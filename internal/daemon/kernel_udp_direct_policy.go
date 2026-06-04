@@ -1,0 +1,193 @@
+package daemon
+
+import (
+	"os"
+	"strings"
+
+	"trustix.local/trustix/internal/config"
+	"trustix.local/trustix/internal/core"
+	"trustix.local/trustix/internal/dataplane"
+	"trustix.local/trustix/internal/transport"
+	securetransport "trustix.local/trustix/internal/transport/secure"
+)
+
+func kernelUDPTXDirectOnlyForDesired(desired config.Desired) bool {
+	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) != dataplane.KernelTransportModeRequireKernel ||
+		!desiredTransportPolicyUsesOnlyDirectKernelTransports(desired) {
+		return false
+	}
+	switch parseSecureTransportEncryption(desired.TransportPolicy.Encryption) {
+	case securetransport.EncryptionPlaintext:
+		return true
+	case securetransport.EncryptionSecure:
+		return desiredTransportPolicyAllowsKernelCryptoDirectOnly(desired) &&
+			desiredTransportPolicyAllowsSecureDirectOnly(desired)
+	default:
+		return false
+	}
+}
+
+func kernelUDPSecureFullDirectForDesired(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolUDP) {
+		return false
+	}
+	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+		return false
+	}
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolUDP))
+	if profile.Profile != config.TransportProfilePerformance {
+		return false
+	}
+	if profile.Datapath == config.TransportDatapathUserspace {
+		return false
+	}
+	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionSecure {
+		return false
+	}
+	placement := normalizeTransportCryptoPlacementConfig(profile.CryptoPlacement)
+	if placement == "" {
+		placement = effectiveTransportCryptoPlacementConfig(desired.TransportPolicy)
+	}
+	return placement != string(dataplane.CryptoPlacementUserspace)
+}
+
+func kernelUDPTXDirectOnlyReasonForDesired(desired config.Desired) string {
+	if !kernelUDPTXDirectOnlyForDesired(desired) {
+		return ""
+	}
+	encryption := parseSecureTransportEncryption(desired.TransportPolicy.Encryption)
+	raw := strings.TrimSpace(desired.TransportPolicy.Encryption)
+	if raw == "" {
+		raw = encryption
+	}
+	reason := "transport_policy.encryption=" + raw
+	if encryption == securetransport.EncryptionSecure {
+		placement := effectiveTransportCryptoPlacementConfig(desired.TransportPolicy)
+		if placement == "" {
+			placement = string(dataplane.CryptoPlacementAuto)
+		}
+		reason += " transport_policy.crypto_placement=" + placement
+	}
+	return reason
+}
+
+func kernelUDPTXDirectOnlyFailClosedForDesired(desired config.Desired) bool {
+	return kernelUDPTXDirectOnlyForDesired(desired) &&
+		!desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) &&
+		envTruthyAny(
+			"TRUSTIX_KERNEL_UDP_TC_ONLY",
+			"TRUSTIX_KERNEL_UDP_TC_DIRECT_ONLY_PROVIDER",
+		)
+}
+
+func kernelUDPTXDirectOnlyFailClosedReasonForDesired(desired config.Desired) string {
+	if !kernelUDPTXDirectOnlyFailClosedForDesired(desired) {
+		return ""
+	}
+	reason := kernelUDPTXDirectOnlyReasonForDesired(desired)
+	if reason == "" {
+		return "kernel_udp_tc_only_provider=enabled"
+	}
+	return reason + " kernel_udp_tc_only_provider=enabled"
+}
+
+func kernelUDPTXDirectOnlyAttachForDesired(desired config.Desired) bool {
+	if kernelUDPTXDirectOnlyFailClosedForDesired(desired) {
+		return true
+	}
+	if !kernelUDPTXDirectOnlyEnvForcedForDesired() {
+		return false
+	}
+	return kernelUDPTXDirectOnlyForDesired(desired)
+}
+
+func kernelUDPTXDirectOnlyAttachReasonForDesired(desired config.Desired) string {
+	if reason := kernelUDPTXDirectOnlyFailClosedReasonForDesired(desired); reason != "" {
+		return reason
+	}
+	if !kernelUDPTXDirectOnlyEnvForcedForDesired() {
+		return ""
+	}
+	return kernelUDPTXDirectOnlyReasonForDesired(desired)
+}
+
+func kernelUDPTXDirectOnlyEnvForcedForDesired() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY"))) {
+	case "1", "true", "yes", "on", "enabled", "force":
+		return true
+	default:
+		return false
+	}
+}
+
+func desiredTransportPolicyAllowsKernelCryptoDirectOnly(desired config.Desired) bool {
+	switch effectiveTransportCryptoPlacementConfig(desired.TransportPolicy) {
+	case string(dataplane.CryptoPlacementUserspace):
+		return false
+	default:
+		return true
+	}
+}
+
+func desiredTransportPolicyAllowsSecureDirectOnly(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolUDP) &&
+		desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		return true
+	}
+	return kernelUDPSecureDirectOnlyEnvEnabled()
+}
+
+func kernelUDPSecureDirectOnlyEnvEnabled() bool {
+	return envTruthyAny(
+		"TRUSTIX_KERNEL_UDP_TC_SECURE_DIRECT_ONLY",
+		"TRUSTIX_KERNEL_UDP_SECURE_DIRECT_ONLY",
+	)
+}
+
+func desiredTransportPolicyUsesOnlyDirectKernelTransports(desired config.Desired) bool {
+	endpointByName := make(map[core.EndpointID]config.EndpointConfig, len(desired.Endpoints))
+	for _, endpoint := range desired.Endpoints {
+		endpointByName[endpoint.Name] = endpoint
+	}
+	seen := false
+	consider := func(endpoint config.EndpointConfig) bool {
+		if !endpoint.Enabled {
+			return true
+		}
+		seen = true
+		switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
+		case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+			return true
+		default:
+			return false
+		}
+	}
+	if len(desired.TransportPolicy.Candidates) > 0 {
+		for _, candidate := range desired.TransportPolicy.Candidates {
+			endpoint, ok := endpointByName[candidate]
+			if !ok {
+				continue
+			}
+			if !consider(endpoint) {
+				return false
+			}
+		}
+		return seen
+	}
+	if len(desired.Endpoints) == 0 {
+		return true
+	}
+	for _, endpoint := range desired.Endpoints {
+		if !consider(endpoint) {
+			return false
+		}
+	}
+	return seen
+}
+
+func experimentalTCPTXDirectForDesired(desired config.Desired) bool {
+	if !envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY") {
+		return false
+	}
+	return desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP)
+}

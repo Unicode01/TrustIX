@@ -1,0 +1,17 @@
+# Keep source, scripts, and docs LF-normalized across platforms.
+* text=auto eol=lf
+
+# Embedded binary assets required by clean builds.
+*.o binary
+*.ko binary
+
+# Large release/archive formats should never be text-normalized.
+*.qcow2 binary
+*.img binary
+*.iso binary
+*.tar.gz binary
+*.zip binary
+
+# Generated assets embedded by trustixd.
+internal/webui/assets/* linguist-generated
+internal/webui/assets/i18n/* linguist-generated

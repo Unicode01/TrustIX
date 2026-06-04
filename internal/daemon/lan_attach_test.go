@@ -1,0 +1,465 @@
+package daemon
+
+import (
+	"path/filepath"
+	"testing"
+
+	"trustix.local/trustix/internal/config"
+	"trustix.local/trustix/internal/core"
+	"trustix.local/trustix/internal/dataplane"
+	"trustix.local/trustix/internal/transport"
+	securetransport "trustix.local/trustix/internal/transport/secure"
+)
+
+func TestDataplaneAttachSpecUsesExistingLANMode(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:            "br-lan",
+			UnderlayIface:    "eth0",
+			Gateway:          "192.168.0.1/24",
+			AttachMode:       config.LANAttachModeExisting,
+			ManageAddress:    true,
+			ManageForwarding: true,
+			ManageRPFilter:   true,
+		},
+	})
+
+	if spec.LANAttachMode != string(config.LANAttachModeExisting) {
+		t.Fatalf("LANAttachMode = %q, want existing", spec.LANAttachMode)
+	}
+	if spec.ManageAddress {
+		t.Fatal("existing LAN attach mode must not manage addresses")
+	}
+	if !spec.ManageQdisc || !spec.ManageForwarding || !spec.ManageRPFilter {
+		t.Fatalf("management flags = qdisc:%t forwarding:%t rp_filter:%t", spec.ManageQdisc, spec.ManageForwarding, spec.ManageRPFilter)
+	}
+	if spec.PinPath != filepath.Join(filepath.Dir(spec.PinPath), filepath.Base(spec.PinPath)) || filepath.Base(spec.PinPath) != "bpf" {
+		t.Fatalf("pin path = %q, want data-dir bpf child", spec.PinPath)
+	}
+}
+
+func TestDataplaneAttachSpecDefaultsLANAttachMode(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:         "br-lan",
+			Gateway:       "192.168.0.1/24",
+			ManageAddress: true,
+		},
+	})
+
+	if spec.LANAttachMode != string(config.LANAttachModeManaged) {
+		t.Fatalf("LANAttachMode = %q, want managed", spec.LANAttachMode)
+	}
+	if !spec.ManageAddress {
+		t.Fatal("managed LAN attach mode should preserve manage_address")
+	}
+}
+
+func TestDataplaneAttachSpecIncludesMultipleLANs(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			ID:               "home",
+			Iface:            "br-lan",
+			UnderlayIface:    "eth0",
+			Gateway:          "192.168.1.1/24",
+			Advertise:        []core.Prefix{"192.168.1.0/24"},
+			ManageAddress:    true,
+			ManageForwarding: true,
+			ManageRPFilter:   true,
+		},
+		LANs: []config.LANConfig{{
+			ID:            "public",
+			Type:          config.LANTypeTrustedPublic,
+			Iface:         "eth1",
+			UnderlayIface: "wan0",
+			Gateway:       "10.10.0.1/24",
+			Advertise:     []core.Prefix{"10.10.0.0/24"},
+			AttachMode:    config.LANAttachModeExisting,
+			ManageAddress: true,
+			DeviceAccess: config.DeviceAccessConfig{
+				Enabled:     true,
+				AddressPool: "10.10.0.128/25",
+			},
+		}},
+	})
+
+	if spec.LANIface != "br-lan" || spec.UnderlayIface != "eth0" || spec.Gateway != "192.168.1.1/24" {
+		t.Fatalf("primary legacy fields = iface:%q underlay:%q gateway:%q", spec.LANIface, spec.UnderlayIface, spec.Gateway)
+	}
+	if len(spec.LANs) != 2 {
+		t.Fatalf("LANs = %#v, want two", spec.LANs)
+	}
+	if spec.LANs[0].ID != "home" || spec.LANs[0].Iface != "br-lan" || !spec.LANs[0].ManageAddress || !spec.LANs[0].ManageForwarding || !spec.LANs[0].ManageRPFilter {
+		t.Fatalf("primary LAN attach spec = %#v", spec.LANs[0])
+	}
+	if spec.LANs[1].ID != "public" || spec.LANs[1].Type != string(config.LANTypeTrustedPublic) || spec.LANs[1].Iface != "eth1" || spec.LANs[1].UnderlayIface != "wan0" {
+		t.Fatalf("secondary LAN attach spec = %#v", spec.LANs[1])
+	}
+	if spec.LANs[1].ManageAddress {
+		t.Fatal("existing secondary LAN attach mode must not manage addresses")
+	}
+	if !spec.LANs[1].DeviceAccess || spec.LANs[1].DeviceAccessPool != "10.10.0.128/25" {
+		t.Fatalf("secondary LAN device access fields = %#v", spec.LANs[1])
+	}
+	if len(spec.LANs[1].Advertise) != 1 || spec.LANs[1].Advertise[0] != "10.10.0.0/24" {
+		t.Fatalf("secondary LAN advertise = %#v", spec.LANs[1].Advertise)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsUserspaceFallbackForPlaintextUDPByDefault(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
+		t.Fatalf("ordinary plaintext UDP should keep userspace fallback available, spec=%#v", spec)
+	}
+	if spec.ExperimentalTCPTXDirect {
+		t.Fatalf("ordinary plaintext UDP should not request experimental_tcp TX direct protection, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecMarksExperimentalTCPTXDirect(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:      "br-lan",
+			AttachMode: config.LANAttachModeExisting,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	})
+
+	if !spec.ExperimentalTCPTXDirect {
+		t.Fatalf("experimental_tcp TC direct policy was not marked in attach spec: %#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsFallbackForRequireKernelPlaintextByDefault(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Encryption:      securetransport.EncryptionPlaintext,
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
+		t.Fatalf("require_kernel plaintext UDP should keep capture fallback unless TC-only provider is explicit, spec=%#v", spec)
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
+	spec = dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Encryption:      securetransport.EncryptionPlaintext,
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	})
+
+	if !spec.KernelUDPTXDirectOnly {
+		t.Fatal("explicit TC-only provider should enable kernel_udp TX direct-only")
+	}
+	if spec.KernelUDPTXDirectOnlyReason != "transport_policy.encryption=plaintext kernel_udp_tc_only_provider=enabled" {
+		t.Fatalf("direct-only reason = %q", spec.KernelUDPTXDirectOnlyReason)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsFallbackForPlaintextNonKernelTransport(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"tcp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "tcp-a",
+			Transport: string(transport.ProtocolTCP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
+		t.Fatalf("plaintext non-kernel transport should keep userspace fallback available, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsFallbackWhenEncryptionEnabled(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: securetransport.EncryptionSecure,
+		},
+	})
+
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
+		t.Fatalf("secure transport should keep userspace fallback available, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecEnablesPerformanceSecureKernelUDPDirect(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
+		t.Fatalf("performance secure UDP should keep userspace fallback, spec=%#v", spec)
+	}
+	if !spec.KernelUDPTXSecureDirect || !spec.KernelUDPRXSecureDirect {
+		t.Fatalf("performance secure UDP should enable TX/RX secure direct, spec=%#v", spec)
+	}
+	if !spec.KernelUDPSecureDirectTrustInnerChecksums || !spec.KernelUDPTXSecureDirectKfuncSeal || !spec.KernelUDPTXSecureDirectSKBSealKfunc {
+		t.Fatalf("performance secure UDP should enable secure direct fast options, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsStableSecureKernelUDPDirectDisabled(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfileStable,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.KernelUDPTXSecureDirect || spec.KernelUDPRXSecureDirect || spec.KernelUDPSecureDirectTrustInnerChecksums {
+		t.Fatalf("stable secure UDP should not enable secure direct, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsFallbackForRequireKernelSecureKernelCryptoByDefault(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
+		t.Fatalf("require_kernel secure UDP should keep capture fallback unless secure direct-only is explicit, spec=%#v", spec)
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
+	spec = dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
+		t.Fatalf("TC-only provider alone should not enable secure UDP direct-only, spec=%#v", spec)
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_SECURE_DIRECT_ONLY", "1")
+	spec = dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	})
+
+	if !spec.KernelUDPTXDirectOnly {
+		t.Fatal("explicit secure direct-only should enable secure UDP direct-only")
+	}
+	if spec.KernelUDPTXDirectOnlyReason != "transport_policy.encryption=secure transport_policy.crypto_placement=kernel kernel_udp_tc_only_provider=enabled" {
+		t.Fatalf("direct-only reason = %q", spec.KernelUDPTXDirectOnlyReason)
+	}
+}
+
+func TestDataplaneAttachSpecRecordsForcedExperimentalTCPSecureDirectOnly(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"experimental-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "experimental-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	})
+
+	if !spec.KernelUDPTXDirectOnly {
+		t.Fatal("forced direct-only should be reflected in attach spec")
+	}
+	if spec.KernelUDPTXDirectOnlyReason != "transport_policy.encryption=secure transport_policy.crypto_placement=kernel" {
+		t.Fatalf("direct-only reason = %q", spec.KernelUDPTXDirectOnlyReason)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsFallbackForRequireKernelSecureUserspaceCrypto(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
+		t.Fatalf("explicit userspace crypto should keep userspace fallback available, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecDisablesLANQdiscForNativePlaintextTunnel(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:            "br-lan",
+			UnderlayIface:    "eth0",
+			Gateway:          "192.168.0.1/24",
+			ManageAddress:    true,
+			ManageForwarding: true,
+			ManageRPFilter:   true,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"gre-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "gre-a",
+			Transport: string(transport.ProtocolGRE),
+			Address:   "local=198.18.0.1,remote=198.18.0.2,local_carrier=10.255.0.1/30,remote_carrier=10.255.0.2,mtu=1400",
+			Enabled:   true,
+		}},
+	})
+
+	if spec.ManageQdisc {
+		t.Fatal("native plaintext tunnel route offload should not attach LAN TC/qdisc")
+	}
+	if !spec.ManageAddress || !spec.ManageForwarding || !spec.ManageRPFilter {
+		t.Fatalf("non-qdisc management flags changed unexpectedly: address:%t forwarding:%t rp_filter:%t", spec.ManageAddress, spec.ManageForwarding, spec.ManageRPFilter)
+	}
+	if spec.ManagedMTU != 1400 {
+		t.Fatalf("managed MTU = %d, want native tunnel MTU 1400", spec.ManagedMTU)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsLANQdiscForSecureTunnel(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:         "br-lan",
+			UnderlayIface: "eth0",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: securetransport.EncryptionSecure,
+			Candidates: []core.EndpointID{"gre-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "gre-a",
+			Transport: string(transport.ProtocolGRE),
+			Enabled:   true,
+		}},
+	})
+
+	if !spec.ManageQdisc {
+		t.Fatal("secure tunnel still needs LAN TC/qdisc for userspace secure transport")
+	}
+	if spec.ManagedMTU != 0 {
+		t.Fatalf("secure tunnel managed MTU = %d, want disabled", spec.ManagedMTU)
+	}
+}

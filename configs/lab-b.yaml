@@ -1,0 +1,161 @@
+domain:
+  id: lab.local
+  trust_roots:
+    - ./certs/root-ca.pem
+    - ./certs/domain-ca.pem
+    - ./certs/config-ca.pem
+
+# trust:
+#   revoked_cert_fingerprints:
+#     - sha256:<certificate-sha256-fingerprint>
+#   trust_roots_pem:
+#     - |
+#       -----BEGIN CERTIFICATE-----
+#       ...
+#       -----END CERTIFICATE-----
+#   admin_policy:
+#     threshold: 2
+#     allowed_fingerprints:
+#       - sha256:<admin-1-fingerprint>
+#       - sha256:<admin-2-fingerprint>
+
+ix:
+  id: ix-b
+  domain: lab.local
+  cert: ./certs/ix-b.crt
+  key: ./certs/ix-b.key
+  control_api: https://127.0.0.1:9444
+  route_authorizations:
+    - ./certs/ix-b-route.crt
+
+lan:
+  iface: br-lan-b
+  # Use attach_mode: existing with manage_address: false to reuse an already
+  # addressed physical LAN port or bridge.
+  attach_mode: managed
+  # Set this to the Linux underlay NIC when enabling experimental_tcp AF_XDP.
+  # underlay_iface: eth0
+  gateway: 10.0.1.1/24
+  advertise:
+    - 10.0.1.0/24
+  mode: routed
+  manage_address: true
+  manage_forwarding: true
+  manage_rp_filter: true
+
+# Optional LAN/host-side management API for hosts under this IX.
+# If listen is omitted, trustixd derives it from lan.gateway and the -api port
+# (for example 10.0.1.1:8788 when lab-b is started with -api 127.0.0.1:8788).
+# Writes require Admin signatures by default.
+# management.tls defaults to auto: loopback API stays HTTP, non-loopback host/API
+# listeners use HTTPS with the IX certificate. Use custom_cert when browsers need
+# a public/IP SAN certificate.
+# management:
+#   tls:
+#     mode: auto
+#     identity: ix_cert
+#   host_api:
+#     enabled: true
+#     listen: 10.0.1.1:8788
+#     allow_unauthenticated_reads: false
+#   web_ui:
+#     enabled: true
+#     # WebUI follows every enabled management API listener.
+#     # Optional directory that overrides embedded WebUI assets.
+#     # custom_dir: ./webui
+
+# Optional node-local kernel module lifecycle. This is not propagated as a
+# remote execution command; it only affects this IX daemon.
+# kernel_modules:
+#   trustix_crypto:
+#     mode: auto
+#     path: embedded
+#     unload_on_exit: false
+#   trustix_datapath_helpers:
+#     mode: disabled
+#     path: embedded
+#     unload_on_exit: false
+
+endpoints:
+  - name: hk-udp
+    mode: passive
+    listen: 127.0.0.1:7002
+    transport: udp
+    enabled: true
+
+  - name: hk-quic
+    mode: passive
+    listen: 127.0.0.1:7442
+    transport: quic
+    enabled: true
+
+  - name: hk-experimental-tcp
+    mode: passive
+    listen: 127.0.0.1:7042
+    address: 127.0.0.1:7042
+    transport: experimental_tcp
+    enabled: false
+
+peers:
+  - id: ix-a
+    domain: lab.local
+    control_api: https://127.0.0.1:9443
+    endpoints:
+      - name: sh-udp
+        address: 127.0.0.1:7001
+        transport: udp
+      - name: sh-quic
+        address: 127.0.0.1:7441
+        transport: quic
+      - name: sh-experimental-tcp
+        address: 127.0.0.1:7041
+        transport: experimental_tcp
+    allowed_prefixes:
+      - 10.0.0.0/24
+
+routes:
+  - prefix: 10.0.0.0/24
+    next_hop: ix-a
+    endpoint: sh-udp
+    policy: default-routed
+    metric: 100
+
+route_policy:
+  # Empty import/export lists mean accept all certificate-authorized dynamic
+  # route advertisements and export all local LAN advertisements.
+  import_prefixes: []
+  export_prefixes: []
+  dynamic_metric: 1000
+
+policies:
+  - name: default-routed
+    route_selection: longest_prefix
+    load_balance: least_conn
+    flow_stickiness: true
+    rewrite: preserve_source
+
+transport_policy:
+  mode: user_defined
+  candidates:
+    - hk-udp
+    - hk-quic
+  failover: health_based
+  load_balance: least_conn
+  # auto uses TLS exporter when the selected transport has an IX-certificate
+  # mTLS link (tcp/websocket/http_connect/quic), otherwise it falls back to the
+  # TrustIX X25519 transcript used by UDP and experimental_tcp.
+  crypto_key_source: auto
+  # By default the transport TLS layer also uses ix.cert/ix.key. To use a
+  # separate IP/public certificate for TCP/WebSocket/HTTP CONNECT/QUIC link TLS,
+  # switch this to custom_cert. TrustIX secure overlay identity still uses the
+  # IX certificate.
+  # tls_identity:
+  #   mode: custom_cert
+  #   cert: ./certs/ix-b-transport.crt
+  #   key: ./certs/ix-b-transport.key
+  #   system_roots: true
+  #   trust_roots:
+  #     - ./certs/public-or-private-transport-root.pem
+  # userspace is the current encrypted path; kernel refuses to start unless
+  # a kernel crypto provider is available.
+  crypto_placement: userspace

@@ -1,0 +1,122 @@
+# TrustIX deployment scripts
+
+The stable automation entry points are:
+
+- `scripts/trustix-build.sh`
+- `scripts/trustix-deploy.sh`
+- `scripts/trustix-bootstrap-ix.sh`
+- `scripts/trustix-latency-history-summary.py`
+
+The scripts target Linux with GNU Bash. They are intended to be callable from the Web UI or another provisioner.
+
+## Build
+
+```bash
+scripts/trustix-build.sh --goarch amd64 --build-ko auto --json
+```
+
+Important options:
+
+- `--goarch amd64|arm64|arm`
+- `--kdir /path/to/kernel/build` for target-kernel `.ko` builds
+- `--build-ko auto|0|1`
+- `--skip-webui` when embedded assets are already built
+
+The script wraps `scripts/build-release-linux.sh` and prints the tarball path when `--json` is used.
+
+## Deploy
+
+```bash
+scripts/trustix-deploy.sh \
+  --target root@example.com \
+  --tarball build/release/trustix-linux-amd64.tar.gz \
+  --instance ix-new \
+  --config build/bootstrap/ix-new/config/ix-new.json \
+  --cert-dir build/bootstrap/ix-new/deploy-certs \
+  --api 127.0.0.1:8787 \
+  --peer-api 0.0.0.0:9443 \
+  --dataplane auto \
+  --admin-auth
+```
+
+Omit `--target` for local deployment. SSH options are `--ssh-port`, `--ssh-key`, and repeated `--ssh-option`.
+
+Deployment installs binaries, the systemd unit, config, certificates, and an `/etc/trustix/<instance>.env` file. The unit supports `TRUSTIX_EXTRA_ARGS`, used by `--admin-auth` and repeated `--extra-arg`.
+
+## Bootstrap A New IX
+
+```bash
+scripts/trustix-bootstrap-ix.sh \
+  --ix ix-new \
+  --domain example.net \
+  --source-certs certs \
+  --control-api https://ix-new.example.net:9443 \
+  --lan-iface br-lan \
+  --lan-gateway 10.44.0.1/24 \
+  --underlay-iface eth0 \
+  --advertise 10.44.0.0/24 \
+  --endpoint 'name=ix-new-udp;transport=udp;mode=passive;listen=0.0.0.0:7000;address=ix-new.example.net:7000' \
+  --bootstrap-control-api https://ix-a.example.net:9443 \
+  --target root@ix-new.example.net \
+  --json
+```
+
+Bootstrap requires the Domain CA key to issue the IX certificate and the Config CA key to issue route authorization. It writes the target config as JSON, stages deployable certs, optionally builds a release tarball, and optionally deploys it.
+
+Use semicolon-separated endpoint specs when a value contains commas, such as GRE/IPIP/VXLAN endpoint strings.
+
+## Latency Matrix History
+
+`scripts/public-production-sim-latency.py` appends one compact JSONL row per completed case by default:
+
+```bash
+python scripts/public-production-sim-latency.py \
+  --production-sim \
+  --require-production-session \
+  --quick \
+  --history build/latency-history.jsonl
+```
+
+Pass `--history ""` to disable history writes. Each row includes the case metadata, RTT summary, overlay-underlay overhead, and compact kernel UDP direct-path counters. The full run JSON remains in the `--out` path.
+
+Summarize the latest rows:
+
+```bash
+python scripts/trustix-latency-history-summary.py --last 20
+python scripts/trustix-latency-history-summary.py --transport udp --encryption secure --last 10
+```
+
+The table columns use milliseconds. `a->b avg/p95` and `b->a avg/p95` are overlay RTTs; `a->b ovh p95` and `b->a ovh p95` are overlay p95 minus underlay p95. The `kernel_udp` column shows `tx/rx` direct attachment, TX secure-direct seal successes, and userspace session packet counts, which makes fallback regressions visible without opening the full JSON.
+
+## Multi-NIC And Multi-IP Boundary
+
+Current config supports:
+
+- `lan` plus `lans[]` for multiple local or trusted-public LANs.
+- Per-LAN `iface`, `underlay_iface`, `gateway`, `advertise`, `attach_mode`, and management flags.
+- Multiple endpoint listeners by binding each endpoint `listen` to a specific IP and publishing a separate `address`.
+- Per-endpoint `local_bind.source_ip` and `local_bind.iface` for outbound underlay selection. `source_ip` is supported by UDP/TCP/QUIC/WebSocket/HTTP CONNECT and is carried into `kernel_udp`/`experimental_tcp` kernel flows. `iface` uses Linux `SO_BINDTODEVICE` on socket-based dials and experimental TCP primer/control connections.
+- GRE/IPIP/VXLAN endpoint strings with explicit `local`, `remote`, carrier addresses, and optional `underlay_if`.
+
+Current dataplane boundary:
+
+- Linux dataplane receives all LAN attach specs and manages address/qdisc/cleanup for multiple LANs.
+- LAN reinject chooses the matching LAN by destination prefix.
+- TC/eBPF and kernel fast-path underlay selection still have a primary-LAN bias for `kernel_udp`, `experimental_tcp`, and negotiated tunnel defaults.
+- `local_bind.iface` is not currently serialized into full-kernel TX route templates; use `local_bind.source_ip`, endpoint `listen`, explicit tunnel `underlay_if`, or OS routing when a pure kernel path must pick a specific uplink.
+
+Example JSON endpoint:
+
+```json
+{
+  "name": "ix-b-tcp-via-wan2",
+  "mode": "active",
+  "transport": "tcp",
+  "address": "ix-b.example.net:7000",
+  "local_bind": {
+    "source_ip": "198.51.100.10",
+    "iface": "wan2"
+  },
+  "enabled": true
+}
+```

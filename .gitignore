@@ -1,0 +1,91 @@
+# Build and release output
+/build/
+/dist/
+/out/
+/tmp/
+/bin/
+*.test
+*.test.exe
+*.prof
+*.pprof
+*.out
+*.err
+*.pid
+*.qcow2
+*.img
+*.iso
+*.tar
+*.tar.gz
+*.zip
+
+# Runtime logs and local state
+*.log
+*.local
+.trustix/
+state/
+state-*/
+*_state/
+config.log
+config.log.*
+config-signers.json
+members.json
+pending-members.json
+
+# Secrets and locally generated PKI material
+certs/
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+
+# Node/Vite
+node_modules/
+webui/node_modules/
+webui/dist/
+.npm/
+.vite/
+
+# Python local caches
+__pycache__/
+*.py[cod]
+
+# Go and platform binaries
+*.exe
+*.dll
+*.so
+*.dylib
+coverage.out
+
+# Kernel module build products.
+# Keep internal/kernelmodule/assets/*.ko: those are small placeholder embed
+# assets used by clean Go builds; release builds replace them with real modules.
+/kernel/**/*.ko
+/kernel/**/*.o
+/kernel/**/*.mod
+/kernel/**/*.mod.c
+/kernel/**/Module.symvers
+/kernel/**/modules.order
+/kernel/**/.tmp_versions/
+/kernel/**/.*.cmd
+
+# Local lab and benchmark wrappers. Keep release/deploy/smoke scripts tracked;
+# these high-churn matrix tools are useful locally but noisy in a first source
+# release.
+/scripts/linux-iperf3-crypto-bench.sh
+/scripts/linux-transport-matrix-bench.sh
+/scripts/openwrt-full-datapath-kmod-matrix.sh
+/scripts/public-production-sim-latency.py
+/scripts/trustix-latency-history-summary.py
+
+# Local binary backups and editor files
+*.bak
+*.bak-*
+*.backup
+*.tmp
+*.swp
+*.swo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

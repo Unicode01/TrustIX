@@ -1,0 +1,29 @@
+[Unit]
+Description=TrustIX router daemon (%i)
+Documentation=file:/usr/share/doc/trustix/first-run.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=TRUSTIX_CONFIG=/etc/trustix/%i.yaml
+Environment=TRUSTIX_DATA_DIR=/var/lib/trustix/%i
+Environment=TRUSTIX_API_ADDR=127.0.0.1:8787
+Environment=TRUSTIX_PEER_API_ADDR=0.0.0.0:9443
+Environment=TRUSTIX_DATAPLANE=auto
+Environment=TRUSTIX_EXTRA_ARGS=
+EnvironmentFile=-/etc/trustix/%i.env
+ExecStartPre=/usr/local/bin/trustixd -config ${TRUSTIX_CONFIG} -data-dir ${TRUSTIX_DATA_DIR} -api ${TRUSTIX_API_ADDR} -peer-api ${TRUSTIX_PEER_API_ADDR} -dataplane ${TRUSTIX_DATAPLANE} -cleanup-dataplane
+ExecStart=/usr/local/bin/trustixd -config ${TRUSTIX_CONFIG} -data-dir ${TRUSTIX_DATA_DIR} -api ${TRUSTIX_API_ADDR} -peer-api ${TRUSTIX_PEER_API_ADDR} -dataplane ${TRUSTIX_DATAPLANE} $TRUSTIX_EXTRA_ARGS
+ExecStopPost=/usr/local/bin/trustixd -config ${TRUSTIX_CONFIG} -data-dir ${TRUSTIX_DATA_DIR} -api ${TRUSTIX_API_ADDR} -peer-api ${TRUSTIX_PEER_API_ADDR} -dataplane ${TRUSTIX_DATAPLANE} -cleanup-dataplane
+Restart=on-failure
+RestartSec=2s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+LimitMEMLOCK=infinity
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_BPF CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_SYS_MODULE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_BPF CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_SYS_MODULE
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{.Title}}</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <script nonce="{{.ScriptNonce}}">
+    (function () {
+      try {
+        var setting = localStorage.getItem("trustix.ui.theme") || "system";
+        var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var theme = setting === "dark" || (setting === "system" && dark) ? "dark" : "light";
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+      } catch (_error) {
+        document.documentElement.dataset.theme = "light";
+      }
+    })();
+  </script>
+  <script nonce="{{.ScriptNonce}}" id="trustix-bootstrap" type="application/json">{{.BootstrapJSON}}</script>
+  <script nonce="{{.ScriptNonce}}">
+    window.TRUSTIX_WEBUI = {};
+    try {
+      window.TRUSTIX_WEBUI = JSON.parse(document.getElementById("trustix-bootstrap").textContent || "{}");
+    } catch (_error) {
+      window.TRUSTIX_WEBUI = {};
+    }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
