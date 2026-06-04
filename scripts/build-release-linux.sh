@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "ERROR: scripts/build-release-linux.sh requires GNU bash 4+" >&2
+  exit 2
+fi
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

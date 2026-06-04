@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "ERROR: scripts/trustix-bootstrap-ix.sh requires GNU bash 4+" >&2
+  exit 2
+fi
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
-  cat >&2 <<'EOF'
+  cat <<'EOF'
 usage: scripts/trustix-bootstrap-ix.sh [options]
 
 Issues a new IX certificate, writes a JSON config, optionally builds a release,
@@ -45,6 +49,7 @@ Common options:
   --ssh-option OPTION        repeatable
   --goarch ARCH              build target arch
   --kdir DIR                 target kernel build dir
+  --build-bpf 0|1            rebuild embedded eBPF objects (default: 1)
   --build-ko auto|0|1        default: auto
   --no-build                 skip release build
   --no-deploy                skip deployment
@@ -225,6 +230,7 @@ ssh_key=""
 ssh_options=()
 goarch=""
 kdir=""
+build_bpf="${TRUSTIX_RELEASE_BUILD_BPF:-1}"
 build_ko="auto"
 do_build=1
 do_deploy=1
@@ -273,6 +279,7 @@ while [[ $# -gt 0 ]]; do
     --ssh-option) [[ $# -ge 2 ]] || die "--ssh-option requires a value"; ssh_options+=("$2"); shift 2 ;;
     --goarch) [[ $# -ge 2 ]] || die "--goarch requires a value"; goarch="$2"; shift 2 ;;
     --kdir) [[ $# -ge 2 ]] || die "--kdir requires a value"; kdir="$2"; shift 2 ;;
+    --build-bpf) [[ $# -ge 2 ]] || die "--build-bpf requires a value"; build_bpf="$2"; shift 2 ;;
     --build-ko) [[ $# -ge 2 ]] || die "--build-ko requires a value"; build_ko="$2"; shift 2 ;;
     --no-build) do_build=0; shift ;;
     --no-deploy) do_deploy=0; shift ;;
@@ -285,6 +292,8 @@ done
 [[ -n "$ix_id" ]] || die "--ix is required"
 [[ -n "$domain_id" ]] || die "--domain is required"
 [[ -n "$control_api" ]] || die "--control-api is required"
+case "$build_bpf" in 0|1) ;; *) die "--build-bpf must be 0 or 1" ;; esac
+case "$build_ko" in auto|0|1) ;; *) die "--build-ko must be auto, 0, or 1" ;; esac
 if [[ ${#advertise[@]} -eq 0 && ${#lan_specs[@]} -eq 0 ]]; then
   die "at least one --advertise CIDR or --lan advertise=... spec is required"
 fi
@@ -498,7 +507,7 @@ done
 
 tarball=""
 if [[ "$do_build" == "1" ]]; then
-  build_args=(--out "${repo_root}/build/release" --version "bootstrap-${ix_id}" --build-ko "$build_ko" --json)
+  build_args=(--out "${repo_root}/build/release" --version "bootstrap-${ix_id}" --build-bpf "$build_bpf" --build-ko "$build_ko" --json)
   [[ -n "$goarch" ]] && build_args+=(--goarch "$goarch")
   [[ -n "$kdir" ]] && build_args+=(--kdir "$kdir")
   log "build release"

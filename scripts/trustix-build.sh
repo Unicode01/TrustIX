@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "ERROR: scripts/trustix-build.sh requires GNU bash 4+" >&2
+  exit 2
+fi
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
-  cat >&2 <<'EOF'
+  cat <<'EOF'
 usage: scripts/trustix-build.sh [options]
 
 Builds a TrustIX Linux release tarball with a stable CLI for automation.
@@ -17,6 +21,7 @@ Options:
   --goarch ARCH             target Go arch: amd64, arm64, arm (default: host)
   --goos OS                 target Go OS (default: linux)
   --kdir DIR                target kernel build dir for .ko build
+  --build-bpf 0|1           rebuild embedded eBPF objects (default: 1)
   --build-ko auto|0|1       build kernel modules (default: auto)
   --embed-ko 0|1            embed built .ko into trustixd (default: 1)
   --build-tests 0|1         build ebpf.test/kernelmodule.test (default: 1)
@@ -63,6 +68,7 @@ release_name=""
 version="${TRUSTIX_RELEASE_VERSION:-}"
 commit="${TRUSTIX_RELEASE_COMMIT:-}"
 kdir="${KDIR:-}"
+build_bpf="${TRUSTIX_RELEASE_BUILD_BPF:-1}"
 build_ko="${TRUSTIX_BUILD_KO:-auto}"
 embed_ko="${TRUSTIX_RELEASE_EMBED_KO:-1}"
 build_tests="${TRUSTIX_RELEASE_BUILD_TESTS:-1}"
@@ -92,6 +98,9 @@ while [[ $# -gt 0 ]]; do
     --kdir)
       [[ $# -ge 2 ]] || die "--kdir requires a value"
       kdir="$2"; shift 2 ;;
+    --build-bpf)
+      [[ $# -ge 2 ]] || die "--build-bpf requires a value"
+      build_bpf="$2"; shift 2 ;;
     --build-ko)
       [[ $# -ge 2 ]] || die "--build-ko requires a value"
       build_ko="$2"; shift 2 ;;
@@ -118,6 +127,7 @@ case "$build_ko" in
   auto|0|1) ;;
   *) die "--build-ko must be auto, 0, or 1" ;;
 esac
+case "$build_bpf" in 0|1) ;; *) die "--build-bpf must be 0 or 1" ;; esac
 case "$embed_ko" in 0|1) ;; *) die "--embed-ko must be 0 or 1" ;; esac
 case "$build_tests" in 0|1) ;; *) die "--build-tests must be 0 or 1" ;; esac
 
@@ -155,13 +165,14 @@ if [[ "$effective_build_ko" == "1" && "$(uname -s)" != "Linux" ]]; then
   die "kernel module release builds must run on Linux; use --build-ko 0 for userspace-only cross builds"
 fi
 
-log "release name=${release_name} target=${goos}/${goarch} build_ko=${effective_build_ko}"
+log "release name=${release_name} target=${goos}/${goarch} build_bpf=${build_bpf} build_ko=${effective_build_ko}"
 
 export GOOS="$goos"
 export GOARCH="$goarch"
 export TRUSTIX_RELEASE_NAME="$release_name"
 export TRUSTIX_RELEASE_OUT="$out_dir"
 export TRUSTIX_RELEASE_VERSION="$version"
+export TRUSTIX_RELEASE_BUILD_BPF="$build_bpf"
 export TRUSTIX_RELEASE_BUILD_KO="$effective_build_ko"
 export TRUSTIX_RELEASE_EMBED_KO="$embed_ko"
 export TRUSTIX_RELEASE_BUILD_TESTS="$build_tests"
@@ -186,6 +197,7 @@ if [[ "$json" == "1" ]]; then
   printf '"bin_dir":"%s",' "$(json_escape "$bin_dir")"
   printf '"name":"%s",' "$(json_escape "$release_name")"
   printf '"target":{"goos":"%s","goarch":"%s"},' "$(json_escape "$goos")" "$(json_escape "$goarch")"
+  printf '"build_bpf":%s,' "$build_bpf"
   printf '"build_ko":%s' "$effective_build_ko"
   printf '}\n'
 else

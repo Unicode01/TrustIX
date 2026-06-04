@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "ERROR: scripts/trustix-deploy.sh requires GNU bash 4+" >&2
+  exit 2
+fi
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
-  cat >&2 <<'EOF'
+  cat <<'EOF'
 usage: scripts/trustix-deploy.sh [options]
 
 Deploys a TrustIX release tarball or bin dir to a local or SSH target.
@@ -323,7 +327,7 @@ local_deploy() {
 
   install_from_package "$package_dir"
   install_config
-  if command -v systemctl >/dev/null 2>&1; then
+  if command -v systemctl >/dev/null 2>&1 && { [[ "$enable_service" == "1" ]] || [[ "$start_service" == "1" ]]; }; then
     run_root systemctl daemon-reload
     if [[ "$enable_service" == "1" ]]; then
       run_root systemctl enable "trustixd@${instance}.service"
