@@ -2168,6 +2168,9 @@ function EdgeEditor(props: { t: Translate; lang: string; edge: TopologyEdge; des
   const routeIndexes = arrayValue(props.desired.routes)
     .map((route, index) => ({ route, index }))
     .filter(({ route }) => route.next_hop === props.edge.target || route.owner === props.edge.target);
+  const runtimeEdgeRoutes = props.edge.routes
+    .map((route) => routeWithEdgeNextHop(route, props.edge.target))
+    .filter((route) => !routeIndexes.some((item) => routesMatch(item.route, route)));
   const updateLocalEndpoints = (nextEndpoints: EndpointConfig[]) => {
     props.onDesired({ ...props.desired, endpoints: nextEndpoints });
   };
@@ -2314,7 +2317,7 @@ function EdgeEditor(props: { t: Translate; lang: string; edge: TopologyEdge; des
             </div>
           );
         })}
-        {props.edge.routes.filter((route) => !routeIndexes.some((item) => routesMatch(item.route, route))).map((route, index) => {
+        {runtimeEdgeRoutes.map((route, index) => {
           const targetIndex = staticRouteTargetIndex(arrayValue(props.desired.routes), route);
           const promotable = runtimeRoutePromotable(route);
           const canOpenRoute = promotable || targetIndex >= 0;
@@ -2407,6 +2410,17 @@ function routesMatch(a: RouteConfig, b: RouteConfig): boolean {
     (a.owner || "") === (b.owner || "") &&
     (a.next_hop || "") === (b.next_hop || "") &&
     (a.endpoint || "") === (b.endpoint || "");
+}
+
+function routeWithEdgeNextHop(route: RouteView, edgeTarget: string): RouteView {
+  if (route.next_hop || !edgeTarget) {
+    return route;
+  }
+  return {
+    ...route,
+    owner: route.owner || edgeTarget,
+    next_hop: edgeTarget,
+  };
 }
 
 function runtimeRoutePromotable(route: RouteView): boolean {

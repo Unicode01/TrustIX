@@ -112,6 +112,9 @@ func TestLinksEndpointReportsPeerSessions(t *testing.T) {
 	if len(link.Endpoints) != 1 || link.Endpoints[0].ActiveSessions != 1 || !link.Endpoints[0].Usable {
 		t.Fatalf("endpoints = %#v", link.Endpoints)
 	}
+	if len(link.Routes) != 1 || link.Routes[0].NextHop != "ix-b" {
+		t.Fatalf("routes = %#v, want next_hop ix-b", link.Routes)
+	}
 	if len(link.Sessions) != 1 || link.Sessions[0].Stats.CryptoPlacement != "kernel" || link.Sessions[0].LastTX.IsZero() {
 		t.Fatalf("sessions = %#v", link.Sessions)
 	}

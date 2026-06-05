@@ -47,6 +47,7 @@ type linkDiagnosticStatus struct {
 type linkDiagnosticRoute struct {
 	Prefix   core.Prefix       `json:"prefix"`
 	Owner    core.IXID         `json:"owner,omitempty"`
+	NextHop  core.IXID         `json:"next_hop,omitempty"`
 	Endpoint core.EndpointID   `json:"endpoint,omitempty"`
 	Policy   core.PolicyID     `json:"policy,omitempty"`
 	Kind     routing.RouteKind `json:"kind,omitempty"`
@@ -123,6 +124,7 @@ func (daemon *Daemon) linkDiagnostics(peerFilter core.IXID) linkDiagnosticsRespo
 		routeByPeer[route.NextHop] = append(routeByPeer[route.NextHop], linkDiagnosticRoute{
 			Prefix:   route.Prefix,
 			Owner:    route.Owner,
+			NextHop:  route.NextHop,
 			Endpoint: route.Endpoint,
 			Policy:   route.Policy,
 			Kind:     route.Kind,
