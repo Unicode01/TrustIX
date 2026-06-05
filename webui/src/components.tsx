@@ -2197,6 +2197,11 @@ function EdgeEditor(props: { t: Translate; lang: string; edge: TopologyEdge; des
     }
     props.onDesired({ ...props.desired, routes });
   };
+  const promoteRoute = (route: RouteView) => {
+    const promoted = promoteRuntimeRouteInDesired(props.desired, route);
+    props.onDesired(promoted.desired);
+    props.onSelect({ type: "route", index: promoted.index });
+  };
   return (
     <div className="inspector-stack">
       <h3>{props.edge.source} {"->"} {props.edge.target}</h3>
@@ -2309,15 +2314,25 @@ function EdgeEditor(props: { t: Translate; lang: string; edge: TopologyEdge; des
             </div>
           );
         })}
-        {props.edge.routes.filter((route) => !routeIndexes.some((item) => routesMatch(item.route, route))).map((route, index) => (
-          <div key={`runtime-${route.prefix}-${route.owner}-${route.next_hop}-${index}`} className="route-inline-row">
-            <button type="button" className="route-inline-main" disabled>
-              <strong>{route.prefix || "-"}</strong>
-              <span>{routeSummary(route)}</span>
-            </button>
-            <span className="readonly-chip">{props.t("runtime", "Runtime")}</span>
-          </div>
-        ))}
+        {props.edge.routes.filter((route) => !routeIndexes.some((item) => routesMatch(item.route, route))).map((route, index) => {
+          const targetIndex = staticRouteTargetIndex(arrayValue(props.desired.routes), route);
+          const promotable = runtimeRoutePromotable(route);
+          return (
+            <div key={`runtime-${route.prefix}-${route.owner}-${route.next_hop}-${index}`} className="route-inline-row">
+              <button type="button" className="route-inline-main" disabled>
+                <strong>{route.prefix || "-"}</strong>
+                <span>{routeSummary(route)}</span>
+              </button>
+              {promotable ? (
+                <Button variant="ghost" title={props.t("help_promote_runtime_route", "Copy this learned runtime route into desired static routes, then edit and apply it.")} onClick={() => promoteRoute(route)}>
+                  <Plus size={15} />{targetIndex >= 0 ? props.t("update_static_route", "Update static") : props.t("promote_to_static", "Make static")}
+                </Button>
+              ) : (
+                <span className="readonly-chip">{props.t("runtime", "Runtime")}</span>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -2376,6 +2391,60 @@ function routesMatch(a: RouteConfig, b: RouteConfig): boolean {
     (a.owner || "") === (b.owner || "") &&
     (a.next_hop || "") === (b.next_hop || "") &&
     (a.endpoint || "") === (b.endpoint || "");
+}
+
+function runtimeRoutePromotable(route: RouteView): boolean {
+  const source = String(route.source || "").trim();
+  if (!route.prefix || !route.next_hop || route.kind === "local") {
+    return false;
+  }
+  if (["static", "local_lan", "management_vip", "device_access"].includes(source)) {
+    return false;
+  }
+  return source === "dynamic" || source === "dynamic_transit" || source === "" || Boolean(route.owner && route.next_hop && route.owner !== route.next_hop);
+}
+
+function staticRouteFromRuntimeRoute(route: RouteView): RouteConfig {
+  const owner = route.owner || route.next_hop || "";
+  return {
+    prefix: route.prefix || "",
+    kind: route.kind && route.kind !== "local" ? route.kind : "unicast",
+    owner,
+    next_hop: route.next_hop || owner,
+    endpoint: route.endpoint || "",
+    policy: route.policy || "",
+    metric: route.metric ?? 100,
+  };
+}
+
+function staticRouteTargetIndex(routes: RouteConfig[], route: RouteView): number {
+  const target = staticRouteFromRuntimeRoute(route);
+  const targetOwner = target.owner || target.next_hop || "";
+  return routes.findIndex((item) => {
+    const itemOwner = item.owner || item.next_hop || "";
+    return (item.prefix || "") === (target.prefix || "") && itemOwner === targetOwner;
+  });
+}
+
+function staticRouteExactIndex(routes: RouteConfig[], route: RouteView): number {
+  const target = staticRouteFromRuntimeRoute(route);
+  return routes.findIndex((item) => routesMatch(item, target));
+}
+
+function promoteRuntimeRouteInDesired(desired: DesiredConfig, route: RouteView): { desired: DesiredConfig; index: number } {
+  const routes = [...arrayValue(desired.routes)];
+  const nextRoute = staticRouteFromRuntimeRoute(route);
+  const existing = staticRouteTargetIndex(routes, route);
+  if (existing >= 0) {
+    routes[existing] = {
+      ...routes[existing],
+      ...nextRoute,
+      policy: nextRoute.policy || routes[existing].policy || "",
+    };
+    return { desired: { ...desired, routes }, index: existing };
+  }
+  routes.push(nextRoute);
+  return { desired: { ...desired, routes }, index: routes.length - 1 };
 }
 
 function endpointPublishStateForPeer(endpoint: EndpointConfig, peerId: string): { published: boolean; mode: string; label: string } {
@@ -2667,6 +2736,11 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
   const removeRoute = (index: number) => {
     props.onDesired({ ...cfg, routes: arrayValue(cfg.routes).filter((_, itemIndex) => itemIndex !== index) });
   };
+  const promoteRuntimeRoute = (route: RouteView): number => {
+    const promoted = promoteRuntimeRouteInDesired(cfg, route);
+    props.onDesired(promoted.desired);
+    return promoted.index;
+  };
   const sections: ConfigSectionID[] = ["basic", "connectivity", "routing", "performance", "advanced"];
   const endpoints = arrayValue(cfg.endpoints);
   const peers = arrayValue(cfg.peers);
@@ -2710,7 +2784,7 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
       )}
 
       {activeSection === "routing" && (
-        <ConfigRouteTable t={props.t} lang={props.lang} desired={cfg} transports={props.transports} links={props.links} routes={routes} runtimeRoutes={runtimeRoutes} onAdd={addRoute} onUpdate={updateRoute} onRemove={removeRoute} />
+        <ConfigRouteTable t={props.t} lang={props.lang} desired={cfg} transports={props.transports} links={props.links} routes={routes} runtimeRoutes={runtimeRoutes} onAdd={addRoute} onUpdate={updateRoute} onRemove={removeRoute} onPromote={promoteRuntimeRoute} />
       )}
 
       {activeSection === "performance" && (
@@ -3609,7 +3683,7 @@ function PeerEndpointReadonlyList(props: { t: Translate; lang: string; endpoints
   );
 }
 
-function ConfigRouteTable(props: { t: Translate; lang: string; desired: DesiredConfig; transports: TransportMatrix | null; links: LinkStatus[]; routes: RouteConfig[]; runtimeRoutes: RouteView[]; onAdd: () => void; onUpdate: (index: number, route: RouteConfig) => void; onRemove: (index: number) => void }) {
+function ConfigRouteTable(props: { t: Translate; lang: string; desired: DesiredConfig; transports: TransportMatrix | null; links: LinkStatus[]; routes: RouteConfig[]; runtimeRoutes: RouteView[]; onAdd: () => void; onUpdate: (index: number, route: RouteConfig) => void; onRemove: (index: number) => void; onPromote: (route: RouteView) => number }) {
   const peers = routePeerOptions(props.desired, undefined, props.links);
   const [selectedIndex, setSelectedIndex] = useState(0);
   useEffect(() => {
@@ -3665,12 +3739,12 @@ function ConfigRouteTable(props: { t: Translate; lang: string; desired: DesiredC
       ) : (
         <div className="empty-row">{props.t("no_static_route", "No static route")}</div>
       )}
-      <RuntimeRouteList t={props.t} lang={props.lang} routes={props.runtimeRoutes} />
+      <RuntimeRouteList t={props.t} lang={props.lang} routes={props.runtimeRoutes} staticRoutes={props.routes} onPromote={(route) => setSelectedIndex(props.onPromote(route))} />
     </section>
   );
 }
 
-function RuntimeRouteList(props: { t: Translate; lang: string; routes: RouteView[] }) {
+function RuntimeRouteList(props: { t: Translate; lang: string; routes: RouteView[]; staticRoutes: RouteConfig[]; onPromote: (route: RouteView) => void }) {
   return (
     <div className="runtime-route-panel">
       <div className="config-section-head">
@@ -3686,9 +3760,12 @@ function RuntimeRouteList(props: { t: Translate; lang: string; routes: RouteView
           {props.routes.map((route, index) => {
             const owner = route.owner || route.next_hop || "";
             const via = route.next_hop && route.next_hop !== owner ? route.next_hop : "";
+            const targetIndex = staticRouteTargetIndex(props.staticRoutes, route);
+            const exactIndex = staticRouteExactIndex(props.staticRoutes, route);
+            const promotable = runtimeRoutePromotable(route);
             const meta = compactList([
               route.kind || "unicast",
-              route.source || props.t("runtime", "Runtime"),
+              routeSourceLabel(props.t, route),
               owner ? `${props.t("owner", "Owner")} ${owner}` : "",
               via ? `${props.t("via", "Via")} ${via}` : "",
               route.endpoint || props.t("auto", "Auto"),
@@ -3698,6 +3775,17 @@ function RuntimeRouteList(props: { t: Translate; lang: string; routes: RouteView
               <div className="readonly-route-row" key={`${route.prefix || "route"}-${route.next_hop || ""}-${index}`}>
                 <strong title={route.prefix || ""}>{route.prefix || props.t("route", "Route")}</strong>
                 <span title={meta}>{meta}</span>
+                <div className="readonly-route-actions">
+                  {exactIndex >= 0 || route.source === "static" ? (
+                    <span className="readonly-chip">{props.t("already_static", "Already static")}</span>
+                  ) : promotable ? (
+                    <Button variant="ghost" title={props.t("help_promote_runtime_route", "Copy this learned runtime route into desired static routes, then edit and apply it.")} onClick={() => props.onPromote(route)}>
+                      <Plus size={15} />{targetIndex >= 0 ? props.t("update_static_route", "Update static") : props.t("promote_to_static", "Make static")}
+                    </Button>
+                  ) : (
+                    <span className="readonly-chip is-muted">{props.t("runtime", "Runtime")}</span>
+                  )}
+                </div>
               </div>
             );
           })}

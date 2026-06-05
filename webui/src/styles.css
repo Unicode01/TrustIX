@@ -2151,7 +2151,7 @@ button {
 
 .readonly-route-row {
   display: grid;
-  grid-template-columns: minmax(150px, 0.34fr) minmax(0, 1fr);
+  grid-template-columns: minmax(150px, 0.3fr) minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   min-width: 0;
@@ -2172,6 +2172,18 @@ button {
 .readonly-route-row span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.readonly-route-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.readonly-route-actions .button {
+  min-height: 30px;
+  padding: 0 10px;
 }
 
 .tunnel-fields {
