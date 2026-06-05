@@ -72,7 +72,7 @@ func TestDatapathPacketClassifyIOCABIMatchesKernelLayout(t *testing.T) {
 }
 
 func TestDatapathPacketStatsIOCABIMatchesKernelLayout(t *testing.T) {
-	if got, want := unsafe.Sizeof(TrustIXDatapathIOCPacketStats{}), uintptr(136); got != want {
+	if got, want := unsafe.Sizeof(TrustIXDatapathIOCPacketStats{}), uintptr(144); got != want {
 		t.Fatalf("TrustIXDatapathIOCPacketStats size = %d, want %d", got, want)
 	}
 	if got, want := TrustIXDatapathIOCPacketStatsCmd(), ioctlIOWR(trustIXAEADIOCMagic, 19, unsafe.Sizeof(TrustIXDatapathIOCPacketStats{})); got != want {
@@ -90,7 +90,7 @@ func TestDatapathHookIOCABIMatchesKernelLayout(t *testing.T) {
 }
 
 func TestDatapathTIXTEncapIOCABIMatchesKernelLayout(t *testing.T) {
-	if got, want := unsafe.Sizeof(TrustIXDatapathIOCTIXTEncap{}), uintptr(120); got != want {
+	if got, want := unsafe.Sizeof(TrustIXDatapathIOCTIXTEncap{}), uintptr(128); got != want {
 		t.Fatalf("TrustIXDatapathIOCTIXTEncap size = %d, want %d", got, want)
 	}
 	if got, want := TrustIXDatapathIOCTIXTEncapCmd(), ioctlIOWR(trustIXAEADIOCMagic, 21, unsafe.Sizeof(TrustIXDatapathIOCTIXTEncap{})); got != want {
@@ -99,7 +99,7 @@ func TestDatapathTIXTEncapIOCABIMatchesKernelLayout(t *testing.T) {
 }
 
 func TestDatapathTIXTDecapIOCABIMatchesKernelLayout(t *testing.T) {
-	if got, want := unsafe.Sizeof(TrustIXDatapathIOCTIXTDecap{}), uintptr(120); got != want {
+	if got, want := unsafe.Sizeof(TrustIXDatapathIOCTIXTDecap{}), uintptr(128); got != want {
 		t.Fatalf("TrustIXDatapathIOCTIXTDecap size = %d, want %d", got, want)
 	}
 	if got, want := TrustIXDatapathIOCTIXTDecapCmd(), ioctlIOWR(trustIXAEADIOCMagic, 22, unsafe.Sizeof(TrustIXDatapathIOCTIXTDecap{})); got != want {
