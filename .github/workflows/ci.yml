@@ -56,7 +56,7 @@ jobs:
 
       - name: Build Userspace Release
         run: |
-          scripts/trustix-build.sh \
+          bash scripts/trustix-build.sh \
             --out build/ci-release \
             --name trustix-linux-amd64-ci \
             --goarch amd64 \

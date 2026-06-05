@@ -119,7 +119,7 @@ jobs:
           if [[ -n "$INPUT_KDIR" ]]; then
             args+=(--kdir "$INPUT_KDIR")
           fi
-          scripts/trustix-build.sh "${args[@]}" --json
+          bash scripts/trustix-build.sh "${args[@]}" --json
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4

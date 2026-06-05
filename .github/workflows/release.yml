@@ -52,7 +52,7 @@ jobs:
           npm ci
           npm run webui:check
           npm run webui:build
-          scripts/trustix-build.sh \
+          bash scripts/trustix-build.sh \
             --out build/release \
             --name trustix-linux-${{ matrix.goarch }} \
             --goarch ${{ matrix.goarch }} \
