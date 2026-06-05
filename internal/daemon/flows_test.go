@@ -5626,6 +5626,47 @@ func TestReceiveDataPathSessionControlOnlyIgnoresDataAndKeepsControl(t *testing.
 	}
 }
 
+func TestReceiveDataPathSessionControlOnlyReceiveDataInjectsDataAndKeepsControl(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE", "0")
+	session := &batchRecvSession{
+		batches: [][][]byte{{tcpIPv4Packet(), encodeDataSessionControl(dataSessionControlPing, 33)}},
+		err:     fmt.Errorf("done"),
+	}
+	injector := &recordingInjector{}
+	daemon := &Daemon{
+		dataplane: &recordingDataplane{
+			NoopManager:       dataplane.NewNoopManager(),
+			recordingInjector: injector,
+		},
+		desired: config.Desired{
+			LAN: config.LANConfig{
+				Advertise: []core.Prefix{"10.0.1.0/24"},
+			},
+		},
+	}
+	runtime := &dataSessionRuntime{controlOnly: true, receiveData: true}
+
+	daemon.receiveDataPathSession(context.Background(), runtime, session)
+
+	if len(injector.packets) != 0 || len(injector.batchPackets) != 1 || len(injector.batchPackets[0]) != 1 {
+		t.Fatalf("control-only receive-data injections = singles:%d batches:%#v, want one batched data packet", len(injector.packets), injector.batchPackets)
+	}
+	if len(session.sent) != 1 {
+		t.Fatalf("control-only receive-data sent frames = %d, want pong", len(session.sent))
+	}
+	kind, nonce, ok := decodeDataSessionControl(session.sent[0])
+	if !ok || kind != dataSessionControlPong || nonce != 33 {
+		t.Fatalf("pong frame = kind %d nonce %d ok %v, want pong 33", kind, nonce, ok)
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.PacketsReceived != 1 || counters.PacketsInjected != 1 || counters.InjectBatchAttempts != 1 || counters.InjectBatchPackets != 1 || counters.SessionHeartbeatReceived != 1 {
+		t.Fatalf("control-only receive-data counters = %+v, want one data receive/inject and one heartbeat", counters)
+	}
+	if !session.closed {
+		t.Fatal("session was not closed on receive exit")
+	}
+}
+
 func TestHandleDataSessionControlRepliesToPingAndSwallowsFrame(t *testing.T) {
 	daemon := &Daemon{}
 	session := &recordingSession{}

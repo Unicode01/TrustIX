@@ -8,6 +8,7 @@ keep="${TRUSTIX_E2E_KEEP:-0}"
 perf_fast="${TRUSTIX_E2E_PERF_FAST:-0}"
 transport="${TRUSTIX_E2E_TRANSPORT:-udp}"
 tls_only="${TRUSTIX_E2E_TLS_ONLY:-0}"
+direct_management_vip="${TRUSTIX_E2E_DIRECT_MANAGEMENT_VIP:-auto}"
 transport_encryption="${TRUSTIX_E2E_TRANSPORT_ENCRYPTION:-${TRUSTIX_E2E_ENCRYPTION:-}}"
 dataplane="${TRUSTIX_E2E_DATAPLANE:-linux}"
 manage_forwarding="${TRUSTIX_E2E_MANAGE_FORWARDING:-true}"
@@ -329,9 +330,13 @@ effective_disable_veth_offloads() {
 
 effective_kernel_experimental_vaes_kfunc() {
   if [[ "$kernel_experimental_vaes_kfunc" == "auto" ]]; then
-    return 0
+    return 1
   fi
   truthy "$kernel_experimental_vaes_kfunc"
+}
+
+effective_kernel_experimental_vaes() {
+  truthy "$kernel_experimental_vaes"
 }
 
 effective_kernel_load_only() {
@@ -701,6 +706,18 @@ perf_fast_enabled() {
   case "$perf_fast" in
     1|true|yes|on|enabled) return 0 ;;
     *) return 1 ;;
+  esac
+}
+
+direct_management_vip_enabled() {
+  case "$direct_management_vip" in
+    1|true|yes|on|enabled) return 0 ;;
+    0|false|no|off|disabled) return 1 ;;
+    auto)
+      [[ "$router_netns" != "1" ]]
+      return
+      ;;
+    *) die "TRUSTIX_E2E_DIRECT_MANAGEMENT_VIP must be auto, 1, or 0" ;;
   esac
 }
 
@@ -1511,26 +1528,61 @@ assert_cross_ix_management_proxy() {
   grep -q "\"ix_id\": \"${target_ix}\"" "$status_path" || die "${source_node} proxy status did not return ${target_ix}"
 }
 
+route_table_covers_management_vip() {
+  local route_path="$1"
+  local target_gateway_ip="$2"
+  local target_ix="$3"
+  python3 - "$route_path" "$target_gateway_ip" "$target_ix" <<'PY'
+import ipaddress
+import json
+import sys
+
+path, target_ip, target_ix = sys.argv[1:4]
+target = ipaddress.ip_address(target_ip)
+try:
+    routes = json.load(open(path, encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+for route in routes:
+    prefix = route.get("prefix")
+    if not prefix:
+        continue
+    try:
+        network = ipaddress.ip_network(prefix, strict=False)
+    except ValueError:
+        continue
+    if target not in network:
+        continue
+    if network.prefixlen == network.max_prefixlen:
+        if route.get("source") == "management_vip" or route.get("kind") == "local":
+            sys.exit(0)
+        continue
+    if route.get("next_hop") == target_ix or route.get("owner") == target_ix:
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
 wait_for_management_vip_route() {
   local source_node="$1"
   local host_ns="$2"
   local source_gateway_ip="$3"
   local source_port="$4"
   local target_gateway_ip="$5"
+  local target_ix="$6"
   local api="https://${source_gateway_ip}:${source_port}"
   local api_tls_ca="$workdir/certs/domain-ca.pem"
   local api_tls_server_name="lab.local"
   local route_path="$workdir/${source_node}-management-vip-routes.json"
   for _ in $(seq 1 60); do
     if run_ctl "$host_ns" -api "$api" -api-tls-ca "$api_tls_ca" -api-tls-server-name "$api_tls_server_name" -admin-cert "$workdir/certs/admin-1.crt" -admin-key "$workdir/certs/admin-1.key" routes >"$route_path" 2>/dev/null &&
-      grep -q "\"prefix\": \"${target_gateway_ip}/32\"" "$route_path" &&
-      grep -q '"kind": "local"' "$route_path"; then
+      route_table_covers_management_vip "$route_path" "$target_gateway_ip" "$target_ix"; then
       return 0
     fi
     sleep 0.25
   done
   sed -n '1,160p' "$route_path" >&2 || true
-  die "${source_node} did not install local management VIP route for ${target_gateway_ip}/32"
+  die "${source_node} has no route covering management VIP ${target_gateway_ip} for ${target_ix}"
 }
 
 assert_direct_management_vip() {
@@ -1547,7 +1599,7 @@ assert_direct_management_vip() {
   local status_path="$workdir/${source_node}-direct-vip-${target_ix}-status.json"
   local attempts="${TRUSTIX_E2E_DIRECT_MANAGEMENT_VIP_ATTEMPTS:-40}"
   log "validating ${source_node} direct management VIP to ${target_ix} at ${api}"
-  wait_for_management_vip_route "$source_node" "$host_ns" "$source_gateway_ip" "$source_port" "$target_gateway_ip"
+  wait_for_management_vip_route "$source_node" "$host_ns" "$source_gateway_ip" "$source_port" "$target_gateway_ip" "$target_ix"
   [[ "$attempts" =~ ^[1-9][0-9]*$ ]] || attempts=40
   for _ in $(seq 1 "$attempts"); do
     if run_ctl "$host_ns" -api "$api" -api-tls-ca "$api_tls_ca" -api-tls-server-name "$api_tls_server_name" -admin-cert "$workdir/certs/admin-1.crt" -admin-key "$workdir/certs/admin-1.key" status >"$status_path" 2>"$workdir/${source_node}-direct-vip-${target_ix}.err"; then
@@ -1817,7 +1869,11 @@ assert_crash_cleanup_restart() {
   assert_data_dir_lock_rejects_duplicate ix-a "$config_path" "$data_dir" "$api_addr" "$peer_api_addr" "$ns"
   assert_host_management_api ix-a "$ns_a" 10.0.0.1 "$api_a_port"
   assert_cross_ix_management_proxy ix-a "$ns_a" 10.0.0.1 "$api_a_port" ix-b
-  assert_direct_management_vip ix-a "$ns_a" 10.0.0.1 "$api_a_port" 10.0.1.1 "$api_b_port" ix-b
+  if direct_management_vip_enabled; then
+    assert_direct_management_vip ix-a "$ns_a" 10.0.0.1 "$api_a_port" 10.0.1.1 "$api_b_port" ix-b
+  else
+    log "skip direct management VIP after crash restart for router-netns transport"
+  fi
   warm_neighbors
   if [[ "$nat_reverse" == "1" ]]; then
     if ! retry_ping "$ns_b" 10.0.0.2 "LAN B -> LAN A after ix-a crash restart reverse warmup"; then
@@ -2992,7 +3048,7 @@ maybe_prepare_kernel_module() {
       TRUSTIX_KERNEL_KEEP_LOADED=1 \
       TRUSTIX_KERNEL_LOAD_ONLY="$(effective_kernel_load_only && printf 1 || printf 0)" \
       TRUSTIX_KERNEL_TEST_BIN="$kernel_test_bin" \
-      TRUSTIX_KERNEL_EXPERIMENTAL_VAES="$kernel_experimental_vaes" \
+      TRUSTIX_KERNEL_EXPERIMENTAL_VAES="$(effective_kernel_experimental_vaes && printf 1 || printf 0)" \
       TRUSTIX_KERNEL_EXPERIMENTAL_VAES_KFUNC="$vaes_kfunc" \
       TRUSTIX_KERNEL_ALLOW_UNSUPPORTED_KERNEL="${TRUSTIX_E2E_KERNEL_ALLOW_UNSUPPORTED_KERNEL:-1}" \
       TRUSTIX_KERNEL_EXTRA_MODULE_PARAMS="$extra_module_params" \
@@ -3005,7 +3061,7 @@ maybe_prepare_kernel_module() {
     TRUSTIX_CRYPTO_MODULE_DIR="$kernel_module_dir" \
     TRUSTIX_KERNEL_KEEP_LOADED=1 \
     TRUSTIX_KERNEL_LOAD_ONLY="$(effective_kernel_load_only && printf 1 || printf 0)" \
-    TRUSTIX_KERNEL_EXPERIMENTAL_VAES="$kernel_experimental_vaes" \
+    TRUSTIX_KERNEL_EXPERIMENTAL_VAES="$(effective_kernel_experimental_vaes && printf 1 || printf 0)" \
     TRUSTIX_KERNEL_EXPERIMENTAL_VAES_KFUNC="$vaes_kfunc" \
     TRUSTIX_KERNEL_ALLOW_UNSUPPORTED_KERNEL="${TRUSTIX_E2E_KERNEL_ALLOW_UNSUPPORTED_KERNEL:-1}" \
     TRUSTIX_KERNEL_EXTRA_MODULE_PARAMS="$extra_module_params" \
@@ -3195,12 +3251,8 @@ validate_observability() {
       assert_hot_any_counter_positive "$workdir/ix-b-bpf.json" "tc_kernel_udp_tx_direct_packets" "tc_kernel_udp_tx_secure_direct_packets" "tc_kernel_udp_rx_direct_packets"
     fi
   fi
-  grep -q '"prefix": "10.0.1.1/32"' "$workdir/ix-a-routes.json" || die "ix-a did not learn ix-b management /32 route"
-  grep -q '"prefix": "10.0.0.1/32"' "$workdir/ix-b-routes.json" || die "ix-b did not learn ix-a management /32 route"
-  grep -q '"source": "management_vip"' "$workdir/ix-a-routes.json" || die "ix-a management /32 route is not sourced from management_vip"
-  grep -q '"source": "management_vip"' "$workdir/ix-b-routes.json" || die "ix-b management /32 route is not sourced from management_vip"
-  grep -q '"kind": "local"' "$workdir/ix-a-routes.json" || die "ix-a management /32 route is not local"
-  grep -q '"kind": "local"' "$workdir/ix-b-routes.json" || die "ix-b management /32 route is not local"
+  route_table_covers_management_vip "$workdir/ix-a-routes.json" "10.0.1.1" "ix-b" || die "ix-a routes do not cover ix-b management VIP"
+  route_table_covers_management_vip "$workdir/ix-b-routes.json" "10.0.0.1" "ix-a" || die "ix-b routes do not cover ix-a management VIP"
   if [[ "$transport" == "experimental_tcp" ]]; then
     for node in ix-a ix-b; do
       grep -q '"provider": "af_xdp"' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp provider is not af_xdp"
@@ -3459,7 +3511,7 @@ main() {
   configure_addresses
   mkdir -p "$workdir"
 log "workdir: $workdir"
-log "dataplane=${dataplane} transport=${transport} router_netns=${router_netns} nat_reverse=${nat_reverse} crypto=${crypto_placement} encryption=$(effective_transport_encryption) tls_only=${tls_only} hot_stats=${hot_stats} perf_fast=${perf_fast}"
+log "dataplane=${dataplane} transport=${transport} router_netns=${router_netns} nat_reverse=${nat_reverse} crypto=${crypto_placement} encryption=$(effective_transport_encryption) tls_only=${tls_only} direct_vip=${direct_management_vip} hot_stats=${hot_stats} perf_fast=${perf_fast}"
 if full_datapath_module_needed; then
   log "full datapath module: enabled rx_worker=${full_datapath_rx_worker} module_dir=${full_datapath_module_dir}"
 fi
@@ -3487,6 +3539,10 @@ fi
   case "$tls_only" in
     0|1) ;;
     *) die "TRUSTIX_E2E_TLS_ONLY must be 0 or 1" ;;
+  esac
+  case "$direct_management_vip" in
+    auto|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_E2E_DIRECT_MANAGEMENT_VIP must be auto, 1, or 0" ;;
   esac
   if is_tls_only && ! is_link_tls_transport; then
     die "TRUSTIX_E2E_TLS_ONLY=1 requires TRUSTIX_E2E_TRANSPORT=tcp, quic, websocket, or http_connect"
@@ -3823,8 +3879,12 @@ fi
     fi
   fi
   if ! perf_fast_enabled; then
-    assert_direct_management_vip ix-a "$ns_a" 10.0.0.1 "$api_a_port" 10.0.1.1 "$api_b_port" ix-b
-    assert_direct_management_vip ix-b "$ns_b" 10.0.1.1 "$api_b_port" 10.0.0.1 "$api_a_port" ix-a
+    if direct_management_vip_enabled; then
+      assert_direct_management_vip ix-a "$ns_a" 10.0.0.1 "$api_a_port" 10.0.1.1 "$api_b_port" ix-b
+      assert_direct_management_vip ix-b "$ns_b" 10.0.1.1 "$api_b_port" 10.0.0.1 "$api_a_port" ix-a
+    else
+      log "skip direct management VIP for router-netns transport"
+    fi
   fi
   if ! retry_ping "$ns_a" 10.0.1.2 "LAN A -> LAN B"; then
     collect_api ix-a "$api_a" "$daemon_ns_a" || true

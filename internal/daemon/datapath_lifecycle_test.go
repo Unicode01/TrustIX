@@ -601,9 +601,9 @@ func TestDataSessionControlOnlyIncludesExplicitSecureKernelDirectOnly(t *testing
 	}
 }
 
-func TestControlOnlySessionRuntimeDoesNotStartReceiveLoop(t *testing.T) {
+func TestControlOnlyKernelUDPSessionRuntimeStartsReceiveLoop(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
-	session := &epochBumpSession{stats: transport.TransportStats{Datagram: true}}
+	session := &epochBumpSession{stats: transport.TransportStats{Datagram: true, NativeBatching: true, FragmentingDatagram: true, MaxPacketSize: 1500}}
 	daemon := &Daemon{
 		dataSessions:     make(map[dataSessionKey]transport.Session),
 		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
@@ -638,21 +638,25 @@ func TestControlOnlySessionRuntimeDoesNotStartReceiveLoop(t *testing.T) {
 	if runtime == nil || !runtime.controlOnly {
 		t.Fatal("UDP plaintext direct-only runtime should be control-only")
 	}
-	time.Sleep(25 * time.Millisecond)
-	if session.closed.Load() {
-		t.Fatal("control-only runtime started receive loop and closed the session")
+	if !runtime.receiveData {
+		t.Fatal("UDP plaintext direct-only runtime should receive data")
 	}
-	daemon.dataMu.Lock()
-	_, ok := daemon.dataSessions[key]
-	daemon.dataMu.Unlock()
-	if !ok {
-		t.Fatal("control-only runtime removed the session")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for !session.closed.Load() {
+		select {
+		case <-ctx.Done():
+			t.Fatal("UDP plaintext direct-only runtime did not start receive loop")
+		case <-ticker.C:
+		}
 	}
 }
 
 func TestControlOnlyWarmupRetainsUDPKernelFlowOnClose(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
-	session := &epochBumpSession{stats: transport.TransportStats{Datagram: true}}
+	session := &epochBumpSession{stats: transport.TransportStats{Datagram: true, NativeBatching: true, FragmentingDatagram: true, MaxPacketSize: 1500}}
 	daemon := &Daemon{
 		dataSessions:     make(map[dataSessionKey]transport.Session),
 		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),

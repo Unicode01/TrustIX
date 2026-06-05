@@ -394,6 +394,7 @@ type dataSessionRuntime struct {
 	cancel       context.CancelFunc
 	batching     dataSessionBatchConfig
 	controlOnly  bool
+	receiveData  bool
 	sendMu       sync.Mutex
 	batchMu      sync.Mutex
 	batchNotify  chan struct{}
@@ -3902,6 +3903,7 @@ func (daemon *Daemon) startDataSessionRuntimeLockedWithOptions(key dataSessionKe
 	if controlOnlyWarmup && controlOnly && key.Transport == transport.ProtocolUDP {
 		retainKernelFlowOnClose(session)
 	}
+	receiveData := !controlOnly || daemon.controlOnlySessionReceivesData(key, session)
 	runtime := &dataSessionRuntime{
 		key:         key,
 		session:     session,
@@ -3911,6 +3913,7 @@ func (daemon *Daemon) startDataSessionRuntimeLockedWithOptions(key dataSessionKe
 		batching:    dataSessionBatchConfigFromEnv(),
 		batchNotify: make(chan struct{}, 1),
 		controlOnly: controlOnly,
+		receiveData: receiveData,
 	}
 	now := time.Now().UTC().UnixNano()
 	runtime.lastPong.Store(now)
@@ -3919,16 +3922,24 @@ func (daemon *Daemon) startDataSessionRuntimeLockedWithOptions(key dataSessionKe
 	runtime.lastUp.Store(now)
 	daemon.dataSessionState[key] = runtime
 	runtime.cacheSessionCapabilities(session)
-	if !runtime.controlOnly {
+	if runtime.receiveData {
 		go daemon.receiveDataPathSession(runtimeCtx, runtime, session)
 	}
-	if !runtime.controlOnly && daemon.sessionHeartbeatEnabledLocked() {
+	if runtime.receiveData && daemon.sessionHeartbeatEnabledLocked() {
 		go daemon.runDataSessionHeartbeat(runtimeCtx, runtime)
 	}
 	if runtime.batching.enabled {
 		go daemon.runDataSessionBatchFlusher(runtimeCtx, runtime)
 	}
 	return runtime
+}
+
+func (daemon *Daemon) controlOnlySessionReceivesData(key dataSessionKey, session transport.Session) bool {
+	if key.Transport != transport.ProtocolUDP || session == nil {
+		return false
+	}
+	stats := session.Stats()
+	return stats.Datagram && (stats.NativeBatching || stats.FragmentingDatagram || stats.MaxPacketSize > 0)
 }
 
 func retainKernelFlowOnClose(session transport.Session) {
@@ -5157,7 +5168,7 @@ func (daemon *Daemon) handleReceivedDataPathPackets(ctx context.Context, runtime
 		scratch = &dataReceiveScratch{}
 		defer scratch.release()
 	}
-	if runtime != nil && runtime.controlOnly {
+	if runtime != nil && runtime.controlOnly && !runtime.receiveData {
 		for _, packet := range packets {
 			daemon.handleDataSessionControl(ctx, runtime, session, packet)
 		}
