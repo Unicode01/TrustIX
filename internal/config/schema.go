@@ -148,10 +148,11 @@ type KernelModulesConfig struct {
 }
 
 type KernelModuleConfig struct {
-	Mode         string `json:"mode,omitempty" yaml:"mode,omitempty"`
-	Path         string `json:"path,omitempty" yaml:"path,omitempty"`
-	Parameters   string `json:"parameters,omitempty" yaml:"parameters,omitempty"`
-	UnloadOnExit bool   `json:"unload_on_exit,omitempty" yaml:"unload_on_exit,omitempty"`
+	Mode            string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Path            string `json:"path,omitempty" yaml:"path,omitempty"`
+	Parameters      string `json:"parameters,omitempty" yaml:"parameters,omitempty"`
+	ReloadOnUpgrade string `json:"reload_on_upgrade,omitempty" yaml:"reload_on_upgrade,omitempty"`
+	UnloadOnExit    bool   `json:"unload_on_exit,omitempty" yaml:"unload_on_exit,omitempty"`
 }
 
 type EndpointConfig struct {
@@ -860,9 +861,29 @@ func validateKernelModules(modules KernelModulesConfig) error {
 func validateKernelModule(label string, module KernelModuleConfig) error {
 	switch strings.ToLower(strings.TrimSpace(module.Mode)) {
 	case "", "disabled", "auto", "required":
-		return nil
 	default:
 		return fmt.Errorf("%s mode %q is unsupported", label, module.Mode)
+	}
+	switch NormalizeKernelModuleReloadOnUpgrade(module.ReloadOnUpgrade) {
+	case "", "auto", "never", "always":
+		return nil
+	default:
+		return fmt.Errorf("%s reload_on_upgrade %q is unsupported", label, module.ReloadOnUpgrade)
+	}
+}
+
+func NormalizeKernelModuleReloadOnUpgrade(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return ""
+	case "auto", "on_mismatch", "mismatch":
+		return "auto"
+	case "never", "disabled", "disable", "off", "false", "0", "no":
+		return "never"
+	case "always", "force", "forced", "true", "1", "yes", "on":
+		return "always"
+	default:
+		return strings.ToLower(strings.TrimSpace(raw))
 	}
 }
 

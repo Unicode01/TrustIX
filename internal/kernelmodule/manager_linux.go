@@ -3,6 +3,7 @@
 package kernelmodule
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,12 +21,21 @@ import (
 	"trustix.local/trustix/internal/config"
 )
 
+const (
+	moduleBuildSHAParam = "build_sha256"
+
+	reloadOnUpgradeAuto   = "auto"
+	reloadOnUpgradeNever  = "never"
+	reloadOnUpgradeAlways = "always"
+)
+
 func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelModuleConfig) (Status, error) {
 	if err := ctx.Err(); err != nil {
 		return manager.status, err
 	}
 	mode := normalizeMode(module.Mode)
 	status := manager.inspectLocked(module, mode)
+	source := manager.resolveModuleSource(module)
 	switch mode {
 	case ModeDisabled:
 		status.State = ModeDisabled
@@ -34,6 +44,19 @@ func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelMo
 		return status, nil
 	case ModeAuto, ModeRequired:
 		if status.Loaded {
+			reloaded, upgradeState, upgradeReason, reloadErr := manager.reloadLoadedModuleForUpgradeLocked(ctx, module, source, status)
+			if reloadErr != nil {
+				status = manager.inspectLocked(module, mode)
+				status.Managed = manager.loadedByUs
+				status.State = "error"
+				status.UpgradeState = upgradeState
+				status.Reason = appendStatusReason(upgradeReason, reloadErr.Error())
+				manager.status = status
+				if mode == ModeRequired {
+					return status, fmt.Errorf("%s is required but could not be upgraded: %w", manager.name, reloadErr)
+				}
+				return status, nil
+			}
 			parameterNotes := applyLoadedModuleParameters(manager.name, module.Parameters)
 			status = manager.inspectLocked(module, mode)
 			if manager.loadedByUs {
@@ -51,10 +74,16 @@ func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelMo
 			if len(parameterNotes) > 0 {
 				status.Reason = strings.TrimSpace(status.Reason + "; " + strings.Join(parameterNotes, "; "))
 			}
+			if reloaded {
+				status.UpgradeState = "reloaded"
+				status.Reason = appendStatusReason(status.Reason, upgradeReason)
+			} else if upgradeState != "" {
+				status.UpgradeState = upgradeState
+				status.Reason = appendStatusReason(status.Reason, upgradeReason)
+			}
 			manager.status = status
 			return status, nil
 		}
-		source := manager.resolveModuleSource(module)
 		if source.unavailable() {
 			status.State = "unavailable"
 			status.Reason = source.err.Error()
@@ -65,10 +94,7 @@ func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelMo
 			return status, nil
 		}
 		status.Path = source.label
-		status.SHA256 = bytesSHA256(source.payload)
-		if source.path != "" {
-			status.SHA256 = fileSHA256(source.path)
-		}
+		status.SHA256 = moduleSourceSHA256(source)
 		if err := loadModuleSource(source, module.Parameters); err != nil {
 			status = manager.inspectLocked(module, mode)
 			status.State = "error"
@@ -86,6 +112,7 @@ func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelMo
 		status.State = "loaded_by_trustix"
 		loadedAt := time.Now().UTC()
 		status.LoadedAt = &loadedAt
+		status.UpgradeState = "loaded"
 		status.Reason = "module loaded by trustixd"
 		manager.status = status
 		return status, nil
@@ -114,10 +141,11 @@ func (manager *Manager) closeLocked(ctx context.Context) error {
 	}
 	if err := unix.DeleteModule(manager.name, unix.O_NONBLOCK); err != nil {
 		manager.status = manager.inspectLocked(config.KernelModuleConfig{
-			Mode:         status.Mode,
-			Path:         status.Path,
-			Parameters:   status.Parameters,
-			UnloadOnExit: status.UnloadOnExit,
+			Mode:            status.Mode,
+			Path:            status.Path,
+			Parameters:      status.Parameters,
+			ReloadOnUpgrade: status.ReloadOnUpgrade,
+			UnloadOnExit:    status.UnloadOnExit,
 		}, status.Mode)
 		manager.status.Managed = true
 		manager.status.State = "error"
@@ -126,10 +154,11 @@ func (manager *Manager) closeLocked(ctx context.Context) error {
 	}
 	manager.loadedByUs = false
 	manager.status = manager.inspectLocked(config.KernelModuleConfig{
-		Mode:         status.Mode,
-		Path:         status.Path,
-		Parameters:   status.Parameters,
-		UnloadOnExit: status.UnloadOnExit,
+		Mode:            status.Mode,
+		Path:            status.Path,
+		Parameters:      status.Parameters,
+		ReloadOnUpgrade: status.ReloadOnUpgrade,
+		UnloadOnExit:    status.UnloadOnExit,
 	}, status.Mode)
 	manager.status.State = "unloaded"
 	manager.status.Reason = "module unloaded by trustixd"
@@ -139,29 +168,29 @@ func (manager *Manager) closeLocked(ctx context.Context) error {
 func (manager *Manager) inspectLocked(module config.KernelModuleConfig, mode string) Status {
 	source := manager.resolveModuleSource(module)
 	status := Status{
-		Name:         manager.name,
-		Mode:         mode,
-		Path:         source.label,
-		Parameters:   module.Parameters,
-		Managed:      manager.loadedByUs,
-		UnloadOnExit: module.UnloadOnExit,
+		Name:            manager.name,
+		Mode:            mode,
+		Path:            source.label,
+		Parameters:      module.Parameters,
+		ReloadOnUpgrade: effectiveReloadOnUpgrade(module.ReloadOnUpgrade),
+		Managed:         manager.loadedByUs,
+		UnloadOnExit:    module.UnloadOnExit,
 	}
-	switch {
-	case source.path != "":
-		status.SHA256 = fileSHA256(source.path)
-	case len(source.payload) > 0:
-		status.SHA256 = bytesSHA256(source.payload)
-	}
+	status.SHA256 = moduleSourceSHA256(source)
 	loaded, refCount, usedBy := procModuleStatus(manager.name)
 	status.Loaded = loaded
 	status.RefCount = refCount
 	status.UsedBy = usedBy
+	if loadedSHA, ok := readModuleParamString(manager.name, moduleBuildSHAParam); ok {
+		status.LoadedSHA256 = loadedSHA
+	}
 	status.InitState = readTrimmed(filepath.Join("/sys/module", manager.name, "initstate"))
 	status.Version = readTrimmed(filepath.Join("/sys/module", manager.name, "version"))
 	status.ABIVersion = inspectModuleABIVersion(manager.name, loaded)
 	var moduleBTFMissing bool
 	status.Features, moduleBTFMissing = inspectTrustIXCryptoFeatures(manager.name, loaded)
 	status = completeCapabilityStatus(status)
+	status.UpgradeState = loadedModuleUpgradeState(source, status)
 	if moduleBTFMissing {
 		status.Reason = appendStatusReason(status.Reason, "module BTF is unavailable; kfunc capabilities are disabled")
 	}
@@ -176,6 +205,94 @@ func (manager *Manager) inspectLocked(module config.KernelModuleConfig, mode str
 		status.State = "unavailable"
 	}
 	return status
+}
+
+func (manager *Manager) reloadLoadedModuleForUpgradeLocked(ctx context.Context, module config.KernelModuleConfig, source moduleSource, status Status) (bool, string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return false, status.UpgradeState, "", err
+	}
+	policy := effectiveReloadOnUpgrade(module.ReloadOnUpgrade)
+	upgradeState := loadedModuleUpgradeState(source, status)
+	upgradeReason := loadedModuleUpgradeReason(source, status, upgradeState)
+	switch policy {
+	case reloadOnUpgradeNever:
+		return false, upgradeState, upgradeReason, nil
+	}
+	if source.unavailable() || moduleSourceSHA256(source) == "" {
+		return false, upgradeState, upgradeReason, nil
+	}
+	if policy != reloadOnUpgradeAlways && !moduleSourceSupportsBuildSHA(source) {
+		return false, upgradeState, upgradeReason, nil
+	}
+	shouldReload := policy == reloadOnUpgradeAlways || upgradeState == "missing_loaded_fingerprint" || upgradeState == "mismatch"
+	if !shouldReload {
+		return false, upgradeState, upgradeReason, nil
+	}
+	if status.RefCount > 0 {
+		return false, upgradeState, upgradeReason, fmt.Errorf("loaded module ref_count=%d; refusing automatic upgrade reload while it is in use", status.RefCount)
+	}
+	if err := unix.DeleteModule(manager.name, unix.O_NONBLOCK); err != nil {
+		return false, upgradeState, upgradeReason, fmt.Errorf("unload old module: %w", err)
+	}
+	manager.loadedByUs = false
+	if err := loadModuleSource(source, module.Parameters); err != nil {
+		return false, "reload_failed", upgradeReason, fmt.Errorf("load upgraded module %q: %w", source.label, err)
+	}
+	manager.loadedByUs = true
+	return true, "reloaded", upgradeReason, nil
+}
+
+func effectiveReloadOnUpgrade(raw string) string {
+	switch config.NormalizeKernelModuleReloadOnUpgrade(raw) {
+	case reloadOnUpgradeNever:
+		return reloadOnUpgradeNever
+	case reloadOnUpgradeAlways:
+		return reloadOnUpgradeAlways
+	default:
+		return reloadOnUpgradeAuto
+	}
+}
+
+func loadedModuleUpgradeState(source moduleSource, status Status) string {
+	if !status.Loaded {
+		return "not_loaded"
+	}
+	sourceSHA := moduleSourceSHA256(source)
+	if source.unavailable() || sourceSHA == "" {
+		return "unknown_target_fingerprint"
+	}
+	if !moduleSourceSupportsBuildSHA(source) {
+		return "target_fingerprint_unsupported"
+	}
+	if status.LoadedSHA256 == "" {
+		return "missing_loaded_fingerprint"
+	}
+	if status.LoadedSHA256 != sourceSHA {
+		return "mismatch"
+	}
+	return "current"
+}
+
+func loadedModuleUpgradeReason(source moduleSource, status Status, state string) string {
+	switch state {
+	case "current":
+		return "loaded module fingerprint matches target module"
+	case "not_loaded":
+		return "module is not loaded"
+	case "unknown_target_fingerprint":
+		if source.err != nil {
+			return source.err.Error()
+		}
+		return "target module fingerprint is unavailable"
+	case "target_fingerprint_unsupported":
+		return "target module does not expose build_sha256; upgrade matching is disabled for this module payload"
+	case "missing_loaded_fingerprint":
+		return "loaded module does not expose build_sha256; treating it as an upgrade candidate"
+	case "mismatch":
+		return "loaded module fingerprint differs from target module"
+	default:
+		return ""
+	}
 }
 
 const (
@@ -359,6 +476,7 @@ func (manager *Manager) resolveModuleSource(module config.KernelModuleConfig) mo
 }
 
 func loadModuleSource(source moduleSource, parameters string) error {
+	parameters = loadParametersWithBuildSHA(source, parameters)
 	if source.path != "" {
 		return loadModuleFile(source.path, parameters)
 	}
@@ -366,6 +484,49 @@ func loadModuleSource(source moduleSource, parameters string) error {
 		return fmt.Errorf("embedded module payload is empty")
 	}
 	return loadModuleBytes(source.payload, parameters)
+}
+
+func moduleSourceSHA256(source moduleSource) string {
+	switch {
+	case source.path != "":
+		return fileSHA256(source.path)
+	case len(source.payload) > 0:
+		return bytesSHA256(source.payload)
+	default:
+		return ""
+	}
+}
+
+func moduleSourceSupportsBuildSHA(source moduleSource) bool {
+	payload, ok := moduleSourceBytes(source)
+	if !ok {
+		return false
+	}
+	return bytes.Contains(payload, []byte("parm="+moduleBuildSHAParam+":"))
+}
+
+func moduleSourceBytes(source moduleSource) ([]byte, bool) {
+	switch {
+	case len(source.payload) > 0:
+		return source.payload, true
+	case source.path != "":
+		payload, err := os.ReadFile(source.path)
+		if err != nil {
+			return nil, false
+		}
+		return payload, true
+	default:
+		return nil, false
+	}
+}
+
+func loadParametersWithBuildSHA(source moduleSource, parameters string) string {
+	parameters = removeModuleParameter(parameters, moduleBuildSHAParam)
+	sourceSHA := moduleSourceSHA256(source)
+	if sourceSHA == "" || !moduleSourceSupportsBuildSHA(source) {
+		return parameters
+	}
+	return setModuleParameter(parameters, moduleBuildSHAParam, sourceSHA)
 }
 
 func loadModuleFile(path, parameters string) error {
@@ -398,6 +559,9 @@ func loadModuleBytes(payload []byte, parameters string) error {
 func applyLoadedModuleParameters(name, parameters string) []string {
 	var notes []string
 	for key, value := range parseModuleParameters(parameters) {
+		if key == moduleBuildSHAParam {
+			continue
+		}
 		path := filepath.Join("/sys/module", name, "parameters", key)
 		current, err := os.ReadFile(path)
 		if err != nil {
@@ -436,6 +600,36 @@ func parseModuleParameters(parameters string) map[string]string {
 		parsed[key] = value
 	}
 	return parsed
+}
+
+func setModuleParameter(parameters, key, value string) string {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" {
+		return strings.TrimSpace(parameters)
+	}
+	parameters = removeModuleParameter(parameters, key)
+	if parameters == "" {
+		return key + "=" + value
+	}
+	return parameters + " " + key + "=" + value
+}
+
+func removeModuleParameter(parameters, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return strings.TrimSpace(parameters)
+	}
+	fields := strings.Fields(parameters)
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		existing, _, ok := strings.Cut(field, "=")
+		if ok && strings.TrimSpace(existing) == key {
+			continue
+		}
+		out = append(out, field)
+	}
+	return strings.Join(out, " ")
 }
 
 func normalizeModuleParameterValue(value string) string {
@@ -507,6 +701,14 @@ func readModuleParamUint64(name, param string) (uint64, bool) {
 		return 0, false
 	}
 	return parsed, true
+}
+
+func readModuleParamString(name, param string) (string, bool) {
+	payload, err := os.ReadFile(filepath.Join("/sys/module", name, "parameters", param))
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(payload)), true
 }
 
 func fileSHA256(path string) string {

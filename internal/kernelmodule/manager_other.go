@@ -15,13 +15,15 @@ func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelMo
 	}
 	mode := normalizeMode(module.Mode)
 	status := Status{
-		Name:         manager.name,
-		Mode:         mode,
-		Path:         module.Path,
-		Parameters:   module.Parameters,
-		UnloadOnExit: module.UnloadOnExit,
-		State:        "unavailable",
-		Reason:       "kernel module lifecycle is only available on Linux",
+		Name:            manager.name,
+		Mode:            mode,
+		Path:            module.Path,
+		Parameters:      module.Parameters,
+		ReloadOnUpgrade: config.NormalizeKernelModuleReloadOnUpgrade(module.ReloadOnUpgrade),
+		UnloadOnExit:    module.UnloadOnExit,
+		State:           "unavailable",
+		UpgradeState:    "unsupported_platform",
+		Reason:          "kernel module lifecycle is only available on Linux",
 	}
 	if mode == ModeDisabled {
 		status.State = ModeDisabled

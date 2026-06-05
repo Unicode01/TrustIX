@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test And Userspace Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set Up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm make
+
+      - name: Shell Syntax
+        run: |
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
+
+      - name: WebUI Check
+        run: |
+          npm ci
+          npm run webui:check
+          npm run webui:build
+
+      - name: Go Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pkgs < <(go list ./cmd/... ./internal/... | grep -v '^trustix.local/trustix/internal/dataplane/ebpf$')
+          go test "${pkgs[@]}" -count=1
+          go test ./internal/dataplane/ebpf -run '^$' -count=1
+
+      - name: Build Userspace Release
+        run: |
+          scripts/trustix-build.sh \
+            --out build/ci-release \
+            --name trustix-linux-amd64-ci \
+            --goarch amd64 \
+            --build-bpf 1 \
+            --build-ko 0 \
+            --build-tests 0 \
+            --skip-webui \
+            --json

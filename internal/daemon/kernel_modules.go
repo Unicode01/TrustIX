@@ -370,6 +370,23 @@ func kernelModuleDoctorCheck(statuses []kernelmodule.Status) doctorCheck {
 		if status.SHA256 != "" {
 			detail += " sha256=" + status.SHA256
 		}
+		if status.LoadedSHA256 != "" {
+			detail += " loaded_sha256=" + status.LoadedSHA256
+		}
+		if status.ReloadOnUpgrade != "" {
+			detail += " reload_on_upgrade=" + status.ReloadOnUpgrade
+		}
+		if status.UpgradeState != "" {
+			detail += " upgrade_state=" + status.UpgradeState
+			switch status.UpgradeState {
+			case "mismatch", "missing_loaded_fingerprint", "reload_failed":
+				if status.Mode == kernelmodule.ModeRequired {
+					worst = "degraded"
+				} else if worst == "ok" {
+					worst = "warn"
+				}
+			}
+		}
 		if status.CapabilityTier != "" {
 			detail += " tier=" + status.CapabilityTier
 		}

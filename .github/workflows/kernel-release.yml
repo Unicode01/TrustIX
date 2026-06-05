@@ -1,0 +1,131 @@
+name: Kernel Module Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      goarch:
+        description: Go target architecture
+        required: true
+        default: amd64
+        type: choice
+        options:
+          - amd64
+          - arm64
+          - arm
+      runs_on:
+        description: Runner label; use self-hosted for custom kernels
+        required: true
+        default: ubuntu-latest
+        type: string
+      release_name:
+        description: Release/package name
+        required: false
+        type: string
+      kdir:
+        description: Kernel build directory; empty uses /lib/modules/$(uname -r)/build
+        required: false
+        type: string
+      kernel_arch:
+        description: Kernel ARCH override
+        required: false
+        type: string
+      cross_compile:
+        description: CROSS_COMPILE prefix override
+        required: false
+        type: string
+      build_bpf:
+        description: Rebuild embedded eBPF objects
+        required: true
+        default: true
+        type: boolean
+      build_tests:
+        description: Build packaged Go test binaries
+        required: true
+        default: false
+        type: boolean
+      build_webui:
+        description: Rebuild WebUI assets in the workflow
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build Kernel Package
+    runs-on: ${{ inputs.runs_on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set Up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang llvm make kmod
+          sudo apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" || true
+
+      - name: Build Kernel Release Tarball
+        env:
+          INPUT_RELEASE_NAME: ${{ inputs.release_name }}
+          INPUT_KDIR: ${{ inputs.kdir }}
+          INPUT_KERNEL_ARCH: ${{ inputs.kernel_arch }}
+          INPUT_CROSS_COMPILE: ${{ inputs.cross_compile }}
+          INPUT_BUILD_BPF: ${{ inputs.build_bpf }}
+          INPUT_BUILD_TESTS: ${{ inputs.build_tests }}
+          INPUT_BUILD_WEBUI: ${{ inputs.build_webui }}
+          TRUSTIX_RELEASE_KERNEL_ARCH: ${{ inputs.kernel_arch }}
+          TRUSTIX_RELEASE_KERNEL_CROSS_COMPILE: ${{ inputs.cross_compile }}
+        run: |
+          set -euo pipefail
+          name="${INPUT_RELEASE_NAME:-trustix-linux-${{ inputs.goarch }}-kernel-$(uname -r)}"
+          build_bpf=0
+          if [[ "$INPUT_BUILD_BPF" == "true" ]]; then
+            build_bpf=1
+          fi
+          build_tests=0
+          if [[ "$INPUT_BUILD_TESTS" == "true" ]]; then
+            build_tests=1
+          fi
+          webui_arg=(--skip-webui)
+          if [[ "$INPUT_BUILD_WEBUI" == "true" ]]; then
+            npm ci
+            npm run webui:check
+            npm run webui:build
+            webui_arg=()
+          fi
+          args=(
+            --out build/kernel-release
+            --name "$name"
+            --goarch "${{ inputs.goarch }}"
+            --build-bpf "$build_bpf"
+            --build-ko 1
+            --build-tests "$build_tests"
+            "${webui_arg[@]}"
+          )
+          if [[ -n "$INPUT_KDIR" ]]; then
+            args+=(--kdir "$INPUT_KDIR")
+          fi
+          scripts/trustix-build.sh "${args[@]}" --json
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-release-${{ inputs.goarch }}
+          path: |
+            build/kernel-release/*.tar.gz
+            build/kernel-release/*/package/manifest.json
+          if-no-files-found: error

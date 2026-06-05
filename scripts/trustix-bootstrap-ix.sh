@@ -105,6 +105,10 @@ Curl bootstrap:
   into a temporary directory before building. Override with
   TRUSTIX_BOOTSTRAP_REPO, TRUSTIX_BOOTSTRAP_REF, or TRUSTIX_BOOTSTRAP_WORKDIR.
 
+Existing installs should be upgraded with scripts/trustix-update.sh. It preserves
+config/certs/data and replaces only release files plus the systemd unit:
+  curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-update.sh | bash -s -- --release-url URL
+
 Endpoint SPEC fields are comma-separated or semicolon-separated:
   name=ix-new-udp,transport=udp,mode=passive,listen=0.0.0.0:7000,address=ddns.example:7000
 Use semicolons when a value itself contains commas, for example GRE/IPIP/VXLAN
@@ -563,7 +567,7 @@ done
   fi
   printf '],\n'
   printf '  "management":{"tls":{"mode":"auto","identity":"ix_cert"},"host_api":{"enabled":true,"allow_unauthenticated_reads":false},"web_ui":{"enabled":true}},\n'
-  printf '  "kernel_modules":{"trustix_crypto":{"mode":"%s","path":"embedded","unload_on_exit":false},"trustix_datapath":{"mode":"%s","path":"embedded","unload_on_exit":false},"trustix_datapath_helpers":{"mode":"%s","path":"embedded","unload_on_exit":false}},\n' \
+  printf '  "kernel_modules":{"trustix_crypto":{"mode":"%s","path":"embedded","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath":{"mode":"%s","path":"embedded","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath_helpers":{"mode":"%s","path":"embedded","reload_on_upgrade":"auto","unload_on_exit":false}},\n' \
     "$(json_escape "$kernel_modules")" "$(json_escape "$kernel_modules")" "$(json_escape "$kernel_modules")"
   printf '  "endpoints":['
   first=1

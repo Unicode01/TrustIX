@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version string used in build metadata
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package ${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch:
+          - amd64
+          - arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set Up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm make
+
+      - name: Build Release Tarball
+        env:
+          TRUSTIX_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          npm ci
+          npm run webui:check
+          npm run webui:build
+          scripts/trustix-build.sh \
+            --out build/release \
+            --name trustix-linux-${{ matrix.goarch }} \
+            --goarch ${{ matrix.goarch }} \
+            --build-bpf 1 \
+            --build-ko 0 \
+            --build-tests 0 \
+            --skip-webui \
+            --json
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trustix-linux-${{ matrix.goarch }}
+          path: |
+            build/release/trustix-linux-${{ matrix.goarch }}.tar.gz
+            build/release/trustix-linux-${{ matrix.goarch }}/package/manifest.json
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: build/artifacts
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find build/artifacts -type f -name '*.tar.gz' | sort)
+          gh release create "$TAG" "${assets[@]}" \
+            --title "$TAG" \
+            --notes "TrustIX userspace release. Kernel module source is included; prebuilt .ko artifacts are target-kernel specific and are not part of the default release." \
+            || gh release upload "$TAG" "${assets[@]}" --clobber

@@ -174,7 +174,7 @@ Linux dataplane 当前会：
 - `kernel/trustix_crypto` 提供可选 out-of-tree `.ko`，用于在已有 BPF crypto kfunc 但缺少 BPF `aead` type 的发行版内核上注册 TrustIX 需要的 AEAD-GCM 能力；默认它委托 kernel crypto API，AES-NI 仍由内核 provider 决定，缺少硬件 AES 时会走内核同步 generic `gcm(aes)` / `__gcm(aes)` 软件实现。需要在有 AES-NI 的机器上强制验证软件路径时，可通过 `kernel_modules.trustix_crypto.parameters: "prefer_software=1"` 或手动 `insmod ... prefer_software=1` 加载。x86 AES/AVX2/VAES/VPCLMULQDQ 主机可加 `experimental_vaes=1` 启用 prepared mmap pool seal batch 的 TrustIX VAES/VPCLMUL 引擎；`experimental_vaes_kfunc=1` 还会让单包 kfunc crypto callback 尝试 VAES 路径，适合 TC secure-direct 这类小包内核加解密压测。默认 `vaes_agg_ghash=1` 使用 4-block aggregated GHASH，`vaes_agg_ghash=0` 可回退 GHASH loop，`vaes_fused_ghash=1` 只保留为较慢的实验对照。`vaes_attempts` 和 `vaes_fallbacks` 可用于确认是否实际命中实验路径。
 - `kernel/trustix_datapath` 是完整 kernel datapath 的独立 `.ko` 落点，拥有 `/dev/trustix_datapath`、query/selftest ABI、route/session/session-wire/flow state batch ioctl 表、内核侧 route/flow/session classify 自测、dry-run IPv4 packet classify ioctl、受控 TIXT encap/decap ioctl，以及可 attach 到 IPv4 prerouting 的 hook/counters。daemon 会在该模块已加载时 best-effort 同步已接受的 IPv4 route/session/session-wire/flow records。加载 `enable_features=128 rx_worker_inject=1 tx_plaintext=1` 且自测通过后，模块会报告安全 `full_datapath`，并可通过 `RX_WORKER` 在内核回注 plaintext RX，通过 `TX_PLAINTEXT` 在内核封装 plaintext LAN TX；secure 加密、GSO LAN TX 和更激进 direct XMIT 仍保持 gated 实验路径。
 - `kernel/trustix_datapath_helpers` 是 skb/header/GSO 和 route-TCP helper kfunc 的独立 `.ko`，拥有 `/dev/trustix_datapath_helpers` 和 helper feature query ABI。当前第一版只允许它报告安全 `gso_skb` helper 能力；完整 route/session/queue/XMIT 下沉属于 `kernel/trustix_datapath`，helpers 即使误报 `full_datapath` 也不会被控制面接纳为完整 datapath。
-- 可用本机 `kernel_modules.trustix_crypto`、`kernel_modules.trustix_datapath` 和 `kernel_modules.trustix_datapath_helpers` 声明让 daemon 管理三个 `.ko` 生命周期。`mode: disabled` 不触碰模块；`mode: auto` 会在模块未加载时尝试加载，失败只在 status/doctor 中告警；`mode: required` 会要求模块已加载或可由 daemon 加载，否则启动/热 apply 失败。`path` 可指向文件，也可写 `embedded` 使用 release 二进制内置的对应 `.ko`。daemon 使用 Linux `finit_module`/`init_module`/`delete_module` syscall，不 shell out 到 `insmod`/`rmmod`；`unload_on_exit: true` 只会在退出时卸载本进程加载的模块，不卸载外部预加载模块。
+- 可用本机 `kernel_modules.trustix_crypto`、`kernel_modules.trustix_datapath` 和 `kernel_modules.trustix_datapath_helpers` 声明让 daemon 管理三个 `.ko` 生命周期。`mode: disabled` 不触碰模块；`mode: auto` 会在模块未加载时尝试加载，失败只在 status/doctor 中告警；`mode: required` 会要求模块已加载或可由 daemon 加载，否则启动/热 apply 失败。`path` 可指向文件，也可写 `embedded` 使用 release 二进制内置的对应 `.ko`。`reload_on_upgrade: auto` 是运行时默认值：TrustIX 加载模块时注入 `build_sha256`，后续启动发现已加载模块缺少该指纹或指纹不同，且模块 `ref_count=0` 时会先卸载旧模块再加载目标 `.ko`；`never` 禁用自动升级重载，`always` 每次 ensure 都重载。daemon 使用 Linux `finit_module`/`init_module`/`delete_module` syscall，不 shell out 到 `insmod`/`rmmod`；`unload_on_exit: true` 只会在退出时卸载本进程加载的模块，不卸载外部预加载模块。
 - 对端 daemon 收到 secure transport packet 后解密，并通过 AF_PACKET cooked L2 reinject 送入 LAN；运行时不再使用 raw IPv4 socket 做 LAN 回灌。若回注包是超过 LAN MTU 的普通 IPv4/TCP payload 包，会先按 LAN MTU 做软件 TCP 分段并刷新 IPv4/TCP checksum，避免 GSO 形态大包在回注侧触发 `MTU_EXCEEDED`；不能安全分段的报文仍 fail-closed。
 - AF_XDP provider 支持多 RX queue 绑定、不可用队列数自动降级、按 flow/tuple 固定 TX queue、TX completion 后台回收、TX 背压短重试、neighbor cache、netlink neighbor event 同步、XDP allowed-port 热同步、session close flow 清理和 orphan flow TTL/GC，并在 `trustixctl datapath`/`trustixctl bpf maps` 暴露 RX/TX/ring/backpressure/neighbor/allowed-port/XDP classifier 统计，以及 UMEM/ring 资源占用 gauge。`TRUSTIX_AF_XDP_TX_BACKPRESSURE_WAIT` 可设置 TX frame/ring 压力下的最长短等待，默认 `2ms`，`0`/`off` 可关闭。
 - `trustixctl datapath` 会输出全局 counters、active sessions、per-route 发送统计、per-peer 发送统计、per-endpoint packet/byte/error/active-session/current-flow 统计和 endpoint health state，用于定位 route、peer 或 endpoint 级故障。
@@ -436,10 +436,12 @@ kernel_modules:
   trustix_crypto:
     mode: required
     path: embedded
+    reload_on_upgrade: auto
     unload_on_exit: false
   trustix_datapath_helpers:
     mode: auto
     path: embedded
+    reload_on_upgrade: auto
     unload_on_exit: false
 
 transport_policy:

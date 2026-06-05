@@ -936,9 +936,9 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			WebUI: config.WebUIConfig{Enabled: true},
 		},
 		KernelModules: config.KernelModulesConfig{
-			TrustIXCrypto:          config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded"},
-			TrustIXDatapath:        config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded"},
-			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded"},
+			TrustIXCrypto:          config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
+			TrustIXDatapath:        config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
+			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      request.EndpointName,

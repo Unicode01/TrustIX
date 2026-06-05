@@ -354,6 +354,11 @@ module_param_named(abi_version, trustix_module_abi_version, uint, 0444);
 MODULE_PARM_DESC(abi_version,
 		 "TrustIX kernel module capability ABI version");
 
+static char *trustix_build_sha256 = "";
+module_param_named(build_sha256, trustix_build_sha256, charp, 0444);
+MODULE_PARM_DESC(build_sha256,
+		 "SHA256 fingerprint of the TrustIX .ko payload passed by trustixd at load time");
+
 static unsigned long trustix_feature_mask;
 module_param_named(features, trustix_feature_mask, ulong, 0444);
 MODULE_PARM_DESC(features,

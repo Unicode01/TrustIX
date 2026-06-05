@@ -4,6 +4,7 @@ The stable automation entry points are:
 
 - `scripts/trustix-build.sh`
 - `scripts/trustix-deploy.sh`
+- `scripts/trustix-update.sh`
 - `scripts/trustix-bootstrap-ix.sh`
 - `scripts/trustix-latency-history-summary.py`
 
@@ -42,6 +43,35 @@ scripts/trustix-deploy.sh \
 Omit `--target` for local deployment. SSH options are `--ssh-port`, `--ssh-key`, and repeated `--ssh-option`.
 
 Deployment installs binaries, the systemd unit, config, certificates, and an `/etc/trustix/<instance>.env` file. The unit supports `TRUSTIX_EXTRA_ARGS`, used by `--admin-auth` and repeated `--extra-arg`.
+
+## Update
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-update.sh | \
+  sudo bash -s -- \
+    --release-url https://github.com/Unicode01/TrustIX/releases/download/v0.1.0/trustix-linux-amd64.tar.gz
+```
+
+`trustix-update.sh` is for in-place upgrades of an existing systemd install. It replaces the binaries and `trustixd@.service`, preserves `/etc/trustix`, certificates, and data directories, then restarts detected `trustixd@*.service` instances. Pass `--instance ix-a` one or more times to choose instances explicitly, or `--no-restart` to only install files.
+
+When no `--release-url` or `--tarball` is provided, the script clones the repo and builds a release locally:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-update.sh | \
+  sudo bash -s -- --repo https://github.com/Unicode01/TrustIX.git --ref main --build-ko auto
+```
+
+Prefer release tarballs for small OpenWrt/soft-router machines. Source-build update needs Go and, when `.ko` is desired, matching kernel headers on the target.
+
+## GitHub Workflows
+
+The default GitHub release workflow intentionally does not build generic `.ko` artifacts:
+
+- `.github/workflows/ci.yml` runs Go tests, WebUI checks, shell syntax checks, and a userspace release build with embedded eBPF but `--build-ko 0`.
+- `.github/workflows/release.yml` publishes `trustix-linux-amd64.tar.gz` and `trustix-linux-arm64.tar.gz` for tags matching `v*`. These packages include kernel module source and Makefiles, not universal prebuilt `.ko` files.
+- `.github/workflows/kernel-release.yml` is manual-only. Use it with a runner/KDIR that matches the target kernel when a prebuilt `.ko` package is actually wanted.
+
+This keeps normal CI/release cheap and avoids shipping kernel modules with misleading ABI compatibility. For target-specific kernels, use the manual workflow, a self-hosted runner, or `trustix-update.sh --build-ko auto` directly on the target.
 
 ## Bootstrap A New IX
 

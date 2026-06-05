@@ -263,7 +263,7 @@ func TestKernelDatapathKernelUDPFlowRecordsEncodeSessionAndWire(t *testing.T) {
 
 func TestKernelDatapathKernelUDPFlowRecordsSkipExistingSessionFlowID(t *testing.T) {
 	daemon := &Daemon{
-		dataplane: kernelDatapathFlowSnapshotManager{flows: []dataplane.KernelUDPFlow{{
+		dataplane: &kernelDatapathFlowSnapshotManager{flows: []dataplane.KernelUDPFlow{{
 			ID:              7,
 			Peer:            "ix-b",
 			Endpoint:        "wan-udp",

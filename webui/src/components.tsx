@@ -34,7 +34,7 @@ import type {
   TopologyNode,
 } from "./types";
 import { edgeMidpoint, edgePath } from "./topology";
-import { arrayValue, compactList, cryptoSuiteOptions, encryptionOptions, formatBytes, formatDurationNanos, formatNumber, formatTime, joinLines, splitLines, transportDatapathOptions, transportOptions, transportProfileOptions, transportToggleOptions } from "./utils";
+import { arrayValue, compactList, cryptoSuiteOptions, encryptionOptions, formatBytes, formatDurationNanos, formatNumber, formatTime, joinLines, shortHash, splitLines, transportDatapathOptions, transportOptions, transportProfileOptions, transportToggleOptions } from "./utils";
 
 export type Translate = (key: string, fallback?: string) => string;
 
@@ -525,6 +525,9 @@ function kernelModuleCapabilityRow(t: Translate, module: KernelModuleStatus): Ke
     compactList(arrayValue(module.features).slice(0, 5), ", "),
     arrayValue(module.missing_features).length ? `${t("missing", "Missing")} ${arrayValue(module.missing_features).join(", ")}` : "",
   ], " · ");
+  const fingerprintText = module.sha256 || module.loaded_sha256
+    ? `target ${shortHash(module.sha256)} / loaded ${shortHash(module.loaded_sha256)}`
+    : "";
   return {
     name: module.name || t("kernel_module", "Kernel module"),
     state,
@@ -532,10 +535,11 @@ function kernelModuleCapabilityRow(t: Translate, module: KernelModuleStatus): Ke
     meta: compactList([
       module.mode,
       module.loaded ? t("loaded", "Loaded") : t("not_loaded", "Not loaded"),
+      module.upgrade_state,
       module.abi_version ? `ABI ${module.abi_version}` : "",
       featureText,
     ], " · "),
-    detail: module.capability_reason || module.reason || module.parameters || "",
+    detail: compactList([module.capability_reason, module.reason, module.reload_on_upgrade ? `reload_on_upgrade=${module.reload_on_upgrade}` : "", fingerprintText, module.parameters], " · "),
   };
 }
 

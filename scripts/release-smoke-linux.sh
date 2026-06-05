@@ -236,14 +236,17 @@ kernel_modules:
   trustix_crypto:
     mode: ${module_mode}
     path: embedded
+    reload_on_upgrade: auto
     unload_on_exit: ${module_unload_on_exit_yaml}
   trustix_datapath:
     mode: auto
     path: embedded
+    reload_on_upgrade: auto
     unload_on_exit: ${module_unload_on_exit_yaml}
   trustix_datapath_helpers:
     mode: auto
     path: embedded
+    reload_on_upgrade: auto
     unload_on_exit: ${module_unload_on_exit_yaml}
 
 endpoints: []

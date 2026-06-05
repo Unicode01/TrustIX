@@ -681,6 +681,11 @@ static unsigned int trustix_datapath_abi_version =
 module_param_named(abi_version, trustix_datapath_abi_version, uint, 0444);
 MODULE_PARM_DESC(abi_version, "TrustIX datapath module ABI version");
 
+static char *trustix_datapath_build_sha256 = "";
+module_param_named(build_sha256, trustix_datapath_build_sha256, charp, 0444);
+MODULE_PARM_DESC(build_sha256,
+		 "SHA256 fingerprint of the TrustIX .ko payload passed by trustixd at load time");
+
 static unsigned int trustix_datapath_max_routes =
 	TRUSTIX_DATAPATH_STATE_DEFAULT_ROUTES;
 module_param_named(max_routes, trustix_datapath_max_routes, uint, 0444);

@@ -142,6 +142,11 @@ static unsigned int trustix_datapath_helpers_abi_version =
 module_param_named(abi_version, trustix_datapath_helpers_abi_version, uint, 0444);
 MODULE_PARM_DESC(abi_version, "TrustIX datapath module ABI version");
 
+static char *trustix_datapath_helpers_build_sha256 = "";
+module_param_named(build_sha256, trustix_datapath_helpers_build_sha256, charp, 0444);
+MODULE_PARM_DESC(build_sha256,
+		 "SHA256 fingerprint of the TrustIX .ko payload passed by trustixd at load time");
+
 struct trustix_datapath_helpers_tixt_frame {
 	__u8 flags;
 	__u64 flow_id;

@@ -450,14 +450,17 @@ kernel_modules:
   trustix_crypto:
     mode: required
     path: embedded
+    reload_on_upgrade: auto
     unload_on_exit: false
   trustix_datapath:
     mode: auto
     path: embedded
+    reload_on_upgrade: auto
     unload_on_exit: false
   trustix_datapath_helpers:
     mode: auto
     path: embedded
+    reload_on_upgrade: auto
     unload_on_exit: false
 \`\`\`
 
@@ -472,6 +475,13 @@ For systemd deployment, run:
 \`\`\`bash
 sudo scripts/install-systemd-linux.sh
 sudo systemctl enable --now trustixd@ix-a
+\`\`\`
+
+For an existing systemd install, update in place without rewriting config,
+certificates, or data directories:
+
+\`\`\`bash
+sudo scripts/trustix-update.sh --tarball /path/to/${release_name}.tar.gz --instance ix-a
 \`\`\`
 
 The template unit reads /etc/trustix/ix-a.yaml and optional

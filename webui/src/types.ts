@@ -461,7 +461,10 @@ export type KernelModuleStatus = {
   managed?: boolean;
   path?: string;
   sha256?: string;
+  loaded_sha256?: string;
   parameters?: string;
+  reload_on_upgrade?: string;
+  upgrade_state?: string;
   ref_count?: number;
   used_by?: string[];
   init_state?: string;

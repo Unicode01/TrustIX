@@ -23,7 +23,10 @@ type Status struct {
 	Managed          bool       `json:"managed"`
 	Path             string     `json:"path,omitempty"`
 	SHA256           string     `json:"sha256,omitempty"`
+	LoadedSHA256     string     `json:"loaded_sha256,omitempty"`
 	Parameters       string     `json:"parameters,omitempty"`
+	ReloadOnUpgrade  string     `json:"reload_on_upgrade,omitempty"`
+	UpgradeState     string     `json:"upgrade_state,omitempty"`
 	RefCount         int        `json:"ref_count,omitempty"`
 	UsedBy           []string   `json:"used_by,omitempty"`
 	InitState        string     `json:"init_state,omitempty"`
@@ -153,13 +156,15 @@ func supportedModuleName(name string) bool {
 
 func unsupportedModuleStatus(name string, module config.KernelModuleConfig, mode string) Status {
 	status := Status{
-		Name:         name,
-		Mode:         mode,
-		Path:         strings.TrimSpace(module.Path),
-		Parameters:   module.Parameters,
-		UnloadOnExit: module.UnloadOnExit,
-		State:        "unsupported",
-		Reason:       "unsupported TrustIX kernel module name; first release manages trustix_crypto, trustix_datapath, and trustix_datapath_helpers only",
+		Name:            name,
+		Mode:            mode,
+		Path:            strings.TrimSpace(module.Path),
+		Parameters:      module.Parameters,
+		ReloadOnUpgrade: config.NormalizeKernelModuleReloadOnUpgrade(module.ReloadOnUpgrade),
+		UnloadOnExit:    module.UnloadOnExit,
+		State:           "unsupported",
+		UpgradeState:    "unsupported_module",
+		Reason:          "unsupported TrustIX kernel module name; first release manages trustix_crypto, trustix_datapath, and trustix_datapath_helpers only",
 	}
 	if mode == ModeDisabled {
 		status.State = ModeDisabled

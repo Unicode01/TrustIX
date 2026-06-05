@@ -122,6 +122,7 @@ kernel_modules:
     mode: REQUIRED
     path: " kernel/trustix_crypto/trustix_crypto.ko "
     parameters: " "
+    reload_on_upgrade: ON_MISMATCH
     unload_on_exit: true
   trustix_datapath:
     mode: AUTO
@@ -130,6 +131,7 @@ kernel_modules:
     mode: AUTO
     path: " kernel/trustix_datapath_helpers/trustix_datapath_helpers.ko "
     parameters: " tixt_tx_plain_skip_sequence=1 "
+    reload_on_upgrade: force
 `), ".yaml")
 	if err != nil {
 		t.Fatalf("load yaml: %v", err)
@@ -189,13 +191,13 @@ kernel_modules:
 	if cfg.Routes[0].Kind != "unicast" {
 		t.Fatalf("route kind = %q, want unicast", cfg.Routes[0].Kind)
 	}
-	if module := cfg.KernelModules.TrustIXCrypto; module.Mode != "required" || module.Path != "kernel/trustix_crypto/trustix_crypto.ko" || module.Parameters != "" || !module.UnloadOnExit {
+	if module := cfg.KernelModules.TrustIXCrypto; module.Mode != "required" || module.Path != "kernel/trustix_crypto/trustix_crypto.ko" || module.Parameters != "" || module.ReloadOnUpgrade != "auto" || !module.UnloadOnExit {
 		t.Fatalf("trustix_crypto module config = %#v", module)
 	}
 	if module := cfg.KernelModules.TrustIXDatapath; module.Mode != "auto" || module.Path != "kernel/trustix_datapath/trustix_datapath.ko" || module.Parameters != "" || module.UnloadOnExit {
 		t.Fatalf("trustix_datapath module config = %#v", module)
 	}
-	if module := cfg.KernelModules.TrustIXDatapathHelpers; module.Mode != "auto" || module.Path != "kernel/trustix_datapath_helpers/trustix_datapath_helpers.ko" || module.Parameters != "tixt_tx_plain_skip_sequence=1" || module.UnloadOnExit {
+	if module := cfg.KernelModules.TrustIXDatapathHelpers; module.Mode != "auto" || module.Path != "kernel/trustix_datapath_helpers/trustix_datapath_helpers.ko" || module.Parameters != "tixt_tx_plain_skip_sequence=1" || module.ReloadOnUpgrade != "always" || module.UnloadOnExit {
 		t.Fatalf("trustix_datapath_helpers module config = %#v", module)
 	}
 	if hostAPI := cfg.Management.HostAPI; !hostAPI.Enabled || hostAPI.Listen != "10.0.0.1:8787" || !hostAPI.RequireReadAuth {
@@ -695,6 +697,22 @@ kernel_modules:
 `), ".yaml")
 	if err == nil {
 		t.Fatal("expected unsupported kernel module mode error")
+	}
+}
+
+func TestLoadBytesRejectsUnsupportedKernelModuleReloadOnUpgrade(t *testing.T) {
+	_, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+kernel_modules:
+  trustix_crypto:
+    mode: auto
+    reload_on_upgrade: maybe
+`), ".yaml")
+	if err == nil {
+		t.Fatal("expected unsupported kernel module reload_on_upgrade error")
 	}
 }
 

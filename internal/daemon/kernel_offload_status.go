@@ -104,6 +104,15 @@ func kernelModulePlacementDetail(status kernelmodule.Status) string {
 	if status.ABIVersion > 0 {
 		detail += fmt.Sprintf(" abi=%d", status.ABIVersion)
 	}
+	if status.UpgradeState != "" {
+		detail += " upgrade_state=" + status.UpgradeState
+	}
+	if status.SHA256 != "" {
+		detail += " sha256=" + status.SHA256
+	}
+	if status.LoadedSHA256 != "" {
+		detail += " loaded_sha256=" + status.LoadedSHA256
+	}
 	if len(status.Features) > 0 {
 		detail += " features=" + strings.Join(status.Features, ",")
 	}

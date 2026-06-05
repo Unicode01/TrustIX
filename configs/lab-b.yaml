@@ -70,10 +70,12 @@ lan:
 #   trustix_crypto:
 #     mode: auto
 #     path: embedded
+#     reload_on_upgrade: auto
 #     unload_on_exit: false
 #   trustix_datapath_helpers:
 #     mode: disabled
 #     path: embedded
+#     reload_on_upgrade: auto
 #     unload_on_exit: false
 
 endpoints:

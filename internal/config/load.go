@@ -165,6 +165,7 @@ func normalizeKernelModule(module *KernelModuleConfig) {
 	module.Mode = strings.ToLower(strings.TrimSpace(module.Mode))
 	module.Path = strings.TrimSpace(module.Path)
 	module.Parameters = strings.TrimSpace(module.Parameters)
+	module.ReloadOnUpgrade = NormalizeKernelModuleReloadOnUpgrade(module.ReloadOnUpgrade)
 }
 
 func normalizeEndpoint(ep *EndpointConfig) {
