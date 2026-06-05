@@ -1202,6 +1202,16 @@ button {
   background: transparent;
 }
 
+.route-inline-runtime-row {
+  grid-template-columns: minmax(0, 1fr) minmax(132px, auto);
+}
+
+.route-inline-runtime-row > .button {
+  justify-self: end;
+  min-width: 132px;
+  white-space: nowrap;
+}
+
 .route-inline-main {
   display: grid;
   gap: 2px;

@@ -2331,7 +2331,7 @@ function EdgeEditor(props: { t: Translate; lang: string; edge: TopologyEdge; des
             }
           };
           return (
-            <div key={`runtime-${route.prefix}-${route.owner}-${route.next_hop}-${index}`} className="route-inline-row">
+            <div key={`runtime-${route.prefix}-${route.owner}-${route.next_hop}-${index}`} className="route-inline-row route-inline-runtime-row">
               <button
                 type="button"
                 className="route-inline-main"
