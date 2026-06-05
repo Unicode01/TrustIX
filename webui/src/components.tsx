@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
-import { ArrowLeft, Check, Circle, Copy, KeyRound, Languages, Move, Network, Plus, RefreshCw, Route, Save, ShieldCheck, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
+import { Archive, ArrowLeft, Check, Circle, Copy, Download, KeyRound, Languages, Move, Network, Plus, RefreshCw, Route, Save, ShieldCheck, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
 import type {
   DeviceAccessIssueResponse,
   DeviceAccessPayload,
@@ -2663,7 +2663,11 @@ export function ConfigView(props: {
   onValidate: () => void;
   onApply: () => void;
   onCopy: () => void;
+  onExport: () => void;
+  onBackup: () => void;
+  onRestore: (file: File | null) => void;
 }) {
+  const restoreInputRef = useRef<HTMLInputElement>(null);
   return (
     <main className="views">
       <section className="panel">
@@ -2675,6 +2679,20 @@ export function ConfigView(props: {
             <Button variant="ghost" onClick={props.onValidate}><Check size={15} />{props.t("validate", "Validate")}</Button>
             <Button onClick={props.onApply}><Save size={15} />{props.t("apply", "Apply")}</Button>
             <Button variant="ghost" onClick={props.onCopy}><Copy size={15} />{props.t("copy", "Copy")}</Button>
+            <Button variant="ghost" onClick={props.onExport} title={props.t("help_config_export", "Download desired config, config log, and public certificate material without private keys.")}><Download size={15} />{props.t("export", "Export")}</Button>
+            <Button variant="ghost" onClick={props.onBackup} title={props.t("help_config_backup", "Download a full backup archive including configured private keys.")}><Archive size={15} />{props.t("full_backup", "Full backup")}</Button>
+            <Button variant="ghost" onClick={() => restoreInputRef.current?.click()} title={props.t("help_config_restore", "Restore config log and configured certificate/key files from a TrustIX backup archive.")}><Upload size={15} />{props.t("restore_backup", "Restore")}</Button>
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept=".tar.gz,.tgz,application/gzip,application/x-gzip"
+              style={{ display: "none" }}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0] || null;
+                props.onRestore(file);
+                event.currentTarget.value = "";
+              }}
+            />
           </div>
         </div>
         {props.desired ? (
@@ -2962,12 +2980,20 @@ function LANConfigFields(props: { t: Translate; lan: LANConfig; source: "legacy"
   const update = (patch: Partial<LANConfig>) => props.onUpdate({ ...lan, ...patch });
   const updateNAT = (patch: NonNullable<LANConfig["nat"]>) => update({ nat: { ...(lan.nat || {}), ...patch } });
   const updateDeviceAccess = (patch: NonNullable<LANConfig["device_access"]>) => update({ device_access: { ...(lan.device_access || {}), ...patch } });
+  const lanMode = lan.mode || "routed";
+  const updateMode = (mode: string) => {
+    if (mode === "nat") {
+      update({ mode });
+      return;
+    }
+    props.onUpdate({ ...lan, mode, nat: undefined });
+  };
   return (
     <>
       <div className="lan-field-group lan-field-group-main">
         <Field label={props.t("lan_id", "LAN ID")} help={props.t("help_lan_id", "Stable LAN identifier used by primary_lan_id and diagnostics.")} value={lan.id || (props.source === "legacy" ? "lan" : "")} onChange={(value) => update({ id: value })} />
         <SelectField label={props.t("lan_type", "LAN type")} help={props.t("help_lan_type", "local is a private LAN behind this IX; trusted_public is a directly reachable trusted network segment.")} value={lan.type || "local"} options={["local", "trusted_public"]} onChange={(value) => update({ type: value })} />
-        <SelectField label={props.t("lan_mode", "LAN mode")} help={props.t("help_lan_mode", "routed advertises LAN prefixes directly; nat rewrites LAN traffic behind this IX.")} value={lan.mode || "routed"} options={["routed", "nat"]} onChange={(value) => update({ mode: value })} />
+        <SelectField label={props.t("lan_mode", "LAN mode")} help={props.t("help_lan_mode", "routed advertises LAN prefixes directly; nat rewrites LAN traffic behind this IX.")} value={lanMode} options={["routed", "nat"]} onChange={updateMode} />
         <SelectField label={props.t("attach_mode", "Attach mode")} help={props.t("help_lan_attach_mode", "managed lets TrustIX create/manage the interface; existing attaches to an interface already present on the host.")} value={lan.attach_mode || "managed"} options={["managed", "existing"]} onChange={(value) => update({ attach_mode: value })} />
       </div>
       <div className="lan-field-group lan-field-group-network">
@@ -2978,10 +3004,12 @@ function LANConfigFields(props: { t: Translate; lan: LANConfig; source: "legacy"
       <div className="lan-field-group lan-field-group-prefixes">
         <Field label={props.t("advertise_prefixes", "Advertise prefixes")} help={props.t("help_lan_advertise", "CIDR prefixes this IX announces to other IX nodes, one prefix per line.")} textarea value={joinLines(lan.advertise)} onChange={(value) => update({ advertise: splitLines(value) })} />
       </div>
-      <div className="lan-field-group lan-field-group-nat">
-        <Field label={props.t("nat_max_bindings", "NAT max bindings")} help={props.t("help_lan_nat_max_bindings", "Maximum number of NAT flow bindings kept for this LAN. Empty uses the daemon default.")} type="number" value={numberFieldValue(lan.nat?.max_bindings)} onChange={(value) => updateNAT({ max_bindings: numberOrUndefined(value) })} />
-        <Field label={props.t("nat_binding_ttl", "NAT binding TTL")} help={props.t("help_lan_nat_binding_ttl", "Idle timeout for NAT bindings on this LAN, for example 5m or 1h.")} placeholder="5m" value={lan.nat?.binding_ttl || ""} onChange={(value) => updateNAT({ binding_ttl: value })} />
-      </div>
+      {lanMode === "nat" && (
+        <div className="lan-field-group lan-field-group-nat">
+          <Field label={props.t("nat_max_bindings", "NAT max bindings")} help={props.t("help_lan_nat_max_bindings", "Maximum number of NAT flow bindings kept for this LAN. Empty uses the daemon default.")} type="number" value={numberFieldValue(lan.nat?.max_bindings)} onChange={(value) => updateNAT({ max_bindings: numberOrUndefined(value) })} />
+          <Field label={props.t("nat_binding_ttl", "NAT binding TTL")} help={props.t("help_lan_nat_binding_ttl", "Idle timeout for NAT bindings on this LAN, for example 5m or 1h.")} placeholder="5m" value={lan.nat?.binding_ttl || ""} onChange={(value) => updateNAT({ binding_ttl: value })} />
+        </div>
+      )}
       <div className="lan-field-group lan-field-group-access">
         <CheckField label={props.t("device_access", "Device access")} help={props.t("help_lan_device_access", "Enable certificate-based device clients on this LAN.")} checked={Boolean(lan.device_access?.enabled)} onChange={(value) => updateDeviceAccess({ enabled: value })} />
         <Field label={props.t("device_address_pool", "Device address pool")} help={props.t("help_lan_device_address_pool", "IPv4 pool used to lease addresses to device clients. It should be inside the LAN gateway prefix when a gateway is configured.")} placeholder="10.82.0.128/25" value={lan.device_access?.address_pool || ""} onChange={(value) => updateDeviceAccess({ address_pool: value })} />
@@ -3907,7 +3935,7 @@ export function DoctorView(props: { t: Translate; lang: string; doctor: DoctorCh
         <div className="panel-head">
           <div>
             <h2>{props.t("route_candidates", "Route candidates")}</h2>
-            <p className="panel-note inline-note">{props.t("route_candidates_note", "Accepted and rejected candidate paths before the runtime table picks the best route for each prefix.")}</p>
+            <p className="panel-note inline-note">{props.t("route_candidates_note", "Candidate paths before the runtime table picks the best route for each prefix, including accepted, shadowed, and rejected paths.")}</p>
           </div>
           <span className="muted">{formatNumber(candidateRows.length, props.lang)}</span>
         </div>
@@ -3934,8 +3962,8 @@ export function DoctorView(props: { t: Translate; lang: string; doctor: DoctorCh
                   <td>{candidate.next_hop || "-"}</td>
                   <td>{candidate.learned_from || (candidate.direct ? props.t("direct", "Direct") : "-")}</td>
                   <td>{routeCandidateSourceLabel(props.t, candidate)}</td>
-                  <td><Pill state={routeCandidateHealthState(candidate)}>{candidate.health || candidate.action || "-"}</Pill></td>
-                  <td>{compactList([candidate.action, candidate.reason, candidate.metric != null ? `metric ${candidate.metric}` : ""], " · ") || "-"}</td>
+                  <td><Pill state={routeCandidateHealthState(candidate)}>{routeCandidateHealthLabel(props.t, candidate)}</Pill></td>
+                  <td>{routeCandidateDetail(props.t, candidate)}</td>
                 </tr>
               )) : <tr><td colSpan={8} className="muted">{props.t("no_route_candidate", "No route candidate")}</td></tr>}
             </tbody>
@@ -4065,6 +4093,9 @@ function routeCandidateHealthState(candidate: RouteCandidate): string {
     case "ok":
     case "accept":
       return "ok";
+    case "shadowed":
+    case "shadow":
+      return "idle";
     case "blocked":
       return "warn";
     case "down":
@@ -4072,6 +4103,83 @@ function routeCandidateHealthState(candidate: RouteCandidate): string {
       return "bad";
     default:
       return candidate.selected ? "ok" : "idle";
+  }
+}
+
+function routeCandidateHealthLabel(t: Translate, candidate: RouteCandidate): string {
+  const raw = String(candidate.health || candidate.action || "").toLowerCase();
+  switch (raw) {
+    case "ok":
+      return t("ok", "OK");
+    case "accept":
+      return t("accepted", "Accepted");
+    case "shadow":
+    case "shadowed":
+      return t("shadowed", "Shadowed");
+    case "blocked":
+      return t("blocked", "Blocked");
+    case "down":
+      return t("down", "Down");
+    case "reject":
+      return t("rejected", "Rejected");
+    default:
+      return candidate.health || candidate.action || "-";
+  }
+}
+
+function routeCandidateDetail(t: Translate, candidate: RouteCandidate): string {
+  const metric = candidate.metric != null ? `${t("metric", "Metric")} ${candidate.metric}` : "";
+  const reason = routeCandidateReasonLabel(t, candidate.reason);
+  if (candidate.reason === "configured" || candidate.reason === "shadowed_by_static") {
+    return compactList([reason, metric], " · ") || "-";
+  }
+  return compactList([routeCandidateActionLabel(t, candidate.action), reason, metric], " · ") || "-";
+}
+
+function routeCandidateActionLabel(t: Translate, action: string | undefined): string {
+  switch (String(action || "").toLowerCase()) {
+    case "accept":
+      return t("accepted", "Accepted");
+    case "reject":
+      return t("rejected", "Rejected");
+    case "shadow":
+      return t("shadowed", "Shadowed");
+    default:
+      return action || "";
+  }
+}
+
+function routeCandidateReasonLabel(t: Translate, reason: string | undefined): string {
+  const raw = String(reason || "").trim();
+  switch (raw) {
+    case "configured":
+      return t("configured", "Configured");
+    case "import_default":
+      return t("import_default", "Import default");
+    case "duplicate_prefix":
+      return t("duplicate_prefix", "Duplicate prefix");
+    case "shadowed_by_static":
+      return t("shadowed_by_static", "Shadowed by static route");
+    case "prefix_conflict":
+      return t("prefix_conflict", "Prefix conflict");
+    case "invalid_prefix":
+      return t("invalid_prefix", "Invalid prefix");
+    case "path_loop":
+      return t("path_loop", "Path loop");
+    case "no_usable_endpoint":
+      return t("no_usable_endpoint", "No usable endpoint");
+    case "no_transit_next_hop":
+      return t("no_transit_next_hop", "No transit next hop");
+    case "import_prefix_denied":
+      return t("import_prefix_denied", "Import prefix denied");
+    case "export_prefix_denied":
+      return t("export_prefix_denied", "Export prefix denied");
+    case "management_host_api_disabled":
+      return t("management_host_api_disabled", "Host API disabled");
+    case "no_control_api":
+      return t("no_control_api", "No control API");
+    default:
+      return raw;
   }
 }
 

@@ -610,6 +610,9 @@ func validateLAN(lan LANConfig) error {
 	if lan.Mode == LANModeNAT && gatewayPrefix == (netip.Prefix{}) {
 		return fmt.Errorf("nat mode requires lan gateway")
 	}
+	if (lan.Mode == "" || lan.Mode == LANModeRouted) && (lan.NAT.MaxBindings > 0 || strings.TrimSpace(lan.NAT.BindingTTL) != "") {
+		return fmt.Errorf("lan nat config is valid only when mode is nat")
+	}
 	if lan.NAT.MaxBindings < 0 {
 		return fmt.Errorf("lan nat max_bindings must be non-negative")
 	}
@@ -654,7 +657,10 @@ func validateLAN(lan LANConfig) error {
 func validateLANs(cfg Desired) error {
 	seen := make(map[string]struct{}, 1+len(cfg.LANs))
 	effectiveIDs := make(map[string]struct{}, 1+len(cfg.LANs))
-	deviceAccessLANs := make([]string, 0)
+	deviceAccessPools := make([]struct {
+		id     string
+		prefix netip.Prefix
+	}, 0)
 	if LANConfigured(cfg.LAN) {
 		id := strings.TrimSpace(cfg.LAN.ID)
 		if id == "" {
@@ -675,7 +681,19 @@ func validateLANs(cfg Desired) error {
 		}
 		effectiveIDs[lan.ID] = struct{}{}
 		if lan.DeviceAccess.Enabled {
-			deviceAccessLANs = append(deviceAccessLANs, lan.ID)
+			pool, err := netip.ParsePrefix(strings.TrimSpace(lan.DeviceAccess.AddressPool))
+			if err == nil {
+				pool = pool.Masked()
+				for _, existing := range deviceAccessPools {
+					if existing.id != lan.ID && existing.prefix.Overlaps(pool) {
+						return fmt.Errorf("lan device_access address_pool conflict: %q on %q overlaps %q on %q", existing.prefix, existing.id, pool, lan.ID)
+					}
+				}
+				deviceAccessPools = append(deviceAccessPools, struct {
+					id     string
+					prefix netip.Prefix
+				}{id: lan.ID, prefix: pool})
+			}
 		}
 		for _, rawPrefix := range lan.Advertise {
 			prefix, err := rawPrefix.Parse()
@@ -715,9 +733,6 @@ func validateLANs(cfg Desired) error {
 		if _, ok := effectiveIDs[cfg.PrimaryLANID]; !ok {
 			return fmt.Errorf("primary_lan_id %q does not match a configured LAN", cfg.PrimaryLANID)
 		}
-	}
-	if len(deviceAccessLANs) > 1 {
-		return fmt.Errorf("multiple device_access LANs are configured (%s); only one device access pool is currently supported", strings.Join(deviceAccessLANs, ", "))
 	}
 	return nil
 }

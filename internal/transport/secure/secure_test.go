@@ -979,6 +979,7 @@ func TestSecureHandshakeCarriesDeviceCertificateChainAndIdentity(t *testing.T) {
 		Domain:     "lab.local",
 		IX:         "ix-a",
 		Device:     "laptop-1",
+		LANID:      "public",
 		Prefixes:   []string{"10.99.0.0/24"},
 	})
 	if err != nil {
@@ -998,7 +999,7 @@ func TestSecureHandshakeCarriesDeviceCertificateChainAndIdentity(t *testing.T) {
 				return fmt.Errorf("verified chain length mismatch")
 			}
 			meta := pki.ParseMetadata(verifiedChains[0][0])
-			if meta.Role != pki.RoleDevice || meta.IX != "ix-a" || meta.Device != "laptop-1" {
+			if meta.Role != pki.RoleDevice || meta.IX != "ix-a" || meta.Device != "laptop-1" || meta.LANID != "public" {
 				return fmt.Errorf("metadata = %+v", meta)
 			}
 			return nil
@@ -1033,7 +1034,7 @@ func TestSecureHandshakeCarriesDeviceCertificateChainAndIdentity(t *testing.T) {
 	if !ok {
 		t.Fatal("server peer identity detail missing")
 	}
-	if identity.Role != string(pki.RoleDevice) || identity.Peer != "ix-a" || identity.Domain != "lab.local" || identity.Device != "laptop-1" {
+	if identity.Role != string(pki.RoleDevice) || identity.Peer != "ix-a" || identity.Domain != "lab.local" || identity.Device != "laptop-1" || identity.LANID != "public" {
 		t.Fatalf("server identity = %+v", identity)
 	}
 	if len(identity.Prefixes) != 1 || identity.Prefixes[0] != "10.99.0.0/24" {

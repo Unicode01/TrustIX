@@ -42,6 +42,7 @@ var (
 	oidIX       = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 3}
 	oidPrefixes = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 4}
 	oidDevice   = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 5}
+	oidLANID    = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 6}
 )
 
 type Bundle struct {
@@ -57,6 +58,7 @@ type IssueRequest struct {
 	Domain      string
 	IX          string
 	Device      string
+	LANID       string
 	Prefixes    []string
 	DNSNames    []string
 	IPAddresses []net.IP
@@ -69,6 +71,7 @@ type Metadata struct {
 	Domain   string   `json:"domain,omitempty"`
 	IX       string   `json:"ix,omitempty"`
 	Device   string   `json:"device,omitempty"`
+	LANID    string   `json:"lan_id,omitempty"`
 	Prefixes []string `json:"prefixes,omitempty"`
 }
 
@@ -383,6 +386,8 @@ func ParseMetadata(cert *x509.Certificate) Metadata {
 			meta.IX = value
 		case ext.Id.Equal(oidDevice):
 			meta.Device = value
+		case ext.Id.Equal(oidLANID):
+			meta.LANID = value
 		case ext.Id.Equal(oidPrefixes):
 			if value != "" {
 				meta.Prefixes = strings.Split(value, ",")
@@ -437,7 +442,7 @@ func newSelfSignedCA(req IssueRequest) (Bundle, error) {
 }
 
 func metadataExtensions(req IssueRequest) []pkix.Extension {
-	extensions := make([]pkix.Extension, 0, 5)
+	extensions := make([]pkix.Extension, 0, 6)
 	add := func(oid asn1.ObjectIdentifier, value string) {
 		if value == "" {
 			return
@@ -452,6 +457,7 @@ func metadataExtensions(req IssueRequest) []pkix.Extension {
 	add(oidDomain, req.Domain)
 	add(oidIX, req.IX)
 	add(oidDevice, req.Device)
+	add(oidLANID, strings.TrimSpace(req.LANID))
 	add(oidPrefixes, strings.Join(req.Prefixes, ","))
 	return extensions
 }

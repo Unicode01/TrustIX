@@ -160,6 +160,7 @@ type PeerIdentity struct {
 	Peer            core.IXID     `json:"peer,omitempty"`
 	Domain          core.DomainID `json:"domain,omitempty"`
 	Device          core.DeviceID `json:"device,omitempty"`
+	LANID           string        `json:"lan_id,omitempty"`
 	Prefixes        []string      `json:"prefixes,omitempty"`
 	CertFingerprint string        `json:"cert_fingerprint,omitempty"`
 }

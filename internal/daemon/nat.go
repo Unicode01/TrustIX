@@ -276,23 +276,14 @@ func (daemon *Daemon) configureNATTable() {
 }
 
 func (daemon *Daemon) natMaxBindings() int {
-	if daemon.desired.LAN.NAT.MaxBindings > 0 {
-		return daemon.desired.LAN.NAT.MaxBindings
-	}
-	if lan, ok := daemon.primaryNATLAN(); ok && lan.NAT.MaxBindings > 0 {
+	if lan, ok := daemon.primaryNATConfigLAN(); ok && lan.NAT.MaxBindings > 0 {
 		return lan.NAT.MaxBindings
 	}
 	return natDefaultMaxBindings
 }
 
 func (daemon *Daemon) natBindingTTL() time.Duration {
-	if daemon.desired.LAN.NAT.BindingTTL != "" {
-		ttl, err := time.ParseDuration(daemon.desired.LAN.NAT.BindingTTL)
-		if err == nil && ttl > 0 {
-			return ttl
-		}
-	}
-	lan, ok := daemon.primaryNATLAN()
+	lan, ok := daemon.primaryNATConfigLAN()
 	if !ok || lan.NAT.BindingTTL == "" {
 		return natBindingTTL
 	}
@@ -470,6 +461,15 @@ func (daemon *Daemon) primaryNATLAN() (config.LANConfig, bool) {
 	}
 	for _, lan := range config.EffectiveLANs(daemon.desired) {
 		if strings.TrimSpace(lan.Gateway) != "" {
+			return lan, true
+		}
+	}
+	return config.LANConfig{}, false
+}
+
+func (daemon *Daemon) primaryNATConfigLAN() (config.LANConfig, bool) {
+	for _, lan := range config.EffectiveLANs(daemon.desired) {
+		if lan.Mode == config.LANModeNAT {
 			return lan, true
 		}
 	}

@@ -24,9 +24,19 @@ type deviceAccessListResponse struct {
 	Enabled     bool                        `json:"enabled"`
 	AddressPool string                      `json:"address_pool,omitempty"`
 	LeaseTTL    string                      `json:"lease_ttl,omitempty"`
+	LANs        []deviceAccessLANResponse   `json:"lans,omitempty"`
 	Leases      []deviceAccessLeaseResponse `json:"leases"`
 	Revoked     []deviceAccessRevokedDevice `json:"revoked,omitempty"`
 	Counts      deviceAccessCounts          `json:"counts"`
+}
+
+type deviceAccessLANResponse struct {
+	ID          string         `json:"id"`
+	Type        config.LANType `json:"type,omitempty"`
+	AddressPool string         `json:"address_pool,omitempty"`
+	LeaseTTL    string         `json:"lease_ttl,omitempty"`
+	Gateway     string         `json:"gateway,omitempty"`
+	Advertise   []core.Prefix  `json:"advertise,omitempty"`
 }
 
 type deviceAccessCounts struct {
@@ -39,6 +49,7 @@ type deviceAccessLeaseResponse struct {
 	Domain            string                   `json:"domain,omitempty"`
 	IX                string                   `json:"ix"`
 	Device            string                   `json:"device"`
+	LANID             string                   `json:"lan_id,omitempty"`
 	Peer              string                   `json:"peer"`
 	Address           string                   `json:"address"`
 	Prefix            string                   `json:"prefix"`
@@ -69,6 +80,7 @@ type deviceAccessRevokeRequest struct {
 
 type deviceAccessIssueRequest struct {
 	Device            core.DeviceID   `json:"device"`
+	LANID             string          `json:"lan_id,omitempty"`
 	Endpoint          core.EndpointID `json:"endpoint,omitempty"`
 	EndpointAddress   string          `json:"endpoint_address,omitempty"`
 	Transport         string          `json:"transport,omitempty"`
@@ -90,6 +102,7 @@ type deviceAccessIssueResponse struct {
 	Domain           string            `json:"domain"`
 	IX               string            `json:"ix"`
 	Device           string            `json:"device"`
+	LANID            string            `json:"lan_id,omitempty"`
 	CertificatePEM   string            `json:"certificate_pem"`
 	PrivateKeyPEM    string            `json:"private_key_pem"`
 	IssuerCertPEM    string            `json:"issuer_cert_pem,omitempty"`
@@ -114,6 +127,7 @@ type deviceAccessSnapshot struct {
 	Enabled     bool
 	AddressPool string
 	LeaseTTL    string
+	LANs        []deviceAccessLANResponse
 	Leases      []deviceAccessLeaseResponse
 }
 
@@ -133,6 +147,7 @@ func (daemon *Daemon) handleDeviceAccessList(w http.ResponseWriter, r *http.Requ
 		Enabled:     snapshot.Enabled,
 		AddressPool: snapshot.AddressPool,
 		LeaseTTL:    snapshot.LeaseTTL,
+		LANs:        snapshot.LANs,
 		Leases:      snapshot.Leases,
 		Revoked:     revoked,
 		Counts: deviceAccessCounts{
@@ -191,9 +206,6 @@ func (daemon *Daemon) handleDeviceAccessIssue(w http.ResponseWriter, r *http.Req
 }
 
 func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequest) (deviceAccessIssueResponse, error) {
-	if !daemon.deviceAccessEnabled() {
-		return deviceAccessIssueResponse{}, fmt.Errorf("lan device_access is disabled")
-	}
 	deviceID := core.DeviceID(strings.TrimSpace(string(request.Device)))
 	if err := deviceID.Validate(); err != nil {
 		return deviceAccessIssueResponse{}, err
@@ -201,6 +213,10 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 	daemon.configMu.RLock()
 	desired := daemon.desired
 	daemon.configMu.RUnlock()
+	lan, err := deviceAccessLANForRequest(desired, request.LANID)
+	if err != nil {
+		return deviceAccessIssueResponse{}, err
+	}
 	ixBundle, err := pki.LoadBundle(desired.IX.CertPath, desired.IX.KeyPath)
 	if err != nil {
 		return deviceAccessIssueResponse{}, err
@@ -226,7 +242,7 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 	if err != nil {
 		return deviceAccessIssueResponse{}, err
 	}
-	if err := daemon.validateDeviceAccessIssueAdvertisePrefixes(desired, advertisePrefixes); err != nil {
+	if err := daemon.validateDeviceAccessIssueAdvertisePrefixes(desired, lan, advertisePrefixes); err != nil {
 		return deviceAccessIssueResponse{}, err
 	}
 	notAfter := time.Now().UTC().AddDate(1, 0, 0)
@@ -246,6 +262,7 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 		Domain:      string(desired.Domain.ID),
 		IX:          string(desired.IX.ID),
 		Device:      string(deviceID),
+		LANID:       lan.ID,
 		Prefixes:    deviceAccessIssuePrefixStrings(advertisePrefixes),
 		DNSNames:    request.DNSNames,
 		IPAddresses: ipAddresses,
@@ -255,7 +272,7 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 		return deviceAccessIssueResponse{}, err
 	}
 	certPEM := string(append(append([]byte(nil), bundle.CertPEM...), ixBundle.CertPEM...))
-	clientConfig, err := daemon.deviceAccessClientConfigForIssueRequest(desired, request, bundle)
+	clientConfig, err := daemon.deviceAccessClientConfigForIssueRequest(desired, lan, request, bundle)
 	if err != nil {
 		return deviceAccessIssueResponse{}, err
 	}
@@ -274,6 +291,7 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 		Domain:           string(desired.Domain.ID),
 		IX:               string(desired.IX.ID),
 		Device:           string(deviceID),
+		LANID:            lan.ID,
 		CertificatePEM:   certPEM,
 		PrivateKeyPEM:    string(bundle.KeyPEM),
 		IssuerCertPEM:    string(ixBundle.CertPEM),
@@ -283,6 +301,25 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 		ClientConfig:     clientConfig,
 		ClientConfigJSON: string(configJSON),
 	}, nil
+}
+
+func deviceAccessLANForRequest(desired config.Desired, rawLANID string) (config.LANConfig, error) {
+	lanID := strings.TrimSpace(rawLANID)
+	lans := config.DeviceAccessLANs(desired)
+	if len(lans) == 0 {
+		return config.LANConfig{}, fmt.Errorf("lan device_access is disabled")
+	}
+	if lanID == "" {
+		if len(lans) == 1 {
+			return lans[0], nil
+		}
+		return config.LANConfig{}, fmt.Errorf("lan_id is required when multiple device_access LANs are enabled")
+	}
+	lan, ok := config.DeviceAccessLANByID(desired, lanID)
+	if !ok {
+		return config.LANConfig{}, fmt.Errorf("device_access lan_id %q is not enabled", lanID)
+	}
+	return lan, nil
 }
 
 func deviceAccessTrustRootsPEM(desired config.Desired) ([]string, error) {
@@ -318,7 +355,7 @@ func deviceAccessTrustRootsPEM(desired config.Desired) ([]string, error) {
 	return roots, nil
 }
 
-func (daemon *Daemon) deviceAccessClientConfigForIssueRequest(desired config.Desired, request deviceAccessIssueRequest, bundle pki.Bundle) (device.FileConfig, error) {
+func (daemon *Daemon) deviceAccessClientConfigForIssueRequest(desired config.Desired, lan config.LANConfig, request deviceAccessIssueRequest, bundle pki.Bundle) (device.FileConfig, error) {
 	endpoint, err := daemon.deviceAccessIssueEndpoint(desired, request)
 	if err != nil {
 		return device.FileConfig{}, err
@@ -361,6 +398,7 @@ func (daemon *Daemon) deviceAccessClientConfigForIssueRequest(desired config.Des
 	return device.FileConfig{
 		Domain:          desired.Domain.ID,
 		IX:              desired.IX.ID,
+		LANID:           lan.ID,
 		CertPath:        certPath,
 		KeyPath:         keyPath,
 		TrustRoots:      append([]string(nil), desired.Domain.TrustRoots...),
@@ -509,11 +547,11 @@ type deviceAccessIssueReservedPrefix struct {
 	AllowDelegatedSubprefix bool
 }
 
-func (daemon *Daemon) validateDeviceAccessIssueAdvertisePrefixes(desired config.Desired, prefixes []netip.Prefix) error {
+func (daemon *Daemon) validateDeviceAccessIssueAdvertisePrefixes(desired config.Desired, lan config.LANConfig, prefixes []netip.Prefix) error {
 	if len(prefixes) == 0 {
 		return nil
 	}
-	reserved := deviceAccessIssueReservedPrefixes(desired)
+	reserved := deviceAccessIssueReservedPrefixes(desired, lan.ID)
 	exportPrefixes := parsedPolicyPrefixes(desired.RoutePolicy.ExportPrefixes)
 	for _, prefix := range prefixes {
 		prefix = prefix.Masked()
@@ -548,28 +586,30 @@ func (daemon *Daemon) validateDeviceAccessIssueAdvertisePrefixes(desired config.
 	return nil
 }
 
-func deviceAccessIssueReservedPrefixes(desired config.Desired) []deviceAccessIssueReservedPrefix {
-	reserved := make([]deviceAccessIssueReservedPrefix, 0, len(desired.Routes)+len(config.EffectiveLANAdvertise(desired))+1)
+func deviceAccessIssueReservedPrefixes(desired config.Desired, lanID string) []deviceAccessIssueReservedPrefix {
+	reserved := make([]deviceAccessIssueReservedPrefix, 0, len(desired.Routes)+len(config.EffectiveLANAdvertise(desired))+len(config.DeviceAccessLANs(desired)))
 	for _, route := range routesFromConfig(desired) {
 		prefix, err := route.Prefix.Parse()
 		if err == nil {
 			reserved = append(reserved, deviceAccessIssueReservedPrefix{Prefix: prefix.Masked(), Source: "static route"})
 		}
 	}
-	for _, rawPrefix := range config.EffectiveLANAdvertise(desired) {
-		prefix, err := rawPrefix.Parse()
-		if err == nil {
-			reserved = append(reserved, deviceAccessIssueReservedPrefix{
-				Prefix:                  prefix.Masked(),
-				Source:                  "local LAN",
-				AllowDelegatedSubprefix: true,
-			})
+	for _, candidateLAN := range config.EffectiveLANs(desired) {
+		for _, rawPrefix := range candidateLAN.Advertise {
+			prefix, err := rawPrefix.Parse()
+			if err == nil {
+				reserved = append(reserved, deviceAccessIssueReservedPrefix{
+					Prefix:                  prefix.Masked(),
+					Source:                  "local LAN " + candidateLAN.ID,
+					AllowDelegatedSubprefix: candidateLAN.ID == lanID,
+				})
+			}
 		}
 	}
-	if lan, ok := config.DeviceAccessLAN(desired); ok {
+	for _, lan := range config.DeviceAccessLANs(desired) {
 		pool, err := netip.ParsePrefix(strings.TrimSpace(lan.DeviceAccess.AddressPool))
 		if err == nil {
-			reserved = append(reserved, deviceAccessIssueReservedPrefix{Prefix: pool.Masked(), Source: "device address pool"})
+			reserved = append(reserved, deviceAccessIssueReservedPrefix{Prefix: pool.Masked(), Source: "device address pool " + lan.ID})
 		}
 	}
 	return reserved
@@ -674,8 +714,14 @@ func (daemon *Daemon) resolveDeviceAccessRevokeTarget(request deviceAccessRevoke
 
 func (daemon *Daemon) deviceAccessSnapshot() deviceAccessSnapshot {
 	daemon.configMu.RLock()
-	lan, _ := config.DeviceAccessLAN(daemon.desired)
-	cfg := lan.DeviceAccess
+	lans := config.DeviceAccessLANs(daemon.desired)
+	lanResponses := deviceAccessLANResponses(lans)
+	var cfg config.DeviceAccessConfig
+	if len(lans) == 1 {
+		cfg = lans[0].DeviceAccess
+	} else if len(lans) > 1 {
+		cfg = lans[0].DeviceAccess
+	}
 	domain := daemon.desired.Domain.ID
 	daemon.configMu.RUnlock()
 	runtimes := daemon.deviceAccessRuntimeSnapshot()
@@ -686,7 +732,8 @@ func (daemon *Daemon) deviceAccessSnapshot() deviceAccessSnapshot {
 			Domain:            string(domain),
 			IX:                string(lease.Key.IX),
 			Device:            string(lease.Key.Device),
-			Peer:              string(deviceAccessPeerID(transport.PeerIdentity{Peer: lease.Key.IX, Device: lease.Key.Device})),
+			LANID:             lease.LANID,
+			Peer:              string(deviceAccessPeerID(transport.PeerIdentity{Peer: lease.Key.IX, Device: lease.Key.Device, LANID: lease.LANID})),
 			Address:           lease.Address.String(),
 			Prefix:            deviceAccessPrefixFromAddress(lease.Address).String(),
 			AdvertisePrefixes: deviceAccessLeaseAdvertisePrefixStrings(lease),
@@ -719,11 +766,30 @@ func (daemon *Daemon) deviceAccessSnapshot() deviceAccessSnapshot {
 		return leases[i].Address < leases[j].Address
 	})
 	return deviceAccessSnapshot{
-		Enabled:     cfg.Enabled,
+		Enabled:     len(lans) > 0,
 		AddressPool: cfg.AddressPool,
 		LeaseTTL:    cfg.LeaseTTL,
+		LANs:        lanResponses,
 		Leases:      leases,
 	}
+}
+
+func deviceAccessLANResponses(lans []config.LANConfig) []deviceAccessLANResponse {
+	if len(lans) == 0 {
+		return nil
+	}
+	out := make([]deviceAccessLANResponse, 0, len(lans))
+	for _, lan := range lans {
+		out = append(out, deviceAccessLANResponse{
+			ID:          lan.ID,
+			Type:        lan.Type,
+			AddressPool: lan.DeviceAccess.AddressPool,
+			LeaseTTL:    lan.DeviceAccess.LeaseTTL,
+			Gateway:     lan.Gateway,
+			Advertise:   append([]core.Prefix(nil), lan.Advertise...),
+		})
+	}
+	return out
 }
 
 func deviceAccessLeaseAdvertisePrefixStrings(lease deviceAccessLease) []string {

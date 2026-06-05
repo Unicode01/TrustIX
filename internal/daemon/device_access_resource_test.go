@@ -48,7 +48,7 @@ func TestDeviceAccessListShowAndRevoke(t *testing.T) {
 		t.Fatalf("device access list = %#v", list)
 	}
 	lease := list.Leases[0]
-	if lease.Device != "laptop-1" || lease.Address != "10.0.0.240" || lease.CertFingerprint != session.identity.CertFingerprint || !lease.Online {
+	if lease.Device != "laptop-1" || lease.LANID != "lan" || lease.Address != "10.0.0.240" || lease.CertFingerprint != session.identity.CertFingerprint || !lease.Online {
 		t.Fatalf("lease response = %#v", lease)
 	}
 
@@ -188,7 +188,7 @@ func TestDeviceAccessIssueRequiresAdminProofAndReturnsBundle(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode issue response: %v", err)
 	}
-	if response.Device != "laptop-2" || response.Fingerprint == "" || response.CertificatePEM == "" || response.PrivateKeyPEM == "" {
+	if response.Device != "laptop-2" || response.LANID != "lan" || response.Fingerprint == "" || response.CertificatePEM == "" || response.PrivateKeyPEM == "" {
 		t.Fatalf("issue response missing bundle fields: %#v", response)
 	}
 	if len(response.TrustRootsPEM) == 0 {
@@ -210,11 +210,40 @@ func TestDeviceAccessIssueRequiresAdminProofAndReturnsBundle(t *testing.T) {
 		t.Fatalf("parse issued certificate: %v", err)
 	}
 	meta := pki.ParseMetadata(certs[0])
-	if len(meta.Prefixes) != 1 || meta.Prefixes[0] != "10.77.0.0/24" {
-		t.Fatalf("issued device prefixes = %#v", meta.Prefixes)
+	if meta.LANID != "lan" || len(meta.Prefixes) != 1 || meta.Prefixes[0] != "10.77.0.0/24" {
+		t.Fatalf("issued device metadata = %+v", meta)
 	}
 	if response.ClientConfigJSON == "" {
 		t.Fatal("client config json is empty")
+	}
+}
+
+func TestDeviceAccessIssueSelectsPublicLAN(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := deviceAccessDesiredWithPublicLANForResourceTest(deviceAccessDesiredWithIssuerForResourceTest(t, pkiSet))
+	daemon := &Daemon{
+		desired:      desired,
+		deviceLeases: make(map[deviceLeaseKey]deviceAccessLease),
+	}
+
+	response, err := daemon.issueDeviceAccessCertificate(deviceAccessIssueRequest{
+		Device:          "phone-1",
+		LANID:           "public",
+		Endpoint:        "access-udp",
+		EndpointAddress: "203.0.113.10:7000",
+	})
+	if err != nil {
+		t.Fatalf("issue public LAN device access certificate: %v", err)
+	}
+	if response.LANID != "public" || response.ClientConfig.LANID != "public" {
+		t.Fatalf("response LAN ID = %q client=%q, want public", response.LANID, response.ClientConfig.LANID)
+	}
+	certs, err := pki.ParseCertificatesPEM([]byte(response.CertificatePEM))
+	if err != nil {
+		t.Fatalf("parse issued certificate: %v", err)
+	}
+	if meta := pki.ParseMetadata(certs[0]); meta.LANID != "public" {
+		t.Fatalf("issued device metadata = %+v, want public LAN", meta)
 	}
 }
 
@@ -275,6 +304,26 @@ func TestDeviceAccessIssueRejectsAdvertisePrefixConflict(t *testing.T) {
 	}
 }
 
+func TestDeviceAccessIssueRejectsDelegatedSubprefixOutsideSelectedLAN(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := deviceAccessDesiredWithPublicLANForResourceTest(deviceAccessDesiredWithIssuerForResourceTest(t, pkiSet))
+	daemon := &Daemon{
+		desired:      desired,
+		deviceLeases: make(map[deviceLeaseKey]deviceAccessLease),
+	}
+
+	_, err := daemon.issueDeviceAccessCertificate(deviceAccessIssueRequest{
+		Device:            "router-public",
+		LANID:             "public",
+		Endpoint:          "access-udp",
+		EndpointAddress:   "203.0.113.10:7000",
+		AdvertisePrefixes: []string{"10.0.0.0/25"},
+	})
+	if err == nil {
+		t.Fatal("expected selected LAN delegated-prefix rejection")
+	}
+}
+
 func TestDeviceAccessIssueRejectsAdvertisePrefixOutsideExportPolicy(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := deviceAccessDesiredWithIssuerForResourceTest(t, pkiSet)
@@ -288,6 +337,71 @@ func TestDeviceAccessIssueRejectsAdvertisePrefixOutsideExportPolicy(t *testing.T
 	})
 	if err == nil {
 		t.Fatal("expected export policy rejection")
+	}
+}
+
+func TestInboundDeviceSessionAllocatesFromSelectedPublicLAN(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := deviceAccessDesiredWithPublicLANForResourceTest(deviceAccessDesiredForResourceTest(pkiSet))
+	desired.IX.CertPath = ""
+	desired.IX.KeyPath = ""
+	daemon := &Daemon{
+		desired:          desired,
+		dataplane:        dataplane.NewNoopManager(),
+		routes:           routing.NewTable(),
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		deviceLeases:     make(map[deviceLeaseKey]deviceAccessLease),
+		endpointState:    make(map[endpointStateKey]rstate.EndpointState),
+	}
+	session := &deviceIdentitySession{
+		identity: transport.PeerIdentity{
+			Role:   string(pki.RoleDevice),
+			Peer:   "ix-a",
+			Domain: "lab.local",
+			Device: "phone-2",
+			LANID:  "public",
+		},
+		recv: make(chan struct{}),
+	}
+	defer daemon.closeDataSessions()
+
+	registerResourceTestDeviceSession(t, daemon, session)
+
+	lease := daemon.deviceLeases[deviceLeaseKey{IX: "ix-a", Device: "phone-2"}]
+	if lease.LANID != "public" || lease.Address.String() != "10.10.0.240" {
+		t.Fatalf("public LAN lease = %#v, want public 10.10.0.240", lease)
+	}
+}
+
+func TestInboundDeviceSessionRequiresLANIDWhenMultipleDeviceAccessLANs(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := deviceAccessDesiredWithPublicLANForResourceTest(deviceAccessDesiredForResourceTest(pkiSet))
+	daemon := &Daemon{
+		desired:          desired,
+		dataplane:        dataplane.NewNoopManager(),
+		routes:           routing.NewTable(),
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		deviceLeases:     make(map[deviceLeaseKey]deviceAccessLease),
+		endpointState:    make(map[endpointStateKey]rstate.EndpointState),
+	}
+	session := &deviceIdentitySession{
+		identity: transport.PeerIdentity{
+			Role:   string(pki.RoleDevice),
+			Peer:   "ix-a",
+			Domain: "lab.local",
+			Device: "legacy-device",
+		},
+		recv: make(chan struct{}),
+	}
+
+	_, err := daemon.registerInboundDataSession(context.Background(), transport.Endpoint{
+		Name:      core.EndpointID("access-udp"),
+		Transport: transport.ProtocolUDP,
+	}, session)
+	if err == nil {
+		t.Fatal("expected missing LAN ID rejection")
 	}
 }
 
@@ -333,6 +447,22 @@ func deviceAccessDesiredForResourceTest(pkiSet membershipPKI) config.Desired {
 		EnabledSet: true,
 	}}
 	desired.TransportPolicy.Encryption = securetransport.EncryptionSecure
+	return desired
+}
+
+func deviceAccessDesiredWithPublicLANForResourceTest(desired config.Desired) config.Desired {
+	desired.LANs = append(desired.LANs, config.LANConfig{
+		ID:        "public",
+		Type:      config.LANTypeTrustedPublic,
+		Iface:     "br-public",
+		Gateway:   "10.10.0.1/24",
+		Advertise: []core.Prefix{"10.10.0.0/24"},
+		DeviceAccess: config.DeviceAccessConfig{
+			Enabled:     true,
+			AddressPool: "10.10.0.240/28",
+			LeaseTTL:    "30m",
+		},
+	})
 	return desired
 }
 

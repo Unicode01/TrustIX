@@ -1004,6 +1004,9 @@ lans:
     gateway: " 10.0.0.1/24 "
     advertise:
       - 10.0.0.0/24
+    device_access:
+      enabled: true
+      address_pool: 10.0.0.240/28
     manage_address: false
   - id: public
     type: trusted-public
@@ -1011,6 +1014,9 @@ lans:
     gateway: 203.0.113.1/29
     advertise:
       - 203.0.113.0/29
+    device_access:
+      enabled: true
+      address_pool: 203.0.113.4/30
 management:
   host_api:
     enabled: true
@@ -1036,6 +1042,9 @@ management:
 	}
 	if primary := PrimaryLAN(cfg); primary.ID != "public" || primary.Iface != "br-pub" {
 		t.Fatalf("primary LAN = %#v, want public", primary)
+	}
+	if accessLANs := DeviceAccessLANs(cfg); len(accessLANs) != 2 || accessLANs[0].ID != "home" || accessLANs[1].ID != "public" {
+		t.Fatalf("device access LANs = %#v, want home and public", accessLANs)
 	}
 }
 
@@ -1111,25 +1120,17 @@ lans:
 `,
 		},
 		{
-			name: "multiple device access LANs",
+			name: "overlapping device access pools",
 			body: `
 lans:
   - id: home
-    iface: br-lan
-    gateway: 10.0.0.1/24
-    advertise:
-      - 10.0.0.0/24
     device_access:
       enabled: true
       address_pool: 10.0.0.128/25
   - id: lab
-    iface: br-lab
-    gateway: 10.0.1.1/24
-    advertise:
-      - 10.0.1.0/24
     device_access:
       enabled: true
-      address_pool: 10.0.1.128/25
+      address_pool: 10.0.0.192/26
 `,
 		},
 	}
@@ -1205,6 +1206,24 @@ lan:
 
 func TestLoadBytesRejectsInvalidNATRuntimeConfig(t *testing.T) {
 	_, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+lan:
+  iface: br-lan
+  gateway: 10.0.0.1/24
+  advertise:
+    - 10.0.0.0/24
+  mode: routed
+  nat:
+    max_bindings: 2048
+`), ".yaml")
+	if err == nil {
+		t.Fatal("expected routed lan nat config to be rejected")
+	}
+
+	_, err = LoadBytes([]byte(`
 domain:
   id: lab.local
 ix:

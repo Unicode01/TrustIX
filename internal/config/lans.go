@@ -63,8 +63,30 @@ func FirstLANGatewayLAN(desired Desired) (LANConfig, bool) {
 }
 
 func DeviceAccessLAN(desired Desired) (LANConfig, bool) {
+	lans := DeviceAccessLANs(desired)
+	if len(lans) == 0 {
+		return LANConfig{}, false
+	}
+	return lans[0], true
+}
+
+func DeviceAccessLANs(desired Desired) []LANConfig {
+	out := make([]LANConfig, 0)
 	for _, lan := range EffectiveLANs(desired) {
 		if lan.DeviceAccess.Enabled {
+			out = append(out, lan)
+		}
+	}
+	return out
+}
+
+func DeviceAccessLANByID(desired Desired, id string) (LANConfig, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return DeviceAccessLAN(desired)
+	}
+	for _, lan := range DeviceAccessLANs(desired) {
+		if lan.ID == id {
 			return lan, true
 		}
 	}

@@ -195,6 +195,8 @@ func (daemon *Daemon) managementMux() http.Handler {
 	mux.HandleFunc("GET /v1/config/verify", daemon.handleConfigVerify)
 	mux.HandleFunc("GET /v1/config/snapshot", daemon.handleConfigSnapshot)
 	mux.HandleFunc("POST /v1/config/rejoin", daemon.handleConfigRejoin)
+	mux.HandleFunc("POST /v1/config/export", daemon.handleConfigExport)
+	mux.HandleFunc("POST /v1/config/restore-archive", daemon.handleConfigRestoreArchive)
 	mux.HandleFunc("POST /v1/config/restore-backup", daemon.handleConfigRestoreBackup)
 	mux.HandleFunc("GET /v1/trust", daemon.handleTrustShow)
 	mux.HandleFunc("POST /v1/trust", daemon.handleTrustApply)

@@ -14,14 +14,9 @@ func firewallDoctorCheck() doctorCheck {
 		procFileState("/proc/net/ip6_tables_names", "iptables_ipv6_tables"),
 		procFileState("/proc/net/nf_tables", "nftables"),
 	}
-	status := "ok"
-	for _, detail := range details {
-		if strings.Contains(detail, "unavailable") {
-			status = "warn"
-			break
-		}
-	}
-	details = append(details, "trustix_managed_firewall_rules=false")
+	managedRules := trustixManagedFirewallRulesEnabled()
+	status := firewallDoctorStatus(details, managedRules)
+	details = append(details, firewallDoctorManagedRulesDetail(managedRules))
 	return doctorCheck{Name: "firewall_compat", Status: status, Detail: strings.Join(details, " ")}
 }
 

@@ -406,6 +406,57 @@ function App() {
     }
   }, [configText, pushToast, t]);
 
+  const exportConfigArchive = useCallback(async (includePrivateKeys: boolean) => {
+    if (includePrivateKeys && !window.confirm(t("backup_private_keys_confirm", "The full backup includes private keys. Store it securely and continue?"))) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await api.postBlob("/config/export", JSON.stringify({ include_private_keys: includePrivateKeys }));
+      const filename = response.filename || configArchiveFilename(status, includePrivateKeys);
+      saveBlob(response.blob, filename);
+      const title = includePrivateKeys ? t("config_backup_exported", "Full backup exported") : t("config_exported", "Config exported");
+      setConfigMessage(`${title}: ${filename}`);
+      pushToast("success", title, filename);
+    } catch (error) {
+      const message = errorMessage(error);
+      const title = includePrivateKeys ? t("config_backup_failed", "Full backup failed") : t("config_export_failed", "Config export failed");
+      setConfigMessage(message);
+      pushToast("error", title, message);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, pushToast, status, t]);
+
+  const restoreConfigArchive = useCallback(async (file: File | null) => {
+    if (!file) {
+      pushToast("info", t("restore_backup", "Restore"), t("restore_backup_select", "Select a TrustIX backup archive"));
+      return;
+    }
+    if (!window.confirm(t("restore_backup_confirm", "This will restore the config log and configured certificate/key files from the archive. Continue?"))) {
+      return;
+    }
+    setLoading(true);
+    try {
+      const payload = new Uint8Array(await file.arrayBuffer());
+      const response = await api.postBinaryJSON<Record<string, unknown>>("/config/restore-archive", payload, "application/gzip");
+      setConfigMessage(JSON.stringify(response, null, 2));
+      pushToast("success", t("restore_backup_success", "Backup restored"), file.name);
+      try {
+        await refreshAll({ silent: true });
+        setConfigMessage(JSON.stringify(response, null, 2));
+      } catch (refreshError) {
+        pushToast("error", t("refresh_failed", "Refresh failed"), errorMessage(refreshError));
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      setConfigMessage(message);
+      pushToast("error", t("restore_backup_failed", "Restore failed"), message);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, pushToast, refreshAll, t]);
+
   const copyText = useCallback(async (text: string, label: string) => {
     if (!text) {
       pushToast("info", t("nothing_to_copy", "Nothing to copy"), label);
@@ -718,6 +769,9 @@ function App() {
           onValidate={validateConfig}
           onApply={applyConfig}
           onCopy={copyConfig}
+          onExport={() => exportConfigArchive(false)}
+          onBackup={() => exportConfigArchive(true)}
+          onRestore={restoreConfigArchive}
         />
       )}
       {activeTab === "doctor" && <DoctorView t={t} lang={lang} doctor={doctor} status={status} routes={routes} routePolicy={routePolicy} kernelCapabilities={kernelCapabilities} />}
@@ -803,6 +857,29 @@ function applyTheme(setting: ThemeSetting): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename || "trustix-config-export.tar.gz";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function configArchiveFilename(status: StatusPayload | null, includePrivateKeys: boolean): string {
+  const domain = sanitizeFilenameSegment(status?.domain_id || "domain");
+  const ix = sanitizeFilenameSegment(status?.ix_id || "ix");
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  return `trustix-${domain}-${ix}-${includePrivateKeys ? "backup" : "export"}-${stamp}.tar.gz`;
+}
+
+function sanitizeFilenameSegment(value: string): string {
+  const clean = String(value || "").trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return clean || "unknown";
 }
 
 function compactListForMessage(values: Array<string | number | undefined>, separator: string): string {

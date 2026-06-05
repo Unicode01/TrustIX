@@ -1426,6 +1426,7 @@ func newSession(inner transport.Session, role role, privateKey *ecdh.PrivateKey,
 			Peer:            session.peerIX,
 			Domain:          session.peerDomain,
 			Device:          core.DeviceID(meta.Device),
+			LANID:           meta.LANID,
 			Prefixes:        append([]string(nil), meta.Prefixes...),
 			CertFingerprint: pki.CertificateFingerprintSHA256(peerCert),
 		}

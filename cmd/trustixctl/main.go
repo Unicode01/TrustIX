@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -237,6 +240,43 @@ func boolEnv(name string) bool {
 
 func handleConfigCommand(client apiClient, args []string) (bool, error) {
 	switch args[0] {
+	case "export":
+		flags := flag.NewFlagSet("config export", flag.ContinueOnError)
+		var out string
+		flags.StringVar(&out, "out", "", "output archive path; defaults to server filename")
+		if err := flags.Parse(args[1:]); err != nil {
+			return true, err
+		}
+		if flags.NArg() != 0 {
+			return true, fmt.Errorf("usage: trustixctl config export [-out file]")
+		}
+		body, err := json.Marshal(configExportCLIRequest{})
+		if err != nil {
+			return true, err
+		}
+		return true, client.postAndSave("/v1/config/export", body, "application/json", out)
+	case "backup":
+		flags := flag.NewFlagSet("config backup", flag.ContinueOnError)
+		var out string
+		var includePrivateKeys bool
+		flags.StringVar(&out, "out", "", "output archive path; defaults to server filename")
+		flags.BoolVar(&includePrivateKeys, "include-private-keys", false, "include configured private key files in the backup archive")
+		if err := flags.Parse(args[1:]); err != nil {
+			return true, err
+		}
+		if flags.NArg() != 0 || !includePrivateKeys {
+			return true, fmt.Errorf("usage: trustixctl config backup -include-private-keys [-out file]")
+		}
+		body, err := json.Marshal(configExportCLIRequest{IncludePrivateKeys: true})
+		if err != nil {
+			return true, err
+		}
+		return true, client.postAndSave("/v1/config/export", body, "application/json", out)
+	case "restore":
+		if len(args) != 2 {
+			return true, fmt.Errorf("usage: trustixctl config restore <archive.tar.gz>")
+		}
+		return true, client.postFileAndPrint("/v1/config/restore-archive", args[1], "application/gzip")
 	case "validate":
 		if len(args) != 2 {
 			return true, fmt.Errorf("usage: trustixctl config validate <file>")
@@ -336,6 +376,10 @@ func handleConfigCommand(client apiClient, args []string) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+type configExportCLIRequest struct {
+	IncludePrivateKeys bool `json:"include_private_keys,omitempty"`
 }
 
 func handleTrustCommand(client apiClient, args []string) (bool, error) {
@@ -861,6 +905,14 @@ func (client apiClient) postConfigFileAndPrint(path, configPath string) error {
 	return client.postAndPrint(requestPath, payload, contentType)
 }
 
+func (client apiClient) postFileAndPrint(path, filePath, contentType string) error {
+	payload, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("read file %q: %w", filePath, err)
+	}
+	return client.postAndPrint(path, payload, contentType)
+}
+
 func (client apiClient) postAndPrint(path string, body []byte, contentType string) error {
 	path = client.managementPath(path)
 	requestURL, err := buildURL(client.baseURL, path, nil)
@@ -887,6 +939,93 @@ func (client apiClient) postAndPrint(path string, body []byte, contentType strin
 	}
 	defer resp.Body.Close()
 	return printResponse("POST", requestURL, resp)
+}
+
+func (client apiClient) postAndSave(path string, body []byte, contentType, outPath string) error {
+	path = client.managementPath(path)
+	requestURL, err := buildURL(client.baseURL, path, nil)
+	if err != nil {
+		return err
+	}
+	httpClient, err := client.httpClient(60 * time.Second)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("POST %s: %w", requestURL, err)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if err := client.signRequest(req, body); err != nil {
+		return err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("POST %s: %w", requestURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		responseBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("POST %s returned %s; read error body: %w", requestURL, resp.Status, readErr)
+		}
+		return fmt.Errorf("POST %s returned %s: %s", requestURL, resp.Status, strings.TrimSpace(string(responseBody)))
+	}
+	if outPath == "" {
+		outPath = contentDispositionFilename(resp.Header.Get("Content-Disposition"))
+		if outPath == "" {
+			outPath = "trustix-config-export.tar.gz"
+		}
+	}
+	if outPath == "-" {
+		_, err := io.Copy(os.Stdout, resp.Body)
+		return err
+	}
+	outPath = filepath.Clean(outPath)
+	dir := filepath.Dir(outPath)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(outPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp output in %q: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	hasher := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(tmp, hasher), resp.Body)
+	closeErr := tmp.Close()
+	if copyErr != nil {
+		return fmt.Errorf("write archive %q: %w", outPath, copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close temp archive %q: %w", tmpName, closeErr)
+	}
+	if _, err := os.Stat(outPath); err == nil {
+		return fmt.Errorf("output file %q already exists", outPath)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("stat output file %q: %w", outPath, err)
+	}
+	if err := os.Rename(tmpName, outPath); err != nil {
+		return fmt.Errorf("save archive %q: %w", outPath, err)
+	}
+	result := struct {
+		Saved  string `json:"saved"`
+		Bytes  int64  `json:"bytes"`
+		SHA256 string `json:"sha256"`
+	}{
+		Saved:  outPath,
+		Bytes:  written,
+		SHA256: hex.EncodeToString(hasher.Sum(nil)),
+	}
+	payload, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("format save result: %w", err)
+	}
+	fmt.Println(string(payload))
+	return nil
 }
 
 func (client apiClient) deleteAndPrint(path string) error {
@@ -991,6 +1130,25 @@ func (client apiClient) signRequest(req *http.Request, body []byte) error {
 	return nil
 }
 
+func contentDispositionFilename(header string) string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(header)
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimSpace(params["filename"])
+	if name == "" {
+		name = strings.TrimSpace(params["filename*"])
+	}
+	if name == "" || strings.ContainsAny(name, `/\`) {
+		return ""
+	}
+	return name
+}
+
 func buildURL(apiBase, path string, query url.Values) (string, error) {
 	base, err := url.Parse(apiBase)
 	if err != nil {
@@ -1036,5 +1194,5 @@ func printResponse(method, requestURL string, resp *http.Response) error {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: trustixctl [-api http://127.0.0.1:8787] [-api-tls-ca root.pem] [-api-tls-server-name name] [-api-tls-insecure-skip-verify] [-target-ix ix-b] [-admin-cert certs/admin-1.crt -admin-key certs/admin-1.key ...] <version|status|peers|members|members delete <ix_id>|routes|route probe <dst> [-src ip] [-proto n] [-sport n] [-dport n]|trace <dst> [-max-hops n] [-src ip] [-proto n] [-sport n] [-dport n]|route-policy|flows|links|device-access [list]|device-access show <device|peer|address|fingerprint>|device-access revoke <device> [-ix ix_id]|device-access revoke -fingerprint sha256|endpoints|trust show|trust policy|trust admins|trust apply-policy <json-file>|trust roots [add <cert>|remove <fingerprint_or_cert>]|trust revoke <cert_or_fingerprint>|trust unrevoke <fingerprint>|admissions [list]|admissions pending [ix_id]|admissions show <ix_id>|admissions approve -ix <ix_id> -ix-cert <cert_or_fingerprint> [-prefix cidr ...] [-route-auth cert_or_fingerprint ...] [-control-api url] [-effective-at rfc3339]|admissions approve-pending <ix_id> [-prefix cidr ...] [-route-auth cert_or_fingerprint ...] [-control-api url] [-effective-at rfc3339]|admissions revoke <ix_id>|config desired|config peers|config head|config log [from [to]]|config event <seq>|config snapshot|config validate <file>|config apply <file>|config rollback [seq]|config rejoin <control_api> [ix_id]|capture [-limit n] [-hook hook] [-peer ix_id] [-src ip] [-dst ip]|stats|datapath|transports|bpf maps|doctor>")
+	fmt.Fprintln(os.Stderr, "usage: trustixctl [-api http://127.0.0.1:8787] [-api-tls-ca root.pem] [-api-tls-server-name name] [-api-tls-insecure-skip-verify] [-target-ix ix-b] [-admin-cert certs/admin-1.crt -admin-key certs/admin-1.key ...] <version|status|peers|members|members delete <ix_id>|routes|route probe <dst> [-src ip] [-proto n] [-sport n] [-dport n]|trace <dst> [-max-hops n] [-src ip] [-proto n] [-sport n] [-dport n]|route-policy|flows|links|device-access [list]|device-access show <device|peer|address|fingerprint>|device-access revoke <device> [-ix ix_id]|device-access revoke -fingerprint sha256|endpoints|trust show|trust policy|trust admins|trust apply-policy <json-file>|trust roots [add <cert>|remove <fingerprint_or_cert>]|trust revoke <cert_or_fingerprint>|trust unrevoke <fingerprint>|admissions [list]|admissions pending [ix_id]|admissions show <ix_id>|admissions approve -ix <ix_id> -ix-cert <cert_or_fingerprint> [-prefix cidr ...] [-route-auth cert_or_fingerprint ...] [-control-api url] [-effective-at rfc3339]|admissions approve-pending <ix_id> [-prefix cidr ...] [-route-auth cert_or_fingerprint ...] [-control-api url] [-effective-at rfc3339]|admissions revoke <ix_id>|config desired|config peers|config head|config log [from [to]]|config event <seq>|config snapshot|config export [-out file]|config backup -include-private-keys [-out file]|config restore <archive.tar.gz>|config validate <file>|config apply <file>|config rollback [seq]|config rejoin <control_api> [ix_id]|capture [-limit n] [-hook hook] [-peer ix_id] [-src ip] [-dst ip]|stats|datapath|transports|bpf maps|doctor>")
 }

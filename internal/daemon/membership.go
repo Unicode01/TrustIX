@@ -171,6 +171,27 @@ type routeCandidate struct {
 	Path           []core.IXID       `json:"path,omitempty"`
 }
 
+type knownRoutePrefix struct {
+	Static bool
+}
+
+func recordKnownRoutePrefix(known map[string]knownRoutePrefix, prefix string, source string) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return
+	}
+	record := known[prefix]
+	record.Static = record.Static || source == "static"
+	known[prefix] = record
+}
+
+func duplicateRouteCandidateStatus(known knownRoutePrefix) (action string, reason string, health string) {
+	if known.Static {
+		return "shadow", "shadowed_by_static", "shadowed"
+	}
+	return "reject", "duplicate_prefix", "blocked"
+}
+
 type advertisementSigningPayload struct {
 	DomainID            string                       `json:"domain_id"`
 	IXID                string                       `json:"ix_id"`
@@ -986,13 +1007,13 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 	}
 
 	localAdvertise := config.EffectiveLANAdvertise(daemon.desired)
-	knownPrefixes := make(map[string]struct{}, len(routes)+len(localAdvertise))
+	knownPrefixes := make(map[string]knownRoutePrefix, len(routes)+len(localAdvertise))
 	claimedPrefixes := newPrefixOwnerIndex()
 	for _, route := range routes {
-		knownPrefixes[string(route.Prefix)] = struct{}{}
+		recordKnownRoutePrefix(knownPrefixes, string(route.Prefix), route.Source)
 		if prefix, err := route.Prefix.Parse(); err == nil {
 			masked := prefix.Masked()
-			knownPrefixes[masked.String()] = struct{}{}
+			recordKnownRoutePrefix(knownPrefixes, masked.String(), route.Source)
 			claimedPrefixes.Add(routeOwner(route), masked)
 		}
 	}
@@ -1001,7 +1022,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 		if err == nil {
 			masked := prefix.Masked()
 			claimedPrefixes.Add(daemon.desired.IX.ID, masked)
-			knownPrefixes[masked.String()] = struct{}{}
+			recordKnownRoutePrefix(knownPrefixes, masked.String(), "local_lan")
 		}
 	}
 	if rawPrefix, ok := daemon.localManagementPrefixString(); ok {
@@ -1009,7 +1030,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 		if err == nil {
 			masked := prefix.Masked()
 			claimedPrefixes.Add(daemon.desired.IX.ID, masked)
-			knownPrefixes[masked.String()] = struct{}{}
+			recordKnownRoutePrefix(knownPrefixes, masked.String(), "management_vip")
 		}
 	}
 
@@ -1159,18 +1180,19 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", reason, "blocked"))
 				continue
 			}
-			if _, exists := knownPrefixes[prefix.String()]; exists {
+			if known, exists := knownPrefixes[prefix.String()]; exists {
+				action, reason, health := duplicateRouteCandidateStatus(known)
 				routePolicy = append(routePolicy, routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
 					Prefix:    core.Prefix(prefix.String()),
-					Action:    "reject",
-					Reason:    "duplicate_prefix",
+					Action:    action,
+					Reason:    reason,
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "duplicate_prefix", "blocked"))
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, action, reason, health))
 				continue
 			}
 			if claimedPrefixes.Conflicts(originIX, prefix) {
@@ -1187,7 +1209,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "prefix_conflict", "blocked"))
 				continue
 			}
-			knownPrefixes[prefix.String()] = struct{}{}
+			knownPrefixes[prefix.String()] = knownRoutePrefix{}
 			claimedPrefixes.Add(originIX, prefix)
 			routePolicy = append(routePolicy, routePolicyDecision{
 				Direction: "import",
@@ -1441,6 +1463,7 @@ func (daemon *Daemon) appendDeviceAccessRoutes(routes []routing.Route) []routing
 			Peer:   lease.Key.IX,
 			Domain: daemon.desired.Domain.ID,
 			Device: lease.Key.Device,
+			LANID:  lease.LANID,
 		}
 		peerID := deviceAccessPeerID(identity)
 		for _, prefix := range deviceAccessLeaseRoutePrefixes(lease) {
@@ -1470,11 +1493,11 @@ func (daemon *Daemon) appendDeviceAccessPeers(peers []dataplane.PeerMetadata) []
 	}
 	daemon.dataMu.Unlock()
 	sort.Slice(leases, func(i, j int) bool {
-		return deviceAccessPeerID(transport.PeerIdentity{Peer: leases[i].Key.IX, Device: leases[i].Key.Device}) <
-			deviceAccessPeerID(transport.PeerIdentity{Peer: leases[j].Key.IX, Device: leases[j].Key.Device})
+		return deviceAccessPeerID(transport.PeerIdentity{Peer: leases[i].Key.IX, Device: leases[i].Key.Device, LANID: leases[i].LANID}) <
+			deviceAccessPeerID(transport.PeerIdentity{Peer: leases[j].Key.IX, Device: leases[j].Key.Device, LANID: leases[j].LANID})
 	})
 	for _, lease := range leases {
-		peerID := deviceAccessPeerID(transport.PeerIdentity{Peer: lease.Key.IX, Device: lease.Key.Device})
+		peerID := deviceAccessPeerID(transport.PeerIdentity{Peer: lease.Key.IX, Device: lease.Key.Device, LANID: lease.LANID})
 		peers = append(peers, dataplane.PeerMetadata{
 			ID:       peerID,
 			DomainID: daemon.desired.Domain.ID,
@@ -2887,6 +2910,7 @@ func (daemon *Daemon) deviceAccessPeerConfigByID(id core.IXID) (config.PeerConfi
 			Peer:   lease.Key.IX,
 			Domain: daemon.desired.Domain.ID,
 			Device: lease.Key.Device,
+			LANID:  lease.LANID,
 		}
 		if deviceAccessPeerID(identity) == id {
 			daemon.dataMu.Unlock()

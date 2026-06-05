@@ -1263,8 +1263,14 @@ func TestStaticTransitRouteOwnsPrefixViaDifferentNextHop(t *testing.T) {
 		t.Fatalf("transit route = %#v", route)
 	}
 	status := daemonA.runtimeRoutePolicyStatus()
-	if !hasRoutePolicyDecision(status.Decisions, "import", "ix-c", "10.0.2.0/24", "reject", "duplicate_prefix") {
-		t.Fatalf("dynamic duplicate was not rejected behind static transit route: %#v", status.Decisions)
+	if hasRoutePolicyDecision(status.Decisions, "import", "ix-c", "10.0.2.0/24", "reject", "duplicate_prefix") {
+		t.Fatalf("static-shadowed dynamic route should not be reported as a duplicate reject: %#v", status.Decisions)
+	}
+	if !hasRoutePolicyDecision(status.Decisions, "import", "ix-c", "10.0.2.0/24", "shadow", "shadowed_by_static") {
+		t.Fatalf("dynamic route was not reported as shadowed by static route: %#v", status.Decisions)
+	}
+	if !hasRouteCandidate(status.Candidates, "10.0.2.0/24", "ix-c", "ix-c", "dynamic", "shadow", false) {
+		t.Fatalf("route candidates missing shadowed dynamic route: %#v", status.Candidates)
 	}
 }
 

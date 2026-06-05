@@ -414,6 +414,7 @@ type deviceLeaseKey struct {
 
 type deviceAccessLease struct {
 	Key               deviceLeaseKey
+	LANID             string
 	Address           netip.Addr
 	Prefix            netip.Prefix
 	AdvertisePrefixes []netip.Prefix
@@ -1776,8 +1777,7 @@ func (daemon *Daemon) deviceAccessEnabled() bool {
 	if daemon == nil {
 		return false
 	}
-	_, ok := config.DeviceAccessLAN(daemon.desired)
-	return ok
+	return len(config.DeviceAccessLANs(daemon.desired)) > 0
 }
 
 func (daemon *Daemon) localAdvertisementConfigured() bool {
@@ -1786,11 +1786,7 @@ func (daemon *Daemon) localAdvertisementConfigured() bool {
 		strings.TrimSpace(daemon.desired.IX.KeyPath) != ""
 }
 
-func (daemon *Daemon) deviceAccessLeaseTTL() time.Duration {
-	lan, ok := config.DeviceAccessLAN(daemon.desired)
-	if !ok {
-		return 24 * time.Hour
-	}
+func (daemon *Daemon) deviceAccessLeaseTTL(lan config.LANConfig) time.Duration {
 	raw := strings.TrimSpace(lan.DeviceAccess.LeaseTTL)
 	if raw == "" {
 		return 24 * time.Hour
@@ -1802,10 +1798,29 @@ func (daemon *Daemon) deviceAccessLeaseTTL() time.Duration {
 	return ttl
 }
 
-func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity) (deviceAccessLease, error) {
-	lan, ok := config.DeviceAccessLAN(daemon.desired)
+func (daemon *Daemon) deviceAccessLANForIdentity(identity transport.PeerIdentity) (config.LANConfig, error) {
+	lanID := strings.TrimSpace(identity.LANID)
+	lans := config.DeviceAccessLANs(daemon.desired)
+	if len(lans) == 0 {
+		return config.LANConfig{}, fmt.Errorf("lan device_access is not enabled")
+	}
+	if lanID == "" {
+		if len(lans) == 1 {
+			return lans[0], nil
+		}
+		return config.LANConfig{}, fmt.Errorf("inbound device session certificate has no lan_id and multiple device_access LANs are enabled")
+	}
+	lan, ok := config.DeviceAccessLANByID(daemon.desired, lanID)
 	if !ok {
-		return deviceAccessLease{}, fmt.Errorf("lan device_access is not enabled")
+		return config.LANConfig{}, fmt.Errorf("inbound device session certificate lan_id %q is not enabled", lanID)
+	}
+	return lan, nil
+}
+
+func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity) (deviceAccessLease, error) {
+	lan, err := daemon.deviceAccessLANForIdentity(identity)
+	if err != nil {
+		return deviceAccessLease{}, err
 	}
 	pool, err := netip.ParsePrefix(strings.TrimSpace(lan.DeviceAccess.AddressPool))
 	if err != nil {
@@ -1814,12 +1829,13 @@ func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity)
 	pool = pool.Masked()
 	key := deviceLeaseKey{IX: identity.Peer, Device: identity.Device}
 	now := time.Now().UTC()
-	expiresAt := now.Add(daemon.deviceAccessLeaseTTL())
+	expiresAt := now.Add(daemon.deviceAccessLeaseTTL(lan))
 	if daemon.deviceLeases == nil {
 		daemon.deviceLeases = make(map[deviceLeaseKey]deviceAccessLease)
 	}
 	daemon.pruneExpiredDeviceLeasesLocked(now)
-	if existing, ok := daemon.deviceLeases[key]; ok && existing.Address.IsValid() && pool.Contains(existing.Address) {
+	if existing, ok := daemon.deviceLeases[key]; ok && (existing.LANID == "" || existing.LANID == lan.ID) && existing.Address.IsValid() && pool.Contains(existing.Address) {
+		existing.LANID = lan.ID
 		existing.ExpiresAt = expiresAt
 		return existing, nil
 	}
@@ -1828,7 +1844,7 @@ func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity)
 		used[gateway] = struct{}{}
 	}
 	for _, lease := range daemon.deviceLeases {
-		if lease.Address.IsValid() {
+		if lease.Address.IsValid() && pool.Contains(lease.Address) {
 			used[lease.Address] = struct{}{}
 		}
 	}
@@ -1838,6 +1854,7 @@ func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity)
 	}
 	return deviceAccessLease{
 		Key:       key,
+		LANID:     lan.ID,
 		Address:   addr,
 		Prefix:    netip.PrefixFrom(addr, 32),
 		ExpiresAt: expiresAt,
@@ -1860,7 +1877,7 @@ func (daemon *Daemon) deviceAccessAdvertisePrefixesForIdentity(identity transpor
 			continue
 		}
 		seen[raw] = struct{}{}
-		if daemon.deviceAccessAdvertisePrefixConflictsLocked(lease.Key, lease.Prefix, prefix) {
+		if daemon.deviceAccessAdvertisePrefixConflictsLocked(lease, prefix) {
 			continue
 		}
 		allowed = append(allowed, prefix)
@@ -1894,29 +1911,40 @@ func normalizeDeviceAccessAdvertisePrefixes(values []string) []netip.Prefix {
 	return out
 }
 
-func (daemon *Daemon) deviceAccessAdvertisePrefixConflictsLocked(key deviceLeaseKey, leasePrefix netip.Prefix, prefix netip.Prefix) bool {
+func (daemon *Daemon) deviceAccessAdvertisePrefixConflictsLocked(current deviceAccessLease, prefix netip.Prefix) bool {
 	if !prefix.IsValid() || !prefix.Addr().Is4() {
 		return true
 	}
-	if leasePrefix.IsValid() && prefixOverlaps(leasePrefix.Masked(), prefix.Masked()) {
+	if current.Prefix.IsValid() && prefixOverlaps(current.Prefix.Masked(), prefix.Masked()) {
 		return true
 	}
 	staticRoutes := routesFromConfig(daemon.desired)
-	staticRoutes = daemon.appendLocalLANRoutes(staticRoutes)
 	for _, route := range staticRoutes {
 		routePrefix, err := route.Prefix.Parse()
 		if err != nil {
 			continue
 		}
 		if prefixOverlaps(routePrefix.Masked(), prefix.Masked()) {
-			if route.Source == "local_lan" && prefixIsDelegatedSubprefix(prefix.Masked(), routePrefix.Masked()) {
-				continue
-			}
 			return true
 		}
 	}
+	for _, lan := range config.EffectiveLANs(daemon.desired) {
+		for _, rawPrefix := range lan.Advertise {
+			lanPrefix, err := rawPrefix.Parse()
+			if err != nil {
+				continue
+			}
+			lanPrefix = lanPrefix.Masked()
+			if prefixOverlaps(lanPrefix, prefix.Masked()) {
+				if lan.ID == current.LANID && prefixIsDelegatedSubprefix(prefix.Masked(), lanPrefix) {
+					continue
+				}
+				return true
+			}
+		}
+	}
 	for otherKey, lease := range daemon.deviceLeases {
-		if otherKey == key {
+		if otherKey == current.Key {
 			continue
 		}
 		if lease.Prefix.IsValid() && prefixOverlaps(lease.Prefix.Masked(), prefix.Masked()) {

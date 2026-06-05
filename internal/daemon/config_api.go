@@ -242,6 +242,15 @@ func (daemon *Daemon) runtimeRouteValidationPeers(desired config.Desired) []conf
 	for _, peer := range peers {
 		seen[peer.ID] = struct{}{}
 	}
+	if desired.IX.ID != daemon.desired.IX.ID {
+		localPeer := daemon.localRouteValidationPeer()
+		if localPeer.ID != "" {
+			if _, ok := seen[localPeer.ID]; !ok {
+				peers = append(peers, localPeer)
+				seen[localPeer.ID] = struct{}{}
+			}
+		}
+	}
 	daemon.membershipMu.RLock()
 	ids := make([]string, 0, len(daemon.members))
 	for ixID := range daemon.members {
@@ -258,6 +267,7 @@ func (daemon *Daemon) runtimeRouteValidationPeers(desired config.Desired) []conf
 		ixID := core.IXID(rawID)
 		record := daemon.members[ixID]
 		peers = append(peers, daemon.peerConfigFromAdvertisement(record.Advertisement))
+		seen[ixID] = struct{}{}
 	}
 	daemon.membershipMu.RUnlock()
 	for _, route := range desired.Routes {
@@ -278,6 +288,27 @@ func (daemon *Daemon) runtimeRouteValidationPeers(desired config.Desired) []conf
 		seen[owner] = struct{}{}
 	}
 	return peers
+}
+
+func (daemon *Daemon) localRouteValidationPeer() config.PeerConfig {
+	prefixes := make([]core.Prefix, 0, len(config.EffectiveLANAdvertise(daemon.desired)))
+	for _, prefix := range daemon.localAdvertisementPrefixStringsForDesired(daemon.desired) {
+		prefixes = append(prefixes, core.Prefix(prefix))
+	}
+	endpoints := make([]config.EndpointConfig, 0, len(daemon.desired.Endpoints))
+	for _, endpoint := range daemon.desired.Endpoints {
+		endpoints = append(endpoints, config.EndpointConfig{
+			Name:      endpoint.Name,
+			Transport: endpoint.Transport,
+			Enabled:   endpoint.Enabled,
+		})
+	}
+	return config.PeerConfig{
+		ID:              daemon.desired.IX.ID,
+		Domain:          daemon.desired.Domain.ID,
+		AllowedPrefixes: prefixes,
+		Endpoints:       endpoints,
+	}
 }
 
 func validateTrustRoots(desired config.Desired) error {

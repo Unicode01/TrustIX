@@ -53,7 +53,7 @@ func (daemon *Daemon) managementAuthMiddleware(next http.Handler, options manage
 			next.ServeHTTP(w, r)
 			return
 		}
-		body, err := readLimitedBody(r.Body, maxConfigEventsBytes)
+		body, err := readLimitedBody(r.Body, managementAuthBodyLimit(r))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -75,6 +75,13 @@ func (daemon *Daemon) managementAuthMiddleware(next http.Handler, options manage
 		r = r.WithContext(context.WithValue(r.Context(), adminProofContextKey{}, proofs))
 		next.ServeHTTP(w, r)
 	})
+}
+
+func managementAuthBodyLimit(r *http.Request) int64 {
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/config/restore-archive" {
+		return maxConfigRestoreArchiveBytes
+	}
+	return maxConfigEventsBytes
 }
 
 func rejectCrossSiteManagementMutation(r *http.Request) error {
@@ -390,14 +397,14 @@ func (daemon *Daemon) verifyAdminProofPolicy(proofs []configlog.AdminProof, trus
 func (daemon *Daemon) apiSecurityDoctorCheck() doctorCheck {
 	if daemon.cfg.APIAdminAuth {
 		if daemon.managementPrimaryAPIReadAuthRequired() {
-			return doctorCheck{Name: "api_security", Status: "ok", Detail: "admin signed reads and writes required on the non-loopback primary management API; protected mutations include config apply/rejoin/restore-backup, trust, admission, provision, and control changes"}
+			return doctorCheck{Name: "api_security", Status: "ok", Detail: "admin signed reads and writes required on the non-loopback primary management API; protected mutations include config apply/rejoin/export/restore, trust, admission, provision, and control changes"}
 		}
 		return doctorCheck{Name: "api_security", Status: "ok", Detail: "admin signed writes required; primary management API reads are loopback-only; provision endpoints require signed writes"}
 	}
 	if apiAddrIsLoopback(daemon.cfg.APIAddr) {
-		return doctorCheck{Name: "api_security", Status: "ok", Detail: "management API is loopback-only; high-risk mutation endpoints include config restore-backup, config apply/rejoin, trust, admissions, provision, and control writes"}
+		return doctorCheck{Name: "api_security", Status: "ok", Detail: "management API is loopback-only; high-risk mutation endpoints include config export/restore, config apply/rejoin, trust, admissions, provision, and control writes"}
 	}
-	return doctorCheck{Name: "api_security", Status: "warn", Detail: "management API writes are unauthenticated on a non-loopback listener; high-risk mutations include config restore-backup, config apply/rejoin, trust, admissions, provision, and control writes"}
+	return doctorCheck{Name: "api_security", Status: "warn", Detail: "management API writes are unauthenticated on a non-loopback listener; high-risk mutations include config export/restore, config apply/rejoin, trust, admissions, provision, and control writes"}
 }
 
 func (daemon *Daemon) managementHostAPIDoctorCheck() doctorCheck {

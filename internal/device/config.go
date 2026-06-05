@@ -21,6 +21,7 @@ const defaultStatsEvery = 30 * time.Second
 type FileConfig struct {
 	Domain          core.DomainID       `json:"domain" yaml:"domain"`
 	IX              core.IXID           `json:"ix" yaml:"ix"`
+	LANID           string              `json:"lan_id,omitempty" yaml:"lan_id,omitempty"`
 	Endpoint        FileEndpointConfig  `json:"endpoint" yaml:"endpoint"`
 	CertPath        string              `json:"cert" yaml:"cert"`
 	KeyPath         string              `json:"key" yaml:"key"`
@@ -74,6 +75,7 @@ func DecodeFileConfig(payload []byte, ext string) (FileConfig, error) {
 func NormalizeFileConfig(cfg FileConfig) FileConfig {
 	cfg.CertPath = strings.TrimSpace(cfg.CertPath)
 	cfg.KeyPath = strings.TrimSpace(cfg.KeyPath)
+	cfg.LANID = strings.TrimSpace(cfg.LANID)
 	cfg.TrustRoots = trimStrings(cfg.TrustRoots)
 	cfg.ServerName = strings.TrimSpace(cfg.ServerName)
 	cfg.Encryption = securetransport.NormalizeEncryptionMode(cfg.Encryption)

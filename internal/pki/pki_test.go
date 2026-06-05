@@ -91,13 +91,14 @@ func TestIssueDeviceCertificateFromIXCA(t *testing.T) {
 		Domain:     "lab.local",
 		IX:         "ix-a",
 		Device:     "laptop-1",
+		LANID:      "public",
 		NotAfter:   time.Now().AddDate(1, 0, 0),
 	})
 	if err != nil {
 		t.Fatalf("issue device: %v", err)
 	}
 	meta := ParseMetadata(device.Cert)
-	if meta.Role != RoleDevice || meta.Domain != "lab.local" || meta.IX != "ix-a" || meta.Device != "laptop-1" {
+	if meta.Role != RoleDevice || meta.Domain != "lab.local" || meta.IX != "ix-a" || meta.Device != "laptop-1" || meta.LANID != "public" {
 		t.Fatalf("metadata = %+v", meta)
 	}
 	if err := VerifyChain(device.Cert, []*x509.Certificate{root.Cert}, []*x509.Certificate{domain.Cert, ix.Cert}); err != nil {

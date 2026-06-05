@@ -598,6 +598,25 @@ func TestConfigApplyRouteToDynamicPeer(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouteValidationPeersIncludesLocalIXForForeignDesired(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	local := desiredForMembershipTest(pkiSet, "ix-b", "127.0.0.1:7002", "https://127.0.0.1:9444", "10.0.1.0/24")
+	daemonB := newConfigApplyTestDaemon(t, local)
+	foreign := desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "https://127.0.0.1:9443", "10.0.0.0/24")
+	foreign.Peers = nil
+	foreign.Routes = []config.RouteConfig{{
+		Prefix:   "10.0.1.0/24",
+		Owner:    "ix-b",
+		NextHop:  "ix-b",
+		Endpoint: "ix-b-udp",
+		Metric:   1000,
+	}}
+
+	if err := daemonB.validateDesiredSchemaForRuntime(foreign); err != nil {
+		t.Fatalf("validate foreign desired route via local IX: %v", err)
+	}
+}
+
 func TestDataSessionSurfaceAutoCompatibleWithUserspaceAdvertisement(t *testing.T) {
 	left := dataSessionPeerSurface{
 		ID:        "ix-b",

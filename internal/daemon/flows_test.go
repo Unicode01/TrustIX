@@ -1959,6 +1959,7 @@ func TestDaemonConfiguresNATTableFromLANConfig(t *testing.T) {
 	daemon := &Daemon{
 		desired: config.Desired{
 			LAN: config.LANConfig{
+				Mode: config.LANModeNAT,
 				NAT: config.NATConfig{
 					MaxBindings: 3,
 					BindingTTL:  "45s",

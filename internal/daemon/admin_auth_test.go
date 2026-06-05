@@ -366,19 +366,19 @@ func TestAPIAddrIsLoopback(t *testing.T) {
 	}
 }
 
-func TestAPISecurityDoctorNamesRestoreBackupExposure(t *testing.T) {
+func TestAPISecurityDoctorNamesConfigRestoreExposure(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	daemon := newConfigApplyTestDaemon(t, configApplyDesired(pkiSet, "10.0.1.0/24"))
 	daemon.cfg.APIAddr = "0.0.0.0:8787"
 
 	check := daemon.apiSecurityDoctorCheck()
-	if check.Name != "api_security" || check.Status != "warn" || !strings.Contains(check.Detail, "config restore-backup") {
-		t.Fatalf("api security doctor check = %#v, want warn with restore-backup detail", check)
+	if check.Name != "api_security" || check.Status != "warn" || !strings.Contains(check.Detail, "config export/restore") {
+		t.Fatalf("api security doctor check = %#v, want warn with config export/restore detail", check)
 	}
 
 	daemon.cfg.APIAdminAuth = true
 	check = daemon.apiSecurityDoctorCheck()
-	if check.Status != "ok" || !strings.Contains(check.Detail, "config apply/rejoin/restore-backup") {
+	if check.Status != "ok" || !strings.Contains(check.Detail, "config apply/rejoin/export/restore") {
 		t.Fatalf("api security doctor check with auth = %#v, want ok with mutation detail", check)
 	}
 }
