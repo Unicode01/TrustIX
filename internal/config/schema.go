@@ -50,6 +50,7 @@ type IXConfig struct {
 	CertPath            string        `json:"cert" yaml:"cert"`
 	KeyPath             string        `json:"key" yaml:"key"`
 	ControlAPI          string        `json:"control_api,omitempty" yaml:"control_api,omitempty"`
+	ControlAPIPublish   string        `json:"control_api_publish,omitempty" yaml:"control_api_publish,omitempty"`
 	ConfigLog           string        `json:"config_log" yaml:"config_log"`
 	RouteAuthorizations []string      `json:"route_authorizations" yaml:"route_authorizations"`
 }
@@ -510,6 +511,11 @@ func (cfg Desired) validateWithRoutePeers(routePeers []PeerConfig) error {
 		if err := validateControlAPI("ix control_api", cfg.IX.ControlAPI); err != nil {
 			return err
 		}
+	}
+	switch cfg.IX.ControlAPIPublish {
+	case "", "disabled":
+	default:
+		return fmt.Errorf("ix control_api_publish %q is unsupported", cfg.IX.ControlAPIPublish)
 	}
 	if err := validateLAN(cfg.LAN); err != nil {
 		return err

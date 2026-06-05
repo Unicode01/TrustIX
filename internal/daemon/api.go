@@ -155,6 +155,9 @@ func (daemon *Daemon) hostAPIHandler() http.Handler {
 func (daemon *Daemon) managementHandler(auth managementAuthOptions) http.Handler {
 	api := daemon.managementAuthMiddleware(daemon.managementMux(), auth)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if daemon.serveIXProvisionIfRequest(w, r) {
+			return
+		}
 		if daemon.managementWebUIEnabled() && daemon.serveWebUIIfRequest(w, r) {
 			return
 		}
@@ -181,6 +184,7 @@ func (daemon *Daemon) managementMux() http.Handler {
 	mux.HandleFunc("GET /v1/endpoint-grants", daemon.handleEndpointGrantsList)
 	mux.HandleFunc("POST /v1/endpoint-grants/issue", daemon.handleEndpointGrantIssue)
 	mux.HandleFunc("POST /v1/endpoint-grants/revoke", daemon.handleEndpointGrantRevoke)
+	mux.HandleFunc("POST /v1/provision/ix", daemon.handleIXProvisionIssue)
 	mux.HandleFunc("GET /v1/config/desired", daemon.handleConfigDesired)
 	mux.HandleFunc("GET /v1/config/peers", daemon.handleConfigPeers)
 	mux.HandleFunc("POST /v1/config/validate", daemon.handleConfigValidate)
@@ -1535,6 +1539,7 @@ func (daemon *Daemon) handleControlAdvertisementPost(w http.ResponseWriter, r *h
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		daemon.scheduleRuntimeRouteWarmup(r.Context())
 	}
 	writeJSON(w, http.StatusOK, struct {
 		Accepted bool `json:"accepted"`

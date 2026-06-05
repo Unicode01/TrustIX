@@ -100,6 +100,36 @@ func TestManagementHandlerServesEmbeddedWebUIAsset(t *testing.T) {
 	}
 }
 
+func TestManagementHandlerServesWebUIAssetIndexAliases(t *testing.T) {
+	daemon := &Daemon{
+		cfg: Config{APIAddr: "127.0.0.1:8787"},
+		desired: config.Desired{
+			Management: config.ManagementConfig{
+				WebUI: config.WebUIConfig{Enabled: true},
+			},
+		},
+	}
+	for _, path := range []string{"/assets", "/assets/", "/assets/index.html"} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			recorder := httptest.NewRecorder()
+
+			daemon.handler().ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+			body := recorder.Body.String()
+			if !strings.Contains(body, "window.TRUSTIX_WEBUI") {
+				t.Fatalf("index response does not include webui bootstrap")
+			}
+			if strings.Contains(body, "{{.BootstrapJSON}}") || strings.Contains(body, "{{.ScriptNonce}}") {
+				t.Fatalf("index alias returned an unrendered template: %s", body)
+			}
+		})
+	}
+}
+
 func TestHostAPIHandlerServesWebUIWhenEnabled(t *testing.T) {
 	daemon := &Daemon{
 		cfg: Config{APIAddr: "127.0.0.1:8787"},

@@ -3103,6 +3103,92 @@ func TestWarmKernelDirectSessionsPreDialsFullPool(t *testing.T) {
 	}
 }
 
+func TestWarmKernelDirectRouteSessionsUsesDynamicRuntimeRoutes(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
+	registry := transport.NewRegistry()
+	fake := &retainingWarmupTransport{name: transport.ProtocolUDP}
+	if err := registry.Register(fake); err != nil {
+		t.Fatalf("register client transport: %v", err)
+	}
+	daemon := &Daemon{
+		transports:       registry,
+		dataplane:        &warmupKernelUDPDataplane{},
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		endpointState:    make(map[endpointStateKey]rstate.EndpointState),
+		flows:            make(map[routing.FlowKey]routing.FlowBinding),
+		members: map[core.IXID]memberRecord{
+			"ix-b": {
+				Advertisement: advertisementResponse{
+					DomainID:    "lab.local",
+					IXID:        "ix-b",
+					LANPrefixes: []string{"10.0.1.0/24"},
+					Endpoints: []dataplane.EndpointMetadata{{
+						Peer:      "ix-b",
+						ID:        "udp-b",
+						Address:   "127.0.0.1:17042",
+						Transport: string(transport.ProtocolUDP),
+						Enabled:   true,
+						Security: dataplane.EndpointSecurityMetadata{
+							Encryption: securetransport.EncryptionPlaintext,
+						},
+					}},
+				},
+				LastSeen: time.Now().UTC(),
+				Direct:   true,
+			},
+		},
+	}
+	daemon.desired = config.Desired{
+		Domain: config.DomainConfig{ID: "lab.local"},
+		IX:     config.IXConfig{ID: "ix-a"},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "ix-a-udp",
+			Mode:      config.EndpointModePassive,
+			Listen:    "127.0.0.1:17041",
+			Address:   "127.0.0.1:17041",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: securetransport.EncryptionPlaintext,
+			SessionPool: config.SessionPoolPolicyConfig{
+				Warmup: true,
+			},
+			KernelTransport: config.KernelTransportPolicyConfig{
+				Mode: string(dataplane.KernelTransportModeAuto),
+			},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	warmed, err := daemon.warmKernelDirectRouteSessionsResult(context.Background())
+	if err != nil {
+		t.Fatalf("warm kernel direct runtime routes: %v", err)
+	}
+	if !warmed {
+		t.Fatal("dynamic runtime route was not warmed")
+	}
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "udp-b",
+		Transport:  transport.ProtocolUDP,
+		Address:    "127.0.0.1:17042",
+		Encryption: securetransport.EncryptionPlaintext,
+	}
+	session, ok := daemon.dataSessions[key].(*retainingWarmupSession)
+	if !ok {
+		t.Fatalf("dynamic warmup session = %T, want retaining warmup session", daemon.dataSessions[key])
+	}
+	if !session.retained {
+		t.Fatal("dynamic runtime route warmup did not retain kernel flow on close")
+	}
+	runtime := daemon.dataSessionState[key]
+	if runtime == nil || !runtime.controlOnly {
+		t.Fatalf("dynamic runtime route warmup controlOnly = %#v, want true", runtime)
+	}
+}
+
 func TestWarmRouteSessionsPreDialsSingleSession(t *testing.T) {
 	registry := transport.NewRegistry()
 	fake := &flakyWarmupTransport{name: transport.ProtocolUDP}
@@ -3145,6 +3231,68 @@ func TestWarmRouteSessionsPreDialsSingleSession(t *testing.T) {
 	}
 	if got := len(daemon.dataSessions); got != 1 {
 		t.Fatalf("active sessions = %d, want 1", got)
+	}
+}
+
+func TestWarmRouteSessionsParallelCandidatesDoesNotBlockOnSlowPreferred(t *testing.T) {
+	registry := transport.NewRegistry()
+	slow := &blockingWarmupTransport{name: transport.ProtocolHTTPConnect, started: make(chan struct{}, 1)}
+	if err := registry.Register(slow); err != nil {
+		t.Fatalf("register slow transport: %v", err)
+	}
+	if err := registry.Register(&retainingWarmupTransport{name: transport.ProtocolUDP}); err != nil {
+		t.Fatalf("register udp transport: %v", err)
+	}
+	daemon := &Daemon{
+		transports:       registry,
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		endpointState:    make(map[endpointStateKey]rstate.EndpointState),
+		flows:            make(map[routing.FlowKey]routing.FlowBinding),
+	}
+	daemon.desired = config.Desired{
+		IX: config.IXConfig{ID: "ix-b"},
+		Peers: []config.PeerConfig{{
+			ID:     "ix-a",
+			Domain: "lab.local",
+			Endpoints: []config.EndpointConfig{
+				{Name: "a-http-connect", Address: "127.0.0.1:7091", Transport: string(transport.ProtocolHTTPConnect), Priority: 50},
+				{Name: "a-udp", Address: "127.0.0.1:7001", Transport: string(transport.ProtocolUDP), Priority: 10},
+			},
+		}},
+		Routes: []config.RouteConfig{{
+			Prefix:  "10.0.0.0/24",
+			NextHop: "ix-a",
+			Metric:  100,
+		}},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: "plaintext",
+			KernelTransport: config.KernelTransportPolicyConfig{
+				Mode: string(dataplane.KernelTransportModeDisabled),
+			},
+			SessionPool: config.SessionPoolPolicyConfig{Warmup: true},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := daemon.warmRouteSessions(ctx); err != nil {
+		t.Fatalf("warm route sessions: %v", err)
+	}
+	select {
+	case <-slow.started:
+	case <-time.After(25 * time.Millisecond):
+	}
+	key := dataSessionKey{
+		Peer:       "ix-a",
+		Endpoint:   "a-udp",
+		Transport:  transport.ProtocolUDP,
+		Address:    "127.0.0.1:7001",
+		Encryption: "plaintext",
+	}
+	if _, ok := daemon.dataSessions[key]; !ok {
+		t.Fatalf("udp session was not warmed; sessions=%v", daemon.dataSessions)
 	}
 }
 
@@ -6855,6 +7003,32 @@ type retainingWarmupSession struct {
 
 func (session *retainingWarmupSession) RetainKernelFlowOnClose() {
 	session.retained = true
+}
+
+type blockingWarmupTransport struct {
+	name    transport.Protocol
+	started chan struct{}
+}
+
+func (fake *blockingWarmupTransport) Name() transport.Protocol {
+	return fake.name
+}
+
+func (fake *blockingWarmupTransport) Probe(ctx context.Context, peer transport.Peer) transport.ProbeResult {
+	return transport.ProbeResult{}
+}
+
+func (fake *blockingWarmupTransport) Dial(ctx context.Context, peer transport.Peer, tlsConf *tls.Config) (transport.Session, error) {
+	select {
+	case fake.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (fake *blockingWarmupTransport) Listen(ctx context.Context, ep transport.Endpoint, tlsConf *tls.Config) (transport.Listener, error) {
+	return nil, fmt.Errorf("unexpected blocking warmup transport listen")
 }
 
 type warmupKernelUDPDataplane struct {

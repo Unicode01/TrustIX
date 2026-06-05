@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/http"
@@ -92,6 +93,7 @@ type deviceAccessIssueResponse struct {
 	CertificatePEM   string            `json:"certificate_pem"`
 	PrivateKeyPEM    string            `json:"private_key_pem"`
 	IssuerCertPEM    string            `json:"issuer_cert_pem,omitempty"`
+	TrustRootsPEM    []string          `json:"trust_roots_pem,omitempty"`
 	Fingerprint      string            `json:"fingerprint"`
 	NotAfter         time.Time         `json:"not_after"`
 	ClientConfig     device.FileConfig `json:"client_config"`
@@ -257,6 +259,13 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 	if err != nil {
 		return deviceAccessIssueResponse{}, err
 	}
+	trustRootsPEM, err := deviceAccessTrustRootsPEM(desired)
+	if err != nil {
+		return deviceAccessIssueResponse{}, fmt.Errorf("load device client trust roots: %w", err)
+	}
+	if len(trustRootsPEM) == 0 {
+		return deviceAccessIssueResponse{}, fmt.Errorf("at least one trust root is required for device client config")
+	}
 	configJSON, err := json.MarshalIndent(clientConfig, "", "  ")
 	if err != nil {
 		return deviceAccessIssueResponse{}, fmt.Errorf("encode device client config: %w", err)
@@ -268,11 +277,45 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 		CertificatePEM:   certPEM,
 		PrivateKeyPEM:    string(bundle.KeyPEM),
 		IssuerCertPEM:    string(ixBundle.CertPEM),
+		TrustRootsPEM:    trustRootsPEM,
 		Fingerprint:      pki.CertificateFingerprintSHA256(bundle.Cert),
 		NotAfter:         bundle.Cert.NotAfter.UTC(),
 		ClientConfig:     clientConfig,
 		ClientConfigJSON: string(configJSON),
 	}, nil
+}
+
+func deviceAccessTrustRootsPEM(desired config.Desired) ([]string, error) {
+	roots := make([]string, 0, len(desired.Domain.TrustRoots)+len(desired.Trust.TrustRootsPEM))
+	seen := make(map[string]struct{}, len(desired.Domain.TrustRoots)+len(desired.Trust.TrustRootsPEM))
+	addRoot := func(label string, payload []byte) error {
+		cert, err := pki.ParseCertificatePEM(payload)
+		if err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+		fingerprint := pki.CertificateFingerprintSHA256(cert)
+		if _, exists := seen[fingerprint]; exists {
+			return nil
+		}
+		seen[fingerprint] = struct{}{}
+		roots = append(roots, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})))
+		return nil
+	}
+	for _, path := range desired.Domain.TrustRoots {
+		_, payload, err := pki.LoadCertificate(path)
+		if err != nil {
+			return nil, err
+		}
+		if err := addRoot("domain trust root "+path, payload); err != nil {
+			return nil, err
+		}
+	}
+	for index, payload := range desired.Trust.TrustRootsPEM {
+		if err := addRoot(fmt.Sprintf("trust.trust_roots_pem[%d]", index), []byte(payload)); err != nil {
+			return nil, err
+		}
+	}
+	return roots, nil
 }
 
 func (daemon *Daemon) deviceAccessClientConfigForIssueRequest(desired config.Desired, request deviceAccessIssueRequest, bundle pki.Bundle) (device.FileConfig, error) {

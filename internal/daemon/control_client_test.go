@@ -1,14 +1,20 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
+	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/core"
+	"trustix.local/trustix/internal/transport"
 )
 
 func TestControlClientReusesCachedTransport(t *testing.T) {
@@ -213,4 +219,107 @@ func TestAdvertisementPushSkipsUnchangedUntilInterval(t *testing.T) {
 	if requests != 1 {
 		t.Fatalf("requests = %d, want unchanged advertisement pushed once", requests)
 	}
+}
+
+func TestControlAdvertisementPostSchedulesRouteWarmup(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desiredA := desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "https://127.0.0.1:9443", "10.0.0.0/24")
+	desiredA.TransportPolicy = config.TransportPolicyConfig{
+		Encryption:  "plaintext",
+		SessionPool: config.SessionPoolPolicyConfig{Warmup: true},
+	}
+	daemonA := newMembershipTestDaemon(t, desiredA, 1)
+	authorizeMembershipTestIX(t, daemonA, pkiSet, "ix-c", "10.0.2.0/24")
+	fake := newWarmupSignalTransport(transport.ProtocolUDP)
+	registry := transport.NewRegistry()
+	if err := registry.Register(fake); err != nil {
+		t.Fatalf("register warmup transport: %v", err)
+	}
+	daemonA.transports = registry
+	daemonA.dataMu.Lock()
+	daemonA.dataPathStarted = true
+	daemonA.dataMu.Unlock()
+
+	daemonC := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-c", "127.0.0.1:7003", "https://127.0.0.1:9445", "10.0.2.0/24"), 2)
+	advertisement, err := daemonC.buildLocalAdvertisement()
+	if err != nil {
+		t.Fatalf("build ix-c advertisement: %v", err)
+	}
+	payload, err := json.Marshal(advertisement)
+	if err != nil {
+		t.Fatalf("marshal advertisement: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/control/advertisements", bytes.NewReader(payload))
+	recorder := httptest.NewRecorder()
+	daemonA.handleControlAdvertisementPost(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("advertisement post status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	select {
+	case <-fake.dialed:
+	case <-time.After(time.Second):
+		t.Fatal("control advertisement post did not schedule route warmup")
+	}
+	if got := fake.dialCount(); got == 0 {
+		t.Fatal("warmup transport was not dialed")
+	}
+	daemonA.dataMu.Lock()
+	defer daemonA.dataMu.Unlock()
+	for key := range daemonA.dataSessions {
+		if key.Peer == "ix-c" && key.Endpoint == "ix-c-udp" {
+			return
+		}
+	}
+	t.Fatalf("warmup session for ix-c was not registered: %#v", daemonA.dataSessions)
+}
+
+type warmupSignalTransport struct {
+	name   transport.Protocol
+	mu     sync.Mutex
+	dials  int
+	dialed chan struct{}
+}
+
+func newWarmupSignalTransport(name transport.Protocol) *warmupSignalTransport {
+	return &warmupSignalTransport{name: name, dialed: make(chan struct{}, 1)}
+}
+
+func (fake *warmupSignalTransport) Name() transport.Protocol {
+	return fake.name
+}
+
+func (fake *warmupSignalTransport) Probe(ctx context.Context, peer transport.Peer) transport.ProbeResult {
+	return transport.ProbeResult{}
+}
+
+func (fake *warmupSignalTransport) Dial(ctx context.Context, peer transport.Peer, tlsConf *tls.Config) (transport.Session, error) {
+	fake.mu.Lock()
+	fake.dials++
+	fake.mu.Unlock()
+	select {
+	case fake.dialed <- struct{}{}:
+	default:
+	}
+	encryption := ""
+	if len(peer.Endpoints) > 0 {
+		encryption = peer.Endpoints[0].Encryption
+	}
+	return &statsSession{stats: transport.TransportStats{
+		Datagram:        true,
+		Encryption:      encryption,
+		CryptoPlacement: "userspace",
+		MaxPacketSize:   65536,
+		NativeBatching:  true,
+	}}, nil
+}
+
+func (fake *warmupSignalTransport) Listen(ctx context.Context, ep transport.Endpoint, tlsConf *tls.Config) (transport.Listener, error) {
+	return nil, errors.New("unexpected warmup signal transport listen")
+}
+
+func (fake *warmupSignalTransport) dialCount() int {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.dials
 }

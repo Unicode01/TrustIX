@@ -125,16 +125,18 @@ type prefixOwnerTrieNode struct {
 }
 
 type runtimeDataplaneProjection struct {
-	Routes      []routing.Route
-	Peers       []dataplane.PeerMetadata
-	Endpoints   []dataplane.EndpointMetadata
-	NAT         *dataplane.NATSnapshot
-	RoutePolicy []routePolicyDecision
+	Routes          []routing.Route
+	Peers           []dataplane.PeerMetadata
+	Endpoints       []dataplane.EndpointMetadata
+	NAT             *dataplane.NATSnapshot
+	RoutePolicy     []routePolicyDecision
+	RouteCandidates []routeCandidate
 }
 
 type routePolicyStatus struct {
-	Config    config.RoutePolicyConfig `json:"config"`
-	Decisions []routePolicyDecision    `json:"decisions"`
+	Config     config.RoutePolicyConfig `json:"config"`
+	Decisions  []routePolicyDecision    `json:"decisions"`
+	Candidates []routeCandidate         `json:"candidates,omitempty"`
 }
 
 type routePolicyDecision struct {
@@ -146,6 +148,27 @@ type routePolicyDecision struct {
 	Action    string      `json:"action"`
 	Reason    string      `json:"reason,omitempty"`
 	Source    string      `json:"source,omitempty"`
+}
+
+type routeCandidate struct {
+	Prefix         core.Prefix       `json:"prefix"`
+	Owner          core.IXID         `json:"owner,omitempty"`
+	OriginIX       core.IXID         `json:"origin_ix,omitempty"`
+	NextHop        core.IXID         `json:"next_hop,omitempty"`
+	LearnedFrom    core.IXID         `json:"learned_from,omitempty"`
+	Endpoint       core.EndpointID   `json:"endpoint,omitempty"`
+	Kind           routing.RouteKind `json:"kind,omitempty"`
+	Metric         int               `json:"metric,omitempty"`
+	Source         string            `json:"source,omitempty"`
+	SourcePriority int               `json:"source_priority,omitempty"`
+	Action         string            `json:"action"`
+	Reason         string            `json:"reason,omitempty"`
+	Health         string            `json:"health,omitempty"`
+	Selected       bool              `json:"selected,omitempty"`
+	Direct         bool              `json:"direct,omitempty"`
+	Static         bool              `json:"static,omitempty"`
+	LastSeen       time.Time         `json:"last_seen,omitempty"`
+	Path           []core.IXID       `json:"path,omitempty"`
 }
 
 type advertisementSigningPayload struct {
@@ -274,6 +297,9 @@ func (daemon *Daemon) advertisedControlAPI() string {
 }
 
 func (daemon *Daemon) advertisedControlAPIForDesired(desired config.Desired) string {
+	if strings.EqualFold(strings.TrimSpace(desired.IX.ControlAPIPublish), "disabled") {
+		return ""
+	}
 	if desired.IX.ControlAPI != "" {
 		return desired.IX.ControlAPI
 	}
@@ -387,6 +413,9 @@ func (daemon *Daemon) localAdvertisementEndpointsForDesiredTarget(desired config
 func advertisedEndpointAddress(endpoint config.EndpointConfig) string {
 	if transportProtocolIsKernelTunnel(endpoint.Transport) {
 		return strings.TrimSpace(firstNonEmpty(endpoint.Address, endpoint.Listen))
+	}
+	if endpoint.Mode == config.EndpointModeActive {
+		return ""
 	}
 	return endpoint.Address
 }
@@ -765,6 +794,7 @@ func (daemon *Daemon) mergeAdvertisementWithOptions(advertisement advertisementR
 	}
 	if exists && !advertisementNewer(existing.Advertisement, advertisement) {
 		recordChanged := !existing.LastSeen.Equal(lastSeen) || existing.Source != recordSource || existing.Direct != direct || existing.Via != via
+		runtimeChanged := existing.Direct != direct || existing.Via != via
 		if recordChanged {
 			existing.LastSeen = lastSeen
 			existing.Source = recordSource
@@ -787,7 +817,7 @@ func (daemon *Daemon) mergeAdvertisementWithOptions(advertisement advertisementR
 				return false, err
 			}
 		}
-		return false, nil
+		return runtimeChanged, nil
 	}
 	daemon.members[ixID] = memberRecord{
 		Advertisement: advertisement,
@@ -930,9 +960,12 @@ func (daemon *Daemon) runtimeRoutePolicyStatus() routePolicyStatus {
 
 	decisions := append(exportRoutePolicyDecisions(daemon.desired), projection.RoutePolicy...)
 	sortRoutePolicyDecisions(decisions)
+	candidates := append([]routeCandidate(nil), projection.RouteCandidates...)
+	sortRouteCandidates(candidates)
 	return routePolicyStatus{
-		Config:    daemon.desired.RoutePolicy,
-		Decisions: decisions,
+		Config:     daemon.desired.RoutePolicy,
+		Decisions:  decisions,
+		Candidates: candidates,
 	}
 }
 
@@ -940,6 +973,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 	routes := routesFromConfig(daemon.desired)
 	routes = daemon.appendLocalLANRoutes(routes)
 	routes = daemon.appendDeviceAccessRoutes(routes)
+	routeCandidates := daemon.routeCandidatesForRuntimeRoutes(routes)
 	peers := peersFromConfig(daemon.desired)
 	peers = daemon.appendDeviceAccessPeers(peers)
 	endpoints := daemon.endpointsFromConfig(daemon.desired)
@@ -1022,6 +1056,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "invalid_prefix",
 					Source:    record.Source,
 				})
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(rawPrefix), "", routing.RouteUnicast, metric+announcement.Metric, "reject", "invalid_prefix", "down"))
 				continue
 			}
 			prefix = prefix.Masked()
@@ -1049,6 +1084,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "path_loop",
 					Source:    record.Source,
 				})
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "path_loop", "blocked"))
 				continue
 			}
 			isManagementVIP := managementVIPPrefix.IsValid() && prefix == managementVIPPrefix && !managementVIPCovered
@@ -1063,6 +1099,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "management_host_api_disabled",
 					Source:    record.Source,
 				})
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "management_host_api_disabled", "down"))
 				continue
 			}
 			if isManagementVIP && strings.TrimSpace(advertisement.ControlAPI) == "" {
@@ -1076,6 +1113,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "no_control_api",
 					Source:    record.Source,
 				})
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "no_control_api", "down"))
 				continue
 			}
 			if !isManagementVIP && nextHop == "" {
@@ -1089,6 +1127,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "no_transit_next_hop",
 					Source:    record.Source,
 				})
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_transit_next_hop", "down"))
 				continue
 			}
 			if !isManagementVIP && !daemon.hasUsableRouteNextHopEndpoint(nextHop) {
@@ -1102,6 +1141,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "no_usable_endpoint",
 					Source:    record.Source,
 				})
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_usable_endpoint", "down"))
 				continue
 			}
 			allowed, reason := importPolicyAllows(prefix, importPrefixes)
@@ -1116,6 +1156,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    reason,
 					Source:    record.Source,
 				})
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", reason, "blocked"))
 				continue
 			}
 			if _, exists := knownPrefixes[prefix.String()]; exists {
@@ -1129,6 +1170,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "duplicate_prefix",
 					Source:    record.Source,
 				})
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "duplicate_prefix", "blocked"))
 				continue
 			}
 			if claimedPrefixes.Conflicts(originIX, prefix) {
@@ -1142,6 +1184,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "prefix_conflict",
 					Source:    record.Source,
 				})
+				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "prefix_conflict", "blocked"))
 				continue
 			}
 			knownPrefixes[prefix.String()] = struct{}{}
@@ -1166,7 +1209,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 				source = "management_vip"
 				nextHop = daemon.desired.IX.ID
 			}
-			routes = append(routes, routing.Route{
+			route := routing.Route{
 				Prefix:        core.Prefix(prefix.String()),
 				Owner:         originIX,
 				NextHop:       nextHop,
@@ -1176,16 +1219,197 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 				LocalPort:     managementVIPLocalPort(isManagementVIP, advertisement),
 				Source:        source,
 				Reason:        reason,
-			})
+			}
+			routes = append(routes, route)
+			routeCandidates = append(routeCandidates, routeCandidateFromAcceptedDynamicRoute(route, announcement, record))
 		}
 	}
+	markSelectedRouteCandidates(routeCandidates, routes)
 	return runtimeDataplaneProjection{
-		Routes:      routes,
-		Peers:       peers,
-		Endpoints:   endpoints,
-		NAT:         daemon.natSnapshotForRoutes(routes),
-		RoutePolicy: routePolicy,
+		Routes:          routes,
+		Peers:           peers,
+		Endpoints:       endpoints,
+		NAT:             daemon.natSnapshotForRoutes(routes),
+		RoutePolicy:     routePolicy,
+		RouteCandidates: routeCandidates,
 	}
+}
+
+func (daemon *Daemon) routeCandidatesForRuntimeRoutes(routes []routing.Route) []routeCandidate {
+	candidates := make([]routeCandidate, 0, len(routes))
+	for _, route := range routes {
+		candidates = append(candidates, routeCandidate{
+			Prefix:         normalizedRoutePrefix(route.Prefix),
+			Owner:          routeOwner(route),
+			OriginIX:       routeOwner(route),
+			NextHop:        route.NextHop,
+			Endpoint:       route.Endpoint,
+			Kind:           route.Kind,
+			Metric:         route.Metric,
+			Source:         route.Source,
+			SourcePriority: routeCandidateSourcePriority(route.Source, route.Kind),
+			Action:         "accept",
+			Reason:         firstNonEmpty(route.Reason, "configured"),
+			Health:         daemon.routeHealthForRoute(route),
+			Static:         route.Source == "static",
+		})
+	}
+	return candidates
+}
+
+func routeCandidateFromAcceptedDynamicRoute(route routing.Route, announcement announcedPrefix, record memberRecord) routeCandidate {
+	candidate := routeCandidateFromAnnouncement(announcement, record, route.Prefix, route.NextHop, route.Kind, route.Metric, "accept", firstNonEmpty(route.Reason, "import_default"), "ok")
+	candidate.Owner = route.Owner
+	candidate.OriginIX = route.Owner
+	candidate.Endpoint = route.Endpoint
+	candidate.Source = route.Source
+	candidate.SourcePriority = routeCandidateSourcePriority(route.Source, route.Kind)
+	return candidate
+}
+
+func routeCandidateFromAnnouncement(announcement announcedPrefix, record memberRecord, prefix core.Prefix, nextHop core.IXID, kind routing.RouteKind, metric int, action, reason, health string) routeCandidate {
+	origin := announcement.OriginIX
+	if origin == "" {
+		origin = core.IXID(record.Advertisement.IXID)
+	}
+	source := "dynamic"
+	if nextHop != "" && origin != "" && nextHop != origin {
+		source = "dynamic_transit"
+	}
+	if kind == routing.RouteLocal {
+		source = "management_vip"
+	}
+	learnedFrom := core.IXID(record.Advertisement.IXID)
+	if !record.Direct && record.Via != "" {
+		learnedFrom = record.Via
+	}
+	return routeCandidate{
+		Prefix:         normalizedRoutePrefix(prefix),
+		Owner:          origin,
+		OriginIX:       origin,
+		NextHop:        nextHop,
+		LearnedFrom:    learnedFrom,
+		Kind:           kind,
+		Metric:         metric,
+		Source:         source,
+		SourcePriority: routeCandidateSourcePriority(source, kind),
+		Action:         action,
+		Reason:         reason,
+		Health:         health,
+		Direct:         record.Direct,
+		LastSeen:       record.LastSeen,
+		Path:           append([]core.IXID(nil), announcement.Path...),
+	}
+}
+
+func (daemon *Daemon) routeHealthForRoute(route routing.Route) string {
+	switch route.Kind {
+	case routing.RouteBlackhole, routing.RouteReject:
+		return "blocked"
+	case routing.RouteLocal:
+		return "ok"
+	}
+	if route.NextHop == "" {
+		return "down"
+	}
+	if route.NextHop == daemon.desired.IX.ID {
+		return "ok"
+	}
+	if daemon.transports == nil {
+		return "unknown"
+	}
+	if daemon.hasUsableRouteNextHopEndpoint(route.NextHop) {
+		return "ok"
+	}
+	return "down"
+}
+
+func normalizedRoutePrefix(prefix core.Prefix) core.Prefix {
+	if parsed, err := prefix.Parse(); err == nil {
+		return core.Prefix(parsed.Masked().String())
+	}
+	return prefix
+}
+
+func routeCandidateSourcePriority(source string, kind routing.RouteKind) int {
+	if kind == routing.RouteLocal {
+		return 10
+	}
+	switch source {
+	case "local_lan", "management_vip":
+		return 10
+	case "device_access":
+		return 20
+	case "static":
+		return 30
+	case "dynamic":
+		return 40
+	case "dynamic_transit":
+		return 50
+	default:
+		return 90
+	}
+}
+
+func markSelectedRouteCandidates(candidates []routeCandidate, routes []routing.Route) {
+	selected := selectedRouteCandidateKeys(routes)
+	for index := range candidates {
+		if candidates[index].Action != "accept" {
+			continue
+		}
+		if _, ok := selected[routeCandidateKeyFromCandidate(candidates[index])]; ok {
+			candidates[index].Selected = true
+		}
+	}
+}
+
+func selectedRouteCandidateKeys(routes []routing.Route) map[string]struct{} {
+	type selectedRoute struct {
+		route routing.Route
+		index int
+	}
+	best := make(map[string]selectedRoute, len(routes))
+	for index, route := range routes {
+		key := string(normalizedRoutePrefix(route.Prefix))
+		if key == "" {
+			continue
+		}
+		current, exists := best[key]
+		if !exists ||
+			route.Metric < current.route.Metric ||
+			route.Metric == current.route.Metric && index < current.index {
+			best[key] = selectedRoute{route: route, index: index}
+		}
+	}
+	out := make(map[string]struct{}, len(best))
+	for _, selected := range best {
+		out[routeCandidateKeyFromRoute(selected.route)] = struct{}{}
+	}
+	return out
+}
+
+func routeCandidateKeyFromRoute(route routing.Route) string {
+	return strings.Join([]string{
+		string(normalizedRoutePrefix(route.Prefix)),
+		string(routeOwner(route)),
+		string(route.NextHop),
+		string(route.Endpoint),
+		string(route.Kind),
+		strconv.Itoa(route.Metric),
+		route.Source,
+	}, "\x00")
+}
+
+func routeCandidateKeyFromCandidate(candidate routeCandidate) string {
+	return strings.Join([]string{
+		string(normalizedRoutePrefix(candidate.Prefix)),
+		string(candidate.Owner),
+		string(candidate.NextHop),
+		string(candidate.Endpoint),
+		string(candidate.Kind),
+		strconv.Itoa(candidate.Metric),
+		candidate.Source,
+	}, "\x00")
 }
 
 func (daemon *Daemon) appendDeviceAccessRoutes(routes []routing.Route) []routing.Route {
@@ -1661,6 +1885,35 @@ func sortRoutePolicyDecisions(decisions []routePolicyDecision) {
 			return decisions[i].IXID < decisions[j].IXID
 		}
 		return decisions[i].Prefix < decisions[j].Prefix
+	})
+}
+
+func sortRouteCandidates(candidates []routeCandidate) {
+	sort.Slice(candidates, func(i, j int) bool {
+		left := candidates[i]
+		right := candidates[j]
+		if left.Prefix != right.Prefix {
+			return left.Prefix < right.Prefix
+		}
+		if left.Selected != right.Selected {
+			return left.Selected
+		}
+		if left.Action != right.Action {
+			return left.Action < right.Action
+		}
+		if left.SourcePriority != right.SourcePriority {
+			return left.SourcePriority < right.SourcePriority
+		}
+		if left.Metric != right.Metric {
+			return left.Metric < right.Metric
+		}
+		if left.Owner != right.Owner {
+			return left.Owner < right.Owner
+		}
+		if left.NextHop != right.NextHop {
+			return left.NextHop < right.NextHop
+		}
+		return left.Source < right.Source
 	})
 }
 

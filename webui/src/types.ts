@@ -104,6 +104,7 @@ export type DesiredConfig = {
     cert?: string;
     key?: string;
     control_api?: string;
+    control_api_publish?: string;
     config_log?: string;
     route_authorizations?: string[];
   };
@@ -288,6 +289,47 @@ export type PeerView = {
 
 export type RouteView = RouteConfig & {
   source?: string;
+};
+
+export type RouteCandidate = {
+  prefix?: string;
+  owner?: string;
+  origin_ix?: string;
+  next_hop?: string;
+  learned_from?: string;
+  endpoint?: string;
+  kind?: string;
+  metric?: number;
+  source?: string;
+  source_priority?: number;
+  action?: string;
+  reason?: string;
+  health?: string;
+  selected?: boolean;
+  direct?: boolean;
+  static?: boolean;
+  last_seen?: string;
+  path?: string[];
+};
+
+export type RoutePolicyStatus = {
+  config?: {
+    import_prefixes?: string[];
+    export_prefixes?: string[];
+    dynamic_metric?: number;
+    [key: string]: unknown;
+  };
+  decisions?: Array<{
+    direction?: string;
+    ix_id?: string;
+    origin_ix?: string;
+    next_hop_ix?: string;
+    prefix?: string;
+    action?: string;
+    reason?: string;
+    source?: string;
+  }>;
+  candidates?: RouteCandidate[];
 };
 
 export type RouteProbeResponse = {
@@ -688,10 +730,58 @@ export type DeviceAccessIssueResponse = {
   certificate_pem?: string;
   private_key_pem?: string;
   issuer_cert_pem?: string;
+  trust_roots_pem?: string[];
   fingerprint?: string;
   not_after?: string;
   client_config?: Record<string, unknown>;
   client_config_json?: string;
+};
+
+export type IXProvisionIssueRequest = {
+  ix_id: string;
+  domain?: string;
+  role?: string;
+  profile?: string;
+  control_api?: string;
+  advertise?: string[];
+  endpoint_name?: string;
+  endpoint_mode?: string;
+  endpoint_transport?: string;
+  endpoint_listen?: string;
+  endpoint_address?: string;
+  lan_iface?: string;
+  lan_gateway?: string;
+  underlay_iface?: string;
+  attach_mode?: string;
+  api_addr?: string;
+  peer_api_addr?: string;
+  dataplane?: string;
+  kernel_modules?: string;
+  goarch?: string;
+  build_bpf?: string;
+  build_ko?: string;
+  build_webui?: string;
+  source_certs?: string;
+  domain_ca_cert?: string;
+  domain_ca_key?: string;
+  config_ca_cert?: string;
+  config_ca_key?: string;
+  trust_roots?: string[];
+  target_cert_dir?: string;
+  bootstrap_ix?: string;
+  bootstrap_control_api?: string;
+  provision_url?: string;
+  ttl?: string;
+};
+
+export type IXProvisionIssueResponse = {
+  token?: string;
+  provision_url?: string;
+  expires_at?: string;
+  command?: string;
+  ix_cert_fingerprint?: string;
+  route_auth_fingerprints?: string[];
+  admission?: Record<string, unknown>;
 };
 
 export type EndpointGrant = {

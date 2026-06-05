@@ -5,7 +5,40 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 set -Eeuo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bootstrap_repo_root() {
+  local source_path="${BASH_SOURCE[0]:-}"
+  if [[ -n "$source_path" && -f "$source_path" ]]; then
+    local candidate
+    candidate="$(cd "$(dirname "$source_path")/.." && pwd)"
+    if [[ -f "${candidate}/go.mod" && -d "${candidate}/scripts" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+if ! repo_root="$(bootstrap_repo_root)"; then
+  repo_url="${TRUSTIX_BOOTSTRAP_REPO:-https://github.com/Unicode01/TrustIX.git}"
+  repo_ref="${TRUSTIX_BOOTSTRAP_REF:-main}"
+  repo_root="${TRUSTIX_BOOTSTRAP_WORKDIR:-}"
+  if [[ -z "$repo_root" ]]; then
+    repo_root="$(mktemp -d /tmp/trustix-bootstrap-src.XXXXXX)"
+  fi
+  if [[ ! -f "${repo_root}/go.mod" ]]; then
+    command -v git >/dev/null 2>&1 || {
+      echo "ERROR: git is required when bootstrapping from curl" >&2
+      exit 127
+    }
+    mkdir -p "$repo_root"
+    if [[ -n "$(find "$repo_root" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+      echo "ERROR: TRUSTIX_BOOTSTRAP_WORKDIR is not a TrustIX repo and is not empty: ${repo_root}" >&2
+      exit 1
+    fi
+    git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
+  fi
+  exec bash "${repo_root}/scripts/trustix-bootstrap-ix.sh" "$@"
+fi
 
 usage() {
   cat <<'EOF'
@@ -13,6 +46,10 @@ usage: scripts/trustix-bootstrap-ix.sh [options]
 
 Issues a new IX certificate, writes a JSON config, optionally builds a release,
 and optionally deploys the new IX to a local or SSH target.
+
+Provision token mode:
+  --provision-url URL       existing IX management URL that issued the token
+  --token TOKEN             one-time IX provision token
 
 Required:
   --ix ID
@@ -51,10 +88,22 @@ Common options:
   --kdir DIR                 target kernel build dir
   --build-bpf 0|1            rebuild embedded eBPF objects (default: 1)
   --build-ko auto|0|1        default: auto
+  --build-webui 0|1          run npm WebUI rebuild during release build (default: 0)
+  --local-install            install and start this IX on the current Linux host after build
   --no-build                 skip release build
   --no-deploy                skip deployment
   --json                     print machine-readable summary
   -h, --help                 show this help
+
+Curl bootstrap:
+  curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-bootstrap-ix.sh | bash -s -- [options]
+
+  Token mode keeps CA private keys on the issuing IX/provisioner:
+  curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-bootstrap-ix.sh | bash -s -- --provision-url https://ix-a.example:18787 --token TOKEN
+
+  When run from curl, the script clones https://github.com/Unicode01/TrustIX.git
+  into a temporary directory before building. Override with
+  TRUSTIX_BOOTSTRAP_REPO, TRUSTIX_BOOTSTRAP_REF, or TRUSTIX_BOOTSTRAP_WORKDIR.
 
 Endpoint SPEC fields are comma-separated or semicolon-separated:
   name=ix-new-udp,transport=udp,mode=passive,listen=0.0.0.0:7000,address=ddns.example:7000
@@ -114,12 +163,19 @@ split_values_append() {
   raw="${raw//,/;}"
   raw="${raw//+/;}"
   raw="${raw//|/;}"
-  local item
-  IFS=';' read -r -a parts <<<"$raw"
-  for item in "${parts[@]}"; do
+  local item rest="$raw"
+  while :; do
+    if [[ "$rest" == *";"* ]]; then
+      item="${rest%%;*}"
+      rest="${rest#*;}"
+    else
+      item="$rest"
+      rest=""
+    fi
     item="${item#"${item%%[![:space:]]*}"}"
     item="${item%"${item##*[![:space:]]}"}"
     [[ -n "$item" ]] && target_ref+=("$item")
+    [[ -z "$rest" ]] && break
   done
 }
 
@@ -131,13 +187,18 @@ field_value() {
   if [[ "$spec" == *";"* ]]; then
     delimiter=";"
   fi
-  local field k v
-  if [[ "$delimiter" == ";" ]]; then
-    IFS=';' read -r -a fields <<<"$spec"
-  else
-    IFS=',' read -r -a fields <<<"$spec"
-  fi
-  for field in "${fields[@]}"; do
+  local field k v rest="$spec"
+  while :; do
+    if [[ "$delimiter" == ";" && "$rest" == *";"* ]]; then
+      field="${rest%%;*}"
+      rest="${rest#*;}"
+    elif [[ "$delimiter" == "," && "$rest" == *","* ]]; then
+      field="${rest%%,*}"
+      rest="${rest#*,}"
+    else
+      field="$rest"
+      rest=""
+    fi
     k="${field%%=*}"
     v="${field#*=}"
     k="${k#"${k%%[![:space:]]*}"}"
@@ -148,6 +209,7 @@ field_value() {
       printf '%s' "$v"
       return
     fi
+    [[ -z "$rest" ]] && break
   done
   printf '%s' "$default_value"
 }
@@ -158,6 +220,21 @@ json_bool() {
     0|false|no|off|disabled|"") printf 'false' ;;
     *) die "invalid boolean value: $1" ;;
   esac
+}
+
+run_provision_token() {
+  [[ -n "$provision_url" ]] || die "--provision-url is required in token mode"
+  [[ -n "$provision_token" ]] || die "--token is required in token mode"
+  command -v curl >/dev/null 2>&1 || die "curl is required in token mode"
+  local base_url="${provision_url%/}"
+  local payload_url="${base_url}/v1/provision/ix/${provision_token}/bootstrap.sh"
+  local payload
+  payload="$(mktemp /tmp/trustix-provision-payload.XXXXXX.sh)"
+  log "fetch provision payload"
+  curl -fsSL "$payload_url" -o "$payload"
+  chmod 0700 "$payload"
+  TRUSTIX_BOOTSTRAP_REPO_ROOT="$repo_root" bash "$payload"
+  rm -f "$payload"
 }
 
 find_trustix_ca_cmd() {
@@ -232,12 +309,18 @@ goarch=""
 kdir=""
 build_bpf="${TRUSTIX_RELEASE_BUILD_BPF:-1}"
 build_ko="auto"
+build_webui="${TRUSTIX_BOOTSTRAP_BUILD_WEBUI:-0}"
 do_build=1
 do_deploy=1
+local_install=0
 json=0
+provision_url=""
+provision_token=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --provision-url) [[ $# -ge 2 ]] || die "--provision-url requires a value"; provision_url="$2"; shift 2 ;;
+    --token|--provision-token) [[ $# -ge 2 ]] || die "$1 requires a value"; provision_token="$2"; shift 2 ;;
     --ix) [[ $# -ge 2 ]] || die "--ix requires a value"; ix_id="$2"; shift 2 ;;
     --domain) [[ $# -ge 2 ]] || die "--domain requires a value"; domain_id="$2"; shift 2 ;;
     --source-certs) [[ $# -ge 2 ]] || die "--source-certs requires a value"; source_certs="$2"; shift 2 ;;
@@ -281,6 +364,8 @@ while [[ $# -gt 0 ]]; do
     --kdir) [[ $# -ge 2 ]] || die "--kdir requires a value"; kdir="$2"; shift 2 ;;
     --build-bpf) [[ $# -ge 2 ]] || die "--build-bpf requires a value"; build_bpf="$2"; shift 2 ;;
     --build-ko) [[ $# -ge 2 ]] || die "--build-ko requires a value"; build_ko="$2"; shift 2 ;;
+    --build-webui) [[ $# -ge 2 ]] || die "--build-webui requires a value"; build_webui="$2"; shift 2 ;;
+    --local-install) local_install=1; shift ;;
     --no-build) do_build=0; shift ;;
     --no-deploy) do_deploy=0; shift ;;
     --json) json=1; shift ;;
@@ -289,11 +374,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "$provision_url" || -n "$provision_token" ]]; then
+  run_provision_token
+  exit 0
+fi
+
 [[ -n "$ix_id" ]] || die "--ix is required"
 [[ -n "$domain_id" ]] || die "--domain is required"
 [[ -n "$control_api" ]] || die "--control-api is required"
 case "$build_bpf" in 0|1) ;; *) die "--build-bpf must be 0 or 1" ;; esac
 case "$build_ko" in auto|0|1) ;; *) die "--build-ko must be auto, 0, or 1" ;; esac
+case "$build_webui" in 0|1) ;; *) die "--build-webui must be 0 or 1" ;; esac
+if [[ -n "$target" && "$local_install" == "1" ]]; then
+  die "--target and --local-install are mutually exclusive"
+fi
 if [[ ${#advertise[@]} -eq 0 && ${#lan_specs[@]} -eq 0 ]]; then
   die "at least one --advertise CIDR or --lan advertise=... spec is required"
 fi
@@ -508,6 +602,7 @@ done
 tarball=""
 if [[ "$do_build" == "1" ]]; then
   build_args=(--out "${repo_root}/build/release" --version "bootstrap-${ix_id}" --build-bpf "$build_bpf" --build-ko "$build_ko" --json)
+  [[ "$build_webui" == "0" ]] && build_args+=(--skip-webui)
   [[ -n "$goarch" ]] && build_args+=(--goarch "$goarch")
   [[ -n "$kdir" ]] && build_args+=(--kdir "$kdir")
   log "build release"
@@ -516,16 +611,23 @@ if [[ "$do_build" == "1" ]]; then
   [[ -n "$tarball" ]] || die "could not parse build tarball path"
 fi
 
-if [[ "$do_deploy" == "1" && -n "$target" ]]; then
+if [[ "$do_deploy" == "1" && ( -n "$target" || "$local_install" == "1" ) ]]; then
   [[ -n "$tarball" ]] || die "deployment requires a tarball; do not combine --no-build with --target unless deploying separately"
-  deploy_args=(--target "$target" --tarball "$tarball" --instance "$ix_id" --config "$config_path" --cert-dir "$deploy_cert_dir" --target-cert-dir "$target_cert_dir" --api "$api_addr" --peer-api "$peer_api_addr" --dataplane "$dataplane" --admin-auth)
-  [[ -n "$ssh_port" ]] && deploy_args+=(--ssh-port "$ssh_port")
-  [[ -n "$ssh_key" ]] && deploy_args+=(--ssh-key "$ssh_key")
-  for opt in "${ssh_options[@]}"; do
-    deploy_args+=(--ssh-option "$opt")
-  done
+  deploy_args=(--tarball "$tarball" --instance "$ix_id" --config "$config_path" --cert-dir "$deploy_cert_dir" --target-cert-dir "$target_cert_dir" --api "$api_addr" --peer-api "$peer_api_addr" --dataplane "$dataplane" --admin-auth)
+  if [[ -n "$target" ]]; then
+    deploy_args=(--target "$target" "${deploy_args[@]}")
+    [[ -n "$ssh_port" ]] && deploy_args+=(--ssh-port "$ssh_port")
+    [[ -n "$ssh_key" ]] && deploy_args+=(--ssh-key "$ssh_key")
+    for opt in "${ssh_options[@]}"; do
+      deploy_args+=(--ssh-option "$opt")
+    done
+  fi
   [[ "$json" == "1" ]] && deploy_args+=(--json)
-  log "deploy ${ix_id} to ${target}"
+  if [[ -n "$target" ]]; then
+    log "deploy ${ix_id} to ${target}"
+  else
+    log "install ${ix_id} on local host"
+  fi
   deploy_json="$("${repo_root}/scripts/trustix-deploy.sh" "${deploy_args[@]}")"
 else
   deploy_json=""

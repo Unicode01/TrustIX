@@ -57,6 +57,8 @@ func Normalize(cfg Desired) Desired {
 	if cfg.IX.Domain == "" {
 		cfg.IX.Domain = cfg.Domain.ID
 	}
+	cfg.IX.ControlAPI = strings.TrimSpace(cfg.IX.ControlAPI)
+	cfg.IX.ControlAPIPublish = normalizeControlAPIPublish(cfg.IX.ControlAPIPublish)
 	cfg.PrimaryLANID = strings.TrimSpace(cfg.PrimaryLANID)
 	normalizeTrustConfig(&cfg.Trust)
 	normalizeLAN(&cfg.LAN)
@@ -94,6 +96,17 @@ func Normalize(cfg Desired) Desired {
 	normalizeRoutePolicy(&cfg.RoutePolicy)
 	normalizeTransportPolicy(&cfg.TransportPolicy)
 	return cfg
+}
+
+func normalizeControlAPIPublish(mode string) string {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(mode), "-", "_")) {
+	case "", "auto", "default":
+		return ""
+	case "disabled", "disable", "off", "none", "no", "false":
+		return "disabled"
+	default:
+		return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(mode), "-", "_"))
+	}
 }
 
 func normalizeLAN(lan *LANConfig) {

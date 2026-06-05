@@ -191,6 +191,14 @@ func TestDeviceAccessIssueRequiresAdminProofAndReturnsBundle(t *testing.T) {
 	if response.Device != "laptop-2" || response.Fingerprint == "" || response.CertificatePEM == "" || response.PrivateKeyPEM == "" {
 		t.Fatalf("issue response missing bundle fields: %#v", response)
 	}
+	if len(response.TrustRootsPEM) == 0 {
+		t.Fatal("issue response has no trust roots")
+	}
+	for index, root := range response.TrustRootsPEM {
+		if _, err := pki.ParseCertificatePEM([]byte(root)); err != nil {
+			t.Fatalf("parse response trust root %d: %v", index, err)
+		}
+	}
 	if response.ClientConfig.Endpoint.Address != "203.0.113.10:7000" || response.ClientConfig.Endpoint.Name != "access-udp" {
 		t.Fatalf("client endpoint config = %#v", response.ClientConfig.Endpoint)
 	}

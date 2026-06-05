@@ -505,6 +505,35 @@ func TestDynamicRouteImportsEndpointWithoutDialAddress(t *testing.T) {
 	}
 }
 
+func TestLocalAdvertisementDoesNotPublishActiveDialAddress(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := desiredForMembershipTest(pkiSet, "ix-c", "127.0.0.1:7002", "https://127.0.0.1:9445", "10.0.2.0/24")
+	desired.IX.ControlAPI = ""
+	desired.IX.ControlAPIPublish = "disabled"
+	desired.Endpoints = []config.EndpointConfig{{
+		Name:      "edge-active",
+		Mode:      config.EndpointModeActive,
+		Address:   "ix-a.example.com:7000",
+		Transport: "udp",
+		Enabled:   true,
+	}}
+	daemonEdge := newMembershipTestDaemon(t, desired, 1)
+
+	advertisement, err := daemonEdge.buildLocalAdvertisement()
+	if err != nil {
+		t.Fatalf("build local advertisement: %v", err)
+	}
+	if advertisement.ControlAPI != "" {
+		t.Fatalf("advertised control_api = %q, want empty", advertisement.ControlAPI)
+	}
+	if len(advertisement.Endpoints) != 1 {
+		t.Fatalf("advertised endpoints = %#v, want one reverse-only endpoint", advertisement.Endpoints)
+	}
+	if advertisement.Endpoints[0].Address != "" {
+		t.Fatalf("advertised active endpoint address = %q, want empty reverse-only address", advertisement.Endpoints[0].Address)
+	}
+}
+
 func TestDynamicRouteRejectsEndpointWithUnusableTransport(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	daemonA := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "https://127.0.0.1:9443", "10.0.0.0/24"), 1)
@@ -1038,6 +1067,59 @@ func TestIndirectGossipDoesNotKeepMemberAlive(t *testing.T) {
 	}
 	if _, ok := daemonA.dynamicPeerConfig("ix-c"); ok {
 		t.Fatal("expired indirectly learned member still exists")
+	}
+}
+
+func TestDirectObservationOfGossipedMemberRefreshesRuntimeNextHop(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desiredA := desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "https://127.0.0.1:9443", "10.0.0.0/24")
+	desiredA.Peers = []config.PeerConfig{{
+		ID:              "ix-b",
+		Domain:          "lab.local",
+		ControlAPI:      "https://127.0.0.1:9444",
+		AllowedPrefixes: []core.Prefix{"10.0.1.0/24"},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "ix-b-udp",
+			Mode:      config.EndpointModeActive,
+			Address:   "127.0.0.1:7002",
+			Transport: "udp",
+			Enabled:   true,
+		}},
+	}}
+	daemonA := newMembershipTestDaemon(t, desiredA, 1)
+	daemonC := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-c", "127.0.0.1:7003", "https://127.0.0.1:9445", "10.0.2.0/24"), 3)
+	authorizeMembershipTestIX(t, daemonA, pkiSet, "ix-c", "10.0.2.0/24")
+
+	adC, err := daemonC.buildLocalAdvertisement()
+	if err != nil {
+		t.Fatalf("build ix-c advertisement: %v", err)
+	}
+	changed, err := daemonA.mergeAdvertisementFromControlTarget(adC, controlTarget{ID: "ix-b", ControlAPI: "https://127.0.0.1:9444"})
+	if err != nil {
+		t.Fatalf("merge indirect ix-c into ix-a: %v", err)
+	}
+	if !changed {
+		t.Fatal("initial indirect merge did not report changed")
+	}
+	route, ok := routeByPrefix(daemonA.runtimeRoutes(), "10.0.2.0/24")
+	if !ok || route.NextHop != "ix-b" || route.Source != "dynamic_transit" {
+		t.Fatalf("indirect route = %#v ok=%t, want next hop ix-b dynamic_transit", route, ok)
+	}
+	status := daemonA.runtimeRoutePolicyStatus()
+	if !hasRouteCandidate(status.Candidates, "10.0.2.0/24", "ix-c", "ix-b", "dynamic_transit", "accept", true) {
+		t.Fatalf("route candidates missing selected indirect path: %#v", status.Candidates)
+	}
+
+	changed, err = daemonA.mergeAdvertisementFromControlTarget(adC, controlTarget{ID: "ix-c", ControlAPI: "https://127.0.0.1:9445"})
+	if err != nil {
+		t.Fatalf("merge direct ix-c into ix-a: %v", err)
+	}
+	if !changed {
+		t.Fatal("direct observation did not report runtime route change")
+	}
+	route, ok = routeByPrefix(daemonA.runtimeRoutes(), "10.0.2.0/24")
+	if !ok || route.NextHop != "ix-c" || route.Source != "dynamic" {
+		t.Fatalf("direct route = %#v ok=%t, want next hop ix-c dynamic", route, ok)
 	}
 }
 
@@ -1576,6 +1658,20 @@ func hasRoutePolicyDecision(decisions []routePolicyDecision, direction string, i
 			decision.Prefix == prefix &&
 			decision.Action == action &&
 			decision.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRouteCandidate(candidates []routeCandidate, prefix core.Prefix, owner core.IXID, nextHop core.IXID, source string, action string, selected bool) bool {
+	for _, candidate := range candidates {
+		if candidate.Prefix == prefix &&
+			candidate.Owner == owner &&
+			candidate.NextHop == nextHop &&
+			candidate.Source == source &&
+			candidate.Action == action &&
+			candidate.Selected == selected {
 			return true
 		}
 	}

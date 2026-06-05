@@ -43,11 +43,14 @@ import type {
   EndpointGrantMutationResponse,
   EndpointGrantsPayload,
   EndpointProbeResponse,
+  IXProvisionIssueRequest,
+  IXProvisionIssueResponse,
   KernelCapabilitiesPayload,
   LinksPayload,
   LinkStatus,
   PeerConfig,
   RouteProbeResponse,
+  RoutePolicyStatus,
   RouteTraceResponse,
   PeerView,
   RouteView,
@@ -95,10 +98,12 @@ function App() {
   const [links, setLinks] = useState<LinkStatus[]>([]);
   const [peers, setPeers] = useState<PeerView[]>([]);
   const [routes, setRoutes] = useState<RouteView[]>([]);
+  const [routePolicy, setRoutePolicy] = useState<RoutePolicyStatus | null>(null);
   const [endpoints, setEndpoints] = useState<EndpointConfig[]>([]);
   const [deviceAccess, setDeviceAccess] = useState<DeviceAccessPayload | null>(null);
   const [endpointGrants, setEndpointGrants] = useState<EndpointGrant[]>([]);
   const [issuedDevice, setIssuedDevice] = useState<DeviceAccessIssueResponse | null>(null);
+  const [issuedIXProvision, setIssuedIXProvision] = useState<IXProvisionIssueResponse | null>(null);
   const [transports, setTransports] = useState<TransportMatrix | null>(null);
   const [desired, setDesired] = useState<DesiredConfig | null>(null);
   const [configText, setConfigText] = useState("");
@@ -192,13 +197,14 @@ function App() {
     }
     setLoading(true);
     try {
-      const [nextStatus, nextDoctor, nextKernelCapabilities, nextLinks, nextPeers, nextRoutes, nextEndpoints, nextDeviceAccess, nextEndpointGrants, nextTransports, nextConfig] = await Promise.all([
+      const [nextStatus, nextDoctor, nextKernelCapabilities, nextLinks, nextPeers, nextRoutes, nextRoutePolicy, nextEndpoints, nextDeviceAccess, nextEndpointGrants, nextTransports, nextConfig] = await Promise.all([
         api.getJSON<StatusPayload>("/status"),
         api.getJSON<DoctorCheck[]>("/doctor"),
         api.getJSON<KernelCapabilitiesPayload>("/kernel/capabilities").catch(() => null),
         api.getJSON<LinksPayload>("/links"),
         api.getJSON<PeerView[] | { members?: PeerView[] }>("/peers"),
         api.getJSON<RouteView[]>("/routes"),
+        api.getJSON<RoutePolicyStatus>("/route-policy").catch(() => null),
         api.getJSON<EndpointConfig[]>("/endpoints"),
         api.getJSON<DeviceAccessPayload>("/device-access").catch(() => null),
         api.getJSON<EndpointGrantsPayload>("/endpoint-grants").catch(() => null),
@@ -213,6 +219,7 @@ function App() {
       setLinks(Array.isArray(nextLinks?.links) ? nextLinks.links : []);
       setPeers(Array.isArray(nextPeers) ? nextPeers : Array.isArray(nextPeers?.members) ? nextPeers.members : []);
       setRoutes(Array.isArray(nextRoutes) ? nextRoutes : []);
+      setRoutePolicy(nextRoutePolicy || null);
       setEndpoints(Array.isArray(nextEndpoints) ? nextEndpoints : []);
       setDeviceAccess(nextDeviceAccess || null);
       setEndpointGrants(Array.isArray(nextEndpointGrants?.grants) ? nextEndpointGrants.grants : []);
@@ -243,13 +250,14 @@ function App() {
   const refreshRuntime = useCallback(async (options: RefreshOptions = {}) => {
     setLoading(true);
     try {
-      const [nextStatus, nextDoctor, nextKernelCapabilities, nextLinks, nextPeers, nextRoutes, nextEndpoints, nextDeviceAccess, nextEndpointGrants, nextTransports] = await Promise.all([
+      const [nextStatus, nextDoctor, nextKernelCapabilities, nextLinks, nextPeers, nextRoutes, nextRoutePolicy, nextEndpoints, nextDeviceAccess, nextEndpointGrants, nextTransports] = await Promise.all([
         api.getJSON<StatusPayload>("/status"),
         api.getJSON<DoctorCheck[]>("/doctor"),
         api.getJSON<KernelCapabilitiesPayload>("/kernel/capabilities").catch(() => null),
         api.getJSON<LinksPayload>("/links"),
         api.getJSON<PeerView[] | { members?: PeerView[] }>("/peers"),
         api.getJSON<RouteView[]>("/routes"),
+        api.getJSON<RoutePolicyStatus>("/route-policy").catch(() => null),
         api.getJSON<EndpointConfig[]>("/endpoints"),
         api.getJSON<DeviceAccessPayload>("/device-access").catch(() => null),
         api.getJSON<EndpointGrantsPayload>("/endpoint-grants").catch(() => null),
@@ -261,6 +269,7 @@ function App() {
       setLinks(Array.isArray(nextLinks?.links) ? nextLinks.links : []);
       setPeers(Array.isArray(nextPeers) ? nextPeers : Array.isArray(nextPeers?.members) ? nextPeers.members : []);
       setRoutes(Array.isArray(nextRoutes) ? nextRoutes : []);
+      setRoutePolicy(nextRoutePolicy || null);
       setEndpoints(Array.isArray(nextEndpoints) ? nextEndpoints : []);
       setDeviceAccess(nextDeviceAccess || null);
       setEndpointGrants(Array.isArray(nextEndpointGrants?.grants) ? nextEndpointGrants.grants : []);
@@ -434,6 +443,35 @@ function App() {
       setLoading(false);
     }
   }, [api, pushToast, refreshRuntime, t]);
+
+  const issueIXProvision = useCallback(async (request: IXProvisionIssueRequest) => {
+    if (!request.ix_id?.trim() || !request.advertise?.length || (request.endpoint_mode !== "active" && !request.endpoint_address?.trim())) {
+      const message = t("new_ix_required_fields", "IX ID, data endpoint, and advertised prefixes are required");
+      setConfigMessage(message);
+      pushToast("info", t("join_new_ix", "Join new IX"), message);
+      return;
+    }
+    if (request.endpoint_mode === "active" && !request.bootstrap_control_api?.trim()) {
+      const message = t("new_ix_active_requires_bootstrap_control_api", "Active outbound IX requires a bootstrap control API");
+      setConfigMessage(message);
+      pushToast("info", t("join_new_ix", "Join new IX"), message);
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await api.postJSON<IXProvisionIssueResponse>("/provision/ix", JSON.stringify(request));
+      setIssuedIXProvision(response || null);
+      setConfigMessage(`${t("provision_token_issued", "Provision token issued")}: ${request.ix_id}`);
+      pushToast("success", t("provision_token_issued", "Provision token issued"), response.expires_at || request.ix_id);
+      await refreshAll({ silent: true });
+    } catch (error) {
+      const message = errorMessage(error);
+      setConfigMessage(message);
+      pushToast("error", t("provision_token_issue_failed", "Provision token issue failed"), message);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, pushToast, refreshAll, t]);
 
   const issueEndpointGrant = useCallback(async (request: EndpointGrantIssueRequest) => {
     if (!request.subject_ix?.trim() || !request.endpoint?.trim()) {
@@ -650,9 +688,11 @@ function App() {
           deviceAccess={deviceAccess}
           endpointGrants={endpointGrants}
           issuedDevice={issuedDevice}
+          issuedIXProvision={issuedIXProvision}
           dirty={dirty}
           message={configMessage}
           onIssueDevice={issueDeviceAccess}
+          onIssueIXProvision={issueIXProvision}
           onIssueEndpointGrant={issueEndpointGrant}
           onRevokeEndpointGrant={revokeEndpointGrant}
           onCopy={copyText}
@@ -668,6 +708,7 @@ function App() {
           desired={desired}
           transports={transports}
           links={links}
+          routes={routes}
           text={configText}
           dirty={dirty}
           message={configMessage}
@@ -679,7 +720,7 @@ function App() {
           onCopy={copyConfig}
         />
       )}
-      {activeTab === "doctor" && <DoctorView t={t} lang={lang} doctor={doctor} status={status} routes={routes} kernelCapabilities={kernelCapabilities} />}
+      {activeTab === "doctor" && <DoctorView t={t} lang={lang} doctor={doctor} status={status} routes={routes} routePolicy={routePolicy} kernelCapabilities={kernelCapabilities} />}
       {activeTab === "capture" && <CaptureView t={t} capture={capture} onReload={loadCapture} />}
     </>
   );

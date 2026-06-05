@@ -1392,7 +1392,9 @@ button {
   line-height: 1.35;
 }
 
-.field > span small {
+.field > span small,
+.check-field > span small,
+.mini-toggle small {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1730,6 +1732,50 @@ button {
 
 .device-issue-primary > .field:nth-child(4) {
   grid-column: 1 / span 2;
+}
+
+.ix-bootstrap-form {
+  grid-template-columns: 1fr;
+}
+
+.ix-bootstrap-primary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.ix-bootstrap-advanced-grid .field:has(.field-lines) {
+  grid-column: 1 / -1;
+}
+
+.ix-bootstrap-effective {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.ix-bootstrap-effective-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.ix-bootstrap-output {
+  grid-template-columns: 1fr;
+}
+
+.issue-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .endpoint-select-field {
@@ -2090,6 +2136,44 @@ button {
   font-size: 12px;
 }
 
+.runtime-route-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.readonly-route-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.readonly-route-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.34fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.readonly-route-row strong,
+.readonly-route-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readonly-route-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .tunnel-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
@@ -2203,14 +2287,6 @@ button {
   font-weight: 650;
 }
 
-.result {
-  margin-top: 12px;
-  min-height: 28px;
-  color: var(--muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--border);
@@ -2298,6 +2374,8 @@ tbody tr:last-child td {
   }
 
   .access-grid,
+  .ix-bootstrap-primary,
+  .ix-bootstrap-effective-grid,
   .endpoint-access-row {
     grid-template-columns: 1fr;
   }
@@ -2418,6 +2496,8 @@ tbody tr:last-child td {
   .endpoint-main,
   .endpoint-controls,
   .device-issue-primary,
+  .ix-bootstrap-primary,
+  .ix-bootstrap-effective-grid,
   .grant-mode-panel,
   .config-card,
   .lan-field-group-main,
@@ -2432,6 +2512,7 @@ tbody tr:last-child td {
   .tunnel-fields,
   .readonly-endpoint-card,
   .readonly-endpoint-main,
+  .readonly-route-row,
   .config-section > .form-grid,
   .config-task-nav,
   .candidate-row,

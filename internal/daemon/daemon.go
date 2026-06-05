@@ -92,6 +92,9 @@ type Daemon struct {
 	membershipDiskMu sync.Mutex
 	members          map[core.IXID]memberRecord
 	pendingMembers   map[core.IXID]pendingMemberRecord
+	provisionMu      sync.Mutex
+	provisionLoaded  bool
+	provisionTokens  map[string]ixProvisionTokenRecord
 	localAd          advertisementResponse
 	runtimeEpoch     uint64
 	dataMu           sync.Mutex
@@ -167,6 +170,7 @@ func New(cfg Config, options ...Option) (*Daemon, error) {
 		peerState:        make(map[core.IXID]peerRuntime),
 		members:          make(map[core.IXID]memberRecord),
 		pendingMembers:   make(map[core.IXID]pendingMemberRecord),
+		provisionTokens:  make(map[string]ixProvisionTokenRecord),
 		dataSessions:     make(map[dataSessionKey]transport.Session),
 		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
 		deviceLeases:     make(map[deviceLeaseKey]deviceAccessLease),

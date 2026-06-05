@@ -75,7 +75,7 @@ func appendUniqueString(values []string, value string) []string {
 }
 
 func (daemon *Daemon) serveWebUIIfRequest(w http.ResponseWriter, r *http.Request) bool {
-	if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+	if r.URL.Path == "/" || r.URL.Path == "/index.html" || r.URL.Path == "/assets" || r.URL.Path == "/assets/" || r.URL.Path == "/assets/index.html" {
 		daemon.serveWebUIIndex(w, r)
 		return true
 	}

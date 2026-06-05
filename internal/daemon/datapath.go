@@ -642,11 +642,6 @@ func (daemon *Daemon) startDataPath(ctx context.Context) (<-chan error, error) {
 		daemon.closeDataPath()
 		return nil, err
 	}
-	if daemon.kernelDirectWarmupEnabled() {
-		go daemon.runKernelDirectWarmup(ctx)
-	} else if daemon.sessionPoolWarmupEnabled() {
-		go daemon.runRouteSessionWarmup(ctx)
-	}
 	if err := daemon.startKernelDatapathRXStage(ctx, dataplaneAttachSpec(daemon.cfg.DataDir, daemon.desired)); err != nil {
 		daemon.closeDataPath()
 		return nil, err
@@ -662,6 +657,7 @@ func (daemon *Daemon) startDataPath(ctx context.Context) (<-chan error, error) {
 	daemon.dataMu.Lock()
 	daemon.dataPathStarted = true
 	daemon.dataMu.Unlock()
+	daemon.scheduleRuntimeRouteWarmup(ctx)
 	return errc, nil
 }
 
@@ -905,19 +901,21 @@ func (daemon *Daemon) warmRouteSessionsForEpoch(ctx context.Context, warmupEpoch
 			lastErr = fmt.Errorf("warm route %q: %w", route.Prefix, err)
 			continue
 		}
-		for _, endpoint := range candidates {
-			if warmupEpoch != 0 && !daemon.routeWarmupEpochActive(warmupEpoch) {
-				return errDataSessionEpochChanged
-			}
-			warmed := daemon.warmEndpointSessionPool(ctx, epoch, peer, endpoint, poolSize)
-			if warmed {
-				warmedRoutes++
-				break
-			}
-			if !daemon.dataSessionEpochActive(epoch) {
-				lastErr = errDataSessionEpochChanged
-				break
-			}
+		if warmupEpoch != 0 && !daemon.routeWarmupEpochActive(warmupEpoch) {
+			return errDataSessionEpochChanged
+		}
+		warmed, err := daemon.warmAnyEndpointSessionPool(ctx, epoch, peer, candidates, poolSize)
+		if warmed {
+			warmedRoutes++
+			continue
+		}
+		if err != nil {
+			lastErr = fmt.Errorf("warm route %q: %w", route.Prefix, err)
+			continue
+		}
+		if !daemon.dataSessionEpochActive(epoch) {
+			lastErr = errDataSessionEpochChanged
+			continue
 		}
 	}
 	if warmedRoutes > 0 || lastErr == nil {
@@ -927,26 +925,86 @@ func (daemon *Daemon) warmRouteSessionsForEpoch(ctx context.Context, warmupEpoch
 }
 
 func (daemon *Daemon) warmEndpointSessionPool(ctx context.Context, epoch uint64, peer config.PeerConfig, cfgEndpoint config.EndpointConfig, poolSize int) bool {
+	warmed, _ := daemon.warmEndpointSessionPoolResult(ctx, epoch, peer, cfgEndpoint, poolSize)
+	return warmed
+}
+
+func (daemon *Daemon) warmEndpointSessionPoolResult(ctx context.Context, epoch uint64, peer config.PeerConfig, cfgEndpoint config.EndpointConfig, poolSize int) (bool, error) {
 	endpoint := transportEndpointFromConfig(cfgEndpoint)
 	endpoint.Enabled = true
 	endpoint.Encryption = daemon.endpointDialEncryption(cfgEndpoint)
 	if poolSize <= 1 {
-		_, _, _, err := daemon.sessionForEndpointWithOptions(ctx, peer, cfgEndpoint, routing.FlowKey{}, false, sessionForEndpointOptions{AllowDial: true, RequireEpoch: true, ExpectedEpoch: epoch})
-		return err == nil
+		_, _, _, err := daemon.sessionForEndpointWithOptions(ctx, peer, cfgEndpoint, routing.FlowKey{}, false, sessionForEndpointOptions{
+			AllowDial:                 true,
+			SuppressCanceledDialError: true,
+			RequireEpoch:              true,
+			ExpectedEpoch:             epoch,
+		})
+		return err == nil, err
 	}
 	warmed := false
+	var lastErr error
 	for _, poolIndex := range daemon.missingSessionPoolIndexes(peer.ID, cfgEndpoint, endpoint.Encryption, poolSize) {
 		if !daemon.dataSessionEpochActive(epoch) {
-			return warmed
+			return warmed, errDataSessionEpochChanged
 		}
-		if _, _, err := daemon.sessionForEndpointPoolIndex(ctx, epoch, peer, cfgEndpoint, endpoint, poolIndex); err == nil {
+		if _, _, err := daemon.sessionForEndpointPoolIndexWithOptions(ctx, epoch, peer, cfgEndpoint, endpoint, poolIndex, sessionForEndpointOptions{
+			AllowDial:                 true,
+			SuppressCanceledDialError: true,
+			RequireEpoch:              true,
+			ExpectedEpoch:             epoch,
+		}); err == nil {
 			warmed = true
+		} else {
+			lastErr = err
 		}
 	}
 	if len(daemon.missingSessionPoolIndexes(peer.ID, cfgEndpoint, endpoint.Encryption, poolSize)) == 0 {
 		warmed = true
 	}
-	return warmed
+	if warmed {
+		return true, nil
+	}
+	return false, lastErr
+}
+
+func (daemon *Daemon) warmAnyEndpointSessionPool(ctx context.Context, epoch uint64, peer config.PeerConfig, candidates []config.EndpointConfig, poolSize int) (bool, error) {
+	if len(candidates) == 0 {
+		return false, nil
+	}
+	if len(candidates) == 1 {
+		return daemon.warmEndpointSessionPoolResult(ctx, epoch, peer, candidates[0], poolSize)
+	}
+	warmCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		warmed bool
+		err    error
+	}
+	results := make(chan result, len(candidates))
+	for _, endpoint := range candidates {
+		endpoint := endpoint
+		go func() {
+			warmed, err := daemon.warmEndpointSessionPoolResult(warmCtx, epoch, peer, endpoint, poolSize)
+			results <- result{warmed: warmed, err: err}
+		}()
+	}
+	var lastErr error
+	for range candidates {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case result := <-results:
+			if result.warmed {
+				cancel()
+				return true, nil
+			}
+			if result.err != nil {
+				lastErr = result.err
+			}
+		}
+	}
+	return false, lastErr
 }
 
 func (daemon *Daemon) warmKernelDirectEndpointSessionPool(ctx context.Context, epoch uint64, peer config.PeerConfig, cfgEndpoint config.EndpointConfig, poolSize int) (bool, error) {
@@ -3330,10 +3388,11 @@ func (daemon *Daemon) clearForwardCacheForOutboundEndpointLocked(peer core.IXID,
 }
 
 type sessionForEndpointOptions struct {
-	AllowDial         bool
-	ControlOnlyWarmup bool
-	RequireEpoch      bool
-	ExpectedEpoch     uint64
+	AllowDial                 bool
+	ControlOnlyWarmup         bool
+	SuppressCanceledDialError bool
+	RequireEpoch              bool
+	ExpectedEpoch             uint64
 }
 
 func (daemon *Daemon) sessionForEndpoint(ctx context.Context, peer config.PeerConfig, cfgEndpoint config.EndpointConfig, flowKey routing.FlowKey, hasFlow bool) (transport.Session, dataSessionKey, *dataSessionRuntime, error) {
@@ -3424,9 +3483,11 @@ func (daemon *Daemon) sessionForEndpointWithOptions(ctx context.Context, peer co
 		Endpoints: []transport.Endpoint{endpoint},
 	}, tlsConf)
 	if err != nil {
-		daemon.dataStats.sessionDialErrors.Add(1)
-		daemon.dataStats.setLastSessionDialError(fmt.Errorf("dial peer %q endpoint %q: %w", peer.ID, endpoint.Name, err))
-		daemon.recordEndpointDownIfNoActiveSession(peer.ID, cfgEndpoint, err)
+		if !options.SuppressCanceledDialError || !errors.Is(err, context.Canceled) {
+			daemon.dataStats.sessionDialErrors.Add(1)
+			daemon.dataStats.setLastSessionDialError(fmt.Errorf("dial peer %q endpoint %q: %w", peer.ID, endpoint.Name, err))
+			daemon.recordEndpointDownIfNoActiveSession(peer.ID, cfgEndpoint, err)
+		}
 		if session, reverseKey, runtime := daemon.reverseSessionForEndpoint(peer.ID, cfgEndpoint, endpoint.Encryption, poolIndex); session != nil {
 			if options.RequireEpoch && !daemon.dataSessionEpochActive(epoch) {
 				return nil, key, nil, errDataSessionEpochChanged
@@ -3547,9 +3608,11 @@ func (daemon *Daemon) sessionForEndpointPoolIndexWithOptions(ctx context.Context
 		Endpoints: []transport.Endpoint{endpoint},
 	}, tlsConf)
 	if err != nil {
-		daemon.dataStats.sessionDialErrors.Add(1)
-		daemon.dataStats.setLastSessionDialError(fmt.Errorf("dial peer %q endpoint %q pool %d: %w", peer.ID, endpoint.Name, poolIndex, err))
-		daemon.recordEndpointDownIfNoActiveSession(peer.ID, cfgEndpoint, err)
+		if !options.SuppressCanceledDialError || !errors.Is(err, context.Canceled) {
+			daemon.dataStats.sessionDialErrors.Add(1)
+			daemon.dataStats.setLastSessionDialError(fmt.Errorf("dial peer %q endpoint %q pool %d: %w", peer.ID, endpoint.Name, poolIndex, err))
+			daemon.recordEndpointDownIfNoActiveSession(peer.ID, cfgEndpoint, err)
+		}
 		if session, reverseKey, _ := daemon.reverseSessionForEndpoint(peer.ID, cfgEndpoint, endpoint.Encryption, poolIndex); session != nil {
 			if options.RequireEpoch && !daemon.dataSessionEpochActive(epoch) {
 				return nil, key, errDataSessionEpochChanged
@@ -6451,17 +6514,17 @@ func (daemon *Daemon) sortEndpointsByTransportPreference(peer core.IXID, endpoin
 		originalIndex[endpoint.Name] = i
 	}
 	sort.SliceStable(endpoints, func(i, j int) bool {
-		leftPriority := daemon.endpointPriorityScore(peer, endpoints[i])
-		rightPriority := daemon.endpointPriorityScore(peer, endpoints[j])
-		if leftPriority != rightPriority {
-			return leftPriority > rightPriority
-		}
 		if daemon.transportPolicyPrefersNativePlaintextKernelTunnel() {
 			left := daemon.endpointTransportPreferenceRank(endpoints[i])
 			right := daemon.endpointTransportPreferenceRank(endpoints[j])
 			if left != right {
 				return left < right
 			}
+		}
+		leftPriority := daemon.endpointPriorityScore(peer, endpoints[i])
+		rightPriority := daemon.endpointPriorityScore(peer, endpoints[j])
+		if leftPriority != rightPriority {
+			return leftPriority > rightPriority
 		}
 		return originalIndex[endpoints[i].Name] < originalIndex[endpoints[j].Name]
 	})
