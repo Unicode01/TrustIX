@@ -1210,7 +1210,17 @@ button {
   border: 0;
   background: transparent;
   color: var(--text);
+  cursor: pointer;
   text-align: left;
+}
+
+.route-inline-main:not(:disabled):hover strong {
+  color: var(--accent);
+}
+
+.route-inline-main:disabled {
+  cursor: default;
+  opacity: 0.72;
 }
 
 .route-inline-main strong,

@@ -2317,14 +2317,30 @@ function EdgeEditor(props: { t: Translate; lang: string; edge: TopologyEdge; des
         {props.edge.routes.filter((route) => !routeIndexes.some((item) => routesMatch(item.route, route))).map((route, index) => {
           const targetIndex = staticRouteTargetIndex(arrayValue(props.desired.routes), route);
           const promotable = runtimeRoutePromotable(route);
+          const canOpenRoute = promotable || targetIndex >= 0;
+          const openRoute = () => {
+            if (promotable) {
+              promoteRoute(route);
+              return;
+            }
+            if (targetIndex >= 0) {
+              props.onSelect({ type: "route", index: targetIndex });
+            }
+          };
           return (
             <div key={`runtime-${route.prefix}-${route.owner}-${route.next_hop}-${index}`} className="route-inline-row">
-              <button type="button" className="route-inline-main" disabled>
+              <button
+                type="button"
+                className="route-inline-main"
+                title={canOpenRoute ? props.t("help_promote_runtime_route", "Copy this learned runtime route into desired static routes, then edit and apply it.") : routeSummary(route)}
+                disabled={!canOpenRoute}
+                onClick={openRoute}
+              >
                 <strong>{route.prefix || "-"}</strong>
                 <span>{routeSummary(route)}</span>
               </button>
               {promotable ? (
-                <Button variant="ghost" title={props.t("help_promote_runtime_route", "Copy this learned runtime route into desired static routes, then edit and apply it.")} onClick={() => promoteRoute(route)}>
+                <Button variant="ghost" title={props.t("help_promote_runtime_route", "Copy this learned runtime route into desired static routes, then edit and apply it.")} onClick={openRoute}>
                   <Plus size={15} />{targetIndex >= 0 ? props.t("update_static_route", "Update static") : props.t("promote_to_static", "Make static")}
                 </Button>
               ) : (
