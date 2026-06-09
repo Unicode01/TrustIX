@@ -38,6 +38,21 @@ func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelMo
 	source := manager.resolveModuleSource(module)
 	switch mode {
 	case ModeDisabled:
+		if status.Loaded && manager.loadedByUs {
+			if err := manager.unloadLocked(ctx, module, mode, "module disabled by desired config"); err != nil {
+				status = manager.inspectLocked(module, mode)
+				status.Managed = true
+				status.State = "error"
+				status.Reason = err.Error()
+				manager.status = status
+				return status, nil
+			}
+			status = manager.inspectLocked(module, mode)
+			status.State = "unloaded"
+			status.Reason = "module unloaded after desired config disabled lifecycle"
+			manager.status = status
+			return status, nil
+		}
 		status.State = ModeDisabled
 		status.Reason = "module lifecycle is disabled"
 		manager.status = status
@@ -56,6 +71,29 @@ func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelMo
 					return status, fmt.Errorf("%s is required but could not be upgraded: %w", manager.name, reloadErr)
 				}
 				return status, nil
+			}
+			if !reloaded {
+				parameterReloaded, parameterState, parameterReason, parameterErr := manager.reloadLoadedModuleForParameterChangeLocked(ctx, module, source, status)
+				if parameterErr != nil {
+					status = manager.inspectLocked(module, mode)
+					status.Managed = manager.loadedByUs
+					status.State = "error"
+					status.UpgradeState = parameterState
+					status.Reason = appendStatusReason(parameterReason, parameterErr.Error())
+					manager.status = status
+					if mode == ModeRequired {
+						return status, fmt.Errorf("%s is required but could not be reloaded with desired parameters: %w", manager.name, parameterErr)
+					}
+					return status, nil
+				}
+				if parameterReloaded {
+					reloaded = true
+					upgradeState = parameterState
+					upgradeReason = appendStatusReason(upgradeReason, parameterReason)
+				} else if parameterState != "" {
+					upgradeState = parameterState
+					upgradeReason = appendStatusReason(upgradeReason, parameterReason)
+				}
 			}
 			parameterNotes := applyLoadedModuleParameters(manager.name, module.Parameters)
 			status = manager.inspectLocked(module, mode)
@@ -139,29 +177,37 @@ func (manager *Manager) closeLocked(ctx context.Context) error {
 		manager.loadedByUs = false
 		return nil
 	}
-	if err := unix.DeleteModule(manager.name, unix.O_NONBLOCK); err != nil {
-		manager.status = manager.inspectLocked(config.KernelModuleConfig{
-			Mode:            status.Mode,
-			Path:            status.Path,
-			Parameters:      status.Parameters,
-			ReloadOnUpgrade: status.ReloadOnUpgrade,
-			UnloadOnExit:    status.UnloadOnExit,
-		}, status.Mode)
-		manager.status.Managed = true
-		manager.status.State = "error"
-		manager.status.Reason = fmt.Sprintf("unload module: %v", err)
-		return fmt.Errorf("unload %s: %w", manager.name, err)
-	}
-	manager.loadedByUs = false
-	manager.status = manager.inspectLocked(config.KernelModuleConfig{
+	module := config.KernelModuleConfig{
 		Mode:            status.Mode,
 		Path:            status.Path,
 		Parameters:      status.Parameters,
 		ReloadOnUpgrade: status.ReloadOnUpgrade,
 		UnloadOnExit:    status.UnloadOnExit,
-	}, status.Mode)
+	}
+	if err := manager.unloadLocked(ctx, module, status.Mode, "module unloaded by trustixd"); err != nil {
+		manager.status = manager.inspectLocked(module, status.Mode)
+		manager.status.Managed = true
+		manager.status.State = "error"
+		manager.status.Reason = err.Error()
+		return err
+	}
+	manager.status = manager.inspectLocked(module, status.Mode)
 	manager.status.State = "unloaded"
 	manager.status.Reason = "module unloaded by trustixd"
+	return nil
+}
+
+func (manager *Manager) unloadLocked(ctx context.Context, module config.KernelModuleConfig, mode string, reason string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := unix.DeleteModule(manager.name, unix.O_NONBLOCK); err != nil {
+		return fmt.Errorf("unload %s: %w", manager.name, err)
+	}
+	manager.loadedByUs = false
+	manager.status = manager.inspectLocked(module, mode)
+	manager.status.State = "unloaded"
+	manager.status.Reason = reason
 	return nil
 }
 
@@ -240,6 +286,33 @@ func (manager *Manager) reloadLoadedModuleForUpgradeLocked(ctx context.Context, 
 	}
 	manager.loadedByUs = true
 	return true, "reloaded", upgradeReason, nil
+}
+
+func (manager *Manager) reloadLoadedModuleForParameterChangeLocked(ctx context.Context, module config.KernelModuleConfig, source moduleSource, status Status) (bool, string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return false, "", "", err
+	}
+	parameters := loadParametersWithBuildSHA(source, module.Parameters)
+	mismatches := loadedModuleLoadTimeParameterMismatches(manager.name, source, parameters)
+	if len(mismatches) == 0 {
+		return false, "", "", nil
+	}
+	reason := "loaded module has different load-time parameters: " + strings.Join(mismatches, ", ")
+	if source.unavailable() || moduleSourceSHA256(source) == "" {
+		return false, "parameter_mismatch", reason, nil
+	}
+	if status.RefCount > 0 {
+		return false, "parameter_mismatch", reason, fmt.Errorf("loaded module ref_count=%d; refusing parameter reload while it is in use", status.RefCount)
+	}
+	if err := unix.DeleteModule(manager.name, unix.O_NONBLOCK); err != nil {
+		return false, "parameter_reload_failed", reason, fmt.Errorf("unload old module: %w", err)
+	}
+	manager.loadedByUs = false
+	if err := loadModuleSource(source, module.Parameters); err != nil {
+		return false, "parameter_reload_failed", reason, fmt.Errorf("load module %q with desired parameters: %w", source.label, err)
+	}
+	manager.loadedByUs = true
+	return true, "reloaded_parameters", reason, nil
 }
 
 func effectiveReloadOnUpgrade(raw string) string {
@@ -582,6 +655,44 @@ func applyLoadedModuleParameters(name, parameters string) []string {
 		}
 	}
 	return notes
+}
+
+func loadedModuleLoadTimeParameterMismatches(name string, source moduleSource, parameters string) []string {
+	parsed := parseModuleParameters(parameters)
+	if len(parsed) == 0 {
+		return nil
+	}
+	out := make([]string, 0)
+	for key, value := range parsed {
+		if key == moduleBuildSHAParam {
+			continue
+		}
+		path := filepath.Join("/sys/module", name, "parameters", key)
+		info, statErr := os.Stat(path)
+		current, readErr := os.ReadFile(path)
+		if statErr != nil || readErr != nil {
+			if moduleSourceSupportsParameter(source, key) {
+				out = append(out, key+" unavailable")
+			}
+			continue
+		}
+		if info.Mode().Perm()&0222 != 0 {
+			continue
+		}
+		desired := normalizeModuleParameterValue(value)
+		if normalizeModuleParameterValue(string(current)) != desired {
+			out = append(out, fmt.Sprintf("%s=%q current=%q", key, desired, strings.TrimSpace(string(current))))
+		}
+	}
+	return out
+}
+
+func moduleSourceSupportsParameter(source moduleSource, key string) bool {
+	payload, ok := moduleSourceBytes(source)
+	if !ok || strings.TrimSpace(key) == "" {
+		return false
+	}
+	return bytes.Contains(payload, []byte("parm="+strings.TrimSpace(key)+":"))
 }
 
 func parseModuleParameters(parameters string) map[string]string {

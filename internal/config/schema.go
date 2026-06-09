@@ -158,10 +158,34 @@ const (
 )
 
 type KernelModulesConfig struct {
-	TrustIXCrypto          KernelModuleConfig `json:"trustix_crypto,omitempty" yaml:"trustix_crypto,omitempty"`
-	TrustIXDatapath        KernelModuleConfig `json:"trustix_datapath,omitempty" yaml:"trustix_datapath,omitempty"`
-	TrustIXDatapathHelpers KernelModuleConfig `json:"trustix_datapath_helpers,omitempty" yaml:"trustix_datapath_helpers,omitempty"`
+	CapabilityProfile      string                      `json:"capability_profile,omitempty" yaml:"capability_profile,omitempty"`
+	Datapath               KernelDatapathRuntimeConfig `json:"datapath,omitempty" yaml:"datapath,omitempty"`
+	TrustIXCrypto          KernelModuleConfig          `json:"trustix_crypto,omitempty" yaml:"trustix_crypto,omitempty"`
+	TrustIXDatapath        KernelModuleConfig          `json:"trustix_datapath,omitempty" yaml:"trustix_datapath,omitempty"`
+	TrustIXDatapathHelpers KernelModuleConfig          `json:"trustix_datapath_helpers,omitempty" yaml:"trustix_datapath_helpers,omitempty"`
 }
+
+type KernelDatapathRuntimeConfig struct {
+	RXStage                      string `json:"rx_stage,omitempty" yaml:"rx_stage,omitempty"`
+	RXWorker                     bool   `json:"rx_worker,omitempty" yaml:"rx_worker,omitempty"`
+	TXPlaintext                  bool   `json:"tx_plaintext,omitempty" yaml:"tx_plaintext,omitempty"`
+	FullPlaintext                bool   `json:"full_plaintext,omitempty" yaml:"full_plaintext,omitempty"`
+	RXWorkerAllowExperimentalTCP bool   `json:"rx_worker_allow_experimental_tcp,omitempty" yaml:"rx_worker_allow_experimental_tcp,omitempty"`
+	RXWorkerHotStats             *bool  `json:"rx_worker_hot_stats,omitempty" yaml:"rx_worker_hot_stats,omitempty"`
+}
+
+const (
+	KernelCapabilityProfileDisabled      = "disabled"
+	KernelCapabilityProfileStable        = "stable"
+	KernelCapabilityProfilePerformance   = "performance"
+	KernelCapabilityProfileFullPlaintext = "full_plaintext"
+	KernelCapabilityProfileCustom        = "custom"
+
+	KernelDatapathRXStageAuto     = "auto"
+	KernelDatapathRXStageDisabled = "disabled"
+	KernelDatapathRXStageStage    = "stage"
+	KernelDatapathRXStageWorker   = "worker"
+)
 
 type KernelModuleConfig struct {
 	Mode            string `json:"mode,omitempty" yaml:"mode,omitempty"`
@@ -981,6 +1005,16 @@ func validateDNSUpstreamAddress(label string, value string) error {
 }
 
 func validateKernelModules(modules KernelModulesConfig) error {
+	switch NormalizeKernelCapabilityProfile(modules.CapabilityProfile) {
+	case "", KernelCapabilityProfileDisabled, KernelCapabilityProfileStable, KernelCapabilityProfilePerformance, KernelCapabilityProfileFullPlaintext, KernelCapabilityProfileCustom:
+	default:
+		return fmt.Errorf("kernel_modules capability_profile %q is unsupported", modules.CapabilityProfile)
+	}
+	switch NormalizeKernelDatapathRXStage(modules.Datapath.RXStage) {
+	case "", KernelDatapathRXStageAuto, KernelDatapathRXStageDisabled, KernelDatapathRXStageStage, KernelDatapathRXStageWorker:
+	default:
+		return fmt.Errorf("kernel_modules datapath rx_stage %q is unsupported", modules.Datapath.RXStage)
+	}
 	if err := validateKernelModule("kernel_modules trustix_crypto", modules.TrustIXCrypto); err != nil {
 		return err
 	}
@@ -1001,6 +1035,88 @@ func validateKernelModule(label string, module KernelModuleConfig) error {
 		return nil
 	default:
 		return fmt.Errorf("%s reload_on_upgrade %q is unsupported", label, module.ReloadOnUpgrade)
+	}
+}
+
+func NormalizeKernelCapabilityProfile(raw string) string {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(raw), "-", "_"))
+	switch normalized {
+	case "", "auto", "default":
+		return ""
+	case "off", "none", "no", "false", "0", "userspace":
+		return KernelCapabilityProfileDisabled
+	case "compat", "compatibility", "safe":
+		return KernelCapabilityProfileStable
+	case "perf":
+		return KernelCapabilityProfilePerformance
+	case "full", "full_datapath", "plaintext_full", "full_plain":
+		return KernelCapabilityProfileFullPlaintext
+	default:
+		return normalized
+	}
+}
+
+func NormalizeKernelDatapathRXStage(raw string) string {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(raw), "-", "_"))
+	switch normalized {
+	case "", "default":
+		return ""
+	case "auto":
+		return KernelDatapathRXStageAuto
+	case "off", "none", "no", "false", "0", "disable":
+		return KernelDatapathRXStageDisabled
+	case "poll", "poller", "userspace_stage":
+		return KernelDatapathRXStageStage
+	default:
+		return normalized
+	}
+}
+
+func EffectiveKernelDatapathRuntime(modules KernelModulesConfig) KernelDatapathRuntimeConfig {
+	profile := NormalizeKernelCapabilityProfile(modules.CapabilityProfile)
+	runtime := modules.Datapath
+	runtime.RXStage = NormalizeKernelDatapathRXStage(runtime.RXStage)
+	switch profile {
+	case KernelCapabilityProfileDisabled:
+		runtime.RXStage = KernelDatapathRXStageDisabled
+		runtime.RXWorker = false
+		runtime.TXPlaintext = false
+		runtime.FullPlaintext = false
+	case KernelCapabilityProfileStable:
+		if runtime.RXStage == "" {
+			runtime.RXStage = KernelDatapathRXStageStage
+		}
+	case KernelCapabilityProfilePerformance:
+		if runtime.RXStage == "" || runtime.RXStage == KernelDatapathRXStageAuto {
+			runtime.RXStage = KernelDatapathRXStageWorker
+		}
+		runtime.RXWorker = true
+	case KernelCapabilityProfileFullPlaintext:
+		runtime.RXStage = KernelDatapathRXStageWorker
+		runtime.RXWorker = true
+		runtime.TXPlaintext = true
+		runtime.FullPlaintext = true
+		runtime.RXWorkerAllowExperimentalTCP = true
+	}
+	if runtime.FullPlaintext {
+		runtime.RXStage = KernelDatapathRXStageWorker
+		runtime.RXWorker = true
+		runtime.TXPlaintext = true
+	}
+	if runtime.TXPlaintext || runtime.RXWorker {
+		if runtime.RXStage == "" || runtime.RXStage == KernelDatapathRXStageAuto {
+			runtime.RXStage = KernelDatapathRXStageWorker
+		}
+	}
+	return runtime
+}
+
+func KernelCapabilityProfileNeedsModules(profile string) bool {
+	switch NormalizeKernelCapabilityProfile(profile) {
+	case KernelCapabilityProfileStable, KernelCapabilityProfilePerformance, KernelCapabilityProfileFullPlaintext, KernelCapabilityProfileCustom:
+		return true
+	default:
+		return false
 	}
 }
 

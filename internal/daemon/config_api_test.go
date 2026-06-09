@@ -729,6 +729,30 @@ func TestDataPathSessionsNeedRestartWhenTransportProfilePolicyChanges(t *testing
 	}
 }
 
+func TestConfigApplyKernelModuleChangeDetachesDataplaneBeforeEnsure(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	initial := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, initial)
+	manager := &captureCountingManager{}
+	daemon.dataplane = manager
+
+	next := initial
+	next.KernelModules.TrustIXDatapath = config.KernelModuleConfig{
+		Mode:       "auto",
+		Path:       "embedded",
+		Parameters: "enable_features=128 rx_worker_inject=1 tx_plaintext=1",
+	}
+	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
+		t.Fatalf("apply kernel module change changed=%t err=%v", changed, err)
+	}
+	if got := manager.detachCount.Load(); got == 0 {
+		t.Fatalf("kernel module dataplane change did not detach dataplane before reload")
+	}
+	if got := manager.attachCount.Load(); got == 0 {
+		t.Fatalf("kernel module dataplane change did not reattach dataplane")
+	}
+}
+
 func dataSessionSurfaceEndpointWithPlacements(placements ...string) dataSessionEndpointSurface {
 	return dataSessionEndpointSurface{
 		Name:      "b-udp",

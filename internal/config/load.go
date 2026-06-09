@@ -199,9 +199,18 @@ func normalizeKernelModules(modules *KernelModulesConfig) {
 	if modules == nil {
 		return
 	}
+	modules.CapabilityProfile = NormalizeKernelCapabilityProfile(modules.CapabilityProfile)
+	normalizeKernelDatapathRuntime(&modules.Datapath)
 	normalizeKernelModule(&modules.TrustIXCrypto)
 	normalizeKernelModule(&modules.TrustIXDatapath)
 	normalizeKernelModule(&modules.TrustIXDatapathHelpers)
+}
+
+func normalizeKernelDatapathRuntime(runtime *KernelDatapathRuntimeConfig) {
+	if runtime == nil {
+		return
+	}
+	runtime.RXStage = NormalizeKernelDatapathRXStage(runtime.RXStage)
 }
 
 func normalizeKernelModule(module *KernelModuleConfig) {

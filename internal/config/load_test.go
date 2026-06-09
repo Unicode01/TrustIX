@@ -843,6 +843,65 @@ kernel_modules:
 	}
 }
 
+func TestLoadBytesNormalizesKernelCapabilityProfile(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+kernel_modules:
+  capability_profile: full-plaintext
+  datapath:
+    rx_stage: poller
+    rx_worker_hot_stats: false
+`), ".yaml")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.KernelModules.CapabilityProfile != KernelCapabilityProfileFullPlaintext {
+		t.Fatalf("capability_profile = %q, want %q", cfg.KernelModules.CapabilityProfile, KernelCapabilityProfileFullPlaintext)
+	}
+	if cfg.KernelModules.Datapath.RXStage != KernelDatapathRXStageStage {
+		t.Fatalf("rx_stage = %q, want %q", cfg.KernelModules.Datapath.RXStage, KernelDatapathRXStageStage)
+	}
+	effective := EffectiveKernelDatapathRuntime(cfg.KernelModules)
+	if effective.RXStage != KernelDatapathRXStageWorker || !effective.RXWorker || !effective.FullPlaintext || !effective.TXPlaintext || !effective.RXWorkerAllowExperimentalTCP {
+		t.Fatalf("effective kernel datapath runtime = %#v", effective)
+	}
+	if effective.RXWorkerHotStats == nil || *effective.RXWorkerHotStats {
+		t.Fatalf("effective rx_worker_hot_stats = %#v, want false pointer", effective.RXWorkerHotStats)
+	}
+}
+
+func TestLoadBytesRejectsUnsupportedKernelCapabilityProfile(t *testing.T) {
+	_, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+kernel_modules:
+  capability_profile: unsafe
+`), ".yaml")
+	if err == nil {
+		t.Fatal("expected unsupported kernel capability profile error")
+	}
+}
+
+func TestLoadBytesRejectsUnsupportedKernelDatapathRXStage(t *testing.T) {
+	_, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+kernel_modules:
+  datapath:
+    rx_stage: inline
+`), ".yaml")
+	if err == nil {
+		t.Fatal("expected unsupported kernel datapath rx_stage error")
+	}
+}
+
 func TestLoadBytesRejectsHostManagementAPIWithoutListenOrGateway(t *testing.T) {
 	_, err := LoadBytes([]byte(`
 domain:

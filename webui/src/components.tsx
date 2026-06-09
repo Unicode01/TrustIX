@@ -36,7 +36,7 @@ import type {
   TopologyNode,
 } from "./types";
 import { edgeMidpoint, edgePath } from "./topology";
-import { arrayValue, compactList, cryptoSuiteOptions, encryptionOptions, formatBytes, formatDurationNanos, formatNumber, formatTime, joinLines, shortHash, splitLines, transportDatapathOptions, transportOptions, transportProfileOptions, transportToggleOptions } from "./utils";
+import { arrayValue, compactList, cryptoSuiteOptions, encryptionOptions, formatBytes, formatDurationNanos, formatNumber, formatTime, joinLines, kernelCapabilityProfileOptions, kernelRXStageOptions, shortHash, splitLines, transportDatapathOptions, transportOptions, transportProfileOptions, transportToggleOptions } from "./utils";
 
 export type Translate = (key: string, fallback?: string) => string;
 
@@ -2726,6 +2726,7 @@ export function ConfigView(props: {
   lang: string;
   desired: DesiredConfig | null;
   transports: TransportMatrix | null;
+  kernelCapabilities: KernelCapabilitiesPayload | null;
   links: LinkStatus[];
   routes: RouteView[];
   text: string;
@@ -2770,7 +2771,7 @@ export function ConfigView(props: {
           </div>
         </div>
         {props.desired ? (
-          <VisualConfig t={props.t} lang={props.lang} desired={props.desired} transports={props.transports} links={props.links} runtimeRoutes={props.routes} onDesired={props.onDesired} />
+          <VisualConfig t={props.t} lang={props.lang} desired={props.desired} transports={props.transports} kernelCapabilities={props.kernelCapabilities} links={props.links} runtimeRoutes={props.routes} onDesired={props.onDesired} />
         ) : (
           <div className="muted">{props.t("loading", "Loading")}</div>
         )}
@@ -2785,7 +2786,7 @@ export function ConfigView(props: {
 
 type ConfigSectionID = "basic" | "connectivity" | "routing" | "performance" | "advanced";
 
-function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfig; transports: TransportMatrix | null; links: LinkStatus[]; runtimeRoutes: RouteView[]; onDesired: (desired: DesiredConfig) => void }) {
+function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfig; transports: TransportMatrix | null; kernelCapabilities: KernelCapabilitiesPayload | null; links: LinkStatus[]; runtimeRoutes: RouteView[]; onDesired: (desired: DesiredConfig) => void }) {
   const cfg = props.desired;
   const [activeSection, setActiveSection] = useState<ConfigSectionID>("basic");
   const updateEndpoint = (index: number, next: EndpointConfig) => {
@@ -2930,6 +2931,7 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
             <Field label={props.t("mtu", "MTU")} help={props.t("help_transport_policy_mtu", "Datapath MTU. Leave 0 to let TrustIX choose from the interface and transport.")} type="number" value={String(cfg.transport_policy?.mtu || "")} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), mtu: Number(value || 0) } })} />
             <MultiSelectField label={props.t("crypto_suites", "Crypto suites")} help={props.t("help_transport_policy_crypto_suites", "Allowed crypto suites in preference order.")} clearLabel={props.t("clear", "Clear")} values={cfg.transport_policy?.crypto_suites} options={cryptoSuiteOptions()} onChange={(values) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), crypto_suites: values } })} />
           </div>
+          <ConfigKernelCapabilityEditor t={props.t} lang={props.lang} desired={cfg} capabilities={props.kernelCapabilities} onDesired={props.onDesired} />
           <TransportPolicyOptionalFields
             t={props.t}
             policy={cfg.transport_policy || {}}
@@ -3259,18 +3261,22 @@ function ConfigSummaryStrip(props: { t: Translate; lang: string; desired: Desire
 function ConfigConceptStrip(props: { t: Translate }) {
   const concepts = [
     {
+      key: "endpoint",
       label: props.t("concept_endpoint", "Endpoint"),
       detail: props.t("concept_endpoint_help", "Reachable data-session address and transport, such as udp or experimental_tcp."),
     },
     {
+      key: "lan-prefix",
       label: props.t("concept_lan_prefix", "LAN prefix"),
       detail: props.t("concept_lan_prefix_help", "CIDR network owned or hosted by this IX and advertised into the domain."),
     },
     {
+      key: "route",
       label: props.t("concept_route", "Route"),
       detail: props.t("concept_route_help", "Normally learned from advertisements; static routes are for pinning or override."),
     },
     {
+      key: "transport-profile",
       label: props.t("concept_transport_profile", "Transport profile"),
       detail: props.t("concept_transport_profile_help", "Intent such as stable, performance, or latency; datapath is the implementation."),
     },
@@ -3278,10 +3284,17 @@ function ConfigConceptStrip(props: { t: Translate }) {
   return (
     <div className="concept-strip" aria-label={props.t("config_concepts", "Config concepts")}>
       {concepts.map((concept) => (
-        <div className="concept-item" key={concept.label}>
-          <strong>{concept.label}</strong>
-          <span>{concept.detail}</span>
-        </div>
+        <button
+          type="button"
+          className="concept-item"
+          key={concept.key}
+          aria-describedby={`config-concept-${concept.key}`}
+          title={concept.detail}
+        >
+          <span className="concept-label">{concept.label}</span>
+          <span className="concept-mark" aria-hidden="true">?</span>
+          <span className="concept-bubble" id={`config-concept-${concept.key}`} role="tooltip">{concept.detail}</span>
+        </button>
       ))}
     </div>
   );
@@ -3325,6 +3338,68 @@ function configSectionValue(t: Translate, cfg: DesiredConfig, transports: Transp
       ], "-");
     }
   }
+}
+
+function ConfigKernelCapabilityEditor(props: { t: Translate; lang: string; desired: DesiredConfig; capabilities: KernelCapabilitiesPayload | null; onDesired: (desired: DesiredConfig) => void }) {
+  const modules = props.desired.kernel_modules || {};
+  const datapath = modules.datapath || {};
+  const actualModules = arrayValue(props.capabilities?.modules);
+  const datapathModule = actualModules.find((module) => module.name === "trustix_datapath");
+  const helpersModule = actualModules.find((module) => module.name === "trustix_datapath_helpers");
+  const cryptoModule = actualModules.find((module) => module.name === "trustix_crypto");
+  const rxStage = props.capabilities?.rx_stage;
+  const updateModules = (patch: NonNullable<DesiredConfig["kernel_modules"]>) => props.onDesired({ ...props.desired, kernel_modules: { ...modules, ...patch } });
+  const updateDatapath = (patch: NonNullable<NonNullable<DesiredConfig["kernel_modules"]>["datapath"]>) => updateModules({ datapath: { ...datapath, ...patch } });
+  const setProfile = (value: string) => {
+    const nextModules = { ...modules, capability_profile: value || undefined };
+    if (value === "disabled") {
+      nextModules.trustix_crypto = { ...(modules.trustix_crypto || {}), mode: "disabled" };
+      nextModules.trustix_datapath = { ...(modules.trustix_datapath || {}), mode: "disabled" };
+      nextModules.trustix_datapath_helpers = { ...(modules.trustix_datapath_helpers || {}), mode: "disabled" };
+    } else if (["stable", "performance", "full_plaintext", "custom"].includes(value)) {
+      nextModules.trustix_crypto = { ...(modules.trustix_crypto || {}), mode: kernelProfileModuleMode(modules.trustix_crypto?.mode) };
+      nextModules.trustix_datapath = { ...(modules.trustix_datapath || {}), mode: kernelProfileModuleMode(modules.trustix_datapath?.mode) };
+      nextModules.trustix_datapath_helpers = { ...(modules.trustix_datapath_helpers || {}), mode: kernelProfileModuleMode(modules.trustix_datapath_helpers?.mode) };
+    }
+    props.onDesired({ ...props.desired, kernel_modules: nextModules });
+  };
+  const actualSummary = compactList([
+    datapathModule?.capability_tier,
+    helpersModule?.capability_tier,
+    cryptoModule?.capability_tier,
+    rxStage?.enabled ? `${props.t("kernel_rx_stage", "Kernel RX stage")} ${rxStage.mode || props.t("active", "Active")}` : "",
+  ], "-");
+  return (
+    <div className="config-card config-wide kernel-config-card">
+      <div className="config-section-head config-wide">
+        <div>
+          <h3>{props.t("kernel_capability_profile", "Kernel capability profile")}</h3>
+          <span className="readonly-note">{props.t("kernel_capability_apply_note", "Applying these settings briefly restarts the dataplane and reloads managed TrustIX modules when needed.")}</span>
+        </div>
+        <Pill state={datapathModule?.loaded || helpersModule?.loaded || cryptoModule?.loaded ? "ok" : "warn"}>{datapathModule?.loaded || helpersModule?.loaded || cryptoModule?.loaded ? props.t("loaded", "Loaded") : props.t("limited", "Limited")}</Pill>
+      </div>
+      <div className="kernel-summary-strip">
+        <SummaryItem label={props.t("desired", "Desired")} value={compactList([modules.capability_profile || props.t("default", "Default"), datapath.rx_stage, datapath.full_plaintext ? "full_plaintext" : ""], "-")} />
+        <SummaryItem label={props.t("actual", "Actual")} value={actualSummary} />
+        <SummaryItem label={props.t("kernel_modules", "Kernel modules")} value={`${formatNumber(actualModules.filter((module) => module.loaded).length, props.lang)} / ${formatNumber(actualModules.length, props.lang)}`} />
+        <SummaryItem label={props.t("rx_worker", "RX worker")} value={rxStage?.rx_worker || rxStage?.mode === "worker" ? props.t("enabled", "Enabled") : props.t("disabled", "Disabled")} />
+      </div>
+      <div className="form-grid">
+        <SelectField label={props.t("kernel_capability_profile", "Kernel capability profile")} help={props.t("help_kernel_capability_profile", "disabled unloads managed modules; stable keeps conservative kernel support; performance enables RX worker/full-datapath feature bits; full_plaintext also enables kernel plaintext TX/RX ownership. custom lets advanced datapath switches decide.")} value={modules.capability_profile || ""} options={kernelCapabilityProfileOptions()} optionLabels={{ "": props.t("default", "Default"), disabled: props.t("disabled", "Disabled"), stable: props.t("stable", "Stable"), performance: props.t("performance", "Performance"), full_plaintext: props.t("full_plaintext", "Full plaintext"), custom: props.t("custom", "Custom") }} onChange={setProfile} />
+        <SelectField label={props.t("kernel_rx_stage", "Kernel RX stage")} help={props.t("help_kernel_rx_stage", "auto follows the selected profile; stage polls packets back into userspace; worker injects packets from the kernel worker; disabled turns the hook off.")} value={datapath.rx_stage || ""} options={kernelRXStageOptions()} optionLabels={{ "": props.t("default", "Default"), auto: props.t("auto", "Auto"), disabled: props.t("disabled", "Disabled"), stage: props.t("stage", "Stage"), worker: props.t("worker", "Worker") }} onChange={(value) => updateDatapath({ rx_stage: value || undefined })} />
+        <CheckField label={props.t("rx_worker", "RX worker")} help={props.t("help_kernel_rx_worker", "Enable the trustix_datapath RX worker path. This adds the safe module parameters needed for kernel-side LAN injection.")} checked={Boolean(datapath.rx_worker)} onChange={(value) => updateDatapath({ rx_worker: value })} />
+        <CheckField label={props.t("full_plaintext", "Full plaintext")} help={props.t("help_kernel_full_plaintext", "For plaintext transports, let trustix_datapath own both RX and TX hooks when the module supports full_datapath.")} checked={Boolean(datapath.full_plaintext)} onChange={(value) => updateDatapath({ full_plaintext: value, tx_plaintext: value || datapath.tx_plaintext })} />
+        <CheckField label={props.t("tx_plaintext", "TX plaintext")} help={props.t("help_kernel_tx_plaintext", "Enable kernel plaintext TX hook without requiring secure userspace reinjection. Use only with plaintext transport policy.")} checked={Boolean(datapath.tx_plaintext)} onChange={(value) => updateDatapath({ tx_plaintext: value })} />
+        <CheckField label={props.t("allow_ackless_tcp_rx_worker", "Allow ackless TCP RX worker")} help={props.t("help_kernel_rx_worker_allow_experimental_tcp", "Allow RX worker with experimental_tcp TC direct. This is needed for full-kernel ackless TCP testing and should be validated on the target kernel.")} checked={Boolean(datapath.rx_worker_allow_experimental_tcp)} onChange={(value) => updateDatapath({ rx_worker_allow_experimental_tcp: value })} />
+        <CheckField label={props.t("rx_worker_hot_stats", "RX worker hot stats")} help={props.t("help_kernel_rx_worker_hot_stats", "Keep per-packet hot-path counters enabled. Disable for lower CPU overhead during throughput tests.")} checked={datapath.rx_worker_hot_stats !== false} onChange={(value) => updateDatapath({ rx_worker_hot_stats: value })} />
+      </div>
+    </div>
+  );
+}
+
+function kernelProfileModuleMode(mode: string | undefined): string {
+  const normalized = String(mode || "").trim().toLowerCase();
+  return normalized === "required" ? "required" : "auto";
 }
 
 function TransportPolicyOptionalFields(props: { t: Translate; policy: NonNullable<DesiredConfig["transport_policy"]>; onChange: (policy: NonNullable<DesiredConfig["transport_policy"]>) => void }) {

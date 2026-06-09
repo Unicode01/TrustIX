@@ -597,15 +597,35 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 	restartPrimaryAPI := managementPrimaryAPINeedsRestart(oldDesired, desired, daemon.cfg.APIAddr)
 	restartDNS := dnsResolverNeedsRestart(oldDesired, desired)
 	syncDNSMasq := restartDNS || dnsMasqIntegrationNeedsRestart(oldDesired, desired)
+	kernelModuleDataplaneChange := !reflect.DeepEqual(oldDesired.KernelModules, desired.KernelModules) &&
+		kernelModulesMayAffectDataplane(oldDesired, desired)
 	reloadDataplane := dataplaneAttachSpecNeedsReload(oldDesired, desired) ||
-		(!reflect.DeepEqual(oldDesired.KernelModules, desired.KernelModules) && kernelModulesMayAffectDataplane(oldDesired, desired))
+		kernelModuleDataplaneChange
+
+	preDetachedDataplane := false
+	if kernelModuleDataplaneChange {
+		daemon.closeDataPath()
+		daemon.closeCaptureForwarder()
+		if err := daemon.dataplane.Detach(ctx); err != nil {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
+		preDetachedDataplane = true
+		restartListeners = true
+		restartAllSessions = false
+		restartPeers = nil
+	}
 
 	if _, err := daemon.ensureKernelModules(ctx, desired); err != nil {
+		if preDetachedDataplane {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
 		return err
 	}
 
 	if restartListeners {
-		daemon.closeDataPath()
+		if !preDetachedDataplane {
+			daemon.closeDataPath()
+		}
 	} else if restartAllSessions {
 		daemon.closeDataSessions()
 	} else if len(restartPeers) > 0 {
@@ -632,8 +652,10 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 	if reloadDataplane {
 		daemon.stopKernelDatapathRXStage()
 		daemon.closeCaptureForwarder()
-		if err := daemon.dataplane.Detach(ctx); err != nil {
-			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		if !preDetachedDataplane {
+			if err := daemon.dataplane.Detach(ctx); err != nil {
+				return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+			}
 		}
 		if err := daemon.loadAttachDataplane(ctx, desired); err != nil {
 			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)

@@ -152,6 +152,47 @@ func TestKernelDatapathFullPlaintextAttachesRXAndTXHooks(t *testing.T) {
 	}
 }
 
+func TestKernelDatapathFullPlaintextProfileAllowsExperimentalTCPAndAttachesTXHook(t *testing.T) {
+	oldOpen := kernelDatapathRXStageOpenDriver
+	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	driver := &fakeKernelRXStageDriver{}
+	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
+		return driver, nil
+	}
+	daemon := &Daemon{
+		dataplane:      dataplane.NewNoopManager(),
+		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+		desired: config.Desired{
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+		},
+	}
+	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{
+		Name:   "trustix_datapath",
+		Mode:   kernelmodule.ModeAuto,
+		Loaded: true,
+		State:  "loaded",
+	})
+	spec := dataplane.AttachSpec{
+		UnderlayIface:           "eth0",
+		LANIface:                "br-lan",
+		ExperimentalTCPTXDirect: true,
+	}
+	if err := daemon.startKernelDatapathRXStage(context.Background(), spec); err != nil {
+		t.Fatalf("start full plaintext profile: %v", err)
+	}
+	status := daemon.kernelDatapathRXStageStatus()
+	if !status.Active || status.Mode != kernelDatapathRXModeWorker || status.IfName != "eth0" || status.TargetIfName != "br-lan" {
+		t.Fatalf("full plaintext profile status = %#v", status)
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.attachAttempts != 2 || driver.ifname != "br-lan" || driver.targetIfname != "eth0" || driver.flags != kernelDatapathTXPlaintextHookFlags() {
+		t.Fatalf("driver attach attempts=%d ifname=%q target=%q flags=%#x", driver.attachAttempts, driver.ifname, driver.targetIfname, driver.flags)
+	}
+}
+
 func TestKernelDatapathRXWorkerSkipsExperimentalTCPTXDirectByDefault(t *testing.T) {
 	opened := false
 	oldOpen := kernelDatapathRXStageOpenDriver

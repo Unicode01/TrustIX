@@ -769,6 +769,7 @@ function App() {
           lang={lang}
           desired={desired}
           transports={transports}
+          kernelCapabilities={kernelCapabilities}
           links={links}
           routes={routes}
           text={configText}

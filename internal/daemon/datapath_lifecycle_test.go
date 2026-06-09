@@ -787,6 +787,8 @@ func TestExperimentalTCPDirectWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
 type captureCountingManager struct {
 	subscription         *captureCountingSubscription
 	experimentalTCPFlows atomic.Uint64
+	attachCount          atomic.Uint64
+	detachCount          atomic.Uint64
 }
 
 func (manager *captureCountingManager) Load(ctx context.Context) error {
@@ -794,6 +796,7 @@ func (manager *captureCountingManager) Load(ctx context.Context) error {
 }
 
 func (manager *captureCountingManager) Attach(ctx context.Context, spec dataplane.AttachSpec) error {
+	manager.attachCount.Add(1)
 	return ctx.Err()
 }
 
@@ -809,6 +812,7 @@ func (manager *captureCountingManager) Stats(ctx context.Context) (dataplane.Sta
 }
 
 func (manager *captureCountingManager) Detach(ctx context.Context) error {
+	manager.detachCount.Add(1)
 	return ctx.Err()
 }
 

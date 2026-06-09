@@ -27,6 +27,9 @@ export function normalizeDesiredConfig(raw: DesiredConfig | null | undefined): D
   cfg.dns.upstreams = arrayValue(cfg.dns.upstreams);
   cfg.dns.dnsmasq = isObject(cfg.dns.dnsmasq) ? cfg.dns.dnsmasq : {};
   cfg.kernel_modules = isObject(cfg.kernel_modules) ? cfg.kernel_modules : {};
+  cfg.kernel_modules.datapath = isObject(cfg.kernel_modules.datapath)
+    ? cfg.kernel_modules.datapath
+    : {};
   cfg.trust = isObject(cfg.trust) ? cfg.trust : {};
   cfg.bootstrap = isObject(cfg.bootstrap) ? cfg.bootstrap : {};
   cfg.control_fabric = isObject(cfg.control_fabric) ? cfg.control_fabric : {};
@@ -228,6 +231,14 @@ export function transportProfileOptions(): string[] {
 
 export function transportDatapathOptions(): string[] {
   return ["", "auto", "userspace", "tc_xdp", "kernel_module"];
+}
+
+export function kernelCapabilityProfileOptions(): string[] {
+  return ["", "disabled", "stable", "performance", "full_plaintext", "custom"];
+}
+
+export function kernelRXStageOptions(): string[] {
+  return ["", "auto", "disabled", "stage", "worker"];
 }
 
 export function transportToggleOptions(): string[] {

@@ -186,7 +186,18 @@ export type KernelModuleConfig = {
   unload_on_exit?: boolean;
 };
 
+export type KernelDatapathRuntimeConfig = {
+  rx_stage?: string;
+  rx_worker?: boolean;
+  tx_plaintext?: boolean;
+  full_plaintext?: boolean;
+  rx_worker_allow_experimental_tcp?: boolean;
+  rx_worker_hot_stats?: boolean;
+};
+
 export type KernelModulesConfig = {
+  capability_profile?: string;
+  datapath?: KernelDatapathRuntimeConfig;
   trustix_crypto?: KernelModuleConfig;
   trustix_datapath?: KernelModuleConfig;
   trustix_datapath_helpers?: KernelModuleConfig;

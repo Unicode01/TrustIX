@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/dataplane"
 )
 
@@ -109,7 +110,7 @@ var kernelDatapathRXStageOpenDriver = openKernelDatapathRXStageDriver
 
 func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec dataplane.AttachSpec) error {
 	daemon.stopKernelDatapathRXStage()
-	mode := kernelDatapathRXMode()
+	mode := kernelDatapathRXModeForDesired(daemon.desired)
 	if mode == "" {
 		daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
 			Enabled:        false,
@@ -117,7 +118,7 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 		})
 		return nil
 	}
-	if mode == kernelDatapathRXModeWorker && !kernelDatapathRXWorkerSupportedForSpec(spec) {
+	if mode == kernelDatapathRXModeWorker && !kernelDatapathRXWorkerSupportedForSpecForDesired(daemon.desired, spec) {
 		daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
 			Enabled:        true,
 			Mode:           mode,
@@ -173,7 +174,7 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 		})
 		return nil
 	}
-	if kernelDatapathFullPlaintextEnabled() {
+	if kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
 		txHook, txErr := attachKernelDatapathRXHook(
 			driver, targetIfname, ifname,
 			kernelDatapathTXPlaintextHookFlags(),
@@ -195,7 +196,7 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 	stage, err := driver.Clear()
 	if err != nil {
 		_ = driver.DetachFor(ifname)
-		if kernelDatapathFullPlaintextEnabled() {
+		if kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
 			_ = driver.DetachFor(targetIfname)
 		}
 		_ = driver.Close()
@@ -492,10 +493,24 @@ func kernelDatapathRXStageTargetIface(spec dataplane.AttachSpec, underlayIfname 
 }
 
 func kernelDatapathRXMode() string {
-	if !kernelDatapathRXStageEnabled() {
+	return kernelDatapathRXModeForDesired(config.Desired{})
+}
+
+func kernelDatapathRXModeForDesired(desired config.Desired) string {
+	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
+	if !kernelDatapathRXStageEnabledForDesired(desired) {
 		return ""
 	}
-	if kernelDatapathFullPlaintextEnabled() {
+	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		return kernelDatapathRXModeWorker
+	}
+	switch runtime.RXStage {
+	case config.KernelDatapathRXStageStage:
+		return kernelDatapathRXModeStage
+	case config.KernelDatapathRXStageWorker:
+		return kernelDatapathRXModeWorker
+	}
+	if runtime.RXWorker {
 		return kernelDatapathRXModeWorker
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER"))) {
@@ -507,6 +522,14 @@ func kernelDatapathRXMode() string {
 }
 
 func kernelDatapathFullPlaintextEnabled() bool {
+	return kernelDatapathFullPlaintextEnabledForDesired(config.Desired{})
+}
+
+func kernelDatapathFullPlaintextEnabledForDesired(desired config.Desired) bool {
+	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
+	if runtime.FullPlaintext || runtime.TXPlaintext {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled", "full":
 		return true
@@ -520,7 +543,15 @@ func kernelDatapathFullPlaintextEnabled() bool {
 }
 
 func kernelDatapathRXWorkerSupportedForSpec(spec dataplane.AttachSpec) bool {
+	return kernelDatapathRXWorkerSupportedForSpecForDesired(config.Desired{}, spec)
+}
+
+func kernelDatapathRXWorkerSupportedForSpecForDesired(desired config.Desired, spec dataplane.AttachSpec) bool {
 	if !spec.ExperimentalTCPTXDirect {
+		return true
+	}
+	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
+	if runtime.RXWorkerAllowExperimentalTCP {
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP"))) {
@@ -532,6 +563,17 @@ func kernelDatapathRXWorkerSupportedForSpec(spec dataplane.AttachSpec) bool {
 }
 
 func kernelDatapathRXStageEnabled() bool {
+	return kernelDatapathRXStageEnabledForDesired(config.Desired{})
+}
+
+func kernelDatapathRXStageEnabledForDesired(desired config.Desired) bool {
+	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
+	switch runtime.RXStage {
+	case config.KernelDatapathRXStageDisabled:
+		return false
+	case config.KernelDatapathRXStageAuto, config.KernelDatapathRXStageStage, config.KernelDatapathRXStageWorker:
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_STAGE"))) {
 	case "", "1", "true", "yes", "on", "auto":
 		return true

@@ -20,20 +20,33 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	if daemon.kernelHelpers == nil {
 		daemon.kernelHelpers = kernelmodule.NewTrustIXDatapathHelpersManager()
 	}
-	cryptoModule := desired.KernelModules.TrustIXCrypto
+	modules := effectiveKernelModulesForDesired(desired)
+	if kernelModulesAllDisabled(modules) {
+		helpersStatus, helpersErr := daemon.kernelHelpers.Ensure(ctx, modules.TrustIXDatapathHelpers)
+		datapathStatus, datapathErr := daemon.kernelDatapath.Ensure(ctx, modules.TrustIXDatapath)
+		cryptoStatus, cryptoErr := daemon.kernelCrypto.Ensure(ctx, modules.TrustIXCrypto)
+		statuses := []kernelmodule.Status{cryptoStatus, datapathStatus, helpersStatus}
+		for _, err := range []error{helpersErr, datapathErr, cryptoErr} {
+			if err != nil {
+				return statuses, err
+			}
+		}
+		return statuses, nil
+	}
+	cryptoModule := modules.TrustIXCrypto
 	cryptoModule.Parameters = TrustIXCryptoModuleParameters(cryptoModule.Parameters)
 	cryptoStatus, err := daemon.kernelCrypto.Ensure(ctx, cryptoModule)
 	if err != nil {
 		return []kernelmodule.Status{cryptoStatus}, err
 	}
-	datapathModule := desired.KernelModules.TrustIXDatapath
-	datapathModule.Parameters = TrustIXDatapathModuleParameters(datapathModule.Parameters)
+	datapathModule := modules.TrustIXDatapath
+	datapathModule.Parameters = TrustIXDatapathModuleParametersForDesired(datapathModule.Parameters, desired)
 	datapathStatus, err := daemon.kernelDatapath.Ensure(ctx, datapathModule)
 	statuses := []kernelmodule.Status{cryptoStatus, datapathStatus}
 	if err != nil {
 		return statuses, err
 	}
-	helpersModule := desired.KernelModules.TrustIXDatapathHelpers
+	helpersModule := modules.TrustIXDatapathHelpers
 	helpersModule.Parameters = TrustIXDatapathHelpersModuleParametersForDesired(helpersModule.Parameters, desired)
 	helpersStatus, err := daemon.kernelHelpers.Ensure(ctx, helpersModule)
 	statuses = append(statuses, helpersStatus)
@@ -43,22 +56,59 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	return statuses, nil
 }
 
+func effectiveKernelModulesForDesired(desired config.Desired) config.KernelModulesConfig {
+	modules := desired.KernelModules
+	profile := config.NormalizeKernelCapabilityProfile(modules.CapabilityProfile)
+	switch profile {
+	case config.KernelCapabilityProfileDisabled:
+		modules.TrustIXCrypto.Mode = kernelmodule.ModeDisabled
+		modules.TrustIXDatapath.Mode = kernelmodule.ModeDisabled
+		modules.TrustIXDatapathHelpers.Mode = kernelmodule.ModeDisabled
+	case config.KernelCapabilityProfileStable, config.KernelCapabilityProfilePerformance, config.KernelCapabilityProfileFullPlaintext, config.KernelCapabilityProfileCustom:
+		if strings.TrimSpace(modules.TrustIXCrypto.Mode) == "" {
+			modules.TrustIXCrypto.Mode = kernelmodule.ModeAuto
+		}
+		if strings.TrimSpace(modules.TrustIXDatapath.Mode) == "" {
+			modules.TrustIXDatapath.Mode = kernelmodule.ModeAuto
+		}
+		if strings.TrimSpace(modules.TrustIXDatapathHelpers.Mode) == "" {
+			modules.TrustIXDatapathHelpers.Mode = kernelmodule.ModeAuto
+		}
+	}
+	return modules
+}
+
+func kernelModulesAllDisabled(modules config.KernelModulesConfig) bool {
+	return !kernelmoduleModeActive(modules.TrustIXCrypto.Mode) &&
+		!kernelmoduleModeActive(modules.TrustIXDatapath.Mode) &&
+		!kernelmoduleModeActive(modules.TrustIXDatapathHelpers.Mode)
+}
+
 func TrustIXCryptoModuleParameters(raw string) string {
 	return filterModuleParameters(raw, trustIXCryptoPanicRiskModuleParameters)
 }
 
 func TrustIXDatapathModuleParameters(raw string) string {
+	return TrustIXDatapathModuleParametersForDesired(raw, config.Desired{})
+}
+
+func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desired) string {
 	params := filterModuleParametersWithAllowlist(
 		raw,
 		trustIXDatapathPanicRiskModuleParameters,
 		trustIXDatapathSafeRXWorkerModuleParameters,
 		"rx_worker_",
 	)
-	fullPlaintext := envTruthyAny(
+	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
+	profile := config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile)
+	rxWorker := runtime.RXWorker || runtime.RXStage == config.KernelDatapathRXStageWorker
+	fullPlaintext := runtime.FullPlaintext || runtime.TXPlaintext
+	rxWorker = rxWorker || envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER")
+	fullPlaintext = fullPlaintext || envTruthyAny(
 		"TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT",
 		"TRUSTIX_KERNEL_DATAPATH_TX_PLAINTEXT",
 	)
-	if !envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER") && !fullPlaintext {
+	if !rxWorker && !fullPlaintext {
 		return params
 	}
 	params = appendModuleParameterIfMissing(params, "enable_features=128")
@@ -66,7 +116,15 @@ func TrustIXDatapathModuleParameters(raw string) string {
 	if fullPlaintext {
 		params = appendModuleParameterIfMissing(params, "tx_plaintext=1")
 	}
-	if envFalsey("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_HOT_STATS") {
+	if profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext {
+		params = appendModuleParameterIfMissing(params, "rx_worker_budget=128")
+		params = appendModuleParameterIfMissing(params, "rx_worker_slots=64")
+	}
+	if runtime.RXWorkerHotStats != nil && !*runtime.RXWorkerHotStats {
+		params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
+	} else if runtime.RXWorkerHotStats == nil && (profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext) {
+		params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
+	} else if envFalsey("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_HOT_STATS") {
 		params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
 	}
 	return params
@@ -113,12 +171,7 @@ func (daemon *Daemon) kernelModuleStatuses() []kernelmodule.Status {
 }
 
 func kernelModulesMayAffectDataplane(oldDesired, newDesired config.Desired) bool {
-	return kernelmoduleModeActive(oldDesired.KernelModules.TrustIXCrypto.Mode) ||
-		kernelmoduleModeActive(newDesired.KernelModules.TrustIXCrypto.Mode) ||
-		kernelmoduleModeActive(oldDesired.KernelModules.TrustIXDatapath.Mode) ||
-		kernelmoduleModeActive(newDesired.KernelModules.TrustIXDatapath.Mode) ||
-		kernelmoduleModeActive(oldDesired.KernelModules.TrustIXDatapathHelpers.Mode) ||
-		kernelmoduleModeActive(newDesired.KernelModules.TrustIXDatapathHelpers.Mode)
+	return true
 }
 
 func disabledKernelModuleStatus(name string) kernelmodule.Status {

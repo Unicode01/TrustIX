@@ -28,6 +28,47 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTX(t *testing.T) {
 	}
 }
 
+func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testing.T) {
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("", desired)
+	for _, want := range []string{
+		"enable_features=128",
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"rx_worker_budget=128",
+		"rx_worker_slots=64",
+		"rx_worker_hot_stats=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parameters = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestEffectiveKernelModulesForDesiredProfileDefaultsModes(t *testing.T) {
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfilePerformance,
+		},
+	}
+
+	modules := effectiveKernelModulesForDesired(desired)
+	if modules.TrustIXCrypto.Mode != "auto" || modules.TrustIXDatapath.Mode != "auto" || modules.TrustIXDatapathHelpers.Mode != "auto" {
+		t.Fatalf("effective modules = %#v, want all auto", modules)
+	}
+
+	desired.KernelModules.CapabilityProfile = config.KernelCapabilityProfileDisabled
+	modules = effectiveKernelModulesForDesired(desired)
+	if modules.TrustIXCrypto.Mode != "disabled" || modules.TrustIXDatapath.Mode != "disabled" || modules.TrustIXDatapathHelpers.Mode != "disabled" {
+		t.Fatalf("disabled modules = %#v, want all disabled", modules)
+	}
+}
+
 func TestTrustIXCryptoModuleParametersStripsPanicRiskRawParameters(t *testing.T) {
 	got := TrustIXCryptoModuleParameters("prefer_software=1 kfunc_simd_fastpath=1 experimental_vaes_kfunc=1")
 	want := "prefer_software=1 experimental_vaes_kfunc=1"
