@@ -48,6 +48,7 @@ overlay_file="${obj_dir}/go-overlay.json"
 overlay_pairs_file="${obj_dir}/go-overlay-pairs.txt"
 clang_bin="${CLANG:-}"
 go_bin="${TRUSTIX_RELEASE_GO:-go}"
+cgo_enabled="${TRUSTIX_RELEASE_CGO_ENABLED:-0}"
 crypto_module_dir="${TRUSTIX_CRYPTO_MODULE_DIR:-${repo_root}/kernel/trustix_crypto}"
 datapath_module_dir="${TRUSTIX_DATAPATH_MODULE_DIR:-${repo_root}/kernel/trustix_datapath}"
 datapath_helpers_module_dir="${TRUSTIX_DATAPATH_HELPERS_MODULE_DIR:-${repo_root}/kernel/trustix_datapath_helpers}"
@@ -144,10 +145,10 @@ go_build() {
   local overlay="$3"
   log "go build ${package}"
   if [[ -n "$overlay" ]]; then
-    (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" build -overlay "$overlay" -trimpath -ldflags "$go_ldflags" -o "$output" "$package")
+    (cd "$repo_root" && CGO_ENABLED="$cgo_enabled" GOOS="$goos" GOARCH="$goarch" "$go_bin" build -overlay "$overlay" -trimpath -ldflags "$go_ldflags" -o "$output" "$package")
     return
   fi
-  (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" build -trimpath -ldflags "$go_ldflags" -o "$output" "$package")
+  (cd "$repo_root" && CGO_ENABLED="$cgo_enabled" GOOS="$goos" GOARCH="$goarch" "$go_bin" build -trimpath -ldflags "$go_ldflags" -o "$output" "$package")
 }
 
 sha256_file() {
@@ -251,8 +252,10 @@ main() {
   need_cmd install
   need_cmd sha256sum
   need_cmd stat
+  case "$cgo_enabled" in 0|1) ;; *) die "TRUSTIX_RELEASE_CGO_ENABLED must be 0 or 1" ;; esac
   log "$("$go_bin" version)"
   log "version=${release_version} commit=${release_commit} built_at=${release_built_at}"
+  log "target=${goos}/${goarch} cgo=${cgo_enabled}"
   rm -rf "$workdir"
   mkdir -p "$obj_dir/bpf" "$obj_dir/kernel" "$bin_dir" "$pkg_dir"
   : >"$overlay_pairs_file"
@@ -388,15 +391,15 @@ main() {
   if [[ "$build_tests" == "1" ]]; then
     log "go test -c internal/dataplane/ebpf"
     if [[ -n "$overlay_arg" ]]; then
-      (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -overlay "$overlay_arg" -ldflags "$go_ldflags" -o "${bin_dir}/ebpf.test" ./internal/dataplane/ebpf)
+      (cd "$repo_root" && CGO_ENABLED="$cgo_enabled" GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -overlay "$overlay_arg" -ldflags "$go_ldflags" -o "${bin_dir}/ebpf.test" ./internal/dataplane/ebpf)
     else
-      (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -ldflags "$go_ldflags" -o "${bin_dir}/ebpf.test" ./internal/dataplane/ebpf)
+      (cd "$repo_root" && CGO_ENABLED="$cgo_enabled" GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -ldflags "$go_ldflags" -o "${bin_dir}/ebpf.test" ./internal/dataplane/ebpf)
     fi
     log "go test -c internal/kernelmodule"
     if [[ -n "$overlay_arg" ]]; then
-      (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -overlay "$overlay_arg" -ldflags "$go_ldflags" -o "${bin_dir}/kernelmodule.test" ./internal/kernelmodule)
+      (cd "$repo_root" && CGO_ENABLED="$cgo_enabled" GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -overlay "$overlay_arg" -ldflags "$go_ldflags" -o "${bin_dir}/kernelmodule.test" ./internal/kernelmodule)
     else
-      (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -ldflags "$go_ldflags" -o "${bin_dir}/kernelmodule.test" ./internal/kernelmodule)
+      (cd "$repo_root" && CGO_ENABLED="$cgo_enabled" GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -ldflags "$go_ldflags" -o "${bin_dir}/kernelmodule.test" ./internal/kernelmodule)
     fi
   fi
 
