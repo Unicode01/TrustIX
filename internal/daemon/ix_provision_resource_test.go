@@ -71,13 +71,39 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	if !strings.Contains(response.Command, "--provision-url") || !strings.Contains(response.Command, "--token") {
 		t.Fatalf("provision command does not use token mode: %s", response.Command)
 	}
-	if !strings.Contains(response.Command, "for url in") ||
-		!strings.Contains(response.Command, "raw.githubusercontent.com/Unicode01/TrustIX") ||
-		!strings.Contains(response.Command, "ghproxy.net") ||
-		!strings.Contains(response.Command, "gh-proxy.com") ||
-		!strings.Contains(response.Command, "ghfast.top") ||
-		!strings.Contains(response.Command, "gh.ddlc.top") {
-		t.Fatalf("provision command does not include bootstrap mirror fallback: %s", response.Command)
+	if strings.Contains(response.Command, "\n") || strings.Contains(response.Command, "\\\n") {
+		t.Fatalf("provision command should be a single physical line: %s", response.Command)
+	}
+	if len(response.Command) > 700 {
+		t.Fatalf("provision command is too long for reliable paste: len=%d command=%s", len(response.Command), response.Command)
+	}
+	if !strings.Contains(response.Command, ixProvisionBootstrapClientPath) {
+		t.Fatalf("provision command does not fetch bootstrap client from control API: %s", response.Command)
+	}
+	if strings.Contains(response.Command, "for url in") || strings.Contains(response.Command, "raw.githubusercontent.com/Unicode01/TrustIX") {
+		t.Fatalf("provision command still expands GitHub mirror fallback inline: %s", response.Command)
+	}
+
+	client := httptest.NewRequest(http.MethodGet, ixProvisionBootstrapClientPath, nil)
+	clientRecorder := httptest.NewRecorder()
+	daemon.handler().ServeHTTP(clientRecorder, client)
+	if clientRecorder.Code != http.StatusOK {
+		t.Fatalf("bootstrap client status = %d body=%s", clientRecorder.Code, clientRecorder.Body.String())
+	}
+	if clientRecorder.Header().Get("X-Content-Type-Options") != "nosniff" ||
+		clientRecorder.Header().Get("X-Frame-Options") != "DENY" ||
+		!strings.Contains(clientRecorder.Header().Get("Content-Security-Policy"), "default-src 'none'") {
+		t.Fatalf("bootstrap client security headers = %#v", clientRecorder.Header())
+	}
+	clientScript := clientRecorder.Body.String()
+	if !strings.Contains(clientScript, "TrustIX/archive") ||
+		!strings.Contains(clientScript, "opkg install bash") ||
+		!strings.Contains(clientScript, "--provision-url") ||
+		!strings.Contains(clientScript, "--token") {
+		t.Fatalf("bootstrap client does not contain source fetch/token runner logic:\n%s", clientScript)
+	}
+	if strings.Contains(clientScript, response.Token) || strings.Contains(clientScript, "PRIVATE KEY") {
+		t.Fatalf("bootstrap client should not contain token-specific secret material:\n%s", clientScript)
 	}
 
 	daemon.configMu.RLock()

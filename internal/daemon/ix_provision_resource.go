@@ -28,10 +28,11 @@ import (
 )
 
 const (
-	defaultIXProvisionTokenTTL = 30 * time.Minute
-	maxIXProvisionTokenTTL     = 24 * time.Hour
-	ixProvisionPrimaryPriority = 100
-	ixProvisionAcklessPriority = 80
+	defaultIXProvisionTokenTTL     = 30 * time.Minute
+	maxIXProvisionTokenTTL         = 24 * time.Hour
+	ixProvisionPrimaryPriority     = 100
+	ixProvisionAcklessPriority     = 80
+	ixProvisionBootstrapClientPath = "/v1/provision/ix/bootstrap-client.sh"
 )
 
 type ixProvisionIssueRequest struct {
@@ -170,6 +171,14 @@ func (daemon *Daemon) handleIXProvisionIssue(w http.ResponseWriter, r *http.Requ
 func (daemon *Daemon) serveIXProvisionIfRequest(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
+	}
+	if r.URL.Path == ixProvisionBootstrapClientPath {
+		setIXProvisionBootstrapSecurityHeaders(w)
+		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(ixProvisionBootstrapClientScript()))
+		return true
 	}
 	token, ok := ixProvisionTokenFromBootstrapPath(r.URL.Path)
 	if !ok {
@@ -1268,18 +1277,176 @@ func mustJSONScalar(value any) []byte {
 }
 
 func ixProvisionCommand(provisionURL, token string) string {
-	args := []string{"--provision-url", provisionURL, "--token", token}
-	parts := []string{
-		"tmp=\"$(mktemp /tmp/trustix-bootstrap.XXXXXX)\"",
-		ixProvisionDownloadBootstrapCommand(ixBootstrapScriptURLs()),
-		"if ! command -v bash >/dev/null 2>&1; then if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; elif command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y bash; elif command -v dnf >/dev/null 2>&1; then dnf install -y bash; elif command -v yum >/dev/null 2>&1; then yum install -y bash; elif command -v apk >/dev/null 2>&1; then apk add --no-cache bash; else echo 'bash is required' >&2; rm -f \"$tmp\"; exit 127; fi; fi",
-		"bash \"$tmp\"",
-	}
-	for _, arg := range args {
-		parts[len(parts)-1] += " " + shellQuote(arg)
-	}
-	parts[len(parts)-1] += "; rc=$?; rm -f \"$tmp\"; [ \"$rc\" -eq 0 ]"
-	return strings.Join(parts, " && \\\n")
+	script := `p=${1%/}; t=$2; f=${TMPDIR:-/tmp}/trustix-bootstrap.$$; rm -f "$f"; u="$p` + ixProvisionBootstrapClientPath + `"; (curl -kfsSL --connect-timeout 8 "$u" -o "$f" 2>/dev/null || wget --no-check-certificate -T 12 -qO "$f" "$u" 2>/dev/null || wget -T 12 -qO "$f" "$u" 2>/dev/null) && sh "$f" --provision-url "$p" --token "$t"; r=$?; rm -f "$f"; exit "$r"`
+	return strings.Join([]string{"sh", "-c", shellQuote(script), "sh", shellQuote(provisionURL), shellQuote(token)}, " ")
+}
+
+func ixProvisionBootstrapClientScript() string {
+	return `#!/bin/sh
+set -u
+
+log() {
+  printf '[trustix-bootstrap] %s\n' "$*" >&2
+}
+
+die() {
+  log "ERROR: $*"
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+install_bash() {
+  if need_cmd bash; then
+    return 0
+  fi
+  if need_cmd opkg; then
+    opkg update && opkg install bash
+  elif need_cmd apt-get; then
+    apt-get update && apt-get install -y bash
+  elif need_cmd dnf; then
+    dnf install -y bash
+  elif need_cmd yum; then
+    yum install -y bash
+  elif need_cmd apk; then
+    apk add --no-cache bash
+  else
+    return 1
+  fi
+}
+
+install_fetch_tool() {
+  if need_cmd curl || need_cmd wget; then
+    return 0
+  fi
+  if need_cmd opkg; then
+    opkg update && opkg install curl
+  elif need_cmd apt-get; then
+    apt-get update && apt-get install -y curl
+  elif need_cmd dnf; then
+    dnf install -y curl
+  elif need_cmd yum; then
+    yum install -y curl
+  elif need_cmd apk; then
+    apk add --no-cache curl
+  else
+    return 1
+  fi
+}
+
+mktemp_dir() {
+  dir="$(mktemp -d /tmp/trustix-bootstrap-src.XXXXXX 2>/dev/null || mktemp -d -t trustix-bootstrap-src.XXXXXX 2>/dev/null || true)"
+  if [ -z "$dir" ]; then
+    dir="${TMPDIR:-/tmp}/trustix-bootstrap-src.$$"
+    rm -rf "$dir"
+    mkdir -p "$dir" || return 1
+  fi
+  printf '%s\n' "$dir"
+}
+
+mktemp_file() {
+  file="$(mktemp /tmp/trustix-bootstrap-archive.XXXXXX 2>/dev/null || mktemp -t trustix-bootstrap-archive.XXXXXX 2>/dev/null || true)"
+  if [ -z "$file" ]; then
+    file="${TMPDIR:-/tmp}/trustix-bootstrap-archive.$$"
+    rm -f "$file"
+    : >"$file" || return 1
+  fi
+  printf '%s\n' "$file"
+}
+
+github_url_candidates() {
+  url="$1"
+  printf '%s\n' "$url"
+  case "${TRUSTIX_BOOTSTRAP_MIRRORS:-auto}" in
+    0|false|no|off|disabled) return 0 ;;
+  esac
+  case "$url" in
+    https://github.com/*|https://raw.githubusercontent.com/*) ;;
+    *) return 0 ;;
+  esac
+  mirrors="${TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS:-https://ghproxy.net/ https://gh-proxy.com/ https://gh-proxy.net/ https://ghfast.top/ https://gh.ddlc.top/ https://gh.llkk.cc/ https://github.moeyy.xyz/ https://mirror.ghproxy.com/}"
+  for mirror in $mirrors; do
+    [ -n "$mirror" ] || continue
+    printf '%s/%s\n' "${mirror%/}" "$url"
+  done
+}
+
+download_file() {
+  out="$1"
+  shift
+  for url in "$@"; do
+    [ -n "$url" ] || continue
+    rm -f "$out"
+    log "download $url"
+    if need_cmd curl && curl -fsSL --connect-timeout 8 "$url" -o "$out"; then
+      return 0
+    fi
+    if need_cmd wget && wget -T 12 -qO "$out" "$url"; then
+      return 0
+    fi
+  done
+  rm -f "$out"
+  return 1
+}
+
+provision_url=""
+provision_token=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --provision-url)
+      [ "$#" -ge 2 ] || die "--provision-url requires a value"
+      provision_url="$2"
+      shift 2
+      ;;
+    --token)
+      [ "$#" -ge 2 ] || die "--token requires a value"
+      provision_token="$2"
+      shift 2
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+[ -n "$provision_url" ] || die "--provision-url is required"
+[ -n "$provision_token" ] || die "--token is required"
+install_bash || die "bash is required"
+install_fetch_tool || die "curl or wget is required"
+need_cmd tar || die "tar is required"
+
+repo_ref="${TRUSTIX_BOOTSTRAP_REF:-main}"
+archive_url="${TRUSTIX_BOOTSTRAP_ARCHIVE_URL:-https://github.com/Unicode01/TrustIX/archive/${repo_ref}.tar.gz}"
+archive="$(mktemp_file)" || die "create temporary archive path failed"
+stage="$(mktemp_dir)" || die "create temporary source directory failed"
+cleanup() {
+  rc=$?
+  rm -f "$archive"
+  if [ "$rc" -ne 0 ]; then
+    rm -rf "$stage"
+  fi
+}
+trap cleanup EXIT
+
+urls="$(github_url_candidates "$archive_url")"
+# shellcheck disable=SC2086
+download_file "$archive" $urls || die "download TrustIX source archive failed"
+tar -xzf "$archive" -C "$stage" || die "extract TrustIX source archive failed"
+repo_root=""
+for candidate in "$stage"/*; do
+  if [ -d "$candidate" ]; then
+    repo_root="$candidate"
+    break
+  fi
+done
+[ -n "$repo_root" ] || die "TrustIX source archive has no root directory"
+[ -f "$repo_root/scripts/trustix-bootstrap-ix.sh" ] || die "TrustIX bootstrap script missing from source archive"
+
+TRUSTIX_BOOTSTRAP_PROVISION_INSECURE="${TRUSTIX_BOOTSTRAP_PROVISION_INSECURE:-1}" \
+  bash "$repo_root/scripts/trustix-bootstrap-ix.sh" --provision-url "$provision_url" --token "$provision_token"
+`
 }
 
 func ixProvisionDownloadBootstrapCommand(urls []string) string {

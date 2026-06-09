@@ -83,7 +83,7 @@ trustix_bootstrap_github_url_candidates() {
     https://github.com/*|https://raw.githubusercontent.com/*) ;;
     *) return 0 ;;
   esac
-  mirrors="${TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS:-https://ghproxy.net/ https://gh-proxy.com/ https://ghfast.top/ https://gh.ddlc.top/ https://gh.llkk.cc/ https://mirror.ghproxy.com/}"
+  mirrors="${TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS:-https://ghproxy.net/ https://gh-proxy.com/ https://gh-proxy.net/ https://ghfast.top/ https://gh.ddlc.top/ https://gh.llkk.cc/ https://github.moeyy.xyz/ https://mirror.ghproxy.com/}"
   for mirror in $mirrors; do
     [[ -n "$mirror" ]] || continue
     printf '%s%s\n' "${mirror%/}/" "$url"
