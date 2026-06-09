@@ -107,15 +107,6 @@ copy_file() {
   install -D -m "${3:-0644}" "$1" "$2"
 }
 
-compile_bpf_object() {
-  local src="$1"
-  local dst="$2"
-  shift 2
-  mkdir -p "$(dirname "$dst")"
-  log "compile eBPF $(realpath --relative-to "$repo_root" "$src")"
-  "$clang_bin" -target bpfel -O2 -g -Wall -Werror "$@" -c "$src" -o "$dst"
-}
-
 json_escape() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -258,7 +249,6 @@ main() {
   [[ "$goos" == "linux" ]] || die "GOOS must be linux for this release script"
   need_cmd "$go_bin"
   need_cmd install
-  need_cmd realpath
   need_cmd sha256sum
   need_cmd stat
   log "$("$go_bin" version)"
@@ -273,25 +263,14 @@ main() {
     fi
     need_cmd "$clang_bin"
     log "clang=$("$clang_bin" --version | { read -r line; printf '%s' "$line"; })"
-    local bpf_src_dir="${repo_root}/kernel/bpf/dataplane"
     local bpf_asset_dir="${repo_root}/internal/dataplane/ebpf/bpf"
-    local name src dst package_asset
-    for name in experimental_tcp_xdp experimental_tcp_kernel_crypto_xdp experimental_tcp_kernel_crypto_tx_xdp kernel_udp_xdp kernel_udp_tx_kernel_crypto_tc kernel_udp_rx_kernel_crypto_tc skb_kfunc_tc kernel_crypto_provider kernel_crypto_selftest; do
-      src="${bpf_src_dir}/${name}.c"
-      dst="${obj_dir}/bpf/${name}_bpfel.o"
-      package_asset="${bpf_asset_dir}/${name}_bpfel.o"
-      if [[ "$name" == "experimental_tcp_xdp" ]]; then
-        compile_bpf_object "$src" "$dst" -DTRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM=1
-      else
-        compile_bpf_object "$src" "$dst"
-      fi
-      add_overlay_pair "$package_asset" "$dst"
+    local object package_asset
+    "${BASH:-bash}" "${repo_root}/scripts/build-embedded-bpf.sh" --out "${obj_dir}/bpf" --clang "$clang_bin"
+    for object in "${obj_dir}/bpf/"*_bpfel.o; do
+      [[ -f "$object" ]] || die "no eBPF objects were built"
+      package_asset="${bpf_asset_dir}/$(basename "$object")"
+      add_overlay_pair "$package_asset" "$object"
     done
-    src="${bpf_src_dir}/experimental_tcp_kernel_crypto_xdp.c"
-    dst="${obj_dir}/bpf/experimental_tcp_kernel_crypto_xdp_direct_bpfel.o"
-    package_asset="${bpf_asset_dir}/experimental_tcp_kernel_crypto_xdp_direct_bpfel.o"
-    compile_bpf_object "$src" "$dst" -DTRUSTIX_EXP_TCP_DIRECT_OPEN=1
-    add_overlay_pair "$package_asset" "$dst"
   fi
 
   local crypto_ko=""

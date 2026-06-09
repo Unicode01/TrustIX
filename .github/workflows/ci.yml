@@ -40,6 +40,10 @@ jobs:
             bash -n "$script"
           done
 
+      - name: Embedded BPF Freshness
+        run: |
+          bash scripts/update-embedded-bpf.sh --check
+
       - name: WebUI Check
         run: |
           npm ci
