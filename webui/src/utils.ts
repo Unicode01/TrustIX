@@ -23,6 +23,9 @@ export function normalizeDesiredConfig(raw: DesiredConfig | null | undefined): D
   cfg.lan.advertise = arrayValue(cfg.lan.advertise);
   cfg.lan.nat = isObject(cfg.lan.nat) ? cfg.lan.nat : {};
   cfg.management = isObject(cfg.management) ? cfg.management : {};
+  cfg.dns = isObject(cfg.dns) ? cfg.dns : {};
+  cfg.dns.upstreams = arrayValue(cfg.dns.upstreams);
+  cfg.dns.dnsmasq = isObject(cfg.dns.dnsmasq) ? cfg.dns.dnsmasq : {};
   cfg.kernel_modules = isObject(cfg.kernel_modules) ? cfg.kernel_modules : {};
   cfg.trust = isObject(cfg.trust) ? cfg.trust : {};
   cfg.bootstrap = isObject(cfg.bootstrap) ? cfg.bootstrap : {};

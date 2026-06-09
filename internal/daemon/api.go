@@ -38,6 +38,7 @@ type statusResponse struct {
 	StartedAt      time.Time             `json:"started_at"`
 	Build          buildinfo.Info        `json:"build"`
 	Management     managementAPIStatus   `json:"management"`
+	DNS            dnsStatus             `json:"dns"`
 	LAN            lanStatus             `json:"lan"`
 	LANs           []lanStatus           `json:"lans,omitempty"`
 	ConfigHead     headResponse          `json:"config_head"`
@@ -273,6 +274,7 @@ func (daemon *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		StartedAt:     daemon.startedAt,
 		Build:         buildassets.BuildInfo(),
 		Management:    daemon.managementAPIStatus(),
+		DNS:           daemon.dnsStatus(),
 		LAN:           daemon.lanStatus(),
 		LANs:          daemon.lanStatuses(),
 		ConfigHead: headResponse{

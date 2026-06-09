@@ -36,6 +36,133 @@ trust:
 	}
 }
 
+func TestLoadBytesAcceptsDNSConfig(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+lan:
+  iface: br-lan
+  gateway: 10.0.0.1/24
+  advertise:
+    - 10.0.0.0/24
+dns:
+  enabled: true
+  domain: " Trust.IX. "
+  ttl: 30s
+  upstreams:
+    - 1.1.1.1
+`), ".yaml")
+	if err != nil {
+		t.Fatalf("load yaml: %v", err)
+	}
+	if !cfg.DNS.Enabled || cfg.DNS.Domain != "trust.ix" || cfg.DNS.TTL != "30s" {
+		t.Fatalf("dns config = %#v", cfg.DNS)
+	}
+	if len(cfg.DNS.Upstreams) != 1 || cfg.DNS.Upstreams[0] != "1.1.1.1:53" {
+		t.Fatalf("dns upstreams = %#v", cfg.DNS.Upstreams)
+	}
+}
+
+func TestLoadBytesAcceptsOpenWRTDNSMasqConfig(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+lan:
+  iface: br-lan
+  gateway: 10.0.0.1/24
+  advertise:
+    - 10.0.0.0/24
+dns:
+  enabled: true
+  dnsmasq:
+    enabled: true
+`), ".yaml")
+	if err != nil {
+		t.Fatalf("load yaml: %v", err)
+	}
+	if !cfg.DNS.Enabled || !cfg.DNS.DNSMasq.Enabled {
+		t.Fatalf("dns config = %#v", cfg.DNS)
+	}
+}
+
+func TestLoadBytesAcceptsOpenWRTDNSMasqWithoutLANGateway(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+dns:
+  enabled: true
+  dnsmasq:
+    enabled: true
+`), ".yaml")
+	if err != nil {
+		t.Fatalf("load yaml: %v", err)
+	}
+	if !cfg.DNS.DNSMasq.Enabled {
+		t.Fatalf("dns config = %#v", cfg.DNS)
+	}
+}
+
+func TestLoadBytesRejectsDNSMasqWithoutDNS(t *testing.T) {
+	_, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+dns:
+  dnsmasq:
+    enabled: true
+`), ".yaml")
+	if err == nil {
+		t.Fatal("expected dnsmasq without dns enabled error")
+	}
+}
+
+func TestLoadBytesRejectsUnsupportedDNSCapture(t *testing.T) {
+	_, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+lan:
+  iface: br-lan
+  gateway: 10.0.0.1/24
+  advertise:
+    - 10.0.0.0/24
+dns:
+  enabled: true
+  capture: redirect
+`), ".yaml")
+	if err == nil {
+		t.Fatal("expected unsupported dns capture error")
+	}
+}
+
+func TestLoadBytesRejectsInvalidDNSDomain(t *testing.T) {
+	_, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+lan:
+  iface: br-lan
+  gateway: 10.0.0.1/24
+  advertise:
+    - 10.0.0.0/24
+dns:
+  enabled: true
+  domain: bad_domain.local
+`), ".yaml")
+	if err == nil {
+		t.Fatal("expected invalid dns domain error")
+	}
+}
+
 func TestLoadBytesYAMLNormalizesAndValidates(t *testing.T) {
 	cfg, err := LoadBytes([]byte(`
 domain:

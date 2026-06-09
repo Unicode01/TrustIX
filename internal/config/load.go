@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,6 +83,7 @@ func Normalize(cfg Desired) Desired {
 		}
 	}
 	normalizeManagement(&cfg.Management)
+	normalizeDNS(&cfg.DNS)
 	normalizeKernelModules(&cfg.KernelModules)
 	for i := range cfg.Endpoints {
 		normalizeEndpoint(&cfg.Endpoints[i])
@@ -148,6 +151,48 @@ func normalizeManagement(management *ManagementConfig) {
 	management.TLS.CertPath = strings.TrimSpace(management.TLS.CertPath)
 	management.TLS.KeyPath = strings.TrimSpace(management.TLS.KeyPath)
 	management.WebUI.CustomDir = strings.TrimSpace(management.WebUI.CustomDir)
+}
+
+func normalizeDNS(dns *DNSConfig) {
+	if dns == nil {
+		return
+	}
+	dns.Listen = strings.TrimSpace(dns.Listen)
+	dns.Domain = strings.ToLower(strings.Trim(strings.TrimSpace(dns.Domain), "."))
+	dns.TTL = strings.TrimSpace(dns.TTL)
+	for i := range dns.Upstreams {
+		dns.Upstreams[i] = normalizeDNSUpstream(dns.Upstreams[i])
+	}
+	dns.Capture = normalizeDNSCapture(dns.Capture)
+}
+
+func normalizeDNSUpstream(upstream string) string {
+	upstream = strings.TrimSpace(upstream)
+	if upstream == "" {
+		return ""
+	}
+	if strings.Contains(upstream, "://") {
+		return upstream
+	}
+	if _, _, err := net.SplitHostPort(upstream); err == nil {
+		return upstream
+	}
+	if addr, err := netip.ParseAddr(strings.Trim(upstream, "[]")); err == nil {
+		return net.JoinHostPort(addr.String(), "53")
+	}
+	if strings.Contains(upstream, ":") {
+		return upstream
+	}
+	return net.JoinHostPort(upstream, "53")
+}
+
+func normalizeDNSCapture(capture string) string {
+	switch strings.ToLower(strings.TrimSpace(capture)) {
+	case "", "none", "disabled", "disable", "off", "no", "false":
+		return ""
+	default:
+		return strings.ToLower(strings.TrimSpace(capture))
+	}
 }
 
 func normalizeKernelModules(modules *KernelModulesConfig) {

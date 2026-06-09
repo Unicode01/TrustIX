@@ -595,6 +595,8 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 	restartAllSessions, restartPeers := daemon.dataPathSessionRestartScope(oldDesired, desired)
 	restartHostAPI := managementHostAPINeedsRestart(oldDesired, desired)
 	restartPrimaryAPI := managementPrimaryAPINeedsRestart(oldDesired, desired, daemon.cfg.APIAddr)
+	restartDNS := dnsResolverNeedsRestart(oldDesired, desired)
+	syncDNSMasq := restartDNS || dnsMasqIntegrationNeedsRestart(oldDesired, desired)
 	reloadDataplane := dataplaneAttachSpecNeedsReload(oldDesired, desired) ||
 		(!reflect.DeepEqual(oldDesired.KernelModules, desired.KernelModules) && kernelModulesMayAffectDataplane(oldDesired, desired))
 
@@ -614,6 +616,16 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 	daemon.clearFlows()
 	if restartHostAPI {
 		if err := daemon.restartHostAPIServers(ctx); err != nil {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
+	}
+	if restartDNS {
+		if err := daemon.restartDNSServer(ctx); err != nil {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
+	}
+	if syncDNSMasq {
+		if err := daemon.syncDNSMasq(ctx); err != nil {
 			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
 		}
 	}
@@ -756,6 +768,12 @@ func (daemon *Daemon) restoreDesiredRuntime(ctx context.Context, desired config.
 		restoreErrs = append(restoreErrs, err)
 	}
 	if err := daemon.restartHostAPIServers(ctx); err != nil {
+		restoreErrs = append(restoreErrs, err)
+	}
+	if err := daemon.restartDNSServer(ctx); err != nil {
+		restoreErrs = append(restoreErrs, err)
+	}
+	if err := daemon.syncDNSMasq(ctx); err != nil {
 		restoreErrs = append(restoreErrs, err)
 	}
 	if err := daemon.refreshLocalAdvertisement(); err != nil {

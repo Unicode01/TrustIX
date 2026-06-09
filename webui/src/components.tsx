@@ -308,6 +308,7 @@ export function OverviewView(props: { t: Translate; lang: string; status: Status
             <div className="status-stack">
               <StatusRow label={props.t("management", "Management")} value={compactListener(status.management?.primary)} />
               <StatusRow label={props.t("web_ui", "WebUI")} value={status.management?.web_ui?.enabled ? props.t("enabled", "Enabled") : props.t("disabled", "Disabled")} />
+              <StatusRow label={props.t("dns", "DNS")} value={compactDNSStatus(status.dns, props.t)} />
               <StatusRow label={props.t("transport", "Transport")} value={(status.transports || []).join(", ") || "-"} />
               <StatusRow label={props.t("warnings", "Warnings")} value={warnings.map((warning) => `${warning.name}: ${warning.detail}`).join(" · ") || "-"} />
             </div>
@@ -2860,6 +2861,7 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
           </section>
 
           <ConfigLANTable t={props.t} lang={props.lang} desired={cfg} onDesired={props.onDesired} />
+          <ConfigDNSEditor t={props.t} desired={cfg} onDesired={props.onDesired} />
         </>
       )}
 
@@ -3018,6 +3020,52 @@ function ConfigLANTable(props: { t: Translate; lang: string; desired: DesiredCon
   );
 }
 
+function ConfigDNSEditor(props: { t: Translate; desired: DesiredConfig; onDesired: (desired: DesiredConfig) => void }) {
+  const dns = props.desired.dns || {};
+  const upstreams = arrayValue(dns.upstreams);
+  const splitOnly = upstreams.length === 0;
+  const dnsmasqEnabled = Boolean(dns.dnsmasq?.enabled);
+  const update = (patch: NonNullable<DesiredConfig["dns"]>) => {
+    props.onDesired({ ...props.desired, dns: { ...dns, ...patch } });
+  };
+  const updateDNSMasq = (enabled: boolean) => {
+    props.onDesired({
+      ...props.desired,
+      dns: {
+        ...dns,
+        enabled: enabled ? true : dns.enabled,
+        dnsmasq: { ...(dns.dnsmasq || {}), enabled },
+      },
+    });
+  };
+  return (
+    <section className="config-section">
+      <div className="config-section-head">
+        <div className="section-title-row">
+          <h3>{props.t("dns_resolver", "DNS resolver")}</h3>
+          <span className="muted">{dns.enabled ? compactList([dnsmasqEnabled ? props.t("openwrt_dnsmasq", "OpenWrt dnsmasq") : "", splitOnly ? props.t("dns_split_only", "Split-only") : props.t("dns_forwarding", "Forwarding")], " / ") : props.t("disabled", "Disabled")}</span>
+        </div>
+      </div>
+      <div className="form-grid">
+        <CheckField label={props.t("dns_enabled", "DNS enabled")} help={props.t("help_dns_enabled", "Run the built-in DNS server for TrustIX domain names. It answers IX IDs such as ix-a.domain to their domain management address.")} checked={Boolean(dns.enabled)} onChange={(value) => update({ enabled: value, dnsmasq: value ? dns.dnsmasq : { ...(dns.dnsmasq || {}), enabled: false } })} />
+        <CheckField label={props.t("openwrt_dnsmasq", "OpenWrt dnsmasq")} help={props.t("help_openwrt_dnsmasq", "On OpenWrt, keep dnsmasq on LAN port 53, add a conditional forward rule for only the TrustIX DNS domain, and allow that domain to return LAN/RFC1918 addresses. Empty listen defaults to 127.0.0.1:1053 in this mode.")} checked={dnsmasqEnabled} onChange={updateDNSMasq} />
+        <Field label={props.t("dns_domain", "DNS domain")} help={props.t("help_dns_domain", "DNS suffix served by TrustIX. Empty uses the TrustIX domain ID.")} placeholder={props.desired.domain?.id || "trust.ix"} value={dns.domain || ""} onChange={(value) => update({ domain: value })} />
+        <Field label={props.t("listen", "Listen")} help={dnsmasqEnabled ? props.t("help_dns_listen_dnsmasq", "DNS listen address. Empty uses 127.0.0.1:1053 so OpenWrt dnsmasq can forward only the TrustIX domain without losing normal LAN DNS.") : props.t("help_dns_listen", "DNS listen address. Empty uses the first LAN gateway on port 53, for example 10.0.0.1:53.")} placeholder={dnsmasqEnabled ? "127.0.0.1:1053" : "10.0.0.1:53"} value={dns.listen || ""} onChange={(value) => update({ listen: value })} />
+        <Field label={props.t("dns_ttl", "DNS TTL")} help={props.t("help_dns_ttl", "TTL for TrustIX DNS answers. Empty uses 30s.")} placeholder="30s" value={dns.ttl || ""} onChange={(value) => update({ ttl: value })} />
+        <Field label={props.t("dns_upstreams", "DNS upstreams")} help={props.t("help_dns_upstreams", "Optional upstream DNS servers, one host:port per line. Leave empty to answer only TrustIX domain names and refuse unrelated domains.")} textarea placeholder={"1.1.1.1:53\n8.8.8.8:53"} value={joinLines(upstreams)} onChange={(value) => update({ upstreams: splitLines(value) })} />
+      </div>
+      <p className="panel-note inline-note">
+        {dnsmasqEnabled ? `${props.t("openwrt_dnsmasq_note", "OpenWrt mode writes a dnsmasq conditional server rule plus a rebind whitelist, then reloads dnsmasq; it does not redirect arbitrary LAN DNS packets.")} ` : ""}
+        {splitOnly
+          ? props.t("dns_split_only_note", "No upstreams are configured: this IX only answers names inside the TrustIX DNS domain and does not capture or forward other DNS traffic.")
+          : props.t("dns_forwarding_note", "Upstreams are configured: non-TrustIX names are forwarded to those DNS servers. Transparent LAN capture is still disabled.")}
+        {" "}
+        {props.t("dns_capture_disabled_note", "LAN transparent capture and hosts-file rewriting are intentionally not enabled in this first stage.")}
+      </p>
+    </section>
+  );
+}
+
 function LANConfigFields(props: { t: Translate; lan: LANConfig; source: "legacy" | "lans"; onUpdate: (lan: LANConfig) => void }) {
   const lan = props.lan;
   const deviceAccess = lan.device_access || {};
@@ -3163,6 +3211,7 @@ function ConfigSummaryStrip(props: { t: Translate; lang: string; desired: Desire
     <div className="config-summary-strip">
       <SummaryItem label={props.t("identity", "Identity")} value={compactList([cfg.domain?.id, cfg.ix?.id], "-")} />
       <SummaryItem label={props.t("lans", "LANs")} value={`${formatNumber(lanEntries.length, props.lang)} · ${primaryID || "-"}`} />
+      <SummaryItem label={props.t("dns", "DNS")} value={cfg.dns?.enabled ? compactList([cfg.dns.domain || cfg.domain?.id, arrayValue(cfg.dns.upstreams).length ? props.t("dns_forwarding", "Forwarding") : props.t("dns_split_only", "Split-only")], " · ") : props.t("disabled", "Disabled")} />
       <SummaryItem label={props.t("connectivity", "Connectivity")} value={`${formatNumber(endpointCount, props.lang)} ${props.t("endpoints", "Endpoints")} · ${formatNumber(peerCount, props.lang)} ${props.t("peers", "Peers")}`} />
       <SummaryItem label={props.t("routing", "Routing")} value={`${formatNumber(staticRouteCount, props.lang)} ${props.t("static", "Static")} · ${formatNumber(runtimeRouteCount, props.lang)} ${props.t("runtime", "Runtime")} · ${formatNumber(activeSessions, props.lang)} ${props.t("sessions", "sessions")}`} />
     </div>
@@ -3218,7 +3267,7 @@ function configSectionLabel(t: Translate, section: ConfigSectionID): string {
 function configSectionValue(t: Translate, cfg: DesiredConfig, transports: TransportMatrix | null, links: LinkStatus[], runtimeRoutes: RouteView[], section: ConfigSectionID): string {
   switch (section) {
     case "basic":
-      return compactList([cfg.ix?.id, `${effectiveLANEntries(cfg).length} ${t("lans", "LANs")}`], "-");
+      return compactList([cfg.ix?.id, `${effectiveLANEntries(cfg).length} ${t("lans", "LANs")}`, cfg.dns?.enabled ? t("dns", "DNS") : ""], "-");
     case "connectivity":
       return `${arrayValue(cfg.endpoints).length} / ${arrayValue(cfg.peers).length}`;
     case "routing":
@@ -3562,6 +3611,7 @@ function splitPEMBlocks(value: string): string[] {
 function AdvancedConfigSummary(props: { t: Translate; desired: DesiredConfig }) {
   const cfg = props.desired;
   const management = cfg.management || {};
+  const dns = cfg.dns || {};
   const kernelModules = cfg.kernel_modules || {};
   const fabric = cfg.control_fabric || {};
   const trustRoots = arrayValue(cfg.domain?.trust_roots);
@@ -3569,6 +3619,7 @@ function AdvancedConfigSummary(props: { t: Translate; desired: DesiredConfig }) 
   return (
     <div className="advanced-config-summary">
       <StatusRow label={props.t("management", "Management")} value={compactAdvancedObject(management)} />
+      <StatusRow label={props.t("dns", "DNS")} value={compactAdvancedObject(dns)} />
       <StatusRow label={props.t("kernel_modules", "Kernel modules")} value={compactAdvancedObject(kernelModules)} />
       <StatusRow label={props.t("control_fabric", "Control fabric")} value={compactList([
         fabric.profile,
@@ -4720,6 +4771,16 @@ function compactBuild(build: StatusPayload["build"]): string {
 
 function compactListener(listener: ListenerStatus | undefined): string {
   return [listener?.listen, listener?.scope, listener?.error].filter(Boolean).join(" · ") || "-";
+}
+
+function compactDNSStatus(status: StatusPayload["dns"], t: Translate): string {
+  if (!status?.enabled) {
+    return t("disabled", "Disabled");
+  }
+  const runtime = status.running ? t("dns_running", "Running") : t("dns_not_running", "Not running");
+  const mode = arrayValue(status.upstreams).length ? t("dns_forwarding", "Forwarding") : t("dns_split_only", "Split-only");
+  const dnsmasq = status.dnsmasq?.enabled ? compactList([t("openwrt_dnsmasq", "OpenWrt dnsmasq"), status.dnsmasq.applied ? t("applied", "Applied") : t("pending", "Pending"), status.dnsmasq.error], " ") : "";
+  return compactList([runtime, status.listen, status.domain, mode, dnsmasq, status.error], " · ");
 }
 
 function compactAdvancedObject(value: Record<string, unknown> | undefined): string {

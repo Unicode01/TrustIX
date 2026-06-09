@@ -54,6 +54,7 @@ export type StatusPayload = {
       error?: string;
     };
   };
+  dns?: DNSStatus;
   kernel_modules?: KernelModuleStatus[];
   data_path?: {
     active_sessions?: number;
@@ -112,6 +113,7 @@ export type DesiredConfig = {
   lan?: LANConfig;
   lans?: LANConfig[];
   management?: ManagementConfig;
+  dns?: DNSConfig;
   kernel_modules?: KernelModulesConfig;
   trust?: TrustConfig;
   endpoints?: EndpointConfig[];
@@ -148,6 +150,31 @@ export type ManagementConfig = {
   web_ui?: {
     enabled?: boolean;
     custom_dir?: string;
+  };
+};
+
+export type DNSConfig = {
+  enabled?: boolean;
+  listen?: string;
+  domain?: string;
+  ttl?: string;
+  upstreams?: string[];
+  capture?: string;
+  dnsmasq?: {
+    enabled?: boolean;
+  };
+};
+
+export type DNSStatus = DNSConfig & {
+  running?: boolean;
+  error?: string;
+  dnsmasq?: {
+    enabled?: boolean;
+    mode?: string;
+    server?: string;
+    section?: string;
+    applied?: boolean;
+    error?: string;
   };
 };
 

@@ -16,6 +16,7 @@ Start here: [TrustIX Bootstrap Command Generator](https://unicode01.github.io/Tr
 - UDP, QUIC, TCP, WebSocket, HTTP CONNECT, GRE/IPIP carrier, `kernel_udp`, and experimental ACKless TCP transport paths.
 - Userspace secure envelope with AES-GCM and ChaCha20-Poly1305 support; optional kernel crypto placement where supported.
 - Embedded Web UI served by `trustixd`.
+- Built-in TrustIX DNS resolver with OpenWrt `dnsmasq` conditional forwarding support.
 - Linux dataplane automation for managed LAN interfaces, routes, TC/eBPF capture, AF_XDP paths, and kernel module capability reporting.
 - Fallback paths for systems without the full kernel module capability set.
 

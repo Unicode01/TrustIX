@@ -189,6 +189,18 @@ Linux dataplane 当前会：
 - 管理 API/WebUI TLS 由同一个 `management.tls` 控制，不为 WebUI 单独开监听。默认 `mode: auto`：loopback 主 API 继续用 HTTP，非 loopback 主 API、`management.host_api` 和 management VIP 自动用 HTTPS；`mode: required` 会连 loopback 也强制 HTTPS，`mode: disabled` 只建议测试使用。默认 `identity: ix_cert`，直接使用本 IX 证书；浏览器如果不信任 TrustIX CA，或访问地址不在 IX 证书 SAN 中，可以切到 `identity: custom_cert` 并配置 `cert`/`key`。`trustixctl` 访问 HTTPS 管理面时可用 `-api-tls-ca`、`-api-tls-server-name` 或临时测试用的 `-api-tls-insecure-skip-verify`。
 - 当前 IX LAN 主机访问本 IX 管理面时，不需要把主 API 绑定到 `0.0.0.0`。在 desired config 中启用 `management.host_api.enabled: true` 后，daemon 会额外监听 `management.host_api.listen`；如果未配置 `listen`，会默认使用第一个配置了 gateway 的 `lan:`/`lans:` IP 和 `-api` 的端口，例如 `10.0.0.1:8787`。这个 host API 默认强制读写请求都带 Admin 签名；只有显式配置 `allow_unauthenticated_reads: true` 才允许匿名读，`allow_unauthenticated_writes: true` 会让 doctor 报 degraded。`trustixctl` 在传入 `-admin-cert/-admin-key` 后会同时给 GET 请求签名。`trustixctl status` 会输出 `management.host`，`trustixctl doctor` 会输出 `management_host_api` 安全状态。
 - 内嵌 WebUI 通过 `management.web_ui.enabled: true` 启用，不启用时只保留 API。WebUI 不再有独立监听模式；API 绑定到哪里，WebUI 就跟到哪里：主 `-api` listener 可本机访问，`management.host_api` 可给当前 IX 下的 LAN 主机访问，management VIP proxy 可用于通过其他 IX 的管理 VIP 打开目标 IX 面板。默认 WebUI 资产会随二进制 embed；如果配置 `custom_dir`，daemon 会优先读取该目录下的 `index.html`、`app.css`、`app.js`、`i18n/*.json` 等同名资产，缺失项回落到嵌入版本。WebUI 响应默认带 CSP nonce、`nosniff`、`DENY` frame 和 `no-referrer` 安全头。WebUI 直接走同源 `/v1` 管理 API，因此 LAN/IX 场景下如果想让普通浏览器读取状态，需要按风险接受度配置 host API 的读认证策略；`trustixctl doctor` 会输出 `management_web_ui` 检查，标出非 loopback 主 API未签名写、host API 匿名读写和 custom UI 暴露面。
+- 内置 DNS 解析器可回答 TrustIX 域内 IX 名称，例如 `ix-a.trust.ix`。未配置 `dns.upstreams` 时只回答域内名称，其他查询返回 `REFUSED`；配置上游后才转发非 TrustIX 域。OpenWrt 推荐启用 `dns.dnsmasq.enabled: true`，daemon 会监听 `127.0.0.1:1053` 并写入 dnsmasq 条件转发规则 `/domain/127.0.0.1#1053`，同时添加 `rebind_domain=domain` 白名单，允许 TrustIX 域名返回 LAN/RFC1918 地址。该模式保留 dnsmasq 继续服务 LAN 的 53 端口，不做 LAN 透明 DNS 捕获，也不改写 hosts。退出或关闭该选项时会按本机状态文件清理 TrustIX 添加的 dnsmasq 规则和 rebind 白名单。
+
+OpenWrt dnsmasq DNS 示例：
+
+```yaml
+dns:
+  enabled: true
+  domain: trust.ix
+  dnsmasq:
+    enabled: true
+```
+
 - 当前 IX 下的主机可以通过本 IX 的 host API 跨 IX 访问其他 IX 的管理 API：`trustixctl -api https://10.0.0.1:8787 -api-tls-ca certs/domain-ca.pem -api-tls-server-name lab.local -target-ix ix-b ...` 会把请求发到本地 IX，再由本地 IX 通过 peer `control_api` mTLS 转发到目标 IX 的 `/v1/control/management`。目标 IX 会重新按自己的 trust policy 复验 Admin proof，配置写入时保留原始 proxy URI 审计，不把中转 IX 当作管理授权者。
 - 远端 IX 开启 `management.host_api` 后，会在成员广告里发布管理 VIP `/32`。本地 IX 会把该 `/32` 导入为 `kind: local` / `source: management_vip`，TC/eBPF 对这个更长前缀放行，不再按远端 LAN 路由送入数据面；daemon 会在本地 LAN iface 上挂载该 VIP 并监听对应端口，把主机直连 `https://远端网关IP:端口/v1/...` 的 HTTPS 请求通过 peer `control_api` mTLS 代理到目标 IX。因此同一台主机既可以用 `-target-ix`，也可以直接把 `-api` 指向远端管理 VIP。
 - Linux daemon 启动时会持有 `<data-dir>/trustixd.lock` 的进程锁；同一个 data dir 已有运行中的 `trustixd` 时，第二个 daemon 会启动失败，避免重复进程同时写 config log、members state 或 BPF state。

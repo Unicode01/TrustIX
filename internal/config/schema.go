@@ -28,6 +28,7 @@ type Desired struct {
 	LAN             LANConfig             `json:"lan" yaml:"lan"`
 	LANs            []LANConfig           `json:"lans,omitempty" yaml:"lans,omitempty"`
 	Management      ManagementConfig      `json:"management,omitempty" yaml:"management,omitempty"`
+	DNS             DNSConfig             `json:"dns,omitempty" yaml:"dns,omitempty"`
 	KernelModules   KernelModulesConfig   `json:"kernel_modules,omitempty" yaml:"kernel_modules,omitempty"`
 	Trust           TrustConfig           `json:"trust,omitempty" yaml:"trust,omitempty"`
 	Endpoints       []EndpointConfig      `json:"endpoints" yaml:"endpoints"`
@@ -118,6 +119,20 @@ type HostManagementAPIConfig struct {
 type WebUIConfig struct {
 	Enabled   bool   `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	CustomDir string `json:"custom_dir,omitempty" yaml:"custom_dir,omitempty"`
+}
+
+type DNSConfig struct {
+	Enabled   bool          `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Listen    string        `json:"listen,omitempty" yaml:"listen,omitempty"`
+	Domain    string        `json:"domain,omitempty" yaml:"domain,omitempty"`
+	TTL       string        `json:"ttl,omitempty" yaml:"ttl,omitempty"`
+	Upstreams []string      `json:"upstreams,omitempty" yaml:"upstreams,omitempty"`
+	Capture   string        `json:"capture,omitempty" yaml:"capture,omitempty"`
+	DNSMasq   DNSMasqConfig `json:"dnsmasq,omitempty" yaml:"dnsmasq,omitempty"`
+}
+
+type DNSMasqConfig struct {
+	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 type LANMode string
@@ -549,6 +564,9 @@ func (cfg Desired) validateWithRoutePeers(routePeers []PeerConfig) error {
 	if err := validateManagement(cfg.Management, EffectiveLANs(cfg)); err != nil {
 		return err
 	}
+	if err := validateDNS(cfg.DNS, cfg.Domain.ID, EffectiveLANs(cfg)); err != nil {
+		return err
+	}
 	if err := validateKernelModules(cfg.KernelModules); err != nil {
 		return err
 	}
@@ -808,6 +826,77 @@ func validateManagement(management ManagementConfig, lans []LANConfig) error {
 	return nil
 }
 
+func validateDNS(dns DNSConfig, domain core.DomainID, lans []LANConfig) error {
+	if !dns.Enabled {
+		if dns.DNSMasq.Enabled {
+			return fmt.Errorf("dns dnsmasq requires dns enabled")
+		}
+		return nil
+	}
+	if strings.TrimSpace(dns.Listen) != "" {
+		if err := validateTCPListenAddress("dns listen", dns.Listen); err != nil {
+			return err
+		}
+	} else if !dns.DNSMasq.Enabled && !anyLANGatewayConfigured(lans) {
+		return fmt.Errorf("dns listen is required when lan gateway is not configured")
+	}
+	suffix := strings.Trim(strings.TrimSpace(dns.Domain), ".")
+	if suffix == "" {
+		suffix = string(domain)
+	}
+	if suffix == "" {
+		return fmt.Errorf("dns domain is required")
+	}
+	for _, label := range strings.Split(suffix, ".") {
+		if err := validateDNSLabel("dns domain", label); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(dns.TTL) != "" {
+		ttl, err := time.ParseDuration(strings.TrimSpace(dns.TTL))
+		if err != nil {
+			return fmt.Errorf("parse dns ttl %q: %w", dns.TTL, err)
+		}
+		if ttl <= 0 {
+			return fmt.Errorf("dns ttl must be positive")
+		}
+		if ttl < time.Second {
+			return fmt.Errorf("dns ttl must be at least 1s")
+		}
+	}
+	for _, upstream := range dns.Upstreams {
+		if err := validateDNSUpstreamAddress("dns upstream", upstream); err != nil {
+			return err
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(dns.Capture)) {
+	case "", "none", "disabled", "off":
+		return nil
+	default:
+		return fmt.Errorf("dns capture %q is unsupported in userspace resolver mode", dns.Capture)
+	}
+}
+
+func validateDNSLabel(context string, label string) error {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return fmt.Errorf("%s contains an empty label", context)
+	}
+	if len(label) > 63 {
+		return fmt.Errorf("%s label %q is longer than 63 bytes", context, label)
+	}
+	if label[0] == '-' || label[len(label)-1] == '-' {
+		return fmt.Errorf("%s label %q must not start or end with '-'", context, label)
+	}
+	for _, ch := range label {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' {
+			continue
+		}
+		return fmt.Errorf("%s label %q contains unsupported character %q", context, label, ch)
+	}
+	return nil
+}
+
 func anyLANGatewayConfigured(lans []LANConfig) bool {
 	for _, lan := range lans {
 		if strings.TrimSpace(lan.Gateway) != "" {
@@ -869,6 +958,24 @@ func validateWebUI(webUI WebUIConfig) error {
 func validateTCPListenAddress(label string, value string) error {
 	if _, _, err := net.SplitHostPort(value); err != nil {
 		return fmt.Errorf("%s %q is invalid: %w", label, value, err)
+	}
+	return nil
+}
+
+func validateDNSUpstreamAddress(label string, value string) error {
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return fmt.Errorf("%s %q is invalid: %w", label, value, err)
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("%s %q host is required", label, value)
+	}
+	if strings.TrimSpace(port) == "" {
+		return fmt.Errorf("%s %q port is required", label, value)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber <= 0 || portNumber > 65535 {
+		return fmt.Errorf("%s %q port is invalid", label, value)
 	}
 	return nil
 }

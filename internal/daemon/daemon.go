@@ -125,6 +125,8 @@ type Daemon struct {
 	apiMu                sync.Mutex
 	apiErr               chan error
 	apiServers           []apiServerRuntime
+	dnsMu                sync.Mutex
+	dnsServer            *dnsServerRuntime
 }
 
 type Option func(*Daemon)
@@ -291,11 +293,17 @@ func (daemon *Daemon) Run(ctx context.Context) error {
 		daemon.releaseDataDirLock()
 		return errors.Join(err, detachErr, moduleErr)
 	}
+	defer daemon.releaseDataDirLock()
 	var peerServer *http.Server
 	cleanup := func() error {
 		return daemon.shutdownRuntime(peerServer, true)
 	}
-	defer daemon.releaseDataDirLock()
+	if err := daemon.startDNSServer(ctx); err != nil {
+		return errors.Join(err, cleanup())
+	}
+	if err := daemon.syncDNSMasq(ctx); err != nil {
+		return errors.Join(err, cleanup())
+	}
 	peerServer, peerErr, err := daemon.startPeerAPIServer()
 	if err != nil {
 		return errors.Join(err, cleanup())
@@ -340,6 +348,12 @@ func (daemon *Daemon) shutdownRuntime(peerServer *http.Server, detach bool) erro
 	defer cancel()
 	var errs []error
 	if err := daemon.closeAPIServers(shutdownCtx); err != nil {
+		errs = append(errs, err)
+	}
+	if err := daemon.cleanupDNSMasq(shutdownCtx); err != nil {
+		errs = append(errs, err)
+	}
+	if err := daemon.closeDNSServer(shutdownCtx); err != nil {
 		errs = append(errs, err)
 	}
 	if peerServer != nil {
