@@ -12,12 +12,59 @@
       --text: #17202a;
       --muted: #5d6875;
       --line: #d8dde5;
+      --input: #ffffff;
+      --button: #ffffff;
       --strong: #0f5f7a;
       --strong-dark: #09455a;
       --danger: #9f2d20;
       --code: #101820;
       --code-text: #ecf2f6;
       --focus: #1d7f9c;
+      --notice-bg: #eef7fa;
+      --notice-text: #24333b;
+      --warning-bg: #fff2ee;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --bg: #11161c;
+        --panel: #171e26;
+        --text: #edf2f7;
+        --muted: #9ca8b6;
+        --line: #2d3947;
+        --input: #10161d;
+        --button: #151d25;
+        --strong: #3aa6c9;
+        --strong-dark: #2889aa;
+        --danger: #f07866;
+        --code: #080c11;
+        --code-text: #e8f1f6;
+        --focus: #55bfdc;
+        --notice-bg: #102b35;
+        --notice-text: #d8ecf2;
+        --warning-bg: #341d18;
+      }
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #11161c;
+      --panel: #171e26;
+      --text: #edf2f7;
+      --muted: #9ca8b6;
+      --line: #2d3947;
+      --input: #10161d;
+      --button: #151d25;
+      --strong: #3aa6c9;
+      --strong-dark: #2889aa;
+      --danger: #f07866;
+      --code: #080c11;
+      --code-text: #e8f1f6;
+      --focus: #55bfdc;
+      --notice-bg: #102b35;
+      --notice-text: #d8ecf2;
+      --warning-bg: #341d18;
     }
 
     * {
@@ -45,6 +92,20 @@
       align-items: flex-end;
       gap: 16px;
       margin-bottom: 18px;
+    }
+
+    .header-actions {
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
 
     h1 {
@@ -96,11 +157,12 @@
       min-height: 38px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: #ffffff;
+      background: var(--button);
       color: var(--text);
       cursor: pointer;
       font: inherit;
       font-weight: 600;
+      padding: 0 12px;
     }
 
     .mode-row button.active,
@@ -158,7 +220,7 @@
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 0 10px;
-      background: #ffffff;
+      background: var(--input);
       color: var(--text);
       font: inherit;
     }
@@ -219,14 +281,14 @@
     .notice {
       border-left: 3px solid var(--strong);
       padding: 8px 10px;
-      background: #eef7fa;
-      color: #24333b;
+      background: var(--notice-bg);
+      color: var(--notice-text);
       font-size: 13px;
     }
 
     .warning {
       border-left-color: var(--danger);
-      background: #fff2ee;
+      background: var(--warning-bg);
     }
 
     .hidden {
@@ -248,6 +310,15 @@
         margin-top: 10px;
       }
 
+      .header-actions {
+        justify-items: start;
+        margin-top: 10px;
+      }
+
+      .toolbar {
+        justify-content: flex-start;
+      }
+
       .output {
         position: static;
         margin-top: 14px;
@@ -264,69 +335,78 @@
   <main>
     <header>
       <div>
-        <h1>TrustIX Bootstrap Command Generator</h1>
-        <p class="subhead">Fill the fields, copy one command, and run it on the target Linux host. Values stay in this browser tab.</p>
+        <h1 data-i18n="app_title">TrustIX Bootstrap Command Generator</h1>
+        <p class="subhead" data-i18n="app_subhead">Fill the fields, copy one command, and run it on the target Linux host. Values stay in this browser tab.</p>
       </div>
-      <nav>
-        <a href="https://github.com/Unicode01/TrustIX">GitHub</a>
-        <span aria-hidden="true"> / </span>
-        <a href="./deployment-scripts.md">Deployment Docs</a>
-      </nav>
+      <div class="header-actions">
+        <nav>
+          <a href="https://github.com/Unicode01/TrustIX">GitHub</a>
+          <span aria-hidden="true"> / </span>
+          <a href="./deployment-scripts.md" data-i18n="deployment_docs">Deployment Docs</a>
+        </nav>
+        <div class="toolbar" aria-label="Page preferences">
+          <select id="language" aria-label="Language">
+            <option value="en">English</option>
+            <option value="zh-CN">简体中文</option>
+          </select>
+          <button id="theme-toggle" class="button" type="button" aria-label="Toggle color theme">Theme</button>
+        </div>
+      </div>
     </header>
 
     <div class="layout">
       <section class="panel" aria-label="Bootstrap parameters">
         <div class="mode-row" role="tablist" aria-label="Setup mode">
-          <button id="mode-first" class="active" type="button" role="tab" aria-selected="true">New Domain / First IX</button>
-          <button id="mode-join" type="button" role="tab" aria-selected="false">Join With Token</button>
+          <button id="mode-first" class="active" type="button" role="tab" aria-selected="true" data-i18n="mode_first">New Domain / First IX</button>
+          <button id="mode-join" type="button" role="tab" aria-selected="false" data-i18n="mode_join">Join With Token</button>
         </div>
 
         <form id="first-form">
-          <h2 class="section-title">Identity</h2>
+          <h2 class="section-title" data-i18n="identity">Identity</h2>
           <div class="grid">
             <div class="field">
-              <label for="domain">Domain ID</label>
+              <label for="domain" data-i18n="domain_id">Domain ID</label>
               <input id="domain" value="trustix.local" autocomplete="off">
             </div>
             <div class="field">
-              <label for="ix">IX ID</label>
+              <label for="ix" data-i18n="ix_id">IX ID</label>
               <input id="ix" value="ix-a" autocomplete="off">
             </div>
             <div class="field">
-              <label for="cert-dir">Local CA/cert directory</label>
+              <label for="cert-dir" data-i18n="cert_dir">Local CA/cert directory</label>
               <input id="cert-dir" value="certs" autocomplete="off">
-              <div class="hint">Created if missing on the first IX host.</div>
+              <div class="hint" data-i18n="cert_dir_hint">Created if missing on the first IX host.</div>
             </div>
             <div class="field">
-              <label for="control-api">Published control API URL</label>
+              <label for="control-api" data-i18n="control_api">Published control API URL</label>
               <input id="control-api" value="https://ix-a.example.net:9443" autocomplete="off">
             </div>
           </div>
 
-          <h2 class="section-title">LAN</h2>
+          <h2 class="section-title" data-i18n="lan">LAN</h2>
           <div class="grid">
             <div class="field">
-              <label for="lan-iface">LAN interface</label>
+              <label for="lan-iface" data-i18n="lan_iface">LAN interface</label>
               <input id="lan-iface" value="br-lan" autocomplete="off">
             </div>
             <div class="field">
-              <label for="underlay-iface">Underlay/WAN interface</label>
+              <label for="underlay-iface" data-i18n="underlay_iface">Underlay/WAN interface</label>
               <input id="underlay-iface" placeholder="eth0" autocomplete="off">
             </div>
             <div class="field">
-              <label for="lan-gateway">LAN gateway CIDR</label>
+              <label for="lan-gateway" data-i18n="lan_gateway">LAN gateway CIDR</label>
               <input id="lan-gateway" value="10.44.0.1/24" autocomplete="off">
             </div>
             <div class="field">
-              <label for="advertise">Advertised LAN prefix</label>
+              <label for="advertise" data-i18n="advertise">Advertised LAN prefix</label>
               <input id="advertise" value="10.44.0.0/24" autocomplete="off">
             </div>
           </div>
 
-          <h2 class="section-title">Data Endpoint</h2>
+          <h2 class="section-title" data-i18n="data_endpoint">Data Endpoint</h2>
           <div class="grid">
             <div class="field">
-              <label for="endpoint-transport">Transport</label>
+              <label for="endpoint-transport" data-i18n="transport">Transport</label>
               <select id="endpoint-transport">
                 <option value="udp">udp</option>
                 <option value="tcp">tcp</option>
@@ -338,28 +418,28 @@
               </select>
             </div>
             <div class="field">
-              <label for="endpoint-listen">Listen address</label>
+              <label for="endpoint-listen" data-i18n="listen_address">Listen address</label>
               <input id="endpoint-listen" value="0.0.0.0:7000" autocomplete="off">
             </div>
             <div class="field full">
-              <label for="endpoint-address">Published endpoint address</label>
+              <label for="endpoint-address" data-i18n="endpoint_address">Published endpoint address</label>
               <input id="endpoint-address" value="ix-a.example.net:7000" autocomplete="off">
-              <div class="hint">Domain names are fine here, including DDNS names.</div>
+              <div class="hint" data-i18n="endpoint_address_hint">Domain names are fine here, including DDNS names.</div>
             </div>
           </div>
 
-          <h2 class="section-title">Runtime</h2>
+          <h2 class="section-title" data-i18n="runtime">Runtime</h2>
           <div class="grid">
             <div class="field">
-              <label for="api">Management/WebUI listen</label>
+              <label for="api" data-i18n="management_listen">Management/WebUI listen</label>
               <input id="api" value="127.0.0.1:8787" autocomplete="off">
             </div>
             <div class="field">
-              <label for="peer-api">Peer control listen</label>
+              <label for="peer-api" data-i18n="peer_control_listen">Peer control listen</label>
               <input id="peer-api" value="0.0.0.0:9443" autocomplete="off">
             </div>
             <div class="field">
-              <label for="dataplane">Dataplane</label>
+              <label for="dataplane" data-i18n="dataplane">Dataplane</label>
               <select id="dataplane">
                 <option value="auto">auto</option>
                 <option value="linux">linux</option>
@@ -367,7 +447,7 @@
               </select>
             </div>
             <div class="field">
-              <label for="kernel-modules">Kernel modules</label>
+              <label for="kernel-modules" data-i18n="kernel_modules">Kernel modules</label>
               <select id="kernel-modules">
                 <option value="auto">auto</option>
                 <option value="disabled">disabled</option>
@@ -376,22 +456,22 @@
             </div>
             <label class="checkbox full" for="local-install">
               <input id="local-install" type="checkbox" checked>
-              Build, install, and start on this host
+              <span data-i18n="local_install">Build, install, and start on this host</span>
             </label>
           </div>
         </form>
 
         <form id="join-form" class="hidden">
-          <h2 class="section-title">Provision Token</h2>
+          <h2 class="section-title" data-i18n="provision_token">Provision Token</h2>
           <div class="grid">
             <div class="field full">
-              <label for="provision-url">Existing IX provision URL</label>
+              <label for="provision-url" data-i18n="provision_url">Existing IX provision URL</label>
               <input id="provision-url" value="https://ix-a.example.net:8787" autocomplete="off">
             </div>
             <div class="field full">
-              <label for="token">One-time token</label>
-              <input id="token" type="password" autocomplete="off" placeholder="Paste token from the TrustIX Web UI">
-              <div class="hint">The token appears in the generated command. Treat it as a short-lived secret.</div>
+              <label for="token" data-i18n="one_time_token">One-time token</label>
+              <input id="token" type="password" autocomplete="off" placeholder="Paste token from the TrustIX Web UI" data-i18n-placeholder="token_placeholder">
+              <div class="hint" data-i18n="token_hint">The token appears in the generated command. Treat it as a short-lived secret.</div>
             </div>
           </div>
         </form>
@@ -399,20 +479,112 @@
 
       <aside class="output panel" aria-label="Generated command">
         <div class="output-head">
-          <h2 class="output-title">Generated Command</h2>
-          <button id="copy" class="button primary" type="button">Copy</button>
+          <h2 class="output-title" data-i18n="generated_command">Generated Command</h2>
+          <button id="copy" class="button primary" type="button" data-i18n="copy">Copy</button>
         </div>
         <pre id="command" aria-live="polite"></pre>
-        <div id="copied" class="notice hidden">Copied.</div>
-        <div class="notice">Run the command on the machine that should become this IX. For router targets, test on a disposable host first if kernel modules are required.</div>
-        <div id="join-warning" class="notice warning hidden">Provision tokens are one-time credentials. Do not paste this command into shared logs or tickets.</div>
+        <div id="copied" class="notice hidden" data-i18n="copied">Copied.</div>
+        <div class="notice" data-i18n="run_notice">Run the command on the machine that should become this IX. For router targets, test on a disposable host first if kernel modules are required.</div>
+        <div id="join-warning" class="notice warning hidden" data-i18n="join_warning">Provision tokens are one-time credentials. Do not paste this command into shared logs or tickets.</div>
       </aside>
     </div>
   </main>
 
   <script>
     const RAW_BASE = "https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts";
-    const state = { mode: "first", advertiseTouched: false };
+    const translations = {
+      en: {
+        app_title: "TrustIX Bootstrap Command Generator",
+        app_subhead: "Fill the fields, copy one command, and run it on the target Linux host. Values stay in this browser tab.",
+        deployment_docs: "Deployment Docs",
+        theme_system: "Theme: System",
+        theme_light: "Theme: Light",
+        theme_dark: "Theme: Dark",
+        mode_first: "New Domain / First IX",
+        mode_join: "Join With Token",
+        identity: "Identity",
+        domain_id: "Domain ID",
+        ix_id: "IX ID",
+        cert_dir: "Local CA/cert directory",
+        cert_dir_hint: "Created if missing on the first IX host.",
+        control_api: "Published control API URL",
+        lan: "LAN",
+        lan_iface: "LAN interface",
+        underlay_iface: "Underlay/WAN interface",
+        lan_gateway: "LAN gateway CIDR",
+        advertise: "Advertised LAN prefix",
+        data_endpoint: "Data Endpoint",
+        transport: "Transport",
+        listen_address: "Listen address",
+        endpoint_address: "Published endpoint address",
+        endpoint_address_hint: "Domain names are fine here, including DDNS names.",
+        runtime: "Runtime",
+        management_listen: "Management/WebUI listen",
+        peer_control_listen: "Peer control listen",
+        dataplane: "Dataplane",
+        kernel_modules: "Kernel modules",
+        local_install: "Build, install, and start on this host",
+        provision_token: "Provision Token",
+        provision_url: "Existing IX provision URL",
+        one_time_token: "One-time token",
+        token_placeholder: "Paste token from the TrustIX Web UI",
+        token_hint: "The token appears in the generated command. Treat it as a short-lived secret.",
+        generated_command: "Generated Command",
+        copy: "Copy",
+        copied: "Copied.",
+        run_notice: "Run the command on the machine that should become this IX. For router targets, test on a disposable host first if kernel modules are required.",
+        join_warning: "Provision tokens are one-time credentials. Do not paste this command into shared logs or tickets."
+      },
+      "zh-CN": {
+        app_title: "TrustIX 一键接入命令生成器",
+        app_subhead: "填写参数，复制一条命令，然后在目标 Linux 主机上执行。参数只保存在当前浏览器标签页里。",
+        deployment_docs: "部署文档",
+        theme_system: "主题：跟随系统",
+        theme_light: "主题：浅色",
+        theme_dark: "主题：暗色",
+        mode_first: "新建域 / 首个 IX",
+        mode_join: "使用 Token 接入",
+        identity: "身份",
+        domain_id: "域 ID",
+        ix_id: "IX ID",
+        cert_dir: "本地 CA/证书目录",
+        cert_dir_hint: "首个 IX 主机上不存在时会自动创建。",
+        control_api: "对外发布的控制 API URL",
+        lan: "LAN",
+        lan_iface: "LAN 接口",
+        underlay_iface: "Underlay/WAN 接口",
+        lan_gateway: "LAN 网关 CIDR",
+        advertise: "发布的 LAN 前缀",
+        data_endpoint: "数据端点",
+        transport: "传输方式",
+        listen_address: "监听地址",
+        endpoint_address: "对外发布的端点地址",
+        endpoint_address_hint: "这里可以填写域名，包括 DDNS 域名。",
+        runtime: "运行参数",
+        management_listen: "管理/WebUI 监听",
+        peer_control_listen: "Peer 控制面监听",
+        dataplane: "数据面",
+        kernel_modules: "内核模块",
+        local_install: "在本机编译、安装并启动",
+        provision_token: "接入 Token",
+        provision_url: "已有 IX 的签发 URL",
+        one_time_token: "一次性 Token",
+        token_placeholder: "粘贴 TrustIX WebUI 生成的 Token",
+        token_hint: "Token 会出现在生成的命令里，请把它当作短期密钥处理。",
+        generated_command: "生成的命令",
+        copy: "复制",
+        copied: "已复制。",
+        run_notice: "在要成为该 IX 的机器上执行这条命令。路由器类目标如果需要内核模块，建议先在可重装测试机上验证。",
+        join_warning: "Provision Token 是一次性凭据。不要把这条命令贴到公开日志或工单里。"
+      }
+    };
+    const themeOrder = ["system", "dark", "light"];
+    const state = {
+      mode: "first",
+      advertiseTouched: false,
+      lang: initialLanguage(),
+      theme: storedValue("trustix.theme") || "system"
+    };
 
     const ids = [
       "domain", "ix", "cert-dir", "control-api", "lan-iface", "underlay-iface",
@@ -423,6 +595,64 @@
 
     function el(id) {
       return document.getElementById(id);
+    }
+
+    function storedValue(key) {
+      try {
+        return window.localStorage.getItem(key) || "";
+      } catch {
+        return "";
+      }
+    }
+
+    function storeValue(key, value) {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch {
+        // Preferences are optional; private browsing can reject localStorage.
+      }
+    }
+
+    function initialLanguage() {
+      const stored = storedValue("trustix.lang");
+      if (translations[stored]) return stored;
+      const navLang = (navigator.language || "").toLowerCase();
+      return navLang.startsWith("zh") ? "zh-CN" : "en";
+    }
+
+    function t(key) {
+      return (translations[state.lang] && translations[state.lang][key]) || translations.en[key] || key;
+    }
+
+    function applyI18n() {
+      document.documentElement.lang = state.lang;
+      document.title = t("app_title");
+      el("language").value = state.lang;
+      for (const node of document.querySelectorAll("[data-i18n]")) {
+        node.textContent = t(node.getAttribute("data-i18n"));
+      }
+      for (const node of document.querySelectorAll("[data-i18n-placeholder]")) {
+        node.setAttribute("placeholder", t(node.getAttribute("data-i18n-placeholder")));
+      }
+      applyTheme();
+    }
+
+    function applyTheme() {
+      const root = document.documentElement;
+      if (state.theme === "dark" || state.theme === "light") {
+        root.dataset.theme = state.theme;
+      } else {
+        delete root.dataset.theme;
+        state.theme = "system";
+      }
+      el("theme-toggle").textContent = t(`theme_${state.theme}`);
+    }
+
+    function cycleTheme() {
+      const current = themeOrder.indexOf(state.theme);
+      state.theme = themeOrder[(current + 1 + themeOrder.length) % themeOrder.length];
+      storeValue("trustix.theme", state.theme);
+      applyTheme();
     }
 
     function value(id) {
@@ -558,6 +788,12 @@
 
     el("mode-first").addEventListener("click", () => setMode("first"));
     el("mode-join").addEventListener("click", () => setMode("join"));
+    el("language").addEventListener("change", () => {
+      state.lang = translations[value("language")] ? value("language") : "en";
+      storeValue("trustix.lang", state.lang);
+      applyI18n();
+    });
+    el("theme-toggle").addEventListener("click", cycleTheme);
     el("copy").addEventListener("click", async () => {
       await navigator.clipboard.writeText(el("command").textContent);
       el("copied").classList.remove("hidden");
@@ -565,6 +801,7 @@
     });
 
     updateDerivedFields();
+    applyI18n();
     render();
   </script>
 </body>
