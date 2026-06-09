@@ -542,6 +542,10 @@ button {
   gap: 12px;
 }
 
+.kernel-config-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .kernel-capability-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);

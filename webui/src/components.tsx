@@ -3378,13 +3378,13 @@ function ConfigKernelCapabilityEditor(props: { t: Translate; lang: string; desir
         </div>
         <Pill state={datapathModule?.loaded || helpersModule?.loaded || cryptoModule?.loaded ? "ok" : "warn"}>{datapathModule?.loaded || helpersModule?.loaded || cryptoModule?.loaded ? props.t("loaded", "Loaded") : props.t("limited", "Limited")}</Pill>
       </div>
-      <div className="kernel-summary-strip">
+      <div className="kernel-summary-strip config-wide">
         <SummaryItem label={props.t("desired", "Desired")} value={compactList([modules.capability_profile || props.t("default", "Default"), datapath.rx_stage, datapath.full_plaintext ? "full_plaintext" : ""], "-")} />
         <SummaryItem label={props.t("actual", "Actual")} value={actualSummary} />
         <SummaryItem label={props.t("kernel_modules", "Kernel modules")} value={`${formatNumber(actualModules.filter((module) => module.loaded).length, props.lang)} / ${formatNumber(actualModules.length, props.lang)}`} />
         <SummaryItem label={props.t("rx_worker", "RX worker")} value={rxStage?.rx_worker || rxStage?.mode === "worker" ? props.t("enabled", "Enabled") : props.t("disabled", "Disabled")} />
       </div>
-      <div className="form-grid">
+      <div className="form-grid config-wide kernel-config-grid">
         <SelectField label={props.t("kernel_capability_profile", "Kernel capability profile")} help={props.t("help_kernel_capability_profile", "disabled unloads managed modules; stable keeps conservative kernel support; performance enables RX worker/full-datapath feature bits; full_plaintext also enables kernel plaintext TX/RX ownership. custom lets advanced datapath switches decide.")} value={modules.capability_profile || ""} options={kernelCapabilityProfileOptions()} optionLabels={{ "": props.t("default", "Default"), disabled: props.t("disabled", "Disabled"), stable: props.t("stable", "Stable"), performance: props.t("performance", "Performance"), full_plaintext: props.t("full_plaintext", "Full plaintext"), custom: props.t("custom", "Custom") }} onChange={setProfile} />
         <SelectField label={props.t("kernel_rx_stage", "Kernel RX stage")} help={props.t("help_kernel_rx_stage", "auto follows the selected profile; stage polls packets back into userspace; worker injects packets from the kernel worker; disabled turns the hook off.")} value={datapath.rx_stage || ""} options={kernelRXStageOptions()} optionLabels={{ "": props.t("default", "Default"), auto: props.t("auto", "Auto"), disabled: props.t("disabled", "Disabled"), stage: props.t("stage", "Stage"), worker: props.t("worker", "Worker") }} onChange={(value) => updateDatapath({ rx_stage: value || undefined })} />
         <CheckField label={props.t("rx_worker", "RX worker")} help={props.t("help_kernel_rx_worker", "Enable the trustix_datapath RX worker path. This adds the safe module parameters needed for kernel-side LAN injection.")} checked={Boolean(datapath.rx_worker)} onChange={(value) => updateDatapath({ rx_worker: value })} />
