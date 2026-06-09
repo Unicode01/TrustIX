@@ -236,8 +236,8 @@ Environment:
   TRUSTIX_BOOTSTRAP_MIRRORS=0 disables GitHub/Go mirror fallbacks.
   TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS="https://proxy/" overrides GitHub mirrors.
   TRUSTIX_BOOTSTRAP_GO_URL=URL pins the Go toolchain download URL.
-  TRUSTIX_BOOTSTRAP_PROVISION_INSECURE=1 disables TLS verification for the
-  one-time provision payload fetch; use only in isolated lab testing.
+  TRUSTIX_BOOTSTRAP_PROVISION_INSECURE=0 enables normal TLS verification for
+  the one-time provision payload fetch; default is insecure for new nodes.
 
 Endpoint SPEC fields are comma-separated or semicolon-separated:
   name=ix-new-udp,transport=udp,mode=passive,listen=0.0.0.0:7000,address=ddns.example:7000
@@ -376,9 +376,9 @@ json_bool() {
 }
 
 trustix_bootstrap_provision_insecure_enabled() {
-  case "$(lower_ascii "${TRUSTIX_BOOTSTRAP_PROVISION_INSECURE:-0}")" in
-    1|true|yes|on|enabled) return 0 ;;
-    *) return 1 ;;
+  case "$(lower_ascii "${TRUSTIX_BOOTSTRAP_PROVISION_INSECURE:-1}")" in
+    0|false|no|off|disabled) return 1 ;;
+    *) return 0 ;;
   esac
 }
 
@@ -416,8 +416,8 @@ run_provision_token() {
   log "fetch provision payload"
   if ! trustix_bootstrap_fetch_provision_payload "$payload_url" "$payload"; then
     log "failed to fetch provision payload from ${payload_url}"
-    log "if this is BADCERT_CN_MISMATCH, use a --provision-url host that matches the IX HTTPS certificate"
-    log "for isolated lab testing only, set TRUSTIX_BOOTSTRAP_PROVISION_INSECURE=1"
+    log "provision payload fetch uses TLS verification disabled by default because new nodes do not have TrustIX CA material yet"
+    log "set TRUSTIX_BOOTSTRAP_PROVISION_INSECURE=0 only when the provision URL is already covered by a trusted certificate"
     die "provision payload download failed"
   fi
   chmod 0700 "$payload"

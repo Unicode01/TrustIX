@@ -213,8 +213,8 @@ Environment:
   TRUSTIX_BOOTSTRAP_MIRRORS=0 disables GitHub/Go mirror fallbacks.
   TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS="https://proxy/" overrides GitHub mirrors.
   TRUSTIX_BOOTSTRAP_GO_URL=URL pins the Go toolchain download URL.
-  TRUSTIX_BOOTSTRAP_PROVISION_INSECURE=1 disables TLS verification for the
-  one-time provision payload fetch; use only in isolated lab testing.
+  TRUSTIX_BOOTSTRAP_PROVISION_INSECURE=0 enables normal TLS verification for
+  the one-time provision payload fetch; default is insecure for new nodes.
 
 EOF
 }

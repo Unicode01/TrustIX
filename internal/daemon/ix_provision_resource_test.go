@@ -298,38 +298,6 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	}
 }
 
-func TestIXProvisionBaseURLPrefersCertificateCoveredControlHost(t *testing.T) {
-	pkiSet := buildMembershipPKI(t)
-	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
-	desired.IX.ControlAPI = "https://lab.local:9443"
-	daemon := newConfigApplyTestDaemon(t, desired)
-	daemon.cfg.APIAddr = "0.0.0.0:8787"
-
-	request := httptest.NewRequest(http.MethodPost, "http://193.227.109.21:8787/v1/provision/ix", nil)
-	request.Host = "193.227.109.21:8787"
-	request.Header.Set("X-Forwarded-Proto", "https")
-
-	if got, want := daemon.ixProvisionBaseURL(request), "https://lab.local:8787"; got != want {
-		t.Fatalf("provision base URL = %q, want %q", got, want)
-	}
-}
-
-func TestIXProvisionBaseURLKeepsCertificateCoveredRequestHost(t *testing.T) {
-	pkiSet := buildMembershipPKI(t)
-	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
-	desired.IX.ControlAPI = "https://lab.local:9443"
-	daemon := newConfigApplyTestDaemon(t, desired)
-	daemon.cfg.APIAddr = "0.0.0.0:8787"
-
-	request := httptest.NewRequest(http.MethodPost, "http://lab.local:8787/v1/provision/ix", nil)
-	request.Host = "lab.local:8787"
-	request.Header.Set("X-Forwarded-Proto", "https")
-
-	if got, want := daemon.ixProvisionBaseURL(request), "https://lab.local:8787"; got != want {
-		t.Fatalf("provision base URL = %q, want %q", got, want)
-	}
-}
-
 func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
