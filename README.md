@@ -26,38 +26,7 @@ This repository is still first-release quality. Treat kernel datapath features a
 
 ## Quick Start
 
-Generate local lab certificates:
-
-```bash
-go run ./cmd/trustix-ca quickstart -out certs -domain lab.local -ix ix-a,ix-b
-```
-
-Start a development daemon with the default config:
-
-```bash
-go run ./cmd/trustixd
-```
-
-The default config is `configs/lab-a.yaml`, the default local management API is `http://127.0.0.1:8787`, and the default dataplane mode is `noop`. On Linux test hosts, use:
-
-```bash
-go run ./cmd/trustixd -config configs/lab-a.yaml -dataplane auto
-```
-
-Query status:
-
-```bash
-go run ./cmd/trustixctl status
-go run ./cmd/trustixctl doctor
-go run ./cmd/trustixctl datapath
-```
-
-More details are in [docs/first-run.md](docs/first-run.md).
-
-## From Zero To First IX
-
-For a first real deployment, use the interactive wizard instead of hand-writing
-the first config:
+For a first real deployment, use the interactive wizard:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-wizard.sh | sudo bash
@@ -81,6 +50,42 @@ curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trus
 
 This token mode keeps CA private keys on the issuing IX/provisioner. The target
 machine only receives the deployable IX certs/config needed for that node.
+
+More deployment details are in [docs/deployment-scripts.md](docs/deployment-scripts.md).
+
+## Local Development
+
+The development path is for local lab testing only. It uses `configs/lab-a.yaml`,
+serves the management API on `http://127.0.0.1:8787`, and defaults to `noop`
+dataplane unless you pass `-dataplane auto`.
+
+Generate local lab certificates:
+
+```bash
+go run ./cmd/trustix-ca quickstart -out certs -domain lab.local -ix ix-a,ix-b
+```
+
+Start a development daemon:
+
+```bash
+go run ./cmd/trustixd
+```
+
+On Linux test hosts:
+
+```bash
+go run ./cmd/trustixd -config configs/lab-a.yaml -dataplane auto
+```
+
+Query status:
+
+```bash
+go run ./cmd/trustixctl status
+go run ./cmd/trustixctl doctor
+go run ./cmd/trustixctl datapath
+```
+
+More local runtime details are in [docs/first-run.md](docs/first-run.md).
 
 ## Build And Test
 
