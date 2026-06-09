@@ -165,29 +165,51 @@ wait_systemd_unit_active() {
   local result=""
   local exec_status=""
   local restarts=""
+  local baseline_restarts=""
   local i
-  for i in {1..8}; do
+  for i in {1..10}; do
     state="$(run_root systemctl is-active "$unit" 2>/dev/null || true)"
     case "$state" in
-      active) return 0 ;;
+      active) break ;;
       failed) break ;;
     esac
     result="$(run_root systemctl show "$unit" --property=Result --value 2>/dev/null || true)"
     exec_status="$(run_root systemctl show "$unit" --property=ExecMainStatus --value 2>/dev/null || true)"
-    restarts="$(run_root systemctl show "$unit" --property=NRestarts --value 2>/dev/null || true)"
     if [[ -n "$result" && "$result" != "success" && "$result" != "exit-code" ]]; then
       break
     fi
-    if [[ "${exec_status:-0}" != "0" || "${restarts:-0}" != "0" ]]; then
+    if [[ "${exec_status:-0}" != "0" ]]; then
       break
     fi
     sleep 1
   done
+  if [[ "$state" == "active" ]]; then
+    baseline_restarts="$(run_root systemctl show "$unit" --property=NRestarts --value 2>/dev/null || true)"
+    for i in {1..5}; do
+      sleep 1
+      state="$(run_root systemctl is-active "$unit" 2>/dev/null || true)"
+      result="$(run_root systemctl show "$unit" --property=Result --value 2>/dev/null || true)"
+      exec_status="$(run_root systemctl show "$unit" --property=ExecMainStatus --value 2>/dev/null || true)"
+      restarts="$(run_root systemctl show "$unit" --property=NRestarts --value 2>/dev/null || true)"
+      if [[ "$state" != "active" ]]; then
+        break
+      fi
+      if [[ -n "$baseline_restarts" && -n "$restarts" && "$restarts" != "$baseline_restarts" ]]; then
+        break
+      fi
+      if [[ "${exec_status:-0}" != "0" ]]; then
+        break
+      fi
+    done
+    if [[ "$state" == "active" && ( -z "$baseline_restarts" || -z "$restarts" || "$restarts" == "$baseline_restarts" ) && "${exec_status:-0}" == "0" ]]; then
+      return 0
+    fi
+  fi
   run_root systemctl show "$unit" --property=ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,NRestarts >&2 || true
   run_root systemctl --no-pager --full status "$unit" >&2 || true
   run_root journalctl -u "$unit" --no-pager -n 80 >&2 || true
   run_root systemctl stop "$unit" >/dev/null 2>&1 || true
-  die "systemd unit did not become active: ${unit} (state=${state:-unknown}, result=${result:-unknown}, exec_status=${exec_status:-unknown}, restarts=${restarts:-unknown})"
+  die "systemd unit did not stay active: ${unit} (state=${state:-unknown}, result=${result:-unknown}, exec_status=${exec_status:-unknown}, restarts=${restarts:-unknown}, baseline_restarts=${baseline_restarts:-unknown})"
 }
 
 install_file() {

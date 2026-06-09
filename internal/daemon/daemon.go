@@ -417,7 +417,71 @@ func (daemon *Daemon) startHostAPIServerLocked() error {
 	if err != nil {
 		return err
 	}
+	if runtime, ok := daemon.apiServerCoveringListenLocked(listen); ok {
+		daemon.apiServers = append(daemon.apiServers, apiServerRuntime{
+			Name:   apiServerHost,
+			Listen: listen,
+			TLS:    runtime.TLS,
+		})
+		return nil
+	}
 	return daemon.startAPIServerLocked(apiServerHost, listen, daemon.hostAPIHandler())
+}
+
+func (daemon *Daemon) apiServerCoveringListenLocked(listen string) (apiServerRuntime, bool) {
+	for _, runtime := range daemon.apiServers {
+		if runtime.Server == nil {
+			continue
+		}
+		if apiServerListenCovers(runtime.Listen, listen) {
+			return runtime, true
+		}
+	}
+	return apiServerRuntime{}, false
+}
+
+func apiServerListenCovers(existing, requested string) bool {
+	existing = strings.TrimSpace(existing)
+	requested = strings.TrimSpace(requested)
+	if existing == "" || requested == "" {
+		return false
+	}
+	if existing == requested {
+		return true
+	}
+	existingHost, existingPort, err := net.SplitHostPort(existing)
+	if err != nil {
+		return false
+	}
+	requestedHost, requestedPort, err := net.SplitHostPort(requested)
+	if err != nil || existingPort != requestedPort {
+		return false
+	}
+	if existingHost == requestedHost {
+		return true
+	}
+	existingAddr, err := netip.ParseAddr(existingHost)
+	if err != nil {
+		if existingHost != "" {
+			return false
+		}
+	} else if !existingAddr.IsUnspecified() {
+		return false
+	}
+	if requestedHost == "" {
+		return true
+	}
+	requestedAddr, err := netip.ParseAddr(requestedHost)
+	if err != nil {
+		return false
+	}
+	if existingHost == "" {
+		return true
+	}
+	if existingAddr.Is4() {
+		return requestedAddr.Is4()
+	}
+	return existingAddr.Is6() && requestedAddr.Is6()
 }
 
 func (daemon *Daemon) startAPIServerLocked(name string, listen string, handler http.Handler) error {
