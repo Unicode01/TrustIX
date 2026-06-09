@@ -1,0 +1,131 @@
+#!/bin/sh /etc/rc.common
+
+START=95
+STOP=10
+USE_PROCD=1
+
+NAME=trustix
+TRUSTIX_SYSCONFDIR="${TRUSTIX_SYSCONFDIR:-/etc/trustix}"
+
+trustix_log() {
+	echo "[trustix] $*" >&2
+}
+
+trustix_instance_env() {
+	local instance="$1"
+	printf '%s/%s.env\n' "$TRUSTIX_SYSCONFDIR" "$instance"
+}
+
+trustix_load_env() {
+	local instance="$1"
+	local env_file="$2"
+
+	TRUSTIX_BIN=""
+	TRUSTIX_CONFIG="${TRUSTIX_SYSCONFDIR}/${instance}.yaml"
+	TRUSTIX_DATA_DIR="/etc/trustix/state/${instance}"
+	TRUSTIX_API_ADDR="127.0.0.1:8787"
+	TRUSTIX_PEER_API_ADDR="0.0.0.0:9443"
+	TRUSTIX_DATAPLANE="auto"
+	TRUSTIX_EXTRA_ARGS=""
+
+	if [ -f "$env_file" ]; then
+		# shellcheck disable=SC1090
+		. "$env_file"
+	fi
+	if [ -z "$TRUSTIX_BIN" ]; then
+		if [ -x /opt/trustix/bin/trustixd ]; then
+			TRUSTIX_BIN=/opt/trustix/bin/trustixd
+		else
+			TRUSTIX_BIN=/usr/local/bin/trustixd
+		fi
+	fi
+}
+
+trustix_cleanup_dataplane() {
+	local instance="$1"
+	local env_file="$2"
+
+	trustix_load_env "$instance" "$env_file"
+	[ -x "$TRUSTIX_BIN" ] || return 0
+	"$TRUSTIX_BIN" \
+		-config "$TRUSTIX_CONFIG" \
+		-data-dir "$TRUSTIX_DATA_DIR" \
+		-api "$TRUSTIX_API_ADDR" \
+		-peer-api "$TRUSTIX_PEER_API_ADDR" \
+		-dataplane "$TRUSTIX_DATAPLANE" \
+		-cleanup-dataplane >/dev/null 2>&1 || true
+}
+
+trustix_start_one() {
+	local instance="$1"
+	local env_file="$2"
+	local arg
+
+	trustix_load_env "$instance" "$env_file"
+	if [ ! -x "$TRUSTIX_BIN" ]; then
+		trustix_log "missing executable: $TRUSTIX_BIN"
+		return 1
+	fi
+	mkdir -p "$TRUSTIX_DATA_DIR" || return 1
+	trustix_cleanup_dataplane "$instance" "$env_file"
+
+	procd_open_instance "$instance"
+	procd_set_param command "$TRUSTIX_BIN" \
+		-config "$TRUSTIX_CONFIG" \
+		-data-dir "$TRUSTIX_DATA_DIR" \
+		-api "$TRUSTIX_API_ADDR" \
+		-peer-api "$TRUSTIX_PEER_API_ADDR" \
+		-dataplane "$TRUSTIX_DATAPLANE"
+	for arg in $TRUSTIX_EXTRA_ARGS; do
+		procd_append_param command "$arg"
+	done
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+trustix_for_each_instance() {
+	local callback="$1"
+	local requested="$2"
+	local env_file instance found
+
+	if [ -n "$requested" ]; then
+		env_file="$(trustix_instance_env "$requested")"
+		"$callback" "$requested" "$env_file"
+		return $?
+	fi
+
+	found=0
+	for env_file in "$TRUSTIX_SYSCONFDIR"/*.env; do
+		[ -f "$env_file" ] || continue
+		instance="${env_file##*/}"
+		instance="${instance%.env}"
+		[ -n "$instance" ] || continue
+		found=1
+		"$callback" "$instance" "$env_file" || return $?
+	done
+	if [ "$found" -eq 0 ]; then
+		trustix_log "no ${TRUSTIX_SYSCONFDIR}/*.env instances found"
+	fi
+}
+
+start_service() {
+	trustix_for_each_instance trustix_start_one "${1:-}"
+}
+
+stop_service() {
+	local requested="${1:-}"
+	if [ -n "$requested" ]; then
+		procd_kill "$NAME" "$requested" 2>/dev/null || true
+	else
+		procd_kill "$NAME" 2>/dev/null || true
+	fi
+	sleep 1
+	trustix_for_each_instance trustix_cleanup_dataplane "$requested"
+}
+
+reload_service() {
+	stop_service "$@"
+	start_service "$@"
+}

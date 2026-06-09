@@ -22,7 +22,7 @@ usage() {
   cat <<'EOF'
 usage: scripts/trustix-update.sh [options]
 
-Updates an existing TrustIX systemd installation without rewriting config,
+Updates an existing TrustIX systemd/OpenWrt installation without rewriting config,
 certificates, or data directories.
 
 Package input:
@@ -41,10 +41,13 @@ Source-build input, used when no release tarball is provided:
 
 Install/restart:
   --instance NAME           trustixd@NAME instance to restart; repeatable
-  --no-restart              install only; do not restart systemd instances
-  --prefix DIR              install prefix (default: /usr/local)
+  --service-manager MODE    auto, systemd, or openwrt (default: auto)
+  --no-restart              install only; do not restart service instances
+  --prefix DIR              install prefix (default: /usr/local, OpenWrt: /opt/trustix)
   --bindir DIR              binary dir (default: PREFIX/bin)
   --unitdir DIR             systemd unit dir (default: /etc/systemd/system)
+  --initdir DIR             OpenWrt init dir (default: /etc/init.d)
+  --sysconfdir DIR          config dir for OpenWrt instance detection (default: /etc/trustix)
   --docdir DIR              docs dir (default: /usr/share/doc/trustix)
   --backup-dir DIR          backup dir (default: /var/backups/trustix/update-TIMESTAMP)
   --no-backup               do not copy old binaries/unit before replacing
@@ -87,6 +90,11 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+lower_ascii() {
+  local value="$1"
+  printf '%s' "${value,,}"
+}
+
 normalize_goarch() {
   case "${1:-}" in
     amd64|x86_64) printf 'amd64\n' ;;
@@ -105,6 +113,58 @@ run_root() {
     "$sudo_cmd" "$@"
   else
     "$@"
+  fi
+}
+
+copy_file_with_mode() {
+  local src="$1"
+  local dst="$2"
+  local mode="$3"
+  local dir="${dst%/*}"
+  [[ "$dir" != "$dst" ]] && run_root mkdir -p "$dir"
+  if command -v install >/dev/null 2>&1; then
+    run_root install -m "$mode" "$src" "$dst"
+  else
+    run_root cp "$src" "$dst"
+    run_root chmod "$mode" "$dst"
+  fi
+}
+
+detect_service_manager() {
+  if [[ "$service_manager" != "auto" ]]; then
+    printf '%s\n' "$service_manager"
+    return
+  fi
+  if [[ -f /etc/openwrt_release && ( -x /sbin/procd || -d /etc/init.d ) ]]; then
+    printf 'openwrt\n'
+    return
+  fi
+  if command -v systemctl >/dev/null 2>&1 || [[ -d /run/systemd/system ]]; then
+    printf 'systemd\n'
+    return
+  fi
+  die "could not auto-detect service manager; pass --service-manager systemd|openwrt or --no-restart"
+}
+
+apply_target_defaults() {
+  service_manager="$(detect_service_manager)"
+  if [[ -z "$prefix" ]]; then
+    case "$service_manager" in
+      openwrt) prefix="/opt/trustix" ;;
+      *) prefix="/usr/local" ;;
+    esac
+  fi
+  if [[ -z "$bindir" ]]; then
+    bindir="${prefix}/bin"
+  fi
+  if [[ -z "$unitdir" ]]; then
+    unitdir="/etc/systemd/system"
+  fi
+  if [[ -z "$initdir" ]]; then
+    initdir="/etc/init.d"
+  fi
+  if [[ -z "$sysconfdir" ]]; then
+    sysconfdir="/etc/trustix"
   fi
 }
 
@@ -133,9 +193,12 @@ build_ko="${TRUSTIX_UPDATE_BUILD_KO:-auto}"
 build_webui=0
 instances=()
 restart=1
-prefix="${TRUSTIX_UPDATE_PREFIX:-/usr/local}"
+service_manager="${TRUSTIX_UPDATE_SERVICE_MANAGER:-auto}"
+prefix="${TRUSTIX_UPDATE_PREFIX:-}"
 bindir="${TRUSTIX_UPDATE_BINDIR:-}"
-unitdir="${TRUSTIX_UPDATE_UNITDIR:-/etc/systemd/system}"
+unitdir="${TRUSTIX_UPDATE_UNITDIR:-}"
+initdir="${TRUSTIX_UPDATE_INITDIR:-}"
+sysconfdir="${TRUSTIX_UPDATE_SYSCONFDIR:-}"
 docdir="${TRUSTIX_UPDATE_DOCDIR:-/usr/share/doc/trustix}"
 backup_dir="${TRUSTIX_UPDATE_BACKUP_DIR:-}"
 backup=1
@@ -155,10 +218,13 @@ while [[ $# -gt 0 ]]; do
     --build-ko) [[ $# -ge 2 ]] || die "--build-ko requires a value"; build_ko="$2"; shift 2 ;;
     --build-webui) build_webui=1; shift ;;
     --instance) [[ $# -ge 2 ]] || die "--instance requires a value"; instances+=("$2"); shift 2 ;;
+    --service-manager) [[ $# -ge 2 ]] || die "--service-manager requires a value"; service_manager="$2"; shift 2 ;;
     --no-restart) restart=0; shift ;;
     --prefix) [[ $# -ge 2 ]] || die "--prefix requires a value"; prefix="$2"; shift 2 ;;
     --bindir) [[ $# -ge 2 ]] || die "--bindir requires a value"; bindir="$2"; shift 2 ;;
     --unitdir) [[ $# -ge 2 ]] || die "--unitdir requires a value"; unitdir="$2"; shift 2 ;;
+    --initdir) [[ $# -ge 2 ]] || die "--initdir requires a value"; initdir="$2"; shift 2 ;;
+    --sysconfdir) [[ $# -ge 2 ]] || die "--sysconfdir requires a value"; sysconfdir="$2"; shift 2 ;;
     --docdir) [[ $# -ge 2 ]] || die "--docdir requires a value"; docdir="$2"; shift 2 ;;
     --backup-dir) [[ $# -ge 2 ]] || die "--backup-dir requires a value"; backup_dir="$2"; shift 2 ;;
     --no-backup) backup=0; shift ;;
@@ -170,15 +236,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$(uname -s)" == "Linux" ]] || die "update script must run on Linux"
+service_manager="$(lower_ascii "$service_manager")"
+case "$service_manager" in
+  auto|systemd|openwrt) ;;
+  *) die "--service-manager must be auto, systemd, or openwrt" ;;
+esac
 case "$build_bpf" in 0|1) ;; *) die "--build-bpf must be 0 or 1" ;; esac
 case "$build_ko" in auto|0|1) ;; *) die "--build-ko must be auto, 0, or 1" ;; esac
 case "$build_webui" in 0|1) ;; *) die "--build-webui must be 0 or 1" ;; esac
 if [[ -n "$release_url" && -n "$tarball" ]]; then
   die "--release-url and --tarball are mutually exclusive"
 fi
-if [[ -z "$bindir" ]]; then
-  bindir="${prefix}/bin"
-fi
+apply_target_defaults
 if [[ -z "$work_dir" ]]; then
   work_dir="$(mktemp -d /tmp/trustix-update.XXXXXX)"
 else
@@ -237,9 +306,9 @@ extract_package() {
   rm -rf "$package_dir"
   mkdir -p "$package_dir"
   tar -xzf "$tarball" -C "$package_dir"
-  [[ -x "${package_dir}/bin/trustixd" ]] || die "package is missing bin/trustixd"
-  [[ -x "${package_dir}/bin/trustixctl" ]] || die "package is missing bin/trustixctl"
-  [[ -x "${package_dir}/bin/trustix-ca" ]] || die "package is missing bin/trustix-ca"
+  [[ -f "${package_dir}/bin/trustixd" ]] || die "package is missing bin/trustixd"
+  [[ -f "${package_dir}/bin/trustixctl" ]] || die "package is missing bin/trustixctl"
+  [[ -f "${package_dir}/bin/trustix-ca" ]] || die "package is missing bin/trustix-ca"
   printf '%s\n' "$package_dir"
 }
 
@@ -255,7 +324,7 @@ backup_file_if_present() {
   [[ -e "$path" ]] || return 0
   local dst
   dst="$(backup_path "$path")"
-  run_root install -D -m 0644 "$path" "$dst"
+  copy_file_with_mode "$path" "$dst" 0644
 }
 
 install_binary() {
@@ -264,7 +333,7 @@ install_binary() {
   local tmp="${dst}.trustix-update.$$"
   backup_file_if_present "$dst"
   run_root mkdir -p "$bindir"
-  run_root install -m 0755 "$src" "$tmp"
+  copy_file_with_mode "$src" "$tmp" 0755
   run_root mv -f "$tmp" "$dst"
 }
 
@@ -274,8 +343,7 @@ install_regular_file() {
   local mode="$3"
   local tmp="${dst}.trustix-update.$$"
   backup_file_if_present "$dst"
-  run_root mkdir -p "$(dirname "$dst")"
-  run_root install -m "$mode" "$src" "$tmp"
+  copy_file_with_mode "$src" "$tmp" "$mode"
   run_root mv -f "$tmp" "$dst"
 }
 
@@ -283,14 +351,24 @@ install_package() {
   local package_dir="$1"
   local name
   for name in trustixd trustixctl trustix-ca trustix-device trustix-iptunnel-smoke; do
-    if [[ -x "${package_dir}/bin/${name}" ]]; then
+    if [[ -f "${package_dir}/bin/${name}" ]]; then
       log "install ${name}"
       install_binary "${package_dir}/bin/${name}"
     fi
   done
   if [[ -f "${package_dir}/packaging/systemd/trustixd@.service" ]]; then
-    log "install systemd unit"
-    install_regular_file "${package_dir}/packaging/systemd/trustixd@.service" "${unitdir}/trustixd@.service" 0644
+    if [[ "$service_manager" == "systemd" ]]; then
+      log "install systemd unit"
+      install_regular_file "${package_dir}/packaging/systemd/trustixd@.service" "${unitdir}/trustixd@.service" 0644
+    fi
+  fi
+  if [[ "$service_manager" == "openwrt" ]]; then
+    if [[ -f "${package_dir}/packaging/openwrt/trustix.init" ]]; then
+      log "install OpenWrt init script"
+      install_regular_file "${package_dir}/packaging/openwrt/trustix.init" "${initdir}/trustix" 0755
+    else
+      die "package is missing packaging/openwrt/trustix.init"
+    fi
   fi
   if [[ -d "${package_dir}/docs" ]]; then
     run_root mkdir -p "$docdir"
@@ -304,6 +382,16 @@ install_package() {
 
 detect_instances() {
   [[ ${#instances[@]} -eq 0 ]] || return 0
+  if [[ "$service_manager" == "openwrt" ]]; then
+    local env_file name
+    for env_file in "${sysconfdir}"/*.env; do
+      [[ -f "$env_file" ]] || continue
+      name="$(basename "$env_file")"
+      name="${name%.env}"
+      [[ -n "$name" ]] && instances+=("$name")
+    done
+    return 0
+  fi
   command -v systemctl >/dev/null 2>&1 || return 0
   local units unit name
   units="$(systemctl list-units --full --all --plain --no-legend 'trustixd@*.service' 2>/dev/null || true)"
@@ -319,18 +407,34 @@ detect_instances() {
 
 restart_instances() {
   [[ "$restart" == "1" ]] || return 0
-  command -v systemctl >/dev/null 2>&1 || die "systemctl not found; rerun with --no-restart"
   detect_instances
-  run_root systemctl daemon-reload
-  if [[ ${#instances[@]} -eq 0 ]]; then
-    log "no trustixd@*.service instance detected; installed binaries only"
-    return 0
-  fi
-  local instance
-  for instance in "${instances[@]}"; do
-    log "restart trustixd@${instance}.service"
-    run_root systemctl restart "trustixd@${instance}.service"
-  done
+  case "$service_manager" in
+    systemd)
+      command -v systemctl >/dev/null 2>&1 || die "systemctl not found; rerun with --no-restart"
+      run_root systemctl daemon-reload
+      if [[ ${#instances[@]} -eq 0 ]]; then
+        log "no trustixd@*.service instance detected; installed binaries only"
+        return 0
+      fi
+      local instance
+      for instance in "${instances[@]}"; do
+        log "restart trustixd@${instance}.service"
+        run_root systemctl restart "trustixd@${instance}.service"
+      done
+      ;;
+    openwrt)
+      [[ -x "${initdir}/trustix" ]] || die "OpenWrt init script not found: ${initdir}/trustix"
+      if [[ ${#instances[@]} -eq 0 ]]; then
+        log "no ${sysconfdir}/*.env instance detected; installed binaries only"
+        return 0
+      fi
+      local instance
+      for instance in "${instances[@]}"; do
+        log "restart trustix:${instance}"
+        run_root "${initdir}/trustix" restart "$instance"
+      done
+      ;;
+  esac
 }
 
 package_dir=""
@@ -342,15 +446,24 @@ restart_instances
 if [[ "$json" == "1" ]]; then
   printf '{'
   printf '"tarball":"%s",' "$(json_escape "$tarball")"
+  printf '"service_manager":"%s",' "$(json_escape "$service_manager")"
   printf '"bindir":"%s",' "$(json_escape "$bindir")"
-  printf '"unit":"%s",' "$(json_escape "${unitdir}/trustixd@.service")"
+  if [[ "$service_manager" == "openwrt" ]]; then
+    printf '"init":"%s",' "$(json_escape "${initdir}/trustix")"
+  else
+    printf '"unit":"%s",' "$(json_escape "${unitdir}/trustixd@.service")"
+  fi
   printf '"backup_dir":"%s",' "$(json_escape "$backup_dir")"
   printf '"restarted":['
   first=1
   for instance in "${instances[@]}"; do
     if [[ "$first" == "0" ]]; then printf ','; fi
     first=0
-    printf '"trustixd@%s.service"' "$(json_escape "$instance")"
+    if [[ "$service_manager" == "openwrt" ]]; then
+      printf '"trustix:%s"' "$(json_escape "$instance")"
+    else
+      printf '"trustixd@%s.service"' "$(json_escape "$instance")"
+    fi
   done
   printf ']'
   printf '}\n'

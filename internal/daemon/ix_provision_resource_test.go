@@ -173,6 +173,54 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	}
 }
 
+func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:            "ix-openwrt",
+		Advertise:       []core.Prefix{"10.52.0.0/24"},
+		EndpointAddress: "router.example.com:7000",
+		ProvisionURL:    "https://ix-a.example.com:18787",
+		ServiceManager:  "openwrt",
+		DNSDomain:       "Trust.IX.",
+		OpenWRTDNSMasq:  "1",
+	}, desired)
+	if err != nil {
+		t.Fatalf("normalize provision request: %v", err)
+	}
+	if request.ServiceManager != "openwrt" || request.DNSEnabled != "1" || request.OpenWRTDNSMasq != "1" || request.DNSDomain != "trust.ix" {
+		t.Fatalf("normalized OpenWrt DNS request = %#v", request)
+	}
+	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
+	if err != nil {
+		t.Fatalf("desired for provision: %v", err)
+	}
+	if !target.DNS.Enabled || !target.DNS.DNSMasq.Enabled || target.DNS.Domain != "trust.ix" {
+		t.Fatalf("target DNS = %#v", target.DNS)
+	}
+	script, err := ixProvisionBootstrapScript(ixProvisionScriptInput{
+		IXID:           request.IXID,
+		ConfigJSON:     `{"dns":{"enabled":true,"dnsmasq":{"enabled":true}}}`,
+		CertificatePEM: "CERT",
+		PrivateKeyPEM:  "KEY",
+		RouteAuthPEM:   "ROUTE",
+		TargetCertDir:  request.TargetCertDir,
+		APIAddr:        request.APIAddr,
+		PeerAPIAddr:    request.PeerAPIAddr,
+		Dataplane:      request.Dataplane,
+		ServiceManager: request.ServiceManager,
+		BuildBPF:       request.BuildBPF,
+		BuildKO:        request.BuildKO,
+		BuildWebUI:     request.BuildWebUI,
+	})
+	if err != nil {
+		t.Fatalf("bootstrap script: %v", err)
+	}
+	if !strings.Contains(script, "--service-manager 'openwrt'") {
+		t.Fatalf("bootstrap script does not force OpenWrt service manager:\n%s", script)
+	}
+}
+
 func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")

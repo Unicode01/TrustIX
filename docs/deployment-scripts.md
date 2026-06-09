@@ -68,7 +68,33 @@ scripts/trustix-deploy.sh \
 
 Omit `--target` for local deployment. SSH options are `--ssh-port`, `--ssh-key`, and repeated `--ssh-option`.
 
-Deployment installs binaries, the systemd unit, config, certificates, and an `/etc/trustix/<instance>.env` file. The unit supports `TRUSTIX_EXTRA_ARGS`, used by `--admin-auth` and repeated `--extra-arg`.
+Deployment installs binaries, config, certificates, and an `/etc/trustix/<instance>.env` file. `--service-manager auto` detects systemd on normal Linux and OpenWrt procd on OpenWrt. Systemd installs `trustixd@.service`; OpenWrt installs `/etc/init.d/trustix`.
+
+OpenWrt defaults are deliberately different from general Linux: binaries go under `/opt/trustix/bin`, persistent runtime state under `/etc/trustix/state/<instance>`, and certificates/config still live under `/etc/trustix`. Use `--service-manager openwrt` to force this path:
+
+```bash
+scripts/trustix-deploy.sh \
+  --target root@openwrt.example \
+  --service-manager openwrt \
+  --tarball build/release/trustix-linux-amd64.tar.gz \
+  --instance ix-router \
+  --config build/bootstrap/ix-router/config/ix-router.json \
+  --cert-dir build/bootstrap/ix-router/deploy-certs \
+  --dataplane auto \
+  --admin-auth
+```
+
+The service wrappers support `TRUSTIX_EXTRA_ARGS`, used by `--admin-auth` and repeated `--extra-arg`.
+
+After deploying to OpenWrt, a read-only smoke check can verify the procd wrapper,
+instance env, binary/config paths, and optional dnsmasq rule:
+
+```bash
+scripts/openwrt-procd-dns-smoke.sh \
+  --target root@openwrt.example \
+  --instance ix-router \
+  --dns-domain trust.ix
+```
 
 ## Update
 
@@ -78,7 +104,7 @@ curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trus
     --release-url https://github.com/Unicode01/TrustIX/releases/download/v0.1.0/trustix-linux-amd64.tar.gz
 ```
 
-`trustix-update.sh` is for in-place upgrades of an existing systemd install. It replaces the binaries and `trustixd@.service`, preserves `/etc/trustix`, certificates, and data directories, then restarts detected `trustixd@*.service` instances. Pass `--instance ix-a` one or more times to choose instances explicitly, or `--no-restart` to only install files.
+`trustix-update.sh` is for in-place upgrades of an existing systemd or OpenWrt install. It replaces the binaries and service wrapper, preserves `/etc/trustix`, certificates, and data directories, then restarts detected instances. Pass `--instance ix-a` one or more times to choose instances explicitly, or `--no-restart` to only install files.
 
 When no `--release-url` or `--tarball` is provided, the script clones the repo and builds a release locally:
 
@@ -120,6 +146,7 @@ scripts/trustix-bootstrap-ix.sh \
 Bootstrap requires the Domain CA key to issue the IX certificate and the Config CA key to issue route authorization. It writes the target config as JSON, stages deployable certs, optionally builds a release tarball, and optionally deploys it.
 
 Use semicolon-separated endpoint specs when a value contains commas, such as GRE/IPIP/VXLAN endpoint strings.
+For OpenWrt, add `--service-manager openwrt --dns-enabled 1 --openwrt-dnsmasq 1` when you want the target IX to answer TrustIX DNS names through dnsmasq conditional forwarding. This keeps dnsmasq on LAN port 53 and forwards only the TrustIX DNS suffix to the built-in resolver.
 The wizard/bootstrap scripts automatically install missing source-build
 dependencies through the host package manager when possible. Set
 `TRUSTIX_BOOTSTRAP_INSTALL_DEPS=0` to disable package installation in locked-down

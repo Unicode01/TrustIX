@@ -53,6 +53,10 @@ type ixProvisionIssueRequest struct {
 	APIAddr             string          `json:"api_addr,omitempty"`
 	PeerAPIAddr         string          `json:"peer_api_addr,omitempty"`
 	Dataplane           string          `json:"dataplane,omitempty"`
+	ServiceManager      string          `json:"service_manager,omitempty"`
+	DNSEnabled          string          `json:"dns_enabled,omitempty"`
+	DNSDomain           string          `json:"dns_domain,omitempty"`
+	OpenWRTDNSMasq      string          `json:"openwrt_dnsmasq,omitempty"`
 	KernelModules       string          `json:"kernel_modules,omitempty"`
 	GOArch              string          `json:"goarch,omitempty"`
 	KDir                string          `json:"kdir,omitempty"`
@@ -125,6 +129,7 @@ type ixProvisionScriptInput struct {
 	APIAddr        string
 	PeerAPIAddr    string
 	Dataplane      string
+	ServiceManager string
 	GOArch         string
 	KDir           string
 	BuildBPF       string
@@ -283,6 +288,7 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 		APIAddr:        normalized.APIAddr,
 		PeerAPIAddr:    normalized.PeerAPIAddr,
 		Dataplane:      normalized.Dataplane,
+		ServiceManager: normalized.ServiceManager,
 		GOArch:         normalized.GOArch,
 		KDir:           normalized.KDir,
 		BuildBPF:       normalized.BuildBPF,
@@ -561,6 +567,33 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 	if request.Dataplane == "" {
 		request.Dataplane = "auto"
 	}
+	request.ServiceManager = strings.ToLower(strings.TrimSpace(request.ServiceManager))
+	if request.ServiceManager == "" {
+		request.ServiceManager = "auto"
+	}
+	switch request.ServiceManager {
+	case "auto", "systemd", "openwrt":
+	default:
+		return ixProvisionIssueRequest{}, nil, fmt.Errorf("service_manager must be auto, systemd, or openwrt")
+	}
+	request.DNSEnabled = strings.TrimSpace(request.DNSEnabled)
+	if request.DNSEnabled == "" {
+		request.DNSEnabled = "0"
+	}
+	request.OpenWRTDNSMasq = strings.TrimSpace(request.OpenWRTDNSMasq)
+	if request.OpenWRTDNSMasq == "" {
+		request.OpenWRTDNSMasq = "0"
+	}
+	if err := validateProvisionToggle("dns_enabled", request.DNSEnabled, "0", "1"); err != nil {
+		return ixProvisionIssueRequest{}, nil, err
+	}
+	if err := validateProvisionToggle("openwrt_dnsmasq", request.OpenWRTDNSMasq, "0", "1"); err != nil {
+		return ixProvisionIssueRequest{}, nil, err
+	}
+	if request.OpenWRTDNSMasq == "1" {
+		request.DNSEnabled = "1"
+	}
+	request.DNSDomain = strings.ToLower(strings.Trim(strings.TrimSpace(request.DNSDomain), "."))
 	request.KernelModules = strings.ToLower(strings.TrimSpace(request.KernelModules))
 	if request.KernelModules == "" {
 		request.KernelModules = "auto"
@@ -1021,6 +1054,11 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			},
 			WebUI: config.WebUIConfig{Enabled: true},
 		},
+		DNS: config.DNSConfig{
+			Enabled: request.DNSEnabled == "1",
+			Domain:  request.DNSDomain,
+			DNSMasq: config.DNSMasqConfig{Enabled: request.OpenWRTDNSMasq == "1"},
+		},
 		KernelModules: config.KernelModulesConfig{
 			TrustIXCrypto:          config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
 			TrustIXDatapath:        config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
@@ -1153,6 +1191,8 @@ func ixProvisionBootstrapScript(input ixProvisionScriptInput) (string, error) {
 	b.WriteString(shellQuote(input.PeerAPIAddr))
 	b.WriteString(" --dataplane ")
 	b.WriteString(shellQuote(input.Dataplane))
+	b.WriteString(" --service-manager ")
+	b.WriteString(shellQuote(input.ServiceManager))
 	b.WriteString(" --admin-auth --json)\n")
 	b.WriteString("log \"install TrustIX IX ")
 	b.WriteString(shellScriptLiteral(string(input.IXID)))
@@ -1209,15 +1249,19 @@ func mustJSONScalar(value any) []byte {
 }
 
 func ixProvisionCommand(provisionURL, token string) string {
-	args := []string{
-		"--provision-url", provisionURL,
-		"--token", token,
+	url := ixBootstrapScriptURL()
+	args := []string{"--provision-url", provisionURL, "--token", token}
+	parts := []string{
+		"tmp=\"$(mktemp /tmp/trustix-bootstrap.XXXXXX)\"",
+		"(curl -fsSL " + shellQuote(url) + " -o \"$tmp\" || wget -qO \"$tmp\" " + shellQuote(url) + ")",
+		"if ! command -v bash >/dev/null 2>&1; then if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; elif command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y bash; elif command -v dnf >/dev/null 2>&1; then dnf install -y bash; elif command -v yum >/dev/null 2>&1; then yum install -y bash; elif command -v apk >/dev/null 2>&1; then apk add --no-cache bash; else echo 'bash is required' >&2; rm -f \"$tmp\"; exit 127; fi; fi",
+		"bash \"$tmp\"",
 	}
-	parts := []string{"curl -fsSL " + shellQuote(ixBootstrapScriptURL()) + " | bash -s --"}
 	for _, arg := range args {
-		parts = append(parts, "  "+shellQuote(arg))
+		parts[len(parts)-1] += " " + shellQuote(arg)
 	}
-	return strings.Join(parts, " \\\n")
+	parts[len(parts)-1] += "; rc=$?; rm -f \"$tmp\"; [ \"$rc\" -eq 0 ]"
+	return strings.Join(parts, " && \\\n")
 }
 
 func ixBootstrapScriptURL() string {

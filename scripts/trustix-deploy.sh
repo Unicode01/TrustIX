@@ -24,18 +24,20 @@ Options:
   --config PATH              config file to install
   --cert-dir DIR             cert directory to install
   --target-cert-dir DIR      target cert dir (default: /etc/trustix/certs)
-  --prefix DIR               install prefix (default: /usr/local)
+  --service-manager MODE     auto, systemd, or openwrt (default: auto)
+  --prefix DIR               install prefix (default: /usr/local, OpenWrt: /opt/trustix)
   --sysconfdir DIR           config dir (default: /etc/trustix)
   --unitdir DIR              systemd unit dir (default: /etc/systemd/system)
-  --state-root DIR           state root (default: /var/lib/trustix)
+  --initdir DIR              OpenWrt init dir (default: /etc/init.d)
+  --state-root DIR           state root (default: /var/lib/trustix, OpenWrt: /etc/trustix/state)
   --api ADDR                 management API listen (default: 127.0.0.1:8787)
   --peer-api ADDR            peer API listen (default: 0.0.0.0:9443)
   --dataplane MODE           noop, linux, or auto (default: auto)
   --admin-auth               add -api-admin-auth to service args
   --extra-arg ARG            append extra trustixd arg; repeatable
   --no-sudo                  run install commands without sudo
-  --no-enable                do not enable systemd service
-  --no-start                 do not start/restart systemd service
+  --no-enable                do not enable service
+  --no-start                 do not start/restart service
   --json                     print machine-readable summary
   -h, --help                 show this help
 EOF
@@ -74,6 +76,11 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+lower_ascii() {
+  local value="$1"
+  printf '%s' "${value,,}"
+}
+
 target=""
 ssh_port=""
 ssh_key=""
@@ -83,10 +90,6 @@ bin_dir=""
 instance="ix"
 config_path=""
 cert_dir=""
-prefix="/usr/local"
-sysconfdir="/etc/trustix"
-unitdir="/etc/systemd/system"
-state_root="/var/lib/trustix"
 target_cert_dir=""
 api_addr="127.0.0.1:8787"
 peer_api_addr="0.0.0.0:9443"
@@ -96,6 +99,13 @@ sudo_cmd="sudo"
 enable_service=1
 start_service=1
 json=0
+service_manager="${TRUSTIX_DEPLOY_SERVICE_MANAGER:-auto}"
+prefix=""
+sysconfdir=""
+unitdir=""
+initdir=""
+state_root=""
+installed_config_path=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -109,9 +119,11 @@ while [[ $# -gt 0 ]]; do
     --config) [[ $# -ge 2 ]] || die "--config requires a value"; config_path="$2"; shift 2 ;;
     --cert-dir) [[ $# -ge 2 ]] || die "--cert-dir requires a value"; cert_dir="$2"; shift 2 ;;
     --target-cert-dir) [[ $# -ge 2 ]] || die "--target-cert-dir requires a value"; target_cert_dir="$2"; shift 2 ;;
+    --service-manager) [[ $# -ge 2 ]] || die "--service-manager requires a value"; service_manager="$2"; shift 2 ;;
     --prefix) [[ $# -ge 2 ]] || die "--prefix requires a value"; prefix="$2"; shift 2 ;;
     --sysconfdir) [[ $# -ge 2 ]] || die "--sysconfdir requires a value"; sysconfdir="$2"; shift 2 ;;
     --unitdir) [[ $# -ge 2 ]] || die "--unitdir requires a value"; unitdir="$2"; shift 2 ;;
+    --initdir) [[ $# -ge 2 ]] || die "--initdir requires a value"; initdir="$2"; shift 2 ;;
     --state-root) [[ $# -ge 2 ]] || die "--state-root requires a value"; state_root="$2"; shift 2 ;;
     --api) [[ $# -ge 2 ]] || die "--api requires a value"; api_addr="$2"; shift 2 ;;
     --peer-api) [[ $# -ge 2 ]] || die "--peer-api requires a value"; peer_api_addr="$2"; shift 2 ;;
@@ -127,21 +139,85 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$target_cert_dir" ]]; then
-  target_cert_dir="${sysconfdir}/certs"
-fi
 if [[ -n "$tarball" && -n "$bin_dir" ]]; then
   die "--tarball and --bin-dir are mutually exclusive"
 fi
 if [[ -z "$tarball" && -z "$bin_dir" ]]; then
   die "either --tarball or --bin-dir is required"
 fi
+service_manager="$(lower_ascii "$service_manager")"
+case "$service_manager" in
+  auto|systemd|openwrt) ;;
+  *) die "--service-manager must be auto, systemd, or openwrt" ;;
+esac
 
 run_root() {
   if [[ -n "$sudo_cmd" ]]; then
     "$sudo_cmd" "$@"
   else
     "$@"
+  fi
+}
+
+install_file() {
+  local src="$1"
+  local dst="$2"
+  local mode="$3"
+  local dir="${dst%/*}"
+  [[ "$dir" != "$dst" ]] && run_root mkdir -p "$dir"
+  if command -v install >/dev/null 2>&1; then
+    run_root install -m "$mode" "$src" "$dst"
+  else
+    run_root cp "$src" "$dst"
+    run_root chmod "$mode" "$dst"
+  fi
+}
+
+detect_service_manager() {
+  if [[ "$service_manager" != "auto" ]]; then
+    printf '%s\n' "$service_manager"
+    return
+  fi
+  if [[ -f /etc/openwrt_release && ( -x /sbin/procd || -d /etc/init.d ) ]]; then
+    printf 'openwrt\n'
+    return
+  fi
+  if command -v systemctl >/dev/null 2>&1 || [[ -d /run/systemd/system ]]; then
+    printf 'systemd\n'
+    return
+  fi
+  if [[ -d /etc/init.d && -f /etc/openwrt_release ]]; then
+    printf 'openwrt\n'
+    return
+  fi
+  die "could not auto-detect service manager; pass --service-manager systemd|openwrt or --no-start"
+}
+
+apply_target_defaults() {
+  service_manager="$(detect_service_manager)"
+  if [[ -z "$sysconfdir" ]]; then
+    sysconfdir="/etc/trustix"
+  fi
+  if [[ -z "$prefix" ]]; then
+    case "$service_manager" in
+      openwrt) prefix="/opt/trustix" ;;
+      *) prefix="/usr/local" ;;
+    esac
+  fi
+  if [[ -z "$unitdir" ]]; then
+    unitdir="/etc/systemd/system"
+  fi
+  if [[ -z "$initdir" ]]; then
+    initdir="/etc/init.d"
+  fi
+  if [[ -z "$state_root" ]]; then
+    case "$service_manager" in
+      openwrt) state_root="${sysconfdir}/state" ;;
+      *) state_root="/var/lib/trustix" ;;
+    esac
+  fi
+  if [[ -z "$target_cert_dir" ]]; then
+    target_cert_dir="${sysconfdir}/certs"
   fi
 }
 
@@ -164,6 +240,11 @@ remote_deploy() {
     scp_cmd+=(-o "$opt")
   done
 
+  local remote_manager="$service_manager"
+  if [[ "$remote_manager" == "auto" ]]; then
+    remote_manager="$("${ssh_cmd[@]}" "$target" 'if [ -f /etc/openwrt_release ] && { [ -x /sbin/procd ] || [ -d /etc/init.d ]; }; then echo openwrt; elif command -v systemctl >/dev/null 2>&1 || [ -d /run/systemd/system ]; then echo systemd; else echo auto; fi')"
+  fi
+
   local stage
   stage="$("${ssh_cmd[@]}" "$target" 'mktemp -d /tmp/trustix-deploy.XXXXXX')"
   [[ -n "$stage" ]] || die "failed to create remote staging dir"
@@ -183,6 +264,10 @@ remote_deploy() {
       "${ssh_cmd[@]}" "$target" "mkdir -p $(shell_quote "${stage}/packaging/systemd")"
       "${scp_cmd[@]}" "${repo_root}/packaging/systemd/trustixd@.service" "${target}:${stage}/packaging/systemd/trustixd@.service"
     fi
+    if [[ -f "${repo_root}/packaging/openwrt/trustix.init" ]]; then
+      "${ssh_cmd[@]}" "$target" "mkdir -p $(shell_quote "${stage}/packaging/openwrt")"
+      "${scp_cmd[@]}" "${repo_root}/packaging/openwrt/trustix.init" "${target}:${stage}/packaging/openwrt/trustix.init"
+    fi
   fi
   if [[ -n "$config_path" ]]; then
     "${scp_cmd[@]}" "$config_path" "${target}:${stage}/config"
@@ -191,15 +276,27 @@ remote_deploy() {
     "${scp_cmd[@]}" -r "$cert_dir" "${target}:${stage}/certs"
   fi
 
+  if [[ "$remote_manager" == "openwrt" ]]; then
+    remote_deploy_openwrt "$stage"
+    return
+  fi
+
+  "${ssh_cmd[@]}" "$target" 'command -v bash >/dev/null 2>&1 || { echo "bash is required on remote target" >&2; exit 127; }'
+
   local remote_args=()
   if [[ -n "$tarball" ]]; then
     remote_args+=(--tarball "${stage}/package.tar.gz")
   else
     remote_args+=(--bin-dir "${stage}/bin")
   fi
-  remote_args+=(--instance "$instance" --prefix "$prefix" --sysconfdir "$sysconfdir" --state-root "$state_root")
-  remote_args+=(--unitdir "$unitdir")
-  remote_args+=(--target-cert-dir "$target_cert_dir" --api "$api_addr" --peer-api "$peer_api_addr" --dataplane "$dataplane")
+  remote_args+=(--instance "$instance" --service-manager "$remote_manager")
+  [[ -n "$prefix" ]] && remote_args+=(--prefix "$prefix")
+  [[ -n "$sysconfdir" ]] && remote_args+=(--sysconfdir "$sysconfdir")
+  [[ -n "$state_root" ]] && remote_args+=(--state-root "$state_root")
+  [[ -n "$unitdir" ]] && remote_args+=(--unitdir "$unitdir")
+  [[ -n "$initdir" ]] && remote_args+=(--initdir "$initdir")
+  [[ -n "$target_cert_dir" ]] && remote_args+=(--target-cert-dir "$target_cert_dir")
+  remote_args+=(--api "$api_addr" --peer-api "$peer_api_addr" --dataplane "$dataplane")
   if [[ -n "$config_path" ]]; then
     remote_args+=(--config "${stage}/config")
   fi
@@ -230,28 +327,182 @@ remote_deploy() {
   "${ssh_cmd[@]}" "$target" "$command"
 }
 
+remote_deploy_openwrt() {
+  local stage="$1"
+  local input_kind="bin"
+  local input_path="${stage}/bin"
+  local joined_extra="" first=1 arg
+  if [[ -n "$tarball" ]]; then
+    input_kind="tarball"
+    input_path="${stage}/package.tar.gz"
+  fi
+  for arg in "${extra_args[@]}"; do
+    if [[ "$first" == "0" ]]; then
+      joined_extra+=" "
+    fi
+    first=0
+    joined_extra+="$arg"
+  done
+  local remote_script
+  remote_script="$(cat <<'EOS'
+set -eu
+stage="$1"
+input_kind="$2"
+input_path="$3"
+instance="$4"
+prefix="$5"
+sysconfdir="$6"
+state_root="$7"
+initdir="$8"
+target_cert_dir="$9"
+shift 9
+config_src="$1"
+cert_src="$2"
+api_addr="$3"
+peer_api_addr="$4"
+dataplane="$5"
+enable_service="$6"
+start_service="$7"
+json="$8"
+extra_args="$9"
+
+[ -n "$prefix" ] || prefix=/opt/trustix
+[ -n "$sysconfdir" ] || sysconfdir=/etc/trustix
+[ -n "$state_root" ] || state_root="${sysconfdir}/state"
+[ -n "$initdir" ] || initdir=/etc/init.d
+[ -n "$target_cert_dir" ] || target_cert_dir="${sysconfdir}/certs"
+
+package_dir="$stage/package"
+if [ "$input_kind" = tarball ]; then
+  rm -rf "$package_dir"
+  mkdir -p "$package_dir"
+  tar -xzf "$input_path" -C "$package_dir"
+else
+  package_dir="$stage"
+fi
+
+copy_mode() {
+  src="$1"
+  dst="$2"
+  mode="$3"
+  dir="${dst%/*}"
+  [ "$dir" = "$dst" ] || mkdir -p "$dir"
+  cp "$src" "$dst"
+  chmod "$mode" "$dst"
+}
+
+for name in trustixd trustixctl trustix-ca trustix-device; do
+  if [ -f "$package_dir/bin/$name" ]; then
+    copy_mode "$package_dir/bin/$name" "$prefix/bin/$name" 0755
+  elif [ "$name" != trustix-device ]; then
+    echo "missing binary: $package_dir/bin/$name" >&2
+    exit 1
+  fi
+done
+
+if [ -f "$package_dir/packaging/openwrt/trustix.init" ]; then
+  copy_mode "$package_dir/packaging/openwrt/trustix.init" "$initdir/trustix" 0755
+elif [ -f "$stage/packaging/openwrt/trustix.init" ]; then
+  copy_mode "$stage/packaging/openwrt/trustix.init" "$initdir/trustix" 0755
+else
+  echo "missing OpenWrt init script" >&2
+  exit 1
+fi
+
+mkdir -p "$sysconfdir" "$state_root"
+installed_config="${sysconfdir}/${instance}.yaml"
+if [ -n "$config_src" ]; then
+  case "$config_src" in
+    *.json) installed_config="${sysconfdir}/${instance}.json" ;;
+    *.yaml|*.yml) installed_config="${sysconfdir}/${instance}.yaml" ;;
+  esac
+  copy_mode "$config_src" "$installed_config" 0644
+fi
+
+if [ -n "$cert_src" ] && [ -d "$cert_src" ]; then
+  mkdir -p "$target_cert_dir"
+  find "$cert_src" -type f | while IFS= read -r file; do
+    rel="${file#$cert_src/}"
+    mode=0644
+    case "$file" in
+      *.key|*.p12|*.pfx) mode=0600 ;;
+    esac
+    copy_mode "$file" "$target_cert_dir/$rel" "$mode"
+  done
+fi
+
+env_tmp="$stage/${instance}.env.tmp"
+{
+  printf 'TRUSTIX_CONFIG=%s\n' "$installed_config"
+  printf 'TRUSTIX_BIN=%s/bin/trustixd\n' "$prefix"
+  printf 'TRUSTIX_DATA_DIR=%s/%s\n' "$state_root" "$instance"
+  printf 'TRUSTIX_API_ADDR=%s\n' "$api_addr"
+  printf 'TRUSTIX_PEER_API_ADDR=%s\n' "$peer_api_addr"
+  printf 'TRUSTIX_DATAPLANE=%s\n' "$dataplane"
+  printf 'TRUSTIX_EXTRA_ARGS="%s"\n' "$extra_args"
+} >"$env_tmp"
+copy_mode "$env_tmp" "$sysconfdir/$instance.env" 0644
+rm -f "$env_tmp"
+
+if [ "$enable_service" = 1 ]; then
+  "$initdir/trustix" enable
+fi
+if [ "$start_service" = 1 ]; then
+  "$initdir/trustix" restart "$instance"
+fi
+
+if [ "$json" = 1 ]; then
+  esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  printf '{"instance":"%s","service_manager":"openwrt","config":"%s","cert_dir":"%s","service":"%s trustix:%s","started":%s}\n' \
+    "$(esc "$instance")" "$(esc "$installed_config")" "$(esc "$target_cert_dir")" "$(esc "$initdir/trustix")" "$(esc "$instance")" "$start_service"
+else
+  printf '[trustix-deploy] deployed instance: %s (openwrt)\n' "$instance" >&2
+fi
+EOS
+)"
+  local config_remote="" cert_remote=""
+  [[ -n "$config_path" ]] && config_remote="${stage}/config"
+  [[ -n "$cert_dir" ]] && cert_remote="${stage}/certs"
+  "${ssh_cmd[@]}" "$target" "sh -s -- $(shell_quote "$stage") $(shell_quote "$input_kind") $(shell_quote "$input_path") $(shell_quote "$instance") $(shell_quote "$prefix") $(shell_quote "$sysconfdir") $(shell_quote "$state_root") $(shell_quote "$initdir") $(shell_quote "$target_cert_dir") $(shell_quote "$config_remote") $(shell_quote "$cert_remote") $(shell_quote "$api_addr") $(shell_quote "$peer_api_addr") $(shell_quote "$dataplane") $(shell_quote "$enable_service") $(shell_quote "$start_service") $(shell_quote "$json") $(shell_quote "$joined_extra")" <<<"$remote_script"
+}
+
 install_from_package() {
   local package_dir="$1"
   local bindir="${prefix}/bin"
   local unit_src=""
-  if [[ -f "${package_dir}/packaging/systemd/trustixd@.service" ]]; then
-    unit_src="${package_dir}/packaging/systemd/trustixd@.service"
-  elif [[ -f "${repo_root}/packaging/systemd/trustixd@.service" ]]; then
-    unit_src="${repo_root}/packaging/systemd/trustixd@.service"
-  else
-    die "missing trustixd@.service"
-  fi
+  local init_src=""
 
   for name in trustixd trustixctl trustix-ca trustix-device; do
-    if [[ -x "${package_dir}/bin/${name}" ]]; then
-      run_root install -D -m 0755 "${package_dir}/bin/${name}" "${bindir}/${name}"
+    if [[ -f "${package_dir}/bin/${name}" ]]; then
+      install_file "${package_dir}/bin/${name}" "${bindir}/${name}" 0755
     elif [[ "$name" == "trustix-device" ]]; then
       continue
     else
       die "missing binary: ${package_dir}/bin/${name}"
     fi
   done
-  run_root install -D -m 0644 "$unit_src" "${unitdir}/trustixd@.service"
+  case "$service_manager" in
+    systemd)
+      if [[ -f "${package_dir}/packaging/systemd/trustixd@.service" ]]; then
+        unit_src="${package_dir}/packaging/systemd/trustixd@.service"
+      elif [[ -f "${repo_root}/packaging/systemd/trustixd@.service" ]]; then
+        unit_src="${repo_root}/packaging/systemd/trustixd@.service"
+      else
+        die "missing trustixd@.service"
+      fi
+      install_file "$unit_src" "${unitdir}/trustixd@.service" 0644
+      ;;
+    openwrt)
+      if [[ -f "${package_dir}/packaging/openwrt/trustix.init" ]]; then
+        init_src="${package_dir}/packaging/openwrt/trustix.init"
+      elif [[ -f "${repo_root}/packaging/openwrt/trustix.init" ]]; then
+        init_src="${repo_root}/packaging/openwrt/trustix.init"
+      else
+        die "missing OpenWrt init script"
+      fi
+      install_file "$init_src" "${initdir}/trustix" 0755
+      ;;
+  esac
   run_root mkdir -p "$sysconfdir" "$state_root"
 }
 
@@ -263,8 +514,9 @@ install_config() {
       json) installed_config="${sysconfdir}/${instance}.json" ;;
       yaml|yml) installed_config="${sysconfdir}/${instance}.yaml" ;;
     esac
-    run_root install -D -m 0644 "$config_path" "$installed_config"
+    install_file "$config_path" "$installed_config" 0644
   fi
+  installed_config_path="$installed_config"
 
   if [[ -n "$cert_dir" ]]; then
     run_root mkdir -p "$target_cert_dir"
@@ -275,7 +527,7 @@ install_config() {
       case "$file" in
         *.key|*.p12|*.pfx) mode=0600 ;;
       esac
-      run_root install -D -m "$mode" "$file" "${target_cert_dir}/${rel}"
+      install_file "$file" "${target_cert_dir}/${rel}" "$mode"
     done < <(find "$cert_dir" -type f -print0)
   fi
 
@@ -283,6 +535,7 @@ install_config() {
   env_tmp="$(mktemp)"
   {
     printf 'TRUSTIX_CONFIG=%s\n' "$installed_config"
+    printf 'TRUSTIX_BIN=%s/bin/trustixd\n' "$prefix"
     printf 'TRUSTIX_DATA_DIR=%s/%s\n' "$state_root" "$instance"
     printf 'TRUSTIX_API_ADDR=%s\n' "$api_addr"
     printf 'TRUSTIX_PEER_API_ADDR=%s\n' "$peer_api_addr"
@@ -299,13 +552,13 @@ install_config() {
     env_quote "$joined_extra"
     printf '\n'
   } >"$env_tmp"
-  run_root install -D -m 0644 "$env_tmp" "${sysconfdir}/${instance}.env"
+  install_file "$env_tmp" "${sysconfdir}/${instance}.env" 0644
   rm -f "$env_tmp"
 }
 
 local_deploy() {
   [[ "$(uname -s)" == "Linux" ]] || die "deployment must run on Linux"
-  need_cmd install
+  apply_target_defaults
   local stage=""
   local package_dir=""
   if [[ -n "$tarball" ]]; then
@@ -319,36 +572,55 @@ local_deploy() {
     package_dir="$(mktemp -d)"
     mkdir -p "${package_dir}/bin"
     cp -a "${bin_dir}/." "${package_dir}/bin/"
-    if [[ -f "${repo_root}/packaging/systemd/trustixd@.service" ]]; then
-      mkdir -p "${package_dir}/packaging/systemd"
-      cp "${repo_root}/packaging/systemd/trustixd@.service" "${package_dir}/packaging/systemd/trustixd@.service"
+    if [[ -d "${repo_root}/packaging" ]]; then
+      cp -R "${repo_root}/packaging" "${package_dir}/packaging"
     fi
   fi
 
   install_from_package "$package_dir"
   install_config
-  if command -v systemctl >/dev/null 2>&1 && { [[ "$enable_service" == "1" ]] || [[ "$start_service" == "1" ]]; }; then
-    run_root systemctl daemon-reload
-    if [[ "$enable_service" == "1" ]]; then
-      run_root systemctl enable "trustixd@${instance}.service"
-    fi
-    if [[ "$start_service" == "1" ]]; then
-      run_root systemctl restart "trustixd@${instance}.service"
-    fi
-  elif [[ "$start_service" == "1" ]]; then
-    die "systemctl not found; rerun with --no-start or start trustixd manually"
-  fi
+  case "$service_manager" in
+    systemd)
+      if command -v systemctl >/dev/null 2>&1 && { [[ "$enable_service" == "1" ]] || [[ "$start_service" == "1" ]]; }; then
+        run_root systemctl daemon-reload
+        if [[ "$enable_service" == "1" ]]; then
+          run_root systemctl enable "trustixd@${instance}.service"
+        fi
+        if [[ "$start_service" == "1" ]]; then
+          run_root systemctl restart "trustixd@${instance}.service"
+        fi
+      elif [[ "$start_service" == "1" ]]; then
+        die "systemctl not found; rerun with --no-start or start trustixd manually"
+      fi
+      ;;
+    openwrt)
+      if [[ ! -x "${initdir}/trustix" ]]; then
+        die "OpenWrt init script not installed: ${initdir}/trustix"
+      fi
+      if [[ "$enable_service" == "1" ]]; then
+        run_root "${initdir}/trustix" enable
+      fi
+      if [[ "$start_service" == "1" ]]; then
+        run_root "${initdir}/trustix" restart "$instance"
+      fi
+      ;;
+  esac
 
   if [[ "$json" == "1" ]]; then
     printf '{'
     printf '"instance":"%s",' "$(json_escape "$instance")"
-    printf '"config":"%s/%s.%s",' "$(json_escape "$sysconfdir")" "$(json_escape "$instance")" "$( [[ "${config_path##*.}" == "json" ]] && printf 'json' || printf 'yaml' )"
+    printf '"service_manager":"%s",' "$(json_escape "$service_manager")"
+    printf '"config":"%s",' "$(json_escape "$installed_config_path")"
     printf '"cert_dir":"%s",' "$(json_escape "$target_cert_dir")"
-    printf '"service":"trustixd@%s.service",' "$(json_escape "$instance")"
+    if [[ "$service_manager" == "openwrt" ]]; then
+      printf '"service":"%s trustix:%s",' "$(json_escape "${initdir}/trustix")" "$(json_escape "$instance")"
+    else
+      printf '"service":"trustixd@%s.service",' "$(json_escape "$instance")"
+    fi
     printf '"started":%s' "$start_service"
     printf '}\n'
   else
-    log "deployed instance: $instance"
+    log "deployed instance: $instance (${service_manager})"
   fi
 
   if [[ -n "$stage" ]]; then

@@ -871,6 +871,10 @@ export type IXProvisionIssueRequest = {
   api_addr?: string;
   peer_api_addr?: string;
   dataplane?: string;
+  service_manager?: string;
+  dns_enabled?: string;
+  dns_domain?: string;
+  openwrt_dnsmasq?: string;
   kernel_modules?: string;
   goarch?: string;
   build_bpf?: string;

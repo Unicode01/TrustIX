@@ -44,7 +44,9 @@ If you prefer filling a form first, use the static command generator:
 Choose **Create a new domain and first IX**. The wizard asks for the domain ID,
 IX ID, published control API URL, LAN interface/gateway, advertised LAN prefix,
 and data endpoint, then calls the stable bootstrap script to generate certs,
-build a release, install the systemd service, and start the first IX.
+build a release, install the target service wrapper, and start the first IX.
+Normal Linux uses systemd; OpenWrt targets can use procd plus optional dnsmasq
+conditional forwarding for TrustIX DNS names.
 
 After the first IX is running, add more IX nodes from the Web UI:
 
@@ -53,12 +55,15 @@ After the first IX is running, add more IX nodes from the Web UI:
 3. Run the generated command on the new machine. It has this shape:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-bootstrap-ix.sh | \
-  sudo bash -s -- --provision-url https://ix-a.example.net:8787 --token TOKEN
+tmp="$(mktemp /tmp/trustix-bootstrap.XXXXXX)" && \
+  curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-bootstrap-ix.sh -o "$tmp" && \
+  bash "$tmp" --provision-url https://ix-a.example.net:8787 --token TOKEN
 ```
 
 This token mode keeps CA private keys on the issuing IX/provisioner. The target
-machine only receives the deployable IX certs/config needed for that node.
+machine only receives the deployable IX certs/config needed for that node. The
+Web UI emits a fuller POSIX `sh` compatible command that can install `bash` on
+OpenWrt before running the bootstrap.
 
 More deployment details are in [docs/deployment-scripts.md](docs/deployment-scripts.md).
 

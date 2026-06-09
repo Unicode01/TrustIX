@@ -33,14 +33,18 @@ if ! repo_root="$(wizard_repo_root)"; then
     fi
     if command -v git >/dev/null 2>&1; then
       git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
-    elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
+    elif { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; } && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
       archive_url="${repo_url%.git}/archive/${repo_ref}.tar.gz"
       archive_path="$(mktemp /tmp/trustix-wizard-src.XXXXXX.tar.gz)"
-      curl -fsSL "$archive_url" -o "$archive_path"
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$archive_url" -o "$archive_path"
+      else
+        wget -qO "$archive_path" "$archive_url"
+      fi
       tar -xzf "$archive_path" -C "$repo_root" --strip-components=1
       rm -f "$archive_path"
     else
-      echo "ERROR: git is required to clone ${repo_url}; alternatively install curl+tar for GitHub archive bootstrap" >&2
+      echo "ERROR: git is required to clone ${repo_url}; alternatively install curl/wget+tar for GitHub archive bootstrap" >&2
       exit 127
     fi
   fi
@@ -79,6 +83,10 @@ First IX options:
   --api ADDR
   --peer-api ADDR
   --dataplane auto|linux|noop
+  --service-manager auto|systemd|openwrt
+  --dns-enabled 0|1
+  --dns-domain DOMAIN
+  --openwrt-dnsmasq 0|1
   --kernel-modules auto|disabled|required
   --local-install
   --no-deploy, --no-install
@@ -133,6 +141,11 @@ prompt() {
   printf '%s\n' "$value"
 }
 
+lower_ascii() {
+  local value="$1"
+  printf '%s' "${value,,}"
+}
+
 prompt_required() {
   local label="$1"
   local default_value="${2:-}"
@@ -149,7 +162,7 @@ prompt_yes_no() {
   local value=""
   while :; do
     value="$(prompt "$label (y/n)" "$default_value")"
-    case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
+    case "$(lower_ascii "$value")" in
       y|yes|1|true|on) return 0 ;;
       n|no|0|false|off) return 1 ;;
       *) log "Please answer y or n" ;;
@@ -192,12 +205,12 @@ flag_or_prompt_yes_no() {
   local value="$1"
   local label="$2"
   local default_value="${3:-Y}"
-  case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
+  case "$(lower_ascii "$value")" in
     1|true|yes|y|on) return 0 ;;
     0|false|no|n|off) return 1 ;;
   esac
   if [[ "${assume_defaults:-0}" == "1" ]]; then
-    case "$(printf '%s' "$default_value" | tr '[:upper:]' '[:lower:]')" in
+    case "$(lower_ascii "$default_value")" in
       1|true|yes|y|on) return 0 ;;
       *) return 1 ;;
     esac
@@ -276,7 +289,7 @@ ensure_first_domain_certs() {
 }
 
 run_first_ix() {
-  local host default_control_api domain_id ix_id cert_dir control_api lan_iface lan_gateway advertise underlay_iface endpoint_transport endpoint_listen endpoint_address endpoint_source_ip endpoint_bind_iface api_addr peer_api_addr dataplane kernel_modules endpoint_spec
+  local host default_control_api domain_id ix_id cert_dir control_api lan_iface lan_gateway advertise underlay_iface endpoint_transport endpoint_listen endpoint_address endpoint_source_ip endpoint_bind_iface api_addr peer_api_addr dataplane service_manager dns_enabled dns_domain openwrt_dnsmasq dnsmasq_default kernel_modules endpoint_spec
   host="$(default_host)"
   default_control_api="https://${host}:9443"
 
@@ -297,6 +310,25 @@ run_first_ix() {
   api_addr="$(value_or_prompt_required "$first_api_addr" "Management/WebUI listen address" "127.0.0.1:8787")"
   peer_api_addr="$(value_or_prompt_required "$first_peer_api_addr" "Peer control listen address" "0.0.0.0:9443")"
   dataplane="$(value_or_prompt_required "$first_dataplane" "Dataplane mode" "auto")"
+  service_manager="$(value_or_prompt_required "$first_service_manager" "Service manager (auto/systemd/openwrt)" "auto")"
+  dns_enabled=0
+  openwrt_dnsmasq=0
+  dns_domain=""
+  case "$(lower_ascii "$first_openwrt_dnsmasq")" in
+    1|true|yes|y|on) first_dns_enabled=1 ;;
+  esac
+  if flag_or_prompt_yes_no "$first_dns_enabled" "Enable TrustIX DNS resolver" "N"; then
+    dns_enabled=1
+    dns_domain="$(value_or_prompt "$first_dns_domain" "TrustIX DNS domain" "$domain_id")"
+    dnsmasq_default="N"
+    if [[ "$(lower_ascii "$service_manager")" == "openwrt" ]]; then
+      dnsmasq_default="Y"
+    fi
+    if flag_or_prompt_yes_no "$first_openwrt_dnsmasq" "Enable OpenWrt dnsmasq conditional forwarding" "$dnsmasq_default"; then
+      openwrt_dnsmasq=1
+      dns_enabled=1
+    fi
+  fi
   kernel_modules="$(value_or_prompt_required "$first_kernel_modules" "Kernel module mode" "auto")"
 
   ensure_first_domain_certs "$domain_id" "$ix_id" "$cert_dir"
@@ -321,9 +353,15 @@ run_first_ix() {
     --api "$api_addr"
     --peer-api "$peer_api_addr"
     --dataplane "$dataplane"
+    --service-manager "$service_manager"
+    --dns-enabled "$dns_enabled"
+    --openwrt-dnsmasq "$openwrt_dnsmasq"
     --kernel-modules "$kernel_modules"
     --json
   )
+  if [[ -n "$dns_domain" ]]; then
+    args+=(--dns-domain "$dns_domain")
+  fi
   if [[ -n "$underlay_iface" ]]; then
     args+=(--underlay-iface "$underlay_iface")
   fi
@@ -363,6 +401,10 @@ first_endpoint_bind_iface=""
 first_api_addr=""
 first_peer_api_addr=""
 first_dataplane=""
+first_service_manager=""
+first_dns_enabled=""
+first_dns_domain=""
+first_openwrt_dnsmasq=""
 first_kernel_modules=""
 first_local_install=""
 join_provision_url=""
@@ -388,6 +430,10 @@ while [[ $# -gt 0 ]]; do
     --api) [[ $# -ge 2 ]] || die "--api requires a value"; first_api_addr="$2"; shift 2 ;;
     --peer-api) [[ $# -ge 2 ]] || die "--peer-api requires a value"; first_peer_api_addr="$2"; shift 2 ;;
     --dataplane) [[ $# -ge 2 ]] || die "--dataplane requires a value"; first_dataplane="$2"; shift 2 ;;
+    --service-manager) [[ $# -ge 2 ]] || die "--service-manager requires a value"; first_service_manager="$2"; shift 2 ;;
+    --dns-enabled) [[ $# -ge 2 ]] || die "--dns-enabled requires a value"; first_dns_enabled="$2"; shift 2 ;;
+    --dns-domain) [[ $# -ge 2 ]] || die "--dns-domain requires a value"; first_dns_domain="$2"; shift 2 ;;
+    --openwrt-dnsmasq) [[ $# -ge 2 ]] || die "--openwrt-dnsmasq requires a value"; first_openwrt_dnsmasq="$2"; shift 2 ;;
     --kernel-modules) [[ $# -ge 2 ]] || die "--kernel-modules requires a value"; first_kernel_modules="$2"; shift 2 ;;
     --local-install) first_local_install=1; shift ;;
     --no-deploy|--no-install) first_local_install=0; shift ;;

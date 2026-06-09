@@ -1274,6 +1274,10 @@ export function AccessView(props: {
   const [newIXAPIAddr, setNewIXAPIAddr] = useState("127.0.0.1:8787");
   const [newIXPeerAPIAddr, setNewIXPeerAPIAddr] = useState("0.0.0.0:9443");
   const [newIXDataplane, setNewIXDataplane] = useState("auto");
+  const [newIXServiceManager, setNewIXServiceManager] = useState("auto");
+  const [newIXDNSEnabled, setNewIXDNSEnabled] = useState(false);
+  const [newIXDNSDomain, setNewIXDNSDomain] = useState("");
+  const [newIXOpenWRTDNSMasq, setNewIXOpenWRTDNSMasq] = useState(false);
   const [newIXKernelModules, setNewIXKernelModules] = useState("auto");
   const [newIXGoArch, setNewIXGoArch] = useState("");
   const [newIXBuildBPF, setNewIXBuildBPF] = useState("1");
@@ -1400,6 +1404,20 @@ export function AccessView(props: {
     compatibility: props.t("new_ix_profile_compatibility", "Compatibility"),
     plaintext_performance: props.t("new_ix_profile_plaintext_performance", "Plaintext performance"),
   };
+  const newIXServiceManagerLabels = {
+    auto: props.t("service_manager_auto", "Auto"),
+    systemd: "systemd",
+    openwrt: "OpenWrt procd",
+  };
+  const handleNewIXOpenWRTDNSMasqChange = (value: boolean) => {
+    setNewIXOpenWRTDNSMasq(value);
+    if (value) {
+      setNewIXDNSEnabled(true);
+      if (newIXServiceManager === "auto") {
+        setNewIXServiceManager("openwrt");
+      }
+    }
+  };
   const newIXRequiredItems = [
     { label: props.t("new_ix_id", "New IX ID"), ok: Boolean(newIXID.trim()) },
     { label: newIXActiveOnly ? props.t("new_ix_bootstrap_control_api", "Bootstrap control API") : newIXEndpointAddressLabel, ok: newIXActiveOnly ? Boolean(newIXBootstrapControlAPIEffective) : Boolean(newIXEndpointAddress.trim()) },
@@ -1507,7 +1525,11 @@ export function AccessView(props: {
                 <Field label={props.t("new_ix_target_cert_dir", "Target cert dir")} help={props.t("help_new_ix_target_cert_dir", "Directory path written into the generated target config for IX certificates and trust roots.")} value={newIXTargetCertDir} onChange={setNewIXTargetCertDir} />
                 <SelectField label={props.t("new_ix_goarch", "GOARCH")} help={props.t("help_new_ix_goarch", "Optional target CPU architecture for cross-builds. Empty uses the target host architecture when possible.")} value={newIXGoArch} options={["", "amd64", "arm64", "arm", "386", "mips", "mipsle", "mips64", "mips64le", "riscv64"]} onChange={setNewIXGoArch} />
                 <SelectField label={props.t("dataplane", "Dataplane")} help={props.t("help_new_ix_dataplane", "Runtime dataplane mode for the target IX. Auto chooses the best supported path; noop is only for diagnostics.")} value={newIXDataplane} options={["auto", "linux", "noop"]} onChange={setNewIXDataplane} />
+                <SelectField label={props.t("service_manager", "Service manager")} help={props.t("help_new_ix_service_manager", "Target service manager for installation. Auto detects systemd on normal Linux and OpenWrt procd on OpenWrt.")} value={newIXServiceManager} options={["auto", "systemd", "openwrt"]} optionLabels={newIXServiceManagerLabels} onChange={setNewIXServiceManager} />
                 <SelectField label={props.t("new_ix_kernel_modules", "Kernel modules")} help={props.t("help_new_ix_kernel_modules", "Controls whether target install may load TrustIX kernel modules. Required fails installation if modules cannot load.")} value={newIXKernelModules} options={["auto", "disabled", "required"]} onChange={setNewIXKernelModules} />
+                <CheckField label={props.t("dns_enabled", "DNS enabled")} help={props.t("help_new_ix_dns_enabled", "Enable the built-in TrustIX DNS resolver on the new IX. It answers names inside the TrustIX DNS domain only unless upstreams are configured later.")} checked={newIXDNSEnabled} onChange={setNewIXDNSEnabled} />
+                <CheckField label={props.t("openwrt_dnsmasq", "OpenWrt dnsmasq")} help={props.t("help_new_ix_openwrt_dnsmasq", "For OpenWrt targets, add a dnsmasq conditional forward for only the TrustIX DNS domain and keep normal LAN DNS unchanged.")} checked={newIXOpenWRTDNSMasq} onChange={handleNewIXOpenWRTDNSMasqChange} />
+                <Field label={props.t("dns_domain", "DNS domain")} help={props.t("help_new_ix_dns_domain", "Optional DNS suffix for TrustIX IX names. Empty uses the TrustIX domain ID.")} placeholder={desiredDomainID || "trust.ix"} value={newIXDNSDomain} onChange={setNewIXDNSDomain} />
                 <Field label={props.t("new_ix_api_listen", "Admin API listen")} help={props.t("help_new_ix_api_listen", "Management API listen address on the target IX. Keep loopback unless you intend to expose the WebUI/API.")} value={newIXAPIAddr} onChange={setNewIXAPIAddr} />
                 <Field label={props.t("new_ix_peer_api_listen", "Peer API listen")} help={props.t("help_new_ix_peer_api_listen", "Peer control API listen address on the target IX, used by other IX nodes for control-plane sync.")} value={newIXPeerAPIAddr} onChange={setNewIXPeerAPIAddr} />
                 <Field label={props.t("source_certs", "Source certs")} help={props.t("help_new_ix_source_certs", "Local directory on the provisioner that contains domain/config CA material used to issue the new IX.")} value={newIXSourceCerts} onChange={setNewIXSourceCerts} />
@@ -1528,6 +1550,8 @@ export function AccessView(props: {
                     <StatusRow label={props.t("endpoint", "Endpoint")} value={compactList([compactList([newIXEffective.endpointName, newIXEffective.acklessEndpointName], " + "), newIXEndpointModeLabels[newIXEffective.endpointMode as keyof typeof newIXEndpointModeLabels] || newIXEffective.endpointMode, newIXEndpointTransport, newIXEffective.endpointListen, newIXEffective.endpointAddress], " / ")} />
                     <StatusRow label={props.t("lan", "LAN")} value={compactList([newIXEffective.lanIface, newIXEffective.lanGateway || props.t("no_gateway", "No gateway"), newIXAttachMode], " / ")} />
                     <StatusRow label={props.t("transport_policy", "Transport policy")} value={compactList([newIXEffective.transportProfile, newIXEffective.datapath, newIXEffective.encryption, newIXEffective.cryptoPlacement, `kernel=${newIXEffective.kernelTransport}`], " / ")} />
+                    <StatusRow label={props.t("service_manager", "Service manager")} value={newIXServiceManagerLabels[newIXServiceManager as keyof typeof newIXServiceManagerLabels] || newIXServiceManager} />
+                    <StatusRow label={props.t("dns", "DNS")} value={newIXDNSEnabled ? compactList([newIXDNSDomain.trim() || effectiveNewIXDomain, newIXOpenWRTDNSMasq ? props.t("openwrt_dnsmasq", "OpenWrt dnsmasq") : props.t("dns_split_only", "Split-only")], " / ") : props.t("disabled", "Disabled")} />
                     <StatusRow label={props.t("kernel_modules", "Kernel modules")} value={newIXEffective.kernelModules || "auto"} />
                     <StatusRow label={props.t("bootstrap", "Bootstrap")} value={compactList([newIXBootstrapIX || desiredIXID, newIXEffective.bootstrapControlAPI], " / ")} />
                   </div>
@@ -1564,6 +1588,10 @@ export function AccessView(props: {
                 api_addr: newIXAPIAddr.trim() || undefined,
                 peer_api_addr: newIXPeerAPIAddr.trim() || undefined,
                 dataplane: newIXDataplane || undefined,
+                service_manager: newIXServiceManager || undefined,
+                dns_enabled: newIXDNSEnabled ? "1" : "0",
+                dns_domain: newIXDNSDomain.trim() || undefined,
+                openwrt_dnsmasq: newIXOpenWRTDNSMasq ? "1" : "0",
                 kernel_modules: newIXKernelModules || undefined,
                 goarch: newIXGoArch || undefined,
                 build_bpf: newIXBuildBPF || undefined,

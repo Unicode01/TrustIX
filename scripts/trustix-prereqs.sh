@@ -8,8 +8,13 @@ trustix_prereqs_log() {
   printf '[trustix-prereqs] %s\n' "$*" >&2
 }
 
+trustix_prereqs_lower_ascii() {
+  local value="$1"
+  printf '%s' "${value,,}"
+}
+
 trustix_prereqs_install_enabled() {
-  case "$(printf '%s' "${TRUSTIX_BOOTSTRAP_INSTALL_DEPS:-auto}" | tr '[:upper:]' '[:lower:]')" in
+  case "$(trustix_prereqs_lower_ascii "${TRUSTIX_BOOTSTRAP_INSTALL_DEPS:-auto}")" in
     0|false|no|off|disabled) return 1 ;;
     *) return 0 ;;
   esac

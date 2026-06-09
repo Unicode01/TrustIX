@@ -477,7 +477,22 @@ sudo scripts/install-systemd-linux.sh
 sudo systemctl enable --now trustixd@ix-a
 \`\`\`
 
-For an existing systemd install, update in place without rewriting config,
+For OpenWrt/procd deployment, use the stable deploy script. It installs
+binaries under /opt/trustix by default, writes /etc/init.d/trustix, and stores
+instance state under /etc/trustix/state:
+
+\`\`\`bash
+scripts/trustix-deploy.sh \\
+  --service-manager openwrt \\
+  --tarball /path/to/${release_name}.tar.gz \\
+  --instance ix-a \\
+  --config /path/to/ix-a.json \\
+  --cert-dir /path/to/certs \\
+  --dataplane auto \\
+  --admin-auth
+\`\`\`
+
+For an existing systemd or OpenWrt install, update in place without rewriting config,
 certificates, or data directories:
 
 \`\`\`bash

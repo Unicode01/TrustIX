@@ -33,14 +33,18 @@ if ! repo_root="$(bootstrap_repo_root)"; then
     fi
     if command -v git >/dev/null 2>&1; then
       git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
-    elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
+    elif { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; } && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
       archive_url="${repo_url%.git}/archive/${repo_ref}.tar.gz"
       archive_path="$(mktemp /tmp/trustix-bootstrap-src.XXXXXX.tar.gz)"
-      curl -fsSL "$archive_url" -o "$archive_path"
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$archive_url" -o "$archive_path"
+      else
+        wget -qO "$archive_path" "$archive_url"
+      fi
       tar -xzf "$archive_path" -C "$repo_root" --strip-components=1
       rm -f "$archive_path"
     else
-      echo "ERROR: git is required to clone ${repo_url}; alternatively install curl+tar for GitHub archive bootstrap" >&2
+      echo "ERROR: git is required to clone ${repo_url}; alternatively install curl/wget+tar for GitHub archive bootstrap" >&2
       exit 127
     fi
   fi
@@ -89,6 +93,10 @@ Common options:
   --api ADDR                 deployed management API listen
   --peer-api ADDR            deployed peer API listen
   --dataplane MODE           deployed dataplane mode
+  --service-manager MODE     auto, systemd, or openwrt for deployment (default: auto)
+  --dns-enabled 0|1          enable built-in TrustIX DNS in generated config
+  --dns-domain DOMAIN        DNS suffix; empty uses --domain
+  --openwrt-dnsmasq 0|1      enable OpenWrt dnsmasq conditional forwarding
   --kernel-modules MODE      disabled, auto, or required (default: auto)
   --target USER@HOST         deploy through SSH after build
   --ssh-port PORT
@@ -201,6 +209,11 @@ split_values() {
   done
 }
 
+lower_ascii() {
+  local value="$1"
+  printf '%s' "${value,,}"
+}
+
 field_value() {
   local spec="$1"
   local key="$2"
@@ -237,7 +250,7 @@ field_value() {
 }
 
 json_bool() {
-  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+  case "$(lower_ascii "$1")" in
     1|true|yes|on|enabled) printf 'true' ;;
     0|false|no|off|disabled|"") printf 'false' ;;
     *) die "invalid boolean value: $1" ;;
@@ -335,6 +348,10 @@ bootstrap_control_apis=()
 api_addr="127.0.0.1:8787"
 peer_api_addr="0.0.0.0:9443"
 dataplane="auto"
+service_manager="auto"
+dns_enabled="0"
+dns_domain=""
+openwrt_dnsmasq="0"
 kernel_modules="auto"
 target=""
 ssh_port=""
@@ -392,6 +409,10 @@ while [[ $# -gt 0 ]]; do
     --api) [[ $# -ge 2 ]] || die "--api requires a value"; api_addr="$2"; shift 2 ;;
     --peer-api) [[ $# -ge 2 ]] || die "--peer-api requires a value"; peer_api_addr="$2"; shift 2 ;;
     --dataplane) [[ $# -ge 2 ]] || die "--dataplane requires a value"; dataplane="$2"; shift 2 ;;
+    --service-manager) [[ $# -ge 2 ]] || die "--service-manager requires a value"; service_manager="$2"; shift 2 ;;
+    --dns-enabled) [[ $# -ge 2 ]] || die "--dns-enabled requires a value"; dns_enabled="$2"; shift 2 ;;
+    --dns-domain) [[ $# -ge 2 ]] || die "--dns-domain requires a value"; dns_domain="$2"; shift 2 ;;
+    --openwrt-dnsmasq) [[ $# -ge 2 ]] || die "--openwrt-dnsmasq requires a value"; openwrt_dnsmasq="$2"; shift 2 ;;
     --kernel-modules) [[ $# -ge 2 ]] || die "--kernel-modules requires a value"; kernel_modules="$2"; shift 2 ;;
     --target) [[ $# -ge 2 ]] || die "--target requires a value"; target="$2"; shift 2 ;;
     --ssh-port) [[ $# -ge 2 ]] || die "--ssh-port requires a value"; ssh_port="$2"; shift 2 ;;
@@ -422,6 +443,10 @@ fi
 case "$build_bpf" in 0|1) ;; *) die "--build-bpf must be 0 or 1" ;; esac
 case "$build_ko" in auto|0|1) ;; *) die "--build-ko must be auto, 0, or 1" ;; esac
 case "$build_webui" in 0|1) ;; *) die "--build-webui must be 0 or 1" ;; esac
+service_manager="$(lower_ascii "$service_manager")"
+case "$service_manager" in auto|systemd|openwrt) ;; *) die "--service-manager must be auto, systemd, or openwrt" ;; esac
+case "$(json_bool "$dns_enabled")" in true) dns_enabled=1 ;; false) dns_enabled=0 ;; esac
+case "$(json_bool "$openwrt_dnsmasq")" in true) openwrt_dnsmasq=1; dns_enabled=1 ;; false) openwrt_dnsmasq=0 ;; esac
 if [[ -n "$target" && "$local_install" == "1" ]]; then
   die "--target and --local-install are mutually exclusive"
 fi
@@ -513,7 +538,7 @@ write_lan_object() {
   manage_addr="$(field_value "$spec" manage_address "$manage_address")"
   manage_fwd="$(field_value "$spec" manage_forwarding "$manage_forwarding")"
   manage_rpf="$(field_value "$spec" manage_rp_filter "$manage_rp_filter")"
-  if [[ "$(printf '%s' "$attach" | tr '[:upper:]' '[:lower:]')" == "existing" ]]; then
+  if [[ "$(lower_ascii "$attach")" == "existing" ]]; then
     manage_addr=0
   fi
   raw_adv="$(field_value "$spec" advertise "")"
@@ -628,6 +653,16 @@ done
   fi
   printf '],\n'
   printf '  "management":{"tls":{"mode":"auto","identity":"ix_cert"},"host_api":{"enabled":true,"allow_unauthenticated_reads":false},"web_ui":{"enabled":true}},\n'
+  if [[ "$dns_enabled" == "1" ]]; then
+    printf '  "dns":{"enabled":true'
+    if [[ -n "$dns_domain" ]]; then
+      printf ',"domain":"%s"' "$(json_escape "$dns_domain")"
+    fi
+    if [[ "$openwrt_dnsmasq" == "1" ]]; then
+      printf ',"dnsmasq":{"enabled":true}'
+    fi
+    printf '},\n'
+  fi
   printf '  "kernel_modules":{"trustix_crypto":{"mode":"%s","path":"embedded","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath":{"mode":"%s","path":"embedded","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath_helpers":{"mode":"%s","path":"embedded","reload_on_upgrade":"auto","unload_on_exit":false}},\n' \
     "$(json_escape "$kernel_modules")" "$(json_escape "$kernel_modules")" "$(json_escape "$kernel_modules")"
   printf '  "endpoints":['
@@ -682,7 +717,7 @@ fi
 
 if [[ "$do_deploy" == "1" && ( -n "$target" || "$local_install" == "1" ) ]]; then
   [[ -n "$tarball" ]] || die "deployment requires a tarball; do not combine --no-build with --target unless deploying separately"
-  deploy_args=(--tarball "$tarball" --instance "$ix_id" --config "$config_path" --cert-dir "$deploy_cert_dir" --target-cert-dir "$target_cert_dir" --api "$api_addr" --peer-api "$peer_api_addr" --dataplane "$dataplane" --admin-auth)
+  deploy_args=(--tarball "$tarball" --instance "$ix_id" --config "$config_path" --cert-dir "$deploy_cert_dir" --target-cert-dir "$target_cert_dir" --api "$api_addr" --peer-api "$peer_api_addr" --dataplane "$dataplane" --service-manager "$service_manager" --admin-auth)
   if [[ -n "$target" ]]; then
     deploy_args=(--target "$target" "${deploy_args[@]}")
     [[ -n "$ssh_port" ]] && deploy_args+=(--ssh-port "$ssh_port")
