@@ -469,9 +469,14 @@ case "$build_ko" in auto|0|1) ;; *) die "--build-ko must be auto, 0, or 1" ;; es
 case "$build_webui" in 0|1) ;; *) die "--build-webui must be 0 or 1" ;; esac
 kernel_modules="$(lower_ascii "$kernel_modules")"
 case "$kernel_modules" in disabled|auto|required) ;; *) die "--kernel-modules must be disabled, auto, or required" ;; esac
-if [[ "$kernel_modules" == "required" && "$build_ko" == "auto" ]]; then
-  log "--kernel-modules required: forcing --build-ko 1 so embedded .ko assets are present"
-  build_ko=1
+if [[ "$kernel_modules" == "required" ]]; then
+  if [[ "$build_ko" == "0" ]]; then
+    die "--kernel-modules required cannot be combined with --build-ko 0"
+  fi
+  if [[ "$build_ko" == "auto" ]]; then
+    log "--kernel-modules required: forcing --build-ko 1 so embedded .ko assets are present"
+    build_ko=1
+  fi
 fi
 service_manager="$(lower_ascii "$service_manager")"
 case "$service_manager" in auto|systemd|openwrt) ;; *) die "--service-manager must be auto, systemd, or openwrt" ;; esac
