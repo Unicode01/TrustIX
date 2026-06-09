@@ -1326,7 +1326,76 @@ func (daemon *Daemon) ixProvisionBaseURL(r *http.Request) string {
 	if host == "" {
 		host = daemon.cfg.APIAddr
 	}
+	if proto == "https" {
+		host = daemon.ixProvisionTLSVerifiedHost(host)
+	}
 	return strings.TrimRight(proto+"://"+host, "/")
+}
+
+func (daemon *Daemon) ixProvisionTLSVerifiedHost(hostPort string) string {
+	host := hostWithoutPort(hostPort)
+	if host == "" {
+		return hostPort
+	}
+	cert, ok := daemon.ixProvisionManagementCertificate()
+	if !ok || certMatchesHost(cert, host) {
+		return hostPort
+	}
+	controlHost := hostFromURL(daemon.desired.IX.ControlAPI)
+	if controlHost == "" || controlHost == host || !certMatchesHost(cert, controlHost) {
+		return hostPort
+	}
+	return replaceHostPreservePort(hostPort, controlHost)
+}
+
+func (daemon *Daemon) ixProvisionManagementCertificate() (*x509.Certificate, bool) {
+	tlsConfig := daemon.desired.Management.TLS
+	certPath := daemon.desired.IX.CertPath
+	if normalizedManagementTLSIdentity(tlsConfig.Identity) == managementTLSIdentityCustomCert {
+		certPath = tlsConfig.CertPath
+	}
+	certPath = strings.TrimSpace(certPath)
+	if certPath == "" {
+		return nil, false
+	}
+	cert, _, err := pki.LoadCertificate(certPath)
+	return cert, err == nil
+}
+
+func certMatchesHost(cert *x509.Certificate, host string) bool {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	return host != "" && cert.VerifyHostname(host) == nil
+}
+
+func hostFromURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	return hostWithoutPort(parsed.Host)
+}
+
+func hostWithoutPort(hostPort string) string {
+	hostPort = strings.TrimSpace(hostPort)
+	if hostPort == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(hostPort); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	if strings.HasPrefix(hostPort, "[") {
+		if end := strings.Index(hostPort, "]"); end > 0 {
+			return hostPort[1:end]
+		}
+	}
+	return strings.Trim(hostPort, "[]")
+}
+
+func replaceHostPreservePort(hostPort, host string) string {
+	if _, port, err := net.SplitHostPort(hostPort); err == nil {
+		return net.JoinHostPort(host, port)
+	}
+	return host
 }
 
 func firstHeaderValue(value string) string {
