@@ -27,6 +27,15 @@ trustix_bootstrap_cleanup_temp_repo() {
   fi
 }
 
+trustix_bootstrap_dir_has_entries() {
+  local dir="$1"
+  local entry
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] && return 0
+  done
+  return 1
+}
+
 if ! repo_root="$(bootstrap_repo_root)"; then
   repo_url="${TRUSTIX_BOOTSTRAP_REPO:-https://github.com/Unicode01/TrustIX.git}"
   repo_ref="${TRUSTIX_BOOTSTRAP_REF:-main}"
@@ -38,7 +47,7 @@ if ! repo_root="$(bootstrap_repo_root)"; then
   trap 'trustix_bootstrap_cleanup_temp_repo "$?"' EXIT
   if [[ ! -f "${repo_root}/go.mod" ]]; then
     mkdir -p "$repo_root"
-    if [[ -n "$(find "$repo_root" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    if trustix_bootstrap_dir_has_entries "$repo_root"; then
       echo "ERROR: TRUSTIX_BOOTSTRAP_WORKDIR is not a TrustIX repo and is not empty: ${repo_root}" >&2
       exit 1
     fi
@@ -46,7 +55,7 @@ if ! repo_root="$(bootstrap_repo_root)"; then
       git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
     elif { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; } && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
       archive_url="${repo_url%.git}/archive/${repo_ref}.tar.gz"
-      archive_path="$(mktemp /tmp/trustix-bootstrap-src.XXXXXX.tar.gz)"
+      archive_path="$(mktemp /tmp/trustix-bootstrap-src.XXXXXX)"
       if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$archive_url" -o "$archive_path"
       else
@@ -290,7 +299,7 @@ run_provision_token() {
   local base_url="${provision_url%/}"
   local payload_url="${base_url}/v1/provision/ix/${provision_token}/bootstrap.sh"
   local payload
-  payload="$(mktemp /tmp/trustix-provision-payload.XXXXXX.sh)"
+  payload="$(mktemp /tmp/trustix-provision-payload.XXXXXX)"
   log "fetch provision payload"
   curl -fsSL "$payload_url" -o "$payload"
   chmod 0700 "$payload"

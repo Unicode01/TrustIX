@@ -104,7 +104,7 @@ trustix_prereqs_install_official_go() {
   url="${TRUSTIX_BOOTSTRAP_GO_URL:-https://go.dev/dl/go${version}.linux-${arch}.tar.gz}"
   install_root="${TRUSTIX_BOOTSTRAP_GO_ROOT:-/usr/local/trustix-go}"
   install_dir="${install_root}/go${version}"
-  tmp="$(mktemp /tmp/trustix-go.XXXXXX.tar.gz)"
+  tmp="$(mktemp /tmp/trustix-go.XXXXXX)"
   stage="$(mktemp -d /tmp/trustix-go.XXXXXX)"
 
   trustix_prereqs_log "install Go ${version} from ${url}"
