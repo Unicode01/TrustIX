@@ -208,7 +208,7 @@ Common options:
   --ssh-option OPTION        repeatable
   --goarch ARCH              build target arch
   --kdir DIR                 target kernel build dir
-  --build-bpf 0|1            rebuild embedded eBPF objects (default: 0)
+  --build-bpf 0|1            recompile embedded eBPF objects on the target (default: 0)
   --build-ko auto|0|1        default: auto
   --build-webui 0|1          run npm WebUI rebuild during release build (default: 0)
   --local-install            install and start this IX on the current Linux host after build

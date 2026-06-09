@@ -24,7 +24,7 @@ Options:
   --goarch ARCH             target Go arch: amd64, arm64, arm (default: host)
   --goos OS                 target Go OS (default: linux)
   --kdir DIR                target kernel build dir for .ko build
-  --build-bpf 0|1           rebuild embedded eBPF objects (default: 1)
+  --build-bpf 0|1           recompile embedded eBPF objects on this host (default: 1)
   --build-ko auto|0|1       build kernel modules (default: auto)
   --embed-ko 0|1            embed built .ko into trustixd (default: 1)
   --build-tests 0|1         build ebpf.test/kernelmodule.test (default: 1)
@@ -141,11 +141,19 @@ if [[ -z "$version" ]]; then
   version="$release_name"
 fi
 
-build_dep_cmds=(go install realpath sha256sum stat tar gzip)
+trustix_prereqs_ensure_commands go install realpath sha256sum stat tar gzip || die "source build dependencies are missing; automatic dependency install failed"
 if [[ "$build_bpf" == "1" ]]; then
-  build_dep_cmds+=(clang make gcc)
+  manager="$(trustix_prereqs_package_manager 2>/dev/null || true)"
+  bpf_strict="$(trustix_prereqs_lower_ascii "${TRUSTIX_RELEASE_BPF_STRICT:-0}")"
+  if [[ "$manager" == "opkg" && "$bpf_strict" != "1" && "$bpf_strict" != "true" && "$bpf_strict" != "yes" && "$bpf_strict" != "on" ]]; then
+    log "OpenWrt/opkg does not normally provide clang/LLVM; using embedded eBPF objects from the source tree (build_bpf=0)"
+    build_bpf=0
+  else
+    if ! trustix_prereqs_ensure_commands clang make gcc; then
+      die "BPF rebuild dependencies are missing; automatic dependency install failed"
+    fi
+  fi
 fi
-trustix_prereqs_ensure_commands "${build_dep_cmds[@]}" || die "source build dependencies are missing; automatic dependency install failed"
 if [[ -z "${GOPROXY:-}" ]] && trustix_prereqs_mirrors_enabled; then
   export GOPROXY="https://goproxy.cn,https://goproxy.io,direct"
 fi
