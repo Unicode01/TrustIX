@@ -15,7 +15,6 @@
       --input: #ffffff;
       --button: #ffffff;
       --button-hover: #eef4f7;
-      --toolbar: rgba(255, 255, 255, 0.74);
       --strong: #0f5f7a;
       --strong-dark: #09455a;
       --danger: #9f2d20;
@@ -38,7 +37,6 @@
         --input: #10161d;
         --button: #151d25;
         --button-hover: #1d2a35;
-        --toolbar: rgba(21, 29, 37, 0.78);
         --strong: #3aa6c9;
         --strong-dark: #2889aa;
         --danger: #f07866;
@@ -61,7 +59,6 @@
       --input: #10161d;
       --button: #151d25;
       --button-hover: #1d2a35;
-      --toolbar: rgba(21, 29, 37, 0.78);
       --strong: #3aa6c9;
       --strong-dark: #2889aa;
       --danger: #f07866;
@@ -108,15 +105,10 @@
 
     .toolbar {
       display: flex;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
       flex-wrap: wrap;
       justify-content: flex-end;
-      width: fit-content;
-      padding: 4px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: var(--toolbar);
     }
 
     h1 {
@@ -185,17 +177,25 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 7px;
-      min-width: 76px;
-      height: 34px;
-      border-color: transparent;
-      border-radius: 999px;
-      background: transparent;
-      padding: 0 10px;
+      gap: 5px;
+      min-width: 34px;
+      min-height: 30px;
+      height: 30px;
+      border-radius: 6px;
+      padding: 0 8px;
     }
 
-    .icon-button:hover {
-      border-color: var(--line);
+    .language-button {
+      min-width: 52px;
+    }
+
+    .theme-button {
+      width: 34px;
+      padding: 0;
+    }
+
+    .theme-button .icon-label {
+      display: none;
     }
 
     .icon-button:active {
@@ -203,8 +203,8 @@
     }
 
     .icon {
-      width: 17px;
-      height: 17px;
+      width: 16px;
+      height: 16px;
       stroke: currentColor;
       stroke-width: 2;
       stroke-linecap: round;
@@ -214,8 +214,8 @@
     }
 
     .icon-label {
-      min-width: 32px;
-      font-size: 13px;
+      min-width: 18px;
+      font-size: 12px;
       font-weight: 700;
       text-align: center;
     }
@@ -436,11 +436,11 @@
           <a href="./deployment-scripts.md" data-i18n="deployment_docs">Deployment Docs</a>
         </nav>
         <div class="toolbar" aria-label="Page preferences">
-          <button id="language-toggle" class="button icon-button" type="button" aria-label="Language">
+          <button id="language-toggle" class="button icon-button language-button" type="button" aria-label="Language">
             <svg class="icon" aria-hidden="true"><use href="#icon-languages"></use></svg>
             <span id="language-label" class="icon-label">EN</span>
           </button>
-          <button id="theme-toggle" class="button icon-button" type="button" aria-label="Toggle color theme">
+          <button id="theme-toggle" class="button icon-button theme-button" type="button" aria-label="Toggle color theme">
             <svg class="icon" aria-hidden="true"><use id="theme-icon" href="#icon-monitor"></use></svg>
             <span id="theme-label" class="icon-label">Auto</span>
           </button>
