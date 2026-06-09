@@ -42,6 +42,10 @@ func CleanupDataplane(ctx context.Context, cfg Config) error {
 	if _, err := iptunneltransport.NewManager(cfg.DataDir).Cleanup(ctx); err != nil {
 		return fmt.Errorf("cleanup ip tunnels: %w", err)
 	}
+	daemon := &Daemon{cfg: cfg}
+	if err := daemon.cleanupDNSMasq(ctx); err != nil {
+		return fmt.Errorf("cleanup dnsmasq: %w", err)
+	}
 	return nil
 }
 

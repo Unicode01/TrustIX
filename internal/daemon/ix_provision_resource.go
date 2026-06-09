@@ -248,16 +248,22 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 	if err != nil {
 		return ixProvisionIssueResponse{}, fmt.Errorf("issue IX certificate: %w", err)
 	}
-	routeBundle, err := pki.Issue(configCA, pki.IssueRequest{
-		CommonName: "TrustIX Route Authorization " + string(normalized.IXID),
-		Role:       pki.RoleRouteAuthorization,
-		Domain:     string(normalized.Domain),
-		IX:         string(normalized.IXID),
-		Prefixes:   corePrefixStrings(prefixes),
-		NotAfter:   time.Now().UTC().AddDate(1, 0, 0),
-	})
-	if err != nil {
-		return ixProvisionIssueResponse{}, fmt.Errorf("issue route authorization: %w", err)
+	var routeAuthPEM string
+	var routeAuthFingerprints []string
+	if len(prefixes) > 0 {
+		routeBundle, err := pki.Issue(configCA, pki.IssueRequest{
+			CommonName: "TrustIX Route Authorization " + string(normalized.IXID),
+			Role:       pki.RoleRouteAuthorization,
+			Domain:     string(normalized.Domain),
+			IX:         string(normalized.IXID),
+			Prefixes:   corePrefixStrings(prefixes),
+			NotAfter:   time.Now().UTC().AddDate(1, 0, 0),
+		})
+		if err != nil {
+			return ixProvisionIssueResponse{}, fmt.Errorf("issue route authorization: %w", err)
+		}
+		routeAuthPEM = string(routeBundle.CertPEM)
+		routeAuthFingerprints = []string{pki.CertificateFingerprintSHA256(routeBundle.Cert)}
 	}
 	trustRoots, err := ixProvisionTrustRootFiles(desired, normalized.TrustRoots)
 	if err != nil {
@@ -280,7 +286,7 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 		ConfigJSON:     string(configJSON),
 		CertificatePEM: string(ixBundle.CertPEM),
 		PrivateKeyPEM:  string(ixBundle.KeyPEM),
-		RouteAuthPEM:   string(routeBundle.CertPEM),
+		RouteAuthPEM:   routeAuthPEM,
 		TrustRoots:     trustRoots,
 		TargetCertDir:  normalized.TargetCertDir,
 		LANIface:       normalized.LANIface,
@@ -310,7 +316,7 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 		State:                 admissionStateApproved,
 		IXCertFingerprint:     pki.CertificateFingerprintSHA256(ixBundle.Cert),
 		AllowedPrefixes:       prefixes,
-		RouteAuthFingerprints: []string{pki.CertificateFingerprintSHA256(routeBundle.Cert)},
+		RouteAuthFingerprints: routeAuthFingerprints,
 		ControlAPI:            normalized.ControlAPI,
 		EffectiveAt:           time.Now().UTC(),
 	}
@@ -481,8 +487,8 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 	if err != nil {
 		return ixProvisionIssueRequest{}, nil, fmt.Errorf("advertise: %w", err)
 	}
-	if len(prefixes) == 0 {
-		return ixProvisionIssueRequest{}, nil, fmt.Errorf("advertise must contain at least one CIDR prefix")
+	if len(prefixes) == 0 && request.Role != "transit_ix" {
+		return ixProvisionIssueRequest{}, nil, fmt.Errorf("advertise must contain at least one CIDR prefix unless role is transit_ix")
 	}
 
 	request.EndpointTransport = strings.ToLower(strings.TrimSpace(request.EndpointTransport))
@@ -1023,26 +1029,12 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			TrustRoots: rootPaths,
 		},
 		IX: config.IXConfig{
-			ID:                  request.IXID,
-			Domain:              request.Domain,
-			CertPath:            path.Join(request.TargetCertDir, ixBase+".crt"),
-			KeyPath:             path.Join(request.TargetCertDir, ixBase+".key"),
-			ControlAPI:          request.ControlAPI,
-			ControlAPIPublish:   ixProvisionControlAPIPublishMode(request),
-			RouteAuthorizations: []string{path.Join(request.TargetCertDir, ixBase+"-route.crt")},
-		},
-		LAN: config.LANConfig{
-			ID:               config.DefaultLANID,
-			Type:             config.LANTypeLocal,
-			Iface:            request.LANIface,
-			UnderlayIface:    request.UnderlayIface,
-			Gateway:          request.LANGateway,
-			Advertise:        append([]core.Prefix(nil), prefixes...),
-			Mode:             config.LANModeRouted,
-			AttachMode:       attachMode,
-			ManageAddress:    manageAddress,
-			ManageForwarding: true,
-			ManageRPFilter:   true,
+			ID:                request.IXID,
+			Domain:            request.Domain,
+			CertPath:          path.Join(request.TargetCertDir, ixBase+".crt"),
+			KeyPath:           path.Join(request.TargetCertDir, ixBase+".key"),
+			ControlAPI:        request.ControlAPI,
+			ControlAPIPublish: ixProvisionControlAPIPublishMode(request),
 		},
 		Management: config.ManagementConfig{
 			TLS: config.ManagementTLSConfig{
@@ -1091,6 +1083,24 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			SessionPool:     config.SessionPoolPolicyConfig{Warmup: true},
 		},
 	}
+	if len(prefixes) > 0 {
+		desired.IX.RouteAuthorizations = []string{path.Join(request.TargetCertDir, ixBase+"-route.crt")}
+	}
+	if ixProvisionHasLAN(request, prefixes) {
+		desired.LAN = config.LANConfig{
+			ID:               config.DefaultLANID,
+			Type:             config.LANTypeLocal,
+			Iface:            request.LANIface,
+			UnderlayIface:    request.UnderlayIface,
+			Gateway:          request.LANGateway,
+			Advertise:        append([]core.Prefix(nil), prefixes...),
+			Mode:             config.LANModeRouted,
+			AttachMode:       attachMode,
+			ManageAddress:    manageAddress && request.LANGateway != "",
+			ManageForwarding: len(prefixes) > 0,
+			ManageRPFilter:   len(prefixes) > 0,
+		}
+	}
 	if request.BootstrapControlAPI != "" {
 		desired.Bootstrap.Peers = []config.BootstrapPeerConfig{{
 			ID:         request.BootstrapIX,
@@ -1103,6 +1113,13 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 		return config.Desired{}, fmt.Errorf("validate provisioned IX config: %w", err)
 	}
 	return desired, nil
+}
+
+func ixProvisionHasLAN(request ixProvisionIssueRequest, prefixes []core.Prefix) bool {
+	return len(prefixes) > 0 ||
+		strings.TrimSpace(request.LANIface) != "" ||
+		strings.TrimSpace(request.UnderlayIface) != "" ||
+		strings.TrimSpace(request.LANGateway) != ""
 }
 
 func ixProvisionBootstrapScript(input ixProvisionScriptInput) (string, error) {
@@ -1130,7 +1147,9 @@ func ixProvisionBootstrapScript(input ixProvisionScriptInput) (string, error) {
 	b.WriteString("\"\n")
 	appendHereDoc(&b, "\"${cert_dir}/"+certFile+"\"", "IX_CERT", input.CertificatePEM)
 	appendHereDoc(&b, "\"${cert_dir}/"+keyFile+"\"", "IX_KEY", input.PrivateKeyPEM)
-	appendHereDoc(&b, "\"${cert_dir}/"+routeFile+"\"", "ROUTE_AUTH", input.RouteAuthPEM)
+	if strings.TrimSpace(input.RouteAuthPEM) != "" {
+		appendHereDoc(&b, "\"${cert_dir}/"+routeFile+"\"", "ROUTE_AUTH", input.RouteAuthPEM)
+	}
 	for _, root := range input.TrustRoots {
 		appendHereDoc(&b, "\"${cert_dir}/"+root.Name+"\"", "TRUST_ROOT_"+root.Name, root.PEM)
 	}

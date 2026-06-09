@@ -5,6 +5,7 @@ The stable automation entry points are:
 - `scripts/trustix-build.sh`
 - `scripts/trustix-deploy.sh`
 - `scripts/trustix-update.sh`
+- `scripts/trustix-uninstall.sh`
 - `scripts/trustix-bootstrap-ix.sh`
 - `scripts/trustix-wizard.sh`
 - `scripts/trustix-latency-history-summary.py`
@@ -35,6 +36,11 @@ The wizard has two modes:
 The wizard is intentionally a thin interactive wrapper. Automation, WebUI, and
 CI should call `trustix-bootstrap-ix.sh`, `trustix-build.sh`, `trustix-deploy.sh`,
 and `trustix-update.sh` directly.
+
+The WebUI one-time provision flow supports transit-only IX bootstrap without a
+local advertised prefix. In that mode the issued target config omits local LAN
+route authorization; the new IX joins the control fabric and can add LANs or
+downstream prefixes later through the config page.
 
 ## Build
 
@@ -114,6 +120,40 @@ curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trus
 ```
 
 Prefer release tarballs for small OpenWrt/soft-router machines. Source-build update needs Go and, when `.ko` is desired, matching kernel headers on the target.
+
+## Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-uninstall.sh | \
+  sudo bash -s -- --all
+```
+
+`trustix-uninstall.sh` stops detected TrustIX instances, runs
+`trustixd -cleanup-dataplane`, removes the systemd/OpenWrt service wrapper, and
+removes installed binaries. By default it preserves `/etc/trustix`,
+`/etc/trustix/certs`, and runtime state under `/var/lib/trustix/<instance>` or
+`/etc/trustix/state/<instance>` on OpenWrt.
+
+Remove one instance but leave shared binaries and service files:
+
+```bash
+sudo bash scripts/trustix-uninstall.sh --instance ix-a --purge
+```
+
+Remove all instances, binaries, service files, instance config/data, and
+instance certificate/key files:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-uninstall.sh | \
+  sudo bash -s -- --all --purge
+```
+
+`--purge` removes only instance files. `--purge-certs-dir` removes the whole
+configured cert directory and is intended for disposable lab installs. Full
+uninstall attempts to unload `trustix_datapath`, `trustix_datapath_helpers`, and
+`trustix_crypto` after dataplane cleanup; use `--keep-kernel-modules` to leave
+loaded modules in place. Remote cleanup is available with `--target USER@HOST`
+plus `--ssh-port`, `--ssh-key`, and repeated `--ssh-option`.
 
 ## GitHub Workflows
 

@@ -504,8 +504,11 @@ function App() {
   }, [api, pushToast, refreshRuntime, t]);
 
   const issueIXProvision = useCallback(async (request: IXProvisionIssueRequest) => {
-    if (!request.ix_id?.trim() || !request.advertise?.length || (request.endpoint_mode !== "active" && !request.endpoint_address?.trim())) {
-      const message = t("new_ix_required_fields", "IX ID, data endpoint, and advertised prefixes are required");
+    const transitOnly = String(request.role || "").trim().toLowerCase().replaceAll("-", "_") === "transit_ix";
+    if (!request.ix_id?.trim() || (!transitOnly && !request.advertise?.length) || (request.endpoint_mode !== "active" && !request.endpoint_address?.trim())) {
+      const message = transitOnly
+        ? t("new_ix_required_fields_transit", "IX ID and bootstrap endpoint are required")
+        : t("new_ix_required_fields", "IX ID, data endpoint, and advertised prefixes are required");
       setConfigMessage(message);
       pushToast("info", t("join_new_ix", "Join new IX"), message);
       return;

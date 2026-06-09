@@ -233,6 +233,15 @@ host_from_url() {
   printf '%s\n' "$value"
 }
 
+absolute_path() {
+  local value="$1"
+  [[ -n "$value" ]] || return 0
+  case "$value" in
+    /*) printf '%s\n' "$value" ;;
+    *) printf '%s/%s\n' "$(pwd -P)" "$value" ;;
+  esac
+}
+
 prefix_from_gateway() {
   local value="$1"
   local ip="${value%%/*}"
@@ -296,6 +305,7 @@ run_first_ix() {
   domain_id="$(value_or_prompt_required "$first_domain_id" "Domain ID" "trustix.local")"
   ix_id="$(value_or_prompt_required "$first_ix_id" "First IX ID" "ix-a")"
   cert_dir="$(value_or_prompt_required "$first_cert_dir" "Local CA/cert directory" "certs")"
+  cert_dir="$(absolute_path "$cert_dir")"
   control_api="$(value_or_prompt_required "$first_control_api" "Published IX control API URL" "$default_control_api")"
   host="$(host_from_url "$control_api")"
   lan_iface="$(value_or_prompt_required "$first_lan_iface" "LAN interface" "br-lan")"

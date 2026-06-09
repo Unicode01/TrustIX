@@ -1358,8 +1358,9 @@ export function AccessView(props: {
   const newIXAdvertiseWarnings = validateCIDRList(props.t, newIXAdvertise);
   const effectiveNewIXDomain = newIXDomain.trim() || desiredDomainID.trim();
   const newIXActiveOnly = newIXEndpointMode === "active";
+  const newIXAdvertiseRequired = newIXRole !== "transit_ix";
   const newIXBootstrapControlAPIEffective = newIXBootstrapControlAPI.trim() || desiredControlAPI.trim();
-  const newIXCommandDisabled = !newIXID.trim() || !effectiveNewIXDomain || (!newIXActiveOnly && !newIXEndpointAddress.trim()) || (newIXActiveOnly && !newIXBootstrapControlAPIEffective) || newIXAdvertisePrefixes.length === 0 || newIXAdvertiseWarnings.length > 0;
+  const newIXCommandDisabled = !newIXID.trim() || !effectiveNewIXDomain || (!newIXActiveOnly && !newIXEndpointAddress.trim()) || (newIXActiveOnly && !newIXBootstrapControlAPIEffective) || (newIXAdvertiseRequired && newIXAdvertisePrefixes.length === 0) || newIXAdvertiseWarnings.length > 0;
   const newIXResolvedEndpointName = newIXEndpointName.trim() || `${safeShellName(newIXID, "ix-new")}-${newIXEndpointTransport || "udp"}`;
   const newIXQuickJoinCommand = props.issuedIXProvision?.command || "";
   const newIXEffective = ixProvisionEffectiveDefaults({
@@ -1421,8 +1422,16 @@ export function AccessView(props: {
   const newIXRequiredItems = [
     { label: props.t("new_ix_id", "New IX ID"), ok: Boolean(newIXID.trim()) },
     { label: newIXActiveOnly ? props.t("new_ix_bootstrap_control_api", "Bootstrap control API") : newIXEndpointAddressLabel, ok: newIXActiveOnly ? Boolean(newIXBootstrapControlAPIEffective) : Boolean(newIXEndpointAddress.trim()) },
-    { label: props.t("new_ix_lan_prefixes", "New IX route prefixes"), ok: newIXAdvertisePrefixes.length > 0 && newIXAdvertiseWarnings.length === 0 },
+    {
+      label: newIXAdvertiseRequired ? props.t("new_ix_lan_prefixes", "New IX route prefixes") : props.t("new_ix_lan_prefixes_optional", "Optional route prefixes"),
+      ok: newIXAdvertiseRequired ? newIXAdvertisePrefixes.length > 0 && newIXAdvertiseWarnings.length === 0 : newIXAdvertiseWarnings.length === 0,
+    },
   ];
+  const newIXAdvertiseLabel = newIXAdvertiseRequired ? props.t("new_ix_lan_prefixes", "New IX route prefixes") : props.t("new_ix_lan_prefixes_optional", "Optional route prefixes");
+  const newIXAdvertiseHelp = newIXAdvertiseRequired
+    ? props.t("help_new_ix_lan_prefixes", "CIDR prefixes this new IX will advertise or may transit in the domain, one per line. This creates route authorization, not a target-host interface address; the LAN gateway is derived from the role or overridden in advanced options.")
+    : props.t("help_new_ix_lan_prefixes_transit", "Transit IX nodes can join without a local LAN prefix. Add CIDRs only when this node should originate or authorize downstream routes now; otherwise configure LANs later from the config page.");
+  const newIXAdvertisePlaceholder = newIXAdvertiseRequired ? "10.83.0.0/24" : props.t("new_ix_lan_prefixes_optional_placeholder", "optional: 10.83.0.0/24");
   const deviceDelegatedParentPrefixes = arrayValue(props.desired?.lan?.advertise);
   const deviceReservedPrefixes = [
     props.deviceAccess?.address_pool || "",
@@ -1494,8 +1503,9 @@ export function AccessView(props: {
               <Field label={props.t("new_ix_id", "New IX ID")} help={props.t("help_new_ix_id", "Unique IX identity to issue. It must differ from the current IX and becomes the certificate IX name.")} placeholder="ix-c" value={newIXID} onChange={setNewIXID} />
               <Field label={newIXEndpointAddressLabel} help={newIXEndpointAddressHelp} placeholder={newIXEndpointAddressPlaceholder} value={newIXEndpointAddress} onChange={setNewIXEndpointAddress} />
             </div>
-            <Field label={props.t("new_ix_lan_prefixes", "New IX route prefixes")} help={props.t("help_new_ix_lan_prefixes", "CIDR prefixes this new IX will advertise or may transit in the domain, one per line. This creates route authorization, not a target-host interface address; the LAN gateway is derived from the role or overridden in advanced options.")} textarea placeholder="10.83.0.0/24" value={newIXAdvertise} onChange={setNewIXAdvertise} />
+            <Field label={newIXAdvertiseLabel} help={newIXAdvertiseHelp} textarea placeholder={newIXAdvertisePlaceholder} value={newIXAdvertise} onChange={setNewIXAdvertise} />
             {newIXAdvertiseWarnings.length > 0 && <div className="field-hint warn config-wide">{newIXAdvertiseWarnings.join(" · ")}</div>}
+            {!newIXAdvertiseRequired && newIXAdvertisePrefixes.length === 0 && <div className="field-hint config-wide">{props.t("new_ix_transit_no_prefix_note", "Transit-only join: no local LAN route authorization will be issued. The IX can still join the control fabric and learn domain routes.")}</div>}
             <div className="requirement-strip config-wide" aria-label={props.t("new_ix_required_fields", "Required fields")}>
               <span className="requirement-label">{props.t("new_ix_required_fields", "Required fields")}</span>
               {newIXRequiredItems.map((item) => (

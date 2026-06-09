@@ -214,6 +214,15 @@ lower_ascii() {
   printf '%s' "${value,,}"
 }
 
+absolute_path() {
+  local value="$1"
+  [[ -n "$value" ]] || return 0
+  case "$value" in
+    /*) printf '%s\n' "$value" ;;
+    *) printf '%s/%s\n' "$(pwd -P)" "$value" ;;
+  esac
+}
+
 field_value() {
   local spec="$1"
   local key="$2"
@@ -456,11 +465,24 @@ fi
 
 if [[ -z "$work_dir" ]]; then
   work_dir="${repo_root}/build/bootstrap/${ix_id}"
+else
+  work_dir="$(absolute_path "$work_dir")"
 fi
+source_certs="$(absolute_path "$source_certs")"
 domain_ca_cert="${domain_ca_cert:-${source_certs}/domain-ca.pem}"
 domain_ca_key="${domain_ca_key:-${source_certs}/domain-ca.key}"
 config_ca_cert="${config_ca_cert:-${source_certs}/config-ca.pem}"
 config_ca_key="${config_ca_key:-${source_certs}/config-ca.key}"
+domain_ca_cert="$(absolute_path "$domain_ca_cert")"
+domain_ca_key="$(absolute_path "$domain_ca_key")"
+config_ca_cert="$(absolute_path "$config_ca_cert")"
+config_ca_key="$(absolute_path "$config_ca_key")"
+if [[ -n "$kdir" ]]; then
+  kdir="$(absolute_path "$kdir")"
+fi
+for i in "${!trust_roots[@]}"; do
+  trust_roots[$i]="$(absolute_path "${trust_roots[$i]}")"
+done
 [[ -f "$domain_ca_cert" ]] || die "domain CA cert not found: $domain_ca_cert"
 [[ -f "$domain_ca_key" ]] || die "domain CA key not found: $domain_ca_key"
 [[ -f "$config_ca_cert" ]] || die "config CA cert not found: $config_ca_cert"

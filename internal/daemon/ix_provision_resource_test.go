@@ -173,6 +173,72 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	}
 }
 
+func TestIXProvisionNonTransitRequiresAdvertisedPrefix(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	_, _, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:            "ix-empty",
+		Role:            "public_ix",
+		EndpointAddress: "ix-empty.example.com:7000",
+		ProvisionURL:    "https://ix-a.example.com:18787",
+	}, desired)
+	if err == nil || !strings.Contains(err.Error(), "advertise must contain at least one CIDR prefix") {
+		t.Fatalf("normalize error = %v, want advertise requirement", err)
+	}
+}
+
+func TestIXProvisionTransitAllowsNoAdvertisedPrefixes(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	desired.IX.ControlAPI = "https://ix-a.example.com:9443"
+	daemon := newConfigApplyTestDaemon(t, desired)
+	daemon.cfg.APIAdminAuth = true
+
+	certDir := filepath.Dir(pkiSet.trustRoots[0])
+	body := mustJSON(t, ixProvisionIssueRequest{
+		IXID:                "ix-transit",
+		Role:                "transit_ix",
+		EndpointMode:        "active",
+		BootstrapControlAPI: "https://ix-a.example.com:9443",
+		ProvisionURL:        "https://ix-a.example.com:18787",
+		DomainCACert:        filepath.Join(certDir, "domain-ca.pem"),
+		DomainCAKey:         filepath.Join(certDir, "domain-ca.key"),
+		ConfigCACert:        filepath.Join(certDir, "config-ca.pem"),
+		ConfigCAKey:         filepath.Join(certDir, "config-ca.key"),
+		TrustRoots:          pkiSet.trustRoots,
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/provision/ix", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	signAdminTestRequest(t, request, body, pkiSet.adminCert, pkiSet.adminKey)
+	recorder := httptest.NewRecorder()
+	daemon.handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("provision status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response ixProvisionIssueResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.RouteAuthFingerprints) != 0 || len(response.Admission.RouteAuthFingerprints) != 0 || len(response.Admission.AllowedPrefixes) != 0 {
+		t.Fatalf("transit response should not issue route authorization: %#v", response)
+	}
+
+	consume := httptest.NewRequest(http.MethodGet, "/v1/provision/ix/"+response.Token+"/bootstrap.sh", nil)
+	consumeRecorder := httptest.NewRecorder()
+	daemon.handler().ServeHTTP(consumeRecorder, consume)
+	if consumeRecorder.Code != http.StatusOK {
+		t.Fatalf("consume status = %d body=%s", consumeRecorder.Code, consumeRecorder.Body.String())
+	}
+	script := consumeRecorder.Body.String()
+	if strings.Contains(script, "-route.crt") || strings.Contains(script, "ROUTE_AUTH") {
+		t.Fatalf("transit bootstrap script contains route authorization material:\n%s", script)
+	}
+	if strings.Contains(script, `"advertise": [
+      "`) {
+		t.Fatalf("transit bootstrap script should not advertise a local prefix by default:\n%s", script)
+	}
+}
+
 func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")

@@ -65,6 +65,10 @@ machine only receives the deployable IX certs/config needed for that node. The
 Web UI emits a fuller POSIX `sh` compatible command that can install `bash` on
 OpenWrt before running the bootstrap.
 
+For a transit-only IX, the Web UI can issue the token without a local LAN
+prefix. That node joins the control fabric first and can add LANs or downstream
+route authorization later from the config page.
+
 More deployment details are in [docs/deployment-scripts.md](docs/deployment-scripts.md).
 
 ## Local Development
