@@ -1268,11 +1268,10 @@ func mustJSONScalar(value any) []byte {
 }
 
 func ixProvisionCommand(provisionURL, token string) string {
-	url := ixBootstrapScriptURL()
 	args := []string{"--provision-url", provisionURL, "--token", token}
 	parts := []string{
 		"tmp=\"$(mktemp /tmp/trustix-bootstrap.XXXXXX)\"",
-		"(curl -fsSL " + shellQuote(url) + " -o \"$tmp\" || wget -qO \"$tmp\" " + shellQuote(url) + ")",
+		ixProvisionDownloadBootstrapCommand(ixBootstrapScriptURLs()),
 		"if ! command -v bash >/dev/null 2>&1; then if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; elif command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y bash; elif command -v dnf >/dev/null 2>&1; then dnf install -y bash; elif command -v yum >/dev/null 2>&1; then yum install -y bash; elif command -v apk >/dev/null 2>&1; then apk add --no-cache bash; else echo 'bash is required' >&2; rm -f \"$tmp\"; exit 127; fi; fi",
 		"bash \"$tmp\"",
 	}
@@ -1281,6 +1280,27 @@ func ixProvisionCommand(provisionURL, token string) string {
 	}
 	parts[len(parts)-1] += "; rc=$?; rm -f \"$tmp\"; [ \"$rc\" -eq 0 ]"
 	return strings.Join(parts, " && \\\n")
+}
+
+func ixProvisionDownloadBootstrapCommand(urls []string) string {
+	var builder strings.Builder
+	builder.WriteString("ok=0; for url in")
+	for _, url := range urls {
+		builder.WriteByte(' ')
+		builder.WriteString(shellQuote(url))
+	}
+	builder.WriteString("; do if (curl -fsSL --connect-timeout 15 --retry 2 \"$url\" -o \"$tmp\" 2>/dev/null || wget -T 20 -qO \"$tmp\" \"$url\" 2>/dev/null); then ok=1; break; fi; done; [ \"$ok\" -eq 1 ] || { echo 'download trustix bootstrap failed' >&2; rm -f \"$tmp\"; exit 1; }")
+	return builder.String()
+}
+
+func ixBootstrapScriptURLs() []string {
+	url := ixBootstrapScriptURL()
+	return []string{
+		url,
+		"https://gh.llkk.cc/" + url,
+		"https://ghproxy.net/" + url,
+		"https://mirror.ghproxy.com/" + url,
+	}
 }
 
 func ixBootstrapScriptURL() string {

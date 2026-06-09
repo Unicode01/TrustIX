@@ -61,6 +61,10 @@ Examples:
 
   curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-update.sh | \
     sudo bash -s -- --repo https://github.com/Unicode01/TrustIX.git --ref main --build-ko auto
+
+Environment:
+  TRUSTIX_UPDATE_MIRRORS=0 disables GitHub mirror fallbacks.
+  TRUSTIX_UPDATE_GITHUB_MIRRORS="https://proxy/" overrides GitHub mirrors.
 EOF
 }
 
@@ -224,13 +228,77 @@ apply_target_defaults() {
 download_file() {
   local url="$1"
   local out="$2"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$out"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$out" "$url"
-  else
+  local candidate
+  local -a candidates=()
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
     die "curl or wget is required to download release tarballs"
   fi
+  mapfile -t candidates < <(github_url_candidates "$url")
+  for candidate in "${candidates[@]}"; do
+    [[ -n "$candidate" ]] || continue
+    rm -f "$out"
+    log "download ${candidate}"
+    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 15 --retry 2 "$candidate" -o "$out"; then
+      return 0
+    fi
+    if command -v wget >/dev/null 2>&1 && wget -T 20 -qO "$out" "$candidate"; then
+      return 0
+    fi
+  done
+  rm -f "$out"
+  return 1
+}
+
+mirrors_enabled() {
+  case "${TRUSTIX_UPDATE_MIRRORS:-${TRUSTIX_BOOTSTRAP_MIRRORS:-auto}}" in
+    0|false|no|off|disabled) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+github_url_candidates() {
+  local url="$1"
+  local mirror mirrors
+  printf '%s\n' "$url"
+  mirrors_enabled || return 0
+  case "$url" in
+    https://github.com/*|https://raw.githubusercontent.com/*) ;;
+    *) return 0 ;;
+  esac
+  mirrors="${TRUSTIX_UPDATE_GITHUB_MIRRORS:-${TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS:-https://gh.llkk.cc/ https://ghproxy.net/ https://mirror.ghproxy.com/}}"
+  for mirror in $mirrors; do
+    [[ -n "$mirror" ]] || continue
+    printf '%s%s\n' "${mirror%/}/" "$url"
+  done
+}
+
+extract_source_archive() {
+  local archive_path="$1"
+  local dest="$2"
+  local stage archive_root candidate
+  stage="$(mktemp -d /tmp/trustix-update-src.XXXXXX)"
+  if ! tar -xzf "$archive_path" -C "$stage"; then
+    rm -rf "$stage"
+    return 1
+  fi
+  archive_root=""
+  for candidate in "$stage"/*; do
+    if [[ -d "$candidate" ]]; then
+      archive_root="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$archive_root" ]]; then
+    rm -rf "$stage"
+    return 1
+  fi
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  if ! cp -R "$archive_root"/. "$dest"/; then
+    rm -rf "$stage"
+    return 1
+  fi
+  rm -rf "$stage"
 }
 
 repo_root="$(script_repo_root || true)"
@@ -317,11 +385,31 @@ ensure_source_repo() {
   if [[ -n "$repo_root" && -f "${repo_root}/go.mod" ]]; then
     return
   fi
-  need_cmd git
   repo_root="${work_dir}/src"
   if [[ ! -f "${repo_root}/go.mod" ]]; then
-    log "clone ${repo_url}#${repo_ref}"
-    git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
+    local cloned=0
+    if command -v git >/dev/null 2>&1; then
+      log "clone ${repo_url}#${repo_ref}"
+      if git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2; then
+        cloned=1
+      else
+        log "git clone failed, trying GitHub archive mirrors"
+        rm -rf "$repo_root"
+        mkdir -p "$repo_root"
+      fi
+    fi
+    if [[ "$cloned" != "1" && "$repo_url" == https://github.com/* ]]; then
+      need_cmd tar
+      local archive_url archive_path
+      archive_url="${repo_url%.git}/archive/${repo_ref}.tar.gz"
+      archive_path="${work_dir}/src.tar.gz"
+      download_file "$archive_url" "$archive_path"
+      extract_source_archive "$archive_path" "$repo_root"
+      cloned=1
+    fi
+    if [[ "$cloned" != "1" ]]; then
+      die "git is required to clone ${repo_url}; alternatively use a GitHub repo URL with curl/wget+tar available"
+    fi
   fi
 }
 
@@ -345,7 +433,6 @@ build_source_tarball() {
 prepare_tarball() {
   if [[ -n "$release_url" ]]; then
     tarball="${work_dir}/package.tar.gz"
-    log "download ${release_url}"
     download_file "$release_url" "$tarball"
   elif [[ -z "$tarball" ]]; then
     build_source_tarball

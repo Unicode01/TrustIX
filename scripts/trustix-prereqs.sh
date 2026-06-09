@@ -97,24 +97,66 @@ trustix_prereqs_go_arch() {
   esac
 }
 
+trustix_prereqs_mirrors_enabled() {
+  case "${TRUSTIX_BOOTSTRAP_MIRRORS:-auto}" in
+    0|false|no|off|disabled) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+trustix_prereqs_go_url_candidates() {
+  local version="$1"
+  local arch="$2"
+  if [[ -n "${TRUSTIX_BOOTSTRAP_GO_URL:-}" ]]; then
+    printf '%s\n' "$TRUSTIX_BOOTSTRAP_GO_URL"
+    return
+  fi
+  printf '%s\n' "https://go.dev/dl/go${version}.linux-${arch}.tar.gz"
+  trustix_prereqs_mirrors_enabled || return 0
+  printf '%s\n' "https://golang.google.cn/dl/go${version}.linux-${arch}.tar.gz"
+  printf '%s\n' "https://mirrors.aliyun.com/golang/go${version}.linux-${arch}.tar.gz"
+  printf '%s\n' "https://mirrors.ustc.edu.cn/golang/go${version}.linux-${arch}.tar.gz"
+  printf '%s\n' "https://mirrors.tuna.tsinghua.edu.cn/golang/go${version}.linux-${arch}.tar.gz"
+}
+
+trustix_prereqs_download_file() {
+  local out="$1"
+  shift
+  local url
+  for url in "$@"; do
+    [[ -n "$url" ]] || continue
+    rm -f "$out"
+    trustix_prereqs_log "download ${url}"
+    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 15 --retry 2 "$url" -o "$out"; then
+      return 0
+    fi
+    if command -v wget >/dev/null 2>&1 && wget -T 20 -qO "$out" "$url"; then
+      return 0
+    fi
+  done
+  rm -f "$out"
+  return 1
+}
+
 trustix_prereqs_install_official_go() {
-  local version arch url tmp stage install_root install_dir
+  local version arch tmp stage install_root install_dir
+  local -a go_urls=()
   version="$(trustix_prereqs_required_go_version)"
   arch="$(trustix_prereqs_go_arch)" || return 1
-  url="${TRUSTIX_BOOTSTRAP_GO_URL:-https://go.dev/dl/go${version}.linux-${arch}.tar.gz}"
   install_root="${TRUSTIX_BOOTSTRAP_GO_ROOT:-/usr/local/trustix-go}"
   install_dir="${install_root}/go${version}"
   tmp="$(mktemp /tmp/trustix-go.XXXXXX)"
   stage="$(mktemp -d /tmp/trustix-go.XXXXXX)"
 
-  trustix_prereqs_log "install Go ${version} from ${url}"
-  if ! command -v curl >/dev/null 2>&1; then
+  trustix_prereqs_log "install Go ${version}"
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
     trustix_prereqs_ensure_commands curl || return 1
   fi
   if ! command -v tar >/dev/null 2>&1; then
     trustix_prereqs_ensure_commands tar gzip || return 1
   fi
-  curl -fsSL "$url" -o "$tmp" || {
+  mapfile -t go_urls < <(trustix_prereqs_go_url_candidates "$version" "$arch")
+  trustix_prereqs_download_file "$tmp" "${go_urls[@]}" || {
     rm -rf "$tmp" "$stage"
     return 1
   }

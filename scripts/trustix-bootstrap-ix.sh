@@ -5,6 +5,10 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 set -Eeuo pipefail
 
+trustix_bootstrap_log() {
+  printf '[trustix-bootstrap] %s\n' "$*" >&2
+}
+
 bootstrap_repo_root() {
   local source_path="${BASH_SOURCE[0]:-}"
   if [[ -n "$source_path" && -f "$source_path" ]]; then
@@ -63,6 +67,48 @@ trustix_bootstrap_extract_archive() {
   rm -rf "$stage"
 }
 
+trustix_bootstrap_mirrors_enabled() {
+  case "${TRUSTIX_BOOTSTRAP_MIRRORS:-auto}" in
+    0|false|no|off|disabled) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+trustix_bootstrap_github_url_candidates() {
+  local url="$1"
+  local mirror mirrors
+  printf '%s\n' "$url"
+  trustix_bootstrap_mirrors_enabled || return 0
+  case "$url" in
+    https://github.com/*|https://raw.githubusercontent.com/*) ;;
+    *) return 0 ;;
+  esac
+  mirrors="${TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS:-https://gh.llkk.cc/ https://ghproxy.net/ https://mirror.ghproxy.com/}"
+  for mirror in $mirrors; do
+    [[ -n "$mirror" ]] || continue
+    printf '%s%s\n' "${mirror%/}/" "$url"
+  done
+}
+
+trustix_bootstrap_download_file() {
+  local out="$1"
+  shift
+  local url
+  for url in "$@"; do
+    [[ -n "$url" ]] || continue
+    rm -f "$out"
+    trustix_bootstrap_log "download ${url}"
+    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 15 --retry 2 "$url" -o "$out"; then
+      return 0
+    fi
+    if command -v wget >/dev/null 2>&1 && wget -T 20 -qO "$out" "$url"; then
+      return 0
+    fi
+  done
+  rm -f "$out"
+  return 1
+}
+
 if ! repo_root="$(bootstrap_repo_root)"; then
   repo_url="${TRUSTIX_BOOTSTRAP_REPO:-https://github.com/Unicode01/TrustIX.git}"
   repo_ref="${TRUSTIX_BOOTSTRAP_REF:-main}"
@@ -78,19 +124,26 @@ if ! repo_root="$(bootstrap_repo_root)"; then
       echo "ERROR: TRUSTIX_BOOTSTRAP_WORKDIR is not a TrustIX repo and is not empty: ${repo_root}" >&2
       exit 1
     fi
+    cloned=0
     if command -v git >/dev/null 2>&1; then
-      git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
-    elif { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; } && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
+      if git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2; then
+        cloned=1
+      else
+        trustix_bootstrap_log "git clone failed, trying GitHub archive mirrors"
+        rm -rf "$repo_root"
+        mkdir -p "$repo_root"
+      fi
+    fi
+    if [[ "$cloned" != "1" ]] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; } && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
       archive_url="${repo_url%.git}/archive/${repo_ref}.tar.gz"
       archive_path="$(mktemp /tmp/trustix-bootstrap-src.XXXXXX)"
-      if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$archive_url" -o "$archive_path"
-      else
-        wget -qO "$archive_path" "$archive_url"
-      fi
+      mapfile -t archive_urls < <(trustix_bootstrap_github_url_candidates "$archive_url")
+      trustix_bootstrap_download_file "$archive_path" "${archive_urls[@]}"
       trustix_bootstrap_extract_archive "$archive_path" "$repo_root"
       rm -f "$archive_path"
-    else
+      cloned=1
+    fi
+    if [[ "$cloned" != "1" ]]; then
       echo "ERROR: git is required to clone ${repo_url}; alternatively install curl/wget+tar for GitHub archive bootstrap" >&2
       exit 127
     fi
@@ -180,6 +233,9 @@ config/certs/data and replaces only release files plus the systemd unit:
 
 Environment:
   TRUSTIX_BOOTSTRAP_INSTALL_DEPS=0 disables automatic package installation.
+  TRUSTIX_BOOTSTRAP_MIRRORS=0 disables GitHub/Go mirror fallbacks.
+  TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS="https://proxy/" overrides GitHub mirrors.
+  TRUSTIX_BOOTSTRAP_GO_URL=URL pins the Go toolchain download URL.
 
 Endpoint SPEC fields are comma-separated or semicolon-separated:
   name=ix-new-udp,transport=udp,mode=passive,listen=0.0.0.0:7000,address=ddns.example:7000

@@ -71,6 +71,12 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	if !strings.Contains(response.Command, "--provision-url") || !strings.Contains(response.Command, "--token") {
 		t.Fatalf("provision command does not use token mode: %s", response.Command)
 	}
+	if !strings.Contains(response.Command, "for url in") ||
+		!strings.Contains(response.Command, "raw.githubusercontent.com/Unicode01/TrustIX") ||
+		!strings.Contains(response.Command, "gh.llkk.cc") ||
+		!strings.Contains(response.Command, "ghproxy.net") {
+		t.Fatalf("provision command does not include bootstrap mirror fallback: %s", response.Command)
+	}
 
 	daemon.configMu.RLock()
 	admission, ok, err := daemon.latestAdmissionForIXLocked("ix-d")
