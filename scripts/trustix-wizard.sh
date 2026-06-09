@@ -26,16 +26,23 @@ if ! repo_root="$(wizard_repo_root)"; then
     repo_root="$(mktemp -d /tmp/trustix-wizard-src.XXXXXX)"
   fi
   if [[ ! -f "${repo_root}/go.mod" ]]; then
-    command -v git >/dev/null 2>&1 || {
-      echo "ERROR: git is required when running the wizard from curl" >&2
-      exit 127
-    }
     mkdir -p "$repo_root"
     if [[ -n "$(find "$repo_root" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
       echo "ERROR: TRUSTIX_BOOTSTRAP_WORKDIR is not a TrustIX repo and is not empty: ${repo_root}" >&2
       exit 1
     fi
-    git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
+    if command -v git >/dev/null 2>&1; then
+      git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
+    elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
+      archive_url="${repo_url%.git}/archive/${repo_ref}.tar.gz"
+      archive_path="$(mktemp /tmp/trustix-wizard-src.XXXXXX.tar.gz)"
+      curl -fsSL "$archive_url" -o "$archive_path"
+      tar -xzf "$archive_path" -C "$repo_root" --strip-components=1
+      rm -f "$archive_path"
+    else
+      echo "ERROR: git is required to clone ${repo_url}; alternatively install curl+tar for GitHub archive bootstrap" >&2
+      exit 127
+    fi
   fi
   exec bash "${repo_root}/scripts/trustix-wizard.sh" "$@"
 fi
@@ -86,6 +93,9 @@ The wizard calls the stable automation scripts underneath:
 Curl usage:
   curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-wizard.sh | sudo bash
 
+Environment:
+  TRUSTIX_BOOTSTRAP_INSTALL_DEPS=0 disables automatic package installation.
+
 EOF
 }
 
@@ -97,6 +107,10 @@ die() {
   log "ERROR: $*"
   exit 1
 }
+
+export TRUSTIX_REPO_ROOT="${TRUSTIX_REPO_ROOT:-$repo_root}"
+# shellcheck source=scripts/trustix-prereqs.sh
+source "${repo_root}/scripts/trustix-prereqs.sh"
 
 need_tty() {
   [[ -r /dev/tty && -w /dev/tty ]] || die "interactive terminal is required"
@@ -252,7 +266,10 @@ ensure_first_domain_certs() {
     return
   fi
   local ca_cmd
-  ca_cmd="$(find_trustix_ca_cmd)" || die "trustix-ca or Go is required to create the first domain"
+  if ! ca_cmd="$(find_trustix_ca_cmd)"; then
+    trustix_prereqs_ensure_ca_deps || die "trustix-ca or Go is required to create the first domain; automatic dependency install failed"
+    ca_cmd="$(find_trustix_ca_cmd)" || die "trustix-ca or Go is required to create the first domain"
+  fi
   mkdir -p "$cert_dir"
   log "create domain CA, config CA, admin cert, and initial IX certs in ${cert_dir}"
   run_trustix_ca "$ca_cmd" quickstart -out "$cert_dir" -domain "$domain_id" -ix "$ix_id" >/dev/null

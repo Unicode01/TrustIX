@@ -120,6 +120,10 @@ scripts/trustix-bootstrap-ix.sh \
 Bootstrap requires the Domain CA key to issue the IX certificate and the Config CA key to issue route authorization. It writes the target config as JSON, stages deployable certs, optionally builds a release tarball, and optionally deploys it.
 
 Use semicolon-separated endpoint specs when a value contains commas, such as GRE/IPIP/VXLAN endpoint strings.
+The wizard/bootstrap scripts automatically install missing source-build
+dependencies through the host package manager when possible. Set
+`TRUSTIX_BOOTSTRAP_INSTALL_DEPS=0` to disable package installation in locked-down
+environments.
 For a single interface with multiple underlay IPs, bind ingress with the
 endpoint `listen` address and bind egress with endpoint `source_ip` and optional
 `bind_iface`:

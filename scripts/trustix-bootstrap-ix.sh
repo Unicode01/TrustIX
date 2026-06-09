@@ -26,16 +26,23 @@ if ! repo_root="$(bootstrap_repo_root)"; then
     repo_root="$(mktemp -d /tmp/trustix-bootstrap-src.XXXXXX)"
   fi
   if [[ ! -f "${repo_root}/go.mod" ]]; then
-    command -v git >/dev/null 2>&1 || {
-      echo "ERROR: git is required when bootstrapping from curl" >&2
-      exit 127
-    }
     mkdir -p "$repo_root"
     if [[ -n "$(find "$repo_root" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
       echo "ERROR: TRUSTIX_BOOTSTRAP_WORKDIR is not a TrustIX repo and is not empty: ${repo_root}" >&2
       exit 1
     fi
-    git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
+    if command -v git >/dev/null 2>&1; then
+      git clone --depth 1 --branch "$repo_ref" "$repo_url" "$repo_root" >&2
+    elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
+      archive_url="${repo_url%.git}/archive/${repo_ref}.tar.gz"
+      archive_path="$(mktemp /tmp/trustix-bootstrap-src.XXXXXX.tar.gz)"
+      curl -fsSL "$archive_url" -o "$archive_path"
+      tar -xzf "$archive_path" -C "$repo_root" --strip-components=1
+      rm -f "$archive_path"
+    else
+      echo "ERROR: git is required to clone ${repo_url}; alternatively install curl+tar for GitHub archive bootstrap" >&2
+      exit 127
+    fi
   fi
   exec bash "${repo_root}/scripts/trustix-bootstrap-ix.sh" "$@"
 fi
@@ -112,6 +119,9 @@ Existing installs should be upgraded with scripts/trustix-update.sh. It preserve
 config/certs/data and replaces only release files plus the systemd unit:
   curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-update.sh | bash -s -- --release-url URL
 
+Environment:
+  TRUSTIX_BOOTSTRAP_INSTALL_DEPS=0 disables automatic package installation.
+
 Endpoint SPEC fields are comma-separated or semicolon-separated:
   name=ix-new-udp,transport=udp,mode=passive,listen=0.0.0.0:7000,address=ddns.example:7000
   Optional local bind fields: source_ip=192.0.2.10,bind_iface=wan2
@@ -131,6 +141,10 @@ die() {
   log "ERROR: $*"
   exit 1
 }
+
+export TRUSTIX_REPO_ROOT="${TRUSTIX_REPO_ROOT:-$repo_root}"
+# shellcheck source=scripts/trustix-prereqs.sh
+source "${repo_root}/scripts/trustix-prereqs.sh"
 
 json_escape() {
   local value="$1"
@@ -233,7 +247,9 @@ json_bool() {
 run_provision_token() {
   [[ -n "$provision_url" ]] || die "--provision-url is required in token mode"
   [[ -n "$provision_token" ]] || die "--token is required in token mode"
-  command -v curl >/dev/null 2>&1 || die "curl is required in token mode"
+  if ! command -v curl >/dev/null 2>&1; then
+    trustix_prereqs_ensure_network_deps || die "curl is required in token mode; automatic dependency install failed"
+  fi
   local base_url="${provision_url%/}"
   local payload_url="${base_url}/v1/provision/ix/${provision_token}/bootstrap.sh"
   local payload
@@ -271,6 +287,15 @@ run_trustix_ca() {
   else
     "$trustix_ca_cmd" "$@"
   fi
+}
+
+ensure_trustix_ca_cmd() {
+  local cmd
+  if ! cmd="$(find_trustix_ca_cmd)"; then
+    trustix_prereqs_ensure_ca_deps || return 1
+    cmd="$(find_trustix_ca_cmd)" || return 1
+  fi
+  printf '%s\n' "$cmd"
 }
 
 ix_id=""
@@ -423,7 +448,7 @@ if [[ ${#trust_roots[@]} -eq 0 ]]; then
 fi
 [[ ${#trust_roots[@]} -gt 0 ]] || die "no trust roots found; pass --trust-root"
 
-trustix_ca_cmd="$(find_trustix_ca_cmd)" || die "could not find trustix-ca or go toolchain"
+trustix_ca_cmd="$(ensure_trustix_ca_cmd)" || die "could not find trustix-ca or go toolchain; automatic dependency install failed"
 issue_dir="${work_dir}/issued"
 deploy_cert_dir="${work_dir}/deploy-certs"
 config_dir="${work_dir}/config"
@@ -641,6 +666,10 @@ done
 
 tarball=""
 if [[ "$do_build" == "1" ]]; then
+  trustix_prereqs_ensure_source_build_deps || die "source build dependencies are missing; automatic dependency install failed"
+  if [[ "$build_webui" == "1" ]]; then
+    trustix_prereqs_ensure_webui_deps || die "npm is required for WebUI build; automatic dependency install failed"
+  fi
   build_args=(--out "${repo_root}/build/release" --version "bootstrap-${ix_id}" --build-bpf "$build_bpf" --build-ko "$build_ko" --json)
   [[ "$build_webui" == "0" ]] && build_args+=(--skip-webui)
   [[ -n "$goarch" ]] && build_args+=(--goarch "$goarch")
