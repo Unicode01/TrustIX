@@ -3850,7 +3850,7 @@ type EndpointScope = "local" | "peer";
 
 function ConfigEndpointCard(props: { t: Translate; scope?: EndpointScope; endpoint: EndpointConfig; onUpdate: (endpoint: EndpointConfig) => void; onRemove: () => void }) {
   return (
-    <div className="config-card endpoint-config-card" key={props.endpoint.name || "endpoint"}>
+    <div className="config-card endpoint-config-card">
       <EndpointConfigFields t={props.t} scope={props.scope || "local"} endpoint={props.endpoint} onUpdate={props.onUpdate} />
       <div className="form-actions">
         <Button variant="danger" onClick={props.onRemove}><Trash2 size={15} />{props.t("remove", "Remove")}</Button>
