@@ -6,6 +6,9 @@ fi
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export TRUSTIX_REPO_ROOT="${TRUSTIX_REPO_ROOT:-$repo_root}"
+# shellcheck source=scripts/trustix-prereqs.sh
+source "${repo_root}/scripts/trustix-prereqs.sh"
 
 out_root="${TRUSTIX_KERNEL_MODULE_OUT:-${repo_root}/build/kernel-modules}"
 module_list="${TRUSTIX_KERNEL_MODULES:-crypto datapath helpers}"
@@ -31,6 +34,13 @@ die() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+ensure_kernel_build_dir() {
+  local kdir="$1"
+  trustix_prereqs_ensure_kernel_build_dir "$kdir" || {
+    die "kernel build directory is not available: ${kdir}; install matching headers or pass a valid KDIR"
+  }
 }
 
 host_kernel_arch() {
@@ -284,7 +294,7 @@ main() {
     kdir="${kdir%"${kdir##*[![:space:]]}"}"
     [[ -n "$kdir" ]] || continue
     have_kdir=1
-    [[ -d "$kdir" ]] || die "kernel build directory not found: $kdir"
+    ensure_kernel_build_dir "$kdir"
     kernel_release="$(kernel_release_for_kdir "$kdir")"
     kernel_out="${out_root}/${kernel_release}/${kernel_arch}"
     mkdir -p "$kernel_out"

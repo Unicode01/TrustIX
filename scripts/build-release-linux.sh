@@ -6,6 +6,9 @@ fi
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export TRUSTIX_REPO_ROOT="${TRUSTIX_REPO_ROOT:-$repo_root}"
+# shellcheck source=scripts/trustix-prereqs.sh
+source "${repo_root}/scripts/trustix-prereqs.sh"
 
 normalize_goarch() {
   case "${1:-}" in
@@ -81,6 +84,12 @@ die() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+ensure_kernel_build_dir() {
+  trustix_prereqs_ensure_kernel_build_dir "$kernel_build_dir" || {
+    die "kernel build directory is not available: ${kernel_build_dir}; install matching headers or rebuild with --build-ko 0 / --kernel-modules auto"
+  }
 }
 
 select_clang() {
@@ -288,7 +297,7 @@ main() {
   local crypto_ko=""
   if [[ "$build_ko" == "1" ]]; then
     need_cmd make
-    [[ -d "$kernel_build_dir" ]] || die "kernel build directory not found: $kernel_build_dir"
+    ensure_kernel_build_dir
     log "build crypto kernel module KDIR=${kernel_build_dir} ARCH=${kernel_arch} CROSS_COMPILE=${kernel_cross_compile:-none} mode=${crypto_build_mode}"
     case "$crypto_build_mode" in
       full)

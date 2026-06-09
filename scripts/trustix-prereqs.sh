@@ -345,6 +345,125 @@ trustix_prereqs_ensure_source_build_deps() {
   trustix_prereqs_ensure_commands git go clang make gcc install realpath sha256sum stat tar gzip
 }
 
+trustix_prereqs_kernel_release_for_kdir() {
+  local kdir="$1"
+  kdir="${kdir%/}"
+  case "$kdir" in
+    /lib/modules/*/build|/lib/modules/*/source)
+      basename "$(dirname "$kdir")"
+      return
+      ;;
+  esac
+  uname -r
+}
+
+trustix_prereqs_kernel_header_hint() {
+  local kdir="$1"
+  local release
+  release="$(trustix_prereqs_kernel_release_for_kdir "$kdir")"
+  case "$release" in
+    *-pve)
+      trustix_prereqs_log "install matching Proxmox headers, for example: apt-get update && apt-get install -y proxmox-headers-${release}"
+      trustix_prereqs_log "older Proxmox repositories may use: apt-get install -y pve-headers-${release}"
+      ;;
+    *)
+      trustix_prereqs_log "install matching kernel headers for ${release}; Debian/Ubuntu example: apt-get update && apt-get install -y linux-headers-${release}"
+      ;;
+  esac
+}
+
+trustix_prereqs_apt_kernel_header_meta() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf '%s\n' linux-headers-amd64 ;;
+    aarch64|arm64) printf '%s\n' linux-headers-arm64 ;;
+    armv7l|armv6l|armhf|arm) printf '%s\n' linux-headers-armmp ;;
+  esac
+}
+
+trustix_prereqs_kernel_header_packages_for() {
+  local manager="$1"
+  local release="$2"
+  case "$manager" in
+    apt-get)
+      if [[ "$release" == *-pve ]]; then
+        printf '%s\n' \
+          "proxmox-headers-${release}" \
+          "pve-headers-${release}" \
+          "linux-headers-${release}" \
+          proxmox-default-headers \
+          pve-headers
+      else
+        printf '%s\n' "linux-headers-${release}"
+        trustix_prereqs_apt_kernel_header_meta
+      fi
+      ;;
+    dnf|yum)
+      printf '%s\n' "kernel-devel-${release}" kernel-devel
+      ;;
+    zypper)
+      printf '%s\n' kernel-default-devel kernel-devel
+      ;;
+    apk)
+      printf '%s\n' linux-headers
+      ;;
+    pacman)
+      printf '%s\n' linux-headers linux-lts-headers
+      ;;
+  esac
+}
+
+trustix_prereqs_ensure_kernel_build_dir() {
+  local kdir="${1:-/lib/modules/$(uname -r)/build}"
+  [[ -d "$kdir" ]] && return 0
+
+  local release manager package attempted=0
+  release="$(trustix_prereqs_kernel_release_for_kdir "$kdir")"
+  trustix_prereqs_log "kernel build directory missing: ${kdir}"
+
+  if ! trustix_prereqs_install_enabled; then
+    trustix_prereqs_log "automatic dependency installation is disabled by TRUSTIX_BOOTSTRAP_INSTALL_DEPS"
+    trustix_prereqs_kernel_header_hint "$kdir"
+    return 1
+  fi
+
+  manager="$(trustix_prereqs_package_manager)" || {
+    trustix_prereqs_log "could not detect a supported package manager for kernel headers"
+    trustix_prereqs_kernel_header_hint "$kdir"
+    return 1
+  }
+
+  if [[ "$manager" == "opkg" ]]; then
+    trustix_prereqs_log "opkg targets normally need kernel modules built with the matching OpenWrt SDK, not on-device headers"
+    trustix_prereqs_kernel_header_hint "$kdir"
+    return 1
+  fi
+
+  while IFS= read -r package; do
+    [[ -n "$package" ]] || continue
+    attempted=1
+    trustix_prereqs_log "try kernel header package for ${release}: ${package}"
+    if trustix_prereqs_install_packages "$manager" "$package"; then
+      hash -r 2>/dev/null || true
+      if [[ -d "$kdir" ]]; then
+        trustix_prereqs_log "kernel build directory is available: ${kdir}"
+        return 0
+      fi
+      trustix_prereqs_log "installed ${package}, but ${kdir} is still missing"
+    fi
+  done < <(trustix_prereqs_kernel_header_packages_for "$manager" "$release")
+
+  if [[ "$attempted" == "0" ]]; then
+    trustix_prereqs_log "no known kernel header package mapping for package manager: ${manager}"
+  fi
+  if [[ -d "$kdir" ]]; then
+    trustix_prereqs_log "kernel build directory is available: ${kdir}"
+    return 0
+  fi
+  trustix_prereqs_log "could not install matching kernel headers for ${release}"
+  trustix_prereqs_kernel_header_hint "$kdir"
+  return 1
+}
+
 trustix_prereqs_ensure_webui_deps() {
   trustix_prereqs_ensure_commands npm
 }

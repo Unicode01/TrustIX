@@ -33,6 +33,15 @@ running on Linux and a matching KDIR is available. The normal GitHub release
 packages intentionally ship kernel module source/Makefiles, not generic
 prebuilt `.ko` files.
 
+With `--build-ko 1`, the build scripts first check the target KDIR and then make
+a best-effort attempt to install matching headers through the host package
+manager. Proxmox kernels use exact-match packages such as
+`proxmox-headers-$(uname -r)` or, on older repositories,
+`pve-headers-$(uname -r)`. If those packages are unavailable, the kernel and
+repository are out of sync for local `.ko` builds; either install matching
+headers manually, boot a kernel that has headers available, or build without
+embedded `.ko` assets.
+
 ## Current validation snapshot
 
 The latest PVE compatibility audit was run on 2026-06-09 against current source.

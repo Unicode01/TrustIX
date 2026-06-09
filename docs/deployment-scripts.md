@@ -57,6 +57,14 @@ Important options:
 
 The script wraps `scripts/build-release-linux.sh` and prints the tarball path when `--json` is used.
 
+When `--build-ko 1` is used, the build needs a matching kernel build tree for
+the running kernel or the `--kdir` target. The scripts try to install the
+matching headers automatically when package installation is enabled. On Proxmox,
+that normally means `proxmox-headers-$(uname -r)`; older repositories may use
+`pve-headers-$(uname -r)`. If the package is not available, install the matching
+headers from the host's kernel repository or use `--build-ko 0` /
+`--kernel-modules auto` for a userspace/eBPF-only install.
+
 ## Deploy
 
 ```bash
