@@ -149,7 +149,8 @@ func dnsServerClosed(err error) bool {
 	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "use of closed network connection") ||
-		strings.Contains(message, "server closed")
+		strings.Contains(message, "server closed") ||
+		strings.Contains(message, "server not started")
 }
 
 func (daemon *Daemon) reportDNSServerError(network string, listen string, err error) {
@@ -197,12 +198,16 @@ func shutdownDNSServerRuntime(ctx context.Context, runtime *dnsServerRuntime) er
 	var errs []error
 	if runtime.UDP != nil {
 		if err := runtime.UDP.ShutdownContext(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("shutdown dns udp %q: %w", runtime.Listen, err))
+			if !dnsServerClosed(err) {
+				errs = append(errs, fmt.Errorf("shutdown dns udp %q: %w", runtime.Listen, err))
+			}
 		}
 	}
 	if runtime.TCP != nil {
 		if err := runtime.TCP.ShutdownContext(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("shutdown dns tcp %q: %w", runtime.Listen, err))
+			if !dnsServerClosed(err) {
+				errs = append(errs, fmt.Errorf("shutdown dns tcp %q: %w", runtime.Listen, err))
+			}
 		}
 	}
 	return errors.Join(errs...)

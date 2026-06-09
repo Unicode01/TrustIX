@@ -36,6 +36,33 @@ trustix_bootstrap_dir_has_entries() {
   return 1
 }
 
+trustix_bootstrap_extract_archive() {
+  local archive_path="$1"
+  local dest="$2"
+  local stage archive_root candidate
+  stage="$(mktemp -d /tmp/trustix-bootstrap-archive.XXXXXX)"
+  if ! tar -xzf "$archive_path" -C "$stage"; then
+    rm -rf "$stage"
+    return 1
+  fi
+  archive_root=""
+  for candidate in "$stage"/*; do
+    if [[ -d "$candidate" ]]; then
+      archive_root="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$archive_root" ]]; then
+    rm -rf "$stage"
+    return 1
+  fi
+  if ! cp -R "$archive_root"/. "$dest"/; then
+    rm -rf "$stage"
+    return 1
+  fi
+  rm -rf "$stage"
+}
+
 if ! repo_root="$(bootstrap_repo_root)"; then
   repo_url="${TRUSTIX_BOOTSTRAP_REPO:-https://github.com/Unicode01/TrustIX.git}"
   repo_ref="${TRUSTIX_BOOTSTRAP_REF:-main}"
@@ -61,7 +88,7 @@ if ! repo_root="$(bootstrap_repo_root)"; then
       else
         wget -qO "$archive_path" "$archive_url"
       fi
-      tar -xzf "$archive_path" -C "$repo_root" --strip-components=1
+      trustix_bootstrap_extract_archive "$archive_path" "$repo_root"
       rm -f "$archive_path"
     else
       echo "ERROR: git is required to clone ${repo_url}; alternatively install curl/wget+tar for GitHub archive bootstrap" >&2
