@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TrustIX Bootstrap Command Generator</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #17202a;
+      --muted: #5d6875;
+      --line: #d8dde5;
+      --strong: #0f5f7a;
+      --strong-dark: #09455a;
+      --danger: #9f2d20;
+      --code: #101820;
+      --code-text: #ecf2f6;
+      --focus: #1d7f9c;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    main {
+      width: min(1160px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .subhead {
+      margin: 6px 0 0;
+      color: var(--muted);
+      max-width: 760px;
+      font-size: 14px;
+    }
+
+    a {
+      color: var(--strong);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 0.82fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .mode-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .mode-row button,
+    .button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #ffffff;
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 600;
+    }
+
+    .mode-row button.active,
+    .button.primary {
+      background: var(--strong);
+      border-color: var(--strong);
+      color: #ffffff;
+    }
+
+    .button.primary:hover,
+    .mode-row button.active:hover {
+      background: var(--strong-dark);
+      border-color: var(--strong-dark);
+    }
+
+    .section-title {
+      margin: 18px 0 10px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .section-title:first-child {
+      margin-top: 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 5px;
+    }
+
+    .field.full {
+      grid-column: 1 / -1;
+    }
+
+    label {
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    input,
+    select {
+      width: 100%;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 10px;
+      background: #ffffff;
+      color: var(--text);
+      font: inherit;
+    }
+
+    input:focus,
+    select:focus,
+    button:focus {
+      outline: 2px solid color-mix(in srgb, var(--focus) 35%, transparent);
+      outline-offset: 2px;
+      border-color: var(--focus);
+    }
+
+    .checkbox {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      min-height: 38px;
+    }
+
+    .checkbox input {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+    }
+
+    .output {
+      position: sticky;
+      top: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .output-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .output-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    pre {
+      margin: 0;
+      min-height: 168px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: var(--code);
+      color: var(--code-text);
+      border-radius: 8px;
+      padding: 14px;
+      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    .notice {
+      border-left: 3px solid var(--strong);
+      padding: 8px 10px;
+      background: #eef7fa;
+      color: #24333b;
+      font-size: 13px;
+    }
+
+    .warning {
+      border-left-color: var(--danger);
+      background: #fff2ee;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        width: min(100% - 20px, 760px);
+        padding-top: 16px;
+      }
+
+      header,
+      .layout {
+        display: block;
+      }
+
+      header nav {
+        margin-top: 10px;
+      }
+
+      .output {
+        position: static;
+        margin-top: 14px;
+      }
+
+      .grid,
+      .mode-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>TrustIX Bootstrap Command Generator</h1>
+        <p class="subhead">Fill the fields, copy one command, and run it on the target Linux host. Values stay in this browser tab.</p>
+      </div>
+      <nav>
+        <a href="https://github.com/Unicode01/TrustIX">GitHub</a>
+        <span aria-hidden="true"> / </span>
+        <a href="./deployment-scripts.md">Deployment Docs</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <section class="panel" aria-label="Bootstrap parameters">
+        <div class="mode-row" role="tablist" aria-label="Setup mode">
+          <button id="mode-first" class="active" type="button" role="tab" aria-selected="true">New Domain / First IX</button>
+          <button id="mode-join" type="button" role="tab" aria-selected="false">Join With Token</button>
+        </div>
+
+        <form id="first-form">
+          <h2 class="section-title">Identity</h2>
+          <div class="grid">
+            <div class="field">
+              <label for="domain">Domain ID</label>
+              <input id="domain" value="trustix.local" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="ix">IX ID</label>
+              <input id="ix" value="ix-a" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="cert-dir">Local CA/cert directory</label>
+              <input id="cert-dir" value="certs" autocomplete="off">
+              <div class="hint">Created if missing on the first IX host.</div>
+            </div>
+            <div class="field">
+              <label for="control-api">Published control API URL</label>
+              <input id="control-api" value="https://ix-a.example.net:9443" autocomplete="off">
+            </div>
+          </div>
+
+          <h2 class="section-title">LAN</h2>
+          <div class="grid">
+            <div class="field">
+              <label for="lan-iface">LAN interface</label>
+              <input id="lan-iface" value="br-lan" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="underlay-iface">Underlay/WAN interface</label>
+              <input id="underlay-iface" placeholder="eth0" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="lan-gateway">LAN gateway CIDR</label>
+              <input id="lan-gateway" value="10.44.0.1/24" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="advertise">Advertised LAN prefix</label>
+              <input id="advertise" value="10.44.0.0/24" autocomplete="off">
+            </div>
+          </div>
+
+          <h2 class="section-title">Data Endpoint</h2>
+          <div class="grid">
+            <div class="field">
+              <label for="endpoint-transport">Transport</label>
+              <select id="endpoint-transport">
+                <option value="udp">udp</option>
+                <option value="tcp">tcp</option>
+                <option value="experimental_tcp">experimental_tcp</option>
+                <option value="kernel_udp">kernel_udp</option>
+                <option value="quic">quic</option>
+                <option value="websocket">websocket</option>
+                <option value="http_connect">http_connect</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="endpoint-listen">Listen address</label>
+              <input id="endpoint-listen" value="0.0.0.0:7000" autocomplete="off">
+            </div>
+            <div class="field full">
+              <label for="endpoint-address">Published endpoint address</label>
+              <input id="endpoint-address" value="ix-a.example.net:7000" autocomplete="off">
+              <div class="hint">Domain names are fine here, including DDNS names.</div>
+            </div>
+          </div>
+
+          <h2 class="section-title">Runtime</h2>
+          <div class="grid">
+            <div class="field">
+              <label for="api">Management/WebUI listen</label>
+              <input id="api" value="127.0.0.1:8787" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="peer-api">Peer control listen</label>
+              <input id="peer-api" value="0.0.0.0:9443" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="dataplane">Dataplane</label>
+              <select id="dataplane">
+                <option value="auto">auto</option>
+                <option value="linux">linux</option>
+                <option value="noop">noop</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="kernel-modules">Kernel modules</label>
+              <select id="kernel-modules">
+                <option value="auto">auto</option>
+                <option value="disabled">disabled</option>
+                <option value="required">required</option>
+              </select>
+            </div>
+            <label class="checkbox full" for="local-install">
+              <input id="local-install" type="checkbox" checked>
+              Build, install, and start on this host
+            </label>
+          </div>
+        </form>
+
+        <form id="join-form" class="hidden">
+          <h2 class="section-title">Provision Token</h2>
+          <div class="grid">
+            <div class="field full">
+              <label for="provision-url">Existing IX provision URL</label>
+              <input id="provision-url" value="https://ix-a.example.net:8787" autocomplete="off">
+            </div>
+            <div class="field full">
+              <label for="token">One-time token</label>
+              <input id="token" type="password" autocomplete="off" placeholder="Paste token from the TrustIX Web UI">
+              <div class="hint">The token appears in the generated command. Treat it as a short-lived secret.</div>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <aside class="output panel" aria-label="Generated command">
+        <div class="output-head">
+          <h2 class="output-title">Generated Command</h2>
+          <button id="copy" class="button primary" type="button">Copy</button>
+        </div>
+        <pre id="command" aria-live="polite"></pre>
+        <div id="copied" class="notice hidden">Copied.</div>
+        <div class="notice">Run the command on the machine that should become this IX. For router targets, test on a disposable host first if kernel modules are required.</div>
+        <div id="join-warning" class="notice warning hidden">Provision tokens are one-time credentials. Do not paste this command into shared logs or tickets.</div>
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    const RAW_BASE = "https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts";
+    const state = { mode: "first", advertiseTouched: false };
+
+    const ids = [
+      "domain", "ix", "cert-dir", "control-api", "lan-iface", "underlay-iface",
+      "lan-gateway", "advertise", "endpoint-transport", "endpoint-listen",
+      "endpoint-address", "api", "peer-api", "dataplane", "kernel-modules",
+      "local-install", "provision-url", "token"
+    ];
+
+    function el(id) {
+      return document.getElementById(id);
+    }
+
+    function value(id) {
+      const node = el(id);
+      if (!node) return "";
+      if (node.type === "checkbox") return node.checked;
+      return String(node.value || "").trim();
+    }
+
+    function shellQuote(input) {
+      const text = String(input || "");
+      if (!text) return "''";
+      return "'" + text.replace(/'/g, "'\"'\"'") + "'";
+    }
+
+    function addArg(parts, name, val) {
+      if (val === undefined || val === null || val === "") return;
+      parts.push(name, shellQuote(val));
+    }
+
+    function prefixFromGateway(raw) {
+      const match = String(raw || "").trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}\/24$/);
+      if (!match) return "";
+      return `${match[1]}.${match[2]}.${match[3]}.0/24`;
+    }
+
+    function hostFromURL(raw) {
+      try {
+        const parsed = new URL(raw);
+        return parsed.hostname || "";
+      } catch {
+        return "";
+      }
+    }
+
+    function updateDerivedFields(event) {
+      if (event && event.target && event.target.id === "advertise") {
+        state.advertiseTouched = true;
+      }
+      if (event && event.target && event.target.id === "control-api") {
+        const host = hostFromURL(value("control-api"));
+        if (host && value("endpoint-address").endsWith(":7000")) {
+          el("endpoint-address").value = `${host}:7000`;
+        }
+      }
+      if (!state.advertiseTouched) {
+        const prefix = prefixFromGateway(value("lan-gateway"));
+        if (prefix) el("advertise").value = prefix;
+      }
+    }
+
+    function firstIXCommand() {
+      const parts = [
+        "curl", "-fsSL", `${RAW_BASE}/trustix-wizard.sh`,
+        "|", "sudo", "bash", "-s", "--",
+        "--first-ix", "--yes"
+      ];
+      addArg(parts, "--domain", value("domain"));
+      addArg(parts, "--ix", value("ix"));
+      addArg(parts, "--source-certs", value("cert-dir"));
+      addArg(parts, "--control-api", value("control-api"));
+      addArg(parts, "--lan-iface", value("lan-iface"));
+      addArg(parts, "--lan-gateway", value("lan-gateway"));
+      addArg(parts, "--advertise", value("advertise"));
+      addArg(parts, "--underlay-iface", value("underlay-iface"));
+      addArg(parts, "--endpoint-transport", value("endpoint-transport"));
+      addArg(parts, "--endpoint-listen", value("endpoint-listen"));
+      addArg(parts, "--endpoint-address", value("endpoint-address"));
+      addArg(parts, "--api", value("api"));
+      addArg(parts, "--peer-api", value("peer-api"));
+      addArg(parts, "--dataplane", value("dataplane"));
+      addArg(parts, "--kernel-modules", value("kernel-modules"));
+      parts.push(value("local-install") ? "--local-install" : "--no-deploy");
+      return wrapCommand(parts);
+    }
+
+    function joinCommand() {
+      const parts = [
+        "curl", "-fsSL", `${RAW_BASE}/trustix-wizard.sh`,
+        "|", "sudo", "bash", "-s", "--",
+        "--join-token", "--yes"
+      ];
+      addArg(parts, "--provision-url", value("provision-url"));
+      addArg(parts, "--token", value("token") || "PASTE_TOKEN_HERE");
+      return wrapCommand(parts);
+    }
+
+    function wrapCommand(parts) {
+      const lines = [];
+      let current = "";
+      for (const part of parts) {
+        const next = current ? `${current} ${part}` : part;
+        if (next.length > 96 && current) {
+          lines.push(`${current} \\`);
+          current = `  ${part}`;
+        } else {
+          current = next;
+        }
+      }
+      if (current) lines.push(current);
+      return lines.join("\n");
+    }
+
+    function render() {
+      const command = state.mode === "first" ? firstIXCommand() : joinCommand();
+      el("command").textContent = command;
+      el("join-warning").classList.toggle("hidden", state.mode !== "join");
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      el("mode-first").classList.toggle("active", mode === "first");
+      el("mode-first").setAttribute("aria-selected", mode === "first" ? "true" : "false");
+      el("mode-join").classList.toggle("active", mode === "join");
+      el("mode-join").setAttribute("aria-selected", mode === "join" ? "true" : "false");
+      el("first-form").classList.toggle("hidden", mode !== "first");
+      el("join-form").classList.toggle("hidden", mode !== "join");
+      render();
+    }
+
+    for (const id of ids) {
+      const node = el(id);
+      if (!node) continue;
+      node.addEventListener("input", (event) => {
+        updateDerivedFields(event);
+        render();
+      });
+      node.addEventListener("change", (event) => {
+        updateDerivedFields(event);
+        render();
+      });
+    }
+
+    el("mode-first").addEventListener("click", () => setMode("first"));
+    el("mode-join").addEventListener("click", () => setMode("join"));
+    el("copy").addEventListener("click", async () => {
+      await navigator.clipboard.writeText(el("command").textContent);
+      el("copied").classList.remove("hidden");
+      window.setTimeout(() => el("copied").classList.add("hidden"), 1600);
+    });
+
+    updateDerivedFields();
+    render();
+  </script>
+</body>
+</html>

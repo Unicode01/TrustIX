@@ -32,6 +32,9 @@ For a first real deployment, use the interactive wizard:
 curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-wizard.sh | sudo bash
 ```
 
+If you prefer filling a form first, use the static command generator:
+[https://unicode01.github.io/TrustIX/](https://unicode01.github.io/TrustIX/).
+
 Choose **Create a new domain and first IX**. The wizard asks for the domain ID,
 IX ID, published control API URL, LAN interface/gateway, advertised LAN prefix,
 and data endpoint, then calls the stable bootstrap script to generate certs,

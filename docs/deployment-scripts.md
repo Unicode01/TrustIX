@@ -19,6 +19,10 @@ For a new operator, start here:
 curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-wizard.sh | sudo bash
 ```
 
+The same command can be generated from a browser at
+[https://unicode01.github.io/TrustIX/](https://unicode01.github.io/TrustIX/).
+The page is static and only assembles shell commands locally.
+
 The wizard has two modes:
 
 - `Create a new domain and first IX`: prompts for the first IX basics, creates

@@ -42,13 +42,41 @@ fi
 
 usage() {
   cat <<'EOF'
-usage: scripts/trustix-wizard.sh [--first-ix|--join-token]
+usage: scripts/trustix-wizard.sh [--first-ix|--join-token] [options]
 
 Interactive first-run helper for new TrustIX users.
 
 Modes:
   --first-ix       Create a new domain and first IX on this machine
   --join-token     Join an existing domain with a WebUI-issued provision token
+
+Non-interactive:
+  --yes, --non-interactive
+                   Use defaults for omitted optional fields; fail if a required
+                   field has no value
+
+First IX options:
+  --domain DOMAIN
+  --ix ID
+  --source-certs DIR, --cert-dir DIR
+  --control-api URL
+  --lan-iface IFACE
+  --lan-gateway CIDR
+  --advertise CIDR
+  --underlay-iface IFACE
+  --endpoint-transport TRANSPORT
+  --endpoint-listen ADDR
+  --endpoint-address ADDR
+  --api ADDR
+  --peer-api ADDR
+  --dataplane auto|linux|noop
+  --kernel-modules auto|disabled|required
+  --local-install
+  --no-deploy, --no-install
+
+Join token options:
+  --provision-url URL
+  --token TOKEN
 
 The wizard calls the stable automation scripts underneath:
   scripts/trustix-bootstrap-ix.sh
@@ -111,6 +139,54 @@ prompt_yes_no() {
       *) log "Please answer y or n" ;;
     esac
   done
+}
+
+value_or_prompt() {
+  local value="$1"
+  local label="$2"
+  local default_value="${3:-}"
+  if [[ -n "$value" ]]; then
+    printf '%s\n' "$value"
+    return
+  fi
+  if [[ "${assume_defaults:-0}" == "1" ]]; then
+    printf '%s\n' "$default_value"
+    return
+  fi
+  prompt "$label" "$default_value"
+}
+
+value_or_prompt_required() {
+  local value="$1"
+  local label="$2"
+  local default_value="${3:-}"
+  if [[ -n "$value" ]]; then
+    printf '%s\n' "$value"
+    return
+  fi
+  if [[ "${assume_defaults:-0}" == "1" ]]; then
+    [[ -n "$default_value" ]] || die "${label} is required"
+    printf '%s\n' "$default_value"
+    return
+  fi
+  prompt_required "$label" "$default_value"
+}
+
+flag_or_prompt_yes_no() {
+  local value="$1"
+  local label="$2"
+  local default_value="${3:-Y}"
+  case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|y|on) return 0 ;;
+    0|false|no|n|off) return 1 ;;
+  esac
+  if [[ "${assume_defaults:-0}" == "1" ]]; then
+    case "$(printf '%s' "$default_value" | tr '[:upper:]' '[:lower:]')" in
+      1|true|yes|y|on) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+  prompt_yes_no "$label" "$default_value"
 }
 
 default_host() {
@@ -185,22 +261,22 @@ run_first_ix() {
   host="$(default_host)"
   default_control_api="https://${host}:9443"
 
-  domain_id="$(prompt_required "Domain ID" "trustix.local")"
-  ix_id="$(prompt_required "First IX ID" "ix-a")"
-  cert_dir="$(prompt_required "Local CA/cert directory" "certs")"
-  control_api="$(prompt_required "Published IX control API URL" "$default_control_api")"
+  domain_id="$(value_or_prompt_required "$first_domain_id" "Domain ID" "trustix.local")"
+  ix_id="$(value_or_prompt_required "$first_ix_id" "First IX ID" "ix-a")"
+  cert_dir="$(value_or_prompt_required "$first_cert_dir" "Local CA/cert directory" "certs")"
+  control_api="$(value_or_prompt_required "$first_control_api" "Published IX control API URL" "$default_control_api")"
   host="$(host_from_url "$control_api")"
-  lan_iface="$(prompt_required "LAN interface" "br-lan")"
-  lan_gateway="$(prompt_required "LAN gateway CIDR managed by this IX" "10.44.0.1/24")"
-  advertise="$(prompt_required "LAN prefix to advertise" "$(prefix_from_gateway "$lan_gateway")")"
-  underlay_iface="$(prompt "Underlay/WAN interface for kernel fast paths" "")"
-  endpoint_transport="$(prompt_required "Default data transport" "udp")"
-  endpoint_listen="$(prompt_required "Data endpoint listen address" "0.0.0.0:7000")"
-  endpoint_address="$(prompt_required "Published data endpoint address" "${host}:7000")"
-  api_addr="$(prompt_required "Management/WebUI listen address" "127.0.0.1:8787")"
-  peer_api_addr="$(prompt_required "Peer control listen address" "0.0.0.0:9443")"
-  dataplane="$(prompt_required "Dataplane mode" "auto")"
-  kernel_modules="$(prompt_required "Kernel module mode" "auto")"
+  lan_iface="$(value_or_prompt_required "$first_lan_iface" "LAN interface" "br-lan")"
+  lan_gateway="$(value_or_prompt_required "$first_lan_gateway" "LAN gateway CIDR managed by this IX" "10.44.0.1/24")"
+  advertise="$(value_or_prompt_required "$first_advertise" "LAN prefix to advertise" "$(prefix_from_gateway "$lan_gateway")")"
+  underlay_iface="$(value_or_prompt "$first_underlay_iface" "Underlay/WAN interface for kernel fast paths" "")"
+  endpoint_transport="$(value_or_prompt_required "$first_endpoint_transport" "Default data transport" "udp")"
+  endpoint_listen="$(value_or_prompt_required "$first_endpoint_listen" "Data endpoint listen address" "0.0.0.0:7000")"
+  endpoint_address="$(value_or_prompt_required "$first_endpoint_address" "Published data endpoint address" "${host}:7000")"
+  api_addr="$(value_or_prompt_required "$first_api_addr" "Management/WebUI listen address" "127.0.0.1:8787")"
+  peer_api_addr="$(value_or_prompt_required "$first_peer_api_addr" "Peer control listen address" "0.0.0.0:9443")"
+  dataplane="$(value_or_prompt_required "$first_dataplane" "Dataplane mode" "auto")"
+  kernel_modules="$(value_or_prompt_required "$first_kernel_modules" "Kernel module mode" "auto")"
 
   ensure_first_domain_certs "$domain_id" "$ix_id" "$cert_dir"
 
@@ -222,7 +298,7 @@ run_first_ix() {
   if [[ -n "$underlay_iface" ]]; then
     args+=(--underlay-iface "$underlay_iface")
   fi
-  if prompt_yes_no "Build, install, and start this IX on the local host" "Y"; then
+  if flag_or_prompt_yes_no "$first_local_install" "Build, install, and start this IX on the local host" "Y"; then
     args+=(--local-install)
   else
     args+=(--no-deploy)
@@ -234,17 +310,56 @@ run_first_ix() {
 
 run_join_token() {
   local provision_url token
-  provision_url="$(prompt_required "Existing IX provision URL" "https://ix-a.example.net:8787")"
-  token="$(prompt_required "One-time provision token" "")"
+  provision_url="$(value_or_prompt_required "$join_provision_url" "Existing IX provision URL" "https://ix-a.example.net:8787")"
+  token="$(value_or_prompt_required "$join_token" "One-time provision token" "")"
   log "join domain with provision token"
   "${repo_root}/scripts/trustix-bootstrap-ix.sh" --provision-url "$provision_url" --token "$token"
 }
 
 mode=""
+assume_defaults=0
+first_domain_id=""
+first_ix_id=""
+first_cert_dir=""
+first_control_api=""
+first_lan_iface=""
+first_lan_gateway=""
+first_advertise=""
+first_underlay_iface=""
+first_endpoint_transport=""
+first_endpoint_listen=""
+first_endpoint_address=""
+first_api_addr=""
+first_peer_api_addr=""
+first_dataplane=""
+first_kernel_modules=""
+first_local_install=""
+join_provision_url=""
+join_token=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --first-ix) mode="first"; shift ;;
     --join-token) mode="join-token"; shift ;;
+    --yes|--non-interactive) assume_defaults=1; shift ;;
+    --domain) [[ $# -ge 2 ]] || die "--domain requires a value"; first_domain_id="$2"; shift 2 ;;
+    --ix) [[ $# -ge 2 ]] || die "--ix requires a value"; first_ix_id="$2"; shift 2 ;;
+    --source-certs|--cert-dir) [[ $# -ge 2 ]] || die "$1 requires a value"; first_cert_dir="$2"; shift 2 ;;
+    --control-api) [[ $# -ge 2 ]] || die "--control-api requires a value"; first_control_api="$2"; shift 2 ;;
+    --lan-iface) [[ $# -ge 2 ]] || die "--lan-iface requires a value"; first_lan_iface="$2"; shift 2 ;;
+    --lan-gateway) [[ $# -ge 2 ]] || die "--lan-gateway requires a value"; first_lan_gateway="$2"; shift 2 ;;
+    --advertise) [[ $# -ge 2 ]] || die "--advertise requires a value"; first_advertise="$2"; shift 2 ;;
+    --underlay-iface) [[ $# -ge 2 ]] || die "--underlay-iface requires a value"; first_underlay_iface="$2"; shift 2 ;;
+    --endpoint-transport) [[ $# -ge 2 ]] || die "--endpoint-transport requires a value"; first_endpoint_transport="$2"; shift 2 ;;
+    --endpoint-listen) [[ $# -ge 2 ]] || die "--endpoint-listen requires a value"; first_endpoint_listen="$2"; shift 2 ;;
+    --endpoint-address) [[ $# -ge 2 ]] || die "--endpoint-address requires a value"; first_endpoint_address="$2"; shift 2 ;;
+    --api) [[ $# -ge 2 ]] || die "--api requires a value"; first_api_addr="$2"; shift 2 ;;
+    --peer-api) [[ $# -ge 2 ]] || die "--peer-api requires a value"; first_peer_api_addr="$2"; shift 2 ;;
+    --dataplane) [[ $# -ge 2 ]] || die "--dataplane requires a value"; first_dataplane="$2"; shift 2 ;;
+    --kernel-modules) [[ $# -ge 2 ]] || die "--kernel-modules requires a value"; first_kernel_modules="$2"; shift 2 ;;
+    --local-install) first_local_install=1; shift ;;
+    --no-deploy|--no-install) first_local_install=0; shift ;;
+    --provision-url) [[ $# -ge 2 ]] || die "--provision-url requires a value"; join_provision_url="$2"; shift 2 ;;
+    --token|--provision-token) [[ $# -ge 2 ]] || die "$1 requires a value"; join_token="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
