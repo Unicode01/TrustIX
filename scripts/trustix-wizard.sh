@@ -67,6 +67,8 @@ First IX options:
   --endpoint-transport TRANSPORT
   --endpoint-listen ADDR
   --endpoint-address ADDR
+  --endpoint-source-ip IP
+  --endpoint-bind-iface IFACE
   --api ADDR
   --peer-api ADDR
   --dataplane auto|linux|noop
@@ -257,7 +259,7 @@ ensure_first_domain_certs() {
 }
 
 run_first_ix() {
-  local host default_control_api domain_id ix_id cert_dir control_api lan_iface lan_gateway advertise underlay_iface endpoint_transport endpoint_listen endpoint_address api_addr peer_api_addr dataplane kernel_modules
+  local host default_control_api domain_id ix_id cert_dir control_api lan_iface lan_gateway advertise underlay_iface endpoint_transport endpoint_listen endpoint_address endpoint_source_ip endpoint_bind_iface api_addr peer_api_addr dataplane kernel_modules endpoint_spec
   host="$(default_host)"
   default_control_api="https://${host}:9443"
 
@@ -273,12 +275,22 @@ run_first_ix() {
   endpoint_transport="$(value_or_prompt_required "$first_endpoint_transport" "Default data transport" "udp")"
   endpoint_listen="$(value_or_prompt_required "$first_endpoint_listen" "Data endpoint listen address" "0.0.0.0:7000")"
   endpoint_address="$(value_or_prompt_required "$first_endpoint_address" "Published data endpoint address" "${host}:7000")"
+  endpoint_source_ip="$(value_or_prompt "$first_endpoint_source_ip" "Outbound source IP for this data endpoint" "")"
+  endpoint_bind_iface="$(value_or_prompt "$first_endpoint_bind_iface" "Outbound bind interface for this data endpoint" "")"
   api_addr="$(value_or_prompt_required "$first_api_addr" "Management/WebUI listen address" "127.0.0.1:8787")"
   peer_api_addr="$(value_or_prompt_required "$first_peer_api_addr" "Peer control listen address" "0.0.0.0:9443")"
   dataplane="$(value_or_prompt_required "$first_dataplane" "Dataplane mode" "auto")"
   kernel_modules="$(value_or_prompt_required "$first_kernel_modules" "Kernel module mode" "auto")"
 
   ensure_first_domain_certs "$domain_id" "$ix_id" "$cert_dir"
+
+  endpoint_spec="name=${ix_id}-${endpoint_transport};transport=${endpoint_transport};mode=passive;listen=${endpoint_listen};address=${endpoint_address}"
+  if [[ -n "$endpoint_source_ip" ]]; then
+    endpoint_spec+=";source_ip=${endpoint_source_ip}"
+  fi
+  if [[ -n "$endpoint_bind_iface" ]]; then
+    endpoint_spec+=";bind_iface=${endpoint_bind_iface}"
+  fi
 
   local args=(
     --ix "$ix_id"
@@ -288,7 +300,7 @@ run_first_ix() {
     --lan-iface "$lan_iface"
     --lan-gateway "$lan_gateway"
     --advertise "$advertise"
-    --endpoint "name=${ix_id}-${endpoint_transport};transport=${endpoint_transport};mode=passive;listen=${endpoint_listen};address=${endpoint_address}"
+    --endpoint "$endpoint_spec"
     --api "$api_addr"
     --peer-api "$peer_api_addr"
     --dataplane "$dataplane"
@@ -329,6 +341,8 @@ first_underlay_iface=""
 first_endpoint_transport=""
 first_endpoint_listen=""
 first_endpoint_address=""
+first_endpoint_source_ip=""
+first_endpoint_bind_iface=""
 first_api_addr=""
 first_peer_api_addr=""
 first_dataplane=""
@@ -352,6 +366,8 @@ while [[ $# -gt 0 ]]; do
     --endpoint-transport) [[ $# -ge 2 ]] || die "--endpoint-transport requires a value"; first_endpoint_transport="$2"; shift 2 ;;
     --endpoint-listen) [[ $# -ge 2 ]] || die "--endpoint-listen requires a value"; first_endpoint_listen="$2"; shift 2 ;;
     --endpoint-address) [[ $# -ge 2 ]] || die "--endpoint-address requires a value"; first_endpoint_address="$2"; shift 2 ;;
+    --endpoint-source-ip) [[ $# -ge 2 ]] || die "--endpoint-source-ip requires a value"; first_endpoint_source_ip="$2"; shift 2 ;;
+    --endpoint-bind-iface) [[ $# -ge 2 ]] || die "--endpoint-bind-iface requires a value"; first_endpoint_bind_iface="$2"; shift 2 ;;
     --api) [[ $# -ge 2 ]] || die "--api requires a value"; first_api_addr="$2"; shift 2 ;;
     --peer-api) [[ $# -ge 2 ]] || die "--peer-api requires a value"; first_peer_api_addr="$2"; shift 2 ;;
     --dataplane) [[ $# -ge 2 ]] || die "--dataplane requires a value"; first_dataplane="$2"; shift 2 ;;

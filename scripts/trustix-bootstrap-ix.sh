@@ -74,6 +74,9 @@ Common options:
   --attach-mode MODE         managed or existing (default: managed)
   --manage-address 0|1       default: 1
   --endpoint SPEC            endpoint key=value spec; repeatable
+  --endpoint-source-ip IP    outbound source IP for the generated default endpoint
+  --endpoint-bind-iface IFACE
+                             outbound Linux interface bind for the generated default endpoint
   --bootstrap-peer SPEC      id=ix-a,domain=lab.local,control_api=https://...
   --bootstrap-control-api URL
   --api ADDR                 deployed management API listen
@@ -111,10 +114,12 @@ config/certs/data and replaces only release files plus the systemd unit:
 
 Endpoint SPEC fields are comma-separated or semicolon-separated:
   name=ix-new-udp,transport=udp,mode=passive,listen=0.0.0.0:7000,address=ddns.example:7000
+  Optional local bind fields: source_ip=192.0.2.10,bind_iface=wan2
 Use semicolons when a value itself contains commas, for example GRE/IPIP/VXLAN
 endpoint address strings.
 If no endpoint is supplied, one UDP passive endpoint is generated from
---listen/--address/--endpoint-name/--endpoint-transport.
+--listen/--address/--endpoint-name/--endpoint-transport and optional
+--endpoint-source-ip/--endpoint-bind-iface.
 EOF
 }
 
@@ -297,6 +302,8 @@ endpoint_transport="udp"
 endpoint_mode="passive"
 endpoint_listen="0.0.0.0:7000"
 endpoint_address=""
+endpoint_source_ip=""
+endpoint_bind_iface=""
 control_api=""
 bootstrap_peers=()
 bootstrap_control_apis=()
@@ -352,6 +359,8 @@ while [[ $# -gt 0 ]]; do
     --endpoint-transport) [[ $# -ge 2 ]] || die "--endpoint-transport requires a value"; endpoint_transport="$2"; shift 2 ;;
     --listen) [[ $# -ge 2 ]] || die "--listen requires a value"; endpoint_listen="$2"; shift 2 ;;
     --address) [[ $# -ge 2 ]] || die "--address requires a value"; endpoint_address="$2"; shift 2 ;;
+    --endpoint-source-ip) [[ $# -ge 2 ]] || die "--endpoint-source-ip requires a value"; endpoint_source_ip="$2"; shift 2 ;;
+    --endpoint-bind-iface) [[ $# -ge 2 ]] || die "--endpoint-bind-iface requires a value"; endpoint_bind_iface="$2"; shift 2 ;;
     --control-api) [[ $# -ge 2 ]] || die "--control-api requires a value"; control_api="$2"; shift 2 ;;
     --bootstrap-peer) [[ $# -ge 2 ]] || die "--bootstrap-peer requires a value"; bootstrap_peers+=("$2"); shift 2 ;;
     --bootstrap-control-api) [[ $# -ge 2 ]] || die "--bootstrap-control-api requires a value"; bootstrap_control_apis+=("$2"); shift 2 ;;
@@ -456,7 +465,14 @@ if [[ ${#endpoint_specs[@]} -eq 0 ]]; then
   if [[ -z "$endpoint_name" ]]; then
     endpoint_name="${ix_id}-${endpoint_transport}"
   fi
-  endpoint_specs+=("name=${endpoint_name},transport=${endpoint_transport},mode=${endpoint_mode},listen=${endpoint_listen},address=${endpoint_address}")
+  generated_endpoint_spec="name=${endpoint_name},transport=${endpoint_transport},mode=${endpoint_mode},listen=${endpoint_listen},address=${endpoint_address}"
+  if [[ -n "$endpoint_source_ip" ]]; then
+    generated_endpoint_spec+=",source_ip=${endpoint_source_ip}"
+  fi
+  if [[ -n "$endpoint_bind_iface" ]]; then
+    generated_endpoint_spec+=",bind_iface=${endpoint_bind_iface}"
+  fi
+  endpoint_specs+=("$generated_endpoint_spec")
 fi
 
 write_lan_object() {
@@ -504,12 +520,14 @@ write_lan_object() {
 
 write_endpoint_object() {
   local spec="$1"
-  local name transport mode listen address priority link_tls encryption profile datapath crypto
+  local name transport mode listen address source_ip bind_iface priority link_tls encryption profile datapath crypto first_bind
   name="$(field_value "$spec" name "")"
   transport="$(field_value "$spec" transport "udp")"
   mode="$(field_value "$spec" mode "passive")"
   listen="$(field_value "$spec" listen "")"
   address="$(field_value "$spec" address "")"
+  source_ip="$(field_value "$spec" source_ip "$(field_value "$spec" local_bind_source_ip "")")"
+  bind_iface="$(field_value "$spec" bind_iface "$(field_value "$spec" local_bind_iface "")")"
   priority="$(field_value "$spec" priority "0")"
   link_tls="$(field_value "$spec" link_tls "")"
   encryption="$(field_value "$spec" encryption "")"
@@ -537,6 +555,19 @@ write_endpoint_object() {
   printf '"datapath":"%s",' "$(json_escape "$datapath")"
   printf '"crypto_placement":"%s"' "$(json_escape "$crypto")"
   printf '},'
+  if [[ -n "$source_ip" || -n "$bind_iface" ]]; then
+    printf '"local_bind":{'
+    first_bind=1
+    if [[ -n "$source_ip" ]]; then
+      printf '"source_ip":"%s"' "$(json_escape "$source_ip")"
+      first_bind=0
+    fi
+    if [[ -n "$bind_iface" ]]; then
+      if [[ "$first_bind" == "0" ]]; then printf ','; fi
+      printf '"iface":"%s"' "$(json_escape "$bind_iface")"
+    fi
+    printf '},'
+  fi
   printf '"enabled":true'
   printf '}'
 }

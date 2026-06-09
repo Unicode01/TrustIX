@@ -120,6 +120,22 @@ scripts/trustix-bootstrap-ix.sh \
 Bootstrap requires the Domain CA key to issue the IX certificate and the Config CA key to issue route authorization. It writes the target config as JSON, stages deployable certs, optionally builds a release tarball, and optionally deploys it.
 
 Use semicolon-separated endpoint specs when a value contains commas, such as GRE/IPIP/VXLAN endpoint strings.
+For a single interface with multiple underlay IPs, bind ingress with the
+endpoint `listen` address and bind egress with endpoint `source_ip` and optional
+`bind_iface`:
+
+```bash
+scripts/trustix-bootstrap-ix.sh \
+  --ix ix-new \
+  --domain example.net \
+  --source-certs certs \
+  --control-api https://ix-new.example.net:9443 \
+  --lan-iface br-lan \
+  --lan-gateway 10.44.0.1/24 \
+  --advertise 10.44.0.0/24 \
+  --endpoint 'name=ix-new-udp;transport=udp;mode=passive;listen=198.51.100.10:7000;address=ix-new.example.net:7000;source_ip=198.51.100.10;bind_iface=vmbr0' \
+  --no-deploy
+```
 
 ## Latency Matrix History
 

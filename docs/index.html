@@ -543,6 +543,16 @@
               <input id="endpoint-address" value="ix-a.example.net:7000" autocomplete="off">
               <div class="hint" data-i18n="endpoint_address_hint">Domain names are fine here, including DDNS names.</div>
             </div>
+            <div class="field">
+              <label for="endpoint-source-ip" data-i18n="endpoint_source_ip">Outbound source IP</label>
+              <input id="endpoint-source-ip" placeholder="198.51.100.10" autocomplete="off">
+              <div class="hint" data-i18n="endpoint_source_ip_hint">Optional. Use this when one interface has multiple underlay IPs.</div>
+            </div>
+            <div class="field">
+              <label for="endpoint-bind-iface" data-i18n="endpoint_bind_iface">Outbound bind interface</label>
+              <input id="endpoint-bind-iface" placeholder="vmbr0" autocomplete="off">
+              <div class="hint" data-i18n="endpoint_bind_iface_hint">Optional Linux interface bind for outbound dials.</div>
+            </div>
           </div>
 
           <h2 class="section-title" data-i18n="runtime">Runtime</h2>
@@ -641,6 +651,10 @@
         listen_address: "Listen address",
         endpoint_address: "Published endpoint address",
         endpoint_address_hint: "Domain names are fine here, including DDNS names.",
+        endpoint_source_ip: "Outbound source IP",
+        endpoint_source_ip_hint: "Optional. Use this when one interface has multiple underlay IPs.",
+        endpoint_bind_iface: "Outbound bind interface",
+        endpoint_bind_iface_hint: "Optional Linux interface bind for outbound dials.",
         runtime: "Runtime",
         management_listen: "Management/WebUI listen",
         peer_control_listen: "Peer control listen",
@@ -689,6 +703,10 @@
         listen_address: "监听地址",
         endpoint_address: "对外发布的端点地址",
         endpoint_address_hint: "这里可以填写域名，包括 DDNS 域名。",
+        endpoint_source_ip: "出口源 IP",
+        endpoint_source_ip_hint: "可选。一个接口有多个 underlay IP 时，用它指定出站源地址。",
+        endpoint_bind_iface: "出口绑定接口",
+        endpoint_bind_iface_hint: "可选。Linux 出站连接绑定的接口名。",
         runtime: "运行参数",
         management_listen: "管理/WebUI 监听",
         peer_control_listen: "Peer 控制面监听",
@@ -718,7 +736,8 @@
     const ids = [
       "domain", "ix", "cert-dir", "control-api", "lan-iface", "underlay-iface",
       "lan-gateway", "lan-prefixes", "endpoint-transport", "endpoint-listen",
-      "endpoint-address", "api", "peer-api", "dataplane", "kernel-modules",
+      "endpoint-address", "endpoint-source-ip", "endpoint-bind-iface",
+      "api", "peer-api", "dataplane", "kernel-modules",
       "local-install", "provision-url", "token"
     ];
 
@@ -868,6 +887,8 @@
       addArg(parts, "--endpoint-transport", value("endpoint-transport"));
       addArg(parts, "--endpoint-listen", value("endpoint-listen"));
       addArg(parts, "--endpoint-address", value("endpoint-address"));
+      addArg(parts, "--endpoint-source-ip", value("endpoint-source-ip"));
+      addArg(parts, "--endpoint-bind-iface", value("endpoint-bind-iface"));
       addArg(parts, "--api", value("api"));
       addArg(parts, "--peer-api", value("peer-api"));
       addArg(parts, "--dataplane", value("dataplane"));
