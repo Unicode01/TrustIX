@@ -542,8 +542,21 @@ button {
   gap: 12px;
 }
 
-.kernel-config-grid {
+.form-grid.kernel-config-grid {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: end;
+}
+
+.kernel-config-card .kernel-summary-strip .summary-value {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kernel-config-card .check-field {
+  width: 100%;
+  align-self: end;
 }
 
 .kernel-capability-grid {

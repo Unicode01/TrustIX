@@ -432,7 +432,7 @@ function SummaryItem(props: { label: string; value: string }) {
   return (
     <div className="summary-item">
       <div className="summary-label">{props.label}</div>
-      <div className="summary-value">{props.value}</div>
+      <div className="summary-value" title={props.value}>{props.value}</div>
     </div>
   );
 }
@@ -3367,7 +3367,7 @@ function ConfigKernelCapabilityEditor(props: { t: Translate; lang: string; desir
     datapathModule?.capability_tier,
     helpersModule?.capability_tier,
     cryptoModule?.capability_tier,
-    rxStage?.enabled ? `${props.t("kernel_rx_stage", "Kernel RX stage")} ${rxStage.mode || props.t("active", "Active")}` : "",
+    rxStage?.enabled ? `RX ${rxStage.mode || props.t("active", "Active")}` : "",
   ], "-");
   return (
     <div className="config-card config-wide kernel-config-card">
