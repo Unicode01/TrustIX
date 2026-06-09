@@ -1484,6 +1484,7 @@ func TestPlanCleanupIncludesMultipleLANs(t *testing.T) {
 		}, {
 			ID:            "guest",
 			Iface:         "br-guest",
+			LinkAdded:     true,
 			AddressAdded:  true,
 			QdiscPrepared: true,
 		}},
@@ -1505,6 +1506,12 @@ func TestPlanCleanupIncludesMultipleLANs(t *testing.T) {
 	}
 	if !cleanupPlanHasStep(plan, "remove_lan_gateway", "br-lan") || !cleanupPlanHasStep(plan, "remove_lan_gateway", "br-guest") {
 		t.Fatalf("cleanup plan missing multi-LAN gateway cleanup: %#v", plan.Steps)
+	}
+	if cleanupPlanHasStep(plan, "delete_managed_lan_iface", "br-lan") {
+		t.Fatalf("cleanup plan should not delete pre-existing LAN iface: %#v", plan.Steps)
+	}
+	if !cleanupPlanHasStep(plan, "delete_managed_lan_iface", "br-guest") {
+		t.Fatalf("cleanup plan missing TrustIX-created LAN iface cleanup: %#v", plan.Steps)
 	}
 }
 

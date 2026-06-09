@@ -176,6 +176,7 @@ type LANStats struct {
 	ManageForwarding bool   `json:"manage_forwarding,omitempty"`
 	ManageRPFilter   bool   `json:"manage_rp_filter,omitempty"`
 	ManagedMTU       int    `json:"managed_mtu,omitempty"`
+	LinkAdded        bool   `json:"link_added,omitempty"`
 	AddressAdded     bool   `json:"address_added,omitempty"`
 	QdiscPrepared    bool   `json:"qdisc_prepared,omitempty"`
 }

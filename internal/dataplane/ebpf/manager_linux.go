@@ -56,6 +56,7 @@ type Manager struct {
 	capabilities                                []string
 	warnings                                    []string
 	restoreSysctls                              map[string]string
+	linkAddedLANs                               map[string]bool
 	addressAdded                                bool
 	addressAddedLANs                            map[string]bool
 	localVIPs                                   map[netip.Addr]struct{}
@@ -1443,6 +1444,7 @@ type persistedDataplaneState struct {
 	Spec                 dataplane.AttachSpec                     `json:"spec"`
 	Snapshot             dataplane.Snapshot                       `json:"snapshot"`
 	Attached             bool                                     `json:"attached"`
+	LinkAdded            bool                                     `json:"link_added,omitempty"`
 	AddressAdded         bool                                     `json:"address_added,omitempty"`
 	QdiscPrepared        bool                                     `json:"qdisc_prepared,omitempty"`
 	LANs                 []persistedLANAttachState                `json:"lans,omitempty"`
@@ -1460,6 +1462,7 @@ type persistedDataplaneState struct {
 type persistedLANAttachState struct {
 	ID                   string                     `json:"id,omitempty"`
 	Iface                string                     `json:"iface"`
+	LinkAdded            bool                       `json:"link_added,omitempty"`
 	AddressAdded         bool                       `json:"address_added,omitempty"`
 	QdiscPrepared        bool                       `json:"qdisc_prepared,omitempty"`
 	LANOffloadProtection *persistedLinkOffloadState `json:"lan_offload_protection,omitempty"`
@@ -1549,6 +1552,7 @@ func captureRingbufSize() uint32 {
 func NewManager() *Manager {
 	return &Manager{
 		restoreSysctls:               make(map[string]string),
+		linkAddedLANs:                make(map[string]bool),
 		addressAddedLANs:             make(map[string]bool),
 		localVIPs:                    make(map[netip.Addr]struct{}),
 		qdiscPreparedLANs:            make(map[string]bool),
@@ -1766,22 +1770,34 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 
 	lans := effectiveLANAttachSpecs(spec)
 	var primaryLink netlink.Link
+	createdLANLinks := make(map[string]netlink.Link)
 	initialLANOffloadProtections := cloneLinkOffloadStateMap(manager.lanOffloadProtections)
 	defer func() {
-		if err == nil || !linkOffloadStateMapChanged(manager.lanOffloadProtections, initialLANOffloadProtections) {
-			return
-		}
-		if restoreErr := manager.restoreLANOffloadProtectionLocked(primaryLink); restoreErr != nil {
-			manager.spec = spec
-			if persistErr := manager.persistStateLocked(); persistErr != nil {
-				err = fmt.Errorf("%w; rollback LAN offload protection: %v; persist rollback state: %v", err, restoreErr, persistErr)
-				return
+		if err != nil && linkOffloadStateMapChanged(manager.lanOffloadProtections, initialLANOffloadProtections) {
+			restoreErr := manager.restoreLANOffloadProtectionLocked(primaryLink)
+			if restoreErr != nil {
+				manager.spec = spec
+				if persistErr := manager.persistStateLocked(); persistErr != nil {
+					err = fmt.Errorf("%w; rollback LAN offload protection: %v; persist rollback state: %v", err, restoreErr, persistErr)
+				} else {
+					err = fmt.Errorf("%w; rollback LAN offload protection: %v", err, restoreErr)
+				}
 			}
-			err = fmt.Errorf("%w; rollback LAN offload protection: %v", err, restoreErr)
+		}
+		if err != nil {
+			for key, link := range createdLANLinks {
+				if link != nil {
+					_ = netlink.LinkDel(link)
+				}
+				delete(manager.linkAddedLANs, key)
+			}
 		}
 	}()
 	if manager.addressAddedLANs == nil {
 		manager.addressAddedLANs = make(map[string]bool)
+	}
+	if manager.linkAddedLANs == nil {
+		manager.linkAddedLANs = make(map[string]bool)
 	}
 	if manager.qdiscPreparedLANs == nil {
 		manager.qdiscPreparedLANs = make(map[string]bool)
@@ -1790,9 +1806,23 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 		if lan.Iface == "" {
 			continue
 		}
+		lanKey := lanAddressStateKey(lan)
 		link, err := netlink.LinkByName(lan.Iface)
 		if err != nil {
-			return fmt.Errorf("inspect LAN iface %q: %w", lan.Iface, err)
+			if isNotFound(err) && lan.LANAttachMode == "managed" {
+				var created bool
+				link, created, err = createManagedLANBridge(lan.Iface)
+				if err != nil {
+					return fmt.Errorf("create managed LAN bridge %q: %w", lan.Iface, err)
+				}
+				if created {
+					manager.linkAddedLANs[lanKey] = true
+					createdLANLinks[lanKey] = link
+					manager.warnings = append(manager.warnings, fmt.Sprintf("created managed LAN bridge %q", lan.Iface))
+				}
+			} else {
+				return fmt.Errorf("inspect LAN iface %q: %w", lan.Iface, err)
+			}
 		}
 		if i == 0 {
 			primaryLink = link
@@ -1814,7 +1844,6 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 				spec.ManageAddress = false
 			}
 		}
-		lanKey := lanAddressStateKey(lan)
 		if lan.ManageAddress && lan.Gateway != "" {
 			existed, err := linkHasAddress(link, lan.Gateway)
 			if err != nil {
@@ -1981,6 +2010,7 @@ func (manager *Manager) lanStatsLocked() []dataplane.LANStats {
 	out := make([]dataplane.LANStats, 0, len(lans))
 	for i, lan := range lans {
 		key := lanAddressStateKey(lan)
+		linkAdded := manager.linkAddedLANs[key]
 		addressAdded := manager.addressAddedLANs[key]
 		qdiscPrepared := manager.qdiscPreparedLANs[key]
 		if i == 0 {
@@ -1999,6 +2029,7 @@ func (manager *Manager) lanStatsLocked() []dataplane.LANStats {
 			ManageForwarding: lan.ManageForwarding,
 			ManageRPFilter:   lan.ManageRPFilter,
 			ManagedMTU:       lan.ManagedMTU,
+			LinkAdded:        linkAdded,
 			AddressAdded:     addressAdded,
 			QdiscPrepared:    qdiscPrepared,
 		})
@@ -5709,6 +5740,7 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 	manager.spec = spec
 	manager.snapshot = dataplane.Snapshot{}
 	manager.attached = false
+	manager.linkAddedLANs = make(map[string]bool)
 	manager.addressAdded = false
 	manager.addressAddedLANs = make(map[string]bool)
 	manager.qdiscPrepared = false
@@ -5751,6 +5783,7 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 		manager.spec = normalizeAttachSpec(mergeCleanupSpec(state.Spec, spec))
 		manager.snapshot = state.Snapshot
 		manager.attached = state.Attached
+		manager.linkAddedLANs = persistedLANLinkAddedMap(state, manager.spec)
 		manager.addressAdded = state.AddressAdded
 		manager.qdiscPrepared = state.QdiscPrepared
 		manager.lanOffloadProtection = state.LANOffloadProtection
@@ -5778,6 +5811,7 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 		manager.nativeTunnelRoutes = nativeTunnelRouteStateMap(state.NativeTunnelRoutes)
 		staleXDP = state.ExperimentalTCPXDP
 	} else {
+		manager.linkAddedLANs = make(map[string]bool)
 		manager.addressAddedLANs = make(map[string]bool)
 		manager.qdiscPreparedLANs = make(map[string]bool)
 		for i, lan := range effectiveLANAttachSpecs(spec) {
@@ -5826,6 +5860,7 @@ func (manager *Manager) PlanCleanup(ctx context.Context, spec dataplane.AttachSp
 	}}
 	localVIPs := []dataplane.LocalVIP(nil)
 	restoreSysctls := map[string]string(nil)
+	linkAddedLANs := map[string]bool(nil)
 	addressAddedLANs := map[string]bool(nil)
 	qdiscPreparedLANs := map[string]bool(nil)
 	lanOffloadProtections := map[string]*persistedLinkOffloadState(nil)
@@ -5835,6 +5870,7 @@ func (manager *Manager) PlanCleanup(ctx context.Context, spec dataplane.AttachSp
 	if found {
 		localVIPs = state.LocalVIPs
 		restoreSysctls = state.RestoreSysctls
+		linkAddedLANs = persistedLANLinkAddedMap(state, effective)
 		addressAddedLANs = persistedLANAddressAddedMap(state, effective)
 		qdiscPreparedLANs = persistedLANQdiscPreparedMap(state, effective)
 		if state.Version == 0 && state.Attached {
@@ -5849,6 +5885,7 @@ func (manager *Manager) PlanCleanup(ctx context.Context, spec dataplane.AttachSp
 		deviceAccessProxyARP = state.DeviceAccessProxyARP
 		staleXDP = state.ExperimentalTCPXDP
 	} else {
+		linkAddedLANs = make(map[string]bool)
 		addressAddedLANs = make(map[string]bool)
 		qdiscPreparedLANs = make(map[string]bool)
 		for _, lan := range effectiveLANAttachSpecs(effective) {
@@ -5906,6 +5943,14 @@ func (manager *Manager) PlanCleanup(ctx context.Context, spec dataplane.AttachSp
 		sort.Strings(keys)
 		for _, path := range keys {
 			steps = append(steps, dataplane.CleanupStep{Action: "restore_sysctl", Target: path, Detail: restoreSysctls[path]})
+		}
+	}
+	for _, lan := range effectiveLANAttachSpecs(effective) {
+		if lan.Iface == "" {
+			continue
+		}
+		if linkAddedLANs[lanAddressStateKey(lan)] {
+			steps = append(steps, dataplane.CleanupStep{Action: "delete_managed_lan_iface", Target: lan.Iface, Detail: "created by TrustIX managed LAN attach"})
 		}
 	}
 	steps = append(steps, dataplane.CleanupStep{Action: "close_bpf_objects", Target: spec.PinPath})
@@ -6032,6 +6077,22 @@ func (manager *Manager) detachLocked(ctx context.Context, staleXDP *persistedExp
 		}
 	}
 	manager.restoreSysctls = make(map[string]string)
+	for _, lan := range effectiveLANAttachSpecs(manager.spec) {
+		if lan.Iface == "" {
+			continue
+		}
+		key := lanAddressStateKey(lan)
+		if !manager.linkAddedLANs[key] {
+			continue
+		}
+		target := lanLinks[lan.Iface]
+		if target == nil {
+			continue
+		}
+		if err := netlink.LinkDel(target); err != nil && !isNotFound(err) {
+			errs = append(errs, fmt.Sprintf("delete managed LAN iface %q: %v", lan.Iface, err))
+		}
+	}
 	if manager.expTCPRawFD >= 0 {
 		if err := unix.Close(manager.expTCPRawFD); err != nil {
 			errs = append(errs, "close experimental_tcp raw socket: "+err.Error())
@@ -6054,6 +6115,7 @@ func (manager *Manager) detachLocked(ctx context.Context, staleXDP *persistedExp
 		errs = append(errs, err.Error())
 	}
 	manager.attached = false
+	manager.linkAddedLANs = make(map[string]bool)
 	manager.addressAdded = false
 	manager.addressAddedLANs = make(map[string]bool)
 	manager.qdiscPrepared = false
@@ -24145,6 +24207,33 @@ func isNotFound(err error) bool {
 		strings.Contains(lower, "cannot find device")
 }
 
+func createManagedLANBridge(iface string) (netlink.Link, bool, error) {
+	iface = strings.TrimSpace(iface)
+	if iface == "" {
+		return nil, false, fmt.Errorf("empty LAN interface name")
+	}
+	bridge := &netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: iface}}
+	created := true
+	if err := netlink.LinkAdd(bridge); err != nil {
+		lower := strings.ToLower(err.Error())
+		if !errors.Is(err, os.ErrExist) && !errors.Is(err, unix.EEXIST) && !strings.Contains(lower, "file exists") && !strings.Contains(lower, "object already exists") {
+			return nil, false, err
+		}
+		created = false
+	}
+	link, err := netlink.LinkByName(iface)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		if created {
+			_ = netlink.LinkDel(link)
+		}
+		return nil, false, err
+	}
+	return link, created, nil
+}
+
 func (manager *Manager) writeSysctl(path, value string) error {
 	previous, err := os.ReadFile(path)
 	if err != nil {
@@ -24168,6 +24257,7 @@ func (manager *Manager) persistStateLocked() error {
 		Spec:                 manager.spec,
 		Snapshot:             manager.snapshot,
 		Attached:             manager.attached,
+		LinkAdded:            manager.primaryLANLinkAddedLocked(),
 		AddressAdded:         manager.addressAdded,
 		QdiscPrepared:        manager.qdiscPrepared,
 		LANs:                 manager.persistedLANAttachSnapshotLocked(),
@@ -24215,6 +24305,7 @@ func (manager *Manager) persistedLANAttachSnapshotLocked() []persistedLANAttachS
 			continue
 		}
 		key := lanAddressStateKey(lan)
+		linkAdded := manager.linkAddedLANs[key]
 		addressAdded := manager.addressAddedLANs[key]
 		qdiscPrepared := manager.qdiscPreparedLANs[key]
 		if i == 0 {
@@ -24224,6 +24315,7 @@ func (manager *Manager) persistedLANAttachSnapshotLocked() []persistedLANAttachS
 		state := persistedLANAttachState{
 			ID:                   lan.ID,
 			Iface:                lan.Iface,
+			LinkAdded:            linkAdded,
 			AddressAdded:         addressAdded,
 			QdiscPrepared:        qdiscPrepared,
 			LANOffloadProtection: manager.lanOffloadProtections[lan.Iface],
@@ -24234,6 +24326,14 @@ func (manager *Manager) persistedLANAttachSnapshotLocked() []persistedLANAttachS
 		return nil
 	}
 	return out
+}
+
+func (manager *Manager) primaryLANLinkAddedLocked() bool {
+	lans := effectiveLANAttachSpecs(manager.spec)
+	if len(lans) == 0 {
+		return false
+	}
+	return manager.linkAddedLANs[lanAddressStateKey(lans[0])]
 }
 
 func readPersistedDataplaneState(pinPath string) (persistedDataplaneState, bool, error) {
@@ -24290,6 +24390,38 @@ func mergeCleanupSpec(persisted dataplane.AttachSpec, fallback dataplane.AttachS
 		persisted.LANs = fallback.LANs
 	}
 	return persisted
+}
+
+func persistedLANLinkAddedMap(state persistedDataplaneState, spec dataplane.AttachSpec) map[string]bool {
+	out := make(map[string]bool)
+	lans := effectiveLANAttachSpecs(spec)
+	byIface := make(map[string]dataplane.LANAttachSpec, len(lans))
+	byID := make(map[string]dataplane.LANAttachSpec, len(lans))
+	for _, lan := range lans {
+		if lan.Iface != "" {
+			byIface[lan.Iface] = lan
+		}
+		if lan.ID != "" {
+			byID[lan.ID] = lan
+		}
+	}
+	for _, lanState := range state.LANs {
+		lan, ok := byIface[lanState.Iface]
+		if !ok && lanState.ID != "" {
+			lan, ok = byID[lanState.ID]
+		}
+		if !ok {
+			lan = dataplane.LANAttachSpec{ID: lanState.ID, Iface: lanState.Iface}
+		}
+		out[lanAddressStateKey(lan)] = lanState.LinkAdded
+	}
+	if len(state.LANs) == 0 && state.LinkAdded {
+		primary := normalizeAttachSpec(spec)
+		if len(effectiveLANAttachSpecs(primary)) > 0 {
+			out[lanAddressStateKey(effectiveLANAttachSpecs(primary)[0])] = true
+		}
+	}
+	return out
 }
 
 func persistedLANAddressAddedMap(state persistedDataplaneState, spec dataplane.AttachSpec) map[string]bool {
