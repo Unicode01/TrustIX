@@ -263,6 +263,24 @@
       font-weight: 650;
     }
 
+    .label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .field-status {
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1px 6px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      line-height: 1.5;
+    }
+
     .hint {
       color: var(--muted);
       font-size: 12px;
@@ -492,8 +510,12 @@
               <input id="lan-gateway" value="10.44.0.1/24" autocomplete="off">
             </div>
             <div class="field">
-              <label for="advertise" data-i18n="advertise">Advertised LAN prefix</label>
-              <input id="advertise" value="10.44.0.0/24" autocomplete="off">
+              <div class="label-row">
+                <label for="advertise" data-i18n="advertise">Advertised LAN prefix</label>
+                <span id="advertise-mode" class="field-status">Auto</span>
+              </div>
+              <input id="advertise" value="10.44.0.0/24" placeholder="10.44.0.0/24,10.45.0.0/24" autocomplete="off">
+              <div class="hint" data-i18n="advertise_hint">Defaults from the LAN gateway until edited. Use commas for multiple prefixes.</div>
             </div>
           </div>
 
@@ -610,6 +632,9 @@
         underlay_iface: "Underlay/WAN interface",
         lan_gateway: "LAN gateway CIDR",
         advertise: "Advertised LAN prefix",
+        advertise_hint: "Defaults from the LAN gateway until edited. Use commas for multiple prefixes.",
+        advertise_auto: "Auto",
+        advertise_manual: "Manual",
         data_endpoint: "Data Endpoint",
         transport: "Transport",
         listen_address: "Listen address",
@@ -655,6 +680,9 @@
         underlay_iface: "Underlay/WAN 接口",
         lan_gateway: "LAN 网关 CIDR",
         advertise: "发布的 LAN 前缀",
+        advertise_hint: "默认从 LAN 网关自动推导；手动输入后不会再覆盖。多个前缀用逗号分隔。",
+        advertise_auto: "自动",
+        advertise_manual: "手动",
         data_endpoint: "数据端点",
         transport: "传输方式",
         listen_address: "监听地址",
@@ -736,7 +764,12 @@
       for (const node of document.querySelectorAll("[data-i18n-placeholder]")) {
         node.setAttribute("placeholder", t(node.getAttribute("data-i18n-placeholder")));
       }
+      updateAdvertiseMode();
       applyTheme();
+    }
+
+    function updateAdvertiseMode() {
+      el("advertise-mode").textContent = t(state.advertiseTouched ? "advertise_manual" : "advertise_auto");
     }
 
     function applyTheme() {
@@ -814,6 +847,7 @@
         const prefix = prefixFromGateway(value("lan-gateway"));
         if (prefix) el("advertise").value = prefix;
       }
+      updateAdvertiseMode();
     }
 
     function firstIXCommand() {
