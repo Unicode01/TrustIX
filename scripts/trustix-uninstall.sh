@@ -93,6 +93,7 @@ need_cmd() {
 
 run_root() {
   if [[ -n "$sudo_cmd" && "${EUID:-$(id -u)}" != "0" ]]; then
+    command -v "$sudo_cmd" >/dev/null 2>&1 || die "${sudo_cmd} is required for non-root uninstall commands; rerun as root or pass --no-sudo"
     "$sudo_cmd" "$@"
   else
     "$@"
