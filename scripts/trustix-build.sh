@@ -6,6 +6,9 @@ fi
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export TRUSTIX_REPO_ROOT="${TRUSTIX_REPO_ROOT:-$repo_root}"
+# shellcheck source=scripts/trustix-prereqs.sh
+source "${repo_root}/scripts/trustix-prereqs.sh"
 
 usage() {
   cat <<'EOF'
@@ -138,15 +141,21 @@ if [[ -z "$version" ]]; then
   version="$release_name"
 fi
 
+build_dep_cmds=(go install realpath sha256sum stat tar gzip)
+if [[ "$build_bpf" == "1" ]]; then
+  build_dep_cmds+=(clang make gcc)
+fi
+trustix_prereqs_ensure_commands "${build_dep_cmds[@]}" || die "source build dependencies are missing; automatic dependency install failed"
+if [[ -z "${GOPROXY:-}" ]] && trustix_prereqs_mirrors_enabled; then
+  export GOPROXY="https://goproxy.cn,https://goproxy.io,direct"
+fi
+
 if [[ "$build_webui" == "1" ]]; then
-  if command -v npm >/dev/null 2>&1; then
-    log "check WebUI"
-    (cd "$repo_root" && npm run webui:check)
-    log "build WebUI"
-    (cd "$repo_root" && npm run webui:build)
-  else
-    die "npm is required for WebUI build; use --skip-webui to bypass"
-  fi
+  trustix_prereqs_ensure_webui_deps || die "npm is required for WebUI build; automatic dependency install failed; use --skip-webui to bypass"
+  log "check WebUI"
+  (cd "$repo_root" && npm run webui:check)
+  log "build WebUI"
+  (cd "$repo_root" && npm run webui:build)
 fi
 
 effective_build_ko="$build_ko"

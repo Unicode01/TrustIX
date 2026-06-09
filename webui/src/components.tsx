@@ -1280,7 +1280,7 @@ export function AccessView(props: {
   const [newIXOpenWRTDNSMasq, setNewIXOpenWRTDNSMasq] = useState(false);
   const [newIXKernelModules, setNewIXKernelModules] = useState("auto");
   const [newIXGoArch, setNewIXGoArch] = useState("");
-  const [newIXBuildBPF, setNewIXBuildBPF] = useState("1");
+  const [newIXBuildBPF, setNewIXBuildBPF] = useState("0");
   const [newIXBuildKO, setNewIXBuildKO] = useState("auto");
   const desiredDomainID = props.desired?.domain?.id || props.desired?.ix?.domain || "";
   const desiredIXID = props.desired?.ix?.id || "";

@@ -208,7 +208,7 @@ Common options:
   --ssh-option OPTION        repeatable
   --goarch ARCH              build target arch
   --kdir DIR                 target kernel build dir
-  --build-bpf 0|1            rebuild embedded eBPF objects (default: 1)
+  --build-bpf 0|1            rebuild embedded eBPF objects (default: 0)
   --build-ko auto|0|1        default: auto
   --build-webui 0|1          run npm WebUI rebuild during release build (default: 0)
   --local-install            install and start this IX on the current Linux host after build
@@ -510,7 +510,7 @@ ssh_key=""
 ssh_options=()
 goarch=""
 kdir=""
-build_bpf="${TRUSTIX_RELEASE_BUILD_BPF:-1}"
+build_bpf="${TRUSTIX_RELEASE_BUILD_BPF:-0}"
 build_ko="auto"
 build_webui="${TRUSTIX_BOOTSTRAP_BUILD_WEBUI:-0}"
 do_build=1

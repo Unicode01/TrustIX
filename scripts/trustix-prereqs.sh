@@ -145,8 +145,21 @@ trustix_prereqs_install_official_go() {
   arch="$(trustix_prereqs_go_arch)" || return 1
   install_root="${TRUSTIX_BOOTSTRAP_GO_ROOT:-/usr/local/trustix-go}"
   install_dir="${install_root}/go${version}"
-  tmp="$(mktemp /tmp/trustix-go.XXXXXX)"
-  stage="$(mktemp -d /tmp/trustix-go.XXXXXX)"
+  tmp="$(mktemp /tmp/trustix-go.XXXXXX 2>/dev/null || mktemp -t trustix-go.XXXXXX 2>/dev/null || true)"
+  if [[ -z "$tmp" ]]; then
+    tmp="${TMPDIR:-/tmp}/trustix-go.$$"
+    rm -f "$tmp"
+    : >"$tmp" || return 1
+  fi
+  stage="$(mktemp -d /tmp/trustix-go.XXXXXX 2>/dev/null || mktemp -d -t trustix-go.XXXXXX 2>/dev/null || true)"
+  if [[ -z "$stage" ]]; then
+    stage="${TMPDIR:-/tmp}/trustix-go-stage.$$"
+    rm -rf "$stage"
+    mkdir -p "$stage" || {
+      rm -f "$tmp"
+      return 1
+    }
+  fi
 
   trustix_prereqs_log "install Go ${version}"
   if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
@@ -249,7 +262,7 @@ trustix_prereqs_packages_for() {
     pacman:gzip) printf '%s\n' gzip ;;
 
     opkg:base) printf '%s\n' ca-bundle ca-certificates ;;
-    opkg:go) printf '%s\n' go golang ;;
+    opkg:go) ;;
     opkg:git) printf '%s\n' git git-http ;;
     opkg:curl) printf '%s\n' curl ;;
     opkg:clang) printf '%s\n' clang llvm ;;

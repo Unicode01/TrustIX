@@ -622,7 +622,7 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 	request.KDir = strings.TrimSpace(request.KDir)
 	request.BuildBPF = strings.TrimSpace(request.BuildBPF)
 	if request.BuildBPF == "" {
-		request.BuildBPF = "1"
+		request.BuildBPF = "0"
 	}
 	request.BuildKO = strings.TrimSpace(request.BuildKO)
 	if request.BuildKO == "" {
