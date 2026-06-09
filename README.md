@@ -129,7 +129,7 @@ sudo -E bash scripts/build-release-linux.sh
 
 For source release gates and Linux smoke tests, use [docs/release-checklist.md](docs/release-checklist.md).
 
-For one-command build, deploy, and new-IX bootstrap automation, use [docs/deployment-scripts.md](docs/deployment-scripts.md).
+For one-command build, deploy, update, uninstall, and new-IX bootstrap automation, use [docs/deployment-scripts.md](docs/deployment-scripts.md).
 
 For kernel version, OpenWrt, and distribution support boundaries, use [docs/kernel-distro-support.md](docs/kernel-distro-support.md).
 
