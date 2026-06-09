@@ -512,10 +512,10 @@
             </div>
             <div class="field">
               <div class="label-row">
-                <label for="advertise" data-i18n="advertise">Advertised LAN prefix</label>
-                <span id="advertise-mode" class="field-status">Auto</span>
+                <label for="lan-prefixes" data-i18n="advertise">Advertised LAN prefix</label>
+                <span id="lan-prefix-mode" class="field-status">Auto</span>
               </div>
-              <input id="advertise" value="10.44.0.0/24" placeholder="10.44.0.0/24,10.45.0.0/24" autocomplete="off">
+              <input id="lan-prefixes" value="10.44.0.0/24" placeholder="10.44.0.0/24,10.45.0.0/24" autocomplete="off">
               <div class="hint" data-i18n="advertise_hint">Defaults from the LAN gateway until edited. Use commas for multiple prefixes.</div>
             </div>
           </div>
@@ -717,7 +717,7 @@
 
     const ids = [
       "domain", "ix", "cert-dir", "control-api", "lan-iface", "underlay-iface",
-      "lan-gateway", "advertise", "endpoint-transport", "endpoint-listen",
+      "lan-gateway", "lan-prefixes", "endpoint-transport", "endpoint-listen",
       "endpoint-address", "api", "peer-api", "dataplane", "kernel-modules",
       "local-install", "provision-url", "token"
     ];
@@ -770,7 +770,7 @@
     }
 
     function updateAdvertiseMode() {
-      el("advertise-mode").textContent = t(state.advertiseTouched ? "advertise_manual" : "advertise_auto");
+      el("lan-prefix-mode").textContent = t(state.advertiseTouched ? "advertise_manual" : "advertise_auto");
     }
 
     function applyTheme() {
@@ -835,7 +835,7 @@
     }
 
     function updateDerivedFields(event) {
-      if (event && event.target && event.target.id === "advertise") {
+      if (event && event.target && event.target.id === "lan-prefixes") {
         state.advertiseTouched = true;
       }
       if (event && event.target && event.target.id === "control-api") {
@@ -846,7 +846,7 @@
       }
       if (!state.advertiseTouched) {
         const prefix = prefixFromGateway(value("lan-gateway"));
-        if (prefix) el("advertise").value = prefix;
+        if (prefix) el("lan-prefixes").value = prefix;
       }
       updateAdvertiseMode();
     }
@@ -863,7 +863,7 @@
       addArg(parts, "--control-api", value("control-api"));
       addArg(parts, "--lan-iface", value("lan-iface"));
       addArg(parts, "--lan-gateway", value("lan-gateway"));
-      addArg(parts, "--advertise", value("advertise"));
+      addArg(parts, "--advertise", value("lan-prefixes"));
       addArg(parts, "--underlay-iface", value("underlay-iface"));
       addArg(parts, "--endpoint-transport", value("endpoint-transport"));
       addArg(parts, "--endpoint-listen", value("endpoint-listen"));
