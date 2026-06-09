@@ -54,6 +54,34 @@ go run ./cmd/trustixctl datapath
 
 More details are in [docs/first-run.md](docs/first-run.md).
 
+## From Zero To First IX
+
+For a first real deployment, use the interactive wizard instead of hand-writing
+the first config:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-wizard.sh | sudo bash
+```
+
+Choose **Create a new domain and first IX**. The wizard asks for the domain ID,
+IX ID, published control API URL, LAN interface/gateway, advertised LAN prefix,
+and data endpoint, then calls the stable bootstrap script to generate certs,
+build a release, install the systemd service, and start the first IX.
+
+After the first IX is running, add more IX nodes from the Web UI:
+
+1. Open the first IX Web UI.
+2. Go to the access/bootstrap page and issue a one-time IX provision token.
+3. Run the generated command on the new machine. It has this shape:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-bootstrap-ix.sh | \
+  sudo bash -s -- --provision-url https://ix-a.example.net:8787 --token TOKEN
+```
+
+This token mode keeps CA private keys on the issuing IX/provisioner. The target
+machine only receives the deployable IX certs/config needed for that node.
+
 ## Build And Test
 
 Web UI:

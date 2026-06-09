@@ -6,9 +6,31 @@ The stable automation entry points are:
 - `scripts/trustix-deploy.sh`
 - `scripts/trustix-update.sh`
 - `scripts/trustix-bootstrap-ix.sh`
+- `scripts/trustix-wizard.sh`
 - `scripts/trustix-latency-history-summary.py`
 
 The scripts target Linux with GNU Bash. They are intended to be callable from the Web UI or another provisioner.
+
+## First-Run Wizard
+
+For a new operator, start here:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-wizard.sh | sudo bash
+```
+
+The wizard has two modes:
+
+- `Create a new domain and first IX`: prompts for the first IX basics, creates
+  the local CA/cert directory when needed, then calls `trustix-bootstrap-ix.sh`
+  to build, install, and start the first IX.
+- `Join an existing domain with a WebUI provision token`: prompts for the
+  provision URL and one-time token, then calls `trustix-bootstrap-ix.sh` in
+  token mode.
+
+The wizard is intentionally a thin interactive wrapper. Automation, WebUI, and
+CI should call `trustix-bootstrap-ix.sh`, `trustix-build.sh`, `trustix-deploy.sh`,
+and `trustix-update.sh` directly.
 
 ## Build
 
