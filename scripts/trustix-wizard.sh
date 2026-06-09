@@ -103,6 +103,9 @@ First IX options:
   --dns-domain DOMAIN
   --openwrt-dnsmasq 0|1
   --kernel-modules auto|disabled|required
+  --build-bpf 0|1
+  --build-ko auto|0|1
+  --build-webui 0|1
   --local-install
   --no-deploy, --no-install
 
@@ -313,7 +316,7 @@ ensure_first_domain_certs() {
 }
 
 run_first_ix() {
-  local host default_control_api domain_id ix_id cert_dir control_api lan_iface lan_gateway advertise underlay_iface endpoint_transport endpoint_listen endpoint_address endpoint_source_ip endpoint_bind_iface api_addr peer_api_addr dataplane service_manager dns_enabled dns_domain openwrt_dnsmasq dnsmasq_default kernel_modules endpoint_spec
+  local host default_control_api domain_id ix_id cert_dir control_api lan_iface lan_gateway advertise underlay_iface endpoint_transport endpoint_listen endpoint_address endpoint_source_ip endpoint_bind_iface api_addr peer_api_addr dataplane service_manager dns_enabled dns_domain openwrt_dnsmasq dnsmasq_default kernel_modules build_bpf build_ko build_webui endpoint_spec
   host="$(default_host)"
   default_control_api="https://${host}:9443"
 
@@ -355,6 +358,9 @@ run_first_ix() {
     fi
   fi
   kernel_modules="$(value_or_prompt_required "$first_kernel_modules" "Kernel module mode" "auto")"
+  build_bpf="$(value_or_prompt_required "$first_build_bpf" "Build embedded eBPF objects" "1")"
+  build_ko="$(value_or_prompt_required "$first_build_ko" "Build kernel modules into release" "auto")"
+  build_webui="$(value_or_prompt_required "$first_build_webui" "Rebuild WebUI assets" "0")"
 
   ensure_first_domain_certs "$domain_id" "$ix_id" "$cert_dir"
 
@@ -382,6 +388,9 @@ run_first_ix() {
     --dns-enabled "$dns_enabled"
     --openwrt-dnsmasq "$openwrt_dnsmasq"
     --kernel-modules "$kernel_modules"
+    --build-bpf "$build_bpf"
+    --build-ko "$build_ko"
+    --build-webui "$build_webui"
     --json
   )
   if [[ -n "$dns_domain" ]]; then
@@ -431,6 +440,9 @@ first_dns_enabled=""
 first_dns_domain=""
 first_openwrt_dnsmasq=""
 first_kernel_modules=""
+first_build_bpf=""
+first_build_ko=""
+first_build_webui=""
 first_local_install=""
 join_provision_url=""
 join_token=""
@@ -460,6 +472,9 @@ while [[ $# -gt 0 ]]; do
     --dns-domain) [[ $# -ge 2 ]] || die "--dns-domain requires a value"; first_dns_domain="$2"; shift 2 ;;
     --openwrt-dnsmasq) [[ $# -ge 2 ]] || die "--openwrt-dnsmasq requires a value"; first_openwrt_dnsmasq="$2"; shift 2 ;;
     --kernel-modules) [[ $# -ge 2 ]] || die "--kernel-modules requires a value"; first_kernel_modules="$2"; shift 2 ;;
+    --build-bpf) [[ $# -ge 2 ]] || die "--build-bpf requires a value"; first_build_bpf="$2"; shift 2 ;;
+    --build-ko) [[ $# -ge 2 ]] || die "--build-ko requires a value"; first_build_ko="$2"; shift 2 ;;
+    --build-webui) [[ $# -ge 2 ]] || die "--build-webui requires a value"; first_build_webui="$2"; shift 2 ;;
     --local-install) first_local_install=1; shift ;;
     --no-deploy|--no-install) first_local_install=0; shift ;;
     --provision-url) [[ $# -ge 2 ]] || die "--provision-url requires a value"; join_provision_url="$2"; shift 2 ;;
