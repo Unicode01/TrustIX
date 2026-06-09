@@ -144,10 +144,10 @@ go_build() {
   local overlay="$3"
   log "go build ${package}"
   if [[ -n "$overlay" ]]; then
-    GOOS="$goos" GOARCH="$goarch" "$go_bin" build -overlay "$overlay" -trimpath -ldflags "$go_ldflags" -o "$output" "$package"
+    (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" build -overlay "$overlay" -trimpath -ldflags "$go_ldflags" -o "$output" "$package")
     return
   fi
-  GOOS="$goos" GOARCH="$goarch" "$go_bin" build -trimpath -ldflags "$go_ldflags" -o "$output" "$package"
+  (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" build -trimpath -ldflags "$go_ldflags" -o "$output" "$package")
 }
 
 sha256_file() {
@@ -399,15 +399,15 @@ main() {
   if [[ "$build_tests" == "1" ]]; then
     log "go test -c internal/dataplane/ebpf"
     if [[ -n "$overlay_arg" ]]; then
-      GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -overlay "$overlay_arg" -ldflags "$go_ldflags" -o "${bin_dir}/ebpf.test" ./internal/dataplane/ebpf
+      (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -overlay "$overlay_arg" -ldflags "$go_ldflags" -o "${bin_dir}/ebpf.test" ./internal/dataplane/ebpf)
     else
-      GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -ldflags "$go_ldflags" -o "${bin_dir}/ebpf.test" ./internal/dataplane/ebpf
+      (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -ldflags "$go_ldflags" -o "${bin_dir}/ebpf.test" ./internal/dataplane/ebpf)
     fi
     log "go test -c internal/kernelmodule"
     if [[ -n "$overlay_arg" ]]; then
-      GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -overlay "$overlay_arg" -ldflags "$go_ldflags" -o "${bin_dir}/kernelmodule.test" ./internal/kernelmodule
+      (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -overlay "$overlay_arg" -ldflags "$go_ldflags" -o "${bin_dir}/kernelmodule.test" ./internal/kernelmodule)
     else
-      GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -ldflags "$go_ldflags" -o "${bin_dir}/kernelmodule.test" ./internal/kernelmodule
+      (cd "$repo_root" && GOOS="$goos" GOARCH="$goarch" "$go_bin" test -c -ldflags "$go_ldflags" -o "${bin_dir}/kernelmodule.test" ./internal/kernelmodule)
     fi
   fi
 

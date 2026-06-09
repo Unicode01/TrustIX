@@ -18,13 +18,24 @@ bootstrap_repo_root() {
   return 1
 }
 
+trustix_bootstrap_temp_repo=0
+
+trustix_bootstrap_cleanup_temp_repo() {
+  local status="$1"
+  if [[ "$status" != "0" && "${trustix_bootstrap_temp_repo:-0}" == "1" && "${repo_root:-}" == /tmp/trustix-bootstrap-src.* ]]; then
+    rm -rf "$repo_root" || true
+  fi
+}
+
 if ! repo_root="$(bootstrap_repo_root)"; then
   repo_url="${TRUSTIX_BOOTSTRAP_REPO:-https://github.com/Unicode01/TrustIX.git}"
   repo_ref="${TRUSTIX_BOOTSTRAP_REF:-main}"
   repo_root="${TRUSTIX_BOOTSTRAP_WORKDIR:-}"
   if [[ -z "$repo_root" ]]; then
     repo_root="$(mktemp -d /tmp/trustix-bootstrap-src.XXXXXX)"
+    trustix_bootstrap_temp_repo=1
   fi
+  trap 'trustix_bootstrap_cleanup_temp_repo "$?"' EXIT
   if [[ ! -f "${repo_root}/go.mod" ]]; then
     mkdir -p "$repo_root"
     if [[ -n "$(find "$repo_root" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
@@ -48,7 +59,11 @@ if ! repo_root="$(bootstrap_repo_root)"; then
       exit 127
     fi
   fi
-  exec bash "${repo_root}/scripts/trustix-bootstrap-ix.sh" "$@"
+  child_status=0
+  bash "${repo_root}/scripts/trustix-bootstrap-ix.sh" "$@" || child_status=$?
+  trustix_bootstrap_cleanup_temp_repo "$child_status"
+  trap - EXIT
+  exit "$child_status"
 fi
 
 usage() {
