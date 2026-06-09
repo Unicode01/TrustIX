@@ -13,6 +13,7 @@ func TestManagementHandlerServesLocalWebUI(t *testing.T) {
 	daemon := &Daemon{
 		cfg: Config{APIAddr: "127.0.0.1:8787"},
 		desired: config.Desired{
+			IX: config.IXConfig{ID: "ix-a"},
 			Management: config.ManagementConfig{
 				WebUI: config.WebUIConfig{Enabled: true},
 			},
@@ -31,6 +32,9 @@ func TestManagementHandlerServesLocalWebUI(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "window.TRUSTIX_WEBUI") {
 		t.Fatalf("index response does not include webui bootstrap")
+	}
+	if !strings.Contains(recorder.Body.String(), "<title>TrustIX - ix-a</title>") {
+		t.Fatalf("index response does not include IX title: %s", recorder.Body.String())
 	}
 	if csp := recorder.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") || !strings.Contains(csp, "script-src 'self' 'nonce-") {
 		t.Fatalf("content-security-policy = %q, want frame protection and script nonce", csp)

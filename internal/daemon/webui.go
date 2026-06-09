@@ -158,10 +158,18 @@ func (daemon *Daemon) webUIIndexData(scriptNonce string) webui.IndexData {
 		payload = []byte("{}")
 	}
 	return webui.IndexData{
-		Title:         "TrustIX",
+		Title:         webUITitle(string(daemon.desired.IX.ID)),
 		BootstrapJSON: template.JS(payload),
 		ScriptNonce:   scriptNonce,
 	}
+}
+
+func webUITitle(ixID string) string {
+	ixID = strings.TrimSpace(ixID)
+	if ixID == "" {
+		return "TrustIX"
+	}
+	return "TrustIX - " + ixID
 }
 
 func newWebUIScriptNonce() (string, error) {

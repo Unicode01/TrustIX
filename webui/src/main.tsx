@@ -130,6 +130,7 @@ function App() {
   const locked = requiresAdminProof(bootstrap) && (!unlocked || adminRestorePending);
   const dirty = Boolean(configText && baselineText && configText !== baselineText);
   const topology = useMemo(() => buildTopology(desired, links), [desired, links]);
+  const documentTitleIX = status?.ix_id || desired?.ix?.id || "";
   const dismissToast = useCallback((id: number) => {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
@@ -159,6 +160,10 @@ function App() {
   useEffect(() => {
     applyTheme(themeSetting);
   }, [themeSetting]);
+
+  useEffect(() => {
+    document.title = documentTitleIX ? `TrustIX - ${documentTitleIX}` : "TrustIX";
+  }, [documentTitleIX]);
 
   useEffect(() => {
     let cancelled = false;
