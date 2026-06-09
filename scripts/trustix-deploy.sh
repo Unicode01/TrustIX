@@ -159,6 +159,22 @@ run_root() {
   fi
 }
 
+wait_systemd_unit_active() {
+  local unit="$1"
+  local state=""
+  local i
+  for i in {1..8}; do
+    state="$(run_root systemctl is-active "$unit" 2>/dev/null || true)"
+    case "$state" in
+      active) return 0 ;;
+      failed) break ;;
+    esac
+    sleep 1
+  done
+  run_root systemctl --no-pager --full status "$unit" >&2 || true
+  die "systemd unit did not become active: ${unit} (state=${state:-unknown})"
+}
+
 install_file() {
   local src="$1"
   local dst="$2"
@@ -588,6 +604,7 @@ local_deploy() {
         fi
         if [[ "$start_service" == "1" ]]; then
           run_root systemctl restart "trustixd@${instance}.service"
+          wait_systemd_unit_active "trustixd@${instance}.service"
         fi
       elif [[ "$start_service" == "1" ]]; then
         die "systemctl not found; rerun with --no-start or start trustixd manually"
