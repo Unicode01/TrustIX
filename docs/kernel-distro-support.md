@@ -40,7 +40,9 @@ manager. Proxmox kernels use exact-match packages such as
 `pve-headers-$(uname -r)`. If those packages are unavailable, the kernel and
 repository are out of sync for local `.ko` builds; either install matching
 headers manually, boot a kernel that has headers available, or build without
-embedded `.ko` assets.
+embedded `.ko` assets. Kbuild may also require `pahole` for module BTF; Debian,
+Ubuntu, and Proxmox provide it through the `dwarves` package, which the scripts
+now install for kernel module builds when dependency installation is enabled.
 
 ## Current validation snapshot
 

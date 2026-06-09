@@ -274,6 +274,7 @@ write_manifest() {
 
 main() {
   [[ "$(uname -s)" == "Linux" ]] || die "build-kernel-modules-linux must run on Linux"
+  trustix_prereqs_ensure_kernel_module_build_deps || die "kernel module build dependencies are missing; automatic dependency install failed"
   need_cmd make
   need_cmd install
   need_cmd sha256sum

@@ -161,6 +161,7 @@ trustix_prereqs_packages_for() {
     apt-get:make) printf '%s\n' make ;;
     apt-get:gcc) printf '%s\n' gcc libc6-dev ;;
     apt-get:npm) printf '%s\n' npm ;;
+    apt-get:pahole) printf '%s\n' dwarves ;;
     apt-get:install|apt-get:realpath|apt-get:sha256sum|apt-get:stat) printf '%s\n' coreutils ;;
     apt-get:tar) printf '%s\n' tar ;;
     apt-get:gzip) printf '%s\n' gzip ;;
@@ -174,6 +175,7 @@ trustix_prereqs_packages_for() {
     dnf:make|yum:make|zypper:make) printf '%s\n' make ;;
     dnf:gcc|yum:gcc|zypper:gcc) printf '%s\n' gcc glibc-devel ;;
     dnf:npm|yum:npm|zypper:npm) printf '%s\n' npm ;;
+    dnf:pahole|yum:pahole|zypper:pahole) printf '%s\n' dwarves ;;
     dnf:install|dnf:realpath|dnf:sha256sum|dnf:stat|yum:install|yum:realpath|yum:sha256sum|yum:stat|zypper:install|zypper:realpath|zypper:sha256sum|zypper:stat) printf '%s\n' coreutils ;;
     dnf:tar|yum:tar|zypper:tar) printf '%s\n' tar ;;
     dnf:gzip|yum:gzip|zypper:gzip) printf '%s\n' gzip ;;
@@ -186,6 +188,7 @@ trustix_prereqs_packages_for() {
     apk:make) printf '%s\n' make ;;
     apk:gcc) printf '%s\n' gcc musl-dev ;;
     apk:npm) printf '%s\n' npm ;;
+    apk:pahole) printf '%s\n' pahole ;;
     apk:install|apk:realpath|apk:sha256sum|apk:stat) printf '%s\n' coreutils ;;
     apk:tar) printf '%s\n' tar ;;
     apk:gzip) printf '%s\n' gzip ;;
@@ -198,6 +201,7 @@ trustix_prereqs_packages_for() {
     pacman:make) printf '%s\n' make ;;
     pacman:gcc) printf '%s\n' gcc glibc ;;
     pacman:npm) printf '%s\n' npm ;;
+    pacman:pahole) printf '%s\n' pahole ;;
     pacman:install|pacman:realpath|pacman:sha256sum|pacman:stat) printf '%s\n' coreutils ;;
     pacman:tar) printf '%s\n' tar ;;
     pacman:gzip) printf '%s\n' gzip ;;
@@ -210,6 +214,7 @@ trustix_prereqs_packages_for() {
     opkg:make) printf '%s\n' make ;;
     opkg:gcc) printf '%s\n' gcc ;;
     opkg:npm) printf '%s\n' node-npm npm ;;
+    opkg:pahole) printf '%s\n' pahole ;;
     opkg:install) printf '%s\n' coreutils-install coreutils ;;
     opkg:realpath) printf '%s\n' coreutils-realpath coreutils ;;
     opkg:sha256sum) printf '%s\n' coreutils-sha256sum coreutils ;;
@@ -343,6 +348,10 @@ trustix_prereqs_ensure_network_deps() {
 
 trustix_prereqs_ensure_source_build_deps() {
   trustix_prereqs_ensure_commands git go clang make gcc install realpath sha256sum stat tar gzip
+}
+
+trustix_prereqs_ensure_kernel_module_build_deps() {
+  trustix_prereqs_ensure_commands make gcc install realpath sha256sum stat pahole
 }
 
 trustix_prereqs_kernel_release_for_kdir() {

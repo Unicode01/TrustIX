@@ -63,7 +63,9 @@ matching headers automatically when package installation is enabled. On Proxmox,
 that normally means `proxmox-headers-$(uname -r)`; older repositories may use
 `pve-headers-$(uname -r)`. If the package is not available, install the matching
 headers from the host's kernel repository or use `--build-ko 0` /
-`--kernel-modules auto` for a userspace/eBPF-only install.
+`--kernel-modules auto` for a userspace/eBPF-only install. Kernel module BTF
+finalization also needs `pahole`; on Debian, Ubuntu, and Proxmox the automation
+installs it through the `dwarves` package.
 
 ## Deploy
 

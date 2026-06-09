@@ -296,6 +296,7 @@ main() {
 
   local crypto_ko=""
   if [[ "$build_ko" == "1" ]]; then
+    trustix_prereqs_ensure_kernel_module_build_deps || die "kernel module build dependencies are missing; automatic dependency install failed"
     need_cmd make
     ensure_kernel_build_dir
     log "build crypto kernel module KDIR=${kernel_build_dir} ARCH=${kernel_arch} CROSS_COMPILE=${kernel_cross_compile:-none} mode=${crypto_build_mode}"
