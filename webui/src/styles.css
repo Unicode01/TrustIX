@@ -60,6 +60,7 @@ select,
 textarea {
   font: inherit;
   color: inherit;
+  min-width: 0;
 }
 
 button {
@@ -1423,18 +1424,23 @@ button {
 .check-field > span {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 5px;
+  min-width: 0;
+  max-width: 100%;
   min-height: 18px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .field > span small,
 .check-field > span small,
 .mini-toggle small {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   width: 16px;
@@ -1584,6 +1590,8 @@ button {
 .input,
 .editor {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-soft);
@@ -2106,9 +2114,10 @@ button {
 
 .config-card {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
   gap: 10px;
   align-items: end;
+  min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2116,7 +2125,7 @@ button {
 }
 
 .endpoint-config-card {
-  grid-template-columns: repeat(3, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
 }
 
 .form-actions,
@@ -2137,11 +2146,11 @@ button {
 
 .peer-config-card,
 .route-config-card {
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
 }
 
 .peer-config-card {
-  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
 }
 
 .lan-config-card {
@@ -2233,7 +2242,7 @@ button {
 
 .peer-endpoint-card {
   display: grid;
-  grid-template-columns: repeat(3, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
   gap: 10px;
   align-items: end;
   min-width: 0;
@@ -2266,7 +2275,7 @@ button {
 
 .endpoint-advanced-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
   gap: 10px;
   align-items: end;
   min-width: 0;
@@ -2278,7 +2287,7 @@ button {
 
 .peer-endpoint-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: 10px;
   align-items: end;
   padding: 10px;
