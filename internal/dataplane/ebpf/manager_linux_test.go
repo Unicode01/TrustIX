@@ -1515,6 +1515,19 @@ func TestPlanCleanupIncludesMultipleLANs(t *testing.T) {
 	}
 }
 
+func TestManagedLANBridgeSourceSetsNonZeroTxQueueLen(t *testing.T) {
+	source, err := os.ReadFile("manager_linux.go")
+	if err != nil {
+		t.Fatalf("read manager source: %v", err)
+	}
+	if !bytes.Contains(source, []byte("LinkAttrs{Name: iface, TxQLen: managedLANTxQueueLen}")) {
+		t.Fatal("managed LAN bridge creation must set a nonzero TxQLen; plain LinkAttrs{Name: iface} creates tx_queue_len=0")
+	}
+	if !bytes.Contains(source, []byte("netlink.LinkSetTxQLen(link, managedLANTxQueueLen)")) {
+		t.Fatal("managed LAN attach must repair existing tx_queue_len=0 interfaces")
+	}
+}
+
 func cleanupPlanHasStep(plan dataplane.CleanupPlan, action, target string) bool {
 	for _, step := range plan.Steps {
 		if step.Action == action && step.Target == target {

@@ -100,6 +100,9 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	if !strings.Contains(script, `"warmup": true`) {
 		t.Fatalf("bootstrap script did not enable session warmup:\n%s", script)
 	}
+	if !strings.Contains(script, "txqueuelen 1000 up") {
+		t.Fatalf("bootstrap script does not set a nonzero managed LAN tx queue length:\n%s", script)
+	}
 	if _, err := pki.ParseCertificatePEM([]byte(extractFirstPEMBlock(t, script, "CERTIFICATE"))); err != nil {
 		t.Fatalf("script does not contain a parseable certificate: %v", err)
 	}

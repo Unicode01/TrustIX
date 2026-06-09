@@ -1171,7 +1171,7 @@ func ixProvisionBootstrapScript(input ixProvisionScriptInput) (string, error) {
 		b.WriteString("  fi\n")
 		b.WriteString("  ip link set ")
 		b.WriteString(shellQuote(input.LANIface))
-		b.WriteString(" up || die \"bring up managed LAN interface\"\n")
+		b.WriteString(" txqueuelen 1000 up || die \"bring up managed LAN interface\"\n")
 		b.WriteString("else\n")
 		b.WriteString("  die \"ip command is required for managed LAN interface setup\"\n")
 		b.WriteString("fi\n")

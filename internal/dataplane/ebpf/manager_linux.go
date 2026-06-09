@@ -774,6 +774,7 @@ const (
 	tcStatsMapMaxEntries                                              = 190
 	persistedStateVersion                                             = 1
 	trustixRouteProtocol                                              = 0x54
+	managedLANTxQueueLen                                              = 1000
 	managedCaptureSyntheticGateway                                    = "169.254.84.84"
 	natDefaultMaxBindings                                             = 16 * 1024
 	skbLenOffset                                                      = 0
@@ -1822,6 +1823,11 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 				}
 			} else {
 				return fmt.Errorf("inspect LAN iface %q: %w", lan.Iface, err)
+			}
+		}
+		if lan.LANAttachMode == "managed" {
+			if err := ensureManagedLANTxQueueLen(link); err != nil {
+				return fmt.Errorf("configure managed LAN tx queue length on %q: %w", lan.Iface, err)
 			}
 		}
 		if i == 0 {
@@ -24212,7 +24218,7 @@ func createManagedLANBridge(iface string) (netlink.Link, bool, error) {
 	if iface == "" {
 		return nil, false, fmt.Errorf("empty LAN interface name")
 	}
-	bridge := &netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: iface}}
+	bridge := &netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: iface, TxQLen: managedLANTxQueueLen}}
 	created := true
 	if err := netlink.LinkAdd(bridge); err != nil {
 		lower := strings.ToLower(err.Error())
@@ -24225,6 +24231,12 @@ func createManagedLANBridge(iface string) (netlink.Link, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
+	if err := ensureManagedLANTxQueueLen(link); err != nil {
+		if created {
+			_ = netlink.LinkDel(link)
+		}
+		return nil, false, err
+	}
 	if err := netlink.LinkSetUp(link); err != nil {
 		if created {
 			_ = netlink.LinkDel(link)
@@ -24232,6 +24244,16 @@ func createManagedLANBridge(iface string) (netlink.Link, bool, error) {
 		return nil, false, err
 	}
 	return link, created, nil
+}
+
+func ensureManagedLANTxQueueLen(link netlink.Link) error {
+	if link == nil || link.Attrs() == nil {
+		return fmt.Errorf("missing link attributes")
+	}
+	if link.Attrs().TxQLen > 0 {
+		return nil
+	}
+	return netlink.LinkSetTxQLen(link, managedLANTxQueueLen)
 }
 
 func (manager *Manager) writeSysctl(path, value string) error {
