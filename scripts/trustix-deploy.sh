@@ -162,6 +162,9 @@ run_root() {
 wait_systemd_unit_active() {
   local unit="$1"
   local state=""
+  local result=""
+  local exec_status=""
+  local restarts=""
   local i
   for i in {1..8}; do
     state="$(run_root systemctl is-active "$unit" 2>/dev/null || true)"
@@ -169,10 +172,22 @@ wait_systemd_unit_active() {
       active) return 0 ;;
       failed) break ;;
     esac
+    result="$(run_root systemctl show "$unit" --property=Result --value 2>/dev/null || true)"
+    exec_status="$(run_root systemctl show "$unit" --property=ExecMainStatus --value 2>/dev/null || true)"
+    restarts="$(run_root systemctl show "$unit" --property=NRestarts --value 2>/dev/null || true)"
+    if [[ -n "$result" && "$result" != "success" && "$result" != "exit-code" ]]; then
+      break
+    fi
+    if [[ "${exec_status:-0}" != "0" || "${restarts:-0}" != "0" ]]; then
+      break
+    fi
     sleep 1
   done
+  run_root systemctl show "$unit" --property=ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,NRestarts >&2 || true
   run_root systemctl --no-pager --full status "$unit" >&2 || true
-  die "systemd unit did not become active: ${unit} (state=${state:-unknown})"
+  run_root journalctl -u "$unit" --no-pager -n 80 >&2 || true
+  run_root systemctl stop "$unit" >/dev/null 2>&1 || true
+  die "systemd unit did not become active: ${unit} (state=${state:-unknown}, result=${result:-unknown}, exec_status=${exec_status:-unknown}, restarts=${restarts:-unknown})"
 }
 
 install_file() {
