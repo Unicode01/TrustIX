@@ -1,8 +1,13 @@
 # TrustIX
 
+[![CI](https://github.com/Unicode01/TrustIX/actions/workflows/ci.yml/badge.svg)](https://github.com/Unicode01/TrustIX/actions/workflows/ci.yml)
+[![Bootstrap](https://img.shields.io/badge/bootstrap-command%20generator-0f5f7a)](https://unicode01.github.io/TrustIX/)
+
 TrustIX is an experimental certificate-based IX mesh for connecting trusted LANs and devices through authenticated overlay transports. It includes a Go control plane, a Web UI, userspace transports, Linux TC/XDP/AF_XDP dataplane paths, and optional Linux kernel modules for crypto and full/plaintext datapath experiments.
 
 This repository is still first-release quality. Treat kernel datapath features as experimental and test them on disposable hosts or VMs before enabling them on a router or production machine.
+
+Start here: [TrustIX Bootstrap Command Generator](https://unicode01.github.io/TrustIX/).
 
 ## Current Scope
 
