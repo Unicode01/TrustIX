@@ -11906,6 +11906,7 @@ func TestKernelUDPRXConfigPassesPlaintextToTCForDirectOnly(t *testing.T) {
 
 func TestKernelUDPRXConfigPassesToKernelDatapathWorker(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_XDP_PASS", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "")
@@ -11940,6 +11941,7 @@ func TestKernelUDPRXConfigPassesToKernelDatapathWorker(t *testing.T) {
 
 func TestKernelDatapathRXWorkerDisablesTCRXDirectOwner(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_XDP_PASS", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
 
@@ -11960,6 +11962,7 @@ func TestKernelDatapathRXWorkerDisablesTCRXDirectOwner(t *testing.T) {
 
 func TestKernelDatapathRXWorkerConfiguresXDPStackPassWithoutTCRXDirect(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_XDP_PASS", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "")
@@ -11992,6 +11995,7 @@ func TestKernelDatapathRXWorkerConfiguresXDPStackPassWithoutTCRXDirect(t *testin
 
 func TestKernelUDPRXConfigKernelDatapathPassCanBeDisabled(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_XDP_PASS", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "")

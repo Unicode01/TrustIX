@@ -508,14 +508,23 @@ func kernelDatapathRXModeForDesired(desired config.Desired) string {
 	case config.KernelDatapathRXStageStage:
 		return kernelDatapathRXModeStage
 	case config.KernelDatapathRXStageWorker:
-		return kernelDatapathRXModeWorker
+		if kernelDatapathRXWorkerCrashRiskAllowed() {
+			return kernelDatapathRXModeWorker
+		}
+		return kernelDatapathRXModeStage
 	}
 	if runtime.RXWorker {
-		return kernelDatapathRXModeWorker
+		if kernelDatapathRXWorkerCrashRiskAllowed() {
+			return kernelDatapathRXModeWorker
+		}
+		return kernelDatapathRXModeStage
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER"))) {
 	case "1", "true", "yes", "on", "worker":
-		return kernelDatapathRXModeWorker
+		if kernelDatapathRXWorkerCrashRiskAllowed() {
+			return kernelDatapathRXModeWorker
+		}
+		return kernelDatapathRXModeStage
 	default:
 		return kernelDatapathRXModeStage
 	}
@@ -528,15 +537,15 @@ func kernelDatapathFullPlaintextEnabled() bool {
 func kernelDatapathFullPlaintextEnabledForDesired(desired config.Desired) bool {
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	if runtime.FullPlaintext || runtime.TXPlaintext {
-		return true
+		return kernelDatapathFullPlaintextCrashRiskAllowed()
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled", "full":
-		return true
+		return kernelDatapathFullPlaintextCrashRiskAllowed()
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_TX_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled":
-		return true
+		return kernelDatapathFullPlaintextCrashRiskAllowed()
 	default:
 		return false
 	}
@@ -551,7 +560,7 @@ func kernelDatapathRXWorkerSupportedForSpecForDesired(desired config.Desired, sp
 		return true
 	}
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
-	if runtime.RXWorkerAllowExperimentalTCP {
+	if runtime.RXWorkerAllowExperimentalTCP && kernelDatapathRXWorkerCrashRiskAllowed() {
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP"))) {

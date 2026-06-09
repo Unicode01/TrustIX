@@ -78,6 +78,7 @@ func TestKernelDatapathRXWorkerAttachesTargetLANWithoutPoller(t *testing.T) {
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	driver := &fakeKernelRXStageDriver{workerInjected: 3}
 	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
 		return driver, nil
@@ -123,6 +124,7 @@ func TestKernelDatapathFullPlaintextAttachesRXAndTXHooks(t *testing.T) {
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	driver := &fakeKernelRXStageDriver{}
 	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
 		return driver, nil
@@ -155,6 +157,7 @@ func TestKernelDatapathFullPlaintextAttachesRXAndTXHooks(t *testing.T) {
 func TestKernelDatapathFullPlaintextProfileAllowsExperimentalTCPAndAttachesTXHook(t *testing.T) {
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	driver := &fakeKernelRXStageDriver{}
 	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
 		return driver, nil
@@ -198,6 +201,7 @@ func TestKernelDatapathRXWorkerSkipsExperimentalTCPTXDirectByDefault(t *testing.
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
 		opened = true
 		return &fakeKernelRXStageDriver{}, nil
@@ -234,6 +238,7 @@ func TestKernelDatapathRXWorkerAllowsExperimentalTCPTXDirectWithOverride(t *test
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP", "1")
 	driver := &fakeKernelRXStageDriver{}
 	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
@@ -272,6 +277,7 @@ func TestKernelDatapathRXWorkerAdoptsExistingHookAfterDaemonCrash(t *testing.T) 
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	driver := &fakeKernelRXStageDriver{
 		ifname:         "eth0",
 		targetIfname:   "br-lan",
@@ -314,6 +320,7 @@ func TestKernelDatapathRXWorkerReattachesMismatchedExistingHook(t *testing.T) {
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	driver := &fakeKernelRXStageDriver{
 		ifname:       "old0",
 		targetIfname: "old-br",

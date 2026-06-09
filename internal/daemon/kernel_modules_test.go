@@ -12,7 +12,18 @@ func TestTrustIXDatapathModuleParametersAutoEnableRXWorker(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1"
+	want := "rx_worker_inject=0 tx_plaintext=0"
+	if got != want {
+		t.Fatalf("parameters = %q, want %q", got, want)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersAutoEnableRXWorkerWithCrashRiskGate(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+
+	got := TrustIXDatapathModuleParameters("")
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -22,13 +33,49 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTX(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("")
+	want := "rx_worker_inject=0 tx_plaintext=0"
+	if got != want {
+		t.Fatalf("parameters = %q, want %q", got, want)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTXWithCrashRiskGate(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+
+	got := TrustIXDatapathModuleParameters("")
 	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
 }
 
+func TestTrustIXDatapathModuleParametersCrashRiskGateWithoutRequestForcesOff(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+
+	got := TrustIXDatapathModuleParameters("")
+	want := "rx_worker_inject=0 tx_plaintext=0"
+	if got != want {
+		t.Fatalf("parameters = %q, want %q", got, want)
+	}
+}
+
 func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testing.T) {
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("", desired)
+	want := "rx_worker_inject=0 tx_plaintext=0"
+	if got != want {
+		t.Fatalf("parameters = %q, want fail-closed runtime parameters %q without crash-risk gate", got, want)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashRiskGate(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	desired := config.Desired{
 		KernelModules: config.KernelModulesConfig{
 			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
@@ -79,10 +126,11 @@ func TestTrustIXCryptoModuleParametersStripsPanicRiskRawParameters(t *testing.T)
 
 func TestTrustIXDatapathModuleParametersCanDisableRXWorkerHotStats(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_HOT_STATS", "0")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1 rx_worker_hot_stats=0"
+	want := "enable_features=128 rx_worker_inject=1 rx_worker_hot_stats=0 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -132,7 +180,7 @@ func TestTrustIXDatapathModuleParametersRejectsPanicRiskEnvCombinations(t *testi
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_COALESCE_MAX_FRAMES", "4")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1"
+	want := "rx_worker_inject=0 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -140,6 +188,7 @@ func TestTrustIXDatapathModuleParametersRejectsPanicRiskEnvCombinations(t *testi
 
 func TestTrustIXDatapathModuleParametersKeepsSafeFallbackRawParameters(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 
 	raw := strings.Join([]string{
 		"rx_worker_slots=64",
@@ -159,7 +208,15 @@ func TestTrustIXDatapathModuleParametersKeepsSafeFallbackRawParameters(t *testin
 	}, " ")
 
 	got := TrustIXDatapathModuleParameters(raw)
-	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_steal_skb=1 rx_worker_inline_stolen=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_coalesce_gso=1 rx_worker_inline_pair_hold_skb=1 rx_worker_xmit_tcp_partial_csum=1 rx_worker_queue_skb=1 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1"
+	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_steal_skb=1 rx_worker_inline_stolen=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_coalesce_gso=1 rx_worker_inline_pair_hold_skb=1 rx_worker_xmit_tcp_partial_csum=1 rx_worker_queue_skb=1 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
+	if got != want {
+		t.Fatalf("parameters = %q, want %q", got, want)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersStripsRawCrashRiskWithoutGate(t *testing.T) {
+	got := TrustIXDatapathModuleParameters("enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_slots=32")
+	want := "enable_features=128 rx_worker_slots=32 rx_worker_inject=0 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -169,7 +226,7 @@ func TestTrustIXDatapathModuleParametersKeepExplicitSafeValues(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
 
 	got := TrustIXDatapathModuleParameters("enable_features=0 rx_worker_inject=0 rx_worker_slots=32")
-	want := "enable_features=0 rx_worker_inject=0 rx_worker_slots=32"
+	want := "enable_features=0 rx_worker_inject=0 rx_worker_slots=32 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}

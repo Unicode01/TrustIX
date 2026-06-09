@@ -158,6 +158,9 @@ func kernelDatapathRXXDPPassEnabled() bool {
 	) {
 		return false
 	}
+	if !kernelDatapathRXWorkerCrashRiskAllowed() {
+		return false
+	}
 	return envTruthy(
 		"TRUSTIX_KERNEL_DATAPATH_RX_XDP_PASS",
 		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XDP_PASS",
@@ -167,6 +170,15 @@ func kernelDatapathRXXDPPassEnabled() bool {
 
 func kernelDatapathRXWorkerOwnsStackRX() bool {
 	return kernelDatapathRXXDPPassEnabled()
+}
+
+func kernelDatapathRXWorkerCrashRiskAllowed() bool {
+	return envTruthy(
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER",
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_RX_WORKER",
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT",
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_FULL_PLAINTEXT",
+	)
 }
 
 func configureExperimentalTCPBPFConfig(m *cebpf.Map, queueCount int) (uint32, error) {

@@ -15,7 +15,7 @@ universal `.ko`.
 | Kernel crypto, full | Matching KDIR plus kernel/BTF support for BPF crypto kfuncs; upstream Linux 6.12+ is the intended full provider target | Builds where headers allow it, but runtime must still pass BTF/kfunc and selftest probes. Older kernels can load but may only provide device/ioctl crypto. |
 | Datapath helpers, basic | Matching KDIR | Build fallback when helper kfunc/BTF support is not available. Does not provide route-GSO/kfunc fast path. |
 | Datapath helpers, full | Matching KDIR plus module BTF/kfunc usability | Provides safe skb/GSO and route-TCP helper capability. Panic-risk route-TCP XMIT/async families are first-release hard-disabled unless separately validated. |
-| Full plaintext datapath module | Matching KDIR; explicit `enable_features=128 rx_worker_inject=1 tx_plaintext=1`; passing module selftests | Experimental but smoke-tested. Secure full-kernel datapath and GSO LAN TX are not complete first-release guarantees. |
+| Full plaintext datapath module | Matching KDIR; explicit crash-risk gates plus `enable_features=128 rx_worker_inject=1 tx_plaintext=1`; passing module selftests | Crash-risk experimental only. Daemon defaults keep RX worker and TX plaintext disabled with explicit `rx_worker_inject=0 tx_plaintext=0`; secure full-kernel datapath and GSO LAN TX are not complete first-release guarantees. |
 
 ## Kernel module ABI boundary
 

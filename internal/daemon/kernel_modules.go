@@ -99,6 +99,9 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		trustIXDatapathSafeRXWorkerModuleParameters,
 		"rx_worker_",
 	)
+	rxWorkerAllowed := kernelDatapathRXWorkerCrashRiskAllowed()
+	fullPlaintextAllowed := kernelDatapathFullPlaintextCrashRiskAllowed()
+	params = filterTrustIXDatapathRuntimeCrashRiskParameters(params, rxWorkerAllowed, fullPlaintextAllowed)
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	profile := config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile)
 	rxWorker := runtime.RXWorker || runtime.RXStage == config.KernelDatapathRXStageWorker
@@ -108,26 +111,100 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		"TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT",
 		"TRUSTIX_KERNEL_DATAPATH_TX_PLAINTEXT",
 	)
-	if !rxWorker && !fullPlaintext {
-		return params
+	if fullPlaintext && !fullPlaintextAllowed {
+		fullPlaintext = false
 	}
-	params = appendModuleParameterIfMissing(params, "enable_features=128")
-	params = appendModuleParameterIfMissing(params, "rx_worker_inject=1")
-	if fullPlaintext {
-		params = appendModuleParameterIfMissing(params, "tx_plaintext=1")
+	if rxWorker && !rxWorkerAllowed {
+		rxWorker = false
 	}
-	if profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext {
-		params = appendModuleParameterIfMissing(params, "rx_worker_budget=128")
-		params = appendModuleParameterIfMissing(params, "rx_worker_slots=64")
+	if rxWorker || fullPlaintext {
+		params = appendModuleParameterIfMissing(params, "enable_features=128")
+		params = appendModuleParameterIfMissing(params, "rx_worker_inject=1")
+		if fullPlaintext {
+			params = appendModuleParameterIfMissing(params, "tx_plaintext=1")
+		}
+		if profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext {
+			params = appendModuleParameterIfMissing(params, "rx_worker_budget=128")
+			params = appendModuleParameterIfMissing(params, "rx_worker_slots=64")
+		}
+		if runtime.RXWorkerHotStats != nil && !*runtime.RXWorkerHotStats {
+			params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
+		} else if runtime.RXWorkerHotStats == nil && (profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext) {
+			params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
+		} else if envFalsey("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_HOT_STATS") {
+			params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
+		}
 	}
-	if runtime.RXWorkerHotStats != nil && !*runtime.RXWorkerHotStats {
-		params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
-	} else if runtime.RXWorkerHotStats == nil && (profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext) {
-		params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
-	} else if envFalsey("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_HOT_STATS") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
+	return forceTrustIXDatapathRuntimeCrashRiskOffParameters(params)
+}
+
+func filterTrustIXDatapathRuntimeCrashRiskParameters(params string, allowRXWorker bool, allowFullPlaintext bool) string {
+	fields := strings.Fields(strings.TrimSpace(params))
+	if len(fields) == 0 {
+		return ""
+	}
+	kept := fields[:0]
+	for _, field := range fields {
+		key, value, _ := strings.Cut(field, "=")
+		key = strings.TrimSpace(key)
+		switch key {
+		case "rx_worker_inject":
+			if !allowRXWorker && !moduleParameterValueFalsey(value) {
+				continue
+			}
+		case "tx_plaintext":
+			if !allowFullPlaintext && !moduleParameterValueFalsey(value) {
+				continue
+			}
+		}
+		kept = append(kept, field)
+	}
+	return strings.Join(kept, " ")
+}
+
+func forceTrustIXDatapathRuntimeCrashRiskOffParameters(params string) string {
+	if !moduleParameterTruthy(params, "rx_worker_inject") {
+		params = appendModuleParameterIfMissing(params, "rx_worker_inject=0")
+	}
+	if !moduleParameterTruthy(params, "tx_plaintext") {
+		params = appendModuleParameterIfMissing(params, "tx_plaintext=0")
 	}
 	return params
+}
+
+func moduleParameterTruthy(params, wantKey string) bool {
+	for _, field := range strings.Fields(params) {
+		key, value, ok := strings.Cut(field, "=")
+		if ok && strings.TrimSpace(key) == wantKey && !moduleParameterValueFalsey(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func moduleParameterValueFalsey(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off", "disabled", "n":
+		return true
+	default:
+		return false
+	}
+}
+
+func kernelDatapathRXWorkerCrashRiskAllowed() bool {
+	return envTruthyAny(
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER",
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_RX_WORKER",
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT",
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_FULL_PLAINTEXT",
+	)
+}
+
+func kernelDatapathFullPlaintextCrashRiskAllowed() bool {
+	return envTruthyAny(
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT",
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_FULL_PLAINTEXT",
+	)
 }
 
 func (daemon *Daemon) closeKernelModules(ctx context.Context) error {
