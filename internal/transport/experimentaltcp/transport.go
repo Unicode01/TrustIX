@@ -69,6 +69,8 @@ const (
 const (
 	experimentalTCPCompatTCPPrimerDefault  = true
 	experimentalTCPCompatTCPPrimerTimeout  = 3 * time.Second
+	experimentalTCPCompatHandshakePriority = 200 * time.Millisecond
+	experimentalTCPCompatPriorityBuffer    = 8
 	experimentalTCPCompatControlVersion    = 1
 	experimentalTCPCompatControlInitType   = 1
 	experimentalTCPCompatControlInitLen    = 16
@@ -302,6 +304,7 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		}
 		session := newSession(transportImpl.provider, subscription, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address)
 		session.compatControl = compatControl
+		session.enableCompatPriority()
 		// Dial contexts are commonly canceled after setup; the session receive
 		// pump must live until Session.Close closes the subscription/input.
 		go session.readSubscription(context.Background())
@@ -357,6 +360,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 		return nil, err
 	} else {
 		listener.compatListener = compatListener
+		listener.primerFlowRequired = compatListener != nil
 	}
 	go listener.readSubscription(ctx)
 	go listener.acceptCompatPrimers()
@@ -390,17 +394,18 @@ func (transportImpl *Transport) listenCompatStream(ctx context.Context, ep trans
 }
 
 type listener struct {
-	provider       dataplane.ExperimentalTCPProvider
-	endpoint       transport.Endpoint
-	subscription   dataplane.ExperimentalTCPSubscription
-	acceptCh       chan transport.Session
-	compatAcceptCh chan transport.Session
-	done           chan struct{}
-	closeOnce      sync.Once
-	mu             sync.Mutex
-	sessions       map[uint64]*session
-	placement      dataplane.CryptoPlacement
-	compatListener net.Listener
+	provider           dataplane.ExperimentalTCPProvider
+	endpoint           transport.Endpoint
+	subscription       dataplane.ExperimentalTCPSubscription
+	acceptCh           chan transport.Session
+	compatAcceptCh     chan transport.Session
+	done               chan struct{}
+	closeOnce          sync.Once
+	mu                 sync.Mutex
+	sessions           map[uint64]*session
+	placement          dataplane.CryptoPlacement
+	compatListener     net.Listener
+	primerFlowRequired bool
 }
 
 func (transportImpl *Transport) requestedCryptoPlacement() dataplane.CryptoPlacement {
@@ -579,23 +584,26 @@ func (listener *listener) acceptCompatPrimers() {
 		}
 		sess := newSession(listener.provider, nil, init.flowID, "", listener.endpoint.Name, listener.placement, flow.LocalAddress, flow.RemoteAddress)
 		sess.compatControl = control
+		sess.enableCompatPriority()
 		listener.mu.Lock()
 		if existing := listener.sessions[init.flowID]; existing != nil && !existing.isClosed() {
 			listener.mu.Unlock()
 			_ = control.Close()
 			continue
 		}
+		listener.sessions[init.flowID] = sess
 		select {
 		case <-listener.done:
+			delete(listener.sessions, init.flowID)
 			listener.mu.Unlock()
 			_ = control.Close()
 			return
 		case listener.acceptCh <- sess:
-			listener.sessions[init.flowID] = sess
 			listener.mu.Unlock()
 			listener.forgetSessionWhenClosed(init.flowID, sess)
 			go sess.readCompatControl(context.Background())
 		default:
+			delete(listener.sessions, init.flowID)
 			listener.mu.Unlock()
 			_ = control.Close()
 			if deleter, ok := listener.provider.(dataplane.ExperimentalTCPFlowDeleter); ok {
@@ -676,6 +684,11 @@ func (listener *listener) dispatch(frame dataplane.ExperimentalTCPFrame) {
 			releaseExperimentalTCPFrame(frame)
 			return
 		}
+		if listener.primerFlowRequired {
+			listener.mu.Unlock()
+			releaseExperimentalTCPFrame(frame)
+			return
+		}
 		sess = newSession(listener.provider, nil, frame.FlowID, frame.Peer, listener.endpoint.Name, listener.placement, "", "")
 		listener.sessions[frame.FlowID] = sess
 		select {
@@ -713,6 +726,10 @@ func (listener *listener) dispatchBatch(frames []dataplane.ExperimentalTCPFrame)
 		}
 		if sess == nil {
 			if frame.Endpoint != "" && frame.Endpoint != listener.endpoint.Name {
+				releaseExperimentalTCPFrame(frame)
+				continue
+			}
+			if listener.primerFlowRequired {
 				releaseExperimentalTCPFrame(frame)
 				continue
 			}
@@ -799,6 +816,8 @@ type session struct {
 	cryptoSuite               string
 	cryptoOffloaded           bool
 	compatControl             *stream.Session
+	compatPriority            chan []byte
+	compatPriorityWaited      atomic.Bool
 	sendFrames                []dataplane.ExperimentalTCPFrame
 	sendExpandedPackets       [][]byte
 	reassemblyMaxAssemblies   int
@@ -931,6 +950,13 @@ func newSession(provider dataplane.ExperimentalTCPProvider, subscription datapla
 	}
 }
 
+func (session *session) enableCompatPriority() {
+	if session == nil || session.compatPriority != nil {
+		return
+	}
+	session.compatPriority = make(chan []byte, experimentalTCPCompatPriorityBuffer)
+}
+
 func (session *session) readSubscription(ctx context.Context) {
 	if session.subscription == nil {
 		return
@@ -977,6 +1003,9 @@ func (session *session) readCompatControl(ctx context.Context) {
 			return
 		}
 		if !experimentalTCPCompatControlEligible(packet) {
+			continue
+		}
+		if session.enqueueCompatPriority(packet) {
 			continue
 		}
 		session.enqueue(packet)
@@ -1461,6 +1490,10 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 		remaining.owner = batch.owner
 		return remaining, true
 	}
+	if priorityPackets := session.recvCompatPriorityPackets(max); len(priorityPackets) > 0 {
+		session.recordReceivedPackets(priorityPackets)
+		return priorityPackets, nil, nil
+	}
 	if len(session.recvPending.packets) > 0 {
 		remaining, hasRemaining := appendBatch(session.recvPending, max)
 		session.recvPending = remaining
@@ -1477,6 +1510,13 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 				return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 			}
 			return nil, nil, fmt.Errorf("experimental_tcp session is closed")
+		case pkt, ok := <-session.compatPriority:
+			if !ok || len(pkt) == 0 {
+				continue
+			}
+			packets = append(packets, pkt)
+			session.recordReceivedPackets(packets)
+			return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 		case batch, ok := <-session.in:
 			if !ok {
 				if len(packets) > 0 {
@@ -2105,8 +2145,90 @@ func experimentalTCPCompatControlEligible(packet []byte) bool {
 	return len(packet) >= 6 && string(packet[0:4]) == string(experimentalTCPSecureHelloMagic[:])
 }
 
+func experimentalTCPCompatHandshakePriorityDelay() time.Duration {
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_HANDSHAKE_PRIORITY_DELAY"))
+	if value == "" {
+		return experimentalTCPCompatHandshakePriority
+	}
+	if parsed, err := time.ParseDuration(value); err == nil {
+		if parsed < 0 {
+			return 0
+		}
+		if parsed > experimentalTCPCompatTCPPrimerTimeout {
+			return experimentalTCPCompatTCPPrimerTimeout
+		}
+		return parsed
+	}
+	millis, err := strconv.Atoi(value)
+	if err != nil || millis <= 0 {
+		return experimentalTCPCompatHandshakePriority
+	}
+	delay := time.Duration(millis) * time.Millisecond
+	if delay > experimentalTCPCompatTCPPrimerTimeout {
+		return experimentalTCPCompatTCPPrimerTimeout
+	}
+	return delay
+}
+
 func (session *session) enqueue(pkt []byte) {
 	session.enqueueBatch(experimentalTCPPacketBatch{packets: [][]byte{pkt}})
+}
+
+func (session *session) enqueueCompatPriority(pkt []byte) bool {
+	if session == nil || session.compatPriority == nil || len(pkt) == 0 {
+		return false
+	}
+	select {
+	case <-session.closed:
+		return true
+	case session.compatPriority <- pkt:
+		return true
+	default:
+		return false
+	}
+}
+
+func (session *session) recvCompatPriorityPackets(max int) [][]byte {
+	if session == nil || session.compatPriority == nil || max <= 0 {
+		return nil
+	}
+	packets := make([][]byte, 0, 1)
+	appendPacket := func(pkt []byte, ok bool) bool {
+		if !ok || len(pkt) == 0 {
+			return false
+		}
+		packets = append(packets, pkt)
+		return true
+	}
+	select {
+	case pkt, ok := <-session.compatPriority:
+		appendPacket(pkt, ok)
+	default:
+	}
+	if len(packets) == 0 && session.compatPriorityWaited.CompareAndSwap(false, true) {
+		delay := experimentalTCPCompatHandshakePriorityDelay()
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case pkt, ok := <-session.compatPriority:
+				appendPacket(pkt, ok)
+			case <-session.closed:
+			case <-timer.C:
+			}
+			stopExperimentalTCPTimer(timer)
+		}
+	}
+	for len(packets) < max {
+		select {
+		case pkt, ok := <-session.compatPriority:
+			if !appendPacket(pkt, ok) {
+				return packets
+			}
+		default:
+			return packets
+		}
+	}
+	return packets
 }
 
 func (session *session) enqueueBatch(batch experimentalTCPPacketBatch) {

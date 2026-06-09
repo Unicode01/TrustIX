@@ -30,6 +30,8 @@ import (
 const (
 	defaultIXProvisionTokenTTL = 30 * time.Minute
 	maxIXProvisionTokenTTL     = 24 * time.Hour
+	ixProvisionPrimaryPriority = 100
+	ixProvisionAcklessPriority = 80
 )
 
 type ixProvisionIssueRequest struct {
@@ -156,6 +158,7 @@ func (daemon *Daemon) handleIXProvisionIssue(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	setSensitiveResponseHeaders(w)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -172,11 +175,21 @@ func (daemon *Daemon) serveIXProvisionIfRequest(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusGone, err)
 		return true
 	}
+	setIXProvisionBootstrapSecurityHeaders(w)
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(record.Script))
 	return true
+}
+
+func setIXProvisionBootstrapSecurityHeaders(w http.ResponseWriter) {
+	header := w.Header()
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("X-Frame-Options", "DENY")
+	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	header.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
 }
 
 func ixProvisionTokenFromBootstrapPath(rawPath string) (string, bool) {
@@ -886,6 +899,78 @@ func ixProvisionControlAPIPublishMode(request ixProvisionIssueRequest) string {
 	return ""
 }
 
+func ixProvisionEndpointConfigs(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) ([]config.EndpointConfig, []core.EndpointID) {
+	primary := ixProvisionEndpointConfig(request, request.EndpointName, request.EndpointTransport, ixProvisionPrimaryPriority, profile)
+	endpoints := []config.EndpointConfig{primary}
+	candidates := []core.EndpointID{primary.Name}
+	if transport.Protocol(request.EndpointTransport) == transport.ProtocolUDP {
+		acklessName := ixProvisionAcklessEndpointName(request)
+		endpoints = append(endpoints, ixProvisionEndpointConfig(request, acklessName, string(transport.ProtocolExperimentalTCP), ixProvisionAcklessPriority, profile))
+		candidates = append(candidates, acklessName)
+	}
+	return endpoints, candidates
+}
+
+func ixProvisionEndpointConfig(request ixProvisionIssueRequest, name core.EndpointID, endpointTransport string, priority int, profile ixProvisionProfileDefaults) config.EndpointConfig {
+	return config.EndpointConfig{
+		Name:      name,
+		Mode:      config.EndpointMode(request.EndpointMode),
+		Listen:    request.EndpointListen,
+		Address:   request.EndpointAddress,
+		Transport: endpointTransport,
+		Priority:  priority,
+		Security: config.EndpointSecurityConfig{
+			Encryption: profile.Encryption,
+		},
+		Profile: config.EndpointProfileConfig{
+			Profile:         profile.TransportProfile,
+			Datapath:        profile.Datapath,
+			Encryption:      profile.Encryption,
+			CryptoPlacement: profile.CryptoPlacement,
+		},
+		Enabled:    true,
+		EnabledSet: true,
+	}
+}
+
+func ixProvisionAcklessEndpointName(request ixProvisionIssueRequest) core.EndpointID {
+	name := strings.TrimSpace(string(request.EndpointName))
+	if strings.HasSuffix(name, "-udp") {
+		return core.EndpointID(strings.TrimSuffix(name, "-udp") + "-experimental_tcp")
+	}
+	if name != "" {
+		return core.EndpointID(name + "-experimental_tcp")
+	}
+	return core.EndpointID(safeProvisionFileName(string(request.IXID), "ix-new") + "-experimental_tcp")
+}
+
+func ixProvisionTransportProfiles(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) []config.TransportProfileConfig {
+	if transport.Protocol(request.EndpointTransport) != transport.ProtocolUDP {
+		return nil
+	}
+	return []config.TransportProfileConfig{{
+		Transport:       string(transport.ProtocolExperimentalTCP),
+		Profile:         profile.TransportProfile,
+		Datapath:        profile.Datapath,
+		Encryption:      profile.Encryption,
+		CryptoPlacement: profile.CryptoPlacement,
+		Advanced:        ixProvisionAcklessAdvanced(request.Profile),
+	}}
+}
+
+func ixProvisionAcklessAdvanced(profile string) config.TransportAdvancedConfig {
+	advanced := config.TransportAdvancedConfig{
+		BatchBytes: dataSessionBatchDefaultBytes,
+		FlushDelay: "25us",
+		MaxFrames:  dataSessionBatchMaxPackets,
+	}
+	if normalizeIXProvisionProfile(profile) == "latency" {
+		advanced.FlushDelay = "0"
+		advanced.MaxFrames = 64
+	}
+	return advanced
+}
+
 func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Prefix, roots []ixProvisionTrustRootFile) (config.Desired, error) {
 	ixBase := safeProvisionFileName(string(request.IXID), "ix")
 	rootPaths := make([]string, 0, len(roots))
@@ -898,6 +983,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 	}
 	attachMode := config.LANAttachMode(request.AttachMode)
 	manageAddress := attachMode != config.LANAttachModeExisting
+	endpoints, candidates := ixProvisionEndpointConfigs(request, profile)
 	desired := config.Desired{
 		Domain: config.DomainConfig{
 			ID:         request.Domain,
@@ -940,24 +1026,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			TrustIXDatapath:        config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
 			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
 		},
-		Endpoints: []config.EndpointConfig{{
-			Name:      request.EndpointName,
-			Mode:      config.EndpointMode(request.EndpointMode),
-			Listen:    request.EndpointListen,
-			Address:   request.EndpointAddress,
-			Transport: request.EndpointTransport,
-			Security: config.EndpointSecurityConfig{
-				Encryption: profile.Encryption,
-			},
-			Profile: config.EndpointProfileConfig{
-				Profile:         profile.TransportProfile,
-				Datapath:        profile.Datapath,
-				Encryption:      profile.Encryption,
-				CryptoPlacement: profile.CryptoPlacement,
-			},
-			Enabled:    true,
-			EnabledSet: true,
-		}},
+		Endpoints: endpoints,
 		Bootstrap: config.BootstrapConfig{},
 		Peers:     []config.PeerConfig{},
 		Routes:    []config.RouteConfig{},
@@ -967,20 +1036,19 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 		Policies: []config.PolicyConfig{{
 			Name:           core.PolicyID("default-routed"),
 			RouteSelection: "longest_prefix",
-			LoadBalance:    "least_conn",
 			FlowStickiness: true,
 			Rewrite:        "preserve_source",
 		}},
 		TransportPolicy: config.TransportPolicyConfig{
 			Mode:            "user_defined",
-			Candidates:      []core.EndpointID{request.EndpointName},
+			Candidates:      candidates,
 			Failover:        "health_based",
-			LoadBalance:     "least_conn",
 			Profile:         profile.TransportProfile,
 			Datapath:        profile.Datapath,
 			Encryption:      profile.Encryption,
 			CryptoKeySource: securetransport.KeySourceAuto,
 			CryptoPlacement: profile.CryptoPlacement,
+			Profiles:        ixProvisionTransportProfiles(request, profile),
 			KernelTransport: config.KernelTransportPolicyConfig{Mode: profile.KernelTransport},
 			SessionPool:     config.SessionPoolPolicyConfig{Warmup: true},
 		},

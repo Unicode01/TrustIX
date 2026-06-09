@@ -10,7 +10,7 @@ module_cross_compile="${TRUSTIX_DATAPATH_CROSS_COMPILE:-${CROSS_COMPILE:-}}"
 module_build_mode="${TRUSTIX_DATAPATH_BUILD_MODE:-${TRUSTIX_DATAPATH_HELPERS_BUILD_MODE:-full}}"
 kernelmodule_test_bin="${TRUSTIX_DATAPATH_KERNELMODULE_TEST_BIN:-${TRUSTIX_KERNEL_KERNELMODULE_TEST_BIN:-}}"
 keep_loaded="${TRUSTIX_DATAPATH_KEEP_LOADED:-1}"
-enable_features="${TRUSTIX_DATAPATH_ENABLE_FEATURES:-320}"
+enable_features="${TRUSTIX_DATAPATH_ENABLE_FEATURES:-832}"
 extra_module_params="${TRUSTIX_DATAPATH_EXTRA_MODULE_PARAMS:-}"
 loaded_by_script=0
 loaded_variant=""
@@ -78,6 +78,17 @@ apply_loaded_bool_param() {
   fi
 }
 
+assert_loaded_bool_param_disabled() {
+  local name="$1"
+  local raw="$2"
+  if truthy "$raw"; then
+    die "${name}=1 is hard-disabled for the first release"
+  fi
+  if param_is_yes "$name"; then
+    die "trustix_datapath_helpers is already loaded with hard-disabled ${name}=1"
+  fi
+}
+
 apply_loaded_extra_params() {
   local token name value param
   for token in $extra_module_params; do
@@ -91,8 +102,38 @@ apply_loaded_extra_params() {
         ;;
     esac
     case "$name" in
-      tixt_tx_plain_skip_sequence|tixt_tx_plain_ack_only|route_tcp_xmit_worker|route_tcp_xmit_worker_steal)
+      tixt_tx_plain_skip_sequence|tixt_tx_plain_ack_only)
         apply_loaded_bool_param "$name" "$value"
+        ;;
+      route_tcp_gso)
+        if truthy "$value"; then
+          param="/sys/module/trustix_datapath_helpers/parameters/${name}"
+          [[ -r "$param" ]] || die "trustix_datapath_helpers is loaded but ${name} parameter is missing"
+          param_is_yes "$name" || die "trustix_datapath_helpers is already loaded without ${name}=1; unload it before enabling route TCP GSO"
+        elif param_is_yes "$name"; then
+          die "trustix_datapath_helpers is already loaded with ${name}=1; unload it or set ${name}=1"
+        fi
+        ;;
+      route_tcp_gso_async|route_tcp_gso_async_dev_xmit)
+        if truthy "$value"; then
+          param="/sys/module/trustix_datapath_helpers/parameters/${name}"
+          [[ -r "$param" ]] || die "trustix_datapath_helpers is loaded but ${name} parameter is missing"
+          param_is_yes "$name" || die "trustix_datapath_helpers is already loaded without ${name}=1; unload it before enabling route TCP async GSO"
+        elif param_is_yes "$name"; then
+          die "trustix_datapath_helpers is already loaded with ${name}=1; unload it or set ${name}=1"
+        fi
+        ;;
+      route_tcp_xmit_worker)
+        if truthy "$value"; then
+          param="/sys/module/trustix_datapath_helpers/parameters/${name}"
+          [[ -r "$param" ]] || die "trustix_datapath_helpers is loaded but ${name} parameter is missing"
+          param_is_yes "$name" || die "trustix_datapath_helpers is already loaded without ${name}=1; unload it before enabling route TCP xmit worker"
+        elif param_is_yes "$name"; then
+          die "trustix_datapath_helpers is already loaded with ${name}=1; unload it or set ${name}=1"
+        fi
+        ;;
+      route_tcp_xmit_worker_steal)
+        assert_loaded_bool_param_disabled "$name" "$value"
         ;;
       *)
         param="/sys/module/trustix_datapath_helpers/parameters/${name}"
@@ -254,6 +295,7 @@ verify_route_tcp_xmit_worker_params() {
   flush_drops="$(read_module_param route_tcp_xmit_worker_flush_drops || true)"
   [[ "$worker" =~ ^[YN]$ ]] || die "unexpected route_tcp_xmit_worker=${worker:-missing}"
   [[ "$steal" =~ ^[YN]$ ]] || die "unexpected route_tcp_xmit_worker_steal=${steal:-missing}"
+  [[ "$steal" == "N" ]] || die "route_tcp_xmit_worker_steal must stay disabled in the first release"
   for value in "$depth" "$enqueued" "$cloned" "$stolen" "$no_dev" "$queue_full" "$alloc_errors" "$header_errors" "$xmit_ok" "$xmit_errors" "$flush_drops"; do
     [[ "$value" =~ ^[0-9]+$ ]] || die "unexpected route TCP xmit worker counter value: ${value:-missing}"
   done

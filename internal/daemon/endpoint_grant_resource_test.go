@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"trustix.local/trustix/internal/config"
+	"trustix.local/trustix/internal/configlog"
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/routing"
@@ -100,6 +103,117 @@ func TestEndpointGrantIssueListRevokeAndInboundEnforcement(t *testing.T) {
 	if _, err := daemon.registerInboundDataSession(context.Background(), transport.Endpoint{Name: "access-udp", Transport: transport.ProtocolUDP}, again); err == nil {
 		t.Fatal("inbound session after revoked endpoint grant was accepted")
 	}
+}
+
+func TestEndpointGrantExpiryDropsExistingInboundSession(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	desired.Endpoints = []config.EndpointConfig{{
+		Name:       "access-udp",
+		Mode:       config.EndpointModePassive,
+		Transport:  "udp",
+		Enabled:    true,
+		EnabledSet: true,
+		Access: config.EndpointAccessConfig{
+			Mode: "require_grant",
+		},
+	}}
+	desired.Peers[0].Endpoints = []config.EndpointConfig{{
+		Name:      "access-udp",
+		Mode:      config.EndpointModeActive,
+		Transport: "udp",
+		Address:   "127.0.0.1:7001",
+		Enabled:   true,
+	}}
+	daemon := newConfigApplyTestDaemon(t, desired)
+	prepareEndpointGrantSessionTestDaemon(daemon)
+
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	issueBody := mustJSON(t, endpointGrantIssueRequest{SubjectIX: "ix-b", Endpoint: "access-udp", ExpiresAt: expiresAt})
+	issueRequest := httptest.NewRequest(http.MethodPost, "/v1/endpoint-grants/issue", bytes.NewReader(issueBody))
+	issueRequest.Header.Set("Content-Type", "application/json")
+	signAdminTestRequest(t, issueRequest, issueBody, pkiSet.adminCert, pkiSet.adminKey)
+	issueRecorder := httptest.NewRecorder()
+	daemon.handler().ServeHTTP(issueRecorder, issueRequest)
+	if issueRecorder.Code != http.StatusOK {
+		t.Fatalf("issue grant status = %d body=%s", issueRecorder.Code, issueRecorder.Body.String())
+	}
+	var issue endpointGrantMutationResponse
+	if err := json.Unmarshal(issueRecorder.Body.Bytes(), &issue); err != nil {
+		t.Fatalf("decode grant issue: %v", err)
+	}
+
+	accepted := &blockingIdentitySession{peer: "ix-b", domain: "lab.local", recv: make(chan struct{})}
+	if _, err := daemon.registerInboundDataSession(context.Background(), transport.Endpoint{Name: "access-udp", Transport: transport.ProtocolUDP}, accepted); err != nil {
+		t.Fatalf("inbound session with endpoint grant rejected: %v", err)
+	}
+
+	dropped := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(issue.Grant.ExpiresAt.Add(time.Nanosecond))
+	if dropped != 1 {
+		t.Fatalf("expired grant dropped %d sessions, want 1", dropped)
+	}
+	if !accepted.closed {
+		t.Fatal("expired endpoint grant did not close the reverse data session")
+	}
+}
+
+func TestEndpointGrantCleanupFailsClosedWhenGrantLogUnreadable(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	desired.Endpoints = []config.EndpointConfig{{
+		Name:       "access-udp",
+		Mode:       config.EndpointModePassive,
+		Transport:  "udp",
+		Enabled:    true,
+		EnabledSet: true,
+		Access: config.EndpointAccessConfig{
+			Mode: "require_grant",
+		},
+	}}
+	daemon := newConfigApplyTestDaemon(t, desired)
+	prepareEndpointGrantSessionTestDaemon(daemon)
+	daemon.store = failingEndpointGrantStore{}
+
+	session := &blockingIdentitySession{peer: "ix-b", domain: "lab.local", recv: make(chan struct{})}
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "access-udp",
+		Transport:  transport.ProtocolUDP,
+		Address:    reverseSessionAddress,
+		Encryption: "secure",
+	}
+	daemon.dataSessions[key] = session
+	daemon.dataSessionState[key] = &dataSessionRuntime{
+		key:      key,
+		session:  session,
+		endpoint: config.EndpointConfig{Name: "access-udp", Transport: "udp"},
+	}
+
+	dropped := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicy()
+	if dropped != 1 {
+		t.Fatalf("grant cleanup with unreadable log dropped %d sessions, want 1", dropped)
+	}
+	if !session.closed {
+		t.Fatal("grant cleanup with unreadable log did not close require_grant session")
+	}
+}
+
+type failingEndpointGrantStore struct{}
+
+func (failingEndpointGrantStore) Append(configlog.Event) error {
+	return errors.New("failing endpoint grant store is read-only")
+}
+
+func (failingEndpointGrantStore) ReplaceAll([]configlog.Event) error {
+	return errors.New("failing endpoint grant store is read-only")
+}
+
+func (failingEndpointGrantStore) Head() (configlog.Head, error) {
+	return configlog.Head{Seq: 1, Hash: "unreadable"}, nil
+}
+
+func (failingEndpointGrantStore) Range(uint64, uint64) ([]configlog.Event, error) {
+	return nil, errors.New("failing endpoint grant store range")
 }
 
 func TestEndpointGrantIssueRejectsUnsupportedPermission(t *testing.T) {

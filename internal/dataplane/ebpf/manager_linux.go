@@ -142,6 +142,7 @@ type Manager struct {
 	kernelUDPTXDirectFinalizeFlowTCPHeaderKfunc bool
 	kernelUDPTXDirectPushRouteTCPHeaderKfunc    bool
 	kernelUDPTXDirectRouteTCPGSOKfunc           bool
+	kernelUDPTXDirectRouteTCPGSOAsyncKfunc      bool
 	kernelUDPTXDirectRouteTCPXmitKfunc          bool
 	kernelUDPTXDirectExperimentalTCPSafeGSO     bool
 	kernelUDPTXSecureDirectAttached             bool
@@ -11968,14 +11969,14 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 	}
 
 	txDirectOptions := kernelUDPTXDirectProgramOptions{
-		Enabled:                          kernelUDPTXDirectProgramEnabled(),
-		ExperimentalTCPOnly:              kernelUDPTXDirectExperimentalTCPOnlyEnabled(),
-		KernelUDPOnly:                    kernelUDPTXDirectKernelUDPOnlyEnabled(),
+		Enabled:                          kernelUDPTXDirectProgramEnabledForSpec(spec),
+		ExperimentalTCPOnly:              kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec),
+		KernelUDPOnly:                    kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec),
 		DirectOnly:                       kernelUDPTXDirectOnlyEnabled(spec),
 		SkipPlainSequence:                kernelUDPTXDirectSkipPlainSequenceEnabled(),
-		ExperimentalTCPSkipPlainSequence: experimentalTCPTXPlainSkipSequenceEnabled(),
-		ExperimentalTCPACKOnly:           experimentalTCPTXPlainACKOnlyEnabled(),
-		RedirectPeer:                     kernelUDPTXDirectRedirectPeerEnabledForLink(underlayLink, kernelUDPTXDirectKernelUDPOnlyEnabled(), kernelUDPTXDirectOnlyEnabled(spec)),
+		ExperimentalTCPSkipPlainSequence: experimentalTCPTXPlainSkipSequenceEnabledForSpec(spec),
+		ExperimentalTCPACKOnly:           experimentalTCPTXPlainACKOnlyEnabledForSpec(spec),
+		RedirectPeer:                     kernelUDPTXDirectRedirectPeerEnabledForLink(underlayLink, kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec), kernelUDPTXDirectOnlyEnabled(spec)),
 	}
 	if kernelUDPTXDirectSKBClearTXOffloadEnabled() {
 		txDirectOptions.SKBClearTXOffload = true
@@ -12023,7 +12024,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			manager.warnings = append(manager.warnings, "kernel_udp TC TX direct inner TCP checksum kfunc disabled: "+err.Error())
 		}
 	}
-	if experimentalTCPTXDirectEnabled() && kernelUDPTXDirectInnerTCPChecksumKfuncEnabled() && !txDirectOptions.InnerTCPKfuncCall.IsKfuncCall() {
+	if experimentalTCPTXDirectEnabledForSpec(spec) && kernelUDPTXDirectInnerTCPChecksumKfuncEnabled() && !txDirectOptions.InnerTCPKfuncCall.IsKfuncCall() {
 		txDirectOptions.InnerTCPKfunc = true
 		txDirectOptions.InnerTCPKfuncAuto = !kernelUDPTXDirectInnerTCPChecksumKfuncRequired()
 		txDirectOptions.InnerTCPKfuncCall, err = loadSKBFixInnerTCPCsumKfuncCall()
@@ -12129,7 +12130,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			return fmt.Errorf("load skb kernel_udp TX UDP header-push kfunc metadata: %w", err)
 		}
 	}
-	if experimentalTCPTXDirectEnabled() && experimentalTCPTXDirectOuterTCPChecksumKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
+	if experimentalTCPTXDirectEnabledForSpec(spec) && experimentalTCPTXDirectOuterTCPChecksumKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
 		txDirectOptions.OuterTCPCsumKfunc = true
 		txDirectOptions.OuterTCPCsumKfuncCall, err = loadSKBTIXTFixOuterTCPCsumKfuncCall()
 		if err != nil {
@@ -12153,7 +12154,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			manager.warnings = append(manager.warnings, "experimental_tcp TC TX direct outer TCP checksum kfunc disabled: "+err.Error())
 		}
 	}
-	if experimentalTCPTXDirectEnabled() && experimentalTCPTXDirectOuterTCPHeaderKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
+	if experimentalTCPTXDirectEnabledForSpec(spec) && experimentalTCPTXDirectOuterTCPHeaderKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
 		txDirectOptions.OuterTCPKfunc = true
 		txDirectOptions.OuterTCPKfuncCall, err = loadSKBTIXTTXFinalizeTCPHeaderKfuncCall()
 		if err != nil {
@@ -12177,7 +12178,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			manager.warnings = append(manager.warnings, "experimental_tcp TC TX direct outer TCP header kfunc disabled: "+err.Error())
 		}
 	}
-	if experimentalTCPTXDirectEnabled() && experimentalTCPTXDirectTCPPartialCSUMKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
+	if experimentalTCPTXDirectEnabledForSpec(spec) && experimentalTCPTXDirectTCPPartialCSUMKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
 		txDirectOptions.TCPPartialCSUMKfunc = true
 		txDirectOptions.TCPPartialCSUMKfuncCall, err = loadSKBTIXTTXSetTCPPartialCSUMKfuncCall()
 		if err != nil {
@@ -12201,7 +12202,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			manager.warnings = append(manager.warnings, "experimental_tcp TC TX direct TCP partial checksum kfunc disabled: "+err.Error())
 		}
 	}
-	if experimentalTCPTXDirectEnabled() && experimentalTCPTXDirectPushTCPHeaderKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
+	if experimentalTCPTXDirectEnabledForSpec(spec) && experimentalTCPTXDirectPushTCPHeaderKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
 		txDirectOptions.PushTCPHeaderKfunc = true
 		txDirectOptions.PushTCPHeaderKfuncCall, err = loadSKBTIXTTXPushTCPHeaderKfuncCall()
 		if err != nil {
@@ -12225,7 +12226,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			manager.warnings = append(manager.warnings, "experimental_tcp TC TX direct TCP header-push kfunc disabled: "+err.Error())
 		}
 	}
-	if experimentalTCPTXDirectEnabled() && experimentalTCPTXDirectPushFlowTCPHeaderKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
+	if experimentalTCPTXDirectEnabledForSpec(spec) && experimentalTCPTXDirectPushFlowTCPHeaderKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
 		txDirectOptions.PushFlowTCPHeaderKfunc = true
 		txDirectOptions.PushFlowTCPHeaderKfuncCall, err = loadSKBTIXTTXPushFlowTCPHeaderKfuncCall()
 		if err != nil {
@@ -12249,7 +12250,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			manager.warnings = append(manager.warnings, "experimental_tcp TC TX direct flow TCP header-push kfunc disabled: "+err.Error())
 		}
 	}
-	if experimentalTCPTXDirectEnabled() && experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
+	if experimentalTCPTXDirectEnabledForSpec(spec) && experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
 		txDirectOptions.FinalizeFlowTCPHeaderKfunc = true
 		txDirectOptions.FinalizeFlowTCPHeaderKfuncCall, err = loadSKBTIXTTXFinalizeFlowTCPHeaderKfuncCall()
 		if err != nil {
@@ -12273,7 +12274,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			manager.warnings = append(manager.warnings, "experimental_tcp TC TX direct flow TCP header-finalize kfunc disabled: "+err.Error())
 		}
 	}
-	if experimentalTCPTXDirectEnabled() && experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
+	if experimentalTCPTXDirectEnabledForSpec(spec) && experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec) && !experimentalTCPSkipOuterTCPChecksum() {
 		txDirectOptions.PushRouteTCPHeaderKfunc = true
 		txDirectOptions.PushRouteTCPHeaderKfuncCall, err = loadSKBTIXTTXPushRouteTCPHeaderKfuncCall()
 		if err != nil {
@@ -12297,7 +12298,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			manager.warnings = append(manager.warnings, "experimental_tcp TC TX direct route TCP header-push kfunc disabled: "+err.Error())
 		}
 	}
-	if experimentalTCPTXDirectEnabled() && experimentalTCPTXDirectRouteTCPGSOKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
+	if experimentalTCPTXDirectEnabledForSpec(spec) && experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) && !experimentalTCPSkipOuterTCPChecksum() {
 		txDirectOptions.RouteTCPGSOKfunc = true
 		txDirectOptions.RouteTCPGSOKfuncCall, err = loadSKBTIXTTXSegmentRouteTCPGSOKfuncCall()
 		if err != nil {
@@ -12321,7 +12322,10 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			manager.warnings = append(manager.warnings, "experimental_tcp TC TX direct route TCP GSO kfunc disabled: "+err.Error())
 		}
 	}
-	if txDirectOptions.RouteTCPGSOKfunc && experimentalTCPTXDirectRouteTCPXmitKfuncRequested() && !experimentalTCPSkipOuterTCPChecksum() {
+	if txDirectOptions.RouteTCPGSOKfunc {
+		txDirectOptions.RouteTCPGSOAsyncKfunc = experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec)
+	}
+	if txDirectOptions.RouteTCPGSOKfunc && experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec) && !experimentalTCPSkipOuterTCPChecksum() {
 		txDirectOptions.RouteTCPXmitKfunc = true
 		txDirectOptions.RouteTCPXmitKfuncCall, err = loadSKBTIXTTXRouteTCPXmitKfuncCall()
 		if err != nil {
@@ -12538,6 +12542,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 	manager.kernelUDPTXDirectFinalizeFlowTCPHeaderKfunc = txDirectOptions.FinalizeFlowTCPHeaderKfunc
 	manager.kernelUDPTXDirectPushRouteTCPHeaderKfunc = txDirectOptions.PushRouteTCPHeaderKfunc
 	manager.kernelUDPTXDirectRouteTCPGSOKfunc = txDirectOptions.RouteTCPGSOKfunc
+	manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = txDirectOptions.RouteTCPGSOAsyncKfunc
 	manager.kernelUDPTXDirectRouteTCPXmitKfunc = txDirectOptions.RouteTCPXmitKfunc
 	manager.kernelUDPTXDirectExperimentalTCPSafeGSO = experimentalTCPTXDirectSafeActiveGSOEnabledForOptions(txDirectOptions)
 	manager.natConfigMap = natConfigMap
@@ -13320,29 +13325,30 @@ func kernelUDPRXDirectOptionsForLink(link netlink.Link) kernelUDPRXDirectProgram
 
 func kernelUDPRXDirectOptionsForLinkWithSpec(link netlink.Link, spec dataplane.AttachSpec) kernelUDPRXDirectProgramOptions {
 	directOnly := kernelUDPTXDirectOnlyEnabled(spec)
-	kernelUDPOnly := kernelUDPTXDirectKernelUDPOnlyEnabled()
+	expTCPOnly := kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec)
+	kernelUDPOnly := kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec)
 	dummyDirectOnly := directOnly && isDummyLink(link)
 	if kernelUDPRXDirectBroadcastDisabled() {
-		return kernelUDPRXDirectProgramOptions{ExperimentalTCPOnly: kernelUDPTXDirectExperimentalTCPOnlyEnabled(), KernelUDPOnly: kernelUDPOnly, DirectOnly: directOnly, DestinationPortOnly: kernelUDPRXDirectDestinationPortOnlyEnabled(kernelUDPOnly, directOnly)}
+		return kernelUDPRXDirectProgramOptions{ExperimentalTCPOnly: expTCPOnly, KernelUDPOnly: kernelUDPOnly, DirectOnly: directOnly, DestinationPortOnly: kernelUDPRXDirectDestinationPortOnlyEnabled(kernelUDPOnly, expTCPOnly, directOnly)}
 	}
 	if !kernelUDPRXDirectBroadcastEnabled() && !isVethLink(link) && !dummyDirectOnly {
-		return kernelUDPRXDirectProgramOptions{ExperimentalTCPOnly: kernelUDPTXDirectExperimentalTCPOnlyEnabled(), KernelUDPOnly: kernelUDPOnly, DirectOnly: directOnly, DestinationPortOnly: kernelUDPRXDirectDestinationPortOnlyEnabled(kernelUDPOnly, directOnly)}
+		return kernelUDPRXDirectProgramOptions{ExperimentalTCPOnly: expTCPOnly, KernelUDPOnly: kernelUDPOnly, DirectOnly: directOnly, DestinationPortOnly: kernelUDPRXDirectDestinationPortOnlyEnabled(kernelUDPOnly, expTCPOnly, directOnly)}
 	}
-	options := kernelUDPRXDirectProgramOptions{Broadcast: true, RedirectIngress: dummyDirectOnly, ExperimentalTCPOnly: kernelUDPTXDirectExperimentalTCPOnlyEnabled(), KernelUDPOnly: kernelUDPOnly, DirectOnly: directOnly, DestinationPortOnly: kernelUDPRXDirectDestinationPortOnlyEnabled(kernelUDPOnly, directOnly)}
+	options := kernelUDPRXDirectProgramOptions{Broadcast: true, RedirectIngress: dummyDirectOnly, ExperimentalTCPOnly: expTCPOnly, KernelUDPOnly: kernelUDPOnly, DirectOnly: directOnly, DestinationPortOnly: kernelUDPRXDirectDestinationPortOnlyEnabled(kernelUDPOnly, expTCPOnly, directOnly)}
 	if !kernelUDPRXDirectPeerRedirectDisabled() && (kernelUDPRXDirectPeerRedirectEnabled() || isVethLink(link)) {
 		options.RedirectPeer = true
 	}
 	return options
 }
 
-func kernelUDPRXDirectDestinationPortOnlyEnabled(kernelUDPOnly, directOnly bool) bool {
+func kernelUDPRXDirectDestinationPortOnlyEnabled(kernelUDPOnly, experimentalTCPOnly, directOnly bool) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT_DESTINATION_PORT_ONLY"))) {
 	case "1", "true", "yes", "on", "enabled":
 		return true
 	case "0", "false", "no", "off", "disabled":
 		return false
 	default:
-		return directOnly && (kernelUDPOnly || kernelUDPTXDirectExperimentalTCPOnlyEnabled())
+		return directOnly && (kernelUDPOnly || experimentalTCPOnly)
 	}
 }
 
@@ -13451,6 +13457,10 @@ func kernelUDPTunnelGSOEnabledForOptions(options kernelUDPTXDirectProgramOptions
 	if kernelUDPTXDirectSafeModeEnabled() {
 		return false
 	}
+	if options.ExperimentalTCPOnly && options.DirectOnly &&
+		options.RouteTCPGSOKfunc {
+		return true
+	}
 	return options.DirectOnly && !options.ExperimentalTCPOnly
 }
 
@@ -13458,8 +13468,12 @@ func kernelUDPTunnelGSOActiveSKBEnabledForOptions(options kernelUDPTXDirectProgr
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO"))) {
 	case "1", "true", "yes", "on", "enabled":
 		if options.ExperimentalTCPOnly {
+			if options.DirectOnly && options.RouteTCPGSOKfunc {
+				return true
+			}
 			return experimentalTCPTXDirectSafeActiveGSOEnabledForOptions(options) ||
-				experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequested() ||
+				(options.RouteTCPGSOKfunc && (options.RouteTCPGSOAsyncKfunc ||
+					experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequested())) ||
 				experimentalTCPTXDirectActiveGSOUnsafeEnabled()
 		}
 		return true
@@ -13468,6 +13482,10 @@ func kernelUDPTunnelGSOActiveSKBEnabledForOptions(options kernelUDPTXDirectProgr
 	}
 	if kernelUDPTXDirectSafeModeEnabled() {
 		return false
+	}
+	if options.ExperimentalTCPOnly && options.DirectOnly &&
+		options.RouteTCPGSOKfunc {
+		return true
 	}
 	return kernelUDPTunnelGSOEnabledForOptions(options) && options.DirectOnly && !options.ExperimentalTCPOnly
 }
@@ -13514,24 +13532,15 @@ func experimentalTCPTXDirectActiveGSOUnsafeEnabled() bool {
 }
 
 func experimentalTCPUnsafeActiveGSOAcknowledged() bool {
-	return envTruthy(
-		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO",
-		"TRUSTIX_EXPERIMENTAL_TCP_ACTIVE_GSO_UNSAFE_ACK",
-	)
+	return false
 }
 
 func experimentalTCPUnsafeRouteTCPKfuncsAcknowledged() bool {
-	return envTruthy(
-		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT",
-		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_TCP_XMIT_CRASH_RISK_ACK",
-	)
+	return false
 }
 
 func experimentalTCPAsyncRouteGSOAcknowledged() bool {
-	return envTruthy(
-		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_TCP_GSO_ASYNC_CRASH_RISK_ACK",
-	)
+	return false
 }
 
 func kernelUDPTunnelGSOEncapL2Flags() uint64 {
@@ -13577,6 +13586,20 @@ func experimentalTCPTXDirectEnabled() bool {
 	return experimentalTCPTXRawDirectExplicitlyEnabled()
 }
 
+func experimentalTCPTXDirectEnabledForSpec(spec dataplane.AttachSpec) bool {
+	if envFalsey(
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY",
+	) {
+		return false
+	}
+	return spec.ExperimentalTCPTXDirect || experimentalTCPTXDirectEnabled()
+}
+
 func experimentalTCPTXRawDirectExplicitlyEnabled() bool {
 	return envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT",
@@ -13594,6 +13617,16 @@ func kernelUDPTXDirectProgramEnabled() bool {
 	}
 	if kernelUDPTXDirectExperimentalTCPOnlyEnabled() {
 		return experimentalTCPTXDirectEnabled()
+	}
+	return true
+}
+
+func kernelUDPTXDirectProgramEnabledForSpec(spec dataplane.AttachSpec) bool {
+	if kernelUDPTXDirectDisabled() {
+		return false
+	}
+	if kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec) {
+		return experimentalTCPTXDirectEnabledForSpec(spec)
 	}
 	return true
 }
@@ -13706,7 +13739,7 @@ func kernelUDPRXDirectTrustInnerChecksumEnabledForOptions(options kernelUDPRXDir
 	) {
 		return true
 	}
-	return !kernelUDPTXDirectInnerTCPChecksumDisabled() && (options.DirectOnly || experimentalTCPTXDirectEnabled())
+	return !kernelUDPTXDirectInnerTCPChecksumDisabled() && (options.DirectOnly || options.ExperimentalTCPOnly || experimentalTCPTXDirectEnabled())
 }
 
 func (manager *Manager) updateKernelUDPRXDirectNeighbor(neighbor netlink.Neigh, deleted bool) {
@@ -13919,6 +13952,7 @@ func (manager *Manager) detachTCPrograms(link netlink.Link) error {
 	manager.kernelUDPTXDirectFinalizeFlowTCPHeaderKfunc = false
 	manager.kernelUDPTXDirectPushRouteTCPHeaderKfunc = false
 	manager.kernelUDPTXDirectRouteTCPGSOKfunc = false
+	manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = false
 	manager.kernelUDPTXDirectRouteTCPXmitKfunc = false
 	if manager.routeMap != nil {
 		if err := manager.routeMap.Close(); err != nil {
@@ -14241,6 +14275,7 @@ type kernelUDPTXDirectProgramOptions struct {
 	PushRouteTCPHeaderKfuncCall      asm.Instruction
 	RouteTCPGSOKfunc                 bool
 	RouteTCPGSOKfuncCall             asm.Instruction
+	RouteTCPGSOAsyncKfunc            bool
 	RouteTCPXmitKfunc                bool
 	RouteTCPXmitKfuncCall            asm.Instruction
 }
@@ -14424,26 +14459,71 @@ func loadTCFastPathProgramsWithExperimentalTCPRouteKfuncFallback(
 	captureScratchMap *cebpf.Map,
 	txDirectOptions kernelUDPTXDirectProgramOptions,
 ) (*cebpf.Program, *cebpf.Program, kernelUDPTXDirectProgramOptions, string, error) {
-	ingressProg, egressProg, loadedOptions, warning, err := loadTCFastPathProgramsWithInnerTCPKfuncFallback(
-		statsMap,
-		packetPolicyMap,
-		routeMap,
-		kernelUDPTXRouteMap,
-		kernelUDPTXFlowMap,
-		natConfigMap,
-		natSourceMap,
-		natRouteMap,
-		natExcludeMap,
-		natBindingMap,
-		captureMap,
-		captureScratchMap,
-		txDirectOptions,
-	)
-	if err == nil || !txDirectOptions.PushRouteTCPHeaderKfunc || experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequired() {
-		if err != nil && experimentalTCPTXDirectRouteTCPGSOKfuncRequired() {
+	load := func(options kernelUDPTXDirectProgramOptions) (*cebpf.Program, *cebpf.Program, kernelUDPTXDirectProgramOptions, string, error) {
+		return loadTCFastPathProgramsWithInnerTCPKfuncFallback(
+			statsMap,
+			packetPolicyMap,
+			routeMap,
+			kernelUDPTXRouteMap,
+			kernelUDPTXFlowMap,
+			natConfigMap,
+			natSourceMap,
+			natRouteMap,
+			natExcludeMap,
+			natBindingMap,
+			captureMap,
+			captureScratchMap,
+			options,
+		)
+	}
+	appendFallbackWarning := func(message, fallbackWarning string) string {
+		if fallbackWarning != "" {
+			message += "; " + fallbackWarning
+		}
+		return message
+	}
+
+	ingressProg, egressProg, loadedOptions, warning, err := load(txDirectOptions)
+	if err == nil {
+		return ingressProg, egressProg, loadedOptions, warning, nil
+	}
+
+	loadErr := err
+	if txDirectOptions.RouteTCPXmitKfunc {
+		if experimentalTCPTXDirectRouteTCPXmitKfuncRequired() {
 			return ingressProg, egressProg, loadedOptions, warning, err
 		}
-		return ingressProg, egressProg, loadedOptions, warning, err
+		fallbackOptions := txDirectOptions
+		fallbackOptions.RouteTCPXmitKfunc = false
+		fallbackOptions.RouteTCPXmitKfuncCall = asm.Instruction{}
+		ingressProg, egressProg, loadedOptions, fallbackWarning, fallbackErr := load(fallbackOptions)
+		if fallbackErr == nil {
+			message := "experimental_tcp TC TX direct route TCP xmit kfunc disabled after verifier/load rejection: " + err.Error()
+			return ingressProg, egressProg, loadedOptions, appendFallbackWarning(message, fallbackWarning), nil
+		}
+		loadErr = fmt.Errorf("%w; retry without experimental_tcp route TCP xmit kfunc: %v", loadErr, fallbackErr)
+	}
+
+	if txDirectOptions.RouteTCPGSOKfunc {
+		if experimentalTCPTXDirectRouteTCPGSOKfuncRequired() {
+			return ingressProg, egressProg, loadedOptions, warning, loadErr
+		}
+		fallbackOptions := txDirectOptions
+		fallbackOptions.RouteTCPGSOKfunc = false
+		fallbackOptions.RouteTCPGSOKfuncCall = asm.Instruction{}
+		fallbackOptions.RouteTCPGSOAsyncKfunc = false
+		fallbackOptions.RouteTCPXmitKfunc = false
+		fallbackOptions.RouteTCPXmitKfuncCall = asm.Instruction{}
+		ingressProg, egressProg, loadedOptions, fallbackWarning, fallbackErr := load(fallbackOptions)
+		if fallbackErr == nil {
+			message := "experimental_tcp TC TX direct route TCP GSO kfunc disabled after verifier/load rejection: " + loadErr.Error()
+			return ingressProg, egressProg, loadedOptions, appendFallbackWarning(message, fallbackWarning), nil
+		}
+		loadErr = fmt.Errorf("%w; retry without experimental_tcp route TCP GSO kfunc: %v", loadErr, fallbackErr)
+	}
+
+	if !txDirectOptions.PushRouteTCPHeaderKfunc || experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequired() {
+		return ingressProg, egressProg, loadedOptions, warning, loadErr
 	}
 
 	fallbackOptions := txDirectOptions
@@ -14451,31 +14531,15 @@ func loadTCFastPathProgramsWithExperimentalTCPRouteKfuncFallback(
 	fallbackOptions.PushRouteTCPHeaderKfuncCall = asm.Instruction{}
 	fallbackOptions.RouteTCPGSOKfunc = false
 	fallbackOptions.RouteTCPGSOKfuncCall = asm.Instruction{}
+	fallbackOptions.RouteTCPGSOAsyncKfunc = false
 	fallbackOptions.RouteTCPXmitKfunc = false
 	fallbackOptions.RouteTCPXmitKfuncCall = asm.Instruction{}
-	ingressProg, egressProg, loadedOptions, fallbackWarning, fallbackErr := loadTCFastPathProgramsWithInnerTCPKfuncFallback(
-		statsMap,
-		packetPolicyMap,
-		routeMap,
-		kernelUDPTXRouteMap,
-		kernelUDPTXFlowMap,
-		natConfigMap,
-		natSourceMap,
-		natRouteMap,
-		natExcludeMap,
-		natBindingMap,
-		captureMap,
-		captureScratchMap,
-		fallbackOptions,
-	)
+	ingressProg, egressProg, loadedOptions, fallbackWarning, fallbackErr := load(fallbackOptions)
 	if fallbackErr != nil {
-		return nil, nil, txDirectOptions, "", fmt.Errorf("%w; retry without experimental_tcp route TCP header-push kfunc: %v", err, fallbackErr)
+		return nil, nil, txDirectOptions, "", fmt.Errorf("%w; retry without experimental_tcp route TCP header-push kfunc: %v", loadErr, fallbackErr)
 	}
-	message := "experimental_tcp TC TX direct route TCP header-push kfunc disabled after verifier/load rejection: " + err.Error()
-	if fallbackWarning != "" {
-		message += "; " + fallbackWarning
-	}
-	return ingressProg, egressProg, loadedOptions, message, nil
+	message := "experimental_tcp TC TX direct route TCP header-push kfunc disabled after verifier/load rejection: " + loadErr.Error()
+	return ingressProg, egressProg, loadedOptions, appendFallbackWarning(message, fallbackWarning), nil
 }
 
 func loadKernelUDPRXDirectProgramWithOptions(name string, statsMap *cebpf.Map, portMap *cebpf.Map, neighMap *cebpf.Map, lanIfindex int, sourceMAC net.HardwareAddr, options kernelUDPRXDirectProgramOptions) (*cebpf.Program, error) {
@@ -15378,12 +15442,12 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 	finalizeOuterTCPKfuncPath := opts.ExperimentalTCPOnly && !opts.KernelUDPOnly && opts.OuterTCPKfunc && opts.OuterTCPKfuncCall.IsKfuncCall() && !experimentalTCPSkipOuterTCPChecksum()
 	tcpPartialCSUMKfuncPath := opts.ExperimentalTCPOnly && !opts.KernelUDPOnly && opts.TCPPartialCSUMKfunc && opts.TCPPartialCSUMKfuncCall.IsKfuncCall() && !experimentalTCPSkipOuterTCPChecksum()
 	pushOuterTCPKfuncPath := opts.ExperimentalTCPOnly && !opts.KernelUDPOnly && opts.PushTCPHeaderKfunc && opts.PushTCPHeaderKfuncCall.IsKfuncCall() && !experimentalTCPSkipOuterTCPChecksum()
-	pushFlowOuterTCPKfuncPath := opts.ExperimentalTCPOnly && !opts.KernelUDPOnly && opts.PushFlowTCPHeaderKfunc && opts.PushFlowTCPHeaderKfuncCall.IsKfuncCall() && !experimentalTCPSkipOuterTCPChecksum() && !experimentalTCPTXDirectPreOuterInnerChecksumEnabled()
-	finalizeFlowOuterTCPKfuncPath := opts.ExperimentalTCPOnly && !opts.KernelUDPOnly && opts.FinalizeFlowTCPHeaderKfunc && opts.FinalizeFlowTCPHeaderKfuncCall.IsKfuncCall() && !experimentalTCPSkipOuterTCPChecksum() && !experimentalTCPTXDirectPreOuterInnerChecksumEnabled()
-	pushRouteOuterTCPKfuncPath := opts.ExperimentalTCPOnly && !opts.KernelUDPOnly && opts.DirectOnly && opts.PushRouteTCPHeaderKfunc && opts.PushRouteTCPHeaderKfuncCall.IsKfuncCall() && !experimentalTCPSkipOuterTCPChecksum() && !experimentalTCPTXDirectPreOuterInnerChecksumEnabled()
+	preOuterInnerChecksum := experimentalTCPTXDirectPreOuterInnerChecksumEnabledForOptions(opts)
+	pushFlowOuterTCPKfuncPath := opts.ExperimentalTCPOnly && !opts.KernelUDPOnly && opts.PushFlowTCPHeaderKfunc && opts.PushFlowTCPHeaderKfuncCall.IsKfuncCall() && !experimentalTCPSkipOuterTCPChecksum() && !preOuterInnerChecksum
+	finalizeFlowOuterTCPKfuncPath := opts.ExperimentalTCPOnly && !opts.KernelUDPOnly && opts.FinalizeFlowTCPHeaderKfunc && opts.FinalizeFlowTCPHeaderKfuncCall.IsKfuncCall() && !experimentalTCPSkipOuterTCPChecksum() && !preOuterInnerChecksum
+	pushRouteOuterTCPKfuncPath := opts.ExperimentalTCPOnly && !opts.KernelUDPOnly && opts.DirectOnly && opts.PushRouteTCPHeaderKfunc && opts.PushRouteTCPHeaderKfuncCall.IsKfuncCall() && !experimentalTCPSkipOuterTCPChecksum() && !preOuterInnerChecksum
 	routeTCPGSOKfuncPath := pushRouteOuterTCPKfuncPath && opts.RouteTCPGSOKfunc && opts.RouteTCPGSOKfuncCall.IsKfuncCall()
 	routeTCPXmitKfuncPath := routeTCPGSOKfuncPath && opts.RouteTCPXmitKfunc && opts.RouteTCPXmitKfuncCall.IsKfuncCall()
-	routeTCPGSOAsyncKfuncPath := routeTCPGSOKfuncPath && experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequested()
 	if pushFlowOuterTCPKfuncPath {
 		finalizeFlowOuterTCPKfuncPath = false
 		pushOuterTCPKfuncPath = false
@@ -15400,7 +15464,7 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 		tcpPartialCSUMKfuncPath = false
 	}
 	if activeGSO && opts.ExperimentalTCPOnly && !finalizeFlowOuterTCPKfuncPath &&
-		!routeTCPGSOAsyncKfuncPath && !experimentalTCPTXDirectActiveGSOUnsafeEnabled() {
+		!routeTCPGSOKfuncPath && !experimentalTCPTXDirectActiveGSOUnsafeEnabled() {
 		activeGSO = false
 	}
 	udpHeaderKfuncArgsPath := buildUDPHeaderKfuncPath || finalizeUDPHeaderKfuncPath || pushUDPHeaderKfuncPath
@@ -15496,25 +15560,27 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 		}
 		instructions = append(instructions, asm.StoreImm(asm.RFP, kernelUDPTXGSOActiveOffset, 0, asm.Word))
 		if routeTCPGSOKfuncPath {
-			routeTCPCall := opts.RouteTCPGSOKfuncCall
 			if routeTCPXmitKfuncPath {
-				routeTCPCall = opts.RouteTCPXmitKfuncCall
+				instructions = append(instructions,
+					asm.LoadMem(asm.R4, asm.R6, skbGSOSizeOffset, asm.Word).WithSymbol("kudp_tx_direct_route_tcp_gso_check"),
+					asm.JEq.Imm(asm.R4, 0, "kudp_tx_direct_route_tcp_xmit_kfunc_prepare"),
+				)
 			} else {
 				instructions = append(instructions,
 					asm.LoadMem(asm.R4, asm.R6, skbGSOSizeOffset, asm.Word).WithSymbol("kudp_tx_direct_route_tcp_gso_check"),
-					asm.JEq.Imm(asm.R4, 0, "kudp_tx_direct_push_route_outer_tcp_header_kfunc"),
+					asm.JEq.Imm(asm.R4, 0, "kudp_tx_direct_route_tcp_linear_kfunc"),
 				)
 			}
 			instructions = append(instructions,
+				asm.LoadMem(asm.R4, asm.R0, 72, asm.Word).WithSymbol("kudp_tx_direct_route_tcp_single_flow_guard"),
+				asm.JNE.Imm(asm.R4, 0, "kudp_tx_direct_fallback"),
 				asm.StoreImm(asm.RFP, kernelUDPTXTIXTSegmentRouteTCPGSOArgsClearFlagsOffset, int64(gsoFlags), asm.Word),
 				asm.Mov.Reg(asm.R2, asm.R0),
 				asm.Mov.Reg(asm.R1, asm.R6).WithSymbol("kudp_tx_direct_route_tcp_kfunc"),
 				asm.Mov.Reg(asm.R3, asm.RFP),
 				asm.Add.Imm(asm.R3, kernelUDPTXTIXTSegmentRouteTCPGSOArgsOffset),
-				routeTCPCall,
+				opts.RouteTCPGSOKfuncCall,
 				asm.JEq.Imm(asm.R0, experimentalTCPTXRouteGSOSegmentsStolen, "kudp_tx_direct_segment_route_tcp_gso_stolen"),
-				asm.JEq.Imm(asm.R0, experimentalTCPTXRouteXmitStolen, "kudp_tx_direct_route_tcp_xmit_stolen"),
-				asm.JEq.Imm(asm.R0, experimentalTCPTXRouteXmitQueued, "kudp_tx_direct_route_tcp_xmit_queued"),
 				asm.JEq.Imm(asm.R0, -int32(unix.EPROTONOSUPPORT), "kudp_tx_direct_segment_route_tcp_gso_fallback"),
 				asm.JEq.Imm(asm.R0, -int32(unix.EOPNOTSUPP), "kudp_tx_direct_segment_route_tcp_gso_fallback"),
 				asm.JEq.Imm(asm.R0, -int32(unix.EMSGSIZE), "kudp_tx_direct_mtu_kind_fallback"),
@@ -15524,8 +15590,26 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 			)
 			if routeTCPXmitKfuncPath {
 				instructions = append(instructions,
+					asm.JSLT.Imm(asm.R0, 0, "kudp_tx_direct_adjust_drop"),
+					asm.JEq.Imm(asm.R0, 0, "kudp_tx_direct_adjust_drop"),
+					asm.Ja.Label("kudp_tx_direct_route_tcp_gso_redirect"),
+					asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord).WithSymbol("kudp_tx_direct_route_tcp_xmit_kfunc_prepare"),
+					asm.LoadMem(asm.R4, asm.R0, 72, asm.Word),
+					asm.JNE.Imm(asm.R4, 0, "kudp_tx_direct_fallback"),
+					asm.StoreImm(asm.RFP, kernelUDPTXTIXTSegmentRouteTCPGSOArgsClearFlagsOffset, int64(gsoFlags), asm.Word),
+					asm.Mov.Reg(asm.R2, asm.R0),
+					asm.Mov.Reg(asm.R1, asm.R6).WithSymbol("kudp_tx_direct_route_tcp_xmit_kfunc"),
+					asm.Mov.Reg(asm.R3, asm.RFP),
+					asm.Add.Imm(asm.R3, kernelUDPTXTIXTSegmentRouteTCPGSOArgsOffset),
+					opts.RouteTCPXmitKfuncCall,
+					asm.JEq.Imm(asm.R0, experimentalTCPTXRouteXmitStolen, "kudp_tx_direct_route_tcp_xmit_stolen"),
+					asm.JEq.Imm(asm.R0, experimentalTCPTXRouteXmitQueued, "kudp_tx_direct_route_tcp_xmit_queued"),
+					asm.JEq.Imm(asm.R0, -int32(unix.EPROTONOSUPPORT), "kudp_tx_direct_route_tcp_xmit_fallback"),
+					asm.JEq.Imm(asm.R0, -int32(unix.EOPNOTSUPP), "kudp_tx_direct_route_tcp_xmit_fallback"),
+					asm.JEq.Imm(asm.R0, -int32(unix.EMSGSIZE), "kudp_tx_direct_mtu_kind_fallback"),
 					asm.JSLT.Imm(asm.R0, 0, "kudp_tx_direct_route_tcp_xmit_drop"),
 					asm.JEq.Imm(asm.R0, 0, "kudp_tx_direct_route_tcp_xmit_drop"),
+					asm.Ja.Label("kudp_tx_direct_route_tcp_xmit_fallback"),
 				)
 			} else {
 				instructions = append(instructions,
@@ -15534,28 +15618,16 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 				)
 				instructions = append(instructions,
 					asm.Ja.Label("kudp_tx_direct_route_tcp_kfunc_done"),
-					asm.StoreImm(asm.RFP, kernelUDPTXTIXTPushRouteTCPHeaderArgsClearFlagsOffset, int64(flags), asm.Word).WithSymbol("kudp_tx_direct_push_route_outer_tcp_header_kfunc"),
-					asm.Mov.Reg(asm.R2, asm.R0),
-					asm.Mov.Reg(asm.R1, asm.R6),
-					asm.Mov.Reg(asm.R3, asm.RFP),
-					asm.Add.Imm(asm.R3, kernelUDPTXTIXTPushRouteTCPHeaderArgsOffset),
-					opts.PushRouteTCPHeaderKfuncCall,
-					asm.JEq.Imm(asm.R0, -int32(unix.EPROTONOSUPPORT), "kudp_tx_direct_inline_route_unsupported"),
-					asm.JEq.Imm(asm.R0, -int32(unix.EOPNOTSUPP), "kudp_tx_direct_inline_route_unsupported"),
-					asm.JEq.Imm(asm.R0, -int32(unix.EMSGSIZE), "kudp_tx_direct_mtu_kind_fallback"),
-					asm.JSLT.Imm(asm.R0, 0, "kudp_tx_direct_adjust_drop"),
-					asm.JEq.Imm(asm.R0, 0, "kudp_tx_direct_adjust_drop"),
-					asm.StoreMem(asm.RFP, kernelUDPTXIfindexOffset, asm.R0, asm.Word),
-					asm.LoadMem(asm.R7, asm.R6, skbDataOffset, asm.Word),
-					asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word),
 					asm.Mov.Reg(asm.R0, asm.R0).WithSymbol("kudp_tx_direct_route_tcp_kfunc_done"),
 				)
 			}
 		} else {
 			instructions = append(instructions,
 				asm.StoreImm(asm.RFP, kernelUDPTXTIXTPushRouteTCPHeaderArgsClearFlagsOffset, int64(flags), asm.Word),
+				asm.LoadMem(asm.R4, asm.R0, 72, asm.Word).WithSymbol("kudp_tx_direct_push_route_outer_tcp_header_kfunc"),
+				asm.JNE.Imm(asm.R4, 0, "kudp_tx_direct_inline_route_unsupported"),
 				asm.Mov.Reg(asm.R2, asm.R0),
-				asm.Mov.Reg(asm.R1, asm.R6).WithSymbol("kudp_tx_direct_push_route_outer_tcp_header_kfunc"),
+				asm.Mov.Reg(asm.R1, asm.R6),
 				asm.Mov.Reg(asm.R3, asm.RFP),
 				asm.Add.Imm(asm.R3, kernelUDPTXTIXTPushRouteTCPHeaderArgsOffset),
 				opts.PushRouteTCPHeaderKfuncCall,
@@ -15569,20 +15641,39 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 				asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word),
 			)
 		}
-		instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXStatSuccess, "kudp_tx_direct_success_counter_done")
-		instructions = append(instructions,
-			asm.LoadMem(asm.R1, asm.RFP, kernelUDPTXIfindexOffset, asm.Word),
-			asm.Mov.Imm(asm.R2, 0),
-		)
-		if opts.RedirectPeer {
-			instructions = append(instructions, asm.FnRedirectPeer.Call())
-		} else {
-			instructions = append(instructions, asm.FnRedirect.Call())
+		if !(routeTCPGSOKfuncPath && routeTCPXmitKfuncPath) {
+			instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXStatSuccess, "kudp_tx_direct_success_counter_done")
+			instructions = append(instructions,
+				asm.LoadMem(asm.R1, asm.RFP, kernelUDPTXIfindexOffset, asm.Word),
+				asm.Mov.Imm(asm.R2, 0),
+			)
+			if opts.RedirectPeer {
+				instructions = append(instructions, asm.FnRedirectPeer.Call())
+			} else {
+				instructions = append(instructions, asm.FnRedirect.Call())
+			}
+			instructions = append(instructions,
+				asm.Return(),
+			)
 		}
-		instructions = append(instructions,
-			asm.Return(),
-		)
 		if routeTCPGSOKfuncPath {
+			if routeTCPXmitKfuncPath {
+				instructions = append(instructions,
+					asm.Mov.Imm(asm.R0, 0).WithSymbol("kudp_tx_direct_route_tcp_gso_redirect"),
+				)
+				instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXDirectStatRouteTCPGSOSuccesses, "kudp_tx_direct_route_tcp_gso_redirect_success_counter_done")
+				instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXStatSuccess, "kudp_tx_direct_route_tcp_gso_redirect_tx_success_counter_done")
+				instructions = append(instructions,
+					asm.LoadMem(asm.R1, asm.RFP, kernelUDPTXIfindexOffset, asm.Word),
+					asm.Mov.Imm(asm.R2, 0),
+				)
+				if opts.RedirectPeer {
+					instructions = append(instructions, asm.FnRedirectPeer.Call())
+				} else {
+					instructions = append(instructions, asm.FnRedirect.Call())
+				}
+				instructions = append(instructions, asm.Return())
+			}
 			instructions = append(instructions,
 				asm.Mov.Imm(asm.R0, 0).WithSymbol("kudp_tx_direct_segment_route_tcp_gso_stolen"),
 			)
@@ -15591,92 +15682,141 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 			instructions = append(instructions,
 				asm.Mov.Imm(asm.R0, tcActShot),
 				asm.Return(),
-				asm.Mov.Imm(asm.R0, 0).WithSymbol("kudp_tx_direct_route_tcp_xmit_stolen"),
 			)
-			instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXDirectStatRouteTCPXmitSuccesses, "kudp_tx_direct_route_tcp_xmit_success_counter_done")
-			instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXStatSuccess, "kudp_tx_direct_success_counter_done")
+			if routeTCPXmitKfuncPath {
+				instructions = append(instructions,
+					asm.Mov.Imm(asm.R0, 0).WithSymbol("kudp_tx_direct_route_tcp_xmit_stolen"),
+				)
+				instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXDirectStatRouteTCPXmitSuccesses, "kudp_tx_direct_route_tcp_xmit_success_counter_done")
+				instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXStatSuccess, "kudp_tx_direct_success_counter_done")
+				instructions = append(instructions,
+					asm.Mov.Imm(asm.R0, tcActStolen),
+					asm.Return(),
+					asm.Mov.Imm(asm.R0, 0).WithSymbol("kudp_tx_direct_route_tcp_xmit_queued"),
+				)
+				instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXDirectStatRouteTCPXmitSuccesses, "kudp_tx_direct_route_tcp_xmit_queued_success_counter_done")
+				instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXStatSuccess, "kudp_tx_direct_queued_success_counter_done")
+				instructions = append(instructions,
+					asm.Mov.Imm(asm.R0, tcActShot),
+					asm.Return(),
+				)
+			}
 			instructions = append(instructions,
-				asm.Mov.Imm(asm.R0, tcActStolen),
-				asm.Return(),
-				asm.Mov.Imm(asm.R0, 0).WithSymbol("kudp_tx_direct_route_tcp_xmit_queued"),
-			)
-			instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXDirectStatRouteTCPXmitSuccesses, "kudp_tx_direct_route_tcp_xmit_queued_success_counter_done")
-			instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXStatSuccess, "kudp_tx_direct_queued_success_counter_done")
-			instructions = append(instructions,
-				asm.Mov.Imm(asm.R0, tcActShot),
-				asm.Return(),
 				asm.Mov.Imm(asm.R0, 0).WithSymbol("kudp_tx_direct_segment_route_tcp_gso_fallback"),
 			)
 			instructions = appendCounter(instructions, statsMap, kernelUDPTXDirectStatRouteTCPGSOFallbacks, "kudp_tx_direct_segment_route_tcp_gso_fallback_counter_done")
 			if routeTCPXmitKfuncPath {
+				instructions = append(instructions,
+					asm.Ja.Label("kudp_tx_direct_fallback"),
+					asm.Mov.Imm(asm.R0, 0).WithSymbol("kudp_tx_direct_route_tcp_xmit_fallback"),
+				)
 				instructions = appendCounter(instructions, statsMap, kernelUDPTXDirectStatRouteTCPXmitFallbacks, "kudp_tx_direct_route_tcp_xmit_fallback_counter_done")
+				instructions = append(instructions, asm.Ja.Label("kudp_tx_direct_route_tcp_linear_kfunc"))
 			}
-			instructions = append(instructions, asm.Ja.Label("kudp_tx_direct_inline_route_unsupported"))
+			if !routeTCPXmitKfuncPath {
+				instructions = append(instructions, asm.Ja.Label("kudp_tx_direct_fallback"))
+			}
+			instructions = append(instructions,
+				asm.StoreImm(asm.RFP, kernelUDPTXTIXTPushRouteTCPHeaderArgsClearFlagsOffset, int64(flags), asm.Word).WithSymbol("kudp_tx_direct_route_tcp_linear_kfunc"),
+				asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord),
+				asm.LoadMem(asm.R4, asm.R0, 72, asm.Word),
+				asm.JNE.Imm(asm.R4, 0, "kudp_tx_direct_fallback"),
+				asm.Mov.Reg(asm.R2, asm.R0),
+				asm.Mov.Reg(asm.R1, asm.R6),
+				asm.Mov.Reg(asm.R3, asm.RFP),
+				asm.Add.Imm(asm.R3, kernelUDPTXTIXTPushRouteTCPHeaderArgsOffset),
+				opts.PushRouteTCPHeaderKfuncCall,
+				asm.JEq.Imm(asm.R0, -int32(unix.EPROTONOSUPPORT), "kudp_tx_direct_fallback"),
+				asm.JEq.Imm(asm.R0, -int32(unix.EOPNOTSUPP), "kudp_tx_direct_fallback"),
+				asm.JEq.Imm(asm.R0, -int32(unix.EMSGSIZE), "kudp_tx_direct_mtu_kind_fallback"),
+				asm.JSLT.Imm(asm.R0, 0, "kudp_tx_direct_adjust_drop"),
+				asm.JEq.Imm(asm.R0, 0, "kudp_tx_direct_adjust_drop"),
+				asm.StoreMem(asm.RFP, kernelUDPTXIfindexOffset, asm.R0, asm.Word),
+				asm.LoadMem(asm.R7, asm.R6, skbDataOffset, asm.Word),
+				asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word),
+			)
+			instructions = appendHotPathCounter(instructions, statsMap, kernelUDPTXStatSuccess, "kudp_tx_direct_route_tcp_linear_success_counter_done")
+			instructions = append(instructions,
+				asm.LoadMem(asm.R1, asm.RFP, kernelUDPTXIfindexOffset, asm.Word),
+				asm.Mov.Imm(asm.R2, 0),
+			)
+			if opts.RedirectPeer {
+				instructions = append(instructions, asm.FnRedirectPeer.Call())
+			} else {
+				instructions = append(instructions, asm.FnRedirect.Call())
+			}
+			instructions = append(instructions, asm.Return())
 		}
 		if routeTCPXmitKfuncPath {
 			instructions = append(instructions, asm.Mov.Imm(asm.R0, 0).WithSymbol("kudp_tx_direct_route_tcp_xmit_drop"))
 			instructions = appendCounter(instructions, statsMap, kernelUDPTXDirectStatRouteTCPXmitDrops, "kudp_tx_direct_route_tcp_xmit_drop_counter_done")
 			instructions = append(instructions, asm.Ja.Label("kudp_tx_direct_adjust_drop"))
 		}
+		if !routeTCPGSOKfuncPath {
+			instructions = append(instructions,
+				asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord).WithSymbol("kudp_tx_direct_inline_route_unsupported"),
+				asm.LoadMem(asm.R1, asm.R0, 72, asm.Word),
+				asm.JEq.Imm(asm.R1, 0, "kudp_tx_direct_inline_default"),
+				asm.StoreMem(asm.RFP, kernelUDPTXFlowMaskScratchOffset, asm.R1, asm.Word),
+			)
+		}
+	}
+	if !routeTCPGSOKfuncPath {
 		instructions = append(instructions,
-			asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord).WithSymbol("kudp_tx_direct_inline_route_unsupported"),
-			asm.LoadMem(asm.R1, asm.R0, 72, asm.Word),
 			asm.JEq.Imm(asm.R1, 0, "kudp_tx_direct_inline_default"),
-			asm.StoreMem(asm.RFP, kernelUDPTXFlowMaskScratchOffset, asm.R1, asm.Word),
+		)
+		if !pushRouteOuterTCPKfuncPath {
+			instructions = append(instructions, asm.StoreMem(asm.RFP, kernelUDPTXFlowMaskScratchOffset, asm.R1, asm.Word))
+		}
+		if kernelUDPTXDirectSKBFlowHashEnabled() {
+			instructions = appendKernelUDPTXDirectSKBFlowHash(instructions, "kudp_tx_direct_inline_hash_ready")
+		} else {
+			instructions = appendKernelUDPTXDirectInnerFlowHash(instructions, "kudp_tx_direct_inline_hash_ready", "kudp_tx_direct_inline_default")
+		}
+		instructions = append(instructions,
+			asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord),
+			asm.LoadMem(asm.R1, asm.RFP, kernelUDPTXFlowMaskScratchOffset, asm.Word),
+			asm.And.Reg(asm.R2, asm.R1),
+			asm.JEq.Imm(asm.R2, 0, "kudp_tx_direct_inline_pick_1"),
+			asm.JEq.Imm(asm.R2, 1, "kudp_tx_direct_inline_pick_2"),
+			asm.JEq.Imm(asm.R2, 2, "kudp_tx_direct_inline_pick_3"),
+			asm.JEq.Imm(asm.R2, 3, "kudp_tx_direct_inline_pick_4"),
+			asm.JEq.Imm(asm.R2, 4, "kudp_tx_direct_inline_pick_5"),
+			asm.JEq.Imm(asm.R2, 5, "kudp_tx_direct_inline_pick_6"),
+			asm.JEq.Imm(asm.R2, 6, "kudp_tx_direct_inline_pick_7"),
+			asm.LoadMem(asm.R1, asm.R0, 64, asm.DWord),
+			asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow8Offset),
+			asm.Ja.Label("kudp_tx_direct_inline_selected"),
+			asm.LoadMem(asm.R1, asm.R0, 8, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_1"),
+			asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlowOffset),
+			asm.Ja.Label("kudp_tx_direct_inline_selected"),
+			asm.LoadMem(asm.R1, asm.R0, 16, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_2"),
+			asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow2Offset),
+			asm.Ja.Label("kudp_tx_direct_inline_selected"),
+			asm.LoadMem(asm.R1, asm.R0, 24, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_3"),
+			asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow3Offset),
+			asm.Ja.Label("kudp_tx_direct_inline_selected"),
+			asm.LoadMem(asm.R1, asm.R0, 32, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_4"),
+			asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow4Offset),
+			asm.Ja.Label("kudp_tx_direct_inline_selected"),
+			asm.LoadMem(asm.R1, asm.R0, 40, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_5"),
+			asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow5Offset),
+			asm.Ja.Label("kudp_tx_direct_inline_selected"),
+			asm.LoadMem(asm.R1, asm.R0, 48, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_6"),
+			asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow6Offset),
+			asm.Ja.Label("kudp_tx_direct_inline_selected"),
+			asm.LoadMem(asm.R1, asm.R0, 56, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_7"),
+			asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow7Offset),
+			asm.Ja.Label("kudp_tx_direct_inline_selected"),
+			asm.LoadMem(asm.R1, asm.R0, 0, asm.DWord).WithSymbol("kudp_tx_direct_inline_default"),
+			asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlowOffset),
+			asm.JEq.Imm(asm.R1, 0, routeFlowZeroLabel),
+			asm.Mov.Reg(asm.R1, asm.R1).WithSymbol("kudp_tx_direct_inline_selected"),
+			asm.JEq.Imm(asm.R1, 0, routeFlowZeroLabel),
+			asm.StoreMem(asm.RFP, kernelUDPTXFlowKeyOffset, asm.R1, asm.DWord),
 		)
 	}
 	instructions = append(instructions,
-		asm.JEq.Imm(asm.R1, 0, "kudp_tx_direct_inline_default"),
-	)
-	if !pushRouteOuterTCPKfuncPath {
-		instructions = append(instructions, asm.StoreMem(asm.RFP, kernelUDPTXFlowMaskScratchOffset, asm.R1, asm.Word))
-	}
-	if kernelUDPTXDirectSKBFlowHashEnabled() {
-		instructions = appendKernelUDPTXDirectSKBFlowHash(instructions, "kudp_tx_direct_inline_hash_ready")
-	} else {
-		instructions = appendKernelUDPTXDirectInnerFlowHash(instructions, "kudp_tx_direct_inline_hash_ready", "kudp_tx_direct_inline_default")
-	}
-	instructions = append(instructions,
-		asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord),
-		asm.LoadMem(asm.R1, asm.RFP, kernelUDPTXFlowMaskScratchOffset, asm.Word),
-		asm.And.Reg(asm.R2, asm.R1),
-		asm.JEq.Imm(asm.R2, 0, "kudp_tx_direct_inline_pick_1"),
-		asm.JEq.Imm(asm.R2, 1, "kudp_tx_direct_inline_pick_2"),
-		asm.JEq.Imm(asm.R2, 2, "kudp_tx_direct_inline_pick_3"),
-		asm.JEq.Imm(asm.R2, 3, "kudp_tx_direct_inline_pick_4"),
-		asm.JEq.Imm(asm.R2, 4, "kudp_tx_direct_inline_pick_5"),
-		asm.JEq.Imm(asm.R2, 5, "kudp_tx_direct_inline_pick_6"),
-		asm.JEq.Imm(asm.R2, 6, "kudp_tx_direct_inline_pick_7"),
-		asm.LoadMem(asm.R1, asm.R0, 64, asm.DWord),
-		asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow8Offset),
-		asm.Ja.Label("kudp_tx_direct_inline_selected"),
-		asm.LoadMem(asm.R1, asm.R0, 8, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_1"),
-		asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlowOffset),
-		asm.Ja.Label("kudp_tx_direct_inline_selected"),
-		asm.LoadMem(asm.R1, asm.R0, 16, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_2"),
-		asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow2Offset),
-		asm.Ja.Label("kudp_tx_direct_inline_selected"),
-		asm.LoadMem(asm.R1, asm.R0, 24, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_3"),
-		asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow3Offset),
-		asm.Ja.Label("kudp_tx_direct_inline_selected"),
-		asm.LoadMem(asm.R1, asm.R0, 32, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_4"),
-		asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow4Offset),
-		asm.Ja.Label("kudp_tx_direct_inline_selected"),
-		asm.LoadMem(asm.R1, asm.R0, 40, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_5"),
-		asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow5Offset),
-		asm.Ja.Label("kudp_tx_direct_inline_selected"),
-		asm.LoadMem(asm.R1, asm.R0, 48, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_6"),
-		asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow6Offset),
-		asm.Ja.Label("kudp_tx_direct_inline_selected"),
-		asm.LoadMem(asm.R1, asm.R0, 56, asm.DWord).WithSymbol("kudp_tx_direct_inline_pick_7"),
-		asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlow7Offset),
-		asm.Ja.Label("kudp_tx_direct_inline_selected"),
-		asm.LoadMem(asm.R1, asm.R0, 0, asm.DWord).WithSymbol("kudp_tx_direct_inline_default"),
-		asm.Add.Imm(asm.R0, kernelUDPTXRouteInlineFlowOffset),
-		asm.JEq.Imm(asm.R1, 0, routeFlowZeroLabel),
-		asm.Mov.Reg(asm.R1, asm.R1).WithSymbol("kudp_tx_direct_inline_selected"),
-		asm.JEq.Imm(asm.R1, 0, routeFlowZeroLabel),
-		asm.StoreMem(asm.RFP, kernelUDPTXFlowKeyOffset, asm.R1, asm.DWord),
 
 		// Plain TC direct-TX only handles flows explicitly marked plaintext. Secure
 		// flows are handled by the optional kernel_udp secure direct object before
@@ -16281,7 +16421,7 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 		checksumOpts := opts
 		checksumOpts.KernelUDPOnly = true
 		checksumOpts.ExperimentalTCPOnly = false
-		if !pushRouteOuterTCPKfuncPath && !pushFlowOuterTCPKfuncPath && !finalizeFlowOuterTCPKfuncPath && experimentalTCPTXDirectPreOuterInnerChecksumEnabled() && kernelUDPTXDirectInnerTCPChecksumEnabledForOptions(checksumOpts) {
+		if !pushRouteOuterTCPKfuncPath && !pushFlowOuterTCPKfuncPath && !finalizeFlowOuterTCPKfuncPath && preOuterInnerChecksum && kernelUDPTXDirectInnerTCPChecksumEnabledForOptions(checksumOpts) {
 			instructions = appendKernelUDPTXDirectInnerTCPChecksumAtOffset(instructions, statsMap, checksumOpts, rejectEthernetHeaderLen, "kudp_tx_direct_inner_tixt_pre_csum", "kudp_tx_direct_fallback")
 		}
 	}
@@ -19433,15 +19573,15 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_inline_flows", Value: manager.kernelUDPTXDirectInlineFlows})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_route_cache_enabled", Value: boolCounter(manager.kernelUDPTXDirectRouteCacheEnabled)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_route_cache_exception", Value: boolCounter(manager.kernelUDPTXDirectRouteCacheException)})
-	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_experimental_tcp_only", Value: boolCounter(kernelUDPTXDirectExperimentalTCPOnlyEnabled())})
-	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_kernel_udp_only", Value: boolCounter(kernelUDPTXDirectKernelUDPOnlyEnabled())})
+	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_experimental_tcp_only", Value: boolCounter(kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(manager.spec))})
+	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_kernel_udp_only", Value: boolCounter(kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(manager.spec))})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_only_enabled", Value: boolCounter(kernelUDPTXDirectOnlyEnabled(manager.spec))})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_plain_skip_sequence", Value: boolCounter(kernelUDPTXDirectSkipPlainSequenceEnabled())})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_strong_flow_hash", Value: boolCounter(kernelUDPTXDirectStrongFlowHashEnabled())})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_skb_flow_hash", Value: boolCounter(kernelUDPTXDirectSKBFlowHashEnabled())})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_port_flow_hash", Value: boolCounter(kernelUDPTXDirectPortFlowHashEnabled())})
-	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_plain_skip_sequence", Value: boolCounter(experimentalTCPTXPlainSkipSequenceEnabled())})
-	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_plain_ack_only", Value: boolCounter(experimentalTCPTXPlainACKOnlyEnabled())})
+	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_plain_skip_sequence", Value: boolCounter(experimentalTCPTXPlainSkipSequenceEnabledForSpec(manager.spec))})
+	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_plain_ack_only", Value: boolCounter(experimentalTCPTXPlainACKOnlyEnabledForSpec(manager.spec))})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_inner_tcp_checksum_kfunc", Value: boolCounter(manager.kernelUDPTXDirectInnerTCPChecksumKfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_inner_tcp_checksum_kfunc_requested", Value: boolCounter(kernelUDPTXDirectInnerTCPChecksumKfuncEnabled())})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_outer_tcp_checksum_kfunc", Value: boolCounter(manager.kernelUDPTXDirectOuterTCPChecksumKfunc)})
@@ -19457,16 +19597,18 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_finalize_flow_outer_tcp_header_kfunc", Value: boolCounter(manager.kernelUDPTXDirectFinalizeFlowTCPHeaderKfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_finalize_flow_outer_tcp_header_kfunc_requested", Value: boolCounter(experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested())})
 	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_push_route_outer_tcp_header_kfunc", Value: boolCounter(manager.kernelUDPTXDirectPushRouteTCPHeaderKfunc)})
-	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_push_route_outer_tcp_header_kfunc_requested", Value: boolCounter(experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequested())})
+	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_push_route_outer_tcp_header_kfunc_requested", Value: boolCounter(experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(manager.spec))})
 	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_route_tcp_gso_kfunc", Value: boolCounter(manager.kernelUDPTXDirectRouteTCPGSOKfunc)})
-	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_route_tcp_gso_kfunc_requested", Value: boolCounter(experimentalTCPTXDirectRouteTCPGSOKfuncRequested())})
+	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_route_tcp_gso_kfunc_requested", Value: boolCounter(experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(manager.spec))})
+	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc", Value: boolCounter(manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc)})
+	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested", Value: boolCounter(experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(manager.spec))})
 	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_route_tcp_xmit_kfunc", Value: boolCounter(manager.kernelUDPTXDirectRouteTCPXmitKfunc)})
-	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_route_tcp_xmit_kfunc_requested", Value: boolCounter(experimentalTCPTXDirectRouteTCPXmitKfuncRequested())})
+	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_route_tcp_xmit_kfunc_requested", Value: boolCounter(experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(manager.spec))})
 	counters = append(counters, observability.Counter{Name: "tc_experimental_tcp_tx_direct_route_tcp_gso_trust_partial_inner_checksum", Value: boolCounter(experimentalTCPTXDirectRouteTCPGSOTrustPartialInnerChecksumEnabled())})
 	if underlayLink, err := netlink.LinkByName(manager.spec.UnderlayIface); err == nil {
-		counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_redirect_peer", Value: boolCounter(kernelUDPTXDirectRedirectPeerEnabledForLink(underlayLink, kernelUDPTXDirectKernelUDPOnlyEnabled(), kernelUDPTXDirectOnlyEnabled(manager.spec)))})
+		counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_redirect_peer", Value: boolCounter(kernelUDPTXDirectRedirectPeerEnabledForLink(underlayLink, kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(manager.spec), kernelUDPTXDirectOnlyEnabled(manager.spec)))})
 	} else {
-		counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_redirect_peer", Value: boolCounter(kernelUDPTXDirectRedirectPeerEnabledForLink(nil, kernelUDPTXDirectKernelUDPOnlyEnabled(), kernelUDPTXDirectOnlyEnabled(manager.spec)))})
+		counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_redirect_peer", Value: boolCounter(kernelUDPTXDirectRedirectPeerEnabledForLink(nil, kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(manager.spec), kernelUDPTXDirectOnlyEnabled(manager.spec)))})
 	}
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_skb_clear_tx_offload", Value: boolCounter(kernelUDPTXDirectSKBClearTXOffloadEnabled())})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_direct_skb_clear_tx_offload_gso", Value: boolCounter(kernelUDPTXDirectSKBClearTXOffloadGSOEnabled())})
@@ -19513,16 +19655,17 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_skb_open_kfunc", Value: boolCounter(kernelUDPRXSecureDirectSKBOpenKfuncEnabled())})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_recompute_inner_checksums", Value: boolCounter(kernelUDPRXSecureDirectRecomputeInnerChecksumEnabled())})
 	txDirectOptions := kernelUDPTXDirectProgramOptions{
-		Enabled:                          kernelUDPTXDirectProgramEnabled(),
-		ExperimentalTCPOnly:              kernelUDPTXDirectExperimentalTCPOnlyEnabled(),
-		KernelUDPOnly:                    kernelUDPTXDirectKernelUDPOnlyEnabled(),
+		Enabled:                          kernelUDPTXDirectProgramEnabledForSpec(manager.spec),
+		ExperimentalTCPOnly:              kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(manager.spec),
+		KernelUDPOnly:                    kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(manager.spec),
 		DirectOnly:                       kernelUDPTXDirectOnlyEnabled(manager.spec),
 		SkipPlainSequence:                kernelUDPTXDirectSkipPlainSequenceEnabled(),
-		ExperimentalTCPSkipPlainSequence: experimentalTCPTXPlainSkipSequenceEnabled(),
-		ExperimentalTCPACKOnly:           experimentalTCPTXPlainACKOnlyEnabled(),
+		ExperimentalTCPSkipPlainSequence: experimentalTCPTXPlainSkipSequenceEnabledForSpec(manager.spec),
+		ExperimentalTCPACKOnly:           experimentalTCPTXPlainACKOnlyEnabledForSpec(manager.spec),
 		FinalizeFlowTCPHeaderKfunc:       manager.kernelUDPTXDirectFinalizeFlowTCPHeaderKfunc,
 		PushRouteTCPHeaderKfunc:          manager.kernelUDPTXDirectPushRouteTCPHeaderKfunc,
 		RouteTCPGSOKfunc:                 manager.kernelUDPTXDirectRouteTCPGSOKfunc,
+		RouteTCPGSOAsyncKfunc:            manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc,
 		RouteTCPXmitKfunc:                manager.kernelUDPTXDirectRouteTCPXmitKfunc,
 	}
 	txAdjustRoomFlags := kernelUDPTCTXAdjustRoomFlagsForOptions(txDirectOptions)
@@ -19634,7 +19777,7 @@ func (manager *Manager) experimentalTCPCountersLocked(counters []observability.C
 	counters = append(counters, observability.Counter{Name: "experimental_tcp_received_frames", Value: manager.expTCPReceived})
 	counters = append(counters, observability.Counter{Name: "experimental_tcp_rx_duplicate_drops", Value: manager.expTCPRXDuplicateDrops})
 	counters = append(counters, observability.Counter{Name: "experimental_tcp_rx_reordered_batches", Value: manager.expTCPRXReorderedBatches})
-	counters = append(counters, observability.Counter{Name: "experimental_tcp_tc_tx_direct_enabled", Value: boolCounter(experimentalTCPTXDirectEnabled())})
+	counters = append(counters, observability.Counter{Name: "experimental_tcp_tc_tx_direct_enabled", Value: boolCounter(experimentalTCPTXDirectEnabledForSpec(manager.spec))})
 	counters = append(counters, observability.Counter{Name: "experimental_tcp_tc_tx_direct_configured_flows", Value: manager.experimentalTCPTXDirectConfiguredFlowsLocked()})
 	if manager.expTCPFastPath == nil {
 		return counters
@@ -19652,7 +19795,7 @@ func (manager *Manager) experimentalTCPCountersLocked(counters []observability.C
 }
 
 func (manager *Manager) experimentalTCPTXDirectConfiguredFlowsLocked() uint64 {
-	if manager == nil || !experimentalTCPTXDirectEnabled() {
+	if manager == nil || !experimentalTCPTXDirectEnabledForSpec(manager.spec) {
 		return 0
 	}
 	var count uint64
@@ -21043,7 +21186,7 @@ func (manager *Manager) syncKernelUDPTXDirectLocked() error {
 		return nil
 	}
 	routeCacheOK := kernelUDPTXDirectRouteCacheEnabled(kernelUDPTXDirectProgramOptions{
-		ExperimentalTCPOnly: kernelUDPTXDirectExperimentalTCPOnlyEnabled(),
+		ExperimentalTCPOnly: kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(manager.spec),
 		DirectOnly:          kernelUDPTXDirectOnlyEnabled(manager.spec),
 	}) && manager.kernelUDPTXRouteCacheMap != nil && manager.snapshot.NAT == nil && !secureDirect
 	var routeCache kernelUDPTXRouteCacheValue
@@ -21272,8 +21415,8 @@ func (manager *Manager) kernelUDPTXDirectPlaintextReadyLocked() bool {
 }
 
 func (manager *Manager) routeHasKernelUDPTXDirectPlaintextFlowLocked(route routing.Route) bool {
-	expTCPOnly := kernelUDPTXDirectExperimentalTCPOnlyEnabled()
-	kernelUDPOnly := !expTCPOnly && kernelUDPTXDirectKernelUDPOnlyEnabled()
+	expTCPOnly := kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(manager.spec)
+	kernelUDPOnly := !expTCPOnly && kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(manager.spec)
 	if !expTCPOnly {
 		for flowID, flow := range manager.kernelUDPFlows {
 			if flowID == 0 || flow.Peer == "" || flow.Peer != route.NextHop {
@@ -21287,7 +21430,7 @@ func (manager *Manager) routeHasKernelUDPTXDirectPlaintextFlowLocked(route routi
 			}
 		}
 	}
-	if !kernelUDPOnly && experimentalTCPTXDirectEnabled() {
+	if !kernelUDPOnly && experimentalTCPTXDirectEnabledForSpec(manager.spec) {
 		for flowID, flow := range manager.expTCPFlows {
 			if flowID == 0 || flow.Peer == "" || flow.Peer != route.NextHop {
 				continue
@@ -21693,7 +21836,7 @@ func (manager *Manager) kernelUDPRXPlaintextPassToTCLocked(enabled bool) bool {
 	if kernelUDPTXDirectSafeModeEnabled() {
 		return true
 	}
-	if experimentalTCPTXDirectEnabled() {
+	if experimentalTCPTXDirectEnabledForSpec(manager.spec) {
 		return true
 	}
 	return kernelUDPTXDirectOnlyEnabled(manager.spec)
@@ -21996,8 +22139,8 @@ func (manager *Manager) kernelUDPTXDirectFlowsForRouteLocked(route routing.Route
 	if route.NextHop == "" {
 		return nil
 	}
-	expTCPOnly := kernelUDPTXDirectExperimentalTCPOnlyEnabled()
-	kernelUDPOnly := !expTCPOnly && kernelUDPTXDirectKernelUDPOnlyEnabled()
+	expTCPOnly := kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(manager.spec)
+	kernelUDPOnly := !expTCPOnly && kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(manager.spec)
 	totalFlows := 0
 	if expTCPOnly || !kernelUDPOnly {
 		totalFlows += len(manager.expTCPFlows)
@@ -22024,7 +22167,8 @@ func (manager *Manager) kernelUDPTXDirectFlowsForRouteLocked(route routing.Route
 			return nil
 		}
 	}
-	if !secureDirect && experimentalTCPTXPlaintextDirectMultiFlowEnabled() {
+	expTCPRouteMultiFlow := !secureDirect && experimentalTCPTXPlaintextDirectRouteMultiFlowEnabled()
+	if expTCPRouteMultiFlow {
 		candidates = manager.filterExperimentalTCPTXPlaintextDirectListenerSourcedFlowsLocked(route, candidates)
 		if len(candidates) == 0 {
 			return nil
@@ -22035,11 +22179,11 @@ func (manager *Manager) kernelUDPTXDirectFlowsForRouteLocked(route routing.Route
 	}
 	if !secureDirect {
 		candidates = manager.filterKernelUDPTXPlaintextDirectListenerSourcedFlowsLocked(route, candidates)
-		if experimentalTCPTXPlaintextDirectMultiFlowEnabled() {
+		if expTCPRouteMultiFlow {
 			candidates = manager.filterExperimentalTCPTXPlaintextDirectListenerSourcedFlowsLocked(route, candidates)
 		}
 		candidates = manager.filterKernelUDPTXDirectTransportLocked(route, candidates, secureDirect)
-		if experimentalTCPTXPlaintextDirectMultiFlowEnabled() {
+		if expTCPRouteMultiFlow {
 			candidates = manager.filterKernelUDPTXPlaintextDirectListenerSourcedFlowsLocked(route, candidates)
 			candidates = manager.filterExperimentalTCPTXPlaintextDirectListenerSourcedFlowsLocked(route, candidates)
 		}
@@ -22253,7 +22397,7 @@ func (manager *Manager) selectExperimentalTCPTXPlaintextDirectFlowLocked(route r
 	if !expTCPOnly {
 		return kernelUDPTXRouteFlow{}, false
 	}
-	if !secureDirect && experimentalTCPTXPlaintextDirectMultiFlowEnabled() {
+	if !secureDirect && experimentalTCPTXPlaintextDirectRouteMultiFlowEnabled() {
 		return kernelUDPTXRouteFlow{}, false
 	}
 	expTCPListenPort, hasExpTCPListenPort := manager.localExperimentalTCPListenPortLocked()
@@ -22429,7 +22573,7 @@ func (manager *Manager) collectKernelUDPTXDirectFlowsForRouteLocked(candidates *
 }
 
 func (manager *Manager) collectExperimentalTCPTXDirectFlowsForRouteLocked(candidates *[]kernelUDPTXRouteFlow, route routing.Route, force bool, secureDirect bool) {
-	if candidates == nil || !experimentalTCPTXDirectEnabled() {
+	if candidates == nil || !experimentalTCPTXDirectEnabledForSpec(manager.spec) {
 		return
 	}
 	for flowID, flow := range manager.expTCPFlows {
@@ -22643,6 +22787,22 @@ func experimentalTCPTXDirectPreOuterInnerChecksumEnabled() bool {
 	return !kernelUDPTXSecureDirectTrustInnerChecksums()
 }
 
+func experimentalTCPTXDirectPreOuterInnerChecksumEnabledForOptions(options kernelUDPTXDirectProgramOptions) bool {
+	if envTruthy("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM") {
+		return true
+	}
+	if envFalsey("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM") {
+		return false
+	}
+	if options.PushRouteTCPHeaderKfunc && (options.RouteTCPGSOKfunc || options.RouteTCPXmitKfunc) {
+		return false
+	}
+	if options.PushRouteTCPHeaderKfunc && experimentalTCPTXDirectOuterTCPHeaderKfuncPartialChecksumEnabled() {
+		return false
+	}
+	return experimentalTCPTXDirectPreOuterInnerChecksumEnabled()
+}
+
 func experimentalTCPTXDirectRouteTCPGSOTrustPartialInnerChecksumEnabled() bool {
 	return envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM",
@@ -22654,21 +22814,23 @@ func experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequested() bool {
 	if kernelUDPTXDirectSafeModeEnabled() {
 		return false
 	}
-	if !experimentalTCPAsyncRouteGSOAcknowledged() {
-		return false
-	}
 	if envFalsey(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_SEGMENT_ROUTE_TCP_GSO_ASYNC_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_ASYNC_KFUNC",
 	) {
 		return false
 	}
 	return envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_SEGMENT_ROUTE_TCP_GSO_ASYNC_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_ASYNC_KFUNC",
 	)
+}
+
+func experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec dataplane.AttachSpec) bool {
+	if spec.ExperimentalTCPRouteGSOAsync {
+		return true
+	}
+	return experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequested()
 }
 
 func experimentalTCPTXDirectPacketChecksumEnabled() bool {
@@ -22941,6 +23103,17 @@ func experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequested() bool {
 	)
 }
 
+func experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec dataplane.AttachSpec) bool {
+	if envFalsey(
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_OUTER_TCP_HEADER_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_KFUNC",
+	) {
+		return false
+	}
+	return spec.ExperimentalTCPRouteGSOSync || experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequested()
+}
+
 func experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequired() bool {
 	return envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC_REQUIRED",
@@ -22950,58 +23123,67 @@ func experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequired() bool {
 }
 
 func experimentalTCPTXDirectRouteTCPGSOKfuncRequested() bool {
-	if kernelUDPTXDirectSafeModeEnabled() {
-		return false
-	}
-	if !experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequested() &&
-		!experimentalTCPUnsafeRouteTCPKfuncsAcknowledged() {
-		return false
-	}
 	if envFalsey(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_SEGMENT_ROUTE_TCP_GSO_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_GSO_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_KFUNC",
 	) {
 		return false
 	}
-	return envTruthy(
+	if envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_SEGMENT_ROUTE_TCP_GSO_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_GSO_KFUNC",
-	)
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_KFUNC",
+	) {
+		return true
+	}
+	return experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequested()
+}
+
+func experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec dataplane.AttachSpec) bool {
+	if envFalsey(
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_KFUNC",
+	) {
+		return false
+	}
+	return spec.ExperimentalTCPRouteGSOSync ||
+		experimentalTCPTXDirectRouteTCPGSOKfuncRequested() ||
+		experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec)
 }
 
 func experimentalTCPTXDirectRouteTCPGSOKfuncRequired() bool {
-	return envTruthy(
+	return experimentalTCPTXDirectRouteTCPGSOKfuncRequested() && envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC_REQUIRED",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_SEGMENT_ROUTE_TCP_GSO_KFUNC_REQUIRED",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_GSO_KFUNC_REQUIRED",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_KFUNC_REQUIRED",
 	)
 }
 
 func experimentalTCPTXDirectRouteTCPXmitKfuncRequested() bool {
-	if kernelUDPTXDirectSafeModeEnabled() {
-		return false
-	}
-	if !experimentalTCPUnsafeRouteTCPKfuncsAcknowledged() {
-		return false
-	}
 	if envFalsey(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_XMIT_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_WORKER_KFUNC",
 	) {
 		return false
 	}
 	return envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_XMIT_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_WORKER_KFUNC",
 	)
 }
 
+func experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec dataplane.AttachSpec) bool {
+	if envFalsey(
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_WORKER_KFUNC",
+	) {
+		return false
+	}
+	return spec.ExperimentalTCPRouteXmitWorker || experimentalTCPTXDirectRouteTCPXmitKfuncRequested()
+}
+
 func experimentalTCPTXDirectRouteTCPXmitKfuncRequired() bool {
-	return envTruthy(
+	return experimentalTCPTXDirectRouteTCPXmitKfuncRequested() && envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC_REQUIRED",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_XMIT_KFUNC_REQUIRED",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_WORKER_KFUNC_REQUIRED",
 	)
 }
 
@@ -23020,6 +23202,16 @@ func experimentalTCPTXPlainSkipSequenceEnabled() bool {
 	)
 }
 
+func experimentalTCPTXPlainSkipSequenceEnabledForSpec(spec dataplane.AttachSpec) bool {
+	if envFalsey(
+		"TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE",
+		"TRUSTIX_TIXT_TX_PLAIN_SKIP_SEQUENCE",
+	) {
+		return false
+	}
+	return spec.ExperimentalTCPPlainSkipSequence || experimentalTCPTXPlainSkipSequenceEnabled()
+}
+
 func experimentalTCPTXPlainACKOnlyEnabled() bool {
 	return envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY",
@@ -23027,10 +23219,31 @@ func experimentalTCPTXPlainACKOnlyEnabled() bool {
 	)
 }
 
+func experimentalTCPTXPlainACKOnlyEnabledForSpec(spec dataplane.AttachSpec) bool {
+	if envFalsey(
+		"TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY",
+		"TRUSTIX_TIXT_TX_PLAIN_ACK_ONLY",
+	) {
+		return false
+	}
+	return spec.ExperimentalTCPPlainACKOnly || experimentalTCPTXPlainACKOnlyEnabled()
+}
+
 func experimentalTCPTXPlaintextDirectMultiFlowEnabled() bool {
 	return envTruthy(
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_MULTI_FLOW",
 		"TRUSTIX_EXPERIMENTAL_TCP_PLAINTEXT_DIRECT_MULTI_FLOW",
+	)
+}
+
+func experimentalTCPTXPlaintextDirectRouteMultiFlowEnabled() bool {
+	if !experimentalTCPTXPlaintextDirectMultiFlowEnabled() {
+		return false
+	}
+	return envTruthy(
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW",
+		"TRUSTIX_EXPERIMENTAL_TCP_PLAINTEXT_DIRECT_ROUTE_MULTI_FLOW",
 	)
 }
 
@@ -23108,6 +23321,16 @@ func kernelUDPTXDirectExperimentalTCPOnlyEnabled() bool {
 	)
 }
 
+func kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec dataplane.AttachSpec) bool {
+	if envFalsey(
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY",
+	) {
+		return false
+	}
+	return spec.ExperimentalTCPTXDirect || kernelUDPTXDirectExperimentalTCPOnlyEnabled()
+}
+
 func kernelUDPTXDirectKernelUDPOnlyEnabled() bool {
 	if kernelUDPTXDirectExperimentalTCPOnlyEnabled() {
 		return false
@@ -23125,6 +23348,25 @@ func kernelUDPTXDirectKernelUDPOnlyEnabled() bool {
 		return true
 	}
 	return !experimentalTCPTXDirectEnabled()
+}
+
+func kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec dataplane.AttachSpec) bool {
+	if kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec) {
+		return false
+	}
+	if envFalsey(
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_ONLY",
+	) {
+		return false
+	}
+	if envTruthy(
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_ONLY",
+	) {
+		return true
+	}
+	return !experimentalTCPTXDirectEnabledForSpec(spec)
 }
 
 func kernelUDPTXDirectOnlyEnabled(spec dataplane.AttachSpec) bool {

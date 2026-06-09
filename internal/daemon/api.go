@@ -155,6 +155,7 @@ func (daemon *Daemon) hostAPIHandler() http.Handler {
 func (daemon *Daemon) managementHandler(auth managementAuthOptions) http.Handler {
 	api := daemon.managementAuthMiddleware(daemon.managementMux(), auth)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setHTTPResponseSecurityHeaders(w)
 		if daemon.serveIXProvisionIfRequest(w, r) {
 			return
 		}
@@ -244,7 +245,10 @@ func (daemon *Daemon) peerHandler() http.Handler {
 	mux.HandleFunc("GET /v1/control/route/trace", daemon.handleControlRouteTrace)
 	mux.HandleFunc("POST /v1/control/config/events", daemon.handleControlConfigEventsPost)
 	mux.HandleFunc("/v1/control/management", daemon.handleControlManagementProxy)
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setHTTPResponseSecurityHeaders(w)
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (daemon *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +287,7 @@ func (daemon *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 			Policies:       len(daemon.desired.Policies),
 		},
 		DomainIX:       daemon.domainIXStatus(time.Now().UTC(), view.DataPath),
-		DomainPrefixes: domainPrefixStatusForRoutes(daemon.desired.IX.ID, view.Routes, daemon.runtimeRoutePolicyStatus().Decisions),
+		DomainPrefixes: domainPrefixStatusForRoutes(daemon.desired.IX.ID, view.Routes, daemon.runtimeRoutePolicyDecisions()),
 		Transports:     transportNames(daemon.transports.Names()),
 		Dataplane:      fmt.Sprintf("%T", daemon.dataplane),
 		DataplaneEpoch: view.DataplaneStats.Epoch,
@@ -297,7 +301,13 @@ func (daemon *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (daemon *Daemon) handlePeers(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, daemon.controlViewSnapshot().Peers)
+	offset, limit, err := parsePaginationParams(r, 0)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	peers, _, _ := paginateSlice(daemon.controlViewSnapshot().Peers, offset, limit)
+	writeJSON(w, http.StatusOK, peers)
 }
 
 func (daemon *Daemon) domainIXStatus(now time.Time, dataPath dataPathStatus) domainIXStatus {
@@ -466,7 +476,13 @@ func domainPrefixStatusForRoutes(localIX core.IXID, routes []routing.Route, deci
 }
 
 func (daemon *Daemon) handleRoutes(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, daemon.controlViewSnapshot().Routes)
+	offset, limit, err := parsePaginationParams(r, 0)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	routes, _, _ := paginateSlice(daemon.controlViewSnapshot().Routes, offset, limit)
+	writeJSON(w, http.StatusOK, routes)
 }
 
 type routeProbeResponse struct {
@@ -1041,7 +1057,12 @@ func (daemon *Daemon) routeProbeEndpoints(endpoints []config.EndpointConfig) []r
 }
 
 func (daemon *Daemon) handleRoutePolicy(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, daemon.runtimeRoutePolicyStatus())
+	status, err := daemon.runtimeRoutePolicyStatusForRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (daemon *Daemon) handleFlows(w http.ResponseWriter, r *http.Request) {
@@ -1437,7 +1458,10 @@ func (daemon *Daemon) handleControlAdvertisements(w http.ResponseWriter, r *http
 
 func (daemon *Daemon) handleControlMembers(w http.ResponseWriter, r *http.Request) {
 	target, _ := daemon.controlRequestTarget(r)
-	response := daemon.controlMembersResponse(target)
+	response := daemon.controlMembersResponse(target, controlMembersPageOptions{
+		Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")),
+		Limit:  controlMembersLimitFromQuery(r.URL.Query().Get("limit"), daemon.controlMemberPageSize()),
+	})
 	payload, err := json.Marshal(response)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -1454,7 +1478,24 @@ func (daemon *Daemon) handleControlMembers(w http.ResponseWriter, r *http.Reques
 	_, _ = w.Write(payload)
 }
 
-func (daemon *Daemon) controlMembersResponse(target controlTarget) membersResponse {
+type controlMembersPageOptions struct {
+	Cursor string
+	Limit  int
+}
+
+func controlMembersLimitFromQuery(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 0 {
+		return fallback
+	}
+	return clampControlMemberPageSize(limit)
+}
+
+func (daemon *Daemon) controlMembersResponse(target controlTarget, page controlMembersPageOptions) membersResponse {
 	now := time.Now().UTC()
 	var targetedLocal *advertisementResponse
 	if target.ID != "" {
@@ -1464,8 +1505,10 @@ func (daemon *Daemon) controlMembersResponse(target controlTarget) membersRespon
 	}
 	daemon.membershipMu.RLock()
 	defer daemon.membershipMu.RUnlock()
+	remoteLimit := clampControlMemberPageSize(page.Limit)
 	members := make([]advertisementResponse, 0, len(daemon.members)+1)
 	localID := core.IXID(daemon.localAd.IXID)
+	targetedMemberAdded := false
 	if daemon.localAd.IXID != "" {
 		local := daemon.localAd
 		if targetedLocal != nil {
@@ -1473,22 +1516,62 @@ func (daemon *Daemon) controlMembersResponse(target controlTarget) membersRespon
 		}
 		members = append(members, local)
 	}
+	if target.ID != "" && target.ID != localID {
+		if record, ok := daemon.members[target.ID]; ok && record.Direct && now.Sub(record.LastSeen) <= memberRecordTTL {
+			members = append(members, record.Advertisement)
+			targetedMemberAdded = true
+		}
+	}
 	ids := make([]string, 0, len(daemon.members))
 	for ixID := range daemon.members {
 		if localID != "" && ixID == localID {
 			continue
 		}
-		ids = append(ids, string(ixID))
-	}
-	sort.Strings(ids)
-	for _, rawID := range ids {
-		record := daemon.members[core.IXID(rawID)]
+		if target.ID != "" && ixID == target.ID {
+			continue
+		}
+		record := daemon.members[ixID]
 		if !record.Direct || now.Sub(record.LastSeen) > memberRecordTTL {
 			continue
 		}
-		members = append(members, record.Advertisement)
+		ids = append(ids, string(ixID))
 	}
-	return membersResponse{Members: members}
+	sort.Strings(ids)
+	start := 0
+	if cursor := strings.TrimSpace(page.Cursor); cursor != "" {
+		start = sort.Search(len(ids), func(index int) bool {
+			return ids[index] > cursor
+		})
+	}
+	addedRemote := 0
+	lastRemote := ""
+	for _, rawID := range ids[start:] {
+		if remoteLimit > 0 && addedRemote >= remoteLimit {
+			break
+		}
+		record := daemon.members[core.IXID(rawID)]
+		members = append(members, record.Advertisement)
+		addedRemote++
+		lastRemote = rawID
+	}
+	nextCursor := ""
+	if remoteLimit > 0 && start+addedRemote < len(ids) && lastRemote != "" {
+		nextCursor = lastRemote
+	}
+	total := len(ids)
+	if daemon.localAd.IXID != "" {
+		total++
+	}
+	if targetedMemberAdded {
+		total++
+	}
+	return membersResponse{
+		Members:    members,
+		NextCursor: nextCursor,
+		Limit:      remoteLimit,
+		Total:      total,
+		Truncated:  nextCursor != "",
+	}
 }
 
 func (daemon *Daemon) controlRequestTarget(r *http.Request) (controlTarget, bool) {
@@ -1932,11 +2015,33 @@ func experimentalTCPDoctorDetail(status dataPathStatus) string {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
+	setHTTPResponseSecurityHeaders(w)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	_ = encoder.Encode(value)
+}
+
+func setHTTPResponseSecurityHeaders(w http.ResponseWriter) {
+	header := w.Header()
+	if header.Get("X-Content-Type-Options") == "" {
+		header.Set("X-Content-Type-Options", "nosniff")
+	}
+	if header.Get("Referrer-Policy") == "" {
+		header.Set("Referrer-Policy", "no-referrer")
+	}
+	if header.Get("Permissions-Policy") == "" {
+		header.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	}
+}
+
+func setSensitiveResponseHeaders(w http.ResponseWriter) {
+	setHTTPResponseSecurityHeaders(w)
+	header := w.Header()
+	header.Set("Cache-Control", "no-store")
+	header.Set("Pragma", "no-cache")
+	header.Set("Expires", "0")
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {

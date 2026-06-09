@@ -82,6 +82,7 @@ func (daemon *Daemon) handleConfigExport(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	setSensitiveResponseHeaders(w)
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", response.filename))
 	w.Header().Set("X-TrustIX-Export-Manifest", response.manifestSummaryHeader())

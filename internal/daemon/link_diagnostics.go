@@ -15,8 +15,12 @@ import (
 )
 
 type linkDiagnosticsResponse struct {
-	LocalIX string                 `json:"local_ix"`
-	Links   []linkDiagnosticStatus `json:"links"`
+	LocalIX   string                 `json:"local_ix"`
+	Links     []linkDiagnosticStatus `json:"links"`
+	Total     int                    `json:"total,omitempty"`
+	Offset    int                    `json:"offset,omitempty"`
+	Limit     int                    `json:"limit,omitempty"`
+	Truncated bool                   `json:"truncated,omitempty"`
 }
 
 type linkDiagnosticStatus struct {
@@ -98,10 +102,15 @@ type linkDiagnosticTraffic struct {
 
 func (daemon *Daemon) handleLinks(w http.ResponseWriter, r *http.Request) {
 	peer := core.IXID(strings.TrimSpace(firstQueryValue(r.URL.Query(), "peer", "ix", "ix_id")))
-	writeJSON(w, http.StatusOK, daemon.linkDiagnostics(peer))
+	offset, limit, err := parsePaginationParams(r, 0)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, daemon.linkDiagnostics(peer, offset, limit))
 }
 
-func (daemon *Daemon) linkDiagnostics(peerFilter core.IXID) linkDiagnosticsResponse {
+func (daemon *Daemon) linkDiagnostics(peerFilter core.IXID, offset, limit int) linkDiagnosticsResponse {
 	view := daemon.controlViewSnapshot()
 	dataPath := view.DataPath
 	routes := view.Routes
@@ -156,9 +165,14 @@ func (daemon *Daemon) linkDiagnostics(peerFilter core.IXID) linkDiagnosticsRespo
 	sort.Slice(links, func(i, j int) bool {
 		return links[i].Peer < links[j].Peer
 	})
+	pagedLinks, total, truncated := paginateSlice(links, offset, limit)
 	return linkDiagnosticsResponse{
-		LocalIX: string(daemon.desired.IX.ID),
-		Links:   links,
+		LocalIX:   string(daemon.desired.IX.ID),
+		Links:     pagedLinks,
+		Total:     total,
+		Offset:    offset,
+		Limit:     limit,
+		Truncated: truncated,
 	}
 }
 

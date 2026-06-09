@@ -35,6 +35,11 @@ type AttachSpec struct {
 	KernelUDPTXSecureDirectKfuncSeal         bool            `json:"kernel_udp_tx_secure_direct_kfunc_seal,omitempty"`
 	KernelUDPTXSecureDirectSKBSealKfunc      bool            `json:"kernel_udp_tx_secure_direct_skb_seal_kfunc,omitempty"`
 	ExperimentalTCPTXDirect                  bool            `json:"experimental_tcp_tx_direct,omitempty"`
+	ExperimentalTCPRouteGSOSync              bool            `json:"experimental_tcp_route_gso_sync,omitempty"`
+	ExperimentalTCPRouteGSOAsync             bool            `json:"experimental_tcp_route_gso_async,omitempty"`
+	ExperimentalTCPRouteXmitWorker           bool            `json:"experimental_tcp_route_xmit_worker,omitempty"`
+	ExperimentalTCPPlainSkipSequence         bool            `json:"experimental_tcp_plain_skip_sequence,omitempty"`
+	ExperimentalTCPPlainACKOnly              bool            `json:"experimental_tcp_plain_ack_only,omitempty"`
 	PinPath                                  string          `json:"pin_path"`
 	DataDir                                  string          `json:"data_dir,omitempty"`
 	LANs                                     []LANAttachSpec `json:"lans,omitempty"`

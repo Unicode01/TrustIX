@@ -218,3 +218,20 @@ func TestManagementWebUIDoctorDegradedForHostUnauthenticatedWrites(t *testing.T)
 		t.Fatalf("web ui doctor = %#v, want host unauthenticated writes degraded", check)
 	}
 }
+
+func TestManagementWebUIDoctorWarnsForCustomDir(t *testing.T) {
+	daemon := &Daemon{
+		cfg: Config{APIAddr: "127.0.0.1:8787", APIAdminAuth: true},
+		desired: config.Desired{
+			Management: config.ManagementConfig{
+				WebUI: config.WebUIConfig{Enabled: true, CustomDir: "/opt/trustix-webui"},
+			},
+		},
+	}
+
+	check := daemon.managementWebUIDoctorCheck()
+
+	if check.Status != "warn" || !strings.Contains(check.Detail, "custom_dir=/opt/trustix-webui") || !strings.Contains(check.Detail, "Admin proof") {
+		t.Fatalf("web ui doctor = %#v, want custom_dir Admin proof warning", check)
+	}
+}

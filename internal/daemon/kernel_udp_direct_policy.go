@@ -92,6 +92,9 @@ func kernelUDPTXDirectOnlyFailClosedReasonForDesired(desired config.Desired) str
 }
 
 func kernelUDPTXDirectOnlyAttachForDesired(desired config.Desired) bool {
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		return true
+	}
 	if kernelUDPTXDirectOnlyFailClosedForDesired(desired) {
 		return true
 	}
@@ -102,6 +105,9 @@ func kernelUDPTXDirectOnlyAttachForDesired(desired config.Desired) bool {
 }
 
 func kernelUDPTXDirectOnlyAttachReasonForDesired(desired config.Desired) string {
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		return "transport_policy.experimental_tcp=performance route_gso_async_outer_gso=enabled encryption=plaintext"
+	}
 	if reason := kernelUDPTXDirectOnlyFailClosedReasonForDesired(desired); reason != "" {
 		return reason
 	}
@@ -186,8 +192,25 @@ func desiredTransportPolicyUsesOnlyDirectKernelTransports(desired config.Desired
 }
 
 func experimentalTCPTXDirectForDesired(desired config.Desired) bool {
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		return true
+	}
 	if !envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY") {
 		return false
 	}
 	return desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP)
+}
+
+func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		return false
+	}
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
+	if profile.Profile != config.TransportProfilePerformance {
+		return false
+	}
+	if profile.Datapath == config.TransportDatapathUserspace {
+		return false
+	}
+	return parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionPlaintext
 }

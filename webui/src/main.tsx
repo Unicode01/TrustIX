@@ -81,6 +81,14 @@ type RefreshOptions = {
 };
 
 const bootstrap = window.TRUSTIX_WEBUI || {};
+const WEBUI_LINK_LIMIT = 500;
+const WEBUI_PEER_LIMIT = 500;
+const WEBUI_ROUTE_LIMIT = 1000;
+const WEBUI_ROUTE_POLICY_LIMIT = 500;
+const runtimeLinksPath = `/links?limit=${WEBUI_LINK_LIMIT}`;
+const runtimePeersPath = `/peers?limit=${WEBUI_PEER_LIMIT}`;
+const runtimeRoutesPath = `/routes?limit=${WEBUI_ROUTE_LIMIT}`;
+const runtimeRoutePolicyPath = `/route-policy?decision_limit=${WEBUI_ROUTE_POLICY_LIMIT}&candidate_limit=${WEBUI_ROUTE_POLICY_LIMIT}`;
 
 function App() {
   const [themeSetting, setThemeSetting] = useState<ThemeSetting>(() => normalizeTheme(localStorage.getItem("trustix.ui.theme")));
@@ -201,10 +209,10 @@ function App() {
         api.getJSON<StatusPayload>("/status"),
         api.getJSON<DoctorCheck[]>("/doctor"),
         api.getJSON<KernelCapabilitiesPayload>("/kernel/capabilities").catch(() => null),
-        api.getJSON<LinksPayload>("/links"),
-        api.getJSON<PeerView[] | { members?: PeerView[] }>("/peers"),
-        api.getJSON<RouteView[]>("/routes"),
-        api.getJSON<RoutePolicyStatus>("/route-policy").catch(() => null),
+        api.getJSON<LinksPayload>(runtimeLinksPath),
+        api.getJSON<PeerView[] | { members?: PeerView[] }>(runtimePeersPath),
+        api.getJSON<RouteView[]>(runtimeRoutesPath),
+        api.getJSON<RoutePolicyStatus>(runtimeRoutePolicyPath).catch(() => null),
         api.getJSON<EndpointConfig[]>("/endpoints"),
         api.getJSON<DeviceAccessPayload>("/device-access").catch(() => null),
         api.getJSON<EndpointGrantsPayload>("/endpoint-grants").catch(() => null),
@@ -254,10 +262,10 @@ function App() {
         api.getJSON<StatusPayload>("/status"),
         api.getJSON<DoctorCheck[]>("/doctor"),
         api.getJSON<KernelCapabilitiesPayload>("/kernel/capabilities").catch(() => null),
-        api.getJSON<LinksPayload>("/links"),
-        api.getJSON<PeerView[] | { members?: PeerView[] }>("/peers"),
-        api.getJSON<RouteView[]>("/routes"),
-        api.getJSON<RoutePolicyStatus>("/route-policy").catch(() => null),
+        api.getJSON<LinksPayload>(runtimeLinksPath),
+        api.getJSON<PeerView[] | { members?: PeerView[] }>(runtimePeersPath),
+        api.getJSON<RouteView[]>(runtimeRoutesPath),
+        api.getJSON<RoutePolicyStatus>(runtimeRoutePolicyPath).catch(() => null),
         api.getJSON<EndpointConfig[]>("/endpoints"),
         api.getJSON<DeviceAccessPayload>("/device-access").catch(() => null),
         api.getJSON<EndpointGrantsPayload>("/endpoint-grants").catch(() => null),

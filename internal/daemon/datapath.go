@@ -34,6 +34,7 @@ const dataSessionHeartbeatDefaultTimeout = 3 * time.Second
 const dataSessionHeartbeatMaxMisses = 3
 const dataSessionHeartbeatRecentActivityGrace = 2
 const dataSessionEndpointUpRefreshInterval = 5 * time.Second
+const deviceAccessExpiryReaperInterval = 5 * time.Second
 const captureForwarderDefaultBuffer = 8192
 const captureForwarderMaxBuffer = 65536
 const captureForwarderDefaultWorkers = 1
@@ -434,10 +435,11 @@ type dataSessionBatch struct {
 }
 
 type dataSessionBatchConfig struct {
-	enabled  bool
-	maxBytes int
-	delay    time.Duration
-	ready    bool
+	enabled    bool
+	maxBytes   int
+	maxPackets int
+	delay      time.Duration
+	ready      bool
 }
 
 type captureForwardBatchCandidate struct {
@@ -1465,10 +1467,7 @@ func dataSessionBatchMaxBytes() int {
 	if err != nil || parsed < 1500 {
 		return dataSessionBatchDefaultBytes
 	}
-	if parsed > 512*1024 {
-		return 512 * 1024
-	}
-	return parsed
+	return clampDataSessionBatchBytes(parsed)
 }
 
 func dataSessionBatchDelay() time.Duration {
@@ -1480,10 +1479,7 @@ func dataSessionBatchDelay() time.Duration {
 	if err != nil || delay < 0 {
 		return dataSessionBatchDefaultDelay
 	}
-	if delay > 5*time.Millisecond {
-		return 5 * time.Millisecond
-	}
-	return delay
+	return clampDataSessionBatchDelay(delay)
 }
 
 func dataSessionSegmentFragmentingDatagramEnabled() bool {
@@ -1495,11 +1491,59 @@ func dataSessionSegmentFragmentingDatagramEnabled() bool {
 
 func dataSessionBatchConfigFromEnv() dataSessionBatchConfig {
 	return dataSessionBatchConfig{
-		enabled:  dataSessionBatchEnabled(),
-		maxBytes: dataSessionBatchMaxBytes(),
-		delay:    dataSessionBatchDelay(),
-		ready:    true,
+		enabled:    dataSessionBatchEnabled(),
+		maxBytes:   dataSessionBatchMaxBytes(),
+		maxPackets: dataSessionBatchMaxPackets,
+		delay:      dataSessionBatchDelay(),
+		ready:      true,
 	}
+}
+
+func (daemon *Daemon) dataSessionBatchConfigForEndpoint(endpoint config.EndpointConfig) dataSessionBatchConfig {
+	batching := dataSessionBatchConfigFromEnv()
+	if daemon == nil {
+		return batching
+	}
+	profile := config.EffectiveTransportProfile(daemon.desired.TransportPolicy, endpoint.Transport)
+	return dataSessionBatchConfigWithAdvanced(batching, profile.Advanced)
+}
+
+func dataSessionBatchConfigWithAdvanced(batching dataSessionBatchConfig, advanced config.TransportAdvancedConfig) dataSessionBatchConfig {
+	if advanced.BatchBytes > 0 {
+		batching.maxBytes = clampDataSessionBatchBytes(advanced.BatchBytes)
+	}
+	if advanced.MaxFrames > 0 {
+		batching.maxPackets = advanced.MaxFrames
+		if batching.maxPackets > dataSessionBatchMaxPackets {
+			batching.maxPackets = dataSessionBatchMaxPackets
+		}
+	}
+	if strings.TrimSpace(advanced.FlushDelay) != "" {
+		if delay, err := time.ParseDuration(strings.TrimSpace(advanced.FlushDelay)); err == nil {
+			batching.delay = clampDataSessionBatchDelay(delay)
+		}
+	}
+	if batching.maxPackets <= 0 {
+		batching.maxPackets = dataSessionBatchMaxPackets
+	}
+	return batching
+}
+
+func clampDataSessionBatchBytes(value int) int {
+	if value > 512*1024 {
+		return 512 * 1024
+	}
+	return value
+}
+
+func clampDataSessionBatchDelay(delay time.Duration) time.Duration {
+	if delay < 0 {
+		return dataSessionBatchDefaultDelay
+	}
+	if delay > 5*time.Millisecond {
+		return 5 * time.Millisecond
+	}
+	return delay
 }
 
 func dataSessionKernelCryptoBatchBytes() int {
@@ -1732,9 +1776,10 @@ func (daemon *Daemon) registerInboundDeviceSession(ctx context.Context, listener
 	if daemon.dataSessions == nil {
 		daemon.dataSessions = make(map[dataSessionKey]transport.Session)
 	}
-	lease, err := daemon.allocateDeviceAccessLease(identity)
+	lease, expiredSessions, err := daemon.allocateDeviceAccessLease(identity)
 	if err != nil {
 		daemon.dataMu.Unlock()
+		daemon.closeDroppedDataSessions(expiredSessions)
 		return nil, err
 	}
 	lease.AdvertisePrefixes = daemon.deviceAccessAdvertisePrefixesForIdentity(identity, lease)
@@ -1751,6 +1796,7 @@ func (daemon *Daemon) registerInboundDeviceSession(ctx context.Context, listener
 	runtime := daemon.startDataSessionRuntimeLocked(key, session, peer, endpoint)
 	daemon.dataSessionEpoch++
 	daemon.dataMu.Unlock()
+	daemon.closeDroppedDataSessions(expiredSessions)
 
 	if annotator, ok := session.(transport.PeerEndpointAnnotator); ok {
 		annotator.SetPeerEndpoint(peer.ID, endpoint.Name)
@@ -1818,14 +1864,14 @@ func (daemon *Daemon) deviceAccessLANForIdentity(identity transport.PeerIdentity
 	return lan, nil
 }
 
-func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity) (deviceAccessLease, error) {
+func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity) (deviceAccessLease, []droppedDataSession, error) {
 	lan, err := daemon.deviceAccessLANForIdentity(identity)
 	if err != nil {
-		return deviceAccessLease{}, err
+		return deviceAccessLease{}, nil, err
 	}
 	pool, err := netip.ParsePrefix(strings.TrimSpace(lan.DeviceAccess.AddressPool))
 	if err != nil {
-		return deviceAccessLease{}, fmt.Errorf("parse lan device_access address_pool: %w", err)
+		return deviceAccessLease{}, nil, fmt.Errorf("parse lan device_access address_pool: %w", err)
 	}
 	pool = pool.Masked()
 	key := deviceLeaseKey{IX: identity.Peer, Device: identity.Device}
@@ -1834,11 +1880,11 @@ func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity)
 	if daemon.deviceLeases == nil {
 		daemon.deviceLeases = make(map[deviceLeaseKey]deviceAccessLease)
 	}
-	daemon.pruneExpiredDeviceLeasesLocked(now)
+	expiredSessions := daemon.pruneExpiredDeviceLeasesLocked(now)
 	if existing, ok := daemon.deviceLeases[key]; ok && (existing.LANID == "" || existing.LANID == lan.ID) && existing.Address.IsValid() && pool.Contains(existing.Address) {
 		existing.LANID = lan.ID
 		existing.ExpiresAt = expiresAt
-		return existing, nil
+		return existing, expiredSessions, nil
 	}
 	used := make(map[netip.Addr]struct{}, len(daemon.deviceLeases)+1)
 	if gateway, ok := deviceAccessGatewayAddress(lan.Gateway); ok {
@@ -1851,7 +1897,7 @@ func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity)
 	}
 	addr, ok := firstFreeDeviceAccessAddress(pool, used)
 	if !ok {
-		return deviceAccessLease{}, fmt.Errorf("lan device_access address_pool %q has no free address", pool)
+		return deviceAccessLease{}, expiredSessions, fmt.Errorf("lan device_access address_pool %q has no free address", pool)
 	}
 	return deviceAccessLease{
 		Key:       key,
@@ -1859,7 +1905,7 @@ func (daemon *Daemon) allocateDeviceAccessLease(identity transport.PeerIdentity)
 		Address:   addr,
 		Prefix:    netip.PrefixFrom(addr, 32),
 		ExpiresAt: expiresAt,
-	}, nil
+	}, expiredSessions, nil
 }
 
 func (daemon *Daemon) deviceAccessAdvertisePrefixesForIdentity(identity transport.PeerIdentity, lease deviceAccessLease) []netip.Prefix {
@@ -1986,12 +2032,70 @@ func (daemon *Daemon) storeDeviceAccessLeaseLocked(lease deviceAccessLease) {
 	daemon.deviceLeases[lease.Key] = lease
 }
 
-func (daemon *Daemon) pruneExpiredDeviceLeasesLocked(now time.Time) {
+func (daemon *Daemon) pruneExpiredDeviceLeasesLocked(now time.Time) []droppedDataSession {
+	dropped := make([]droppedDataSession, 0)
 	for key, lease := range daemon.deviceLeases {
-		if !lease.ExpiresAt.IsZero() && now.After(lease.ExpiresAt) {
-			delete(daemon.deviceLeases, key)
+		if lease.ExpiresAt.IsZero() || now.Before(lease.ExpiresAt) {
+			continue
+		}
+		if lease.SessionKey != (dataSessionKey{}) {
+			session := daemon.dataSessions[lease.SessionKey]
+			if session != nil {
+				daemon.clearForwardCacheForSession(lease.SessionKey)
+			}
+			dropped = append(dropped, droppedDataSession{
+				session: session,
+				runtime: daemon.dataSessionState[lease.SessionKey],
+			})
+			delete(daemon.dataSessions, lease.SessionKey)
+			delete(daemon.dataSessionState, lease.SessionKey)
+			daemon.deleteSessionPoolCursorLocked(lease.SessionKey)
+			daemon.deleteSessionFlowBindingsLocked(lease.SessionKey)
+		} else {
+			dropped = append(dropped, droppedDataSession{})
+		}
+		delete(daemon.deviceLeases, key)
+	}
+	if len(dropped) > 0 {
+		daemon.dataSessionEpoch++
+	}
+	if len(daemon.dataSessions) == 0 {
+		daemon.sessionPoolRR = nil
+		daemon.sessionPoolFlow = nil
+	}
+	return dropped
+}
+
+func (daemon *Daemon) deviceAccessExpiryReaper(ctx context.Context) {
+	ticker := time.NewTicker(deviceAccessExpiryReaperInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			dropped := daemon.dropExpiredDeviceAccessSessions()
+			if dropped == 0 {
+				continue
+			}
+			_ = daemon.applyRuntimeDataplaneSnapshot(ctx)
+			if daemon.localAdvertisementConfigured() {
+				_ = daemon.refreshLocalAdvertisement()
+			}
 		}
 	}
+}
+
+func (daemon *Daemon) dropExpiredDeviceAccessSessions() int {
+	if daemon == nil || !daemon.deviceAccessEnabled() {
+		return 0
+	}
+	now := time.Now().UTC()
+	daemon.dataMu.Lock()
+	dropped := daemon.pruneExpiredDeviceLeasesLocked(now)
+	daemon.dataMu.Unlock()
+	daemon.closeDroppedDataSessions(dropped)
+	return len(dropped)
 }
 
 func deviceAccessGatewayAddress(raw string) (netip.Addr, bool) {
@@ -2091,7 +2195,7 @@ func (daemon *Daemon) refreshDeviceAccessClientRoutes() {
 	}
 	now := time.Now().UTC()
 	daemon.dataMu.Lock()
-	daemon.pruneExpiredDeviceLeasesLocked(now)
+	expiredSessions := daemon.pruneExpiredDeviceLeasesLocked(now)
 	updates := make([]update, 0, len(daemon.deviceLeases))
 	for _, lease := range daemon.deviceLeases {
 		session := daemon.dataSessions[lease.SessionKey]
@@ -2102,6 +2206,7 @@ func (daemon *Daemon) refreshDeviceAccessClientRoutes() {
 		updates = append(updates, update{runtime: runtime, session: session, lease: lease})
 	}
 	daemon.dataMu.Unlock()
+	daemon.closeDroppedDataSessions(expiredSessions)
 	for _, item := range updates {
 		routes := daemon.deviceAccessClientRoutesForLease(item.lease)
 		frame := encodeDataSessionDeviceLease(item.lease.Address, uint32(item.lease.Prefix.Bits()), item.lease.ExpiresAt, routes)
@@ -3458,7 +3563,7 @@ func (daemon *Daemon) sessionForEndpointWithOptions(ctx context.Context, peer co
 		}
 		return nil, key, nil, fmt.Errorf("peer %q endpoint %q address is empty", peer.ID, endpoint.Name)
 	}
-	if daemon.preferReverseSessionForAddressedKernelUDPSecure(cfgEndpoint, endpoint.Encryption) {
+	if daemon.preferReverseSessionForAddressedEndpoint(cfgEndpoint, endpoint.Encryption) {
 		if session, reverseKey, runtime := daemon.reverseSessionForEndpoint(peer.ID, cfgEndpoint, endpoint.Encryption, poolIndex); session != nil {
 			if options.RequireEpoch && !daemon.dataSessionEpochActive(epoch) {
 				return nil, key, nil, errDataSessionEpochChanged
@@ -3595,6 +3700,14 @@ func (daemon *Daemon) sessionForEndpointPoolIndexWithOptions(ctx context.Context
 			return session, reverseKey, nil
 		}
 		return nil, key, fmt.Errorf("peer %q endpoint %q address is empty", peer.ID, endpoint.Name)
+	}
+	if daemon.preferReverseSessionForAddressedEndpoint(cfgEndpoint, endpoint.Encryption) {
+		if session, reverseKey, _ := daemon.reverseSessionForEndpoint(peer.ID, cfgEndpoint, endpoint.Encryption, poolIndex); session != nil {
+			if options.RequireEpoch && !daemon.dataSessionEpochActive(epoch) {
+				return nil, key, errDataSessionEpochChanged
+			}
+			return session, reverseKey, nil
+		}
 	}
 	tr, ok := daemon.transports.Get(endpoint.Transport)
 	if !ok {
@@ -3774,6 +3887,20 @@ func (daemon *Daemon) preferReverseSessionForAddressedKernelUDPSecure(endpoint c
 	}
 }
 
+func (daemon *Daemon) preferReverseSessionForAddressedEndpoint(endpoint config.EndpointConfig, encryption string) bool {
+	if strings.TrimSpace(endpoint.Address) == "" {
+		return false
+	}
+	switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
+	case transport.ProtocolExperimentalTCP:
+		return true
+	case transport.ProtocolUDP:
+		return daemon.preferReverseSessionForAddressedKernelUDPSecure(endpoint, encryption)
+	default:
+		return false
+	}
+}
+
 func reverseDataSessionKey(peer core.IXID, endpoint config.EndpointConfig, encryption string) dataSessionKey {
 	return dataSessionKey{
 		Peer:       peer,
@@ -3841,7 +3968,7 @@ func (daemon *Daemon) missingSessionPoolIndexes(peer core.IXID, endpoint config.
 		if session == nil || key.PoolIndex < 0 || key.PoolIndex >= poolSize {
 			continue
 		}
-		if endpoint.Address == "" && reverseDataSessionKeyMatches(key, peer, endpoint, encryption) ||
+		if (endpoint.Address == "" || daemon.preferReverseSessionForAddressedEndpoint(endpoint, encryption)) && reverseDataSessionKeyMatches(key, peer, endpoint, encryption) ||
 			key.Peer == peer &&
 				key.Endpoint == endpoint.Name &&
 				key.Transport == transport.Protocol(endpoint.Transport) &&
@@ -3910,7 +4037,7 @@ func (daemon *Daemon) startDataSessionRuntimeLockedWithOptions(key dataSessionKe
 		peer:        peer,
 		endpoint:    endpoint,
 		cancel:      cancel,
-		batching:    dataSessionBatchConfigFromEnv(),
+		batching:    daemon.dataSessionBatchConfigForEndpoint(endpoint),
 		batchNotify: make(chan struct{}, 1),
 		controlOnly: controlOnly,
 		receiveData: receiveData,
@@ -4498,7 +4625,7 @@ func (daemon *Daemon) queueDataSessionPackets(runtime *dataSessionRuntime, sessi
 		runtime.batch.payload = append(runtime.batch.payload, packet...)
 		runtime.batch.count++
 		daemon.dataStats.recordDataSessionBatchQueued(packet)
-		if runtime.batch.count >= dataSessionBatchMaxPackets ||
+		if runtime.batch.count >= runtime.batching.maxPackets ||
 			len(runtime.batch.payload) >= maxBytes ||
 			(runtime.batching.delay > 0 && now.Sub(runtime.batch.firstSeen) >= runtime.batching.delay) {
 			if payload := takeDataSessionBatchPayloadLocked(&runtime.batch); len(payload) > 0 {
@@ -5613,6 +5740,10 @@ func (daemon *Daemon) localLANCacheSnapshot() localLANCache {
 }
 
 func (daemon *Daemon) forwardTransitPacket(ctx context.Context, packet []byte, dst netip.Addr) error {
+	if !daemon.transitForwardingEnabled() {
+		daemon.dataStats.recordDrop(observability.DropTransitDisabled)
+		return fmt.Errorf("transit forwarding is disabled for received packet destination %s", dst)
+	}
 	decision, ok := daemon.lookupRouteForPacket(dst, packet)
 	if !ok {
 		daemon.dataStats.routeMisses.Add(1)
@@ -5652,6 +5783,13 @@ func (daemon *Daemon) forwardTransitPacket(ctx context.Context, packet []byte, d
 		return err
 	}
 	return nil
+}
+
+func (daemon *Daemon) transitForwardingEnabled() bool {
+	if daemon == nil {
+		return true
+	}
+	return config.RoutePolicyTransitForwardingEnabled(daemon.desired.RoutePolicy)
 }
 
 func routeDropReason(route routing.Route) (observability.DropReason, bool) {

@@ -20,7 +20,9 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	if daemon.kernelHelpers == nil {
 		daemon.kernelHelpers = kernelmodule.NewTrustIXDatapathHelpersManager()
 	}
-	cryptoStatus, err := daemon.kernelCrypto.Ensure(ctx, desired.KernelModules.TrustIXCrypto)
+	cryptoModule := desired.KernelModules.TrustIXCrypto
+	cryptoModule.Parameters = TrustIXCryptoModuleParameters(cryptoModule.Parameters)
+	cryptoStatus, err := daemon.kernelCrypto.Ensure(ctx, cryptoModule)
 	if err != nil {
 		return []kernelmodule.Status{cryptoStatus}, err
 	}
@@ -32,7 +34,7 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 		return statuses, err
 	}
 	helpersModule := desired.KernelModules.TrustIXDatapathHelpers
-	helpersModule.Parameters = TrustIXDatapathHelpersModuleParameters(helpersModule.Parameters)
+	helpersModule.Parameters = TrustIXDatapathHelpersModuleParametersForDesired(helpersModule.Parameters, desired)
 	helpersStatus, err := daemon.kernelHelpers.Ensure(ctx, helpersModule)
 	statuses = append(statuses, helpersStatus)
 	if err != nil {
@@ -41,8 +43,17 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	return statuses, nil
 }
 
+func TrustIXCryptoModuleParameters(raw string) string {
+	return filterModuleParameters(raw, trustIXCryptoPanicRiskModuleParameters)
+}
+
 func TrustIXDatapathModuleParameters(raw string) string {
-	params := strings.TrimSpace(raw)
+	params := filterModuleParametersWithAllowlist(
+		raw,
+		trustIXDatapathPanicRiskModuleParameters,
+		trustIXDatapathSafeRXWorkerModuleParameters,
+		"rx_worker_",
+	)
 	fullPlaintext := envTruthyAny(
 		"TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT",
 		"TRUSTIX_KERNEL_DATAPATH_TX_PLAINTEXT",
@@ -55,121 +66,8 @@ func TrustIXDatapathModuleParameters(raw string) string {
 	if fullPlaintext {
 		params = appendModuleParameterIfMissing(params, "tx_plaintext=1")
 	}
-	if envTruthyAny(
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_STEAL",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_STOLEN",
-	) {
-		params = appendModuleParameterIfMissing(params, "rx_worker_steal_skb=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_STOLEN",
-	) {
-		params = appendModuleParameterIfMissing(params, "rx_worker_inline_stolen=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XMIT",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_LAN_XMIT",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_XMIT",
-	) && envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_UNSAFE_XMIT") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_xmit=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_DIRECT_XMIT") &&
-		envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_UNSAFE_XMIT") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_direct_xmit=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_XMIT") &&
-		envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_UNSAFE_XMIT") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_XMIT_NO_COPY_CSUM") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit_copy_csum=0")
-	}
 	if envFalsey("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_HOT_STATS") {
 		params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_PAIR_COALESCE") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_inline_pair_coalesce=1")
-		if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_PAIR_HOLD_SKB") {
-			params = appendModuleParameterIfMissing(params, "rx_worker_inline_pair_hold_skb=1")
-		}
-		params = appendModuleParameterFromEnvIfMissing(params, "rx_worker_inline_pair_flush_jiffies", "TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_PAIR_FLUSH_JIFFIES")
-		params = appendModuleParameterFromEnvIfMissing(params, "rx_worker_inline_coalesce_max_frames", "TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_COALESCE_MAX_FRAMES")
-	}
-	if envTruthyAny(
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_STEAL_XMIT",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_STEAL_XMIT",
-	) {
-		params = appendModuleParameterIfMissing(params, "rx_worker_steal_xmit=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_STEAL_TCP") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_steal_tcp=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_INLINE_RECEIVE",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_RECEIVE",
-	) {
-		params = appendModuleParameterIfMissing(params, "rx_worker_steal_skb=1")
-		params = appendModuleParameterIfMissing(params, "rx_worker_inline_stolen=1")
-		params = appendModuleParameterIfMissing(params, "rx_worker_inline_receive=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_TCP",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP",
-	) {
-		params = appendModuleParameterIfMissing(params, "rx_worker_tcp=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_STREAM_TCP",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_TCP_STREAM",
-	) {
-		params = appendModuleParameterIfMissing(params, "rx_worker_tcp=1")
-		params = appendModuleParameterIfMissing(params, "rx_worker_stream_tcp=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_STREAM_BATCH_QUEUE",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_TCP_STREAM_BATCH_QUEUE",
-	) {
-		params = appendModuleParameterIfMissing(params, "rx_worker_stream_batch_queue=1")
-	}
-	params = appendModuleParameterFromEnvIfMissing(
-		params,
-		"rx_worker_xmit_trust_tcp_checksum_min_len",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XMIT_TRUST_TCP_CHECKSUM_MIN_LEN",
-	)
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XMIT_TRUST_TCP_CHECKSUM_ACK_ONLY") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_xmit_trust_tcp_checksum_ack_only=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XMIT_TCP_PARTIAL_CSUM") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_xmit_tcp_partial_csum=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XMIT_HASH_TX_QUEUE") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_xmit_hash_tx_queue=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XMIT_MORE") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_xmit_more=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XMIT_DST_MAC_CACHE") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_xmit_dst_mac_cache=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XMIT_DST_MAC_PCPU_CACHE") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_xmit_dst_mac_pcpu_cache=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_XMIT_DST_MAC_SEQ_CACHE") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_xmit_dst_mac_seq_cache=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_QUEUE_SKB") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_queue_skb=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_STREAM_COALESCE_GSO") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_stream_coalesce_gso=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_STREAM_COALESCE_SOFTWARE_SEGMENT") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_stream_coalesce_software_segment=1")
-	}
-	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_STREAM_COALESCE_FULL_CSUM") {
-		params = appendModuleParameterIfMissing(params, "rx_worker_stream_coalesce_partial_csum=0")
 	}
 	return params
 }
@@ -244,73 +142,103 @@ func kernelmoduleModeActive(mode string) bool {
 }
 
 func TrustIXDatapathHelpersModuleParameters(raw string) string {
-	params := strings.TrimSpace(raw)
+	params := filterModuleParametersWithAllowlist(
+		raw,
+		trustIXDatapathHelpersPanicRiskModuleParameters,
+		trustIXDatapathHelpersSafeAsyncModuleParameters,
+		"route_tcp_gso_async_",
+		"tixt_rx_stream_",
+		"tixt_rx_single_coalesce_",
+		"tixt_rx_coalesce_",
+	)
 	params = appendTrustIXDatapathHelpersTIXTParameters(params)
-	if !datapathRouteTCPXmitWorkerRequested() {
-		return params
-	}
-	params = appendModuleParameterIfMissing(params, "route_tcp_xmit_worker=1")
-	if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_TCP_XMIT_WORKER_STEAL") &&
-		envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT_STEAL") {
-		params = appendModuleParameterIfMissing(params, "route_tcp_xmit_worker_steal=1")
+	return params
+}
+
+func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config.Desired) string {
+	params := TrustIXDatapathHelpersModuleParameters(raw)
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		params = appendModuleParameterIfMissing(params, "tixt_tx_plain_skip_sequence=1")
+		params = appendModuleParameterIfMissing(params, "tixt_tx_plain_ack_only=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_prefer=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_dev_xmit=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_limit=2048")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_bytes_limit=33554432")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_item_budget=32")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_segment_budget=1024")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_emit_budget=8")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_resched_stride=16")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_min_queue_depth=8")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_schedule_delay_usecs=500")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_max_segments_per_item=128")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_unbound_worker=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_sharded_queue=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_queue_shards=6")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_flow_shard_queue=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build_inner_csum=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build_fast_copy=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build_frag_fast_copy=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_outer_gso=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_outer_gso_hard_enable=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_max_frames=64")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_cross_item_batch=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_cross_item_dequeue_batch=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_cross_item_max_frames=24")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_cross_item_dynamic_cap=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_cross_item_dynamic_low_frames=12")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_cross_item_dynamic_queue_depth=4")
+		params = appendModuleParameterIfMissing(params, "route_tcp_xmit_worker=1")
 	}
 	return params
 }
 
 func appendTrustIXDatapathHelpersTIXTParameters(params string) string {
 	if envTruthyAny(
-		"TRUSTIX_TIXT_RX_SINGLE_COALESCE_GSO",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_RX_SINGLE_COALESCE_GSO",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_WORKER_KFUNC",
 	) {
-		params = appendModuleParameterIfMissing(params, "tixt_rx_single_coalesce_gso=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_xmit_worker=1")
 	}
 	if envTruthyAny(
-		"TRUSTIX_TIXT_RX_SINGLE_COALESCE_SKIP_TCP_CSUM",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_RX_SINGLE_COALESCE_SKIP_TCP_CSUM",
+		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_SYNC_STREAM",
 	) {
-		params = appendModuleParameterIfMissing(params, "tixt_rx_single_coalesce_skip_tcp_csum=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_sync_stream=1")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_sync_stream_max_frames", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES")
+		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_parse=1")
+		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_xmit_extra=1")
+		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_gso_xmit=1")
+		params = appendModuleParameterFromEnvIfMissing(params, "tixt_rx_stream_max_frames", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES")
 	}
 	if envTruthyAny(
-		"TRUSTIX_TIXT_RX_SINGLE_COALESCE_NETIF_RX",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_RX_SINGLE_COALESCE_NETIF_RX",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC",
 	) {
-		params = appendModuleParameterIfMissing(params, "tixt_rx_single_coalesce_netif_rx=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_TIXT_RX_SINGLE_COALESCE_PAGE_ONLY",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_RX_SINGLE_COALESCE_PAGE_ONLY",
-	) {
-		params = appendModuleParameterIfMissing(params, "tixt_rx_single_coalesce_page_only=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_TIXT_RX_SINGLE_COALESCE_LINEAR_BUILD",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_RX_SINGLE_COALESCE_LINEAR_BUILD",
-	) {
-		params = appendModuleParameterIfMissing(params, "tixt_rx_single_coalesce_linear_build=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_TIXT_RX_SINGLE_COALESCE_HYBRID_HEAD",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_RX_SINGLE_COALESCE_HYBRID_HEAD",
-	) {
-		params = appendModuleParameterIfMissing(params, "tixt_rx_single_coalesce_hybrid_head=1")
-	}
-	if envTruthyAny(
-		"TRUSTIX_TIXT_RX_STREAM_ORDERED_LIST",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_ORDERED_LIST",
-	) {
-		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_ordered_list=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_dev_xmit=1")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_limit", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_bytes_limit", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_BYTES_LIMIT")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_worker_item_budget", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_worker_segment_budget", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_max_segments_per_item", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM")
+		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM") {
+			params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream=1")
+			params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_stream_max_frames", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES")
+		}
+		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD") {
+			params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build=1")
+		}
+		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO") {
+			params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_outer_gso=1")
+		}
 	}
 	return params
-}
-
-func datapathRouteTCPXmitWorkerRequested() bool {
-	return envTruthyAny(
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_XMIT_KFUNC",
-	) && envTruthyAny(
-		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT",
-		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_TCP_XMIT_CRASH_RISK_ACK",
-	)
 }
 
 func appendModuleParameterIfMissing(params, assignment string) string {
@@ -340,6 +268,169 @@ func appendModuleParameterFromEnvIfMissing(params, key, envName string) string {
 		value = fields[0]
 	}
 	return appendModuleParameterIfMissing(params, strings.TrimSpace(key)+"="+value)
+}
+
+var trustIXDatapathPanicRiskModuleParameters = map[string]struct{}{}
+
+var trustIXDatapathSafeRXWorkerModuleParameters = map[string]struct{}{
+	"rx_worker_budget":                           {},
+	"rx_worker_direct_xmit":                      {},
+	"rx_worker_hot_stats":                        {},
+	"rx_worker_inject":                           {},
+	"rx_worker_inline_coalesce_max_frames":       {},
+	"rx_worker_inline_pair_coalesce":             {},
+	"rx_worker_inline_pair_flush_jiffies":        {},
+	"rx_worker_inline_pair_hold_skb":             {},
+	"rx_worker_inline_xmit":                      {},
+	"rx_worker_inline_xmit_copy_csum":            {},
+	"rx_worker_queue_skb":                        {},
+	"rx_worker_slots":                            {},
+	"rx_worker_steal_skb":                        {},
+	"rx_worker_inline_stolen":                    {},
+	"rx_worker_inline_receive":                   {},
+	"rx_worker_steal_xmit":                       {},
+	"rx_worker_steal_tcp":                        {},
+	"rx_worker_stream_batch_queue":               {},
+	"rx_worker_stream_coalesce_gso":              {},
+	"rx_worker_stream_coalesce_partial_csum":     {},
+	"rx_worker_stream_coalesce_software_segment": {},
+	"rx_worker_stream_tcp":                       {},
+	"rx_worker_tcp":                              {},
+	"rx_worker_xmit":                             {},
+	"rx_worker_xmit_dst_mac_cache":               {},
+	"rx_worker_xmit_dst_mac_pcpu_cache":          {},
+	"rx_worker_xmit_dst_mac_seq_cache":           {},
+	"rx_worker_xmit_hash_tx_queue":               {},
+	"rx_worker_xmit_more":                        {},
+	"rx_worker_xmit_tcp_partial_csum":            {},
+	"rx_worker_xmit_trust_tcp_checksum_ack_only": {},
+	"rx_worker_xmit_trust_tcp_checksum_min_len":  {},
+}
+
+var trustIXCryptoPanicRiskModuleParameters = map[string]struct{}{
+	"kfunc_simd_fastpath": {},
+}
+
+var trustIXDatapathHelpersPanicRiskModuleParameters = map[string]struct{}{
+	"tixt_rx_stream_ordered_list":    {},
+	"tixt_rx_stream_nonlinear_parse": {},
+}
+
+var trustIXDatapathHelpersSafeAsyncModuleParameters = map[string]struct{}{
+	"route_tcp_gso_async_bytes_limit":                                   {},
+	"route_tcp_gso_async_dev_xmit":                                      {},
+	"route_tcp_gso_async_direct_xmit":                                   {},
+	"route_tcp_gso_async_force_inner_checksum":                          {},
+	"route_tcp_gso_async_force_software_outer_csum":                     {},
+	"route_tcp_gso_async_hot_stats":                                     {},
+	"route_tcp_gso_async_limit":                                         {},
+	"route_tcp_gso_async_max_segments_per_item":                         {},
+	"route_tcp_gso_async_ordered_queue":                                 {},
+	"route_tcp_gso_async_prefer":                                        {},
+	"route_tcp_gso_async_queue_shards":                                  {},
+	"route_tcp_gso_async_sharded_queue":                                 {},
+	"route_tcp_gso_async_stream":                                        {},
+	"route_tcp_gso_async_stream_direct_build":                           {},
+	"route_tcp_gso_async_stream_direct_build_fast_copy":                 {},
+	"route_tcp_gso_async_stream_direct_build_frag_fast_copy":            {},
+	"route_tcp_gso_async_stream_direct_build_inner_csum":                {},
+	"route_tcp_gso_async_stream_max_frames":                             {},
+	"route_tcp_gso_async_stream_allow_virtio_net":                       {},
+	"route_tcp_gso_async_stream_outer_gso":                              {},
+	"route_tcp_gso_async_stream_outer_gso_hard_enable":                  {},
+	"route_tcp_gso_async_stream_cross_item_batch":                       {},
+	"route_tcp_gso_async_stream_cross_item_debug":                       {},
+	"route_tcp_gso_async_stream_cross_item_dequeue_batch":               {},
+	"route_tcp_gso_async_stream_cross_item_dynamic_cap":                 {},
+	"route_tcp_gso_async_stream_cross_item_dynamic_low_frames":          {},
+	"route_tcp_gso_async_stream_cross_item_dynamic_queue_depth":         {},
+	"route_tcp_gso_async_stream_cross_item_lookahead":                   {},
+	"route_tcp_gso_async_stream_cross_item_max_frames":                  {},
+	"route_tcp_gso_async_stream_cross_item_tail_stitch":                 {},
+	"route_tcp_gso_async_stream_direct_build_frag_fast_copy_cross_page": {},
+	"route_tcp_gso_async_stream_nonlinear_direct_build":                 {},
+	"route_tcp_gso_async_stream_software_segment":                       {},
+	"route_tcp_gso_async_unbound_worker":                                {},
+	"route_tcp_gso_async_flow_shard_queue":                              {},
+	"route_tcp_gso_async_hash_tx_queue":                                 {},
+	"route_tcp_gso_async_reslice_to_mtu":                                {},
+	"route_tcp_gso_async_worker_budget_reschedule_delay_jiffies":        {},
+	"route_tcp_gso_async_worker_budget_reschedule_delay_usecs":          {},
+	"route_tcp_gso_async_worker_dequeue_batch":                          {},
+	"route_tcp_gso_async_worker_item_budget":                            {},
+	"route_tcp_gso_async_worker_max_depth_defers":                       {},
+	"route_tcp_gso_async_worker_min_queue_depth":                        {},
+	"route_tcp_gso_async_worker_resched_stride":                         {},
+	"route_tcp_gso_async_worker_schedule_delay_jiffies":                 {},
+	"route_tcp_gso_async_worker_schedule_delay_no_accel":                {},
+	"route_tcp_gso_async_worker_schedule_delay_usecs":                   {},
+	"route_tcp_gso_async_worker_segment_budget":                         {},
+	"route_tcp_gso_async_xmit_busy_retries":                             {},
+	"route_tcp_gso_async_xmit_busy_sleep_usecs":                         {},
+	"route_tcp_gso_async_xmit_more":                                     {},
+	"route_tcp_gso_async_xmit_cn_sleep_usecs":                           {},
+	"route_tcp_gso_async_yield_on_xmit_cn":                              {},
+	"tixt_rx_stream_gso_xmit":                                           {},
+	"tixt_rx_stream_coalesce_gso":                                       {},
+	"tixt_rx_stream_coalesce_mark_gso":                                  {},
+	"tixt_rx_stream_max_frames":                                         {},
+	"tixt_rx_stream_parse":                                              {},
+	"tixt_rx_stream_xmit_extra":                                         {},
+	"tixt_rx_coalesce_mark_gso_partial_csum":                            {},
+	"tixt_rx_coalesce_segment_gso":                                      {},
+	"tixt_rx_single_coalesce_gso":                                       {},
+	"tixt_rx_single_coalesce_mark_gso":                                  {},
+	"tixt_rx_single_coalesce_skip_tcp_csum":                             {},
+	"tixt_rx_single_coalesce_direct_list":                               {},
+	"tixt_rx_single_coalesce_direct_list_max_frames":                    {},
+	"tixt_rx_single_coalesce_page_only":                                 {},
+	"tixt_rx_single_coalesce_linear_build":                              {},
+	"tixt_rx_single_coalesce_hybrid_head":                               {},
+	"tixt_rx_single_coalesce_netif_rx":                                  {},
+	"tixt_rx_single_coalesce_schedule_once":                             {},
+	"tixt_rx_single_coalesce_stream_fallback":                           {},
+	"tixt_rx_single_coalesce_hot_stats":                                 {},
+	"tixt_rx_single_coalesce_defer_full_flush":                          {},
+	"tixt_rx_single_coalesce_keep_full_timer":                           {},
+	"tixt_rx_single_coalesce_set_hash":                                  {},
+	"tixt_rx_single_coalesce_schedule_stride":                           {},
+	"tixt_rx_single_coalesce_max_frames":                                {},
+	"tixt_rx_single_coalesce_flush_jiffies":                             {},
+	"tixt_rx_single_coalesce_warmup_frames":                             {},
+	"tixt_rx_single_coalesce_linear_max":                                {},
+}
+
+func filterModuleParameters(params string, deny map[string]struct{}, denyPrefixes ...string) string {
+	return filterModuleParametersWithAllowlist(params, deny, nil, denyPrefixes...)
+}
+
+func filterModuleParametersWithAllowlist(params string, deny map[string]struct{}, allow map[string]struct{}, denyPrefixes ...string) string {
+	fields := strings.Fields(strings.TrimSpace(params))
+	if len(fields) == 0 || (len(deny) == 0 && len(denyPrefixes) == 0) {
+		return strings.Join(fields, " ")
+	}
+	kept := fields[:0]
+	for _, field := range fields {
+		key, _, _ := strings.Cut(field, "=")
+		key = strings.TrimSpace(key)
+		if _, blocked := deny[key]; blocked {
+			continue
+		}
+		blocked := false
+		for _, prefix := range denyPrefixes {
+			if strings.HasPrefix(key, prefix) {
+				if _, allowed := allow[key]; !allowed {
+					blocked = true
+				}
+				break
+			}
+		}
+		if blocked {
+			continue
+		}
+		kept = append(kept, field)
+	}
+	return strings.Join(kept, " ")
 }
 
 func envFalsey(name string) bool {

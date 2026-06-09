@@ -379,6 +379,162 @@ func TestExperimentalTCPCompatControlCloseClosesAcceptedSession(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPCompatPrimerRegistersSessionBeforeAcceptDelivery(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+	provider := &fakeProvider{
+		local:   "ix-b",
+		subs:    make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
+		flows:   make(map[uint64]dataplane.ExperimentalTCPFlow),
+		cryptos: make(map[uint64]fakeCrypto),
+	}
+	ln, err := New(provider).Listen(context.Background(), transport.Endpoint{
+		Name:      core.EndpointID("server"),
+		Transport: transport.ProtocolExperimentalTCP,
+		Listen:    "127.0.0.1:0",
+		Enabled:   true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	expListener := ln.(*listener)
+	conn, err := net.Dial("tcp", expListener.compatListener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial compat primer: %v", err)
+	}
+	defer conn.Close()
+	control := stream.NewSession(conn)
+	defer control.Close()
+	const flowID = 0x1234567812345678
+	if err := control.SendPacket(encodeExperimentalTCPCompatControlInit(flowID)); err != nil {
+		t.Fatalf("send compat control init: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		expListener.mu.Lock()
+		sess := expListener.sessions[flowID]
+		queued := len(expListener.acceptCh)
+		expListener.mu.Unlock()
+		if sess != nil && queued == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	expListener.mu.Lock()
+	sess := expListener.sessions[flowID]
+	queuedBefore := len(expListener.acceptCh)
+	expListener.mu.Unlock()
+	if sess == nil || queuedBefore != 1 {
+		t.Fatalf("compat session registered=%t queued=%d, want registered and one accept", sess != nil, queuedBefore)
+	}
+
+	expListener.dispatch(dataplane.ExperimentalTCPFrame{
+		FlowID:    flowID,
+		Direction: dataplane.ExperimentalTCPInbound,
+		Endpoint:  core.EndpointID("server"),
+		Payload:   []byte("data-after-primer"),
+	})
+	if queuedAfter := len(expListener.acceptCh); queuedAfter != 1 {
+		t.Fatalf("accept queue length after same-flow data = %d, want 1", queuedAfter)
+	}
+	got, err := sess.RecvPacket()
+	if err != nil {
+		t.Fatalf("recv same-flow data: %v", err)
+	}
+	if string(got) != "data-after-primer" {
+		t.Fatalf("same-flow data = %q", got)
+	}
+}
+
+func TestExperimentalTCPCompatPrimerDropsUnknownFlowFrames(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+	provider := &fakeProvider{
+		local:   "ix-b",
+		subs:    make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
+		flows:   make(map[uint64]dataplane.ExperimentalTCPFlow),
+		cryptos: make(map[uint64]fakeCrypto),
+	}
+	ln, err := New(provider).Listen(context.Background(), transport.Endpoint{
+		Name:      core.EndpointID("server"),
+		Transport: transport.ProtocolExperimentalTCP,
+		Listen:    "127.0.0.1:0",
+		Enabled:   true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	expListener := ln.(*listener)
+	if !expListener.primerFlowRequired {
+		t.Fatal("compat primer listener did not require primer-established flows")
+	}
+
+	expListener.dispatch(dataplane.ExperimentalTCPFrame{
+		FlowID:    0xfeedface,
+		Direction: dataplane.ExperimentalTCPInbound,
+		Endpoint:  core.EndpointID("server"),
+		Payload:   []byte("stale-data-before-primer"),
+	})
+	if queued := len(expListener.acceptCh); queued != 0 {
+		t.Fatalf("accept queue length = %d, want 0", queued)
+	}
+	expListener.mu.Lock()
+	_, installed := expListener.sessions[0xfeedface]
+	expListener.mu.Unlock()
+	if installed {
+		t.Fatal("unknown flow created a listener session despite compat primer requirement")
+	}
+}
+
+func TestExperimentalTCPCompatPrimerDropsUnknownFlowBatchFrames(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+	provider := &fakeProvider{
+		local:   "ix-b",
+		subs:    make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
+		flows:   make(map[uint64]dataplane.ExperimentalTCPFlow),
+		cryptos: make(map[uint64]fakeCrypto),
+	}
+	ln, err := New(provider).Listen(context.Background(), transport.Endpoint{
+		Name:      core.EndpointID("server"),
+		Transport: transport.ProtocolExperimentalTCP,
+		Listen:    "127.0.0.1:0",
+		Enabled:   true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	expListener := ln.(*listener)
+
+	expListener.dispatchBatch([]dataplane.ExperimentalTCPFrame{
+		{
+			FlowID:    0x1111,
+			Direction: dataplane.ExperimentalTCPInbound,
+			Endpoint:  core.EndpointID("server"),
+			Payload:   []byte("stale-batch-1"),
+		},
+		{
+			FlowID:    0x2222,
+			Direction: dataplane.ExperimentalTCPInbound,
+			Endpoint:  core.EndpointID("server"),
+			Payload:   []byte("stale-batch-2"),
+		},
+	})
+	if queued := len(expListener.acceptCh); queued != 0 {
+		t.Fatalf("accept queue length = %d, want 0", queued)
+	}
+	expListener.mu.Lock()
+	sessionCount := len(expListener.sessions)
+	expListener.mu.Unlock()
+	if sessionCount != 0 {
+		t.Fatalf("listener sessions = %d, want 0", sessionCount)
+	}
+}
+
 func TestExperimentalTCPCompatStreamFallbackRoundTrips(t *testing.T) {
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "1")
@@ -737,6 +893,35 @@ func TestExperimentalTCPCompatControlCarriesSecureHandshakeOnly(t *testing.T) {
 	providerB.mu.Unlock()
 	if !reverseInstalled {
 		t.Fatal("server did not install reverse experimental_tcp flow from compat control")
+	}
+}
+
+func TestExperimentalTCPCompatControlHandshakeHasReceivePriority(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_HANDSHAKE_PRIORITY_DELAY", "100ms")
+	session := newSession(nil, nil, 1, core.IXID("ix-a"), core.EndpointID("server"), dataplane.CryptoPlacementUserspace)
+	session.enableCompatPriority()
+	defer session.Close()
+
+	session.enqueue([]byte("dataplane-before-handshake"))
+	hello := []byte{'T', 'I', 'X', 'H', 1, 1, 'h'}
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		session.enqueueCompatPriority(hello)
+	}()
+
+	got, err := session.RecvPacket()
+	if err != nil {
+		t.Fatalf("recv: %v", err)
+	}
+	if !bytes.Equal(got, hello) {
+		t.Fatalf("first packet = %q, want compat handshake", got)
+	}
+	next, err := session.RecvPacket()
+	if err != nil {
+		t.Fatalf("recv queued dataplane: %v", err)
+	}
+	if string(next) != "dataplane-before-handshake" {
+		t.Fatalf("next packet = %q, want queued dataplane", next)
 	}
 }
 

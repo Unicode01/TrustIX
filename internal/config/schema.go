@@ -32,6 +32,7 @@ type Desired struct {
 	Trust           TrustConfig           `json:"trust,omitempty" yaml:"trust,omitempty"`
 	Endpoints       []EndpointConfig      `json:"endpoints" yaml:"endpoints"`
 	Bootstrap       BootstrapConfig       `json:"bootstrap,omitempty" yaml:"bootstrap,omitempty"`
+	ControlFabric   ControlFabricConfig   `json:"control_fabric,omitempty" yaml:"control_fabric,omitempty"`
 	Peers           []PeerConfig          `json:"peers" yaml:"peers"`
 	Routes          []RouteConfig         `json:"routes" yaml:"routes"`
 	RoutePolicy     RoutePolicyConfig     `json:"route_policy,omitempty" yaml:"route_policy,omitempty"`
@@ -261,6 +262,13 @@ type BootstrapPeerConfig struct {
 	ControlAPI string        `json:"control_api" yaml:"control_api"`
 }
 
+type ControlFabricConfig struct {
+	Profile              string `json:"profile,omitempty" yaml:"profile,omitempty"`
+	DynamicControlFanout *int   `json:"dynamic_control_fanout,omitempty" yaml:"dynamic_control_fanout,omitempty"`
+	MemberPageSize       *int   `json:"member_page_size,omitempty" yaml:"member_page_size,omitempty"`
+	MemberImportLimit    *int   `json:"member_import_limit,omitempty" yaml:"member_import_limit,omitempty"`
+}
+
 type PeerConfig struct {
 	ID              core.IXID        `json:"id" yaml:"id"`
 	Domain          core.DomainID    `json:"domain" yaml:"domain"`
@@ -289,9 +297,23 @@ type PolicyConfig struct {
 }
 
 type RoutePolicyConfig struct {
-	ImportPrefixes []core.Prefix `json:"import_prefixes,omitempty" yaml:"import_prefixes,omitempty"`
-	ExportPrefixes []core.Prefix `json:"export_prefixes,omitempty" yaml:"export_prefixes,omitempty"`
-	DynamicMetric  int           `json:"dynamic_metric,omitempty" yaml:"dynamic_metric,omitempty"`
+	ImportPrefixes      []core.Prefix `json:"import_prefixes,omitempty" yaml:"import_prefixes,omitempty"`
+	ExportPrefixes      []core.Prefix `json:"export_prefixes,omitempty" yaml:"export_prefixes,omitempty"`
+	DynamicMetric       int           `json:"dynamic_metric,omitempty" yaml:"dynamic_metric,omitempty"`
+	TransitForwarding   *bool         `json:"transit_forwarding,omitempty" yaml:"transit_forwarding,omitempty"`
+	ImportTransitRoutes *bool         `json:"import_transit_routes,omitempty" yaml:"import_transit_routes,omitempty"`
+}
+
+func RoutePolicyTransitForwardingEnabled(policy RoutePolicyConfig) bool {
+	return boolDefaultTrue(policy.TransitForwarding)
+}
+
+func RoutePolicyImportTransitRoutesEnabled(policy RoutePolicyConfig) bool {
+	return boolDefaultTrue(policy.ImportTransitRoutes)
+}
+
+func boolDefaultTrue(value *bool) bool {
+	return value == nil || *value
 }
 
 type TransportPolicyConfig struct {
@@ -537,6 +559,9 @@ func (cfg Desired) validateWithRoutePeers(routePeers []PeerConfig) error {
 		return err
 	}
 	if err := validateBootstrap(cfg.Bootstrap, cfg.Domain.ID); err != nil {
+		return err
+	}
+	if err := validateControlFabric(cfg.ControlFabric); err != nil {
 		return err
 	}
 	if err := validatePeers(cfg.Peers); err != nil {
@@ -1315,6 +1340,24 @@ func validateRoutePolicy(policy RoutePolicyConfig) error {
 	}
 	if policy.DynamicMetric < 0 {
 		return fmt.Errorf("route_policy dynamic_metric must be non-negative")
+	}
+	return nil
+}
+
+func validateControlFabric(fabric ControlFabricConfig) error {
+	switch fabric.Profile {
+	case "", "edge", "reflector", "route_reflector", "authority", "core", "small":
+	default:
+		return fmt.Errorf("control_fabric profile %q is unsupported", fabric.Profile)
+	}
+	if fabric.DynamicControlFanout != nil && *fabric.DynamicControlFanout < 0 {
+		return fmt.Errorf("control_fabric dynamic_control_fanout must be non-negative")
+	}
+	if fabric.MemberPageSize != nil && *fabric.MemberPageSize < 0 {
+		return fmt.Errorf("control_fabric member_page_size must be non-negative")
+	}
+	if fabric.MemberImportLimit != nil && *fabric.MemberImportLimit < 0 {
+		return fmt.Errorf("control_fabric member_import_limit must be non-negative")
 	}
 	return nil
 }

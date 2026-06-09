@@ -17,6 +17,14 @@ implemented by the module, and covered by a clean selftest before they appear in
 Full route/session/queue ownership and direct XMIT are still intentionally not
 reported as `full_datapath`.
 
+First-release production safety is fail-closed. The route-TCP GSO async,
+route-TCP XMIT worker, outer-GSO batching, TIXT RX stream parsing, and TIXT RX
+coalesce families remain in the source for continued hardening, but their
+enable parameters are read-only and forced to safe defaults during module init
+even if passed to `insmod`. `trustixd` strips the same raw module parameters and
+ignores the old crash-risk environment acknowledgements, so these paths cannot
+be selected by a production configuration or smoke/bench wrapper.
+
 Build and load on the target kernel:
 
 ```bash

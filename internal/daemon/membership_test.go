@@ -2,11 +2,14 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -205,9 +208,14 @@ func TestLocalAdvertisementCarriesTransportProfile(t *testing.T) {
 	if profile.Version != transportProfileMetadataVersion || profile.Profile != "performance" || profile.Datapath != "kernel_module" || profile.Encryption != "plaintext" {
 		t.Fatalf("advertised transport profile = %#v", profile)
 	}
-	for _, feature := range []string{"tixt_v1", "ackless_tcp", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx", "plaintext_ack_only"} {
+	for _, feature := range []string{"tixt_v1", "ackless_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "route_gso_async", "route_gso_async_outer_gso", "route_xmit_worker", "plaintext_ack_only"} {
 		if !containsString(profile.Features, feature) {
 			t.Fatalf("advertised transport profile features = %#v, missing %q", profile.Features, feature)
+		}
+	}
+	for _, feature := range []string{"route_gso_sync", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx"} {
+		if containsString(profile.Features, feature) {
+			t.Fatalf("advertised transport profile features = %#v, must not include disabled panic-risk feature %q", profile.Features, feature)
 		}
 	}
 }
@@ -993,6 +1001,323 @@ func TestMembershipGossipsThreeIXTopology(t *testing.T) {
 	}
 }
 
+func TestMembershipHubOutageReconnectRestoresPrunedMembers(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	daemonA := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "", "10.0.0.0/24"), 1)
+	daemonB := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-b", "127.0.0.1:7002", "", "10.0.1.0/24"), 2)
+	daemonC := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-c", "127.0.0.1:7003", "", "10.0.2.0/24"), 3)
+
+	hubOnline := atomic.Bool{}
+	hubOnline.Store(true)
+	serverA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hubOnline.Load() {
+			http.Error(w, "hub offline", http.StatusServiceUnavailable)
+			return
+		}
+		daemonA.peerHandler().ServeHTTP(w, r)
+	}))
+	defer serverA.Close()
+	serverB := httptest.NewServer(daemonB.peerHandler())
+	defer serverB.Close()
+	serverC := httptest.NewServer(daemonC.peerHandler())
+	defer serverC.Close()
+
+	daemonA.desired.IX.ControlAPI = serverA.URL
+	daemonB.desired.IX.ControlAPI = serverB.URL
+	daemonC.desired.IX.ControlAPI = serverC.URL
+	daemonB.desired.Bootstrap.Peers = []config.BootstrapPeerConfig{{
+		ID:         "ix-a",
+		Domain:     "lab.local",
+		ControlAPI: serverA.URL,
+	}}
+	daemonC.desired.Bootstrap.Peers = []config.BootstrapPeerConfig{{
+		ID:         "ix-a",
+		Domain:     "lab.local",
+		ControlAPI: serverA.URL,
+	}}
+
+	authorizeMembershipTestIXWithControlAPI(t, daemonA, pkiSet, "ix-b", serverB.URL, "10.0.1.0/24")
+	authorizeMembershipTestIXWithControlAPI(t, daemonA, pkiSet, "ix-c", serverC.URL, "10.0.2.0/24")
+	authorizeMembershipTestIXWithControlAPI(t, daemonB, pkiSet, "ix-a", serverA.URL, "10.0.0.0/24")
+	authorizeMembershipTestIXWithControlAPI(t, daemonB, pkiSet, "ix-c", serverC.URL, "10.0.2.0/24")
+	authorizeMembershipTestIXWithControlAPI(t, daemonC, pkiSet, "ix-a", serverA.URL, "10.0.0.0/24")
+	authorizeMembershipTestIXWithControlAPI(t, daemonC, pkiSet, "ix-b", serverB.URL, "10.0.1.0/24")
+
+	for _, daemon := range []*Daemon{daemonA, daemonB, daemonC} {
+		if err := daemon.refreshLocalAdvertisement(); err != nil {
+			t.Fatalf("refresh local advertisement for %s: %v", daemon.desired.IX.ID, err)
+		}
+	}
+
+	ctx := context.Background()
+	daemonB.pollPeers(ctx)
+	daemonC.pollPeers(ctx)
+	daemonB.pollPeers(ctx)
+	daemonB.pollPeers(ctx)
+	daemonC.pollPeers(ctx)
+	if _, ok := routeByPrefix(daemonA.runtimeRoutes(), "10.0.1.0/24"); !ok {
+		t.Fatalf("hub did not learn ix-b before outage: %#v", daemonA.runtimeRoutes())
+	}
+	if _, ok := routeByPrefix(daemonA.runtimeRoutes(), "10.0.2.0/24"); !ok {
+		t.Fatalf("hub did not learn ix-c before outage: %#v", daemonA.runtimeRoutes())
+	}
+	if route, ok := routeByPrefix(daemonB.runtimeRoutes(), "10.0.2.0/24"); !ok || route.NextHop != "ix-c" {
+		t.Fatalf("ix-b did not learn direct ix-c before outage: route=%#v ok=%t", route, ok)
+	}
+
+	hubOnline.Store(false)
+	for _, daemon := range []*Daemon{daemonB, daemonC} {
+		daemon.membershipMu.Lock()
+		record := daemon.members["ix-a"]
+		record.LastSeen = time.Now().Add(-memberRecordTTL - time.Second)
+		daemon.members["ix-a"] = record
+		daemon.membershipMu.Unlock()
+		daemon.pollPeers(ctx)
+		if _, ok := routeByPrefix(daemon.runtimeRoutes(), "10.0.0.0/24"); ok {
+			t.Fatalf("%s kept expired hub route during outage: %#v", daemon.desired.IX.ID, daemon.runtimeRoutes())
+		}
+	}
+
+	daemonA.membershipMu.Lock()
+	delete(daemonA.members, "ix-b")
+	delete(daemonA.members, "ix-c")
+	daemonA.membershipMu.Unlock()
+	if err := daemonA.applyRuntimeDataplaneSnapshot(ctx); err != nil {
+		t.Fatalf("apply emptied hub snapshot: %v", err)
+	}
+	hubOnline.Store(true)
+	daemonB.pollPeers(ctx)
+	daemonC.pollPeers(ctx)
+	daemonB.pollPeers(ctx)
+
+	if _, ok := routeByPrefix(daemonA.runtimeRoutes(), "10.0.1.0/24"); !ok {
+		t.Fatalf("hub did not relearn ix-b after reconnect: %#v", daemonA.runtimeRoutes())
+	}
+	if _, ok := routeByPrefix(daemonA.runtimeRoutes(), "10.0.2.0/24"); !ok {
+		t.Fatalf("hub did not relearn ix-c after reconnect: %#v", daemonA.runtimeRoutes())
+	}
+	if route, ok := routeByPrefix(daemonB.runtimeRoutes(), "10.0.0.0/24"); !ok || route.NextHop != "ix-a" {
+		t.Fatalf("ix-b did not restore hub route after reconnect: route=%#v ok=%t", route, ok)
+	}
+	if route, ok := routeByPrefix(daemonC.runtimeRoutes(), "10.0.0.0/24"); !ok || route.NextHop != "ix-a" {
+		t.Fatalf("ix-c did not restore hub route after reconnect: route=%#v ok=%t", route, ok)
+	}
+}
+
+func TestMembershipAllIXColdRestartRestoresRoutes(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	daemonA := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "", "10.0.0.0/24"), 1)
+	daemonB := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-b", "127.0.0.1:7002", "", "10.0.1.0/24"), 2)
+	daemonC := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-c", "127.0.0.1:7003", "", "10.0.2.0/24"), 3)
+	daemonA.cfg.DataDir = t.TempDir()
+	daemonB.cfg.DataDir = t.TempDir()
+	daemonC.cfg.DataDir = t.TempDir()
+	enableFileConfigLogForMembershipTest(t, daemonA)
+	enableFileConfigLogForMembershipTest(t, daemonB)
+	enableFileConfigLogForMembershipTest(t, daemonC)
+
+	serverA := newSwitchablePeerServer(t, daemonA)
+	defer serverA.Close()
+	serverB := newSwitchablePeerServer(t, daemonB)
+	defer serverB.Close()
+	serverC := newSwitchablePeerServer(t, daemonC)
+	defer serverC.Close()
+
+	configureRestartMembershipTopology(t, pkiSet, daemonA, daemonB, daemonC, serverA.URL(), serverB.URL(), serverC.URL())
+
+	ctx := context.Background()
+	pollMembershipSet(ctx, daemonA, daemonB, daemonC, 5)
+	assertAllIXDirectRoutes(t, daemonA, daemonB, daemonC)
+
+	serverA.SetOnline(false)
+	serverB.SetOnline(false)
+	serverC.SetOnline(false)
+
+	restartedA := restartMembershipTestDaemon(t, daemonA)
+	restartedB := restartMembershipTestDaemon(t, daemonB)
+	restartedC := restartMembershipTestDaemon(t, daemonC)
+	serverA.SetDaemon(restartedA)
+	serverB.SetDaemon(restartedB)
+	serverC.SetDaemon(restartedC)
+	serverA.SetOnline(true)
+	serverB.SetOnline(true)
+	serverC.SetOnline(true)
+
+	assertAllIXDirectRoutes(t, restartedA, restartedB, restartedC)
+	pollMembershipSet(ctx, restartedA, restartedB, restartedC, 3)
+	assertAllIXDirectRoutes(t, restartedA, restartedB, restartedC)
+
+	serverA.SetOnline(false)
+	serverB.SetOnline(false)
+	serverC.SetOnline(false)
+	expirePersistedMembersForRestartTest(t, restartedA, restartedB, restartedC)
+
+	staleRestartA := restartMembershipTestDaemon(t, restartedA)
+	staleRestartB := restartMembershipTestDaemon(t, restartedB)
+	staleRestartC := restartMembershipTestDaemon(t, restartedC)
+	serverA.SetDaemon(staleRestartA)
+	serverB.SetDaemon(staleRestartB)
+	serverC.SetDaemon(staleRestartC)
+	serverA.SetOnline(true)
+	serverB.SetOnline(true)
+	serverC.SetOnline(true)
+
+	pollMembershipSet(ctx, staleRestartA, staleRestartB, staleRestartC, 6)
+	assertAllIXDirectRoutes(t, staleRestartA, staleRestartB, staleRestartC)
+}
+
+func TestControlTargetsBoundsDynamicFanout(t *testing.T) {
+	now := time.Now().UTC()
+	fanout := 2
+	daemon := &Daemon{
+		desired: config.Desired{
+			Domain: config.DomainConfig{ID: "lab.local"},
+			IX:     config.IXConfig{ID: "ix-a", Domain: "lab.local"},
+			ControlFabric: config.ControlFabricConfig{
+				Profile:              "edge",
+				DynamicControlFanout: &fanout,
+			},
+			Peers: []config.PeerConfig{{
+				ID:         "ix-static",
+				Domain:     "lab.local",
+				ControlAPI: "https://127.0.0.1:9444",
+			}},
+			Bootstrap: config.BootstrapConfig{Peers: []config.BootstrapPeerConfig{{
+				ID:         "ix-reflector",
+				Domain:     "lab.local",
+				ControlAPI: "https://127.0.0.1:9445",
+			}}},
+		},
+		members: map[core.IXID]memberRecord{},
+	}
+	for i := 0; i < 5; i++ {
+		ixID := core.IXID(fmt.Sprintf("ix-dyn-%d", i))
+		daemon.members[ixID] = memberRecord{
+			Advertisement: advertisementResponse{
+				DomainID:   "lab.local",
+				IXID:       string(ixID),
+				ControlAPI: fmt.Sprintf("https://127.0.0.1:%d", 9500+i),
+			},
+			LastSeen: now,
+			Direct:   true,
+		}
+	}
+
+	first := daemon.controlTargets()
+	second := daemon.controlTargets()
+	if countDynamicControlTargets(first) != 2 {
+		t.Fatalf("first dynamic control targets = %#v, want exactly 2 dynamic targets", first)
+	}
+	if countDynamicControlTargets(second) != 2 {
+		t.Fatalf("second dynamic control targets = %#v, want exactly 2 dynamic targets", second)
+	}
+	if !hasControlTarget(first, "ix-static") || !hasControlTarget(first, "ix-reflector") {
+		t.Fatalf("bounded fanout dropped static/bootstrap targets: %#v", first)
+	}
+	if dynamicControlTargetIDs(first) == dynamicControlTargetIDs(second) {
+		t.Fatalf("dynamic control target window did not rotate: first=%#v second=%#v", first, second)
+	}
+}
+
+func TestDynamicControlTargetFanoutEnvOverridesConfig(t *testing.T) {
+	t.Setenv("TRUSTIX_DYNAMIC_CONTROL_TARGET_FANOUT", "1")
+	fanout := 4
+	daemon := &Daemon{
+		desired: config.Desired{ControlFabric: config.ControlFabricConfig{DynamicControlFanout: &fanout}},
+	}
+	if got := daemon.dynamicControlTargetFanout(); got != 1 {
+		t.Fatalf("dynamic control fanout = %d, want env override 1", got)
+	}
+}
+
+func TestDynamicControlTargetFanoutProfileDefaults(t *testing.T) {
+	t.Setenv("TRUSTIX_DYNAMIC_CONTROL_TARGET_FANOUT", "")
+	tests := []struct {
+		name    string
+		profile string
+		want    int
+	}{
+		{name: "default", profile: "", want: defaultDynamicControlTargetFanout},
+		{name: "small", profile: "small", want: 0},
+		{name: "edge", profile: "edge", want: edgeDynamicControlTargetFanout},
+		{name: "reflector", profile: "reflector", want: reflectorControlTargetFanout},
+		{name: "route-reflector-normalized", profile: "route-reflector", want: reflectorControlTargetFanout},
+		{name: "core", profile: "core", want: coreDynamicControlTargetFanout},
+		{name: "authority", profile: "authority", want: coreDynamicControlTargetFanout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			daemon := &Daemon{
+				desired: config.Desired{ControlFabric: config.ControlFabricConfig{Profile: tt.profile}},
+			}
+			if got := daemon.dynamicControlTargetFanout(); got != tt.want {
+				t.Fatalf("dynamic control fanout = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRoutePolicyRejectsDynamicTransitImportWhenDisabled(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	disabled := false
+	desiredA := desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "https://127.0.0.1:9443", "10.0.0.0/24")
+	desiredA.RoutePolicy.ImportTransitRoutes = &disabled
+	daemonA := newMembershipTestDaemon(t, desiredA, 1)
+	daemonB := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-b", "127.0.0.1:7002", "https://127.0.0.1:9444", "10.0.1.0/24"), 2)
+	daemonC := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-c", "127.0.0.1:7003", "https://127.0.0.1:9445", "10.0.2.0/24"), 3)
+	authorizeMembershipTestIX(t, daemonA, pkiSet, "ix-b", "10.0.1.0/24")
+	authorizeMembershipTestIX(t, daemonA, pkiSet, "ix-c", "10.0.2.0/24")
+	authorizeMembershipTestIX(t, daemonB, pkiSet, "ix-a", "10.0.0.0/24")
+	authorizeMembershipTestIX(t, daemonB, pkiSet, "ix-c", "10.0.2.0/24")
+	if err := daemonA.refreshLocalAdvertisement(); err != nil {
+		t.Fatalf("refresh ix-a advertisement: %v", err)
+	}
+	if err := daemonB.refreshLocalAdvertisement(); err != nil {
+		t.Fatalf("refresh ix-b advertisement: %v", err)
+	}
+	if err := daemonC.refreshLocalAdvertisement(); err != nil {
+		t.Fatalf("refresh ix-c advertisement: %v", err)
+	}
+
+	adA, err := daemonA.buildLocalAdvertisement()
+	if err != nil {
+		t.Fatalf("build ix-a advertisement: %v", err)
+	}
+	adC, err := daemonC.buildLocalAdvertisement()
+	if err != nil {
+		t.Fatalf("build ix-c advertisement: %v", err)
+	}
+	if _, err := daemonB.mergeAdvertisement(adA, "test-a"); err != nil {
+		t.Fatalf("merge ix-a into ix-b: %v", err)
+	}
+	if _, err := daemonB.mergeAdvertisement(adC, "test-c"); err != nil {
+		t.Fatalf("merge ix-c into ix-b: %v", err)
+	}
+
+	server := httptest.NewServer(daemonB.peerHandler())
+	defer server.Close()
+	targetB := controlTarget{ID: "ix-b", ControlAPI: server.URL}
+	advertisements, err := daemonA.fetchMembers(context.Background(), targetB)
+	if err != nil {
+		t.Fatalf("fetch ix-b members: %v", err)
+	}
+	for _, advertisement := range advertisements {
+		if _, err := daemonA.mergeAdvertisementFromControlTarget(advertisement, targetB); err != nil {
+			t.Fatalf("merge gossiped advertisement %q: %v", advertisement.IXID, err)
+		}
+	}
+	if _, ok := routeByPrefix(daemonA.runtimeRoutes(), "10.0.1.0/24"); !ok {
+		t.Fatalf("ix-a did not learn direct ix-b route: %#v", daemonA.runtimeRoutes())
+	}
+	if route, ok := routeByPrefix(daemonA.runtimeRoutes(), "10.0.2.0/24"); ok {
+		t.Fatalf("ix-a installed disabled transit route: %#v", route)
+	}
+	status := daemonA.runtimeRoutePolicyStatus()
+	if !hasRoutePolicyDecision(status.Decisions, "import", "ix-c", "10.0.2.0/24", "reject", "transit_import_disabled") {
+		t.Fatalf("route policy decisions missing transit disabled reject: %#v", status.Decisions)
+	}
+}
+
 func TestMembershipRejectsAnnouncedPrefixPathLoop(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	daemonA := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "https://127.0.0.1:9443", "10.0.0.0/24"), 1)
@@ -1173,7 +1498,7 @@ func TestControlMembersResponseOnlyPropagatesDirectLiveMembers(t *testing.T) {
 		},
 	}
 
-	response := daemon.controlMembersResponse(controlTarget{})
+	response := daemon.controlMembersResponse(controlTarget{}, controlMembersPageOptions{})
 	var got []string
 	for _, member := range response.Members {
 		got = append(got, member.IXID)
@@ -1684,6 +2009,214 @@ func hasRouteCandidate(candidates []routeCandidate, prefix core.Prefix, owner co
 	return false
 }
 
+func countDynamicControlTargets(targets []controlTarget) int {
+	count := 0
+	for _, target := range targets {
+		if strings.HasPrefix(string(target.ID), "ix-dyn-") {
+			count++
+		}
+	}
+	return count
+}
+
+func hasControlTarget(targets []controlTarget, ixID core.IXID) bool {
+	for _, target := range targets {
+		if target.ID == ixID {
+			return true
+		}
+	}
+	return false
+}
+
+func dynamicControlTargetIDs(targets []controlTarget) string {
+	ids := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if strings.HasPrefix(string(target.ID), "ix-dyn-") {
+			ids = append(ids, string(target.ID))
+		}
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
+}
+
+type switchablePeerServer struct {
+	server  *httptest.Server
+	online  atomic.Bool
+	current atomic.Value
+}
+
+func newSwitchablePeerServer(t *testing.T, daemon *Daemon) *switchablePeerServer {
+	t.Helper()
+	out := &switchablePeerServer{}
+	out.online.Store(true)
+	out.current.Store(daemon)
+	out.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !out.online.Load() {
+			http.Error(w, "peer offline", http.StatusServiceUnavailable)
+			return
+		}
+		current, _ := out.current.Load().(*Daemon)
+		if current == nil {
+			http.Error(w, "peer unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		current.peerHandler().ServeHTTP(w, r)
+	}))
+	return out
+}
+
+func (server *switchablePeerServer) URL() string {
+	return server.server.URL
+}
+
+func (server *switchablePeerServer) Close() {
+	server.server.Close()
+}
+
+func (server *switchablePeerServer) SetOnline(online bool) {
+	server.online.Store(online)
+}
+
+func (server *switchablePeerServer) SetDaemon(daemon *Daemon) {
+	server.current.Store(daemon)
+}
+
+func configureRestartMembershipTopology(t *testing.T, pkiSet membershipPKI, daemonA, daemonB, daemonC *Daemon, urlA, urlB, urlC string) {
+	t.Helper()
+	daemonA.desired.IX.ControlAPI = urlA
+	daemonB.desired.IX.ControlAPI = urlB
+	daemonC.desired.IX.ControlAPI = urlC
+	daemonB.desired.Bootstrap.Peers = []config.BootstrapPeerConfig{{
+		ID:         "ix-a",
+		Domain:     "lab.local",
+		ControlAPI: urlA,
+	}}
+	daemonC.desired.Bootstrap.Peers = []config.BootstrapPeerConfig{{
+		ID:         "ix-a",
+		Domain:     "lab.local",
+		ControlAPI: urlA,
+	}}
+	for _, daemon := range []*Daemon{daemonA, daemonB, daemonC} {
+		authorizeMembershipTestIXWithControlAPI(t, daemon, pkiSet, "ix-a", urlA, "10.0.0.0/24")
+		authorizeMembershipTestIXWithControlAPI(t, daemon, pkiSet, "ix-b", urlB, "10.0.1.0/24")
+		authorizeMembershipTestIXWithControlAPI(t, daemon, pkiSet, "ix-c", urlC, "10.0.2.0/24")
+		if err := daemon.refreshLocalAdvertisement(); err != nil {
+			t.Fatalf("refresh local advertisement for %s: %v", daemon.desired.IX.ID, err)
+		}
+	}
+}
+
+func restartMembershipTestDaemon(t *testing.T, previous *Daemon) *Daemon {
+	t.Helper()
+	restarted := newMembershipTestDaemon(t, previous.desired, previous.head.Seq)
+	restarted.cfg.DataDir = previous.cfg.DataDir
+	restarted.logPath = previous.logPath
+	if previous.logPath != "" && previous.logPath != "memory" {
+		store, err := configlog.NewFileStore(previous.logPath)
+		if err != nil {
+			t.Fatalf("reopen config log for %s: %v", restarted.desired.IX.ID, err)
+		}
+		restarted.store = store
+		head, err := store.Head()
+		if err != nil {
+			t.Fatalf("read reopened config log head for %s: %v", restarted.desired.IX.ID, err)
+		}
+		restarted.head = head
+	} else {
+		restarted.store = previous.store
+		restarted.head = previous.head
+	}
+	if err := restarted.registerLocalConfigSigner(); err != nil {
+		t.Fatalf("register restarted signer for %s: %v", restarted.desired.IX.ID, err)
+	}
+	if err := restarted.loadConfigSignerCache(); err != nil {
+		t.Fatalf("load restarted signer cache for %s: %v", restarted.desired.IX.ID, err)
+	}
+	if err := restarted.loadPersistedMembers(); err != nil {
+		t.Fatalf("load persisted members for %s: %v", restarted.desired.IX.ID, err)
+	}
+	if err := restarted.refreshLocalAdvertisement(); err != nil {
+		t.Fatalf("refresh restarted local advertisement for %s: %v", restarted.desired.IX.ID, err)
+	}
+	if err := restarted.applyRuntimeDataplaneSnapshot(context.Background()); err != nil {
+		t.Fatalf("apply restarted runtime snapshot for %s: %v", restarted.desired.IX.ID, err)
+	}
+	return restarted
+}
+
+func enableFileConfigLogForMembershipTest(t *testing.T, daemon *Daemon) {
+	t.Helper()
+	if daemon.cfg.DataDir == "" {
+		daemon.cfg.DataDir = t.TempDir()
+	}
+	logPath := filepath.Join(daemon.cfg.DataDir, "config.log")
+	store, err := configlog.NewFileStore(logPath)
+	if err != nil {
+		t.Fatalf("create config log for %s: %v", daemon.desired.IX.ID, err)
+	}
+	daemon.store = store
+	daemon.logPath = logPath
+	if err := daemon.registerLocalConfigSigner(); err != nil {
+		t.Fatalf("register config signer for %s: %v", daemon.desired.IX.ID, err)
+	}
+	if err := daemon.ensureConfigGenesisEvent(daemon.desired); err != nil {
+		t.Fatalf("append config genesis for %s: %v", daemon.desired.IX.ID, err)
+	}
+	head, err := store.Head()
+	if err != nil {
+		t.Fatalf("read config log head for %s: %v", daemon.desired.IX.ID, err)
+	}
+	daemon.head = head
+}
+
+func expirePersistedMembersForRestartTest(t *testing.T, daemons ...*Daemon) {
+	t.Helper()
+	expired := time.Now().UTC().Add(-memberRecordTTL - time.Second)
+	for _, daemon := range daemons {
+		daemon.membershipMu.Lock()
+		for ixID, record := range daemon.members {
+			if ixID == daemon.desired.IX.ID {
+				continue
+			}
+			record.LastSeen = expired
+			daemon.members[ixID] = record
+		}
+		daemon.membershipMu.Unlock()
+		if err := daemon.persistMembers(); err != nil {
+			t.Fatalf("persist expired members for %s: %v", daemon.desired.IX.ID, err)
+		}
+	}
+}
+
+func pollMembershipSet(ctx context.Context, daemonA, daemonB, daemonC *Daemon, rounds int) {
+	for i := 0; i < rounds; i++ {
+		daemonA.pollPeers(ctx)
+		daemonB.pollPeers(ctx)
+		daemonC.pollPeers(ctx)
+	}
+}
+
+func assertAllIXDirectRoutes(t *testing.T, daemonA, daemonB, daemonC *Daemon) {
+	t.Helper()
+	assertDirectRoute(t, daemonA, "10.0.1.0/24", "ix-b")
+	assertDirectRoute(t, daemonA, "10.0.2.0/24", "ix-c")
+	assertDirectRoute(t, daemonB, "10.0.0.0/24", "ix-a")
+	assertDirectRoute(t, daemonB, "10.0.2.0/24", "ix-c")
+	assertDirectRoute(t, daemonC, "10.0.0.0/24", "ix-a")
+	assertDirectRoute(t, daemonC, "10.0.1.0/24", "ix-b")
+}
+
+func assertDirectRoute(t *testing.T, daemon *Daemon, prefix core.Prefix, nextHop core.IXID) {
+	t.Helper()
+	route, ok := routeByPrefix(daemon.runtimeRoutes(), prefix)
+	if !ok {
+		t.Fatalf("%s missing route %s after restart/convergence: %#v", daemon.desired.IX.ID, prefix, daemon.runtimeRoutes())
+	}
+	if route.NextHop != nextHop || route.Owner != nextHop {
+		t.Fatalf("%s route %s = %#v, want direct owner/next_hop %s", daemon.desired.IX.ID, prefix, route, nextHop)
+	}
+}
+
 func newMembershipTestDaemon(t *testing.T, desired config.Desired, seq uint64) *Daemon {
 	t.Helper()
 	daemon, err := New(Config{DataplaneMode: "noop"}, WithDataplane(dataplane.NewNoopManager()))
@@ -1696,6 +2229,11 @@ func newMembershipTestDaemon(t *testing.T, desired config.Desired, seq uint64) *
 }
 
 func authorizeMembershipTestIX(t *testing.T, daemon *Daemon, pkiSet membershipPKI, ixID core.IXID, prefixes ...core.Prefix) {
+	t.Helper()
+	authorizeMembershipTestIXWithControlAPI(t, daemon, pkiSet, ixID, controlAPIForIX(ixID), prefixes...)
+}
+
+func authorizeMembershipTestIXWithControlAPI(t *testing.T, daemon *Daemon, pkiSet membershipPKI, ixID core.IXID, controlAPI string, prefixes ...core.Prefix) {
 	t.Helper()
 	if daemon.store == nil {
 		daemon.store = configlog.NewMemoryStore()
@@ -1726,7 +2264,7 @@ func authorizeMembershipTestIX(t *testing.T, daemon *Daemon, pkiSet membershipPK
 		IXCertFingerprint:     fingerprintForCertPath(t, pkiSet.ixCerts[ixID]),
 		AllowedPrefixes:       prefixes,
 		RouteAuthFingerprints: []string{fingerprintForCertPath(t, pkiSet.routeCerts[ixID])},
-		ControlAPI:            controlAPIForIX(ixID),
+		ControlAPI:            controlAPI,
 	})
 	if err != nil {
 		t.Fatalf("build test admission for %s: %v", ixID, err)

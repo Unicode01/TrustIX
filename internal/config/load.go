@@ -92,6 +92,7 @@ func Normalize(cfg Desired) Desired {
 		}
 		cfg.Peers[i].AllowedPrefixes = normalizePrefixList(cfg.Peers[i].AllowedPrefixes)
 	}
+	normalizeControlFabric(&cfg.ControlFabric)
 	normalizeRoutes(cfg.Routes)
 	normalizeRoutePolicy(&cfg.RoutePolicy)
 	normalizeTransportPolicy(&cfg.TransportPolicy)
@@ -402,6 +403,13 @@ func normalizeRoutePolicy(policy *RoutePolicyConfig) {
 	}
 	policy.ImportPrefixes = normalizePrefixList(policy.ImportPrefixes)
 	policy.ExportPrefixes = normalizePrefixList(policy.ExportPrefixes)
+}
+
+func normalizeControlFabric(fabric *ControlFabricConfig) {
+	if fabric == nil {
+		return
+	}
+	fabric.Profile = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(fabric.Profile), "-", "_"))
 }
 
 func normalizeRoutes(routes []RouteConfig) {

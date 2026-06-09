@@ -178,9 +178,9 @@ main() {
     *) die "TRUSTIX_RELEASE_SMOKE_UNLOAD_MODULES_ON_EXIT must be 1 or 0" ;;
   esac
   local module_unload_on_exit_yaml="false"
-  if [[ "$module_unload_on_exit" =~ ^(1|true|yes|on)$ ]]; then
-    module_unload_on_exit_yaml="true"
-  fi
+  case "$module_unload_on_exit" in
+    1|true|yes|on) module_unload_on_exit_yaml="true" ;;
+  esac
   rm -rf "$workdir"
   mkdir -p "$workdir/extract" "$workdir/runtime" "$workdir/certs"
   log "extract $(realpath "$tarball")"

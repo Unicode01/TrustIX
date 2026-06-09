@@ -161,9 +161,8 @@ csv_join() {
   done
 }
 
-split_values_append() {
+split_values() {
   local raw="$1"
-  local -n target_ref="$2"
   raw="${raw//,/;}"
   raw="${raw//+/;}"
   raw="${raw//|/;}"
@@ -178,7 +177,7 @@ split_values_append() {
     fi
     item="${item#"${item%%[![:space:]]*}"}"
     item="${item%"${item##*[![:space:]]}"}"
-    [[ -n "$item" ]] && target_ref+=("$item")
+    [[ -n "$item" ]] && printf '%s\n' "$item"
     [[ -z "$rest" ]] && break
   done
 }
@@ -335,8 +334,8 @@ while [[ $# -gt 0 ]]; do
     --config-ca-cert) [[ $# -ge 2 ]] || die "--config-ca-cert requires a value"; config_ca_cert="$2"; shift 2 ;;
     --config-ca-key) [[ $# -ge 2 ]] || die "--config-ca-key requires a value"; config_ca_key="$2"; shift 2 ;;
     --trust-root) [[ $# -ge 2 ]] || die "--trust-root requires a value"; trust_roots+=("$2"); shift 2 ;;
-    --dns) [[ $# -ge 2 ]] || die "--dns requires a value"; split_values_append "$2" dns_sans; shift 2 ;;
-    --ip) [[ $# -ge 2 ]] || die "--ip requires a value"; split_values_append "$2" ip_sans; shift 2 ;;
+    --dns) [[ $# -ge 2 ]] || die "--dns requires a value"; while IFS= read -r split_item; do dns_sans+=("$split_item"); done < <(split_values "$2"); shift 2 ;;
+    --ip) [[ $# -ge 2 ]] || die "--ip requires a value"; while IFS= read -r split_item; do ip_sans+=("$split_item"); done < <(split_values "$2"); shift 2 ;;
     --lan-id) [[ $# -ge 2 ]] || die "--lan-id requires a value"; lan_id="$2"; shift 2 ;;
     --lan-type) [[ $# -ge 2 ]] || die "--lan-type requires a value"; lan_type="$2"; shift 2 ;;
     --lan-iface) [[ $# -ge 2 ]] || die "--lan-iface requires a value"; lan_iface="$2"; shift 2 ;;
@@ -346,7 +345,7 @@ while [[ $# -gt 0 ]]; do
     --manage-address) [[ $# -ge 2 ]] || die "--manage-address requires a value"; manage_address="$2"; shift 2 ;;
     --manage-forwarding) [[ $# -ge 2 ]] || die "--manage-forwarding requires a value"; manage_forwarding="$2"; shift 2 ;;
     --manage-rp-filter) [[ $# -ge 2 ]] || die "--manage-rp-filter requires a value"; manage_rp_filter="$2"; shift 2 ;;
-    --advertise|--route-prefix) [[ $# -ge 2 ]] || die "$1 requires a value"; split_values_append "$2" advertise; shift 2 ;;
+    --advertise|--route-prefix) [[ $# -ge 2 ]] || die "$1 requires a value"; while IFS= read -r split_item; do advertise+=("$split_item"); done < <(split_values "$2"); shift 2 ;;
     --lan) [[ $# -ge 2 ]] || die "--lan requires a value"; lan_specs+=("$2"); shift 2 ;;
     --endpoint) [[ $# -ge 2 ]] || die "--endpoint requires a value"; endpoint_specs+=("$2"); shift 2 ;;
     --endpoint-name) [[ $# -ge 2 ]] || die "--endpoint-name requires a value"; endpoint_name="$2"; shift 2 ;;
@@ -430,7 +429,11 @@ run_trustix_ca ix issue -out "$issue_dir" -domain "$domain_id" -ix "$ix_id" -ca-
 all_prefixes=("${advertise[@]}")
 for spec in "${lan_specs[@]}"; do
   raw_adv="$(field_value "$spec" advertise "")"
-  [[ -n "$raw_adv" ]] && split_values_append "$raw_adv" all_prefixes
+  if [[ -n "$raw_adv" ]]; then
+    while IFS= read -r split_item; do
+      all_prefixes+=("$split_item")
+    done < <(split_values "$raw_adv")
+  fi
 done
 route_csv="$(csv_join "${all_prefixes[@]}")"
 log "issue route authorization for ${route_csv}"
@@ -458,7 +461,7 @@ fi
 
 write_lan_object() {
   local spec="$1"
-  local id type iface underlay gateway attach manage_addr manage_fwd manage_rpf raw_adv
+  local id type iface underlay gateway attach manage_addr manage_fwd manage_rpf raw_adv split_item
   local -a adv=()
   id="$(field_value "$spec" id "$lan_id")"
   type="$(field_value "$spec" type "$lan_type")"
@@ -474,7 +477,9 @@ write_lan_object() {
   fi
   raw_adv="$(field_value "$spec" advertise "")"
   if [[ -n "$raw_adv" ]]; then
-    split_values_append "$raw_adv" adv
+    while IFS= read -r split_item; do
+      adv+=("$split_item")
+    done < <(split_values "$raw_adv")
   else
     adv=("${advertise[@]}")
   fi

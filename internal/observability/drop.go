@@ -25,6 +25,7 @@ const (
 	DropBlackholeRoute       DropReason = "BLACKHOLE_ROUTE"
 	DropRejectRoute          DropReason = "REJECT_ROUTE"
 	DropTTLExpired           DropReason = "TTL_EXPIRED"
+	DropTransitDisabled      DropReason = "TRANSIT_DISABLED"
 )
 
 type Counter struct {

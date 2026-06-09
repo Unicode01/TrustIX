@@ -6,6 +6,7 @@
 
 int trustix_datapath_helpers_register(void);
 void trustix_datapath_helpers_unregister(void);
+void trustix_datapath_helpers_disable_panic_risk_params(void);
 __u64 trustix_datapath_helpers_feature_mask(void);
 
 #endif /* TRUSTIX_DATAPATH_HELPERS_INTERNAL_H */

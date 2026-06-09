@@ -34,21 +34,21 @@ func TestLANOffloadProtectionAppliesByMode(t *testing.T) {
 	}
 }
 
-func TestLANOffloadProtectionPreservesRouteGSOForExperimentalTCP(t *testing.T) {
+func TestLANOffloadProtectionDoesNotPreserveRouteGSOForDisabledExperimentalTCP(t *testing.T) {
 	t.Setenv("TRUSTIX_LAN_OFFLOAD_PROTECTION", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
-	if !lanOffloadProtectionPreservesRouteGSO(dataplane.AttachSpec{ExperimentalTCPTXDirect: true}) {
-		t.Fatal("auto mode should preserve TX offloads for experimental_tcp route-GSO kfunc")
+	if lanOffloadProtectionPreservesRouteGSO(dataplane.AttachSpec{ExperimentalTCPTXDirect: true}) {
+		t.Fatal("auto mode preserved TX offloads for production-disabled experimental_tcp route-GSO kfunc")
 	}
 	features := lanOffloadProtectionFeaturesForSpec(dataplane.AttachSpec{ExperimentalTCPTXDirect: true})
-	if _, ok := features["generic-segmentation-offload"]; ok {
-		t.Fatal("route-GSO offload protection should not disable TX/GSO")
+	if _, ok := features["generic-segmentation-offload"]; !ok {
+		t.Fatal("disabled route-GSO path should keep normal TX/GSO offload protection")
 	}
 	if _, ok := features["generic-receive-offload"]; !ok {
-		t.Fatal("route-GSO offload protection should still disable GRO")
+		t.Fatal("disabled route-GSO path should still disable GRO")
 	}
 
 	t.Setenv("TRUSTIX_LAN_OFFLOAD_PROTECTION_PRESERVE_ROUTE_GSO", "0")
@@ -57,7 +57,7 @@ func TestLANOffloadProtectionPreservesRouteGSOForExperimentalTCP(t *testing.T) {
 	}
 }
 
-func TestLANOffloadProtectionPreservesRouteGSOForExperimentalTCPFinalizeActiveGSO(t *testing.T) {
+func TestLANOffloadProtectionDoesNotPreserveRouteGSOForDisabledExperimentalTCPFinalizeActiveGSO(t *testing.T) {
 	t.Setenv("TRUSTIX_LAN_OFFLOAD_PROTECTION", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "1")
@@ -69,15 +69,15 @@ func TestLANOffloadProtectionPreservesRouteGSOForExperimentalTCPFinalizeActiveGS
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
 
 	spec := dataplane.AttachSpec{ExperimentalTCPTXDirect: true}
-	if !lanOffloadProtectionPreservesRouteGSO(spec) {
-		t.Fatal("auto mode should preserve TX offloads for experimental_tcp finalize-flow active-GSO")
+	if lanOffloadProtectionPreservesRouteGSO(spec) {
+		t.Fatal("auto mode preserved TX offloads for production-disabled experimental_tcp finalize-flow active-GSO")
 	}
 	features := lanOffloadProtectionFeaturesForSpec(spec)
-	if _, ok := features["generic-segmentation-offload"]; ok {
-		t.Fatal("finalize-flow active-GSO offload protection should not disable TX/GSO")
+	if _, ok := features["generic-segmentation-offload"]; !ok {
+		t.Fatal("disabled finalize-flow active-GSO should keep normal TX/GSO offload protection")
 	}
 	if _, ok := features["generic-receive-offload"]; !ok {
-		t.Fatal("finalize-flow active-GSO offload protection should still disable GRO by default")
+		t.Fatal("disabled finalize-flow active-GSO should still disable GRO by default")
 	}
 }
 

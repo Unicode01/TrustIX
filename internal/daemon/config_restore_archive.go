@@ -27,6 +27,7 @@ const (
 	maxConfigRestoreArchiveEntryBytes        int64 = 32 << 20
 	maxConfigRestoreArchiveUncompressedBytes int64 = 96 << 20
 	maxConfigRestoreArchiveFiles                   = 128
+	maxConfigRestoreArchiveEntries                 = 256
 )
 
 type configRestoreArchiveResponse struct {
@@ -138,6 +139,7 @@ func parseConfigRestoreArchive(payload []byte) (parsedConfigRestoreArchive, erro
 	tarReader := tar.NewReader(gzipReader)
 	entries := make(map[string][]byte)
 	var total int64
+	entryCount := 0
 	fileCount := 0
 	for {
 		header, err := tarReader.Next()
@@ -147,7 +149,14 @@ func parseConfigRestoreArchive(payload []byte) (parsedConfigRestoreArchive, erro
 		if err != nil {
 			return parsedConfigRestoreArchive{}, fmt.Errorf("read restore archive tar: %w", err)
 		}
+		entryCount++
+		if entryCount > maxConfigRestoreArchiveEntries {
+			return parsedConfigRestoreArchive{}, fmt.Errorf("restore archive has more than %d entries", maxConfigRestoreArchiveEntries)
+		}
 		if header.Typeflag == tar.TypeDir {
+			if _, err := normalizeRestoreArchivePath(header.Name); err != nil {
+				return parsedConfigRestoreArchive{}, err
+			}
 			continue
 		}
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {

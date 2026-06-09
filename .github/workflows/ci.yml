@@ -54,6 +54,13 @@ jobs:
           go test "${pkgs[@]}" -count=1
           go test ./internal/dataplane/ebpf -run '^$' -count=1
 
+      - name: Security Smoke
+        run: |
+          TRUSTIX_SECURITY_SMOKE_GO_TESTS=0 \
+          TRUSTIX_SECURITY_SMOKE_CONTROL=1 \
+          TRUSTIX_SECURITY_SMOKE_ROOT=0 \
+          bash scripts/linux-security-smoke.sh
+
       - name: Build Userspace Release
         run: |
           bash scripts/trustix-build.sh \

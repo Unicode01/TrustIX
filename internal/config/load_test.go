@@ -824,6 +824,46 @@ route_policy:
 	}
 }
 
+func TestLoadBytesKeepsRoutePolicyTransitCapabilities(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+route_policy:
+  transit_forwarding: false
+  import_transit_routes: false
+`), ".yaml")
+	if err != nil {
+		t.Fatalf("load route policy yaml: %v", err)
+	}
+	if RoutePolicyTransitForwardingEnabled(cfg.RoutePolicy) {
+		t.Fatal("transit forwarding default helper ignored configured false")
+	}
+	if RoutePolicyImportTransitRoutesEnabled(cfg.RoutePolicy) {
+		t.Fatal("import transit routes default helper ignored configured false")
+	}
+	if cfg.RoutePolicy.TransitForwarding == nil || *cfg.RoutePolicy.TransitForwarding {
+		t.Fatalf("transit forwarding = %#v, want pointer to false", cfg.RoutePolicy.TransitForwarding)
+	}
+	if cfg.RoutePolicy.ImportTransitRoutes == nil || *cfg.RoutePolicy.ImportTransitRoutes {
+		t.Fatalf("import transit routes = %#v, want pointer to false", cfg.RoutePolicy.ImportTransitRoutes)
+	}
+
+	cfg, err = LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+`), ".yaml")
+	if err != nil {
+		t.Fatalf("load default route policy yaml: %v", err)
+	}
+	if !RoutePolicyTransitForwardingEnabled(cfg.RoutePolicy) || !RoutePolicyImportTransitRoutesEnabled(cfg.RoutePolicy) {
+		t.Fatalf("default route transit capabilities should be enabled: %#v", cfg.RoutePolicy)
+	}
+}
+
 func TestLoadBytesRejectsUnsupportedFragmentPolicy(t *testing.T) {
 	_, err := LoadBytes([]byte(`
 domain:
@@ -1403,5 +1443,37 @@ routes: []
 	}
 	if cfg.Bootstrap.Peers[0].Domain != "" {
 		t.Fatalf("bootstrap domain = %q, want empty/defaulted at runtime", cfg.Bootstrap.Peers[0].Domain)
+	}
+}
+
+func TestLoadBytesAcceptsControlFabricConfig(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`{
+  "domain": {"id": "lab.local"},
+  "ix": {"id": "ix-a"},
+  "lan": {},
+  "endpoints": [],
+  "peers": [],
+  "routes": [],
+  "control_fabric": {
+    "profile": "route-reflector",
+    "dynamic_control_fanout": 8,
+    "member_page_size": 64,
+    "member_import_limit": 128
+  }
+}`), ".json")
+	if err != nil {
+		t.Fatalf("load control fabric json: %v", err)
+	}
+	if cfg.ControlFabric.Profile != "route_reflector" {
+		t.Fatalf("control fabric profile = %q, want normalized route_reflector", cfg.ControlFabric.Profile)
+	}
+	if cfg.ControlFabric.DynamicControlFanout == nil || *cfg.ControlFabric.DynamicControlFanout != 8 {
+		t.Fatalf("control fabric dynamic fanout = %#v, want 8", cfg.ControlFabric.DynamicControlFanout)
+	}
+	if cfg.ControlFabric.MemberPageSize == nil || *cfg.ControlFabric.MemberPageSize != 64 {
+		t.Fatalf("control fabric member page size = %#v, want 64", cfg.ControlFabric.MemberPageSize)
+	}
+	if cfg.ControlFabric.MemberImportLimit == nil || *cfg.ControlFabric.MemberImportLimit != 128 {
+		t.Fatalf("control fabric member import limit = %#v, want 128", cfg.ControlFabric.MemberImportLimit)
 	}
 }

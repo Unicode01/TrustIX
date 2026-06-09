@@ -153,6 +153,36 @@ func TestDataplaneAttachSpecMarksExperimentalTCPTXDirect(t *testing.T) {
 	}
 }
 
+func TestDataplaneAttachSpecEnablesPerformancePlaintextExperimentalTCPRouteGSO(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:      "br-lan",
+			AttachMode: config.LANAttachModeExisting,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	})
+
+	if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly {
+		t.Fatalf("performance plaintext experimental_tcp should enable direct route-GSO path, spec=%#v", spec)
+	}
+	if !spec.ExperimentalTCPRouteGSOAsync || !spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker || !spec.ExperimentalTCPPlainSkipSequence || !spec.ExperimentalTCPPlainACKOnly {
+		t.Fatalf("performance plaintext experimental_tcp route-GSO flags missing, spec=%#v", spec)
+	}
+	if spec.KernelUDPTXDirectOnlyReason != "transport_policy.experimental_tcp=performance route_gso_async_outer_gso=enabled encryption=plaintext" {
+		t.Fatalf("direct-only reason = %q", spec.KernelUDPTXDirectOnlyReason)
+	}
+}
+
 func TestDataplaneAttachSpecKeepsFallbackForRequireKernelPlaintextByDefault(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{

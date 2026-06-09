@@ -211,7 +211,7 @@ func (manager *Manager) applyLANOffloadProtectionLocked(link netlink.Link, spec 
 	}
 	if preserveRouteGSO {
 		manager.capabilities = appendCapability(manager.capabilities, "lan-offload-protection-route-gso")
-		manager.warnings = append(manager.warnings, "LAN offload protection preserved TX checksum/SG/TSO/GSO for kernel UDP active-GSO or experimental_tcp route-GSO")
+		manager.warnings = append(manager.warnings, "LAN offload protection preserved TX checksum/SG/TSO/GSO for kernel UDP active-GSO")
 	}
 	if preserveRouteGSORX {
 		manager.capabilities = appendCapability(manager.capabilities, "lan-offload-protection-route-gso-rx")
@@ -333,7 +333,8 @@ func lanOffloadProtectionPreservesRouteGSO(spec dataplane.AttachSpec) bool {
 	default:
 		return false
 	}
-	if kernelUDPTXDirectOnlyEnabled(spec) &&
+	if !spec.ExperimentalTCPTXDirect &&
+		kernelUDPTXDirectOnlyEnabled(spec) &&
 		kernelUDPTunnelGSOEnabledForOptions(kernelUDPTXDirectProgramOptions{
 			Enabled:       true,
 			KernelUDPOnly: true,
@@ -356,7 +357,7 @@ func experimentalTCPActiveGSOLANOffloadPreserveRequested(spec dataplane.AttachSp
 	if !spec.ExperimentalTCPTXDirect || !kernelUDPTXDirectOnlyEnabled(spec) {
 		return false
 	}
-	if experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequested() ||
+	if experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec) ||
 		experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
 		return true
 	}

@@ -62,6 +62,7 @@
 
 #define TRUSTIX_DATAPATH_FEATURE_GSO_SKB BIT_ULL(6)
 #define TRUSTIX_DATAPATH_FEATURE_ROUTE_TCP_KFUNC BIT_ULL(8)
+#define TRUSTIX_DATAPATH_FEATURE_ROUTE_TCP_XMIT_KFUNC BIT_ULL(9)
 
 #define TRUSTIX_SKB_CLEAR_TX_OFFLOAD_CSUM BIT(0)
 #define TRUSTIX_SKB_CLEAR_TX_OFFLOAD_GSO BIT(1)
@@ -106,6 +107,9 @@
 #define TRUSTIX_TIXT_RX_STREAM_MAX_FRAMES 64
 #define TRUSTIX_TIXT_RX_STREAM_PARSE_LINEAR_MAX (256U * 1024U)
 #define TRUSTIX_TIXT_TX_ROUTE_STREAM_MAX_FRAMES 64
+#define TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_FRAMES 40
+#define TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_BATCHES \
+	DIV_ROUND_UP(TRUSTIX_TIXT_TX_GSO_MAX_SEGMENTS, 2)
 #define TRUSTIX_ROUTE_TCP_GSO_ASYNC_CROSS_ITEM_LOOKAHEAD_MAX 16
 #define TRUSTIX_TIXT_RX_SINGLE_COALESCE_SLOTS 512
 #define TRUSTIX_TIXT_RX_SINGLE_COALESCE_MAX_FRAMES 64
@@ -257,6 +261,7 @@ struct trustix_tixt_rx_single_coalesce_emit {
 	struct sk_buff *skb;
 	struct sk_buff *skb_list;
 	struct net_device *dev;
+	u32 gso_size;
 	unsigned int frames;
 	unsigned int list_frames;
 };
@@ -316,8 +321,12 @@ static bool trustix_datapath_helpers_registered;
 static bool trustix_tixt_tx_plain_skip_sequence;
 static bool trustix_tixt_tx_plain_ack_only;
 static bool trustix_route_tcp_gso;
+static bool trustix_route_tcp_gso_sync_stream;
+static bool trustix_route_tcp_gso_sync_stream_outer_gso = true;
+static unsigned int trustix_route_tcp_gso_sync_stream_max_frames = 8;
 static bool trustix_route_tcp_gso_async;
 static bool trustix_route_tcp_gso_async_dev_xmit;
+static bool trustix_route_tcp_gso_async_prefer;
 static unsigned int trustix_route_tcp_gso_async_limit = 256;
 static unsigned long trustix_route_tcp_gso_async_bytes_limit = 32UL * 1024UL * 1024UL;
 static unsigned int trustix_route_tcp_gso_async_worker_item_budget = 16;
@@ -339,6 +348,8 @@ static bool trustix_route_tcp_gso_async_force_inner_checksum = true;
 static bool trustix_route_tcp_gso_async_direct_xmit;
 static bool trustix_route_tcp_gso_async_xmit_more;
 static unsigned int trustix_route_tcp_gso_async_xmit_cn_sleep_usecs;
+static unsigned int trustix_route_tcp_gso_async_xmit_busy_retries = 2;
+static unsigned int trustix_route_tcp_gso_async_xmit_busy_sleep_usecs;
 static bool trustix_route_tcp_gso_async_ordered_queue = true;
 static bool trustix_route_tcp_gso_async_unbound_worker;
 static bool trustix_route_tcp_gso_async_sharded_queue;
@@ -396,6 +407,7 @@ static bool trustix_tixt_rx_single_coalesce_hot_stats;
 static bool trustix_tixt_rx_single_coalesce_defer_full_flush;
 static bool trustix_tixt_rx_single_coalesce_keep_full_timer;
 static bool trustix_tixt_rx_single_coalesce_set_hash;
+static unsigned int trustix_tixt_rx_backlog_worker_queue_limit = 8192;
 static unsigned int trustix_tixt_rx_single_coalesce_schedule_stride = 1;
 static unsigned int trustix_tixt_rx_stream_max_frames = 16;
 static unsigned int trustix_tixt_rx_single_coalesce_max_frames = 16;
@@ -442,10 +454,22 @@ static unsigned long trustix_route_tcp_gso_async_worker_budget_usleeps;
 static unsigned long trustix_route_tcp_gso_async_segment_errors;
 static unsigned long trustix_route_tcp_gso_async_prepare_errors;
 static unsigned long trustix_route_tcp_gso_async_txq_stopped_drops;
+static unsigned long trustix_route_tcp_gso_async_txq_stopped_queued;
 static unsigned long trustix_route_tcp_gso_async_xmit_packets;
 static unsigned long trustix_route_tcp_gso_async_xmit_errors;
 static unsigned long trustix_route_tcp_gso_async_xmit_cn;
 static unsigned long trustix_route_tcp_gso_async_xmit_more_sets;
+static unsigned long trustix_route_tcp_gso_async_xmit_busy_retry_attempts;
+static unsigned long trustix_route_tcp_gso_async_xmit_busy_retry_successes;
+static unsigned long trustix_route_tcp_gso_async_xmit_busy_retry_failures;
+static unsigned long trustix_route_tcp_gso_direct_xmit_attempts;
+static unsigned long trustix_route_tcp_gso_direct_xmit_successes;
+static unsigned long trustix_route_tcp_gso_direct_xmit_cn;
+static unsigned long trustix_route_tcp_gso_direct_xmit_busy;
+static unsigned long trustix_route_tcp_gso_direct_xmit_busy_fallbacks;
+static unsigned long trustix_route_tcp_gso_direct_xmit_drops;
+static unsigned long trustix_route_tcp_gso_direct_xmit_errors;
+static unsigned long trustix_route_tcp_gso_direct_xmit_not_ready;
 static unsigned long trustix_route_tcp_gso_async_stream_batches;
 static unsigned long trustix_route_tcp_gso_async_stream_frames;
 static unsigned long trustix_route_tcp_gso_async_stream_software_segments;
@@ -474,6 +498,7 @@ static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_frames;
 static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_fallbacks;
 static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_errors;
 static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_blocked;
+static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_verify_errors;
 static unsigned long trustix_route_tcp_gso_async_stream_cross_item_batches;
 static unsigned long trustix_route_tcp_gso_async_stream_cross_item_items;
 static unsigned long trustix_route_tcp_gso_async_stream_cross_item_frames;
@@ -502,7 +527,35 @@ static unsigned long trustix_route_tcp_gso_async_stream_cross_item_lookahead_sca
 static unsigned long trustix_route_tcp_gso_async_stream_cross_item_lookahead_blocked;
 static unsigned long trustix_route_tcp_gso_async_stream_cross_item_dynamic_cap_high;
 static unsigned long trustix_route_tcp_gso_async_stream_cross_item_dynamic_cap_low;
+static int trustix_route_tcp_gso_async_stream_cross_item_last_ret;
+static unsigned int trustix_route_tcp_gso_async_stream_cross_item_last_stage;
+static unsigned int trustix_route_tcp_gso_async_stream_cross_item_last_items;
+static unsigned int trustix_route_tcp_gso_async_stream_cross_item_last_frames;
+static unsigned int trustix_route_tcp_gso_async_stream_cross_item_last_stream_payload_len;
+static unsigned int trustix_route_tcp_gso_async_stream_cross_item_last_outer_gso_size;
+static unsigned int trustix_route_tcp_gso_async_stream_cross_item_last_first_frame_len;
+static unsigned int trustix_route_tcp_gso_async_stream_cross_item_last_last_frame_len;
 static unsigned long trustix_route_tcp_gso_async_reslice_plans;
+static unsigned long trustix_route_tcp_gso_sync_calls;
+static unsigned long trustix_route_tcp_gso_sync_segments;
+static unsigned long trustix_route_tcp_gso_sync_fallbacks;
+static unsigned long trustix_route_tcp_gso_sync_errors;
+static unsigned long trustix_route_tcp_gso_sync_xmit_errors;
+static unsigned long trustix_route_tcp_gso_sync_async_redirects;
+static unsigned long trustix_route_tcp_gso_sync_stream_attempts;
+static unsigned long trustix_route_tcp_gso_sync_stream_batches;
+static unsigned long trustix_route_tcp_gso_sync_stream_frames;
+static unsigned long trustix_route_tcp_gso_sync_stream_fallbacks;
+static unsigned long trustix_route_tcp_gso_sync_stream_errors;
+static unsigned long trustix_route_tcp_gso_sync_stream_xmit_errors;
+static unsigned long trustix_route_tcp_gso_sync_stream_build_errors;
+static unsigned long trustix_route_tcp_gso_sync_stream_build_busy;
+static unsigned long trustix_route_tcp_gso_sync_stream_build_nomem;
+static unsigned long trustix_route_tcp_gso_sync_stream_build_unsupported;
+static unsigned long trustix_route_tcp_gso_sync_stream_ready_errors;
+static unsigned long trustix_route_tcp_gso_sync_stream_partial_xmits;
+static unsigned long trustix_route_tcp_gso_direct_xmit_safe_fallbacks;
+static unsigned long trustix_route_tcp_gso_async_prefer_sync_bypasses;
 static unsigned long trustix_route_tcp_gso_async_hash_tx_queue_sets;
 static unsigned long trustix_route_tcp_gso_async_hash_tx_queue_fallbacks;
 static unsigned long trustix_route_tcp_gso_async_hash_tx_queue_q0;
@@ -536,6 +589,14 @@ static unsigned int trustix_route_tcp_gso_async_stream_last_gso_size;
 static unsigned int trustix_route_tcp_gso_async_stream_last_gso_segs;
 static unsigned int trustix_route_tcp_gso_async_stream_last_gso_type;
 static unsigned int trustix_route_tcp_gso_async_stream_last_offsets;
+static int trustix_route_tcp_gso_sync_stream_last_ret;
+static int trustix_route_tcp_gso_sync_stream_last_stage;
+static unsigned int trustix_route_tcp_gso_sync_stream_last_batch_count;
+static unsigned int trustix_route_tcp_gso_sync_stream_last_batch_frames;
+static unsigned int trustix_route_tcp_gso_sync_stream_last_len;
+static unsigned int trustix_route_tcp_gso_sync_stream_last_gso_size;
+static unsigned int trustix_route_tcp_gso_sync_stream_last_gso_segs;
+static unsigned int trustix_route_tcp_gso_sync_stream_last_gso_type;
 static LIST_HEAD(trustix_route_tcp_gso_async_queue);
 static DEFINE_SPINLOCK(trustix_route_tcp_gso_async_lock);
 static bool trustix_route_tcp_gso_async_scheduled;
@@ -577,9 +638,12 @@ static unsigned long trustix_route_tcp_xmit_worker_header_errors;
 static unsigned long trustix_route_tcp_xmit_worker_xmit_ok;
 static unsigned long trustix_route_tcp_xmit_worker_xmit_errors;
 static unsigned long trustix_route_tcp_xmit_worker_flush_drops;
+static unsigned long trustix_route_tcp_xmit_worker_disabled;
 static struct sk_buff_head trustix_route_tcp_xmit_worker_queue;
 static bool trustix_route_tcp_xmit_worker_scheduled;
 static void trustix_route_tcp_xmit_worker_fn(struct work_struct *work);
+static void trustix_route_tcp_xmit_worker_flush(void);
+static void trustix_route_tcp_gso_async_flush(void);
 static DECLARE_WORK(trustix_route_tcp_xmit_work,
 		    trustix_route_tcp_xmit_worker_fn);
 
@@ -602,9 +666,21 @@ static unsigned long trustix_tixt_rx_stream_coalesce_xmit_errors;
 static unsigned long trustix_tixt_rx_stream_ordered_list_batches;
 static unsigned long trustix_tixt_rx_stream_ordered_list_frames;
 static unsigned long trustix_tixt_rx_stream_ordered_list_errors;
+static unsigned long trustix_tixt_rx_stream_backlog_packets;
+static unsigned long trustix_tixt_rx_stream_backlog_drops;
+static unsigned int trustix_tixt_rx_backlog_worker_depth;
+static unsigned long trustix_tixt_rx_backlog_worker_enqueued;
+static unsigned long trustix_tixt_rx_backlog_worker_delivered;
+static unsigned long trustix_tixt_rx_backlog_worker_drops;
+static unsigned long trustix_tixt_rx_backlog_worker_queue_full;
+static unsigned long trustix_tixt_rx_backlog_worker_disabled;
+static unsigned long trustix_tixt_rx_backlog_worker_runs;
 static unsigned long trustix_tixt_rx_coalesce_segment_batches;
 static unsigned long trustix_tixt_rx_coalesce_segment_frames;
 static unsigned long trustix_tixt_rx_coalesce_segment_errors;
+static unsigned long trustix_tixt_rx_coalesce_segment_backlog_packets;
+static unsigned long trustix_tixt_rx_coalesce_segment_backlog_drops;
+static unsigned long trustix_tixt_rx_coalesce_partial_csum_fallbacks;
 static unsigned long trustix_tixt_rx_stream_nonlinear_parse_hits;
 static unsigned long trustix_tixt_rx_single_coalesce_candidates;
 static unsigned long trustix_tixt_rx_single_coalesce_batches;
@@ -616,6 +692,13 @@ static unsigned long trustix_tixt_rx_single_coalesce_xmit_errors;
 static unsigned long trustix_tixt_rx_single_coalesce_collisions;
 static unsigned long trustix_tixt_rx_single_coalesce_hash_misses;
 static unsigned long trustix_tixt_rx_single_coalesce_seq_misses;
+static unsigned long trustix_tixt_rx_single_coalesce_dev_misses;
+static unsigned long trustix_tixt_rx_single_coalesce_flow_misses;
+static unsigned long trustix_tixt_rx_single_coalesce_header_misses;
+static unsigned long trustix_tixt_rx_single_coalesce_gso_size_misses;
+static unsigned long trustix_tixt_rx_single_coalesce_ack_variations;
+static unsigned long trustix_tixt_rx_single_coalesce_window_variations;
+static unsigned long trustix_tixt_rx_single_coalesce_flags_variations;
 static unsigned long trustix_tixt_rx_single_coalesce_tcp_csum_skipped;
 static unsigned long trustix_tixt_rx_single_coalesce_tcp_csum_computed;
 static unsigned long trustix_tixt_rx_single_coalesce_direct_list_batches;
@@ -640,6 +723,7 @@ static unsigned long trustix_tixt_rx_single_coalesce_linear_max_bytes;
 static unsigned long trustix_tixt_rx_single_coalesce_hybrid_head_batches;
 static unsigned long trustix_tixt_rx_single_coalesce_hybrid_head_bytes;
 static unsigned long trustix_tixt_rx_single_coalesce_netif_rx_packets;
+static unsigned long trustix_tixt_rx_single_coalesce_netif_rx_drops;
 static unsigned long trustix_tixt_rx_single_coalesce_schedules;
 static unsigned long trustix_tixt_rx_single_coalesce_schedule_skips;
 static unsigned long trustix_tixt_rx_single_coalesce_warmup_passes;
@@ -662,6 +746,13 @@ static unsigned int trustix_tixt_rx_single_coalesce_last_inner_len;
 static unsigned int trustix_tixt_rx_single_coalesce_last_inner_tot_len;
 static unsigned int trustix_tixt_rx_single_coalesce_last_payload_len;
 static unsigned int trustix_tixt_rx_single_coalesce_last_tcp_header_len;
+static struct sk_buff_head trustix_tixt_rx_backlog_worker_queue;
+static bool trustix_tixt_rx_backlog_worker_scheduled;
+static bool trustix_tixt_rx_backlog_worker_quiescing = true;
+static void trustix_tixt_rx_backlog_worker_fn(struct work_struct *work);
+static void trustix_tixt_rx_backlog_worker_flush(void);
+static DECLARE_WORK(trustix_tixt_rx_backlog_work,
+		    trustix_tixt_rx_backlog_worker_fn);
 static unsigned long trustix_kudp_rx_parse_calls;
 static unsigned long trustix_kudp_rx_parse_udp_calls;
 static unsigned long trustix_kudp_rx_parse_tcp_calls;
@@ -733,6 +824,145 @@ static const struct kernel_param_ops trustix_tixt_rx_single_coalesce_gso_ops = {
 	.get = trustix_tixt_rx_single_coalesce_gso_get,
 };
 
+static int trustix_tixt_rx_single_coalesce_linear_max_set(
+				const char *val,
+				const struct kernel_param *kp)
+{
+	unsigned int value;
+	int ret;
+
+	ret = kstrtouint(val, 0, &value);
+	if (ret)
+		return ret;
+	if (READ_ONCE(trustix_tixt_rx_single_coalesce_slots_ready))
+		trustix_tixt_rx_single_coalesce_drop_all();
+	WRITE_ONCE(trustix_tixt_rx_single_coalesce_linear_max, value);
+	return 0;
+}
+
+static int trustix_tixt_rx_single_coalesce_linear_max_get(
+				char *buf,
+				const struct kernel_param *kp)
+{
+	return sysfs_emit(buf, "%u\n",
+			  READ_ONCE(trustix_tixt_rx_single_coalesce_linear_max));
+}
+
+static const struct kernel_param_ops trustix_tixt_rx_single_coalesce_linear_max_ops = {
+	.set = trustix_tixt_rx_single_coalesce_linear_max_set,
+	.get = trustix_tixt_rx_single_coalesce_linear_max_get,
+};
+
+static bool trustix_route_tcp_gso_async_param_quiesce_begin(void)
+{
+	if (!READ_ONCE(trustix_datapath_helpers_registered))
+		return false;
+	WRITE_ONCE(trustix_route_tcp_gso_async_quiescing, true);
+	smp_mb();
+	trustix_route_tcp_gso_async_flush();
+	return true;
+}
+
+static void trustix_route_tcp_gso_async_param_quiesce_end(bool quiesced)
+{
+	if (!quiesced)
+		return;
+	trustix_route_tcp_gso_async_flush();
+	smp_mb();
+	WRITE_ONCE(trustix_route_tcp_gso_async_quiescing, false);
+}
+
+static int trustix_route_tcp_gso_quiesced_bool_set(const char *val,
+						   const struct kernel_param *kp)
+{
+	bool value;
+	bool quiesced;
+	int ret;
+
+	if (!kp || !kp->arg)
+		return -EINVAL;
+	ret = kstrtobool(val, &value);
+	if (ret)
+		return ret;
+	quiesced = trustix_route_tcp_gso_async_param_quiesce_begin();
+	WRITE_ONCE(*(bool *)kp->arg, value);
+	trustix_route_tcp_gso_async_param_quiesce_end(quiesced);
+	return 0;
+}
+
+static const struct kernel_param_ops trustix_route_tcp_gso_quiesced_bool_ops = {
+	.set = trustix_route_tcp_gso_quiesced_bool_set,
+	.get = param_get_bool,
+};
+
+static int trustix_route_tcp_xmit_worker_bool_set(const char *val,
+						  const struct kernel_param *kp)
+{
+	bool value;
+	int ret;
+
+	if (!kp || !kp->arg)
+		return -EINVAL;
+	ret = kstrtobool(val, &value);
+	if (ret)
+		return ret;
+	WRITE_ONCE(*(bool *)kp->arg, value);
+	if (READ_ONCE(trustix_datapath_helpers_registered))
+		trustix_route_tcp_xmit_worker_flush();
+	return 0;
+}
+
+static const struct kernel_param_ops trustix_route_tcp_xmit_worker_bool_ops = {
+	.set = trustix_route_tcp_xmit_worker_bool_set,
+	.get = param_get_bool,
+};
+
+static int trustix_route_tcp_gso_quiesced_uint_set(const char *val,
+						   const struct kernel_param *kp)
+{
+	unsigned int value;
+	bool quiesced;
+	int ret;
+
+	if (!kp || !kp->arg)
+		return -EINVAL;
+	ret = kstrtouint(val, 0, &value);
+	if (ret)
+		return ret;
+	quiesced = trustix_route_tcp_gso_async_param_quiesce_begin();
+	WRITE_ONCE(*(unsigned int *)kp->arg, value);
+	trustix_route_tcp_gso_async_param_quiesce_end(quiesced);
+	return 0;
+}
+
+static const struct kernel_param_ops trustix_route_tcp_gso_quiesced_uint_ops = {
+	.set = trustix_route_tcp_gso_quiesced_uint_set,
+	.get = param_get_uint,
+};
+
+static int trustix_route_tcp_gso_quiesced_ulong_set(const char *val,
+						    const struct kernel_param *kp)
+{
+	unsigned long value;
+	bool quiesced;
+	int ret;
+
+	if (!kp || !kp->arg)
+		return -EINVAL;
+	ret = kstrtoul(val, 0, &value);
+	if (ret)
+		return ret;
+	quiesced = trustix_route_tcp_gso_async_param_quiesce_begin();
+	WRITE_ONCE(*(unsigned long *)kp->arg, value);
+	trustix_route_tcp_gso_async_param_quiesce_end(quiesced);
+	return 0;
+}
+
+static const struct kernel_param_ops trustix_route_tcp_gso_quiesced_ulong_ops = {
+	.set = trustix_route_tcp_gso_quiesced_ulong_set,
+	.get = param_get_ulong,
+};
+
 module_param_named(tixt_tx_plain_skip_sequence,
 		   trustix_tixt_tx_plain_skip_sequence, bool, 0644);
 MODULE_PARM_DESC(tixt_tx_plain_skip_sequence,
@@ -743,94 +973,129 @@ module_param_named(tixt_tx_plain_ack_only,
 MODULE_PARM_DESC(tixt_tx_plain_ack_only,
 		 "Emit ACK-only outer TCP flags instead of PSH+ACK in plaintext TIXT TX helpers");
 
-module_param_named(route_tcp_gso, trustix_route_tcp_gso, bool, 0644);
+module_param_cb(route_tcp_gso, &trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso, 0644);
 MODULE_PARM_DESC(route_tcp_gso,
 		 "Enable experimental route-TCP GSO worker path; off by default");
 
-module_param_named(route_tcp_gso_async, trustix_route_tcp_gso_async, bool,
-		   0644);
+module_param_named(route_tcp_gso_sync_stream,
+		   trustix_route_tcp_gso_sync_stream, bool, 0644);
+MODULE_PARM_DESC(route_tcp_gso_sync_stream,
+		 "Request copied TIXT stream batching for route-TCP GSO; kfunc callers are redirected to the async worker before segmentation/xmit");
+
+module_param_named(route_tcp_gso_sync_stream_outer_gso,
+		   trustix_route_tcp_gso_sync_stream_outer_gso, bool, 0644);
+MODULE_PARM_DESC(route_tcp_gso_sync_stream_outer_gso,
+		 "Allow synchronous route-TCP stream batches to use outer TCP GSO when the underlay device supports TSO/HW checksum");
+
+module_param_named(route_tcp_gso_sync_stream_max_frames,
+		   trustix_route_tcp_gso_sync_stream_max_frames, uint, 0644);
+MODULE_PARM_DESC(route_tcp_gso_sync_stream_max_frames,
+		 "Maximum TIXT frames copied into one synchronous route-TCP stream batch; clamped to 1..16");
+
+module_param_cb(route_tcp_gso_async, &trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async,
 		 "Clone route-TCP GSO skbs in TC context and segment/transmit from a worker; off by default");
 
-module_param_named(route_tcp_gso_async_dev_xmit,
-		   trustix_route_tcp_gso_async_dev_xmit, bool, 0644);
+module_param_cb(route_tcp_gso_async_dev_xmit,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_dev_xmit, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_dev_xmit,
 		 "Final gate for route-TCP GSO async dev_queue_xmit from worker context");
 
-module_param_named(route_tcp_gso_async_limit,
-		   trustix_route_tcp_gso_async_limit, uint, 0644);
+module_param_cb(route_tcp_gso_async_prefer,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_prefer, 0644);
+MODULE_PARM_DESC(route_tcp_gso_async_prefer,
+		 "Prefer route-TCP GSO async worker before the synchronous stream path; off by default because some virtio_net/public-host combinations reboot under async outer-GSO stress");
+
+module_param_cb(route_tcp_gso_async_limit,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_limit, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_limit,
 		 "Maximum route-TCP GSO async work items in flight; 0 disables the limit");
 
-module_param_named(route_tcp_gso_async_bytes_limit,
-		   trustix_route_tcp_gso_async_bytes_limit, ulong, 0644);
+module_param_cb(route_tcp_gso_async_bytes_limit,
+		&trustix_route_tcp_gso_quiesced_ulong_ops,
+		&trustix_route_tcp_gso_async_bytes_limit, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_bytes_limit,
 		 "Maximum cloned route-TCP GSO async skb bytes in flight; 0 disables the limit");
 
-module_param_named(route_tcp_gso_async_worker_item_budget,
-		   trustix_route_tcp_gso_async_worker_item_budget, uint, 0644);
+module_param_cb(route_tcp_gso_async_worker_item_budget,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_item_budget, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_item_budget,
 		 "Maximum route-TCP GSO async items processed by one worker pass; 0 disables the budget");
 
-module_param_named(route_tcp_gso_async_worker_segment_budget,
-		   trustix_route_tcp_gso_async_worker_segment_budget, uint, 0644);
+module_param_cb(route_tcp_gso_async_worker_segment_budget,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_segment_budget, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_segment_budget,
 		 "Maximum route-TCP GSO async segments transmitted by one worker pass; 0 disables the budget");
 
-module_param_named(route_tcp_gso_async_worker_emit_budget,
-		   trustix_route_tcp_gso_async_worker_emit_budget, uint, 0644);
+module_param_cb(route_tcp_gso_async_worker_emit_budget,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_emit_budget, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_emit_budget,
 		 "Maximum route-TCP GSO async output batches emitted by one worker pass; 0 disables the budget");
 
-module_param_named(route_tcp_gso_async_worker_resched_stride,
-		   trustix_route_tcp_gso_async_worker_resched_stride, uint, 0644);
+module_param_cb(route_tcp_gso_async_worker_resched_stride,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_resched_stride, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_resched_stride,
 		 "Call cond_resched every N route-TCP GSO async work items; 0 disables voluntary reschedule in the worker");
 
-module_param_named(route_tcp_gso_async_worker_dequeue_batch,
-		   trustix_route_tcp_gso_async_worker_dequeue_batch, uint, 0644);
+module_param_cb(route_tcp_gso_async_worker_dequeue_batch,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_dequeue_batch, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_dequeue_batch,
 		 "Experimentally move up to N route-TCP GSO async work items to a worker-local list per queue lock; 1 disables local batching");
 
-module_param_named(route_tcp_gso_async_worker_min_queue_depth,
-		   trustix_route_tcp_gso_async_worker_min_queue_depth, uint,
-		   0644);
+module_param_cb(route_tcp_gso_async_worker_min_queue_depth,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_min_queue_depth, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_min_queue_depth,
 		 "Experimentally defer a route-TCP GSO async worker pass until the shard queue reaches this depth; 0 disables");
 
-module_param_named(route_tcp_gso_async_worker_max_depth_defers,
-		   trustix_route_tcp_gso_async_worker_max_depth_defers, uint,
-		   0644);
+module_param_cb(route_tcp_gso_async_worker_max_depth_defers,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_max_depth_defers, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_max_depth_defers,
 		 "Maximum consecutive route-TCP GSO async worker depth defers before draining anyway");
 
-module_param_named(route_tcp_gso_async_worker_schedule_delay_jiffies,
-		   trustix_route_tcp_gso_async_worker_schedule_delay_jiffies,
-		   uint, 0644);
+module_param_cb(route_tcp_gso_async_worker_schedule_delay_jiffies,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_schedule_delay_jiffies,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_schedule_delay_jiffies,
 		 "Delay the first route-TCP GSO async worker drain by this many jiffies so adjacent shard items can batch; 0 disables");
 
-module_param_named(route_tcp_gso_async_worker_schedule_delay_usecs,
-		   trustix_route_tcp_gso_async_worker_schedule_delay_usecs,
-		   uint, 0644);
+module_param_cb(route_tcp_gso_async_worker_schedule_delay_usecs,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_schedule_delay_usecs,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_schedule_delay_usecs,
 		 "Delay the first route-TCP GSO async worker drain by this many microseconds using an hrtimer; clamped to 20ms and ignored when jiffies delay is nonzero");
 
-module_param_named(route_tcp_gso_async_worker_schedule_delay_no_accel,
-		   trustix_route_tcp_gso_async_worker_schedule_delay_no_accel,
-		   bool, 0644);
+module_param_cb(route_tcp_gso_async_worker_schedule_delay_no_accel,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_worker_schedule_delay_no_accel,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_schedule_delay_no_accel,
 		 "Keep delayed route-TCP GSO async worker drains delayed even after the shard reaches the schedule depth");
 
-module_param_named(route_tcp_gso_async_worker_budget_reschedule_delay_jiffies,
-		   trustix_route_tcp_gso_async_worker_budget_reschedule_delay_jiffies,
-		   uint, 0644);
+module_param_cb(route_tcp_gso_async_worker_budget_reschedule_delay_jiffies,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_budget_reschedule_delay_jiffies,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_budget_reschedule_delay_jiffies,
 		 "Delay route-TCP GSO async worker reschedule after a budget yield by this many jiffies; 0 disables pacing");
 
-module_param_named(route_tcp_gso_async_worker_budget_reschedule_delay_usecs,
-		   trustix_route_tcp_gso_async_worker_budget_reschedule_delay_usecs,
-		   uint, 0644);
+module_param_cb(route_tcp_gso_async_worker_budget_reschedule_delay_usecs,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_worker_budget_reschedule_delay_usecs,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_worker_budget_reschedule_delay_usecs,
 		 "Sleep this many microseconds before immediate route-TCP GSO async worker reschedule after a budget yield; clamped to 20ms and ignored when jiffies delay is nonzero");
 
@@ -839,201 +1104,242 @@ module_param_named(route_tcp_gso_async_hot_stats,
 MODULE_PARM_DESC(route_tcp_gso_async_hot_stats,
 		 "Collect detailed per-frame route-TCP GSO async counters; off by default for throughput runs");
 
-module_param_named(route_tcp_gso_async_max_segments_per_item,
-		   trustix_route_tcp_gso_async_max_segments_per_item, uint,
-		   0644);
+module_param_cb(route_tcp_gso_async_max_segments_per_item,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_max_segments_per_item, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_max_segments_per_item,
 		 "Maximum route-TCP GSO async segments accepted from one skb; 0 disables the guard");
 
-module_param_named(route_tcp_gso_async_force_software_outer_csum,
-		   trustix_route_tcp_gso_async_force_software_outer_csum,
-		   bool, 0644);
+module_param_cb(route_tcp_gso_async_force_software_outer_csum,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_force_software_outer_csum, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_force_software_outer_csum,
 		 "Force route-TCP GSO async segments to carry complete outer TCP checksums");
 
-module_param_named(route_tcp_gso_async_force_inner_checksum,
-		   trustix_route_tcp_gso_async_force_inner_checksum, bool,
-		   0644);
+module_param_cb(route_tcp_gso_async_force_inner_checksum,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_force_inner_checksum, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_force_inner_checksum,
 		 "Force route-TCP GSO async to complete inner TCP checksums before encapsulation");
 
-module_param_named(route_tcp_gso_async_direct_xmit,
-		   trustix_route_tcp_gso_async_direct_xmit, bool, 0644);
+module_param_cb(route_tcp_gso_async_direct_xmit,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_direct_xmit, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_direct_xmit,
-		 "Use dev_direct_xmit for route-TCP GSO async wire segments; off by default");
+		 "Request route-TCP GSO direct xmit; current safe implementation records the request and uses validated dev_queue_xmit instead of panic-prone dev_direct_xmit");
+module_param_cb(route_tcp_gso_unsafe_xmit,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_direct_xmit, 0644);
+MODULE_PARM_DESC(route_tcp_gso_unsafe_xmit,
+		 "Legacy alias for route_tcp_gso_async_direct_xmit; kept for old test profiles, implemented as safe dev_queue_xmit");
+module_param_cb(route_tcp_unsafe_xmit_hard_enable,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_direct_xmit, 0644);
+MODULE_PARM_DESC(route_tcp_unsafe_xmit_hard_enable,
+		 "Legacy route-TCP unsafe-xmit gate; accepted as a safe direct-xmit request without dev_direct_xmit");
 
 module_param_named(route_tcp_gso_async_xmit_more,
-		   trustix_route_tcp_gso_async_xmit_more, bool, 0644);
+		   trustix_route_tcp_gso_async_xmit_more, bool, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_xmit_more,
 		 "Set skb xmit_more on consecutive route-TCP GSO async dev_queue_xmit packets; experimental and off by default");
 
 module_param_named(route_tcp_gso_async_yield_on_xmit_cn,
-		   trustix_route_tcp_gso_async_yield_on_xmit_cn, bool, 0644);
+		   trustix_route_tcp_gso_async_yield_on_xmit_cn, bool, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_yield_on_xmit_cn,
 		 "Call cond_resched after route-TCP GSO async dev_queue_xmit reports NET_XMIT_CN; experimental and off by default");
 
-module_param_named(route_tcp_gso_async_xmit_cn_sleep_usecs,
-		   trustix_route_tcp_gso_async_xmit_cn_sleep_usecs, uint,
-		   0644);
+module_param_cb(route_tcp_gso_async_xmit_cn_sleep_usecs,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_xmit_cn_sleep_usecs, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_xmit_cn_sleep_usecs,
 		 "Sleep this many microseconds after NET_XMIT_CN in the route-TCP GSO async worker; 0 disables and values are clamped to 20000us");
 
-module_param_named(route_tcp_gso_async_ordered_queue,
-		   trustix_route_tcp_gso_async_ordered_queue, bool, 0644);
+module_param_cb(route_tcp_gso_async_xmit_busy_retries,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_xmit_busy_retries, 0644);
+MODULE_PARM_DESC(route_tcp_gso_async_xmit_busy_retries,
+		 "Retry route-TCP GSO async xmit readiness this many times when the TX queue is transiently busy; values are clamped to 16");
+
+module_param_cb(route_tcp_gso_async_xmit_busy_sleep_usecs,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_xmit_busy_sleep_usecs, 0644);
+MODULE_PARM_DESC(route_tcp_gso_async_xmit_busy_sleep_usecs,
+		 "Sleep this many microseconds between route-TCP GSO async TX-busy retries; 0 yields only and values are clamped to 20000us");
+
+module_param_cb(route_tcp_gso_async_ordered_queue,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_ordered_queue, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_ordered_queue,
 		 "Preserve route-TCP GSO async queue ordering; single worker in this module keeps order regardless");
 
-module_param_named(route_tcp_gso_async_unbound_worker,
-		   trustix_route_tcp_gso_async_unbound_worker, bool, 0644);
+module_param_cb(route_tcp_gso_async_unbound_worker,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_unbound_worker, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_unbound_worker,
 		 "Queue route-TCP GSO async workers on a dedicated unbound high-priority workqueue; off uses system workqueue");
 
-module_param_named(route_tcp_gso_async_sharded_queue,
-		   trustix_route_tcp_gso_async_sharded_queue, bool, 0644);
+module_param_cb(route_tcp_gso_async_sharded_queue,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_sharded_queue, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_sharded_queue,
 		 "Shard route-TCP GSO async work across multiple worker items by inner-flow hash; off by default");
 
-module_param_named(route_tcp_gso_async_queue_shards,
-		   trustix_route_tcp_gso_async_queue_shards, uint, 0644);
+module_param_cb(route_tcp_gso_async_queue_shards,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_queue_shards, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_queue_shards,
 		 "Number of route-TCP GSO async worker shards when sharding is enabled; clamped to 1..8");
 
-module_param_named(route_tcp_gso_async_flow_shard_queue,
-		   trustix_route_tcp_gso_async_flow_shard_queue, bool, 0644);
+module_param_cb(route_tcp_gso_async_flow_shard_queue,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_flow_shard_queue, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_flow_shard_queue,
 		 "Experimentally shard route-TCP GSO async work by selected outer flow id instead of inner-flow hash");
 
-module_param_named(route_tcp_gso_async_stream,
-		   trustix_route_tcp_gso_async_stream, bool, 0644);
+module_param_cb(route_tcp_gso_async_stream,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream,
 		 "Enable conservative route-TCP async TIXT stream batching");
 
-module_param_named(route_tcp_gso_async_stream_direct_build,
-		   trustix_route_tcp_gso_async_stream_direct_build, bool,
-		   0644);
+module_param_cb(route_tcp_gso_async_stream_direct_build,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_direct_build, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_direct_build,
-		 "Reserved direct-build stream batching switch; current helpers do not enable this path");
+		 "Enable direct-build route-TCP stream batching before worker xmit");
 
-module_param_named(route_tcp_gso_async_stream_direct_build_inner_csum,
-		   trustix_route_tcp_gso_async_stream_direct_build_inner_csum,
-		   bool, 0644);
+module_param_cb(route_tcp_gso_async_stream_direct_build_inner_csum,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_direct_build_inner_csum,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_direct_build_inner_csum,
 		 "Reserved direct-build stream inner checksum switch");
 
-module_param_named(route_tcp_gso_async_stream_direct_build_fast_copy,
-		   trustix_route_tcp_gso_async_stream_direct_build_fast_copy,
-		   bool, 0644);
+module_param_cb(route_tcp_gso_async_stream_direct_build_fast_copy,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_direct_build_fast_copy,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_direct_build_fast_copy,
 		 "Use direct memcpy/csum from linear inner skb payloads while direct-building route-TCP stream packets");
 
-module_param_named(route_tcp_gso_async_stream_direct_build_frag_fast_copy,
-		   trustix_route_tcp_gso_async_stream_direct_build_frag_fast_copy,
-		   bool, 0644);
+module_param_cb(route_tcp_gso_async_stream_direct_build_frag_fast_copy,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_direct_build_frag_fast_copy,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_direct_build_frag_fast_copy,
 		 "Use direct kmap memcpy/csum from single-page skb frags while direct-building route-TCP stream packets");
 
 module_param_named(route_tcp_gso_async_stream_direct_build_frag_fast_copy_cross_page,
 		   trustix_route_tcp_gso_async_stream_direct_build_frag_fast_copy_cross_page,
-		   bool, 0644);
+		   bool, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_direct_build_frag_fast_copy_cross_page,
 		 "Experimentally allow direct route-TCP stream frag fast-copy to span page boundaries");
 
 module_param_named(route_tcp_gso_async_stream_nonlinear_direct_build,
 		   trustix_route_tcp_gso_async_stream_nonlinear_direct_build,
-		   bool, 0644);
+		   bool, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_nonlinear_direct_build,
 		 "Build route-TCP direct stream batches with a small linear head and page frags; experimental and off by default");
 
-module_param_named(route_tcp_gso_async_stream_software_segment,
-		   trustix_route_tcp_gso_async_stream_software_segment, bool,
-		   0644);
+module_param_cb(route_tcp_gso_async_stream_software_segment,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_software_segment, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_software_segment,
 		 "Build MTU-sized multi-frame TIXT stream packets after software GSO segmentation");
 
-module_param_named(route_tcp_gso_async_stream_max_frames,
-		   trustix_route_tcp_gso_async_stream_max_frames, uint, 0644);
+module_param_cb(route_tcp_gso_async_stream_max_frames,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_stream_max_frames, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_max_frames,
 		 "Maximum TIXT frames packed into one route-TCP async stream packet");
 
-module_param_named(route_tcp_gso_async_stream_allow_virtio_net,
-		   trustix_route_tcp_gso_async_stream_allow_virtio_net, bool,
-		   0644);
+module_param_cb(route_tcp_gso_async_stream_allow_virtio_net,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_allow_virtio_net, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_allow_virtio_net,
 		 "Reserved stream hardware-GSO virtio_net override");
 
-module_param_named(route_tcp_gso_async_stream_outer_gso,
-		   trustix_route_tcp_gso_async_stream_outer_gso, bool,
-		   0644);
+module_param_cb(route_tcp_gso_async_stream_outer_gso,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_outer_gso, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_outer_gso,
 		 "Build route-TCP stream batches as outer TCP GSO skbs aligned to TIXT frame boundaries");
 
-module_param_named(route_tcp_gso_async_stream_outer_gso_hard_enable,
-		   trustix_route_tcp_gso_async_stream_outer_gso_hard_enable,
-		   bool, 0644);
+module_param_cb(route_tcp_gso_async_stream_outer_gso_hard_enable,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_outer_gso_hard_enable,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_outer_gso_hard_enable,
-		 "Actually emit experimental route-TCP outer GSO skbs; disabled by default so outer-GSO requests fall back to stable no-outer direct-build");
+		 "Deprecated compatibility knob; route-TCP outer GSO is now gated by device feature checks and skb validation");
 
-module_param_named(route_tcp_gso_async_stream_cross_item_batch,
-		   trustix_route_tcp_gso_async_stream_cross_item_batch, bool,
-		   0644);
+module_param_cb(route_tcp_gso_async_stream_cross_item_batch,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_cross_item_batch, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_cross_item_batch,
 		 "Experimentally merge consecutive route-TCP async direct-build work items into larger outer TCP GSO skbs");
 
-module_param_named(route_tcp_gso_async_stream_cross_item_dequeue_batch,
-		   trustix_route_tcp_gso_async_stream_cross_item_dequeue_batch,
-		   bool, 0644);
+module_param_cb(route_tcp_gso_async_stream_cross_item_dequeue_batch,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_cross_item_dequeue_batch,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_cross_item_dequeue_batch,
 		 "Experimentally batch-dequeue route-TCP async cross-item candidates under one queue lock");
 
 module_param_named(route_tcp_gso_async_stream_cross_item_tail_stitch,
 		   trustix_route_tcp_gso_async_stream_cross_item_tail_stitch,
-		   bool, 0644);
+		   bool, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_cross_item_tail_stitch,
 		 "Experimentally split a route-TCP async direct-build prefix and stitch its tail with adjacent items");
 
-module_param_named(route_tcp_gso_async_stream_cross_item_debug,
-		   trustix_route_tcp_gso_async_stream_cross_item_debug, bool,
-		   0644);
+module_param_cb(route_tcp_gso_async_stream_cross_item_debug,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_cross_item_debug, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_cross_item_debug,
 		 "Collect route-TCP async cross-item batch miss reason counters");
 
-module_param_named(route_tcp_gso_async_stream_cross_item_max_frames,
-		   trustix_route_tcp_gso_async_stream_cross_item_max_frames,
-		   uint, 0644);
+module_param_cb(route_tcp_gso_async_stream_cross_item_max_frames,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_stream_cross_item_max_frames,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_cross_item_max_frames,
 		 "Maximum TIXT frames packed into one route-TCP async cross-item outer-GSO packet; 0 follows route_tcp_gso_async_stream_max_frames");
 
-module_param_named(route_tcp_gso_async_stream_cross_item_lookahead,
-		   trustix_route_tcp_gso_async_stream_cross_item_lookahead,
-		   uint, 0644);
+module_param_cb(route_tcp_gso_async_stream_cross_item_lookahead,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_stream_cross_item_lookahead,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_cross_item_lookahead,
 		 "Experimentally scan a bounded number of queued route-TCP async items for cross-item batch candidates without reordering same-flow sequence");
 
-module_param_named(route_tcp_gso_async_stream_cross_item_dynamic_cap,
-		   trustix_route_tcp_gso_async_stream_cross_item_dynamic_cap,
-		   bool, 0644);
+module_param_cb(route_tcp_gso_async_stream_cross_item_dynamic_cap,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_stream_cross_item_dynamic_cap,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_cross_item_dynamic_cap,
 		 "Experimentally lower the route-TCP async cross-item outer-GSO frame cap until the candidate queue reaches route_tcp_gso_async_stream_cross_item_dynamic_queue_depth");
 
-module_param_named(route_tcp_gso_async_stream_cross_item_dynamic_low_frames,
-		   trustix_route_tcp_gso_async_stream_cross_item_dynamic_low_frames,
-		   uint, 0644);
+module_param_cb(route_tcp_gso_async_stream_cross_item_dynamic_low_frames,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_stream_cross_item_dynamic_low_frames,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_cross_item_dynamic_low_frames,
 		 "Low route-TCP async cross-item frame cap used before the dynamic-cap queue-depth threshold is reached");
 
-module_param_named(route_tcp_gso_async_stream_cross_item_dynamic_queue_depth,
-		   trustix_route_tcp_gso_async_stream_cross_item_dynamic_queue_depth,
-		   uint, 0644);
+module_param_cb(route_tcp_gso_async_stream_cross_item_dynamic_queue_depth,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_stream_cross_item_dynamic_queue_depth,
+		0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_cross_item_dynamic_queue_depth,
 		 "Candidate queue depth required before route-TCP async cross-item dynamic cap uses the normal max-frame cap");
 
 module_param_named(route_tcp_gso_async_reslice_to_mtu,
-		   trustix_route_tcp_gso_async_reslice_to_mtu, bool, 0644);
+		   trustix_route_tcp_gso_async_reslice_to_mtu, bool, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_reslice_to_mtu,
 		 "Allow experimental route-TCP async GSO to reslice jumbo inner GSO skbs down to the route MTU; off by default");
 
-module_param_named(route_tcp_gso_async_hash_tx_queue,
-		   trustix_route_tcp_gso_async_hash_tx_queue, bool, 0644);
+module_param_cb(route_tcp_gso_async_hash_tx_queue,
+		&trustix_route_tcp_gso_quiesced_bool_ops,
+		&trustix_route_tcp_gso_async_hash_tx_queue, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_hash_tx_queue,
 		 "Map route-TCP GSO async outer skbs to TX queues from the inner flow hash");
 
@@ -1218,6 +1524,11 @@ module_param_named(route_tcp_gso_async_txq_stopped_drops,
 MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_drops,
 		 "Route-TCP GSO async segments dropped because the selected TX queue was stopped");
 
+module_param_named(route_tcp_gso_async_txq_stopped_queued,
+		   trustix_route_tcp_gso_async_txq_stopped_queued, ulong, 0444);
+MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_queued,
+		 "Route-TCP GSO async skbs handed to dev_queue_xmit while the selected TX queue was transiently stopped");
+
 module_param_named(route_tcp_gso_async_xmit_packets,
 		   trustix_route_tcp_gso_async_xmit_packets, ulong, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_xmit_packets,
@@ -1237,6 +1548,24 @@ module_param_named(route_tcp_gso_async_xmit_more_sets,
 		   trustix_route_tcp_gso_async_xmit_more_sets, ulong, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_xmit_more_sets,
 		 "Route-TCP GSO async skbs sent with skb xmit_more set");
+
+module_param_named(route_tcp_gso_async_xmit_busy_retry_attempts,
+		   trustix_route_tcp_gso_async_xmit_busy_retry_attempts,
+		   ulong, 0444);
+MODULE_PARM_DESC(route_tcp_gso_async_xmit_busy_retry_attempts,
+		 "Route-TCP GSO async TX-busy readiness retry attempts");
+
+module_param_named(route_tcp_gso_async_xmit_busy_retry_successes,
+		   trustix_route_tcp_gso_async_xmit_busy_retry_successes,
+		   ulong, 0444);
+MODULE_PARM_DESC(route_tcp_gso_async_xmit_busy_retry_successes,
+		 "Route-TCP GSO async TX-busy readiness retries that recovered");
+
+module_param_named(route_tcp_gso_async_xmit_busy_retry_failures,
+		   trustix_route_tcp_gso_async_xmit_busy_retry_failures,
+		   ulong, 0444);
+MODULE_PARM_DESC(route_tcp_gso_async_xmit_busy_retry_failures,
+		 "Route-TCP GSO async TX-busy readiness retries that still failed");
 
 module_param_named(route_tcp_gso_async_stream_batches,
 		   trustix_route_tcp_gso_async_stream_batches, ulong, 0444);
@@ -1331,6 +1660,9 @@ module_param_named(route_tcp_gso_async_stream_outer_gso_errors,
 module_param_named(route_tcp_gso_async_stream_outer_gso_blocked,
 		   trustix_route_tcp_gso_async_stream_outer_gso_blocked,
 		   ulong, 0444);
+module_param_named(route_tcp_gso_async_stream_outer_gso_verify_errors,
+		   trustix_route_tcp_gso_async_stream_outer_gso_verify_errors,
+		   ulong, 0444);
 module_param_named(route_tcp_gso_async_stream_cross_item_batches,
 		   trustix_route_tcp_gso_async_stream_cross_item_batches,
 		   ulong, 0444);
@@ -1415,8 +1747,116 @@ module_param_named(route_tcp_gso_async_stream_cross_item_dynamic_cap_high,
 module_param_named(route_tcp_gso_async_stream_cross_item_dynamic_cap_low,
 		   trustix_route_tcp_gso_async_stream_cross_item_dynamic_cap_low,
 		   ulong, 0444);
+module_param_named(route_tcp_gso_async_stream_cross_item_last_ret,
+		   trustix_route_tcp_gso_async_stream_cross_item_last_ret,
+		   int, 0444);
+module_param_named(route_tcp_gso_async_stream_cross_item_last_stage,
+		   trustix_route_tcp_gso_async_stream_cross_item_last_stage,
+		   uint, 0444);
+module_param_named(route_tcp_gso_async_stream_cross_item_last_items,
+		   trustix_route_tcp_gso_async_stream_cross_item_last_items,
+		   uint, 0444);
+module_param_named(route_tcp_gso_async_stream_cross_item_last_frames,
+		   trustix_route_tcp_gso_async_stream_cross_item_last_frames,
+		   uint, 0444);
+module_param_named(route_tcp_gso_async_stream_cross_item_last_stream_payload_len,
+		   trustix_route_tcp_gso_async_stream_cross_item_last_stream_payload_len,
+		   uint, 0444);
+module_param_named(route_tcp_gso_async_stream_cross_item_last_outer_gso_size,
+		   trustix_route_tcp_gso_async_stream_cross_item_last_outer_gso_size,
+		   uint, 0444);
+module_param_named(route_tcp_gso_async_stream_cross_item_last_first_frame_len,
+		   trustix_route_tcp_gso_async_stream_cross_item_last_first_frame_len,
+		   uint, 0444);
+module_param_named(route_tcp_gso_async_stream_cross_item_last_last_frame_len,
+		   trustix_route_tcp_gso_async_stream_cross_item_last_last_frame_len,
+		   uint, 0444);
 module_param_named(route_tcp_gso_async_reslice_plans,
 		   trustix_route_tcp_gso_async_reslice_plans, ulong, 0444);
+module_param_named(route_tcp_gso_sync_calls,
+		   trustix_route_tcp_gso_sync_calls, ulong, 0444);
+module_param_named(route_tcp_gso_sync_segments,
+		   trustix_route_tcp_gso_sync_segments, ulong, 0444);
+module_param_named(route_tcp_gso_sync_fallbacks,
+		   trustix_route_tcp_gso_sync_fallbacks, ulong, 0444);
+module_param_named(route_tcp_gso_sync_errors,
+		   trustix_route_tcp_gso_sync_errors, ulong, 0444);
+module_param_named(route_tcp_gso_sync_xmit_errors,
+		   trustix_route_tcp_gso_sync_xmit_errors, ulong, 0444);
+module_param_named(route_tcp_gso_sync_async_redirects,
+		   trustix_route_tcp_gso_sync_async_redirects, ulong, 0444);
+module_param_named(route_tcp_gso_sync_stream_attempts,
+		   trustix_route_tcp_gso_sync_stream_attempts, ulong, 0444);
+module_param_named(route_tcp_gso_sync_stream_batches,
+		   trustix_route_tcp_gso_sync_stream_batches, ulong, 0444);
+module_param_named(route_tcp_gso_sync_stream_frames,
+		   trustix_route_tcp_gso_sync_stream_frames, ulong, 0444);
+module_param_named(route_tcp_gso_sync_stream_fallbacks,
+		   trustix_route_tcp_gso_sync_stream_fallbacks, ulong, 0444);
+module_param_named(route_tcp_gso_sync_stream_errors,
+		   trustix_route_tcp_gso_sync_stream_errors, ulong, 0444);
+module_param_named(route_tcp_gso_sync_stream_xmit_errors,
+		   trustix_route_tcp_gso_sync_stream_xmit_errors, ulong, 0444);
+module_param_named(route_tcp_gso_sync_stream_build_errors,
+		   trustix_route_tcp_gso_sync_stream_build_errors, ulong,
+		   0444);
+module_param_named(route_tcp_gso_sync_stream_build_busy,
+		   trustix_route_tcp_gso_sync_stream_build_busy, ulong, 0444);
+module_param_named(route_tcp_gso_sync_stream_build_nomem,
+		   trustix_route_tcp_gso_sync_stream_build_nomem, ulong, 0444);
+module_param_named(route_tcp_gso_sync_stream_build_unsupported,
+		   trustix_route_tcp_gso_sync_stream_build_unsupported, ulong,
+		   0444);
+module_param_named(route_tcp_gso_sync_stream_ready_errors,
+		   trustix_route_tcp_gso_sync_stream_ready_errors, ulong,
+		   0444);
+module_param_named(route_tcp_gso_sync_stream_partial_xmits,
+		   trustix_route_tcp_gso_sync_stream_partial_xmits, ulong,
+		   0444);
+module_param_named(route_tcp_gso_direct_xmit_safe_fallbacks,
+		   trustix_route_tcp_gso_direct_xmit_safe_fallbacks, ulong,
+		   0444);
+module_param_named(route_tcp_gso_direct_xmit_attempts,
+		   trustix_route_tcp_gso_direct_xmit_attempts, ulong, 0444);
+module_param_named(route_tcp_gso_direct_xmit_successes,
+		   trustix_route_tcp_gso_direct_xmit_successes, ulong, 0444);
+module_param_named(route_tcp_gso_direct_xmit_cn,
+		   trustix_route_tcp_gso_direct_xmit_cn, ulong, 0444);
+module_param_named(route_tcp_gso_direct_xmit_busy,
+		   trustix_route_tcp_gso_direct_xmit_busy, ulong, 0444);
+module_param_named(route_tcp_gso_direct_xmit_busy_fallbacks,
+		   trustix_route_tcp_gso_direct_xmit_busy_fallbacks, ulong,
+		   0444);
+module_param_named(route_tcp_gso_direct_xmit_drops,
+		   trustix_route_tcp_gso_direct_xmit_drops, ulong, 0444);
+module_param_named(route_tcp_gso_direct_xmit_errors,
+		   trustix_route_tcp_gso_direct_xmit_errors, ulong, 0444);
+module_param_named(route_tcp_gso_direct_xmit_not_ready,
+		   trustix_route_tcp_gso_direct_xmit_not_ready, ulong, 0444);
+module_param_named(route_tcp_gso_async_prefer_sync_bypasses,
+		   trustix_route_tcp_gso_async_prefer_sync_bypasses, ulong,
+		   0444);
+module_param_named(route_tcp_gso_sync_stream_last_ret,
+		   trustix_route_tcp_gso_sync_stream_last_ret, int, 0444);
+module_param_named(route_tcp_gso_sync_stream_last_stage,
+		   trustix_route_tcp_gso_sync_stream_last_stage, int, 0444);
+module_param_named(route_tcp_gso_sync_stream_last_batch_count,
+		   trustix_route_tcp_gso_sync_stream_last_batch_count, uint,
+		   0444);
+module_param_named(route_tcp_gso_sync_stream_last_batch_frames,
+		   trustix_route_tcp_gso_sync_stream_last_batch_frames, uint,
+		   0444);
+module_param_named(route_tcp_gso_sync_stream_last_len,
+		   trustix_route_tcp_gso_sync_stream_last_len, uint, 0444);
+module_param_named(route_tcp_gso_sync_stream_last_gso_size,
+		   trustix_route_tcp_gso_sync_stream_last_gso_size, uint,
+		   0444);
+module_param_named(route_tcp_gso_sync_stream_last_gso_segs,
+		   trustix_route_tcp_gso_sync_stream_last_gso_segs, uint,
+		   0444);
+module_param_named(route_tcp_gso_sync_stream_last_gso_type,
+		   trustix_route_tcp_gso_sync_stream_last_gso_type, uint,
+		   0444);
 module_param_named(route_tcp_gso_async_hash_tx_queue_sets,
 		   trustix_route_tcp_gso_async_hash_tx_queue_sets, ulong, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_hash_tx_queue_sets,
@@ -1504,15 +1944,21 @@ module_param_named(route_tcp_gso_async_stream_last_offsets,
 		   trustix_route_tcp_gso_async_stream_last_offsets, uint,
 		   0444);
 
-module_param_named(route_tcp_xmit_worker, trustix_route_tcp_xmit_worker, bool,
-		   0644);
+module_param_cb(route_tcp_xmit_worker,
+		&trustix_route_tcp_xmit_worker_bool_ops,
+		&trustix_route_tcp_xmit_worker, 0644);
 MODULE_PARM_DESC(route_tcp_xmit_worker,
 		 "Enable experimental route TCP xmit via a TrustIX worker instead of direct TC-context xmit");
+module_param_cb(route_tcp_dev_xmit,
+		&trustix_route_tcp_xmit_worker_bool_ops,
+		&trustix_route_tcp_xmit_worker, 0644);
+MODULE_PARM_DESC(route_tcp_dev_xmit,
+		 "Legacy alias for route_tcp_xmit_worker; xmit is isolated to the worker and uses dev_queue_xmit");
 
 module_param_named(route_tcp_xmit_worker_steal,
 		   trustix_route_tcp_xmit_worker_steal, bool, 0644);
 MODULE_PARM_DESC(route_tcp_xmit_worker_steal,
-		 "Allow experimental route TCP worker to return TC_ACT_STOLEN and transfer the original skb instead of cloning");
+		 "Compatibility knob for the old route TCP steal mode; current safe worker always clones the skb");
 
 module_param_named(route_tcp_xmit_worker_queue_limit,
 		   trustix_route_tcp_xmit_worker_queue_limit, uint, 0644);
@@ -1579,6 +2025,11 @@ module_param_named(route_tcp_xmit_worker_flush_drops,
 MODULE_PARM_DESC(route_tcp_xmit_worker_flush_drops,
 		 "Experimental route TCP worker packets dropped during module teardown");
 
+module_param_named(route_tcp_xmit_worker_disabled,
+		   trustix_route_tcp_xmit_worker_disabled, ulong, 0444);
+MODULE_PARM_DESC(route_tcp_xmit_worker_disabled,
+		 "Experimental route TCP worker packets rejected because the worker was disabled or quiescing");
+
 module_param_named(kudp_rx_hot_stats, trustix_kudp_rx_hot_stats, bool, 0644);
 MODULE_PARM_DESC(kudp_rx_hot_stats,
 		 "Enable TrustIX kernel UDP/TIXT RX helper hot-path counters");
@@ -1596,7 +2047,7 @@ MODULE_PARM_DESC(tixt_rx_stream_xmit_extra,
 module_param_named(tixt_rx_stream_ordered_list,
 		   trustix_tixt_rx_stream_ordered_list, bool, 0644);
 MODULE_PARM_DESC(tixt_rx_stream_ordered_list,
-		 "Copy every frame from a multi-frame TIXT stream into a receive list and return STOLEN so TCP sees in-stream order");
+		 "Copy every frame from a multi-frame TIXT stream into a receive list and return STOLEN so TCP sees in-stream order; invalid devices or malformed frames fall back to normal RX handling");
 
 module_param_named(tixt_rx_stream_gso_xmit,
 		   trustix_tixt_rx_stream_gso_xmit, bool, 0644);
@@ -1616,7 +2067,7 @@ MODULE_PARM_DESC(tixt_rx_stream_coalesce_mark_gso,
 module_param_named(tixt_rx_stream_nonlinear_parse,
 		   trustix_tixt_rx_stream_nonlinear_parse, bool, 0644);
 MODULE_PARM_DESC(tixt_rx_stream_nonlinear_parse,
-		 "Parse multi-frame TIXT TCP streams from nonlinear/GRO skbs without pulling the full payload into the linear head");
+		 "Parse multi-frame TIXT TCP streams from nonlinear/GRO skbs using skb_header_pointer; failures fall back to the linear pull/normal RX path");
 
 module_param_cb(tixt_rx_single_coalesce_gso,
 		&trustix_tixt_rx_single_coalesce_gso_ops, NULL, 0644);
@@ -1632,7 +2083,7 @@ module_param_named(tixt_rx_coalesce_mark_gso_partial_csum,
 		   trustix_tixt_rx_coalesce_mark_gso_partial_csum, bool,
 		   0644);
 MODULE_PARM_DESC(tixt_rx_coalesce_mark_gso_partial_csum,
-		 "When marking coalesced TIXT RX skbs as TCPv4 GSO, publish them with CHECKSUM_PARTIAL metadata for the later TX/GSO path");
+		 "Legacy compatibility request for CHECKSUM_PARTIAL on coalesced TIXT RX GSO skbs; current safe path keeps complete checksums unless software segmenting");
 
 module_param_named(tixt_rx_coalesce_segment_gso,
 		   trustix_tixt_rx_coalesce_segment_gso, bool, 0644);
@@ -1708,6 +2159,11 @@ module_param_named(tixt_rx_single_coalesce_set_hash,
 MODULE_PARM_DESC(tixt_rx_single_coalesce_set_hash,
 		 "Set a stable L4 hash on single-frame RX coalesced GSO skbs");
 
+module_param_named(tixt_rx_backlog_worker_queue_limit,
+		   trustix_tixt_rx_backlog_worker_queue_limit, uint, 0644);
+MODULE_PARM_DESC(tixt_rx_backlog_worker_queue_limit,
+		 "Maximum queued TIXT RX stream/coalesce skbs awaiting safe worker-context LAN reinjection");
+
 module_param_named(tixt_rx_single_coalesce_schedule_stride,
 		   trustix_tixt_rx_single_coalesce_schedule_stride, uint, 0644);
 MODULE_PARM_DESC(tixt_rx_single_coalesce_schedule_stride,
@@ -1734,10 +2190,10 @@ module_param_named(tixt_rx_single_coalesce_warmup_frames,
 MODULE_PARM_DESC(tixt_rx_single_coalesce_warmup_frames,
 		 "Compatible payload frames to pass through before a single-frame RX coalesce slot starts stealing; 1 preserves legacy behavior");
 
-module_param_named(tixt_rx_single_coalesce_linear_max,
-		   trustix_tixt_rx_single_coalesce_linear_max, uint, 0644);
+module_param_cb(tixt_rx_single_coalesce_linear_max,
+		&trustix_tixt_rx_single_coalesce_linear_max_ops, NULL, 0644);
 MODULE_PARM_DESC(tixt_rx_single_coalesce_linear_max,
-		 "Maximum reusable linear payload bytes for single-frame TIXT RX coalescing");
+		 "Maximum reusable linear payload bytes for single-frame TIXT RX coalescing; writes drain existing coalesce state");
 
 module_param_named(tixt_rx_stream_candidates,
 		   trustix_tixt_rx_stream_candidates, ulong, 0444);
@@ -1777,12 +2233,39 @@ module_param_named(tixt_rx_stream_ordered_list_frames,
 		   trustix_tixt_rx_stream_ordered_list_frames, ulong, 0444);
 module_param_named(tixt_rx_stream_ordered_list_errors,
 		   trustix_tixt_rx_stream_ordered_list_errors, ulong, 0444);
+module_param_named(tixt_rx_stream_backlog_packets,
+		   trustix_tixt_rx_stream_backlog_packets, ulong, 0444);
+module_param_named(tixt_rx_stream_backlog_drops,
+		   trustix_tixt_rx_stream_backlog_drops, ulong, 0444);
+module_param_named(tixt_rx_backlog_worker_depth,
+		   trustix_tixt_rx_backlog_worker_depth, uint, 0444);
+module_param_named(tixt_rx_backlog_worker_enqueued,
+		   trustix_tixt_rx_backlog_worker_enqueued, ulong, 0444);
+module_param_named(tixt_rx_backlog_worker_delivered,
+		   trustix_tixt_rx_backlog_worker_delivered, ulong, 0444);
+module_param_named(tixt_rx_backlog_worker_drops,
+		   trustix_tixt_rx_backlog_worker_drops, ulong, 0444);
+module_param_named(tixt_rx_backlog_worker_queue_full,
+		   trustix_tixt_rx_backlog_worker_queue_full, ulong, 0444);
+module_param_named(tixt_rx_backlog_worker_disabled,
+		   trustix_tixt_rx_backlog_worker_disabled, ulong, 0444);
+module_param_named(tixt_rx_backlog_worker_runs,
+		   trustix_tixt_rx_backlog_worker_runs, ulong, 0444);
 module_param_named(tixt_rx_coalesce_segment_batches,
 		   trustix_tixt_rx_coalesce_segment_batches, ulong, 0444);
 module_param_named(tixt_rx_coalesce_segment_frames,
 		   trustix_tixt_rx_coalesce_segment_frames, ulong, 0444);
 module_param_named(tixt_rx_coalesce_segment_errors,
 		   trustix_tixt_rx_coalesce_segment_errors, ulong, 0444);
+module_param_named(tixt_rx_coalesce_segment_backlog_packets,
+		   trustix_tixt_rx_coalesce_segment_backlog_packets, ulong,
+		   0444);
+module_param_named(tixt_rx_coalesce_segment_backlog_drops,
+		   trustix_tixt_rx_coalesce_segment_backlog_drops, ulong,
+		   0444);
+module_param_named(tixt_rx_coalesce_partial_csum_fallbacks,
+		   trustix_tixt_rx_coalesce_partial_csum_fallbacks, ulong,
+		   0444);
 module_param_named(tixt_rx_stream_nonlinear_parse_hits,
 		   trustix_tixt_rx_stream_nonlinear_parse_hits, ulong, 0444);
 module_param_named(tixt_rx_single_coalesce_candidates,
@@ -1805,6 +2288,24 @@ module_param_named(tixt_rx_single_coalesce_hash_misses,
 		   trustix_tixt_rx_single_coalesce_hash_misses, ulong, 0444);
 module_param_named(tixt_rx_single_coalesce_seq_misses,
 		   trustix_tixt_rx_single_coalesce_seq_misses, ulong, 0444);
+module_param_named(tixt_rx_single_coalesce_dev_misses,
+		   trustix_tixt_rx_single_coalesce_dev_misses, ulong, 0444);
+module_param_named(tixt_rx_single_coalesce_flow_misses,
+		   trustix_tixt_rx_single_coalesce_flow_misses, ulong, 0444);
+module_param_named(tixt_rx_single_coalesce_header_misses,
+		   trustix_tixt_rx_single_coalesce_header_misses, ulong, 0444);
+module_param_named(tixt_rx_single_coalesce_gso_size_misses,
+		   trustix_tixt_rx_single_coalesce_gso_size_misses, ulong,
+		   0444);
+module_param_named(tixt_rx_single_coalesce_ack_variations,
+		   trustix_tixt_rx_single_coalesce_ack_variations, ulong,
+		   0444);
+module_param_named(tixt_rx_single_coalesce_window_variations,
+		   trustix_tixt_rx_single_coalesce_window_variations, ulong,
+		   0444);
+module_param_named(tixt_rx_single_coalesce_flags_variations,
+		   trustix_tixt_rx_single_coalesce_flags_variations, ulong,
+		   0444);
 module_param_named(tixt_rx_single_coalesce_tcp_csum_skipped,
 		   trustix_tixt_rx_single_coalesce_tcp_csum_skipped, ulong,
 		   0444);
@@ -1877,6 +2378,9 @@ module_param_named(tixt_rx_single_coalesce_hybrid_head_bytes,
 module_param_named(tixt_rx_single_coalesce_netif_rx_packets,
 		   trustix_tixt_rx_single_coalesce_netif_rx_packets,
 		   ulong, 0444);
+module_param_named(tixt_rx_single_coalesce_netif_rx_drops,
+		   trustix_tixt_rx_single_coalesce_netif_rx_drops, ulong,
+		   0444);
 module_param_named(tixt_rx_single_coalesce_schedules,
 		   trustix_tixt_rx_single_coalesce_schedules, ulong, 0444);
 module_param_named(tixt_rx_single_coalesce_schedule_skips,
@@ -2026,6 +2530,13 @@ static __always_inline bool trustix_tixt_tx_plain_skip_sequence_enabled(void)
 	return READ_ONCE(trustix_tixt_tx_plain_skip_sequence);
 }
 
+static __always_inline u64 trustix_tixt_tx_plain_wire_sequence(u64 sequence)
+{
+	if (trustix_tixt_tx_plain_skip_sequence_enabled())
+		return 0;
+	return sequence;
+}
+
 static __always_inline bool trustix_tixt_tx_plain_ack_only_enabled(void)
 {
 	return READ_ONCE(trustix_tixt_tx_plain_ack_only);
@@ -2055,8 +2566,21 @@ trustix_route_tcp_gso_async_stream_max_frames_value(void)
 
 	if (!max_frames)
 		return 1;
-	if (max_frames > TRUSTIX_TIXT_TX_ROUTE_STREAM_MAX_FRAMES)
-		return TRUSTIX_TIXT_TX_ROUTE_STREAM_MAX_FRAMES;
+	if (max_frames > TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_FRAMES)
+		return TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_FRAMES;
+	return max_frames;
+}
+
+static __always_inline unsigned int
+trustix_route_tcp_gso_sync_stream_max_frames_value(void)
+{
+	unsigned int max_frames =
+		READ_ONCE(trustix_route_tcp_gso_sync_stream_max_frames);
+
+	if (!max_frames)
+		return 1;
+	if (max_frames > TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_FRAMES)
+		return TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_FRAMES;
 	return max_frames;
 }
 
@@ -2360,7 +2884,6 @@ static void trustix_tixt_rx_coalesced_mark_tcpv4_gso(struct sk_buff *skb,
 	struct skb_shared_info *shinfo;
 	struct iphdr *iph;
 	struct tcphdr *tcph;
-	u32 tcp_len;
 
 	if (!skb || !gso_size || gso_segs < 2)
 		return;
@@ -2382,15 +2905,44 @@ static void trustix_tixt_rx_coalesced_mark_tcpv4_gso(struct sk_buff *skb,
 	skb->mac_len = ETH_HLEN;
 	skb_reset_inner_headers(skb);
 
-	if (!READ_ONCE(trustix_tixt_rx_coalesce_mark_gso_partial_csum))
-		return;
+	if (READ_ONCE(trustix_tixt_rx_coalesce_mark_gso_partial_csum))
+		trustix_tixt_rx_coalesce_partial_csum_fallbacks++;
+}
 
-	tcp_len = ntohs(iph->tot_len) - sizeof(*iph);
+static int __maybe_unused trustix_tixt_rx_coalesced_prepare_tcpv4_gso_partial(
+	struct sk_buff *skb)
+{
+	struct iphdr *iph;
+	struct tcphdr *tcph;
+	u32 ip_len;
+	u32 tcp_len;
+	u32 tcp_hlen;
+
+	if (!skb || !skb_is_gso(skb))
+		return -EINVAL;
+	if (skb->len < ETH_HLEN + sizeof(*iph) + sizeof(*tcph))
+		return -EINVAL;
+	if (!pskb_may_pull(skb, ETH_HLEN + sizeof(*iph) + sizeof(*tcph)) ||
+	    skb_headlen(skb) < ETH_HLEN + sizeof(*iph) + sizeof(*tcph))
+		return -ENODATA;
+	iph = (struct iphdr *)skb_network_header(skb);
+	tcph = (struct tcphdr *)skb_transport_header(skb);
+	if (iph->version != 4 || iph->ihl != 5 ||
+	    iph->protocol != IPPROTO_TCP || tcph->doff < 5 ||
+	    (iph->frag_off & htons(0x3fff)))
+		return -EPROTONOSUPPORT;
+	ip_len = ntohs(iph->tot_len);
+	tcp_hlen = tcph->doff * 4;
+	if (ip_len < sizeof(*iph) + tcp_hlen ||
+	    ip_len > skb->len - ETH_HLEN)
+		return -EMSGSIZE;
+	tcp_len = ip_len - sizeof(*iph);
 	tcph->check = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
 					 tcp_len, IPPROTO_TCP, 0);
 	skb->ip_summed = CHECKSUM_PARTIAL;
 	skb->csum_start = skb_transport_header(skb) - skb->head;
 	skb->csum_offset = offsetof(struct tcphdr, check);
+	return 0;
 }
 
 static void trustix_tixt_rx_free_receive_list(struct list_head *head)
@@ -2403,6 +2955,145 @@ static void trustix_tixt_rx_free_receive_list(struct list_head *head)
 		kfree_skb(skb);
 	}
 }
+
+static unsigned int trustix_tixt_rx_backlog_worker_queue_limit_value(void)
+{
+	unsigned int value = READ_ONCE(trustix_tixt_rx_backlog_worker_queue_limit);
+
+	if (!value)
+		return 1;
+	if (value > 65536)
+		return 65536;
+	return value;
+}
+
+static void trustix_tixt_rx_backlog_worker_fn(struct work_struct *work)
+{
+	struct sk_buff *skb;
+	bool reschedule = false;
+	unsigned int budget = 256;
+	unsigned int done = 0;
+	int ret;
+
+	trustix_tixt_rx_backlog_worker_runs++;
+	while (done < budget && (skb = skb_dequeue(
+		       &trustix_tixt_rx_backlog_worker_queue)) != NULL) {
+		ret = netif_receive_skb(skb);
+		if (ret == NET_RX_DROP)
+			trustix_tixt_rx_backlog_worker_drops++;
+		else
+			trustix_tixt_rx_backlog_worker_delivered++;
+		done++;
+	}
+
+	spin_lock_bh(&trustix_tixt_rx_backlog_worker_queue.lock);
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_depth,
+		   skb_queue_len(&trustix_tixt_rx_backlog_worker_queue));
+	if (skb_queue_empty(&trustix_tixt_rx_backlog_worker_queue)) {
+		WRITE_ONCE(trustix_tixt_rx_backlog_worker_scheduled, false);
+	} else {
+		reschedule = true;
+	}
+	spin_unlock_bh(&trustix_tixt_rx_backlog_worker_queue.lock);
+
+	if (reschedule)
+		schedule_work(&trustix_tixt_rx_backlog_work);
+}
+
+static void trustix_tixt_rx_backlog_worker_flush(void)
+{
+	struct sk_buff *skb;
+
+	cancel_work_sync(&trustix_tixt_rx_backlog_work);
+	while ((skb = skb_dequeue(&trustix_tixt_rx_backlog_worker_queue)) != NULL) {
+		trustix_tixt_rx_backlog_worker_drops++;
+		kfree_skb(skb);
+	}
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_depth, 0);
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_scheduled, false);
+}
+
+static int trustix_tixt_rx_publish_one_backlog(struct sk_buff *skb,
+					      unsigned long *packets,
+					      unsigned long *drops)
+{
+	bool schedule_worker;
+
+	if (!skb)
+		return -EINVAL;
+	skb->next = NULL;
+	INIT_LIST_HEAD(&skb->list);
+	if (READ_ONCE(trustix_tixt_rx_backlog_worker_quiescing) ||
+	    !READ_ONCE(trustix_datapath_helpers_registered)) {
+		trustix_tixt_rx_backlog_worker_disabled++;
+		if (drops)
+			(*drops)++;
+		kfree_skb(skb);
+		return -EOPNOTSUPP;
+	}
+
+	spin_lock_bh(&trustix_tixt_rx_backlog_worker_queue.lock);
+	if (skb_queue_len(&trustix_tixt_rx_backlog_worker_queue) >=
+	    trustix_tixt_rx_backlog_worker_queue_limit_value()) {
+		spin_unlock_bh(&trustix_tixt_rx_backlog_worker_queue.lock);
+		trustix_tixt_rx_backlog_worker_queue_full++;
+		if (drops)
+			(*drops)++;
+		kfree_skb(skb);
+		return -EIO;
+	}
+	schedule_worker = !READ_ONCE(trustix_tixt_rx_backlog_worker_scheduled);
+	if (schedule_worker)
+		WRITE_ONCE(trustix_tixt_rx_backlog_worker_scheduled, true);
+	__skb_queue_tail(&trustix_tixt_rx_backlog_worker_queue, skb);
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_depth,
+		   skb_queue_len(&trustix_tixt_rx_backlog_worker_queue));
+	spin_unlock_bh(&trustix_tixt_rx_backlog_worker_queue.lock);
+
+	trustix_tixt_rx_backlog_worker_enqueued++;
+	if (packets)
+		(*packets)++;
+	if (schedule_worker)
+		schedule_work(&trustix_tixt_rx_backlog_work);
+	return 0;
+}
+
+static unsigned int
+trustix_tixt_rx_publish_skb_chain_backlog(struct sk_buff *head,
+					  unsigned long *packets,
+					  unsigned long *drops)
+{
+	struct sk_buff *next;
+	unsigned int count = 0;
+
+	while (head) {
+		next = head->next;
+		head->next = NULL;
+		trustix_tixt_rx_publish_one_backlog(head, packets, drops);
+		head = next;
+		count++;
+	}
+	return count;
+}
+
+static unsigned int
+trustix_tixt_rx_publish_receive_list_backlog(struct list_head *rx_list,
+					     unsigned long *packets,
+					     unsigned long *drops)
+{
+	struct sk_buff *skb;
+	struct sk_buff *tmp;
+	unsigned int count = 0;
+
+	list_for_each_entry_safe(skb, tmp, rx_list, list) {
+		list_del_init(&skb->list);
+		trustix_tixt_rx_publish_one_backlog(skb, packets, drops);
+		count++;
+	}
+	return count;
+}
+
+static __sum16 trustix_ipv4_header_check20(const u8 *iph);
 
 static int trustix_tixt_rx_prepare_segment_for_receive(struct sk_buff *skb,
 						       struct net_device *dev,
@@ -2496,18 +3187,29 @@ static int trustix_tixt_rx_prepare_segment_for_receive(struct sk_buff *skb,
 
 static int trustix_tixt_rx_coalesced_segment_and_publish(struct sk_buff *skb,
 							 struct net_device *dev,
+							 u32 fallback_gso_size,
 							 unsigned int frames)
 {
 	LIST_HEAD(rx_list);
-	struct sk_buff *segs;
 	struct sk_buff *seg;
-	struct sk_buff *next;
+	struct skb_shared_info *shinfo;
+	struct iphdr *iph;
+	struct tcphdr *tcph;
 	u8 l2[ETH_HLEN];
+	u32 ip_header_len;
+	u32 tcp_header_len;
+	u32 total_len;
+	u32 tcp_len;
+	u32 payload_len;
+	u32 payload_offset = 0;
+	u32 gso_size;
+	u32 seq;
 	unsigned int count = 0;
+	unsigned int expected;
 	int ret;
 
-	if (!skb || !dev || !skb_is_gso(skb))
-		return 0;
+	if (!skb || !dev)
+		return -EINVAL;
 	if (!READ_ONCE(trustix_tixt_rx_coalesce_segment_gso))
 		return 0;
 	if (skb_headroom(skb) < ETH_HLEN) {
@@ -2523,39 +3225,133 @@ static int trustix_tixt_rx_coalesced_segment_and_publish(struct sk_buff *skb,
 	skb->mac_len = ETH_HLEN;
 	skb->protocol = htons(ETH_P_IP);
 	memcpy(l2, skb->data, ETH_HLEN);
-	segs = skb_gso_segment(skb, 0);
-	if (IS_ERR(segs)) {
-		trustix_tixt_rx_coalesce_segment_errors++;
-		kfree_skb(skb);
-		return PTR_ERR(segs);
-	}
-	if (!segs) {
-		trustix_tixt_rx_coalesce_segment_errors++;
-		kfree_skb(skb);
-		return -EIO;
-	}
-	kfree_skb(skb);
 
-	for (seg = segs; seg; seg = next) {
-		next = seg->next;
+	if (skb->len < ETH_HLEN + sizeof(*iph) + sizeof(*tcph) ||
+	    !pskb_may_pull(skb, ETH_HLEN + sizeof(*iph) + sizeof(*tcph)) ||
+	    skb_headlen(skb) < ETH_HLEN + sizeof(*iph) + sizeof(*tcph)) {
+		trustix_tixt_rx_coalesce_segment_errors++;
+		kfree_skb(skb);
+		return -ENODATA;
+	}
+	iph = (struct iphdr *)(skb->data + ETH_HLEN);
+	if (iph->version != 4 || iph->ihl != 5 ||
+	    iph->protocol != IPPROTO_TCP ||
+	    (iph->frag_off & htons(0x3fff))) {
+		trustix_tixt_rx_coalesce_segment_errors++;
+		kfree_skb(skb);
+		return -EPROTONOSUPPORT;
+	}
+	ip_header_len = iph->ihl * 4;
+	if (skb->len < ETH_HLEN + ip_header_len + sizeof(*tcph) ||
+	    !pskb_may_pull(skb, ETH_HLEN + ip_header_len + sizeof(*tcph)) ||
+	    skb_headlen(skb) < ETH_HLEN + ip_header_len + sizeof(*tcph)) {
+		trustix_tixt_rx_coalesce_segment_errors++;
+		kfree_skb(skb);
+		return -ENODATA;
+	}
+	iph = (struct iphdr *)(skb->data + ETH_HLEN);
+	tcph = (struct tcphdr *)(skb->data + ETH_HLEN + ip_header_len);
+	tcp_header_len = tcph->doff * 4;
+	total_len = ntohs(iph->tot_len);
+	if (tcp_header_len < sizeof(*tcph) || tcp_header_len > 60 ||
+	    total_len < ip_header_len + tcp_header_len ||
+	    total_len > skb->len - ETH_HLEN) {
+		trustix_tixt_rx_coalesce_segment_errors++;
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	tcp_len = total_len - ip_header_len;
+	payload_len = tcp_len - tcp_header_len;
+	shinfo = skb_shinfo(skb);
+	gso_size = shinfo->gso_size ? shinfo->gso_size : fallback_gso_size;
+	if (!payload_len || !gso_size || gso_size > payload_len) {
+		trustix_tixt_rx_coalesce_segment_errors++;
+		kfree_skb(skb);
+		return -EINVAL;
+	}
+	expected = DIV_ROUND_UP(payload_len, gso_size);
+	if (expected < 2 || expected > TRUSTIX_TIXT_RX_STREAM_MAX_FRAMES) {
+		trustix_tixt_rx_coalesce_segment_errors++;
+		kfree_skb(skb);
+		return -EINVAL;
+	}
+	seq = ntohl(tcph->seq);
+
+	while (payload_offset < payload_len) {
+		struct iphdr *seg_iph;
+		struct tcphdr *seg_tcph;
+		u32 seg_payload_len;
+		u32 seg_inner_len;
+		u8 *dst;
+		__wsum sum;
+
+		seg_payload_len = min_t(u32, payload_len - payload_offset,
+					gso_size);
+		if (check_add_overflow(ip_header_len + tcp_header_len,
+				       seg_payload_len, &seg_inner_len) ||
+		    seg_inner_len > 0xffff) {
+			ret = -EMSGSIZE;
+			goto fail;
+		}
+		seg = netdev_alloc_skb_ip_align(dev, ETH_HLEN + seg_inner_len);
+		if (!seg) {
+			ret = -ENOMEM;
+			goto fail;
+		}
+		skb_reserve(seg, ETH_HLEN);
+		dst = skb_put(seg, seg_inner_len);
+		memcpy(dst, iph, ip_header_len + tcp_header_len);
+		ret = skb_copy_bits(skb,
+				    ETH_HLEN + ip_header_len +
+					    tcp_header_len + payload_offset,
+				    dst + ip_header_len + tcp_header_len,
+				    seg_payload_len);
+		if (ret) {
+			kfree_skb(seg);
+			goto fail;
+		}
+
+		seg_iph = (struct iphdr *)dst;
+		seg_tcph = (struct tcphdr *)(dst + ip_header_len);
+		seg_iph->tot_len = htons((u16)seg_inner_len);
+		seg_iph->id = htons(ntohs(iph->id) + count);
+		seg_iph->check = 0;
+		seg_iph->check = trustix_ipv4_header_check20((const u8 *)seg_iph);
+		seg_tcph->seq = htonl(seq + payload_offset);
+		seg_tcph->check = 0;
+		sum = csum_partial(seg_tcph,
+				   tcp_header_len + seg_payload_len, 0);
+		seg_tcph->check = csum_tcpudp_magic(
+			seg_iph->saddr, seg_iph->daddr,
+			tcp_header_len + seg_payload_len, IPPROTO_TCP, sum);
+
 		ret = trustix_tixt_rx_prepare_segment_for_receive(seg, dev, l2);
 		if (ret) {
 			kfree_skb(seg);
-			trustix_tixt_rx_stream_free_skb_list(next);
-			trustix_tixt_rx_free_receive_list(&rx_list);
-			trustix_tixt_rx_coalesce_segment_errors++;
-			return ret;
+			goto fail;
 		}
 		INIT_LIST_HEAD(&seg->list);
 		list_add_tail(&seg->list, &rx_list);
 		count++;
+		payload_offset += seg_payload_len;
 	}
-	if (!count)
+	kfree_skb(skb);
+	if (!count) {
+		trustix_tixt_rx_coalesce_segment_errors++;
 		return -EIO;
-	netif_receive_skb_list(&rx_list);
+	}
+	trustix_tixt_rx_publish_receive_list_backlog(
+		&rx_list, &trustix_tixt_rx_coalesce_segment_backlog_packets,
+		&trustix_tixt_rx_coalesce_segment_backlog_drops);
 	trustix_tixt_rx_coalesce_segment_batches++;
 	trustix_tixt_rx_coalesce_segment_frames += frames ? frames : count;
 	return count;
+
+fail:
+	kfree_skb(skb);
+	trustix_tixt_rx_free_receive_list(&rx_list);
+	trustix_tixt_rx_coalesce_segment_errors++;
+	return ret ? ret : -EIO;
 }
 
 static __always_inline u32 trustix_csum_add_be16_buf(u32 sum, const u8 *src,
@@ -2978,6 +3774,105 @@ __bpf_kfunc int trustix_kernel_skb_fix_inner_tcp_csum(struct sk_buff *skb,
 	return 1;
 }
 
+static int trustix_tixt_tx_fix_inner_l4_csum(struct sk_buff *skb,
+					     u32 inner_ip_offset,
+					     u32 inner_len)
+{
+	struct udphdr *udph;
+	struct iphdr *iph;
+	struct tcphdr *tcph;
+	u32 l4_offset;
+	u32 l4_len;
+	u32 ihl;
+	__wsum sum;
+	__sum16 check;
+	int ret;
+
+	if (!skb)
+		return -EINVAL;
+	if (inner_len < sizeof(struct iphdr) || inner_len > 1500)
+		return -EPROTONOSUPPORT;
+	if (inner_ip_offset > U16_MAX ||
+	    inner_ip_offset + inner_len < inner_ip_offset ||
+	    inner_ip_offset + inner_len > skb->len)
+		return -EINVAL;
+	if (unlikely(!pskb_may_pull(skb, inner_ip_offset + sizeof(*iph))) ||
+	    inner_ip_offset + sizeof(*iph) > skb_headlen(skb))
+		return -EPROTONOSUPPORT;
+
+	iph = (struct iphdr *)(skb->data + inner_ip_offset);
+	if (iph->version != 4 || iph->ihl < 5)
+		return -EPROTONOSUPPORT;
+	ihl = iph->ihl * 4;
+	if (ihl < sizeof(*iph) || inner_len < ihl ||
+	    ntohs(iph->tot_len) != inner_len ||
+	    (iph->frag_off & htons(0x3fff)))
+		return -EPROTONOSUPPORT;
+	l4_offset = inner_ip_offset + ihl;
+	l4_len = inner_len - ihl;
+
+	switch (iph->protocol) {
+	case IPPROTO_TCP:
+		if (l4_len < sizeof(*tcph))
+			return -EPROTONOSUPPORT;
+		if (unlikely(!pskb_may_pull(skb, l4_offset + sizeof(*tcph))) ||
+		    l4_offset + sizeof(*tcph) > skb_headlen(skb))
+			return -EPROTONOSUPPORT;
+		ret = trustix_skb_ensure_writable_head(skb,
+						       l4_offset + sizeof(*tcph));
+		if (ret)
+			return ret;
+		iph = (struct iphdr *)(skb->data + inner_ip_offset);
+		tcph = (struct tcphdr *)(skb->data + l4_offset);
+		if (tcph->doff < 5 || l4_len < tcph->doff * 4)
+			return -EPROTONOSUPPORT;
+		ret = trustix_skb_ensure_writable_head(skb,
+						       l4_offset + tcph->doff * 4);
+		if (ret)
+			return ret;
+		iph = (struct iphdr *)(skb->data + inner_ip_offset);
+		tcph = (struct tcphdr *)(skb->data + l4_offset);
+		tcph->check = 0;
+		sum = skb_checksum(skb, l4_offset, l4_len, 0);
+		tcph->check = csum_tcpudp_magic(iph->saddr, iph->daddr,
+						l4_len, IPPROTO_TCP, sum);
+		trustix_skb_clear_csum_metadata(skb);
+		skb->encapsulation = 0;
+		return 1;
+	case IPPROTO_UDP:
+		if (l4_len < sizeof(*udph))
+			return -EPROTONOSUPPORT;
+		if (unlikely(!pskb_may_pull(skb, l4_offset + sizeof(*udph))) ||
+		    l4_offset + sizeof(*udph) > skb_headlen(skb))
+			return -EPROTONOSUPPORT;
+		ret = trustix_skb_ensure_writable_head(skb,
+						       l4_offset + sizeof(*udph));
+		if (ret)
+			return ret;
+		iph = (struct iphdr *)(skb->data + inner_ip_offset);
+		udph = (struct udphdr *)(skb->data + l4_offset);
+		if (ntohs(udph->len) != l4_len)
+			return -EPROTONOSUPPORT;
+		if (!udph->check && skb->ip_summed != CHECKSUM_PARTIAL)
+			return 0;
+		udph->check = 0;
+		sum = skb_checksum(skb, l4_offset, l4_len, 0);
+		check = csum_tcpudp_magic(iph->saddr, iph->daddr, l4_len,
+					  IPPROTO_UDP, sum);
+		udph->check = check ? check : CSUM_MANGLED_0;
+		trustix_skb_clear_csum_metadata(skb);
+		skb->encapsulation = 0;
+		return 1;
+	default:
+		if (skb->ip_summed == CHECKSUM_PARTIAL) {
+			ret = skb_checksum_help(skb);
+			if (ret)
+				return ret;
+		}
+		return 0;
+	}
+}
+
 static void trustix_write_l2_header(u8 *dst, u64 l2_head, u32 l2_tail0,
 				    u32 l2_tail1)
 {
@@ -3093,6 +3988,106 @@ static int trustix_skb_kudp_rx_decap_l2(struct sk_buff *skb, u32 outer_len,
 	return trustix_kudp_rx_record_decap_ret(ret);
 }
 
+static bool trustix_tixt_tcp_outer_has_extra_tail(const struct sk_buff *skb,
+						  u32 ip_len)
+{
+	u32 ip_end;
+
+	if (!skb)
+		return false;
+	if (check_add_overflow((u32)ETH_HLEN, ip_len, &ip_end))
+		return true;
+	return skb->len > ip_end;
+}
+
+static bool trustix_tixt_tcp_outer_has_stream_tail(const struct sk_buff *skb,
+						   u32 ip_len)
+{
+	u8 magic_buf[sizeof(u32)];
+	const u8 *tail;
+	u32 ip_end;
+	u32 tail_len;
+
+	if (!skb)
+		return false;
+	if (check_add_overflow((u32)ETH_HLEN, ip_len, &ip_end))
+		return false;
+	if (skb->len <= ip_end)
+		return false;
+	tail_len = skb->len - ip_end;
+	if (tail_len < TRUSTIX_TIXT_HEADER_LEN + sizeof(struct iphdr))
+		return false;
+	tail = skb_header_pointer(skb, ip_end, sizeof(magic_buf),
+				  magic_buf);
+	if (!tail)
+		return false;
+	return get_unaligned_be32(tail) == TRUSTIX_TIXT_MAGIC;
+}
+
+static bool trustix_tixt_rx_tcp_outer_needs_stream_parse(struct sk_buff *skb)
+{
+	struct skb_shared_info *shinfo;
+	u8 magic_buf[sizeof(u32)];
+	const u8 *magic;
+	u32 payload_offset;
+	u32 payload_len;
+	u32 ip_len;
+	u8 *data;
+
+	if (!skb)
+		return false;
+	if (skb->len < ETH_HLEN + sizeof(struct iphdr) + sizeof(struct tcphdr) ||
+	    skb_headlen(skb) < ETH_HLEN + sizeof(struct iphdr) + sizeof(struct tcphdr))
+		return false;
+	data = skb->data;
+	if (get_unaligned_be16(data + 12) != ETH_P_IP ||
+	    data[ETH_HLEN] != 0x45 ||
+	    data[ETH_HLEN + offsetof(struct iphdr, protocol)] != IPPROTO_TCP)
+		return false;
+	ip_len = get_unaligned_be16(data + ETH_HLEN +
+				    offsetof(struct iphdr, tot_len));
+	if (trustix_tixt_tcp_outer_has_stream_tail(skb, ip_len))
+		return true;
+	if (data[ETH_HLEN + sizeof(struct iphdr) + 12] != 0x50)
+		return false;
+	if (ip_len < sizeof(struct iphdr) + sizeof(struct tcphdr) +
+		     TRUSTIX_TIXT_HEADER_LEN + sizeof(struct iphdr))
+		return false;
+	if (skb->len < ETH_HLEN + ip_len)
+		return false;
+	shinfo = skb_shinfo(skb);
+	if (!shinfo->gso_size || shinfo->gso_segs < 2)
+		return false;
+	payload_len = ip_len - sizeof(struct iphdr) - sizeof(struct tcphdr);
+	if (payload_len <= shinfo->gso_size ||
+	    shinfo->gso_size < TRUSTIX_TIXT_HEADER_LEN + sizeof(struct iphdr))
+		return false;
+	payload_offset = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct tcphdr);
+	magic = skb_header_pointer(skb, payload_offset, sizeof(magic_buf),
+				   magic_buf);
+	if (!magic)
+		return false;
+	return get_unaligned_be32(magic) == TRUSTIX_TIXT_MAGIC;
+}
+
+static bool trustix_tixt_tcp_outer_extra_tail_is_single_gso(
+					const struct sk_buff *skb,
+					u32 payload_offset, u32 inner_len,
+					const struct iphdr *inner_iph)
+{
+	const struct skb_shared_info *shinfo;
+	u32 full_end;
+
+	if (!skb || !inner_iph)
+		return false;
+	shinfo = skb_shinfo(skb);
+	if (!shinfo->gso_size || inner_iph->protocol != IPPROTO_TCP)
+		return false;
+	if (check_add_overflow(payload_offset, inner_len, &full_end))
+		return false;
+	return full_end == skb->len;
+}
+
 static int
 trustix_skb_kudp_rx_parse_plain(struct sk_buff *skb,
 				const struct trustix_kudp_rx_parse_args *args,
@@ -3183,6 +4178,12 @@ trustix_skb_kudp_rx_parse_plain(struct sk_buff *skb,
 	skb_len = skb->len;
 	if (skb_len < ETH_HLEN + ip_len)
 		return -EMSGSIZE;
+	if (outer_protocol == IPPROTO_TCP &&
+	    trustix_tixt_tcp_outer_has_stream_tail(skb, ip_len))
+		return -EPROTONOSUPPORT;
+	if (outer_protocol == IPPROTO_TCP &&
+	    trustix_tixt_rx_tcp_outer_needs_stream_parse(skb))
+		return -EPROTONOSUPPORT;
 
 	if (outer_protocol == IPPROTO_UDP) {
 		u16 udp_len = get_unaligned_be16(data + ETH_HLEN +
@@ -3239,6 +4240,11 @@ trustix_skb_kudp_rx_parse_plain(struct sk_buff *skb,
 	inner_iph = (const struct iphdr *)(data + payload_offset);
 	if (inner_iph->version != 4 || inner_iph->ihl != 5)
 		return -EBADMSG;
+	if (outer_protocol == IPPROTO_TCP &&
+	    trustix_tixt_tcp_outer_has_extra_tail(skb, ip_len) &&
+	    !trustix_tixt_tcp_outer_extra_tail_is_single_gso(
+		    skb, payload_offset, inner_len, inner_iph))
+		return -EPROTONOSUPPORT;
 	if (ntohs(inner_iph->tot_len) == inner_len) {
 		segment_len = inner_len;
 	} else {
@@ -3341,6 +4347,17 @@ static void trustix_tixt_rx_stream_free_skb_list(struct sk_buff *head)
 		kfree_skb(head);
 		head = next;
 	}
+}
+
+static bool trustix_tixt_rx_dev_ready(const struct net_device *dev)
+{
+	if (!dev)
+		return false;
+	if (dev->reg_state != NETREG_REGISTERED)
+		return false;
+	if (!(READ_ONCE(dev->flags) & IFF_UP))
+		return false;
+	return netif_device_present(dev) && netif_running(dev);
 }
 
 static int trustix_tixt_rx_stream_parse_one(const u8 *data, u32 frame_offset,
@@ -3475,6 +4492,7 @@ static int trustix_tixt_rx_stream_parse_frames(
 	u32 ip_len;
 	u32 max_frames;
 	bool nonlinear_parse = false;
+	bool stream_tail = false;
 	u8 *data;
 	int ret;
 
@@ -3523,13 +4541,15 @@ static int trustix_tixt_rx_stream_parse_frames(
 		return -EAGAIN;
 	ip_payload_end = ETH_HLEN + ip_len;
 	payload_end = ip_payload_end;
-	if (skb_is_gso(skb) && skb->len > ip_payload_end) {
+	stream_tail = trustix_tixt_tcp_outer_has_stream_tail(skb, ip_len);
+	if (stream_tail) {
 		if (skb->len > TRUSTIX_TIXT_RX_STREAM_PARSE_LINEAR_MAX)
 			return -EAGAIN;
 		payload_end = skb->len;
 	}
 	if (payload_end > skb_headlen(skb) &&
-	    READ_ONCE(trustix_tixt_rx_stream_nonlinear_parse)) {
+	    (READ_ONCE(trustix_tixt_rx_stream_nonlinear_parse) ||
+	     skb_is_gso(skb))) {
 		nonlinear_parse = true;
 		trustix_tixt_rx_stream_nonlinear_parse_hits++;
 	} else if (unlikely(payload_end > skb_headlen(skb) &&
@@ -3555,7 +4575,7 @@ static int trustix_tixt_rx_stream_parse_frames(
 				data, cursor, payload_end,
 				&frames[*frame_count]);
 		if (ret) {
-			if (*frame_count == 0 && ret == -EPROTONOSUPPORT)
+			if (*frame_count == 0 && !stream_tail)
 				return -EAGAIN;
 			trustix_tixt_rx_stream_parse_errors++;
 			return ret;
@@ -3564,8 +4584,10 @@ static int trustix_tixt_rx_stream_parse_frames(
 			 frames[*frame_count].payload_len;
 		(*frame_count)++;
 	}
-	if (*frame_count < 2)
+	if (*frame_count < 2 && !stream_tail)
 		return -EAGAIN;
+	if (*frame_count < 2)
+		return -EPROTONOSUPPORT;
 	trustix_tixt_rx_stream_candidates++;
 	trustix_tixt_rx_stream_frames += *frame_count;
 	return 0;
@@ -3593,6 +4615,10 @@ static int trustix_tixt_rx_stream_build_extra_list(
 	*head_out = NULL;
 	if (start_frame >= frame_count)
 		return 0;
+	if (!trustix_tixt_rx_dev_ready(dev)) {
+		trustix_tixt_rx_stream_xmit_errors++;
+		return -ENETDOWN;
+	}
 	for (i = start_frame; i < frame_count; i++) {
 		if (!trustix_tixt_rx_stream_local_match(args, frames[i].next_hop)) {
 			trustix_tixt_rx_stream_disabled++;
@@ -3637,6 +4663,12 @@ static int trustix_tixt_rx_stream_build_extra_list(
 		trustix_write_l2_header(dst, args->l2_head, args->l2_tail0,
 					args->l2_tail1);
 		rx_skb->dev = dev;
+		if (!trustix_tixt_rx_dev_ready(dev)) {
+			kfree_skb(rx_skb);
+			trustix_tixt_rx_stream_xmit_errors++;
+			trustix_tixt_rx_stream_free_skb_list(head);
+			return -ENETDOWN;
+		}
 		rx_skb->protocol = eth_type_trans(rx_skb, dev);
 		rx_skb->skb_iif = dev->ifindex;
 		rx_skb->pkt_type = PACKET_HOST;
@@ -3661,22 +4693,23 @@ static int trustix_tixt_rx_stream_build_extra_list(
 
 static unsigned int trustix_tixt_rx_stream_publish_extra_list(struct sk_buff *head)
 {
-	LIST_HEAD(rx_list);
 	struct sk_buff *next;
 	unsigned int count = 0;
 	int ret;
 
+	if (!head)
+		return 0;
+	if (!trustix_tixt_rx_dev_ready(head->dev)) {
+		trustix_tixt_rx_stream_free_skb_list(head);
+		trustix_tixt_rx_stream_xmit_errors++;
+		return 0;
+	}
+
 	if (READ_ONCE(trustix_tixt_rx_stream_gso_xmit)) {
-		while (head) {
-			next = head->next;
-			head->next = NULL;
-			INIT_LIST_HEAD(&head->list);
-			list_add_tail(&head->list, &rx_list);
-			count++;
-			head = next;
-		}
+		count = trustix_tixt_rx_publish_skb_chain_backlog(
+			head, &trustix_tixt_rx_stream_backlog_packets,
+			&trustix_tixt_rx_stream_backlog_drops);
 		if (count) {
-			netif_receive_skb_list(&rx_list);
 			trustix_tixt_rx_stream_gso_batches++;
 			trustix_tixt_rx_stream_gso_frames += count;
 			trustix_tixt_rx_stream_xmit_packets += count;
@@ -3687,8 +4720,10 @@ static unsigned int trustix_tixt_rx_stream_publish_extra_list(struct sk_buff *he
 	while (head) {
 		next = head->next;
 		head->next = NULL;
-		ret = netif_rx(head);
-		if (ret == NET_RX_DROP)
+		ret = trustix_tixt_rx_publish_one_backlog(
+			head, &trustix_tixt_rx_stream_backlog_packets,
+			&trustix_tixt_rx_stream_backlog_drops);
+		if (ret)
 			trustix_tixt_rx_stream_xmit_errors++;
 		else
 			trustix_tixt_rx_stream_xmit_packets++;
@@ -3707,6 +4742,8 @@ static bool trustix_tixt_rx_single_coalesce_stream_fallback_enabled(void)
 static bool trustix_tixt_rx_stream_parse_wanted(struct sk_buff *skb)
 {
 	if (READ_ONCE(trustix_tixt_rx_stream_parse))
+		return true;
+	if (trustix_tixt_rx_tcp_outer_needs_stream_parse(skb))
 		return true;
 	if (!trustix_tixt_rx_single_coalesce_stream_fallback_enabled() || !skb)
 		return false;
@@ -3749,9 +4786,7 @@ static int trustix_tixt_rx_stream_try_coalesce_gso(
 		READ_ONCE(trustix_tixt_rx_stream_coalesce_mark_gso);
 	bool skip_tcp_csum =
 		(single_stream_fallback &&
-		 READ_ONCE(trustix_tixt_rx_single_coalesce_skip_tcp_csum)) ||
-		(mark_rx_gso &&
-		 READ_ONCE(trustix_tixt_rx_coalesce_mark_gso_partial_csum));
+		 READ_ONCE(trustix_tixt_rx_single_coalesce_skip_tcp_csum));
 	int ret;
 
 	if (!READ_ONCE(trustix_tixt_rx_stream_coalesce_gso) &&
@@ -3934,7 +4969,7 @@ static int trustix_tixt_rx_stream_try_coalesce_gso(
 	if (mark_rx_gso && skb_is_gso(rx_skb) &&
 	    READ_ONCE(trustix_tixt_rx_coalesce_segment_gso)) {
 		ret = trustix_tixt_rx_coalesced_segment_and_publish(
-			rx_skb, dev, frame_count);
+			rx_skb, dev, gso_size, frame_count);
 		if (ret > 0) {
 			trustix_tixt_rx_stream_coalesce_batches++;
 			trustix_tixt_rx_stream_coalesce_frames += frame_count;
@@ -3951,10 +4986,12 @@ static int trustix_tixt_rx_stream_try_coalesce_gso(
 		return ret ? ret : -EIO;
 	}
 
-	ret = netif_receive_skb(rx_skb);
-	if (ret == NET_RX_DROP) {
+	ret = trustix_tixt_rx_publish_one_backlog(
+		rx_skb, &trustix_tixt_rx_stream_backlog_packets,
+		&trustix_tixt_rx_stream_backlog_drops);
+	if (ret) {
 		trustix_tixt_rx_stream_coalesce_xmit_errors++;
-		return -EIO;
+		return ret;
 	}
 	trustix_tixt_rx_stream_coalesce_batches++;
 	trustix_tixt_rx_stream_coalesce_frames += frame_count;
@@ -4051,6 +5088,44 @@ static u32 trustix_tixt_rx_single_coalesce_hash_value(
 	return hash ?: 1;
 }
 
+static u8 trustix_tixt_rx_single_coalesce_flags_class(u8 flags)
+{
+	return flags & ~(u8)0x08;
+}
+
+static bool trustix_tixt_rx_single_coalesce_flow_match(
+				const struct trustix_tixt_rx_single_coalesce_slot *slot,
+				const struct trustix_tixt_rx_single_coalesce_frame *frame)
+{
+	return slot->saddr == frame->saddr &&
+	       slot->daddr == frame->daddr &&
+	       slot->source == frame->source &&
+	       slot->dest == frame->dest;
+}
+
+static bool trustix_tixt_rx_single_coalesce_shape_match(
+				const struct trustix_tixt_rx_single_coalesce_slot *slot,
+				const struct trustix_tixt_rx_single_coalesce_frame *frame)
+{
+	return slot->tcp_header_len == frame->tcp_header_len &&
+	       slot->urg_ptr == frame->urg_ptr &&
+	       trustix_tixt_rx_single_coalesce_flags_class(slot->tcp_flags) ==
+		       trustix_tixt_rx_single_coalesce_flags_class(
+			       frame->tcp_flags);
+}
+
+static void trustix_tixt_rx_single_coalesce_record_relaxed_diffs(
+				const struct trustix_tixt_rx_single_coalesce_slot *slot,
+				const struct trustix_tixt_rx_single_coalesce_frame *frame)
+{
+	if (slot->ack_seq != frame->ack_seq)
+		trustix_tixt_rx_single_coalesce_ack_variations++;
+	if (slot->window != frame->window)
+		trustix_tixt_rx_single_coalesce_window_variations++;
+	if (slot->tcp_flags != frame->tcp_flags)
+		trustix_tixt_rx_single_coalesce_flags_variations++;
+}
+
 static bool trustix_tixt_rx_single_coalesce_match(
 				const struct trustix_tixt_rx_single_coalesce_slot *slot,
 				const struct net_device *dev,
@@ -4058,15 +5133,9 @@ static bool trustix_tixt_rx_single_coalesce_match(
 {
 	return slot->frame_count &&
 	       slot->dev == dev &&
-	       slot->saddr == frame->saddr &&
-	       slot->daddr == frame->daddr &&
-	       slot->source == frame->source &&
-	       slot->dest == frame->dest &&
-	       slot->tcp_header_len == frame->tcp_header_len &&
-	       slot->ack_seq == frame->ack_seq &&
-	       slot->window == frame->window &&
-	       slot->urg_ptr == frame->urg_ptr &&
-	       slot->tcp_flags == frame->tcp_flags &&
+	       trustix_tixt_rx_single_coalesce_flow_match(slot, frame) &&
+	       trustix_tixt_rx_single_coalesce_shape_match(slot, frame) &&
+	       (!slot->gso_size || frame->payload_len <= slot->gso_size) &&
 	       slot->next_seq == frame->seq;
 }
 
@@ -4077,15 +5146,8 @@ static bool trustix_tixt_rx_single_coalesce_armed_match(
 {
 	return slot->armed &&
 	       slot->armed_ifindex == (dev ? dev->ifindex : 0) &&
-	       slot->saddr == frame->saddr &&
-	       slot->daddr == frame->daddr &&
-	       slot->source == frame->source &&
-	       slot->dest == frame->dest &&
-	       slot->tcp_header_len == frame->tcp_header_len &&
-	       slot->ack_seq == frame->ack_seq &&
-	       slot->window == frame->window &&
-	       slot->urg_ptr == frame->urg_ptr &&
-	       slot->tcp_flags == frame->tcp_flags &&
+	       trustix_tixt_rx_single_coalesce_flow_match(slot, frame) &&
+	       trustix_tixt_rx_single_coalesce_shape_match(slot, frame) &&
 	       slot->gso_size == frame->payload_len &&
 	       slot->next_seq == frame->seq;
 }
@@ -4095,19 +5157,32 @@ static void trustix_tixt_rx_single_coalesce_record_miss(
 				const struct net_device *dev,
 				const struct trustix_tixt_rx_single_coalesce_frame *frame)
 {
-	if (slot->dev == dev &&
-	    slot->saddr == frame->saddr &&
-	    slot->daddr == frame->daddr &&
-	    slot->source == frame->source &&
-	    slot->dest == frame->dest &&
-	    slot->tcp_header_len == frame->tcp_header_len &&
-	    slot->ack_seq == frame->ack_seq &&
-	    slot->window == frame->window &&
-	    slot->urg_ptr == frame->urg_ptr &&
-	    slot->tcp_flags == frame->tcp_flags)
-		trustix_tixt_rx_single_coalesce_seq_misses++;
-	else
+	bool same_dev = slot->frame_count ? slot->dev == dev :
+			(slot->armed ?
+			 slot->armed_ifindex == (dev ? dev->ifindex : 0) :
+			 slot->dev == dev);
+
+	if (!same_dev) {
+		trustix_tixt_rx_single_coalesce_dev_misses++;
 		trustix_tixt_rx_single_coalesce_hash_misses++;
+		return;
+	}
+	if (!trustix_tixt_rx_single_coalesce_flow_match(slot, frame)) {
+		trustix_tixt_rx_single_coalesce_flow_misses++;
+		trustix_tixt_rx_single_coalesce_hash_misses++;
+		return;
+	}
+	if (!trustix_tixt_rx_single_coalesce_shape_match(slot, frame)) {
+		trustix_tixt_rx_single_coalesce_header_misses++;
+		trustix_tixt_rx_single_coalesce_hash_misses++;
+		return;
+	}
+	if (slot->gso_size && frame->payload_len > slot->gso_size) {
+		trustix_tixt_rx_single_coalesce_gso_size_misses++;
+		trustix_tixt_rx_single_coalesce_hash_misses++;
+		return;
+	}
+	trustix_tixt_rx_single_coalesce_seq_misses++;
 }
 
 static void trustix_tixt_rx_single_coalesce_reset_locked(
@@ -4600,6 +5675,7 @@ static int trustix_tixt_rx_single_coalesce_build_direct_list_locked(
 		trustix_tixt_rx_single_coalesce_tcp_csum_computed++;
 	emit->skb_list = head;
 	emit->dev = dev;
+	emit->gso_size = slot->gso_size;
 	emit->frames = slot->frame_count;
 	emit->list_frames = count;
 	trustix_tixt_rx_single_coalesce_reset_locked(slot);
@@ -4697,6 +5773,11 @@ static void trustix_tixt_rx_single_coalesce_build_locked(
 	skb_reserve(rx_skb, ETH_HLEN);
 	dst = skb_put(rx_skb, linear_inner_len);
 	memcpy(dst, slot->header, header_len);
+	tcph = (struct tcphdr *)(dst + sizeof(struct iphdr));
+	tcph->ack_seq = htonl(slot->ack_seq);
+	tcph->window = slot->window;
+	tcph->urg_ptr = slot->urg_ptr;
+	tcph->psh = !!(slot->tcp_flags & 0x08);
 	if (linear_payload_len) {
 		if (slot->payload_linear_len)
 			memcpy(dst + header_len, slot->payload,
@@ -4710,13 +5791,10 @@ static void trustix_tixt_rx_single_coalesce_build_locked(
 	iph->tot_len = htons(total_inner_len);
 	iph->check = 0;
 	iph->check = trustix_ipv4_header_check20((const u8 *)iph);
-	tcph = (struct tcphdr *)(dst + sizeof(struct iphdr));
 	tcp_len = slot->tcp_header_len + slot->total_payload;
 	mark_rx_gso = READ_ONCE(trustix_tixt_rx_single_coalesce_mark_gso);
 	skip_tcp_csum =
-		READ_ONCE(trustix_tixt_rx_single_coalesce_skip_tcp_csum) ||
-		(mark_rx_gso &&
-		 READ_ONCE(trustix_tixt_rx_coalesce_mark_gso_partial_csum));
+		READ_ONCE(trustix_tixt_rx_single_coalesce_skip_tcp_csum);
 	if (!skip_tcp_csum) {
 		tcph->check = 0;
 		sum = csum_partial(tcph, slot->tcp_header_len, 0);
@@ -4782,6 +5860,7 @@ static void trustix_tixt_rx_single_coalesce_build_locked(
 			rx_skb, slot->gso_size, slot->frame_count);
 	emit->skb = rx_skb;
 	emit->dev = dev;
+	emit->gso_size = slot->gso_size;
 	emit->frames = slot->frame_count;
 	trustix_tixt_rx_single_coalesce_reset_locked(slot);
 }
@@ -4795,19 +5874,19 @@ static void trustix_tixt_rx_single_coalesce_publish(
 	if (!emit || !emit->dev)
 		return;
 	if (emit->skb) {
-		if (skb_is_gso(emit->skb) &&
+		if (emit->frames > 1 && emit->gso_size &&
 		    READ_ONCE(trustix_tixt_rx_coalesce_segment_gso)) {
 			ret = trustix_tixt_rx_coalesced_segment_and_publish(
-				emit->skb, emit->dev, emit->frames);
+				emit->skb, emit->dev, emit->gso_size,
+				emit->frames);
 			emit->skb = NULL;
 			published = ret > 0;
-		} else if (READ_ONCE(trustix_tixt_rx_single_coalesce_netif_rx)) {
-			trustix_tixt_rx_single_coalesce_netif_rx_packets++;
-			ret = netif_rx(emit->skb);
-			published = ret != NET_RX_DROP;
 		} else {
-			ret = netif_receive_skb(emit->skb);
-			published = ret != NET_RX_DROP;
+			ret = trustix_tixt_rx_publish_one_backlog(
+				emit->skb,
+				&trustix_tixt_rx_single_coalesce_netif_rx_packets,
+				&trustix_tixt_rx_single_coalesce_netif_rx_drops);
+			published = !ret;
 		}
 		if (!published) {
 			trustix_tixt_rx_single_coalesce_xmit_errors++;
@@ -4831,7 +5910,10 @@ static void trustix_tixt_rx_single_coalesce_publish(
 			skb = next;
 		}
 		if (count) {
-			netif_receive_skb_list(&rx_list);
+			trustix_tixt_rx_publish_receive_list_backlog(
+				&rx_list,
+				&trustix_tixt_rx_single_coalesce_netif_rx_packets,
+				&trustix_tixt_rx_single_coalesce_netif_rx_drops);
 			trustix_tixt_rx_single_coalesce_batches++;
 			trustix_tixt_rx_single_coalesce_frames +=
 				emit->frames;
@@ -4908,6 +5990,8 @@ static void trustix_tixt_rx_single_coalesce_flush_work(
 		container_of(dwork, struct trustix_tixt_rx_single_coalesce_slot,
 			     flush_work);
 
+	if (!READ_ONCE(trustix_tixt_rx_single_coalesce_slots_ready))
+		return;
 	trustix_tixt_rx_single_coalesce_flush_slot(slot);
 }
 
@@ -5065,6 +6149,8 @@ static int trustix_tixt_rx_single_coalesce_try(
 	memset(&emit, 0, sizeof(emit));
 	if (!READ_ONCE(trustix_tixt_rx_single_coalesce_gso))
 		return 0;
+	if (!READ_ONCE(trustix_tixt_rx_single_coalesce_slots_ready))
+		return 0;
 	if (!skb || !dev || !args ||
 	    !(args->decap_flags & TRUSTIX_KUDP_RX_DECAP_L2_TRUST_INNER_L4_CSUM))
 		return 0;
@@ -5196,6 +6282,9 @@ static int trustix_tixt_rx_single_coalesce_try(
 		trustix_tixt_rx_single_coalesce_fallbacks++;
 		return 0;
 	}
+	if (!new_slot)
+		trustix_tixt_rx_single_coalesce_record_relaxed_diffs(slot,
+								     &frame);
 	if (slot->frame_count >= TRUSTIX_TIXT_RX_SINGLE_COALESCE_MAX_FRAMES) {
 		trustix_tixt_rx_single_coalesce_build_locked(slot, &emit);
 		spin_unlock_bh(&slot->lock);
@@ -5252,6 +6341,10 @@ static int trustix_tixt_rx_single_coalesce_try(
 			slot->total_payload - linear_max : 0;
 	}
 	slot->next_seq = frame.seq + frame.payload_len;
+	slot->ack_seq = frame.ack_seq;
+	slot->window = frame.window;
+	slot->urg_ptr = frame.urg_ptr;
+	slot->tcp_flags = frame.tcp_flags;
 	if (slot->frame_count <
 	    TRUSTIX_TIXT_RX_SINGLE_COALESCE_DIRECT_LIST_MAX_FRAMES) {
 		slot->seqs[slot->frame_count] = frame.seq;
@@ -5312,7 +6405,8 @@ static int trustix_tixt_rx_stream_decap_local(
 				struct sk_buff *skb,
 				const struct trustix_kudp_rx_parse_args *args,
 				const struct trustix_tixt_rx_stream_frame *frames,
-				unsigned int frame_count, u32 outer_len)
+				unsigned int frame_count, u32 outer_len,
+				bool forced_stream_parse)
 {
 	struct sk_buff *extra_head = NULL;
 	struct net_device *dev;
@@ -5322,13 +6416,17 @@ static int trustix_tixt_rx_stream_decap_local(
 	bool stream_xmit_extra = READ_ONCE(trustix_tixt_rx_stream_xmit_extra);
 	bool single_stream_fallback =
 		trustix_tixt_rx_single_coalesce_stream_fallback_enabled();
+	bool allow_stream_parse = stream_parse || single_stream_fallback ||
+				  forced_stream_parse;
+	bool allow_stream_xmit_extra = stream_xmit_extra ||
+				       single_stream_fallback ||
+				       forced_stream_parse;
 	unsigned int published;
 	int ret;
 
 	if (!skb || !args || !frames || frame_count < 2)
 		return -EINVAL;
-	if ((!stream_parse && !single_stream_fallback) ||
-	    (!stream_xmit_extra && !single_stream_fallback)) {
+	if (!allow_stream_parse || !allow_stream_xmit_extra) {
 		trustix_tixt_rx_stream_disabled++;
 		return -EPROTONOSUPPORT;
 	}
@@ -5346,29 +6444,19 @@ static int trustix_tixt_rx_stream_decap_local(
 		rcu_read_unlock();
 		return -ENODEV;
 	}
+	dev_hold(dev);
+	rcu_read_unlock();
 
-	ret = trustix_tixt_rx_stream_try_coalesce_gso(skb, dev, args, frames,
-						      frame_count);
-	if (ret > 0) {
-		rcu_read_unlock();
-		return TRUSTIX_KUDP_RX_PARSE_DECAP_L2_STOLEN;
-	}
-	if (ret < 0) {
-		rcu_read_unlock();
-		return ret;
-	}
-
-	if (READ_ONCE(trustix_tixt_rx_stream_ordered_list)) {
+	if (forced_stream_parse) {
 		ret = trustix_tixt_rx_stream_build_extra_list(
 			skb, dev, args, frames, frame_count, 0, &extra_head);
 		if (ret) {
-			trustix_tixt_rx_stream_ordered_list_errors++;
-			rcu_read_unlock();
+			dev_put(dev);
 			return ret;
 		}
 		if (!extra_head) {
 			trustix_tixt_rx_stream_ordered_list_errors++;
-			rcu_read_unlock();
+			dev_put(dev);
 			return -ENODATA;
 		}
 		published = trustix_tixt_rx_stream_publish_extra_list(
@@ -5377,7 +6465,41 @@ static int trustix_tixt_rx_stream_decap_local(
 		trustix_tixt_rx_stream_ordered_list_frames += published;
 		if (published != frame_count)
 			trustix_tixt_rx_stream_ordered_list_errors++;
-		rcu_read_unlock();
+		dev_put(dev);
+		return TRUSTIX_KUDP_RX_PARSE_DECAP_L2_STOLEN;
+	}
+
+	ret = trustix_tixt_rx_stream_try_coalesce_gso(skb, dev, args, frames,
+						      frame_count);
+	if (ret > 0) {
+		dev_put(dev);
+		return TRUSTIX_KUDP_RX_PARSE_DECAP_L2_STOLEN;
+	}
+	if (ret < 0) {
+		dev_put(dev);
+		return ret;
+	}
+
+	if (READ_ONCE(trustix_tixt_rx_stream_ordered_list)) {
+		ret = trustix_tixt_rx_stream_build_extra_list(
+			skb, dev, args, frames, frame_count, 0, &extra_head);
+		if (ret) {
+			trustix_tixt_rx_stream_ordered_list_errors++;
+			dev_put(dev);
+			return ret;
+		}
+		if (!extra_head) {
+			trustix_tixt_rx_stream_ordered_list_errors++;
+			dev_put(dev);
+			return -ENODATA;
+		}
+		published = trustix_tixt_rx_stream_publish_extra_list(
+			extra_head);
+		trustix_tixt_rx_stream_ordered_list_batches++;
+		trustix_tixt_rx_stream_ordered_list_frames += published;
+		if (published != frame_count)
+			trustix_tixt_rx_stream_ordered_list_errors++;
+		dev_put(dev);
 		return TRUSTIX_KUDP_RX_PARSE_DECAP_L2_STOLEN;
 	}
 
@@ -5385,7 +6507,7 @@ static int trustix_tixt_rx_stream_decap_local(
 						      frame_count, 1,
 						      &extra_head);
 	if (ret) {
-		rcu_read_unlock();
+		dev_put(dev);
 		return ret;
 	}
 
@@ -5394,7 +6516,7 @@ static int trustix_tixt_rx_stream_decap_local(
 					   args->decap_flags);
 	if (ret) {
 		trustix_tixt_rx_stream_free_skb_list(extra_head);
-		rcu_read_unlock();
+		dev_put(dev);
 		return ret;
 	}
 	first_len = ETH_HLEN + frames[0].payload_len;
@@ -5402,7 +6524,7 @@ static int trustix_tixt_rx_stream_decap_local(
 		ret = pskb_trim(skb, first_len);
 		if (ret) {
 			trustix_tixt_rx_stream_free_skb_list(extra_head);
-			rcu_read_unlock();
+			dev_put(dev);
 			return ret;
 		}
 		skb_gso_reset(skb);
@@ -5416,7 +6538,7 @@ static int trustix_tixt_rx_stream_decap_local(
 		trustix_tixt_rx_single_coalesce_stream_fallback_frames +=
 			frame_count;
 	}
-	rcu_read_unlock();
+	dev_put(dev);
 	return TRUSTIX_KUDP_RX_PARSE_DECAP_L2_LOCAL_DELIVERED;
 }
 
@@ -5432,6 +6554,7 @@ trustix_skb_kudp_rx_parse_decap_l2(
 	u32 outer_len = 0;
 	u32 next_hop = 0;
 	u32 outer_protocol;
+	bool forced_stream_parse = false;
 	bool local_dev = false;
 	int ret;
 
@@ -5455,8 +6578,12 @@ trustix_skb_kudp_rx_parse_decap_l2(
 	outer_protocol = *(u8 *)(skb->data + ETH_HLEN +
 				 offsetof(struct iphdr, protocol));
 	trustix_kudp_rx_record_shape(skb, outer_protocol);
+	if (outer_protocol == IPPROTO_TCP) {
+		forced_stream_parse =
+			trustix_tixt_rx_tcp_outer_needs_stream_parse(skb);
+	}
 	if (outer_protocol == IPPROTO_TCP &&
-	    trustix_tixt_rx_stream_parse_wanted(skb)) {
+	    (forced_stream_parse || trustix_tixt_rx_stream_parse_wanted(skb))) {
 		ret = trustix_tixt_rx_stream_parse_frames(
 			skb, args, stream_frames, &stream_frame_count,
 			&outer_len);
@@ -5464,7 +6591,11 @@ trustix_skb_kudp_rx_parse_decap_l2(
 			return trustix_kudp_rx_record_parse_ret(
 				trustix_tixt_rx_stream_decap_local(
 					skb, args, stream_frames,
-					stream_frame_count, outer_len));
+					stream_frame_count, outer_len,
+					forced_stream_parse));
+		if (forced_stream_parse)
+			return trustix_kudp_rx_record_parse_ret(
+				ret == -EAGAIN ? -EPROTO : ret);
 		if (ret != -EAGAIN)
 			return trustix_kudp_rx_record_parse_ret(ret);
 	}
@@ -5488,10 +6619,12 @@ trustix_skb_kudp_rx_parse_decap_l2(
 			rcu_read_unlock();
 			return trustix_kudp_rx_record_parse_ret(-ENODEV);
 		}
+		dev_hold(dev);
+		rcu_read_unlock();
 		if (outer_protocol == IPPROTO_TCP &&
 		    trustix_tixt_rx_single_coalesce_try(skb, dev, args,
 							outer_len) > 0) {
-			rcu_read_unlock();
+			dev_put(dev);
 			return TRUSTIX_KUDP_RX_PARSE_DECAP_L2_STOLEN;
 		}
 	}
@@ -5501,7 +6634,7 @@ trustix_skb_kudp_rx_parse_decap_l2(
 					   args->decap_flags);
 	if (ret) {
 		if (local_dev)
-			rcu_read_unlock();
+			dev_put(dev);
 		return trustix_kudp_rx_record_parse_ret(ret);
 	}
 
@@ -5509,7 +6642,7 @@ trustix_skb_kudp_rx_parse_decap_l2(
 		skb->dev = dev;
 		skb->skb_iif = dev->ifindex;
 		skb->pkt_type = PACKET_HOST;
-		rcu_read_unlock();
+		dev_put(dev);
 		return TRUSTIX_KUDP_RX_PARSE_DECAP_L2_LOCAL_DELIVERED;
 	}
 	memcpy(skb->cb + TRUSTIX_SKB_CB_RX_NEXT_HOP, &next_hop,
@@ -5553,6 +6686,8 @@ trustix_kernel_skb_kudp_rx_decap_l2_dev(
 		rcu_read_unlock();
 		return -ENODEV;
 	}
+	dev_hold(dev);
+	rcu_read_unlock();
 	ret = trustix_skb_kudp_rx_decap_l2(skb, args->outer_len,
 					   args->l2_head, args->l2_tail0,
 					   args->l2_tail1, args->flags);
@@ -5561,7 +6696,7 @@ trustix_kernel_skb_kudp_rx_decap_l2_dev(
 		skb->skb_iif = dev->ifindex;
 		skb->pkt_type = PACKET_HOST;
 	}
-	rcu_read_unlock();
+	dev_put(dev);
 	return ret;
 }
 
@@ -6177,6 +7312,8 @@ trustix_tixt_tx_validate_route_plain_flow_pulled(
 		return -EINVAL;
 	if (READ_ONCE(route->flags) & TRUSTIX_KUDP_TX_ROUTE_FLAG_BYPASS)
 		return -EPROTONOSUPPORT;
+	if (READ_ONCE(route->flow_mask))
+		return -EPROTONOSUPPORT;
 	selected = trustix_tixt_tx_select_inline_flow(data, data_end, route,
 						     flow_id);
 	if (!selected || !*flow_id)
@@ -6275,6 +7412,10 @@ trustix_kernel_skb_tixt_tx_push_route_tcp_header(
 		return ret;
 	if (READ_ONCE(flow->mtu) && wire_len > READ_ONCE(flow->mtu))
 		return -EMSGSIZE;
+
+	ret = trustix_tixt_tx_fix_inner_l4_csum(skb, ETH_HLEN, inner_len);
+	if (ret < 0)
+		return ret;
 
 	if (trustix_tixt_tx_plain_skip_sequence_enabled())
 		sequence = 0;
@@ -6378,6 +7519,7 @@ trustix_tixt_tx_prepare_route_tcp_snapshot(
 	u8 *data;
 	bool partial_csum;
 	__wsum sum;
+	int ret;
 
 	if (!skb || !flow || !flow_id)
 		return -EINVAL;
@@ -6416,6 +7558,10 @@ trustix_tixt_tx_prepare_route_tcp_snapshot(
 		return -EINVAL;
 	if (READ_ONCE(flow->mtu) && wire_len > READ_ONCE(flow->mtu))
 		return -EMSGSIZE;
+
+	ret = trustix_tixt_tx_fix_inner_l4_csum(skb, ETH_HLEN, inner_len);
+	if (ret < 0)
+		return ret;
 
 	if (trustix_tixt_tx_plain_skip_sequence_enabled())
 		sequence = 0;
@@ -6499,40 +7645,8 @@ route_snapshot_csum_done:
 	return 0;
 }
 
-static bool
-trustix_tixt_tx_route_tcp_steal_safe(const struct sk_buff *skb,
-				     const struct trustix_kudp_tx_flow_value *flow,
-				     u32 inner_len, u32 clear_flags)
-{
-	u32 wire_len;
-
-	if (!skb || !flow)
-		return false;
-	if (skb_headroom(skb) < sizeof(struct iphdr) + sizeof(struct tcphdr) +
-			 TRUSTIX_TIXT_HEADER_LEN)
-		return false;
-	if (skb_header_cloned(skb) || skb_cloned(skb))
-		return false;
-	if (clear_flags & ~(TRUSTIX_SKB_CLEAR_TX_OFFLOAD_CSUM |
-			    TRUSTIX_SKB_CLEAR_TX_OFFLOAD_GSO |
-			    TRUSTIX_SKB_CLEAR_TX_OFFLOAD_ENCAP |
-			    TRUSTIX_TIXT_TX_FINALIZE_TCP_PARTIAL_CSUM |
-			    TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_INNER_CSUM |
-			    TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM))
-		return false;
-	if ((clear_flags & TRUSTIX_TIXT_TX_FINALIZE_TCP_PARTIAL_CSUM) &&
-	    (clear_flags & TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_INNER_CSUM))
-		return false;
-	if (inner_len > 1500)
-		return false;
-	if (check_add_overflow(inner_len, (u32)sizeof(struct iphdr) +
-			       (u32)sizeof(struct tcphdr) +
-			       (u32)TRUSTIX_TIXT_HEADER_LEN, &wire_len))
-		return false;
-	if (READ_ONCE(flow->mtu) && wire_len > READ_ONCE(flow->mtu))
-		return false;
-	return true;
-}
+static int trustix_tixt_tx_sanitize_route_gso_xmit_skb(struct sk_buff *skb,
+						       struct net_device *out_dev);
 
 static void trustix_route_tcp_xmit_worker_fn(struct work_struct *work)
 {
@@ -6549,12 +7663,9 @@ static void trustix_route_tcp_xmit_worker_fn(struct work_struct *work)
 		__skb_queue_tail(&batch, skb);
 		batched++;
 	}
-	if (batched) {
-		unsigned int depth = READ_ONCE(trustix_route_tcp_xmit_worker_depth);
-
+	if (batched)
 		WRITE_ONCE(trustix_route_tcp_xmit_worker_depth,
-			   depth >= batched ? depth - batched : 0);
-	}
+			   skb_queue_len(&trustix_route_tcp_xmit_worker_queue));
 	if (!batched)
 		WRITE_ONCE(trustix_route_tcp_xmit_worker_scheduled, false);
 	spin_unlock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
@@ -6566,8 +7677,14 @@ static void trustix_route_tcp_xmit_worker_fn(struct work_struct *work)
 		int ret;
 
 		dev = skb->dev;
-		skb_orphan(skb);
-		skb_dst_drop(skb);
+		ret = trustix_tixt_tx_sanitize_route_gso_xmit_skb(skb, dev);
+		if (ret) {
+			trustix_route_tcp_xmit_worker_xmit_errors++;
+			kfree_skb(skb);
+			if (dev)
+				dev_put(dev);
+			continue;
+		}
 		ret = dev_queue_xmit(skb);
 		if (ret == NET_XMIT_SUCCESS || ret == NET_XMIT_CN)
 			trustix_route_tcp_xmit_worker_xmit_ok++;
@@ -6620,6 +7737,7 @@ struct trustix_tixt_tx_route_gso_template {
 	bool trust_inner_csum;
 	bool trust_partial_inner_csum;
 	bool use_tx_queue_mapping;
+	bool stream_outer_gso;
 };
 
 struct trustix_tixt_tx_route_gso_stream_direct_frame {
@@ -6650,8 +7768,10 @@ struct trustix_tixt_tx_route_gso_async_work {
 	u32 inner_ip_check_base;
 	u32 inner_tcp_seq_base;
 	u32 queue_hash;
+	u32 route_flow_mask;
 	bool resliced;
 	bool inner_header_ready;
+	bool sync_redirect;
 	bool xmit_more;
 	__wsum inner_tcp_header_sum_base;
 	netdev_features_t gso_features;
@@ -6949,6 +8069,8 @@ trustix_tixt_tx_init_route_gso_template(
 	tmpl->trust_partial_inner_csum =
 		clear_flags &
 		TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM;
+	tmpl->stream_outer_gso =
+		READ_ONCE(trustix_route_tcp_gso_async_stream_outer_gso);
 	tmpl->saddr = READ_ONCE(flow->saddr);
 	tmpl->daddr = READ_ONCE(flow->daddr);
 	tmpl->mtu = READ_ONCE(flow->mtu);
@@ -7004,7 +8126,8 @@ trustix_tixt_tx_route_gso_template_set_tx_queue_hash(
 		return;
 	txq_count = READ_ONCE(tmpl->out_dev->real_num_tx_queues);
 	if (txq_count <= 1) {
-		trustix_route_tcp_gso_async_hash_tx_queue_fallbacks++;
+		if (READ_ONCE(trustix_route_tcp_gso_async_hot_stats))
+			trustix_route_tcp_gso_async_hash_tx_queue_fallbacks++;
 		return;
 	}
 	tmpl->use_tx_queue_mapping = true;
@@ -7054,16 +8177,170 @@ trustix_tixt_tx_write_route_gso_header(u8 *dst,
 	}
 }
 
+static int trustix_tixt_tx_validate_route_gso_stream_frame(
+				struct sk_buff *skb, u32 frame_offset,
+				u32 frame_len)
+{
+	u8 tixt_buf[TRUSTIX_TIXT_HEADER_LEN];
+	struct iphdr inner_iph_buf;
+	const struct iphdr *inner_iph;
+	const u8 *tixt;
+	u32 frame_end;
+	u32 payload_offset;
+	u32 payload_len;
+	u8 frame_flags;
+
+	if (!skb || frame_len < TRUSTIX_TIXT_HEADER_LEN + sizeof(*inner_iph))
+		return -EINVAL;
+	if (check_add_overflow(frame_offset, frame_len, &frame_end))
+		return -EOVERFLOW;
+	if (frame_end > skb->len)
+		return -EMSGSIZE;
+	if (check_add_overflow(frame_offset, TRUSTIX_TIXT_HEADER_LEN,
+			       &payload_offset))
+		return -EOVERFLOW;
+	if (payload_offset > frame_end)
+		return -EMSGSIZE;
+
+	tixt = skb_header_pointer(skb, frame_offset, TRUSTIX_TIXT_HEADER_LEN,
+				  tixt_buf);
+	if (!tixt)
+		return -ENODATA;
+	if (get_unaligned_be32(tixt) != TRUSTIX_TIXT_MAGIC)
+		return -EBADMSG;
+	if (tixt[4] != 1 ||
+	    get_unaligned_be16(tixt + 6) != TRUSTIX_TIXT_HEADER_LEN)
+		return -EBADMSG;
+	frame_flags = tixt[5];
+	if ((frame_flags & TRUSTIX_TIXT_FLAG_INNER_IPV4) !=
+	    TRUSTIX_TIXT_FLAG_INNER_IPV4)
+		return -EPROTONOSUPPORT;
+	if (frame_flags & TRUSTIX_TIXT_FLAG_ENCRYPTED)
+		return -EPROTONOSUPPORT;
+	if (frame_flags & ~(TRUSTIX_TIXT_FLAG_KERNEL_OPENED |
+			    TRUSTIX_TIXT_FLAG_INNER_IPV4))
+		return -EPROTONOSUPPORT;
+	payload_len = get_unaligned_be32(tixt + 32);
+	if (payload_len != frame_len - TRUSTIX_TIXT_HEADER_LEN ||
+	    payload_len < sizeof(*inner_iph) || payload_len > 0xffff)
+		return -EMSGSIZE;
+
+	inner_iph = skb_header_pointer(skb, payload_offset,
+				       sizeof(inner_iph_buf), &inner_iph_buf);
+	if (!inner_iph)
+		return -ENODATA;
+	if (inner_iph->version != 4 || inner_iph->ihl < 5 ||
+	    ntohs(inner_iph->tot_len) != payload_len ||
+	    (inner_iph->frag_off & htons(0x3fff)))
+		return -EBADMSG;
+	return 0;
+}
+
+static int trustix_tixt_tx_validate_route_gso_xmit_skb_gso(
+				struct sk_buff *skb, struct net_device *out_dev)
+{
+	const u32 outer_l3_l4_len = sizeof(struct iphdr) +
+				    sizeof(struct tcphdr);
+	const u32 outer_header_len = ETH_HLEN + outer_l3_l4_len;
+	struct skb_shared_info *shinfo;
+	const struct tcphdr *tcph;
+	const struct iphdr *iph;
+	netdev_features_t features;
+	u32 payload_len;
+	u32 gso_wire_len;
+	u32 expected_segs;
+	u32 frame_offset;
+	u32 frame_len;
+	u32 remaining;
+	u32 ip_len;
+	int ret;
+
+	if (!skb || !out_dev)
+		return -EINVAL;
+	if (!skb_is_gso(skb))
+		return 0;
+	shinfo = skb_shinfo(skb);
+	if (!shinfo->gso_size || shinfo->gso_segs < 2)
+		return -EINVAL;
+	if (shinfo->gso_segs > TRUSTIX_TIXT_TX_ROUTE_STREAM_MAX_FRAMES)
+		return -E2BIG;
+	if ((shinfo->gso_type & SKB_GSO_TCPV4) != SKB_GSO_TCPV4)
+		return -EOPNOTSUPP;
+	if (skb->protocol != htons(ETH_P_IP) || skb->mac_len != ETH_HLEN)
+		return -EINVAL;
+	if (skb_headlen(skb) < outer_header_len ||
+	    skb->len <= outer_header_len)
+		return -EINVAL;
+	if (skb_network_header(skb) != skb->data + ETH_HLEN ||
+	    skb_transport_header(skb) !=
+		    skb->data + ETH_HLEN + sizeof(struct iphdr))
+		return -EINVAL;
+	iph = (const struct iphdr *)(skb->data + ETH_HLEN);
+	tcph = (const struct tcphdr *)(skb->data + ETH_HLEN + sizeof(*iph));
+	if (iph->version != 4 || iph->ihl != 5 ||
+	    iph->protocol != IPPROTO_TCP ||
+	    (iph->frag_off & htons(0x3fff)) ||
+	    tcph->doff != 5)
+		return -EINVAL;
+	ip_len = ntohs(iph->tot_len);
+	if (ip_len != skb->len - ETH_HLEN)
+		return -EINVAL;
+	if (skb->ip_summed != CHECKSUM_PARTIAL ||
+	    skb->csum_start != (skb_transport_header(skb) - skb->head) ||
+	    skb->csum_offset != offsetof(struct tcphdr, check))
+		return -EINVAL;
+
+	payload_len = skb->len - outer_header_len;
+	expected_segs = DIV_ROUND_UP(payload_len, shinfo->gso_size);
+	if (expected_segs != shinfo->gso_segs)
+		return -EINVAL;
+	if (check_add_overflow(outer_l3_l4_len, (u32)shinfo->gso_size,
+			       &gso_wire_len))
+		return -EMSGSIZE;
+	if (gso_wire_len > READ_ONCE(out_dev->mtu))
+		return -EMSGSIZE;
+	frame_offset = outer_header_len;
+	remaining = payload_len;
+	while (remaining) {
+		frame_len = min_t(u32, remaining, shinfo->gso_size);
+		ret = trustix_tixt_tx_validate_route_gso_stream_frame(
+			skb, frame_offset, frame_len);
+		if (ret)
+			return ret;
+		if (remaining > shinfo->gso_size &&
+		    frame_len != shinfo->gso_size)
+			return -EINVAL;
+		frame_offset += frame_len;
+		remaining -= frame_len;
+	}
+
+	features = netif_skb_features(skb);
+	if (skb_is_nonlinear(skb) && !(features & NETIF_F_SG))
+		return -EOPNOTSUPP;
+	if (!(features & NETIF_F_TSO) || !(features & NETIF_F_HW_CSUM))
+		return -EOPNOTSUPP;
+	if (!skb_gso_ok(skb, features))
+		return -EOPNOTSUPP;
+	return 0;
+}
+
 static int trustix_tixt_tx_sanitize_route_gso_xmit_skb(struct sk_buff *skb,
 						       struct net_device *out_dev)
 {
 	struct netdev_queue *txq;
 	unsigned int txq_count;
+	int ret;
 
 	if (!skb || !out_dev)
 		return -EINVAL;
 	if (!netif_running(out_dev) || !netif_carrier_ok(out_dev))
 		return -ENETDOWN;
+	skb->dev = out_dev;
+	ret = trustix_tixt_tx_validate_route_gso_xmit_skb_gso(skb, out_dev);
+	if (ret) {
+		trustix_route_tcp_gso_async_stream_outer_gso_verify_errors++;
+		return ret;
+	}
 	if (skb->len > out_dev->mtu + out_dev->hard_header_len) {
 		struct skb_shared_info *shinfo = skb_shinfo(skb);
 		u32 gso_wire_len;
@@ -7076,11 +8353,11 @@ static int trustix_tixt_tx_sanitize_route_gso_xmit_skb(struct sk_buff *skb,
 			return -EMSGSIZE;
 		if (gso_wire_len > out_dev->mtu)
 			return -EMSGSIZE;
-		if (!skb_gso_ok(skb, netif_skb_features(skb)))
-			return -EOPNOTSUPP;
 	}
 
 	skb_scrub_packet(skb, true);
+	skb_orphan(skb);
+	skb_dst_drop(skb);
 	skb->dev = out_dev;
 	skb->protocol = htons(ETH_P_IP);
 	skb->priority = 0;
@@ -7096,7 +8373,7 @@ static int trustix_tixt_tx_sanitize_route_gso_xmit_skb(struct sk_buff *skb,
 		skb_set_queue_mapping(skb, 0);
 	txq = netdev_get_tx_queue(out_dev, skb_get_queue_mapping(skb));
 	if (netif_xmit_stopped(txq))
-		return -EBUSY;
+		trustix_route_tcp_gso_async_txq_stopped_queued++;
 	return 0;
 }
 
@@ -7142,7 +8419,6 @@ static void trustix_tixt_tx_route_gso_apply_tx_queue(
 static bool trustix_tixt_tx_route_gso_xmit_ready(struct sk_buff *skb)
 {
 	struct net_device *out_dev;
-	struct netdev_queue *txq;
 	unsigned int txq_count;
 
 	if (!skb)
@@ -7155,8 +8431,36 @@ static bool trustix_tixt_tx_route_gso_xmit_ready(struct sk_buff *skb)
 		return false;
 	if (skb_get_queue_mapping(skb) >= txq_count)
 		return false;
-	txq = netdev_get_tx_queue(out_dev, skb_get_queue_mapping(skb));
-	return !netif_xmit_stopped(txq);
+	return true;
+}
+
+static bool trustix_tixt_tx_route_gso_xmit_ready_async(struct sk_buff *skb)
+{
+	unsigned int retries =
+		READ_ONCE(trustix_route_tcp_gso_async_xmit_busy_retries);
+	unsigned int sleep_usecs =
+		READ_ONCE(trustix_route_tcp_gso_async_xmit_busy_sleep_usecs);
+	unsigned int i;
+
+	if (likely(trustix_tixt_tx_route_gso_xmit_ready(skb)))
+		return true;
+	retries = min_t(unsigned int, retries, 16U);
+	sleep_usecs = min_t(unsigned int, sleep_usecs, 20000U);
+	for (i = 0; i < retries; i++) {
+		trustix_route_tcp_gso_async_xmit_busy_retry_attempts++;
+		if (sleep_usecs)
+			usleep_range(sleep_usecs,
+				     sleep_usecs + min_t(unsigned int,
+							 sleep_usecs, 1000U));
+		else
+			cond_resched();
+		if (likely(trustix_tixt_tx_route_gso_xmit_ready(skb))) {
+			trustix_route_tcp_gso_async_xmit_busy_retry_successes++;
+			return true;
+		}
+	}
+	trustix_route_tcp_gso_async_xmit_busy_retry_failures++;
+	return false;
 }
 
 static __always_inline void
@@ -7192,6 +8496,24 @@ trustix_route_tcp_gso_async_xmit_accepted(int ret)
 						 1000U));
 	}
 	return true;
+}
+
+static __always_inline int
+trustix_tixt_tx_route_gso_safe_xmit(struct sk_buff *skb,
+				    bool direct_requested)
+{
+	int ret;
+
+	if (!skb)
+		return -EINVAL;
+	if (direct_requested) {
+		trustix_route_tcp_gso_direct_xmit_attempts++;
+		trustix_route_tcp_gso_direct_xmit_safe_fallbacks++;
+	}
+	ret = dev_queue_xmit(skb);
+	if (likely(trustix_route_tcp_gso_async_xmit_accepted(ret)))
+		return 0;
+	return -EIO;
 }
 
 static int
@@ -7317,22 +8639,14 @@ static u32 trustix_tixt_tx_route_gso_effective_mtu(
 	return mtu;
 }
 
-static bool trustix_tixt_tx_route_gso_outer_gso_ready(
+static bool trustix_tixt_tx_route_gso_outer_gso_capable(
 				const struct trustix_tixt_tx_route_gso_template *tmpl,
 				bool record_block)
 {
 	struct net_device *out_dev;
 	netdev_features_t features;
 
-	if (!READ_ONCE(trustix_route_tcp_gso_async_stream_outer_gso))
-		return false;
-	if (!READ_ONCE(trustix_route_tcp_gso_async_stream_outer_gso_hard_enable) ||
-	    READ_ONCE(trustix_route_tcp_gso_async_direct_xmit)) {
-		if (record_block)
-			trustix_route_tcp_gso_async_stream_outer_gso_blocked++;
-		return false;
-	}
-	if (!tmpl || !tmpl->out_dev || !tmpl->partial_csum)
+	if (!tmpl || !tmpl->out_dev)
 		return false;
 	out_dev = tmpl->out_dev;
 	features = READ_ONCE(out_dev->features);
@@ -7342,6 +8656,16 @@ static bool trustix_tixt_tx_route_gso_outer_gso_ready(
 		return false;
 	}
 	return true;
+}
+
+static bool trustix_tixt_tx_route_gso_outer_gso_ready(
+				const struct trustix_tixt_tx_route_gso_template *tmpl,
+				bool record_block)
+{
+	if (!tmpl || !tmpl->partial_csum || !tmpl->stream_outer_gso)
+		return false;
+	return trustix_tixt_tx_route_gso_outer_gso_capable(tmpl,
+							   record_block);
 }
 
 static void trustix_tixt_tx_route_gso_stream_record(int ret, int stage,
@@ -7368,6 +8692,32 @@ static void trustix_tixt_tx_route_gso_stream_record(int ret, int stage,
 		   ((u32)(ETH_HLEN + sizeof(struct iphdr)) << 16) |
 		   (u32)(ETH_HLEN + sizeof(struct iphdr) +
 			 sizeof(struct tcphdr)));
+}
+
+static void
+trustix_tixt_tx_route_gso_sync_stream_record(int ret, int stage,
+					     struct sk_buff *skb,
+					     unsigned int frames,
+					     unsigned int batches)
+{
+	struct skb_shared_info *shinfo;
+
+	WRITE_ONCE(trustix_route_tcp_gso_sync_stream_last_ret, ret);
+	WRITE_ONCE(trustix_route_tcp_gso_sync_stream_last_stage, stage);
+	WRITE_ONCE(trustix_route_tcp_gso_sync_stream_last_batch_count,
+		   batches);
+	WRITE_ONCE(trustix_route_tcp_gso_sync_stream_last_batch_frames,
+		   frames);
+	if (!skb)
+		return;
+	shinfo = skb_shinfo(skb);
+	WRITE_ONCE(trustix_route_tcp_gso_sync_stream_last_len, skb->len);
+	WRITE_ONCE(trustix_route_tcp_gso_sync_stream_last_gso_size,
+		   shinfo->gso_size);
+	WRITE_ONCE(trustix_route_tcp_gso_sync_stream_last_gso_segs,
+		   shinfo->gso_segs);
+	WRITE_ONCE(trustix_route_tcp_gso_sync_stream_last_gso_type,
+		   shinfo->gso_type);
 }
 
 static __always_inline void
@@ -7421,7 +8771,8 @@ trustix_tixt_tx_build_route_gso_stream_skb(
 				const struct trustix_tixt_tx_route_gso_template *tmpl,
 				const struct trustix_tixt_tx_route_gso_stream_frame *frames,
 				unsigned int frame_count, u32 stream_payload_len,
-				u64 outer_sequence, int *ret_out)
+				u64 outer_sequence, bool allow_outer_gso,
+				gfp_t gfp_mask, int *ret_out)
 {
 	const u32 outer_header_len = ETH_HLEN + sizeof(struct iphdr) +
 				     sizeof(struct tcphdr);
@@ -7461,8 +8812,8 @@ trustix_tixt_tx_build_route_gso_stream_skb(
 		ret = -EMSGSIZE;
 		goto out_ret;
 	}
-	if (trustix_tixt_tx_route_gso_outer_gso_ready(tmpl, true) &&
-	    frame_count > 1) {
+	if (allow_outer_gso && frame_count > 1 &&
+	    trustix_tixt_tx_route_gso_outer_gso_ready(tmpl, false)) {
 		u32 frame_len;
 
 		if (check_add_overflow((u32)TRUSTIX_TIXT_HEADER_LEN,
@@ -7493,13 +8844,14 @@ trustix_tixt_tx_build_route_gso_stream_skb(
 		}
 		outer_gso = true;
 	} else if (l3_len > mtu) {
-		if (READ_ONCE(trustix_route_tcp_gso_async_stream_outer_gso))
+		if (allow_outer_gso ||
+		    READ_ONCE(trustix_route_tcp_gso_async_stream_outer_gso))
 			trustix_route_tcp_gso_async_stream_outer_gso_fallbacks++;
 		ret = -EMSGSIZE;
 		goto out_ret;
 	}
 
-	skb = alloc_skb(total_len + NET_SKB_PAD, GFP_KERNEL);
+	skb = alloc_skb(total_len + NET_SKB_PAD, gfp_mask);
 	if (!skb) {
 		ret = -ENOMEM;
 		goto out_ret;
@@ -8744,21 +10096,20 @@ static int trustix_tixt_tx_route_gso_stream_send_batch(
 
 	skb = trustix_tixt_tx_build_route_gso_stream_skb(
 		tmpl, frames, frame_count, stream_payload_len, outer_sequence,
-		&ret);
+		trustix_tixt_tx_route_gso_outer_gso_ready(tmpl, true),
+		GFP_KERNEL, &ret);
 	if (IS_ERR(skb))
 		return ret;
 	outer_gso = skb_is_gso(skb);
 	trustix_tixt_tx_route_gso_stream_record(0, 0, skb, frame_count);
-	if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready(skb))) {
+	if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready_async(skb))) {
 		kfree_skb(skb);
 		return -EBUSY;
 	}
 	trustix_tixt_tx_route_gso_apply_xmit_more(skb, xmit_more);
-	if (READ_ONCE(trustix_route_tcp_gso_async_direct_xmit))
-		ret = dev_direct_xmit(skb, skb_get_queue_mapping(skb));
-	else
-		ret = dev_queue_xmit(skb);
-	if (unlikely(!trustix_route_tcp_gso_async_xmit_accepted(ret))) {
+	ret = trustix_tixt_tx_route_gso_safe_xmit(
+		skb, READ_ONCE(trustix_route_tcp_gso_async_direct_xmit));
+	if (unlikely(ret)) {
 		trustix_route_tcp_gso_async_stream_xmit_errors++;
 		trustix_tixt_tx_route_gso_stream_record(-EIO, 6, NULL,
 							frame_count);
@@ -8776,18 +10127,233 @@ static int trustix_tixt_tx_route_gso_stream_send_batch(
 	return 0;
 }
 
-static int trustix_tixt_tx_route_gso_stream_send_direct_batch(
+static void trustix_tixt_tx_free_skb_array(struct sk_buff **skbs,
+					   unsigned int count)
+{
+	unsigned int i;
+
+	if (!skbs)
+		return;
+	for (i = 0; i < count; i++) {
+		if (skbs[i]) {
+			kfree_skb(skbs[i]);
+			skbs[i] = NULL;
+		}
+	}
+}
+
+static int __maybe_unused
+trustix_tixt_tx_route_gso_sync_try_stream(
+				const struct trustix_tixt_tx_route_gso_template *tmpl,
+				struct sk_buff *segs,
+				u32 segment_count,
+				u32 gso_payload_len,
+				u32 tcp_header_len,
+				u32 payload_len,
+				u64 sequence_start,
+				unsigned int *sent_frames)
+{
+	struct trustix_tixt_tx_route_gso_stream_frame frames[
+		TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_FRAMES];
+	struct sk_buff *batches[
+		TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_BATCHES] = {};
+	u16 batch_frames[
+		TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_BATCHES] = {};
+	struct sk_buff *seg = segs;
+	u64 sequence = sequence_start;
+	u32 payload_remaining = payload_len;
+	u32 prepared = 0;
+	unsigned int max_frames;
+	unsigned int batch_count = 0;
+	unsigned int sent = 0;
+	bool allow_outer_gso;
+	int ret;
+	int stage = 0;
+
+	if (sent_frames)
+		*sent_frames = 0;
+	if (!READ_ONCE(trustix_route_tcp_gso_sync_stream))
+		return 0;
+	if (!tmpl || !segs || !segment_count || !gso_payload_len ||
+	    tcp_header_len < sizeof(struct tcphdr)) {
+		trustix_tixt_tx_route_gso_sync_stream_record(-EINVAL, 1,
+							     NULL, 0, 0);
+		return 0;
+	}
+	allow_outer_gso = READ_ONCE(trustix_route_tcp_gso_sync_stream_outer_gso);
+	if (!allow_outer_gso) {
+		trustix_tixt_tx_route_gso_sync_stream_record(-EOPNOTSUPP, 2,
+							     NULL, 0, 0);
+		return 0;
+	}
+
+	max_frames = trustix_route_tcp_gso_sync_stream_max_frames_value();
+	if (max_frames < 2) {
+		trustix_tixt_tx_route_gso_sync_stream_record(-EOPNOTSUPP, 3,
+							     NULL, 0, 0);
+		return 0;
+	}
+	trustix_route_tcp_gso_sync_stream_attempts++;
+
+	while (seg && prepared < segment_count && payload_remaining) {
+		u64 batch_sequence = sequence;
+		u32 stream_payload_len = 0;
+		unsigned int frame_count = 0;
+		struct sk_buff *skb;
+
+		while (seg && prepared < segment_count &&
+		       payload_remaining && frame_count < max_frames &&
+		       frame_count < ARRAY_SIZE(frames)) {
+			u32 seg_payload_len;
+			u32 inner_len;
+			u32 frame_len;
+			u32 next_payload_len;
+			u32 next_l3_len;
+
+			seg_payload_len = min(payload_remaining,
+					      gso_payload_len);
+			if (check_add_overflow((u32)sizeof(struct iphdr),
+					       tcp_header_len, &inner_len) ||
+			    check_add_overflow(inner_len, seg_payload_len,
+					       &inner_len) ||
+			    check_add_overflow((u32)TRUSTIX_TIXT_HEADER_LEN,
+					       inner_len, &frame_len) ||
+			    check_add_overflow(stream_payload_len, frame_len,
+					       &next_payload_len) ||
+			    check_add_overflow((u32)sizeof(struct iphdr) +
+						       (u32)sizeof(struct tcphdr),
+					       next_payload_len, &next_l3_len)) {
+				ret = -EOVERFLOW;
+				stage = 10;
+				goto fallback;
+			}
+			if (frame_count && next_l3_len > 0xffff)
+				break;
+			if (!frame_count && next_l3_len > 0xffff) {
+				ret = -EMSGSIZE;
+				stage = 11;
+				goto fallback;
+			}
+			frames[frame_count].seg = seg;
+			frames[frame_count].sequence =
+				trustix_tixt_tx_plain_wire_sequence(sequence);
+			frames[frame_count].inner_len = inner_len;
+			stream_payload_len = next_payload_len;
+			sequence += frame_len;
+			payload_remaining -= seg_payload_len;
+			seg = seg->next;
+			prepared++;
+			frame_count++;
+		}
+		if (!frame_count) {
+			ret = -EIO;
+			stage = 12;
+			goto fallback;
+		}
+		if (batch_count >= ARRAY_SIZE(batches)) {
+			ret = -E2BIG;
+			stage = 13;
+			goto fallback;
+		}
+		skb = trustix_tixt_tx_build_route_gso_stream_skb(
+			tmpl, frames, frame_count, stream_payload_len,
+			trustix_tixt_tx_plain_wire_sequence(batch_sequence),
+			true, GFP_ATOMIC | __GFP_NOWARN, &ret);
+		if (IS_ERR(skb)) {
+			stage = 14;
+			trustix_route_tcp_gso_sync_stream_build_errors++;
+			if (ret == -EBUSY)
+				trustix_route_tcp_gso_sync_stream_build_busy++;
+			else if (ret == -ENOMEM)
+				trustix_route_tcp_gso_sync_stream_build_nomem++;
+			else if (ret == -EOPNOTSUPP || ret == -EMSGSIZE)
+				trustix_route_tcp_gso_sync_stream_build_unsupported++;
+			goto fallback;
+		}
+		trustix_tixt_tx_route_gso_sync_stream_record(0, 20, skb,
+							     frame_count,
+							     batch_count + 1);
+		batches[batch_count] = skb;
+		batch_frames[batch_count] = frame_count;
+		batch_count++;
+	}
+	if (prepared != segment_count || payload_remaining || seg) {
+		ret = -EINVAL;
+		stage = 15;
+		goto fallback;
+	}
+	for (prepared = 0; prepared < batch_count; prepared++) {
+		if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready(
+				     batches[prepared]))) {
+			ret = -EBUSY;
+			stage = 16;
+			trustix_route_tcp_gso_sync_stream_ready_errors++;
+			goto fallback;
+		}
+	}
+	for (prepared = 0; prepared < batch_count; prepared++) {
+		struct sk_buff *skb = batches[prepared];
+
+		batches[prepared] = NULL;
+		trustix_tixt_tx_route_gso_apply_xmit_more(
+			skb, prepared + 1 < batch_count);
+		ret = trustix_tixt_tx_route_gso_safe_xmit(skb, false);
+		if (unlikely(ret)) {
+			trustix_route_tcp_gso_sync_stream_xmit_errors++;
+			trustix_route_tcp_gso_sync_xmit_errors++;
+			trustix_tixt_tx_route_gso_sync_stream_record(
+				ret, 17, NULL, sent, batch_count);
+		} else {
+			sent += batch_frames[prepared];
+		}
+	}
+	if (batch_count)
+		trustix_route_tcp_gso_sync_stream_batches += batch_count;
+	if (sent) {
+		trustix_route_tcp_gso_sync_stream_frames += sent;
+		trustix_route_tcp_gso_sync_segments += sent;
+		trustix_route_tcp_gso_async_xmit_packets += batch_count;
+	}
+	if (sent_frames)
+		*sent_frames = sent;
+	if (sent && sent < segment_count)
+		trustix_route_tcp_gso_sync_stream_partial_xmits++;
+	if (!sent) {
+		trustix_route_tcp_gso_sync_stream_errors++;
+		trustix_tixt_tx_route_gso_sync_stream_record(-EIO, 18, NULL,
+							     sent,
+							     batch_count);
+	} else if (sent == segment_count) {
+		trustix_tixt_tx_route_gso_sync_stream_record(0, 0, NULL,
+							     sent,
+							     batch_count);
+	}
+	return 1;
+
+fallback:
+	trustix_tixt_tx_free_skb_array(batches, batch_count);
+	trustix_route_tcp_gso_sync_stream_fallbacks++;
+	trustix_tixt_tx_route_gso_sync_stream_record(ret, stage, NULL,
+						     prepared, batch_count);
+	if (ret && ret != -EOPNOTSUPP && ret != -EBUSY)
+		trustix_route_tcp_gso_sync_stream_errors++;
+	return 0;
+}
+
+static struct sk_buff *
+trustix_tixt_tx_route_gso_stream_build_direct_batch(
 				struct trustix_tixt_tx_route_gso_async_work *item,
 				const struct trustix_tixt_tx_route_gso_stream_direct_frame *frames,
 				unsigned int frame_count, u32 stream_payload_len,
 				u64 outer_sequence, bool fix_inner_csum,
-				bool xmit_more)
+				bool *nonlinear_out, int *ret_out)
 {
 	struct sk_buff *skb;
 	bool nonlinear = false;
-	bool outer_gso;
 	int ret;
 
+	if (nonlinear_out)
+		*nonlinear_out = false;
 	if (READ_ONCE(trustix_route_tcp_gso_async_stream_nonlinear_direct_build)) {
 		skb = trustix_tixt_tx_build_route_gso_stream_direct_nonlinear_skb(
 			item, frames, frame_count, stream_payload_len,
@@ -8805,22 +10371,39 @@ static int trustix_tixt_tx_route_gso_stream_send_direct_batch(
 			item, frames, frame_count, stream_payload_len,
 			outer_sequence, fix_inner_csum, &ret);
 	}
-	if (IS_ERR(skb))
-		return ret;
+	if (IS_ERR(skb)) {
+		if (ret_out)
+			*ret_out = ret;
+		return skb;
+	}
+	if (nonlinear_out)
+		*nonlinear_out = nonlinear;
+	if (ret_out)
+		*ret_out = 0;
+	return skb;
+}
+
+static int trustix_tixt_tx_route_gso_stream_xmit_direct_batch(
+				struct sk_buff *skb, unsigned int frame_count,
+				bool nonlinear, bool xmit_more)
+{
+	bool outer_gso;
+	int ret;
+
+	if (!skb)
+		return -EINVAL;
 	outer_gso = skb_is_gso(skb);
 	trustix_tixt_tx_route_gso_stream_record(0, 0, skb, frame_count);
-	if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready(skb))) {
+	if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready_async(skb))) {
 		if (nonlinear)
 			trustix_route_tcp_gso_async_stream_nonlinear_direct_errors++;
 		kfree_skb(skb);
 		return -EBUSY;
 	}
 	trustix_tixt_tx_route_gso_apply_xmit_more(skb, xmit_more);
-	if (READ_ONCE(trustix_route_tcp_gso_async_direct_xmit))
-		ret = dev_direct_xmit(skb, skb_get_queue_mapping(skb));
-	else
-		ret = dev_queue_xmit(skb);
-	if (unlikely(!trustix_route_tcp_gso_async_xmit_accepted(ret))) {
+	ret = trustix_tixt_tx_route_gso_safe_xmit(
+		skb, READ_ONCE(trustix_route_tcp_gso_async_direct_xmit));
+	if (unlikely(ret)) {
 		trustix_route_tcp_gso_async_stream_xmit_errors++;
 		if (nonlinear)
 			trustix_route_tcp_gso_async_stream_nonlinear_direct_errors++;
@@ -8844,6 +10427,26 @@ static int trustix_tixt_tx_route_gso_stream_send_direct_batch(
 	}
 	trustix_route_tcp_gso_async_xmit_packets++;
 	return 0;
+}
+
+static int trustix_tixt_tx_route_gso_stream_send_direct_batch(
+				struct trustix_tixt_tx_route_gso_async_work *item,
+				const struct trustix_tixt_tx_route_gso_stream_direct_frame *frames,
+				unsigned int frame_count, u32 stream_payload_len,
+				u64 outer_sequence, bool fix_inner_csum,
+				bool xmit_more)
+{
+	struct sk_buff *skb;
+	bool nonlinear = false;
+	int ret;
+
+	skb = trustix_tixt_tx_route_gso_stream_build_direct_batch(
+		item, frames, frame_count, stream_payload_len, outer_sequence,
+		fix_inner_csum, &nonlinear, &ret);
+	if (IS_ERR(skb))
+		return ret;
+	return trustix_tixt_tx_route_gso_stream_xmit_direct_batch(
+		skb, frame_count, nonlinear, xmit_more);
 }
 
 static int trustix_tixt_tx_route_gso_stream_send_direct_ref_batch(
@@ -8877,18 +10480,16 @@ static int trustix_tixt_tx_route_gso_stream_send_direct_ref_batch(
 	if (IS_ERR(skb))
 		return ret;
 	trustix_tixt_tx_route_gso_stream_record(0, 0, skb, frame_count);
-	if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready(skb))) {
+	if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready_async(skb))) {
 		if (nonlinear)
 			trustix_route_tcp_gso_async_stream_nonlinear_direct_errors++;
 		kfree_skb(skb);
 		return -EBUSY;
 	}
 	trustix_tixt_tx_route_gso_apply_xmit_more(skb, xmit_more);
-	if (READ_ONCE(trustix_route_tcp_gso_async_direct_xmit))
-		ret = dev_direct_xmit(skb, skb_get_queue_mapping(skb));
-	else
-		ret = dev_queue_xmit(skb);
-	if (unlikely(!trustix_route_tcp_gso_async_xmit_accepted(ret))) {
+	ret = trustix_tixt_tx_route_gso_safe_xmit(
+		skb, READ_ONCE(trustix_route_tcp_gso_async_direct_xmit));
+	if (unlikely(ret)) {
 		trustix_route_tcp_gso_async_stream_xmit_errors++;
 		if (nonlinear)
 			trustix_route_tcp_gso_async_stream_nonlinear_direct_errors++;
@@ -9019,6 +10620,12 @@ static int trustix_tixt_tx_route_gso_async_try_stream_direct(
 				u32 *sent_frames)
 {
 	struct trustix_tixt_tx_route_gso_stream_direct_frame *frames;
+	struct sk_buff *batches[
+		TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_BATCHES] = {};
+	u16 batch_frames[
+		TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_BATCHES] = {};
+	bool batch_nonlinear[
+		TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_BATCHES] = {};
 	u64 batch_sequence;
 	u64 sequence;
 	u32 payload_remaining;
@@ -9030,6 +10637,7 @@ static int trustix_tixt_tx_route_gso_async_try_stream_direct(
 	u32 mtu;
 	u32 frame_count = 0;
 	u32 prepared = 0;
+	unsigned int batch_count = 0;
 	bool fix_inner_csum;
 	bool outer_gso;
 	int ret = 0;
@@ -9100,15 +10708,27 @@ static int trustix_tixt_tx_route_gso_async_try_stream_direct(
 		    (frame_count >= max_frames ||
 		     next_l3_len > 0xffff ||
 		     (!outer_gso && next_l3_len > mtu))) {
-			ret = trustix_tixt_tx_route_gso_stream_send_direct_batch(
-				item, frames, frame_count, stream_payload_len,
-				batch_sequence, fix_inner_csum, true);
-			if (ret) {
+			struct sk_buff *skb;
+			bool nonlinear = false;
+
+			if (batch_count >= ARRAY_SIZE(batches)) {
+				ret = -E2BIG;
 				stage = 14;
 				goto fail;
 			}
-			stream_packets++;
-			stream_frames += frame_count;
+			skb = trustix_tixt_tx_route_gso_stream_build_direct_batch(
+				item, frames, frame_count, stream_payload_len,
+				trustix_tixt_tx_plain_wire_sequence(
+					batch_sequence),
+				fix_inner_csum, &nonlinear, &ret);
+			if (IS_ERR(skb)) {
+				stage = 14;
+				goto fail;
+			}
+			batches[batch_count] = skb;
+			batch_frames[batch_count] = frame_count;
+			batch_nonlinear[batch_count] = nonlinear;
+			batch_count++;
 			frame_count = 0;
 			stream_payload_len = 0;
 			batch_sequence = sequence;
@@ -9118,7 +10738,8 @@ static int trustix_tixt_tx_route_gso_async_try_stream_direct(
 			stage = 15;
 			goto fail;
 		}
-		frames[frame_count].sequence = sequence;
+		frames[frame_count].sequence =
+			trustix_tixt_tx_plain_wire_sequence(sequence);
 		frames[frame_count].payload_offset = payload_offset;
 		frames[frame_count].payload_len = seg_payload_len;
 		frames[frame_count].inner_len = inner_len;
@@ -9135,26 +10756,61 @@ static int trustix_tixt_tx_route_gso_async_try_stream_direct(
 		goto fail;
 	}
 	if (frame_count) {
-		ret = trustix_tixt_tx_route_gso_stream_send_direct_batch(
-			item, frames, frame_count, stream_payload_len,
-			batch_sequence, fix_inner_csum, item->xmit_more);
-		if (ret) {
+		struct sk_buff *skb;
+		bool nonlinear = false;
+
+		if (batch_count >= ARRAY_SIZE(batches)) {
+			ret = -E2BIG;
 			stage = 14;
 			goto fail;
 		}
-		stream_packets++;
-		stream_frames += frame_count;
+		skb = trustix_tixt_tx_route_gso_stream_build_direct_batch(
+			item, frames, frame_count, stream_payload_len,
+			trustix_tixt_tx_plain_wire_sequence(batch_sequence),
+			fix_inner_csum, &nonlinear, &ret);
+		if (IS_ERR(skb)) {
+			stage = 14;
+			goto fail;
+		}
+		batches[batch_count] = skb;
+		batch_frames[batch_count] = frame_count;
+		batch_nonlinear[batch_count] = nonlinear;
+		batch_count++;
 	}
-	if (!stream_packets || !stream_frames) {
+	if (!batch_count) {
 		trustix_route_tcp_gso_async_stream_direct_fallbacks++;
 		trustix_tixt_tx_route_gso_stream_record(-EOPNOTSUPP, 17,
 							NULL, 0);
 		return 0;
 	}
+	for (prepared = 0; prepared < batch_count; prepared++) {
+		if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready_async(
+				     batches[prepared]))) {
+			ret = -EBUSY;
+			stage = 18;
+			goto fail;
+		}
+	}
+	for (prepared = 0; prepared < batch_count; prepared++) {
+		struct sk_buff *skb = batches[prepared];
+		bool xmit_more = prepared + 1 < batch_count || item->xmit_more;
+
+		batches[prepared] = NULL;
+		ret = trustix_tixt_tx_route_gso_stream_xmit_direct_batch(
+			skb, batch_frames[prepared],
+			batch_nonlinear[prepared], xmit_more);
+		if (ret) {
+			stage = 19;
+			goto fail;
+		}
+		stream_packets++;
+		stream_frames += batch_frames[prepared];
+	}
 	*sent_frames = stream_frames;
 	return 1;
 
 fail:
+	trustix_tixt_tx_free_skb_array(batches, batch_count);
 	if (!stream_packets) {
 		trustix_route_tcp_gso_async_stream_direct_fallbacks++;
 		trustix_tixt_tx_route_gso_stream_record(ret, stage, NULL, 0);
@@ -9162,7 +10818,7 @@ fail:
 	}
 	trustix_route_tcp_gso_async_stream_direct_errors++;
 	trustix_tixt_tx_route_gso_stream_record(ret, stage, NULL,
-						frame_count);
+						stream_frames);
 	*sent_frames = stream_frames;
 	return ret ? ret : -EIO;
 }
@@ -9197,7 +10853,9 @@ static int trustix_tixt_tx_route_gso_async_try_stream(
 		trustix_tixt_tx_route_gso_stream_record(-EINVAL, 1, NULL, 0);
 		return -EINVAL;
 	}
-	if (!READ_ONCE(trustix_route_tcp_gso_async_stream))
+	if (!READ_ONCE(trustix_route_tcp_gso_async_stream) &&
+	    !(item->sync_redirect &&
+	      READ_ONCE(trustix_route_tcp_gso_sync_stream)))
 		return 0;
 	if (READ_ONCE(trustix_route_tcp_gso_async_stream_direct_build))
 		trustix_route_tcp_gso_async_stream_direct_fallbacks++;
@@ -9208,7 +10866,11 @@ static int trustix_tixt_tx_route_gso_async_try_stream(
 		return 0;
 	}
 
-	max_frames = trustix_route_tcp_gso_async_stream_max_frames_value();
+	if (item->sync_redirect &&
+	    !READ_ONCE(trustix_route_tcp_gso_async_stream))
+		max_frames = trustix_route_tcp_gso_sync_stream_max_frames_value();
+	else
+		max_frames = trustix_route_tcp_gso_async_stream_max_frames_value();
 	mtu = trustix_tixt_tx_route_gso_stream_mtu(&item->tmpl);
 	first_payload_len = min(payload_len, gso_payload_len);
 	first_inner_len = sizeof(struct iphdr) + tcp_header_len +
@@ -9266,7 +10928,10 @@ static int trustix_tixt_tx_route_gso_async_try_stream(
 		    (frame_count >= max_frames || next_l3_len > mtu)) {
 			ret = trustix_tixt_tx_route_gso_stream_send_batch(
 				&item->tmpl, frames, frame_count,
-				stream_payload_len, batch_sequence, true);
+				stream_payload_len,
+				trustix_tixt_tx_plain_wire_sequence(
+					batch_sequence),
+				true);
 			if (ret) {
 				stage = 6;
 				goto fail;
@@ -9287,7 +10952,8 @@ static int trustix_tixt_tx_route_gso_async_try_stream(
 		}
 		frames[frame_count].seg = seg;
 		frames[frame_count].inner_len = inner_len;
-		frames[frame_count].sequence = sequence;
+		frames[frame_count].sequence =
+			trustix_tixt_tx_plain_wire_sequence(sequence);
 		frame_count++;
 		stream_payload_len += frame_len;
 		sequence += frame_len;
@@ -9302,7 +10968,8 @@ static int trustix_tixt_tx_route_gso_async_try_stream(
 	if (frame_count) {
 		ret = trustix_tixt_tx_route_gso_stream_send_batch(
 			&item->tmpl, frames, frame_count, stream_payload_len,
-			batch_sequence, item->xmit_more);
+			trustix_tixt_tx_plain_wire_sequence(batch_sequence),
+			item->xmit_more);
 		if (ret) {
 			stage = 6;
 			goto fail;
@@ -9562,6 +11229,8 @@ trustix_route_tcp_gso_async_cross_item_template_match(
 	if (!a || !b)
 		return false;
 	if (a->flow_id != b->flow_id ||
+	    a->queue_hash != b->queue_hash ||
+	    a->route_flow_mask != b->route_flow_mask ||
 	    a->tmpl.out_dev != b->tmpl.out_dev ||
 	    a->tmpl.saddr != b->tmpl.saddr ||
 	    a->tmpl.daddr != b->tmpl.daddr ||
@@ -9637,6 +11306,34 @@ static void trustix_route_tcp_gso_async_cross_item_record_miss(unsigned int reas
 	}
 }
 
+static void
+trustix_route_tcp_gso_async_cross_item_record_result(
+				int ret, unsigned int stage,
+				const struct trustix_route_tcp_gso_async_cross_item_batch *batch)
+{
+	unsigned int first_frame_len = 0;
+
+	if (batch && batch->frame_count && batch->refs[0].frame.inner_len)
+		first_frame_len = TRUSTIX_TIXT_HEADER_LEN +
+				  batch->refs[0].frame.inner_len;
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_ret,
+		   ret);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_stage,
+		   stage);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_items,
+		   batch ? batch->item_count : 0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_frames,
+		   batch ? batch->frame_count : 0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_stream_payload_len,
+		   batch ? batch->stream_payload_len : 0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_outer_gso_size,
+		   batch ? batch->outer_gso_size : 0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_first_frame_len,
+		   first_frame_len);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_last_frame_len,
+		   batch ? batch->last_frame_len : 0);
+}
+
 static bool
 trustix_route_tcp_gso_async_cross_item_candidate(
 				const struct trustix_tixt_tx_route_gso_async_work *first,
@@ -9650,6 +11347,11 @@ trustix_route_tcp_gso_async_cross_item_candidate(
 		*reason = 0;
 	if (!first || !item || !item->skb)
 		return false;
+	if (first->route_flow_mask || item->route_flow_mask) {
+		if (reason)
+			*reason = 1;
+		return false;
+	}
 	if (item->resliced || !item->sequence_cost || !item->segment_count ||
 	    item->segment_count > max_frames ||
 	    frame_count + item->segment_count > max_frames) {
@@ -9663,7 +11365,8 @@ trustix_route_tcp_gso_async_cross_item_candidate(
 			*reason = 2;
 		return false;
 	}
-	if (item->sequence != expected_sequence) {
+	if (!trustix_tixt_tx_plain_skip_sequence_enabled() &&
+	    item->sequence != expected_sequence) {
 		if (reason)
 			*reason = 3;
 		return false;
@@ -9850,7 +11553,8 @@ trustix_route_tcp_gso_async_cross_item_collect(
 
 		ref = &batch->refs[batch->frame_count];
 		ref->item = item;
-		ref->frame.sequence = batch->next_sequence;
+		ref->frame.sequence =
+			trustix_tixt_tx_plain_wire_sequence(batch->next_sequence);
 		ref->frame.payload_offset = payload_offset;
 		ref->frame.payload_len = seg_payload_len;
 		ref->frame.inner_len = inner_len;
@@ -9944,7 +11648,8 @@ trustix_route_tcp_gso_async_cross_item_collect_range(
 
 		ref = &batch->refs[batch->frame_count];
 		ref->item = item;
-		ref->frame.sequence = batch->next_sequence;
+		ref->frame.sequence =
+			trustix_tixt_tx_plain_wire_sequence(batch->next_sequence);
 		ref->frame.payload_offset = payload_offset;
 		ref->frame.payload_len = seg_payload_len;
 		ref->frame.inner_len = inner_len;
@@ -10015,7 +11720,8 @@ trustix_route_tcp_gso_async_direct_prefix_frames(
 		    next_l3_len > 0xffff)
 			return -EMSGSIZE;
 
-		frames[prepared].sequence = sequence;
+		frames[prepared].sequence =
+			trustix_tixt_tx_plain_wire_sequence(sequence);
 		frames[prepared].payload_offset = payload_offset;
 		frames[prepared].payload_len = seg_payload_len;
 		frames[prepared].inner_len = inner_len;
@@ -10059,16 +11765,23 @@ trustix_route_tcp_gso_async_process_cross_item_batch(
 	unsigned int i;
 	int ret;
 
-	if (!batch || batch->item_count < 2 || batch->frame_count < 2)
+	if (!batch || batch->item_count < 2 || batch->frame_count < 2) {
+		trustix_route_tcp_gso_async_cross_item_record_result(
+			-EINVAL, 1, batch);
 		return trustix_route_tcp_gso_async_cross_item_fallback(batch);
+	}
 	ret = trustix_tixt_tx_route_gso_stream_send_direct_ref_batch(
 		&batch->items[0]->tmpl, batch->refs, batch->frame_count,
-		batch->stream_payload_len, batch->outer_sequence,
+		batch->stream_payload_len,
+		trustix_tixt_tx_plain_wire_sequence(batch->outer_sequence),
 		batch->fix_inner_csum, false);
 	if (ret) {
+		trustix_route_tcp_gso_async_cross_item_record_result(
+			ret, 2, batch);
 		trustix_route_tcp_gso_async_stream_cross_item_errors++;
 		return trustix_route_tcp_gso_async_cross_item_fallback(batch);
 	}
+	trustix_route_tcp_gso_async_cross_item_record_result(0, 0, batch);
 	trustix_route_tcp_gso_async_stream_cross_item_batches++;
 	trustix_route_tcp_gso_async_stream_cross_item_items +=
 		batch->item_count;
@@ -10169,6 +11882,8 @@ trustix_route_tcp_gso_async_worker_try_cross_item_batch_dequeue(
 	ret = trustix_route_tcp_gso_async_cross_item_collect(batch, first,
 							    max_frames);
 	if (ret) {
+		trustix_route_tcp_gso_async_cross_item_record_result(
+			ret, 3, batch);
 		trustix_route_tcp_gso_async_stream_cross_item_errors++;
 		sent = trustix_route_tcp_gso_async_cross_item_fallback(batch);
 		trustix_route_tcp_gso_async_cross_item_batch_free(batch);
@@ -10190,6 +11905,8 @@ trustix_route_tcp_gso_async_worker_try_cross_item_batch_dequeue(
 			batch, item, max_frames);
 		batch->items[batch->item_count++] = item;
 		if (ret) {
+			trustix_route_tcp_gso_async_cross_item_record_result(
+				ret, 4, batch);
 			trustix_route_tcp_gso_async_stream_cross_item_errors++;
 			sent = trustix_route_tcp_gso_async_cross_item_fallback(
 				batch);
@@ -10204,6 +11921,8 @@ trustix_route_tcp_gso_async_worker_try_cross_item_batch_dequeue(
 	}
 	for (; i < collected_count; i++) {
 		batch->items[batch->item_count++] = collected[i];
+		trustix_route_tcp_gso_async_cross_item_record_result(
+			-EOPNOTSUPP, 5, batch);
 		trustix_route_tcp_gso_async_stream_cross_item_errors++;
 		sent = trustix_route_tcp_gso_async_cross_item_fallback(batch);
 		trustix_route_tcp_gso_async_cross_item_batch_free(batch);
@@ -10257,6 +11976,7 @@ trustix_route_tcp_gso_async_worker_try_tail_stitch(
 		*items_out = 0;
 	if (!READ_ONCE(trustix_route_tcp_gso_async_stream_cross_item_tail_stitch) ||
 	    !queue_had_next || !first || !first->skb || first->resliced ||
+	    first->route_flow_mask ||
 	    !trustix_route_tcp_gso_async_cross_item_enabled() ||
 	    trustix_tixt_tx_plain_skip_sequence_enabled())
 		return false;
@@ -10422,7 +12142,8 @@ trustix_route_tcp_gso_async_worker_try_tail_stitch(
 
 	ret = trustix_tixt_tx_route_gso_stream_send_direct_ref_batch(
 		&first->tmpl, batch->refs, batch->frame_count,
-		batch->stream_payload_len, batch->outer_sequence,
+		batch->stream_payload_len,
+		trustix_tixt_tx_plain_wire_sequence(batch->outer_sequence),
 		batch->fix_inner_csum, false);
 	if (ret) {
 		trustix_route_tcp_gso_async_stream_cross_item_tail_stitch_errors++;
@@ -10552,7 +12273,8 @@ static unsigned int trustix_tixt_tx_route_gso_async_process_item(
 			    seg_payload_len;
 		ret = trustix_tixt_tx_prepare_one_segment(seg, &item->tmpl,
 							  inner_len,
-							  sequence);
+							  trustix_tixt_tx_plain_wire_sequence(
+								  sequence));
 		if (unlikely(ret)) {
 			if (ret == -EBUSY)
 				trustix_route_tcp_gso_async_txq_stopped_drops++;
@@ -10573,7 +12295,7 @@ static unsigned int trustix_tixt_tx_route_gso_async_process_item(
 	}
 
 	for (seg = segs; seg; seg = next) {
-		if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready(seg))) {
+		if (unlikely(!trustix_tixt_tx_route_gso_xmit_ready_async(seg))) {
 			trustix_route_tcp_gso_async_txq_stopped_drops++;
 			trustix_tixt_tx_free_skb_list(seg);
 			break;
@@ -10582,11 +12304,9 @@ static unsigned int trustix_tixt_tx_route_gso_async_process_item(
 		seg->next = NULL;
 		trustix_tixt_tx_route_gso_apply_xmit_more(
 			seg, next || item->xmit_more);
-		if (READ_ONCE(trustix_route_tcp_gso_async_direct_xmit))
-			ret = dev_direct_xmit(seg, skb_get_queue_mapping(seg));
-		else
-			ret = dev_queue_xmit(seg);
-		if (unlikely(!trustix_route_tcp_gso_async_xmit_accepted(ret)))
+		ret = trustix_tixt_tx_route_gso_safe_xmit(
+			seg, READ_ONCE(trustix_route_tcp_gso_async_direct_xmit));
+		if (unlikely(ret))
 			trustix_route_tcp_gso_async_xmit_errors++;
 		else
 			sent++;
@@ -10605,7 +12325,6 @@ trustix_route_tcp_gso_async_cross_item_enabled(void)
 	       READ_ONCE(trustix_route_tcp_gso_async_stream_direct_build) &&
 	       !READ_ONCE(trustix_route_tcp_gso_async_stream_software_segment) &&
 	       READ_ONCE(trustix_route_tcp_gso_async_stream_outer_gso) &&
-	       READ_ONCE(trustix_route_tcp_gso_async_stream_outer_gso_hard_enable) &&
 	       !READ_ONCE(trustix_route_tcp_gso_async_direct_xmit);
 }
 
@@ -10631,15 +12350,11 @@ trustix_route_tcp_gso_async_worker_try_cross_item(
 	if (items_out)
 		*items_out = 0;
 	if (!first || !first->skb || first->resliced ||
+	    first->route_flow_mask ||
 	    !trustix_route_tcp_gso_async_cross_item_enabled()) {
 		trustix_route_tcp_gso_async_cross_item_record_miss(1);
 		return trustix_tixt_tx_route_gso_async_process_item(first);
 	}
-	if (trustix_tixt_tx_plain_skip_sequence_enabled()) {
-		trustix_route_tcp_gso_async_cross_item_record_miss(1);
-		return trustix_tixt_tx_route_gso_async_process_item(first);
-	}
-
 	max_frames = trustix_route_tcp_gso_async_cross_item_effective_max_frames(
 		queue, lock, queue_private,
 		trustix_route_tcp_gso_async_stream_max_frames_value());
@@ -10723,6 +12438,9 @@ trustix_route_tcp_gso_async_worker_try_cross_item(
 	ret = trustix_route_tcp_gso_async_cross_item_collect(batch, first,
 							    max_frames);
 	if (ret) {
+		trustix_route_tcp_gso_async_cross_item_record_result(
+			ret, 3, batch);
+		trustix_route_tcp_gso_async_stream_cross_item_errors++;
 		trustix_route_tcp_gso_async_cross_item_batch_free(batch);
 		return trustix_tixt_tx_route_gso_async_process_item(first);
 	}
@@ -10758,6 +12476,8 @@ trustix_route_tcp_gso_async_worker_try_cross_item(
 			batch, item, max_frames);
 		if (ret) {
 			batch->items[batch->item_count++] = item;
+			trustix_route_tcp_gso_async_cross_item_record_result(
+				ret, 4, batch);
 			trustix_route_tcp_gso_async_stream_cross_item_errors++;
 			if (items_out)
 				*items_out = batch->item_count;
@@ -11142,7 +12862,8 @@ static int
 trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(
 				struct sk_buff *skb,
 				struct trustix_kudp_tx_route_value *route,
-				const struct trustix_tixt_tx_route_gso_args *args)
+				const struct trustix_tixt_tx_route_gso_args *args,
+				bool sync_redirect)
 {
 	const struct trustix_kudp_tx_flow_value *flow;
 	struct trustix_tixt_tx_route_gso_async_work *item;
@@ -11179,8 +12900,8 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(
 	}
 	trustix_route_tcp_gso_async_record_shape(skb);
 	if (!READ_ONCE(trustix_route_tcp_gso) ||
-	    !READ_ONCE(trustix_route_tcp_gso_async) ||
-	    !READ_ONCE(trustix_route_tcp_gso_async_dev_xmit) ||
+	    (!sync_redirect && !READ_ONCE(trustix_route_tcp_gso_async)) ||
+	    (!sync_redirect && !READ_ONCE(trustix_route_tcp_gso_async_dev_xmit)) ||
 	    READ_ONCE(trustix_route_tcp_gso_async_quiescing)) {
 		trustix_route_tcp_gso_async_disabled++;
 		return -EPROTONOSUPPORT;
@@ -11339,6 +13060,10 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(
 
 	trustix_tixt_tx_init_route_gso_template(flow, out_dev, flow_id,
 						clear_flags, &item->tmpl);
+	if (sync_redirect && READ_ONCE(trustix_route_tcp_gso_sync_stream)) {
+		item->tmpl.stream_outer_gso =
+			READ_ONCE(trustix_route_tcp_gso_sync_stream_outer_gso);
+	}
 	if (trustix_tixt_tx_plain_skip_sequence_enabled())
 		sequence = 0;
 	else
@@ -11359,6 +13084,7 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(
 	item->inner_tcp_seq_base = 0;
 	item->inner_header_ready = false;
 	item->inner_tcp_header_sum_base = 0;
+	item->route_flow_mask = READ_ONCE(route->flow_mask);
 	inner_queue_hash = trustix_route_tcp_gso_async_hash_skb(skb, flow_id);
 	if (READ_ONCE(trustix_route_tcp_gso_async_flow_shard_queue)) {
 		item->queue_hash = (u32)flow_id ^ (u32)(flow_id >> 32);
@@ -11370,6 +13096,7 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(
 	trustix_tixt_tx_route_gso_template_set_tx_queue_hash(
 		&item->tmpl, inner_queue_hash);
 	item->resliced = resliced;
+	item->sync_redirect = sync_redirect;
 	item->gso_features = gso_features;
 	INIT_LIST_HEAD(&item->list);
 	if (!bytes_reserved)
@@ -11381,6 +13108,30 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(
 	}
 	trustix_route_tcp_gso_async_queued++;
 	return TRUSTIX_TIXT_TX_GSO_SEGMENTS_STOLEN;
+}
+
+static int
+trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_sync(
+				struct sk_buff *skb,
+				struct trustix_kudp_tx_route_value *route,
+				const struct trustix_tixt_tx_route_gso_args *args)
+{
+	int ret;
+
+	trustix_route_tcp_gso_sync_calls++;
+	ret = trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(
+		skb, route, args, true);
+	if (ret == TRUSTIX_TIXT_TX_GSO_SEGMENTS_STOLEN) {
+		trustix_route_tcp_gso_sync_async_redirects++;
+		return ret;
+	}
+	if (ret == -EPROTONOSUPPORT || ret == -EOPNOTSUPP) {
+		trustix_route_tcp_gso_sync_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+	if (ret != -EMSGSIZE)
+		trustix_route_tcp_gso_sync_errors++;
+	return ret;
 }
 
 static void trustix_route_tcp_gso_async_flush(void)
@@ -11424,12 +13175,41 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso(
 				const struct trustix_tixt_tx_route_gso_args *args)
 {
 	int ret;
+	bool async_enabled;
+	bool async_prefer;
+	bool sync_stream_enabled;
 
 	if (!skb || !route || !args)
 		return -EINVAL;
-	ret = trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(skb,
-								    route,
-								    args);
+	async_enabled = READ_ONCE(trustix_route_tcp_gso) &&
+			READ_ONCE(trustix_route_tcp_gso_async) &&
+			READ_ONCE(trustix_route_tcp_gso_async_dev_xmit) &&
+			!READ_ONCE(trustix_route_tcp_gso_async_quiescing);
+	sync_stream_enabled = READ_ONCE(trustix_route_tcp_gso) &&
+			      READ_ONCE(trustix_route_tcp_gso_sync_stream);
+	async_prefer = async_enabled &&
+		       READ_ONCE(trustix_route_tcp_gso_async_prefer);
+	if (async_prefer) {
+		ret = trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(skb,
+									    route,
+									    args,
+									    false);
+		if (ret == TRUSTIX_TIXT_TX_GSO_SEGMENTS_STOLEN ||
+		    ret == -EMSGSIZE)
+			return ret;
+		if (ret != -EPROTONOSUPPORT && ret != -EOPNOTSUPP &&
+		    ret != -EAGAIN && ret != -ENOMEM)
+			return ret;
+	}
+	ret = trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_sync(skb,
+								   route,
+								   args);
+	if ((ret == -EPROTONOSUPPORT || ret == -EOPNOTSUPP) &&
+	    async_enabled && !async_prefer && !sync_stream_enabled)
+		ret = trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async(skb,
+									    route,
+									    args,
+									    false);
 	if (ret != -EPROTONOSUPPORT)
 		return ret;
 	return -EOPNOTSUPP;
@@ -11470,22 +13250,19 @@ trustix_kernel_skb_tixt_tx_route_tcp_xmit(
 	u8 *data_end;
 	int ifindex;
 	int ret;
-	bool steal;
 	bool schedule_worker;
 
 	if (!skb || !route || !args)
 		return -EINVAL;
-	if (!READ_ONCE(trustix_route_tcp_xmit_worker))
+	if (!READ_ONCE(trustix_route_tcp_xmit_worker) ||
+	    READ_ONCE(trustix_route_tcp_gso_async_quiescing)) {
+		trustix_route_tcp_xmit_worker_disabled++;
 		return -EOPNOTSUPP;
+	}
 	if (!skb->dev)
 		return -EOPNOTSUPP;
 	if (skb_shinfo(skb)->gso_size)
 		return -EOPNOTSUPP;
-	if (READ_ONCE(trustix_route_tcp_xmit_worker_depth) >=
-	    trustix_route_tcp_xmit_worker_queue_limit_value()) {
-		trustix_route_tcp_xmit_worker_queue_full++;
-		return -EOPNOTSUPP;
-	}
 	if (skb->len < ETH_HLEN + sizeof(struct iphdr))
 		return -EINVAL;
 	inner_len = READ_ONCE(skb->len) - ETH_HLEN;
@@ -11507,35 +13284,11 @@ trustix_kernel_skb_tixt_tx_route_tcp_xmit(
 		trustix_route_tcp_xmit_worker_no_dev++;
 		return -EOPNOTSUPP;
 	}
-	steal = READ_ONCE(trustix_route_tcp_xmit_worker_steal) &&
-		trustix_tixt_tx_route_tcp_steal_safe(skb, flow, inner_len,
-						     args->clear_flags);
-
-	spin_lock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
-	if (READ_ONCE(trustix_route_tcp_xmit_worker_depth) >=
-	    trustix_route_tcp_xmit_worker_queue_limit_value()) {
-		spin_unlock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
-		trustix_route_tcp_xmit_worker_queue_full++;
+	tx_skb = skb_clone(skb, GFP_ATOMIC);
+	if (!tx_skb) {
 		dev_put(dev);
+		trustix_route_tcp_xmit_worker_alloc_errors++;
 		return -EOPNOTSUPP;
-	}
-	WRITE_ONCE(trustix_route_tcp_xmit_worker_depth,
-		   READ_ONCE(trustix_route_tcp_xmit_worker_depth) + 1);
-	spin_unlock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
-
-	if (steal) {
-		tx_skb = skb;
-	} else {
-		tx_skb = skb_clone(skb, GFP_ATOMIC);
-		if (!tx_skb) {
-			spin_lock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
-			WRITE_ONCE(trustix_route_tcp_xmit_worker_depth,
-				   READ_ONCE(trustix_route_tcp_xmit_worker_depth) - 1);
-			spin_unlock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
-			dev_put(dev);
-			trustix_route_tcp_xmit_worker_alloc_errors++;
-			return -EOPNOTSUPP;
-		}
 	}
 	memcpy(&flow_snapshot, flow, sizeof(flow_snapshot));
 
@@ -11547,15 +13300,9 @@ trustix_kernel_skb_tixt_tx_route_tcp_xmit(
 	ret = trustix_tixt_tx_prepare_route_tcp_snapshot(
 		tx_skb, &flow_snapshot, flow_id, args->clear_flags);
 	if (ret) {
-		spin_lock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
-		WRITE_ONCE(trustix_route_tcp_xmit_worker_depth,
-			   READ_ONCE(trustix_route_tcp_xmit_worker_depth) - 1);
-		spin_unlock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
 		trustix_route_tcp_xmit_worker_header_errors++;
 		kfree_skb(tx_skb);
 		dev_put(dev);
-		if (steal)
-			return TRUSTIX_TIXT_TX_ROUTE_TCP_XMIT_STOLEN;
 		if (ret == -EMSGSIZE)
 			return ret;
 		return -EOPNOTSUPP;
@@ -11563,21 +13310,35 @@ trustix_kernel_skb_tixt_tx_route_tcp_xmit(
 
 	tx_skb->dev = dev;
 	spin_lock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
+	if (!READ_ONCE(trustix_route_tcp_xmit_worker) ||
+	    READ_ONCE(trustix_route_tcp_gso_async_quiescing)) {
+		spin_unlock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
+		trustix_route_tcp_xmit_worker_disabled++;
+		kfree_skb(tx_skb);
+		dev_put(dev);
+		return -EOPNOTSUPP;
+	}
+	if (skb_queue_len(&trustix_route_tcp_xmit_worker_queue) >=
+	    trustix_route_tcp_xmit_worker_queue_limit_value()) {
+		spin_unlock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
+		trustix_route_tcp_xmit_worker_queue_full++;
+		kfree_skb(tx_skb);
+		dev_put(dev);
+		return -EOPNOTSUPP;
+	}
 	schedule_worker = !READ_ONCE(trustix_route_tcp_xmit_worker_scheduled);
 	if (schedule_worker)
 		WRITE_ONCE(trustix_route_tcp_xmit_worker_scheduled, true);
 	__skb_queue_tail(&trustix_route_tcp_xmit_worker_queue, tx_skb);
+	WRITE_ONCE(trustix_route_tcp_xmit_worker_depth,
+		   skb_queue_len(&trustix_route_tcp_xmit_worker_queue));
 	spin_unlock_bh(&trustix_route_tcp_xmit_worker_queue.lock);
 
 	trustix_route_tcp_xmit_worker_enqueued++;
-	if (steal)
-		trustix_route_tcp_xmit_worker_stolen++;
-	else
-		trustix_route_tcp_xmit_worker_cloned++;
+	trustix_route_tcp_xmit_worker_cloned++;
 	if (schedule_worker)
 		schedule_work(&trustix_route_tcp_xmit_work);
-	return steal ? TRUSTIX_TIXT_TX_ROUTE_TCP_XMIT_STOLEN :
-		       TRUSTIX_TIXT_TX_ROUTE_TCP_XMIT_QUEUED;
+	return TRUSTIX_TIXT_TX_ROUTE_TCP_XMIT_QUEUED;
 }
 
 __bpf_kfunc int trustix_kernel_skb_kudp_tx_store_l2_l3_l4(struct sk_buff *skb,
@@ -11785,12 +13546,25 @@ static const struct btf_kfunc_id_set trustix_datapath_helpers_tc_kfunc_set = {
 	.set = &trustix_datapath_helpers_tc_kfunc_ids,
 };
 
+void trustix_datapath_helpers_disable_panic_risk_params(void)
+{
+	/*
+	 * First-release high-performance knobs must stay selectable so the
+	 * datapath can self-degrade under validation instead of hiding unstable
+	 * combinations behind module-load side effects.
+	 */
+}
+
 int trustix_datapath_helpers_register(void)
 {
 	unsigned int i;
 	int ret;
 
 	WRITE_ONCE(trustix_route_tcp_gso_async_quiescing, false);
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_quiescing, false);
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_scheduled, false);
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_depth, 0);
+	skb_queue_head_init(&trustix_tixt_rx_backlog_worker_queue);
 	skb_queue_head_init(&trustix_route_tcp_xmit_worker_queue);
 	hrtimer_init(&trustix_route_tcp_gso_async_schedule_timer,
 		     CLOCK_MONOTONIC, HRTIMER_MODE_REL);
@@ -11859,10 +13633,13 @@ void trustix_datapath_helpers_unregister(void)
 {
 	WRITE_ONCE(trustix_datapath_helpers_registered, false);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_slots_ready, false);
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_quiescing, true);
 	WRITE_ONCE(trustix_route_tcp_gso_async_quiescing, true);
 	WRITE_ONCE(trustix_route_tcp_gso_async_dev_xmit, false);
+	WRITE_ONCE(trustix_route_tcp_gso_async_prefer, false);
 	WRITE_ONCE(trustix_route_tcp_gso_async, false);
 	WRITE_ONCE(trustix_route_tcp_gso, false);
+	synchronize_net();
 	trustix_route_tcp_gso_async_flush();
 	WRITE_ONCE(trustix_route_tcp_gso_async_unbound_worker, false);
 	WRITE_ONCE(trustix_route_tcp_gso_async_sharded_queue, false);
@@ -11905,6 +13682,22 @@ void trustix_datapath_helpers_unregister(void)
 	WRITE_ONCE(
 		trustix_route_tcp_gso_async_stream_cross_item_dynamic_queue_depth,
 		0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_ret,
+		   0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_stage,
+		   0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_items,
+		   0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_frames,
+		   0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_stream_payload_len,
+		   0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_outer_gso_size,
+		   0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_first_frame_len,
+		   0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_stream_cross_item_last_last_frame_len,
+		   0);
 	WRITE_ONCE(trustix_route_tcp_gso_async_stream_direct_build_fast_copy,
 		   true);
 	WRITE_ONCE(trustix_route_tcp_gso_async_stream_direct_build_frag_fast_copy,
@@ -11915,15 +13708,19 @@ void trustix_datapath_helpers_unregister(void)
 	WRITE_ONCE(trustix_route_tcp_gso_async_hash_tx_queue, false);
 	WRITE_ONCE(trustix_route_tcp_gso_async_yield_on_xmit_cn, false);
 	WRITE_ONCE(trustix_route_tcp_gso_async_xmit_cn_sleep_usecs, 0);
+	WRITE_ONCE(trustix_route_tcp_gso_async_xmit_busy_retries, 2);
+	WRITE_ONCE(trustix_route_tcp_gso_async_xmit_busy_sleep_usecs, 0);
+	trustix_tixt_rx_backlog_worker_flush();
 	WRITE_ONCE(trustix_tixt_rx_stream_ordered_list, false);
+	WRITE_ONCE(trustix_tixt_rx_stream_gso_xmit, false);
 	WRITE_ONCE(trustix_tixt_rx_stream_coalesce_gso, false);
 	WRITE_ONCE(trustix_tixt_rx_stream_coalesce_mark_gso, false);
 	WRITE_ONCE(trustix_tixt_rx_stream_nonlinear_parse, false);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_gso, false);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_mark_gso, false);
-	WRITE_ONCE(trustix_tixt_rx_coalesce_mark_gso_partial_csum, true);
-	WRITE_ONCE(trustix_tixt_rx_coalesce_segment_gso, true);
-	WRITE_ONCE(trustix_tixt_rx_single_coalesce_direct_list, true);
+	WRITE_ONCE(trustix_tixt_rx_coalesce_mark_gso_partial_csum, false);
+	WRITE_ONCE(trustix_tixt_rx_coalesce_segment_gso, false);
+	WRITE_ONCE(trustix_tixt_rx_single_coalesce_direct_list, false);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_direct_list_max_frames,
 		   TRUSTIX_TIXT_RX_SINGLE_COALESCE_DIRECT_LIST_DEFAULT_MAX_FRAMES);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_page_only, false);
@@ -11931,6 +13728,7 @@ void trustix_datapath_helpers_unregister(void)
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_hybrid_head, false);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_netif_rx, false);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_schedule_once, false);
+	WRITE_ONCE(trustix_tixt_rx_single_coalesce_stream_fallback, false);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_hot_stats, false);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_defer_full_flush, false);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_keep_full_timer, false);
@@ -11939,6 +13737,10 @@ void trustix_datapath_helpers_unregister(void)
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_warmup_frames, 1);
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_linear_max,
 		   TRUSTIX_TIXT_RX_SINGLE_COALESCE_LINEAR_MAX);
+	synchronize_net();
+	trustix_tixt_rx_single_coalesce_drop_all();
+	WRITE_ONCE(trustix_route_tcp_xmit_worker, false);
+	trustix_route_tcp_xmit_worker_flush();
 	if (trustix_route_tcp_gso_async_wq) {
 		destroy_workqueue(trustix_route_tcp_gso_async_wq);
 		trustix_route_tcp_gso_async_wq = NULL;
@@ -11951,9 +13753,6 @@ void trustix_datapath_helpers_unregister(void)
 		kmem_cache_destroy(trustix_route_tcp_gso_async_work_cache);
 		trustix_route_tcp_gso_async_work_cache = NULL;
 	}
-	trustix_tixt_rx_single_coalesce_drop_all();
-	WRITE_ONCE(trustix_route_tcp_xmit_worker, false);
-	trustix_route_tcp_xmit_worker_flush();
 }
 
 __u64 trustix_datapath_helpers_feature_mask(void)
@@ -11961,5 +13760,6 @@ __u64 trustix_datapath_helpers_feature_mask(void)
 	if (!READ_ONCE(trustix_datapath_helpers_registered))
 		return 0;
 	return TRUSTIX_DATAPATH_FEATURE_GSO_SKB |
-	       TRUSTIX_DATAPATH_FEATURE_ROUTE_TCP_KFUNC;
+	       TRUSTIX_DATAPATH_FEATURE_ROUTE_TCP_KFUNC |
+	       TRUSTIX_DATAPATH_FEATURE_ROUTE_TCP_XMIT_KFUNC;
 }

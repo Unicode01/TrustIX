@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { Archive, ArrowLeft, Check, Circle, Copy, Download, KeyRound, Languages, Move, Network, Plus, RefreshCw, Route, Save, ShieldCheck, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
 import type {
+  BootstrapPeerConfig,
   DeviceAccessIssueResponse,
   DeviceAccessPayload,
   DesiredConfig,
@@ -10,6 +11,7 @@ import type {
   ExperimentalTCPStatus,
   EndpointConfig,
   KernelModuleStatus,
+  KernelModuleConfig,
   KernelCapabilitiesPayload,
   KernelPlacementStatus,
   KernelRXStageStatus,
@@ -867,6 +869,7 @@ type IXProvisionEffectiveDefaults = {
   endpointAddress: string;
   endpointListen: string;
   endpointName: string;
+  acklessEndpointName: string;
   endpointMode: string;
   lanIface: string;
   lanGateway: string;
@@ -900,6 +903,17 @@ function ixProvisionProfileDefaults(profile: string): Pick<IXProvisionEffectiveD
   }
 }
 
+function ixProvisionAcklessEndpointName(endpointName: string, ixID: string): string {
+  const name = String(endpointName || "").trim();
+  if (name.endsWith("-udp")) {
+    return `${name.slice(0, -4)}-experimental_tcp`;
+  }
+  if (name) {
+    return `${name}-experimental_tcp`;
+  }
+  return `${safeShellName(ixID, "ix-new")}-experimental_tcp`;
+}
+
 function ixProvisionEffectiveDefaults(input: {
   ixID: string;
   role: string;
@@ -926,11 +940,13 @@ function ixProvisionEffectiveDefaults(input: {
   const attachMode = String(input.attachMode || "managed").trim().toLowerCase().replaceAll("_", "-");
   const derivedGateway = role === "transit_ix" ? "" : defaultLANGatewayForPrefix(input.advertisePrefixes[0] || "");
   const profile = ixProvisionProfileDefaults(input.profile);
+  const endpointName = String(input.endpointName || "").trim() || `${safeShellName(input.ixID, "ix-new")}-${input.endpointTransport || "udp"}`;
   return {
     controlAPI: String(input.controlAPI || "").trim() || (endpointMode === "passive" ? provisionControlAPIFromEndpointAddress(endpointAddress, "9443") : ""),
     endpointAddress,
     endpointListen: endpointMode === "passive" ? (String(input.endpointListen || "").trim() || (endpointPort ? `0.0.0.0:${endpointPort}` : "")) : "",
-    endpointName: String(input.endpointName || "").trim() || `${safeShellName(input.ixID, "ix-new")}-${input.endpointTransport || "udp"}`,
+    endpointName,
+    acklessEndpointName: String(input.endpointTransport || "udp") === "udp" ? ixProvisionAcklessEndpointName(endpointName, input.ixID) : "",
     endpointMode,
     lanIface: String(input.lanIface || "").trim() || (attachMode === "existing" ? "" : `trustix-${safeShellName(input.ixID, "ix")}`),
     lanGateway: String(input.lanGateway || "").trim() || derivedGateway,
@@ -1383,6 +1399,11 @@ export function AccessView(props: {
     compatibility: props.t("new_ix_profile_compatibility", "Compatibility"),
     plaintext_performance: props.t("new_ix_profile_plaintext_performance", "Plaintext performance"),
   };
+  const newIXRequiredItems = [
+    { label: props.t("new_ix_id", "New IX ID"), ok: Boolean(newIXID.trim()) },
+    { label: newIXActiveOnly ? props.t("new_ix_bootstrap_control_api", "Bootstrap control API") : newIXEndpointAddressLabel, ok: newIXActiveOnly ? Boolean(newIXBootstrapControlAPIEffective) : Boolean(newIXEndpointAddress.trim()) },
+    { label: props.t("new_ix_lan_prefixes", "New IX route prefixes"), ok: newIXAdvertisePrefixes.length > 0 && newIXAdvertiseWarnings.length === 0 },
+  ];
   const deviceDelegatedParentPrefixes = arrayValue(props.desired?.lan?.advertise);
   const deviceReservedPrefixes = [
     props.deviceAccess?.address_pool || "",
@@ -1454,8 +1475,18 @@ export function AccessView(props: {
               <Field label={props.t("new_ix_id", "New IX ID")} help={props.t("help_new_ix_id", "Unique IX identity to issue. It must differ from the current IX and becomes the certificate IX name.")} placeholder="ix-c" value={newIXID} onChange={setNewIXID} />
               <Field label={newIXEndpointAddressLabel} help={newIXEndpointAddressHelp} placeholder={newIXEndpointAddressPlaceholder} value={newIXEndpointAddress} onChange={setNewIXEndpointAddress} />
             </div>
-            <Field label={props.t("new_ix_lan_prefixes", "New IX advertised prefixes")} help={props.t("help_new_ix_lan_prefixes", "CIDR prefixes this IX owns or is authorized to transit, one per line. They become route authorizations, not device bootstrap routes.")} textarea placeholder="10.83.0.0/24" value={newIXAdvertise} onChange={setNewIXAdvertise} />
+            <Field label={props.t("new_ix_lan_prefixes", "New IX route prefixes")} help={props.t("help_new_ix_lan_prefixes", "CIDR prefixes this new IX will advertise or may transit in the domain, one per line. This creates route authorization, not a target-host interface address; the LAN gateway is derived from the role or overridden in advanced options.")} textarea placeholder="10.83.0.0/24" value={newIXAdvertise} onChange={setNewIXAdvertise} />
             {newIXAdvertiseWarnings.length > 0 && <div className="field-hint warn config-wide">{newIXAdvertiseWarnings.join(" · ")}</div>}
+            <div className="requirement-strip config-wide" aria-label={props.t("new_ix_required_fields", "Required fields")}>
+              <span className="requirement-label">{props.t("new_ix_required_fields", "Required fields")}</span>
+              {newIXRequiredItems.map((item) => (
+                <span key={item.label} className={`requirement-item ${item.ok ? "ok" : "warn"}`}>
+                  {item.ok ? <Check size={14} /> : <Circle size={12} />}
+                  <span>{item.label}</span>
+                  <strong>{item.ok ? props.t("ready", "Ready") : props.t("missing", "Missing")}</strong>
+                </span>
+              ))}
+            </div>
             <details className="endpoint-advanced-fields config-wide">
               <summary>{props.t("new_ix_advanced", "Advanced IX bootstrap")}</summary>
               <div className="endpoint-advanced-grid ix-bootstrap-advanced-grid">
@@ -1463,7 +1494,7 @@ export function AccessView(props: {
                 <Field label={props.t("new_ix_control_api", "New IX public control API")} help={newIXActiveOnly ? props.t("help_new_ix_control_api_active", "Optional published control API for this edge IX. Leave empty when it has no public inbound control-plane address.") : props.t("help_new_ix_control_api", "Optional public URL for the new IX control API. Empty derives https://host:9443 from the public endpoint.")} placeholder={newIXActiveOnly ? props.t("no_control_api", "No control API published") : (newIXEffective.controlAPI || "https://ix-c.example.com:9443")} value={newIXControlAPI} onChange={setNewIXControlAPI} />
                 <Field label={props.t("new_ix_bootstrap_peer", "Bootstrap peer IX")} help={props.t("help_new_ix_bootstrap_peer", "Existing IX used as the first control-plane peer for the generated config.")} value={newIXBootstrapIX} onChange={setNewIXBootstrapIX} />
                 <Field label={props.t("new_ix_bootstrap_control_api", "Bootstrap control API")} help={props.t("help_new_ix_bootstrap_control_api", "Control API URL of the bootstrap peer. Empty uses the current IX control API from this config.")} placeholder={newIXEffective.bootstrapControlAPI || "https://ix-a.example.com:9443"} value={newIXBootstrapControlAPI} onChange={setNewIXBootstrapControlAPI} />
-                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. UDP is the safest default; advanced deployments can choose TCP or tunnel transports.")} value={newIXEndpointTransport} options={transportOptions()} onChange={setNewIXEndpointTransport} />
+                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. UDP stays the primary default; when UDP is selected the generated config also adds experimental_tcp as a lower-priority fallback for NAT or UDP-hostile networks.")} value={newIXEndpointTransport} options={transportOptions()} onChange={setNewIXEndpointTransport} />
                 {!newIXActiveOnly && <Field label={props.t("new_ix_endpoint_listen", "Endpoint listen")} help={props.t("help_new_ix_endpoint_listen", "Optional listen address. Empty listens on 0.0.0.0 with the public endpoint port.")} placeholder={newIXEffective.endpointListen || "0.0.0.0:7000"} value={newIXEndpointListen} onChange={setNewIXEndpointListen} />}
                 <Field label={props.t("new_ix_endpoint_name", "Endpoint name")} help={props.t("help_new_ix_endpoint_name", "Optional local endpoint name written into the generated config. Empty derives <ix_id>-<transport>.")} placeholder={newIXResolvedEndpointName} value={newIXEndpointName} onChange={setNewIXEndpointName} />
                 <Field label={props.t("new_ix_lan_iface", "LAN interface")} help={props.t("help_new_ix_lan_iface", "Optional LAN interface. Managed mode creates trustix-<ix_id> when empty; existing mode requires a host interface.")} placeholder={newIXEffective.lanIface || "br-lan / eth1"} value={newIXLANIface} onChange={setNewIXLANIface} />
@@ -1493,7 +1524,7 @@ export function AccessView(props: {
                   </div>
                   <div className="ix-bootstrap-effective-grid">
                     <StatusRow label={props.t("new_ix_control_api", "New IX public control API")} value={newIXEffective.controlAPI || props.t("no_control_api", "No control API published")} />
-                    <StatusRow label={props.t("endpoint", "Endpoint")} value={compactList([newIXEffective.endpointName, newIXEndpointModeLabels[newIXEffective.endpointMode as keyof typeof newIXEndpointModeLabels] || newIXEffective.endpointMode, newIXEndpointTransport, newIXEffective.endpointListen, newIXEffective.endpointAddress], " / ")} />
+                    <StatusRow label={props.t("endpoint", "Endpoint")} value={compactList([compactList([newIXEffective.endpointName, newIXEffective.acklessEndpointName], " + "), newIXEndpointModeLabels[newIXEffective.endpointMode as keyof typeof newIXEndpointModeLabels] || newIXEffective.endpointMode, newIXEndpointTransport, newIXEffective.endpointListen, newIXEffective.endpointAddress], " / ")} />
                     <StatusRow label={props.t("lan", "LAN")} value={compactList([newIXEffective.lanIface, newIXEffective.lanGateway || props.t("no_gateway", "No gateway"), newIXAttachMode], " / ")} />
                     <StatusRow label={props.t("transport_policy", "Transport policy")} value={compactList([newIXEffective.transportProfile, newIXEffective.datapath, newIXEffective.encryption, newIXEffective.cryptoPlacement, `kernel=${newIXEffective.kernelTransport}`], " / ")} />
                     <StatusRow label={props.t("kernel_modules", "Kernel modules")} value={newIXEffective.kernelModules || "auto"} />
@@ -1576,13 +1607,13 @@ export function AccessView(props: {
                 <Field label={props.t("server_name", "Server name")} help={props.t("help_device_server_name", "Optional TLS server name override used by the generated device client config.")} value={deviceServerName} onChange={setDeviceServerName} />
                 <SelectField label={props.t("encryption", "Encryption")} help={props.t("help_device_encryption", "Optional device transport encryption override. Empty follows the selected endpoint and transport policy.")} value={deviceEncryption} options={encryptionOptions()} onChange={setDeviceEncryption} />
               </div>
-              <Field label={props.t("device_advertise_prefixes", "Device announced prefixes")} help={props.t("help_device_advertise_prefixes", "CIDR prefixes this device or downstream IX is allowed to announce into the TrustIX domain. Use independent downstream LANs by default; use a more-specific subprefix of this IX LAN only when intentionally delegating that subnet to the device. The upstream IX forwards by authorization and does not let the device decide global routes. Leave empty for a single leased /32 only.")} textarea placeholder="10.99.0.0/24" value={deviceAdvertisePrefixes} onChange={setDeviceAdvertisePrefixes} />
+              <Field label={props.t("device_advertise_prefixes", "Downstream advertised prefixes")} help={props.t("help_device_advertise_prefixes", "Route advertisement authorization issued to this downstream device or IX, one CIDR per line. Ordinary devices usually leave this empty and only receive one leased address; fill it only when the downstream side hosts its own LAN or acts as a child IX transit node. The upstream still accepts prefixes through certificate authorization and domain policy.")} textarea placeholder="10.99.0.0/24" value={deviceAdvertisePrefixes} onChange={setDeviceAdvertisePrefixes} />
               {deviceAdvertiseWarnings.length > 0 && <div className="field-hint warn config-wide">{deviceAdvertiseWarnings.join(" · ")}</div>}
               <details className="endpoint-advanced-fields config-wide">
                 <summary>{props.t("device_issue_advanced", "Advanced device config")}</summary>
                 <div className="endpoint-advanced-grid">
                   <Field label={props.t("public_endpoint_override", "Public endpoint override")} help={props.t("help_public_endpoint_override", "Optional address written into the generated client config instead of the selected endpoint address. Use domain:port or IP:port.")} placeholder={props.t("placeholder_endpoint_address", "203.0.113.10:7000")} value={deviceAddress} onChange={setDeviceAddress} />
-                  <Field label={props.t("bootstrap_routes", "Bootstrap routes")} help={props.t("help_bootstrap_routes", "Optional static client routes written into the generated config. Normal route updates are sent by the IX after the device connects.")} textarea value={deviceBootstrapRoutes} onChange={setDeviceBootstrapRoutes} />
+                  <Field label={props.t("bootstrap_routes", "Initial static routes")} help={props.t("help_bootstrap_routes", "Optional initial static routes written into the generated client config. Normal domain routes are synchronized by the IX after the device connects, so ordinary devices usually leave this empty.")} textarea value={deviceBootstrapRoutes} onChange={setDeviceBootstrapRoutes} />
                 </div>
               </details>
               <div className="form-actions">
@@ -2793,6 +2824,9 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
     props.onDesired(promoted.desired);
     return promoted.index;
   };
+  const updateRoutePolicy = (next: DesiredConfig["route_policy"]) => {
+    props.onDesired({ ...cfg, route_policy: { ...(cfg.route_policy || {}), ...(next || {}) } });
+  };
   const sections: ConfigSectionID[] = ["basic", "connectivity", "routing", "performance", "advanced"];
   const endpoints = arrayValue(cfg.endpoints);
   const peers = arrayValue(cfg.peers);
@@ -2801,6 +2835,7 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
   return (
     <div className="config-visual">
       <ConfigSummaryStrip t={props.t} lang={props.lang} desired={cfg} transports={props.transports} links={props.links} runtimeRoutes={runtimeRoutes} />
+      <ConfigConceptStrip t={props.t} />
       <nav className="config-task-nav" aria-label={props.t("config_sections", "Config sections")}>
         {sections.map((section) => (
           <button key={section} type="button" className={`config-task-tab ${activeSection === section ? "is-active" : ""}`} onClick={() => setActiveSection(section)}>
@@ -2836,7 +2871,10 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
       )}
 
       {activeSection === "routing" && (
-        <ConfigRouteTable t={props.t} lang={props.lang} desired={cfg} transports={props.transports} links={props.links} routes={routes} runtimeRoutes={runtimeRoutes} onAdd={addRoute} onUpdate={updateRoute} onRemove={removeRoute} onPromote={promoteRuntimeRoute} />
+        <>
+          <ConfigRoutePolicy t={props.t} routePolicy={cfg.route_policy || {}} onUpdate={updateRoutePolicy} />
+          <ConfigRouteTable t={props.t} lang={props.lang} desired={cfg} transports={props.transports} links={props.links} routes={routes} runtimeRoutes={runtimeRoutes} onAdd={addRoute} onUpdate={updateRoute} onRemove={removeRoute} onPromote={promoteRuntimeRoute} />
+        </>
       )}
 
       {activeSection === "performance" && (
@@ -2844,15 +2882,19 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
           <div className="config-section-head"><h3>{props.t("transport_policy", "Transport policy")}</h3></div>
           <div className="form-grid">
             <Field label={props.t("transport_mode", "Transport mode")} help={props.t("help_transport_policy_mode", "Overall transport preference, such as auto or a specific policy mode.")} value={cfg.transport_policy?.mode || ""} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), mode: value } })} />
-            <SelectField label={props.t("profile", "Profile")} help={props.t("help_transport_profile", "Default transport behavior profile. Use performance only after both IX endpoints support the advertised features.")} value={cfg.transport_policy?.profile || ""} options={transportProfileOptions()} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), profile: value } })} />
-            <SelectField label={props.t("datapath", "Datapath")} help={props.t("help_transport_datapath", "Preferred datapath for transports that support multiple implementations.")} value={cfg.transport_policy?.datapath || ""} options={transportDatapathOptions()} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), datapath: value } })} />
+            <SelectField label={props.t("profile", "Profile")} help={props.t("help_transport_profile", "Default transport intent: stable favors reliability, performance favors throughput, and latency favors low delay. The concrete protocol and datapath are still negotiated from both sides' capabilities.")} value={cfg.transport_policy?.profile || ""} options={transportProfileOptions()} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), profile: value } })} />
+            <SelectField label={props.t("datapath", "Datapath")} help={props.t("help_transport_datapath", "Preferred datapath implementation, such as auto, kernel_module, tc_xdp, or userspace.")} value={cfg.transport_policy?.datapath || ""} options={transportDatapathOptions()} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), datapath: value } })} />
             <SelectField label={props.t("encryption", "Encryption")} help={props.t("help_transport_policy_encryption", "Default encryption direction. secure encrypts both directions; plaintext disables transport encryption.")} value={cfg.transport_policy?.encryption || ""} options={encryptionOptions()} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), encryption: value } })} />
             <SelectField label={props.t("kernel_transport", "Kernel transport")} help={props.t("help_transport_policy_kernel_transport_mode", "Controls whether UDP/TCP/GRE/IPIP datapath should prefer or require the kernel fast path.")} value={cfg.transport_policy?.kernel_transport?.mode || ""} options={["", "auto", "prefer_kernel", "require_kernel", "disabled"]} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), kernel_transport: { ...(cfg.transport_policy?.kernel_transport || {}), mode: value } } })} />
             <SelectField label={props.t("crypto_placement", "Crypto placement")} help={props.t("help_transport_policy_crypto_placement", "Where payload encryption runs: auto, userspace fallback, or kernel when supported.")} value={cfg.transport_policy?.crypto_placement || ""} options={["", "auto", "userspace", "kernel"]} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), crypto_placement: value } })} />
             <Field label={props.t("mtu", "MTU")} help={props.t("help_transport_policy_mtu", "Datapath MTU. Leave 0 to let TrustIX choose from the interface and transport.")} type="number" value={String(cfg.transport_policy?.mtu || "")} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), mtu: Number(value || 0) } })} />
             <MultiSelectField label={props.t("crypto_suites", "Crypto suites")} help={props.t("help_transport_policy_crypto_suites", "Allowed crypto suites in preference order.")} clearLabel={props.t("clear", "Clear")} values={cfg.transport_policy?.crypto_suites} options={cryptoSuiteOptions()} onChange={(values) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), crypto_suites: values } })} />
-            <CheckField label={props.t("session_warmup", "Session warmup")} help={props.t("help_session_warmup", "Pre-open transport sessions for configured peers so the first data flow avoids dial latency.")} checked={Boolean(cfg.transport_policy?.session_pool?.warmup)} onChange={(value) => props.onDesired({ ...cfg, transport_policy: { ...(cfg.transport_policy || {}), session_pool: { ...(cfg.transport_policy?.session_pool || {}), warmup: value } } })} />
           </div>
+          <TransportPolicyOptionalFields
+            t={props.t}
+            policy={cfg.transport_policy || {}}
+            onChange={(transportPolicy) => props.onDesired({ ...cfg, transport_policy: transportPolicy })}
+          />
           <CandidateEndpointPicker
             t={props.t}
             endpoints={endpoints}
@@ -2874,10 +2916,7 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
       )}
 
       {activeSection === "advanced" && (
-        <section className="config-section">
-          <div className="config-section-head"><h3>{props.t("advanced_config", "Advanced config")}</h3></div>
-          <AdvancedConfigSummary t={props.t} desired={cfg} />
-        </section>
+        <AdvancedConfigEditor t={props.t} desired={cfg} onDesired={props.onDesired} />
       )}
     </div>
   );
@@ -2981,6 +3020,8 @@ function ConfigLANTable(props: { t: Translate; lang: string; desired: DesiredCon
 
 function LANConfigFields(props: { t: Translate; lan: LANConfig; source: "legacy" | "lans"; onUpdate: (lan: LANConfig) => void }) {
   const lan = props.lan;
+  const deviceAccess = lan.device_access || {};
+  const showDeviceAccessDetails = Boolean(deviceAccess.enabled || deviceAccess.address_pool || deviceAccess.lease_ttl);
   const update = (patch: Partial<LANConfig>) => props.onUpdate({ ...lan, ...patch });
   const updateNAT = (patch: NonNullable<LANConfig["nat"]>) => update({ nat: { ...(lan.nat || {}), ...patch } });
   const updateDeviceAccess = (patch: NonNullable<LANConfig["device_access"]>) => update({ device_access: { ...(lan.device_access || {}), ...patch } });
@@ -3015,9 +3056,9 @@ function LANConfigFields(props: { t: Translate; lan: LANConfig; source: "legacy"
         </div>
       )}
       <div className="lan-field-group lan-field-group-access">
-        <CheckField label={props.t("device_access", "Device access")} help={props.t("help_lan_device_access", "Enable certificate-based device clients on this LAN.")} checked={Boolean(lan.device_access?.enabled)} onChange={(value) => updateDeviceAccess({ enabled: value })} />
-        <Field label={props.t("device_address_pool", "Device address pool")} help={props.t("help_lan_device_address_pool", "IPv4 pool used to lease addresses to device clients. It should be inside the LAN gateway prefix when a gateway is configured.")} placeholder="10.82.0.128/25" value={lan.device_access?.address_pool || ""} onChange={(value) => updateDeviceAccess({ address_pool: value })} />
-        <Field label={props.t("device_lease_ttl", "Device lease TTL")} help={props.t("help_lan_device_lease_ttl", "Default device address lease lifetime for this LAN.")} placeholder="24h" value={lan.device_access?.lease_ttl || ""} onChange={(value) => updateDeviceAccess({ lease_ttl: value })} />
+        <CheckField label={props.t("device_access", "Device access")} help={props.t("help_lan_device_access", "Enable certificate-based device clients on this LAN.")} checked={Boolean(deviceAccess.enabled)} onChange={(value) => updateDeviceAccess({ enabled: value })} />
+        {showDeviceAccessDetails && <Field label={props.t("device_address_pool", "Device address pool")} help={props.t("help_lan_device_address_pool", "IPv4 pool used to lease addresses to device clients. It should be inside the LAN gateway prefix when a gateway is configured.")} placeholder="10.82.0.128/25" value={deviceAccess.address_pool || ""} onChange={(value) => updateDeviceAccess({ address_pool: value })} />}
+        {showDeviceAccessDetails && <Field label={props.t("device_lease_ttl", "Device lease TTL")} help={props.t("help_lan_device_lease_ttl", "Default device address lease lifetime for this LAN.")} placeholder="24h" value={deviceAccess.lease_ttl || ""} onChange={(value) => updateDeviceAccess({ lease_ttl: value })} />}
       </div>
       <div className="lan-field-group lan-field-group-system">
         <CheckField label={props.t("manage_address", "Manage address")} help={props.t("help_lan_manage_address", "Let TrustIX add or remove the LAN gateway address on the interface.")} checked={Boolean(lan.manage_address)} onChange={(value) => update({ manage_address: value })} />
@@ -3128,6 +3169,37 @@ function ConfigSummaryStrip(props: { t: Translate; lang: string; desired: Desire
   );
 }
 
+function ConfigConceptStrip(props: { t: Translate }) {
+  const concepts = [
+    {
+      label: props.t("concept_endpoint", "Endpoint"),
+      detail: props.t("concept_endpoint_help", "Reachable data-session address and transport, such as udp or experimental_tcp."),
+    },
+    {
+      label: props.t("concept_lan_prefix", "LAN prefix"),
+      detail: props.t("concept_lan_prefix_help", "CIDR network owned or hosted by this IX and advertised into the domain."),
+    },
+    {
+      label: props.t("concept_route", "Route"),
+      detail: props.t("concept_route_help", "Normally learned from advertisements; static routes are for pinning or override."),
+    },
+    {
+      label: props.t("concept_transport_profile", "Transport profile"),
+      detail: props.t("concept_transport_profile_help", "Intent such as stable, performance, or latency; datapath is the implementation."),
+    },
+  ];
+  return (
+    <div className="concept-strip" aria-label={props.t("config_concepts", "Config concepts")}>
+      {concepts.map((concept) => (
+        <div className="concept-item" key={concept.label}>
+          <strong>{concept.label}</strong>
+          <span>{concept.detail}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function configSectionLabel(t: Translate, section: ConfigSectionID): string {
   switch (section) {
     case "basic":
@@ -3153,13 +3225,64 @@ function configSectionValue(t: Translate, cfg: DesiredConfig, transports: Transp
       return `${arrayValue(cfg.routes).length} ${t("static", "Static")} · ${runtimeRoutes.length} ${t("runtime", "Runtime")}`;
     case "performance":
       return compactList([cfg.transport_policy?.profile, cfg.transport_policy?.datapath, cfg.transport_policy?.encryption], "-");
-    case "advanced":
+    case "advanced": {
+      const fabric = cfg.control_fabric || {};
       return compactList([
+        fabric.profile ? t("control_fabric", "Control fabric") : "",
+        fabric.dynamic_control_fanout != null ? `${t("dynamic_control_fanout", "Dynamic fanout")} ${fabric.dynamic_control_fanout}` : "",
+        fabric.member_page_size != null ? `${t("member_page_size", "Member page")} ${fabric.member_page_size}` : "",
+        fabric.member_import_limit != null ? `${t("member_import_limit", "Import limit")} ${fabric.member_import_limit}` : "",
         cfg.management ? t("management", "Management") : "",
         cfg.kernel_modules ? t("kernel", "Kernel") : "",
         arrayValue(transports?.sessions).length || links.some((link) => arrayValue(link.sessions).length) ? t("runtime", "Runtime") : "",
       ], "-");
+    }
   }
+}
+
+function TransportPolicyOptionalFields(props: { t: Translate; policy: NonNullable<DesiredConfig["transport_policy"]>; onChange: (policy: NonNullable<DesiredConfig["transport_policy"]>) => void }) {
+  const policy = props.policy || {};
+  const sessionPool = policy.session_pool || {};
+  const heartbeat = sessionPool.heartbeat || {};
+  const tlsIdentity = policy.tls_identity || {};
+  const update = (patch: Partial<NonNullable<DesiredConfig["transport_policy"]>>) => props.onChange({ ...policy, ...patch });
+  const updateSessionPool = (patch: NonNullable<NonNullable<DesiredConfig["transport_policy"]>["session_pool"]>) => update({ session_pool: { ...sessionPool, ...patch } });
+  const updateHeartbeat = (patch: NonNullable<NonNullable<NonNullable<DesiredConfig["transport_policy"]>["session_pool"]>["heartbeat"]>) => updateSessionPool({ heartbeat: { ...heartbeat, ...patch } });
+  const updateTLSIdentity = (patch: NonNullable<NonNullable<DesiredConfig["transport_policy"]>["tls_identity"]>) => update({ tls_identity: { ...tlsIdentity, ...patch } });
+  return (
+    <div className="config-card-list config-wide">
+      <div className="config-card">
+        <div className="config-section-head config-wide">
+          <h3>{props.t("transport_selection", "Transport selection")}</h3>
+        </div>
+        <SelectField label={props.t("failover", "Failover")} help={props.t("help_transport_failover", "health_based skips endpoints recently marked down by probes or send failures.")} value={policy.failover || ""} options={["", "health_based"]} onChange={(value) => update({ failover: value })} />
+        <SelectField label={props.t("load_balance", "Load balance")} help={props.t("help_transport_load_balance", "least_conn prefers endpoints with fewer active sessions when routes do not pin an endpoint.")} value={policy.load_balance || ""} options={["", "least_conn"]} onChange={(value) => update({ load_balance: value })} />
+        <SelectField label={props.t("fragment_policy", "Fragments")} help={props.t("help_transport_policy_fragment_policy", "Whether fragmented packets are accepted or dropped before forwarding.")} value={policy.fragment_policy || ""} options={["", "allow", "drop"]} onChange={(value) => update({ fragment_policy: value })} />
+        <SelectField label={props.t("crypto_key_source", "Key source")} help={props.t("help_transport_policy_crypto_key_source", "Key derivation source for transport encryption, such as TrustIX X25519 or TLS exporter.")} value={policy.crypto_key_source || ""} options={["", "auto", "trustix_x25519", "tls_exporter"]} onChange={(value) => update({ crypto_key_source: value })} />
+      </div>
+      <div className="config-card">
+        <div className="config-section-head config-wide">
+          <h3>{props.t("session_pool", "Session pool")}</h3>
+        </div>
+        <Field label={props.t("session_pool_size", "Pool size")} help={props.t("help_session_pool_size", "Number of parallel transport sessions per endpoint. 0 or 1 keeps a single session.")} type="number" value={numberFieldValue(sessionPool.size)} onChange={(value) => updateSessionPool({ size: numberOrUndefined(value) })} />
+        <SelectField label={props.t("strategy", "Strategy")} help={props.t("help_session_pool_strategy", "flow/five_tuple pins flows to a session; packet/round_robin spreads packets across sessions.")} value={sessionPool.strategy || ""} options={["", "flow", "five_tuple", "packet", "round_robin"]} onChange={(value) => updateSessionPool({ strategy: value })} />
+        <CheckField label={props.t("session_warmup", "Session warmup")} help={props.t("help_session_warmup", "Pre-open transport sessions for configured peers so the first data flow avoids dial latency.")} checked={Boolean(sessionPool.warmup)} onChange={(value) => updateSessionPool({ warmup: value })} />
+        <SelectField label={props.t("heartbeat_mode", "Heartbeat mode")} help={props.t("help_session_pool_heartbeat_mode", "auto enables session heartbeats when the pool uses more than one session.")} value={heartbeat.mode || ""} options={["", "auto", "enabled", "disabled"]} onChange={(value) => updateHeartbeat({ mode: value })} />
+        <Field label={props.t("heartbeat_interval", "Heartbeat interval")} help={props.t("help_session_pool_heartbeat_interval", "Interval between session heartbeat probes, for example 10s.")} placeholder="10s" value={heartbeat.interval || ""} onChange={(value) => updateHeartbeat({ interval: value })} />
+        <Field label={props.t("heartbeat_timeout", "Heartbeat timeout")} help={props.t("help_session_pool_heartbeat_timeout", "Heartbeat response timeout before a pooled session is considered unhealthy.")} placeholder="3s" value={heartbeat.timeout || ""} onChange={(value) => updateHeartbeat({ timeout: value })} />
+      </div>
+      <div className="config-card">
+        <div className="config-section-head config-wide">
+          <h3>{props.t("transport_tls_identity", "Transport TLS identity")}</h3>
+        </div>
+        <SelectField label={props.t("mode", "Mode")} help={props.t("help_transport_tls_identity_mode", "ix_cert reuses the IX certificate for link TLS; custom_cert uses the certificate and trust roots below.")} value={tlsIdentity.mode || ""} options={["", "ix_cert", "custom_cert"]} onChange={(value) => updateTLSIdentity({ mode: value })} />
+        <Field label={props.t("certificate", "Certificate")} help={props.t("help_transport_tls_identity_cert", "Custom certificate path used by TCP/WebSocket/HTTP CONNECT/QUIC link TLS.")} value={tlsIdentity.cert || ""} onChange={(value) => updateTLSIdentity({ cert: value })} />
+        <Field label={props.t("private_key", "Private key")} help={props.t("help_transport_tls_identity_key", "Private key path matching the custom transport TLS certificate.")} value={tlsIdentity.key || ""} onChange={(value) => updateTLSIdentity({ key: value })} />
+        <Field label={props.t("trust_root_paths", "Trust root paths")} help={props.t("help_transport_tls_identity_trust_roots", "CA paths trusted for custom transport TLS verification, one path per line.")} textarea value={joinLines(tlsIdentity.trust_roots)} onChange={(value) => updateTLSIdentity({ trust_roots: splitLines(value) })} />
+        <CheckField label={props.t("system_roots", "System roots")} help={props.t("help_transport_tls_identity_system_roots", "Also trust the system certificate pool for custom transport TLS.")} checked={Boolean(tlsIdentity.system_roots)} onChange={(value) => updateTLSIdentity({ system_roots: value })} />
+      </div>
+    </div>
+  );
 }
 
 function CandidateEndpointPicker(props: { t: Translate; endpoints: EndpointConfig[]; selected: string[]; onChange: (selected: string[]) => void }) {
@@ -3214,16 +3337,245 @@ function CandidateEndpointPicker(props: { t: Translate; endpoints: EndpointConfi
   );
 }
 
+function AdvancedConfigEditor(props: { t: Translate; desired: DesiredConfig; onDesired: (desired: DesiredConfig) => void }) {
+  return (
+    <>
+      <ConfigManagementEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
+      <ConfigKernelModulesEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
+      <ConfigTrustEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
+      <ConfigBootstrapEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
+      <ConfigControlFabricEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
+      <section className="config-section">
+        <div className="config-section-head"><h3>{props.t("advanced_config", "Advanced config")}</h3></div>
+        <AdvancedConfigSummary t={props.t} desired={props.desired} />
+      </section>
+    </>
+  );
+}
+
+function ConfigManagementEditor(props: { t: Translate; desired: DesiredConfig; onDesired: (desired: DesiredConfig) => void }) {
+  const management = props.desired.management || {};
+  const hostAPI = management.host_api || {};
+  const tls = management.tls || {};
+  const webUI = management.web_ui || {};
+  const updateManagement = (patch: NonNullable<DesiredConfig["management"]>) => props.onDesired({ ...props.desired, management: { ...management, ...patch } });
+  const updateHostAPI = (patch: NonNullable<NonNullable<DesiredConfig["management"]>["host_api"]>) => updateManagement({ host_api: { ...hostAPI, ...patch } });
+  const updateTLS = (patch: NonNullable<NonNullable<DesiredConfig["management"]>["tls"]>) => updateManagement({ tls: { ...tls, ...patch } });
+  const updateWebUI = (patch: NonNullable<NonNullable<DesiredConfig["management"]>["web_ui"]>) => updateManagement({ web_ui: { ...webUI, ...patch } });
+  return (
+    <section className="config-section">
+      <div className="config-section-head"><h3>{props.t("management", "Management")}</h3></div>
+      <div className="form-grid">
+        <CheckField label={props.t("web_ui_enabled", "WebUI enabled")} help={props.t("help_management_web_ui_enabled", "Expose the embedded WebUI on the same listener as the API.")} checked={Boolean(webUI.enabled)} onChange={(value) => updateWebUI({ enabled: value })} />
+        <Field label={props.t("custom_dir", "Custom dir")} help={props.t("help_management_web_ui_custom_dir", "Optional directory served instead of the embedded WebUI assets.")} value={webUI.custom_dir || ""} onChange={(value) => updateWebUI({ custom_dir: value })} />
+        <SelectField label={props.t("management_tls_mode", "TLS mode")} help={props.t("help_management_tls_mode", "Controls HTTPS for the API and WebUI: auto uses TLS when credentials are available, required refuses plaintext, disabled allows HTTP.")} value={tls.mode || ""} options={["", "auto", "required", "disabled"]} onChange={(value) => updateTLS({ mode: value })} />
+        <SelectField label={props.t("management_tls_identity", "TLS identity")} help={props.t("help_management_tls_identity", "Choose whether management TLS uses the IX certificate or a custom certificate/key pair.")} value={tls.identity || ""} options={["", "ix_cert", "custom_cert"]} onChange={(value) => updateTLS({ identity: value })} />
+        <Field label={props.t("management_cert", "Management cert")} help={props.t("help_management_tls_cert", "Custom management TLS certificate path when TLS identity is custom_cert.")} value={tls.cert || ""} onChange={(value) => updateTLS({ cert: value })} />
+        <Field label={props.t("management_key", "Management key")} help={props.t("help_management_tls_key", "Private key path for the custom management TLS certificate.")} value={tls.key || ""} onChange={(value) => updateTLS({ key: value })} />
+      </div>
+      <div className="config-card config-wide">
+        <div className="config-section-head config-wide">
+          <h3>{props.t("host_api", "Host API")}</h3>
+          <span className="readonly-note">{props.t("host_api_note", "Optional API listener for LAN or localhost clients.")}</span>
+        </div>
+        <CheckField label={props.t("host_api_enabled", "Host API enabled")} help={props.t("help_management_host_api_enabled", "Enable the local host API used by LAN/localhost clients.")} checked={Boolean(hostAPI.enabled)} onChange={(value) => updateHostAPI({ enabled: value })} />
+        <Field label={props.t("host_api_listen", "Host API listen")} help={props.t("help_management_host_api_listen", "Listen address for the host API, for example 127.0.0.1:8787 or 0.0.0.0:8787.")} placeholder="127.0.0.1:8787" value={hostAPI.listen || ""} onChange={(value) => updateHostAPI({ listen: value })} />
+        <CheckField label={props.t("require_read_auth", "Require read auth")} help={props.t("help_management_host_api_require_read_auth", "Require Admin proof even for read-only API calls.")} checked={Boolean(hostAPI.require_read_auth)} onChange={(value) => updateHostAPI({ require_read_auth: value })} />
+        <CheckField label={props.t("allow_unauthenticated_reads", "Allow unauthenticated reads")} help={props.t("help_management_host_api_allow_unauthenticated_reads", "Allow read-only host API calls without Admin proof. Use only on trusted local networks.")} checked={Boolean(hostAPI.allow_unauthenticated_reads)} onChange={(value) => updateHostAPI({ allow_unauthenticated_reads: value })} />
+        <CheckField label={props.t("allow_unauthenticated_writes", "Allow unauthenticated writes")} help={props.t("help_management_host_api_allow_unauthenticated_writes", "Dangerous: allow config-changing host API calls without Admin proof. Keep disabled unless the listener is fully isolated.")} checked={Boolean(hostAPI.allow_unauthenticated_writes)} onChange={(value) => updateHostAPI({ allow_unauthenticated_writes: value })} />
+      </div>
+    </section>
+  );
+}
+
+type KernelModuleKey = "trustix_crypto" | "trustix_datapath" | "trustix_datapath_helpers";
+
+const kernelModuleEditors: Array<{ key: KernelModuleKey; labelKey: string; fallback: string }> = [
+  { key: "trustix_crypto", labelKey: "trustix_crypto", fallback: "trustix_crypto" },
+  { key: "trustix_datapath", labelKey: "trustix_datapath", fallback: "trustix_datapath" },
+  { key: "trustix_datapath_helpers", labelKey: "trustix_datapath_helpers", fallback: "trustix_datapath_helpers" },
+];
+
+function ConfigKernelModulesEditor(props: { t: Translate; desired: DesiredConfig; onDesired: (desired: DesiredConfig) => void }) {
+  const modules = props.desired.kernel_modules || {};
+  const updateModule = (key: KernelModuleKey, module: KernelModuleConfig) => {
+    props.onDesired({ ...props.desired, kernel_modules: { ...modules, [key]: module } });
+  };
+  return (
+    <section className="config-section">
+      <div className="config-section-head"><h3>{props.t("kernel_modules", "Kernel modules")}</h3></div>
+      <div className="config-card-list config-wide">
+        {kernelModuleEditors.map((item) => {
+          const module = modules[item.key] || {};
+          const update = (patch: KernelModuleConfig) => updateModule(item.key, { ...module, ...patch });
+          return (
+            <div className="config-card" key={item.key}>
+              <div className="config-section-head config-wide">
+                <h3>{props.t(item.labelKey, item.fallback)}</h3>
+              </div>
+              <SelectField label={props.t("mode", "Mode")} help={props.t("help_kernel_module_mode", "disabled never loads the module; auto loads when useful; required fails startup if loading is unavailable.")} value={module.mode || ""} options={["", "disabled", "auto", "required"]} onChange={(value) => update({ mode: value })} />
+              <Field label={props.t("path", "Path")} help={props.t("help_kernel_module_path", "Module path, or embedded for release binaries that carry the module payload.")} placeholder="embedded" value={module.path || ""} onChange={(value) => update({ path: value })} />
+              <Field label={props.t("parameters", "Parameters")} help={props.t("help_kernel_module_parameters", "Optional module parameters passed when loading, for example enable_features=128.")} value={module.parameters || ""} onChange={(value) => update({ parameters: value })} />
+              <SelectField label={props.t("reload_on_upgrade", "Reload on upgrade")} help={props.t("help_kernel_module_reload_on_upgrade", "Controls whether a loaded TrustIX module may be reloaded when the desired module payload changes.")} value={module.reload_on_upgrade || ""} options={["", "auto", "never", "always"]} onChange={(value) => update({ reload_on_upgrade: value })} />
+              <CheckField label={props.t("unload_on_exit", "Unload on exit")} help={props.t("help_kernel_module_unload_on_exit", "Unload this module when the daemon exits if this process loaded it and the module is not busy.")} checked={Boolean(module.unload_on_exit)} onChange={(value) => update({ unload_on_exit: value })} />
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ConfigTrustEditor(props: { t: Translate; desired: DesiredConfig; onDesired: (desired: DesiredConfig) => void }) {
+  const domain = props.desired.domain || {};
+  const ix = props.desired.ix || {};
+  const trust = props.desired.trust || {};
+  const adminPolicy = trust.admin_policy || {};
+  const updateDomain = (patch: NonNullable<DesiredConfig["domain"]>) => props.onDesired({ ...props.desired, domain: { ...domain, ...patch } });
+  const updateIX = (patch: NonNullable<DesiredConfig["ix"]>) => props.onDesired({ ...props.desired, ix: { ...ix, ...patch } });
+  const updateTrust = (patch: NonNullable<DesiredConfig["trust"]>) => props.onDesired({ ...props.desired, trust: { ...trust, ...patch } });
+  const updateAdminPolicy = (patch: NonNullable<NonNullable<DesiredConfig["trust"]>["admin_policy"]>) => updateTrust({ admin_policy: { ...adminPolicy, ...patch } });
+  return (
+    <section className="config-section">
+      <div className="config-section-head"><h3>{props.t("trust_and_authorization", "Trust and authorization")}</h3></div>
+      <div className="form-grid">
+        <Field label={props.t("config_log", "Config log")} help={props.t("help_ix_config_log", "Path to the local signed config log. Empty uses the daemon default under data-dir.")} value={ix.config_log || ""} onChange={(value) => updateIX({ config_log: value })} />
+        <Field label={props.t("trust_roots", "Trust roots")} help={props.t("help_domain_trust_roots", "Trust root file paths used by this IX, one path per line.")} textarea value={joinLines(domain.trust_roots)} onChange={(value) => updateDomain({ trust_roots: splitLines(value) })} />
+        <Field label={props.t("route_authorizations", "Route authorizations")} help={props.t("help_ix_route_authorizations", "Route authorization certificate paths held by this IX, one path per line.")} textarea value={joinLines(ix.route_authorizations)} onChange={(value) => updateIX({ route_authorizations: splitLines(value) })} />
+        <Field label={props.t("revoked_cert_fingerprints", "Revoked cert fingerprints")} help={props.t("help_trust_revoked_cert_fingerprints", "Certificate SHA256 fingerprints revoked by this domain, one fingerprint per line.")} textarea value={joinLines(trust.revoked_cert_fingerprints)} onChange={(value) => updateTrust({ revoked_cert_fingerprints: splitLines(value) })} />
+        <Field label={props.t("trust_roots_pem", "Trust roots PEM")} help={props.t("help_trust_roots_pem", "Optional CA certificate PEM blocks stored directly in desired config. Prefer file paths when possible.")} textarea value={arrayValue(trust.trust_roots_pem).join("\n\n")} onChange={(value) => updateTrust({ trust_roots_pem: splitPEMBlocks(value) })} />
+        <Field label={props.t("admin_threshold", "Admin threshold")} help={props.t("help_admin_threshold", "Number of allowed Admin proofs required for protected config changes. Empty or 0 uses the default policy.")} type="number" value={numberFieldValue(adminPolicy.threshold)} onChange={(value) => updateAdminPolicy({ threshold: numberOrUndefined(value) })} />
+        <Field label={props.t("allowed_admin_fingerprints", "Allowed Admin fingerprints")} help={props.t("help_allowed_admin_fingerprints", "Admin certificate SHA256 fingerprints allowed to approve protected changes, one fingerprint per line.")} textarea value={joinLines(adminPolicy.allowed_fingerprints)} onChange={(value) => updateAdminPolicy({ allowed_fingerprints: splitLines(value) })} />
+      </div>
+    </section>
+  );
+}
+
+function ConfigBootstrapEditor(props: { t: Translate; desired: DesiredConfig; onDesired: (desired: DesiredConfig) => void }) {
+  const bootstrap = props.desired.bootstrap || {};
+  const peers = arrayValue(bootstrap.peers);
+  const updatePeers = (nextPeers: BootstrapPeerConfig[]) => props.onDesired({ ...props.desired, bootstrap: { ...bootstrap, peers: nextPeers } });
+  const addPeer = () => updatePeers([...peers, { domain: props.desired.domain?.id || "", control_api: "" }]);
+  const updatePeer = (index: number, peer: BootstrapPeerConfig) => {
+    const next = [...peers];
+    next[index] = peer;
+    updatePeers(next);
+  };
+  const removePeer = (index: number) => updatePeers(peers.filter((_, itemIndex) => itemIndex !== index));
+  return (
+    <section className="config-section">
+      <div className="config-section-head">
+        <div className="section-title-row">
+          <h3>{props.t("bootstrap", "Bootstrap")}</h3>
+          <span className="muted">{peers.length}</span>
+        </div>
+        <Button variant="ghost" onClick={addPeer}><Plus size={15} />{props.t("add_bootstrap_peer", "Add bootstrap peer")}</Button>
+      </div>
+      <div className="config-card-list config-wide">
+        {peers.length ? peers.map((peer, index) => (
+          <div className="config-card" key={`${peer.control_api || "bootstrap"}-${index}`}>
+            <Field label={props.t("ix_id", "IX ID")} help={props.t("help_bootstrap_peer_id", "Optional IX ID expected from this bootstrap control API.")} value={peer.id || ""} onChange={(value) => updatePeer(index, { ...peer, id: value })} />
+            <Field label={props.t("domain_id", "Domain ID")} help={props.t("help_bootstrap_peer_domain", "Optional domain ID expected from this bootstrap peer. Leave aligned with this IX domain.")} value={peer.domain || ""} onChange={(value) => updatePeer(index, { ...peer, domain: value })} />
+            <Field label={props.t("control_api", "Control API")} help={props.t("help_bootstrap_peer_control_api", "Control API URL used during startup to push this IX advertisement and fetch members.")} placeholder="https://ix-a.example:9443" value={peer.control_api || ""} onChange={(value) => updatePeer(index, { ...peer, control_api: value })} />
+            <div className="form-actions">
+              <Button variant="danger" onClick={() => removePeer(index)}><Trash2 size={15} />{props.t("remove", "Remove")}</Button>
+            </div>
+          </div>
+        )) : <div className="empty-row">{props.t("no_bootstrap_peer", "No bootstrap peer")}</div>}
+      </div>
+    </section>
+  );
+}
+
+function ConfigControlFabricEditor(props: { t: Translate; desired: DesiredConfig; onDesired: (desired: DesiredConfig) => void }) {
+  const fabric = props.desired.control_fabric || {};
+  const update = (patch: NonNullable<DesiredConfig["control_fabric"]>) => props.onDesired({ ...props.desired, control_fabric: { ...fabric, ...patch } });
+  const profileLabels: Record<string, string> = {
+    "": props.t("default", "Default"),
+    small: props.t("control_fabric_profile_small", "Small"),
+    edge: props.t("control_fabric_profile_edge", "Edge"),
+    reflector: props.t("control_fabric_profile_reflector", "Reflector"),
+    route_reflector: props.t("control_fabric_profile_route_reflector", "Route reflector"),
+    core: props.t("control_fabric_profile_core", "Core"),
+    authority: props.t("control_fabric_profile_authority", "Authority"),
+  };
+  return (
+    <section className="config-section">
+      <div className="config-section-head">
+        <div className="section-title-row">
+          <h3>{props.t("control_fabric", "Control fabric")}</h3>
+          <span className="muted">{compactList([
+            profileLabels[fabric.profile || ""],
+            fabric.dynamic_control_fanout != null ? `${props.t("dynamic_control_fanout", "Dynamic fanout")} ${fabric.dynamic_control_fanout}` : "",
+            fabric.member_page_size != null ? `${props.t("member_page_size", "Member page")} ${fabric.member_page_size}` : "",
+            fabric.member_import_limit != null ? `${props.t("member_import_limit", "Import limit")} ${fabric.member_import_limit}` : "",
+          ], "-")}</span>
+        </div>
+      </div>
+      <div className="form-grid">
+        <SelectField
+          label={props.t("control_fabric_profile", "Fabric profile")}
+          help={props.t("help_control_fabric_profile", "Selects the control-plane discovery role. Edge nodes poll a bounded reflector set; reflector/core nodes can carry more member exchange. This does not change cryptographic authority by itself.")}
+          value={fabric.profile || ""}
+          options={["", "small", "edge", "reflector", "route_reflector", "core", "authority"]}
+          optionLabels={profileLabels}
+          onChange={(value) => update({ profile: value || undefined })}
+        />
+        <Field
+          label={props.t("dynamic_control_fanout", "Dynamic control fanout")}
+          help={props.t("help_dynamic_control_fanout", "Maximum learned control endpoints polled per peer cycle. Static peers and bootstrap peers are always polled. 0 disables the limit.")}
+          type="number"
+          value={numberFieldValue(fabric.dynamic_control_fanout)}
+          onChange={(value) => update({ dynamic_control_fanout: nonNegativeNumberOrUndefined(value) })}
+        />
+        <Field
+          label={props.t("member_page_size", "Member page size")}
+          help={props.t("help_member_page_size", "Maximum remote IX advertisements returned by one control members response. The local advertisement is always included. 0 disables pagination.")}
+          type="number"
+          value={numberFieldValue(fabric.member_page_size)}
+          onChange={(value) => update({ member_page_size: nonNegativeNumberOrUndefined(value) })}
+        />
+        <Field
+          label={props.t("member_import_limit", "Member import limit")}
+          help={props.t("help_member_import_limit", "Maximum remote IX advertisements imported from one control target per poll. Cursor state resumes on the next poll. 0 imports all pages.")}
+          type="number"
+          value={numberFieldValue(fabric.member_import_limit)}
+          onChange={(value) => update({ member_import_limit: nonNegativeNumberOrUndefined(value) })}
+        />
+      </div>
+    </section>
+  );
+}
+
+function splitPEMBlocks(value: string): string[] {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return [];
+  }
+  const matches = raw.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g);
+  if (matches?.length) {
+    return matches.map((item) => item.trim()).filter(Boolean);
+  }
+  return splitLines(value);
+}
+
 function AdvancedConfigSummary(props: { t: Translate; desired: DesiredConfig }) {
   const cfg = props.desired;
   const management = cfg.management || {};
   const kernelModules = cfg.kernel_modules || {};
+  const fabric = cfg.control_fabric || {};
   const trustRoots = arrayValue(cfg.domain?.trust_roots);
   const routeAuth = arrayValue(cfg.ix?.route_authorizations);
   return (
     <div className="advanced-config-summary">
       <StatusRow label={props.t("management", "Management")} value={compactAdvancedObject(management)} />
       <StatusRow label={props.t("kernel_modules", "Kernel modules")} value={compactAdvancedObject(kernelModules)} />
+      <StatusRow label={props.t("control_fabric", "Control fabric")} value={compactList([
+        fabric.profile,
+        fabric.dynamic_control_fanout != null ? `${props.t("dynamic_control_fanout", "Dynamic fanout")} ${fabric.dynamic_control_fanout}` : "",
+        fabric.member_page_size != null ? `${props.t("member_page_size", "Member page")} ${fabric.member_page_size}` : "",
+        fabric.member_import_limit != null ? `${props.t("member_import_limit", "Import limit")} ${fabric.member_import_limit}` : "",
+      ], "-")} />
       <StatusRow label={props.t("trust_roots", "Trust roots")} value={trustRoots.join(" · ") || "-"} />
       <StatusRow label={props.t("route_authorizations", "Route authorizations")} value={routeAuth.join(" · ") || "-"} />
       <StatusRow label={props.t("advanced_json", "Advanced JSON")} value={props.t("advanced_json_available", "Raw JSON editor is below the visual config.")} />
@@ -3361,7 +3713,6 @@ function EndpointConfigFields(props: { t: Translate; scope: EndpointScope; endpo
       <Field label={props.t("name", "Name")} help={props.t("help_endpoint_name", "Endpoint name referenced by peers, routes, and transport policies.")} value={endpoint.name || ""} onChange={(value) => props.onUpdate({ ...endpoint, name: value })} />
       <SelectField label={props.t("transport", "Transport")} help={props.t("help_endpoint_transport", "Underlying transport used by this endpoint, such as udp, experimental_tcp, gre, or ipip.")} value={endpoint.transport || "udp"} options={transportOptions()} onChange={(value) => props.onUpdate({ ...endpoint, transport: value })} />
       <SelectField label={props.t("mode", "Mode")} help={props.t("help_endpoint_mode", "passive listens for inbound sessions; active dials the peer address.")} value={endpoint.mode || (props.scope === "peer" ? "active" : "passive")} options={["active", "passive"]} onChange={(value) => props.onUpdate({ ...endpoint, mode: value })} />
-      <Field label={props.t("priority", "Priority")} help={props.t("help_endpoint_priority", "Integer exchanged during endpoint negotiation. Transport profile/datapath pick the endpoint class first; higher combined priority breaks ties within comparable endpoints.")} type="number" value={String(endpoint.priority ?? 0)} onChange={(value) => props.onUpdate({ ...endpoint, priority: Math.trunc(Number(value || 0)) })} />
       {tunnel && props.scope === "local" ? (
         <TunnelEndpointFields
           t={props.t}
@@ -3389,6 +3740,7 @@ function EndpointConfigFields(props: { t: Translate; scope: EndpointScope; endpo
       <details className="endpoint-advanced-fields config-wide">
         <summary>{props.t("endpoint_advanced", "Endpoint advanced")}</summary>
         <div className="endpoint-advanced-grid">
+          <Field label={props.t("priority", "Priority")} help={props.t("help_endpoint_priority", "Integer exchanged during endpoint negotiation. Transport profile/datapath pick the endpoint class first; higher combined priority breaks ties within comparable endpoints.")} type="number" value={String(endpoint.priority ?? 0)} onChange={(value) => props.onUpdate({ ...endpoint, priority: Math.trunc(Number(value || 0)) })} />
           <MultiSelectField label={props.t("crypto_suites", "Crypto suites")} help={props.t("help_endpoint_crypto_suites", "Endpoint-level crypto suite allowlist. Empty inherits the transport policy list.")} clearLabel={props.t("clear", "Clear")} values={endpoint.security?.crypto_suites} options={cryptoSuiteOptions()} onChange={(values) => props.onUpdate({ ...endpoint, security: { ...(endpoint.security || {}), crypto_suites: values } })} />
           <Field label={props.t("local_bind_source_ip", "Source IP")} help={props.t("help_local_bind_source_ip", "Local underlay source IP used when dialing this endpoint. Leave empty to let the OS route choose.")} placeholder="192.0.2.10" value={endpoint.local_bind?.source_ip || ""} onChange={(value) => props.onUpdate({ ...endpoint, local_bind: { ...(endpoint.local_bind || {}), source_ip: value } })} />
           <Field label={props.t("local_bind_iface", "Source iface")} help={props.t("help_local_bind_iface", "Linux interface name used with SO_BINDTODEVICE for outbound dials. Requires privileges.")} placeholder="eth0" value={endpoint.local_bind?.iface || ""} onChange={(value) => props.onUpdate({ ...endpoint, local_bind: { ...(endpoint.local_bind || {}), iface: value } })} />
@@ -3745,6 +4097,55 @@ function PeerEndpointReadonlyList(props: { t: Translate; lang: string; endpoints
   );
 }
 
+function ConfigRoutePolicy(props: { t: Translate; routePolicy: NonNullable<DesiredConfig["route_policy"]>; onUpdate: (routePolicy: DesiredConfig["route_policy"]) => void }) {
+  const policy = props.routePolicy || {};
+  const update = (next: DesiredConfig["route_policy"]) => props.onUpdate({ ...policy, ...(next || {}) });
+  return (
+    <section className="config-section">
+      <div className="config-section-head">
+        <div className="section-title-row">
+          <h3>{props.t("route_policy", "Route policy")}</h3>
+        </div>
+      </div>
+      <div className="form-grid">
+        <CheckField
+          label={props.t("transit_forwarding", "Transit forwarding")}
+          help={props.t("help_transit_forwarding", "Allow packets received from another IX to be forwarded to a third IX by this node. Disable on edge nodes that must not carry transit traffic.")}
+          checked={policy.transit_forwarding !== false}
+          onChange={(value) => update({ transit_forwarding: value })}
+        />
+        <CheckField
+          label={props.t("import_transit_routes", "Import transit routes")}
+          help={props.t("help_import_transit_routes", "Install dynamic routes learned indirectly through another IX. Direct peer and local LAN routes are still allowed.")}
+          checked={policy.import_transit_routes !== false}
+          onChange={(value) => update({ import_transit_routes: value })}
+        />
+        <Field
+          label={props.t("import_prefixes", "Import prefixes")}
+          help={props.t("help_import_prefixes", "Optional CIDR allowlist for dynamic route imports. Empty allows non-default advertised prefixes.")}
+          textarea
+          value={joinLines(policy.import_prefixes)}
+          onChange={(value) => update({ import_prefixes: splitLines(value) })}
+        />
+        <Field
+          label={props.t("export_prefixes", "Export prefixes")}
+          help={props.t("help_export_prefixes", "Optional CIDR allowlist for prefixes this IX advertises to peers. Empty allows local advertised prefixes except default routes.")}
+          textarea
+          value={joinLines(policy.export_prefixes)}
+          onChange={(value) => update({ export_prefixes: splitLines(value) })}
+        />
+        <Field
+          label={props.t("dynamic_metric", "Dynamic metric")}
+          help={props.t("help_dynamic_metric", "Metric added to imported dynamic routes. Lower metrics win when multiple routes match.")}
+          type="number"
+          value={String(policy.dynamic_metric || "")}
+          onChange={(value) => update({ dynamic_metric: Number(value || 0) })}
+        />
+      </div>
+    </section>
+  );
+}
+
 function ConfigRouteTable(props: { t: Translate; lang: string; desired: DesiredConfig; transports: TransportMatrix | null; links: LinkStatus[]; routes: RouteConfig[]; runtimeRoutes: RouteView[]; onAdd: () => void; onUpdate: (index: number, route: RouteConfig) => void; onRemove: (index: number) => void; onPromote: (route: RouteView) => number }) {
   const peers = routePeerOptions(props.desired, undefined, props.links);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -3864,6 +4265,7 @@ export function DoctorView(props: { t: Translate; lang: string; doctor: DoctorCh
   const prefixes = props.status?.domain_prefixes || {};
   const routeRows = domainRouteRows(props.routes);
   const candidateRows = routeCandidateRows(props.routePolicy);
+  const candidateTotal = props.routePolicy?.candidate_total ?? candidateRows.length;
   return (
     <main className="views">
       <section className="panel">
@@ -3941,8 +4343,9 @@ export function DoctorView(props: { t: Translate; lang: string; doctor: DoctorCh
             <h2>{props.t("route_candidates", "Route candidates")}</h2>
             <p className="panel-note inline-note">{props.t("route_candidates_note", "Candidate paths before the runtime table picks the best route for each prefix, including accepted, shadowed, and rejected paths.")}</p>
           </div>
-          <span className="muted">{formatNumber(candidateRows.length, props.lang)}</span>
+          <span className="muted">{formatNumber(candidateRows.length, props.lang)} / {formatNumber(candidateTotal, props.lang)}</span>
         </div>
+        {props.routePolicy?.candidate_truncated && <p className="panel-note inline-note">{props.t("route_candidates_truncated", "Showing a bounded route-candidate page to keep the control UI responsive.")}</p>}
         <div className="table-wrap">
           <table>
             <thead>
@@ -4174,6 +4577,8 @@ function routeCandidateReasonLabel(t: Translate, reason: string | undefined): st
       return t("no_usable_endpoint", "No usable endpoint");
     case "no_transit_next_hop":
       return t("no_transit_next_hop", "No transit next hop");
+    case "transit_import_disabled":
+      return t("transit_import_disabled", "Transit import disabled");
     case "import_prefix_denied":
       return t("import_prefix_denied", "Import prefix denied");
     case "export_prefix_denied":
@@ -4397,4 +4802,9 @@ function numberOrUndefined(value: string): number | undefined {
   }
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? Math.trunc(parsed) : undefined;
+}
+
+function nonNegativeNumberOrUndefined(value: string): number | undefined {
+  const parsed = numberOrUndefined(value);
+  return parsed == null ? undefined : Math.max(0, parsed);
 }

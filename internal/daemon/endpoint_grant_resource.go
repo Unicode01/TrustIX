@@ -25,6 +25,8 @@ const (
 	endpointGrantStateRevoked = "revoked"
 
 	endpointGrantPermissionDataSession = "data_session"
+
+	endpointGrantExpiryReaperInterval = 5 * time.Second
 )
 
 type endpointGrantPayload struct {
@@ -588,23 +590,54 @@ type closableSession struct {
 	session interface{ Close() error }
 }
 
+func (daemon *Daemon) endpointGrantExpiryReaper(ctx context.Context) {
+	ticker := time.NewTicker(endpointGrantExpiryReaperInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			dropped := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicy()
+			if dropped == 0 {
+				continue
+			}
+			_ = daemon.applyRuntimeDataplaneSnapshot(ctx)
+		}
+	}
+}
+
 func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicy() int {
+	return daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(time.Now().UTC())
+}
+
+func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(now time.Time) int {
 	type dropped struct {
 		session interface{ Close() error }
 		runtime *dataSessionRuntime
 	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
 	daemon.configMu.RLock()
 	grants, err := daemon.latestEndpointGrantsFromLogLocked()
+	localEndpoints := make(map[core.EndpointID]config.EndpointConfig, len(daemon.desired.Endpoints))
+	for _, endpoint := range daemon.desired.Endpoints {
+		if endpoint.Name != "" {
+			localEndpoints[endpoint.Name] = endpoint
+		}
+	}
 	daemon.configMu.RUnlock()
 	if err != nil {
-		return 0
+		grants = nil
 	}
 	droppedSessions := make([]dropped, 0)
-	now := time.Now().UTC()
 	daemon.dataMu.Lock()
 	for key, session := range daemon.dataSessions {
 		runtime := daemon.dataSessionState[key]
-		endpoint := runtimeEndpointConfig(runtime, key)
+		endpoint := runtimeEndpointGrantPolicyConfig(runtime, key, localEndpoints)
 		if endpoint.Name == "" || !daemon.endpointAccessRequiresGrant(endpoint) {
 			continue
 		}
@@ -631,6 +664,15 @@ func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicy() int {
 		}
 	}
 	return len(droppedSessions)
+}
+
+func runtimeEndpointGrantPolicyConfig(runtime *dataSessionRuntime, key dataSessionKey, localEndpoints map[core.EndpointID]config.EndpointConfig) config.EndpointConfig {
+	if key.Address == reverseSessionAddress {
+		if endpoint, ok := localEndpoints[key.Endpoint]; ok {
+			return endpoint
+		}
+	}
+	return runtimeEndpointConfig(runtime, key)
 }
 
 func runtimeEndpointConfig(runtime *dataSessionRuntime, key dataSessionKey) config.EndpointConfig {

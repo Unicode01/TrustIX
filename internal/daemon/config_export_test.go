@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -132,6 +133,32 @@ func TestConfigRestoreArchiveRejectsTrailingJSONEntryContent(t *testing.T) {
 	}
 }
 
+func TestConfigRestoreArchiveRejectsTooManyEntries(t *testing.T) {
+	var payload bytes.Buffer
+	gzipWriter := gzip.NewWriter(&payload)
+	tarWriter := tar.NewWriter(gzipWriter)
+	for i := 0; i <= maxConfigRestoreArchiveEntries; i++ {
+		if err := tarWriter.WriteHeader(&tar.Header{
+			Name:     fmt.Sprintf("dirs/%03d", i),
+			Typeflag: tar.TypeDir,
+			Mode:     0o700,
+			ModTime:  time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := parseConfigRestoreArchive(payload.Bytes()); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("parse oversized-entry archive err = %v, want entry limit", err)
+	}
+}
+
 func TestConfigRestoreArchiveRejectsSymlinkTarget(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
@@ -247,6 +274,12 @@ func TestConfigExportAPIRequiresAdminProofWhenEnabled(t *testing.T) {
 	}
 	if contentType := signedRecorder.Header().Get("Content-Type"); contentType != "application/gzip" {
 		t.Fatalf("content-type = %q, want application/gzip", contentType)
+	}
+	if cacheControl := signedRecorder.Header().Get("Cache-Control"); cacheControl != "no-store" {
+		t.Fatalf("cache-control = %q, want no-store", cacheControl)
+	}
+	if got := signedRecorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("x-content-type-options = %q, want nosniff", got)
 	}
 }
 

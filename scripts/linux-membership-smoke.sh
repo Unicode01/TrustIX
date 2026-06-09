@@ -6,6 +6,7 @@ WORKDIR="${TRUSTIX_MEMBERSHIP_SMOKE_WORKDIR:-$(mktemp -d /tmp/trustix-membership
 KEEP="${TRUSTIX_MEMBERSHIP_SMOKE_KEEP:-0}"
 BIN_DIR="${TRUSTIX_MEMBERSHIP_SMOKE_BIN_DIR:-$WORKDIR/bin}"
 PORT_BASE="${TRUSTIX_MEMBERSHIP_SMOKE_PORT_BASE:-$((26000 + (RANDOM % 20000)))}"
+PEER_POLL_INTERVAL="${TRUSTIX_MEMBERSHIP_SMOKE_PEER_POLL_INTERVAL:-1s}"
 
 API_A="${TRUSTIX_MEMBERSHIP_SMOKE_API_A:-}"
 API_B="${TRUSTIX_MEMBERSHIP_SMOKE_API_B:-}"
@@ -300,7 +301,7 @@ write_all_configs() {
   local a_import="$1"
   local c_export="$2"
   generate_config ix-a "$API_A" "$PEER_A" "$UDP_A" 10.0.0.0/24 10.0.0.1/24 "$PEER_B" "$(prefix_list_yaml "$a_import")" "$(prefix_list_yaml "")" "$WORKDIR/a.yaml"
-  generate_config ix-b "$API_B" "$PEER_B" "$UDP_B" 10.0.1.0/24 10.0.1.1/24 "$PEER_C" "$(prefix_list_yaml "")" "$(prefix_list_yaml "")" "$WORKDIR/b.yaml"
+  generate_config ix-b "$API_B" "$PEER_B" "$UDP_B" 10.0.1.0/24 10.0.1.1/24 "$PEER_A" "$(prefix_list_yaml "")" "$(prefix_list_yaml "")" "$WORKDIR/b.yaml"
   generate_config ix-c "$API_C" "$PEER_C" "$UDP_C" 10.0.2.0/24 10.0.2.1/24 "$PEER_B" "$(prefix_list_yaml "")" "$(prefix_list_yaml "$c_export")" "$WORKDIR/c.yaml"
 }
 
@@ -311,7 +312,7 @@ start_daemon() {
   local config_path="$4"
   local data_dir="$WORKDIR/state-$ix"
   mkdir -p "$data_dir"
-  "$TRUSTIXD" \
+  TRUSTIX_PEER_POLL_INTERVAL="$PEER_POLL_INTERVAL" "$TRUSTIXD" \
     -config "$config_path" \
     -data-dir "$data_dir" \
     -api "127.0.0.1:$api_port" \
@@ -486,16 +487,15 @@ main() {
   wait_api ix-b "$API_B"
   assert_data_dir_lock_rejects_duplicate ix-a "$API_A" "$PEER_A" "$WORKDIR/a.yaml"
 
-  log "waiting for ix-a to learn ix-b through bootstrap"
-  wait_grep "ix-a route to ix-b" "ctl $API_A routes" '"prefix": "10.0.1.0/24"' "$WORKDIR/a-routes-initial.json"
+  log "waiting for ix-a to observe ix-b as pending through bootstrap"
+  wait_grep "ix-a pending ix-b admission" "ctl $API_A admissions pending" '"ix_id": "ix-b"' "$WORKDIR/a-pending-ix-b.json"
+  ctl "$API_A" routes >"$WORKDIR/a-routes-before-b-approve.json"
+  assert_not_grep '"prefix": "10.0.1.0/24"' "$WORKDIR/a-routes-before-b-approve.json"
 
-  log "enabling chain admission by approving ix-b on ix-a"
-  admin_ctl "$API_A" admissions approve \
-    -ix ix-b \
-    -ix-cert "$WORKDIR/certs/ix-b.crt" \
-    -prefix 10.0.1.0/24 \
-    -route-auth "$WORKDIR/certs/ix-b-route.crt" \
-    -control-api "https://127.0.0.1:$PEER_B" >/dev/null
+  log "enabling chain admission by approving observed ix-b on ix-a"
+  admin_ctl "$API_A" admissions approve-pending ix-b -prefix 10.0.1.0/24 >/dev/null
+  wait_grep "ix-a route to ix-b after admission" "ctl $API_A routes" '"prefix": "10.0.1.0/24"' "$WORKDIR/a-routes-initial.json"
+  admin_ctl "$API_B" config rejoin "https://127.0.0.1:$PEER_A" ix-a >/dev/null
   wait_grep "ix-b synced chain admission mode" "ctl $API_B admissions" '"ix_id": "ix-b"' "$WORKDIR/b-admissions-after-b-approve.json"
 
   log "starting unapproved ix-c and waiting for pending admission"
@@ -518,6 +518,7 @@ main() {
   log "approving pending ix-c from observed advertisement"
   admin_ctl "$API_B" admissions approve-pending ix-c -prefix 10.0.2.0/24 >/dev/null
   wait_grep "ix-b admitted ix-c member" "ctl $API_B members" '"ix_id": "ix-c"' "$WORKDIR/b-members-after-c-approve.json"
+  admin_ctl "$API_A" config rejoin "https://127.0.0.1:$PEER_B" ix-b >/dev/null
   wait_grep "ix-a member ix-c through ix-b gossip" "ctl $API_A members" '"ix_id": "ix-c"' "$WORKDIR/a-members-initial.json"
   assert_not_grep '"prefix": "10.0.2.0/24"' "$WORKDIR/a-routes-initial.json"
 

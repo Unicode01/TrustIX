@@ -116,6 +116,36 @@ func TestKernelUDPTXRouteCacheValueABI(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPRouteGSOAsyncSpecRequestsSafeKfuncPath(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_SAFE_MODE", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_ASYNC_KFUNC", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "")
+
+	spec := dataplane.AttachSpec{ExperimentalTCPRouteGSOAsync: true}
+	if !experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec) {
+		t.Fatal("async route-GSO spec did not request async kfunc path")
+	}
+	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) {
+		t.Fatal("async route-GSO spec did not request route-GSO kfunc")
+	}
+	options := kernelUDPTXDirectProgramOptions{
+		ExperimentalTCPOnly:   true,
+		DirectOnly:            true,
+		RouteTCPGSOKfunc:      true,
+		RouteTCPGSOAsyncKfunc: true,
+	}
+	if !kernelUDPTunnelGSOEnabledForOptions(options) {
+		t.Fatal("async route-GSO options did not enable tunnel GSO")
+	}
+	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
+		t.Fatal("async route-GSO options did not enable active GSO")
+	}
+}
+
 func TestKernelUDPTXFlowValueABI(t *testing.T) {
 	if got := unsafe.Sizeof(kernelUDPTXFlowValue{}); got != kernelUDPTXFlowValueSize {
 		t.Fatalf("kernelUDPTXFlowValue size = %d, want %d", got, kernelUDPTXFlowValueSize)
@@ -938,6 +968,38 @@ func TestKernelModuleTIXTHeaderWritersUseNonZeroACK(t *testing.T) {
 	}
 }
 
+func TestKernelModuleTIXTRXStreamTailBypassesPlainDecap(t *testing.T) {
+	sourceBytes, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_kfuncs.c"))
+	if err != nil {
+		t.Fatalf("read datapath module C source: %v", err)
+	}
+	source := string(sourceBytes)
+	plainBody := sourceFunctionBody(t, source, "trustix_skb_kudp_rx_parse_plain")
+	if !strings.Contains(plainBody, "trustix_tixt_tcp_outer_has_stream_tail(skb, ip_len)") ||
+		!strings.Contains(plainBody, "return -EPROTONOSUPPORT;") {
+		t.Fatal("plain TIXT RX parser must reject TCP skbs that carry a stream tail")
+	}
+	wantedBody := sourceFunctionBody(t, source, "trustix_tixt_rx_stream_parse_wanted")
+	if !strings.Contains(wantedBody, "trustix_tixt_rx_tcp_outer_needs_stream_parse(skb)") {
+		t.Fatal("TIXT RX stream parser must be selected for TCP GSO/GRO stream candidates")
+	}
+	parseBody := sourceFunctionBody(t, source, "trustix_tixt_rx_stream_parse_frames")
+	if !strings.Contains(parseBody, "trustix_tixt_tcp_outer_has_stream_tail(skb, ip_len)") ||
+		!strings.Contains(parseBody, "payload_end = skb->len;") {
+		t.Fatal("TIXT RX stream parser must parse TCP stream tails through the skb payload end")
+	}
+	disableBody := sourceFunctionBody(t, source, "trustix_datapath_helpers_disable_panic_risk_params")
+	for _, forbidden := range []string{
+		"WRITE_ONCE(trustix_tixt_rx_stream_parse, false);",
+		"WRITE_ONCE(trustix_tixt_rx_stream_xmit_extra, false);",
+		"WRITE_ONCE(trustix_tixt_rx_stream_gso_xmit, false);",
+	} {
+		if strings.Contains(disableBody, forbidden) {
+			t.Fatalf("safe TIXT RX stream parameter is still forcibly disabled: %s", forbidden)
+		}
+	}
+}
+
 func TestTrustIXCryptoTCKfuncSetIsCryptoOnly(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "trustix_crypto", "trustix_crypto.c"))
 	if err != nil {
@@ -1070,7 +1132,7 @@ func TestTrustIXDatapathHelpersOwnsSKBAndRouteHeaderKfuncs(t *testing.T) {
 		"trustix_route_tcp_xmit_worker_scheduled",
 		"skb_queue_head_init(&trustix_route_tcp_xmit_worker_queue)",
 		"__skb_queue_tail(&trustix_route_tcp_xmit_worker_queue",
-		"trustix_tixt_tx_route_tcp_steal_safe",
+		"skb_clone(skb, GFP_ATOMIC)",
 		"trustix_route_tcp_xmit_worker_flush()",
 		"trustix_route_tcp_gso_async_flush()",
 		"trustix_tixt_rx_single_coalesce_gso_set",
@@ -1085,10 +1147,13 @@ func TestTrustIXDatapathHelpersOwnsSKBAndRouteHeaderKfuncs(t *testing.T) {
 	if bytes.Contains(helperSource, []byte("module_param_named(tixt_rx_single_coalesce_gso")) {
 		t.Fatal("tixt_rx_single_coalesce_gso must drain stale RX coalesce state through its custom setter")
 	}
-	if bytes.Contains(helperSource, []byte("struct trustix_route_tcp_xmit_item")) ||
-		bytes.Contains(helperSource, []byte("kzalloc(sizeof(*item)")) ||
-		bytes.Contains(helperSource, []byte("kfree(item)")) {
+	if bytes.Contains(xmitBody, []byte("struct trustix_route_tcp_xmit_item")) ||
+		bytes.Contains(xmitBody, []byte("kzalloc(sizeof(*item)")) ||
+		bytes.Contains(xmitBody, []byte("kfree(item)")) {
 		t.Fatal("trustix_datapath_helpers route TCP xmit worker should queue skbs without per-packet worker item allocation")
+	}
+	if bytes.Contains(helperSource, []byte("trustix_tixt_tx_route_tcp_steal_safe")) {
+		t.Fatal("trustix_datapath_helpers route TCP xmit worker must not steal the TC-owned skb")
 	}
 	if !bytes.Contains(helperSource, []byte("register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS")) {
 		t.Fatal("trustix_datapath_helpers helper kfuncs are not registered for TC")
@@ -5112,10 +5177,66 @@ func TestExperimentalTCPTXPlaintextDirectFallsBackToListenerSource(t *testing.T)
 	}
 }
 
+func TestExperimentalTCPTXPlaintextDirectMultiFlowKeepsSingleRouteFlowByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
+	manager := NewManager()
+	manager.snapshot = dataplane.Snapshot{
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        core.EndpointID("ix-b-tixt"),
+			Peer:      core.IXID("ix-b"),
+			Transport: "experimental_tcp",
+			Enabled:   true,
+			Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+		}},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		34: {
+			ID:              34,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "192.0.2.1:42034",
+			RemoteAddress:   "198.51.100.34:18001",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+		33: {
+			ID:              33,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "192.0.2.1:42033",
+			RemoteAddress:   "198.51.100.33:18001",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+		35: {
+			ID:              35,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "192.0.2.1:42035",
+			RemoteAddress:   "198.51.100.35:18001",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+	}
+	route := routing.Route{
+		Prefix:   core.Prefix("10.47.0.0/16"),
+		NextHop:  core.IXID("ix-b"),
+		Endpoint: core.EndpointID("ix-b-tixt"),
+	}
+
+	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, false, kernelUDPTXRouteMaxFlows)
+	if len(flows) != 1 {
+		t.Fatalf("plaintext direct default route flows = %d, want one safe flow: %+v", len(flows), flows)
+	}
+	if flows[0].id != 33 {
+		t.Fatalf("plaintext direct default route flow id = %d, want stable flow 33", flows[0].id)
+	}
+}
+
 func TestExperimentalTCPTXPlaintextDirectMultiFlowKeepsStableFlowSet(t *testing.T) {
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{{
@@ -5173,6 +5294,7 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowPrefersOutboundFlowOverListene
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -5244,6 +5366,7 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowCanPreferListenerSource(t *tes
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PREFER_LISTENER_SOURCE", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
@@ -6208,6 +6331,37 @@ func TestKernelUDPTXDirectActiveGSODefaultsOnForDirectOnly(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPRouteTCPGSOKfuncEnablesSafeActiveGSO(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "0")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
+
+	withoutRouteKfunc := kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, ExperimentalTCPOnly: true}
+	if kernelUDPTunnelGSOEnabledForOptions(withoutRouteKfunc) {
+		t.Fatal("experimental_tcp route-GSO env enabled tunnel-GSO without an available route GSO kfunc")
+	}
+	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(withoutRouteKfunc) {
+		t.Fatal("experimental_tcp route-GSO env enabled active-GSO without an available route GSO kfunc")
+	}
+
+	withRouteKfunc := withoutRouteKfunc
+	withRouteKfunc.RouteTCPGSOKfunc = true
+	if !kernelUDPTunnelGSOEnabledForOptions(withRouteKfunc) {
+		t.Fatal("experimental_tcp route-GSO kfunc should enable tunnel-GSO packet handling")
+	}
+	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(withRouteKfunc) {
+		t.Fatal("experimental_tcp route-GSO kfunc should enable active GSO input without unsafe active-GSO ack")
+	}
+
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "0")
+	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(withRouteKfunc) {
+		t.Fatal("explicit active-GSO disable should still override route-GSO sync")
+	}
+}
+
 func TestKernelUDPTXDirectKernelUDPOnlyDefaultsNoChecksumReset(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_NO_CSUM_RESET", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "0")
@@ -6245,11 +6399,11 @@ func TestExperimentalTCPActiveGSOAllowsSafeFinalizeFlowMode(t *testing.T) {
 		t.Fatal("experimental_tcp active-GSO should stay disabled without unsafe ack")
 	}
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
-	if !experimentalTCPTXDirectSafeActiveGSOEnabledForOptions(options) {
-		t.Fatal("experimental_tcp active-GSO ignored the finalize-flow kfunc path with unsafe ack")
+	if experimentalTCPTXDirectSafeActiveGSOEnabledForOptions(options) {
+		t.Fatal("experimental_tcp active-GSO accepted unsafe ack after production hard-disable")
 	}
-	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
-		t.Fatal("experimental_tcp active-GSO did not enable with unsafe ack")
+	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
+		t.Fatal("experimental_tcp active-GSO enabled after production hard-disable")
 	}
 	options.PushRouteTCPHeaderKfunc = true
 	if experimentalTCPTXDirectSafeActiveGSOEnabledForOptions(options) {
@@ -6272,11 +6426,11 @@ func TestExperimentalTCPActiveGSORequiresUnsafeAck(t *testing.T) {
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
-	if !experimentalTCPTXDirectActiveGSOUnsafeEnabled() {
-		t.Fatal("experimental_tcp active GSO unsafe flag ignored explicit ack")
+	if experimentalTCPTXDirectActiveGSOUnsafeEnabled() {
+		t.Fatal("experimental_tcp active GSO unsafe flag accepted explicit ack after production hard-disable")
 	}
-	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
-		t.Fatal("experimental_tcp unsafe active-GSO did not enable after explicit unsafe ack")
+	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
+		t.Fatal("experimental_tcp unsafe active-GSO enabled after production hard-disable")
 	}
 }
 
@@ -6521,7 +6675,7 @@ func TestLANOffloadProtectionPreservesKernelUDPDirectGSOByDefault(t *testing.T) 
 	}
 }
 
-func TestKernelUDPTXDirectSafeModeDisablesImplicitGSOAndRouteTCPKfuncs(t *testing.T) {
+func TestKernelUDPTXDirectSafeModeDisablesImplicitGSOButAllowsExplicitRouteTCPKfuncs(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "")
@@ -6535,11 +6689,11 @@ func TestKernelUDPTXDirectSafeModeDisablesImplicitGSOAndRouteTCPKfuncs(t *testin
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
 		t.Fatal("safe direct mode should disable implicit active-GSO")
 	}
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("safe direct mode should block experimental_tcp route TCP GSO kfunc")
+	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("safe direct mode should allow explicit experimental_tcp route TCP GSO kfunc")
 	}
-	if experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("safe direct mode should block experimental_tcp route TCP xmit kfunc")
+	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("safe direct mode should allow explicit experimental_tcp route TCP clone-worker xmit kfunc")
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "1")
@@ -6558,6 +6712,7 @@ func TestKernelUDPTXDirectSafeModeAllowsExplicitLinearDirectProgram(t *testing.T
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_HOT_STATS", "1")
 	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "safe_linear_direct")
 	defer statsMap.Close()
 	defer routeMap.Close()
@@ -7026,29 +7181,34 @@ func TestExperimentalTCPTXDirectRouteTCPGSOKfuncIsExplicitOptIn(t *testing.T) {
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc should require the crash-risk route TCP ack")
+	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("experimental_tcp route TCP GSO kfunc was not requested after safe sync opt-in")
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ROUTE_TCP_KFUNCS", "1")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc accepted legacy unsafe ack after watchdog crashes")
+	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("experimental_tcp route TCP GSO kfunc should ignore legacy unsafe ack and keep safe sync opt-in")
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "1")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP async GSO kfunc should require its own crash-risk ack after virtio watchdog")
+	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("experimental_tcp route TCP GSO kfunc should stay requested while async stays separately gated")
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC", "1")
 	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc should accept async opt-in with crash-risk ack")
+		t.Fatal("experimental_tcp route TCP GSO kfunc should not depend on async crash-risk ack")
+	}
+
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("experimental_tcp route TCP async GSO opt-in should request the route GSO kfunc")
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "0")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT", "1")
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc was not requested after crash-risk opt-in")
+	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("experimental_tcp route TCP GSO kfunc accepted unrelated crash-risk opt-in without explicit GSO request")
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "0")
@@ -7057,8 +7217,67 @@ func TestExperimentalTCPTXDirectRouteTCPGSOKfuncIsExplicitOptIn(t *testing.T) {
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC_REQUIRED", "1")
+	if experimentalTCPTXDirectRouteTCPGSOKfuncRequired() {
+		t.Fatal("experimental_tcp route TCP GSO kfunc required flag should require the route GSO kfunc request")
+	}
+
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
 	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequired() {
 		t.Fatal("experimental_tcp route TCP GSO kfunc required flag was not detected")
+	}
+}
+
+func TestExperimentalTCPTXDirectRouteTCPGSOKfuncCanFollowAttachSpec(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY", "")
+
+	spec := dataplane.AttachSpec{
+		ExperimentalTCPTXDirect:          true,
+		ExperimentalTCPRouteGSOSync:      true,
+		ExperimentalTCPRouteXmitWorker:   true,
+		ExperimentalTCPPlainSkipSequence: true,
+		ExperimentalTCPPlainACKOnly:      true,
+	}
+	if !experimentalTCPTXDirectEnabledForSpec(spec) {
+		t.Fatal("attach spec did not enable experimental_tcp TX direct")
+	}
+	if !kernelUDPTXDirectProgramEnabledForSpec(spec) {
+		t.Fatal("attach spec did not enable the TX direct program")
+	}
+	if !kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec) || kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec) {
+		t.Fatal("attach spec should request experimental_tcp-only direct program")
+	}
+	if !experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec) {
+		t.Fatal("route-GSO sync spec did not request route TCP header kfunc")
+	}
+	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) {
+		t.Fatal("route-GSO sync spec did not request route TCP GSO kfunc")
+	}
+	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec) {
+		t.Fatal("route-GSO sync spec did not request route TCP clone-worker xmit kfunc")
+	}
+	if !experimentalTCPTXPlainSkipSequenceEnabledForSpec(spec) || !experimentalTCPTXPlainACKOnlyEnabledForSpec(spec) {
+		t.Fatal("route-GSO sync spec did not enable plaintext fast flags")
+	}
+
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "0")
+	if experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) {
+		t.Fatal("explicit route TCP GSO kfunc disable should override attach spec")
+	}
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "0")
+	if experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec) {
+		t.Fatal("explicit route TCP header kfunc disable should override attach spec")
+	}
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
+	if experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec) {
+		t.Fatal("explicit route TCP clone-worker xmit kfunc disable should override attach spec")
 	}
 }
 
@@ -7086,23 +7305,23 @@ func TestExperimentalTCPTXDirectRouteTCPXmitKfuncIsExplicitOptIn(t *testing.T) {
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "1")
-	if experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP xmit kfunc should require the crash-risk route TCP ack")
+	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("experimental_tcp route TCP clone-worker xmit kfunc was not requested after explicit opt-in")
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ROUTE_TCP_KFUNCS", "1")
-	if experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP xmit kfunc accepted legacy unsafe ack after watchdog crashes")
+	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("experimental_tcp route TCP clone-worker xmit kfunc should ignore legacy unsafe ack and keep explicit opt-in")
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT", "1")
 	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP xmit kfunc was not requested after crash-risk opt-in")
+		t.Fatal("experimental_tcp route TCP clone-worker xmit kfunc should ignore crash-risk ack and keep explicit opt-in")
 	}
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC_REQUIRED", "1")
 	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequired() {
-		t.Fatal("experimental_tcp route TCP xmit kfunc required flag was not detected")
+		t.Fatal("experimental_tcp route TCP clone-worker xmit kfunc required flag was not detected")
 	}
 }
 
@@ -7119,6 +7338,114 @@ func TestExperimentalTCPTXDirectPreOuterInnerChecksumDefaultsOffForRouteTCPKfunc
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "1")
 	if !experimentalTCPTXDirectPreOuterInnerChecksumEnabled() {
 		t.Fatal("explicit pre-outer inner checksum enable should be honored")
+	}
+}
+
+func TestExperimentalTCPTXDirectPreOuterInnerChecksumDefaultsOffForRouteTCPGSOOptions(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "")
+	options := kernelUDPTXDirectProgramOptions{
+		ExperimentalTCPOnly:     true,
+		DirectOnly:              true,
+		PushRouteTCPHeaderKfunc: true,
+		RouteTCPGSOKfunc:        true,
+	}
+	if experimentalTCPTXDirectPreOuterInnerChecksumEnabledForOptions(options) {
+		t.Fatal("route TCP GSO options should disable pre-outer inner checksum by default")
+	}
+
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "1")
+	if !experimentalTCPTXDirectPreOuterInnerChecksumEnabledForOptions(options) {
+		t.Fatal("explicit pre-outer inner checksum enable should override route TCP GSO options")
+	}
+}
+
+func TestRouteTCPGSOSyncKfuncFixesInnerL4Checksum(t *testing.T) {
+	sourcePath := filepath.Join("..", "..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_kfuncs.c")
+	payload, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read datapath helpers source: %v", err)
+	}
+	source := string(payload)
+	helper := sourceFunctionBody(t, source, "trustix_tixt_tx_fix_inner_l4_csum")
+	for _, needle := range []string{
+		"IPPROTO_TCP",
+		"IPPROTO_UDP",
+		"skb_checksum",
+		"csum_tcpudp_magic",
+		"trustix_skb_clear_csum_metadata",
+	} {
+		if !strings.Contains(helper, needle) {
+			t.Fatalf("inner L4 checksum helper missing %q", needle)
+		}
+	}
+	for _, name := range []string{
+		"trustix_kernel_skb_tixt_tx_push_route_tcp_header",
+		"trustix_tixt_tx_prepare_route_tcp_snapshot",
+	} {
+		body := sourceFunctionBody(t, source, name)
+		if !strings.Contains(body, "trustix_tixt_tx_fix_inner_l4_csum") {
+			t.Fatalf("%s does not fix inner L4 checksum before route TCP transmit", name)
+		}
+	}
+	syncBody := sourceFunctionBody(t, source, "trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_sync")
+	for _, needle := range []string{"sync_async_redirects", "trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async"} {
+		if !strings.Contains(syncBody, needle) {
+			t.Fatalf("route TCP GSO sync body missing %q", needle)
+		}
+	}
+	for _, forbidden := range []string{"trustix_tixt_tx_gso_segment_inner", "trustix_tixt_tx_prepare_one_segment", "dev_queue_xmit"} {
+		if strings.Contains(syncBody, forbidden) {
+			t.Fatalf("route TCP GSO sync body must redirect to the worker before %q", forbidden)
+		}
+	}
+	streamLimitBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_sync_stream_max_frames_value")
+	if !strings.Contains(streamLimitBody, "TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_FRAMES") {
+		t.Fatal("route TCP GSO sync stream max_frames must clamp to the sync stack-array size")
+	}
+	streamBody := sourceFunctionBody(t, source, "trustix_tixt_tx_route_gso_sync_try_stream")
+	if !strings.Contains(streamBody, "frame_count < ARRAY_SIZE(frames)") {
+		t.Fatal("route TCP GSO sync stream loop must guard frame_count with ARRAY_SIZE(frames)")
+	}
+	segmentBody := sourceFunctionBody(t, source, "trustix_tixt_tx_gso_segment_inner")
+	if !strings.Contains(segmentBody, "skb_gso_segment") {
+		t.Fatal("route TCP GSO segment helper does not call skb_gso_segment")
+	}
+	if !strings.Contains(source, "route_tcp_gso_sync_async_redirects") {
+		t.Fatal("route TCP GSO sync redirects must be observable")
+	}
+}
+
+func sourceFunctionBody(t *testing.T, source string, name string) string {
+	t.Helper()
+	offset := 0
+	for {
+		start := strings.Index(source[offset:], name+"(")
+		if start < 0 {
+			t.Fatalf("function %s not found", name)
+		}
+		start += offset
+		openRel := strings.Index(source[start:], "{")
+		if openRel < 0 {
+			t.Fatalf("function %s has no body", name)
+		}
+		open := start + openRel
+		if semiRel := strings.Index(source[start:open], ";"); semiRel >= 0 {
+			offset = open + 1
+			continue
+		}
+		depth := 0
+		for i := open; i < len(source); i++ {
+			switch source[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					return source[open : i+1]
+				}
+			}
+		}
+		t.Fatalf("function %s body is not closed", name)
 	}
 }
 
@@ -8189,6 +8516,23 @@ func instructionsContainReference(instructions asm.Instructions, reference strin
 	return false
 }
 
+func instructionsContainReferenceAfterSymbol(instructions asm.Instructions, symbol string, reference string, limit int) bool {
+	start := instructionSymbolIndex(instructions, symbol)
+	if start < 0 {
+		return false
+	}
+	end := len(instructions)
+	if limit > 0 && start+limit+1 < end {
+		end = start + limit + 1
+	}
+	for _, ins := range instructions[start+1 : end] {
+		if ins.Reference() == reference {
+			return true
+		}
+	}
+	return false
+}
+
 func instructionSymbolIndex(instructions asm.Instructions, symbol string) int {
 	for i, ins := range instructions {
 		if ins.Symbol() == symbol {
@@ -8222,6 +8566,88 @@ func duplicateInstructionSymbols(instructions asm.Instructions) []string {
 	}
 	sort.Strings(duplicates)
 	return duplicates
+}
+
+func unreachableInstructionIndexes(instructions asm.Instructions) []int {
+	if len(instructions) == 0 {
+		return nil
+	}
+	labels := make(map[string]int)
+	for i, ins := range instructions {
+		if symbol := ins.Symbol(); symbol != "" {
+			labels[symbol] = i
+		}
+	}
+	reachable := make([]bool, len(instructions))
+	stack := []int{0}
+	push := func(index int) {
+		if index >= 0 && index < len(instructions) && !reachable[index] {
+			stack = append(stack, index)
+		}
+	}
+	pushRef := func(current int, ref string) {
+		if ref == "" {
+			push(current + 1 + int(instructions[current].Offset))
+			return
+		}
+		if target, ok := labels[ref]; ok {
+			push(target)
+		}
+	}
+	for len(stack) > 0 {
+		index := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if index < 0 || index >= len(instructions) || reachable[index] {
+			continue
+		}
+		reachable[index] = true
+		ins := instructions[index]
+		class := ins.OpCode.Class()
+		if class != asm.JumpClass && class != asm.Jump32Class {
+			push(index + 1)
+			continue
+		}
+		switch ins.OpCode.JumpOp() {
+		case asm.Exit:
+			continue
+		case asm.Call:
+			push(index + 1)
+		case asm.Ja:
+			pushRef(index, ins.Reference())
+		default:
+			pushRef(index, ins.Reference())
+			push(index + 1)
+		}
+	}
+	var unreachable []int
+	for i := range instructions {
+		if !reachable[i] {
+			unreachable = append(unreachable, i)
+		}
+	}
+	return unreachable
+}
+
+func describeInstructionIndexes(instructions asm.Instructions, indexes []int, limit int) string {
+	if len(indexes) == 0 {
+		return ""
+	}
+	if limit <= 0 || limit > len(indexes) {
+		limit = len(indexes)
+	}
+	parts := make([]string, 0, limit+1)
+	for _, index := range indexes[:limit] {
+		if index < 0 || index >= len(instructions) {
+			parts = append(parts, fmt.Sprintf("%d:<out-of-range>", index))
+			continue
+		}
+		ins := instructions[index]
+		parts = append(parts, fmt.Sprintf("%d:%s sym=%q ref=%q", index, ins.OpCode, ins.Symbol(), ins.Reference()))
+	}
+	if len(indexes) > limit {
+		parts = append(parts, fmt.Sprintf("... %d more", len(indexes)-limit))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func instructionsContainKfuncCall(instructions asm.Instructions) bool {
@@ -8453,7 +8879,15 @@ func instructionsStoreImmNearSymbol(instructions asm.Instructions, symbol string
 		if ins.Symbol() != symbol {
 			continue
 		}
-		for j := i; j < len(instructions) && j-i <= limit; j++ {
+		start := i - limit
+		if start < 0 {
+			start = 0
+		}
+		end := i + limit
+		if end >= len(instructions) {
+			end = len(instructions) - 1
+		}
+		for j := start; j <= end; j++ {
 			candidate := instructions[j]
 			if candidate.OpCode.Class().IsStore() &&
 				candidate.OpCode.Mode() == asm.MemMode &&
@@ -9198,6 +9632,69 @@ func TestIngressFastPathProgramLoadsWithExperimentalTCPTrustedInnerChecksum(t *t
 	program, err := loadIngressFastPathProgram("trustix_ingress_exp_trusted_csum_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
 	if err != nil {
 		t.Fatalf("load ingress fast path experimental_tcp trusted-checksum direct-only program: %v", err)
+	}
+	defer program.Close()
+}
+
+func TestIngressFastPathProgramLoadsWithExperimentalTCPRouteGSOAndXmitKfuncs(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("ingress fast path verifier test requires Linux")
+	}
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	if err := rlimit.RemoveMemlock(); err != nil {
+		t.Skipf("raise memlock limit for BPF verifier test: %v", err)
+	}
+	statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap := newIngressFastPathTestMaps(t)
+	defer statsMap.Close()
+	defer packetPolicyMap.Close()
+	defer routeMap.Close()
+	defer kernelUDPTXRouteMap.Close()
+	defer kernelUDPTXFlowMap.Close()
+	defer natConfigMap.Close()
+	defer natSourceMap.Close()
+	defer natRouteMap.Close()
+	defer natExcludeMap.Close()
+	defer captureMap.Close()
+
+	routeKfuncCall, err := loadSKBTIXTTXPushRouteTCPHeaderKfuncCall()
+	if err != nil {
+		t.Fatalf("load route TCP header-push kfunc metadata: %v", err)
+	}
+	gsoKfuncCall, err := loadSKBTIXTTXSegmentRouteTCPGSOKfuncCall()
+	if err != nil {
+		t.Fatalf("load route TCP GSO kfunc metadata: %v", err)
+	}
+	xmitKfuncCall, err := loadSKBTIXTTXRouteTCPXmitKfuncCall()
+	if err != nil {
+		t.Fatalf("load route TCP xmit kfunc metadata: %v", err)
+	}
+	program, err := loadIngressFastPathProgram(
+		"trustix_ingress_exp_route_gso_xmit_test",
+		statsMap,
+		packetPolicyMap,
+		routeMap,
+		kernelUDPTXRouteMap,
+		kernelUDPTXFlowMap,
+		natConfigMap,
+		natSourceMap,
+		natRouteMap,
+		natExcludeMap,
+		captureMap,
+		kernelUDPTXDirectProgramOptions{
+			Enabled:                     true,
+			ExperimentalTCPOnly:         true,
+			DirectOnly:                  true,
+			PushRouteTCPHeaderKfunc:     true,
+			PushRouteTCPHeaderKfuncCall: routeKfuncCall,
+			RouteTCPGSOKfunc:            true,
+			RouteTCPGSOKfuncCall:        gsoKfuncCall,
+			RouteTCPXmitKfunc:           true,
+			RouteTCPXmitKfuncCall:       xmitKfuncCall,
+		},
+	)
+	if err != nil {
+		t.Fatalf("load ingress fast path experimental_tcp route-GSO + xmit kfunc program: %v", err)
 	}
 	defer program.Close()
 }
@@ -10079,6 +10576,22 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesPushRouteTCPHeaderKfuncWhenAvai
 	if !instructionsContainKfuncCall(out) {
 		t.Fatal("experimental_tcp direct-only TX program did not emit route TCP header-push kfunc call")
 	}
+	routeKfuncIndex := instructionSymbolIndex(out, "kudp_tx_direct_push_route_outer_tcp_header_kfunc")
+	if routeKfuncIndex < 0 {
+		t.Fatal("experimental_tcp route TCP header-push kfunc label is missing")
+	}
+	routeKfuncGuard := out[routeKfuncIndex]
+	if !routeKfuncGuard.OpCode.Class().IsLoad() ||
+		routeKfuncGuard.OpCode.Mode() != asm.MemMode ||
+		routeKfuncGuard.Dst != asm.R4 ||
+		routeKfuncGuard.Src != asm.R0 ||
+		routeKfuncGuard.Offset != 72 ||
+		routeKfuncGuard.OpCode.Size() != asm.Word {
+		t.Fatal("experimental_tcp route TCP header-push kfunc is not guarded by route flow_mask")
+	}
+	if !instructionsContainJump(out, "kudp_tx_direct_push_route_outer_tcp_header_kfunc", "kudp_tx_direct_inline_route_unsupported") {
+		t.Fatal("experimental_tcp route TCP header-push kfunc does not fallback for multi-flow inline routes")
+	}
 	if instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPTrustInnerCSUM)) {
 		t.Fatal("experimental_tcp route TCP header-push path should compute a full outer TCP checksum by default")
 	}
@@ -10087,6 +10600,8 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesPushRouteTCPHeaderKfuncWhenAvai
 func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPGSOKfuncWhenAvailable(t *testing.T) {
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_HOT_STATS", "1")
 	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_gso_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
@@ -10116,11 +10631,22 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPGSOKfuncWhenAvailable(t
 	if !instructionsContainLoadMemInto(out, asm.R4, asm.R6, skbGSOSizeOffset, asm.Word) {
 		t.Fatalf("experimental_tcp route TCP GSO path does not read skb gso_size offset %d", skbGSOSizeOffset)
 	}
-	if !instructionsContainImmJumpTo(out, 0, "kudp_tx_direct_push_route_outer_tcp_header_kfunc") {
-		t.Fatal("experimental_tcp route TCP GSO path does not send linear skbs through the route header-push kfunc")
+	if !instructionsContainSymbol(out, "kudp_tx_direct_gso_active_accept_counter_done") {
+		t.Fatal("experimental_tcp route TCP GSO path does not accept active GSO input before the route kfunc")
 	}
-	if !instructionsContainSymbol(out, "kudp_tx_direct_push_route_outer_tcp_header_kfunc") {
-		t.Fatal("experimental_tcp route TCP GSO path does not include the linear route header-push fallback")
+	if !instructionsContainImmJumpTo(out, 0, "kudp_tx_direct_route_tcp_linear_kfunc") {
+		t.Fatal("experimental_tcp route TCP GSO path does not send linear skbs through the safe route TCP kfunc fallback")
+	}
+	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_linear_kfunc") ||
+		!instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_linear_success_counter_done") {
+		t.Fatal("experimental_tcp route TCP GSO path missing safe linear route TCP kfunc fallback")
+	}
+	if !instructionsContainJump(out, "kudp_tx_direct_route_tcp_linear_kfunc", "kudp_tx_direct_fallback") {
+		t.Fatal("experimental_tcp route TCP GSO linear kfunc fallback should fall back to userspace when the kfunc cannot handle the skb")
+	}
+	if instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_xmit_stolen") ||
+		instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_xmit_queued") {
+		t.Fatal("experimental_tcp route TCP GSO path emitted route TCP xmit-only result blocks without the xmit kfunc")
 	}
 	if !instructionsContainKfuncCall(out) {
 		t.Fatal("experimental_tcp route TCP GSO path did not emit a kfunc call")
@@ -10137,22 +10663,57 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPGSOKfuncWhenAvailable(t
 	if duplicates := duplicateInstructionSymbols(out); len(duplicates) > 0 {
 		t.Fatalf("duplicate instruction symbols: %v", duplicates)
 	}
+	if unreachable := unreachableInstructionIndexes(out); len(unreachable) > 0 {
+		t.Fatalf("route TCP GSO path emitted verifier-unreachable instructions: %s", describeInstructionIndexes(out, unreachable, 8))
+	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPRouteGSOAsyncAllowsActiveGSO(t *testing.T) {
+func TestKernelUDPTXDirectExperimentalTCPRouteGSOAsyncHasNoUnreachableInstructions(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM", "1")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_gso_async_reach")
+	defer statsMap.Close()
+	defer routeMap.Close()
+	defer flowMap.Close()
+	routeKfuncCall, err := loadSKBTIXTTXPushRouteTCPHeaderKfuncCall()
+	if err != nil {
+		t.Fatalf("load route TCP header-push kfunc metadata: %v", err)
+	}
+	gsoKfuncCall, err := loadSKBTIXTTXSegmentRouteTCPGSOKfuncCall()
+	if err != nil {
+		t.Fatalf("load route TCP GSO kfunc metadata: %v", err)
+	}
+	out := appendKernelUDPTXDirect(
+		asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1), asm.LoadMem(asm.R7, asm.R6, skbDataOffset, asm.Word), asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word)},
+		statsMap,
+		routeMap,
+		flowMap,
+		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall, RouteTCPGSOAsyncKfunc: true},
+	)
+	if unreachable := unreachableInstructionIndexes(out); len(unreachable) > 0 {
+		t.Fatalf("route TCP async GSO path emitted verifier-unreachable instructions: %s", describeInstructionIndexes(out, unreachable, 8))
+	}
+}
+
+func TestKernelUDPTXDirectExperimentalTCPRouteGSOAsyncCannotEnableActiveGSO(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC", "1")
 
 	options := kernelUDPTXDirectProgramOptions{ExperimentalTCPOnly: true, DirectOnly: true}
+	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
+		t.Fatal("route TCP async GSO opt-in enabled active-GSO without an available route GSO kfunc")
+	}
+	options.RouteTCPGSOKfunc = true
 	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
-		t.Fatal("route TCP async GSO opt-in should allow experimental_tcp active-GSO only with async crash-risk ack")
+		t.Fatal("route TCP async GSO opt-in should allow active-GSO when the route GSO kfunc is available")
 	}
 }
 
 func TestKernelUDPTXDirectExperimentalTCPRouteGSOEnvCombinationEmitsRouteKfuncBeforeAdjustRoom(t *testing.T) {
-	t.Skip("route TCP GSO kfunc performs skb_gso_segment/dev_queue_xmit from TC context and is hard-disabled after kernel crashes")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
@@ -10160,11 +10721,8 @@ func TestKernelUDPTXDirectExperimentalTCPRouteGSOEnvCombinationEmitsRouteKfuncBe
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "1")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "1")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ACTIVE_GSO_UNSAFE", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
@@ -10191,6 +10749,12 @@ func TestKernelUDPTXDirectExperimentalTCPRouteGSOEnvCombinationEmitsRouteKfuncBe
 		PushRouteTCPHeaderKfuncCall: routeKfuncCall,
 		RouteTCPGSOKfunc:            gsoKfuncCall.IsKfuncCall() && experimentalTCPTXDirectRouteTCPGSOKfuncRequested(),
 		RouteTCPGSOKfuncCall:        gsoKfuncCall,
+	}
+	if !kernelUDPTunnelGSOEnabledForOptions(options) {
+		t.Fatal("route-GSO sync environment did not enable tunnel-GSO handling")
+	}
+	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
+		t.Fatal("route-GSO sync environment did not enable active GSO input")
 	}
 	out := appendKernelUDPTXDirect(
 		asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1), asm.LoadMem(asm.R7, asm.R6, skbDataOffset, asm.Word), asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word)},
@@ -10265,6 +10829,13 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPXmitKfuncWhenAvailable(
 		flowMap,
 		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall, RouteTCPXmitKfunc: true, RouteTCPXmitKfuncCall: xmitKfuncCall},
 	)
+	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_kfunc") ||
+		!instructionsContainSymbol(out, "kudp_tx_direct_segment_route_tcp_gso_stolen") {
+		t.Fatal("experimental_tcp route TCP xmit path must preserve the route-GSO branch for GSO skbs")
+	}
+	if !instructionsContainImmJumpTo(out, 0, "kudp_tx_direct_route_tcp_xmit_kfunc_prepare") {
+		t.Fatal("experimental_tcp route TCP xmit path should only take linear skbs from the GSO-size gate")
+	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_xmit_stolen") {
 		t.Fatal("experimental_tcp direct-only TX program does not recognize route TCP xmit kfunc stolen sentinel")
 	}
@@ -10276,6 +10847,28 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPXmitKfuncWhenAvailable(
 	}
 	if !instructionsContainImm(out, int64(experimentalTCPTXRouteXmitQueued)) {
 		t.Fatal("experimental_tcp route TCP xmit path does not recognize the worker queued sentinel")
+	}
+	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_gso_redirect") ||
+		!instructionsContainReferenceAfterSymbol(out, "kudp_tx_direct_route_tcp_kfunc", "kudp_tx_direct_route_tcp_gso_redirect", 32) {
+		t.Fatal("experimental_tcp route TCP xmit path must redirect positive route-GSO kfunc returns instead of dropping them")
+	}
+	routeIndex := instructionSymbolIndex(out, "kudp_tx_direct_route_tcp_kfunc")
+	xmitPrepareIndex := instructionSymbolIndex(out, "kudp_tx_direct_route_tcp_xmit_kfunc_prepare")
+	if routeIndex < 0 || xmitPrepareIndex < 0 || routeIndex >= xmitPrepareIndex {
+		t.Fatalf("route TCP GSO/xmit block order is invalid: routeIndex=%d xmitPrepareIndex=%d", routeIndex, xmitPrepareIndex)
+	}
+	for i := routeIndex; i < xmitPrepareIndex; i++ {
+		if out[i].OpCode.Class() == asm.JumpClass &&
+			out[i].OpCode.JumpOp() == asm.Ja &&
+			out[i].Reference() == "kudp_tx_direct_adjust_drop" {
+			t.Fatal("experimental_tcp route TCP xmit path still drops positive route-GSO kfunc returns")
+		}
+	}
+	if !instructionsContainReferenceAfterSymbol(out, "kudp_tx_direct_route_tcp_xmit_fallback", "kudp_tx_direct_route_tcp_linear_kfunc", 16) {
+		t.Fatal("experimental_tcp route TCP xmit fallback does not return to the safe linear route TCP kfunc")
+	}
+	if unreachable := unreachableInstructionIndexes(out); len(unreachable) > 0 {
+		t.Fatalf("route TCP xmit path emitted verifier-unreachable instructions: %s", describeInstructionIndexes(out, unreachable, 8))
 	}
 }
 
@@ -10339,8 +10932,8 @@ func TestKernelUDPTXDirectExperimentalTCPPathRouteTCPGSOKfuncCanTrustPartialInne
 	if !instructionsStoreImmNearSymbol(out, "kudp_tx_direct_route_tcp_kfunc", kernelUDPTXTIXTSegmentRouteTCPGSOArgsClearFlagsOffset, gsoFlags, 8) {
 		t.Fatal("experimental_tcp route TCP GSO path did not pass trust-partial-inner flag to the GSO kfunc")
 	}
-	if !instructionsStoreImmNearSymbol(out, "kudp_tx_direct_inline_flow", kernelUDPTXTIXTPushRouteTCPHeaderArgsClearFlagsOffset, int64(trustIXTIXTTXFinalizeTCPPartialCSUM), 140) {
-		t.Fatal("experimental_tcp route TCP header-push path did not keep normal partial checksum flags")
+	if !instructionsStoreImmNearSymbol(out, "kudp_tx_direct_route_tcp_linear_kfunc", kernelUDPTXTIXTPushRouteTCPHeaderArgsClearFlagsOffset, int64(trustIXTIXTTXFinalizeTCPPartialCSUM), 4) {
+		t.Fatal("experimental_tcp route TCP GSO linear fallback should keep normal partial checksum flags without trusting partial inner checksums")
 	}
 }
 
@@ -12284,9 +12877,314 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 		"route_tcp_gso_async_queue_bytes_full",
 		"atomic_long_add_return",
 		"atomic_long_sub_return",
+		"trustix_tixt_tx_validate_route_gso_xmit_skb_gso",
+		"trustix_tixt_tx_validate_route_gso_stream_frame",
+		"route_tcp_gso_async_stream_outer_gso_verify_errors",
+		"skb_gso_ok(skb, features)",
+		"ip_len != skb->len - ETH_HLEN",
+		"frame_len < TRUSTIX_TIXT_HEADER_LEN + sizeof(*inner_iph)",
+		"trustix_tixt_tx_route_gso_xmit_ready_async",
+		"route_tcp_gso_async_xmit_busy_retry_attempts",
+		"route_tcp_gso_async_xmit_busy_retry_successes",
+		"route_tcp_gso_async_xmit_busy_retry_failures",
+		"route_tcp_gso_async_txq_stopped_queued",
+		"trustix_tixt_tx_route_gso_stream_build_direct_batch",
+		"trustix_tixt_tx_route_gso_stream_xmit_direct_batch",
+		"TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_BATCHES",
+		"u32 route_flow_mask;",
+		"item->route_flow_mask = READ_ONCE(route->flow_mask);",
+		"READ_ONCE(route->flow_mask))\n\t\treturn -EPROTONOSUPPORT;",
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("route TCP GSO async worker source missing %q", want)
 		}
+	}
+	templateMatchBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_cross_item_template_match")
+	for _, want := range []string{
+		"a->queue_hash != b->queue_hash",
+		"a->route_flow_mask != b->route_flow_mask",
+	} {
+		if !strings.Contains(templateMatchBody, want) {
+			t.Fatalf("route TCP GSO cross-item template match missing %q", want)
+		}
+	}
+	candidateBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_cross_item_candidate")
+	if !strings.Contains(candidateBody, "first->route_flow_mask || item->route_flow_mask") {
+		t.Fatal("route TCP GSO cross-item candidate must reject multi-flow route entries")
+	}
+	tryBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_worker_try_cross_item")
+	if !strings.Contains(tryBody, "first->route_flow_mask") {
+		t.Fatal("route TCP GSO cross-item worker must self-degrade multi-flow route entries")
+	}
+	workerBody := sourceFunctionBody(t, source, "trustix_route_tcp_xmit_worker_fn")
+	if !strings.Contains(workerBody, "trustix_tixt_tx_sanitize_route_gso_xmit_skb(skb, dev)") {
+		t.Fatal("route TCP xmit worker must sanitize skb before dev_queue_xmit")
+	}
+	sanitizeBody := sourceFunctionBody(t, source, "trustix_tixt_tx_sanitize_route_gso_xmit_skb")
+	if !strings.Contains(sanitizeBody, "trustix_route_tcp_gso_async_txq_stopped_queued++") ||
+		strings.Contains(sanitizeBody, "return -EBUSY;") {
+		t.Fatal("route TCP GSO sanitize must not drop dev_queue_xmit skbs only because the selected TX queue is transiently stopped")
+	}
+	readyBody := sourceFunctionBody(t, source, "trustix_tixt_tx_route_gso_xmit_ready")
+	if strings.Contains(readyBody, "netif_xmit_stopped") {
+		t.Fatal("route TCP GSO dev_queue_xmit readiness must not treat a transiently stopped TX queue as a hard failure")
+	}
+}
+
+func TestRemotePerfMatrixAppliesSysfsAfterModuleReload(t *testing.T) {
+	source := readSourceFile(t, filepath.Join("..", "..", "..", "build", "run_remote_perf_matrix.py"))
+	runCase := sourceFunctionBody(t, source, "run_case")
+
+	restartIdx := strings.Index(runCase, "pids = restart_pair(")
+	waitModulesIdx := strings.Index(runCase, "required_modules_after_start = wait_required_modules_loaded(")
+	waitReadyIdx := strings.Index(runCase, "ready = wait_ready(")
+	firstSysfsIdx := strings.Index(runCase, "kudp_rx_hot_stats_param = set_kudp_rx_hot_stats(")
+	if restartIdx < 0 || waitModulesIdx < 0 || waitReadyIdx < 0 || firstSysfsIdx < 0 {
+		t.Fatalf("remote matrix run_case is missing expected lifecycle markers")
+	}
+	if firstSysfsIdx < restartIdx {
+		t.Fatalf("remote matrix writes module sysfs knobs before restart_pair")
+	}
+	if !(restartIdx < waitModulesIdx && waitModulesIdx < firstSysfsIdx && firstSysfsIdx < waitReadyIdx) {
+		t.Fatalf("remote matrix must restart, wait for required modules, apply sysfs knobs, then run ready ping")
+	}
+	requireSourceContains(t, source, "def wait_required_modules_loaded(")
+	requireSourceContains(t, source, `"required_modules_after_ready": required_modules_after_ready`)
+}
+
+func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
+	datapathSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+	helpersMainSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_main.c"))
+	helpersSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_kfuncs.c"))
+	cryptoSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_crypto", "trustix_crypto.c"))
+
+	for _, name := range []string{
+		"rx_worker_steal_skb",
+		"rx_worker_inline_stolen",
+		"rx_worker_inline_receive",
+		"rx_worker_steal_xmit",
+		"rx_worker_steal_tcp",
+	} {
+		requireModuleParamPermission(t, datapathSource, name, "0644")
+	}
+	for _, name := range []string{
+		"rx_worker_xmit",
+		"rx_worker_xmit_hash_tx_queue",
+		"rx_worker_xmit_more",
+		"rx_worker_inline_xmit",
+		"rx_worker_inline_xmit_copy_csum",
+		"rx_worker_inline_pair_coalesce",
+		"rx_worker_inline_pair_flush_jiffies",
+		"rx_worker_inline_pair_hold_skb",
+		"rx_worker_inline_coalesce_max_frames",
+		"rx_worker_xmit_trust_tcp_checksum_min_len",
+		"rx_worker_xmit_trust_tcp_checksum_ack_only",
+		"rx_worker_xmit_tcp_partial_csum",
+		"rx_worker_xmit_dst_mac_cache",
+		"rx_worker_xmit_dst_mac_pcpu_cache",
+		"rx_worker_xmit_dst_mac_seq_cache",
+		"rx_worker_queue_skb",
+		"rx_worker_stream_coalesce_gso",
+		"rx_worker_stream_coalesce_software_segment",
+		"rx_worker_stream_coalesce_partial_csum",
+		"rx_worker_tcp",
+		"rx_worker_stream_tcp",
+		"rx_worker_stream_batch_queue",
+	} {
+		requireModuleParamPermission(t, datapathSource, name, "0644")
+	}
+	requireModuleParamPermission(t, datapathSource, "rx_worker_direct_xmit", "0644")
+	if strings.Contains(datapathSource, "dev_direct_xmit(") ||
+		strings.Contains(helpersSource, "dev_direct_xmit(") {
+		t.Fatal("kernel datapath sources must not call panic-prone dev_direct_xmit")
+	}
+	if strings.Contains(datapathSource, "netif_receive_skb(") ||
+		strings.Contains(datapathSource, "netif_receive_skb_list(") {
+		t.Fatal("kernel datapath module must use backlog/worker receive, not direct protocol-stack reinjection")
+	}
+	for _, want := range []string{
+		"trustix_tixt_rx_publish_one_backlog",
+		"trustix_tixt_rx_publish_skb_chain_backlog",
+		"trustix_tixt_rx_publish_receive_list_backlog",
+		"trustix_tixt_rx_backlog_worker_fn",
+		"tixt_rx_backlog_worker_queue_limit",
+		"tixt_rx_backlog_worker_enqueued",
+		"tixt_rx_stream_backlog_packets",
+		"tixt_rx_coalesce_segment_backlog_packets",
+		"tixt_rx_single_coalesce_netif_rx_drops",
+	} {
+		requireSourceContains(t, helpersSource, want)
+	}
+	workerBody := sourceFunctionBody(t, helpersSource, "trustix_tixt_rx_backlog_worker_fn")
+	if !strings.Contains(workerBody, "netif_receive_skb(skb)") {
+		t.Fatal("TIXT RX backlog worker must own protocol-stack reinjection")
+	}
+	for _, name := range []string{
+		"trustix_tixt_rx_coalesced_segment_and_publish",
+		"trustix_tixt_rx_stream_publish_extra_list",
+		"trustix_tixt_rx_stream_try_coalesce_gso",
+		"trustix_tixt_rx_single_coalesce_publish",
+	} {
+		body := sourceFunctionBody(t, helpersSource, name)
+		if strings.Contains(body, "netif_receive_skb(") ||
+			strings.Contains(body, "netif_receive_skb_list(") {
+			t.Fatalf("%s must enqueue to the safe RX backlog worker instead of direct receive", name)
+		}
+	}
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_direct_xmit_safe_fallbacks++;")
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_inline_receive_safe_fallbacks++;")
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_param_set_stolen_noop")
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_steal_param_safe_fallbacks++;")
+	requireSourceContains(t, datapathSource, "WRITE_ONCE(*(bool *)kp->arg, false);")
+	for _, want := range []string{
+		"module_param_cb(rx_worker_steal_skb,\n\t\t&trustix_datapath_rx_worker_stolen_noop_bool_ops",
+		"module_param_cb(rx_worker_inline_stolen,\n\t\t&trustix_datapath_rx_worker_stolen_noop_bool_ops",
+		"module_param_cb(rx_worker_steal_xmit,\n\t\t&trustix_datapath_rx_worker_stolen_noop_bool_ops",
+		"module_param_cb(rx_worker_steal_tcp,\n\t\t&trustix_datapath_rx_worker_stolen_noop_bool_ops",
+	} {
+		requireSourceContains(t, datapathSource, want)
+	}
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_drop_pending_sync();")
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_dev_ready(dev)")
+	requireSourceContains(t, datapathSource, "if (skb_is_gso(skb))")
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_xmit_inner_gso_segments(")
+	requireSourceContains(t, datapathSource, "current safe implementation falls back to copy/worker")
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_steal_fallbacks++;\n\treturn false;")
+	coalescedBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_xmit_coalesced_inner_skb")
+	inlineStart := strings.Index(coalescedBody, "if (inline_context)")
+	prepareStart := strings.Index(coalescedBody, "trustix_datapath_rx_worker_prepare_inner_skb")
+	if inlineStart < 0 || prepareStart < 0 || inlineStart >= prepareStart {
+		t.Fatal("coalesced GSO xmit must explicitly reject inline/hook context before preparing the skb")
+	}
+	inlineCoalescedBranch := coalescedBody[inlineStart:prepareStart]
+	if strings.Contains(inlineCoalescedBranch, "trustix_datapath_rx_worker_enqueue_pending_skb") {
+		t.Fatal("coalesced GSO skbs must not be queued from inline/hook context")
+	}
+	requireSourceContains(t, inlineCoalescedBranch, "kfree_skb(skb);")
+	requireSourceContains(t, inlineCoalescedBranch, "return -EOPNOTSUPP;")
+	for _, name := range []string{
+		"trustix_datapath_rx_worker_inline_pair_coalesce_view",
+		"trustix_datapath_rx_worker_inline_xmit_stream_copy",
+		"trustix_datapath_rx_worker_push_stream_batch_copy",
+	} {
+		body := sourceFunctionBody(t, datapathSource, name)
+		if strings.Contains(body, "trustix_datapath_rx_worker_build_coalesced_gso_skb") ||
+			strings.Contains(body, "trustix_datapath_rx_worker_xmit_coalesced_inner_skb") {
+			t.Fatalf("%s must self-degrade hook/inline coalesced GSO to per-frame worker queueing", name)
+		}
+	}
+	for _, forbidden := range []string{
+		"trustix_datapath_disable_panic_risk_params();",
+		"WRITE_ONCE(trustix_datapath_rx_worker_steal_skb, false);",
+		"WRITE_ONCE(trustix_datapath_rx_worker_inline_stolen, false);",
+	} {
+		if strings.Contains(datapathSource, forbidden) {
+			t.Fatalf("kernel datapath must not hard-disable safe-fallback RX worker option %q", forbidden)
+		}
+	}
+
+	for _, name := range []string{
+		"tixt_rx_stream_ordered_list",
+		"tixt_rx_stream_nonlinear_parse",
+	} {
+		requireModuleParamPermission(t, helpersSource, name, "0644")
+	}
+	for _, name := range []string{
+		"route_tcp_gso",
+		"route_tcp_gso_async",
+		"route_tcp_gso_async_dev_xmit",
+		"route_tcp_gso_async_unbound_worker",
+		"route_tcp_gso_async_sharded_queue",
+		"route_tcp_gso_async_flow_shard_queue",
+		"route_tcp_gso_async_stream",
+		"route_tcp_gso_async_stream_direct_build",
+		"route_tcp_gso_async_direct_xmit",
+		"route_tcp_gso_async_stream_allow_virtio_net",
+		"route_tcp_gso_async_stream_outer_gso",
+		"route_tcp_gso_async_stream_outer_gso_hard_enable",
+		"route_tcp_gso_async_stream_cross_item_batch",
+		"route_tcp_gso_async_stream_cross_item_dequeue_batch",
+		"route_tcp_gso_async_hash_tx_queue",
+		"route_tcp_xmit_worker_steal",
+		"tixt_rx_stream_parse",
+		"tixt_rx_stream_xmit_extra",
+		"tixt_rx_stream_gso_xmit",
+		"tixt_rx_stream_coalesce_gso",
+		"tixt_rx_stream_coalesce_mark_gso",
+		"tixt_rx_stream_max_frames",
+		"tixt_rx_single_coalesce_gso",
+		"tixt_rx_single_coalesce_mark_gso",
+		"tixt_rx_coalesce_mark_gso_partial_csum",
+		"tixt_rx_coalesce_segment_gso",
+		"tixt_rx_single_coalesce_skip_tcp_csum",
+		"tixt_rx_single_coalesce_direct_list",
+		"tixt_rx_single_coalesce_direct_list_max_frames",
+		"tixt_rx_single_coalesce_page_only",
+		"tixt_rx_single_coalesce_linear_build",
+		"tixt_rx_single_coalesce_hybrid_head",
+		"tixt_rx_single_coalesce_netif_rx",
+		"tixt_rx_single_coalesce_schedule_once",
+		"tixt_rx_single_coalesce_stream_fallback",
+		"tixt_rx_single_coalesce_defer_full_flush",
+		"tixt_rx_single_coalesce_keep_full_timer",
+		"tixt_rx_single_coalesce_set_hash",
+		"tixt_rx_single_coalesce_schedule_stride",
+		"tixt_rx_single_coalesce_max_frames",
+		"tixt_rx_single_coalesce_flush_jiffies",
+		"tixt_rx_single_coalesce_warmup_frames",
+		"tixt_rx_single_coalesce_linear_max",
+	} {
+		requireModuleParamPermission(t, helpersSource, name, "0644")
+	}
+	requireSourceContains(t, helpersSource, "module_param_cb(tixt_rx_single_coalesce_linear_max,")
+	requireSourceContains(t, helpersSource, "trustix_tixt_rx_single_coalesce_linear_max_ops, NULL, 0644")
+	for _, want := range []string{
+		"trustix_datapath_helpers_disable_panic_risk_params();",
+	} {
+		if strings.HasPrefix(want, "trustix_datapath_helpers") {
+			requireSourceContains(t, helpersMainSource, want)
+			continue
+		}
+		requireSourceContains(t, helpersSource, want)
+	}
+	requireSourceContains(t, helpersSource, "datapath can self-degrade under validation")
+
+	requireModuleParamPermission(t, cryptoSource, "kfunc_simd_fastpath", "0444")
+	requireSourceContains(t, cryptoSource, "WRITE_ONCE(trustix_kfunc_simd_fastpath, false);")
+}
+
+func readSourceFile(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read source %s: %v", path, err)
+	}
+	return string(body)
+}
+
+func requireModuleParamPermission(t *testing.T, source, name, wantPermission string) {
+	t.Helper()
+	compact := strings.Join(strings.Fields(source), " ")
+	start := strings.Index(compact, "module_param_named("+name+",")
+	if start < 0 {
+		start = strings.Index(compact, "module_param_cb("+name+",")
+	}
+	if start < 0 {
+		t.Fatalf("module parameter %s is missing", name)
+	}
+	end := strings.Index(compact[start:], ");")
+	if end < 0 {
+		t.Fatalf("module parameter %s declaration is unterminated", name)
+	}
+	decl := compact[start : start+end]
+	if !strings.Contains(decl, ", "+wantPermission) {
+		t.Fatalf("module parameter %s declaration %q does not use permission %s", name, decl, wantPermission)
+	}
+}
+
+func requireSourceContains(t *testing.T, source, want string) {
+	t.Helper()
+	if !strings.Contains(source, want) {
+		t.Fatalf("source missing %q", want)
 	}
 }

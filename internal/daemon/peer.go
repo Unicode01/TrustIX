@@ -108,6 +108,16 @@ func (daemon *Daemon) pollPeers(ctx context.Context) {
 			}
 			continue
 		}
+		if !advertisementsIncludeIX(advertisements, daemon.desired.IX.ID) {
+			daemon.forgetLocalAdvertisementPush(target)
+			if err := daemon.pushLocalAdvertisement(ctx, target); err != nil {
+				if target.Static {
+					daemon.recordPeerError(target.ID, err.Error())
+				} else {
+					daemon.recordConfigSync(target, "error", configlog.Head{}, 0, 0, err)
+				}
+			}
+		}
 		var targetAdvertisement *advertisementResponse
 		for _, advertisement := range advertisements {
 			if advertisementMatchesControlTarget(advertisement, target) {
@@ -160,6 +170,15 @@ func (daemon *Daemon) pollPeers(ctx context.Context) {
 			daemon.scheduleRuntimeRouteWarmup(ctx)
 		}
 	}
+}
+
+func advertisementsIncludeIX(advertisements []advertisementResponse, ixID core.IXID) bool {
+	for _, advertisement := range advertisements {
+		if core.IXID(advertisement.IXID) == ixID {
+			return true
+		}
+	}
+	return false
 }
 
 func advertisementMatchesControlTarget(advertisement advertisementResponse, target controlTarget) bool {

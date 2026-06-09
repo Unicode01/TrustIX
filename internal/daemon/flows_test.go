@@ -2164,6 +2164,59 @@ func TestHandleReceivedDataPathPacketForwardsTransitRoute(t *testing.T) {
 	}
 }
 
+func TestHandleReceivedDataPathPacketDropsTransitWhenDisabled(t *testing.T) {
+	table := routing.NewTable()
+	route := routing.Route{
+		Prefix:   "10.0.2.0/24",
+		Owner:    "ix-c",
+		NextHop:  "ix-c",
+		Endpoint: "ep-c",
+		Metric:   100,
+		Kind:     routing.RouteUnicast,
+	}
+	if err := table.Replace([]routing.Route{route}); err != nil {
+		t.Fatalf("replace routes: %v", err)
+	}
+	disabled := false
+	session := &recordingSession{}
+	daemon := &Daemon{
+		routes: table,
+		desired: config.Desired{
+			IX: config.IXConfig{ID: "ix-b"},
+			RoutePolicy: config.RoutePolicyConfig{
+				TransitForwarding: &disabled,
+			},
+			Peers: []config.PeerConfig{{
+				ID:     "ix-c",
+				Domain: "lab.local",
+				Endpoints: []config.EndpointConfig{{
+					Name:      "ep-c",
+					Address:   "192.0.2.3:7003",
+					Transport: "udp",
+				}},
+			}},
+		},
+		dataSessions: map[dataSessionKey]transport.Session{
+			{Peer: "ix-c", Endpoint: "ep-c", Transport: "udp", Address: "192.0.2.3:7003", Encryption: "secure"}: session,
+		},
+		flows: make(map[routing.FlowKey]routing.FlowBinding),
+	}
+	packet := tcpPayloadIPv4Packet([]byte("transit"))
+	copy(packet[16:20], []byte{10, 0, 2, 2})
+
+	err := daemon.handleReceivedDataPathPacket(context.Background(), packet, &recordingInjector{})
+	if err == nil || !strings.Contains(err.Error(), "transit forwarding is disabled") {
+		t.Fatalf("handle received transit packet error = %v, want disabled", err)
+	}
+	if len(session.sent) != 0 {
+		t.Fatalf("forwarded packets = %d, want 0", len(session.sent))
+	}
+	drops := daemon.dataStats.dropReasonSnapshot()
+	if drops[observability.DropTransitDisabled] != 1 {
+		t.Fatalf("drop reasons = %#v, want TRANSIT_DISABLED", drops)
+	}
+}
+
 func TestCaptureFilterCanMatchPeerHookAndAddresses(t *testing.T) {
 	table := routing.NewTable()
 	if err := table.Replace([]routing.Route{{
@@ -4629,6 +4682,38 @@ func TestSendDataSessionPacketsAggregatesPlaintextExperimentalTCPByDefault(t *te
 	}
 }
 
+func TestDataSessionBatchConfigUsesTransportAdvanced(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
+	daemon := &Daemon{
+		desired: config.Desired{
+			TransportPolicy: config.TransportPolicyConfig{
+				Advanced: config.TransportAdvancedConfig{
+					BatchBytes: 8192,
+					FlushDelay: "1ms",
+					MaxFrames:  8,
+				},
+				Profiles: []config.TransportProfileConfig{{
+					Transport: string(transport.ProtocolExperimentalTCP),
+					Advanced: config.TransportAdvancedConfig{
+						BatchBytes: 32768,
+						FlushDelay: "0",
+						MaxFrames:  64,
+					},
+				}},
+			},
+		},
+	}
+
+	udp := daemon.dataSessionBatchConfigForEndpoint(config.EndpointConfig{Transport: string(transport.ProtocolUDP)})
+	if !udp.enabled || udp.maxBytes != 8192 || udp.delay != time.Millisecond || udp.maxPackets != 8 {
+		t.Fatalf("udp batching = %#v, want global advanced settings", udp)
+	}
+	experimentalTCP := daemon.dataSessionBatchConfigForEndpoint(config.EndpointConfig{Transport: string(transport.ProtocolExperimentalTCP)})
+	if !experimentalTCP.enabled || experimentalTCP.maxBytes != 32768 || experimentalTCP.delay != 0 || experimentalTCP.maxPackets != 64 {
+		t.Fatalf("experimental_tcp batching = %#v, want profile advanced settings", experimentalTCP)
+	}
+}
+
 func TestSendDataSessionPacketsCanDisableExperimentalTCPAggregation(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_BYTES", "4096")
@@ -6002,6 +6087,67 @@ func TestRegisterInboundPublicEndpointKeepsOutboundSession(t *testing.T) {
 	if _, ok := daemon.dataSessions[reverseKey]; !ok {
 		t.Fatal("inbound reverse session was not registered")
 	}
+}
+
+func TestAddressedExperimentalTCPReverseSessionSatisfiesSessionPoolIndex(t *testing.T) {
+	peer := testPeer()
+	endpoint := peer.Endpoints[0]
+	endpoint.Name = core.EndpointID("b-experimental-tcp")
+	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Address = "198.51.100.2:7142"
+	endpoint.Security.Encryption = securetransport.EncryptionPlaintext
+	peer.Endpoints[0] = endpoint
+
+	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionPlaintext)
+	reverseKey.PoolIndex = 2
+	reverse := &recordingSession{}
+	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	registry := transport.NewRegistry()
+	if err := registry.Register(expTransport); err != nil {
+		t.Fatalf("register experimental_tcp transport: %v", err)
+	}
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX:     config.IXConfig{ID: core.IXID("ix-a")},
+			Domain: config.DomainConfig{ID: peer.Domain},
+			Peers:  []config.PeerConfig{peer},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionPlaintext,
+				SessionPool: config.SessionPoolPolicyConfig{
+					Size: 4,
+				},
+			},
+		},
+		transports: registry,
+		dataSessions: map[dataSessionKey]transport.Session{
+			reverseKey: reverse,
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{
+			reverseKey: {key: reverseKey, session: reverse, peer: peer, endpoint: endpoint},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	transportEndpoint := transportEndpointFromConfig(endpoint)
+	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
+	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
+	if err != nil {
+		t.Fatalf("session for addressed experimental_tcp reverse pool index: %v", err)
+	}
+	if session != reverse {
+		t.Fatal("addressed experimental_tcp did not reuse reverse session for matching pool index")
+	}
+	if key != reverseKey {
+		t.Fatalf("session key = %#v, want reverse key %#v", key, reverseKey)
+	}
+	if expTransport.dialCount() != 0 {
+		t.Fatalf("experimental_tcp dial count = %d, want 0", expTransport.dialCount())
+	}
+	missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4)
+	if reflect.DeepEqual(missing, []int{0, 1, 3}) {
+		return
+	}
+	t.Fatalf("missing pool indexes = %v, want [0 1 3]", missing)
 }
 
 func TestDropSessionsForPeerTransportDropsOnlyMatchingSessions(t *testing.T) {

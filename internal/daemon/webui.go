@@ -246,7 +246,8 @@ func (daemon *Daemon) managementWebUIDoctorCheck() doctorCheck {
 		}
 	}
 	if customDir := strings.TrimSpace(webUI.CustomDir); customDir != "" {
-		details = append(details, "custom_dir="+customDir)
+		status = worstDoctorStatus(status, "warn")
+		details = append(details, "custom_dir="+customDir+" serves same-origin WebUI code; custom assets can access browser-held Admin proof material")
 	}
 	return doctorCheck{Name: "management_web_ui", Status: status, Detail: strings.Join(details, "; ")}
 }

@@ -32,13 +32,22 @@ import (
 )
 
 const (
-	dynamicRouteMetric               = 1000
-	memberRecordTTL                  = 2 * time.Minute
-	pendingMemberTTL                 = 24 * time.Hour
-	defaultControlClientTimeout      = 15 * time.Second
-	defaultControlClientCacheTTL     = 5 * time.Minute
-	controlClientIdleConnTimeout     = 30 * time.Second
-	defaultAdvertisementPushInterval = 60 * time.Second
+	dynamicRouteMetric                = 1000
+	memberRecordTTL                   = 2 * time.Minute
+	pendingMemberTTL                  = 24 * time.Hour
+	defaultControlClientTimeout       = 15 * time.Second
+	defaultControlClientCacheTTL      = 5 * time.Minute
+	controlClientIdleConnTimeout      = 30 * time.Second
+	defaultAdvertisementPushInterval  = 60 * time.Second
+	defaultDynamicControlTargetFanout = 128
+	edgeDynamicControlTargetFanout    = 32
+	reflectorControlTargetFanout      = 256
+	coreDynamicControlTargetFanout    = 512
+	defaultControlMemberPageSize      = 256
+	edgeControlMemberPageSize         = 128
+	reflectorControlMemberPageSize    = 512
+	coreControlMemberPageSize         = 1024
+	maxControlMemberPageSize          = 4096
 )
 
 type cachedControlClient struct {
@@ -48,8 +57,8 @@ type cachedControlClient struct {
 }
 
 type cachedControlMembers struct {
-	etag    string
-	members []advertisementResponse
+	etag     string
+	response membersResponse
 }
 
 type cachedAdvertisementPush struct {
@@ -94,7 +103,11 @@ func isPendingAdmissionError(err error) bool {
 }
 
 type membersResponse struct {
-	Members []advertisementResponse `json:"members"`
+	Members    []advertisementResponse `json:"members"`
+	NextCursor string                  `json:"next_cursor,omitempty"`
+	Limit      int                     `json:"limit,omitempty"`
+	Total      int                     `json:"total,omitempty"`
+	Truncated  bool                    `json:"truncated,omitempty"`
 }
 
 type persistedMembers struct {
@@ -133,10 +146,22 @@ type runtimeDataplaneProjection struct {
 	RouteCandidates []routeCandidate
 }
 
+type runtimeProjectionOptions struct {
+	IncludeRouteCandidates bool
+}
+
 type routePolicyStatus struct {
-	Config     config.RoutePolicyConfig `json:"config"`
-	Decisions  []routePolicyDecision    `json:"decisions"`
-	Candidates []routeCandidate         `json:"candidates,omitempty"`
+	Config             config.RoutePolicyConfig `json:"config"`
+	Decisions          []routePolicyDecision    `json:"decisions"`
+	Candidates         []routeCandidate         `json:"candidates,omitempty"`
+	DecisionTotal      int                      `json:"decision_total,omitempty"`
+	DecisionOffset     int                      `json:"decision_offset,omitempty"`
+	DecisionLimit      int                      `json:"decision_limit,omitempty"`
+	DecisionTruncated  bool                     `json:"decision_truncated,omitempty"`
+	CandidateTotal     int                      `json:"candidate_total,omitempty"`
+	CandidateOffset    int                      `json:"candidate_offset,omitempty"`
+	CandidateLimit     int                      `json:"candidate_limit,omitempty"`
+	CandidateTruncated bool                     `json:"candidate_truncated,omitempty"`
 }
 
 type routePolicyDecision struct {
@@ -940,13 +965,13 @@ func (daemon *Daemon) runtimeSnapshotEpochLocked() uint64 {
 func (daemon *Daemon) runtimeDataplaneState() ([]routing.Route, []dataplane.PeerMetadata, []dataplane.EndpointMetadata) {
 	daemon.membershipMu.RLock()
 	defer daemon.membershipMu.RUnlock()
-	projection := daemon.runtimeDataplaneProjectionLocked()
+	projection := daemon.runtimeDataplaneProjectionLockedWithOptions(runtimeProjectionOptions{})
 	return projection.Routes, projection.Peers, projection.Endpoints
 }
 
 func (daemon *Daemon) runtimeDataplaneSnapshot() dataplane.Snapshot {
 	daemon.membershipMu.RLock()
-	projection := daemon.runtimeDataplaneProjectionLocked()
+	projection := daemon.runtimeDataplaneProjectionLockedWithOptions(runtimeProjectionOptions{})
 	epoch := daemon.runtimeSnapshotEpochLocked()
 	daemon.membershipMu.RUnlock()
 	return dataplane.Snapshot{
@@ -990,16 +1015,94 @@ func (daemon *Daemon) runtimeRoutePolicyStatus() routePolicyStatus {
 	}
 }
 
+func (daemon *Daemon) runtimeRoutePolicyDecisions() []routePolicyDecision {
+	daemon.membershipMu.RLock()
+	projection := daemon.runtimeDataplaneProjectionLockedWithOptions(runtimeProjectionOptions{})
+	daemon.membershipMu.RUnlock()
+
+	decisions := append(exportRoutePolicyDecisions(daemon.desired), projection.RoutePolicy...)
+	sortRoutePolicyDecisions(decisions)
+	return decisions
+}
+
+func (daemon *Daemon) runtimeRoutePolicyStatusForRequest(r *http.Request) (routePolicyStatus, error) {
+	status := daemon.runtimeRoutePolicyStatus()
+	query := r.URL.Query()
+	decisionOffset, decisionLimit, err := parseNamedPagination(query, "decision_offset", "decision_limit", 0)
+	if err != nil {
+		return routePolicyStatus{}, err
+	}
+	candidateOffset, candidateLimit, err := parseNamedPagination(query, "candidate_offset", "candidate_limit", 0)
+	if err != nil {
+		return routePolicyStatus{}, err
+	}
+	if query.Get("limit") != "" {
+		_, limit, err := parsePaginationParams(r, 0)
+		if err != nil {
+			return routePolicyStatus{}, err
+		}
+		if decisionLimit == 0 {
+			decisionLimit = limit
+		}
+		if candidateLimit == 0 {
+			candidateLimit = limit
+		}
+	}
+	status.Decisions, status.DecisionTotal, status.DecisionTruncated = paginateSlice(status.Decisions, decisionOffset, decisionLimit)
+	status.DecisionOffset = decisionOffset
+	status.DecisionLimit = decisionLimit
+	status.Candidates, status.CandidateTotal, status.CandidateTruncated = paginateSlice(status.Candidates, candidateOffset, candidateLimit)
+	status.CandidateOffset = candidateOffset
+	status.CandidateLimit = candidateLimit
+	return status, nil
+}
+
+func parseNamedPagination(query url.Values, offsetName, limitName string, defaultLimit int) (int, int, error) {
+	offset := 0
+	limit := defaultLimit
+	if raw := strings.TrimSpace(query.Get(offsetName)); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return 0, 0, fmt.Errorf("invalid %s %q", offsetName, raw)
+		}
+		offset = value
+	}
+	if raw := strings.TrimSpace(query.Get(limitName)); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return 0, 0, fmt.Errorf("invalid %s %q", limitName, raw)
+		}
+		limit = value
+	}
+	if limit > maxPaginatedAPILimit {
+		limit = maxPaginatedAPILimit
+	}
+	return offset, limit, nil
+}
+
 func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProjection {
+	return daemon.runtimeDataplaneProjectionLockedWithOptions(runtimeProjectionOptions{IncludeRouteCandidates: true})
+}
+
+func (daemon *Daemon) runtimeDataplaneProjectionLockedWithOptions(options runtimeProjectionOptions) runtimeDataplaneProjection {
 	routes := routesFromConfig(daemon.desired)
 	routes = daemon.appendLocalLANRoutes(routes)
 	routes = daemon.appendDeviceAccessRoutes(routes)
-	routeCandidates := daemon.routeCandidatesForRuntimeRoutes(routes)
+	var routeCandidates []routeCandidate
+	if options.IncludeRouteCandidates {
+		routeCandidates = daemon.routeCandidatesForRuntimeRoutes(routes)
+	}
+	addRouteCandidate := func(candidate routeCandidate) {
+		if options.IncludeRouteCandidates {
+			routeCandidates = append(routeCandidates, candidate)
+		}
+	}
 	peers := peersFromConfig(daemon.desired)
 	peers = daemon.appendDeviceAccessPeers(peers)
 	endpoints := daemon.endpointsFromConfig(daemon.desired)
 	routePolicy := make([]routePolicyDecision, 0, len(daemon.members))
 	importPrefixes := parsedPolicyPrefixes(daemon.desired.RoutePolicy.ImportPrefixes)
+	importTransitRoutes := config.RoutePolicyImportTransitRoutesEnabled(daemon.desired.RoutePolicy)
 	metric := daemon.dynamicRouteMetric()
 	staticPeers := make(map[core.IXID]struct{}, len(daemon.desired.Peers))
 	for _, peer := range daemon.desired.Peers {
@@ -1077,7 +1180,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "invalid_prefix",
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(rawPrefix), "", routing.RouteUnicast, metric+announcement.Metric, "reject", "invalid_prefix", "down"))
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(rawPrefix), "", routing.RouteUnicast, metric+announcement.Metric, "reject", "invalid_prefix", "down"))
 				continue
 			}
 			prefix = prefix.Masked()
@@ -1105,7 +1208,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "path_loop",
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "path_loop", "blocked"))
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "path_loop", "blocked"))
 				continue
 			}
 			isManagementVIP := managementVIPPrefix.IsValid() && prefix == managementVIPPrefix && !managementVIPCovered
@@ -1120,7 +1223,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "management_host_api_disabled",
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "management_host_api_disabled", "down"))
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "management_host_api_disabled", "down"))
 				continue
 			}
 			if isManagementVIP && strings.TrimSpace(advertisement.ControlAPI) == "" {
@@ -1134,7 +1237,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "no_control_api",
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "no_control_api", "down"))
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "no_control_api", "down"))
 				continue
 			}
 			if !isManagementVIP && nextHop == "" {
@@ -1148,7 +1251,21 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "no_transit_next_hop",
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_transit_next_hop", "down"))
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_transit_next_hop", "down"))
+				continue
+			}
+			if !isManagementVIP && nextHop != originIX && !importTransitRoutes {
+				routePolicy = append(routePolicy, routePolicyDecision{
+					Direction: "import",
+					IXID:      originIX,
+					OriginIX:  originIX,
+					NextHopIX: nextHop,
+					Prefix:    core.Prefix(prefix.String()),
+					Action:    "reject",
+					Reason:    "transit_import_disabled",
+					Source:    record.Source,
+				})
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "transit_import_disabled", "blocked"))
 				continue
 			}
 			if !isManagementVIP && !daemon.hasUsableRouteNextHopEndpoint(nextHop) {
@@ -1162,7 +1279,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "no_usable_endpoint",
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_usable_endpoint", "down"))
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_usable_endpoint", "down"))
 				continue
 			}
 			allowed, reason := importPolicyAllows(prefix, importPrefixes)
@@ -1177,7 +1294,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    reason,
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", reason, "blocked"))
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", reason, "blocked"))
 				continue
 			}
 			if known, exists := knownPrefixes[prefix.String()]; exists {
@@ -1192,7 +1309,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    reason,
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, action, reason, health))
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, action, reason, health))
 				continue
 			}
 			if claimedPrefixes.Conflicts(originIX, prefix) {
@@ -1206,7 +1323,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 					Reason:    "prefix_conflict",
 					Source:    record.Source,
 				})
-				routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "prefix_conflict", "blocked"))
+				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "prefix_conflict", "blocked"))
 				continue
 			}
 			knownPrefixes[prefix.String()] = knownRoutePrefix{}
@@ -1243,10 +1360,12 @@ func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProject
 				Reason:        reason,
 			}
 			routes = append(routes, route)
-			routeCandidates = append(routeCandidates, routeCandidateFromAcceptedDynamicRoute(route, announcement, record))
+			addRouteCandidate(routeCandidateFromAcceptedDynamicRoute(route, announcement, record))
 		}
 	}
-	markSelectedRouteCandidates(routeCandidates, routes)
+	if options.IncludeRouteCandidates {
+		markSelectedRouteCandidates(routeCandidates, routes)
+	}
 	return runtimeDataplaneProjection{
 		Routes:          routes,
 		Peers:           peers,
@@ -1440,7 +1559,7 @@ func (daemon *Daemon) appendDeviceAccessRoutes(routes []routing.Route) []routing
 	}
 	now := time.Now().UTC()
 	daemon.dataMu.Lock()
-	daemon.pruneExpiredDeviceLeasesLocked(now)
+	expiredSessions := daemon.pruneExpiredDeviceLeasesLocked(now)
 	leases := make([]deviceAccessLease, 0, len(daemon.deviceLeases))
 	for _, lease := range daemon.deviceLeases {
 		if lease.Address.IsValid() {
@@ -1448,6 +1567,7 @@ func (daemon *Daemon) appendDeviceAccessRoutes(routes []routing.Route) []routing
 		}
 	}
 	daemon.dataMu.Unlock()
+	daemon.closeDroppedDataSessions(expiredSessions)
 	sort.Slice(leases, func(i, j int) bool {
 		if leases[i].Address.Compare(leases[j].Address) != 0 {
 			return leases[i].Address.Compare(leases[j].Address) < 0
@@ -1486,12 +1606,13 @@ func (daemon *Daemon) appendDeviceAccessPeers(peers []dataplane.PeerMetadata) []
 	}
 	now := time.Now().UTC()
 	daemon.dataMu.Lock()
-	daemon.pruneExpiredDeviceLeasesLocked(now)
+	expiredSessions := daemon.pruneExpiredDeviceLeasesLocked(now)
 	leases := make([]deviceAccessLease, 0, len(daemon.deviceLeases))
 	for _, lease := range daemon.deviceLeases {
 		leases = append(leases, lease)
 	}
 	daemon.dataMu.Unlock()
+	daemon.closeDroppedDataSessions(expiredSessions)
 	sort.Slice(leases, func(i, j int) bool {
 		return deviceAccessPeerID(transport.PeerIdentity{Peer: leases[i].Key.IX, Device: leases[i].Key.Device, LANID: leases[i].LANID}) <
 			deviceAccessPeerID(transport.PeerIdentity{Peer: leases[j].Key.IX, Device: leases[j].Key.Device, LANID: leases[j].LANID})
@@ -1692,7 +1813,7 @@ func (daemon *Daemon) appendLocalDeviceAccessAdvertisementPrefixes(prefixes []st
 	allowed := parsedPolicyPrefixes(desired.RoutePolicy.ExportPrefixes)
 	now := time.Now().UTC()
 	daemon.dataMu.Lock()
-	daemon.pruneExpiredDeviceLeasesLocked(now)
+	expiredSessions := daemon.pruneExpiredDeviceLeasesLocked(now)
 	leases := make([]deviceAccessLease, 0, len(daemon.deviceLeases))
 	for _, lease := range daemon.deviceLeases {
 		if lease.Prefix.IsValid() && lease.Prefix.Addr().Is4() {
@@ -1700,6 +1821,7 @@ func (daemon *Daemon) appendLocalDeviceAccessAdvertisementPrefixes(prefixes []st
 		}
 	}
 	daemon.dataMu.Unlock()
+	daemon.closeDroppedDataSessions(expiredSessions)
 	sort.Slice(leases, func(i, j int) bool {
 		return leases[i].Prefix.String() < leases[j].Prefix.String()
 	})
@@ -2903,7 +3025,7 @@ func (daemon *Daemon) deviceAccessPeerConfigByID(id core.IXID) (config.PeerConfi
 	}
 	now := time.Now().UTC()
 	daemon.dataMu.Lock()
-	daemon.pruneExpiredDeviceLeasesLocked(now)
+	expiredSessions := daemon.pruneExpiredDeviceLeasesLocked(now)
 	for _, lease := range daemon.deviceLeases {
 		identity := transport.PeerIdentity{
 			Role:   string(pki.RoleDevice),
@@ -2914,10 +3036,12 @@ func (daemon *Daemon) deviceAccessPeerConfigByID(id core.IXID) (config.PeerConfi
 		}
 		if deviceAccessPeerID(identity) == id {
 			daemon.dataMu.Unlock()
+			daemon.closeDroppedDataSessions(expiredSessions)
 			return daemon.deviceAccessPeerConfig(identity, lease), true
 		}
 	}
 	daemon.dataMu.Unlock()
+	daemon.closeDroppedDataSessions(expiredSessions)
 	return config.PeerConfig{}, false
 }
 
@@ -3022,6 +3146,7 @@ func (daemon *Daemon) controlTargets() []controlTarget {
 func (daemon *Daemon) controlTargetsForDesired(desired config.Desired) []controlTarget {
 	seen := make(map[string]struct{})
 	targets := make([]controlTarget, 0, len(desired.Peers)+len(desired.Bootstrap.Peers))
+	dynamicTargets := make([]controlTarget, 0)
 	add := func(target controlTarget) {
 		if target.ControlAPI == "" {
 			return
@@ -3048,14 +3173,138 @@ func (daemon *Daemon) controlTargetsForDesired(desired config.Desired) []control
 			continue
 		}
 		ad := record.Advertisement
-		add(controlTarget{
-			ID:         core.IXID(ad.IXID),
-			Domain:     core.DomainID(ad.DomainID),
-			ControlAPI: ad.ControlAPI,
-		})
+		if ad.ControlAPI != "" {
+			dynamicTargets = append(dynamicTargets, controlTarget{
+				ID:         core.IXID(ad.IXID),
+				Domain:     core.DomainID(ad.DomainID),
+				ControlAPI: ad.ControlAPI,
+			})
+		}
 	}
 	daemon.membershipMu.RUnlock()
+	sort.Slice(dynamicTargets, func(i, j int) bool {
+		if dynamicTargets[i].ControlAPI != dynamicTargets[j].ControlAPI {
+			return dynamicTargets[i].ControlAPI < dynamicTargets[j].ControlAPI
+		}
+		return dynamicTargets[i].ID < dynamicTargets[j].ID
+	})
+	for _, target := range daemon.selectDynamicControlTargets(dynamicTargets) {
+		add(target)
+	}
 	return targets
+}
+
+func (daemon *Daemon) selectDynamicControlTargets(targets []controlTarget) []controlTarget {
+	fanout := daemon.dynamicControlTargetFanout()
+	if fanout <= 0 || fanout >= len(targets) {
+		return targets
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	start := int((daemon.controlTargetCursor.Add(1) - 1) % uint64(len(targets)))
+	selected := make([]controlTarget, 0, fanout)
+	for i := 0; i < fanout; i++ {
+		selected = append(selected, targets[(start+i)%len(targets)])
+	}
+	return selected
+}
+
+func (daemon *Daemon) dynamicControlTargetFanout() int {
+	if value, ok := controlFabricLimitFromEnv("TRUSTIX_DYNAMIC_CONTROL_TARGET_FANOUT", defaultDynamicControlTargetFanout); ok {
+		return value
+	}
+	daemon.configMu.RLock()
+	configured := daemon.desired.ControlFabric.DynamicControlFanout
+	profile := daemon.desired.ControlFabric.Profile
+	daemon.configMu.RUnlock()
+	if configured != nil {
+		return *configured
+	}
+	return dynamicControlTargetFanoutForProfile(profile)
+}
+
+func dynamicControlTargetFanoutForProfile(profile string) int {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(profile), "-", "_")) {
+	case "small":
+		return 0
+	case "edge":
+		return edgeDynamicControlTargetFanout
+	case "reflector", "route_reflector":
+		return reflectorControlTargetFanout
+	case "core", "authority":
+		return coreDynamicControlTargetFanout
+	default:
+		return defaultDynamicControlTargetFanout
+	}
+}
+
+func (daemon *Daemon) controlMemberPageSize() int {
+	if value, ok := controlFabricLimitFromEnv("TRUSTIX_CONTROL_MEMBER_PAGE_SIZE", defaultControlMemberPageSize); ok {
+		return clampControlMemberPageSize(value)
+	}
+	daemon.configMu.RLock()
+	configured := daemon.desired.ControlFabric.MemberPageSize
+	profile := daemon.desired.ControlFabric.Profile
+	daemon.configMu.RUnlock()
+	if configured != nil {
+		return clampControlMemberPageSize(*configured)
+	}
+	return clampControlMemberPageSize(controlMemberPageSizeForProfile(profile))
+}
+
+func controlMemberPageSizeForProfile(profile string) int {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(profile), "-", "_")) {
+	case "small":
+		return 0
+	case "edge":
+		return edgeControlMemberPageSize
+	case "reflector", "route_reflector":
+		return reflectorControlMemberPageSize
+	case "core", "authority":
+		return coreControlMemberPageSize
+	default:
+		return defaultControlMemberPageSize
+	}
+}
+
+func (daemon *Daemon) controlMemberImportLimit() int {
+	if value, ok := controlFabricLimitFromEnv("TRUSTIX_CONTROL_MEMBER_IMPORT_LIMIT", defaultControlMemberPageSize); ok {
+		return value
+	}
+	daemon.configMu.RLock()
+	configured := daemon.desired.ControlFabric.MemberImportLimit
+	profile := daemon.desired.ControlFabric.Profile
+	daemon.configMu.RUnlock()
+	if configured != nil {
+		return *configured
+	}
+	return controlMemberPageSizeForProfile(profile)
+}
+
+func clampControlMemberPageSize(value int) int {
+	if value <= 0 {
+		return 0
+	}
+	if value > maxControlMemberPageSize {
+		return maxControlMemberPageSize
+	}
+	return value
+}
+
+func controlFabricLimitFromEnv(name string, fallback int) (int, bool) {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	switch raw {
+	case "":
+		return 0, false
+	case "0", "off", "false", "disabled", "unlimited", "all":
+		return 0, true
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return fallback, true
+	}
+	return value, true
 }
 
 func (daemon *Daemon) controlClient(target controlTarget) (*http.Client, error) {
@@ -3131,6 +3380,10 @@ func controlClientCacheKey(target controlTarget) string {
 	return strings.TrimSpace(target.ControlAPI) + "\x00" + string(target.Domain) + "\x00" + string(target.ID)
 }
 
+func controlMemberPageCacheKey(target controlTarget, cursor string, limit int) string {
+	return controlClientCacheKey(target) + "\x00members\x00" + strings.TrimSpace(cursor) + "\x00" + strconv.Itoa(limit)
+}
+
 func controlClientCacheTTL() time.Duration {
 	raw := strings.TrimSpace(os.Getenv("TRUSTIX_CONTROL_CLIENT_CACHE_TTL"))
 	if raw == "" {
@@ -3159,17 +3412,17 @@ func advertisementPushInterval() time.Duration {
 	return defaultAdvertisementPushInterval
 }
 
-func (daemon *Daemon) cachedControlMembers(key string) (string, []advertisementResponse) {
+func (daemon *Daemon) cachedControlMembers(key string) (string, membersResponse, bool) {
 	daemon.controlClientMu.Lock()
 	defer daemon.controlClientMu.Unlock()
 	cached, ok := daemon.controlMembers[key]
-	if !ok || cached.etag == "" || len(cached.members) == 0 {
-		return "", nil
+	if !ok || cached.etag == "" {
+		return "", membersResponse{}, false
 	}
-	return cached.etag, cloneAdvertisements(cached.members)
+	return cached.etag, cloneMembersResponse(cached.response), true
 }
 
-func (daemon *Daemon) storeCachedControlMembers(key, etag string, members []advertisementResponse) {
+func (daemon *Daemon) storeCachedControlMembers(key, etag string, response membersResponse) {
 	etag = strings.TrimSpace(etag)
 	if etag == "" {
 		return
@@ -3179,10 +3432,34 @@ func (daemon *Daemon) storeCachedControlMembers(key, etag string, members []adve
 		daemon.controlMembers = make(map[string]cachedControlMembers)
 	}
 	daemon.controlMembers[key] = cachedControlMembers{
-		etag:    etag,
-		members: cloneAdvertisements(members),
+		etag:     etag,
+		response: cloneMembersResponse(response),
 	}
 	daemon.controlClientMu.Unlock()
+}
+
+func (daemon *Daemon) controlMemberCursor(key string) string {
+	daemon.controlClientMu.Lock()
+	defer daemon.controlClientMu.Unlock()
+	return daemon.controlMemberCursors[key]
+}
+
+func (daemon *Daemon) storeControlMemberCursor(key, cursor string) {
+	daemon.controlClientMu.Lock()
+	if daemon.controlMemberCursors == nil {
+		daemon.controlMemberCursors = make(map[string]string)
+	}
+	if strings.TrimSpace(cursor) == "" {
+		delete(daemon.controlMemberCursors, key)
+	} else {
+		daemon.controlMemberCursors[key] = strings.TrimSpace(cursor)
+	}
+	daemon.controlClientMu.Unlock()
+}
+
+func cloneMembersResponse(response membersResponse) membersResponse {
+	response.Members = cloneAdvertisements(response.Members)
+	return response
 }
 
 func cloneAdvertisements(members []advertisementResponse) []advertisementResponse {
@@ -3227,6 +3504,15 @@ func (daemon *Daemon) markLocalAdvertisementPushed(target controlTarget, payload
 	daemon.controlClientMu.Unlock()
 }
 
+func (daemon *Daemon) forgetLocalAdvertisementPush(target controlTarget) {
+	key := controlClientCacheKey(target)
+	daemon.controlClientMu.Lock()
+	if daemon.controlAdPush != nil {
+		delete(daemon.controlAdPush, key)
+	}
+	daemon.controlClientMu.Unlock()
+}
+
 func controlPayloadHash(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return fmt.Sprintf("%x", sum)
@@ -3265,6 +3551,9 @@ func (daemon *Daemon) closeControlClientsLocked() {
 	}
 	for key := range daemon.controlMembers {
 		delete(daemon.controlMembers, key)
+	}
+	for key := range daemon.controlMemberCursors {
+		delete(daemon.controlMemberCursors, key)
 	}
 	for key := range daemon.controlAdPush {
 		delete(daemon.controlAdPush, key)
@@ -3338,34 +3627,110 @@ func (daemon *Daemon) fetchMembers(ctx context.Context, target controlTarget) ([
 	if err != nil {
 		return nil, err
 	}
-	cacheKey := controlClientCacheKey(target)
-	cachedETag, cachedMembers := daemon.cachedControlMembers(cacheKey)
-	requestURL := parsed.ResolveReference(&url.URL{Path: "/v1/control/members"})
+	baseCacheKey := controlClientCacheKey(target)
+	cursor := daemon.controlMemberCursor(baseCacheKey)
+	pageSize := daemon.controlMemberPageSize()
+	importLimit := daemon.controlMemberImportLimit()
+	advertisements := make([]advertisementResponse, 0)
+	seen := make(map[core.IXID]struct{})
+	importedRemote := 0
+	for pages := 0; pages < maxControlMemberPaginationPages(); pages++ {
+		limit := pageSize
+		if importLimit > 0 {
+			remaining := importLimit - importedRemote
+			if remaining <= 0 {
+				daemon.storeControlMemberCursor(baseCacheKey, cursor)
+				return advertisements, nil
+			}
+			if limit <= 0 || limit > remaining {
+				limit = remaining
+			}
+		}
+		response, fallback, err := daemon.fetchMembersPage(ctx, target, client, parsed, cursor, limit)
+		if fallback {
+			if len(advertisements) > 0 {
+				daemon.storeControlMemberCursor(baseCacheKey, cursor)
+				return advertisements, nil
+			}
+			return daemon.fetchSingleAdvertisement(ctx, target, client, parsed)
+		}
+		if err != nil {
+			if len(advertisements) > 0 {
+				daemon.storeControlMemberCursor(baseCacheKey, cursor)
+				return advertisements, nil
+			}
+			return nil, err
+		}
+		for _, advertisement := range response.Members {
+			ixID := core.IXID(strings.TrimSpace(advertisement.IXID))
+			if ixID == "" {
+				continue
+			}
+			if _, exists := seen[ixID]; exists {
+				continue
+			}
+			seen[ixID] = struct{}{}
+			advertisements = append(advertisements, advertisement)
+			if !advertisementMatchesControlTarget(advertisement, target) {
+				importedRemote++
+			}
+		}
+		cursor = strings.TrimSpace(response.NextCursor)
+		if cursor == "" {
+			daemon.storeControlMemberCursor(baseCacheKey, "")
+			return advertisements, nil
+		}
+	}
+	daemon.storeControlMemberCursor(baseCacheKey, cursor)
+	return advertisements, nil
+}
+
+func (daemon *Daemon) fetchMembersPage(ctx context.Context, target controlTarget, client *http.Client, parsed *url.URL, cursor string, limit int) (membersResponse, bool, error) {
+	cacheKey := controlMemberPageCacheKey(target, cursor, limit)
+	cachedETag, cachedResponse, cached := daemon.cachedControlMembers(cacheKey)
+	query := url.Values{}
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	query.Set("limit", strconv.Itoa(limit))
+	requestURL := parsed.ResolveReference(&url.URL{Path: "/v1/control/members", RawQuery: query.Encode()})
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
 	if err != nil {
-		return nil, err
+		return membersResponse{}, false, err
 	}
 	if cachedETag != "" {
 		req.Header.Set("If-None-Match", cachedETag)
 	}
 	resp, err := client.Do(req)
-	if err == nil && resp.StatusCode == http.StatusNotModified && len(cachedMembers) > 0 {
+	if err == nil && resp.StatusCode == http.StatusNotModified && cached {
 		drainAndCloseResponse(resp)
-		return cachedMembers, nil
+		return cachedResponse, false, nil
 	}
 	if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		defer drainAndCloseResponse(resp)
 		var response membersResponse
 		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-			return nil, fmt.Errorf("decode members from %s: %w", requestURL, err)
+			return membersResponse{}, false, fmt.Errorf("decode members from %s: %w", requestURL, err)
 		}
-		daemon.storeCachedControlMembers(cacheKey, resp.Header.Get("ETag"), response.Members)
-		return response.Members, nil
+		daemon.storeCachedControlMembers(cacheKey, resp.Header.Get("ETag"), response)
+		return response, false, nil
 	}
 	if resp != nil {
 		drainAndCloseResponse(resp)
 	}
-	return daemon.fetchSingleAdvertisement(ctx, target, client, parsed)
+	return membersResponse{}, true, nil
+}
+
+func maxControlMemberPaginationPages() int {
+	raw := strings.TrimSpace(os.Getenv("TRUSTIX_CONTROL_MEMBER_MAX_PAGES"))
+	if raw == "" {
+		return 16
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 16
+	}
+	return value
 }
 
 func (daemon *Daemon) fetchSingleAdvertisement(ctx context.Context, target controlTarget, client *http.Client, parsed *url.URL) ([]advertisementResponse, error) {

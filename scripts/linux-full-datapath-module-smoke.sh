@@ -44,11 +44,33 @@ read_module_param() {
   cat "$path"
 }
 
+param_is_yes() {
+  local name="$1"
+  local value
+  value="$(read_module_param "$name")" || return 1
+  printf '%s\n' "$value" | grep -qi '^Y'
+}
+
 truthy() {
   case "${1:-0}" in
     1|true|yes|on|enabled) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+assert_module_bool_disabled() {
+  local name="$1"
+  if param_is_yes "$name"; then
+    die "${name} must stay disabled in the first release"
+  fi
+}
+
+assert_module_param_equals() {
+  local name="$1"
+  local want="$2"
+  local got
+  got="$(read_module_param "$name" || true)"
+  [[ "$got" == "$want" ]] || die "${name}=${got:-missing}, want ${want}"
 }
 
 append_module_param_if_missing() {
@@ -185,6 +207,41 @@ verify_sysfs() {
     fi
   fi
   log "verified sysfs abi=${abi} selftests=${selftests} failures=${failures} features=${features} safe=${safe} unsafe=${unsafe} flags=${flags}"
+  verify_panic_risk_params_disabled
+}
+
+verify_panic_risk_params_disabled() {
+  local name
+  for name in \
+    rx_worker_steal_skb \
+    rx_worker_inline_stolen \
+    rx_worker_inline_receive \
+    rx_worker_xmit \
+    rx_worker_direct_xmit \
+    rx_worker_xmit_hash_tx_queue \
+    rx_worker_xmit_more \
+    rx_worker_inline_xmit \
+    rx_worker_inline_pair_coalesce \
+    rx_worker_inline_pair_hold_skb \
+    rx_worker_xmit_trust_tcp_checksum_ack_only \
+    rx_worker_xmit_tcp_partial_csum \
+    rx_worker_xmit_dst_mac_cache \
+    rx_worker_xmit_dst_mac_pcpu_cache \
+    rx_worker_xmit_dst_mac_seq_cache \
+    rx_worker_queue_skb \
+    rx_worker_stream_coalesce_gso \
+    rx_worker_stream_coalesce_software_segment \
+    rx_worker_steal_xmit \
+    rx_worker_steal_tcp \
+    rx_worker_tcp \
+    rx_worker_stream_tcp \
+    rx_worker_stream_batch_queue; do
+    assert_module_bool_disabled "$name"
+  done
+  assert_module_param_equals rx_worker_inline_pair_flush_jiffies 1
+  assert_module_param_equals rx_worker_inline_coalesce_max_frames 2
+  assert_module_param_equals rx_worker_xmit_trust_tcp_checksum_min_len 0
+  log "verified first-release panic-risk datapath parameters are forced disabled"
 }
 
 run_ioctl_test() {

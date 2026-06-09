@@ -8,3 +8,5 @@ TrustIX 是一个基于根证书信任链、实时可信配置传播和 TC/eBPF 
 - [第一版运行方式](first-run.md)：当前后端骨架的启动、查询和已实现边界。
 - [实现边界](implementation-boundaries.md)：当前 Go package 和命令入口的职责划分。
 - [部署脚本](deployment-scripts.md)：稳定的 build/deploy/bootstrap 脚本接口和多网卡边界。
+- [内核和发行版支持](kernel-distro-support.md)：当前 `.ko`、TC/eBPF、OpenWrt 和发行版支持边界。
+- [控制面 Fabric 架构](control-fabric-architecture.md)：大规模 IX 域的授权、发现、路由和恢复模型。

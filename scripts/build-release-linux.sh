@@ -421,7 +421,7 @@ main() {
     [[ -f "$script_src" ]] || continue
     script_name="$(basename "$script_src")"
     case "$script_name" in
-      linux-iperf3-crypto-bench.sh|linux-transport-matrix-bench.sh|openwrt-full-datapath-kmod-matrix.sh)
+      linux-iperf3-crypto-bench.sh|linux-transport-matrix-bench.sh)
         continue
         ;;
     esac

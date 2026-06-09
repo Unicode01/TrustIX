@@ -111,21 +111,84 @@ export type DesiredConfig = {
   primary_lan_id?: string;
   lan?: LANConfig;
   lans?: LANConfig[];
-  management?: Record<string, unknown>;
-  kernel_modules?: Record<string, unknown>;
-  trust?: Record<string, unknown>;
+  management?: ManagementConfig;
+  kernel_modules?: KernelModulesConfig;
+  trust?: TrustConfig;
   endpoints?: EndpointConfig[];
-  bootstrap?: Record<string, unknown>;
+  bootstrap?: BootstrapConfig;
+  control_fabric?: ControlFabricConfig;
   peers?: PeerConfig[];
   routes?: RouteConfig[];
   route_policy?: {
     import_prefixes?: string[];
     export_prefixes?: string[];
     dynamic_metric?: number;
+    transit_forwarding?: boolean;
+    import_transit_routes?: boolean;
     [key: string]: unknown;
   };
   policies?: Record<string, unknown>[];
   transport_policy?: TransportPolicyConfig;
+};
+
+export type ManagementConfig = {
+  host_api?: {
+    enabled?: boolean;
+    listen?: string;
+    require_read_auth?: boolean;
+    allow_unauthenticated_reads?: boolean;
+    allow_unauthenticated_writes?: boolean;
+  };
+  tls?: {
+    mode?: string;
+    identity?: string;
+    cert?: string;
+    key?: string;
+  };
+  web_ui?: {
+    enabled?: boolean;
+    custom_dir?: string;
+  };
+};
+
+export type KernelModuleConfig = {
+  mode?: string;
+  path?: string;
+  parameters?: string;
+  reload_on_upgrade?: string;
+  unload_on_exit?: boolean;
+};
+
+export type KernelModulesConfig = {
+  trustix_crypto?: KernelModuleConfig;
+  trustix_datapath?: KernelModuleConfig;
+  trustix_datapath_helpers?: KernelModuleConfig;
+};
+
+export type TrustConfig = {
+  revoked_cert_fingerprints?: string[];
+  trust_roots_pem?: string[];
+  admin_policy?: {
+    threshold?: number;
+    allowed_fingerprints?: string[];
+  };
+};
+
+export type BootstrapConfig = {
+  peers?: BootstrapPeerConfig[];
+};
+
+export type BootstrapPeerConfig = {
+  id?: string;
+  domain?: string;
+  control_api?: string;
+};
+
+export type ControlFabricConfig = {
+  profile?: string;
+  dynamic_control_fanout?: number;
+  member_page_size?: number;
+  member_import_limit?: number;
 };
 
 export type LANConfig = {
@@ -244,10 +307,18 @@ export type TransportPolicyConfig = {
       timeout?: string;
     };
   };
-  tls_identity?: Record<string, unknown>;
+  tls_identity?: TransportTLSIdentityConfig;
   kernel_transport?: {
     mode?: string;
   };
+};
+
+export type TransportTLSIdentityConfig = {
+  mode?: string;
+  cert?: string;
+  key?: string;
+  trust_roots?: string[];
+  system_roots?: boolean;
 };
 
 export type TransportProfileConfig = {
@@ -317,6 +388,8 @@ export type RoutePolicyStatus = {
     import_prefixes?: string[];
     export_prefixes?: string[];
     dynamic_metric?: number;
+    transit_forwarding?: boolean;
+    import_transit_routes?: boolean;
     [key: string]: unknown;
   };
   decisions?: Array<{
@@ -330,6 +403,14 @@ export type RoutePolicyStatus = {
     source?: string;
   }>;
   candidates?: RouteCandidate[];
+  decision_total?: number;
+  decision_offset?: number;
+  decision_limit?: number;
+  decision_truncated?: boolean;
+  candidate_total?: number;
+  candidate_offset?: number;
+  candidate_limit?: number;
+  candidate_truncated?: boolean;
 };
 
 export type RouteProbeResponse = {
@@ -619,6 +700,10 @@ export type ExperimentalTCPStatus = KernelUDPStatus & {
 export type LinksPayload = {
   local_ix?: string;
   links?: LinkStatus[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  truncated?: boolean;
 };
 
 export type LinkStatus = {

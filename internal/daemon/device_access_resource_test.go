@@ -120,6 +120,39 @@ func TestTrustRevokeDropsDeviceAccessSession(t *testing.T) {
 	}
 }
 
+func TestDeviceAccessLeaseExpiryDropsSession(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	daemon := newConfigApplyTestDaemon(t, deviceAccessDesiredForResourceTest(pkiSet))
+	session := &deviceIdentitySession{
+		identity: transport.PeerIdentity{
+			Role:   string(pki.RoleDevice),
+			Peer:   "ix-a",
+			Domain: "lab.local",
+			Device: "laptop-expire",
+		},
+		recv: make(chan struct{}),
+	}
+	registerResourceTestDeviceSession(t, daemon, session)
+	leaseKey := deviceLeaseKey{IX: "ix-a", Device: "laptop-expire"}
+	lease := daemon.deviceLeases[leaseKey]
+	lease.ExpiresAt = time.Now().UTC().Add(-time.Second)
+	daemon.deviceLeases[leaseKey] = lease
+
+	dropped := daemon.dropExpiredDeviceAccessSessions()
+	if dropped != 1 {
+		t.Fatalf("expired device lease dropped %d sessions, want 1", dropped)
+	}
+	if !session.closed {
+		t.Fatal("expired device lease did not close the session")
+	}
+	if len(daemon.deviceLeases) != 0 {
+		t.Fatalf("device leases after expiry = %#v, want none", daemon.deviceLeases)
+	}
+	if len(daemon.dataSessions) != 0 || len(daemon.dataSessionState) != 0 {
+		t.Fatalf("data sessions after device expiry = sessions:%#v state:%#v, want empty", daemon.dataSessions, daemon.dataSessionState)
+	}
+}
+
 func TestDeviceAccessRevokeRequiresAdminAuth(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	daemon := newConfigApplyTestDaemon(t, deviceAccessDesiredForResourceTest(pkiSet))
@@ -183,6 +216,9 @@ func TestDeviceAccessIssueRequiresAdminProofAndReturnsBundle(t *testing.T) {
 	daemon.handler().ServeHTTP(recorder, signed)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("issue status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if cacheControl := recorder.Header().Get("Cache-Control"); cacheControl != "no-store" {
+		t.Fatalf("cache-control = %q, want no-store", cacheControl)
 	}
 	var response deviceAccessIssueResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {

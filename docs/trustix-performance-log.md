@@ -2,6 +2,55 @@
 
 This file records datapath performance findings and script changes so future runs do not depend on chat context.
 
+## 2026-06-08
+
+### Public A/B ACKless TCP route-GSO verifier and stability retest
+
+Change: fixed route-GSO TC BPF generation so the route-GSO kfunc path no longer leaves verifier-unreachable fallback blocks behind. Follow-up fix redirects positive route-GSO kfunc returns in the route-xmit variant instead of falling through to the adjust-drop path.
+
+Validation:
+
+| Result file | Case | TCP tests | Result |
+| --- | --- | --- | --- |
+| `build/perf-matrix-remote-216-82-20260608-222345.json` | `exp_plaintext_fast_route_gso_async_stream_hw_inline_rx_directbuild_m64_outergso_hardenable_tuned_ackonly` | `82clientp1,82clientp4` | p1 2576.0 Mbps, p4 2344.1 Mbps, no reboot, outer-GSO active |
+| `build/perf-matrix-remote-216-82-20260608-222345.json` | `...flowshard_shards8_deqbatch_scheddepth8_usec500_dynlow12_high24_q4_emit12_resched16_hash_txq` | `82clientp1,82clientp4` | p1 2315.9 Mbps, p4 2143.7 Mbps, no reboot, cross-item active |
+| `build/perf-matrix-remote-216-82-20260608-223422.json` | `exp_plaintext_fast_route_gso_async_skipseq_route_xmit_kfunc` | `82clientp1,82clientp4` | p1 648.0 Mbps, p4 610.2 Mbps, no reboot, route-xmit kfunc active but not a throughput path |
+| `build/perf-matrix-remote-216-82-20260608-224203.json` | RX inline xmit stream-coalesce variants | `82clientp1` | 126.0 and 263.1 Mbps, no reboot; stable but not useful for performance |
+
+Conclusion: current public A/B fast ACKless path is route-GSO async stream direct-build with outer-GSO hard-enable. Route-xmit kfunc is now functional and stable in the tested public directions, but it mainly handles linear packets and does not improve throughput. RX inline xmit/coalesce no longer reproduced the earlier immediate panic in this short test, but throughput is too low to keep pursuing as the main performance path.
+
+Profile update: plaintext `performance` ACKless now enables `route_tcp_gso_async_stream_outer_gso_hard_enable=1` so the profile reaches the validated outer-GSO path. `stable` remains conservative and does not enable route-GSO async, outer-GSO hard-enable, or route-xmit worker by default.
+
+### Current-source PVE and public confirmation
+
+Compatibility fix: `dev->reg_state` is a bit-field on the current PVE/public kernels, so module code now reads it directly instead of through `READ_ONCE()`. This fixed out-of-tree module builds on PVE Ubuntu 6.8 and public Debian 6.12.
+
+PVE result file: `build/pve/pve-current-routegso-confirm-20260608-230959.json`, PVE VM A/B on `10.10.0.11/10.10.0.12`, underlay `enp6s19`, `TCP_TESTS=82clientp1,82clientp4,82clientp8`, `IPERF_SECONDS=5`, UDP disabled, route outer-GSO enabled, per-case module validation enabled.
+
+| Case | p1 Mbps | p4 Mbps | p8 Mbps | Result |
+| --- | ---: | ---: | ---: | --- |
+| ordered outer-GSO hard-enable | 3922.9 | 3671.8 | 3445.2 | no reboot, module validation OK, `route_gso_stream_outer_gso_active` |
+| sharded4 outer-GSO hard-enable | 4188.9 | 3615.9 | 3496.4 | no reboot, module validation OK |
+| sharded8 outer-GSO hard-enable | 4311.2 | 3665.2 | 3527.1 | no reboot, module validation OK; best p1 |
+| flowshard/shards8/deqbatch/dyncap/hash-txq profile candidate | 3853.5 | 3612.5 | 3243.5 | no reboot, cross-item active, not better than simple sharded cases |
+| route-xmit kfunc compatibility path | 3339.5 | 3362.3 | 2949.1 | no reboot, `route_tcp_xmit_active`; stable but still not the best throughput path |
+
+PVE conclusion: current source has a repeatable ACKless TCP performance ceiling above 3 Gbps on the isolated PVE path. The simple outer-GSO async stream direct-build variants remain the best candidates; extra flowshard/cross-item tuning did not beat them in this run. Route-xmit kfunc is no longer a low-throughput-only path on PVE, but it still trails outer-GSO direct-build.
+
+Public A/B result files: `build/perf-matrix-remote-216-82-public-confirm-20260608-232942.json` and `build/perf-matrix-remote-216-82-public-b2a-repeat-20260608-234401.json`.
+
+| Case | Direction | Result |
+| --- | --- | --- |
+| sharded8 outer-GSO hard-enable | A -> B | p1 427.2 Mbps, p4 669.7 Mbps, no reboot |
+| sharded8 outer-GSO hard-enable | B -> A | p1 761.7 Mbps, p4 1244.1 Mbps, no reboot |
+| route-xmit kfunc | A -> B | p1 171.5 Mbps, p4 389.6 Mbps, no reboot |
+| route-xmit kfunc | B -> A | p1 602.2 Mbps, p4 576.0 Mbps, no reboot |
+| ordered outer-GSO hard-enable repeat | B -> A | p1 707.5 Mbps, p4 1204.7 Mbps, p8 1719.8 Mbps, no reboot |
+
+Same-window public underlay baseline: direct iperf A -> B was p1 303.3 Mbps / p4 499.0 Mbps, while B -> A was p1 910.2 Mbps / p4 2187.1 Mbps. Public TrustIX throughput is therefore dominated by the asymmetric/noisy public underlay in this window, not by a PVE-style kernel panic or verifier failure.
+
+Cleanup: after the PVE and public confirmations, A, B, pveA, and pveB had stable boot IDs, no `trustixd`/`trustixd.current`/`iperf3` processes, no TrustIX modules loaded, and no test netns left. Final available memory was about 705 MiB on A, 733 MiB on B, 7314 MiB on pveA, and 7410 MiB on pveB.
+
 ## 2026-06-02
 
 ### PVE ACKless TCP outer-GSO stability correction
@@ -970,3 +1019,92 @@ Public underlay baseline from `build/perf-matrix-public-ab-ackless-noouter-20260
 Conclusion: real public A/B is not capped at the old 0.5 Gbps ACKless result. Safe direct-build/no-outer ACKless TCP remains poor at about 0.53-0.54 Gbps. Enabling outer-GSO hard-enable raises the best public ACKless TCP result to about 2.33 Gbps short-window and 2.26 Gbps over 10 seconds, with zero outer-GSO errors and no reboot. This is still well below the 4.2-4.5 Gbps available in the same direction on plain underlay TCP. Cross-item batching did not beat sharded8, and hash-txq did not work on this path because TX queue setting fell back every time. The remaining gap is more likely burst shape/backpressure/congestion behavior on the public path than raw per-frame copy cost.
 
 Cleanup: after testing, A/B had no TrustIX or iperf user processes, no loaded `trustix_*` modules, no TrustIX test netns, and no XDP attached to `ens18`. Available memory after cleanup was about 1,739,152 KiB on A and 767,512 KiB on B.
+
+### Public A/B ACKless TCP retake after peak window
+
+Validation: on 2026-06-09 afternoon, retested public A/B because the previous low result was likely affected by evening peak. A/B were clean before the run, current `trustixd.current` and rebuilt modules were deployed, and the ACKless TCP route-GSO/outer-GSO cases were run with `ENABLE_TIXT_PLAIN_ACK_ONLY=1`, `ENABLE_TIXT_PLAIN_SKIP_SEQUENCE=1`, `ENABLE_ROUTE_OUTER_GSO_HARD=1`, hot stats enabled, and `ens18` as the underlay. Result files: `build/public-underlay-retake-20260609-140709.json` and `build/perf-matrix-remote-216-82-public-retake-20260609-141604.json`.
+
+Public underlay baseline in the same window:
+
+| Direction | p1 Mbps | p4 Mbps | p8 Mbps | Notes |
+| --- | ---: | ---: | ---: | --- |
+| A `203.0.113.10` -> B `203.0.113.20` | 1217.03 | 1082.70 | 1533.52 | direct ping avg 1.29 ms |
+| B -> A | 3099.24 | 3702.00 | 3745.80 | direct ping avg 0.76 ms |
+
+ACKless TCP plaintext route-GSO/outer-GSO results:
+
+| Case | Direction | p1 Mbps | p4 Mbps | p8 Mbps | Resource/stability notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| sharded8 outer-GSO hard-enable | A -> B | 929.95 | 965.20 | 934.16 | max `trustixd` CPU 10.1%, max RSS 74.0 MiB, min available 603 MiB, boot IDs stable |
+| sharded8 outer-GSO hard-enable | B -> A | 2489.89 | 2599.17 | 2281.42 | outer-GSO frames A 2,105,951 / B 5,477,912, no reboot |
+| ordered outer-GSO hard-enable | A -> B | 544.75 | 1481.37 | 1169.74 | max `trustixd` CPU 10.1%, max RSS 70.3 MiB, min available 596 MiB, boot IDs stable |
+| ordered outer-GSO hard-enable | B -> A | 2436.37 | 2502.28 | 2203.38 | outer-GSO frames A 2,402,709 / B 5,307,052, no reboot |
+
+Conclusion: the late low public result was not representative. In this retake, A->B underlay recovered to about 1.5 Gbps and ACKless TCP reached 1.48 Gbps on the best ordered p4 run, effectively near the current public-path ceiling in that direction. B->A underlay recovered to about 3.7 Gbps and ACKless TCP reached 2.60 Gbps, about 69% of p4 underlay. CPU is still not saturated by `trustixd`; the remaining B->A gap is more likely congestion/burst pacing, qdisc/softirq behavior, or route-GSO queue shaping than a simple userspace CPU bottleneck.
+
+Cleanup: after the retake, A/B had no TrustIX or iperf processes, no TrustIX netns/veth, no loaded `trustix_*` modules, and no XDP attached to `ens18`. Boot IDs stayed unchanged. Available memory after cleanup was about 725,940 KiB on A and 784,112 KiB on B.
+
+### ACKless TCP public profile retune
+
+Change: the ACKless TCP performance route-GSO default was retuned from the previous sharded8/hash-TX-queue profile to the more balanced public-path profile:
+
+`flowshard + shards6 + worker dequeue batch + min queue depth 8 + 500 usec schedule delay + cross-item dynamic cap low 12/high 24/q4 + emit budget 8 + resched stride 16`
+
+The production helper profile no longer enables `route_tcp_gso_async_hash_tx_queue` by default because public A/B counters showed it falling back on this virtio path without a measurable gain.
+
+Validation files:
+
+| Result file | Scope | Notes |
+| --- | --- | --- |
+| `build/perf-matrix-remote-216-82-public-pacing-sweep-20260609-143510.json` | p4 sweep, hot stats | compared sharded8, ordered, shards6 pacing, delay variants; wrapper timed out after the final extra case, but completed cases and final boot status were valid |
+| `build/perf-matrix-remote-216-82-public-default-confirm-20260609-150401.json` | full p1/p4/p8, hot stats | validated selected shards6/emit8 profile after making it the harness best profile |
+| `build/perf-matrix-remote-216-82-public-prodlike-confirm-20260609-151328.json` | p4/p8, hot stats off | production-like confirmation without BPF map/hot-stat collection |
+
+Key public results:
+
+| Profile | Direction | p1 Mbps | p4 Mbps | p8 Mbps | Stability/resources |
+| --- | --- | ---: | ---: | ---: | --- |
+| selected shards6/emit8, hot stats | A -> B | 832.72 | 1420.68 | 1431.54 | boot IDs stable, max `trustixd` CPU 10.0%, max RSS 75.9 MiB |
+| selected shards6/emit8, hot stats | B -> A | 2425.47 | 2660.17 | 2406.61 | min available memory 607 MiB, no route-GSO errors/reboot |
+| selected shards6/emit8, production-like | A -> B | n/a | 1489.44 | 1439.96 | boot IDs stable, max `trustixd` CPU 10.0%, max RSS 73.9 MiB |
+| selected shards6/emit8, production-like | B -> A | n/a | 2411.18 | 2288.90 | min available memory 598 MiB, no reboot |
+
+Sweep highlights: the old sharded8 profile retested at about 1137 Mbps A->B p4 and 2345 Mbps B->A p4. Ordered outer-GSO retested at about 1360 Mbps A->B p4 and 2583 Mbps B->A p4. The selected shards6/emit8 pacing profile reached about 1552 Mbps A->B p4 and 2683 Mbps B->A p4 in the same sweep, with much lower A->B retransmits than ordered. A hash-TX-queue variant did not prove useful; its counters showed fallback instead of queue assignment.
+
+Conclusion: this does not make public ACKless TCP reach the PVE ceiling, but it is a better default than sharded8/hash-txq for the real A/B path. The current public limit still looks more like burst pacing/congestion and softirq/qdisc behavior than userspace CPU saturation.
+
+Cleanup: A/B were cleaned after validation. Final status showed no TrustIX or iperf processes, no TrustIX netns/veth, no loaded `trustix_*` modules, and no XDP attached to `ens18`. Boot IDs stayed unchanged; available memory after cleanup was about 721,592 KiB on A and 733,468 KiB on B.
+
+### Kernel and distro compatibility audit on PVE
+
+Validation: on 2026-06-09, reused the PVE compatibility VM `trustix-kernel-compat` (`10.0.0.21`, Ubuntu 22.04.5 LTS, running kernel `6.8.0-124-generic`) to check current kernel module build/load behavior across installed distro header trees. VM103 and VM104 were originally stopped; VM103 was started for the test and stopped again after cleanup. VM100 was not touched.
+
+Generic Linux Kbuild result:
+
+| KDIR | Kernel ABI | `trustix_crypto` | `trustix_datapath` | `trustix_datapath_helpers` |
+| --- | --- | --- | --- | --- |
+| `/lib/modules/5.15.0-179-generic/build` | `5.15.0-179-generic` | pass, `device-only` | pass, `full` | pass, `basic` |
+| `/lib/modules/5.15.0-181-generic/build` | `5.15.0-181-generic` | pass, `device-only` | pass, `full` | pass, `basic` |
+| `/lib/modules/6.1.0-1036-oem/build` | `6.1.0-1036-oem` | pass, `device-only` | pass, `full` | pass, `basic` |
+| `/lib/modules/6.8.0-124-generic/build` | `6.8.0-124-generic` | pass, `full` | pass, `full` | pass, `full` |
+
+Runtime smoke on the running `6.8.0-124-generic` kernel:
+
+| Module | Result | Notes |
+| --- | --- | --- |
+| `trustix_crypto` | pass | full module loaded; `/dev/trustix_crypto` ioctl batch/session/prepared-pool tests passed; BPF crypto kfunc provider was correctly skipped because this kernel BTF lacks `bpf_crypto_*` kfuncs |
+| `trustix_datapath_helpers` | pass | full helper loaded, selftests passed, `gso_skb` feature gate active, route-TCP XMIT worker remained disabled |
+| `trustix_datapath` | pass | loaded with `enable_features=128 rx_worker_inject=1 tx_plaintext=1`; selftests passed, `features=128 safe=128 unsafe=0`; panic-risk parameters forced disabled |
+
+OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
+
+| OpenWrt target | Kernel | Result |
+| --- | --- | --- |
+| `21.02.7 x86/64` | `5.4.238` | pass |
+| `23.05.5 x86/64` | `5.15.167` | pass |
+| `24.10.2 x86/64` | `6.6.93` | pass |
+| `23.05.5 armsr/armv8` | `5.15.167` | pass after re-downloading a truncated SDK cache |
+
+Compatibility fix in the OpenWrt matrix helper: added an explicit GNU awk prerequisite check and tar integrity validation before reusing cached SDK archives, so a missing `gawk` or truncated `.tar.xz/.tar.zst` fails with a useful cause instead of a misleading module build failure. The helper is now promoted to a tracked release tool and included in Linux release packages.
+
+Cleanup: VM103 had no loaded `trustix_*` modules and temporary `/tmp`/`/var/tmp` TrustIX files were removed. PVE host `/root`, `/tmp`, and `/var/tmp` had no `trustix*`/`*trustix*` leftovers after cleanup; VM103 and VM104 were stopped again. PVE disk usage ended at about 104 GiB used / 784 GiB free.

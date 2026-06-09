@@ -63,7 +63,8 @@
 #else
 #define TRUSTIX_DATAPATH_COMPILED_FEATURES \
 	(TRUSTIX_DATAPATH_FEATURE_GSO_SKB | \
-	 TRUSTIX_DATAPATH_FEATURE_ROUTE_TCP_KFUNC)
+	 TRUSTIX_DATAPATH_FEATURE_ROUTE_TCP_KFUNC | \
+	 TRUSTIX_DATAPATH_FEATURE_ROUTE_TCP_XMIT_KFUNC)
 #endif
 
 struct trustix_datapath_helpers_ioc_query {
@@ -506,6 +507,10 @@ void trustix_datapath_helpers_unregister(void)
 {
 }
 
+void trustix_datapath_helpers_disable_panic_risk_params(void)
+{
+}
+
 __u64 trustix_datapath_helpers_feature_mask(void)
 {
 	return 0;
@@ -516,6 +521,7 @@ static int __init trustix_datapath_helpers_init(void)
 {
 	int ret;
 
+	trustix_datapath_helpers_disable_panic_risk_params();
 	ret = trustix_datapath_helpers_register();
 	if (ret)
 		return ret;

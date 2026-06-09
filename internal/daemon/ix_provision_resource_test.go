@@ -55,6 +55,9 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("provision status = %d body=%s", recorder.Code, recorder.Body.String())
 	}
+	if cacheControl := recorder.Header().Get("Cache-Control"); cacheControl != "no-store" {
+		t.Fatalf("cache-control = %q, want no-store", cacheControl)
+	}
 	var response ixProvisionIssueResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -84,6 +87,11 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	daemon.handler().ServeHTTP(consumeRecorder, consume)
 	if consumeRecorder.Code != http.StatusOK {
 		t.Fatalf("consume status = %d body=%s", consumeRecorder.Code, consumeRecorder.Body.String())
+	}
+	if consumeRecorder.Header().Get("X-Content-Type-Options") != "nosniff" ||
+		consumeRecorder.Header().Get("X-Frame-Options") != "DENY" ||
+		!strings.Contains(consumeRecorder.Header().Get("Content-Security-Policy"), "default-src 'none'") {
+		t.Fatalf("bootstrap security headers = %#v", consumeRecorder.Header())
 	}
 	script := consumeRecorder.Body.String()
 	if !strings.Contains(script, "PRIVATE KEY") || !strings.Contains(script, `"id": "ix-d"`) || strings.Contains(script, "domain-ca.key") {
@@ -125,6 +133,9 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	if request.EndpointAddress != "ix-e.example.com:7000" || request.EndpointListen != "0.0.0.0:7000" {
 		t.Fatalf("endpoint = %q listen %q, want ix-e.example.com:7000 / 0.0.0.0:7000", request.EndpointAddress, request.EndpointListen)
 	}
+	if request.EndpointTransport != "udp" || request.EndpointName != "ix-e-udp" {
+		t.Fatalf("endpoint transport/name = %q/%q, want udp/ix-e-udp", request.EndpointTransport, request.EndpointName)
+	}
 	if request.LANIface != "trustix-ix-e" || request.LANGateway != "10.42.0.1/24" {
 		t.Fatalf("lan defaults iface=%q gateway=%q, want trustix-ix-e / 10.42.0.1/24", request.LANIface, request.LANGateway)
 	}
@@ -136,6 +147,29 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 		target.TransportPolicy.Profile != config.TransportProfileStable ||
 		target.TransportPolicy.KernelTransport.Mode != "auto" {
 		t.Fatalf("target transport policy = %#v", target.TransportPolicy)
+	}
+	if len(target.Endpoints) != 2 ||
+		target.Endpoints[0].Name != "ix-e-udp" ||
+		target.Endpoints[0].Transport != "udp" ||
+		target.Endpoints[0].Priority <= target.Endpoints[1].Priority ||
+		target.Endpoints[1].Name != "ix-e-experimental_tcp" ||
+		target.Endpoints[1].Transport != "experimental_tcp" {
+		t.Fatalf("target endpoints = %#v, want udp primary and experimental_tcp secondary", target.Endpoints)
+	}
+	if len(target.TransportPolicy.Candidates) != 2 ||
+		target.TransportPolicy.Candidates[0] != "ix-e-udp" ||
+		target.TransportPolicy.Candidates[1] != "ix-e-experimental_tcp" {
+		t.Fatalf("transport candidates = %#v, want udp then experimental_tcp", target.TransportPolicy.Candidates)
+	}
+	if len(target.TransportPolicy.Profiles) != 1 ||
+		target.TransportPolicy.Profiles[0].Transport != "experimental_tcp" ||
+		target.TransportPolicy.Profiles[0].Advanced.BatchBytes != dataSessionBatchDefaultBytes ||
+		target.TransportPolicy.Profiles[0].Advanced.FlushDelay != "25us" ||
+		target.TransportPolicy.Profiles[0].Advanced.MaxFrames != dataSessionBatchMaxPackets {
+		t.Fatalf("experimental_tcp profile = %#v, want fixed ackless batching profile", target.TransportPolicy.Profiles)
+	}
+	if target.Policies[0].LoadBalance == "least_conn" {
+		t.Fatalf("generated default policy uses least_conn, want priority-ordered fallback")
 	}
 }
 
@@ -159,6 +193,9 @@ func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
+	}
+	if len(target.Endpoints) != 2 {
+		t.Fatalf("target endpoints = %#v, want udp plus experimental_tcp fallback", target.Endpoints)
 	}
 	if target.TransportPolicy.Encryption != securetransport.EncryptionPlaintext ||
 		target.TransportPolicy.Profile != config.TransportProfilePerformance ||
@@ -199,7 +236,15 @@ func TestIXProvisionEdgeActiveOnlyDoesNotPublishControlAPI(t *testing.T) {
 	if target.IX.ControlAPI != "" || target.IX.ControlAPIPublish != "disabled" {
 		t.Fatalf("target ix control api = %q publish=%q, want empty/disabled", target.IX.ControlAPI, target.IX.ControlAPIPublish)
 	}
-	if len(target.Endpoints) != 1 || target.Endpoints[0].Mode != config.EndpointModeActive || target.Endpoints[0].Address != "ix-a.example.com:7000" || target.Endpoints[0].Listen != "" {
+	if len(target.Endpoints) != 2 ||
+		target.Endpoints[0].Mode != config.EndpointModeActive ||
+		target.Endpoints[0].Transport != "udp" ||
+		target.Endpoints[0].Address != "ix-a.example.com:7000" ||
+		target.Endpoints[0].Listen != "" ||
+		target.Endpoints[1].Mode != config.EndpointModeActive ||
+		target.Endpoints[1].Transport != "experimental_tcp" ||
+		target.Endpoints[1].Address != "ix-a.example.com:7000" ||
+		target.Endpoints[1].Listen != "" {
 		t.Fatalf("target endpoint = %#v, want active dial to upstream", target.Endpoints)
 	}
 	if len(target.Bootstrap.Peers) != 1 || target.Bootstrap.Peers[0].ControlAPI != "https://ix-a.example.com:9443" {

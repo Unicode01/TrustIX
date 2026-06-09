@@ -121,7 +121,10 @@ func transportProfileFeatures(rawTransport string, profile config.EndpointProfil
 	case transport.ProtocolExperimentalTCP:
 		add("tixt_v1", "ackless_tcp")
 		if profile.Profile == config.TransportProfilePerformance {
-			add("tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx")
+			add("tixb_batching")
+			if profile.Datapath != config.TransportDatapathUserspace {
+				add("tc_xdp", "af_xdp", "tc_tx_direct", "route_gso_async", "route_gso_async_outer_gso", "route_xmit_worker")
+			}
 			if parseSecureTransportEncryption(profile.Encryption) == "plaintext" {
 				add("plaintext_ack_only")
 			}
@@ -191,7 +194,7 @@ func requiredTransportProfileFeatures(rawTransport string, profile config.Endpoi
 	required := make([]string, 0, len(features))
 	for _, feature := range features {
 		switch feature {
-		case "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx", "large_frame_rx", "gso_rx", "gro_rx",
+		case "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "route_gso_async", "route_gso_async_outer_gso", "route_xmit_worker", "large_frame_rx", "gso_rx", "gro_rx",
 			"secure_tx_direct", "secure_rx_direct", "secure_kfunc_seal", "secure_trust_inner_checksum":
 			required = append(required, feature)
 		}

@@ -202,6 +202,7 @@ func (daemon *Daemon) handleDeviceAccessIssue(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	setSensitiveResponseHeaders(w)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -568,21 +569,26 @@ func (daemon *Daemon) validateDeviceAccessIssueAdvertisePrefixes(desired config.
 		}
 	}
 	daemon.dataMu.Lock()
-	defer daemon.dataMu.Unlock()
-	daemon.pruneExpiredDeviceLeasesLocked(time.Now().UTC())
+	expiredSessions := daemon.pruneExpiredDeviceLeasesLocked(time.Now().UTC())
 	for _, prefix := range prefixes {
 		prefix = prefix.Masked()
 		for key, lease := range daemon.deviceLeases {
 			if lease.Prefix.IsValid() && prefixOverlaps(prefix, lease.Prefix.Masked()) {
+				daemon.dataMu.Unlock()
+				daemon.closeDroppedDataSessions(expiredSessions)
 				return fmt.Errorf("advertise_prefixes %q overlaps device lease %q", prefix, lease.Prefix.Masked())
 			}
 			for _, advertised := range lease.AdvertisePrefixes {
 				if advertised.IsValid() && prefixOverlaps(prefix, advertised.Masked()) {
+					daemon.dataMu.Unlock()
+					daemon.closeDroppedDataSessions(expiredSessions)
 					return fmt.Errorf("advertise_prefixes %q overlaps device %s/%s prefix %q", prefix, key.IX, key.Device, advertised.Masked())
 				}
 			}
 		}
 	}
+	daemon.dataMu.Unlock()
+	daemon.closeDroppedDataSessions(expiredSessions)
 	return nil
 }
 

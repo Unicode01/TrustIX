@@ -80,6 +80,10 @@ For source release gates and Linux smoke tests, use [docs/release-checklist.md](
 
 For one-command build, deploy, and new-IX bootstrap automation, use [docs/deployment-scripts.md](docs/deployment-scripts.md).
 
+For kernel version, OpenWrt, and distribution support boundaries, use [docs/kernel-distro-support.md](docs/kernel-distro-support.md).
+
+For large-domain control-plane discovery, recovery, and anti-storm architecture, use [docs/control-fabric-architecture.md](docs/control-fabric-architecture.md).
+
 ## Security Notes
 
 Do not commit generated PKI material, runtime state, logs, or benchmark artifacts. The repository `.gitignore` intentionally excludes `certs/`, `*.key`, `.trustix/`, `build/`, and local state files.

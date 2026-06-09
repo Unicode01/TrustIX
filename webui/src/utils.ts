@@ -26,6 +26,7 @@ export function normalizeDesiredConfig(raw: DesiredConfig | null | undefined): D
   cfg.kernel_modules = isObject(cfg.kernel_modules) ? cfg.kernel_modules : {};
   cfg.trust = isObject(cfg.trust) ? cfg.trust : {};
   cfg.bootstrap = isObject(cfg.bootstrap) ? cfg.bootstrap : {};
+  cfg.control_fabric = isObject(cfg.control_fabric) ? cfg.control_fabric : {};
   cfg.route_policy = isObject(cfg.route_policy) ? cfg.route_policy : {};
   cfg.route_policy.import_prefixes = arrayValue(cfg.route_policy.import_prefixes);
   cfg.route_policy.export_prefixes = arrayValue(cfg.route_policy.export_prefixes);

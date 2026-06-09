@@ -57,72 +57,74 @@ type Config struct {
 }
 
 type Daemon struct {
-	cfg              Config
-	dataplane        dataplane.Manager
-	kernelCrypto     *kernelmodule.Manager
-	kernelDatapath   *kernelmodule.Manager
-	kernelHelpers    *kernelmodule.Manager
-	routes           *routing.Table
-	transports       *transport.Registry
-	desired          config.Desired
-	store            configlog.Store
-	logPath          string
-	dataDirLock      heldDataDirLock
-	head             configlog.Head
-	startedAt        time.Time
-	runCtx           context.Context
-	configMu         sync.RWMutex
-	configSyncMu     sync.RWMutex
-	controlClientMu  sync.Mutex
-	controlViewMu    sync.Mutex
-	controlClients   map[string]*cachedControlClient
-	controlMembers   map[string]cachedControlMembers
-	controlAdPush    map[string]cachedAdvertisementPush
-	controlView      controlViewSnapshot
-	cryptoPlacement  atomic.Uint32
-	secureKeySource  atomic.Uint32
-	secureEncryption atomic.Uint32
-	secureSuites     atomic.Value
-	configSync       map[string]configSyncPeerState
-	signerMu         sync.RWMutex
-	signerCerts      map[core.SignerID]*x509.Certificate
-	peerMu           sync.RWMutex
-	peerState        map[core.IXID]peerRuntime
-	membershipMu     sync.RWMutex
-	membershipDiskMu sync.Mutex
-	members          map[core.IXID]memberRecord
-	pendingMembers   map[core.IXID]pendingMemberRecord
-	provisionMu      sync.Mutex
-	provisionLoaded  bool
-	provisionTokens  map[string]ixProvisionTokenRecord
-	localAd          advertisementResponse
-	runtimeEpoch     uint64
-	dataMu           sync.Mutex
-	dataStats        dataPathStats
-	dataMetrics      dataPathMetrics
-	dataSessions     map[dataSessionKey]transport.Session
-	dataSessionState map[dataSessionKey]*dataSessionRuntime
-	deviceLeases     map[deviceLeaseKey]deviceAccessLease
-	sessionPoolRR    map[dataSessionPoolKey]uint64
-	sessionPoolFlow  map[dataSessionFlowPoolKey]int
-	dataSessionEpoch uint64
-	routeWarmupEpoch atomic.Uint64
-	forwardCacheMu   sync.RWMutex
-	forwardCache     map[routing.FlowKey]*dataForwardCacheEntry
-	dataPathStarted  bool
-	dataListeners    []dataListenerRuntime
-	captureCancel    context.CancelFunc
-	captureSub       dataplane.CaptureSubscription
-	kernelRXStage    kernelDatapathRXStageRuntime
-	localLAN         atomic.Value
-	flowMu           sync.RWMutex
-	flows            map[routing.FlowKey]routing.FlowBinding
-	nat              *natTable
-	endpointMu       sync.Mutex
-	endpointState    map[endpointStateKey]rstate.EndpointState
-	apiMu            sync.Mutex
-	apiErr           chan error
-	apiServers       []apiServerRuntime
+	cfg                  Config
+	dataplane            dataplane.Manager
+	kernelCrypto         *kernelmodule.Manager
+	kernelDatapath       *kernelmodule.Manager
+	kernelHelpers        *kernelmodule.Manager
+	routes               *routing.Table
+	transports           *transport.Registry
+	desired              config.Desired
+	store                configlog.Store
+	logPath              string
+	dataDirLock          heldDataDirLock
+	head                 configlog.Head
+	startedAt            time.Time
+	runCtx               context.Context
+	configMu             sync.RWMutex
+	configSyncMu         sync.RWMutex
+	controlClientMu      sync.Mutex
+	controlViewMu        sync.Mutex
+	controlClients       map[string]*cachedControlClient
+	controlMembers       map[string]cachedControlMembers
+	controlMemberCursors map[string]string
+	controlAdPush        map[string]cachedAdvertisementPush
+	controlTargetCursor  atomic.Uint64
+	controlView          controlViewSnapshot
+	cryptoPlacement      atomic.Uint32
+	secureKeySource      atomic.Uint32
+	secureEncryption     atomic.Uint32
+	secureSuites         atomic.Value
+	configSync           map[string]configSyncPeerState
+	signerMu             sync.RWMutex
+	signerCerts          map[core.SignerID]*x509.Certificate
+	peerMu               sync.RWMutex
+	peerState            map[core.IXID]peerRuntime
+	membershipMu         sync.RWMutex
+	membershipDiskMu     sync.Mutex
+	members              map[core.IXID]memberRecord
+	pendingMembers       map[core.IXID]pendingMemberRecord
+	provisionMu          sync.Mutex
+	provisionLoaded      bool
+	provisionTokens      map[string]ixProvisionTokenRecord
+	localAd              advertisementResponse
+	runtimeEpoch         uint64
+	dataMu               sync.Mutex
+	dataStats            dataPathStats
+	dataMetrics          dataPathMetrics
+	dataSessions         map[dataSessionKey]transport.Session
+	dataSessionState     map[dataSessionKey]*dataSessionRuntime
+	deviceLeases         map[deviceLeaseKey]deviceAccessLease
+	sessionPoolRR        map[dataSessionPoolKey]uint64
+	sessionPoolFlow      map[dataSessionFlowPoolKey]int
+	dataSessionEpoch     uint64
+	routeWarmupEpoch     atomic.Uint64
+	forwardCacheMu       sync.RWMutex
+	forwardCache         map[routing.FlowKey]*dataForwardCacheEntry
+	dataPathStarted      bool
+	dataListeners        []dataListenerRuntime
+	captureCancel        context.CancelFunc
+	captureSub           dataplane.CaptureSubscription
+	kernelRXStage        kernelDatapathRXStageRuntime
+	localLAN             atomic.Value
+	flowMu               sync.RWMutex
+	flows                map[routing.FlowKey]routing.FlowBinding
+	nat                  *natTable
+	endpointMu           sync.Mutex
+	endpointState        map[endpointStateKey]rstate.EndpointState
+	apiMu                sync.Mutex
+	apiErr               chan error
+	apiServers           []apiServerRuntime
 }
 
 type Option func(*Daemon)
@@ -137,6 +139,14 @@ type apiServerRuntime struct {
 const (
 	apiServerPrimary = "management"
 	apiServerHost    = "host_management"
+
+	managementHTTPReadHeaderTimeout = 5 * time.Second
+	managementHTTPWriteTimeout      = 2 * time.Minute
+	managementHTTPIdleTimeout       = 90 * time.Second
+	peerHTTPReadHeaderTimeout       = 5 * time.Second
+	peerHTTPWriteTimeout            = 2 * time.Minute
+	peerHTTPIdleTimeout             = 90 * time.Second
+	httpMaxHeaderBytes              = 1 << 20
 )
 
 func DefaultConfig() Config {
@@ -157,26 +167,28 @@ func WithDataplane(manager dataplane.Manager) Option {
 
 func New(cfg Config, options ...Option) (*Daemon, error) {
 	daemon := &Daemon{
-		cfg:              cfg,
-		dataplane:        selectDataplane(cfg.DataplaneMode),
-		kernelCrypto:     kernelmodule.NewTrustIXCryptoManager(),
-		kernelDatapath:   kernelmodule.NewTrustIXDatapathManager(),
-		kernelHelpers:    kernelmodule.NewTrustIXDatapathHelpersManager(),
-		routes:           routing.NewTable(),
-		transports:       transport.NewRegistry(),
-		configSync:       make(map[string]configSyncPeerState),
-		controlClients:   make(map[string]*cachedControlClient),
-		signerCerts:      make(map[core.SignerID]*x509.Certificate),
-		peerState:        make(map[core.IXID]peerRuntime),
-		members:          make(map[core.IXID]memberRecord),
-		pendingMembers:   make(map[core.IXID]pendingMemberRecord),
-		provisionTokens:  make(map[string]ixProvisionTokenRecord),
-		dataSessions:     make(map[dataSessionKey]transport.Session),
-		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
-		deviceLeases:     make(map[deviceLeaseKey]deviceAccessLease),
-		flows:            make(map[routing.FlowKey]routing.FlowBinding),
-		nat:              newNATTable(),
-		endpointState:    make(map[endpointStateKey]rstate.EndpointState),
+		cfg:                  cfg,
+		dataplane:            selectDataplane(cfg.DataplaneMode),
+		kernelCrypto:         kernelmodule.NewTrustIXCryptoManager(),
+		kernelDatapath:       kernelmodule.NewTrustIXDatapathManager(),
+		kernelHelpers:        kernelmodule.NewTrustIXDatapathHelpersManager(),
+		routes:               routing.NewTable(),
+		transports:           transport.NewRegistry(),
+		configSync:           make(map[string]configSyncPeerState),
+		controlClients:       make(map[string]*cachedControlClient),
+		controlMembers:       make(map[string]cachedControlMembers),
+		controlMemberCursors: make(map[string]string),
+		signerCerts:          make(map[core.SignerID]*x509.Certificate),
+		peerState:            make(map[core.IXID]peerRuntime),
+		members:              make(map[core.IXID]memberRecord),
+		pendingMembers:       make(map[core.IXID]pendingMemberRecord),
+		provisionTokens:      make(map[string]ixProvisionTokenRecord),
+		dataSessions:         make(map[dataSessionKey]transport.Session),
+		dataSessionState:     make(map[dataSessionKey]*dataSessionRuntime),
+		deviceLeases:         make(map[deviceLeaseKey]deviceAccessLease),
+		flows:                make(map[routing.FlowKey]routing.FlowBinding),
+		nat:                  newNATTable(),
+		endpointState:        make(map[endpointStateKey]rstate.EndpointState),
 	}
 	for _, option := range options {
 		option(daemon)
@@ -294,6 +306,8 @@ func (daemon *Daemon) Run(ctx context.Context) error {
 	}
 	go daemon.peerPoller(ctx)
 	go daemon.endpointHealthPoller(ctx)
+	go daemon.endpointGrantExpiryReaper(ctx)
+	go daemon.deviceAccessExpiryReaper(ctx)
 	go daemon.apiServerWatchdog(ctx)
 
 	select {
@@ -406,7 +420,7 @@ func (daemon *Daemon) startAPIServerLocked(name string, listen string, handler h
 		}
 		listener = tls.NewListener(listener, tlsConf)
 	}
-	server := &http.Server{Handler: handler}
+	server := newManagementHTTPServer(handler)
 	daemon.apiServers = append(daemon.apiServers, apiServerRuntime{
 		Name:   name,
 		Listen: listen,
@@ -626,7 +640,7 @@ func (daemon *Daemon) startPeerAPIServer() (*http.Server, <-chan error, error) {
 		return nil, nil, fmt.Errorf("listen peer api %q: %w", daemon.cfg.PeerAPIAddr, err)
 	}
 	listener = tls.NewListener(listener, tlsConf)
-	server := &http.Server{Handler: daemon.peerHandler()}
+	server := newPeerHTTPServer(daemon.peerHandler())
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
@@ -634,6 +648,26 @@ func (daemon *Daemon) startPeerAPIServer() (*http.Server, <-chan error, error) {
 		close(errc)
 	}()
 	return server, errc, nil
+}
+
+func newManagementHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: managementHTTPReadHeaderTimeout,
+		WriteTimeout:      managementHTTPWriteTimeout,
+		IdleTimeout:       managementHTTPIdleTimeout,
+		MaxHeaderBytes:    httpMaxHeaderBytes,
+	}
+}
+
+func newPeerHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: peerHTTPReadHeaderTimeout,
+		WriteTimeout:      peerHTTPWriteTimeout,
+		IdleTimeout:       peerHTTPIdleTimeout,
+		MaxHeaderBytes:    httpMaxHeaderBytes,
+	}
 }
 
 func listenTCP(ctx context.Context, listen string) (net.Listener, error) {
@@ -746,6 +780,7 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 	lan := config.PrimaryLAN(desired)
 	lanSpec := dataplaneLANAttachSpec(lan, desired)
 	secureFullDirect := kernelUDPSecureFullDirectForDesired(desired)
+	experimentalTCPRouteGSOAsync := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired)
 	return dataplane.AttachSpec{
 		LANIface:                                 lanSpec.Iface,
 		UnderlayIface:                            lanSpec.UnderlayIface,
@@ -764,6 +799,11 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		KernelUDPTXSecureDirectKfuncSeal:         secureFullDirect,
 		KernelUDPTXSecureDirectSKBSealKfunc:      secureFullDirect,
 		ExperimentalTCPTXDirect:                  experimentalTCPTXDirectForDesired(desired),
+		ExperimentalTCPRouteGSOSync:              experimentalTCPRouteGSOAsync,
+		ExperimentalTCPRouteGSOAsync:             experimentalTCPRouteGSOAsync,
+		ExperimentalTCPRouteXmitWorker:           experimentalTCPRouteGSOAsync,
+		ExperimentalTCPPlainSkipSequence:         experimentalTCPRouteGSOAsync,
+		ExperimentalTCPPlainACKOnly:              experimentalTCPRouteGSOAsync,
 		PinPath:                                  filepath.Join(dataDir, "bpf"),
 		DataDir:                                  dataDir,
 		LANs:                                     dataplaneLANAttachSpecs(desired),
@@ -1281,4 +1321,48 @@ func parseUintParam(r *http.Request, name string, defaultValue uint64) (uint64, 
 		return 0, fmt.Errorf("invalid %s %q", name, raw)
 	}
 	return value, nil
+}
+
+const maxPaginatedAPILimit = 10000
+
+func parsePaginationParams(r *http.Request, defaultLimit int) (int, int, error) {
+	offset := 0
+	limit := defaultLimit
+	query := r.URL.Query()
+	if raw := strings.TrimSpace(query.Get("offset")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return 0, 0, fmt.Errorf("invalid offset %q", raw)
+		}
+		offset = value
+	}
+	if raw := strings.TrimSpace(query.Get("limit")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return 0, 0, fmt.Errorf("invalid limit %q", raw)
+		}
+		limit = value
+	}
+	if limit > maxPaginatedAPILimit {
+		limit = maxPaginatedAPILimit
+	}
+	return offset, limit, nil
+}
+
+func paginateSlice[T any](items []T, offset, limit int) ([]T, int, bool) {
+	total := len(items)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= total {
+		return []T{}, total, total > 0
+	}
+	if limit <= 0 {
+		return items[offset:], total, false
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return items[offset:end], total, end < total
 }

@@ -16,6 +16,7 @@
 *.iso
 *.tar
 *.tar.gz
+*.tgz
 *.zip
 
 # Runtime logs and local state
@@ -74,7 +75,6 @@ coverage.out
 # release.
 /scripts/linux-iperf3-crypto-bench.sh
 /scripts/linux-transport-matrix-bench.sh
-/scripts/openwrt-full-datapath-kmod-matrix.sh
 /scripts/public-production-sim-latency.py
 /scripts/trustix-latency-history-summary.py
 
