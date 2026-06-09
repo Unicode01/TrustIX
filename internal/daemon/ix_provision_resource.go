@@ -1289,7 +1289,7 @@ func ixProvisionDownloadBootstrapCommand(urls []string) string {
 		builder.WriteByte(' ')
 		builder.WriteString(shellQuote(url))
 	}
-	builder.WriteString("; do if (curl -fsSL --connect-timeout 15 --retry 2 \"$url\" -o \"$tmp\" 2>/dev/null || wget -T 20 -qO \"$tmp\" \"$url\" 2>/dev/null); then ok=1; break; fi; done; [ \"$ok\" -eq 1 ] || { echo 'download trustix bootstrap failed' >&2; rm -f \"$tmp\"; exit 1; }")
+	builder.WriteString("; do if (curl -fsSL --connect-timeout 8 \"$url\" -o \"$tmp\" 2>/dev/null || wget -T 12 -qO \"$tmp\" \"$url\" 2>/dev/null); then ok=1; break; fi; done; [ \"$ok\" -eq 1 ] || { echo 'download trustix bootstrap failed' >&2; rm -f \"$tmp\"; exit 1; }")
 	return builder.String()
 }
 
@@ -1297,8 +1297,11 @@ func ixBootstrapScriptURLs() []string {
 	url := ixBootstrapScriptURL()
 	return []string{
 		url,
-		"https://gh.llkk.cc/" + url,
 		"https://ghproxy.net/" + url,
+		"https://gh-proxy.com/" + url,
+		"https://ghfast.top/" + url,
+		"https://gh.ddlc.top/" + url,
+		"https://gh.llkk.cc/" + url,
 		"https://mirror.ghproxy.com/" + url,
 	}
 }

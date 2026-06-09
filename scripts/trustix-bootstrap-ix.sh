@@ -83,7 +83,7 @@ trustix_bootstrap_github_url_candidates() {
     https://github.com/*|https://raw.githubusercontent.com/*) ;;
     *) return 0 ;;
   esac
-  mirrors="${TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS:-https://gh.llkk.cc/ https://ghproxy.net/ https://mirror.ghproxy.com/}"
+  mirrors="${TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS:-https://ghproxy.net/ https://gh-proxy.com/ https://ghfast.top/ https://gh.ddlc.top/ https://gh.llkk.cc/ https://mirror.ghproxy.com/}"
   for mirror in $mirrors; do
     [[ -n "$mirror" ]] || continue
     printf '%s%s\n' "${mirror%/}/" "$url"
@@ -98,10 +98,10 @@ trustix_bootstrap_download_file() {
     [[ -n "$url" ]] || continue
     rm -f "$out"
     trustix_bootstrap_log "download ${url}"
-    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 15 --retry 2 "$url" -o "$out"; then
+    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 8 "$url" -o "$out"; then
       return 0
     fi
-    if command -v wget >/dev/null 2>&1 && wget -T 20 -qO "$out" "$url"; then
+    if command -v wget >/dev/null 2>&1 && wget -T 12 -qO "$out" "$url"; then
       return 0
     fi
   done
@@ -236,6 +236,8 @@ Environment:
   TRUSTIX_BOOTSTRAP_MIRRORS=0 disables GitHub/Go mirror fallbacks.
   TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS="https://proxy/" overrides GitHub mirrors.
   TRUSTIX_BOOTSTRAP_GO_URL=URL pins the Go toolchain download URL.
+  TRUSTIX_BOOTSTRAP_PROVISION_INSECURE=1 disables TLS verification for the
+  one-time provision payload fetch; use only in isolated lab testing.
 
 Endpoint SPEC fields are comma-separated or semicolon-separated:
   name=ix-new-udp,transport=udp,mode=passive,listen=0.0.0.0:7000,address=ddns.example:7000
@@ -373,18 +375,51 @@ json_bool() {
   esac
 }
 
+trustix_bootstrap_provision_insecure_enabled() {
+  case "$(lower_ascii "${TRUSTIX_BOOTSTRAP_PROVISION_INSECURE:-0}")" in
+    1|true|yes|on|enabled) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+trustix_bootstrap_fetch_provision_payload() {
+  local url="$1"
+  local out="$2"
+  local -a curl_args=(-fsSL --connect-timeout 8)
+  local -a wget_args=(-T 12 -qO "$out")
+  if trustix_bootstrap_provision_insecure_enabled; then
+    curl_args+=(-k)
+    wget_args=(--no-check-certificate "${wget_args[@]}")
+    log "WARNING: fetching provision payload with TLS verification disabled"
+  fi
+  rm -f "$out"
+  if command -v curl >/dev/null 2>&1 && curl "${curl_args[@]}" "$url" -o "$out"; then
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1 && wget "${wget_args[@]}" "$url"; then
+    return 0
+  fi
+  rm -f "$out"
+  return 1
+}
+
 run_provision_token() {
   [[ -n "$provision_url" ]] || die "--provision-url is required in token mode"
   [[ -n "$provision_token" ]] || die "--token is required in token mode"
-  if ! command -v curl >/dev/null 2>&1; then
-    trustix_prereqs_ensure_network_deps || die "curl is required in token mode; automatic dependency install failed"
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    trustix_prereqs_ensure_network_deps || die "curl or wget is required in token mode; automatic dependency install failed"
   fi
   local base_url="${provision_url%/}"
   local payload_url="${base_url}/v1/provision/ix/${provision_token}/bootstrap.sh"
   local payload
   payload="$(mktemp /tmp/trustix-provision-payload.XXXXXX)"
   log "fetch provision payload"
-  curl -fsSL "$payload_url" -o "$payload"
+  if ! trustix_bootstrap_fetch_provision_payload "$payload_url" "$payload"; then
+    log "failed to fetch provision payload from ${payload_url}"
+    log "if this is BADCERT_CN_MISMATCH, use a --provision-url host that matches the IX HTTPS certificate"
+    log "for isolated lab testing only, set TRUSTIX_BOOTSTRAP_PROVISION_INSECURE=1"
+    die "provision payload download failed"
+  fi
   chmod 0700 "$payload"
   TRUSTIX_BOOTSTRAP_REPO_ROOT="$repo_root" bash "$payload"
   rm -f "$payload"

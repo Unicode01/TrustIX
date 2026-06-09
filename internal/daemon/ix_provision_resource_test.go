@@ -73,8 +73,10 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	}
 	if !strings.Contains(response.Command, "for url in") ||
 		!strings.Contains(response.Command, "raw.githubusercontent.com/Unicode01/TrustIX") ||
-		!strings.Contains(response.Command, "gh.llkk.cc") ||
-		!strings.Contains(response.Command, "ghproxy.net") {
+		!strings.Contains(response.Command, "ghproxy.net") ||
+		!strings.Contains(response.Command, "gh-proxy.com") ||
+		!strings.Contains(response.Command, "ghfast.top") ||
+		!strings.Contains(response.Command, "gh.ddlc.top") {
 		t.Fatalf("provision command does not include bootstrap mirror fallback: %s", response.Command)
 	}
 

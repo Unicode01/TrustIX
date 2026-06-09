@@ -127,10 +127,10 @@ trustix_prereqs_download_file() {
     [[ -n "$url" ]] || continue
     rm -f "$out"
     trustix_prereqs_log "download ${url}"
-    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 15 --retry 2 "$url" -o "$out"; then
+    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 8 "$url" -o "$out"; then
       return 0
     fi
-    if command -v wget >/dev/null 2>&1 && wget -T 20 -qO "$out" "$url"; then
+    if command -v wget >/dev/null 2>&1 && wget -T 12 -qO "$out" "$url"; then
       return 0
     fi
   done

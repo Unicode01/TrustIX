@@ -238,10 +238,10 @@ download_file() {
     [[ -n "$candidate" ]] || continue
     rm -f "$out"
     log "download ${candidate}"
-    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 15 --retry 2 "$candidate" -o "$out"; then
+    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 8 "$candidate" -o "$out"; then
       return 0
     fi
-    if command -v wget >/dev/null 2>&1 && wget -T 20 -qO "$out" "$candidate"; then
+    if command -v wget >/dev/null 2>&1 && wget -T 12 -qO "$out" "$candidate"; then
       return 0
     fi
   done
@@ -265,7 +265,7 @@ github_url_candidates() {
     https://github.com/*|https://raw.githubusercontent.com/*) ;;
     *) return 0 ;;
   esac
-  mirrors="${TRUSTIX_UPDATE_GITHUB_MIRRORS:-${TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS:-https://gh.llkk.cc/ https://ghproxy.net/ https://mirror.ghproxy.com/}}"
+  mirrors="${TRUSTIX_UPDATE_GITHUB_MIRRORS:-${TRUSTIX_BOOTSTRAP_GITHUB_MIRRORS:-https://ghproxy.net/ https://gh-proxy.com/ https://ghfast.top/ https://gh.ddlc.top/ https://gh.llkk.cc/ https://mirror.ghproxy.com/}}"
   for mirror in $mirrors; do
     [[ -n "$mirror" ]] || continue
     printf '%s%s\n' "${mirror%/}/" "$url"
