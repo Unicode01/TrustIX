@@ -893,6 +893,9 @@ fi
 if [[ "$do_deploy" == "1" && ( -n "$target" || "$local_install" == "1" ) ]]; then
   [[ -n "$tarball" ]] || die "deployment requires a tarball; do not combine --no-build with --target unless deploying separately"
   deploy_args=(--tarball "$tarball" --instance "$ix_id" --config "$config_path" --cert-dir "$deploy_cert_dir" --target-cert-dir "$target_cert_dir" --api "$api_addr" --peer-api "$peer_api_addr" --dataplane "$dataplane" --service-manager "$service_manager" --admin-auth)
+  if [[ "$service_manager" == "openwrt" || ( "$service_manager" == "auto" && -f /etc/openwrt_release ) ]]; then
+    deploy_args+=(--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1)
+  fi
   if [[ -n "$target" ]]; then
     deploy_args=(--target "$target" "${deploy_args[@]}")
     [[ -n "$ssh_port" ]] && deploy_args+=(--ssh-port "$ssh_port")

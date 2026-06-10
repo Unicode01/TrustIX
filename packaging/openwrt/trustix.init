@@ -41,6 +41,26 @@ trustix_load_env() {
 	fi
 }
 
+trustix_append_env_params() {
+	local env_file="$1"
+	local name value
+
+	[ -f "$env_file" ] || return 0
+	for name in $(sed -n \
+		-e 's/^[[:space:]]*export[[:space:]][[:space:]]*\(TRUSTIX_[A-Za-z0-9_]*\)=.*/\1/p' \
+		-e 's/^[[:space:]]*\(TRUSTIX_[A-Za-z0-9_]*\)=.*/\1/p' \
+		"$env_file" | sort -u); do
+		case "$name" in
+		TRUSTIX_BIN|TRUSTIX_CONFIG|TRUSTIX_DATA_DIR|TRUSTIX_API_ADDR|TRUSTIX_PEER_API_ADDR|TRUSTIX_DATAPLANE|TRUSTIX_EXTRA_ARGS)
+			continue
+			;;
+		esac
+		eval "value=\${$name-}"
+		[ -n "$value" ] || continue
+		procd_append_param env "$name=$value"
+	done
+}
+
 trustix_cleanup_dataplane() {
 	local instance="$1"
 	local env_file="$2"
@@ -79,6 +99,7 @@ trustix_start_one() {
 	for arg in $TRUSTIX_EXTRA_ARGS; do
 		procd_append_param command "$arg"
 	done
+	trustix_append_env_params "$env_file"
 	procd_set_param respawn 3600 5 5
 	procd_set_param stdout 1
 	procd_set_param stderr 1

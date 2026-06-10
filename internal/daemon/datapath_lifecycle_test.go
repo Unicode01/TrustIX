@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/routing"
+	rstate "trustix.local/trustix/internal/runtime"
 	"trustix.local/trustix/internal/transport"
 	experimentaltcptransport "trustix.local/trustix/internal/transport/experimentaltcp"
 	securetransport "trustix.local/trustix/internal/transport/secure"
@@ -212,6 +214,84 @@ func TestStartDataPathKeepsCaptureForwarderForExperimentalTCPTCOnlyProvider(t *t
 	}
 	if status.CaptureForwarderSuppressed {
 		t.Fatal("capture forwarder should not report suppressed for experimental_tcp fallback")
+	}
+}
+
+func TestStartDataPathDegradesExperimentalTCPKernelListenerUnavailable(t *testing.T) {
+	registry := transport.NewRegistry()
+	if err := registry.Register(&failingListenTransport{
+		name: transport.ProtocolExperimentalTCP,
+		err:  fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable"),
+	}); err != nil {
+		t.Fatalf("register transport: %v", err)
+	}
+	daemon := &Daemon{
+		dataplane:    &captureCountingManager{},
+		transports:   registry,
+		dataSessions: make(map[dataSessionKey]transport.Session),
+		desired: config.Desired{
+			IX: config.IXConfig{ID: "ix-a"},
+			Endpoints: []config.EndpointConfig{{
+				Name:      "exp-a",
+				Mode:      config.EndpointModePassive,
+				Listen:    "127.0.0.1:17043",
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeAuto)},
+			},
+		},
+	}
+
+	if _, err := daemon.startDataPath(context.Background()); err != nil {
+		t.Fatalf("start data path: %v", err)
+	}
+	state, ok := daemon.endpointStateFor("ix-a", config.EndpointConfig{
+		Name:      "exp-a",
+		Address:   "127.0.0.1:17043",
+		Transport: string(transport.ProtocolExperimentalTCP),
+	})
+	if !ok {
+		t.Fatal("local experimental_tcp listener failure was not recorded")
+	}
+	if state.Health != rstate.EndpointDown {
+		t.Fatalf("endpoint health = %q, want down", state.Health)
+	}
+	if !strings.Contains(state.Error, "TC/XDP reinject is unavailable") {
+		t.Fatalf("endpoint error = %q", state.Error)
+	}
+}
+
+func TestStartDataPathRequiresExperimentalTCPKernelListener(t *testing.T) {
+	registry := transport.NewRegistry()
+	if err := registry.Register(&failingListenTransport{
+		name: transport.ProtocolExperimentalTCP,
+		err:  fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable"),
+	}); err != nil {
+		t.Fatalf("register transport: %v", err)
+	}
+	daemon := &Daemon{
+		dataplane:    &captureCountingManager{},
+		transports:   registry,
+		dataSessions: make(map[dataSessionKey]transport.Session),
+		desired: config.Desired{
+			IX: config.IXConfig{ID: "ix-a"},
+			Endpoints: []config.EndpointConfig{{
+				Name:      "exp-a",
+				Mode:      config.EndpointModePassive,
+				Listen:    "127.0.0.1:17043",
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			},
+		},
+	}
+
+	if _, err := daemon.startDataPath(context.Background()); err == nil {
+		t.Fatal("start data path succeeded with require_kernel listener failure")
 	}
 }
 
@@ -973,6 +1053,27 @@ func waitForCaptureSubscriptionClose(t *testing.T, subscription *captureCounting
 	case <-time.After(time.Second):
 		t.Fatal("capture subscription was not closed")
 	}
+}
+
+type failingListenTransport struct {
+	name transport.Protocol
+	err  error
+}
+
+func (transportImpl *failingListenTransport) Name() transport.Protocol {
+	return transportImpl.name
+}
+
+func (transportImpl *failingListenTransport) Probe(ctx context.Context, peer transport.Peer) transport.ProbeResult {
+	return transport.ProbeResult{}
+}
+
+func (transportImpl *failingListenTransport) Dial(ctx context.Context, peer transport.Peer, tlsConf *tls.Config) (transport.Session, error) {
+	return nil, fmt.Errorf("unexpected failing transport dial")
+}
+
+func (transportImpl *failingListenTransport) Listen(ctx context.Context, ep transport.Endpoint, tlsConf *tls.Config) (transport.Listener, error) {
+	return nil, transportImpl.err
 }
 
 type epochBumpTransport struct {

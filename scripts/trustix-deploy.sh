@@ -35,6 +35,7 @@ Options:
   --dataplane MODE           noop, linux, or auto (default: auto)
   --admin-auth               add -api-admin-auth to service args
   --extra-arg ARG            append extra trustixd arg; repeatable
+  --env KEY=VALUE            append service environment; repeatable
   --no-sudo                  run install commands without sudo
   --no-enable                do not enable service
   --no-start                 do not start/restart service
@@ -95,6 +96,7 @@ api_addr="127.0.0.1:8787"
 peer_api_addr="0.0.0.0:9443"
 dataplane="auto"
 extra_args=()
+runtime_env=()
 sudo_cmd="sudo"
 enable_service=1
 start_service=1
@@ -130,6 +132,7 @@ while [[ $# -gt 0 ]]; do
     --dataplane) [[ $# -ge 2 ]] || die "--dataplane requires a value"; dataplane="$2"; shift 2 ;;
     --admin-auth) extra_args+=("-api-admin-auth"); shift ;;
     --extra-arg) [[ $# -ge 2 ]] || die "--extra-arg requires a value"; extra_args+=("$2"); shift 2 ;;
+    --env) [[ $# -ge 2 ]] || die "--env requires a value"; runtime_env+=("$2"); shift 2 ;;
     --no-sudo) sudo_cmd=""; shift ;;
     --no-enable) enable_service=0; shift ;;
     --no-start) start_service=0; shift ;;
@@ -150,6 +153,11 @@ case "$service_manager" in
   auto|systemd|openwrt) ;;
   *) die "--service-manager must be auto, systemd, or openwrt" ;;
 esac
+for item in "${runtime_env[@]}"; do
+  key="${item%%=*}"
+  [[ "$item" == *=* && "$key" =~ ^TRUSTIX_[A-Za-z0-9_]+$ ]] || die "--env must be TRUSTIX_NAME=value"
+  [[ "$item" != *$'\n'* ]] || die "--env value must not contain newlines"
+done
 
 run_root() {
   if [[ -n "$sudo_cmd" && "${EUID:-$(id -u)}" != "0" ]]; then
@@ -211,6 +219,24 @@ wait_systemd_unit_active() {
   run_root journalctl -u "$unit" --no-pager -n 80 >&2 || true
   run_root systemctl stop "$unit" >/dev/null 2>&1 || true
   die "systemd unit did not stay active: ${unit} (state=${state:-unknown}, result=${result:-unknown}, exec_status=${exec_status:-unknown}, restarts=${restarts:-unknown}, baseline_restarts=${baseline_restarts:-unknown})"
+}
+
+wait_openwrt_instance_started() {
+  local instance="$1"
+  local i
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return 0
+  fi
+  for i in {1..10}; do
+    if pgrep -f "trustixd.*${instance}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "OpenWrt instance did not show a trustixd process quickly: ${instance}"
+  run_root "${initdir}/trustix" status "$instance" >&2 || true
+  command -v logread >/dev/null 2>&1 && logread | grep -i 'trustix' | tail -n 80 >&2 || true
+  return 1
 }
 
 install_file() {
@@ -372,6 +398,9 @@ remote_deploy() {
   for opt in "${extra_args[@]}"; do
     remote_args+=(--extra-arg "$opt")
   done
+  for item in "${runtime_env[@]}"; do
+    remote_args+=(--env "$item")
+  done
 
   local command="TRUSTIX_DEPLOY_REMOTE_CHILD=1 bash $(shell_quote "${stage}/trustix-deploy.sh")"
   local arg
@@ -386,6 +415,7 @@ remote_deploy_openwrt() {
   local input_kind="bin"
   local input_path="${stage}/bin"
   local joined_extra="" first=1 arg
+  local joined_env="" env_item
   if [[ -n "$tarball" ]]; then
     input_kind="tarball"
     input_path="${stage}/package.tar.gz"
@@ -396,6 +426,14 @@ remote_deploy_openwrt() {
     fi
     first=0
     joined_extra+="$arg"
+  done
+  first=1
+  for env_item in "${runtime_env[@]}"; do
+    if [[ "$first" == "0" ]]; then
+      joined_env+=$'\n'
+    fi
+    first=0
+    joined_env+="$env_item"
   done
   local remote_script
   remote_script="$(cat <<'EOS'
@@ -419,6 +457,8 @@ enable_service="$6"
 start_service="$7"
 json="$8"
 extra_args="$9"
+shift 9
+runtime_env="${1:-}"
 
 [ -n "$prefix" ] || prefix=/opt/trustix
 [ -n "$sysconfdir" ] || sysconfdir=/etc/trustix
@@ -494,6 +534,17 @@ env_tmp="$stage/${instance}.env.tmp"
   printf 'TRUSTIX_PEER_API_ADDR=%s\n' "$peer_api_addr"
   printf 'TRUSTIX_DATAPLANE=%s\n' "$dataplane"
   printf 'TRUSTIX_EXTRA_ARGS="%s"\n' "$extra_args"
+  printf '%s\n' "$runtime_env" | while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    key="${item%%=*}"
+    value="${item#*=}"
+    case "$key" in
+      TRUSTIX_[A-Za-z0-9_]*)
+        esc_value="$(printf '%s' "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        printf '%s="%s"\n' "$key" "$esc_value"
+        ;;
+    esac
+  done
 } >"$env_tmp"
 copy_mode "$env_tmp" "$sysconfdir/$instance.env" 0644
 rm -f "$env_tmp"
@@ -502,7 +553,26 @@ if [ "$enable_service" = 1 ]; then
   "$initdir/trustix" enable
 fi
 if [ "$start_service" = 1 ]; then
-  "$initdir/trustix" restart "$instance"
+  "$initdir/trustix" stop "$instance" >/dev/null 2>&1 || true
+  "$initdir/trustix" start "$instance"
+  if command -v pgrep >/dev/null 2>&1; then
+    started=0
+    i=0
+    while [ "$i" -lt 10 ]; do
+      if pgrep -f "trustixd.*${instance}" >/dev/null 2>&1; then
+        started=1
+        break
+      fi
+      i=$((i + 1))
+      sleep 1
+    done
+    if [ "$started" != 1 ]; then
+      echo "OpenWrt instance did not show a trustixd process quickly: $instance" >&2
+      "$initdir/trustix" status "$instance" >&2 || true
+      command -v logread >/dev/null 2>&1 && logread | grep -i 'trustix' | tail -n 80 >&2 || true
+      exit 1
+    fi
+  fi
 fi
 
 if [ "$json" = 1 ]; then
@@ -517,7 +587,7 @@ EOS
   local config_remote="" cert_remote=""
   [[ -n "$config_path" ]] && config_remote="${stage}/config"
   [[ -n "$cert_dir" ]] && cert_remote="${stage}/certs"
-  "${ssh_cmd[@]}" "$target" "sh -s -- $(shell_quote "$stage") $(shell_quote "$input_kind") $(shell_quote "$input_path") $(shell_quote "$instance") $(shell_quote "$prefix") $(shell_quote "$sysconfdir") $(shell_quote "$state_root") $(shell_quote "$initdir") $(shell_quote "$target_cert_dir") $(shell_quote "$config_remote") $(shell_quote "$cert_remote") $(shell_quote "$api_addr") $(shell_quote "$peer_api_addr") $(shell_quote "$dataplane") $(shell_quote "$enable_service") $(shell_quote "$start_service") $(shell_quote "$json") $(shell_quote "$joined_extra")" <<<"$remote_script"
+  "${ssh_cmd[@]}" "$target" "sh -s -- $(shell_quote "$stage") $(shell_quote "$input_kind") $(shell_quote "$input_path") $(shell_quote "$instance") $(shell_quote "$prefix") $(shell_quote "$sysconfdir") $(shell_quote "$state_root") $(shell_quote "$initdir") $(shell_quote "$target_cert_dir") $(shell_quote "$config_remote") $(shell_quote "$cert_remote") $(shell_quote "$api_addr") $(shell_quote "$peer_api_addr") $(shell_quote "$dataplane") $(shell_quote "$enable_service") $(shell_quote "$start_service") $(shell_quote "$json") $(shell_quote "$joined_extra") $(shell_quote "$joined_env")" <<<"$remote_script"
 }
 
 install_from_package() {
@@ -605,6 +675,14 @@ install_config() {
     printf 'TRUSTIX_EXTRA_ARGS='
     env_quote "$joined_extra"
     printf '\n'
+    local env_item key value
+    for env_item in "${runtime_env[@]}"; do
+      key="${env_item%%=*}"
+      value="${env_item#*=}"
+      printf '%s=' "$key"
+      env_quote "$value"
+      printf '\n'
+    done
   } >"$env_tmp"
   install_file "$env_tmp" "${sysconfdir}/${instance}.env" 0644
   rm -f "$env_tmp"
@@ -656,7 +734,9 @@ local_deploy() {
         run_root "${initdir}/trustix" enable
       fi
       if [[ "$start_service" == "1" ]]; then
-        run_root "${initdir}/trustix" restart "$instance"
+        run_root "${initdir}/trustix" stop "$instance" >/dev/null 2>&1 || true
+        run_root "${initdir}/trustix" start "$instance"
+        wait_openwrt_instance_started "$instance" || die "OpenWrt instance did not start: ${instance}"
       fi
       ;;
   esac

@@ -1973,6 +1973,47 @@ func TestKernelTransportProtocolExperimentalTCPReportsRawFallbackKernelCrypto(t 
 	}
 }
 
+func TestEnsureKernelTransportFastPathAutoDegradesAttachFailure(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{UnderlayIface: "trustix-missing-underlay0"}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeAuto},
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        "exp-a",
+			Peer:      "ix-a",
+			Transport: "experimental_tcp",
+			Listen:    "127.0.0.1:17043",
+			Enabled:   true,
+		}},
+	}
+
+	if err := manager.ensureKernelTransportFastPathLocked(context.Background()); err != nil {
+		t.Fatalf("auto kernel transport attach should degrade: %v", err)
+	}
+	if len(manager.warnings) == 0 || !strings.Contains(manager.warnings[len(manager.warnings)-1], "continuing without AF_XDP provider") {
+		t.Fatalf("warnings = %#v, want AF_XDP degradation warning", manager.warnings)
+	}
+}
+
+func TestEnsureKernelTransportFastPathRequireKernelFailsAttachFailure(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{UnderlayIface: "trustix-missing-underlay0"}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        "exp-a",
+			Peer:      "ix-a",
+			Transport: "experimental_tcp",
+			Listen:    "127.0.0.1:17043",
+			Enabled:   true,
+		}},
+	}
+
+	if err := manager.ensureKernelTransportFastPathLocked(context.Background()); err == nil {
+		t.Fatal("require_kernel attach failure returned nil")
+	}
+}
+
 func TestKernelUDPTXRouteFlowPowerOfTwoLimit(t *testing.T) {
 	tests := []struct {
 		count int

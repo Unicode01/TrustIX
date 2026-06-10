@@ -3072,6 +3072,13 @@ func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context)
 				}
 				return nil
 			}
+			if manager.snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeRequireKernel {
+				manager.warnings = append(manager.warnings, "kernel transport fast path unavailable; continuing without AF_XDP provider: "+err.Error())
+				if detachErr := manager.detachExperimentalTCPFastPathLocked(); detachErr != nil {
+					return detachErr
+				}
+				return nil
+			}
 			return err
 		}
 		if kernelDatapathRXWorkerOwnsStackRX() {

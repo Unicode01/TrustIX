@@ -722,6 +722,14 @@ func (daemon *Daemon) startTransportListenerEndpoint(ctx context.Context, cfgEnd
 	}
 	listener, err := tr.Listen(ctx, endpoint, tlsConf)
 	if err != nil {
+		if daemon.dataListenerErrorCanDegrade(cfgEndpoint, err) {
+			statusEndpoint := cfgEndpoint
+			if statusEndpoint.Address == "" {
+				statusEndpoint.Address = statusEndpoint.Listen
+			}
+			daemon.recordEndpointDown(daemon.desired.IX.ID, statusEndpoint, fmt.Errorf("listen data endpoint %q: %w", endpoint.Name, err))
+			return nil
+		}
 		return fmt.Errorf("listen data endpoint %q: %w", endpoint.Name, err)
 	}
 	listenerCtx, cancel := context.WithCancel(ctx)
@@ -734,6 +742,28 @@ func (daemon *Daemon) startTransportListenerEndpoint(ctx context.Context, cfgEnd
 	daemon.dataMu.Unlock()
 	go daemon.acceptDataPathSessions(listenerCtx, endpoint, listener)
 	return nil
+}
+
+func (daemon *Daemon) dataListenerErrorCanDegrade(endpoint config.EndpointConfig, err error) bool {
+	if err == nil || daemon.kernelTransportMode() == dataplane.KernelTransportModeRequireKernel {
+		return false
+	}
+	switch transport.Protocol(endpoint.Transport) {
+	case transport.ProtocolExperimentalTCP:
+	default:
+		return false
+	}
+	message := err.Error()
+	for _, marker := range []string{
+		"TC/XDP reinject is unavailable",
+		"dataplane provider is unavailable",
+		"requires kernel transport",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (daemon *Daemon) peerConfigsForTunnelListeners() []config.PeerConfig {

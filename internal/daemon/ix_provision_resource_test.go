@@ -322,6 +322,9 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if !strings.Contains(script, "--service-manager 'openwrt'") {
 		t.Fatalf("bootstrap script does not force OpenWrt service manager:\n%s", script)
 	}
+	if !strings.Contains(script, "--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1") {
+		t.Fatalf("bootstrap script does not enable OpenWrt experimental_tcp compat stream:\n%s", script)
+	}
 }
 
 func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
