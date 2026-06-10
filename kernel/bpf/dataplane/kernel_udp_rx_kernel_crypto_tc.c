@@ -3,7 +3,7 @@
 // experimental_tcp TIXT frames.
 // Eligible packets are opened with the provider-owned AEAD context, rewritten
 // to Ethernet + inner IPv4, and redirected to the LAN. Unsupported packets use
-// TC_ACT_PIPE so the existing XDP/AF_XDP fallback remains authoritative.
+// TC_ACT_UNSPEC so unrelated TC filters on the same hook can still run.
 #define SEC(NAME) __attribute__((section(NAME), used))
 #define __ksym __attribute__((section(".ksyms")))
 #define __always_inline inline __attribute__((always_inline))
@@ -50,8 +50,8 @@ const volatile __u32 trustix_kudp_rx_secure_recompute_inner_csum = 0;
 #endif
 
 #define TC_ACT_OK 0
+#define TC_ACT_UNSPEC (-1)
 #define TC_ACT_SHOT 2
-#define TC_ACT_PIPE 3
 
 #define ETH_P_IP 0x0800
 #define IPPROTO_TCP 6
@@ -1238,7 +1238,7 @@ drop:
 
 fallback:
     trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACKS);
-    return TC_ACT_PIPE;
+    return TC_ACT_UNSPEC;
 }
 
 char __license[] SEC("license") = "Dual MIT/GPL";

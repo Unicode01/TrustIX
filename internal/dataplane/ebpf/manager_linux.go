@@ -783,6 +783,7 @@ const (
 	skbDataOffset                                                     = 76
 	skbDataEndOffset                                                  = 80
 	skbGSOSizeOffset                                                  = 176
+	tcActUnspec                                                       = -1
 	tcActOK                                                           = 0
 	tcActShot                                                         = 2
 	tcActStolen                                                       = 4
@@ -1661,6 +1662,19 @@ func effectiveLANAttachSpecs(spec dataplane.AttachSpec) []dataplane.LANAttachSpe
 		out = append(out, normalizeLANAttachSpec(lan, spec, i == 0))
 	}
 	return out
+}
+
+func attachSpecHasLANIface(spec dataplane.AttachSpec, iface string) bool {
+	iface = strings.TrimSpace(iface)
+	if iface == "" {
+		return false
+	}
+	for _, lan := range effectiveLANAttachSpecs(spec) {
+		if strings.TrimSpace(lan.Iface) == iface {
+			return true
+		}
+	}
+	return false
 }
 
 func legacyLANAttachConfigured(spec dataplane.AttachSpec) bool {
@@ -5836,6 +5850,7 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 			}
 		}
 	}
+	manager.underlayQdiscPrepared = strings.TrimSpace(manager.spec.UnderlayIface) != ""
 	if manager.spec.PinPath != "" {
 		if err := os.MkdirAll(manager.spec.PinPath, 0o755); err != nil {
 			return fmt.Errorf("create dataplane pin path %q: %w", manager.spec.PinPath, err)
@@ -5906,6 +5921,13 @@ func (manager *Manager) PlanCleanup(ctx context.Context, spec dataplane.AttachSp
 				qdiscPreparedLANs[lanAddressStateKey(lan)] = true
 			}
 		}
+	}
+	underlayIface := strings.TrimSpace(effective.UnderlayIface)
+	if underlayIface != "" && !attachSpecHasLANIface(effective, underlayIface) {
+		steps = append(steps,
+			dataplane.CleanupStep{Action: "remove_tc_filters", Target: underlayIface, Detail: "TrustIX underlay BPF filters"},
+			dataplane.CleanupStep{Action: "delete_clsact_qdisc", Target: underlayIface},
+		)
 	}
 	for _, lan := range effectiveLANAttachSpecs(effective) {
 		if lan.Iface == "" {
@@ -15239,7 +15261,7 @@ func appendKernelUDPRXDirectTerminalBlocks(instructions asm.Instructions, statsM
 	}
 	if instructionsContainSymbolOrReference(instructions, "kudp_rx_direct_pass") {
 		instructions = append(instructions,
-			asm.Mov.Imm(asm.R0, tcActOK).WithSymbol("kudp_rx_direct_pass"),
+			asm.Mov.Imm(asm.R0, tcActUnspec).WithSymbol("kudp_rx_direct_pass"),
 			asm.Return(),
 		)
 	}

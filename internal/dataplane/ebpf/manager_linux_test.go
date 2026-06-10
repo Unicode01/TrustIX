@@ -762,7 +762,7 @@ func TestKernelUDPTXSecureDirectBypassesRouteFlag(t *testing.T) {
 	}
 	body := source[bodyStart:]
 	lookup := bytes.Index(body, []byte("route = bpf_map_lookup_elem(&ix_kudp_tx_route, &route_key);"))
-	bypass := bytes.Index(body, []byte("if (route->flags & TRUSTIX_KUDP_TX_ROUTE_FLAG_BYPASS)\n        return TC_ACT_PIPE;"))
+	bypass := bytes.Index(body, []byte("if (route->flags & TRUSTIX_KUDP_TX_ROUTE_FLAG_BYPASS)\n        return TC_ACT_UNSPEC;"))
 	selectFlow := bytes.Index(body, []byte("flow_id = trustix_kudp_select_route_flow(route, data, data_end);"))
 	if lookup < 0 || bypass < 0 || selectFlow < 0 {
 		t.Fatalf("secure route lookup/bypass/select not found: lookup=%d bypass=%d select=%d", lookup, bypass, selectFlow)
@@ -937,6 +937,44 @@ func TestKernelUDPSecureDirectKfuncsUseDirectSlotMap(t *testing.T) {
 			!bytes.Contains(source, []byte("provider.directSlotMap")) {
 			t.Fatalf("%s does not replace trustix_kernel_crypto_direct_slots with provider map", name)
 		}
+	}
+}
+
+func TestKernelUDPTCClassifiersYieldExternalFiltersOnFallback(t *testing.T) {
+	for name, path := range map[string]string{
+		"tx": filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_tx_kernel_crypto_tc.c"),
+		"rx": filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_rx_kernel_crypto_tc.c"),
+	} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read kernel_udp %s secure C source: %v", name, err)
+		}
+		source := strings.ReplaceAll(string(raw), "\r\n", "\n")
+		if !strings.Contains(source, "#define TC_ACT_UNSPEC (-1)") {
+			t.Fatalf("%s secure TC source does not define TC_ACT_UNSPEC", name)
+		}
+		if strings.Contains(source, "return TC_ACT_PIPE") || strings.Contains(source, "return TC_ACT_OK") {
+			t.Fatalf("%s secure TC source still has a terminal fallback/pass return", name)
+		}
+		if !strings.Contains(source, "fallback:\n") || !strings.Contains(source, "return TC_ACT_UNSPEC;") {
+			t.Fatalf("%s secure TC fallback does not yield to later filters", name)
+		}
+	}
+}
+
+func TestKernelUDPRXDirectPassYieldsExternalFilters(t *testing.T) {
+	source, err := os.ReadFile("manager_linux.go")
+	if err != nil {
+		t.Fatalf("read manager_linux.go: %v", err)
+	}
+	if !bytes.Contains(source, []byte("tcActUnspec                                                       = -1")) {
+		t.Fatal("manager source does not define TC_ACT_UNSPEC equivalent")
+	}
+	if !bytes.Contains(source, []byte(`asm.Mov.Imm(asm.R0, tcActUnspec).WithSymbol("kudp_rx_direct_pass")`)) {
+		t.Fatal("kernel_udp RX direct pass path does not yield to later TC filters")
+	}
+	if bytes.Contains(source, []byte(`asm.Mov.Imm(asm.R0, tcActOK).WithSymbol("kudp_rx_direct_pass")`)) {
+		t.Fatal("kernel_udp RX direct pass path still terminates TC classification")
 	}
 }
 
@@ -1535,6 +1573,78 @@ func TestPlanCleanupIncludesMultipleLANs(t *testing.T) {
 	}
 	if !cleanupPlanHasStep(plan, "delete_managed_lan_iface", "br-guest") {
 		t.Fatalf("cleanup plan missing TrustIX-created LAN iface cleanup: %#v", plan.Steps)
+	}
+}
+
+func TestPlanCleanupIncludesDistinctUnderlayTCFilters(t *testing.T) {
+	pinPath := t.TempDir()
+	state := persistedDataplaneState{
+		Version: persistedStateVersion,
+		Spec: normalizeAttachSpec(dataplane.AttachSpec{
+			PinPath:       pinPath,
+			LANIface:      "br-lan",
+			UnderlayIface: "eth0",
+			Gateway:       "192.168.1.1/24",
+			ManageQdisc:   true,
+			ManageAddress: true,
+		}),
+		Attached:      true,
+		QdiscPrepared: true,
+		AddressAdded:  true,
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pinPath, "state.json"), payload, 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	manager := NewManager()
+	plan, err := manager.PlanCleanup(context.Background(), dataplane.AttachSpec{PinPath: pinPath})
+	if err != nil {
+		t.Fatalf("plan cleanup: %v", err)
+	}
+	if !cleanupPlanHasStep(plan, "remove_tc_filters", "eth0") || !cleanupPlanHasStep(plan, "delete_clsact_qdisc", "eth0") {
+		t.Fatalf("cleanup plan missing underlay TC cleanup: %#v", plan.Steps)
+	}
+}
+
+func TestPlanCleanupSkipsDuplicateUnderlayLANStep(t *testing.T) {
+	pinPath := t.TempDir()
+	state := persistedDataplaneState{
+		Version: persistedStateVersion,
+		Spec: normalizeAttachSpec(dataplane.AttachSpec{
+			PinPath:       pinPath,
+			LANIface:      "br-lan",
+			UnderlayIface: "br-lan",
+			Gateway:       "192.168.1.1/24",
+			ManageQdisc:   true,
+			ManageAddress: true,
+		}),
+		Attached:      true,
+		QdiscPrepared: true,
+		AddressAdded:  true,
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pinPath, "state.json"), payload, 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	manager := NewManager()
+	plan, err := manager.PlanCleanup(context.Background(), dataplane.AttachSpec{PinPath: pinPath})
+	if err != nil {
+		t.Fatalf("plan cleanup: %v", err)
+	}
+	count := 0
+	for _, step := range plan.Steps {
+		if step.Action == "remove_tc_filters" && step.Target == "br-lan" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("cleanup plan should include one br-lan TC cleanup step, got %d: %#v", count, plan.Steps)
 	}
 }
 

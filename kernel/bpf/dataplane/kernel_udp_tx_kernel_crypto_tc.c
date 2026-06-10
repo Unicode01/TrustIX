@@ -2,8 +2,8 @@
 // TC egress-builder for secure kernel transport TX. It runs before the generic
 // TrustIX LAN ingress program, encrypts eligible inner IPv4 packets with the
 // provider-owned AEAD context, builds UDP/TIXU or TCP-shaped TIXT in-place,
-// and redirects to the underlay. Unsupported packets return TC_ACT_PIPE so
-// lower-priority TrustIX TC filters can still handle them.
+// and redirects to the underlay. Unsupported packets return TC_ACT_UNSPEC so
+// lower-priority TrustIX and external TC filters can still handle them.
 #define SEC(NAME) __attribute__((section(NAME), used))
 #define __ksym __attribute__((section(".ksyms")))
 #define __always_inline inline __attribute__((always_inline))
@@ -48,8 +48,8 @@ const volatile __u32 trustix_kudp_tx_secure_outer_tcp_partial_csum_kfunc = 0;
 #endif
 
 #define TC_ACT_OK 0
+#define TC_ACT_UNSPEC (-1)
 #define TC_ACT_SHOT 2
-#define TC_ACT_PIPE 3
 
 #define ETH_P_IP 0x0800
 #define IPPROTO_TCP 6
@@ -1337,7 +1337,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     if (!route)
         goto route_miss;
     if (route->flags & TRUSTIX_KUDP_TX_ROUTE_FLAG_BYPASS)
-        return TC_ACT_PIPE;
+        return TC_ACT_UNSPEC;
     flow_id = trustix_kudp_select_route_flow(route, data, data_end);
     if (flow_id == 0)
         goto route_miss;
@@ -1536,7 +1536,7 @@ checksum_fallback:
 
 fallback:
     trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_FALLBACKS);
-    return TC_ACT_PIPE;
+    return TC_ACT_UNSPEC;
 
 drop:
     trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DROPS);
