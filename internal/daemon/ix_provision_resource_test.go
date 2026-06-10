@@ -325,6 +325,16 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if !strings.Contains(script, "--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1") {
 		t.Fatalf("bootstrap script does not enable OpenWrt experimental_tcp compat stream:\n%s", script)
 	}
+	for _, env := range []string{
+		"--env TRUSTIX_KERNEL_UDP_TC_ONLY=1",
+		"--env TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1",
+		"--env TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO=1",
+		"--env TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO=1",
+	} {
+		if !strings.Contains(script, env) {
+			t.Fatalf("bootstrap script does not enable OpenWrt TC-only env %q:\n%s", env, script)
+		}
+	}
 }
 
 func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
@@ -356,6 +366,43 @@ func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 		target.TransportPolicy.Datapath != config.TransportDatapathKernelModule ||
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
 		t.Fatalf("target plaintext performance policy endpoint=%#v policy=%#v", target.Endpoints[0], target.TransportPolicy)
+	}
+}
+
+func TestIXProvisionOpenWRTPlaintextPerformanceUsesUDPTCOnly(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:            "ix-openwrt-fast",
+		Profile:         "plaintext-performance",
+		Advertise:       []core.Prefix{"10.79.0.0/24"},
+		EndpointAddress: "router.example.com:7000",
+		ProvisionURL:    "https://ix-a.example.com:18787",
+		ServiceManager:  "openwrt",
+	}, desired)
+	if err != nil {
+		t.Fatalf("normalize provision request: %v", err)
+	}
+	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
+	if err != nil {
+		t.Fatalf("desired for provision: %v", err)
+	}
+	if len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "udp" {
+		t.Fatalf("OpenWrt TC-only target endpoints = %#v, want single UDP endpoint", target.Endpoints)
+	}
+	if len(target.TransportPolicy.Candidates) != 1 || target.TransportPolicy.Candidates[0] != target.Endpoints[0].Name {
+		t.Fatalf("OpenWrt TC-only candidates = %#v endpoints=%#v", target.TransportPolicy.Candidates, target.Endpoints)
+	}
+	if target.TransportPolicy.KernelTransport.Mode != "require_kernel" {
+		t.Fatalf("OpenWrt TC-only kernel transport mode = %q, want require_kernel", target.TransportPolicy.KernelTransport.Mode)
+	}
+	if len(target.TransportPolicy.Profiles) != 0 {
+		t.Fatalf("OpenWrt TC-only transport profiles = %#v, want none", target.TransportPolicy.Profiles)
+	}
+	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapath.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" {
+		t.Fatalf("OpenWrt TC-only kernel module modes = %#v", target.KernelModules)
 	}
 }
 

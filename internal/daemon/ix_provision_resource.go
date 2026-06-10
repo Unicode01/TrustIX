@@ -22,6 +22,7 @@ import (
 
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/core"
+	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/pki"
 	"trustix.local/trustix/internal/transport"
 	securetransport "trustix.local/trustix/internal/transport/secure"
@@ -951,7 +952,7 @@ func ixProvisionEndpointConfigs(request ixProvisionIssueRequest, profile ixProvi
 	primary := ixProvisionEndpointConfig(request, request.EndpointName, request.EndpointTransport, ixProvisionPrimaryPriority, profile)
 	endpoints := []config.EndpointConfig{primary}
 	candidates := []core.EndpointID{primary.Name}
-	if transport.Protocol(request.EndpointTransport) == transport.ProtocolUDP {
+	if transport.Protocol(request.EndpointTransport) == transport.ProtocolUDP && !ixProvisionOpenWRTTCOnly(request, profile) {
 		acklessName := ixProvisionAcklessEndpointName(request)
 		endpoints = append(endpoints, ixProvisionEndpointConfig(request, acklessName, string(transport.ProtocolExperimentalTCP), ixProvisionAcklessPriority, profile))
 		candidates = append(candidates, acklessName)
@@ -993,7 +994,7 @@ func ixProvisionAcklessEndpointName(request ixProvisionIssueRequest) core.Endpoi
 }
 
 func ixProvisionTransportProfiles(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) []config.TransportProfileConfig {
-	if transport.Protocol(request.EndpointTransport) != transport.ProtocolUDP {
+	if transport.Protocol(request.EndpointTransport) != transport.ProtocolUDP || ixProvisionOpenWRTTCOnly(request, profile) {
 		return nil
 	}
 	return []config.TransportProfileConfig{{
@@ -1019,6 +1020,35 @@ func ixProvisionAcklessAdvanced(profile string) config.TransportAdvancedConfig {
 	return advanced
 }
 
+func ixProvisionOpenWRTTCOnly(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
+	if request.ServiceManager != "openwrt" {
+		return false
+	}
+	if transport.Protocol(request.EndpointTransport) != transport.ProtocolUDP {
+		return false
+	}
+	if profile.TransportProfile != config.TransportProfilePerformance ||
+		profile.Datapath == config.TransportDatapathUserspace ||
+		parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext {
+		return false
+	}
+	return true
+}
+
+func ixProvisionKernelTransportMode(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) string {
+	if ixProvisionOpenWRTTCOnly(request, profile) {
+		return string(dataplane.KernelTransportModeRequireKernel)
+	}
+	return profile.KernelTransport
+}
+
+func ixProvisionKernelModulesMode(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) string {
+	if ixProvisionOpenWRTTCOnly(request, profile) && request.KernelModules == "auto" {
+		return "disabled"
+	}
+	return request.KernelModules
+}
+
 func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Prefix, roots []ixProvisionTrustRootFile) (config.Desired, error) {
 	ixBase := safeProvisionFileName(string(request.IXID), "ix")
 	rootPaths := make([]string, 0, len(roots))
@@ -1032,6 +1062,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 	attachMode := config.LANAttachMode(request.AttachMode)
 	manageAddress := attachMode != config.LANAttachModeExisting
 	endpoints, candidates := ixProvisionEndpointConfigs(request, profile)
+	kernelModulesMode := ixProvisionKernelModulesMode(request, profile)
 	desired := config.Desired{
 		Domain: config.DomainConfig{
 			ID:         request.Domain,
@@ -1061,9 +1092,9 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			DNSMasq: config.DNSMasqConfig{Enabled: request.OpenWRTDNSMasq == "1"},
 		},
 		KernelModules: config.KernelModulesConfig{
-			TrustIXCrypto:          config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
-			TrustIXDatapath:        config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
-			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: request.KernelModules, Path: "embedded", ReloadOnUpgrade: "auto"},
+			TrustIXCrypto:          config.KernelModuleConfig{Mode: kernelModulesMode, Path: "embedded", ReloadOnUpgrade: "auto"},
+			TrustIXDatapath:        config.KernelModuleConfig{Mode: kernelModulesMode, Path: "embedded", ReloadOnUpgrade: "auto"},
+			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: kernelModulesMode, Path: "embedded", ReloadOnUpgrade: "auto"},
 		},
 		Endpoints: endpoints,
 		Bootstrap: config.BootstrapConfig{},
@@ -1088,7 +1119,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			CryptoKeySource: securetransport.KeySourceAuto,
 			CryptoPlacement: profile.CryptoPlacement,
 			Profiles:        ixProvisionTransportProfiles(request, profile),
-			KernelTransport: config.KernelTransportPolicyConfig{Mode: profile.KernelTransport},
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: ixProvisionKernelTransportMode(request, profile)},
 			SessionPool:     config.SessionPoolPolicyConfig{Warmup: true},
 		},
 	}
@@ -1228,6 +1259,10 @@ func ixProvisionBootstrapScript(input ixProvisionScriptInput) (string, error) {
 	b.WriteString(shellQuote(input.ServiceManager))
 	b.WriteString(" == \"auto\" && -f /etc/openwrt_release ) ]]; then\n")
 	b.WriteString("  deploy_args+=(--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1)\n")
+	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_UDP_TC_ONLY=1)\n")
+	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1)\n")
+	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO=1)\n")
+	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO=1)\n")
 	b.WriteString("fi\n")
 	b.WriteString("log \"install TrustIX IX ")
 	b.WriteString(shellScriptLiteral(string(input.IXID)))
