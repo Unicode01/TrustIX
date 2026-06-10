@@ -329,7 +329,8 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 		"--env TRUSTIX_KERNEL_UDP_TC_ONLY=1",
 		"--env TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1",
 		"--env TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO=1",
-		"--env TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO=1",
+		"--env TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO=0",
+		"--env TRUSTIX_KERNEL_UDP_TC_RX_ADJ_ROOM_TUNNEL_GSO=0",
 	} {
 		if !strings.Contains(script, env) {
 			t.Fatalf("bootstrap script does not enable OpenWrt TC-only env %q:\n%s", env, script)

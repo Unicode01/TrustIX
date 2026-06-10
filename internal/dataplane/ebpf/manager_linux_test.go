@@ -107,6 +107,29 @@ func TestAddKernelCryptoDatapathQueryStatsUsesDistinctPrefixes(t *testing.T) {
 	}
 }
 
+func TestIsTrustIXTCFilterMatchesOnlyTrustIXBPFNames(t *testing.T) {
+	for _, name := range []string{
+		"trustix_ingress",
+		"trustix_egress",
+		"trustix_kudp_txk",
+		"trustix_kudp_txke",
+		"trustix_kudp_rx",
+		"trustix_kudp_rxk",
+	} {
+		if !isTrustIXTCFilter(&netlink.BpfFilter{Name: " " + name + " "}) {
+			t.Fatalf("TrustIX TC filter %q was not matched", name)
+		}
+	}
+	for _, name := range []string{"", "forward_ingress", "trustix_tc_dynamic", "trustix"} {
+		if isTrustIXTCFilter(&netlink.BpfFilter{Name: name}) {
+			t.Fatalf("non-TrustIX TC filter %q was matched", name)
+		}
+	}
+	if isTrustIXTCFilter(nil) {
+		t.Fatal("nil filter was matched")
+	}
+}
+
 func TestKernelUDPTXRouteCacheValueABI(t *testing.T) {
 	if got := unsafe.Sizeof(kernelUDPTXRouteCacheValue{}); got != kernelUDPTXRouteCacheValueSize {
 		t.Fatalf("kernelUDPTXRouteCacheValue size = %d, want %d", got, kernelUDPTXRouteCacheValueSize)

@@ -23996,7 +23996,26 @@ func replaceClsact(link netlink.Link) error {
 	return netlink.QdiscReplace(qdisc)
 }
 
+var trustIXTCFilterNames = map[string]struct{}{
+	"trustix_ingress":   {},
+	"trustix_egress":    {},
+	"trustix_kudp_txk":  {},
+	"trustix_kudp_txke": {},
+	"trustix_kudp_rx":   {},
+	"trustix_kudp_rxk":  {},
+}
+
 func deleteClsact(link netlink.Link) error {
+	if err := deleteTrustIXTCFilters(link); err != nil {
+		return err
+	}
+	hasFilters, err := clsactHasFilters(link)
+	if err != nil {
+		return err
+	}
+	if hasFilters {
+		return nil
+	}
 	qdisc := &netlink.Clsact{
 		QdiscAttrs: netlink.QdiscAttrs{
 			LinkIndex: link.Attrs().Index,
@@ -24008,6 +24027,63 @@ func deleteClsact(link netlink.Link) error {
 		return fmt.Errorf("remove clsact qdisc from %q: %w", link.Attrs().Name, err)
 	}
 	return nil
+}
+
+func deleteTrustIXTCFilters(link netlink.Link) error {
+	if link == nil || link.Attrs() == nil {
+		return nil
+	}
+	var errs []string
+	for _, parent := range []uint32{netlink.HANDLE_MIN_INGRESS, netlink.HANDLE_MIN_EGRESS} {
+		filters, err := netlink.FilterList(link, parent)
+		if err != nil {
+			if isNotFound(err) || errors.Is(err, unix.EINVAL) {
+				continue
+			}
+			errs = append(errs, fmt.Sprintf("list TC filters on %q: %v", link.Attrs().Name, err))
+			continue
+		}
+		for _, filter := range filters {
+			if !isTrustIXTCFilter(filter) {
+				continue
+			}
+			if err := netlink.FilterDel(filter); err != nil && !isNotFound(err) {
+				errs = append(errs, fmt.Sprintf("remove stale TrustIX TC filter from %q: %v", link.Attrs().Name, err))
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func clsactHasFilters(link netlink.Link) (bool, error) {
+	if link == nil || link.Attrs() == nil {
+		return false, nil
+	}
+	for _, parent := range []uint32{netlink.HANDLE_MIN_INGRESS, netlink.HANDLE_MIN_EGRESS} {
+		filters, err := netlink.FilterList(link, parent)
+		if err != nil {
+			if isNotFound(err) || errors.Is(err, unix.EINVAL) {
+				continue
+			}
+			return false, fmt.Errorf("list TC filters on %q: %w", link.Attrs().Name, err)
+		}
+		if len(filters) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func isTrustIXTCFilter(filter netlink.Filter) bool {
+	bpfFilter, ok := filter.(*netlink.BpfFilter)
+	if !ok {
+		return false
+	}
+	_, ok = trustIXTCFilterNames[strings.TrimSpace(bpfFilter.Name)]
+	return ok
 }
 
 func linkHasAddress(link netlink.Link, cidr string) (bool, error) {
