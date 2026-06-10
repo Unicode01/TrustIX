@@ -192,6 +192,9 @@ func desiredTransportPolicyUsesOnlyDirectKernelTransports(desired config.Desired
 }
 
 func experimentalTCPTXDirectForDesired(desired config.Desired) bool {
+	if experimentalTCPFastPathDisabledForDesired(desired) {
+		return false
+	}
 	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		return true
 	}
@@ -202,6 +205,9 @@ func experimentalTCPTXDirectForDesired(desired config.Desired) bool {
 }
 
 func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) bool {
+	if experimentalTCPFastPathDisabledForDesired(desired) {
+		return false
+	}
 	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
 		return false
 	}
@@ -213,4 +219,31 @@ func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) b
 		return false
 	}
 	return parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionPlaintext
+}
+
+func experimentalTCPFastPathDisabledForDesired(desired config.Desired) bool {
+	return experimentalTCPFastPathDisabledReasonForDesired(desired) != ""
+}
+
+func experimentalTCPFastPathDisabledReasonForDesired(desired config.Desired) string {
+	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+		return ""
+	}
+	if experimentalTCPMixedTCPFastPathAllowedForPolicy() {
+		return ""
+	}
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		return ""
+	}
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTCP) {
+		return ""
+	}
+	return "tcp+experimental_tcp concurrent kernel transport is disabled by default after PVE mixed-load reboot reproduction; set TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1 only for isolated validation"
+}
+
+func experimentalTCPMixedTCPFastPathAllowedForPolicy() bool {
+	return envTruthyAny(
+		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH",
+		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP",
+	)
 }

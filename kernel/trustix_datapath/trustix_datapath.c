@@ -739,6 +739,8 @@ MODULE_PARM_DESC(rx_worker_budget,
 static bool trustix_datapath_rx_worker_param_live;
 static unsigned long long
 	trustix_datapath_rx_worker_steal_param_safe_fallbacks;
+static unsigned long long
+	trustix_datapath_rx_worker_unsafe_param_safe_fallbacks;
 
 static void trustix_datapath_rx_worker_quiesce_for_param(void)
 {
@@ -788,6 +790,42 @@ static int trustix_datapath_rx_worker_param_set_stolen_noop(
 	return 0;
 }
 
+static int trustix_datapath_rx_worker_param_set_unsafe_bool_noop(
+	const char *val, const struct kernel_param *kp)
+{
+	bool requested = false;
+	int ret;
+
+	ret = kstrtobool(val, &requested);
+	if (ret)
+		return ret;
+	trustix_datapath_rx_worker_quiesce_for_param();
+	if (requested)
+		trustix_datapath_rx_worker_unsafe_param_safe_fallbacks++;
+	if (kp && kp->arg)
+		WRITE_ONCE(*(bool *)kp->arg, false);
+	trustix_datapath_rx_worker_quiesce_for_param();
+	return 0;
+}
+
+static int trustix_datapath_rx_worker_param_set_unsafe_uint_noop(
+	const char *val, const struct kernel_param *kp)
+{
+	unsigned int requested = 0;
+	int ret;
+
+	ret = kstrtouint(val, 0, &requested);
+	if (ret)
+		return ret;
+	trustix_datapath_rx_worker_quiesce_for_param();
+	if (requested)
+		trustix_datapath_rx_worker_unsafe_param_safe_fallbacks++;
+	if (kp && kp->arg)
+		WRITE_ONCE(*(unsigned int *)kp->arg, 0);
+	trustix_datapath_rx_worker_quiesce_for_param();
+	return 0;
+}
+
 static const struct kernel_param_ops trustix_datapath_rx_worker_bool_ops = {
 	.set = trustix_datapath_rx_worker_param_set_bool,
 	.get = param_get_bool,
@@ -797,6 +835,18 @@ static const struct kernel_param_ops
 	trustix_datapath_rx_worker_stolen_noop_bool_ops = {
 		.set = trustix_datapath_rx_worker_param_set_stolen_noop,
 		.get = param_get_bool,
+	};
+
+static const struct kernel_param_ops
+	trustix_datapath_rx_worker_unsafe_noop_bool_ops = {
+		.set = trustix_datapath_rx_worker_param_set_unsafe_bool_noop,
+		.get = param_get_bool,
+	};
+
+static const struct kernel_param_ops
+	trustix_datapath_rx_worker_unsafe_noop_uint_ops = {
+		.set = trustix_datapath_rx_worker_param_set_unsafe_uint_noop,
+		.get = param_get_uint,
 	};
 
 static const struct kernel_param_ops trustix_datapath_rx_worker_uint_ops = {
@@ -917,26 +967,26 @@ MODULE_PARM_DESC(rx_worker_xmit_fix_checksums,
 
 static unsigned int trustix_datapath_rx_worker_xmit_trust_tcp_checksum_min_len;
 module_param_cb(rx_worker_xmit_trust_tcp_checksum_min_len,
-		&trustix_datapath_rx_worker_uint_ops,
+		&trustix_datapath_rx_worker_unsafe_noop_uint_ops,
 		&trustix_datapath_rx_worker_xmit_trust_tcp_checksum_min_len,
 		0644);
 MODULE_PARM_DESC(rx_worker_xmit_trust_tcp_checksum_min_len,
-		 "Trust already-complete TCP checksums for RX worker xmit packets with at least this many payload bytes; 0 disables");
+		 "Accept legacy RX worker TCP checksum-trust requests; current safe implementation keeps checksum rebuild enabled");
 
 static bool trustix_datapath_rx_worker_xmit_trust_tcp_checksum_ack_only;
 module_param_cb(rx_worker_xmit_trust_tcp_checksum_ack_only,
-		&trustix_datapath_rx_worker_bool_ops,
+		&trustix_datapath_rx_worker_unsafe_noop_bool_ops,
 		&trustix_datapath_rx_worker_xmit_trust_tcp_checksum_ack_only,
 		0644);
 MODULE_PARM_DESC(rx_worker_xmit_trust_tcp_checksum_ack_only,
-		 "Trust already-complete TCP checksums for RX worker xmit ACK-only packets; experimental and off by default");
+		 "Accept legacy RX worker ACK-only checksum-trust requests; current safe implementation keeps checksum rebuild enabled");
 
 static bool trustix_datapath_rx_worker_xmit_tcp_partial_csum;
 module_param_cb(rx_worker_xmit_tcp_partial_csum,
-		&trustix_datapath_rx_worker_bool_ops,
+		&trustix_datapath_rx_worker_unsafe_noop_bool_ops,
 		&trustix_datapath_rx_worker_xmit_tcp_partial_csum, 0644);
 MODULE_PARM_DESC(rx_worker_xmit_tcp_partial_csum,
-		 "Use CHECKSUM_PARTIAL for RX worker TCP dev_queue_xmit delivery instead of rebuilding L4 checksums in the worker");
+		 "Accept legacy RX worker TCP CHECKSUM_PARTIAL requests; current safe implementation keeps complete checksum rebuilds");
 
 static bool trustix_datapath_rx_worker_xmit_dst_mac_cache;
 module_param_cb(rx_worker_xmit_dst_mac_cache,
@@ -982,7 +1032,7 @@ MODULE_PARM_DESC(rx_worker_stream_coalesce_software_segment,
 
 static bool trustix_datapath_rx_worker_stream_coalesce_partial_csum;
 module_param_cb(rx_worker_stream_coalesce_partial_csum,
-		&trustix_datapath_rx_worker_bool_ops,
+		&trustix_datapath_rx_worker_unsafe_noop_bool_ops,
 		&trustix_datapath_rx_worker_stream_coalesce_partial_csum,
 		0644);
 MODULE_PARM_DESC(rx_worker_stream_coalesce_partial_csum,
@@ -1038,6 +1088,12 @@ module_param_named(rx_worker_steal_param_safe_fallbacks,
 		   ullong, 0444);
 MODULE_PARM_DESC(rx_worker_steal_param_safe_fallbacks,
 		 "TrustIX RX worker stolen-skb parameter requests accepted as safe no-op fallback");
+
+module_param_named(rx_worker_unsafe_param_safe_fallbacks,
+		   trustix_datapath_rx_worker_unsafe_param_safe_fallbacks,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_unsafe_param_safe_fallbacks,
+		 "TrustIX RX worker unsafe checksum parameter requests accepted as safe no-op fallback");
 
 static unsigned long long trustix_datapath_rx_worker_steal_errors;
 module_param_named(rx_worker_steal_errors,
@@ -1780,6 +1836,36 @@ static struct workqueue_struct *trustix_datapath_rx_worker_wq;
 static void trustix_datapath_rx_worker_run(struct work_struct *work);
 static DECLARE_WORK(trustix_datapath_rx_worker_work,
 		    trustix_datapath_rx_worker_run);
+static unsigned long long trustix_datapath_rx_worker_queue_work_calls;
+module_param_named(rx_worker_queue_work_calls,
+		   trustix_datapath_rx_worker_queue_work_calls, ullong, 0444);
+MODULE_PARM_DESC(rx_worker_queue_work_calls,
+		 "TrustIX RX worker queue_work attempts");
+static unsigned long long trustix_datapath_rx_worker_queue_work_enqueued;
+module_param_named(rx_worker_queue_work_enqueued,
+		   trustix_datapath_rx_worker_queue_work_enqueued, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_queue_work_enqueued,
+		 "TrustIX RX worker queue_work calls that accepted a new work item");
+static unsigned long long trustix_datapath_rx_worker_runs;
+module_param_named(rx_worker_runs, trustix_datapath_rx_worker_runs, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_runs, "TrustIX RX worker workqueue callbacks run");
+static unsigned long long trustix_datapath_rx_worker_run_processed;
+module_param_named(rx_worker_run_processed,
+		   trustix_datapath_rx_worker_run_processed, ullong, 0444);
+MODULE_PARM_DESC(rx_worker_run_processed,
+		 "TrustIX RX worker slots processed by workqueue callbacks");
+
+static void trustix_datapath_rx_worker_kick(void)
+{
+	if (!trustix_datapath_rx_worker_wq)
+		return;
+	trustix_datapath_rx_worker_queue_work_calls++;
+	if (queue_work(trustix_datapath_rx_worker_wq,
+		       &trustix_datapath_rx_worker_work))
+		trustix_datapath_rx_worker_queue_work_enqueued++;
+}
 
 struct trustix_datapath_rx_worker_mac_cache {
 	int ifindex;
@@ -2108,6 +2194,10 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_xmit_more_sets = 0;
 	trustix_datapath_rx_worker_last_push_ret = 0;
 	trustix_datapath_rx_worker_last_deliver_ret = 0;
+	trustix_datapath_rx_worker_queue_work_calls = 0;
+	trustix_datapath_rx_worker_queue_work_enqueued = 0;
+	trustix_datapath_rx_worker_runs = 0;
+	trustix_datapath_rx_worker_run_processed = 0;
 	trustix_datapath_rx_worker_stolen = 0;
 	trustix_datapath_rx_worker_steal_fallbacks = 0;
 	trustix_datapath_rx_worker_steal_errors = 0;
@@ -4476,8 +4566,7 @@ static __always_inline bool trustix_datapath_rx_worker_hot_stats_enabled(void)
 static __always_inline void
 trustix_datapath_rx_worker_count_injected(unsigned int packets)
 {
-	if (trustix_datapath_rx_worker_hot_stats_enabled())
-		trustix_datapath_rx_worker_injected += packets;
+	trustix_datapath_rx_worker_injected += packets;
 }
 
 static __always_inline void
@@ -6148,9 +6237,7 @@ trustix_datapath_rx_worker_push_stolen_target(
 	trustix_datapath_rx_worker_queued++;
 	trustix_datapath_rx_worker_stolen++;
 	spin_unlock_irqrestore(&trustix_datapath_rx_worker_lock, irqflags);
-	if (trustix_datapath_rx_worker_wq)
-		queue_work(trustix_datapath_rx_worker_wq,
-			   &trustix_datapath_rx_worker_work);
+	trustix_datapath_rx_worker_kick();
 	return 0;
 
 err_msgsize:
@@ -6255,9 +6342,7 @@ trustix_datapath_rx_worker_push_copy(
 	trustix_datapath_rx_worker_count++;
 	trustix_datapath_rx_worker_queued++;
 	spin_unlock_irqrestore(&trustix_datapath_rx_worker_lock, irqflags);
-	if (trustix_datapath_rx_worker_wq)
-		queue_work(trustix_datapath_rx_worker_wq,
-			   &trustix_datapath_rx_worker_work);
+	trustix_datapath_rx_worker_kick();
 	return 0;
 }
 
@@ -6445,9 +6530,8 @@ static int trustix_datapath_rx_worker_enqueue_pending_copies(
 
 	if (queued_frames)
 		*queued_frames = queued;
-	if (queued && trustix_datapath_rx_worker_wq)
-		queue_work(trustix_datapath_rx_worker_wq,
-			   &trustix_datapath_rx_worker_work);
+	if (queued)
+		trustix_datapath_rx_worker_kick();
 	return ret;
 }
 
@@ -6507,9 +6591,8 @@ static int trustix_datapath_rx_worker_enqueue_pending_skb(
 
 out_unlock:
 	spin_unlock_irqrestore(&trustix_datapath_rx_worker_lock, irqflags);
-	if (!ret && trustix_datapath_rx_worker_wq)
-		queue_work(trustix_datapath_rx_worker_wq,
-			   &trustix_datapath_rx_worker_work);
+	if (!ret)
+		trustix_datapath_rx_worker_kick();
 	return ret;
 }
 
@@ -7805,16 +7888,15 @@ static void trustix_datapath_rx_worker_run(struct work_struct *work)
 	unsigned int budget;
 	unsigned int processed = 0;
 
+	trustix_datapath_rx_worker_runs++;
 	budget = READ_ONCE(trustix_datapath_rx_worker_budget);
 	if (!budget)
 		budget = TRUSTIX_DATAPATH_RX_WORKER_DEFAULT_BUDGET;
 
 	for (;;) {
 		if (processed >= budget) {
-			if (trustix_datapath_rx_worker_has_pending() &&
-			    trustix_datapath_rx_worker_wq)
-				queue_work(trustix_datapath_rx_worker_wq,
-					   &trustix_datapath_rx_worker_work);
+			if (trustix_datapath_rx_worker_has_pending())
+				trustix_datapath_rx_worker_kick();
 			cond_resched();
 			return;
 		}
@@ -7841,6 +7923,7 @@ static void trustix_datapath_rx_worker_run(struct work_struct *work)
 		spin_unlock_irqrestore(&trustix_datapath_rx_worker_lock,
 				       irqflags);
 		processed++;
+		trustix_datapath_rx_worker_run_processed++;
 
 		if (slot.stolen_skb) {
 			if (slot.valid && slot.target_dev && slot.skb &&
@@ -8477,6 +8560,10 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_xmit_more_sets = 0;
 	trustix_datapath_rx_worker_last_push_ret = 0;
 	trustix_datapath_rx_worker_last_deliver_ret = 0;
+	trustix_datapath_rx_worker_queue_work_calls = 0;
+	trustix_datapath_rx_worker_queue_work_enqueued = 0;
+	trustix_datapath_rx_worker_runs = 0;
+	trustix_datapath_rx_worker_run_processed = 0;
 	trustix_datapath_rx_worker_stolen = 0;
 	trustix_datapath_rx_worker_steal_fallbacks = 0;
 	trustix_datapath_rx_worker_steal_errors = 0;

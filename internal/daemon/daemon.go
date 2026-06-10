@@ -859,6 +859,7 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 	lanSpec := dataplaneLANAttachSpec(lan, desired)
 	secureFullDirect := kernelUDPSecureFullDirectForDesired(desired)
 	experimentalTCPRouteGSOAsync := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired)
+	experimentalTCPFastPathDisabledReason := experimentalTCPFastPathDisabledReasonForDesired(desired)
 	return dataplane.AttachSpec{
 		LANIface:                                 lanSpec.Iface,
 		UnderlayIface:                            lanSpec.UnderlayIface,
@@ -882,6 +883,8 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		ExperimentalTCPRouteXmitWorker:           experimentalTCPRouteGSOAsync,
 		ExperimentalTCPPlainSkipSequence:         experimentalTCPRouteGSOAsync,
 		ExperimentalTCPPlainACKOnly:              experimentalTCPRouteGSOAsync,
+		ExperimentalTCPFastPathDisabled:          experimentalTCPFastPathDisabledReason != "",
+		ExperimentalTCPFastPathDisabledReason:    experimentalTCPFastPathDisabledReason,
 		PinPath:                                  filepath.Join(dataDir, "bpf"),
 		DataDir:                                  dataDir,
 		LANs:                                     dataplaneLANAttachSpecs(desired),

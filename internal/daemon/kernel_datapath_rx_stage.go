@@ -114,7 +114,7 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 	if mode == "" {
 		daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
 			Enabled:        false,
-			DisabledReason: "kernel datapath RX is disabled",
+			DisabledReason: kernelDatapathRXDisabledReasonForDesired(daemon.desired),
 		})
 		return nil
 	}
@@ -497,37 +497,42 @@ func kernelDatapathRXMode() string {
 }
 
 func kernelDatapathRXModeForDesired(desired config.Desired) string {
-	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
-	if !kernelDatapathRXStageEnabledForDesired(desired) {
+	if mode, ok := kernelDatapathRXStageModeFromEnv(); ok {
+		if mode == kernelDatapathRXModeWorker && !kernelDatapathRXWorkerCrashRiskAllowed() {
+			return ""
+		}
+		return mode
+	}
+	requestedRXStage := config.NormalizeKernelDatapathRXStage(desired.KernelModules.Datapath.RXStage)
+	if requestedRXStage == config.KernelDatapathRXStageDisabled {
 		return ""
 	}
 	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
 		return kernelDatapathRXModeWorker
 	}
-	switch runtime.RXStage {
-	case config.KernelDatapathRXStageStage:
+	switch requestedRXStage {
+	case config.KernelDatapathRXStageAuto, config.KernelDatapathRXStageStage:
 		return kernelDatapathRXModeStage
 	case config.KernelDatapathRXStageWorker:
 		if kernelDatapathRXWorkerCrashRiskAllowed() {
 			return kernelDatapathRXModeWorker
 		}
-		return kernelDatapathRXModeStage
+		return ""
 	}
-	if runtime.RXWorker {
+	if desired.KernelModules.Datapath.RXWorker {
 		if kernelDatapathRXWorkerCrashRiskAllowed() {
 			return kernelDatapathRXModeWorker
 		}
-		return kernelDatapathRXModeStage
+		return ""
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER"))) {
 	case "1", "true", "yes", "on", "worker":
 		if kernelDatapathRXWorkerCrashRiskAllowed() {
 			return kernelDatapathRXModeWorker
 		}
-		return kernelDatapathRXModeStage
-	default:
-		return kernelDatapathRXModeStage
+		return ""
 	}
+	return ""
 }
 
 func kernelDatapathFullPlaintextEnabled() bool {
@@ -576,20 +581,72 @@ func kernelDatapathRXStageEnabled() bool {
 }
 
 func kernelDatapathRXStageEnabledForDesired(desired config.Desired) bool {
+	return kernelDatapathRXModeForDesired(desired) != ""
+}
+
+func kernelDatapathRXStageModeFromEnv() (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_STAGE"))) {
+	case "":
+		return "", false
+	case "0", "false", "no", "off", "disabled":
+		return "", true
+	case "worker":
+		return kernelDatapathRXModeWorker, true
+	case "1", "true", "yes", "on", "enabled", "auto", "stage", "poll", "poller":
+		return kernelDatapathRXModeStage, true
+	default:
+		return kernelDatapathRXModeStage, true
+	}
+}
+
+func kernelDatapathRXDisabledReasonForDesired(desired config.Desired) string {
+	if mode, ok := kernelDatapathRXStageModeFromEnv(); ok {
+		if mode == "" {
+			return "kernel datapath RX is disabled by TRUSTIX_KERNEL_DATAPATH_RX_STAGE"
+		}
+		if mode == kernelDatapathRXModeWorker && !kernelDatapathRXWorkerCrashRiskAllowed() {
+			return "RX_WORKER requires TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER=1"
+		}
+	}
+	requestedRXStage := config.NormalizeKernelDatapathRXStage(desired.KernelModules.Datapath.RXStage)
+	if requestedRXStage == config.KernelDatapathRXStageDisabled {
+		return "kernel datapath RX is disabled by config"
+	}
+	if kernelDatapathFullPlaintextRequestedForDesired(desired) && !kernelDatapathFullPlaintextCrashRiskAllowed() {
+		return "full plaintext datapath requires TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT=1"
+	}
+	if kernelDatapathRXWorkerRequestedForDesired(desired) && !kernelDatapathRXWorkerCrashRiskAllowed() {
+		return "RX_WORKER requires TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER=1"
+	}
+	return "kernel datapath RX_STAGE hook is disabled by default; set kernel_modules.datapath.rx_stage: stage or TRUSTIX_KERNEL_DATAPATH_RX_STAGE=1 to enable"
+}
+
+func kernelDatapathFullPlaintextRequestedForDesired(desired config.Desired) bool {
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
-	switch runtime.RXStage {
-	case config.KernelDatapathRXStageDisabled:
-		return false
-	case config.KernelDatapathRXStageAuto, config.KernelDatapathRXStageStage, config.KernelDatapathRXStageWorker:
+	if runtime.FullPlaintext || runtime.TXPlaintext {
 		return true
 	}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_STAGE"))) {
-	case "", "1", "true", "yes", "on", "auto":
+	return envTruthyAny(
+		"TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT",
+		"TRUSTIX_KERNEL_DATAPATH_TX_PLAINTEXT",
+	)
+}
+
+func kernelDatapathRXWorkerRequestedForDesired(desired config.Desired) bool {
+	requestedRXStage := config.NormalizeKernelDatapathRXStage(desired.KernelModules.Datapath.RXStage)
+	if requestedRXStage == config.KernelDatapathRXStageWorker || desired.KernelModules.Datapath.RXWorker {
+		return true
+	}
+	if mode, ok := kernelDatapathRXStageModeFromEnv(); ok && mode == kernelDatapathRXModeWorker {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER"))) {
+	case "1", "true", "yes", "on", "worker":
 		return true
 	case "0", "false", "no", "off", "disabled":
 		return false
 	default:
-		return true
+		return false
 	}
 }
 

@@ -34,6 +34,11 @@ func TestKernelDatapathRXStagePollerInjectsStagedPackets(t *testing.T) {
 		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
 		desired: config.Desired{
 			LAN: config.LANConfig{Gateway: "10.0.1.1/24"},
+			KernelModules: config.KernelModulesConfig{
+				Datapath: config.KernelDatapathRuntimeConfig{
+					RXStage: config.KernelDatapathRXStageStage,
+				},
+			},
 		},
 	}
 	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{
@@ -369,6 +374,13 @@ func TestKernelDatapathRXStageSkipsWithoutLoadedModule(t *testing.T) {
 	daemon := &Daemon{
 		dataplane:      dataplane.NewNoopManager(),
 		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+		desired: config.Desired{
+			KernelModules: config.KernelModulesConfig{
+				Datapath: config.KernelDatapathRuntimeConfig{
+					RXStage: config.KernelDatapathRXStageStage,
+				},
+			},
+		},
 	}
 	if err := daemon.startKernelDatapathRXStage(context.Background(), dataplane.AttachSpec{UnderlayIface: "eth0"}); err != nil {
 		t.Fatalf("start RX stage: %v", err)
@@ -379,6 +391,67 @@ func TestKernelDatapathRXStageSkipsWithoutLoadedModule(t *testing.T) {
 	status := daemon.kernelDatapathRXStageStatus()
 	if status.Active || !status.Enabled || status.InactiveReason == "" {
 		t.Fatalf("status = %#v, want enabled inactive with reason", status)
+	}
+}
+
+func TestKernelDatapathRXStageDefaultOffEvenWhenModuleIsLoaded(t *testing.T) {
+	opened := false
+	oldOpen := kernelDatapathRXStageOpenDriver
+	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
+		opened = true
+		return &fakeKernelRXStageDriver{}, nil
+	}
+	daemon := &Daemon{
+		dataplane:      dataplane.NewNoopManager(),
+		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+	}
+	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{
+		Name:   "trustix_datapath",
+		Mode:   kernelmodule.ModeAuto,
+		Loaded: true,
+		State:  "loaded",
+	})
+	if err := daemon.startKernelDatapathRXStage(context.Background(), dataplane.AttachSpec{UnderlayIface: "eth0"}); err != nil {
+		t.Fatalf("start RX stage: %v", err)
+	}
+	if opened {
+		t.Fatal("driver should not open when RX_STAGE was not explicitly requested")
+	}
+	status := daemon.kernelDatapathRXStageStatus()
+	if status.Active || status.Enabled || !strings.Contains(status.DisabledReason, "disabled by default") {
+		t.Fatalf("status = %#v, want default-off disabled reason", status)
+	}
+}
+
+func TestKernelDatapathRXWorkerRequiresCrashRiskGate(t *testing.T) {
+	opened := false
+	oldOpen := kernelDatapathRXStageOpenDriver
+	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
+		opened = true
+		return &fakeKernelRXStageDriver{}, nil
+	}
+	daemon := &Daemon{
+		dataplane:      dataplane.NewNoopManager(),
+		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+	}
+	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{
+		Name:   "trustix_datapath",
+		Mode:   kernelmodule.ModeAuto,
+		Loaded: true,
+		State:  "loaded",
+	})
+	if err := daemon.startKernelDatapathRXStage(context.Background(), dataplane.AttachSpec{UnderlayIface: "eth0", LANIface: "br-lan"}); err != nil {
+		t.Fatalf("start RX worker: %v", err)
+	}
+	if opened {
+		t.Fatal("driver should not open when RX_WORKER lacks the crash-risk gate")
+	}
+	status := daemon.kernelDatapathRXStageStatus()
+	if status.Active || status.Enabled || !strings.Contains(status.DisabledReason, "RX_WORKER requires") {
+		t.Fatalf("status = %#v, want RX_WORKER crash-risk disabled reason", status)
 	}
 }
 

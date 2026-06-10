@@ -183,6 +183,109 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextExperimentalTCPRouteGSO(t
 	}
 }
 
+func TestDataplaneAttachSpecDisablesExperimentalTCPFastPathForMixedTCP(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:      "br-lan",
+			AttachMode: config.LANAttachModeExisting,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"tcp-a", "exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{
+			{
+				Name:      "tcp-a",
+				Transport: string(transport.ProtocolTCP),
+				Enabled:   true,
+			},
+			{
+				Name:      "exp-a",
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			},
+		},
+	})
+
+	if !spec.ExperimentalTCPFastPathDisabled || spec.ExperimentalTCPFastPathDisabledReason == "" {
+		t.Fatalf("mixed tcp+experimental_tcp should disable experimental_tcp fast path, spec=%#v", spec)
+	}
+	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly || spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
+		t.Fatalf("mixed tcp+experimental_tcp enabled experimental_tcp direct flags, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsExperimentalTCPFastPathForMixedUDP(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:      "br-lan",
+			AttachMode: config.LANAttachModeExisting,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"udp-a", "exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{
+			{
+				Name:      "udp-a",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			},
+			{
+				Name:      "exp-a",
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			},
+		},
+	})
+
+	if spec.ExperimentalTCPFastPathDisabled {
+		t.Fatalf("udp+experimental_tcp should keep experimental_tcp fast path enabled, spec=%#v", spec)
+	}
+	if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly || !spec.ExperimentalTCPRouteGSOAsync {
+		t.Fatalf("udp+experimental_tcp performance policy should keep direct route-GSO, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecAllowsForcedMixedTCPExperimentalTCPFastPath(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH", "1")
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:      "br-lan",
+			AttachMode: config.LANAttachModeExisting,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"tcp-a", "exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{
+			{
+				Name:      "tcp-a",
+				Transport: string(transport.ProtocolTCP),
+				Enabled:   true,
+			},
+			{
+				Name:      "exp-a",
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			},
+		},
+	})
+
+	if spec.ExperimentalTCPFastPathDisabled {
+		t.Fatalf("forced mixed tcp+experimental_tcp unexpectedly disabled fast path, spec=%#v", spec)
+	}
+	if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly || !spec.ExperimentalTCPRouteGSOAsync {
+		t.Fatalf("forced mixed tcp+experimental_tcp did not enable direct route-GSO, spec=%#v", spec)
+	}
+}
+
 func TestDataplaneAttachSpecKeepsFallbackForRequireKernelPlaintextByDefault(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{

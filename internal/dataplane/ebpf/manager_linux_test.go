@@ -4171,6 +4171,40 @@ func TestKernelTransportAllowedPortsDisabledModeKeepsUserspaceUDPPortsOutOfXDP(t
 	}
 }
 
+func TestExperimentalTCPFastPathDisabledKeepsExperimentalPortsOutOfXDP(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		ExperimentalTCPFastPathDisabled:       true,
+		ExperimentalTCPFastPathDisabledReason: "mixed tcp+experimental_tcp",
+	}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Peers: []dataplane.PeerMetadata{
+			{ID: core.IXID("ix-b"), DomainID: core.DomainID("lab.local"), Trusted: true},
+		},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: core.EndpointID("local-exp"), Peer: core.IXID("ix-a"), Transport: "experimental_tcp", Listen: "198.18.0.1:17041", Enabled: true},
+			{ID: core.EndpointID("local-udp"), Peer: core.IXID("ix-a"), Transport: "udp", Listen: "198.18.0.1:17001", Enabled: true},
+		},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		10: {SourcePort: 41000, LocalAddress: "198.18.0.1:41001"},
+	}
+	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{
+		20: {SourcePort: 42000, LocalAddress: "198.18.0.1:42001"},
+	}
+
+	if ports := manager.desiredExperimentalTCPPortsLocked(); len(ports) != 0 {
+		t.Fatalf("experimental_tcp desired ports = %#v, want none while fast path is disabled", ports)
+	}
+	udpPorts := manager.desiredKernelUDPPortsLocked()
+	for _, port := range []uint16{17001, 42000, 42001} {
+		if _, ok := udpPorts[port]; !ok {
+			t.Fatalf("kernel_udp desired ports missing %d while experimental_tcp is disabled: %#v", port, udpPorts)
+		}
+	}
+}
+
 func TestKernelTransportFastPathNotNeededForNativeTunnelEndpoints(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
@@ -4184,6 +4218,35 @@ func TestKernelTransportFastPathNotNeededForNativeTunnelEndpoints(t *testing.T) 
 
 	if manager.snapshotNeedsKernelTransportFastPathLocked() {
 		t.Fatal("native tunnel endpoints requested AF_XDP kernel transport fast path")
+	}
+}
+
+func TestExperimentalTCPFastPathDisabledDoesNotRequestFastPathForExperimentalTCPOnly(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		ExperimentalTCPFastPathDisabled:       true,
+		ExperimentalTCPFastPathDisabledReason: "mixed tcp+experimental_tcp",
+	}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Peers: []dataplane.PeerMetadata{
+			{ID: core.IXID("ix-b"), DomainID: core.DomainID("lab.local"), Trusted: true},
+		},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: core.EndpointID("local"), Peer: core.IXID("ix-a"), Transport: "experimental_tcp", Listen: "198.18.0.1:17001", Enabled: true},
+			{ID: core.EndpointID("remote"), Peer: core.IXID("ix-b"), Transport: "experimental_tcp", Address: "198.18.0.2:27001", Enabled: true},
+		},
+	}
+	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{ID: 7}
+
+	if manager.snapshotNeedsKernelTransportFastPathLocked() {
+		t.Fatal("disabled experimental_tcp requested AF_XDP kernel transport fast path")
+	}
+	manager.snapshot.Endpoints = append(manager.snapshot.Endpoints, dataplane.EndpointMetadata{
+		ID: core.EndpointID("local-udp"), Peer: core.IXID("ix-a"), Transport: "udp", Listen: "198.18.0.1:17002", Enabled: true,
+	})
+	if !manager.snapshotNeedsKernelTransportFastPathLocked() {
+		t.Fatal("kernel_udp endpoint should still request AF_XDP kernel transport fast path")
 	}
 }
 
@@ -5726,6 +5789,58 @@ func TestExperimentalTCPStatusIncludesActiveFlowSnapshot(t *testing.T) {
 	}
 	if status.Flows[1].RemoteAddress != "198.51.100.2:7142" || status.Flows[1].SourcePort != 50158 {
 		t.Fatalf("status outbound flow = %+v", status.Flows[1])
+	}
+}
+
+func TestExperimentalTCPStatusReportsFastPathDisabled(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{
+		ExperimentalTCPFastPathDisabled:       true,
+		ExperimentalTCPFastPathDisabledReason: "mixed tcp+experimental_tcp",
+	}
+
+	status, err := manager.ExperimentalTCPStatus(context.Background())
+	if err != nil {
+		t.Fatalf("experimental_tcp status: %v", err)
+	}
+	if status.Available || status.FastPath || status.Reinject {
+		t.Fatalf("disabled experimental_tcp status = %+v, want unavailable/no fast path", status)
+	}
+	if !strings.Contains(status.FastPathFallback, "mixed tcp+experimental_tcp") {
+		t.Fatalf("fast path fallback = %q, want disabled reason", status.FastPathFallback)
+	}
+	found := false
+	for _, note := range status.Notes {
+		if strings.Contains(note, "mixed tcp+experimental_tcp") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("status notes missing disabled reason: %#v", status.Notes)
+	}
+}
+
+func TestInstallExperimentalTCPFlowsRejectsFastPathDisabled(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		ExperimentalTCPFastPathDisabled:       true,
+		ExperimentalTCPFastPathDisabledReason: "mixed tcp+experimental_tcp",
+	}
+
+	err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+		ID:              7,
+		Peer:            core.IXID("ix-b"),
+		Endpoint:        core.EndpointID("exp-b"),
+		RemoteAddress:   "198.51.100.2:7142",
+		CryptoPlacement: dataplane.CryptoPlacementUserspace,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "mixed tcp+experimental_tcp") {
+		t.Fatalf("install experimental_tcp flow error = %v, want disabled reason", err)
+	}
+	if len(manager.expTCPFlows) != 0 {
+		t.Fatalf("disabled experimental_tcp installed flows: %#v", manager.expTCPFlows)
 	}
 }
 
@@ -13233,12 +13348,19 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_inline_receive_safe_fallbacks++;")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_param_set_stolen_noop")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_steal_param_safe_fallbacks++;")
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_param_set_unsafe_bool_noop")
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_param_set_unsafe_uint_noop")
+	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_unsafe_param_safe_fallbacks++;")
 	requireSourceContains(t, datapathSource, "WRITE_ONCE(*(bool *)kp->arg, false);")
 	for _, want := range []string{
 		"module_param_cb(rx_worker_steal_skb,\n\t\t&trustix_datapath_rx_worker_stolen_noop_bool_ops",
 		"module_param_cb(rx_worker_inline_stolen,\n\t\t&trustix_datapath_rx_worker_stolen_noop_bool_ops",
 		"module_param_cb(rx_worker_steal_xmit,\n\t\t&trustix_datapath_rx_worker_stolen_noop_bool_ops",
 		"module_param_cb(rx_worker_steal_tcp,\n\t\t&trustix_datapath_rx_worker_stolen_noop_bool_ops",
+		"module_param_cb(rx_worker_xmit_tcp_partial_csum,\n\t\t&trustix_datapath_rx_worker_unsafe_noop_bool_ops",
+		"module_param_cb(rx_worker_stream_coalesce_partial_csum,\n\t\t&trustix_datapath_rx_worker_unsafe_noop_bool_ops",
+		"module_param_cb(rx_worker_xmit_trust_tcp_checksum_ack_only,\n\t\t&trustix_datapath_rx_worker_unsafe_noop_bool_ops",
+		"module_param_cb(rx_worker_xmit_trust_tcp_checksum_min_len,\n\t\t&trustix_datapath_rx_worker_unsafe_noop_uint_ops",
 	} {
 		requireSourceContains(t, datapathSource, want)
 	}

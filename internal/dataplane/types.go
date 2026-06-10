@@ -40,6 +40,8 @@ type AttachSpec struct {
 	ExperimentalTCPRouteXmitWorker           bool            `json:"experimental_tcp_route_xmit_worker,omitempty"`
 	ExperimentalTCPPlainSkipSequence         bool            `json:"experimental_tcp_plain_skip_sequence,omitempty"`
 	ExperimentalTCPPlainACKOnly              bool            `json:"experimental_tcp_plain_ack_only,omitempty"`
+	ExperimentalTCPFastPathDisabled          bool            `json:"experimental_tcp_fast_path_disabled,omitempty"`
+	ExperimentalTCPFastPathDisabledReason    string          `json:"experimental_tcp_fast_path_disabled_reason,omitempty"`
 	PinPath                                  string          `json:"pin_path"`
 	DataDir                                  string          `json:"data_dir,omitempty"`
 	LANs                                     []LANAttachSpec `json:"lans,omitempty"`

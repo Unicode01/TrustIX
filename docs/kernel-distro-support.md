@@ -15,7 +15,7 @@ universal `.ko`.
 | Kernel crypto, full | Matching KDIR plus kernel/BTF support for BPF crypto kfuncs; upstream Linux 6.12+ is the intended full provider target | Builds where headers allow it, but runtime must still pass BTF/kfunc and selftest probes. Older kernels can load but may only provide device/ioctl crypto. |
 | Datapath helpers, basic | Matching KDIR | Build fallback when helper kfunc/BTF support is not available. Does not provide route-GSO/kfunc fast path. |
 | Datapath helpers, full | Matching KDIR plus module BTF/kfunc usability | Provides safe skb/GSO and route-TCP helper capability. Panic-risk route-TCP XMIT/async families are first-release hard-disabled unless separately validated. |
-| Full plaintext datapath module | Matching KDIR; explicit crash-risk gates plus `enable_features=128 rx_worker_inject=1 tx_plaintext=1`; passing module selftests | Crash-risk experimental only. Daemon defaults keep RX worker and TX plaintext disabled with explicit `rx_worker_inject=0 tx_plaintext=0`; secure full-kernel datapath and GSO LAN TX are not complete first-release guarantees. |
+| Full plaintext datapath module | Matching KDIR; explicit crash-risk gates plus `enable_features=128 rx_worker_inject=1 tx_plaintext=1`; passing module selftests | Crash-risk experimental only. Daemon defaults keep RX worker and TX plaintext disabled with explicit `rx_worker_inject=0 tx_plaintext=0`; OpenWrt requires an additional OpenWrt-specific opt-in gate. Secure full-kernel datapath and GSO LAN TX are not complete first-release guarantees. |
 
 ## Kernel module ABI boundary
 
@@ -65,6 +65,30 @@ Runtime smoke on Ubuntu `6.8.0-124-generic`:
 | `trustix_datapath_helpers` | pass | Full helper loaded, selftests passed, `gso_skb` active, route-TCP XMIT worker stayed disabled. |
 | `trustix_datapath` | pass | Loaded with full plaintext feature gate; `features=128 safe=128 unsafe=0`; panic-risk parameters forced disabled. |
 
+PVE A/B full datapath retest on 2026-06-10 used VM101/VM102 on Ubuntu
+`6.8.0-124-generic` with current rebuilt modules and real TCP traffic over the
+PVE underlay pair. The no-outer route-GSO baseline, RX-worker queue-skb,
+coalesced-GSO full-checksum, hold-skb/pair-coalesce, receive/batchqueue, stolen
+xmit compatibility, and selected p8/8s high-risk cases all completed without a
+VM reboot, kernel panic, Oops, watchdog, or pstore record. A longer p8/30s
+high-risk soak then reproduced a VM101/A reboot in
+`build/pve/pve-datapath-risk-p8-30s-20260610.json` while VM102/B stayed up; no
+pstore record or previous-boot kernel stack was captured. This validates only
+the short PVE matrix. Full plaintext datapath remains crash-risk experimental
+and must not be described as production-safe until the route-GSO/RX-worker
+corner is isolated and a longer A/B soak passes with crash capture enabled.
+
+Follow-up PVE multitransport isolation narrowed the later hard reboot to the
+full datapath RX_STAGE hook attachment, not module load by itself. Runs with all
+TrustIX modules disabled, helper-only modules, and `trustix_datapath` loaded
+with `kernel_modules.datapath.rx_stage: disabled` stayed up. A datapath-only run
+with the daemon's previous default RX_STAGE hook reproduced a reboot. The daemon
+therefore defaults RX_STAGE/RX_WORKER hook attachment off; explicit
+`kernel_modules.datapath.rx_stage: stage|worker` or the matching environment
+override is required, and RX_WORKER/full plaintext still need their crash-risk
+gates. TC/eBPF plus `trustix_datapath_helpers` remains the recommended
+performance path.
+
 OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 
 | OpenWrt target | Kernel | Result |
@@ -76,9 +100,16 @@ OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 
 Older performance-log runs also covered a wider OpenWrt compile matrix, but the
 table above is the current-source spot check. Runtime load/function coverage is
-strongest for Ubuntu `6.8.0-124-generic` and OpenWrt `23.05.5 x86_64`; other
-kernel/distro rows should still receive target smoke before being called
-production-ready.
+strongest for Ubuntu `6.8.0-124-generic`.
+
+OpenWrt `23.05.5 x86_64` runtime status is deliberately narrower than the
+Ubuntu/PVE row: module load/unload, `RX_WORKER`, `TX_PLAINTEXT`, RX-worker plus
+`clsact` TC coexistence, and single-host TCP-stream smoke pass on kernel
+`5.15.167` without reboot. This is not a formal OpenWrt A/B traffic stress
+result. Treat OpenWrt full plaintext datapath as an explicit opt-in production
+risk until longer A/B traffic stress passes on the same OpenWrt kernel. TC-only,
+userspace fallback, and helper-module paths are separate from this full
+plaintext `.ko` path.
 
 ## Distribution notes
 

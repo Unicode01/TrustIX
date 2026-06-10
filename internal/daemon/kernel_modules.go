@@ -192,7 +192,7 @@ func moduleParameterValueFalsey(value string) bool {
 }
 
 func kernelDatapathRXWorkerCrashRiskAllowed() bool {
-	return envTruthyAny(
+	return kernelDatapathOpenWrtCrashRiskAllowed() && envTruthyAny(
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER",
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_RX_WORKER",
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT",
@@ -201,10 +201,33 @@ func kernelDatapathRXWorkerCrashRiskAllowed() bool {
 }
 
 func kernelDatapathFullPlaintextCrashRiskAllowed() bool {
-	return envTruthyAny(
+	return kernelDatapathOpenWrtCrashRiskAllowed() && envTruthyAny(
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT",
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_FULL_PLAINTEXT",
 	)
+}
+
+func kernelDatapathOpenWrtCrashRiskAllowed() bool {
+	if !runtimeLooksLikeOpenWrt() {
+		return true
+	}
+	return envTruthyAny(
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH",
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_OPENWRT_FULL_DATAPATH",
+	)
+}
+
+func runtimeLooksLikeOpenWrt() bool {
+	if envTruthyAny("TRUSTIX_ASSUME_OPENWRT") {
+		return true
+	}
+	if envFalsey("TRUSTIX_ASSUME_OPENWRT") {
+		return false
+	}
+	if _, err := os.Stat("/etc/openwrt_release"); err == nil {
+		return true
+	}
+	return false
 }
 
 func (daemon *Daemon) closeKernelModules(ctx context.Context) error {
@@ -400,7 +423,13 @@ func appendModuleParameterFromEnvIfMissing(params, key, envName string) string {
 	return appendModuleParameterIfMissing(params, strings.TrimSpace(key)+"="+value)
 }
 
-var trustIXDatapathPanicRiskModuleParameters = map[string]struct{}{}
+var trustIXDatapathPanicRiskModuleParameters = map[string]struct{}{
+	"rx_worker_inline_pair_flush_jiffies":        {},
+	"rx_worker_stream_coalesce_partial_csum":     {},
+	"rx_worker_xmit_tcp_partial_csum":            {},
+	"rx_worker_xmit_trust_tcp_checksum_ack_only": {},
+	"rx_worker_xmit_trust_tcp_checksum_min_len":  {},
+}
 
 var trustIXDatapathSafeRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_budget":                           {},
@@ -409,7 +438,6 @@ var trustIXDatapathSafeRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_inject":                           {},
 	"rx_worker_inline_coalesce_max_frames":       {},
 	"rx_worker_inline_pair_coalesce":             {},
-	"rx_worker_inline_pair_flush_jiffies":        {},
 	"rx_worker_inline_pair_hold_skb":             {},
 	"rx_worker_inline_xmit":                      {},
 	"rx_worker_inline_xmit_copy_csum":            {},
@@ -422,7 +450,6 @@ var trustIXDatapathSafeRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_steal_tcp":                        {},
 	"rx_worker_stream_batch_queue":               {},
 	"rx_worker_stream_coalesce_gso":              {},
-	"rx_worker_stream_coalesce_partial_csum":     {},
 	"rx_worker_stream_coalesce_software_segment": {},
 	"rx_worker_stream_tcp":                       {},
 	"rx_worker_tcp":                              {},
@@ -432,9 +459,6 @@ var trustIXDatapathSafeRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_xmit_dst_mac_seq_cache":           {},
 	"rx_worker_xmit_hash_tx_queue":               {},
 	"rx_worker_xmit_more":                        {},
-	"rx_worker_xmit_tcp_partial_csum":            {},
-	"rx_worker_xmit_trust_tcp_checksum_ack_only": {},
-	"rx_worker_xmit_trust_tcp_checksum_min_len":  {},
 }
 
 var trustIXCryptoPanicRiskModuleParameters = map[string]struct{}{

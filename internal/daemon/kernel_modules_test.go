@@ -50,6 +50,31 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTXWithCrashRiskGate(
 	}
 }
 
+func TestTrustIXDatapathModuleParametersOpenWrtRequiresDedicatedGate(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+
+	got := TrustIXDatapathModuleParameters("")
+	want := "rx_worker_inject=0 tx_plaintext=0"
+	if got != want {
+		t.Fatalf("parameters = %q, want OpenWrt fail-closed runtime parameters %q", got, want)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersOpenWrtDedicatedGateAllowsFullPlaintext(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
+
+	got := TrustIXDatapathModuleParameters("")
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1"
+	if got != want {
+		t.Fatalf("parameters = %q, want %q", got, want)
+	}
+}
+
 func TestTrustIXDatapathModuleParametersCrashRiskGateWithoutRequestForcesOff(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
@@ -201,14 +226,33 @@ func TestTrustIXDatapathModuleParametersKeepsSafeFallbackRawParameters(t *testin
 		"rx_worker_stream_tcp=1",
 		"rx_worker_stream_coalesce_gso=1",
 		"rx_worker_inline_pair_hold_skb=1",
-		"rx_worker_xmit_tcp_partial_csum=1",
 		"rx_worker_queue_skb=1",
 		"rx_worker_hot_stats=0",
 		"rx_worker_future_experiment=1",
 	}, " ")
 
 	got := TrustIXDatapathModuleParameters(raw)
-	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_steal_skb=1 rx_worker_inline_stolen=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_coalesce_gso=1 rx_worker_inline_pair_hold_skb=1 rx_worker_xmit_tcp_partial_csum=1 rx_worker_queue_skb=1 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
+	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_steal_skb=1 rx_worker_inline_stolen=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_coalesce_gso=1 rx_worker_inline_pair_hold_skb=1 rx_worker_queue_skb=1 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
+	if got != want {
+		t.Fatalf("parameters = %q, want %q", got, want)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersStripsKnownRXWorkerCrashParamsEvenWithGate(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+
+	raw := strings.Join([]string{
+		"rx_worker_xmit=1",
+		"rx_worker_xmit_tcp_partial_csum=1",
+		"rx_worker_stream_coalesce_partial_csum=1",
+		"rx_worker_xmit_trust_tcp_checksum_ack_only=1",
+		"rx_worker_xmit_trust_tcp_checksum_min_len=1",
+		"rx_worker_inline_pair_flush_jiffies=2",
+	}, " ")
+
+	got := TrustIXDatapathModuleParameters(raw)
+	want := "rx_worker_xmit=1 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}

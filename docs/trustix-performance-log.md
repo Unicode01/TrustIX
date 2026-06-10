@@ -1108,3 +1108,159 @@ OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 Compatibility fix in the OpenWrt matrix helper: added an explicit GNU awk prerequisite check and tar integrity validation before reusing cached SDK archives, so a missing `gawk` or truncated `.tar.xz/.tar.zst` fails with a useful cause instead of a misleading module build failure. The helper is now promoted to a tracked release tool and included in Linux release packages.
 
 Cleanup: VM103 had no loaded `trustix_*` modules and temporary `/tmp`/`/var/tmp` TrustIX files were removed. PVE host `/root`, `/tmp`, and `/var/tmp` had no `trustix*`/`*trustix*` leftovers after cleanup; VM103 and VM104 were stopped again. PVE disk usage ended at about 104 GiB used / 784 GiB free.
+
+### PVE full datapath hard-lock retest
+
+Validation: on 2026-06-10, retested the current `trustix_datapath` and
+`trustix_datapath_helpers` build on the PVE A/B pair where the previous
+production-style hard lock had been observed. The run used VM101
+`trustix-perf-a` (`10.10.0.11`) and VM102 `trustix-perf-b` (`10.10.0.12`),
+both on Ubuntu kernel `6.8.0-124-generic`, with the current `trustixd.current`
+and rebuilt modules deployed under `/root/trustix-webui-demo`.
+
+The short PVE A/B runs kept boot IDs unchanged:
+
+| VM | Boot ID |
+| --- | --- |
+| VM101 / A | `46d72c2d-a751-40ee-8492-73b123688f06` |
+| VM102 / B | `8117433a-a5b6-41cb-a856-38a32f0cdfc2` |
+
+Result files:
+
+| Result file | Scope |
+| --- | --- |
+| `build/pve/pve-datapath-baseline-noouter-underlay-20260610.json` | no-outer route-GSO baseline, p1/p4 |
+| `build/pve/pve-datapath-rxworker-queueskb-20260610.json` | RX worker queue-skb and partial-checksum/MAC-cache variants, p1/p4 |
+| `build/pve/pve-datapath-rxworker-coalescedgso-fullcsum-20260610.json` | RX worker coalesced-GSO full-checksum and software-segment variants, p1/p4 |
+| `build/pve/pve-datapath-holdskb-hard-smoke-20260610.json` | hold-skb/pair-coalesce hard-enable variants, p1/p4 |
+| `build/pve/pve-datapath-rxworker-stream-steal-20260610.json` | receive, batchqueue, and stolen-xmit compatibility variants, p1/p4 |
+| `build/pve/pve-datapath-risk-p8-8s-20260610.json` | selected high-risk variants, p8 for 8 seconds |
+| `build/pve/pve-datapath-risk-p8-30s-20260610.json` | same high-risk family, p8 for 30 seconds; reproduced VM101 reboot |
+
+Representative results:
+
+| Case | Test | Throughput | Reboot |
+| --- | --- | ---: | --- |
+| no-outer direct-build baseline | `82clientp1` / `82clientp4` | 3791.2 / 3365.2 Mbps | no |
+| RX worker queue-skb partial checksum + MAC cache | `82clientp1` / `82clientp4` | 4389.8 / 3784.9 Mbps | no |
+| RX worker coalesced-GSO full checksum | `82clientp1` / `82clientp4` | 4504.0 / 3602.6 Mbps | no |
+| hold-skb pair-coalesce full checksum | `82clientp1` / `82clientp4` | 4531.6 / 3607.8 Mbps | no |
+| hold-skb trust-csum ACK-trust | `82clientp1` / `82clientp4` | 4078.9 / 3517.9 Mbps | no |
+| RX worker receive | `82clientp1` / `82clientp4` | 4417.9 / 3888.8 Mbps | no |
+| inline stolen xmit partial + MAC cache | `82clientp8`, 8s | 3478.1 Mbps | no |
+| xmit batchqueue partial + MAC cache | `82clientp8`, 8s | 3510.1 Mbps | no |
+| hold-skb trust-csum ACK-trust | `82clientp8`, 8s | 3493.8 Mbps | no |
+| inline stolen xmit partial + MAC cache | `82clientp8`, 30s | failed before throughput; empty iperf output | VM101 / A rebooted |
+
+Long-soak reproduction: `build/pve/pve-datapath-risk-p8-30s-20260610.json`
+started the first selected high-risk case,
+`exp_plaintext_fast_route_gso_async_stream_hw_inline_rx_directbuild_m64_outergso_tuned_sharded4_ackonly_crossitem_budget_i32_s1024_rxworker_stream_inline_stolen_xmit_partial_maccache`,
+with `TRUSTIX_MATRIX_TCP_TESTS=82clientp8` and `TRUSTIX_MATRIX_IPERF_SECONDS=30`.
+The ready check passed and module parameter validation passed, but the iperf
+phase returned empty output and the harness detected VM101 / A boot ID changing
+from `46d72c2d-a751-40ee-8492-73b123688f06` to
+`44cf7acf-5aa9-48ad-9d0a-be8d8651d778`. VM102 / B stayed on
+`8117433a-a5b6-41cb-a856-38a32f0cdfc2`.
+
+No panic, Oops, BUG, call trace, watchdog, soft lockup, hard lockup, or pstore
+record was found after the reboot; VM101's previous-boot journal ended without
+a useful kernel stack and `/sys/fs/pstore` was empty. The case requested the
+full plaintext RX-worker module with route-GSO async stream direct-build,
+outer-GSO requested, sharded queue, cross-item batching, ACK-only plaintext,
+and RX-worker stream/xmit knobs. The captured runtime parameters show those
+knobs on VM102 / B, while VM101 / A's module-parameter snapshot is consistent
+with the post-reboot default state, so the evidence should be treated as
+"B-side accelerated traffic caused A-side reboot" until a narrower run proves
+which side and path is responsible. The case name includes stolen/partial
+variants, but runtime parameter filtering means those labels must not be treated
+as the sole root cause without a narrower A/B isolation run.
+
+Conclusion: short WebUI/API-style reads, single-host synthetic hooks, and short
+real A/B TCP flows do not reproduce the crash, but a longer p8 real-traffic soak
+does. The full plaintext datapath remains crash-risk experimental and must stay
+behind explicit panic-risk gates. Next isolation should bisect this case family
+between route-GSO async outer-GSO/cross-item, RX-worker xmit, and forward-TC
+interaction, preferably with kdump/netconsole/serial capture before expanding
+to mixed transport so the first crash yields a kernel stack.
+
+Cleanup: after testing, both VMs had no TrustIX or iperf processes, no temporary
+TrustIX routes/netdevs, and no loaded `trustix_*` modules. The temporary matrix
+SSH key was removed from both VMs and from the local workspace.
+
+### OpenWrt single-host full datapath smoke
+
+Validation: on 2026-06-10, rebuilt `kernel/trustix_datapath` for OpenWrt
+`23.05.5 x86/64` / kernel `5.15.167` using the OpenWrt SDK on PVE VM101. The
+rebuilt `trustix_datapath.ko` SHA256 was
+`07f4bc8c24b6d8c83b6a44ad5205f2e4ed5db6491244535e62a4c7ddf27c06b9`.
+
+Runtime target: PVE VM105, OpenWrt `23.05.5`, boot ID
+`a2e9109d-bacc-4a0c-b280-106dae1e2920`.
+
+Smoke matrix:
+
+| Case | Parameters | Result |
+| --- | --- | --- |
+| Device query loop | `enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_hot_stats=0` | pass, 30 repeated query/selftest reads, no reboot |
+| RX/TX base | same | pass: RX worker inject, RX worker with `clsact` TC on ingress, TX plaintext; TCP stream test skipped because `rx_worker_xmit=0` |
+| TCP stream xmit | base plus `rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_coalesce_gso=1 rx_worker_queue_skb=1` | pass, 10 repeats |
+| Partial checksum probe | TCP stream xmit plus `rx_worker_xmit_tcp_partial_csum=1 rx_worker_stream_coalesce_partial_csum=1` | pass, 10 repeats |
+| Inline-pair delayed flush probe | TCP stream xmit plus `rx_worker_inline_pair_hold_skb=1 rx_worker_inline_pair_flush_jiffies=2` | pass, 10 repeats |
+| Trust-checksum probe | TCP stream xmit plus `rx_worker_xmit_trust_tcp_checksum_ack_only=1 rx_worker_xmit_trust_tcp_checksum_min_len=1` | pass, 10 repeats |
+| Combined danger probe | all probes above together | pass, 20 repeats |
+
+Result: no lockup was reproduced in these single-host OpenWrt runtime smokes.
+This was not a formal OpenWrt A/B datapath stress run and should not be used as
+proof that OpenWrt production traffic is safe. The earlier RX-worker smoke
+failure was a false negative: the
+`rx_worker_injected` correctness counter was gated behind `rx_worker_hot_stats`,
+so production-like `rx_worker_hot_stats=0` made a successful delivery look like
+no delivery. The counter is now always updated. WebUI/API-style device reads and
+basic `clsact` TC coexistence did not trigger a lockup in this matrix.
+
+Production boundary: keep OpenWrt full plaintext datapath behind the dedicated
+OpenWrt crash-risk opt-in gate until an A/B traffic run exercises real bridge,
+forward TC, and sustained TCP flows. The daemon also strips known historical
+panic-risk RX-worker parameters from automatic module loading, even when the
+general crash-risk gate is enabled.
+
+### PVE multitransport RX_STAGE hook isolation
+
+Validation: on 2026-06-10, extended the PVE A/B retest to mixed endpoint
+sets and longer concurrent traffic. The harness enabled multiple transport
+candidates in one policy (`udp`, `tcp`, and `experimental_tcp`) and, for the
+longest runs, drove TCP and UDP traffic at the same time.
+
+Isolation results:
+
+| Result file | Module/config shape | Traffic | Duration | Result |
+| --- | --- | --- | --- | --- |
+| `build/pve/pve-multitransport-guarded-600s-20260610.json` | mixed `tcp+experimental_tcp`, experimental TCP fast path disabled by policy guard | TCP | 600s | reboot reproduced; not caused by experimental_tcp fast path |
+| `build/pve/pve-multitransport-modules-disabled-tcp-only-600s-20260610.json` | all TrustIX modules disabled | TCP | 600s | no reboot |
+| `build/pve/pve-multitransport-modules-disabled-triple-tcpudp-1800s-20260610.json` | all TrustIX modules disabled; `udp,tcp,experimental_tcp` candidates | TCP+UDP | 1800s | no reboot; TCP/UDP quality degraded under contention |
+| `build/pve/pve-multitransport-helpers-only-tcp-300s-20260610.json` | only `trustix_datapath_helpers` loaded | TCP | 300s | no reboot |
+| `build/pve/pve-multitransport-datapath-only-tcp-300s-20260610.json` | only `trustix_datapath` loaded; daemon attached default RX_STAGE hook | TCP | 300s | reboot reproduced |
+| `build/pve/pve-multitransport-datapath-only-rxstage-disabled-tcp-600s-20260610.json` | only `trustix_datapath` loaded; `kernel_modules.datapath.rx_stage: disabled` | TCP | 600s | no reboot |
+| `build/pve/pve-multitransport-template-rxstage-default-off-triple-tcpudp-900s-20260610.json` | template required datapath/helpers modules; new daemon default leaves RX_STAGE hook disabled | TCP+UDP | 900s | no reboot; observed TCP and UDP sessions |
+| `build/pve/pve-multitransport-template-rxstage-default-off-triple-tcpudp-1800s-20260610.json` | same default-off daemon and template modules | TCP+UDP | 1800s | no reboot; iperf/control-plane quality degraded and timed out |
+
+The narrow reproducer is the daemon attaching the full datapath RX_STAGE hook
+to the underlay while real traffic is running. Loading `trustix_datapath` alone
+does not reproduce the lockup when the RX_STAGE hook is disabled. The helper
+module and TC route-GSO path remain the stable performance path in this matrix.
+
+Change: daemon RX_STAGE/RX_WORKER hook attachment is now default-off. It only
+attaches when explicitly requested through `kernel_modules.datapath.rx_stage:
+stage`, `kernel_modules.datapath.rx_stage: worker`, `rx_worker: true`, or the
+corresponding `TRUSTIX_KERNEL_DATAPATH_RX_STAGE` /
+`TRUSTIX_KERNEL_DATAPATH_RX_WORKER` environment variables. RX_WORKER and full
+plaintext still require their crash-risk gates. A denied worker request no
+longer falls back to the RX_STAGE poller, because the poller hook is the path
+that reproduced the PVE hard lock/reboot.
+
+Boundary: the 900s default-off mixed run is a stability pass for the panic
+regression. The 1800s mixed run is not a throughput pass: boot IDs stayed
+stable and modules remained loaded, but API/iperf calls timed out under
+TCP+UDP pressure. Treat this as evidence that the default-off hook removes the
+known hard-lock trigger, not as evidence that the mixed-transport performance
+profile is tuned.

@@ -179,6 +179,174 @@ func TestTrustIXFullDatapathRXWorkerInjectsWithoutPanic(t *testing.T) {
 	}
 }
 
+func TestTrustIXFullDatapathRXWorkerWithTCClsactDoesNotPanic(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("trustix_datapath RX worker TC coexistence test requires root")
+	}
+	if _, err := exec.LookPath("tc"); err != nil {
+		t.Skip("tc is not available")
+	}
+	if info, err := os.Stat(TrustIXDatapathDevicePath); err != nil || info.IsDir() {
+		t.Skip("trustix_datapath device is not available; load trustix_datapath.ko rx_worker_inject=1")
+	}
+	if !trustIXFullDatapathRXWorkerInjectEnabled() {
+		t.Skip("trustix_datapath rx_worker_inject is disabled; load module with rx_worker_inject=1")
+	}
+	installFullDatapathOuterTestState(t)
+	if _, err := DatapathHookDetach(TrustIXDatapathDevicePath); err != nil && err != syscall.ENOENT {
+		t.Fatalf("detach before RX worker TC ingress: %v", err)
+	}
+	ingress := "tixdtc0"
+	peer := "tixdtp0"
+	target := "tixdtt0"
+	targetPeer := "tixdtr0"
+	if err := unixLinkAddVeth(ingress, peer); err != nil {
+		t.Skipf("veth unavailable for datapath RX worker TC ingress: %v", err)
+	}
+	defer unixLinkDelete(ingress)
+	if err := unixLinkAddVeth(target, targetPeer); err != nil {
+		t.Skipf("veth unavailable for datapath RX worker TC target: %v", err)
+	}
+	defer unixLinkDelete(target)
+	for _, name := range []string{ingress, peer, target, targetPeer} {
+		if err := unixLinkSetUp(name); err != nil {
+			t.Skipf("unable to bring RX worker TC netdev %s up: %v", name, err)
+		}
+	}
+	if err := tcQdiscAddClsact(ingress); err != nil {
+		t.Skipf("unable to add clsact qdisc to RX worker ingress: %v", err)
+	}
+	defer tcQdiscDelClsact(ingress)
+	_ = tcFilterAddPass(ingress, "ingress")
+	_ = tcFilterAddPass(ingress, "egress")
+	status, err := DatapathHook(TrustIXDatapathDevicePath, DatapathHookRequest{
+		Op:           TrustIXDatapathHookOpAttach,
+		Flags:        TrustIXDatapathHookFlagRXPreview | TrustIXDatapathHookFlagRXWorker,
+		IfName:       ingress,
+		TargetIfName: target,
+	})
+	if err != nil {
+		t.Fatalf("attach datapath hook for RX worker TC ingress: %v", err)
+	}
+	defer func() {
+		if _, err := DatapathHookDetach(TrustIXDatapathDevicePath); err != nil && err != syscall.ENOENT {
+			t.Fatalf("detach RX worker TC ingress hook: %v", err)
+		}
+	}()
+	if status.Flags&TrustIXDatapathHookFlagRXWorker == 0 {
+		t.Fatalf("RX worker flag was not retained with TC clsact: %#v", status)
+	}
+	inner := buildIPv4UDPPacketWithPayload(0x0a520001, 0x0a520009, 12345, 5201, bytesOf(0x6c, 48))
+	outer, err := DatapathOuterBuild(TrustIXDatapathDevicePath, inner, 655)
+	if err != nil {
+		t.Fatalf("build outer packet for RX worker TC ingress: %v", err)
+	}
+	if err := sendIPv4EthernetFrame(peer, outer.Outer); err != nil {
+		t.Skipf("unable to inject RX worker TC outer ingress frame: %v", err)
+	}
+	var query DatapathHookStatus
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		query, err = DatapathHookQuery(TrustIXDatapathDevicePath)
+		if err != nil {
+			t.Fatalf("query datapath hook after RX worker TC ingress: %v", err)
+		}
+		if query.RXWorkerInjected > 0 || query.RXWorkerDropped > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if query.OuterParsed == 0 || query.RXWorker == 0 || query.RXWorkerInjected == 0 {
+		t.Fatalf("RX worker did not inject TC-coexisting outer ingress packet cleanly: %#v", query)
+	}
+}
+
+func TestTrustIXFullDatapathRXWorkerTCPStreamDoesNotPanic(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("trustix_datapath RX worker TCP stream test requires root")
+	}
+	if info, err := os.Stat(TrustIXDatapathDevicePath); err != nil || info.IsDir() {
+		t.Skip("trustix_datapath device is not available; load trustix_datapath.ko rx_worker_inject=1")
+	}
+	if !trustIXFullDatapathRXWorkerInjectEnabled() {
+		t.Skip("trustix_datapath rx_worker_inject is disabled; load module with rx_worker_inject=1")
+	}
+	if !trustIXFullDatapathRXWorkerXmitEnabled() {
+		t.Skip("trustix_datapath rx_worker_xmit is disabled; load module with rx_worker_xmit=1")
+	}
+	installFullDatapathOuterTestState(t)
+	if _, err := DatapathHookDetach(TrustIXDatapathDevicePath); err != nil && err != syscall.ENOENT {
+		t.Fatalf("detach before RX worker TCP ingress: %v", err)
+	}
+	ingress := "tixdxi0"
+	peer := "tixdxp0"
+	target := "tixdxt0"
+	targetPeer := "tixdxr0"
+	if err := unixLinkAddVeth(ingress, peer); err != nil {
+		t.Skipf("veth unavailable for datapath RX worker TCP ingress: %v", err)
+	}
+	defer unixLinkDelete(ingress)
+	if err := unixLinkAddVeth(target, targetPeer); err != nil {
+		t.Skipf("veth unavailable for datapath RX worker TCP target: %v", err)
+	}
+	defer unixLinkDelete(target)
+	for _, name := range []string{ingress, peer, target, targetPeer} {
+		if err := unixLinkSetUp(name); err != nil {
+			t.Skipf("unable to bring RX worker TCP netdev %s up: %v", name, err)
+		}
+	}
+	status, err := DatapathHook(TrustIXDatapathDevicePath, DatapathHookRequest{
+		Op:           TrustIXDatapathHookOpAttach,
+		Flags:        TrustIXDatapathHookFlagRXPreview | TrustIXDatapathHookFlagRXWorker,
+		IfName:       ingress,
+		TargetIfName: target,
+	})
+	if err != nil {
+		t.Fatalf("attach datapath hook for RX worker TCP ingress: %v", err)
+	}
+	defer func() {
+		if _, err := DatapathHookDetach(TrustIXDatapathDevicePath); err != nil && err != syscall.ENOENT {
+			t.Fatalf("detach RX worker TCP ingress hook: %v", err)
+		}
+	}()
+	if status.Flags&TrustIXDatapathHookFlagRXWorker == 0 {
+		t.Fatalf("RX worker flag was not retained for TCP stream: %#v", status)
+	}
+	payload0 := bytesOf(0x71, 32)
+	payload1 := bytesOf(0x72, 32)
+	inner0 := buildIPv4TCPPacketWithPayload(0x0a520001, 0x0a520009, 12345, 5201, 1000, 0, 0x18, payload0)
+	inner1 := buildIPv4TCPPacketWithPayload(0x0a520001, 0x0a520009, 12345, 5201, uint32(1000+len(payload0)), 0, 0x18, payload1)
+	outer0, err := DatapathOuterBuild(TrustIXDatapathDevicePath, inner0, 656)
+	if err != nil {
+		t.Fatalf("build first outer TCP packet for RX worker ingress: %v", err)
+	}
+	outer1, err := DatapathOuterBuild(TrustIXDatapathDevicePath, inner1, 657)
+	if err != nil {
+		t.Fatalf("build second outer TCP packet for RX worker ingress: %v", err)
+	}
+	if err := sendIPv4EthernetFrame(peer, outer0.Outer); err != nil {
+		t.Skipf("unable to inject first RX worker TCP outer ingress frame: %v", err)
+	}
+	if err := sendIPv4EthernetFrame(peer, outer1.Outer); err != nil {
+		t.Skipf("unable to inject second RX worker TCP outer ingress frame: %v", err)
+	}
+	var query DatapathHookStatus
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		query, err = DatapathHookQuery(TrustIXDatapathDevicePath)
+		if err != nil {
+			t.Fatalf("query datapath hook after RX worker TCP ingress: %v", err)
+		}
+		if query.RXWorkerInjected >= 2 || query.RXWorkerDropped > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if query.OuterParsed < 2 || query.RXWorker < 2 || query.RXWorkerInjected < 2 {
+		t.Fatalf("RX worker did not inject TCP stream packets cleanly: %#v", query)
+	}
+}
+
 func TestTrustIXFullDatapathTXPlaintextEncapsulatesWithoutPanic(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("trustix_datapath TX plaintext test requires root")
@@ -1442,6 +1610,28 @@ func buildIPv4UDPPacketWithPayload(sourceIPv4 uint32, destinationIPv4 uint32, so
 	return packet
 }
 
+func buildIPv4TCPPacketWithPayload(sourceIPv4 uint32, destinationIPv4 uint32, sourcePort uint16, destinationPort uint16, seq uint32, ack uint32, flags uint8, payload []byte) []byte {
+	packet := make([]byte, 20+20+len(payload))
+	packet[0] = 0x45
+	packet[8] = 64
+	packet[9] = 6
+	binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
+	binary.BigEndian.PutUint32(packet[12:16], sourceIPv4)
+	binary.BigEndian.PutUint32(packet[16:20], destinationIPv4)
+	tcp := packet[20:]
+	binary.BigEndian.PutUint16(tcp[0:2], sourcePort)
+	binary.BigEndian.PutUint16(tcp[2:4], destinationPort)
+	binary.BigEndian.PutUint32(tcp[4:8], seq)
+	binary.BigEndian.PutUint32(tcp[8:12], ack)
+	tcp[12] = 5 << 4
+	tcp[13] = flags
+	binary.BigEndian.PutUint16(tcp[14:16], 65535)
+	copy(tcp[20:], payload)
+	binary.BigEndian.PutUint16(packet[10:12], ipv4Checksum(packet[:20]))
+	binary.BigEndian.PutUint16(tcp[16:18], tcpIPv4Checksum(packet))
+	return packet
+}
+
 func unixLinkAddDummy(name string) error {
 	_ = unixLinkDelete(name)
 	return exec.Command("ip", "link", "add", name, "type", "dummy").Run()
@@ -1473,6 +1663,18 @@ func unixRouteDelete(dst string, dev string) error {
 	return exec.Command("ip", "route", "delete", dst, "dev", dev).Run()
 }
 
+func tcQdiscAddClsact(dev string) error {
+	return exec.Command("tc", "qdisc", "add", "dev", dev, "clsact").Run()
+}
+
+func tcQdiscDelClsact(dev string) {
+	_ = exec.Command("tc", "qdisc", "del", "dev", dev, "clsact").Run()
+}
+
+func tcFilterAddPass(dev string, direction string) error {
+	return exec.Command("tc", "filter", "add", "dev", dev, direction, "pref", "100", "matchall", "action", "pass").Run()
+}
+
 func unixNeighReplace(dev string, ip string, lladdr string) error {
 	return exec.Command("ip", "neigh", "replace", ip, "lladdr", lladdr, "dev", dev, "nud", "permanent").Run()
 }
@@ -1483,6 +1685,14 @@ func unixNeighDelete(dev string, ip string) error {
 
 func trustIXFullDatapathRXWorkerInjectEnabled() bool {
 	value, err := os.ReadFile("/sys/module/trustix_datapath/parameters/rx_worker_inject")
+	if err != nil {
+		return false
+	}
+	return len(value) > 0 && (value[0] == 'Y' || value[0] == 'y' || value[0] == '1')
+}
+
+func trustIXFullDatapathRXWorkerXmitEnabled() bool {
+	value, err := os.ReadFile("/sys/module/trustix_datapath/parameters/rx_worker_xmit")
 	if err != nil {
 		return false
 	}
@@ -1617,6 +1827,22 @@ func udpIPv4Checksum(packet []byte) uint16 {
 	sum = checksumAddBytes(sum, packet[16:20])
 	sum = checksumAddBytes(sum, []byte{0, 17, byte(len(udp) >> 8), byte(len(udp))})
 	sum = checksumAddBytes(sum, udp)
+	checksum := checksumFold(sum)
+	if checksum == 0 {
+		return 0xffff
+	}
+	return checksum
+}
+
+func tcpIPv4Checksum(packet []byte) uint16 {
+	if len(packet) < 40 || packet[9] != 6 {
+		return 0
+	}
+	tcp := packet[20:]
+	sum := checksumAddBytes(0, packet[12:16])
+	sum = checksumAddBytes(sum, packet[16:20])
+	sum = checksumAddBytes(sum, []byte{0, 6, byte(len(tcp) >> 8), byte(len(tcp))})
+	sum = checksumAddBytes(sum, tcp)
 	checksum := checksumFold(sum)
 	if checksum == 0 {
 		return 0xffff
