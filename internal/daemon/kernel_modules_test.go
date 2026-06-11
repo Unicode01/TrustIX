@@ -112,8 +112,8 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashR
 		"enable_features=128",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
-		"rx_worker_budget=128",
-		"rx_worker_slots=64",
+		"rx_worker_budget=1024",
+		"rx_worker_slots=8192",
 		"rx_worker_hot_stats=0",
 	} {
 		if !strings.Contains(got, want) {

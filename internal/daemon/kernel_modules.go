@@ -124,8 +124,8 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 			params = appendModuleParameterIfMissing(params, "tx_plaintext=1")
 		}
 		if profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext {
-			params = appendModuleParameterIfMissing(params, "rx_worker_budget=128")
-			params = appendModuleParameterIfMissing(params, "rx_worker_slots=64")
+			params = appendModuleParameterIfMissing(params, "rx_worker_budget=1024")
+			params = appendModuleParameterIfMissing(params, "rx_worker_slots=8192")
 		}
 		if runtime.RXWorkerHotStats != nil && !*runtime.RXWorkerHotStats {
 			params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
@@ -454,6 +454,7 @@ var trustIXDatapathSafeRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_stream_tcp":                       {},
 	"rx_worker_tcp":                              {},
 	"rx_worker_xmit":                             {},
+	"rx_worker_xmit_dev_forward":                 {},
 	"rx_worker_xmit_dst_mac_cache":               {},
 	"rx_worker_xmit_dst_mac_pcpu_cache":          {},
 	"rx_worker_xmit_dst_mac_seq_cache":           {},
