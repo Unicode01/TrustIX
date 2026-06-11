@@ -125,9 +125,120 @@ func TestKernelDatapathRXWorkerAttachesTargetLANWithoutPoller(t *testing.T) {
 	}
 }
 
+func TestKernelDatapathRXWorkerEnvOverridesStageCompatibilityFlag(t *testing.T) {
+	oldOpen := kernelDatapathRXStageOpenDriver
+	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_STAGE", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	driver := &fakeKernelRXStageDriver{workerInjected: 5}
+	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
+		return driver, nil
+	}
+	daemon := &Daemon{
+		dataplane:      dataplane.NewNoopManager(),
+		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+	}
+	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{
+		Name:   "trustix_datapath",
+		Mode:   kernelmodule.ModeAuto,
+		Loaded: true,
+		State:  "loaded",
+	})
+	spec := dataplane.AttachSpec{
+		UnderlayIface: "eth0",
+		LANIface:      "br-lan",
+		LANs: []dataplane.LANAttachSpec{{
+			Iface:         "br-lan",
+			UnderlayIface: "eth0",
+		}},
+	}
+	if err := daemon.startKernelDatapathRXStage(context.Background(), spec); err != nil {
+		t.Fatalf("start RX worker: %v", err)
+	}
+	status := daemon.kernelDatapathRXStageStatus()
+	if !status.Active || status.Mode != kernelDatapathRXModeWorker || status.IfName != "eth0" || status.TargetIfName != "br-lan" {
+		t.Fatalf("worker status = %#v", status)
+	}
+	if status.BatchSize != 0 || status.Polls != 0 || status.RXWorkerInjected != 5 {
+		t.Fatalf("worker counters = %#v, want worker without poller", status)
+	}
+	if status.Flags != kernelDatapathRXWorkerHookFlags() {
+		t.Fatalf("worker hook flags = %#x, want %#x", status.Flags, kernelDatapathRXWorkerHookFlags())
+	}
+	daemon.stopKernelDatapathRXStage()
+}
+
+func TestKernelDatapathRXWorkerEnvWithStageCompatibilityRequiresCrashRiskGate(t *testing.T) {
+	opened := false
+	oldOpen := kernelDatapathRXStageOpenDriver
+	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_STAGE", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
+		opened = true
+		return &fakeKernelRXStageDriver{}, nil
+	}
+	daemon := &Daemon{
+		dataplane:      dataplane.NewNoopManager(),
+		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+	}
+	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{
+		Name:   "trustix_datapath",
+		Mode:   kernelmodule.ModeAuto,
+		Loaded: true,
+		State:  "loaded",
+	})
+	if err := daemon.startKernelDatapathRXStage(context.Background(), dataplane.AttachSpec{UnderlayIface: "eth0", LANIface: "br-lan"}); err != nil {
+		t.Fatalf("start RX worker: %v", err)
+	}
+	if opened {
+		t.Fatal("driver should not open when RX_WORKER lacks the crash-risk gate")
+	}
+	status := daemon.kernelDatapathRXStageStatus()
+	if status.Active || status.Enabled || !strings.Contains(status.DisabledReason, "RX_WORKER requires") {
+		t.Fatalf("status = %#v, want RX_WORKER crash-risk disabled reason", status)
+	}
+}
+
 func TestKernelDatapathFullPlaintextAttachesRXAndTXHooks(t *testing.T) {
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	driver := &fakeKernelRXStageDriver{}
+	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
+		return driver, nil
+	}
+	daemon := &Daemon{
+		dataplane:      dataplane.NewNoopManager(),
+		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+	}
+	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{
+		Name:   "trustix_datapath",
+		Mode:   kernelmodule.ModeAuto,
+		Loaded: true,
+		State:  "loaded",
+	})
+	spec := dataplane.AttachSpec{UnderlayIface: "eth0", LANIface: "br-lan"}
+	if err := daemon.startKernelDatapathRXStage(context.Background(), spec); err != nil {
+		t.Fatalf("start full plaintext: %v", err)
+	}
+	status := daemon.kernelDatapathRXStageStatus()
+	if !status.Active || status.Mode != kernelDatapathRXModeWorker || status.IfName != "eth0" || status.TargetIfName != "br-lan" {
+		t.Fatalf("full plaintext status = %#v", status)
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.attachAttempts != 2 || driver.ifname != "br-lan" || driver.targetIfname != "eth0" || driver.flags != kernelDatapathTXPlaintextHookFlags() {
+		t.Fatalf("driver attach attempts=%d ifname=%q target=%q flags=%#x", driver.attachAttempts, driver.ifname, driver.targetIfname, driver.flags)
+	}
+}
+
+func TestKernelDatapathFullPlaintextOverridesStageCompatibilityFlag(t *testing.T) {
+	oldOpen := kernelDatapathRXStageOpenDriver
+	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_STAGE", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	driver := &fakeKernelRXStageDriver{}

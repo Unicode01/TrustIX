@@ -498,7 +498,25 @@ func kernelDatapathRXMode() string {
 
 func kernelDatapathRXModeForDesired(desired config.Desired) string {
 	if mode, ok := kernelDatapathRXStageModeFromEnv(); ok {
+		if mode == "" {
+			return ""
+		}
 		if mode == kernelDatapathRXModeWorker && !kernelDatapathRXWorkerCrashRiskAllowed() {
+			return ""
+		}
+		if mode == kernelDatapathRXModeWorker {
+			return mode
+		}
+		if kernelDatapathFullPlaintextRequestedForDesired(desired) {
+			if kernelDatapathFullPlaintextEnabledForDesired(desired) {
+				return kernelDatapathRXModeWorker
+			}
+			return ""
+		}
+		if kernelDatapathRXWorkerRequestedByEnv() {
+			if kernelDatapathRXWorkerCrashRiskAllowed() {
+				return kernelDatapathRXModeWorker
+			}
 			return ""
 		}
 		return mode
@@ -525,8 +543,7 @@ func kernelDatapathRXModeForDesired(desired config.Desired) string {
 		}
 		return ""
 	}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER"))) {
-	case "1", "true", "yes", "on", "worker":
+	if kernelDatapathRXWorkerRequestedByEnv() {
 		if kernelDatapathRXWorkerCrashRiskAllowed() {
 			return kernelDatapathRXModeWorker
 		}
@@ -640,11 +657,13 @@ func kernelDatapathRXWorkerRequestedForDesired(desired config.Desired) bool {
 	if mode, ok := kernelDatapathRXStageModeFromEnv(); ok && mode == kernelDatapathRXModeWorker {
 		return true
 	}
+	return kernelDatapathRXWorkerRequestedByEnv()
+}
+
+func kernelDatapathRXWorkerRequestedByEnv() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER"))) {
 	case "1", "true", "yes", "on", "worker":
 		return true
-	case "0", "false", "no", "off", "disabled":
-		return false
 	default:
 		return false
 	}

@@ -1087,10 +1087,9 @@ func EffectiveKernelDatapathRuntime(modules KernelModulesConfig) KernelDatapathR
 			runtime.RXStage = KernelDatapathRXStageStage
 		}
 	case KernelCapabilityProfilePerformance:
-		if runtime.RXStage == "" || runtime.RXStage == KernelDatapathRXStageAuto {
-			runtime.RXStage = KernelDatapathRXStageWorker
-		}
-		runtime.RXWorker = true
+		// Keep the profile on production-safe kernel helpers by default.
+		// The full trustix_datapath RX worker remains an explicit datapath
+		// request because it can hard-lock affected kernels under real traffic.
 	case KernelCapabilityProfileFullPlaintext:
 		runtime.RXStage = KernelDatapathRXStageWorker
 		runtime.RXWorker = true

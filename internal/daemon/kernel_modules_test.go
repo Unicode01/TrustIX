@@ -141,6 +141,21 @@ func TestEffectiveKernelModulesForDesiredProfileDefaultsModes(t *testing.T) {
 	}
 }
 
+func TestTrustIXDatapathModuleParametersForDesiredPerformanceProfileDoesNotEnableRXWorker(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfilePerformance,
+		},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("", desired)
+	want := "rx_worker_inject=0 tx_plaintext=0"
+	if got != want {
+		t.Fatalf("parameters = %q, want production-safe performance parameters %q", got, want)
+	}
+}
+
 func TestTrustIXCryptoModuleParametersStripsPanicRiskRawParameters(t *testing.T) {
 	got := TrustIXCryptoModuleParameters("prefer_software=1 kfunc_simd_fastpath=1 experimental_vaes_kfunc=1")
 	want := "prefer_software=1 experimental_vaes_kfunc=1"

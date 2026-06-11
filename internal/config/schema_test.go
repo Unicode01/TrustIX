@@ -32,3 +32,24 @@ func TestEndpointLocalBindValidation(t *testing.T) {
 		t.Fatalf("error = %v, want local_bind source_ip", err)
 	}
 }
+
+func TestEffectiveKernelDatapathRuntimePerformanceDoesNotRequestRXWorker(t *testing.T) {
+	runtime := EffectiveKernelDatapathRuntime(KernelModulesConfig{
+		CapabilityProfile: KernelCapabilityProfilePerformance,
+	})
+	if runtime.RXWorker || runtime.RXStage == KernelDatapathRXStageWorker || runtime.TXPlaintext || runtime.FullPlaintext {
+		t.Fatalf("performance kernel datapath runtime = %#v, want no full-kernel RX worker/plaintext request", runtime)
+	}
+}
+
+func TestEffectiveKernelDatapathRuntimeExplicitRXWorkerStillWorks(t *testing.T) {
+	runtime := EffectiveKernelDatapathRuntime(KernelModulesConfig{
+		CapabilityProfile: KernelCapabilityProfilePerformance,
+		Datapath: KernelDatapathRuntimeConfig{
+			RXWorker: true,
+		},
+	})
+	if !runtime.RXWorker || runtime.RXStage != KernelDatapathRXStageWorker {
+		t.Fatalf("explicit RX worker runtime = %#v, want worker", runtime)
+	}
+}
