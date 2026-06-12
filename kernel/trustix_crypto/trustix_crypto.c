@@ -72,6 +72,15 @@
 #define BTF_KFUNCS_START(name) BTF_SET8_START(name)
 #define BTF_KFUNCS_END(name) BTF_SET8_END(name)
 #endif
+#ifndef __bpf_kfunc
+#define __bpf_kfunc
+#endif
+#ifndef __bpf_kfunc_start_defs
+#define __bpf_kfunc_start_defs()
+#endif
+#ifndef __bpf_kfunc_end_defs
+#define __bpf_kfunc_end_defs()
+#endif
 #endif
 #if !TRUSTIX_DEVICE_ONLY
 #include <linux/tcp.h>
@@ -95,7 +104,6 @@
 #include <net/checksum.h>
 #if !TRUSTIX_DEVICE_ONLY
 #include <net/dst.h>
-#include <net/gso.h>
 #include <net/ip.h>
 #endif
 #if defined(CONFIG_X86) && defined(CONFIG_X86_64)
