@@ -7478,6 +7478,7 @@ static int trustix_datapath_rx_worker_queue_l2_skb_from_hook(
 	struct sk_buff **inner_skb, __u32 len, unsigned int frames,
 	unsigned int *queued_frames)
 {
+	struct sk_buff *skb;
 	unsigned int queued = 0;
 	int ret;
 
@@ -7487,6 +7488,26 @@ static int trustix_datapath_rx_worker_queue_l2_skb_from_hook(
 		return -EINVAL;
 	if (!frames)
 		frames = 1;
+	if (frames == 1 && !skb_is_gso(*inner_skb) &&
+	    READ_ONCE(trustix_datapath_rx_worker_inline_xmit) &&
+	    READ_ONCE(trustix_datapath_rx_worker_xmit)) {
+		skb = *inner_skb;
+		*inner_skb = NULL;
+		ret = trustix_datapath_rx_worker_deliver_inner_skb(
+			skb, target_dev, true);
+		if (!ret) {
+			trustix_datapath_rx_worker_count_injected(1);
+			trustix_datapath_rx_worker_count_inline_xmit(1);
+			WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, 0);
+			if (queued_frames)
+				*queued_frames = 1;
+			return 0;
+		}
+		trustix_datapath_rx_worker_dropped++;
+		trustix_datapath_rx_worker_inline_xmit_errors++;
+		WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, ret);
+		return ret;
+	}
 	ret = trustix_datapath_rx_worker_enqueue_pending_skb(
 		source_skb, target_dev, *inner_skb, len, frames, true, &queued);
 	if (ret)
