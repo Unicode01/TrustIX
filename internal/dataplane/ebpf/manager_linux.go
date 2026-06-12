@@ -3110,7 +3110,7 @@ func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context)
 			}
 			return err
 		}
-		if kernelDatapathRXWorkerOwnsStackRX() {
+		if kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) {
 			if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
 				manager.warnings = append(manager.warnings, "kernel datapath RX worker XDP pass config failed: "+err.Error())
 			}
@@ -3183,7 +3183,7 @@ func (manager *Manager) kernelUDPTCOnlyEligibleLocked() bool {
 	if !kernelUDPTXDirectOnlyEnabled(manager.spec) || kernelUDPTXSecureDirectRequiredBySpec(manager.spec) {
 		return false
 	}
-	if kernelDatapathRXWorkerOwnsStackRX() {
+	if kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) {
 		return false
 	}
 	if manager.snapshot.PacketPolicy.KernelTransportMode == dataplane.KernelTransportModeDisabled {
@@ -3318,7 +3318,7 @@ func kernelUDPFlowSecurityEncryptionLocked(snapshot dataplane.Snapshot, flow dat
 }
 
 func (manager *Manager) ensureKernelUDPRXDirectLocked() error {
-	if manager.kernelUDPRXDirectAttached || kernelUDPRXDirectDisabled() || kernelDatapathRXWorkerOwnsStackRX() || manager.spec.LANIface == "" ||
+	if manager.kernelUDPRXDirectAttached || kernelUDPRXDirectDisabled() || kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) || manager.spec.LANIface == "" ||
 		manager.spec.UnderlayIface == "" || manager.statsMap == nil {
 		return nil
 	}
@@ -12738,7 +12738,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 
 func (manager *Manager) attachKernelUDPRXDirectLocked(lanLink netlink.Link, underlayLink netlink.Link) error {
 	if kernelUDPRXDirectDisabled() || lanLink == nil || underlayLink == nil || manager.statsMap == nil ||
-		manager.kernelTransportPortMap == nil || kernelDatapathRXWorkerOwnsStackRX() {
+		manager.kernelTransportPortMap == nil || kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) {
 		return nil
 	}
 	if manager.underlayIngressProg != nil || manager.underlayIngressFilter != nil {
@@ -13370,7 +13370,7 @@ func (manager *Manager) syncStandaloneKernelUDPRXXDPDirectConfigLocked() error {
 		return nil
 	}
 	enabled := manager.kernelUDPRXDirectConfigEnabledLocked()
-	xdpEnabled := enabled && manager.kernelUDPXDPRXDirectEnabled && !kernelDatapathRXXDPPassEnabled()
+	xdpEnabled := enabled && manager.kernelUDPXDPRXDirectEnabled && !kernelDatapathRXXDPPassEnabledForSpec(manager.spec)
 	secureEnabled := enabled && manager.kernelUDPRXSecureDirectConfigEnabledLocked()
 	options := experimentalTCPBPFConfigOptions{
 		XDPRXSecureDirect:       kernelUDPXDPRXSecureDirectEnabled() && !manager.kernelUDPXDPRXSecureDirectVethFallback,
@@ -21957,7 +21957,7 @@ func (manager *Manager) rememberKernelUDPTXDirectSequencesLocked() error {
 
 func (manager *Manager) syncKernelUDPRXDirectConfigLocked() error {
 	enabled := manager.kernelUDPRXDirectConfigEnabledLocked()
-	kernelDatapathRXXDPPass := kernelDatapathRXXDPPassEnabled()
+	kernelDatapathRXXDPPass := kernelDatapathRXXDPPassEnabledForSpec(manager.spec)
 	tcPlaintextDirect := manager.kernelUDPRXPlaintextPassToTCLocked(enabled) || (enabled && kernelDatapathRXXDPPass)
 	xdpEnabled := enabled && manager.kernelUDPXDPRXDirectEnabled && !kernelDatapathRXXDPPass
 	secureEnabled := enabled && manager.kernelUDPRXSecureDirectConfigEnabledLocked()
@@ -21984,7 +21984,7 @@ func (manager *Manager) kernelUDPRXPlaintextPassToTCLocked(enabled bool) bool {
 	if !enabled {
 		return false
 	}
-	if kernelDatapathRXXDPPassEnabled() {
+	if kernelDatapathRXXDPPassEnabledForSpec(manager.spec) {
 		return true
 	}
 	if manager.kernelUDPXDPRXDirectVethFallback {
@@ -23590,6 +23590,20 @@ func kernelUDPTXSecureDirectRequiredBySpec(spec dataplane.AttachSpec) bool {
 	reason := strings.ToLower(spec.KernelUDPTXDirectOnlyReason)
 	return strings.Contains(reason, "encryption=secure") ||
 		strings.Contains(reason, "crypto_placement=kernel")
+}
+
+func kernelDatapathRXXDPPassEnabledForSpec(spec dataplane.AttachSpec) bool {
+	if spec.KernelDatapathSuppressLegacyRXWorker {
+		return false
+	}
+	return kernelDatapathRXXDPPassEnabled()
+}
+
+func kernelDatapathRXWorkerOwnsStackRXForSpec(spec dataplane.AttachSpec) bool {
+	if spec.KernelDatapathSuppressLegacyRXWorker {
+		return false
+	}
+	return kernelDatapathRXWorkerOwnsStackRX()
 }
 
 func kernelUDPRXDirectDisabled() bool {

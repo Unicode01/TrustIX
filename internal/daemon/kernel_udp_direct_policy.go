@@ -208,17 +208,53 @@ func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) b
 	if experimentalTCPFastPathDisabledForDesired(desired) {
 		return false
 	}
+	if experimentalTCPRouteGSOExplicitlyDisabledByEnv() {
+		return false
+	}
 	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
 		return false
 	}
 	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
-	if profile.Profile != config.TransportProfilePerformance {
-		return false
-	}
 	if profile.Datapath == config.TransportDatapathUserspace {
 		return false
 	}
-	return parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionPlaintext
+	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext {
+		return false
+	}
+	if profile.Profile == config.TransportProfilePerformance {
+		return true
+	}
+	return experimentalTCPLegacyFullPlaintextRouteGSOForDesired(desired)
+}
+
+func experimentalTCPLegacyFullPlaintextRouteGSOForDesired(desired config.Desired) bool {
+	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
+	if runtime.FullPlaintext || runtime.TXPlaintext {
+		return true
+	}
+	switch config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile) {
+	case config.KernelCapabilityProfileFullPlaintext:
+		return true
+	}
+	return kernelDatapathFullPlaintextRequestedByEnv()
+}
+
+func experimentalTCPRouteGSOExplicitlyDisabledByEnv() bool {
+	for _, name := range []string{
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY",
+	} {
+		if envFalsey(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func experimentalTCPFastPathDisabledForDesired(desired config.Desired) bool {

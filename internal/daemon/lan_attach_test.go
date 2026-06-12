@@ -178,8 +178,75 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextExperimentalTCPRouteGSO(t
 	if !spec.ExperimentalTCPRouteGSOAsync || !spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker || !spec.ExperimentalTCPPlainSkipSequence || !spec.ExperimentalTCPPlainACKOnly {
 		t.Fatalf("performance plaintext experimental_tcp route-GSO flags missing, spec=%#v", spec)
 	}
+	if !spec.KernelDatapathSuppressLegacyRXWorker {
+		t.Fatalf("performance plaintext experimental_tcp should suppress legacy RX worker ownership, spec=%#v", spec)
+	}
 	if spec.KernelUDPTXDirectOnlyReason != "transport_policy.experimental_tcp=performance route_gso_async_outer_gso=enabled encryption=plaintext" {
 		t.Fatalf("direct-only reason = %q", spec.KernelUDPTXDirectOnlyReason)
+	}
+}
+
+func TestDataplaneAttachSpecMigratesLegacyFullPlaintextExperimentalTCPToRouteGSO(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:      "br-lan",
+			AttachMode: config.LANAttachModeExisting,
+		},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfileStable,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	})
+
+	if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly {
+		t.Fatalf("legacy full plaintext experimental_tcp should migrate to direct route-GSO path, spec=%#v", spec)
+	}
+	if !spec.ExperimentalTCPRouteGSOAsync || !spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker || !spec.ExperimentalTCPPlainSkipSequence || !spec.ExperimentalTCPPlainACKOnly {
+		t.Fatalf("legacy full plaintext experimental_tcp route-GSO flags missing, spec=%#v", spec)
+	}
+	if !spec.KernelDatapathSuppressLegacyRXWorker {
+		t.Fatalf("legacy full plaintext route-GSO migration should suppress legacy RX worker ownership, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsFullPlaintextFallbackWhenRouteGSOExplicitlyDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:      "br-lan",
+			AttachMode: config.LANAttachModeExisting,
+		},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfileStable,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly || spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
+		t.Fatalf("explicit TC direct disable should keep route-GSO off for full plaintext fallback, spec=%#v", spec)
+	}
+	if spec.KernelDatapathSuppressLegacyRXWorker {
+		t.Fatalf("explicit TC direct disable should keep legacy RX worker ownership available, spec=%#v", spec)
 	}
 }
 

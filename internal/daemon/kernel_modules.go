@@ -101,6 +101,11 @@ func TrustIXDatapathModuleParameters(raw string) string {
 	return TrustIXDatapathModuleParametersForDesired(raw, config.Desired{})
 }
 
+func kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired config.Desired) bool {
+	return experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) &&
+		!envTruthyAny("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX")
+}
+
 func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desired) string {
 	params := filterModuleParametersWithAllowlist(
 		raw,
@@ -111,9 +116,9 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	profile := config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile)
 	fullPlaintextConfigured := runtime.FullPlaintext || runtime.TXPlaintext
-	suppressFullPlaintextTX := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) && !envTruthyAny("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX")
-	rxWorkerAllowed := fullPlaintextConfigured || kernelDatapathRXWorkerCrashRiskAllowed()
-	fullPlaintextAllowed := !suppressFullPlaintextTX && (fullPlaintextConfigured || kernelDatapathFullPlaintextCrashRiskAllowed())
+	suppressFullPlaintext := kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired)
+	rxWorkerAllowed := !suppressFullPlaintext && (fullPlaintextConfigured || kernelDatapathRXWorkerCrashRiskAllowed())
+	fullPlaintextAllowed := !suppressFullPlaintext && (fullPlaintextConfigured || kernelDatapathFullPlaintextCrashRiskAllowed())
 	params = filterTrustIXDatapathRuntimeCrashRiskParameters(params, rxWorkerAllowed, fullPlaintextAllowed)
 	rxWorker := runtime.RXWorker || runtime.RXStage == config.KernelDatapathRXStageWorker
 	fullPlaintext := fullPlaintextConfigured
@@ -126,11 +131,9 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		fullPlaintext = true
 		fullPlaintextRequested = true
 	}
-	if fullPlaintext && suppressFullPlaintextTX {
+	if suppressFullPlaintext {
 		fullPlaintext = false
-		if fullPlaintextConfigured && !envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER") {
-			rxWorker = false
-		}
+		rxWorker = false
 	}
 	if fullPlaintext && !fullPlaintextAllowed {
 		fullPlaintext = false
@@ -295,6 +298,13 @@ func filterTrustIXDatapathRuntimeCrashRiskParameters(params string, allowRXWorke
 				continue
 			}
 		default:
+			if strings.HasPrefix(key, "rx_worker_") && !allowRXWorker && !moduleParameterValueFalsey(value) {
+				switch key {
+				case "rx_worker_budget", "rx_worker_slots", "rx_worker_hot_stats":
+				default:
+					continue
+				}
+			}
 			if strings.HasPrefix(key, "tx_plaintext_") && !allowFullPlaintext {
 				continue
 			}

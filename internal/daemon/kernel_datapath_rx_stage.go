@@ -497,8 +497,12 @@ func kernelDatapathRXMode() string {
 }
 
 func kernelDatapathRXModeForDesired(desired config.Desired) string {
+	suppressFullPlaintext := kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired)
 	if mode, ok := kernelDatapathRXStageModeFromEnv(); ok {
 		if mode == "" {
+			return ""
+		}
+		if mode == kernelDatapathRXModeWorker && suppressFullPlaintext {
 			return ""
 		}
 		if mode == kernelDatapathRXModeWorker && !kernelDatapathRXWorkerCrashRiskAllowed() {
@@ -508,12 +512,18 @@ func kernelDatapathRXModeForDesired(desired config.Desired) string {
 			return mode
 		}
 		if kernelDatapathFullPlaintextRequestedForDesired(desired) {
+			if suppressFullPlaintext {
+				return ""
+			}
 			if kernelDatapathFullPlaintextEnabledForDesired(desired) {
 				return kernelDatapathRXModeWorker
 			}
 			return ""
 		}
 		if kernelDatapathRXWorkerRequestedByEnv() {
+			if suppressFullPlaintext {
+				return ""
+			}
 			if kernelDatapathRXWorkerCrashRiskAllowed() {
 				return kernelDatapathRXModeWorker
 			}
@@ -538,12 +548,18 @@ func kernelDatapathRXModeForDesired(desired config.Desired) string {
 		return ""
 	}
 	if desired.KernelModules.Datapath.RXWorker {
+		if suppressFullPlaintext {
+			return ""
+		}
 		if kernelDatapathRXWorkerCrashRiskAllowed() {
 			return kernelDatapathRXModeWorker
 		}
 		return ""
 	}
 	if kernelDatapathRXWorkerRequestedByEnv() {
+		if suppressFullPlaintext {
+			return ""
+		}
 		if kernelDatapathRXWorkerCrashRiskAllowed() {
 			return kernelDatapathRXModeWorker
 		}
@@ -557,24 +573,24 @@ func kernelDatapathFullPlaintextEnabled() bool {
 }
 
 func kernelDatapathFullPlaintextEnabledForDesired(desired config.Desired) bool {
-	suppressFullPlaintextTX := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) && !envTruthyAny("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX")
+	suppressFullPlaintext := kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired)
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	if runtime.FullPlaintext || runtime.TXPlaintext {
-		if suppressFullPlaintextTX {
+		if suppressFullPlaintext {
 			return false
 		}
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled", "full":
-		if suppressFullPlaintextTX {
+		if suppressFullPlaintext {
 			return false
 		}
 		return kernelDatapathFullPlaintextCrashRiskAllowed()
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_TX_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled":
-		if suppressFullPlaintextTX {
+		if suppressFullPlaintext {
 			return false
 		}
 		return kernelDatapathFullPlaintextCrashRiskAllowed()

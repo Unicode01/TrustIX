@@ -350,6 +350,61 @@ func TestKernelDatapathRXWorkerSkipsExperimentalTCPTXDirectByDefault(t *testing.
 	}
 }
 
+func TestKernelDatapathRXWorkerEnvSuppressedByRouteGSOMigration(t *testing.T) {
+	opened := false
+	oldOpen := kernelDatapathRXStageOpenDriver
+	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
+		opened = true
+		return &fakeKernelRXStageDriver{}, nil
+	}
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfileStable,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: "plaintext",
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: "experimental_tcp",
+			Enabled:   true,
+		}},
+	}
+	if mode := kernelDatapathRXModeForDesired(desired); mode != "" {
+		t.Fatalf("route-GSO migration should suppress legacy RX worker mode, got %q", mode)
+	}
+	daemon := &Daemon{
+		dataplane:      dataplane.NewNoopManager(),
+		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+		desired:        desired,
+	}
+	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{
+		Name:   "trustix_datapath",
+		Mode:   kernelmodule.ModeAuto,
+		Loaded: true,
+		State:  "loaded",
+	})
+	if err := daemon.startKernelDatapathRXStage(context.Background(), dataplane.AttachSpec{
+		UnderlayIface:           "eth0",
+		LANIface:                "br-lan",
+		ExperimentalTCPTXDirect: true,
+	}); err != nil {
+		t.Fatalf("start RX worker: %v", err)
+	}
+	if opened {
+		t.Fatal("driver should not open when route-GSO migration suppresses legacy RX worker")
+	}
+	status := daemon.kernelDatapathRXStageStatus()
+	if status.Active || status.Enabled {
+		t.Fatalf("status = %#v, want disabled inactive RX worker", status)
+	}
+}
+
 func TestKernelDatapathRXWorkerAllowsExperimentalTCPTXDirectWithOverride(t *testing.T) {
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })

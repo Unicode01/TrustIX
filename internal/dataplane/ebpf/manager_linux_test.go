@@ -12493,6 +12493,64 @@ func TestKernelDatapathRXWorkerDisablesTCRXDirectOwner(t *testing.T) {
 	}
 }
 
+func TestKernelDatapathRXWorkerSuppressedBySpecAllowsTCRXDirectOwner(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_XDP_PASS", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
+
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		LANIface:                             "br-lan",
+		UnderlayIface:                        "eth0",
+		KernelUDPTXDirectOnly:                true,
+		KernelDatapathSuppressLegacyRXWorker: true,
+	}
+	manager.statsMap = &cebpf.Map{}
+	manager.kernelUDPTXRouteMap = &cebpf.Map{}
+	manager.kernelUDPTXFlowMap = &cebpf.Map{}
+
+	if !manager.kernelUDPTCOnlyEligibleLocked() {
+		t.Fatal("route-GSO suppression should let TC RX direct own the stack despite legacy RX_WORKER env")
+	}
+}
+
+func TestKernelUDPRXConfigRouteGSOSuppressionIgnoresLegacyWorkerEnv(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_XDP_PASS", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_OPEN", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_PASS_OPENED", "")
+
+	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_xdp_route_gso_suppressed_worker_config_test", Type: cebpf.Array, KeySize: 4, ValueSize: 4, MaxEntries: 1})
+	defer configMap.Close()
+
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		ExperimentalTCPTXDirect:              true,
+		KernelDatapathSuppressLegacyRXWorker: true,
+	}
+	manager.expTCPFastPath = &experimentalTCPFastPath{xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.kernelUDPRXDirectAttached = true
+	manager.kernelUDPXDPRXDirectEnabled = true
+	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
+		t.Fatalf("sync route-GSO suppressed-worker RX direct config: %v", err)
+	}
+	var config uint32
+	key := uint32(0)
+	if err := configMap.Lookup(key, &config); err != nil {
+		t.Fatalf("read XDP config map: %v", err)
+	}
+	if config&experimentalTCPConfigKernelUDPTCRXDirect == 0 {
+		t.Fatalf("route-GSO suppressed-worker config did not set TC RX direct bit: %#x", config)
+	}
+	if config&experimentalTCPConfigXDPFallbackPass != 0 {
+		t.Fatalf("route-GSO suppressed-worker config should not keep legacy XDP fallback-pass bit: %#x", config)
+	}
+}
+
 func TestKernelDatapathRXWorkerConfiguresXDPStackPassWithoutTCRXDirect(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")

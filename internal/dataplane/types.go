@@ -42,6 +42,7 @@ type AttachSpec struct {
 	ExperimentalTCPPlainACKOnly              bool            `json:"experimental_tcp_plain_ack_only,omitempty"`
 	ExperimentalTCPFastPathDisabled          bool            `json:"experimental_tcp_fast_path_disabled,omitempty"`
 	ExperimentalTCPFastPathDisabledReason    string          `json:"experimental_tcp_fast_path_disabled_reason,omitempty"`
+	KernelDatapathSuppressLegacyRXWorker     bool            `json:"kernel_datapath_suppress_legacy_rx_worker,omitempty"`
 	PinPath                                  string          `json:"pin_path"`
 	DataDir                                  string          `json:"data_dir,omitempty"`
 	LANs                                     []LANAttachSpec `json:"lans,omitempty"`
