@@ -94,8 +94,8 @@ tcp_connect_timeout="${TRUSTIX_E2E_TCP_CONNECT_TIMEOUT:-5}"
 crash_restart="${TRUSTIX_E2E_CRASH_RESTART:-1}"
 experimental_tcp_skip_checksum="${TRUSTIX_E2E_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM:-${TRUSTIX_E2E_EXPERIMENTAL_TCP_SKIP_CHECKSUM:-${TRUSTIX_EXPERIMENTAL_TCP_SKIP_CHECKSUM:-${TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM:-0}}}}"
 experimental_tcp_skip_outer_checksum="${TRUSTIX_E2E_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM:-${TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM:-$experimental_tcp_skip_checksum}}"
-experimental_tcp_tc_tx_direct="${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT:-0}}"
-experimental_tcp_tc_tx_direct_only="${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY:-0}}"
+experimental_tcp_tc_tx_direct="${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT:-}}"
+experimental_tcp_tc_tx_direct_only="${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY:-}}"
 experimental_tcp_route_gso_sync="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_SYNC:-0}}}"
 experimental_tcp_route_gso_sync_stream="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_SYNC_STREAM:-0}}}"
 experimental_tcp_route_gso_sync_stream_outer_gso="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_OUTER_GSO:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_OUTER_GSO:-1}}"
@@ -3738,12 +3738,12 @@ fi
   fi
   [[ "$af_xdp_umem_frame_size" =~ ^[1-9][0-9]*$ ]] || die "TRUSTIX_E2E_AF_XDP_UMEM_FRAME_SIZE must be auto or a positive integer"
   case "$experimental_tcp_tc_tx_direct" in
-    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT must be 0 or 1" ;;
+    ""|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT must be empty or 0/1" ;;
   esac
   case "$experimental_tcp_tc_tx_direct_only" in
-    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY must be 0 or 1" ;;
+    ""|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY must be empty or 0/1" ;;
   esac
   case "$experimental_tcp_route_gso_sync" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
