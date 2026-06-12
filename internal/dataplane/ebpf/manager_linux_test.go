@@ -170,6 +170,159 @@ func TestExperimentalTCPRouteGSOAsyncSpecRequestsSafeKfuncPath(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPRouteGSOAttachIgnoresGenericUDPDirectDisable(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
+
+	spec := dataplane.AttachSpec{
+		KernelUDPTXDirectOnly:        true,
+		ExperimentalTCPTXDirect:      true,
+		ExperimentalTCPRouteGSOAsync: true,
+	}
+	if !kernelUDPTXDirectProgramEnabledForSpec(spec) {
+		t.Fatal("generic UDP TX direct disable must not disable experimental_tcp route-GSO TC program")
+	}
+	if !kernelUDPTXDirectOnlyEnabled(spec) {
+		t.Fatal("generic UDP direct-only disable must not disable experimental_tcp route-GSO direct-only mode")
+	}
+	if !kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec) {
+		t.Fatal("route-GSO attach should remain experimental_tcp-only")
+	}
+}
+
+func TestExperimentalTCPRouteGSOAttachWithFullKmodEnvEmitsRouteKfuncPath(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "")
+
+	spec := dataplane.AttachSpec{
+		KernelUDPTXDirectOnly:            true,
+		ExperimentalTCPTXDirect:          true,
+		ExperimentalTCPRouteGSOSync:      true,
+		ExperimentalTCPRouteGSOAsync:     true,
+		ExperimentalTCPRouteXmitWorker:   true,
+		ExperimentalTCPPlainSkipSequence: true,
+		ExperimentalTCPPlainACKOnly:      true,
+	}
+	if !kernelUDPTXDirectProgramEnabledForSpec(spec) {
+		t.Fatal("full_kmod route-GSO spec should keep the TC TX direct program enabled")
+	}
+	if !kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec) || kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec) {
+		t.Fatal("full_kmod route-GSO spec should select the experimental_tcp-only TC program")
+	}
+	if !kernelUDPTXDirectOnlyEnabled(spec) {
+		t.Fatal("full_kmod route-GSO spec should force direct-only mode")
+	}
+
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_gso_full_kmod_env")
+	defer statsMap.Close()
+	defer routeMap.Close()
+	defer flowMap.Close()
+	routeKfuncCall, err := loadSKBTIXTTXPushRouteTCPHeaderKfuncCall()
+	if err != nil {
+		t.Fatalf("load route TCP header-push kfunc metadata: %v", err)
+	}
+	gsoKfuncCall, err := loadSKBTIXTTXSegmentRouteTCPGSOKfuncCall()
+	if err != nil {
+		t.Fatalf("load route TCP GSO kfunc metadata: %v", err)
+	}
+	xmitKfuncCall, err := loadSKBTIXTTXRouteTCPXmitKfuncCall()
+	if err != nil {
+		t.Fatalf("load route TCP xmit kfunc metadata: %v", err)
+	}
+	options := kernelUDPTXDirectProgramOptions{
+		Enabled:                          kernelUDPTXDirectProgramEnabledForSpec(spec),
+		ExperimentalTCPOnly:              kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec),
+		KernelUDPOnly:                    kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec),
+		DirectOnly:                       kernelUDPTXDirectOnlyEnabled(spec),
+		ExperimentalTCPSkipPlainSequence: experimentalTCPTXPlainSkipSequenceEnabledForSpec(spec),
+		ExperimentalTCPACKOnly:           experimentalTCPTXPlainACKOnlyEnabledForSpec(spec),
+		PushRouteTCPHeaderKfunc:          experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec),
+		PushRouteTCPHeaderKfuncCall:      routeKfuncCall,
+		RouteTCPGSOKfunc:                 experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec),
+		RouteTCPGSOKfuncCall:             gsoKfuncCall,
+		RouteTCPGSOAsyncKfunc:            experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec),
+		RouteTCPXmitKfunc:                experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec),
+		RouteTCPXmitKfuncCall:            xmitKfuncCall,
+	}
+	if !kernelUDPTunnelGSOEnabledForOptions(options) || !kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
+		t.Fatalf("full_kmod route-GSO options did not enable tunnel/active GSO: %+v", options)
+	}
+	out := appendKernelUDPTXDirect(
+		asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1), asm.LoadMem(asm.R7, asm.R6, skbDataOffset, asm.Word), asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word)},
+		statsMap,
+		routeMap,
+		flowMap,
+		options,
+	)
+	if instructionSymbolIndex(out, "kudp_tx_direct_route_tcp_kfunc") < 0 {
+		t.Fatalf("full_kmod route-GSO spec did not emit route TCP GSO kfunc path; options=%+v", options)
+	}
+	if instructionSymbolIndex(out, "kudp_tx_direct_route_tcp_xmit_kfunc") < 0 {
+		t.Fatalf("full_kmod route-GSO spec did not emit route TCP xmit kfunc path; options=%+v", options)
+	}
+}
+
+func TestExperimentalTCPRouteGSORXDirectIgnoresGenericUDPDirectDisable(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT", "0")
+
+	spec := dataplane.AttachSpec{
+		ExperimentalTCPTXDirect:      true,
+		ExperimentalTCPRouteGSOAsync: true,
+	}
+	if kernelUDPRXDirectDisabledForSpec(spec) {
+		t.Fatal("generic UDP RX direct disable must not disable experimental_tcp route-GSO RX direct")
+	}
+
+	manager := NewManager()
+	manager.spec = spec
+	manager.kernelUDPRXDirectAttached = true
+	if !manager.kernelUDPRXDirectConfigEnabledLocked() {
+		t.Fatal("generic UDP RX direct disable must not suppress route-GSO RX direct config")
+	}
+}
+
+func TestGenericUDPDirectDisableStillDisablesNonRouteGSOProgram(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
+
+	if kernelUDPTXDirectProgramEnabledForSpec(dataplane.AttachSpec{}) {
+		t.Fatal("generic UDP TX direct disable should still disable non-route-GSO TC program")
+	}
+	if kernelUDPTXDirectOnlyEnabled(dataplane.AttachSpec{KernelUDPTXDirectOnly: true}) {
+		t.Fatal("generic UDP direct-only disable should still override non-route-GSO direct-only mode")
+	}
+}
+
+func TestGenericUDPDirectDisableStillDisablesNonRouteGSORXDirect(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT", "0")
+
+	if !kernelUDPRXDirectDisabledForSpec(dataplane.AttachSpec{}) {
+		t.Fatal("generic UDP RX direct disable should still disable non-route-GSO RX direct")
+	}
+
+	manager := NewManager()
+	manager.kernelUDPRXDirectAttached = true
+	if manager.kernelUDPRXDirectConfigEnabledLocked() {
+		t.Fatal("generic UDP RX direct disable should still suppress non-route-GSO RX direct config")
+	}
+}
+
 func TestKernelUDPTXFlowValueABI(t *testing.T) {
 	if got := unsafe.Sizeof(kernelUDPTXFlowValue{}); got != kernelUDPTXFlowValueSize {
 		t.Fatalf("kernelUDPTXFlowValue size = %d, want %d", got, kernelUDPTXFlowValueSize)
@@ -6438,6 +6591,34 @@ func TestKernelUDPTXInlineRouteFlowAllowsExperimentalTCPRouteGSOEnv(t *testing.T
 	}
 }
 
+func TestKernelUDPTXInlineRouteFlowAllowsExperimentalTCPRouteGSOSpec(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_PLAIN_SKIP_SEQUENCE", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+
+	spec := dataplane.AttachSpec{ExperimentalTCPRouteGSOSync: true}
+	if !kernelUDPTXInlineRouteFlowAllowedForSpec(spec, []kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
+		t.Fatal("experimental_tcp route-GSO spec requires an inline route value for the route kfunc path")
+	}
+	if !kernelUDPTXInlineRouteFlowValueAllowedForSpec(spec, kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagExperimentalTCP}) {
+		t.Fatal("experimental_tcp route-GSO spec should allow inline experimental_tcp flow values")
+	}
+	routeValue := kernelUDPTXRouteValue{}
+	if !appendKernelUDPTXRouteFlow(&routeValue, 7, 0) {
+		t.Fatal("append route flow")
+	}
+	if !appendKernelUDPTXRouteInlineFlowsForSpec(spec, &routeValue, map[uint64]kernelUDPTXFlowValue{
+		7: {Ifindex: 101, Flags: kernelUDPTXFlowFlagExperimentalTCP},
+	}, 1) {
+		t.Fatal("experimental_tcp route-GSO spec should append inline route flow values")
+	}
+
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "0")
+	if kernelUDPTXInlineRouteFlowAllowedForSpec(spec, []kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
+		t.Fatal("explicit inline experimental_tcp disable should override the route-GSO spec")
+	}
+}
+
 func TestAppendKernelUDPTXRouteInlineFlows(t *testing.T) {
 	routeValue := kernelUDPTXRouteValue{}
 	if !appendKernelUDPTXRouteFlow(&routeValue, 11, 0) || !appendKernelUDPTXRouteFlow(&routeValue, 22, 1) {
@@ -9415,14 +9596,33 @@ func instructionsRouteTCPKfuncUsesCurrentRoutePtr(instructions asm.Instructions)
 		if ins.Symbol() != "kudp_tx_direct_route_tcp_kfunc" {
 			continue
 		}
-		if i == 0 {
+		if i < 2 {
 			return false
 		}
 		prior := instructions[i-1]
-		return prior.OpCode.Class().IsALU() &&
+		if !(prior.OpCode.Class().IsALU() &&
 			prior.OpCode.ALUOp() == asm.Mov &&
 			prior.Dst == asm.R2 &&
-			prior.Src == asm.R0
+			prior.Src == asm.R0) {
+			return false
+		}
+		for j := i - 2; j >= 0 && i-j <= 8; j-- {
+			candidate := instructions[j]
+			if candidate.OpCode.Class().IsLoad() &&
+				candidate.OpCode.Mode() == asm.MemMode &&
+				candidate.Dst == asm.R0 &&
+				candidate.Src == asm.RFP &&
+				candidate.Offset == kernelUDPTXRoutePtrOffset &&
+				candidate.OpCode.Size() == asm.DWord {
+				return true
+			}
+			if candidate.OpCode.Class().IsLoad() && candidate.Dst == asm.R0 ||
+				candidate.OpCode.Class().IsALU() && candidate.Dst == asm.R0 ||
+				candidate.IsBuiltinCall() {
+				return false
+			}
+		}
+		return false
 	}
 	return false
 }

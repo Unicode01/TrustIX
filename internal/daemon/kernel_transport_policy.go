@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/transport"
 )
@@ -23,7 +24,18 @@ func normalizeKernelTransportMode(raw string) dataplane.KernelTransportMode {
 }
 
 func (daemon *Daemon) kernelTransportMode() dataplane.KernelTransportMode {
-	return normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode)
+	return effectiveKernelTransportModeForDesired(daemon.desired)
+}
+
+func effectiveKernelTransportModeForDesired(desired config.Desired) dataplane.KernelTransportMode {
+	mode := normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode)
+	if mode == dataplane.KernelTransportModeDisabled {
+		return mode
+	}
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		return dataplane.KernelTransportModeRequireKernel
+	}
+	return mode
 }
 
 func (daemon *Daemon) annotateKernelTransportStatus(status *dataplane.KernelTransportStatus) {

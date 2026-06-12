@@ -1004,6 +1004,64 @@ func TestRuntimeDataplaneSnapshotCarriesKernelTransportDisabled(t *testing.T) {
 	}
 }
 
+func TestRuntimeDataplaneSnapshotMigratedLegacyFullPlaintextExperimentalTCPRequiresKernelTransport(t *testing.T) {
+	daemon := &Daemon{
+		desired: config.Desired{
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+			TransportPolicy: config.TransportPolicyConfig{
+				Profile:    config.TransportProfileStable,
+				Datapath:   config.TransportDatapathKernelModule,
+				Encryption: securetransport.EncryptionPlaintext,
+				Candidates: []core.EndpointID{"exp-a"},
+			},
+			Endpoints: []config.EndpointConfig{{
+				Name:      "exp-a",
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			}},
+		},
+		members: make(map[core.IXID]memberRecord),
+	}
+
+	snapshot := daemon.runtimeDataplaneSnapshot()
+	if snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeRequireKernel {
+		t.Fatalf("packet policy kernel transport mode = %q, want require_kernel for legacy route-GSO migration", snapshot.PacketPolicy.KernelTransportMode)
+	}
+}
+
+func TestRuntimeDataplaneSnapshotDisabledKernelTransportDoesNotMigrateLegacyFullPlaintextExperimentalTCP(t *testing.T) {
+	daemon := &Daemon{
+		desired: config.Desired{
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+			TransportPolicy: config.TransportPolicyConfig{
+				Profile:         config.TransportProfileStable,
+				Datapath:        config.TransportDatapathKernelModule,
+				Encryption:      securetransport.EncryptionPlaintext,
+				KernelTransport: config.KernelTransportPolicyConfig{Mode: "disabled"},
+				Candidates:      []core.EndpointID{"exp-a"},
+			},
+			Endpoints: []config.EndpointConfig{{
+				Name:      "exp-a",
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			}},
+		},
+		members: make(map[core.IXID]memberRecord),
+	}
+
+	snapshot := daemon.runtimeDataplaneSnapshot()
+	if snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeDisabled {
+		t.Fatalf("packet policy kernel transport mode = %q, want disabled", snapshot.PacketPolicy.KernelTransportMode)
+	}
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) {
+		t.Fatal("disabled kernel_transport must not migrate legacy full plaintext experimental_tcp to route-GSO")
+	}
+}
+
 func TestRuntimeDataplaneSnapshotEnvAutoMSSForUserspaceUDP(t *testing.T) {
 	t.Setenv("TRUSTIX_UDP_AUTO_TCP_MSS_CLAMP", "1")
 	daemon := &Daemon{

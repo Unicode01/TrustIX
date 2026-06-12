@@ -3190,7 +3190,7 @@ func (manager *Manager) kernelUDPTCOnlyEligibleLocked() bool {
 		return false
 	}
 	if manager.spec.LANIface == "" || manager.spec.UnderlayIface == "" || manager.statsMap == nil ||
-		manager.kernelUDPTXRouteMap == nil || manager.kernelUDPTXFlowMap == nil || kernelUDPRXDirectDisabled() {
+		manager.kernelUDPTXRouteMap == nil || manager.kernelUDPTXFlowMap == nil || kernelUDPRXDirectDisabledForSpec(manager.spec) {
 		return false
 	}
 	return true
@@ -3318,7 +3318,7 @@ func kernelUDPFlowSecurityEncryptionLocked(snapshot dataplane.Snapshot, flow dat
 }
 
 func (manager *Manager) ensureKernelUDPRXDirectLocked() error {
-	if manager.kernelUDPRXDirectAttached || kernelUDPRXDirectDisabled() || kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) || manager.spec.LANIface == "" ||
+	if manager.kernelUDPRXDirectAttached || kernelUDPRXDirectDisabledForSpec(manager.spec) || kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) || manager.spec.LANIface == "" ||
 		manager.spec.UnderlayIface == "" || manager.statsMap == nil {
 		return nil
 	}
@@ -10854,7 +10854,23 @@ func (manager *Manager) addKernelUDPTXDirectCurrentStatsLocked(stats map[string]
 	}
 	stats[prefix+"kernel_udp_tx_direct_routes"] = manager.kernelUDPTXDirectRoutes
 	stats[prefix+"kernel_udp_tx_direct_flows"] = manager.kernelUDPTXDirectFlows
+	stats[prefix+"kernel_udp_tx_direct_inline_routes"] = manager.kernelUDPTXDirectInlineRoutes
+	stats[prefix+"kernel_udp_tx_direct_inline_flows"] = manager.kernelUDPTXDirectInlineFlows
 	stats[prefix+"kernel_udp_tx_direct_secure_configured_flows"] = manager.kernelCryptoTCSealConfiguredFlows
+	stats[prefix+"tc_kernel_udp_tx_direct_enabled"] = boolCounter(kernelUDPTXDirectProgramEnabledForSpec(manager.spec))
+	stats[prefix+"tc_kernel_udp_tx_direct_experimental_tcp_only"] = boolCounter(kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(manager.spec))
+	stats[prefix+"tc_kernel_udp_tx_direct_kernel_udp_only"] = boolCounter(kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(manager.spec))
+	stats[prefix+"tc_kernel_udp_tx_direct_only_enabled"] = boolCounter(kernelUDPTXDirectOnlyEnabled(manager.spec))
+	stats[prefix+"tc_experimental_tcp_tx_plain_skip_sequence"] = boolCounter(experimentalTCPTXPlainSkipSequenceEnabledForSpec(manager.spec))
+	stats[prefix+"tc_experimental_tcp_tx_plain_ack_only"] = boolCounter(experimentalTCPTXPlainACKOnlyEnabledForSpec(manager.spec))
+	stats[prefix+"tc_experimental_tcp_tx_direct_push_route_outer_tcp_header_kfunc"] = boolCounter(manager.kernelUDPTXDirectPushRouteTCPHeaderKfunc)
+	stats[prefix+"tc_experimental_tcp_tx_direct_push_route_outer_tcp_header_kfunc_requested"] = boolCounter(experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(manager.spec))
+	stats[prefix+"tc_experimental_tcp_tx_direct_route_tcp_gso_kfunc"] = boolCounter(manager.kernelUDPTXDirectRouteTCPGSOKfunc)
+	stats[prefix+"tc_experimental_tcp_tx_direct_route_tcp_gso_kfunc_requested"] = boolCounter(experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(manager.spec))
+	stats[prefix+"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc"] = boolCounter(manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc)
+	stats[prefix+"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested"] = boolCounter(experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(manager.spec))
+	stats[prefix+"tc_experimental_tcp_tx_direct_route_tcp_xmit_kfunc"] = boolCounter(manager.kernelUDPTXDirectRouteTCPXmitKfunc)
+	stats[prefix+"tc_experimental_tcp_tx_direct_route_tcp_xmit_kfunc_requested"] = boolCounter(experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(manager.spec))
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_attached"] = boolCounter(manager.kernelUDPTXSecureDirectAttached)
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_configured_flows"] = manager.kernelCryptoTCSealConfiguredFlows
 	txSecureOptions := kernelUDPTXSecureDirectProgramOptionsForSpec(manager.spec)
@@ -12737,7 +12753,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 }
 
 func (manager *Manager) attachKernelUDPRXDirectLocked(lanLink netlink.Link, underlayLink netlink.Link) error {
-	if kernelUDPRXDirectDisabled() || lanLink == nil || underlayLink == nil || manager.statsMap == nil ||
+	if kernelUDPRXDirectDisabledForSpec(manager.spec) || lanLink == nil || underlayLink == nil || manager.statsMap == nil ||
 		manager.kernelTransportPortMap == nil || kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) {
 		return nil
 	}
@@ -13775,13 +13791,17 @@ func kernelUDPTXDirectProgramEnabled() bool {
 }
 
 func kernelUDPTXDirectProgramEnabledForSpec(spec dataplane.AttachSpec) bool {
-	if kernelUDPTXDirectDisabled() {
+	if kernelUDPTXDirectDisabled() && !experimentalTCPRouteGSORequestedForSpec(spec) {
 		return false
 	}
 	if kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec) {
 		return experimentalTCPTXDirectEnabledForSpec(spec)
 	}
 	return true
+}
+
+func experimentalTCPRouteGSORequestedForSpec(spec dataplane.AttachSpec) bool {
+	return spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteGSOAsync
 }
 
 func kernelUDPTCRXAdjustRoomFlags() uint64 {
@@ -15727,6 +15747,7 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 				)
 			}
 			instructions = append(instructions,
+				asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord),
 				asm.LoadMem(asm.R4, asm.R0, 72, asm.Word).WithSymbol("kudp_tx_direct_route_tcp_single_flow_guard"),
 				asm.JNE.Imm(asm.R4, 0, "kudp_tx_direct_fallback"),
 				asm.StoreImm(asm.RFP, kernelUDPTXTIXTSegmentRouteTCPGSOArgsClearFlagsOffset, int64(gsoFlags), asm.Word),
@@ -21319,7 +21340,7 @@ func (manager *Manager) syncKernelUDPTXDirectLocked() error {
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
 		return err
 	}
-	if !kernelUDPTXDirectProgramEnabled() {
+	if !kernelUDPTXDirectProgramEnabledForSpec(manager.spec) {
 		manager.kernelUDPTXDirectSync.SkippedDisabled++
 		return nil
 	}
@@ -21468,7 +21489,7 @@ func (manager *Manager) syncKernelUDPTXDirectLocked() error {
 		if manager.kernelUDPTXRouteFailClosedLocked(route) {
 			routeValue.Flags |= kernelUDPTXRouteFlagDirectOnly
 		}
-		if kernelUDPTXInlineRouteFlowAllowed(routeFlows, routeFlowCount) && appendKernelUDPTXRouteInlineFlows(&routeValue, routeFlowValues, activeRouteFlowCount) {
+		if kernelUDPTXInlineRouteFlowAllowedForSpec(manager.spec, routeFlows, routeFlowCount) && appendKernelUDPTXRouteInlineFlowsForSpec(manager.spec, &routeValue, routeFlowValues, activeRouteFlowCount) {
 			routeValue.Flags |= kernelUDPTXRouteFlagInlineFlow
 			manager.kernelUDPTXDirectInlineRoutes++
 			manager.kernelUDPTXDirectInlineFlows += uint64(activeRouteFlowCount)
@@ -21551,7 +21572,7 @@ func kernelUDPTXDirectBypassRouteForSync(route routing.Route) bool {
 }
 
 func (manager *Manager) kernelUDPTXDirectPlaintextReadyLocked() bool {
-	if !kernelUDPTXDirectProgramEnabled() {
+	if !kernelUDPTXDirectProgramEnabledForSpec(manager.spec) {
 		return false
 	}
 	if manager.snapshot.NAT != nil && manager.snapshot.NAT.Enabled {
@@ -22000,7 +22021,7 @@ func (manager *Manager) kernelUDPRXPlaintextPassToTCLocked(enabled bool) bool {
 }
 
 func (manager *Manager) kernelUDPRXDirectConfigEnabledLocked() bool {
-	if !manager.kernelUDPRXDirectAttached || kernelUDPRXDirectDisabled() ||
+	if !manager.kernelUDPRXDirectAttached || kernelUDPRXDirectDisabledForSpec(manager.spec) ||
 		manager.snapshot.NAT != nil && manager.snapshot.NAT.Enabled {
 		return false
 	}
@@ -22016,13 +22037,17 @@ func (manager *Manager) kernelUDPRXSecureDirectConfigEnabledLocked() bool {
 }
 
 func kernelUDPTXInlineRouteFlowAllowed(routeFlows []kernelUDPTXRouteFlow, routeFlowCount int) bool {
+	return kernelUDPTXInlineRouteFlowAllowedForSpec(dataplane.AttachSpec{}, routeFlows, routeFlowCount)
+}
+
+func kernelUDPTXInlineRouteFlowAllowedForSpec(spec dataplane.AttachSpec, routeFlows []kernelUDPTXRouteFlow, routeFlowCount int) bool {
 	if routeFlowCount <= 0 || routeFlowCount > kernelUDPTXRouteMaxFlows || len(routeFlows) < routeFlowCount {
 		return false
 	}
 	if !kernelUDPTXDirectSkipPlainSequenceEnabled() {
 		return false
 	}
-	allowExperimentalTCP := kernelUDPTXInlineExperimentalTCPEnabled()
+	allowExperimentalTCP := kernelUDPTXInlineExperimentalTCPEnabledForSpec(spec)
 	for index := 0; index < routeFlowCount; index++ {
 		if routeFlows[index].experimentalTCP && !allowExperimentalTCP {
 			return false
@@ -22032,23 +22057,31 @@ func kernelUDPTXInlineRouteFlowAllowed(routeFlows []kernelUDPTXRouteFlow, routeF
 }
 
 func kernelUDPTXInlineRouteFlowValueAllowed(value kernelUDPTXFlowValue) bool {
+	return kernelUDPTXInlineRouteFlowValueAllowedForSpec(dataplane.AttachSpec{}, value)
+}
+
+func kernelUDPTXInlineRouteFlowValueAllowedForSpec(spec dataplane.AttachSpec, value kernelUDPTXFlowValue) bool {
 	if value.Flags&kernelUDPTXFlowFlagSecure != 0 {
 		return false
 	}
-	if value.Flags&kernelUDPTXFlowFlagExperimentalTCP != 0 && !kernelUDPTXInlineExperimentalTCPEnabled() {
+	if value.Flags&kernelUDPTXFlowFlagExperimentalTCP != 0 && !kernelUDPTXInlineExperimentalTCPEnabledForSpec(spec) {
 		return false
 	}
 	return true
 }
 
 func kernelUDPTXInlineExperimentalTCPEnabled() bool {
+	return kernelUDPTXInlineExperimentalTCPEnabledForSpec(dataplane.AttachSpec{})
+}
+
+func kernelUDPTXInlineExperimentalTCPEnabledForSpec(spec dataplane.AttachSpec) bool {
 	if envFalsey("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP") {
 		return false
 	}
 	if envTruthy("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP") {
 		return true
 	}
-	return experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequested() ||
+	return experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec) ||
 		experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested()
 }
 
@@ -22239,6 +22272,10 @@ func appendKernelUDPTXRouteFlow(routeValue *kernelUDPTXRouteValue, flowID uint64
 }
 
 func appendKernelUDPTXRouteInlineFlows(routeValue *kernelUDPTXRouteValue, flowValues map[uint64]kernelUDPTXFlowValue, activeCount int) bool {
+	return appendKernelUDPTXRouteInlineFlowsForSpec(dataplane.AttachSpec{}, routeValue, flowValues, activeCount)
+}
+
+func appendKernelUDPTXRouteInlineFlowsForSpec(spec dataplane.AttachSpec, routeValue *kernelUDPTXRouteValue, flowValues map[uint64]kernelUDPTXFlowValue, activeCount int) bool {
 	if routeValue == nil || activeCount <= 0 || activeCount > kernelUDPTXRouteMaxFlows {
 		return false
 	}
@@ -22259,7 +22296,7 @@ func appendKernelUDPTXRouteInlineFlows(routeValue *kernelUDPTXRouteValue, flowVa
 			return false
 		}
 		value, ok := flowValues[flowID]
-		if !ok || !kernelUDPTXInlineRouteFlowValueAllowed(value) {
+		if !ok || !kernelUDPTXInlineRouteFlowValueAllowedForSpec(spec, value) {
 			return false
 		}
 		values[index] = value
@@ -23527,6 +23564,9 @@ func kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec dataplane.AttachSpec) boo
 }
 
 func kernelUDPTXDirectOnlyEnabled(spec dataplane.AttachSpec) bool {
+	if experimentalTCPRouteGSORequestedForSpec(spec) {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY"))) {
 	case "1", "true", "yes", "on", "enabled", "force":
 		return true
@@ -23616,6 +23656,13 @@ func kernelUDPRXDirectDisabled() bool {
 	default:
 		return false
 	}
+}
+
+func kernelUDPRXDirectDisabledForSpec(spec dataplane.AttachSpec) bool {
+	if experimentalTCPRouteGSORequestedForSpec(spec) {
+		return false
+	}
+	return kernelUDPRXDirectDisabled()
 }
 
 func kernelUDPRXSecureDirectRequested() bool {

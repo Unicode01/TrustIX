@@ -205,6 +205,9 @@ func experimentalTCPTXDirectForDesired(desired config.Desired) bool {
 }
 
 func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) bool {
+	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+		return false
+	}
 	if experimentalTCPFastPathDisabledForDesired(desired) {
 		return false
 	}
@@ -241,8 +244,10 @@ func experimentalTCPLegacyFullPlaintextRouteGSOForDesired(desired config.Desired
 
 func experimentalTCPRouteGSOExplicitlyDisabledByEnv() bool {
 	for _, name := range []string{
-		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT",
-		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO",
+		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT",
 		"TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT",
 		"TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT",

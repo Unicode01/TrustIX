@@ -8,6 +8,7 @@ import (
 
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/core"
+	"trustix.local/trustix/internal/dataplane"
 )
 
 func TestTrustIXDatapathModuleParametersAutoEnableRXWorker(t *testing.T) {
@@ -409,9 +410,47 @@ func TestTrustIXDatapathModuleParametersForDesiredRouteGSOSuppressesLegacyRXWork
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredKeepsFullPlaintextWhenRouteGSOExplicitlyDisabled(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredGenericUDPDirectDisableStillMigratesLegacyExperimentalTCP(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfileStable,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: "plaintext",
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: "experimental_tcp",
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext=1 rx_worker_xmit=1", desired)
+	for _, want := range []string{
+		"rx_worker_inject=0",
+		"tx_plaintext=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parameters = %q, missing %q", got, want)
+		}
+	}
+	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatal("generic UDP TC direct disable must not disable experimental_tcp route-GSO migration")
+	}
+	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("generic UDP TC direct disable should not keep legacy full plaintext ownership")
+	}
+}
+
+func TestTrustIXDatapathModuleParametersForDesiredKeepsFullPlaintextWhenRouteGSOExplicitlyDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO", "0")
 	desired := config.Desired{
 		KernelModules: config.KernelModulesConfig{
 			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
@@ -443,6 +482,43 @@ func TestTrustIXDatapathModuleParametersForDesiredKeepsFullPlaintextWhenRouteGSO
 	}
 	if !kernelDatapathFullPlaintextEnabledForDesired(desired) {
 		t.Fatal("explicit TC direct disable should keep full plaintext fallback enabled")
+	}
+}
+
+func TestTrustIXDatapathModuleParametersForDesiredKeepsFullPlaintextWhenKernelTransportDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfileStable,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      "plaintext",
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeDisabled)},
+			Candidates:      []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: "experimental_tcp",
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("", desired)
+	for _, want := range []string{
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parameters = %q, missing fallback %q", got, want)
+		}
+	}
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatal("disabled kernel_transport must prevent route-GSO migration")
+	}
+	if !kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("disabled kernel_transport should keep full plaintext fallback enabled")
 	}
 }
 
