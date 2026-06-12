@@ -44,7 +44,13 @@
 #endif
 #include <net/checksum.h>
 #include <net/dst.h>
+#if defined(__has_include)
+#if __has_include(<net/gso.h>)
 #include <net/gso.h>
+#endif
+#else
+#include <net/gso.h>
+#endif
 
 #include "trustix_datapath_helpers_internal.h"
 
@@ -59,6 +65,21 @@
 #ifndef BTF_KFUNCS_END
 #define BTF_KFUNCS_END(name) BTF_SET8_END(name)
 #endif
+#ifndef __bpf_kfunc
+#define __bpf_kfunc
+#endif
+#ifndef __bpf_kfunc_start_defs
+#define __bpf_kfunc_start_defs()
+#endif
+#ifndef __bpf_kfunc_end_defs
+#define __bpf_kfunc_end_defs()
+#endif
+
+static __always_inline struct sk_buff *
+trustix_bpf_ctx_skb(struct __sk_buff *ctx)
+{
+	return (struct sk_buff *)ctx;
+}
 
 #define TRUSTIX_DATAPATH_FEATURE_GSO_SKB BIT_ULL(6)
 #define TRUSTIX_DATAPATH_FEATURE_ROUTE_TCP_KFUNC BIT_ULL(8)
@@ -7346,12 +7367,13 @@ trustix_tixt_tx_validate_route_plain_flow(struct sk_buff *skb,
 
 __bpf_kfunc int
 trustix_kernel_skb_tixt_tx_push_route_tcp_header(
-				struct sk_buff *skb,
+				struct __sk_buff *ctx,
 				struct trustix_kudp_tx_route_value *route,
 				const struct trustix_tixt_tx_route_header_args *args)
 {
 	const struct trustix_kudp_tx_flow_value *flow;
 	struct trustix_tixt_tx_tcp_header_args csum_args;
+	struct sk_buff *skb = trustix_bpf_ctx_skb(ctx);
 	struct tcphdr *tcph;
 	u32 clear_flags;
 	u32 header_len = ETH_HLEN + sizeof(struct iphdr) +
@@ -13170,10 +13192,11 @@ static void trustix_route_tcp_gso_async_flush(void)
 
 __bpf_kfunc int
 trustix_kernel_skb_tixt_tx_segment_route_tcp_gso(
-				struct sk_buff *skb,
+				struct __sk_buff *ctx,
 				struct trustix_kudp_tx_route_value *route,
 				const struct trustix_tixt_tx_route_gso_args *args)
 {
+	struct sk_buff *skb = trustix_bpf_ctx_skb(ctx);
 	int ret;
 	bool async_enabled;
 	bool async_prefer;
@@ -13217,11 +13240,12 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso(
 
 __bpf_kfunc int
 trustix_kernel_skb_tixt_tx_route_tcp(
-				struct sk_buff *skb,
+				struct __sk_buff *ctx,
 				struct trustix_kudp_tx_route_value *route,
 				const struct trustix_tixt_tx_route_gso_args *args)
 {
 	struct trustix_tixt_tx_route_header_args linear_args;
+	struct sk_buff *skb = trustix_bpf_ctx_skb(ctx);
 
 	if (!skb || !route || !args)
 		return -EINVAL;
@@ -13230,19 +13254,20 @@ trustix_kernel_skb_tixt_tx_route_tcp(
 	linear_args.clear_flags = args->clear_flags &
 		~TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM;
 	linear_args.reserved = args->reserved;
-	return trustix_kernel_skb_tixt_tx_push_route_tcp_header(skb, route,
+	return trustix_kernel_skb_tixt_tx_push_route_tcp_header(ctx, route,
 								&linear_args);
 }
 
 __bpf_kfunc int
 trustix_kernel_skb_tixt_tx_route_tcp_xmit(
-				struct sk_buff *skb,
+				struct __sk_buff *ctx,
 				struct trustix_kudp_tx_route_value *route,
 				const struct trustix_tixt_tx_route_gso_args *args)
 {
 	const struct trustix_kudp_tx_flow_value *flow;
 	struct trustix_kudp_tx_flow_value flow_snapshot;
 	struct net_device *dev;
+	struct sk_buff *skb = trustix_bpf_ctx_skb(ctx);
 	struct sk_buff *tx_skb;
 	u64 flow_id;
 	u32 inner_len;

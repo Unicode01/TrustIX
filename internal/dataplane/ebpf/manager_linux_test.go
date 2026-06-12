@@ -1449,7 +1449,7 @@ func TestTrustIXDatapathHelpersOwnsSKBAndRouteHeaderKfuncs(t *testing.T) {
 			t.Fatalf("trustix_datapath_helpers worker xmit source missing %q", want)
 		}
 	}
-	if bytes.Contains(helperSource, []byte("module_param_named(tixt_rx_single_coalesce_gso")) {
+	if bytes.Contains(helperSource, []byte("module_param_named(tixt_rx_single_coalesce_gso,")) {
 		t.Fatal("tixt_rx_single_coalesce_gso must drain stale RX coalesce state through its custom setter")
 	}
 	if bytes.Contains(xmitBody, []byte("struct trustix_route_tcp_xmit_item")) ||

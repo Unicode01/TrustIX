@@ -151,7 +151,7 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 
 func appendTrustIXDatapathFullPlaintextBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "rx_worker_xmit=1")
-	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit=0")
+	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit_copy_csum=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_tcp=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_stream_tcp=1")
