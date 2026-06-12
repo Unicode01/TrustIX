@@ -96,7 +96,7 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 	params := filterModuleParametersWithAllowlist(
 		raw,
 		trustIXDatapathPanicRiskModuleParameters,
-		trustIXDatapathSafeRXWorkerModuleParameters,
+		trustIXDatapathAllowedRXWorkerModuleParameters(),
 		"rx_worker_",
 	)
 	rxWorkerAllowed := kernelDatapathRXWorkerCrashRiskAllowed()
@@ -122,20 +122,30 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		params = appendModuleParameterIfMissing(params, "rx_worker_inject=1")
 		if fullPlaintext {
 			params = appendModuleParameterIfMissing(params, "tx_plaintext=1")
+			params = appendTrustIXDatapathFullPlaintextBaseParameters(params)
 		}
-		if profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext {
+		if fullPlaintext || profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext {
 			params = appendModuleParameterIfMissing(params, "rx_worker_budget=1024")
 			params = appendModuleParameterIfMissing(params, "rx_worker_slots=8192")
 		}
 		if runtime.RXWorkerHotStats != nil && !*runtime.RXWorkerHotStats {
 			params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
-		} else if runtime.RXWorkerHotStats == nil && (profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext) {
+		} else if runtime.RXWorkerHotStats == nil && (fullPlaintext || profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext) {
 			params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
 		} else if envFalsey("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_HOT_STATS") {
 			params = appendModuleParameterIfMissing(params, "rx_worker_hot_stats=0")
 		}
 	}
 	return forceTrustIXDatapathRuntimeCrashRiskOffParameters(params)
+}
+
+func appendTrustIXDatapathFullPlaintextBaseParameters(params string) string {
+	params = appendModuleParameterIfMissing(params, "rx_worker_xmit=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit_copy_csum=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_tcp=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_stream_tcp=1")
+	return params
 }
 
 func filterTrustIXDatapathRuntimeCrashRiskParameters(params string, allowRXWorker bool, allowFullPlaintext bool) string {
@@ -204,6 +214,13 @@ func kernelDatapathFullPlaintextCrashRiskAllowed() bool {
 	return kernelDatapathOpenWrtCrashRiskAllowed() && envTruthyAny(
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT",
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_FULL_PLAINTEXT",
+	)
+}
+
+func kernelDatapathRXWorkerExperimentsAllowed() bool {
+	return kernelDatapathRXWorkerCrashRiskAllowed() && envTruthyAny(
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER_EXPERIMENTS",
+		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_RX_WORKER_EXPERIMENTS",
 	)
 }
 
@@ -431,18 +448,37 @@ var trustIXDatapathPanicRiskModuleParameters = map[string]struct{}{
 	"rx_worker_xmit_trust_tcp_checksum_min_len":  {},
 }
 
-var trustIXDatapathSafeRXWorkerModuleParameters = map[string]struct{}{
-	"rx_worker_budget":                           {},
-	"rx_worker_direct_xmit":                      {},
-	"rx_worker_hot_stats":                        {},
-	"rx_worker_inject":                           {},
+func trustIXDatapathAllowedRXWorkerModuleParameters() map[string]struct{} {
+	allow := make(map[string]struct{}, len(trustIXDatapathBaseRXWorkerModuleParameters)+len(trustIXDatapathExperimentalRXWorkerModuleParameters))
+	for key := range trustIXDatapathBaseRXWorkerModuleParameters {
+		allow[key] = struct{}{}
+	}
+	if kernelDatapathRXWorkerExperimentsAllowed() {
+		for key := range trustIXDatapathExperimentalRXWorkerModuleParameters {
+			allow[key] = struct{}{}
+		}
+	}
+	return allow
+}
+
+var trustIXDatapathBaseRXWorkerModuleParameters = map[string]struct{}{
+	"rx_worker_budget":                {},
+	"rx_worker_direct_xmit":           {},
+	"rx_worker_hot_stats":             {},
+	"rx_worker_inject":                {},
+	"rx_worker_inline_xmit":           {},
+	"rx_worker_inline_xmit_copy_csum": {},
+	"rx_worker_slots":                 {},
+	"rx_worker_stream_tcp":            {},
+	"rx_worker_tcp":                   {},
+	"rx_worker_xmit":                  {},
+}
+
+var trustIXDatapathExperimentalRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_inline_coalesce_max_frames":       {},
 	"rx_worker_inline_pair_coalesce":             {},
 	"rx_worker_inline_pair_hold_skb":             {},
-	"rx_worker_inline_xmit":                      {},
-	"rx_worker_inline_xmit_copy_csum":            {},
 	"rx_worker_queue_skb":                        {},
-	"rx_worker_slots":                            {},
 	"rx_worker_steal_skb":                        {},
 	"rx_worker_inline_stolen":                    {},
 	"rx_worker_inline_receive":                   {},
@@ -451,9 +487,6 @@ var trustIXDatapathSafeRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_stream_batch_queue":               {},
 	"rx_worker_stream_coalesce_gso":              {},
 	"rx_worker_stream_coalesce_software_segment": {},
-	"rx_worker_stream_tcp":                       {},
-	"rx_worker_tcp":                              {},
-	"rx_worker_xmit":                             {},
 	"rx_worker_xmit_dev_forward":                 {},
 	"rx_worker_xmit_dst_mac_cache":               {},
 	"rx_worker_xmit_dst_mac_pcpu_cache":          {},
