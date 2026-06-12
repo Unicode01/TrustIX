@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -44,7 +46,7 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTXWithCrashRiskGate(
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=0 rx_worker_inline_xmit_copy_csum=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -69,7 +71,7 @@ func TestTrustIXDatapathModuleParametersOpenWrtDedicatedGateAllowsFullPlaintext(
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=0 rx_worker_inline_xmit_copy_csum=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -93,9 +95,23 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testin
 	}
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
-	want := "rx_worker_inject=0 tx_plaintext=0"
-	if got != want {
-		t.Fatalf("parameters = %q, want fail-closed runtime parameters %q without crash-risk gate", got, want)
+	for _, want := range []string{
+		"enable_features=128",
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"rx_worker_xmit=1",
+		"rx_worker_inline_xmit=0",
+		"rx_worker_inline_xmit_copy_csum=1",
+		"rx_worker_tcp=1",
+		"rx_worker_stream_tcp=1",
+		"tx_plaintext_slots=8192",
+		"rx_worker_budget=1024",
+		"rx_worker_slots=8192",
+		"rx_worker_hot_stats=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parameters = %q, missing %q", got, want)
+		}
 	}
 }
 
@@ -113,10 +129,11 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashR
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
-		"rx_worker_inline_xmit=1",
+		"rx_worker_inline_xmit=0",
 		"rx_worker_inline_xmit_copy_csum=1",
 		"rx_worker_tcp=1",
 		"rx_worker_stream_tcp=1",
+		"tx_plaintext_slots=8192",
 		"rx_worker_budget=1024",
 		"rx_worker_slots=8192",
 		"rx_worker_hot_stats=0",
@@ -124,6 +141,86 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashR
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
 		}
+	}
+}
+
+func TestKernelDatapathFullPlaintextSoftnetSysctlDefaults(t *testing.T) {
+	targets := kernelDatapathFullPlaintextSoftnetSysctls()
+	want := map[string]int{
+		"/proc/sys/net/core/netdev_max_backlog":  kernelDatapathFullPlaintextNetdevMaxBacklog,
+		"/proc/sys/net/core/netdev_budget":       kernelDatapathFullPlaintextNetdevBudget,
+		"/proc/sys/net/core/netdev_budget_usecs": kernelDatapathFullPlaintextNetdevBudgetUsecs,
+	}
+	if len(targets) != len(want) {
+		t.Fatalf("targets = %#v, want %d entries", targets, len(want))
+	}
+	for _, target := range targets {
+		if want[target.Path] != target.Value {
+			t.Fatalf("target %q = %d, want %d", target.Path, target.Value, want[target.Path])
+		}
+	}
+}
+
+func TestWriteKernelSysctlMinimumRaisesLowValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sysctl")
+	if err := os.WriteFile(path, []byte("1000\n"), 0o644); err != nil {
+		t.Fatalf("write temp sysctl: %v", err)
+	}
+	daemon := &Daemon{}
+	if err := daemon.writeKernelSysctlMinimum(path, 65536); err != nil {
+		t.Fatalf("write minimum: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read temp sysctl: %v", err)
+	}
+	if strings.TrimSpace(string(got)) != "65536" {
+		t.Fatalf("sysctl value = %q, want 65536", strings.TrimSpace(string(got)))
+	}
+	if daemon.kernelSysctlRestore[path] != "1000" {
+		t.Fatalf("restore value = %q, want 1000", daemon.kernelSysctlRestore[path])
+	}
+}
+
+func TestWriteKernelSysctlMinimumKeepsHigherValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sysctl")
+	if err := os.WriteFile(path, []byte("99999\n"), 0o644); err != nil {
+		t.Fatalf("write temp sysctl: %v", err)
+	}
+	daemon := &Daemon{}
+	if err := daemon.writeKernelSysctlMinimum(path, 65536); err != nil {
+		t.Fatalf("write minimum: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read temp sysctl: %v", err)
+	}
+	if strings.TrimSpace(string(got)) != "99999" {
+		t.Fatalf("sysctl value = %q, want 99999", strings.TrimSpace(string(got)))
+	}
+	if len(daemon.kernelSysctlRestore) != 0 {
+		t.Fatalf("restore map = %#v, want empty", daemon.kernelSysctlRestore)
+	}
+}
+
+func TestRestoreKernelDatapathFullPlaintextSysctls(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sysctl")
+	if err := os.WriteFile(path, []byte("65536\n"), 0o644); err != nil {
+		t.Fatalf("write temp sysctl: %v", err)
+	}
+	daemon := &Daemon{kernelSysctlRestore: map[string]string{path: "1000"}}
+	if err := daemon.restoreKernelDatapathFullPlaintextSysctls(); err != nil {
+		t.Fatalf("restore sysctl: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read temp sysctl: %v", err)
+	}
+	if strings.TrimSpace(string(got)) != "1000" {
+		t.Fatalf("sysctl value = %q, want 1000", strings.TrimSpace(string(got)))
+	}
+	if len(daemon.kernelSysctlRestore) != 0 {
+		t.Fatalf("restore map = %#v, want empty", daemon.kernelSysctlRestore)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"trustix.local/trustix/internal/transport"
 	experimentaltcptransport "trustix.local/trustix/internal/transport/experimentaltcp"
 	securetransport "trustix.local/trustix/internal/transport/secure"
+	udptransport "trustix.local/trustix/internal/transport/udp"
 )
 
 func TestShutdownRuntimeClosesCaptureForwarderWithoutParentCancel(t *testing.T) {
@@ -150,6 +151,119 @@ func TestStartDataPathSuppressesCaptureForwarderForKernelUDPTCOnlyProvider(t *te
 	if status.CaptureForwarderSuppressedReason == "" {
 		t.Fatal("capture forwarder suppression reason should be reported")
 	}
+}
+
+func TestStartDataPathSuppressesCaptureForwarderForFullPlaintextDatapath(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	manager := &captureCountingManager{}
+	daemon := &Daemon{
+		dataplane:    manager,
+		dataSessions: make(map[dataSessionKey]transport.Session),
+		desired: config.Desired{
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+		},
+	}
+
+	if _, err := daemon.startDataPath(context.Background()); err != nil {
+		t.Fatalf("start data path: %v", err)
+	}
+	if manager.subscription != nil {
+		t.Fatal("capture subscription should not start when full plaintext datapath owns LAN TX/RX")
+	}
+	status := daemon.dataPathStatus()
+	if status.CaptureForwarderActive {
+		t.Fatal("capture forwarder should be inactive for full plaintext datapath")
+	}
+	if !status.CaptureForwarderSuppressed {
+		t.Fatal("capture forwarder should report suppressed for full plaintext datapath")
+	}
+	if !strings.Contains(status.CaptureForwarderSuppressedReason, "full plaintext") {
+		t.Fatalf("suppression reason = %q, want full plaintext", status.CaptureForwarderSuppressedReason)
+	}
+}
+
+func TestStartDataPathFullPlaintextWarmsKernelUDPRouteWithAutoKernelTransport(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_PLAINTEXT_WARMUP_RETRY_DELAY", "1ms")
+	t.Setenv("TRUSTIX_KERNEL_UDP_PLAINTEXT_WARMUP_TIMEOUT", "1s")
+	manager := &captureCountingManager{
+		kernelUDPStatus: &dataplane.KernelUDPStatus{
+			Available:       true,
+			Provider:        "test",
+			FastPath:        true,
+			UserspaceCrypto: true,
+			PreferredCrypto: dataplane.CryptoPlacementUserspace,
+			SupportedCrypto: []dataplane.CryptoPlacement{dataplane.CryptoPlacementUserspace},
+			Reinject:        true,
+		},
+	}
+	registry := transport.NewRegistry()
+	if err := registry.Register(udptransport.NewWithKernelProvider(manager, udptransport.Options{
+		CryptoPlacement: func() dataplane.CryptoPlacement { return dataplane.CryptoPlacementUserspace },
+		KernelTransport: func() dataplane.KernelTransportMode {
+			return dataplane.KernelTransportModeAuto
+		},
+		Encryption: func() string { return securetransport.EncryptionPlaintext },
+	})); err != nil {
+		t.Fatalf("register udp transport: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	daemon := &Daemon{
+		dataplane:        manager,
+		transports:       registry,
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		desired: config.Desired{
+			IX: config.IXConfig{ID: "ix-a"},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+			Peers: []config.PeerConfig{{
+				ID:     "ix-b",
+				Domain: "lab.local",
+				Endpoints: []config.EndpointConfig{{
+					Name:      "udp-b",
+					Address:   "127.0.0.1:17042",
+					Transport: string(transport.ProtocolUDP),
+					Enabled:   true,
+				}},
+			}},
+			Routes: []config.RouteConfig{{
+				Prefix:  "10.0.1.0/24",
+				NextHop: "ix-b",
+				Metric:  100,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionPlaintext,
+				KernelTransport: config.KernelTransportPolicyConfig{
+					Mode: string(dataplane.KernelTransportModeAuto),
+				},
+			},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	if _, err := daemon.startDataPath(ctx); err != nil {
+		t.Fatalf("start data path: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if manager.kernelUDPFlows.Load() == 1 {
+			daemon.dataMu.Lock()
+			sessions := len(daemon.dataSessions)
+			daemon.dataMu.Unlock()
+			if sessions == 1 {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	daemon.dataMu.Lock()
+	sessions := len(daemon.dataSessions)
+	daemon.dataMu.Unlock()
+	t.Fatalf("full plaintext warmup installed flows=%d sessions=%d, want 1/1", manager.kernelUDPFlows.Load(), sessions)
 }
 
 func TestStartDataPathKeepsCaptureForwarderForSecureKernelUDPTCOnlyProviderByDefault(t *testing.T) {
@@ -866,6 +980,8 @@ func TestExperimentalTCPDirectWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
 
 type captureCountingManager struct {
 	subscription         *captureCountingSubscription
+	kernelUDPStatus      *dataplane.KernelUDPStatus
+	kernelUDPFlows       atomic.Uint64
 	experimentalTCPFlows atomic.Uint64
 	attachCount          atomic.Uint64
 	detachCount          atomic.Uint64
@@ -912,11 +1028,20 @@ func (manager *captureCountingManager) KernelUDPStatus(ctx context.Context) (dat
 	if err := ctx.Err(); err != nil {
 		return dataplane.KernelUDPStatus{}, err
 	}
+	if manager.kernelUDPStatus != nil {
+		status := *manager.kernelUDPStatus
+		status.ActiveFlows = int(manager.kernelUDPFlows.Load())
+		return status, nil
+	}
 	return dataplane.KernelUDPStatus{Available: true, Provider: "test", FastPath: true, UserspaceCrypto: true}, nil
 }
 
 func (manager *captureCountingManager) InstallKernelUDPFlows(ctx context.Context, flows []dataplane.KernelUDPFlow) error {
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	manager.kernelUDPFlows.Add(uint64(len(flows)))
+	return nil
 }
 
 func (manager *captureCountingManager) SubmitKernelUDPFrame(ctx context.Context, frame dataplane.KernelUDPFrame) error {

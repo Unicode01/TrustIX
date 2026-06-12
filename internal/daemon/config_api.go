@@ -722,6 +722,7 @@ func dataplaneAttachSpecNeedsReload(oldDesired, newDesired config.Desired) bool 
 	return kernelUDPTXDirectOnlyFailClosedForDesired(oldDesired) != kernelUDPTXDirectOnlyFailClosedForDesired(newDesired) ||
 		kernelUDPSecureFullDirectForDesired(oldDesired) != kernelUDPSecureFullDirectForDesired(newDesired) ||
 		nativePlaintextKernelTunnelRouteOffloadForDesired(oldDesired) != nativePlaintextKernelTunnelRouteOffloadForDesired(newDesired) ||
+		kernelDatapathFullPlaintextEnabledForDesired(oldDesired) != kernelDatapathFullPlaintextEnabledForDesired(newDesired) ||
 		!reflect.DeepEqual(dataplaneLANAttachSpecs(oldDesired), dataplaneLANAttachSpecs(newDesired))
 }
 

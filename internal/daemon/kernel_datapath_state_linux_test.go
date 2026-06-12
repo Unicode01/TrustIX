@@ -289,6 +289,128 @@ func TestKernelDatapathKernelUDPFlowRecordsSkipExistingSessionFlowID(t *testing.
 	}
 }
 
+func TestKernelDatapathFullPlaintextRouteSessionRecordsIgnoreExistingSessionKey(t *testing.T) {
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX: config.IXConfig{ID: "ix-a"},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: "plaintext",
+			},
+			Endpoints: []config.EndpointConfig{{
+				Name:      "wan-udp",
+				Mode:      config.EndpointModePassive,
+				Listen:    "192.0.2.1:17041",
+				Address:   "192.0.2.1:17041",
+				Transport: string(transport.ProtocolUDP),
+				Security: config.EndpointSecurityConfig{
+					Encryption: "plaintext",
+				},
+				Enabled: true,
+			}},
+			Peers: []config.PeerConfig{{
+				ID: "ix-b",
+				Endpoints: []config.EndpointConfig{{
+					Name:      "wan-udp",
+					Mode:      config.EndpointModePassive,
+					Address:   "198.51.100.2:17042",
+					Transport: string(transport.ProtocolUDP),
+					Security: config.EndpointSecurityConfig{
+						Encryption: "plaintext",
+					},
+					Enabled: true,
+				}},
+			}},
+		},
+		dataSessions:     map[dataSessionKey]transport.Session{},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{},
+	}
+	existingKey := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "wan-udp",
+		Transport:  transport.ProtocolUDP,
+		Address:    "198.51.100.2:17042",
+		Encryption: "plaintext",
+	}
+	daemon.dataSessions[existingKey] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:   7,
+		Peer:     "ix-b",
+		Endpoint: "wan-udp",
+	}}
+	daemon.dataSessionState[existingKey] = &dataSessionRuntime{key: existingKey}
+
+	records := daemon.kernelDatapathFullPlaintextRouteSessionRecords(context.Background(), []routing.Route{{
+		Prefix:   core.Prefix("10.202.12.0/24"),
+		NextHop:  "ix-b",
+		Endpoint: "wan-udp",
+		Kind:     routing.RouteUnicast,
+	}})
+	if len(records) != 2 {
+		t.Fatalf("full plaintext records = %#v, want session+wire", records)
+	}
+	if records[0].Kind != kernelmodule.TrustIXDatapathStateKindSession ||
+		records[1].Kind != kernelmodule.TrustIXDatapathStateKindSessionWire ||
+		records[0].Key != kernelDatapathSessionStateKey(existingKey) ||
+		records[1].Key != records[0].Key {
+		t.Fatalf("unexpected full plaintext records: %#v", records)
+	}
+	if records[1].Value[0] != records[0].Value[0] || records[1].Value[0] == 0 {
+		t.Fatalf("wire record does not match synthetic flow id: session=%#v wire=%#v", records[0], records[1])
+	}
+}
+
+func TestKernelDatapathFullPlaintextFlowIDIsSharedAcrossDirections(t *testing.T) {
+	daemon := &Daemon{}
+	endpointA := config.EndpointConfig{
+		Name:      "ix-a-full",
+		Mode:      config.EndpointModePassive,
+		Listen:    "192.0.2.1:17041",
+		Address:   "192.0.2.1:17041",
+		Transport: string(transport.ProtocolUDP),
+		Enabled:   true,
+	}
+	endpointB := config.EndpointConfig{
+		Name:      "ix-b-full",
+		Mode:      config.EndpointModePassive,
+		Listen:    "198.51.100.2:17042",
+		Address:   "198.51.100.2:17042",
+		Transport: string(transport.ProtocolUDP),
+		Enabled:   true,
+	}
+	sessionAB, wireAB, ok := daemon.kernelDatapathFullPlaintextEndpointRecords(
+		context.Background(),
+		config.PeerConfig{ID: "ix-b"},
+		endpointB,
+		endpointA,
+	)
+	if !ok {
+		t.Fatal("ix-a to ix-b full plaintext records were not encoded")
+	}
+	sessionBA, wireBA, ok := daemon.kernelDatapathFullPlaintextEndpointRecords(
+		context.Background(),
+		config.PeerConfig{ID: "ix-a"},
+		endpointA,
+		endpointB,
+	)
+	if !ok {
+		t.Fatal("ix-b to ix-a full plaintext records were not encoded")
+	}
+	if sessionAB.Value[0] == 0 ||
+		sessionAB.Value[0] != wireAB.Value[0] ||
+		sessionAB.Value[0] != sessionBA.Value[0] ||
+		sessionBA.Value[0] != wireBA.Value[0] {
+		t.Fatalf("full plaintext flow ids should match both directions: ab session=%#v wire=%#v ba session=%#v wire=%#v", sessionAB, wireAB, sessionBA, wireBA)
+	}
+	if wireAB.Value[1] != wireBA.Value[2] ||
+		wireAB.Value[2] != wireBA.Value[1] ||
+		uint16(wireAB.Value[3]>>16) != uint16(wireBA.Value[3]) ||
+		uint16(wireAB.Value[3]) != uint16(wireBA.Value[3]>>16) {
+		t.Fatalf("full plaintext wire tuples should remain local-perspective encoded: ab=%#v ba=%#v", wireAB, wireBA)
+	}
+}
+
 func TestKernelDatapathKernelUDPFlowSessionKeyIncludesFlowID(t *testing.T) {
 	first, ok := kernelDatapathKernelUDPFlowSessionKey(dataplane.KernelUDPFlow{
 		ID:       1,

@@ -13,10 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/kernelmodule"
 	"trustix.local/trustix/internal/routing"
 	"trustix.local/trustix/internal/transport"
+	securetransport "trustix.local/trustix/internal/transport/secure"
 )
 
 const (
@@ -87,6 +89,7 @@ func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot data
 		}
 	}
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(ctx)...)
+	records = append(records, daemon.kernelDatapathFullPlaintextRouteSessionRecords(ctx, snapshot.Routes)...)
 	for _, flow := range daemon.flowSnapshot() {
 		if ctx.Err() != nil {
 			return
@@ -124,6 +127,7 @@ func (daemon *Daemon) syncKernelDatapathSessionUpsert(key dataSessionKey, runtim
 		records = append(records, wireRecord)
 	}
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(context.Background())...)
+	records = append(records, daemon.kernelDatapathFullPlaintextRouteSessionRecords(context.Background(), daemon.runtimeDataplaneSnapshot().Routes)...)
 	daemon.applyKernelDatapathStateRecords(context.Background(), records)
 }
 
@@ -231,6 +235,265 @@ func (daemon *Daemon) kernelDatapathSessionSnapshot() []kernelDatapathSessionSna
 		return left.PoolIndex < right.PoolIndex
 	})
 	return sessions
+}
+
+func (daemon *Daemon) kernelDatapathFullPlaintextRouteSessionRecords(ctx context.Context, routes []routing.Route) []kernelmodule.DatapathStateRecord {
+	if daemon == nil || !kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
+		return nil
+	}
+	records := make([]kernelmodule.DatapathStateRecord, 0, len(routes)*2)
+	for _, route := range routes {
+		if ctx.Err() != nil {
+			return records
+		}
+		if route.NextHop == "" || route.Kind != "" && route.Kind != routing.RouteUnicast {
+			continue
+		}
+		peer, ok := daemon.peerConfig(route.NextHop)
+		if !ok {
+			continue
+		}
+		candidates, _, err := daemon.candidatePeerEndpoints(peer, route, routing.FlowKey{}, false)
+		if err != nil {
+			continue
+		}
+		for _, endpoint := range candidates {
+			if !daemon.kernelDatapathFullPlaintextEndpointCompatible(endpoint) {
+				continue
+			}
+			local, ok := daemon.kernelDatapathFullPlaintextLocalEndpoint(endpoint)
+			if !ok {
+				continue
+			}
+			sessionRecord, wireRecord, ok := daemon.kernelDatapathFullPlaintextEndpointRecords(ctx, peer, endpoint, local)
+			if !ok {
+				continue
+			}
+			records = append(records, sessionRecord, wireRecord)
+			break
+		}
+	}
+	return records
+}
+
+func (daemon *Daemon) kernelDatapathFullPlaintextEndpointCompatible(endpoint config.EndpointConfig) bool {
+	if strings.TrimSpace(endpoint.Address) == "" {
+		return false
+	}
+	switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
+	case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+	default:
+		return false
+	}
+	if parseSecureTransportEncryption(daemon.endpointDialEncryption(endpoint)) != securetransport.EncryptionPlaintext {
+		return false
+	}
+	return daemon.endpointSecurityCompatible(endpoint) && daemon.endpointTransportProfileCompatible(endpoint)
+}
+
+func (daemon *Daemon) kernelDatapathFullPlaintextLocalEndpoint(remote config.EndpointConfig) (config.EndpointConfig, bool) {
+	var fallback config.EndpointConfig
+	hasFallback := false
+	remoteTransport := strings.ToLower(strings.TrimSpace(remote.Transport))
+	for _, endpoint := range daemon.desired.Endpoints {
+		if !endpoint.Enabled ||
+			endpoint.Mode != config.EndpointModePassive ||
+			strings.ToLower(strings.TrimSpace(endpoint.Transport)) != remoteTransport ||
+			strings.TrimSpace(endpoint.Listen) == "" {
+			continue
+		}
+		if parseSecureTransportEncryption(daemon.endpointDialEncryption(endpoint)) != securetransport.EncryptionPlaintext {
+			continue
+		}
+		if !daemon.endpointSecurityCompatible(endpoint) || !daemon.endpointTransportProfileCompatible(endpoint) {
+			continue
+		}
+		if endpoint.Name == remote.Name {
+			return endpoint, true
+		}
+		if !hasFallback {
+			fallback = endpoint
+			hasFallback = true
+		}
+	}
+	return fallback, hasFallback
+}
+
+func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Context, peer config.PeerConfig, endpoint config.EndpointConfig, local config.EndpointConfig) (kernelmodule.DatapathStateRecord, kernelmodule.DatapathStateRecord, bool) {
+	key := dataSessionKey{
+		Peer:       peer.ID,
+		Endpoint:   endpoint.Name,
+		Transport:  transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))),
+		Address:    endpoint.Address,
+		Encryption: securetransport.EncryptionPlaintext,
+	}
+	localIP, localPort, remoteIP, remotePort, ok := kernelDatapathFullPlaintextWireTuple(ctx, local, endpoint)
+	if !ok {
+		return kernelmodule.DatapathStateRecord{}, kernelmodule.DatapathStateRecord{}, false
+	}
+	flowID := kernelDatapathFullPlaintextFlowID(key.Transport, localIP, localPort, remoteIP, remotePort)
+	flags := kernelDatapathSessionFlagKernelFlow | kernelDatapathSessionFlagCryptoUserspace
+	if key.Transport == transport.ProtocolUDP {
+		flags |= kernelDatapathSessionFlagDatagram |
+			kernelDatapathSessionFlagNativeBatching |
+			kernelDatapathSessionFlagFragmentingDatagram
+	}
+	now := kernelDatapathUnixNano(time.Now().UTC().UnixNano())
+	session := kernelmodule.DatapathStateRecord{
+		Kind:  kernelmodule.TrustIXDatapathStateKindSession,
+		Op:    kernelmodule.TrustIXDatapathStateOpUpsert,
+		Flags: flags,
+		Key:   kernelDatapathSessionStateKey(key),
+		Value: [8]uint64{
+			flowID,
+			uint64(kernelDatapathTransportCode(key.Transport)),
+			0,
+			0,
+			uint64(kernelDatapathCryptoPlacementCode(string(dataplane.CryptoPlacementUserspace))),
+			now,
+			now,
+			0,
+		},
+	}
+	wire := kernelmodule.DatapathStateRecord{
+		Kind:  kernelmodule.TrustIXDatapathStateKindSessionWire,
+		Op:    kernelmodule.TrustIXDatapathStateOpUpsert,
+		Flags: kernelDatapathSessionWireFlagIPv4 | kernelDatapathSessionWireFlagLocalKnown | kernelDatapathSessionWireFlagRemoteKnown,
+		Key:   session.Key,
+		Value: [8]uint64{
+			flowID,
+			uint64(localIP),
+			uint64(remoteIP),
+			uint64(localPort)<<16 | uint64(remotePort),
+			uint64(kernelDatapathTransportCode(key.Transport)),
+			0,
+			0,
+			0,
+		},
+	}
+	return session, wire, true
+}
+
+func kernelDatapathFullPlaintextFlowID(protocol transport.Protocol, localIP uint32, localPort uint16, remoteIP uint32, remotePort uint16) uint64 {
+	leftIP, leftPort := localIP, localPort
+	rightIP, rightPort := remoteIP, remotePort
+	if rightIP < leftIP || rightIP == leftIP && rightPort < leftPort {
+		leftIP, rightIP = rightIP, leftIP
+		leftPort, rightPort = rightPort, leftPort
+	}
+	flowID := hashString64("full_plaintext\x00" +
+		string(protocol) + "\x00" +
+		strconv.FormatUint(uint64(leftIP), 10) + ":" + strconv.FormatUint(uint64(leftPort), 10) + "\x00" +
+		strconv.FormatUint(uint64(rightIP), 10) + ":" + strconv.FormatUint(uint64(rightPort), 10))
+	if flowID == 0 {
+		return 1
+	}
+	return flowID
+}
+
+func kernelDatapathFullPlaintextWireTuple(ctx context.Context, local config.EndpointConfig, remote config.EndpointConfig) (uint32, uint16, uint32, uint16, bool) {
+	remoteIP, remotePort, ok := kernelDatapathResolveIPv4AddrPort(remote.Address)
+	if !ok || remoteIP == 0 || remotePort == 0 {
+		return 0, 0, 0, 0, false
+	}
+	localPort, ok := kernelDatapathEndpointListenPort(local)
+	if !ok || localPort == 0 {
+		return 0, 0, 0, 0, false
+	}
+	if sourceIP := strings.TrimSpace(local.LocalBind.SourceIP); sourceIP != "" {
+		if ip, ok := kernelDatapathParseIPv4Addr(sourceIP); ok && ip != 0 {
+			return ip, localPort, remoteIP, remotePort, true
+		}
+	}
+	localIP, _, ok := kernelDatapathResolveIPv4AddrPort(local.Listen)
+	if (!ok || localIP == 0) && strings.TrimSpace(local.Address) != "" {
+		localIP, _, ok = kernelDatapathResolveIPv4AddrPort(local.Address)
+	}
+	if !ok || localIP == 0 {
+		if ip, err := kernelDatapathRouteSourceIPv4(ctx, remoteIP, remotePort); err == nil {
+			localIP = ip
+			ok = true
+		}
+	}
+	if !ok || localIP == 0 {
+		return 0, 0, 0, 0, false
+	}
+	return localIP, localPort, remoteIP, remotePort, true
+}
+
+func kernelDatapathEndpointListenPort(endpoint config.EndpointConfig) (uint16, bool) {
+	if _, port, ok := kernelDatapathResolveIPv4AddrPort(endpoint.Listen); ok && port != 0 {
+		return port, true
+	}
+	if _, port, ok := kernelDatapathResolveIPv4AddrPort(endpoint.Address); ok && port != 0 {
+		return port, true
+	}
+	return 0, false
+}
+
+func kernelDatapathResolveIPv4AddrPort(address string) (uint32, uint16, bool) {
+	host, portText, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return 0, 0, false
+	}
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || port == 0 {
+		return 0, 0, false
+	}
+	ip, ok := kernelDatapathResolveIPv4Host(host)
+	return ip, uint16(port), ok
+}
+
+func kernelDatapathResolveIPv4Host(host string) (uint32, bool) {
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return 0, false
+	}
+	if ip, ok := kernelDatapathParseIPv4Addr(host); ok {
+		return ip, true
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return 0, false
+	}
+	for _, ip := range ips {
+		ip4 := ip.To4()
+		if ip4 == nil {
+			continue
+		}
+		return binary.BigEndian.Uint32(ip4), true
+	}
+	return 0, false
+}
+
+func kernelDatapathParseIPv4Addr(raw string) (uint32, bool) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil || !addr.Is4() || addr.IsUnspecified() {
+		return 0, false
+	}
+	ip := addr.As4()
+	return binary.BigEndian.Uint32(ip[:]), true
+}
+
+func kernelDatapathRouteSourceIPv4(ctx context.Context, remoteIP uint32, remotePort uint16) (uint32, error) {
+	var raw [4]byte
+	binary.BigEndian.PutUint32(raw[:], remoteIP)
+	addr := netip.AddrFrom4(raw)
+	dialer := net.Dialer{Timeout: 500 * time.Millisecond}
+	conn, err := dialer.DialContext(ctx, "udp4", net.JoinHostPort(addr.String(), strconv.Itoa(int(remotePort))))
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || udpAddr.IP == nil {
+		return 0, net.InvalidAddrError("local UDP address is unavailable")
+	}
+	ip4 := udpAddr.IP.To4()
+	if ip4 == nil {
+		return 0, net.InvalidAddrError("local UDP address is not IPv4")
+	}
+	return binary.BigEndian.Uint32(ip4), nil
 }
 
 func (daemon *Daemon) kernelDatapathKernelUDPFlowRecords(ctx context.Context) []kernelmodule.DatapathStateRecord {

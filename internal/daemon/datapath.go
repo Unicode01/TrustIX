@@ -661,6 +661,7 @@ func (daemon *Daemon) startDataPath(ctx context.Context) (<-chan error, error) {
 	daemon.dataMu.Lock()
 	daemon.dataPathStarted = true
 	daemon.dataMu.Unlock()
+	daemon.syncKernelDatapathState(ctx, daemon.runtimeDataplaneSnapshot())
 	daemon.scheduleRuntimeRouteWarmup(ctx)
 	return errc, nil
 }
@@ -818,18 +819,23 @@ func (daemon *Daemon) startCaptureForwarder(ctx context.Context) error {
 
 func (daemon *Daemon) captureForwarderSuppressed() bool {
 	return daemon.kernelUDPTCOnlyProviderRequested() && !daemon.transportPolicyUsesExperimentalTCP() ||
-		daemon.transportPolicyUsesNativePlaintextKernelTunnelRouteOffload()
+		daemon.transportPolicyUsesNativePlaintextKernelTunnelRouteOffload() ||
+		kernelDatapathFullPlaintextEnabledForDesired(daemon.desired)
 }
 
 func (daemon *Daemon) captureForwarderSuppressedReason() string {
 	if !daemon.captureForwarderSuppressed() {
 		return ""
 	}
+	if kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
+		return "full plaintext kernel datapath owns LAN RX/TX; userspace capture fallback is disabled"
+	}
 	return "kernel direct-only routes are fail-closed in TC/XDP; userspace capture fallback is disabled"
 }
 
 func (daemon *Daemon) kernelDirectWarmupEnabled() bool {
-	return daemon.kernelUDPDirectOnlyEnabled() &&
+	return (daemon.kernelUDPDirectOnlyEnabled() ||
+		kernelDatapathFullPlaintextEnabledForDesired(daemon.desired)) &&
 		daemon.transportPolicyUsesKernelDirect() &&
 		daemon.kernelTransportMode() != dataplane.KernelTransportModeDisabled
 }

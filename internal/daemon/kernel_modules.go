@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 
 	"trustix.local/trustix/internal/config"
@@ -22,6 +25,9 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	}
 	modules := effectiveKernelModulesForDesired(desired)
 	if kernelModulesAllDisabled(modules) {
+		if err := daemon.restoreKernelDatapathFullPlaintextSysctls(); err != nil {
+			return nil, err
+		}
 		helpersStatus, helpersErr := daemon.kernelHelpers.Ensure(ctx, modules.TrustIXDatapathHelpers)
 		datapathStatus, datapathErr := daemon.kernelDatapath.Ensure(ctx, modules.TrustIXDatapath)
 		cryptoStatus, cryptoErr := daemon.kernelCrypto.Ensure(ctx, modules.TrustIXCrypto)
@@ -32,6 +38,9 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 			}
 		}
 		return statuses, nil
+	}
+	if err := daemon.reconcileKernelDatapathFullPlaintextSysctls(desired); err != nil {
+		return nil, err
 	}
 	cryptoModule := modules.TrustIXCrypto
 	cryptoModule.Parameters = TrustIXCryptoModuleParameters(cryptoModule.Parameters)
@@ -99,13 +108,14 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		trustIXDatapathAllowedRXWorkerModuleParameters(),
 		"rx_worker_",
 	)
-	rxWorkerAllowed := kernelDatapathRXWorkerCrashRiskAllowed()
-	fullPlaintextAllowed := kernelDatapathFullPlaintextCrashRiskAllowed()
-	params = filterTrustIXDatapathRuntimeCrashRiskParameters(params, rxWorkerAllowed, fullPlaintextAllowed)
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	profile := config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile)
+	fullPlaintextConfigured := runtime.FullPlaintext || runtime.TXPlaintext
+	rxWorkerAllowed := fullPlaintextConfigured || kernelDatapathRXWorkerCrashRiskAllowed()
+	fullPlaintextAllowed := fullPlaintextConfigured || kernelDatapathFullPlaintextCrashRiskAllowed()
+	params = filterTrustIXDatapathRuntimeCrashRiskParameters(params, rxWorkerAllowed, fullPlaintextAllowed)
 	rxWorker := runtime.RXWorker || runtime.RXStage == config.KernelDatapathRXStageWorker
-	fullPlaintext := runtime.FullPlaintext || runtime.TXPlaintext
+	fullPlaintext := fullPlaintextConfigured
 	rxWorker = rxWorker || envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER")
 	fullPlaintext = fullPlaintext || envTruthyAny(
 		"TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT",
@@ -141,11 +151,102 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 
 func appendTrustIXDatapathFullPlaintextBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "rx_worker_xmit=1")
-	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit=0")
 	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit_copy_csum=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_tcp=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_stream_tcp=1")
+	params = appendModuleParameterIfMissing(params, "tx_plaintext_slots=8192")
 	return params
+}
+
+type kernelSysctlMinimum struct {
+	Path  string
+	Value int
+}
+
+const (
+	kernelDatapathFullPlaintextNetdevMaxBacklog  = 65536
+	kernelDatapathFullPlaintextNetdevBudget      = 600
+	kernelDatapathFullPlaintextNetdevBudgetUsecs = 50000
+)
+
+func (daemon *Daemon) reconcileKernelDatapathFullPlaintextSysctls(desired config.Desired) error {
+	if !kernelDatapathFullPlaintextSoftnetTuningEnabledForDesired(desired) {
+		return daemon.restoreKernelDatapathFullPlaintextSysctls()
+	}
+	return daemon.applyKernelDatapathFullPlaintextSysctls()
+}
+
+func kernelDatapathFullPlaintextSoftnetTuningEnabledForDesired(desired config.Desired) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	if envFalsey("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT_SOFTNET_TUNING") ||
+		envFalsey("TRUSTIX_KERNEL_DATAPATH_SOFTNET_TUNING") {
+		return false
+	}
+	return kernelDatapathFullPlaintextEnabledForDesired(desired)
+}
+
+func kernelDatapathFullPlaintextSoftnetSysctls() []kernelSysctlMinimum {
+	return []kernelSysctlMinimum{
+		{Path: "/proc/sys/net/core/netdev_max_backlog", Value: kernelDatapathFullPlaintextNetdevMaxBacklog},
+		{Path: "/proc/sys/net/core/netdev_budget", Value: kernelDatapathFullPlaintextNetdevBudget},
+		{Path: "/proc/sys/net/core/netdev_budget_usecs", Value: kernelDatapathFullPlaintextNetdevBudgetUsecs},
+	}
+}
+
+func (daemon *Daemon) applyKernelDatapathFullPlaintextSysctls() error {
+	if daemon == nil || runtime.GOOS != "linux" {
+		return nil
+	}
+	for _, target := range kernelDatapathFullPlaintextSoftnetSysctls() {
+		if err := daemon.writeKernelSysctlMinimum(target.Path, target.Value); err != nil {
+			restoreErr := daemon.restoreKernelDatapathFullPlaintextSysctls()
+			return errors.Join(err, restoreErr)
+		}
+	}
+	return nil
+}
+
+func (daemon *Daemon) writeKernelSysctlMinimum(path string, minimum int) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read sysctl %q: %w", path, err)
+	}
+	currentText := strings.TrimSpace(string(raw))
+	current, err := strconv.Atoi(currentText)
+	if err != nil {
+		return fmt.Errorf("parse sysctl %q value %q: %w", path, currentText, err)
+	}
+	if current >= minimum {
+		return nil
+	}
+	if daemon.kernelSysctlRestore == nil {
+		daemon.kernelSysctlRestore = make(map[string]string)
+	}
+	if _, exists := daemon.kernelSysctlRestore[path]; !exists {
+		daemon.kernelSysctlRestore[path] = currentText
+	}
+	if err := os.WriteFile(path, []byte(strconv.Itoa(minimum)), 0o644); err != nil {
+		return fmt.Errorf("write sysctl %q: %w", path, err)
+	}
+	return nil
+}
+
+func (daemon *Daemon) restoreKernelDatapathFullPlaintextSysctls() error {
+	if daemon == nil || len(daemon.kernelSysctlRestore) == 0 {
+		return nil
+	}
+	var errs []error
+	for path, value := range daemon.kernelSysctlRestore {
+		if err := os.WriteFile(path, []byte(value), 0o644); err != nil {
+			errs = append(errs, fmt.Errorf("restore sysctl %q: %w", path, err))
+			continue
+		}
+		delete(daemon.kernelSysctlRestore, path)
+	}
+	return errors.Join(errs...)
 }
 
 func filterTrustIXDatapathRuntimeCrashRiskParameters(params string, allowRXWorker bool, allowFullPlaintext bool) string {
@@ -263,6 +364,9 @@ func (daemon *Daemon) closeKernelModules(ctx context.Context) error {
 		if err := daemon.kernelCrypto.Close(ctx); err != nil && firstErr == nil {
 			firstErr = err
 		}
+	}
+	if err := daemon.restoreKernelDatapathFullPlaintextSysctls(); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	return firstErr
 }

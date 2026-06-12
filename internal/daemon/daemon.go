@@ -62,6 +62,7 @@ type Daemon struct {
 	kernelCrypto         *kernelmodule.Manager
 	kernelDatapath       *kernelmodule.Manager
 	kernelHelpers        *kernelmodule.Manager
+	kernelSysctlRestore  map[string]string
 	routes               *routing.Table
 	transports           *transport.Registry
 	desired              config.Desired
@@ -912,7 +913,9 @@ func dataplaneLANAttachSpec(lan config.LANConfig, desired config.Desired) datapl
 	if attachMode == config.LANAttachModeExisting {
 		manageAddress = false
 	}
-	manageQdisc := lan.Iface != "" && !nativePlaintextKernelTunnelRouteOffloadForDesired(desired)
+	manageQdisc := lan.Iface != "" &&
+		!nativePlaintextKernelTunnelRouteOffloadForDesired(desired) &&
+		!kernelDatapathFullPlaintextEnabledForDesired(desired)
 	managedMTU := 0
 	if !manageQdisc && manageAddress && nativeTunnelManagedLANMTUEnabled() {
 		managedMTU = nativePlaintextKernelTunnelMTUForDesired(desired)

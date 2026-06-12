@@ -143,8 +143,9 @@
 #define TRUSTIX_DATAPATH_RX_WORKER_STREAM_MAX_FRAMES 64U
 #define TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_SLOTS 256U
 #define TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES 4U
-#define TRUSTIX_DATAPATH_TX_PLAINTEXT_DEFAULT_SLOTS 1024U
+#define TRUSTIX_DATAPATH_TX_PLAINTEXT_DEFAULT_SLOTS 8192U
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_SLOTS 8192U
+#define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS 64U
 #define TRUSTIX_DATAPATH_SKB_MARK_TX_PLAINTEXT BIT(31)
 #define TRUSTIX_DATAPATH_SKB_MARK_RX_WORKER BIT(30)
 #define TRUSTIX_DATAPATH_HOOK_MAX 16U
@@ -1381,6 +1382,12 @@ module_param_named(hook_ifindex_skips,
 MODULE_PARM_DESC(hook_ifindex_skips,
 		 "TrustIX datapath hook invocations skipped because the packet arrived on a different interface");
 
+static unsigned long long trustix_datapath_hook_master_ifindex_matches;
+module_param_named(hook_master_ifindex_matches,
+		   trustix_datapath_hook_master_ifindex_matches, ullong, 0444);
+MODULE_PARM_DESC(hook_master_ifindex_matches,
+		 "TrustIX datapath hook packets accepted because their ingress device is enslaved to the hooked interface");
+
 static unsigned long long trustix_datapath_rx_worker_self_marked;
 module_param_named(rx_worker_self_marked,
 		   trustix_datapath_rx_worker_self_marked, ullong, 0444);
@@ -1716,6 +1723,18 @@ module_param_named(tx_plaintext_gso_skips,
 MODULE_PARM_DESC(tx_plaintext_gso_skips,
 		 "TrustIX plaintext TX packets skipped because the ingress skb is GSO");
 
+static unsigned long long trustix_datapath_tx_plaintext_gso_segments;
+module_param_named(tx_plaintext_gso_segments,
+		   trustix_datapath_tx_plaintext_gso_segments, ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_gso_segments,
+		 "TrustIX plaintext TX software GSO segments encapsulated by the full datapath");
+
+static unsigned long long trustix_datapath_tx_plaintext_gso_errors;
+module_param_named(tx_plaintext_gso_errors,
+		   trustix_datapath_tx_plaintext_gso_errors, ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_gso_errors,
+		 "TrustIX plaintext TX GSO segmentation, queueing, or encapsulation errors");
+
 static unsigned long long trustix_datapath_tx_plaintext_encrypted_skips;
 module_param_named(tx_plaintext_encrypted_skips,
 		   trustix_datapath_tx_plaintext_encrypted_skips, ullong,
@@ -1814,6 +1833,46 @@ module_param_named(tx_plaintext_build_errors,
 		   trustix_datapath_tx_plaintext_build_errors, ullong, 0444);
 MODULE_PARM_DESC(tx_plaintext_build_errors,
 		 "TrustIX plaintext TX packet allocation, copy, or framing errors");
+
+static int trustix_datapath_tx_plaintext_last_build_ret;
+module_param_named(tx_plaintext_last_build_ret,
+		   trustix_datapath_tx_plaintext_last_build_ret, int, 0444);
+MODULE_PARM_DESC(tx_plaintext_last_build_ret,
+		 "Last TrustIX plaintext TX packet build error code");
+
+static unsigned int trustix_datapath_tx_plaintext_last_build_stage;
+module_param_named(tx_plaintext_last_build_stage,
+		   trustix_datapath_tx_plaintext_last_build_stage, uint, 0444);
+MODULE_PARM_DESC(tx_plaintext_last_build_stage,
+		 "Last TrustIX plaintext TX packet build error stage");
+
+static unsigned int trustix_datapath_tx_plaintext_last_build_inner_len;
+module_param_named(tx_plaintext_last_build_inner_len,
+		   trustix_datapath_tx_plaintext_last_build_inner_len, uint,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_last_build_inner_len,
+		 "Last TrustIX plaintext TX build-error inner packet length");
+
+static unsigned int trustix_datapath_tx_plaintext_last_build_skb_len;
+module_param_named(tx_plaintext_last_build_skb_len,
+		   trustix_datapath_tx_plaintext_last_build_skb_len, uint,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_last_build_skb_len,
+		 "Last TrustIX plaintext TX build-error skb length");
+
+static unsigned int trustix_datapath_tx_plaintext_last_build_network_offset;
+module_param_named(tx_plaintext_last_build_network_offset,
+		   trustix_datapath_tx_plaintext_last_build_network_offset,
+		   uint, 0444);
+MODULE_PARM_DESC(tx_plaintext_last_build_network_offset,
+		 "Last TrustIX plaintext TX build-error skb network offset");
+
+static unsigned int trustix_datapath_tx_plaintext_last_build_protocol;
+module_param_named(tx_plaintext_last_build_protocol,
+		   trustix_datapath_tx_plaintext_last_build_protocol, uint,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_last_build_protocol,
+		 "Last TrustIX plaintext TX build-error IPv4 protocol");
 
 static unsigned long long trustix_datapath_tx_plaintext_xmit_errors;
 module_param_named(tx_plaintext_xmit_errors,
@@ -2057,6 +2116,75 @@ static int trustix_datapath_tx_plaintext_enqueue(
 	return 0;
 }
 
+static int trustix_datapath_tx_plaintext_enqueue_many(
+	struct sk_buff **skbs, const __u32 *inner_lens, unsigned int count,
+	struct net_device *target_dev, const struct trustix_datapath_tx_plan *plan)
+{
+	struct workqueue_struct *wq = NULL;
+	unsigned long irqflags;
+	bool queue = false;
+	unsigned int i;
+	int ret = 0;
+
+	if (!skbs || !inner_lens || !count || !target_dev || !plan)
+		return -EINVAL;
+	if (count > TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS)
+		return -E2BIG;
+	for (i = 0; i < count; i++) {
+		if (!skbs[i] || !inner_lens[i])
+			return -EINVAL;
+	}
+
+	spin_lock_irqsave(&trustix_datapath_tx_plaintext_lock, irqflags);
+	if (!trustix_datapath_tx_plaintext_ring ||
+	    !trustix_datapath_tx_plaintext_capacity ||
+	    !trustix_datapath_tx_plaintext_wq) {
+		ret = -ENODEV;
+	} else if (count > trustix_datapath_tx_plaintext_capacity ||
+		   trustix_datapath_tx_plaintext_count >
+			   trustix_datapath_tx_plaintext_capacity - count) {
+		trustix_datapath_tx_plaintext_queue_drops += count;
+		ret = -ENOSPC;
+	} else {
+		for (i = 0; i < count; i++) {
+			struct trustix_datapath_tx_plaintext_slot *slot =
+				&trustix_datapath_tx_plaintext_ring
+					 [trustix_datapath_tx_plaintext_tail];
+
+			memset(slot, 0, sizeof(*slot));
+			dev_hold(target_dev);
+			slot->valid = true;
+			slot->skb = skbs[i];
+			slot->target_dev = target_dev;
+			slot->plan = *plan;
+			slot->inner_len = inner_lens[i];
+			skbs[i] = NULL;
+			trustix_datapath_tx_plaintext_tail =
+				(trustix_datapath_tx_plaintext_tail + 1) %
+				trustix_datapath_tx_plaintext_capacity;
+		}
+		trustix_datapath_tx_plaintext_count += count;
+		WRITE_ONCE(trustix_datapath_tx_plaintext_queue_len,
+			   trustix_datapath_tx_plaintext_count);
+		trustix_datapath_tx_plaintext_queued += count;
+		if (!trustix_datapath_tx_plaintext_work_active &&
+		    trustix_datapath_tx_plaintext_wq) {
+			trustix_datapath_tx_plaintext_work_active = true;
+			wq = trustix_datapath_tx_plaintext_wq;
+			queue = true;
+		}
+	}
+	spin_unlock_irqrestore(&trustix_datapath_tx_plaintext_lock, irqflags);
+	if (ret)
+		return ret;
+	if (queue) {
+		trustix_datapath_tx_plaintext_queue_work_calls++;
+		if (queue_work(wq, &trustix_datapath_tx_plaintext_work))
+			trustix_datapath_tx_plaintext_queue_work_enqueued++;
+	}
+	return 0;
+}
+
 static int trustix_datapath_alloc_tx_plaintext(void)
 {
 	unsigned long irqflags;
@@ -2173,6 +2301,19 @@ module_param_named(rx_worker_xmit_ret_errors,
 		   trustix_datapath_rx_worker_xmit_ret_errors, ullong, 0444);
 MODULE_PARM_DESC(rx_worker_xmit_ret_errors,
 		 "TrustIX RX worker dev_queue_xmit calls that returned an error/drop status");
+
+static unsigned long long trustix_datapath_rx_worker_xmit_drop;
+module_param_named(rx_worker_xmit_drop, trustix_datapath_rx_worker_xmit_drop,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_xmit_drop,
+		 "TrustIX RX worker dev_queue_xmit calls that returned NET_XMIT_DROP");
+
+static unsigned long long trustix_datapath_rx_worker_xmit_other_ret_errors;
+module_param_named(rx_worker_xmit_other_ret_errors,
+		   trustix_datapath_rx_worker_xmit_other_ret_errors, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_xmit_other_ret_errors,
+		 "TrustIX RX worker dev_queue_xmit calls that returned a non-DROP error status");
 
 static unsigned long long trustix_datapath_rx_worker_xmit_dev_forward_packets;
 module_param_named(rx_worker_xmit_dev_forward_packets,
@@ -2316,6 +2457,12 @@ module_param_named(rx_worker_last_xmit_ret,
 		   trustix_datapath_rx_worker_last_xmit_ret, int, 0444);
 MODULE_PARM_DESC(rx_worker_last_xmit_ret,
 		 "Last raw TrustIX RX worker dev_queue_xmit return value");
+
+static int trustix_datapath_rx_worker_last_xmit_error_ret;
+module_param_named(rx_worker_last_xmit_error_ret,
+		   trustix_datapath_rx_worker_last_xmit_error_ret, int, 0444);
+MODULE_PARM_DESC(rx_worker_last_xmit_error_ret,
+		 "Last non-success TrustIX RX worker dev_queue_xmit return value");
 
 static DEFINE_SPINLOCK(trustix_datapath_rx_stage_lock);
 static struct trustix_datapath_rx_stage_slot *trustix_datapath_rx_stage_ring;
@@ -2707,6 +2854,8 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_xmit_ok = 0;
 	trustix_datapath_rx_worker_xmit_cn = 0;
 	trustix_datapath_rx_worker_xmit_ret_errors = 0;
+	trustix_datapath_rx_worker_xmit_drop = 0;
+	trustix_datapath_rx_worker_xmit_other_ret_errors = 0;
 	trustix_datapath_rx_worker_xmit_dev_forward_packets = 0;
 	trustix_datapath_rx_worker_xmit_dev_forward_errors = 0;
 	trustix_datapath_rx_worker_xmit_peer_forward_packets = 0;
@@ -2731,6 +2880,7 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_last_push_ret = 0;
 	trustix_datapath_rx_worker_last_deliver_ret = 0;
 	trustix_datapath_rx_worker_last_xmit_ret = 0;
+	trustix_datapath_rx_worker_last_xmit_error_ret = 0;
 	trustix_datapath_rx_worker_queue_work_calls = 0;
 	trustix_datapath_rx_worker_queue_work_enqueued = 0;
 	trustix_datapath_rx_worker_runs = 0;
@@ -2767,6 +2917,7 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_queued_skb_fallbacks = 0;
 	trustix_datapath_rx_worker_mark_skips = 0;
 	trustix_datapath_hook_ifindex_skips = 0;
+	trustix_datapath_hook_master_ifindex_matches = 0;
 	trustix_datapath_rx_worker_self_marked = 0;
 	trustix_datapath_rx_worker_tc_skip_requests = 0;
 	trustix_datapath_rx_worker_xmit_scrubbed = 0;
@@ -4500,6 +4651,31 @@ static void trustix_datapath_tx_plaintext_record_plan_error(
 	}
 }
 
+static void trustix_datapath_tx_plaintext_record_build_error(
+	int ret, unsigned int stage, const struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *classify, __u32 inner_len)
+{
+	WRITE_ONCE(trustix_datapath_tx_plaintext_last_build_ret, ret);
+	WRITE_ONCE(trustix_datapath_tx_plaintext_last_build_stage, stage);
+	WRITE_ONCE(trustix_datapath_tx_plaintext_last_build_inner_len,
+		   inner_len);
+	if (skb) {
+		WRITE_ONCE(trustix_datapath_tx_plaintext_last_build_skb_len,
+			   skb->len);
+		WRITE_ONCE(
+			trustix_datapath_tx_plaintext_last_build_network_offset,
+			skb_network_offset(skb));
+	} else {
+		WRITE_ONCE(trustix_datapath_tx_plaintext_last_build_skb_len, 0);
+		WRITE_ONCE(
+			trustix_datapath_tx_plaintext_last_build_network_offset,
+			0);
+	}
+	WRITE_ONCE(trustix_datapath_tx_plaintext_last_build_protocol,
+		   classify ? classify->protocol : 0);
+	trustix_datapath_tx_plaintext_build_errors++;
+}
+
 static int
 trustix_datapath_tx_build_outer_skb(struct sk_buff *inner_skb,
 				    const struct trustix_datapath_tx_plan *plan,
@@ -4679,6 +4855,347 @@ static void trustix_datapath_tx_plaintext_run(struct work_struct *work)
 	}
 }
 
+static int trustix_datapath_tx_build_outer_tcp_segment_skb(
+	struct sk_buff *inner_skb, const struct trustix_datapath_tx_plan *plan,
+	__u32 network_offset, __u32 ip_header_len, __u32 tcp_header_len,
+	__u32 payload_offset, __u32 payload_len, __u32 seq, __u16 ip_id,
+	unsigned int seg_index, bool last_segment, struct sk_buff **out_skb)
+{
+	struct sk_buff *skb;
+	struct iphdr *seg_iph;
+	struct tcphdr *seg_tcph;
+	__u8 *packet;
+	__u8 *tixt;
+	__u32 inner_header_len;
+	__u32 inner_len;
+	__u32 outer_header_len;
+	__u32 tixt_len;
+	__u32 outer_len;
+	__u64 sequence;
+	int ret;
+
+	if (!inner_skb || !plan || !out_skb)
+		return -EINVAL;
+	*out_skb = NULL;
+	if (check_add_overflow(ip_header_len, tcp_header_len,
+			       &inner_header_len) ||
+	    check_add_overflow(inner_header_len, payload_len, &inner_len))
+		return -EOVERFLOW;
+	if (!inner_len || inner_len > TRUSTIX_DATAPATH_TIXT_MAX_PAYLOAD)
+		return -EMSGSIZE;
+
+	switch (plan->outer_protocol) {
+	case IPPROTO_UDP:
+		outer_header_len = 20 + 8;
+		break;
+	case IPPROTO_TCP:
+		outer_header_len = 20 + 20;
+		break;
+	default:
+		return -EPROTONOSUPPORT;
+	}
+	tixt_len = TRUSTIX_DATAPATH_TIXT_HEADER_LEN + inner_len;
+	outer_len = outer_header_len + tixt_len;
+	if (outer_len > 0xffffU)
+		return -EMSGSIZE;
+	if (plan->max_packet_size && outer_len > plan->max_packet_size)
+		return -EMSGSIZE;
+
+	skb = alloc_skb(LL_MAX_HEADER + outer_len, GFP_ATOMIC);
+	if (!skb)
+		return -ENOMEM;
+	skb_reserve(skb, LL_MAX_HEADER);
+	packet = skb_put(skb, outer_len);
+	memset(packet, 0, outer_len);
+
+	trustix_datapath_build_outer_ipv4(packet, outer_len,
+					  plan->outer_protocol,
+					  plan->local_ipv4,
+					  plan->remote_ipv4);
+	if (plan->outer_protocol == IPPROTO_UDP) {
+		trustix_datapath_put_be16(packet + 20, plan->local_port);
+		trustix_datapath_put_be16(packet + 22, plan->remote_port);
+		trustix_datapath_put_be16(packet + 24, (__u16)(8 + tixt_len));
+		tixt = packet + 28;
+	} else {
+		trustix_datapath_put_be16(packet + 20, plan->local_port);
+		trustix_datapath_put_be16(packet + 22, plan->remote_port);
+		packet[32] = 0x50;
+		packet[33] = 0x18;
+		trustix_datapath_put_be16(packet + 34, 65535);
+		tixt = packet + 40;
+	}
+
+	sequence = (__u64)atomic64_inc_return(&trustix_datapath_tx_sequence);
+	trustix_datapath_build_tixt(tixt, TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4,
+				    plan->flow_id, plan->epoch, sequence,
+				    inner_len, 0, 0);
+	ret = skb_copy_bits(inner_skb, network_offset,
+			    tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+			    inner_header_len);
+	if (ret)
+		goto error;
+	if (payload_len) {
+		ret = skb_copy_bits(inner_skb,
+				    network_offset + inner_header_len +
+					    payload_offset,
+				    tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN +
+					    inner_header_len,
+				    payload_len);
+		if (ret)
+			goto error;
+	}
+
+	seg_iph = (struct iphdr *)(tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN);
+	seg_tcph = (struct tcphdr *)((__u8 *)seg_iph + ip_header_len);
+	seg_iph->tot_len = htons((__u16)inner_len);
+	seg_iph->id = htons(ip_id + seg_index);
+	trustix_datapath_rx_worker_fix_ipv4_header_checksum(seg_iph,
+							   ip_header_len);
+	seg_tcph->seq = htonl(seq + payload_offset);
+	if (!last_segment) {
+		seg_tcph->fin = 0;
+		seg_tcph->psh = 0;
+	}
+	seg_tcph->check = 0;
+	seg_tcph->check = trustix_datapath_rx_worker_l4_checksum(
+		seg_iph, seg_tcph, tcp_header_len + payload_len, IPPROTO_TCP);
+
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, 20);
+	skb->protocol = htons(ETH_P_IP);
+	skb->ip_summed = CHECKSUM_NONE;
+	skb->pkt_type = PACKET_OUTGOING;
+	*out_skb = skb;
+	return 0;
+
+error:
+	kfree_skb(skb);
+	return ret;
+}
+
+static int trustix_datapath_tx_plaintext_outer_header_len(
+	const struct trustix_datapath_tx_plan *plan, __u32 *header_len)
+{
+	if (!plan || !header_len)
+		return -EINVAL;
+	switch (plan->outer_protocol) {
+	case IPPROTO_UDP:
+		*header_len = 20 + 8;
+		return 0;
+	case IPPROTO_TCP:
+		*header_len = 20 + 20;
+		return 0;
+	default:
+		return -EPROTONOSUPPORT;
+	}
+}
+
+static int trustix_datapath_tx_plaintext_gso_payload_size(
+	const struct trustix_datapath_tx_plan *plan, struct net_device *target_dev,
+	__u32 ip_header_len, __u32 tcp_header_len, __u32 requested_gso_size,
+	__u32 *payload_size)
+{
+	__u32 outer_header_len;
+	__u32 inner_header_len;
+	__u32 outer_overhead;
+	__u32 packet_limit;
+	__u32 max_payload;
+	int ret;
+
+	if (!plan || !payload_size || !requested_gso_size)
+		return -EINVAL;
+	ret = trustix_datapath_tx_plaintext_outer_header_len(
+		plan, &outer_header_len);
+	if (ret)
+		return ret;
+	if (check_add_overflow(ip_header_len, tcp_header_len,
+			       &inner_header_len) ||
+	    check_add_overflow(outer_header_len,
+			       (__u32)TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+			       &outer_overhead))
+		return -EOVERFLOW;
+
+	packet_limit = plan->max_packet_size;
+	if (!packet_limit && target_dev)
+		packet_limit = READ_ONCE(target_dev->mtu);
+	if (!packet_limit) {
+		*payload_size = requested_gso_size;
+		return 0;
+	}
+	if (packet_limit <= outer_overhead + inner_header_len)
+		return -EMSGSIZE;
+	max_payload = packet_limit - outer_overhead - inner_header_len;
+	if (!max_payload)
+		return -EMSGSIZE;
+	*payload_size = min(requested_gso_size, max_payload);
+	return 0;
+}
+
+static int trustix_datapath_tx_plaintext_outer_exceeds_packet_limit(
+	const struct trustix_datapath_tx_plan *plan,
+	const struct net_device *target_dev, __u32 inner_len, bool *exceeds)
+{
+	__u32 outer_header_len;
+	__u32 tixt_len;
+	__u32 outer_len;
+	__u32 packet_limit;
+	int ret;
+
+	if (!plan || !exceeds)
+		return -EINVAL;
+	*exceeds = false;
+	packet_limit = plan->max_packet_size;
+	if (!packet_limit && target_dev)
+		packet_limit = READ_ONCE(target_dev->mtu);
+	if (!packet_limit)
+		return 0;
+	ret = trustix_datapath_tx_plaintext_outer_header_len(
+		plan, &outer_header_len);
+	if (ret)
+		return ret;
+	if (check_add_overflow((__u32)TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+			       inner_len, &tixt_len) ||
+	    check_add_overflow(outer_header_len, tixt_len, &outer_len))
+		return -EOVERFLOW;
+	*exceeds = outer_len > packet_limit;
+	return 0;
+}
+
+static int trustix_datapath_tx_plaintext_segment_tcp_skb(
+	struct sk_buff *skb, const struct trustix_datapath_tx_plan *plan,
+	struct net_device *target_dev, __u32 requested_gso_size,
+	bool require_gso)
+{
+	struct sk_buff *segments[TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS] = {};
+	__u32 inner_lens[TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS] = {};
+	struct skb_shared_info *shinfo;
+	const struct tcphdr *tcph;
+	const struct iphdr *iph;
+	__u32 network_offset;
+	__u32 ip_header_len;
+	__u32 tcp_header_len;
+	__u32 total_len;
+	__u32 tcp_len;
+	__u32 payload_len;
+	__u32 payload_offset = 0;
+	__u32 gso_size;
+	__u32 wire_gso_size;
+	__u32 seq;
+	__u16 ip_id;
+	unsigned int expected_segs;
+	unsigned int seg_index = 0;
+	int ret = 0;
+	bool gso;
+
+	if (!skb || !plan || !target_dev)
+		return -EINVAL;
+	gso = skb_is_gso(skb);
+	if (require_gso && !gso)
+		return -EINVAL;
+	network_offset = skb_network_offset(skb);
+	if (network_offset > TRUSTIX_DATAPATH_PACKET_MAX_LEN ||
+	    !pskb_may_pull(skb, network_offset + sizeof(*iph)))
+		return -ENODATA;
+	iph = (const struct iphdr *)skb_network_header(skb);
+	if (!iph || iph->version != 4 || iph->ihl < 5 ||
+	    iph->protocol != IPPROTO_TCP ||
+	    (iph->frag_off & htons(0x3fff)))
+		return -EPROTONOSUPPORT;
+	ip_header_len = iph->ihl * 4;
+	if (ip_header_len < sizeof(*iph) ||
+	    !pskb_may_pull(skb, network_offset + ip_header_len + sizeof(*tcph)))
+		return -ENODATA;
+	iph = (const struct iphdr *)skb_network_header(skb);
+	tcph = (const struct tcphdr *)((const __u8 *)iph + ip_header_len);
+	tcp_header_len = tcph->doff * 4;
+	total_len = ntohs(iph->tot_len);
+	if (tcp_header_len < sizeof(*tcph) ||
+	    total_len < ip_header_len + tcp_header_len ||
+	    total_len > skb->len - network_offset ||
+	    !pskb_may_pull(skb, network_offset + ip_header_len +
+				  tcp_header_len))
+		return -EINVAL;
+	tcp_len = total_len - ip_header_len;
+	payload_len = tcp_len - tcp_header_len;
+	if (!payload_len)
+		return -EINVAL;
+	if (gso) {
+		shinfo = skb_shinfo(skb);
+		gso_size = shinfo->gso_size;
+	} else {
+		shinfo = NULL;
+		gso_size = requested_gso_size ?: payload_len;
+	}
+	if (!gso_size || gso_size > payload_len)
+		return -EINVAL;
+	ret = trustix_datapath_tx_plaintext_gso_payload_size(
+		plan, target_dev, ip_header_len, tcp_header_len, gso_size,
+		&wire_gso_size);
+	if (ret)
+		return ret;
+	if (!wire_gso_size)
+		return -EINVAL;
+	if (wire_gso_size >= payload_len)
+		return -EOPNOTSUPP;
+	expected_segs = DIV_ROUND_UP(payload_len, wire_gso_size);
+	if (expected_segs < 2 ||
+	    expected_segs > TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS)
+		return -E2BIG;
+	seq = ntohl(tcph->seq);
+	ip_id = ntohs(iph->id);
+
+	while (payload_offset < payload_len) {
+		__u32 seg_payload_len = min_t(__u32,
+					      payload_len - payload_offset,
+					      wire_gso_size);
+		__u32 inner_len;
+		bool last = payload_offset + seg_payload_len >= payload_len;
+
+		if (seg_index >= expected_segs) {
+			ret = -E2BIG;
+			goto error;
+		}
+		inner_len = ip_header_len + tcp_header_len + seg_payload_len;
+		ret = trustix_datapath_tx_build_outer_tcp_segment_skb(
+			skb, plan, network_offset, ip_header_len,
+			tcp_header_len, payload_offset, seg_payload_len, seq,
+			ip_id, seg_index, last, &segments[seg_index]);
+		if (ret)
+			goto error;
+		inner_lens[seg_index] = inner_len;
+		payload_offset += seg_payload_len;
+		seg_index++;
+	}
+	if (seg_index != expected_segs) {
+		ret = -EINVAL;
+		goto error;
+	}
+	ret = trustix_datapath_tx_plaintext_enqueue_many(
+		segments, inner_lens, seg_index, target_dev, plan);
+	if (ret)
+		goto error;
+	trustix_datapath_tx_plaintext_gso_segments += seg_index;
+	return 0;
+
+error:
+	while (seg_index > 0) {
+		seg_index--;
+		kfree_skb(segments[seg_index]);
+		segments[seg_index] = NULL;
+	}
+	trustix_datapath_tx_plaintext_gso_errors++;
+	return ret;
+}
+
+static int trustix_datapath_tx_plaintext_gso_skb(
+	struct sk_buff *skb, const struct trustix_datapath_tx_plan *plan,
+	struct net_device *target_dev)
+{
+	return trustix_datapath_tx_plaintext_segment_tcp_skb(
+		skb, plan, target_dev, 0, true);
+}
+
 static int
 trustix_datapath_tx_plaintext_skb(struct sk_buff *skb,
 				  struct trustix_datapath_ioc_classify *classify,
@@ -4691,15 +5208,12 @@ trustix_datapath_tx_plaintext_skb(struct sk_buff *skb,
 	const struct iphdr *iph;
 	__u32 inner_len;
 	int ret;
+	bool outer_exceeds = false;
 
 	if (!READ_ONCE(trustix_datapath_tx_plaintext))
 		return -EPROTONOSUPPORT;
 	if (!skb || !classify)
 		return -EINVAL;
-	if (skb_is_gso(skb)) {
-		trustix_datapath_tx_plaintext_gso_skips++;
-		return -EOPNOTSUPP;
-	}
 	if (target_dev_hint) {
 		dev_hold(target_dev_hint);
 		target_dev = target_dev_hint;
@@ -4722,28 +5236,67 @@ trustix_datapath_tx_plaintext_skb(struct sk_buff *skb,
 		goto out_dev;
 	}
 
+	if (skb_is_gso(skb)) {
+		ret = trustix_datapath_tx_plaintext_gso_skb(skb, &plan,
+							   target_dev);
+		if (ret) {
+			trustix_datapath_tx_plaintext_gso_skips++;
+			if (ret == -EOPNOTSUPP || ret == -EPROTONOSUPPORT)
+				trustix_datapath_tx_plaintext_unsupported_transports++;
+			else if (ret == -ENOSPC)
+				trustix_datapath_tx_plaintext_xmit_errors++;
+			else
+				trustix_datapath_tx_plaintext_record_build_error(
+					ret, 1, skb, classify, 0);
+		}
+		goto out_dev;
+	}
+
 	if (!pskb_may_pull(skb, skb_network_offset(skb) + sizeof(*iph))) {
 		ret = -ENODATA;
-		trustix_datapath_tx_plaintext_build_errors++;
+		trustix_datapath_tx_plaintext_record_build_error(
+			ret, 2, skb, classify, 0);
 		goto out_dev;
 	}
 	iph = ip_hdr(skb);
 	if (!iph || iph->version != 4 || iph->ihl < 5) {
 		ret = -EPROTONOSUPPORT;
-		trustix_datapath_tx_plaintext_build_errors++;
+		trustix_datapath_tx_plaintext_record_build_error(
+			ret, 3, skb, classify, 0);
 		goto out_dev;
 	}
 	inner_len = ntohs(iph->tot_len);
 	if (!inner_len || inner_len > skb->len - skb_network_offset(skb)) {
 		ret = -EMSGSIZE;
-		trustix_datapath_tx_plaintext_build_errors++;
+		trustix_datapath_tx_plaintext_record_build_error(
+			ret, 4, skb, classify, inner_len);
+		goto out_dev;
+	}
+	ret = trustix_datapath_tx_plaintext_outer_exceeds_packet_limit(
+		&plan, target_dev, inner_len, &outer_exceeds);
+	if (ret) {
+		trustix_datapath_tx_plaintext_record_build_error(
+			ret, 5, skb, classify, inner_len);
+		goto out_dev;
+	}
+	if (outer_exceeds) {
+		ret = trustix_datapath_tx_plaintext_segment_tcp_skb(
+			skb, &plan, target_dev, 0, false);
+		if (ret) {
+			if (ret == -ENOSPC)
+				trustix_datapath_tx_plaintext_xmit_errors++;
+			else
+				trustix_datapath_tx_plaintext_record_build_error(
+					ret, 6, skb, classify, inner_len);
+		}
 		goto out_dev;
 	}
 
 	ret = trustix_datapath_tx_build_outer_skb(skb, &plan, inner_len,
 						 &outer_skb);
 	if (ret) {
-		trustix_datapath_tx_plaintext_build_errors++;
+		trustix_datapath_tx_plaintext_record_build_error(
+			ret, 7, skb, classify, inner_len);
 		goto out_dev;
 	}
 	ret = trustix_datapath_tx_plaintext_enqueue(outer_skb, target_dev,
@@ -5347,8 +5900,15 @@ trustix_datapath_rx_worker_record_xmit_ret(int ret)
 		trustix_datapath_rx_worker_xmit_ok++;
 	else if (ret == NET_XMIT_CN)
 		trustix_datapath_rx_worker_xmit_cn++;
-	else
+	else {
+		WRITE_ONCE(trustix_datapath_rx_worker_last_xmit_error_ret,
+			   ret);
+		if (ret == NET_XMIT_DROP)
+			trustix_datapath_rx_worker_xmit_drop++;
+		else
+			trustix_datapath_rx_worker_xmit_other_ret_errors++;
 		trustix_datapath_rx_worker_xmit_ret_errors++;
+	}
 }
 
 static __always_inline void
@@ -5582,6 +6142,27 @@ static bool trustix_datapath_rx_worker_dev_is_veth(const struct net_device *dev)
 	return strcmp(dev->rtnl_link_ops->kind, "veth") == 0;
 }
 
+static struct net_device *
+trustix_datapath_rx_worker_get_peer_dev(struct net_device *dev)
+{
+	struct net_device *peer_dev = NULL;
+	const struct net_device_ops *ops;
+
+	if (!dev)
+		return NULL;
+	rcu_read_lock();
+	ops = READ_ONCE(dev->netdev_ops);
+	if (ops && ops->ndo_get_peer_dev) {
+		peer_dev = ops->ndo_get_peer_dev(dev);
+		if (peer_dev && peer_dev != dev)
+			dev_hold(peer_dev);
+		else
+			peer_dev = NULL;
+	}
+	rcu_read_unlock();
+	return peer_dev;
+}
+
 static int trustix_datapath_rx_worker_deliver_veth_peer_skb(
 	struct sk_buff *skb, struct net_device *dev)
 {
@@ -5594,15 +6175,18 @@ static int trustix_datapath_rx_worker_deliver_veth_peer_skb(
 		return -EINVAL;
 	if (!trustix_datapath_rx_worker_dev_is_veth(dev))
 		return -EOPNOTSUPP;
-	iflink = dev_get_iflink(dev);
-	if (iflink <= 0 || iflink == dev->ifindex)
-		return -EOPNOTSUPP;
-	net = dev_net(dev);
-	peer_dev = dev_get_by_index(net, iflink);
-	if (!peer_dev || peer_dev == dev) {
-		if (peer_dev)
-			dev_put(peer_dev);
-		return -EOPNOTSUPP;
+	peer_dev = trustix_datapath_rx_worker_get_peer_dev(dev);
+	if (!peer_dev) {
+		iflink = dev_get_iflink(dev);
+		if (iflink <= 0 || iflink == dev->ifindex)
+			return -EOPNOTSUPP;
+		net = dev_net(dev);
+		peer_dev = dev_get_by_index(net, iflink);
+		if (!peer_dev || peer_dev == dev) {
+			if (peer_dev)
+				dev_put(peer_dev);
+			return -EOPNOTSUPP;
+		}
 	}
 	if (!trustix_datapath_rx_worker_dev_ready(peer_dev)) {
 		dev_put(peer_dev);
@@ -5637,13 +6221,16 @@ static int trustix_datapath_rx_worker_deliver_xmit_skb(struct sk_buff *skb,
 			trustix_datapath_rx_worker_xmit_dev_forward_packets++;
 			return 0;
 		}
-		if (ret == -EOPNOTSUPP)
+		if (ret == -EOPNOTSUPP) {
 			trustix_datapath_rx_worker_xmit_peer_forward_unsupported++;
+			goto queue_xmit;
+		}
 		trustix_datapath_rx_worker_xmit_dev_forward_errors++;
-		if (ret == -EOPNOTSUPP || ret == -ENETDOWN)
+		if (ret == -ENETDOWN)
 			kfree_skb(skb);
 		return ret == -ENETDOWN ? ret : -ENOBUFS;
 	}
+queue_xmit:
 	ret = dev_queue_xmit(skb);
 	trustix_datapath_rx_worker_record_xmit_ret(ret);
 	if (ret == NET_XMIT_SUCCESS || ret == NET_XMIT_CN)
@@ -9093,6 +9680,27 @@ trustix_datapath_outer_magic_check_packet(const __u8 *packet, __u32 packet_len,
 }
 
 static __always_inline bool
+trustix_datapath_hook_dev_matches_ifindex(const struct net_device *dev,
+					  int ifindex)
+{
+	struct net_device *master;
+	bool matched = false;
+
+	if (!dev || ifindex <= 0)
+		return false;
+	if (dev->ifindex == ifindex)
+		return true;
+	rcu_read_lock();
+	master = netdev_master_upper_dev_get_rcu((struct net_device *)dev);
+	if (master && master->ifindex == ifindex) {
+		trustix_datapath_hook_master_ifindex_matches++;
+		matched = true;
+	}
+	rcu_read_unlock();
+	return matched;
+}
+
+static __always_inline bool
 trustix_datapath_hook_packet_matches_ifindex(
 	const struct trustix_datapath_hook_entry *hook,
 	const struct sk_buff *skb,
@@ -9105,9 +9713,11 @@ trustix_datapath_hook_packet_matches_ifindex(
 	ifindex = READ_ONCE(hook->ifindex);
 	if (ifindex <= 0)
 		return true;
-	if (state && state->in && state->in->ifindex == ifindex)
+	if (state && trustix_datapath_hook_dev_matches_ifindex(state->in,
+							      ifindex))
 		return true;
-	if (skb && skb->dev && skb->dev->ifindex == ifindex)
+	if (skb && trustix_datapath_hook_dev_matches_ifindex(skb->dev,
+							    ifindex))
 		return true;
 	return false;
 }
@@ -9483,6 +10093,8 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_xmit_ok = 0;
 	trustix_datapath_rx_worker_xmit_cn = 0;
 	trustix_datapath_rx_worker_xmit_ret_errors = 0;
+	trustix_datapath_rx_worker_xmit_drop = 0;
+	trustix_datapath_rx_worker_xmit_other_ret_errors = 0;
 	trustix_datapath_rx_worker_xmit_dev_forward_packets = 0;
 	trustix_datapath_rx_worker_xmit_dev_forward_errors = 0;
 	trustix_datapath_rx_worker_xmit_peer_forward_packets = 0;
@@ -9507,6 +10119,7 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_last_push_ret = 0;
 	trustix_datapath_rx_worker_last_deliver_ret = 0;
 	trustix_datapath_rx_worker_last_xmit_ret = 0;
+	trustix_datapath_rx_worker_last_xmit_error_ret = 0;
 	trustix_datapath_rx_worker_queue_work_calls = 0;
 	trustix_datapath_rx_worker_queue_work_enqueued = 0;
 	trustix_datapath_rx_worker_runs = 0;
@@ -9543,6 +10156,7 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_queued_skb_fallbacks = 0;
 	trustix_datapath_rx_worker_mark_skips = 0;
 	trustix_datapath_hook_ifindex_skips = 0;
+	trustix_datapath_hook_master_ifindex_matches = 0;
 	trustix_datapath_rx_worker_self_marked = 0;
 	trustix_datapath_rx_worker_tc_skip_requests = 0;
 	trustix_datapath_rx_worker_xmit_scrubbed = 0;
@@ -9573,6 +10187,8 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_packets = 0;
 	trustix_datapath_tx_plaintext_bytes = 0;
 	trustix_datapath_tx_plaintext_gso_skips = 0;
+	trustix_datapath_tx_plaintext_gso_segments = 0;
+	trustix_datapath_tx_plaintext_gso_errors = 0;
 	trustix_datapath_tx_plaintext_encrypted_skips = 0;
 	trustix_datapath_tx_plaintext_route_misses = 0;
 	trustix_datapath_tx_plaintext_no_routes = 0;
@@ -9588,6 +10204,12 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_last_src_port = 0;
 	trustix_datapath_tx_plaintext_last_dst_port = 0;
 	trustix_datapath_tx_plaintext_last_protocol = 0;
+	trustix_datapath_tx_plaintext_last_build_ret = 0;
+	trustix_datapath_tx_plaintext_last_build_stage = 0;
+	trustix_datapath_tx_plaintext_last_build_inner_len = 0;
+	trustix_datapath_tx_plaintext_last_build_skb_len = 0;
+	trustix_datapath_tx_plaintext_last_build_network_offset = 0;
+	trustix_datapath_tx_plaintext_last_build_protocol = 0;
 	trustix_datapath_tx_plaintext_build_errors = 0;
 	trustix_datapath_tx_plaintext_xmit_errors = 0;
 	trustix_datapath_tx_plaintext_queued = 0;

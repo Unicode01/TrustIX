@@ -559,7 +559,7 @@ func kernelDatapathFullPlaintextEnabled() bool {
 func kernelDatapathFullPlaintextEnabledForDesired(desired config.Desired) bool {
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	if runtime.FullPlaintext || runtime.TXPlaintext {
-		return kernelDatapathFullPlaintextCrashRiskAllowed()
+		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled", "full":
@@ -582,7 +582,8 @@ func kernelDatapathRXWorkerSupportedForSpecForDesired(desired config.Desired, sp
 		return true
 	}
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
-	if runtime.RXWorkerAllowExperimentalTCP && kernelDatapathRXWorkerCrashRiskAllowed() {
+	if runtime.RXWorkerAllowExperimentalTCP &&
+		(kernelDatapathFullPlaintextEnabledForDesired(desired) || kernelDatapathRXWorkerCrashRiskAllowed()) {
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP"))) {
@@ -629,10 +630,12 @@ func kernelDatapathRXDisabledReasonForDesired(desired config.Desired) string {
 	if requestedRXStage == config.KernelDatapathRXStageDisabled {
 		return "kernel datapath RX is disabled by config"
 	}
-	if kernelDatapathFullPlaintextRequestedForDesired(desired) && !kernelDatapathFullPlaintextCrashRiskAllowed() {
+	if kernelDatapathFullPlaintextRequestedByEnvOnlyForDesired(desired) && !kernelDatapathFullPlaintextCrashRiskAllowed() {
 		return "full plaintext datapath requires TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT=1"
 	}
-	if kernelDatapathRXWorkerRequestedForDesired(desired) && !kernelDatapathRXWorkerCrashRiskAllowed() {
+	if kernelDatapathRXWorkerRequestedForDesired(desired) &&
+		!kernelDatapathFullPlaintextEnabledForDesired(desired) &&
+		!kernelDatapathRXWorkerCrashRiskAllowed() {
 		return "RX_WORKER requires TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER=1"
 	}
 	return "kernel datapath RX_STAGE hook is disabled by default; set kernel_modules.datapath.rx_stage: stage or TRUSTIX_KERNEL_DATAPATH_RX_STAGE=1 to enable"
@@ -643,6 +646,18 @@ func kernelDatapathFullPlaintextRequestedForDesired(desired config.Desired) bool
 	if runtime.FullPlaintext || runtime.TXPlaintext {
 		return true
 	}
+	return kernelDatapathFullPlaintextRequestedByEnv()
+}
+
+func kernelDatapathFullPlaintextRequestedByEnvOnlyForDesired(desired config.Desired) bool {
+	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
+	if runtime.FullPlaintext || runtime.TXPlaintext {
+		return false
+	}
+	return kernelDatapathFullPlaintextRequestedByEnv()
+}
+
+func kernelDatapathFullPlaintextRequestedByEnv() bool {
 	return envTruthyAny(
 		"TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT",
 		"TRUSTIX_KERNEL_DATAPATH_TX_PLAINTEXT",

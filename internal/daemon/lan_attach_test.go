@@ -572,6 +572,26 @@ func TestDataplaneAttachSpecDisablesLANQdiscForNativePlaintextTunnel(t *testing.
 	}
 }
 
+func TestDataplaneAttachSpecDisablesLANQdiscForFullPlaintextDatapath(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:         "br-lan",
+			UnderlayIface: "eth0",
+			Gateway:       "10.81.0.1/24",
+			ManageAddress: true,
+		},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+	})
+
+	if spec.ManageQdisc {
+		t.Fatal("full plaintext datapath should not attach LAN TC/qdisc")
+	}
+}
+
 func TestDataplaneAttachSpecKeepsLANQdiscForSecureTunnel(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
