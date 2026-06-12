@@ -10,6 +10,8 @@ transport="${TRUSTIX_E2E_TRANSPORT:-udp}"
 tls_only="${TRUSTIX_E2E_TLS_ONLY:-0}"
 direct_management_vip="${TRUSTIX_E2E_DIRECT_MANAGEMENT_VIP:-auto}"
 transport_encryption="${TRUSTIX_E2E_TRANSPORT_ENCRYPTION:-${TRUSTIX_E2E_ENCRYPTION:-}}"
+transport_profile="${TRUSTIX_E2E_TRANSPORT_PROFILE:-stable}"
+transport_datapath="${TRUSTIX_E2E_TRANSPORT_DATAPATH:-auto}"
 dataplane="${TRUSTIX_E2E_DATAPLANE:-linux}"
 manage_forwarding="${TRUSTIX_E2E_MANAGE_FORWARDING:-true}"
 lan_mode="${TRUSTIX_E2E_LAN_MODE:-routed}"
@@ -1351,6 +1353,8 @@ policies:
 
 transport_policy:
   mode: user_defined
+  profile: ${transport_profile}
+  datapath: ${transport_datapath}
   mtu: ${underlay_mtu}
   candidates:
     - ${transport_candidate}
@@ -3526,7 +3530,7 @@ main() {
   configure_addresses
   mkdir -p "$workdir"
 log "workdir: $workdir"
-log "dataplane=${dataplane} transport=${transport} router_netns=${router_netns} nat_reverse=${nat_reverse} crypto=${crypto_placement} encryption=$(effective_transport_encryption) tls_only=${tls_only} direct_vip=${direct_management_vip} hot_stats=${hot_stats} perf_fast=${perf_fast}"
+log "dataplane=${dataplane} transport=${transport} profile=${transport_profile} datapath=${transport_datapath} router_netns=${router_netns} nat_reverse=${nat_reverse} crypto=${crypto_placement} encryption=$(effective_transport_encryption) tls_only=${tls_only} direct_vip=${direct_management_vip} hot_stats=${hot_stats} perf_fast=${perf_fast}"
 if full_datapath_module_needed; then
   log "full datapath module: enabled rx_worker=${full_datapath_rx_worker} module_dir=${full_datapath_module_dir}"
 fi

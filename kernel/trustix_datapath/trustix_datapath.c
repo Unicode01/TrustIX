@@ -909,6 +909,12 @@ module_param_cb(tx_plaintext, &trustix_datapath_tx_plaintext_bool_ops,
 MODULE_PARM_DESC(tx_plaintext,
 		 "Enable TrustIX plaintext LAN-to-underlay TX ownership");
 
+static bool trustix_datapath_tx_plaintext_inline_xmit;
+module_param_named(tx_plaintext_inline_xmit,
+		   trustix_datapath_tx_plaintext_inline_xmit, bool, 0644);
+MODULE_PARM_DESC(tx_plaintext_inline_xmit,
+		 "Send TrustIX plaintext TX outer skbs directly from the hook path instead of queueing a work item");
+
 static bool trustix_datapath_rx_worker_steal_skb;
 module_param_cb(rx_worker_steal_skb,
 		&trustix_datapath_rx_worker_stolen_noop_bool_ops,
@@ -1880,6 +1886,20 @@ module_param_named(tx_plaintext_xmit_errors,
 MODULE_PARM_DESC(tx_plaintext_xmit_errors,
 		 "TrustIX plaintext TX underlay route or transmit errors");
 
+static unsigned long long trustix_datapath_tx_plaintext_inline_xmit_packets;
+module_param_named(tx_plaintext_inline_xmit_packets,
+		   trustix_datapath_tx_plaintext_inline_xmit_packets, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_inline_xmit_packets,
+		 "TrustIX plaintext TX packets sent directly from the hook path");
+
+static unsigned long long trustix_datapath_tx_plaintext_inline_xmit_errors;
+module_param_named(tx_plaintext_inline_xmit_errors,
+		   trustix_datapath_tx_plaintext_inline_xmit_errors, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_inline_xmit_errors,
+		 "TrustIX plaintext TX direct hook-path send failures");
+
 static unsigned int trustix_datapath_tx_plaintext_slots =
 	TRUSTIX_DATAPATH_TX_PLAINTEXT_DEFAULT_SLOTS;
 module_param_named(tx_plaintext_slots, trustix_datapath_tx_plaintext_slots,
@@ -2006,6 +2026,11 @@ trustix_datapath_tx_plaintext_release_slot(
 	memset(slot, 0, sizeof(*slot));
 }
 
+static int
+trustix_datapath_tx_send_outer_skb(struct sk_buff *skb,
+				   struct net_device *target_dev,
+				   const struct trustix_datapath_tx_plan *plan);
+
 static void trustix_datapath_tx_plaintext_clear(void)
 {
 	struct trustix_datapath_tx_plaintext_slot slot = {};
@@ -2073,6 +2098,19 @@ static int trustix_datapath_tx_plaintext_enqueue(
 
 	if (!skb || !target_dev || !plan || !inner_len)
 		return -EINVAL;
+	if (READ_ONCE(trustix_datapath_tx_plaintext_inline_xmit)) {
+		ret = trustix_datapath_tx_send_outer_skb(skb, target_dev, plan);
+		if (ret) {
+			trustix_datapath_tx_plaintext_xmit_errors++;
+			trustix_datapath_tx_plaintext_inline_xmit_errors++;
+		} else {
+			trustix_datapath_tx_plaintext_packets++;
+			trustix_datapath_tx_plaintext_bytes += inner_len;
+			trustix_datapath_tx_plaintext_inline_xmit_packets++;
+		}
+		dev_put(target_dev);
+		return 0;
+	}
 	spin_lock_irqsave(&trustix_datapath_tx_plaintext_lock, irqflags);
 	if (!trustix_datapath_tx_plaintext_ring ||
 	    !trustix_datapath_tx_plaintext_capacity ||
@@ -2133,6 +2171,24 @@ static int trustix_datapath_tx_plaintext_enqueue_many(
 	for (i = 0; i < count; i++) {
 		if (!skbs[i] || !inner_lens[i])
 			return -EINVAL;
+	}
+
+	if (READ_ONCE(trustix_datapath_tx_plaintext_inline_xmit)) {
+		for (i = 0; i < count; i++) {
+			ret = trustix_datapath_tx_send_outer_skb(skbs[i],
+								target_dev, plan);
+			skbs[i] = NULL;
+			if (ret) {
+				trustix_datapath_tx_plaintext_xmit_errors++;
+				trustix_datapath_tx_plaintext_inline_xmit_errors++;
+			} else {
+				trustix_datapath_tx_plaintext_packets++;
+				trustix_datapath_tx_plaintext_bytes +=
+					inner_lens[i];
+				trustix_datapath_tx_plaintext_inline_xmit_packets++;
+			}
+		}
+		return 0;
 	}
 
 	spin_lock_irqsave(&trustix_datapath_tx_plaintext_lock, irqflags);
@@ -10212,6 +10268,8 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_last_build_protocol = 0;
 	trustix_datapath_tx_plaintext_build_errors = 0;
 	trustix_datapath_tx_plaintext_xmit_errors = 0;
+	trustix_datapath_tx_plaintext_inline_xmit_packets = 0;
+	trustix_datapath_tx_plaintext_inline_xmit_errors = 0;
 	trustix_datapath_tx_plaintext_queued = 0;
 	trustix_datapath_tx_plaintext_queue_drops = 0;
 	trustix_datapath_tx_plaintext_queue_work_calls = 0;

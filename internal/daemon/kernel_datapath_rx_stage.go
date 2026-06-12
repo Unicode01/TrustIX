@@ -557,16 +557,26 @@ func kernelDatapathFullPlaintextEnabled() bool {
 }
 
 func kernelDatapathFullPlaintextEnabledForDesired(desired config.Desired) bool {
+	suppressFullPlaintextTX := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) && !envTruthyAny("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX")
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	if runtime.FullPlaintext || runtime.TXPlaintext {
+		if suppressFullPlaintextTX {
+			return false
+		}
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled", "full":
+		if suppressFullPlaintextTX {
+			return false
+		}
 		return kernelDatapathFullPlaintextCrashRiskAllowed()
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_TX_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled":
+		if suppressFullPlaintextTX {
+			return false
+		}
 		return kernelDatapathFullPlaintextCrashRiskAllowed()
 	default:
 		return false

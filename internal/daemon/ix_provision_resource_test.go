@@ -368,6 +368,9 @@ func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
 		t.Fatalf("target plaintext performance policy endpoint=%#v policy=%#v", target.Endpoints[0], target.TransportPolicy)
 	}
+	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
+		t.Fatalf("target kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
+	}
 }
 
 func TestIXProvisionOpenWRTPlaintextPerformanceUsesUDPTCOnly(t *testing.T) {
@@ -404,6 +407,9 @@ func TestIXProvisionOpenWRTPlaintextPerformanceUsesUDPTCOnly(t *testing.T) {
 		target.KernelModules.TrustIXDatapath.Mode != "disabled" ||
 		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" {
 		t.Fatalf("OpenWrt TC-only kernel module modes = %#v", target.KernelModules)
+	}
+	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
+		t.Fatalf("OpenWrt TC-only kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
 	}
 }
 

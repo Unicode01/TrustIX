@@ -111,11 +111,12 @@ type ixProvisionTrustRootFile struct {
 }
 
 type ixProvisionProfileDefaults struct {
-	TransportProfile string
-	Datapath         string
-	Encryption       string
-	CryptoPlacement  string
-	KernelTransport  string
+	TransportProfile        string
+	Datapath                string
+	Encryption              string
+	CryptoPlacement         string
+	KernelTransport         string
+	KernelCapabilityProfile string
 }
 
 type ixProvisionScriptInput struct {
@@ -719,43 +720,48 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 	switch profile {
 	case "stable":
 		return ixProvisionProfileDefaults{
-			TransportProfile: config.TransportProfileStable,
-			Datapath:         config.TransportDatapathAuto,
-			Encryption:       securetransport.EncryptionSecure,
-			CryptoPlacement:  "auto",
-			KernelTransport:  "auto",
+			TransportProfile:        config.TransportProfileStable,
+			Datapath:                config.TransportDatapathAuto,
+			Encryption:              securetransport.EncryptionSecure,
+			CryptoPlacement:         "auto",
+			KernelTransport:         "auto",
+			KernelCapabilityProfile: config.KernelCapabilityProfileStable,
 		}, nil
 	case "performance":
 		return ixProvisionProfileDefaults{
-			TransportProfile: config.TransportProfilePerformance,
-			Datapath:         config.TransportDatapathAuto,
-			Encryption:       securetransport.EncryptionSecure,
-			CryptoPlacement:  "auto",
-			KernelTransport:  "auto",
+			TransportProfile:        config.TransportProfilePerformance,
+			Datapath:                config.TransportDatapathAuto,
+			Encryption:              securetransport.EncryptionSecure,
+			CryptoPlacement:         "auto",
+			KernelTransport:         "auto",
+			KernelCapabilityProfile: config.KernelCapabilityProfilePerformance,
 		}, nil
 	case "latency":
 		return ixProvisionProfileDefaults{
-			TransportProfile: config.TransportProfileLatency,
-			Datapath:         config.TransportDatapathAuto,
-			Encryption:       securetransport.EncryptionSecure,
-			CryptoPlacement:  "auto",
-			KernelTransport:  "auto",
+			TransportProfile:        config.TransportProfileLatency,
+			Datapath:                config.TransportDatapathAuto,
+			Encryption:              securetransport.EncryptionSecure,
+			CryptoPlacement:         "auto",
+			KernelTransport:         "auto",
+			KernelCapabilityProfile: config.KernelCapabilityProfileStable,
 		}, nil
 	case "compatibility":
 		return ixProvisionProfileDefaults{
-			TransportProfile: config.TransportProfileStable,
-			Datapath:         config.TransportDatapathUserspace,
-			Encryption:       securetransport.EncryptionSecure,
-			CryptoPlacement:  "userspace",
-			KernelTransport:  "disabled",
+			TransportProfile:        config.TransportProfileStable,
+			Datapath:                config.TransportDatapathUserspace,
+			Encryption:              securetransport.EncryptionSecure,
+			CryptoPlacement:         "userspace",
+			KernelTransport:         "disabled",
+			KernelCapabilityProfile: config.KernelCapabilityProfileDisabled,
 		}, nil
 	case "plaintext_performance":
 		return ixProvisionProfileDefaults{
-			TransportProfile: config.TransportProfilePerformance,
-			Datapath:         config.TransportDatapathKernelModule,
-			Encryption:       securetransport.EncryptionPlaintext,
-			CryptoPlacement:  "auto",
-			KernelTransport:  "auto",
+			TransportProfile:        config.TransportProfilePerformance,
+			Datapath:                config.TransportDatapathKernelModule,
+			Encryption:              securetransport.EncryptionPlaintext,
+			CryptoPlacement:         "auto",
+			KernelTransport:         "auto",
+			KernelCapabilityProfile: config.KernelCapabilityProfilePerformance,
 		}, nil
 	default:
 		return ixProvisionProfileDefaults{}, fmt.Errorf("profile must be stable, performance, latency, compatibility, or plaintext_performance")
@@ -1092,6 +1098,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			DNSMasq: config.DNSMasqConfig{Enabled: request.OpenWRTDNSMasq == "1"},
 		},
 		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile:      profile.KernelCapabilityProfile,
 			TrustIXCrypto:          config.KernelModuleConfig{Mode: kernelModulesMode, Path: "embedded", ReloadOnUpgrade: "auto"},
 			TrustIXDatapath:        config.KernelModuleConfig{Mode: kernelModulesMode, Path: "embedded", ReloadOnUpgrade: "auto"},
 			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: kernelModulesMode, Path: "embedded", ReloadOnUpgrade: "auto"},

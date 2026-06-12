@@ -46,7 +46,7 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTXWithCrashRiskGate(
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 tx_plaintext_inline_xmit=1 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -71,7 +71,7 @@ func TestTrustIXDatapathModuleParametersOpenWrtDedicatedGateAllowsFullPlaintext(
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 tx_plaintext_inline_xmit=1 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -104,6 +104,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testin
 		"rx_worker_inline_xmit_copy_csum=1",
 		"rx_worker_tcp=1",
 		"rx_worker_stream_tcp=1",
+		"tx_plaintext_inline_xmit=1",
 		"tx_plaintext_slots=8192",
 		"rx_worker_budget=1024",
 		"rx_worker_slots=8192",
@@ -133,6 +134,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashR
 		"rx_worker_inline_xmit_copy_csum=1",
 		"rx_worker_tcp=1",
 		"rx_worker_stream_tcp=1",
+		"tx_plaintext_inline_xmit=1",
 		"tx_plaintext_slots=8192",
 		"rx_worker_budget=1024",
 		"rx_worker_slots=8192",
@@ -255,6 +257,55 @@ func TestTrustIXDatapathModuleParametersForDesiredPerformanceProfileDoesNotEnabl
 	want := "rx_worker_inject=0 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want production-safe performance parameters %q", got, want)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersForDesiredRouteGSOSuppressesFullPlaintextTX(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: "plaintext",
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: "experimental_tcp",
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext=1 tx_plaintext_slots=16384", desired)
+	for _, want := range []string{
+		"rx_worker_inject=0",
+		"tx_plaintext=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parameters = %q, missing %q", got, want)
+		}
+	}
+	for _, unexpected := range []string{
+		"rx_worker_inject=1",
+		"rx_worker_xmit=1",
+		"rx_worker_stream_tcp=1",
+		"tx_plaintext=1",
+		"tx_plaintext_inline_xmit=1",
+		"tx_plaintext_slots=16384",
+	} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("parameters = %q, unexpectedly enabled %q", got, unexpected)
+		}
+	}
+	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("route-GSO performance policy should suppress full plaintext datapath ownership")
+	}
+	if mode := kernelDatapathRXModeForDesired(desired); mode != "" {
+		t.Fatalf("route-GSO performance policy should not attach full plaintext RX hook, mode=%q", mode)
 	}
 }
 

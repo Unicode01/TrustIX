@@ -111,16 +111,27 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	profile := config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile)
 	fullPlaintextConfigured := runtime.FullPlaintext || runtime.TXPlaintext
+	suppressFullPlaintextTX := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) && !envTruthyAny("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX")
 	rxWorkerAllowed := fullPlaintextConfigured || kernelDatapathRXWorkerCrashRiskAllowed()
-	fullPlaintextAllowed := fullPlaintextConfigured || kernelDatapathFullPlaintextCrashRiskAllowed()
+	fullPlaintextAllowed := !suppressFullPlaintextTX && (fullPlaintextConfigured || kernelDatapathFullPlaintextCrashRiskAllowed())
 	params = filterTrustIXDatapathRuntimeCrashRiskParameters(params, rxWorkerAllowed, fullPlaintextAllowed)
 	rxWorker := runtime.RXWorker || runtime.RXStage == config.KernelDatapathRXStageWorker
 	fullPlaintext := fullPlaintextConfigured
+	fullPlaintextRequested := fullPlaintextConfigured
 	rxWorker = rxWorker || envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER")
-	fullPlaintext = fullPlaintext || envTruthyAny(
+	if envTruthyAny(
 		"TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT",
 		"TRUSTIX_KERNEL_DATAPATH_TX_PLAINTEXT",
-	)
+	) {
+		fullPlaintext = true
+		fullPlaintextRequested = true
+	}
+	if fullPlaintext && suppressFullPlaintextTX {
+		fullPlaintext = false
+		if fullPlaintextConfigured && !envTruthyAny("TRUSTIX_KERNEL_DATAPATH_RX_WORKER") {
+			rxWorker = false
+		}
+	}
 	if fullPlaintext && !fullPlaintextAllowed {
 		fullPlaintext = false
 	}
@@ -132,7 +143,12 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		params = appendModuleParameterIfMissing(params, "rx_worker_inject=1")
 		if fullPlaintext {
 			params = appendModuleParameterIfMissing(params, "tx_plaintext=1")
-			params = appendTrustIXDatapathFullPlaintextBaseParameters(params)
+		}
+		if fullPlaintextRequested && (rxWorker || fullPlaintext) {
+			params = appendTrustIXDatapathRXWorkerTCPBaseParameters(params)
+		}
+		if fullPlaintext {
+			params = appendTrustIXDatapathTXPlaintextBaseParameters(params)
 		}
 		if fullPlaintext || profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext {
 			params = appendModuleParameterIfMissing(params, "rx_worker_budget=1024")
@@ -150,11 +166,22 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 }
 
 func appendTrustIXDatapathFullPlaintextBaseParameters(params string) string {
+	params = appendTrustIXDatapathRXWorkerTCPBaseParameters(params)
+	params = appendTrustIXDatapathTXPlaintextBaseParameters(params)
+	return params
+}
+
+func appendTrustIXDatapathRXWorkerTCPBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "rx_worker_xmit=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit_copy_csum=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_tcp=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_stream_tcp=1")
+	return params
+}
+
+func appendTrustIXDatapathTXPlaintextBaseParameters(params string) string {
+	params = appendModuleParameterIfMissing(params, "tx_plaintext_inline_xmit=1")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_slots=8192")
 	return params
 }
@@ -265,6 +292,10 @@ func filterTrustIXDatapathRuntimeCrashRiskParameters(params string, allowRXWorke
 			}
 		case "tx_plaintext":
 			if !allowFullPlaintext && !moduleParameterValueFalsey(value) {
+				continue
+			}
+		default:
+			if strings.HasPrefix(key, "tx_plaintext_") && !allowFullPlaintext {
 				continue
 			}
 		}
