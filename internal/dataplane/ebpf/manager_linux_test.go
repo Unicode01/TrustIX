@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -976,6 +977,249 @@ func TestKernelUDPRXDirectPassYieldsExternalFilters(t *testing.T) {
 	if bytes.Contains(source, []byte(`asm.Mov.Imm(asm.R0, tcActOK).WithSymbol("kudp_rx_direct_pass")`)) {
 		t.Fatal("kernel_udp RX direct pass path still terminates TC classification")
 	}
+}
+
+func TestMainTCMissPathsYieldExternalFilters(t *testing.T) {
+	source, err := os.ReadFile("manager_linux.go")
+	if err != nil {
+		t.Fatalf("read manager_linux.go: %v", err)
+	}
+	text := strings.ReplaceAll(string(source), "\r\n", "\n")
+	for name, needle := range map[string]string{
+		"ingress yield exit": `asm.Mov.Imm(asm.R0, tcActUnspec).WithSymbol("yield_exit")`,
+		"egress yield exit":  `asm.Mov.Imm(asm.R0, tcActUnspec).WithSymbol("egress_yield_exit")`,
+		"egress nat l4 miss": `appendNATBindingLookup(instructions, natBindingMap, "egress_nat_lookup_l4", "egress_nat_l4_binding_fresh", "egress_yield_exit")`,
+		"egress nat ip miss": `appendNATBindingLookup(instructions, natBindingMap, "egress_nat_lookup_ip_only", "egress_nat_ip_only_binding_fresh", "egress_yield_exit")`,
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("%s does not yield to later TC filters", name)
+		}
+	}
+	assertSymbolBlockContains := func(name, startSymbol, endSymbol, needle string) {
+		t.Helper()
+		startNeedle := fmt.Sprintf(`WithSymbol("%s")`, startSymbol)
+		start := strings.Index(text, startNeedle)
+		if start < 0 {
+			t.Fatalf("%s symbol %q is missing", name, startSymbol)
+		}
+		endNeedle := fmt.Sprintf(`WithSymbol("%s")`, endSymbol)
+		relEnd := strings.Index(text[start+len(startNeedle):], endNeedle)
+		if relEnd < 0 {
+			t.Fatalf("%s following symbol %q is missing", name, endSymbol)
+		}
+		block := text[start : start+len(startNeedle)+relEnd]
+		if !strings.Contains(block, needle) {
+			t.Fatalf("%s does not yield to later TC filters", name)
+		}
+	}
+	assertSymbolBlockContains("ingress route miss", "route_miss", "packet_mtu_drop", `asm.Ja.Label("yield_exit")`)
+	assertSymbolBlockContains("ingress non-ipv4", "non_ipv4", "parse_error", `asm.Ja.Label("yield_exit")`)
+	if parseError := strings.Index(text, `WithSymbol("parse_error")`); parseError < 0 {
+		t.Fatal("ingress parse_error symbol is missing")
+	} else if yieldExit := strings.Index(text[parseError:], `WithSymbol("yield_exit")`); yieldExit < 0 {
+		t.Fatal("ingress parse_error does not fall through to yield_exit")
+	}
+	assertSymbolBlockContains("egress parse error", "egress_parse_error", "egress_yield_exit", `asm.Ja.Label("egress_yield_exit")`)
+	if strings.Contains(text, `asm.JEq.Imm(asm.R0, 0, "egress_exit"),
+		asm.LoadMem(asm.R1, asm.R0, 0, asm.Word)`) {
+		t.Fatal("egress NAT binding miss still terminates TC classification")
+	}
+	if strings.Contains(text, `asm.JGT.Reg(asm.R0, asm.R1, "egress_exit"),
+		asm.Mov.Imm(asm.R0, 0).WithSymbol(freshLabel)`) {
+		t.Fatal("egress expired NAT binding still terminates TC classification")
+	}
+}
+
+func TestMainTCMissPathsYieldToLaterTCFiltersLive(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("live TC filter test requires Linux")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create veth pair and attach TC filters")
+	}
+	if _, err := exec.LookPath("ping"); err != nil {
+		t.Skipf("ping is required for live TC filter test: %v", err)
+	}
+	if err := rlimit.RemoveMemlock(); err != nil {
+		t.Skipf("raise memlock limit for live TC filter test: %v", err)
+	}
+
+	t.Run("ingress", func(t *testing.T) {
+		runMainTCMissYieldLiveTest(t, netlink.HANDLE_MIN_INGRESS, "198.18.91.1", "198.18.91.2")
+	})
+	t.Run("egress", func(t *testing.T) {
+		runMainTCMissYieldLiveTest(t, netlink.HANDLE_MIN_EGRESS, "198.18.92.1", "198.18.92.2")
+	})
+}
+
+func runMainTCMissYieldLiveTest(t *testing.T, parent uint32, hostIP string, peerIP string) {
+	t.Helper()
+	suffix := fmt.Sprintf("%d%d", os.Getpid()%10000, time.Now().UnixNano()%10000)
+	if len(suffix) > 8 {
+		suffix = suffix[:8]
+	}
+	hostName := "tixy" + suffix
+	peerName := "tixz" + suffix
+	_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}})
+	t.Cleanup(func() {
+		_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}})
+		_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: peerName}})
+	})
+	if err := netlink.LinkAdd(&netlink.Veth{
+		LinkAttrs: netlink.LinkAttrs{Name: hostName},
+		PeerName:  peerName,
+	}); err != nil {
+		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+			t.Skipf("requires CAP_NET_ADMIN to create veth pair: %v", err)
+		}
+		t.Fatalf("create veth pair: %v", err)
+	}
+	hostLink, err := netlink.LinkByName(hostName)
+	if err != nil {
+		t.Fatalf("inspect host veth: %v", err)
+	}
+	peerLink, err := netlink.LinkByName(peerName)
+	if err != nil {
+		t.Fatalf("inspect peer veth: %v", err)
+	}
+	if err := netlink.AddrAdd(hostLink, mustTestAddr(t, hostIP+"/30")); err != nil && !isNetlinkAlreadyExists(err) {
+		t.Fatalf("add host veth address: %v", err)
+	}
+	if err := netlink.AddrAdd(peerLink, mustTestAddr(t, peerIP+"/30")); err != nil && !isNetlinkAlreadyExists(err) {
+		t.Fatalf("add peer veth address: %v", err)
+	}
+	if err := netlink.LinkSetUp(hostLink); err != nil {
+		t.Fatalf("set host veth up: %v", err)
+	}
+	if err := netlink.LinkSetUp(peerLink); err != nil {
+		t.Fatalf("set peer veth up: %v", err)
+	}
+	setStaticNeighbor(t, hostLink, peerIP, peerLink.Attrs().HardwareAddr)
+	setStaticNeighbor(t, peerLink, hostIP, hostLink.Attrs().HardwareAddr)
+	if err := replaceClsact(hostLink); err != nil {
+		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+			t.Skipf("requires CAP_NET_ADMIN to attach clsact: %v", err)
+		}
+		t.Fatalf("attach clsact to host veth: %v", err)
+	}
+
+	statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap := newIngressFastPathTestMaps(t)
+	defer statsMap.Close()
+	defer packetPolicyMap.Close()
+	defer routeMap.Close()
+	defer kernelUDPTXRouteMap.Close()
+	defer kernelUDPTXFlowMap.Close()
+	defer natConfigMap.Close()
+	defer natSourceMap.Close()
+	defer natRouteMap.Close()
+	defer natExcludeMap.Close()
+	defer captureMap.Close()
+	natBindingMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_nat_bindings_tc_yield_live", Type: cebpf.Hash, KeySize: 20, ValueSize: 16, MaxEntries: 16})
+	defer natBindingMap.Close()
+	counterMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tc_yield_live_counter", Type: cebpf.Array, KeySize: 4, ValueSize: 8, MaxEntries: 1})
+	defer counterMap.Close()
+
+	var trustIXProgram *cebpf.Program
+	var trustIXName string
+	if parent == netlink.HANDLE_MIN_INGRESS {
+		trustIXName = "trustix_ingress"
+		trustIXProgram, err = loadIngressFastPathProgram("tix_ing_yield", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true})
+	} else {
+		trustIXName = "trustix_egress"
+		trustIXProgram, err = loadEgressFastPathProgram("tix_eg_yield", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, natBindingMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true})
+	}
+	if err != nil {
+		t.Fatalf("load TrustIX TC program: %v", err)
+	}
+	defer trustIXProgram.Close()
+	counterProgram, err := loadTCCountingDropProgram("tix_drop_yield", counterMap)
+	if err != nil {
+		t.Fatalf("load later TC counter/drop program: %v", err)
+	}
+	defer counterProgram.Close()
+
+	trustIXFilter := bpfFilterWithPriority(hostLink, parent, netlink.MakeHandle(0, 1), trustIXName, trustIXProgram.FD(), 1)
+	counterFilter := bpfFilterWithPriority(hostLink, parent, netlink.MakeHandle(0, 10), "tix_later_drop", counterProgram.FD(), 10)
+	if err := netlink.FilterReplace(trustIXFilter); err != nil {
+		t.Fatalf("attach TrustIX TC filter: %v", err)
+	}
+	if err := netlink.FilterReplace(counterFilter); err != nil {
+		t.Fatalf("attach later TC counter/drop filter: %v", err)
+	}
+
+	pingSource, pingTarget := peerName, hostIP
+	if parent == netlink.HANDLE_MIN_EGRESS {
+		pingSource, pingTarget = hostName, peerIP
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "1", "-I", pingSource, pingTarget).Run()
+
+	var count uint64
+	key := uint32(0)
+	if err := counterMap.Lookup(key, &count); err != nil {
+		t.Fatalf("read later TC counter: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("later TC filter did not run after TrustIX %s miss", tcParentName(parent))
+	}
+}
+
+func loadTCCountingDropProgram(name string, counterMap *cebpf.Map) (*cebpf.Program, error) {
+	instructions := appendCounter(nil, counterMap, 0, "counter_done")
+	instructions = append(instructions,
+		asm.Mov.Imm(asm.R0, tcActShot),
+		asm.Return(),
+	)
+	return cebpf.NewProgramWithOptions(&cebpf.ProgramSpec{
+		Name:         name,
+		Type:         cebpf.SchedCLS,
+		Instructions: withTCProgramBTFMetadata(instructions),
+		License:      "GPL",
+	}, cebpf.ProgramOptions{LogLevel: cebpf.LogLevelBranch})
+}
+
+func mustTestAddr(t *testing.T, cidr string) *netlink.Addr {
+	t.Helper()
+	addr, err := netlink.ParseAddr(cidr)
+	if err != nil {
+		t.Fatalf("parse test address %q: %v", cidr, err)
+	}
+	return addr
+}
+
+func setStaticNeighbor(t *testing.T, link netlink.Link, ip string, mac net.HardwareAddr) {
+	t.Helper()
+	if err := netlink.NeighSet(&netlink.Neigh{
+		LinkIndex:    link.Attrs().Index,
+		Family:       unix.AF_INET,
+		State:        netlink.NUD_PERMANENT,
+		IP:           net.ParseIP(ip).To4(),
+		HardwareAddr: mac,
+	}); err != nil && !isNetlinkAlreadyExists(err) {
+		t.Fatalf("set static neighbor %s on %s: %v", ip, link.Attrs().Name, err)
+	}
+}
+
+func isNetlinkAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return errors.Is(err, os.ErrExist) ||
+		errors.Is(err, unix.EEXIST) ||
+		strings.Contains(lower, "file exists") ||
+		strings.Contains(lower, "object already exists")
+}
+
+func tcParentName(parent uint32) string {
+	if parent == netlink.HANDLE_MIN_INGRESS {
+		return "ingress"
+	}
+	if parent == netlink.HANDLE_MIN_EGRESS {
+		return "egress"
+	}
+	return fmt.Sprintf("parent %#x", parent)
 }
 
 func TestKernelUDPRXSecureDirectLocalDeliveryBypassesRedirectPeer(t *testing.T) {

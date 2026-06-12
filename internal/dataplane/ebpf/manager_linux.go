@@ -14240,7 +14240,7 @@ func loadIngressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.M
 	)
 	instructions = append(instructions, asm.Mov.Imm(asm.R0, 0).WithSymbol("route_miss"))
 	instructions = appendHotPathCounter(instructions, statsMap, 3, "route_miss_done")
-	instructions = append(instructions, asm.Ja.Label("exit"))
+	instructions = append(instructions, asm.Ja.Label("yield_exit"))
 	instructions = append(instructions, asm.Mov.Imm(asm.R0, 0).WithSymbol("packet_mtu_drop"))
 	instructions = appendCounter(instructions, statsMap, 15, "packet_mtu_drop_done")
 	instructions = append(instructions,
@@ -14255,10 +14255,12 @@ func loadIngressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.M
 	)
 	instructions = append(instructions, asm.Mov.Imm(asm.R0, 0).WithSymbol("non_ipv4"))
 	instructions = appendHotPathCounter(instructions, statsMap, 5, "non_ipv4_done")
-	instructions = append(instructions, asm.Ja.Label("exit"))
+	instructions = append(instructions, asm.Ja.Label("yield_exit"))
 	instructions = append(instructions, asm.Mov.Imm(asm.R0, 0).WithSymbol("parse_error"))
 	instructions = appendHotPathCounter(instructions, statsMap, 6, "parse_error_done")
 	instructions = append(instructions,
+		asm.Mov.Imm(asm.R0, tcActUnspec).WithSymbol("yield_exit"),
+		asm.Return(),
 		asm.Mov.Imm(asm.R0, tcActOK).WithSymbol("exit"),
 		asm.Return(),
 	)
@@ -18885,19 +18887,19 @@ func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Ma
 		asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word), // skb->data_end
 		asm.Mov.Reg(asm.R4, asm.R7),
 		asm.Add.Imm(asm.R4, 34),
-		asm.JGT.Reg(asm.R4, asm.R8, "egress_exit"),
+		asm.JGT.Reg(asm.R4, asm.R8, "egress_yield_exit"),
 		asm.LoadMem(asm.R4, asm.R7, 12, asm.Half),
-		asm.JNE.Imm(asm.R4, 0x0008, "egress_exit"), // ETH_P_IP in packet byte order on little-endian hosts.
+		asm.JNE.Imm(asm.R4, 0x0008, "egress_yield_exit"), // ETH_P_IP in packet byte order on little-endian hosts.
 	)
 	instructions = appendNativeLocalRouteBypass(instructions, statsMap, routeMap, "egress_parse_error", "egress_exit")
 	instructions = appendPacketPolicyTCPMSSClamp(instructions, statsMap, packetPolicyMap, "egress_parse_error")
 	if txDirectOption.DirectOnly {
 		instructions = appendKernelUDPTXDirect(instructions, statsMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, txDirectOption)
-		instructions = appendReloadIPv4PacketPointers(instructions, "egress_exit")
+		instructions = appendReloadIPv4PacketPointers(instructions, "egress_yield_exit")
 	} else {
 		instructions = appendKernelUDPTXDirect(instructions, statsMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, txDirectOption)
 	}
-	instructions = appendReloadIPv4PacketPointers(instructions, "egress_exit")
+	instructions = appendReloadIPv4PacketPointers(instructions, "egress_yield_exit")
 	instructions = appendPacketPolicy(instructions, statsMap, packetPolicyMap)
 	instructions = append(instructions,
 		asm.Mov.Reg(asm.R9, asm.R8),
@@ -18980,26 +18982,26 @@ func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Ma
 		asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word),
 		asm.Mov.Reg(asm.R4, asm.R7),
 		asm.Add.Imm(asm.R4, 34),
-		asm.JGT.Reg(asm.R4, asm.R8, "egress_exit"),
+		asm.JGT.Reg(asm.R4, asm.R8, "egress_yield_exit"),
 		asm.LoadMem(asm.R4, asm.R7, 12, asm.Half),
-		asm.JNE.Imm(asm.R4, 0x0008, "egress_exit"),
+		asm.JNE.Imm(asm.R4, 0x0008, "egress_yield_exit"),
 		asm.StoreImm(asm.RFP, natConfigKeyOffset, 0, asm.Word),
 		asm.LoadMapPtr(asm.R1, natConfigMap.FD()),
 		asm.Mov.Reg(asm.R2, asm.RFP),
 		asm.Add.Imm(asm.R2, natConfigKeyOffset),
 		asm.FnMapLookupElem.Call(),
-		asm.JEq.Imm(asm.R0, 0, "egress_exit"),
+		asm.JEq.Imm(asm.R0, 0, "egress_yield_exit"),
 		asm.LoadMem(asm.R1, asm.R0, 0, asm.Word),
-		asm.JEq.Imm(asm.R1, 0, "egress_exit"),
+		asm.JEq.Imm(asm.R1, 0, "egress_yield_exit"),
 		asm.LoadMem(asm.R1, asm.R0, 4, asm.Word), // NAT gateway.
 		asm.LoadMem(asm.R2, asm.R7, 30, asm.Word),
-		asm.JNE.Reg(asm.R2, asm.R1, "egress_exit"),
+		asm.JNE.Reg(asm.R2, asm.R1, "egress_yield_exit"),
 		asm.StoreMem(asm.RFP, natOriginalSourceOffset, asm.R1, asm.Word), // old destination.
 		asm.LoadMem(asm.R2, asm.R7, 20, asm.Half),                        // IPv4 flags/fragment offset.
-		asm.JSet.Imm(asm.R2, ipv4FragmentMaskLittleEndian, "egress_exit"),
+		asm.JSet.Imm(asm.R2, ipv4FragmentMaskLittleEndian, "egress_yield_exit"),
 		asm.LoadMem(asm.R2, asm.R7, 14, asm.Byte),
 		asm.And.Imm(asm.R2, 0x0f),
-		asm.JLT.Imm(asm.R2, 5, "egress_exit"),
+		asm.JLT.Imm(asm.R2, 5, "egress_yield_exit"),
 		asm.LSh.Imm(asm.R2, 2),
 		asm.Mov.Reg(asm.R9, asm.R2), // IPv4 header length.
 		asm.Mov.Reg(asm.R3, asm.R7),
@@ -19014,10 +19016,10 @@ func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Ma
 		asm.JEq.Imm(asm.R2, ipProtocolTCP, "egress_nat_tcp"),
 		asm.JEq.Imm(asm.R2, ipProtocolUDP, "egress_nat_udp"),
 		asm.JEq.Imm(asm.R2, ipProtocolICMP, "egress_nat_icmp"),
-		asm.Ja.Label("egress_exit"),
+		asm.Ja.Label("egress_yield_exit"),
 		asm.Mov.Reg(asm.R4, asm.R3).WithSymbol("egress_nat_tcp"),
 		asm.Add.Imm(asm.R4, 20),
-		asm.JGT.Reg(asm.R4, asm.R8, "egress_exit"),
+		asm.JGT.Reg(asm.R4, asm.R8, "egress_yield_exit"),
 		asm.LoadMem(asm.R4, asm.R3, 2, asm.Half), // destination port = local NAT port.
 		asm.StoreMem(asm.RFP, natBindingKeyOffset+12, asm.R4, asm.Half),
 		asm.LoadMem(asm.R4, asm.R3, 0, asm.Half), // source port = remote port.
@@ -19028,7 +19030,7 @@ func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Ma
 		asm.Ja.Label("egress_nat_lookup_l4"),
 		asm.Mov.Reg(asm.R4, asm.R3).WithSymbol("egress_nat_udp"),
 		asm.Add.Imm(asm.R4, 8),
-		asm.JGT.Reg(asm.R4, asm.R8, "egress_exit"),
+		asm.JGT.Reg(asm.R4, asm.R8, "egress_yield_exit"),
 		asm.LoadMem(asm.R4, asm.R3, 2, asm.Half), // destination port = local NAT port.
 		asm.StoreMem(asm.RFP, natBindingKeyOffset+12, asm.R4, asm.Half),
 		asm.LoadMem(asm.R4, asm.R3, 0, asm.Half), // source port = remote port.
@@ -19041,16 +19043,16 @@ func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Ma
 		asm.Ja.Label("egress_nat_lookup_l4"),
 		asm.Mov.Reg(asm.R4, asm.R3).WithSymbol("egress_nat_icmp"),
 		asm.Add.Imm(asm.R4, 8),
-		asm.JGT.Reg(asm.R4, asm.R8, "egress_exit"),
+		asm.JGT.Reg(asm.R4, asm.R8, "egress_yield_exit"),
 		asm.LoadMem(asm.R4, asm.R3, 0, asm.Byte),
 		asm.JEq.Imm(asm.R4, 0, "egress_nat_icmp_type_ok"),
-		asm.JNE.Imm(asm.R4, 8, "egress_exit"),
+		asm.JNE.Imm(asm.R4, 8, "egress_yield_exit"),
 		asm.LoadMem(asm.R4, asm.R3, 4, asm.Half).WithSymbol("egress_nat_icmp_type_ok"),
 		asm.StoreMem(asm.RFP, natBindingKeyOffset+12, asm.R4, asm.Half),
 		asm.StoreMem(asm.RFP, natBindingKeyOffset+14, asm.R4, asm.Half),
 		asm.Ja.Label("egress_nat_lookup_ip_only"),
 	)
-	instructions = appendNATBindingLookup(instructions, natBindingMap, "egress_nat_lookup_l4", "egress_nat_l4_binding_fresh")
+	instructions = appendNATBindingLookup(instructions, natBindingMap, "egress_nat_lookup_l4", "egress_nat_l4_binding_fresh", "egress_yield_exit")
 	instructions = appendNATL3Checksum(instructions, "egress_nat_apply_l4", "egress_nat_error")
 	instructions = append(instructions,
 		asm.Mov.Reg(asm.R1, asm.R6),
@@ -19062,7 +19064,7 @@ func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Ma
 		asm.JNE.Imm(asm.R0, 0, "egress_nat_error"),
 		asm.Ja.Label("egress_nat_store_destination"),
 	)
-	instructions = appendNATBindingLookup(instructions, natBindingMap, "egress_nat_lookup_ip_only", "egress_nat_ip_only_binding_fresh")
+	instructions = appendNATBindingLookup(instructions, natBindingMap, "egress_nat_lookup_ip_only", "egress_nat_ip_only_binding_fresh", "egress_yield_exit")
 	instructions = appendNATL3Checksum(instructions, "egress_nat_apply_ip_only", "egress_nat_error")
 	instructions = append(instructions,
 		asm.Mov.Imm(asm.R0, 0).WithSymbol("egress_nat_store_destination"),
@@ -19093,8 +19095,10 @@ func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Ma
 	)
 	instructions = append(instructions, asm.Mov.Imm(asm.R0, 0).WithSymbol("egress_parse_error"))
 	instructions = appendHotPathCounter(instructions, statsMap, 6, "egress_parse_error_done")
-	instructions = append(instructions, asm.Ja.Label("egress_exit"))
+	instructions = append(instructions, asm.Ja.Label("egress_yield_exit"))
 	instructions = append(instructions,
+		asm.Mov.Imm(asm.R0, tcActUnspec).WithSymbol("egress_yield_exit"),
+		asm.Return(),
 		asm.Mov.Imm(asm.R0, tcActOK).WithSymbol("egress_exit"),
 		asm.Return(),
 	)
@@ -19111,13 +19115,13 @@ func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Ma
 	return program, nil
 }
 
-func appendNATBindingLookup(instructions asm.Instructions, natBindingMap *cebpf.Map, label string, freshLabel string) asm.Instructions {
+func appendNATBindingLookup(instructions asm.Instructions, natBindingMap *cebpf.Map, label string, freshLabel string, missLabel string) asm.Instructions {
 	return append(instructions,
 		asm.LoadMapPtr(asm.R1, natBindingMap.FD()).WithSymbol(label),
 		asm.Mov.Reg(asm.R2, asm.RFP),
 		asm.Add.Imm(asm.R2, natBindingKeyOffset),
 		asm.FnMapLookupElem.Call(),
-		asm.JEq.Imm(asm.R0, 0, "egress_exit"),
+		asm.JEq.Imm(asm.R0, 0, missLabel),
 		asm.LoadMem(asm.R1, asm.R0, 0, asm.Word),
 		asm.StoreMem(asm.RFP, natGatewayOffset, asm.R1, asm.Word),
 		asm.LoadMem(asm.R1, asm.R0, 8, asm.DWord),
@@ -19125,7 +19129,7 @@ func appendNATBindingLookup(instructions asm.Instructions, natBindingMap *cebpf.
 		asm.StoreMem(asm.RFP, natDnatExpiresOffset, asm.R1, asm.DWord),
 		asm.FnKtimeGetNs.Call(),
 		asm.LoadMem(asm.R1, asm.RFP, natDnatExpiresOffset, asm.DWord),
-		asm.JGT.Reg(asm.R0, asm.R1, "egress_exit"),
+		asm.JGT.Reg(asm.R0, asm.R1, missLabel),
 		asm.Mov.Imm(asm.R0, 0).WithSymbol(freshLabel),
 	)
 }
