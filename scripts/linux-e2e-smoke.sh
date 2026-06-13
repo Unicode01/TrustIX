@@ -41,8 +41,8 @@ capture_forwarder_workers="${TRUSTIX_E2E_CAPTURE_FORWARDER_WORKERS:-4}"
 capture_forwarder_buffer="${TRUSTIX_E2E_CAPTURE_FORWARDER_BUFFER:-262144}"
 capture_forwarder_batch="${TRUSTIX_E2E_CAPTURE_FORWARDER_BATCH:-256}"
 capture_forwarder_batch_delay="${TRUSTIX_E2E_CAPTURE_FORWARDER_BATCH_DELAY:-0}"
-data_session_encrypted_tixb="${TRUSTIX_E2E_DATA_SESSION_ENCRYPTED_TIXB:-${TRUSTIX_DATA_SESSION_ENCRYPTED_TIXB:-0}}"
-data_session_rx_gso_coalesce_userspace_encrypted="${TRUSTIX_E2E_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED:-${TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED:-0}}"
+data_session_encrypted_tixb="${TRUSTIX_E2E_DATA_SESSION_ENCRYPTED_TIXB:-${TRUSTIX_DATA_SESSION_ENCRYPTED_TIXB:-auto}}"
+data_session_rx_gso_coalesce_userspace_encrypted="${TRUSTIX_E2E_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED:-${TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED:-auto}}"
 kernel_module="${TRUSTIX_E2E_KERNEL_MODULE:-0}"
 kernel_script="${TRUSTIX_E2E_KERNEL_SCRIPT:-${repo_root}/scripts/linux-kernel-module-smoke.sh}"
 kernel_module_dir="${TRUSTIX_E2E_KERNEL_MODULE_DIR:-${repo_root}/kernel/trustix_crypto}"
@@ -369,7 +369,7 @@ kernel_extra_module_params() {
     printf '%s\n' "$TRUSTIX_E2E_KERNEL_EXTRA_MODULE_PARAMS"
     return
   fi
-  printf 'experimental_vaes_kfunc=%s kfunc_fastpath_stats=0 kfunc_fastpath_wipe=%s\n' "$vaes_kfunc" "${TRUSTIX_E2E_KERNEL_FASTPATH_WIPE:-1}"
+  printf 'experimental_aesni_kfunc=1 experimental_vaes_kfunc=%s kfunc_fastpath_stats=0 kfunc_fastpath_wipe=%s\n' "$vaes_kfunc" "${TRUSTIX_E2E_KERNEL_FASTPATH_WIPE:-1}"
 }
 
 datapath_extra_module_params() {
@@ -1611,7 +1611,7 @@ start_daemon() {
       $extra_args \
       >"$log_path" 2>&1 &
   else
-    run_in_netns "$ns" env "TRUSTIX_CPU_PROFILE_DIR=${node_profile_dir}" "TRUSTIX_TC_HOT_STATS=${hot_stats}" "TRUSTIX_NATIVE_TUNNEL_ROUTE_OFFLOAD=${TRUSTIX_NATIVE_TUNNEL_ROUTE_OFFLOAD:-1}" "TRUSTIX_NATIVE_TUNNEL_AUTO_TCP_MSS_CLAMP=${TRUSTIX_NATIVE_TUNNEL_AUTO_TCP_MSS_CLAMP:-0}" "TRUSTIX_KERNEL_DATAPATH_RX_WORKER=$(full_datapath_rx_worker_value)" "TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER=$(full_datapath_rx_worker_value)" "$bin_dir/trustixd" \
+    run_in_netns "$ns" env "TRUSTIX_CPU_PROFILE_DIR=${node_profile_dir}" "TRUSTIX_TC_HOT_STATS=${hot_stats}" "TRUSTIX_NATIVE_TUNNEL_ROUTE_OFFLOAD=${TRUSTIX_NATIVE_TUNNEL_ROUTE_OFFLOAD:-1}" "TRUSTIX_NATIVE_TUNNEL_AUTO_TCP_MSS_CLAMP=${TRUSTIX_NATIVE_TUNNEL_AUTO_TCP_MSS_CLAMP:-0}" "TRUSTIX_KERNEL_DATAPATH_RX_WORKER=$(full_datapath_rx_worker_value)" "TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER=$(full_datapath_rx_worker_value)" "TRUSTIX_CAPTURE_FORWARDER_WORKERS=${capture_forwarder_workers}" "TRUSTIX_CAPTURE_FORWARDER_BUFFER=${capture_forwarder_buffer}" "TRUSTIX_CAPTURE_FORWARDER_BATCH=${capture_forwarder_batch}" "TRUSTIX_CAPTURE_FORWARDER_BATCH_DELAY=${capture_forwarder_batch_delay}" "TRUSTIX_DATA_SESSION_ENCRYPTED_TIXB=${data_session_encrypted_tixb}" "TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED=${data_session_rx_gso_coalesce_userspace_encrypted}" "$bin_dir/trustixd" \
       -config "$config_path" \
       -data-dir "$data_dir" \
       -api "$api_addr" \
@@ -4021,12 +4021,12 @@ fi
   [[ "$capture_forwarder_batch" =~ ^[1-9][0-9]*$ ]] || die "TRUSTIX_E2E_CAPTURE_FORWARDER_BATCH must be a positive integer"
   [[ "$capture_forwarder_batch_delay" == "0" || "$capture_forwarder_batch_delay" =~ $duration_re ]] || die "TRUSTIX_E2E_CAPTURE_FORWARDER_BATCH_DELAY must be a Go duration or 0"
   case "$data_session_encrypted_tixb" in
-    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_DATA_SESSION_ENCRYPTED_TIXB must be 0 or 1" ;;
+    auto|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_E2E_DATA_SESSION_ENCRYPTED_TIXB must be auto or 0/1" ;;
   esac
   case "$data_session_rx_gso_coalesce_userspace_encrypted" in
-    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED must be 0 or 1" ;;
+    auto|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_E2E_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED must be auto or 0/1" ;;
   esac
   if [[ "$transport" == "experimental_tcp" && "$crypto_placement" == "kernel" && "$kernel_module" != "1" ]] && ! kernel_provider_expected; then
     die "TRUSTIX_E2E_CRYPTO_PLACEMENT=kernel requires TRUSTIX_E2E_KERNEL_MODULE=1"

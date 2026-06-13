@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"trustix.local/trustix/internal/transport"
 )
@@ -198,8 +199,8 @@ func TestCarrierRecvSkipsInvalidHeader(t *testing.T) {
 		t.Fatalf("read carrier batch: %v", err)
 	}
 	defer release()
-	if len(packets) != 1 || string(packets[0]) != "ok" {
-		t.Fatalf("packets = %q, want ok", packets)
+	if len(packets) != 1 || string(packets[0].payload) != "ok" {
+		t.Fatalf("packets = %+v, want ok", packets)
 	}
 }
 
@@ -296,6 +297,124 @@ func TestCarrierSendPacketsWritesBatchAndStats(t *testing.T) {
 	}
 }
 
+func TestCarrierStatsAdvertisesFragmentingDatagram(t *testing.T) {
+	session := &carrier{cfg: tunnelConfig{MTU: 128, CarrierPort: 47820}}
+	stats := session.Stats()
+	if !stats.Datagram || !stats.FragmentingDatagram {
+		t.Fatalf("stats datagram/fragmenting = %v/%v, want true/true", stats.Datagram, stats.FragmentingDatagram)
+	}
+	if stats.MaxPacketSize != carrierMaxPacket {
+		t.Fatalf("MaxPacketSize = %d, want %d", stats.MaxPacketSize, carrierMaxPacket)
+	}
+	if got := stats.Extra["iptunnel_kernel_fragment"]; got != 1 {
+		t.Fatalf("kernel fragment = %d, want 1", got)
+	}
+	if got, want := stats.Extra["iptunnel_fragment_payload_size"], uint64(carrierMaxUDPPayload-carrierHeaderLen-carrierFragmentHeaderLen); got != want {
+		t.Fatalf("fragment payload size = %d, want %d", got, want)
+	}
+}
+
+func TestCarrierSendPacketFragmentsAboveMTU(t *testing.T) {
+	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "0")
+	server, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	defer server.Close()
+
+	clientConn, err := net.DialUDP("udp4", nil, server.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("dial udp: %v", err)
+	}
+	defer clientConn.Close()
+
+	session := &carrier{
+		cfg:  tunnelConfig{MTU: 128},
+		conn: clientConn,
+	}
+	payload := bytes.Repeat([]byte("z"), 4096)
+	if err := session.SendPacket(payload); err != nil {
+		t.Fatalf("send fragmented packet: %v", err)
+	}
+	stats := session.Stats()
+	if stats.PacketsSent != 1 {
+		t.Fatalf("PacketsSent = %d, want 1", stats.PacketsSent)
+	}
+	if stats.Extra["iptunnel_fragmented_packets_sent"] != 1 {
+		t.Fatalf("fragmented packets sent = %d, want 1", stats.Extra["iptunnel_fragmented_packets_sent"])
+	}
+	if stats.Extra["iptunnel_fragments_sent"] <= 1 {
+		t.Fatalf("fragments sent = %d, want > 1", stats.Extra["iptunnel_fragments_sent"])
+	}
+
+	var reassembler carrierReassembler
+	var got carrierReceivedPacket
+	deadline := time.Now().Add(2 * time.Second)
+	if err := server.SetReadDeadline(deadline); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	buf := make([]byte, 256)
+	for {
+		n, _, err := server.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatalf("read fragment: %v", err)
+		}
+		frame, err := decodeCarrierFrameView(buf[:n])
+		if err != nil {
+			t.Fatalf("decode fragment: %v", err)
+		}
+		frame.wireLen = n
+		var ok bool
+		got, ok, _ = reassembler.accept(frame)
+		if ok {
+			break
+		}
+	}
+	if !bytes.Equal(got.payload, payload) {
+		t.Fatalf("reassembled payload length = %d, want %d", len(got.payload), len(payload))
+	}
+}
+
+func TestCarrierRecvPacketsWithReleaseReassemblesFragments(t *testing.T) {
+	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "0")
+	server, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	defer server.Close()
+
+	clientConn, err := net.DialUDP("udp4", nil, server.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("dial udp: %v", err)
+	}
+	defer clientConn.Close()
+
+	sender := &carrier{cfg: tunnelConfig{MTU: 128}, conn: clientConn}
+	receiver := &carrier{cfg: tunnelConfig{MTU: 128}, conn: server}
+	payload := bytes.Repeat([]byte("r"), 4096)
+	if err := sender.SendPacket(payload); err != nil {
+		t.Fatalf("send fragmented packet: %v", err)
+	}
+	if err := server.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	packets, release, err := receiver.RecvPacketsWithRelease(64)
+	if err != nil {
+		t.Fatalf("receive fragmented packet: %v", err)
+	}
+	defer release()
+	if len(packets) != 1 || !bytes.Equal(packets[0], payload) {
+		t.Fatalf("received packets = %d len=%d, want one len=%d", len(packets), len(packets[0]), len(payload))
+	}
+	stats := receiver.Stats()
+	if stats.PacketsReceived != 1 {
+		t.Fatalf("PacketsReceived = %d, want 1", stats.PacketsReceived)
+	}
+	if stats.Extra["iptunnel_reassembled_packets"] != 1 {
+		t.Fatalf("reassembled packets = %d, want 1", stats.Extra["iptunnel_reassembled_packets"])
+	}
+}
+
 func TestCarrierServerSessionSendPacketsWritesBatchAndStats(t *testing.T) {
 	server, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -350,7 +469,110 @@ func TestCarrierServerSessionSendPacketsWritesBatchAndStats(t *testing.T) {
 	}
 }
 
+func TestCarrierServerSessionSendPacketFragmentsAboveMTU(t *testing.T) {
+	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "0")
+	server, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen udp server: %v", err)
+	}
+	defer server.Close()
+
+	client, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen udp client: %v", err)
+	}
+	defer client.Close()
+
+	session := &carrierServerSession{
+		conn:     server,
+		remote:   client.LocalAddr().(*net.UDPAddr),
+		listener: &packetListener{cfg: tunnelConfig{MTU: 128}},
+	}
+	payload := bytes.Repeat([]byte("s"), 4096)
+	if err := session.SendPacket(payload); err != nil {
+		t.Fatalf("send fragmented server packet: %v", err)
+	}
+	stats := session.Stats()
+	if stats.Extra["iptunnel_fragmented_packets_sent"] != 1 {
+		t.Fatalf("fragmented packets sent = %d, want 1", stats.Extra["iptunnel_fragmented_packets_sent"])
+	}
+	if stats.Extra["iptunnel_fragments_sent"] <= 1 {
+		t.Fatalf("fragments sent = %d, want > 1", stats.Extra["iptunnel_fragments_sent"])
+	}
+
+	var reassembler carrierReassembler
+	var got carrierReceivedPacket
+	if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	buf := make([]byte, 256)
+	for {
+		n, _, err := client.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatalf("read fragment: %v", err)
+		}
+		frame, err := decodeCarrierFrameView(buf[:n])
+		if err != nil {
+			t.Fatalf("decode fragment: %v", err)
+		}
+		frame.wireLen = n
+		var ok bool
+		got, ok, _ = reassembler.accept(frame)
+		if ok {
+			break
+		}
+	}
+	if !bytes.Equal(got.payload, payload) {
+		t.Fatalf("reassembled payload length = %d, want %d", len(got.payload), len(payload))
+	}
+}
+
+func TestCarrierServerSessionEnqueueReassemblesFragments(t *testing.T) {
+	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "0")
+	session := &carrierServerSession{
+		in:       make(chan carrierReceivedPacket, 8),
+		listener: &packetListener{cfg: tunnelConfig{MTU: 128}},
+	}
+	payload := bytes.Repeat([]byte("q"), 4096)
+	packets, headers, err := buildCarrierFragmentPackets(nil, nil, payload, 77, 128)
+	if err != nil {
+		t.Fatalf("build fragments: %v", err)
+	}
+	defer func() {
+		_ = headers
+		session.closeInput()
+	}()
+	for _, packet := range packets {
+		wire, err := carrierBatchPacketWire(packet)
+		if err != nil {
+			t.Fatalf("build wire: %v", err)
+		}
+		buffer := takeCarrierReadBuffer(len(wire))
+		copy(buffer, wire)
+		frame, err := decodeCarrierFrameView(buffer[:len(wire)])
+		if err != nil {
+			t.Fatalf("decode fragment: %v", err)
+		}
+		frame.buffer = buffer
+		frame.wireLen = len(wire)
+		session.enqueue(frame)
+	}
+	received, release, err := session.RecvPacketsWithRelease(1)
+	if err != nil {
+		t.Fatalf("receive reassembled packet: %v", err)
+	}
+	defer release()
+	if len(received) != 1 || !bytes.Equal(received[0], payload) {
+		t.Fatalf("received packets = %d len=%d, want one len=%d", len(received), len(received[0]), len(payload))
+	}
+	stats := session.Stats()
+	if stats.Extra["iptunnel_reassembled_packets"] != 1 {
+		t.Fatalf("reassembled packets = %d, want 1", stats.Extra["iptunnel_reassembled_packets"])
+	}
+}
+
 func TestCarrierSendRejectsPacketsAboveMTU(t *testing.T) {
+	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "0")
 	session := &carrier{cfg: tunnelConfig{MTU: carrierHeaderLen + 4}}
 	if err := session.SendPacket([]byte("12345")); err == nil {
 		t.Fatal("expected packet above carrier mtu to fail")
@@ -391,6 +613,7 @@ func TestCarrierServerSessionStatsTrackQueueDrops(t *testing.T) {
 }
 
 func TestCarrierServerSessionRejectsPacketsAboveMTU(t *testing.T) {
+	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "0")
 	session := &carrierServerSession{
 		listener: &packetListener{cfg: tunnelConfig{MTU: carrierHeaderLen + 1}},
 	}

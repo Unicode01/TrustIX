@@ -666,7 +666,7 @@ func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceEnablesSIMDKfun
 	}
 
 	got := TrustIXCryptoModuleParametersForDesired("", desired)
-	for _, want := range []string{"kfunc_simd_fastpath=1", "experimental_vaes_kfunc=1"} {
+	for _, want := range []string{"kfunc_simd_fastpath=1", "experimental_aesni_kfunc=1", "experimental_vaes_kfunc=1"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
 		}

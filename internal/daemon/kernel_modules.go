@@ -104,6 +104,7 @@ func TrustIXCryptoModuleParametersForDesired(raw string, desired config.Desired)
 		params = filterModuleParameters(params, trustIXCryptoPanicRiskModuleParameters)
 	} else {
 		params = appendModuleParameterIfMissing(params, "kfunc_simd_fastpath=1")
+		params = appendModuleParameterIfMissing(params, "experimental_aesni_kfunc=1")
 		params = appendModuleParameterIfMissing(params, "experimental_vaes_kfunc=1")
 	}
 	return strings.TrimSpace(params)

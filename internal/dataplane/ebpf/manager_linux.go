@@ -125,6 +125,7 @@ type Manager struct {
 	captureEventNext                            int
 	captureEventCount                           int
 	captureSubs                                 map[chan []dataplane.CaptureEvent]struct{}
+	captureSubOwners                            map[chan []dataplane.CaptureEvent]*captureSubscription
 	captureLost                                 uint64
 	captureSubDrops                             uint64
 	routeEntries                                uint64
@@ -1563,6 +1564,7 @@ func NewManager() *Manager {
 		deviceAccessProxyARP:         make(map[string]deviceAccessProxyARPState),
 		lanTCFilters:                 make(map[string]lanTCFilterState),
 		captureSubs:                  make(map[chan []dataplane.CaptureEvent]struct{}),
+		captureSubOwners:             make(map[chan []dataplane.CaptureEvent]*captureSubscription),
 		dropReasons:                  make(map[observability.DropReason]uint64),
 		natBindingKeys:               make(map[natBindingKey]struct{}),
 		lanInjectors:                 make(map[string]*lanPacketInjector),
@@ -2170,7 +2172,14 @@ func (manager *Manager) SubscribeCapture(ctx context.Context, buffer int) (datap
 	subscription := &captureSubscription{manager: manager, events: events}
 
 	manager.captureMu.Lock()
+	if manager.captureSubs == nil {
+		manager.captureSubs = make(map[chan []dataplane.CaptureEvent]struct{})
+	}
+	if manager.captureSubOwners == nil {
+		manager.captureSubOwners = make(map[chan []dataplane.CaptureEvent]*captureSubscription)
+	}
 	manager.captureSubs[events] = struct{}{}
+	manager.captureSubOwners[events] = subscription
 	manager.captureMu.Unlock()
 	return subscription, nil
 }
@@ -6243,10 +6252,12 @@ func ipv4Payload(packet []byte) ([]byte, [4]byte, error) {
 }
 
 type captureSubscription struct {
-	manager *Manager
-	events  chan []dataplane.CaptureEvent
-	legacy  chan dataplane.CaptureEvent
-	once    sync.Once
+	manager    *Manager
+	events     chan []dataplane.CaptureEvent
+	legacy     chan dataplane.CaptureEvent
+	once       sync.Once
+	borrowedMu sync.Mutex
+	borrowed   map[uintptr]*captureEventBatchLease
 }
 
 func (subscription *captureSubscription) Events() <-chan dataplane.CaptureEvent {
@@ -6275,6 +6286,7 @@ func (subscription *captureSubscription) legacyLoop() {
 		for _, event := range batch {
 			subscription.legacy <- event
 		}
+		subscription.ReleaseBatch(batch)
 	}
 	close(subscription.legacy)
 }
@@ -6283,10 +6295,118 @@ func (subscription *captureSubscription) Close() error {
 	subscription.once.Do(func() {
 		subscription.manager.captureMu.Lock()
 		delete(subscription.manager.captureSubs, subscription.events)
+		delete(subscription.manager.captureSubOwners, subscription.events)
 		close(subscription.events)
 		subscription.manager.captureMu.Unlock()
 	})
 	return nil
+}
+
+func (subscription *captureSubscription) trackBorrowedBatch(batch []dataplane.CaptureEvent, lease *captureEventBatchLease) bool {
+	if subscription == nil || lease == nil || len(batch) == 0 {
+		return false
+	}
+	key := captureEventBatchKey(batch)
+	if key == 0 {
+		return false
+	}
+	subscription.borrowedMu.Lock()
+	if subscription.borrowed == nil {
+		subscription.borrowed = make(map[uintptr]*captureEventBatchLease)
+	}
+	if previous := subscription.borrowed[key]; previous != nil && previous != lease {
+		putCaptureEventBatchLease(previous)
+	}
+	subscription.borrowed[key] = lease
+	subscription.borrowedMu.Unlock()
+	return true
+}
+
+func (subscription *captureSubscription) untrackBorrowedBatch(batch []dataplane.CaptureEvent) *captureEventBatchLease {
+	if subscription == nil || len(batch) == 0 {
+		return nil
+	}
+	key := captureEventBatchKey(batch)
+	if key == 0 {
+		return nil
+	}
+	subscription.borrowedMu.Lock()
+	lease := subscription.borrowed[key]
+	if lease != nil {
+		delete(subscription.borrowed, key)
+	}
+	subscription.borrowedMu.Unlock()
+	return lease
+}
+
+func (subscription *captureSubscription) ReleaseBatch(batch []dataplane.CaptureEvent) {
+	if lease := subscription.untrackBorrowedBatch(batch); lease != nil {
+		putCaptureEventBatchLease(lease)
+	}
+}
+
+type captureEventBatchLease struct {
+	events []dataplane.CaptureEvent
+	arena  []byte
+}
+
+var captureEventBatchLeasePool = sync.Pool{
+	New: func() any {
+		return &captureEventBatchLease{}
+	},
+}
+
+func takeCaptureEventBatchLease() *captureEventBatchLease {
+	lease, _ := captureEventBatchLeasePool.Get().(*captureEventBatchLease)
+	if lease == nil {
+		lease = &captureEventBatchLease{}
+	}
+	if cap(lease.events) < captureReaderBatchSize {
+		lease.events = make([]dataplane.CaptureEvent, 0, captureReaderBatchSize)
+	} else {
+		lease.events = lease.events[:0]
+	}
+	lease.arena = lease.arena[:0]
+	return lease
+}
+
+func putCaptureEventBatchLease(lease *captureEventBatchLease) {
+	if lease == nil {
+		return
+	}
+	if len(lease.events) > 0 {
+		clear(lease.events)
+	}
+	if cap(lease.events) > 4096 {
+		lease.events = nil
+	} else {
+		lease.events = lease.events[:0]
+	}
+	if cap(lease.arena) > captureEventArenaRetainLimit() {
+		lease.arena = nil
+	} else {
+		lease.arena = lease.arena[:0]
+	}
+	captureEventBatchLeasePool.Put(lease)
+}
+
+func captureEventArenaRetainLimit() int {
+	const maxRetain = 16 * 1024 * 1024
+	limit := captureSampleLimit * captureReaderBatchSize
+	if limit <= 0 {
+		return maxRetain
+	}
+	if limit > maxRetain {
+		return maxRetain
+	}
+	return limit
+}
+
+func captureEventBatchKey(batch []dataplane.CaptureEvent) uintptr {
+	if len(batch) == 0 {
+		return 0
+	}
+	return uintptr(unsafe.Pointer(&batch[0]))
 }
 
 type experimentalTCPSubscription struct {
@@ -23741,8 +23861,13 @@ func clearBPFMap[K comparable, V any](m *cebpf.Map, label string) error {
 }
 
 func (manager *Manager) deliverCaptureEventBatchLocked(batch []dataplane.CaptureEvent) bool {
+	consumed, _ := manager.deliverCaptureEventBatchLeaseLocked(batch, nil)
+	return consumed
+}
+
+func (manager *Manager) deliverCaptureEventBatchLeaseLocked(batch []dataplane.CaptureEvent, lease *captureEventBatchLease) (bool, bool) {
 	if len(batch) == 0 {
-		return false
+		return false, false
 	}
 	if captureHistoryEnabled {
 		for _, event := range batch {
@@ -23750,43 +23875,101 @@ func (manager *Manager) deliverCaptureEventBatchLocked(batch []dataplane.Capture
 		}
 	}
 	if len(manager.captureSubs) == 0 {
-		return false
+		return false, false
 	}
 	if !captureHistoryEnabled && len(manager.captureSubs) == 1 {
 		for i := range batch {
 			batch[i].PayloadMutable = true
 		}
-	} else {
-		for i := range batch {
-			batch[i].PayloadMutable = false
+		for subscriber := range manager.captureSubs {
+			owner := manager.captureSubOwners[subscriber]
+			if lease == nil {
+				select {
+				case subscriber <- batch:
+					return true, false
+				default:
+					manager.captureSubDrops += uint64(len(batch))
+					return true, false
+				}
+			}
+			if owner != nil && owner.legacy == nil && owner.trackBorrowedBatch(batch, lease) {
+				select {
+				case subscriber <- batch:
+					return true, true
+				default:
+					owner.untrackBorrowedBatch(batch)
+					manager.captureSubDrops += uint64(len(batch))
+					return true, false
+				}
+			}
+			delivered := cloneCaptureEventBatch(batch, false)
+			select {
+			case subscriber <- delivered:
+				return true, false
+			default:
+				manager.captureSubDrops += uint64(len(batch))
+				return true, false
+			}
 		}
 	}
+	for i := range batch {
+		batch[i].PayloadMutable = false
+	}
+	sent := 0
 	for subscriber := range manager.captureSubs {
+		delivered := batch
+		if lease != nil {
+			delivered = cloneCaptureEventBatch(batch, false)
+		}
 		select {
-		case subscriber <- batch:
+		case subscriber <- delivered:
+			sent++
 		default:
 			manager.captureSubDrops += uint64(len(batch))
 		}
 	}
-	return true
+	return true, false
+}
+
+func cloneCaptureEventBatch(batch []dataplane.CaptureEvent, mutable bool) []dataplane.CaptureEvent {
+	if len(batch) == 0 {
+		return nil
+	}
+	out := make([]dataplane.CaptureEvent, len(batch))
+	for i := range batch {
+		out[i] = batch[i]
+		out[i].PayloadMutable = mutable
+		if len(batch[i].Payload) > 0 {
+			out[i].Payload = append([]byte(nil), batch[i].Payload...)
+		}
+	}
+	return out
 }
 
 func (manager *Manager) readCaptureEvents(reader *perf.Reader) {
 	var record perf.Record
-	batch := make([]dataplane.CaptureEvent, 0, captureReaderBatchSize)
-	var arena []byte
+	lease := takeCaptureEventBatchLease()
+	defer func() {
+		putCaptureEventBatchLease(lease)
+	}()
 	deliver := func() {
-		if len(batch) == 0 {
+		if len(lease.events) == 0 {
 			return
 		}
 		manager.captureMu.Lock()
-		if manager.deliverCaptureEventBatchLocked(batch) {
-			batch = make([]dataplane.CaptureEvent, 0, captureReaderBatchSize)
-		} else {
-			batch = batch[:0]
-		}
+		_, retained := manager.deliverCaptureEventBatchLeaseLocked(lease.events, lease)
 		manager.captureMu.Unlock()
-		arena = nil
+		if retained {
+			lease = takeCaptureEventBatchLease()
+		} else {
+			clear(lease.events)
+			lease.events = lease.events[:0]
+			if captureHistoryEnabled {
+				lease.arena = nil
+			} else {
+				lease.arena = lease.arena[:0]
+			}
+		}
 	}
 	blockingRead := true
 	for {
@@ -23819,12 +24002,12 @@ func (manager *Manager) readCaptureEvents(reader *perf.Reader) {
 		if captureHistoryEnabled {
 			capturedAt = time.Now().UTC()
 		}
-		event, ok := decodeCaptureEventIntoAt(record, &arena, capturedAt)
+		event, ok := decodeCaptureEventIntoAt(record, &lease.arena, capturedAt)
 		if !ok {
 			continue
 		}
-		batch = append(batch, event)
-		if len(batch) >= captureReaderBatchSize {
+		lease.events = append(lease.events, event)
+		if len(lease.events) >= captureReaderBatchSize {
 			deliver()
 			blockingRead = true
 		} else if captureReaderDrainTimeout <= 0 {
@@ -23838,20 +24021,28 @@ func (manager *Manager) readCaptureEvents(reader *perf.Reader) {
 
 func (manager *Manager) readCaptureRingEvents(reader *ringbuf.Reader) {
 	var record ringbuf.Record
-	batch := make([]dataplane.CaptureEvent, 0, captureReaderBatchSize)
-	var arena []byte
+	lease := takeCaptureEventBatchLease()
+	defer func() {
+		putCaptureEventBatchLease(lease)
+	}()
 	deliver := func() {
-		if len(batch) == 0 {
+		if len(lease.events) == 0 {
 			return
 		}
 		manager.captureMu.Lock()
-		if manager.deliverCaptureEventBatchLocked(batch) {
-			batch = make([]dataplane.CaptureEvent, 0, captureReaderBatchSize)
-		} else {
-			batch = batch[:0]
-		}
+		_, retained := manager.deliverCaptureEventBatchLeaseLocked(lease.events, lease)
 		manager.captureMu.Unlock()
-		arena = nil
+		if retained {
+			lease = takeCaptureEventBatchLease()
+		} else {
+			clear(lease.events)
+			lease.events = lease.events[:0]
+			if captureHistoryEnabled {
+				lease.arena = nil
+			} else {
+				lease.arena = lease.arena[:0]
+			}
+		}
 	}
 	blockingRead := true
 	for {
@@ -23876,12 +24067,12 @@ func (manager *Manager) readCaptureRingEvents(reader *ringbuf.Reader) {
 		if captureHistoryEnabled {
 			capturedAt = time.Now().UTC()
 		}
-		event, ok := decodeCaptureRawEventIntoAt(record.RawSample, -1, &arena, capturedAt)
+		event, ok := decodeCaptureRawEventIntoAt(record.RawSample, -1, &lease.arena, capturedAt)
 		if !ok {
 			continue
 		}
-		batch = append(batch, event)
-		if len(batch) >= captureReaderBatchSize {
+		lease.events = append(lease.events, event)
+		if len(lease.events) >= captureReaderBatchSize {
 			deliver()
 			blockingRead = true
 		} else if captureReaderDrainTimeout <= 0 {
@@ -23902,6 +24093,10 @@ func (manager *Manager) recordCaptureEventLocked(event dataplane.CaptureEvent) {
 		manager.captureEventNext = 0
 		manager.captureEventCount = 0
 	}
+	if len(event.Payload) > 0 {
+		event.Payload = append([]byte(nil), event.Payload...)
+	}
+	event.PayloadMutable = false
 	manager.captureEvents[manager.captureEventNext] = event
 	manager.captureEventNext = (manager.captureEventNext + 1) % captureRingLimit
 	if manager.captureEventCount < captureRingLimit {

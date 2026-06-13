@@ -750,6 +750,142 @@ func TestDeliverCaptureEventBatchMarksMutableOnlyForSingleSubscriberNoHistory(t 
 	}
 }
 
+func TestDeliverCaptureEventBatchTracksBorrowedLeaseForBatchSubscriber(t *testing.T) {
+	oldHistory := captureHistoryEnabled
+	captureHistoryEnabled = false
+	t.Cleanup(func() { captureHistoryEnabled = oldHistory })
+
+	manager := &Manager{
+		captureSubs:      make(map[chan []dataplane.CaptureEvent]struct{}),
+		captureSubOwners: make(map[chan []dataplane.CaptureEvent]*captureSubscription),
+	}
+	events := make(chan []dataplane.CaptureEvent, 1)
+	subscription := &captureSubscription{manager: manager, events: events}
+	manager.captureSubs[events] = struct{}{}
+	manager.captureSubOwners[events] = subscription
+	lease := &captureEventBatchLease{
+		events: []dataplane.CaptureEvent{{Payload: []byte{1, 2, 3}}},
+		arena:  []byte{1, 2, 3},
+	}
+
+	consumed, retained := manager.deliverCaptureEventBatchLeaseLocked(lease.events, lease)
+	if !consumed {
+		t.Fatal("borrowed delivery was not consumed")
+	}
+	if !retained {
+		t.Fatal("borrowed delivery should be retained until ReleaseBatch")
+	}
+	delivered := <-events
+	if !delivered[0].PayloadMutable {
+		t.Fatal("borrowed single-subscriber payload should be mutable")
+	}
+	if got := len(subscription.borrowed); got != 1 {
+		t.Fatalf("borrowed batch count = %d, want 1", got)
+	}
+	subscription.ReleaseBatch(delivered)
+	if got := len(subscription.borrowed); got != 0 {
+		t.Fatalf("borrowed batch count after release = %d, want 0", got)
+	}
+	subscription.ReleaseBatch(delivered)
+}
+
+func TestDeliverCaptureEventBatchDoesNotRetainDroppedBorrowedLease(t *testing.T) {
+	oldHistory := captureHistoryEnabled
+	captureHistoryEnabled = false
+	t.Cleanup(func() { captureHistoryEnabled = oldHistory })
+
+	manager := &Manager{
+		captureSubs:      make(map[chan []dataplane.CaptureEvent]struct{}),
+		captureSubOwners: make(map[chan []dataplane.CaptureEvent]*captureSubscription),
+	}
+	events := make(chan []dataplane.CaptureEvent)
+	subscription := &captureSubscription{manager: manager, events: events}
+	manager.captureSubs[events] = struct{}{}
+	manager.captureSubOwners[events] = subscription
+	lease := &captureEventBatchLease{
+		events: []dataplane.CaptureEvent{{Payload: []byte{1, 2, 3}}},
+		arena:  []byte{1, 2, 3},
+	}
+
+	consumed, retained := manager.deliverCaptureEventBatchLeaseLocked(lease.events, lease)
+	if !consumed {
+		t.Fatal("dropped delivery should still be consumed")
+	}
+	if retained {
+		t.Fatal("dropped delivery should not retain the borrowed lease")
+	}
+	if got := len(subscription.borrowed); got != 0 {
+		t.Fatalf("borrowed batch count after dropped delivery = %d, want 0", got)
+	}
+}
+
+func TestDeliverCaptureEventBatchCopiesBorrowedLeaseForLegacySubscriber(t *testing.T) {
+	oldHistory := captureHistoryEnabled
+	captureHistoryEnabled = false
+	t.Cleanup(func() { captureHistoryEnabled = oldHistory })
+
+	manager := &Manager{
+		captureSubs:      make(map[chan []dataplane.CaptureEvent]struct{}),
+		captureSubOwners: make(map[chan []dataplane.CaptureEvent]*captureSubscription),
+	}
+	events := make(chan []dataplane.CaptureEvent, 1)
+	subscription := &captureSubscription{manager: manager, events: events, legacy: make(chan dataplane.CaptureEvent, 1)}
+	manager.captureSubs[events] = struct{}{}
+	manager.captureSubOwners[events] = subscription
+	lease := &captureEventBatchLease{
+		events: []dataplane.CaptureEvent{{Payload: []byte{1, 2, 3}}},
+		arena:  []byte{1, 2, 3},
+	}
+
+	consumed, retained := manager.deliverCaptureEventBatchLeaseLocked(lease.events, lease)
+	if !consumed {
+		t.Fatal("legacy delivery was not consumed")
+	}
+	if retained {
+		t.Fatal("legacy delivery should copy instead of retaining the borrowed lease")
+	}
+	delivered := <-events
+	if delivered[0].PayloadMutable {
+		t.Fatal("legacy copied payload should not be mutable")
+	}
+	if len(delivered[0].Payload) == 0 || &delivered[0].Payload[0] == &lease.events[0].Payload[0] {
+		t.Fatal("legacy copied payload aliases the borrowed lease")
+	}
+	if got := len(subscription.borrowed); got != 0 {
+		t.Fatalf("borrowed batch count after legacy delivery = %d, want 0", got)
+	}
+}
+
+func TestDeliverCaptureEventBatchHistoryCopiesBorrowedPayload(t *testing.T) {
+	oldHistory := captureHistoryEnabled
+	captureHistoryEnabled = true
+	t.Cleanup(func() { captureHistoryEnabled = oldHistory })
+
+	manager := &Manager{captureSubs: make(map[chan []dataplane.CaptureEvent]struct{})}
+	lease := &captureEventBatchLease{
+		events: []dataplane.CaptureEvent{{Payload: []byte{1, 2, 3}}},
+		arena:  []byte{1, 2, 3},
+	}
+	consumed, retained := manager.deliverCaptureEventBatchLeaseLocked(lease.events, lease)
+	if consumed {
+		t.Fatal("history-only delivery should not report subscriber consumption")
+	}
+	if retained {
+		t.Fatal("history-only delivery should not retain the borrowed lease")
+	}
+	if manager.captureEventCount != 1 {
+		t.Fatalf("capture history count = %d, want 1", manager.captureEventCount)
+	}
+	history := manager.captureEvents[0]
+	if len(history.Payload) == 0 || &history.Payload[0] == &lease.events[0].Payload[0] {
+		t.Fatal("capture history payload aliases the borrowed lease")
+	}
+	lease.events[0].Payload[0] = 9
+	if history.Payload[0] != 1 {
+		t.Fatalf("capture history payload mutated through lease: got %d want 1", history.Payload[0])
+	}
+}
+
 func TestTCStatsCounterKeysDoNotOverlap(t *testing.T) {
 	keys := map[uint32]string{}
 	add := func(name string, key uint32) {

@@ -25,7 +25,7 @@ type carrierRecvMmsgScratch struct {
 	iovs    []unix.Iovec
 	msgs    []carrierRecvMMsgHdr
 	buffers [][]byte
-	packet  [][]byte
+	packet  []carrierReceivedPacket
 	from    []carrierReceivedPacket
 }
 
@@ -36,13 +36,13 @@ var carrierRecvMmsgPool = sync.Pool{
 			iovs:    make([]unix.Iovec, 0, carrierRecvMmsgMaxBatch),
 			msgs:    make([]carrierRecvMMsgHdr, 0, carrierRecvMmsgMaxBatch),
 			buffers: make([][]byte, 0, carrierRecvMmsgMaxBatch),
-			packet:  make([][]byte, 0, carrierRecvMmsgMaxBatch),
+			packet:  make([]carrierReceivedPacket, 0, carrierRecvMmsgMaxBatch),
 			from:    make([]carrierReceivedPacket, 0, carrierRecvMmsgMaxBatch),
 		}
 	},
 }
 
-func recvCarrierBatch(conn *net.UDPConn, max int, packetSize int) ([][]byte, carrierBatchReceiveResult, func(), error) {
+func recvCarrierBatch(conn *net.UDPConn, max int, packetSize int) ([]carrierReceivedPacket, carrierBatchReceiveResult, func(), error) {
 	if max <= 0 {
 		max = 1
 	}
@@ -99,7 +99,7 @@ func recvCarrierBatchFrom(conn *net.UDPConn, max int, packetSize int) ([]carrier
 	return packets, result, func() { putCarrierRecvMmsgScratch(scratch, false) }, nil
 }
 
-func recvCarrierBatchMmsg(raw syscall.RawConn, scratch *carrierRecvMmsgScratch, max int, from bool) ([][]byte, carrierBatchReceiveResult, error) {
+func recvCarrierBatchMmsg(raw syscall.RawConn, scratch *carrierRecvMmsgScratch, max int, from bool) ([]carrierReceivedPacket, carrierBatchReceiveResult, error) {
 	n, result, err := recvCarrierMmsgChunk(raw, scratch, max, from)
 	if err != nil {
 		return nil, result, err
@@ -109,13 +109,15 @@ func recvCarrierBatchMmsg(raw syscall.RawConn, scratch *carrierRecvMmsgScratch, 
 	for i := 0; i < n; i++ {
 		size := int(scratch.msgs[i].len)
 		buffer := scratch.buffers[i]
-		payload, _, err := decodeCarrierView(buffer[:size])
+		packet, err := decodeCarrierFrameView(buffer[:size])
 		if err != nil {
 			putCarrierReadBuffer(buffer)
 			scratch.buffers[i] = nil
 			continue
 		}
-		packets = append(packets, payload)
+		packet.buffer = buffer
+		packet.wireLen = size
+		packets = append(packets, packet)
 		result.bytesReceived += uint64(size)
 	}
 	scratch.packet = packets
@@ -135,14 +137,17 @@ func recvCarrierBatchFromMmsg(raw syscall.RawConn, scratch *carrierRecvMmsgScrat
 	for i := 0; i < n; i++ {
 		size := int(scratch.msgs[i].len)
 		buffer := scratch.buffers[i]
-		payload, _, err := decodeCarrierView(buffer[:size])
+		packet, err := decodeCarrierFrameView(buffer[:size])
 		if err != nil {
 			putCarrierReadBuffer(buffer)
 			scratch.buffers[i] = nil
 			continue
 		}
 		addr := carrierAddrFromRawSockaddrInet4(&scratch.addrs[i])
-		packets = append(packets, carrierReceivedPacket{payload: payload, wireLen: size, buffer: buffer, addr: addr})
+		packet.wireLen = size
+		packet.buffer = buffer
+		packet.addr = addr
+		packets = append(packets, packet)
 		scratch.buffers[i] = nil
 		result.bytesReceived += uint64(size)
 	}
@@ -223,7 +228,7 @@ func takeCarrierRecvMmsgScratch(size int, packetSize int) *carrierRecvMmsgScratc
 		scratch.buffers[i] = takeCarrierReadBuffer(packetSize)
 	}
 	if cap(scratch.packet) < size {
-		scratch.packet = make([][]byte, 0, size)
+		scratch.packet = make([]carrierReceivedPacket, 0, size)
 	} else {
 		scratch.packet = scratch.packet[:0]
 	}

@@ -105,12 +105,12 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	if err != nil {
 		return nil, err
 	}
-	conn, err := listenUDPOnCarrier(ctx, cfg.LocalCarrier.Addr(), cfg.CarrierPort)
+	conns, err := listenUDPOnCarrierConns(ctx, cfg.LocalCarrier.Addr(), cfg.CarrierPort, carrierListenWorkers())
 	if err != nil {
 		_ = transportImpl.closeTunnelFunc(name)()
 		return nil, fmt.Errorf("listen %s kernel tunnel carrier %s:%d: %w", transportImpl.protocol, cfg.LocalCarrier.Addr(), cfg.CarrierPort, err)
 	}
-	listener := newPacketListener(ctx, cfg, conn)
+	listener := newPacketListener(ctx, cfg, conns)
 	return &tunnelListener{Listener: listener, tunnelName: name, closeFunc: transportImpl.closeTunnelFunc(name)}, nil
 }
 

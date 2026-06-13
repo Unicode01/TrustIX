@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,16 +22,23 @@ import (
 
 const (
 	carrierHeaderLen                    = 16
+	carrierFragmentHeaderLen            = 8
 	carrierVersion                 byte = 1
 	carrierTypeData                byte = 1
-	carrierMaxPacket                    = 64 * 1024
-	carrierMaxWire                      = carrierHeaderLen + carrierMaxPacket
+	carrierTypeFragment            byte = 2
+	carrierMaxPacket                    = 512 * 1024
+	carrierMaxUDPPayload                = 65507
+	carrierMaxUnfragmentedPacket        = carrierMaxUDPPayload - carrierHeaderLen
+	carrierMaxWire                      = carrierMaxUDPPayload
 	defaultCarrierPort                  = 47819
 	defaultTunnelMTU                    = 1400
 	defaultVXLANVNI                     = 0x545849
 	defaultVXLANPort                    = 4789
 	carrierReadBatchDefault             = 64
 	carrierReadBatchMax                 = 256
+	carrierListenWorkersDefault         = 4
+	carrierListenWorkersMax             = 16
+	carrierReassemblyMaxPackets         = 64
 	carrierSendBatchArenaRetainMax      = 4 * 1024 * 1024
 )
 
@@ -45,6 +54,13 @@ var carrierReadBufferPools = []carrierReadBufferPoolBucket{
 	{size: 4096, pool: sync.Pool{New: func() any { return make([]byte, 4096) }}},
 	{size: 16 * 1024, pool: sync.Pool{New: func() any { return make([]byte, 16*1024) }}},
 	{size: carrierMaxWire, pool: sync.Pool{New: func() any { return make([]byte, carrierMaxWire) }}},
+}
+
+var carrierReassemblyBufferPools = []carrierReadBufferPoolBucket{
+	{size: 64 * 1024, pool: sync.Pool{New: func() any { return make([]byte, 64*1024) }}},
+	{size: 128 * 1024, pool: sync.Pool{New: func() any { return make([]byte, 128*1024) }}},
+	{size: 256 * 1024, pool: sync.Pool{New: func() any { return make([]byte, 256*1024) }}},
+	{size: carrierMaxPacket, pool: sync.Pool{New: func() any { return make([]byte, carrierMaxPacket) }}},
 }
 
 func takeCarrierReadBuffer(sizes ...int) []byte {
@@ -79,6 +95,41 @@ func putCarrierReadBuffer(buf []byte) {
 	}
 	if cap(buf) >= carrierMaxWire {
 		carrierReadBufferPools[len(carrierReadBufferPools)-1].pool.Put(buf[:carrierMaxWire])
+	}
+}
+
+func takeCarrierReassemblyBuffer(size int) []byte {
+	if size <= 0 {
+		size = 1
+	}
+	if size > carrierMaxPacket {
+		size = carrierMaxPacket
+	}
+	for i := range carrierReassemblyBufferPools {
+		bucket := &carrierReassemblyBufferPools[i]
+		if bucket.size < size {
+			continue
+		}
+		buf := bucket.pool.Get().([]byte)
+		if cap(buf) < bucket.size {
+			return make([]byte, size, bucket.size)
+		}
+		return buf[:size]
+	}
+	return make([]byte, size)
+}
+
+func putCarrierReassemblyBuffer(buf []byte) {
+	if cap(buf) <= 0 {
+		return
+	}
+	for i := range carrierReassemblyBufferPools {
+		bucket := &carrierReassemblyBufferPools[i]
+		if cap(buf) != bucket.size {
+			continue
+		}
+		bucket.pool.Put(buf[:bucket.size])
+		return
 	}
 }
 
@@ -136,14 +187,21 @@ type carrier struct {
 	recvBatchMMSGSyscalls  atomic.Uint64
 	recvBatchLoopSyscalls  atomic.Uint64
 	recvBatchFallbacks     atomic.Uint64
+	fragmentsSent          atomic.Uint64
+	fragmentedPacketsSent  atomic.Uint64
+	fragmentsReceived      atomic.Uint64
+	reassembledPackets     atomic.Uint64
+	fragmentDrops          atomic.Uint64
 	sendWire               []byte
 	sendBatchWire          [][]byte
 	sendBatchPacketScratch []carrierBatchPacket
 	sendBatchArena         []byte
+	reassembler            carrierReassembler
 }
 
 type packetListener struct {
 	conn      *net.UDPConn
+	conns     []*net.UDPConn
 	cfg       tunnelConfig
 	acceptCh  chan transport.Session
 	done      chan struct{}
@@ -178,10 +236,16 @@ type carrierServerSession struct {
 	recvBatchCalls         atomic.Uint64
 	recvBatchPackets       atomic.Uint64
 	recvBatchBytes         atomic.Uint64
+	fragmentsSent          atomic.Uint64
+	fragmentedPacketsSent  atomic.Uint64
+	fragmentsReceived      atomic.Uint64
+	reassembledPackets     atomic.Uint64
+	fragmentDrops          atomic.Uint64
 	sendWire               []byte
 	sendBatchWire          [][]byte
 	sendBatchPacketScratch []carrierBatchPacket
 	sendBatchArena         []byte
+	reassembler            carrierReassembler
 }
 
 type carrierBatchPacket struct {
@@ -190,10 +254,15 @@ type carrierBatchPacket struct {
 }
 
 type carrierReceivedPacket struct {
-	payload []byte
-	wireLen int
-	buffer  []byte
-	addr    *net.UDPAddr
+	payload    []byte
+	wireLen    int
+	buffer     []byte
+	reassembly []byte
+	addr       *net.UDPAddr
+	sequence   uint64
+	frameType  byte
+	totalLen   int
+	offset     int
 }
 
 type carrierBatchReceiveResult struct {
@@ -201,6 +270,24 @@ type carrierBatchReceiveResult struct {
 	mmsgSyscalls  uint64
 	loopSyscalls  uint64
 	fallbacks     uint64
+}
+
+type carrierFragmentRange struct {
+	start int
+	end   int
+}
+
+type carrierFragmentAssembly struct {
+	totalLen int
+	received int
+	wireLen  int
+	data     []byte
+	ranges   []carrierFragmentRange
+}
+
+type carrierReassembler struct {
+	assemblies map[uint64]*carrierFragmentAssembly
+	order      []uint64
 }
 
 func parseTunnelConfig(raw string) (tunnelConfig, error) {
@@ -574,7 +661,7 @@ func encodeCarrier(payload []byte, sequence uint64) ([]byte, error) {
 	if len(payload) > carrierMaxPacket {
 		return nil, fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(payload), carrierMaxPacket)
 	}
-	if len(payload) > 0xffff {
+	if len(payload) > carrierMaxUnfragmentedPacket {
 		return nil, fmt.Errorf("tunnel carrier packet size %d exceeds header capacity", len(payload))
 	}
 	out := make([]byte, carrierHeaderLen+len(payload))
@@ -588,7 +675,7 @@ func encodeCarrierInto(out []byte, payload []byte, sequence uint64) error {
 	if len(payload) > carrierMaxPacket {
 		return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(payload), carrierMaxPacket)
 	}
-	if len(payload) > 0xffff {
+	if len(payload) > carrierMaxUnfragmentedPacket {
 		return fmt.Errorf("tunnel carrier packet size %d exceeds header capacity", len(payload))
 	}
 	if len(out) < carrierHeaderLen+len(payload) {
@@ -602,10 +689,14 @@ func encodeCarrierInto(out []byte, payload []byte, sequence uint64) error {
 }
 
 func encodeCarrierHeaderInto(out []byte, payloadLen int, sequence uint64) error {
+	return encodeCarrierTypedHeaderInto(out, carrierTypeData, payloadLen, sequence)
+}
+
+func encodeCarrierTypedHeaderInto(out []byte, frameType byte, payloadLen int, sequence uint64) error {
 	if payloadLen > carrierMaxPacket {
 		return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", payloadLen, carrierMaxPacket)
 	}
-	if payloadLen > 0xffff {
+	if payloadLen > carrierMaxUnfragmentedPacket {
 		return fmt.Errorf("tunnel carrier packet size %d exceeds header capacity", payloadLen)
 	}
 	if len(out) < carrierHeaderLen {
@@ -613,9 +704,28 @@ func encodeCarrierHeaderInto(out []byte, payloadLen int, sequence uint64) error 
 	}
 	copy(out[0:4], carrierMagic[:])
 	out[4] = carrierVersion
-	out[5] = carrierTypeData
+	out[5] = frameType
 	binary.BigEndian.PutUint16(out[6:8], uint16(payloadLen))
 	binary.BigEndian.PutUint64(out[8:16], sequence)
+	return nil
+}
+
+func encodeCarrierFragmentHeaderInto(out []byte, fragmentLen int, sequence uint64, totalLen int, offset int) error {
+	if totalLen <= 0 || totalLen > carrierMaxPacket {
+		return fmt.Errorf("tunnel carrier fragment total size %d exceeds max %d", totalLen, carrierMaxPacket)
+	}
+	if offset < 0 || fragmentLen <= 0 || offset+fragmentLen > totalLen {
+		return fmt.Errorf("invalid tunnel carrier fragment offset=%d len=%d total=%d", offset, fragmentLen, totalLen)
+	}
+	payloadLen := carrierFragmentHeaderLen + fragmentLen
+	if len(out) < carrierHeaderLen+carrierFragmentHeaderLen {
+		return fmt.Errorf("tunnel carrier fragment header output buffer size %d is smaller than header %d", len(out), carrierHeaderLen+carrierFragmentHeaderLen)
+	}
+	if err := encodeCarrierTypedHeaderInto(out[:carrierHeaderLen], carrierTypeFragment, payloadLen, sequence); err != nil {
+		return err
+	}
+	binary.BigEndian.PutUint32(out[carrierHeaderLen:carrierHeaderLen+4], uint32(totalLen))
+	binary.BigEndian.PutUint32(out[carrierHeaderLen+4:carrierHeaderLen+8], uint32(offset))
 	return nil
 }
 
@@ -628,18 +738,273 @@ func decodeCarrier(wire []byte) ([]byte, uint64, error) {
 }
 
 func decodeCarrierView(wire []byte) ([]byte, uint64, error) {
+	frame, err := decodeCarrierFrameView(wire)
+	if err != nil {
+		return nil, 0, err
+	}
+	if frame.frameType != carrierTypeData {
+		return nil, 0, fmt.Errorf("tunnel carrier frame is not data")
+	}
+	return frame.payload, frame.sequence, nil
+}
+
+func decodeCarrierFrameView(wire []byte) (carrierReceivedPacket, error) {
 	if len(wire) < carrierHeaderLen {
-		return nil, 0, fmt.Errorf("tunnel carrier frame too short: %d", len(wire))
+		return carrierReceivedPacket{}, fmt.Errorf("tunnel carrier frame too short: %d", len(wire))
 	}
-	if wire[0] != carrierMagic[0] || wire[1] != carrierMagic[1] || wire[2] != carrierMagic[2] || wire[3] != carrierMagic[3] || wire[4] != carrierVersion || wire[5] != carrierTypeData {
-		return nil, 0, fmt.Errorf("invalid tunnel carrier header")
+	if wire[0] != carrierMagic[0] || wire[1] != carrierMagic[1] || wire[2] != carrierMagic[2] || wire[3] != carrierMagic[3] || wire[4] != carrierVersion {
+		return carrierReceivedPacket{}, fmt.Errorf("invalid tunnel carrier header")
 	}
+	frameType := wire[5]
 	payloadLen := int(binary.BigEndian.Uint16(wire[6:8]))
 	if payloadLen != len(wire)-carrierHeaderLen {
-		return nil, 0, fmt.Errorf("tunnel carrier payload length %d != wire payload %d", payloadLen, len(wire)-carrierHeaderLen)
+		return carrierReceivedPacket{}, fmt.Errorf("tunnel carrier payload length %d != wire payload %d", payloadLen, len(wire)-carrierHeaderLen)
 	}
 	sequence := binary.BigEndian.Uint64(wire[8:16])
-	return wire[carrierHeaderLen:], sequence, nil
+	payload := wire[carrierHeaderLen:]
+	switch frameType {
+	case carrierTypeData:
+		return carrierReceivedPacket{
+			payload:   payload,
+			wireLen:   len(wire),
+			sequence:  sequence,
+			frameType: frameType,
+		}, nil
+	case carrierTypeFragment:
+		if payloadLen < carrierFragmentHeaderLen {
+			return carrierReceivedPacket{}, fmt.Errorf("tunnel carrier fragment payload too short: %d", payloadLen)
+		}
+		totalLen := int(binary.BigEndian.Uint32(payload[0:4]))
+		offset := int(binary.BigEndian.Uint32(payload[4:8]))
+		fragment := payload[carrierFragmentHeaderLen:]
+		if totalLen <= 0 || totalLen > carrierMaxPacket {
+			return carrierReceivedPacket{}, fmt.Errorf("tunnel carrier fragment total size %d exceeds max %d", totalLen, carrierMaxPacket)
+		}
+		if len(fragment) == 0 || offset < 0 || offset+len(fragment) > totalLen {
+			return carrierReceivedPacket{}, fmt.Errorf("invalid tunnel carrier fragment offset=%d len=%d total=%d", offset, len(fragment), totalLen)
+		}
+		return carrierReceivedPacket{
+			payload:   fragment,
+			wireLen:   len(wire),
+			sequence:  sequence,
+			frameType: frameType,
+			totalLen:  totalLen,
+			offset:    offset,
+		}, nil
+	default:
+		return carrierReceivedPacket{}, fmt.Errorf("unsupported tunnel carrier frame type %d", frameType)
+	}
+}
+
+func carrierMaxFragmentPayloadForMTU(mtu int) int {
+	if carrierKernelFragmentEnabled() {
+		return carrierMaxUDPPayload - carrierHeaderLen - carrierFragmentHeaderLen
+	}
+	maxPayload := mtu - carrierHeaderLen - carrierFragmentHeaderLen
+	if wireMax := carrierMaxUnfragmentedPacket - carrierFragmentHeaderLen; maxPayload > wireMax {
+		maxPayload = wireMax
+	}
+	return maxPayload
+}
+
+func carrierPacketFitsUnfragmented(packetLen int, mtu int) bool {
+	if carrierKernelFragmentEnabled() {
+		return packetLen <= carrierMaxUnfragmentedPacket
+	}
+	return packetLen <= carrierMaxUnfragmentedPacket && packetLen+carrierHeaderLen <= mtu
+}
+
+func carrierReadWireSizeForMTU(mtu int) int {
+	if carrierKernelFragmentEnabled() {
+		return carrierMaxUDPPayload
+	}
+	return mtu
+}
+
+func carrierMaxUnfragmentedPayloadForMTU(mtu int) int {
+	if carrierKernelFragmentEnabled() {
+		return carrierMaxUnfragmentedPacket
+	}
+	return max(0, mtu-carrierHeaderLen)
+}
+
+func boolUint64(value bool) uint64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func carrierPacketFragmentCount(packetLen int, mtu int) (int, error) {
+	if packetLen <= 0 {
+		return 0, nil
+	}
+	if packetLen > carrierMaxPacket {
+		return 0, fmt.Errorf("tunnel carrier packet size %d exceeds max %d", packetLen, carrierMaxPacket)
+	}
+	maxPayload := carrierMaxFragmentPayloadForMTU(mtu)
+	if maxPayload <= 0 {
+		return 0, fmt.Errorf("tunnel carrier mtu %d cannot carry fragment header", mtu)
+	}
+	return (packetLen + maxPayload - 1) / maxPayload, nil
+}
+
+func buildCarrierFragmentPackets(packetScratch []carrierBatchPacket, headerArena []byte, pkt []byte, sequence uint64, mtu int) ([]carrierBatchPacket, []byte, error) {
+	fragments, err := carrierPacketFragmentCount(len(pkt), mtu)
+	if err != nil {
+		return nil, headerArena, err
+	}
+	if fragments == 0 {
+		return packetScratch[:0], headerArena[:0], nil
+	}
+	if cap(packetScratch) < fragments {
+		packetScratch = make([]carrierBatchPacket, fragments)
+	} else {
+		packetScratch = packetScratch[:fragments]
+		clear(packetScratch)
+	}
+	headerBytes := fragments * (carrierHeaderLen + carrierFragmentHeaderLen)
+	if cap(headerArena) < headerBytes {
+		headerArena = make([]byte, headerBytes)
+	} else {
+		headerArena = headerArena[:headerBytes]
+		clear(headerArena)
+	}
+	maxPayload := carrierMaxFragmentPayloadForMTU(mtu)
+	for i, offset := 0, 0; offset < len(pkt); i, offset = i+1, offset+maxPayload {
+		end := offset + maxPayload
+		if end > len(pkt) {
+			end = len(pkt)
+		}
+		header := headerArena[i*(carrierHeaderLen+carrierFragmentHeaderLen) : (i+1)*(carrierHeaderLen+carrierFragmentHeaderLen)]
+		if err := encodeCarrierFragmentHeaderInto(header, end-offset, sequence, len(pkt), offset); err != nil {
+			clear(packetScratch)
+			return nil, headerArena, err
+		}
+		packetScratch[i] = carrierBatchPacket{header: header, payload: pkt[offset:end]}
+	}
+	return packetScratch, headerArena, nil
+}
+
+func (reassembler *carrierReassembler) accept(packet carrierReceivedPacket) (carrierReceivedPacket, bool, bool) {
+	if packet.frameType != carrierTypeFragment {
+		return packet, true, false
+	}
+	if packet.totalLen <= 0 || packet.totalLen > carrierMaxPacket || packet.offset < 0 || len(packet.payload) == 0 || packet.offset+len(packet.payload) > packet.totalLen {
+		return carrierReceivedPacket{}, false, true
+	}
+	if reassembler.assemblies == nil {
+		reassembler.assemblies = make(map[uint64]*carrierFragmentAssembly)
+	}
+	assembly := reassembler.assemblies[packet.sequence]
+	if assembly != nil && assembly.totalLen != packet.totalLen {
+		delete(reassembler.assemblies, packet.sequence)
+		reassembler.removeOrder(packet.sequence)
+		putCarrierReassemblyBuffer(assembly.data)
+		assembly = nil
+	}
+	if assembly == nil {
+		if len(reassembler.assemblies) >= carrierReassemblyMaxPackets {
+			reassembler.dropOldest()
+		}
+		assembly = &carrierFragmentAssembly{
+			totalLen: packet.totalLen,
+			data:     takeCarrierReassemblyBuffer(packet.totalLen),
+		}
+		reassembler.assemblies[packet.sequence] = assembly
+		reassembler.order = append(reassembler.order, packet.sequence)
+	}
+	added, ok := assembly.add(packet.offset, packet.payload)
+	if !ok {
+		delete(reassembler.assemblies, packet.sequence)
+		reassembler.removeOrder(packet.sequence)
+		putCarrierReassemblyBuffer(assembly.data)
+		return carrierReceivedPacket{}, false, true
+	}
+	assembly.received += added
+	assembly.wireLen += packet.wireLen
+	if assembly.received < assembly.totalLen {
+		return carrierReceivedPacket{}, false, false
+	}
+	delete(reassembler.assemblies, packet.sequence)
+	reassembler.removeOrder(packet.sequence)
+	return carrierReceivedPacket{
+		payload:    assembly.data[:assembly.totalLen],
+		wireLen:    assembly.wireLen,
+		reassembly: assembly.data,
+		sequence:   packet.sequence,
+		frameType:  carrierTypeData,
+	}, true, false
+}
+
+func (assembly *carrierFragmentAssembly) add(start int, payload []byte) (int, bool) {
+	end := start + len(payload)
+	if start < 0 || len(payload) == 0 || end > assembly.totalLen {
+		return 0, false
+	}
+	for _, existing := range assembly.ranges {
+		if end <= existing.start || start >= existing.end {
+			continue
+		}
+		if start >= existing.start && end <= existing.end {
+			return 0, true
+		}
+		return 0, false
+	}
+	copy(assembly.data[start:end], payload)
+	assembly.ranges = append(assembly.ranges, carrierFragmentRange{start: start, end: end})
+	sort.Slice(assembly.ranges, func(i, j int) bool {
+		return assembly.ranges[i].start < assembly.ranges[j].start
+	})
+	merged := assembly.ranges[:0]
+	for _, next := range assembly.ranges {
+		if len(merged) == 0 || next.start > merged[len(merged)-1].end {
+			merged = append(merged, next)
+			continue
+		}
+		if next.end > merged[len(merged)-1].end {
+			merged[len(merged)-1].end = next.end
+		}
+	}
+	assembly.ranges = merged
+	return len(payload), true
+}
+
+func (reassembler *carrierReassembler) dropOldest() {
+	for len(reassembler.order) > 0 {
+		sequence := reassembler.order[0]
+		copy(reassembler.order, reassembler.order[1:])
+		reassembler.order = reassembler.order[:len(reassembler.order)-1]
+		if assembly, ok := reassembler.assemblies[sequence]; ok {
+			delete(reassembler.assemblies, sequence)
+			if assembly != nil {
+				putCarrierReassemblyBuffer(assembly.data)
+			}
+			return
+		}
+	}
+}
+
+func (reassembler *carrierReassembler) releaseAll() {
+	for sequence, assembly := range reassembler.assemblies {
+		delete(reassembler.assemblies, sequence)
+		if assembly != nil {
+			putCarrierReassemblyBuffer(assembly.data)
+		}
+	}
+	clear(reassembler.order)
+	reassembler.order = reassembler.order[:0]
+}
+
+func (reassembler *carrierReassembler) removeOrder(sequence uint64) {
+	for i, value := range reassembler.order {
+		if value != sequence {
+			continue
+		}
+		copy(reassembler.order[i:], reassembler.order[i+1:])
+		reassembler.order = reassembler.order[:len(reassembler.order)-1]
+		return
+	}
 }
 
 func randomTunnelName(prefix string) (string, error) {
@@ -690,11 +1055,14 @@ func dialUDPOnCarrier(ctx context.Context, local netip.Addr, remote netip.Addr, 
 
 func (session *carrier) SendPacket(pkt []byte) error {
 	mtu := effectiveTunnelMTU(session.cfg.MTU)
-	if len(pkt)+carrierHeaderLen > mtu {
+	if len(pkt) > carrierMaxPacket {
 		session.mtuDrops.Add(1)
-		return fmt.Errorf("tunnel carrier packet size %d plus header %d exceeds mtu %d", len(pkt), carrierHeaderLen, mtu)
+		return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(pkt), carrierMaxPacket)
 	}
 	seq := session.sendSeq.Add(1)
+	if !carrierPacketFitsUnfragmented(len(pkt), mtu) {
+		return session.sendFragmentedPacket(pkt, seq, mtu)
+	}
 	needed := carrierHeaderLen + len(pkt)
 	if cap(session.sendWire) < needed {
 		session.sendWire = make([]byte, needed)
@@ -713,6 +1081,34 @@ func (session *carrier) SendPacket(pkt []byte) error {
 	return nil
 }
 
+func (session *carrier) sendFragmentedPacket(pkt []byte, sequence uint64, mtu int) error {
+	fragments, err := carrierPacketFragmentCount(len(pkt), mtu)
+	if err != nil {
+		session.mtuDrops.Add(1)
+		return err
+	}
+	batch, headers, err := buildCarrierFragmentPackets(session.sendBatchPacketScratch, session.sendBatchArena, pkt, sequence, mtu)
+	session.sendBatchPacketScratch = batch
+	session.sendBatchArena = headers
+	if err != nil {
+		session.mtuDrops.Add(1)
+		return err
+	}
+	result, err := sendCarrierPacketBatch(session.conn, batch)
+	clear(batch)
+	session.sendBatchPacketScratch = batch[:0]
+	session.sendBatchArena = retainCarrierSendBatchArena(headers, len(headers))
+	if err != nil {
+		return err
+	}
+	session.bytesSent.Add(result.bytesSent)
+	session.packetsSent.Add(1)
+	session.fragmentedPacketsSent.Add(1)
+	session.fragmentsSent.Add(uint64(fragments))
+	session.recordBatchSend(1, result)
+	return nil
+}
+
 func (session *carrier) SendPackets(pkts [][]byte) error {
 	if len(pkts) == 0 {
 		return nil
@@ -722,13 +1118,18 @@ func (session *carrier) SendPackets(pkts [][]byte) error {
 	}
 	mtu := effectiveTunnelMTU(session.cfg.MTU)
 	for _, pkt := range pkts {
-		if len(pkt)+carrierHeaderLen > mtu {
-			session.mtuDrops.Add(1)
-			return fmt.Errorf("tunnel carrier packet size %d plus header %d exceeds mtu %d", len(pkt), carrierHeaderLen, mtu)
-		}
 		if len(pkt) > carrierMaxPacket {
+			session.mtuDrops.Add(1)
 			return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(pkt), carrierMaxPacket)
 		}
+	}
+	if carrierPacketBatchNeedsFragmentation(pkts, mtu) {
+		for _, pkt := range pkts {
+			if err := session.SendPacket(pkt); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if !carrierSendScatterGatherEnabled() {
 		return session.sendPacketsContiguous(pkts)
@@ -765,6 +1166,15 @@ func (session *carrier) SendPackets(pkts [][]byte) error {
 	session.packetsSent.Add(uint64(len(pkts)))
 	session.recordBatchSend(uint64(len(pkts)), result)
 	return nil
+}
+
+func carrierPacketBatchNeedsFragmentation(pkts [][]byte, mtu int) bool {
+	for _, pkt := range pkts {
+		if !carrierPacketFitsUnfragmented(len(pkt), mtu) {
+			return true
+		}
+	}
+	return false
 }
 
 func (session *carrier) sendPacketsContiguous(pkts [][]byte) error {
@@ -844,17 +1254,80 @@ func (session *carrier) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 	}
 	session.recvMu.Lock()
 	defer session.recvMu.Unlock()
-	packets, result, release, err := recvCarrierBatch(session.conn, max, effectiveTunnelMTU(session.cfg.MTU))
-	if err != nil {
-		return nil, nil, err
+	for {
+		received, result, release, err := recvCarrierBatch(session.conn, max, carrierReadWireSizeForMTU(effectiveTunnelMTU(session.cfg.MTU)))
+		if err != nil {
+			return nil, nil, err
+		}
+		completed := session.completeReceivedPackets(received)
+		session.recordReceivedPackets(uint64(len(completed)), completedWireLen(completed))
+		session.recordBatchReceive(uint64(len(received)), result)
+		if len(completed) == 0 {
+			if release != nil {
+				release()
+			}
+			continue
+		}
+		packets := make([][]byte, 0, len(completed))
+		reassemblies := make([][]byte, 0, len(completed))
+		for _, packet := range completed {
+			packets = append(packets, packet.payload)
+			if packet.reassembly != nil {
+				reassemblies = append(reassemblies, packet.reassembly)
+			}
+		}
+		return packets, releaseCarrierReceivedBatch(release, reassemblies), nil
 	}
-	session.recordReceivedPackets(uint64(len(packets)), result.bytesReceived)
-	session.recordBatchReceive(uint64(len(packets)), result)
-	return packets, release, nil
+}
+
+func releaseCarrierReceivedBatch(release func(), reassemblies [][]byte) func() {
+	if release == nil && len(reassemblies) == 0 {
+		return nil
+	}
+	return func() {
+		if release != nil {
+			release()
+		}
+		for _, buf := range reassemblies {
+			putCarrierReassemblyBuffer(buf)
+		}
+	}
+}
+
+func (session *carrier) completeReceivedPackets(received []carrierReceivedPacket) []carrierReceivedPacket {
+	if len(received) == 0 {
+		return nil
+	}
+	completed := make([]carrierReceivedPacket, 0, len(received))
+	for _, packet := range received {
+		if packet.frameType == carrierTypeFragment {
+			session.fragmentsReceived.Add(1)
+		}
+		complete, ok, dropped := session.reassembler.accept(packet)
+		if dropped {
+			session.fragmentDrops.Add(1)
+		}
+		if !ok {
+			continue
+		}
+		if packet.frameType == carrierTypeFragment {
+			session.reassembledPackets.Add(1)
+		}
+		completed = append(completed, complete)
+	}
+	return completed
+}
+
+func completedWireLen(packets []carrierReceivedPacket) uint64 {
+	var total uint64
+	for _, packet := range packets {
+		total += uint64(packet.wireLen)
+	}
+	return total
 }
 
 func (session *carrier) readCarrierPacket() ([]byte, int, []byte, error) {
-	buf := takeCarrierReadBuffer(effectiveTunnelMTU(session.cfg.MTU))
+	buf := takeCarrierReadBuffer(carrierReadWireSizeForMTU(effectiveTunnelMTU(session.cfg.MTU)))
 	n, err := session.conn.Read(buf)
 	if err != nil {
 		putCarrierReadBuffer(buf)
@@ -885,27 +1358,31 @@ func (session *carrier) Close() error {
 				err = closeErr
 			}
 		}
+		session.recvMu.Lock()
+		session.reassembler.releaseAll()
+		session.recvMu.Unlock()
 	})
 	return err
 }
 
 func (session *carrier) Stats() transport.TransportStats {
 	mtu := effectiveTunnelMTU(session.cfg.MTU)
-	maxPacket := 0
-	if mtu > carrierHeaderLen {
-		maxPacket = mtu - carrierHeaderLen
-	}
 	return transport.TransportStats{
-		BytesSent:       session.bytesSent.Load(),
-		BytesReceived:   session.bytesReceived.Load(),
-		PacketsSent:     session.packetsSent.Load(),
-		PacketsReceived: session.packetsReceived.Load(),
-		NativeBatching:  true,
-		Datagram:        true,
-		MaxPacketSize:   uint64(maxPacket),
+		BytesSent:           session.bytesSent.Load(),
+		BytesReceived:       session.bytesReceived.Load(),
+		PacketsSent:         session.packetsSent.Load(),
+		PacketsReceived:     session.packetsReceived.Load(),
+		NativeBatching:      true,
+		Datagram:            true,
+		FragmentingDatagram: true,
+		MaxPacketSize:       uint64(carrierMaxPacket),
 		Extra: map[string]uint64{
 			"iptunnel_carrier_port":             uint64(session.cfg.CarrierPort),
 			"iptunnel_mtu":                      uint64(mtu),
+			"iptunnel_kernel_fragment":          boolUint64(carrierKernelFragmentEnabled()),
+			"iptunnel_udp_payload_size":         uint64(carrierReadWireSizeForMTU(mtu)),
+			"iptunnel_wire_max_packet_size":     uint64(carrierMaxUnfragmentedPayloadForMTU(mtu)),
+			"iptunnel_fragment_payload_size":    uint64(max(0, carrierMaxFragmentPayloadForMTU(mtu))),
 			"iptunnel_decode_errors":            session.decodeErrors.Load(),
 			"iptunnel_mtu_drops":                session.mtuDrops.Load(),
 			"iptunnel_send_batch_calls":         session.sendBatchCalls.Load(),
@@ -921,6 +1398,11 @@ func (session *carrier) Stats() transport.TransportStats {
 			"iptunnel_recv_batch_mmsg_syscalls": session.recvBatchMMSGSyscalls.Load(),
 			"iptunnel_recv_batch_loop_syscalls": session.recvBatchLoopSyscalls.Load(),
 			"iptunnel_recv_batch_fallbacks":     session.recvBatchFallbacks.Load(),
+			"iptunnel_fragmented_packets_sent":  session.fragmentedPacketsSent.Load(),
+			"iptunnel_fragments_sent":           session.fragmentsSent.Load(),
+			"iptunnel_fragments_received":       session.fragmentsReceived.Load(),
+			"iptunnel_reassembled_packets":      session.reassembledPackets.Load(),
+			"iptunnel_fragment_drops":           session.fragmentDrops.Load(),
 		},
 	}
 }
@@ -944,9 +1426,13 @@ func (session *carrier) recordBatchReceive(packets uint64, result carrierBatchRe
 	session.recvBatchFallbacks.Add(result.fallbacks)
 }
 
-func newPacketListener(ctx context.Context, cfg tunnelConfig, conn *net.UDPConn) *packetListener {
+func newPacketListener(ctx context.Context, cfg tunnelConfig, conns []*net.UDPConn) *packetListener {
+	if len(conns) == 0 {
+		conns = []*net.UDPConn{nil}
+	}
 	listener := &packetListener{
-		conn:     conn,
+		conn:     conns[0],
+		conns:    conns,
 		cfg:      cfg,
 		acceptCh: make(chan transport.Session, 64),
 		done:     make(chan struct{}),
@@ -956,7 +1442,12 @@ func newPacketListener(ctx context.Context, cfg tunnelConfig, conn *net.UDPConn)
 		<-ctx.Done()
 		_ = listener.Close()
 	}()
-	go listener.readLoop()
+	for _, conn := range conns {
+		if conn == nil {
+			continue
+		}
+		go listener.readLoop(conn)
+	}
 	return listener
 }
 
@@ -978,8 +1469,13 @@ func (listener *packetListener) Close() error {
 	var err error
 	listener.closeOnce.Do(func() {
 		close(listener.done)
-		if listener.conn != nil {
-			err = listener.conn.Close()
+		for _, conn := range listener.conns {
+			if conn == nil {
+				continue
+			}
+			if closeErr := conn.Close(); err == nil {
+				err = closeErr
+			}
 		}
 		listener.mu.Lock()
 		for key, session := range listener.sessions {
@@ -991,9 +1487,9 @@ func (listener *packetListener) Close() error {
 	return err
 }
 
-func (listener *packetListener) readLoop() {
+func (listener *packetListener) readLoop(conn *net.UDPConn) {
 	for {
-		packets, _, release, err := recvCarrierBatchFrom(listener.conn, carrierReadBatch(), effectiveTunnelMTU(listener.cfg.MTU))
+		packets, _, release, err := recvCarrierBatchFrom(conn, carrierReadBatch(), carrierReadWireSizeForMTU(effectiveTunnelMTU(listener.cfg.MTU)))
 		if err != nil {
 			if release != nil {
 				release()
@@ -1005,14 +1501,14 @@ func (listener *packetListener) readLoop() {
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
-		listener.dispatchPackets(packets)
+		listener.dispatchPackets(conn, packets)
 		if release != nil {
 			release()
 		}
 	}
 }
 
-func (listener *packetListener) dispatchPackets(packets []carrierReceivedPacket) {
+func (listener *packetListener) dispatchPackets(conn *net.UDPConn, packets []carrierReceivedPacket) {
 	for _, packet := range packets {
 		if packet.addr == nil {
 			putCarrierReadBuffer(packet.buffer)
@@ -1023,7 +1519,7 @@ func (listener *packetListener) dispatchPackets(packets []carrierReceivedPacket)
 		session := listener.sessions[key]
 		if session == nil {
 			session = &carrierServerSession{
-				conn:     listener.conn,
+				conn:     conn,
 				remote:   packet.addr,
 				in:       make(chan carrierReceivedPacket, 256),
 				listener: listener,
@@ -1043,6 +1539,28 @@ func (listener *packetListener) dispatchPackets(packets []carrierReceivedPacket)
 		listener.mu.Unlock()
 		session.enqueue(packet)
 	}
+}
+
+func carrierListenWorkers() int {
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_IPTUNNEL_LISTEN_WORKERS"))
+	if value == "" {
+		workers := runtime.GOMAXPROCS(0)
+		if workers > carrierListenWorkersDefault {
+			workers = carrierListenWorkersDefault
+		}
+		if workers < 1 {
+			workers = 1
+		}
+		return workers
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 1
+	}
+	if parsed > carrierListenWorkersMax {
+		return carrierListenWorkersMax
+	}
+	return parsed
 }
 
 func carrierReadBatch() int {
@@ -1073,8 +1591,19 @@ func carrierUDPSegmentEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_IPTUNNEL_UDP_SEGMENT"))) {
 	case "1", "true", "yes", "on", "enabled":
 		return true
+	case "0", "false", "no", "off", "disabled":
+		return false
 	default:
 		return false
+	}
+}
+
+func carrierKernelFragmentEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT"))) {
+	case "0", "false", "no", "off", "disabled":
+		return false
+	default:
+		return true
 	}
 }
 
@@ -1105,11 +1634,14 @@ func (session *carrierServerSession) SendPacket(pkt []byte) error {
 	if session.listener != nil {
 		mtu = effectiveTunnelMTU(session.listener.cfg.MTU)
 	}
-	if len(pkt)+carrierHeaderLen > mtu {
+	if len(pkt) > carrierMaxPacket {
 		session.mtuDrops.Add(1)
-		return fmt.Errorf("tunnel carrier packet size %d plus header %d exceeds mtu %d", len(pkt), carrierHeaderLen, mtu)
+		return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(pkt), carrierMaxPacket)
 	}
 	seq := session.sendSeq.Add(1)
+	if !carrierPacketFitsUnfragmented(len(pkt), mtu) {
+		return session.sendFragmentedPacket(pkt, seq, mtu)
+	}
 	needed := carrierHeaderLen + len(pkt)
 	if cap(session.sendWire) < needed {
 		session.sendWire = make([]byte, needed)
@@ -1128,6 +1660,34 @@ func (session *carrierServerSession) SendPacket(pkt []byte) error {
 	return nil
 }
 
+func (session *carrierServerSession) sendFragmentedPacket(pkt []byte, sequence uint64, mtu int) error {
+	fragments, err := carrierPacketFragmentCount(len(pkt), mtu)
+	if err != nil {
+		session.mtuDrops.Add(1)
+		return err
+	}
+	batch, headers, err := buildCarrierFragmentPackets(session.sendBatchPacketScratch, session.sendBatchArena, pkt, sequence, mtu)
+	session.sendBatchPacketScratch = batch
+	session.sendBatchArena = headers
+	if err != nil {
+		session.mtuDrops.Add(1)
+		return err
+	}
+	result, err := sendCarrierPacketBatchTo(session.conn, session.remote, batch)
+	clear(batch)
+	session.sendBatchPacketScratch = batch[:0]
+	session.sendBatchArena = retainCarrierSendBatchArena(headers, len(headers))
+	if err != nil {
+		return err
+	}
+	session.bytesSent.Add(result.bytesSent)
+	session.packetsSent.Add(1)
+	session.fragmentedPacketsSent.Add(1)
+	session.fragmentsSent.Add(uint64(fragments))
+	session.recordBatchSend(1, result)
+	return nil
+}
+
 func (session *carrierServerSession) SendPackets(pkts [][]byte) error {
 	if len(pkts) == 0 {
 		return nil
@@ -1140,13 +1700,18 @@ func (session *carrierServerSession) SendPackets(pkts [][]byte) error {
 		mtu = effectiveTunnelMTU(session.listener.cfg.MTU)
 	}
 	for _, pkt := range pkts {
-		if len(pkt)+carrierHeaderLen > mtu {
-			session.mtuDrops.Add(1)
-			return fmt.Errorf("tunnel carrier packet size %d plus header %d exceeds mtu %d", len(pkt), carrierHeaderLen, mtu)
-		}
 		if len(pkt) > carrierMaxPacket {
+			session.mtuDrops.Add(1)
 			return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(pkt), carrierMaxPacket)
 		}
+	}
+	if carrierPacketBatchNeedsFragmentation(pkts, mtu) {
+		for _, pkt := range pkts {
+			if err := session.SendPacket(pkt); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if !carrierSendScatterGatherEnabled() {
 		return session.sendPacketsContiguous(pkts)
@@ -1257,21 +1822,21 @@ func (session *carrierServerSession) RecvPacketsWithRelease(max int) ([][]byte, 
 		}
 		session.bytesReceived.Add(uint64(item.wireLen))
 		session.packetsReceived.Add(1)
-		return [][]byte{item.payload}, func() { putCarrierReadBuffer(item.buffer) }, nil
+		return [][]byte{item.payload}, func() { releaseCarrierReceivedPacket(item) }, nil
 	}
 	first, ok := <-session.in
 	if !ok {
 		return nil, nil, net.ErrClosed
 	}
 	packets := make([][]byte, 0, max)
-	buffers := make([][]byte, 0, max)
+	received := make([]carrierReceivedPacket, 0, max)
 	packets = append(packets, first.payload)
-	buffers = append(buffers, first.buffer)
+	received = append(received, first)
 	var bytes uint64
 	bytes += uint64(first.wireLen)
 	release := func() {
-		for _, buffer := range buffers {
-			putCarrierReadBuffer(buffer)
+		for _, item := range received {
+			releaseCarrierReceivedPacket(item)
 		}
 	}
 	for len(packets) < max {
@@ -1282,7 +1847,7 @@ func (session *carrierServerSession) RecvPacketsWithRelease(max int) ([][]byte, 
 				return packets, release, nil
 			}
 			packets = append(packets, item.payload)
-			buffers = append(buffers, item.buffer)
+			received = append(received, item)
 			bytes += uint64(item.wireLen)
 		default:
 			session.bytesReceived.Add(bytes)
@@ -1315,13 +1880,31 @@ func (session *carrierServerSession) enqueue(pkt carrierReceivedPacket) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if session.closed {
+		releaseCarrierReceivedPacket(pkt)
+		return
+	}
+	if pkt.frameType == carrierTypeFragment {
+		session.fragmentsReceived.Add(1)
+	}
+	complete, ok, dropped := session.reassembler.accept(pkt)
+	if dropped {
+		session.fragmentDrops.Add(1)
+	}
+	if pkt.frameType == carrierTypeFragment {
 		putCarrierReadBuffer(pkt.buffer)
+		if ok {
+			session.reassembledPackets.Add(1)
+		}
+	} else {
+		complete = pkt
+	}
+	if !ok {
 		return
 	}
 	select {
-	case session.in <- pkt:
+	case session.in <- complete:
 	default:
-		putCarrierReadBuffer(pkt.buffer)
+		releaseCarrierReceivedPacket(complete)
 		session.packetsDropped.Add(1)
 	}
 }
@@ -1333,29 +1916,38 @@ func (session *carrierServerSession) closeInput() {
 		return
 	}
 	session.closed = true
+	session.reassembler.releaseAll()
 	close(session.in)
 	for item := range session.in {
-		putCarrierReadBuffer(item.buffer)
+		releaseCarrierReceivedPacket(item)
+	}
+}
+
+func releaseCarrierReceivedPacket(packet carrierReceivedPacket) {
+	putCarrierReadBuffer(packet.buffer)
+	if packet.reassembly != nil {
+		putCarrierReassemblyBuffer(packet.reassembly)
 	}
 }
 
 func (session *carrierServerSession) Stats() transport.TransportStats {
 	mtu := session.listenerMTU()
-	maxPacket := 0
-	if mtu > carrierHeaderLen {
-		maxPacket = mtu - carrierHeaderLen
-	}
 	return transport.TransportStats{
-		BytesSent:       session.bytesSent.Load(),
-		BytesReceived:   session.bytesReceived.Load(),
-		PacketsSent:     session.packetsSent.Load(),
-		PacketsReceived: session.packetsReceived.Load(),
-		NativeBatching:  true,
-		Datagram:        true,
-		MaxPacketSize:   uint64(maxPacket),
+		BytesSent:           session.bytesSent.Load(),
+		BytesReceived:       session.bytesReceived.Load(),
+		PacketsSent:         session.packetsSent.Load(),
+		PacketsReceived:     session.packetsReceived.Load(),
+		NativeBatching:      true,
+		Datagram:            true,
+		FragmentingDatagram: true,
+		MaxPacketSize:       uint64(carrierMaxPacket),
 		Extra: map[string]uint64{
 			"iptunnel_carrier_port":             uint64(session.listenerCarrierPort()),
 			"iptunnel_mtu":                      uint64(mtu),
+			"iptunnel_kernel_fragment":          boolUint64(carrierKernelFragmentEnabled()),
+			"iptunnel_udp_payload_size":         uint64(carrierReadWireSizeForMTU(mtu)),
+			"iptunnel_wire_max_packet_size":     uint64(carrierMaxUnfragmentedPayloadForMTU(mtu)),
+			"iptunnel_fragment_payload_size":    uint64(max(0, carrierMaxFragmentPayloadForMTU(mtu))),
 			"iptunnel_packets_dropped":          session.packetsDropped.Load(),
 			"iptunnel_mtu_drops":                session.mtuDrops.Load(),
 			"iptunnel_send_batch_calls":         session.sendBatchCalls.Load(),
@@ -1368,6 +1960,11 @@ func (session *carrierServerSession) Stats() transport.TransportStats {
 			"iptunnel_recv_batch_calls":         session.recvBatchCalls.Load(),
 			"iptunnel_recv_batch_packets":       session.recvBatchPackets.Load(),
 			"iptunnel_recv_batch_bytes":         session.recvBatchBytes.Load(),
+			"iptunnel_fragmented_packets_sent":  session.fragmentedPacketsSent.Load(),
+			"iptunnel_fragments_sent":           session.fragmentsSent.Load(),
+			"iptunnel_fragments_received":       session.fragmentsReceived.Load(),
+			"iptunnel_reassembled_packets":      session.reassembledPackets.Load(),
+			"iptunnel_fragment_drops":           session.fragmentDrops.Load(),
 		},
 	}
 }

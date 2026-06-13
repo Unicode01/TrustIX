@@ -4901,6 +4901,40 @@ func TestSendDataSessionPacketsUsesNativeBatchingForUserspaceEncryptedDatagramBy
 	}
 }
 
+func TestSendDataSessionPacketsAggregatesUserspaceEncryptedNativeTunnelByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
+	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_BYTES", "4096")
+	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_DELAY", "0")
+	session := &recordingNativeBatchSession{stats: transport.TransportStats{
+		NativeBatching:  true,
+		Encrypted:       true,
+		CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+		Datagram:        true,
+		MaxPacketSize:   4096,
+	}}
+	runtime := &dataSessionRuntime{
+		key:     dataSessionKey{Transport: transport.ProtocolGRE},
+		session: session,
+	}
+	daemon := &Daemon{}
+	packetA := tcpIPv4Packet()
+	packetB := udpIPv4Packet([]byte("gre-userspace-encrypted-default"))
+
+	if err := daemon.sendDataSessionPackets(runtime, session, [][]byte{packetA, packetB}); err != nil {
+		t.Fatalf("send packet batch: %v", err)
+	}
+	if len(session.batches) != 0 {
+		t.Fatalf("native batches = %d, want native tunnel userspace encrypted TIXB aggregation", len(session.batches))
+	}
+	if len(session.sent) != 1 {
+		t.Fatalf("single sends = %d, want one TIXB packet", len(session.sent))
+	}
+	packets, ok := decodeDataSessionBatch(session.sent[0])
+	if !ok || len(packets) != 2 {
+		t.Fatalf("sent packet did not decode as native tunnel encrypted TIXB batch: ok=%v len=%d", ok, len(packets))
+	}
+}
+
 func TestSendDataSessionPacketsAggregatesUserspaceEncryptedExperimentalTCPByDefault(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_BYTES", "4096")
@@ -5653,6 +5687,38 @@ func TestHandleReceivedDataPathPacketsAllowsCoalesceForUserspaceEncryptedReceive
 	packetB := tcpPayloadIPv4PacketWithSeq(7, []byte("world"))
 
 	daemon.handleReceivedDataPathPackets(context.Background(), nil, session, [][]byte{packetA, packetB}, injector, injector, &dataReceiveScratch{})
+
+	if len(injector.batchPackets) != 1 || len(injector.batchPackets[0]) != 1 {
+		t.Fatalf("batch injections = %#v, want one coalesced wire packet", injector.batchPackets)
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.InjectGSOCoalesceBatches != 1 || counters.InjectGSOCoalescePackets != 2 || counters.InjectGSOCoalesceWires != 1 {
+		t.Fatalf("GSO coalesce counters = %+v, want one 2-to-1 coalesce", counters)
+	}
+}
+
+func TestHandleReceivedDataPathPacketsCoalescesUserspaceEncryptedNativeTunnelByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE", "1")
+	daemon := &Daemon{
+		desired: config.Desired{
+			LAN: config.LANConfig{
+				Advertise: []core.Prefix{"10.0.1.0/24"},
+			},
+		},
+	}
+	runtime := &dataSessionRuntime{
+		key: dataSessionKey{Transport: transport.ProtocolGRE},
+	}
+	injector := &recordingInjector{}
+	session := &recordingSession{stats: transport.TransportStats{
+		Encrypted:        true,
+		ReceiveEncrypted: true,
+		CryptoPlacement:  "userspace",
+	}}
+	packetA := tcpPayloadIPv4PacketWithSeq(1, []byte("hello "))
+	packetB := tcpPayloadIPv4PacketWithSeq(7, []byte("world"))
+
+	daemon.handleReceivedDataPathPackets(context.Background(), runtime, session, [][]byte{packetA, packetB}, injector, injector, &dataReceiveScratch{})
 
 	if len(injector.batchPackets) != 1 || len(injector.batchPackets[0]) != 1 {
 		t.Fatalf("batch injections = %#v, want one coalesced wire packet", injector.batchPackets)

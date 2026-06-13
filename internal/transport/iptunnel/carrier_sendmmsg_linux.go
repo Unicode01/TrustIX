@@ -170,6 +170,16 @@ func sendCarrierMmsgChunk(raw syscall.RawConn, wires [][]byte, remote *unix.RawS
 }
 
 func sendCarrierPacketBatchMmsg(raw syscall.RawConn, packets []carrierBatchPacket, remote *unix.RawSockaddrInet4) (carrierBatchSendResult, error) {
+	if carrierUDPSegmentEnabled() && !carrierUDPSegmentDisabled.Load() {
+		result, ok, err := sendCarrierPacketBatchUDPSegment(raw, packets, remote)
+		if ok || err != nil {
+			return result, err
+		}
+	}
+	return sendCarrierPacketBatchMmsgNoGSO(raw, packets, remote)
+}
+
+func sendCarrierPacketBatchMmsgNoGSO(raw syscall.RawConn, packets []carrierBatchPacket, remote *unix.RawSockaddrInet4) (carrierBatchSendResult, error) {
 	var result carrierBatchSendResult
 	for offset := 0; offset < len(packets); {
 		end := offset + carrierSendMmsgMaxBatch
@@ -338,6 +348,58 @@ func sendCarrierBatchUDPSegment(raw syscall.RawConn, wires [][]byte, remote *uni
 	return result, true, nil
 }
 
+func sendCarrierPacketBatchUDPSegment(raw syscall.RawConn, packets []carrierBatchPacket, remote *unix.RawSockaddrInet4) (carrierBatchSendResult, bool, error) {
+	var result carrierBatchSendResult
+	for offset := 0; offset < len(packets); {
+		segLen := len(packets[offset].header) + len(packets[offset].payload)
+		if segLen <= 0 {
+			result.fallbacks++
+			loopResult, err := sendCarrierPacketBatchMmsgNoGSO(raw, packets[offset:offset+1], remote)
+			result.add(loopResult)
+			if err != nil {
+				return result, true, err
+			}
+			offset++
+			continue
+		}
+		end := offset + 1
+		total := segLen
+		for end < len(packets) && end-offset < carrierUDPSegmentMaxBatch {
+			nextLen := len(packets[end].header) + len(packets[end].payload)
+			if nextLen != segLen || total+nextLen > 65535 {
+				break
+			}
+			total += nextLen
+			end++
+		}
+		if end-offset < 2 {
+			result.fallbacks++
+			loopResult, err := sendCarrierPacketBatchMmsgNoGSO(raw, packets[offset:end], remote)
+			result.add(loopResult)
+			if err != nil {
+				return result, true, err
+			}
+			offset = end
+			continue
+		}
+		n, err := sendCarrierUDPSegmentPacketChunk(raw, packets[offset:end], segLen, total, remote)
+		result.gsoSyscalls++
+		if err != nil {
+			if carrierUDPSegmentPermanentError(err) {
+				carrierUDPSegmentDisabled.Store(true)
+				result.fallbacks++
+				loopResult, loopErr := sendCarrierPacketBatchMmsgNoGSO(raw, packets[offset:], remote)
+				result.add(loopResult)
+				return result, true, loopErr
+			}
+			return result, true, err
+		}
+		result.bytesSent += uint64(n)
+		offset = end
+	}
+	return result, true, nil
+}
+
 func (result *carrierBatchSendResult) add(other carrierBatchSendResult) {
 	result.bytesSent += other.bytesSent
 	result.mmsgSyscalls += other.mmsgSyscalls
@@ -368,6 +430,46 @@ func sendCarrierUDPSegmentChunk(raw syscall.RawConn, wires [][]byte, segLen int,
 		return !errors.Is(opErr, unix.EAGAIN) && !errors.Is(opErr, unix.EWOULDBLOCK)
 	})
 	runtime.KeepAlive(wires)
+	runtime.KeepAlive(iovs)
+	runtime.KeepAlive(oob)
+	if err != nil {
+		return sent, err
+	}
+	if opErr == nil && sent != total {
+		return sent, unix.EIO
+	}
+	return sent, opErr
+}
+
+func sendCarrierUDPSegmentPacketChunk(raw syscall.RawConn, packets []carrierBatchPacket, segLen int, total int, remote *unix.RawSockaddrInet4) (int, error) {
+	if len(packets) == 0 {
+		return 0, nil
+	}
+	scratch := takeCarrierSendMmsgScratchIov(1, len(packets)*2)
+	defer putCarrierSendMmsgScratch(scratch)
+	iovs := scratch.iovs[:len(packets)*2]
+	for i, packet := range packets {
+		headerIov := &iovs[i*2]
+		payloadIov := &iovs[i*2+1]
+		*headerIov = unix.Iovec{}
+		*payloadIov = unix.Iovec{}
+		if len(packet.header) > 0 {
+			headerIov.Base = &packet.header[0]
+			headerIov.SetLen(len(packet.header))
+		}
+		if len(packet.payload) > 0 {
+			payloadIov.Base = &packet.payload[0]
+			payloadIov.SetLen(len(packet.payload))
+		}
+	}
+	oob := carrierUDPSegmentOOB(carrierSendMmsgScratchOOB(scratch, unix.CmsgSpace(2)), uint16(segLen))
+	var sent int
+	var opErr error
+	err := raw.Write(func(fd uintptr) bool {
+		sent, opErr = sendCarrierUDPSegmentRaw(int(fd), iovs, oob, remote)
+		return !errors.Is(opErr, unix.EAGAIN) && !errors.Is(opErr, unix.EWOULDBLOCK)
+	})
+	runtime.KeepAlive(packets)
 	runtime.KeepAlive(iovs)
 	runtime.KeepAlive(oob)
 	if err != nil {

@@ -2369,6 +2369,57 @@ func (daemon *Daemon) localDataEndpointConfig(listenerEndpoint transport.Endpoin
 	return config.EndpointConfig{}, false
 }
 
+type captureBatchReleaser func([]dataplane.CaptureEvent)
+
+type captureBatchWork struct {
+	events  []dataplane.CaptureEvent
+	release func()
+}
+
+type captureBatchDispatchWork struct {
+	index int
+	work  captureBatchWork
+}
+
+func captureBatchReleaserForSubscription(subscription dataplane.CaptureBatchSubscription) captureBatchReleaser {
+	releaser, ok := subscription.(dataplane.CaptureBatchReleaseSubscription)
+	if !ok {
+		return nil
+	}
+	return releaser.ReleaseBatch
+}
+
+func captureBatchReleaseForBatch(releaser captureBatchReleaser, batch []dataplane.CaptureEvent) func() {
+	if releaser == nil || len(batch) == 0 {
+		return nil
+	}
+	return func() {
+		releaser(batch)
+	}
+}
+
+func captureBatchRefCountRelease(release func(), recipients int) func() {
+	if release == nil {
+		return nil
+	}
+	if recipients <= 1 {
+		return release
+	}
+	var remaining atomic.Int32
+	remaining.Store(int32(recipients))
+	return func() {
+		if remaining.Add(-1) == 0 {
+			release()
+		}
+	}
+}
+
+func (work captureBatchWork) finish() {
+	if work.release != nil {
+		work.release()
+	}
+}
+
 func (daemon *Daemon) forwardCapturedPackets(ctx context.Context, subscription dataplane.CaptureSubscription) {
 	defer func() {
 		_ = subscription.Close()
@@ -2403,26 +2454,27 @@ func (daemon *Daemon) forwardCapturedPackets(ctx context.Context, subscription d
 
 func (daemon *Daemon) forwardCapturedPacketBatches(ctx context.Context, subscription dataplane.CaptureBatchSubscription) {
 	workers := captureForwarderWorkerCount()
+	releaser := captureBatchReleaserForSubscription(subscription)
 	if workers > 1 {
 		var wg sync.WaitGroup
 		workerBuffer := captureForwarderWorkerBufferSize(workers)
-		queues := make([]chan []dataplane.CaptureEvent, workers)
+		queues := make([]chan captureBatchWork, workers)
 		wg.Add(workers)
 		for i := 0; i < workers; i++ {
-			queues[i] = make(chan []dataplane.CaptureEvent, workerBuffer)
-			go func(events <-chan []dataplane.CaptureEvent) {
+			queues[i] = make(chan captureBatchWork, workerBuffer)
+			go func(events <-chan captureBatchWork) {
 				defer wg.Done()
-				daemon.forwardCapturedPacketBatchLoop(ctx, events)
+				daemon.forwardCapturedPacketBatchWorkLoop(ctx, events)
 			}(queues[i])
 		}
-		daemon.dispatchCapturedPacketBatchGroups(ctx, subscription.BatchEvents(), queues)
+		daemon.dispatchCapturedPacketBatchGroups(ctx, subscription.BatchEvents(), queues, releaser)
 		for _, queue := range queues {
 			close(queue)
 		}
 		wg.Wait()
 		return
 	}
-	daemon.forwardCapturedPacketBatchLoop(ctx, subscription.BatchEvents())
+	daemon.forwardCapturedPacketBatchLoop(ctx, subscription.BatchEvents(), releaser)
 }
 
 func captureForwarderWorkerBufferSize(workers int) int {
@@ -2490,13 +2542,14 @@ func (daemon *Daemon) dispatchCapturedPacketBatches(ctx context.Context, batches
 	}
 }
 
-func (daemon *Daemon) dispatchCapturedPacketBatchGroups(ctx context.Context, batches <-chan []dataplane.CaptureEvent, queues []chan []dataplane.CaptureEvent) {
+func (daemon *Daemon) dispatchCapturedPacketBatchGroups(ctx context.Context, batches <-chan []dataplane.CaptureEvent, queues []chan captureBatchWork, releaser captureBatchReleaser) {
 	if len(queues) == 0 {
 		return
 	}
 	workers := len(queues)
 	var fallback uint64
 	grouped := make([][]dataplane.CaptureEvent, workers)
+	works := make([]captureBatchDispatchWork, 0, workers)
 	for {
 		select {
 		case <-ctx.Done():
@@ -2505,14 +2558,20 @@ func (daemon *Daemon) dispatchCapturedPacketBatchGroups(ctx context.Context, bat
 			if !ok {
 				return
 			}
+			release := captureBatchReleaseForBatch(releaser, batch)
 			if len(batch) == 0 {
+				if release != nil {
+					release()
+				}
 				continue
 			}
 			if workers == 1 {
+				work := captureBatchWork{events: batch, release: release}
 				select {
 				case <-ctx.Done():
+					work.finish()
 					return
-				case queues[0] <- batch:
+				case queues[0] <- work:
 				}
 				continue
 			}
@@ -2535,16 +2594,19 @@ func (daemon *Daemon) dispatchCapturedPacketBatchGroups(ctx context.Context, bat
 			}
 			if singleWorker {
 				fallback = nextFallback
+				work := captureBatchWork{events: batch, release: release}
 				select {
 				case <-ctx.Done():
+					work.finish()
 					return
-				case queues[firstIndex] <- batch:
+				case queues[firstIndex] <- work:
 				}
 				continue
 			}
 			for index := range grouped {
 				grouped[index] = nil
 			}
+			works = works[:0]
 			nextFallback = fallback
 			for _, event := range batch {
 				index, hasFlow := captureForwarderWorkerIndexWithFlow(event, workers, nextFallback)
@@ -2557,10 +2619,21 @@ func (daemon *Daemon) dispatchCapturedPacketBatchGroups(ctx context.Context, bat
 				if len(grouped[index]) == 0 {
 					continue
 				}
+				works = append(works, captureBatchDispatchWork{index: index, work: captureBatchWork{events: grouped[index]}})
+			}
+			done := captureBatchRefCountRelease(release, len(works))
+			for i := range works {
+				works[i].work.release = done
+			}
+			for i, item := range works {
 				select {
 				case <-ctx.Done():
+					item.work.finish()
+					for j := i + 1; j < len(works); j++ {
+						works[j].work.finish()
+					}
 					return
-				case queues[index] <- grouped[index]:
+				case queues[item.index] <- item.work:
 				}
 			}
 			fallback = nextFallback
@@ -2618,11 +2691,11 @@ func captureEventWorkerFlowKey(event dataplane.CaptureEvent) (routing.FlowKey, b
 	}, true
 }
 
-func (daemon *Daemon) forwardCapturedPacketBatchLoop(ctx context.Context, batchCh <-chan []dataplane.CaptureEvent) {
+func (daemon *Daemon) forwardCapturedPacketBatchLoop(ctx context.Context, batchCh <-chan []dataplane.CaptureEvent, releaser captureBatchReleaser) {
 	batchSize := captureForwarderBatchSize()
 	batchDelay := captureForwarderBatchDelay()
 	if batchDelay > 0 && batchSize > 1 {
-		daemon.forwardCapturedPacketBatchCoalescedLoop(ctx, batchCh, batchSize, batchDelay)
+		daemon.forwardCapturedPacketBatchCoalescedLoop(ctx, batchCh, releaser, batchSize, batchDelay)
 		return
 	}
 	var scratch captureForwardScratch
@@ -2634,15 +2707,45 @@ func (daemon *Daemon) forwardCapturedPacketBatchLoop(ctx context.Context, batchC
 			if !ok {
 				return
 			}
-			if !daemon.forwardCaptureEventsBatch(ctx, events, &scratch) {
+			work := captureBatchWork{events: events, release: captureBatchReleaseForBatch(releaser, events)}
+			if !daemon.forwardCaptureBatchWork(ctx, work, &scratch) {
 				return
 			}
 		}
 	}
 }
 
-func (daemon *Daemon) forwardCapturedPacketBatchCoalescedLoop(ctx context.Context, batchCh <-chan []dataplane.CaptureEvent, batchSize int, batchDelay time.Duration) {
+func (daemon *Daemon) forwardCapturedPacketBatchWorkLoop(ctx context.Context, workCh <-chan captureBatchWork) {
+	batchSize := captureForwarderBatchSize()
+	batchDelay := captureForwarderBatchDelay()
+	if batchDelay > 0 && batchSize > 1 {
+		daemon.forwardCapturedPacketBatchWorkCoalescedLoop(ctx, workCh, batchSize, batchDelay)
+		return
+	}
+	var scratch captureForwardScratch
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case work, ok := <-workCh:
+			if !ok {
+				return
+			}
+			if !daemon.forwardCaptureBatchWork(ctx, work, &scratch) {
+				return
+			}
+		}
+	}
+}
+
+func (daemon *Daemon) forwardCaptureBatchWork(ctx context.Context, work captureBatchWork, scratch *captureForwardScratch) bool {
+	defer work.finish()
+	return daemon.forwardCaptureEventsBatch(ctx, work.events, scratch)
+}
+
+func (daemon *Daemon) forwardCapturedPacketBatchCoalescedLoop(ctx context.Context, batchCh <-chan []dataplane.CaptureEvent, releaser captureBatchReleaser, batchSize int, batchDelay time.Duration) {
 	events := make([]dataplane.CaptureEvent, 0, batchSize)
+	releases := make([]func(), 0, 4)
 	var scratch captureForwardScratch
 	var timer *time.Timer
 	var timerC <-chan time.Time
@@ -2669,17 +2772,24 @@ func (daemon *Daemon) forwardCapturedPacketBatchCoalescedLoop(ctx context.Contex
 		}
 		timerC = timer.C
 	}
+	releasePending := func() {
+		for _, release := range releases {
+			if release != nil {
+				release()
+			}
+		}
+		releases = releases[:0]
+	}
 	flush := func() bool {
 		if len(events) == 0 {
 			return true
 		}
 		stopTimer()
-		if !daemon.forwardCaptureEventsBatch(ctx, events, &scratch) {
-			return false
-		}
+		ok := daemon.forwardCaptureEventsBatch(ctx, events, &scratch)
 		clear(events)
 		events = events[:0]
-		return true
+		releasePending()
+		return ok
 	}
 	defer func() {
 		stopTimer()
@@ -2697,16 +2807,118 @@ func (daemon *Daemon) forwardCapturedPacketBatchCoalescedLoop(ctx context.Contex
 				flush()
 				return
 			}
+			release := captureBatchReleaseForBatch(releaser, batch)
 			if len(batch) == 0 {
+				if release != nil {
+					release()
+				}
 				continue
 			}
 			if len(events) == 0 && len(batch) >= batchSize {
-				if !daemon.forwardCaptureEventsBatch(ctx, batch, &scratch) {
+				work := captureBatchWork{events: batch, release: release}
+				if !daemon.forwardCaptureBatchWork(ctx, work, &scratch) {
 					return
 				}
 				continue
 			}
 			events = append(events, batch...)
+			if release != nil {
+				releases = append(releases, release)
+			}
+			if len(events) >= batchSize {
+				if !flush() {
+					return
+				}
+				continue
+			}
+			startTimer()
+		case <-timerC:
+			timerC = nil
+			if !flush() {
+				return
+			}
+		}
+	}
+}
+
+func (daemon *Daemon) forwardCapturedPacketBatchWorkCoalescedLoop(ctx context.Context, workCh <-chan captureBatchWork, batchSize int, batchDelay time.Duration) {
+	events := make([]dataplane.CaptureEvent, 0, batchSize)
+	releases := make([]func(), 0, 4)
+	var scratch captureForwardScratch
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	stopTimer := func() {
+		if timer == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timerC = nil
+	}
+	startTimer := func() {
+		if batchDelay <= 0 || len(events) == 0 || timerC != nil {
+			return
+		}
+		if timer == nil {
+			timer = time.NewTimer(batchDelay)
+		} else {
+			timer.Reset(batchDelay)
+		}
+		timerC = timer.C
+	}
+	releasePending := func() {
+		for _, release := range releases {
+			if release != nil {
+				release()
+			}
+		}
+		releases = releases[:0]
+	}
+	flush := func() bool {
+		if len(events) == 0 {
+			return true
+		}
+		stopTimer()
+		ok := daemon.forwardCaptureEventsBatch(ctx, events, &scratch)
+		clear(events)
+		events = events[:0]
+		releasePending()
+		return ok
+	}
+	defer func() {
+		stopTimer()
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			flush()
+			return
+		case work, ok := <-workCh:
+			if !ok {
+				flush()
+				return
+			}
+			if len(work.events) == 0 {
+				work.finish()
+				continue
+			}
+			if len(events) == 0 && len(work.events) >= batchSize {
+				if !daemon.forwardCaptureBatchWork(ctx, work, &scratch) {
+					return
+				}
+				continue
+			}
+			events = append(events, work.events...)
+			if work.release != nil {
+				releases = append(releases, work.release)
+			}
 			if len(events) >= batchSize {
 				if !flush() {
 					return
@@ -4460,12 +4672,23 @@ func dataSessionBatchAggregationPreferred(runtime *dataSessionRuntime, stats tra
 		if enabled, explicit := dataSessionEncryptedBatchAggregationPreference(); explicit {
 			return enabled
 		}
-		return dataSessionExperimentalTCPBatchAggregationDefault(runtime)
+		return dataSessionEncryptedBatchAggregationDefault(runtime)
 	}
 	if enabled, explicit := dataSessionPlaintextBatchAggregationPreference(); explicit {
 		return enabled
 	}
 	return dataSessionExperimentalTCPBatchAggregationDefault(runtime)
+}
+
+func dataSessionEncryptedBatchAggregationDefault(runtime *dataSessionRuntime) bool {
+	switch dataSessionRuntimeTransport(runtime) {
+	case transport.ProtocolExperimentalTCP:
+		return dataSessionExperimentalTCPBatchAggregationDefault(runtime)
+	case transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
+		return true
+	default:
+		return false
+	}
 }
 
 func dataSessionExperimentalTCPBatchAggregationDefault(runtime *dataSessionRuntime) bool {

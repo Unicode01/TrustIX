@@ -299,6 +299,11 @@ type CaptureBatchSubscription interface {
 	BatchEvents() <-chan []CaptureEvent
 }
 
+type CaptureBatchReleaseSubscription interface {
+	CaptureBatchSubscription
+	ReleaseBatch([]CaptureEvent)
+}
+
 type CaptureSubscriber interface {
 	SubscribeCapture(ctx context.Context, buffer int) (CaptureSubscription, error)
 }

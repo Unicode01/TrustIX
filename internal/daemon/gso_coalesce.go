@@ -155,7 +155,7 @@ func dataSessionTXGSOCoalesceMaxPackets() int {
 func dataSessionRXGSOCoalesceDisabledForSession(runtime *dataSessionRuntime, session transport.Session) bool {
 	stats := dataSessionTransportStats(runtime, session)
 	if stats.Encrypted && stats.CryptoPlacement == "userspace" && stats.ReceiveEncrypted {
-		return !dataSessionRXGSOCoalesceUserspaceEncryptedEnabled()
+		return !dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(runtime)
 	}
 	if !stats.Encrypted {
 		return !dataSessionRXGSOCoalescePlaintextEnabled()
@@ -164,11 +164,30 @@ func dataSessionRXGSOCoalesceDisabledForSession(runtime *dataSessionRuntime, ses
 }
 
 func dataSessionRXGSOCoalesceUserspaceEncryptedEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED"))) {
-	case "1", "true", "yes", "on", "enabled":
+	enabled, _ := dataSessionRXGSOCoalesceUserspaceEncryptedPreference()
+	return enabled
+}
+
+func dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(runtime *dataSessionRuntime) bool {
+	if enabled, explicit := dataSessionRXGSOCoalesceUserspaceEncryptedPreference(); explicit {
+		return enabled
+	}
+	switch dataSessionRuntimeTransport(runtime) {
+	case transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
 		return true
 	default:
 		return false
+	}
+}
+
+func dataSessionRXGSOCoalesceUserspaceEncryptedPreference() (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED"))) {
+	case "1", "true", "yes", "on", "enabled":
+		return true, true
+	case "0", "false", "no", "off", "disabled":
+		return false, true
+	default:
+		return false, false
 	}
 }
 

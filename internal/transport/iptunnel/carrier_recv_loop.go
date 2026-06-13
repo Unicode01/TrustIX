@@ -5,12 +5,12 @@ import (
 	"time"
 )
 
-func readCarrierBatchLoop(conn *net.UDPConn, max int, packetSize int) ([][]byte, carrierBatchReceiveResult, func(), error) {
+func readCarrierBatchLoop(conn *net.UDPConn, max int, packetSize int) ([]carrierReceivedPacket, carrierBatchReceiveResult, func(), error) {
 	if max <= 0 {
 		max = 1
 	}
 	packetSize = carrierReadBufferSize(packetSize)
-	packets := make([][]byte, 0, max)
+	packets := make([]carrierReceivedPacket, 0, max)
 	buffers := make([][]byte, 0, max)
 	release := func() {
 		for _, buffer := range buffers {
@@ -25,11 +25,13 @@ func readCarrierBatchLoop(conn *net.UDPConn, max int, packetSize int) ([][]byte,
 			putCarrierReadBuffer(buf)
 			return nil, result, nil, err
 		}
-		packet, _, err := decodeCarrierView(buf[:n])
+		packet, err := decodeCarrierFrameView(buf[:n])
 		if err != nil {
 			putCarrierReadBuffer(buf)
 			continue
 		}
+		packet.buffer = buf
+		packet.wireLen = n
 		packets = append(packets, packet)
 		buffers = append(buffers, buf)
 		result.bytesReceived += uint64(n)
@@ -48,12 +50,14 @@ func readCarrierBatchLoop(conn *net.UDPConn, max int, packetSize int) ([][]byte,
 					_ = conn.SetReadDeadline(time.Time{})
 					return packets, result, release, nil
 				}
-				packet, _, err := decodeCarrierView(buf[:n])
+				packet, err := decodeCarrierFrameView(buf[:n])
 				if err != nil {
 					putCarrierReadBuffer(buf)
 					_ = conn.SetReadDeadline(time.Time{})
 					return packets, result, release, nil
 				}
+				packet.buffer = buf
+				packet.wireLen = n
 				packets = append(packets, packet)
 				buffers = append(buffers, buf)
 				result.bytesReceived += uint64(n)
@@ -79,12 +83,15 @@ func readCarrierBatchFromLoop(conn *net.UDPConn, max int, packetSize int) ([]car
 			putCarrierReadBuffer(buf)
 			return nil, result, nil, err
 		}
-		packet, _, err := decodeCarrierView(buf[:n])
+		packet, err := decodeCarrierFrameView(buf[:n])
 		if err != nil {
 			putCarrierReadBuffer(buf)
 			continue
 		}
-		packets = append(packets, carrierReceivedPacket{payload: packet, wireLen: n, buffer: buf, addr: addr})
+		packet.wireLen = n
+		packet.buffer = buf
+		packet.addr = addr
+		packets = append(packets, packet)
 		result.bytesReceived += uint64(n)
 		result.loopSyscalls++
 	}
@@ -101,12 +108,15 @@ func readCarrierBatchFromLoop(conn *net.UDPConn, max int, packetSize int) ([]car
 					_ = conn.SetReadDeadline(time.Time{})
 					return packets, result, nil, nil
 				}
-				packet, _, err := decodeCarrierView(buf[:n])
+				packet, err := decodeCarrierFrameView(buf[:n])
 				if err != nil {
 					putCarrierReadBuffer(buf)
 					continue
 				}
-				packets = append(packets, carrierReceivedPacket{payload: packet, wireLen: n, buffer: buf, addr: addr})
+				packet.wireLen = n
+				packet.buffer = buf
+				packet.addr = addr
+				packets = append(packets, packet)
 				result.bytesReceived += uint64(n)
 				result.loopSyscalls++
 			}
