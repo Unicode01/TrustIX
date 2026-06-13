@@ -373,11 +373,44 @@ func (manager *Manager) kernelCryptoProductionReadyLocked() bool {
 }
 
 func (manager *Manager) kernelCryptoTCDirectReadyLocked() bool {
-	return (manager.kernelCryptoContextProviderReadyLocked() || manager.kernelCryptoDirectSlotProviderReadyLocked()) &&
+	return kernelCryptoTCDirectProviderReady(manager.kernelCryptoContextProviderReadyLocked(), manager.kernelCryptoDirectSlotProviderReadyLocked(), kernelCryptoDirectKfuncFastpathReady()) &&
 		manager.kernelCryptoProvider.flowIndexMap != nil &&
 		manager.kernelCryptoProvider.contextSlots != nil &&
 		manager.kernelCryptoProvider.directSlotMap != nil &&
 		manager.kernelCryptoFlowMap != nil
+}
+
+func kernelCryptoTCDirectProviderReady(contextProviderReady bool, directSlotProviderReady bool, directKfuncFastpathReady bool) bool {
+	return contextProviderReady || (directSlotProviderReady && directKfuncFastpathReady)
+}
+
+func kernelCryptoDirectKfuncFastpathReady() bool {
+	value, ok := readTrustIXAEADModuleParamUint64("kfunc_simd_fastpath")
+	return ok && value != 0
+}
+
+func kernelCryptoDirectKfuncFastpathUnavailableReason() string {
+	value, ok := readTrustIXAEADModuleParamUint64("kfunc_simd_fastpath")
+	if !ok {
+		return "TrustIX AEAD direct kfunc fastpath parameter kfunc_simd_fastpath is unavailable"
+	}
+	if value == 0 {
+		return "TrustIX AEAD direct kfunc fastpath kfunc_simd_fastpath is disabled"
+	}
+	return ""
+}
+
+func (manager *Manager) kernelCryptoTCDirectUnavailableReasonLocked() string {
+	reason := manager.kernelCryptoUnavailableReasonLocked()
+	if manager.kernelCryptoDirectSlotProviderReadyLocked() {
+		if directReason := kernelCryptoDirectKfuncFastpathUnavailableReason(); directReason != "" {
+			if reason == "" {
+				return directReason
+			}
+			return reason + "; " + directReason
+		}
+	}
+	return reason
 }
 
 func kernelCryptoDirectSlotModuleReady() bool {
@@ -415,7 +448,7 @@ func (manager *Manager) kernelUDPKernelCryptoReadyLocked() bool {
 func (manager *Manager) kernelUDPKernelCryptoUnavailableReasonLocked() string {
 	reasons := make([]string, 0, 2)
 	if !manager.kernelCryptoTCDirectReadyLocked() {
-		reasons = append(reasons, "TC direct BPF crypto provider: "+manager.kernelCryptoUnavailableReasonLocked())
+		reasons = append(reasons, "TC direct BPF crypto provider: "+manager.kernelCryptoTCDirectUnavailableReasonLocked())
 	}
 	if reason := manager.kernelUDPDeviceCryptoReasonLocked(); reason != "" {
 		reasons = append(reasons, "AEAD device: "+reason)
@@ -453,7 +486,7 @@ func (manager *Manager) kernelUDPCryptoFallbackStatusLocked() dataplane.CryptoFa
 			Ready:     tcReady,
 			Placement: "kernel",
 			Layer:     dataplane.CryptoFallbackLayerTC,
-			Reason:    readinessReason(tcReady, manager.kernelCryptoUnavailableReasonLocked()),
+			Reason:    readinessReason(tcReady, manager.kernelCryptoTCDirectUnavailableReasonLocked()),
 		},
 		{
 			Name:      dataplane.CryptoFallbackKOAEADDevice,

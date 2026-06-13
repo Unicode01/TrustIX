@@ -12557,10 +12557,10 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		manager.warnings = append(manager.warnings, kfuncFallbackWarning)
 	}
 	var kernelUDPTXSecureDirect *kernelUDPTXSecureDirectObject
-	if kernelUDPTXSecureDirectRequestedForSpec(spec) && manager.kernelCryptoProvider == nil {
-		manager.warnings = append(manager.warnings, "kernel_udp secure TC TX direct unavailable: TrustIX AEAD direct-slot provider is not loaded; trustix_crypto must expose kfunc_tc and /dev/trustix_crypto")
+	if kernelUDPTXSecureDirectRequestedForSpec(spec) && !manager.kernelCryptoTCDirectReadyLocked() {
+		manager.warnings = append(manager.warnings, "kernel_udp secure TC TX direct unavailable: "+manager.kernelCryptoTCDirectUnavailableReasonLocked())
 	}
-	if kernelUDPTXSecureDirectRequestedForSpec(spec) && manager.kernelCryptoProvider != nil {
+	if kernelUDPTXSecureDirectRequestedForSpec(spec) && manager.kernelCryptoTCDirectReadyLocked() {
 		kernelUDPTXSecureDirect, err = loadKernelUDPTXSecureDirectObject(manager.kernelCryptoProvider, statsMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, kernelUDPTXSecureDirectProgramOptionsForSpec(spec))
 		if err != nil {
 			_ = kernelUDPTXFlowMap.Close()
@@ -12913,6 +12913,9 @@ func (manager *Manager) attachKernelUDPRXSecureDirectLocked(underlayLink netlink
 	if !manager.kernelUDPRXSecureDirectRequestedLocked() {
 		return nil
 	}
+	if !manager.kernelCryptoTCDirectReadyLocked() {
+		return nil
+	}
 	if manager.kernelCryptoProvider == nil || manager.statsMap == nil || manager.kernelTransportPortMap == nil ||
 		underlayLink == nil || neighMap == nil {
 		return nil
@@ -12944,6 +12947,9 @@ func (manager *Manager) attachKernelUDPRXSecureDirectLocked(underlayLink netlink
 func (manager *Manager) ensureKernelUDPRXSecureDirectLocked() error {
 	if !manager.kernelUDPRXSecureDirectRequestedLocked() || manager.kernelUDPRXSecureDirectAttached ||
 		manager.kernelUDPRXSecureDirect != nil || manager.kernelUDPRXSecureDirectFilter != nil {
+		return nil
+	}
+	if !manager.kernelCryptoTCDirectReadyLocked() {
 		return nil
 	}
 	if manager.kernelCryptoProvider == nil || manager.statsMap == nil || manager.kernelTransportPortMap == nil ||
