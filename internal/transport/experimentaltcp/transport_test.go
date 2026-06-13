@@ -2240,6 +2240,20 @@ func TestExperimentalTCPDefaultAutoUsesKernelCryptoWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPAutoPrefersKernelCryptoWhenBothPlacementsAvailable(t *testing.T) {
+	placement, err := selectCryptoPlacement(dataplane.CryptoPlacementAuto, dataplane.ExperimentalTCPStatus{
+		UserspaceCrypto: true,
+		KernelCrypto:    true,
+		PreferredCrypto: dataplane.CryptoPlacementUserspace,
+	})
+	if err != nil {
+		t.Fatalf("select crypto placement: %v", err)
+	}
+	if placement != dataplane.CryptoPlacementKernel {
+		t.Fatalf("auto crypto placement = %q, want kernel", placement)
+	}
+}
+
 func TestExperimentalTCPPlaintextAutoKeepsKernelTransportWithoutCryptoPlacement(t *testing.T) {
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	providerA.kernelCrypto = true

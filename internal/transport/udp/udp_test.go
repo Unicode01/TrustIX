@@ -1908,6 +1908,20 @@ func TestKernelUDPRejectsKernelCryptoWhenUnavailable(t *testing.T) {
 	}
 }
 
+func TestKernelUDPAutoPrefersKernelCryptoWhenBothPlacementsAvailable(t *testing.T) {
+	placement, err := selectCryptoPlacement(dataplane.CryptoPlacementAuto, dataplane.KernelUDPStatus{
+		UserspaceCrypto: true,
+		KernelCrypto:    true,
+		PreferredCrypto: dataplane.CryptoPlacementUserspace,
+	})
+	if err != nil {
+		t.Fatalf("select crypto placement: %v", err)
+	}
+	if placement != dataplane.CryptoPlacementKernel {
+		t.Fatalf("auto crypto placement = %q, want kernel", placement)
+	}
+}
+
 func TestSecureTransportKernelUDPUsesUserspaceCryptoWhenProviderUnavailable(t *testing.T) {
 	providerA, providerB := newKernelUDPProviderPair()
 	providerA.kernelCrypto = false

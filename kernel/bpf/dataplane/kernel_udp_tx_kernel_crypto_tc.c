@@ -591,7 +591,9 @@ static __noinline __u16 trustix_l4_checksum(const __u8 *ip,
 
     if (l4_len == 0 || l4_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20)
         return 0;
-    barrier_var(l4_len);
+    l4_len &= 0xfff;
+    if (l4_len == 0 || l4_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20)
+        return 0;
 
     header.pseudo[0] = ip[12];
     header.pseudo[1] = ip[13];
@@ -613,6 +615,8 @@ static __noinline __u16 trustix_l4_checksum(const __u8 *ip,
         for (int i = 0; i < 3; i++) {
             __u32 offset = l4_len + (__u32)i;
             if (offset >= padded_len)
+                break;
+            if (offset >= TRUSTIX_KERNEL_CRYPTO_FRAME_PADDED - 20)
                 break;
             l4[offset] = 0;
         }
@@ -668,7 +672,6 @@ static __noinline int trustix_fix_inner_checksums(struct trustix_kudp_tx_scratch
             return -22;
         if (udp_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20)
             return -22;
-        barrier_var(udp_len);
         if (l4[6] == 0 && l4[7] == 0)
             return 0;
         l4[6] = 0;

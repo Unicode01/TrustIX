@@ -154,11 +154,11 @@ func effectiveCryptoPlacement(component string, requested dataplane.CryptoPlacem
 		if status.PreferredCrypto == dataplane.CryptoPlacementKernel && status.KernelCrypto {
 			return dataplane.CryptoPlacementKernel, nil
 		}
-		if status.UserspaceCrypto {
-			return dataplane.CryptoPlacementUserspace, nil
-		}
 		if status.KernelCrypto {
 			return dataplane.CryptoPlacementKernel, nil
+		}
+		if status.UserspaceCrypto {
+			return dataplane.CryptoPlacementUserspace, nil
 		}
 		return "", fmt.Errorf("%s has no available crypto placement", component)
 	default:

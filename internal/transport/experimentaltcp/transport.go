@@ -469,11 +469,11 @@ func selectCryptoPlacement(requested dataplane.CryptoPlacement, status dataplane
 		if preferred == dataplane.CryptoPlacementKernel && status.KernelCrypto {
 			return dataplane.CryptoPlacementKernel, nil
 		}
-		if status.UserspaceCrypto {
-			return dataplane.CryptoPlacementUserspace, nil
-		}
 		if status.KernelCrypto {
 			return dataplane.CryptoPlacementKernel, nil
+		}
+		if status.UserspaceCrypto {
+			return dataplane.CryptoPlacementUserspace, nil
 		}
 		return "", fmt.Errorf("experimental_tcp has no available crypto placement")
 	case dataplane.CryptoPlacementUserspace:

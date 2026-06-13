@@ -290,6 +290,7 @@ func TestKernelDatapathKernelUDPFlowRecordsSkipExistingSessionFlowID(t *testing.
 }
 
 func TestKernelDatapathFullPlaintextRouteSessionRecordsIgnoreExistingSessionKey(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX", "1")
 	daemon := &Daemon{
 		desired: config.Desired{
 			IX: config.IXConfig{ID: "ix-a"},

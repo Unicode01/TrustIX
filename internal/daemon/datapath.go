@@ -4535,6 +4535,11 @@ func dataSessionBatchMaxBytesForStats(maxBytes int, stats transport.TransportSta
 func dataSessionTransportStats(runtime *dataSessionRuntime, session transport.Session) transport.TransportStats {
 	if runtime != nil {
 		if stats, ok := runtime.cachedSessionCapabilities(); ok {
+			if dataSessionCapabilitiesNeedRefresh(runtime, stats, session) {
+				refreshed := session.Stats()
+				runtime.storeSessionCapabilities(refreshed)
+				return refreshed
+			}
 			return stats
 		}
 	}
@@ -4553,6 +4558,41 @@ func (runtime *dataSessionRuntime) cacheSessionCapabilities(session transport.Se
 		return
 	}
 	runtime.storeSessionCapabilities(session.Stats())
+}
+
+func dataSessionCapabilitiesNeedRefresh(runtime *dataSessionRuntime, stats transport.TransportStats, session transport.Session) bool {
+	if runtime == nil || session == nil {
+		return false
+	}
+	if !dataSessionRuntimeExpectsEncrypted(runtime) {
+		return false
+	}
+	if !stats.Encrypted || strings.TrimSpace(stats.CryptoPlacement) == "" {
+		return true
+	}
+	if stats.SendEncrypted && stats.Datagram && stats.MaxPacketSize == 0 {
+		return true
+	}
+	return false
+}
+
+func dataSessionRuntimeExpectsEncrypted(runtime *dataSessionRuntime) bool {
+	if runtime == nil {
+		return false
+	}
+	encryption := strings.TrimSpace(runtime.key.Encryption)
+	if encryption == "" {
+		encryption = strings.TrimSpace(endpointTransportEncryption(runtime.endpoint))
+	}
+	if encryption == "" {
+		return false
+	}
+	switch parseSecureTransportEncryption(encryption) {
+	case securetransport.EncryptionSecure, securetransport.EncryptionSendEncrypted, securetransport.EncryptionReceiveEncrypted:
+		return true
+	default:
+		return false
+	}
 }
 
 func (runtime *dataSessionRuntime) cachedSessionCapabilities() (transport.TransportStats, bool) {

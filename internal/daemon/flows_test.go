@@ -5227,6 +5227,50 @@ func TestSendDataSessionPacketCachesTransportCapabilities(t *testing.T) {
 	}
 }
 
+func TestSendDataSessionPacketsRefreshesEncryptedCapabilities(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
+	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_BYTES", "4096")
+	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_DELAY", "0")
+	t.Setenv("TRUSTIX_DATA_SESSION_ENCRYPTED_TIXB", "1")
+	session := &statsCountingNativeBatchSession{stats: transport.TransportStats{
+		NativeBatching: true,
+		Datagram:       true,
+		MaxPacketSize:  1500,
+	}}
+	runtime := &dataSessionRuntime{
+		key:     dataSessionKey{Encryption: securetransport.EncryptionSecure},
+		session: session,
+	}
+	runtime.cacheSessionCapabilities(session)
+	session.stats = transport.TransportStats{
+		NativeBatching:  true,
+		Encrypted:       true,
+		CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+		Datagram:        true,
+		MaxPacketSize:   1400,
+	}
+	daemon := &Daemon{}
+	packetA := tcpIPv4Packet()
+	packetB := udpIPv4Packet([]byte("encrypted-capability-refresh"))
+
+	if err := daemon.sendDataSessionPackets(runtime, session, [][]byte{packetA, packetB}); err != nil {
+		t.Fatalf("send packet batch: %v", err)
+	}
+	if session.statsCalls != 2 {
+		t.Fatalf("Stats calls = %d, want cached lookup plus encrypted refresh", session.statsCalls)
+	}
+	if len(session.batches) != 0 {
+		t.Fatalf("native batches = %d, want userspace encrypted TIXB aggregation", len(session.batches))
+	}
+	if len(session.sent) != 1 {
+		t.Fatalf("single sends = %d, want one TIXB packet", len(session.sent))
+	}
+	packets, ok := decodeDataSessionBatch(session.sent[0])
+	if !ok || len(packets) != 2 {
+		t.Fatalf("sent packet did not decode as encrypted TIXB batch: ok=%v len=%d", ok, len(packets))
+	}
+}
+
 func TestDataSessionBatchEnabledByDefault(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "")
 	if !dataSessionBatchEnabled() {
