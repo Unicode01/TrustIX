@@ -18,6 +18,9 @@ iperf3="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3:-1}"
 iperf3_seconds="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_SECONDS:-30}"
 iperf3_parallel="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_PARALLEL:-2}"
 iperf3_directions="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_DIRECTIONS:-both}"
+iperf3_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS:-0}"
+iperf3_min_sent_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_SENT_GBPS:-$iperf3_min_gbps}"
+iperf3_min_received_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_RECEIVED_GBPS:-$iperf3_min_gbps}"
 ping_count="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PING_COUNT:-3}"
 udp_burst_packets="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_UDP_BURST_PACKETS:-64}"
 udp_burst_size="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_UDP_BURST_SIZE:-512}"
@@ -184,6 +187,8 @@ run_case() {
     export TRUSTIX_E2E_IPERF3_SECONDS="$iperf3_seconds"
     export TRUSTIX_E2E_IPERF3_PARALLEL="$iperf3_parallel"
     export TRUSTIX_E2E_IPERF3_DIRECTIONS="$iperf3_directions"
+    export TRUSTIX_E2E_IPERF3_MIN_SENT_GBPS="$iperf3_min_sent_gbps"
+    export TRUSTIX_E2E_IPERF3_MIN_RECEIVED_GBPS="$iperf3_min_received_gbps"
     export TRUSTIX_E2E_PING_COUNT="$ping_count"
     export TRUSTIX_E2E_UDP_BURST_PACKETS="$udp_burst_packets"
     export TRUSTIX_E2E_UDP_BURST_SIZE="$udp_burst_size"
@@ -239,6 +244,9 @@ main() {
     auto|1|true|yes|on|enabled|0|false|no|off|disabled) ;;
     *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_INCLUDE_KERNEL must be auto, 1, or 0" ;;
   esac
+  local nonnegative_decimal_re='^[0-9]+([.][0-9]+)?$'
+  [[ "$iperf3_min_sent_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_SENT_GBPS/TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS must be a non-negative number"
+  [[ "$iperf3_min_received_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_RECEIVED_GBPS/TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS must be a non-negative number"
   : >"$summary_path"
   log "workdir=${workdir}"
   log "summary=${summary_path}"

@@ -83,6 +83,8 @@ iperf3_port="${TRUSTIX_E2E_IPERF3_PORT:-25201}"
 iperf3_reverse="${TRUSTIX_E2E_IPERF3_REVERSE:-0}"
 iperf3_directions="${TRUSTIX_E2E_IPERF3_DIRECTIONS:-both}"
 iperf3_timeout="${TRUSTIX_E2E_IPERF3_TIMEOUT:-}"
+iperf3_min_sent_gbps="${TRUSTIX_E2E_IPERF3_MIN_SENT_GBPS:-${TRUSTIX_E2E_IPERF3_MIN_GBPS:-0}}"
+iperf3_min_received_gbps="${TRUSTIX_E2E_IPERF3_MIN_RECEIVED_GBPS:-${TRUSTIX_E2E_IPERF3_MIN_GBPS:-0}}"
 iperf3_pre_hook="${TRUSTIX_E2E_IPERF3_PRE_HOOK:-}"
 iperf3_post_hook="${TRUSTIX_E2E_IPERF3_POST_HOOK:-}"
 trustixctl_timeout="${TRUSTIX_E2E_TRUSTIXCTL_TIMEOUT:-8s}"
@@ -2477,11 +2479,11 @@ run_iperf3_probe() {
     die "${label} iperf3 server failed"
   fi
   run_iperf3_post_hook_if_armed "$src_ns" "$dst_ns" "$dst_ip" "$port" "$label"
-  python3 - "$client_json" "$label" <<'PY'
+  if ! python3 - "$client_json" "$label" "$iperf3_min_sent_gbps" "$iperf3_min_received_gbps" <<'PY'
 import json
 import sys
 
-path, label = sys.argv[1:3]
+path, label, min_sent_gbps, min_received_gbps = sys.argv[1:5]
 with open(path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 end = payload.get("end") or {}
@@ -2490,8 +2492,20 @@ received = end.get("sum_received") or {}
 sent_bps = float(sent.get("bits_per_second") or 0.0)
 recv_bps = float(received.get("bits_per_second") or 0.0)
 retransmits = int(sent.get("retransmits") or 0)
-print(f"[trustix-e2e] {label}: iperf3 sent_gbps={sent_bps / 1_000_000_000:.3f} received_gbps={recv_bps / 1_000_000_000:.3f} retransmits={retransmits}", file=sys.stderr)
+sent_gbps = sent_bps / 1_000_000_000
+received_gbps = recv_bps / 1_000_000_000
+min_sent = float(min_sent_gbps or 0.0)
+min_received = float(min_received_gbps or 0.0)
+print(f"[trustix-e2e] {label}: iperf3 sent_gbps={sent_gbps:.3f} received_gbps={received_gbps:.3f} retransmits={retransmits}", file=sys.stderr)
+if min_sent > 0 and sent_gbps < min_sent:
+    raise SystemExit(f"{label} iperf3 sent_gbps {sent_gbps:.3f} is below minimum {min_sent:.3f}")
+if min_received > 0 and received_gbps < min_received:
+    raise SystemExit(f"{label} iperf3 received_gbps {received_gbps:.3f} is below minimum {min_received:.3f}")
 PY
+  then
+    collect_api_pair || true
+    die "${label} iperf3 throughput gate failed"
+  fi
 }
 
 run_iperf3_probes() {
@@ -3783,6 +3797,9 @@ fi
   [[ "$iperf3_parallel" =~ ^[1-9][0-9]*$ ]] || die "TRUSTIX_E2E_IPERF3_PARALLEL must be a positive integer"
   [[ "$iperf3_port" =~ ^[1-9][0-9]*$ && "$iperf3_port" -le 65534 ]] || die "TRUSTIX_E2E_IPERF3_PORT must be in 1..65534"
   [[ -z "$iperf3_timeout" || "$iperf3_timeout" =~ $timeout_duration_re ]] || die "TRUSTIX_E2E_IPERF3_TIMEOUT must be a coreutils timeout duration"
+  local nonnegative_decimal_re='^[0-9]+([.][0-9]+)?$'
+  [[ "$iperf3_min_sent_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_E2E_IPERF3_MIN_SENT_GBPS/TRUSTIX_E2E_IPERF3_MIN_GBPS must be a non-negative number"
+  [[ "$iperf3_min_received_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_E2E_IPERF3_MIN_RECEIVED_GBPS/TRUSTIX_E2E_IPERF3_MIN_GBPS must be a non-negative number"
   case "$iperf3_reverse" in
     0|1) ;;
     *) die "TRUSTIX_E2E_IPERF3_REVERSE must be 0 or 1" ;;
