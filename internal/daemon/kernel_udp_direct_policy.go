@@ -95,6 +95,9 @@ func kernelUDPTXDirectOnlyAttachForDesired(desired config.Desired) bool {
 	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		return true
 	}
+	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
+		return true
+	}
 	if kernelUDPTXDirectOnlyFailClosedForDesired(desired) {
 		return true
 	}
@@ -108,6 +111,9 @@ func kernelUDPTXDirectOnlyAttachReasonForDesired(desired config.Desired) string 
 	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		return "transport_policy.experimental_tcp=performance route_gso_async_outer_gso=enabled encryption=plaintext"
 	}
+	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
+		return "transport_policy.udp=performance tc_direct=enabled encryption=plaintext"
+	}
 	if reason := kernelUDPTXDirectOnlyFailClosedReasonForDesired(desired); reason != "" {
 		return reason
 	}
@@ -117,6 +123,21 @@ func kernelUDPTXDirectOnlyAttachReasonForDesired(desired config.Desired) string 
 	return kernelUDPTXDirectOnlyReasonForDesired(desired)
 }
 
+func kernelUDPTCOnlyProviderForDesired(desired config.Desired) bool {
+	return kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) ||
+		kernelUDPTXDirectOnlyFailClosedForDesired(desired)
+}
+
+func kernelUDPTCOnlyProviderReasonForDesired(desired config.Desired) string {
+	if !kernelUDPTCOnlyProviderForDesired(desired) {
+		return ""
+	}
+	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
+		return kernelUDPTXDirectOnlyAttachReasonForDesired(desired)
+	}
+	return kernelUDPTXDirectOnlyFailClosedReasonForDesired(desired)
+}
+
 func kernelUDPTXDirectOnlyEnvForcedForDesired() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY"))) {
 	case "1", "true", "yes", "on", "enabled", "force":
@@ -124,6 +145,56 @@ func kernelUDPTXDirectOnlyEnvForcedForDesired() bool {
 	default:
 		return false
 	}
+}
+
+func kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired config.Desired) bool {
+	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+		return false
+	}
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolUDP) {
+		return false
+	}
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolUDP))
+	if profile.Datapath == config.TransportDatapathUserspace {
+		return false
+	}
+	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext {
+		return false
+	}
+	fullPlaintextRequested := kernelUDPFullPlaintextDatapathRequestedForDesired(desired)
+	if kernelUDPPlaintextPerformanceDirectOnlyExplicitlyDisabledByEnv() && !fullPlaintextRequested {
+		return false
+	}
+	if profile.Profile == config.TransportProfilePerformance {
+		return true
+	}
+	return fullPlaintextRequested
+}
+
+func kernelUDPFullPlaintextDatapathRequestedForDesired(desired config.Desired) bool {
+	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
+	if runtime.FullPlaintext || runtime.TXPlaintext {
+		return true
+	}
+	switch config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile) {
+	case config.KernelCapabilityProfileFullPlaintext:
+		return true
+	default:
+		return false
+	}
+}
+
+func kernelUDPPlaintextPerformanceDirectOnlyExplicitlyDisabledByEnv() bool {
+	for _, name := range []string{
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_ONLY",
+	} {
+		if envFalsey(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func desiredTransportPolicyAllowsKernelCryptoDirectOnly(desired config.Desired) bool {

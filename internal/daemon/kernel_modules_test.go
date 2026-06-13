@@ -355,6 +355,123 @@ func TestTrustIXDatapathModuleParametersForDesiredMigratesLegacyFullPlaintextToR
 	}
 }
 
+func TestTrustIXDatapathModuleParametersForDesiredMigratesLegacyFullPlaintextUDPToTCOnly(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfileStable,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: "plaintext",
+			Candidates: []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: "udp",
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext=1 rx_worker_xmit=1 rx_worker_tcp=1", desired)
+	for _, want := range []string{
+		"rx_worker_inject=0",
+		"tx_plaintext=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parameters = %q, missing %q", got, want)
+		}
+	}
+	for _, unexpected := range []string{
+		"rx_worker_inject=1",
+		"rx_worker_xmit=1",
+		"rx_worker_tcp=1",
+		"tx_plaintext=1",
+	} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("parameters = %q, unexpectedly kept legacy full plaintext %q", got, unexpected)
+		}
+	}
+	if !kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
+		t.Fatal("legacy full plaintext UDP should use TC-only performance fast path")
+	}
+	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("legacy full plaintext UDP should not keep full plaintext datapath ownership")
+	}
+	if mode := kernelDatapathRXModeForDesired(desired); mode != "" {
+		t.Fatalf("legacy full plaintext UDP should suppress RX worker hook, mode=%q", mode)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersForDesiredMigratesHarnessFullPlaintextUDPToTCOnly(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	desired := config.Desired{
+		Endpoints: []config.EndpointConfig{{
+			Name:       "ix-a-full_kmod",
+			Transport:  "udp",
+			Enabled:    true,
+			EnabledSet: true,
+			Security:   config.EndpointSecurityConfig{Encryption: "plaintext"},
+		}},
+		Peers: []config.PeerConfig{{
+			ID: "ix-b",
+			Endpoints: []config.EndpointConfig{{
+				Name:       "ix-b-full_kmod",
+				Transport:  "udp",
+				Enabled:    true,
+				EnabledSet: true,
+				Security:   config.EndpointSecurityConfig{Encryption: "plaintext"},
+			}},
+		}},
+		TransportPolicy: config.TransportPolicyConfig{
+			Mode:            "user_defined",
+			Candidates:      []core.EndpointID{"ix-a-full_kmod"},
+			Failover:        "health_based",
+			LoadBalance:     "least_conn",
+			Encryption:      "plaintext",
+			CryptoPlacement: "userspace",
+		},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+	}
+	desired = config.Normalize(desired)
+
+	got := TrustIXDatapathModuleParametersForDesired("enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_budget=1024 rx_worker_slots=8192 tx_plaintext_slots=8192", desired)
+	for _, want := range []string{
+		"rx_worker_inject=0",
+		"tx_plaintext=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parameters = %q, missing %q", got, want)
+		}
+	}
+	for _, unexpected := range []string{
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"tx_plaintext_slots=8192",
+	} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("parameters = %q, unexpectedly kept harness full plaintext %q", got, unexpected)
+		}
+	}
+	if !kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
+		t.Fatal("harness full plaintext UDP should use TC-only direct path")
+	}
+	if !kernelUDPTCOnlyProviderForDesired(desired) {
+		t.Fatal("harness full plaintext UDP should request TC-only provider")
+	}
+}
+
 func TestTrustIXDatapathModuleParametersForDesiredRouteGSOSuppressesLegacyRXWorkerEnv(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")

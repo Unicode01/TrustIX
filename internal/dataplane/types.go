@@ -29,6 +29,8 @@ type AttachSpec struct {
 	ManagedMTU                               int             `json:"managed_mtu,omitempty"`
 	KernelUDPTXDirectOnly                    bool            `json:"kernel_udp_tx_direct_only,omitempty"`
 	KernelUDPTXDirectOnlyReason              string          `json:"kernel_udp_tx_direct_only_reason,omitempty"`
+	KernelUDPTCOnlyProvider                  bool            `json:"kernel_udp_tc_only_provider,omitempty"`
+	KernelUDPTCOnlyProviderReason            string          `json:"kernel_udp_tc_only_provider_reason,omitempty"`
 	KernelUDPTXSecureDirect                  bool            `json:"kernel_udp_tx_secure_direct,omitempty"`
 	KernelUDPRXSecureDirect                  bool            `json:"kernel_udp_rx_secure_direct,omitempty"`
 	KernelUDPSecureDirectTrustInnerChecksums bool            `json:"kernel_udp_secure_direct_trust_inner_checksums,omitempty"`

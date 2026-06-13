@@ -848,10 +848,9 @@ func (daemon *Daemon) kernelUDPDirectOnlyProgramEnabledForPolicy() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY"))) {
 	case "1", "true", "yes", "on", "enabled", "force":
 		return daemon.transportPolicyUsesKernelDirect()
-	case "0", "false", "no", "off", "disabled":
-		return false
+	default:
+		return kernelUDPTXDirectOnlyAttachForDesired(daemon.desired)
 	}
-	return kernelUDPTXDirectOnlyFailClosedForDesired(daemon.desired)
 }
 
 func kernelUDPTXDirectExperimentalTCPOnlyRequestedForPolicy() bool {

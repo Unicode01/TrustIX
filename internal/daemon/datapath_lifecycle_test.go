@@ -153,6 +153,52 @@ func TestStartDataPathSuppressesCaptureForwarderForKernelUDPTCOnlyProvider(t *te
 	}
 }
 
+func TestStartDataPathSuppressesCaptureForwarderForMigratedFullPlaintextUDP(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	manager := &captureCountingManager{}
+	daemon := &Daemon{
+		dataplane:    manager,
+		dataSessions: make(map[dataSessionKey]transport.Session),
+		desired: config.Desired{
+			Endpoints: []config.EndpointConfig{{
+				Name:      "udp-a",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionPlaintext,
+				Candidates: []core.EndpointID{"udp-a"},
+			},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+		},
+	}
+
+	if _, err := daemon.startDataPath(context.Background()); err != nil {
+		t.Fatalf("start data path: %v", err)
+	}
+	if manager.subscription != nil {
+		t.Fatal("capture subscription should not start after full plaintext UDP migrates to TC-only provider")
+	}
+	status := daemon.dataPathStatus()
+	if status.CaptureForwarderActive {
+		t.Fatal("capture forwarder should be inactive after full plaintext UDP migrates to TC-only provider")
+	}
+	if !status.CaptureForwarderSuppressed {
+		t.Fatal("capture forwarder should report suppressed")
+	}
+	if status.CaptureForwarderSuppressedReason == "" {
+		t.Fatal("capture forwarder suppression reason should be reported")
+	}
+}
+
 func TestStartDataPathSuppressesCaptureForwarderForFullPlaintextDatapath(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	manager := &captureCountingManager{}
@@ -772,6 +818,38 @@ func TestDataSessionControlOnlyKeepsSecureUDPFallbackByDefault(t *testing.T) {
 		Encryption: securetransport.EncryptionSecure,
 	}, config.EndpointConfig{Transport: string(transport.ProtocolExperimentalTCP)}) {
 		t.Fatal("secure experimental_tcp session should keep userspace RX/TX under UDP TC-only provider")
+	}
+}
+
+func TestDataSessionControlOnlyMigratesFullPlaintextUDPToTCOnly(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	daemon := &Daemon{
+		desired: config.Desired{
+			Endpoints: []config.EndpointConfig{{
+				Name:      "udp-a",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionPlaintext,
+				Candidates: []core.EndpointID{"udp-a"},
+			},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+		},
+	}
+	if !daemon.dataSessionControlOnly(dataSessionKey{
+		Transport:  transport.ProtocolUDP,
+		Encryption: securetransport.EncryptionPlaintext,
+	}, config.EndpointConfig{Transport: string(transport.ProtocolUDP)}) {
+		t.Fatal("migrated full plaintext UDP session should be control-only")
 	}
 }
 

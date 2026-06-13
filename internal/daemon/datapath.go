@@ -1249,6 +1249,10 @@ func (daemon *Daemon) kernelUDPPlaintextDirectOnlyEnabled() bool {
 }
 
 func (daemon *Daemon) kernelUDPDirectOnlyEnabled() bool {
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) ||
+		kernelUDPPlaintextPerformanceDirectOnlyForDesired(daemon.desired) {
+		return true
+	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY")), "0") ||
 		strings.EqualFold(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY")), "false") ||
 		strings.EqualFold(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY")), "off") ||
@@ -1259,11 +1263,7 @@ func (daemon *Daemon) kernelUDPDirectOnlyEnabled() bool {
 }
 
 func (daemon *Daemon) kernelUDPTCOnlyProviderRequested() bool {
-	return daemon.kernelUDPDirectOnlyEnabled() &&
-		envTruthyAny(
-			"TRUSTIX_KERNEL_UDP_TC_ONLY",
-			"TRUSTIX_KERNEL_UDP_TC_DIRECT_ONLY_PROVIDER",
-		)
+	return kernelUDPTCOnlyProviderForDesired(daemon.desired)
 }
 
 func envTruthyAny(names ...string) bool {

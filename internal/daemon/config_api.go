@@ -719,7 +719,8 @@ func dataPathListenersNeedRestart(oldDesired, newDesired config.Desired) bool {
 }
 
 func dataplaneAttachSpecNeedsReload(oldDesired, newDesired config.Desired) bool {
-	return kernelUDPTXDirectOnlyFailClosedForDesired(oldDesired) != kernelUDPTXDirectOnlyFailClosedForDesired(newDesired) ||
+	return kernelUDPTXDirectOnlyAttachForDesired(oldDesired) != kernelUDPTXDirectOnlyAttachForDesired(newDesired) ||
+		kernelUDPTCOnlyProviderForDesired(oldDesired) != kernelUDPTCOnlyProviderForDesired(newDesired) ||
 		kernelUDPSecureFullDirectForDesired(oldDesired) != kernelUDPSecureFullDirectForDesired(newDesired) ||
 		nativePlaintextKernelTunnelRouteOffloadForDesired(oldDesired) != nativePlaintextKernelTunnelRouteOffloadForDesired(newDesired) ||
 		kernelDatapathFullPlaintextEnabledForDesired(oldDesired) != kernelDatapathFullPlaintextEnabledForDesired(newDesired) ||

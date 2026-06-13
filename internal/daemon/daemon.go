@@ -873,6 +873,8 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		ManagedMTU:                               lanSpec.ManagedMTU,
 		KernelUDPTXDirectOnly:                    kernelUDPTXDirectOnlyAttachForDesired(desired),
 		KernelUDPTXDirectOnlyReason:              kernelUDPTXDirectOnlyAttachReasonForDesired(desired),
+		KernelUDPTCOnlyProvider:                  kernelUDPTCOnlyProviderForDesired(desired),
+		KernelUDPTCOnlyProviderReason:            kernelUDPTCOnlyProviderReasonForDesired(desired),
 		KernelUDPTXSecureDirect:                  secureFullDirect,
 		KernelUDPRXSecureDirect:                  secureFullDirect,
 		KernelUDPSecureDirectTrustInnerChecksums: secureFullDirect,

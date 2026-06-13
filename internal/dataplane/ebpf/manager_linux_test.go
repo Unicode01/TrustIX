@@ -192,6 +192,18 @@ func TestExperimentalTCPRouteGSOAttachIgnoresGenericUDPDirectDisable(t *testing.
 	}
 }
 
+func TestKernelUDPTCOnlyProviderRequestedForSpecIgnoresFalseyEnv(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ONLY_PROVIDER", "0")
+
+	if !kernelUDPTCOnlyProviderRequestedForSpec(dataplane.AttachSpec{KernelUDPTCOnlyProvider: true}) {
+		t.Fatal("spec-requested TC-only provider should not be disabled by legacy falsey env")
+	}
+	if kernelUDPTCOnlyProviderRequestedForSpec(dataplane.AttachSpec{}) {
+		t.Fatal("empty spec with falsey env should not request TC-only provider")
+	}
+}
+
 func TestExperimentalTCPRouteGSOAttachWithFullKmodEnvEmitsRouteKfuncPath(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT", "0")
@@ -306,6 +318,13 @@ func TestGenericUDPDirectDisableStillDisablesNonRouteGSOProgram(t *testing.T) {
 	if kernelUDPTXDirectOnlyEnabled(dataplane.AttachSpec{KernelUDPTXDirectOnly: true}) {
 		t.Fatal("generic UDP direct-only disable should still override non-route-GSO direct-only mode")
 	}
+	tcOnlySpec := dataplane.AttachSpec{KernelUDPTXDirectOnly: true, KernelUDPTCOnlyProvider: true}
+	if !kernelUDPTXDirectProgramEnabledForSpec(tcOnlySpec) {
+		t.Fatal("spec-requested TC-only provider should override legacy falsey TX direct env")
+	}
+	if !kernelUDPTXDirectOnlyEnabled(tcOnlySpec) {
+		t.Fatal("spec-requested TC-only provider should override legacy falsey direct-only env")
+	}
 }
 
 func TestGenericUDPDirectDisableStillDisablesNonRouteGSORXDirect(t *testing.T) {
@@ -314,6 +333,9 @@ func TestGenericUDPDirectDisableStillDisablesNonRouteGSORXDirect(t *testing.T) {
 
 	if !kernelUDPRXDirectDisabledForSpec(dataplane.AttachSpec{}) {
 		t.Fatal("generic UDP RX direct disable should still disable non-route-GSO RX direct")
+	}
+	if kernelUDPRXDirectDisabledForSpec(dataplane.AttachSpec{KernelUDPTXDirectOnly: true, KernelUDPTCOnlyProvider: true}) {
+		t.Fatal("spec-requested TC-only provider should override legacy falsey RX direct env")
 	}
 
 	manager := NewManager()

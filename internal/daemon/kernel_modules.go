@@ -102,7 +102,8 @@ func TrustIXDatapathModuleParameters(raw string) string {
 }
 
 func kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired config.Desired) bool {
-	return experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) &&
+	return (experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) ||
+		kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired)) &&
 		!envTruthyAny("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX")
 }
 

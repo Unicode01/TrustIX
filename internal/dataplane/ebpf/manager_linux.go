@@ -3069,7 +3069,7 @@ func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context)
 				return err
 			}
 			if err := manager.ensureKernelUDPRXDirectLocked(); err != nil {
-				if kernelUDPTCOnlyProviderRequested() {
+				if kernelUDPTCOnlyProviderRequestedForSpec(manager.spec) {
 					return fmt.Errorf("attach kernel_udp TC-only RX direct provider: %w", err)
 				}
 				manager.warnings = append(manager.warnings, "kernel_udp TC RX direct disabled: "+err.Error())
@@ -3124,7 +3124,7 @@ func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context)
 }
 
 func (manager *Manager) snapshotCanUseKernelUDPTCOnlyLocked() bool {
-	return kernelUDPTCOnlyProviderRequested() && manager.snapshotKernelUDPTCOnlyEligibleLocked()
+	return kernelUDPTCOnlyProviderRequestedForSpec(manager.spec) && manager.snapshotKernelUDPTCOnlyEligibleLocked()
 }
 
 func (manager *Manager) snapshotCanFallbackToKernelUDPTCOnlyLocked() bool {
@@ -10489,7 +10489,7 @@ func (manager *Manager) kernelUDPProviderStatsLocked() map[string]uint64 {
 		"received_frames":  manager.kernelUDPReceived,
 		"subscriber_drops": manager.kernelUDPSubDrops,
 	}
-	stats["tc_only_requested"] = boolCounter(kernelUDPTCOnlyProviderRequested())
+	stats["tc_only_requested"] = boolCounter(kernelUDPTCOnlyProviderRequestedForSpec(manager.spec))
 	stats["tc_only_eligible"] = boolCounter(manager.kernelUDPTCOnlyEligibleLocked())
 	stats["tc_only_snapshot_eligible"] = boolCounter(manager.snapshotKernelUDPTCOnlyEligibleLocked())
 	stats["tc_only_available"] = boolCounter(manager.kernelUDPTCDirectOnlyAvailableLocked())
@@ -13791,6 +13791,9 @@ func kernelUDPTXDirectProgramEnabled() bool {
 }
 
 func kernelUDPTXDirectProgramEnabledForSpec(spec dataplane.AttachSpec) bool {
+	if spec.KernelUDPTCOnlyProvider && spec.KernelUDPTXDirectOnly {
+		return true
+	}
 	if kernelUDPTXDirectDisabled() && !experimentalTCPRouteGSORequestedForSpec(spec) {
 		return false
 	}
@@ -23567,6 +23570,9 @@ func kernelUDPTXDirectOnlyEnabled(spec dataplane.AttachSpec) bool {
 	if experimentalTCPRouteGSORequestedForSpec(spec) {
 		return true
 	}
+	if spec.KernelUDPTCOnlyProvider && spec.KernelUDPTXDirectOnly {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY"))) {
 	case "1", "true", "yes", "on", "enabled", "force":
 		return true
@@ -23582,6 +23588,10 @@ func kernelUDPTCOnlyProviderRequested() bool {
 		"TRUSTIX_KERNEL_UDP_TC_ONLY",
 		"TRUSTIX_KERNEL_UDP_TC_DIRECT_ONLY_PROVIDER",
 	)
+}
+
+func kernelUDPTCOnlyProviderRequestedForSpec(spec dataplane.AttachSpec) bool {
+	return spec.KernelUDPTCOnlyProvider || kernelUDPTCOnlyProviderRequested()
 }
 
 func kernelUDPTCOnlyFallbackDisabled() bool {
@@ -23660,6 +23670,9 @@ func kernelUDPRXDirectDisabled() bool {
 
 func kernelUDPRXDirectDisabledForSpec(spec dataplane.AttachSpec) bool {
 	if experimentalTCPRouteGSORequestedForSpec(spec) {
+		return false
+	}
+	if spec.KernelUDPTCOnlyProvider && spec.KernelUDPTXDirectOnly {
 		return false
 	}
 	return kernelUDPRXDirectDisabled()

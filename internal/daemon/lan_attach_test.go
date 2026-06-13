@@ -464,6 +464,74 @@ func TestDataplaneAttachSpecKeepsFallbackForRequireKernelPlaintextByDefault(t *t
 	}
 }
 
+func TestDataplaneAttachSpecEnablesPerformancePlaintextUDPDirectOnly(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfilePerformance,
+		},
+	})
+
+	if !spec.KernelUDPTXDirectOnly {
+		t.Fatalf("performance plaintext UDP should use TC-only direct path, spec=%#v", spec)
+	}
+	if !spec.KernelUDPTCOnlyProvider {
+		t.Fatalf("performance plaintext UDP should request TC-only provider, spec=%#v", spec)
+	}
+	if spec.KernelUDPTXDirectOnlyReason != "transport_policy.udp=performance tc_direct=enabled encryption=plaintext" {
+		t.Fatalf("direct-only reason = %q", spec.KernelUDPTXDirectOnlyReason)
+	}
+	if spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync {
+		t.Fatalf("UDP performance direct path should not enable experimental_tcp route-GSO flags, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecMigratesLegacyFullPlaintextUDPToTCOnly(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "0")
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+	})
+
+	if !spec.KernelUDPTXDirectOnly {
+		t.Fatalf("legacy full plaintext UDP should migrate to TC-only direct path, spec=%#v", spec)
+	}
+	if !spec.KernelUDPTCOnlyProvider {
+		t.Fatalf("legacy full plaintext UDP should request TC-only provider, spec=%#v", spec)
+	}
+	if !spec.KernelDatapathSuppressLegacyRXWorker {
+		t.Fatalf("legacy full plaintext UDP should suppress RX worker ownership, spec=%#v", spec)
+	}
+}
+
 func TestDataplaneAttachSpecKeepsFallbackForPlaintextNonKernelTransport(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
