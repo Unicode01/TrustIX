@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -482,6 +483,49 @@ func TestExperimentalTCPDecodeKernelOpenedRXFrameNoCopyUnfragmented(t *testing.T
 	}
 	if socket.fill.descs[0] != rxFrame.addr {
 		t.Fatalf("recycled addr = %d, want %d", socket.fill.descs[0], rxFrame.addr)
+	}
+}
+
+func TestExperimentalTCPDecodeRXFrameRejectsMissingSocket(t *testing.T) {
+	fastPath := testExperimentalTCPFastPathWithQueues(1)
+	manager := NewManager()
+	rxFrame := &afXDPRXFrame{data: make([]byte, ethernetHeaderLen)}
+	var expBatch []receivedExperimentalTCPFrame
+	var udpBatch []receivedKernelUDPFrame
+
+	mode, err := fastPath.decodeRXFrame(manager, nil, rxFrame, &expBatch, &udpBatch)
+	if err == nil {
+		t.Fatal("decodeRXFrame error = nil, want missing socket error")
+	}
+	if mode != afXDPRXRecycleNow {
+		t.Fatalf("recycle mode = %d, want recycle-now", mode)
+	}
+}
+
+func TestExperimentalTCPDecodeRXFrameRecoversAndContinues(t *testing.T) {
+	fastPath := testExperimentalTCPFastPathWithQueues(1)
+	fastPath.skipTCPChecksum = true
+	manager := NewManager()
+	socket := testAFXDPSocketForRXFrame()
+	rxFrame, _ := testExperimentalTCPRXFrame(t, socket, experimentaltcp.Frame{
+		FlowID:   42,
+		Sequence: 1,
+		Payload:  []byte("payload"),
+	})
+	var udpBatch []receivedKernelUDPFrame
+
+	mode, err := fastPath.decodeRXFrame(manager, socket, rxFrame, nil, &udpBatch)
+	if err != nil {
+		t.Fatalf("decodeRXFrame error = %v, want recovered nil error", err)
+	}
+	if mode != afXDPRXRecycleNow {
+		t.Fatalf("recycle mode = %d, want recycle-now", mode)
+	}
+	manager.mu.Lock()
+	warnings := append([]string(nil), manager.warnings...)
+	manager.mu.Unlock()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "experimental_tcp AF_XDP RX decode recovered") {
+		t.Fatalf("warnings = %#v, want recovered decode warning", warnings)
 	}
 }
 

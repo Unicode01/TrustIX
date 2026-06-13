@@ -87,6 +87,7 @@ type TransportStats struct {
 	Datagram            bool              `json:"datagram,omitempty"`
 	FragmentingDatagram bool              `json:"fragmenting_datagram,omitempty"`
 	MaxPacketSize       uint64            `json:"max_packet_size,omitempty"`
+	ReplayWindow        uint              `json:"replay_window,omitempty"`
 }
 
 var ErrCryptoOffloadUnavailable = errors.New("transport crypto offload unavailable")

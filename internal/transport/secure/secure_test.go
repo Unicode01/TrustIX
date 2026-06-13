@@ -784,11 +784,91 @@ func TestSessionRejectsReplay(t *testing.T) {
 		t.Fatalf("server recv first packet: %v", err)
 	}
 
-	serverInner := clientInner.peer()
-	serverInner.inject(wire)
-	_, err := server.RecvPacket()
+	_, _, err := server.openReceivedPacketNoStats(wire)
 	if !errors.Is(err, ErrReplayDetected) {
-		t.Fatalf("recv replay err = %v, want ErrReplayDetected", err)
+		t.Fatalf("open replay err = %v, want ErrReplayDetected", err)
+	}
+}
+
+func TestSessionRecvPacketDropsReplayAndContinues(t *testing.T) {
+	client, server, clientInner := handshakePair(t)
+	if err := client.SendPacket([]byte("first")); err != nil {
+		t.Fatalf("send first packet: %v", err)
+	}
+	replayWire := clientInner.lastSent()
+	if got, err := server.RecvPacket(); err != nil || string(got) != "first" {
+		t.Fatalf("server first recv = %q, %v", got, err)
+	}
+
+	serverInner := clientInner.peer()
+	serverInner.inject(replayWire)
+	if err := client.SendPacket([]byte("second")); err != nil {
+		t.Fatalf("send second packet: %v", err)
+	}
+	got, err := server.RecvPacket()
+	if err != nil {
+		t.Fatalf("server recv after replay: %v", err)
+	}
+	if string(got) != "second" {
+		t.Fatalf("server recv after replay = %q, want second", got)
+	}
+}
+
+func TestSessionRecvPacketsDropsReplayInsideBatch(t *testing.T) {
+	client, server, clientInner := handshakePair(t)
+	if err := client.SendPacket([]byte("one")); err != nil {
+		t.Fatalf("send one: %v", err)
+	}
+	replayWire := clientInner.lastSent()
+	if got, err := server.RecvPacket(); err != nil || string(got) != "one" {
+		t.Fatalf("server first recv = %q, %v", got, err)
+	}
+
+	serverInner := clientInner.peer()
+	serverInner.inject(replayWire)
+	if err := client.SendPacket([]byte("two")); err != nil {
+		t.Fatalf("send two: %v", err)
+	}
+	if err := client.SendPacket([]byte("three")); err != nil {
+		t.Fatalf("send three: %v", err)
+	}
+	got, err := server.RecvPackets(8)
+	if err != nil {
+		t.Fatalf("server batch recv after replay: %v", err)
+	}
+	if len(got) != 2 || string(got[0]) != "two" || string(got[1]) != "three" {
+		t.Fatalf("server batch recv = %q, want [two three]", got)
+	}
+}
+
+func TestReplayWindowAcceptsLargeOutOfOrderBurst(t *testing.T) {
+	window := newReplayWindow(defaultReplayWindowSize)
+
+	if !window.Accept(70000) {
+		t.Fatal("first high sequence was rejected")
+	}
+	if !window.Accept(70000 - 4096) {
+		t.Fatal("sequence inside the enlarged replay window was rejected")
+	}
+	if window.Accept(70000 - defaultReplayWindowSize) {
+		t.Fatal("sequence just outside replay window was accepted")
+	}
+	if window.Accept(70000 - 4096) {
+		t.Fatal("duplicate sequence was accepted")
+	}
+}
+
+func TestReplayWindowAcceptBatchIsAtomic(t *testing.T) {
+	window := newReplayWindow(128)
+
+	if !window.Accept(10) {
+		t.Fatal("initial sequence was rejected")
+	}
+	if window.AcceptBatch([]uint64{11, 12, 10}) {
+		t.Fatal("batch containing a duplicate sequence was accepted")
+	}
+	if !window.Accept(11) {
+		t.Fatal("failed batch advanced replay state")
 	}
 }
 

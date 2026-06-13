@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -1907,6 +1908,37 @@ func (fastPath *experimentalTCPFastPath) decodeRXFrame(manager *Manager, socket 
 			err = recycleErr
 		}
 	}()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if expBatch != nil {
+				*expBatch = (*expBatch)[:0]
+			}
+			if udpBatch != nil {
+				*udpBatch = (*udpBatch)[:0]
+			}
+			if socket != nil {
+				socket.stats.rxParseErrors.Add(1)
+			}
+			if manager != nil {
+				manager.recordDrop(observability.DropInvalidOverlayHeader)
+				stack := string(debug.Stack())
+				if len(stack) > 4096 {
+					stack = stack[:4096]
+				}
+				manager.mu.Lock()
+				manager.warnings = append(manager.warnings, fmt.Sprintf("experimental_tcp AF_XDP RX decode recovered: %v\n%s", recovered, stack))
+				manager.mu.Unlock()
+			}
+			recycleMode = afXDPRXRecycleNow
+			err = nil
+		}
+	}()
+	if rxFrame == nil {
+		return afXDPRXRecycleNow, nil
+	}
+	if socket == nil {
+		return afXDPRXRecycleNow, fmt.Errorf("experimental_tcp AF_XDP RX decode missing socket")
+	}
 	packet, srcMAC, ok := parseEthernetIPv4Frame(rxFrame.Bytes())
 	if !ok {
 		return afXDPRXRecycleNow, nil

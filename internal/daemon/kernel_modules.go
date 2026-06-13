@@ -98,7 +98,8 @@ func TrustIXCryptoModuleParameters(raw string) string {
 }
 
 func TrustIXCryptoModuleParametersForDesired(raw string, desired config.Desired) string {
-	allowSIMDFastpath := kernelUDPSecureFullDirectForDesired(desired) || envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH")
+	_ = desired
+	allowSIMDFastpath := envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH")
 	params := raw
 	if !allowSIMDFastpath {
 		params = filterModuleParameters(params, trustIXCryptoPanicRiskModuleParameters)

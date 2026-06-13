@@ -69,6 +69,10 @@ const (
 	handshakeRetransmitInterval = 200 * time.Millisecond
 
 	tlsExporterLabel = "EXPORTER-TrustIX-secure-transport-v1"
+
+	defaultReplayWindowSize = 65536
+	minReplayWindowSize     = 64
+	maxReplayWindowSize     = 1 << 20
 )
 
 var (
@@ -427,6 +431,7 @@ func newPlaintextBypassSession(inner transport.Session, role role, options Optio
 			Peer:   peerIX,
 			Domain: peerDomain,
 		},
+		replay: newReplayWindow(defaultReplayWindowSize),
 	}
 }
 
@@ -471,39 +476,41 @@ func handshakeWithContext(ctx context.Context, inner transport.Session, run func
 }
 
 type Session struct {
-	inner           transport.Session
-	role            role
-	sendAEAD        cipher.AEAD
-	recvAEAD        cipher.AEAD
-	sendIV          []byte
-	recvIV          []byte
-	epoch           uint64
-	cryptoOffloaded bool
-	cryptoPlacement string
-	cryptoSuite     cryptoSuite
-	cryptoKeySource string
-	encryptionMode  string
-	sendEncrypted   bool
-	recvEncrypted   bool
-	peerIX          core.IXID
-	peerDomain      core.DomainID
-	peerIdentity    transport.PeerIdentity
-	sendSeq         atomic.Uint64
-	sendMu          sync.Mutex
-	sendHeader      [dataHeaderLen]byte
-	sendNonce       [12]byte
-	sendWire        []byte
-	sendBatchWire   [][]byte
-	sendBatchArena  []byte
-	recvBatchPlain  [][]byte
-	recvBatchSeqs   []uint64
-	replay          replayWindow
-	bytesSent       atomic.Uint64
-	bytesRecv       atomic.Uint64
-	packetsOut      atomic.Uint64
-	packetsIn       atomic.Uint64
-	clientHelloRaw  []byte
-	serverHelloRaw  []byte
+	inner            transport.Session
+	role             role
+	sendAEAD         cipher.AEAD
+	recvAEAD         cipher.AEAD
+	sendIV           []byte
+	recvIV           []byte
+	epoch            uint64
+	cryptoOffloaded  bool
+	cryptoPlacement  string
+	cryptoSuite      cryptoSuite
+	cryptoKeySource  string
+	encryptionMode   string
+	sendEncrypted    bool
+	recvEncrypted    bool
+	peerIX           core.IXID
+	peerDomain       core.DomainID
+	peerIdentity     transport.PeerIdentity
+	sendSeq          atomic.Uint64
+	sendMu           sync.Mutex
+	sendHeader       [dataHeaderLen]byte
+	sendNonce        [12]byte
+	sendWire         []byte
+	sendBatchWire    [][]byte
+	sendBatchArena   []byte
+	recvBatchPlain   [][]byte
+	recvBatchSeqs    []uint64
+	recvBatchIndexes []int
+	recvBatchAccepts []bool
+	replay           replayWindow
+	bytesSent        atomic.Uint64
+	bytesRecv        atomic.Uint64
+	packetsOut       atomic.Uint64
+	packetsIn        atomic.Uint64
+	clientHelloRaw   []byte
+	serverHelloRaw   []byte
 }
 
 func Client(inner transport.Session, tlsConf *tls.Config, options Options) (*Session, error) {
@@ -754,6 +761,9 @@ func (session *Session) RecvPacket() ([]byte, error) {
 		}
 		plaintext, ok, err := session.openReceivedPacket(wire)
 		if err != nil {
+			if errors.Is(err, ErrReplayDetected) {
+				continue
+			}
 			return nil, err
 		}
 		if !ok {
@@ -891,7 +901,13 @@ func (session *Session) openReceivedPacketBatch(dst [][]byte, wirePackets [][]by
 	} else {
 		session.recvBatchSeqs = session.recvBatchSeqs[:0]
 	}
+	if cap(session.recvBatchIndexes) < len(wirePackets) {
+		session.recvBatchIndexes = make([]int, 0, len(wirePackets))
+	} else {
+		session.recvBatchIndexes = session.recvBatchIndexes[:0]
+	}
 	seqs := session.recvBatchSeqs
+	seqIndexes := session.recvBatchIndexes
 	startLen := len(dst)
 	var bytesReceived uint64
 	for _, wire := range wirePackets {
@@ -912,18 +928,53 @@ func (session *Session) openReceivedPacketBatch(dst [][]byte, wirePackets [][]by
 		}
 		dst = append(dst, plaintext)
 		seqs = append(seqs, seq)
+		seqIndexes = append(seqIndexes, len(dst)-1)
 		bytesReceived += uint64(len(plaintext))
 	}
 	if len(seqs) == 0 {
 		session.recvBatchSeqs = seqs
+		session.recvBatchIndexes = seqIndexes
 		return dst, bytesReceived, uint64(len(dst) - startLen), nil
 	}
-	if !session.replay.AcceptBatch(seqs) {
-		session.recvBatchSeqs = seqs
-		return dst, bytesReceived, uint64(len(dst) - startLen), ErrReplayDetected
-	}
+	accepted := session.replay.AcceptBatchResults(seqs, session.recvBatchAccepts[:0])
+	dst, bytesReceived = filterReplayRejectedBatch(dst, startLen, seqIndexes, accepted, bytesReceived)
 	session.recvBatchSeqs = seqs
+	session.recvBatchIndexes = seqIndexes
+	session.recvBatchAccepts = accepted
 	return dst, bytesReceived, uint64(len(dst) - startLen), nil
+}
+
+func filterReplayRejectedBatch(dst [][]byte, startLen int, seqIndexes []int, accepted []bool, bytesReceived uint64) ([][]byte, uint64) {
+	if len(seqIndexes) == 0 || len(seqIndexes) != len(accepted) {
+		return dst, bytesReceived
+	}
+	allAccepted := true
+	for _, ok := range accepted {
+		if !ok {
+			allAccepted = false
+			break
+		}
+	}
+	if allAccepted {
+		return dst, bytesReceived
+	}
+	write := startLen
+	seqCursor := 0
+	for read := startLen; read < len(dst); read++ {
+		keep := true
+		if seqCursor < len(seqIndexes) && seqIndexes[seqCursor] == read {
+			keep = accepted[seqCursor]
+			seqCursor++
+		}
+		if !keep {
+			bytesReceived -= uint64(len(dst[read]))
+			continue
+		}
+		dst[write] = dst[read]
+		write++
+	}
+	clear(dst[write:])
+	return dst[:write], bytesReceived
 }
 
 func (session *Session) openReceivedPacketNoStats(wire []byte) ([]byte, bool, error) {
@@ -1068,6 +1119,7 @@ func (session *Session) Stats() transport.TransportStats {
 			stats.MaxPacketSize = 0
 		}
 	}
+	stats.ReplayWindow = uint(session.replay.Size())
 	return stats
 }
 
@@ -1413,6 +1465,7 @@ func newSession(inner transport.Session, role role, privateKey *ecdh.PrivateKey,
 		recvEncrypted:   encryption.ReceiveEncrypted,
 		cryptoSuite:     suite,
 		cryptoKeySource: "",
+		replay:          newReplayWindow(defaultReplayWindowSize),
 		clientHelloRaw:  slices.Clone(clientHelloRaw),
 		serverHelloRaw:  slices.Clone(serverHelloRaw),
 	}
@@ -1504,7 +1557,7 @@ func (session *Session) enableCryptoOffload(role role, clientKey, serverKey, cli
 		WireFormat:   transport.CryptoWireFormatTrustIXSecureDataV1,
 		KeySource:    session.cryptoKeySource,
 		Epoch:        session.epoch,
-		ReplayWindow: 64,
+		ReplayWindow: uint(session.replay.Size()),
 	}
 	if role == clientRole {
 		spec.SendKey = slices.Clone(clientKey)
@@ -1728,7 +1781,53 @@ func hkdfExpand(prk []byte, info []byte, length int) []byte {
 type replayWindow struct {
 	mu      sync.Mutex
 	highest uint64
-	seen    uint64
+	seen    []uint64
+	size    uint64
+}
+
+func newReplayWindow(size uint64) replayWindow {
+	size = normalizeReplayWindowSize(size)
+	return replayWindow{
+		seen: make([]uint64, replayWindowWords(size)),
+		size: size,
+	}
+}
+
+func normalizeReplayWindowSize(size uint64) uint64 {
+	if size == 0 {
+		return defaultReplayWindowSize
+	}
+	if size < minReplayWindowSize {
+		return minReplayWindowSize
+	}
+	if size > maxReplayWindowSize {
+		return maxReplayWindowSize
+	}
+	return size
+}
+
+func replayWindowWords(size uint64) int {
+	return int((size + 63) / 64)
+}
+
+func (window *replayWindow) Size() uint64 {
+	window.mu.Lock()
+	defer window.mu.Unlock()
+	window.ensureLocked()
+	return window.size
+}
+
+func (window *replayWindow) ensureLocked() {
+	size := normalizeReplayWindowSize(window.size)
+	if window.size != size {
+		window.size = size
+	}
+	words := replayWindowWords(size)
+	if len(window.seen) != words {
+		window.seen = make([]uint64, words)
+		return
+	}
+	maskReplayWindowTail(window.seen, size)
 }
 
 func (window *replayWindow) Accept(seq uint64) bool {
@@ -1737,27 +1836,9 @@ func (window *replayWindow) Accept(seq uint64) bool {
 	}
 	window.mu.Lock()
 	defer window.mu.Unlock()
+	window.ensureLocked()
 
-	if seq > window.highest {
-		shift := seq - window.highest
-		if shift >= 64 {
-			window.seen = 1
-		} else {
-			window.seen = (window.seen << shift) | 1
-		}
-		window.highest = seq
-		return true
-	}
-	delta := window.highest - seq
-	if delta >= 64 {
-		return false
-	}
-	mask := uint64(1) << delta
-	if window.seen&mask != 0 {
-		return false
-	}
-	window.seen |= mask
-	return true
+	return replayWindowAcceptLocked(&window.highest, window.seen, window.size, seq)
 }
 
 func (window *replayWindow) AcceptBatch(seqs []uint64) bool {
@@ -1766,33 +1847,105 @@ func (window *replayWindow) AcceptBatch(seqs []uint64) bool {
 	}
 	window.mu.Lock()
 	defer window.mu.Unlock()
+	window.ensureLocked()
 	highest := window.highest
-	seen := window.seen
+	seen := append([]uint64(nil), window.seen...)
 	for _, seq := range seqs {
-		if seq == 0 {
+		if !replayWindowAcceptLocked(&highest, seen, window.size, seq) {
 			return false
 		}
-		if seq > highest {
-			shift := seq - highest
-			if shift >= 64 {
-				seen = 1
-			} else {
-				seen = (seen << shift) | 1
-			}
-			highest = seq
-			continue
-		}
-		delta := highest - seq
-		if delta >= 64 {
-			return false
-		}
-		mask := uint64(1) << delta
-		if seen&mask != 0 {
-			return false
-		}
-		seen |= mask
 	}
 	window.highest = highest
-	window.seen = seen
+	copy(window.seen, seen)
 	return true
+}
+
+func (window *replayWindow) AcceptBatchResults(seqs []uint64, dst []bool) []bool {
+	if cap(dst) < len(seqs) {
+		dst = make([]bool, len(seqs))
+	} else {
+		dst = dst[:len(seqs)]
+		clear(dst)
+	}
+	if len(seqs) == 0 {
+		return dst
+	}
+	window.mu.Lock()
+	defer window.mu.Unlock()
+	window.ensureLocked()
+	for i, seq := range seqs {
+		if replayWindowAcceptLocked(&window.highest, window.seen, window.size, seq) {
+			dst[i] = true
+		}
+	}
+	return dst
+}
+
+func replayWindowAcceptLocked(highest *uint64, seen []uint64, size uint64, seq uint64) bool {
+	if seq == 0 {
+		return false
+	}
+	if seq > *highest {
+		shiftReplayWindowSeen(seen, seq-*highest, size)
+		*highest = seq
+		setReplayWindowBit(seen, 0)
+		return true
+	}
+	delta := *highest - seq
+	if delta >= size || replayWindowBit(seen, delta) {
+		return false
+	}
+	setReplayWindowBit(seen, delta)
+	return true
+}
+
+func shiftReplayWindowSeen(seen []uint64, shift uint64, size uint64) {
+	if shift == 0 {
+		return
+	}
+	if shift >= size || int(shift/64) >= len(seen) {
+		clear(seen)
+		return
+	}
+	wordShift := int(shift / 64)
+	bitShift := uint(shift % 64)
+	for i := len(seen) - 1; i >= 0; i-- {
+		src := i - wordShift
+		var value uint64
+		if src >= 0 {
+			value = seen[src] << bitShift
+			if bitShift != 0 && src > 0 {
+				value |= seen[src-1] >> (64 - bitShift)
+			}
+		}
+		seen[i] = value
+	}
+	maskReplayWindowTail(seen, size)
+}
+
+func replayWindowBit(seen []uint64, bit uint64) bool {
+	word := int(bit / 64)
+	if word < 0 || word >= len(seen) {
+		return false
+	}
+	return seen[word]&(uint64(1)<<(bit%64)) != 0
+}
+
+func setReplayWindowBit(seen []uint64, bit uint64) {
+	word := int(bit / 64)
+	if word < 0 || word >= len(seen) {
+		return
+	}
+	seen[word] |= uint64(1) << (bit % 64)
+}
+
+func maskReplayWindowTail(seen []uint64, size uint64) {
+	if len(seen) == 0 {
+		return
+	}
+	remainder := size % 64
+	if remainder == 0 {
+		return
+	}
+	seen[len(seen)-1] &= (uint64(1) << remainder) - 1
 }

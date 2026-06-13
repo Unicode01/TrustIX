@@ -388,15 +388,19 @@ effective_kernel_load_only() {
 }
 
 kernel_extra_module_params() {
-  local vaes_kfunc=0
-  if effective_kernel_experimental_vaes_kfunc; then
-    vaes_kfunc=1
-  fi
-  if [[ -n "${TRUSTIX_E2E_KERNEL_EXTRA_MODULE_PARAMS+x}" ]]; then
-    printf '%s\n' "$TRUSTIX_E2E_KERNEL_EXTRA_MODULE_PARAMS"
-    return
-  fi
-  printf 'kfunc_simd_fastpath=1 experimental_aesni_kfunc=1 experimental_vaes_kfunc=%s kfunc_fastpath_stats=0 kfunc_fastpath_wipe=%s\n' "$vaes_kfunc" "${TRUSTIX_E2E_KERNEL_FASTPATH_WIPE:-1}"
+	local vaes_kfunc=0
+	if effective_kernel_experimental_vaes_kfunc; then
+		vaes_kfunc=1
+	fi
+	if [[ -n "${TRUSTIX_E2E_KERNEL_EXTRA_MODULE_PARAMS+x}" ]]; then
+		printf '%s\n' "$TRUSTIX_E2E_KERNEL_EXTRA_MODULE_PARAMS"
+		return
+	fi
+	local params="experimental_aesni_kfunc=1 experimental_vaes_kfunc=${vaes_kfunc} kfunc_fastpath_stats=0 kfunc_fastpath_wipe=${TRUSTIX_E2E_KERNEL_FASTPATH_WIPE:-1}"
+	if truthy "${TRUSTIX_E2E_KERNEL_ALLOW_SIMD_KFUNC_FASTPATH:-${TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH:-0}}"; then
+		params="kfunc_simd_fastpath=1 ${params}"
+	fi
+	printf '%s\n' "$params"
 }
 
 datapath_extra_module_params() {

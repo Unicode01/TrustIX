@@ -14,6 +14,7 @@ enable_features="${TRUSTIX_DATAPATH_ENABLE_FEATURES:-832}"
 extra_module_params="${TRUSTIX_DATAPATH_EXTRA_MODULE_PARAMS:-}"
 loaded_by_script=0
 loaded_variant=""
+reload_loaded_module=0
 
 log() {
   printf '[trustix-datapath] %s\n' "$*" >&2
@@ -56,6 +57,12 @@ param_is_yes() {
   local value
   value="$(read_module_param "$name")" || return 1
   printf '%s\n' "$value" | grep -qi '^Y'
+}
+
+request_loaded_module_reload() {
+  local reason="$1"
+  reload_loaded_module=1
+  log "loaded trustix_datapath_helpers needs reload: ${reason}"
 }
 
 apply_loaded_bool_param() {
@@ -109,27 +116,27 @@ apply_loaded_extra_params() {
         if truthy "$value"; then
           param="/sys/module/trustix_datapath_helpers/parameters/${name}"
           [[ -r "$param" ]] || die "trustix_datapath_helpers is loaded but ${name} parameter is missing"
-          param_is_yes "$name" || die "trustix_datapath_helpers is already loaded without ${name}=1; unload it before enabling route TCP GSO"
+          param_is_yes "$name" || request_loaded_module_reload "${name}=1 requested but loaded module has ${name}=0"
         elif param_is_yes "$name"; then
-          die "trustix_datapath_helpers is already loaded with ${name}=1; unload it or set ${name}=1"
+          request_loaded_module_reload "${name}=0 requested but loaded module has ${name}=1"
         fi
         ;;
       route_tcp_gso_async|route_tcp_gso_async_dev_xmit)
         if truthy "$value"; then
           param="/sys/module/trustix_datapath_helpers/parameters/${name}"
           [[ -r "$param" ]] || die "trustix_datapath_helpers is loaded but ${name} parameter is missing"
-          param_is_yes "$name" || die "trustix_datapath_helpers is already loaded without ${name}=1; unload it before enabling route TCP async GSO"
+          param_is_yes "$name" || request_loaded_module_reload "${name}=1 requested but loaded module has ${name}=0"
         elif param_is_yes "$name"; then
-          die "trustix_datapath_helpers is already loaded with ${name}=1; unload it or set ${name}=1"
+          request_loaded_module_reload "${name}=0 requested but loaded module has ${name}=1"
         fi
         ;;
       route_tcp_xmit_worker)
         if truthy "$value"; then
           param="/sys/module/trustix_datapath_helpers/parameters/${name}"
           [[ -r "$param" ]] || die "trustix_datapath_helpers is loaded but ${name} parameter is missing"
-          param_is_yes "$name" || die "trustix_datapath_helpers is already loaded without ${name}=1; unload it before enabling route TCP xmit worker"
+          param_is_yes "$name" || request_loaded_module_reload "${name}=1 requested but loaded module has ${name}=0"
         elif param_is_yes "$name"; then
-          die "trustix_datapath_helpers is already loaded with ${name}=1; unload it or set ${name}=1"
+          request_loaded_module_reload "${name}=0 requested but loaded module has ${name}=1"
         fi
         ;;
       route_tcp_xmit_worker_steal)
@@ -175,6 +182,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+unload_loaded_module_for_reload() {
+  local reason="$1"
+  log "unloading trustix_datapath_helpers for reload: ${reason}"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if rmmod trustix_datapath_helpers >/dev/null 2>&1; then
+      reload_loaded_module=0
+      return 0
+    fi
+    sleep 0.2
+  done
+  die "failed to unload trustix_datapath_helpers for reload; module may still be in use"
+}
+
 require_linux_root() {
   [[ "$(uname -s)" == "Linux" ]] || die "linux-datapath-module-smoke must run on Linux"
   [[ "${EUID:-$(id -u)}" == "0" ]] || die "linux-datapath-module-smoke must run as root to load kernel modules"
@@ -187,7 +207,10 @@ build_and_load_module() {
   if lsmod | awk '{print $1}' | grep -qx trustix_datapath_helpers; then
     log "trustix_datapath_helpers is already loaded"
     apply_loaded_extra_params
-    return 0
+    if [[ "$reload_loaded_module" != "1" ]]; then
+      return 0
+    fi
+    unload_loaded_module_for_reload "load-time parameter mismatch"
   fi
 
   local ko_path="$module_ko"

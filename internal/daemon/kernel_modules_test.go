@@ -649,7 +649,7 @@ func TestTrustIXCryptoModuleParametersStripsPanicRiskRawParameters(t *testing.T)
 	}
 }
 
-func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceEnablesSIMDKfuncFastpath(t *testing.T) {
+func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceFiltersSIMDKfuncFastpathByDefault(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -664,6 +664,16 @@ func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceEnablesSIMDKfun
 			Enabled:   true,
 		}},
 	}
+
+	got := TrustIXCryptoModuleParametersForDesired("", desired)
+	if strings.Contains(got, "kfunc_simd_fastpath=1") {
+		t.Fatalf("parameters = %q, must not enable SIMD kfunc fast path by default", got)
+	}
+}
+
+func TestTrustIXCryptoModuleParametersForDesiredAllowsExplicitSIMDKfuncFastpath(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH", "1")
+	desired := config.Desired{}
 
 	got := TrustIXCryptoModuleParametersForDesired("", desired)
 	for _, want := range []string{"kfunc_simd_fastpath=1", "experimental_aesni_kfunc=1", "experimental_vaes_kfunc=1"} {
