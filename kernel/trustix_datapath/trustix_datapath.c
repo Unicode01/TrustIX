@@ -13359,7 +13359,12 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 	hook->seen++;
 	if (outer_candidate) {
 		hook->outer_seen++;
-		if (!outer_ret && !worker_stream_queued)
+		/*
+		 * rx_prepare validates the outer wire/session before the worker
+		 * takes ownership. Re-parsing here repeats the same state walk on
+		 * every RX fast-path packet.
+		 */
+		if (!outer_ret && !worker_stream_queued && !rx_prepared)
 			outer_ret = trustix_datapath_outer_parse_skb_locked(
 				skb, &classify, ip_header_len, l4_header_len);
 		trustix_datapath_debug_record_outer(5, outer_ret, worker_ret,
@@ -13393,15 +13398,22 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 				hook->rx_worker_errors++;
 		}
 	}
-	ret = trustix_datapath_classify_locked(&classify);
-	if (ret == 0)
+	if (worker_queued) {
+		/* The RX worker already owns the packet; avoid a second route lookup. */
+		ret = 0;
 		hook->classified++;
-	else if (ret == -ENOENT)
-		hook->route_misses++;
-	else if (ret == -EHOSTUNREACH)
-		hook->session_misses++;
-	trustix_datapath_account_packet_classify_locked(skb->len, &classify,
-							ret);
+	} else {
+		ret = trustix_datapath_classify_locked(&classify);
+		if (ret == 0)
+			hook->classified++;
+		else if (ret == -ENOENT)
+			hook->route_misses++;
+		else if (ret == -EHOSTUNREACH)
+			hook->session_misses++;
+		trustix_datapath_account_packet_classify_locked(skb->len,
+								&classify,
+								ret);
+	}
 	if (worker_queued) {
 		hook->drop++;
 		if (worker_stream_frames > 1)
