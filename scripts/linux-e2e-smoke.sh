@@ -376,29 +376,72 @@ datapath_extra_module_params() {
     return
   fi
   local params=""
+  local add_param
+  add_param() {
+    local assignment="$1"
+    local key="${assignment%%=*}"
+    [[ -n "$key" ]] || return 0
+    case " ${params} " in
+      *" ${key}="*) return 0 ;;
+    esac
+    params="${params:+${params} }${assignment}"
+  }
   if experimental_tcp_route_header_kfunc_enabled; then
-    params="tixt_tx_plain_skip_sequence=${experimental_tcp_plain_skip_sequence} tixt_tx_plain_ack_only=${experimental_tcp_plain_ack_only}"
+    add_param "tixt_tx_plain_skip_sequence=${experimental_tcp_plain_skip_sequence}"
+    add_param "tixt_tx_plain_ack_only=${experimental_tcp_plain_ack_only}"
   fi
   if experimental_tcp_route_gso_sync_enabled || truthy "$experimental_tcp_route_gso_sync_stream"; then
-    params="${params:+${params} }route_tcp_gso=1"
+    add_param "route_tcp_gso=1"
   fi
   if experimental_tcp_route_gso_async_enabled; then
-    params="${params:+${params} }route_tcp_gso=1 route_tcp_gso_async=1 route_tcp_gso_async_dev_xmit=${experimental_tcp_route_gso_async_dev_xmit} route_tcp_gso_async_limit=${experimental_tcp_route_gso_async_limit} route_tcp_gso_async_worker_item_budget=${experimental_tcp_route_gso_async_worker_item_budget} route_tcp_gso_async_worker_segment_budget=${experimental_tcp_route_gso_async_worker_segment_budget} route_tcp_gso_async_max_segments_per_item=${experimental_tcp_route_gso_async_max_segments_per_item}"
+    add_param "route_tcp_gso=1"
+    add_param "route_tcp_gso_async=1"
+    add_param "route_tcp_gso_async_dev_xmit=${experimental_tcp_route_gso_async_dev_xmit}"
+    add_param "route_tcp_gso_async_limit=${experimental_tcp_route_gso_async_limit}"
+    add_param "route_tcp_gso_async_worker_item_budget=${experimental_tcp_route_gso_async_worker_item_budget}"
+    add_param "route_tcp_gso_async_worker_segment_budget=${experimental_tcp_route_gso_async_worker_segment_budget}"
+    add_param "route_tcp_gso_async_max_segments_per_item=${experimental_tcp_route_gso_async_max_segments_per_item}"
     if truthy "$experimental_tcp_route_gso_async_stream"; then
-      params="${params} route_tcp_gso_async_stream=1 route_tcp_gso_async_stream_max_frames=${experimental_tcp_route_gso_async_stream_max_frames}"
+      add_param "route_tcp_gso_async_stream=1"
+      add_param "route_tcp_gso_async_stream_max_frames=${experimental_tcp_route_gso_async_stream_max_frames}"
     fi
     if truthy "$experimental_tcp_route_gso_async_stream_direct_build"; then
-      params="${params} route_tcp_gso_async_stream_direct_build=1"
+      add_param "route_tcp_gso_async_stream_direct_build=1"
     fi
     if truthy "$experimental_tcp_route_gso_async_stream_outer_gso"; then
-      params="${params} route_tcp_gso_async_stream_outer_gso=1 route_tcp_gso_async_stream_outer_gso_hard_enable=1"
+      add_param "route_tcp_gso_async_stream_outer_gso=1"
+      add_param "route_tcp_gso_async_stream_outer_gso_hard_enable=1"
     fi
   fi
   if truthy "$experimental_tcp_route_gso_sync_stream"; then
-    params="${params:+${params} }route_tcp_gso_sync_stream=1 route_tcp_gso_sync_stream_outer_gso=${experimental_tcp_route_gso_sync_stream_outer_gso} route_tcp_gso_sync_stream_max_frames=${experimental_tcp_route_gso_sync_stream_max_frames}"
+    add_param "route_tcp_gso_sync_stream=1"
+    add_param "route_tcp_gso_sync_stream_outer_gso=${experimental_tcp_route_gso_sync_stream_outer_gso}"
+    add_param "route_tcp_gso_sync_stream_max_frames=${experimental_tcp_route_gso_sync_stream_max_frames}"
   fi
   if experimental_tcp_route_xmit_worker_enabled; then
-    params="${params:+${params} }route_tcp_xmit_worker=1"
+    add_param "route_tcp_xmit_worker=1"
+  fi
+  if experimental_tcp_profile_route_gso_default_enabled; then
+    add_param "route_tcp_gso_async_prefer=1"
+    add_param "route_tcp_gso_async_bytes_limit=33554432"
+    add_param "route_tcp_gso_async_worker_emit_budget=8"
+    add_param "route_tcp_gso_async_worker_resched_stride=16"
+    add_param "route_tcp_gso_async_worker_min_queue_depth=8"
+    add_param "route_tcp_gso_async_worker_schedule_delay_usecs=500"
+    add_param "route_tcp_gso_async_unbound_worker=1"
+    add_param "route_tcp_gso_async_sharded_queue=1"
+    add_param "route_tcp_gso_async_queue_shards=6"
+    add_param "route_tcp_gso_async_flow_shard_queue=1"
+    add_param "route_tcp_gso_async_stream_direct_build_inner_csum=1"
+    add_param "route_tcp_gso_async_stream_direct_build_fast_copy=1"
+    add_param "route_tcp_gso_async_stream_direct_build_frag_fast_copy=1"
+    add_param "route_tcp_gso_async_stream_outer_gso_hard_enable=1"
+    add_param "route_tcp_gso_async_stream_cross_item_batch=1"
+    add_param "route_tcp_gso_async_stream_cross_item_dequeue_batch=1"
+    add_param "route_tcp_gso_async_stream_cross_item_max_frames=24"
+    add_param "route_tcp_gso_async_stream_cross_item_dynamic_cap=1"
+    add_param "route_tcp_gso_async_stream_cross_item_dynamic_low_frames=12"
+    add_param "route_tcp_gso_async_stream_cross_item_dynamic_queue_depth=4"
   fi
   printf '%s\n' "$params"
 }
@@ -546,6 +589,85 @@ is_plaintext_encryption() {
     plaintext|none|disabled|off) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+transport_profile_is_performance() {
+  case "$(printf '%s' "${transport_profile:-}" | tr '[:upper:]' '[:lower:]' | tr '-' '_')" in
+    performance|perf|throughput|fast) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+transport_datapath_is_userspace() {
+  case "$(printf '%s' "${transport_datapath:-}" | tr '[:upper:]' '[:lower:]' | tr '-' '_')" in
+    userspace|user|raw_socket|rawsocket) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+experimental_tcp_profile_route_gso_default_enabled() {
+  [[ "$transport" == "experimental_tcp" ]] || return 1
+  transport_profile_is_performance || return 1
+  transport_datapath_is_userspace && return 1
+  is_plaintext_encryption "$(effective_transport_encryption)" || return 1
+  [[ "$crypto_placement" == "auto" || "$crypto_placement" == "userspace" ]] || return 1
+  return 0
+}
+
+apply_transport_profile_fastpath_defaults() {
+  experimental_tcp_profile_route_gso_default_enabled || return 0
+
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT+x}" ]]; then
+    experimental_tcp_tc_tx_direct=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY+x}" ]]; then
+    experimental_tcp_tc_tx_direct_only=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_SYNC+x}" ]]; then
+    experimental_tcp_route_gso_sync=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC+x}" ]]; then
+    experimental_tcp_route_gso_async=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_DEV_XMIT+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_DEV_XMIT+x}" ]]; then
+    experimental_tcp_route_gso_async_dev_xmit=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC+x}" ]]; then
+    experimental_tcp_route_xmit_worker=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_PLAIN_SKIP_SEQUENCE+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE+x}" && -z "${TRUSTIX_TIXT_TX_PLAIN_SKIP_SEQUENCE+x}" ]]; then
+    experimental_tcp_plain_skip_sequence=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_PLAIN_ACK_ONLY+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY+x}" && -z "${TRUSTIX_TIXT_TX_PLAIN_ACK_ONLY+x}" ]]; then
+    experimental_tcp_plain_ack_only=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT+x}" ]]; then
+    experimental_tcp_route_gso_async_limit=2048
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET+x}" ]]; then
+    experimental_tcp_route_gso_async_worker_item_budget=32
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET+x}" ]]; then
+    experimental_tcp_route_gso_async_worker_segment_budget=1024
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM+x}" ]]; then
+    experimental_tcp_route_gso_async_max_segments_per_item=128
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM+x}" ]]; then
+    experimental_tcp_route_gso_async_stream=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD+x}" ]]; then
+    experimental_tcp_route_gso_async_stream_direct_build=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO+x}" ]]; then
+    experimental_tcp_route_gso_async_stream_outer_gso=1
+  fi
+  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES+x}" ]]; then
+    experimental_tcp_route_gso_async_stream_max_frames=64
+  fi
+  if [[ -z "${TRUSTIX_E2E_DATAPATH_MODULE+x}" ]]; then
+    datapath_module=1
+  fi
 }
 
 append_endpoint_encryption_security() {
@@ -3555,6 +3677,7 @@ main() {
 
   allocate_ports
   configure_addresses
+  apply_transport_profile_fastpath_defaults
   mkdir -p "$workdir"
 log "workdir: $workdir"
 log "dataplane=${dataplane} transport=${transport} profile=${transport_profile} datapath=${transport_datapath} router_netns=${router_netns} nat_reverse=${nat_reverse} crypto=${crypto_placement} encryption=$(effective_transport_encryption) tls_only=${tls_only} direct_vip=${direct_management_vip} hot_stats=${hot_stats} perf_fast=${perf_fast}"
