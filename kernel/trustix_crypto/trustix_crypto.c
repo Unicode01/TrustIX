@@ -492,6 +492,17 @@ struct trustix_aead_direct_slot {
 #endif
 };
 
+#if TRUSTIX_X86_SIMD
+struct trustix_aead_direct_snapshot {
+	u8 rk[15][16] __aligned(16);
+	u8 shash[16] __aligned(16);
+	u8 shash4[4][16] __aligned(16);
+	int rounds;
+	bool aesni_ready;
+	bool vaes_ready;
+};
+#endif
+
 struct trustix_aead_ioc_scratch {
 	u8 *src;
 	u8 *dst;
@@ -6095,7 +6106,41 @@ static const struct bpf_crypto_type trustix_crypto = {
 
 #if !TRUSTIX_DEVICE_ONLY
 #if TRUSTIX_X86_SIMD
-static int trustix_aead_direct_crypt_one(struct trustix_aead_direct_slot *slot,
+static int
+trustix_aead_direct_snapshot_slot(struct trustix_aead_direct_snapshot *snapshot,
+				  u32 slot_id, bool decrypt)
+{
+	struct trustix_aead_direct_slot *slot;
+	int ret;
+
+	if (!snapshot)
+		return -EINVAL;
+	memset(snapshot, 0, sizeof(*snapshot));
+
+	rcu_read_lock();
+	slot = trustix_aead_direct_lookup_rcu(slot_id);
+	if (!slot) {
+		ret = -ENOENT;
+	} else if (!slot->aesni_ready ||
+		   (!!(slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT) !=
+		    decrypt)) {
+		ret = -EOPNOTSUPP;
+	} else {
+		memcpy(snapshot->rk, slot->rk, sizeof(snapshot->rk));
+		memcpy(snapshot->shash, slot->shash, sizeof(snapshot->shash));
+		memcpy(snapshot->shash4, slot->shash4,
+		       sizeof(snapshot->shash4));
+		snapshot->rounds = slot->rounds;
+		snapshot->aesni_ready = slot->aesni_ready;
+		snapshot->vaes_ready = slot->vaes_ready;
+		ret = 0;
+	}
+	rcu_read_unlock();
+	return ret;
+}
+
+static int trustix_aead_direct_crypt_one(
+					 struct trustix_aead_direct_snapshot *slot,
 					 struct trustix_aead_prepared_op *op,
 					 bool decrypt)
 {
@@ -6146,21 +6191,15 @@ __bpf_kfunc int trustix_kernel_direct_seal(u32 slot_id, const u8 *src,
 					     const u8 *nonce)
 {
 #if TRUSTIX_X86_SIMD
-	struct trustix_aead_direct_slot *slot;
+	struct trustix_aead_direct_snapshot snapshot;
 	struct trustix_aead_prepared_op op;
 	int ret;
 
 	if (!src || !dst || !nonce ||
 	    plain_len > TRUSTIX_AEAD_IOC_INPUT_MAX - TRUSTIX_AEAD_IOC_TAG_LEN)
 		return -EINVAL;
-	rcu_read_lock();
-	slot = trustix_aead_direct_lookup_rcu(slot_id);
-	if (!slot) {
-		ret = -ENOENT;
-	} else if (!slot->aesni_ready ||
-		   (slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT)) {
-		ret = -EOPNOTSUPP;
-	} else {
+	ret = trustix_aead_direct_snapshot_slot(&snapshot, slot_id, false);
+	if (!ret) {
 		op.nonce = (u8 *)nonce;
 		op.src = (u8 *)src;
 		op.dst = dst;
@@ -6168,9 +6207,9 @@ __bpf_kfunc int trustix_kernel_direct_seal(u32 slot_id, const u8 *src,
 		op.out_len = plain_len + TRUSTIX_AEAD_IOC_TAG_LEN;
 		if (trustix_kfunc_fastpath_stats)
 			this_cpu_inc(trustix_direct_kfunc_seal_calls);
-		ret = trustix_aead_direct_crypt_one(slot, &op, false);
+		ret = trustix_aead_direct_crypt_one(&snapshot, &op, false);
+		memzero_explicit(&snapshot, sizeof(snapshot));
 	}
-	rcu_read_unlock();
 	if (ret && trustix_kfunc_fastpath_stats)
 		this_cpu_inc(trustix_direct_kfunc_errors);
 	return ret;
@@ -6184,21 +6223,15 @@ __bpf_kfunc int trustix_kernel_direct_open(u32 slot_id, const u8 *src,
 					    const u8 *nonce)
 {
 #if TRUSTIX_X86_SIMD
-	struct trustix_aead_direct_slot *slot;
+	struct trustix_aead_direct_snapshot snapshot;
 	struct trustix_aead_prepared_op op;
 	int ret;
 
 	if (!src || !dst || !nonce || cipher_len < TRUSTIX_AEAD_IOC_TAG_LEN ||
 	    cipher_len > TRUSTIX_AEAD_IOC_INPUT_MAX)
 		return -EINVAL;
-	rcu_read_lock();
-	slot = trustix_aead_direct_lookup_rcu(slot_id);
-	if (!slot) {
-		ret = -ENOENT;
-	} else if (!slot->aesni_ready ||
-		   !(slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT)) {
-		ret = -EOPNOTSUPP;
-	} else {
+	ret = trustix_aead_direct_snapshot_slot(&snapshot, slot_id, true);
+	if (!ret) {
 		op.nonce = (u8 *)nonce;
 		op.src = (u8 *)src;
 		op.dst = dst;
@@ -6206,9 +6239,9 @@ __bpf_kfunc int trustix_kernel_direct_open(u32 slot_id, const u8 *src,
 		op.out_len = cipher_len - TRUSTIX_AEAD_IOC_TAG_LEN;
 		if (trustix_kfunc_fastpath_stats)
 			this_cpu_inc(trustix_direct_kfunc_open_calls);
-		ret = trustix_aead_direct_crypt_one(slot, &op, true);
+		ret = trustix_aead_direct_crypt_one(&snapshot, &op, true);
+		memzero_explicit(&snapshot, sizeof(snapshot));
 	}
-	rcu_read_unlock();
 	if (ret && trustix_kfunc_fastpath_stats)
 		this_cpu_inc(trustix_direct_kfunc_errors);
 	return ret;
@@ -6223,7 +6256,7 @@ trustix_kernel_skb_direct_open(struct sk_buff *skb,
 				 const u8 *nonce)
 {
 #if TRUSTIX_X86_SIMD
-	struct trustix_aead_direct_slot *slot;
+	struct trustix_aead_direct_snapshot snapshot;
 	struct trustix_aead_prepared_op op;
 	struct iphdr *iph;
 	u32 end;
@@ -6243,14 +6276,8 @@ trustix_kernel_skb_direct_open(struct sk_buff *skb,
 
 	cipher = skb->data + args->cipher_offset;
 	plain_len = args->cipher_len - TRUSTIX_AEAD_IOC_TAG_LEN;
-	rcu_read_lock();
-	slot = trustix_aead_direct_lookup_rcu(args->slot_id);
-	if (!slot) {
-		ret = -ENOENT;
-	} else if (!slot->aesni_ready ||
-		   !(slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT)) {
-		ret = -EOPNOTSUPP;
-	} else {
+	ret = trustix_aead_direct_snapshot_slot(&snapshot, args->slot_id, true);
+	if (!ret) {
 		op.nonce = (u8 *)nonce;
 		op.src = cipher;
 		op.dst = cipher;
@@ -6258,9 +6285,9 @@ trustix_kernel_skb_direct_open(struct sk_buff *skb,
 		op.out_len = plain_len;
 		if (trustix_kfunc_fastpath_stats)
 			this_cpu_inc(trustix_direct_kfunc_open_calls);
-		ret = trustix_aead_direct_crypt_one(slot, &op, true);
+		ret = trustix_aead_direct_crypt_one(&snapshot, &op, true);
+		memzero_explicit(&snapshot, sizeof(snapshot));
 	}
-	rcu_read_unlock();
 	if (ret) {
 		if (trustix_kfunc_fastpath_stats)
 			this_cpu_inc(trustix_direct_kfunc_errors);
@@ -6287,7 +6314,7 @@ trustix_kernel_skb_direct_seal(struct sk_buff *skb,
 				 const u8 *nonce)
 {
 #if TRUSTIX_X86_SIMD
-	struct trustix_aead_direct_slot *slot;
+	struct trustix_aead_direct_snapshot snapshot;
 	struct trustix_aead_prepared_op op;
 	u32 plain_end;
 	u32 cipher_end;
@@ -6317,14 +6344,8 @@ trustix_kernel_skb_direct_seal(struct sk_buff *skb,
 
 	plain = skb->data + args->plain_offset;
 	cipher = skb->data + args->cipher_offset;
-	rcu_read_lock();
-	slot = trustix_aead_direct_lookup_rcu(args->slot_id);
-	if (!slot) {
-		ret = -ENOENT;
-	} else if (!slot->aesni_ready ||
-		   (slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT)) {
-		ret = -EOPNOTSUPP;
-	} else {
+	ret = trustix_aead_direct_snapshot_slot(&snapshot, args->slot_id, false);
+	if (!ret) {
 		op.nonce = (u8 *)nonce;
 		op.src = plain;
 		op.dst = cipher;
@@ -6332,9 +6353,9 @@ trustix_kernel_skb_direct_seal(struct sk_buff *skb,
 		op.out_len = args->plain_len + TRUSTIX_AEAD_IOC_TAG_LEN;
 		if (trustix_kfunc_fastpath_stats)
 			this_cpu_inc(trustix_direct_kfunc_seal_calls);
-		ret = trustix_aead_direct_crypt_one(slot, &op, false);
+		ret = trustix_aead_direct_crypt_one(&snapshot, &op, false);
+		memzero_explicit(&snapshot, sizeof(snapshot));
 	}
-	rcu_read_unlock();
 	if (ret) {
 		if (trustix_kfunc_fastpath_stats)
 			this_cpu_inc(trustix_direct_kfunc_errors);
@@ -6375,7 +6396,6 @@ static int __init trustix_crypto_init(void)
 {
 	int ret;
 
-	WRITE_ONCE(trustix_kfunc_simd_fastpath, false);
 #if TRUSTIX_DEVICE_ONLY
 	trustix_vaes_available = trustix_aead_vaes_capable();
 	trustix_aesni_available = trustix_aead_aesni_capable();

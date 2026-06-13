@@ -58,6 +58,32 @@ func TestPacketSocketGSOErrnoRecordsKnownTransientErrors(t *testing.T) {
 	}
 }
 
+func TestPacketSocketGSOErrnoUnwrapsJoinedErrors(t *testing.T) {
+	err := errors.Join(
+		fmt.Errorf("raw configure: %w", &os.SyscallError{Syscall: "setsockopt", Err: unix.ENOPROTOOPT}),
+		fmt.Errorf("cooked configure: %w", &os.SyscallError{Syscall: "setsockopt", Err: unix.EINVAL}),
+	)
+	if got := packetSocketGSOErrno(err); got != unix.ENOPROTOOPT {
+		t.Fatalf("joined packet socket GSO errno = %v, want ENOPROTOOPT", got)
+	}
+	if !isPacketSocketGSOUnsupported(err) {
+		t.Fatalf("joined unsupported errno was not treated as GSO unsupported")
+	}
+}
+
+func TestPacketVNetHeaderSizeOptionalErrors(t *testing.T) {
+	for _, errno := range []unix.Errno{unix.EINVAL, unix.ENOPROTOOPT, unix.EOPNOTSUPP, unix.ENOTSUP} {
+		err := fmt.Errorf("set PACKET_VNET_HDR_SZ: %w", errno)
+		if !isPacketVNetHeaderSizeOptionalError(err) {
+			t.Fatalf("%v should allow default VNET header size fallback", errno)
+		}
+	}
+	err := fmt.Errorf("set PACKET_VNET_HDR_SZ: %w", unix.EPERM)
+	if isPacketVNetHeaderSizeOptionalError(err) {
+		t.Fatalf("EPERM should remain a fatal VNET header size configuration error")
+	}
+}
+
 func TestLANReinjectGSOQdiscBypassDefaultDisabled(t *testing.T) {
 	t.Setenv("TRUSTIX_LAN_REINJECT_GSO_QDISC_BYPASS", "")
 	if lanReinjectGSOQdiscBypassEnabled() {

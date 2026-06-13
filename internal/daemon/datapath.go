@@ -469,6 +469,7 @@ type captureForwardScratch struct {
 	packetArena           []byte
 	txGSOCoalesceReady    bool
 	txGSOCoalesceEnabled  bool
+	txGSOCoalesceExplicit bool
 	txGSOCoalesceMaxBytes int
 	txGSOCoalesceMaxPkts  int
 	mssClamp              int
@@ -529,7 +530,7 @@ func (scratch *captureForwardScratch) begin(eventCount int, daemon *Daemon) {
 	scratch.coalescedPackets = scratch.coalescedPackets[:0]
 	scratch.coalesceArena = scratch.coalesceArena[:0]
 	if !scratch.txGSOCoalesceReady {
-		scratch.txGSOCoalesceEnabled = dataSessionTXGSOCoalesceEnabled()
+		scratch.txGSOCoalesceEnabled, scratch.txGSOCoalesceExplicit = dataSessionTXGSOCoalescePreference()
 		scratch.txGSOCoalesceMaxBytes = dataSessionTXGSOCoalesceMaxBytes()
 		scratch.txGSOCoalesceMaxPkts = dataSessionTXGSOCoalesceMaxPackets()
 		scratch.txGSOCoalesceReady = true
@@ -3150,6 +3151,9 @@ func (daemon *Daemon) prepareCaptureForwardWireBatch(runtime *dataSessionRuntime
 			if sessionMax := int(stats.MaxPacketSize); sessionMax > 0 && maxBytes > sessionMax {
 				maxBytes = sessionMax
 			}
+		}
+		if !scratch.txGSOCoalesceExplicit && dataSessionTXGSOCoalesceDefaultForStats(stats) {
+			enabled = true
 		}
 	}
 	if !enabled {

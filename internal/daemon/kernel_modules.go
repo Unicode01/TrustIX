@@ -43,7 +43,7 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 		return nil, err
 	}
 	cryptoModule := modules.TrustIXCrypto
-	cryptoModule.Parameters = TrustIXCryptoModuleParameters(cryptoModule.Parameters)
+	cryptoModule.Parameters = TrustIXCryptoModuleParametersForDesired(cryptoModule.Parameters, desired)
 	cryptoStatus, err := daemon.kernelCrypto.Ensure(ctx, cryptoModule)
 	if err != nil {
 		return []kernelmodule.Status{cryptoStatus}, err
@@ -95,6 +95,18 @@ func kernelModulesAllDisabled(modules config.KernelModulesConfig) bool {
 
 func TrustIXCryptoModuleParameters(raw string) string {
 	return filterModuleParameters(raw, trustIXCryptoPanicRiskModuleParameters)
+}
+
+func TrustIXCryptoModuleParametersForDesired(raw string, desired config.Desired) string {
+	allowSIMDFastpath := kernelUDPSecureFullDirectForDesired(desired) || envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH")
+	params := raw
+	if !allowSIMDFastpath {
+		params = filterModuleParameters(params, trustIXCryptoPanicRiskModuleParameters)
+	} else {
+		params = appendModuleParameterIfMissing(params, "kfunc_simd_fastpath=1")
+		params = appendModuleParameterIfMissing(params, "experimental_vaes_kfunc=1")
+	}
+	return strings.TrimSpace(params)
 }
 
 func TrustIXDatapathModuleParameters(raw string) string {

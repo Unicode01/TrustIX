@@ -107,6 +107,10 @@ func dataSessionTXGSOCoalesceEnabled() bool {
 	return enabled
 }
 
+func dataSessionTXGSOCoalesceDefaultForStats(stats transport.TransportStats) bool {
+	return stats.Encrypted && stats.CryptoPlacement == "kernel"
+}
+
 func dataSessionTXGSOCoalescePreference() (bool, bool) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_DATA_SESSION_TX_GSO_COALESCE"))) {
 	case "1", "true", "yes", "on", "enabled":

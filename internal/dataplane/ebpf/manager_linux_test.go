@@ -1035,6 +1035,38 @@ func TestKernelUDPTXSecureDirectExperimentalTCPComputesOuterChecksum(t *testing.
 	}
 }
 
+func TestKernelUDPTXSecureDirectOuterTCPChecksumKfuncCompiledOutByDefault(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_tx_kernel_crypto_tc.c"))
+	if err != nil {
+		t.Fatalf("read kernel_udp TX secure C source: %v", err)
+	}
+	requireSourceContains(t, string(source), "#define TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC 0")
+	requireSourceContains(t, string(source), "#if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC\nextern int trustix_kernel_skb_tixt_fix_outer_tcp_csum")
+	requireSourceContains(t, string(source), "#if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC\n        __u32 csum_flags = outer_tcp_partial_csum_kfunc ?")
+
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_OUTER_TCP_CHECKSUM_KFUNC", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_OUTER_TCP_PARTIAL_CHECKSUM_KFUNC", "1")
+	options := kernelUDPTXSecureDirectProgramOptionsForSpec(dataplane.AttachSpec{})
+	if options.OuterTCPChecksumKfunc || options.OuterTCPPartialCSUMKfunc {
+		t.Fatalf("outer TCP checksum kfunc options enabled with embedded object compiled without support: %+v", options)
+	}
+}
+
+func TestKernelUDPTXSecureDirectBoundsInnerUDPChecksumLength(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_tx_kernel_crypto_tc.c"))
+	if err != nil {
+		t.Fatalf("read kernel_udp TX secure C source: %v", err)
+	}
+
+	l4Body := sourceFunctionBody(t, string(source), "trustix_l4_checksum")
+	requireSourceContains(t, l4Body, "l4_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20")
+	requireSourceContains(t, l4Body, "barrier_var(l4_len);")
+
+	fixBody := sourceFunctionBody(t, string(source), "trustix_fix_inner_checksums")
+	requireSourceContains(t, fixBody, "udp_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20")
+	requireSourceContains(t, fixBody, "barrier_var(udp_len);")
+}
+
 func TestKernelUDPTXSecureDirectCanFixInnerChecksumsWithoutTrustFlag(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_tx_kernel_crypto_tc.c"))
 	if err != nil {
@@ -4907,6 +4939,24 @@ func TestExperimentalTCPPayloadMaxUsesRawFallbackMTU(t *testing.T) {
 	stats := manager.experimentalTCPProviderStatsLocked()
 	if stats["effective_payload_max_secure"] != uint64(want) || stats["underlay_mtu_l3"] != 1500 {
 		t.Fatalf("stats payload/mtu = %d/%d, want %d/1500", stats["effective_payload_max_secure"], stats["underlay_mtu_l3"], want)
+	}
+}
+
+func TestKernelUDPPayloadMaxClampsAFXDPCryptoPayloadToUnderlayMTU(t *testing.T) {
+	manager := NewManager()
+	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
+	manager.expTCPFastPath.ready.Store(true)
+	manager.expTCPFastPath.sockets[0].umemFrameSize = 4096
+	manager.snapshot.PacketPolicy.MTU = 1500
+	manager.kernelCryptoDevices = map[uint64]*kernelCryptoDevice{1: {}}
+
+	got, err := manager.KernelUDPPayloadMax(context.Background(), dataplane.CryptoPlacementKernel, true)
+	if err != nil {
+		t.Fatalf("payload max: %v", err)
+	}
+	want := 1500 - rejectIPv4HeaderLen - 8 - kerneludp.HeaderLen - experimentalTCPKernelCryptoOverhead
+	if got != want {
+		t.Fatalf("kernel UDP crypto payload max = %d, want %d", got, want)
 	}
 }
 
@@ -13993,7 +14043,38 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	requireSourceContains(t, helpersSource, "datapath can self-degrade under validation")
 
 	requireModuleParamPermission(t, cryptoSource, "kfunc_simd_fastpath", "0444")
-	requireSourceContains(t, cryptoSource, "WRITE_ONCE(trustix_kfunc_simd_fastpath, false);")
+	requireSourceNotContains(t, cryptoSource, "WRITE_ONCE(trustix_kfunc_simd_fastpath, false);")
+}
+
+func TestTrustIXCryptoDirectKfuncSnapshotsBeforeFPU(t *testing.T) {
+	cryptoSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_crypto", "trustix_crypto.c"))
+
+	snapshotBody := sourceFunctionBody(t, cryptoSource, "trustix_aead_direct_snapshot_slot")
+	requireSourceContains(t, snapshotBody, "rcu_read_lock();")
+	requireSourceContains(t, snapshotBody, "rcu_read_unlock();")
+	requireSourceNotContains(t, snapshotBody, "kernel_fpu_begin();")
+
+	cryptBody := sourceFunctionBody(t, cryptoSource, "trustix_aead_direct_crypt_one")
+	requireSourceContains(t, cryptBody, "kernel_fpu_begin();")
+	requireSourceContains(t, cryptBody, "kernel_fpu_end();")
+	requireSourceNotContains(t, cryptBody, "rcu_read_lock();")
+	requireSourceNotContains(t, cryptBody, "rcu_read_unlock();")
+
+	for _, name := range []string{
+		"trustix_kernel_direct_seal",
+		"trustix_kernel_direct_open",
+		"trustix_kernel_skb_direct_open",
+		"trustix_kernel_skb_direct_seal",
+	} {
+		body := sourceFunctionBody(t, cryptoSource, name)
+		snapshot := strings.Index(body, "trustix_aead_direct_snapshot_slot")
+		crypt := strings.Index(body, "trustix_aead_direct_crypt_one")
+		if snapshot < 0 || crypt < 0 || snapshot > crypt {
+			t.Fatalf("%s must snapshot the direct slot before crypt: snapshot=%d crypt=%d", name, snapshot, crypt)
+		}
+		requireSourceNotContains(t, body, "rcu_read_lock();")
+		requireSourceNotContains(t, body, "rcu_read_unlock();")
+	}
 }
 
 func readSourceFile(t *testing.T, path string) string {
@@ -14029,5 +14110,12 @@ func requireSourceContains(t *testing.T, source, want string) {
 	t.Helper()
 	if !strings.Contains(source, want) {
 		t.Fatalf("source missing %q", want)
+	}
+}
+
+func requireSourceNotContains(t *testing.T, source, want string) {
+	t.Helper()
+	if strings.Contains(source, want) {
+		t.Fatalf("source unexpectedly contains %q", want)
 	}
 }

@@ -367,7 +367,7 @@ kernel_extra_module_params() {
     printf '%s\n' "$TRUSTIX_E2E_KERNEL_EXTRA_MODULE_PARAMS"
     return
   fi
-  printf 'experimental_aesni_kfunc=1 experimental_vaes_kfunc=%s kfunc_fastpath_stats=0 kfunc_fastpath_wipe=%s\n' "$vaes_kfunc" "${TRUSTIX_E2E_KERNEL_FASTPATH_WIPE:-1}"
+  printf 'experimental_vaes_kfunc=%s kfunc_fastpath_stats=0 kfunc_fastpath_wipe=%s\n' "$vaes_kfunc" "${TRUSTIX_E2E_KERNEL_FASTPATH_WIPE:-1}"
 }
 
 datapath_extra_module_params() {
@@ -788,6 +788,31 @@ cleanup_iptunnel_links_in_ns() {
   ip netns exec "$ns" sh -c 'for path in /sys/class/net/tixgr* /sys/class/net/tixip* /sys/class/net/tixvx*; do [ -e "$path" ] || continue; ip link del "$(basename "$path")" 2>/dev/null || true; done' >/dev/null 2>&1 || true
 }
 
+cleanup_netdev_dataplane_state_in_ns() {
+  local ns="$1"
+  shift
+  local dev
+  for dev in "$@"; do
+    [[ -n "$dev" ]] || continue
+    run_in_netns "$ns" sh -c '
+      dev="$1"
+      ip link show dev "$dev" >/dev/null 2>&1 || exit 0
+      tc qdisc del dev "$dev" clsact >/dev/null 2>&1 || true
+      ip link set dev "$dev" xdp off >/dev/null 2>&1 || true
+      ip link set dev "$dev" xdpgeneric off >/dev/null 2>&1 || true
+    ' sh "$dev" >/dev/null 2>&1 || true
+  done
+}
+
+cleanup_topology_dataplane_state() {
+  if [[ "$router_netns" == "1" ]]; then
+    cleanup_netdev_dataplane_state_in_ns "$ns_ix_a" "$lan_a" "$underlay_a"
+    cleanup_netdev_dataplane_state_in_ns "$ns_ix_b" "$lan_b" "$underlay_b"
+  else
+    cleanup_netdev_dataplane_state_in_ns "" "$lan_a" "$lan_b"
+  fi
+}
+
 trustixd_pids_for_data_dir() {
   local data_dir="$1"
   ps -eo pid=,comm=,args= | awk -v dd="$data_dir" '$2 == "trustixd" && index($0, "-data-dir " dd) { print $1 }'
@@ -817,6 +842,7 @@ cleanup() {
   stop_daemon_pid "$pid_a"
   stop_daemon_pid "$pid_b"
   stop_daemons_by_workdir
+  cleanup_topology_dataplane_state
   cleanup_iptunnel_links_in_ns "$ns_ix_a"
   cleanup_iptunnel_links_in_ns "$ns_ix_b"
   if [[ "$keep" != "1" ]]; then
@@ -844,6 +870,7 @@ require_linux_root() {
 }
 
 clean_previous_topology() {
+  cleanup_topology_dataplane_state
   ip netns del "$ns_ix_a" >/dev/null 2>&1 || true
   ip netns del "$ns_ix_b" >/dev/null 2>&1 || true
   ip netns del "$ns_a" >/dev/null 2>&1 || true

@@ -31,7 +31,10 @@ type kernelUDPTXSecureDirectProgramOptions struct {
 	OuterTCPPartialCSUMKfunc bool
 }
 
-const kernelUDPTXSecureDirectSKBSealKfuncCompiled = false
+const (
+	kernelUDPTXSecureDirectSKBSealKfuncCompiled          = false
+	kernelUDPTXSecureDirectOuterTCPChecksumKfuncCompiled = false
+)
 
 func loadKernelUDPTXSecureDirectObject(provider *kernelCryptoProviderObject, statsMap *cebpf.Map, routeMap *cebpf.Map, flowMap *cebpf.Map, options kernelUDPTXSecureDirectProgramOptions) (*kernelUDPTXSecureDirectObject, error) {
 	if provider == nil || provider.flowIndexMap == nil || provider.contextSlots == nil || provider.directSlotMap == nil {

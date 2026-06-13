@@ -92,11 +92,12 @@ returning by default. Trusted throughput tests can load with
 `kfunc_fastpath_wipe=0` to measure the hot-path cost of that wipe while keeping
 key/context cleanup and decrypt-failure plaintext cleanup intact.
 
-`kfunc_simd_fastpath` is hard-disabled for the first release. The parameter is
-read-only and forced to `N` during module init even if passed to `insmod`,
-because TC/XDP callbacks can execute in contexts where explicit FPU/SIMD use is
-not safe enough for production. Prepared-pool VAES device batches remain the
-supported high-throughput SIMD path.
+`kfunc_simd_fastpath` is off by default and read-only after module load. Trusted
+TC/XDP throughput deployments can opt in at load time with
+`kfunc_simd_fastpath=1`; stable deployments should leave it disabled because
+TC/XDP callbacks can execute in contexts where explicit FPU/SIMD use carries
+extra risk. Prepared-pool VAES device batches remain the default high-throughput
+SIMD path when direct kfuncs are not explicitly enabled.
 
 To run the experimental VAES prepared-batch checks through the smoke script:
 

@@ -1619,6 +1619,7 @@ type kernelUDPFragmentPayloadCacheKey struct {
 	placement  dataplane.CryptoPlacement
 	offloaded  bool
 	configured int
+	explicit   bool
 }
 
 type kernelUDPFragmentAssembly struct {
@@ -1984,6 +1985,7 @@ func (session *kernelSession) kernelUDPSealBeforeFragmentMax(enabled bool) int {
 		placement:  session.cryptoPlacement,
 		offloaded:  session.cryptoOffloaded,
 		configured: configured,
+		explicit:   kernelUDPConfiguredFragmentPayloadSizeExplicit(kernelUDPFragmentPayloadMaxForPlacement(session.cryptoPlacement, session.cryptoOffloaded)),
 	}
 	if session.sealBeforeMaxCached > 0 && session.sealBeforeMaxCacheKey == key {
 		return session.sealBeforeMaxCached
@@ -2713,15 +2715,17 @@ func (session *kernelSession) fragmentPayloadSize() int {
 	if configured == 0 {
 		configured = kernelUDPFragmentPayloadSizeForPlacement(session.cryptoPlacement, session.cryptoOffloaded)
 	}
+	explicit := kernelUDPConfiguredFragmentPayloadSizeExplicit(kernelUDPFragmentPayloadMaxForPlacement(session.cryptoPlacement, session.cryptoOffloaded))
 	key := kernelUDPFragmentPayloadCacheKey{
 		placement:  session.cryptoPlacement,
 		offloaded:  session.cryptoOffloaded,
 		configured: configured,
+		explicit:   explicit,
 	}
 	if session.fragmentPayloadCached > 0 && session.fragmentPayloadCacheKey == key {
 		return session.fragmentPayloadCached
 	}
-	payloadSize := session.clampFragmentPayloadSize(configured)
+	payloadSize := session.clampFragmentPayloadSize(configured, explicit)
 	session.fragmentPayloadCacheKey = key
 	session.fragmentPayloadCached = payloadSize
 	return payloadSize
@@ -2750,10 +2754,14 @@ func (session *kernelSession) maxPacketSize() int {
 	return maxPacket
 }
 
-func (session *kernelSession) clampFragmentPayloadSize(payloadSize int) int {
+func (session *kernelSession) clampFragmentPayloadSize(payloadSize int, explicit bool) int {
 	if sizer, ok := session.provider.(dataplane.KernelUDPPayloadSizer); ok {
-		if maxSize, err := sizer.KernelUDPPayloadMax(context.Background(), session.cryptoPlacement, session.cryptoOffloaded); err == nil && maxSize > 0 && payloadSize > maxSize {
-			payloadSize = maxSize
+		if maxSize, err := sizer.KernelUDPPayloadMax(context.Background(), session.cryptoPlacement, session.cryptoOffloaded); err == nil && maxSize > 0 {
+			if payloadSize > maxSize {
+				payloadSize = maxSize
+			} else if !explicit && session.autoRaiseKernelUDPFragmentPayload() && payloadSize < maxSize {
+				payloadSize = min(maxSize, kernelUDPFragmentPayloadMaxForPlacement(session.cryptoPlacement, session.cryptoOffloaded))
+			}
 		}
 	}
 	if payloadSize < 1 {
@@ -2762,11 +2770,22 @@ func (session *kernelSession) clampFragmentPayloadSize(payloadSize int) int {
 	return payloadSize
 }
 
+func (session *kernelSession) autoRaiseKernelUDPFragmentPayload() bool {
+	return session != nil && session.cryptoOffloaded && session.cryptoPlacement == dataplane.CryptoPlacementKernel
+}
+
 func kernelUDPFragmentPayloadSizeForPlacement(placement dataplane.CryptoPlacement, offloaded bool) int {
 	if placement == dataplane.CryptoPlacementKernel || offloaded {
 		return kernelUDPConfiguredFragmentPayloadSize(kernelUDPKernelFragmentPayloadSize, kernelUDPKernelFragmentPayloadMax)
 	}
 	return kernelUDPConfiguredFragmentPayloadSize(kernelUDPFragmentPayloadSize, kernelUDPFragmentPayloadMax)
+}
+
+func kernelUDPFragmentPayloadMaxForPlacement(placement dataplane.CryptoPlacement, offloaded bool) int {
+	if placement == dataplane.CryptoPlacementKernel || offloaded {
+		return kernelUDPKernelFragmentPayloadMax
+	}
+	return kernelUDPFragmentPayloadMax
 }
 
 func kernelUDPSealBeforeFragmentEnabled() bool {
@@ -2781,19 +2800,31 @@ func kernelUDPSealBeforeFragmentEnabled() bool {
 }
 
 func kernelUDPConfiguredFragmentPayloadSize(defaultSize int, maxSize int) int {
+	if parsed, ok := kernelUDPConfiguredFragmentPayloadSizeValue(maxSize); ok {
+		return parsed
+	}
+	return defaultSize
+}
+
+func kernelUDPConfiguredFragmentPayloadSizeExplicit(maxSize int) bool {
+	_, ok := kernelUDPConfiguredFragmentPayloadSizeValue(maxSize)
+	return ok
+}
+
+func kernelUDPConfiguredFragmentPayloadSizeValue(maxSize int) (int, bool) {
 	const minSize = 576
 	value := strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_FRAGMENT_PAYLOAD_SIZE"))
 	if value == "" {
-		return defaultSize
+		return 0, false
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < minSize {
-		return defaultSize
+		return 0, false
 	}
 	if parsed > maxSize {
-		return maxSize
+		parsed = maxSize
 	}
-	return parsed
+	return parsed, true
 }
 
 func kernelUDPConfiguredMaxPacketSize() int {

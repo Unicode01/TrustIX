@@ -9,6 +9,8 @@ import (
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/dataplane"
+	"trustix.local/trustix/internal/transport"
+	securetransport "trustix.local/trustix/internal/transport/secure"
 )
 
 func TestTrustIXDatapathModuleParametersAutoEnableRXWorker(t *testing.T) {
@@ -644,6 +646,30 @@ func TestTrustIXCryptoModuleParametersStripsPanicRiskRawParameters(t *testing.T)
 	want := "prefer_software=1 experimental_vaes_kfunc=1"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
+	}
+}
+
+func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceEnablesSIMDKfuncFastpath(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXCryptoModuleParametersForDesired("", desired)
+	for _, want := range []string{"kfunc_simd_fastpath=1", "experimental_vaes_kfunc=1"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parameters = %q, missing %q", got, want)
+		}
 	}
 }
 

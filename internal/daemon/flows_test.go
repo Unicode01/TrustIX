@@ -796,7 +796,7 @@ func TestPrepareCaptureForwardWireBatchDefaultsOffForPlaintext(t *testing.T) {
 	}
 }
 
-func TestPrepareCaptureForwardWireBatchDefaultsOffForKernelCrypto(t *testing.T) {
+func TestPrepareCaptureForwardWireBatchDefaultsOnForKernelCrypto(t *testing.T) {
 	daemon := &Daemon{}
 	session := &recordingNativeBatchSession{stats: transport.TransportStats{
 		NativeBatching:      true,
@@ -818,12 +818,15 @@ func TestPrepareCaptureForwardWireBatchDefaultsOffForKernelCrypto(t *testing.T) 
 
 	wire := daemon.prepareCaptureForwardWireBatch(runtime, session, batch, &scratch)
 
-	if len(wire.Packets) != 2 {
-		t.Fatalf("wire packets = %d, want default kernel crypto uncoalesced 2", len(wire.Packets))
+	if len(wire.Packets) != 1 {
+		t.Fatalf("wire packets = %d, want default kernel crypto coalesced 1", len(wire.Packets))
+	}
+	if got := string(wire.Packets[0][40:]); got != "helloworld" {
+		t.Fatalf("coalesced payload = %q", got)
 	}
 	counters := daemon.dataStats.snapshot()
-	if counters.SendGSOCoalesceBatches != 0 || counters.SendGSOCoalescePackets != 0 || counters.SendGSOCoalesceWires != 0 {
-		t.Fatalf("TX GSO coalesce counters = %+v, want kernel crypto default disabled", counters)
+	if counters.SendGSOCoalesceBatches != 1 || counters.SendGSOCoalescePackets != 2 || counters.SendGSOCoalesceWires != 1 {
+		t.Fatalf("TX GSO coalesce counters = %+v, want kernel crypto default enabled", counters)
 	}
 }
 

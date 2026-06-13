@@ -3510,19 +3510,32 @@ func (manager *Manager) KernelUDPPayloadMax(ctx context.Context, placement datap
 	if !fastPath && !rawFallback {
 		return 0, fmt.Errorf("UDP AF_XDP kernel transport provider is not available")
 	}
+	effectiveEncrypted := encrypted
+	var payloadMax int
 	if fastPath && placement == dataplane.CryptoPlacementKernel && manager.hasKernelCryptoDeviceLocked(kernelCryptoNamespaceKernelUDP) {
-		return manager.expTCPFastPath.KernelUDPPayloadMaxWithDeviceCrypto(), nil
-	}
-	if fastPath {
-		return manager.expTCPFastPath.KernelUDPPayloadMax(placement, encrypted), nil
-	}
-	if placement == dataplane.CryptoPlacementKernel {
+		payloadMax = manager.expTCPFastPath.KernelUDPPayloadMaxWithDeviceCrypto()
+		effectiveEncrypted = true
+	} else if fastPath {
+		payloadMax = manager.expTCPFastPath.KernelUDPPayloadMax(placement, encrypted)
+	} else if placement == dataplane.CryptoPlacementKernel {
 		if !manager.kernelUDPKernelCryptoReadyLocked() {
 			return 0, fmt.Errorf("kernel_udp raw UDP fallback kernel crypto is not available: %s", manager.kernelUDPKernelCryptoUnavailableReasonLocked())
 		}
-		return manager.kernelUDPRawFallbackPayloadMaxLocked(placement, true), nil
+		payloadMax = manager.kernelUDPRawFallbackPayloadMaxLocked(placement, true)
+		effectiveEncrypted = true
+	} else {
+		payloadMax = manager.kernelUDPRawFallbackPayloadMaxLocked(placement, encrypted)
 	}
-	return manager.kernelUDPRawFallbackPayloadMaxLocked(placement, encrypted), nil
+	if mtuMax := manager.kernelUDPRawFallbackPayloadMaxLocked(placement, effectiveEncrypted); mtuMax > 0 {
+		if payloadMax <= 0 {
+			payloadMax = mtuMax
+		}
+		payloadMax = min(payloadMax, mtuMax)
+	}
+	if payloadMax <= 0 {
+		return 0, fmt.Errorf("kernel_udp payload max is unavailable")
+	}
+	return payloadMax, nil
 }
 
 func (manager *Manager) KernelUDPSealBeforeFragmentMax(ctx context.Context, placement dataplane.CryptoPlacement) (int, error) {
@@ -10817,6 +10830,8 @@ func addLANPacketInjectorProviderStats(stats map[string]uint64) {
 	stats["lan_reinject_gso_error_efault"] = lanPacketStats.gsoErrnoEFAULT.Load()
 	stats["lan_reinject_gso_error_edestaddrreq"] = lanPacketStats.gsoErrnoEDESTADDRREQ.Load()
 	stats["lan_reinject_gso_error_other"] = lanPacketStats.gsoErrnoOther.Load()
+	stats["lan_reinject_gso_vnet_hdr_size_configured"] = lanPacketStats.gsoVNetHdrSizeConfigured.Load()
+	stats["lan_reinject_gso_vnet_hdr_size_fallbacks"] = lanPacketStats.gsoVNetHdrSizeFallbacks.Load()
 	stats["lan_reinject_software_segments"] = lanPacketStats.softwareSegments.Load()
 	stats["lan_reinject_software_segment_batches"] = lanPacketStats.softwareSegmentBatches.Load()
 	stats["lan_reinject_batch_send_attempts"] = lanPacketStats.batchSendAttempts.Load()
@@ -10878,7 +10893,7 @@ func (manager *Manager) addKernelUDPTXDirectCurrentStatsLocked(stats map[string]
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled"] = boolCounter(txSecureOptions.KfuncSeal)
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_skb_seal_kfunc"] = boolCounter(txSecureOptions.SKBSealKfunc)
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_inner_tcp_checksum_kfunc"] = boolCounter(kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled())
-	stats[prefix+"tc_kernel_udp_tx_secure_direct_outer_tcp_csum_kfunc"] = boolCounter(kernelUDPTXSecureDirectOuterTCPChecksumKfuncEnabled())
+	stats[prefix+"tc_kernel_udp_tx_secure_direct_outer_tcp_csum_kfunc"] = boolCounter(txSecureOptions.OuterTCPChecksumKfunc)
 }
 
 func (manager *Manager) addKernelUDPTXDirectSyncStatsLocked(stats map[string]uint64, prefix string) {
@@ -19813,8 +19828,8 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled", Value: boolCounter(txSecureOptions.KfuncSeal)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_skb_seal_kfunc", Value: boolCounter(txSecureOptions.SKBSealKfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_inner_tcp_checksum_kfunc", Value: boolCounter(kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled())})
-	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_outer_tcp_csum_kfunc", Value: boolCounter(kernelUDPTXSecureDirectOuterTCPChecksumKfuncEnabled())})
-	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_outer_tcp_partial_csum_kfunc", Value: boolCounter(kernelUDPTXSecureDirectOuterTCPPartialChecksumKfuncEnabled())})
+	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_outer_tcp_csum_kfunc", Value: boolCounter(txSecureOptions.OuterTCPChecksumKfunc)})
+	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_outer_tcp_partial_csum_kfunc", Value: boolCounter(txSecureOptions.OuterTCPPartialCSUMKfunc)})
 	txDirectStats := make(map[string]uint64)
 	manager.addKernelUDPTXDirectSyncStatsLocked(txDirectStats, "tc_")
 	txDirectNames := make([]string, 0, len(txDirectStats))
@@ -23630,8 +23645,8 @@ func kernelUDPTXSecureDirectProgramOptionsForSpec(spec dataplane.AttachSpec) ker
 		SKBSealKfunc:             kernelUDPTXSecureDirectSKBSealKfuncCompiled && (spec.KernelUDPTXSecureDirectSKBSealKfunc || kernelUDPTXSecureDirectSKBSealKfuncEnabled()),
 		FixInnerChecksums:        kernelUDPTXSecureDirectFixInnerChecksumsEnabled(),
 		InnerTCPChecksumKfunc:    kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled(),
-		OuterTCPChecksumKfunc:    kernelUDPTXSecureDirectOuterTCPChecksumKfuncEnabled(),
-		OuterTCPPartialCSUMKfunc: kernelUDPTXSecureDirectOuterTCPPartialChecksumKfuncEnabled(),
+		OuterTCPChecksumKfunc:    kernelUDPTXSecureDirectOuterTCPChecksumKfuncCompiled && kernelUDPTXSecureDirectOuterTCPChecksumKfuncEnabled(),
+		OuterTCPPartialCSUMKfunc: kernelUDPTXSecureDirectOuterTCPChecksumKfuncCompiled && kernelUDPTXSecureDirectOuterTCPPartialChecksumKfuncEnabled(),
 	}
 }
 

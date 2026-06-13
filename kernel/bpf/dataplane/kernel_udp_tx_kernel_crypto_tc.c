@@ -51,6 +51,10 @@ const volatile __u32 trustix_kudp_tx_secure_outer_tcp_partial_csum_kfunc = 0;
 #define TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC 0
 #endif
 
+#ifndef TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
+#define TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC 0
+#endif
+
 #define TC_ACT_OK 0
 #define TC_ACT_UNSPEC (-1)
 #define TC_ACT_SHOT 2
@@ -354,7 +358,9 @@ extern int trustix_kernel_skb_fix_inner_tcp_csum(struct __sk_buff *skb,
                                               __u32 inner_ip_offset,
                                               __u32 inner_len,
                                               __u32 flags) __ksym;
+#if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
 extern int trustix_kernel_skb_tixt_fix_outer_tcp_csum(struct __sk_buff *skb, __u32 flags) __ksym;
+#endif
 
 static __always_inline void trustix_kudp_tx_count(__u32 key)
 {
@@ -583,9 +589,9 @@ static __noinline __u16 trustix_l4_checksum(const __u8 *ip,
     __u32 padded_len;
     __u16 checksum;
 
-    l4_len &= TRUSTIX_KERNEL_CRYPTO_FRAME_MAX;
-    if (l4_len == 0 || l4_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX)
+    if (l4_len == 0 || l4_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20)
         return 0;
+    barrier_var(l4_len);
 
     header.pseudo[0] = ip[12];
     header.pseudo[1] = ip[13];
@@ -660,6 +666,9 @@ static __noinline int trustix_fix_inner_checksums(struct trustix_kudp_tx_scratch
         udp_len = trustix_read_be16(l4 + 4);
         if (udp_len < 8 || udp_len > l4_len)
             return -22;
+        if (udp_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20)
+            return -22;
+        barrier_var(udp_len);
         if (l4[6] == 0 && l4[7] == 0)
             return 0;
         l4[6] = 0;
@@ -1319,7 +1328,9 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     int experimental_tcp;
     int skb_sealed = 0;
     int outer_tcp_csum_kfunc = 0;
+#if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
     int outer_tcp_partial_csum_kfunc = 0;
+#endif
 #if TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC
     int inner_tcp_syn = 0;
 #endif
@@ -1393,6 +1404,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
         outer_overhead = TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD;
         packet_header_len = TRUSTIX_EXP_TCP_SECURE_PACKET_HEADER_LEN;
         cipher_offset = TRUSTIX_EXP_TCP_SECURE_CIPHER_OFFSET;
+#if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
         if (trustix_kudp_tx_secure_outer_tcp_csum_kfunc &&
             !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM))
             outer_tcp_csum_kfunc = 1;
@@ -1401,6 +1413,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
             outer_tcp_csum_kfunc = 1;
             outer_tcp_partial_csum_kfunc = 1;
         }
+#endif
     }
 
     outer_len = inner_len + outer_overhead;
@@ -1483,6 +1496,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
         goto drop;
     if ((skb_sealed || outer_tcp_csum_kfunc) && experimental_tcp &&
         !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM)) {
+#if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
         __u32 csum_flags = outer_tcp_partial_csum_kfunc ?
             TRUSTIX_TIXT_TX_FINALIZE_TCP_PARTIAL_CSUM : 0;
         if (trustix_kernel_skb_tixt_fix_outer_tcp_csum(skb, csum_flags)) {
@@ -1496,6 +1510,10 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
         if (outer_tcp_partial_csum_kfunc)
             trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_OUTER_TCP_PARTIAL_CSUM_KFUNC_SUCCESSES);
         trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_OUTER_TCP_CSUM_KFUNC_SUCCESSES);
+#else
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_CHECKSUM_FALLBACKS);
+        goto drop;
+#endif
     }
     trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_SUCCESSES);
     return bpf_redirect(redirect_ifindex, 0);

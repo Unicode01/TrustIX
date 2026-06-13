@@ -15,6 +15,7 @@ keep_loaded="${TRUSTIX_KERNEL_KEEP_LOADED:-1}"
 prefer_software="${TRUSTIX_KERNEL_PREFER_SOFTWARE:-0}"
 experimental_vaes="${TRUSTIX_KERNEL_EXPERIMENTAL_VAES:-0}"
 experimental_vaes_kfunc="${TRUSTIX_KERNEL_EXPERIMENTAL_VAES_KFUNC:-0}"
+simd_kfunc_fastpath="${TRUSTIX_KERNEL_SIMD_KFUNC_FASTPATH:-0}"
 extra_module_params="${TRUSTIX_KERNEL_EXTRA_MODULE_PARAMS:-}"
 expect_vaes="${TRUSTIX_KERNEL_EXPECT_VAES:-auto}"
 run_vaes_bench="${TRUSTIX_KERNEL_VAES_BENCH:-0}"
@@ -65,6 +66,15 @@ extra_module_param_value() {
   return 1
 }
 
+simd_kfunc_fastpath_requested() {
+  if truthy "$simd_kfunc_fastpath"; then
+    return 0
+  fi
+  local value
+  value="$(extra_module_param_value kfunc_simd_fastpath || true)"
+  truthy "$value"
+}
+
 read_module_param() {
   local name="$1"
   local path="/sys/module/${module_name}/parameters/${name}"
@@ -101,10 +111,14 @@ apply_loaded_bool_param() {
   return 0
 }
 
-verify_simd_fastpath_disabled() {
+verify_simd_fastpath_mode() {
   local value
   value="$(read_module_param kfunc_simd_fastpath || true)"
-  [[ -z "$value" || "$value" =~ ^[Nn]$ ]] || die "kfunc_simd_fastpath must stay disabled in the first release"
+  if simd_kfunc_fastpath_requested; then
+    [[ "$value" =~ ^[Yy]$ ]] || die "kfunc_simd_fastpath=1 was requested but is not enabled"
+  else
+    [[ -z "$value" || "$value" =~ ^[Nn]$ ]] || die "kfunc_simd_fastpath is enabled without explicit opt-in"
+  fi
 }
 
 roundtrip_skip_is_unsupported_kernel() {
@@ -171,7 +185,7 @@ build_and_load_module() {
     fi
     apply_loaded_bool_param experimental_vaes_kfunc "$experimental_vaes_kfunc"
     apply_loaded_bool_param kfunc_fastpath_wipe "$kfunc_fastpath_wipe"
-    verify_simd_fastpath_disabled
+    verify_simd_fastpath_mode
     return 0
   fi
 
@@ -223,6 +237,9 @@ build_and_load_module() {
   if truthy "$experimental_vaes_kfunc"; then
     insmod_params="${insmod_params} experimental_vaes_kfunc=1"
   fi
+  if truthy "$simd_kfunc_fastpath" && ! extra_module_param_value kfunc_simd_fastpath >/dev/null 2>&1; then
+    insmod_params="${insmod_params} kfunc_simd_fastpath=1"
+  fi
   if [[ -n "$kfunc_fastpath_wipe" ]] && ! truthy "$kfunc_fastpath_wipe"; then
     insmod_params="${insmod_params} kfunc_fastpath_wipe=0"
   fi
@@ -233,7 +250,7 @@ build_and_load_module() {
   insmod "$ko_path" $insmod_params
   loaded_by_script=1
   lsmod | grep "$module_name" >/dev/null || die "${module_name} did not appear in lsmod"
-  verify_simd_fastpath_disabled
+  verify_simd_fastpath_mode
   if truthy "$prefer_software"; then
     grep -qi '^Y' "/sys/module/${module_name}/parameters/prefer_software" || die "prefer_software=1 was not applied"
     log "verified ${module_name} prefer_software=1"

@@ -970,6 +970,29 @@ func TestKernelUDPFragmentPayloadClampsToProviderMax(t *testing.T) {
 	}
 }
 
+func TestKernelUDPFragmentPayloadAutoRaisesKernelCryptoDefaultToProviderMax(t *testing.T) {
+	provider := &fakeKernelUDPProvider{payloadMax: 3900}
+	session := newKernelSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementKernel)
+	session.cryptoOffloaded = true
+	session.configuredFragmentPayload = kernelUDPFragmentPayloadSizeForPlacement(session.cryptoPlacement, session.cryptoOffloaded)
+
+	if got := session.fragmentPayloadSize(); got != 3900 {
+		t.Fatalf("fragment payload = %d, want provider max 3900", got)
+	}
+}
+
+func TestKernelUDPFragmentPayloadHonorsExplicitKernelCryptoValueBelowProviderMax(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_FRAGMENT_PAYLOAD_SIZE", "1200")
+	provider := &fakeKernelUDPProvider{payloadMax: 3900}
+	session := newKernelSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementKernel)
+	session.cryptoOffloaded = true
+	session.configuredFragmentPayload = kernelUDPFragmentPayloadSizeForPlacement(session.cryptoPlacement, session.cryptoOffloaded)
+
+	if got := session.fragmentPayloadSize(); got != 1200 {
+		t.Fatalf("fragment payload = %d, want explicit value 1200", got)
+	}
+}
+
 func TestKernelUDPSendPacketsMarksOnlyValidInnerIPv4(t *testing.T) {
 	providerA, providerB := newKernelUDPProviderPair()
 	flowID := uint64(77)

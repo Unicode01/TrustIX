@@ -39,50 +39,52 @@ const lanGSOScatterDefaultMaxSegments = 32
 var lanPacketStats lanPacketInjectorStats
 
 type lanPacketInjectorStats struct {
-	gsoAttempts             atomic.Uint64
-	gsoSuccesses            atomic.Uint64
-	gsoUnsupported          atomic.Uint64
-	gsoErrors               atomic.Uint64
-	gsoDisabled             atomic.Uint64
-	gsoRawAttempts          atomic.Uint64
-	gsoRawSuccesses         atomic.Uint64
-	gsoRawBatchAttempts     atomic.Uint64
-	gsoRawBatchSuccesses    atomic.Uint64
-	gsoRawBatchMessages     atomic.Uint64
-	gsoRawMixedAttempts     atomic.Uint64
-	gsoRawMixedSuccesses    atomic.Uint64
-	gsoRawMixedMessages     atomic.Uint64
-	rawVNetBatchAttempts    atomic.Uint64
-	rawVNetBatchSuccesses   atomic.Uint64
-	rawVNetBatchMessages    atomic.Uint64
-	rawVNetBatchErrors      atomic.Uint64
-	rawVNetBatchUnsupported atomic.Uint64
-	gsoRawScatterAttempts   atomic.Uint64
-	gsoRawScatterSuccesses  atomic.Uint64
-	gsoRawScatterMessages   atomic.Uint64
-	gsoCookedAttempts       atomic.Uint64
-	gsoCookedSuccesses      atomic.Uint64
-	gsoErrnoEINVAL          atomic.Uint64
-	gsoErrnoEMSGSIZE        atomic.Uint64
-	gsoErrnoEOPNOTSUPP      atomic.Uint64
-	gsoErrnoENOPROTOOPT     atomic.Uint64
-	gsoErrnoEPERM           atomic.Uint64
-	gsoErrnoEIO             atomic.Uint64
-	gsoErrnoENOTSUP         atomic.Uint64
-	gsoErrnoEAGAIN          atomic.Uint64
-	gsoErrnoEACCES          atomic.Uint64
-	gsoErrnoENOBUFS         atomic.Uint64
-	gsoErrnoENODEV          atomic.Uint64
-	gsoErrnoENXIO           atomic.Uint64
-	gsoErrnoEFAULT          atomic.Uint64
-	gsoErrnoEDESTADDRREQ    atomic.Uint64
-	gsoErrnoOther           atomic.Uint64
-	softwareSegments        atomic.Uint64
-	softwareSegmentBatches  atomic.Uint64
-	batchSendAttempts       atomic.Uint64
-	batchSendMessages       atomic.Uint64
-	batchSendErrors         atomic.Uint64
-	singleSendPackets       atomic.Uint64
+	gsoAttempts              atomic.Uint64
+	gsoSuccesses             atomic.Uint64
+	gsoUnsupported           atomic.Uint64
+	gsoErrors                atomic.Uint64
+	gsoDisabled              atomic.Uint64
+	gsoRawAttempts           atomic.Uint64
+	gsoRawSuccesses          atomic.Uint64
+	gsoRawBatchAttempts      atomic.Uint64
+	gsoRawBatchSuccesses     atomic.Uint64
+	gsoRawBatchMessages      atomic.Uint64
+	gsoRawMixedAttempts      atomic.Uint64
+	gsoRawMixedSuccesses     atomic.Uint64
+	gsoRawMixedMessages      atomic.Uint64
+	rawVNetBatchAttempts     atomic.Uint64
+	rawVNetBatchSuccesses    atomic.Uint64
+	rawVNetBatchMessages     atomic.Uint64
+	rawVNetBatchErrors       atomic.Uint64
+	rawVNetBatchUnsupported  atomic.Uint64
+	gsoRawScatterAttempts    atomic.Uint64
+	gsoRawScatterSuccesses   atomic.Uint64
+	gsoRawScatterMessages    atomic.Uint64
+	gsoCookedAttempts        atomic.Uint64
+	gsoCookedSuccesses       atomic.Uint64
+	gsoErrnoEINVAL           atomic.Uint64
+	gsoErrnoEMSGSIZE         atomic.Uint64
+	gsoErrnoEOPNOTSUPP       atomic.Uint64
+	gsoErrnoENOPROTOOPT      atomic.Uint64
+	gsoErrnoEPERM            atomic.Uint64
+	gsoErrnoEIO              atomic.Uint64
+	gsoErrnoENOTSUP          atomic.Uint64
+	gsoErrnoEAGAIN           atomic.Uint64
+	gsoErrnoEACCES           atomic.Uint64
+	gsoErrnoENOBUFS          atomic.Uint64
+	gsoErrnoENODEV           atomic.Uint64
+	gsoErrnoENXIO            atomic.Uint64
+	gsoErrnoEFAULT           atomic.Uint64
+	gsoErrnoEDESTADDRREQ     atomic.Uint64
+	gsoErrnoOther            atomic.Uint64
+	gsoVNetHdrSizeConfigured atomic.Uint64
+	gsoVNetHdrSizeFallbacks  atomic.Uint64
+	softwareSegments         atomic.Uint64
+	softwareSegmentBatches   atomic.Uint64
+	batchSendAttempts        atomic.Uint64
+	batchSendMessages        atomic.Uint64
+	batchSendErrors          atomic.Uint64
+	singleSendPackets        atomic.Uint64
 }
 
 func (stats *lanPacketInjectorStats) recordGSOErrno(err error) {
@@ -150,6 +152,14 @@ func packetSocketGSOErrno(err error) unix.Errno {
 	for err != nil {
 		if errno, ok := err.(unix.Errno); ok {
 			return errno
+		}
+		if multi, ok := err.(interface{ Unwrap() []error }); ok {
+			for _, child := range multi.Unwrap() {
+				if errno := packetSocketGSOErrno(child); errno != 0 {
+					return errno
+				}
+			}
+			return 0
 		}
 		unwrapped := errors.Unwrap(err)
 		if unwrapped == nil {
@@ -2095,7 +2105,12 @@ func configureGSOPacketSocket(fd int) error {
 		return err
 	}
 	if err := unix.SetsockoptInt(fd, unix.SOL_PACKET, unix.PACKET_VNET_HDR_SZ, virtioNetHdrLen); err != nil {
-		return fmt.Errorf("set PACKET_VNET_HDR_SZ: %w", err)
+		if !isPacketVNetHeaderSizeOptionalError(err) {
+			return fmt.Errorf("set PACKET_VNET_HDR_SZ: %w", err)
+		}
+		lanPacketStats.gsoVNetHdrSizeFallbacks.Add(1)
+	} else {
+		lanPacketStats.gsoVNetHdrSizeConfigured.Add(1)
 	}
 	if err := unix.SetsockoptInt(fd, unix.SOL_PACKET, unix.PACKET_VNET_HDR, 1); err != nil {
 		return fmt.Errorf("enable PACKET_VNET_HDR: %w", err)
@@ -2104,6 +2119,15 @@ func configureGSOPacketSocket(fd int) error {
 		_ = unix.SetsockoptInt(fd, unix.SOL_PACKET, unix.PACKET_QDISC_BYPASS, 1)
 	}
 	return nil
+}
+
+func isPacketVNetHeaderSizeOptionalError(err error) bool {
+	switch packetSocketGSOErrno(err) {
+	case unix.EINVAL, unix.ENOPROTOOPT, unix.EOPNOTSUPP:
+		return true
+	default:
+		return false
+	}
 }
 
 func configureLANPacketSocket(fd int) error {
