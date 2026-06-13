@@ -502,9 +502,18 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 		return ixProvisionIssueRequest{}, nil, fmt.Errorf("advertise must contain at least one CIDR prefix unless role is transit_ix")
 	}
 
+	request.ServiceManager = strings.ToLower(strings.TrimSpace(request.ServiceManager))
+	if request.ServiceManager == "" {
+		request.ServiceManager = "auto"
+	}
+	switch request.ServiceManager {
+	case "auto", "systemd", "openwrt":
+	default:
+		return ixProvisionIssueRequest{}, nil, fmt.Errorf("service_manager must be auto, systemd, or openwrt")
+	}
 	request.EndpointTransport = strings.ToLower(strings.TrimSpace(request.EndpointTransport))
 	if request.EndpointTransport == "" {
-		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile)
+		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile, request.ServiceManager)
 	}
 	request.EndpointMode = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(request.EndpointMode), "-", "_"))
 	if request.EndpointMode == "" {
@@ -583,15 +592,6 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 	request.Dataplane = strings.ToLower(strings.TrimSpace(request.Dataplane))
 	if request.Dataplane == "" {
 		request.Dataplane = "auto"
-	}
-	request.ServiceManager = strings.ToLower(strings.TrimSpace(request.ServiceManager))
-	if request.ServiceManager == "" {
-		request.ServiceManager = "auto"
-	}
-	switch request.ServiceManager {
-	case "auto", "systemd", "openwrt":
-	default:
-		return ixProvisionIssueRequest{}, nil, fmt.Errorf("service_manager must be auto, systemd, or openwrt")
 	}
 	request.DNSEnabled = strings.TrimSpace(request.DNSEnabled)
 	if request.DNSEnabled == "" {
@@ -705,7 +705,7 @@ func normalizeIXProvisionProfile(profile string) string {
 	profile = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(profile), "-", "_"))
 	switch profile {
 	case "":
-		return "stable"
+		return "plaintext_performance"
 	case "compat", "compatible":
 		return "compatibility"
 	case "plain", "plaintext", "plaintext_perf", "performance_plaintext":
@@ -768,8 +768,13 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 	}
 }
 
-func ixProvisionDefaultEndpointTransport(profile string) string {
+func ixProvisionDefaultEndpointTransport(profile string, serviceManager ...string) string {
 	if normalizeIXProvisionProfile(profile) == "plaintext_performance" {
+		for _, manager := range serviceManager {
+			if strings.ToLower(strings.TrimSpace(manager)) == "openwrt" {
+				return string(transport.ProtocolUDP)
+			}
+		}
 		return string(transport.ProtocolExperimentalTCP)
 	}
 	return string(transport.ProtocolUDP)

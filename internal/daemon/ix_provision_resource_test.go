@@ -161,8 +161,8 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize provision request: %v", err)
 	}
-	if request.Role != "public_ix" || request.Profile != "stable" {
-		t.Fatalf("role/profile = %q/%q, want public_ix/stable", request.Role, request.Profile)
+	if request.Role != "public_ix" || request.Profile != "plaintext_performance" {
+		t.Fatalf("role/profile = %q/%q, want public_ix/plaintext_performance", request.Role, request.Profile)
 	}
 	if request.ControlAPI != "https://ix-e.example.com:9443" {
 		t.Fatalf("control_api = %q, want derived https endpoint", request.ControlAPI)
@@ -170,8 +170,8 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	if request.EndpointAddress != "ix-e.example.com:7000" || request.EndpointListen != "0.0.0.0:7000" {
 		t.Fatalf("endpoint = %q listen %q, want ix-e.example.com:7000 / 0.0.0.0:7000", request.EndpointAddress, request.EndpointListen)
 	}
-	if request.EndpointTransport != "udp" || request.EndpointName != "ix-e-udp" {
-		t.Fatalf("endpoint transport/name = %q/%q, want udp/ix-e-udp", request.EndpointTransport, request.EndpointName)
+	if request.EndpointTransport != "experimental_tcp" || request.EndpointName != "ix-e-experimental_tcp" {
+		t.Fatalf("endpoint transport/name = %q/%q, want experimental_tcp/ix-e-experimental_tcp", request.EndpointTransport, request.EndpointName)
 	}
 	if request.LANIface != "trustix-ix-e" || request.LANGateway != "10.42.0.1/24" {
 		t.Fatalf("lan defaults iface=%q gateway=%q, want trustix-ix-e / 10.42.0.1/24", request.LANIface, request.LANGateway)
@@ -180,33 +180,68 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
 	}
-	if target.TransportPolicy.Encryption != securetransport.EncryptionSecure ||
-		target.TransportPolicy.Profile != config.TransportProfileStable ||
+	if target.TransportPolicy.Encryption != securetransport.EncryptionPlaintext ||
+		target.TransportPolicy.Profile != config.TransportProfilePerformance ||
+		target.TransportPolicy.Datapath != config.TransportDatapathKernelModule ||
 		target.TransportPolicy.KernelTransport.Mode != "auto" {
 		t.Fatalf("target transport policy = %#v", target.TransportPolicy)
 	}
-	if len(target.Endpoints) != 2 ||
-		target.Endpoints[0].Name != "ix-e-udp" ||
-		target.Endpoints[0].Transport != "udp" ||
-		target.Endpoints[0].Priority <= target.Endpoints[1].Priority ||
-		target.Endpoints[1].Name != "ix-e-experimental_tcp" ||
-		target.Endpoints[1].Transport != "experimental_tcp" {
-		t.Fatalf("target endpoints = %#v, want udp primary and experimental_tcp secondary", target.Endpoints)
+	if len(target.Endpoints) != 1 ||
+		target.Endpoints[0].Name != "ix-e-experimental_tcp" ||
+		target.Endpoints[0].Transport != "experimental_tcp" ||
+		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
+		t.Fatalf("target endpoints = %#v, want experimental_tcp plaintext performance primary", target.Endpoints)
 	}
-	if len(target.TransportPolicy.Candidates) != 2 ||
-		target.TransportPolicy.Candidates[0] != "ix-e-udp" ||
-		target.TransportPolicy.Candidates[1] != "ix-e-experimental_tcp" {
-		t.Fatalf("transport candidates = %#v, want udp then experimental_tcp", target.TransportPolicy.Candidates)
+	if len(target.TransportPolicy.Candidates) != 1 ||
+		target.TransportPolicy.Candidates[0] != "ix-e-experimental_tcp" {
+		t.Fatalf("transport candidates = %#v, want experimental_tcp", target.TransportPolicy.Candidates)
+	}
+	if len(target.TransportPolicy.Profiles) != 0 {
+		t.Fatalf("transport profiles = %#v, want none for experimental_tcp primary", target.TransportPolicy.Profiles)
+	}
+	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("default provision config did not enable experimental_tcp route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	}
+	if target.Policies[0].LoadBalance == "least_conn" {
+		t.Fatalf("generated default policy uses least_conn, want priority-ordered fallback")
+	}
+}
+
+func TestIXProvisionExplicitStableKeepsSecureUDPCompatibility(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:            "ix-stable",
+		Profile:         "stable",
+		Advertise:       []core.Prefix{"10.43.0.0/24"},
+		EndpointAddress: "ix-stable.example.com:7000",
+		ProvisionURL:    "https://ix-a.example.com:18787",
+	}, desired)
+	if err != nil {
+		t.Fatalf("normalize provision request: %v", err)
+	}
+	if request.EndpointTransport != "udp" || request.EndpointName != "ix-stable-udp" {
+		t.Fatalf("endpoint transport/name = %q/%q, want udp/ix-stable-udp", request.EndpointTransport, request.EndpointName)
+	}
+	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
+	if err != nil {
+		t.Fatalf("desired for provision: %v", err)
+	}
+	if target.TransportPolicy.Encryption != securetransport.EncryptionSecure ||
+		target.TransportPolicy.Profile != config.TransportProfileStable {
+		t.Fatalf("target stable transport policy = %#v", target.TransportPolicy)
+	}
+	if len(target.Endpoints) != 2 ||
+		target.Endpoints[0].Transport != "udp" ||
+		target.Endpoints[1].Transport != "experimental_tcp" {
+		t.Fatalf("target stable endpoints = %#v, want udp primary and experimental_tcp secondary", target.Endpoints)
 	}
 	if len(target.TransportPolicy.Profiles) != 1 ||
 		target.TransportPolicy.Profiles[0].Transport != "experimental_tcp" ||
 		target.TransportPolicy.Profiles[0].Advanced.BatchBytes != dataSessionBatchDefaultBytes ||
 		target.TransportPolicy.Profiles[0].Advanced.FlushDelay != "25us" ||
 		target.TransportPolicy.Profiles[0].Advanced.MaxFrames != dataSessionBatchMaxPackets {
-		t.Fatalf("experimental_tcp profile = %#v, want fixed ackless batching profile", target.TransportPolicy.Profiles)
-	}
-	if target.Policies[0].LoadBalance == "least_conn" {
-		t.Fatalf("generated default policy uses least_conn, want priority-ordered fallback")
+		t.Fatalf("stable experimental_tcp profile = %#v, want fixed ackless batching profile", target.TransportPolicy.Profiles)
 	}
 }
 
@@ -294,9 +329,15 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if request.ServiceManager != "openwrt" || request.DNSEnabled != "1" || request.OpenWRTDNSMasq != "1" || request.DNSDomain != "trust.ix" {
 		t.Fatalf("normalized OpenWrt DNS request = %#v", request)
 	}
+	if request.Profile != "plaintext_performance" || request.EndpointTransport != "udp" {
+		t.Fatalf("normalized OpenWrt performance defaults profile=%q transport=%q, want plaintext_performance/udp", request.Profile, request.EndpointTransport)
+	}
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
+	}
+	if target.TransportPolicy.KernelTransport.Mode != "require_kernel" || len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "udp" {
+		t.Fatalf("target OpenWrt TC-only defaults policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if !target.DNS.Enabled || !target.DNS.DNSMasq.Enabled || target.DNS.Domain != "trust.ix" {
 		t.Fatalf("target DNS = %#v", target.DNS)
@@ -458,16 +499,13 @@ func TestIXProvisionEdgeActiveOnlyDoesNotPublishControlAPI(t *testing.T) {
 	if target.IX.ControlAPI != "" || target.IX.ControlAPIPublish != "disabled" {
 		t.Fatalf("target ix control api = %q publish=%q, want empty/disabled", target.IX.ControlAPI, target.IX.ControlAPIPublish)
 	}
-	if len(target.Endpoints) != 2 ||
+	if len(target.Endpoints) != 1 ||
 		target.Endpoints[0].Mode != config.EndpointModeActive ||
-		target.Endpoints[0].Transport != "udp" ||
+		target.Endpoints[0].Transport != "experimental_tcp" ||
 		target.Endpoints[0].Address != "ix-a.example.com:7000" ||
 		target.Endpoints[0].Listen != "" ||
-		target.Endpoints[1].Mode != config.EndpointModeActive ||
-		target.Endpoints[1].Transport != "experimental_tcp" ||
-		target.Endpoints[1].Address != "ix-a.example.com:7000" ||
-		target.Endpoints[1].Listen != "" {
-		t.Fatalf("target endpoint = %#v, want active dial to upstream", target.Endpoints)
+		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
+		t.Fatalf("target endpoint = %#v, want active experimental_tcp plaintext dial to upstream", target.Endpoints)
 	}
 	if len(target.Bootstrap.Peers) != 1 || target.Bootstrap.Peers[0].ControlAPI != "https://ix-a.example.com:9443" {
 		t.Fatalf("bootstrap peers = %#v", target.Bootstrap.Peers)

@@ -905,7 +905,7 @@ function ixProvisionProfileDefaults(profile: string): Pick<IXProvisionEffectiveD
 }
 
 function normalizeIXProvisionProfileName(profile: string): string {
-  const normalized = String(profile || "stable").trim().toLowerCase().replaceAll("-", "_");
+  const normalized = String(profile || "plaintext_performance").trim().toLowerCase().replaceAll("-", "_");
   switch (normalized) {
     case "compat":
     case "compatible":
@@ -916,12 +916,15 @@ function normalizeIXProvisionProfileName(profile: string): string {
     case "performance_plaintext":
       return "plaintext_performance";
     default:
-      return normalized || "stable";
+      return normalized || "plaintext_performance";
   }
 }
 
-function ixProvisionDefaultEndpointTransport(profile: string): string {
-  return normalizeIXProvisionProfileName(profile) === "plaintext_performance" ? "experimental_tcp" : "udp";
+function ixProvisionDefaultEndpointTransport(profile: string, serviceManager = ""): string {
+  if (normalizeIXProvisionProfileName(profile) !== "plaintext_performance") {
+    return "udp";
+  }
+  return String(serviceManager || "").trim().toLowerCase() === "openwrt" ? "udp" : "experimental_tcp";
 }
 
 function ixProvisionAcklessEndpointName(endpointName: string, ixID: string): string {
@@ -933,6 +936,24 @@ function ixProvisionAcklessEndpointName(endpointName: string, ixID: string): str
     return `${name}-experimental_tcp`;
   }
   return `${safeShellName(ixID, "ix-new")}-experimental_tcp`;
+}
+
+function plaintextPerformanceEndpoint(name: string, options: Partial<EndpointConfig>): EndpointConfig {
+  const { security, transport_profile: transportProfile, ...rest } = options;
+  return {
+    name,
+    transport: "experimental_tcp",
+    enabled: true,
+    security: { encryption: "plaintext", ...(security || {}) },
+    transport_profile: {
+      profile: "performance",
+      datapath: "kernel_module",
+      encryption: "plaintext",
+      crypto_placement: "auto",
+      ...(transportProfile || {}),
+    },
+    ...rest,
+  };
 }
 
 function ixProvisionEffectiveDefaults(input: {
@@ -952,6 +973,7 @@ function ixProvisionEffectiveDefaults(input: {
   bootstrapControlAPI: string;
   desiredControlAPI: string;
   kernelModules: string;
+  serviceManager: string;
 }): IXProvisionEffectiveDefaults {
   const endpointMode = String(input.endpointMode || "passive").trim().toLowerCase().replaceAll("-", "_") === "active" ? "active" : "passive";
   const bootstrapControlAPI = String(input.bootstrapControlAPI || "").trim() || String(input.desiredControlAPI || "").trim();
@@ -961,7 +983,7 @@ function ixProvisionEffectiveDefaults(input: {
   const attachMode = String(input.attachMode || "managed").trim().toLowerCase().replaceAll("_", "-");
   const derivedGateway = role === "transit_ix" ? "" : defaultLANGatewayForPrefix(input.advertisePrefixes[0] || "");
   const profile = ixProvisionProfileDefaults(input.profile);
-  const endpointTransport = String(input.endpointTransport || "").trim() || ixProvisionDefaultEndpointTransport(input.profile);
+  const endpointTransport = String(input.endpointTransport || "").trim() || ixProvisionDefaultEndpointTransport(input.profile, input.serviceManager);
   const endpointName = String(input.endpointName || "").trim() || `${safeShellName(input.ixID, "ix-new")}-${endpointTransport}`;
   return {
     controlAPI: String(input.controlAPI || "").trim() || (endpointMode === "passive" ? provisionControlAPIFromEndpointAddress(endpointAddress, "9443") : ""),
@@ -1269,13 +1291,13 @@ export function AccessView(props: {
   const [newIXID, setNewIXID] = useState("ix-new");
   const [newIXDomain, setNewIXDomain] = useState("");
   const [newIXRole, setNewIXRole] = useState("public_ix");
-  const [newIXProfile, setNewIXProfile] = useState("stable");
+  const [newIXProfile, setNewIXProfile] = useState("plaintext_performance");
   const [newIXAdvertise, setNewIXAdvertise] = useState("");
   const [newIXControlAPI, setNewIXControlAPI] = useState("");
   const [newIXEndpointAddress, setNewIXEndpointAddress] = useState("");
   const [newIXEndpointMode, setNewIXEndpointMode] = useState("passive");
   const [newIXEndpointListen, setNewIXEndpointListen] = useState("");
-  const [newIXEndpointTransport, setNewIXEndpointTransport] = useState("udp");
+  const [newIXEndpointTransport, setNewIXEndpointTransport] = useState("experimental_tcp");
   const [newIXEndpointName, setNewIXEndpointName] = useState("");
   const [newIXBootstrapIX, setNewIXBootstrapIX] = useState("");
   const [newIXBootstrapControlAPI, setNewIXBootstrapControlAPI] = useState("");
@@ -1324,9 +1346,9 @@ export function AccessView(props: {
       setNewIXEndpointAddress((current) => current.trim() || defaultUpstreamEndpointAddress);
     }
   };
-  const updateNewIXEndpointTransportDefault = (nextProfile: string) => {
-    const previousDefault = ixProvisionDefaultEndpointTransport(newIXProfile);
-    const nextDefault = ixProvisionDefaultEndpointTransport(nextProfile);
+  const updateNewIXEndpointTransportDefault = (nextProfile: string, nextServiceManager = newIXServiceManager) => {
+    const previousDefault = ixProvisionDefaultEndpointTransport(newIXProfile, newIXServiceManager);
+    const nextDefault = ixProvisionDefaultEndpointTransport(nextProfile, nextServiceManager);
     if (newIXEndpointTransport === previousDefault) {
       setNewIXEndpointTransport(nextDefault);
     }
@@ -1336,6 +1358,7 @@ export function AccessView(props: {
     setNewIXProfile(value);
   };
   const handleNewIXServiceManagerChange = (value: string) => {
+    updateNewIXEndpointTransportDefault(newIXProfile, value);
     setNewIXServiceManager(value);
   };
   useEffect(() => {
@@ -1396,7 +1419,7 @@ export function AccessView(props: {
   const newIXAdvertiseRequired = newIXRole !== "transit_ix";
   const newIXBootstrapControlAPIEffective = newIXBootstrapControlAPI.trim() || desiredControlAPI.trim();
   const newIXCommandDisabled = !newIXID.trim() || !effectiveNewIXDomain || (!newIXActiveOnly && !newIXEndpointAddress.trim()) || (newIXActiveOnly && !newIXBootstrapControlAPIEffective) || (newIXAdvertiseRequired && newIXAdvertisePrefixes.length === 0) || newIXAdvertiseWarnings.length > 0;
-  const newIXEffectiveEndpointTransport = newIXEndpointTransport || ixProvisionDefaultEndpointTransport(newIXProfile);
+  const newIXEffectiveEndpointTransport = newIXEndpointTransport || ixProvisionDefaultEndpointTransport(newIXProfile, newIXServiceManager);
   const newIXResolvedEndpointName = newIXEndpointName.trim() || `${safeShellName(newIXID, "ix-new")}-${newIXEffectiveEndpointTransport}`;
   const newIXQuickJoinCommand = props.issuedIXProvision?.command || "";
   const newIXEffective = ixProvisionEffectiveDefaults({
@@ -1416,6 +1439,7 @@ export function AccessView(props: {
     bootstrapControlAPI: newIXBootstrapControlAPI,
     desiredControlAPI,
     kernelModules: newIXKernelModules,
+    serviceManager: newIXServiceManager,
   });
   const newIXRoleOptions = ["public_ix", "edge_ix", "transit_ix", "lab_ix"];
   const newIXRoleLabels = {
@@ -1451,6 +1475,7 @@ export function AccessView(props: {
     if (value) {
       setNewIXDNSEnabled(true);
       if (newIXServiceManager === "auto") {
+        updateNewIXEndpointTransportDefault(newIXProfile, "openwrt");
         setNewIXServiceManager("openwrt");
       }
     }
@@ -2831,14 +2856,10 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
     props.onDesired({ ...cfg, endpoints });
   };
   const addEndpoint = () => {
-    const endpoints = [...arrayValue(cfg.endpoints), {
-      name: "local-udp",
-      transport: "udp",
+    const endpoints = [...arrayValue(cfg.endpoints), plaintextPerformanceEndpoint("local-experimental_tcp", {
       mode: "passive",
       listen: "0.0.0.0:7000",
-      enabled: true,
-      security: {},
-    }];
+    })];
     props.onDesired({ ...cfg, endpoints });
   };
   const removeEndpoint = (index: number) => {
@@ -2858,7 +2879,7 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
         domain: cfg.domain?.id || cfg.ix?.domain || "",
         control_api: "",
         allowed_prefixes: [],
-        endpoints: [{ name: `${id}-udp`, transport: "udp", mode: "active", address: "", enabled: true, security: {} }],
+        endpoints: [plaintextPerformanceEndpoint(`${id}-experimental_tcp`, { mode: "active", address: "" })],
       }],
     });
   };
@@ -4061,7 +4082,7 @@ function ConfigPeerTable(props: { t: Translate; lang: string; peers: PeerConfig[
     const endpoints = arrayValue(selectedPeer.endpoints);
     props.onUpdate(selectedIndex, {
       ...selectedPeer,
-      endpoints: [...endpoints, { name: `${selectedPeer.id || "peer"}-udp-${endpoints.length + 1}`, transport: "udp", mode: "active", address: "", enabled: true, security: {} }],
+      endpoints: [...endpoints, plaintextPerformanceEndpoint(`${selectedPeer.id || "peer"}-experimental_tcp-${endpoints.length + 1}`, { mode: "active", address: "" })],
     });
   };
   const updatePeerEndpoint = (endpointIndex: number, endpoint: EndpointConfig) => {
