@@ -401,6 +401,22 @@ trustix_prereqs_ensure_network_deps() {
   trustix_prereqs_ensure_commands curl
 }
 
+trustix_prereqs_ensure_openwrt_dataplane_runtime_deps() {
+  local manager
+  manager="$(trustix_prereqs_package_manager 2>/dev/null || true)"
+  [[ "$manager" == "opkg" ]] || return 0
+  [[ -f /etc/openwrt_release ]] || return 0
+  trustix_prereqs_install_enabled || return 1
+
+  # TrustIX attaches sched_cls BPF programs directly through netlink. Minimal
+  # OpenWrt images often have clsact but not the BPF classifier module, which
+  # makes TC attach fail with ENOENT and prevents the fast path from loading.
+  trustix_prereqs_install_packages opkg \
+    ca-bundle ca-certificates \
+    kmod-sched-core kmod-sched kmod-sched-bpf \
+    ip-full tc-bpf
+}
+
 trustix_prereqs_ensure_source_build_deps() {
   trustix_prereqs_ensure_commands git go clang make gcc install realpath sha256sum stat tar gzip
 }

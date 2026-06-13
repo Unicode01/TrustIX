@@ -53,6 +53,17 @@ func skipIfKernelKfuncUnavailable(t *testing.T, err error) {
 	}
 }
 
+func TestAnnotateTCFilterAttachErrorHintsOpenWrtBPFClassifier(t *testing.T) {
+	err := annotateTCFilterAttachError(os.ErrNotExist)
+	if err == nil {
+		t.Fatal("annotated error is nil")
+	}
+	text := err.Error()
+	if !strings.Contains(text, "kmod-sched-bpf") || !strings.Contains(text, "clsact") {
+		t.Fatalf("annotated TC attach error missing OpenWrt dependency hint: %v", err)
+	}
+}
+
 func TestKernelUDPTXRouteValueABI(t *testing.T) {
 	if got := unsafe.Sizeof(kernelUDPTXRouteValue{}); got != kernelUDPTXRouteValueSize {
 		t.Fatalf("kernelUDPTXRouteValue size = %d, want %d", got, kernelUDPTXRouteValueSize)

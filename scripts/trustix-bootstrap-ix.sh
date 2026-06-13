@@ -876,6 +876,9 @@ done
 
 tarball=""
 if [[ "$do_build" == "1" ]]; then
+  if [[ "$service_manager" == "openwrt" || ( "$service_manager" == "auto" && -f /etc/openwrt_release ) ]]; then
+    trustix_prereqs_ensure_openwrt_dataplane_runtime_deps || die "OpenWrt dataplane runtime dependencies are missing; automatic dependency install failed"
+  fi
   trustix_prereqs_ensure_source_build_deps || die "source build dependencies are missing; automatic dependency install failed"
   if [[ "$build_webui" == "1" ]]; then
     trustix_prereqs_ensure_webui_deps || die "npm is required for WebUI build; automatic dependency install failed"

@@ -12627,7 +12627,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			_ = statsMap.Close()
 			_ = ingressProg.Close()
 			_ = egressProg.Close()
-			return fmt.Errorf("attach kernel_udp secure TC TX direct BPF filter on %q: %w", link.Attrs().Name, err)
+			return fmt.Errorf("attach kernel_udp secure TC TX direct BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 		}
 	}
 	if kernelUDPTXSecureDirectEgressFilter != nil {
@@ -12651,7 +12651,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			_ = statsMap.Close()
 			_ = ingressProg.Close()
 			_ = egressProg.Close()
-			return fmt.Errorf("attach kernel_udp secure TC TX direct egress BPF filter on %q: %w", link.Attrs().Name, err)
+			return fmt.Errorf("attach kernel_udp secure TC TX direct egress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 		}
 	}
 	if err := netlink.FilterReplace(ingressFilter); err != nil {
@@ -12679,7 +12679,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		_ = statsMap.Close()
 		_ = ingressProg.Close()
 		_ = egressProg.Close()
-		return fmt.Errorf("attach ingress BPF filter on %q: %w", link.Attrs().Name, err)
+		return fmt.Errorf("attach ingress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 	}
 	if err := netlink.FilterReplace(egressFilter); err != nil {
 		_ = netlink.FilterDel(ingressFilter)
@@ -12707,7 +12707,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		_ = statsMap.Close()
 		_ = ingressProg.Close()
 		_ = egressProg.Close()
-		return fmt.Errorf("attach egress BPF filter on %q: %w", link.Attrs().Name, err)
+		return fmt.Errorf("attach egress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 	}
 
 	manager.statsMap = statsMap
@@ -12891,7 +12891,7 @@ func (manager *Manager) attachKernelUDPRXDirectLocked(lanLink netlink.Link, unde
 			_ = devMap.Close()
 		}
 		_ = neighMap.Close()
-		return fmt.Errorf("attach kernel_udp underlay RX direct BPF filter on %q: %w", underlayLink.Attrs().Name, err)
+		return fmt.Errorf("attach kernel_udp underlay RX direct BPF filter on %q: %w", underlayLink.Attrs().Name, annotateTCFilterAttachError(err))
 	}
 	manager.underlayIngressProg = program
 	manager.underlayIngressFilter = filter
@@ -12951,7 +12951,7 @@ func (manager *Manager) attachKernelUDPRXSecureDirectLocked(underlayLink netlink
 	filter := bpfFilterWithPriority(underlayLink, netlink.HANDLE_MIN_INGRESS, netlink.MakeHandle(0, 5), "trustix_kudp_rxk", object.program.FD(), 1)
 	if err := netlink.FilterReplace(filter); err != nil {
 		_ = object.Close()
-		return fmt.Errorf("attach kernel_udp secure underlay RX direct BPF filter on %q: %w", underlayLink.Attrs().Name, err)
+		return fmt.Errorf("attach kernel_udp secure underlay RX direct BPF filter on %q: %w", underlayLink.Attrs().Name, annotateTCFilterAttachError(err))
 	}
 	manager.kernelUDPRXSecureDirect = object
 	manager.kernelUDPRXSecureDirectFilter = filter
@@ -19479,7 +19479,7 @@ func (manager *Manager) attachTCFiltersToLink(link netlink.Link, spec dataplane.
 	}
 	if state.kernelUDPTXSecureDirect != nil {
 		if err := netlink.FilterReplace(state.kernelUDPTXSecureDirect); err != nil {
-			return fmt.Errorf("attach kernel_udp secure TC TX direct BPF filter on %q: %w", link.Attrs().Name, err)
+			return fmt.Errorf("attach kernel_udp secure TC TX direct BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 		}
 	}
 	if state.kernelUDPTXSecureDirectEgress != nil {
@@ -19487,7 +19487,7 @@ func (manager *Manager) attachTCFiltersToLink(link netlink.Link, spec dataplane.
 			if state.kernelUDPTXSecureDirect != nil {
 				_ = netlink.FilterDel(state.kernelUDPTXSecureDirect)
 			}
-			return fmt.Errorf("attach kernel_udp secure TC TX direct egress BPF filter on %q: %w", link.Attrs().Name, err)
+			return fmt.Errorf("attach kernel_udp secure TC TX direct egress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 		}
 	}
 	if err := netlink.FilterReplace(ingressFilter); err != nil {
@@ -19497,7 +19497,7 @@ func (manager *Manager) attachTCFiltersToLink(link netlink.Link, spec dataplane.
 		if state.kernelUDPTXSecureDirect != nil {
 			_ = netlink.FilterDel(state.kernelUDPTXSecureDirect)
 		}
-		return fmt.Errorf("attach ingress BPF filter on %q: %w", link.Attrs().Name, err)
+		return fmt.Errorf("attach ingress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 	}
 	if err := netlink.FilterReplace(egressFilter); err != nil {
 		_ = netlink.FilterDel(ingressFilter)
@@ -19507,7 +19507,7 @@ func (manager *Manager) attachTCFiltersToLink(link netlink.Link, spec dataplane.
 		if state.kernelUDPTXSecureDirect != nil {
 			_ = netlink.FilterDel(state.kernelUDPTXSecureDirect)
 		}
-		return fmt.Errorf("attach egress BPF filter on %q: %w", link.Attrs().Name, err)
+		return fmt.Errorf("attach egress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 	}
 	manager.lanTCFilters[link.Attrs().Name] = state
 	if link.Attrs().Name == manager.spec.LANIface || manager.ingressFilter == nil {
@@ -24471,6 +24471,13 @@ func isNotFound(err error) bool {
 		strings.Contains(lower, "not found") ||
 		strings.Contains(lower, "no such process") ||
 		strings.Contains(lower, "cannot find device")
+}
+
+func annotateTCFilterAttachError(err error) error {
+	if err == nil || !isNotFound(err) {
+		return err
+	}
+	return fmt.Errorf("%w; TC BPF classifier support appears unavailable (on OpenWrt install kmod-sched-bpf; also ensure clsact/sched_cls support is present)", err)
 }
 
 func createManagedLANBridge(iface string) (netlink.Link, bool, error) {

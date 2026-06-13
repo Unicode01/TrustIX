@@ -239,6 +239,26 @@ wait_openwrt_instance_started() {
   return 1
 }
 
+openwrt_runtime_deps_install_enabled() {
+  case "$(lower_ascii "${TRUSTIX_DEPLOY_INSTALL_DEPS:-${TRUSTIX_BOOTSTRAP_INSTALL_DEPS:-auto}}")" in
+    0|false|no|off|disabled) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+ensure_openwrt_dataplane_runtime_deps() {
+  [[ -f /etc/openwrt_release ]] || return 0
+  command -v opkg >/dev/null 2>&1 || return 0
+  openwrt_runtime_deps_install_enabled || return 0
+
+  log "install OpenWrt dataplane runtime packages"
+  run_root opkg update
+  run_root opkg install \
+    ca-bundle ca-certificates \
+    kmod-sched-core kmod-sched kmod-sched-bpf \
+    ip-full tc-bpf
+}
+
 install_file() {
   local src="$1"
   local dst="$2"
@@ -466,6 +486,22 @@ runtime_env="${1:-}"
 [ -n "$initdir" ] || initdir=/etc/init.d
 [ -n "$target_cert_dir" ] || target_cert_dir="${sysconfdir}/certs"
 
+install_openwrt_dataplane_runtime_deps() {
+  [ -f /etc/openwrt_release ] || return 0
+  command -v opkg >/dev/null 2>&1 || return 0
+  case "${TRUSTIX_DEPLOY_INSTALL_DEPS:-${TRUSTIX_BOOTSTRAP_INSTALL_DEPS:-auto}}" in
+    0|false|no|off|disabled) return 0 ;;
+  esac
+  printf '[trustix-deploy] install OpenWrt dataplane runtime packages\n' >&2
+  opkg update
+  opkg install \
+    ca-bundle ca-certificates \
+    kmod-sched-core kmod-sched kmod-sched-bpf \
+    ip-full tc-bpf
+}
+
+install_openwrt_dataplane_runtime_deps
+
 package_dir="$stage/package"
 if [ "$input_kind" = tarball ]; then
   rm -rf "$package_dir"
@@ -691,6 +727,9 @@ install_config() {
 local_deploy() {
   [[ "$(uname -s)" == "Linux" ]] || die "deployment must run on Linux"
   apply_target_defaults
+  if [[ "$service_manager" == "openwrt" ]]; then
+    ensure_openwrt_dataplane_runtime_deps || die "OpenWrt dataplane runtime dependencies are missing; automatic dependency install failed"
+  fi
   local stage=""
   local package_dir=""
   if [[ -n "$tarball" ]]; then
