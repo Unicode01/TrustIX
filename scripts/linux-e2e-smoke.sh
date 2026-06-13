@@ -222,6 +222,28 @@ falsey() {
   esac
 }
 
+kernel_cpu_has_flag() {
+  local flag="$1"
+  [[ -r /proc/cpuinfo ]] || return 1
+  awk -v flag="$flag" '
+    /^flags[[:space:]]*:/ || /^Features[[:space:]]*:/ {
+      for (i = 2; i <= NF; i++) {
+        if ($i == flag) {
+          found = 1
+        }
+      }
+    }
+    END { exit found ? 0 : 1 }
+  ' /proc/cpuinfo
+}
+
+kernel_cpu_vaes_capable() {
+  kernel_cpu_has_flag aes &&
+    kernel_cpu_has_flag avx2 &&
+    kernel_cpu_has_flag vaes &&
+    kernel_cpu_has_flag vpclmulqdq
+}
+
 hot_stats_enabled() {
   truthy "$hot_stats"
 }
@@ -344,12 +366,17 @@ effective_disable_veth_offloads() {
 
 effective_kernel_experimental_vaes_kfunc() {
   if [[ "$kernel_experimental_vaes_kfunc" == "auto" ]]; then
-    return 1
+    kernel_cpu_vaes_capable
+    return
   fi
   truthy "$kernel_experimental_vaes_kfunc"
 }
 
 effective_kernel_experimental_vaes() {
+  if [[ "$kernel_experimental_vaes" == "auto" ]]; then
+    kernel_cpu_vaes_capable
+    return
+  fi
   truthy "$kernel_experimental_vaes"
 }
 
@@ -369,7 +396,7 @@ kernel_extra_module_params() {
     printf '%s\n' "$TRUSTIX_E2E_KERNEL_EXTRA_MODULE_PARAMS"
     return
   fi
-  printf 'experimental_aesni_kfunc=1 experimental_vaes_kfunc=%s kfunc_fastpath_stats=0 kfunc_fastpath_wipe=%s\n' "$vaes_kfunc" "${TRUSTIX_E2E_KERNEL_FASTPATH_WIPE:-1}"
+  printf 'kfunc_simd_fastpath=1 experimental_aesni_kfunc=1 experimental_vaes_kfunc=%s kfunc_fastpath_stats=0 kfunc_fastpath_wipe=%s\n' "$vaes_kfunc" "${TRUSTIX_E2E_KERNEL_FASTPATH_WIPE:-1}"
 }
 
 datapath_extra_module_params() {
@@ -3811,6 +3838,10 @@ fi
   case "$disable_veth_offloads" in
     auto|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
     *) die "TRUSTIX_E2E_DISABLE_VETH_OFFLOADS must be auto, 0, or 1" ;;
+  esac
+  case "$kernel_experimental_vaes" in
+    auto|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_E2E_KERNEL_EXPERIMENTAL_VAES must be auto, 0, or 1" ;;
   esac
   case "$kernel_experimental_vaes_kfunc" in
     auto|0|1|true|false|yes|no|on|off|enabled|disabled) ;;

@@ -836,6 +836,7 @@ func (daemon *Daemon) captureForwarderSuppressedReason() string {
 
 func (daemon *Daemon) kernelDirectWarmupEnabled() bool {
 	return (daemon.kernelUDPDirectOnlyEnabled() ||
+		kernelUDPSecureFullDirectForDesired(daemon.desired) ||
 		kernelDatapathFullPlaintextEnabledForDesired(daemon.desired)) &&
 		daemon.transportPolicyUsesKernelDirect() &&
 		daemon.kernelTransportMode() != dataplane.KernelTransportModeDisabled
@@ -1320,7 +1321,8 @@ func (daemon *Daemon) kernelDirectOnlyEndpointEncryption(encryption string) bool
 	case securetransport.EncryptionSecure:
 		return parseSecureTransportEncryption(daemon.desired.TransportPolicy.Encryption) == securetransport.EncryptionSecure &&
 			desiredTransportPolicyAllowsKernelCryptoDirectOnly(daemon.desired) &&
-			desiredTransportPolicyAllowsSecureDirectOnly(daemon.desired)
+			(desiredTransportPolicyAllowsSecureDirectOnly(daemon.desired) ||
+				kernelUDPSecureFullDirectForDesired(daemon.desired))
 	default:
 		return false
 	}

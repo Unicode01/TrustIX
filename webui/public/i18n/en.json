@@ -686,7 +686,7 @@
   "help_new_ix_target": "Optional user@host. Leave empty for a target-local command; set it to generate a management-host SSH deployment command.",
   "help_new_ix_target_cert_dir": "Directory path written into the generated target config for IX certificates and trust roots.",
   "help_new_ix_trust_roots": "Optional trust root paths, one per line. Empty uses certs/root-ca.pem, certs/domain-ca.pem, and certs/config-ca.pem if present.",
-  "help_new_ix_transport": "Initial passive data transport for the new IX endpoint. UDP stays the primary default; when UDP is selected the generated config also adds experimental_tcp as a lower-priority fallback for NAT or UDP-hostile networks.",
+  "help_new_ix_transport": "Initial passive data transport for the new IX endpoint. Plaintext performance uses IPIP when the public endpoint is an IPv4 address; DNS or active endpoints fall back to experimental_tcp.",
   "help_new_ix_transport_active": "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.",
   "help_new_ix_upstream_endpoint": "Data endpoint on the upstream IX that this no-public-IP edge IX dials. Empty derives host:7000 from the bootstrap control API. It is not advertised as the new IX public address.",
   "help_new_ix_underlay_iface": "Optional physical or WAN interface hint used by kernel fast paths and tunnel transports.",

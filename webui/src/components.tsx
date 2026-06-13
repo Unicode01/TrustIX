@@ -920,11 +920,14 @@ function normalizeIXProvisionProfileName(profile: string): string {
   }
 }
 
-function ixProvisionDefaultEndpointTransport(profile: string, serviceManager = ""): string {
+function ixProvisionDefaultEndpointTransport(profile: string, endpointMode = "passive", endpointAddress = ""): string {
   if (normalizeIXProvisionProfileName(profile) !== "plaintext_performance") {
     return "udp";
   }
-  return String(serviceManager || "").trim().toLowerCase() === "openwrt" ? "udp" : "experimental_tcp";
+  if (String(endpointMode || "passive").trim().toLowerCase().replaceAll("-", "_") !== "active" && provisionEndpointAddressHasIPv4(endpointAddress)) {
+    return "ipip";
+  }
+  return "experimental_tcp";
 }
 
 function ixProvisionAcklessEndpointName(endpointName: string, ixID: string): string {
@@ -983,12 +986,13 @@ function ixProvisionEffectiveDefaults(input: {
   const attachMode = String(input.attachMode || "managed").trim().toLowerCase().replaceAll("_", "-");
   const derivedGateway = role === "transit_ix" ? "" : defaultLANGatewayForPrefix(input.advertisePrefixes[0] || "");
   const profile = ixProvisionProfileDefaults(input.profile);
-  const endpointTransport = String(input.endpointTransport || "").trim() || ixProvisionDefaultEndpointTransport(input.profile, input.serviceManager);
+  const endpointTransport = String(input.endpointTransport || "").trim() || ixProvisionDefaultEndpointTransport(input.profile, endpointMode, endpointAddress);
   const endpointName = String(input.endpointName || "").trim() || `${safeShellName(input.ixID, "ix-new")}-${endpointTransport}`;
+  const endpointAddressForConfig = transportIsKernelTunnel(endpointTransport) ? (normalizeProvisionTunnelEndpointAddress(endpointAddress) || endpointAddress) : endpointAddress;
   return {
     controlAPI: String(input.controlAPI || "").trim() || (endpointMode === "passive" ? provisionControlAPIFromEndpointAddress(endpointAddress, "9443") : ""),
-    endpointAddress,
-    endpointListen: endpointMode === "passive" ? (String(input.endpointListen || "").trim() || (endpointPort ? `0.0.0.0:${endpointPort}` : "")) : "",
+    endpointAddress: endpointAddressForConfig,
+    endpointListen: endpointMode === "passive" ? (String(input.endpointListen || "").trim() || (transportIsKernelTunnel(endpointTransport) ? endpointAddressForConfig : (endpointPort ? `0.0.0.0:${endpointPort}` : ""))) : "",
     endpointName,
     acklessEndpointName: endpointTransport === "udp" ? ixProvisionAcklessEndpointName(endpointName, input.ixID) : "",
     endpointMode,
@@ -999,6 +1003,10 @@ function ixProvisionEffectiveDefaults(input: {
     kernelModules: String(input.kernelModules || "").trim() || "auto",
     ...profile,
   };
+}
+
+function transportIsKernelTunnel(transport: string): boolean {
+  return ["gre", "ipip", "vxlan"].includes(String(transport || "").trim().toLowerCase());
 }
 
 function normalizeProvisionEndpointAddress(raw: string, fallbackPort: string): string {
@@ -1027,6 +1035,43 @@ function normalizeProvisionEndpointAddress(raw: string, fallbackPort: string): s
     return `[${value.replace(/^\[|\]$/g, "")}]:${fallbackPort}`;
   }
   return `${value}:${fallbackPort}`;
+}
+
+function provisionEndpointAddressHasIPv4(raw: string): boolean {
+  if (String(raw || "").includes("=")) {
+    const local = parseTunnelEndpointField(raw, "local");
+    if (local) {
+      raw = local;
+    }
+  }
+  const host = provisionEndpointHost(raw) || String(raw || "").trim();
+  return isIPv4Address(host.replace(/^\[|\]$/g, ""));
+}
+
+function parseTunnelEndpointField(raw: string, fieldName: string): string {
+  const prefix = `${fieldName.toLowerCase()}=`;
+  for (const field of String(raw || "").split(",")) {
+    const value = field.trim();
+    if (value.toLowerCase().startsWith(prefix)) {
+      return value.slice(prefix.length).trim();
+    }
+  }
+  return "";
+}
+
+function normalizeProvisionTunnelEndpointAddress(raw: string): string {
+  const value = String(raw || "").trim();
+  if (!value || value.includes("=") || value.includes(",")) {
+    return value;
+  }
+  const host = provisionEndpointHost(value) || value;
+  const addr = host.replace(/^\[|\]$/g, "");
+  return isIPv4Address(addr) ? `local=${addr}` : value;
+}
+
+function isIPv4Address(value: string): boolean {
+  const parts = String(value || "").trim().split(".");
+  return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
 }
 
 function provisionEndpointPort(endpointAddress: string, fallback: string): string {
@@ -1297,7 +1342,7 @@ export function AccessView(props: {
   const [newIXEndpointAddress, setNewIXEndpointAddress] = useState("");
   const [newIXEndpointMode, setNewIXEndpointMode] = useState("passive");
   const [newIXEndpointListen, setNewIXEndpointListen] = useState("");
-  const [newIXEndpointTransport, setNewIXEndpointTransport] = useState("experimental_tcp");
+  const [newIXEndpointTransport, setNewIXEndpointTransport] = useState("");
   const [newIXEndpointName, setNewIXEndpointName] = useState("");
   const [newIXBootstrapIX, setNewIXBootstrapIX] = useState("");
   const [newIXBootstrapControlAPI, setNewIXBootstrapControlAPI] = useState("");
@@ -1347,8 +1392,9 @@ export function AccessView(props: {
     }
   };
   const updateNewIXEndpointTransportDefault = (nextProfile: string, nextServiceManager = newIXServiceManager) => {
-    const previousDefault = ixProvisionDefaultEndpointTransport(newIXProfile, newIXServiceManager);
-    const nextDefault = ixProvisionDefaultEndpointTransport(nextProfile, nextServiceManager);
+    void nextServiceManager;
+    const previousDefault = ixProvisionDefaultEndpointTransport(newIXProfile, newIXEndpointMode, newIXEndpointAddress);
+    const nextDefault = ixProvisionDefaultEndpointTransport(nextProfile, newIXEndpointMode, newIXEndpointAddress);
     if (newIXEndpointTransport === previousDefault) {
       setNewIXEndpointTransport(nextDefault);
     }
@@ -1419,7 +1465,7 @@ export function AccessView(props: {
   const newIXAdvertiseRequired = newIXRole !== "transit_ix";
   const newIXBootstrapControlAPIEffective = newIXBootstrapControlAPI.trim() || desiredControlAPI.trim();
   const newIXCommandDisabled = !newIXID.trim() || !effectiveNewIXDomain || (!newIXActiveOnly && !newIXEndpointAddress.trim()) || (newIXActiveOnly && !newIXBootstrapControlAPIEffective) || (newIXAdvertiseRequired && newIXAdvertisePrefixes.length === 0) || newIXAdvertiseWarnings.length > 0;
-  const newIXEffectiveEndpointTransport = newIXEndpointTransport || ixProvisionDefaultEndpointTransport(newIXProfile, newIXServiceManager);
+  const newIXEffectiveEndpointTransport = newIXEndpointTransport || ixProvisionDefaultEndpointTransport(newIXProfile, newIXEndpointMode, newIXEndpointAddress);
   const newIXResolvedEndpointName = newIXEndpointName.trim() || `${safeShellName(newIXID, "ix-new")}-${newIXEffectiveEndpointTransport}`;
   const newIXQuickJoinCommand = props.issuedIXProvision?.command || "";
   const newIXEffective = ixProvisionEffectiveDefaults({
@@ -1584,7 +1630,7 @@ export function AccessView(props: {
                 <Field label={props.t("new_ix_control_api", "New IX public control API")} help={newIXActiveOnly ? props.t("help_new_ix_control_api_active", "Optional published control API for this edge IX. Leave empty when it has no public inbound control-plane address.") : props.t("help_new_ix_control_api", "Optional public URL for the new IX control API. Empty derives https://host:9443 from the public endpoint.")} placeholder={newIXActiveOnly ? props.t("no_control_api", "No control API published") : (newIXEffective.controlAPI || "https://ix-c.example.com:9443")} value={newIXControlAPI} onChange={setNewIXControlAPI} />
                 <Field label={props.t("new_ix_bootstrap_peer", "Bootstrap peer IX")} help={props.t("help_new_ix_bootstrap_peer", "Existing IX used as the first control-plane peer for the generated config.")} value={newIXBootstrapIX} onChange={setNewIXBootstrapIX} />
                 <Field label={props.t("new_ix_bootstrap_control_api", "Bootstrap control API")} help={props.t("help_new_ix_bootstrap_control_api", "Control API URL of the bootstrap peer. Empty uses the current IX control API from this config.")} placeholder={newIXEffective.bootstrapControlAPI || "https://ix-a.example.com:9443"} value={newIXBootstrapControlAPI} onChange={setNewIXBootstrapControlAPI} />
-                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. Plaintext performance defaults to experimental_tcp route-GSO; UDP is still available for explicit compatibility testing.")} value={newIXEffectiveEndpointTransport} options={transportOptions()} onChange={setNewIXEndpointTransport} />
+                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. Plaintext performance uses IPIP when the public endpoint is an IPv4 address; DNS or active endpoints fall back to experimental_tcp.")} value={newIXEffectiveEndpointTransport} options={transportOptions()} onChange={setNewIXEndpointTransport} />
                 {!newIXActiveOnly && <Field label={props.t("new_ix_endpoint_listen", "Endpoint listen")} help={props.t("help_new_ix_endpoint_listen", "Optional listen address. Empty listens on 0.0.0.0 with the public endpoint port.")} placeholder={newIXEffective.endpointListen || "0.0.0.0:7000"} value={newIXEndpointListen} onChange={setNewIXEndpointListen} />}
                 <Field label={props.t("new_ix_endpoint_name", "Endpoint name")} help={props.t("help_new_ix_endpoint_name", "Optional local endpoint name written into the generated config. Empty derives <ix_id>-<transport>.")} placeholder={newIXResolvedEndpointName} value={newIXEndpointName} onChange={setNewIXEndpointName} />
                 <Field label={props.t("new_ix_lan_iface", "LAN interface")} help={props.t("help_new_ix_lan_iface", "Optional LAN interface. Managed mode creates trustix-<ix_id> when empty; existing mode requires a host interface.")} placeholder={newIXEffective.lanIface || "br-lan / eth1"} value={newIXLANIface} onChange={setNewIXLANIface} />

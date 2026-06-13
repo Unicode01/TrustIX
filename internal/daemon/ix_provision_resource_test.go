@@ -207,6 +207,67 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	}
 }
 
+func TestIXProvisionPlaintextPerformanceIPv4DefaultsToNativeIPIP(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:            "ix-e",
+		Advertise:       []core.Prefix{"10.42.0.0/24"},
+		EndpointAddress: "198.51.100.10:7000",
+		ProvisionURL:    "https://ix-a.example.com:18787",
+	}, desired)
+	if err != nil {
+		t.Fatalf("normalize provision request: %v", err)
+	}
+	if request.ControlAPI != "https://198.51.100.10:9443" {
+		t.Fatalf("control_api = %q, want derived IPv4 control API", request.ControlAPI)
+	}
+	if request.EndpointTransport != "ipip" || request.EndpointName != "ix-e-ipip" {
+		t.Fatalf("endpoint transport/name = %q/%q, want ipip/ix-e-ipip", request.EndpointTransport, request.EndpointName)
+	}
+	if request.EndpointAddress != "local=198.51.100.10" || request.EndpointListen != "local=198.51.100.10" {
+		t.Fatalf("endpoint tunnel declaration = %q listen %q, want local IPv4 declaration", request.EndpointAddress, request.EndpointListen)
+	}
+	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
+	if err != nil {
+		t.Fatalf("desired for provision: %v", err)
+	}
+	if len(target.Endpoints) != 1 ||
+		target.Endpoints[0].Name != "ix-e-ipip" ||
+		target.Endpoints[0].Transport != "ipip" ||
+		target.Endpoints[0].Address != "local=198.51.100.10" ||
+		target.Endpoints[0].Listen != "local=198.51.100.10" {
+		t.Fatalf("target endpoints = %#v, want native IPIP plaintext performance endpoint", target.Endpoints)
+	}
+	if len(target.TransportPolicy.Candidates) != 1 || target.TransportPolicy.Candidates[0] != "ix-e-ipip" {
+		t.Fatalf("transport candidates = %#v, want ipip", target.TransportPolicy.Candidates)
+	}
+	if !nativePlaintextKernelTunnelRouteOffloadForDesired(target) {
+		t.Fatalf("target plaintext IPIP config did not enable native tunnel route offload: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	}
+}
+
+func TestIXProvisionPlaintextPerformanceTunnelDeclarationDefaultsToNativeIPIP(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	request, _, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:            "ix-e",
+		Advertise:       []core.Prefix{"10.42.0.0/24"},
+		EndpointAddress: "local=198.51.100.10,mtu=1480",
+		ControlAPI:      "https://198.51.100.10:9443",
+		ProvisionURL:    "https://ix-a.example.com:18787",
+	}, desired)
+	if err != nil {
+		t.Fatalf("normalize provision request: %v", err)
+	}
+	if request.EndpointTransport != "ipip" || request.EndpointName != "ix-e-ipip" {
+		t.Fatalf("endpoint transport/name = %q/%q, want ipip/ix-e-ipip", request.EndpointTransport, request.EndpointName)
+	}
+	if request.EndpointAddress != "local=198.51.100.10,mtu=1480" || request.EndpointListen != "local=198.51.100.10,mtu=1480" {
+		t.Fatalf("endpoint tunnel declaration = %q listen %q", request.EndpointAddress, request.EndpointListen)
+	}
+}
+
 func TestIXProvisionExplicitStableKeepsSecureUDPCompatibility(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
@@ -329,15 +390,15 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if request.ServiceManager != "openwrt" || request.DNSEnabled != "1" || request.OpenWRTDNSMasq != "1" || request.DNSDomain != "trust.ix" {
 		t.Fatalf("normalized OpenWrt DNS request = %#v", request)
 	}
-	if request.Profile != "plaintext_performance" || request.EndpointTransport != "udp" {
-		t.Fatalf("normalized OpenWrt performance defaults profile=%q transport=%q, want plaintext_performance/udp", request.Profile, request.EndpointTransport)
+	if request.Profile != "plaintext_performance" || request.EndpointTransport != "experimental_tcp" {
+		t.Fatalf("normalized OpenWrt performance defaults profile=%q transport=%q, want plaintext_performance/experimental_tcp", request.Profile, request.EndpointTransport)
 	}
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
 	}
-	if target.TransportPolicy.KernelTransport.Mode != "require_kernel" || len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "udp" {
-		t.Fatalf("target OpenWrt TC-only defaults policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	if target.TransportPolicy.KernelTransport.Mode != "auto" || len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "experimental_tcp" {
+		t.Fatalf("target OpenWrt performance defaults policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if !target.DNS.Enabled || !target.DNS.DNSMasq.Enabled || target.DNS.Domain != "trust.ix" {
 		t.Fatalf("target DNS = %#v", target.DNS)
@@ -373,8 +434,8 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 		"--env TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO=0",
 		"--env TRUSTIX_KERNEL_UDP_TC_RX_ADJ_ROOM_TUNNEL_GSO=0",
 	} {
-		if !strings.Contains(script, env) {
-			t.Fatalf("bootstrap script does not enable OpenWrt TC-only env %q:\n%s", env, script)
+		if strings.Contains(script, env) {
+			t.Fatalf("bootstrap script should not force OpenWrt TC-only env %q by default:\n%s", env, script)
 		}
 	}
 }
@@ -428,6 +489,7 @@ func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 }
 
 func TestIXProvisionOpenWRTPlaintextPerformanceUsesUDPTCOnly(t *testing.T) {
+	t.Setenv("TRUSTIX_PROVISION_OPENWRT_UDP_TC_ONLY", "1")
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
 	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{

@@ -511,10 +511,6 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 	default:
 		return ixProvisionIssueRequest{}, nil, fmt.Errorf("service_manager must be auto, systemd, or openwrt")
 	}
-	request.EndpointTransport = strings.ToLower(strings.TrimSpace(request.EndpointTransport))
-	if request.EndpointTransport == "" {
-		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile, request.ServiceManager)
-	}
 	request.EndpointMode = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(request.EndpointMode), "-", "_"))
 	if request.EndpointMode == "" {
 		request.EndpointMode = string(config.EndpointModePassive)
@@ -551,9 +547,30 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 			return ixProvisionIssueRequest{}, nil, fmt.Errorf("control_api: %w", err)
 		}
 	}
+	request.EndpointTransport = strings.ToLower(strings.TrimSpace(request.EndpointTransport))
+	if request.EndpointTransport == "" {
+		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile, request.EndpointMode, request.EndpointAddress)
+	}
+	if transportProtocolIsKernelTunnel(request.EndpointTransport) {
+		tunnelAddress, err := normalizeProvisionTunnelEndpointAddress(request.EndpointAddress)
+		if err != nil {
+			return ixProvisionIssueRequest{}, nil, fmt.Errorf("endpoint_address: %w", err)
+		}
+		request.EndpointAddress = tunnelAddress
+	}
 	request.EndpointListen = strings.TrimSpace(request.EndpointListen)
 	if request.EndpointMode == string(config.EndpointModePassive) && request.EndpointListen == "" {
-		request.EndpointListen = net.JoinHostPort("0.0.0.0", provisionEndpointPort(request.EndpointAddress, "7000"))
+		if transportProtocolIsKernelTunnel(request.EndpointTransport) {
+			request.EndpointListen = request.EndpointAddress
+		} else {
+			request.EndpointListen = net.JoinHostPort("0.0.0.0", provisionEndpointPort(request.EndpointAddress, "7000"))
+		}
+	} else if request.EndpointListen != "" && transportProtocolIsKernelTunnel(request.EndpointTransport) {
+		tunnelListen, err := normalizeProvisionTunnelEndpointAddress(request.EndpointListen)
+		if err != nil {
+			return ixProvisionIssueRequest{}, nil, fmt.Errorf("endpoint_listen: %w", err)
+		}
+		request.EndpointListen = tunnelListen
 	}
 	if request.EndpointMode == string(config.EndpointModeActive) {
 		request.EndpointListen = ""
@@ -768,12 +785,11 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 	}
 }
 
-func ixProvisionDefaultEndpointTransport(profile string, serviceManager ...string) string {
+func ixProvisionDefaultEndpointTransport(profile string, endpointMode string, endpointAddress string) string {
 	if normalizeIXProvisionProfile(profile) == "plaintext_performance" {
-		for _, manager := range serviceManager {
-			if strings.ToLower(strings.TrimSpace(manager)) == "openwrt" {
-				return string(transport.ProtocolUDP)
-			}
+		if strings.ToLower(strings.ReplaceAll(strings.TrimSpace(endpointMode), "-", "_")) != string(config.EndpointModeActive) &&
+			provisionEndpointAddressHasIPv4(endpointAddress) {
+			return string(transport.ProtocolIPIP)
 		}
 		return string(transport.ProtocolExperimentalTCP)
 	}
@@ -830,6 +846,39 @@ func provisionEndpointAddressFromControlAPI(controlAPI, fallbackPort string) str
 		return ""
 	}
 	return net.JoinHostPort(host, fallbackPort)
+}
+
+func provisionEndpointAddressHasIPv4(raw string) bool {
+	if strings.Contains(raw, "=") {
+		if values, err := parseTunnelEndpointValues(raw); err == nil {
+			raw = values["local"]
+		}
+	}
+	host := hostForSAN(raw)
+	if host == "" {
+		host = strings.TrimSpace(raw)
+	}
+	addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	return err == nil && addr.Is4()
+}
+
+func normalizeProvisionTunnelEndpointAddress(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("tunnel endpoint address is required")
+	}
+	if strings.Contains(raw, "=") || strings.Contains(raw, ",") {
+		return raw, nil
+	}
+	host := hostForSAN(raw)
+	if host == "" {
+		host = raw
+	}
+	addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil || !addr.Is4() {
+		return "", fmt.Errorf("kernel tunnel endpoints require an IPv4 local underlay address, got %q", raw)
+	}
+	return "local=" + addr.String(), nil
 }
 
 func provisionEndpointPort(endpointAddress, fallback string) string {
@@ -1039,6 +1088,9 @@ func ixProvisionAcklessAdvanced(profile string) config.TransportAdvancedConfig {
 }
 
 func ixProvisionOpenWRTTCOnly(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
+	if !envTruthyAny("TRUSTIX_PROVISION_OPENWRT_UDP_TC_ONLY") {
+		return false
+	}
 	if request.ServiceManager != "openwrt" {
 		return false
 	}
@@ -1278,11 +1330,6 @@ func ixProvisionBootstrapScript(input ixProvisionScriptInput) (string, error) {
 	b.WriteString(shellQuote(input.ServiceManager))
 	b.WriteString(" == \"auto\" && -f /etc/openwrt_release ) ]]; then\n")
 	b.WriteString("  deploy_args+=(--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1)\n")
-	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_UDP_TC_ONLY=1)\n")
-	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1)\n")
-	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO=1)\n")
-	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO=0)\n")
-	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_UDP_TC_RX_ADJ_ROOM_TUNNEL_GSO=0)\n")
 	b.WriteString("fi\n")
 	b.WriteString("log \"install TrustIX IX ")
 	b.WriteString(shellScriptLiteral(string(input.IXID)))

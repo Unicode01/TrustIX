@@ -312,6 +312,87 @@ func TestStartDataPathFullPlaintextWarmsKernelUDPRouteWithAutoKernelTransport(t 
 	t.Fatalf("full plaintext warmup installed flows=%d sessions=%d, want 1/1", manager.kernelUDPFlows.Load(), sessions)
 }
 
+func TestStartDataPathSecureKernelUDPWarmsSecureDirectRoute(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_PLAINTEXT_WARMUP_RETRY_DELAY", "1ms")
+	t.Setenv("TRUSTIX_KERNEL_UDP_PLAINTEXT_WARMUP_TIMEOUT", "1s")
+	manager := &captureCountingManager{
+		kernelUDPStatus: &dataplane.KernelUDPStatus{
+			Available:       true,
+			Provider:        "test",
+			FastPath:        true,
+			UserspaceCrypto: true,
+			KernelCrypto:    true,
+			PreferredCrypto: dataplane.CryptoPlacementKernel,
+			SupportedCrypto: []dataplane.CryptoPlacement{dataplane.CryptoPlacementUserspace, dataplane.CryptoPlacementKernel},
+			Reinject:        true,
+		},
+	}
+	registry := transport.NewRegistry()
+	if err := registry.Register(udptransport.NewWithKernelProvider(manager, udptransport.Options{
+		CryptoPlacement: func() dataplane.CryptoPlacement { return dataplane.CryptoPlacementKernel },
+		KernelTransport: func() dataplane.KernelTransportMode {
+			return dataplane.KernelTransportModeRequireKernel
+		},
+		Encryption: func() string { return securetransport.EncryptionSecure },
+	})); err != nil {
+		t.Fatalf("register udp transport: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	daemon := &Daemon{
+		dataplane:        manager,
+		transports:       registry,
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		desired: config.Desired{
+			IX: config.IXConfig{ID: "ix-a"},
+			Peers: []config.PeerConfig{{
+				ID:     "ix-b",
+				Domain: "lab.local",
+				Endpoints: []config.EndpointConfig{{
+					Name:      "udp-b",
+					Address:   "127.0.0.1:17042",
+					Transport: string(transport.ProtocolUDP),
+					Enabled:   true,
+				}},
+			}},
+			Routes: []config.RouteConfig{{
+				Prefix:  "10.0.1.0/24",
+				NextHop: "ix-b",
+				Metric:  100,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				Profile:         config.TransportProfilePerformance,
+				Datapath:        config.TransportDatapathTCXDP,
+				Encryption:      securetransport.EncryptionSecure,
+				CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+				KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	if _, err := daemon.startDataPath(ctx); err != nil {
+		t.Fatalf("start data path: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if manager.kernelUDPFlows.Load() == 1 {
+			daemon.dataMu.Lock()
+			sessions := len(daemon.dataSessions)
+			daemon.dataMu.Unlock()
+			if sessions == 1 {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	daemon.dataMu.Lock()
+	sessions := len(daemon.dataSessions)
+	daemon.dataMu.Unlock()
+	t.Fatalf("secure kernel_udp warmup installed flows=%d sessions=%d, want 1/1", manager.kernelUDPFlows.Load(), sessions)
+}
+
 func TestStartDataPathKeepsCaptureForwarderForSecureKernelUDPTCOnlyProviderByDefault(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	manager := &captureCountingManager{}

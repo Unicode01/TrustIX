@@ -686,7 +686,7 @@
   "help_new_ix_target": "可选 user@host。留空时生成目标机本地执行命令；填写后生成从管理机 SSH 部署的命令。",
   "help_new_ix_target_cert_dir": "写入目标配置的证书目录路径，用于存放 IX 证书和信任根。",
   "help_new_ix_trust_roots": "可选信任根路径，每行一个。留空时脚本会尝试使用 certs/root-ca.pem、certs/domain-ca.pem 和 certs/config-ca.pem。",
-  "help_new_ix_transport": "新 IX 初始 passive 数据端点承载。UDP 仍是主默认路径；选择 UDP 时生成配置会同时加入低优先级 experimental_tcp，用于 NAT 或 UDP 劣化网络兜底。",
+  "help_new_ix_transport": "新 IX 初始 passive 数据端点承载。明文性能在公网端点是 IPv4 地址时默认使用 IPIP；DNS 或主动拨出端点回退到 experimental_tcp。",
   "help_new_ix_transport_active": "用于拨出到上游端点的数据承载，需要和上游端点的承载一致。",
   "help_new_ix_upstream_endpoint": "上游 IX 的数据端点地址，这个无公网 edge IX 会主动拨它。留空时按 Bootstrap 控制 API 主机名推导 host:7000。它不会被发布为新 IX 的公网地址。",
   "help_new_ix_underlay_iface": "可选物理/WAN 接口提示，供内核快路径和隧道承载使用。",
