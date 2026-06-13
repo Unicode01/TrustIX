@@ -30,6 +30,7 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/udp.h>
+#include <linux/version.h>
 #include <linux/workqueue.h>
 #include <net/arp.h>
 #include <net/checksum.h>
@@ -142,10 +143,16 @@
 #define TRUSTIX_DATAPATH_RX_WORKER_DEFAULT_BUDGET 64U
 #define TRUSTIX_DATAPATH_RX_WORKER_STREAM_MAX_FRAMES 64U
 #define TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_SLOTS 256U
-#define TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES 4U
+#define TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES 64U
+#define TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_SLOTS 1024U
+#define TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES 16U
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_DEFAULT_SLOTS 8192U
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_SLOTS 8192U
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS 64U
+#define TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_SLOTS 256U
+#define TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES 32U
+#define TRUSTIX_DATAPATH_LOOKUP_CACHE_MIN_SLOTS 1024U
+#define TRUSTIX_DATAPATH_LOOKUP_CACHE_MAX_SLOTS 262144U
 #define TRUSTIX_DATAPATH_SKB_MARK_TX_PLAINTEXT BIT(31)
 #define TRUSTIX_DATAPATH_SKB_MARK_RX_WORKER BIT(30)
 #define TRUSTIX_DATAPATH_HOOK_MAX 16U
@@ -161,6 +168,8 @@
 #define TRUSTIX_DATAPATH_TIXT_FLAG_KERNEL_OPENED BIT(1)
 #define TRUSTIX_DATAPATH_TIXT_FLAG_CRYPTO_FRAGMENT BIT(2)
 #define TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4 BIT(3)
+#define TRUSTIX_DATAPATH_TIXT_FLAG_INNER_L4_CHECKSUM_VALID \
+	TRUSTIX_DATAPATH_TIXT_FLAG_KERNEL_OPENED
 #define TRUSTIX_DATAPATH_TIXT_KNOWN_FLAGS \
 	(TRUSTIX_DATAPATH_TIXT_FLAG_ENCRYPTED | \
 	 TRUSTIX_DATAPATH_TIXT_FLAG_KERNEL_OPENED | \
@@ -477,6 +486,40 @@ struct trustix_datapath_state_table {
 	__u32 count;
 };
 
+struct trustix_datapath_session_flow_cache_entry {
+	bool used;
+	__u64 flow_id;
+	struct trustix_datapath_state_slot *slot;
+};
+
+struct trustix_datapath_route_dst_cache_entry {
+	bool used;
+	__u32 dst_ipv4;
+	struct trustix_datapath_state_slot *slot;
+};
+
+struct trustix_datapath_session_route_cache_entry {
+	bool used;
+	struct trustix_datapath_state_slot *route;
+	struct trustix_datapath_state_slot *flow;
+	__u64 next_hop_hash;
+	__u64 endpoint_hash;
+	__u64 pool_index;
+	struct trustix_datapath_state_slot *slot;
+};
+
+struct trustix_datapath_session_wire_tuple_cache_entry {
+	bool used;
+	bool reverse;
+	__u8 protocol;
+	__u16 src_port;
+	__u16 dst_port;
+	__u32 src_ipv4;
+	__u32 dst_ipv4;
+	__u64 flow_id;
+	struct trustix_datapath_state_slot *slot;
+};
+
 struct trustix_datapath_rx_stage_slot {
 	bool valid;
 	__u32 len;
@@ -567,6 +610,20 @@ struct trustix_datapath_rx_worker_coalesce_state {
 	__u8 header[sizeof(struct iphdr) + 60];
 };
 
+struct trustix_datapath_tx_plaintext_coalesce_slot {
+	spinlock_t lock;
+	struct delayed_work flush_work;
+	bool valid;
+	struct net_device *target_dev;
+	int target_ifindex;
+	__u32 hash;
+	struct trustix_datapath_tx_plan plan;
+	struct trustix_datapath_rx_worker_coalesce_state state;
+	__u8 *packets[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	__u32 lens[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	unsigned int frames;
+};
+
 struct trustix_datapath_rx_worker_pending_copy {
 	__u8 *packet;
 	const __u8 *source_packet;
@@ -586,6 +643,20 @@ struct trustix_datapath_rx_worker_inline_pair_slot {
 	struct sk_buff *skb;
 	__u8 *packets[TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES];
 	__u32 lens[TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES];
+	unsigned int frames;
+};
+
+struct trustix_datapath_rx_worker_single_coalesce_slot {
+	spinlock_t lock;
+	struct delayed_work flush_work;
+	bool valid;
+	struct net_device *target_dev;
+	int target_ifindex;
+	__u32 hash;
+	struct trustix_datapath_rx_worker_coalesce_state state;
+	__u8 *packets[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	__u32 lens[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	__u8 tixt_flags[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
 	unsigned int frames;
 };
 
@@ -612,10 +683,15 @@ static int trustix_datapath_rx_worker_inline_pair_xmit_skb_frames(
 	bool inline_context, unsigned int frames);
 static int trustix_datapath_rx_worker_xmit_inner_gso_segments(
 	struct sk_buff *skb, struct net_device *dev);
+static int trustix_datapath_rx_worker_xmit_inner_gso(
+	struct sk_buff *skb, struct net_device *dev, bool xmit_more);
+static bool trustix_datapath_rx_worker_dev_ready(struct net_device *dev);
 static int trustix_datapath_rx_worker_enqueue_pending_skb(
 	struct sk_buff *source_skb, struct net_device *target_dev,
 	struct sk_buff *inner_skb, __u32 len, unsigned int frames,
 	bool skb_l2_ready, unsigned int *queued_frames);
+static bool trustix_datapath_ipv4_prefix_match(__u32 addr, __u32 prefix,
+					       __u32 bits);
 static int trustix_datapath_rx_worker_queue_l2_skb_from_hook(
 	struct sk_buff *source_skb, struct net_device *target_dev,
 	struct sk_buff **inner_skb, __u32 len, unsigned int frames,
@@ -627,9 +703,15 @@ static int trustix_datapath_rx_worker_inline_pair_append_held_skb(
 static void trustix_datapath_rx_worker_inline_pair_flush_work(
 	struct work_struct *work);
 static void trustix_datapath_rx_worker_inline_pair_drop_all(void);
+static void trustix_datapath_rx_worker_single_coalesce_flush_work(
+	struct work_struct *work);
+static void trustix_datapath_rx_worker_single_coalesce_drop_all(void);
 static void trustix_datapath_rx_worker_drop_pending_sync(void);
 static void trustix_datapath_tx_plaintext_drop_pending_sync(void);
 static void trustix_datapath_tx_plaintext_run(struct work_struct *work);
+static void trustix_datapath_tx_plaintext_coalesce_flush_work(
+	struct work_struct *work);
+static void trustix_datapath_tx_plaintext_coalesce_drop_all(void);
 static int
 trustix_datapath_tx_send_outer_skb(struct sk_buff *skb,
 				   struct net_device *target_dev,
@@ -915,19 +997,53 @@ module_param_named(tx_plaintext_inline_xmit,
 MODULE_PARM_DESC(tx_plaintext_inline_xmit,
 		 "Send TrustIX plaintext TX outer skbs directly from the hook path instead of queueing a work item");
 
+static bool trustix_datapath_tx_plaintext_direct_xmit = true;
+module_param_named(tx_plaintext_direct_xmit,
+		   trustix_datapath_tx_plaintext_direct_xmit, bool, 0644);
+MODULE_PARM_DESC(tx_plaintext_direct_xmit,
+		 "Send plaintext TX outer skbs with a resolved Ethernet header through dev_queue_xmit, falling back to ip_local_out");
+
+static bool trustix_datapath_tx_plaintext_skip_inner_tcp_checksum;
+module_param_named(tx_plaintext_skip_inner_tcp_checksum,
+		   trustix_datapath_tx_plaintext_skip_inner_tcp_checksum, bool,
+		   0644);
+MODULE_PARM_DESC(tx_plaintext_skip_inner_tcp_checksum,
+		 "Skip rebuilding encapsulated inner TCP checksums; TrustIX RX xmit repairs or marks checksums before LAN delivery");
+
+static bool trustix_datapath_tx_plaintext_stream_coalesce;
+module_param_named(tx_plaintext_stream_coalesce,
+		   trustix_datapath_tx_plaintext_stream_coalesce, bool,
+		   0644);
+MODULE_PARM_DESC(tx_plaintext_stream_coalesce,
+		 "Coalesce adjacent plaintext TX TCP packets into outer TCP or UDP GSO");
+
+static unsigned int trustix_datapath_tx_plaintext_stream_coalesce_max_frames = 16;
+module_param_named(tx_plaintext_stream_coalesce_max_frames,
+		   trustix_datapath_tx_plaintext_stream_coalesce_max_frames,
+		   uint, 0644);
+MODULE_PARM_DESC(tx_plaintext_stream_coalesce_max_frames,
+		 "Maximum adjacent plaintext TX TCP packets coalesced before transmit");
+
+static unsigned int trustix_datapath_tx_plaintext_stream_coalesce_flush_jiffies;
+module_param_named(tx_plaintext_stream_coalesce_flush_jiffies,
+		   trustix_datapath_tx_plaintext_stream_coalesce_flush_jiffies,
+		   uint, 0644);
+MODULE_PARM_DESC(tx_plaintext_stream_coalesce_flush_jiffies,
+		 "Delayed flush interval for plaintext TX TCP stream coalescing");
+
 static bool trustix_datapath_rx_worker_steal_skb;
 module_param_cb(rx_worker_steal_skb,
-		&trustix_datapath_rx_worker_stolen_noop_bool_ops,
+		&trustix_datapath_rx_worker_bool_ops,
 		&trustix_datapath_rx_worker_steal_skb, 0644);
 MODULE_PARM_DESC(rx_worker_steal_skb,
-		 "Accept legacy stolen-skb RX worker requests; current safe implementation falls back to copy/worker reinjection");
+		 "Enable the constrained synchronous RX stolen-skb xmit path; legacy async stolen-skb worker queueing remains disabled");
 
 static bool trustix_datapath_rx_worker_inline_stolen;
 module_param_cb(rx_worker_inline_stolen,
-		&trustix_datapath_rx_worker_stolen_noop_bool_ops,
+		&trustix_datapath_rx_worker_bool_ops,
 		&trustix_datapath_rx_worker_inline_stolen, 0644);
 MODULE_PARM_DESC(rx_worker_inline_stolen,
-		 "Accept legacy inline stolen-skb RX worker requests; current safe implementation falls back to copy/worker reinjection");
+		 "Transmit eligible decapsulated RX packets by rewriting the hook skb in place and returning NF_STOLEN");
 
 static bool trustix_datapath_rx_worker_inline_receive;
 module_param_cb(rx_worker_inline_receive,
@@ -994,6 +1110,13 @@ module_param_cb(rx_worker_inline_pair_coalesce,
 MODULE_PARM_DESC(rx_worker_inline_pair_coalesce,
 		 "Pair adjacent validated single-frame inline xmit TCP packets into full-checksum inner GSO skbs");
 
+static bool trustix_datapath_rx_worker_single_coalesce;
+module_param_cb(rx_worker_single_coalesce,
+		&trustix_datapath_rx_worker_bool_ops,
+		&trustix_datapath_rx_worker_single_coalesce, 0644);
+MODULE_PARM_DESC(rx_worker_single_coalesce,
+		 "Coalesce validated single-frame inline xmit TCP packets across outer skbs into inner GSO skbs");
+
 static bool trustix_datapath_rx_worker_inline_pair_hold_skb;
 module_param_cb(rx_worker_inline_pair_hold_skb,
 		&trustix_datapath_rx_worker_bool_ops,
@@ -1001,7 +1124,7 @@ module_param_cb(rx_worker_inline_pair_hold_skb,
 MODULE_PARM_DESC(rx_worker_inline_pair_hold_skb,
 		 "Cache first inline TCP pair frame as a prepared skb to avoid a second copy on pair hit");
 
-static unsigned int trustix_datapath_rx_worker_inline_pair_flush_jiffies = 1;
+static unsigned int trustix_datapath_rx_worker_inline_pair_flush_jiffies;
 module_param_cb(rx_worker_inline_pair_flush_jiffies,
 		&trustix_datapath_rx_worker_uint_ops,
 		&trustix_datapath_rx_worker_inline_pair_flush_jiffies, 0644);
@@ -1014,6 +1137,21 @@ module_param_cb(rx_worker_inline_coalesce_max_frames,
 		&trustix_datapath_rx_worker_inline_coalesce_max_frames, 0644);
 MODULE_PARM_DESC(rx_worker_inline_coalesce_max_frames,
 		 "Maximum adjacent inline xmit TCP packets coalesced before transmit; clamped to 2..4");
+
+static unsigned int trustix_datapath_rx_worker_single_coalesce_max_frames = 16;
+module_param_cb(rx_worker_single_coalesce_max_frames,
+		&trustix_datapath_rx_worker_uint_ops,
+		&trustix_datapath_rx_worker_single_coalesce_max_frames, 0644);
+MODULE_PARM_DESC(rx_worker_single_coalesce_max_frames,
+		 "Maximum validated single-frame inline TCP packets coalesced before transmit; clamped to 2..16");
+
+static unsigned int trustix_datapath_rx_worker_single_coalesce_flush_jiffies = 1;
+module_param_cb(rx_worker_single_coalesce_flush_jiffies,
+		&trustix_datapath_rx_worker_uint_ops,
+		&trustix_datapath_rx_worker_single_coalesce_flush_jiffies,
+		0644);
+MODULE_PARM_DESC(rx_worker_single_coalesce_flush_jiffies,
+		 "Delayed flush interval for unmatched single-frame inline TCP coalesce packets");
 
 static bool trustix_datapath_rx_worker_xmit_fix_checksums = true;
 module_param_named(rx_worker_xmit_fix_checksums,
@@ -1244,6 +1382,52 @@ MODULE_PARM_DESC(rx_worker_inline_pair_errors,
 static struct trustix_datapath_rx_worker_inline_pair_slot
 	trustix_datapath_rx_worker_inline_pair_slots[
 		TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_SLOTS];
+
+static unsigned long long trustix_datapath_rx_worker_single_coalesce_stored;
+module_param_named(rx_worker_single_coalesce_stored,
+		   trustix_datapath_rx_worker_single_coalesce_stored, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_single_coalesce_stored,
+		 "TrustIX RX worker single-frame TCP packets held for coalescing");
+
+static unsigned long long trustix_datapath_rx_worker_single_coalesce_packets;
+module_param_named(rx_worker_single_coalesce_packets,
+		   trustix_datapath_rx_worker_single_coalesce_packets, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_single_coalesce_packets,
+		 "TrustIX RX worker single-frame TCP coalesced batches delivered");
+
+static unsigned long long trustix_datapath_rx_worker_single_coalesce_frames;
+module_param_named(rx_worker_single_coalesce_frames,
+		   trustix_datapath_rx_worker_single_coalesce_frames, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_single_coalesce_frames,
+		 "TrustIX RX worker single-frame TCP frames delivered in coalesced batches");
+
+static unsigned long long trustix_datapath_rx_worker_single_coalesce_flushes;
+module_param_named(rx_worker_single_coalesce_flushes,
+		   trustix_datapath_rx_worker_single_coalesce_flushes, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_single_coalesce_flushes,
+		 "TrustIX RX worker single-frame TCP coalesce held packets flushed singly");
+
+static unsigned long long trustix_datapath_rx_worker_single_coalesce_misses;
+module_param_named(rx_worker_single_coalesce_misses,
+		   trustix_datapath_rx_worker_single_coalesce_misses, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_single_coalesce_misses,
+		 "TrustIX RX worker single-frame TCP coalesce flow or sequence misses");
+
+static unsigned long long trustix_datapath_rx_worker_single_coalesce_errors;
+module_param_named(rx_worker_single_coalesce_errors,
+		   trustix_datapath_rx_worker_single_coalesce_errors, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_single_coalesce_errors,
+		 "TrustIX RX worker single-frame TCP coalesce allocation/build/xmit errors");
+
+static struct trustix_datapath_rx_worker_single_coalesce_slot
+	trustix_datapath_rx_worker_single_coalesce_slots[
+		TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_SLOTS];
 
 static unsigned long long trustix_datapath_rx_worker_stream_packets;
 module_param_named(rx_worker_stream_packets,
@@ -1482,6 +1666,34 @@ module_param_named(rx_worker_stream_coalesce_segment_errors,
 MODULE_PARM_DESC(rx_worker_stream_coalesce_segment_errors,
 		 "TrustIX RX worker coalesced GSO software segmentation or xmit failures");
 
+static unsigned long long trustix_datapath_rx_worker_gso_xmit_packets;
+module_param_named(rx_worker_gso_xmit_packets,
+		   trustix_datapath_rx_worker_gso_xmit_packets, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_gso_xmit_packets,
+		 "TrustIX RX worker inner GSO skbs transmitted without software segmentation");
+
+static unsigned long long trustix_datapath_rx_worker_gso_xmit_segments;
+module_param_named(rx_worker_gso_xmit_segments,
+		   trustix_datapath_rx_worker_gso_xmit_segments, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_gso_xmit_segments,
+		 "TrustIX RX worker inner TCP segments preserved inside direct GSO xmit skbs");
+
+static unsigned long long trustix_datapath_rx_worker_gso_xmit_fallbacks;
+module_param_named(rx_worker_gso_xmit_fallbacks,
+		   trustix_datapath_rx_worker_gso_xmit_fallbacks, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_gso_xmit_fallbacks,
+		 "TrustIX RX worker inner GSO skbs that fell back to software segmentation");
+
+static unsigned long long trustix_datapath_rx_worker_gso_xmit_errors;
+module_param_named(rx_worker_gso_xmit_errors,
+		   trustix_datapath_rx_worker_gso_xmit_errors, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_gso_xmit_errors,
+		 "TrustIX RX worker direct inner GSO xmit failures");
+
 static unsigned long long trustix_datapath_rx_worker_stream_coalesce_partial_csum_fallbacks;
 module_param_named(rx_worker_stream_coalesce_partial_csum_fallbacks,
 		   trustix_datapath_rx_worker_stream_coalesce_partial_csum_fallbacks,
@@ -1502,6 +1714,34 @@ module_param_named(rx_worker_stream_coalesce_inline_queue_fallbacks,
 		   ullong, 0444);
 MODULE_PARM_DESC(rx_worker_stream_coalesce_inline_queue_fallbacks,
 		 "TrustIX RX worker hook/inline coalesced TCP GSO requests safely degraded to per-frame worker queueing");
+
+static unsigned long long trustix_datapath_rx_worker_stream_direct_gso_packets;
+module_param_named(rx_worker_stream_direct_gso_packets,
+		   trustix_datapath_rx_worker_stream_direct_gso_packets,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_stream_direct_gso_packets,
+		 "TrustIX RX outer TCP stream batches queued as one inner GSO skb");
+
+static unsigned long long trustix_datapath_rx_worker_stream_direct_gso_frames;
+module_param_named(rx_worker_stream_direct_gso_frames,
+		   trustix_datapath_rx_worker_stream_direct_gso_frames,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_stream_direct_gso_frames,
+		 "TrustIX RX outer TCP stream frames queued through direct inner GSO");
+
+static unsigned long long trustix_datapath_rx_worker_stream_direct_gso_fallbacks;
+module_param_named(rx_worker_stream_direct_gso_fallbacks,
+		   trustix_datapath_rx_worker_stream_direct_gso_fallbacks,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_stream_direct_gso_fallbacks,
+		 "TrustIX RX outer TCP stream batches that fell back from direct inner GSO");
+
+static unsigned long long trustix_datapath_rx_worker_stream_direct_gso_errors;
+module_param_named(rx_worker_stream_direct_gso_errors,
+		   trustix_datapath_rx_worker_stream_direct_gso_errors,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_stream_direct_gso_errors,
+		 "TrustIX RX outer TCP stream direct inner GSO build or queue errors");
 
 static unsigned int trustix_datapath_rx_worker_stream_coalesce_last_len;
 module_param_named(rx_worker_stream_coalesce_last_len,
@@ -1695,6 +1935,18 @@ static struct trustix_datapath_state_table trustix_datapath_routes;
 static struct trustix_datapath_state_table trustix_datapath_sessions;
 static struct trustix_datapath_state_table trustix_datapath_flows;
 static struct trustix_datapath_state_table trustix_datapath_session_wires;
+static struct trustix_datapath_route_dst_cache_entry
+	*trustix_datapath_route_dst_cache;
+static __u32 trustix_datapath_route_dst_cache_capacity;
+static struct trustix_datapath_session_route_cache_entry
+	*trustix_datapath_session_route_cache;
+static __u32 trustix_datapath_session_route_cache_capacity;
+static struct trustix_datapath_session_flow_cache_entry
+	*trustix_datapath_session_flow_cache;
+static __u32 trustix_datapath_session_flow_cache_capacity;
+static struct trustix_datapath_session_wire_tuple_cache_entry
+	*trustix_datapath_session_wire_tuple_cache;
+static __u32 trustix_datapath_session_wire_tuple_cache_capacity;
 static __u64 trustix_datapath_state_upserts;
 static __u64 trustix_datapath_state_deletes;
 static __u64 trustix_datapath_state_clears;
@@ -1740,6 +1992,34 @@ module_param_named(tx_plaintext_gso_errors,
 		   trustix_datapath_tx_plaintext_gso_errors, ullong, 0444);
 MODULE_PARM_DESC(tx_plaintext_gso_errors,
 		 "TrustIX plaintext TX GSO segmentation, queueing, or encapsulation errors");
+
+static unsigned long long trustix_datapath_tx_plaintext_outer_gso_packets;
+module_param_named(tx_plaintext_outer_gso_packets,
+		   trustix_datapath_tx_plaintext_outer_gso_packets, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_packets,
+		 "TrustIX plaintext TX outer TCP GSO skbs built by the full datapath");
+
+static unsigned long long trustix_datapath_tx_plaintext_outer_gso_segments;
+module_param_named(tx_plaintext_outer_gso_segments,
+		   trustix_datapath_tx_plaintext_outer_gso_segments, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_segments,
+		 "TrustIX plaintext TX inner TCP segments carried by outer TCP GSO skbs");
+
+static unsigned long long trustix_datapath_tx_plaintext_outer_gso_fallbacks;
+module_param_named(tx_plaintext_outer_gso_fallbacks,
+		   trustix_datapath_tx_plaintext_outer_gso_fallbacks, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_fallbacks,
+		 "TrustIX plaintext TX GSO skbs that fell back to legacy software segmentation");
+
+static unsigned long long trustix_datapath_tx_plaintext_outer_gso_errors;
+module_param_named(tx_plaintext_outer_gso_errors,
+		   trustix_datapath_tx_plaintext_outer_gso_errors, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_errors,
+		 "TrustIX plaintext TX outer TCP GSO build or xmit failures");
 
 static unsigned long long trustix_datapath_tx_plaintext_encrypted_skips;
 module_param_named(tx_plaintext_encrypted_skips,
@@ -1900,6 +2180,69 @@ module_param_named(tx_plaintext_inline_xmit_errors,
 MODULE_PARM_DESC(tx_plaintext_inline_xmit_errors,
 		 "TrustIX plaintext TX direct hook-path send failures");
 
+static unsigned long long trustix_datapath_tx_plaintext_direct_xmit_packets;
+module_param_named(tx_plaintext_direct_xmit_packets,
+		   trustix_datapath_tx_plaintext_direct_xmit_packets, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_direct_xmit_packets,
+		 "TrustIX plaintext TX outer skbs sent through dev_queue_xmit");
+
+static unsigned long long trustix_datapath_tx_plaintext_direct_xmit_errors;
+module_param_named(tx_plaintext_direct_xmit_errors,
+		   trustix_datapath_tx_plaintext_direct_xmit_errors, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_direct_xmit_errors,
+		 "TrustIX plaintext TX dev_queue_xmit failures");
+
+static unsigned long long trustix_datapath_tx_plaintext_direct_xmit_fallbacks;
+module_param_named(tx_plaintext_direct_xmit_fallbacks,
+		   trustix_datapath_tx_plaintext_direct_xmit_fallbacks,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_direct_xmit_fallbacks,
+		 "TrustIX plaintext TX outer skbs that fell back to ip_local_out");
+
+static unsigned long long trustix_datapath_tx_plaintext_direct_xmit_neigh_misses;
+module_param_named(tx_plaintext_direct_xmit_neigh_misses,
+		   trustix_datapath_tx_plaintext_direct_xmit_neigh_misses,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_direct_xmit_neigh_misses,
+		 "TrustIX plaintext TX direct xmit neighbour lookup misses");
+
+static unsigned long long trustix_datapath_tx_plaintext_stream_coalesce_packets;
+module_param_named(tx_plaintext_stream_coalesce_packets,
+		   trustix_datapath_tx_plaintext_stream_coalesce_packets,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_stream_coalesce_packets,
+		 "TrustIX plaintext TX coalesced outer TCP GSO batches sent");
+
+static unsigned long long trustix_datapath_tx_plaintext_stream_coalesce_frames;
+module_param_named(tx_plaintext_stream_coalesce_frames,
+		   trustix_datapath_tx_plaintext_stream_coalesce_frames,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_stream_coalesce_frames,
+		 "TrustIX plaintext TX inner TCP frames sent through stream coalescing");
+
+static unsigned long long trustix_datapath_tx_plaintext_stream_coalesce_stored;
+module_param_named(tx_plaintext_stream_coalesce_stored,
+		   trustix_datapath_tx_plaintext_stream_coalesce_stored,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_stream_coalesce_stored,
+		 "TrustIX plaintext TX TCP frames stored for stream coalescing");
+
+static unsigned long long trustix_datapath_tx_plaintext_stream_coalesce_misses;
+module_param_named(tx_plaintext_stream_coalesce_misses,
+		   trustix_datapath_tx_plaintext_stream_coalesce_misses,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_stream_coalesce_misses,
+		 "TrustIX plaintext TX TCP frames that missed stream coalescing");
+
+static unsigned long long trustix_datapath_tx_plaintext_stream_coalesce_errors;
+module_param_named(tx_plaintext_stream_coalesce_errors,
+		   trustix_datapath_tx_plaintext_stream_coalesce_errors,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_stream_coalesce_errors,
+		 "TrustIX plaintext TX stream coalescing build or xmit errors");
+
 static unsigned int trustix_datapath_tx_plaintext_slots =
 	TRUSTIX_DATAPATH_TX_PLAINTEXT_DEFAULT_SLOTS;
 module_param_named(tx_plaintext_slots, trustix_datapath_tx_plaintext_slots,
@@ -1958,10 +2301,14 @@ MODULE_PARM_DESC(tx_plaintext_mark_skips,
 		 "TrustIX plaintext TX self-generated packets skipped by the hook mark guard");
 
 static atomic64_t trustix_datapath_tx_sequence = ATOMIC64_INIT(0);
+static atomic64_t trustix_datapath_outer_tcp_sequence = ATOMIC64_INIT(1);
 
 static DEFINE_SPINLOCK(trustix_datapath_tx_plaintext_lock);
 static struct trustix_datapath_tx_plaintext_slot
 	*trustix_datapath_tx_plaintext_ring;
+static struct trustix_datapath_tx_plaintext_coalesce_slot
+	trustix_datapath_tx_plaintext_coalesce_slots
+		[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_SLOTS];
 static __u32 trustix_datapath_tx_plaintext_capacity;
 static __u32 trustix_datapath_tx_plaintext_head;
 static __u32 trustix_datapath_tx_plaintext_tail;
@@ -2078,6 +2425,7 @@ static void trustix_datapath_tx_plaintext_clear(void)
 
 static void trustix_datapath_tx_plaintext_drop_pending_sync(void)
 {
+	trustix_datapath_tx_plaintext_coalesce_drop_all();
 	if (trustix_datapath_tx_plaintext_wq)
 		flush_workqueue(trustix_datapath_tx_plaintext_wq);
 	trustix_datapath_tx_plaintext_clear();
@@ -2246,6 +2594,7 @@ static int trustix_datapath_alloc_tx_plaintext(void)
 	unsigned long irqflags;
 	__u32 capacity;
 	struct trustix_datapath_tx_plaintext_slot *ring;
+	unsigned int i;
 
 	capacity = trustix_datapath_clamp_tx_plaintext_slots(
 		trustix_datapath_tx_plaintext_slots);
@@ -2258,6 +2607,17 @@ static int trustix_datapath_alloc_tx_plaintext(void)
 	if (!trustix_datapath_tx_plaintext_wq) {
 		vfree(ring);
 		return -ENOMEM;
+	}
+	for (i = 0; i < TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_SLOTS; i++) {
+		spin_lock_init(
+			&trustix_datapath_tx_plaintext_coalesce_slots[i].lock);
+		INIT_DELAYED_WORK(
+			&trustix_datapath_tx_plaintext_coalesce_slots[i].flush_work,
+			trustix_datapath_tx_plaintext_coalesce_flush_work);
+		trustix_datapath_tx_plaintext_coalesce_slots[i].valid = false;
+		trustix_datapath_tx_plaintext_coalesce_slots[i].target_dev =
+			NULL;
+		trustix_datapath_tx_plaintext_coalesce_slots[i].frames = 0;
 	}
 	spin_lock_irqsave(&trustix_datapath_tx_plaintext_lock, irqflags);
 	trustix_datapath_tx_plaintext_ring = ring;
@@ -2644,6 +3004,24 @@ static void trustix_datapath_put_be64(__u8 *ptr, __u64 value)
 	trustix_datapath_put_be32(ptr + 4, (__u32)value);
 }
 
+static bool trustix_datapath_dev_supports_tcpv4_gso(struct net_device *dev)
+{
+	netdev_features_t features;
+
+	if (!dev)
+		return false;
+	features = READ_ONCE(dev->features);
+	if (!(features & NETIF_F_TSO))
+		return false;
+	if (features & NETIF_F_HW_CSUM)
+		return true;
+#ifdef NETIF_F_IP_CSUM
+	if (features & NETIF_F_IP_CSUM)
+		return true;
+#endif
+	return false;
+}
+
 static void
 trustix_datapath_debug_record_outer(int stage, int ret, int worker_ret,
 				    struct sk_buff *skb,
@@ -2774,6 +3152,12 @@ trustix_datapath_build_tixt(__u8 *wire, __u8 flags, __u64 flow_id,
 			    __u64 epoch, __u64 sequence, __u32 payload_len,
 			    __u16 fragment_index, __u16 fragment_count);
 
+static void
+trustix_datapath_build_tixt_header(__u8 *wire, __u8 flags, __u64 flow_id,
+				   __u64 epoch, __u64 sequence,
+				   __u32 payload_len, __u16 fragment_index,
+				   __u16 fragment_count);
+
 static int
 trustix_datapath_parse_tixt(const __u8 *wire, __u32 len,
 			    struct trustix_datapath_tixt_frame *frame);
@@ -2821,6 +3205,90 @@ static void trustix_datapath_free_table(struct trustix_datapath_state_table *tab
 	table->slots = NULL;
 	table->capacity = 0;
 	table->count = 0;
+}
+
+static __u32 trustix_datapath_clamp_lookup_cache_slots(unsigned int requested)
+{
+	if (requested < TRUSTIX_DATAPATH_LOOKUP_CACHE_MIN_SLOTS)
+		return TRUSTIX_DATAPATH_LOOKUP_CACHE_MIN_SLOTS;
+	if (requested > TRUSTIX_DATAPATH_LOOKUP_CACHE_MAX_SLOTS)
+		return TRUSTIX_DATAPATH_LOOKUP_CACHE_MAX_SLOTS;
+	return requested;
+}
+
+static int trustix_datapath_alloc_lookup_caches(void)
+{
+	__u32 sessions = trustix_datapath_clamp_capacity(
+		trustix_datapath_max_sessions);
+	__u32 routes = trustix_datapath_clamp_capacity(
+		trustix_datapath_max_routes);
+	__u32 route_capacity =
+		trustix_datapath_clamp_lookup_cache_slots(routes * 16U);
+	__u32 session_route_capacity =
+		trustix_datapath_clamp_lookup_cache_slots(sessions * 2U);
+	__u32 flow_capacity =
+		trustix_datapath_clamp_lookup_cache_slots(sessions * 2U);
+	__u32 wire_capacity =
+		trustix_datapath_clamp_lookup_cache_slots(sessions * 4U);
+
+	trustix_datapath_route_dst_cache =
+		vzalloc(array_size(route_capacity,
+				   sizeof(*trustix_datapath_route_dst_cache)));
+	if (!trustix_datapath_route_dst_cache)
+		return -ENOMEM;
+	trustix_datapath_route_dst_cache_capacity = route_capacity;
+	trustix_datapath_session_route_cache =
+		vzalloc(array_size(session_route_capacity,
+				   sizeof(*trustix_datapath_session_route_cache)));
+	if (!trustix_datapath_session_route_cache)
+		goto free_route_cache;
+	trustix_datapath_session_route_cache_capacity =
+		session_route_capacity;
+	trustix_datapath_session_flow_cache =
+		vzalloc(array_size(flow_capacity,
+				   sizeof(*trustix_datapath_session_flow_cache)));
+	if (!trustix_datapath_session_flow_cache)
+		goto free_session_route_cache;
+	trustix_datapath_session_flow_cache_capacity = flow_capacity;
+	trustix_datapath_session_wire_tuple_cache =
+		vzalloc(array_size(
+			wire_capacity,
+			sizeof(*trustix_datapath_session_wire_tuple_cache)));
+	if (!trustix_datapath_session_wire_tuple_cache) {
+		goto free_session_flow_cache;
+	}
+	trustix_datapath_session_wire_tuple_cache_capacity = wire_capacity;
+	return 0;
+
+free_session_flow_cache:
+	vfree(trustix_datapath_session_flow_cache);
+	trustix_datapath_session_flow_cache = NULL;
+	trustix_datapath_session_flow_cache_capacity = 0;
+free_session_route_cache:
+	vfree(trustix_datapath_session_route_cache);
+	trustix_datapath_session_route_cache = NULL;
+	trustix_datapath_session_route_cache_capacity = 0;
+free_route_cache:
+	vfree(trustix_datapath_route_dst_cache);
+	trustix_datapath_route_dst_cache = NULL;
+	trustix_datapath_route_dst_cache_capacity = 0;
+	return -ENOMEM;
+}
+
+static void trustix_datapath_free_lookup_caches(void)
+{
+	vfree(trustix_datapath_session_wire_tuple_cache);
+	vfree(trustix_datapath_session_flow_cache);
+	vfree(trustix_datapath_session_route_cache);
+	vfree(trustix_datapath_route_dst_cache);
+	trustix_datapath_session_wire_tuple_cache = NULL;
+	trustix_datapath_session_flow_cache = NULL;
+	trustix_datapath_session_route_cache = NULL;
+	trustix_datapath_route_dst_cache = NULL;
+	trustix_datapath_session_wire_tuple_cache_capacity = 0;
+	trustix_datapath_session_flow_cache_capacity = 0;
+	trustix_datapath_session_route_cache_capacity = 0;
+	trustix_datapath_route_dst_cache_capacity = 0;
 }
 
 static void
@@ -2987,9 +3455,17 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_stream_coalesce_segment_batches = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_skbs = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_errors = 0;
+	trustix_datapath_rx_worker_gso_xmit_packets = 0;
+	trustix_datapath_rx_worker_gso_xmit_segments = 0;
+	trustix_datapath_rx_worker_gso_xmit_fallbacks = 0;
+	trustix_datapath_rx_worker_gso_xmit_errors = 0;
 	trustix_datapath_rx_worker_stream_coalesce_partial_csum_fallbacks = 0;
 	trustix_datapath_rx_worker_stream_coalesce_checksum_fallbacks = 0;
 	trustix_datapath_rx_worker_stream_coalesce_inline_queue_fallbacks = 0;
+	trustix_datapath_rx_worker_stream_direct_gso_packets = 0;
+	trustix_datapath_rx_worker_stream_direct_gso_frames = 0;
+	trustix_datapath_rx_worker_stream_direct_gso_fallbacks = 0;
+	trustix_datapath_rx_worker_stream_direct_gso_errors = 0;
 	trustix_datapath_rx_worker_stream_coalesce_last_len = 0;
 	trustix_datapath_rx_worker_stream_coalesce_last_gso_size = 0;
 	trustix_datapath_rx_worker_stream_coalesce_last_gso_segs = 0;
@@ -3001,6 +3477,12 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_inline_pair_flushes = 0;
 	trustix_datapath_rx_worker_inline_pair_misses = 0;
 	trustix_datapath_rx_worker_inline_pair_errors = 0;
+	trustix_datapath_rx_worker_single_coalesce_stored = 0;
+	trustix_datapath_rx_worker_single_coalesce_packets = 0;
+	trustix_datapath_rx_worker_single_coalesce_frames = 0;
+	trustix_datapath_rx_worker_single_coalesce_flushes = 0;
+	trustix_datapath_rx_worker_single_coalesce_misses = 0;
+	trustix_datapath_rx_worker_single_coalesce_errors = 0;
 	for (i = 0; i < TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_SLOTS; i++) {
 		spin_lock_init(&trustix_datapath_rx_worker_inline_pair_slots[i].lock);
 		INIT_DELAYED_WORK(
@@ -3011,6 +3493,18 @@ static int trustix_datapath_alloc_rx_worker(void)
 			false;
 		trustix_datapath_rx_worker_inline_pair_slots[i].target_dev = NULL;
 		trustix_datapath_rx_worker_inline_pair_slots[i].frames = 0;
+	}
+	for (i = 0; i < TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_SLOTS; i++) {
+		spin_lock_init(
+			&trustix_datapath_rx_worker_single_coalesce_slots[i].lock);
+		INIT_DELAYED_WORK(
+			&trustix_datapath_rx_worker_single_coalesce_slots[i].flush_work,
+			trustix_datapath_rx_worker_single_coalesce_flush_work);
+		trustix_datapath_rx_worker_single_coalesce_slots[i].valid =
+			false;
+		trustix_datapath_rx_worker_single_coalesce_slots[i].target_dev =
+			NULL;
+		trustix_datapath_rx_worker_single_coalesce_slots[i].frames = 0;
 	}
 	return 0;
 }
@@ -3073,6 +3567,11 @@ static __u8 trustix_datapath_rx_worker_tcp_flags_byte(
 	       ((__u8)tcph->ece << 6) | ((__u8)tcph->cwr << 7);
 }
 
+static __u8 trustix_datapath_rx_worker_tcp_flags_class(__u8 flags)
+{
+	return flags & ~((__u8)0x08);
+}
+
 static bool
 trustix_datapath_rx_worker_coalesce_match(
 	const struct trustix_datapath_rx_worker_coalesce_state *state,
@@ -3084,10 +3583,10 @@ trustix_datapath_rx_worker_coalesce_match(
 	if (state->saddr != iph->saddr || state->daddr != iph->daddr ||
 	    state->source != tcph->source || state->dest != tcph->dest ||
 	    state->tcp_header_len != tcp_header_len ||
-	    state->ack_seq != ntohl(tcph->ack_seq) ||
-	    state->window != tcph->window || state->urg_ptr != tcph->urg_ptr ||
-	    state->tcp_flags !=
-		    trustix_datapath_rx_worker_tcp_flags_byte(tcph))
+	    state->urg_ptr != tcph->urg_ptr ||
+	    trustix_datapath_rx_worker_tcp_flags_class(state->tcp_flags) !=
+		    trustix_datapath_rx_worker_tcp_flags_class(
+			    trustix_datapath_rx_worker_tcp_flags_byte(tcph)))
 		return false;
 	return state->next_seq == ntohl(tcph->seq);
 }
@@ -3208,10 +3707,7 @@ trustix_datapath_rx_worker_build_coalesced_gso_skb(
 	__u32 copied_payload = 0;
 	__u32 first_tcp_len;
 	__u32 payload_offset;
-	__u32 tcp_len;
 	__u32 gso_segs;
-	bool l4_checksum_rebuilt = true;
-	bool tcp_checksum_trusted = false;
 
 	if (!target_dev || !state || !state->active || !pending ||
 	    frames < 2 || !state->gso_size || !state->payload_len ||
@@ -3220,10 +3716,8 @@ trustix_datapath_rx_worker_build_coalesced_gso_skb(
 	gso_segs = DIV_ROUND_UP(state->payload_len, state->gso_size);
 	if (!gso_segs || gso_segs > U16_MAX)
 		return NULL;
-	if (!trustix_datapath_rx_worker_coalesce_checksum_safe(state)) {
+	if (!trustix_datapath_rx_worker_coalesce_checksum_safe(state))
 		trustix_datapath_rx_worker_stream_coalesce_checksum_fallbacks++;
-		return NULL;
-	}
 	header_len = sizeof(struct iphdr) + state->tcp_header_len;
 	skb = netdev_alloc_skb_ip_align(target_dev,
 					ETH_HLEN + state->total_len);
@@ -3268,66 +3762,14 @@ trustix_datapath_rx_worker_build_coalesced_gso_skb(
 	iph = (struct iphdr *)skb->data;
 	tcph = (struct tcphdr *)(skb->data + sizeof(*iph));
 	first_tcp_len = ntohs(iph->tot_len) - sizeof(*iph);
-	if (READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_partial_csum))
-		trustix_datapath_rx_worker_stream_coalesce_partial_csum_fallbacks++;
-	if (trustix_datapath_rx_worker_trust_tcp_checksum(
-		    iph, sizeof(*iph), first_tcp_len, &tcph)) {
-		tcp_len = first_tcp_len;
-		for (i = 1; i < frames; i++) {
-			const struct iphdr *frame_iph;
-			const __u8 *frame_packet;
-			__u32 frame_payload_len;
-			__u32 frame_total_len;
-
-			frame_packet = pending[i].packet ?: pending[i].source_packet;
-			if (!frame_packet || pending[i].len < header_len) {
-				kfree_skb(skb);
-				return NULL;
-			}
-			frame_iph = (const struct iphdr *)frame_packet;
-			frame_total_len = ntohs(frame_iph->tot_len);
-			if (frame_total_len < header_len ||
-			    frame_total_len > pending[i].len) {
-				kfree_skb(skb);
-				return NULL;
-			}
-			frame_payload_len = frame_total_len - header_len;
-			tcph->check =
-				trustix_datapath_rx_worker_tcp_checksum_append_payload(
-					tcph, tcp_len,
-					tcp_len + frame_payload_len,
-					frame_packet + header_len,
-					frame_payload_len);
-			tcp_len += frame_payload_len;
-		}
-		if (tcp_len != state->total_len - sizeof(*iph)) {
-			kfree_skb(skb);
-			return NULL;
-		}
-		tcp_checksum_trusted = true;
-		l4_checksum_rebuilt = false;
-	}
+	(void)first_tcp_len;
 	iph->tot_len = htons((__u16)state->total_len);
 	trustix_datapath_rx_worker_fix_ipv4_header_checksum(iph,
 							   sizeof(*iph));
-	if (tcp_checksum_trusted) {
-		trustix_datapath_rx_worker_checksum_trusted++;
-		trustix_datapath_rx_worker_checksum_ipv4_only++;
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
-		skb->csum_start = 0;
-		skb->csum_offset = 0;
-	} else {
-		tcph->check = 0;
-		tcph->check = trustix_datapath_rx_worker_l4_checksum(
-			iph, tcph, state->total_len - sizeof(*iph),
-			IPPROTO_TCP);
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
-		skb->csum_start = 0;
-		skb->csum_offset = 0;
-	}
-	if (l4_checksum_rebuilt &&
-	    READ_ONCE(trustix_datapath_rx_worker_hot_stats))
-		trustix_datapath_rx_worker_checksum_fixed++;
+	tcph->check = 0;
+	skb->ip_summed = CHECKSUM_NONE;
+	skb->csum_start = 0;
+	skb->csum_offset = 0;
 	skb_reset_network_header(skb);
 	skb_set_transport_header(skb, sizeof(*iph));
 	shinfo = skb_shinfo(skb);
@@ -3391,10 +3833,12 @@ static void trustix_datapath_rx_worker_clear(void)
 
 static void trustix_datapath_rx_worker_drop_pending_sync(void)
 {
+	trustix_datapath_rx_worker_single_coalesce_drop_all();
 	trustix_datapath_rx_worker_inline_pair_drop_all();
 	trustix_datapath_rx_worker_clear();
 	if (trustix_datapath_rx_worker_wq)
 		flush_workqueue(trustix_datapath_rx_worker_wq);
+	trustix_datapath_rx_worker_single_coalesce_drop_all();
 	trustix_datapath_rx_worker_inline_pair_drop_all();
 	trustix_datapath_rx_worker_clear();
 }
@@ -3537,12 +3981,17 @@ static int trustix_datapath_alloc_state(void)
 					   trustix_datapath_max_sessions);
 	if (ret)
 		goto free_flows;
+	ret = trustix_datapath_alloc_lookup_caches();
+	if (ret)
+		goto free_session_wires;
 	write_lock_bh(&trustix_datapath_state_lock);
 	trustix_datapath_publish_state_counts_locked();
 	write_unlock_bh(&trustix_datapath_state_lock);
 	WRITE_ONCE(trustix_datapath_rx_worker_param_live, true);
 	return 0;
 
+free_session_wires:
+	trustix_datapath_free_table(&trustix_datapath_session_wires);
 free_flows:
 	trustix_datapath_free_table(&trustix_datapath_flows);
 free_sessions:
@@ -3562,6 +4011,7 @@ static void trustix_datapath_free_state(void)
 {
 	WRITE_ONCE(trustix_datapath_rx_worker_param_live, false);
 	write_lock_bh(&trustix_datapath_state_lock);
+	trustix_datapath_free_lookup_caches();
 	trustix_datapath_free_table(&trustix_datapath_session_wires);
 	trustix_datapath_free_table(&trustix_datapath_flows);
 	trustix_datapath_free_table(&trustix_datapath_sessions);
@@ -3591,6 +4041,439 @@ static __u32 trustix_datapath_key_hash(const __u64 key[4])
 		hash ^= hash >> 32;
 	}
 	return (__u32)(hash ^ (hash >> 32));
+}
+
+static __u32 trustix_datapath_session_flow_cache_hash(__u64 flow_id)
+{
+	__u64 key[4] = { flow_id, flow_id >> 32, 0, 0 };
+
+	return trustix_datapath_key_hash(key);
+}
+
+static __u32 trustix_datapath_route_dst_cache_hash(__u32 dst_ipv4)
+{
+	__u64 key[4] = { dst_ipv4, 0, 0, 0 };
+
+	return trustix_datapath_key_hash(key);
+}
+
+static __u32
+trustix_datapath_session_route_cache_hash(
+	const struct trustix_datapath_state_slot *route,
+	const struct trustix_datapath_state_slot *flow, __u64 next_hop_hash,
+	__u64 endpoint_hash, __u64 pool_index)
+{
+	__u64 key[4];
+
+	key[0] = (unsigned long)route;
+	key[1] = (unsigned long)flow;
+	key[2] = next_hop_hash ^ (endpoint_hash << 1);
+	key[3] = pool_index;
+	return trustix_datapath_key_hash(key);
+}
+
+static struct trustix_datapath_state_slot *
+trustix_datapath_route_dst_cache_lookup_locked(__u32 dst_ipv4)
+{
+	__u32 start;
+	__u32 i;
+
+	if (!trustix_datapath_route_dst_cache ||
+	    !trustix_datapath_route_dst_cache_capacity)
+		return NULL;
+	start = trustix_datapath_route_dst_cache_hash(dst_ipv4) %
+		trustix_datapath_route_dst_cache_capacity;
+	for (i = 0; i < trustix_datapath_route_dst_cache_capacity; i++) {
+		struct trustix_datapath_route_dst_cache_entry *entry =
+			&trustix_datapath_route_dst_cache[
+				(start + i) %
+				trustix_datapath_route_dst_cache_capacity];
+		struct trustix_datapath_state_slot *slot;
+		__u32 bits;
+
+		if (!entry->used)
+			return NULL;
+		if (entry->dst_ipv4 != dst_ipv4)
+			continue;
+		slot = entry->slot;
+		if (!slot || !slot->used)
+			return NULL;
+		bits = (__u32)slot->key[1];
+		if (bits <= 32 &&
+		    trustix_datapath_ipv4_prefix_match(
+			    dst_ipv4, (__u32)slot->key[0], bits))
+			return slot;
+		return NULL;
+	}
+	return NULL;
+}
+
+static void
+trustix_datapath_route_dst_cache_insert_locked(
+	__u32 dst_ipv4, struct trustix_datapath_state_slot *slot)
+{
+	__u32 start;
+	__u32 i;
+
+	if (!slot || !slot->used || !trustix_datapath_route_dst_cache ||
+	    !trustix_datapath_route_dst_cache_capacity)
+		return;
+	start = trustix_datapath_route_dst_cache_hash(dst_ipv4) %
+		trustix_datapath_route_dst_cache_capacity;
+	for (i = 0; i < trustix_datapath_route_dst_cache_capacity; i++) {
+		struct trustix_datapath_route_dst_cache_entry *entry =
+			&trustix_datapath_route_dst_cache[
+				(start + i) %
+				trustix_datapath_route_dst_cache_capacity];
+
+		if (entry->used && entry->dst_ipv4 != dst_ipv4)
+			continue;
+		entry->used = true;
+		entry->dst_ipv4 = dst_ipv4;
+		entry->slot = slot;
+		return;
+	}
+}
+
+static struct trustix_datapath_state_slot *
+trustix_datapath_session_route_cache_lookup_locked(
+	struct trustix_datapath_state_slot *route,
+	struct trustix_datapath_state_slot *flow, __u64 next_hop_hash,
+	__u64 endpoint_hash, __u64 pool_index)
+{
+	__u32 start;
+	__u32 i;
+
+	if (!route || !trustix_datapath_session_route_cache ||
+	    !trustix_datapath_session_route_cache_capacity)
+		return NULL;
+	start = trustix_datapath_session_route_cache_hash(
+			route, flow, next_hop_hash, endpoint_hash,
+			pool_index) %
+		trustix_datapath_session_route_cache_capacity;
+	for (i = 0; i < trustix_datapath_session_route_cache_capacity; i++) {
+		struct trustix_datapath_session_route_cache_entry *entry =
+			&trustix_datapath_session_route_cache[
+				(start + i) %
+				trustix_datapath_session_route_cache_capacity];
+		struct trustix_datapath_state_slot *slot;
+
+		if (!entry->used)
+			return NULL;
+		if (entry->route != route || entry->flow != flow ||
+		    entry->next_hop_hash != next_hop_hash ||
+		    entry->endpoint_hash != endpoint_hash ||
+		    entry->pool_index != pool_index)
+			continue;
+		slot = entry->slot;
+		if (slot && slot->used &&
+		    (slot->flags & TRUSTIX_DATAPATH_SESSION_FLAG_KERNEL_FLOW) &&
+		    (!next_hop_hash || slot->key[0] == next_hop_hash) &&
+		    (!endpoint_hash || slot->key[1] == endpoint_hash) &&
+		    (!flow || slot->value[7] == pool_index))
+			return slot;
+		return NULL;
+	}
+	return NULL;
+}
+
+static void
+trustix_datapath_session_route_cache_insert_locked(
+	struct trustix_datapath_state_slot *route,
+	struct trustix_datapath_state_slot *flow, __u64 next_hop_hash,
+	__u64 endpoint_hash, __u64 pool_index,
+	struct trustix_datapath_state_slot *slot)
+{
+	__u32 start;
+	__u32 i;
+
+	if (!route || !slot || !slot->used ||
+	    !trustix_datapath_session_route_cache ||
+	    !trustix_datapath_session_route_cache_capacity)
+		return;
+	start = trustix_datapath_session_route_cache_hash(
+			route, flow, next_hop_hash, endpoint_hash,
+			pool_index) %
+		trustix_datapath_session_route_cache_capacity;
+	for (i = 0; i < trustix_datapath_session_route_cache_capacity; i++) {
+		struct trustix_datapath_session_route_cache_entry *entry =
+			&trustix_datapath_session_route_cache[
+				(start + i) %
+				trustix_datapath_session_route_cache_capacity];
+
+		if (entry->used &&
+		    (entry->route != route || entry->flow != flow ||
+		     entry->next_hop_hash != next_hop_hash ||
+		     entry->endpoint_hash != endpoint_hash ||
+		     entry->pool_index != pool_index))
+			continue;
+		entry->used = true;
+		entry->route = route;
+		entry->flow = flow;
+		entry->next_hop_hash = next_hop_hash;
+		entry->endpoint_hash = endpoint_hash;
+		entry->pool_index = pool_index;
+		entry->slot = slot;
+		return;
+	}
+}
+
+static bool
+trustix_datapath_wire_tuple_cache_match(
+	const struct trustix_datapath_session_wire_tuple_cache_entry *entry,
+	__u64 flow_id, __u32 src_ipv4, __u32 dst_ipv4, __u16 src_port,
+	__u16 dst_port, __u8 protocol)
+{
+	return entry && entry->used && entry->flow_id == flow_id &&
+	       entry->src_ipv4 == src_ipv4 && entry->dst_ipv4 == dst_ipv4 &&
+	       entry->src_port == src_port && entry->dst_port == dst_port &&
+	       entry->protocol == protocol;
+}
+
+static __u32
+trustix_datapath_wire_tuple_cache_hash(__u64 flow_id, __u32 src_ipv4,
+				       __u32 dst_ipv4, __u16 src_port,
+				       __u16 dst_port, __u8 protocol)
+{
+	__u64 key[4];
+
+	key[0] = src_ipv4;
+	key[1] = dst_ipv4;
+	key[2] = ((__u64)src_port << 16) | (__u64)dst_port;
+	key[3] = flow_id ^ ((__u64)protocol << 56);
+	return trustix_datapath_key_hash(key);
+}
+
+static void
+trustix_datapath_session_flow_cache_insert_locked(
+	struct trustix_datapath_state_slot *slot)
+{
+	__u64 flow_id;
+	__u32 start;
+	__u32 i;
+
+	if (!slot || !slot->used ||
+	    !(slot->flags & TRUSTIX_DATAPATH_SESSION_FLAG_KERNEL_FLOW) ||
+	    !trustix_datapath_session_flow_cache ||
+	    !trustix_datapath_session_flow_cache_capacity)
+		return;
+	flow_id = slot->value[0];
+	if (!flow_id)
+		return;
+	start = trustix_datapath_session_flow_cache_hash(flow_id) %
+		trustix_datapath_session_flow_cache_capacity;
+	for (i = 0; i < trustix_datapath_session_flow_cache_capacity; i++) {
+		struct trustix_datapath_session_flow_cache_entry *entry =
+			&trustix_datapath_session_flow_cache[
+				(start + i) %
+				trustix_datapath_session_flow_cache_capacity];
+
+		if (entry->used && entry->flow_id != flow_id)
+			continue;
+		entry->used = true;
+		entry->flow_id = flow_id;
+		entry->slot = slot;
+		return;
+	}
+}
+
+static struct trustix_datapath_state_slot *
+trustix_datapath_session_flow_cache_lookup_locked(__u64 flow_id)
+{
+	__u32 start;
+	__u32 i;
+
+	if (!flow_id || !trustix_datapath_session_flow_cache ||
+	    !trustix_datapath_session_flow_cache_capacity)
+		return NULL;
+	start = trustix_datapath_session_flow_cache_hash(flow_id) %
+		trustix_datapath_session_flow_cache_capacity;
+	for (i = 0; i < trustix_datapath_session_flow_cache_capacity; i++) {
+		struct trustix_datapath_session_flow_cache_entry *entry =
+			&trustix_datapath_session_flow_cache[
+				(start + i) %
+				trustix_datapath_session_flow_cache_capacity];
+		struct trustix_datapath_state_slot *slot;
+
+		if (!entry->used)
+			return NULL;
+		if (entry->flow_id != flow_id)
+			continue;
+		slot = entry->slot;
+		if (slot && slot->used &&
+		    (slot->flags & TRUSTIX_DATAPATH_SESSION_FLAG_KERNEL_FLOW) &&
+		    slot->value[0] == flow_id)
+			return slot;
+		return NULL;
+	}
+	return NULL;
+}
+
+static void
+trustix_datapath_wire_tuple_cache_insert_one_locked(
+	struct trustix_datapath_state_slot *slot, __u64 flow_id,
+	__u32 src_ipv4, __u32 dst_ipv4, __u16 src_port, __u16 dst_port,
+	__u8 protocol, bool reverse)
+{
+	__u32 start;
+	__u32 i;
+
+	if (!slot || !slot->used || !trustix_datapath_session_wire_tuple_cache ||
+	    !trustix_datapath_session_wire_tuple_cache_capacity)
+		return;
+	start = trustix_datapath_wire_tuple_cache_hash(
+			flow_id, src_ipv4, dst_ipv4, src_port, dst_port,
+			protocol) %
+		trustix_datapath_session_wire_tuple_cache_capacity;
+	for (i = 0; i < trustix_datapath_session_wire_tuple_cache_capacity;
+	     i++) {
+		struct trustix_datapath_session_wire_tuple_cache_entry *entry =
+			&trustix_datapath_session_wire_tuple_cache[
+				(start + i) %
+				trustix_datapath_session_wire_tuple_cache_capacity];
+
+		if (entry->used &&
+		    !trustix_datapath_wire_tuple_cache_match(
+			    entry, flow_id, src_ipv4, dst_ipv4, src_port,
+			    dst_port, protocol))
+			continue;
+		entry->used = true;
+		entry->reverse = reverse;
+		entry->protocol = protocol;
+		entry->src_port = src_port;
+		entry->dst_port = dst_port;
+		entry->src_ipv4 = src_ipv4;
+		entry->dst_ipv4 = dst_ipv4;
+		entry->flow_id = flow_id;
+		entry->slot = slot;
+		return;
+	}
+}
+
+static void
+trustix_datapath_session_wire_tuple_cache_insert_locked(
+	struct trustix_datapath_state_slot *slot)
+{
+	__u64 flow_id;
+	__u32 local_ipv4;
+	__u32 remote_ipv4;
+	__u16 local_port;
+	__u16 remote_port;
+	__u8 protocol;
+
+	if (!slot || !slot->used)
+		return;
+	flow_id = slot->value[0];
+	local_ipv4 = (__u32)slot->value[1];
+	remote_ipv4 = (__u32)slot->value[2];
+	local_port = (__u16)(slot->value[3] >> 16);
+	remote_port = (__u16)slot->value[3];
+	if (!flow_id || !local_ipv4 || !remote_ipv4 || !local_port ||
+	    !remote_port)
+		return;
+	switch ((__u32)slot->value[4]) {
+	case TRUSTIX_DATAPATH_TRANSPORT_UDP:
+		protocol = IPPROTO_UDP;
+		break;
+	case TRUSTIX_DATAPATH_TRANSPORT_EXPERIMENTAL_TCP:
+		protocol = IPPROTO_TCP;
+		break;
+	default:
+		return;
+	}
+	trustix_datapath_wire_tuple_cache_insert_one_locked(
+		slot, flow_id, local_ipv4, remote_ipv4, local_port,
+		remote_port, protocol, false);
+	trustix_datapath_wire_tuple_cache_insert_one_locked(
+		slot, flow_id, remote_ipv4, local_ipv4, remote_port,
+		local_port, protocol, true);
+	if (protocol == IPPROTO_UDP) {
+		trustix_datapath_wire_tuple_cache_insert_one_locked(
+			slot, 0, local_ipv4, remote_ipv4, local_port,
+			remote_port, protocol, false);
+		trustix_datapath_wire_tuple_cache_insert_one_locked(
+			slot, 0, remote_ipv4, local_ipv4, remote_port,
+			local_port, protocol, true);
+	}
+}
+
+static struct trustix_datapath_state_slot *
+trustix_datapath_session_wire_tuple_cache_lookup_locked(
+	__u64 flow_id, __u32 src_ipv4, __u32 dst_ipv4, __u16 src_port,
+	__u16 dst_port, __u8 protocol, bool *reverse)
+{
+	__u32 start;
+	__u32 i;
+
+	if (reverse)
+		*reverse = false;
+	if (!trustix_datapath_session_wire_tuple_cache ||
+	    !trustix_datapath_session_wire_tuple_cache_capacity)
+		return NULL;
+	start = trustix_datapath_wire_tuple_cache_hash(
+			flow_id, src_ipv4, dst_ipv4, src_port, dst_port,
+			protocol) %
+		trustix_datapath_session_wire_tuple_cache_capacity;
+	for (i = 0; i < trustix_datapath_session_wire_tuple_cache_capacity;
+	     i++) {
+		struct trustix_datapath_session_wire_tuple_cache_entry *entry =
+			&trustix_datapath_session_wire_tuple_cache[
+				(start + i) %
+				trustix_datapath_session_wire_tuple_cache_capacity];
+		struct trustix_datapath_state_slot *slot;
+
+		if (!entry->used)
+			return NULL;
+		if (!trustix_datapath_wire_tuple_cache_match(
+			    entry, flow_id, src_ipv4, dst_ipv4, src_port,
+			    dst_port, protocol))
+			continue;
+		slot = entry->slot;
+		if (!slot || !slot->used)
+			return NULL;
+		if (reverse)
+			*reverse = entry->reverse;
+		return slot;
+	}
+	return NULL;
+}
+
+static void trustix_datapath_rebuild_lookup_caches_locked(void)
+{
+	__u32 i;
+
+	if (trustix_datapath_route_dst_cache &&
+	    trustix_datapath_route_dst_cache_capacity)
+		memset(trustix_datapath_route_dst_cache, 0,
+		       array_size(trustix_datapath_route_dst_cache_capacity,
+				  sizeof(*trustix_datapath_route_dst_cache)));
+	if (trustix_datapath_session_route_cache &&
+	    trustix_datapath_session_route_cache_capacity)
+		memset(trustix_datapath_session_route_cache, 0,
+		       array_size(trustix_datapath_session_route_cache_capacity,
+				  sizeof(*trustix_datapath_session_route_cache)));
+	if (trustix_datapath_session_flow_cache &&
+	    trustix_datapath_session_flow_cache_capacity)
+		memset(trustix_datapath_session_flow_cache, 0,
+		       array_size(trustix_datapath_session_flow_cache_capacity,
+				  sizeof(*trustix_datapath_session_flow_cache)));
+	if (trustix_datapath_session_wire_tuple_cache &&
+	    trustix_datapath_session_wire_tuple_cache_capacity)
+		memset(trustix_datapath_session_wire_tuple_cache, 0,
+		       array_size(
+			       trustix_datapath_session_wire_tuple_cache_capacity,
+			       sizeof(*trustix_datapath_session_wire_tuple_cache)));
+	if (trustix_datapath_table_usable_locked(&trustix_datapath_sessions)) {
+		for (i = 0; i < trustix_datapath_sessions.capacity; i++)
+			trustix_datapath_session_flow_cache_insert_locked(
+				&trustix_datapath_sessions.slots[i]);
+	}
+	if (trustix_datapath_table_usable_locked(
+		    &trustix_datapath_session_wires)) {
+		for (i = 0; i < trustix_datapath_session_wires.capacity; i++)
+			trustix_datapath_session_wire_tuple_cache_insert_locked(
+				&trustix_datapath_session_wires.slots[i]);
+	}
 }
 
 static struct trustix_datapath_state_table *
@@ -3745,9 +4628,17 @@ static int
 trustix_datapath_state_apply_locked(struct trustix_datapath_ioc_state *state)
 {
 	struct trustix_datapath_state_table *table;
+	int ret;
 
 	table = trustix_datapath_table_for_kind(state->kind);
-	return trustix_datapath_state_apply_to_table(table, state, true);
+	ret = trustix_datapath_state_apply_to_table(table, state, true);
+	if (!ret &&
+	    (state->kind == TRUSTIX_DATAPATH_STATE_KIND_ROUTE ||
+	     state->kind == TRUSTIX_DATAPATH_STATE_KIND_SESSION ||
+	     state->kind == TRUSTIX_DATAPATH_STATE_KIND_FLOW ||
+	     state->kind == TRUSTIX_DATAPATH_STATE_KIND_SESSION_WIRE))
+		trustix_datapath_rebuild_lookup_caches_locked();
+	return ret;
 }
 
 static bool trustix_datapath_ipv4_prefix_match(__u32 addr, __u32 prefix,
@@ -3767,6 +4658,7 @@ static struct trustix_datapath_state_slot *
 trustix_datapath_route_lookup_locked(__u32 dst_ipv4)
 {
 	struct trustix_datapath_state_slot *best = NULL;
+	struct trustix_datapath_state_slot *cached;
 	struct trustix_datapath_state_slot *slots;
 	__u32 best_bits = 0;
 	__u32 capacity;
@@ -3774,6 +4666,9 @@ trustix_datapath_route_lookup_locked(__u32 dst_ipv4)
 
 	if (!trustix_datapath_table_usable_locked(&trustix_datapath_routes))
 		return NULL;
+	cached = trustix_datapath_route_dst_cache_lookup_locked(dst_ipv4);
+	if (cached)
+		return cached;
 	slots = trustix_datapath_routes.slots;
 	capacity = trustix_datapath_routes.capacity;
 	for (i = 0; i < capacity; i++) {
@@ -3795,6 +4690,8 @@ trustix_datapath_route_lookup_locked(__u32 dst_ipv4)
 			best_bits = bits;
 		}
 	}
+	if (best)
+		trustix_datapath_route_dst_cache_insert_locked(dst_ipv4, best);
 	return best;
 }
 
@@ -3813,6 +4710,7 @@ trustix_datapath_session_for_route_locked(struct trustix_datapath_state_slot *ro
 					  struct trustix_datapath_state_slot *flow)
 {
 	struct trustix_datapath_state_slot *best = NULL;
+	struct trustix_datapath_state_slot *cached;
 	struct trustix_datapath_state_slot *slots;
 	__u64 next_hop_hash = 0;
 	__u64 endpoint_hash = 0;
@@ -3834,6 +4732,10 @@ trustix_datapath_session_for_route_locked(struct trustix_datapath_state_slot *ro
 			endpoint_hash = flow->value[1];
 		pool_index = flow->value[2];
 	}
+	cached = trustix_datapath_session_route_cache_lookup_locked(
+		route, flow, next_hop_hash, endpoint_hash, pool_index);
+	if (cached)
+		return cached;
 	for (i = 0; i < capacity; i++) {
 		struct trustix_datapath_state_slot *slot = &slots[i];
 
@@ -3850,8 +4752,14 @@ trustix_datapath_session_for_route_locked(struct trustix_datapath_state_slot *ro
 		best = slot;
 		break;
 	}
-	if (best || !flow)
+	if (best) {
+		trustix_datapath_session_route_cache_insert_locked(
+			route, flow, next_hop_hash, endpoint_hash, pool_index,
+			best);
 		return best;
+	}
+	if (!flow)
+		return NULL;
 	for (i = 0; i < capacity; i++) {
 		struct trustix_datapath_state_slot *slot = &slots[i];
 
@@ -3863,6 +4771,9 @@ trustix_datapath_session_for_route_locked(struct trustix_datapath_state_slot *ro
 			continue;
 		if (endpoint_hash && slot->key[1] != endpoint_hash)
 			continue;
+		trustix_datapath_session_route_cache_insert_locked(
+			route, flow, next_hop_hash, endpoint_hash, pool_index,
+			slot);
 		return slot;
 	}
 	return NULL;
@@ -3872,12 +4783,16 @@ static struct trustix_datapath_state_slot *
 trustix_datapath_session_for_flow_id_locked(__u64 flow_id)
 {
 	struct trustix_datapath_state_slot *slots;
+	struct trustix_datapath_state_slot *cached;
 	__u32 capacity;
 	__u32 i;
 
 	if (!flow_id ||
 	    !trustix_datapath_table_usable_locked(&trustix_datapath_sessions))
 		return NULL;
+	cached = trustix_datapath_session_flow_cache_lookup_locked(flow_id);
+	if (cached)
+		return cached;
 	slots = trustix_datapath_sessions.slots;
 	capacity = trustix_datapath_sessions.capacity;
 	for (i = 0; i < capacity; i++) {
@@ -3910,6 +4825,7 @@ trustix_datapath_session_wire_for_tuple_locked(__u64 flow_id,
 					       __u8 protocol,
 					       bool *reverse)
 {
+	struct trustix_datapath_state_slot *cached;
 	struct trustix_datapath_state_slot *slots;
 	__u32 transport;
 	__u32 capacity;
@@ -3933,6 +4849,11 @@ trustix_datapath_session_wire_for_tuple_locked(__u64 flow_id,
 	default:
 		return NULL;
 	}
+	cached = trustix_datapath_session_wire_tuple_cache_lookup_locked(
+		flow_id, src_ipv4, dst_ipv4, src_port, dst_port, protocol,
+		reverse);
+	if (cached)
+		return cached;
 	for (i = 0; i < capacity; i++) {
 		struct trustix_datapath_state_slot *slot = &slots[i];
 		__u32 local_ipv4;
@@ -3967,6 +4888,7 @@ trustix_datapath_session_wire_for_tuple_any_flow_locked(
 	__u32 src_ipv4, __u32 dst_ipv4, __u16 src_port, __u16 dst_port,
 	__u8 protocol, bool *reverse)
 {
+	struct trustix_datapath_state_slot *cached;
 	struct trustix_datapath_state_slot *slots;
 	__u32 transport;
 	__u32 capacity;
@@ -3989,6 +4911,10 @@ trustix_datapath_session_wire_for_tuple_any_flow_locked(
 	default:
 		return NULL;
 	}
+	cached = trustix_datapath_session_wire_tuple_cache_lookup_locked(
+		0, src_ipv4, dst_ipv4, src_port, dst_port, protocol, reverse);
+	if (cached)
+		return cached;
 	for (i = 0; i < capacity; i++) {
 		struct trustix_datapath_state_slot *slot = &slots[i];
 		__u32 local_ipv4;
@@ -4732,18 +5658,95 @@ static void trustix_datapath_tx_plaintext_record_build_error(
 	trustix_datapath_tx_plaintext_build_errors++;
 }
 
+static __always_inline __u8
+trustix_datapath_tx_plaintext_tixt_flags(bool inner_l4_checksum_valid)
+{
+	__u8 flags = TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4;
+
+	if (inner_l4_checksum_valid)
+		flags |= TRUSTIX_DATAPATH_TIXT_FLAG_INNER_L4_CHECKSUM_VALID;
+	return flags;
+}
+
+static bool
+trustix_datapath_tx_plaintext_fix_inner_l4_checksum(__u8 *packet, __u32 len)
+{
+	struct udphdr *udph;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
+	__u32 ip_header_len;
+	__u32 total_len;
+	__u32 l4_len;
+
+	if (!packet || len < sizeof(*iph))
+		return false;
+	iph = (struct iphdr *)packet;
+	if (iph->version != 4 || iph->ihl < 5 ||
+	    (iph->frag_off & htons(0x3fff)))
+		return false;
+	ip_header_len = iph->ihl * 4;
+	if (ip_header_len < sizeof(*iph) || len < ip_header_len)
+		return false;
+	total_len = ntohs(iph->tot_len);
+	if (total_len < ip_header_len || total_len > len)
+		return false;
+	trustix_datapath_rx_worker_fix_ipv4_header_checksum(iph,
+							   ip_header_len);
+	l4_len = total_len - ip_header_len;
+	switch (iph->protocol) {
+	case IPPROTO_TCP:
+		if (l4_len < sizeof(*tcph))
+			return false;
+		tcph = (struct tcphdr *)(packet + ip_header_len);
+		if (tcph->doff < 5 || l4_len < (__u32)tcph->doff * 4)
+			return false;
+		tcph->check = 0;
+		tcph->check = trustix_datapath_rx_worker_l4_checksum(
+			iph, tcph, l4_len, IPPROTO_TCP);
+		return true;
+	case IPPROTO_UDP:
+		if (l4_len < sizeof(*udph))
+			return false;
+		udph = (struct udphdr *)(packet + ip_header_len);
+		if (ntohs(udph->len) < sizeof(*udph) ||
+		    ntohs(udph->len) > l4_len)
+			return false;
+		udph->check = 0;
+		udph->check = trustix_datapath_rx_worker_l4_checksum(
+			iph, udph, ntohs(udph->len), IPPROTO_UDP);
+		if (!udph->check)
+			udph->check = CSUM_MANGLED_0;
+		return true;
+	default:
+		return false;
+	}
+}
+
+static __u32 trustix_datapath_tx_outer_tcp_next_seq(__u32 payload_len)
+{
+	__u64 end;
+	__u32 step = payload_len ?: 1;
+
+	end = atomic64_add_return(step, &trustix_datapath_outer_tcp_sequence);
+	return (__u32)(end - step);
+}
+
 static int
 trustix_datapath_tx_build_outer_skb(struct sk_buff *inner_skb,
 				    const struct trustix_datapath_tx_plan *plan,
 				    __u32 inner_len, struct sk_buff **out_skb)
 {
 	struct sk_buff *skb;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
 	__u8 *packet;
 	__u8 *tixt;
 	__u32 outer_header_len;
 	__u32 tixt_len;
 	__u32 outer_len;
+	__u32 tcp_len;
 	__u64 sequence;
+	bool inner_l4_checksum_valid = false;
 	int ret;
 
 	if (!inner_skb || !plan || !out_skb)
@@ -4774,7 +5777,7 @@ trustix_datapath_tx_build_outer_skb(struct sk_buff *inner_skb,
 		return -ENOMEM;
 	skb_reserve(skb, LL_MAX_HEADER);
 	packet = skb_put(skb, outer_len);
-	memset(packet, 0, outer_len);
+	memset(packet, 0, outer_header_len);
 
 	trustix_datapath_build_outer_ipv4(packet, outer_len,
 					  plan->outer_protocol,
@@ -4788,6 +5791,9 @@ trustix_datapath_tx_build_outer_skb(struct sk_buff *inner_skb,
 	} else {
 		trustix_datapath_put_be16(packet + 20, plan->local_port);
 		trustix_datapath_put_be16(packet + 22, plan->remote_port);
+		trustix_datapath_put_be32(
+			packet + 24,
+			trustix_datapath_tx_outer_tcp_next_seq(tixt_len));
 		packet[32] = 0x50;
 		packet[33] = 0x18;
 		trustix_datapath_put_be16(packet + 34, 65535);
@@ -4795,9 +5801,6 @@ trustix_datapath_tx_build_outer_skb(struct sk_buff *inner_skb,
 	}
 
 	sequence = (__u64)atomic64_inc_return(&trustix_datapath_tx_sequence);
-	trustix_datapath_build_tixt(tixt, TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4,
-				    plan->flow_id, plan->epoch, sequence,
-				    inner_len, 0, 0);
 	ret = skb_copy_bits(inner_skb, skb_network_offset(inner_skb),
 			    tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
 			    inner_len);
@@ -4805,14 +5808,115 @@ trustix_datapath_tx_build_outer_skb(struct sk_buff *inner_skb,
 		kfree_skb(skb);
 		return ret;
 	}
+	if (!READ_ONCE(trustix_datapath_tx_plaintext_skip_inner_tcp_checksum))
+		inner_l4_checksum_valid =
+			trustix_datapath_tx_plaintext_fix_inner_l4_checksum(
+				tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+				inner_len);
+	trustix_datapath_build_tixt_header(
+		tixt,
+		trustix_datapath_tx_plaintext_tixt_flags(
+			inner_l4_checksum_valid),
+		plan->flow_id, plan->epoch, sequence, inner_len, 0, 0);
 
 	skb_reset_network_header(skb);
 	skb_set_transport_header(skb, 20);
 	skb->protocol = htons(ETH_P_IP);
+	if (plan->outer_protocol == IPPROTO_TCP) {
+		iph = (struct iphdr *)skb_network_header(skb);
+		tcph = (struct tcphdr *)skb_transport_header(skb);
+		tcp_len = outer_len - 20;
+		tcph->check = 0;
+		tcph->check = trustix_datapath_rx_worker_l4_checksum(
+			iph, tcph, tcp_len, IPPROTO_TCP);
+	}
 	skb->ip_summed = CHECKSUM_NONE;
 	skb->pkt_type = PACKET_OUTGOING;
 	*out_skb = skb;
 	return 0;
+}
+
+static int
+trustix_datapath_tx_send_outer_skb_direct(struct sk_buff *skb,
+					  struct net_device *target_dev,
+					  const struct trustix_datapath_tx_plan *plan)
+{
+	struct neighbour *neigh = NULL;
+	struct ethhdr *eth;
+	struct flowi4 fl4 = {};
+	struct rtable *rt;
+	struct net *net;
+	__be32 nexthop;
+	__u8 daddr[ETH_ALEN];
+	int ret;
+
+	if (!skb || !target_dev || !plan)
+		return -EINVAL;
+	if (!READ_ONCE(trustix_datapath_tx_plaintext_direct_xmit))
+		return -EOPNOTSUPP;
+	if (target_dev->type != ARPHRD_ETHER ||
+	    !is_valid_ether_addr(target_dev->dev_addr))
+		return -EOPNOTSUPP;
+	if (!trustix_datapath_rx_worker_dev_ready(target_dev))
+		return -ENETDOWN;
+	if (skb_headroom(skb) < ETH_HLEN || skb_header_cloned(skb)) {
+		ret = skb_cow_head(skb, ETH_HLEN);
+		if (ret)
+			return ret;
+	}
+
+	net = dev_net(target_dev);
+	fl4.flowi4_oif = target_dev->ifindex;
+	fl4.flowi4_proto = plan->outer_protocol;
+	fl4.saddr = htonl(plan->local_ipv4);
+	fl4.daddr = htonl(plan->remote_ipv4);
+	fl4.fl4_sport = htons(plan->local_port);
+	fl4.fl4_dport = htons(plan->remote_port);
+	rt = ip_route_output_key(net, &fl4);
+	if (IS_ERR(rt))
+		return PTR_ERR(rt);
+	if (rt->dst.dev != target_dev) {
+		ip_rt_put(rt);
+		return -EOPNOTSUPP;
+	}
+	nexthop = rt_nexthop(rt, fl4.daddr);
+	neigh = neigh_lookup(&arp_tbl, &nexthop, target_dev);
+	if (!neigh) {
+		ip_rt_put(rt);
+		trustix_datapath_tx_plaintext_direct_xmit_neigh_misses++;
+		return -EHOSTUNREACH;
+	}
+	if (!(READ_ONCE(neigh->nud_state) & NUD_VALID) ||
+	    !is_valid_ether_addr(neigh->ha)) {
+		neigh_release(neigh);
+		ip_rt_put(rt);
+		trustix_datapath_tx_plaintext_direct_xmit_neigh_misses++;
+		return -EHOSTUNREACH;
+	}
+	ether_addr_copy(daddr, neigh->ha);
+	neigh_release(neigh);
+	ip_rt_put(rt);
+
+	skb->dev = target_dev;
+	skb->mark |= TRUSTIX_DATAPATH_SKB_MARK_TX_PLAINTEXT;
+	skb->protocol = htons(ETH_P_IP);
+	skb->pkt_type = PACKET_OUTGOING;
+	skb_push(skb, ETH_HLEN);
+	skb_reset_mac_header(skb);
+	skb_set_network_header(skb, ETH_HLEN);
+	skb_set_transport_header(skb, ETH_HLEN + sizeof(struct iphdr));
+	skb->mac_len = ETH_HLEN;
+	eth = eth_hdr(skb);
+	ether_addr_copy(eth->h_dest, daddr);
+	ether_addr_copy(eth->h_source, target_dev->dev_addr);
+	eth->h_proto = htons(ETH_P_IP);
+	ret = dev_queue_xmit(skb);
+	if (ret == NET_XMIT_SUCCESS || ret == NET_XMIT_CN) {
+		trustix_datapath_tx_plaintext_direct_xmit_packets++;
+		return 0;
+	}
+	trustix_datapath_tx_plaintext_direct_xmit_errors++;
+	return -ENOBUFS;
 }
 
 static int
@@ -4827,6 +5931,14 @@ trustix_datapath_tx_send_outer_skb(struct sk_buff *skb,
 
 	if (!skb || !target_dev || !plan)
 		return -EINVAL;
+	ret = trustix_datapath_tx_send_outer_skb_direct(skb, target_dev, plan);
+	if (!ret)
+		return 0;
+	if (ret != -ENOBUFS) {
+		trustix_datapath_tx_plaintext_direct_xmit_fallbacks++;
+	} else {
+		return ret;
+	}
 	net = dev_net(target_dev);
 	fl4.flowi4_oif = target_dev->ifindex;
 	fl4.flowi4_proto = plan->outer_protocol;
@@ -4918,6 +6030,8 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 	unsigned int seg_index, bool last_segment, struct sk_buff **out_skb)
 {
 	struct sk_buff *skb;
+	struct tcphdr *outer_tcph;
+	struct iphdr *outer_iph;
 	struct iphdr *seg_iph;
 	struct tcphdr *seg_tcph;
 	__u8 *packet;
@@ -4927,6 +6041,7 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 	__u32 outer_header_len;
 	__u32 tixt_len;
 	__u32 outer_len;
+	__u32 outer_tcp_len;
 	__u64 sequence;
 	int ret;
 
@@ -4962,7 +6077,7 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 		return -ENOMEM;
 	skb_reserve(skb, LL_MAX_HEADER);
 	packet = skb_put(skb, outer_len);
-	memset(packet, 0, outer_len);
+	memset(packet, 0, outer_header_len);
 
 	trustix_datapath_build_outer_ipv4(packet, outer_len,
 					  plan->outer_protocol,
@@ -4976,6 +6091,9 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 	} else {
 		trustix_datapath_put_be16(packet + 20, plan->local_port);
 		trustix_datapath_put_be16(packet + 22, plan->remote_port);
+		trustix_datapath_put_be32(
+			packet + 24,
+			trustix_datapath_tx_outer_tcp_next_seq(tixt_len));
 		packet[32] = 0x50;
 		packet[33] = 0x18;
 		trustix_datapath_put_be16(packet + 34, 65535);
@@ -4983,9 +6101,11 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 	}
 
 	sequence = (__u64)atomic64_inc_return(&trustix_datapath_tx_sequence);
-	trustix_datapath_build_tixt(tixt, TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4,
-				    plan->flow_id, plan->epoch, sequence,
-				    inner_len, 0, 0);
+	trustix_datapath_build_tixt_header(
+		tixt,
+		trustix_datapath_tx_plaintext_tixt_flags(!READ_ONCE(
+			trustix_datapath_tx_plaintext_skip_inner_tcp_checksum)),
+		plan->flow_id, plan->epoch, sequence, inner_len, 0, 0);
 	ret = skb_copy_bits(inner_skb, network_offset,
 			    tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
 			    inner_header_len);
@@ -5014,12 +6134,22 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 		seg_tcph->psh = 0;
 	}
 	seg_tcph->check = 0;
-	seg_tcph->check = trustix_datapath_rx_worker_l4_checksum(
-		seg_iph, seg_tcph, tcp_header_len + payload_len, IPPROTO_TCP);
+	if (!READ_ONCE(trustix_datapath_tx_plaintext_skip_inner_tcp_checksum))
+		seg_tcph->check = trustix_datapath_rx_worker_l4_checksum(
+			seg_iph, seg_tcph, tcp_header_len + payload_len,
+			IPPROTO_TCP);
 
 	skb_reset_network_header(skb);
 	skb_set_transport_header(skb, 20);
 	skb->protocol = htons(ETH_P_IP);
+	if (plan->outer_protocol == IPPROTO_TCP) {
+		outer_iph = (struct iphdr *)skb_network_header(skb);
+		outer_tcph = (struct tcphdr *)skb_transport_header(skb);
+		outer_tcp_len = outer_len - 20;
+		outer_tcph->check = 0;
+		outer_tcph->check = trustix_datapath_rx_worker_l4_checksum(
+			outer_iph, outer_tcph, outer_tcp_len, IPPROTO_TCP);
+	}
 	skb->ip_summed = CHECKSUM_NONE;
 	skb->pkt_type = PACKET_OUTGOING;
 	*out_skb = skb;
@@ -5244,12 +6374,1270 @@ error:
 	return ret;
 }
 
+static int trustix_datapath_tx_build_outer_tcp_gso_skb(
+	struct sk_buff *inner_skb, const struct trustix_datapath_tx_plan *plan,
+	__u32 network_offset, __u32 ip_header_len, __u32 tcp_header_len,
+	__u32 payload_offset, __u32 payload_len, __u32 wire_gso_size,
+	__u32 seq, __u16 ip_id, unsigned int seg_index,
+	unsigned int frame_count, struct sk_buff **out_skb,
+	__u32 *inner_bytes_out)
+{
+	struct skb_shared_info *shinfo;
+	struct sk_buff *skb;
+	struct tcphdr *outer_tcph;
+	struct iphdr *outer_iph;
+	__u8 *packet;
+	__u8 *pos;
+	__u32 inner_header_len;
+	__u32 outer_header_len = 20 + 20;
+	__u32 outer_gso_size;
+	__u32 full_inner_len;
+	__u32 stream_payload_len = 0;
+	__u32 inner_bytes = 0;
+	__u32 cursor_payload_offset;
+	__u32 outer_len;
+	__u32 tcp_len;
+	__u64 outer_sequence;
+	unsigned int i;
+	int ret;
+
+	if (!inner_skb || !plan || !out_skb || !inner_bytes_out)
+		return -EINVAL;
+	*out_skb = NULL;
+	*inner_bytes_out = 0;
+	if (plan->outer_protocol != IPPROTO_TCP || frame_count < 2 ||
+	    !wire_gso_size)
+		return -EOPNOTSUPP;
+	if (check_add_overflow(ip_header_len, tcp_header_len,
+			       &inner_header_len) ||
+	    check_add_overflow(inner_header_len, wire_gso_size,
+			       &full_inner_len) ||
+	    check_add_overflow((__u32)TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+			       full_inner_len, &outer_gso_size))
+		return -EOVERFLOW;
+	if (!outer_gso_size)
+		return -EINVAL;
+
+	cursor_payload_offset = payload_offset;
+	for (i = 0; i < frame_count; i++) {
+		__u32 seg_payload_len;
+		__u32 inner_len;
+		__u32 frame_len;
+
+		if (cursor_payload_offset >= payload_len)
+			return -EINVAL;
+		seg_payload_len = min_t(__u32,
+					payload_len - cursor_payload_offset,
+					wire_gso_size);
+		if (check_add_overflow(inner_header_len, seg_payload_len,
+				       &inner_len) ||
+		    check_add_overflow((__u32)TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+				       inner_len, &frame_len) ||
+		    check_add_overflow(stream_payload_len, frame_len,
+				       &stream_payload_len) ||
+		    check_add_overflow(inner_bytes, inner_len,
+				       &inner_bytes))
+			return -EOVERFLOW;
+		if (i + 1 < frame_count && frame_len != outer_gso_size)
+			return -EINVAL;
+		if (i + 1 == frame_count && frame_len > outer_gso_size)
+			return -EINVAL;
+		cursor_payload_offset += seg_payload_len;
+	}
+	if (check_add_overflow(outer_header_len, stream_payload_len,
+			       &outer_len) ||
+	    check_add_overflow((__u32)sizeof(struct tcphdr),
+			       stream_payload_len, &tcp_len))
+		return -EOVERFLOW;
+	if (outer_len > 0xffffU)
+		return -EMSGSIZE;
+
+	skb = alloc_skb(LL_MAX_HEADER + outer_len, GFP_ATOMIC);
+	if (!skb)
+		return -ENOMEM;
+	skb_reserve(skb, LL_MAX_HEADER);
+	packet = skb_put(skb, outer_len);
+	memset(packet, 0, outer_header_len);
+
+	trustix_datapath_build_outer_ipv4(packet, outer_len, IPPROTO_TCP,
+					  plan->local_ipv4,
+					  plan->remote_ipv4);
+	trustix_datapath_put_be16(packet + 20, plan->local_port);
+	trustix_datapath_put_be16(packet + 22, plan->remote_port);
+	packet[32] = 0x50;
+	packet[33] = 0x18;
+	trustix_datapath_put_be16(packet + 34, 65535);
+	outer_sequence = trustix_datapath_tx_outer_tcp_next_seq(
+		stream_payload_len);
+	trustix_datapath_put_be32(packet + 24, (__u32)outer_sequence);
+
+	pos = packet + outer_header_len;
+	cursor_payload_offset = payload_offset;
+	for (i = 0; i < frame_count; i++) {
+		struct tcphdr *seg_tcph;
+		struct iphdr *seg_iph;
+		__u8 *tixt = pos;
+		__u32 seg_payload_len;
+		__u32 inner_len;
+		bool last_segment;
+		__u64 sequence;
+
+		seg_payload_len = min_t(__u32,
+					payload_len - cursor_payload_offset,
+					wire_gso_size);
+		inner_len = inner_header_len + seg_payload_len;
+		last_segment = cursor_payload_offset + seg_payload_len >=
+			       payload_len;
+		sequence = (__u64)atomic64_inc_return(
+			&trustix_datapath_tx_sequence);
+		trustix_datapath_build_tixt_header(
+			tixt,
+			trustix_datapath_tx_plaintext_tixt_flags(!READ_ONCE(
+				trustix_datapath_tx_plaintext_skip_inner_tcp_checksum)),
+			plan->flow_id, plan->epoch, sequence, inner_len, 0,
+			0);
+		ret = skb_copy_bits(
+			inner_skb, network_offset,
+			tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+			inner_header_len);
+		if (ret)
+			goto error;
+		ret = skb_copy_bits(
+			inner_skb, network_offset + inner_header_len +
+					   cursor_payload_offset,
+			tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN +
+				inner_header_len,
+			seg_payload_len);
+		if (ret)
+			goto error;
+
+		seg_iph = (struct iphdr *)(tixt +
+					   TRUSTIX_DATAPATH_TIXT_HEADER_LEN);
+		seg_tcph = (struct tcphdr *)((__u8 *)seg_iph +
+					     ip_header_len);
+		seg_iph->tot_len = htons((__u16)inner_len);
+		seg_iph->id = htons(ip_id + seg_index + i);
+		trustix_datapath_rx_worker_fix_ipv4_header_checksum(
+			seg_iph, ip_header_len);
+		seg_tcph->seq = htonl(seq + cursor_payload_offset);
+		if (!last_segment) {
+			seg_tcph->fin = 0;
+			seg_tcph->psh = 0;
+		}
+		seg_tcph->check = 0;
+		if (!READ_ONCE(
+			    trustix_datapath_tx_plaintext_skip_inner_tcp_checksum))
+			seg_tcph->check =
+				trustix_datapath_rx_worker_l4_checksum(
+					seg_iph, seg_tcph,
+					tcp_header_len + seg_payload_len,
+					IPPROTO_TCP);
+
+		pos += TRUSTIX_DATAPATH_TIXT_HEADER_LEN + inner_len;
+		cursor_payload_offset += seg_payload_len;
+	}
+	if (pos != packet + outer_len) {
+		ret = -EINVAL;
+		goto error;
+	}
+
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, 20);
+	skb->protocol = htons(ETH_P_IP);
+	skb->pkt_type = PACKET_OUTGOING;
+	skb->encapsulation = 0;
+	skb->csum = 0;
+	skb->csum_level = 0;
+	outer_iph = (struct iphdr *)skb_network_header(skb);
+	outer_tcph = (struct tcphdr *)skb_transport_header(skb);
+	outer_tcph->check = ~csum_tcpudp_magic(outer_iph->saddr,
+					       outer_iph->daddr, tcp_len,
+					       IPPROTO_TCP, 0);
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	skb->csum_start = skb_transport_header(skb) - skb->head;
+	skb->csum_offset = offsetof(struct tcphdr, check);
+	shinfo = skb_shinfo(skb);
+	shinfo->gso_size = outer_gso_size;
+	shinfo->gso_segs = frame_count;
+	shinfo->gso_type = SKB_GSO_TCPV4;
+	*out_skb = skb;
+	*inner_bytes_out = inner_bytes;
+	return 0;
+
+error:
+	kfree_skb(skb);
+	return ret;
+}
+
+static int trustix_datapath_tx_plaintext_outer_tcp_gso_skb(
+	struct sk_buff *skb, const struct trustix_datapath_tx_plan *plan,
+	struct net_device *target_dev)
+{
+	struct sk_buff *batches[TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS] = {};
+	__u32 inner_lens[TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS] = {};
+	struct skb_shared_info *shinfo;
+	const struct tcphdr *tcph;
+	const struct iphdr *iph;
+	__u32 network_offset;
+	__u32 ip_header_len;
+	__u32 tcp_header_len;
+	__u32 inner_header_len;
+	__u32 total_len;
+	__u32 tcp_len;
+	__u32 payload_len;
+	__u32 payload_offset = 0;
+	__u32 gso_size;
+	__u32 wire_gso_size;
+	__u32 seq;
+	__u16 ip_id;
+	unsigned int expected_segs;
+	unsigned int seg_index = 0;
+	unsigned int batch_count = 0;
+	unsigned int outer_gso_batches = 0;
+	unsigned int outer_gso_segments = 0;
+	int ret = 0;
+
+	if (!skb || !plan || !target_dev)
+		return -EINVAL;
+	if (plan->outer_protocol != IPPROTO_TCP)
+		return -EPROTONOSUPPORT;
+	if (!trustix_datapath_dev_supports_tcpv4_gso(target_dev))
+		return -EOPNOTSUPP;
+	if (!skb_is_gso(skb))
+		return -EINVAL;
+	shinfo = skb_shinfo(skb);
+	if ((shinfo->gso_type & SKB_GSO_TCPV4) != SKB_GSO_TCPV4)
+		return -EPROTONOSUPPORT;
+	network_offset = skb_network_offset(skb);
+	if (network_offset > TRUSTIX_DATAPATH_PACKET_MAX_LEN ||
+	    !pskb_may_pull(skb, network_offset + sizeof(*iph)))
+		return -ENODATA;
+	iph = (const struct iphdr *)skb_network_header(skb);
+	if (!iph || iph->version != 4 || iph->ihl < 5 ||
+	    iph->protocol != IPPROTO_TCP ||
+	    (iph->frag_off & htons(0x3fff)))
+		return -EPROTONOSUPPORT;
+	ip_header_len = iph->ihl * 4;
+	if (ip_header_len < sizeof(*iph) ||
+	    !pskb_may_pull(skb, network_offset + ip_header_len + sizeof(*tcph)))
+		return -ENODATA;
+	iph = (const struct iphdr *)skb_network_header(skb);
+	tcph = (const struct tcphdr *)((const __u8 *)iph + ip_header_len);
+	tcp_header_len = tcph->doff * 4;
+	total_len = ntohs(iph->tot_len);
+	if (tcp_header_len < sizeof(*tcph) ||
+	    total_len < ip_header_len + tcp_header_len ||
+	    total_len > skb->len - network_offset ||
+	    !pskb_may_pull(skb, network_offset + ip_header_len +
+				  tcp_header_len))
+		return -EINVAL;
+	if (check_add_overflow(ip_header_len, tcp_header_len,
+			       &inner_header_len))
+		return -EOVERFLOW;
+	tcp_len = total_len - ip_header_len;
+	payload_len = tcp_len - tcp_header_len;
+	if (!payload_len)
+		return -EINVAL;
+	gso_size = shinfo->gso_size;
+	if (!gso_size || gso_size > payload_len)
+		return -EINVAL;
+	ret = trustix_datapath_tx_plaintext_gso_payload_size(
+		plan, target_dev, ip_header_len, tcp_header_len, gso_size,
+		&wire_gso_size);
+	if (ret)
+		return ret;
+	if (!wire_gso_size || wire_gso_size > payload_len)
+		return -EINVAL;
+	if (wire_gso_size >= payload_len)
+		return -EOPNOTSUPP;
+	expected_segs = DIV_ROUND_UP(payload_len, wire_gso_size);
+	if (expected_segs < 2 ||
+	    expected_segs > TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS)
+		return -E2BIG;
+	seq = ntohl(tcph->seq);
+	ip_id = ntohs(iph->id);
+
+	while (payload_offset < payload_len) {
+		__u32 batch_payload_offset = payload_offset;
+		__u32 batch_stream_payload_len = 0;
+		__u32 batch_inner_bytes = 0;
+		unsigned int batch_seg_index = seg_index;
+		unsigned int frame_count = 0;
+		struct sk_buff *out = NULL;
+
+		while (payload_offset < payload_len) {
+			__u32 seg_payload_len;
+			__u32 inner_len;
+			__u32 frame_len;
+
+			seg_payload_len = min_t(__u32,
+						payload_len - payload_offset,
+						wire_gso_size);
+			if (check_add_overflow(inner_header_len,
+					       seg_payload_len, &inner_len) ||
+			    check_add_overflow(
+				    (__u32)TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+				    inner_len, &frame_len)) {
+				ret = -EOVERFLOW;
+				goto error;
+			}
+			if (frame_count &&
+			    40 + batch_stream_payload_len + frame_len > 0xffffU)
+				break;
+			if (!frame_count && 40 + frame_len > 0xffffU) {
+				ret = -EMSGSIZE;
+				goto error;
+			}
+			if (check_add_overflow(batch_stream_payload_len,
+					       frame_len,
+					       &batch_stream_payload_len) ||
+			    check_add_overflow(batch_inner_bytes, inner_len,
+					       &batch_inner_bytes)) {
+				ret = -EOVERFLOW;
+				goto error;
+			}
+			frame_count++;
+			payload_offset += seg_payload_len;
+			seg_index++;
+			if (batch_count + 1 >=
+			    TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS)
+				break;
+		}
+		if (!frame_count) {
+			ret = -EINVAL;
+			goto error;
+		}
+		if (batch_count >= TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS) {
+			ret = -E2BIG;
+			goto error;
+		}
+		if (frame_count >= 2) {
+			ret = trustix_datapath_tx_build_outer_tcp_gso_skb(
+				skb, plan, network_offset, ip_header_len,
+				tcp_header_len, batch_payload_offset,
+				payload_len, wire_gso_size, seq, ip_id,
+				batch_seg_index, frame_count, &out,
+				&batch_inner_bytes);
+			if (ret)
+				goto error;
+			outer_gso_batches++;
+			outer_gso_segments += frame_count;
+		} else {
+			__u32 seg_payload_len = min_t(
+				__u32, payload_len - batch_payload_offset,
+				wire_gso_size);
+			bool last = batch_payload_offset + seg_payload_len >=
+				    payload_len;
+
+			ret = trustix_datapath_tx_build_outer_tcp_segment_skb(
+				skb, plan, network_offset, ip_header_len,
+				tcp_header_len, batch_payload_offset,
+				seg_payload_len, seq, ip_id, batch_seg_index,
+				last, &out);
+			if (ret)
+				goto error;
+			batch_inner_bytes = inner_header_len + seg_payload_len;
+		}
+		batches[batch_count] = out;
+		inner_lens[batch_count] = batch_inner_bytes;
+		batch_count++;
+	}
+	if (seg_index != expected_segs) {
+		ret = -EINVAL;
+		goto error;
+	}
+	ret = trustix_datapath_tx_plaintext_enqueue_many(
+		batches, inner_lens, batch_count, target_dev, plan);
+	if (ret)
+		goto error;
+	trustix_datapath_tx_plaintext_gso_segments += seg_index;
+	trustix_datapath_tx_plaintext_outer_gso_packets += outer_gso_batches;
+	trustix_datapath_tx_plaintext_outer_gso_segments +=
+		outer_gso_segments;
+	return 0;
+
+error:
+	while (batch_count > 0) {
+		batch_count--;
+		kfree_skb(batches[batch_count]);
+		batches[batch_count] = NULL;
+	}
+	trustix_datapath_tx_plaintext_outer_gso_errors++;
+	return ret;
+}
+
+static int trustix_datapath_tx_plaintext_outer_udp_gso_skb(
+	struct sk_buff *skb, const struct trustix_datapath_tx_plan *plan,
+	struct net_device *target_dev)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+	struct sk_buff *batches[TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS] = {};
+	__u32 inner_lens[TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS] = {};
+	struct skb_shared_info *shinfo;
+	const struct tcphdr *tcph;
+	const struct iphdr *iph;
+	__u32 network_offset;
+	__u32 ip_header_len;
+	__u32 tcp_header_len;
+	__u32 inner_header_len;
+	__u32 total_len;
+	__u32 tcp_len;
+	__u32 payload_len;
+	__u32 payload_offset = 0;
+	__u32 gso_size;
+	__u32 wire_gso_size;
+	__u32 seq;
+	__u16 ip_id;
+	unsigned int expected_segs;
+	unsigned int seg_index = 0;
+	unsigned int batch_count = 0;
+	unsigned int outer_gso_batches = 0;
+	unsigned int outer_gso_segments = 0;
+	int ret = 0;
+
+	if (!skb || !plan || !target_dev)
+		return -EINVAL;
+	if (plan->outer_protocol != IPPROTO_UDP)
+		return -EPROTONOSUPPORT;
+	if (!skb_is_gso(skb))
+		return -EINVAL;
+	shinfo = skb_shinfo(skb);
+	if ((shinfo->gso_type & SKB_GSO_TCPV4) != SKB_GSO_TCPV4)
+		return -EPROTONOSUPPORT;
+	network_offset = skb_network_offset(skb);
+	if (network_offset > TRUSTIX_DATAPATH_PACKET_MAX_LEN ||
+	    !pskb_may_pull(skb, network_offset + sizeof(*iph)))
+		return -ENODATA;
+	iph = (const struct iphdr *)skb_network_header(skb);
+	if (!iph || iph->version != 4 || iph->ihl < 5 ||
+	    iph->protocol != IPPROTO_TCP ||
+	    (iph->frag_off & htons(0x3fff)))
+		return -EPROTONOSUPPORT;
+	ip_header_len = iph->ihl * 4;
+	if (ip_header_len < sizeof(*iph) ||
+	    !pskb_may_pull(skb, network_offset + ip_header_len + sizeof(*tcph)))
+		return -ENODATA;
+	iph = (const struct iphdr *)skb_network_header(skb);
+	tcph = (const struct tcphdr *)((const __u8 *)iph + ip_header_len);
+	tcp_header_len = tcph->doff * 4;
+	total_len = ntohs(iph->tot_len);
+	if (tcp_header_len < sizeof(*tcph) ||
+	    total_len < ip_header_len + tcp_header_len ||
+	    total_len > skb->len - network_offset ||
+	    !pskb_may_pull(skb, network_offset + ip_header_len +
+				  tcp_header_len))
+		return -EINVAL;
+	if (check_add_overflow(ip_header_len, tcp_header_len,
+			       &inner_header_len))
+		return -EOVERFLOW;
+	tcp_len = total_len - ip_header_len;
+	payload_len = tcp_len - tcp_header_len;
+	if (!payload_len)
+		return -EINVAL;
+	gso_size = shinfo->gso_size;
+	if (!gso_size || gso_size > payload_len)
+		return -EINVAL;
+	ret = trustix_datapath_tx_plaintext_gso_payload_size(
+		plan, target_dev, ip_header_len, tcp_header_len, gso_size,
+		&wire_gso_size);
+	if (ret)
+		return ret;
+	if (!wire_gso_size || wire_gso_size > payload_len)
+		return -EINVAL;
+	if (wire_gso_size >= payload_len)
+		return -EOPNOTSUPP;
+	expected_segs = DIV_ROUND_UP(payload_len, wire_gso_size);
+	if (expected_segs < 2 ||
+	    expected_segs > TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS)
+		return -E2BIG;
+	seq = ntohl(tcph->seq);
+	ip_id = ntohs(iph->id);
+
+	while (payload_offset < payload_len) {
+		struct sk_buff *out = NULL;
+		struct udphdr *outer_udph;
+		struct iphdr *outer_iph;
+		__u8 *packet;
+		__u8 *pos;
+		__u32 batch_payload_offset = payload_offset;
+		__u32 batch_stream_payload_len = 0;
+		__u32 batch_inner_bytes = 0;
+		__u32 outer_len;
+		__u32 udp_len;
+		__u32 outer_gso_size;
+		unsigned int batch_seg_index = seg_index;
+		unsigned int frame_count = 0;
+		unsigned int i;
+
+		if (check_add_overflow(inner_header_len, wire_gso_size,
+				       &outer_gso_size) ||
+		    check_add_overflow((__u32)TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+				       outer_gso_size, &outer_gso_size)) {
+			ret = -EOVERFLOW;
+			goto error;
+		}
+		while (payload_offset < payload_len) {
+			__u32 seg_payload_len;
+			__u32 inner_len;
+			__u32 frame_len;
+
+			seg_payload_len = min_t(__u32,
+						payload_len - payload_offset,
+						wire_gso_size);
+			if (check_add_overflow(inner_header_len,
+					       seg_payload_len, &inner_len) ||
+			    check_add_overflow(
+				    (__u32)TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+				    inner_len, &frame_len)) {
+				ret = -EOVERFLOW;
+				goto error;
+			}
+			if (frame_count &&
+			    28 + batch_stream_payload_len + frame_len > 0xffffU)
+				break;
+			if (!frame_count && 28 + frame_len > 0xffffU) {
+				ret = -EMSGSIZE;
+				goto error;
+			}
+			if (frame_count && frame_len != outer_gso_size)
+				break;
+			if (check_add_overflow(batch_stream_payload_len,
+					       frame_len,
+					       &batch_stream_payload_len) ||
+			    check_add_overflow(batch_inner_bytes, inner_len,
+					       &batch_inner_bytes)) {
+				ret = -EOVERFLOW;
+				goto error;
+			}
+			frame_count++;
+			payload_offset += seg_payload_len;
+			seg_index++;
+			if (batch_count + 1 >=
+			    TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS)
+				break;
+		}
+		if (!frame_count) {
+			ret = -EINVAL;
+			goto error;
+		}
+		if (batch_count >= TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS) {
+			ret = -E2BIG;
+			goto error;
+		}
+		if (frame_count < 2) {
+			__u32 seg_payload_len = min_t(
+				__u32, payload_len - batch_payload_offset,
+				wire_gso_size);
+			bool last = batch_payload_offset + seg_payload_len >=
+				    payload_len;
+
+			ret = trustix_datapath_tx_build_outer_tcp_segment_skb(
+				skb, plan, network_offset, ip_header_len,
+				tcp_header_len, batch_payload_offset,
+				seg_payload_len, seq, ip_id, batch_seg_index,
+				last, &out);
+			if (ret)
+				goto error;
+			batch_inner_bytes = inner_header_len + seg_payload_len;
+			batches[batch_count] = out;
+			inner_lens[batch_count] = batch_inner_bytes;
+			batch_count++;
+			continue;
+		}
+		if (check_add_overflow((__u32)sizeof(struct iphdr) +
+					       sizeof(struct udphdr),
+				       batch_stream_payload_len, &outer_len) ||
+		    check_add_overflow((__u32)sizeof(struct udphdr),
+				       batch_stream_payload_len, &udp_len)) {
+			ret = -EOVERFLOW;
+			goto error;
+		}
+		if (outer_len > 0xffffU) {
+			ret = -EMSGSIZE;
+			goto error;
+		}
+		out = alloc_skb(LL_MAX_HEADER + outer_len, GFP_ATOMIC);
+		if (!out) {
+			ret = -ENOMEM;
+			goto error;
+		}
+		skb_reserve(out, LL_MAX_HEADER);
+		packet = skb_put(out, outer_len);
+		memset(packet, 0, sizeof(struct iphdr) + sizeof(struct udphdr));
+		trustix_datapath_build_outer_ipv4(packet, outer_len,
+						  IPPROTO_UDP,
+						  plan->local_ipv4,
+						  plan->remote_ipv4);
+		trustix_datapath_put_be16(packet + 20, plan->local_port);
+		trustix_datapath_put_be16(packet + 22, plan->remote_port);
+		trustix_datapath_put_be16(packet + 24, udp_len);
+		pos = packet + sizeof(struct iphdr) + sizeof(struct udphdr);
+		payload_offset = batch_payload_offset;
+		for (i = 0; i < frame_count; i++) {
+			struct tcphdr *seg_tcph;
+			struct iphdr *seg_iph;
+			__u8 *tixt = pos;
+			__u32 seg_payload_len;
+			__u32 inner_len;
+			bool last_segment;
+			__u64 sequence;
+
+			seg_payload_len = min_t(__u32,
+						payload_len - payload_offset,
+						wire_gso_size);
+			inner_len = inner_header_len + seg_payload_len;
+			last_segment = payload_offset + seg_payload_len >=
+				       payload_len;
+			sequence = (__u64)atomic64_inc_return(
+				&trustix_datapath_tx_sequence);
+			trustix_datapath_build_tixt_header(
+				tixt,
+				trustix_datapath_tx_plaintext_tixt_flags(!READ_ONCE(
+					trustix_datapath_tx_plaintext_skip_inner_tcp_checksum)),
+				plan->flow_id, plan->epoch, sequence,
+				inner_len, 0, 0);
+			ret = skb_copy_bits(
+				skb, network_offset,
+				tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+				inner_header_len);
+			if (ret) {
+				kfree_skb(out);
+				goto error;
+			}
+			ret = skb_copy_bits(
+				skb, network_offset + inner_header_len +
+					     payload_offset,
+				tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN +
+					inner_header_len,
+				seg_payload_len);
+			if (ret) {
+				kfree_skb(out);
+				goto error;
+			}
+			seg_iph = (struct iphdr *)(tixt +
+						   TRUSTIX_DATAPATH_TIXT_HEADER_LEN);
+			seg_tcph = (struct tcphdr *)((__u8 *)seg_iph +
+						     ip_header_len);
+			seg_iph->tot_len = htons((__u16)inner_len);
+			seg_iph->id = htons(ip_id + batch_seg_index + i);
+			trustix_datapath_rx_worker_fix_ipv4_header_checksum(
+				seg_iph, ip_header_len);
+			seg_tcph->seq = htonl(seq + payload_offset);
+			if (!last_segment) {
+				seg_tcph->fin = 0;
+				seg_tcph->psh = 0;
+			}
+			seg_tcph->check = 0;
+			if (!READ_ONCE(
+				    trustix_datapath_tx_plaintext_skip_inner_tcp_checksum))
+				seg_tcph->check =
+					trustix_datapath_rx_worker_l4_checksum(
+						seg_iph, seg_tcph,
+						tcp_header_len + seg_payload_len,
+						IPPROTO_TCP);
+			pos += TRUSTIX_DATAPATH_TIXT_HEADER_LEN + inner_len;
+			payload_offset += seg_payload_len;
+		}
+		if (pos != packet + outer_len) {
+			kfree_skb(out);
+			ret = -EINVAL;
+			goto error;
+		}
+		skb_reset_network_header(out);
+		skb_set_transport_header(out, sizeof(struct iphdr));
+		out->protocol = htons(ETH_P_IP);
+		out->pkt_type = PACKET_OUTGOING;
+		out->encapsulation = 0;
+		out->csum = 0;
+		out->csum_level = 0;
+		outer_iph = (struct iphdr *)skb_network_header(out);
+		outer_udph = (struct udphdr *)skb_transport_header(out);
+		outer_udph->check = ~csum_tcpudp_magic(
+			outer_iph->saddr, outer_iph->daddr, udp_len,
+			IPPROTO_UDP, 0);
+		out->ip_summed = CHECKSUM_PARTIAL;
+		out->csum_start = skb_transport_header(out) - out->head;
+		out->csum_offset = offsetof(struct udphdr, check);
+		shinfo = skb_shinfo(out);
+		shinfo->gso_size = outer_gso_size;
+		shinfo->gso_segs = frame_count;
+		shinfo->gso_type = SKB_GSO_UDP_L4;
+		batches[batch_count] = out;
+		inner_lens[batch_count] = batch_inner_bytes;
+		batch_count++;
+		outer_gso_batches++;
+		outer_gso_segments += frame_count;
+	}
+	if (seg_index != expected_segs) {
+		ret = -EINVAL;
+		goto error;
+	}
+	ret = trustix_datapath_tx_plaintext_enqueue_many(
+		batches, inner_lens, batch_count, target_dev, plan);
+	if (ret)
+		goto error;
+	trustix_datapath_tx_plaintext_gso_segments += seg_index;
+	trustix_datapath_tx_plaintext_outer_gso_packets += outer_gso_batches;
+	trustix_datapath_tx_plaintext_outer_gso_segments +=
+		outer_gso_segments;
+	return 0;
+
+error:
+	while (batch_count > 0) {
+		batch_count--;
+		kfree_skb(batches[batch_count]);
+		batches[batch_count] = NULL;
+	}
+	trustix_datapath_tx_plaintext_outer_gso_errors++;
+	return ret;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+
 static int trustix_datapath_tx_plaintext_gso_skb(
 	struct sk_buff *skb, const struct trustix_datapath_tx_plan *plan,
 	struct net_device *target_dev)
 {
+	int ret;
+
+	if (plan && plan->outer_protocol == IPPROTO_UDP)
+		ret = trustix_datapath_tx_plaintext_outer_udp_gso_skb(
+			skb, plan, target_dev);
+	else
+		ret = trustix_datapath_tx_plaintext_outer_tcp_gso_skb(
+			skb, plan, target_dev);
+	if (!ret)
+		return 0;
+	trustix_datapath_tx_plaintext_outer_gso_fallbacks++;
 	return trustix_datapath_tx_plaintext_segment_tcp_skb(
 		skb, plan, target_dev, 0, true);
+}
+
+static unsigned int
+trustix_datapath_tx_plaintext_coalesce_max_frames_value(void)
+{
+	unsigned int value = READ_ONCE(
+		trustix_datapath_tx_plaintext_stream_coalesce_max_frames);
+
+	if (value < 2)
+		return 2;
+	if (value > TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES)
+		return TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES;
+	return value;
+}
+
+static unsigned long
+trustix_datapath_tx_plaintext_coalesce_flush_delay(void)
+{
+	unsigned int value = READ_ONCE(
+		trustix_datapath_tx_plaintext_stream_coalesce_flush_jiffies);
+
+	if (value > HZ)
+		return HZ;
+	return value;
+}
+
+static bool trustix_datapath_tx_plaintext_stream_coalesce_supported(
+	const struct trustix_datapath_tx_plan *plan, struct net_device *target_dev)
+{
+	if (!plan)
+		return false;
+	switch (plan->outer_protocol) {
+	case IPPROTO_TCP:
+		return trustix_datapath_dev_supports_tcpv4_gso(target_dev);
+	case IPPROTO_UDP:
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+		return true;
+#else
+		return false;
+#endif
+	default:
+		return false;
+	}
+}
+
+static bool trustix_datapath_tx_plaintext_plan_equal(
+	const struct trustix_datapath_tx_plan *left,
+	const struct trustix_datapath_tx_plan *right)
+{
+	if (!left || !right)
+		return false;
+	return left->flow_id == right->flow_id &&
+	       left->epoch == right->epoch &&
+	       left->session_flags == right->session_flags &&
+	       left->local_ipv4 == right->local_ipv4 &&
+	       left->remote_ipv4 == right->remote_ipv4 &&
+	       left->local_port == right->local_port &&
+	       left->remote_port == right->remote_port &&
+	       left->outer_protocol == right->outer_protocol &&
+	       left->max_packet_size == right->max_packet_size;
+}
+
+static __u32 trustix_datapath_tx_plaintext_coalesce_hash(
+	const struct trustix_datapath_rx_worker_coalesce_state *state,
+	const struct trustix_datapath_tx_plan *plan, int target_ifindex)
+{
+	__u32 hash;
+
+	if (!state || !plan)
+		return 0;
+	hash = (__force __u32)state->saddr ^
+	       ((__force __u32)state->daddr << 7) ^
+	       ((__force __u32)state->daddr >> 9) ^
+	       ((__force __u16)state->source << 16) ^
+	       (__force __u16)state->dest ^ (__u32)target_ifindex ^
+	       (__u32)plan->flow_id ^ ((__u32)(plan->flow_id >> 32) << 3) ^
+	       ((__u32)plan->epoch << 11) ^ plan->local_ipv4 ^
+	       (plan->remote_ipv4 << 5) ^ ((__u32)plan->local_port << 16) ^
+	       plan->remote_port;
+	hash ^= hash >> 16;
+	hash *= 0x7feb352dU;
+	hash ^= hash >> 15;
+	return hash ?: 1;
+}
+
+static void
+trustix_datapath_tx_plaintext_coalesce_detach_locked(
+	struct trustix_datapath_tx_plaintext_coalesce_slot *slot,
+	struct net_device **target_dev, __u8 **packets, __u32 *lens,
+	unsigned int *frames, struct trustix_datapath_tx_plan *plan,
+	struct trustix_datapath_rx_worker_coalesce_state *state)
+{
+	unsigned int i;
+
+	if (target_dev)
+		*target_dev = NULL;
+	if (packets) {
+		for (i = 0; i < TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES;
+		     i++)
+			packets[i] = NULL;
+	}
+	if (lens)
+		memset(lens, 0, sizeof(__u32) *
+				  TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES);
+	if (frames)
+		*frames = 0;
+	if (plan)
+		memset(plan, 0, sizeof(*plan));
+	if (state)
+		memset(state, 0, sizeof(*state));
+	if (!slot || !slot->valid)
+		return;
+
+	if (target_dev)
+		*target_dev = slot->target_dev;
+	else if (slot->target_dev)
+		dev_put(slot->target_dev);
+	if (packets) {
+		for (i = 0; i < TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES;
+		     i++)
+			packets[i] = slot->packets[i];
+	} else {
+		for (i = 0; i < TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES;
+		     i++)
+			kfree(slot->packets[i]);
+	}
+	if (lens)
+		memcpy(lens, slot->lens,
+		       sizeof(__u32) *
+			       TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES);
+	if (frames)
+		*frames = slot->frames;
+	if (plan)
+		*plan = slot->plan;
+	if (state)
+		*state = slot->state;
+
+	slot->valid = false;
+	slot->target_dev = NULL;
+	slot->target_ifindex = 0;
+	slot->hash = 0;
+	memset(&slot->plan, 0, sizeof(slot->plan));
+	memset(&slot->state, 0, sizeof(slot->state));
+	for (i = 0; i < TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES;
+	     i++) {
+		slot->packets[i] = NULL;
+		slot->lens[i] = 0;
+	}
+	slot->frames = 0;
+}
+
+static bool trustix_datapath_tx_plaintext_coalesce_store_locked(
+	struct trustix_datapath_tx_plaintext_coalesce_slot *slot,
+	struct net_device *target_dev, int target_ifindex, __u32 hash,
+	const struct trustix_datapath_tx_plan *plan,
+	const struct trustix_datapath_rx_worker_coalesce_state *state,
+	__u8 **packet, __u32 len)
+{
+	if (!slot || slot->valid || !target_dev || !plan || !state ||
+	    !state->active || !packet || !*packet || !len)
+		return false;
+
+	dev_hold(target_dev);
+	slot->valid = true;
+	slot->target_dev = target_dev;
+	slot->target_ifindex = target_ifindex;
+	slot->hash = hash;
+	slot->plan = *plan;
+	slot->state = *state;
+	slot->packets[0] = *packet;
+	slot->lens[0] = len;
+	slot->frames = 1;
+	*packet = NULL;
+	trustix_datapath_tx_plaintext_stream_coalesce_stored++;
+	return true;
+}
+
+static struct sk_buff *
+trustix_datapath_tx_plaintext_inner_packet_skb(
+	struct net_device *target_dev, const __u8 *packet, __u32 len)
+{
+	struct sk_buff *skb;
+	struct iphdr *iph;
+
+	skb = trustix_datapath_rx_worker_build_inner_skb(target_dev, packet,
+							 len);
+	if (!skb)
+		return NULL;
+	if (!pskb_may_pull(skb, sizeof(*iph))) {
+		kfree_skb(skb);
+		return NULL;
+	}
+	iph = (struct iphdr *)skb->data;
+	if (iph->version != 4 || iph->ihl < 5 || len < iph->ihl * 4) {
+		kfree_skb(skb);
+		return NULL;
+	}
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, iph->ihl * 4);
+	return skb;
+}
+
+static int trustix_datapath_tx_plaintext_coalesce_xmit_singles(
+	struct net_device *target_dev, const struct trustix_datapath_tx_plan *plan,
+	__u8 **packets, const __u32 *lens, unsigned int frames)
+{
+	struct sk_buff *outer_skbs[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	__u32 inner_lens[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	unsigned int outer_count = 0;
+	unsigned int i;
+	int ret = 0;
+
+	memset(outer_skbs, 0, sizeof(outer_skbs));
+	memset(inner_lens, 0, sizeof(inner_lens));
+	if (!target_dev || !plan || !packets || !lens || !frames)
+		return -EINVAL;
+
+	for (i = 0; i < frames; i++) {
+		struct sk_buff *inner_skb;
+		bool outer_exceeds = false;
+
+		if (!packets[i] || !lens[i])
+			continue;
+		inner_skb = trustix_datapath_tx_plaintext_inner_packet_skb(
+			target_dev, packets[i], lens[i]);
+		if (!inner_skb) {
+			ret = -ENOMEM;
+			goto error;
+		}
+		ret = trustix_datapath_tx_plaintext_outer_exceeds_packet_limit(
+			plan, target_dev, lens[i], &outer_exceeds);
+		if (!ret && outer_exceeds) {
+			ret = trustix_datapath_tx_plaintext_segment_tcp_skb(
+				inner_skb, plan, target_dev, 0, false);
+			kfree_skb(inner_skb);
+			if (ret)
+				goto error;
+			continue;
+		}
+		if (ret) {
+			kfree_skb(inner_skb);
+			goto error;
+		}
+		ret = trustix_datapath_tx_build_outer_skb(
+			inner_skb, plan, lens[i], &outer_skbs[outer_count]);
+		kfree_skb(inner_skb);
+		if (ret)
+			goto error;
+		inner_lens[outer_count] = lens[i];
+		outer_count++;
+	}
+
+	if (outer_count) {
+		ret = trustix_datapath_tx_plaintext_enqueue_many(
+			outer_skbs, inner_lens, outer_count, target_dev, plan);
+		if (ret)
+			goto error;
+	}
+	return 0;
+
+error:
+	while (outer_count > 0) {
+		outer_count--;
+		kfree_skb(outer_skbs[outer_count]);
+		outer_skbs[outer_count] = NULL;
+	}
+	trustix_datapath_tx_plaintext_stream_coalesce_errors++;
+	return ret;
+}
+
+static int trustix_datapath_tx_plaintext_coalesce_xmit_packets(
+	struct net_device *target_dev, __u8 **packets, __u32 *lens,
+	unsigned int frames,
+	const struct trustix_datapath_rx_worker_coalesce_state *state,
+	const struct trustix_datapath_tx_plan *plan)
+{
+	struct trustix_datapath_rx_worker_pending_copy
+		pending[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	struct sk_buff *inner_skb;
+	unsigned int i;
+	int ret;
+
+	if (!target_dev || !packets || !lens || !state || !state->active ||
+	    !plan || frames < 1 ||
+	    frames > TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES)
+		return -EINVAL;
+	if (frames < 2)
+		return trustix_datapath_tx_plaintext_coalesce_xmit_singles(
+			target_dev, plan, packets, lens, frames);
+
+	memset(pending, 0, sizeof(pending));
+	for (i = 0; i < frames; i++) {
+		if (!packets[i] || !lens[i])
+			return -EINVAL;
+		pending[i].source_packet = packets[i];
+		pending[i].len = lens[i];
+	}
+	inner_skb = trustix_datapath_rx_worker_build_coalesced_gso_skb(
+		target_dev, state, pending, frames);
+	if (!inner_skb) {
+		trustix_datapath_tx_plaintext_stream_coalesce_errors++;
+		return trustix_datapath_tx_plaintext_coalesce_xmit_singles(
+			target_dev, plan, packets, lens, frames);
+	}
+	ret = trustix_datapath_tx_plaintext_gso_skb(inner_skb, plan,
+						   target_dev);
+	kfree_skb(inner_skb);
+	if (!ret) {
+		trustix_datapath_tx_plaintext_stream_coalesce_packets++;
+		trustix_datapath_tx_plaintext_stream_coalesce_frames += frames;
+		return 0;
+	}
+	trustix_datapath_tx_plaintext_stream_coalesce_errors++;
+	return trustix_datapath_tx_plaintext_coalesce_xmit_singles(
+		target_dev, plan, packets, lens, frames);
+}
+
+static void
+trustix_datapath_tx_plaintext_coalesce_free_detached(
+	struct net_device *target_dev, __u8 **packets, unsigned int frames)
+{
+	unsigned int i;
+
+	if (packets) {
+		for (i = 0; i < frames &&
+			    i < TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES;
+		     i++) {
+			kfree(packets[i]);
+			packets[i] = NULL;
+		}
+	}
+	if (target_dev)
+		dev_put(target_dev);
+}
+
+static void
+trustix_datapath_tx_plaintext_coalesce_flush_slot(
+	struct trustix_datapath_tx_plaintext_coalesce_slot *slot)
+{
+	struct net_device *target_dev = NULL;
+	unsigned long flags;
+	__u8 *packets[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	__u32 lens[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	struct trustix_datapath_tx_plan plan = {};
+	struct trustix_datapath_rx_worker_coalesce_state state = {};
+	unsigned int frames = 0;
+
+	if (!slot)
+		return;
+	spin_lock_irqsave(&slot->lock, flags);
+	trustix_datapath_tx_plaintext_coalesce_detach_locked(
+		slot, &target_dev, packets, lens, &frames, &plan, &state);
+	spin_unlock_irqrestore(&slot->lock, flags);
+	if (frames && target_dev)
+		trustix_datapath_tx_plaintext_coalesce_xmit_packets(
+			target_dev, packets, lens, frames, &state, &plan);
+	trustix_datapath_tx_plaintext_coalesce_free_detached(target_dev,
+							    packets, frames);
+}
+
+static void trustix_datapath_tx_plaintext_coalesce_flush_work(
+	struct work_struct *work)
+{
+	struct delayed_work *dwork = to_delayed_work(work);
+	struct trustix_datapath_tx_plaintext_coalesce_slot *slot =
+		container_of(dwork,
+			     struct trustix_datapath_tx_plaintext_coalesce_slot,
+			     flush_work);
+
+	trustix_datapath_tx_plaintext_coalesce_flush_slot(slot);
+}
+
+static void trustix_datapath_tx_plaintext_coalesce_drop_all(void)
+{
+	struct net_device *target_dev = NULL;
+	unsigned long flags;
+	__u8 *packets[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	__u32 lens[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	unsigned int frames = 0;
+	unsigned int i;
+
+	for (i = 0; i < TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_SLOTS; i++) {
+		struct trustix_datapath_tx_plaintext_coalesce_slot *slot =
+			&trustix_datapath_tx_plaintext_coalesce_slots[i];
+
+		cancel_delayed_work_sync(&slot->flush_work);
+		spin_lock_irqsave(&slot->lock, flags);
+		trustix_datapath_tx_plaintext_coalesce_detach_locked(
+			slot, &target_dev, packets, lens, &frames, NULL, NULL);
+		spin_unlock_irqrestore(&slot->lock, flags);
+		trustix_datapath_tx_plaintext_coalesce_free_detached(
+			target_dev, packets, frames);
+		target_dev = NULL;
+		frames = 0;
+	}
+}
+
+static bool trustix_datapath_tx_plaintext_coalesce_skb(
+	struct sk_buff *skb,
+	const struct trustix_datapath_ioc_classify *classify,
+	int target_ifindex, struct net_device *target_dev,
+	const struct trustix_datapath_tx_plan *plan, __u32 inner_len)
+{
+	struct trustix_datapath_rx_worker_coalesce_state cur_state = {};
+	struct trustix_datapath_rx_worker_coalesce_state merged = {};
+	struct trustix_datapath_tx_plaintext_coalesce_slot *slot;
+	struct net_device *held_dev = NULL;
+	__u8 *held_packets[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	__u32 held_lens[TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES];
+	struct trustix_datapath_tx_plan held_plan = {};
+	struct trustix_datapath_rx_worker_coalesce_state held_state = {};
+	unsigned int held_frames = 0;
+	unsigned int max_frames;
+	unsigned long flags;
+	__u8 *packet = NULL;
+	__u32 hash;
+	bool appended = false;
+	bool stored = false;
+	bool flush_with_current = false;
+	int ret;
+
+	if (!READ_ONCE(trustix_datapath_tx_plaintext_stream_coalesce) ||
+	    !skb || !classify || !target_dev || !plan ||
+	    classify->protocol != IPPROTO_TCP ||
+	    !trustix_datapath_tx_plaintext_stream_coalesce_supported(
+		    plan, target_dev) ||
+	    !inner_len ||
+	    skb_is_gso(skb))
+		return false;
+	packet = kmalloc(inner_len, GFP_ATOMIC);
+	if (!packet)
+		return false;
+	ret = skb_copy_bits(skb, skb_network_offset(skb), packet, inner_len);
+	if (ret)
+		goto miss;
+	ret = trustix_datapath_rx_worker_coalesce_accept(&cur_state, packet,
+							 inner_len);
+	if (ret)
+		goto miss;
+
+	hash = trustix_datapath_tx_plaintext_coalesce_hash(&cur_state, plan,
+							   target_ifindex);
+	slot = &trustix_datapath_tx_plaintext_coalesce_slots
+			[hash & (TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_SLOTS - 1)];
+	max_frames = trustix_datapath_tx_plaintext_coalesce_max_frames_value();
+
+	spin_lock_irqsave(&slot->lock, flags);
+	if (slot->valid) {
+		merged = slot->state;
+		if (slot->target_dev == target_dev &&
+		    slot->target_ifindex == target_ifindex &&
+		    slot->hash == hash &&
+		    trustix_datapath_tx_plaintext_plan_equal(&slot->plan,
+							     plan) &&
+		    !trustix_datapath_rx_worker_coalesce_accept(&merged,
+								packet,
+								inner_len)) {
+			if (slot->frames + 1 >= max_frames) {
+				trustix_datapath_tx_plaintext_coalesce_detach_locked(
+					slot, &held_dev, held_packets,
+					held_lens, &held_frames, &held_plan,
+					&held_state);
+				held_state = merged;
+				flush_with_current = true;
+			} else {
+				slot->state = merged;
+				slot->packets[slot->frames] = packet;
+				slot->lens[slot->frames] = inner_len;
+				slot->frames++;
+				packet = NULL;
+				appended = true;
+				trustix_datapath_tx_plaintext_stream_coalesce_stored++;
+			}
+		} else {
+			trustix_datapath_tx_plaintext_stream_coalesce_misses++;
+			trustix_datapath_tx_plaintext_coalesce_detach_locked(
+				slot, &held_dev, held_packets, held_lens,
+				&held_frames, &held_plan, &held_state);
+			stored = trustix_datapath_tx_plaintext_coalesce_store_locked(
+				slot, target_dev, target_ifindex, hash, plan,
+				&cur_state, &packet, inner_len);
+		}
+	} else {
+		stored = trustix_datapath_tx_plaintext_coalesce_store_locked(
+			slot, target_dev, target_ifindex, hash, plan, &cur_state,
+			&packet, inner_len);
+	}
+	spin_unlock_irqrestore(&slot->lock, flags);
+
+	if (appended || stored) {
+		mod_delayed_work(system_wq, &slot->flush_work,
+				 trustix_datapath_tx_plaintext_coalesce_flush_delay());
+		if (held_frames && held_dev) {
+			trustix_datapath_tx_plaintext_coalesce_xmit_packets(
+				held_dev, held_packets, held_lens, held_frames,
+				&held_state, &held_plan);
+			trustix_datapath_tx_plaintext_coalesce_free_detached(
+				held_dev, held_packets, held_frames);
+		}
+		kfree(packet);
+		return true;
+	}
+
+	if (flush_with_current) {
+		if (held_frames <
+		    TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES) {
+			held_packets[held_frames] = packet;
+			held_lens[held_frames] = inner_len;
+			held_frames++;
+			packet = NULL;
+			trustix_datapath_tx_plaintext_stream_coalesce_stored++;
+		}
+		if (held_dev && held_frames)
+			trustix_datapath_tx_plaintext_coalesce_xmit_packets(
+				held_dev, held_packets, held_lens, held_frames,
+				&held_state, &held_plan);
+		trustix_datapath_tx_plaintext_coalesce_free_detached(
+			held_dev, held_packets, held_frames);
+		kfree(packet);
+		return true;
+	}
+
+miss:
+	kfree(packet);
+	trustix_datapath_tx_plaintext_stream_coalesce_misses++;
+	return false;
 }
 
 static int
@@ -5326,6 +7714,12 @@ trustix_datapath_tx_plaintext_skb(struct sk_buff *skb,
 		ret = -EMSGSIZE;
 		trustix_datapath_tx_plaintext_record_build_error(
 			ret, 4, skb, classify, inner_len);
+		goto out_dev;
+	}
+	if (trustix_datapath_tx_plaintext_coalesce_skb(
+		    skb, classify, target_ifindex, target_dev, &plan,
+		    inner_len)) {
+		ret = 0;
 		goto out_dev;
 	}
 	ret = trustix_datapath_tx_plaintext_outer_exceeds_packet_limit(
@@ -5930,7 +8324,7 @@ trustix_datapath_rx_worker_prepare_self_generated_xmit(
 		}
 		skb->pkt_type = PACKET_OUTGOING;
 		skb->mac_len = ETH_HLEN;
-		if (!skb_is_gso(skb)) {
+		if (!skb_is_gso(skb) && skb->ip_summed != CHECKSUM_PARTIAL) {
 			skb->ip_summed = CHECKSUM_NONE;
 			skb->csum = 0;
 			skb->csum_start = 0;
@@ -6013,6 +8407,30 @@ trustix_datapath_rx_worker_count_pair_flushes(unsigned int packets)
 {
 	if (trustix_datapath_rx_worker_hot_stats_enabled())
 		trustix_datapath_rx_worker_inline_pair_flushes += packets;
+}
+
+static __always_inline void
+trustix_datapath_rx_worker_count_single_coalesce_stored(unsigned int packets)
+{
+	if (trustix_datapath_rx_worker_hot_stats_enabled())
+		trustix_datapath_rx_worker_single_coalesce_stored += packets;
+}
+
+static __always_inline void
+trustix_datapath_rx_worker_count_single_coalesce(unsigned int packets,
+						 unsigned int frames)
+{
+	if (!trustix_datapath_rx_worker_hot_stats_enabled())
+		return;
+	trustix_datapath_rx_worker_single_coalesce_packets += packets;
+	trustix_datapath_rx_worker_single_coalesce_frames += frames;
+}
+
+static __always_inline void
+trustix_datapath_rx_worker_count_single_coalesce_flushes(unsigned int packets)
+{
+	if (trustix_datapath_rx_worker_hot_stats_enabled())
+		trustix_datapath_rx_worker_single_coalesce_flushes += packets;
 }
 
 static __always_inline void
@@ -6295,6 +8713,24 @@ queue_xmit:
 }
 
 static bool
+trustix_datapath_rx_worker_tcpv4_partial_csum_dev_supported(
+	const struct net_device *dev)
+{
+	netdev_features_t features;
+
+	if (!dev)
+		return false;
+	features = READ_ONCE(dev->features);
+	if (features & NETIF_F_HW_CSUM)
+		return true;
+#ifdef NETIF_F_IP_CSUM
+	if (features & NETIF_F_IP_CSUM)
+		return true;
+#endif
+	return false;
+}
+
+static bool
 trustix_datapath_rx_worker_partial_csum_supported(struct sk_buff *skb,
 						 struct net_device *dev)
 {
@@ -6516,7 +8952,8 @@ trustix_datapath_rx_worker_prepare_inner_skb(struct sk_buff *skb,
 		trustix_datapath_rx_worker_mark_inner_checksum(skb);
 	if (premarked_gso)
 		return;
-	if (xmit)
+	if (xmit &&
+	    trustix_datapath_rx_worker_tcpv4_partial_csum_dev_supported(dev))
 		partial_prepared =
 			trustix_datapath_rx_worker_prepare_tcp_partial_checksum(skb);
 	if (!dev || !dev->mtu || skb->len <= dev->mtu ||
@@ -6746,8 +9183,8 @@ trustix_datapath_rx_worker_deliver_inner_skb_more(struct sk_buff *skb,
 		skb->protocol = htons(ETH_P_IP);
 		skb->pkt_type = PACKET_OUTGOING;
 		if (skb_is_gso(skb))
-			return trustix_datapath_rx_worker_xmit_inner_gso_segments(
-				skb, dev);
+			return trustix_datapath_rx_worker_xmit_inner_gso(
+				skb, dev, xmit_more);
 		ret = trustix_datapath_rx_worker_finish_partial_checksum(skb,
 									dev);
 		if (ret) {
@@ -6893,6 +9330,80 @@ static int trustix_datapath_rx_worker_sanitize_inner_gso_skb(
 	WRITE_ONCE(trustix_datapath_rx_worker_stream_coalesce_last_gso_type,
 		   shinfo->gso_type);
 	return 0;
+}
+
+static bool
+trustix_datapath_rx_worker_inner_gso_xmit_supported(struct sk_buff *skb,
+						    struct net_device *dev)
+{
+	struct skb_shared_info *shinfo;
+
+	if (!skb || !dev || !skb_is_gso(skb))
+		return false;
+	if (!trustix_datapath_dev_supports_tcpv4_gso(dev))
+		return false;
+	shinfo = skb_shinfo(skb);
+	if (!shinfo->gso_size || shinfo->gso_segs < 2)
+		return false;
+	if ((shinfo->gso_type & SKB_GSO_TCPV4) != SKB_GSO_TCPV4)
+		return false;
+	return true;
+}
+
+static int
+trustix_datapath_rx_worker_xmit_inner_gso_direct(struct sk_buff *skb,
+						 struct net_device *dev,
+						 bool xmit_more)
+{
+	struct skb_shared_info *shinfo;
+	unsigned int gso_segs;
+	int ret;
+
+	if (!skb || !dev || !skb_is_gso(skb))
+		return -EINVAL;
+	ret = trustix_datapath_rx_worker_sanitize_inner_gso_skb(skb, dev);
+	if (ret) {
+		trustix_datapath_rx_worker_gso_xmit_errors++;
+		WRITE_ONCE(trustix_datapath_rx_worker_last_deliver_ret, ret);
+		kfree_skb(skb);
+		return ret;
+	}
+	ret = trustix_datapath_rx_worker_finish_partial_checksum(skb, dev);
+	if (ret) {
+		trustix_datapath_rx_worker_gso_xmit_errors++;
+		WRITE_ONCE(trustix_datapath_rx_worker_last_deliver_ret, ret);
+		kfree_skb(skb);
+		return ret;
+	}
+	shinfo = skb_shinfo(skb);
+	gso_segs = shinfo->gso_segs ?: DIV_ROUND_UP(
+		ntohs(ip_hdr(skb)->tot_len) - ip_hdr(skb)->ihl * 4 -
+			tcp_hdr(skb)->doff * 4,
+		shinfo->gso_size);
+	ret = trustix_datapath_rx_worker_deliver_xmit_skb(skb, dev,
+							  xmit_more);
+	if (!ret) {
+		trustix_datapath_rx_worker_count_xmit_packets(gso_segs);
+		trustix_datapath_rx_worker_gso_xmit_packets++;
+		trustix_datapath_rx_worker_gso_xmit_segments += gso_segs;
+		WRITE_ONCE(trustix_datapath_rx_worker_last_deliver_ret, 0);
+		return 0;
+	}
+	trustix_datapath_rx_worker_deliver_errors++;
+	trustix_datapath_rx_worker_gso_xmit_errors++;
+	WRITE_ONCE(trustix_datapath_rx_worker_last_deliver_ret,
+		   ret ? ret : -ENOBUFS);
+	return ret ? ret : -ENOBUFS;
+}
+
+static int trustix_datapath_rx_worker_xmit_inner_gso(
+	struct sk_buff *skb, struct net_device *dev, bool xmit_more)
+{
+	if (trustix_datapath_rx_worker_inner_gso_xmit_supported(skb, dev))
+		return trustix_datapath_rx_worker_xmit_inner_gso_direct(
+			skb, dev, xmit_more);
+	trustix_datapath_rx_worker_gso_xmit_fallbacks++;
+	return trustix_datapath_rx_worker_xmit_inner_gso_segments(skb, dev);
 }
 
 static int trustix_datapath_rx_worker_xmit_inner_gso_segments(
@@ -7138,8 +9649,8 @@ static int trustix_datapath_rx_worker_xmit_coalesced_inner_skb(
 	skb_reset_inner_headers(skb);
 	trustix_datapath_rx_worker_fill_inner_eth(skb, target_dev, true);
 	if (skb_is_gso(skb))
-		return trustix_datapath_rx_worker_xmit_inner_gso_segments(
-			skb, target_dev);
+		return trustix_datapath_rx_worker_xmit_inner_gso(
+			skb, target_dev, false);
 	return trustix_datapath_rx_worker_deliver_inner_skb(
 		skb, target_dev, inline_context);
 }
@@ -7313,6 +9824,127 @@ static int trustix_datapath_rx_worker_inline_pair_xmit_single(
 	return ret;
 }
 
+static int trustix_datapath_rx_worker_prepare_l2_gso_skb(
+	struct sk_buff *skb, struct net_device *target_dev)
+{
+	struct iphdr *iph;
+	__u32 ip_header_len;
+
+	if (!skb || !target_dev || !skb_is_gso(skb))
+		return -EINVAL;
+	if (skb->len < sizeof(*iph))
+		return -EINVAL;
+	if (!pskb_may_pull(skb, sizeof(*iph)) ||
+	    skb_headlen(skb) < sizeof(*iph))
+		return -ENODATA;
+	iph = (struct iphdr *)skb->data;
+	if (iph->version != 4 || iph->ihl < 5)
+		return -EPROTONOSUPPORT;
+	ip_header_len = iph->ihl * 4;
+	if (ip_header_len < sizeof(*iph) ||
+	    skb->len < ip_header_len + sizeof(struct tcphdr))
+		return -EINVAL;
+	if (!pskb_may_pull(skb, ip_header_len + sizeof(struct tcphdr)) ||
+	    skb_headlen(skb) < ip_header_len + sizeof(struct tcphdr))
+		return -ENODATA;
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, ip_header_len);
+	if (skb_cow_head(skb, ETH_HLEN))
+		return -ENOMEM;
+	skb_push(skb, ETH_HLEN);
+	skb_reset_mac_header(skb);
+	skb_set_network_header(skb, ETH_HLEN);
+	skb_set_transport_header(skb, ETH_HLEN + ip_header_len);
+	skb->mac_len = ETH_HLEN;
+	skb_reset_inner_headers(skb);
+	trustix_datapath_rx_worker_fill_inner_eth(skb, target_dev, true);
+	return 0;
+}
+
+static int trustix_datapath_rx_worker_inline_pair_xmit_packets_gso(
+	struct net_device *target_dev, __u8 **packets, __u32 *lens,
+	unsigned int frames,
+	const struct trustix_datapath_rx_worker_coalesce_state *state,
+	const __u8 *extra_packet, __u32 extra_len, bool inline_context)
+{
+	struct trustix_datapath_rx_worker_pending_copy
+		*pending = NULL;
+	struct sk_buff *skb = NULL;
+	unsigned int total_frames = frames;
+	unsigned int i;
+	int ret;
+
+	if (!target_dev || !packets || !lens || !state || !state->active)
+		return -EINVAL;
+	if (extra_packet && extra_len)
+		total_frames++;
+	if (total_frames < 2 ||
+	    total_frames > TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES)
+		return -EINVAL;
+	pending = kcalloc(total_frames, sizeof(*pending), GFP_ATOMIC);
+	if (!pending) {
+		trustix_datapath_rx_worker_alloc_errors++;
+		return -ENOMEM;
+	}
+	for (i = 0; i < frames; i++) {
+		if (!packets[i] || !lens[i]) {
+			ret = -EINVAL;
+			goto out_free_pending;
+		}
+		pending[i].source_packet = packets[i];
+		pending[i].len = lens[i];
+	}
+	if (extra_packet && extra_len) {
+		pending[frames].source_packet = extra_packet;
+		pending[frames].len = extra_len;
+	}
+	skb = trustix_datapath_rx_worker_build_coalesced_gso_skb(
+		target_dev, state, pending, total_frames);
+	if (!skb) {
+		ret = -EOPNOTSUPP;
+		goto out_free_pending;
+	}
+	ret = trustix_datapath_rx_worker_prepare_l2_gso_skb(skb, target_dev);
+	if (ret) {
+		kfree_skb(skb);
+		goto out_free_pending;
+	}
+	if (inline_context) {
+		ret = trustix_datapath_rx_worker_queue_l2_skb_from_hook(
+			NULL, target_dev, &skb, skb->len, total_frames, NULL);
+		if (!ret) {
+			trustix_datapath_rx_worker_count_pair_flushes(
+				total_frames);
+			trustix_datapath_rx_worker_count_pair_packets(
+				total_frames);
+			kfree(pending);
+			return 0;
+		}
+		kfree_skb(skb);
+		trustix_datapath_rx_worker_dropped += total_frames;
+		trustix_datapath_rx_worker_inline_xmit_errors += total_frames;
+		trustix_datapath_rx_worker_inline_pair_errors++;
+		goto out_free_pending;
+	}
+	ret = trustix_datapath_rx_worker_xmit_inner_gso(skb, target_dev, false);
+	if (!ret) {
+		trustix_datapath_rx_worker_count_injected(total_frames);
+		trustix_datapath_rx_worker_count_inline_xmit(total_frames);
+		trustix_datapath_rx_worker_count_pair_flushes(total_frames);
+		trustix_datapath_rx_worker_count_pair_packets(total_frames);
+		trustix_datapath_rx_worker_count_stream_coalesce(
+			1, total_frames);
+		kfree(pending);
+		return 0;
+	}
+	trustix_datapath_rx_worker_dropped += total_frames;
+	trustix_datapath_rx_worker_inline_xmit_errors += total_frames;
+	trustix_datapath_rx_worker_inline_pair_errors++;
+out_free_pending:
+	kfree(pending);
+	return ret;
+}
+
 static void
 trustix_datapath_rx_worker_inline_pair_flush_slot(
 	struct trustix_datapath_rx_worker_inline_pair_slot *slot,
@@ -7323,6 +9955,7 @@ trustix_datapath_rx_worker_inline_pair_flush_slot(
 	__u8 *packets[TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES];
 	__u32 lens[TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES];
 	struct sk_buff *held_skb = NULL;
+	struct trustix_datapath_rx_worker_coalesce_state state = {};
 	unsigned int frames = 0;
 	unsigned int i;
 
@@ -7336,7 +9969,7 @@ trustix_datapath_rx_worker_inline_pair_flush_slot(
 	}
 	trustix_datapath_rx_worker_inline_pair_detach_locked(
 		slot, false, &target_dev, &held_skb, packets, lens, &frames,
-		NULL);
+		&state);
 	spin_unlock_irqrestore(&slot->lock, flags);
 	if (!frames)
 		return;
@@ -7347,6 +9980,19 @@ trustix_datapath_rx_worker_inline_pair_flush_slot(
 		else
 			kfree_skb(held_skb);
 		held_skb = NULL;
+	}
+	if (!held_skb && target_dev && frames > 1 &&
+	    !trustix_datapath_rx_worker_inline_pair_xmit_packets_gso(
+		    target_dev, packets, lens, frames, &state, NULL, 0,
+		    inline_context)) {
+		for (i = 0; i < frames &&
+			    i < TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES;
+		     i++) {
+			kfree(packets[i]);
+			packets[i] = NULL;
+		}
+		dev_put(target_dev);
+		return;
 	}
 	for (i = 0; i < frames &&
 		    i < TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES;
@@ -7471,6 +10117,7 @@ static bool trustix_datapath_rx_worker_inline_pair_coalesce_view(
 	unsigned long flags;
 	__u8 *held_packets[TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES];
 	__u32 held_lens[TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES];
+	struct trustix_datapath_rx_worker_coalesce_state held_state = {};
 	unsigned int held_frames = 0;
 	unsigned int max_frames;
 	unsigned int frames;
@@ -7509,7 +10156,7 @@ static bool trustix_datapath_rx_worker_inline_pair_coalesce_view(
 				trustix_datapath_rx_worker_inline_pair_detach_locked(
 					slot, true, &held_dev, &held_skb,
 					held_packets, held_lens, &held_frames,
-					NULL);
+					&held_state);
 			} else {
 				__u8 *copy = NULL;
 
@@ -7530,7 +10177,7 @@ static bool trustix_datapath_rx_worker_inline_pair_coalesce_view(
 							slot, true, &held_dev,
 							&held_skb, held_packets,
 							held_lens, &held_frames,
-							NULL);
+							&held_state);
 					}
 				} else {
 					copy = kmemdup(view->inner_packet,
@@ -7551,7 +10198,7 @@ static bool trustix_datapath_rx_worker_inline_pair_coalesce_view(
 							slot, true, &held_dev,
 							&held_skb, held_packets,
 							held_lens, &held_frames,
-							NULL);
+							&held_state);
 					}
 				}
 			}
@@ -7559,7 +10206,7 @@ static bool trustix_datapath_rx_worker_inline_pair_coalesce_view(
 			trustix_datapath_rx_worker_inline_pair_misses++;
 			trustix_datapath_rx_worker_inline_pair_detach_locked(
 				slot, true, &held_dev, &held_skb, held_packets,
-				held_lens, &held_frames, NULL);
+				held_lens, &held_frames, &held_state);
 		}
 	}
 	spin_unlock_irqrestore(&slot->lock, flags);
@@ -7620,6 +10267,22 @@ static bool trustix_datapath_rx_worker_inline_pair_coalesce_view(
 		unsigned int delivered = 0;
 		unsigned int fallback_errors = 0;
 
+		ret = trustix_datapath_rx_worker_inline_pair_xmit_packets_gso(
+			held_dev ?: target_dev, held_packets, held_lens,
+			held_frames, &merged, view->inner_packet,
+			view->frame.payload_len, true);
+		if (!ret) {
+			for (i = 0; i < held_frames &&
+				    i < TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES;
+			     i++) {
+				kfree(held_packets[i]);
+				held_packets[i] = NULL;
+			}
+			if (held_dev)
+				dev_put(held_dev);
+			WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, 0);
+			return true;
+		}
 		trustix_datapath_rx_worker_stream_coalesce_inline_queue_fallbacks++;
 		for (i = 0; i < held_frames &&
 			    i < TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES;
@@ -7661,6 +10324,21 @@ static bool trustix_datapath_rx_worker_inline_pair_coalesce_view(
 			trustix_datapath_rx_worker_inline_pair_xmit_skb_frames(
 				held_dev, held_skb, true, held_frames);
 			held_skb = NULL;
+		}
+		if (!held_skb && held_dev && held_frames > 1 &&
+		    !trustix_datapath_rx_worker_inline_pair_xmit_packets_gso(
+			    held_dev, held_packets, held_lens, held_frames,
+			    &held_state, NULL, 0, true)) {
+			for (i = 0; i < held_frames &&
+				    i < TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES;
+			     i++) {
+				kfree(held_packets[i]);
+				held_packets[i] = NULL;
+			}
+			dev_put(held_dev);
+			return trustix_datapath_rx_worker_inline_pair_store(
+				slot, target_dev, target_ifindex, hash, &cur_state,
+				view->inner_packet, view->frame.payload_len);
 		}
 		for (i = 0; i < held_frames &&
 			    i < TRUSTIX_DATAPATH_RX_WORKER_INLINE_PAIR_MAX_FRAMES;
@@ -8131,23 +10809,25 @@ static int trustix_datapath_rx_worker_queue_l2_skb_from_hook(
 		return -EINVAL;
 	if (!frames)
 		frames = 1;
-	if (frames == 1 && !skb_is_gso(*inner_skb) &&
-	    READ_ONCE(trustix_datapath_rx_worker_inline_xmit) &&
-	    READ_ONCE(trustix_datapath_rx_worker_xmit)) {
+	if (READ_ONCE(trustix_datapath_rx_worker_inline_xmit) &&
+	    READ_ONCE(trustix_datapath_rx_worker_xmit) &&
+	    ((frames == 1 && !skb_is_gso(*inner_skb)) ||
+	     (READ_ONCE(trustix_datapath_rx_worker_direct_xmit) &&
+	      skb_is_gso(*inner_skb)))) {
 		skb = *inner_skb;
 		*inner_skb = NULL;
 		ret = trustix_datapath_rx_worker_deliver_inner_skb(
 			skb, target_dev, true);
 		if (!ret) {
-			trustix_datapath_rx_worker_count_injected(1);
-			trustix_datapath_rx_worker_count_inline_xmit(1);
+			trustix_datapath_rx_worker_count_injected(frames);
+			trustix_datapath_rx_worker_count_inline_xmit(frames);
 			WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, 0);
 			if (queued_frames)
-				*queued_frames = 1;
+				*queued_frames = frames;
 			return 0;
 		}
-		trustix_datapath_rx_worker_dropped++;
-		trustix_datapath_rx_worker_inline_xmit_errors++;
+		trustix_datapath_rx_worker_dropped += frames;
+		trustix_datapath_rx_worker_inline_xmit_errors += frames;
 		WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, ret);
 		return ret;
 	}
@@ -8163,9 +10843,16 @@ static int trustix_datapath_rx_worker_queue_l2_skb_from_hook(
 	return 0;
 }
 
+static __always_inline bool
+trustix_datapath_rx_worker_tixt_inner_l4_checksum_valid(__u8 flags)
+{
+	return flags &
+	       TRUSTIX_DATAPATH_TIXT_FLAG_INNER_L4_CHECKSUM_VALID;
+}
+
 static bool trustix_datapath_rx_worker_build_xmit_inner_skb_copy_csum(
 	struct net_device *target_dev, const __u8 *packet, __u32 len,
-	__u32 extra_tailroom,
+	__u32 extra_tailroom, bool trust_inner_l4_checksum,
 	struct sk_buff **inner_skb_out)
 {
 	const struct udphdr *src_udph;
@@ -8181,13 +10868,13 @@ static bool trustix_datapath_rx_worker_build_xmit_inner_skb_copy_csum(
 	__u32 l4_len;
 	__u32 total_len;
 	__u32 alloc_len;
+	bool tcp_partial_csum = false;
 	bool l4_checksum_rebuilt = true;
 
 	if (inner_skb_out)
 		*inner_skb_out = NULL;
 	if (!READ_ONCE(trustix_datapath_rx_worker_inline_xmit_copy_csum) ||
-	    !READ_ONCE(trustix_datapath_rx_worker_xmit_fix_checksums) ||
-	    READ_ONCE(trustix_datapath_rx_worker_xmit_tcp_partial_csum))
+	    !READ_ONCE(trustix_datapath_rx_worker_xmit_fix_checksums))
 		return false;
 	if (!target_dev || !packet || !len || !inner_skb_out ||
 	    len < sizeof(*src_iph) || target_dev->type != ARPHRD_ETHER)
@@ -8242,7 +10929,20 @@ static bool trustix_datapath_rx_worker_build_xmit_inner_skb_copy_csum(
 	switch (iph->protocol) {
 	case IPPROTO_TCP:
 		tcph = (struct tcphdr *)(dst + ip_header_len);
-		if (trustix_datapath_rx_worker_trust_tcp_checksum(
+		if (trust_inner_l4_checksum) {
+			trustix_datapath_rx_worker_checksum_trusted++;
+			trustix_datapath_rx_worker_checksum_ipv4_only++;
+			l4_checksum_rebuilt = false;
+		} else if (READ_ONCE(trustix_datapath_rx_worker_xmit_tcp_partial_csum) &&
+		    trustix_datapath_rx_worker_tcpv4_partial_csum_dev_supported(
+			    target_dev)) {
+			tcph->check = ~csum_tcpudp_magic(
+				iph->saddr, iph->daddr, l4_len, IPPROTO_TCP,
+				0);
+			tcp_partial_csum = true;
+			l4_checksum_rebuilt = false;
+			trustix_datapath_rx_worker_checksum_partial++;
+		} else if (trustix_datapath_rx_worker_trust_tcp_checksum(
 			    iph, ip_header_len, l4_len, &tcph)) {
 			trustix_datapath_rx_worker_checksum_trusted++;
 			trustix_datapath_rx_worker_checksum_ipv4_only++;
@@ -8257,18 +10957,33 @@ static bool trustix_datapath_rx_worker_build_xmit_inner_skb_copy_csum(
 		break;
 	case IPPROTO_UDP:
 		udph = (struct udphdr *)(dst + ip_header_len);
-		udph->check = 0;
-		l4_sum = csum_partial(udph, l4_len, 0);
-		udph->check = csum_tcpudp_magic(iph->saddr, iph->daddr,
-						l4_len, IPPROTO_UDP, l4_sum);
-		if (!udph->check)
-			udph->check = CSUM_MANGLED_0;
+		if (trust_inner_l4_checksum) {
+			trustix_datapath_rx_worker_checksum_trusted++;
+			trustix_datapath_rx_worker_checksum_ipv4_only++;
+			l4_checksum_rebuilt = false;
+		} else {
+			udph->check = 0;
+			l4_sum = csum_partial(udph, l4_len, 0);
+			udph->check = csum_tcpudp_magic(iph->saddr,
+							iph->daddr, l4_len,
+							IPPROTO_UDP, l4_sum);
+			if (!udph->check)
+				udph->check = CSUM_MANGLED_0;
+		}
 		break;
 	default:
 		kfree_skb(inner_skb);
 		return false;
 	}
-	inner_skb->ip_summed = CHECKSUM_UNNECESSARY;
+	if (tcp_partial_csum) {
+		inner_skb->ip_summed = CHECKSUM_PARTIAL;
+		inner_skb->csum_start = (unsigned char *)tcph - inner_skb->head;
+		inner_skb->csum_offset = offsetof(struct tcphdr, check);
+	} else {
+		inner_skb->ip_summed = CHECKSUM_UNNECESSARY;
+		inner_skb->csum_start = 0;
+		inner_skb->csum_offset = 0;
+	}
 	inner_skb->csum = 0;
 	inner_skb->csum_level = 0;
 	skb_reset_network_header(inner_skb);
@@ -8286,8 +11001,9 @@ static bool trustix_datapath_rx_worker_build_xmit_inner_skb_copy_csum(
 	return true;
 }
 
-static int trustix_datapath_rx_worker_build_xmit_inner_skb(
+static int trustix_datapath_rx_worker_build_xmit_inner_skb_flags(
 	struct net_device *target_dev, const __u8 *packet, __u32 len,
+	__u8 tixt_flags,
 	struct sk_buff **inner_skb_out)
 {
 	struct sk_buff *inner_skb;
@@ -8300,7 +11016,10 @@ static int trustix_datapath_rx_worker_build_xmit_inner_skb(
 	if (target_dev->type != ARPHRD_ETHER)
 		return -EPROTONOSUPPORT;
 	if (trustix_datapath_rx_worker_build_xmit_inner_skb_copy_csum(
-		    target_dev, packet, len, 0, inner_skb_out))
+		    target_dev, packet, len, 0,
+		    trustix_datapath_rx_worker_tixt_inner_l4_checksum_valid(
+			    tixt_flags),
+		    inner_skb_out))
 		return 0;
 	trustix_datapath_rx_worker_inline_xmit_copy_csum_fallbacks++;
 	inner_skb = trustix_datapath_rx_worker_build_inner_skb(
@@ -8340,6 +11059,448 @@ static int trustix_datapath_rx_worker_build_xmit_inner_skb(
 	return 0;
 }
 
+static int trustix_datapath_rx_worker_build_xmit_inner_skb(
+	struct net_device *target_dev, const __u8 *packet, __u32 len,
+	struct sk_buff **inner_skb_out)
+{
+	return trustix_datapath_rx_worker_build_xmit_inner_skb_flags(
+		target_dev, packet, len, 0, inner_skb_out);
+}
+
+static unsigned int
+trustix_datapath_rx_worker_single_coalesce_max_frames_value(void)
+{
+	unsigned int value = READ_ONCE(
+		trustix_datapath_rx_worker_single_coalesce_max_frames);
+
+	if (value < 2)
+		return 2;
+	if (value > TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES)
+		return TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES;
+	return value;
+}
+
+static unsigned int
+trustix_datapath_rx_worker_single_coalesce_flush_jiffies_value(void)
+{
+	unsigned int value = READ_ONCE(
+		trustix_datapath_rx_worker_single_coalesce_flush_jiffies);
+
+	if (value > HZ)
+		return HZ;
+	return value;
+}
+
+static void
+trustix_datapath_rx_worker_single_coalesce_detach_locked(
+	struct trustix_datapath_rx_worker_single_coalesce_slot *slot,
+	struct net_device **target_dev, __u8 **packets, __u32 *lens,
+	__u8 *tixt_flags, unsigned int *frames,
+	struct trustix_datapath_rx_worker_coalesce_state *state)
+{
+	unsigned int i;
+
+	if (target_dev)
+		*target_dev = NULL;
+	if (frames)
+		*frames = 0;
+	if (packets) {
+		for (i = 0;
+		     i < TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES;
+		     i++)
+			packets[i] = NULL;
+	}
+	if (lens)
+		memset(lens, 0,
+		       sizeof(__u32) *
+			       TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES);
+	if (tixt_flags)
+		memset(tixt_flags, 0,
+		       sizeof(__u8) *
+			       TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES);
+	if (state)
+		memset(state, 0, sizeof(*state));
+	if (!slot || !slot->valid)
+		return;
+	if (target_dev)
+		*target_dev = slot->target_dev;
+	else if (slot->target_dev)
+		dev_put(slot->target_dev);
+	if (frames)
+		*frames = slot->frames;
+	for (i = 0;
+	     i < TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES; i++) {
+		if (packets)
+			packets[i] = slot->packets[i];
+		else
+			kfree(slot->packets[i]);
+		if (lens)
+			lens[i] = slot->lens[i];
+		if (tixt_flags)
+			tixt_flags[i] = slot->tixt_flags[i];
+		slot->packets[i] = NULL;
+		slot->lens[i] = 0;
+		slot->tixt_flags[i] = 0;
+	}
+	if (state)
+		*state = slot->state;
+	slot->valid = false;
+	slot->target_dev = NULL;
+	slot->target_ifindex = 0;
+	slot->hash = 0;
+	slot->frames = 0;
+	memset(&slot->state, 0, sizeof(slot->state));
+}
+
+static bool
+trustix_datapath_rx_worker_single_coalesce_store_locked(
+	struct trustix_datapath_rx_worker_single_coalesce_slot *slot,
+	struct net_device *target_dev, int target_ifindex, __u32 hash,
+	const struct trustix_datapath_rx_worker_coalesce_state *state,
+	__u8 **packet, __u32 len, __u8 tixt_flags)
+{
+	if (!slot || !target_dev || !state || !state->active || !packet ||
+	    !*packet || !len || slot->valid)
+		return false;
+	dev_hold(target_dev);
+	slot->valid = true;
+	slot->target_dev = target_dev;
+	slot->target_ifindex = target_ifindex;
+	slot->hash = hash;
+	slot->state = *state;
+	slot->packets[0] = *packet;
+	slot->lens[0] = len;
+	slot->tixt_flags[0] = tixt_flags;
+	slot->frames = 1;
+	*packet = NULL;
+	trustix_datapath_rx_worker_count_single_coalesce_stored(1);
+	return true;
+}
+
+static void trustix_datapath_rx_worker_single_coalesce_free_packets(
+	struct net_device *target_dev, __u8 **packets, unsigned int frames)
+{
+	unsigned int i;
+
+	for (i = 0;
+	     i < frames &&
+	     i < TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES;
+	     i++) {
+		kfree(packets[i]);
+		packets[i] = NULL;
+	}
+	if (target_dev)
+		dev_put(target_dev);
+}
+
+static int trustix_datapath_rx_worker_single_coalesce_xmit_singles(
+	struct net_device *target_dev, __u8 **packets, __u32 *lens,
+	__u8 *tixt_flags, unsigned int frames)
+{
+	unsigned int delivered = 0;
+	unsigned int errors = 0;
+	unsigned int i;
+
+	if (!target_dev || !packets || !lens || !frames)
+		return -EINVAL;
+	for (i = 0;
+	     i < frames &&
+	     i < TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES;
+	     i++) {
+		struct sk_buff *inner_skb = NULL;
+		int ret;
+
+		if (!packets[i] || !lens[i])
+			continue;
+		ret = trustix_datapath_rx_worker_build_xmit_inner_skb_flags(
+			target_dev, packets[i], lens[i],
+			tixt_flags ? tixt_flags[i] : 0, &inner_skb);
+		if (!ret)
+			ret = trustix_datapath_rx_worker_queue_l2_skb_from_hook(
+				NULL, target_dev, &inner_skb,
+				inner_skb ? inner_skb->len : 0, 1, NULL);
+		kfree_skb(inner_skb);
+		if (ret) {
+			errors++;
+			trustix_datapath_rx_worker_single_coalesce_errors++;
+			continue;
+		}
+		delivered++;
+	}
+	if (delivered)
+		trustix_datapath_rx_worker_count_single_coalesce_flushes(
+			delivered);
+	if (errors)
+		return -ENOBUFS;
+	return delivered ? 0 : -EINVAL;
+}
+
+static int trustix_datapath_rx_worker_single_coalesce_xmit_packets(
+	struct net_device *target_dev, __u8 **packets, __u32 *lens,
+	__u8 *tixt_flags, unsigned int frames,
+	const struct trustix_datapath_rx_worker_coalesce_state *state)
+{
+	struct trustix_datapath_rx_worker_pending_copy
+		pending[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	struct sk_buff *skb = NULL;
+	unsigned int i;
+	int ret;
+
+	if (!target_dev || !packets || !lens || !state || !state->active ||
+	    !frames ||
+	    frames > TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES)
+		return -EINVAL;
+	if (frames < 2)
+		return trustix_datapath_rx_worker_single_coalesce_xmit_singles(
+			target_dev, packets, lens, tixt_flags, frames);
+	memset(pending, 0, sizeof(pending));
+	for (i = 0; i < frames; i++) {
+		if (!packets[i] || !lens[i])
+			return -EINVAL;
+		pending[i].source_packet = packets[i];
+		pending[i].len = lens[i];
+	}
+	skb = trustix_datapath_rx_worker_build_coalesced_gso_skb(
+		target_dev, state, pending, frames);
+	if (!skb) {
+		trustix_datapath_rx_worker_single_coalesce_errors++;
+		return trustix_datapath_rx_worker_single_coalesce_xmit_singles(
+			target_dev, packets, lens, tixt_flags, frames);
+	}
+	ret = trustix_datapath_rx_worker_prepare_l2_gso_skb(skb, target_dev);
+	if (!ret)
+		ret = trustix_datapath_rx_worker_queue_l2_skb_from_hook(
+			NULL, target_dev, &skb, skb ? skb->len : 0, frames,
+			NULL);
+	kfree_skb(skb);
+	if (!ret) {
+		trustix_datapath_rx_worker_count_single_coalesce(1, frames);
+		trustix_datapath_rx_worker_count_stream_coalesce(1, frames);
+		return 0;
+	}
+	trustix_datapath_rx_worker_single_coalesce_errors++;
+	return trustix_datapath_rx_worker_single_coalesce_xmit_singles(
+		target_dev, packets, lens, tixt_flags, frames);
+}
+
+static void
+trustix_datapath_rx_worker_single_coalesce_flush_detached(
+	struct net_device *target_dev, __u8 **packets, __u32 *lens,
+	__u8 *tixt_flags, unsigned int frames,
+	const struct trustix_datapath_rx_worker_coalesce_state *state)
+{
+	if (frames && target_dev)
+		trustix_datapath_rx_worker_single_coalesce_xmit_packets(
+			target_dev, packets, lens, tixt_flags, frames, state);
+	trustix_datapath_rx_worker_single_coalesce_free_packets(target_dev,
+								packets,
+								frames);
+}
+
+static void
+trustix_datapath_rx_worker_single_coalesce_flush_slot(
+	struct trustix_datapath_rx_worker_single_coalesce_slot *slot)
+{
+	struct net_device *target_dev = NULL;
+	unsigned long flags;
+	__u8 *packets[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	__u32 lens[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	__u8 tixt_flags[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	struct trustix_datapath_rx_worker_coalesce_state state = {};
+	unsigned int frames = 0;
+
+	if (!slot)
+		return;
+	spin_lock_irqsave(&slot->lock, flags);
+	trustix_datapath_rx_worker_single_coalesce_detach_locked(
+		slot, &target_dev, packets, lens, tixt_flags, &frames,
+		&state);
+	spin_unlock_irqrestore(&slot->lock, flags);
+	trustix_datapath_rx_worker_single_coalesce_flush_detached(
+		target_dev, packets, lens, tixt_flags, frames, &state);
+}
+
+static void trustix_datapath_rx_worker_single_coalesce_flush_work(
+	struct work_struct *work)
+{
+	struct delayed_work *dwork = to_delayed_work(work);
+	struct trustix_datapath_rx_worker_single_coalesce_slot *slot =
+		container_of(
+			dwork,
+			struct trustix_datapath_rx_worker_single_coalesce_slot,
+			flush_work);
+
+	trustix_datapath_rx_worker_single_coalesce_flush_slot(slot);
+}
+
+static void trustix_datapath_rx_worker_single_coalesce_drop_all(void)
+{
+	struct net_device *target_dev = NULL;
+	unsigned long flags;
+	__u8 *packets[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	__u32 lens[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	__u8 tixt_flags[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	unsigned int frames = 0;
+	unsigned int i;
+	unsigned int j;
+
+	for (i = 0; i < TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_SLOTS; i++) {
+		struct trustix_datapath_rx_worker_single_coalesce_slot *slot =
+			&trustix_datapath_rx_worker_single_coalesce_slots[i];
+
+		cancel_delayed_work_sync(&slot->flush_work);
+		spin_lock_irqsave(&slot->lock, flags);
+		trustix_datapath_rx_worker_single_coalesce_detach_locked(
+			slot, &target_dev, packets, lens, tixt_flags, &frames,
+			NULL);
+		spin_unlock_irqrestore(&slot->lock, flags);
+		for (j = 0;
+		     j < frames &&
+		     j < TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES;
+		     j++)
+			kfree(packets[j]);
+		if (target_dev)
+			dev_put(target_dev);
+		target_dev = NULL;
+		frames = 0;
+	}
+}
+
+static bool trustix_datapath_rx_worker_single_coalesce_view(
+	struct net_device *target_dev,
+	const struct trustix_datapath_rx_stage_view *view,
+	int target_ifindex)
+{
+	struct trustix_datapath_rx_worker_coalesce_state cur_state = {};
+	struct trustix_datapath_rx_worker_coalesce_state merged = {};
+	struct trustix_datapath_rx_worker_single_coalesce_slot *slot;
+	struct net_device *held_dev = NULL;
+	__u8 *held_packets[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	__u32 held_lens[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	__u8 held_flags[TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES];
+	struct trustix_datapath_rx_worker_coalesce_state held_state = {};
+	unsigned int held_frames = 0;
+	unsigned int max_frames;
+	unsigned long flags;
+	__u8 *packet = NULL;
+	__u32 hash;
+	bool appended = false;
+	bool flush_with_current = false;
+	bool stored = false;
+	int ret;
+
+	if (!READ_ONCE(trustix_datapath_rx_worker_single_coalesce) ||
+	    !READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_gso) ||
+	    !READ_ONCE(trustix_datapath_rx_worker_xmit) ||
+	    !READ_ONCE(trustix_datapath_rx_worker_inline_xmit) ||
+	    !target_dev || !view || !view->inner_packet ||
+	    view->inner.protocol != IPPROTO_TCP || !view->frame.payload_len ||
+	    target_dev->type != ARPHRD_ETHER ||
+	    !trustix_datapath_dev_supports_tcpv4_gso(target_dev))
+		return false;
+	packet = kmemdup(view->inner_packet, view->frame.payload_len,
+			 GFP_ATOMIC);
+	if (!packet) {
+		trustix_datapath_rx_worker_alloc_errors++;
+		trustix_datapath_rx_worker_single_coalesce_errors++;
+		return false;
+	}
+	ret = trustix_datapath_rx_worker_coalesce_accept(
+		&cur_state, packet, view->frame.payload_len);
+	if (ret)
+		goto miss;
+	hash = trustix_datapath_rx_worker_inline_pair_hash(&cur_state,
+							  target_ifindex);
+	slot = &trustix_datapath_rx_worker_single_coalesce_slots
+			[hash & (TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_SLOTS - 1)];
+	max_frames = trustix_datapath_rx_worker_single_coalesce_max_frames_value();
+
+	spin_lock_irqsave(&slot->lock, flags);
+	if (slot->valid) {
+		merged = slot->state;
+		if (slot->target_dev == target_dev &&
+		    slot->target_ifindex == target_ifindex &&
+		    slot->hash == hash &&
+		    !trustix_datapath_rx_worker_coalesce_accept(
+			    &merged, packet, view->frame.payload_len)) {
+			if (slot->frames + 1 >= max_frames) {
+				trustix_datapath_rx_worker_single_coalesce_detach_locked(
+					slot, &held_dev, held_packets,
+					held_lens, held_flags, &held_frames,
+					&held_state);
+				held_state = merged;
+				flush_with_current = true;
+			} else if (slot->frames <
+				   TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES) {
+				slot->state = merged;
+				slot->packets[slot->frames] = packet;
+				slot->lens[slot->frames] =
+					view->frame.payload_len;
+				slot->tixt_flags[slot->frames] =
+					view->frame.flags;
+				slot->frames++;
+				packet = NULL;
+				appended = true;
+				trustix_datapath_rx_worker_count_single_coalesce_stored(1);
+			}
+		} else {
+			trustix_datapath_rx_worker_single_coalesce_misses++;
+			trustix_datapath_rx_worker_single_coalesce_detach_locked(
+				slot, &held_dev, held_packets, held_lens,
+				held_flags, &held_frames, &held_state);
+			stored =
+				trustix_datapath_rx_worker_single_coalesce_store_locked(
+					slot, target_dev, target_ifindex, hash,
+					&cur_state, &packet,
+					view->frame.payload_len,
+					view->frame.flags);
+		}
+	} else {
+		stored =
+			trustix_datapath_rx_worker_single_coalesce_store_locked(
+				slot, target_dev, target_ifindex, hash,
+				&cur_state, &packet, view->frame.payload_len,
+				view->frame.flags);
+	}
+	spin_unlock_irqrestore(&slot->lock, flags);
+
+	if (appended || stored) {
+		mod_delayed_work(
+			system_wq, &slot->flush_work,
+			trustix_datapath_rx_worker_single_coalesce_flush_jiffies_value());
+		trustix_datapath_rx_worker_single_coalesce_flush_detached(
+			held_dev, held_packets, held_lens, held_flags,
+			held_frames, &held_state);
+		kfree(packet);
+		return true;
+	}
+
+	if (flush_with_current) {
+		if (held_frames <
+		    TRUSTIX_DATAPATH_RX_WORKER_SINGLE_COALESCE_MAX_FRAMES) {
+			held_packets[held_frames] = packet;
+			held_lens[held_frames] = view->frame.payload_len;
+			held_flags[held_frames] = view->frame.flags;
+			held_frames++;
+			packet = NULL;
+			trustix_datapath_rx_worker_count_single_coalesce_stored(1);
+		}
+		trustix_datapath_rx_worker_single_coalesce_flush_detached(
+			held_dev, held_packets, held_lens, held_flags,
+			held_frames, &held_state);
+		kfree(packet);
+		return true;
+	}
+
+miss:
+	kfree(packet);
+	if (held_frames || held_dev)
+		trustix_datapath_rx_worker_single_coalesce_flush_detached(
+			held_dev, held_packets, held_lens, held_flags,
+			held_frames, &held_state);
+	return false;
+}
+
 static bool trustix_datapath_rx_worker_build_xmit_inner_skb_hold(
 	struct net_device *target_dev, const __u8 *packet, __u32 len,
 	__u32 extra_tailroom, struct sk_buff **inner_skb_out)
@@ -8349,17 +11510,9 @@ static bool trustix_datapath_rx_worker_build_xmit_inner_skb_hold(
 	if (!READ_ONCE(trustix_datapath_rx_worker_inline_pair_hold_skb) ||
 	    READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_partial_csum))
 		return false;
-	/*
-	 * Holding a prepared skb across a netfilter hook and delayed pair slot
-	 * has repeatedly rebooted public A/B hosts under ACKless TCP. Keep the
-	 * knob as a compatibility request, but use the packet-copy pair path so
-	 * the rest of inline pair coalescing/GSO remains testable and stable.
-	 */
-	(void)target_dev;
-	(void)packet;
-	(void)len;
-	(void)extra_tailroom;
-	return false;
+	return trustix_datapath_rx_worker_build_xmit_inner_skb_copy_csum(
+		target_dev, packet, len, extra_tailroom, false,
+		inner_skb_out);
 }
 
 static int trustix_datapath_rx_worker_inline_pair_xmit_skb_frames(
@@ -8395,8 +11548,8 @@ static int trustix_datapath_rx_worker_inline_pair_xmit_skb_frames(
 		return ret;
 	}
 	if (skb_is_gso(skb)) {
-		ret = trustix_datapath_rx_worker_xmit_inner_gso_segments(
-			skb, target_dev);
+		ret = trustix_datapath_rx_worker_xmit_inner_gso(
+			skb, target_dev, false);
 		if (!ret) {
 			trustix_datapath_rx_worker_count_injected(frames);
 			if (inline_context)
@@ -8509,14 +11662,248 @@ static int trustix_datapath_rx_worker_inline_pair_append_held_skb(
 	return 0;
 }
 
+static int trustix_datapath_rx_worker_queue_stream_gso_from_pending(
+	struct sk_buff *source_skb, struct net_device *target_dev,
+	struct trustix_datapath_rx_worker_pending_copy *pending,
+	unsigned int frames, unsigned int *queued_frames)
+{
+	struct trustix_datapath_rx_worker_coalesce_state coalesce = {};
+	struct sk_buff *inner_skb = NULL;
+	unsigned int queued = 0;
+	unsigned int i;
+	int ret;
+
+	if (queued_frames)
+		*queued_frames = 0;
+	if (!READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_gso) ||
+	    !READ_ONCE(trustix_datapath_rx_worker_xmit) ||
+	    !source_skb || !target_dev || !pending || frames < 2)
+		return -EOPNOTSUPP;
+	if (target_dev->type != ARPHRD_ETHER)
+		return -EPROTONOSUPPORT;
+	for (i = 0; i < frames; i++) {
+		const __u8 *packet = pending[i].source_packet ?: pending[i].packet;
+
+		ret = trustix_datapath_rx_worker_coalesce_accept(
+			&coalesce, packet, pending[i].len);
+		if (ret) {
+			trustix_datapath_rx_worker_stream_direct_gso_fallbacks++;
+			return ret;
+		}
+	}
+	inner_skb = trustix_datapath_rx_worker_build_coalesced_gso_skb(
+		target_dev, &coalesce, pending, frames);
+	if (!inner_skb) {
+		trustix_datapath_rx_worker_stream_direct_gso_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+	ret = trustix_datapath_rx_worker_prepare_l2_gso_skb(inner_skb,
+							   target_dev);
+	if (ret) {
+		kfree_skb(inner_skb);
+		trustix_datapath_rx_worker_stream_direct_gso_errors++;
+		return ret;
+	}
+	ret = trustix_datapath_rx_worker_queue_l2_skb_from_hook(
+		source_skb, target_dev, &inner_skb, inner_skb->len, frames,
+		&queued);
+	if (ret) {
+		kfree_skb(inner_skb);
+		trustix_datapath_rx_worker_stream_direct_gso_errors++;
+		return ret;
+	}
+	trustix_datapath_rx_worker_stream_direct_gso_packets++;
+	trustix_datapath_rx_worker_stream_direct_gso_frames += frames;
+	trustix_datapath_rx_worker_count_stream_coalesce(1, frames);
+	if (queued_frames)
+		*queued_frames = queued ?: frames;
+	WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, 0);
+	return 0;
+}
+
+static int trustix_datapath_rx_worker_inline_steal_xmit_view(
+	struct sk_buff *skb, const struct trustix_datapath_rx_stage_view *view,
+	struct net_device *target_dev, bool *stolen)
+{
+	struct udphdr *udph;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
+	__u32 ip_header_len;
+	__u32 l4_len;
+	__u32 total_len;
+	__u32 end;
+	int ret;
+
+	if (stolen)
+		*stolen = false;
+	if (!READ_ONCE(trustix_datapath_rx_worker_steal_skb) ||
+	    !READ_ONCE(trustix_datapath_rx_worker_inline_stolen) ||
+	    !READ_ONCE(trustix_datapath_rx_worker_xmit))
+		return -EOPNOTSUPP;
+	if (!skb || !view || !target_dev || !view->inner_packet ||
+	    !view->frame.payload_len)
+		return -EINVAL;
+	if (!trustix_datapath_rx_worker_dev_ready(target_dev))
+		return -ENETDOWN;
+	if (target_dev->type != ARPHRD_ETHER)
+		return -EPROTONOSUPPORT;
+	if (skb_cloned(skb) || skb_shared(skb) || skb_header_cloned(skb) ||
+	    skb_is_nonlinear(skb)) {
+		trustix_datapath_rx_worker_steal_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+	if (view->inner_offset > skb_headlen(skb) ||
+	    view->frame.payload_len > skb_headlen(skb) - view->inner_offset) {
+		trustix_datapath_rx_worker_steal_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+	if (check_add_overflow(view->inner_offset, view->frame.payload_len,
+			       &end) ||
+	    end > skb->len) {
+		trustix_datapath_rx_worker_steal_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+	if (target_dev->mtu && view->frame.payload_len > target_dev->mtu) {
+		trustix_datapath_rx_worker_steal_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+	if (skb_headroom(skb) + view->inner_offset < ETH_HLEN) {
+		trustix_datapath_rx_worker_steal_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+
+	iph = (struct iphdr *)(skb->data + view->inner_offset);
+	if (view->frame.payload_len < sizeof(*iph) || iph->version != 4 ||
+	    iph->ihl < 5 || (iph->frag_off & htons(0x3fff))) {
+		trustix_datapath_rx_worker_steal_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+	ip_header_len = iph->ihl * 4;
+	if (ip_header_len < sizeof(*iph) ||
+	    view->frame.payload_len < ip_header_len) {
+		trustix_datapath_rx_worker_steal_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+	total_len = ntohs(iph->tot_len);
+	if (total_len != view->frame.payload_len ||
+	    total_len < ip_header_len) {
+		trustix_datapath_rx_worker_steal_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+	l4_len = total_len - ip_header_len;
+	switch (iph->protocol) {
+	case IPPROTO_TCP:
+		if (l4_len < sizeof(*tcph)) {
+			trustix_datapath_rx_worker_steal_fallbacks++;
+			return -EOPNOTSUPP;
+		}
+		tcph = (struct tcphdr *)((__u8 *)iph + ip_header_len);
+		if (tcph->doff < 5 || l4_len < (__u32)tcph->doff * 4) {
+			trustix_datapath_rx_worker_steal_fallbacks++;
+			return -EOPNOTSUPP;
+		}
+		break;
+	case IPPROTO_UDP:
+		if (l4_len < sizeof(*udph)) {
+			trustix_datapath_rx_worker_steal_fallbacks++;
+			return -EOPNOTSUPP;
+		}
+		udph = (struct udphdr *)((__u8 *)iph + ip_header_len);
+		if (ntohs(udph->len) < sizeof(*udph) ||
+		    ntohs(udph->len) > l4_len) {
+			trustix_datapath_rx_worker_steal_fallbacks++;
+			return -EOPNOTSUPP;
+		}
+		break;
+	default:
+		trustix_datapath_rx_worker_steal_fallbacks++;
+		return -EOPNOTSUPP;
+	}
+
+	skb_pull(skb, view->inner_offset);
+	skb_trim(skb, view->frame.payload_len);
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, ip_header_len);
+	skb->protocol = htons(ETH_P_IP);
+	skb->pkt_type = PACKET_OUTGOING;
+	skb->encapsulation = 0;
+	skb->csum = 0;
+	skb->csum_level = 0;
+	skb_reset_inner_headers(skb);
+
+	if (trustix_datapath_rx_worker_tixt_inner_l4_checksum_valid(
+		    view->frame.flags)) {
+		iph = ip_hdr(skb);
+		trustix_datapath_rx_worker_fix_ipv4_header_checksum(
+			iph, ip_header_len);
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		skb->csum_start = 0;
+		skb->csum_offset = 0;
+		trustix_datapath_rx_worker_checksum_trusted++;
+		trustix_datapath_rx_worker_checksum_ipv4_only++;
+	} else {
+		trustix_datapath_rx_worker_prepare_inner_skb(skb, target_dev,
+							    true);
+		ret = trustix_datapath_rx_worker_fix_inner_checksums(skb);
+		if (ret) {
+			if (stolen)
+				*stolen = true;
+			kfree_skb(skb);
+			trustix_datapath_rx_worker_checksum_errors++;
+			trustix_datapath_rx_worker_steal_errors++;
+			trustix_datapath_rx_worker_dropped++;
+			WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret,
+				   ret);
+			return 0;
+		}
+	}
+
+	if (skb_headroom(skb) < ETH_HLEN) {
+		if (stolen)
+			*stolen = true;
+		kfree_skb(skb);
+		trustix_datapath_rx_worker_steal_errors++;
+		trustix_datapath_rx_worker_dropped++;
+		WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, -ENOSPC);
+		return 0;
+	}
+	skb_push(skb, ETH_HLEN);
+	skb_reset_mac_header(skb);
+	skb_set_network_header(skb, ETH_HLEN);
+	skb_set_transport_header(skb, ETH_HLEN + ip_header_len);
+	skb->mac_len = ETH_HLEN;
+	trustix_datapath_rx_worker_fill_inner_eth(skb, target_dev, true);
+
+	if (stolen)
+		*stolen = true;
+	ret = trustix_datapath_rx_worker_deliver_inner_skb(skb, target_dev,
+							   true);
+	if (!ret) {
+		trustix_datapath_rx_worker_stolen++;
+		trustix_datapath_rx_worker_inline_injected++;
+		trustix_datapath_rx_worker_count_injected(1);
+		trustix_datapath_rx_worker_count_inline_xmit(1);
+		WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, 0);
+		return 0;
+	}
+	trustix_datapath_rx_worker_steal_errors++;
+	trustix_datapath_rx_worker_inline_errors++;
+	trustix_datapath_rx_worker_dropped++;
+	WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, ret);
+	return 0;
+}
+
 static int trustix_datapath_rx_worker_inline_xmit_view(
 	struct sk_buff *skb, const struct trustix_datapath_rx_stage_view *view,
-	int target_ifindex, struct net_device *target_dev_hint)
+	int target_ifindex, struct net_device *target_dev_hint,
+	bool *stolen)
 {
 	struct net_device *target_dev = NULL;
 	struct sk_buff *inner_skb = NULL;
 	int ret;
 
+	if (stolen)
+		*stolen = false;
 	if (!READ_ONCE(trustix_datapath_rx_worker_inline_xmit) ||
 	    !READ_ONCE(trustix_datapath_rx_worker_xmit))
 		return -EOPNOTSUPP;
@@ -8537,14 +11924,24 @@ static int trustix_datapath_rx_worker_inline_xmit_view(
 		ret = -ENETDOWN;
 		goto out;
 	}
+	ret = trustix_datapath_rx_worker_inline_steal_xmit_view(
+		skb, view, target_dev, stolen);
+	if (!ret) {
+		goto out;
+	}
+	if (trustix_datapath_rx_worker_single_coalesce_view(
+		    target_dev, view, target_ifindex)) {
+		ret = 0;
+		goto out;
+	}
 	if (trustix_datapath_rx_worker_inline_pair_coalesce_view(
 		    target_dev, view, target_ifindex)) {
 		ret = 0;
 		goto out;
 	}
-	ret = trustix_datapath_rx_worker_build_xmit_inner_skb(
+	ret = trustix_datapath_rx_worker_build_xmit_inner_skb_flags(
 		target_dev, view->inner_packet, view->frame.payload_len,
-		&inner_skb);
+		view->frame.flags, &inner_skb);
 	if (ret)
 		goto out;
 	ret = trustix_datapath_rx_worker_queue_l2_skb_from_hook(
@@ -8668,9 +12065,6 @@ trustix_datapath_rx_worker_inline_xmit_stream_copy(
 		ret = -EIO;
 		goto error;
 	}
-	if (frames > 1 &&
-	    READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_gso))
-		trustix_datapath_rx_worker_stream_coalesce_inline_queue_fallbacks++;
 	for (i = 0; i < frames; i++) {
 		ret = trustix_datapath_rx_worker_build_xmit_inner_skb(
 			target_dev, pending[i].source_packet, pending[i].len,
@@ -8820,8 +12214,20 @@ trustix_datapath_rx_worker_push_stream_batch_copy(
 		goto error;
 	}
 	if (frames > 1 &&
-	    READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_gso))
+	    READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_gso)) {
+		ret = trustix_datapath_rx_worker_queue_stream_gso_from_pending(
+			skb, target_dev, pending, frames, &queued);
+		if (!ret) {
+			if (queued_frames)
+				*queued_frames = queued ?: frames;
+			trustix_datapath_rx_worker_count_stream_batch(
+				1, queued ?: frames);
+			kfree(pending);
+			dev_put(target_dev);
+			return 0;
+		}
 		trustix_datapath_rx_worker_stream_coalesce_inline_queue_fallbacks++;
+	}
 	ret = trustix_datapath_rx_worker_materialize_pending_copies(
 		target_dev, pending, frames);
 	if (ret)
@@ -8882,6 +12288,7 @@ trustix_datapath_rx_worker_push_stream(
 	__u32 total_len;
 	__u32 tixt_offset;
 	__u32 remaining;
+	__u16 transport_len;
 	unsigned int frames = 0;
 	bool inline_xmit_needs_batch = false;
 	int ret;
@@ -8892,9 +12299,9 @@ trustix_datapath_rx_worker_push_stream(
 		return -EOPNOTSUPP;
 	if (!READ_ONCE(trustix_datapath_rx_worker_inject))
 		return -EOPNOTSUPP;
-	if (!skb || !outer || outer->protocol != IPPROTO_TCP)
+	if (!skb || !outer)
 		return -EINVAL;
-	if (ip_header_len != 20 || l4_header_len != 20)
+	if (ip_header_len != 20)
 		return -EPROTONOSUPPORT;
 	network = skb_network_header(skb);
 	if (!network)
@@ -8902,7 +12309,24 @@ trustix_datapath_rx_worker_push_stream(
 	total_len = trustix_datapath_get_be16(network + 2);
 	if (total_len > skb->len)
 		return -EMSGSIZE;
-	tixt_offset = 40;
+	switch (outer->protocol) {
+	case IPPROTO_UDP:
+		if (l4_header_len != 8)
+			return -EPROTONOSUPPORT;
+		transport_len = trustix_datapath_get_be16(network + 24);
+		if (transport_len < 8 ||
+		    (__u32)transport_len != total_len - ip_header_len)
+			return -EMSGSIZE;
+		tixt_offset = 28;
+		break;
+	case IPPROTO_TCP:
+		if (l4_header_len != 20)
+			return -EPROTONOSUPPORT;
+		tixt_offset = 40;
+		break;
+	default:
+		return -EPROTONOSUPPORT;
+	}
 	if (total_len < tixt_offset + TRUSTIX_DATAPATH_MIN_FRAME_HEADER_LEN)
 		return -EPROTONOSUPPORT;
 	inline_xmit_needs_batch =
@@ -8965,8 +12389,11 @@ trustix_datapath_rx_worker_push_stream(
 		return -ENODATA;
 	if (READ_ONCE(trustix_datapath_rx_worker_inline_xmit) &&
 	    READ_ONCE(trustix_datapath_rx_worker_xmit)) {
-		if (inline_xmit_needs_batch) {
-			trustix_datapath_rx_worker_stream_inline_batch_fallbacks++;
+		if (inline_xmit_needs_batch ||
+		    (frames > 1 &&
+		     READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_gso))) {
+			if (inline_xmit_needs_batch)
+				trustix_datapath_rx_worker_stream_inline_batch_fallbacks++;
 			ret = trustix_datapath_rx_worker_push_stream_batch_copy(
 				skb, outer, total_len, tixt_offset, frames,
 				target_ifindex, queued_frames, true);
@@ -9800,6 +13227,7 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 	bool rx_worker = false;
 	bool worker_queued = false;
 	bool worker_defer_stolen = false;
+	bool worker_inline_stolen = false;
 	bool worker_stream_queued = false;
 	struct net_device *worker_defer_target_dev = NULL;
 	unsigned int worker_stream_frames = 0;
@@ -9872,7 +13300,8 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 				&rx_view);
 			rx_prepared = !outer_ret;
 			if (outer_ret == -EMSGSIZE && rx_worker &&
-			    classify.protocol == IPPROTO_TCP &&
+			    (classify.protocol == IPPROTO_TCP ||
+			     classify.protocol == IPPROTO_UDP) &&
 			    READ_ONCE(trustix_datapath_rx_worker_stream_tcp)) {
 				worker_ret = trustix_datapath_rx_worker_push_stream(
 					skb, &classify, ip_header_len,
@@ -9908,7 +13337,8 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 				worker_ret =
 					trustix_datapath_rx_worker_inline_xmit_view(
 						skb, &rx_view, target_ifindex,
-						target_dev_hint);
+						target_dev_hint,
+						&worker_inline_stolen);
 			else
 				worker_ret = trustix_datapath_rx_worker_push(
 					skb, &rx_view, &worker_defer_stolen,
@@ -10008,6 +13438,8 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 	}
 	if (worker_defer_target_dev)
 		dev_put(worker_defer_target_dev);
+	if (worker_inline_stolen)
+		return NF_STOLEN;
 	return worker_queued ? NF_DROP : NF_ACCEPT;
 }
 
@@ -10226,9 +13658,17 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_stream_coalesce_segment_batches = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_skbs = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_errors = 0;
+	trustix_datapath_rx_worker_gso_xmit_packets = 0;
+	trustix_datapath_rx_worker_gso_xmit_segments = 0;
+	trustix_datapath_rx_worker_gso_xmit_fallbacks = 0;
+	trustix_datapath_rx_worker_gso_xmit_errors = 0;
 	trustix_datapath_rx_worker_stream_coalesce_partial_csum_fallbacks = 0;
 	trustix_datapath_rx_worker_stream_coalesce_checksum_fallbacks = 0;
 	trustix_datapath_rx_worker_stream_coalesce_inline_queue_fallbacks = 0;
+	trustix_datapath_rx_worker_stream_direct_gso_packets = 0;
+	trustix_datapath_rx_worker_stream_direct_gso_frames = 0;
+	trustix_datapath_rx_worker_stream_direct_gso_fallbacks = 0;
+	trustix_datapath_rx_worker_stream_direct_gso_errors = 0;
 	trustix_datapath_rx_worker_stream_coalesce_last_len = 0;
 	trustix_datapath_rx_worker_stream_coalesce_last_gso_size = 0;
 	trustix_datapath_rx_worker_stream_coalesce_last_gso_segs = 0;
@@ -10240,11 +13680,21 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_inline_pair_flushes = 0;
 	trustix_datapath_rx_worker_inline_pair_misses = 0;
 	trustix_datapath_rx_worker_inline_pair_errors = 0;
+	trustix_datapath_rx_worker_single_coalesce_stored = 0;
+	trustix_datapath_rx_worker_single_coalesce_packets = 0;
+	trustix_datapath_rx_worker_single_coalesce_frames = 0;
+	trustix_datapath_rx_worker_single_coalesce_flushes = 0;
+	trustix_datapath_rx_worker_single_coalesce_misses = 0;
+	trustix_datapath_rx_worker_single_coalesce_errors = 0;
 	trustix_datapath_tx_plaintext_packets = 0;
 	trustix_datapath_tx_plaintext_bytes = 0;
 	trustix_datapath_tx_plaintext_gso_skips = 0;
 	trustix_datapath_tx_plaintext_gso_segments = 0;
 	trustix_datapath_tx_plaintext_gso_errors = 0;
+	trustix_datapath_tx_plaintext_outer_gso_packets = 0;
+	trustix_datapath_tx_plaintext_outer_gso_segments = 0;
+	trustix_datapath_tx_plaintext_outer_gso_fallbacks = 0;
+	trustix_datapath_tx_plaintext_outer_gso_errors = 0;
 	trustix_datapath_tx_plaintext_encrypted_skips = 0;
 	trustix_datapath_tx_plaintext_route_misses = 0;
 	trustix_datapath_tx_plaintext_no_routes = 0;
@@ -10270,6 +13720,15 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_xmit_errors = 0;
 	trustix_datapath_tx_plaintext_inline_xmit_packets = 0;
 	trustix_datapath_tx_plaintext_inline_xmit_errors = 0;
+	trustix_datapath_tx_plaintext_direct_xmit_packets = 0;
+	trustix_datapath_tx_plaintext_direct_xmit_errors = 0;
+	trustix_datapath_tx_plaintext_direct_xmit_fallbacks = 0;
+	trustix_datapath_tx_plaintext_direct_xmit_neigh_misses = 0;
+	trustix_datapath_tx_plaintext_stream_coalesce_packets = 0;
+	trustix_datapath_tx_plaintext_stream_coalesce_frames = 0;
+	trustix_datapath_tx_plaintext_stream_coalesce_stored = 0;
+	trustix_datapath_tx_plaintext_stream_coalesce_misses = 0;
+	trustix_datapath_tx_plaintext_stream_coalesce_errors = 0;
 	trustix_datapath_tx_plaintext_queued = 0;
 	trustix_datapath_tx_plaintext_queue_drops = 0;
 	trustix_datapath_tx_plaintext_queue_work_calls = 0;
@@ -11451,11 +14910,11 @@ restore:
 }
 
 static void
-trustix_datapath_build_tixt(__u8 *wire, __u8 flags, __u64 flow_id,
-			    __u64 epoch, __u64 sequence, __u32 payload_len,
-			    __u16 fragment_index, __u16 fragment_count)
+trustix_datapath_build_tixt_header(__u8 *wire, __u8 flags, __u64 flow_id,
+				   __u64 epoch, __u64 sequence,
+				   __u32 payload_len, __u16 fragment_index,
+				   __u16 fragment_count)
 {
-	memset(wire, 0, TRUSTIX_DATAPATH_TIXT_HEADER_LEN + payload_len);
 	trustix_datapath_put_be32(wire, TRUSTIX_DATAPATH_TIXT_MAGIC);
 	wire[4] = TRUSTIX_DATAPATH_TIXT_VERSION;
 	wire[5] = flags;
@@ -11466,6 +14925,17 @@ trustix_datapath_build_tixt(__u8 *wire, __u8 flags, __u64 flow_id,
 	trustix_datapath_put_be32(wire + 32, payload_len);
 	trustix_datapath_put_be16(wire + 36, fragment_index);
 	trustix_datapath_put_be16(wire + 38, fragment_count);
+}
+
+static void
+trustix_datapath_build_tixt(__u8 *wire, __u8 flags, __u64 flow_id,
+			    __u64 epoch, __u64 sequence, __u32 payload_len,
+			    __u16 fragment_index, __u16 fragment_count)
+{
+	memset(wire, 0, TRUSTIX_DATAPATH_TIXT_HEADER_LEN + payload_len);
+	trustix_datapath_build_tixt_header(wire, flags, flow_id, epoch,
+					   sequence, payload_len,
+					   fragment_index, fragment_count);
 }
 
 static int

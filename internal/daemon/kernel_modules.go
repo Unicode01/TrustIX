@@ -193,13 +193,28 @@ func appendTrustIXDatapathRXWorkerTCPBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "rx_worker_xmit=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_inline_xmit_copy_csum=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_direct_xmit=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_inline_coalesce_max_frames=16")
+	if !runtimeLooksLikeOpenWrt() {
+		params = appendModuleParameterIfMissing(params, "rx_worker_single_coalesce=1")
+		params = appendModuleParameterIfMissing(params, "rx_worker_single_coalesce_max_frames=16")
+	}
 	params = appendModuleParameterIfMissing(params, "rx_worker_tcp=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_stream_tcp=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_stream_batch_queue=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_stream_coalesce_gso=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_stream_coalesce_software_segment=0")
+	params = appendModuleParameterIfMissing(params, "rx_worker_xmit_more=1")
+	params = appendModuleParameterIfMissing(params, "rx_worker_xmit_dst_mac_cache=1")
 	return params
 }
 
 func appendTrustIXDatapathTXPlaintextBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_inline_xmit=1")
+	params = appendModuleParameterIfMissing(params, "tx_plaintext_direct_xmit=1")
+	params = appendModuleParameterIfMissing(params, "tx_plaintext_skip_inner_tcp_checksum=1")
+	params = appendModuleParameterIfMissing(params, "tx_plaintext_stream_coalesce=0")
+	params = appendModuleParameterIfMissing(params, "tx_plaintext_stream_coalesce_max_frames=16")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_slots=8192")
 	return params
 }
@@ -622,16 +637,19 @@ func trustIXDatapathAllowedRXWorkerModuleParameters() map[string]struct{} {
 }
 
 var trustIXDatapathBaseRXWorkerModuleParameters = map[string]struct{}{
-	"rx_worker_budget":                {},
-	"rx_worker_direct_xmit":           {},
-	"rx_worker_hot_stats":             {},
-	"rx_worker_inject":                {},
-	"rx_worker_inline_xmit":           {},
-	"rx_worker_inline_xmit_copy_csum": {},
-	"rx_worker_slots":                 {},
-	"rx_worker_stream_tcp":            {},
-	"rx_worker_tcp":                   {},
-	"rx_worker_xmit":                  {},
+	"rx_worker_budget":                        {},
+	"rx_worker_direct_xmit":                   {},
+	"rx_worker_hot_stats":                     {},
+	"rx_worker_inject":                        {},
+	"rx_worker_inline_xmit":                   {},
+	"rx_worker_inline_xmit_copy_csum":         {},
+	"rx_worker_single_coalesce":               {},
+	"rx_worker_single_coalesce_max_frames":    {},
+	"rx_worker_single_coalesce_flush_jiffies": {},
+	"rx_worker_slots":                         {},
+	"rx_worker_stream_tcp":                    {},
+	"rx_worker_tcp":                           {},
+	"rx_worker_xmit":                          {},
 }
 
 var trustIXDatapathExperimentalRXWorkerModuleParameters = map[string]struct{}{
