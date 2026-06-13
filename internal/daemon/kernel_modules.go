@@ -198,6 +198,8 @@ func appendTrustIXDatapathRXWorkerTCPBaseParameters(params string) string {
 	if !runtimeLooksLikeOpenWrt() {
 		params = appendModuleParameterIfMissing(params, "rx_worker_single_coalesce=1")
 		params = appendModuleParameterIfMissing(params, "rx_worker_single_coalesce_max_frames=16")
+	} else {
+		params = setModuleParameterIfPresent(params, "rx_worker_single_coalesce", "0")
 	}
 	params = appendModuleParameterIfMissing(params, "rx_worker_tcp=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_stream_tcp=1")
@@ -212,8 +214,8 @@ func appendTrustIXDatapathRXWorkerTCPBaseParameters(params string) string {
 func appendTrustIXDatapathTXPlaintextBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_inline_xmit=1")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_direct_xmit=1")
-	params = appendModuleParameterIfMissing(params, "tx_plaintext_skip_inner_tcp_checksum=1")
-	params = appendModuleParameterIfMissing(params, "tx_plaintext_stream_coalesce=0")
+	params = setModuleParameter(params, "tx_plaintext_skip_inner_tcp_checksum", "1")
+	params = setModuleParameter(params, "tx_plaintext_stream_coalesce", "0")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_stream_coalesce_max_frames=16")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_slots=8192")
 	return params
@@ -602,6 +604,50 @@ func appendModuleParameterIfMissing(params, assignment string) string {
 		return assignment
 	}
 	return strings.TrimSpace(params) + " " + assignment
+}
+
+func setModuleParameter(params, key, value string) string {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" {
+		return params
+	}
+	assignment := key + "=" + value
+	fields := strings.Fields(strings.TrimSpace(params))
+	if len(fields) == 0 {
+		return assignment
+	}
+	replaced := false
+	kept := fields[:0]
+	for _, field := range fields {
+		existing, _, ok := strings.Cut(field, "=")
+		if ok && strings.TrimSpace(existing) == key {
+			if !replaced {
+				kept = append(kept, assignment)
+				replaced = true
+			}
+			continue
+		}
+		kept = append(kept, field)
+	}
+	if !replaced {
+		kept = append(kept, assignment)
+	}
+	return strings.Join(kept, " ")
+}
+
+func setModuleParameterIfPresent(params, key, value string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return params
+	}
+	for _, field := range strings.Fields(params) {
+		existing, _, ok := strings.Cut(field, "=")
+		if ok && strings.TrimSpace(existing) == key {
+			return setModuleParameter(params, key, value)
+		}
+	}
+	return params
 }
 
 func appendModuleParameterFromEnvIfMissing(params, key, envName string) string {
