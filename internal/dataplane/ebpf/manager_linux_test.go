@@ -6699,8 +6699,8 @@ func TestKernelUDPTXSecureDirectSKBSealKfuncDefaultsOff(t *testing.T) {
 		t.Fatal("skb seal kfunc enabled by default; custom skb mutation kfuncs must be explicit opt-in")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC", "1")
-	if !kernelUDPTXSecureDirectSKBSealKfuncEnabled() {
-		t.Fatal("skb seal kfunc disabled with explicit opt-in")
+	if kernelUDPTXSecureDirectSKBSealKfuncEnabled() {
+		t.Fatal("skb seal kfunc enabled while the embedded object is built without verifier-safe skb mutation kfunc support")
 	}
 }
 
@@ -9029,7 +9029,6 @@ func TestKernelUDPSecureDirectRequestedForSecureDirectOnlySpec(t *testing.T) {
 		KernelUDPRXSecureDirect:                  true,
 		KernelUDPSecureDirectTrustInnerChecksums: true,
 		KernelUDPTXSecureDirectKfuncSeal:         true,
-		KernelUDPTXSecureDirectSKBSealKfunc:      true,
 	}
 	if !kernelUDPTXSecureDirectRequestedForSpec(profileSpec) {
 		t.Fatal("profile secure direct spec should request TX secure direct")
@@ -9042,8 +9041,8 @@ func TestKernelUDPSecureDirectRequestedForSecureDirectOnlySpec(t *testing.T) {
 		t.Fatal("profile secure direct spec should trust inner checksums")
 	}
 	options := kernelUDPTXSecureDirectProgramOptionsForSpec(profileSpec)
-	if !options.KfuncSeal || !options.SKBSealKfunc {
-		t.Fatalf("profile secure direct TX options = %#v, want kfunc seal paths enabled", options)
+	if !options.KfuncSeal || options.SKBSealKfunc {
+		t.Fatalf("profile secure direct TX options = %#v, want direct seal enabled and verifier-unsafe skb seal disabled", options)
 	}
 
 	plaintextSpec := dataplane.AttachSpec{

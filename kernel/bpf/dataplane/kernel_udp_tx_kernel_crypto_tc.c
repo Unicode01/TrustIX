@@ -47,6 +47,10 @@ const volatile __u32 trustix_kudp_tx_secure_outer_tcp_partial_csum_kfunc = 0;
 #define TRUSTIX_KUDP_SECURE_BPF_CRYPTO 0
 #endif
 
+#ifndef TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC
+#define TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC 0
+#endif
+
 #define TC_ACT_OK 0
 #define TC_ACT_UNSPEC (-1)
 #define TC_ACT_SHOT 2
@@ -341,9 +345,11 @@ extern void bpf_rcu_read_unlock(void) __ksym;
 extern int bpf_crypto_encrypt(struct bpf_crypto_ctx *ctx, const struct bpf_dynptr *src, const struct bpf_dynptr *dst, const struct bpf_dynptr *siv__nullable) __ksym;
 #endif
 extern int trustix_kernel_direct_seal(__u32 slot_id, const __u8 *src, __u8 *dst, __u32 plain_len, const __u8 *nonce) __ksym;
+#if TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC
 extern int trustix_kernel_skb_direct_seal(struct __sk_buff *skb,
                                             const struct trustix_aead_skb_direct_seal_args *args,
                                             const __u8 *nonce) __ksym;
+#endif
 extern int trustix_kernel_skb_fix_inner_tcp_csum(struct __sk_buff *skb,
                                               __u32 inner_ip_offset,
                                               __u32 inner_len,
@@ -805,6 +811,7 @@ static __always_inline void trustix_write_secure_header(__u8 *secure,
     trustix_write_be64(secure + 16, sequence);
 }
 
+#if TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC
 static __noinline int trustix_encrypt_inner_ipv4_skb_direct(struct __sk_buff *skb,
                                                             __u32 inner_len,
                                                             __u64 flow_id,
@@ -815,14 +822,11 @@ static __noinline int trustix_encrypt_inner_ipv4_skb_direct(struct __sk_buff *sk
     struct trustix_kernel_crypto_ctx_value *state;
     struct trustix_kernel_crypto_direct_slot *direct_slot;
     __u32 *slot_index;
-    __u32 bounded_inner_len;
     __u32 wire_len;
 
-    bounded_inner_len = inner_len & TRUSTIX_KERNEL_CRYPTO_FRAME_MAX;
     if (!trustix_kudp_tx_secure_skb_seal_kfunc || !scratch || !skb || !flow)
         return -95;
-    inner_len = bounded_inner_len;
-    if (inner_len == 0 || inner_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX)
+    if (inner_len < 20 || inner_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX)
         return -22;
     if (trustix_kudp_tx_fix_inner_checksums ||
         !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TRUST_INNER_CHECKSUM))
@@ -877,10 +881,10 @@ static __noinline int trustix_encrypt_inner_ipv4_skb_direct(struct __sk_buff *sk
     return (__s32)wire_len;
 }
 
-static __noinline int trustix_seal_shifted_inner_ipv4_skb_direct(struct __sk_buff *skb,
-                                                                 __u32 cipher_offset,
-                                                                 __u32 inner_len,
-                                                                 struct trustix_kudp_tx_scratch *scratch)
+static __always_inline int trustix_seal_shifted_inner_ipv4_skb_direct(struct __sk_buff *skb,
+                                                                      __u32 cipher_offset,
+                                                                      __u32 inner_len,
+                                                                      struct trustix_kudp_tx_scratch *scratch)
 {
     struct trustix_aead_skb_direct_seal_args args = {};
     int err;
@@ -906,6 +910,7 @@ static __noinline int trustix_seal_shifted_inner_ipv4_skb_direct(struct __sk_buf
     trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_SKB_SEAL_SUCCESSES);
     return 0;
 }
+#endif
 
 static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
                                                  __u32 inner_len,
@@ -919,7 +924,6 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
     struct trustix_kernel_crypto_ctx_value *state;
     struct trustix_kernel_crypto_direct_slot *direct_slot;
     __u32 *slot_index;
-    __u32 bounded_inner_len;
     __u32 wire_len;
     __u16 mss_clamp;
     int clamp_result;
@@ -931,11 +935,9 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
     struct bpf_dynptr plain, cipher, nonce;
 #endif
 
-    bounded_inner_len = inner_len & TRUSTIX_KERNEL_CRYPTO_FRAME_MAX;
     if (!scratch || !skb)
         return -22;
-    inner_len = bounded_inner_len;
-    if (inner_len == 0 || inner_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX)
+    if (inner_len < 20 || inner_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX)
         return -22;
 
     if (data + 54 <= data_end && data[23] == IPPROTO_TCP &&
@@ -1318,7 +1320,9 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     int skb_sealed = 0;
     int outer_tcp_csum_kfunc = 0;
     int outer_tcp_partial_csum_kfunc = 0;
+#if TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC
     int inner_tcp_syn = 0;
+#endif
     int cipher_len;
 
     if (data + 34 > data_end)
@@ -1354,8 +1358,10 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     if (data[23] == IPPROTO_TCP) {
         if (data + 54 > data_end)
             goto len_mismatch;
+#if TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC
         if (data[47] & TRUSTIX_TCP_FLAG_SYN)
             inner_tcp_syn = 1;
+#endif
     }
 
     inner_len = trustix_read_be16(data + 16);
@@ -1416,6 +1422,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     if (!scratch)
         goto no_context;
     cipher_len = -95;
+#if TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC
     if (trustix_kudp_tx_secure_skb_seal_kfunc &&
         !trustix_kudp_tx_fix_inner_checksums &&
         (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TRUST_INNER_CHECKSUM) &&
@@ -1426,6 +1433,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
         if (cipher_len >= 0)
             skb_sealed = 1;
     }
+#endif
     if (!skb_sealed) {
         cipher_len = trustix_encrypt_inner_ipv4(skb, inner_len, flow_id,
                                                 flow, scratch);
@@ -1463,11 +1471,13 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     if (bpf_skb_store_bytes(skb, 0, scratch->io.split.header, packet_header_len,
                             BPF_F_INVALIDATE_HASH))
         goto drop;
+#if TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC
     if (skb_sealed) {
         if (trustix_seal_shifted_inner_ipv4_skb_direct(
                 skb, cipher_offset, inner_len, scratch))
             goto drop;
     }
+#endif
     if (!skb_sealed &&
         trustix_store_cipher_to_packet(skb, cipher_offset, scratch, (__u32)cipher_len))
         goto drop;

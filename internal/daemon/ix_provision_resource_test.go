@@ -355,18 +355,31 @@ func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 	if request.Role != "lab_ix" || request.Profile != "plaintext_performance" {
 		t.Fatalf("role/profile = %q/%q, want lab_ix/plaintext_performance", request.Role, request.Profile)
 	}
+	if request.EndpointTransport != "experimental_tcp" || request.EndpointName != "ix-lab-experimental_tcp" {
+		t.Fatalf("endpoint transport/name = %q/%q, want experimental_tcp/ix-lab-experimental_tcp", request.EndpointTransport, request.EndpointName)
+	}
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
 	}
-	if len(target.Endpoints) != 2 {
-		t.Fatalf("target endpoints = %#v, want udp plus experimental_tcp fallback", target.Endpoints)
+	if len(target.Endpoints) != 1 ||
+		target.Endpoints[0].Name != "ix-lab-experimental_tcp" ||
+		target.Endpoints[0].Transport != "experimental_tcp" ||
+		len(target.TransportPolicy.Candidates) != 1 ||
+		target.TransportPolicy.Candidates[0] != "ix-lab-experimental_tcp" {
+		t.Fatalf("target endpoints/candidates = %#v / %#v, want experimental_tcp route-GSO primary", target.Endpoints, target.TransportPolicy.Candidates)
 	}
 	if target.TransportPolicy.Encryption != securetransport.EncryptionPlaintext ||
 		target.TransportPolicy.Profile != config.TransportProfilePerformance ||
 		target.TransportPolicy.Datapath != config.TransportDatapathKernelModule ||
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
 		t.Fatalf("target plaintext performance policy endpoint=%#v policy=%#v", target.Endpoints[0], target.TransportPolicy)
+	}
+	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("target plaintext performance config did not enable experimental_tcp route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	}
+	if !kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(target) {
+		t.Fatalf("target plaintext performance config did not suppress legacy full-kmod plaintext TX")
 	}
 	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
 		t.Fatalf("target kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
@@ -377,12 +390,13 @@ func TestIXProvisionOpenWRTPlaintextPerformanceUsesUDPTCOnly(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
 	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
-		IXID:            "ix-openwrt-fast",
-		Profile:         "plaintext-performance",
-		Advertise:       []core.Prefix{"10.79.0.0/24"},
-		EndpointAddress: "router.example.com:7000",
-		ProvisionURL:    "https://ix-a.example.com:18787",
-		ServiceManager:  "openwrt",
+		IXID:              "ix-openwrt-fast",
+		Profile:           "plaintext-performance",
+		Advertise:         []core.Prefix{"10.79.0.0/24"},
+		EndpointAddress:   "router.example.com:7000",
+		EndpointTransport: "udp",
+		ProvisionURL:      "https://ix-a.example.com:18787",
+		ServiceManager:    "openwrt",
 	}, desired)
 	if err != nil {
 		t.Fatalf("normalize provision request: %v", err)

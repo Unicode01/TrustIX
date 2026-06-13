@@ -23611,7 +23611,7 @@ func (manager *Manager) kernelUDPRXSecureDirectRequestedLocked() bool {
 func kernelUDPTXSecureDirectProgramOptionsForSpec(spec dataplane.AttachSpec) kernelUDPTXSecureDirectProgramOptions {
 	return kernelUDPTXSecureDirectProgramOptions{
 		KfuncSeal:                spec.KernelUDPTXSecureDirectKfuncSeal || kernelUDPTXSecureDirectKfuncSealEnabled(),
-		SKBSealKfunc:             spec.KernelUDPTXSecureDirectSKBSealKfunc || kernelUDPTXSecureDirectSKBSealKfuncEnabled(),
+		SKBSealKfunc:             kernelUDPTXSecureDirectSKBSealKfuncCompiled && (spec.KernelUDPTXSecureDirectSKBSealKfunc || kernelUDPTXSecureDirectSKBSealKfuncEnabled()),
 		FixInnerChecksums:        kernelUDPTXSecureDirectFixInnerChecksumsEnabled(),
 		InnerTCPChecksumKfunc:    kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled(),
 		OuterTCPChecksumKfunc:    kernelUDPTXSecureDirectOuterTCPChecksumKfuncEnabled(),

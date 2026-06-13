@@ -877,7 +877,6 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		KernelUDPRXSecureDirect:                  secureFullDirect,
 		KernelUDPSecureDirectTrustInnerChecksums: secureFullDirect,
 		KernelUDPTXSecureDirectKfuncSeal:         secureFullDirect,
-		KernelUDPTXSecureDirectSKBSealKfunc:      secureFullDirect,
 		ExperimentalTCPTXDirect:                  experimentalTCPTXDirectForDesired(desired),
 		ExperimentalTCPRouteGSOSync:              experimentalTCPRouteGSOAsync,
 		ExperimentalTCPRouteGSOAsync:             experimentalTCPRouteGSOAsync,

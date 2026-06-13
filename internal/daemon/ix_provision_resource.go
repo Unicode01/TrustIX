@@ -504,7 +504,7 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 
 	request.EndpointTransport = strings.ToLower(strings.TrimSpace(request.EndpointTransport))
 	if request.EndpointTransport == "" {
-		request.EndpointTransport = string(transport.ProtocolUDP)
+		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile)
 	}
 	request.EndpointMode = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(request.EndpointMode), "-", "_"))
 	if request.EndpointMode == "" {
@@ -766,6 +766,13 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 	default:
 		return ixProvisionProfileDefaults{}, fmt.Errorf("profile must be stable, performance, latency, compatibility, or plaintext_performance")
 	}
+}
+
+func ixProvisionDefaultEndpointTransport(profile string) string {
+	if normalizeIXProvisionProfile(profile) == "plaintext_performance" {
+		return string(transport.ProtocolExperimentalTCP)
+	}
+	return string(transport.ProtocolUDP)
 }
 
 func normalizeProvisionControlAPI(raw string) string {

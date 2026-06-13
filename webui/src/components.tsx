@@ -885,7 +885,7 @@ type IXProvisionEffectiveDefaults = {
 };
 
 function ixProvisionProfileDefaults(profile: string): Pick<IXProvisionEffectiveDefaults, "transportProfile" | "datapath" | "encryption" | "cryptoPlacement" | "kernelTransport"> {
-  switch (String(profile || "stable").trim().toLowerCase().replaceAll("-", "_")) {
+  switch (normalizeIXProvisionProfileName(profile)) {
     case "performance":
       return { transportProfile: "performance", datapath: "auto", encryption: "secure", cryptoPlacement: "auto", kernelTransport: "auto" };
     case "latency":
@@ -902,6 +902,26 @@ function ixProvisionProfileDefaults(profile: string): Pick<IXProvisionEffectiveD
     default:
       return { transportProfile: "stable", datapath: "auto", encryption: "secure", cryptoPlacement: "auto", kernelTransport: "auto" };
   }
+}
+
+function normalizeIXProvisionProfileName(profile: string): string {
+  const normalized = String(profile || "stable").trim().toLowerCase().replaceAll("-", "_");
+  switch (normalized) {
+    case "compat":
+    case "compatible":
+      return "compatibility";
+    case "plain":
+    case "plaintext":
+    case "plaintext_perf":
+    case "performance_plaintext":
+      return "plaintext_performance";
+    default:
+      return normalized || "stable";
+  }
+}
+
+function ixProvisionDefaultEndpointTransport(profile: string): string {
+  return normalizeIXProvisionProfileName(profile) === "plaintext_performance" ? "experimental_tcp" : "udp";
 }
 
 function ixProvisionAcklessEndpointName(endpointName: string, ixID: string): string {
@@ -941,13 +961,14 @@ function ixProvisionEffectiveDefaults(input: {
   const attachMode = String(input.attachMode || "managed").trim().toLowerCase().replaceAll("_", "-");
   const derivedGateway = role === "transit_ix" ? "" : defaultLANGatewayForPrefix(input.advertisePrefixes[0] || "");
   const profile = ixProvisionProfileDefaults(input.profile);
-  const endpointName = String(input.endpointName || "").trim() || `${safeShellName(input.ixID, "ix-new")}-${input.endpointTransport || "udp"}`;
+  const endpointTransport = String(input.endpointTransport || "").trim() || ixProvisionDefaultEndpointTransport(input.profile);
+  const endpointName = String(input.endpointName || "").trim() || `${safeShellName(input.ixID, "ix-new")}-${endpointTransport}`;
   return {
     controlAPI: String(input.controlAPI || "").trim() || (endpointMode === "passive" ? provisionControlAPIFromEndpointAddress(endpointAddress, "9443") : ""),
     endpointAddress,
     endpointListen: endpointMode === "passive" ? (String(input.endpointListen || "").trim() || (endpointPort ? `0.0.0.0:${endpointPort}` : "")) : "",
     endpointName,
-    acklessEndpointName: String(input.endpointTransport || "udp") === "udp" ? ixProvisionAcklessEndpointName(endpointName, input.ixID) : "",
+    acklessEndpointName: endpointTransport === "udp" ? ixProvisionAcklessEndpointName(endpointName, input.ixID) : "",
     endpointMode,
     lanIface: String(input.lanIface || "").trim() || (attachMode === "existing" ? "" : `trustix-${safeShellName(input.ixID, "ix")}`),
     lanGateway: String(input.lanGateway || "").trim() || derivedGateway,
@@ -1303,6 +1324,20 @@ export function AccessView(props: {
       setNewIXEndpointAddress((current) => current.trim() || defaultUpstreamEndpointAddress);
     }
   };
+  const updateNewIXEndpointTransportDefault = (nextProfile: string) => {
+    const previousDefault = ixProvisionDefaultEndpointTransport(newIXProfile);
+    const nextDefault = ixProvisionDefaultEndpointTransport(nextProfile);
+    if (newIXEndpointTransport === previousDefault) {
+      setNewIXEndpointTransport(nextDefault);
+    }
+  };
+  const handleNewIXProfileChange = (value: string) => {
+    updateNewIXEndpointTransportDefault(value);
+    setNewIXProfile(value);
+  };
+  const handleNewIXServiceManagerChange = (value: string) => {
+    setNewIXServiceManager(value);
+  };
   useEffect(() => {
     if (!deviceEndpoint && deviceEndpointCandidates[0]?.name) {
       setDeviceEndpoint(deviceEndpointCandidates[0].name);
@@ -1361,14 +1396,15 @@ export function AccessView(props: {
   const newIXAdvertiseRequired = newIXRole !== "transit_ix";
   const newIXBootstrapControlAPIEffective = newIXBootstrapControlAPI.trim() || desiredControlAPI.trim();
   const newIXCommandDisabled = !newIXID.trim() || !effectiveNewIXDomain || (!newIXActiveOnly && !newIXEndpointAddress.trim()) || (newIXActiveOnly && !newIXBootstrapControlAPIEffective) || (newIXAdvertiseRequired && newIXAdvertisePrefixes.length === 0) || newIXAdvertiseWarnings.length > 0;
-  const newIXResolvedEndpointName = newIXEndpointName.trim() || `${safeShellName(newIXID, "ix-new")}-${newIXEndpointTransport || "udp"}`;
+  const newIXEffectiveEndpointTransport = newIXEndpointTransport || ixProvisionDefaultEndpointTransport(newIXProfile);
+  const newIXResolvedEndpointName = newIXEndpointName.trim() || `${safeShellName(newIXID, "ix-new")}-${newIXEffectiveEndpointTransport}`;
   const newIXQuickJoinCommand = props.issuedIXProvision?.command || "";
   const newIXEffective = ixProvisionEffectiveDefaults({
     ixID: newIXID,
     role: newIXRole,
     profile: newIXProfile,
     endpointMode: newIXEndpointMode,
-    endpointTransport: newIXEndpointTransport,
+    endpointTransport: newIXEffectiveEndpointTransport,
     endpointAddress: newIXEndpointAddress,
     endpointListen: newIXEndpointListen,
     endpointName: newIXEndpointName,
@@ -1498,7 +1534,7 @@ export function AccessView(props: {
           <div className="access-form ix-bootstrap-form">
             <div className="ix-bootstrap-primary config-wide">
               <SelectField label={props.t("new_ix_role", "IX role")} help={props.t("help_new_ix_role", "Role selects the generated LAN defaults and route-exchange intent.")} value={newIXRole} options={newIXRoleOptions} optionLabels={newIXRoleLabels} onChange={handleNewIXRoleChange} />
-              <SelectField label={props.t("new_ix_profile", "Deployment profile")} help={props.t("help_new_ix_profile", "Profile chooses stable, performance, latency, compatibility, or plaintext performance defaults.")} value={newIXProfile} options={newIXProfileOptions} optionLabels={newIXProfileLabels} onChange={setNewIXProfile} />
+              <SelectField label={props.t("new_ix_profile", "Deployment profile")} help={props.t("help_new_ix_profile", "Profile chooses stable, performance, latency, compatibility, or plaintext performance defaults.")} value={newIXProfile} options={newIXProfileOptions} optionLabels={newIXProfileLabels} onChange={handleNewIXProfileChange} />
               <SelectField label={props.t("new_ix_endpoint_mode", "Endpoint mode")} help={props.t("help_new_ix_endpoint_mode", "Passive inbound publishes a reachable endpoint for peers to dial. Active outbound is for edge IX nodes without public inbound access.")} value={newIXEndpointMode} options={["passive", "active"]} optionLabels={newIXEndpointModeLabels} onChange={handleNewIXEndpointModeChange} />
               <Field label={props.t("new_ix_id", "New IX ID")} help={props.t("help_new_ix_id", "Unique IX identity to issue. It must differ from the current IX and becomes the certificate IX name.")} placeholder="ix-c" value={newIXID} onChange={setNewIXID} />
               <Field label={newIXEndpointAddressLabel} help={newIXEndpointAddressHelp} placeholder={newIXEndpointAddressPlaceholder} value={newIXEndpointAddress} onChange={setNewIXEndpointAddress} />
@@ -1523,7 +1559,7 @@ export function AccessView(props: {
                 <Field label={props.t("new_ix_control_api", "New IX public control API")} help={newIXActiveOnly ? props.t("help_new_ix_control_api_active", "Optional published control API for this edge IX. Leave empty when it has no public inbound control-plane address.") : props.t("help_new_ix_control_api", "Optional public URL for the new IX control API. Empty derives https://host:9443 from the public endpoint.")} placeholder={newIXActiveOnly ? props.t("no_control_api", "No control API published") : (newIXEffective.controlAPI || "https://ix-c.example.com:9443")} value={newIXControlAPI} onChange={setNewIXControlAPI} />
                 <Field label={props.t("new_ix_bootstrap_peer", "Bootstrap peer IX")} help={props.t("help_new_ix_bootstrap_peer", "Existing IX used as the first control-plane peer for the generated config.")} value={newIXBootstrapIX} onChange={setNewIXBootstrapIX} />
                 <Field label={props.t("new_ix_bootstrap_control_api", "Bootstrap control API")} help={props.t("help_new_ix_bootstrap_control_api", "Control API URL of the bootstrap peer. Empty uses the current IX control API from this config.")} placeholder={newIXEffective.bootstrapControlAPI || "https://ix-a.example.com:9443"} value={newIXBootstrapControlAPI} onChange={setNewIXBootstrapControlAPI} />
-                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. UDP stays the primary default; when UDP is selected the generated config also adds experimental_tcp as a lower-priority fallback for NAT or UDP-hostile networks.")} value={newIXEndpointTransport} options={transportOptions()} onChange={setNewIXEndpointTransport} />
+                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. Plaintext performance defaults to experimental_tcp route-GSO; UDP is still available for explicit compatibility testing.")} value={newIXEffectiveEndpointTransport} options={transportOptions()} onChange={setNewIXEndpointTransport} />
                 {!newIXActiveOnly && <Field label={props.t("new_ix_endpoint_listen", "Endpoint listen")} help={props.t("help_new_ix_endpoint_listen", "Optional listen address. Empty listens on 0.0.0.0 with the public endpoint port.")} placeholder={newIXEffective.endpointListen || "0.0.0.0:7000"} value={newIXEndpointListen} onChange={setNewIXEndpointListen} />}
                 <Field label={props.t("new_ix_endpoint_name", "Endpoint name")} help={props.t("help_new_ix_endpoint_name", "Optional local endpoint name written into the generated config. Empty derives <ix_id>-<transport>.")} placeholder={newIXResolvedEndpointName} value={newIXEndpointName} onChange={setNewIXEndpointName} />
                 <Field label={props.t("new_ix_lan_iface", "LAN interface")} help={props.t("help_new_ix_lan_iface", "Optional LAN interface. Managed mode creates trustix-<ix_id> when empty; existing mode requires a host interface.")} placeholder={newIXEffective.lanIface || "br-lan / eth1"} value={newIXLANIface} onChange={setNewIXLANIface} />
@@ -1535,7 +1571,7 @@ export function AccessView(props: {
                 <Field label={props.t("new_ix_target_cert_dir", "Target cert dir")} help={props.t("help_new_ix_target_cert_dir", "Directory path written into the generated target config for IX certificates and trust roots.")} value={newIXTargetCertDir} onChange={setNewIXTargetCertDir} />
                 <SelectField label={props.t("new_ix_goarch", "GOARCH")} help={props.t("help_new_ix_goarch", "Optional target CPU architecture for cross-builds. Empty uses the target host architecture when possible.")} value={newIXGoArch} options={["", "amd64", "arm64", "arm", "386", "mips", "mipsle", "mips64", "mips64le", "riscv64"]} onChange={setNewIXGoArch} />
                 <SelectField label={props.t("dataplane", "Dataplane")} help={props.t("help_new_ix_dataplane", "Runtime dataplane mode for the target IX. Auto chooses the best supported path; noop is only for diagnostics.")} value={newIXDataplane} options={["auto", "linux", "noop"]} onChange={setNewIXDataplane} />
-                <SelectField label={props.t("service_manager", "Service manager")} help={props.t("help_new_ix_service_manager", "Target service manager for installation. Auto detects systemd on normal Linux and OpenWrt procd on OpenWrt.")} value={newIXServiceManager} options={["auto", "systemd", "openwrt"]} optionLabels={newIXServiceManagerLabels} onChange={setNewIXServiceManager} />
+                <SelectField label={props.t("service_manager", "Service manager")} help={props.t("help_new_ix_service_manager", "Target service manager for installation. Auto detects systemd on normal Linux and OpenWrt procd on OpenWrt.")} value={newIXServiceManager} options={["auto", "systemd", "openwrt"]} optionLabels={newIXServiceManagerLabels} onChange={handleNewIXServiceManagerChange} />
                 <SelectField label={props.t("new_ix_kernel_modules", "Kernel modules")} help={props.t("help_new_ix_kernel_modules", "Controls whether target install may load TrustIX kernel modules. Required fails installation if modules cannot load.")} value={newIXKernelModules} options={["auto", "disabled", "required"]} onChange={setNewIXKernelModules} />
                 <CheckField label={props.t("dns_enabled", "DNS enabled")} help={props.t("help_new_ix_dns_enabled", "Enable the built-in TrustIX DNS resolver on the new IX. It answers names inside the TrustIX DNS domain only unless upstreams are configured later.")} checked={newIXDNSEnabled} onChange={setNewIXDNSEnabled} />
                 <CheckField label={props.t("openwrt_dnsmasq", "OpenWrt dnsmasq")} help={props.t("help_new_ix_openwrt_dnsmasq", "For OpenWrt targets, add a dnsmasq conditional forward for only the TrustIX DNS domain and keep normal LAN DNS unchanged.")} checked={newIXOpenWRTDNSMasq} onChange={handleNewIXOpenWRTDNSMasqChange} />
@@ -1557,7 +1593,7 @@ export function AccessView(props: {
                   </div>
                   <div className="ix-bootstrap-effective-grid">
                     <StatusRow label={props.t("new_ix_control_api", "New IX public control API")} value={newIXEffective.controlAPI || props.t("no_control_api", "No control API published")} />
-                    <StatusRow label={props.t("endpoint", "Endpoint")} value={compactList([compactList([newIXEffective.endpointName, newIXEffective.acklessEndpointName], " + "), newIXEndpointModeLabels[newIXEffective.endpointMode as keyof typeof newIXEndpointModeLabels] || newIXEffective.endpointMode, newIXEndpointTransport, newIXEffective.endpointListen, newIXEffective.endpointAddress], " / ")} />
+                    <StatusRow label={props.t("endpoint", "Endpoint")} value={compactList([compactList([newIXEffective.endpointName, newIXEffective.acklessEndpointName], " + "), newIXEndpointModeLabels[newIXEffective.endpointMode as keyof typeof newIXEndpointModeLabels] || newIXEffective.endpointMode, newIXEffectiveEndpointTransport, newIXEffective.endpointListen, newIXEffective.endpointAddress], " / ")} />
                     <StatusRow label={props.t("lan", "LAN")} value={compactList([newIXEffective.lanIface, newIXEffective.lanGateway || props.t("no_gateway", "No gateway"), newIXAttachMode], " / ")} />
                     <StatusRow label={props.t("transport_policy", "Transport policy")} value={compactList([newIXEffective.transportProfile, newIXEffective.datapath, newIXEffective.encryption, newIXEffective.cryptoPlacement, `kernel=${newIXEffective.kernelTransport}`], " / ")} />
                     <StatusRow label={props.t("service_manager", "Service manager")} value={newIXServiceManagerLabels[newIXServiceManager as keyof typeof newIXServiceManagerLabels] || newIXServiceManager} />
@@ -1588,7 +1624,7 @@ export function AccessView(props: {
                 advertise: newIXAdvertisePrefixes,
                 endpoint_name: newIXResolvedEndpointName,
                 endpoint_mode: newIXEndpointMode || undefined,
-                endpoint_transport: newIXEndpointTransport || undefined,
+                endpoint_transport: newIXEffectiveEndpointTransport || undefined,
                 endpoint_listen: newIXActiveOnly ? undefined : (newIXEndpointListen.trim() || undefined),
                 endpoint_address: newIXEndpointAddress.trim() || undefined,
                 lan_iface: newIXLANIface.trim() || undefined,
@@ -3822,7 +3858,7 @@ function ConfigEndpointTable(props: { t: Translate; endpoints: EndpointConfig[];
         <div className="config-split">
           <div className="config-list compact-config-list">
             {props.endpoints.map((endpoint, index) => (
-              <button key={`${endpoint.name}-${index}`} type="button" className={`config-list-row ${index === selectedIndex ? "is-selected" : ""}`} onClick={() => setSelectedIndex(index)}>
+              <button key={index} type="button" className={`config-list-row ${index === selectedIndex ? "is-selected" : ""}`} onClick={() => setSelectedIndex(index)}>
                 <strong>{endpoint.name || props.t("endpoint", "Endpoint")}</strong>
                 <span>{compactList([endpoint.transport, endpoint.mode || "passive", endpoint.security?.encryption, endpoint.enabled === false ? props.t("disabled", "Disabled") : props.t("enabled", "Enabled")], "-")}</span>
                 <span>{endpointAddressSummary(endpoint, props.t)}</span>
@@ -4116,7 +4152,7 @@ function PeerEndpointEditorList(props: { t: Translate; endpoints: EndpointConfig
     <div className="peer-endpoint-split">
       <div className="config-list compact-config-list peer-endpoint-nav">
         {props.endpoints.map((endpoint, index) => (
-          <button key={`${endpoint.name}-${index}`} type="button" className={`config-list-row ${index === selectedIndex ? "is-selected" : ""}`} onClick={() => setSelectedIndex(index)}>
+          <button key={index} type="button" className={`config-list-row ${index === selectedIndex ? "is-selected" : ""}`} onClick={() => setSelectedIndex(index)}>
             <strong>{endpoint.name || props.t("endpoint", "Endpoint")}</strong>
             <span>{compactList([endpoint.transport, endpoint.mode || "active", endpoint.security?.encryption, endpoint.enabled === false ? props.t("disabled", "Disabled") : props.t("enabled", "Enabled")], "-")}</span>
             <span>{endpointAddressSummary(endpoint, props.t)}</span>

@@ -31,6 +31,8 @@ type kernelUDPTXSecureDirectProgramOptions struct {
 	OuterTCPPartialCSUMKfunc bool
 }
 
+const kernelUDPTXSecureDirectSKBSealKfuncCompiled = false
+
 func loadKernelUDPTXSecureDirectObject(provider *kernelCryptoProviderObject, statsMap *cebpf.Map, routeMap *cebpf.Map, flowMap *cebpf.Map, options kernelUDPTXSecureDirectProgramOptions) (*kernelUDPTXSecureDirectObject, error) {
 	if provider == nil || provider.flowIndexMap == nil || provider.contextSlots == nil || provider.directSlotMap == nil {
 		return nil, fmt.Errorf("kernel_udp secure TC TX direct requires loaded kernel crypto provider maps")
@@ -172,7 +174,8 @@ func kernelUDPTXSecureDirectKfuncSealEnabled() bool {
 }
 
 func kernelUDPTXSecureDirectSKBSealKfuncEnabled() bool {
-	return envTruthy("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC")
+	return kernelUDPTXSecureDirectSKBSealKfuncCompiled &&
+		envTruthy("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC")
 }
 
 func kernelUDPTXSecureDirectFixInnerChecksumsEnabled() bool {
