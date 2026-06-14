@@ -205,6 +205,12 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
 		t.Fatalf("default provision config did not enable full-kmod plaintext: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
+	if !target.KernelModules.Datapath.FullPlaintext ||
+		!target.KernelModules.Datapath.RXWorker ||
+		!target.KernelModules.Datapath.TXPlaintext ||
+		target.KernelModules.Datapath.RXStage != config.KernelDatapathRXStageWorker {
+		t.Fatalf("default provision config did not persist explicit full-kmod runtime: %#v", target.KernelModules.Datapath)
+	}
 	if target.Policies[0].LoadBalance == "least_conn" {
 		t.Fatalf("generated default policy uses least_conn, want priority-ordered fallback")
 	}

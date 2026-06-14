@@ -1258,6 +1258,17 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			SessionPool:     config.SessionPoolPolicyConfig{Warmup: true},
 		},
 	}
+	if ixProvisionPlaintextPerformanceFullKmodProfile(profile) &&
+		transport.Protocol(request.EndpointTransport) == transport.ProtocolUDP &&
+		!ixProvisionOpenWRTTCOnly(request, profile) {
+		desired.KernelModules.Datapath = config.KernelDatapathRuntimeConfig{
+			RXStage:                      config.KernelDatapathRXStageWorker,
+			RXWorker:                     true,
+			TXPlaintext:                  true,
+			FullPlaintext:                true,
+			RXWorkerAllowExperimentalTCP: true,
+		}
+	}
 	if len(prefixes) > 0 {
 		desired.IX.RouteAuthorizations = []string{path.Join(request.TargetCertDir, ixBase+"-route.crt")}
 	}

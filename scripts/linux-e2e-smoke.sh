@@ -57,6 +57,7 @@ datapath_enable_features="${TRUSTIX_E2E_DATAPATH_ENABLE_FEATURES:-832}"
 full_datapath_module="${TRUSTIX_E2E_FULL_DATAPATH_MODULE:-0}"
 full_datapath_script="${TRUSTIX_E2E_FULL_DATAPATH_SCRIPT:-${repo_root}/scripts/linux-full-datapath-module-smoke.sh}"
 full_datapath_module_dir="${TRUSTIX_E2E_FULL_DATAPATH_MODULE_DIR:-${repo_root}/kernel/trustix_datapath}"
+full_datapath_ko="${TRUSTIX_E2E_FULL_DATAPATH_KO:-}"
 full_datapath_enable_features="${TRUSTIX_E2E_FULL_DATAPATH_ENABLE_FEATURES:-128}"
 full_datapath_rx_worker="${TRUSTIX_E2E_FULL_DATAPATH_RX_WORKER:-0}"
 crypto_placement="${TRUSTIX_E2E_CRYPTO_PLACEMENT:-userspace}"
@@ -3308,6 +3309,7 @@ maybe_prepare_full_datapath_module() {
   log "preparing TrustIX full datapath module through ${full_datapath_script}"
   env \
     TRUSTIX_FULL_DATAPATH_MODULE_DIR="$full_datapath_module_dir" \
+    TRUSTIX_FULL_DATAPATH_KO="$full_datapath_ko" \
     TRUSTIX_FULL_DATAPATH_KEEP_LOADED=1 \
     TRUSTIX_FULL_DATAPATH_ENABLE_FEATURES="$full_datapath_enable_features" \
     TRUSTIX_FULL_DATAPATH_EXTRA_PARAMS="$extra_module_params" \
