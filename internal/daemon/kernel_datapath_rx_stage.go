@@ -581,6 +581,12 @@ func kernelDatapathFullPlaintextEnabledForDesired(desired config.Desired) bool {
 		}
 		return true
 	}
+	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
+		if suppressFullPlaintext {
+			return false
+		}
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled", "full":
 		if suppressFullPlaintext {
@@ -668,6 +674,9 @@ func kernelDatapathRXDisabledReasonForDesired(desired config.Desired) string {
 }
 
 func kernelDatapathFullPlaintextRequestedForDesired(desired config.Desired) bool {
+	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
+		return true
+	}
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	if runtime.FullPlaintext || runtime.TXPlaintext {
 		return true

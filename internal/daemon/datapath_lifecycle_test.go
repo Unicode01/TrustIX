@@ -902,7 +902,7 @@ func TestDataSessionControlOnlyKeepsSecureUDPFallbackByDefault(t *testing.T) {
 	}
 }
 
-func TestDataSessionControlOnlyMigratesFullPlaintextUDPToTCOnly(t *testing.T) {
+func TestDataSessionControlOnlyKeepsFullPlaintextUDPOnKernelDatapath(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "0")
@@ -926,11 +926,11 @@ func TestDataSessionControlOnlyMigratesFullPlaintextUDPToTCOnly(t *testing.T) {
 			},
 		},
 	}
-	if !daemon.dataSessionControlOnly(dataSessionKey{
+	if daemon.dataSessionControlOnly(dataSessionKey{
 		Transport:  transport.ProtocolUDP,
 		Encryption: securetransport.EncryptionPlaintext,
 	}, config.EndpointConfig{Transport: string(transport.ProtocolUDP)}) {
-		t.Fatal("migrated full plaintext UDP session should be control-only")
+		t.Fatal("full plaintext UDP session should stay attached to full-kmod datapath")
 	}
 }
 

@@ -162,16 +162,25 @@ func kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired config.Desired) b
 		return false
 	}
 	fullPlaintextRequested := kernelUDPFullPlaintextDatapathRequestedForDesired(desired)
+	if kernelUDPPlaintextPerformanceDirectOnlyExplicitlyEnabledByEnv() && (profile.Profile == config.TransportProfilePerformance || fullPlaintextRequested) {
+		return true
+	}
+	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
+		return false
+	}
 	if kernelUDPPlaintextPerformanceDirectOnlyExplicitlyDisabledByEnv() && !fullPlaintextRequested {
 		return false
 	}
 	if profile.Profile == config.TransportProfilePerformance {
 		return true
 	}
-	return fullPlaintextRequested
+	return false
 }
 
 func kernelUDPFullPlaintextDatapathRequestedForDesired(desired config.Desired) bool {
+	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
+		return true
+	}
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	if runtime.FullPlaintext || runtime.TXPlaintext {
 		return true
@@ -182,6 +191,14 @@ func kernelUDPFullPlaintextDatapathRequestedForDesired(desired config.Desired) b
 	default:
 		return false
 	}
+}
+
+func kernelUDPPlaintextPerformanceDirectOnlyExplicitlyEnabledByEnv() bool {
+	return envTruthyAny(
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_ONLY",
+	)
 }
 
 func kernelUDPPlaintextPerformanceDirectOnlyExplicitlyDisabledByEnv() bool {
@@ -295,13 +312,19 @@ func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) b
 	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext {
 		return false
 	}
+	if experimentalTCPRouteGSOExplicitlyEnabledByEnv() {
+		return true
+	}
+	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
+		return false
+	}
 	if profile.Profile == config.TransportProfilePerformance {
 		return true
 	}
-	return experimentalTCPLegacyFullPlaintextRouteGSOForDesired(desired)
+	return false
 }
 
-func experimentalTCPLegacyFullPlaintextRouteGSOForDesired(desired config.Desired) bool {
+func kernelDatapathFullPlaintextPolicySelectedForDesired(desired config.Desired) bool {
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	if runtime.FullPlaintext || runtime.TXPlaintext {
 		return true
@@ -310,7 +333,75 @@ func experimentalTCPLegacyFullPlaintextRouteGSOForDesired(desired config.Desired
 	case config.KernelCapabilityProfileFullPlaintext:
 		return true
 	}
-	return kernelDatapathFullPlaintextRequestedByEnv()
+	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+		return false
+	}
+	if !desiredTransportPolicyUsesOnlyDirectKernelTransports(desired) {
+		return false
+	}
+	endpointByName := make(map[core.EndpointID]config.EndpointConfig, len(desired.Endpoints))
+	for _, endpoint := range desired.Endpoints {
+		endpointByName[endpoint.Name] = endpoint
+	}
+	seen := false
+	consider := func(endpoint config.EndpointConfig) bool {
+		if !endpoint.Enabled {
+			return true
+		}
+		switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
+		case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+		default:
+			return false
+		}
+		profile := config.EffectiveEndpointProfile(endpoint, desired.TransportPolicy)
+		if profile.Profile != config.TransportProfilePerformance {
+			return false
+		}
+		if profile.Datapath != config.TransportDatapathKernelModule {
+			return false
+		}
+		if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext {
+			return false
+		}
+		seen = true
+		return true
+	}
+	if len(desired.TransportPolicy.Candidates) > 0 {
+		for _, candidate := range desired.TransportPolicy.Candidates {
+			endpoint, ok := endpointByName[candidate]
+			if !ok {
+				continue
+			}
+			if !consider(endpoint) {
+				return false
+			}
+		}
+		return seen
+	}
+	if len(desired.Endpoints) == 0 {
+		return false
+	}
+	for _, endpoint := range desired.Endpoints {
+		if !consider(endpoint) {
+			return false
+		}
+	}
+	return seen
+}
+
+func experimentalTCPRouteGSOExplicitlyEnabledByEnv() bool {
+	return envTruthyAny(
+		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO",
+		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT",
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY",
+	)
 }
 
 func experimentalTCPRouteGSOExplicitlyDisabledByEnv() bool {

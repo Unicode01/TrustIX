@@ -186,7 +186,7 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextExperimentalTCPRouteGSO(t
 	}
 }
 
-func TestDataplaneAttachSpecMigratesLegacyFullPlaintextExperimentalTCPToRouteGSO(t *testing.T) {
+func TestDataplaneAttachSpecKeepsFullPlaintextExperimentalTCPOnRXWorker(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -208,14 +208,14 @@ func TestDataplaneAttachSpecMigratesLegacyFullPlaintextExperimentalTCPToRouteGSO
 		}},
 	})
 
-	if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly {
-		t.Fatalf("legacy full plaintext experimental_tcp should migrate to direct route-GSO path, spec=%#v", spec)
+	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly {
+		t.Fatalf("full plaintext experimental_tcp should not migrate to route-GSO direct path, spec=%#v", spec)
 	}
-	if !spec.ExperimentalTCPRouteGSOAsync || !spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker || !spec.ExperimentalTCPPlainSkipSequence || !spec.ExperimentalTCPPlainACKOnly {
-		t.Fatalf("legacy full plaintext experimental_tcp route-GSO flags missing, spec=%#v", spec)
+	if spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker || spec.ExperimentalTCPPlainSkipSequence || spec.ExperimentalTCPPlainACKOnly {
+		t.Fatalf("full plaintext experimental_tcp should keep route-GSO flags off, spec=%#v", spec)
 	}
-	if !spec.KernelDatapathSuppressLegacyRXWorker {
-		t.Fatalf("legacy full plaintext route-GSO migration should suppress legacy RX worker ownership, spec=%#v", spec)
+	if spec.KernelDatapathSuppressLegacyRXWorker {
+		t.Fatalf("full plaintext experimental_tcp should keep RX worker ownership, spec=%#v", spec)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestDataplaneAttachSpecKeepsFullPlaintextFallbackWhenKernelTransportDisable
 	}
 }
 
-func TestDataplaneAttachSpecGenericUDPDirectDisableStillMigratesLegacyExperimentalTCP(t *testing.T) {
+func TestDataplaneAttachSpecGenericUDPDirectDisableKeepsFullPlaintextExperimentalTCP(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
@@ -305,14 +305,14 @@ func TestDataplaneAttachSpecGenericUDPDirectDisableStillMigratesLegacyExperiment
 		}},
 	})
 
-	if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly {
-		t.Fatalf("generic UDP direct disable should not block experimental_tcp route-GSO migration, spec=%#v", spec)
+	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly {
+		t.Fatalf("generic UDP direct disable should keep full plaintext experimental_tcp off route-GSO, spec=%#v", spec)
 	}
-	if !spec.ExperimentalTCPRouteGSOAsync || !spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker {
-		t.Fatalf("generic UDP direct disable should keep route-GSO flags, spec=%#v", spec)
+	if spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
+		t.Fatalf("generic UDP direct disable should keep route-GSO flags off for full plaintext, spec=%#v", spec)
 	}
-	if !spec.KernelDatapathSuppressLegacyRXWorker {
-		t.Fatalf("generic UDP direct disable should still suppress legacy RX worker, spec=%#v", spec)
+	if spec.KernelDatapathSuppressLegacyRXWorker {
+		t.Fatalf("generic UDP direct disable should keep full plaintext RX worker ownership, spec=%#v", spec)
 	}
 }
 
@@ -464,7 +464,7 @@ func TestDataplaneAttachSpecKeepsFallbackForRequireKernelPlaintextByDefault(t *t
 	}
 }
 
-func TestDataplaneAttachSpecEnablesPerformancePlaintextUDPDirectOnly(t *testing.T) {
+func TestDataplaneAttachSpecEnablesPerformancePlaintextUDPFullKmod(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface: "br-lan",
@@ -485,13 +485,13 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextUDPDirectOnly(t *testing.
 		},
 	})
 
-	if !spec.KernelUDPTXDirectOnly {
-		t.Fatalf("performance plaintext UDP should use TC-only direct path, spec=%#v", spec)
+	if spec.KernelUDPTXDirectOnly {
+		t.Fatalf("performance plaintext UDP kernel_module should not use TC-only direct path, spec=%#v", spec)
 	}
-	if !spec.KernelUDPTCOnlyProvider {
-		t.Fatalf("performance plaintext UDP should request TC-only provider, spec=%#v", spec)
+	if spec.KernelUDPTCOnlyProvider {
+		t.Fatalf("performance plaintext UDP kernel_module should not request TC-only provider, spec=%#v", spec)
 	}
-	if spec.KernelUDPTXDirectOnlyReason != "transport_policy.udp=performance tc_direct=enabled encryption=plaintext" {
+	if spec.KernelUDPTXDirectOnlyReason != "" {
 		t.Fatalf("direct-only reason = %q", spec.KernelUDPTXDirectOnlyReason)
 	}
 	if spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync {
@@ -499,7 +499,7 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextUDPDirectOnly(t *testing.
 	}
 }
 
-func TestDataplaneAttachSpecMigratesLegacyFullPlaintextUDPToTCOnly(t *testing.T) {
+func TestDataplaneAttachSpecKeepsLegacyFullPlaintextUDPOnRXWorker(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "0")
@@ -521,14 +521,14 @@ func TestDataplaneAttachSpecMigratesLegacyFullPlaintextUDPToTCOnly(t *testing.T)
 		},
 	})
 
-	if !spec.KernelUDPTXDirectOnly {
-		t.Fatalf("legacy full plaintext UDP should migrate to TC-only direct path, spec=%#v", spec)
+	if spec.KernelUDPTXDirectOnly {
+		t.Fatalf("full plaintext UDP should not migrate to TC-only direct path, spec=%#v", spec)
 	}
-	if !spec.KernelUDPTCOnlyProvider {
-		t.Fatalf("legacy full plaintext UDP should request TC-only provider, spec=%#v", spec)
+	if spec.KernelUDPTCOnlyProvider {
+		t.Fatalf("full plaintext UDP should not request TC-only provider, spec=%#v", spec)
 	}
-	if !spec.KernelDatapathSuppressLegacyRXWorker {
-		t.Fatalf("legacy full plaintext UDP should suppress RX worker ownership, spec=%#v", spec)
+	if spec.KernelDatapathSuppressLegacyRXWorker {
+		t.Fatalf("full plaintext UDP should keep RX worker ownership, spec=%#v", spec)
 	}
 }
 

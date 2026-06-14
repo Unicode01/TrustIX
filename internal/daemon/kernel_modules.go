@@ -116,6 +116,9 @@ func TrustIXDatapathModuleParameters(raw string) string {
 }
 
 func kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired config.Desired) bool {
+	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
+		return false
+	}
 	return (experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) ||
 		kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired)) &&
 		!envTruthyAny("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX")
@@ -130,7 +133,7 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 	)
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	profile := config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile)
-	fullPlaintextConfigured := runtime.FullPlaintext || runtime.TXPlaintext
+	fullPlaintextConfigured := runtime.FullPlaintext || runtime.TXPlaintext || kernelDatapathFullPlaintextPolicySelectedForDesired(desired)
 	suppressFullPlaintext := kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired)
 	rxWorkerAllowed := !suppressFullPlaintext && (fullPlaintextConfigured || kernelDatapathRXWorkerCrashRiskAllowed())
 	fullPlaintextAllowed := !suppressFullPlaintext && (fullPlaintextConfigured || kernelDatapathFullPlaintextCrashRiskAllowed())

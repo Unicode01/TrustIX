@@ -1007,7 +1007,7 @@ func TestRuntimeDataplaneSnapshotCarriesKernelTransportDisabled(t *testing.T) {
 	}
 }
 
-func TestRuntimeDataplaneSnapshotMigratedLegacyFullPlaintextExperimentalTCPRequiresKernelTransport(t *testing.T) {
+func TestRuntimeDataplaneSnapshotFullPlaintextExperimentalTCPKeepsKernelTransportAuto(t *testing.T) {
 	daemon := &Daemon{
 		desired: config.Desired{
 			KernelModules: config.KernelModulesConfig{
@@ -1029,8 +1029,11 @@ func TestRuntimeDataplaneSnapshotMigratedLegacyFullPlaintextExperimentalTCPRequi
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeRequireKernel {
-		t.Fatalf("packet policy kernel transport mode = %q, want require_kernel for legacy route-GSO migration", snapshot.PacketPolicy.KernelTransportMode)
+	if snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeAuto {
+		t.Fatalf("packet policy kernel transport mode = %q, want auto for full-kmod plaintext", snapshot.PacketPolicy.KernelTransportMode)
+	}
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) {
+		t.Fatal("full plaintext experimental_tcp should not migrate to route-GSO")
 	}
 }
 

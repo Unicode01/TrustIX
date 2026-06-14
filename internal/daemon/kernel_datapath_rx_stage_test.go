@@ -350,7 +350,7 @@ func TestKernelDatapathRXWorkerSkipsExperimentalTCPTXDirectByDefault(t *testing.
 	}
 }
 
-func TestKernelDatapathRXWorkerEnvSuppressedByRouteGSOMigration(t *testing.T) {
+func TestKernelDatapathRXWorkerEnvKeptForFullPlaintext(t *testing.T) {
 	opened := false
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
@@ -375,8 +375,8 @@ func TestKernelDatapathRXWorkerEnvSuppressedByRouteGSOMigration(t *testing.T) {
 			Enabled:   true,
 		}},
 	}
-	if mode := kernelDatapathRXModeForDesired(desired); mode != "" {
-		t.Fatalf("route-GSO migration should suppress legacy RX worker mode, got %q", mode)
+	if mode := kernelDatapathRXModeForDesired(desired); mode != kernelDatapathRXModeWorker {
+		t.Fatalf("full plaintext should keep RX worker mode, got %q", mode)
 	}
 	daemon := &Daemon{
 		dataplane:      dataplane.NewNoopManager(),
@@ -390,18 +390,17 @@ func TestKernelDatapathRXWorkerEnvSuppressedByRouteGSOMigration(t *testing.T) {
 		State:  "loaded",
 	})
 	if err := daemon.startKernelDatapathRXStage(context.Background(), dataplane.AttachSpec{
-		UnderlayIface:           "eth0",
-		LANIface:                "br-lan",
-		ExperimentalTCPTXDirect: true,
+		UnderlayIface: "eth0",
+		LANIface:      "br-lan",
 	}); err != nil {
 		t.Fatalf("start RX worker: %v", err)
 	}
-	if opened {
-		t.Fatal("driver should not open when route-GSO migration suppresses legacy RX worker")
+	if !opened {
+		t.Fatal("driver should open for full plaintext RX worker")
 	}
 	status := daemon.kernelDatapathRXStageStatus()
-	if status.Active || status.Enabled {
-		t.Fatalf("status = %#v, want disabled inactive RX worker", status)
+	if !status.Active || !status.Enabled || status.Mode != kernelDatapathRXModeWorker {
+		t.Fatalf("status = %#v, want active RX worker", status)
 	}
 }
 

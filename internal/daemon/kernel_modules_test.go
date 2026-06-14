@@ -323,7 +323,7 @@ func TestTrustIXDatapathModuleParametersForDesiredPerformanceProfileDoesNotEnabl
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredRouteGSOSuppressesFullPlaintextTX(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredPerformanceKernelModuleKeepsFullPlaintextTX(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	desired := config.Desired{
@@ -345,34 +345,29 @@ func TestTrustIXDatapathModuleParametersForDesiredRouteGSOSuppressesFullPlaintex
 
 	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext=1 tx_plaintext_slots=16384", desired)
 	for _, want := range []string{
-		"rx_worker_inject=0",
-		"tx_plaintext=0",
+		"enable_features=128",
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"rx_worker_xmit=1",
+		"rx_worker_stream_tcp=1",
+		"tx_plaintext_inline_xmit=1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
 		}
 	}
-	for _, unexpected := range []string{
-		"rx_worker_inject=1",
-		"rx_worker_xmit=1",
-		"rx_worker_stream_tcp=1",
-		"tx_plaintext=1",
-		"tx_plaintext_inline_xmit=1",
-		"tx_plaintext_slots=16384",
-	} {
-		if strings.Contains(got, unexpected) {
-			t.Fatalf("parameters = %q, unexpectedly enabled %q", got, unexpected)
-		}
+	if !kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("performance kernel_module plaintext policy should keep full plaintext datapath ownership")
 	}
-	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
-		t.Fatal("route-GSO performance policy should suppress full plaintext datapath ownership")
+	if mode := kernelDatapathRXModeForDesired(desired); mode != kernelDatapathRXModeWorker {
+		t.Fatalf("performance kernel_module plaintext policy should attach full plaintext RX hook, mode=%q", mode)
 	}
-	if mode := kernelDatapathRXModeForDesired(desired); mode != "" {
-		t.Fatalf("route-GSO performance policy should not attach full plaintext RX hook, mode=%q", mode)
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatal("performance kernel_module plaintext policy should not prefer route-GSO over full-kmod")
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredMigratesLegacyFullPlaintextToRouteGSO(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredKeepsLegacyFullPlaintextExperimentalTCP(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	desired := config.Desired{
 		KernelModules: config.KernelModulesConfig{
@@ -393,31 +388,23 @@ func TestTrustIXDatapathModuleParametersForDesiredMigratesLegacyFullPlaintextToR
 
 	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext=1 tx_plaintext_slots=16384", desired)
 	for _, want := range []string{
-		"rx_worker_inject=0",
-		"tx_plaintext=0",
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"rx_worker_xmit=1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
 		}
 	}
-	for _, unexpected := range []string{
-		"rx_worker_inject=1",
-		"tx_plaintext=1",
-		"tx_plaintext_slots=16384",
-	} {
-		if strings.Contains(got, unexpected) {
-			t.Fatalf("parameters = %q, unexpectedly enabled legacy full plaintext %q", got, unexpected)
-		}
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatal("full plaintext experimental_tcp should not use route-GSO performance fast path")
 	}
-	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
-		t.Fatal("legacy full plaintext experimental_tcp should use route-GSO performance fast path")
-	}
-	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
-		t.Fatal("legacy full plaintext experimental_tcp should not keep full plaintext datapath ownership")
+	if !kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("full plaintext experimental_tcp should keep full plaintext datapath ownership")
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredMigratesLegacyFullPlaintextUDPToTCOnly(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredKeepsLegacyFullPlaintextUDP(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	desired := config.Desired{
@@ -439,35 +426,27 @@ func TestTrustIXDatapathModuleParametersForDesiredMigratesLegacyFullPlaintextUDP
 
 	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext=1 rx_worker_xmit=1 rx_worker_tcp=1", desired)
 	for _, want := range []string{
-		"rx_worker_inject=0",
-		"tx_plaintext=0",
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"rx_worker_xmit=1",
+		"rx_worker_tcp=1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
 		}
 	}
-	for _, unexpected := range []string{
-		"rx_worker_inject=1",
-		"rx_worker_xmit=1",
-		"rx_worker_tcp=1",
-		"tx_plaintext=1",
-	} {
-		if strings.Contains(got, unexpected) {
-			t.Fatalf("parameters = %q, unexpectedly kept legacy full plaintext %q", got, unexpected)
-		}
+	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
+		t.Fatal("full plaintext UDP should not use TC-only performance fast path")
 	}
-	if !kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
-		t.Fatal("legacy full plaintext UDP should use TC-only performance fast path")
+	if !kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("full plaintext UDP should keep full plaintext datapath ownership")
 	}
-	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
-		t.Fatal("legacy full plaintext UDP should not keep full plaintext datapath ownership")
-	}
-	if mode := kernelDatapathRXModeForDesired(desired); mode != "" {
-		t.Fatalf("legacy full plaintext UDP should suppress RX worker hook, mode=%q", mode)
+	if mode := kernelDatapathRXModeForDesired(desired); mode != kernelDatapathRXModeWorker {
+		t.Fatalf("full plaintext UDP should attach RX worker hook, mode=%q", mode)
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredMigratesHarnessFullPlaintextUDPToTCOnly(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredKeepsHarnessFullPlaintextUDP(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
@@ -510,31 +489,24 @@ func TestTrustIXDatapathModuleParametersForDesiredMigratesHarnessFullPlaintextUD
 
 	got := TrustIXDatapathModuleParametersForDesired("enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_budget=1024 rx_worker_slots=8192 tx_plaintext_slots=8192", desired)
 	for _, want := range []string{
-		"rx_worker_inject=0",
-		"tx_plaintext=0",
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"rx_worker_xmit=1",
+		"tx_plaintext_inline_xmit=1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
 		}
 	}
-	for _, unexpected := range []string{
-		"rx_worker_inject=1",
-		"tx_plaintext=1",
-		"tx_plaintext_slots=8192",
-	} {
-		if strings.Contains(got, unexpected) {
-			t.Fatalf("parameters = %q, unexpectedly kept harness full plaintext %q", got, unexpected)
-		}
+	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
+		t.Fatal("harness full plaintext UDP should not use TC-only direct path")
 	}
-	if !kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
-		t.Fatal("harness full plaintext UDP should use TC-only direct path")
-	}
-	if !kernelUDPTCOnlyProviderForDesired(desired) {
-		t.Fatal("harness full plaintext UDP should request TC-only provider")
+	if kernelUDPTCOnlyProviderForDesired(desired) {
+		t.Fatal("harness full plaintext UDP should not request TC-only provider")
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredRouteGSOSuppressesLegacyRXWorkerEnv(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredKeepsLegacyRXWorkerEnvForFullPlaintext(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
@@ -564,32 +536,21 @@ func TestTrustIXDatapathModuleParametersForDesiredRouteGSOSuppressesLegacyRXWork
 		"tx_plaintext_slots=16384",
 	}, " "), desired)
 	for _, want := range []string{
-		"rx_worker_inject=0",
-		"tx_plaintext=0",
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"rx_worker_xmit=1",
+		"rx_worker_stream_tcp=1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
 		}
 	}
-	for _, unexpected := range []string{
-		"rx_worker_inject=1",
-		"rx_worker_xmit=1",
-		"rx_worker_inline_xmit=1",
-		"rx_worker_tcp=1",
-		"rx_worker_stream_tcp=1",
-		"tx_plaintext=1",
-		"tx_plaintext_slots=16384",
-	} {
-		if strings.Contains(got, unexpected) {
-			t.Fatalf("parameters = %q, unexpectedly kept legacy worker/full plaintext %q", got, unexpected)
-		}
-	}
-	if mode := kernelDatapathRXModeForDesired(desired); mode != "" {
-		t.Fatalf("route-GSO migration should suppress legacy RX worker env, mode=%q", mode)
+	if mode := kernelDatapathRXModeForDesired(desired); mode != kernelDatapathRXModeWorker {
+		t.Fatalf("full plaintext should keep RX worker env, mode=%q", mode)
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredGenericUDPDirectDisableStillMigratesLegacyExperimentalTCP(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredGenericUDPDirectDisableKeepsFullPlaintextExperimentalTCP(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
@@ -612,18 +573,18 @@ func TestTrustIXDatapathModuleParametersForDesiredGenericUDPDirectDisableStillMi
 
 	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext=1 rx_worker_xmit=1", desired)
 	for _, want := range []string{
-		"rx_worker_inject=0",
-		"tx_plaintext=0",
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
 		}
 	}
-	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
-		t.Fatal("generic UDP TC direct disable must not disable experimental_tcp route-GSO migration")
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatal("generic UDP TC direct disable should not force experimental_tcp route-GSO over full plaintext")
 	}
-	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
-		t.Fatal("generic UDP TC direct disable should not keep legacy full plaintext ownership")
+	if !kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("generic UDP TC direct disable should keep full plaintext ownership")
 	}
 }
 
@@ -922,7 +883,7 @@ func TestTrustIXDatapathHelpersModuleParametersAllowsRouteGSOSyncStream(t *testi
 	}
 }
 
-func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessPerformance(t *testing.T) {
+func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDPPerformance(t *testing.T) {
 	desired := config.Desired{
 		Endpoints: []config.EndpointConfig{{
 			Name:      "ackless-a",
@@ -936,7 +897,7 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessPerfo
 			Profiles: []config.TransportProfileConfig{{
 				Transport:  "experimental_tcp",
 				Profile:    config.TransportProfilePerformance,
-				Datapath:   config.TransportDatapathKernelModule,
+				Datapath:   config.TransportDatapathTCXDP,
 				Encryption: "plaintext",
 			}},
 		},

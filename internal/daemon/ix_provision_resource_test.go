@@ -199,8 +199,11 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	if len(target.TransportPolicy.Profiles) != 0 {
 		t.Fatalf("transport profiles = %#v, want none for experimental_tcp primary", target.TransportPolicy.Profiles)
 	}
-	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
-		t.Fatalf("default provision config did not enable experimental_tcp route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("default provision config should prefer full-kmod plaintext over experimental_tcp route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	}
+	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
+		t.Fatalf("default provision config did not enable full-kmod plaintext: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if target.Policies[0].LoadBalance == "least_conn" {
 		t.Fatalf("generated default policy uses least_conn, want priority-ordered fallback")
@@ -477,11 +480,14 @@ func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
 		t.Fatalf("target plaintext performance policy endpoint=%#v policy=%#v", target.Endpoints[0], target.TransportPolicy)
 	}
-	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
-		t.Fatalf("target plaintext performance config did not enable experimental_tcp route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("target plaintext performance config should prefer full-kmod plaintext over route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
-	if !kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(target) {
-		t.Fatalf("target plaintext performance config did not suppress legacy full-kmod plaintext TX")
+	if kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(target) {
+		t.Fatalf("target plaintext performance config should keep full-kmod plaintext TX")
+	}
+	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
+		t.Fatalf("target plaintext performance config did not enable full-kmod plaintext")
 	}
 	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
 		t.Fatalf("target kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
