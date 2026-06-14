@@ -29,6 +29,8 @@ iperf3_directions="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_DIRECTIONS:-both
 iperf3_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS:-0}"
 iperf3_min_sent_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_SENT_GBPS:-$iperf3_min_gbps}"
 iperf3_min_received_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_RECEIVED_GBPS:-$iperf3_min_gbps}"
+full_datapath_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MIN_GBPS:-4}"
+route_gso_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_ROUTE_GSO_MIN_GBPS:-4}"
 ping_count="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PING_COUNT:-3}"
 udp_burst_packets="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_UDP_BURST_PACKETS:-64}"
 udp_burst_size="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_UDP_BURST_SIZE:-512}"
@@ -154,6 +156,15 @@ case_is_full_datapath() {
     "$placement" == "userspace" ]]
 }
 
+case_is_route_gso() {
+  local transport="$1" encryption="$2" profile="$3" datapath="$4" placement="$5"
+  [[ "$transport" == "experimental_tcp" &&
+    "$encryption" == "plaintext" &&
+    "$profile" == "performance" &&
+    "$datapath" == "kernel_module" &&
+    "$placement" == "userspace" ]]
+}
+
 full_datapath_case_available() {
   case "$full_datapath_module" in
     1|true|yes|on|enabled) return 0 ;;
@@ -173,6 +184,30 @@ full_datapath_case_available() {
       ;;
     *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MODULE must be auto, 1, or 0" ;;
   esac
+}
+
+case_min_sent_gbps() {
+  if case_is_full_datapath "$@"; then
+    printf '%s' "$full_datapath_min_gbps"
+    return
+  fi
+  if case_is_route_gso "$@"; then
+    printf '%s' "$route_gso_min_gbps"
+    return
+  fi
+  printf '%s' "$iperf3_min_sent_gbps"
+}
+
+case_min_received_gbps() {
+  if case_is_full_datapath "$@"; then
+    printf '%s' "$full_datapath_min_gbps"
+    return
+  fi
+  if case_is_route_gso "$@"; then
+    printf '%s' "$route_gso_min_gbps"
+    return
+  fi
+  printf '%s' "$iperf3_min_received_gbps"
 }
 
 case_full_datapath_module_value() {
@@ -206,7 +241,7 @@ run_case() {
   local transport="$1" encryption="$2" profile="$3" datapath="$4" placement="$5"
   local name="${transport}-${encryption}-${profile}-${datapath}-${placement}"
   local dir="${workdir}/${name}"
-  local start end elapsed rc case_kernel_module case_full_datapath_module case_full_datapath_rx_worker
+  local start end elapsed rc case_kernel_module case_full_datapath_module case_full_datapath_rx_worker case_min_sent case_min_received
   validate_case "$transport" "$encryption" "$profile" "$datapath" "$placement"
   if case_should_skip "$transport" "$encryption" "$profile" "$datapath" "$placement"; then
     record_result "skipped" "$name" "$transport" "$encryption" "$profile" "$datapath" "$placement" 0 "$dir" 0
@@ -218,6 +253,8 @@ run_case() {
   fi
   case_full_datapath_module="$(case_full_datapath_module_value "$transport" "$encryption" "$profile" "$datapath" "$placement")"
   case_full_datapath_rx_worker="$(case_full_datapath_rx_worker_value "$transport" "$encryption" "$profile" "$datapath" "$placement")"
+  case_min_sent="$(case_min_sent_gbps "$transport" "$encryption" "$profile" "$datapath" "$placement")"
+  case_min_received="$(case_min_received_gbps "$transport" "$encryption" "$profile" "$datapath" "$placement")"
   rm -rf "$dir"
   mkdir -p "$dir"
   log "run ${name}"
@@ -261,8 +298,8 @@ run_case() {
     export TRUSTIX_E2E_IPERF3_SECONDS="$iperf3_seconds"
     export TRUSTIX_E2E_IPERF3_PARALLEL="$iperf3_parallel"
     export TRUSTIX_E2E_IPERF3_DIRECTIONS="$iperf3_directions"
-    export TRUSTIX_E2E_IPERF3_MIN_SENT_GBPS="$iperf3_min_sent_gbps"
-    export TRUSTIX_E2E_IPERF3_MIN_RECEIVED_GBPS="$iperf3_min_received_gbps"
+    export TRUSTIX_E2E_IPERF3_MIN_SENT_GBPS="$case_min_sent"
+    export TRUSTIX_E2E_IPERF3_MIN_RECEIVED_GBPS="$case_min_received"
     export TRUSTIX_E2E_PING_COUNT="$ping_count"
     export TRUSTIX_E2E_UDP_BURST_PACKETS="$udp_burst_packets"
     export TRUSTIX_E2E_UDP_BURST_SIZE="$udp_burst_size"
@@ -325,6 +362,8 @@ main() {
   local nonnegative_decimal_re='^[0-9]+([.][0-9]+)?$'
   [[ "$iperf3_min_sent_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_SENT_GBPS/TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS must be a non-negative number"
   [[ "$iperf3_min_received_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_RECEIVED_GBPS/TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS must be a non-negative number"
+  [[ "$full_datapath_min_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MIN_GBPS must be a non-negative number"
+  [[ "$route_gso_min_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_ROUTE_GSO_MIN_GBPS must be a non-negative number"
   : >"$summary_path"
   log "workdir=${workdir}"
   log "summary=${summary_path}"
