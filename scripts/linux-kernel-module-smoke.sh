@@ -75,6 +75,14 @@ simd_kfunc_fastpath_requested() {
   truthy "$value"
 }
 
+simd_kfunc_fastpath_requested_value() {
+  if simd_kfunc_fastpath_requested; then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
 read_module_param() {
   local name="$1"
   local path="/sys/module/${module_name}/parameters/${name}"
@@ -185,6 +193,7 @@ build_and_load_module() {
     fi
     apply_loaded_bool_param experimental_vaes_kfunc "$experimental_vaes_kfunc"
     apply_loaded_bool_param kfunc_fastpath_wipe "$kfunc_fastpath_wipe"
+    apply_loaded_bool_param kfunc_simd_fastpath "$(simd_kfunc_fastpath_requested_value)"
     verify_simd_fastpath_mode
     return 0
   fi
@@ -250,6 +259,7 @@ build_and_load_module() {
   insmod "$ko_path" $insmod_params
   loaded_by_script=1
   lsmod | grep "$module_name" >/dev/null || die "${module_name} did not appear in lsmod"
+  apply_loaded_bool_param kfunc_simd_fastpath "$(simd_kfunc_fastpath_requested_value)"
   verify_simd_fastpath_mode
   if truthy "$prefer_software"; then
     grep -qi '^Y' "/sys/module/${module_name}/parameters/prefer_software" || die "prefer_software=1 was not applied"

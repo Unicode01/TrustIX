@@ -336,7 +336,7 @@ MODULE_PARM_DESC(kfunc_fastpath_wipe,
 		 "Wipe one-packet BPF AES-GCM temporary buffers before returning; disable only for trusted performance tests");
 
 static bool trustix_kfunc_simd_fastpath;
-module_param_named(kfunc_simd_fastpath, trustix_kfunc_simd_fastpath, bool, 0444);
+module_param_named(kfunc_simd_fastpath, trustix_kfunc_simd_fastpath, bool, 0644);
 MODULE_PARM_DESC(kfunc_simd_fastpath,
 		 "Allow TrustIX one-packet BPF crypto callbacks to use explicit SIMD/FPU fast paths; off by default because TC/XDP callbacks can run in contexts where kernel_fpu_begin is unsafe");
 

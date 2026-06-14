@@ -699,7 +699,7 @@ func TestTrustIXCryptoModuleParametersStripsPanicRiskRawParameters(t *testing.T)
 	}
 }
 
-func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceFiltersSIMDKfuncFastpathByDefault(t *testing.T) {
+func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceEnablesSIMDKfuncFastpath(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -716,8 +716,13 @@ func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceFiltersSIMDKfun
 	}
 
 	got := TrustIXCryptoModuleParametersForDesired("", desired)
-	if strings.Contains(got, "kfunc_simd_fastpath=1") {
-		t.Fatalf("parameters = %q, must not enable SIMD kfunc fast path by default", got)
+	if !strings.Contains(got, "kfunc_simd_fastpath=1") {
+		t.Fatalf("parameters = %q, missing secure performance SIMD kfunc fast path", got)
+	}
+	for _, unexpected := range []string{"experimental_aesni_kfunc=1", "experimental_vaes_kfunc=1"} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("parameters = %q, unexpectedly enabled %q", got, unexpected)
+		}
 	}
 }
 

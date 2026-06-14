@@ -14192,7 +14192,7 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	}
 	requireSourceContains(t, helpersSource, "datapath can self-degrade under validation")
 
-	requireModuleParamPermission(t, cryptoSource, "kfunc_simd_fastpath", "0444")
+	requireModuleParamPermission(t, cryptoSource, "kfunc_simd_fastpath", "0644")
 	requireSourceNotContains(t, cryptoSource, "WRITE_ONCE(trustix_kfunc_simd_fastpath, false);")
 }
 
