@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"runtime/debug"
 	"sort"
+	"strings"
 )
 
 var (
@@ -38,14 +40,51 @@ type AssetInfo struct {
 }
 
 func Snapshot() Info {
+	version, commit, builtAt := resolveBuildIdentity()
 	return Info{
-		Version:   Version,
-		Commit:    Commit,
-		BuiltAt:   BuiltAt,
+		Version:   version,
+		Commit:    commit,
+		BuiltAt:   builtAt,
 		GoVersion: runtime.Version(),
 		GOOS:      runtime.GOOS,
 		GOARCH:    runtime.GOARCH,
 	}
+}
+
+func resolveBuildIdentity() (string, string, string) {
+	version := Version
+	commit := Commit
+	builtAt := BuiltAt
+	build, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version, commit, builtAt
+	}
+	if isPlaceholder(version) && build.Main.Version != "" && build.Main.Version != "(devel)" {
+		version = build.Main.Version
+	}
+	vcsModified := false
+	for _, setting := range build.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			if isPlaceholder(commit) && setting.Value != "" {
+				commit = setting.Value
+			}
+		case "vcs.time":
+			if isPlaceholder(builtAt) && setting.Value != "" {
+				builtAt = setting.Value
+			}
+		case "vcs.modified":
+			vcsModified = setting.Value == "true"
+		}
+	}
+	if vcsModified && !isPlaceholder(commit) && !strings.HasSuffix(commit, "-dirty") {
+		commit += "-dirty"
+	}
+	return version, commit, builtAt
+}
+
+func isPlaceholder(value string) bool {
+	return value == "" || value == "dev" || value == "unknown"
 }
 
 func SnapshotWithAssets(assets Assets) Info {

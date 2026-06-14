@@ -4,6 +4,29 @@ This file records datapath performance findings and script changes so future run
 
 ## 2026-06-15
 
+### Current full-kmod speed regression check
+
+Finding: a low-throughput rerun was traced to stale cross-host test payloads,
+not a current-source full-kmod throughput regression. VM104/VM106/VM107 did not
+all have the same `/tmp/trustix-e2e/bin/trustixd`; after rebuilding the current
+PVE source and syncing the same binary to the test peers, plaintext full-kmod
+returned above the 4 Gbps production gate.
+
+Current-source PVE verification:
+
+| Case | Artifact | Duration per direction | Throughput |
+| --- | --- | ---: | --- |
+| Debian to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-dd-fullkmod-short-20260615-001507` | 20s | 5.389 / 5.530 Gbps |
+| Debian to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-dd-fullkmod-soak120-20260615-002936` | 120s | 5.430 / 5.550 Gbps |
+| OpenWrt to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-owdeb-fullkmod-short-20260615-001950` | 20s | 5.472 / 6.280 Gbps |
+| OpenWrt to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-owdeb-fullkmod-soak120-20260615-002404` | 120s | 5.483 / 6.275 Gbps |
+
+Change: `scripts/linux-cross-host-soak-verify.py` now records and validates
+collected build identities, and can require matching `binary-identity.json`
+checksums. `scripts/linux-e2e-smoke.sh` writes a `*-binary-identity.json`
+artifact beside status/route/datapath captures so future performance results
+can fail closed when peers are accidentally tested with different binaries.
+
 ### Cross-host production artifact verifier
 
 Change: added `scripts/linux-cross-host-soak-verify.py`. The single-host

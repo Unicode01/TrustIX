@@ -11,6 +11,7 @@ duration, plus log scanning for kernel crash signatures.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -102,6 +103,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="skip panic/oops/lockup log signature scanning",
     )
+    parser.add_argument(
+        "--require-build-identity",
+        action="store_true",
+        help="require at least two collected status.json build blocks and verify they match",
+    )
+    parser.add_argument(
+        "--require-strong-build-identity",
+        action="store_true",
+        help="also reject placeholder or missing commit/time build metadata",
+    )
+    parser.add_argument(
+        "--require-binary-identity",
+        action="store_true",
+        help="require at least two collected binary-identity.json files and verify their sha256 values match",
+    )
     return parser.parse_args()
 
 
@@ -165,6 +181,66 @@ def scan_logs(case_dir: Path) -> list[str]:
     return findings
 
 
+def stable_digest(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def collect_status_build_identities(case_dir: Path) -> list[dict[str, Any]]:
+    identities: list[dict[str, Any]] = []
+    for path in sorted(case_dir.rglob("status.json")):
+        try:
+            payload = read_json(path)
+        except Exception:
+            continue
+        build = payload.get("build")
+        if not isinstance(build, dict):
+            continue
+        identity = {
+            "source": str(path.relative_to(case_dir)),
+            "version": str(build.get("version") or ""),
+            "commit": str(build.get("commit") or ""),
+            "built_at": str(build.get("built_at") or ""),
+            "go_version": str(build.get("go_version") or ""),
+            "goos": str(build.get("goos") or ""),
+            "goarch": str(build.get("goarch") or ""),
+            "assets_sha256": stable_digest(build.get("assets") or {}),
+        }
+        identity["strong"] = all(
+            identity.get(field) not in {"", "unknown"}
+            for field in ("commit", "built_at")
+        )
+        identities.append(identity)
+    return identities
+
+
+def collect_binary_identities(case_dir: Path) -> list[dict[str, Any]]:
+    identities: list[dict[str, Any]] = []
+    for path in sorted(case_dir.rglob("binary-identity.json")):
+        try:
+            payload = read_json(path)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        sha256 = str(payload.get("sha256") or payload.get("trustixd_sha256") or "")
+        if not sha256:
+            continue
+        identities.append(
+            {
+                "source": str(path.relative_to(case_dir)),
+                "sha256": sha256,
+                "path": str(payload.get("path") or ""),
+                "version": payload.get("version"),
+            }
+        )
+    return identities
+
+
+def identity_key(identity: dict[str, Any], fields: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(str(identity.get(field) or "") for field in fields)
+
+
 def validate_case(
     case: CaseSpec,
     *,
@@ -174,6 +250,9 @@ def validate_case(
     min_iperf_json: int,
     require_result_marker: bool,
     log_scan: bool,
+    require_build_identity: bool,
+    require_strong_build_identity: bool,
+    require_binary_identity: bool,
 ) -> dict[str, Any]:
     errors: list[str] = []
     if not case.path.is_dir():
@@ -221,6 +300,45 @@ def validate_case(
     if log_findings:
         errors.extend(f"log crash signature: {finding}" for finding in log_findings)
 
+    build_identities = collect_status_build_identities(case.path)
+    build_identity_fields = (
+        "version",
+        "commit",
+        "built_at",
+        "go_version",
+        "goos",
+        "goarch",
+        "assets_sha256",
+    )
+    build_identity_keys = {identity_key(item, build_identity_fields) for item in build_identities}
+    if require_build_identity and len(build_identities) < 2:
+        errors.append(
+            f"found {len(build_identities)} collected status build identities, want >= 2"
+        )
+    if len(build_identity_keys) > 1:
+        errors.append("collected status build identity mismatch across hosts")
+    if require_strong_build_identity:
+        if len(build_identities) < 2:
+            errors.append(
+                f"found {len(build_identities)} collected status build identities, want >= 2"
+            )
+        for item in build_identities:
+            if not item.get("strong"):
+                errors.append(
+                    f"{item['source']}: weak build identity "
+                    f"version={item['version']!r} commit={item['commit']!r} "
+                    f"built_at={item['built_at']!r}"
+                )
+
+    binary_identities = collect_binary_identities(case.path)
+    binary_sha256s = {str(item.get("sha256") or "") for item in binary_identities}
+    if require_binary_identity and len(binary_identities) < 2:
+        errors.append(
+            f"found {len(binary_identities)} binary identities, want >= 2"
+        )
+    if len(binary_sha256s) > 1:
+        errors.append("binary identity sha256 mismatch across hosts")
+
     min_sent = min((item["sent_gbps"] for item in iperf_results), default=0)
     min_received = min((item["received_gbps"] for item in iperf_results), default=0)
     min_duration = min((item["seconds"] for item in iperf_results), default=0)
@@ -238,6 +356,8 @@ def validate_case(
         "result_markers": marker_values,
         "iperf": iperf_results,
         "log_findings": log_findings,
+        "build_identities": build_identities,
+        "binary_identities": binary_identities,
         "errors": errors,
     }
 
@@ -270,6 +390,9 @@ def main() -> int:
             min_iperf_json=args.min_iperf_json,
             require_result_marker=not args.no_result_marker,
             log_scan=not args.no_log_scan,
+            require_build_identity=args.require_build_identity,
+            require_strong_build_identity=args.require_strong_build_identity,
+            require_binary_identity=args.require_binary_identity,
         )
         for case in parse_cases(args)
     ]

@@ -2558,10 +2558,64 @@ run_iperf3_probes() {
   esac
 }
 
+collect_binary_identity() {
+  local name="$1"
+  python3 - "$bin_dir/trustixd" "$workdir/${name}-binary-identity.json" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+binary = Path(sys.argv[1])
+out = Path(sys.argv[2])
+sha256 = ""
+try:
+    digest = hashlib.sha256()
+    with binary.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    sha256 = digest.hexdigest()
+except OSError:
+    pass
+
+version = {}
+try:
+    proc = subprocess.run(
+        [str(binary), "-version"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=5,
+    )
+    for line in proc.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            version[key.strip()] = value.strip()
+except Exception as exc:  # noqa: BLE001 - best-effort artifact collection.
+    version["error"] = str(exc)
+
+out.write_text(
+    json.dumps(
+        {
+            "path": str(binary),
+            "sha256": sha256,
+            "version": version,
+        },
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
 collect_api() {
   local name="$1"
   local api="$2"
   local ns="${3:-}"
+  collect_binary_identity "$name" || true
   run_ctl "$ns" -api "$api" status >"$workdir/${name}-status.json"
   run_ctl "$ns" -api "$api" routes >"$workdir/${name}-routes.json"
   run_ctl "$ns" -api "$api" flows >"$workdir/${name}-flows.json"
