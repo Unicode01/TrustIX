@@ -396,12 +396,20 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if request.Profile != "plaintext_performance" || request.EndpointTransport != "udp" {
 		t.Fatalf("normalized OpenWrt performance defaults profile=%q transport=%q, want plaintext_performance/udp", request.Profile, request.EndpointTransport)
 	}
+	if request.KernelModules != "auto" || request.BuildKO != "1" {
+		t.Fatalf("normalized OpenWrt performance kernel modules/build_ko = %q/%q, want auto/1", request.KernelModules, request.BuildKO)
+	}
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
 	}
 	if target.TransportPolicy.KernelTransport.Mode != "auto" || len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "udp" {
 		t.Fatalf("target OpenWrt performance defaults policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	}
+	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapath.Mode != "required" ||
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" {
+		t.Fatalf("target OpenWrt performance kernel module modes = %#v, want datapath required only", target.KernelModules)
 	}
 	if !target.DNS.Enabled || !target.DNS.DNSMasq.Enabled || target.DNS.Domain != "trust.ix" {
 		t.Fatalf("target DNS = %#v", target.DNS)
@@ -492,6 +500,11 @@ func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
 		t.Fatalf("target kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
 	}
+	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapath.Mode != "required" ||
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" {
+		t.Fatalf("target plaintext performance kernel module modes = %#v, want datapath required only", target.KernelModules)
+	}
 }
 
 func TestIXProvisionOpenWRTPlaintextPerformanceUsesUDPTCOnly(t *testing.T) {
@@ -530,6 +543,9 @@ func TestIXProvisionOpenWRTPlaintextPerformanceUsesUDPTCOnly(t *testing.T) {
 		target.KernelModules.TrustIXDatapath.Mode != "disabled" ||
 		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" {
 		t.Fatalf("OpenWrt TC-only kernel module modes = %#v", target.KernelModules)
+	}
+	if request.BuildKO != "auto" {
+		t.Fatalf("OpenWrt TC-only build_ko = %q, want auto", request.BuildKO)
 	}
 	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
 		t.Fatalf("OpenWrt TC-only kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
@@ -580,6 +596,14 @@ func TestIXProvisionEdgeActiveOnlyDoesNotPublishControlAPI(t *testing.T) {
 	}
 	if target.TransportPolicy.Datapath != config.TransportDatapathTCXDP {
 		t.Fatalf("active experimental_tcp datapath = %q, want tc_xdp route-GSO", target.TransportPolicy.Datapath)
+	}
+	if request.BuildKO != "1" {
+		t.Fatalf("active experimental_tcp build_ko = %q, want 1 for route-GSO modules", request.BuildKO)
+	}
+	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapath.Mode != "required" ||
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "required" {
+		t.Fatalf("active experimental_tcp kernel module modes = %#v, want datapath/helpers required", target.KernelModules)
 	}
 	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
 		t.Fatalf("active experimental_tcp provision config did not enable route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)

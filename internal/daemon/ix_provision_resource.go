@@ -660,6 +660,16 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 	if err := validateProvisionToggle("build_webui", request.BuildWebUI, "0", "1"); err != nil {
 		return ixProvisionIssueRequest{}, nil, err
 	}
+	if request.KernelModules == "auto" && request.BuildKO == "auto" {
+		profile, err := ixProvisionDefaultsForProfile(request.Profile)
+		if err != nil {
+			return ixProvisionIssueRequest{}, nil, err
+		}
+		profile = ixProvisionEffectiveProfileForRequest(request, profile)
+		if ixProvisionRequiresBuiltKernelModules(request, profile) {
+			request.BuildKO = "1"
+		}
+	}
 	request.SourceCerts = strings.TrimSpace(request.SourceCerts)
 	if request.SourceCerts == "" {
 		request.SourceCerts = "certs"
@@ -1146,6 +1156,32 @@ func ixProvisionKernelModulesMode(request ixProvisionIssueRequest, profile ixPro
 	return request.KernelModules
 }
 
+func ixProvisionKernelModuleModes(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) (cryptoMode, datapathMode, helpersMode string) {
+	mode := ixProvisionKernelModulesMode(request, profile)
+	cryptoMode, datapathMode, helpersMode = mode, mode, mode
+	if mode != "auto" {
+		return cryptoMode, datapathMode, helpersMode
+	}
+	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext ||
+		profile.TransportProfile != config.TransportProfilePerformance {
+		return cryptoMode, datapathMode, helpersMode
+	}
+	switch profile.Datapath {
+	case config.TransportDatapathKernelModule:
+		return "disabled", "required", "disabled"
+	case config.TransportDatapathTCXDP:
+		if transport.Protocol(request.EndpointTransport) == transport.ProtocolExperimentalTCP {
+			return "disabled", "required", "required"
+		}
+	}
+	return cryptoMode, datapathMode, helpersMode
+}
+
+func ixProvisionRequiresBuiltKernelModules(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
+	cryptoMode, datapathMode, helpersMode := ixProvisionKernelModuleModes(request, profile)
+	return cryptoMode == "required" || datapathMode == "required" || helpersMode == "required"
+}
+
 func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Prefix, roots []ixProvisionTrustRootFile) (config.Desired, error) {
 	ixBase := safeProvisionFileName(string(request.IXID), "ix")
 	rootPaths := make([]string, 0, len(roots))
@@ -1160,7 +1196,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 	attachMode := config.LANAttachMode(request.AttachMode)
 	manageAddress := attachMode != config.LANAttachModeExisting
 	endpoints, candidates := ixProvisionEndpointConfigs(request, profile)
-	kernelModulesMode := ixProvisionKernelModulesMode(request, profile)
+	cryptoMode, datapathMode, helpersMode := ixProvisionKernelModuleModes(request, profile)
 	desired := config.Desired{
 		Domain: config.DomainConfig{
 			ID:         request.Domain,
@@ -1191,9 +1227,9 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 		},
 		KernelModules: config.KernelModulesConfig{
 			CapabilityProfile:      profile.KernelCapabilityProfile,
-			TrustIXCrypto:          config.KernelModuleConfig{Mode: kernelModulesMode, Path: "embedded", ReloadOnUpgrade: "auto"},
-			TrustIXDatapath:        config.KernelModuleConfig{Mode: kernelModulesMode, Path: "embedded", ReloadOnUpgrade: "auto"},
-			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: kernelModulesMode, Path: "embedded", ReloadOnUpgrade: "auto"},
+			TrustIXCrypto:          config.KernelModuleConfig{Mode: cryptoMode, Path: "embedded", ReloadOnUpgrade: "auto"},
+			TrustIXDatapath:        config.KernelModuleConfig{Mode: datapathMode, Path: "embedded", ReloadOnUpgrade: "auto"},
+			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: helpersMode, Path: "embedded", ReloadOnUpgrade: "auto"},
 		},
 		Endpoints: endpoints,
 		Bootstrap: config.BootstrapConfig{},

@@ -181,6 +181,9 @@ fi
 if [[ "$effective_build_ko" == "1" && "$(uname -s)" != "Linux" ]]; then
   die "kernel module release builds must run on Linux; use --build-ko 0 for userspace-only cross builds"
 fi
+if [[ "$effective_build_ko" == "1" ]]; then
+  trustix_prereqs_ensure_kernel_build_dir "${kdir:-/lib/modules/$(uname -r)/build}" || die "kernel module build dependencies are missing; provide a matching KDIR/OpenWrt SDK build tree or use --build-ko 0 with non-required kernel modules"
+fi
 
 log "release name=${release_name} target=${goos}/${goarch} build_bpf=${build_bpf} build_ko=${effective_build_ko}"
 
