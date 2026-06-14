@@ -1127,6 +1127,34 @@ func TestRuntimeDataplaneSnapshotDisabledKernelTransportDoesNotMigrateLegacyFull
 	}
 }
 
+func TestRuntimeDataplaneSnapshotDisablesAutoForSecureUserspaceExperimentalTCP(t *testing.T) {
+	daemon := &Daemon{
+		desired: config.Desired{
+			TransportPolicy: config.TransportPolicyConfig{
+				Profile:         config.TransportProfilePerformance,
+				Datapath:        config.TransportDatapathTCXDP,
+				Encryption:      securetransport.EncryptionSecure,
+				CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+				Candidates:      []core.EndpointID{"exp-a"},
+			},
+			Endpoints: []config.EndpointConfig{{
+				Name:      "exp-a",
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			}},
+		},
+		members: make(map[core.IXID]memberRecord),
+	}
+
+	snapshot := daemon.runtimeDataplaneSnapshot()
+	if snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeDisabled {
+		t.Fatalf("packet policy kernel transport mode = %q, want disabled for secure userspace-crypto experimental_tcp", snapshot.PacketPolicy.KernelTransportMode)
+	}
+	if daemon.transportPolicyUsesExperimentalTCP() {
+		t.Fatal("secure userspace-crypto experimental_tcp auto policy should not enable kernel direct helpers")
+	}
+}
+
 func TestRuntimeDataplaneSnapshotEnvAutoMSSForUserspaceUDP(t *testing.T) {
 	t.Setenv("TRUSTIX_UDP_AUTO_TCP_MSS_CLAMP", "1")
 	daemon := &Daemon{

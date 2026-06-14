@@ -134,3 +134,146 @@ func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoUDP(t *testin
 		t.Fatalf("kernel transport mode = %q, want auto for secure kernel-crypto UDP", got)
 	}
 }
+
+func TestEffectiveKernelTransportModeDisablesAutoForSecureUserspaceExperimentalTCP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			Candidates:      []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeDisabled {
+		t.Fatalf("kernel transport mode = %q, want disabled for secure userspace-crypto experimental_tcp", got)
+	}
+	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason == "" {
+		t.Fatal("experimental_tcp fast path disabled reason is empty")
+	}
+}
+
+func TestEffectiveKernelTransportModeKeepsAutoForMixedUDPAndSecureUserspaceExperimentalTCP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionPlaintext,
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			Candidates:      []core.EndpointID{"udp-a", "exp-a"},
+			Profiles: []config.TransportProfileConfig{
+				{
+					Transport:       string(transport.ProtocolUDP),
+					Profile:         config.TransportProfilePerformance,
+					Datapath:        config.TransportDatapathKernelModule,
+					Encryption:      securetransport.EncryptionPlaintext,
+					CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+				},
+				{
+					Transport:       string(transport.ProtocolExperimentalTCP),
+					Profile:         config.TransportProfilePerformance,
+					Datapath:        config.TransportDatapathTCXDP,
+					Encryption:      securetransport.EncryptionSecure,
+					CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+				},
+			},
+		},
+		Endpoints: []config.EndpointConfig{
+			{
+				Name:      "udp-a",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			},
+			{
+				Name:      "exp-a",
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			},
+		},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
+		t.Fatalf("kernel transport mode = %q, want auto so UDP/full-kmod remains available", got)
+	}
+	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason == "" {
+		t.Fatal("mixed policy should still disable only the unsafe experimental_tcp fast path")
+	}
+}
+
+func TestEffectiveKernelTransportModeKeepsExplicitRequireForSecureUserspaceExperimentalTCP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Candidates:      []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeRequireKernel {
+		t.Fatalf("kernel transport mode = %q, want explicit require_kernel", got)
+	}
+	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("explicit require_kernel unexpectedly disabled experimental_tcp fast path: %q", reason)
+	}
+}
+
+func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoExperimentalTCP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
+		t.Fatalf("kernel transport mode = %q, want auto for secure kernel-crypto experimental_tcp", got)
+	}
+	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("kernel crypto experimental_tcp unexpectedly disabled fast path: %q", reason)
+	}
+}
+
+func TestEffectiveKernelTransportModeRequiresKernelForPlaintextPerformanceExperimentalTCP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeRequireKernel {
+		t.Fatalf("kernel transport mode = %q, want require_kernel for plaintext experimental_tcp route-GSO", got)
+	}
+	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("plaintext performance experimental_tcp unexpectedly disabled fast path: %q", reason)
+	}
+}

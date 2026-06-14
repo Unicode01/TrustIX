@@ -7046,7 +7046,7 @@ func (daemon *Daemon) transportPolicyPrefersNativePlaintextKernelTunnel() bool {
 	return daemon != nil &&
 		!nativeTunnelRouteOffloadDisabledForPolicy() &&
 		!daemon.transportPolicySendsSecureData() &&
-		normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode) != dataplane.KernelTransportModeDisabled
+		daemon.kernelTransportMode() != dataplane.KernelTransportModeDisabled
 }
 
 func (daemon *Daemon) endpointTransportPreferenceRank(endpoint config.EndpointConfig) int {

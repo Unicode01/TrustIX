@@ -42,6 +42,9 @@ func effectiveKernelTransportModeForDesired(desired config.Desired) dataplane.Ke
 	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesSecureUserspaceKernelUDP(desired) {
 		return dataplane.KernelTransportModeDisabled
 	}
+	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlySecureUserspaceExperimentalTCP(desired) {
+		return dataplane.KernelTransportModeDisabled
+	}
 	return mode
 }
 
@@ -75,6 +78,36 @@ func desiredTransportPolicyUsesSecureUserspaceKernelUDP(desired config.Desired) 
 		placement = effectiveTransportCryptoPlacementConfig(desired.TransportPolicy)
 	}
 	return placement == string(dataplane.CryptoPlacementUserspace)
+}
+
+func desiredTransportPolicyUsesSecureUserspaceExperimentalTCP(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		return false
+	}
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
+	if profile.Datapath == config.TransportDatapathUserspace {
+		return false
+	}
+	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionSecure {
+		return false
+	}
+	placement := normalizeTransportCryptoPlacementConfig(profile.CryptoPlacement)
+	if placement == "" {
+		placement = effectiveTransportCryptoPlacementConfig(desired.TransportPolicy)
+	}
+	return placement == string(dataplane.CryptoPlacementUserspace)
+}
+
+func desiredTransportPolicyUsesOnlySecureUserspaceExperimentalTCP(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesSecureUserspaceExperimentalTCP(desired) {
+		return false
+	}
+	return !desiredTransportPolicyUsesAnyProtocol(desired,
+		transport.ProtocolUDP,
+		transport.ProtocolGRE,
+		transport.ProtocolIPIP,
+		transport.ProtocolVXLAN,
+	)
 }
 
 func (daemon *Daemon) annotateKernelTransportStatus(status *dataplane.KernelTransportStatus) {

@@ -422,7 +422,7 @@ func (daemon *Daemon) transportPolicySendsPlainExperimentalTCPData() bool {
 	if daemon == nil || !daemon.transportPolicyUsesExperimentalTCP() || daemon.transportPolicySendsSecureData() {
 		return false
 	}
-	if normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
 		return false
 	}
 	return true
@@ -432,7 +432,7 @@ func (daemon *Daemon) transportPolicySendsSecureExperimentalTCPData() bool {
 	if daemon == nil || !daemon.transportPolicyUsesExperimentalTCP() || !daemon.transportPolicySendsSecureData() {
 		return false
 	}
-	if normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
 		return false
 	}
 	return true
@@ -462,7 +462,7 @@ func (daemon *Daemon) transportPolicySendsPlainKernelUDPData() bool {
 	if daemon == nil || !daemon.transportPolicyUsesKernelUDP() || daemon.transportPolicySendsSecureData() {
 		return false
 	}
-	if normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
 		return false
 	}
 	return true
@@ -472,7 +472,7 @@ func (daemon *Daemon) transportPolicySendsSecureKernelUDPData() bool {
 	if daemon == nil || !daemon.transportPolicyUsesKernelUDP() || !daemon.transportPolicySendsSecureData() {
 		return false
 	}
-	if normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
 		return false
 	}
 	return true
@@ -881,28 +881,28 @@ func experimentalTCPTXDirectRequestedForPolicy() bool {
 }
 
 func (daemon *Daemon) transportPolicyUsesKernelUDP() bool {
-	if normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
 		return false
 	}
 	return daemon.transportPolicyUsesAnyProtocol(transport.ProtocolUDP)
 }
 
 func (daemon *Daemon) transportPolicyUsesUserspaceUDP() bool {
-	if normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode) != dataplane.KernelTransportModeDisabled {
+	if daemon.kernelTransportMode() != dataplane.KernelTransportModeDisabled {
 		return false
 	}
 	return daemon.transportPolicyUsesAnyProtocol(transport.ProtocolUDP)
 }
 
 func (daemon *Daemon) transportPolicyUsesExperimentalTCP() bool {
-	if normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
 		return false
 	}
 	return daemon.transportPolicyUsesAnyProtocol(transport.ProtocolExperimentalTCP)
 }
 
 func (daemon *Daemon) transportPolicyUsesKernelDirect() bool {
-	if normalizeKernelTransportMode(daemon.desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
 		return false
 	}
 	return daemon.transportPolicyUsesAnyProtocol(transport.ProtocolUDP, transport.ProtocolExperimentalTCP)

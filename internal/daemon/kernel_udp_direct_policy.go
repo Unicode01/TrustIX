@@ -429,8 +429,12 @@ func experimentalTCPFastPathDisabledForDesired(desired config.Desired) bool {
 }
 
 func experimentalTCPFastPathDisabledReasonForDesired(desired config.Desired) string {
-	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+	mode := normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode)
+	if mode == dataplane.KernelTransportModeDisabled {
 		return ""
+	}
+	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesSecureUserspaceExperimentalTCP(desired) {
+		return "experimental_tcp secure userspace-crypto AF_XDP fast path is disabled by auto policy; use kernel crypto/full-kernel plaintext or enable an explicit fallback after validation"
 	}
 	if experimentalTCPMixedTCPFastPathAllowedForPolicy() {
 		return ""

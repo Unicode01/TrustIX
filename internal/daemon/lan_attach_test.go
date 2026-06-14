@@ -756,6 +756,33 @@ func TestDataplaneAttachSpecRecordsForcedExperimentalTCPSecureDirectOnly(t *test
 	}
 }
 
+func TestDataplaneAttachSpecDisablesAutoExperimentalTCPSecureUserspaceFastPath(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			Candidates:      []core.EndpointID{"experimental-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "experimental-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	})
+
+	if !spec.ExperimentalTCPFastPathDisabled || spec.ExperimentalTCPFastPathDisabledReason == "" {
+		t.Fatalf("secure userspace-crypto experimental_tcp auto policy should disable AF_XDP fast path, spec=%#v", spec)
+	}
+	if spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync || spec.KernelUDPTXDirectOnly {
+		t.Fatalf("secure userspace-crypto experimental_tcp auto policy should not request direct TX, spec=%#v", spec)
+	}
+}
+
 func TestDataplaneAttachSpecKeepsFallbackForRequireKernelSecureUserspaceCrypto(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
