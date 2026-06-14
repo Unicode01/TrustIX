@@ -729,7 +729,7 @@ func TestPrepareCaptureForwardWireBatchCanDisableTXCoalesce(t *testing.T) {
 	}
 }
 
-func TestPrepareCaptureForwardWireBatchDefaultsToSmallTXCoalesceWindow(t *testing.T) {
+func TestPrepareCaptureForwardWireBatchDefaultsToLargeTXCoalesceWindow(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_TX_GSO_COALESCE", "1")
 	daemon := &Daemon{}
 	session := &recordingNativeBatchSession{stats: transport.TransportStats{
@@ -755,15 +755,15 @@ func TestPrepareCaptureForwardWireBatchDefaultsToSmallTXCoalesceWindow(t *testin
 
 	wire := daemon.prepareCaptureForwardWireBatch(runtime, session, batch, &scratch)
 
-	if len(wire.Packets) != 2 {
-		t.Fatalf("wire packets = %d, want default small-window 3-to-2 coalesce", len(wire.Packets))
+	if len(wire.Packets) != 1 {
+		t.Fatalf("wire packets = %d, want default large-window 3-to-1 coalesce", len(wire.Packets))
 	}
-	if len(wire.Packets[0]) != len(packetA)+len(payload) || len(wire.Packets[1]) != len(packetC) {
-		t.Fatalf("wire packet lengths = %d,%d", len(wire.Packets[0]), len(wire.Packets[1]))
+	if len(wire.Packets[0]) != len(packetA)+len(payload)*2 {
+		t.Fatalf("wire packet length = %d, want %d", len(wire.Packets[0]), len(packetA)+len(payload)*2)
 	}
 	counters := daemon.dataStats.snapshot()
-	if counters.SendGSOCoalesceBatches != 1 || counters.SendGSOCoalescePackets != 2 || counters.SendGSOCoalesceWires != 1 {
-		t.Fatalf("TX GSO coalesce counters = %+v, want one 2-to-1 coalesce", counters)
+	if counters.SendGSOCoalesceBatches != 1 || counters.SendGSOCoalescePackets != 3 || counters.SendGSOCoalesceWires != 1 {
+		t.Fatalf("TX GSO coalesce counters = %+v, want one 3-to-1 coalesce", counters)
 	}
 }
 
@@ -793,6 +793,65 @@ func TestPrepareCaptureForwardWireBatchDefaultsOffForPlaintext(t *testing.T) {
 	counters := daemon.dataStats.snapshot()
 	if counters.SendGSOCoalesceBatches != 0 || counters.SendGSOCoalescePackets != 0 || counters.SendGSOCoalesceWires != 0 {
 		t.Fatalf("TX GSO coalesce counters = %+v, want plaintext default disabled", counters)
+	}
+}
+
+func TestPrepareCaptureForwardWireBatchDefaultsOnForLargeSocketDatagram(t *testing.T) {
+	daemon := &Daemon{}
+	session := &recordingNativeBatchSession{stats: transport.TransportStats{
+		NativeBatching: true,
+		Datagram:       true,
+		MaxPacketSize:  65507,
+	}}
+	runtime := &dataSessionRuntime{session: session}
+	var scratch captureForwardScratch
+	scratch.begin(2, daemon)
+	packetA := tcpPayloadIPv4PacketWithSeq(1, []byte("hello"))
+	packetB := tcpPayloadIPv4PacketWithSeq(6, []byte("world"))
+	batch := prepareCaptureForwardBatch([]captureForwardBatchCandidate{
+		{Packet: packetA},
+		{Packet: packetB},
+	}, &scratch)
+
+	wire := daemon.prepareCaptureForwardWireBatch(runtime, session, batch, &scratch)
+
+	if len(wire.Packets) != 1 {
+		t.Fatalf("wire packets = %d, want default socket datagram coalesced 1", len(wire.Packets))
+	}
+	if got := string(wire.Packets[0][40:]); got != "helloworld" {
+		t.Fatalf("coalesced payload = %q", got)
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.SendGSOCoalesceBatches != 1 || counters.SendGSOCoalescePackets != 2 || counters.SendGSOCoalesceWires != 1 {
+		t.Fatalf("TX GSO coalesce counters = %+v, want socket datagram default enabled", counters)
+	}
+}
+
+func TestPrepareCaptureForwardWireBatchDefaultsOffForSmallSocketDatagram(t *testing.T) {
+	daemon := &Daemon{}
+	session := &recordingNativeBatchSession{stats: transport.TransportStats{
+		NativeBatching: true,
+		Datagram:       true,
+		MaxPacketSize:  4096,
+	}}
+	runtime := &dataSessionRuntime{session: session}
+	var scratch captureForwardScratch
+	scratch.begin(2, daemon)
+	packetA := tcpPayloadIPv4PacketWithSeq(1, []byte("hello"))
+	packetB := tcpPayloadIPv4PacketWithSeq(6, []byte("world"))
+	batch := prepareCaptureForwardBatch([]captureForwardBatchCandidate{
+		{Packet: packetA},
+		{Packet: packetB},
+	}, &scratch)
+
+	wire := daemon.prepareCaptureForwardWireBatch(runtime, session, batch, &scratch)
+
+	if len(wire.Packets) != 2 {
+		t.Fatalf("wire packets = %d, want small datagram default uncoalesced 2", len(wire.Packets))
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.SendGSOCoalesceBatches != 0 || counters.SendGSOCoalescePackets != 0 || counters.SendGSOCoalesceWires != 0 {
+		t.Fatalf("TX GSO coalesce counters = %+v, want small datagram default disabled", counters)
 	}
 }
 

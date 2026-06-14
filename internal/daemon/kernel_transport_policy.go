@@ -35,7 +35,21 @@ func effectiveKernelTransportModeForDesired(desired config.Desired) dataplane.Ke
 	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		return dataplane.KernelTransportModeRequireKernel
 	}
+	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlyUserspaceUDP(desired) {
+		return dataplane.KernelTransportModeDisabled
+	}
 	return mode
+}
+
+func desiredTransportPolicyUsesOnlyUserspaceUDP(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolUDP) {
+		return false
+	}
+	if desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		return false
+	}
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolUDP))
+	return profile.Datapath == config.TransportDatapathUserspace
 }
 
 func (daemon *Daemon) annotateKernelTransportStatus(status *dataplane.KernelTransportStatus) {

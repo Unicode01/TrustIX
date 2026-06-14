@@ -5,3 +5,7 @@ package udp
 func defaultUserspaceUDPReadPacketSize() int {
 	return userspaceUDPDatagramBatchMax
 }
+
+func defaultUserspaceUDPDatagramMaxPacketSize() int {
+	return userspaceUDPDatagramBatchMax
+}

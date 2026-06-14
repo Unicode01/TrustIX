@@ -48,6 +48,7 @@ const (
 
 const (
 	userspaceUDPSessionMaxPacket      = 64*1024 - 1
+	userspaceUDPDatagramPayloadMax    = userspaceUDPSessionMaxPacket - 20 - 8
 	userspaceUDPDatagramBatchMax      = 1500 - 20 - 8
 	userspaceUDPListenerBufferDefault = 64
 	userspaceUDPListenerBufferMax     = 256
@@ -331,6 +332,26 @@ func userspaceUDPReadPacketSize() int {
 	}
 	if parsed > userspaceUDPSessionMaxPacket {
 		return userspaceUDPSessionMaxPacket
+	}
+	return parsed
+}
+
+func userspaceUDPDatagramMaxPacketSize() uint64 {
+	return uint64(userspaceUDPConfiguredDatagramMaxPacketSize())
+}
+
+func userspaceUDPConfiguredDatagramMaxPacketSize() int {
+	defaultMax := defaultUserspaceUDPDatagramMaxPacketSize()
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_UDP_DATAGRAM_MAX_PACKET_SIZE"))
+	if value == "" {
+		return defaultMax
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < userspaceUDPDatagramBatchMax {
+		return defaultMax
+	}
+	if parsed > userspaceUDPDatagramPayloadMax {
+		return userspaceUDPDatagramPayloadMax
 	}
 	return parsed
 }
@@ -952,7 +973,7 @@ func (session *session) Stats() transport.TransportStats {
 		},
 		NativeBatching: true,
 		Datagram:       true,
-		MaxPacketSize:  userspaceUDPDatagramBatchMax,
+		MaxPacketSize:  userspaceUDPDatagramMaxPacketSize(),
 	}
 }
 
@@ -2874,6 +2895,6 @@ func (session *serverSession) Stats() transport.TransportStats {
 		},
 		NativeBatching: true,
 		Datagram:       true,
-		MaxPacketSize:  userspaceUDPDatagramBatchMax,
+		MaxPacketSize:  userspaceUDPDatagramMaxPacketSize(),
 	}
 }

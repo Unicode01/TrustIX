@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -171,6 +172,41 @@ func TestUserspaceUDPSessionSendPacketsWritesBatchAndStats(t *testing.T) {
 	}
 	if stats.Extra["udp_send_batch_bytes"] != stats.BytesSent {
 		t.Fatalf("batch bytes = %d, want bytes sent %d", stats.Extra["udp_send_batch_bytes"], stats.BytesSent)
+	}
+}
+
+func TestUserspaceUDPSessionStatsAdvertisesDatagramMaxPacketSize(t *testing.T) {
+	session := &session{}
+	stats := session.Stats()
+	if !stats.NativeBatching || !stats.Datagram {
+		t.Fatalf("stats batching/datagram = native:%t datagram:%t, want true/true", stats.NativeBatching, stats.Datagram)
+	}
+	if got, want := stats.MaxPacketSize, uint64(defaultUserspaceUDPDatagramMaxPacketSize()); got != want {
+		t.Fatalf("MaxPacketSize = %d, want %d", got, want)
+	}
+	if stats.FragmentingDatagram {
+		t.Fatal("FragmentingDatagram = true, want false so daemon still enforces UDP payload max")
+	}
+
+	t.Setenv("TRUSTIX_UDP_DATAGRAM_MAX_PACKET_SIZE", strconv.Itoa(userspaceUDPDatagramBatchMax))
+	if got, want := session.Stats().MaxPacketSize, uint64(userspaceUDPDatagramBatchMax); got != want {
+		t.Fatalf("env MaxPacketSize = %d, want %d", got, want)
+	}
+
+	t.Setenv("TRUSTIX_UDP_DATAGRAM_MAX_PACKET_SIZE", "999999")
+	if got, want := session.Stats().MaxPacketSize, uint64(userspaceUDPDatagramPayloadMax); got != want {
+		t.Fatalf("clamped MaxPacketSize = %d, want %d", got, want)
+	}
+}
+
+func TestUserspaceUDPServerSessionStatsAdvertisesDatagramMaxPacketSize(t *testing.T) {
+	session := &serverSession{}
+	stats := session.Stats()
+	if !stats.NativeBatching || !stats.Datagram {
+		t.Fatalf("stats batching/datagram = native:%t datagram:%t, want true/true", stats.NativeBatching, stats.Datagram)
+	}
+	if got, want := stats.MaxPacketSize, uint64(defaultUserspaceUDPDatagramMaxPacketSize()); got != want {
+		t.Fatalf("MaxPacketSize = %d, want %d", got, want)
 	}
 }
 

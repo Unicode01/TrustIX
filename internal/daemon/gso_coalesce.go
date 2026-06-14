@@ -14,8 +14,9 @@ import (
 const (
 	dataSessionRXGSOCoalesceDefaultMaxBytes   = 65535
 	dataSessionRXGSOCoalesceDefaultMaxPackets = 128
-	dataSessionTXGSOCoalesceDefaultMaxBytes   = 4000
+	dataSessionTXGSOCoalesceDefaultMaxBytes   = 65535
 	dataSessionTXGSOCoalesceDefaultMaxPackets = 128
+	dataSessionTXGSOCoalesceLargeDatagramMin  = 32 * 1024
 	dataSessionGSOCoalesceMaxActiveFlows      = 64
 )
 
@@ -108,7 +109,13 @@ func dataSessionTXGSOCoalesceEnabled() bool {
 }
 
 func dataSessionTXGSOCoalesceDefaultForStats(stats transport.TransportStats) bool {
-	return stats.Encrypted && stats.CryptoPlacement == "kernel"
+	if stats.Encrypted && stats.CryptoPlacement == "kernel" {
+		return true
+	}
+	return stats.Datagram &&
+		stats.NativeBatching &&
+		!stats.FragmentingDatagram &&
+		stats.MaxPacketSize >= dataSessionTXGSOCoalesceLargeDatagramMin
 }
 
 func dataSessionTXGSOCoalescePreference() (bool, bool) {
