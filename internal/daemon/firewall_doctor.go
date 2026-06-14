@@ -2,11 +2,17 @@ package daemon
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
 func trustixManagedFirewallRulesEnabled() bool {
-	return false
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_OPENWRT_FIREWALL_RULES"))) {
+	case "1", "true", "yes", "on", "enabled", "auto":
+		return true
+	default:
+		return false
+	}
 }
 
 func firewallDoctorStatus(details []string, managedRules bool) string {

@@ -79,7 +79,7 @@ func validateExperimentalTCPRouteGSOHelpersStatus(desired config.Desired, status
 		}
 	}
 	if len(missing) == 0 {
-		return nil
+		return validateExperimentalTCPRouteGSOHelperRuntimeParameters(status)
 	}
 	detail := status.CapabilityReason
 	if status.Reason != "" {
@@ -98,6 +98,56 @@ func validateExperimentalTCPRouteGSOHelpersStatus(desired config.Desired, status
 		status.Loaded,
 		strings.Join(status.Features, ","),
 		detail)
+}
+
+var readTrustIXDatapathHelpersParameter = func(name string) (string, error) {
+	payload, err := os.ReadFile("/sys/module/trustix_datapath_helpers/parameters/" + name)
+	return strings.TrimSpace(string(payload)), err
+}
+
+func validateExperimentalTCPRouteGSOHelperRuntimeParameters(status kernelmodule.Status) error {
+	if !status.Loaded {
+		return nil
+	}
+	required := []string{
+		"tixt_tx_plain_skip_sequence",
+		"tixt_tx_plain_ack_only",
+		"route_tcp_gso",
+		"route_tcp_gso_async",
+		"route_tcp_gso_async_dev_xmit",
+		"route_tcp_gso_async_stream_outer_gso",
+		"route_tcp_xmit_worker",
+	}
+	var missing []string
+	var inactive []string
+	for _, name := range required {
+		value, err := readTrustIXDatapathHelpersParameter(name)
+		if err != nil {
+			missing = append(missing, name)
+			continue
+		}
+		if !kernelModuleBoolParameterEnabled(value) {
+			inactive = append(inactive, name+"="+value)
+		}
+	}
+	if len(missing) == 0 && len(inactive) == 0 {
+		return nil
+	}
+	return fmt.Errorf("experimental_tcp route-GSO requires active trustix_datapath_helpers runtime parameters; missing=%s inactive=%s state=%s loaded=%t features=%s",
+		strings.Join(missing, ","),
+		strings.Join(inactive, ","),
+		status.State,
+		status.Loaded,
+		strings.Join(status.Features, ","))
+}
+
+func kernelModuleBoolParameterEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "y", "yes", "true", "on", "enabled":
+		return true
+	default:
+		return false
+	}
 }
 
 func kernelModuleStatusHasFeature(status kernelmodule.Status, want string) bool {

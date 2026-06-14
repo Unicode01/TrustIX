@@ -390,6 +390,15 @@ func TestValidateExperimentalTCPRouteGSOHelpersRequiresRouteTCPKfuncs(t *testing
 		t.Fatalf("route-GSO helper validation error = %v, want missing route TCP kfuncs", err)
 	}
 
+	withTrustIXDatapathHelpersParameters(t, map[string]string{
+		"tixt_tx_plain_skip_sequence":          "Y",
+		"tixt_tx_plain_ack_only":               "Y",
+		"route_tcp_gso":                        "Y",
+		"route_tcp_gso_async":                  "Y",
+		"route_tcp_gso_async_dev_xmit":         "Y",
+		"route_tcp_gso_async_stream_outer_gso": "Y",
+		"route_tcp_xmit_worker":                "Y",
+	})
 	err = validateExperimentalTCPRouteGSOHelpersStatus(desired, kernelmodule.Status{
 		Name:   "trustix_datapath_helpers",
 		Loaded: true,
@@ -403,6 +412,62 @@ func TestValidateExperimentalTCPRouteGSOHelpersRequiresRouteTCPKfuncs(t *testing
 	if err != nil {
 		t.Fatalf("route-GSO helper validation with route TCP features: %v", err)
 	}
+}
+
+func TestValidateExperimentalTCPRouteGSOHelpersRequiresActiveRuntimeParameters(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: "plaintext",
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+	withTrustIXDatapathHelpersParameters(t, map[string]string{
+		"tixt_tx_plain_skip_sequence":          "Y",
+		"tixt_tx_plain_ack_only":               "Y",
+		"route_tcp_gso":                        "Y",
+		"route_tcp_gso_async":                  "N",
+		"route_tcp_gso_async_dev_xmit":         "Y",
+		"route_tcp_gso_async_stream_outer_gso": "Y",
+		"route_tcp_xmit_worker":                "Y",
+	})
+
+	err := validateExperimentalTCPRouteGSOHelpersStatus(desired, kernelmodule.Status{
+		Name:   "trustix_datapath_helpers",
+		Loaded: true,
+		State:  "loaded",
+		Features: []string{
+			kernelmodule.FeatureGSOSKB,
+			kernelmodule.FeatureRouteTCPKfunc,
+			kernelmodule.FeatureRouteTCPXmit,
+		},
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), "runtime parameters") ||
+		!strings.Contains(err.Error(), "route_tcp_gso_async=N") {
+		t.Fatalf("route-GSO helper runtime parameter validation error = %v, want inactive route_tcp_gso_async", err)
+	}
+}
+
+func withTrustIXDatapathHelpersParameters(t *testing.T, values map[string]string) {
+	t.Helper()
+	old := readTrustIXDatapathHelpersParameter
+	readTrustIXDatapathHelpersParameter = func(name string) (string, error) {
+		value, ok := values[name]
+		if !ok {
+			return "", os.ErrNotExist
+		}
+		return value, nil
+	}
+	t.Cleanup(func() {
+		readTrustIXDatapathHelpersParameter = old
+	})
 }
 
 func TestTrustIXDatapathModuleParametersForDesiredPerformanceProfileDoesNotEnableRXWorker(t *testing.T) {

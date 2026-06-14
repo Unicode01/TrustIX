@@ -886,6 +886,7 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		ExperimentalTCPPlainACKOnly:              experimentalTCPRouteGSOAsync,
 		ExperimentalTCPFastPathDisabled:          experimentalTCPFastPathDisabledReason != "",
 		ExperimentalTCPFastPathDisabledReason:    experimentalTCPFastPathDisabledReason,
+		KernelDatapathFullPlaintext:              kernelDatapathFullPlaintextEnabledForDesired(desired),
 		KernelDatapathSuppressLegacyRXWorker:     kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired),
 		PinPath:                                  filepath.Join(dataDir, "bpf"),
 		DataDir:                                  dataDir,

@@ -530,6 +530,9 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextUDPFullKmod(t *testing.T)
 	if spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync {
 		t.Fatalf("UDP performance direct path should not enable experimental_tcp route-GSO flags, spec=%#v", spec)
 	}
+	if !spec.KernelDatapathFullPlaintext {
+		t.Fatalf("performance plaintext UDP kernel_module should mark full plaintext ownership, spec=%#v", spec)
+	}
 }
 
 func TestDataplaneAttachSpecKeepsLegacyFullPlaintextUDPOnRXWorker(t *testing.T) {
@@ -562,6 +565,9 @@ func TestDataplaneAttachSpecKeepsLegacyFullPlaintextUDPOnRXWorker(t *testing.T) 
 	}
 	if spec.KernelDatapathSuppressLegacyRXWorker {
 		t.Fatalf("full plaintext UDP should keep RX worker ownership, spec=%#v", spec)
+	}
+	if !spec.KernelDatapathFullPlaintext {
+		t.Fatalf("full plaintext UDP should mark full plaintext ownership, spec=%#v", spec)
 	}
 }
 

@@ -36,6 +36,7 @@ Options:
   --admin-auth               add -api-admin-auth to service args
   --extra-arg ARG            append extra trustixd arg; repeatable
   --env KEY=VALUE            append service environment; repeatable
+  --no-openwrt-firewall      do not install OpenWrt firewall allow rules
   --no-sudo                  run install commands without sudo
   --no-enable                do not enable service
   --no-start                 do not start/restart service
@@ -101,6 +102,7 @@ sudo_cmd="sudo"
 enable_service=1
 start_service=1
 json=0
+openwrt_firewall_rules="${TRUSTIX_OPENWRT_FIREWALL_RULES:-auto}"
 service_manager="${TRUSTIX_DEPLOY_SERVICE_MANAGER:-auto}"
 prefix=""
 sysconfdir=""
@@ -133,6 +135,7 @@ while [[ $# -gt 0 ]]; do
     --admin-auth) extra_args+=("-api-admin-auth"); shift ;;
     --extra-arg) [[ $# -ge 2 ]] || die "--extra-arg requires a value"; extra_args+=("$2"); shift 2 ;;
     --env) [[ $# -ge 2 ]] || die "--env requires a value"; runtime_env+=("$2"); shift 2 ;;
+    --no-openwrt-firewall) openwrt_firewall_rules="0"; shift ;;
     --no-sudo) sudo_cmd=""; shift ;;
     --no-enable) enable_service=0; shift ;;
     --no-start) start_service=0; shift ;;
@@ -259,6 +262,132 @@ ensure_openwrt_dataplane_runtime_deps() {
     ip-full tc-bpf
 }
 
+openwrt_firewall_rules_enabled() {
+  case "$(lower_ascii "$openwrt_firewall_rules")" in
+    0|false|no|off|disabled) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+sanitize_openwrt_firewall_rule_part() {
+  local value="$1"
+  value="${value//[^A-Za-z0-9_.-]/-}"
+  value="${value##-}"
+  value="${value%%-}"
+  [[ -n "$value" ]] || value="ix"
+  printf '%s' "$value"
+}
+
+address_port() {
+  local value="$1"
+  value="${value%%/*}"
+  value="${value##*,}"
+  value="${value##*=}"
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+  value="${value%]}"
+  value="${value##*:}"
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  [[ "$value" -ge 1 && "$value" -le 65535 ]] || return 1
+  printf '%s\n' "$value"
+}
+
+addr_is_loopback_only() {
+  local value="$1" host
+  host="${value%:*}"
+  host="${host#[}"
+  host="${host%]}"
+  case "$host" in
+    ""|127.*|localhost|::1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+config_listen_ports() {
+  [[ -n "${installed_config_path:-}" && -f "$installed_config_path" ]] || return 0
+  sed -n \
+    -e 's/.*"listen"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    -e 's/^[[:space:]]*listen:[[:space:]]*["'\'']\{0,1\}\([^"'\'']*\).*/\1/p' \
+    "$installed_config_path" |
+    while IFS= read -r listen; do
+      printf '%s\n' "$listen" | tr ',' '\n' | while IFS= read -r part; do
+        part="${part#"${part%%[![:space:]]*}"}"
+        part="${part%"${part##*[![:space:]]}"}"
+        case "$part" in
+          port=*|vxlan_port=*) address_port "$part" || true ;;
+          *:*) address_port "$part" || true ;;
+        esac
+      done
+    done | sort -n -u
+}
+
+config_has_transport() {
+  local name="$1"
+  [[ -n "${installed_config_path:-}" && -f "$installed_config_path" ]] || return 1
+  grep -Eq "\"transport\"[[:space:]]*:[[:space:]]*\"${name}\"|^[[:space:]]*transport:[[:space:]]*[\"']?${name}([\"']?([[:space:]]|#|$))" "$installed_config_path"
+}
+
+openwrt_firewall_rule_exists() {
+  local name="$1"
+  run_root uci -q show firewall 2>/dev/null | grep -F ".name='${name}'" >/dev/null 2>&1
+}
+
+openwrt_add_firewall_rule() {
+  local name="$1" proto="$2" port="${3:-}" section
+  openwrt_firewall_rule_exists "$name" && return 0
+  section="$(run_root uci add firewall rule)"
+  [[ -n "$section" ]] || return 1
+  run_root uci set "firewall.${section}.name=${name}"
+  run_root uci set "firewall.${section}.src=*"
+  run_root uci set "firewall.${section}.proto=${proto}"
+  if [[ -n "$port" ]]; then
+    run_root uci set "firewall.${section}.dest_port=${port}"
+  fi
+  run_root uci set "firewall.${section}.target=ACCEPT"
+  run_root uci set "firewall.${section}.family=ipv4"
+}
+
+install_openwrt_firewall_rules() {
+  [[ "$service_manager" == "openwrt" ]] || return 0
+  [[ -f /etc/openwrt_release ]] || return 0
+  openwrt_firewall_rules_enabled || return 0
+  command -v uci >/dev/null 2>&1 || return 0
+  [[ -x "${initdir}/firewall" || -x /etc/init.d/firewall ]] || return 0
+
+  local rule_prefix safe_instance port
+  safe_instance="$(sanitize_openwrt_firewall_rule_part "$instance")"
+  rule_prefix="trustix-${safe_instance}"
+
+  if port="$(address_port "$peer_api_addr" 2>/dev/null)"; then
+    openwrt_add_firewall_rule "${rule_prefix}-peer-api-${port}" tcp "$port"
+  fi
+  if ! addr_is_loopback_only "$api_addr"; then
+    if port="$(address_port "$api_addr" 2>/dev/null)"; then
+      openwrt_add_firewall_rule "${rule_prefix}-api-${port}" tcp "$port"
+    fi
+  fi
+  while IFS= read -r port; do
+    [[ -n "$port" ]] || continue
+    openwrt_add_firewall_rule "${rule_prefix}-endpoint-udp-${port}" udp "$port"
+    openwrt_add_firewall_rule "${rule_prefix}-endpoint-tcp-${port}" tcp "$port"
+  done < <(config_listen_ports)
+  if config_has_transport gre; then
+    openwrt_add_firewall_rule "${rule_prefix}-gre" gre
+  fi
+  if config_has_transport ipip; then
+    openwrt_add_firewall_rule "${rule_prefix}-ipip" 4
+  fi
+
+  run_root uci commit firewall
+  if [[ -x "${initdir}/firewall" ]]; then
+    run_root "${initdir}/firewall" reload >/dev/null 2>&1 || true
+  else
+    run_root /etc/init.d/firewall reload >/dev/null 2>&1 || true
+  fi
+}
+
 install_file() {
   local src="$1"
   local dst="$2"
@@ -343,6 +472,9 @@ remote_deploy() {
   local remote_manager="$service_manager"
   if [[ "$remote_manager" == "auto" ]]; then
     remote_manager="$("${ssh_cmd[@]}" "$target" 'if [ -f /etc/openwrt_release ] && { [ -x /sbin/procd ] || [ -d /etc/init.d ]; }; then echo openwrt; elif command -v systemctl >/dev/null 2>&1 || [ -d /run/systemd/system ]; then echo systemd; else echo auto; fi')"
+  fi
+  if [[ "$remote_manager" == "openwrt" ]]; then
+    scp_cmd+=(-O)
   fi
 
   local stage
@@ -479,6 +611,8 @@ json="$8"
 extra_args="$9"
 shift 9
 runtime_env="${1:-}"
+shift || true
+openwrt_firewall_rules="${1:-auto}"
 
 [ -n "$prefix" ] || prefix=/opt/trustix
 [ -n "$sysconfdir" ] || sysconfdir=/etc/trustix
@@ -501,6 +635,134 @@ install_openwrt_dataplane_runtime_deps() {
 }
 
 install_openwrt_dataplane_runtime_deps
+
+lower_ascii() {
+  printf '%s' "$1" | tr 'A-Z' 'a-z'
+}
+
+openwrt_firewall_rules_enabled() {
+  case "$(lower_ascii "$openwrt_firewall_rules")" in
+    0|false|no|off|disabled) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+sanitize_openwrt_firewall_rule_part() {
+  value="$(printf '%s' "$1" | sed 's/[^A-Za-z0-9_.-]/-/g; s/^-*//; s/-*$//')"
+  [ -n "$value" ] || value=ix
+  printf '%s' "$value"
+}
+
+address_port() {
+  value="$1"
+  value="${value%%/*}"
+  value="${value##*,}"
+  value="${value##*=}"
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+  value="${value%]}"
+  value="${value##*:}"
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$value" -ge 1 ] && [ "$value" -le 65535 ] || return 1
+  printf '%s\n' "$value"
+}
+
+addr_is_loopback_only() {
+  value="$1"
+  host="${value%:*}"
+  host="${host#[}"
+  host="${host%]}"
+  case "$host" in
+    ''|127.*|localhost|::1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+config_listen_ports() {
+  [ -n "${installed_config:-}" ] && [ -f "$installed_config" ] || return 0
+  sed -n \
+    -e 's/.*"listen"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    -e 's/^[[:space:]]*listen:[[:space:]]*["'\'']\{0,1\}\([^"'\'']*\).*/\1/p' \
+    "$installed_config" |
+    while IFS= read -r listen; do
+      printf '%s\n' "$listen" | tr ',' '\n' | while IFS= read -r part; do
+        part="$(printf '%s' "$part" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        case "$part" in
+          port=*|vxlan_port=*) address_port "$part" || true ;;
+          *:*) address_port "$part" || true ;;
+        esac
+      done
+    done | sort -n -u
+}
+
+config_has_transport() {
+  name="$1"
+  [ -n "${installed_config:-}" ] && [ -f "$installed_config" ] || return 1
+  grep -Eq "\"transport\"[[:space:]]*:[[:space:]]*\"${name}\"|^[[:space:]]*transport:[[:space:]]*[\"']?${name}([\"']?([[:space:]]|#|$))" "$installed_config"
+}
+
+openwrt_firewall_rule_exists() {
+  name="$1"
+  uci -q show firewall 2>/dev/null | grep -F ".name='${name}'" >/dev/null 2>&1
+}
+
+openwrt_add_firewall_rule() {
+  name="$1"
+  proto="$2"
+  port="${3:-}"
+  openwrt_firewall_rule_exists "$name" && return 0
+  section="$(uci add firewall rule)"
+  [ -n "$section" ] || return 1
+  uci set "firewall.${section}.name=${name}"
+  uci set "firewall.${section}.src=*"
+  uci set "firewall.${section}.proto=${proto}"
+  if [ -n "$port" ]; then
+    uci set "firewall.${section}.dest_port=${port}"
+  fi
+  uci set "firewall.${section}.target=ACCEPT"
+  uci set "firewall.${section}.family=ipv4"
+}
+
+install_openwrt_firewall_rules() {
+  [ -f /etc/openwrt_release ] || return 0
+  openwrt_firewall_rules_enabled || return 0
+  command -v uci >/dev/null 2>&1 || return 0
+  { [ -x "$initdir/firewall" ] || [ -x /etc/init.d/firewall ]; } || return 0
+
+  safe_instance="$(sanitize_openwrt_firewall_rule_part "$instance")"
+  rule_prefix="trustix-${safe_instance}"
+
+  if port="$(address_port "$peer_api_addr" 2>/dev/null)"; then
+    openwrt_add_firewall_rule "${rule_prefix}-peer-api-${port}" tcp "$port"
+  fi
+  if ! addr_is_loopback_only "$api_addr"; then
+    if port="$(address_port "$api_addr" 2>/dev/null)"; then
+      openwrt_add_firewall_rule "${rule_prefix}-api-${port}" tcp "$port"
+    fi
+  fi
+  config_listen_ports | while IFS= read -r port; do
+    [ -n "$port" ] || continue
+    openwrt_add_firewall_rule "${rule_prefix}-endpoint-udp-${port}" udp "$port"
+    openwrt_add_firewall_rule "${rule_prefix}-endpoint-tcp-${port}" tcp "$port"
+  done
+  if config_has_transport gre; then
+    openwrt_add_firewall_rule "${rule_prefix}-gre" gre
+  fi
+  if config_has_transport ipip; then
+    openwrt_add_firewall_rule "${rule_prefix}-ipip" 4
+  fi
+
+  uci commit firewall
+  if [ -x "$initdir/firewall" ]; then
+    "$initdir/firewall" reload >/dev/null 2>&1 || true
+  else
+    /etc/init.d/firewall reload >/dev/null 2>&1 || true
+  fi
+}
 
 package_dir="$stage/package"
 if [ "$input_kind" = tarball ]; then
@@ -570,6 +832,9 @@ env_tmp="$stage/${instance}.env.tmp"
   printf 'TRUSTIX_PEER_API_ADDR=%s\n' "$peer_api_addr"
   printf 'TRUSTIX_DATAPLANE=%s\n' "$dataplane"
   printf 'TRUSTIX_EXTRA_ARGS="%s"\n' "$extra_args"
+  if openwrt_firewall_rules_enabled; then
+    printf 'TRUSTIX_OPENWRT_FIREWALL_RULES=1\n'
+  fi
   printf '%s\n' "$runtime_env" | while IFS= read -r item; do
     [ -n "$item" ] || continue
     key="${item%%=*}"
@@ -584,6 +849,8 @@ env_tmp="$stage/${instance}.env.tmp"
 } >"$env_tmp"
 copy_mode "$env_tmp" "$sysconfdir/$instance.env" 0644
 rm -f "$env_tmp"
+
+install_openwrt_firewall_rules
 
 if [ "$enable_service" = 1 ]; then
   "$initdir/trustix" enable
@@ -623,7 +890,7 @@ EOS
   local config_remote="" cert_remote=""
   [[ -n "$config_path" ]] && config_remote="${stage}/config"
   [[ -n "$cert_dir" ]] && cert_remote="${stage}/certs"
-  "${ssh_cmd[@]}" "$target" "sh -s -- $(shell_quote "$stage") $(shell_quote "$input_kind") $(shell_quote "$input_path") $(shell_quote "$instance") $(shell_quote "$prefix") $(shell_quote "$sysconfdir") $(shell_quote "$state_root") $(shell_quote "$initdir") $(shell_quote "$target_cert_dir") $(shell_quote "$config_remote") $(shell_quote "$cert_remote") $(shell_quote "$api_addr") $(shell_quote "$peer_api_addr") $(shell_quote "$dataplane") $(shell_quote "$enable_service") $(shell_quote "$start_service") $(shell_quote "$json") $(shell_quote "$joined_extra") $(shell_quote "$joined_env")" <<<"$remote_script"
+  "${ssh_cmd[@]}" "$target" "sh -s -- $(shell_quote "$stage") $(shell_quote "$input_kind") $(shell_quote "$input_path") $(shell_quote "$instance") $(shell_quote "$prefix") $(shell_quote "$sysconfdir") $(shell_quote "$state_root") $(shell_quote "$initdir") $(shell_quote "$target_cert_dir") $(shell_quote "$config_remote") $(shell_quote "$cert_remote") $(shell_quote "$api_addr") $(shell_quote "$peer_api_addr") $(shell_quote "$dataplane") $(shell_quote "$enable_service") $(shell_quote "$start_service") $(shell_quote "$json") $(shell_quote "$joined_extra") $(shell_quote "$joined_env") $(shell_quote "$openwrt_firewall_rules")" <<<"$remote_script"
 }
 
 install_from_package() {
@@ -711,6 +978,9 @@ install_config() {
     printf 'TRUSTIX_EXTRA_ARGS='
     env_quote "$joined_extra"
     printf '\n'
+    if [[ "$service_manager" == "openwrt" ]] && openwrt_firewall_rules_enabled; then
+      printf 'TRUSTIX_OPENWRT_FIREWALL_RULES=1\n'
+    fi
     local env_item key value
     for env_item in "${runtime_env[@]}"; do
       key="${env_item%%=*}"
@@ -750,6 +1020,7 @@ local_deploy() {
 
   install_from_package "$package_dir"
   install_config
+  install_openwrt_firewall_rules
   case "$service_manager" in
     systemd)
       if command -v systemctl >/dev/null 2>&1 && { [[ "$enable_service" == "1" ]] || [[ "$start_service" == "1" ]]; }; then

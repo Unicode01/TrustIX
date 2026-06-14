@@ -2750,7 +2750,10 @@ func kernelTransportProtocolUDP(status dataplane.KernelUDPStatus) dataplane.Kern
 	placement := "userspace"
 	reason := "UDP AF_XDP provider is unavailable"
 	available := status.Available && status.Reinject && (status.FastPath || status.Provider == "raw_udp_fallback")
-	if status.FastPath && status.KernelCrypto {
+	if status.Provider == "kernel_datapath_full_plaintext" && available {
+		placement = "kernel"
+		reason = "full plaintext kernel datapath owns UDP LAN RX/TX without AF_XDP"
+	} else if status.FastPath && status.KernelCrypto {
 		placement = "kernel"
 		reason = "XDP/AF_XDP handles UDP-shaped TIXU frame RX/TX; AES-GCM AEAD can run in the shared kernel crypto provider"
 	} else if status.FastPath {
@@ -2774,7 +2777,7 @@ func kernelTransportProtocolUDP(status dataplane.KernelUDPStatus) dataplane.Kern
 		Provider:          status.Provider,
 		Carrier:           "udp-ipv4",
 		Contract:          "trustix-kernel-udp-frame-v1",
-		UserspaceFallback: !status.KernelCrypto,
+		UserspaceFallback: !status.KernelCrypto && status.Provider != "kernel_datapath_full_plaintext",
 		Reason:            reason,
 	}
 }
@@ -3003,16 +3006,19 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 	}
 	fastPath := manager.experimentalTCPFastPathAvailableLocked()
 	tcOnly := manager.kernelUDPTCDirectOnlyAvailableLocked()
+	fullPlaintext := manager.kernelDatapathFullPlaintextTransportAvailableLocked()
 	rawFallback := kernelUDPRawFallbackEnabled()
 	provider := "none"
 	if fastPath {
 		provider = manager.experimentalTCPFastPathProviderLocked()
+	} else if fullPlaintext {
+		provider = "kernel_datapath_full_plaintext"
 	} else if tcOnly {
 		provider = "tc_direct"
 	} else if rawFallback {
 		provider = "raw_udp_fallback"
 	}
-	kernelCryptoReady := manager.kernelUDPKernelCryptoReadyLocked() && !tcOnly
+	kernelCryptoReady := manager.kernelUDPKernelCryptoReadyLocked() && !tcOnly && !fullPlaintext
 	kernelCryptoReason := ""
 	if !kernelCryptoReady {
 		kernelCryptoReason = manager.kernelUDPKernelCryptoUnavailableReasonLocked()
@@ -3037,6 +3043,9 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 			notes = append(notes, "kernel_udp direct-only is enabled: payload data uses TC/XDP direct paths when route and flow maps match; AF_XDP remains available for control session establishment")
 		}
 	}
+	if fullPlaintext {
+		notes = append(notes, "full plaintext kernel datapath owns UDP LAN RX/TX; AF_XDP is not required for the plaintext data path")
+	}
 	if rawFallback && !fastPath {
 		notes = append(notes, "kernel_udp raw UDP fallback is enabled: TIXU frames use raw IPv4/UDP sockets when AF_XDP is unavailable; AEAD remains in userspace unless kernel crypto is explicitly ready")
 	}
@@ -3047,18 +3056,18 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 		notes = append(notes, "AF_XDP mode fallback: "+fastPathFallback)
 	}
 	return dataplane.KernelUDPStatus{
-		Available:          manager.attached && (fastPath || tcOnly || rawFallback),
+		Available:          manager.attached && (fastPath || fullPlaintext || tcOnly || rawFallback),
 		Provider:           provider,
-		FastPath:           fastPath || tcOnly,
-		DirectOnly:         kernelUDPTXDirectOnlyEnabled(manager.spec),
-		TCOnly:             tcOnly && !fastPath,
+		FastPath:           fastPath || fullPlaintext || tcOnly,
+		DirectOnly:         kernelUDPTXDirectOnlyEnabled(manager.spec) || fullPlaintext,
+		TCOnly:             (tcOnly || fullPlaintext) && !fastPath,
 		UserspaceCrypto:    manager.attached && (fastPath || rawFallback),
 		KernelCrypto:       kernelCryptoReady,
 		KernelCryptoReason: kernelCryptoReason,
 		CryptoFallback:     manager.kernelUDPCryptoFallbackStatusLocked(),
 		PreferredCrypto:    preferredCrypto,
 		SupportedCrypto:    supportedCrypto,
-		Reinject:           manager.attached && (fastPath || tcOnly || rawFallback),
+		Reinject:           manager.attached && (fastPath || fullPlaintext || tcOnly || rawFallback),
 		XDPAttachMode:      xdpAttachMode,
 		AFXDPBindMode:      afXDPBindMode,
 		ZeroCopyEnabled:    zeroCopyEnabled,
@@ -3103,6 +3112,13 @@ func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context)
 				}
 				return nil
 			}
+			if manager.snapshotCanFallbackToFullPlaintextKernelDatapathLocked() {
+				manager.warnings = append(manager.warnings, "kernel transport AF_XDP fast path unavailable; using full plaintext kernel datapath provider: "+err.Error())
+				if detachErr := manager.detachExperimentalTCPFastPathLocked(); detachErr != nil {
+					return detachErr
+				}
+				return nil
+			}
 			if kernelUDPRawFallbackEnabled() && manager.snapshotHasLocalKernelUDPEndpointLocked() {
 				manager.warnings = append(manager.warnings, "kernel_udp AF_XDP fast path unavailable; using raw UDP fallback: "+err.Error())
 				if detachErr := manager.detachExperimentalTCPFastPathLocked(); detachErr != nil {
@@ -3138,6 +3154,16 @@ func (manager *Manager) snapshotCanUseKernelUDPTCOnlyLocked() bool {
 
 func (manager *Manager) snapshotCanFallbackToKernelUDPTCOnlyLocked() bool {
 	return !kernelUDPTCOnlyFallbackDisabled() && manager.snapshotKernelUDPTCOnlyEligibleLocked()
+}
+
+func (manager *Manager) snapshotCanFallbackToFullPlaintextKernelDatapathLocked() bool {
+	if !kernelDatapathFullPlaintextOwnsKernelUDPForSpec(manager.spec) {
+		return false
+	}
+	if len(manager.expTCPFlows) > 0 || manager.snapshotHasLocalExperimentalTCPEndpointLocked() {
+		return false
+	}
+	return len(manager.kernelUDPFlows) > 0 || manager.snapshotHasLocalKernelUDPEndpointLocked()
 }
 
 func (manager *Manager) snapshotKernelUDPTCOnlyEligibleLocked() bool {
@@ -3211,6 +3237,10 @@ func (manager *Manager) kernelUDPTCDirectOnlyAvailableLocked() bool {
 		manager.kernelUDPRXDirectAttached &&
 		manager.underlayIngressProg != nil &&
 		manager.kernelTransportPortMap != nil
+}
+
+func (manager *Manager) kernelDatapathFullPlaintextTransportAvailableLocked() bool {
+	return manager.attached && kernelDatapathFullPlaintextOwnsKernelUDPForSpec(manager.spec)
 }
 
 func (manager *Manager) reconcileKernelTransportFlowsForSnapshotLocked(snapshot dataplane.Snapshot) bool {
@@ -3589,7 +3619,7 @@ func (manager *Manager) InstallKernelUDPFlows(ctx context.Context, flows []datap
 		manager.kernelUDPTXTemplates = oldTemplates
 		return err
 	}
-	if !manager.experimentalTCPFastPathAvailableLocked() && !manager.kernelUDPTCDirectOnlyAvailableLocked() && !manager.kernelUDPTCDirectOnlyPendingLocked() && !kernelUDPRawFallbackEnabled() {
+	if !manager.experimentalTCPFastPathAvailableLocked() && !manager.kernelDatapathFullPlaintextTransportAvailableLocked() && !manager.kernelUDPTCDirectOnlyAvailableLocked() && !manager.kernelUDPTCDirectOnlyPendingLocked() && !kernelUDPRawFallbackEnabled() {
 		manager.kernelUDPFlows = oldFlows
 		manager.kernelUDPTXTemplates = oldTemplates
 		return fmt.Errorf("UDP AF_XDP kernel transport provider is not available")
@@ -10627,6 +10657,7 @@ func (manager *Manager) kernelUDPProviderStatsLocked() map[string]uint64 {
 	stats["tc_only_snapshot_eligible"] = boolCounter(manager.snapshotKernelUDPTCOnlyEligibleLocked())
 	stats["tc_only_available"] = boolCounter(manager.kernelUDPTCDirectOnlyAvailableLocked())
 	stats["tc_only_pending"] = boolCounter(manager.kernelUDPTCDirectOnlyPendingLocked())
+	stats["kernel_datapath_full_plaintext_provider"] = boolCounter(manager.kernelDatapathFullPlaintextTransportAvailableLocked())
 	stats["tc_only_blocking_experimental_tcp_flows"] = uint64(len(manager.expTCPFlows))
 	stats["tc_rx_direct_attached"] = boolCounter(manager.kernelUDPRXDirectAttached)
 	stats["tc_underlay_ingress_prog_loaded"] = boolCounter(manager.underlayIngressProg != nil)
@@ -23794,7 +23825,17 @@ func kernelDatapathRXWorkerOwnsStackRXForSpec(spec dataplane.AttachSpec) bool {
 	if spec.KernelDatapathSuppressLegacyRXWorker {
 		return false
 	}
+	if spec.KernelDatapathFullPlaintext {
+		return true
+	}
 	return kernelDatapathRXWorkerOwnsStackRX()
+}
+
+func kernelDatapathFullPlaintextOwnsKernelUDPForSpec(spec dataplane.AttachSpec) bool {
+	if spec.KernelDatapathSuppressLegacyRXWorker {
+		return false
+	}
+	return spec.KernelDatapathFullPlaintext
 }
 
 func kernelUDPRXDirectDisabled() bool {

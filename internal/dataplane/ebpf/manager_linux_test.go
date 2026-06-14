@@ -4533,6 +4533,27 @@ func TestKernelTransportStatusReportsUDPFastPath(t *testing.T) {
 	}
 }
 
+func TestKernelUDPStatusReportsFullPlaintextKernelDatapathProvider(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+
+	status, err := manager.KernelUDPStatus(context.Background())
+	if err != nil {
+		t.Fatalf("kernel udp status: %v", err)
+	}
+	if !status.Available || !status.Reinject || !status.FastPath || !status.DirectOnly || !status.TCOnly {
+		t.Fatalf("full plaintext status = %+v, want available direct kernel provider", status)
+	}
+	if status.Provider != "kernel_datapath_full_plaintext" {
+		t.Fatalf("provider = %q, want kernel_datapath_full_plaintext", status.Provider)
+	}
+	protocol := kernelTransportProtocolUDP(status)
+	if !protocol.Available || protocol.Placement != "kernel" || protocol.UserspaceFallback {
+		t.Fatalf("full plaintext protocol = %+v, want kernel placement without userspace fallback", protocol)
+	}
+}
+
 func TestKernelUDPStatusReportsKernelCryptoWhenDeviceFlowExists(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
@@ -4909,6 +4930,59 @@ func TestKernelTransportFastPathNeededForInstalledFlows(t *testing.T) {
 	manager.snapshot.PacketPolicy.KernelTransportMode = dataplane.KernelTransportModeDisabled
 	if manager.snapshotNeedsKernelTransportFastPathLocked() {
 		t.Fatal("disabled kernel transport requested AF_XDP kernel transport fast path")
+	}
+}
+
+func TestKernelTransportFastPathPreferredForFullPlaintextKernelUDP(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: core.EndpointID("local-udp"), Peer: core.IXID("ix-a"), Transport: "udp", Listen: "198.18.0.1:17001", Enabled: true},
+		},
+	}
+	manager.kernelUDPFlows[7] = dataplane.KernelUDPFlow{ID: 7}
+
+	if !manager.snapshotNeedsKernelTransportFastPathLocked() {
+		t.Fatal("full plaintext kernel datapath UDP should still prefer AF_XDP when available")
+	}
+	if !kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) {
+		t.Fatal("full plaintext kernel datapath should own stack RX")
+	}
+}
+
+func TestInstallKernelUDPFlowAllowsFullPlaintextKernelDatapathWithoutAFXDPPProvider(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+	}
+
+	err := manager.InstallKernelUDPFlows(context.Background(), []dataplane.KernelUDPFlow{{
+		ID:            7,
+		Peer:          core.IXID("ix-b"),
+		Endpoint:      core.EndpointID("udp-b"),
+		RemoteAddress: "198.18.0.2:17001",
+	}})
+	if err != nil {
+		t.Fatalf("install full plaintext kernel_udp flow: %v", err)
+	}
+}
+
+func TestKernelTransportFastPathStillNeededForExperimentalTCPWithFullPlaintextSpec(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: core.EndpointID("local-exp"), Peer: core.IXID("ix-a"), Transport: "experimental_tcp", Listen: "198.18.0.1:17041", Enabled: true},
+		},
+	}
+
+	if !manager.snapshotNeedsKernelTransportFastPathLocked() {
+		t.Fatal("experimental_tcp should still request its fast path")
 	}
 }
 

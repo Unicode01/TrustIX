@@ -48,3 +48,15 @@ func TestFirewallDoctorManagedRulesDetailShowsBackendRequirement(t *testing.T) {
 		t.Fatalf("detail %q missing backend requirement flag", detail)
 	}
 }
+
+func TestTrustIXManagedFirewallRulesEnabledFromEnv(t *testing.T) {
+	t.Setenv("TRUSTIX_OPENWRT_FIREWALL_RULES", "1")
+	if !trustixManagedFirewallRulesEnabled() {
+		t.Fatal("managed firewall rules env was ignored")
+	}
+
+	t.Setenv("TRUSTIX_OPENWRT_FIREWALL_RULES", "0")
+	if trustixManagedFirewallRulesEnabled() {
+		t.Fatal("managed firewall rules false env was ignored")
+	}
+}
