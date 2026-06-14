@@ -21,6 +21,8 @@ full_datapath_extra_module_params="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DA
 full_datapath_kernelmodule_test_bin="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_KERNELMODULE_TEST_BIN:-}"
 full_datapath_ioctl_selftest="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_IOCTL_SELFTEST:-0}"
 full_datapath_verify_safe_defaults="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-0}"
+single_host_full_datapath="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_FULL_DATAPATH:-0}"
+single_host_route_gso="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_ROUTE_GSO:-0}"
 cases_raw="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASES:-}"
 include_kernel="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_INCLUDE_KERNEL:-auto}"
 kernel_module="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_KERNEL_MODULE:-0}"
@@ -93,7 +95,6 @@ ipip:plaintext:performance:tc_xdp:userspace
 vxlan:secure:stable:tc_xdp:userspace
 vxlan:plaintext:performance:tc_xdp:userspace
 kernel_udp:plaintext:performance:tc_xdp:userspace
-kernel_udp:secure:stable:tc_xdp:userspace
 kernel_udp:secure:performance:tc_xdp:kernel
 experimental_tcp:plaintext:performance:kernel_module:userspace
 experimental_tcp:secure:stable:userspace:userspace
@@ -126,6 +127,16 @@ validate_case() {
 
 case_should_skip() {
   local transport="$1" encryption="$2" profile="$3" datapath="$4" placement="$5"
+  if case_is_full_datapath "$transport" "$encryption" "$profile" "$datapath" "$placement" &&
+    ! truthy "$single_host_full_datapath"; then
+    log "skip ${transport}/${encryption}/${profile}/${datapath}/${placement}: full datapath module requires a cross-host harness; set TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_FULL_DATAPATH=1 for explicit single-host diagnostics"
+    return 0
+  fi
+  if case_is_route_gso "$transport" "$encryption" "$profile" "$datapath" "$placement" &&
+    ! truthy "$single_host_route_gso"; then
+    log "skip ${transport}/${encryption}/${profile}/${datapath}/${placement}: route-GSO throughput requires a cross-host harness; set TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_ROUTE_GSO=1 for explicit single-host diagnostics"
+    return 0
+  fi
   if case_is_full_datapath "$transport" "$encryption" "$profile" "$datapath" "$placement" &&
     ! full_datapath_case_available; then
     log "skip ${transport}/${encryption}/${profile}/${datapath}/${placement}: full datapath module is unavailable"
@@ -381,6 +392,14 @@ main() {
   case "$full_datapath_verify_safe_defaults" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
     *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS must be truthy or falsey" ;;
+  esac
+  case "$single_host_full_datapath" in
+    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_FULL_DATAPATH must be truthy or falsey" ;;
+  esac
+  case "$single_host_route_gso" in
+    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_ROUTE_GSO must be truthy or falsey" ;;
   esac
   case "$perf_fast" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;

@@ -23,14 +23,24 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT",
 				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_IOCTL_SELFTEST:-0",
 				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-0",
+				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_FULL_DATAPATH:-0",
+				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_ROUTE_GSO:-0",
 				"rx_worker_xmit=1",
 				"tx_plaintext_skip_inner_tcp_checksum=1",
 				"udp:plaintext:performance:kernel_module:userspace",
+				"kernel_udp:secure:performance:tc_xdp:kernel",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace",
 				"experimental_tcp:secure:stable:userspace:userspace",
 			} {
 				if !strings.Contains(text, want) {
 					t.Fatalf("%s production defaults missing %q", name, want)
+				}
+			}
+			for _, unwanted := range []string{
+				"kernel_udp:secure:stable:tc_xdp:userspace",
+			} {
+				if strings.Contains(text, unwanted) {
+					t.Fatalf("%s production defaults still include slow/unselected combo %q", name, unwanted)
 				}
 			}
 		})

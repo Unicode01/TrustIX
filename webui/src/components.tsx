@@ -924,10 +924,13 @@ function ixProvisionDefaultEndpointTransport(profile: string, endpointMode = "pa
   if (normalizeIXProvisionProfileName(profile) !== "plaintext_performance") {
     return "udp";
   }
-  if (String(endpointMode || "passive").trim().toLowerCase().replaceAll("-", "_") !== "active" && provisionEndpointAddressHasIPv4(endpointAddress)) {
+  if (String(endpointMode || "passive").trim().toLowerCase().replaceAll("-", "_") === "active") {
+    return "experimental_tcp";
+  }
+  if (String(endpointAddress || "").includes("=") && provisionEndpointAddressHasIPv4(endpointAddress)) {
     return "ipip";
   }
-  return "experimental_tcp";
+  return "udp";
 }
 
 function ixProvisionAcklessEndpointName(endpointName: string, ixID: string): string {
@@ -1630,7 +1633,7 @@ export function AccessView(props: {
                 <Field label={props.t("new_ix_control_api", "New IX public control API")} help={newIXActiveOnly ? props.t("help_new_ix_control_api_active", "Optional published control API for this edge IX. Leave empty when it has no public inbound control-plane address.") : props.t("help_new_ix_control_api", "Optional public URL for the new IX control API. Empty derives https://host:9443 from the public endpoint.")} placeholder={newIXActiveOnly ? props.t("no_control_api", "No control API published") : (newIXEffective.controlAPI || "https://ix-c.example.com:9443")} value={newIXControlAPI} onChange={setNewIXControlAPI} />
                 <Field label={props.t("new_ix_bootstrap_peer", "Bootstrap peer IX")} help={props.t("help_new_ix_bootstrap_peer", "Existing IX used as the first control-plane peer for the generated config.")} value={newIXBootstrapIX} onChange={setNewIXBootstrapIX} />
                 <Field label={props.t("new_ix_bootstrap_control_api", "Bootstrap control API")} help={props.t("help_new_ix_bootstrap_control_api", "Control API URL of the bootstrap peer. Empty uses the current IX control API from this config.")} placeholder={newIXEffective.bootstrapControlAPI || "https://ix-a.example.com:9443"} value={newIXBootstrapControlAPI} onChange={setNewIXBootstrapControlAPI} />
-                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. Plaintext performance uses IPIP when the public endpoint is an IPv4 address; DNS or active endpoints fall back to experimental_tcp.")} value={newIXEffectiveEndpointTransport} options={transportOptions()} onChange={setNewIXEndpointTransport} />
+                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. Plaintext performance defaults to UDP full-kmod; explicit tunnel declarations like local=198.51.100.10 use IPIP.")} value={newIXEffectiveEndpointTransport} options={transportOptions()} onChange={setNewIXEndpointTransport} />
                 {!newIXActiveOnly && <Field label={props.t("new_ix_endpoint_listen", "Endpoint listen")} help={props.t("help_new_ix_endpoint_listen", "Optional listen address. Empty listens on 0.0.0.0 with the public endpoint port.")} placeholder={newIXEffective.endpointListen || "0.0.0.0:7000"} value={newIXEndpointListen} onChange={setNewIXEndpointListen} />}
                 <Field label={props.t("new_ix_endpoint_name", "Endpoint name")} help={props.t("help_new_ix_endpoint_name", "Optional local endpoint name written into the generated config. Empty derives <ix_id>-<transport>.")} placeholder={newIXResolvedEndpointName} value={newIXEndpointName} onChange={setNewIXEndpointName} />
                 <Field label={props.t("new_ix_lan_iface", "LAN interface")} help={props.t("help_new_ix_lan_iface", "Optional LAN interface. Managed mode creates trustix-<ix_id> when empty; existing mode requires a host interface.")} placeholder={newIXEffective.lanIface || "br-lan / eth1"} value={newIXLANIface} onChange={setNewIXLANIface} />
