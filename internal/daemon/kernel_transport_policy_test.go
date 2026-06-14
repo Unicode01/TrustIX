@@ -70,3 +70,67 @@ func TestEffectiveKernelTransportModeKeepsAutoForFullKmodUDP(t *testing.T) {
 		t.Fatalf("kernel transport mode = %q, want auto for full-kmod UDP", got)
 	}
 }
+
+func TestEffectiveKernelTransportModeDisablesAutoForSecureUserspaceKernelUDP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeDisabled {
+		t.Fatalf("kernel transport mode = %q, want disabled for secure userspace-crypto kernel UDP", got)
+	}
+}
+
+func TestEffectiveKernelTransportModeKeepsExplicitRequireForSecureUserspaceKernelUDP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeRequireKernel {
+		t.Fatalf("kernel transport mode = %q, want explicit require_kernel", got)
+	}
+}
+
+func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoUDP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
+		t.Fatalf("kernel transport mode = %q, want auto for secure kernel-crypto UDP", got)
+	}
+}

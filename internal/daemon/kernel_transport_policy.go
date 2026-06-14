@@ -8,6 +8,7 @@ import (
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/transport"
+	securetransport "trustix.local/trustix/internal/transport/secure"
 )
 
 func normalizeKernelTransportMode(raw string) dataplane.KernelTransportMode {
@@ -38,6 +39,9 @@ func effectiveKernelTransportModeForDesired(desired config.Desired) dataplane.Ke
 	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlyUserspaceUDP(desired) {
 		return dataplane.KernelTransportModeDisabled
 	}
+	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesSecureUserspaceKernelUDP(desired) {
+		return dataplane.KernelTransportModeDisabled
+	}
 	return mode
 }
 
@@ -50,6 +54,27 @@ func desiredTransportPolicyUsesOnlyUserspaceUDP(desired config.Desired) bool {
 	}
 	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolUDP))
 	return profile.Datapath == config.TransportDatapathUserspace
+}
+
+func desiredTransportPolicyUsesSecureUserspaceKernelUDP(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolUDP) {
+		return false
+	}
+	if desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		return false
+	}
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolUDP))
+	if profile.Datapath == config.TransportDatapathUserspace {
+		return false
+	}
+	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionSecure {
+		return false
+	}
+	placement := normalizeTransportCryptoPlacementConfig(profile.CryptoPlacement)
+	if placement == "" {
+		placement = effectiveTransportCryptoPlacementConfig(desired.TransportPolicy)
+	}
+	return placement == string(dataplane.CryptoPlacementUserspace)
 }
 
 func (daemon *Daemon) annotateKernelTransportStatus(status *dataplane.KernelTransportStatus) {
