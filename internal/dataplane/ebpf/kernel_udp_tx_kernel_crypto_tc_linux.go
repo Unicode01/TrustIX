@@ -33,6 +33,7 @@ type kernelUDPTXSecureDirectProgramOptions struct {
 
 const (
 	kernelUDPTXSecureDirectSKBSealKfuncCompiled          = false
+	kernelUDPTXSecureDirectInnerTCPChecksumKfuncCompiled = false
 	kernelUDPTXSecureDirectOuterTCPChecksumKfuncCompiled = false
 )
 
@@ -122,7 +123,7 @@ func loadKernelUDPTXSecureDirectObject(provider *kernelCryptoProviderObject, sta
 	if err != nil {
 		var verifier *cebpf.VerifierError
 		if errors.As(err, &verifier) {
-			return nil, fmt.Errorf("load embedded kernel_udp secure TC TX direct object: verifier log:\n%+v", verifier)
+			return nil, fmt.Errorf("load embedded kernel_udp secure TC TX direct object: verifier log:\n%-260v", verifier)
 		}
 		return nil, fmt.Errorf("load embedded kernel_udp secure TC TX direct object: %w", err)
 	}
@@ -191,7 +192,8 @@ func kernelUDPTXSecureDirectFixInnerChecksumsEnabled() bool {
 }
 
 func kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled() bool {
-	return envTruthy("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_INNER_TCP_CHECKSUM_KFUNC")
+	return kernelUDPTXSecureDirectInnerTCPChecksumKfuncCompiled &&
+		envTruthy("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_INNER_TCP_CHECKSUM_KFUNC")
 }
 
 func kernelUDPTXSecureDirectOuterTCPChecksumKfuncEnabled() bool {

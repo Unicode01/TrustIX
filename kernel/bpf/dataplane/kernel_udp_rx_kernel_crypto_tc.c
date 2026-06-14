@@ -49,6 +49,14 @@ const volatile __u32 trustix_kudp_rx_secure_recompute_inner_csum = 0;
 #define TRUSTIX_KUDP_SECURE_BPF_CRYPTO 0
 #endif
 
+#ifndef TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
+#define TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC 0
+#endif
+
+#ifndef TRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC
+#define TRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC 0
+#endif
+
 #define TC_ACT_OK 0
 #define TC_ACT_UNSPEC (-1)
 #define TC_ACT_SHOT 2
@@ -269,7 +277,9 @@ struct {
 static void *(*bpf_map_lookup_elem)(const void *map, const void *key) = (void *)1;
 static long (*bpf_skb_store_bytes)(struct __sk_buff *skb, __u32 offset, const void *from, __u32 len, __u64 flags) = (void *)9;
 static long (*bpf_skb_load_bytes)(const struct __sk_buff *skb, __u32 offset, void *to, __u32 len) = (void *)26;
+#if TRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC
 static long (*bpf_skb_change_tail)(struct __sk_buff *skb, __u32 len, __u64 flags) = (void *)38;
+#endif
 static long (*bpf_skb_adjust_room)(struct __sk_buff *skb, __s32 len_diff, __u32 mode, __u64 flags) = (void *)50;
 static long (*bpf_redirect)(__u32 ifindex, __u64 flags) = (void *)23;
 static long (*bpf_redirect_peer)(__u32 ifindex, __u64 flags) = (void *)155;
@@ -281,14 +291,18 @@ extern void bpf_rcu_read_unlock(void) __ksym;
 extern int bpf_crypto_decrypt(struct bpf_crypto_ctx *ctx, const struct bpf_dynptr *src, const struct bpf_dynptr *dst, const struct bpf_dynptr *siv__nullable) __ksym;
 #endif
 extern int trustix_kernel_direct_open(__u32 slot_id, const __u8 *src, __u8 *dst, __u32 cipher_len, const __u8 *nonce) __ksym;
+#if TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 extern int trustix_kernel_skb_direct_open(struct __sk_buff *skb,
                                             const struct trustix_aead_skb_direct_open_args *args,
                                             const __u8 *nonce) __ksym;
+#endif
+#if TRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC
 extern int trustix_kernel_skb_kudp_rx_decap_l2(struct __sk_buff *skb,
                                             __u32 outer_len,
                                             unsigned long long l2_head,
                                             __u32 l2_tail0,
                                             __u32 l2_tail1) __ksym;
+#endif
 
 static __always_inline void trustix_kudp_rx_secure_count(__u32 key)
 {
@@ -303,32 +317,36 @@ static __always_inline void trustix_kudp_rx_secure_count_path(__u32 key)
         trustix_kudp_rx_secure_count(key);
 }
 
-static __always_inline int trustix_kernel_crypto_hot_stats(const struct trustix_kernel_crypto_ctx_value *state)
-{
-    return state && (state->flags & TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_HOT_STATS);
-}
-
 static __always_inline int trustix_kernel_crypto_direct_hot_stats(const struct trustix_kernel_crypto_direct_slot *slot)
 {
     return slot && (slot->flags & TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_HOT_STATS);
+}
+
+#if TRUSTIX_KUDP_SECURE_BPF_CRYPTO || TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
+static __always_inline int trustix_kernel_crypto_hot_stats(const struct trustix_kernel_crypto_ctx_value *state)
+{
+    return state && (state->flags & TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_HOT_STATS);
 }
 
 static __always_inline int trustix_kernel_crypto_no_replay(const struct trustix_kernel_crypto_ctx_value *state)
 {
     return state && (state->flags & TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_NO_REPLAY);
 }
+#endif
 
 static __always_inline int trustix_kernel_crypto_direct_no_replay(const struct trustix_kernel_crypto_direct_slot *slot)
 {
     return slot && (slot->flags & TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_NO_REPLAY);
 }
 
+#if TRUSTIX_KUDP_SECURE_BPF_CRYPTO || TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 static __always_inline void trustix_kudp_rx_secure_count_hot(const struct trustix_kernel_crypto_ctx_value *state,
                                                             __u32 key)
 {
     if (trustix_kernel_crypto_hot_stats(state))
         trustix_kudp_rx_secure_count(key);
 }
+#endif
 
 static __always_inline void trustix_kudp_rx_secure_count_direct_hot(const struct trustix_kernel_crypto_direct_slot *slot,
                                                                     __u32 key)
@@ -378,18 +396,19 @@ static __always_inline void trustix_prepare_nonce_from_iv(__u8 *nonce,
     nonce[11] = (__u8)sequence;
 }
 
-static __always_inline void trustix_prepare_nonce(__u8 *nonce,
-                                                 const struct trustix_kernel_crypto_ctx_value *state,
-                                                 __u64 sequence)
-{
-    trustix_prepare_nonce_from_iv(nonce, state->iv, sequence);
-}
-
 static __always_inline void trustix_prepare_direct_nonce(__u8 *nonce,
                                                         const struct trustix_kernel_crypto_direct_slot *slot,
                                                         __u64 sequence)
 {
     trustix_prepare_nonce_from_iv(nonce, slot->iv, sequence);
+}
+
+#if TRUSTIX_KUDP_SECURE_BPF_CRYPTO || TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
+static __always_inline void trustix_prepare_nonce(__u8 *nonce,
+                                                 const struct trustix_kernel_crypto_ctx_value *state,
+                                                 __u64 sequence)
+{
+    trustix_prepare_nonce_from_iv(nonce, state->iv, sequence);
 }
 
 static __always_inline __u32 trustix_replay_window(const struct trustix_kernel_crypto_ctx_value *state)
@@ -401,6 +420,7 @@ static __always_inline __u32 trustix_replay_window(const struct trustix_kernel_c
         window = TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX;
     return window;
 }
+#endif
 
 static __always_inline __u32 trustix_direct_replay_window(const struct trustix_kernel_crypto_direct_slot *slot)
 {
@@ -412,6 +432,7 @@ static __always_inline __u32 trustix_direct_replay_window(const struct trustix_k
     return window;
 }
 
+#if TRUSTIX_KUDP_SECURE_BPF_CRYPTO || TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 static __always_inline int trustix_replay_seen(const struct trustix_kernel_crypto_ctx_value *state,
                                                __u64 sequence)
 {
@@ -424,6 +445,7 @@ static __always_inline int trustix_replay_seen(const struct trustix_kernel_crypt
         return 0;
     return (state->replay_seen[slot] & mask) != 0;
 }
+#endif
 
 static __always_inline int trustix_direct_replay_seen(const struct trustix_kernel_crypto_direct_slot *slot,
                                                       __u64 sequence)
@@ -438,6 +460,7 @@ static __always_inline int trustix_direct_replay_seen(const struct trustix_kerne
     return (slot->replay_seen[replay_slot] & mask) != 0;
 }
 
+#if TRUSTIX_KUDP_SECURE_BPF_CRYPTO || TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 static __always_inline void trustix_replay_mark(struct trustix_kernel_crypto_ctx_value *state,
                                                 __u64 sequence)
 {
@@ -452,6 +475,7 @@ static __always_inline void trustix_replay_mark(struct trustix_kernel_crypto_ctx
     }
     state->replay_seen[slot] |= mask;
 }
+#endif
 
 static __always_inline void trustix_direct_replay_mark(struct trustix_kernel_crypto_direct_slot *slot,
                                                        __u64 sequence)
@@ -468,6 +492,7 @@ static __always_inline void trustix_direct_replay_mark(struct trustix_kernel_cry
     slot->replay_seen[replay_slot] |= mask;
 }
 
+#if TRUSTIX_KUDP_SECURE_BPF_CRYPTO || TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 static __always_inline int trustix_replay_check(const struct trustix_kernel_crypto_ctx_value *state,
                                                 __u64 sequence)
 {
@@ -489,6 +514,7 @@ static __always_inline int trustix_replay_check(const struct trustix_kernel_cryp
         return -114;
     return 0;
 }
+#endif
 
 static __always_inline int trustix_direct_replay_check(const struct trustix_kernel_crypto_direct_slot *slot,
                                                        __u64 sequence)
@@ -512,6 +538,7 @@ static __always_inline int trustix_direct_replay_check(const struct trustix_kern
     return 0;
 }
 
+#if TRUSTIX_KUDP_SECURE_BPF_CRYPTO || TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 static __always_inline int trustix_replay_commit(struct trustix_kernel_crypto_ctx_value *state,
                                                  __u64 sequence)
 {
@@ -537,6 +564,7 @@ static __always_inline int trustix_replay_commit(struct trustix_kernel_crypto_ct
     trustix_replay_mark(state, sequence);
     return 0;
 }
+#endif
 
 static __always_inline int trustix_direct_replay_commit(struct trustix_kernel_crypto_direct_slot *slot,
                                                         __u64 sequence)
@@ -576,11 +604,11 @@ static __always_inline int trustix_kernel_udp_unfragmented(__u8 *frame)
            frame[30] == 0 && frame[31] == 0;
 }
 
-static __noinline int trustix_open_secure_frame(struct __sk_buff *skb,
-                                                __u32 cipher_offset,
-                                                __u32 cipher_len,
-                                                __u8 namespace,
-                                                struct trustix_kudp_rx_secure_scratch *scratch)
+static __always_inline int trustix_open_secure_frame(struct __sk_buff *skb,
+                                                     __u32 cipher_offset,
+                                                     __u32 cipher_len,
+                                                     __u32 namespace,
+                                                     struct trustix_kudp_rx_secure_scratch *scratch)
 {
     struct trustix_kernel_crypto_flow_key key = {};
     struct trustix_kernel_crypto_ctx_value *state;
@@ -599,6 +627,7 @@ static __noinline int trustix_open_secure_frame(struct __sk_buff *skb,
         bounded_cipher_len < TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN + 20 ||
         bounded_cipher_len > TRUSTIX_KERNEL_CRYPTO_FRAME_MAX)
         return -22;
+    barrier_var(bounded_cipher_len);
     cipher_len = bounded_cipher_len;
     plain_len = cipher_len - TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN;
     if (bpf_skb_load_bytes(skb, cipher_offset, scratch->cipher, cipher_len))
@@ -696,11 +725,12 @@ direct_ok:
 #endif
 }
 
+#if TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 static __noinline int trustix_open_secure_frame_skb_direct(
     struct __sk_buff *skb,
     __u32 cipher_offset,
     __u32 cipher_len,
-    __u8 namespace,
+    __u32 namespace,
     struct trustix_kudp_rx_secure_scratch *scratch)
 {
     struct trustix_kernel_crypto_flow_key key = {};
@@ -717,6 +747,7 @@ static __noinline int trustix_open_secure_frame_skb_direct(
         bounded_cipher_len < TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN + 20 ||
         bounded_cipher_len > TRUSTIX_KERNEL_CRYPTO_FRAME_MAX)
         return -22;
+    barrier_var(bounded_cipher_len);
     cipher_len = bounded_cipher_len;
     plain_len = cipher_len - TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN;
 
@@ -783,6 +814,7 @@ static __noinline int trustix_open_secure_frame_skb_direct(
     trustix_kudp_rx_secure_count_hot(state, TRUSTIX_KUDP_RX_SECURE_STAT_SUCCESSES);
     return (__s32)plain_len;
 }
+#endif
 
 static __noinline int trustix_store_plain_to_packet(struct __sk_buff *skb,
                                                     struct trustix_kudp_rx_secure_scratch *scratch,
@@ -806,6 +838,7 @@ static __noinline int trustix_store_plain_to_packet(struct __sk_buff *skb,
                                     BPF_F_INVALIDATE_HASH);
 }
 
+#if TRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC
 static __always_inline __u64 trustix_l2_head(const struct trustix_kudp_rx_secure_scratch *scratch)
 {
     return ((__u64)scratch->header[0]) |
@@ -856,6 +889,7 @@ static __noinline int trustix_secure_decap_l2_kfunc(struct __sk_buff *skb,
         skb, bounded_decap_len, trustix_l2_head(scratch),
         trustix_l2_tail0(scratch), trustix_l2_tail1(scratch));
 }
+#endif
 
 static __always_inline void trustix_set_header_broadcast(struct trustix_kudp_rx_secure_scratch *scratch)
 {
@@ -954,7 +988,7 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
     __u64 epoch;
     __u64 sequence;
     __u32 scratch_key = 0;
-    __u8 namespace = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP;
+    __u32 namespace = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP;
     int plain_len;
     struct trustix_kudp_rx_secure_scratch *scratch;
     struct trustix_kudp_rx_neigh_value *neigh;
@@ -1102,6 +1136,7 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
     scratch->sequence = sequence;
     scratch->suite = secure[5];
     trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_CANDIDATES);
+#if TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
     if (trustix_kudp_rx_secure_skb_open_kfunc) {
         plain_len = trustix_open_secure_frame_skb_direct(
             skb, cipher_offset, cipher_len, namespace, scratch);
@@ -1112,9 +1147,12 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
         if (plain_len != -95)
             goto open_error;
     }
+#endif
     plain_len = trustix_open_secure_frame(
         skb, cipher_offset, cipher_len, namespace, scratch);
+#if TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 open_error:
+#endif
     if (plain_len < 0) {
         if (plain_len == -2)
             goto no_context;
@@ -1128,7 +1166,9 @@ open_error:
             goto header_error;
         goto decrypt_error;
     }
+#if TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 opened:
+#endif
     inner_len = (__u32)plain_len;
     if (!skb_opened) {
         plain = trustix_rx_plain_ptr(scratch);
@@ -1167,6 +1207,7 @@ opened:
     if (!scratch->ifindex)
         goto neigh_miss;
 
+#if TRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC
     if (trustix_kudp_rx_secure_decap_l2_kfunc) {
         if (skb_opened) {
             if (trustix_kernel_skb_kudp_rx_decap_l2(
@@ -1185,6 +1226,7 @@ opened:
             return bpf_redirect(scratch->ifindex, BPF_F_INGRESS);
         return bpf_redirect(scratch->ifindex, 0);
     }
+#endif
 
     if (bpf_skb_adjust_room(skb, -(__s32)(skb_opened ? decap_len : outer_overhead),
                             BPF_ADJ_ROOM_MAC,

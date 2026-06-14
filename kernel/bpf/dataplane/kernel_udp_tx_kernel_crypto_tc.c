@@ -51,6 +51,10 @@ const volatile __u32 trustix_kudp_tx_secure_outer_tcp_partial_csum_kfunc = 0;
 #define TRUSTIX_KUDP_SECURE_SKB_SEAL_KFUNC 0
 #endif
 
+#ifndef TRUSTIX_KUDP_SECURE_INNER_TCP_CSUM_KFUNC
+#define TRUSTIX_KUDP_SECURE_INNER_TCP_CSUM_KFUNC 0
+#endif
+
 #ifndef TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
 #define TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC 0
 #endif
@@ -354,10 +358,12 @@ extern int trustix_kernel_skb_direct_seal(struct __sk_buff *skb,
                                             const struct trustix_aead_skb_direct_seal_args *args,
                                             const __u8 *nonce) __ksym;
 #endif
+#if TRUSTIX_KUDP_SECURE_INNER_TCP_CSUM_KFUNC
 extern int trustix_kernel_skb_fix_inner_tcp_csum(struct __sk_buff *skb,
-                                              __u32 inner_ip_offset,
-                                              __u32 inner_len,
-                                              __u32 flags) __ksym;
+                                                 __u32 inner_ip_offset,
+                                                 __u32 inner_len,
+                                                 __u32 flags) __ksym;
+#endif
 #if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
 extern int trustix_kernel_skb_tixt_fix_outer_tcp_csum(struct __sk_buff *skb, __u32 flags) __ksym;
 #endif
@@ -589,9 +595,8 @@ static __noinline __u16 trustix_l4_checksum(const __u8 *ip,
     __u32 padded_len;
     __u16 checksum;
 
-    if (l4_len == 0 || l4_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20)
-        return 0;
     l4_len &= 0xfff;
+    barrier_var(l4_len);
     if (l4_len == 0 || l4_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20)
         return 0;
 
@@ -668,9 +673,10 @@ static __noinline int trustix_fix_inner_checksums(struct trustix_kudp_tx_scratch
         if (l4_len < 8)
             return -22;
         udp_len = trustix_read_be16(l4 + 4);
-        if (udp_len < 8 || udp_len > l4_len)
-            return -22;
-        if (udp_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20)
+        udp_len &= 0xfff;
+        barrier_var(udp_len);
+        if (udp_len < 8 || udp_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX - 20 ||
+            udp_len > l4_len)
             return -22;
         if (l4[6] == 0 && l4[7] == 0)
             return 0;
@@ -930,8 +936,6 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
                                                  struct trustix_kudp_tx_flow_value *flow,
                                                  struct trustix_kudp_tx_scratch *scratch)
 {
-    __u8 *data = (__u8 *)(long)skb->data;
-    __u8 *data_end = (__u8 *)(long)skb->data_end;
     struct trustix_kernel_crypto_flow_key key = {};
     struct trustix_kernel_crypto_ctx_value *state;
     struct trustix_kernel_crypto_direct_slot *direct_slot;
@@ -940,11 +944,17 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
     __u16 mss_clamp;
     int clamp_result;
     int fixed_inner_tcp_csum_kfunc = 0;
+#if TRUSTIX_KUDP_SECURE_INNER_TCP_CSUM_KFUNC
     int inner_tcp_syn = 0;
+#endif
     int err = 0;
 #if TRUSTIX_KUDP_SECURE_BPF_CRYPTO
     struct bpf_crypto_ctx *crypto_ctx;
     struct bpf_dynptr plain, cipher, nonce;
+#endif
+#if TRUSTIX_KUDP_SECURE_INNER_TCP_CSUM_KFUNC
+    __u8 *data = (__u8 *)(long)skb->data;
+    __u8 *data_end = (__u8 *)(long)skb->data_end;
 #endif
 
     if (!scratch || !skb)
@@ -952,6 +962,7 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
     if (inner_len < 20 || inner_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX)
         return -22;
 
+#if TRUSTIX_KUDP_SECURE_INNER_TCP_CSUM_KFUNC
     if (data + 54 <= data_end && data[23] == IPPROTO_TCP &&
         (data[47] & TRUSTIX_TCP_FLAG_SYN))
         inner_tcp_syn = 1;
@@ -965,6 +976,7 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
             trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_INNER_TCP_CSUM_KFUNC_FALLBACKS);
         }
     }
+#endif
     if (bpf_skb_load_bytes(skb, 14, scratch->plain, inner_len))
         return -14;
     if (!flow)

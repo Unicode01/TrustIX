@@ -7022,12 +7022,46 @@ func TestKernelUDPTXSecureDirectInnerTCPChecksumKfuncDefaultsOff(t *testing.T) {
 		t.Fatal("secure direct inner TCP checksum kfunc enabled by default; datapath helper kfuncs must be explicit opt-in")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_INNER_TCP_CHECKSUM_KFUNC", "1")
-	if !kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled() {
-		t.Fatal("secure direct inner TCP checksum kfunc disabled with explicit opt-in")
+	if kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled() {
+		t.Fatal("secure direct inner TCP checksum kfunc enabled while the embedded object is built without datapath helper kfunc support")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_INNER_TCP_CHECKSUM_KFUNC", "0")
 	if kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled() {
 		t.Fatal("secure direct inner TCP checksum kfunc enabled with explicit opt-out")
+	}
+}
+
+func TestKernelUDPTXSecureDirectInnerTCPChecksumKfuncIsCompileTimeOptional(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_tx_kernel_crypto_tc.c"))
+	if err != nil {
+		t.Fatalf("read kernel_udp TX secure C source: %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "#define TRUSTIX_KUDP_SECURE_INNER_TCP_CSUM_KFUNC 0") {
+		t.Fatal("secure direct inner TCP checksum kfunc must default to a disabled compile-time feature")
+	}
+	extern := "extern int trustix_kernel_skb_fix_inner_tcp_csum"
+	call := "err = trustix_kernel_skb_fix_inner_tcp_csum(skb, 14, inner_len, 0);"
+	for _, needle := range []string{extern, call} {
+		index := strings.Index(text, needle)
+		if index < 0 {
+			t.Fatalf("secure direct source missing guarded kfunc reference %q", needle)
+		}
+		prefix := text[:index]
+		open := strings.LastIndex(prefix, "#if TRUSTIX_KUDP_SECURE_INNER_TCP_CSUM_KFUNC")
+		close := strings.LastIndex(prefix, "#endif")
+		if open < 0 || close > open {
+			t.Fatalf("kfunc reference %q is not guarded by TRUSTIX_KUDP_SECURE_INNER_TCP_CSUM_KFUNC", needle)
+		}
+	}
+	if !strings.Contains(text, "kernelUDPTXSecureDirectInnerTCPChecksumKfuncCompiled = false") {
+		loader, err := os.ReadFile("kernel_udp_tx_kernel_crypto_tc_linux.go")
+		if err != nil {
+			t.Fatalf("read kernel_udp TX secure loader: %v", err)
+		}
+		if !bytes.Contains(loader, []byte("kernelUDPTXSecureDirectInnerTCPChecksumKfuncCompiled = false")) {
+			t.Fatal("loader must keep inner TCP checksum kfunc disabled for the default embedded object")
+		}
 	}
 }
 
@@ -7133,6 +7167,68 @@ func TestKernelUDPRXSecureDirectKfuncOpenDefaultsOn(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN", "0")
 	if kernelUDPRXSecureDirectKfuncOpenEnabled() {
 		t.Fatal("RX kfunc open ignored explicit opt-out")
+	}
+}
+
+func TestKernelUDPRXSecureDirectHelperKfuncsCompiledOutByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC", "")
+	if kernelUDPRXSecureDirectSKBOpenKfuncEnabled() {
+		t.Fatal("secure RX skb-open helper kfunc enabled by default; datapath helper kfuncs must be explicit opt-in")
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC", "1")
+	if kernelUDPRXSecureDirectSKBOpenKfuncEnabled() {
+		t.Fatal("secure RX skb-open helper kfunc enabled while the embedded object is built without datapath helper kfunc support")
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_DECAP_L2_KFUNC", "")
+	if kernelUDPRXSecureDirectDecapL2KfuncEnabled() {
+		t.Fatal("secure RX decap L2 helper kfunc enabled by default; datapath helper kfuncs must be explicit opt-in")
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_DECAP_L2_KFUNC", "1")
+	if kernelUDPRXSecureDirectDecapL2KfuncEnabled() {
+		t.Fatal("secure RX decap L2 helper kfunc enabled while the embedded object is built without datapath helper kfunc support")
+	}
+}
+
+func TestKernelUDPRXSecureDirectHelperKfuncsAreCompileTimeOptional(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_rx_kernel_crypto_tc.c"))
+	if err != nil {
+		t.Fatalf("read kernel_udp RX secure C source: %v", err)
+	}
+	text := string(source)
+	requireSourceContains(t, text, "#define TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC 0")
+	requireSourceContains(t, text, "#define TRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC 0")
+	for macro, needles := range map[string][]string{
+		"TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC": {
+			"extern int trustix_kernel_skb_direct_open",
+			"static __noinline int trustix_open_secure_frame_skb_direct",
+			"plain_len = trustix_open_secure_frame_skb_direct(",
+		},
+		"TRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC": {
+			"extern int trustix_kernel_skb_kudp_rx_decap_l2",
+			"static __noinline int trustix_secure_decap_l2_kfunc",
+			"trustix_secure_decap_l2_kfunc(skb, scratch, decap_len, inner_len)",
+		},
+	} {
+		for _, needle := range needles {
+			index := strings.Index(text, needle)
+			if index < 0 {
+				t.Fatalf("secure RX source missing guarded kfunc reference %q", needle)
+			}
+			prefix := text[:index]
+			open := strings.LastIndex(prefix, "#if "+macro)
+			close := strings.LastIndex(prefix, "#endif")
+			if open < 0 || close > open {
+				t.Fatalf("secure RX kfunc reference %q is not guarded by %s", needle, macro)
+			}
+		}
+	}
+	loader, err := os.ReadFile("kernel_udp_rx_kernel_crypto_tc_linux.go")
+	if err != nil {
+		t.Fatalf("read kernel_udp RX secure loader: %v", err)
+	}
+	if !bytes.Contains(loader, []byte("kernelUDPRXSecureDirectSKBOpenKfuncCompiled = false")) ||
+		!bytes.Contains(loader, []byte("kernelUDPRXSecureDirectDecapL2KfuncCompiled = false")) {
+		t.Fatal("secure RX loader must keep helper kfuncs disabled for the default embedded object")
 	}
 }
 

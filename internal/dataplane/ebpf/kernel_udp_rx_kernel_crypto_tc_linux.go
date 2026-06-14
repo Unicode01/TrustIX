@@ -22,6 +22,11 @@ type kernelUDPRXSecureDirectObject struct {
 	program    *cebpf.Program
 }
 
+const (
+	kernelUDPRXSecureDirectSKBOpenKfuncCompiled = false
+	kernelUDPRXSecureDirectDecapL2KfuncCompiled = false
+)
+
 func loadKernelUDPRXSecureDirectObject(provider *kernelCryptoProviderObject, statsMap *cebpf.Map, portMap *cebpf.Map, neighMap *cebpf.Map, lanIfindex int, localIPv4 uint32, sourceMAC [6]byte, options kernelUDPRXDirectProgramOptions) (*kernelUDPRXSecureDirectObject, error) {
 	if provider == nil || provider.flowIndexMap == nil || provider.contextSlots == nil || provider.directSlotMap == nil {
 		return nil, fmt.Errorf("kernel_udp secure TC RX direct requires loaded kernel crypto provider maps")
@@ -155,11 +160,13 @@ func kernelUDPRXSecureDirectKfuncOpenEnabled() bool {
 }
 
 func kernelUDPRXSecureDirectDecapL2KfuncEnabled() bool {
-	return envTruthy("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_DECAP_L2_KFUNC")
+	return kernelUDPRXSecureDirectDecapL2KfuncCompiled &&
+		envTruthy("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_DECAP_L2_KFUNC")
 }
 
 func kernelUDPRXSecureDirectSKBOpenKfuncEnabled() bool {
-	return envTruthy("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC")
+	return kernelUDPRXSecureDirectSKBOpenKfuncCompiled &&
+		envTruthy("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC")
 }
 
 func kernelUDPRXSecureDirectRecomputeInnerChecksumEnabled() bool {
