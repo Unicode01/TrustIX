@@ -62,7 +62,51 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	if err != nil {
 		return statuses, err
 	}
+	if err := validateExperimentalTCPRouteGSOHelpersStatus(desired, helpersStatus); err != nil {
+		return statuses, err
+	}
 	return statuses, nil
+}
+
+func validateExperimentalTCPRouteGSOHelpersStatus(desired config.Desired, status kernelmodule.Status) error {
+	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		return nil
+	}
+	var missing []string
+	for _, feature := range []string{kernelmodule.FeatureRouteTCPKfunc, kernelmodule.FeatureRouteTCPXmit} {
+		if !kernelModuleStatusHasFeature(status, feature) {
+			missing = append(missing, feature)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	detail := status.CapabilityReason
+	if status.Reason != "" {
+		if detail == "" {
+			detail = status.Reason
+		} else if !strings.Contains(detail, status.Reason) {
+			detail += "; " + status.Reason
+		}
+	}
+	if detail != "" {
+		detail = "; " + detail
+	}
+	return fmt.Errorf("experimental_tcp route-GSO requires trustix_datapath_helpers full route TCP kfunc capability; missing=%s state=%s loaded=%t features=%s%s",
+		strings.Join(missing, ","),
+		status.State,
+		status.Loaded,
+		strings.Join(status.Features, ","),
+		detail)
+}
+
+func kernelModuleStatusHasFeature(status kernelmodule.Status, want string) bool {
+	for _, feature := range status.Features {
+		if feature == want {
+			return true
+		}
+	}
+	return false
 }
 
 func effectiveKernelModulesForDesired(desired config.Desired) config.KernelModulesConfig {
@@ -84,7 +128,30 @@ func effectiveKernelModulesForDesired(desired config.Desired) config.KernelModul
 			modules.TrustIXDatapathHelpers.Mode = kernelmodule.ModeAuto
 		}
 	}
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		modules.TrustIXDatapathHelpers.Mode = kernelmodule.ModeRequired
+		if strings.TrimSpace(modules.TrustIXDatapathHelpers.Path) == "" {
+			modules.TrustIXDatapathHelpers.Path = inferTrustIXDatapathHelpersModulePath(modules.TrustIXDatapath.Path)
+		}
+	}
 	return modules
+}
+
+func inferTrustIXDatapathHelpersModulePath(datapathPath string) string {
+	path := strings.TrimSpace(datapathPath)
+	switch {
+	case path == "":
+		return ""
+	case strings.EqualFold(path, "embedded"):
+		return "embedded"
+	case strings.EqualFold(path, "embedded://trustix_datapath.ko"):
+		return "embedded://trustix_datapath_helpers.ko"
+	}
+	const datapathKO = "trustix_datapath.ko"
+	if strings.HasSuffix(path, datapathKO) {
+		return strings.TrimSuffix(path, datapathKO) + "trustix_datapath_helpers.ko"
+	}
+	return ""
 }
 
 func kernelModulesAllDisabled(modules config.KernelModulesConfig) bool {

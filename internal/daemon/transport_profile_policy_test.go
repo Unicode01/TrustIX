@@ -101,10 +101,13 @@ func TestTransportProfileFeaturesAdvertiseSecureKernelUDPDirect(t *testing.T) {
 		Encryption:      "secure",
 		CryptoPlacement: "kernel",
 	})
-	for _, feature := range []string{"secure_tx_direct", "secure_rx_direct", "secure_kfunc_seal", "secure_trust_inner_checksum"} {
+	for _, feature := range []string{"secure_tx_direct", "secure_rx_direct", "secure_trust_inner_checksum"} {
 		if !stringListContains(features, feature) {
 			t.Fatalf("performance secure UDP features = %#v, want %q", features, feature)
 		}
+	}
+	if stringListContains(features, "secure_kfunc_seal") {
+		t.Fatalf("performance secure UDP features = %#v, should not advertise opt-in kfunc seal by default", features)
 	}
 }
 

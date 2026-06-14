@@ -626,8 +626,8 @@ func TestDataplaneAttachSpecEnablesPerformanceSecureKernelUDPDirect(t *testing.T
 	if !spec.KernelUDPTXSecureDirect || !spec.KernelUDPRXSecureDirect {
 		t.Fatalf("performance secure UDP should enable TX/RX secure direct, spec=%#v", spec)
 	}
-	if !spec.KernelUDPSecureDirectTrustInnerChecksums || !spec.KernelUDPTXSecureDirectKfuncSeal || spec.KernelUDPTXSecureDirectSKBSealKfunc {
-		t.Fatalf("performance secure UDP should enable verifier-safe secure direct fast options only, spec=%#v", spec)
+	if !spec.KernelUDPSecureDirectTrustInnerChecksums || spec.KernelUDPTXSecureDirectKfuncSeal || spec.KernelUDPTXSecureDirectSKBSealKfunc {
+		t.Fatalf("performance secure UDP should trust inner checksums without forcing kfunc seal variants, spec=%#v", spec)
 	}
 }
 

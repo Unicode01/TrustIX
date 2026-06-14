@@ -9,6 +9,7 @@ import (
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/dataplane"
+	"trustix.local/trustix/internal/kernelmodule"
 	"trustix.local/trustix/internal/transport"
 	securetransport "trustix.local/trustix/internal/transport/secure"
 )
@@ -305,6 +306,90 @@ func TestEffectiveKernelModulesForDesiredProfileDefaultsModes(t *testing.T) {
 	modules = effectiveKernelModulesForDesired(desired)
 	if modules.TrustIXCrypto.Mode != "disabled" || modules.TrustIXDatapath.Mode != "disabled" || modules.TrustIXDatapathHelpers.Mode != "disabled" {
 		t.Fatalf("disabled modules = %#v, want all disabled", modules)
+	}
+}
+
+func TestEffectiveKernelModulesRequiresHelpersForExperimentalTCPRouteGSO(t *testing.T) {
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileDisabled,
+			TrustIXDatapath: config.KernelModuleConfig{
+				Mode: kernelmodule.ModeRequired,
+				Path: "/tmp/trustix-e2e/modules/trustix_datapath.ko",
+			},
+			TrustIXDatapathHelpers: config.KernelModuleConfig{
+				Mode: kernelmodule.ModeDisabled,
+			},
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: "plaintext",
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatal("test desired should select experimental_tcp route-GSO")
+	}
+	modules := effectiveKernelModulesForDesired(desired)
+	if modules.TrustIXDatapathHelpers.Mode != kernelmodule.ModeRequired {
+		t.Fatalf("route-GSO helpers mode = %q, want required", modules.TrustIXDatapathHelpers.Mode)
+	}
+	if modules.TrustIXDatapathHelpers.Path != "/tmp/trustix-e2e/modules/trustix_datapath_helpers.ko" {
+		t.Fatalf("route-GSO helpers path = %q, want inferred sibling helper module", modules.TrustIXDatapathHelpers.Path)
+	}
+
+	desired.KernelModules.TrustIXDatapath.Path = "embedded://trustix_datapath.ko"
+	desired.KernelModules.TrustIXDatapathHelpers.Path = ""
+	modules = effectiveKernelModulesForDesired(desired)
+	if modules.TrustIXDatapathHelpers.Path != "embedded://trustix_datapath_helpers.ko" {
+		t.Fatalf("route-GSO embedded helpers path = %q, want embedded helpers", modules.TrustIXDatapathHelpers.Path)
+	}
+}
+
+func TestValidateExperimentalTCPRouteGSOHelpersRequiresRouteTCPKfuncs(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: "plaintext",
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	err := validateExperimentalTCPRouteGSOHelpersStatus(desired, kernelmodule.Status{
+		Name:     "trustix_datapath_helpers",
+		Loaded:   true,
+		State:    "loaded",
+		Features: []string{kernelmodule.FeatureGSOSKB},
+	})
+	if err == nil || !strings.Contains(err.Error(), kernelmodule.FeatureRouteTCPKfunc) || !strings.Contains(err.Error(), kernelmodule.FeatureRouteTCPXmit) {
+		t.Fatalf("route-GSO helper validation error = %v, want missing route TCP kfuncs", err)
+	}
+
+	err = validateExperimentalTCPRouteGSOHelpersStatus(desired, kernelmodule.Status{
+		Name:   "trustix_datapath_helpers",
+		Loaded: true,
+		State:  "loaded",
+		Features: []string{
+			kernelmodule.FeatureGSOSKB,
+			kernelmodule.FeatureRouteTCPKfunc,
+			kernelmodule.FeatureRouteTCPXmit,
+		},
+	})
+	if err != nil {
+		t.Fatalf("route-GSO helper validation with route TCP features: %v", err)
 	}
 }
 

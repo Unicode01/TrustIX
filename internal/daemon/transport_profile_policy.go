@@ -135,7 +135,7 @@ func transportProfileFeatures(rawTransport string, profile config.EndpointProfil
 			add("kernel_udp", "large_frame_rx", "gso_rx", "gro_rx")
 			if parseSecureTransportEncryption(profile.Encryption) == "secure" &&
 				normalizeEndpointCryptoPlacement(profile.CryptoPlacement) != string(dataplane.CryptoPlacementUserspace) {
-				add("secure_tx_direct", "secure_rx_direct", "secure_kfunc_seal", "secure_trust_inner_checksum")
+				add("secure_tx_direct", "secure_rx_direct", "secure_trust_inner_checksum")
 			}
 		}
 	case transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
