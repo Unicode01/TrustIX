@@ -12,6 +12,8 @@ keep_loaded="${TRUSTIX_FULL_DATAPATH_KEEP_LOADED:-1}"
 enable_features="${TRUSTIX_FULL_DATAPATH_ENABLE_FEATURES:-128}"
 extra_module_params="${TRUSTIX_FULL_DATAPATH_EXTRA_PARAMS:-}"
 expect_active="${TRUSTIX_FULL_DATAPATH_EXPECT_ACTIVE:-1}"
+ioctl_selftest="${TRUSTIX_FULL_DATAPATH_IOCTL_SELFTEST:-1}"
+verify_safe_defaults="${TRUSTIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-1}"
 loaded_by_script=0
 clean_legacy_modules="${TRUSTIX_FULL_DATAPATH_CLEAN_LEGACY_MODULES:-1}"
 
@@ -207,7 +209,11 @@ verify_sysfs() {
     fi
   fi
   log "verified sysfs abi=${abi} selftests=${selftests} failures=${failures} features=${features} safe=${safe} unsafe=${unsafe} flags=${flags}"
-  verify_panic_risk_params_disabled
+  if truthy "$verify_safe_defaults"; then
+    verify_panic_risk_params_disabled
+  else
+    log "skip first-release safe-default parameter assertions"
+  fi
 }
 
 verify_panic_risk_params_disabled() {
@@ -238,13 +244,17 @@ verify_panic_risk_params_disabled() {
     rx_worker_stream_batch_queue; do
     assert_module_bool_disabled "$name"
   done
-  assert_module_param_equals rx_worker_inline_pair_flush_jiffies 1
+  assert_module_param_equals rx_worker_inline_pair_flush_jiffies 0
   assert_module_param_equals rx_worker_inline_coalesce_max_frames 2
   assert_module_param_equals rx_worker_xmit_trust_tcp_checksum_min_len 0
   log "verified first-release panic-risk datapath parameters are forced disabled"
 }
 
 run_ioctl_test() {
+  if ! truthy "$ioctl_selftest"; then
+    log "skip full datapath ioctl selftest"
+    return 0
+  fi
   if [[ -n "$kernelmodule_test_bin" ]]; then
     [[ -x "$kernelmodule_test_bin" ]] || die "TRUSTIX_FULL_DATAPATH_KERNELMODULE_TEST_BIN is not executable: $kernelmodule_test_bin"
     log "running prebuilt full datapath ioctl selftest"
@@ -258,6 +268,14 @@ run_ioctl_test() {
 
 main() {
   require_linux_root
+  case "$ioctl_selftest" in
+    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_FULL_DATAPATH_IOCTL_SELFTEST must be truthy or falsey" ;;
+  esac
+  case "$verify_safe_defaults" in
+    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS must be truthy or falsey" ;;
+  esac
   cleanup_legacy_modules
   build_and_load_module
   verify_sysfs

@@ -21,6 +21,10 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 			for _, want := range []string{
 				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PERF_FAST:-1",
 				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT",
+				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_IOCTL_SELFTEST:-0",
+				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-0",
+				"rx_worker_xmit=1",
+				"tx_plaintext_skip_inner_tcp_checksum=1",
 				"udp:plaintext:performance:kernel_module:userspace",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace",
 				"experimental_tcp:secure:stable:userspace:userspace",

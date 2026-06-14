@@ -1310,6 +1310,9 @@ func (daemon *Daemon) kernelDirectWarmupEndpoint(endpoint config.EndpointConfig)
 }
 
 func (daemon *Daemon) kernelDirectWarmupControlOnlyEndpoint(endpoint config.EndpointConfig) bool {
+	if kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
+		return false
+	}
 	return transport.Protocol(endpoint.Transport) == transport.ProtocolUDP ||
 		transport.Protocol(endpoint.Transport) == transport.ProtocolExperimentalTCP && !experimentalTCPTXDirectRequestedForPolicy()
 }

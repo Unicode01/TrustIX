@@ -934,6 +934,33 @@ func TestDataSessionControlOnlyKeepsFullPlaintextUDPOnKernelDatapath(t *testing.
 	}
 }
 
+func TestKernelDirectWarmupKeepsFullPlaintextUDPDataSession(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
+	daemon := &Daemon{
+		desired: config.Desired{
+			Endpoints: []config.EndpointConfig{{
+				Name:      "udp-a",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				Profile:    config.TransportProfilePerformance,
+				Datapath:   config.TransportDatapathKernelModule,
+				Encryption: securetransport.EncryptionPlaintext,
+				Candidates: []core.EndpointID{"udp-a"},
+			},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+		},
+	}
+	if daemon.kernelDirectWarmupControlOnlyEndpoint(config.EndpointConfig{
+		Transport: string(transport.ProtocolUDP),
+	}) {
+		t.Fatal("full plaintext UDP warmup must keep the data session attached")
+	}
+}
+
 func TestDataSessionControlOnlyIncludesExplicitSecureKernelDirectOnly(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_SECURE_DIRECT_ONLY", "1")

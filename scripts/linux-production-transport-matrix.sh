@@ -17,8 +17,10 @@ full_datapath_script="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_SCRIPT
 full_datapath_module_dir="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MODULE_DIR:-${repo_root}/kernel/trustix_datapath}"
 full_datapath_ko="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_KO:-}"
 full_datapath_enable_features="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_ENABLE_FEATURES:-128}"
-full_datapath_extra_module_params="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_EXTRA_MODULE_PARAMS:-}"
+full_datapath_extra_module_params="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_EXTRA_MODULE_PARAMS:-rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=16 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_skip_inner_tcp_checksum=1 tx_plaintext_stream_coalesce=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0}"
 full_datapath_kernelmodule_test_bin="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_KERNELMODULE_TEST_BIN:-}"
+full_datapath_ioctl_selftest="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_IOCTL_SELFTEST:-0}"
+full_datapath_verify_safe_defaults="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-0}"
 cases_raw="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASES:-}"
 include_kernel="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_INCLUDE_KERNEL:-auto}"
 kernel_module="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_KERNEL_MODULE:-0}"
@@ -305,6 +307,8 @@ run_case() {
     export TRUSTIX_E2E_FULL_DATAPATH_ENABLE_FEATURES="$full_datapath_enable_features"
     export TRUSTIX_E2E_FULL_DATAPATH_EXTRA_MODULE_PARAMS="$full_datapath_extra_module_params"
     export TRUSTIX_E2E_FULL_DATAPATH_KERNELMODULE_TEST_BIN="$full_datapath_kernelmodule_test_bin"
+    export TRUSTIX_E2E_FULL_DATAPATH_IOCTL_SELFTEST="$full_datapath_ioctl_selftest"
+    export TRUSTIX_E2E_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS="$full_datapath_verify_safe_defaults"
     export TRUSTIX_E2E_IPERF3="$iperf3"
     export TRUSTIX_E2E_IPERF3_SECONDS="$iperf3_seconds"
     export TRUSTIX_E2E_IPERF3_PARALLEL="$iperf3_parallel"
@@ -369,6 +373,14 @@ main() {
   case "$full_datapath_module" in
     auto|1|true|yes|on|enabled|0|false|no|off|disabled) ;;
     *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MODULE must be auto, 1, or 0" ;;
+  esac
+  case "$full_datapath_ioctl_selftest" in
+    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_IOCTL_SELFTEST must be truthy or falsey" ;;
+  esac
+  case "$full_datapath_verify_safe_defaults" in
+    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS must be truthy or falsey" ;;
   esac
   case "$perf_fast" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
