@@ -2,6 +2,42 @@
 
 This file records datapath performance findings and script changes so future runs do not depend on chat context.
 
+## 2026-06-15
+
+### Cross-host production artifact verifier
+
+Change: added `scripts/linux-cross-host-soak-verify.py`. The single-host
+production matrix now skips full-kmod and ACKless route-GSO throughput gates by
+default because netns-only throughput is not representative for those paths.
+This verifier is the machine-readable gate for cross-host artifacts: it checks
+`*.result == pass`, requires bidirectional iperf3 JSON, enforces minimum
+throughput and duration, and scans logs for kernel crash signatures such as
+panic, oops, BUG, call trace, watchdog, and lockup.
+
+PVE verification commands used:
+
+```bash
+python3 scripts/linux-cross-host-soak-verify.py --min-gbps 4 --min-seconds 120 \
+  --case dd-fullkmod=/root/trustix-openwrt-debian-e2e/results/codex-warmfix-dd-fullkmod-underlay-soak120-20260614-152812 \
+  --case owdeb-fullkmod=/root/trustix-openwrt-debian-e2e/results/codex-warmfix-static-owdeb-fullkmod-soak120-20260614-154244
+
+python3 scripts/linux-cross-host-soak-verify.py --min-gbps 4 --min-seconds 300 \
+  --case dd-routegso=/root/trustix-openwrt-debian-e2e/results/codex-soak300-dd-routegso-soak300-20260614-101456
+```
+
+Validation result:
+
+| Case | Kernel pair | Duration per direction | Minimum received throughput | Result |
+| --- | --- | ---: | ---: | --- |
+| `dd-fullkmod` | Debian 6.1 to Debian 6.1 | 120s | 5.428 Gbps | pass, no crash signatures in artifacts |
+| `owdeb-fullkmod` | OpenWrt 5.15 to Debian 6.1 | 120s | 5.114 Gbps | pass, no crash signatures in artifacts |
+| `dd-routegso` | Debian 6.1 to Debian 6.1 | 300s | 4.635 Gbps | pass, no crash signatures in artifacts |
+
+Conclusion: the selected production plaintext fast paths are above the 4 Gbps
+cross-host gate in the verified artifacts. The verifier does not replace a
+fresh live soak, but it makes stored PVE soak results fail-closed instead of
+depending on manual interpretation.
+
 ## 2026-06-08
 
 ### Public A/B ACKless TCP route-GSO verifier and stability retest
