@@ -369,6 +369,18 @@ func TestValidateExperimentalTCPRouteGSOHelpersRequiresRouteTCPKfuncs(t *testing
 	}
 
 	err := validateExperimentalTCPRouteGSOHelpersStatus(desired, kernelmodule.Status{
+		Name:   "trustix_datapath_helpers",
+		Loaded: false,
+		State:  kernelmodule.ModeDisabled,
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), kernelmodule.FeatureRouteTCPKfunc) ||
+		!strings.Contains(err.Error(), kernelmodule.FeatureRouteTCPXmit) ||
+		!strings.Contains(err.Error(), kernelmodule.ModeDisabled) {
+		t.Fatalf("route-GSO disabled-helper validation error = %v, want fail-closed missing route TCP kfuncs", err)
+	}
+
+	err = validateExperimentalTCPRouteGSOHelpersStatus(desired, kernelmodule.Status{
 		Name:     "trustix_datapath_helpers",
 		Loaded:   true,
 		State:    "loaded",
