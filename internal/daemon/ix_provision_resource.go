@@ -801,7 +801,7 @@ func ixProvisionDefaultEndpointTransport(profile string, endpointMode string, en
 		if endpointMode == string(config.EndpointModeActive) {
 			return string(transport.ProtocolExperimentalTCP)
 		}
-		if provisionEndpointAddressHasIPv4(endpointAddress) {
+		if strings.Contains(endpointAddress, "=") && provisionEndpointAddressHasIPv4(endpointAddress) {
 			return string(transport.ProtocolIPIP)
 		}
 		return string(transport.ProtocolUDP)
@@ -1145,6 +1145,11 @@ func ixProvisionOpenWRTTCOnly(request ixProvisionIssueRequest, profile ixProvisi
 func ixProvisionKernelTransportMode(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) string {
 	if ixProvisionOpenWRTTCOnly(request, profile) {
 		return string(dataplane.KernelTransportModeRequireKernel)
+	}
+	if request.ServiceManager == "openwrt" &&
+		ixProvisionPlaintextPerformanceFullKmodProfile(profile) &&
+		transport.Protocol(request.EndpointTransport) == transport.ProtocolUDP {
+		return string(dataplane.KernelTransportModeDisabled)
 	}
 	return profile.KernelTransport
 }

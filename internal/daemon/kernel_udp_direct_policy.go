@@ -315,11 +315,11 @@ func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) b
 	if experimentalTCPRouteGSOExplicitlyEnabledByEnv() {
 		return true
 	}
-	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
-		return false
-	}
 	if profile.Profile == config.TransportProfilePerformance {
 		return true
+	}
+	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
+		return false
 	}
 	return false
 }

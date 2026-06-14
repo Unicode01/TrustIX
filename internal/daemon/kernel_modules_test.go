@@ -323,7 +323,7 @@ func TestTrustIXDatapathModuleParametersForDesiredPerformanceProfileDoesNotEnabl
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredPerformanceKernelModuleKeepsFullPlaintextTX(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredPerformanceExperimentalTCPSuppressesFullPlaintextTX(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	desired := config.Desired{
@@ -344,26 +344,17 @@ func TestTrustIXDatapathModuleParametersForDesiredPerformanceKernelModuleKeepsFu
 	}
 
 	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext=1 tx_plaintext_slots=16384", desired)
-	for _, want := range []string{
-		"enable_features=128",
-		"rx_worker_inject=1",
-		"tx_plaintext=1",
-		"rx_worker_xmit=1",
-		"rx_worker_stream_tcp=1",
-		"tx_plaintext_inline_xmit=1",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("parameters = %q, missing %q", got, want)
-		}
+	if got != "rx_worker_inject=0 tx_plaintext=0" {
+		t.Fatalf("parameters = %q, want route-GSO to suppress legacy full-kmod plaintext params", got)
 	}
-	if !kernelDatapathFullPlaintextEnabledForDesired(desired) {
-		t.Fatal("performance kernel_module plaintext policy should keep full plaintext datapath ownership")
+	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatal("performance experimental_tcp kernel_module policy should migrate to route-GSO even with full_plaintext capability")
 	}
-	if mode := kernelDatapathRXModeForDesired(desired); mode != kernelDatapathRXModeWorker {
-		t.Fatalf("performance kernel_module plaintext policy should attach full plaintext RX hook, mode=%q", mode)
+	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("performance experimental_tcp route-GSO should not keep full-kmod plaintext ownership")
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
-		t.Fatal("performance kernel_module plaintext policy should not prefer route-GSO over full-kmod")
+	if mode := kernelDatapathRXModeForDesired(desired); mode == kernelDatapathRXModeWorker {
+		t.Fatalf("performance experimental_tcp route-GSO should not attach full plaintext RX hook, mode=%q", mode)
 	}
 }
 

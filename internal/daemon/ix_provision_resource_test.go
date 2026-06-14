@@ -216,7 +216,7 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	}
 }
 
-func TestIXProvisionPlaintextPerformanceIPv4DefaultsToNativeIPIP(t *testing.T) {
+func TestIXProvisionPlaintextPerformanceIPv4DefaultsToUDPFullKmod(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
 	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
@@ -231,28 +231,31 @@ func TestIXProvisionPlaintextPerformanceIPv4DefaultsToNativeIPIP(t *testing.T) {
 	if request.ControlAPI != "https://198.51.100.10:9443" {
 		t.Fatalf("control_api = %q, want derived IPv4 control API", request.ControlAPI)
 	}
-	if request.EndpointTransport != "ipip" || request.EndpointName != "ix-e-ipip" {
-		t.Fatalf("endpoint transport/name = %q/%q, want ipip/ix-e-ipip", request.EndpointTransport, request.EndpointName)
+	if request.EndpointTransport != "udp" || request.EndpointName != "ix-e-udp" {
+		t.Fatalf("endpoint transport/name = %q/%q, want udp/ix-e-udp", request.EndpointTransport, request.EndpointName)
 	}
-	if request.EndpointAddress != "local=198.51.100.10" || request.EndpointListen != "local=198.51.100.10" {
-		t.Fatalf("endpoint tunnel declaration = %q listen %q, want local IPv4 declaration", request.EndpointAddress, request.EndpointListen)
+	if request.EndpointAddress != "198.51.100.10:7000" || request.EndpointListen != "0.0.0.0:7000" {
+		t.Fatalf("endpoint = %q listen %q, want IPv4 UDP endpoint", request.EndpointAddress, request.EndpointListen)
 	}
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
 	}
 	if len(target.Endpoints) != 1 ||
-		target.Endpoints[0].Name != "ix-e-ipip" ||
-		target.Endpoints[0].Transport != "ipip" ||
-		target.Endpoints[0].Address != "local=198.51.100.10" ||
-		target.Endpoints[0].Listen != "local=198.51.100.10" {
-		t.Fatalf("target endpoints = %#v, want native IPIP plaintext performance endpoint", target.Endpoints)
+		target.Endpoints[0].Name != "ix-e-udp" ||
+		target.Endpoints[0].Transport != "udp" ||
+		target.Endpoints[0].Address != "198.51.100.10:7000" ||
+		target.Endpoints[0].Listen != "0.0.0.0:7000" {
+		t.Fatalf("target endpoints = %#v, want UDP full-kmod plaintext performance endpoint", target.Endpoints)
 	}
-	if len(target.TransportPolicy.Candidates) != 1 || target.TransportPolicy.Candidates[0] != "ix-e-ipip" {
-		t.Fatalf("transport candidates = %#v, want ipip", target.TransportPolicy.Candidates)
+	if len(target.TransportPolicy.Candidates) != 1 || target.TransportPolicy.Candidates[0] != "ix-e-udp" {
+		t.Fatalf("transport candidates = %#v, want udp", target.TransportPolicy.Candidates)
 	}
-	if !nativePlaintextKernelTunnelRouteOffloadForDesired(target) {
-		t.Fatalf("target plaintext IPIP config did not enable native tunnel route offload: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("target IPv4 provision config should prefer UDP full-kmod over route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	}
+	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
+		t.Fatalf("target IPv4 provision config did not enable full-kmod plaintext: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 }
 
@@ -409,7 +412,7 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
 	}
-	if target.TransportPolicy.KernelTransport.Mode != "auto" || len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "udp" {
+	if target.TransportPolicy.KernelTransport.Mode != "disabled" || len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "udp" {
 		t.Fatalf("target OpenWrt performance defaults policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
