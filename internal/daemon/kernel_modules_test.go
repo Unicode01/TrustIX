@@ -367,6 +367,35 @@ func TestTrustIXDatapathModuleParametersForDesiredPerformanceKernelModuleKeepsFu
 	}
 }
 
+func TestPerformanceKernelModuleExperimentalTCPMigratesToRouteGSO(t *testing.T) {
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfilePerformance,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatalf("performance experimental_tcp kernel_module should migrate to route-GSO")
+	}
+	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatalf("performance experimental_tcp kernel_module should not claim full-kmod plaintext ownership")
+	}
+	if !kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired) {
+		t.Fatalf("performance experimental_tcp kernel_module should suppress legacy full-kmod plaintext parameters")
+	}
+}
+
 func TestTrustIXDatapathModuleParametersForDesiredKeepsLegacyFullPlaintextExperimentalTCP(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	desired := config.Desired{

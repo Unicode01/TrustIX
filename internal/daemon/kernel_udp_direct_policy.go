@@ -349,7 +349,7 @@ func kernelDatapathFullPlaintextPolicySelectedForDesired(desired config.Desired)
 			return true
 		}
 		switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
-		case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+		case transport.ProtocolUDP:
 		default:
 			return false
 		}

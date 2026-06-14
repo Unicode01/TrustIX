@@ -787,11 +787,14 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 
 func ixProvisionDefaultEndpointTransport(profile string, endpointMode string, endpointAddress string) string {
 	if normalizeIXProvisionProfile(profile) == "plaintext_performance" {
-		if strings.ToLower(strings.ReplaceAll(strings.TrimSpace(endpointMode), "-", "_")) != string(config.EndpointModeActive) &&
-			provisionEndpointAddressHasIPv4(endpointAddress) {
+		endpointMode = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(endpointMode), "-", "_"))
+		if endpointMode == string(config.EndpointModeActive) {
+			return string(transport.ProtocolExperimentalTCP)
+		}
+		if provisionEndpointAddressHasIPv4(endpointAddress) {
 			return string(transport.ProtocolIPIP)
 		}
-		return string(transport.ProtocolExperimentalTCP)
+		return string(transport.ProtocolUDP)
 	}
 	return string(transport.ProtocolUDP)
 }
@@ -1019,12 +1022,22 @@ func ixProvisionEndpointConfigs(request ixProvisionIssueRequest, profile ixProvi
 	primary := ixProvisionEndpointConfig(request, request.EndpointName, request.EndpointTransport, ixProvisionPrimaryPriority, profile)
 	endpoints := []config.EndpointConfig{primary}
 	candidates := []core.EndpointID{primary.Name}
-	if transport.Protocol(request.EndpointTransport) == transport.ProtocolUDP && !ixProvisionOpenWRTTCOnly(request, profile) {
+	if ixProvisionShouldAddAcklessEndpoint(request, profile) {
 		acklessName := ixProvisionAcklessEndpointName(request)
 		endpoints = append(endpoints, ixProvisionEndpointConfig(request, acklessName, string(transport.ProtocolExperimentalTCP), ixProvisionAcklessPriority, profile))
 		candidates = append(candidates, acklessName)
 	}
 	return endpoints, candidates
+}
+
+func ixProvisionShouldAddAcklessEndpoint(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
+	if transport.Protocol(request.EndpointTransport) != transport.ProtocolUDP {
+		return false
+	}
+	if ixProvisionOpenWRTTCOnly(request, profile) {
+		return false
+	}
+	return !ixProvisionPlaintextPerformanceFullKmodProfile(profile)
 }
 
 func ixProvisionEndpointConfig(request ixProvisionIssueRequest, name core.EndpointID, endpointTransport string, priority int, profile ixProvisionProfileDefaults) config.EndpointConfig {
@@ -1061,7 +1074,7 @@ func ixProvisionAcklessEndpointName(request ixProvisionIssueRequest) core.Endpoi
 }
 
 func ixProvisionTransportProfiles(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) []config.TransportProfileConfig {
-	if transport.Protocol(request.EndpointTransport) != transport.ProtocolUDP || ixProvisionOpenWRTTCOnly(request, profile) {
+	if !ixProvisionShouldAddAcklessEndpoint(request, profile) {
 		return nil
 	}
 	return []config.TransportProfileConfig{{
@@ -1085,6 +1098,20 @@ func ixProvisionAcklessAdvanced(profile string) config.TransportAdvancedConfig {
 		advanced.MaxFrames = 64
 	}
 	return advanced
+}
+
+func ixProvisionPlaintextPerformanceFullKmodProfile(profile ixProvisionProfileDefaults) bool {
+	return profile.TransportProfile == config.TransportProfilePerformance &&
+		profile.Datapath == config.TransportDatapathKernelModule &&
+		parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionPlaintext
+}
+
+func ixProvisionEffectiveProfileForRequest(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) ixProvisionProfileDefaults {
+	if ixProvisionPlaintextPerformanceFullKmodProfile(profile) &&
+		transport.Protocol(request.EndpointTransport) == transport.ProtocolExperimentalTCP {
+		profile.Datapath = config.TransportDatapathTCXDP
+	}
+	return profile
 }
 
 func ixProvisionOpenWRTTCOnly(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
@@ -1129,6 +1156,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 	if err != nil {
 		return config.Desired{}, err
 	}
+	profile = ixProvisionEffectiveProfileForRequest(request, profile)
 	attachMode := config.LANAttachMode(request.AttachMode)
 	manageAddress := attachMode != config.LANAttachModeExisting
 	endpoints, candidates := ixProvisionEndpointConfigs(request, profile)

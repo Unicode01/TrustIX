@@ -186,6 +186,39 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextExperimentalTCPRouteGSO(t
 	}
 }
 
+func TestDataplaneAttachSpecMigratesKernelModuleExperimentalTCPToRouteGSO(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface:      "br-lan",
+			AttachMode: config.LANAttachModeExisting,
+		},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfilePerformance,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	})
+
+	if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly {
+		t.Fatalf("performance experimental_tcp kernel_module should migrate to route-GSO direct path, spec=%#v", spec)
+	}
+	if !spec.ExperimentalTCPRouteGSOAsync || !spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker {
+		t.Fatalf("performance experimental_tcp kernel_module route-GSO flags missing, spec=%#v", spec)
+	}
+	if !spec.KernelDatapathSuppressLegacyRXWorker {
+		t.Fatalf("performance experimental_tcp kernel_module should suppress legacy RX worker ownership, spec=%#v", spec)
+	}
+}
+
 func TestDataplaneAttachSpecKeepsFullPlaintextExperimentalTCPOnRXWorker(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
