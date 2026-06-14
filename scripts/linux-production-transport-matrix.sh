@@ -84,7 +84,7 @@ kernel_udp:plaintext:performance:tc_xdp:userspace
 kernel_udp:secure:stable:tc_xdp:userspace
 kernel_udp:secure:performance:tc_xdp:kernel
 experimental_tcp:plaintext:performance:kernel_module:userspace
-experimental_tcp:secure:stable:kernel_module:userspace
+experimental_tcp:secure:stable:userspace:userspace
 CASES
 }
 
