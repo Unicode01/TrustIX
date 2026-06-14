@@ -12,6 +12,8 @@ summary_path="${TRUSTIX_PRODUCTION_SOAK_SUMMARY:-${workdir}/summary.jsonl}"
 matrix_iperf3_seconds="${TRUSTIX_PRODUCTION_SOAK_IPERF3_SECONDS:-120}"
 matrix_iperf3_parallel="${TRUSTIX_PRODUCTION_SOAK_IPERF3_PARALLEL:-4}"
 matrix_iperf3_directions="${TRUSTIX_PRODUCTION_SOAK_IPERF3_DIRECTIONS:-both}"
+matrix_perf_fast="${TRUSTIX_PRODUCTION_SOAK_PERF_FAST:-1}"
+matrix_case_timeout="${TRUSTIX_PRODUCTION_SOAK_CASE_TIMEOUT:-15m}"
 matrix_ping_count="${TRUSTIX_PRODUCTION_SOAK_PING_COUNT:-5}"
 matrix_udp_burst_packets="${TRUSTIX_PRODUCTION_SOAK_UDP_BURST_PACKETS:-512}"
 matrix_tcp_burst_connections="${TRUSTIX_PRODUCTION_SOAK_TCP_BURST_CONNECTIONS:-32}"
@@ -72,6 +74,8 @@ run_iteration() {
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_SECONDS="$matrix_iperf3_seconds"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_PARALLEL="$matrix_iperf3_parallel"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_DIRECTIONS="$matrix_iperf3_directions"
+    export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PERF_FAST="$matrix_perf_fast"
+    export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT="$matrix_case_timeout"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PING_COUNT="$matrix_ping_count"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_UDP_BURST_PACKETS="$matrix_udp_burst_packets"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_TCP_BURST_CONNECTIONS="$matrix_tcp_burst_connections"
@@ -101,6 +105,12 @@ main() {
   validate_nonnegative_int TRUSTIX_PRODUCTION_SOAK_ITERATIONS "$iterations"
   validate_positive_int TRUSTIX_PRODUCTION_SOAK_IPERF3_SECONDS "$matrix_iperf3_seconds"
   validate_positive_int TRUSTIX_PRODUCTION_SOAK_IPERF3_PARALLEL "$matrix_iperf3_parallel"
+  case "$matrix_perf_fast" in
+    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_PRODUCTION_SOAK_PERF_FAST must be truthy or falsey" ;;
+  esac
+  local timeout_duration_re='^[1-9][0-9]*(s|m|h|d)?$'
+  [[ -z "$matrix_case_timeout" || "$matrix_case_timeout" =~ $timeout_duration_re ]] || die "TRUSTIX_PRODUCTION_SOAK_CASE_TIMEOUT must be a coreutils timeout duration"
   validate_positive_int TRUSTIX_PRODUCTION_SOAK_PING_COUNT "$matrix_ping_count"
   validate_nonnegative_int TRUSTIX_PRODUCTION_SOAK_UDP_BURST_PACKETS "$matrix_udp_burst_packets"
   validate_nonnegative_int TRUSTIX_PRODUCTION_SOAK_TCP_BURST_CONNECTIONS "$matrix_tcp_burst_connections"

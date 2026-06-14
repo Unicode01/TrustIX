@@ -19,6 +19,8 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				t.Fatalf("%s production defaults still select unsafe secure userspace-crypto experimental_tcp kernel fast path", name)
 			}
 			for _, want := range []string{
+				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PERF_FAST:-1",
+				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT",
 				"udp:plaintext:performance:kernel_module:userspace",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace",
 				"experimental_tcp:secure:stable:userspace:userspace",
@@ -40,6 +42,8 @@ func TestProductionSoakWrapsProductionMatrix(t *testing.T) {
 	for _, want := range []string{
 		"TRUSTIX_PRODUCTION_SOAK_DURATION_SECONDS:-3600",
 		"TRUSTIX_PRODUCTION_SOAK_IPERF3_SECONDS:-120",
+		"TRUSTIX_PRODUCTION_SOAK_PERF_FAST:-1",
+		"TRUSTIX_PRODUCTION_SOAK_CASE_TIMEOUT:-15m",
 		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASES",
 		"linux-production-transport-matrix.sh",
 	} {

@@ -22,6 +22,8 @@ full_datapath_kernelmodule_test_bin="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_
 cases_raw="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASES:-}"
 include_kernel="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_INCLUDE_KERNEL:-auto}"
 kernel_module="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_KERNEL_MODULE:-0}"
+perf_fast="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PERF_FAST:-1}"
+case_timeout="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT:-}"
 iperf3="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3:-1}"
 iperf3_seconds="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_SECONDS:-30}"
 iperf3_parallel="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_PARALLEL:-2}"
@@ -55,6 +57,14 @@ truthy() {
     1|true|yes|on|enabled) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+run_case_smoke() {
+  if [[ -n "$case_timeout" ]]; then
+    timeout --foreground "$case_timeout" bash "$smoke_script"
+    return
+  fi
+  bash "$smoke_script"
 }
 
 kernel_provider_available() {
@@ -279,6 +289,7 @@ run_case() {
     export TRUSTIX_E2E_WORKDIR="$dir"
     export TRUSTIX_E2E_KEEP="$keep"
     export TRUSTIX_E2E_CRASH_RESTART=0
+    export TRUSTIX_E2E_PERF_FAST="$perf_fast"
     export TRUSTIX_E2E_ROUTE_KIND_PROBE=0
     export TRUSTIX_E2E_TRANSPORT="$transport"
     export TRUSTIX_E2E_TRANSPORT_ENCRYPTION="$encryption"
@@ -305,7 +316,7 @@ run_case() {
     export TRUSTIX_E2E_UDP_BURST_SIZE="$udp_burst_size"
     export TRUSTIX_E2E_TCP_BURST_CONNECTIONS="$tcp_burst_connections"
     export TRUSTIX_E2E_TCP_BURST_SIZE="$tcp_burst_size"
-    bash "$smoke_script"
+    run_case_smoke
   ) >"${dir}.log" 2>&1
   rc=$?
   set -e
@@ -359,6 +370,15 @@ main() {
     auto|1|true|yes|on|enabled|0|false|no|off|disabled) ;;
     *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MODULE must be auto, 1, or 0" ;;
   esac
+  case "$perf_fast" in
+    0|1|true|false|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PERF_FAST must be truthy or falsey" ;;
+  esac
+  local timeout_duration_re='^[1-9][0-9]*(s|m|h|d)?$'
+  [[ -z "$case_timeout" || "$case_timeout" =~ $timeout_duration_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT must be a coreutils timeout duration"
+  if [[ -n "$case_timeout" ]] && ! command -v timeout >/dev/null 2>&1; then
+    die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT requires timeout"
+  fi
   local nonnegative_decimal_re='^[0-9]+([.][0-9]+)?$'
   [[ "$iperf3_min_sent_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_SENT_GBPS/TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS must be a non-negative number"
   [[ "$iperf3_min_received_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_RECEIVED_GBPS/TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS must be a non-negative number"
