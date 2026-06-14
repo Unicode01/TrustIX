@@ -16,6 +16,7 @@ Current-source PVE verification:
 
 | Case | Artifact | Duration per direction | Throughput |
 | --- | --- | ---: | --- |
+| Debian to Debian full-kmod, live recheck | `/root/trustix-openwrt-debian-e2e/results/codex-live-dd-fullkmod-fixcheck-20260614-172044` | 20s | 5.235 / 5.389 Gbps |
 | Debian to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-dd-fullkmod-short-20260615-001507` | 20s | 5.389 / 5.530 Gbps |
 | Debian to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-dd-fullkmod-soak120-20260615-002936` | 120s | 5.430 / 5.550 Gbps |
 | OpenWrt to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-owdeb-fullkmod-short-20260615-001950` | 20s | 5.472 / 6.280 Gbps |
@@ -46,6 +47,21 @@ can fail closed when peers are accidentally tested with different binaries.
 The verifier can also require specific datapath stats from every collected
 `datapath.json`; when a datapath stat is required, it defaults to requiring at
 least two datapath captures so one-sided artifacts do not pass accidentally.
+
+Change: `scripts/linux-cross-host-production-gate.sh` wraps the verifier for the
+production cross-host gates. It defaults to 4 Gbps, 120 seconds per direction,
+requires matching binary identities, requires the full-kmod plaintext provider
+stat for full-kmod artifacts, and requires the route-GSO async kfunc provider
+stats for route-GSO artifacts.
+
+Example:
+
+```bash
+TRUSTIX_CROSS_HOST_DD_FULL_KMOD=/root/trustix-openwrt-debian-e2e/results/codex-identity-dd-fullkmod-soak120-20260614-165703 \
+TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD=/root/trustix-openwrt-debian-e2e/results/codex-identity-owdeb-fullkmod-soak120-20260614-170127 \
+TRUSTIX_CROSS_HOST_DD_ROUTE_GSO=/root/trustix-openwrt-debian-e2e/results/codex-identity-dd-routegso-proddefault-soak120-20260614-170547 \
+bash scripts/linux-cross-host-production-gate.sh
+```
 
 ### Cross-host production artifact verifier
 

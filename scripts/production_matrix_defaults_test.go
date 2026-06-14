@@ -66,3 +66,28 @@ func TestProductionSoakWrapsProductionMatrix(t *testing.T) {
 		}
 	}
 }
+
+func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join(".", "linux-cross-host-production-gate.sh"))
+	if err != nil {
+		t.Fatalf("read linux-cross-host-production-gate.sh: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-4",
+		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-120",
+		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY:-1",
+		"TRUSTIX_CROSS_HOST_DD_FULL_KMOD",
+		"TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD",
+		"TRUSTIX_CROSS_HOST_DD_ROUTE_GSO",
+		"--require-binary-identity",
+		"--require-datapath-stat kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1",
+		"--require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1",
+		"--require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1",
+		"--require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("linux-cross-host-production-gate.sh missing %q", want)
+		}
+	}
+}
