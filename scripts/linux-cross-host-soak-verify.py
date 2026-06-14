@@ -118,6 +118,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="require at least two collected binary-identity.json files and verify their sha256 values match",
     )
+    parser.add_argument(
+        "--require-datapath-stat",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require every collected datapath.json to contain PATH with VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--min-datapath-json",
+        type=int,
+        default=0,
+        help="minimum number of datapath.json files expected; defaults to 2 when --require-datapath-stat is used",
+    )
     return parser.parse_args()
 
 
@@ -241,6 +254,84 @@ def identity_key(identity: dict[str, Any], fields: tuple[str, ...]) -> tuple[str
     return tuple(str(identity.get(field) or "") for field in fields)
 
 
+def parse_required_datapath_stats(raw_items: list[str]) -> list[tuple[str, str]]:
+    required: list[tuple[str, str]] = []
+    for raw in raw_items:
+        path, sep, value = raw.partition("=")
+        path = path.strip()
+        value = value.strip()
+        if not sep or not path:
+            raise SystemExit(f"invalid --require-datapath-stat {raw!r}; expected PATH=VALUE")
+        required.append((path, value))
+    return required
+
+
+def datapath_value(payload: Any, dotted_path: str) -> Any:
+    current = payload
+    for part in dotted_path.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        raise KeyError(dotted_path)
+    return current
+
+
+def datapath_value_matches(actual: Any, expected: str) -> bool:
+    expected_lower = expected.lower()
+    if isinstance(actual, bool):
+        return expected_lower in {"1", "true", "yes", "on"} if actual else expected_lower in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+    if isinstance(actual, (int, float)):
+        try:
+            return float(actual) == float(expected)
+        except ValueError:
+            return str(actual) == expected
+    return str(actual) == expected
+
+
+def validate_datapath_stats(
+    case_dir: Path,
+    *,
+    required: list[tuple[str, str]],
+    min_datapath_json: int,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    datapath_files = sorted(case_dir.rglob("datapath.json"))
+    rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    if len(datapath_files) < min_datapath_json:
+        errors.append(
+            f"found {len(datapath_files)} datapath.json files, want >= {min_datapath_json}"
+        )
+    if required and not datapath_files:
+        return rows, errors, len(datapath_files)
+    for path in datapath_files:
+        rel = str(path.relative_to(case_dir))
+        try:
+            payload = read_json(path)
+        except Exception as exc:  # noqa: BLE001 - artifact validation should report and continue.
+            errors.append(f"{rel}: parse datapath JSON: {exc}")
+            continue
+        values: dict[str, Any] = {}
+        for dotted_path, expected in required:
+            try:
+                actual = datapath_value(payload, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing datapath stat {dotted_path!r}")
+                continue
+            values[dotted_path] = actual
+            if not datapath_value_matches(actual, expected):
+                errors.append(
+                    f"{rel}: datapath stat {dotted_path}={actual!r}, want {expected!r}"
+                )
+        if values:
+            rows.append({"file": rel, "values": values})
+    return rows, errors, len(datapath_files)
+
+
 def validate_case(
     case: CaseSpec,
     *,
@@ -253,6 +344,8 @@ def validate_case(
     require_build_identity: bool,
     require_strong_build_identity: bool,
     require_binary_identity: bool,
+    required_datapath_stats: list[tuple[str, str]],
+    min_datapath_json: int,
 ) -> dict[str, Any]:
     errors: list[str] = []
     if not case.path.is_dir():
@@ -339,6 +432,13 @@ def validate_case(
     if len(binary_sha256s) > 1:
         errors.append("binary identity sha256 mismatch across hosts")
 
+    datapath_stat_results, datapath_stat_errors, datapath_json_count = validate_datapath_stats(
+        case.path,
+        required=required_datapath_stats,
+        min_datapath_json=min_datapath_json,
+    )
+    errors.extend(datapath_stat_errors)
+
     min_sent = min((item["sent_gbps"] for item in iperf_results), default=0)
     min_received = min((item["received_gbps"] for item in iperf_results), default=0)
     min_duration = min((item["seconds"] for item in iperf_results), default=0)
@@ -358,6 +458,8 @@ def validate_case(
         "log_findings": log_findings,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
+        "datapath_json_count": datapath_json_count,
+        "datapath_stats": datapath_stat_results,
         "errors": errors,
     }
 
@@ -380,6 +482,12 @@ def main() -> int:
         raise SystemExit("--seconds-slop must be non-negative")
     if args.min_iperf_json < 0:
         raise SystemExit("--min-iperf-json must be non-negative")
+    required_datapath_stats = parse_required_datapath_stats(args.require_datapath_stat)
+    if args.min_datapath_json < 0:
+        raise SystemExit("--min-datapath-json must be non-negative")
+    min_datapath_json = args.min_datapath_json
+    if required_datapath_stats and min_datapath_json == 0:
+        min_datapath_json = 2
 
     rows = [
         validate_case(
@@ -393,6 +501,8 @@ def main() -> int:
             require_build_identity=args.require_build_identity,
             require_strong_build_identity=args.require_strong_build_identity,
             require_binary_identity=args.require_binary_identity,
+            required_datapath_stats=required_datapath_stats,
+            min_datapath_json=min_datapath_json,
         )
         for case in parse_cases(args)
     ]

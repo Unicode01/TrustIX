@@ -20,12 +20,32 @@ Current-source PVE verification:
 | Debian to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-dd-fullkmod-soak120-20260615-002936` | 120s | 5.430 / 5.550 Gbps |
 | OpenWrt to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-owdeb-fullkmod-short-20260615-001950` | 20s | 5.472 / 6.280 Gbps |
 | OpenWrt to Debian full-kmod | `/root/trustix-openwrt-debian-e2e/results/codex-fixspeed-owdeb-fullkmod-soak120-20260615-002404` | 120s | 5.483 / 6.275 Gbps |
+| Debian to Debian full-kmod, identity-gated | `/root/trustix-openwrt-debian-e2e/results/codex-identity-dd-fullkmod-soak120-20260614-165703` | 120s | 5.447 / 5.564 Gbps |
+| OpenWrt to Debian full-kmod, identity-gated | `/root/trustix-openwrt-debian-e2e/results/codex-identity-owdeb-fullkmod-soak120-20260614-170127` | 120s | 5.497 / 4.496 Gbps |
+| Debian to Debian route-GSO, identity-gated | `/root/trustix-openwrt-debian-e2e/results/codex-identity-dd-routegso-proddefault-soak120-20260614-170547` | 120s | 4.659 / 4.681 Gbps |
+
+Verifier summaries:
+
+- `/root/trustix-openwrt-debian-e2e/results/codex-identity-soak-verify-summary-20260614-171014.jsonl`
+- `/root/trustix-openwrt-debian-e2e/results/codex-identity-routegso-verify-summary-20260614-171014.jsonl`
+
+The identity-gated verifier required matching `binary-identity.json` checksums
+on both peers. Full-kmod also required
+`kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1` on both
+peers. Route-GSO required
+`tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1`,
+`tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1`, and
+`tc_kernel_udp_tx_direct_experimental_tcp_only=1` on both peers. All three
+identity-gated runs passed the 4 Gbps gate and log crash scan.
 
 Change: `scripts/linux-cross-host-soak-verify.py` now records and validates
 collected build identities, and can require matching `binary-identity.json`
 checksums. `scripts/linux-e2e-smoke.sh` writes a `*-binary-identity.json`
 artifact beside status/route/datapath captures so future performance results
 can fail closed when peers are accidentally tested with different binaries.
+The verifier can also require specific datapath stats from every collected
+`datapath.json`; when a datapath stat is required, it defaults to requiring at
+least two datapath captures so one-sided artifacts do not pass accidentally.
 
 ### Cross-host production artifact verifier
 

@@ -134,6 +134,65 @@ func TestCrossHostSoakVerifyRejectsMismatchedBinaryIdentity(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyChecksRequiredDatapathStats(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeDatapathJSON(t, filepath.Join(dir, "collect", "a", "datapath.json"), 1)
+	writeDatapathJSON(t, filepath.Join(dir, "collect", "b", "datapath.json"), 0)
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps",
+		"4",
+		"--min-seconds",
+		"120",
+		"--require-datapath-stat",
+		"kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing datapath fast-path stat:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRequiresTwoDatapathStatsByDefault(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeDatapathJSON(t, filepath.Join(dir, "collect", "a", "datapath.json"), 1)
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps",
+		"4",
+		"--min-seconds",
+		"120",
+		"--require-datapath-stat",
+		"kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted one-sided datapath artifacts:\n%s", output)
+	}
+}
+
 func writeIperfJSON(t *testing.T, path string, sentBPS, receivedBPS, seconds float64) {
 	t.Helper()
 	payload := map[string]any{
@@ -210,5 +269,26 @@ func writeBinaryIdentityJSON(t *testing.T, path, sha256 string) {
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write binary identity json: %v", err)
+	}
+}
+
+func writeDatapathJSON(t *testing.T, path string, fullPlaintextProvider int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make datapath dir: %v", err)
+	}
+	payload := map[string]any{
+		"kernel_udp": map[string]any{
+			"provider_stats": map[string]any{
+				"kernel_datapath_full_plaintext_provider": fullPlaintextProvider,
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal datapath json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write datapath json: %v", err)
 	}
 }
