@@ -320,7 +320,7 @@ func appendTrustIXDatapathRXWorkerTCPBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "rx_worker_direct_xmit=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_inline_coalesce_max_frames=16")
 	if kernelDatapathOpenWrtRXSingleCoalesceDisabled() {
-		params = setModuleParameterIfPresent(params, "rx_worker_single_coalesce", "0")
+		params = setModuleParameter(params, "rx_worker_single_coalesce", "0")
 	} else {
 		params = appendModuleParameterIfMissing(params, "rx_worker_single_coalesce=1")
 		params = appendModuleParameterIfMissing(params, "rx_worker_single_coalesce_max_frames=16")
@@ -533,8 +533,19 @@ func kernelDatapathOpenWrtCrashRiskAllowed() bool {
 }
 
 func kernelDatapathOpenWrtRXSingleCoalesceDisabled() bool {
-	return runtimeLooksLikeOpenWrt() &&
-		envTruthyAny("TRUSTIX_KERNEL_DATAPATH_DISABLE_OPENWRT_RX_SINGLE_COALESCE")
+	if !runtimeLooksLikeOpenWrt() {
+		return false
+	}
+	if envTruthyAny(
+		"TRUSTIX_KERNEL_DATAPATH_ENABLE_OPENWRT_RX_SINGLE_COALESCE",
+		"TRUSTIX_KERNEL_DATAPATH_OPENWRT_RX_SINGLE_COALESCE",
+	) {
+		return false
+	}
+	if envFalsey("TRUSTIX_KERNEL_DATAPATH_DISABLE_OPENWRT_RX_SINGLE_COALESCE") {
+		return false
+	}
+	return true
 }
 
 func runtimeLooksLikeOpenWrt() bool {
