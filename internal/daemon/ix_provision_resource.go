@@ -788,7 +788,7 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 			Encryption:              securetransport.EncryptionPlaintext,
 			CryptoPlacement:         "auto",
 			KernelTransport:         "auto",
-			KernelCapabilityProfile: config.KernelCapabilityProfilePerformance,
+			KernelCapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
 		}, nil
 	default:
 		return ixProvisionProfileDefaults{}, fmt.Errorf("profile must be stable, performance, latency, compatibility, or plaintext_performance")
@@ -1117,9 +1117,8 @@ func ixProvisionPlaintextPerformanceFullKmodProfile(profile ixProvisionProfileDe
 }
 
 func ixProvisionEffectiveProfileForRequest(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) ixProvisionProfileDefaults {
-	if ixProvisionPlaintextPerformanceFullKmodProfile(profile) &&
-		transport.Protocol(request.EndpointTransport) == transport.ProtocolExperimentalTCP {
-		profile.Datapath = config.TransportDatapathTCXDP
+	if ixProvisionOpenWRTTCOnly(request, profile) {
+		profile.KernelCapabilityProfile = config.KernelCapabilityProfilePerformance
 	}
 	return profile
 }
@@ -1145,11 +1144,6 @@ func ixProvisionOpenWRTTCOnly(request ixProvisionIssueRequest, profile ixProvisi
 func ixProvisionKernelTransportMode(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) string {
 	if ixProvisionOpenWRTTCOnly(request, profile) {
 		return string(dataplane.KernelTransportModeRequireKernel)
-	}
-	if request.ServiceManager == "openwrt" &&
-		ixProvisionPlaintextPerformanceFullKmodProfile(profile) &&
-		transport.Protocol(request.EndpointTransport) == transport.ProtocolUDP {
-		return string(dataplane.KernelTransportModeDisabled)
 	}
 	return profile.KernelTransport
 }
@@ -1264,7 +1258,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 		},
 	}
 	if ixProvisionPlaintextPerformanceFullKmodProfile(profile) &&
-		transport.Protocol(request.EndpointTransport) == transport.ProtocolUDP &&
+		ixProvisionTransportSupportsFullPlaintextDatapath(request.EndpointTransport) &&
 		!ixProvisionOpenWRTTCOnly(request, profile) {
 		desired.KernelModules.Datapath = config.KernelDatapathRuntimeConfig{
 			RXStage:                      config.KernelDatapathRXStageWorker,
@@ -1304,6 +1298,15 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 		return config.Desired{}, fmt.Errorf("validate provisioned IX config: %w", err)
 	}
 	return desired, nil
+}
+
+func ixProvisionTransportSupportsFullPlaintextDatapath(endpointTransport string) bool {
+	switch transport.Protocol(endpointTransport) {
+	case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+		return true
+	default:
+		return false
+	}
 }
 
 func ixProvisionHasLAN(request ixProvisionIssueRequest, prefixes []core.Prefix) bool {

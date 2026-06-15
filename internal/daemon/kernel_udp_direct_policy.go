@@ -51,6 +51,33 @@ func kernelUDPSecureFullDirectForDesired(desired config.Desired) bool {
 	return placement != string(dataplane.CryptoPlacementUserspace)
 }
 
+func experimentalTCPSecureKernelCryptoDirectForDesired(desired config.Desired) bool {
+	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+		return false
+	}
+	if experimentalTCPFastPathDisabledForDesired(desired) {
+		return false
+	}
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		return false
+	}
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
+	if profile.Profile != config.TransportProfilePerformance {
+		return false
+	}
+	if profile.Datapath == config.TransportDatapathUserspace {
+		return false
+	}
+	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionSecure {
+		return false
+	}
+	placement := normalizeTransportCryptoPlacementConfig(profile.CryptoPlacement)
+	if placement == "" {
+		placement = effectiveTransportCryptoPlacementConfig(desired.TransportPolicy)
+	}
+	return placement != string(dataplane.CryptoPlacementUserspace)
+}
+
 func kernelUDPTXDirectOnlyReasonForDesired(desired config.Desired) string {
 	if !kernelUDPTXDirectOnlyForDesired(desired) {
 		return ""
@@ -315,13 +342,25 @@ func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) b
 	if experimentalTCPRouteGSOExplicitlyEnabledByEnv() {
 		return true
 	}
-	if profile.Profile == config.TransportProfilePerformance {
-		return true
-	}
 	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
 		return false
 	}
+	if profile.Profile == config.TransportProfilePerformance {
+		return true
+	}
 	return false
+}
+
+func experimentalTCPRouteGSOAsyncForDesired(desired config.Desired) bool {
+	return experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) ||
+		experimentalTCPSecureRouteGSOAsyncForDesired(desired)
+}
+
+func experimentalTCPSecureRouteGSOAsyncForDesired(desired config.Desired) bool {
+	if experimentalTCPRouteGSOExplicitlyDisabledByEnv() {
+		return false
+	}
+	return experimentalTCPSecureKernelCryptoDirectForDesired(desired)
 }
 
 func kernelDatapathFullPlaintextPolicySelectedForDesired(desired config.Desired) bool {

@@ -412,7 +412,7 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
 	}
-	if target.TransportPolicy.KernelTransport.Mode != "disabled" || len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "udp" {
+	if target.TransportPolicy.KernelTransport.Mode != "auto" || len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "udp" {
 		t.Fatalf("target OpenWrt performance defaults policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
@@ -506,8 +506,8 @@ func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
 		t.Fatalf("target plaintext performance config did not enable full-kmod plaintext")
 	}
-	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
-		t.Fatalf("target kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
+	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfileFullPlaintext {
+		t.Fatalf("target kernel capability profile = %q, want full_plaintext", target.KernelModules.CapabilityProfile)
 	}
 	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
 		target.KernelModules.TrustIXDatapath.Mode != "required" ||
@@ -603,22 +603,22 @@ func TestIXProvisionEdgeActiveOnlyDoesNotPublishControlAPI(t *testing.T) {
 	if len(target.Bootstrap.Peers) != 1 || target.Bootstrap.Peers[0].ControlAPI != "https://ix-a.example.com:9443" {
 		t.Fatalf("bootstrap peers = %#v", target.Bootstrap.Peers)
 	}
-	if target.TransportPolicy.Datapath != config.TransportDatapathTCXDP {
-		t.Fatalf("active experimental_tcp datapath = %q, want tc_xdp route-GSO", target.TransportPolicy.Datapath)
+	if target.TransportPolicy.Datapath != config.TransportDatapathKernelModule {
+		t.Fatalf("active experimental_tcp datapath = %q, want kernel_module full-kmod", target.TransportPolicy.Datapath)
 	}
 	if request.BuildKO != "1" {
-		t.Fatalf("active experimental_tcp build_ko = %q, want 1 for route-GSO modules", request.BuildKO)
+		t.Fatalf("active experimental_tcp build_ko = %q, want 1 for full-kmod modules", request.BuildKO)
 	}
 	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
 		target.KernelModules.TrustIXDatapath.Mode != "required" ||
-		target.KernelModules.TrustIXDatapathHelpers.Mode != "required" {
-		t.Fatalf("active experimental_tcp kernel module modes = %#v, want datapath/helpers required", target.KernelModules)
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" {
+		t.Fatalf("active experimental_tcp kernel module modes = %#v, want datapath required only", target.KernelModules)
 	}
-	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
-		t.Fatalf("active experimental_tcp provision config did not enable route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("active experimental_tcp provision config should prefer full-kmod over route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
-	if kernelDatapathFullPlaintextEnabledForDesired(target) {
-		t.Fatalf("active experimental_tcp provision config should not select full-kmod plaintext: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
+		t.Fatalf("active experimental_tcp provision config did not select full-kmod plaintext: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 }
 

@@ -119,7 +119,7 @@ func TestTrustIXDatapathModuleParametersOpenWrtSingleCoalesceExplicitEnable(t *t
 		"rx_worker_single_coalesce_max_frames=16",
 	} {
 		if !moduleParameterHasAssignment(got, want) {
-			t.Fatalf("parameters = %q, missing OpenWrt single-coalesce default assignment %q", got, want)
+			t.Fatalf("parameters = %q, missing explicit OpenWrt single-coalesce assignment %q", got, want)
 		}
 	}
 }
@@ -426,13 +426,15 @@ func TestValidateExperimentalTCPRouteGSOHelpersRequiresRouteTCPKfuncs(t *testing
 	}
 
 	withTrustIXDatapathHelpersParameters(t, map[string]string{
-		"tixt_tx_plain_skip_sequence":          "Y",
-		"tixt_tx_plain_ack_only":               "Y",
-		"route_tcp_gso":                        "Y",
-		"route_tcp_gso_async":                  "Y",
-		"route_tcp_gso_async_dev_xmit":         "Y",
-		"route_tcp_gso_async_stream_outer_gso": "Y",
-		"route_tcp_xmit_worker":                "Y",
+		"tixt_tx_plain_skip_sequence":                   "Y",
+		"tixt_tx_plain_ack_only":                        "Y",
+		"route_tcp_gso":                                 "Y",
+		"route_tcp_gso_async":                           "Y",
+		"route_tcp_gso_async_dev_xmit":                  "Y",
+		"route_tcp_gso_async_force_inner_checksum":      "N",
+		"route_tcp_gso_async_force_software_outer_csum": "N",
+		"route_tcp_gso_async_stream_outer_gso":          "Y",
+		"route_tcp_xmit_worker":                         "Y",
 	})
 	err = validateExperimentalTCPRouteGSOHelpersStatus(desired, kernelmodule.Status{
 		Name:   "trustix_datapath_helpers",
@@ -464,13 +466,15 @@ func TestValidateExperimentalTCPRouteGSOHelpersRequiresActiveRuntimeParameters(t
 		}},
 	}
 	withTrustIXDatapathHelpersParameters(t, map[string]string{
-		"tixt_tx_plain_skip_sequence":          "Y",
-		"tixt_tx_plain_ack_only":               "Y",
-		"route_tcp_gso":                        "Y",
-		"route_tcp_gso_async":                  "N",
-		"route_tcp_gso_async_dev_xmit":         "Y",
-		"route_tcp_gso_async_stream_outer_gso": "Y",
-		"route_tcp_xmit_worker":                "Y",
+		"tixt_tx_plain_skip_sequence":                   "Y",
+		"tixt_tx_plain_ack_only":                        "Y",
+		"route_tcp_gso":                                 "Y",
+		"route_tcp_gso_async":                           "N",
+		"route_tcp_gso_async_dev_xmit":                  "Y",
+		"route_tcp_gso_async_force_inner_checksum":      "N",
+		"route_tcp_gso_async_force_software_outer_csum": "N",
+		"route_tcp_gso_async_stream_outer_gso":          "Y",
+		"route_tcp_xmit_worker":                         "Y",
 	})
 
 	err := validateExperimentalTCPRouteGSOHelpersStatus(desired, kernelmodule.Status{
@@ -487,6 +491,49 @@ func TestValidateExperimentalTCPRouteGSOHelpersRequiresActiveRuntimeParameters(t
 		!strings.Contains(err.Error(), "runtime parameters") ||
 		!strings.Contains(err.Error(), "route_tcp_gso_async=N") {
 		t.Fatalf("route-GSO helper runtime parameter validation error = %v, want inactive route_tcp_gso_async", err)
+	}
+}
+
+func TestValidateExperimentalTCPRouteGSOHelpersRejectsForcedSoftwareOuterChecksum(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: "plaintext",
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+	withTrustIXDatapathHelpersParameters(t, map[string]string{
+		"tixt_tx_plain_skip_sequence":                   "Y",
+		"tixt_tx_plain_ack_only":                        "Y",
+		"route_tcp_gso":                                 "Y",
+		"route_tcp_gso_async":                           "Y",
+		"route_tcp_gso_async_dev_xmit":                  "Y",
+		"route_tcp_gso_async_force_inner_checksum":      "N",
+		"route_tcp_gso_async_force_software_outer_csum": "Y",
+		"route_tcp_gso_async_stream_outer_gso":          "Y",
+		"route_tcp_xmit_worker":                         "Y",
+	})
+
+	err := validateExperimentalTCPRouteGSOHelpersStatus(desired, kernelmodule.Status{
+		Name:   "trustix_datapath_helpers",
+		Loaded: true,
+		State:  "loaded",
+		Features: []string{
+			kernelmodule.FeatureGSOSKB,
+			kernelmodule.FeatureRouteTCPKfunc,
+			kernelmodule.FeatureRouteTCPXmit,
+		},
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), "runtime parameters") ||
+		!strings.Contains(err.Error(), "route_tcp_gso_async_force_software_outer_csum=Y") {
+		t.Fatalf("route-GSO helper runtime parameter validation error = %v, want forced software checksum rejected", err)
 	}
 }
 
@@ -520,7 +567,7 @@ func TestTrustIXDatapathModuleParametersForDesiredPerformanceProfileDoesNotEnabl
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredPerformanceExperimentalTCPSuppressesFullPlaintextTX(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredPerformanceExperimentalTCPKeepsFullPlaintextTX(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	desired := config.Desired{
@@ -541,17 +588,24 @@ func TestTrustIXDatapathModuleParametersForDesiredPerformanceExperimentalTCPSupp
 	}
 
 	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext=1 tx_plaintext_slots=16384", desired)
-	if got != "rx_worker_inject=0 tx_plaintext=0" {
-		t.Fatalf("parameters = %q, want route-GSO to suppress legacy full-kmod plaintext params", got)
+	for _, want := range []string{
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"rx_worker_xmit=1",
+		"tx_plaintext_slots=16384",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parameters = %q, missing full-kmod plaintext parameter %q", got, want)
+		}
 	}
-	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
-		t.Fatal("performance experimental_tcp kernel_module policy should migrate to route-GSO even with full_plaintext capability")
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatal("performance experimental_tcp kernel_module policy should prefer full-kmod plaintext over route-GSO when full_plaintext is selected")
 	}
-	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
-		t.Fatal("performance experimental_tcp route-GSO should not keep full-kmod plaintext ownership")
+	if !kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("performance experimental_tcp should keep full-kmod plaintext ownership")
 	}
-	if mode := kernelDatapathRXModeForDesired(desired); mode == kernelDatapathRXModeWorker {
-		t.Fatalf("performance experimental_tcp route-GSO should not attach full plaintext RX hook, mode=%q", mode)
+	if mode := kernelDatapathRXModeForDesired(desired); mode != kernelDatapathRXModeWorker {
+		t.Fatalf("performance experimental_tcp full-kmod should attach RX worker, mode=%q", mode)
 	}
 }
 
@@ -887,7 +941,7 @@ func TestTrustIXCryptoModuleParametersStripsPanicRiskRawParameters(t *testing.T)
 	}
 }
 
-func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceEnablesSIMDKfuncFastpath(t *testing.T) {
+func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceKeepsSIMDKfuncFastpathDisabledByDefault(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -903,13 +957,69 @@ func TestTrustIXCryptoModuleParametersForDesiredSecurePerformanceEnablesSIMDKfun
 		}},
 	}
 
-	got := TrustIXCryptoModuleParametersForDesired("", desired)
-	if !strings.Contains(got, "kfunc_simd_fastpath=1") {
-		t.Fatalf("parameters = %q, missing secure performance SIMD kfunc fast path", got)
+	got := TrustIXCryptoModuleParametersForDesired("kfunc_fastpath_stats=1", desired)
+	if strings.Contains(got, "kfunc_simd_fastpath=1") {
+		t.Fatalf("parameters = %q, unexpectedly enabled secure performance SIMD kfunc fast path", got)
 	}
 	for _, unexpected := range []string{"experimental_aesni_kfunc=1", "experimental_vaes_kfunc=1"} {
 		if strings.Contains(got, unexpected) {
 			t.Fatalf("parameters = %q, unexpectedly enabled %q", got, unexpected)
+		}
+	}
+}
+
+func TestTrustIXCryptoModuleParametersForDesiredExperimentalTCPSecureKernelPerformanceKeepsDirectKfuncDisabledByDefault(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXCryptoModuleParametersForDesired("kfunc_fastpath_stats=1", desired)
+	for _, unexpected := range []string{
+		"kfunc_simd_fastpath=1",
+		"experimental_aesni_kfunc=1",
+		"experimental_vaes_kfunc=1",
+	} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("parameters = %q, unexpectedly enabled %q", got, unexpected)
+		}
+	}
+}
+
+func TestTrustIXCryptoModuleParametersForDesiredExperimentalTCPUserspaceCryptoKeepsDirectKfuncDisabled(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			Candidates:      []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXCryptoModuleParametersForDesired("", desired)
+	for _, unexpected := range []string{
+		"kfunc_simd_fastpath=1",
+		"experimental_aesni_kfunc=1",
+		"experimental_vaes_kfunc=1",
+	} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("parameters = %q, unexpectedly kept %q", got, unexpected)
 		}
 	}
 }
@@ -1127,20 +1237,26 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDP
 
 	got := TrustIXDatapathHelpersModuleParametersForDesired("", desired)
 	for _, want := range []string{
+		"enable_features=836",
 		"tixt_tx_plain_skip_sequence=1",
 		"tixt_tx_plain_ack_only=1",
 		"route_tcp_gso=1",
 		"route_tcp_gso_async=1",
 		"route_tcp_gso_async_prefer=1",
 		"route_tcp_gso_async_dev_xmit=1",
+		"route_tcp_gso_async_force_inner_checksum=0",
+		"route_tcp_gso_async_force_software_outer_csum=0",
 		"route_tcp_gso_async_stream=1",
 		"route_tcp_gso_async_stream_direct_build=1",
+		"route_tcp_gso_async_stream_software_segment=0",
 		"route_tcp_gso_async_stream_outer_gso=1",
 		"route_tcp_gso_async_stream_outer_gso_hard_enable=1",
 		"route_tcp_gso_async_stream_cross_item_batch=1",
 		"route_tcp_gso_async_flow_shard_queue=1",
 		"route_tcp_gso_async_queue_shards=6",
-		"route_tcp_gso_async_worker_emit_budget=8",
+		"route_tcp_gso_async_worker_emit_budget=0",
+		"route_tcp_gso_async_worker_min_queue_depth=1",
+		"route_tcp_gso_async_worker_schedule_delay_usecs=0",
 		"route_tcp_xmit_worker=1",
 	} {
 		if !strings.Contains(got, want) {
@@ -1280,6 +1396,40 @@ func TestTrustIXDatapathHelpersPerformanceExperimentalTCPDoesNotEnableLegacyRXSt
 	} {
 		if strings.Contains(got, unexpected) {
 			t.Fatalf("parameters = %q, unexpectedly enabled legacy path %q", got, unexpected)
+		}
+	}
+}
+
+func TestTrustIXDatapathHelpersSecureExperimentalTCPBuildsValidInnerChecksum(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"exp-sec"},
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-sec",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if !experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
+		t.Fatal("secure experimental_tcp kernel crypto policy should select route-GSO")
+	}
+	got := TrustIXDatapathHelpersModuleParametersForDesired("", desired)
+	for _, want := range []string{
+		"route_tcp_gso=1",
+		"route_tcp_gso_async=1",
+		"route_tcp_gso_async_stream_direct_build=1",
+		"route_tcp_gso_async_stream_outer_gso=1",
+		"route_tcp_gso_async_stream_direct_build_inner_csum=1",
+	} {
+		if !moduleParameterHasAssignment(got, want) {
+			t.Fatalf("parameters = %q, missing %q", got, want)
 		}
 	}
 }
