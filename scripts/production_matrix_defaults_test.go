@@ -18,22 +18,14 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 			if strings.Contains(text, "experimental_tcp:secure:stable:kernel_module:userspace") {
 				t.Fatalf("%s production defaults still select unsafe secure userspace-crypto experimental_tcp kernel fast path", name)
 			}
-			for _, want := range []string{
-				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PERF_FAST:-1",
-				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT",
-				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_IOCTL_SELFTEST:-0",
-				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-0",
-				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_FULL_DATAPATH:-0",
-				"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_ROUTE_GSO:-0",
-				"rx_worker_xmit=1",
-				"tx_plaintext_skip_inner_tcp_checksum=1",
+			for _, wantCase := range []string{
 				"udp:plaintext:performance:kernel_module:userspace",
 				"kernel_udp:secure:performance:tc_xdp:kernel",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace",
 				"experimental_tcp:secure:stable:userspace:userspace",
 			} {
-				if !strings.Contains(text, want) {
-					t.Fatalf("%s production defaults missing %q", name, want)
+				if !strings.Contains(text, wantCase) {
+					t.Fatalf("%s production defaults missing %q", name, wantCase)
 				}
 			}
 			for _, unwanted := range []string{
@@ -44,6 +36,60 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				}
 			}
 		})
+	}
+}
+
+func TestProductionTransportMatrixDefaults(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join(".", "linux-production-transport-matrix.sh"))
+	if err != nil {
+		t.Fatalf("read linux-production-transport-matrix.sh: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PERF_FAST:-1",
+		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT",
+		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_IOCTL_SELFTEST:-0",
+		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-0",
+		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_FULL_DATAPATH:-0",
+		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SINGLE_HOST_ROUTE_GSO:-0",
+		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_AF_XDP_TX_BACKPRESSURE_WAIT:-50ms",
+		"TRUSTIX_E2E_AF_XDP_TX_BACKPRESSURE_WAIT",
+		"rx_worker_xmit=1",
+		"rx_worker_single_coalesce=0",
+		"tx_plaintext_skip_inner_tcp_checksum=0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("linux-production-transport-matrix.sh production defaults missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{
+		"rx_worker_single_coalesce=1",
+		"rx_worker_single_coalesce_max_frames=16",
+	} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("linux-production-transport-matrix.sh production defaults still include %q", unwanted)
+		}
+	}
+}
+
+func TestE2ESmokeDefaultsAvoidUnsafeDirectKfuncCrypto(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join(".", "linux-e2e-smoke.sh"))
+	if err != nil {
+		t.Fatalf("read linux-e2e-smoke.sh: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"TRUSTIX_E2E_AF_XDP_TX_BACKPRESSURE_WAIT:-50ms",
+		"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL:-0",
+		"TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN:-0",
+		"TRUSTIX_E2E_AF_XDP_TX_BACKPRESSURE_WAIT must be a Go duration or 0",
+		"route_tcp_gso_async_worker_emit_budget=0",
+		"route_tcp_gso_async_worker_min_queue_depth=1",
+		"route_tcp_gso_async_worker_schedule_delay_usecs=0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("linux-e2e-smoke.sh default missing %q", want)
+		}
 	}
 }
 

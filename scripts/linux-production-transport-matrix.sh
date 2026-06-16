@@ -17,7 +17,7 @@ full_datapath_script="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_SCRIPT
 full_datapath_module_dir="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MODULE_DIR:-${repo_root}/kernel/trustix_datapath}"
 full_datapath_ko="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_KO:-}"
 full_datapath_enable_features="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_ENABLE_FEATURES:-128}"
-full_datapath_extra_module_params="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_EXTRA_MODULE_PARAMS:-rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=16 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_skip_inner_tcp_checksum=1 tx_plaintext_stream_coalesce=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0}"
+full_datapath_extra_module_params="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_EXTRA_MODULE_PARAMS:-rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0}"
 full_datapath_kernelmodule_test_bin="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_KERNELMODULE_TEST_BIN:-}"
 full_datapath_ioctl_selftest="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_IOCTL_SELFTEST:-0}"
 full_datapath_verify_safe_defaults="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-0}"
@@ -35,6 +35,7 @@ iperf3_directions="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_DIRECTIONS:-both
 iperf3_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS:-0}"
 iperf3_min_sent_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_SENT_GBPS:-$iperf3_min_gbps}"
 iperf3_min_received_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_RECEIVED_GBPS:-$iperf3_min_gbps}"
+af_xdp_tx_backpressure_wait="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_AF_XDP_TX_BACKPRESSURE_WAIT:-50ms}"
 full_datapath_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MIN_GBPS:-4}"
 route_gso_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_ROUTE_GSO_MIN_GBPS:-4}"
 ping_count="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PING_COUNT:-3}"
@@ -326,6 +327,7 @@ run_case() {
     export TRUSTIX_E2E_IPERF3_DIRECTIONS="$iperf3_directions"
     export TRUSTIX_E2E_IPERF3_MIN_SENT_GBPS="$case_min_sent"
     export TRUSTIX_E2E_IPERF3_MIN_RECEIVED_GBPS="$case_min_received"
+    export TRUSTIX_E2E_AF_XDP_TX_BACKPRESSURE_WAIT="$af_xdp_tx_backpressure_wait"
     export TRUSTIX_E2E_PING_COUNT="$ping_count"
     export TRUSTIX_E2E_UDP_BURST_PACKETS="$udp_burst_packets"
     export TRUSTIX_E2E_UDP_BURST_SIZE="$udp_burst_size"
@@ -413,6 +415,8 @@ main() {
   local nonnegative_decimal_re='^[0-9]+([.][0-9]+)?$'
   [[ "$iperf3_min_sent_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_SENT_GBPS/TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS must be a non-negative number"
   [[ "$iperf3_min_received_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_RECEIVED_GBPS/TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS must be a non-negative number"
+  local go_duration_re='^[0-9]+(ns|us|ms|s|m|h)$'
+  [[ "$af_xdp_tx_backpressure_wait" == "0" || "$af_xdp_tx_backpressure_wait" =~ $go_duration_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_AF_XDP_TX_BACKPRESSURE_WAIT must be a Go duration or 0"
   [[ "$full_datapath_min_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MIN_GBPS must be a non-negative number"
   [[ "$route_gso_min_gbps" =~ $nonnegative_decimal_re ]] || die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_ROUTE_GSO_MIN_GBPS must be a non-negative number"
   : >"$summary_path"
