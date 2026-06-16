@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +69,43 @@ func TestCrossHostSoakVerifyRejectsSlowArtifacts(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("verify unexpectedly accepted slow artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyAcceptsRawBidirClientArtifact(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfBidirJSON(t, filepath.Join(dir, "case-iperf-bidir.json"), 13.6e9, 13.5e9, 5.8e9, 5.7e9, 900.1)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "900", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify raw bidir artifact failed: %v\n%s", err, output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsSlowRawBidirReverse(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfBidirJSON(t, filepath.Join(dir, "case-iperf-bidir.json"), 13.6e9, 13.5e9, 0.5e9, 0.4e9, 900.1)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "900", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted slow reverse bidir artifact:\n%s", output)
+	}
+	if !strings.Contains(string(output), "case-iperf-bidir.json:reverse") {
+		t.Fatalf("verify did not identify reverse direction failure:\n%s", output)
 	}
 }
 
@@ -258,6 +296,41 @@ func writeIperfReceiverJSON(t *testing.T, path string, receivedBPS, seconds floa
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write iperf receiver json: %v", err)
+	}
+}
+
+func writeIperfBidirJSON(t *testing.T, path string, sentBPS, receivedBPS, reverseSentBPS, reverseReceivedBPS, seconds float64) {
+	t.Helper()
+	payload := map[string]any{
+		"end": map[string]any{
+			"sum_sent": map[string]any{
+				"bits_per_second": sentBPS,
+				"seconds":         seconds,
+				"sender":          true,
+			},
+			"sum_received": map[string]any{
+				"bits_per_second": receivedBPS,
+				"seconds":         seconds,
+				"sender":          true,
+			},
+			"sum_sent_bidir_reverse": map[string]any{
+				"bits_per_second": reverseSentBPS,
+				"seconds":         seconds,
+				"sender":          false,
+			},
+			"sum_received_bidir_reverse": map[string]any{
+				"bits_per_second": reverseReceivedBPS,
+				"seconds":         seconds,
+				"sender":          false,
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal iperf bidir json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write iperf bidir json: %v", err)
 	}
 }
 

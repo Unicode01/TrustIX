@@ -154,17 +154,53 @@ def read_json(path: Path) -> Any:
         return json.load(handle)
 
 
-def iperf_sums(path: Path) -> tuple[float, float, float, bool]:
+def iperf_sums(path: Path) -> list[dict[str, Any]]:
     payload = read_json(path)
     end = payload.get("end") or {}
-    sent = end.get("sum_sent") or {}
-    received = end.get("sum_received") or {}
-    sent_bps = float(sent.get("bits_per_second") or 0)
-    received_bps = float(received.get("bits_per_second") or 0)
-    seconds = float(received.get("seconds") or sent.get("seconds") or 0)
-    sent_sender = sent.get("sender")
-    sent_required = sent_bps > 0 or sent_sender is True or sent_sender is None
-    return sent_bps / 1e9, received_bps / 1e9, seconds, sent_required
+    rows: list[dict[str, Any]] = []
+
+    def append_pair(
+        direction: str,
+        sent_key: str,
+        received_key: str,
+        *,
+        default_require_received: bool,
+    ) -> None:
+        sent = end.get(sent_key) or {}
+        received = end.get(received_key) or {}
+        if not sent and not received:
+            return
+        sent_bps = float(sent.get("bits_per_second") or 0)
+        received_bps = float(received.get("bits_per_second") or 0)
+        seconds = float(received.get("seconds") or sent.get("seconds") or 0)
+        sent_sender = sent.get("sender")
+        received_sender = received.get("sender")
+        sent_required = sent_bps > 0 or sent_sender is True or sent_sender is None
+        received_required = default_require_received
+        if direction == "reverse" and received_bps == 0 and received_sender is True and sent_bps > 0:
+            # iperf3 server-side --bidir JSON reports the reverse sender stream
+            # without a local receive aggregate. The client JSON still carries the
+            # receiver aggregate, so do not reject a sender-only server artifact.
+            received_required = False
+        rows.append(
+            {
+                "direction": direction,
+                "sent_gbps": sent_bps / 1e9,
+                "received_gbps": received_bps / 1e9,
+                "seconds": seconds,
+                "sent_required": sent_required,
+                "received_required": received_required,
+            }
+        )
+
+    append_pair("forward", "sum_sent", "sum_received", default_require_received=True)
+    append_pair(
+        "reverse",
+        "sum_sent_bidir_reverse",
+        "sum_received_bidir_reverse",
+        default_require_received=True,
+    )
+    return rows
 
 
 def result_markers_pass(case_dir: Path) -> tuple[bool, list[str]]:
@@ -363,34 +399,50 @@ def validate_case(
         errors.append(f"missing or non-pass result marker: {marker_values!r}")
 
     iperf_files = sorted(case.path.rglob("*iperf*.json"))
-    if len(iperf_files) < min_iperf_json:
-        errors.append(f"found {len(iperf_files)} iperf JSON files, want >= {min_iperf_json}")
 
     iperf_results: list[dict[str, Any]] = []
     for path in iperf_files:
         try:
-            sent_gbps, received_gbps, seconds, sent_required = iperf_sums(path)
+            sums = iperf_sums(path)
         except Exception as exc:  # noqa: BLE001 - artifact validation should report and continue.
             errors.append(f"{path.relative_to(case.path)}: parse iperf JSON: {exc}")
             continue
+        if not sums:
+            errors.append(f"{path.relative_to(case.path)}: no iperf summary aggregates found")
+            continue
         rel = str(path.relative_to(case.path))
-        iperf_results.append(
-            {
-                "file": rel,
-                "sent_gbps": round(sent_gbps, 6),
-                "received_gbps": round(received_gbps, 6),
-                "seconds": round(seconds, 6),
-                "sent_required": sent_required,
-            }
-        )
-        if sent_required and sent_gbps < min_gbps:
-            errors.append(f"{rel}: sent {sent_gbps:.3f}Gbps < {min_gbps:.3f}Gbps")
-        if received_gbps < min_gbps:
-            errors.append(f"{rel}: received {received_gbps:.3f}Gbps < {min_gbps:.3f}Gbps")
-        if seconds + seconds_slop < min_seconds:
-            errors.append(
-                f"{rel}: seconds {seconds:.3f} + slop {seconds_slop:.3f} < {min_seconds:.3f}"
+        for item in sums:
+            direction = str(item["direction"])
+            sent_gbps = float(item["sent_gbps"])
+            received_gbps = float(item["received_gbps"])
+            seconds = float(item["seconds"])
+            sent_required = bool(item["sent_required"])
+            received_required = bool(item["received_required"])
+            iperf_results.append(
+                {
+                    "file": rel,
+                    "direction": direction,
+                    "sent_gbps": round(sent_gbps, 6),
+                    "received_gbps": round(received_gbps, 6),
+                    "seconds": round(seconds, 6),
+                    "sent_required": sent_required,
+                    "received_required": received_required,
+                }
             )
+            label = rel if direction == "forward" else f"{rel}:{direction}"
+            if sent_required and sent_gbps < min_gbps:
+                errors.append(f"{label}: sent {sent_gbps:.3f}Gbps < {min_gbps:.3f}Gbps")
+            if received_required and received_gbps < min_gbps:
+                errors.append(f"{label}: received {received_gbps:.3f}Gbps < {min_gbps:.3f}Gbps")
+            if seconds + seconds_slop < min_seconds:
+                errors.append(
+                    f"{label}: seconds {seconds:.3f} + slop {seconds_slop:.3f} < {min_seconds:.3f}"
+                )
+    if len(iperf_files) < min_iperf_json and len(iperf_results) < min_iperf_json:
+        errors.append(
+            f"found {len(iperf_files)} iperf JSON files / {len(iperf_results)} validated "
+            f"directions, want >= {min_iperf_json}"
+        )
 
     log_findings = scan_logs(case.path) if log_scan else []
     if log_findings:
@@ -447,6 +499,10 @@ def validate_case(
         default=0,
     )
     min_received = min((item["received_gbps"] for item in iperf_results), default=0)
+    min_required_received = min(
+        (item["received_gbps"] for item in iperf_results if item.get("received_required")),
+        default=0,
+    )
     min_duration = min((item["seconds"] for item in iperf_results), default=0)
     return {
         "case": case.name,
@@ -456,8 +512,10 @@ def validate_case(
         "min_seconds_required": min_seconds,
         "seconds_slop": seconds_slop,
         "iperf_json_count": len(iperf_files),
+        "iperf_direction_count": len(iperf_results),
         "min_sent_gbps": round(min_sent, 6),
         "min_received_gbps": round(min_received, 6),
+        "min_required_received_gbps": round(min_required_received, 6),
         "min_seconds": round(min_duration, 6),
         "result_markers": marker_values,
         "iperf": iperf_results,
