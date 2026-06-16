@@ -2511,8 +2511,11 @@ func (manager *Manager) ExperimentalTCPStatus(ctx context.Context) (dataplane.Ex
 	}
 	rawFallback := experimentalTCPRawFallbackEnabled()
 	fastPath := manager.experimentalTCPProviderFastPathAvailableLocked()
+	fullPlaintext := manager.kernelDatapathFullPlaintextTransportAvailableLocked()
 	provider := "none"
 	switch {
+	case fullPlaintext:
+		provider = "kernel_datapath_full_plaintext"
 	case fastPath:
 		provider = manager.experimentalTCPFastPathProviderLocked()
 	case rawFallback:
@@ -2541,6 +2544,9 @@ func (manager *Manager) ExperimentalTCPStatus(ctx context.Context) (dataplane.Ex
 		"kernel crypto capability is probed through kernel BTF and /proc/crypto; provider is enabled only after BPF ctx install plus frame seal/open probes are available",
 		"experimental_tcp fast-path TX builds TCP-shaped frames directly in AF_XDP UMEM; kernel TX crypto seals in place before the TX descriptor is published",
 	}
+	if fullPlaintext {
+		notes = append(notes, "full plaintext kernel datapath owns experimental_tcp LAN TX and underlay RX without AF_XDP")
+	}
 	if reason := manager.experimentalTCPFastPathDisabledReasonLocked(); reason != "" {
 		notes = append(notes, "experimental_tcp fast path disabled: "+reason)
 	}
@@ -2551,15 +2557,15 @@ func (manager *Manager) ExperimentalTCPStatus(ctx context.Context) (dataplane.Ex
 		notes = append(notes, "AF_XDP mode fallback: "+fastPathFallback)
 	}
 	return dataplane.ExperimentalTCPStatus{
-		Available:          manager.attached && (fastPath || rawFallback),
+		Available:          manager.attached && (fullPlaintext || fastPath || rawFallback),
 		Provider:           provider,
-		FastPath:           fastPath,
+		FastPath:           fullPlaintext || fastPath,
 		UserspaceCrypto:    manager.attached && (fastPath || rawFallback),
 		KernelCrypto:       kernelCryptoReady,
 		KernelCryptoReason: kernelCryptoReason,
 		KernelCryptoProbe:  &kernelCryptoProbe,
 		CryptoFallback:     manager.experimentalTCPCryptoFallbackStatusLocked(),
-		Reinject:           manager.attached && (fastPath || rawFallback),
+		Reinject:           manager.attached && (fullPlaintext || fastPath || rawFallback),
 		RawSocketFallback:  rawFallback,
 		XDPAttachMode:      xdpAttachMode,
 		AFXDPBindMode:      afXDPBindMode,
@@ -2714,7 +2720,11 @@ func kernelTransportProtocolExperimentalTCP(status dataplane.ExperimentalTCPStat
 	placement := "userspace"
 	reason := "experimental_tcp AF_XDP provider is unavailable"
 	available := status.Available && status.Reinject
-	if status.FastPath && status.KernelCrypto {
+	fullPlaintext := status.Provider == "kernel_datapath_full_plaintext"
+	if fullPlaintext && available {
+		placement = "kernel"
+		reason = "full plaintext kernel datapath owns experimental_tcp LAN TX and underlay RX without AF_XDP"
+	} else if status.FastPath && status.KernelCrypto {
 		placement = "kernel"
 		reason = "AF_XDP/XDP handles RX/TX; kernel crypto is available when selected"
 	} else if status.FastPath {
@@ -2741,7 +2751,7 @@ func kernelTransportProtocolExperimentalTCP(status dataplane.ExperimentalTCPStat
 		Provider:          status.Provider,
 		Carrier:           "tcp-shaped-ipv4",
 		Contract:          "trustix-experimental-tcp-frame-v1",
-		UserspaceFallback: !status.KernelCrypto,
+		UserspaceFallback: !status.KernelCrypto && !fullPlaintext,
 		Reason:            reason,
 	}
 }
@@ -2789,7 +2799,8 @@ func (manager *Manager) InstallExperimentalTCPFlows(ctx context.Context, flows [
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if manager.experimentalTCPFastPathDisabledLocked() && !experimentalTCPRawFallbackEnabled() {
+	if manager.experimentalTCPFastPathDisabledLocked() && !experimentalTCPRawFallbackEnabled() &&
+		!kernelDatapathFullPlaintextOwnsKernelUDPForSpec(manager.spec) {
 		reason := manager.experimentalTCPFastPathDisabledReasonLocked()
 		if reason == "" {
 			reason = "disabled by attach policy"
@@ -3009,10 +3020,10 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 	fullPlaintext := manager.kernelDatapathFullPlaintextTransportAvailableLocked()
 	rawFallback := kernelUDPRawFallbackEnabled()
 	provider := "none"
-	if fastPath {
-		provider = manager.experimentalTCPFastPathProviderLocked()
-	} else if fullPlaintext {
+	if fullPlaintext {
 		provider = "kernel_datapath_full_plaintext"
+	} else if fastPath {
+		provider = manager.experimentalTCPFastPathProviderLocked()
 	} else if tcOnly {
 		provider = "tc_direct"
 	} else if rawFallback {
@@ -3060,7 +3071,7 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 		Provider:           provider,
 		FastPath:           fastPath || fullPlaintext || tcOnly,
 		DirectOnly:         kernelUDPTXDirectOnlyEnabled(manager.spec) || fullPlaintext,
-		TCOnly:             (tcOnly || fullPlaintext) && !fastPath,
+		TCOnly:             fullPlaintext || (tcOnly && !fastPath),
 		UserspaceCrypto:    manager.attached && (fastPath || rawFallback),
 		KernelCrypto:       kernelCryptoReady,
 		KernelCryptoReason: kernelCryptoReason,
@@ -3081,6 +3092,9 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 }
 
 func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context) error {
+	if kernelDatapathFullPlaintextOwnsKernelUDPForSpec(manager.spec) {
+		return manager.detachIdleKernelTransportFastPathLocked()
+	}
 	if manager.snapshotNeedsKernelTransportFastPathLocked() {
 		if manager.snapshotCanUseKernelUDPTCOnlyLocked() {
 			if err := manager.detachExperimentalTCPFastPathLocked(); err != nil {
@@ -3376,8 +3390,12 @@ func (manager *Manager) ensureKernelUDPRXDirectLocked() error {
 }
 
 func (manager *Manager) detachIdleKernelTransportFastPathLocked() error {
+	fullPlaintext := kernelDatapathFullPlaintextOwnsKernelUDPForSpec(manager.spec)
 	if manager.expTCPFastPath == nil && !manager.kernelUDPRXDirectAttached && manager.underlayIngressFilter == nil &&
 		manager.underlayIngressProg == nil && manager.kernelUDPRXSecureDirect == nil && manager.kernelUDPRXSecureDirectFilter == nil {
+		if fullPlaintext {
+			return detachIdleStaleExperimentalTCPXDP(manager)
+		}
 		return nil
 	}
 	var underlayLink netlink.Link
@@ -3394,6 +3412,11 @@ func (manager *Manager) detachIdleKernelTransportFastPathLocked() error {
 	if err := manager.detachExperimentalTCPFastPathLocked(); err != nil {
 		return err
 	}
+	if fullPlaintext {
+		if err := detachIdleStaleExperimentalTCPXDP(manager); err != nil {
+			return err
+		}
+	}
 	manager.expTCPAllowed = nil
 	manager.kernelUDPAllowed = nil
 	manager.kernelTransportAllowed = nil
@@ -3402,6 +3425,9 @@ func (manager *Manager) detachIdleKernelTransportFastPathLocked() error {
 
 func (manager *Manager) snapshotNeedsKernelTransportFastPathLocked() bool {
 	if manager.snapshot.PacketPolicy.KernelTransportMode == dataplane.KernelTransportModeDisabled {
+		return false
+	}
+	if kernelDatapathFullPlaintextOwnsKernelUDPForSpec(manager.spec) {
 		return false
 	}
 	if len(manager.kernelUDPFlows) > 0 {
@@ -3428,6 +3454,9 @@ func (manager *Manager) snapshotNeedsKernelTransportFastPathLocked() bool {
 }
 
 func (manager *Manager) snapshotHasLocalExperimentalTCPEndpointLocked() bool {
+	if kernelDatapathFullPlaintextOwnsKernelUDPForSpec(manager.spec) {
+		return false
+	}
 	if manager.experimentalTCPFastPathDisabledLocked() {
 		return false
 	}
@@ -5784,16 +5813,19 @@ func (manager *Manager) SubscribeExperimentalTCP(ctx context.Context, buffer int
 		buffer = 256
 	}
 	manager.mu.Lock()
-	if !manager.experimentalTCPProviderFastPathAvailableLocked() && !experimentalTCPRawFallbackEnabled() {
+	fullPlaintext := manager.kernelDatapathFullPlaintextTransportAvailableLocked()
+	if !manager.experimentalTCPProviderFastPathAvailableLocked() && !experimentalTCPRawFallbackEnabled() && !fullPlaintext {
 		manager.mu.Unlock()
 		if reason := manager.experimentalTCPFastPathDisabledReasonLocked(); reason != "" {
 			return nil, fmt.Errorf("experimental_tcp TC/XDP provider is disabled: %s", reason)
 		}
 		return nil, fmt.Errorf("experimental_tcp TC/XDP provider is not available; raw socket fallback is disabled")
 	}
-	if err := manager.startExperimentalTCPReceiverLocked(); err != nil {
-		manager.mu.Unlock()
-		return nil, err
+	if !fullPlaintext {
+		if err := manager.startExperimentalTCPReceiverLocked(); err != nil {
+			manager.mu.Unlock()
+			return nil, err
+		}
 	}
 	events := make(chan []dataplane.ExperimentalTCPFrame, buffer)
 	subscription := &experimentalTCPSubscription{manager: manager, events: events}
@@ -5813,16 +5845,19 @@ func (manager *Manager) SubscribeExperimentalTCPFlow(ctx context.Context, flowID
 		buffer = 256
 	}
 	manager.mu.Lock()
-	if !manager.experimentalTCPProviderFastPathAvailableLocked() && !experimentalTCPRawFallbackEnabled() {
+	fullPlaintext := manager.kernelDatapathFullPlaintextTransportAvailableLocked()
+	if !manager.experimentalTCPProviderFastPathAvailableLocked() && !experimentalTCPRawFallbackEnabled() && !fullPlaintext {
 		manager.mu.Unlock()
 		if reason := manager.experimentalTCPFastPathDisabledReasonLocked(); reason != "" {
 			return nil, fmt.Errorf("experimental_tcp TC/XDP provider is disabled: %s", reason)
 		}
 		return nil, fmt.Errorf("experimental_tcp TC/XDP provider is not available; raw socket fallback is disabled")
 	}
-	if err := manager.startExperimentalTCPReceiverLocked(); err != nil {
-		manager.mu.Unlock()
-		return nil, err
+	if !fullPlaintext {
+		if err := manager.startExperimentalTCPReceiverLocked(); err != nil {
+			manager.mu.Unlock()
+			return nil, err
+		}
 	}
 	events := make(chan []dataplane.ExperimentalTCPFrame, buffer)
 	subscription := &experimentalTCPSubscription{manager: manager, events: events, flowID: flowID}
@@ -11778,6 +11813,9 @@ func (manager *Manager) syncExperimentalTCPPortsLocked() error {
 func (manager *Manager) desiredExperimentalTCPPortsLocked() map[uint16]struct{} {
 	desired := make(map[uint16]struct{})
 	if manager.snapshot.PacketPolicy.KernelTransportMode == dataplane.KernelTransportModeDisabled {
+		return desired
+	}
+	if kernelDatapathFullPlaintextOwnsKernelUDPForSpec(manager.spec) {
 		return desired
 	}
 	if manager.experimentalTCPFastPathDisabledLocked() {

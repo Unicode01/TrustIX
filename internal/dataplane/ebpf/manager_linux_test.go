@@ -2745,6 +2745,75 @@ func TestEnsureKernelTransportFastPathRequireKernelFailsAttachFailure(t *testing
 	}
 }
 
+func TestEnsureKernelTransportFastPathDetachesAFXDPForFullPlaintext(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        "exp-a",
+			Peer:      "ix-a",
+			Transport: "experimental_tcp",
+			Listen:    "127.0.0.1:17043",
+			Enabled:   true,
+		}},
+	}
+	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
+	manager.expTCPFastPath.provider = "af_xdp"
+	manager.expTCPFastPath.done = make(chan struct{})
+	manager.expTCPFastPath.ready.Store(true)
+	for _, socket := range manager.expTCPFastPath.sockets {
+		socket.fd = -1
+	}
+
+	if err := manager.ensureKernelTransportFastPathLocked(context.Background()); err != nil {
+		t.Fatalf("full plaintext should detach AF_XDP without error: %v", err)
+	}
+	if manager.expTCPFastPath != nil {
+		t.Fatal("full plaintext left experimental_tcp AF_XDP attached")
+	}
+}
+
+func TestEnsureKernelTransportFastPathDetachesStaleXDPForFullPlaintext(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{
+		KernelDatapathFullPlaintext: true,
+		UnderlayIface:               "eth1",
+	}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        "exp-a",
+			Peer:      "ix-a",
+			Transport: "experimental_tcp",
+			Listen:    "127.0.0.1:17043",
+			Enabled:   true,
+		}},
+	}
+
+	calls := 0
+	oldDetach := detachIdleStaleExperimentalTCPXDP
+	detachIdleStaleExperimentalTCPXDP = func(got *Manager) error {
+		calls++
+		if got != manager {
+			t.Fatal("stale XDP detach called with wrong manager")
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		detachIdleStaleExperimentalTCPXDP = oldDetach
+	})
+
+	if err := manager.ensureKernelTransportFastPathLocked(context.Background()); err != nil {
+		t.Fatalf("full plaintext should detach stale XDP without error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("stale XDP detach calls = %d, want 1", calls)
+	}
+}
+
 func TestKernelUDPTXRouteFlowPowerOfTwoLimit(t *testing.T) {
 	tests := []struct {
 		count int
@@ -4537,6 +4606,9 @@ func TestKernelUDPStatusReportsFullPlaintextKernelDatapathProvider(t *testing.T)
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
+	manager.expTCPFastPath.provider = "af_xdp"
+	manager.expTCPFastPath.ready.Store(true)
 
 	status, err := manager.KernelUDPStatus(context.Background())
 	if err != nil {
@@ -4551,6 +4623,64 @@ func TestKernelUDPStatusReportsFullPlaintextKernelDatapathProvider(t *testing.T)
 	protocol := kernelTransportProtocolUDP(status)
 	if !protocol.Available || protocol.Placement != "kernel" || protocol.UserspaceFallback {
 		t.Fatalf("full plaintext protocol = %+v, want kernel placement without userspace fallback", protocol)
+	}
+}
+
+func TestExperimentalTCPStatusReportsFullPlaintextKernelDatapathProvider(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
+	manager.expTCPFastPath.provider = "af_xdp"
+	manager.expTCPFastPath.ready.Store(true)
+
+	status, err := manager.ExperimentalTCPStatus(context.Background())
+	if err != nil {
+		t.Fatalf("experimental_tcp status: %v", err)
+	}
+	if !status.Available || !status.Reinject || !status.FastPath {
+		t.Fatalf("full plaintext experimental_tcp status = %+v, want available kernel provider", status)
+	}
+	if status.Provider != "kernel_datapath_full_plaintext" {
+		t.Fatalf("provider = %q, want kernel_datapath_full_plaintext", status.Provider)
+	}
+	protocol := kernelTransportProtocolExperimentalTCP(status)
+	if !protocol.Available || protocol.Placement != "kernel" || protocol.UserspaceFallback {
+		t.Fatalf("full plaintext experimental_tcp protocol = %+v, want kernel placement without userspace fallback", protocol)
+	}
+}
+
+func TestSubscribeExperimentalTCPAllowsFullPlaintextKernelDatapathProvider(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+
+	subscription, err := manager.SubscribeExperimentalTCP(context.Background(), 8)
+	if err != nil {
+		t.Fatalf("subscribe experimental_tcp: %v", err)
+	}
+	if subscription == nil {
+		t.Fatal("subscription is nil")
+	}
+	if err := subscription.Close(); err != nil {
+		t.Fatalf("close subscription: %v", err)
+	}
+}
+
+func TestSubscribeExperimentalTCPFlowAllowsFullPlaintextKernelDatapathProvider(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+
+	subscription, err := manager.SubscribeExperimentalTCPFlow(context.Background(), 42, 8)
+	if err != nil {
+		t.Fatalf("subscribe experimental_tcp flow: %v", err)
+	}
+	if subscription == nil {
+		t.Fatal("subscription is nil")
+	}
+	if err := subscription.Close(); err != nil {
+		t.Fatalf("close subscription: %v", err)
 	}
 }
 
@@ -4933,7 +5063,7 @@ func TestKernelTransportFastPathNeededForInstalledFlows(t *testing.T) {
 	}
 }
 
-func TestKernelTransportFastPathPreferredForFullPlaintextKernelUDP(t *testing.T) {
+func TestKernelTransportFastPathNotNeededForFullPlaintextKernelUDP(t *testing.T) {
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
 	manager.snapshot = dataplane.Snapshot{
@@ -4944,8 +5074,8 @@ func TestKernelTransportFastPathPreferredForFullPlaintextKernelUDP(t *testing.T)
 	}
 	manager.kernelUDPFlows[7] = dataplane.KernelUDPFlow{ID: 7}
 
-	if !manager.snapshotNeedsKernelTransportFastPathLocked() {
-		t.Fatal("full plaintext kernel datapath UDP should still prefer AF_XDP when available")
+	if manager.snapshotNeedsKernelTransportFastPathLocked() {
+		t.Fatal("full plaintext kernel datapath UDP should not request AF_XDP")
 	}
 	if !kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) {
 		t.Fatal("full plaintext kernel datapath should own stack RX")
@@ -4971,7 +5101,7 @@ func TestInstallKernelUDPFlowAllowsFullPlaintextKernelDatapathWithoutAFXDPPProvi
 	}
 }
 
-func TestKernelTransportFastPathStillNeededForExperimentalTCPWithFullPlaintextSpec(t *testing.T) {
+func TestKernelTransportFastPathNotNeededForExperimentalTCPWithFullPlaintextSpec(t *testing.T) {
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
 	manager.snapshot = dataplane.Snapshot{
@@ -4981,8 +5111,8 @@ func TestKernelTransportFastPathStillNeededForExperimentalTCPWithFullPlaintextSp
 		},
 	}
 
-	if !manager.snapshotNeedsKernelTransportFastPathLocked() {
-		t.Fatal("experimental_tcp should still request its fast path")
+	if manager.snapshotNeedsKernelTransportFastPathLocked() {
+		t.Fatal("full plaintext experimental_tcp should not request AF_XDP")
 	}
 }
 

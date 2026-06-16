@@ -268,6 +268,10 @@ func (manager *Manager) detachExperimentalTCPFastPathLocked() error {
 	return err
 }
 
+var detachIdleStaleExperimentalTCPXDP = func(manager *Manager) error {
+	return manager.detachStaleExperimentalTCPXDPLocked(nil)
+}
+
 func (manager *Manager) detachStaleExperimentalTCPXDPLocked(state *persistedExperimentalTCPXDPState) error {
 	underlay := manager.spec.UnderlayIface
 	attachFlags := 0

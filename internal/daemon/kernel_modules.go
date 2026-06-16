@@ -338,7 +338,7 @@ func appendTrustIXDatapathRXWorkerTCPBaseParameters(params string) string {
 func appendTrustIXDatapathTXPlaintextBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_inline_xmit=1")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_direct_xmit=1")
-	params = setModuleParameter(params, "tx_plaintext_skip_inner_tcp_checksum", "1")
+	params = setModuleParameter(params, "tx_plaintext_skip_inner_tcp_checksum", "0")
 	params = setModuleParameter(params, "tx_plaintext_stream_coalesce", "0")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_stream_coalesce_max_frames=16")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_slots=8192")
