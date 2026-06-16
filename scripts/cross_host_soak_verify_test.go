@@ -31,6 +31,26 @@ func TestCrossHostSoakVerifyAcceptsPassingArtifacts(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyAcceptsReceiverOnlyServerArtifact(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b-client.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfReceiverJSON(t, filepath.Join(dir, "case-iperf-b-to-a-server.json"), 4.7e9, 120.1)
+	if err := os.WriteFile(filepath.Join(dir, "case.result"), []byte("pass\n"), 0o644); err != nil {
+		t.Fatalf("write result marker: %v", err)
+	}
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify receiver-only artifacts failed: %v\n%s", err, output)
+	}
+}
+
 func TestCrossHostSoakVerifyRejectsSlowArtifacts(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -213,6 +233,31 @@ func writeIperfJSON(t *testing.T, path string, sentBPS, receivedBPS, seconds flo
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write iperf json: %v", err)
+	}
+}
+
+func writeIperfReceiverJSON(t *testing.T, path string, receivedBPS, seconds float64) {
+	t.Helper()
+	payload := map[string]any{
+		"end": map[string]any{
+			"sum_sent": map[string]any{
+				"bits_per_second": 0,
+				"seconds":         seconds,
+				"sender":          false,
+			},
+			"sum_received": map[string]any{
+				"bits_per_second": receivedBPS,
+				"seconds":         seconds,
+				"sender":          false,
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal iperf receiver json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write iperf receiver json: %v", err)
 	}
 }
 

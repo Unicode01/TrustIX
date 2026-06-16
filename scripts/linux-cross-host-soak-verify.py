@@ -154,7 +154,7 @@ def read_json(path: Path) -> Any:
         return json.load(handle)
 
 
-def iperf_sums(path: Path) -> tuple[float, float, float]:
+def iperf_sums(path: Path) -> tuple[float, float, float, bool]:
     payload = read_json(path)
     end = payload.get("end") or {}
     sent = end.get("sum_sent") or {}
@@ -162,7 +162,9 @@ def iperf_sums(path: Path) -> tuple[float, float, float]:
     sent_bps = float(sent.get("bits_per_second") or 0)
     received_bps = float(received.get("bits_per_second") or 0)
     seconds = float(received.get("seconds") or sent.get("seconds") or 0)
-    return sent_bps / 1e9, received_bps / 1e9, seconds
+    sent_sender = sent.get("sender")
+    sent_required = sent_bps > 0 or sent_sender is True or sent_sender is None
+    return sent_bps / 1e9, received_bps / 1e9, seconds, sent_required
 
 
 def result_markers_pass(case_dir: Path) -> tuple[bool, list[str]]:
@@ -367,7 +369,7 @@ def validate_case(
     iperf_results: list[dict[str, Any]] = []
     for path in iperf_files:
         try:
-            sent_gbps, received_gbps, seconds = iperf_sums(path)
+            sent_gbps, received_gbps, seconds, sent_required = iperf_sums(path)
         except Exception as exc:  # noqa: BLE001 - artifact validation should report and continue.
             errors.append(f"{path.relative_to(case.path)}: parse iperf JSON: {exc}")
             continue
@@ -378,9 +380,10 @@ def validate_case(
                 "sent_gbps": round(sent_gbps, 6),
                 "received_gbps": round(received_gbps, 6),
                 "seconds": round(seconds, 6),
+                "sent_required": sent_required,
             }
         )
-        if sent_gbps < min_gbps:
+        if sent_required and sent_gbps < min_gbps:
             errors.append(f"{rel}: sent {sent_gbps:.3f}Gbps < {min_gbps:.3f}Gbps")
         if received_gbps < min_gbps:
             errors.append(f"{rel}: received {received_gbps:.3f}Gbps < {min_gbps:.3f}Gbps")
@@ -439,7 +442,10 @@ def validate_case(
     )
     errors.extend(datapath_stat_errors)
 
-    min_sent = min((item["sent_gbps"] for item in iperf_results), default=0)
+    min_sent = min(
+        (item["sent_gbps"] for item in iperf_results if item.get("sent_required")),
+        default=0,
+    )
     min_received = min((item["received_gbps"] for item in iperf_results), default=0)
     min_duration = min((item["seconds"] for item in iperf_results), default=0)
     return {
