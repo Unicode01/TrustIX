@@ -22,6 +22,18 @@ import (
 	"trustix.local/trustix/internal/transport/kerneludp"
 )
 
+func TestExperimentalTCPTXSocketGSODefaultsOff(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_SOCKET_GSO", "")
+	t.Setenv("TRUSTIX_TIXT_TX_SOCKET_GSO", "")
+	if experimentalTCPTXSocketGSOEnabled() {
+		t.Fatal("experimental_tcp TX socket GSO should default off")
+	}
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_SOCKET_GSO", "1")
+	if !experimentalTCPTXSocketGSOEnabled() {
+		t.Fatal("experimental_tcp TX socket GSO should be opt-in")
+	}
+}
+
 func TestExperimentalTCPTXSocketAffinityUsesFlowID(t *testing.T) {
 	fastPath := testExperimentalTCPFastPathWithQueues(4)
 	packet := experimentaltcp.TCPPacket{
@@ -300,13 +312,13 @@ func TestPreparedExperimentalTCPFragmentedTIXBUsesFirstInnerHash(t *testing.T) {
 			Sequence:      100,
 			FragmentIndex: 0,
 			FragmentCount: 2,
-			Payload:       batch[:32],
+			Payload:       batch[:34],
 		},
 	}
 	frameB := frameA
 	frameB.wireFrame.Sequence++
 	frameB.wireFrame.FragmentIndex = 1
-	frameB.wireFrame.Payload = batch[32:]
+	frameB.wireFrame.Payload = batch[34:]
 	frames := []preparedExperimentalTCPTXFrame{frameA, frameB}
 	hash, ok := fragmentedPreparedExperimentalTCPInnerHash(frames, 1)
 	if !ok {
@@ -364,7 +376,7 @@ func TestDataSessionBatchFirstInnerIPv4TXHashFromFragmentUsesPartialHeader(t *te
 	batch = append(batch, first...)
 	batch = binary.BigEndian.AppendUint16(batch, uint16(len(second)))
 	batch = append(batch, second...)
-	fragment := batch[:32]
+	fragment := batch[:34]
 	want, ok := innerIPv4TXHash(first)
 	if !ok {
 		t.Fatal("first inner IPv4 hash is not valid")
@@ -651,12 +663,177 @@ func TestExperimentalTCPDecodeKernelOpenedRXFrameCopiesFragments(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPDecodeUserspaceSecureRXFrameCopiesByDefault(t *testing.T) {
+	tests := []struct {
+		name  string
+		magic []byte
+	}{
+		{name: "data", magic: []byte{'T', 'I', 'X', 'D'}},
+		{name: "handshake", magic: []byte{'T', 'I', 'X', 'H'}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fastPath := testExperimentalTCPFastPathWithQueues(1)
+			fastPath.skipTCPChecksum = true
+			manager := NewManager()
+			socket := testAFXDPSocketForRXFrame()
+			payload := append(append([]byte(nil), tt.magic...), []byte("secure-wrapper-payload")...)
+			rxFrame, payloadOffset := testExperimentalTCPRXFrame(t, socket, experimentaltcp.Frame{
+				FlowID:   7,
+				Epoch:    9,
+				Sequence: 11,
+				Payload:  payload,
+			})
+			wire := rxFrame.data
+			var expBatch []receivedExperimentalTCPFrame
+			var udpBatch []receivedKernelUDPFrame
+
+			mode, err := fastPath.decodeRXFrame(manager, socket, rxFrame, &expBatch, &udpBatch)
+			if err != nil {
+				t.Fatalf("decodeRXFrame error = %v", err)
+			}
+			if mode != afXDPRXRecycleNow {
+				t.Fatalf("recycle mode = %d, want immediate recycle for copied secure userspace frame", mode)
+			}
+			if len(expBatch) != 1 {
+				t.Fatalf("experimental_tcp batch len = %d, want 1", len(expBatch))
+			}
+			delivered := expBatch[0].frame
+			if !bytes.Equal(delivered.Payload, payload) {
+				t.Fatalf("payload = %x, want %x", delivered.Payload, payload)
+			}
+			if delivered.Encrypted || delivered.CryptoPlacement != dataplane.CryptoPlacementUserspace {
+				t.Fatalf("delivered metadata = encrypted:%v placement:%s, want userspace secure wrapper", delivered.Encrypted, delivered.CryptoPlacement)
+			}
+			if delivered.Release != nil {
+				t.Fatal("release is set for copied secure userspace frame")
+			}
+			if rxFrame.recycled == nil || !rxFrame.recycled.Load() {
+				t.Fatal("decode did not immediately recycle copied secure userspace RX frame")
+			}
+			wire[payloadOffset] ^= 0xff
+			if delivered.Payload[0] == wire[payloadOffset] {
+				t.Fatal("secure userspace payload borrowed AF_XDP RX storage; want independent copy")
+			}
+			if got := atomic.LoadUint32(socket.fill.producer); got != 1 {
+				t.Fatalf("fill producer after copied secure userspace decode = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestExperimentalTCPDecodeEncryptedRXFrameCopiesByDefault(t *testing.T) {
+	fastPath := testExperimentalTCPFastPathWithQueues(1)
+	fastPath.skipTCPChecksum = true
+	manager := NewManager()
+	socket := testAFXDPSocketForRXFrame()
+	sequence := uint64(11)
+	payload := bytesOf(0x5a, kernelCryptoSecureHeaderLen+48+kernelCryptoFrameTagLen)
+	kernelCryptoPutSecureHeader(payload[:kernelCryptoSecureHeaderLen], byte(kernelCryptoSuiteIDTrustIXAES256GCMX25519), 9, sequence)
+	rxFrame, payloadOffset := testExperimentalTCPRXFrame(t, socket, experimentaltcp.Frame{
+		Flags:    experimentaltcp.FlagEncrypted,
+		FlowID:   7,
+		Epoch:    9,
+		Sequence: sequence,
+		Payload:  payload,
+	})
+	wire := rxFrame.data
+	var expBatch []receivedExperimentalTCPFrame
+	var udpBatch []receivedKernelUDPFrame
+
+	mode, err := fastPath.decodeRXFrame(manager, socket, rxFrame, &expBatch, &udpBatch)
+	if err != nil {
+		t.Fatalf("decodeRXFrame error = %v", err)
+	}
+	if mode != afXDPRXRecycleNow {
+		t.Fatalf("recycle mode = %d, want immediate recycle for copied encrypted frame", mode)
+	}
+	if len(expBatch) != 1 {
+		t.Fatalf("experimental_tcp batch len = %d, want 1", len(expBatch))
+	}
+	frame := expBatch[0]
+	if !frame.encryptedKernelPayload || frame.encryptedKernelFragment {
+		t.Fatalf("encrypted flags payload=%t fragment=%t, want encrypted whole frame", frame.encryptedKernelPayload, frame.encryptedKernelFragment)
+	}
+	if frame.kernelOpenPlain == nil || frame.kernelOpenPlainRelease == nil || frame.kernelOpenPlainInPlace {
+		t.Fatal("encrypted fallback should preallocate an open buffer and avoid in-place open by default")
+	}
+	if frame.frame.Release != nil {
+		t.Fatal("release is set for copied encrypted frame")
+	}
+	if rxFrame.recycled == nil || !rxFrame.recycled.Load() {
+		t.Fatal("decode did not immediately recycle copied encrypted RX frame")
+	}
+	wire[payloadOffset] ^= 0xff
+	if frame.frame.Payload[0] == wire[payloadOffset] {
+		t.Fatal("encrypted payload borrowed AF_XDP RX storage; want independent copy")
+	}
+	if got := atomic.LoadUint32(socket.fill.producer); got != 1 {
+		t.Fatalf("fill producer after copied encrypted decode = %d, want 1", got)
+	}
+	frame.kernelOpenPlainRelease()
+}
+
+func TestExperimentalTCPDecodeEncryptedCryptoFragmentCopiesByDefault(t *testing.T) {
+	fastPath := testExperimentalTCPFastPathWithQueues(1)
+	fastPath.skipTCPChecksum = true
+	manager := NewManager()
+	socket := testAFXDPSocketForRXFrame()
+	sequence := uint64(11)
+	payload := bytesOf(0x5a, kernelCryptoSecureHeaderLen+48+kernelCryptoFrameTagLen)
+	kernelCryptoPutSecureHeader(payload[:kernelCryptoSecureHeaderLen], byte(kernelCryptoSuiteIDTrustIXAES256GCMX25519), 9, sequence)
+	rxFrame, payloadOffset := testExperimentalTCPRXFrame(t, socket, experimentaltcp.Frame{
+		Flags:         experimentaltcp.FlagEncrypted | experimentaltcp.FlagCryptoFragment,
+		FlowID:        7,
+		Epoch:         9,
+		Sequence:      sequence,
+		FragmentIndex: 0,
+		FragmentCount: 2,
+		Payload:       payload,
+	})
+	wire := rxFrame.data
+	var expBatch []receivedExperimentalTCPFrame
+	var udpBatch []receivedKernelUDPFrame
+
+	mode, err := fastPath.decodeRXFrame(manager, socket, rxFrame, &expBatch, &udpBatch)
+	if err != nil {
+		t.Fatalf("decodeRXFrame error = %v", err)
+	}
+	if mode != afXDPRXRecycleNow {
+		t.Fatalf("recycle mode = %d, want immediate recycle for copied encrypted fragment", mode)
+	}
+	if len(expBatch) != 1 {
+		t.Fatalf("experimental_tcp batch len = %d, want 1", len(expBatch))
+	}
+	frame := expBatch[0]
+	if !frame.encryptedKernelPayload || !frame.encryptedKernelFragment {
+		t.Fatalf("encrypted fragment flags payload=%t fragment=%t, want both true", frame.encryptedKernelPayload, frame.encryptedKernelFragment)
+	}
+	if frame.kernelOpenPlain != nil || frame.kernelOpenPlainRelease != nil || frame.kernelOpenPlainInPlace {
+		t.Fatal("encrypted fragment should not preallocate whole-frame open storage")
+	}
+	if frame.frame.Release != nil {
+		t.Fatal("release is set for copied encrypted fragment")
+	}
+	if rxFrame.recycled == nil || !rxFrame.recycled.Load() {
+		t.Fatal("decode did not immediately recycle copied encrypted fragment RX frame")
+	}
+	wire[payloadOffset] ^= 0xff
+	if frame.frame.Payload[0] == wire[payloadOffset] {
+		t.Fatal("encrypted fragment borrowed AF_XDP RX storage; want independent copy")
+	}
+	if got := atomic.LoadUint32(socket.fill.producer); got != 1 {
+		t.Fatalf("fill producer after copied encrypted fragment decode = %d, want 1", got)
+	}
+}
+
 func TestExperimentalTCPDecodeEncryptedKernelOpenInPlaceOptIn(t *testing.T) {
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_OPEN_INPLACE", "1")
 	fastPath := testExperimentalTCPFastPathWithQueues(1)
 	fastPath.skipTCPChecksum = true
 	manager := NewManager()
 	socket := testAFXDPSocketForRXFrame()
+	socket.kernelOpenInPlace = true
 	sequence := uint64(11)
 	payload := bytesOf(0x5a, kernelCryptoSecureHeaderLen+48+kernelCryptoFrameTagLen)
 	kernelCryptoPutSecureHeader(payload[:kernelCryptoSecureHeaderLen], byte(kernelCryptoSuiteIDTrustIXAES256GCMX25519), 9, sequence)
@@ -1398,13 +1575,15 @@ func TestAFXDPSendPreparedExperimentalTCPFramesBatchesDescriptors(t *testing.T) 
 	defer unix.Close(fds[0])
 	defer unix.Close(fds[1])
 	socket := &afXDPSocket{
-		fd:                 fds[0],
-		linkMAC:            net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
-		umem:               make([]byte, 3*expTCPDefaultUMEMFrameSize),
-		umemFrameSize:      expTCPDefaultUMEMFrameSize,
-		txFree:             []uint64{0, expTCPDefaultUMEMFrameSize},
-		txKickBatch:        1024,
-		txBackpressurePoll: time.Millisecond,
+		fd:                     fds[0],
+		linkMAC:                net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
+		umem:                   make([]byte, 3*expTCPDefaultUMEMFrameSize),
+		umemFrameSize:          expTCPDefaultUMEMFrameSize,
+		txFree:                 []uint64{0, expTCPDefaultUMEMFrameSize},
+		txKickBatch:            1024,
+		txBackpressurePoll:     time.Millisecond,
+		txMultiFrameMaxFrames:  experimentalTCPTXMultiFrameMaxFrames(),
+		txMultiFrameMaxIPv4Len: experimentalTCPTXMultiFrameMaxIPv4Len(),
 		tx: xdpDescRing{
 			producer: &txProducer,
 			consumer: &txConsumer,
@@ -1479,13 +1658,15 @@ func TestAFXDPSendPreparedExperimentalTCPFramesMultiFrameCoalescesDescriptors(t 
 	defer unix.Close(fds[0])
 	defer unix.Close(fds[1])
 	socket := &afXDPSocket{
-		fd:                 fds[0],
-		linkMAC:            net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
-		umem:               make([]byte, 3*expTCPDefaultUMEMFrameSize),
-		umemFrameSize:      expTCPDefaultUMEMFrameSize,
-		txFree:             []uint64{0, expTCPDefaultUMEMFrameSize},
-		txKickBatch:        1024,
-		txBackpressurePoll: time.Millisecond,
+		fd:                     fds[0],
+		linkMAC:                net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
+		umem:                   make([]byte, 3*expTCPDefaultUMEMFrameSize),
+		umemFrameSize:          expTCPDefaultUMEMFrameSize,
+		txFree:                 []uint64{0, expTCPDefaultUMEMFrameSize},
+		txKickBatch:            1024,
+		txBackpressurePoll:     time.Millisecond,
+		txMultiFrameMaxFrames:  experimentalTCPTXMultiFrameMaxFrames(),
+		txMultiFrameMaxIPv4Len: experimentalTCPTXMultiFrameMaxIPv4Len(),
 		tx: xdpDescRing{
 			producer: &txProducer,
 			consumer: &txConsumer,
@@ -1560,7 +1741,191 @@ func TestAFXDPSendPreparedExperimentalTCPFramesMultiFrameCoalescesDescriptors(t 
 	}
 }
 
+func TestAFXDPSendPreparedExperimentalTCPFramesMultiFrameCoalescesUserspaceFragments(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_MULTI_FRAME", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_MULTI_FRAME_MAX_FRAMES", "4")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_MULTI_FRAME_MAX_IPV4_LEN", "4096")
+
+	txProducer := uint32(0)
+	txConsumer := uint32(0)
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("socketpair: %v", err)
+	}
+	defer unix.Close(fds[0])
+	defer unix.Close(fds[1])
+	socket := &afXDPSocket{
+		fd:                     fds[0],
+		linkMAC:                net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
+		umem:                   make([]byte, 3*expTCPDefaultUMEMFrameSize),
+		umemFrameSize:          expTCPDefaultUMEMFrameSize,
+		txFree:                 []uint64{0, expTCPDefaultUMEMFrameSize},
+		txKickBatch:            1024,
+		txBackpressurePoll:     time.Millisecond,
+		txMultiFrameMaxFrames:  experimentalTCPTXMultiFrameMaxFrames(),
+		txMultiFrameMaxIPv4Len: experimentalTCPTXMultiFrameMaxIPv4Len(),
+		tx: xdpDescRing{
+			producer: &txProducer,
+			consumer: &txConsumer,
+			descs:    make([]unix.XDPDesc, 4),
+			size:     4,
+			mask:     3,
+		},
+	}
+	packet := experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("192.0.2.1"),
+		DestinationIP:   netip.MustParseAddr("198.51.100.2"),
+		SourcePort:      40000,
+		DestinationPort: 9443,
+		Acknowledgment:  1,
+	}
+	payloads := [][]byte{
+		append([]byte{'T', 'I', 'X', 'D'}, bytes.Repeat([]byte{0xa5}, 256)...),
+		bytes.Repeat([]byte{0xb6}, 260),
+		bytes.Repeat([]byte{0xc7}, 260),
+	}
+	items := make([]preparedExperimentalTCPTXFrame, len(payloads))
+	nextSeq := uint32(0)
+	for i, payload := range payloads {
+		itemPacket := packet
+		itemPacket.Sequence = nextSeq
+		frameLen := experimentaltcp.HeaderLen + len(payload)
+		nextSeq += uint32(frameLen)
+		items[i] = preparedExperimentalTCPTXFrame{
+			packet: itemPacket,
+			wireFrame: experimentaltcp.Frame{
+				FlowID:        7,
+				Epoch:         9,
+				Sequence:      uint64(100 + i),
+				FragmentIndex: uint16(i),
+				FragmentCount: uint16(len(payloads)),
+				Payload:       append([]byte(nil), payload...),
+			},
+		}
+	}
+
+	if err := socket.SendPreparedFrames(items, net.HardwareAddr{0x02, 0, 0, 0, 0, 2}); err != nil {
+		t.Fatalf("SendPreparedFrames error = %v", err)
+	}
+	if got := atomic.LoadUint32(&txProducer); got != 1 {
+		t.Fatalf("tx producer = %d, want 1", got)
+	}
+	if got := socket.stats.txMultiFrameBatches.Load(); got != 1 {
+		t.Fatalf("tx multi-frame batches = %d, want 1", got)
+	}
+	if got := socket.stats.txMultiFrameRejectFragment.Load(); got != 0 {
+		t.Fatalf("tx multi-frame fragment rejects = %d, want 0", got)
+	}
+
+	desc := socket.tx.descs[0]
+	wire := socket.umem[int(desc.Addr)+ethernetHeaderLen : int(desc.Addr)+int(desc.Len)]
+	packetOut, err := experimentaltcp.ParseTCPShapedIPv4NoCopy(wire)
+	if err != nil {
+		t.Fatalf("parse experimental_tcp packet: %v", err)
+	}
+	frames, err := experimentaltcp.ParseFrameStreamNoCopy(packetOut.Payload)
+	if err != nil {
+		t.Fatalf("parse TIXT stream: %v", err)
+	}
+	if len(frames) != len(items) {
+		t.Fatalf("frame count = %d, want %d", len(frames), len(items))
+	}
+	for i, frame := range frames {
+		want := items[i].wireFrame
+		if frame.Sequence != want.Sequence ||
+			frame.FragmentIndex != want.FragmentIndex ||
+			frame.FragmentCount != want.FragmentCount ||
+			!bytes.Equal(frame.Payload, want.Payload) {
+			t.Fatalf("frame %d = %#v, want %#v", i, frame, want)
+		}
+	}
+}
+
+func TestAFXDPSendPreparedExperimentalTCPFramesMultiFrameClampsToLinkMTU(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_MULTI_FRAME", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_MULTI_FRAME_MAX_FRAMES", "4")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_MULTI_FRAME_MAX_IPV4_LEN", "4096")
+
+	txProducer := uint32(0)
+	txConsumer := uint32(0)
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("socketpair: %v", err)
+	}
+	defer unix.Close(fds[0])
+	defer unix.Close(fds[1])
+	socket := &afXDPSocket{
+		fd:                     fds[0],
+		linkMAC:                net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
+		linkMTU:                1500,
+		umem:                   make([]byte, 3*expTCPDefaultUMEMFrameSize),
+		umemFrameSize:          expTCPDefaultUMEMFrameSize,
+		txFree:                 []uint64{0, expTCPDefaultUMEMFrameSize},
+		txKickBatch:            1024,
+		txBackpressurePoll:     time.Millisecond,
+		txMultiFrameMaxFrames:  experimentalTCPTXMultiFrameMaxFrames(),
+		txMultiFrameMaxIPv4Len: experimentalTCPTXMultiFrameMaxIPv4Len(),
+		tx: xdpDescRing{
+			producer: &txProducer,
+			consumer: &txConsumer,
+			descs:    make([]unix.XDPDesc, 4),
+			size:     4,
+			mask:     3,
+		},
+	}
+	packet := experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("192.0.2.1"),
+		DestinationIP:   netip.MustParseAddr("198.51.100.2"),
+		SourcePort:      40000,
+		DestinationPort: 9443,
+		Acknowledgment:  1,
+	}
+	payloads := [][]byte{
+		append([]byte{'T', 'I', 'X', 'D'}, bytes.Repeat([]byte{0xa5}, 1180)...),
+		bytes.Repeat([]byte{0xb6}, 1184),
+	}
+	items := make([]preparedExperimentalTCPTXFrame, len(payloads))
+	nextSeq := uint32(0)
+	for i, payload := range payloads {
+		itemPacket := packet
+		itemPacket.Sequence = nextSeq
+		frameLen := experimentaltcp.HeaderLen + len(payload)
+		nextSeq += uint32(frameLen)
+		items[i] = preparedExperimentalTCPTXFrame{
+			packet: itemPacket,
+			wireFrame: experimentaltcp.Frame{
+				FlowID:        7,
+				Epoch:         9,
+				Sequence:      uint64(100 + i),
+				FragmentIndex: uint16(i),
+				FragmentCount: uint16(len(payloads)),
+				Payload:       append([]byte(nil), payload...),
+			},
+		}
+	}
+
+	if err := socket.SendPreparedFrames(items, net.HardwareAddr{0x02, 0, 0, 0, 0, 2}); err != nil {
+		t.Fatalf("SendPreparedFrames error = %v", err)
+	}
+	if got := atomic.LoadUint32(&txProducer); got != 2 {
+		t.Fatalf("tx producer = %d, want 2 descriptors", got)
+	}
+	if got := socket.stats.txMultiFrameBatches.Load(); got != 0 {
+		t.Fatalf("tx multi-frame batches = %d, want 0", got)
+	}
+	if got := socket.stats.txMultiFrameRejectMTU.Load(); got != 1 {
+		t.Fatalf("tx multi-frame MTU rejects = %d, want 1", got)
+	}
+	for i := range items {
+		desc := socket.tx.descs[i]
+		if int(desc.Len) > socket.linkMTU+ethernetHeaderLen {
+			t.Fatalf("descriptor %d length = %d, want <= %d", i, desc.Len, socket.linkMTU+ethernetHeaderLen)
+		}
+	}
+}
+
 func TestAFXDPSendPreparedExperimentalTCPFramesEncryptedMultiFrameOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_SOCKET_GSO", "0")
 	newSocket := func(t *testing.T) (*afXDPSocket, *uint32) {
 		t.Helper()
 		txProducer := new(uint32)
@@ -1574,13 +1939,16 @@ func TestAFXDPSendPreparedExperimentalTCPFramesEncryptedMultiFrameOptIn(t *testi
 			unix.Close(fds[1])
 		})
 		socket := &afXDPSocket{
-			fd:                 fds[0],
-			linkMAC:            net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
-			umem:               make([]byte, 3*expTCPDefaultUMEMFrameSize),
-			umemFrameSize:      expTCPDefaultUMEMFrameSize,
-			txFree:             []uint64{0, expTCPDefaultUMEMFrameSize},
-			txKickBatch:        1024,
-			txBackpressurePoll: time.Millisecond,
+			fd:                     fds[0],
+			linkMAC:                net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
+			umem:                   make([]byte, 3*expTCPDefaultUMEMFrameSize),
+			umemFrameSize:          expTCPDefaultUMEMFrameSize,
+			txFree:                 []uint64{0, expTCPDefaultUMEMFrameSize},
+			txKickBatch:            1024,
+			txBackpressurePoll:     time.Millisecond,
+			txMultiFrameMaxFrames:  experimentalTCPTXMultiFrameMaxFrames(),
+			txMultiFrameMaxIPv4Len: experimentalTCPTXMultiFrameMaxIPv4Len(),
+			txMultiFrameEncrypted:  experimentalTCPTXMultiFrameEncryptedEnabled(),
 			tx: xdpDescRing{
 				producer: txProducer,
 				consumer: txConsumer,
@@ -1661,6 +2029,236 @@ func TestAFXDPSendPreparedExperimentalTCPFramesEncryptedMultiFrameOptIn(t *testi
 			}
 		}
 	})
+}
+
+func TestPreparedExperimentalTCPSocketGSOGroupCoalescesEncryptedFragments(t *testing.T) {
+	packet := experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("192.0.2.1"),
+		DestinationIP:   netip.MustParseAddr("198.51.100.2"),
+		SourcePort:      40000,
+		DestinationPort: 9443,
+		Acknowledgment:  1,
+		Sequence:        1000,
+	}
+	payload := []byte("cipher-fragment")
+	frameLen := experimentaltcp.HeaderLen + len(payload)
+	items := make([]preparedExperimentalTCPTXFrame, 3)
+	for i := range items {
+		itemPacket := packet
+		itemPacket.Sequence += uint32(i * frameLen)
+		items[i] = preparedExperimentalTCPTXFrame{
+			packet: itemPacket,
+			wireFrame: experimentaltcp.Frame{
+				Flags:         experimentaltcp.FlagEncrypted | experimentaltcp.FlagCryptoFragment | experimentaltcp.FlagInnerIPv4,
+				FlowID:        7,
+				Epoch:         9,
+				Sequence:      uint64(i + 1),
+				FragmentIndex: uint16(i),
+				FragmentCount: uint16(len(items)),
+				Payload:       append([]byte(nil), payload...),
+			},
+		}
+	}
+
+	group, err := preparedExperimentalTCPSocketGSOGroupWithReason(items, 1460, 8, 0xffff)
+	if err != nil {
+		t.Fatalf("group encrypted fragments: %v", err)
+	}
+	if group.groupLen != len(items) {
+		t.Fatalf("group len = %d, want %d reject=%d", group.groupLen, len(items), group.reject)
+	}
+	if group.frameLen != frameLen {
+		t.Fatalf("frame len = %d, want %d", group.frameLen, frameLen)
+	}
+	if group.packetLen != 20+20+len(items)*frameLen {
+		t.Fatalf("packet len = %d, want %d", group.packetLen, 20+20+len(items)*frameLen)
+	}
+}
+
+func TestPreparedExperimentalTCPSocketGSOGroupCoalescesUserspaceSecurePayloads(t *testing.T) {
+	packet := experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("192.0.2.1"),
+		DestinationIP:   netip.MustParseAddr("198.51.100.2"),
+		SourcePort:      40000,
+		DestinationPort: 9443,
+		Acknowledgment:  1,
+		Sequence:        3000,
+	}
+	payload := append([]byte{'T', 'I', 'X', 'D'}, bytes.Repeat([]byte{0xa5}, 96)...)
+	frameLen := experimentaltcp.HeaderLen + len(payload)
+	items := make([]preparedExperimentalTCPTXFrame, 4)
+	for i := range items {
+		itemPacket := packet
+		itemPacket.Sequence += uint32(i * frameLen)
+		items[i] = preparedExperimentalTCPTXFrame{
+			packet: itemPacket,
+			wireFrame: experimentaltcp.Frame{
+				FlowID:   7,
+				Epoch:    9,
+				Sequence: uint64(i + 1),
+				Payload:  append([]byte(nil), payload...),
+			},
+		}
+	}
+
+	group, err := preparedExperimentalTCPSocketGSOGroupWithReason(items, 1460, 8, 0xffff)
+	if err != nil {
+		t.Fatalf("group userspace secure payloads: %v", err)
+	}
+	if group.groupLen != len(items) {
+		t.Fatalf("group len = %d, want %d reject=%d", group.groupLen, len(items), group.reject)
+	}
+}
+
+func TestPreparedExperimentalTCPSocketGSOGroupCoalescesUserspaceSecureFragments(t *testing.T) {
+	packet := experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("192.0.2.1"),
+		DestinationIP:   netip.MustParseAddr("198.51.100.2"),
+		SourcePort:      40000,
+		DestinationPort: 9443,
+		Acknowledgment:  1,
+		Sequence:        9000,
+	}
+	payloads := [][]byte{
+		append([]byte{'T', 'I', 'X', 'D'}, bytes.Repeat([]byte{0xa5}, 116)...),
+		bytes.Repeat([]byte{0xb6}, 120),
+		bytes.Repeat([]byte{0xc7}, 120),
+	}
+	frameLen := experimentaltcp.HeaderLen + len(payloads[0])
+	items := make([]preparedExperimentalTCPTXFrame, len(payloads))
+	for i := range items {
+		itemPacket := packet
+		itemPacket.Sequence += uint32(i * frameLen)
+		items[i] = preparedExperimentalTCPTXFrame{
+			packet: itemPacket,
+			wireFrame: experimentaltcp.Frame{
+				FlowID:        7,
+				Epoch:         9,
+				Sequence:      uint64(i + 1),
+				FragmentIndex: uint16(i),
+				FragmentCount: uint16(len(items)),
+				Payload:       append([]byte(nil), payloads[i]...),
+			},
+		}
+	}
+
+	group, err := preparedExperimentalTCPSocketGSOGroupWithReason(items, 1460, 8, 0xffff)
+	if err != nil {
+		t.Fatalf("group userspace secure fragments: %v", err)
+	}
+	if group.groupLen != len(items) {
+		t.Fatalf("group len = %d, want %d reject=%d", group.groupLen, len(items), group.reject)
+	}
+}
+
+func TestPreparedExperimentalTCPSocketGSOGroupRejectsSequenceAndLengthMismatch(t *testing.T) {
+	packet := experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("192.0.2.1"),
+		DestinationIP:   netip.MustParseAddr("198.51.100.2"),
+		SourcePort:      40000,
+		DestinationPort: 9443,
+		Acknowledgment:  1,
+		Sequence:        500,
+	}
+	payload := []byte("cipher")
+	frameLen := experimentaltcp.HeaderLen + len(payload)
+	first := preparedExperimentalTCPTXFrame{
+		packet: packet,
+		wireFrame: experimentaltcp.Frame{
+			Flags:    experimentaltcp.FlagEncrypted | experimentaltcp.FlagInnerIPv4,
+			FlowID:   7,
+			Epoch:    9,
+			Sequence: 1,
+			Payload:  append([]byte(nil), payload...),
+		},
+	}
+	second := first
+	second.packet.Sequence += uint32(frameLen + 1)
+	second.wireFrame.Sequence = 2
+	group, err := preparedExperimentalTCPSocketGSOGroupWithReason([]preparedExperimentalTCPTXFrame{first, second}, 1460, 8, 0xffff)
+	if err != nil {
+		t.Fatalf("sequence mismatch group: %v", err)
+	}
+	if group.groupLen != 1 || group.reject != preparedExperimentalTCPSocketGSORejectSequence {
+		t.Fatalf("sequence mismatch group = %#v, want singleton sequence reject", group)
+	}
+
+	second = first
+	second.packet.Sequence += uint32(frameLen)
+	second.wireFrame.Sequence = 2
+	second.wireFrame.Payload = []byte("different-length")
+	group, err = preparedExperimentalTCPSocketGSOGroupWithReason([]preparedExperimentalTCPTXFrame{first, second}, 1460, 8, 0xffff)
+	if err != nil {
+		t.Fatalf("length mismatch group: %v", err)
+	}
+	if group.groupLen != 1 || group.reject != preparedExperimentalTCPSocketGSORejectFrameLen {
+		t.Fatalf("length mismatch group = %#v, want singleton frame-len reject", group)
+	}
+}
+
+func TestMarshalPreparedExperimentalTCPSocketGSOIPv4FrameStream(t *testing.T) {
+	packet := experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("192.0.2.1"),
+		DestinationIP:   netip.MustParseAddr("198.51.100.2"),
+		SourcePort:      40000,
+		DestinationPort: 9443,
+		Acknowledgment:  1,
+		Sequence:        700,
+	}
+	payload := []byte("cipher-text")
+	frameLen := experimentaltcp.HeaderLen + len(payload)
+	items := make([]preparedExperimentalTCPTXFrame, 3)
+	for i := range items {
+		itemPacket := packet
+		itemPacket.Sequence += uint32(i * frameLen)
+		items[i] = preparedExperimentalTCPTXFrame{
+			packet: itemPacket,
+			wireFrame: experimentaltcp.Frame{
+				Flags:    experimentaltcp.FlagEncrypted | experimentaltcp.FlagInnerIPv4,
+				FlowID:   7,
+				Epoch:    9,
+				Sequence: uint64(i + 1),
+				Payload:  append([]byte(nil), payload...),
+			},
+		}
+	}
+	group, err := preparedExperimentalTCPSocketGSOGroupWithReason(items, 1460, 8, 0xffff)
+	if err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	wire := make([]byte, group.packetLen)
+	if err := marshalPreparedExperimentalTCPSocketGSOIPv4Into(items, wire); err != nil {
+		t.Fatalf("marshal socket GSO packet: %v", err)
+	}
+	packetOut, err := experimentaltcp.ParseTCPShapedIPv4NoCopySkipTCPChecksum(wire)
+	if err != nil {
+		t.Fatalf("parse socket GSO packet: %v", err)
+	}
+	if packetOut.Sequence != packet.Sequence {
+		t.Fatalf("outer sequence = %d, want %d", packetOut.Sequence, packet.Sequence)
+	}
+	if got, want := binary.BigEndian.Uint16(wire[20+16:20+18]), tcpPseudoHeaderPartialChecksum(wire, len(wire)-20); got != want {
+		t.Fatalf("partial TCP checksum = %#x, want %#x", got, want)
+	}
+	frames, err := experimentaltcp.ParseFrameStreamNoCopy(packetOut.Payload)
+	if err != nil {
+		t.Fatalf("parse TIXT stream: %v", err)
+	}
+	if len(frames) != len(items) {
+		t.Fatalf("frame count = %d, want %d", len(frames), len(items))
+	}
+	for i, frame := range frames {
+		if frame.Sequence != items[i].wireFrame.Sequence || !bytes.Equal(frame.Payload, items[i].wireFrame.Payload) {
+			t.Fatalf("frame %d = %#v, want %#v", i, frame, items[i].wireFrame)
+		}
+	}
+	virtio := make([]byte, virtioNetHdrLen)
+	if err := preparePreparedExperimentalTCPSocketGSOVirtioHeader(virtio, frameLen); err != nil {
+		t.Fatalf("prepare virtio header: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(virtio[4:6]); int(got) != frameLen {
+		t.Fatalf("gso size = %d, want %d", got, frameLen)
+	}
 }
 
 func testMinimalIPv4Payload(totalLen int) []byte {

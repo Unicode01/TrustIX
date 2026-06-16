@@ -1033,17 +1033,17 @@ MODULE_PARM_DESC(tx_plaintext_stream_coalesce_flush_jiffies,
 
 static bool trustix_datapath_rx_worker_steal_skb;
 module_param_cb(rx_worker_steal_skb,
-		&trustix_datapath_rx_worker_bool_ops,
+		&trustix_datapath_rx_worker_stolen_noop_bool_ops,
 		&trustix_datapath_rx_worker_steal_skb, 0644);
 MODULE_PARM_DESC(rx_worker_steal_skb,
-		 "Enable the constrained synchronous RX stolen-skb xmit path; legacy async stolen-skb worker queueing remains disabled");
+		 "Accept legacy stolen-skb requests; current safe implementation keeps the path disabled");
 
 static bool trustix_datapath_rx_worker_inline_stolen;
 module_param_cb(rx_worker_inline_stolen,
-		&trustix_datapath_rx_worker_bool_ops,
+		&trustix_datapath_rx_worker_stolen_noop_bool_ops,
 		&trustix_datapath_rx_worker_inline_stolen, 0644);
 MODULE_PARM_DESC(rx_worker_inline_stolen,
-		 "Transmit eligible decapsulated RX packets by rewriting the hook skb in place and returning NF_STOLEN");
+		 "Accept legacy inline stolen-skb requests; current safe implementation keeps the path disabled");
 
 static bool trustix_datapath_rx_worker_inline_receive;
 module_param_cb(rx_worker_inline_receive,
@@ -1083,6 +1083,13 @@ module_param_cb(rx_worker_xmit_more, &trustix_datapath_rx_worker_bool_ops,
 		&trustix_datapath_rx_worker_xmit_more, 0644);
 MODULE_PARM_DESC(rx_worker_xmit_more,
 		 "Set skb xmit_more on consecutive RX worker dev_queue_xmit packets; experimental and off by default");
+
+static bool trustix_datapath_rx_worker_tc_skip_classify;
+module_param_cb(rx_worker_tc_skip_classify,
+		&trustix_datapath_rx_worker_bool_ops,
+		&trustix_datapath_rx_worker_tc_skip_classify, 0644);
+MODULE_PARM_DESC(rx_worker_tc_skip_classify,
+		 "Set skb->tc_skip_classify on RX worker xmit packets; off by default so other TC programs can still classify TrustIX-generated LAN packets");
 
 static bool trustix_datapath_rx_worker_inline_xmit;
 module_param_cb(rx_worker_inline_xmit, &trustix_datapath_rx_worker_bool_ops,
@@ -8481,6 +8488,8 @@ trustix_datapath_rx_worker_request_tc_skip(struct sk_buff *skb)
 #if defined(CONFIG_NET_XGRESS)
 	if (!skb)
 		return;
+	if (!READ_ONCE(trustix_datapath_rx_worker_tc_skip_classify))
+		return;
 	if (!skb->tc_skip_classify) {
 		skb->tc_skip_classify = 1;
 		trustix_datapath_rx_worker_tc_skip_requests++;
@@ -8745,39 +8754,27 @@ trustix_datapath_rx_worker_mix_hash(__u32 hash)
 	return hash ?: 1;
 }
 
-static void
-trustix_datapath_rx_worker_set_hash_tx_queue(struct sk_buff *skb,
-					     const struct net_device *dev)
+static bool trustix_datapath_rx_worker_hash_ipv4_at_offset(
+	struct sk_buff *skb, unsigned int offset, unsigned int head_len,
+	__u32 *hash_out)
 {
 	const struct udphdr *udph;
 	const struct tcphdr *tcph;
 	const struct iphdr *iph;
-	unsigned int txq_count;
-	unsigned int offset;
-	unsigned int head_len;
 	__u32 ip_header_len;
 	__u32 l4_offset;
 	__u32 hash;
-	__u16 queue;
 
-	if (!READ_ONCE(trustix_datapath_rx_worker_xmit_hash_tx_queue))
-		return;
-	if (!skb || !dev)
-		goto fallback;
-	txq_count = READ_ONCE(dev->real_num_tx_queues);
-	if (txq_count <= 1)
-		goto fallback;
-	offset = skb_network_offset(skb);
-	head_len = skb_headlen(skb);
-	if (offset > head_len || head_len - offset < sizeof(*iph))
-		goto fallback;
+	if (!skb || !hash_out || offset > head_len ||
+	    head_len - offset < sizeof(*iph))
+		return false;
 	iph = (const struct iphdr *)(skb->data + offset);
 	if (iph->version != 4 || iph->ihl < 5)
-		goto fallback;
+		return false;
 	ip_header_len = iph->ihl * 4;
 	if (ip_header_len < sizeof(*iph) ||
 	    offset + ip_header_len > head_len)
-		goto fallback;
+		return false;
 	hash = (__force __u32)iph->saddr ^
 	       ((__force __u32)iph->daddr << 7) ^
 	       ((__force __u32)iph->daddr >> 9) ^
@@ -8801,6 +8798,51 @@ trustix_datapath_rx_worker_set_hash_tx_queue(struct sk_buff *skb,
 	default:
 		break;
 	}
+	*hash_out = hash;
+	return true;
+}
+
+static bool trustix_datapath_rx_worker_hash_inner_ipv4(
+	struct sk_buff *skb, unsigned int head_len, __u32 *hash_out)
+{
+	const struct ethhdr *eth;
+	unsigned int offset;
+
+	offset = skb_network_offset(skb);
+	if (trustix_datapath_rx_worker_hash_ipv4_at_offset(
+		    skb, offset, head_len, hash_out))
+		return true;
+	if (head_len >= ETH_HLEN + sizeof(struct iphdr)) {
+		eth = (const struct ethhdr *)skb->data;
+		if (eth->h_proto == htons(ETH_P_IP) &&
+		    trustix_datapath_rx_worker_hash_ipv4_at_offset(
+			    skb, ETH_HLEN, head_len, hash_out))
+			return true;
+	}
+	return trustix_datapath_rx_worker_hash_ipv4_at_offset(
+		skb, 0, head_len, hash_out);
+}
+
+static void
+trustix_datapath_rx_worker_set_hash_tx_queue(struct sk_buff *skb,
+					     const struct net_device *dev)
+{
+	unsigned int txq_count;
+	unsigned int head_len;
+	__u32 hash;
+	__u16 queue;
+
+	if (!READ_ONCE(trustix_datapath_rx_worker_xmit_hash_tx_queue))
+		return;
+	if (!skb || !dev)
+		goto fallback;
+	txq_count = READ_ONCE(dev->real_num_tx_queues);
+	if (txq_count <= 1)
+		goto fallback;
+	head_len = skb_headlen(skb);
+	if (!trustix_datapath_rx_worker_hash_inner_ipv4(skb, head_len,
+							&hash))
+		goto fallback;
 	queue = (__u16)(trustix_datapath_rx_worker_mix_hash(hash) %
 			txq_count);
 	skb_set_queue_mapping(skb, queue);

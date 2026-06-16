@@ -743,11 +743,18 @@ func testTrustIXFullDatapathHookLifecycle(t *testing.T) {
 	if _, err := DatapathHookDetach(TrustIXDatapathDevicePath); err != nil && err != syscall.ENOENT {
 		t.Fatalf("detach stale datapath hook: %v", err)
 	}
-	name := "tixdpd0"
-	if err := unixLinkAddDummy(name); err != nil {
-		t.Skipf("dummy netdev unavailable for datapath hook lifecycle: %v", err)
+	name := "tixdpl0"
+	peer := "tixdpp0"
+	if err := unixLinkAddVeth(name, peer); err != nil {
+		t.Skipf("veth unavailable for datapath hook lifecycle: %v", err)
 	}
 	defer unixLinkDelete(name)
+	if err := unixLinkSetUp(name); err != nil {
+		t.Skipf("unable to bring datapath hook veth up: %v", err)
+	}
+	if err := unixLinkSetUp(peer); err != nil {
+		t.Skipf("unable to bring datapath hook peer up: %v", err)
+	}
 	status, err := DatapathHook(TrustIXDatapathDevicePath, DatapathHookRequest{
 		Op:     TrustIXDatapathHookOpAttach,
 		IfName: name,
@@ -765,7 +772,7 @@ func testTrustIXFullDatapathHookLifecycle(t *testing.T) {
 	if !query.Attached || query.IfName != name || query.IfIndex != status.IfIndex {
 		t.Fatalf("unexpected hook query status: %#v attach=%#v", query, status)
 	}
-	generateHookTraffic(t, name)
+	generateHookTraffic(t, peer)
 	query, err = DatapathHookQuery(TrustIXDatapathDevicePath)
 	if err != nil {
 		t.Fatalf("query datapath hook after traffic: %v", err)
@@ -1717,15 +1724,9 @@ func readUint64File(path string) (uint64, error) {
 
 func generateHookTraffic(t *testing.T, name string) {
 	t.Helper()
-	commands := [][]string{
-		{"ip", "addr", "add", "198.18.77.1/32", "dev", name},
-		{"ip", "link", "set", name, "up"},
-		{"ping", "-c", "1", "-W", "1", "-I", name, "198.18.77.1"},
-	}
-	for _, command := range commands {
-		if err := exec.Command(command[0], command[1:]...).Run(); err != nil {
-			t.Skipf("unable to generate datapath hook traffic with %v: %v", command, err)
-		}
+	packet := buildIPv4UDPPacketWithPayload(0x0a520001, 0x0a520002, 12345, 5201, bytesOf(0x77, 32))
+	if err := sendIPv4EthernetFrame(name, packet); err != nil {
+		t.Skipf("unable to inject datapath hook traffic on %s: %v", name, err)
 	}
 }
 

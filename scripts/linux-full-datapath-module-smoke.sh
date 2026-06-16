@@ -225,6 +225,7 @@ verify_panic_risk_params_disabled() {
     rx_worker_xmit \
     rx_worker_direct_xmit \
     rx_worker_xmit_hash_tx_queue \
+    rx_worker_tc_skip_classify \
     rx_worker_xmit_more \
     rx_worker_inline_xmit \
     rx_worker_inline_pair_coalesce \

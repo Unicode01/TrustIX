@@ -73,7 +73,7 @@ func TestExperimentalTCPKernelCryptoXDPOpensFrameAndRejectsReplay(t *testing.T) 
 
 	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load experimental_tcp kernel crypto XDP object: %+v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
@@ -250,7 +250,7 @@ func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedTIXTByDefault(t *testin
 
 	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load experimental_tcp kernel crypto XDP object: %+v", err)
 	}
 	defer object.Close()
 	if _, err := configureExperimentalTCPBPFConfigValue(object.configMap, 1, false); err != nil {
@@ -299,6 +299,69 @@ func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedTIXTByDefault(t *testin
 	assertXDPStat(t, object, 0, 1)
 	assertXDPStat(t, object, 4, 0)
 	assertXDPStat(t, object, 5, 0)
+}
+
+func TestExperimentalTCPKernelCryptoXDPEncryptedTIXTPassesToTCSecureDirect(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("experimental_tcp encrypted XDP to TC secure direct handoff requires root")
+	}
+	manager := NewManager()
+	if err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("load manager: %v", err)
+	}
+	defer manager.closeKernelCryptoProviderMapLocked()
+	if !manager.kernelCryptoProductionReadyLocked() {
+		t.Skipf("kernel crypto provider is not ready: %s", manager.kernelCryptoUnavailableReasonLocked())
+	}
+
+	const (
+		flowID          = 9216
+		destinationPort = 9457
+		xdpPass         = 2
+	)
+	spec := validKernelCryptoSpec(flowID)
+	spec.RecvKey = append([]byte(nil), spec.SendKey...)
+	spec.RecvIV = append([]byte(nil), spec.SendIV...)
+	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+		t.Fatalf("install kernel crypto contexts: %v", err)
+	}
+	sealer, err := loadExperimentalTCPTXSealObject(manager.kernelCryptoProvider)
+	if err != nil {
+		t.Fatalf("load experimental_tcp TX seal XDP object: %-v", err)
+	}
+	defer sealer.Close()
+	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	if err != nil {
+		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+	}
+	defer object.Close()
+	key := uint32(0)
+	config := experimentalTCPConfigKernelUDPTCRXSecureDirect | experimentalTCPConfigKernelUDPXDPRXDirect | experimentalTCPConfigHotPathStats
+	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
+		t.Fatalf("enable XDP TIXT TC secure direct handoff: %v", err)
+	}
+	value := uint8(1)
+	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+		t.Fatalf("allow destination port in XDP map: %v", err)
+	}
+
+	inner := ipv4PacketForXDPTCRXDirectTest()
+	packet := sealTCPShapedEthernetWithFlagsForTest(t, sealer, flowID, spec.Epoch, 41, destinationPort, 1260, inner, experimentaltcp.FlagInnerIPv4)
+	run := &cebpf.RunOptions{Data: append([]byte(nil), packet...), DataOut: make([]byte, len(packet))}
+	ret, err := object.program.Run(run)
+	if err != nil {
+		t.Fatalf("run encrypted TIXT TC secure direct handoff: %v", err)
+	}
+	if ret != xdpPass {
+		t.Fatalf("encrypted TIXT TC secure direct handoff return = %d, want XDP_PASS", ret)
+	}
+	if !bytes.Equal(run.DataOut, packet) {
+		t.Fatalf("encrypted TIXT TC secure direct handoff modified packet")
+	}
+	assertXDPStat(t, object, 0, 0)
+	assertXDPStat(t, object, 4, 0)
+	assertXDPStat(t, object, 5, 0)
+	assertXDPStat(t, object, 14, 1)
 }
 
 func TestExperimentalTCPKernelCryptoXDPDefersNoContextToUserspace(t *testing.T) {

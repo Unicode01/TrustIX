@@ -14,20 +14,88 @@ import (
 	cebpf "github.com/cilium/ebpf"
 )
 
-//go:embed bpf/kernel_udp_rx_kernel_crypto_tc_bpfel.o
+//go:embed bpf/kernel_udp_rx_kernel_crypto_tc_bpfel.o bpf/kernel_udp_rx_kernel_crypto_tc_skbopen_bpfel.o bpf/kernel_udp_rx_kernel_crypto_tc_skbopen_decap_l2_bpfel.o
 var kernelUDPRXSecureDirectFS embed.FS
 
 type kernelUDPRXSecureDirectObject struct {
-	collection *cebpf.Collection
-	program    *cebpf.Program
+	collection    *cebpf.Collection
+	program       *cebpf.Program
+	skbOpenKfunc  bool
+	decapL2Kfunc  bool
+	variantErrors []string
 }
 
 const (
-	kernelUDPRXSecureDirectSKBOpenKfuncCompiled = false
-	kernelUDPRXSecureDirectDecapL2KfuncCompiled = false
+	kernelUDPRXSecureDirectSKBOpenKfuncCompiled = true
+	kernelUDPRXSecureDirectDecapL2KfuncCompiled = true
 )
 
 func loadKernelUDPRXSecureDirectObject(provider *kernelCryptoProviderObject, statsMap *cebpf.Map, portMap *cebpf.Map, neighMap *cebpf.Map, lanIfindex int, localIPv4 uint32, sourceMAC [6]byte, options kernelUDPRXDirectProgramOptions) (*kernelUDPRXSecureDirectObject, error) {
+	skbOpenKfunc := kernelUDPRXSecureDirectSKBOpenKfuncEnabled()
+	decapL2Kfunc := kernelUDPRXSecureDirectDecapL2KfuncEnabled()
+	var firstErr error
+	var variantErrors []string
+	for _, variant := range kernelUDPRXSecureDirectObjectVariants(skbOpenKfunc, decapL2Kfunc) {
+		object, err := loadKernelUDPRXSecureDirectObjectVariant(provider, statsMap, portMap, neighMap, lanIfindex, localIPv4, sourceMAC, options, variant.skbOpenKfunc, variant.decapL2Kfunc)
+		if err == nil {
+			object.variantErrors = variantErrors
+			return object, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		variantErrors = append(variantErrors, fmt.Sprintf("skb_open=%t decap_l2=%t: %s", variant.skbOpenKfunc, variant.decapL2Kfunc, summarizeKernelUDPRXSecureDirectVariantError(err)))
+	}
+	return nil, fmt.Errorf("load embedded kernel_udp secure TC RX direct object: %w", firstErr)
+}
+
+func summarizeKernelUDPRXSecureDirectVariantError(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.TrimSpace(err.Error())
+	if text == "" {
+		return err.Error()
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > 44 {
+		tail := append([]string{"..."}, lines[len(lines)-34:]...)
+		lines = append(lines[:10], tail...)
+	}
+	text = strings.Join(lines, "\n")
+	const maxLen = 6000
+	if len(text) > maxLen {
+		text = text[:maxLen] + "..."
+	}
+	return text
+}
+
+type kernelUDPRXSecureDirectObjectVariant struct {
+	skbOpenKfunc bool
+	decapL2Kfunc bool
+}
+
+func kernelUDPRXSecureDirectObjectVariants(skbOpenKfunc, decapL2Kfunc bool) []kernelUDPRXSecureDirectObjectVariant {
+	var variants []kernelUDPRXSecureDirectObjectVariant
+	add := func(skbOpen, decapL2 bool) {
+		for _, variant := range variants {
+			if variant.skbOpenKfunc == skbOpen && variant.decapL2Kfunc == decapL2 {
+				return
+			}
+		}
+		variants = append(variants, kernelUDPRXSecureDirectObjectVariant{skbOpenKfunc: skbOpen, decapL2Kfunc: decapL2})
+	}
+	add(skbOpenKfunc, decapL2Kfunc)
+	if decapL2Kfunc {
+		add(skbOpenKfunc, false)
+	}
+	if skbOpenKfunc {
+		add(false, false)
+	}
+	return variants
+}
+
+func loadKernelUDPRXSecureDirectObjectVariant(provider *kernelCryptoProviderObject, statsMap *cebpf.Map, portMap *cebpf.Map, neighMap *cebpf.Map, lanIfindex int, localIPv4 uint32, sourceMAC [6]byte, options kernelUDPRXDirectProgramOptions, skbOpenKfunc bool, decapL2Kfunc bool) (*kernelUDPRXSecureDirectObject, error) {
 	if provider == nil || provider.flowIndexMap == nil || provider.contextSlots == nil || provider.directSlotMap == nil {
 		return nil, fmt.Errorf("kernel_udp secure TC RX direct requires loaded kernel crypto provider maps")
 	}
@@ -37,12 +105,20 @@ func loadKernelUDPRXSecureDirectObject(provider *kernelCryptoProviderObject, sta
 	if lanIfindex <= 0 {
 		return nil, fmt.Errorf("invalid LAN ifindex %d", lanIfindex)
 	}
-	object, err := kernelUDPRXSecureDirectFS.ReadFile("bpf/kernel_udp_rx_kernel_crypto_tc_bpfel.o")
+	objectName := "kernel_udp_rx_kernel_crypto_tc_bpfel.o"
+	if skbOpenKfunc && decapL2Kfunc {
+		objectName = "kernel_udp_rx_kernel_crypto_tc_skbopen_decap_l2_bpfel.o"
+	} else if skbOpenKfunc {
+		objectName = "kernel_udp_rx_kernel_crypto_tc_skbopen_bpfel.o"
+	} else if decapL2Kfunc {
+		return nil, fmt.Errorf("kernel_udp secure TC RX direct decap-l2 kfunc requires skb-open object")
+	}
+	object, err := kernelUDPRXSecureDirectFS.ReadFile("bpf/" + objectName)
 	if err != nil {
-		return nil, fmt.Errorf("read embedded kernel_udp secure TC RX direct object: %w", err)
+		return nil, fmt.Errorf("read embedded kernel_udp secure TC RX direct object %q: %w", objectName, err)
 	}
 	if len(object) == 0 {
-		return nil, fmt.Errorf("embedded kernel_udp secure TC RX direct object is empty")
+		return nil, fmt.Errorf("embedded kernel_udp secure TC RX direct object %q is empty", objectName)
 	}
 	defer debug.FreeOSMemory()
 
@@ -66,8 +142,8 @@ func loadKernelUDPRXSecureDirectObject(provider *kernelCryptoProviderObject, sta
 		"trustix_kudp_rx_secure_broadcast":            boolAsUint32(options.Broadcast),
 		"trustix_kudp_rx_secure_hot_stats":            boolAsUint32(experimentalTCPHotPathStats()),
 		"trustix_kudp_rx_secure_direct_open_kfunc":    boolAsUint32(kernelUDPRXSecureDirectKfuncOpenEnabled()),
-		"trustix_kudp_rx_secure_skb_open_kfunc":       boolAsUint32(kernelUDPRXSecureDirectSKBOpenKfuncEnabled()),
-		"trustix_kudp_rx_secure_decap_l2_kfunc":       boolAsUint32(kernelUDPRXSecureDirectDecapL2KfuncEnabled()),
+		"trustix_kudp_rx_secure_skb_open_kfunc":       boolAsUint32(skbOpenKfunc),
+		"trustix_kudp_rx_secure_decap_l2_kfunc":       boolAsUint32(decapL2Kfunc),
 		"trustix_kudp_rx_secure_recompute_inner_csum": boolAsUint32(kernelUDPRXSecureDirectRecomputeInnerChecksumEnabled()),
 	}
 	for name, value := range variables {
@@ -115,8 +191,10 @@ func loadKernelUDPRXSecureDirectObject(provider *kernelCryptoProviderObject, sta
 		return nil, fmt.Errorf("load embedded kernel_udp secure TC RX direct object: %w", err)
 	}
 	objectHandle := &kernelUDPRXSecureDirectObject{
-		collection: coll,
-		program:    coll.Programs["trustix_kudp_rx_secure"],
+		collection:   coll,
+		program:      coll.Programs["trustix_kudp_rx_secure"],
+		skbOpenKfunc: skbOpenKfunc,
+		decapL2Kfunc: decapL2Kfunc,
 	}
 	if objectHandle.program == nil {
 		objectHandle.Close()
@@ -152,10 +230,10 @@ func uint16FromMACSuffix(mac [6]byte) uint16 {
 
 func kernelUDPRXSecureDirectKfuncOpenEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN"))) {
-	case "0", "false", "no", "off", "disabled":
-		return false
-	default:
+	case "1", "true", "yes", "on", "enabled":
 		return true
+	default:
+		return false
 	}
 }
 

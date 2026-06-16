@@ -51,6 +51,8 @@ experimental_tcp_kernel_crypto_tx_xdp_bpfel.o|kernel/bpf/dataplane/experimental_
 kernel_udp_xdp_bpfel.o|kernel/bpf/dataplane/kernel_udp_xdp.c|
 kernel_udp_tx_kernel_crypto_tc_bpfel.o|kernel/bpf/dataplane/kernel_udp_tx_kernel_crypto_tc.c|
 kernel_udp_rx_kernel_crypto_tc_bpfel.o|kernel/bpf/dataplane/kernel_udp_rx_kernel_crypto_tc.c|
+kernel_udp_rx_kernel_crypto_tc_skbopen_bpfel.o|kernel/bpf/dataplane/kernel_udp_rx_kernel_crypto_tc.c|-DTRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC=1
+kernel_udp_rx_kernel_crypto_tc_skbopen_decap_l2_bpfel.o|kernel/bpf/dataplane/kernel_udp_rx_kernel_crypto_tc.c|-DTRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC=1 -DTRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC=1
 skb_kfunc_tc_bpfel.o|kernel/bpf/dataplane/skb_kfunc_tc.c|
 kernel_crypto_provider_bpfel.o|kernel/bpf/dataplane/kernel_crypto_provider.c|
 kernel_crypto_selftest_bpfel.o|kernel/bpf/dataplane/kernel_crypto_selftest.c|

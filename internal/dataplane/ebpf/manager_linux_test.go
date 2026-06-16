@@ -1220,13 +1220,24 @@ func TestKernelUDPTXSecureDirectCanFixInnerChecksumsWithoutTrustFlag(t *testing.
 		t.Fatalf("read kernel_udp TX secure C source: %v", err)
 	}
 	gate := []byte("if (!trustix_kudp_tx_fix_inner_checksums &&\n        !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TRUST_INNER_CHECKSUM))")
-	if got := bytes.Count(source, gate); got != 2 {
-		t.Fatalf("secure direct checksum gate count = %d, want 2 kernel_udp and experimental_tcp paths", got)
+	if got := bytes.Count(source, gate); got != 1 {
+		t.Fatalf("secure direct checksum gate count = %d, want 1 shared fallback path", got)
 	}
 	legacyGate := []byte("if (!(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TRUST_INNER_CHECKSUM))")
 	if bytes.Contains(source, legacyGate) {
 		t.Fatal("secure direct still requires trusted inner checksums before the checksum-fix compatibility path")
 	}
+}
+
+func TestKernelUDPTXSecureDirectRouteGSOPassesTrustPartialInnerChecksum(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_tx_kernel_crypto_tc.c"))
+	if err != nil {
+		t.Fatalf("read kernel_udp TX secure C source: %v", err)
+	}
+	body := sourceFunctionBody(t, string(source), "trustix_secure_route_gso_direct")
+	requireSourceContains(t, body, "TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM")
+	requireSourceContains(t, body, "if (!trustix_kudp_tx_fix_inner_checksums &&")
+	requireSourceContains(t, body, "(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TRUST_INNER_CHECKSUM)")
 }
 
 func TestKernelUDPTXSecureDirectKfuncSealUsesSplitCipherBuffer(t *testing.T) {
@@ -2745,7 +2756,7 @@ func TestEnsureKernelTransportFastPathRequireKernelFailsAttachFailure(t *testing
 	}
 }
 
-func TestEnsureKernelTransportFastPathDetachesAFXDPForFullPlaintext(t *testing.T) {
+func TestEnsureKernelTransportFastPathDetachesAFXDPPForFullPlaintext(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
@@ -2763,9 +2774,6 @@ func TestEnsureKernelTransportFastPathDetachesAFXDPForFullPlaintext(t *testing.T
 	manager.expTCPFastPath.provider = "af_xdp"
 	manager.expTCPFastPath.done = make(chan struct{})
 	manager.expTCPFastPath.ready.Store(true)
-	for _, socket := range manager.expTCPFastPath.sockets {
-		socket.fd = -1
-	}
 
 	if err := manager.ensureKernelTransportFastPathLocked(context.Background()); err != nil {
 		t.Fatalf("full plaintext should detach AF_XDP without error: %v", err)
@@ -5273,6 +5281,27 @@ func TestExperimentalTCPPayloadMaxClampsToUnderlayMTU(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPPayloadMaxUsesFastPathLinkMTU(t *testing.T) {
+	manager := NewManager()
+	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
+	manager.expTCPFastPath.ready.Store(true)
+	manager.expTCPFastPath.sockets[0].umemFrameSize = 4096
+	manager.expTCPFastPath.sockets[0].linkMTU = 1500
+
+	got, err := manager.ExperimentalTCPPayloadMax(context.Background(), dataplane.CryptoPlacementUserspace, false)
+	if err != nil {
+		t.Fatalf("payload max: %v", err)
+	}
+	want := 1500 - rejectIPv4HeaderLen - rejectTCPHeaderLen - experimentaltcp.HeaderLen
+	if got != want {
+		t.Fatalf("userspace payload max = %d, want %d", got, want)
+	}
+	stats := manager.experimentalTCPProviderStatsLocked()
+	if stats["effective_payload_max"] != uint64(want) || stats["underlay_mtu_l3"] != 1500 {
+		t.Fatalf("stats payload/mtu = %d/%d, want %d/1500", stats["effective_payload_max"], stats["underlay_mtu_l3"], want)
+	}
+}
+
 func TestExperimentalTCPPayloadMaxUsesRawFallbackMTU(t *testing.T) {
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK", "1")
 	manager := NewManager()
@@ -5844,6 +5873,48 @@ func TestKernelUDPTXSecureDirectRouteWithoutEndpointUsesPreferredTransportOnly(t
 		if flows[i].id != wantID || !flows[i].experimentalTCP {
 			t.Fatalf("flow[%d] = %+v, want experimental_tcp flow %d", i, flows[i], wantID)
 		}
+	}
+}
+
+func TestKernelUDPTXSecureDirectExperimentalTCPUsesAttachSpecDirectFlag(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		ExperimentalTCPTXDirect:                  true,
+		KernelUDPTXSecureDirect:                  true,
+		KernelUDPSecureDirectTrustInnerChecksums: true,
+	}
+	manager.kernelUDPTXSecureDirectAttached = true
+	manager.snapshot = dataplane.Snapshot{
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        core.EndpointID("ix-b-tixt"),
+			Peer:      core.IXID("ix-b"),
+			Transport: "experimental_tcp",
+			Enabled:   true,
+			Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
+		}},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		21: {
+			ID:              21,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "192.0.2.1:42021",
+			RemoteAddress:   "198.51.100.21:18001",
+			CryptoPlacement: dataplane.CryptoPlacementKernel,
+		},
+	}
+	route := routing.Route{
+		Prefix:   core.Prefix("10.50.0.0/16"),
+		NextHop:  core.IXID("ix-b"),
+		Endpoint: core.EndpointID("ix-b-tixt"),
+	}
+
+	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, true, kernelUDPTXRouteMaxFlows)
+	if len(flows) != 1 {
+		t.Fatalf("secure experimental_tcp direct flows = %d, want one flow from attach spec: %+v", len(flows), flows)
+	}
+	if flows[0].id != 21 || !flows[0].experimentalTCP {
+		t.Fatalf("secure experimental_tcp flow = %+v, want experimental_tcp flow 21", flows[0])
 	}
 }
 
@@ -7281,10 +7352,10 @@ func TestKernelUDPRXDirectDecapL2KfuncDefaultsOff(t *testing.T) {
 	}
 }
 
-func TestKernelUDPRXSecureDirectKfuncOpenDefaultsOn(t *testing.T) {
+func TestKernelUDPRXSecureDirectKfuncOpenDefaultsOff(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN", "")
-	if !kernelUDPRXSecureDirectKfuncOpenEnabled() {
-		t.Fatal("RX kfunc open default disabled, want direct .ko open path")
+	if kernelUDPRXSecureDirectKfuncOpenEnabled() {
+		t.Fatal("RX kfunc open default enabled; custom SIMD kfuncs must be explicit opt-in")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN", "1")
 	if !kernelUDPRXSecureDirectKfuncOpenEnabled() {
@@ -7300,22 +7371,38 @@ func TestKernelUDPRXSecureDirectKfuncOpenDefaultsOn(t *testing.T) {
 	}
 }
 
-func TestKernelUDPRXSecureDirectHelperKfuncsCompiledOutByDefault(t *testing.T) {
+func TestKernelUDPRXSecureDirectHelperKfuncsKeepSKBOpenOptIn(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC", "")
 	if kernelUDPRXSecureDirectSKBOpenKfuncEnabled() {
-		t.Fatal("secure RX skb-open helper kfunc enabled by default; datapath helper kfuncs must be explicit opt-in")
+		t.Fatal("secure RX skb-open helper kfunc enabled by default; keep experimental skb-open path opt-in")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC", "1")
+	if !kernelUDPRXSecureDirectSKBOpenKfuncEnabled() {
+		t.Fatal("secure RX skb-open helper kfunc ignored explicit opt-in")
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC", "0")
 	if kernelUDPRXSecureDirectSKBOpenKfuncEnabled() {
-		t.Fatal("secure RX skb-open helper kfunc enabled while the embedded object is built without datapath helper kfunc support")
+		t.Fatal("secure RX skb-open helper kfunc ignored explicit opt-out")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_DECAP_L2_KFUNC", "")
 	if kernelUDPRXSecureDirectDecapL2KfuncEnabled() {
 		t.Fatal("secure RX decap L2 helper kfunc enabled by default; datapath helper kfuncs must be explicit opt-in")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_DECAP_L2_KFUNC", "1")
-	if kernelUDPRXSecureDirectDecapL2KfuncEnabled() {
-		t.Fatal("secure RX decap L2 helper kfunc enabled while the embedded object is built without datapath helper kfunc support")
+	if !kernelUDPRXSecureDirectDecapL2KfuncEnabled() {
+		t.Fatal("secure RX decap L2 helper kfunc ignored explicit opt-in")
+	}
+}
+
+func TestKernelUDPRXSecureDirectObjectVariantsPreferDecapAndFallback(t *testing.T) {
+	variants := kernelUDPRXSecureDirectObjectVariants(true, true)
+	want := []kernelUDPRXSecureDirectObjectVariant{
+		{skbOpenKfunc: true, decapL2Kfunc: true},
+		{skbOpenKfunc: true, decapL2Kfunc: false},
+		{skbOpenKfunc: false, decapL2Kfunc: false},
+	}
+	if !reflect.DeepEqual(variants, want) {
+		t.Fatalf("secure RX variants = %+v, want %+v", variants, want)
 	}
 }
 
@@ -7356,23 +7443,52 @@ func TestKernelUDPRXSecureDirectHelperKfuncsAreCompileTimeOptional(t *testing.T)
 	if err != nil {
 		t.Fatalf("read kernel_udp RX secure loader: %v", err)
 	}
-	if !bytes.Contains(loader, []byte("kernelUDPRXSecureDirectSKBOpenKfuncCompiled = false")) ||
-		!bytes.Contains(loader, []byte("kernelUDPRXSecureDirectDecapL2KfuncCompiled = false")) {
-		t.Fatal("secure RX loader must keep helper kfuncs disabled for the default embedded object")
+	if !bytes.Contains(loader, []byte("kernelUDPRXSecureDirectSKBOpenKfuncCompiled = true")) ||
+		!bytes.Contains(loader, []byte("kernelUDPRXSecureDirectDecapL2KfuncCompiled = true")) {
+		t.Fatal("secure RX loader must enable compiled skb-open and decap-L2 embedded objects")
+	}
+	if !bytes.Contains(loader, []byte("kernel_udp_rx_kernel_crypto_tc_skbopen_bpfel.o")) {
+		t.Fatal("secure RX loader must be able to select the skb-open embedded object")
+	}
+	if !bytes.Contains(loader, []byte("kernel_udp_rx_kernel_crypto_tc_skbopen_decap_l2_bpfel.o")) {
+		t.Fatal("secure RX loader must be able to select the skb-open decap-L2 embedded object")
 	}
 }
 
-func TestExperimentalTCPOpenBorrowedPoolDefaultsAutoOn(t *testing.T) {
+func TestKernelUDPOpenBorrowedPoolDefaultsOffAndExperimentalTCPAutoOn(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_OPEN_BORROW_POOL", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_SEAL_BORROW_POOL", "")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_OPEN_BORROW_POOL", "")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_OPEN_INPLACE", "")
 	t.Setenv("TRUSTIX_AF_XDP_TX_DEFER_FLUSH", "")
-	if !kernelUDPOpenBorrowedPoolEnabled() {
-		t.Fatal("kernel_udp borrowed-open default changed unexpectedly")
+	if kernelUDPOpenBorrowedPoolEnabled() {
+		t.Fatal("kernel_udp borrowed-open default enabled")
+	}
+	if kernelUDPSealBorrowedPoolEnabled() {
+		t.Fatal("kernel_udp borrowed-seal default enabled")
 	}
 	if !experimentalTCPOpenBorrowedPoolEnabled() {
 		t.Fatal("experimental_tcp borrowed-open auto default disabled")
 	}
+
+	t.Setenv("TRUSTIX_KERNEL_UDP_OPEN_BORROW_POOL", "1")
+	if !kernelUDPOpenBorrowedPoolEnabled() {
+		t.Fatal("kernel_udp borrowed-open ignored explicit opt-in")
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_SEAL_BORROW_POOL", "1")
+	if !kernelUDPSealBorrowedPoolEnabled() {
+		t.Fatal("kernel_udp borrowed-seal ignored explicit opt-in")
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_OPEN_BORROW_POOL", "0")
+	if kernelUDPOpenBorrowedPoolEnabled() {
+		t.Fatal("kernel_udp borrowed-open ignored explicit opt-out")
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_SEAL_BORROW_POOL", "0")
+	if kernelUDPSealBorrowedPoolEnabled() {
+		t.Fatal("kernel_udp borrowed-seal ignored explicit opt-out")
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_OPEN_BORROW_POOL", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_SEAL_BORROW_POOL", "")
 
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_OPEN_INPLACE", "1")
 	if experimentalTCPOpenBorrowedPoolEnabled() {
@@ -7384,7 +7500,6 @@ func TestExperimentalTCPOpenBorrowedPoolDefaultsAutoOn(t *testing.T) {
 		t.Fatal("experimental_tcp borrowed-open auto ignored deferred TX flush")
 	}
 	t.Setenv("TRUSTIX_AF_XDP_TX_DEFER_FLUSH", "")
-	t.Setenv("TRUSTIX_KERNEL_UDP_OPEN_BORROW_POOL", "0")
 	if !experimentalTCPOpenBorrowedPoolEnabled() {
 		t.Fatal("experimental_tcp borrowed-open incorrectly inherited kernel_udp opt-out")
 	}
@@ -14249,6 +14364,22 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 	if !strings.Contains(tryBody, "first->route_flow_mask") {
 		t.Fatal("route TCP GSO cross-item worker must self-degrade multi-flow route entries")
 	}
+	secureRouteBody := sourceFunctionBody(t, source, "trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async_ex")
+	if !strings.Contains(secureRouteBody, "if (secure) {\n\t\tsequence = atomic64_fetch_add(\n\t\t\tsegment_count,") ||
+		!strings.Contains(secureRouteBody, "&trustix_route_tcp_gso_secure_outer_sequence") ||
+		!strings.Contains(secureRouteBody, "item->outer_sequence = outer_sequence;") {
+		t.Fatal("secure route TCP GSO must keep AEAD frame sequence separate from the outer TCP byte-sequence range")
+	}
+	secureStreamBody := sourceFunctionBody(t, source, "trustix_tixt_tx_route_gso_async_try_stream_direct")
+	if !strings.Contains(secureStreamBody, "outer_sequence += frame_len;") ||
+		!strings.Contains(secureStreamBody, "sequence += item->tmpl.secure ? 1 : frame_len;") {
+		t.Fatal("secure route TCP GSO direct stream must keep outer TCP bytes separate from AEAD frame sequence")
+	}
+	processBody := sourceFunctionBody(t, source, "trustix_tixt_tx_route_gso_async_process_item")
+	if !strings.Contains(processBody, "if (!item->resliced || item->tmpl.secure)") ||
+		!strings.Contains(processBody, "if (item->tmpl.secure)") {
+		t.Fatal("secure route TCP GSO must not fall through to plaintext async segmentation fallback")
+	}
 	workerBody := sourceFunctionBody(t, source, "trustix_route_tcp_xmit_worker_fn")
 	if !strings.Contains(workerBody, "trustix_tixt_tx_sanitize_route_gso_xmit_skb(skb, dev)") {
 		t.Fatal("route TCP xmit worker must sanitize skb before dev_queue_xmit")
@@ -14304,6 +14435,7 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 		"rx_worker_xmit",
 		"rx_worker_xmit_hash_tx_queue",
 		"rx_worker_xmit_more",
+		"rx_worker_tc_skip_classify",
 		"rx_worker_inline_xmit",
 		"rx_worker_inline_xmit_copy_csum",
 		"rx_worker_inline_pair_coalesce",
@@ -14369,6 +14501,9 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	}
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_direct_xmit_safe_fallbacks++;")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_inline_receive_safe_fallbacks++;")
+	requireSourceContains(t, datapathSource, "static bool trustix_datapath_rx_worker_tc_skip_classify;")
+	tcSkipBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_request_tc_skip")
+	requireSourceContains(t, tcSkipBody, "if (!READ_ONCE(trustix_datapath_rx_worker_tc_skip_classify))\n\t\treturn;")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_param_set_stolen_noop")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_steal_param_safe_fallbacks++;")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_param_set_unsafe_bool_noop")
@@ -14496,19 +14631,27 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	requireSourceNotContains(t, cryptoSource, "WRITE_ONCE(trustix_kfunc_simd_fastpath, false);")
 }
 
-func TestTrustIXCryptoDirectKfuncSnapshotsBeforeFPU(t *testing.T) {
+func TestTrustIXCryptoDirectKfuncKeepsSnapshotFallbackForSlotFastpathOptOut(t *testing.T) {
 	cryptoSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_crypto", "trustix_crypto.c"))
+
+	requireModuleParamPermission(t, cryptoSource, "kfunc_direct_slot_fastpath", "0644")
+	requireSourceContains(t, cryptoSource, "static bool trustix_kfunc_direct_slot_fastpath = true;")
 
 	snapshotBody := sourceFunctionBody(t, cryptoSource, "trustix_aead_direct_snapshot_slot")
 	requireSourceContains(t, snapshotBody, "rcu_read_lock();")
 	requireSourceContains(t, snapshotBody, "rcu_read_unlock();")
 	requireSourceNotContains(t, snapshotBody, "kernel_fpu_begin();")
 
-	cryptBody := sourceFunctionBody(t, cryptoSource, "trustix_aead_direct_crypt_one")
-	requireSourceContains(t, cryptBody, "kernel_fpu_begin();")
-	requireSourceContains(t, cryptBody, "kernel_fpu_end();")
-	requireSourceNotContains(t, cryptBody, "rcu_read_lock();")
-	requireSourceNotContains(t, cryptBody, "rcu_read_unlock();")
+	requireSourceContains(t, cryptoSource, "if (!in_task())\n\t\treturn false;")
+	requireSourceContains(t, cryptoSource, "if (!trustix_aead_fpu_begin())\n\t\treturn -EOPNOTSUPP;\n\tret = trustix_aead_direct_crypt_one_nofpu")
+	requireSourceContains(t, cryptoSource, "trustix_aead_fpu_end();")
+
+	slotBody := sourceFunctionBody(t, cryptoSource, "trustix_aead_direct_crypt_one_slot_rcu")
+	requireSourceContains(t, slotBody, "if (!trustix_kfunc_direct_slot_fastpath)")
+	requireSourceContains(t, slotBody, "rcu_read_lock();")
+	requireSourceContains(t, slotBody, "rcu_read_unlock();")
+	requireSourceContains(t, slotBody, "trustix_aead_fpu_begin()")
+	requireSourceContains(t, slotBody, "trustix_aead_fpu_end();")
 
 	for _, name := range []string{
 		"trustix_kernel_direct_seal",
@@ -14517,14 +14660,18 @@ func TestTrustIXCryptoDirectKfuncSnapshotsBeforeFPU(t *testing.T) {
 		"trustix_kernel_skb_direct_seal",
 	} {
 		body := sourceFunctionBody(t, cryptoSource, name)
-		snapshot := strings.Index(body, "trustix_aead_direct_snapshot_slot")
-		crypt := strings.Index(body, "trustix_aead_direct_crypt_one")
-		if snapshot < 0 || crypt < 0 || snapshot > crypt {
-			t.Fatalf("%s must snapshot the direct slot before crypt: snapshot=%d crypt=%d", name, snapshot, crypt)
+		slot := strings.Index(body, "trustix_aead_direct_crypt_one_slot_rcu")
+		fallback := strings.Index(body, "trustix_aead_direct_snapshot_slot")
+		if slot < 0 || fallback < 0 || slot > fallback {
+			t.Fatalf("%s must try direct slot before snapshot fallback: slot=%d fallback=%d", name, slot, fallback)
 		}
 		requireSourceNotContains(t, body, "rcu_read_lock();")
 		requireSourceNotContains(t, body, "rcu_read_unlock();")
 	}
+
+	skbOpenBody := sourceFunctionBody(t, cryptoSource, "trustix_kernel_skb_direct_open")
+	requireSourceContains(t, skbOpenBody, "if (tail_len)\n\t\treturn -EOPNOTSUPP;")
+	requireSourceNotContains(t, skbOpenBody, "memmove(cipher + plain_len")
 }
 
 func readSourceFile(t *testing.T, path string) string {

@@ -25,6 +25,7 @@ type kernelUDPTXSecureDirectObject struct {
 type kernelUDPTXSecureDirectProgramOptions struct {
 	KfuncSeal                bool
 	SKBSealKfunc             bool
+	SecureRouteTCPGSOKfunc   bool
 	FixInnerChecksums        bool
 	InnerTCPChecksumKfunc    bool
 	OuterTCPChecksumKfunc    bool
@@ -70,6 +71,11 @@ func loadKernelUDPTXSecureDirectObject(provider *kernelCryptoProviderObject, sta
 	if variable := spec.Variables["trustix_kudp_tx_secure_skb_seal_kfunc"]; variable != nil {
 		if err := variable.Set(boolAsUint32(options.SKBSealKfunc)); err != nil {
 			return nil, fmt.Errorf("configure kernel_udp secure TC TX direct skb seal: %w", err)
+		}
+	}
+	if variable := spec.Variables["trustix_kudp_tx_secure_route_gso_kfunc"]; variable != nil {
+		if err := variable.Set(boolAsUint32(options.SecureRouteTCPGSOKfunc)); err != nil {
+			return nil, fmt.Errorf("configure kernel_udp secure TC TX route TCP GSO kfunc: %w", err)
 		}
 	}
 	if variable := spec.Variables["trustix_kudp_tx_fix_inner_checksums"]; variable != nil {

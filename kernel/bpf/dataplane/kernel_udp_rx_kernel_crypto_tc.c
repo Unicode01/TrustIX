@@ -86,6 +86,7 @@ const volatile __u32 trustix_kudp_rx_secure_recompute_inner_csum = 0;
 #define TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_NO_REPLAY 2
 #define TRUSTIX_KUDP_RX_PLAIN_BUFFER_PLAIN 0
 #define TRUSTIX_KUDP_RX_PLAIN_BUFFER_CIPHER 1
+#define TRUSTIX_KUDP_RX_DECAP_L2_TRUST_INNER_L4_CSUM 1
 #define TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD (20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
 #define TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN (14 + 20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
 #define TRUSTIX_KUDP_SECURE_CIPHER_OFFSET TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN
@@ -604,11 +605,18 @@ static __always_inline int trustix_kernel_udp_unfragmented(__u8 *frame)
            frame[30] == 0 && frame[31] == 0;
 }
 
-static __always_inline int trustix_open_secure_frame(struct __sk_buff *skb,
-                                                     __u32 cipher_offset,
-                                                     __u32 cipher_len,
-                                                     __u32 namespace,
-                                                     struct trustix_kudp_rx_secure_scratch *scratch)
+#if TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
+#define TRUSTIX_KUDP_RX_SECURE_FALLBACK_INLINE __noinline
+#else
+#define TRUSTIX_KUDP_RX_SECURE_FALLBACK_INLINE __always_inline
+#endif
+
+static TRUSTIX_KUDP_RX_SECURE_FALLBACK_INLINE int trustix_open_secure_frame(
+    struct __sk_buff *skb,
+    __u32 cipher_offset,
+    __u32 cipher_len,
+    __u32 namespace,
+    struct trustix_kudp_rx_secure_scratch *scratch)
 {
     struct trustix_kernel_crypto_flow_key key = {};
     struct trustix_kernel_crypto_ctx_value *state;
@@ -864,6 +872,20 @@ static __always_inline __u32 trustix_l2_tail1(const struct trustix_kudp_rx_secur
     return ((__u32)scratch->header[12]) | ((__u32)scratch->header[13] << 8);
 }
 
+static __always_inline __u32 trustix_l2_tail1_decap_flags(const struct trustix_kudp_rx_secure_scratch *scratch)
+{
+    __u32 tail = trustix_l2_tail1(scratch);
+
+    /*
+     * The secure performance path preserves inner L4 checksum validity.
+     * Tell the helper not to force CHECKSUM_NONE, otherwise TCP can stall
+     * while ICMP still works on the decap_l2 path.
+     */
+    if (!trustix_kudp_rx_secure_recompute_inner_csum)
+        tail |= TRUSTIX_KUDP_RX_DECAP_L2_TRUST_INNER_L4_CSUM << 16;
+    return tail;
+}
+
 static __noinline int trustix_secure_decap_l2_kfunc(struct __sk_buff *skb,
                                                     struct trustix_kudp_rx_secure_scratch *scratch,
                                                     __u32 decap_len,
@@ -887,7 +909,7 @@ static __noinline int trustix_secure_decap_l2_kfunc(struct __sk_buff *skb,
         return -14;
     return trustix_kernel_skb_kudp_rx_decap_l2(
         skb, bounded_decap_len, trustix_l2_head(scratch),
-        trustix_l2_tail0(scratch), trustix_l2_tail1(scratch));
+        trustix_l2_tail0(scratch), trustix_l2_tail1_decap_flags(scratch));
 }
 #endif
 
@@ -1212,7 +1234,8 @@ opened:
         if (skb_opened) {
             if (trustix_kernel_skb_kudp_rx_decap_l2(
                     skb, decap_len, trustix_l2_head(scratch),
-                    trustix_l2_tail0(scratch), trustix_l2_tail1(scratch)))
+                    trustix_l2_tail0(scratch),
+                    trustix_l2_tail1_decap_flags(scratch)))
                 goto adjust_error;
         } else if (trustix_secure_decap_l2_kfunc(skb, scratch, decap_len, inner_len)) {
             goto adjust_error;

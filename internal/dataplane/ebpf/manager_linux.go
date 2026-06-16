@@ -151,6 +151,8 @@ type Manager struct {
 	kernelUDPTXDirectSync                       kernelUDPTXDirectSyncStats
 	kernelUDPRXDirectAttached                   bool
 	kernelUDPRXSecureDirectAttached             bool
+	kernelUDPRXSecureDirectSKBOpenKfunc         bool
+	kernelUDPRXSecureDirectDecapL2Kfunc         bool
 	nativeTunnelRoutes                          map[string]nativeTunnelRouteState
 	natSourceEntries                            uint64
 	natRouteEntries                             uint64
@@ -2423,7 +2425,7 @@ func (manager *Manager) InjectLocalPacket(ctx context.Context, packet []byte) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ipPacket, dst, err := ipv4Payload(packet)
+	ipPacket, dst, err := normalizedIPv4PayloadForInjection(packet)
 	if err != nil {
 		manager.recordDrop(observability.DropInvalidPacket)
 		return err
@@ -2444,6 +2446,16 @@ func (manager *Manager) InjectLocalPacket(ctx context.Context, packet []byte) er
 		return err
 	}
 	return nil
+}
+
+func normalizedIPv4PayloadForInjection(packet []byte) ([]byte, [4]byte, error) {
+	ipPacket, dst, err := ipv4Payload(packet)
+	if err != nil {
+		return nil, [4]byte{}, err
+	}
+	normalized := append([]byte(nil), ipPacket...)
+	normalizeCapturePayloadChecksumsInPlace(normalized)
+	return normalized, dst, nil
 }
 
 func (manager *Manager) InjectNATPacket(ctx context.Context, packet []byte, destination netip.Addr) error {
@@ -3564,6 +3576,13 @@ func (manager *Manager) experimentalTCPUnderlayMTULocked() int {
 			}
 		}
 	}
+	if manager.expTCPFastPath != nil {
+		if fastPathMTU := manager.expTCPFastPath.UnderlayMTU(); fastPathMTU > 0 {
+			if mtu == 0 || fastPathMTU < mtu {
+				mtu = fastPathMTU
+			}
+		}
+	}
 	return mtu
 }
 
@@ -4305,7 +4324,7 @@ func (manager *Manager) sealPreparedKernelUDPFrames(prepared []preparedKernelUDP
 				var sealed [][]byte
 				var release func()
 				var err error
-				if len(requests) >= device.poolMinBatchConfigured() {
+				if kernelUDPSealBorrowedPoolEnabled() && len(requests) >= device.poolMinBatchConfigured() {
 					manager.mu.Lock()
 					manager.kernelCryptoDeviceSealBorrowAttempts += uint64(len(requests))
 					manager.mu.Unlock()
@@ -5348,7 +5367,10 @@ func (manager *Manager) SubmitExperimentalTCPFrames(ctx context.Context, frames 
 			}
 			manager.kernelCryptoFrameSealAttempts++
 			deviceAvailable := manager.kernelCryptoDeviceForFlowLocked(kernelCryptoNamespaceExperimentalTCP, flowID) != nil
-			if deviceAvailable || fragmentPayload > 0 {
+			if fragmentPayload <= 0 && manager.expTCPFastPath != nil && manager.expTCPFastPath.kernelCryptoTX &&
+				manager.kernelCryptoProviderHasFlowLocked(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend) {
+				kernelTX = true
+			} else if deviceAvailable || fragmentPayload > 0 {
 				if !deviceAvailable && !manager.kernelCryptoProductionReadyLocked() {
 					manager.kernelCryptoFrameSealErrors++
 					manager.mu.Unlock()
@@ -5377,9 +5399,6 @@ func (manager *Manager) SubmitExperimentalTCPFrames(ctx context.Context, frames 
 					Sequence: uint64(frame.Sequence),
 					Plain:    payload,
 				})
-			} else if manager.expTCPFastPath != nil && manager.expTCPFastPath.kernelCryptoTX &&
-				manager.kernelCryptoProviderHasFlowLocked(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend) {
-				kernelTX = true
 			} else {
 				if !manager.kernelCryptoProductionReadyLocked() {
 					manager.kernelCryptoFrameSealErrors++
@@ -9523,10 +9542,23 @@ func kernelUDPExclusiveFlowSubscribers() bool {
 
 func kernelUDPOpenBorrowedPoolEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_OPEN_BORROW_POOL"))) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
 	case "0", "false", "no", "off", "disabled":
 		return false
 	default:
+		return false
+	}
+}
+
+func kernelUDPSealBorrowedPoolEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_UDP_SEAL_BORROW_POOL"))) {
+	case "1", "true", "yes", "on", "enabled":
 		return true
+	case "0", "false", "no", "off", "disabled":
+		return false
+	default:
+		return false
 	}
 }
 
@@ -11031,8 +11063,8 @@ func (manager *Manager) addKernelUDPRXDirectCurrentStatsLocked(stats map[string]
 		return
 	}
 	stats[prefix+"tc_kernel_udp_rx_secure_direct_attached"] = boolCounter(manager.kernelUDPRXSecureDirectAttached)
-	stats[prefix+"tc_kernel_udp_rx_secure_direct_skb_open_kfunc"] = boolCounter(kernelUDPRXSecureDirectSKBOpenKfuncEnabled())
-	stats[prefix+"tc_kernel_udp_rx_secure_direct_decap_l2_kfunc"] = boolCounter(kernelUDPRXSecureDirectDecapL2KfuncEnabled())
+	stats[prefix+"tc_kernel_udp_rx_secure_direct_skb_open_kfunc"] = boolCounter(manager.kernelUDPRXSecureDirectSKBOpenKfunc)
+	stats[prefix+"tc_kernel_udp_rx_secure_direct_decap_l2_kfunc"] = boolCounter(manager.kernelUDPRXSecureDirectDecapL2Kfunc)
 	stats[prefix+"tc_kernel_udp_rx_secure_direct_recompute_inner_checksums"] = boolCounter(kernelUDPRXSecureDirectRecomputeInnerChecksumEnabled())
 	stats[prefix+"tc_kernel_udp_rx_direct_attached"] = boolCounter(manager.kernelUDPRXDirectAttached)
 	stats[prefix+"tc_kernel_udp_rx_direct_broadcast"] = boolCounter(manager.kernelUDPRXDirectBroadcast)
@@ -11078,6 +11110,7 @@ func (manager *Manager) addKernelUDPTXDirectCurrentStatsLocked(stats map[string]
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_trust_inner_checksums"] = boolCounter(kernelUDPTXSecureDirectTrustInnerChecksumsForSpec(manager.spec))
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled"] = boolCounter(txSecureOptions.KfuncSeal)
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_skb_seal_kfunc"] = boolCounter(txSecureOptions.SKBSealKfunc)
+	stats[prefix+"tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc"] = boolCounter(txSecureOptions.SecureRouteTCPGSOKfunc)
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_inner_tcp_checksum_kfunc"] = boolCounter(kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled())
 	stats[prefix+"tc_kernel_udp_tx_secure_direct_outer_tcp_csum_kfunc"] = boolCounter(txSecureOptions.OuterTCPChecksumKfunc)
 }
@@ -13145,6 +13178,17 @@ func (manager *Manager) attachKernelUDPRXSecureDirectLocked(underlayLink netlink
 	manager.kernelUDPRXSecureDirect = object
 	manager.kernelUDPRXSecureDirectFilter = filter
 	manager.kernelUDPRXSecureDirectAttached = true
+	manager.kernelUDPRXSecureDirectSKBOpenKfunc = object.skbOpenKfunc
+	manager.kernelUDPRXSecureDirectDecapL2Kfunc = object.decapL2Kfunc
+	if kernelUDPRXSecureDirectSKBOpenKfuncEnabled() && !object.skbOpenKfunc {
+		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct fell back without skb-open kfunc")
+	}
+	if kernelUDPRXSecureDirectDecapL2KfuncEnabled() && !object.decapL2Kfunc {
+		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct fell back without decap-l2 kfunc")
+	}
+	for _, variantErr := range object.variantErrors {
+		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct variant load failed: "+variantErr)
+	}
 	return nil
 }
 
@@ -13408,6 +13452,8 @@ func (manager *Manager) detachKernelUDPRXDirectLocked(underlayLink netlink.Link)
 		}
 		manager.kernelUDPRXSecureDirectFilter = nil
 		manager.kernelUDPRXSecureDirectAttached = false
+		manager.kernelUDPRXSecureDirectSKBOpenKfunc = false
+		manager.kernelUDPRXSecureDirectDecapL2Kfunc = false
 	}
 	if manager.underlayIngressProg != nil {
 		if err := manager.underlayIngressProg.Close(); err != nil {
@@ -13446,6 +13492,8 @@ func (manager *Manager) detachKernelUDPRXDirectLocked(underlayLink netlink.Link)
 	manager.kernelUDPXDPRXSecureDirectVethFallback = false
 	manager.kernelUDPXDPRXDirectVethFallback = false
 	manager.kernelUDPRXSecureDirectAttached = false
+	manager.kernelUDPRXSecureDirectSKBOpenKfunc = false
+	manager.kernelUDPRXSecureDirectDecapL2Kfunc = false
 	if manager.kernelUDPRXNeighMap != nil {
 		if err := manager.kernelUDPRXNeighMap.Close(); err != nil {
 			errs = append(errs, "close kernel_udp RX direct neighbor BPF map: "+err.Error())
@@ -20016,6 +20064,7 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_no_csum_reset", Value: boolCounter(kernelUDPTXSecureDirectAdjustRoomFlags()&bpfAdjRoomNoCSUMReset != 0)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled", Value: boolCounter(txSecureOptions.KfuncSeal)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_skb_seal_kfunc", Value: boolCounter(txSecureOptions.SKBSealKfunc)})
+	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc", Value: boolCounter(txSecureOptions.SecureRouteTCPGSOKfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_inner_tcp_checksum_kfunc", Value: boolCounter(kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled())})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_outer_tcp_csum_kfunc", Value: boolCounter(txSecureOptions.OuterTCPChecksumKfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_tx_secure_direct_outer_tcp_partial_csum_kfunc", Value: boolCounter(txSecureOptions.OuterTCPPartialCSUMKfunc)})
@@ -20043,7 +20092,8 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_direct_parse_decap_l2_kfunc", Value: boolCounter(manager.kernelUDPRXDirectParseDecapL2Kfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_direct_trust_inner_checksum", Value: boolCounter(manager.kernelUDPRXDirectTrustInnerChecksum)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_attached", Value: boolCounter(manager.kernelUDPRXSecureDirectAttached)})
-	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_skb_open_kfunc", Value: boolCounter(kernelUDPRXSecureDirectSKBOpenKfuncEnabled())})
+	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_skb_open_kfunc", Value: boolCounter(manager.kernelUDPRXSecureDirectSKBOpenKfunc)})
+	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_decap_l2_kfunc", Value: boolCounter(manager.kernelUDPRXSecureDirectDecapL2Kfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_recompute_inner_checksums", Value: boolCounter(kernelUDPRXSecureDirectRecomputeInnerChecksumEnabled())})
 	txDirectOptions := kernelUDPTXDirectProgramOptions{
 		Enabled:                          kernelUDPTXDirectProgramEnabledForSpec(manager.spec),
@@ -23832,11 +23882,26 @@ func kernelUDPTXSecureDirectProgramOptionsForSpec(spec dataplane.AttachSpec) ker
 	return kernelUDPTXSecureDirectProgramOptions{
 		KfuncSeal:                spec.KernelUDPTXSecureDirectKfuncSeal || kernelUDPTXSecureDirectKfuncSealEnabled(),
 		SKBSealKfunc:             kernelUDPTXSecureDirectSKBSealKfuncCompiled && (spec.KernelUDPTXSecureDirectSKBSealKfunc || kernelUDPTXSecureDirectSKBSealKfuncEnabled()),
+		SecureRouteTCPGSOKfunc:   kernelUDPTXSecureDirectRouteTCPGSOKfuncEnabledForSpec(spec),
 		FixInnerChecksums:        kernelUDPTXSecureDirectFixInnerChecksumsEnabled(),
 		InnerTCPChecksumKfunc:    kernelUDPTXSecureDirectInnerTCPChecksumKfuncEnabled(),
 		OuterTCPChecksumKfunc:    kernelUDPTXSecureDirectOuterTCPChecksumKfuncCompiled && kernelUDPTXSecureDirectOuterTCPChecksumKfuncEnabled(),
 		OuterTCPPartialCSUMKfunc: kernelUDPTXSecureDirectOuterTCPChecksumKfuncCompiled && kernelUDPTXSecureDirectOuterTCPPartialChecksumKfuncEnabled(),
 	}
+}
+
+func kernelUDPTXSecureDirectRouteTCPGSOKfuncEnabledForSpec(spec dataplane.AttachSpec) bool {
+	if envFalsey("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_TCP_GSO_KFUNC",
+		"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC") {
+		return false
+	}
+	if envTruthy("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_TCP_GSO_KFUNC",
+		"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC") {
+		return true
+	}
+	return spec.KernelUDPTXSecureDirect &&
+		spec.ExperimentalTCPTXDirect &&
+		(spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync)
 }
 
 func kernelUDPTXSecureDirectTrustInnerChecksumsForSpec(spec dataplane.AttachSpec) bool {

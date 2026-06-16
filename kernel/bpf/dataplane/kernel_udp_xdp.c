@@ -282,7 +282,7 @@ static __attribute__((noinline)) int trustix_xdp_add_csum_bytes(__u8 *data, __u3
 }
 
 #define TRUSTIX_XDP_LOAD_L4_CHUNK(chunk)                                      \
-    if (len & (chunk)) {                                                      \
+    if (len >= copied + (chunk)) {                                            \
         if (copied > TRUSTIX_XDP_RX_DIRECT_FRAME_PADDED - (chunk))            \
             return -22;                                                       \
         if (bpf_xdp_load_bytes(ctx, packet_offset + copied,                   \
@@ -299,6 +299,7 @@ static __attribute__((noinline)) int trustix_xdp_load_l4(struct xdp_md *ctx,
 
     if (!scratch || len < 1 || len > TRUSTIX_XDP_RX_DIRECT_FRAME_MAX)
         return -22;
+    len &= TRUSTIX_XDP_RX_DIRECT_FRAME_MAX;
     TRUSTIX_XDP_LOAD_L4_CHUNK(1024);
     TRUSTIX_XDP_LOAD_L4_CHUNK(512);
     TRUSTIX_XDP_LOAD_L4_CHUNK(256);
@@ -357,6 +358,34 @@ static __attribute__((noinline)) __u16 trustix_xdp_l4_checksum(__u8 *ip, __u8 *l
     return checksum;
 }
 
+static __always_inline int
+trustix_xdp_zero_l4_padding(struct trustix_xdp_csum_scratch *scratch,
+                            __u32 len)
+{
+    __u32 pad;
+
+    if (!scratch || len > TRUSTIX_XDP_RX_DIRECT_FRAME_MAX)
+        return -22;
+    len &= TRUSTIX_XDP_RX_DIRECT_FRAME_MAX;
+    pad = (4 - (len & 3)) & 3;
+    if (!pad)
+        return 0;
+    if (len > TRUSTIX_XDP_RX_DIRECT_FRAME_PADDED - 1)
+        return -22;
+    scratch->l4[len] = 0;
+    if (pad == 1)
+        return 0;
+    if (len > TRUSTIX_XDP_RX_DIRECT_FRAME_PADDED - 2)
+        return -22;
+    scratch->l4[len + 1] = 0;
+    if (pad == 2)
+        return 0;
+    if (len > TRUSTIX_XDP_RX_DIRECT_FRAME_PADDED - 3)
+        return -22;
+    scratch->l4[len + 2] = 0;
+    return 0;
+}
+
 static __attribute__((noinline)) int trustix_xdp_fix_inner_l4_checksum(__u8 *inner,
                                                                        struct xdp_md *ctx,
                                                                        __u32 inner_offset,
@@ -369,11 +398,11 @@ static __attribute__((noinline)) int trustix_xdp_fix_inner_l4_checksum(__u8 *inn
     __u32 l4_len;
     __u32 tcp_header_len;
     __u32 udp_len;
-    __u32 padded_len;
     __u16 checksum;
 
     if (inner_len < 20 || inner_len > TRUSTIX_XDP_RX_DIRECT_FRAME_MAX)
         return -22;
+    inner_len &= TRUSTIX_XDP_RX_DIRECT_FRAME_MAX;
     if (inner[0] != 0x45 || trustix_read_be16(inner + 2) != inner_len)
         return -22;
     if (inner[6] & 0x3f || inner[7])
@@ -381,6 +410,9 @@ static __attribute__((noinline)) int trustix_xdp_fix_inner_l4_checksum(__u8 *inn
 
     l4 = inner + 20;
     l4_len = inner_len - 20;
+    if (l4_len < 1 || l4_len > TRUSTIX_XDP_RX_DIRECT_FRAME_MAX - 20)
+        return -22;
+    l4_len &= TRUSTIX_XDP_RX_DIRECT_FRAME_MAX;
     if (l4 + l4_len > data_end)
         return -14;
     scratch = bpf_map_lookup_elem(&ix_kudp_xdp_csum_scratch, &scratch_key);
@@ -388,10 +420,10 @@ static __attribute__((noinline)) int trustix_xdp_fix_inner_l4_checksum(__u8 *inn
         return -22;
 
     if (inner[9] == IPPROTO_TCP) {
-        if (l4_len < 20)
-            return -22;
         if (l4 + 20 > data_end)
             return -14;
+        if (l4_len < 20)
+            return -22;
         tcp_header_len = (__u32)(l4[12] >> 4) << 2;
         if (tcp_header_len < 20 || tcp_header_len > l4_len)
             return -22;
@@ -399,44 +431,31 @@ static __attribute__((noinline)) int trustix_xdp_fix_inner_l4_checksum(__u8 *inn
             return -22;
         scratch->l4[16] = 0;
         scratch->l4[17] = 0;
-        padded_len = (l4_len + 3) & ~3U;
-        if (padded_len > l4_len) {
-#pragma clang loop unroll(full)
-            for (int i = 0; i < 3; i++) {
-                __u32 offset = l4_len + (__u32)i;
-                if (offset >= padded_len)
-                    break;
-                scratch->l4[offset] = 0;
-            }
-        }
+        if (trustix_xdp_zero_l4_padding(scratch, l4_len))
+            return -22;
         checksum = trustix_xdp_l4_checksum(inner, scratch->l4, l4_len, IPPROTO_TCP);
         if (!checksum)
             return -22;
         trustix_write_be16(l4 + 16, checksum);
     } else if (inner[9] == IPPROTO_UDP) {
-        if (l4_len < 8)
-            return -22;
         if (l4 + 8 > data_end)
             return -14;
+        if (l4_len < 8)
+            return -22;
         udp_len = trustix_read_be16(l4 + 4);
         if (udp_len < 8 || udp_len > l4_len)
             return -22;
+        if (udp_len > TRUSTIX_XDP_RX_DIRECT_FRAME_MAX - 20)
+            return -22;
+        udp_len &= TRUSTIX_XDP_RX_DIRECT_FRAME_MAX;
         if (l4[6] == 0 && l4[7] == 0)
             return 0;
         if (trustix_xdp_load_l4(ctx, inner_offset + 20, udp_len, scratch))
             return -22;
         scratch->l4[6] = 0;
         scratch->l4[7] = 0;
-        padded_len = (udp_len + 3) & ~3U;
-        if (padded_len > udp_len) {
-#pragma clang loop unroll(full)
-            for (int i = 0; i < 3; i++) {
-                __u32 offset = udp_len + (__u32)i;
-                if (offset >= padded_len)
-                    break;
-                scratch->l4[offset] = 0;
-            }
-        }
+        if (trustix_xdp_zero_l4_padding(scratch, udp_len))
+            return -22;
         checksum = trustix_xdp_l4_checksum(inner, scratch->l4, udp_len, IPPROTO_UDP);
         if (!checksum)
             return -22;

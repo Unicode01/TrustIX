@@ -381,7 +381,9 @@ func (manager *Manager) kernelCryptoTCDirectReadyLocked() bool {
 }
 
 func kernelCryptoTCDirectProviderReady(contextProviderReady bool, directSlotProviderReady bool, directKfuncFastpathReady bool) bool {
-	return contextProviderReady || (directSlotProviderReady && directKfuncFastpathReady)
+	_ = directSlotProviderReady
+	_ = directKfuncFastpathReady
+	return contextProviderReady
 }
 
 func kernelCryptoDirectKfuncFastpathReady() bool {
@@ -401,16 +403,7 @@ func kernelCryptoDirectKfuncFastpathUnavailableReason() string {
 }
 
 func (manager *Manager) kernelCryptoTCDirectUnavailableReasonLocked() string {
-	reason := manager.kernelCryptoUnavailableReasonLocked()
-	if manager.kernelCryptoDirectSlotProviderReadyLocked() {
-		if directReason := kernelCryptoDirectKfuncFastpathUnavailableReason(); directReason != "" {
-			if reason == "" {
-				return directReason
-			}
-			return reason + "; " + directReason
-		}
-	}
-	return reason
+	return manager.kernelCryptoUnavailableReasonLocked()
 }
 
 func kernelCryptoDirectSlotModuleReady() bool {
@@ -651,7 +644,7 @@ func (manager *Manager) installKernelCryptoDevicesLocked(namespace uint8, entrie
 			continue
 		}
 		if old := devices[flowID]; old != nil {
-			_ = old.Close()
+			closeKernelCryptoDeviceDetached(old)
 		}
 		devices[flowID] = device
 	}
@@ -676,9 +669,18 @@ func (manager *Manager) deleteKernelCryptoDeviceLocked(namespace uint8, flowID u
 		return
 	}
 	if device := devices[flowID]; device != nil {
-		_ = device.Close()
+		closeKernelCryptoDeviceDetached(device)
 	}
 	delete(devices, flowID)
+}
+
+func closeKernelCryptoDeviceDetached(device *kernelCryptoDevice) {
+	if device == nil {
+		return
+	}
+	go func() {
+		_ = device.Close()
+	}()
 }
 
 func (manager *Manager) kernelCryptoDeviceMapForNamespaceLocked(namespace uint8, create bool) map[uint64]*kernelCryptoDevice {

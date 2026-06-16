@@ -42,6 +42,7 @@ const volatile __u32 trustix_kudp_tx_fix_inner_checksums = 1;
 const volatile __u32 trustix_kudp_tx_secure_inner_tcp_csum_kfunc = 0;
 const volatile __u32 trustix_kudp_tx_secure_outer_tcp_csum_kfunc = 0;
 const volatile __u32 trustix_kudp_tx_secure_outer_tcp_partial_csum_kfunc = 0;
+const volatile __u32 trustix_kudp_tx_secure_route_gso_kfunc = 0;
 
 #ifndef TRUSTIX_KUDP_SECURE_BPF_CRYPTO
 #define TRUSTIX_KUDP_SECURE_BPF_CRYPTO 0
@@ -152,6 +153,8 @@ const volatile __u32 trustix_kudp_tx_secure_outer_tcp_partial_csum_kfunc = 0;
 #define TRUSTIX_KUDP_TX_SECURE_STAT_INNER_TCP_CSUM_KFUNC_FALLBACKS 189
 
 #define TRUSTIX_TIXT_TX_FINALIZE_TCP_PARTIAL_CSUM (1U << 8)
+#define TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM (1U << 10)
+#define TRUSTIX_TIXT_TX_GSO_SEGMENTS_STOLEN 4
 
 struct __sk_buff {
     __u32 len;
@@ -288,6 +291,17 @@ struct trustix_aead_skb_direct_seal_args {
     __u32 plain_len;
 };
 
+struct trustix_tixt_tx_secure_route_gso_args {
+    __u32 clear_flags;
+    __u32 slot_id;
+    __u16 suite;
+    __u16 reserved0;
+    __u64 epoch;
+    __u64 flow_id;
+    __u8 iv[12];
+    __u32 reserved1;
+};
+
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 184);
@@ -367,6 +381,11 @@ extern int trustix_kernel_skb_fix_inner_tcp_csum(struct __sk_buff *skb,
 #if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
 extern int trustix_kernel_skb_tixt_fix_outer_tcp_csum(struct __sk_buff *skb, __u32 flags) __ksym;
 #endif
+extern int trustix_kernel_skb_tixt_tx_segment_secure_route_tcp_gso(
+    struct __sk_buff *skb,
+    struct trustix_kudp_tx_route_value *route,
+    struct trustix_kudp_tx_flow_value *flow,
+    const struct trustix_tixt_tx_secure_route_gso_args *args) __ksym;
 
 static __always_inline void trustix_kudp_tx_count(__u32 key)
 {
@@ -930,6 +949,77 @@ static __always_inline int trustix_seal_shifted_inner_ipv4_skb_direct(struct __s
 }
 #endif
 
+static __noinline int trustix_secure_route_gso_direct(struct __sk_buff *skb,
+                                                      struct trustix_kudp_tx_route_value *route,
+                                                      __u64 flow_id,
+                                                      struct trustix_kudp_tx_flow_value *flow)
+{
+    struct trustix_kernel_crypto_flow_key key = {};
+    struct trustix_kernel_crypto_ctx_value *state;
+    struct trustix_kernel_crypto_direct_slot *direct_slot;
+    struct trustix_tixt_tx_secure_route_gso_args args = {};
+    __u32 *slot_index;
+    __u32 bytes;
+    int ret;
+
+    if (!trustix_kudp_tx_secure_route_gso_kfunc || !skb || !route || !flow)
+        return -95;
+
+    key.flow_id = flow_id;
+    key.direction = TRUSTIX_KERNEL_CRYPTO_DIRECTION_SEND;
+    key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP;
+    slot_index = bpf_map_lookup_elem(&trustix_kernel_crypto_flow_index_map, &key);
+    if (!slot_index) {
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_FLOW_INDEX_MISSES);
+        return -2;
+    }
+    state = bpf_map_lookup_elem(&trustix_kernel_crypto_ctx_slots, slot_index);
+    direct_slot = bpf_map_lookup_elem(&trustix_kernel_crypto_direct_slots, slot_index);
+    if ((!state || state->suite == 0) && !direct_slot) {
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_SLOT_MISSES);
+        return -2;
+    }
+    if (!direct_slot || !direct_slot->enabled) {
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_SLOT_DISABLED);
+        return -95;
+    }
+
+    args.clear_flags = TRUSTIX_TIXT_TX_FINALIZE_TCP_PARTIAL_CSUM;
+    if (!trustix_kudp_tx_fix_inner_checksums &&
+        (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TRUST_INNER_CHECKSUM))
+        args.clear_flags |= TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM;
+    args.slot_id = direct_slot->slot_id;
+    args.flow_id = flow_id;
+    if (state && state->suite != 0) {
+        args.suite = state->suite;
+        args.epoch = state->epoch;
+#pragma clang loop unroll(full)
+        for (int i = 0; i < 12; i++)
+            args.iv[i] = state->iv[i];
+    } else {
+        args.suite = direct_slot->suite;
+        args.epoch = direct_slot->epoch;
+#pragma clang loop unroll(full)
+        for (int i = 0; i < 12; i++)
+            args.iv[i] = direct_slot->iv[i];
+    }
+
+    ret = trustix_kernel_skb_tixt_tx_segment_secure_route_tcp_gso(
+        skb, route, flow, &args);
+    if (ret == TRUSTIX_TIXT_TX_GSO_SEGMENTS_STOLEN) {
+        bytes = skb->len > 14 ? skb->len - 14 : 0;
+        if (trustix_kernel_crypto_direct_hot_stats(direct_slot)) {
+            direct_slot->packets++;
+            direct_slot->bytes += bytes;
+        }
+        if (state && trustix_kernel_crypto_hot_stats(state)) {
+            state->packets++;
+            state->bytes += bytes;
+        }
+    }
+    return ret;
+}
+
 static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
                                                  __u32 inner_len,
                                                  __u64 flow_id,
@@ -1376,6 +1466,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
         goto flow_miss;
     if (!(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SECURE))
         goto flag_miss;
+    experimental_tcp = flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP;
 
     trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_ATTEMPTS);
     trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_CANDIDATES);
@@ -1394,10 +1485,20 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     if (inner_len < 20)
         goto header_error;
     if (skb->len != 14 + inner_len) {
-        if (skb->len > 14 + inner_len)
+        if (skb->len > 14 + inner_len) {
+            if (experimental_tcp && data[23] == IPPROTO_TCP) {
+                int route_gso_ret = trustix_secure_route_gso_direct(
+                    skb, route, flow_id, flow);
+
+                if (route_gso_ret == TRUSTIX_TIXT_TX_GSO_SEGMENTS_STOLEN) {
+                    trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_SUCCESSES);
+                    return TC_ACT_SHOT;
+                }
+            }
             trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_LEN_GSO_FALLBACKS);
-        else
+        } else {
             trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_LEN_SHORT_FALLBACKS);
+        }
         goto len_mismatch;
     }
     /*
@@ -1407,6 +1508,15 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
      * mismatches during direct-path validation.
      */
     if (inner_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX) {
+        if (experimental_tcp && data[23] == IPPROTO_TCP) {
+            int route_gso_ret = trustix_secure_route_gso_direct(
+                skb, route, flow_id, flow);
+
+            if (route_gso_ret == TRUSTIX_TIXT_TX_GSO_SEGMENTS_STOLEN) {
+                trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_SUCCESSES);
+                return TC_ACT_SHOT;
+            }
+        }
         trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_MTU_PLAIN_MAX_FALLBACKS);
         goto mtu_fallback;
     }
@@ -1414,7 +1524,6 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     outer_overhead = TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD;
     packet_header_len = TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN;
     cipher_offset = TRUSTIX_KUDP_SECURE_CIPHER_OFFSET;
-    experimental_tcp = flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP;
     if (experimental_tcp) {
         outer_overhead = TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD;
         packet_header_len = TRUSTIX_EXP_TCP_SECURE_PACKET_HEADER_LEN;
@@ -1435,6 +1544,15 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     if (outer_len > 0xffff)
         goto header_error;
     if (flow->mtu && outer_len > flow->mtu) {
+        if (experimental_tcp && data[23] == IPPROTO_TCP) {
+            int route_gso_ret = trustix_secure_route_gso_direct(
+                skb, route, flow_id, flow);
+
+            if (route_gso_ret == TRUSTIX_TIXT_TX_GSO_SEGMENTS_STOLEN) {
+                trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_SUCCESSES);
+                return TC_ACT_SHOT;
+            }
+        }
         trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_MTU_UNDERLAY_FALLBACKS);
         if (flow->mtu <= 1500)
             trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_MTU_UNDERLAY_1500ISH_FALLBACKS);

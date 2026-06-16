@@ -67,6 +67,10 @@ func loadSKBTIXTTXSegmentRouteTCPGSOKfuncCall() (asm.Instruction, error) {
 	return loadSKBKfuncCall("trustix_skb_tixt_tx_segment_route_tcp_gso_tc")
 }
 
+func loadSKBTIXTTXSegmentSecureRouteTCPGSOKfuncCall() (asm.Instruction, error) {
+	return loadSKBKfuncCall("trustix_skb_tixt_tx_segment_secure_route_tcp_gso_tc")
+}
+
 func loadSKBTIXTTXRouteTCPKfuncCall() (asm.Instruction, error) {
 	return loadSKBKfuncCall("trustix_skb_tixt_tx_route_tcp_tc")
 }

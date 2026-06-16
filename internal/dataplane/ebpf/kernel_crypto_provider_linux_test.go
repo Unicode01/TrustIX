@@ -69,12 +69,12 @@ func TestKernelCryptoProviderObjectSyntheticContextLifecycle(t *testing.T) {
 	assertKernelCryptoCommandSlotCleared(t, provider)
 }
 
-func TestKernelCryptoTCDirectProviderReadyRequiresRunnableDirectKfuncForDirectSlotOnly(t *testing.T) {
+func TestKernelCryptoTCDirectProviderReadyRequiresBPFContextProvider(t *testing.T) {
 	if kernelCryptoTCDirectProviderReady(false, true, false) {
-		t.Fatal("direct-slot-only provider must not be TC direct ready when direct kfunc fastpath is disabled")
+		t.Fatal("direct-slot-only provider must not be TC direct ready without BPF crypto context provider")
 	}
-	if !kernelCryptoTCDirectProviderReady(false, true, true) {
-		t.Fatal("direct-slot provider should be TC direct ready when direct kfunc fastpath is available")
+	if kernelCryptoTCDirectProviderReady(false, true, true) {
+		t.Fatal("direct-slot provider must not be TC direct ready even when direct kfunc fastpath is available")
 	}
 	if !kernelCryptoTCDirectProviderReady(true, false, false) {
 		t.Fatal("BPF context provider should be TC direct ready without direct-slot kfunc fastpath")

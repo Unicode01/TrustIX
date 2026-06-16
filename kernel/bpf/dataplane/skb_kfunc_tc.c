@@ -161,6 +161,22 @@ struct trustix_tixt_tx_route_gso_args {
 extern int trustix_kernel_skb_tixt_tx_segment_route_tcp_gso(struct __sk_buff *skb,
     struct trustix_kudp_tx_route_value *route,
     const struct trustix_tixt_tx_route_gso_args *args) __ksym;
+
+struct trustix_tixt_tx_secure_route_gso_args {
+    __u32 clear_flags;
+    __u32 slot_id;
+    __u16 suite;
+    __u16 reserved0;
+    unsigned long long epoch;
+    unsigned long long flow_id;
+    unsigned char iv[12];
+    __u32 reserved1;
+};
+
+extern int trustix_kernel_skb_tixt_tx_segment_secure_route_tcp_gso(struct __sk_buff *skb,
+    struct trustix_kudp_tx_route_value *route,
+    struct trustix_kudp_tx_flow_value *flow,
+    const struct trustix_tixt_tx_secure_route_gso_args *args) __ksym;
 extern int trustix_kernel_skb_tixt_tx_route_tcp(struct __sk_buff *skb,
     struct trustix_kudp_tx_route_value *route,
     const struct trustix_tixt_tx_route_gso_args *args) __ksym;
@@ -294,6 +310,15 @@ int trustix_skb_tixt_tx_segment_route_tcp_gso_tc(struct __sk_buff *skb)
     struct trustix_tixt_tx_route_gso_args args = {};
 
     return trustix_kernel_skb_tixt_tx_segment_route_tcp_gso(skb, &route, &args);
+}
+
+SEC("tc/ingress")
+int trustix_skb_tixt_tx_segment_secure_route_tcp_gso_tc(struct __sk_buff *skb)
+{
+    return trustix_kernel_skb_tixt_tx_segment_secure_route_tcp_gso(
+        skb, (struct trustix_kudp_tx_route_value *)0,
+        (struct trustix_kudp_tx_flow_value *)0,
+        (struct trustix_tixt_tx_secure_route_gso_args *)0);
 }
 
 SEC("tc/ingress")

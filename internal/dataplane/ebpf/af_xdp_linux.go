@@ -45,7 +45,7 @@ const (
 	ethernetHeaderLen                          = 14
 	etherTypeIPv4                       uint16 = 0x0800
 	expTCPDefaultMaxQueues                     = 8
-	expTCPTXBackpressureWait                   = 2 * time.Millisecond
+	expTCPTXBackpressureWait                   = 50 * time.Millisecond
 	expTCPTXBackpressurePoll                   = 50 * time.Microsecond
 	expTCPTXKickBatch                          = 256
 	expTCPTXFlushInterval                      = 0 * time.Microsecond
@@ -1225,6 +1225,22 @@ func (fastPath *experimentalTCPFastPath) QueueCount() int {
 	return len(fastPath.sockets)
 }
 
+func (fastPath *experimentalTCPFastPath) UnderlayMTU() int {
+	if fastPath == nil {
+		return 0
+	}
+	mtu := 0
+	for _, socket := range fastPath.sockets {
+		if socket == nil || socket.linkMTU <= 0 {
+			continue
+		}
+		if mtu == 0 || socket.linkMTU < mtu {
+			mtu = socket.linkMTU
+		}
+	}
+	return mtu
+}
+
 func (fastPath *experimentalTCPFastPath) ExperimentalTCPPayloadMax(placement dataplane.CryptoPlacement, encrypted bool) int {
 	if fastPath == nil || len(fastPath.sockets) == 0 {
 		return 0
@@ -1864,7 +1880,9 @@ func (fastPath *experimentalTCPFastPath) readLoop(manager *Manager, socket *afXD
 		}
 		socket.stats.rxBatches.Add(1)
 		socket.stats.rxBatchFrames.Add(uint64(len(rxFrames)))
-		deliver()
+		if len(expBatch)+len(udpBatch) >= rxBurst || len(heldRXFrames) >= rxBurst {
+			deliver()
+		}
 	}
 }
 
@@ -2034,6 +2052,7 @@ func (fastPath *experimentalTCPFastPath) decodeTCPWireFrame(manager *Manager, so
 	kernelOpened := wireFrame.Flags&experimentaltcp.FlagKernelOpened != 0
 	cryptoFragment := wireFrame.Flags&experimentaltcp.FlagCryptoFragment != 0
 	innerIPv4 := wireFrame.Flags&experimentaltcp.FlagInnerIPv4 != 0
+	openInPlace := encrypted && !kernelOpened && !cryptoFragment && rxFrame != nil && socket != nil && socket.kernelOpenInPlace
 	borrowedRX := false
 	if kernelOpened {
 		placement = dataplane.CryptoPlacementKernel
@@ -2058,16 +2077,23 @@ func (fastPath *experimentalTCPFastPath) decodeTCPWireFrame(manager *Manager, so
 			return false, nil
 		}
 		placement = dataplane.CryptoPlacementKernel
-		borrowedRX = rxFrame != nil
+		if openInPlace {
+			borrowedRX = true
+		} else {
+			payload = append([]byte(nil), payload...)
+		}
 	} else if rxFrame != nil && wireFrame.FragmentCount == 0 && wireFrame.FragmentIndex == 0 {
-		borrowedRX = true
-		payload = wireFrame.Payload
+		if experimentalTCPUserspaceSecurePayload(wireFrame.Payload) {
+			payload = append([]byte(nil), wireFrame.Payload...)
+		} else {
+			borrowedRX = true
+			payload = wireFrame.Payload
+		}
 		innerIPv4 = innerIPv4 && kernelUDPInnerIPv4Eligible(payload)
 	} else {
 		payload = append([]byte(nil), payload...)
 		innerIPv4 = innerIPv4 && kernelUDPInnerIPv4Eligible(payload)
 	}
-	openInPlace := encrypted && !kernelOpened && !cryptoFragment && rxFrame != nil && socket.kernelOpenInPlace
 	openPlain, openRelease := kernelUDPOpenPlainBuffer(encrypted && !kernelOpened && !cryptoFragment && !openInPlace, len(payload))
 	*batch = append(*batch, receivedExperimentalTCPFrame{
 		frame: dataplane.ExperimentalTCPFrame{
@@ -2090,6 +2116,14 @@ func (fastPath *experimentalTCPFastPath) decodeTCPWireFrame(manager *Manager, so
 		encryptedKernelFragment: encrypted && cryptoFragment && !kernelOpened,
 	})
 	return borrowedRX, nil
+}
+
+func experimentalTCPUserspaceSecurePayload(payload []byte) bool {
+	return len(payload) >= 4 &&
+		payload[0] == 'T' &&
+		payload[1] == 'I' &&
+		payload[2] == 'X' &&
+		(payload[3] == 'D' || payload[3] == 'H')
 }
 
 func (fastPath *experimentalTCPFastPath) handleUDPFrame(manager *Manager, socket *afXDPSocket, packet []byte, srcMAC net.HardwareAddr, tcpErr error) error {
@@ -2413,8 +2447,13 @@ func (fastPath *experimentalTCPFastPath) Stats() map[string]uint64 {
 		freeFrames, capacityFrames := socket.txFreeCounts()
 		stats["tx_free_frames_total"] += uint64(freeFrames)
 		stats["tx_capacity_frames_total"] += uint64(capacityFrames)
-		for name, value := range socket.Stats() {
+		socketStats := socket.Stats()
+		queuePrefix := fmt.Sprintf("queue_%d_", socket.queueID)
+		stats[queuePrefix+"tx_free_frames"] = uint64(freeFrames)
+		stats[queuePrefix+"tx_capacity_frames"] = uint64(capacityFrames)
+		for name, value := range socketStats {
 			stats[name] += value
+			stats[queuePrefix+name] = value
 		}
 	}
 	for name, value := range fastPath.XDPStats() {
@@ -2816,6 +2855,7 @@ type afXDPSocket struct {
 	fd              int
 	linkIndex       int
 	linkMAC         net.HardwareAddr
+	linkMTU         int
 	queueID         uint32
 	rxNeighborAddr  netip.Addr
 	rxNeighborMAC   [6]byte
@@ -2851,6 +2891,9 @@ type afXDPSocket struct {
 	txBatchActive          bool
 	txLastKick             time.Time
 	txLastSoftKick         time.Time
+	txSocketGSOFD          int
+	txSocketGSOFDValid     bool
+	txSocketGSODisabled    bool
 	skipTCPChecksum        bool
 	skipUDPChecksum        bool
 	kernelOpenInPlace      bool
@@ -2903,6 +2946,28 @@ type afXDPSocketStats struct {
 	txMultiFrameRejectCryptoFragment atomic.Uint64
 	txMultiFrameRejectFlags          atomic.Uint64
 	txMultiFrameRejectFragment       atomic.Uint64
+	txSocketGSOAttempts              atomic.Uint64
+	txSocketGSOSuccesses             atomic.Uint64
+	txSocketGSOMessages              atomic.Uint64
+	txSocketGSOInputFrames           atomic.Uint64
+	txSocketGSOSegments              atomic.Uint64
+	txSocketGSOSingles               atomic.Uint64
+	txSocketGSOFallbacks             atomic.Uint64
+	txSocketGSOUnsupported           atomic.Uint64
+	txSocketGSOErrors                atomic.Uint64
+	txSocketGSORejectIneligible      atomic.Uint64
+	txSocketGSORejectNoBenefit       atomic.Uint64
+	txSocketGSORejectKernelTX        atomic.Uint64
+	txSocketGSORejectKernelOpened    atomic.Uint64
+	txSocketGSORejectNotSecure       atomic.Uint64
+	txSocketGSORejectFlags           atomic.Uint64
+	txSocketGSORejectFragment        atomic.Uint64
+	txSocketGSORejectFrameLen        atomic.Uint64
+	txSocketGSORejectTuple           atomic.Uint64
+	txSocketGSORejectSequence        atomic.Uint64
+	txSocketGSORejectPacketLen       atomic.Uint64
+	txSocketGSORejectMaxSegments     atomic.Uint64
+	txSocketGSORejectMaxIPv4Len      atomic.Uint64
 	txUMEMDirectBuild                atomic.Uint64
 	txCompletions                    atomic.Uint64
 	txPoolExhausted                  atomic.Uint64
@@ -2951,7 +3016,9 @@ func newAFXDPSocket(link netlink.Link, queueID uint32, bindFlags uint16, config 
 		fd:                     fd,
 		linkIndex:              link.Attrs().Index,
 		linkMAC:                append(net.HardwareAddr(nil), link.Attrs().HardwareAddr...),
+		linkMTU:                link.Attrs().MTU,
 		queueID:                queueID,
+		txSocketGSOFD:          -1,
 		txFree:                 make([]uint64, 0, int(config.umemFrames-config.ringEntries)),
 		rxRecycleState:         make([]atomic.Uint64, int(config.umemFrames)),
 		rxRecycleBatch:         make([]uint64, 0, int(config.ringEntries)),
@@ -3329,6 +3396,15 @@ func (socket *afXDPSocket) SendPreparedFrames(items []preparedExperimentalTCPTXF
 	}()
 	socket.beginTXBatchLocked()
 	if len(items) > 1 {
+		if experimentalTCPTXSocketGSOEnabled() {
+			handled, err := socket.sendPreparedExperimentalTCPSocketGSOBatchLocked(items, dstMAC)
+			if err != nil {
+				return err
+			}
+			if handled {
+				return nil
+			}
+		}
 		if experimentalTCPTXMultiFrameEnabled() {
 			return socket.publishPreparedFrameMultiFrameBatchLocked(items, dstMAC)
 		}
@@ -3506,6 +3582,13 @@ func (socket *afXDPSocket) publishPreparedFrameMultiFrameBatchLocked(items []pre
 	}
 	if umemIPv4Len := int(socket.umemFrameSize) - ethernetHeaderLen; maxIPv4Len > umemIPv4Len {
 		maxIPv4Len = umemIPv4Len
+	}
+	linkMTU := socket.linkMTU
+	if linkMTU <= 0 {
+		linkMTU = expTCPDefaultTXMultiFrameMaxIPv4Len
+	}
+	if maxIPv4Len > linkMTU {
+		maxIPv4Len = linkMTU
 	}
 	for i := 0; i < len(items); {
 		group, frameErr := preparedExperimentalTCPMultiFrameGroupWithReason(items[i:], maxFrames, maxIPv4Len, socket.txMultiFrameEncrypted)
@@ -4202,6 +4285,10 @@ func preparedExperimentalTCPMultiFrameGroupWithReason(items []preparedExperiment
 			eligibilityReason = reason
 			break
 		}
+		if item.wireFrame.FlowID != first.wireFrame.FlowID || item.wireFrame.Epoch != first.wireFrame.Epoch {
+			rejectReason = preparedExperimentalTCPMultiFrameRejectTuple
+			break
+		}
 		itemSrc, itemDst, itemSourcePort, itemDestinationPort, err := preparedExperimentalTCPIPv4Tuple(item)
 		if err != nil {
 			return preparedExperimentalTCPMultiFrameGroupResult{}, err
@@ -4250,20 +4337,27 @@ func preparedExperimentalTCPMultiFrameEligibility(item preparedExperimentalTCPTX
 		return preparedExperimentalTCPMultiFrameEligibilityRejectKernelTX
 	}
 	frame := item.wireFrame
-	if frame.Flags&experimentaltcp.FlagCryptoFragment != 0 {
-		return preparedExperimentalTCPMultiFrameEligibilityRejectCryptoFragment
-	}
 	allowedFlags := experimentaltcp.FlagKernelOpened | experimentaltcp.FlagInnerIPv4
 	if frame.Flags&experimentaltcp.FlagEncrypted != 0 {
 		if !encryptedEnabled {
 			return preparedExperimentalTCPMultiFrameEligibilityRejectEncrypted
 		}
 		allowedFlags |= experimentaltcp.FlagEncrypted
+		if frame.Flags&experimentaltcp.FlagCryptoFragment != 0 {
+			allowedFlags |= experimentaltcp.FlagCryptoFragment
+		}
+	} else if frame.Flags&experimentaltcp.FlagCryptoFragment != 0 {
+		return preparedExperimentalTCPMultiFrameEligibilityRejectCryptoFragment
 	}
 	if frame.Flags&^allowedFlags != 0 {
 		return preparedExperimentalTCPMultiFrameEligibilityRejectFlags
 	}
-	if frame.FragmentIndex != 0 || frame.FragmentCount != 0 {
+	switch {
+	case frame.FragmentCount == 0:
+		if frame.FragmentIndex != 0 {
+			return preparedExperimentalTCPMultiFrameEligibilityRejectFragment
+		}
+	case frame.FragmentIndex >= frame.FragmentCount:
 		return preparedExperimentalTCPMultiFrameEligibilityRejectFragment
 	}
 	return preparedExperimentalTCPMultiFrameEligibilityOK
@@ -4884,6 +4978,28 @@ func (socket *afXDPSocket) Stats() map[string]uint64 {
 		"tx_multi_frame_reject_crypto_fragment": socket.stats.txMultiFrameRejectCryptoFragment.Load(),
 		"tx_multi_frame_reject_flags":           socket.stats.txMultiFrameRejectFlags.Load(),
 		"tx_multi_frame_reject_fragment":        socket.stats.txMultiFrameRejectFragment.Load(),
+		"tx_socket_gso_attempts":                socket.stats.txSocketGSOAttempts.Load(),
+		"tx_socket_gso_successes":               socket.stats.txSocketGSOSuccesses.Load(),
+		"tx_socket_gso_messages":                socket.stats.txSocketGSOMessages.Load(),
+		"tx_socket_gso_input_frames":            socket.stats.txSocketGSOInputFrames.Load(),
+		"tx_socket_gso_segments":                socket.stats.txSocketGSOSegments.Load(),
+		"tx_socket_gso_singles":                 socket.stats.txSocketGSOSingles.Load(),
+		"tx_socket_gso_fallbacks":               socket.stats.txSocketGSOFallbacks.Load(),
+		"tx_socket_gso_unsupported":             socket.stats.txSocketGSOUnsupported.Load(),
+		"tx_socket_gso_errors":                  socket.stats.txSocketGSOErrors.Load(),
+		"tx_socket_gso_reject_ineligible":       socket.stats.txSocketGSORejectIneligible.Load(),
+		"tx_socket_gso_reject_no_benefit":       socket.stats.txSocketGSORejectNoBenefit.Load(),
+		"tx_socket_gso_reject_kernel_tx":        socket.stats.txSocketGSORejectKernelTX.Load(),
+		"tx_socket_gso_reject_kernel_opened":    socket.stats.txSocketGSORejectKernelOpened.Load(),
+		"tx_socket_gso_reject_not_secure":       socket.stats.txSocketGSORejectNotSecure.Load(),
+		"tx_socket_gso_reject_flags":            socket.stats.txSocketGSORejectFlags.Load(),
+		"tx_socket_gso_reject_fragment":         socket.stats.txSocketGSORejectFragment.Load(),
+		"tx_socket_gso_reject_frame_len":        socket.stats.txSocketGSORejectFrameLen.Load(),
+		"tx_socket_gso_reject_tuple":            socket.stats.txSocketGSORejectTuple.Load(),
+		"tx_socket_gso_reject_sequence":         socket.stats.txSocketGSORejectSequence.Load(),
+		"tx_socket_gso_reject_packet_len":       socket.stats.txSocketGSORejectPacketLen.Load(),
+		"tx_socket_gso_reject_max_segments":     socket.stats.txSocketGSORejectMaxSegments.Load(),
+		"tx_socket_gso_reject_max_ipv4_len":     socket.stats.txSocketGSORejectMaxIPv4Len.Load(),
 		"tx_umem_direct_build_frames":           socket.stats.txUMEMDirectBuild.Load(),
 		"tx_completions":                        socket.stats.txCompletions.Load(),
 		"tx_pool_exhausted":                     socket.stats.txPoolExhausted.Load(),
@@ -4981,6 +5097,13 @@ func (socket *afXDPSocket) Close() error {
 				errs = append(errs, err.Error())
 			}
 			socket.fd = -1
+		}
+		if socket.txSocketGSOFDValid && socket.txSocketGSOFD >= 0 {
+			if err := unix.Close(socket.txSocketGSOFD); err != nil {
+				errs = append(errs, err.Error())
+			}
+			socket.txSocketGSOFD = -1
+			socket.txSocketGSOFDValid = false
 		}
 		for _, ring := range []*xdpDescRing{&socket.rx, &socket.tx} {
 			if len(ring.mmap) > 0 {

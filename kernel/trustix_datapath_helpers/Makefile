@@ -10,6 +10,8 @@ else
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 KBUILD_ARGS := M=$(CURDIR)
+TRUSTIX_CRYPTO_MODULE_DIR ?= $(patsubst %/trustix_datapath_helpers,%/trustix_crypto,$(CURDIR))
+TRUSTIX_CRYPTO_MODULE_SYMVERS ?= $(TRUSTIX_CRYPTO_MODULE_DIR)/Module.symvers
 VMLINUX_BTF ?= /sys/kernel/btf/vmlinux
 KDIR_NOSLASH := $(patsubst %/,%,$(KDIR))
 KDIR_MODULES_KERNELRELEASE := $(notdir $(patsubst %/source,%,$(patsubst %/build,%,$(KDIR_NOSLASH))))
@@ -20,6 +22,9 @@ KBUILD_ARGS += ARCH=$(ARCH)
 endif
 ifneq ($(CROSS_COMPILE),)
 KBUILD_ARGS += CROSS_COMPILE=$(CROSS_COMPILE)
+endif
+ifneq ($(wildcard $(TRUSTIX_CRYPTO_MODULE_SYMVERS)),)
+KBUILD_ARGS += KBUILD_EXTRA_SYMBOLS=$(TRUSTIX_CRYPTO_MODULE_SYMVERS)
 endif
 
 prepare-btf-base:

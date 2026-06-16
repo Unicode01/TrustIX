@@ -760,6 +760,25 @@ func setLANTCPIPv4SequenceForTest(packet []byte, sequence uint32) {
 	binary.BigEndian.PutUint16(tcp[16:18], captureTransportChecksum(packet[12:16], packet[16:20], ipProtocolTCP, tcp))
 }
 
+func TestNormalizedIPv4PayloadForInjectionFixesPartialTCPChecksum(t *testing.T) {
+	packet := lanTCPIPv4PacketForTest([]byte("local-inject"), 0x18, 20)
+	tcp := packet[20:]
+	binary.BigEndian.PutUint16(tcp[16:18], tcpPseudoHeaderPartialChecksum(packet, len(tcp)))
+	original := append([]byte(nil), packet...)
+
+	normalized, dst, err := normalizedIPv4PayloadForInjection(ethernetIPv4FrameForNeighborTest(packet))
+	if err != nil {
+		t.Fatalf("normalize injection payload: %v", err)
+	}
+	if dst != netip.MustParseAddr("10.0.1.2").As4() {
+		t.Fatalf("destination = %s, want 10.0.1.2", netip.AddrFrom4(dst))
+	}
+	if !bytes.Equal(packet, original) {
+		t.Fatal("normalization mutated caller packet buffer")
+	}
+	assertLANIPv4TCPChecksumValid(t, normalized)
+}
+
 func ethernetIPv4FrameForNeighborTest(packet []byte) []byte {
 	frame := make([]byte, ethernetHeaderLen+len(packet))
 	copy(frame[0:6], []byte{0x02, 0, 0, 0, 0, 2})
