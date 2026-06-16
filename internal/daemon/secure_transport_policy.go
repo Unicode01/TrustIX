@@ -1,6 +1,13 @@
 package daemon
 
-import securetransport "trustix.local/trustix/internal/transport/secure"
+import (
+	"strings"
+
+	"trustix.local/trustix/internal/config"
+	"trustix.local/trustix/internal/dataplane"
+	"trustix.local/trustix/internal/transport"
+	securetransport "trustix.local/trustix/internal/transport/secure"
+)
 
 const (
 	secureKeySourceAutoCode uint32 = iota
@@ -23,8 +30,8 @@ func (daemon *Daemon) setSecureTransportEncryption(raw string) {
 	daemon.secureEncryption.Store(secureEncryptionCode(parseSecureTransportEncryption(raw)))
 }
 
-func (daemon *Daemon) setSecureTransportCryptoSuites(raw []string) {
-	daemon.secureSuites.Store(securetransport.CryptoSuitesOrDefault(raw))
+func (daemon *Daemon) setSecureTransportCryptoSuites(desired config.Desired) {
+	daemon.secureSuites.Store(effectiveSecureTransportCryptoSuitesForDesired(desired))
 }
 
 func (daemon *Daemon) secureTransportKeySource() string {
@@ -85,6 +92,64 @@ func parseSecureTransportEncryption(raw string) string {
 	default:
 		return securetransport.EncryptionSecure
 	}
+}
+
+func effectiveSecureTransportCryptoSuitesForDesired(desired config.Desired) []string {
+	if len(desired.TransportPolicy.CryptoSuites) > 0 {
+		return securetransport.CryptoSuitesOrDefault(desired.TransportPolicy.CryptoSuites)
+	}
+	if performanceKernelSecureCryptoForDesired(desired) {
+		return performanceKernelSecureCryptoSuites()
+	}
+	return securetransport.CryptoSuitesOrDefault(nil)
+}
+
+func effectiveSecureTransportCryptoSuitesForEndpointPolicy(endpoint config.EndpointConfig, policy config.TransportPolicyConfig) []string {
+	if len(policy.CryptoSuites) > 0 {
+		return securetransport.CryptoSuitesOrDefault(policy.CryptoSuites)
+	}
+	if performanceKernelSecureCryptoForEndpointPolicy(endpoint, policy) {
+		return performanceKernelSecureCryptoSuites()
+	}
+	return securetransport.CryptoSuitesOrDefault(nil)
+}
+
+func performanceKernelSecureCryptoSuites() []string {
+	return []string{
+		securetransport.SuiteAES128GCMX25519,
+		securetransport.SuiteAES256GCMX25519,
+	}
+}
+
+func performanceKernelSecureCryptoForDesired(desired config.Desired) bool {
+	return experimentalTCPSecureKernelCryptoDirectForDesired(desired) ||
+		kernelUDPSecureFullDirectForDesired(desired)
+}
+
+func performanceKernelSecureCryptoForEndpointPolicy(endpoint config.EndpointConfig, policy config.TransportPolicyConfig) bool {
+	if normalizeKernelTransportMode(policy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
+		return false
+	}
+	switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
+	case transport.ProtocolExperimentalTCP, transport.ProtocolUDP:
+	default:
+		return false
+	}
+	profile := config.EffectiveEndpointProfile(endpoint, policy)
+	if profile.Profile != config.TransportProfilePerformance {
+		return false
+	}
+	if profile.Datapath == config.TransportDatapathUserspace {
+		return false
+	}
+	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionSecure {
+		return false
+	}
+	placement := normalizeTransportCryptoPlacementConfig(profile.CryptoPlacement)
+	if placement == "" {
+		placement = effectiveTransportCryptoPlacementConfig(policy)
+	}
+	return placement != string(dataplane.CryptoPlacementUserspace)
 }
 
 func secureKeySourceCode(source string) uint32 {

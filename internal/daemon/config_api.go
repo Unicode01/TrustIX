@@ -823,7 +823,7 @@ func (daemon *Daemon) setRuntimeDesired(desired config.Desired, head configlog.H
 	daemon.setTransportCryptoPlacement(desired.TransportPolicy)
 	daemon.setSecureTransportKeySource(desired.TransportPolicy.CryptoKeySource)
 	daemon.setSecureTransportEncryption(desired.TransportPolicy.Encryption)
-	daemon.setSecureTransportCryptoSuites(desired.TransportPolicy.CryptoSuites)
+	daemon.setSecureTransportCryptoSuites(desired)
 }
 
 func (daemon *Daemon) listenerContext(fallback context.Context) context.Context {

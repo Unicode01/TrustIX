@@ -767,7 +767,7 @@ func (daemon *Daemon) loadAndApply(ctx context.Context) error {
 	daemon.setTransportCryptoPlacement(desired.TransportPolicy)
 	daemon.setSecureTransportKeySource(desired.TransportPolicy.CryptoKeySource)
 	daemon.setSecureTransportEncryption(desired.TransportPolicy.Encryption)
-	daemon.setSecureTransportCryptoSuites(desired.TransportPolicy.CryptoSuites)
+	daemon.setSecureTransportCryptoSuites(desired)
 	daemon.cfg.DomainID = desired.Domain.ID
 	daemon.cfg.IXID = desired.IX.ID
 	if _, err := daemon.ensureKernelModules(ctx, desired); err != nil {

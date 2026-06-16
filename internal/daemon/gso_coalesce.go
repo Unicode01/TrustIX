@@ -118,6 +118,27 @@ func dataSessionTXGSOCoalesceDefaultForStats(stats transport.TransportStats) boo
 		stats.MaxPacketSize >= dataSessionTXGSOCoalesceLargeDatagramMin
 }
 
+func dataSessionTXGSOCoalesceDefaultForRuntime(runtime *dataSessionRuntime, stats transport.TransportStats) bool {
+	if stats.Encrypted &&
+		stats.CryptoPlacement == "userspace" &&
+		stats.Datagram &&
+		stats.NativeBatching &&
+		stats.MaxPacketSize >= dataSessionTXGSOCoalesceLargeDatagramMin &&
+		dataSessionRuntimeTransport(runtime) == transport.ProtocolExperimentalTCP {
+		return true
+	}
+	return dataSessionTXGSOCoalesceDefaultForStats(stats)
+}
+
+func dataSessionTXGSOCoalesceMultiFlowDefaultForRuntime(runtime *dataSessionRuntime, stats transport.TransportStats) bool {
+	return stats.Encrypted &&
+		stats.CryptoPlacement == "userspace" &&
+		stats.Datagram &&
+		stats.NativeBatching &&
+		stats.MaxPacketSize >= dataSessionTXGSOCoalesceLargeDatagramMin &&
+		dataSessionRuntimeTransport(runtime) == transport.ProtocolExperimentalTCP
+}
+
 func dataSessionTXGSOCoalescePreference() (bool, bool) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_DATA_SESSION_TX_GSO_COALESCE"))) {
 	case "1", "true", "yes", "on", "enabled":
@@ -126,6 +147,24 @@ func dataSessionTXGSOCoalescePreference() (bool, bool) {
 		return false, true
 	default:
 		return false, false
+	}
+}
+
+func dataSessionTXGSOCoalesceMultiFlowPreference() (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_DATA_SESSION_TX_GSO_COALESCE_MULTI_FLOW"))) {
+	case "1", "true", "yes", "on", "enabled":
+		return true, true
+	case "0", "false", "no", "off", "disabled":
+		return false, true
+	default:
+		switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_DATA_SESSION_TX_GSO_MULTI_FLOW"))) {
+		case "1", "true", "yes", "on", "enabled":
+			return true, true
+		case "0", "false", "no", "off", "disabled":
+			return false, true
+		default:
+			return false, false
+		}
 	}
 }
 
@@ -180,7 +219,7 @@ func dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(runtime *dataSe
 		return enabled
 	}
 	switch dataSessionRuntimeTransport(runtime) {
-	case transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
+	case transport.ProtocolExperimentalTCP, transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
 		return true
 	default:
 		return false

@@ -125,7 +125,7 @@ func (daemon *Daemon) transportMatrixPolicy() transportMatrixPolicy {
 		CryptoPlacement:     effectiveTransportCryptoPlacementConfig(policy),
 		Encryption:          policy.Encryption,
 		CryptoKeySource:     policy.CryptoKeySource,
-		CryptoSuites:        append([]string(nil), policy.CryptoSuites...),
+		CryptoSuites:        effectiveSecureTransportCryptoSuitesForDesired(daemon.desired),
 		MTU:                 policy.MTU,
 		FragmentPolicy:      policy.FragmentPolicy,
 		SessionPoolSize:     policy.SessionPool.Size,

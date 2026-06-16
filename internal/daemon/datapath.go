@@ -459,24 +459,26 @@ type captureForwardPreparedBatch struct {
 }
 
 type captureForwardScratch struct {
-	candidates            []captureForwardBatchCandidate
-	fallbacks             []dataplane.CaptureEvent
-	groups                map[*dataSessionRuntime]int
-	batches               []captureForwardBatchGroup
-	packets               [][]byte
-	coalescedPackets      [][]byte
-	coalesceArena         []byte
-	packetArena           []byte
-	txGSOCoalesceReady    bool
-	txGSOCoalesceEnabled  bool
-	txGSOCoalesceExplicit bool
-	txGSOCoalesceMaxBytes int
-	txGSOCoalesceMaxPkts  int
-	mssClamp              int
-	trustCapturedChecksum bool
-	trustCapturedReady    bool
-	mtu                   int
-	dropFragments         bool
+	candidates                     []captureForwardBatchCandidate
+	fallbacks                      []dataplane.CaptureEvent
+	groups                         map[*dataSessionRuntime]int
+	batches                        []captureForwardBatchGroup
+	packets                        [][]byte
+	coalescedPackets               [][]byte
+	coalesceArena                  []byte
+	packetArena                    []byte
+	txGSOCoalesceReady             bool
+	txGSOCoalesceEnabled           bool
+	txGSOCoalesceExplicit          bool
+	txGSOCoalesceMaxBytes          int
+	txGSOCoalesceMaxPkts           int
+	txGSOCoalesceMultiFlow         bool
+	txGSOCoalesceMultiFlowExplicit bool
+	mssClamp                       int
+	trustCapturedChecksum          bool
+	trustCapturedReady             bool
+	mtu                            int
+	dropFragments                  bool
 }
 
 type dataReceiveScratch struct {
@@ -533,6 +535,7 @@ func (scratch *captureForwardScratch) begin(eventCount int, daemon *Daemon) {
 		scratch.txGSOCoalesceEnabled, scratch.txGSOCoalesceExplicit = dataSessionTXGSOCoalescePreference()
 		scratch.txGSOCoalesceMaxBytes = dataSessionTXGSOCoalesceMaxBytes()
 		scratch.txGSOCoalesceMaxPkts = dataSessionTXGSOCoalesceMaxPackets()
+		scratch.txGSOCoalesceMultiFlow, scratch.txGSOCoalesceMultiFlowExplicit = dataSessionTXGSOCoalesceMultiFlowPreference()
 		scratch.txGSOCoalesceReady = true
 	}
 	scratch.mssClamp = daemon.effectiveTCPMSSClamp()
@@ -3362,6 +3365,7 @@ func (daemon *Daemon) prepareCaptureForwardWireBatch(runtime *dataSessionRuntime
 		return batch
 	}
 	enabled := scratch.txGSOCoalesceEnabled
+	multiFlow := scratch.txGSOCoalesceMultiFlow
 	if session != nil {
 		stats := dataSessionTransportStats(runtime, session)
 		if stats.Datagram && stats.MaxPacketSize > 0 && stats.MaxPacketSize <= uint64(int(^uint(0)>>1)) {
@@ -3369,14 +3373,18 @@ func (daemon *Daemon) prepareCaptureForwardWireBatch(runtime *dataSessionRuntime
 				maxBytes = sessionMax
 			}
 		}
-		if !scratch.txGSOCoalesceExplicit && dataSessionTXGSOCoalesceDefaultForStats(stats) {
+		if !scratch.txGSOCoalesceExplicit && dataSessionTXGSOCoalesceDefaultForRuntime(runtime, stats) {
 			enabled = true
+		}
+		if !scratch.txGSOCoalesceMultiFlowExplicit && dataSessionTXGSOCoalesceMultiFlowDefaultForRuntime(runtime, stats) {
+			multiFlow = true
 		}
 	}
 	if !enabled {
 		return batch
 	}
-	packets, coalesceStats := coalesceDataSessionTCPLocalPacketsConfiguredScratch(batch.Packets, enabled, maxBytes, scratch.txGSOCoalesceMaxPkts, &scratch.coalescedPackets, &scratch.coalesceArena)
+	coalesceOptions := tcpGSOCoalesceOptions{multiFlow: multiFlow}
+	packets, coalesceStats := coalesceDataSessionTCPLocalPacketsConfiguredScratchOptions(batch.Packets, enabled, maxBytes, scratch.txGSOCoalesceMaxPkts, &scratch.coalescedPackets, &scratch.coalesceArena, coalesceOptions)
 	if coalesceStats.Batches == 0 {
 		return batch
 	}
@@ -4150,7 +4158,10 @@ func (daemon *Daemon) preferReverseSessionForAddressedEndpoint(endpoint config.E
 	}
 	switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
 	case transport.ProtocolExperimentalTCP:
-		return true
+		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_SECURE_PREFER_REVERSE_SESSION") {
+			return true
+		}
+		return parseSecureTransportEncryption(encryption) == securetransport.EncryptionPlaintext
 	case transport.ProtocolUDP:
 		return daemon.preferReverseSessionForAddressedKernelUDPSecure(endpoint, encryption)
 	default:

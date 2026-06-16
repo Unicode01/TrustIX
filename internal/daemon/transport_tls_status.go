@@ -44,7 +44,7 @@ func (daemon *Daemon) transportTLSStatus(dataPath dataPathStatus) transportTLSSt
 	status := transportTLSStatus{
 		Encryption:                    parseSecureTransportEncryption(daemon.desired.TransportPolicy.Encryption),
 		CryptoKeySource:               parseSecureTransportKeySource(daemon.desired.TransportPolicy.CryptoKeySource),
-		CryptoSuites:                  securetransport.CryptoSuitesOrDefault(daemon.desired.TransportPolicy.CryptoSuites),
+		CryptoSuites:                  effectiveSecureTransportCryptoSuitesForDesired(daemon.desired),
 		TLSIdentityMode:               normalizedTransportTLSIdentityMode(daemon.desired.TransportPolicy.TLSIdentity.Mode),
 		WireFormat:                    transport.CryptoWireFormatTrustIXSecureDataV1,
 		SystemRoots:                   daemon.desired.TransportPolicy.TLSIdentity.SystemRoots,

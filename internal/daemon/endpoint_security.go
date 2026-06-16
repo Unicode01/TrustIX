@@ -47,7 +47,7 @@ func endpointSecurityMetadataForPolicy(endpoint config.EndpointConfig, policy co
 		metadata.WireFormat = endpointWireFormatTrustIXSecureDataV1
 	}
 	if len(metadata.CryptoSuites) == 0 && endpointEncryptionUsesCrypto(metadata.Encryption) {
-		metadata.CryptoSuites = securetransport.CryptoSuitesOrDefault(policy.CryptoSuites)
+		metadata.CryptoSuites = effectiveSecureTransportCryptoSuitesForEndpointPolicy(endpoint, policy)
 	}
 	if len(metadata.CryptoPlacements) == 0 && transportSupportsCryptoPlacement(endpoint.Transport) && endpointEncryptionFullySecure(metadata.Encryption) {
 		metadata.CryptoPlacements = advertisedTransportCryptoPlacements(effectiveTransportCryptoPlacementConfig(policy))
@@ -211,7 +211,7 @@ func (daemon *Daemon) endpointCryptoSuiteCompatible(security dataplane.EndpointS
 	if len(security.CryptoSuites) == 0 {
 		return true
 	}
-	for _, local := range securetransport.CryptoSuitesOrDefault(daemon.desired.TransportPolicy.CryptoSuites) {
+	for _, local := range effectiveSecureTransportCryptoSuitesForDesired(daemon.desired) {
 		if endpointListContains(security.CryptoSuites, local, normalizeEndpointCryptoSuite) {
 			return true
 		}

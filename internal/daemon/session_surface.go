@@ -9,7 +9,6 @@ import (
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/transport"
-	securetransport "trustix.local/trustix/internal/transport/secure"
 )
 
 type dataSessionDesiredSurface struct {
@@ -77,7 +76,7 @@ func dataPathSessionsNeedRestart(oldDesired, newDesired config.Desired) bool {
 }
 
 func (daemon *Daemon) dataPathSessionRestartScope(oldDesired, newDesired config.Desired) (bool, map[core.IXID]struct{}) {
-	if !reflect.DeepEqual(dataSessionTransportPolicySurfaceFor(oldDesired.TransportPolicy), dataSessionTransportPolicySurfaceFor(newDesired.TransportPolicy)) {
+	if !reflect.DeepEqual(dataSessionTransportPolicySurfaceForDesired(oldDesired), dataSessionTransportPolicySurfaceForDesired(newDesired)) {
 		return true, nil
 	}
 	if !reflect.DeepEqual(localEndpointSelectionSurface(oldDesired.Endpoints), localEndpointSelectionSurface(newDesired.Endpoints)) {
@@ -153,7 +152,7 @@ func desiredDataSessionSurface(desired config.Desired) dataSessionDesiredSurface
 	return dataSessionDesiredSurface{
 		LocalEndpoints:  localEndpointSelectionSurface(desired.Endpoints),
 		Peers:           peers,
-		TransportPolicy: dataSessionTransportPolicySurfaceFor(desired.TransportPolicy),
+		TransportPolicy: dataSessionTransportPolicySurfaceForDesired(desired),
 	}
 }
 
@@ -182,7 +181,8 @@ func localEndpointSelectionSurface(endpoints []config.EndpointConfig) []dataSess
 	return out
 }
 
-func dataSessionTransportPolicySurfaceFor(policy config.TransportPolicyConfig) dataSessionTransportPolicySurface {
+func dataSessionTransportPolicySurfaceForDesired(desired config.Desired) dataSessionTransportPolicySurface {
+	policy := desired.TransportPolicy
 	return dataSessionTransportPolicySurface{
 		Mode:            strings.TrimSpace(policy.Mode),
 		Candidates:      append([]core.EndpointID(nil), policy.Candidates...),
@@ -190,7 +190,7 @@ func dataSessionTransportPolicySurfaceFor(policy config.TransportPolicyConfig) d
 		Datapath:        strings.TrimSpace(policy.Datapath),
 		Encryption:      strings.TrimSpace(policy.Encryption),
 		CryptoKeySource: strings.TrimSpace(policy.CryptoKeySource),
-		CryptoSuites:    append([]string(nil), policy.CryptoSuites...),
+		CryptoSuites:    effectiveSecureTransportCryptoSuitesForDesired(desired),
 		CryptoPlacement: effectiveTransportCryptoPlacementConfig(policy),
 		Profiles:        append([]config.TransportProfileConfig(nil), policy.Profiles...),
 		Advanced:        policy.Advanced,
@@ -400,7 +400,7 @@ func endpointSecuritySurfaceForPolicy(endpoint config.EndpointConfig, policy con
 		metadata.WireFormat = endpointWireFormatTrustIXSecureDataV1
 	}
 	if len(metadata.CryptoSuites) == 0 && endpointEncryptionUsesCrypto(metadata.Encryption) {
-		metadata.CryptoSuites = securetransport.CryptoSuitesOrDefault(policy.CryptoSuites)
+		metadata.CryptoSuites = effectiveSecureTransportCryptoSuitesForEndpointPolicy(endpoint, policy)
 	}
 	if len(metadata.CryptoPlacements) == 0 && transportSupportsCryptoPlacement(endpoint.Transport) && endpointEncryptionFullySecure(metadata.Encryption) {
 		metadata.CryptoPlacements = advertisedTransportCryptoPlacements(effectiveTransportCryptoPlacementConfig(policy))

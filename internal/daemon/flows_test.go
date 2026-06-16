@@ -665,6 +665,47 @@ func TestPrepareCaptureForwardWireBatchCoalescesContiguousTCPSegments(t *testing
 	}
 }
 
+func TestPrepareCaptureForwardWireBatchMultiFlowCoalescesExperimentalTCPUserspaceSecure(t *testing.T) {
+	daemon := &Daemon{}
+	session := &recordingNativeBatchSession{stats: transport.TransportStats{
+		NativeBatching:      true,
+		Datagram:            true,
+		FragmentingDatagram: true,
+		Encrypted:           true,
+		CryptoPlacement:     string(dataplane.CryptoPlacementUserspace),
+		MaxPacketSize:       65535,
+	}}
+	runtime := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolExperimentalTCP}, session: session}
+	var scratch captureForwardScratch
+	scratch.begin(4, daemon)
+	flowA1 := tcpPayloadIPv4PacketWithSeqAndPorts(1, 12345, 18200, []byte("aa"))
+	flowB1 := tcpPayloadIPv4PacketWithSeqAndPorts(1, 12346, 18200, []byte("bb"))
+	flowA2 := tcpPayloadIPv4PacketWithSeqAndPorts(3, 12345, 18200, []byte("AA"))
+	flowB2 := tcpPayloadIPv4PacketWithSeqAndPorts(3, 12346, 18200, []byte("BB"))
+	batch := prepareCaptureForwardBatch([]captureForwardBatchCandidate{
+		{Packet: flowA1},
+		{Packet: flowB1},
+		{Packet: flowA2},
+		{Packet: flowB2},
+	}, &scratch)
+
+	wire := daemon.prepareCaptureForwardWireBatch(runtime, session, batch, &scratch)
+
+	if len(wire.Packets) != 2 {
+		t.Fatalf("wire packets = %d, want two coalesced multi-flow packets", len(wire.Packets))
+	}
+	if got := string(wire.Packets[0][40:]); got != "aaAA" {
+		t.Fatalf("first coalesced payload = %q, want aaAA", got)
+	}
+	if got := string(wire.Packets[1][40:]); got != "bbBB" {
+		t.Fatalf("second coalesced payload = %q, want bbBB", got)
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.SendGSOCoalesceBatches != 2 || counters.SendGSOCoalescePackets != 4 || counters.SendGSOCoalesceWires != 2 {
+		t.Fatalf("TX GSO coalesce counters = %+v, want two 2-to-1 coalesces", counters)
+	}
+}
+
 func TestPrepareCaptureForwardWireBatchRespectsSessionMaxPacketSize(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_TX_GSO_COALESCE", "1")
 	daemon := &Daemon{}
@@ -5089,6 +5130,37 @@ func TestDataSessionBatchMaxBytesAllowsFragmentingDatagramLogicalBatches(t *test
 	}
 }
 
+func TestDataSessionGSOCoalesceDefaultsForExperimentalTCPUserspaceSecure(t *testing.T) {
+	stats := transport.TransportStats{
+		NativeBatching:      true,
+		Encrypted:           true,
+		CryptoPlacement:     string(dataplane.CryptoPlacementUserspace),
+		Datagram:            true,
+		FragmentingDatagram: true,
+		MaxPacketSize:       65535,
+	}
+	experimentalTCP := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolExperimentalTCP}}
+	if !dataSessionTXGSOCoalesceDefaultForRuntime(experimentalTCP, stats) {
+		t.Fatal("experimental_tcp userspace secure should default TX GSO coalescing on")
+	}
+	if !dataSessionTXGSOCoalesceMultiFlowDefaultForRuntime(experimentalTCP, stats) {
+		t.Fatal("experimental_tcp userspace secure should default TX GSO multi-flow coalescing on")
+	}
+	if !dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(experimentalTCP) {
+		t.Fatal("experimental_tcp userspace secure should default RX GSO coalescing on")
+	}
+	udp := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolUDP}}
+	if dataSessionTXGSOCoalesceDefaultForRuntime(udp, stats) {
+		t.Fatal("generic userspace secure datagram should not default TX GSO coalescing on")
+	}
+	if dataSessionTXGSOCoalesceMultiFlowDefaultForRuntime(udp, stats) {
+		t.Fatal("generic userspace secure datagram should not default TX GSO multi-flow coalescing on")
+	}
+	if dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(udp) {
+		t.Fatal("generic userspace secure datagram should not default RX GSO coalescing on")
+	}
+}
+
 func TestSendDataSessionPacketsAggregatesUserspaceEncryptedDatagramWhenEnabled(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_BYTES", "4096")
@@ -6405,6 +6477,132 @@ func TestAddressedExperimentalTCPReverseSessionSatisfiesSessionPoolIndex(t *test
 		t.Fatalf("experimental_tcp dial count = %d, want 0", expTransport.dialCount())
 	}
 	missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4)
+	if reflect.DeepEqual(missing, []int{0, 1, 3}) {
+		return
+	}
+	t.Fatalf("missing pool indexes = %v, want [0 1 3]", missing)
+}
+
+func TestAddressedSecureExperimentalTCPPrefersDirectSessionOverReversePoolIndex(t *testing.T) {
+	peer := testPeer()
+	endpoint := peer.Endpoints[0]
+	endpoint.Name = core.EndpointID("b-experimental-tcp")
+	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Address = "198.51.100.2:7142"
+	endpoint.Security.Encryption = securetransport.EncryptionSecure
+	peer.Endpoints[0] = endpoint
+
+	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionSecure)
+	reverseKey.PoolIndex = 2
+	reverse := &recordingSession{}
+	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	registry := transport.NewRegistry()
+	if err := registry.Register(expTransport); err != nil {
+		t.Fatalf("register experimental_tcp transport: %v", err)
+	}
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX:     config.IXConfig{ID: core.IXID("ix-a")},
+			Domain: config.DomainConfig{ID: peer.Domain},
+			Peers:  []config.PeerConfig{peer},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionSecure,
+				SessionPool: config.SessionPoolPolicyConfig{
+					Size: 4,
+				},
+			},
+		},
+		transports: registry,
+		dataSessions: map[dataSessionKey]transport.Session{
+			reverseKey: reverse,
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{
+			reverseKey: {key: reverseKey, session: reverse, peer: peer, endpoint: endpoint},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	transportEndpoint := transportEndpointFromConfig(endpoint)
+	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
+	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
+	if err != nil {
+		t.Fatalf("session for addressed secure experimental_tcp pool index: %v", err)
+	}
+	if session == reverse {
+		t.Fatal("addressed secure experimental_tcp reused reverse session by default")
+	}
+	if key.Address != endpoint.Address {
+		t.Fatalf("session key address = %q, want direct address %q", key.Address, endpoint.Address)
+	}
+	if key.Encryption != securetransport.EncryptionSecure {
+		t.Fatalf("session key encryption = %q, want secure", key.Encryption)
+	}
+	if expTransport.dialCount() != 1 {
+		t.Fatalf("experimental_tcp dial count = %d, want 1", expTransport.dialCount())
+	}
+	missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionSecure, 4)
+	if reflect.DeepEqual(missing, []int{0, 1, 3}) {
+		return
+	}
+	t.Fatalf("missing pool indexes = %v, want [0 1 3]", missing)
+}
+
+func TestAddressedSecureExperimentalTCPReverseSessionOptInSatisfiesSessionPoolIndex(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SECURE_PREFER_REVERSE_SESSION", "1")
+	peer := testPeer()
+	endpoint := peer.Endpoints[0]
+	endpoint.Name = core.EndpointID("b-experimental-tcp")
+	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Address = "198.51.100.2:7142"
+	endpoint.Security.Encryption = securetransport.EncryptionSecure
+	peer.Endpoints[0] = endpoint
+
+	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionSecure)
+	reverseKey.PoolIndex = 2
+	reverse := &recordingSession{}
+	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	registry := transport.NewRegistry()
+	if err := registry.Register(expTransport); err != nil {
+		t.Fatalf("register experimental_tcp transport: %v", err)
+	}
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX:     config.IXConfig{ID: core.IXID("ix-a")},
+			Domain: config.DomainConfig{ID: peer.Domain},
+			Peers:  []config.PeerConfig{peer},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionSecure,
+				SessionPool: config.SessionPoolPolicyConfig{
+					Size: 4,
+				},
+			},
+		},
+		transports: registry,
+		dataSessions: map[dataSessionKey]transport.Session{
+			reverseKey: reverse,
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{
+			reverseKey: {key: reverseKey, session: reverse, peer: peer, endpoint: endpoint},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	transportEndpoint := transportEndpointFromConfig(endpoint)
+	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
+	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
+	if err != nil {
+		t.Fatalf("session for addressed secure experimental_tcp reverse pool index: %v", err)
+	}
+	if session != reverse {
+		t.Fatal("addressed secure experimental_tcp did not reuse reverse session when opted in")
+	}
+	if key != reverseKey {
+		t.Fatalf("session key = %#v, want reverse key %#v", key, reverseKey)
+	}
+	if expTransport.dialCount() != 0 {
+		t.Fatalf("experimental_tcp dial count = %d, want 0", expTransport.dialCount())
+	}
+	missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionSecure, 4)
 	if reflect.DeepEqual(missing, []int{0, 1, 3}) {
 		return
 	}
