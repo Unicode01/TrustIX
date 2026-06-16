@@ -596,17 +596,24 @@ case "$build_ko" in auto|0|1) ;; *) die "--build-ko must be auto, 0, or 1" ;; es
 case "$build_webui" in 0|1) ;; *) die "--build-webui must be 0 or 1" ;; esac
 kernel_modules="$(lower_ascii "$kernel_modules")"
 case "$kernel_modules" in disabled|auto|required) ;; *) die "--kernel-modules must be disabled, auto, or required" ;; esac
+service_manager="$(lower_ascii "$service_manager")"
+case "$service_manager" in auto|systemd|openwrt) ;; *) die "--service-manager must be auto, systemd, or openwrt" ;; esac
+openwrt_service_target=0
+if [[ "$service_manager" == "openwrt" || ( "$service_manager" == "auto" && -f /etc/openwrt_release ) ]]; then
+  openwrt_service_target=1
+fi
 if [[ "$kernel_modules" == "required" ]]; then
-  if [[ "$build_ko" == "0" ]]; then
+  if [[ "$openwrt_service_target" == "1" ]]; then
+    if [[ "$build_ko" == "auto" ]]; then
+      log "OpenWrt required kernel modules use SDK-built .ko files under /etc/trustix/modules; leaving --build-ko auto"
+    fi
+  elif [[ "$build_ko" == "0" ]]; then
     die "--kernel-modules required cannot be combined with --build-ko 0"
-  fi
-  if [[ "$build_ko" == "auto" ]]; then
+  elif [[ "$build_ko" == "auto" ]]; then
     log "--kernel-modules required: forcing --build-ko 1 so embedded .ko assets are present"
     build_ko=1
   fi
 fi
-service_manager="$(lower_ascii "$service_manager")"
-case "$service_manager" in auto|systemd|openwrt) ;; *) die "--service-manager must be auto, systemd, or openwrt" ;; esac
 case "$(json_bool "$dns_enabled")" in true) dns_enabled=1 ;; false) dns_enabled=0 ;; esac
 case "$(json_bool "$openwrt_dnsmasq")" in true) openwrt_dnsmasq=1; dns_enabled=1 ;; false) openwrt_dnsmasq=0 ;; esac
 if [[ -n "$target" && "$local_install" == "1" ]]; then
@@ -654,6 +661,20 @@ deploy_cert_dir="${work_dir}/deploy-certs"
 config_dir="${work_dir}/config"
 config_path="${config_dir}/${ix_id}.json"
 mkdir -p "$issue_dir" "$deploy_cert_dir" "$config_dir"
+
+openwrt_embedded_kmod=0
+case "$(lower_ascii "${TRUSTIX_PROVISION_OPENWRT_ALLOW_EMBEDDED_KMOD:-0}")" in
+  1|true|yes|on) openwrt_embedded_kmod=1 ;;
+esac
+
+kernel_module_path_for_config() {
+  local module_name="$1"
+  if [[ "$openwrt_service_target" == "1" && "$kernel_modules" != "disabled" && "$openwrt_embedded_kmod" != "1" ]]; then
+    printf '/etc/trustix/modules/%s.ko' "$module_name"
+    return 0
+  fi
+  printf 'embedded'
+}
 
 dns_csv="$(csv_join "${dns_sans[@]}")"
 ip_csv="$(csv_join "${ip_sans[@]}")"
@@ -838,8 +859,13 @@ done
     fi
     printf '},\n'
   fi
-  printf '  "kernel_modules":{"trustix_crypto":{"mode":"%s","path":"embedded","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath":{"mode":"%s","path":"embedded","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath_helpers":{"mode":"%s","path":"embedded","reload_on_upgrade":"auto","unload_on_exit":false}},\n' \
-    "$(json_escape "$kernel_modules")" "$(json_escape "$kernel_modules")" "$(json_escape "$kernel_modules")"
+  crypto_module_path="$(kernel_module_path_for_config trustix_crypto)"
+  datapath_module_path="$(kernel_module_path_for_config trustix_datapath)"
+  helpers_module_path="$(kernel_module_path_for_config trustix_datapath_helpers)"
+  printf '  "kernel_modules":{"trustix_crypto":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath_helpers":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false}},\n' \
+    "$(json_escape "$kernel_modules")" "$(json_escape "$crypto_module_path")" \
+    "$(json_escape "$kernel_modules")" "$(json_escape "$datapath_module_path")" \
+    "$(json_escape "$kernel_modules")" "$(json_escape "$helpers_module_path")"
   printf '  "endpoints":['
   first=1
   for spec in "${endpoint_specs[@]}"; do

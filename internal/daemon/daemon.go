@@ -858,8 +858,10 @@ func (daemon *Daemon) attachDataplane(ctx context.Context, desired config.Desire
 func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.AttachSpec {
 	lan := config.PrimaryLAN(desired)
 	lanSpec := dataplaneLANAttachSpec(lan, desired)
-	secureFullDirect := kernelUDPSecureFullDirectForDesired(desired)
-	experimentalTCPRouteGSOAsync := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired)
+	experimentalTCPSecureDirect := experimentalTCPSecureKernelCryptoDirectForDesired(desired)
+	secureFullDirect := kernelUDPSecureFullDirectForDesired(desired) || experimentalTCPSecureDirect
+	experimentalTCPRouteGSOAsync := experimentalTCPRouteGSOAsyncForDesired(desired)
+	experimentalTCPPlainRouteGSOAsync := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired)
 	experimentalTCPFastPathDisabledReason := experimentalTCPFastPathDisabledReasonForDesired(desired)
 	return dataplane.AttachSpec{
 		LANIface:                                 lanSpec.Iface,
@@ -878,12 +880,12 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		KernelUDPTXSecureDirect:                  secureFullDirect,
 		KernelUDPRXSecureDirect:                  secureFullDirect,
 		KernelUDPSecureDirectTrustInnerChecksums: secureFullDirect,
-		ExperimentalTCPTXDirect:                  experimentalTCPTXDirectForDesired(desired),
+		ExperimentalTCPTXDirect:                  experimentalTCPTXDirectForDesired(desired) || experimentalTCPSecureDirect,
 		ExperimentalTCPRouteGSOSync:              experimentalTCPRouteGSOAsync,
 		ExperimentalTCPRouteGSOAsync:             experimentalTCPRouteGSOAsync,
 		ExperimentalTCPRouteXmitWorker:           experimentalTCPRouteGSOAsync,
-		ExperimentalTCPPlainSkipSequence:         experimentalTCPRouteGSOAsync,
-		ExperimentalTCPPlainACKOnly:              experimentalTCPRouteGSOAsync,
+		ExperimentalTCPPlainSkipSequence:         experimentalTCPPlainRouteGSOAsync,
+		ExperimentalTCPPlainACKOnly:              experimentalTCPPlainRouteGSOAsync,
 		ExperimentalTCPFastPathDisabled:          experimentalTCPFastPathDisabledReason != "",
 		ExperimentalTCPFastPathDisabledReason:    experimentalTCPFastPathDisabledReason,
 		KernelDatapathFullPlaintext:              kernelDatapathFullPlaintextEnabledForDesired(desired),

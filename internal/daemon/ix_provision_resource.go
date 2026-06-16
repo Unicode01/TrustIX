@@ -667,7 +667,11 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 		}
 		profile = ixProvisionEffectiveProfileForRequest(request, profile)
 		if ixProvisionRequiresBuiltKernelModules(request, profile) {
-			request.BuildKO = "1"
+			if request.ServiceManager == "openwrt" {
+				request.BuildKO = "auto"
+			} else {
+				request.BuildKO = "1"
+			}
 		}
 	}
 	request.SourceCerts = strings.TrimSpace(request.SourceCerts)
@@ -1196,6 +1200,9 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 	manageAddress := attachMode != config.LANAttachModeExisting
 	endpoints, candidates := ixProvisionEndpointConfigs(request, profile)
 	cryptoMode, datapathMode, helpersMode := ixProvisionKernelModuleModes(request, profile)
+	cryptoPath := ixProvisionKernelModulePath(request, cryptoMode, "trustix_crypto")
+	datapathPath := ixProvisionKernelModulePath(request, datapathMode, "trustix_datapath")
+	helpersPath := ixProvisionKernelModulePath(request, helpersMode, "trustix_datapath_helpers")
 	desired := config.Desired{
 		Domain: config.DomainConfig{
 			ID:         request.Domain,
@@ -1226,9 +1233,9 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 		},
 		KernelModules: config.KernelModulesConfig{
 			CapabilityProfile:      profile.KernelCapabilityProfile,
-			TrustIXCrypto:          config.KernelModuleConfig{Mode: cryptoMode, Path: "embedded", ReloadOnUpgrade: "auto"},
-			TrustIXDatapath:        config.KernelModuleConfig{Mode: datapathMode, Path: "embedded", ReloadOnUpgrade: "auto"},
-			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: helpersMode, Path: "embedded", ReloadOnUpgrade: "auto"},
+			TrustIXCrypto:          config.KernelModuleConfig{Mode: cryptoMode, Path: cryptoPath, ReloadOnUpgrade: "auto"},
+			TrustIXDatapath:        config.KernelModuleConfig{Mode: datapathMode, Path: datapathPath, ReloadOnUpgrade: "auto"},
+			TrustIXDatapathHelpers: config.KernelModuleConfig{Mode: helpersMode, Path: helpersPath, ReloadOnUpgrade: "auto"},
 		},
 		Endpoints: endpoints,
 		Bootstrap: config.BootstrapConfig{},
@@ -1298,6 +1305,15 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 		return config.Desired{}, fmt.Errorf("validate provisioned IX config: %w", err)
 	}
 	return desired, nil
+}
+
+func ixProvisionKernelModulePath(request ixProvisionIssueRequest, mode string, moduleName string) string {
+	if request.ServiceManager == "openwrt" &&
+		(mode == "auto" || mode == "required") &&
+		!envTruthyAny("TRUSTIX_PROVISION_OPENWRT_ALLOW_EMBEDDED_KMOD") {
+		return path.Join("/etc/trustix/modules", moduleName+".ko")
+	}
+	return "embedded"
 }
 
 func ixProvisionTransportSupportsFullPlaintextDatapath(endpointTransport string) bool {

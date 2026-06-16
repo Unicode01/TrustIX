@@ -24,6 +24,9 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 		daemon.kernelHelpers = kernelmodule.NewTrustIXDatapathHelpersManager()
 	}
 	modules := effectiveKernelModulesForDesired(desired)
+	if err := validateOpenWrtKernelModuleSources(modules); err != nil {
+		return nil, err
+	}
 	if kernelModulesAllDisabled(modules) {
 		if err := daemon.restoreKernelDatapathFullPlaintextSysctls(); err != nil {
 			return nil, err
@@ -69,7 +72,7 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 }
 
 func validateExperimentalTCPRouteGSOHelpersStatus(desired config.Desired, status kernelmodule.Status) error {
-	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+	if !experimentalTCPRouteGSOAsyncForDesired(desired) {
 		return nil
 	}
 	var missing []string
@@ -79,7 +82,7 @@ func validateExperimentalTCPRouteGSOHelpersStatus(desired config.Desired, status
 		}
 	}
 	if len(missing) == 0 {
-		return validateExperimentalTCPRouteGSOHelperRuntimeParameters(status)
+		return validateExperimentalTCPRouteGSOHelperRuntimeParameters(desired, status)
 	}
 	detail := status.CapabilityReason
 	if status.Reason != "" {
@@ -105,18 +108,26 @@ var readTrustIXDatapathHelpersParameter = func(name string) (string, error) {
 	return strings.TrimSpace(string(payload)), err
 }
 
-func validateExperimentalTCPRouteGSOHelperRuntimeParameters(status kernelmodule.Status) error {
+func validateExperimentalTCPRouteGSOHelperRuntimeParameters(desired config.Desired, status kernelmodule.Status) error {
 	if !status.Loaded {
 		return nil
 	}
 	required := []string{
-		"tixt_tx_plain_skip_sequence",
-		"tixt_tx_plain_ack_only",
 		"route_tcp_gso",
 		"route_tcp_gso_async",
 		"route_tcp_gso_async_dev_xmit",
 		"route_tcp_gso_async_stream_outer_gso",
 		"route_tcp_xmit_worker",
+	}
+	requiredDisabled := []string{
+		"route_tcp_gso_async_force_inner_checksum",
+		"route_tcp_gso_async_force_software_outer_csum",
+	}
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		required = append(required,
+			"tixt_tx_plain_skip_sequence",
+			"tixt_tx_plain_ack_only",
+		)
 	}
 	var missing []string
 	var inactive []string
@@ -127,6 +138,16 @@ func validateExperimentalTCPRouteGSOHelperRuntimeParameters(status kernelmodule.
 			continue
 		}
 		if !kernelModuleBoolParameterEnabled(value) {
+			inactive = append(inactive, name+"="+value)
+		}
+	}
+	for _, name := range requiredDisabled {
+		value, err := readTrustIXDatapathHelpersParameter(name)
+		if err != nil {
+			missing = append(missing, name)
+			continue
+		}
+		if kernelModuleBoolParameterEnabled(value) {
 			inactive = append(inactive, name+"="+value)
 		}
 	}
@@ -178,13 +199,70 @@ func effectiveKernelModulesForDesired(desired config.Desired) config.KernelModul
 			modules.TrustIXDatapathHelpers.Mode = kernelmodule.ModeAuto
 		}
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+	if experimentalTCPRouteGSOAsyncForDesired(desired) {
 		modules.TrustIXDatapathHelpers.Mode = kernelmodule.ModeRequired
 		if strings.TrimSpace(modules.TrustIXDatapathHelpers.Path) == "" {
 			modules.TrustIXDatapathHelpers.Path = inferTrustIXDatapathHelpersModulePath(modules.TrustIXDatapath.Path)
 		}
 	}
+	modules = disableOpenWrtAutoEmbeddedKernelModules(modules)
 	return modules
+}
+
+func disableOpenWrtAutoEmbeddedKernelModules(modules config.KernelModulesConfig) config.KernelModulesConfig {
+	if !runtimeLooksLikeOpenWrt() || openWrtEmbeddedKernelModulesAllowed() {
+		return modules
+	}
+	disableOpenWrtAutoEmbeddedKernelModule(&modules.TrustIXCrypto)
+	disableOpenWrtAutoEmbeddedKernelModule(&modules.TrustIXDatapath)
+	disableOpenWrtAutoEmbeddedKernelModule(&modules.TrustIXDatapathHelpers)
+	return modules
+}
+
+func disableOpenWrtAutoEmbeddedKernelModule(module *config.KernelModuleConfig) {
+	if strings.ToLower(strings.TrimSpace(module.Mode)) != kernelmodule.ModeAuto {
+		return
+	}
+	if !kernelModulePathLooksEmbedded(module.Path) {
+		return
+	}
+	module.Mode = kernelmodule.ModeDisabled
+}
+
+func validateOpenWrtKernelModuleSources(modules config.KernelModulesConfig) error {
+	if !runtimeLooksLikeOpenWrt() || openWrtEmbeddedKernelModulesAllowed() {
+		return nil
+	}
+	for _, item := range []struct {
+		label  string
+		module config.KernelModuleConfig
+	}{
+		{label: "trustix_crypto", module: modules.TrustIXCrypto},
+		{label: "trustix_datapath", module: modules.TrustIXDatapath},
+		{label: "trustix_datapath_helpers", module: modules.TrustIXDatapathHelpers},
+	} {
+		mode := strings.ToLower(strings.TrimSpace(item.module.Mode))
+		if mode != kernelmodule.ModeRequired {
+			continue
+		}
+		if !kernelModulePathLooksEmbedded(item.module.Path) {
+			continue
+		}
+		return fmt.Errorf("OpenWrt %s required kernel module uses embedded/empty path; provide a matching OpenWrt SDK-built .ko path under kernel_modules.%s.path or set TRUSTIX_KERNEL_MODULE_ALLOW_OPENWRT_EMBEDDED=1 to explicitly override the ABI guard", item.label, item.label)
+	}
+	return nil
+}
+
+func openWrtEmbeddedKernelModulesAllowed() bool {
+	return envTruthyAny(
+		"TRUSTIX_KERNEL_MODULE_ALLOW_OPENWRT_EMBEDDED",
+		"TRUSTIX_KERNEL_MODULE_ALLOW_OPENWRT_EMBEDDED_ABI",
+	)
+}
+
+func kernelModulePathLooksEmbedded(raw string) bool {
+	path := strings.ToLower(strings.TrimSpace(raw))
+	return path == "" || path == "embedded" || strings.HasPrefix(path, "embedded://")
 }
 
 func inferTrustIXDatapathHelpersModulePath(datapathPath string) string {
@@ -215,15 +293,21 @@ func TrustIXCryptoModuleParameters(raw string) string {
 }
 
 func TrustIXCryptoModuleParametersForDesired(raw string, desired config.Desired) string {
-	performanceSecureDirect := kernelUDPSecureFullDirectForDesired(desired)
-	allowSIMDFastpath := performanceSecureDirect || envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH")
+	experimentalTCPSecureDirect := experimentalTCPSecureKernelCryptoDirectForDesired(desired)
+	performanceSecureDirect := kernelUDPSecureFullDirectForDesired(desired) || experimentalTCPSecureDirect
+	explicitSIMDFastpath := envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH")
+	allowSIMDFastpath := explicitSIMDFastpath
 	params := raw
 	if !allowSIMDFastpath {
 		params = filterModuleParameters(params, trustIXCryptoPanicRiskModuleParameters)
 	} else {
 		params = appendModuleParameterIfMissing(params, "kfunc_simd_fastpath=1")
+		if performanceSecureDirect {
+			params = setModuleParameter(params, "kfunc_fastpath_stats", "0")
+			params = appendModuleParameterIfMissing(params, "kfunc_fastpath_wipe=0")
+		}
 	}
-	if envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH") {
+	if explicitSIMDFastpath {
 		params = appendModuleParameterIfMissing(params, "experimental_aesni_kfunc=1")
 		params = appendModuleParameterIfMissing(params, "experimental_vaes_kfunc=1")
 	}
@@ -647,6 +731,9 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		params = appendModuleParameterIfMissing(params, "tixt_tx_plain_skip_sequence=1")
 		params = appendModuleParameterIfMissing(params, "tixt_tx_plain_ack_only=1")
+	}
+	if experimentalTCPRouteGSOAsyncForDesired(desired) {
+		params = appendModuleParameterIfMissing(params, "enable_features=836")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_prefer=1")
@@ -655,11 +742,13 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_bytes_limit=33554432")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_item_budget=32")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_segment_budget=1024")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_emit_budget=8")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_emit_budget=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_resched_stride=16")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_min_queue_depth=8")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_schedule_delay_usecs=500")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_min_queue_depth=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_schedule_delay_usecs=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_max_segments_per_item=128")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_force_inner_checksum=0")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_force_software_outer_csum=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_unbound_worker=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_sharded_queue=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_queue_shards=6")
@@ -669,6 +758,7 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build_inner_csum=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build_fast_copy=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build_frag_fast_copy=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_software_segment=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_outer_gso=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_outer_gso_hard_enable=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_max_frames=64")
@@ -723,6 +813,9 @@ func appendTrustIXDatapathHelpersTIXTParameters(params string) string {
 		}
 		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO") {
 			params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_outer_gso=1")
+		}
+		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_SECURE_SEAL_BATCH") {
+			params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_secure_seal_batch=1")
 		}
 	}
 	return params
@@ -857,6 +950,7 @@ var trustIXDatapathExperimentalRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_xmit_dst_mac_seq_cache":           {},
 	"rx_worker_xmit_hash_tx_queue":               {},
 	"rx_worker_xmit_more":                        {},
+	"rx_worker_tc_skip_classify":                 {},
 }
 
 var trustIXCryptoPanicRiskModuleParameters = map[string]struct{}{
@@ -881,6 +975,7 @@ var trustIXDatapathHelpersSafeAsyncModuleParameters = map[string]struct{}{
 	"route_tcp_gso_async_prefer":                                        {},
 	"route_tcp_gso_async_queue_shards":                                  {},
 	"route_tcp_gso_async_sharded_queue":                                 {},
+	"route_tcp_gso_async_secure_seal_batch":                             {},
 	"route_tcp_gso_async_stream":                                        {},
 	"route_tcp_gso_async_stream_direct_build":                           {},
 	"route_tcp_gso_async_stream_direct_build_fast_copy":                 {},

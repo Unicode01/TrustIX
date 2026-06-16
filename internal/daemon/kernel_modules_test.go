@@ -147,6 +147,16 @@ func TestTrustIXDatapathModuleParametersRewritesLegacyFullPlaintextChecksumSkip(
 	}
 }
 
+func TestTrustIXDatapathModuleParametersPreservesExplicitTCSkipWhenExperimentsAllowed(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER_EXPERIMENTS", "1")
+
+	got := TrustIXDatapathModuleParameters("rx_worker_tc_skip_classify=1")
+	if !moduleParameterHasAssignment(got, "rx_worker_tc_skip_classify=1") {
+		t.Fatalf("parameters = %q, missing explicit tc-skip assignment", got)
+	}
+}
+
 func TestTrustIXDatapathModuleParametersOpenWrtRewritesLegacySingleCoalesce(t *testing.T) {
 	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
@@ -341,6 +351,77 @@ func TestEffectiveKernelModulesForDesiredProfileDefaultsModes(t *testing.T) {
 	modules = effectiveKernelModulesForDesired(desired)
 	if modules.TrustIXCrypto.Mode != "disabled" || modules.TrustIXDatapath.Mode != "disabled" || modules.TrustIXDatapathHelpers.Mode != "disabled" {
 		t.Fatalf("disabled modules = %#v, want all disabled", modules)
+	}
+}
+
+func TestEffectiveKernelModulesOpenWrtAutoEmbeddedDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfilePerformance,
+			TrustIXCrypto: config.KernelModuleConfig{
+				Mode: kernelmodule.ModeAuto,
+				Path: "embedded",
+			},
+			TrustIXDatapath: config.KernelModuleConfig{
+				Mode: kernelmodule.ModeAuto,
+			},
+			TrustIXDatapathHelpers: config.KernelModuleConfig{
+				Mode: kernelmodule.ModeAuto,
+				Path: "embedded://trustix_datapath_helpers.ko",
+			},
+		},
+	}
+
+	modules := effectiveKernelModulesForDesired(desired)
+	if modules.TrustIXCrypto.Mode != kernelmodule.ModeDisabled ||
+		modules.TrustIXDatapath.Mode != kernelmodule.ModeDisabled ||
+		modules.TrustIXDatapathHelpers.Mode != kernelmodule.ModeDisabled {
+		t.Fatalf("OpenWrt auto embedded modules = %#v, want all disabled", modules)
+	}
+}
+
+func TestValidateOpenWrtKernelModuleSourcesRejectsRequiredEmbedded(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	modules := config.KernelModulesConfig{
+		TrustIXDatapath: config.KernelModuleConfig{
+			Mode: kernelmodule.ModeRequired,
+			Path: "embedded",
+		},
+	}
+
+	err := validateOpenWrtKernelModuleSources(modules)
+	if err == nil || !strings.Contains(err.Error(), "OpenWrt") || !strings.Contains(err.Error(), "SDK-built") {
+		t.Fatalf("validateOpenWrtKernelModuleSources error = %v, want SDK-built OpenWrt guard", err)
+	}
+}
+
+func TestValidateOpenWrtKernelModuleSourcesAllowsRequiredExternalPath(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	modules := config.KernelModulesConfig{
+		TrustIXDatapath: config.KernelModuleConfig{
+			Mode: kernelmodule.ModeRequired,
+			Path: "/etc/trustix/modules/trustix_datapath.ko",
+		},
+	}
+
+	if err := validateOpenWrtKernelModuleSources(modules); err != nil {
+		t.Fatalf("validateOpenWrtKernelModuleSources external path error = %v", err)
+	}
+}
+
+func TestValidateOpenWrtKernelModuleSourcesCanAllowEmbeddedOverride(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	t.Setenv("TRUSTIX_KERNEL_MODULE_ALLOW_OPENWRT_EMBEDDED", "1")
+	modules := config.KernelModulesConfig{
+		TrustIXDatapath: config.KernelModuleConfig{
+			Mode: kernelmodule.ModeRequired,
+			Path: "embedded",
+		},
+	}
+
+	if err := validateOpenWrtKernelModuleSources(modules); err != nil {
+		t.Fatalf("validateOpenWrtKernelModuleSources override error = %v", err)
 	}
 }
 

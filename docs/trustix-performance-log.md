@@ -2,6 +2,71 @@
 
 This file records datapath performance findings and script changes so future runs do not depend on chat context.
 
+## 2026-06-16
+
+### Zaozhuang PVE OpenWrt SDK full-kmod validation
+
+PVE host: `120.220.44.72:8006`, isolated VM IDs 200+. VM100 and 1xx were not
+modified. Test VMs:
+
+| VM | Role | Address |
+| --- | --- | --- |
+| `200 trustix-deb-a` | Debian IX A | `192.168.100.200` |
+| `201 trustix-deb-b` | Debian IX B | `192.168.100.201` |
+| `202 trustix-openwrt` | OpenWrt IX | `192.168.100.202` |
+
+Important OpenWrt finding: OpenWrt 23.05.5 x86_64 uses kernel `5.15.167` and
+has no `/sys/kernel/btf/vmlinux`, so TC/eBPF CO-RE cannot be treated as the main
+OpenWrt performance path on that release. Full plaintext OpenWrt performance
+requires a matching OpenWrt SDK-built `trustix_datapath.ko`; Debian/PVE embedded
+`.ko` assets are the wrong kernel ABI.
+
+OpenWrt SDK module used:
+
+| Target | Output | SHA256 |
+| --- | --- | --- |
+| `23.05.5-x86_64` | `/root/trustix-openwrt-kmod-dirty-20260616-1243/.../trustix_datapath.ko` | `9017947ff22e2181323222a8acc46b7fc89e15221a9e56b748410cd5820fe516` |
+
+Validation:
+
+| Case | Artifact | Duration per direction | Throughput | Result |
+| --- | --- | ---: | ---: | --- |
+| Debian to Debian full plaintext kmod | `/root/trustix-cross/dirty-dd-fullkmod-20260616-1200/results/bidir-p8-120-clean-20260616-120411` | 120s | 8.02 / 8.05 Gbps | pass |
+| Debian to Debian full plaintext kmod | `/root/trustix-cross/dirty-dd-fullkmod-20260616-1200/results/dd-bidir-p8-900-20260616-132214` | 900s | 5.552 / 4.465 Gbps | pass at 4 Gbps production gate |
+| Debian to Debian route-GSO fallback | `/root/trustix-cross/dirty-dd-routegso-20260616-1210/results/bidir-p8-120-20260616-121345` | 120s | 1.59 / 1.60 Gbps | pass at 1 Gbps fallback gate |
+| OpenWrt to Debian full plaintext kmod | `/root/trustix-cross/dirty-owdeb-fullkmod-20260616-1312/results/owdeb-bidir-p8-120-20260616-124815` | 120s | 12.15 / 7.28 Gbps | pass at 4 Gbps production gate |
+| OpenWrt to Debian mixed full plaintext kmod soak | `/root/trustix-cross/dirty-owdeb-fullkmod-20260616-1312/results/owdeb-bidir-p8-900-mixed-20260616-125153` | 900s | 14.038 / 4.676 Gbps | pass at 4 Gbps production gate |
+
+The 900s mixed soak verifier required matching build/binary identity and
+`kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1`. Datapath
+counters stayed clean: both sides reported zero `rx_worker_dropped` and zero
+`tx_plaintext_xmit_errors`. No panic, Oops, watchdog, lockup, or TrustIX crash
+signature was present in the captured logs.
+
+The Debian-to-Debian 900s full plaintext run used the same dirty binary on both
+hosts (`5f07d3119f2ba57d3577059a0bc5fe40b265733927f12ab4a5eee1f5b86e931b`).
+`verify-client-bidir.jsonl` passed with `--min-gbps 4.0`, `--min-seconds 900`,
+matching build/binary identity, and full plaintext provider stats on both
+hosts. The iperf3 `--bidir` reverse direction measured 4.465 Gbps, also above
+the 4 Gbps gate. A and B boot IDs stayed unchanged, and explicit crash
+signature scanning found zero findings.
+
+OpenWrt module load/unload stability was also checked on VM202 with the SDK
+module copied to `/etc/trustix/modules/trustix_datapath.ko`:
+`9017947ff22e2181323222a8acc46b7fc89e15221a9e56b748410cd5820fe516`. Twenty
+load/unload cycles with full plaintext parameters completed without reboot or
+crash signatures. The older wrong `/etc/trustix/modules` copy was replaced with
+the SDK-built module after the reload test.
+
+Change: OpenWrt kernel module handling is now fail-closed for embedded `.ko`
+assets. Auto-mode embedded modules are disabled on OpenWrt, and required
+OpenWrt modules with an embedded or empty path are rejected with a clear
+OpenWrt SDK `.ko` error. Generated OpenWrt provisioning configs point active
+module paths at `/etc/trustix/modules/*.ko` unless
+`TRUSTIX_PROVISION_OPENWRT_ALLOW_EMBEDDED_KMOD=1` is explicitly set.
+The cross-host soak verifier now also checks iperf3 `--bidir` reverse sums
+(`sum_*_bidir_reverse`) against the same throughput and duration gate.
+
 ## 2026-06-15
 
 ### Current full-kmod speed regression check

@@ -405,8 +405,8 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if request.Profile != "plaintext_performance" || request.EndpointTransport != "udp" {
 		t.Fatalf("normalized OpenWrt performance defaults profile=%q transport=%q, want plaintext_performance/udp", request.Profile, request.EndpointTransport)
 	}
-	if request.KernelModules != "auto" || request.BuildKO != "1" {
-		t.Fatalf("normalized OpenWrt performance kernel modules/build_ko = %q/%q, want auto/1", request.KernelModules, request.BuildKO)
+	if request.KernelModules != "auto" || request.BuildKO != "auto" {
+		t.Fatalf("normalized OpenWrt performance kernel modules/build_ko = %q/%q, want auto/auto", request.KernelModules, request.BuildKO)
 	}
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
@@ -419,6 +419,9 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 		target.KernelModules.TrustIXDatapath.Mode != "required" ||
 		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" {
 		t.Fatalf("target OpenWrt performance kernel module modes = %#v, want datapath required only", target.KernelModules)
+	}
+	if target.KernelModules.TrustIXDatapath.Path != "/etc/trustix/modules/trustix_datapath.ko" {
+		t.Fatalf("target OpenWrt datapath module path = %q, want SDK-built module path", target.KernelModules.TrustIXDatapath.Path)
 	}
 	if !target.DNS.Enabled || !target.DNS.DNSMasq.Enabled || target.DNS.Domain != "trust.ix" {
 		t.Fatalf("target DNS = %#v", target.DNS)

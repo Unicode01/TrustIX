@@ -102,14 +102,23 @@ Older performance-log runs also covered a wider OpenWrt compile matrix, but the
 table above is the current-source spot check. Runtime load/function coverage is
 strongest for Ubuntu `6.8.0-124-generic`.
 
-OpenWrt `23.05.5 x86_64` runtime status is deliberately narrower than the
-Ubuntu/PVE row: module load/unload, `RX_WORKER`, `TX_PLAINTEXT`, RX-worker plus
-`clsact` TC coexistence, and single-host TCP-stream smoke pass on kernel
-`5.15.167` without reboot. This is not a formal OpenWrt A/B traffic stress
-result. Treat OpenWrt full plaintext datapath as an explicit opt-in production
-risk until longer A/B traffic stress passes on the same OpenWrt kernel. TC-only,
-userspace fallback, and helper-module paths are separate from this full
-plaintext `.ko` path.
+OpenWrt `23.05.5 x86_64` runtime status was promoted after a cross-host PVE
+stress run on 2026-06-16. OpenWrt kernel `5.15.167` loaded an OpenWrt SDK-built
+`trustix_datapath.ko` and passed OpenWrt-to-Debian full plaintext traffic at
+12.15 / 7.28 Gbps for 120s, then 14.038 / 4.676 Gbps for a 900s mixed soak.
+The verifier required build/binary identity and the full plaintext provider
+stat, and captured no panic, Oops, watchdog, lockup, RX-worker drops, or
+plaintext TX xmit errors. This result applies to matching SDK-built OpenWrt
+modules only. OpenWrt 23.05.5 has no `/sys/kernel/btf/vmlinux`, so TC/eBPF
+CO-RE is not the primary OpenWrt performance path for that release.
+
+OpenWrt deployment is fail-closed for module ABI. Do not use release-embedded
+Debian/PVE `.ko` payloads on OpenWrt. Build the module with the matching
+OpenWrt SDK, copy it to `/etc/trustix/modules/trustix_datapath.ko`, and point
+`kernel_modules.trustix_datapath.path` there. Auto-mode embedded modules are
+disabled on OpenWrt, and required OpenWrt modules with an embedded or empty path
+are rejected unless `TRUSTIX_KERNEL_MODULE_ALLOW_OPENWRT_EMBEDDED=1` is set as
+an explicit ABI override.
 
 ## Distribution notes
 

@@ -7,7 +7,13 @@ download_root="${TRUSTIX_OPENWRT_KMOD_MATRIX_DOWNLOADS:-${out_root}/downloads}"
 sdk_root="${TRUSTIX_OPENWRT_KMOD_MATRIX_SDKS:-${out_root}/sdks}"
 result_jsonl="${TRUSTIX_OPENWRT_KMOD_MATRIX_JSONL:-${out_root}/results.jsonl}"
 result_tsv="${TRUSTIX_OPENWRT_KMOD_MATRIX_TSV:-${out_root}/results.tsv}"
-base_url="${TRUSTIX_OPENWRT_DOWNLOAD_BASE:-https://downloads.openwrt.org/releases}"
+if [[ -n "${TRUSTIX_OPENWRT_DOWNLOAD_BASES:-}" ]]; then
+  base_urls="${TRUSTIX_OPENWRT_DOWNLOAD_BASES}"
+elif [[ -n "${TRUSTIX_OPENWRT_DOWNLOAD_BASE:-}" ]]; then
+  base_urls="${TRUSTIX_OPENWRT_DOWNLOAD_BASE}"
+else
+  base_urls="https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases https://mirrors.ustc.edu.cn/openwrt/releases https://mirrors.aliyun.com/openwrt/releases https://downloads.openwrt.org/releases"
+fi
 matrix_raw="${TRUSTIX_OPENWRT_KMOD_MATRIX:-}"
 keep_sdks="${TRUSTIX_OPENWRT_KMOD_MATRIX_KEEP_SDKS:-1}"
 make_v="${V:-s}"
@@ -85,9 +91,10 @@ fetch_index() {
   fi
 }
 
-discover_sdk_url() {
-  local release="$1"
-  local target="$2"
+discover_sdk_url_from_base() {
+  local base_url="$1"
+  local release="$2"
+  local target="$3"
   local target_url="${base_url}/${release}/targets/${target}/"
   local index
   index="$(fetch_index "$target_url")"
@@ -97,6 +104,19 @@ discover_sdk_url() {
     head -n 1 || true)"
   [[ -n "$name" ]] || return 1
   printf '%s%s\n' "$target_url" "$name"
+}
+
+discover_sdk_url() {
+  local release="$1"
+  local target="$2"
+  local base_url
+  for base_url in $base_urls; do
+    [[ -n "$base_url" ]] || continue
+    if discover_sdk_url_from_base "$base_url" "$release" "$target"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 archive_dir_name() {
