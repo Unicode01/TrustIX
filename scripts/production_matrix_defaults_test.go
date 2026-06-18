@@ -7,6 +7,27 @@ import (
 	"testing"
 )
 
+func readProductionTransportDefaults(t *testing.T) string {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join(".", "production-transport-defaults.tsv"))
+	if err != nil {
+		t.Fatalf("read production-transport-defaults.tsv: %v", err)
+	}
+	var rows []string
+	for _, line := range strings.Split(string(payload), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 9 {
+			t.Fatalf("invalid production default row %q", line)
+		}
+		rows = append(rows, strings.Join(fields[:9], ":"))
+	}
+	return strings.Join(rows, "\n")
+}
+
 func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *testing.T) {
 	for _, name := range []string{"linux-production-transport-matrix.sh"} {
 		t.Run(name, func(t *testing.T) {
@@ -18,21 +39,22 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 			if strings.Contains(text, "experimental_tcp:secure:stable:kernel_module:userspace") {
 				t.Fatalf("%s production defaults still select unsafe secure userspace-crypto experimental_tcp kernel fast path", name)
 			}
+			defaults := readProductionTransportDefaults(t)
 			for _, wantCase := range []string{
-				"udp:plaintext:performance:kernel_module:userspace",
-				"kernel_udp:secure:performance:tc_xdp:kernel",
-				"experimental_tcp:secure:stable:userspace:userspace",
+				"udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod:3:900",
+				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:900",
+				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:4:900",
+				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 			} {
-				if !strings.Contains(text, wantCase) {
-					t.Fatalf("%s production defaults missing %q", name, wantCase)
+				if !strings.Contains(defaults, wantCase) {
+					t.Fatalf("production defaults missing %q", wantCase)
 				}
 			}
 			for _, unwanted := range []string{
 				"kernel_udp:secure:stable:tc_xdp:userspace",
-				"experimental_tcp:plaintext:performance:kernel_module:userspace",
 			} {
-				if strings.Contains(text, unwanted) {
-					t.Fatalf("%s production defaults still include slow/unselected combo %q", name, unwanted)
+				if strings.Contains(defaults, unwanted) {
+					t.Fatalf("production defaults still include slow/unselected combo %q", unwanted)
 				}
 			}
 		})
@@ -47,6 +69,7 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 	text := string(payload)
 	for _, want := range []string{
 		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PERF_FAST:-1",
+		"defaults_file=\"${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DEFAULTS:-${repo_root}/scripts/production-transport-defaults.tsv}\"",
 		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT",
 		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_IOCTL_SELFTEST:-0",
 		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-0",
@@ -58,6 +81,8 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 		"rx_worker_single_coalesce=1",
 		"rx_worker_single_coalesce_max_frames=32",
 		"tx_plaintext_skip_inner_tcp_checksum=0",
+		"production defaults file not found",
+		"invalid production defaults row",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-production-transport-matrix.sh production defaults missing %q", want)
@@ -68,6 +93,36 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 	} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("linux-production-transport-matrix.sh production defaults still include %q", unwanted)
+		}
+	}
+}
+
+func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing.T) {
+	defaults := readProductionTransportDefaults(t)
+	for _, wantCase := range []string{
+		"udp:secure:stable:userspace:userspace:single_host:userspace:0:30",
+		"udp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+		"tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
+		"tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+		"quic:secure:stable:userspace:userspace:single_host:userspace:0:30",
+		"quic:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+		"websocket:secure:stable:userspace:userspace:single_host:userspace:0:30",
+		"websocket:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+		"http_connect:secure:stable:userspace:userspace:single_host:userspace:0:30",
+		"http_connect:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+		"gre:secure:stable:tc_xdp:userspace:single_host:userspace_tc:0:30",
+		"gre:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
+		"ipip:secure:stable:tc_xdp:userspace:single_host:userspace_tc:0:30",
+		"ipip:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
+		"vxlan:secure:stable:tc_xdp:userspace:single_host:userspace_tc:0:30",
+		"vxlan:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
+		"kernel_udp:plaintext:performance:tc_xdp:userspace:single_host:tc_direct:0:30",
+		"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:900",
+		"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
+		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:4:900",
+	} {
+		if !strings.Contains(defaults, wantCase) {
+			t.Fatalf("production defaults missing %q", wantCase)
 		}
 	}
 }

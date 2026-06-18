@@ -11,6 +11,7 @@ datapath_module_dir="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DATAPATH_MODULE_DIR:-
 datapath_script="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DATAPATH_SCRIPT:-}"
 datapath_ko="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DATAPATH_KO:-}"
 datapath_kernelmodule_test_bin="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DATAPATH_KERNELMODULE_TEST_BIN:-}"
+defaults_file="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DEFAULTS:-${repo_root}/scripts/production-transport-defaults.tsv}"
 full_datapath_module="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MODULE:-auto}"
 full_datapath_rx_worker="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_RX_WORKER:-auto}"
 full_datapath_script="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_SCRIPT:-${repo_root}/scripts/linux-full-datapath-module-smoke.sh}"
@@ -77,28 +78,13 @@ kernel_provider_available() {
 }
 
 default_cases() {
-  cat <<'CASES'
-udp:secure:stable:userspace:userspace
-udp:plaintext:stable:userspace:userspace
-udp:plaintext:performance:kernel_module:userspace
-tcp:secure:stable:userspace:userspace
-tcp:plaintext:stable:userspace:userspace
-quic:secure:stable:userspace:userspace
-quic:plaintext:stable:userspace:userspace
-websocket:secure:stable:userspace:userspace
-websocket:plaintext:stable:userspace:userspace
-http_connect:secure:stable:userspace:userspace
-http_connect:plaintext:stable:userspace:userspace
-gre:secure:stable:tc_xdp:userspace
-gre:plaintext:performance:tc_xdp:userspace
-ipip:secure:stable:tc_xdp:userspace
-ipip:plaintext:performance:tc_xdp:userspace
-vxlan:secure:stable:tc_xdp:userspace
-vxlan:plaintext:performance:tc_xdp:userspace
-kernel_udp:plaintext:performance:tc_xdp:userspace
-kernel_udp:secure:performance:tc_xdp:kernel
-experimental_tcp:secure:stable:userspace:userspace
-CASES
+  [[ -f "$defaults_file" ]] || die "production defaults file not found: $defaults_file"
+  awk -F '\t' '
+    BEGIN { OFS = ":" }
+    /^[[:space:]]*#/ || NF == 0 { next }
+    NF < 9 { printf "invalid production defaults row: %s\n", $0 >"/dev/stderr"; exit 2 }
+    { print $1, $2, $3, $4, $5 }
+  ' "$defaults_file"
 }
 
 validate_case() {
