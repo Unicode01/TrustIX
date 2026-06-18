@@ -4,7 +4,10 @@ set -Eeuo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 verifier="${TRUSTIX_CROSS_HOST_GATE_VERIFIER:-${repo_root}/scripts/linux-cross-host-soak-verify.py}"
 summary_dir="${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-}"
-min_gbps="${TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-4}"
+gate_min_gbps="${TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-}"
+full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}}"
+secure_kudp_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}}"
+route_gso_min_gbps="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-4}}"
 min_seconds="${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900}"
 seconds_slop="${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-1}"
 require_binary_identity="${TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY:-1}"
@@ -52,8 +55,9 @@ validate_case_token() {
 
 run_gate() {
   local label="$1"
-  shift
-  set -- --min-gbps "$min_gbps" --min-seconds "$min_seconds" --seconds-slop "$seconds_slop" "$@"
+  local category_min_gbps="$2"
+  shift 2
+  set -- --min-gbps "$category_min_gbps" --min-seconds "$min_seconds" --seconds-slop "$seconds_slop" "$@"
   if truthy "$require_binary_identity"; then
     set -- "$@" --require-binary-identity
   fi
@@ -67,7 +71,12 @@ run_gate() {
 
 main() {
   [[ -f "$verifier" ]] || die "verifier not found: ${verifier}"
-  validate_number TRUSTIX_CROSS_HOST_GATE_MIN_GBPS "$min_gbps"
+  if [[ -n "$gate_min_gbps" ]]; then
+    validate_number TRUSTIX_CROSS_HOST_GATE_MIN_GBPS "$gate_min_gbps"
+  fi
+  validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS "$full_kmod_min_gbps"
+  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS "$secure_kudp_min_gbps"
+  validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS "$route_gso_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS "$min_seconds"
   validate_number TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP "$seconds_slop"
   validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
@@ -122,7 +131,7 @@ main() {
   fi
 
   if [[ "$full_kmod_case_count" -gt 0 ]]; then
-    run_gate full-kmod $full_kmod_args \
+    run_gate full-kmod "$full_kmod_min_gbps" $full_kmod_args \
       --require-transport-policy-min session_pool_size="${full_kmod_min_sessions}" \
       --require-transport-policy-stat session_pool_strategy=flow \
       --require-transport-policy-stat session_pool_warmup=true \
@@ -155,7 +164,7 @@ main() {
   fi
 
   if [[ "$secure_kudp_case_count" -gt 0 ]]; then
-    run_gate secure-kudp $secure_kudp_args \
+    run_gate secure-kudp "$secure_kudp_min_gbps" $secure_kudp_args \
       --require-transport-policy-stat encryption=secure \
       --require-transport-policy-stat crypto_placement=kernel \
       --require-transport-policy-stat datapath=tc_xdp \
@@ -199,11 +208,12 @@ main() {
       --require-module-param-min trustix_crypto.kfunc_simd_irq_fpu_fastpath=1 \
       --require-module-param-any-min trustix_crypto.direct_kfunc_seal_calls=1 \
       --require-module-param-any-min trustix_crypto.direct_kfunc_open_calls=1 \
-      --require-module-param-max trustix_crypto.direct_kfunc_errors=0
+      --require-module-param-max trustix_crypto.direct_kfunc_errors=0 \
+      --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_secure_seal_batch=1
   fi
 
   if [[ "$route_gso_case_count" -gt 0 ]]; then
-    run_gate route-gso $route_gso_args \
+    run_gate route-gso "$route_gso_min_gbps" $route_gso_args \
       --require-transport-policy-min session_pool_size="${route_gso_min_sessions}" \
       --require-transport-policy-stat session_pool_strategy=flow \
       --require-transport-policy-stat session_pool_warmup=true \

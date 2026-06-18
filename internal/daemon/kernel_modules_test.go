@@ -1811,6 +1811,7 @@ func TestTrustIXDatapathHelpersSecureExperimentalTCPBuildsValidInnerChecksum(t *
 		"route_tcp_gso_async_stream_direct_build=1",
 		"route_tcp_gso_async_stream_outer_gso=1",
 		"route_tcp_gso_async_stream_direct_build_inner_csum=1",
+		"route_tcp_gso_async_secure_seal_batch=1",
 	} {
 		if !moduleParameterHasAssignment(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
@@ -1845,6 +1846,7 @@ func TestTrustIXDatapathHelpersSecureKernelUDPRouteGSOAvoidsPlaintextShortcuts(t
 		"route_tcp_gso_async_stream_direct_build=1",
 		"route_tcp_gso_async_stream_outer_gso=1",
 		"route_tcp_xmit_worker=1",
+		"route_tcp_gso_async_secure_seal_batch=1",
 	} {
 		if !moduleParameterHasAssignment(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)

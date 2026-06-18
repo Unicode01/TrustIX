@@ -822,6 +822,9 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_cross_item_dynamic_cap=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_xmit_worker=1")
 	}
+	if secureKernelRouteGSOForDesired(desired) {
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_secure_seal_batch=1")
+	}
 	return params
 }
 

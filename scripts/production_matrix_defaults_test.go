@@ -126,7 +126,10 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 	}
 	text := string(payload)
 	for _, want := range []string{
-		"TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-4",
+		"gate_min_gbps=\"${TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-}\"",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-4}",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900",
 		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY:-1",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8",
@@ -137,6 +140,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_DD_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_DD_ROUTE_GSO",
+		"validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS \"$full_kmod_min_gbps\"",
+		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS \"$secure_kudp_min_gbps\"",
+		"validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS \"$route_gso_min_gbps\"",
 		"--require-binary-identity",
 		"--require-transport-policy-stat encryption=secure",
 		"--require-transport-policy-stat crypto_placement=kernel",
@@ -175,6 +181,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-any-min trustix_crypto.direct_kfunc_seal_calls=1",
 		"--require-module-param-any-min trustix_crypto.direct_kfunc_open_calls=1",
 		"--require-module-param-max trustix_crypto.direct_kfunc_errors=0",
+		"--require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_secure_seal_batch=1",
 		"--require-datapath-min kernel_rx_stage.rx_worker_injected=1",
 		"--require-datapath-min counters.session_dials=\"${full_kmod_min_sessions}\"",
 		"--require-datapath-max counters.session_dial_errors=0",
