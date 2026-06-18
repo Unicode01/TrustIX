@@ -119,6 +119,8 @@ trustix_bpf_ctx_skb(struct __sk_buff *ctx)
 #define TRUSTIX_X86_SIMD 0
 #endif
 
+static bool trustix_kfunc_simd_irq_fpu_fastpath;
+
 #if TRUSTIX_X86_SIMD
 #include <asm/cpufeature.h>
 #include <asm/fpu/api.h>
@@ -155,7 +157,7 @@ trustix_bpf_ctx_skb(struct __sk_buff *ctx)
 #if TRUSTIX_X86_SIMD
 static bool trustix_aead_fpu_begin(void)
 {
-	if (!in_task())
+	if (!in_task() && !READ_ONCE(trustix_kfunc_simd_irq_fpu_fastpath))
 		return false;
 	if (!irq_fpu_usable())
 		return false;
@@ -380,6 +382,11 @@ static bool trustix_kfunc_simd_fastpath;
 module_param_named(kfunc_simd_fastpath, trustix_kfunc_simd_fastpath, bool, 0644);
 MODULE_PARM_DESC(kfunc_simd_fastpath,
 		 "Allow TrustIX one-packet BPF crypto callbacks to use explicit SIMD/FPU fast paths; off by default because TC/XDP callbacks can run in contexts where kernel_fpu_begin is unsafe");
+
+module_param_named(kfunc_simd_irq_fpu_fastpath,
+		   trustix_kfunc_simd_irq_fpu_fastpath, bool, 0644);
+MODULE_PARM_DESC(kfunc_simd_irq_fpu_fastpath,
+		 "Allow TrustIX one-packet BPF crypto callbacks to enter explicit SIMD/FPU outside task context when irq_fpu_usable permits it; off by default and intended only for controlled TC/XDP soak validation");
 
 static bool trustix_kfunc_direct_slot_fastpath = true;
 module_param_named(kfunc_direct_slot_fastpath,
@@ -5232,7 +5239,31 @@ static int trustix_aead_aesni_prepared_slice(struct trustix_aead_tfm *ctx,
 
 	if (!trustix_aead_fpu_begin())
 		return -EOPNOTSUPP;
-	for (i = start; i < end; i++) {
+	for (i = start; i < end;) {
+		if (!decrypt && i + 4 <= end) {
+			ret = trustix_aead_aesni_seal4_prepared(
+				ctx->vaes_rk, ctx->vaes_rounds,
+				ctx->vaes_shash, ctx->vaes_shash4, &ops[i]);
+			if (!ret) {
+				trustix_aead_prepared_set_result(&ops[i], 0);
+				trustix_aead_prepared_set_result(&ops[i + 1], 0);
+				trustix_aead_prepared_set_result(&ops[i + 2], 0);
+				trustix_aead_prepared_set_result(&ops[i + 3], 0);
+				ok += 4;
+				i += 4;
+				continue;
+			}
+			if (ret != -EOPNOTSUPP) {
+				trustix_aead_prepared_set_result(&ops[i], ret);
+				trustix_aead_prepared_set_result(&ops[i + 1], ret);
+				trustix_aead_prepared_set_result(&ops[i + 2], ret);
+				trustix_aead_prepared_set_result(&ops[i + 3], ret);
+				if (!first_err)
+					first_err = ret;
+				i += 4;
+				continue;
+			}
+		}
 		ret = decrypt ?
 			trustix_aead_aesni_open_one(ctx->vaes_rk,
 						    ctx->vaes_rounds,
@@ -5250,6 +5281,7 @@ static int trustix_aead_aesni_prepared_slice(struct trustix_aead_tfm *ctx,
 		} else if (!first_err) {
 			first_err = ret;
 		}
+		i++;
 	}
 	trustix_aead_fpu_end();
 	*successes = ok;

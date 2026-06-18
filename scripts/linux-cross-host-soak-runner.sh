@@ -1,0 +1,1248 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+case_name="${TRUSTIX_CROSS_HOST_CASE:-dd-fullkmod}"
+workdir="${TRUSTIX_CROSS_HOST_WORKDIR:-$(mktemp -d /tmp/trustix-cross-host.XXXXXX)}"
+workdir="$(mkdir -p "$workdir" && cd "$workdir" && pwd -P)"
+keep_remote="${TRUSTIX_CROSS_HOST_KEEP_REMOTE:-0}"
+keep_local="${TRUSTIX_CROSS_HOST_KEEP_LOCAL:-1}"
+unload_modules="${TRUSTIX_CROSS_HOST_UNLOAD_MODULES:-1}"
+
+node_a="${TRUSTIX_CROSS_HOST_A:-local}"
+node_b="${TRUSTIX_CROSS_HOST_B:-}"
+ssh_opts_raw="${TRUSTIX_CROSS_HOST_SSH_OPTS:-}"
+scp_opts_raw="${TRUSTIX_CROSS_HOST_SCP_OPTS:-$ssh_opts_raw}"
+
+default_bin_dir="${TRUSTIX_CROSS_HOST_BIN_DIR:-${repo_root}/build/release/trustix-linux-amd64/bin}"
+bin_dir_a="${TRUSTIX_CROSS_HOST_BIN_DIR_A:-$default_bin_dir}"
+bin_dir_b="${TRUSTIX_CROSS_HOST_BIN_DIR_B:-$default_bin_dir}"
+trustixd_a="${TRUSTIX_CROSS_HOST_TRUSTIXD_A:-${bin_dir_a}/trustixd}"
+trustixd_b="${TRUSTIX_CROSS_HOST_TRUSTIXD_B:-${bin_dir_b}/trustixd}"
+trustixctl_a="${TRUSTIX_CROSS_HOST_TRUSTIXCTL_A:-${bin_dir_a}/trustixctl}"
+trustixctl_b="${TRUSTIX_CROSS_HOST_TRUSTIXCTL_B:-${bin_dir_b}/trustixctl}"
+trustix_ca="${TRUSTIX_CROSS_HOST_TRUSTIX_CA:-${bin_dir_a}/trustix-ca}"
+
+remote_base="${TRUSTIX_CROSS_HOST_REMOTE_BASE:-/tmp}"
+remote_a="${TRUSTIX_CROSS_HOST_REMOTE_A:-${remote_base}/trustix-cross-host-a}"
+remote_b="${TRUSTIX_CROSS_HOST_REMOTE_B:-${remote_base}/trustix-cross-host-b}"
+
+full_kmod_datapath_path="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PATH:-embedded}"
+full_kmod_datapath_path_a="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PATH_A:-$full_kmod_datapath_path}"
+full_kmod_datapath_path_b="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PATH_B:-$full_kmod_datapath_path}"
+route_gso_helpers_path="${TRUSTIX_CROSS_HOST_ROUTE_GSO_HELPERS_PATH:-embedded}"
+secure_kudp_crypto_path="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PATH:-embedded}"
+secure_kudp_crypto_path_a="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PATH_A:-$secure_kudp_crypto_path}"
+secure_kudp_crypto_path_b="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PATH_B:-$secure_kudp_crypto_path}"
+secure_kudp_helpers_path="${TRUSTIX_CROSS_HOST_SECURE_KUDP_HELPERS_PATH:-}"
+secure_kudp_helpers_path_a="${TRUSTIX_CROSS_HOST_SECURE_KUDP_HELPERS_PATH_A:-$secure_kudp_helpers_path}"
+secure_kudp_helpers_path_b="${TRUSTIX_CROSS_HOST_SECURE_KUDP_HELPERS_PATH_B:-$secure_kudp_helpers_path}"
+
+domain_id="${TRUSTIX_CROSS_HOST_DOMAIN:-lab.local}"
+ix_a="${TRUSTIX_CROSS_HOST_IX_A:-ix-a}"
+ix_b="${TRUSTIX_CROSS_HOST_IX_B:-ix-b}"
+
+api_a_port="${TRUSTIX_CROSS_HOST_API_A_PORT:-18787}"
+api_b_port="${TRUSTIX_CROSS_HOST_API_B_PORT:-18788}"
+peer_a_port="${TRUSTIX_CROSS_HOST_PEER_A_PORT:-19443}"
+peer_b_port="${TRUSTIX_CROSS_HOST_PEER_B_PORT:-19444}"
+data_a_port="${TRUSTIX_CROSS_HOST_DATA_A_PORT:-}"
+data_b_port="${TRUSTIX_CROSS_HOST_DATA_B_PORT:-}"
+iperf_port="${TRUSTIX_CROSS_HOST_IPERF_PORT:-25201}"
+health_port="${TRUSTIX_CROSS_HOST_HEALTH_PORT:-}"
+iperf_seconds="${TRUSTIX_CROSS_HOST_IPERF_SECONDS:-900}"
+iperf_parallel="${TRUSTIX_CROSS_HOST_IPERF_PARALLEL:-8}"
+iperf_timeout="${TRUSTIX_CROSS_HOST_IPERF_TIMEOUT:-$((iperf_seconds + 60))}"
+iperf_mode="${TRUSTIX_CROSS_HOST_IPERF_MODE:-forward}"
+iperf_directions="${TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS:-both}"
+transport_snapshot_delay="${TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY:-5}"
+session_pool_size="${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE:-$iperf_parallel}"
+session_pool_strategy="${TRUSTIX_CROSS_HOST_SESSION_POOL_STRATEGY:-flow}"
+session_pool_warmup="${TRUSTIX_CROSS_HOST_SESSION_POOL_WARMUP:-true}"
+session_pool_heartbeat_mode="${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE:-enabled}"
+session_pool_heartbeat_interval="${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_INTERVAL:-5s}"
+session_pool_heartbeat_timeout="${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_TIMEOUT:-1s}"
+
+lan_if_a="${TRUSTIX_CROSS_HOST_LAN_IF_A:-tix-lan}"
+lan_if_b="${TRUSTIX_CROSS_HOST_LAN_IF_B:-tix-lan}"
+host_if_a="${TRUSTIX_CROSS_HOST_HOST_IF_A:-tix-host}"
+host_if_b="${TRUSTIX_CROSS_HOST_HOST_IF_B:-tix-host}"
+host_ns_a="${TRUSTIX_CROSS_HOST_HOST_NS_A:-tix-host-a}"
+host_ns_b="${TRUSTIX_CROSS_HOST_HOST_NS_B:-tix-host-b}"
+lan_a_cidr="${TRUSTIX_CROSS_HOST_LAN_A_CIDR:-10.64.0.0/24}"
+lan_b_cidr="${TRUSTIX_CROSS_HOST_LAN_B_CIDR:-10.64.1.0/24}"
+lan_a_gateway="${TRUSTIX_CROSS_HOST_LAN_A_GATEWAY:-10.64.0.1/24}"
+lan_b_gateway="${TRUSTIX_CROSS_HOST_LAN_B_GATEWAY:-10.64.1.1/24}"
+host_a_addr="${TRUSTIX_CROSS_HOST_HOST_A_ADDR:-10.64.0.2/24}"
+host_b_addr="${TRUSTIX_CROSS_HOST_HOST_B_ADDR:-10.64.1.2/24}"
+host_a_ip="${host_a_addr%/*}"
+host_b_ip="${host_b_addr%/*}"
+
+underlay_a_ip="${TRUSTIX_CROSS_HOST_A_UNDERLAY_IP:-}"
+underlay_b_ip="${TRUSTIX_CROSS_HOST_B_UNDERLAY_IP:-}"
+underlay_a_if="${TRUSTIX_CROSS_HOST_A_UNDERLAY_IF:-}"
+underlay_b_if="${TRUSTIX_CROSS_HOST_B_UNDERLAY_IF:-}"
+
+dataplane_mode="${TRUSTIX_CROSS_HOST_DATAPLANE:-linux}"
+endpoint_transport_override="${TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORT:-}"
+daemon_ready_attempts="${TRUSTIX_CROSS_HOST_READY_ATTEMPTS:-80}"
+daemon_ready_sleep="${TRUSTIX_CROSS_HOST_READY_SLEEP:-1}"
+
+ssh_opts=()
+scp_opts=()
+if [[ -n "$ssh_opts_raw" ]]; then
+  # shellcheck disable=SC2206
+  ssh_opts=($ssh_opts_raw)
+fi
+if [[ -n "$scp_opts_raw" ]]; then
+  # shellcheck disable=SC2206
+  scp_opts=($scp_opts_raw)
+fi
+
+log() {
+  printf '[trustix-cross-host-runner] %s\n' "$*" >&2
+}
+
+die() {
+  log "ERROR: $*"
+  exit 1
+}
+
+truthy() {
+  case "${1:-0}" in
+    1|true|yes|on|enabled) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+node_dest() {
+  case "$1" in
+    a) printf '%s\n' "$node_a" ;;
+    b) printf '%s\n' "$node_b" ;;
+    *) die "unknown node $1" ;;
+  esac
+}
+
+node_is_local() {
+  case "$(node_dest "$1")" in
+    local|localhost|127.0.0.1|"") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+run_node() {
+  local node="$1"
+  local script="$2"
+  local dest
+  dest="$(node_dest "$node")"
+  if node_is_local "$node"; then
+    bash -s <<<"$script"
+    return
+  fi
+  ssh "${ssh_opts[@]}" "$dest" bash -s <<<"$script"
+}
+
+ssh_no_stdin() {
+  local dest="$1"
+  shift
+  ssh -n "${ssh_opts[@]}" "$dest" "$@"
+}
+
+copy_to_node() {
+  local node="$1"
+  local src="$2"
+  local dest_path="$3"
+  local dest dest_dir
+  dest="$(node_dest "$node")"
+  if node_is_local "$node"; then
+    mkdir -p "$(dirname "$dest_path")"
+    cp -a "$src" "$dest_path"
+    return
+  fi
+  if [[ -d "$src" ]]; then
+    ssh_no_stdin "$dest" "mkdir -p $(remote_quote "$dest_path")"
+    (cd "$src" && tar -czf - .) | ssh "${ssh_opts[@]}" "$dest" "tar -xzf - -C $(remote_quote "$dest_path")"
+    return
+  fi
+  dest_dir="$(dirname "$dest_path")"
+  ssh_no_stdin "$dest" "mkdir -p $(remote_quote "$dest_dir")"
+  cat "$src" | ssh "${ssh_opts[@]}" "$dest" "cat >$(remote_quote "$dest_path")"
+}
+
+fetch_from_node() {
+  local node="$1"
+  local src="$2"
+  local dest_path="$3"
+  local dest
+  dest="$(node_dest "$node")"
+  mkdir -p "$dest_path"
+  if node_is_local "$node"; then
+    cp -a "$src"/. "$dest_path"/ 2>/dev/null || true
+    return
+  fi
+  if ssh_no_stdin "$dest" "test -d $(remote_quote "$src")" >/dev/null 2>&1; then
+    ssh_no_stdin "$dest" "cd $(remote_quote "$src") && tar -czf - ." | tar -xzf - -C "$dest_path" 2>/dev/null || true
+  fi
+}
+
+node_value() {
+  local node="$1"
+  local value_a="$2"
+  local value_b="$3"
+  if [[ "$node" == "a" ]]; then
+    printf '%s\n' "$value_a"
+  else
+    printf '%s\n' "$value_b"
+  fi
+}
+
+infer_helpers_path_from_module_path() {
+  local path="${1:-}"
+  case "$path" in
+    "") return 0 ;;
+    embedded)
+      printf 'embedded\n'
+      return 0
+      ;;
+    embedded://trustix_crypto.ko|embedded://trustix_datapath.ko)
+      printf 'embedded://trustix_datapath_helpers.ko\n'
+      return 0
+      ;;
+    *trustix_crypto.ko)
+      printf '%strustix_datapath_helpers.ko\n' "${path%trustix_crypto.ko}"
+      return 0
+      ;;
+    *trustix_datapath.ko)
+      printf '%strustix_datapath_helpers.ko\n' "${path%trustix_datapath.ko}"
+      return 0
+      ;;
+  esac
+  return 0
+}
+
+remote_dir() {
+  node_value "$1" "$remote_a" "$remote_b"
+}
+
+node_bin() {
+  local node="$1"
+  local name="$2"
+  case "$node:$name" in
+    a:trustixd) printf '%s\n' "$trustixd_a" ;;
+    b:trustixd) printf '%s\n' "$trustixd_b" ;;
+    a:trustixctl) printf '%s\n' "$trustixctl_a" ;;
+    b:trustixctl) printf '%s\n' "$trustixctl_b" ;;
+    *) die "unknown binary $node/$name" ;;
+  esac
+}
+
+remote_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+yaml_single_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+}
+
+validate_case() {
+  case "$case_name" in
+    dd-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) ;;
+    dd-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) ;;
+    dd-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) ;;
+    ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct) ;;
+    *) die "unsupported TRUSTIX_CROSS_HOST_CASE=${case_name}" ;;
+  esac
+}
+
+case_transport() {
+  case "$case_name" in
+    dd-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|dd-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'udp\n' ;;
+    *) printf 'experimental_tcp\n' ;;
+  esac
+}
+
+case_fast_path() {
+  case "$case_name" in
+    dd-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) printf 'full_kmod\n' ;;
+    dd-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'secure_kudp\n' ;;
+    dd-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) printf 'route_gso\n' ;;
+    ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct) printf 'tc_direct\n' ;;
+    *) die "unsupported TRUSTIX_CROSS_HOST_CASE=${case_name}" ;;
+  esac
+}
+
+case_encryption() {
+  case "$(case_fast_path)" in
+    secure_kudp) printf 'secure\n' ;;
+    *) printf 'plaintext\n' ;;
+  esac
+}
+
+case_crypto_placement() {
+  case "$(case_fast_path)" in
+    secure_kudp) printf 'kernel\n' ;;
+    *) printf 'userspace\n' ;;
+  esac
+}
+
+case_endpoint_transport() {
+  if [[ -n "$endpoint_transport_override" ]]; then
+    printf '%s\n' "$endpoint_transport_override"
+    return
+  fi
+  case "$(case_transport)" in
+    udp) printf 'udp\n' ;;
+    experimental_tcp) printf 'experimental_tcp\n' ;;
+  esac
+}
+
+case_capability_profile() {
+  case "$(case_fast_path)" in
+    full_kmod) printf 'full_plaintext\n' ;;
+    tc_direct) printf 'disabled\n' ;;
+    *) printf 'performance\n' ;;
+  esac
+}
+
+case_transport_datapath() {
+  case "$(case_fast_path)" in
+    secure_kudp|tc_direct) printf 'tc_xdp\n' ;;
+    *) printf 'kernel_module\n' ;;
+  esac
+}
+
+case_endpoint_name() {
+  local node="$1"
+  case "$(case_endpoint_transport)" in
+    udp) node_value "$node" a-udp b-udp ;;
+    experimental_tcp) node_value "$node" a-experimental-tcp b-experimental-tcp ;;
+  esac
+}
+
+default_data_port() {
+  local node="$1"
+  node_value "$node" 13000 13001
+}
+
+resolve_data_ports() {
+  if [[ -z "$data_a_port" ]]; then
+    data_a_port="$(default_data_port a)"
+  fi
+  if [[ -z "$data_b_port" ]]; then
+    data_b_port="$(default_data_port b)"
+  fi
+}
+
+case_module_yaml() {
+  local node="${1:-a}"
+  case "$(case_fast_path)" in
+    full_kmod)
+      local params="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PARAMETERS:-}"
+      local path
+      path="$(node_value "$node" "$full_kmod_datapath_path_a" "$full_kmod_datapath_path_b")"
+      cat <<'EOF'
+kernel_modules:
+  capability_profile: full_plaintext
+  datapath:
+    rx_stage: worker
+    rx_worker: true
+    tx_plaintext: true
+    full_plaintext: true
+  trustix_crypto:
+    mode: disabled
+  trustix_datapath:
+    mode: required
+    reload_on_upgrade: always
+    unload_on_exit: true
+EOF
+      printf '    path: %s\n' "$(yaml_single_quote "$path")"
+      if [[ -n "$params" ]]; then
+        printf '    parameters: %s\n' "$(yaml_single_quote "$params")"
+      fi
+      cat <<'EOF'
+  trustix_datapath_helpers:
+    mode: disabled
+EOF
+      ;;
+    route_gso)
+      local params="${TRUSTIX_CROSS_HOST_ROUTE_GSO_HELPER_PARAMETERS:-}"
+      cat <<'EOF'
+kernel_modules:
+  capability_profile: performance
+  trustix_crypto:
+    mode: disabled
+  trustix_datapath:
+    mode: disabled
+  trustix_datapath_helpers:
+    mode: required
+    reload_on_upgrade: always
+    unload_on_exit: true
+EOF
+      printf '    path: %s\n' "$(yaml_single_quote "$route_gso_helpers_path")"
+      if [[ -n "$params" ]]; then
+        printf '    parameters: %s\n' "$(yaml_single_quote "$params")"
+      fi
+      ;;
+    tc_direct)
+      cat <<'EOF'
+kernel_modules:
+  capability_profile: disabled
+  trustix_crypto:
+    mode: disabled
+  trustix_datapath:
+    mode: disabled
+  trustix_datapath_helpers:
+    mode: disabled
+EOF
+      ;;
+    secure_kudp)
+      local params="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PARAMETERS:-}"
+      local helper_params="${TRUSTIX_CROSS_HOST_SECURE_KUDP_HELPER_PARAMETERS:-}"
+      local path
+      local helper_path
+      path="$(node_value "$node" "$secure_kudp_crypto_path_a" "$secure_kudp_crypto_path_b")"
+      helper_path="$(node_value "$node" "$secure_kudp_helpers_path_a" "$secure_kudp_helpers_path_b")"
+      if [[ -z "$helper_path" ]]; then
+        helper_path="$(infer_helpers_path_from_module_path "$path")"
+      fi
+      cat <<'EOF'
+kernel_modules:
+  capability_profile: performance
+  trustix_crypto:
+    mode: required
+    reload_on_upgrade: always
+    unload_on_exit: true
+EOF
+      printf '    path: %s\n' "$(yaml_single_quote "$path")"
+      if [[ -n "$params" ]]; then
+        printf '    parameters: %s\n' "$(yaml_single_quote "$params")"
+      fi
+      cat <<'EOF'
+  trustix_datapath:
+    mode: disabled
+  trustix_datapath_helpers:
+EOF
+      if [[ -n "$helper_path" ]]; then
+        cat <<'EOF'
+    mode: required
+    reload_on_upgrade: always
+    unload_on_exit: true
+EOF
+        printf '    path: %s\n' "$(yaml_single_quote "$helper_path")"
+        if [[ -n "$helper_params" ]]; then
+          printf '    parameters: %s\n' "$(yaml_single_quote "$helper_params")"
+        fi
+      else
+        cat <<'EOF'
+    mode: disabled
+EOF
+      fi
+      ;;
+  esac
+}
+
+check_local_inputs() {
+  [[ -n "$node_b" ]] || die "TRUSTIX_CROSS_HOST_B is required unless node B is local"
+  [[ -x "$trustix_ca" ]] || die "trustix-ca is not executable: $trustix_ca"
+  case "$iperf_seconds" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_SECONDS must be an integer" ;; esac
+  case "$iperf_parallel" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PARALLEL must be an integer" ;; esac
+  case "$iperf_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PORT must be an integer" ;; esac
+  if [[ -z "$health_port" ]]; then
+    health_port=$((iperf_port + 1))
+  fi
+  case "$health_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_HEALTH_PORT must be an integer" ;; esac
+  [[ "$health_port" -ne "$iperf_port" ]] || die "TRUSTIX_CROSS_HOST_HEALTH_PORT must differ from TRUSTIX_CROSS_HOST_IPERF_PORT"
+  case "$transport_snapshot_delay" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be an integer" ;; esac
+  case "$session_pool_size" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be an integer" ;; esac
+  [[ "$iperf_parallel" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_IPERF_PARALLEL must be >= 1"
+  [[ "$transport_snapshot_delay" -ge 0 ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be >= 0"
+  [[ "$session_pool_size" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be >= 1"
+  resolve_data_ports
+  case "$data_a_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_A_PORT must be an integer" ;; esac
+  case "$data_b_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_B_PORT must be an integer" ;; esac
+  case "$iperf_mode" in bidir|forward|reverse) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_MODE must be bidir, forward, or reverse" ;; esac
+  case "$iperf_directions" in both|a2b|b2a|a-to-b|b-to-a) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS must be both, a2b, or b2a" ;; esac
+  case "$endpoint_transport_override" in ""|udp|experimental_tcp) ;; *) die "TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORT must be empty, udp, or experimental_tcp" ;; esac
+  case "$session_pool_strategy" in flow|five_tuple|5tuple|packet|round_robin) ;; *) die "TRUSTIX_CROSS_HOST_SESSION_POOL_STRATEGY must be flow, five_tuple, 5tuple, packet, or round_robin" ;; esac
+  case "$session_pool_warmup" in true|false|1|0|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_SESSION_POOL_WARMUP must be boolean" ;; esac
+  case "$session_pool_heartbeat_mode" in auto|enabled|on|disabled|off) ;; *) die "TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE must be auto, enabled, on, disabled, or off" ;; esac
+}
+
+check_node_prereqs() {
+  local node="$1"
+  local trustixd trustixctl
+  trustixd="$(node_bin "$node" trustixd)"
+  trustixctl="$(node_bin "$node" trustixctl)"
+  run_node "$node" "set -Eeuo pipefail
+command -v ip >/dev/null
+command -v iperf3 >/dev/null
+command -v curl >/dev/null
+test -x $(remote_quote "$trustixd")
+test -x $(remote_quote "$trustixctl")
+"
+}
+
+detect_underlay_ip() {
+  local node="$1"
+  local peer_ip="$2"
+  run_node "$node" "set -Eeuo pipefail
+ip -4 route get $(remote_quote "$peer_ip") | awk '
+  {
+    for (i = 1; i <= NF; i++) {
+      if (\$i == \"src\" && i < NF) {
+        print \$(i + 1)
+        exit
+      }
+    }
+  }
+'
+"
+}
+
+detect_underlay_if() {
+  local node="$1"
+  local peer_ip="$2"
+  run_node "$node" "set -Eeuo pipefail
+ip -4 route get $(remote_quote "$peer_ip") | awk '
+  {
+    for (i = 1; i <= NF; i++) {
+      if (\$i == \"dev\" && i < NF) {
+        print \$(i + 1)
+        exit
+      }
+    }
+  }
+'
+"
+}
+
+resolve_underlay() {
+  if [[ -z "$underlay_a_ip" || -z "$underlay_b_ip" ]]; then
+    die "set TRUSTIX_CROSS_HOST_A_UNDERLAY_IP and TRUSTIX_CROSS_HOST_B_UNDERLAY_IP"
+  fi
+  if [[ -z "$underlay_a_if" ]]; then
+    underlay_a_if="$(detect_underlay_if a "$underlay_b_ip" | tail -n 1)"
+  fi
+  if [[ -z "$underlay_b_if" ]]; then
+    underlay_b_if="$(detect_underlay_if b "$underlay_a_ip" | tail -n 1)"
+  fi
+  [[ -n "$underlay_a_if" ]] || die "could not detect node A underlay interface"
+  [[ -n "$underlay_b_if" ]] || die "could not detect node B underlay interface"
+}
+
+prepare_node_topology() {
+  local node="$1"
+  local dir lan_if host_if host_ns host_addr host_gw
+  dir="$(remote_dir "$node")"
+  lan_if="$(node_value "$node" "$lan_if_a" "$lan_if_b")"
+  host_if="$(node_value "$node" "$host_if_a" "$host_if_b")"
+  host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
+  host_addr="$(node_value "$node" "$host_a_addr" "$host_b_addr")"
+  host_gw="$(node_value "$node" "${lan_a_gateway%/*}" "${lan_b_gateway%/*}")"
+  run_node "$node" "set -Eeuo pipefail
+rm -rf $(remote_quote "$dir")
+mkdir -p $(remote_quote "$dir")/logs $(remote_quote "$dir")/certs $(remote_quote "$dir")/data
+for pid in \$(ip netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
+ip netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
+ip link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
+ip link del $(remote_quote "$host_if") >/dev/null 2>&1 || true
+ip link add $(remote_quote "$lan_if") type veth peer name $(remote_quote "$host_if")
+ip netns add $(remote_quote "$host_ns")
+ip link set $(remote_quote "$host_if") netns $(remote_quote "$host_ns")
+ip link set $(remote_quote "$lan_if") up
+ip netns exec $(remote_quote "$host_ns") ip link set lo up
+ip netns exec $(remote_quote "$host_ns") ip addr add $(remote_quote "$host_addr") dev $(remote_quote "$host_if")
+ip netns exec $(remote_quote "$host_ns") ip link set $(remote_quote "$host_if") up
+ip netns exec $(remote_quote "$host_ns") ip route replace default via $(remote_quote "$host_gw")
+"
+}
+
+generate_certs() {
+  rm -rf "$workdir/certs"
+  mkdir -p "$workdir/certs"
+  "$trustix_ca" quickstart -out "$workdir/certs" -domain "$domain_id" -ix "${ix_a},${ix_b}" >/dev/null
+  "$trustix_ca" route authorize -out "$workdir/certs" -domain "$domain_id" -ix "$ix_a" -prefix "$lan_a_cidr" >/dev/null
+  "$trustix_ca" route authorize -out "$workdir/certs" -domain "$domain_id" -ix "$ix_b" -prefix "$lan_b_cidr" >/dev/null
+}
+
+write_config() {
+  local node="$1"
+  local config_path="$2"
+  local local_ix peer_ix local_lan remote_lan local_gateway local_lan_if local_underlay_if
+  local local_peer_api remote_peer_api local_endpoint remote_endpoint local_data remote_data endpoint_transport
+  local remote_dir_node encryption crypto_placement
+  local_ix="$(node_value "$node" "$ix_a" "$ix_b")"
+  peer_ix="$(node_value "$node" "$ix_b" "$ix_a")"
+  local_lan="$(node_value "$node" "$lan_a_cidr" "$lan_b_cidr")"
+  remote_lan="$(node_value "$node" "$lan_b_cidr" "$lan_a_cidr")"
+  local_gateway="$(node_value "$node" "$lan_a_gateway" "$lan_b_gateway")"
+  local_lan_if="$(node_value "$node" "$lan_if_a" "$lan_if_b")"
+  local_underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  local_peer_api="$(node_value "$node" "${underlay_a_ip}:${peer_a_port}" "${underlay_b_ip}:${peer_b_port}")"
+  remote_peer_api="$(node_value "$node" "${underlay_b_ip}:${peer_b_port}" "${underlay_a_ip}:${peer_a_port}")"
+  local_data="$(node_value "$node" "${underlay_a_ip}:${data_a_port}" "${underlay_b_ip}:${data_b_port}")"
+  remote_data="$(node_value "$node" "${underlay_b_ip}:${data_b_port}" "${underlay_a_ip}:${data_a_port}")"
+  local_endpoint="$(case_endpoint_name "$node")"
+  if [[ "$node" == "a" ]]; then
+    remote_endpoint="$(case_endpoint_name b)"
+  else
+    remote_endpoint="$(case_endpoint_name a)"
+  fi
+  endpoint_transport="$(case_endpoint_transport)"
+  encryption="$(case_encryption)"
+  crypto_placement="$(case_crypto_placement)"
+  remote_dir_node="$(remote_dir "$node")"
+  {
+    cat <<EOF
+domain:
+  id: ${domain_id}
+  trust_roots:
+    - ${remote_dir_node}/certs/root-ca.pem
+    - ${remote_dir_node}/certs/domain-ca.pem
+    - ${remote_dir_node}/certs/config-ca.pem
+
+ix:
+  id: ${local_ix}
+  domain: ${domain_id}
+  cert: ${remote_dir_node}/certs/${local_ix}.crt
+  key: ${remote_dir_node}/certs/${local_ix}.key
+  control_api: https://${local_peer_api}
+  route_authorizations:
+    - ${remote_dir_node}/certs/${local_ix}-route.crt
+
+lan:
+  iface: ${local_lan_if}
+  underlay_iface: ${local_underlay_if}
+  gateway: ${local_gateway}
+  advertise:
+    - ${local_lan}
+  mode: routed
+  manage_address: true
+  manage_forwarding: true
+  manage_rp_filter: true
+
+endpoints:
+  - name: ${local_endpoint}
+    mode: passive
+    listen: ${local_data}
+    address: ${local_data}
+    transport: ${endpoint_transport}
+    security:
+      encryption: ${encryption}
+    enabled: true
+
+peers:
+  - id: ${peer_ix}
+    domain: ${domain_id}
+    control_api: https://${remote_peer_api}
+    endpoints:
+      - name: ${remote_endpoint}
+        address: ${remote_data}
+        transport: ${endpoint_transport}
+        security:
+          encryption: ${encryption}
+        enabled: true
+    allowed_prefixes:
+      - ${remote_lan}
+
+routes:
+  - prefix: ${remote_lan}
+    next_hop: ${peer_ix}
+    endpoint: ${remote_endpoint}
+    policy: default-routed
+    metric: 100
+
+policies:
+  - name: default-routed
+    route_selection: longest_prefix
+    load_balance: least_conn
+    flow_stickiness: true
+    rewrite: preserve_source
+
+transport_policy:
+  mode: user_defined
+  profile: performance
+  datapath: $(case_transport_datapath)
+  mtu: 1500
+  candidates:
+    - ${local_endpoint}
+  failover: health_based
+  load_balance: least_conn
+  encryption: ${encryption}
+  crypto_placement: ${crypto_placement}
+  session_pool:
+    size: ${session_pool_size}
+    strategy: ${session_pool_strategy}
+    warmup: ${session_pool_warmup}
+    heartbeat:
+      mode: ${session_pool_heartbeat_mode}
+      interval: ${session_pool_heartbeat_interval}
+      timeout: ${session_pool_heartbeat_timeout}
+  kernel_transport:
+    mode: require_kernel
+
+EOF
+    case_module_yaml "$node"
+  } >"$config_path"
+}
+
+push_inputs() {
+  copy_to_node a "$workdir/certs/." "${remote_a}/certs"
+  copy_to_node b "$workdir/certs/." "${remote_b}/certs"
+  copy_to_node a "$workdir/config-a.yaml" "${remote_a}/config.yaml"
+  copy_to_node b "$workdir/config-b.yaml" "${remote_b}/config.yaml"
+}
+
+daemon_env() {
+  case "$(case_fast_path)" in
+    full_kmod)
+      local rx_worker_experimental_tcp=0
+      if [[ "$(case_endpoint_transport)" == "experimental_tcp" ]]; then
+        rx_worker_experimental_tcp=1
+      fi
+      cat <<'EOF'
+TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT=1
+TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER=1
+TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER_EXPERIMENTS=1
+TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_RX_WORKER_EXPERIMENTS=1
+TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1
+TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT=1
+TRUSTIX_KERNEL_DATAPATH_RX_WORKER=1
+EOF
+      if truthy "${TRUSTIX_CROSS_HOST_ENABLE_OPENWRT_RX_SINGLE_COALESCE:-0}"; then
+        printf 'TRUSTIX_KERNEL_DATAPATH_ENABLE_OPENWRT_RX_SINGLE_COALESCE=1\n'
+      fi
+      if [[ -n "${TRUSTIX_CROSS_HOST_OPENWRT_RX_SINGLE_COALESCE:-}" ]]; then
+        printf 'TRUSTIX_KERNEL_DATAPATH_OPENWRT_RX_SINGLE_COALESCE=%s\n' "$TRUSTIX_CROSS_HOST_OPENWRT_RX_SINGLE_COALESCE"
+      fi
+      printf 'TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=%s\n' "$rx_worker_experimental_tcp"
+      if [[ "$rx_worker_experimental_tcp" == "1" ]]; then
+        printf 'TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1\n'
+      fi
+      ;;
+    route_gso)
+      cat <<'EOF'
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=1
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1
+TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
+EOF
+      ;;
+    tc_direct)
+      cat <<'EOF'
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1
+TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
+EOF
+      ;;
+    secure_kudp)
+      cat <<'EOF'
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_SECURE_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_ONLY=1
+TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH=1
+TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH=1
+TRUSTIX_KERNEL_CRYPTO_KFUNC_FASTPATH_STATS=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL=1
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC=0
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC=0
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_FIX_INNER_CHECKSUMS=0
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC=1
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
+EOF
+      ;;
+  esac
+}
+
+daemon_env_exports() {
+  local env_lines env_exports=""
+  env_lines="$(daemon_env)"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    env_exports="${env_exports} ${line}"
+  done <<<"$env_lines"
+  if [[ -n "${TRUSTIX_CROSS_HOST_EXTRA_DAEMON_ENV:-}" ]]; then
+    env_exports="${env_exports} ${TRUSTIX_CROSS_HOST_EXTRA_DAEMON_ENV}"
+  fi
+  printf '%s\n' "${env_exports# }"
+}
+
+start_daemon() {
+  local node="$1"
+  local dir api_port peer_port trustixd env_exports
+  dir="$(remote_dir "$node")"
+  api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
+  peer_port="$(node_value "$node" "$peer_a_port" "$peer_b_port")"
+  trustixd="$(node_bin "$node" trustixd)"
+  env_exports="$(daemon_env_exports)"
+run_node "$node" "set -Eeuo pipefail
+cd $(remote_quote "$dir")
+rm -f trustixd.pid logs/trustixd.log
+if command -v nohup >/dev/null 2>&1; then
+  nohup env ${env_exports} $(remote_quote "$trustixd") \\
+    -config $(remote_quote "${dir}/config.yaml") \\
+    -data-dir $(remote_quote "${dir}/data") \\
+    -api 127.0.0.1:${api_port} \\
+    -peer-api 0.0.0.0:${peer_port} \\
+    -dataplane $(remote_quote "$dataplane_mode") \\
+    >$(remote_quote "${dir}/logs/trustixd.log") 2>&1 </dev/null &
+elif command -v setsid >/dev/null 2>&1; then
+  setsid env ${env_exports} $(remote_quote "$trustixd") \\
+    -config $(remote_quote "${dir}/config.yaml") \\
+    -data-dir $(remote_quote "${dir}/data") \\
+    -api 127.0.0.1:${api_port} \\
+    -peer-api 0.0.0.0:${peer_port} \\
+    -dataplane $(remote_quote "$dataplane_mode") \\
+    >$(remote_quote "${dir}/logs/trustixd.log") 2>&1 </dev/null &
+else
+  env ${env_exports} $(remote_quote "$trustixd") \\
+    -config $(remote_quote "${dir}/config.yaml") \\
+    -data-dir $(remote_quote "${dir}/data") \\
+    -api 127.0.0.1:${api_port} \\
+    -peer-api 0.0.0.0:${peer_port} \\
+    -dataplane $(remote_quote "$dataplane_mode") \\
+    >$(remote_quote "${dir}/logs/trustixd.log") 2>&1 </dev/null &
+fi
+echo \$! >$(remote_quote "${dir}/trustixd.pid")
+"
+}
+
+wait_for_api() {
+  local node="$1"
+  local dir api_port
+  dir="$(remote_dir "$node")"
+  api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
+  run_node "$node" "set -Eeuo pipefail
+pid=\$(cat $(remote_quote "${dir}/trustixd.pid"))
+for _ in \$(seq 1 ${daemon_ready_attempts}); do
+  if curl -fsS http://127.0.0.1:${api_port}/v1/status >/dev/null 2>&1; then
+    exit 0
+  fi
+  if ! kill -0 \"\$pid\" >/dev/null 2>&1; then
+    sed -n '1,240p' $(remote_quote "${dir}/logs/trustixd.log") >&2 || true
+    exit 1
+  fi
+  sleep ${daemon_ready_sleep}
+done
+sed -n '1,240p' $(remote_quote "${dir}/logs/trustixd.log") >&2 || true
+exit 1
+"
+}
+
+collect_node_api() {
+  local node="$1"
+  local prefix="${2:-}"
+  local dir api_port trustixctl suffix
+  dir="$(remote_dir "$node")"
+  api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
+  trustixctl="$(node_bin "$node" trustixctl)"
+  suffix=""
+  if [[ -n "$prefix" ]]; then
+    suffix="-${prefix}"
+  fi
+  run_node "$node" "set +e
+dir=$(remote_quote "$dir")
+trustixctl=$(remote_quote "$trustixctl")
+api=http://127.0.0.1:${api_port}
+suffix=$(remote_quote "$suffix")
+collect_one() {
+  name=\"\$1\"
+  shift
+  out=\"\${dir}/\${name}\${suffix}.json\"
+  tmp=\"\${dir}/.\${name}\${suffix}.json.tmp\"
+  if \"\$trustixctl\" -api \"\$api\" \"\$@\" >\"\$tmp\" 2>\"\${dir}/\${name}\${suffix}.err\" && [ -s \"\$tmp\" ]; then
+    mv \"\$tmp\" \"\$out\"
+  else
+    rm -f \"\$tmp\"
+  fi
+}
+collect_one status status
+collect_one datapath datapath
+collect_one transports transports
+collect_one doctor doctor
+collect_one bpf bpf maps
+"
+}
+
+collect_transport_snapshot() {
+  local label="$1"
+  collect_node_api a "$label" || true
+  collect_node_api b "$label" || true
+}
+
+collect_failure_snapshot() {
+  local label="$1"
+  collect_transport_snapshot "failed-${label}" || true
+  collect_module_parameters a || true
+  collect_module_parameters b || true
+  collect_kernel_logs a || true
+  collect_kernel_logs b || true
+  fetch_from_node a "$remote_a" "$workdir/a" || true
+  fetch_from_node b "$remote_b" "$workdir/b" || true
+}
+
+collect_binary_identity() {
+  local node="$1"
+  local dir trustixd
+  dir="$(remote_dir "$node")"
+  trustixd="$(node_bin "$node" trustixd)"
+  run_node "$node" "set -Eeuo pipefail
+sha=\$(sha256sum $(remote_quote "$trustixd") | awk '{print \$1}')
+if command -v stat >/dev/null 2>&1; then
+  size=\$(stat -c %s $(remote_quote "$trustixd"))
+else
+  size=\$(wc -c <$(remote_quote "$trustixd") | awk '{print \$1}')
+fi
+version_output=\$($(remote_quote "$trustixd") -version 2>/dev/null || true)
+version=\$(printf '%s\n' \"\$version_output\" | awk -F= '/^version=/ && !found {print \$2; found=1}')
+commit=\$(printf '%s\n' \"\$version_output\" | awk -F= '/^commit=/ && !found {print \$2; found=1}')
+built_at=\$(printf '%s\n' \"\$version_output\" | awk -F= '/^built_at=/ && !found {print \$2; found=1}')
+printf '{\"path\":\"%s\",\"sha256\":\"%s\",\"size\":%s,\"version\":\"%s\",\"commit\":\"%s\",\"built_at\":\"%s\"}\\n' $(remote_quote "$trustixd") \"\$sha\" \"\$size\" \"\$version\" \"\$commit\" \"\$built_at\" >$(remote_quote "${dir}/binary-identity.json")
+"
+}
+
+collect_kernel_logs() {
+  local node="$1"
+  local dir prefix
+  dir="$(remote_dir "$node")"
+  prefix="$(node_value "$node" "$ix_a" "$ix_b")"
+  run_node "$node" "set +e
+journalctl -k -b --since '1 hour ago' --no-pager -o short-iso >$(remote_quote "${dir}/${prefix}-kernel.log") 2>&1
+dmesg -T >$(remote_quote "${dir}/${prefix}-dmesg.log") 2>&1
+lsmod | awk '/^trustix_/ {print}' >$(remote_quote "${dir}/${prefix}-lsmod.txt") 2>&1
+"
+}
+
+collect_module_parameters() {
+  local node="$1"
+  local dir
+  dir="$(remote_dir "$node")"
+  run_node "$node" "set +e
+out=$(remote_quote "${dir}/module-parameters.txt")
+: >\"\$out\"
+for module_dir in /sys/module/trustix_*/parameters; do
+  [ -d \"\$module_dir\" ] || continue
+  module=\"\${module_dir#/sys/module/}\"
+  module=\"\${module%/parameters}\"
+  printf '===== %s =====\\n' \"\$module\" >>\"\$out\"
+  for param in \"\$module_dir\"/*; do
+    [ -f \"\$param\" ] || continue
+    name=\"\${param##*/}\"
+    value=\$(cat \"\$param\" 2>/dev/null || true)
+    printf '%s=%s\\n' \"\$name\" \"\$value\" >>\"\$out\"
+  done
+done
+"
+}
+
+run_ping_checks() {
+  run_node a "set -Eeuo pipefail
+for _ in \$(seq 1 20); do
+  if ip netns exec $(remote_quote "$host_ns_a") ping -c 1 -W 1 $(remote_quote "$host_b_ip") >/dev/null 2>&1; then exit 0; fi
+  sleep 1
+done
+exit 1
+"
+  run_node b "set -Eeuo pipefail
+for _ in \$(seq 1 20); do
+  if ip netns exec $(remote_quote "$host_ns_b") ping -c 1 -W 1 $(remote_quote "$host_a_ip") >/dev/null 2>&1; then exit 0; fi
+  sleep 1
+done
+exit 1
+"
+}
+
+run_tcp_health_direction() {
+  local client="$1"
+  local server="$2"
+  local dst_ip="$3"
+  local label="$4"
+  local server_dir client_dir server_ns client_ns
+  server_dir="$(remote_dir "$server")"
+  client_dir="$(remote_dir "$client")"
+  server_ns="$(node_value "$server" "$host_ns_a" "$host_ns_b")"
+  client_ns="$(node_value "$client" "$host_ns_a" "$host_ns_b")"
+  run_node "$server" "set -Eeuo pipefail
+rm -f $(remote_quote "${server_dir}/health-${label}-server.pid") $(remote_quote "${server_dir}/health-${label}-server.json")
+ip netns exec $(remote_quote "$server_ns") iperf3 -s -1 -p ${health_port} -J >$(remote_quote "${server_dir}/health-${label}-server.json") 2>$(remote_quote "${server_dir}/health-${label}-server.err") </dev/null &
+echo \$! >$(remote_quote "${server_dir}/health-${label}-server.pid")
+"
+  sleep 1
+  run_node "$client" "set -Eeuo pipefail
+cmd=\"ip netns exec $(remote_quote "$client_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${health_port} -t 1 -P 1 -J\"
+if command -v timeout >/dev/null 2>&1; then
+  timeout 20s sh -c \"\$cmd\" >$(remote_quote "${client_dir}/health-${label}-client.json") 2>$(remote_quote "${client_dir}/health-${label}-client.err")
+else
+  sh -c \"\$cmd\" >$(remote_quote "${client_dir}/health-${label}-client.json") 2>$(remote_quote "${client_dir}/health-${label}-client.err")
+fi
+"
+  run_node "$server" "set +e
+pid=\$(cat $(remote_quote "${server_dir}/health-${label}-server.pid") 2>/dev/null || true)
+[ -z \"\$pid\" ] && exit 0
+for _ in \$(seq 1 20); do
+  kill -0 \"\$pid\" >/dev/null 2>&1 || exit 0
+  sleep 1
+done
+kill \"\$pid\" >/dev/null 2>&1 || true
+exit 0
+"
+}
+
+run_tcp_health_checks() {
+  run_tcp_health_direction a b "$host_b_ip" "a-to-b"
+  run_tcp_health_direction b a "$host_a_ip" "b-to-a"
+}
+
+run_connectivity_checks() {
+  case "$(case_fast_path)" in
+    secure_kudp) run_tcp_health_checks ;;
+    *) run_ping_checks ;;
+  esac
+}
+
+start_iperf_server() {
+  local node="$1"
+  local dir host_ns
+  dir="$(remote_dir "$node")"
+  host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
+run_node "$node" "set -Eeuo pipefail
+rm -f $(remote_quote "${dir}/iperf3-server.pid") $(remote_quote "${dir}/iperf3-server.json")
+if command -v nohup >/dev/null 2>&1; then
+  nohup ip netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
+elif command -v setsid >/dev/null 2>&1; then
+  setsid ip netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
+else
+  ip netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
+fi
+echo \$! >$(remote_quote "${dir}/iperf3-server.pid")
+"
+}
+
+run_iperf_client() {
+  local node="$1"
+  local dst_ip="$2"
+  local out_name="$3"
+  local dir host_ns mode_args
+  dir="$(remote_dir "$node")"
+  host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
+  case "$iperf_mode" in
+    bidir) mode_args="--bidir" ;;
+    forward) mode_args="" ;;
+    reverse) mode_args="-R" ;;
+  esac
+  run_node "$node" "set -Eeuo pipefail
+iperf_cmd=\"ip netns exec $(remote_quote "$host_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${iperf_port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J\"
+out=$(remote_quote "${dir}/${out_name}")
+err=$(remote_quote "${dir}/${out_name%.json}.err")
+rc=0
+if command -v timeout >/dev/null 2>&1; then
+  timeout ${iperf_timeout}s sh -c \"\$iperf_cmd\" >\"\$out\" 2>\"\$err\" || rc=\$?
+else
+  sh -c \"\$iperf_cmd\" >\"\$out\" 2>\"\$err\" || rc=\$?
+fi
+if [ \"\$rc\" -eq 0 ]; then
+  json_error_pattern='\"error\"'
+  json_sum_sent_pattern='\"sum_sent\"'
+  json_sum_received_pattern='\"sum_received\"'
+  if grep -Fq \"\$json_error_pattern\" \"\$out\" 2>/dev/null; then
+    printf '%s\\n' 'trustix-cross-host-runner: iperf JSON contains error' >>\"\$err\"
+    rc=1
+  elif ! grep -Fq \"\$json_sum_sent_pattern\" \"\$out\" 2>/dev/null && ! grep -Fq \"\$json_sum_received_pattern\" \"\$out\" 2>/dev/null; then
+    printf '%s\\n' 'trustix-cross-host-runner: iperf JSON missing final summary' >>\"\$err\"
+    rc=1
+  fi
+fi
+exit \"\$rc\"
+"
+}
+
+run_iperf_client_with_snapshot() {
+  local node="$1"
+  local dst_ip="$2"
+  local out_name="$3"
+  local client_pid snapshot_label rc
+  run_iperf_client "$node" "$dst_ip" "$out_name" &
+  client_pid=$!
+  if [[ "$transport_snapshot_delay" -gt 0 ]]; then
+    sleep "$transport_snapshot_delay"
+  fi
+  snapshot_label="${out_name%.json}"
+  snapshot_label="${snapshot_label#iperf3-}"
+  collect_transport_snapshot "during-${snapshot_label}"
+  if wait "$client_pid"; then
+    return 0
+  else
+    rc=$?
+  fi
+  collect_failure_snapshot "$snapshot_label"
+  return "$rc"
+}
+
+iperf_artifact_suffix() {
+  case "$iperf_mode" in
+    bidir) printf 'bidir\n' ;;
+    forward) printf 'forward\n' ;;
+    reverse) printf 'reverse\n' ;;
+  esac
+}
+
+wait_iperf_server_exit() {
+  local node="$1"
+  local dir
+  dir="$(remote_dir "$node")"
+  run_node "$node" "set +e
+pid=\$(cat $(remote_quote "${dir}/iperf3-server.pid") 2>/dev/null || true)
+[ -z \"\$pid\" ] && exit 0
+for _ in \$(seq 1 40); do
+  kill -0 \"\$pid\" >/dev/null 2>&1 || exit 0
+  sleep 1
+done
+kill \"\$pid\" >/dev/null 2>&1 || true
+exit 0
+"
+}
+
+run_iperf_bidirectional_artifacts() {
+  local suffix rc=0
+  suffix="$(iperf_artifact_suffix)"
+  case "$iperf_directions" in
+    both|a2b|a-to-b)
+      start_iperf_server b
+      sleep 1
+      run_iperf_client_with_snapshot a "$host_b_ip" "iperf3-a-to-b-${suffix}.json" || rc=$?
+      wait_iperf_server_exit b
+      ;;
+  esac
+
+  case "$iperf_directions" in
+    both|b2a|b-to-a)
+      start_iperf_server a
+      sleep 1
+      run_iperf_client_with_snapshot b "$host_a_ip" "iperf3-b-to-a-${suffix}.json" || rc=$?
+      wait_iperf_server_exit a
+      ;;
+  esac
+  return "$rc"
+}
+
+stop_daemon() {
+  local node="$1"
+  local dir
+  dir="$(remote_dir "$node")"
+  run_node "$node" "set +e
+if [ -s $(remote_quote "${dir}/trustixd.pid") ]; then
+  pid=\$(cat $(remote_quote "${dir}/trustixd.pid"))
+  kill \"\$pid\" >/dev/null 2>&1 || true
+  for _ in \$(seq 1 40); do
+    kill -0 \"\$pid\" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  kill -KILL \"\$pid\" >/dev/null 2>&1 || true
+fi
+"
+}
+
+cleanup_node() {
+  local node="$1"
+  local dir lan_if host_ns trustixd api_port peer_port env_exports
+  dir="$(remote_dir "$node")"
+  lan_if="$(node_value "$node" "$lan_if_a" "$lan_if_b")"
+  host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
+  trustixd="$(node_bin "$node" trustixd)"
+  api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
+  peer_port="$(node_value "$node" "$peer_a_port" "$peer_b_port")"
+  env_exports="$(daemon_env_exports)"
+  run_node "$node" "set +e
+if [ -x $(remote_quote "$trustixd") ] && [ -f $(remote_quote "${dir}/config.yaml") ]; then
+  env ${env_exports} $(remote_quote "$trustixd") -config $(remote_quote "${dir}/config.yaml") -data-dir $(remote_quote "${dir}/data") -api 127.0.0.1:${api_port} -peer-api 0.0.0.0:${peer_port} -dataplane $(remote_quote "$dataplane_mode") -cleanup-dataplane >>$(remote_quote "${dir}/logs/cleanup.log") 2>&1
+fi
+for pid in \$(ip netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
+ip netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
+ip link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
+if [ $(remote_quote "$unload_modules") = '1' ]; then
+  rmmod trustix_datapath >/dev/null 2>&1 || true
+  rmmod trustix_datapath_helpers >/dev/null 2>&1 || true
+  rmmod trustix_crypto >/dev/null 2>&1 || true
+fi
+if [ $(remote_quote "$keep_remote") != '1' ]; then
+  rm -rf $(remote_quote "$dir")
+fi
+"
+}
+
+collect_all() {
+  collect_node_api a || true
+  collect_node_api b || true
+  collect_module_parameters a || true
+  collect_module_parameters b || true
+  collect_binary_identity a || true
+  collect_binary_identity b || true
+  collect_kernel_logs a || true
+  collect_kernel_logs b || true
+  fetch_from_node a "$remote_a" "$workdir/a"
+  fetch_from_node b "$remote_b" "$workdir/b"
+}
+
+cleanup_all() {
+  set +e
+  collect_all
+  stop_daemon a
+  stop_daemon b
+  cleanup_node a
+  cleanup_node b
+  if [[ "$keep_local" != "1" && -d "$workdir" ]]; then
+    rm -rf "$workdir"
+  fi
+}
+
+main() {
+  validate_case
+  need_cmd ssh
+  need_cmd tar
+  need_cmd cp
+  need_cmd find
+  check_local_inputs
+  log "case=${case_name} workdir=${workdir}"
+  if [[ "$(case_transport)" == "udp" && "$(case_endpoint_transport)" == "experimental_tcp" ]]; then
+    log "WARNING: full-kmod with experimental_tcp endpoint is diagnostic only; production uses UDP full-kmod or experimental_tcp route-GSO"
+  fi
+  check_node_prereqs a
+  check_node_prereqs b
+  resolve_underlay
+  log "underlay a=${underlay_a_ip}/${underlay_a_if} b=${underlay_b_ip}/${underlay_b_if}"
+  trap cleanup_all EXIT
+  prepare_node_topology a
+  prepare_node_topology b
+  generate_certs
+  write_config a "$workdir/config-a.yaml"
+  write_config b "$workdir/config-b.yaml"
+  push_inputs
+  start_daemon a
+  start_daemon b
+  wait_for_api a
+  wait_for_api b
+  run_connectivity_checks
+  run_iperf_bidirectional_artifacts
+  collect_all
+  printf 'pass\n' >"$workdir/${case_name}.result"
+  log "pass result=${workdir}"
+}
+
+main "$@"

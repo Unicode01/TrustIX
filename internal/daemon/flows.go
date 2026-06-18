@@ -684,7 +684,7 @@ func autoKernelTunnelTCPMSSClampForMTU(mtu int, secureData bool) int {
 	if secureData {
 		overhead += trustIXSecureDataOverhead + kernelTunnelSecureTCPMSSHeadroom
 	}
-	mss := mtu - overhead - ipv4HeaderLen - kernelUDPSecureDirectTCPOptionBudget
+	mss := mtu - overhead - ipv4HeaderLen - tcpHeaderLen - kernelUDPSecureDirectTCPOptionBudget
 	if mss < tcpMSSMinimumIPv4 {
 		return tcpMSSMinimumIPv4
 	}
@@ -699,7 +699,7 @@ func autoExperimentalTCPTCPMSSClampForMTU(mtu int, secureData bool) int {
 	if secureData {
 		overhead += trustIXSecureDataOverhead
 	}
-	mss := mtu - overhead - ipv4HeaderLen - kernelUDPSecureDirectTCPOptionBudget
+	mss := mtu - overhead - ipv4HeaderLen - tcpHeaderLen - kernelUDPSecureDirectTCPOptionBudget
 	if mss < tcpMSSMinimumIPv4 {
 		return tcpMSSMinimumIPv4
 	}
@@ -734,7 +734,7 @@ func autoKernelUDPTCPMSSClampBaseForMTU(mtu int, secureData bool) int {
 	if secureData {
 		overhead += trustIXSecureDataOverhead
 	}
-	mss := mtu - overhead - ipv4HeaderLen - kernelUDPSecureDirectTCPOptionBudget
+	mss := mtu - overhead - ipv4HeaderLen - tcpHeaderLen - kernelUDPSecureDirectTCPOptionBudget
 	if mss < tcpMSSMinimumIPv4 {
 		return tcpMSSMinimumIPv4
 	}
@@ -749,7 +749,7 @@ func autoUserspaceUDPTCPMSSClampForMTU(mtu int, secureData bool) int {
 	if secureData {
 		overhead += trustIXSecureDataOverhead
 	}
-	mss := mtu - overhead - ipv4HeaderLen - kernelUDPSecureDirectTCPOptionBudget
+	mss := mtu - overhead - ipv4HeaderLen - tcpHeaderLen - kernelUDPSecureDirectTCPOptionBudget
 	if mss < tcpMSSMinimumIPv4 {
 		return tcpMSSMinimumIPv4
 	}

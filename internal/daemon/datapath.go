@@ -280,6 +280,7 @@ type dataPathSessionStatus struct {
 	Reverse     bool                     `json:"reverse"`
 	PoolIndex   int                      `json:"pool_index,omitempty"`
 	ControlOnly bool                     `json:"control_only,omitempty"`
+	ReceiveLoop bool                     `json:"receive_loop"`
 	LastRX      time.Time                `json:"last_rx,omitempty"`
 	LastTX      time.Time                `json:"last_tx,omitempty"`
 	LastUp      time.Time                `json:"last_up,omitempty"`
@@ -396,6 +397,7 @@ type dataSessionRuntime struct {
 	batching     dataSessionBatchConfig
 	controlOnly  bool
 	receiveData  bool
+	receiveLoop  bool
 	sendMu       sync.Mutex
 	batchMu      sync.Mutex
 	batchNotify  chan struct{}
@@ -1763,7 +1765,7 @@ func (daemon *Daemon) registerInboundDataSession(ctx context.Context, listenerEn
 		return runtime, nil
 	}
 	existingRuntime := daemon.dataSessionState[key]
-	if existing != nil && existingRuntime != nil && daemon.shouldKeepExistingSecureKernelUDPReverseSessionLocked(key, session) {
+	if existing != nil && existingRuntime != nil && daemon.shouldKeepExistingKernelUDPReverseSessionLocked(key, session) {
 		daemon.dataMu.Unlock()
 		_ = session.Close()
 		return existingRuntime, nil
@@ -4104,19 +4106,36 @@ func (daemon *Daemon) shouldDropOutboundDataSessionsForInbound(endpoint config.E
 	return strings.TrimSpace(endpoint.Address) == ""
 }
 
-func (daemon *Daemon) shouldKeepExistingSecureKernelUDPReverseSessionLocked(key dataSessionKey, incoming transport.Session) bool {
+func (daemon *Daemon) shouldKeepExistingKernelUDPReverseSessionLocked(key dataSessionKey, incoming transport.Session) bool {
 	if key.Address != reverseSessionAddress ||
 		key.Transport != transport.ProtocolUDP ||
 		daemon.kernelTransportMode() != dataplane.KernelTransportModeRequireKernel ||
 		incoming == nil {
 		return false
 	}
+	stats := incoming.Stats()
+	if daemon.shouldKeepExistingFullPlaintextKernelUDPReverseSessionLocked(key, stats) {
+		return true
+	}
+	return daemon.shouldKeepExistingSecureKernelUDPReverseSessionLocked(key, stats)
+}
+
+func (daemon *Daemon) shouldKeepExistingFullPlaintextKernelUDPReverseSessionLocked(key dataSessionKey, stats transport.TransportStats) bool {
+	if parseSecureTransportEncryption(key.Encryption) != securetransport.EncryptionPlaintext {
+		return false
+	}
+	if !kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
+		return false
+	}
+	return !stats.Encrypted && stats.NativeBatching && stats.Datagram
+}
+
+func (daemon *Daemon) shouldKeepExistingSecureKernelUDPReverseSessionLocked(key dataSessionKey, stats transport.TransportStats) bool {
 	switch parseSecureTransportEncryption(key.Encryption) {
 	case securetransport.EncryptionSecure, securetransport.EncryptionSendEncrypted, securetransport.EncryptionReceiveEncrypted:
 	default:
 		return false
 	}
-	stats := incoming.Stats()
 	if !stats.Encrypted || !stats.NativeBatching || !stats.Datagram {
 		return false
 	}
@@ -4299,6 +4318,7 @@ func (daemon *Daemon) startDataSessionRuntimeLockedWithOptions(key dataSessionKe
 		retainKernelFlowOnClose(session)
 	}
 	receiveData := !controlOnly || daemon.controlOnlySessionReceivesData(key, session)
+	receiveLoop := receiveData && !daemon.kernelDatapathFullPlaintextOwnsSessionReceive(key)
 	runtime := &dataSessionRuntime{
 		key:         key,
 		session:     session,
@@ -4309,6 +4329,7 @@ func (daemon *Daemon) startDataSessionRuntimeLockedWithOptions(key dataSessionKe
 		batchNotify: make(chan struct{}, 1),
 		controlOnly: controlOnly,
 		receiveData: receiveData,
+		receiveLoop: receiveLoop,
 	}
 	now := time.Now().UTC().UnixNano()
 	runtime.lastPong.Store(now)
@@ -4317,16 +4338,29 @@ func (daemon *Daemon) startDataSessionRuntimeLockedWithOptions(key dataSessionKe
 	runtime.lastUp.Store(now)
 	daemon.dataSessionState[key] = runtime
 	runtime.cacheSessionCapabilities(session)
-	if runtime.receiveData {
+	if runtime.receiveLoop {
 		go daemon.receiveDataPathSession(runtimeCtx, runtime, session)
 	}
-	if runtime.receiveData && daemon.sessionHeartbeatEnabledLocked() {
+	if runtime.receiveLoop && daemon.sessionHeartbeatEnabledLocked() {
 		go daemon.runDataSessionHeartbeat(runtimeCtx, runtime)
 	}
 	if runtime.batching.enabled {
 		go daemon.runDataSessionBatchFlusher(runtimeCtx, runtime)
 	}
 	return runtime
+}
+
+func (daemon *Daemon) kernelDatapathFullPlaintextOwnsSessionReceive(key dataSessionKey) bool {
+	if key.Transport != transport.ProtocolUDP {
+		return false
+	}
+	if parseSecureTransportEncryption(key.Encryption) != securetransport.EncryptionPlaintext {
+		return false
+	}
+	if config.EffectiveTransportProfile(daemon.desired.TransportPolicy, string(transport.ProtocolUDP)).Datapath == config.TransportDatapathUserspace {
+		return false
+	}
+	return kernelDatapathFullPlaintextEnabledForDesired(daemon.desired)
 }
 
 func (daemon *Daemon) controlOnlySessionReceivesData(key dataSessionKey, session transport.Session) bool {
@@ -6561,10 +6595,11 @@ func (daemon *Daemon) dataPathStatusWithStats(dataplaneStats dataplane.Stats, da
 			direction = "inbound_reverse"
 		}
 		runtime := daemon.dataSessionState[key]
-		var controlOnly bool
+		var controlOnly, receiveLoop bool
 		var lastRX, lastTX, lastUp, lastPong time.Time
 		if runtime != nil {
 			controlOnly = runtime.controlOnly
+			receiveLoop = runtime.receiveLoop
 			lastRX = unixNanoTime(runtime.lastRX.Load())
 			lastTX = unixNanoTime(runtime.lastTX.Load())
 			lastUp = unixNanoTime(runtime.lastUp.Load())
@@ -6579,6 +6614,7 @@ func (daemon *Daemon) dataPathStatusWithStats(dataplaneStats dataplane.Stats, da
 			Reverse:     reverse,
 			PoolIndex:   key.PoolIndex,
 			ControlOnly: controlOnly,
+			ReceiveLoop: receiveLoop,
 			LastRX:      lastRX,
 			LastTX:      lastTX,
 			LastUp:      lastUp,

@@ -1965,6 +1965,8 @@ button {
 
 .ix-bootstrap-output {
   grid-template-columns: 1fr;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .issue-result-meta {
@@ -1991,6 +1993,17 @@ button {
   min-height: 190px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+}
+
+.ix-bootstrap-output .field,
+.ix-bootstrap-output .field-lines {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ix-bootstrap-output .field-lines {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .grant-list,
@@ -2126,6 +2139,7 @@ button {
 
 .endpoint-config-card {
   grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
+  overflow: hidden;
 }
 
 .form-actions,
@@ -2250,6 +2264,7 @@ button {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elevated);
+  overflow: hidden;
 }
 
 .peer-endpoint-card .field:has(.field-lines) {

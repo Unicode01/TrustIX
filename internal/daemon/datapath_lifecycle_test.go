@@ -934,6 +934,155 @@ func TestDataSessionControlOnlyKeepsFullPlaintextUDPOnKernelDatapath(t *testing.
 	}
 }
 
+func TestFullPlaintextKernelUDPRuntimeSkipsUserspaceReceiveLoop(t *testing.T) {
+	session := &epochBumpSession{stats: transport.TransportStats{Datagram: true, NativeBatching: true, FragmentingDatagram: true, MaxPacketSize: 1500}}
+	daemon := &Daemon{
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		desired: config.Desired{
+			Endpoints: []config.EndpointConfig{{
+				Name:      "udp-a",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				Datapath:   config.TransportDatapathKernelModule,
+				Encryption: securetransport.EncryptionPlaintext,
+				Candidates: []core.EndpointID{"udp-a"},
+			},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+		},
+	}
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "udp-a",
+		Transport:  transport.ProtocolUDP,
+		Address:    "127.0.0.1:17042",
+		Encryption: securetransport.EncryptionPlaintext,
+	}
+	daemon.dataSessions[key] = session
+	daemon.dataMu.Lock()
+	runtime := daemon.startDataSessionRuntimeLocked(key, session, config.PeerConfig{ID: "ix-b"}, config.EndpointConfig{
+		Name:      "udp-a",
+		Transport: string(transport.ProtocolUDP),
+	})
+	daemon.dataMu.Unlock()
+	defer daemon.closeDataSessions()
+	if runtime == nil {
+		t.Fatal("runtime should be created")
+	}
+	if runtime.controlOnly {
+		t.Fatal("full plaintext UDP runtime should keep data-plane session semantics for kernel state")
+	}
+	if !runtime.receiveData {
+		t.Fatal("full plaintext UDP runtime should remain a data session")
+	}
+	if runtime.receiveLoop {
+		t.Fatal("full plaintext UDP runtime must not start userspace receive loop")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if session.closed.Load() {
+		t.Fatal("full plaintext UDP runtime closed session through userspace receive loop")
+	}
+}
+
+func TestFullPlaintextKernelUDPRuntimeSkipsUserspaceReceiveLoopWithAutoDatapathProfile(t *testing.T) {
+	session := &epochBumpSession{stats: transport.TransportStats{Datagram: true, NativeBatching: true, FragmentingDatagram: true, MaxPacketSize: 1500}}
+	daemon := &Daemon{
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		desired: config.Desired{
+			Endpoints: []config.EndpointConfig{{
+				Name:      "udp-a",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionPlaintext,
+				Candidates: []core.EndpointID{"udp-a"},
+			},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+		},
+	}
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "udp-a",
+		Transport:  transport.ProtocolUDP,
+		Address:    "127.0.0.1:17042",
+		Encryption: securetransport.EncryptionPlaintext,
+	}
+	daemon.dataSessions[key] = session
+	daemon.dataMu.Lock()
+	runtime := daemon.startDataSessionRuntimeLocked(key, session, config.PeerConfig{ID: "ix-b"}, config.EndpointConfig{
+		Name:      "udp-a",
+		Transport: string(transport.ProtocolUDP),
+	})
+	daemon.dataMu.Unlock()
+	defer daemon.closeDataSessions()
+	if runtime == nil {
+		t.Fatal("runtime should be created")
+	}
+	if runtime.receiveLoop {
+		t.Fatal("full plaintext UDP runtime with auto datapath profile must not start userspace receive loop")
+	}
+}
+
+func TestFullPlaintextKernelUDPUserspaceDatapathKeepsReceiveLoop(t *testing.T) {
+	session := &epochBumpSession{stats: transport.TransportStats{Datagram: true, NativeBatching: true, FragmentingDatagram: true, MaxPacketSize: 1500}}
+	daemon := &Daemon{
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		desired: config.Desired{
+			Endpoints: []config.EndpointConfig{{
+				Name:      "udp-a",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				Datapath:   config.TransportDatapathUserspace,
+				Encryption: securetransport.EncryptionPlaintext,
+				Candidates: []core.EndpointID{"udp-a"},
+			},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+		},
+	}
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "udp-a",
+		Transport:  transport.ProtocolUDP,
+		Address:    "127.0.0.1:17042",
+		Encryption: securetransport.EncryptionPlaintext,
+	}
+	daemon.dataSessions[key] = session
+	daemon.dataMu.Lock()
+	runtime := daemon.startDataSessionRuntimeLocked(key, session, config.PeerConfig{ID: "ix-b"}, config.EndpointConfig{
+		Name:      "udp-a",
+		Transport: string(transport.ProtocolUDP),
+	})
+	daemon.dataMu.Unlock()
+	defer daemon.closeDataSessions()
+	if runtime == nil {
+		t.Fatal("runtime should be created")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for !session.closed.Load() {
+		select {
+		case <-ctx.Done():
+			t.Fatal("userspace datapath runtime did not start receive loop")
+		case <-ticker.C:
+		}
+	}
+}
+
 func TestKernelDirectWarmupKeepsFullPlaintextUDPDataSession(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
 	daemon := &Daemon{

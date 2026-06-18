@@ -211,7 +211,7 @@ write_manifest() {
     printf '  "embedded_assets": {\n'
     printf '    "ebpf": {\n'
     first=1
-    for name in experimental_tcp_xdp experimental_tcp_kernel_crypto_xdp experimental_tcp_kernel_crypto_xdp_direct experimental_tcp_kernel_crypto_tx_xdp kernel_udp_xdp kernel_udp_tx_kernel_crypto_tc kernel_udp_rx_kernel_crypto_tc kernel_udp_rx_kernel_crypto_tc_skbopen kernel_udp_rx_kernel_crypto_tc_skbopen_decap_l2 skb_kfunc_tc kernel_crypto_provider kernel_crypto_selftest; do
+    for name in experimental_tcp_xdp experimental_tcp_kernel_crypto_xdp experimental_tcp_kernel_crypto_xdp_direct experimental_tcp_kernel_crypto_tx_xdp kernel_udp_xdp kernel_udp_tx_kernel_crypto_tc kernel_udp_tx_kernel_crypto_tc_routegso kernel_udp_rx_kernel_crypto_tc kernel_udp_rx_kernel_crypto_tc_skbopen kernel_udp_rx_kernel_crypto_tc_skbopen_decap_l2 skb_kfunc_tc kernel_crypto_provider kernel_crypto_selftest; do
       src_path="${obj_dir}/bpf/${name}_bpfel.o"
       if [[ ! -f "$src_path" ]]; then
         src_path="${bpf_asset_dir}/${name}_bpfel.o"

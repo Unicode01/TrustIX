@@ -357,8 +357,7 @@ func experimentalTCPActiveGSOLANOffloadPreserveRequested(spec dataplane.AttachSp
 	if !spec.ExperimentalTCPTXDirect || !kernelUDPTXDirectOnlyEnabled(spec) {
 		return false
 	}
-	if experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec) ||
-		experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
+	if spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync {
 		return true
 	}
 	if !experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() {
@@ -520,7 +519,7 @@ func vethPeerOffloadTarget(link netlink.Link) (*linkOffloadTarget, string) {
 	if !ok {
 		return nil, ""
 	}
-	peerIndex, err := netlink.VethPeerIndex(veth)
+	peerIndex, err := vethPeerIndex(veth)
 	if err != nil {
 		return nil, fmt.Sprintf("LAN offload protection could not inspect veth peer for %s: %v", link.Attrs().Name, err)
 	}
@@ -538,6 +537,17 @@ func vethPeerOffloadTarget(link netlink.Link) (*linkOffloadTarget, string) {
 		return nil, fmt.Sprintf("LAN offload protection could not locate veth peer ifindex %d for %s in named netns", peerIndex, link.Attrs().Name)
 	}
 	return target, ""
+}
+
+func vethPeerIndex(link *netlink.Veth) (int, error) {
+	if link == nil || link.Attrs() == nil {
+		return -1, fmt.Errorf("nil veth link")
+	}
+	attrs := link.Attrs()
+	if attrs.ParentIndex > 0 && attrs.ParentIndex != attrs.Index {
+		return attrs.ParentIndex, nil
+	}
+	return netlink.VethPeerIndex(link)
 }
 
 func vethPeerHardwareAddr(link netlink.Link) (net.HardwareAddr, string) {

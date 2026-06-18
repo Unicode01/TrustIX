@@ -362,6 +362,95 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsIgnoreExistingSessionKey(
 	}
 }
 
+func TestKernelDatapathFullPlaintextRouteSessionRecordsCoverActivePoolIndexes(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX", "1")
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX: config.IXConfig{ID: "ix-a"},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: "plaintext",
+			},
+			Endpoints: []config.EndpointConfig{{
+				Name:      "wan-udp",
+				Mode:      config.EndpointModePassive,
+				Listen:    "192.0.2.1:17041",
+				Address:   "192.0.2.1:17041",
+				Transport: string(transport.ProtocolUDP),
+				Security: config.EndpointSecurityConfig{
+					Encryption: "plaintext",
+				},
+				Enabled: true,
+			}},
+			Peers: []config.PeerConfig{{
+				ID: "ix-b",
+				Endpoints: []config.EndpointConfig{{
+					Name:      "wan-udp",
+					Mode:      config.EndpointModePassive,
+					Address:   "198.51.100.2:17042",
+					Transport: string(transport.ProtocolUDP),
+					Security: config.EndpointSecurityConfig{
+						Encryption: "plaintext",
+					},
+					Enabled: true,
+				}},
+			}},
+		},
+		dataSessions:     map[dataSessionKey]transport.Session{},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{},
+	}
+	for _, poolIndex := range []int{0, 7, 1} {
+		key := dataSessionKey{
+			Peer:       "ix-b",
+			Endpoint:   "wan-udp",
+			Transport:  transport.ProtocolUDP,
+			Address:    "198.51.100.2:17042",
+			Encryption: "plaintext",
+			PoolIndex:  poolIndex,
+		}
+		daemon.dataSessions[key] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+			FlowID:   uint64(100 + poolIndex),
+			Peer:     "ix-b",
+			Endpoint: "wan-udp",
+		}}
+		daemon.dataSessionState[key] = &dataSessionRuntime{key: key}
+	}
+
+	records := daemon.kernelDatapathFullPlaintextRouteSessionRecords(context.Background(), []routing.Route{{
+		Prefix:   core.Prefix("10.202.12.0/24"),
+		NextHop:  "ix-b",
+		Endpoint: "wan-udp",
+		Kind:     routing.RouteUnicast,
+	}})
+	if len(records) != 6 {
+		t.Fatalf("full plaintext records = %#v, want three session/wire pairs", records)
+	}
+	for i, poolIndex := range []int{0, 1, 7} {
+		session := records[i*2]
+		wire := records[i*2+1]
+		key := dataSessionKey{
+			Peer:       "ix-b",
+			Endpoint:   "wan-udp",
+			Transport:  transport.ProtocolUDP,
+			Address:    "198.51.100.2:17042",
+			Encryption: "plaintext",
+			PoolIndex:  poolIndex,
+		}
+		if session.Kind != kernelmodule.TrustIXDatapathStateKindSession ||
+			wire.Kind != kernelmodule.TrustIXDatapathStateKindSessionWire ||
+			session.Key != kernelDatapathSessionStateKey(key) ||
+			wire.Key != session.Key ||
+			session.Value[7] != uint64(poolIndex) ||
+			wire.Value[7] != uint64(poolIndex) ||
+			wire.Value[0] != session.Value[0] ||
+			wire.Value[0] == 0 {
+			t.Fatalf("unexpected pool %d records: session=%#v wire=%#v", poolIndex, session, wire)
+		}
+	}
+}
+
 func TestKernelDatapathFullPlaintextFlowIDIsSharedAcrossDirections(t *testing.T) {
 	daemon := &Daemon{}
 	endpointA := config.EndpointConfig{
@@ -385,6 +474,7 @@ func TestKernelDatapathFullPlaintextFlowIDIsSharedAcrossDirections(t *testing.T)
 		config.PeerConfig{ID: "ix-b"},
 		endpointB,
 		endpointA,
+		0,
 	)
 	if !ok {
 		t.Fatal("ix-a to ix-b full plaintext records were not encoded")
@@ -394,6 +484,7 @@ func TestKernelDatapathFullPlaintextFlowIDIsSharedAcrossDirections(t *testing.T)
 		config.PeerConfig{ID: "ix-a"},
 		endpointA,
 		endpointB,
+		0,
 	)
 	if !ok {
 		t.Fatal("ix-b to ix-a full plaintext records were not encoded")

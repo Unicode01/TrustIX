@@ -64,6 +64,11 @@ const (
 	experimentalTCPStatFragmentPayloadSize       = "experimental_tcp_fragment_payload_size"
 	experimentalTCPStatTIXBExpandedPackets       = "experimental_tcp_tixb_expanded_packets"
 	experimentalTCPStatTIXBExpandedItems         = "experimental_tcp_tixb_expanded_items"
+	experimentalTCPStatFullPlaintextKernel       = "experimental_tcp_full_plaintext_kernel_datapath"
+)
+
+const (
+	experimentalTCPProviderFullPlaintextKernel = "kernel_datapath_full_plaintext"
 )
 
 const (
@@ -251,20 +256,31 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			}
 			return nil, fmt.Errorf("experimental_tcp dataplane provider is unavailable")
 		}
-		placement, err := transportImpl.selectCryptoPlacement(ctx, endpoint.Encryption)
+		status, err := transportImpl.provider.ExperimentalTCPStatus(ctx)
 		if err != nil {
 			return nil, err
 		}
+		if !status.Available || !status.Reinject {
+			return nil, fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable")
+		}
+		placement, err := transportImpl.selectCryptoPlacementFromStatus(status, endpoint.Encryption)
+		if err != nil {
+			return nil, err
+		}
+		fullPlaintextKernel := experimentalTCPFullPlaintextKernelDatapathStatus(status)
 		flowID, err := randomFlowID()
 		if err != nil {
 			return nil, err
 		}
 		primerConn, err := dialExperimentalTCPCompatPrimer(ctx, endpoint)
 		if err != nil {
-			if experimentalTCPCompatPrimerRequired() {
+			if experimentalTCPCompatPrimerRequired() || fullPlaintextKernel {
 				return nil, err
 			}
 			primerConn = nil
+		}
+		if primerConn == nil && fullPlaintextKernel {
+			return nil, fmt.Errorf("experimental_tcp full plaintext kernel datapath requires compat TCP control primer for endpoint %q", endpoint.Name)
 		}
 		flow := dataplane.ExperimentalTCPFlow{
 			ID:              flowID,
@@ -304,6 +320,7 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		}
 		session := newSession(transportImpl.provider, subscription, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address)
 		session.compatControl = compatControl
+		session.fullPlaintextKernelDatapath = fullPlaintextKernel
 		session.enableCompatPriority()
 		// Dial contexts are commonly canceled after setup; the session receive
 		// pump must live until Session.Close closes the subscription/input.
@@ -337,23 +354,32 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	if transportImpl.provider == nil {
 		return nil, fmt.Errorf("experimental_tcp dataplane provider is unavailable")
 	}
-	placement, err := transportImpl.selectCryptoPlacement(ctx, ep.Encryption)
+	status, err := transportImpl.provider.ExperimentalTCPStatus(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if !status.Available || !status.Reinject {
+		return nil, fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable")
+	}
+	placement, err := transportImpl.selectCryptoPlacementFromStatus(status, ep.Encryption)
+	if err != nil {
+		return nil, err
+	}
+	fullPlaintextKernel := experimentalTCPFullPlaintextKernelDatapathStatus(status)
 	subscription, err := transportImpl.provider.SubscribeExperimentalTCP(ctx, experimentalTCPSessionBuffer())
 	if err != nil {
 		return nil, err
 	}
 	listener := &listener{
-		provider:       transportImpl.provider,
-		endpoint:       ep,
-		subscription:   subscription,
-		acceptCh:       make(chan transport.Session, 64),
-		compatAcceptCh: make(chan transport.Session, 64),
-		done:           make(chan struct{}),
-		sessions:       make(map[uint64]*session),
-		placement:      placement,
+		provider:                    transportImpl.provider,
+		endpoint:                    ep,
+		subscription:                subscription,
+		acceptCh:                    make(chan transport.Session, 64),
+		compatAcceptCh:              make(chan transport.Session, 64),
+		done:                        make(chan struct{}),
+		sessions:                    make(map[uint64]*session),
+		placement:                   placement,
+		fullPlaintextKernelDatapath: fullPlaintextKernel,
 	}
 	if compatListener, err := listenExperimentalTCPCompatPrimer(ep.Listen); err != nil {
 		_ = subscription.Close()
@@ -361,6 +387,10 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	} else {
 		listener.compatListener = compatListener
 		listener.primerFlowRequired = compatListener != nil
+	}
+	if fullPlaintextKernel && listener.compatListener == nil {
+		_ = subscription.Close()
+		return nil, fmt.Errorf("experimental_tcp full plaintext kernel datapath requires compat TCP control listener for endpoint %q", ep.Name)
 	}
 	go listener.readSubscription(ctx)
 	go listener.acceptCompatPrimers()
@@ -394,18 +424,19 @@ func (transportImpl *Transport) listenCompatStream(ctx context.Context, ep trans
 }
 
 type listener struct {
-	provider           dataplane.ExperimentalTCPProvider
-	endpoint           transport.Endpoint
-	subscription       dataplane.ExperimentalTCPSubscription
-	acceptCh           chan transport.Session
-	compatAcceptCh     chan transport.Session
-	done               chan struct{}
-	closeOnce          sync.Once
-	mu                 sync.Mutex
-	sessions           map[uint64]*session
-	placement          dataplane.CryptoPlacement
-	compatListener     net.Listener
-	primerFlowRequired bool
+	provider                    dataplane.ExperimentalTCPProvider
+	endpoint                    transport.Endpoint
+	subscription                dataplane.ExperimentalTCPSubscription
+	acceptCh                    chan transport.Session
+	compatAcceptCh              chan transport.Session
+	done                        chan struct{}
+	closeOnce                   sync.Once
+	mu                          sync.Mutex
+	sessions                    map[uint64]*session
+	placement                   dataplane.CryptoPlacement
+	compatListener              net.Listener
+	primerFlowRequired          bool
+	fullPlaintextKernelDatapath bool
 }
 
 func (transportImpl *Transport) requestedCryptoPlacement() dataplane.CryptoPlacement {
@@ -431,6 +462,10 @@ func (transportImpl *Transport) selectCryptoPlacementFromStatus(status dataplane
 		return dataplane.CryptoPlacementUserspace, nil
 	}
 	return selectCryptoPlacement(transportImpl.requestedCryptoPlacement(), status)
+}
+
+func experimentalTCPFullPlaintextKernelDatapathStatus(status dataplane.ExperimentalTCPStatus) bool {
+	return strings.EqualFold(strings.TrimSpace(status.Provider), experimentalTCPProviderFullPlaintextKernel)
 }
 
 func (transportImpl *Transport) effectiveEncryption(encryption string) string {
@@ -584,6 +619,7 @@ func (listener *listener) acceptCompatPrimers() {
 		}
 		sess := newSession(listener.provider, nil, init.flowID, "", listener.endpoint.Name, listener.placement, flow.LocalAddress, flow.RemoteAddress)
 		sess.compatControl = control
+		sess.fullPlaintextKernelDatapath = listener.fullPlaintextKernelDatapath
 		sess.enableCompatPriority()
 		listener.mu.Lock()
 		if existing := listener.sessions[init.flowID]; existing != nil && !existing.isClosed() {
@@ -778,55 +814,56 @@ func (listener *listener) dispatchBatch(frames []dataplane.ExperimentalTCPFrame)
 }
 
 type session struct {
-	provider                  dataplane.ExperimentalTCPProvider
-	subscription              dataplane.ExperimentalTCPSubscription
-	flowID                    uint64
-	peer                      core.IXID
-	peerIdentity              transport.PeerIdentity
-	endpoint                  core.EndpointID
-	localAddress              string
-	remoteAddress             string
-	in                        chan experimentalTCPPacketBatch
-	recvPending               experimentalTCPPacketBatch
-	closeOnce                 sync.Once
-	closeInputOnce            sync.Once
-	sendMu                    sync.Mutex
-	recvMu                    sync.Mutex
-	closed                    chan struct{}
-	reassembly                map[uint64]*fragmentAssembly
-	sendSeq                   atomic.Uint64
-	bytesSent                 atomic.Uint64
-	bytesReceived             atomic.Uint64
-	packetsSent               atomic.Uint64
-	packetsReceived           atomic.Uint64
-	fragmentedPacketsSent     atomic.Uint64
-	fragmentsSent             atomic.Uint64
-	fragmentsReceived         atomic.Uint64
-	fragmentedPacketsReceived atomic.Uint64
-	fragmentsReassembled      atomic.Uint64
-	fragmentDuplicates        atomic.Uint64
-	fragmentExpiredAssemblies atomic.Uint64
-	fragmentExpiredFragments  atomic.Uint64
-	fragmentMismatches        atomic.Uint64
-	fragmentRejects           atomic.Uint64
-	tixbExpandedPackets       atomic.Uint64
-	tixbExpandedItems         atomic.Uint64
-	epoch                     uint64
-	cryptoPlacement           dataplane.CryptoPlacement
-	cryptoSuite               string
-	cryptoOffloaded           bool
-	compatControl             *stream.Session
-	compatPriority            chan []byte
-	compatPriorityWaited      atomic.Bool
-	sendFrames                []dataplane.ExperimentalTCPFrame
-	sendExpandedPackets       [][]byte
-	reassemblyMaxAssemblies   int
-	configuredFragmentPayload int
-	fragmentPayloadCached     int
-	fragmentPayloadCacheKey   fragmentPayloadCacheKey
-	sealBeforeMaxCached       int
-	sealBeforeMaxCacheKey     fragmentPayloadCacheKey
-	keepFlowOnClose           bool
+	provider                    dataplane.ExperimentalTCPProvider
+	subscription                dataplane.ExperimentalTCPSubscription
+	flowID                      uint64
+	peer                        core.IXID
+	peerIdentity                transport.PeerIdentity
+	endpoint                    core.EndpointID
+	localAddress                string
+	remoteAddress               string
+	in                          chan experimentalTCPPacketBatch
+	recvPending                 experimentalTCPPacketBatch
+	closeOnce                   sync.Once
+	closeInputOnce              sync.Once
+	sendMu                      sync.Mutex
+	recvMu                      sync.Mutex
+	closed                      chan struct{}
+	reassembly                  map[uint64]*fragmentAssembly
+	sendSeq                     atomic.Uint64
+	bytesSent                   atomic.Uint64
+	bytesReceived               atomic.Uint64
+	packetsSent                 atomic.Uint64
+	packetsReceived             atomic.Uint64
+	fragmentedPacketsSent       atomic.Uint64
+	fragmentsSent               atomic.Uint64
+	fragmentsReceived           atomic.Uint64
+	fragmentedPacketsReceived   atomic.Uint64
+	fragmentsReassembled        atomic.Uint64
+	fragmentDuplicates          atomic.Uint64
+	fragmentExpiredAssemblies   atomic.Uint64
+	fragmentExpiredFragments    atomic.Uint64
+	fragmentMismatches          atomic.Uint64
+	fragmentRejects             atomic.Uint64
+	tixbExpandedPackets         atomic.Uint64
+	tixbExpandedItems           atomic.Uint64
+	epoch                       uint64
+	cryptoPlacement             dataplane.CryptoPlacement
+	cryptoSuite                 string
+	cryptoOffloaded             bool
+	fullPlaintextKernelDatapath bool
+	compatControl               *stream.Session
+	compatPriority              chan []byte
+	compatPriorityWaited        atomic.Bool
+	sendFrames                  []dataplane.ExperimentalTCPFrame
+	sendExpandedPackets         [][]byte
+	reassemblyMaxAssemblies     int
+	configuredFragmentPayload   int
+	fragmentPayloadCached       int
+	fragmentPayloadCacheKey     fragmentPayloadCacheKey
+	sealBeforeMaxCached         int
+	sealBeforeMaxCacheKey       fragmentPayloadCacheKey
+	keepFlowOnClose             bool
 }
 
 type fragmentPayloadCacheKey struct {
@@ -1062,6 +1099,9 @@ func (session *session) SendPacket(pkt []byte) error {
 		session.packetsSent.Add(1)
 		return nil
 	}
+	if session.fullPlaintextKernelDatapath {
+		return fmt.Errorf("experimental_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
+	}
 	return session.SendPackets([][]byte{pkt})
 }
 
@@ -1073,6 +1113,28 @@ func (session *session) SendPackets(pkts [][]byte) error {
 	case <-session.closed:
 		return fmt.Errorf("experimental_tcp session is closed")
 	default:
+	}
+	if session.fullPlaintextKernelDatapath {
+		if session.compatControl == nil {
+			return fmt.Errorf("experimental_tcp full plaintext kernel datapath requires compat TCP control")
+		}
+		for _, pkt := range pkts {
+			if !experimentalTCPCompatControlEligible(pkt) {
+				return fmt.Errorf("experimental_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
+			}
+		}
+		session.sendMu.Lock()
+		defer session.sendMu.Unlock()
+		var packetBytes uint64
+		for _, pkt := range pkts {
+			if err := session.compatControl.SendPacket(pkt); err != nil {
+				return err
+			}
+			packetBytes += uint64(len(pkt))
+		}
+		session.bytesSent.Add(packetBytes)
+		session.packetsSent.Add(uint64(len(pkts)))
+		return nil
 	}
 	session.sendMu.Lock()
 	defer session.sendMu.Unlock()
@@ -2142,7 +2204,21 @@ func acceptExperimentalTCPCompatControl(conn net.Conn) (*stream.Session, experim
 }
 
 func experimentalTCPCompatControlEligible(packet []byte) bool {
-	return len(packet) >= 6 && string(packet[0:4]) == string(experimentalTCPSecureHelloMagic[:])
+	if len(packet) < 6 {
+		return false
+	}
+	if string(packet[0:4]) == string(experimentalTCPSecureHelloMagic[:]) {
+		return true
+	}
+	if string(packet[0:4]) != string(experimentalTCPCompatControlMagic[:]) || packet[4] != experimentalTCPCompatControlVersion {
+		return false
+	}
+	switch packet[5] {
+	case 1, 2, 3:
+		return true
+	default:
+		return false
+	}
 }
 
 func experimentalTCPCompatHandshakePriorityDelay() time.Duration {
@@ -2524,6 +2600,9 @@ func (session *session) fragmentStats() map[string]uint64 {
 		experimentalTCPStatFragmentPayloadSize:       uint64(session.fragmentPayloadSize()),
 		experimentalTCPStatTIXBExpandedPackets:       session.tixbExpandedPackets.Load(),
 		experimentalTCPStatTIXBExpandedItems:         session.tixbExpandedItems.Load(),
+	}
+	if session.fullPlaintextKernelDatapath {
+		extra[experimentalTCPStatFullPlaintextKernel] = 1
 	}
 	session.recvMu.Lock()
 	extra[experimentalTCPStatFragmentAssembliesCurrent] = uint64(len(session.reassembly))

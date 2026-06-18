@@ -597,6 +597,7 @@
   "reinject": "Reinject",
   "rx_worker_injected": "RX worker injected",
   "submitted": "Submitted",
+  "tx_plaintext_hook": "TX plaintext hook",
   "userspace_fallback": "Userspace fallback",
   "zero_copy": "Zero-copy",
   "access": "Access",

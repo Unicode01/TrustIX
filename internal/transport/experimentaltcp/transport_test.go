@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1007,6 +1008,183 @@ func TestExperimentalTCPPlaintextStillUsesCompatControlHandshake(t *testing.T) {
 	}
 	if providerA.submitted.Load() == 0 {
 		t.Fatal("plaintext data packets did not use experimental_tcp provider")
+	}
+}
+
+func TestExperimentalTCPFullPlaintextKernelDatapathRequiresCompatPrimer(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "0")
+	provider := &fakeProvider{
+		local:          "ix-a",
+		subs:           make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
+		flows:          make(map[uint64]dataplane.ExperimentalTCPFlow),
+		cryptos:        make(map[uint64]fakeCrypto),
+		statusProvider: experimentalTCPProviderFullPlaintextKernel,
+	}
+	clientTransport := New(provider)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := clientTransport.Dial(ctx, transport.Peer{
+		ID: core.IXID("ix-b"),
+		Endpoints: []transport.Endpoint{{
+			Name:       core.EndpointID("server"),
+			Transport:  transport.ProtocolExperimentalTCP,
+			Address:    "127.0.0.1:9",
+			Encryption: securetransport.EncryptionPlaintext,
+		}},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "requires compat TCP control primer") {
+		t.Fatalf("dial error = %v, want compat control primer requirement", err)
+	}
+}
+
+func TestExperimentalTCPFullPlaintextKernelDatapathHandshakeUsesCompatControl(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+	providerA, providerB := newProviderPair("ix-a", "ix-b")
+	providerA.statusProvider = experimentalTCPProviderFullPlaintextKernel
+	providerB.statusProvider = experimentalTCPProviderFullPlaintextKernel
+	options := securetransport.Options{
+		Encryption: func() string {
+			return securetransport.EncryptionPlaintext
+		},
+	}
+	clientTransport := securetransport.New(New(providerA), options)
+	serverTransport := securetransport.New(New(providerB), options)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
+		Name:       core.EndpointID("server"),
+		Transport:  transport.ProtocolExperimentalTCP,
+		Listen:     listenAddr,
+		Encryption: securetransport.EncryptionPlaintext,
+		Enabled:    true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	accepted := make(chan transport.Session, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		session, err := listener.Accept(ctx)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- session
+	}()
+
+	client, err := clientTransport.Dial(ctx, transport.Peer{
+		ID: core.IXID("ix-b"),
+		Endpoints: []transport.Endpoint{{
+			Name:       core.EndpointID("server"),
+			Transport:  transport.ProtocolExperimentalTCP,
+			Address:    listenAddr,
+			Encryption: securetransport.EncryptionPlaintext,
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	var server transport.Session
+	select {
+	case err := <-acceptErr:
+		t.Fatalf("accept: %v", err)
+	case server = <-accepted:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	defer server.Close()
+
+	if providerA.submitted.Load() != 0 || providerB.submitted.Load() != 0 {
+		t.Fatalf("full plaintext handshake used userspace provider frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
+	}
+	if err := client.SendPacket([]byte{0x45, 0, 0, 20}); err == nil || !strings.Contains(err.Error(), "full plaintext kernel datapath owns data frames") {
+		t.Fatalf("data send error = %v, want full plaintext kernel datapath ownership", err)
+	}
+}
+
+func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlCarriesControlFrames(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+	providerA, providerB := newProviderPair("ix-a", "ix-b")
+	providerA.statusProvider = experimentalTCPProviderFullPlaintextKernel
+	providerB.statusProvider = experimentalTCPProviderFullPlaintextKernel
+	clientTransport := New(providerA)
+	serverTransport := New(providerB)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
+		Name:       core.EndpointID("server"),
+		Transport:  transport.ProtocolExperimentalTCP,
+		Listen:     listenAddr,
+		Encryption: securetransport.EncryptionPlaintext,
+		Enabled:    true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	accepted := make(chan transport.Session, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		session, err := listener.Accept(ctx)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- session
+	}()
+
+	client, err := clientTransport.Dial(ctx, transport.Peer{
+		ID: core.IXID("ix-b"),
+		Endpoints: []transport.Endpoint{{
+			Name:       core.EndpointID("server"),
+			Transport:  transport.ProtocolExperimentalTCP,
+			Address:    listenAddr,
+			Encryption: securetransport.EncryptionPlaintext,
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	var server transport.Session
+	select {
+	case err := <-acceptErr:
+		t.Fatalf("accept: %v", err)
+	case server = <-accepted:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	defer server.Close()
+
+	control := make([]byte, 16)
+	copy(control[0:4], experimentalTCPCompatControlMagic[:])
+	control[4] = experimentalTCPCompatControlVersion
+	control[5] = 2
+	binary.BigEndian.PutUint64(control[8:16], 0x1020304050607080)
+	if err := client.SendPacket(control); err != nil {
+		t.Fatalf("send control: %v", err)
+	}
+	got, err := server.RecvPacket()
+	if err != nil {
+		t.Fatalf("server recv control: %v", err)
+	}
+	if !bytes.Equal(got, control) {
+		t.Fatalf("server control = %x, want %x", got, control)
+	}
+	if providerA.submitted.Load() != 0 || providerB.submitted.Load() != 0 {
+		t.Fatalf("compat control used userspace provider frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
+	}
+	if err := client.SendPacket([]byte{0x45, 0, 0, 20}); err == nil || !strings.Contains(err.Error(), "full plaintext kernel datapath owns data frames") {
+		t.Fatalf("data send error = %v, want full plaintext kernel datapath ownership", err)
 	}
 }
 
@@ -2648,19 +2826,20 @@ func TestExperimentalTCPSessionSetPeerEndpointAnnotatesFlow(t *testing.T) {
 }
 
 type fakeProvider struct {
-	local         core.IXID
-	remote        *fakeProvider
-	mu            sync.Mutex
-	subs          map[chan dataplane.ExperimentalTCPFrame]struct{}
-	flows         map[uint64]dataplane.ExperimentalTCPFlow
-	cryptos       map[uint64]fakeCrypto
-	kernelCrypto  bool
-	payloadMax    int
-	sealBeforeMax int
-	lastWire      []byte
-	frames        []dataplane.ExperimentalTCPFrame
-	submitted     atomic.Uint64
-	received      atomic.Uint64
+	local          core.IXID
+	remote         *fakeProvider
+	mu             sync.Mutex
+	subs           map[chan dataplane.ExperimentalTCPFrame]struct{}
+	flows          map[uint64]dataplane.ExperimentalTCPFlow
+	cryptos        map[uint64]fakeCrypto
+	kernelCrypto   bool
+	statusProvider string
+	payloadMax     int
+	sealBeforeMax  int
+	lastWire       []byte
+	frames         []dataplane.ExperimentalTCPFrame
+	submitted      atomic.Uint64
+	received       atomic.Uint64
 }
 
 type capturingCryptoInstallerProvider struct {
@@ -2757,6 +2936,7 @@ func (provider *fakeProvider) ExperimentalTCPStatus(ctx context.Context) (datapl
 	provider.mu.Unlock()
 	return dataplane.ExperimentalTCPStatus{
 		Available:       true,
+		Provider:        provider.statusProvider,
 		UserspaceCrypto: true,
 		KernelCrypto:    provider.kernelCrypto,
 		Reinject:        true,

@@ -152,14 +152,15 @@ func (transportImpl *Transport) Probe(ctx context.Context, peer transport.Peer) 
 			for _, endpoint := range peer.Endpoints {
 				if endpoint.Transport == transport.ProtocolUDP && endpoint.Address != "" {
 					effectiveEncryption := transportImpl.effectiveEncryption(endpoint.Encryption)
-					if kernelUDPStatusPendingTCOnlyPlaintext(status, effectiveEncryption) {
+					placement, placementErr := transportImpl.selectCryptoPlacementFromStatus(status, endpoint.Encryption)
+					if placementErr == nil && kernelUDPStatusDirectOnlyKernelManaged(status, effectiveEncryption, placement) {
 						return transport.ProbeResult{Healthy: true, CheckedAt: time.Now()}
 					}
 					if !kernelUDPStatusCanDial(status) {
 						continue
 					}
-					if _, err := transportImpl.selectCryptoPlacementFromStatus(status, endpoint.Encryption); err != nil {
-						return transport.ProbeResult{Healthy: false, Error: err.Error(), CheckedAt: time.Now()}
+					if placementErr != nil {
+						return transport.ProbeResult{Healthy: false, Error: placementErr.Error(), CheckedAt: time.Now()}
 					}
 					return transport.ProbeResult{Healthy: true, CheckedAt: time.Now()}
 				}
@@ -380,8 +381,12 @@ func (transportImpl *Transport) dialKernel(ctx context.Context, peer transport.P
 					continue
 				}
 				effectiveEncryption := transportImpl.effectiveEncryption(endpoint.Encryption)
-				if kernelUDPStatusPendingTCOnlyPlaintext(status, effectiveEncryption) {
-					return transportImpl.dialKernelUDPFlow(ctx, peer, endpoint, status, dataplane.CryptoPlacementUserspace, effectiveEncryption)
+				placement, placementErr := transportImpl.selectCryptoPlacementFromStatus(status, endpoint.Encryption)
+				if placementErr != nil {
+					return nil, true, placementErr
+				}
+				if kernelUDPStatusDirectOnlyKernelManaged(status, effectiveEncryption, placement) {
+					return transportImpl.dialKernelUDPFlow(ctx, peer, endpoint, status, placement, effectiveEncryption)
 				}
 			}
 			return nil, true, kernelUDPUnavailableError(status)
@@ -423,8 +428,26 @@ func (transportImpl *Transport) dialKernelUDPFlow(ctx context.Context, peer tran
 	}}); err != nil {
 		return nil, true, err
 	}
-	if kernelUDPStatusTCOnlyPlaintext(status, effectiveEncryption) || kernelUDPStatusPendingTCOnlyPlaintext(status, effectiveEncryption) {
+	if kernelUDPStatusDirectOnlyKernelManaged(status, effectiveEncryption, placement) {
+		if kernelUDPStatusNeedsControlSubscription(status, effectiveEncryption, placement) {
+			subscription, err := transportImpl.subscribeKernelFlow(ctx, flowID)
+			if err != nil {
+				if deleter, ok := transportImpl.kernel.(dataplane.KernelUDPFlowDeleter); ok {
+					_ = deleter.DeleteKernelUDPFlows(context.Background(), []uint64{flowID})
+				}
+				return nil, true, err
+			}
+			session := newKernelSession(transportImpl.kernel, subscription, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address)
+			go session.readSubscription(context.Background())
+			return session, true, nil
+		}
 		return newKernelSession(transportImpl.kernel, nil, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address), true, nil
+	}
+	if status.DirectOnly || status.TCOnly {
+		if deleter, ok := transportImpl.kernel.(dataplane.KernelUDPFlowDeleter); ok {
+			_ = deleter.DeleteKernelUDPFlows(context.Background(), []uint64{flowID})
+		}
+		return nil, true, kernelUDPDirectOnlyUnsupportedError(status, effectiveEncryption, placement)
 	}
 	subscription, err := transportImpl.subscribeKernelFlow(ctx, flowID)
 	if err != nil {
@@ -469,20 +492,37 @@ func (transportImpl *Transport) listenKernel(ctx context.Context, ep transport.E
 			return nil, true, err
 		}
 		effectiveEncryption := transportImpl.effectiveEncryption(ep.Encryption)
-		if kernelUDPStatusPendingTCOnlyPlaintext(status, effectiveEncryption) {
+		placement, placementErr := transportImpl.selectCryptoPlacementFromStatus(status, ep.Encryption)
+		if placementErr != nil {
+			return nil, true, placementErr
+		}
+		if kernelUDPStatusDirectOnlyKernelManaged(status, effectiveEncryption, placement) {
+			var subscription dataplane.KernelUDPSubscription
+			if kernelUDPStatusNeedsControlSubscription(status, effectiveEncryption, placement) {
+				var err error
+				subscription, err = transportImpl.kernel.SubscribeKernelUDP(ctx, kernelSessionBuffer())
+				if err != nil {
+					return nil, true, err
+				}
+			}
+			requireSecureClientHello := transportImpl.options.RequireSecureClientHello && !kernelUDPPlaintextEncryption(effectiveEncryption)
 			listener := &kernelListener{
 				provider:                 transportImpl.kernel,
 				endpoint:                 ep,
+				subscription:             subscription,
 				acceptCh:                 make(chan transport.Session, 64),
 				done:                     make(chan struct{}),
 				sessions:                 make(map[uint64]*kernelSession),
-				placement:                dataplane.CryptoPlacementUserspace,
-				requireSecureClientHello: false,
+				placement:                placement,
+				requireSecureClientHello: requireSecureClientHello,
 			}
 			go func() {
 				<-ctx.Done()
 				_ = listener.Close()
 			}()
+			if subscription != nil {
+				go listener.readSubscription(ctx)
+			}
 			return listener, true, nil
 		}
 		return nil, true, kernelUDPUnavailableError(status)
@@ -493,10 +533,19 @@ func (transportImpl *Transport) listenKernel(ctx context.Context, ep transport.E
 	}
 	effectiveEncryption := transportImpl.effectiveEncryption(ep.Encryption)
 	requireSecureClientHello := transportImpl.options.RequireSecureClientHello && !kernelUDPPlaintextEncryption(effectiveEncryption)
-	if kernelUDPStatusTCOnlyPlaintext(status, effectiveEncryption) {
+	if kernelUDPStatusDirectOnlyKernelManaged(status, effectiveEncryption, placement) {
+		var subscription dataplane.KernelUDPSubscription
+		if kernelUDPStatusNeedsControlSubscription(status, effectiveEncryption, placement) {
+			var err error
+			subscription, err = transportImpl.kernel.SubscribeKernelUDP(ctx, kernelSessionBuffer())
+			if err != nil {
+				return nil, true, err
+			}
+		}
 		listener := &kernelListener{
 			provider:                 transportImpl.kernel,
 			endpoint:                 ep,
+			subscription:             subscription,
 			acceptCh:                 make(chan transport.Session, 64),
 			done:                     make(chan struct{}),
 			sessions:                 make(map[uint64]*kernelSession),
@@ -507,7 +556,13 @@ func (transportImpl *Transport) listenKernel(ctx context.Context, ep transport.E
 			<-ctx.Done()
 			_ = listener.Close()
 		}()
+		if subscription != nil {
+			go listener.readSubscription(ctx)
+		}
 		return listener, true, nil
+	}
+	if status.DirectOnly || status.TCOnly {
+		return nil, true, kernelUDPDirectOnlyUnsupportedError(status, effectiveEncryption, placement)
 	}
 	subscription, err := transportImpl.kernel.SubscribeKernelUDP(ctx, kernelSessionBuffer())
 	if err != nil {
@@ -527,12 +582,34 @@ func (transportImpl *Transport) listenKernel(ctx context.Context, ep transport.E
 	return listener, true, nil
 }
 
-func kernelUDPStatusTCOnlyPlaintext(status dataplane.KernelUDPStatus, encryption string) bool {
-	return status.TCOnly && kernelUDPPlaintextEncryption(encryption)
+func kernelUDPStatusDirectOnlyKernelManaged(status dataplane.KernelUDPStatus, encryption string, placement dataplane.CryptoPlacement) bool {
+	if !status.DirectOnly && !status.TCOnly {
+		return false
+	}
+	if kernelUDPPlaintextEncryption(encryption) {
+		return true
+	}
+	return normalizeCryptoPlacement(placement) == dataplane.CryptoPlacementKernel && status.KernelCrypto
 }
 
-func kernelUDPStatusPendingTCOnlyPlaintext(status dataplane.KernelUDPStatus, encryption string) bool {
-	return status.DirectOnly && kernelUDPPlaintextEncryption(encryption)
+func kernelUDPStatusNeedsControlSubscription(status dataplane.KernelUDPStatus, encryption string, placement dataplane.CryptoPlacement) bool {
+	return kernelUDPStatusDirectOnlyKernelManaged(status, encryption, placement) && !kernelUDPPlaintextEncryption(encryption)
+}
+
+func kernelUDPDirectOnlyUnsupportedError(status dataplane.KernelUDPStatus, encryption string, placement dataplane.CryptoPlacement) error {
+	return fmt.Errorf(
+		"kernel_udp direct-only provider cannot use userspace subscription: provider=%q direct_only=%t tc_only=%t userspace_crypto=%t kernel_crypto=%t preferred_crypto=%q requested_crypto=%q effective_crypto=%q encryption=%q selected_crypto=%q",
+		status.Provider,
+		status.DirectOnly,
+		status.TCOnly,
+		status.UserspaceCrypto,
+		status.KernelCrypto,
+		status.PreferredCrypto,
+		status.RequestedCrypto,
+		status.EffectiveCrypto,
+		encryption,
+		placement,
+	)
 }
 
 func (transportImpl *Transport) requestedCryptoPlacement() dataplane.CryptoPlacement {

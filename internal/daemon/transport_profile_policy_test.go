@@ -117,14 +117,14 @@ func TestTransportProfileFeaturesAdvertiseSafeExperimentalTCPPerformance(t *test
 		Datapath:   config.TransportDatapathTCXDP,
 		Encryption: "plaintext",
 	})
-	for _, feature := range []string{"tixt_v1", "ackless_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "route_gso_async", "route_gso_async_outer_gso", "route_xmit_worker", "plaintext_ack_only"} {
+	for _, feature := range []string{"tixt_v1", "ackless_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "plaintext_ack_only"} {
 		if !stringListContains(features, feature) {
 			t.Fatalf("performance experimental_tcp features = %#v, want %q", features, feature)
 		}
 	}
-	for _, feature := range []string{"route_gso_sync", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx"} {
+	for _, feature := range []string{"route_gso_async", "route_gso_async_outer_gso", "route_xmit_worker", "route_gso_sync", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx"} {
 		if stringListContains(features, feature) {
-			t.Fatalf("performance experimental_tcp features = %#v, must not advertise disabled panic-risk feature %q", features, feature)
+			t.Fatalf("performance experimental_tcp features = %#v, must not advertise opt-in/unselected feature %q", features, feature)
 		}
 	}
 }

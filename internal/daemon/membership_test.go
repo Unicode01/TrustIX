@@ -19,6 +19,7 @@ import (
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/pki"
 	"trustix.local/trustix/internal/routing"
+	"trustix.local/trustix/internal/transport"
 )
 
 type membershipPKI struct {
@@ -208,14 +209,14 @@ func TestLocalAdvertisementCarriesTransportProfile(t *testing.T) {
 	if profile.Version != transportProfileMetadataVersion || profile.Profile != "performance" || profile.Datapath != "kernel_module" || profile.Encryption != "plaintext" {
 		t.Fatalf("advertised transport profile = %#v", profile)
 	}
-	for _, feature := range []string{"tixt_v1", "ackless_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "route_gso_async", "route_gso_async_outer_gso", "route_xmit_worker", "plaintext_ack_only"} {
+	for _, feature := range []string{"tixt_v1", "ackless_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "plaintext_ack_only"} {
 		if !containsString(profile.Features, feature) {
 			t.Fatalf("advertised transport profile features = %#v, missing %q", profile.Features, feature)
 		}
 	}
-	for _, feature := range []string{"route_gso_sync", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx"} {
+	for _, feature := range []string{"route_gso_async", "route_gso_async_outer_gso", "route_xmit_worker", "route_gso_sync", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx"} {
 		if containsString(profile.Features, feature) {
-			t.Fatalf("advertised transport profile features = %#v, must not include disabled panic-risk feature %q", profile.Features, feature)
+			t.Fatalf("advertised transport profile features = %#v, must not include opt-in/unselected feature %q", profile.Features, feature)
 		}
 	}
 }
@@ -1747,6 +1748,56 @@ func TestMembershipPersistenceAndPrune(t *testing.T) {
 	}
 	if _, ok := restarted.dynamicPeerConfig("ix-c"); ok {
 		t.Fatal("expired dynamic peer ix-c still exists")
+	}
+}
+
+func TestPruneExpiredStaticMemberKeepsDataSessions(t *testing.T) {
+	peer := testPeer()
+	key := dataSessionKey{
+		Peer:       peer.ID,
+		Endpoint:   peer.Endpoints[0].Name,
+		Transport:  transport.Protocol(peer.Endpoints[0].Transport),
+		Address:    peer.Endpoints[0].Address,
+		Encryption: "plaintext",
+	}
+	session := &recordingSession{}
+	runtime := &dataSessionRuntime{key: key, session: session}
+	daemon := &Daemon{
+		cfg: Config{DataDir: t.TempDir()},
+		desired: config.Desired{
+			IX:     config.IXConfig{ID: core.IXID("ix-a")},
+			Domain: config.DomainConfig{ID: peer.Domain},
+			Peers:  []config.PeerConfig{peer},
+		},
+		members: map[core.IXID]memberRecord{
+			peer.ID: {
+				Advertisement: advertisementResponse{IXID: string(peer.ID), DomainID: string(peer.Domain)},
+				LastSeen:      time.Now().UTC().Add(-memberRecordTTL - time.Second),
+				Direct:        true,
+			},
+		},
+		dataSessions: map[dataSessionKey]transport.Session{
+			key: session,
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{
+			key: runtime,
+		},
+	}
+
+	if !daemon.pruneExpiredMembers() {
+		t.Fatal("expired dynamic overlay for static peer was not pruned")
+	}
+	if _, ok := daemon.members[peer.ID]; ok {
+		t.Fatal("expired dynamic overlay for static peer still exists")
+	}
+	if got := daemon.dataSessions[key]; got != session {
+		t.Fatalf("static peer session = %#v, want existing session", got)
+	}
+	if session.closed {
+		t.Fatal("static peer session was closed by dynamic member pruning")
+	}
+	if counters := daemon.dataStats.snapshot(); counters.StaleSessionsDropped != 0 {
+		t.Fatalf("stale sessions dropped = %d, want 0", counters.StaleSessionsDropped)
 	}
 }
 

@@ -265,11 +265,13 @@ func (daemon *Daemon) kernelDatapathFullPlaintextRouteSessionRecords(ctx context
 			if !ok {
 				continue
 			}
-			sessionRecord, wireRecord, ok := daemon.kernelDatapathFullPlaintextEndpointRecords(ctx, peer, endpoint, local)
-			if !ok {
-				continue
+			for _, poolIndex := range daemon.kernelDatapathFullPlaintextEndpointPoolIndexes(peer, endpoint) {
+				sessionRecord, wireRecord, ok := daemon.kernelDatapathFullPlaintextEndpointRecords(ctx, peer, endpoint, local, poolIndex)
+				if !ok {
+					continue
+				}
+				records = append(records, sessionRecord, wireRecord)
 			}
-			records = append(records, sessionRecord, wireRecord)
 			break
 		}
 	}
@@ -319,13 +321,46 @@ func (daemon *Daemon) kernelDatapathFullPlaintextLocalEndpoint(remote config.End
 	return fallback, hasFallback
 }
 
-func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Context, peer config.PeerConfig, endpoint config.EndpointConfig, local config.EndpointConfig) (kernelmodule.DatapathStateRecord, kernelmodule.DatapathStateRecord, bool) {
+func (daemon *Daemon) kernelDatapathFullPlaintextEndpointPoolIndexes(peer config.PeerConfig, endpoint config.EndpointConfig) []int {
+	if daemon == nil {
+		return []int{0}
+	}
+	protocol := transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport)))
+	indexes := map[int]bool{}
+	for _, item := range daemon.kernelDatapathSessionSnapshot() {
+		key := item.key
+		if key.Peer != peer.ID ||
+			key.Endpoint != endpoint.Name ||
+			key.Transport != protocol ||
+			strings.TrimSpace(key.Address) != strings.TrimSpace(endpoint.Address) ||
+			parseSecureTransportEncryption(key.Encryption) != securetransport.EncryptionPlaintext ||
+			key.PoolIndex < 0 {
+			continue
+		}
+		indexes[key.PoolIndex] = true
+	}
+	if len(indexes) == 0 {
+		return []int{0}
+	}
+	out := make([]int, 0, len(indexes))
+	for index := range indexes {
+		out = append(out, index)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Context, peer config.PeerConfig, endpoint config.EndpointConfig, local config.EndpointConfig, poolIndex int) (kernelmodule.DatapathStateRecord, kernelmodule.DatapathStateRecord, bool) {
+	if poolIndex < 0 {
+		poolIndex = 0
+	}
 	key := dataSessionKey{
 		Peer:       peer.ID,
 		Endpoint:   endpoint.Name,
 		Transport:  transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))),
 		Address:    endpoint.Address,
 		Encryption: securetransport.EncryptionPlaintext,
+		PoolIndex:  poolIndex,
 	}
 	localIP, localPort, remoteIP, remotePort, ok := kernelDatapathFullPlaintextWireTuple(ctx, local, endpoint)
 	if !ok {
@@ -352,7 +387,7 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Con
 			uint64(kernelDatapathCryptoPlacementCode(string(dataplane.CryptoPlacementUserspace))),
 			now,
 			now,
-			0,
+			uint64(uint32(poolIndex)),
 		},
 	}
 	wire := kernelmodule.DatapathStateRecord{
@@ -368,7 +403,7 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Con
 			uint64(kernelDatapathTransportCode(key.Transport)),
 			0,
 			0,
-			0,
+			uint64(uint32(poolIndex)),
 		},
 	}
 	return session, wire, true

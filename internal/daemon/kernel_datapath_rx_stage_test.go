@@ -228,6 +228,7 @@ func TestKernelDatapathFullPlaintextAttachesRXAndTXHooks(t *testing.T) {
 	if !status.Active || status.Mode != kernelDatapathRXModeWorker || status.IfName != "eth0" || status.TargetIfName != "br-lan" {
 		t.Fatalf("full plaintext status = %#v", status)
 	}
+	assertFullPlaintextTXHookStatus(t, status, "br-lan", "eth0")
 	driver.mu.Lock()
 	defer driver.mu.Unlock()
 	if driver.attachAttempts != 2 || driver.ifname != "br-lan" || driver.targetIfname != "eth0" || driver.flags != kernelDatapathTXPlaintextHookFlags() {
@@ -263,6 +264,7 @@ func TestKernelDatapathFullPlaintextOverridesStageCompatibilityFlag(t *testing.T
 	if !status.Active || status.Mode != kernelDatapathRXModeWorker || status.IfName != "eth0" || status.TargetIfName != "br-lan" {
 		t.Fatalf("full plaintext status = %#v", status)
 	}
+	assertFullPlaintextTXHookStatus(t, status, "br-lan", "eth0")
 	driver.mu.Lock()
 	defer driver.mu.Unlock()
 	if driver.attachAttempts != 2 || driver.ifname != "br-lan" || driver.targetIfname != "eth0" || driver.flags != kernelDatapathTXPlaintextHookFlags() {
@@ -305,10 +307,21 @@ func TestKernelDatapathFullPlaintextProfileAllowsExperimentalTCPAndAttachesTXHoo
 	if !status.Active || status.Mode != kernelDatapathRXModeWorker || status.IfName != "eth0" || status.TargetIfName != "br-lan" {
 		t.Fatalf("full plaintext profile status = %#v", status)
 	}
+	assertFullPlaintextTXHookStatus(t, status, "br-lan", "eth0")
 	driver.mu.Lock()
 	defer driver.mu.Unlock()
 	if driver.attachAttempts != 2 || driver.ifname != "br-lan" || driver.targetIfname != "eth0" || driver.flags != kernelDatapathTXPlaintextHookFlags() {
 		t.Fatalf("driver attach attempts=%d ifname=%q target=%q flags=%#x", driver.attachAttempts, driver.ifname, driver.targetIfname, driver.flags)
+	}
+}
+
+func assertFullPlaintextTXHookStatus(t *testing.T, status kernelDatapathRXStageStatus, ifname, targetIfname string) {
+	t.Helper()
+	if !status.TXPlaintextAttached ||
+		status.TXPlaintextIfName != ifname ||
+		status.TXPlaintextTargetIfName != targetIfname ||
+		status.TXPlaintextFlags != kernelDatapathTXPlaintextHookFlags() {
+		t.Fatalf("TX plaintext hook status = %#v, want attached %s -> %s flags %#x", status, ifname, targetIfname, kernelDatapathTXPlaintextHookFlags())
 	}
 }
 

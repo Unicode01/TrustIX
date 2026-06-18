@@ -2504,7 +2504,7 @@ func TestKernelUDPFallbackHasFrameGSOGroupAllowsMixedBatch(t *testing.T) {
 		DestinationPort: 9443,
 	}
 	items := []preparedKernelUDPTXFrame{
-		preparedKernelUDPFrameForTest(t, packet, kerneludp.Frame{FlowID: 7, Sequence: 1, Payload: []byte("ack")}),
+		preparedKernelUDPFrameForTest(t, packet, kerneludp.Frame{FlowID: 7, Sequence: 1, Payload: []byte("control")}),
 		preparedKernelUDPFrameForTest(t, packet, kerneludp.Frame{FlowID: 7, Sequence: 2, Payload: []byte("aaa")}),
 		preparedKernelUDPFrameForTest(t, packet, kerneludp.Frame{FlowID: 7, Sequence: 3, Payload: []byte("bbb")}),
 		preparedKernelUDPFrameForTest(t, packet, kerneludp.Frame{FlowID: 7, Sequence: 4, Payload: []byte("tail")}),

@@ -1216,8 +1216,8 @@ func TestRuntimeDataplaneSnapshotEnvAutoMSSForUserspaceUDP(t *testing.T) {
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1402 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1402", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1382 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1382", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1240,8 +1240,8 @@ func TestRuntimeDataplaneSnapshotAutoMSSForKernelUDPSecureDirect(t *testing.T) {
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1340 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1340", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1320 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1320", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1265,8 +1265,8 @@ func TestRuntimeDataplaneSnapshotAutoMSSForKernelUDPUserspaceCrypto(t *testing.T
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1340 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1340", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1320 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1320", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1289,8 +1289,8 @@ func TestRuntimeDataplaneSnapshotAutoMSSForSecureKernelUDPTransport(t *testing.T
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1340 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1340", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1320 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1320", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1315,8 +1315,8 @@ func TestRuntimeDataplaneSnapshotAutoMSSForExperimentalTCPSecureDirect(t *testin
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1320 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1320", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1300 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1300", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1340,8 +1340,8 @@ func TestRuntimeDataplaneSnapshotAutoMSSForExperimentalTCPSecureKernelTransport(
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1320 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1320", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1300 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1300", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1439,8 +1439,8 @@ func TestRuntimeDataplaneSnapshotAutoMSSForKernelUDPPlaintextCanDisableSafeCap(t
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1380 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1380", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1360 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1360", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1464,8 +1464,8 @@ func TestRuntimeDataplaneSnapshotExplicitAutoMSSForExperimentalTCP(t *testing.T)
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1320 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1320", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1300 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1300", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1489,8 +1489,8 @@ func TestRuntimeDataplaneSnapshotEnvAutoMSSForExperimentalTCPPlaintext(t *testin
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1360 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1360", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1340 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1340", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1513,8 +1513,8 @@ func TestRuntimeDataplaneSnapshotAutoMSSForPlainExperimentalTCP(t *testing.T) {
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1360 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1360", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1340 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1340", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1536,8 +1536,8 @@ func TestRuntimeDataplaneSnapshotExplicitAutoMSSForKernelTunnel(t *testing.T) {
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1254 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1254", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1234 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1234", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1560,8 +1560,8 @@ func TestRuntimeDataplaneSnapshotAutoMSSForKernelTunnelEndpointMTU(t *testing.T)
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1204 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1204", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1184 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1184", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1583,8 +1583,8 @@ func TestRuntimeDataplaneSnapshotEnvAutoMSSForKernelTunnel(t *testing.T) {
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1280 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1280", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1260 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1260", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -1607,8 +1607,8 @@ func TestRuntimeDataplaneSnapshotEnvAutoMSSForKernelTunnelPlaintext(t *testing.T
 	}
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
-	if snapshot.PacketPolicy.TCPMSSClamp != 1400 {
-		t.Fatalf("auto TCP MSS clamp = %d, want 1400", snapshot.PacketPolicy.TCPMSSClamp)
+	if snapshot.PacketPolicy.TCPMSSClamp != 1380 {
+		t.Fatalf("auto TCP MSS clamp = %d, want 1380", snapshot.PacketPolicy.TCPMSSClamp)
 	}
 }
 
@@ -7016,6 +7016,111 @@ func TestRegisterInboundSecureKernelUDPReplacesIdleReverseSessionWhenHeartbeatEn
 	}
 	if !existing.closed {
 		t.Fatal("stale reverse session was not closed")
+	}
+}
+
+func TestRegisterInboundFullPlaintextKernelUDPKeepsReverseSessionWhenHeartbeatEnabled(t *testing.T) {
+	peer := testPeer()
+	endpoint := peer.Endpoints[0]
+	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionPlaintext)
+	plaintextKernelUDPStats := transport.TransportStats{
+		Encryption:     securetransport.EncryptionPlaintext,
+		NativeBatching: true,
+		Datagram:       true,
+	}
+	existingSessions := make(map[dataSessionKey]transport.Session)
+	existingRuntimes := make(map[dataSessionKey]*dataSessionRuntime)
+	var expectedExisting *identitySession
+	var expectedRuntime *dataSessionRuntime
+	oldest := time.Now().UTC().Add(-3 * dataSessionHeartbeatDefaultInterval)
+	for i := 0; i < 4; i++ {
+		key := reverseKey
+		key.PoolIndex = i
+		existing := &identitySession{
+			recordingSession: recordingSession{stats: plaintextKernelUDPStats},
+			peer:             peer.ID,
+			domain:           peer.Domain,
+		}
+		runtime := &dataSessionRuntime{key: key, session: existing}
+		activity := oldest.Add(time.Duration(i) * time.Second).UnixNano()
+		runtime.lastRX.Store(activity)
+		runtime.lastTX.Store(activity)
+		runtime.lastUp.Store(activity)
+		runtime.lastPong.Store(activity)
+		existingSessions[key] = existing
+		existingRuntimes[key] = runtime
+		if i == 0 {
+			expectedExisting = existing
+			expectedRuntime = runtime
+		}
+	}
+	incoming := &identitySession{
+		recordingSession: recordingSession{stats: plaintextKernelUDPStats},
+		peer:             peer.ID,
+		domain:           peer.Domain,
+	}
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX:     config.IXConfig{ID: core.IXID("ix-a")},
+			Domain: config.DomainConfig{ID: peer.Domain},
+			Peers:  []config.PeerConfig{peer},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionPlaintext,
+				Datapath:   config.TransportDatapathKernelModule,
+				SessionPool: config.SessionPoolPolicyConfig{
+					Size:      4,
+					Heartbeat: config.SessionPoolHeartbeatConfig{Mode: "enabled"},
+				},
+				KernelTransport: config.KernelTransportPolicyConfig{
+					Mode: string(dataplane.KernelTransportModeRequireKernel),
+				},
+			},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+		},
+		dataplane: &kernelTransportDataplane{
+			status: dataplane.KernelTransportStatus{
+				Available: true,
+				Protocols: []dataplane.KernelTransportProtocol{{
+					Protocol:  string(transport.ProtocolUDP),
+					Available: true,
+				}},
+			},
+		},
+		dataSessions:     existingSessions,
+		dataSessionState: existingRuntimes,
+		endpointState:    make(map[endpointStateKey]rstate.EndpointState),
+	}
+	defer daemon.closeDataSessions()
+
+	runtime, err := daemon.registerInboundDataSession(context.Background(), transport.Endpoint{
+		Name:      endpoint.Name,
+		Transport: transport.Protocol(endpoint.Transport),
+	}, incoming)
+	if err != nil {
+		t.Fatalf("register inbound session: %v", err)
+	}
+	if runtime != expectedRuntime {
+		t.Fatal("full plaintext reverse session was replaced while kernel datapath owns traffic")
+	}
+	if got := daemon.dataSessions[reverseKey]; got != expectedExisting {
+		t.Fatalf("reverse session = %#v, want expected existing", got)
+	}
+	if !incoming.closed {
+		t.Fatal("incoming replacement session was not closed")
+	}
+	for key, session := range existingSessions {
+		existing, ok := session.(*identitySession)
+		if !ok {
+			t.Fatalf("session %v = %T, want identitySession", key, session)
+		}
+		if existing.closed {
+			t.Fatalf("existing reverse session %v was closed", key)
+		}
+	}
+	if counters := daemon.dataStats.snapshot(); counters.StaleSessionsDropped != 0 {
+		t.Fatalf("stale sessions dropped = %d, want 0", counters.StaleSessionsDropped)
 	}
 }
 

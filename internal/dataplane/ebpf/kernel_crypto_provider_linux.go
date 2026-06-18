@@ -82,8 +82,8 @@ type kernelCryptoCtxSlotValue struct {
 	Packets       uint64
 	Bytes         uint64
 	LastSequence  uint64
-	ReplaySeen    [64]uint64
-	ReplayBlocks  [64]uint64
+	ReplaySeen    [1024]uint64
+	ReplayBlocks  [1024]uint64
 }
 
 type kernelCryptoProviderObject struct {
@@ -102,7 +102,7 @@ type kernelCryptoProviderObject struct {
 }
 
 const (
-	kernelCryptoCtxSlotValueSize = 1096
+	kernelCryptoCtxSlotValueSize = 16456
 )
 
 type kernelCryptoDirectSlotValue struct {
@@ -118,8 +118,8 @@ type kernelCryptoDirectSlotValue struct {
 	Packets       uint64
 	Bytes         uint64
 	LastSequence  uint64
-	ReplaySeen    [64]uint64
-	ReplayBlocks  [64]uint64
+	ReplaySeen    [1024]uint64
+	ReplayBlocks  [1024]uint64
 }
 
 type kernelCryptoProviderInstallEntry struct {
@@ -373,6 +373,9 @@ func (manager *Manager) kernelCryptoProductionReadyLocked() bool {
 }
 
 func (manager *Manager) kernelCryptoTCDirectReadyLocked() bool {
+	if manager.kernelCryptoProvider == nil {
+		return false
+	}
 	return kernelCryptoTCDirectProviderReady(manager.kernelCryptoContextProviderReadyLocked(), manager.kernelCryptoDirectSlotProviderReadyLocked(), kernelCryptoDirectKfuncFastpathReady()) &&
 		manager.kernelCryptoProvider.flowIndexMap != nil &&
 		manager.kernelCryptoProvider.contextSlots != nil &&
@@ -381,9 +384,7 @@ func (manager *Manager) kernelCryptoTCDirectReadyLocked() bool {
 }
 
 func kernelCryptoTCDirectProviderReady(contextProviderReady bool, directSlotProviderReady bool, directKfuncFastpathReady bool) bool {
-	_ = directSlotProviderReady
-	_ = directKfuncFastpathReady
-	return contextProviderReady
+	return contextProviderReady || (directSlotProviderReady && directKfuncFastpathReady)
 }
 
 func kernelCryptoDirectKfuncFastpathReady() bool {
@@ -403,7 +404,46 @@ func kernelCryptoDirectKfuncFastpathUnavailableReason() string {
 }
 
 func (manager *Manager) kernelCryptoTCDirectUnavailableReasonLocked() string {
-	return manager.kernelCryptoUnavailableReasonLocked()
+	if manager.kernelCryptoTCDirectReadyLocked() {
+		return ""
+	}
+	reasons := make([]string, 0, 4)
+	if manager.kernelCryptoFlowMap == nil {
+		reasons = append(reasons, "kernel crypto flow map is not loaded")
+	}
+	if manager.kernelCryptoProvider == nil {
+		reasons = append(reasons, "kernel crypto provider maps are not loaded")
+	} else {
+		if manager.kernelCryptoProvider.flowIndexMap == nil {
+			reasons = append(reasons, "kernel crypto flow index map is not loaded")
+		}
+		if manager.kernelCryptoProvider.contextSlots == nil {
+			reasons = append(reasons, "kernel crypto context slot map is not loaded")
+		}
+		if manager.kernelCryptoProvider.directSlotMap == nil {
+			reasons = append(reasons, "kernel crypto direct slot map is not loaded")
+		}
+	}
+	if manager.kernelCryptoContextProviderReadyLocked() {
+		if len(reasons) == 0 {
+			return "kernel crypto BPF context provider is ready but TC direct maps are incomplete"
+		}
+		return strings.Join(reasons, "; ")
+	}
+	if manager.kernelCryptoDirectSlotProviderReadyLocked() {
+		if reason := kernelCryptoDirectKfuncFastpathUnavailableReason(); reason != "" {
+			reasons = append(reasons, "direct-slot provider requires "+reason)
+		}
+	} else {
+		reasons = append(reasons, "direct-slot provider is unavailable")
+	}
+	if reason := manager.kernelCryptoUnavailableReasonLocked(); reason != "" {
+		reasons = append(reasons, "BPF context provider: "+reason)
+	}
+	if len(reasons) == 0 {
+		return "kernel crypto TC direct provider is unavailable"
+	}
+	return strings.Join(reasons, "; ")
 }
 
 func kernelCryptoDirectSlotModuleReady() bool {

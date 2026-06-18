@@ -1829,7 +1829,7 @@ func TestKernelUDPPlaintextPendingTCOnlyRequireKernelProbeIsHealthy(t *testing.T
 	}
 }
 
-func TestKernelUDPSecurePendingTCOnlyDialStillRequiresProvider(t *testing.T) {
+func TestKernelUDPSecurePendingTCOnlyDialInstallsKernelFlowWithControlSubscription(t *testing.T) {
 	providerA, _ := newKernelUDPProviderPair()
 	providerA.available = false
 	providerA.tcOnly = true
@@ -1844,7 +1844,7 @@ func TestKernelUDPSecurePendingTCOnlyDialStillRequiresProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := tr.Dial(ctx, transport.Peer{
+	session, err := tr.Dial(ctx, transport.Peer{
 		ID:       core.IXID("ix-b"),
 		DomainID: core.DomainID("lab.local"),
 		Endpoints: []transport.Endpoint{{
@@ -1853,13 +1853,27 @@ func TestKernelUDPSecurePendingTCOnlyDialStillRequiresProvider(t *testing.T) {
 			Address:   "198.51.100.2:7000",
 		}},
 	}, nil)
-	if err == nil {
-		t.Fatalf("secure pending TC-only dial unexpectedly succeeded")
+	if err != nil {
+		t.Fatalf("dial secure pending TC-only kernel udp: %v", err)
 	}
 	providerA.mu.Lock()
-	defer providerA.mu.Unlock()
-	if len(providerA.flows) != 0 {
-		t.Fatalf("secure pending TC-only installed flows = %d, want 0", len(providerA.flows))
+	if len(providerA.flows) != 1 {
+		providerA.mu.Unlock()
+		t.Fatalf("installed flows = %d, want 1", len(providerA.flows))
+	}
+	if providerA.subscribeCalls != 0 || providerA.flowSubscribeCalls != 1 {
+		providerA.mu.Unlock()
+		t.Fatalf("subscriptions global=%d flow=%d, want one flow control subscription for secure pending TC-only", providerA.subscribeCalls, providerA.flowSubscribeCalls)
+	}
+	for _, flow := range providerA.flows {
+		if flow.CryptoPlacement != dataplane.CryptoPlacementKernel {
+			providerA.mu.Unlock()
+			t.Fatalf("secure pending TC-only flow crypto placement = %q, want kernel", flow.CryptoPlacement)
+		}
+	}
+	providerA.mu.Unlock()
+	if err := session.Close(); err != nil {
+		t.Fatalf("close session: %v", err)
 	}
 }
 
@@ -1896,7 +1910,7 @@ func TestKernelUDPPlaintextPendingTCOnlyListenDoesNotRequireReinjectYet(t *testi
 	}
 }
 
-func TestKernelUDPSecurePendingTCOnlyListenStillRequiresProvider(t *testing.T) {
+func TestKernelUDPSecurePendingTCOnlyListenDoesNotRequireReinjectYet(t *testing.T) {
 	providerA, _ := newKernelUDPProviderPair()
 	providerA.available = false
 	providerA.tcOnly = true
@@ -1911,13 +1925,28 @@ func TestKernelUDPSecurePendingTCOnlyListenStillRequiresProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if _, err := tr.Listen(ctx, transport.Endpoint{
+	listener, err := tr.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
 		Transport: transport.ProtocolUDP,
 		Listen:    "198.51.100.2:7000",
 		Enabled:   true,
-	}, nil); err == nil {
-		t.Fatalf("secure pending TC-only listener unexpectedly succeeded")
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen secure pending TC-only kernel udp: %v", err)
+	}
+	defer listener.Close()
+
+	kernelListener, ok := listener.(*kernelListener)
+	if !ok {
+		t.Fatalf("listener type = %T, want *kernelListener", listener)
+	}
+	if kernelListener.placement != dataplane.CryptoPlacementKernel {
+		t.Fatalf("secure pending TC-only listener placement = %q, want kernel", kernelListener.placement)
+	}
+	providerA.mu.Lock()
+	defer providerA.mu.Unlock()
+	if providerA.subscribeCalls != 1 || providerA.flowSubscribeCalls != 0 {
+		t.Fatalf("subscriptions global=%d flow=%d, want one global control subscription for secure pending TC-only listener", providerA.subscribeCalls, providerA.flowSubscribeCalls)
 	}
 }
 
@@ -1955,6 +1984,99 @@ func TestKernelUDPAutoPrefersKernelCryptoWhenBothPlacementsAvailable(t *testing.
 	}
 	if placement != dataplane.CryptoPlacementKernel {
 		t.Fatalf("auto crypto placement = %q, want kernel", placement)
+	}
+}
+
+func TestKernelUDPStatusTCOnlySecureKernelManagedWithoutDirectOnlyFlag(t *testing.T) {
+	status := dataplane.KernelUDPStatus{
+		TCOnly:       true,
+		KernelCrypto: true,
+	}
+	if !kernelUDPStatusDirectOnlyKernelManaged(status, "secure", dataplane.CryptoPlacementKernel) {
+		t.Fatal("TC-only secure kernel crypto status should be treated as kernel-managed even without direct-only flag")
+	}
+	if kernelUDPStatusDirectOnlyKernelManaged(status, "secure", dataplane.CryptoPlacementUserspace) {
+		t.Fatal("TC-only secure userspace crypto status should not be treated as kernel-managed")
+	}
+}
+
+func TestSecureTransportKernelUDPTCOnlyUsesControlSubscriptionAndKernelCrypto(t *testing.T) {
+	providerA, providerB := newKernelUDPProviderPair()
+	providerA.tcOnly = true
+	providerB.tcOnly = true
+	clientTransport := securetransport.New(NewWithKernelProvider(providerA), securetransport.Options{})
+	serverTransport := securetransport.New(NewWithKernelProvider(providerB), securetransport.Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
+		Name:      core.EndpointID("server"),
+		Transport: transport.ProtocolUDP,
+		Listen:    "198.51.100.2:7000",
+		Enabled:   true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen secure TC-only kernel udp: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan transport.Session, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		session, err := listener.Accept(ctx)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- session
+	}()
+
+	client, err := clientTransport.Dial(ctx, transport.Peer{
+		ID:       core.IXID("ix-b"),
+		DomainID: core.DomainID("lab.local"),
+		Endpoints: []transport.Endpoint{{
+			Name:      core.EndpointID("server"),
+			Transport: transport.ProtocolUDP,
+			Address:   "198.51.100.2:7000",
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("dial secure TC-only kernel udp: %v", err)
+	}
+	defer client.Close()
+
+	var server transport.Session
+	select {
+	case server = <-accepted:
+	case err := <-acceptErr:
+		t.Fatalf("accept secure TC-only kernel udp: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	defer server.Close()
+
+	payload := []byte("secure-tc-only-control")
+	if err := client.SendPacket(payload); err != nil {
+		t.Fatalf("client send: %v", err)
+	}
+	got, err := server.RecvPacket()
+	if err != nil {
+		t.Fatalf("server recv: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("server received %q, want %q", got, payload)
+	}
+	if stats := client.Stats(); !stats.Encrypted || stats.CryptoPlacement != string(dataplane.CryptoPlacementKernel) {
+		t.Fatalf("client stats encrypted=%t placement=%q, want kernel crypto", stats.Encrypted, stats.CryptoPlacement)
+	}
+	providerA.mu.Lock()
+	aFlowSubs := providerA.flowSubscribeCalls
+	providerA.mu.Unlock()
+	providerB.mu.Lock()
+	bSubs := providerB.subscribeCalls
+	providerB.mu.Unlock()
+	if aFlowSubs == 0 || bSubs == 0 {
+		t.Fatalf("control subscriptions client flow=%d server global=%d, want both non-zero", aFlowSubs, bSubs)
 	}
 }
 

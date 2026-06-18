@@ -23,7 +23,7 @@ const (
 	kernelCryptoAES256KeyLen                             = 32
 	kernelCryptoMaxKeyLen                                = 32
 	kernelCryptoAESGCMIVLen                              = 12
-	kernelCryptoMaxEntries                               = 16384
+	kernelCryptoMaxEntries                               = 4096
 	kernelCryptoNamespaceExperimentalTCP          uint8  = 0
 	kernelCryptoNamespaceKernelUDP                uint8  = 1
 	kernelCryptoDirectionSend                     uint8  = 1

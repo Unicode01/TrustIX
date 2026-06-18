@@ -324,6 +324,7 @@ required_ebpf = [
     "experimental_tcp_kernel_crypto_tx_xdp_bpfel.o",
     "kernel_udp_xdp_bpfel.o",
     "kernel_udp_tx_kernel_crypto_tc_bpfel.o",
+    "kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o",
     "kernel_udp_rx_kernel_crypto_tc_bpfel.o",
     "kernel_udp_rx_kernel_crypto_tc_skbopen_bpfel.o",
     "kernel_udp_rx_kernel_crypto_tc_skbopen_decap_l2_bpfel.o",

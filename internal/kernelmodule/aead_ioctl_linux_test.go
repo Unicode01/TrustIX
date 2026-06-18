@@ -7,6 +7,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -82,6 +83,9 @@ func TestTrustIXFullDatapathDeviceQueryAndSelftest(t *testing.T) {
 	}
 	selftest, err := RunDatapathSelftest(TrustIXDatapathDevicePath, TrustIXDatapathSelftestAll)
 	if err != nil {
+		if errors.Is(err, syscall.EBUSY) {
+			t.Skipf("trustix_datapath selftest is busy; unload active datapath users before running this device selftest: %v", err)
+		}
 		t.Fatalf("run full datapath selftest: %v", err)
 	}
 	if selftest.Requested != TrustIXDatapathSelftestAll ||

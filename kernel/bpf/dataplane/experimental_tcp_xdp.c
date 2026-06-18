@@ -721,6 +721,30 @@ static __always_inline int trustix_kernel_udp_xdp_redirect_lan(
     return bpf_redirect_map(&ix_kudp_rx_devmap, 0, 0);
 }
 
+static __always_inline int trustix_kernel_udp_xdp_rx_direct_fix_inner_checksums(
+    struct xdp_md *ctx, __u8 *inner, __u32 inner_offset, __u32 inner_len,
+    __u8 *data_end, __u32 config_value)
+{
+#ifdef TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM
+    if (trustix_xdp_fix_inner_tcp_control_checksum(inner, inner_len, data_end)) {
+        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
+        return TRUSTIX_XDP_DIRECT_FALLBACK;
+    }
+#endif
+    if (!(config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUM)) {
+#ifdef TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CHECKSUM
+        if (trustix_xdp_fix_inner_l4_checksum(inner, ctx, inner_offset, inner_len, data_end)) {
+            trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
+            return TRUSTIX_XDP_DIRECT_FALLBACK;
+        }
+#else
+        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
+        return TRUSTIX_XDP_DIRECT_FALLBACK;
+#endif
+    }
+    return 0;
+}
+
 static __always_inline int trustix_kernel_udp_xdp_rx_direct_inner(
     struct xdp_md *ctx, __u32 inner_offset, __u32 config_value)
 {
@@ -743,23 +767,6 @@ static __always_inline int trustix_kernel_udp_xdp_rx_direct_inner(
     available = (__u32)(data_end - inner);
     if (inner_len < 20 || inner_len > available)
         goto direct_len_error;
-#ifdef TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM
-    if (trustix_xdp_fix_inner_tcp_control_checksum(inner, inner_len, data_end)) {
-        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
-        return TRUSTIX_XDP_DIRECT_FALLBACK;
-    }
-#endif
-    if (!(config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUM)) {
-#ifdef TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CHECKSUM
-        if (trustix_xdp_fix_inner_l4_checksum(inner, ctx, inner_offset, inner_len, data_end)) {
-            trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
-            return TRUSTIX_XDP_DIRECT_FALLBACK;
-        }
-#else
-        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
-        return TRUSTIX_XDP_DIRECT_FALLBACK;
-#endif
-    }
 
     if (config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_FIXED_L2) {
         __u32 config_key = 0;
@@ -771,6 +778,9 @@ static __always_inline int trustix_kernel_udp_xdp_rx_direct_inner(
         }
         trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_BROADCASTS,
                                          config_value);
+        if (trustix_kernel_udp_xdp_rx_direct_fix_inner_checksums(ctx, inner, inner_offset, inner_len,
+                                                                 data_end, config_value))
+            return TRUSTIX_XDP_DIRECT_FALLBACK;
         return trustix_kernel_udp_xdp_redirect_lan(
             ctx, inner_offset, inner_len, available,
             rx_config->destination_mac0, rx_config->destination_mac1,
@@ -788,6 +798,9 @@ static __always_inline int trustix_kernel_udp_xdp_rx_direct_inner(
 
     trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_NEIGH_HITS,
                                      config_value);
+    if (trustix_kernel_udp_xdp_rx_direct_fix_inner_checksums(ctx, inner, inner_offset, inner_len,
+                                                             data_end, config_value))
+        return TRUSTIX_XDP_DIRECT_FALLBACK;
     return trustix_kernel_udp_xdp_redirect_lan(
         ctx, inner_offset, inner_len, available,
         neigh->destination_mac0, neigh->destination_mac1,

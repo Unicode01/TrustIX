@@ -339,16 +339,7 @@ func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) b
 	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext {
 		return false
 	}
-	if experimentalTCPRouteGSOExplicitlyEnabledByEnv() {
-		return true
-	}
-	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
-		return false
-	}
-	if profile.Profile == config.TransportProfilePerformance {
-		return true
-	}
-	return false
+	return experimentalTCPRouteGSOExplicitlyEnabledByEnv()
 }
 
 func experimentalTCPRouteGSOAsyncForDesired(desired config.Desired) bool {
@@ -361,6 +352,23 @@ func experimentalTCPSecureRouteGSOAsyncForDesired(desired config.Desired) bool {
 		return false
 	}
 	return experimentalTCPSecureKernelCryptoDirectForDesired(desired)
+}
+
+func kernelUDPSecureRouteGSOForDesired(desired config.Desired) bool {
+	if kernelUDPSecureRouteGSOExplicitlyDisabledByEnv() {
+		return false
+	}
+	return kernelUDPSecureFullDirectForDesired(desired)
+}
+
+func secureKernelRouteGSOForDesired(desired config.Desired) bool {
+	return experimentalTCPSecureRouteGSOAsyncForDesired(desired) ||
+		kernelUDPSecureRouteGSOForDesired(desired)
+}
+
+func routeGSOHelpersForDesired(desired config.Desired) bool {
+	return experimentalTCPRouteGSOAsyncForDesired(desired) ||
+		kernelUDPSecureRouteGSOForDesired(desired)
 }
 
 func kernelDatapathFullPlaintextPolicySelectedForDesired(desired config.Desired) bool {
@@ -434,12 +442,6 @@ func experimentalTCPRouteGSOExplicitlyEnabledByEnv() bool {
 		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC",
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY",
-		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY",
 	)
 }
 
@@ -449,12 +451,19 @@ func experimentalTCPRouteGSOExplicitlyDisabledByEnv() bool {
 		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC",
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY",
-		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY",
+	} {
+		if envFalsey(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func kernelUDPSecureRouteGSOExplicitlyDisabledByEnv() bool {
+	for _, name := range []string{
+		"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO",
+		"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC",
+		"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_TCP_GSO_KFUNC",
 	} {
 		if envFalsey(name) {
 			return true

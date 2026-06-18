@@ -158,6 +158,13 @@ trustix_bpf_ctx_skb(struct __sk_buff *ctx)
 #define TRUSTIX_TIXT_TX_SECURE_PAYLOAD_OVERHEAD \
 	(TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + \
 	 TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
+#define TRUSTIX_KUDP_UDP_OUTER_HEADER_LEN \
+	(ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + \
+	 TRUSTIX_KUDP_HEADER_LEN)
+#define TRUSTIX_KUDP_SECURE_UDP_OUTER_OVERHEAD \
+	((u32)sizeof(struct iphdr) + (u32)sizeof(struct udphdr) + \
+	 (u32)TRUSTIX_KUDP_HEADER_LEN + \
+	 (u32)TRUSTIX_TIXT_TX_SECURE_PAYLOAD_OVERHEAD)
 #define TRUSTIX_ROUTE_TCP_GSO_ASYNC_MAX_QUEUE_SHARDS 8
 #define TRUSTIX_TIXT_TX_ROUTE_TCP_XMIT_STOLEN 5
 #define TRUSTIX_TIXT_TX_ROUTE_TCP_XMIT_QUEUED 6
@@ -7518,8 +7525,7 @@ trustix_tixt_tx_validate_route_secure_flow_pulled(
 	if (!selected || !*flow_id)
 		return -EPROTONOSUPPORT;
 	flow_flags = READ_ONCE(selected->flags);
-	if (!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP) ||
-	    !(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SECURE) ||
+	if (!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SECURE) ||
 	    (flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CSUM))
 		return -EPROTONOSUPPORT;
 	*flow = selected;
@@ -7939,6 +7945,7 @@ struct trustix_tixt_tx_route_gso_template {
 	bool trust_inner_csum;
 	bool trust_partial_inner_csum;
 	bool secure;
+	bool kernel_udp;
 	bool use_tx_queue_mapping;
 	bool stream_outer_gso;
 };
@@ -7973,12 +7980,17 @@ struct trustix_tixt_tx_route_gso_async_work {
 	u32 inner_ip_check_base;
 	u32 inner_tcp_seq_base;
 	u32 queue_hash;
+	__be32 inner_flow_saddr;
+	__be32 inner_flow_daddr;
+	__be16 inner_flow_sport;
+	__be16 inner_flow_dport;
 	u32 route_flow_mask;
 	u32 secure_slot_id;
 	u16 secure_suite;
 	u16 secure_reserved;
 	u64 secure_epoch;
 	bool resliced;
+	bool inner_flow_key_ready;
 	bool inner_header_ready;
 	bool sync_redirect;
 	bool xmit_more;
@@ -8358,14 +8370,61 @@ trustix_tixt_tx_init_secure_route_gso_template(
 				u32 clear_flags,
 				struct trustix_tixt_tx_route_gso_template *tmpl)
 {
+	struct udphdr *udph;
+	struct iphdr *iph;
 	u8 *tixt;
+	u8 *kudp;
+	u16 tail1;
 
-	trustix_tixt_tx_init_route_gso_template(flow, out_dev, flow_id,
-						clear_flags, tmpl);
+	if (READ_ONCE(flow->flags) & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP) {
+		trustix_tixt_tx_init_route_gso_template(flow, out_dev, flow_id,
+							clear_flags, tmpl);
+		tmpl->secure = true;
+		tixt = tmpl->base + ETH_HLEN + sizeof(struct iphdr) +
+		       sizeof(struct tcphdr);
+		tixt[5] = TRUSTIX_TIXT_FLAG_ENCRYPTED | TRUSTIX_TIXT_FLAG_INNER_IPV4;
+		return;
+	}
+
+	memset(tmpl, 0, sizeof(*tmpl));
+	tmpl->out_dev = out_dev;
 	tmpl->secure = true;
-	tixt = tmpl->base + ETH_HLEN + sizeof(struct iphdr) +
-	       sizeof(struct tcphdr);
-	tixt[5] = TRUSTIX_TIXT_FLAG_ENCRYPTED | TRUSTIX_TIXT_FLAG_INNER_IPV4;
+	tmpl->kernel_udp = true;
+	tmpl->saddr = READ_ONCE(flow->saddr);
+	tmpl->daddr = READ_ONCE(flow->daddr);
+	tmpl->mtu = READ_ONCE(flow->mtu);
+	tmpl->ip_check_base = READ_ONCE(flow->ipv4_check_udp);
+
+	memcpy(tmpl->base, &flow->destination_mac0,
+	       sizeof(flow->destination_mac0));
+	memcpy(tmpl->base + 4, &flow->destination_mac1,
+	       sizeof(flow->destination_mac1));
+	memcpy(tmpl->base + 6, &flow->source_mac0,
+	       sizeof(flow->source_mac0));
+	memcpy(tmpl->base + 10, &flow->source_mac1,
+	       sizeof(flow->source_mac1));
+	tail1 = htons(ETH_P_IP);
+	memcpy(tmpl->base + 12, &tail1, sizeof(tail1));
+
+	iph = (struct iphdr *)(tmpl->base + ETH_HLEN);
+	iph->version = 4;
+	iph->ihl = 5;
+	iph->frag_off = htons(0x4000);
+	iph->ttl = 64;
+	iph->protocol = IPPROTO_UDP;
+	iph->saddr = tmpl->saddr;
+	iph->daddr = tmpl->daddr;
+
+	udph = (struct udphdr *)(tmpl->base + ETH_HLEN + sizeof(*iph));
+	udph->source = READ_ONCE(flow->source);
+	udph->dest = READ_ONCE(flow->dest);
+
+	kudp = (u8 *)(udph + 1);
+	put_unaligned_be32(TRUSTIX_KUDP_MAGIC, kudp);
+	kudp[4] = 1;
+	kudp[5] = TRUSTIX_KUDP_FLAG_ENCRYPTED | TRUSTIX_KUDP_FLAG_INNER_IPV4;
+	put_unaligned_be16(TRUSTIX_KUDP_HEADER_LEN, kudp + 6);
+	put_unaligned_be64(flow_id, kudp + 8);
 }
 
 static void
@@ -9009,6 +9068,37 @@ trustix_tixt_tx_write_route_gso_stream_tixt(
 	put_unaligned_be32(inner_len, dst + 32);
 	put_unaligned_be16(0, dst + 36);
 	put_unaligned_be16(0, dst + 38);
+}
+
+static __always_inline void
+trustix_kudp_tx_write_secure_route_gso_header(
+				u8 *dst,
+				const struct trustix_tixt_tx_route_gso_template *tmpl,
+				u32 secure_payload_len, u64 sequence)
+{
+	u32 udp_len = sizeof(struct udphdr) + TRUSTIX_KUDP_HEADER_LEN +
+		      secure_payload_len;
+	u32 l3_len = sizeof(struct iphdr) + udp_len;
+	u32 sum;
+	u16 check;
+
+	memcpy(dst, tmpl->base, TRUSTIX_KUDP_UDP_OUTER_HEADER_LEN);
+	put_unaligned_be16(l3_len, dst + ETH_HLEN + 2);
+	put_unaligned_be16(0, dst + ETH_HLEN + 10);
+	sum = tmpl->ip_check_base;
+	sum += l3_len;
+	sum = (sum & 0xffff) + (sum >> 16);
+	sum = (sum & 0xffff) + (sum >> 16);
+	check = ~sum;
+	if (!check)
+		check = 0xffff;
+	put_unaligned_be16(check, dst + ETH_HLEN + 10);
+	put_unaligned_be64(sequence, dst + ETH_HLEN + sizeof(struct iphdr) +
+			   sizeof(struct udphdr) + 16);
+	put_unaligned_be32(secure_payload_len, dst + ETH_HLEN +
+			   sizeof(struct iphdr) + sizeof(struct udphdr) + 24);
+	put_unaligned_be16(udp_len, dst + ETH_HLEN + sizeof(struct iphdr) +
+			   4);
 }
 
 static __always_inline void
@@ -10311,6 +10401,101 @@ out_ret:
 }
 
 static struct sk_buff *
+trustix_kudp_tx_build_secure_route_gso_frame_skb(
+				struct trustix_tixt_tx_route_gso_async_work *item,
+				const struct trustix_tixt_tx_route_gso_stream_direct_frame *frame,
+				bool fix_inner_csum, int *ret_out)
+{
+	struct trustix_tixt_tx_route_gso_template *tmpl;
+	struct trustix_aead_direct_batch_op op = {};
+	struct sk_buff *skb;
+	u32 secure_payload_len;
+	u32 l3_len;
+	u32 total_len;
+	u32 mtu;
+	u8 *data;
+	int ret;
+
+	if (!item || !item->skb || !frame || !item->tmpl.secure ||
+	    !item->tmpl.kernel_udp) {
+		ret = -EINVAL;
+		goto out_ret;
+	}
+	tmpl = &item->tmpl;
+	if (!tmpl->out_dev) {
+		ret = -EINVAL;
+		goto out_ret;
+	}
+	secure_payload_len = frame->inner_len;
+	if (!secure_payload_len ||
+	    check_add_overflow((u32)sizeof(struct iphdr) +
+				       (u32)sizeof(struct udphdr) +
+				       (u32)TRUSTIX_KUDP_HEADER_LEN,
+			       secure_payload_len,
+			       &l3_len) ||
+	    check_add_overflow((u32)ETH_HLEN, l3_len, &total_len)) {
+		ret = -EOVERFLOW;
+		goto out_ret;
+	}
+	mtu = trustix_tixt_tx_route_gso_stream_mtu(tmpl);
+	if (!mtu || l3_len > mtu || l3_len > 0xffff) {
+		ret = -EMSGSIZE;
+		goto out_ret;
+	}
+	skb = alloc_skb(total_len + NET_SKB_PAD, GFP_KERNEL);
+	if (!skb) {
+		ret = -ENOMEM;
+		goto out_ret;
+	}
+	skb_reserve(skb, NET_SKB_PAD);
+	data = skb_put(skb, total_len);
+	trustix_kudp_tx_write_secure_route_gso_header(
+		data, tmpl, secure_payload_len, frame->sequence);
+	trustix_tixt_tx_write_secure_header(
+		data + TRUSTIX_KUDP_UDP_OUTER_HEADER_LEN, item->secure_suite,
+		item->secure_epoch, frame->sequence);
+	ret = trustix_tixt_tx_copy_route_gso_stream_direct_secure_inner(
+		item, data + TRUSTIX_KUDP_UDP_OUTER_HEADER_LEN, frame,
+		fix_inner_csum, &op);
+	if (ret) {
+		kfree_skb(skb);
+		goto out_ret;
+	}
+	ret = trustix_tixt_tx_route_gso_direct_seal_ops(
+		item->secure_slot_id, &op, 1);
+	if (ret) {
+		kfree_skb(skb);
+		goto out_ret;
+	}
+
+	skb->dev = tmpl->out_dev;
+	skb->protocol = htons(ETH_P_IP);
+	skb_reset_mac_header(skb);
+	skb_set_network_header(skb, ETH_HLEN);
+	skb_set_transport_header(skb, ETH_HLEN + sizeof(struct iphdr));
+	skb->mac_len = ETH_HLEN;
+	skb->encapsulation = 0;
+	skb->csum = 0;
+	skb->csum_level = 0;
+	skb_gso_reset(skb);
+	trustix_skb_clear_csum_metadata(skb);
+	trustix_tixt_tx_route_gso_apply_tx_queue(skb, tmpl);
+	ret = trustix_tixt_tx_sanitize_route_gso_xmit_skb(skb, tmpl->out_dev);
+	if (ret) {
+		kfree_skb(skb);
+		goto out_ret;
+	}
+	if (ret_out)
+		*ret_out = 0;
+	return skb;
+
+out_ret:
+	if (ret_out)
+		*ret_out = ret;
+	return ERR_PTR(ret);
+}
+
+static struct sk_buff *
 trustix_tixt_tx_build_route_gso_stream_direct_ref_nonlinear_skb(
 				const struct trustix_tixt_tx_route_gso_template *tmpl,
 				const struct trustix_tixt_tx_route_gso_stream_direct_ref *refs,
@@ -11313,13 +11498,58 @@ static int trustix_tixt_tx_route_gso_async_try_stream_direct(
 				       seg_payload_len, &plain_inner_len) ||
 		    check_add_overflow(plain_inner_len, frame_payload_extra,
 				       &inner_len) ||
-		    check_add_overflow((u32)TRUSTIX_TIXT_HEADER_LEN,
-				       inner_len, &frame_len) ||
+		    check_add_overflow(item->tmpl.kernel_udp ?
+					       (u32)TRUSTIX_KUDP_HEADER_LEN :
+					       (u32)TRUSTIX_TIXT_HEADER_LEN,
+				       inner_len, &frame_len)) {
+			ret = -EMSGSIZE;
+			stage = 12;
+			goto fail;
+		}
+		if (item->tmpl.kernel_udp &&
+		    sizeof(struct iphdr) + sizeof(struct udphdr) + frame_len >
+			    mtu) {
+			ret = -EMSGSIZE;
+			stage = 12;
+			goto fail;
+		}
+		if (!item->tmpl.kernel_udp &&
 		    sizeof(struct iphdr) + sizeof(struct tcphdr) + frame_len >
 			    mtu) {
 			ret = -EMSGSIZE;
 			stage = 12;
 			goto fail;
+		}
+		if (item->tmpl.kernel_udp) {
+			struct sk_buff *skb;
+
+			frames[0].sequence = sequence;
+			frames[0].payload_offset = payload_offset;
+			frames[0].payload_len = seg_payload_len;
+			frames[0].inner_len = inner_len;
+			frames[0].plain_inner_len = plain_inner_len;
+			skb = trustix_kudp_tx_build_secure_route_gso_frame_skb(
+				item, &frames[0], fix_inner_csum, &ret);
+			if (IS_ERR(skb)) {
+				stage = 14;
+				goto fail;
+			}
+			if (batch_count >= ARRAY_SIZE(batches)) {
+				kfree_skb(skb);
+				ret = -E2BIG;
+				stage = 14;
+				goto fail;
+			}
+			batches[batch_count] = skb;
+			batch_frames[batch_count] = 1;
+			batch_nonlinear[batch_count] = false;
+			batch_count++;
+			stream_payload_len += frame_len;
+			sequence++;
+			payload_offset += seg_payload_len;
+			payload_remaining -= seg_payload_len;
+			prepared++;
+			continue;
 		}
 		if (check_add_overflow(stream_payload_len, frame_len,
 				       &next_payload_len) ||
@@ -11773,8 +12003,36 @@ trustix_route_tcp_gso_async_cross_item_effective_max_frames(
 	return low_frames;
 }
 
-static u32 trustix_route_tcp_gso_async_hash_skb(struct sk_buff *skb,
-						u64 flow_id)
+static u32 trustix_route_tcp_gso_async_hash_mix(u32 hash)
+{
+	hash ^= hash >> 16;
+	hash *= 0x7feb352dU;
+	hash ^= hash >> 15;
+	return hash ? hash : 1;
+}
+
+static u32 trustix_route_tcp_gso_async_flow_fallback_hash(u64 flow_id)
+{
+	u32 hash = (u32)flow_id ^ (u32)(flow_id >> 32);
+
+	return trustix_route_tcp_gso_async_hash_mix(hash);
+}
+
+static bool
+trustix_route_tcp_gso_async_same_inner_tcp_flow(
+				const struct trustix_tixt_tx_route_gso_async_work *a,
+				const struct trustix_tixt_tx_route_gso_async_work *b)
+{
+	return a && b && a->inner_flow_key_ready && b->inner_flow_key_ready &&
+	       a->inner_flow_saddr == b->inner_flow_saddr &&
+	       a->inner_flow_daddr == b->inner_flow_daddr &&
+	       a->inner_flow_sport == b->inner_flow_sport &&
+	       a->inner_flow_dport == b->inner_flow_dport;
+}
+
+static u32 trustix_route_tcp_gso_async_hash_skb(
+				struct sk_buff *skb, u64 flow_id,
+				struct trustix_tixt_tx_route_gso_async_work *item)
 {
 	const struct tcphdr *tcph;
 	const struct iphdr *iph;
@@ -11783,14 +12041,12 @@ static u32 trustix_route_tcp_gso_async_hash_skb(struct sk_buff *skb,
 
 	hash = (u32)flow_id ^ (u32)(flow_id >> 32);
 	if (!skb)
-		return hash ? hash : 1;
-	if (skb_get_hash(skb))
-		return skb_get_hash(skb);
+		return trustix_route_tcp_gso_async_hash_mix(hash);
 	if (skb_headlen(skb) < ETH_HLEN + sizeof(*iph))
-		return hash ? hash : 1;
+		return trustix_route_tcp_gso_async_hash_mix(hash);
 	iph = (const struct iphdr *)(skb->data + ETH_HLEN);
 	if (iph->version != 4 || iph->ihl < 5)
-		return hash ? hash : 1;
+		return trustix_route_tcp_gso_async_hash_mix(hash);
 	off = ETH_HLEN + iph->ihl * 4;
 	hash ^= (__force u32)iph->saddr;
 	hash ^= ((__force u32)iph->daddr << 16) |
@@ -11801,11 +12057,16 @@ static u32 trustix_route_tcp_gso_async_hash_skb(struct sk_buff *skb,
 		tcph = (const struct tcphdr *)(skb->data + off);
 		hash ^= ((u32)ntohs(tcph->source) << 16) |
 			(u32)ntohs(tcph->dest);
+		if (item) {
+			item->inner_flow_saddr = iph->saddr;
+			item->inner_flow_daddr = iph->daddr;
+			item->inner_flow_sport = tcph->source;
+			item->inner_flow_dport = tcph->dest;
+			item->inner_tcp_seq_base = ntohl(tcph->seq);
+			item->inner_flow_key_ready = true;
+		}
 	}
-	hash ^= hash >> 16;
-	hash *= 0x7feb352dU;
-	hash ^= hash >> 15;
-	return hash ? hash : 1;
+	return trustix_route_tcp_gso_async_hash_mix(hash);
 }
 
 static unsigned int trustix_tixt_tx_route_gso_async_process_item(
@@ -11824,6 +12085,7 @@ struct trustix_route_tcp_gso_async_cross_item_batch {
 	u32 stream_payload_len;
 	u32 outer_gso_size;
 	u32 last_frame_len;
+	u32 next_inner_tcp_seq;
 	u64 outer_sequence;
 	u64 next_sequence;
 	u64 next_frame_sequence;
@@ -11874,6 +12136,7 @@ trustix_route_tcp_gso_async_cross_item_template_match(
 	    a->tmpl.trust_partial_inner_csum !=
 		    b->tmpl.trust_partial_inner_csum ||
 	    a->tmpl.secure != b->tmpl.secure ||
+	    a->tmpl.kernel_udp != b->tmpl.kernel_udp ||
 	    a->tmpl.use_tx_queue_mapping != b->tmpl.use_tx_queue_mapping ||
 	    a->tmpl.stream_outer_gso != b->tmpl.stream_outer_gso ||
 	    a->tcp_header_len != b->tcp_header_len ||
@@ -12009,6 +12272,7 @@ trustix_route_tcp_gso_async_cross_item_candidate(
 				const struct trustix_tixt_tx_route_gso_async_work *item,
 				u64 expected_outer_sequence,
 				u64 expected_frame_sequence,
+				u32 expected_inner_tcp_seq,
 				unsigned int frame_count,
 				u32 stream_payload_len,
 				unsigned int max_frames,
@@ -12039,6 +12303,18 @@ trustix_route_tcp_gso_async_cross_item_candidate(
 	if (item->tmpl.secure) {
 		if (item->outer_sequence != expected_outer_sequence ||
 		    item->sequence != expected_frame_sequence) {
+			if (reason)
+				*reason = 3;
+			return false;
+		}
+	} else if (trustix_tixt_tx_plain_skip_sequence_enabled()) {
+		if (!trustix_route_tcp_gso_async_same_inner_tcp_flow(first,
+								    item)) {
+			if (reason)
+				*reason = 4;
+			return false;
+		}
+		if (item->inner_tcp_seq_base != expected_inner_tcp_seq) {
 			if (reason)
 				*reason = 3;
 			return false;
@@ -12091,6 +12367,13 @@ trustix_route_tcp_gso_async_cross_item_same_stream(
 {
 	if (!first || !item)
 		return false;
+	if (trustix_tixt_tx_plain_skip_sequence_enabled() &&
+	    !first->tmpl.secure && !item->tmpl.secure) {
+		if (first->inner_flow_key_ready && item->inner_flow_key_ready)
+			return trustix_route_tcp_gso_async_same_inner_tcp_flow(
+				first, item);
+		return first->queue_hash == item->queue_hash;
+	}
 	if (first->flow_id == item->flow_id)
 		return true;
 	return trustix_route_tcp_gso_async_cross_item_template_match(first,
@@ -12103,6 +12386,7 @@ trustix_route_tcp_gso_async_cross_item_find_locked(
 				const struct trustix_tixt_tx_route_gso_async_work *first,
 				u64 expected_outer_sequence,
 				u64 expected_frame_sequence,
+				u32 expected_inner_tcp_seq,
 				unsigned int frame_count,
 				u32 stream_payload_len,
 				unsigned int max_frames,
@@ -12133,7 +12417,8 @@ trustix_route_tcp_gso_async_cross_item_find_locked(
 			trustix_route_tcp_gso_async_stream_cross_item_lookahead_scans++;
 		if (trustix_route_tcp_gso_async_cross_item_candidate(
 			    first, item, expected_outer_sequence,
-			    expected_frame_sequence, frame_count,
+			    expected_frame_sequence, expected_inner_tcp_seq,
+			    frame_count,
 			    stream_payload_len, max_frames,
 			    &candidate_reason)) {
 			if (record_lookahead && lookahead && scanned > 1)
@@ -12253,6 +12538,10 @@ trustix_route_tcp_gso_async_cross_item_collect(
 		batch->next_sequence += frame_len;
 		batch->next_frame_sequence += item->tmpl.secure ? 1 :
 			frame_len;
+		if (!item->tmpl.secure &&
+		    trustix_tixt_tx_plain_skip_sequence_enabled())
+			batch->next_inner_tcp_seq =
+				item->inner_tcp_seq_base + item->payload_len;
 		payload_offset += seg_payload_len;
 		payload_remaining -= seg_payload_len;
 		prepared++;
@@ -12359,6 +12648,11 @@ trustix_route_tcp_gso_async_cross_item_collect_range(
 		batch->next_sequence += frame_len;
 		batch->next_frame_sequence += item->tmpl.secure ? 1 :
 			frame_len;
+		if (!item->tmpl.secure &&
+		    trustix_tixt_tx_plain_skip_sequence_enabled())
+			batch->next_inner_tcp_seq =
+				item->inner_tcp_seq_base + payload_offset +
+				seg_payload_len;
 		payload_offset += seg_payload_len;
 		payload_remaining -= seg_payload_len;
 		prepared++;
@@ -12531,6 +12825,7 @@ trustix_route_tcp_gso_async_worker_try_cross_item_batch_dequeue(
 		first->sequence_cost;
 	u64 next_frame_sequence = first->sequence +
 		trustix_route_tcp_gso_async_item_frame_sequence_cost(first);
+	u32 next_inner_tcp_seq = first->inner_tcp_seq_base + first->payload_len;
 	unsigned int frame_count = first->segment_count;
 	unsigned int collected_count = 0;
 	unsigned int reason = 0;
@@ -12551,14 +12846,15 @@ trustix_route_tcp_gso_async_worker_try_cross_item_batch_dequeue(
 	       collected_count + 1 < ARRAY_SIZE(collected)) {
 		item = trustix_route_tcp_gso_async_cross_item_find_locked(
 			queue, first, next_outer_sequence, next_frame_sequence,
-			frame_count, stream_payload_len, max_frames, true,
-			true, &reason);
+			next_inner_tcp_seq, frame_count, stream_payload_len,
+			max_frames, true, true, &reason);
 		if (!item)
 			break;
 		collected[collected_count++] = item;
 		next_outer_sequence += item->sequence_cost;
 		next_frame_sequence +=
 			trustix_route_tcp_gso_async_item_frame_sequence_cost(item);
+		next_inner_tcp_seq += item->payload_len;
 		stream_payload_len += (u32)item->sequence_cost;
 		frame_count += item->segment_count;
 		if (frame_count >= max_frames ||
@@ -12590,6 +12886,7 @@ trustix_route_tcp_gso_async_worker_try_cross_item_batch_dequeue(
 		trustix_route_tcp_gso_async_item_outer_sequence(first);
 	batch->next_sequence = batch->outer_sequence;
 	batch->next_frame_sequence = first->sequence;
+	batch->next_inner_tcp_seq = first->inner_tcp_seq_base;
 	batch->fix_inner_csum =
 		trustix_route_tcp_gso_async_fix_inner_csum(first);
 	ret = trustix_route_tcp_gso_async_cross_item_collect(batch, first,
@@ -12740,7 +13037,7 @@ trustix_route_tcp_gso_async_worker_try_tail_stitch(
 		    first, item, first->sequence + prefix_payload_len +
 			    tail_payload_len,
 		    first->sequence + prefix_payload_len + tail_payload_len,
-		    tail_frames, tail_payload_len, max_frames, &reason)) {
+		    0, tail_frames, tail_payload_len, max_frames, &reason)) {
 		trustix_route_tcp_gso_async_candidate_queue_unlock(lock,
 								   queue_private);
 		trustix_route_tcp_gso_async_stream_cross_item_tail_stitch_fallbacks++;
@@ -12756,6 +13053,7 @@ trustix_route_tcp_gso_async_worker_try_tail_stitch(
 	batch->outer_sequence = first->sequence + prefix_payload_len;
 	batch->next_sequence = batch->outer_sequence;
 	batch->next_frame_sequence = batch->outer_sequence;
+	batch->next_inner_tcp_seq = first->inner_tcp_seq_base;
 	batch->fix_inner_csum =
 		trustix_route_tcp_gso_async_fix_inner_csum(first);
 	ret = trustix_route_tcp_gso_async_cross_item_collect_range(
@@ -12773,8 +13071,8 @@ trustix_route_tcp_gso_async_worker_try_tail_stitch(
 			       list);
 	if (!trustix_route_tcp_gso_async_cross_item_candidate(
 		    first, item, batch->next_sequence,
-		    batch->next_frame_sequence, batch->frame_count,
-		    batch->stream_payload_len,
+		    batch->next_frame_sequence, batch->next_inner_tcp_seq,
+		    batch->frame_count, batch->stream_payload_len,
 		    max_frames, &reason)) {
 		trustix_route_tcp_gso_async_candidate_queue_unlock(lock,
 								   queue_private);
@@ -12811,7 +13109,8 @@ trustix_route_tcp_gso_async_worker_try_tail_stitch(
 					list);
 		if (!trustix_route_tcp_gso_async_cross_item_candidate(
 			    first, item, batch->next_sequence,
-			    batch->next_frame_sequence, batch->frame_count,
+			    batch->next_frame_sequence,
+			    batch->next_inner_tcp_seq, batch->frame_count,
 			    batch->stream_payload_len, max_frames, &reason)) {
 			trustix_route_tcp_gso_async_candidate_queue_unlock(
 				lock, queue_private);
@@ -13073,6 +13372,7 @@ trustix_route_tcp_gso_async_worker_try_cross_item(
 	if (items_out)
 		*items_out = 0;
 	if (!first || !first->skb || first->resliced ||
+	    first->tmpl.kernel_udp ||
 	    first->route_flow_mask ||
 	    !trustix_route_tcp_gso_async_cross_item_enabled()) {
 		trustix_route_tcp_gso_async_cross_item_record_miss(1);
@@ -13139,6 +13439,7 @@ trustix_route_tcp_gso_async_worker_try_cross_item(
 			first->sequence_cost,
 		first->sequence +
 			trustix_route_tcp_gso_async_item_frame_sequence_cost(first),
+		first->inner_tcp_seq_base + first->payload_len,
 		first->segment_count, first_stream_payload_len, max_frames,
 		false, true, &reason);
 	if (!item) {
@@ -13162,6 +13463,7 @@ trustix_route_tcp_gso_async_worker_try_cross_item(
 		trustix_route_tcp_gso_async_item_outer_sequence(first);
 	batch->next_sequence = batch->outer_sequence;
 	batch->next_frame_sequence = first->sequence;
+	batch->next_inner_tcp_seq = first->inner_tcp_seq_base;
 	batch->fix_inner_csum =
 		trustix_route_tcp_gso_async_fix_inner_csum(first);
 	ret = trustix_route_tcp_gso_async_cross_item_collect(batch, first,
@@ -13188,9 +13490,10 @@ trustix_route_tcp_gso_async_worker_try_cross_item(
 		}
 		item = trustix_route_tcp_gso_async_cross_item_find_locked(
 			queue, first, batch->next_sequence,
-			batch->next_frame_sequence, batch->frame_count,
-			batch->stream_payload_len, max_frames, true,
-			first_candidate_checked ? false : true, &reason);
+			batch->next_frame_sequence, batch->next_inner_tcp_seq,
+			batch->frame_count, batch->stream_payload_len,
+			max_frames, true, first_candidate_checked ? false : true,
+			&reason);
 		first_candidate_checked = false;
 		if (!item) {
 			trustix_route_tcp_gso_async_candidate_queue_unlock(
@@ -13847,15 +14150,14 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async_ex(
 	item->payload_len = payload_len;
 	item->inner_header_len = 0;
 	item->inner_ip_check_base = 0;
-	item->inner_tcp_seq_base = 0;
 	item->inner_header_ready = false;
 	item->inner_tcp_header_sum_base = 0;
 	item->route_flow_mask = READ_ONCE(route->flow_mask);
-	inner_queue_hash = trustix_route_tcp_gso_async_hash_skb(skb, flow_id);
+	inner_queue_hash =
+		trustix_route_tcp_gso_async_hash_skb(skb, flow_id, item);
 	if (READ_ONCE(trustix_route_tcp_gso_async_flow_shard_queue)) {
-		item->queue_hash = (u32)flow_id ^ (u32)(flow_id >> 32);
-		if (!item->queue_hash)
-			item->queue_hash = 1;
+		item->queue_hash =
+			trustix_route_tcp_gso_async_flow_fallback_hash(flow_id);
 	} else {
 		item->queue_hash = inner_queue_hash;
 	}

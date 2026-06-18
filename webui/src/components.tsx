@@ -640,19 +640,24 @@ function kernelRXStageStatusRow(t: Translate, lang: string, status: KernelRXStag
   if (!status || !status.enabled) {
     return null;
   }
+  const txPlaintextPath = status.tx_plaintext_ifname || status.tx_plaintext_target_ifname
+    ? `${status.tx_plaintext_ifname || "-"} -> ${status.tx_plaintext_target_ifname || "-"}`
+    : "";
   return {
     name: t("kernel_rx_stage", "Kernel RX stage"),
-    state: status.active && status.attached ? "ok" : "warn",
+    state: status.active && status.attached && (status.tx_plaintext_ifname ? status.tx_plaintext_attached : true) ? "ok" : "warn",
     badge: status.active ? status.mode || t("active", "Active") : t("inactive", "Inactive"),
     meta: compactList([
       status.ifname,
       status.target_ifname ? `${status.ifname || "-"} -> ${status.target_ifname}` : "",
       status.attached ? t("attached", "Attached") : "",
+      txPlaintextPath ? `${t("tx_plaintext_hook", "TX plaintext hook")} ${yesNo(status.tx_plaintext_attached, t)}` : "",
     ], " · "),
     detail: compactList([
       `${t("packets", "Packets")} ${formatNumber(status.packets || 0, lang)}`,
       `${t("batches", "Batches")} ${formatNumber(status.batches || 0, lang)}`,
       `${t("rx_worker_injected", "RX worker injected")} ${formatNumber(status.rx_worker_injected || 0, lang)}`,
+      txPlaintextPath ? `${t("tx_plaintext_hook", "TX plaintext hook")} ${txPlaintextPath}` : "",
       status.inactive_reason,
       status.last_error,
     ], " · "),
@@ -3474,6 +3479,7 @@ function ConfigKernelCapabilityEditor(props: { t: Translate; lang: string; desir
     helpersModule?.capability_tier,
     cryptoModule?.capability_tier,
     rxStage?.enabled ? `RX ${rxStage.mode || props.t("active", "Active")}` : "",
+    rxStage?.tx_plaintext_ifname ? `TX ${rxStage.tx_plaintext_attached ? props.t("attached", "Attached") : props.t("inactive", "Inactive")}` : "",
   ], "-");
   return (
     <div className="config-card config-wide kernel-config-card">

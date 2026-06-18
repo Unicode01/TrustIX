@@ -72,8 +72,8 @@ const volatile __u32 trustix_kudp_rx_secure_recompute_inner_csum = 0;
 #define TRUSTIX_EXP_TCP_FLAG_ENCRYPTED 1
 #define TRUSTIX_EXP_TCP_FLAG_CRYPTO_FRAGMENT 4
 #define TRUSTIX_EXP_TCP_FLAG_INNER_IPV4 8
-#define TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES 16384
-#define TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS 64
+#define TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES 4096
+#define TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS 1024
 #define TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX ((TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS - 1) * 64)
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_MAX 4095
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_PADDED 4096
@@ -130,6 +130,27 @@ const volatile __u32 trustix_kudp_rx_secure_recompute_inner_csum = 0;
 #define TRUSTIX_KUDP_RX_SECURE_STAT_ERR_OPEN_EINVAL 133
 #define TRUSTIX_KUDP_RX_SECURE_STAT_ERR_OPEN_EBADMSG 134
 #define TRUSTIX_KUDP_RX_SECURE_STAT_ERR_INNER_IPV4 135
+#define TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ATTEMPTS 198
+#define TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ERRORS 199
+#define TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EINVAL 200
+#define TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EOPNOTSUPP 201
+#define TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EFAULT 202
+#define TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ENOENT 203
+#define TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EBADMSG 204
+#define TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_OTHER 205
+#define TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS 210
+#define TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS 211
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_L2_SHORT 212
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_NON_IPV4 213
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_IP_HEADER 214
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_FRAGMENT 215
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_SKB_SHORT 216
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_LINEAR_SHORT 217
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_NON_UDP_TCP 218
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_UDP_LEN 219
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_PORT_MISS 220
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_TIXU_FLAGS 221
+#define TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_TIXU_LEN 222
 
 struct __sk_buff {
     __u32 len;
@@ -228,7 +249,7 @@ struct trustix_aead_skb_direct_open_args {
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-    __uint(max_entries, 163);
+    __uint(max_entries, 224);
     __type(key, __u32);
     __type(value, __u64);
 } ix_stats_map SEC(".maps");
@@ -278,6 +299,7 @@ struct {
 static void *(*bpf_map_lookup_elem)(const void *map, const void *key) = (void *)1;
 static long (*bpf_skb_store_bytes)(struct __sk_buff *skb, __u32 offset, const void *from, __u32 len, __u64 flags) = (void *)9;
 static long (*bpf_skb_load_bytes)(const struct __sk_buff *skb, __u32 offset, void *to, __u32 len) = (void *)26;
+static long (*bpf_skb_pull_data)(struct __sk_buff *skb, __u32 len) = (void *)39;
 #if TRUSTIX_KUDP_SECURE_DECAP_L2_KFUNC
 static long (*bpf_skb_change_tail)(struct __sk_buff *skb, __u32 len, __u64 flags) = (void *)38;
 #endif
@@ -316,6 +338,23 @@ static __always_inline void trustix_kudp_rx_secure_count_path(__u32 key)
 {
     if (trustix_kudp_rx_secure_hot_stats)
         trustix_kudp_rx_secure_count(key);
+}
+
+static __always_inline void trustix_kudp_rx_secure_count_direct_open_error(int err)
+{
+    trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ERRORS);
+    if (err == -22)
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EINVAL);
+    else if (err == -95)
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EOPNOTSUPP);
+    else if (err == -14)
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EFAULT);
+    else if (err == -2)
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ENOENT);
+    else if (err == -74)
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EBADMSG);
+    else
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_OTHER);
 }
 
 static __always_inline int trustix_kernel_crypto_direct_hot_stats(const struct trustix_kernel_crypto_direct_slot *slot)
@@ -509,10 +548,14 @@ static __always_inline int trustix_replay_check(const struct trustix_kernel_cryp
 
     window = trustix_replay_window(state);
     delta = state->last_sequence - sequence;
-    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX)
+    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX) {
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS);
         return -114;
-    if (trustix_replay_seen(state, sequence))
+    }
+    if (trustix_replay_seen(state, sequence)) {
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS);
         return -114;
+    }
     return 0;
 }
 #endif
@@ -532,10 +575,14 @@ static __always_inline int trustix_direct_replay_check(const struct trustix_kern
 
     window = trustix_direct_replay_window(slot);
     delta = slot->last_sequence - sequence;
-    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX)
+    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX) {
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS);
         return -114;
-    if (trustix_direct_replay_seen(slot, sequence))
+    }
+    if (trustix_direct_replay_seen(slot, sequence)) {
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS);
         return -114;
+    }
     return 0;
 }
 
@@ -558,10 +605,14 @@ static __always_inline int trustix_replay_commit(struct trustix_kernel_crypto_ct
 
     window = trustix_replay_window(state);
     delta = state->last_sequence - sequence;
-    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX)
+    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX) {
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS);
         return -114;
-    if (trustix_replay_seen(state, sequence))
+    }
+    if (trustix_replay_seen(state, sequence)) {
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS);
         return -114;
+    }
     trustix_replay_mark(state, sequence);
     return 0;
 }
@@ -585,10 +636,14 @@ static __always_inline int trustix_direct_replay_commit(struct trustix_kernel_cr
 
     window = trustix_direct_replay_window(slot);
     delta = slot->last_sequence - sequence;
-    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX)
+    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX) {
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS);
         return -114;
-    if (trustix_direct_replay_seen(slot, sequence))
+    }
+    if (trustix_direct_replay_seen(slot, sequence)) {
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS);
         return -114;
+    }
     trustix_direct_replay_mark(slot, sequence);
     return 0;
 }
@@ -659,11 +714,14 @@ static TRUSTIX_KUDP_RX_SECURE_FALLBACK_INLINE int trustix_open_secure_frame(
             return err;
         trustix_prepare_direct_nonce(scratch->nonce, direct_slot, scratch->sequence);
         scratch->plain_buffer = TRUSTIX_KUDP_RX_PLAIN_BUFFER_PLAIN;
+        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ATTEMPTS);
         err = trustix_kernel_direct_open(direct_slot->slot_id, scratch->cipher,
                                            scratch->cipher, cipher_len,
                                            scratch->nonce);
-        if (err)
-            return err;
+        if (err) {
+            trustix_kudp_rx_secure_count_direct_open_error(err);
+            return -5;
+        }
         scratch->plain_buffer = TRUSTIX_KUDP_RX_PLAIN_BUFFER_CIPHER;
         err = trustix_direct_replay_commit(direct_slot, scratch->sequence);
         if (err)
@@ -690,6 +748,7 @@ static TRUSTIX_KUDP_RX_SECURE_FALLBACK_INLINE int trustix_open_secure_frame(
     scratch->plain_buffer = TRUSTIX_KUDP_RX_PLAIN_BUFFER_PLAIN;
     if (trustix_kudp_rx_secure_direct_open_kfunc) {
         if (direct_slot && direct_slot->enabled) {
+            trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ATTEMPTS);
             err = trustix_kernel_direct_open(direct_slot->slot_id, scratch->cipher,
                                                scratch->cipher, cipher_len,
                                                scratch->nonce);
@@ -697,6 +756,7 @@ static TRUSTIX_KUDP_RX_SECURE_FALLBACK_INLINE int trustix_open_secure_frame(
                 scratch->plain_buffer = TRUSTIX_KUDP_RX_PLAIN_BUFFER_CIPHER;
                 goto direct_ok;
             }
+            trustix_kudp_rx_secure_count_direct_open_error(err);
         }
     }
 
@@ -1025,21 +1085,62 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
         if (frame[0] == 'T' && frame[1] == 'I' && frame[2] == 'X' && frame[3] == 'U')
             trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_DBG_L3_TIXU_MAGIC);
     }
-    if (data + 14 + 20 + 8 > data_end)
+    if (data + 14 + 20 + 8 > data_end) {
+        if (skb->len < 14 + 20 + 8 || bpf_skb_pull_data(skb, 14 + 20 + 8)) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_L2_SHORT);
+            goto fallback;
+        }
+        data = (__u8 *)(long)skb->data;
+        data_end = (__u8 *)(long)skb->data_end;
+        if (data + 14 + 20 + 8 > data_end) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_L2_SHORT);
+            goto fallback;
+        }
+    }
+    if (data[12] != 0x08 || data[13] != 0x00) {
+        trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_NON_IPV4);
         goto fallback;
-    if (data[12] != 0x08 || data[13] != 0x00)
-        goto fallback;
+    }
     trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_DBG_L2_IPV4);
     ip = data + 14;
-    if (ip[0] != 0x45)
+    if (ip[0] != 0x45) {
+        trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_IP_HEADER);
         goto fallback;
-    if (ip[6] & 0x3f || ip[7])
+    }
+    if (ip[6] & 0x3f || ip[7]) {
+        trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_FRAGMENT);
         goto fallback;
+    }
     outer_total_len = trustix_read_be16(ip + 2);
-    if (skb->len < 14 + outer_total_len)
+    if (skb->len < 14 + outer_total_len) {
+        trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_SKB_SHORT);
         goto fallback;
-    if (data + 14 + outer_total_len > data_end)
-        goto fallback;
+    }
+    if (data + 14 + outer_total_len > data_end) {
+        if (bpf_skb_pull_data(skb, 14 + outer_total_len)) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_LINEAR_SHORT);
+            goto fallback;
+        }
+        data = (__u8 *)(long)skb->data;
+        data_end = (__u8 *)(long)skb->data_end;
+        if (data + 14 + 20 + 8 > data_end || data + 14 + outer_total_len > data_end) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_LINEAR_SHORT);
+            goto fallback;
+        }
+        if (data[12] != 0x08 || data[13] != 0x00) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_NON_IPV4);
+            goto fallback;
+        }
+        ip = data + 14;
+        if (ip[0] != 0x45) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_IP_HEADER);
+            goto fallback;
+        }
+        if (ip[6] & 0x3f || ip[7]) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_FRAGMENT);
+            goto fallback;
+        }
+    }
 
     l4 = ip + 20;
     if (ip[9] == IPPROTO_TCP) {
@@ -1073,10 +1174,14 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
         sequence = trustix_read_be64(frame + 24);
     } else if (ip[9] == IPPROTO_UDP) {
         trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_DBG_UDP);
-        if (data + TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN > data_end)
+        if (data + TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN > data_end) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_LINEAR_SHORT);
             goto fallback;
-        if (trustix_read_be16(l4 + 4) != outer_total_len - 20)
+        }
+        if (trustix_read_be16(l4 + 4) != outer_total_len - 20) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_UDP_LEN);
             goto fallback;
+        }
         frame = l4 + 8;
         frame_end = frame + TRUSTIX_KERNEL_UDP_HEADER_LEN;
         barrier_var(frame_end);
@@ -1091,15 +1196,19 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
         if (!(frame[5] & TRUSTIX_KERNEL_UDP_FLAG_ENCRYPTED) ||
             !(frame[5] & TRUSTIX_KERNEL_UDP_FLAG_INNER_IPV4) ||
             (frame[5] & TRUSTIX_KERNEL_UDP_FLAG_CRYPTO_FRAGMENT) ||
-            !trustix_kernel_udp_unfragmented(frame))
+            !trustix_kernel_udp_unfragmented(frame)) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_TIXU_FLAGS);
             goto fallback;
+        }
         trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_FLAGS);
 
         payload_len = trustix_read_be32(frame + 24);
         if (outer_total_len < 20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
             goto fallback;
-        if (20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + payload_len != outer_total_len)
+        if (20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + payload_len != outer_total_len) {
+            trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_TIXU_LEN);
             goto fallback;
+        }
         trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_LEN);
         secure = frame + TRUSTIX_KERNEL_UDP_HEADER_LEN;
         secure_end = secure + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN;
@@ -1114,6 +1223,7 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
         decap_len = TRUSTIX_KUDP_SECURE_DECAP_LEN;
         namespace = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_KERNEL_UDP;
     } else {
+        trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_NON_UDP_TCP);
         goto fallback;
     }
 
@@ -1130,8 +1240,10 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
     }
 
     port_key = ((__u32)l4[2]) | ((__u32)l4[3] << 8);
-    if (!bpf_map_lookup_elem(&ix_exp_tcp_port, &port_key))
+    if (!bpf_map_lookup_elem(&ix_exp_tcp_port, &port_key)) {
+        trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_PORT_MISS);
         goto fallback;
+    }
     trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_DBG_PORT);
     if (secure + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN > data_end)
         goto fallback;

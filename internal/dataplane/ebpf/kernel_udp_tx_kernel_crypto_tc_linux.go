@@ -14,7 +14,7 @@ import (
 	cebpf "github.com/cilium/ebpf"
 )
 
-//go:embed bpf/kernel_udp_tx_kernel_crypto_tc_bpfel.o
+//go:embed bpf/kernel_udp_tx_kernel_crypto_tc_bpfel.o bpf/kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o
 var kernelUDPTXSecureDirectFS embed.FS
 
 type kernelUDPTXSecureDirectObject struct {
@@ -36,6 +36,8 @@ const (
 	kernelUDPTXSecureDirectSKBSealKfuncCompiled          = false
 	kernelUDPTXSecureDirectInnerTCPChecksumKfuncCompiled = false
 	kernelUDPTXSecureDirectOuterTCPChecksumKfuncCompiled = false
+	kernelUDPTXSecureDirectObjectName                    = "kernel_udp_tx_kernel_crypto_tc_bpfel.o"
+	kernelUDPTXSecureDirectRouteGSOObjectName            = "kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o"
 )
 
 func loadKernelUDPTXSecureDirectObject(provider *kernelCryptoProviderObject, statsMap *cebpf.Map, routeMap *cebpf.Map, flowMap *cebpf.Map, options kernelUDPTXSecureDirectProgramOptions) (*kernelUDPTXSecureDirectObject, error) {
@@ -45,12 +47,16 @@ func loadKernelUDPTXSecureDirectObject(provider *kernelCryptoProviderObject, sta
 	if statsMap == nil || routeMap == nil || flowMap == nil {
 		return nil, fmt.Errorf("kernel_udp secure TC TX direct requires stats, route, and flow maps")
 	}
-	object, err := kernelUDPTXSecureDirectFS.ReadFile("bpf/kernel_udp_tx_kernel_crypto_tc_bpfel.o")
+	objectName := kernelUDPTXSecureDirectObjectName
+	if options.SecureRouteTCPGSOKfunc {
+		objectName = kernelUDPTXSecureDirectRouteGSOObjectName
+	}
+	object, err := kernelUDPTXSecureDirectFS.ReadFile("bpf/" + objectName)
 	if err != nil {
-		return nil, fmt.Errorf("read embedded kernel_udp secure TC TX direct object: %w", err)
+		return nil, fmt.Errorf("read embedded kernel_udp secure TC TX direct object %q: %w", objectName, err)
 	}
 	if len(object) == 0 {
-		return nil, fmt.Errorf("embedded kernel_udp secure TC TX direct object is empty")
+		return nil, fmt.Errorf("embedded kernel_udp secure TC TX direct object %q is empty", objectName)
 	}
 	defer debug.FreeOSMemory()
 

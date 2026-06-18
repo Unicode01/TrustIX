@@ -34,6 +34,7 @@ type AttachSpec struct {
 	KernelUDPTXSecureDirect                  bool            `json:"kernel_udp_tx_secure_direct,omitempty"`
 	KernelUDPRXSecureDirect                  bool            `json:"kernel_udp_rx_secure_direct,omitempty"`
 	KernelUDPSecureDirectTrustInnerChecksums bool            `json:"kernel_udp_secure_direct_trust_inner_checksums,omitempty"`
+	KernelUDPSecureRouteGSO                  bool            `json:"kernel_udp_secure_route_gso,omitempty"`
 	KernelUDPTXSecureDirectKfuncSeal         bool            `json:"kernel_udp_tx_secure_direct_kfunc_seal,omitempty"`
 	KernelUDPTXSecureDirectSKBSealKfunc      bool            `json:"kernel_udp_tx_secure_direct_skb_seal_kfunc,omitempty"`
 	ExperimentalTCPTXDirect                  bool            `json:"experimental_tcp_tx_direct,omitempty"`

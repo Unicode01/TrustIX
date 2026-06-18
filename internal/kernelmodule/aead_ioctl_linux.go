@@ -821,6 +821,9 @@ func RunDatapathSelftest(path string, requested uint64) (DatapathSelftest, error
 		return DatapathSelftest{}, err
 	}
 	if req.Result != 0 {
+		if req.Result < 0 {
+			return DatapathSelftest{}, fmt.Errorf("trustix datapath selftest returned %d: %w", req.Result, syscall.Errno(-req.Result))
+		}
 		return DatapathSelftest{}, fmt.Errorf("trustix datapath selftest returned %d", req.Result)
 	}
 	return DatapathSelftest{

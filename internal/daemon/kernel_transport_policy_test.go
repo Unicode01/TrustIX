@@ -255,7 +255,31 @@ func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoExperimentalT
 	}
 }
 
-func TestEffectiveKernelTransportModeRequiresKernelForPlaintextPerformanceExperimentalTCP(t *testing.T) {
+func TestEffectiveKernelTransportModeKeepsAutoForPlaintextPerformanceExperimentalTCP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
+		t.Fatalf("kernel transport mode = %q, want auto for plaintext experimental_tcp without route-GSO opt-in", got)
+	}
+	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("plaintext performance experimental_tcp unexpectedly disabled fast path: %q", reason)
+	}
+}
+
+func TestEffectiveKernelTransportModeRequiresKernelForExplicitPlaintextExperimentalTCPRouteGSO(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO", "1")
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:    config.TransportProfilePerformance,
@@ -271,9 +295,9 @@ func TestEffectiveKernelTransportModeRequiresKernelForPlaintextPerformanceExperi
 	}
 
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeRequireKernel {
-		t.Fatalf("kernel transport mode = %q, want require_kernel for plaintext experimental_tcp route-GSO", got)
+		t.Fatalf("kernel transport mode = %q, want require_kernel for explicit plaintext experimental_tcp route-GSO", got)
 	}
 	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
-		t.Fatalf("plaintext performance experimental_tcp unexpectedly disabled fast path: %q", reason)
+		t.Fatalf("explicit plaintext experimental_tcp route-GSO unexpectedly disabled fast path: %q", reason)
 	}
 }

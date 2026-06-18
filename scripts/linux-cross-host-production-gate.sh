@@ -5,14 +5,20 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 verifier="${TRUSTIX_CROSS_HOST_GATE_VERIFIER:-${repo_root}/scripts/linux-cross-host-soak-verify.py}"
 summary_dir="${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-}"
 min_gbps="${TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-4}"
-min_seconds="${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-120}"
+min_seconds="${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900}"
 seconds_slop="${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-1}"
 require_binary_identity="${TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY:-1}"
+full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8}"
+secure_kudp_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8}"
+route_gso_min_sessions="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS:-8}"
 
 dd_full_kmod="${TRUSTIX_CROSS_HOST_DD_FULL_KMOD:-}"
 owdeb_full_kmod="${TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD:-}"
+dd_secure_kudp="${TRUSTIX_CROSS_HOST_DD_SECURE_KUDP:-}"
+owdeb_secure_kudp="${TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP:-}"
 dd_route_gso="${TRUSTIX_CROSS_HOST_DD_ROUTE_GSO:-}"
 full_kmod_cases_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASES:-}"
+secure_kudp_cases_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES:-}"
 route_gso_cases_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES:-}"
 
 log() {
@@ -64,10 +70,15 @@ main() {
   validate_number TRUSTIX_CROSS_HOST_GATE_MIN_GBPS "$min_gbps"
   validate_number TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS "$min_seconds"
   validate_number TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP "$seconds_slop"
+  validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
+  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"
+  validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS "$route_gso_min_sessions"
 
   local full_kmod_args=""
+  local secure_kudp_args=""
   local route_gso_args=""
   local full_kmod_case_count=0
+  local secure_kudp_case_count=0
   local route_gso_case_count=0
   if [[ -n "$dd_full_kmod" ]]; then
     full_kmod_args="${full_kmod_args} --case dd-fullkmod=${dd_full_kmod}"
@@ -83,6 +94,19 @@ main() {
     full_kmod_args="${full_kmod_args} --case ${token}"
     full_kmod_case_count=$((full_kmod_case_count + 1))
   done
+  if [[ -n "$dd_secure_kudp" ]]; then
+    secure_kudp_args="${secure_kudp_args} --case dd-secure-kudp=${dd_secure_kudp}"
+    secure_kudp_case_count=$((secure_kudp_case_count + 1))
+  fi
+  if [[ -n "$owdeb_secure_kudp" ]]; then
+    secure_kudp_args="${secure_kudp_args} --case owdeb-secure-kudp=${owdeb_secure_kudp}"
+    secure_kudp_case_count=$((secure_kudp_case_count + 1))
+  fi
+  for token in $secure_kudp_cases_raw; do
+    validate_case_token "$token"
+    secure_kudp_args="${secure_kudp_args} --case ${token}"
+    secure_kudp_case_count=$((secure_kudp_case_count + 1))
+  done
   if [[ -n "$dd_route_gso" ]]; then
     route_gso_args="${route_gso_args} --case dd-routegso=${dd_route_gso}"
     route_gso_case_count=$((route_gso_case_count + 1))
@@ -93,20 +117,126 @@ main() {
     route_gso_case_count=$((route_gso_case_count + 1))
   done
 
-  if [[ "$full_kmod_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
-    die "set TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO or *_CASES"
+  if [[ "$full_kmod_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
+    die "set TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO or *_CASES"
   fi
 
   if [[ "$full_kmod_case_count" -gt 0 ]]; then
     run_gate full-kmod $full_kmod_args \
-      --require-datapath-stat kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1
+      --require-transport-policy-min session_pool_size="${full_kmod_min_sessions}" \
+      --require-transport-policy-stat session_pool_strategy=flow \
+      --require-transport-policy-stat session_pool_warmup=true \
+      --require-status-max data_path.counters.session_dial_errors=0 \
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
+      --require-datapath-stat kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1 \
+      --require-datapath-min kernel_rx_stage.rx_worker_injected=1 \
+      --require-datapath-min counters.session_dials="${full_kmod_min_sessions}" \
+      --require-datapath-max counters.session_dial_errors=0 \
+      --require-module-param-min trustix_datapath.session_records="${full_kmod_min_sessions}" \
+      --require-module-param-min trustix_datapath.session_wire_records="${full_kmod_min_sessions}" \
+      --require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_segments=1 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_direct_xmit_dst_mac_cache_hits=1 \
+      --require-module-param-any-min trustix_datapath.rx_worker_gso_xmit_segments=1 \
+      --require-module-param-max trustix_datapath.rx_worker_alloc_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_deliver_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_gso_xmit_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_xmit_ret_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_xmit_other_ret_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_xmit_dev_forward_errors=0 \
+      --require-module-param-max trustix_datapath.rx_worker_xmit_peer_forward_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_build_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_no_sessions=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_no_wires=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_stale_wires=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_xmit_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_outer_gso_errors=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_queue_drops=0
+  fi
+
+  if [[ "$secure_kudp_case_count" -gt 0 ]]; then
+    run_gate secure-kudp $secure_kudp_args \
+      --require-transport-policy-stat encryption=secure \
+      --require-transport-policy-stat crypto_placement=kernel \
+      --require-transport-policy-stat datapath=tc_xdp \
+      --require-transport-policy-min session_pool_size="${secure_kudp_min_sessions}" \
+      --require-transport-policy-stat session_pool_strategy=flow \
+      --require-transport-policy-stat session_pool_warmup=true \
+      --require-status-max data_path.counters.session_dial_errors=0 \
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
+      --require-datapath-stat kernel_udp.kernel_crypto=true \
+      --require-datapath-stat kernel_udp.requested_crypto=kernel \
+      --require-datapath-stat kernel_udp.effective_crypto=kernel \
+      --require-datapath-stat kernel_udp.provider_stats.kernel_crypto_flow_map_ready=1 \
+      --require-datapath-min kernel_udp.provider_stats.kernel_crypto_flow_map_entries="${secure_kudp_min_sessions}" \
+      --require-datapath-min kernel_udp.provider_stats.kernel_crypto_flow_map_updates="${secure_kudp_min_sessions}" \
+      --require-datapath-stat kernel_udp.provider_stats.kernel_crypto_direct_slot_provider_ready=1 \
+      --require-datapath-stat kernel_udp.provider_stats.kernel_crypto_direct_kfunc_fastpath_ready=1 \
+      --require-datapath-stat kernel_udp.provider_stats.kernel_crypto_tc_direct_ready=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_only_enabled=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_attached=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_attached=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_trust_inner_checksums=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_enabled=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_skb_open_kfunc=0 \
+      --require-datapath-any-min kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_packets=1 \
+      --require-datapath-any-min kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_packets=1 \
+      --require-datapath-max kernel_udp.provider_stats.kernel_crypto_provider_unavailable_errors=0 \
+      --require-datapath-max kernel_udp.provider_stats.kernel_crypto_flow_rejects=0 \
+      --require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_rejects=0 \
+      --require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_seal_errors=0 \
+      --require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_open_errors=0 \
+      --require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_replay_drops=0 \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_encrypt_errors=0 \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_sequence_errors=0 \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_drops=0 \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_header_errors=0 \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors=0 \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_drops=0 \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_drops=0 \
+      --require-module-param-min trustix_crypto.kfunc_simd_fastpath=1 \
+      --require-module-param-min trustix_crypto.kfunc_simd_irq_fpu_fastpath=1 \
+      --require-module-param-any-min trustix_crypto.direct_kfunc_seal_calls=1 \
+      --require-module-param-any-min trustix_crypto.direct_kfunc_open_calls=1 \
+      --require-module-param-max trustix_crypto.direct_kfunc_errors=0
   fi
 
   if [[ "$route_gso_case_count" -gt 0 ]]; then
     run_gate route-gso $route_gso_args \
+      --require-transport-policy-min session_pool_size="${route_gso_min_sessions}" \
+      --require-transport-policy-stat session_pool_strategy=flow \
+      --require-transport-policy-stat session_pool_warmup=true \
+      --require-transport-sessions-min "${route_gso_min_sessions}" \
+      --require-status-min data_path.active_sessions="${route_gso_min_sessions}" \
+      --require-status-max data_path.counters.session_dial_errors=0 \
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
       --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
-      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1 \
+      --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=1 \
+      --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue_sets=1 \
+      --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1 \
+      --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_xmit_packets=1 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_flow_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_plan_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_mtu_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_queue_full=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_queue_bytes_full=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_alloc_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_clone_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_segment_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_prepare_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_drops=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_xmit_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_xmit_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_direct_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_blocked=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_verify_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_tail_stitch_errors=0
   fi
 }
 

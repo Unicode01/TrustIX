@@ -187,6 +187,7 @@ type Manager struct {
 	kernelUDPUDPFallbackTXBatches               uint64
 	kernelUDPUDPFallbackRXBatches               uint64
 	kernelUDPUDPFallbackTXFallbacks             uint64
+	kernelUDPUDPFallbackRXDataDrops             uint64
 	kernelUDPUDPFallbackBindErrors              uint64
 	kernelUDPUDPFallbackGSODisabled             atomic.Bool
 	kernelUDPUDPFallbackGSOScatterDisabled      atomic.Bool
@@ -774,7 +775,7 @@ const (
 	captureOutputModePerf                                             = "perf"
 	captureScratchMaxSize                                             = 32*1024 - captureEventHeader
 	captureRingLimit                                                  = 128
-	tcStatsMapMaxEntries                                              = 190
+	tcStatsMapMaxEntries                                              = 224
 	persistedStateVersion                                             = 1
 	trustixRouteProtocol                                              = 0x54
 	managedLANTxQueueLen                                              = 1000
@@ -907,6 +908,7 @@ const (
 	kernelUDPTXRouteMaxFlows                                          = 8
 	kernelUDPTXRouteValueSize                                         = 464
 	kernelUDPTXFlowValueSize                                          = 48
+	kernelUDPTXDirectSequenceUpdateGuard                              = 16384
 	kernelUDPTXRouteInlineFlowOffset                                  = 80
 	kernelUDPTXRouteInlineFlow2Offset                                 = kernelUDPTXRouteInlineFlowOffset + kernelUDPTXFlowValueSize
 	kernelUDPTXRouteInlineFlow3Offset                                 = kernelUDPTXRouteInlineFlow2Offset + kernelUDPTXFlowValueSize
@@ -1078,6 +1080,39 @@ const (
 	kernelUDPTXSecureDirectStatDirectSlotDisabled                     = 178
 	kernelUDPTXSecureDirectStatInnerTCPChecksumKfuncSuccesses         = 188
 	kernelUDPTXSecureDirectStatInnerTCPChecksumKfuncFallbacks         = 189
+	kernelUDPTXSecureDirectStatDirectKfuncSealAttempts                = 190
+	kernelUDPTXSecureDirectStatDirectKfuncSealErrors                  = 191
+	kernelUDPTXSecureDirectStatDirectKfuncSealEINVAL                  = 192
+	kernelUDPTXSecureDirectStatDirectKfuncSealEOPNOTSUPP              = 193
+	kernelUDPTXSecureDirectStatDirectKfuncSealEFAULT                  = 194
+	kernelUDPTXSecureDirectStatDirectKfuncSealENOENT                  = 195
+	kernelUDPTXSecureDirectStatDirectKfuncSealEBADMSG                 = 196
+	kernelUDPTXSecureDirectStatDirectKfuncSealOther                   = 197
+	kernelUDPRXSecureDirectStatDirectKfuncOpenAttempts                = 198
+	kernelUDPRXSecureDirectStatDirectKfuncOpenErrors                  = 199
+	kernelUDPRXSecureDirectStatDirectKfuncOpenEINVAL                  = 200
+	kernelUDPRXSecureDirectStatDirectKfuncOpenEOPNOTSUPP              = 201
+	kernelUDPRXSecureDirectStatDirectKfuncOpenEFAULT                  = 202
+	kernelUDPRXSecureDirectStatDirectKfuncOpenENOENT                  = 203
+	kernelUDPRXSecureDirectStatDirectKfuncOpenEBADMSG                 = 204
+	kernelUDPRXSecureDirectStatDirectKfuncOpenOther                   = 205
+	kernelUDPTXSecureDirectStatTCPMSSCandidates                       = 206
+	kernelUDPTXSecureDirectStatTCPMSSClamps                           = 207
+	kernelUDPTXSecureDirectStatTCPMSSNoops                            = 208
+	kernelUDPTXSecureDirectStatTCPMSSErrors                           = 209
+	kernelUDPRXSecureDirectStatReplayOldDrops                         = 210
+	kernelUDPRXSecureDirectStatReplaySeenDrops                        = 211
+	kernelUDPRXSecureDirectStatFallbackL2Short                        = 212
+	kernelUDPRXSecureDirectStatFallbackNonIPv4                        = 213
+	kernelUDPRXSecureDirectStatFallbackIPHeader                       = 214
+	kernelUDPRXSecureDirectStatFallbackFragment                       = 215
+	kernelUDPRXSecureDirectStatFallbackSKBShort                       = 216
+	kernelUDPRXSecureDirectStatFallbackLinearShort                    = 217
+	kernelUDPRXSecureDirectStatFallbackNonUDPTCP                      = 218
+	kernelUDPRXSecureDirectStatFallbackUDPLen                         = 219
+	kernelUDPRXSecureDirectStatFallbackPortMiss                       = 220
+	kernelUDPRXSecureDirectStatFallbackTIXUFlags                      = 221
+	kernelUDPRXSecureDirectStatFallbackTIXULen                        = 222
 	trustIXSKBClearTXOffloadCSUM                                      = 1
 	trustIXSKBClearTXOffloadGSO                                       = 2
 	trustIXSKBClearTXOffloadEncap                                     = 4
@@ -3041,7 +3076,7 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 	} else if rawFallback {
 		provider = "raw_udp_fallback"
 	}
-	kernelCryptoReady := manager.kernelUDPKernelCryptoReadyLocked() && !tcOnly && !fullPlaintext
+	kernelCryptoReady := manager.kernelUDPKernelCryptoReadyLocked() && !fullPlaintext
 	kernelCryptoReason := ""
 	if !kernelCryptoReady {
 		kernelCryptoReason = manager.kernelUDPKernelCryptoUnavailableReasonLocked()
@@ -3061,7 +3096,11 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 	}
 	if kernelUDPTXDirectOnlyEnabled(manager.spec) {
 		if tcOnly && !fastPath {
-			notes = append(notes, "kernel_udp direct-only is enabled: plaintext payload data uses TC direct paths without AF_XDP userspace control traffic")
+			if manager.kernelUDPTCOnlySecureDirectRequestedLocked() {
+				notes = append(notes, "kernel_udp direct-only is enabled: secure payload data uses TC direct paths with kernel crypto and without AF_XDP userspace control traffic")
+			} else {
+				notes = append(notes, "kernel_udp direct-only is enabled: plaintext payload data uses TC direct paths without AF_XDP userspace control traffic")
+			}
 		} else {
 			notes = append(notes, "kernel_udp direct-only is enabled: payload data uses TC/XDP direct paths when route and flow maps match; AF_XDP remains available for control session establishment")
 		}
@@ -3071,6 +3110,9 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 	}
 	if rawFallback && !fastPath {
 		notes = append(notes, "kernel_udp raw UDP fallback is enabled: TIXU frames use raw IPv4/UDP sockets when AF_XDP is unavailable; AEAD remains in userspace unless kernel crypto is explicitly ready")
+	}
+	if manager.kernelUDPTCOnlyControlFallbackEnabledLocked() {
+		notes = append(notes, "kernel_udp TC-only secure control fallback is enabled: secure handshake/control frames use UDP socket fallback while InnerIPv4 data remains TC direct only")
 	}
 	if xdpAttachMode != "" || afXDPBindMode != "" {
 		notes = append(notes, fmt.Sprintf("AF_XDP negotiated xdp_attach_mode=%s af_xdp_bind_mode=%s zerocopy_enabled=%t", xdpAttachMode, afXDPBindMode, zeroCopyEnabled))
@@ -3113,6 +3155,10 @@ func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context)
 				return err
 			}
 			if err := manager.ensureKernelUDPRXDirectLocked(); err != nil {
+				if manager.kernelUDPTCDirectOnlyPendingLocked() {
+					manager.warnings = append(manager.warnings, "kernel_udp TC-only RX direct pending: "+err.Error())
+					return nil
+				}
 				if kernelUDPTCOnlyProviderRequestedForSpec(manager.spec) {
 					return fmt.Errorf("attach kernel_udp TC-only RX direct provider: %w", err)
 				}
@@ -3200,11 +3246,7 @@ func (manager *Manager) snapshotKernelUDPTCOnlyEligibleLocked() bool {
 		return false
 	}
 	for _, flow := range manager.kernelUDPFlows {
-		if flow.CryptoPlacement == dataplane.CryptoPlacementKernel || flow.CryptoSuite != "" || flow.Epoch != 0 {
-			return false
-		}
-		encryption := kernelUDPFlowSecurityEncryptionLocked(manager.snapshot, flow)
-		if encryption != "" && encryption != "plaintext" {
+		if !manager.kernelUDPTCOnlyFlowAllowedLocked(flow) {
 			return false
 		}
 	}
@@ -3217,8 +3259,7 @@ func (manager *Manager) snapshotKernelUDPTCOnlyEligibleLocked() bool {
 		case "experimental_tcp":
 			return false
 		case "udp", "kernel_udp":
-			encryption := secureEndpointEncryption(endpoint.Security.Encryption)
-			if encryption != "" && encryption != "plaintext" {
+			if !manager.kernelUDPTCOnlyEndpointAllowedLocked(endpoint) {
 				return false
 			}
 		}
@@ -3241,7 +3282,7 @@ func (manager *Manager) snapshotHasLocalKernelUDPEndpointLocked() bool {
 }
 
 func (manager *Manager) kernelUDPTCOnlyEligibleLocked() bool {
-	if !kernelUDPTXDirectOnlyEnabled(manager.spec) || kernelUDPTXSecureDirectRequiredBySpec(manager.spec) {
+	if !kernelUDPTXDirectOnlyEnabled(manager.spec) {
 		return false
 	}
 	if kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) {
@@ -3258,11 +3299,20 @@ func (manager *Manager) kernelUDPTCOnlyEligibleLocked() bool {
 }
 
 func (manager *Manager) kernelUDPTCDirectOnlyAvailableLocked() bool {
-	return manager.expTCPFastPath == nil &&
+	available := manager.expTCPFastPath == nil &&
 		manager.kernelUDPTCOnlyEligibleLocked() &&
 		manager.kernelUDPRXDirectAttached &&
 		manager.underlayIngressProg != nil &&
 		manager.kernelTransportPortMap != nil
+	if !available {
+		return false
+	}
+	if manager.kernelUDPTCOnlySecureDirectRequestedLocked() {
+		return manager.kernelCryptoTCDirectReadyLocked() &&
+			manager.kernelUDPTXSecureDirectAttached &&
+			manager.kernelUDPRXSecureDirectAttached
+	}
+	return true
 }
 
 func (manager *Manager) kernelDatapathFullPlaintextTransportAvailableLocked() bool {
@@ -3380,6 +3430,68 @@ func kernelUDPFlowSecurityEncryptionLocked(snapshot dataplane.Snapshot, flow dat
 		}
 	}
 	return ""
+}
+
+func (manager *Manager) kernelUDPTCOnlySecureDirectRequestedLocked() bool {
+	return kernelUDPTXSecureDirectRequestedForSpec(manager.spec) && manager.kernelUDPRXSecureDirectRequestedLocked()
+}
+
+func (manager *Manager) kernelUDPTCOnlyFlowAllowedLocked(flow dataplane.KernelUDPFlow) bool {
+	encryption := kernelUDPFlowSecurityEncryptionLocked(manager.snapshot, flow)
+	if flow.CryptoPlacement == dataplane.CryptoPlacementUserspace {
+		if flow.CryptoSuite != "" || flow.Epoch != 0 {
+			return false
+		}
+		if encryption == "" || encryption == "plaintext" {
+			return true
+		}
+		return encryption == "secure" &&
+			manager.kernelUDPTCOnlySecureDirectRequestedLocked() &&
+			manager.kernelUDPFlowEndpointAllowsKernelCryptoLocked(flow)
+	}
+	if flow.CryptoPlacement == dataplane.CryptoPlacementKernel || flow.CryptoSuite != "" || flow.Epoch != 0 {
+		return manager.kernelUDPTCOnlySecureDirectRequestedLocked() && manager.kernelUDPFlowEndpointAllowsKernelCryptoLocked(flow)
+	}
+	if encryption == "" || encryption == "plaintext" {
+		return true
+	}
+	if encryption == "secure" {
+		return manager.kernelUDPTCOnlySecureDirectRequestedLocked() && manager.kernelUDPFlowEndpointAllowsKernelCryptoLocked(flow)
+	}
+	return false
+}
+
+func (manager *Manager) kernelUDPTCOnlyEndpointAllowedLocked(endpoint dataplane.EndpointMetadata) bool {
+	encryption := secureEndpointEncryption(endpoint.Security.Encryption)
+	if encryption == "" || encryption == "plaintext" {
+		return true
+	}
+	if encryption == "secure" {
+		return manager.kernelUDPTCOnlySecureDirectRequestedLocked() && endpointSecurityAllowsKernelCrypto(endpoint.Security)
+	}
+	return false
+}
+
+func (manager *Manager) kernelUDPFlowEndpointAllowsKernelCryptoLocked(flow dataplane.KernelUDPFlow) bool {
+	for _, endpoint := range manager.snapshot.Endpoints {
+		if endpoint.ID == flow.Endpoint && (flow.Peer == "" || endpoint.Peer == "" || endpoint.Peer == flow.Peer) {
+			return endpointSecurityAllowsKernelCrypto(endpoint.Security)
+		}
+	}
+	return true
+}
+
+func endpointSecurityAllowsKernelCrypto(security dataplane.EndpointSecurityMetadata) bool {
+	if len(security.CryptoPlacements) == 0 {
+		return true
+	}
+	for _, placement := range security.CryptoPlacements {
+		switch strings.ToLower(strings.TrimSpace(placement)) {
+		case "", "auto", "kernel":
+			return true
+		}
+	}
+	return false
 }
 
 func (manager *Manager) ensureKernelUDPRXDirectLocked() error {
@@ -3593,9 +3705,10 @@ func (manager *Manager) KernelUDPPayloadMax(ctx context.Context, placement datap
 		return 0, err
 	}
 	fastPath := manager.experimentalTCPFastPathAvailableLocked()
+	tcOnly := manager.kernelUDPTCDirectOnlyAvailableLocked() || manager.kernelUDPTCDirectOnlyPendingLocked()
 	rawFallback := kernelUDPRawFallbackEnabled()
-	if !fastPath && !rawFallback {
-		return 0, fmt.Errorf("UDP AF_XDP kernel transport provider is not available")
+	if !fastPath && !tcOnly && !rawFallback {
+		return 0, fmt.Errorf("UDP kernel transport provider is not available")
 	}
 	effectiveEncrypted := encrypted
 	var payloadMax int
@@ -3606,7 +3719,7 @@ func (manager *Manager) KernelUDPPayloadMax(ctx context.Context, placement datap
 		payloadMax = manager.expTCPFastPath.KernelUDPPayloadMax(placement, encrypted)
 	} else if placement == dataplane.CryptoPlacementKernel {
 		if !manager.kernelUDPKernelCryptoReadyLocked() {
-			return 0, fmt.Errorf("kernel_udp raw UDP fallback kernel crypto is not available: %s", manager.kernelUDPKernelCryptoUnavailableReasonLocked())
+			return 0, fmt.Errorf("kernel_udp kernel crypto is not available: %s", manager.kernelUDPKernelCryptoUnavailableReasonLocked())
 		}
 		payloadMax = manager.kernelUDPRawFallbackPayloadMaxLocked(placement, true)
 		effectiveEncrypted = true
@@ -3946,6 +4059,14 @@ func (manager *Manager) SubmitKernelUDPFrames(ctx context.Context, frames []data
 		_ = manager.syncKernelUDPTXDirectLocked()
 	}
 	if !manager.experimentalTCPFastPathAvailableLocked() {
+		if manager.kernelUDPTCOnlyControlFallbackEnabledLocked() {
+			if err := manager.validateKernelUDPTCOnlyControlFallbackFramesLocked(frames); err != nil {
+				manager.recordDropLocked(observability.DropEndpointDown)
+				manager.mu.Unlock()
+				return err
+			}
+			return manager.submitKernelUDPFramesRawFallbackLocked(ctx, frames)
+		}
 		if kernelUDPRawFallbackEnabled() {
 			return manager.submitKernelUDPFramesRawFallbackLocked(ctx, frames)
 		}
@@ -4183,6 +4304,34 @@ func (manager *Manager) SubmitKernelUDPFrames(ctx context.Context, frames []data
 		manager.mu.Lock()
 		manager.observeKernelUDPTXBatchLocked(remaining, time.Now().UTC())
 		manager.mu.Unlock()
+	}
+	return nil
+}
+
+func (manager *Manager) kernelUDPTCOnlyControlFallbackEnabledLocked() bool {
+	if manager.experimentalTCPFastPathAvailableLocked() {
+		return false
+	}
+	if !manager.kernelUDPTCOnlySecureDirectRequestedLocked() {
+		return false
+	}
+	if !manager.kernelUDPTCDirectOnlyAvailableLocked() && !manager.kernelUDPTCDirectOnlyPendingLocked() {
+		return false
+	}
+	return kernelUDPUDPFallbackEnabled() || kernelUDPRawFallbackEnabled()
+}
+
+func (manager *Manager) validateKernelUDPTCOnlyControlFallbackFramesLocked(frames []dataplane.KernelUDPFrame) error {
+	for _, frame := range frames {
+		if frame.FlowID == 0 {
+			return fmt.Errorf("kernel_udp TC-only control fallback requires an installed flow")
+		}
+		if frame.FragmentCount > 0 || frame.FragmentIndex > 0 {
+			return fmt.Errorf("kernel_udp TC-only control fallback refuses fragmented frame for flow %d", frame.FlowID)
+		}
+		if frame.InnerIPv4 || kernelUDPInnerIPv4Eligible(frame.Payload) {
+			return fmt.Errorf("kernel_udp TC-only control fallback refuses InnerIPv4 data frame for flow %d", frame.FlowID)
+		}
 	}
 	return nil
 }
@@ -4918,7 +5067,7 @@ func (manager *Manager) SubscribeKernelUDP(ctx context.Context, buffer int) (dat
 		buffer = 256
 	}
 	manager.mu.Lock()
-	if !manager.experimentalTCPFastPathAvailableLocked() && !kernelUDPRawFallbackEnabled() {
+	if !manager.experimentalTCPFastPathAvailableLocked() && !kernelUDPRawFallbackEnabled() && !manager.kernelUDPTCOnlyControlFallbackEnabledLocked() {
 		manager.mu.Unlock()
 		return nil, fmt.Errorf("UDP AF_XDP kernel transport provider is not available")
 	}
@@ -4944,7 +5093,7 @@ func (manager *Manager) SubscribeKernelUDPFlow(ctx context.Context, flowID uint6
 		buffer = 256
 	}
 	manager.mu.Lock()
-	if !manager.experimentalTCPFastPathAvailableLocked() && !kernelUDPRawFallbackEnabled() {
+	if !manager.experimentalTCPFastPathAvailableLocked() && !kernelUDPRawFallbackEnabled() && !manager.kernelUDPTCOnlyControlFallbackEnabledLocked() {
 		manager.mu.Unlock()
 		return nil, fmt.Errorf("kernel_udp provider is not available")
 	}
@@ -5060,6 +5209,11 @@ func (manager *Manager) SubmitExperimentalTCPFrame(ctx context.Context, frame da
 	}
 	if manager.pruneExperimentalTCPFlowsLocked(time.Now().UTC()) {
 		_ = manager.syncExperimentalTCPPortsLocked()
+	}
+	if manager.kernelDatapathFullPlaintextTransportAvailableLocked() {
+		manager.recordDropLocked(observability.DropEndpointDown)
+		manager.mu.Unlock()
+		return fmt.Errorf("experimental_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
 	}
 	fastPath := manager.experimentalTCPProviderFastPathAvailableLocked()
 	rawFallback := experimentalTCPRawFallbackEnabled()
@@ -5280,6 +5434,11 @@ func (manager *Manager) SubmitExperimentalTCPFrames(ctx context.Context, frames 
 	}
 	if manager.pruneExperimentalTCPFlowsLocked(time.Now().UTC()) {
 		_ = manager.syncExperimentalTCPPortsLocked()
+	}
+	if manager.kernelDatapathFullPlaintextTransportAvailableLocked() {
+		manager.recordDropLocked(observability.DropEndpointDown)
+		manager.mu.Unlock()
+		return fmt.Errorf("experimental_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
 	}
 	fastPath := manager.experimentalTCPProviderFastPathAvailableLocked()
 	if !fastPath {
@@ -5943,11 +6102,13 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 	manager.nativeTunnelRoutes = make(map[string]nativeTunnelRouteState)
 
 	var staleXDP *persistedExperimentalTCPXDPState
+	corruptState := false
 	state, found, err := readPersistedDataplaneState(spec.PinPath)
 	if err != nil {
 		if quarantineErr := quarantinePersistedDataplaneState(spec.PinPath); quarantineErr != nil {
 			return fmt.Errorf("%w; quarantine corrupt dataplane state: %v", err, quarantineErr)
 		}
+		corruptState = true
 		found = false
 	}
 	if found {
@@ -6003,7 +6164,17 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 			return fmt.Errorf("create dataplane pin path %q: %w", manager.spec.PinPath, err)
 		}
 	}
-	return manager.detachLocked(ctx, staleXDP)
+	err = manager.detachLocked(ctx, staleXDP)
+	if corruptState {
+		statePath := filepath.Join(manager.spec.PinPath, "state.json")
+		if removeErr := os.Remove(statePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			if err != nil {
+				return fmt.Errorf("%w; remove regenerated corrupt dataplane state %q: %v", err, statePath, removeErr)
+			}
+			return fmt.Errorf("remove regenerated corrupt dataplane state %q: %w", statePath, removeErr)
+		}
+	}
+	return err
 }
 
 func (manager *Manager) PlanCleanup(ctx context.Context, spec dataplane.AttachSpec) (dataplane.CleanupPlan, error) {
@@ -6611,6 +6782,7 @@ func (manager *Manager) startKernelUDPRawReceiverLocked() error {
 	if manager.experimentalTCPFastPathAvailableLocked() {
 		return nil
 	}
+	controlFallback := manager.kernelUDPTCOnlyControlFallbackEnabledLocked()
 	if kernelUDPUDPFallbackEnabled() && len(manager.kernelUDPAllowed) > 0 {
 		err := manager.syncKernelUDPUDPFallbackSocketsLocked(manager.kernelUDPAllowed)
 		if err == nil {
@@ -6618,11 +6790,17 @@ func (manager *Manager) startKernelUDPRawReceiverLocked() error {
 		}
 		manager.kernelUDPUDPFallbackBindErrors++
 		manager.warnings = append(manager.warnings, "kernel_udp UDP socket fallback unavailable; using raw UDP socket fallback: "+err.Error())
+		if !kernelUDPRawFallbackEnabled() {
+			return fmt.Errorf("kernel_udp UDP socket control fallback unavailable and raw UDP fallback is disabled: %w", err)
+		}
 	}
 	if manager.kernelUDPRawFD >= 0 {
 		return nil
 	}
 	if !kernelUDPRawFallbackEnabled() {
+		if controlFallback {
+			return fmt.Errorf("kernel_udp TC-only control fallback requires UDP socket fallback or raw UDP fallback")
+		}
 		return fmt.Errorf("kernel_udp raw UDP fallback is disabled")
 	}
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.IPPROTO_UDP)
@@ -6758,7 +6936,8 @@ func (manager *Manager) decodeKernelUDPPayloadWithOptions(udpPacket kerneludp.UD
 	encrypted := wireFrame.Flags&kerneludp.FlagEncrypted != 0
 	kernelOpened := wireFrame.Flags&kerneludp.FlagKernelOpened != 0
 	cryptoFragment := wireFrame.Flags&kerneludp.FlagCryptoFragment != 0
-	innerIPv4 := wireFrame.Flags&kerneludp.FlagInnerIPv4 != 0
+	wireInnerIPv4 := wireFrame.Flags&kerneludp.FlagInnerIPv4 != 0
+	innerIPv4 := wireInnerIPv4
 	placement := dataplane.CryptoPlacementUserspace
 	if kernelOpened || encrypted && cryptoFragment {
 		placement = dataplane.CryptoPlacementKernel
@@ -6788,6 +6967,7 @@ func (manager *Manager) decodeKernelUDPPayloadWithOptions(udpPacket kerneludp.UD
 		borrowedKernelPayload:   !copyPayload,
 		encryptedKernelPayload:  encrypted && !kernelOpened,
 		encryptedKernelFragment: encrypted && cryptoFragment && !kernelOpened,
+		wireInnerIPv4:           wireInnerIPv4,
 	}, true
 }
 
@@ -8429,6 +8609,7 @@ func reassembleKernelUDPCryptoFragmentRun(frames []receivedKernelUDPFrame) (rece
 		frame:                  completeFrame,
 		packet:                 first.packet,
 		encryptedKernelPayload: true,
+		wireInnerIPv4:          first.wireInnerIPv4,
 		wireSequenceCount:      uint64(count),
 	}, count, true
 }
@@ -8463,11 +8644,11 @@ func (manager *Manager) ingestKernelUDPCryptoFragment(item receivedKernelUDPFram
 			createdAt:         now,
 			frame:             frame,
 			packet:            item.packet,
-			innerIPv4:         frame.InnerIPv4,
+			innerIPv4:         frame.InnerIPv4 || item.wireInnerIPv4,
 			receivedFragments: make([]bool, count),
 		}
 		manager.kernelUDPCryptoFragments[key] = assembly
-	} else if frame.InnerIPv4 {
+	} else if frame.InnerIPv4 || item.wireInnerIPv4 {
 		assembly.innerIPv4 = true
 	}
 	if len(assembly.receivedFragments) != count {
@@ -8501,6 +8682,7 @@ func (manager *Manager) ingestKernelUDPCryptoFragment(item receivedKernelUDPFram
 		frame:                  completeFrame,
 		packet:                 packet,
 		encryptedKernelPayload: true,
+		wireInnerIPv4:          assembly.innerIPv4,
 		wireSequenceCount:      uint64(count),
 	}, true
 }
@@ -8622,6 +8804,17 @@ func (manager *Manager) openReceivedKernelUDPFrames(frames []receivedKernelUDPFr
 	var pendingSingleFlow uint64
 	var pendingSingle *pendingKernelUDPOpenBatch
 	manager.mu.Lock()
+	if manager.kernelUDPTCOnlyControlFallbackEnabledLocked() {
+		frames = manager.dropKernelUDPTCOnlySocketFallbackDataLocked(frames)
+		if len(frames) == 0 {
+			manager.mu.Unlock()
+			return nil, true
+		}
+	}
+	if !manager.kernelUDPKernelCryptoReadyLocked() {
+		manager.mu.Unlock()
+		return manager.forwardKernelUDPEncryptedFramesToUserspace(frames), true
+	}
 	for i := range frames {
 		if !frames[i].encryptedKernelPayload {
 			continue
@@ -8674,10 +8867,6 @@ func (manager *Manager) openReceivedKernelUDPFrames(frames []receivedKernelUDPFr
 	if len(pendingByFlow) == 0 && (pendingSingle == nil || len(pendingSingle.requests) == 0) {
 		manager.mu.Unlock()
 		return frames, true
-	}
-	if !manager.kernelUDPKernelCryptoReadyLocked() {
-		manager.mu.Unlock()
-		return manager.forwardKernelUDPEncryptedFramesToUserspace(frames), true
 	}
 	manager.mu.Unlock()
 	processPending := func(flowID uint64, pending *pendingKernelUDPOpenBatch) bool {
@@ -8858,6 +9047,31 @@ func (manager *Manager) openReceivedKernelUDPFrames(frames []receivedKernelUDPFr
 		}
 	}
 	return frames, true
+}
+
+func (manager *Manager) dropKernelUDPTCOnlySocketFallbackDataLocked(frames []receivedKernelUDPFrame) []receivedKernelUDPFrame {
+	var filtered []receivedKernelUDPFrame
+	for i, item := range frames {
+		if item.frame.InnerIPv4 || item.wireInnerIPv4 {
+			manager.kernelUDPUDPFallbackRXDataDrops++
+			manager.recordDropLocked(observability.DropInvalidPacket)
+			if item.frame.Release != nil {
+				item.frame.Release()
+			}
+			if filtered == nil {
+				filtered = make([]receivedKernelUDPFrame, 0, len(frames)-1)
+				filtered = append(filtered, frames[:i]...)
+			}
+			continue
+		}
+		if filtered != nil {
+			filtered = append(filtered, item)
+		}
+	}
+	if filtered == nil {
+		return frames
+	}
+	return filtered
 }
 
 func (manager *Manager) forwardKernelUDPEncryptedFramesToUserspace(frames []receivedKernelUDPFrame) []receivedKernelUDPFrame {
@@ -9645,7 +9859,7 @@ func (manager *Manager) prepareExperimentalTCPPacketLocked(flowID uint64, sequen
 	syncPorts := flow.SourcePort != localPort || flow.DestinationPort != remotePort
 	flow.SourcePort = localPort
 	flow.DestinationPort = remotePort
-	if flow.LocalAddress == "" {
+	if flow.LocalAddress == "" || !kernelTransportLocalAddressHasPort(flow.LocalAddress) {
 		flow.LocalAddress = net.JoinHostPort(localIP.String(), strconv.Itoa(int(localPort)))
 		syncPorts = true
 	}
@@ -9879,7 +10093,7 @@ func (manager *Manager) prepareKernelUDPPacketForFlowLocked(flowID uint64, flow 
 	syncPorts := flow.SourcePort != localPort || flow.DestinationPort != remotePort
 	flow.SourcePort = localPort
 	flow.DestinationPort = remotePort
-	if flow.LocalAddress == "" {
+	if flow.LocalAddress == "" || !kernelTransportLocalAddressHasPort(flow.LocalAddress) {
 		flow.LocalAddress = net.JoinHostPort(localIP.String(), strconv.Itoa(int(localPort)))
 		syncPorts = true
 	}
@@ -10148,6 +10362,11 @@ func resolveKernelTransportLocalAddress(address string) (netip.Addr, uint16, err
 	return resolveExperimentalTCPAddress(address)
 }
 
+func kernelTransportLocalAddressHasPort(address string) bool {
+	_, portText, err := net.SplitHostPort(strings.TrimSpace(address))
+	return err == nil && strings.TrimSpace(portText) != ""
+}
+
 func resolveExperimentalTCPAddress(address string) (netip.Addr, uint16, error) {
 	host, portText, err := net.SplitHostPort(address)
 	if err != nil {
@@ -10307,6 +10526,12 @@ func (manager *Manager) sendRawKernelUDPPreparedFrames(frames []preparedKernelUD
 		if sent > 0 {
 			return sent, err
 		}
+		if !kernelUDPRawFallbackEnabled() {
+			return sent, err
+		}
+	}
+	if !kernelUDPRawFallbackEnabled() {
+		return 0, fmt.Errorf("kernel_udp raw UDP fallback is disabled")
 	}
 	return manager.sendRawKernelUDPPreparedFramesRaw(frames, false)
 }
@@ -10749,8 +10974,13 @@ func (manager *Manager) kernelUDPProviderStatsLocked() map[string]uint64 {
 	stats["af_xdp_idle_fallback_sent_frames"] = manager.kernelUDPAFXDPIdleFallbackSentFrames
 	stats["af_xdp_idle_fallback_errors"] = manager.kernelUDPAFXDPIdleFallbackErrors
 	stats["af_xdp_idle_fallback_skips"] = manager.kernelUDPAFXDPIdleFallbackSkips
-	if kernelUDPRawFallbackEnabled() {
-		stats["raw_udp_fallback_enabled"] = 1
+	stats["tc_packet_policy_mtu"] = uint64(manager.snapshot.PacketPolicy.MTU)
+	stats["tc_packet_policy_drop_fragments"] = boolCounter(manager.snapshot.PacketPolicy.DropFragments)
+	stats["tc_packet_policy_tcp_mss_clamp"] = uint64(manager.snapshot.PacketPolicy.TCPMSSClamp)
+	tcOnlyControlFallback := manager.kernelUDPTCOnlyControlFallbackEnabledLocked()
+	stats["tc_only_control_fallback_enabled"] = boolCounter(tcOnlyControlFallback)
+	if kernelUDPRawFallbackEnabled() || tcOnlyControlFallback {
+		stats["raw_udp_fallback_enabled"] = boolCounter(kernelUDPRawFallbackEnabled())
 		stats["raw_udp_fallback_socket_open"] = boolCounter(manager.kernelUDPRawFD >= 0)
 		stats["udp_socket_fallback_enabled"] = boolCounter(kernelUDPUDPFallbackEnabled())
 		manager.kernelUDPUDPFallbackMu.RLock()
@@ -10761,6 +10991,7 @@ func (manager *Manager) kernelUDPProviderStatsLocked() map[string]uint64 {
 		stats["udp_socket_fallback_tx_batches"] = manager.kernelUDPUDPFallbackTXBatches
 		stats["udp_socket_fallback_rx_batches"] = manager.kernelUDPUDPFallbackRXBatches
 		stats["udp_socket_fallback_tx_fallbacks"] = manager.kernelUDPUDPFallbackTXFallbacks
+		stats["udp_socket_fallback_rx_data_drops"] = manager.kernelUDPUDPFallbackRXDataDrops
 		stats["udp_socket_fallback_bind_errors"] = manager.kernelUDPUDPFallbackBindErrors
 		stats["udp_socket_fallback_gso_enabled"] = boolCounter(kernelUDPUDPFallbackGSOEnabled() && !manager.kernelUDPUDPFallbackGSODisabled.Load())
 		stats["udp_socket_fallback_gso_scatter"] = boolCounter(kernelUDPUDPFallbackGSOScatterEnabled() && !manager.kernelUDPUDPFallbackGSOScatterDisabled.Load())
@@ -10867,6 +11098,9 @@ func (manager *Manager) addKernelUDPTCHotStatsLocked(stats map[string]uint64) {
 		{key: captureStatPerfLastErrno, name: "tc_capture_perf_last_errno"},
 		{key: 15, name: "tc_packet_mtu_drops"},
 		{key: 16, name: "tc_packet_fragment_drops"},
+		{key: packetPolicyTCPMSSClampStatSuccess, name: "tc_packet_policy_tcp_mss_clamps"},
+		{key: packetPolicyTCPMSSClampStatErrors, name: "tc_packet_policy_tcp_mss_clamp_errors"},
+		{key: packetPolicyTCPMSSClampStatDrops, name: "tc_packet_policy_tcp_mss_clamp_drops"},
 		{key: kernelUDPTXStatSuccess, name: "tc_kernel_udp_tx_direct_packets"},
 		{key: kernelUDPTXStatErrors, name: "tc_kernel_udp_tx_direct_errors"},
 		{key: kernelUDPTXStatDrops, name: "tc_kernel_udp_tx_direct_drops"},
@@ -10894,6 +11128,10 @@ func (manager *Manager) addKernelUDPTCHotStatsLocked(stats map[string]uint64) {
 		{key: kernelUDPTXSecureDirectStatMTUUnderlayFallbacks, name: "tc_kernel_udp_tx_secure_direct_mtu_underlay_fallbacks"},
 		{key: kernelUDPTXSecureDirectStatLenGSOFallbacks, name: "tc_kernel_udp_tx_secure_direct_len_gso_fallbacks"},
 		{key: kernelUDPTXSecureDirectStatLenShortFallbacks, name: "tc_kernel_udp_tx_secure_direct_len_short_fallbacks"},
+		{key: kernelUDPTXSecureDirectStatMTUUnderlay1500Fallbacks, name: "tc_kernel_udp_tx_secure_direct_mtu_underlay_1500ish_fallbacks"},
+		{key: kernelUDPTXSecureDirectStatMTUUnderlayJumboFallbacks, name: "tc_kernel_udp_tx_secure_direct_mtu_underlay_jumbo_fallbacks"},
+		{key: kernelUDPTXSecureDirectStatMTUUnderlayInnerGT1400Fallbacks, name: "tc_kernel_udp_tx_secure_direct_mtu_underlay_inner_gt_1400_fallbacks"},
+		{key: kernelUDPTXSecureDirectStatMTUUnderlayInnerLE1400Fallbacks, name: "tc_kernel_udp_tx_secure_direct_mtu_underlay_inner_le_1400_fallbacks"},
 		{key: kernelUDPTXSecureDirectStatFlowIndexMisses, name: "tc_kernel_udp_tx_secure_direct_flow_index_misses"},
 		{key: kernelUDPTXSecureDirectStatDirectSlotMisses, name: "tc_kernel_udp_tx_secure_direct_direct_slot_misses"},
 		{key: kernelUDPTXSecureDirectStatDirectSlotDisabled, name: "tc_kernel_udp_tx_secure_direct_direct_slot_disabled"},
@@ -10901,6 +11139,18 @@ func (manager *Manager) addKernelUDPTCHotStatsLocked(stats map[string]uint64) {
 		{key: 180, name: "tc_kernel_udp_tx_secure_direct_skb_seal_errors"},
 		{key: kernelUDPTXSecureDirectStatInnerTCPChecksumKfuncSuccesses, name: "tc_kernel_udp_tx_secure_direct_inner_tcp_checksum_kfunc_successes"},
 		{key: kernelUDPTXSecureDirectStatInnerTCPChecksumKfuncFallbacks, name: "tc_kernel_udp_tx_secure_direct_inner_tcp_checksum_kfunc_fallbacks"},
+		{key: kernelUDPTXSecureDirectStatDirectKfuncSealAttempts, name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_attempts"},
+		{key: kernelUDPTXSecureDirectStatDirectKfuncSealErrors, name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_errors"},
+		{key: kernelUDPTXSecureDirectStatDirectKfuncSealEINVAL, name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_einval"},
+		{key: kernelUDPTXSecureDirectStatDirectKfuncSealEOPNOTSUPP, name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_eopnotsupp"},
+		{key: kernelUDPTXSecureDirectStatDirectKfuncSealEFAULT, name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_efault"},
+		{key: kernelUDPTXSecureDirectStatDirectKfuncSealENOENT, name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_enoent"},
+		{key: kernelUDPTXSecureDirectStatDirectKfuncSealEBADMSG, name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_ebadmsg"},
+		{key: kernelUDPTXSecureDirectStatDirectKfuncSealOther, name: "tc_kernel_udp_tx_secure_direct_kfunc_seal_other"},
+		{key: kernelUDPTXSecureDirectStatTCPMSSCandidates, name: "tc_kernel_udp_tx_secure_direct_tcp_mss_candidates"},
+		{key: kernelUDPTXSecureDirectStatTCPMSSClamps, name: "tc_kernel_udp_tx_secure_direct_tcp_mss_clamps"},
+		{key: kernelUDPTXSecureDirectStatTCPMSSNoops, name: "tc_kernel_udp_tx_secure_direct_tcp_mss_noops"},
+		{key: kernelUDPTXSecureDirectStatTCPMSSErrors, name: "tc_kernel_udp_tx_secure_direct_tcp_mss_errors"},
 		{key: kernelUDPRXSecureDirectStatAttempts, name: "tc_kernel_udp_rx_secure_direct_attempts"},
 		{key: kernelUDPRXSecureDirectStatCandidates, name: "tc_kernel_udp_rx_secure_direct_candidates"},
 		{key: kernelUDPRXSecureDirectStatSuccess, name: "tc_kernel_udp_rx_secure_direct_packets"},
@@ -10909,6 +11159,8 @@ func (manager *Manager) addKernelUDPTCHotStatsLocked(stats map[string]uint64) {
 		{key: kernelUDPRXSecureDirectStatHeaderErrors, name: "tc_kernel_udp_rx_secure_direct_header_errors"},
 		{key: kernelUDPRXSecureDirectStatDecryptErrors, name: "tc_kernel_udp_rx_secure_direct_decrypt_errors"},
 		{key: kernelUDPRXSecureDirectStatReplayDrops, name: "tc_kernel_udp_rx_secure_direct_replay_drops"},
+		{key: kernelUDPRXSecureDirectStatReplayOldDrops, name: "tc_kernel_udp_rx_secure_direct_replay_old_drops"},
+		{key: kernelUDPRXSecureDirectStatReplaySeenDrops, name: "tc_kernel_udp_rx_secure_direct_replay_seen_drops"},
 		{key: kernelUDPRXSecureDirectStatDrops, name: "tc_kernel_udp_rx_secure_direct_drops"},
 		{key: kernelUDPRXSecureDirectStatNeighHits, name: "tc_kernel_udp_rx_secure_direct_neighbor_hits"},
 		{key: kernelUDPRXSecureDirectStatNeighMisses, name: "tc_kernel_udp_rx_secure_direct_neighbor_misses"},
@@ -10935,6 +11187,25 @@ func (manager *Manager) addKernelUDPTCHotStatsLocked(stats map[string]uint64) {
 		{key: kernelUDPRXSecureDirectStatErrOpenEINVAL, name: "tc_kernel_udp_rx_secure_direct_err_open_einval"},
 		{key: kernelUDPRXSecureDirectStatErrOpenEBADMSG, name: "tc_kernel_udp_rx_secure_direct_err_open_ebadmsg"},
 		{key: kernelUDPRXSecureDirectStatErrInnerIPv4, name: "tc_kernel_udp_rx_secure_direct_err_inner_ipv4"},
+		{key: kernelUDPRXSecureDirectStatDirectKfuncOpenAttempts, name: "tc_kernel_udp_rx_secure_direct_kfunc_open_attempts"},
+		{key: kernelUDPRXSecureDirectStatDirectKfuncOpenErrors, name: "tc_kernel_udp_rx_secure_direct_kfunc_open_errors"},
+		{key: kernelUDPRXSecureDirectStatDirectKfuncOpenEINVAL, name: "tc_kernel_udp_rx_secure_direct_kfunc_open_einval"},
+		{key: kernelUDPRXSecureDirectStatDirectKfuncOpenEOPNOTSUPP, name: "tc_kernel_udp_rx_secure_direct_kfunc_open_eopnotsupp"},
+		{key: kernelUDPRXSecureDirectStatDirectKfuncOpenEFAULT, name: "tc_kernel_udp_rx_secure_direct_kfunc_open_efault"},
+		{key: kernelUDPRXSecureDirectStatDirectKfuncOpenENOENT, name: "tc_kernel_udp_rx_secure_direct_kfunc_open_enoent"},
+		{key: kernelUDPRXSecureDirectStatDirectKfuncOpenEBADMSG, name: "tc_kernel_udp_rx_secure_direct_kfunc_open_ebadmsg"},
+		{key: kernelUDPRXSecureDirectStatDirectKfuncOpenOther, name: "tc_kernel_udp_rx_secure_direct_kfunc_open_other"},
+		{key: kernelUDPRXSecureDirectStatFallbackL2Short, name: "tc_kernel_udp_rx_secure_direct_fallback_l2_short"},
+		{key: kernelUDPRXSecureDirectStatFallbackNonIPv4, name: "tc_kernel_udp_rx_secure_direct_fallback_non_ipv4"},
+		{key: kernelUDPRXSecureDirectStatFallbackIPHeader, name: "tc_kernel_udp_rx_secure_direct_fallback_ip_header"},
+		{key: kernelUDPRXSecureDirectStatFallbackFragment, name: "tc_kernel_udp_rx_secure_direct_fallback_fragment"},
+		{key: kernelUDPRXSecureDirectStatFallbackSKBShort, name: "tc_kernel_udp_rx_secure_direct_fallback_skb_short"},
+		{key: kernelUDPRXSecureDirectStatFallbackLinearShort, name: "tc_kernel_udp_rx_secure_direct_fallback_linear_short"},
+		{key: kernelUDPRXSecureDirectStatFallbackNonUDPTCP, name: "tc_kernel_udp_rx_secure_direct_fallback_non_udp_tcp"},
+		{key: kernelUDPRXSecureDirectStatFallbackUDPLen, name: "tc_kernel_udp_rx_secure_direct_fallback_udp_len"},
+		{key: kernelUDPRXSecureDirectStatFallbackPortMiss, name: "tc_kernel_udp_rx_secure_direct_fallback_port_miss"},
+		{key: kernelUDPRXSecureDirectStatFallbackTIXUFlags, name: "tc_kernel_udp_rx_secure_direct_fallback_tixu_flags"},
+		{key: kernelUDPRXSecureDirectStatFallbackTIXULen, name: "tc_kernel_udp_rx_secure_direct_fallback_tixu_len"},
 		{key: kernelUDPRXDirectStatNeighHits, name: "tc_kernel_udp_rx_direct_neighbor_hits"},
 		{key: kernelUDPRXDirectStatNeighMisses, name: "tc_kernel_udp_rx_direct_neighbor_misses"},
 		{key: kernelUDPTXDirectStatRouteMisses, name: "tc_kernel_udp_tx_direct_route_misses"},
@@ -11063,6 +11334,7 @@ func (manager *Manager) addKernelUDPRXDirectCurrentStatsLocked(stats map[string]
 		return
 	}
 	stats[prefix+"tc_kernel_udp_rx_secure_direct_attached"] = boolCounter(manager.kernelUDPRXSecureDirectAttached)
+	stats[prefix+"tc_kernel_udp_rx_secure_direct_kfunc_open_enabled"] = boolCounter(kernelUDPRXSecureDirectKfuncOpenEnabled())
 	stats[prefix+"tc_kernel_udp_rx_secure_direct_skb_open_kfunc"] = boolCounter(manager.kernelUDPRXSecureDirectSKBOpenKfunc)
 	stats[prefix+"tc_kernel_udp_rx_secure_direct_decap_l2_kfunc"] = boolCounter(manager.kernelUDPRXSecureDirectDecapL2Kfunc)
 	stats[prefix+"tc_kernel_udp_rx_secure_direct_recompute_inner_checksums"] = boolCounter(kernelUDPRXSecureDirectRecomputeInnerChecksumEnabled())
@@ -11490,7 +11762,12 @@ func (manager *Manager) kernelCryptoProviderStatsLocked() map[string]uint64 {
 		"kernel_crypto_flow_map_updates":                     manager.kernelCryptoFlowMapUpdates,
 		"kernel_crypto_flow_map_deletes":                     manager.kernelCryptoFlowMapDeletes,
 		"kernel_crypto_flow_map_entries":                     manager.kernelCryptoFlowMapEntriesLocked(),
+		"kernel_crypto_provider_maps_loaded":                 boolCounter(manager.kernelCryptoProvider != nil),
 		"kernel_crypto_ctx_provider_loaded":                  boolCounter(manager.kernelCryptoProvider != nil),
+		"kernel_crypto_context_provider_ready":               boolCounter(manager.kernelCryptoContextProviderReadyLocked()),
+		"kernel_crypto_direct_slot_provider_ready":           boolCounter(manager.kernelCryptoDirectSlotProviderReadyLocked()),
+		"kernel_crypto_direct_kfunc_fastpath_ready":          boolCounter(kernelCryptoDirectKfuncFastpathReady()),
+		"kernel_crypto_tc_direct_ready":                      boolCounter(manager.kernelCryptoTCDirectReadyLocked()),
 		"kernel_crypto_ctx_provider_load_errors":             manager.kernelCryptoProviderLoadErrors,
 		"kernel_crypto_aead_gcm_ctx_create_attempts":         manager.kernelCryptoAEADCreateAttempts,
 		"kernel_crypto_aead_gcm_ctx_create_successes":        manager.kernelCryptoAEADCreateSuccesses,
@@ -11550,6 +11827,7 @@ func addKernelCryptoModuleStats(stats map[string]uint64) {
 		"kfunc_fastpath_stats",
 		"kfunc_fastpath_wipe",
 		"kfunc_simd_fastpath",
+		"kfunc_simd_irq_fpu_fastpath",
 		"vaes_available",
 		"aesni_available",
 		"direct_xdp_available",
@@ -17641,6 +17919,8 @@ func appendKernelUDPTXDirectPushOuterTCPHeaderKfunc(instructions asm.Instruction
 	var flags int32
 	if experimentalTCPTXDirectOuterTCPHeaderKfuncPartialChecksumEnabled() {
 		flags |= trustIXTIXTTXFinalizeTCPPartialCSUM
+	} else if experimentalTCPTXDirectTrustInnerChecksums() {
+		flags |= trustIXTIXTTXFinalizeTCPTrustInnerCSUM
 	}
 	if opts.SKBClearTXOffload {
 		flags |= int32(trustIXSKBClearTXOffloadCSUM | trustIXSKBClearTXOffloadEncap)
@@ -19952,6 +20232,8 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 		{key: kernelUDPRXSecureDirectStatHeaderErrors, name: "tc_kernel_udp_rx_secure_direct_header_errors"},
 		{key: kernelUDPRXSecureDirectStatDecryptErrors, name: "tc_kernel_udp_rx_secure_direct_decrypt_errors"},
 		{key: kernelUDPRXSecureDirectStatReplayDrops, name: "tc_kernel_udp_rx_secure_direct_replay_drops"},
+		{key: kernelUDPRXSecureDirectStatReplayOldDrops, name: "tc_kernel_udp_rx_secure_direct_replay_old_drops"},
+		{key: kernelUDPRXSecureDirectStatReplaySeenDrops, name: "tc_kernel_udp_rx_secure_direct_replay_seen_drops"},
 		{key: kernelUDPRXSecureDirectStatDrops, name: "tc_kernel_udp_rx_secure_direct_drops"},
 		{key: kernelUDPRXSecureDirectStatNeighHits, name: "tc_kernel_udp_rx_secure_direct_neighbor_hits"},
 		{key: kernelUDPRXSecureDirectStatNeighMisses, name: "tc_kernel_udp_rx_secure_direct_neighbor_misses"},
@@ -19978,6 +20260,17 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 		{key: kernelUDPRXSecureDirectStatErrOpenEINVAL, name: "tc_kernel_udp_rx_secure_direct_err_open_einval"},
 		{key: kernelUDPRXSecureDirectStatErrOpenEBADMSG, name: "tc_kernel_udp_rx_secure_direct_err_open_ebadmsg"},
 		{key: kernelUDPRXSecureDirectStatErrInnerIPv4, name: "tc_kernel_udp_rx_secure_direct_err_inner_ipv4"},
+		{key: kernelUDPRXSecureDirectStatFallbackL2Short, name: "tc_kernel_udp_rx_secure_direct_fallback_l2_short"},
+		{key: kernelUDPRXSecureDirectStatFallbackNonIPv4, name: "tc_kernel_udp_rx_secure_direct_fallback_non_ipv4"},
+		{key: kernelUDPRXSecureDirectStatFallbackIPHeader, name: "tc_kernel_udp_rx_secure_direct_fallback_ip_header"},
+		{key: kernelUDPRXSecureDirectStatFallbackFragment, name: "tc_kernel_udp_rx_secure_direct_fallback_fragment"},
+		{key: kernelUDPRXSecureDirectStatFallbackSKBShort, name: "tc_kernel_udp_rx_secure_direct_fallback_skb_short"},
+		{key: kernelUDPRXSecureDirectStatFallbackLinearShort, name: "tc_kernel_udp_rx_secure_direct_fallback_linear_short"},
+		{key: kernelUDPRXSecureDirectStatFallbackNonUDPTCP, name: "tc_kernel_udp_rx_secure_direct_fallback_non_udp_tcp"},
+		{key: kernelUDPRXSecureDirectStatFallbackUDPLen, name: "tc_kernel_udp_rx_secure_direct_fallback_udp_len"},
+		{key: kernelUDPRXSecureDirectStatFallbackPortMiss, name: "tc_kernel_udp_rx_secure_direct_fallback_port_miss"},
+		{key: kernelUDPRXSecureDirectStatFallbackTIXUFlags, name: "tc_kernel_udp_rx_secure_direct_fallback_tixu_flags"},
+		{key: kernelUDPRXSecureDirectStatFallbackTIXULen, name: "tc_kernel_udp_rx_secure_direct_fallback_tixu_len"},
 		{key: captureStatPullErrors, name: "tc_capture_pull_errors"},
 		{key: captureStatLinearShortErrors, name: "tc_capture_linear_short_errors"},
 		{key: captureStatEtherTypeErrors, name: "tc_capture_ethertype_errors"},
@@ -20092,6 +20385,7 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_direct_parse_decap_l2_kfunc", Value: boolCounter(manager.kernelUDPRXDirectParseDecapL2Kfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_direct_trust_inner_checksum", Value: boolCounter(manager.kernelUDPRXDirectTrustInnerChecksum)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_attached", Value: boolCounter(manager.kernelUDPRXSecureDirectAttached)})
+	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_kfunc_open_enabled", Value: boolCounter(kernelUDPRXSecureDirectKfuncOpenEnabled())})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_skb_open_kfunc", Value: boolCounter(manager.kernelUDPRXSecureDirectSKBOpenKfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_decap_l2_kfunc", Value: boolCounter(manager.kernelUDPRXSecureDirectDecapL2Kfunc)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_secure_direct_recompute_inner_checksums", Value: boolCounter(kernelUDPRXSecureDirectRecomputeInnerChecksumEnabled())})
@@ -21587,9 +21881,6 @@ func (manager *Manager) syncKernelUDPTXDirectLocked() error {
 	if err := clearBPFMap[routeKey, kernelUDPTXRouteValue](manager.kernelUDPTXRouteMap, "kernel_udp TC TX route LPM BPF map"); err != nil {
 		return err
 	}
-	if err := clearBPFMap[uint64, kernelUDPTXFlowValue](manager.kernelUDPTXFlowMap, "kernel_udp TC TX flow BPF map"); err != nil {
-		return err
-	}
 	if err := manager.clearKernelUDPTXDirectRouteCacheLocked(); err != nil {
 		return err
 	}
@@ -21641,6 +21932,7 @@ func (manager *Manager) syncKernelUDPTXDirectLocked() error {
 		return nil
 	}
 	flowValues := make(map[uint64]kernelUDPTXFlowValue)
+	activeFlowIDs := make(map[uint64]struct{})
 	for _, route := range manager.snapshot.Routes {
 		manager.kernelUDPTXDirectSync.RoutesScanned++
 		prefix, err := route.Prefix.Parse()
@@ -21725,13 +22017,18 @@ func (manager *Manager) syncKernelUDPTXDirectLocked() error {
 					MTU:             underlayTarget.mtu,
 				}
 				value.Flags = manager.kernelUDPTXDirectFlowFlagsLocked(route, routeFlow, secureDirect)
-				flowValues[flowID] = value
-				if err := manager.kernelUDPTXFlowMap.Update(flowID, value, cebpf.UpdateAny); err != nil {
-					return fmt.Errorf("sync kernel_udp TC TX flow %d: %w", flowID, err)
+				var wrote bool
+				value, wrote, err = manager.syncKernelUDPTXDirectFlowValueLocked(flowID, value)
+				if err != nil {
+					return err
 				}
+				flowValues[flowID] = value
 				manager.kernelUDPTXDirectFlows++
-				manager.kernelUDPTXDirectSync.FlowsWritten++
+				if wrote {
+					manager.kernelUDPTXDirectSync.FlowsWritten++
+				}
 			}
+			activeFlowIDs[flowID] = struct{}{}
 			routeFlowValues[flowID] = value
 			if !appendKernelUDPTXRouteFlow(&routeValue, flowID, routeFlowCount) {
 				manager.kernelUDPTXDirectSync.RouteFlowAppendReject++
@@ -21793,7 +22090,94 @@ func (manager *Manager) syncKernelUDPTXDirectLocked() error {
 			return err
 		}
 	}
+	if err := manager.pruneKernelUDPTXDirectFlowMapLocked(activeFlowIDs); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (manager *Manager) syncKernelUDPTXDirectFlowValueLocked(flowID uint64, desired kernelUDPTXFlowValue) (kernelUDPTXFlowValue, bool, error) {
+	if manager.kernelUDPTXFlowMap == nil {
+		return desired, false, nil
+	}
+	sequence := desired.Sequence
+	if manager.kernelUDPTXDirectSequences != nil && manager.kernelUDPTXDirectSequences[flowID] > sequence {
+		sequence = manager.kernelUDPTXDirectSequences[flowID]
+	}
+	var current kernelUDPTXFlowValue
+	if err := manager.kernelUDPTXFlowMap.Lookup(flowID, &current); err != nil {
+		if !errors.Is(err, cebpf.ErrKeyNotExist) {
+			return kernelUDPTXFlowValue{}, false, fmt.Errorf("read kernel_udp TC TX flow %d before sync: %w", flowID, err)
+		}
+		desired.Sequence = sequence
+		if err := manager.kernelUDPTXFlowMap.Update(flowID, desired, cebpf.UpdateAny); err != nil {
+			return kernelUDPTXFlowValue{}, false, fmt.Errorf("sync kernel_udp TC TX flow %d: %w", flowID, err)
+		}
+		manager.rememberKernelUDPTXDirectSequenceValue(flowID, desired.Sequence)
+		return desired, true, nil
+	}
+	if current.Sequence > sequence {
+		sequence = current.Sequence
+	}
+	manager.rememberKernelUDPTXDirectSequenceValue(flowID, sequence)
+	if kernelUDPTXFlowValueConfigEqual(current, desired) {
+		return current, false, nil
+	}
+	desired.Sequence = kernelUDPTXDirectSequenceWithUpdateGuard(sequence)
+	if err := manager.kernelUDPTXFlowMap.Update(flowID, desired, cebpf.UpdateAny); err != nil {
+		return kernelUDPTXFlowValue{}, false, fmt.Errorf("sync kernel_udp TC TX flow %d: %w", flowID, err)
+	}
+	manager.rememberKernelUDPTXDirectSequenceValue(flowID, desired.Sequence)
+	return desired, true, nil
+}
+
+func (manager *Manager) pruneKernelUDPTXDirectFlowMapLocked(active map[uint64]struct{}) error {
+	if manager.kernelUDPTXFlowMap == nil {
+		return nil
+	}
+	stale := make([]uint64, 0)
+	var flowID uint64
+	var value kernelUDPTXFlowValue
+	iterator := manager.kernelUDPTXFlowMap.Iterate()
+	for iterator.Next(&flowID, &value) {
+		if _, ok := active[flowID]; !ok {
+			stale = append(stale, flowID)
+		}
+	}
+	if err := iterator.Err(); err != nil {
+		return fmt.Errorf("scan kernel_udp TC TX flow BPF map for stale flows: %w", err)
+	}
+	for _, flowID := range stale {
+		if err := manager.kernelUDPTXFlowMap.Delete(flowID); err != nil && !errors.Is(err, cebpf.ErrKeyNotExist) {
+			return fmt.Errorf("delete stale kernel_udp TC TX flow %d: %w", flowID, err)
+		}
+	}
+	return nil
+}
+
+func (manager *Manager) rememberKernelUDPTXDirectSequenceValue(flowID uint64, sequence uint64) {
+	if flowID == 0 {
+		return
+	}
+	if manager.kernelUDPTXDirectSequences == nil {
+		manager.kernelUDPTXDirectSequences = make(map[uint64]uint64)
+	}
+	if sequence > manager.kernelUDPTXDirectSequences[flowID] {
+		manager.kernelUDPTXDirectSequences[flowID] = sequence
+	}
+}
+
+func kernelUDPTXFlowValueConfigEqual(a, b kernelUDPTXFlowValue) bool {
+	a.Sequence = 0
+	b.Sequence = 0
+	return a == b
+}
+
+func kernelUDPTXDirectSequenceWithUpdateGuard(sequence uint64) uint64 {
+	if sequence > ^uint64(0)-kernelUDPTXDirectSequenceUpdateGuard {
+		return ^uint64(0)
+	}
+	return sequence + kernelUDPTXDirectSequenceUpdateGuard
 }
 
 func kernelUDPTXDirectRouteCacheCandidate(routeCacheSet bool, routeValue kernelUDPTXRouteValue) bool {
@@ -23804,6 +24188,9 @@ func kernelUDPTXDirectKernelUDPOnlyEnabled() bool {
 	) {
 		return true
 	}
+	if kernelUDPTCOnlyProviderRequested() {
+		return false
+	}
 	return !experimentalTCPTXDirectEnabled()
 }
 
@@ -23822,6 +24209,9 @@ func kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec dataplane.AttachSpec) boo
 		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_ONLY",
 	) {
 		return true
+	}
+	if kernelUDPTCOnlyProviderRequestedForSpec(spec) {
+		return false
 	}
 	return !experimentalTCPTXDirectEnabledForSpec(spec)
 }
@@ -23875,7 +24265,10 @@ func kernelUDPTXSecureDirectRequestedForSpec(spec dataplane.AttachSpec) bool {
 }
 
 func (manager *Manager) kernelUDPRXSecureDirectRequestedLocked() bool {
-	return manager.spec.KernelUDPRXSecureDirect || kernelUDPRXSecureDirectRequested()
+	return manager.spec.KernelUDPRXSecureDirect ||
+		kernelUDPRXSecureDirectRequested() ||
+		manager.spec.KernelUDPTCOnlyProvider && kernelUDPTXSecureDirectRequiredBySpec(manager.spec) ||
+		kernelUDPXDPRXDirectEnabled() && kernelUDPXDPRXSecureDirectEnabled()
 }
 
 func kernelUDPTXSecureDirectProgramOptionsForSpec(spec dataplane.AttachSpec) kernelUDPTXSecureDirectProgramOptions {
@@ -23899,9 +24292,10 @@ func kernelUDPTXSecureDirectRouteTCPGSOKfuncEnabledForSpec(spec dataplane.Attach
 		"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC") {
 		return true
 	}
-	return spec.KernelUDPTXSecureDirect &&
+	routeGSO := spec.KernelUDPSecureRouteGSO ||
 		spec.ExperimentalTCPTXDirect &&
-		(spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync)
+			(spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync)
+	return spec.KernelUDPTXSecureDirect && routeGSO
 }
 
 func kernelUDPTXSecureDirectTrustInnerChecksumsForSpec(spec dataplane.AttachSpec) bool {

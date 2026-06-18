@@ -1583,6 +1583,9 @@ func lanIPv4TCPGSOScatterRun(packets [][]byte, mtu int) (int, lanIPv4TCPSegmentM
 			!lanIPv4TCPGSOScatterFlagsOK(nextTCP[13]) {
 			break
 		}
+		if tcp[12] != nextTCP[12] {
+			break
+		}
 		payloadLen := len(packet) - nextMeta.payloadOffset
 		if totalLen+payloadLen > maxIPv4Len {
 			break
@@ -1591,7 +1594,7 @@ func lanIPv4TCPGSOScatterRun(packets [][]byte, mtu int) (int, lanIPv4TCPSegmentM
 		nextSeq += uint32(payloadLen)
 		run++
 	}
-	if run < 2 || totalLen <= mtu {
+	if run < 2 {
 		return 0, lanIPv4TCPSegmentMeta{}, 0, false
 	}
 	return run, meta, totalLen, true

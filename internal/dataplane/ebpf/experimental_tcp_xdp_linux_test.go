@@ -487,6 +487,7 @@ func TestExperimentalTCPXDPAllowsKernelUDPSourcePort(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP program run requires root")
 	}
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
 	const (
 		sourcePort      = 9443
 		destinationPort = 43000
@@ -627,7 +628,7 @@ func TestExperimentalTCPXDPDirectsPlainKernelUDPToLAN(t *testing.T) {
 		t.Fatalf("load experimental_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueFor(object.configMap, 1, true, true, false); err != nil {
+	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP UDP RX direct: %v", err)
 	}
 	value := uint8(1)
@@ -675,7 +676,7 @@ func TestExperimentalTCPXDPDirectsPlainKernelUDPToLAN(t *testing.T) {
 		t.Fatalf("XDP UDP RX direct return = %d, want redirect/drop from devmap helper", ret)
 	}
 	if len(run.DataOut) != len(packet)-kernelUDPTXOuterOverhead {
-		t.Fatalf("XDP UDP RX direct data out len = %d, want %d", len(run.DataOut), len(packet)-kernelUDPTXOuterOverhead)
+		t.Fatalf("XDP UDP RX direct data out len = %d, want %d ret=%d stats=%v", len(run.DataOut), len(packet)-kernelUDPTXOuterOverhead, ret, xdpStatsForTest(t, object))
 	}
 	if !bytes.Equal(run.DataOut[:14], []byte{0x02, 0x10, 0x11, 0x12, 0x13, 0x14, 0x02, 0x20, 0x21, 0x22, 0x23, 0x24, 0x08, 0x00}) {
 		t.Fatalf("XDP UDP RX direct ethernet header = %x", run.DataOut[:14])
@@ -735,7 +736,7 @@ func TestExperimentalTCPXDPDirectsPlainKernelUDPWithFixedL2(t *testing.T) {
 		t.Fatalf("load experimental_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueFor(object.configMap, 1, true, true, false); err != nil {
+	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP UDP RX fixed L2 direct: %v", err)
 	}
 	value := uint8(1)
@@ -761,6 +762,7 @@ func TestExperimentalTCPXDPDirectsPlainKernelUDPWithFixedL2(t *testing.T) {
 	inner := ipv4PacketForXDPTCRXDirectTest()
 	missInner := append([]byte(nil), inner...)
 	copy(missInner[16:20], []byte{10, 0, 1, 99})
+	refreshIPv4TCPChecksumForXDPTCRXDirectTest(missInner)
 	packet := mustKernelUDPXDPEthernetFrame(t, kerneludp.Frame{
 		Flags:    kerneludp.FlagInnerIPv4,
 		FlowID:   997,
@@ -776,7 +778,7 @@ func TestExperimentalTCPXDPDirectsPlainKernelUDPWithFixedL2(t *testing.T) {
 		t.Fatalf("XDP UDP RX direct fixed L2 return = %d, want redirect/drop from helper", ret)
 	}
 	if len(run.DataOut) != len(packet)-kernelUDPTXOuterOverhead {
-		t.Fatalf("XDP UDP RX direct fixed L2 data out len = %d, want %d", len(run.DataOut), len(packet)-kernelUDPTXOuterOverhead)
+		t.Fatalf("XDP UDP RX direct fixed L2 data out len = %d, want %d ret=%d stats=%v", len(run.DataOut), len(packet)-kernelUDPTXOuterOverhead, ret, xdpStatsForTest(t, object))
 	}
 	if !bytes.Equal(run.DataOut[:14], []byte{0x02, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0x02, 0x90, 0x91, 0x92, 0x93, 0x94, 0x08, 0x00}) {
 		t.Fatalf("XDP UDP RX direct fixed L2 ethernet header = %x", run.DataOut[:14])
@@ -796,6 +798,7 @@ func TestExperimentalTCPXDPDoesNotDirectPlainKernelUDPWithoutInnerIPv4Flag(t *te
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP RX direct program run requires root")
 	}
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
 	const destinationPort = 9448
 	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_rx_neigh_xdp_noflag_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 4096})
 	defer neighMap.Close()
@@ -813,7 +816,7 @@ func TestExperimentalTCPXDPDoesNotDirectPlainKernelUDPWithoutInnerIPv4Flag(t *te
 		t.Fatalf("load experimental_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueFor(object.configMap, 1, true, true, false); err != nil {
+	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP UDP RX direct: %v", err)
 	}
 	value := uint8(1)
@@ -875,7 +878,7 @@ func TestExperimentalTCPXDPDirectIfindexModeCountsRedirect(t *testing.T) {
 		t.Fatalf("load experimental_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueFor(object.configMap, 1, true, true, false); err != nil {
+	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP UDP RX direct ifindex: %v", err)
 	}
 	value := uint8(1)
@@ -910,7 +913,7 @@ func TestExperimentalTCPXDPDirectIfindexModeCountsRedirect(t *testing.T) {
 		t.Fatalf("XDP UDP RX direct ifindex return = %d, want redirect/drop from helper", ret)
 	}
 	if len(run.DataOut) != len(packet)-kernelUDPTXOuterOverhead {
-		t.Fatalf("XDP UDP RX direct ifindex data out len = %d, want %d", len(run.DataOut), len(packet)-kernelUDPTXOuterOverhead)
+		t.Fatalf("XDP UDP RX direct ifindex data out len = %d, want %d ret=%d stats=%v", len(run.DataOut), len(packet)-kernelUDPTXOuterOverhead, ret, xdpStatsForTest(t, object))
 	}
 	if !bytes.Equal(run.DataOut[:14], []byte{0x02, 0x50, 0x51, 0x52, 0x53, 0x54, 0x02, 0x60, 0x61, 0x62, 0x63, 0x64, 0x08, 0x00}) {
 		t.Fatalf("XDP UDP RX direct ifindex ethernet header = %x", run.DataOut[:14])
@@ -943,7 +946,7 @@ func TestExperimentalTCPXDPDirectsPlainTIXTToLAN(t *testing.T) {
 		t.Fatalf("load experimental_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueFor(object.configMap, 1, true, true, false); err != nil {
+	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP TIXT RX direct: %v", err)
 	}
 	value := uint8(1)
@@ -991,7 +994,7 @@ func TestExperimentalTCPXDPDirectsPlainTIXTToLAN(t *testing.T) {
 		t.Fatalf("XDP TIXT RX direct return = %d, want redirect/drop from devmap helper", ret)
 	}
 	if len(run.DataOut) != len(packet)-80 {
-		t.Fatalf("XDP TIXT RX direct data out len = %d, want %d", len(run.DataOut), len(packet)-80)
+		t.Fatalf("XDP TIXT RX direct data out len = %d, want %d ret=%d stats=%v", len(run.DataOut), len(packet)-80, ret, xdpStatsForTest(t, object))
 	}
 	if !bytes.Equal(run.DataOut[:14], []byte{0x02, 0x30, 0x31, 0x32, 0x33, 0x34, 0x02, 0x40, 0x41, 0x42, 0x43, 0x44, 0x08, 0x00}) {
 		t.Fatalf("XDP TIXT RX direct ethernet header = %x", run.DataOut[:14])
@@ -1054,6 +1057,7 @@ func TestExperimentalTCPXDPDoesNotDirectPlainTIXTWithoutInnerIPv4Flag(t *testing
 	if os.Geteuid() != 0 {
 		t.Skip("experimental_tcp XDP RX direct program run requires root")
 	}
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
 	const destinationPort = 9450
 	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tixt_rx_neigh_xdp_noflag_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 4096})
 	defer neighMap.Close()
@@ -1071,7 +1075,7 @@ func TestExperimentalTCPXDPDoesNotDirectPlainTIXTWithoutInnerIPv4Flag(t *testing
 		t.Fatalf("load experimental_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueFor(object.configMap, 1, true, true, false); err != nil {
+	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP TIXT RX direct: %v", err)
 	}
 	value := uint8(1)
@@ -2251,8 +2255,8 @@ type kernelCryptoCtxStateForTest struct {
 	Packets       uint64
 	Bytes         uint64
 	LastSequence  uint64
-	ReplaySeen    [64]uint64
-	ReplayBlocks  [64]uint64
+	ReplaySeen    [1024]uint64
+	ReplayBlocks  [1024]uint64
 }
 
 func kernelCryptoCtxStateSnapshotForTest(t *testing.T, provider *kernelCryptoProviderObject, key kernelCryptoFlowKey) kernelCryptoCtxStateForTest {
@@ -2271,7 +2275,7 @@ func kernelCryptoCtxStateSnapshotForTest(t *testing.T, provider *kernelCryptoPro
 func xdpStatsForTest(t *testing.T, object *experimentalTCPXDPObject) map[uint32]uint64 {
 	t.Helper()
 	stats := make(map[uint32]uint64)
-	for key := uint32(0); key <= 10; key++ {
+	for key := uint32(0); key <= 50; key++ {
 		value, err := bpfCounterValue(object.xdpStatsMap, key)
 		if err != nil {
 			t.Fatalf("lookup XDP stat %d: %v", key, err)
@@ -2382,7 +2386,21 @@ func ipv4PacketForXDPTCRXDirectTest() []byte {
 	copy(packet[16:20], []byte{10, 0, 1, 2})
 	binary.BigEndian.PutUint16(packet[20:22], 12345)
 	binary.BigEndian.PutUint16(packet[22:24], 443)
+	packet[32] = 0x50
+	packet[33] = 0x10
+	refreshIPv4TCPChecksumForXDPTCRXDirectTest(packet)
 	return packet
+}
+
+func refreshIPv4TCPChecksumForXDPTCRXDirectTest(packet []byte) {
+	if len(packet) < 40 {
+		return
+	}
+	packet[36] = 0
+	packet[37] = 0
+	src := [4]byte{packet[12], packet[13], packet[14], packet[15]}
+	dst := [4]byte{packet[16], packet[17], packet[18], packet[19]}
+	binary.BigEndian.PutUint16(packet[36:38], tcpChecksumBytesForTest(src, dst, packet[20:]))
 }
 
 func ethernetIPv4PacketForXDPTCRXDirectTest(ipv4 []byte) []byte {

@@ -177,6 +177,7 @@ type receivedKernelUDPFrame struct {
 	borrowedKernelPayload   bool
 	encryptedKernelPayload  bool
 	encryptedKernelFragment bool
+	wireInnerIPv4           bool
 	wireSequenceCount       uint64
 }
 
@@ -464,7 +465,11 @@ func (fastPath *experimentalTCPFastPath) SetKernelUDPRXDirectWithOptions(tcDirec
 	if fastPath == nil || fastPath.xdpObject == nil || fastPath.xdpObject.configMap == nil {
 		return nil
 	}
-	config, err := configureExperimentalTCPBPFConfigValueForOptions(fastPath.xdpObject.configMap, fastPath.queueCount, tcDirect, xdpDirect, tcSecureDirect, options)
+	queueCount := fastPath.queueCount
+	if queueCount <= 0 {
+		queueCount = fastPath.QueueCount()
+	}
+	config, err := configureExperimentalTCPBPFConfigValueForOptions(fastPath.xdpObject.configMap, queueCount, tcDirect, xdpDirect, tcSecureDirect, options)
 	if err != nil {
 		return err
 	}
@@ -1890,14 +1895,14 @@ func nextAFXDPRXIdlePollTimeout(current int, config experimentalTCPRXPollConfig)
 	if config.IdleTimeoutMS <= config.BaseTimeoutMS {
 		return config.BaseTimeoutMS
 	}
-	if current < config.BaseTimeoutMS {
-		current = config.BaseTimeoutMS
-	}
 	if current <= 0 {
 		if config.IdleTimeoutMS > 1 {
 			return 1
 		}
 		return config.IdleTimeoutMS
+	}
+	if current < config.BaseTimeoutMS {
+		current = config.BaseTimeoutMS
 	}
 	next := current * 2
 	if next < current || next > config.IdleTimeoutMS {

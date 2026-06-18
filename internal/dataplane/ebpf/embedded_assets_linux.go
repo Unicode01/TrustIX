@@ -49,6 +49,12 @@ func EmbeddedAssets() []EmbeddedAsset {
 			},
 		},
 		{
+			name: "kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o",
+			read: func() ([]byte, error) {
+				return kernelUDPTXSecureDirectFS.ReadFile("bpf/kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o")
+			},
+		},
+		{
 			name: "kernel_udp_rx_kernel_crypto_tc_bpfel.o",
 			read: func() ([]byte, error) {
 				return kernelUDPRXSecureDirectFS.ReadFile("bpf/kernel_udp_rx_kernel_crypto_tc_bpfel.o")

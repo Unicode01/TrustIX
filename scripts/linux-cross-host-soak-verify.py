@@ -119,6 +119,33 @@ def parse_args() -> argparse.Namespace:
         help="require at least two collected binary-identity.json files and verify their sha256 values match",
     )
     parser.add_argument(
+        "--require-status-stat",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require every collected status.json to contain PATH with VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-status-min",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require every collected status.json to contain numeric PATH >= VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-status-max",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require every collected status.json to contain numeric PATH <= VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--min-status-json",
+        type=int,
+        default=0,
+        help="minimum number of status.json files expected; defaults to 2 when status requirements are used",
+    )
+    parser.add_argument(
         "--require-datapath-stat",
         action="append",
         default=[],
@@ -126,10 +153,84 @@ def parse_args() -> argparse.Namespace:
         help="require every collected datapath.json to contain PATH with VALUE; may be repeated",
     )
     parser.add_argument(
+        "--require-datapath-min",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require every collected datapath.json to contain numeric PATH >= VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-datapath-any-min",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require at least one collected datapath.json to contain numeric PATH >= VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-datapath-max",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require every collected datapath.json to contain numeric PATH <= VALUE; may be repeated",
+    )
+    parser.add_argument(
         "--min-datapath-json",
         type=int,
         default=0,
-        help="minimum number of datapath.json files expected; defaults to 2 when --require-datapath-stat is used",
+        help="minimum number of datapath.json files expected; defaults to 2 when datapath requirements are used",
+    )
+    parser.add_argument(
+        "--require-module-param-min",
+        action="append",
+        default=[],
+        metavar="MODULE.PARAM=VALUE",
+        help="require every collected module-parameters.txt to contain numeric MODULE.PARAM >= VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-module-param-any-min",
+        action="append",
+        default=[],
+        metavar="MODULE.PARAM=VALUE",
+        help="require at least one collected module-parameters.txt to contain numeric MODULE.PARAM >= VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-module-param-max",
+        action="append",
+        default=[],
+        metavar="MODULE.PARAM=VALUE",
+        help="require every collected module-parameters.txt to contain numeric MODULE.PARAM <= VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--min-module-parameters",
+        type=int,
+        default=0,
+        help="minimum number of module-parameters.txt files expected; defaults to 2 when module-parameter requirements are used",
+    )
+    parser.add_argument(
+        "--require-transport-policy-min",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require every collected transports.json policy to contain numeric PATH >= VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-transport-policy-stat",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require every collected transports.json policy to contain PATH with VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-transport-sessions-min",
+        type=int,
+        default=0,
+        help="require every collected transports.json to report at least this many sessions",
+    )
+    parser.add_argument(
+        "--min-transports-json",
+        type=int,
+        default=0,
+        help="minimum number of transports.json files expected; defaults to 2 when transport requirements are used",
     )
     return parser.parse_args()
 
@@ -159,6 +260,40 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
     end = payload.get("end") or {}
     rows: list[dict[str, Any]] = []
 
+    def interval_stats() -> dict[str, Any]:
+        intervals = payload.get("intervals") or []
+        values: list[float] = []
+        retransmits = 0
+        for interval in intervals:
+            if not isinstance(interval, dict):
+                continue
+            summary = interval.get("sum") or {}
+            if not isinstance(summary, dict):
+                continue
+            values.append(float(summary.get("bits_per_second") or 0) / 1e9)
+            retransmits += int(summary.get("retransmits") or 0)
+        if not values:
+            return {
+                "intervals": 0,
+                "min_gbps": 0.0,
+                "max_gbps": 0.0,
+                "first_10_avg_gbps": 0.0,
+                "last_10_avg_gbps": 0.0,
+                "retransmits": retransmits,
+            }
+        first = values[:10]
+        last = values[-10:]
+        return {
+            "intervals": len(values),
+            "min_gbps": min(values),
+            "max_gbps": max(values),
+            "first_10_avg_gbps": sum(first) / len(first),
+            "last_10_avg_gbps": sum(last) / len(last),
+            "retransmits": retransmits,
+        }
+
+    stats = interval_stats()
+
     def append_pair(
         direction: str,
         sent_key: str,
@@ -175,7 +310,7 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
         seconds = float(received.get("seconds") or sent.get("seconds") or 0)
         sent_sender = sent.get("sender")
         received_sender = received.get("sender")
-        sent_required = sent_bps > 0 or sent_sender is True or sent_sender is None
+        sent_required = sent_bps > 0 or sent_sender is True
         received_required = default_require_received
         if direction == "reverse" and received_bps == 0 and received_sender is True and sent_bps > 0:
             # iperf3 server-side --bidir JSON reports the reverse sender stream
@@ -190,6 +325,13 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
                 "seconds": seconds,
                 "sent_required": sent_required,
                 "received_required": received_required,
+                "intervals": stats["intervals"],
+                "interval_min_gbps": stats["min_gbps"],
+                "interval_max_gbps": stats["max_gbps"],
+                "interval_first_10_avg_gbps": stats["first_10_avg_gbps"],
+                "interval_last_10_avg_gbps": stats["last_10_avg_gbps"],
+                "retransmits": int(sent.get("retransmits") or stats["retransmits"]),
+                "interval_retransmits": stats["retransmits"],
             }
         )
 
@@ -265,6 +407,79 @@ def collect_status_build_identities(case_dir: Path) -> list[dict[str, Any]]:
     return identities
 
 
+def validate_status_stats(
+    case_dir: Path,
+    *,
+    required: list[tuple[str, str]],
+    required_minima: list[tuple[str, float]],
+    required_maxima: list[tuple[str, float]],
+    min_status_json: int,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    status_files = sorted(case_dir.rglob("status.json"))
+    rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    if len(status_files) < min_status_json:
+        errors.append(
+            f"found {len(status_files)} status.json files, want >= {min_status_json}"
+        )
+    if (required or required_minima or required_maxima) and not status_files:
+        return rows, errors, len(status_files)
+    for path in status_files:
+        rel = str(path.relative_to(case_dir))
+        try:
+            payload = read_json(path)
+        except Exception as exc:  # noqa: BLE001 - artifact validation should report and continue.
+            errors.append(f"{rel}: parse status JSON: {exc}")
+            continue
+        values: dict[str, Any] = {}
+        for dotted_path, expected in required:
+            try:
+                actual = datapath_value(payload, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing status stat {dotted_path!r}")
+                continue
+            values[dotted_path] = actual
+            if not datapath_value_matches(actual, expected):
+                errors.append(
+                    f"{rel}: status stat {dotted_path}={actual!r}, want {expected!r}"
+                )
+        for dotted_path, minimum in required_minima:
+            try:
+                actual = datapath_value(payload, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing status stat {dotted_path!r}")
+                continue
+            values[dotted_path] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(f"{rel}: status stat {dotted_path}={actual!r} is not numeric")
+                continue
+            if actual_number < minimum:
+                errors.append(
+                    f"{rel}: status stat {dotted_path}={actual_number:g}, want >= {minimum:g}"
+                )
+        for dotted_path, maximum in required_maxima:
+            try:
+                actual = datapath_value(payload, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing status stat {dotted_path!r}")
+                continue
+            values[dotted_path] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(f"{rel}: status stat {dotted_path}={actual!r} is not numeric")
+                continue
+            if actual_number > maximum:
+                errors.append(
+                    f"{rel}: status stat {dotted_path}={actual_number:g}, want <= {maximum:g}"
+                )
+        if values:
+            rows.append({"file": rel, "values": values})
+    return rows, errors, len(status_files)
+
+
 def collect_binary_identities(case_dir: Path) -> list[dict[str, Any]]:
     identities: list[dict[str, Any]] = []
     for path in sorted(case_dir.rglob("binary-identity.json")):
@@ -304,6 +519,22 @@ def parse_required_datapath_stats(raw_items: list[str]) -> list[tuple[str, str]]
     return required
 
 
+def parse_required_numeric_limits(raw_items: list[str], flag: str) -> list[tuple[str, float]]:
+    required: list[tuple[str, float]] = []
+    for raw in raw_items:
+        path, sep, value = raw.partition("=")
+        path = path.strip()
+        value = value.strip()
+        if not sep or not path:
+            raise SystemExit(f"invalid {flag} {raw!r}; expected PATH=VALUE")
+        try:
+            minimum = float(value)
+        except ValueError as exc:
+            raise SystemExit(f"invalid {flag} {raw!r}; VALUE must be numeric") from exc
+        required.append((path, minimum))
+    return required
+
+
 def datapath_value(payload: Any, dotted_path: str) -> Any:
     current = payload
     for part in dotted_path.split("."):
@@ -331,20 +562,40 @@ def datapath_value_matches(actual: Any, expected: str) -> bool:
     return str(actual) == expected
 
 
+def numeric_value(actual: Any) -> float:
+    if isinstance(actual, bool):
+        return 1.0 if actual else 0.0
+    if isinstance(actual, (int, float)):
+        return float(actual)
+    text = str(actual).strip()
+    truthy = {"y", "yes", "true", "on", "enabled"}
+    falsey = {"n", "no", "false", "off", "disabled"}
+    lower = text.lower()
+    if lower in truthy:
+        return 1.0
+    if lower in falsey or text == "":
+        return 0.0
+    return float(text)
+
+
 def validate_datapath_stats(
     case_dir: Path,
     *,
     required: list[tuple[str, str]],
+    required_minima: list[tuple[str, float]],
+    required_any_minima: list[tuple[str, float]],
+    required_maxima: list[tuple[str, float]],
     min_datapath_json: int,
 ) -> tuple[list[dict[str, Any]], list[str], int]:
     datapath_files = sorted(case_dir.rglob("datapath.json"))
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
+    any_hits = {dotted_path: False for dotted_path, _ in required_any_minima}
     if len(datapath_files) < min_datapath_json:
         errors.append(
             f"found {len(datapath_files)} datapath.json files, want >= {min_datapath_json}"
         )
-    if required and not datapath_files:
+    if (required or required_minima or required_any_minima or required_maxima) and not datapath_files:
         return rows, errors, len(datapath_files)
     for path in datapath_files:
         rel = str(path.relative_to(case_dir))
@@ -365,9 +616,267 @@ def validate_datapath_stats(
                 errors.append(
                     f"{rel}: datapath stat {dotted_path}={actual!r}, want {expected!r}"
                 )
+        for dotted_path, minimum in required_minima:
+            try:
+                actual = datapath_value(payload, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing datapath stat {dotted_path!r}")
+                continue
+            values[dotted_path] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(f"{rel}: datapath stat {dotted_path}={actual!r} is not numeric")
+                continue
+            if actual_number < minimum:
+                errors.append(
+                    f"{rel}: datapath stat {dotted_path}={actual_number:g}, want >= {minimum:g}"
+                )
+        for dotted_path, minimum in required_any_minima:
+            try:
+                actual = datapath_value(payload, dotted_path)
+            except KeyError:
+                continue
+            values[dotted_path] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(f"{rel}: datapath stat {dotted_path}={actual!r} is not numeric")
+                continue
+            if actual_number >= minimum:
+                any_hits[dotted_path] = True
+        for dotted_path, maximum in required_maxima:
+            try:
+                actual = datapath_value(payload, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing datapath stat {dotted_path!r}")
+                continue
+            values[dotted_path] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(f"{rel}: datapath stat {dotted_path}={actual!r} is not numeric")
+                continue
+            if actual_number > maximum:
+                errors.append(
+                    f"{rel}: datapath stat {dotted_path}={actual_number:g}, want <= {maximum:g}"
+                )
         if values:
             rows.append({"file": rel, "values": values})
+    for dotted_path, minimum in required_any_minima:
+        if not any_hits.get(dotted_path, False):
+            errors.append(
+                f"no collected datapath stat {dotted_path!r} reached >= {minimum:g}"
+            )
     return rows, errors, len(datapath_files)
+
+
+def parse_module_parameters(path: Path) -> dict[str, dict[str, str]]:
+    modules: dict[str, dict[str, str]] = {}
+    current = ""
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("=====") and line.endswith("====="):
+            current = line.strip("= ").strip()
+            modules.setdefault(current, {})
+            continue
+        if not current or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        modules.setdefault(current, {})[name.strip()] = value.strip()
+    return modules
+
+
+def module_parameter_value(modules: dict[str, dict[str, str]], dotted_path: str) -> str:
+    module, sep, param = dotted_path.partition(".")
+    if not sep or not module or not param:
+        raise KeyError(dotted_path)
+    return modules[module][param]
+
+
+def validate_module_parameters(
+    case_dir: Path,
+    *,
+    required_minima: list[tuple[str, float]],
+    required_any_minima: list[tuple[str, float]],
+    required_maxima: list[tuple[str, float]],
+    min_module_parameters: int,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    files = sorted(case_dir.rglob("module-parameters.txt"))
+    rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    any_hits: dict[str, bool] = {
+        dotted_path: False for dotted_path, _ in required_any_minima
+    }
+    if len(files) < min_module_parameters:
+        errors.append(
+            f"found {len(files)} module-parameters.txt files, want >= {min_module_parameters}"
+        )
+    if (required_minima or required_any_minima or required_maxima) and not files:
+        return rows, errors, len(files)
+    for path in files:
+        rel = str(path.relative_to(case_dir))
+        try:
+            modules = parse_module_parameters(path)
+        except OSError as exc:
+            errors.append(f"{rel}: read module parameters: {exc}")
+            continue
+        values: dict[str, Any] = {}
+        for dotted_path, minimum in required_minima:
+            try:
+                actual = module_parameter_value(modules, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing module parameter {dotted_path!r}")
+                continue
+            values[dotted_path] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(f"{rel}: module parameter {dotted_path}={actual!r} is not numeric")
+                continue
+            if actual_number < minimum:
+                errors.append(
+                    f"{rel}: module parameter {dotted_path}={actual_number:g}, want >= {minimum:g}"
+                )
+        for dotted_path, minimum in required_any_minima:
+            try:
+                actual = module_parameter_value(modules, dotted_path)
+            except KeyError:
+                continue
+            values[dotted_path] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(f"{rel}: module parameter {dotted_path}={actual!r} is not numeric")
+                continue
+            if actual_number >= minimum:
+                any_hits[dotted_path] = True
+        for dotted_path, maximum in required_maxima:
+            try:
+                actual = module_parameter_value(modules, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing module parameter {dotted_path!r}")
+                continue
+            values[dotted_path] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(f"{rel}: module parameter {dotted_path}={actual!r} is not numeric")
+                continue
+            if actual_number > maximum:
+                errors.append(
+                    f"{rel}: module parameter {dotted_path}={actual_number:g}, want <= {maximum:g}"
+                )
+        if values:
+            rows.append({"file": rel, "values": values})
+    for dotted_path, minimum in required_any_minima:
+        if not any_hits.get(dotted_path, False):
+            errors.append(
+                f"no collected module parameter {dotted_path!r} reached >= {minimum:g}"
+            )
+    return rows, errors, len(files)
+
+
+def collect_transports_json(case_dir: Path) -> list[tuple[Path, Any]]:
+    payloads: list[tuple[Path, Any]] = []
+    for path in sorted(case_dir.rglob("transports*.json")):
+        try:
+            payloads.append((path, read_json(path)))
+        except Exception:
+            payloads.append((path, None))
+    return payloads
+
+
+def transport_policy_value(payload: Any, dotted_path: str) -> Any:
+    policy = datapath_value(payload, "policy")
+    return datapath_value(policy, dotted_path)
+
+
+def transport_node_key(path: Path, case_dir: Path) -> str:
+    parts = path.relative_to(case_dir).parts
+    for part in parts[:-1]:
+        if part in {"a", "b"}:
+            return part
+    return "__all__"
+
+
+def validate_transports(
+    case_dir: Path,
+    *,
+    required_policy_stats: list[tuple[str, str]],
+    required_policy_minima: list[tuple[str, float]],
+    required_sessions_min: int,
+    min_transports_json: int,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    payloads = collect_transports_json(case_dir)
+    rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    session_counts_by_node: dict[str, list[tuple[str, int]]] = {}
+    if len(payloads) < min_transports_json:
+        errors.append(
+            f"found {len(payloads)} transports.json files, want >= {min_transports_json}"
+        )
+    if (
+        required_policy_stats
+        or required_policy_minima
+        or required_sessions_min > 0
+    ) and not payloads:
+        return rows, errors, len(payloads)
+    for path, payload in payloads:
+        rel = str(path.relative_to(case_dir))
+        if payload is None:
+            errors.append(f"{rel}: parse transports JSON failed")
+            continue
+        values: dict[str, Any] = {}
+        for dotted_path, expected in required_policy_stats:
+            try:
+                actual = transport_policy_value(payload, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing transport policy stat {dotted_path!r}")
+                continue
+            values[f"policy.{dotted_path}"] = actual
+            if not datapath_value_matches(actual, expected):
+                errors.append(
+                    f"{rel}: transport policy {dotted_path}={actual!r}, want {expected!r}"
+                )
+        for dotted_path, minimum in required_policy_minima:
+            try:
+                actual = transport_policy_value(payload, dotted_path)
+            except KeyError:
+                errors.append(f"{rel}: missing transport policy stat {dotted_path!r}")
+                continue
+            values[f"policy.{dotted_path}"] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"{rel}: transport policy {dotted_path}={actual!r} is not numeric"
+                )
+                continue
+            if actual_number < minimum:
+                errors.append(
+                    f"{rel}: transport policy {dotted_path}={actual_number:g}, want >= {minimum:g}"
+                )
+        if required_sessions_min > 0:
+            sessions = payload.get("sessions") if isinstance(payload, dict) else None
+            count = len(sessions) if isinstance(sessions, list) else 0
+            values["sessions"] = count
+            node_key = transport_node_key(path, case_dir)
+            session_counts_by_node.setdefault(node_key, []).append((rel, count))
+        if values:
+            rows.append({"file": rel, "values": values})
+    if required_sessions_min > 0:
+        for node_key, counts in sorted(session_counts_by_node.items()):
+            if not counts:
+                continue
+            best_rel, best_count = max(counts, key=lambda item: item[1])
+            if best_count < required_sessions_min:
+                errors.append(
+                    f"{best_rel}: transport sessions={best_count}, want >= {required_sessions_min}"
+                )
+    return rows, errors, len(payloads)
 
 
 def validate_case(
@@ -382,8 +891,23 @@ def validate_case(
     require_build_identity: bool,
     require_strong_build_identity: bool,
     require_binary_identity: bool,
+    required_status_stats: list[tuple[str, str]],
+    required_status_minima: list[tuple[str, float]],
+    required_status_maxima: list[tuple[str, float]],
+    min_status_json: int,
     required_datapath_stats: list[tuple[str, str]],
+    required_datapath_minima: list[tuple[str, float]],
+    required_datapath_any_minima: list[tuple[str, float]],
+    required_datapath_maxima: list[tuple[str, float]],
     min_datapath_json: int,
+    required_module_param_minima: list[tuple[str, float]],
+    required_module_param_any_minima: list[tuple[str, float]],
+    required_module_param_maxima: list[tuple[str, float]],
+    min_module_parameters: int,
+    required_transport_policy_stats: list[tuple[str, str]],
+    required_transport_policy_minima: list[tuple[str, float]],
+    required_transport_sessions_min: int,
+    min_transports_json: int,
 ) -> dict[str, Any]:
     errors: list[str] = []
     if not case.path.is_dir():
@@ -398,7 +922,11 @@ def validate_case(
     if require_result_marker and not marker_ok:
         errors.append(f"missing or non-pass result marker: {marker_values!r}")
 
-    iperf_files = sorted(case.path.rglob("*iperf*.json"))
+    iperf_files = sorted(
+        path
+        for path in case.path.rglob("*iperf*.json")
+        if not path.name.startswith("transports")
+    )
 
     iperf_results: list[dict[str, Any]] = []
     for path in iperf_files:
@@ -427,6 +955,17 @@ def validate_case(
                     "seconds": round(seconds, 6),
                     "sent_required": sent_required,
                     "received_required": received_required,
+                    "intervals": int(item.get("intervals") or 0),
+                    "interval_min_gbps": round(float(item.get("interval_min_gbps") or 0), 6),
+                    "interval_max_gbps": round(float(item.get("interval_max_gbps") or 0), 6),
+                    "interval_first_10_avg_gbps": round(
+                        float(item.get("interval_first_10_avg_gbps") or 0), 6
+                    ),
+                    "interval_last_10_avg_gbps": round(
+                        float(item.get("interval_last_10_avg_gbps") or 0), 6
+                    ),
+                    "retransmits": int(item.get("retransmits") or 0),
+                    "interval_retransmits": int(item.get("interval_retransmits") or 0),
                 }
             )
             label = rel if direction == "forward" else f"{rel}:{direction}"
@@ -487,12 +1026,39 @@ def validate_case(
     if len(binary_sha256s) > 1:
         errors.append("binary identity sha256 mismatch across hosts")
 
+    status_stat_results, status_stat_errors, status_json_count = validate_status_stats(
+        case.path,
+        required=required_status_stats,
+        required_minima=required_status_minima,
+        required_maxima=required_status_maxima,
+        min_status_json=min_status_json,
+    )
+    errors.extend(status_stat_errors)
     datapath_stat_results, datapath_stat_errors, datapath_json_count = validate_datapath_stats(
         case.path,
         required=required_datapath_stats,
+        required_minima=required_datapath_minima,
+        required_any_minima=required_datapath_any_minima,
+        required_maxima=required_datapath_maxima,
         min_datapath_json=min_datapath_json,
     )
     errors.extend(datapath_stat_errors)
+    module_param_results, module_param_errors, module_param_count = validate_module_parameters(
+        case.path,
+        required_minima=required_module_param_minima,
+        required_any_minima=required_module_param_any_minima,
+        required_maxima=required_module_param_maxima,
+        min_module_parameters=min_module_parameters,
+    )
+    errors.extend(module_param_errors)
+    transport_results, transport_errors, transports_json_count = validate_transports(
+        case.path,
+        required_policy_stats=required_transport_policy_stats,
+        required_policy_minima=required_transport_policy_minima,
+        required_sessions_min=required_transport_sessions_min,
+        min_transports_json=min_transports_json,
+    )
+    errors.extend(transport_errors)
 
     min_sent = min(
         (item["sent_gbps"] for item in iperf_results if item.get("sent_required")),
@@ -522,8 +1088,14 @@ def validate_case(
         "log_findings": log_findings,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
+        "status_json_count": status_json_count,
+        "status_stats": status_stat_results,
         "datapath_json_count": datapath_json_count,
         "datapath_stats": datapath_stat_results,
+        "module_parameters_count": module_param_count,
+        "module_parameters": module_param_results,
+        "transports_json_count": transports_json_count,
+        "transports": transport_results,
         "errors": errors,
     }
 
@@ -546,12 +1118,86 @@ def main() -> int:
         raise SystemExit("--seconds-slop must be non-negative")
     if args.min_iperf_json < 0:
         raise SystemExit("--min-iperf-json must be non-negative")
+    required_status_stats = parse_required_datapath_stats(args.require_status_stat)
+    required_status_minima = parse_required_numeric_limits(
+        args.require_status_min,
+        "--require-status-min",
+    )
+    required_status_maxima = parse_required_numeric_limits(
+        args.require_status_max,
+        "--require-status-max",
+    )
     required_datapath_stats = parse_required_datapath_stats(args.require_datapath_stat)
+    required_datapath_minima = parse_required_numeric_limits(
+        args.require_datapath_min,
+        "--require-datapath-min",
+    )
+    required_datapath_any_minima = parse_required_numeric_limits(
+        args.require_datapath_any_min,
+        "--require-datapath-any-min",
+    )
+    required_datapath_maxima = parse_required_numeric_limits(
+        args.require_datapath_max,
+        "--require-datapath-max",
+    )
+    required_module_param_minima = parse_required_numeric_limits(
+        args.require_module_param_min,
+        "--require-module-param-min",
+    )
+    required_module_param_any_minima = parse_required_numeric_limits(
+        args.require_module_param_any_min,
+        "--require-module-param-any-min",
+    )
+    required_module_param_maxima = parse_required_numeric_limits(
+        args.require_module_param_max,
+        "--require-module-param-max",
+    )
+    required_transport_policy_stats = parse_required_datapath_stats(
+        args.require_transport_policy_stat
+    )
+    required_transport_policy_minima = parse_required_numeric_limits(
+        args.require_transport_policy_min,
+        "--require-transport-policy-min",
+    )
+    if args.min_status_json < 0:
+        raise SystemExit("--min-status-json must be non-negative")
     if args.min_datapath_json < 0:
         raise SystemExit("--min-datapath-json must be non-negative")
+    if args.min_module_parameters < 0:
+        raise SystemExit("--min-module-parameters must be non-negative")
+    if args.min_transports_json < 0:
+        raise SystemExit("--min-transports-json must be non-negative")
+    if args.require_transport_sessions_min < 0:
+        raise SystemExit("--require-transport-sessions-min must be non-negative")
+    min_status_json = args.min_status_json
+    if (
+        required_status_stats
+        or required_status_minima
+        or required_status_maxima
+    ) and min_status_json == 0:
+        min_status_json = 2
     min_datapath_json = args.min_datapath_json
-    if required_datapath_stats and min_datapath_json == 0:
+    if (
+        required_datapath_stats
+        or required_datapath_minima
+        or required_datapath_any_minima
+        or required_datapath_maxima
+    ) and min_datapath_json == 0:
         min_datapath_json = 2
+    min_module_parameters = args.min_module_parameters
+    if (
+        required_module_param_minima
+        or required_module_param_any_minima
+        or required_module_param_maxima
+    ) and min_module_parameters == 0:
+        min_module_parameters = 2
+    min_transports_json = args.min_transports_json
+    if (
+        required_transport_policy_stats
+        or required_transport_policy_minima
+        or args.require_transport_sessions_min > 0
+    ) and min_transports_json == 0:
+        min_transports_json = 2
 
     rows = [
         validate_case(
@@ -565,8 +1211,23 @@ def main() -> int:
             require_build_identity=args.require_build_identity,
             require_strong_build_identity=args.require_strong_build_identity,
             require_binary_identity=args.require_binary_identity,
+            required_status_stats=required_status_stats,
+            required_status_minima=required_status_minima,
+            required_status_maxima=required_status_maxima,
+            min_status_json=min_status_json,
             required_datapath_stats=required_datapath_stats,
+            required_datapath_minima=required_datapath_minima,
+            required_datapath_any_minima=required_datapath_any_minima,
+            required_datapath_maxima=required_datapath_maxima,
             min_datapath_json=min_datapath_json,
+            required_module_param_minima=required_module_param_minima,
+            required_module_param_any_minima=required_module_param_any_minima,
+            required_module_param_maxima=required_module_param_maxima,
+            min_module_parameters=min_module_parameters,
+            required_transport_policy_stats=required_transport_policy_stats,
+            required_transport_policy_minima=required_transport_policy_minima,
+            required_transport_sessions_min=args.require_transport_sessions_min,
+            min_transports_json=min_transports_json,
         )
         for case in parse_cases(args)
     ]

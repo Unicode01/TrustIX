@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
+
+var testVethNameCounter atomic.Uint32
 
 func TestPacketSocketGSOErrnoUnwrapsSyscallErrors(t *testing.T) {
 	err := fmt.Errorf("sendmsg wrapper: %w", &os.SyscallError{Syscall: "sendmsg", Err: unix.EINVAL})
@@ -475,9 +478,11 @@ func TestResolveIPv4NeighborPrefersVethPeerMAC(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root to create veth pair")
 	}
-	suffix := fmt.Sprintf("%d", os.Getpid()%100000)
+	suffix := fmt.Sprintf("%03d%04x", os.Getpid()%1000, testVethNameCounter.Add(1)&0xffff)
 	hostName := "tixh" + suffix
 	peerName := "tixp" + suffix
+	hostMAC := net.HardwareAddr{0x02, 0x54, 0x49, 0x58, byte(testVethNameCounter.Load() >> 8), byte(testVethNameCounter.Load())}
+	peerMAC := net.HardwareAddr{0x02, 0x54, 0x49, 0x59, byte(testVethNameCounter.Load() >> 8), byte(testVethNameCounter.Load())}
 	_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}})
 	t.Cleanup(func() {
 		_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}})
@@ -485,8 +490,9 @@ func TestResolveIPv4NeighborPrefersVethPeerMAC(t *testing.T) {
 	})
 
 	if err := netlink.LinkAdd(&netlink.Veth{
-		LinkAttrs: netlink.LinkAttrs{Name: hostName},
-		PeerName:  peerName,
+		LinkAttrs:        netlink.LinkAttrs{Name: hostName, HardwareAddr: hostMAC},
+		PeerName:         peerName,
+		PeerHardwareAddr: peerMAC,
 	}); err != nil {
 		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
 			t.Skipf("requires CAP_NET_ADMIN to create veth pair: %v", err)
@@ -510,8 +516,19 @@ func TestResolveIPv4NeighborPrefersVethPeerMAC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve veth neighbor: %v", err)
 	}
+	peer, err = netlink.LinkByName(peerName)
+	if err != nil {
+		t.Fatalf("refresh peer veth after resolve: %v", err)
+	}
 	if !hardwareAddrEqual6(got, peer.Attrs().HardwareAddr) {
-		t.Fatalf("resolved MAC = %s, want peer %s", got, peer.Attrs().HardwareAddr)
+		target, warning := vethPeerOffloadTarget(host)
+		byIndex, byIndexErr := netlink.LinkByIndex(host.Attrs().ParentIndex)
+		byName, byNameErr := netlink.LinkByName(peerName)
+		t.Fatalf("resolved MAC = %s, want peer %s; host=%s idx=%d parent=%d peer=%s idx=%d parent=%d target=%+v warning=%q byIndex=%s/%v byName=%s/%v",
+			got, peer.Attrs().HardwareAddr,
+			host.Attrs().HardwareAddr, host.Attrs().Index, host.Attrs().ParentIndex,
+			peer.Attrs().HardwareAddr, peer.Attrs().Index, peer.Attrs().ParentIndex,
+			target, warning, linkDebugString(byIndex), byIndexErr, linkDebugString(byName), byNameErr)
 	}
 	if hardwareAddrEqual6(got, host.Attrs().HardwareAddr) {
 		t.Fatalf("resolved own veth MAC %s, want peer %s", got, peer.Attrs().HardwareAddr)
@@ -520,6 +537,13 @@ func TestResolveIPv4NeighborPrefersVethPeerMAC(t *testing.T) {
 	if !ok || !hardwareAddrEqual6(cached, net.HardwareAddr(peer.Attrs().HardwareAddr)) {
 		t.Fatalf("cached MAC = %s ok=%v, want peer %s", cached, ok, peer.Attrs().HardwareAddr)
 	}
+}
+
+func linkDebugString(link netlink.Link) string {
+	if link == nil || link.Attrs() == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%s idx=%d parent=%d hw=%s", link.Attrs().Name, link.Attrs().Index, link.Attrs().ParentIndex, link.Attrs().HardwareAddr)
 }
 
 func TestNeighborCacheResolvedInvalidatesOnNextHopChange(t *testing.T) {

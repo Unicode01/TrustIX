@@ -597,6 +597,7 @@
   "reinject": "回注",
   "rx_worker_injected": "RX worker 已注入",
   "submitted": "已提交",
+  "tx_plaintext_hook": "TX 明文 hook",
   "userspace_fallback": "用户态回退",
   "zero_copy": "零拷贝",
   "access": "接入",

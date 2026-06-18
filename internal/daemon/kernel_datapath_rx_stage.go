@@ -73,37 +73,43 @@ type kernelDatapathRXStageRuntime struct {
 }
 
 type kernelDatapathRXStageStatus struct {
-	Enabled          bool      `json:"enabled,omitempty"`
-	Active           bool      `json:"active,omitempty"`
-	Mode             string    `json:"mode,omitempty"`
-	Attached         bool      `json:"attached,omitempty"`
-	IfName           string    `json:"ifname,omitempty"`
-	IfIndex          int32     `json:"ifindex,omitempty"`
-	TargetIfName     string    `json:"target_ifname,omitempty"`
-	TargetIfIndex    int32     `json:"target_ifindex,omitempty"`
-	Flags            uint32    `json:"flags,omitempty"`
-	QueueLen         uint32    `json:"queue_len,omitempty"`
-	Capacity         uint32    `json:"capacity,omitempty"`
-	Staged           uint64    `json:"staged,omitempty"`
-	Popped           uint64    `json:"popped,omitempty"`
-	Dropped          uint64    `json:"dropped,omitempty"`
-	Overwritten      uint64    `json:"overwritten,omitempty"`
-	Polls            uint64    `json:"polls,omitempty"`
-	EmptyPolls       uint64    `json:"empty_polls,omitempty"`
-	Packets          uint64    `json:"packets,omitempty"`
-	Batches          uint64    `json:"batches,omitempty"`
-	Errors           uint64    `json:"errors,omitempty"`
-	RXWorker         uint64    `json:"rx_worker,omitempty"`
-	RXWorkerErrors   uint64    `json:"rx_worker_errors,omitempty"`
-	RXWorkerInjected uint64    `json:"rx_worker_injected,omitempty"`
-	RXWorkerDropped  uint64    `json:"rx_worker_dropped,omitempty"`
-	LastError        string    `json:"last_error,omitempty"`
-	LastStopped      string    `json:"last_stopped,omitempty"`
-	StartedAt        time.Time `json:"started_at,omitempty"`
-	DisabledReason   string    `json:"disabled_reason,omitempty"`
-	InactiveReason   string    `json:"inactive_reason,omitempty"`
-	BatchSize        int       `json:"batch_size,omitempty"`
-	IdleDelayMillis  int64     `json:"idle_delay_ms,omitempty"`
+	Enabled                  bool      `json:"enabled,omitempty"`
+	Active                   bool      `json:"active,omitempty"`
+	Mode                     string    `json:"mode,omitempty"`
+	Attached                 bool      `json:"attached,omitempty"`
+	IfName                   string    `json:"ifname,omitempty"`
+	IfIndex                  int32     `json:"ifindex,omitempty"`
+	TargetIfName             string    `json:"target_ifname,omitempty"`
+	TargetIfIndex            int32     `json:"target_ifindex,omitempty"`
+	Flags                    uint32    `json:"flags,omitempty"`
+	TXPlaintextAttached      bool      `json:"tx_plaintext_attached,omitempty"`
+	TXPlaintextIfName        string    `json:"tx_plaintext_ifname,omitempty"`
+	TXPlaintextIfIndex       int32     `json:"tx_plaintext_ifindex,omitempty"`
+	TXPlaintextTargetIfName  string    `json:"tx_plaintext_target_ifname,omitempty"`
+	TXPlaintextTargetIfIndex int32     `json:"tx_plaintext_target_ifindex,omitempty"`
+	TXPlaintextFlags         uint32    `json:"tx_plaintext_flags,omitempty"`
+	QueueLen                 uint32    `json:"queue_len,omitempty"`
+	Capacity                 uint32    `json:"capacity,omitempty"`
+	Staged                   uint64    `json:"staged,omitempty"`
+	Popped                   uint64    `json:"popped,omitempty"`
+	Dropped                  uint64    `json:"dropped,omitempty"`
+	Overwritten              uint64    `json:"overwritten,omitempty"`
+	Polls                    uint64    `json:"polls,omitempty"`
+	EmptyPolls               uint64    `json:"empty_polls,omitempty"`
+	Packets                  uint64    `json:"packets,omitempty"`
+	Batches                  uint64    `json:"batches,omitempty"`
+	Errors                   uint64    `json:"errors,omitempty"`
+	RXWorker                 uint64    `json:"rx_worker,omitempty"`
+	RXWorkerErrors           uint64    `json:"rx_worker_errors,omitempty"`
+	RXWorkerInjected         uint64    `json:"rx_worker_injected,omitempty"`
+	RXWorkerDropped          uint64    `json:"rx_worker_dropped,omitempty"`
+	LastError                string    `json:"last_error,omitempty"`
+	LastStopped              string    `json:"last_stopped,omitempty"`
+	StartedAt                time.Time `json:"started_at,omitempty"`
+	DisabledReason           string    `json:"disabled_reason,omitempty"`
+	InactiveReason           string    `json:"inactive_reason,omitempty"`
+	BatchSize                int       `json:"batch_size,omitempty"`
+	IdleDelayMillis          int64     `json:"idle_delay_ms,omitempty"`
 }
 
 var kernelDatapathRXStageOpenDriver = openKernelDatapathRXStageDriver
@@ -174,8 +180,10 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 		})
 		return nil
 	}
+	txHook := kernelDatapathRXStageHookStatus{}
 	if kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
-		txHook, txErr := attachKernelDatapathRXHook(
+		var txErr error
+		txHook, txErr = attachKernelDatapathRXHook(
 			driver, targetIfname, ifname,
 			kernelDatapathTXPlaintextHookFlags(),
 		)
@@ -191,6 +199,9 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 		}
 		if txHook.Attached {
 			hook.RXWorker = txHook.RXWorker
+			hook.RXWorkerErrors = txHook.RXWorkerErrors
+			hook.RXWorkerInjected = txHook.RXWorkerInjected
+			hook.RXWorkerDropped = txHook.RXWorkerDropped
 		}
 	}
 	stage, err := driver.Clear()
@@ -215,26 +226,32 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 		done = make(chan struct{})
 	}
 	status := kernelDatapathRXStageStatus{
-		Enabled:          true,
-		Active:           true,
-		Mode:             mode,
-		Attached:         hook.Attached,
-		IfName:           hook.IfName,
-		IfIndex:          hook.IfIndex,
-		TargetIfName:     hook.TargetIfName,
-		TargetIfIndex:    hook.TargetIfIndex,
-		Flags:            hook.Flags,
-		QueueLen:         stage.QueueLen,
-		Capacity:         stage.Capacity,
-		Staged:           stage.Staged,
-		Popped:           stage.Popped,
-		Dropped:          stage.Dropped,
-		Overwritten:      stage.Overwritten,
-		StartedAt:        time.Now().UTC(),
-		RXWorker:         hook.RXWorker,
-		RXWorkerErrors:   hook.RXWorkerErrors,
-		RXWorkerInjected: hook.RXWorkerInjected,
-		RXWorkerDropped:  hook.RXWorkerDropped,
+		Enabled:                  true,
+		Active:                   true,
+		Mode:                     mode,
+		Attached:                 hook.Attached,
+		IfName:                   hook.IfName,
+		IfIndex:                  hook.IfIndex,
+		TargetIfName:             hook.TargetIfName,
+		TargetIfIndex:            hook.TargetIfIndex,
+		Flags:                    hook.Flags,
+		TXPlaintextAttached:      txHook.Attached,
+		TXPlaintextIfName:        txHook.IfName,
+		TXPlaintextIfIndex:       txHook.IfIndex,
+		TXPlaintextTargetIfName:  txHook.TargetIfName,
+		TXPlaintextTargetIfIndex: txHook.TargetIfIndex,
+		TXPlaintextFlags:         txHook.Flags,
+		QueueLen:                 stage.QueueLen,
+		Capacity:                 stage.Capacity,
+		Staged:                   stage.Staged,
+		Popped:                   stage.Popped,
+		Dropped:                  stage.Dropped,
+		Overwritten:              stage.Overwritten,
+		StartedAt:                time.Now().UTC(),
+		RXWorker:                 hook.RXWorker,
+		RXWorkerErrors:           hook.RXWorkerErrors,
+		RXWorkerInjected:         hook.RXWorkerInjected,
+		RXWorkerDropped:          hook.RXWorkerDropped,
 	}
 	if mode == kernelDatapathRXModeStage {
 		status.BatchSize = kernelDatapathRXStageBatchSize()
@@ -296,6 +313,8 @@ func (daemon *Daemon) stopKernelDatapathRXStage() {
 	daemon.kernelRXStage.driver = nil
 	if daemon.kernelRXStage.status.Active {
 		daemon.kernelRXStage.status.Active = false
+		daemon.kernelRXStage.status.Attached = false
+		daemon.kernelRXStage.status.TXPlaintextAttached = false
 		daemon.kernelRXStage.status.InactiveReason = "stopped"
 	}
 	daemon.kernelRXStage.mu.Unlock()
@@ -362,6 +381,18 @@ func (daemon *Daemon) kernelDatapathRXStageStatus() kernelDatapathRXStageStatus 
 			status.RXWorkerErrors = hook.RXWorkerErrors
 			status.RXWorkerInjected = hook.RXWorkerInjected
 			status.RXWorkerDropped = hook.RXWorkerDropped
+		}
+		if status.TXPlaintextIfName != "" {
+			if txHook, txErr := driver.HookQueryFor(status.TXPlaintextIfName); txErr == nil {
+				status.TXPlaintextAttached = txHook.Attached
+				status.TXPlaintextFlags = txHook.Flags
+				status.TXPlaintextIfName = txHook.IfName
+				status.TXPlaintextIfIndex = txHook.IfIndex
+				status.TXPlaintextTargetIfName = txHook.TargetIfName
+				status.TXPlaintextTargetIfIndex = txHook.TargetIfIndex
+			} else {
+				status.TXPlaintextAttached = false
+			}
 		}
 	}
 	status.Polls = daemon.kernelRXStage.polls.Load()

@@ -860,6 +860,7 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 	lanSpec := dataplaneLANAttachSpec(lan, desired)
 	experimentalTCPSecureDirect := experimentalTCPSecureKernelCryptoDirectForDesired(desired)
 	secureFullDirect := kernelUDPSecureFullDirectForDesired(desired) || experimentalTCPSecureDirect
+	kernelUDPSecureRouteGSO := kernelUDPSecureRouteGSOForDesired(desired)
 	experimentalTCPRouteGSOAsync := experimentalTCPRouteGSOAsyncForDesired(desired)
 	experimentalTCPPlainRouteGSOAsync := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired)
 	experimentalTCPFastPathDisabledReason := experimentalTCPFastPathDisabledReasonForDesired(desired)
@@ -880,6 +881,7 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		KernelUDPTXSecureDirect:                  secureFullDirect,
 		KernelUDPRXSecureDirect:                  secureFullDirect,
 		KernelUDPSecureDirectTrustInnerChecksums: secureFullDirect,
+		KernelUDPSecureRouteGSO:                  kernelUDPSecureRouteGSO,
 		ExperimentalTCPTXDirect:                  experimentalTCPTXDirectForDesired(desired) || experimentalTCPSecureDirect,
 		ExperimentalTCPRouteGSOSync:              experimentalTCPRouteGSOAsync,
 		ExperimentalTCPRouteGSOAsync:             experimentalTCPRouteGSOAsync,

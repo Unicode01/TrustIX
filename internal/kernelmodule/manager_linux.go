@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -519,8 +520,11 @@ type moduleSource struct {
 	label   string
 	path    string
 	payload []byte
+	sha256  string
 	err     error
 }
+
+var embeddedModuleSHA256Cache sync.Map
 
 func (source moduleSource) unavailable() bool {
 	return source.err != nil || (source.path == "" && len(source.payload) == 0)
@@ -543,7 +547,11 @@ func (manager *Manager) resolveModuleSource(module config.KernelModuleConfig) mo
 				err:   fmt.Errorf("module is not loaded and no embedded %s ELF is present", embedded.name),
 			}
 		}
-		return moduleSource{label: embedded.label, payload: payload}
+		return moduleSource{
+			label:   embedded.label,
+			payload: payload,
+			sha256: cachedEmbeddedModuleSHA256(embedded.label, payload),
+		}
 	}
 	return moduleSource{label: path, path: path}
 }
@@ -560,6 +568,9 @@ func loadModuleSource(source moduleSource, parameters string) error {
 }
 
 func moduleSourceSHA256(source moduleSource) string {
+	if source.sha256 != "" {
+		return source.sha256
+	}
 	switch {
 	case source.path != "":
 		return fileSHA256(source.path)
@@ -568,6 +579,22 @@ func moduleSourceSHA256(source moduleSource) string {
 	default:
 		return ""
 	}
+}
+
+func cachedEmbeddedModuleSHA256(label string, payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	if cached, ok := embeddedModuleSHA256Cache.Load(label); ok {
+		if sha, ok := cached.(string); ok && sha != "" {
+			return sha
+		}
+	}
+	sha := bytesSHA256(payload)
+	if sha != "" {
+		embeddedModuleSHA256Cache.Store(label, sha)
+	}
+	return sha
 }
 
 func moduleSourceSupportsBuildSHA(source moduleSource) bool {

@@ -103,6 +103,14 @@ falls back instead of nesting FPU use under RX interrupt load. Prepared-pool VAE
 device batches remain the default high-throughput SIMD path when direct kfuncs
 are not enabled.
 
+`kfunc_simd_irq_fpu_fastpath=1` is a narrower soak-test escape hatch for the
+TC/XDP direct-kfunc path. It keeps the `irq_fpu_usable()` checks before and
+after `local_bh_disable()`, but allows non-task callers to enter the SIMD path
+when the kernel says FPU use is currently permitted. `trustixd` strips this raw
+module parameter unless `TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH=1`
+is set. Do not treat it as a production default until long cross-kernel soak
+evidence proves the path is stable.
+
 To run the experimental VAES prepared-batch checks through the smoke script:
 
 ```bash

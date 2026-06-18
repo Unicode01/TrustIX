@@ -111,8 +111,8 @@ experimental_tcp_route_xmit_worker_crash_risk_ack="${TRUSTIX_E2E_EXPERIMENTAL_TC
 experimental_tcp_route_xmit_worker_steal="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER_STEAL:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL:-0}}"
 experimental_tcp_route_xmit_worker_steal_crash_risk_ack="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER_STEAL_CRASH_RISK_ACK:-${TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT_STEAL:-0}}"
 experimental_tcp_route_gso_async_limit="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT:-256}}"
-experimental_tcp_route_gso_async_worker_item_budget="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET:-16}}"
-experimental_tcp_route_gso_async_worker_segment_budget="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET:-512}}"
+experimental_tcp_route_gso_async_worker_item_budget="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET:-64}}"
+experimental_tcp_route_gso_async_worker_segment_budget="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET:-2048}}"
 experimental_tcp_route_gso_async_max_segments_per_item="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM:-64}}"
 experimental_tcp_route_gso_async_stream="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM:-0}}"
 experimental_tcp_route_gso_async_stream_direct_build="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD:-0}}"
@@ -460,22 +460,22 @@ datapath_extra_module_params() {
     add_param "route_tcp_gso_async_bytes_limit=33554432"
     add_param "route_tcp_gso_async_worker_emit_budget=0"
     add_param "route_tcp_gso_async_worker_resched_stride=16"
+    add_param "route_tcp_gso_async_worker_dequeue_batch=4"
     add_param "route_tcp_gso_async_worker_min_queue_depth=1"
     add_param "route_tcp_gso_async_worker_schedule_delay_usecs=0"
     add_param "route_tcp_gso_async_unbound_worker=1"
     add_param "route_tcp_gso_async_sharded_queue=1"
-    add_param "route_tcp_gso_async_queue_shards=6"
-    add_param "route_tcp_gso_async_flow_shard_queue=1"
+    add_param "route_tcp_gso_async_queue_shards=8"
+    add_param "route_tcp_gso_async_flow_shard_queue=0"
+    add_param "route_tcp_gso_async_hash_tx_queue=1"
     add_param "route_tcp_gso_async_stream_direct_build_inner_csum=1"
     add_param "route_tcp_gso_async_stream_direct_build_fast_copy=1"
     add_param "route_tcp_gso_async_stream_direct_build_frag_fast_copy=1"
     add_param "route_tcp_gso_async_stream_outer_gso_hard_enable=1"
     add_param "route_tcp_gso_async_stream_cross_item_batch=1"
     add_param "route_tcp_gso_async_stream_cross_item_dequeue_batch=1"
-    add_param "route_tcp_gso_async_stream_cross_item_max_frames=24"
-    add_param "route_tcp_gso_async_stream_cross_item_dynamic_cap=1"
-    add_param "route_tcp_gso_async_stream_cross_item_dynamic_low_frames=12"
-    add_param "route_tcp_gso_async_stream_cross_item_dynamic_queue_depth=4"
+    add_param "route_tcp_gso_async_stream_cross_item_max_frames=64"
+    add_param "route_tcp_gso_async_stream_cross_item_dynamic_cap=0"
   fi
   printf '%s\n' "$params"
 }
@@ -679,10 +679,10 @@ apply_transport_profile_fastpath_defaults() {
     experimental_tcp_route_gso_async_limit=2048
   fi
   if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET+x}" ]]; then
-    experimental_tcp_route_gso_async_worker_item_budget=32
+    experimental_tcp_route_gso_async_worker_item_budget=64
   fi
   if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET+x}" ]]; then
-    experimental_tcp_route_gso_async_worker_segment_budget=1024
+    experimental_tcp_route_gso_async_worker_segment_budget=2048
   fi
   if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM+x}" ]]; then
     experimental_tcp_route_gso_async_max_segments_per_item=128

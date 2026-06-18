@@ -637,12 +637,25 @@ func TestKernelUDPProviderStatsIncludeTCHotCounters(t *testing.T) {
 	put(kernelUDPTXDirectStatGSOInputs, 5)
 	put(kernelUDPTXDirectStatGSOActiveAccepts, 4)
 	put(kernelUDPTXDirectStatGSOSuccesses, 2)
+	put(packetPolicyTCPMSSClampStatSuccess, 9)
+	put(packetPolicyTCPMSSClampStatErrors, 1)
+	put(packetPolicyTCPMSSClampStatDrops, 2)
+	put(kernelUDPTXSecureDirectStatMTUUnderlayFallbacks, 6)
+	put(kernelUDPTXSecureDirectStatMTUUnderlay1500Fallbacks, 4)
+	put(kernelUDPTXSecureDirectStatMTUUnderlayJumboFallbacks, 1)
+	put(kernelUDPTXSecureDirectStatMTUUnderlayInnerGT1400Fallbacks, 3)
+	put(kernelUDPTXSecureDirectStatMTUUnderlayInnerLE1400Fallbacks, 2)
 
 	manager := &Manager{
 		statsMap:                               statsMap,
 		kernelUDPRXDirectAttached:              true,
 		kernelUDPRXDirectStaticDestinationPort: 17001,
 		kernelUDPRXDirectParseDecapL2Kfunc:     true,
+		snapshot: dataplane.Snapshot{PacketPolicy: dataplane.PacketPolicy{
+			MTU:           1500,
+			DropFragments: true,
+			TCPMSSClamp:   1320,
+		}},
 	}
 	stats := manager.kernelUDPProviderStatsLocked()
 	if stats["tc_kernel_udp_tx_direct_packets"] != 17 ||
@@ -653,7 +666,18 @@ func TestKernelUDPProviderStatsIncludeTCHotCounters(t *testing.T) {
 		stats["tc_kernel_udp_tx_direct_gso_successes"] != 2 ||
 		stats["tc_kernel_udp_rx_direct_attached"] != 1 ||
 		stats["tc_kernel_udp_rx_direct_static_destination_port"] != 17001 ||
-		stats["tc_kernel_udp_rx_direct_parse_decap_l2_kfunc"] != 1 {
+		stats["tc_kernel_udp_rx_direct_parse_decap_l2_kfunc"] != 1 ||
+		stats["tc_packet_policy_mtu"] != 1500 ||
+		stats["tc_packet_policy_drop_fragments"] != 1 ||
+		stats["tc_packet_policy_tcp_mss_clamp"] != 1320 ||
+		stats["tc_packet_policy_tcp_mss_clamps"] != 9 ||
+		stats["tc_packet_policy_tcp_mss_clamp_errors"] != 1 ||
+		stats["tc_packet_policy_tcp_mss_clamp_drops"] != 2 ||
+		stats["tc_kernel_udp_tx_secure_direct_mtu_underlay_fallbacks"] != 6 ||
+		stats["tc_kernel_udp_tx_secure_direct_mtu_underlay_1500ish_fallbacks"] != 4 ||
+		stats["tc_kernel_udp_tx_secure_direct_mtu_underlay_jumbo_fallbacks"] != 1 ||
+		stats["tc_kernel_udp_tx_secure_direct_mtu_underlay_inner_gt_1400_fallbacks"] != 3 ||
+		stats["tc_kernel_udp_tx_secure_direct_mtu_underlay_inner_le_1400_fallbacks"] != 2 {
 		t.Fatalf("TC hot provider stats = %#v", stats)
 	}
 }
@@ -909,6 +933,8 @@ func TestTCStatsCounterKeysDoNotOverlap(t *testing.T) {
 		{"kernel_udp_rx_secure_direct_header_errors", kernelUDPRXSecureDirectStatHeaderErrors},
 		{"kernel_udp_rx_secure_direct_decrypt_errors", kernelUDPRXSecureDirectStatDecryptErrors},
 		{"kernel_udp_rx_secure_direct_replay_drops", kernelUDPRXSecureDirectStatReplayDrops},
+		{"kernel_udp_rx_secure_direct_replay_old_drops", kernelUDPRXSecureDirectStatReplayOldDrops},
+		{"kernel_udp_rx_secure_direct_replay_seen_drops", kernelUDPRXSecureDirectStatReplaySeenDrops},
 		{"kernel_udp_rx_secure_direct_drops", kernelUDPRXSecureDirectStatDrops},
 		{"kernel_udp_rx_secure_direct_neighbor_hits", kernelUDPRXSecureDirectStatNeighHits},
 		{"kernel_udp_rx_secure_direct_neighbor_misses", kernelUDPRXSecureDirectStatNeighMisses},
@@ -927,6 +953,37 @@ func TestTCStatsCounterKeysDoNotOverlap(t *testing.T) {
 		{"kernel_udp_rx_secure_direct_debug_port", kernelUDPRXSecureDirectStatDebugPort},
 		{"kernel_udp_rx_secure_direct_debug_secure_header", kernelUDPRXSecureDirectStatDebugSecureHeader},
 		{"kernel_udp_rx_secure_direct_debug_l3_tixu_magic", kernelUDPRXSecureDirectStatDebugL3TIXUMagic},
+		{"kernel_udp_rx_secure_direct_kfunc_open_attempts", kernelUDPRXSecureDirectStatDirectKfuncOpenAttempts},
+		{"kernel_udp_rx_secure_direct_kfunc_open_errors", kernelUDPRXSecureDirectStatDirectKfuncOpenErrors},
+		{"kernel_udp_rx_secure_direct_kfunc_open_einval", kernelUDPRXSecureDirectStatDirectKfuncOpenEINVAL},
+		{"kernel_udp_rx_secure_direct_kfunc_open_eopnotsupp", kernelUDPRXSecureDirectStatDirectKfuncOpenEOPNOTSUPP},
+		{"kernel_udp_rx_secure_direct_kfunc_open_efault", kernelUDPRXSecureDirectStatDirectKfuncOpenEFAULT},
+		{"kernel_udp_rx_secure_direct_kfunc_open_enoent", kernelUDPRXSecureDirectStatDirectKfuncOpenENOENT},
+		{"kernel_udp_rx_secure_direct_kfunc_open_ebadmsg", kernelUDPRXSecureDirectStatDirectKfuncOpenEBADMSG},
+		{"kernel_udp_rx_secure_direct_kfunc_open_other", kernelUDPRXSecureDirectStatDirectKfuncOpenOther},
+		{"kernel_udp_rx_secure_direct_fallback_l2_short", kernelUDPRXSecureDirectStatFallbackL2Short},
+		{"kernel_udp_rx_secure_direct_fallback_non_ipv4", kernelUDPRXSecureDirectStatFallbackNonIPv4},
+		{"kernel_udp_rx_secure_direct_fallback_ip_header", kernelUDPRXSecureDirectStatFallbackIPHeader},
+		{"kernel_udp_rx_secure_direct_fallback_fragment", kernelUDPRXSecureDirectStatFallbackFragment},
+		{"kernel_udp_rx_secure_direct_fallback_skb_short", kernelUDPRXSecureDirectStatFallbackSKBShort},
+		{"kernel_udp_rx_secure_direct_fallback_linear_short", kernelUDPRXSecureDirectStatFallbackLinearShort},
+		{"kernel_udp_rx_secure_direct_fallback_non_udp_tcp", kernelUDPRXSecureDirectStatFallbackNonUDPTCP},
+		{"kernel_udp_rx_secure_direct_fallback_udp_len", kernelUDPRXSecureDirectStatFallbackUDPLen},
+		{"kernel_udp_rx_secure_direct_fallback_port_miss", kernelUDPRXSecureDirectStatFallbackPortMiss},
+		{"kernel_udp_rx_secure_direct_fallback_tixu_flags", kernelUDPRXSecureDirectStatFallbackTIXUFlags},
+		{"kernel_udp_rx_secure_direct_fallback_tixu_len", kernelUDPRXSecureDirectStatFallbackTIXULen},
+		{"kernel_udp_tx_secure_direct_kfunc_seal_attempts", kernelUDPTXSecureDirectStatDirectKfuncSealAttempts},
+		{"kernel_udp_tx_secure_direct_kfunc_seal_errors", kernelUDPTXSecureDirectStatDirectKfuncSealErrors},
+		{"kernel_udp_tx_secure_direct_kfunc_seal_einval", kernelUDPTXSecureDirectStatDirectKfuncSealEINVAL},
+		{"kernel_udp_tx_secure_direct_kfunc_seal_eopnotsupp", kernelUDPTXSecureDirectStatDirectKfuncSealEOPNOTSUPP},
+		{"kernel_udp_tx_secure_direct_kfunc_seal_efault", kernelUDPTXSecureDirectStatDirectKfuncSealEFAULT},
+		{"kernel_udp_tx_secure_direct_kfunc_seal_enoent", kernelUDPTXSecureDirectStatDirectKfuncSealENOENT},
+		{"kernel_udp_tx_secure_direct_kfunc_seal_ebadmsg", kernelUDPTXSecureDirectStatDirectKfuncSealEBADMSG},
+		{"kernel_udp_tx_secure_direct_kfunc_seal_other", kernelUDPTXSecureDirectStatDirectKfuncSealOther},
+		{"kernel_udp_tx_secure_direct_tcp_mss_candidates", kernelUDPTXSecureDirectStatTCPMSSCandidates},
+		{"kernel_udp_tx_secure_direct_tcp_mss_clamps", kernelUDPTXSecureDirectStatTCPMSSClamps},
+		{"kernel_udp_tx_secure_direct_tcp_mss_noops", kernelUDPTXSecureDirectStatTCPMSSNoops},
+		{"kernel_udp_tx_secure_direct_tcp_mss_errors", kernelUDPTXSecureDirectStatTCPMSSErrors},
 		{"kernel_udp_tx_direct_mtu_linear_fallbacks", kernelUDPTXDirectStatMTULinearFallbacks},
 		{"kernel_udp_tx_direct_mtu_gso_fallbacks", kernelUDPTXDirectStatMTUGSOFallbacks},
 		{"kernel_udp_tx_direct_mtu_gso_size_zero_fallbacks", kernelUDPTXDirectStatMTUGSOSizeZeroFallbacks},
@@ -988,40 +1045,61 @@ func TestKernelUDPRXSecureDirectCStatsMatchGoKeys(t *testing.T) {
 		t.Fatalf("read kernel_udp RX secure C source: %v", err)
 	}
 	for macro, want := range map[string]uint32{
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ATTEMPTS":          kernelUDPRXSecureDirectStatAttempts,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_CANDIDATES":        kernelUDPRXSecureDirectStatCandidates,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_SUCCESSES":         kernelUDPRXSecureDirectStatSuccess,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACKS":         kernelUDPRXSecureDirectStatFallbacks,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_NO_CONTEXT":        kernelUDPRXSecureDirectStatNoContext,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_HEADER_ERRORS":     kernelUDPRXSecureDirectStatHeaderErrors,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DECRYPT_ERRORS":    kernelUDPRXSecureDirectStatDecryptErrors,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_DROPS":      kernelUDPRXSecureDirectStatReplayDrops,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DROPS":             kernelUDPRXSecureDirectStatDrops,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_NEIGH_HITS":        kernelUDPRXSecureDirectStatNeighHits,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_NEIGH_MISSES":      kernelUDPRXSecureDirectStatNeighMisses,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ADJUST_ERRORS":     kernelUDPRXSecureDirectStatAdjustErrors,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_STORE_ERRORS":      kernelUDPRXSecureDirectStatStoreErrors,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_BROADCASTS":        kernelUDPRXSecureDirectStatBroadcasts,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_PEER_REDIRECTS":    kernelUDPRXSecureDirectStatPeerRedirects,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_REDIRECTS":         kernelUDPRXSecureDirectStatRedirects,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_L2_IPV4":       kernelUDPRXSecureDirectStatDebugL2IPv4,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_L3_IPV4":       kernelUDPRXSecureDirectStatDebugL3IPv4,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_UDP":           kernelUDPRXSecureDirectStatDebugUDP,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_MAGIC":    kernelUDPRXSecureDirectStatDebugTIXUMagic,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_HEADER":   kernelUDPRXSecureDirectStatDebugTIXUHeader,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_FLAGS":    kernelUDPRXSecureDirectStatDebugTIXUFlags,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_LEN":      kernelUDPRXSecureDirectStatDebugTIXULen,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_PORT":          kernelUDPRXSecureDirectStatDebugPort,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_SECURE_HEADER": kernelUDPRXSecureDirectStatDebugSecureHeader,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_L3_TIXU_MAGIC": kernelUDPRXSecureDirectStatDebugL3TIXUMagic,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_PAYLOAD_LEN":   kernelUDPRXSecureDirectStatErrPayloadLen,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_CIPHER_LEN":    kernelUDPRXSecureDirectStatErrCipherLen,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_SECURE_MAGIC":  kernelUDPRXSecureDirectStatErrSecureMagic,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_SECURE_EPOCH":  kernelUDPRXSecureDirectStatErrSecureEpoch,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_CTX_EPOCH":     kernelUDPRXSecureDirectStatErrContextEpoch,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_OPEN_EINVAL":   kernelUDPRXSecureDirectStatErrOpenEINVAL,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_OPEN_EBADMSG":  kernelUDPRXSecureDirectStatErrOpenEBADMSG,
-		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_INNER_IPV4":    kernelUDPRXSecureDirectStatErrInnerIPv4,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ATTEMPTS":                     kernelUDPRXSecureDirectStatAttempts,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_CANDIDATES":                   kernelUDPRXSecureDirectStatCandidates,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_SUCCESSES":                    kernelUDPRXSecureDirectStatSuccess,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACKS":                    kernelUDPRXSecureDirectStatFallbacks,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_NO_CONTEXT":                   kernelUDPRXSecureDirectStatNoContext,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_HEADER_ERRORS":                kernelUDPRXSecureDirectStatHeaderErrors,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DECRYPT_ERRORS":               kernelUDPRXSecureDirectStatDecryptErrors,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_DROPS":                 kernelUDPRXSecureDirectStatReplayDrops,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS":             kernelUDPRXSecureDirectStatReplayOldDrops,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS":            kernelUDPRXSecureDirectStatReplaySeenDrops,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DROPS":                        kernelUDPRXSecureDirectStatDrops,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_NEIGH_HITS":                   kernelUDPRXSecureDirectStatNeighHits,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_NEIGH_MISSES":                 kernelUDPRXSecureDirectStatNeighMisses,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ADJUST_ERRORS":                kernelUDPRXSecureDirectStatAdjustErrors,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_STORE_ERRORS":                 kernelUDPRXSecureDirectStatStoreErrors,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_BROADCASTS":                   kernelUDPRXSecureDirectStatBroadcasts,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_PEER_REDIRECTS":               kernelUDPRXSecureDirectStatPeerRedirects,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_REDIRECTS":                    kernelUDPRXSecureDirectStatRedirects,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_L2_IPV4":                  kernelUDPRXSecureDirectStatDebugL2IPv4,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_L3_IPV4":                  kernelUDPRXSecureDirectStatDebugL3IPv4,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_UDP":                      kernelUDPRXSecureDirectStatDebugUDP,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_MAGIC":               kernelUDPRXSecureDirectStatDebugTIXUMagic,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_HEADER":              kernelUDPRXSecureDirectStatDebugTIXUHeader,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_FLAGS":               kernelUDPRXSecureDirectStatDebugTIXUFlags,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_TIXU_LEN":                 kernelUDPRXSecureDirectStatDebugTIXULen,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_PORT":                     kernelUDPRXSecureDirectStatDebugPort,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_SECURE_HEADER":            kernelUDPRXSecureDirectStatDebugSecureHeader,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DBG_L3_TIXU_MAGIC":            kernelUDPRXSecureDirectStatDebugL3TIXUMagic,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_PAYLOAD_LEN":              kernelUDPRXSecureDirectStatErrPayloadLen,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_CIPHER_LEN":               kernelUDPRXSecureDirectStatErrCipherLen,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_SECURE_MAGIC":             kernelUDPRXSecureDirectStatErrSecureMagic,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_SECURE_EPOCH":             kernelUDPRXSecureDirectStatErrSecureEpoch,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_CTX_EPOCH":                kernelUDPRXSecureDirectStatErrContextEpoch,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_OPEN_EINVAL":              kernelUDPRXSecureDirectStatErrOpenEINVAL,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_OPEN_EBADMSG":             kernelUDPRXSecureDirectStatErrOpenEBADMSG,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_ERR_INNER_IPV4":               kernelUDPRXSecureDirectStatErrInnerIPv4,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ATTEMPTS":   kernelUDPRXSecureDirectStatDirectKfuncOpenAttempts,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ERRORS":     kernelUDPRXSecureDirectStatDirectKfuncOpenErrors,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EINVAL":     kernelUDPRXSecureDirectStatDirectKfuncOpenEINVAL,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EOPNOTSUPP": kernelUDPRXSecureDirectStatDirectKfuncOpenEOPNOTSUPP,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EFAULT":     kernelUDPRXSecureDirectStatDirectKfuncOpenEFAULT,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ENOENT":     kernelUDPRXSecureDirectStatDirectKfuncOpenENOENT,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_EBADMSG":    kernelUDPRXSecureDirectStatDirectKfuncOpenEBADMSG,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_OTHER":      kernelUDPRXSecureDirectStatDirectKfuncOpenOther,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_L2_SHORT":            kernelUDPRXSecureDirectStatFallbackL2Short,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_NON_IPV4":            kernelUDPRXSecureDirectStatFallbackNonIPv4,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_IP_HEADER":           kernelUDPRXSecureDirectStatFallbackIPHeader,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_FRAGMENT":            kernelUDPRXSecureDirectStatFallbackFragment,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_SKB_SHORT":           kernelUDPRXSecureDirectStatFallbackSKBShort,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_LINEAR_SHORT":        kernelUDPRXSecureDirectStatFallbackLinearShort,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_NON_UDP_TCP":         kernelUDPRXSecureDirectStatFallbackNonUDPTCP,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_UDP_LEN":             kernelUDPRXSecureDirectStatFallbackUDPLen,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_PORT_MISS":           kernelUDPRXSecureDirectStatFallbackPortMiss,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_TIXU_FLAGS":          kernelUDPRXSecureDirectStatFallbackTIXUFlags,
+		"TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_TIXU_LEN":            kernelUDPRXSecureDirectStatFallbackTIXULen,
 	} {
 		line := []byte(fmt.Sprintf("#define %s %d", macro, want))
 		if !bytes.Contains(source, line) {
@@ -1062,6 +1140,18 @@ func TestKernelUDPTXSecureDirectCStatsMatchGoKeys(t *testing.T) {
 		"TRUSTIX_KUDP_TX_SECURE_STAT_MTU_UNDERLAY_JUMBO_FALLBACKS":         kernelUDPTXSecureDirectStatMTUUnderlayJumboFallbacks,
 		"TRUSTIX_KUDP_TX_SECURE_STAT_MTU_UNDERLAY_INNER_GT_1400_FALLBACKS": kernelUDPTXSecureDirectStatMTUUnderlayInnerGT1400Fallbacks,
 		"TRUSTIX_KUDP_TX_SECURE_STAT_MTU_UNDERLAY_INNER_LE_1400_FALLBACKS": kernelUDPTXSecureDirectStatMTUUnderlayInnerLE1400Fallbacks,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_ATTEMPTS":           kernelUDPTXSecureDirectStatDirectKfuncSealAttempts,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_ERRORS":             kernelUDPTXSecureDirectStatDirectKfuncSealErrors,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EINVAL":             kernelUDPTXSecureDirectStatDirectKfuncSealEINVAL,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EOPNOTSUPP":         kernelUDPTXSecureDirectStatDirectKfuncSealEOPNOTSUPP,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EFAULT":             kernelUDPTXSecureDirectStatDirectKfuncSealEFAULT,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_ENOENT":             kernelUDPTXSecureDirectStatDirectKfuncSealENOENT,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EBADMSG":            kernelUDPTXSecureDirectStatDirectKfuncSealEBADMSG,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_OTHER":              kernelUDPTXSecureDirectStatDirectKfuncSealOther,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_CANDIDATES":                   kernelUDPTXSecureDirectStatTCPMSSCandidates,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_CLAMPS":                       kernelUDPTXSecureDirectStatTCPMSSClamps,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_NOOPS":                        kernelUDPTXSecureDirectStatTCPMSSNoops,
+		"TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_ERRORS":                       kernelUDPTXSecureDirectStatTCPMSSErrors,
 	} {
 		line := []byte(fmt.Sprintf("#define %s %d", macro, want))
 		if !bytes.Contains(source, line) {
@@ -1114,8 +1204,12 @@ func TestKernelUDPTXSecureDirectEncryptsTCPSYNBeforeFallback(t *testing.T) {
 		t.Fatal("kernel_udp TX secure direct does not clamp TCP SYN MSS inside the encrypt path")
 	}
 	guard := []byte("if (trustix_inner_tcp_syn_candidate(scratch, inner_len))")
-	if got := bytes.Count(source, guard); got != 2 {
-		t.Fatalf("kernel_udp TX secure direct MSS clamp guard count = %d, want 2 kernel_udp and experimental_tcp paths", got)
+	if got := bytes.Count([]byte(sourceFunctionBody(t, string(source), "trustix_encrypt_inner_ipv4")), guard); got != 1 {
+		t.Fatalf("kernel_udp TX secure direct shared MSS clamp guard count = %d, want 1", got)
+	}
+	if !bytes.Contains(source, []byte("? TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD")) ||
+		!bytes.Contains(source, []byte(": TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD")) {
+		t.Fatal("kernel_udp TX secure direct MSS clamp does not select experimental_tcp and kernel_udp overheads in the shared encrypt path")
 	}
 	encrypt := bytes.Index(body, []byte("cipher_len = trustix_encrypt_inner_ipv4"))
 	if encrypt < 0 {
@@ -1149,7 +1243,7 @@ func TestKernelUDPTXSecureDirectExperimentalTCPComputesOuterChecksum(t *testing.
 		t.Fatal("kernel_udp TX secure classifier entry not found")
 	}
 	body := source[bodyStart:]
-	condition := bytes.Index(body, []byte("if (experimental_tcp && !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM))"))
+	condition := bytes.Index(body, []byte("if (!skb_sealed && experimental_tcp && !outer_tcp_csum_kfunc &&\n        !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM))"))
 	if condition < 0 {
 		t.Fatal("experimental_tcp secure TX does not gate checksum generation on the explicit skip flag")
 	}
@@ -1235,9 +1329,81 @@ func TestKernelUDPTXSecureDirectRouteGSOPassesTrustPartialInnerChecksum(t *testi
 		t.Fatalf("read kernel_udp TX secure C source: %v", err)
 	}
 	body := sourceFunctionBody(t, string(source), "trustix_secure_route_gso_direct")
+	requireSourceContains(t, string(source), "#define TRUSTIX_KUDP_SECURE_ROUTE_GSO_KFUNC 0")
+	requireSourceContains(t, string(source), "#if TRUSTIX_KUDP_SECURE_ROUTE_GSO_KFUNC\nextern int trustix_kernel_skb_tixt_tx_segment_secure_route_tcp_gso")
 	requireSourceContains(t, body, "TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM")
 	requireSourceContains(t, body, "if (!trustix_kudp_tx_fix_inner_checksums &&")
 	requireSourceContains(t, body, "(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TRUST_INNER_CHECKSUM)")
+	requireSourceContains(t, body, "#if TRUSTIX_KUDP_SECURE_ROUTE_GSO_KFUNC")
+}
+
+func TestKernelUDPTXSecureDirectRouteGSOUsesDedicatedEmbeddedObject(t *testing.T) {
+	loader, err := os.ReadFile("kernel_udp_tx_kernel_crypto_tc_linux.go")
+	if err != nil {
+		t.Fatalf("read kernel_udp TX secure loader: %v", err)
+	}
+	for _, want := range []string{
+		"bpf/kernel_udp_tx_kernel_crypto_tc_bpfel.o bpf/kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o",
+		`kernelUDPTXSecureDirectRouteGSOObjectName            = "kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o"`,
+		"if options.SecureRouteTCPGSOKfunc {",
+		"objectName = kernelUDPTXSecureDirectRouteGSOObjectName",
+	} {
+		if !bytes.Contains(loader, []byte(want)) {
+			t.Fatalf("kernel_udp TX secure loader missing %q", want)
+		}
+	}
+
+	builder, err := os.ReadFile(filepath.Join("..", "..", "..", "scripts", "build-embedded-bpf.sh"))
+	if err != nil {
+		t.Fatalf("read build-embedded-bpf.sh: %v", err)
+	}
+	if !bytes.Contains(builder, []byte("kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o|kernel/bpf/dataplane/kernel_udp_tx_kernel_crypto_tc.c|-DTRUSTIX_KUDP_SECURE_ROUTE_GSO_KFUNC=1")) {
+		t.Fatal("build-embedded-bpf.sh does not build the route-GSO kernel_udp TX secure object")
+	}
+}
+
+func TestKernelUDPTXSecureDirectRouteGSOHandlesKernelUDP(t *testing.T) {
+	txSource, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_tx_kernel_crypto_tc.c"))
+	if err != nil {
+		t.Fatalf("read kernel_udp TX secure C source: %v", err)
+	}
+	txBody := sourceFunctionBody(t, string(txSource), "trustix_secure_route_gso_direct")
+	for _, want := range []string{
+		"if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)",
+		"key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_KERNEL_UDP",
+	} {
+		requireSourceContains(t, txBody, want)
+	}
+	if strings.Contains(string(txSource), "if (experimental_tcp && data[23] == IPPROTO_TCP)") {
+		t.Fatal("secure kernel_udp TX still gates route-GSO on experimental_tcp")
+	}
+
+	helperSource, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_kfuncs.c"))
+	if err != nil {
+		t.Fatalf("read TrustIX datapath helper source: %v", err)
+	}
+	helper := string(helperSource)
+	validateBody := sourceFunctionBody(t, helper, "trustix_tixt_tx_validate_route_secure_flow_pulled")
+	if strings.Contains(validateBody, "!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)") {
+		t.Fatal("secure route-GSO helper still rejects kernel_udp secure flows")
+	}
+	initBody := sourceFunctionBody(t, helper, "trustix_tixt_tx_init_secure_route_gso_template")
+	for _, want := range []string{
+		"tmpl->kernel_udp = true;",
+		"iph->protocol = IPPROTO_UDP;",
+		"kudp[5] = TRUSTIX_KUDP_FLAG_ENCRYPTED | TRUSTIX_KUDP_FLAG_INNER_IPV4;",
+		"tmpl->ip_check_base = READ_ONCE(flow->ipv4_check_udp);",
+	} {
+		requireSourceContains(t, initBody, want)
+	}
+	streamBody := sourceFunctionBody(t, helper, "trustix_tixt_tx_route_gso_async_try_stream_direct")
+	for _, want := range []string{
+		"item->tmpl.kernel_udp",
+		"trustix_kudp_tx_build_secure_route_gso_frame_skb",
+		"sizeof(struct udphdr)",
+	} {
+		requireSourceContains(t, streamBody, want)
+	}
 }
 
 func TestKernelUDPTXSecureDirectKfuncSealUsesSplitCipherBuffer(t *testing.T) {
@@ -1251,7 +1417,7 @@ func TestKernelUDPTXSecureDirectKfuncSealUsesSplitCipherBuffer(t *testing.T) {
 	if got := bytes.Count(source, []byte("trustix_kernel_direct_seal(direct_slot->slot_id, scratch->plain")); got != 1 {
 		t.Fatalf("direct seal call count = %d, want shared kernel_udp and experimental_tcp path", got)
 	}
-	if got := bytes.Count(source, []byte("scratch->io.split.cipher")); got < 4 {
+	if got := bytes.Count(source, []byte("scratch->io.split.cipher")); got < 3 {
 		t.Fatalf("split cipher buffer references = %d, want direct seal plus dynptr fallback users", got)
 	}
 	if bytes.Contains(source, []byte("trustix_kernel_direct_seal(*slot_index, scratch->plain,\n                                           scratch->plain")) ||
@@ -4692,6 +4858,48 @@ func TestSubscribeExperimentalTCPFlowAllowsFullPlaintextKernelDatapathProvider(t
 	}
 }
 
+func TestSubmitExperimentalTCPFrameRejectsFullPlaintextKernelDatapathProvider(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+	manager.expTCPFlows[42] = dataplane.ExperimentalTCPFlow{
+		ID:       42,
+		Peer:     core.IXID("ix-b"),
+		Endpoint: core.EndpointID("exp-b"),
+	}
+
+	err := manager.SubmitExperimentalTCPFrame(context.Background(), dataplane.ExperimentalTCPFrame{
+		FlowID:    42,
+		Direction: dataplane.ExperimentalTCPOutbound,
+		Sequence:  1,
+		Payload:   []byte("data"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "full plaintext kernel datapath owns data frames") {
+		t.Fatalf("submit error = %v, want full plaintext kernel datapath ownership", err)
+	}
+}
+
+func TestSubmitExperimentalTCPFramesRejectsFullPlaintextKernelDatapathProvider(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
+	manager.expTCPFlows[42] = dataplane.ExperimentalTCPFlow{
+		ID:       42,
+		Peer:     core.IXID("ix-b"),
+		Endpoint: core.EndpointID("exp-b"),
+	}
+
+	err := manager.SubmitExperimentalTCPFrames(context.Background(), []dataplane.ExperimentalTCPFrame{{
+		FlowID:    42,
+		Direction: dataplane.ExperimentalTCPOutbound,
+		Sequence:  1,
+		Payload:   []byte("data"),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "full plaintext kernel datapath owns data frames") {
+		t.Fatalf("batch submit error = %v, want full plaintext kernel datapath ownership", err)
+	}
+}
+
 func TestKernelUDPStatusReportsKernelCryptoWhenDeviceFlowExists(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
@@ -5337,6 +5545,59 @@ func TestKernelUDPPayloadMaxClampsAFXDPCryptoPayloadToUnderlayMTU(t *testing.T) 
 	want := 1500 - rejectIPv4HeaderLen - 8 - kerneludp.HeaderLen - experimentalTCPKernelCryptoOverhead
 	if got != want {
 		t.Fatalf("kernel UDP crypto payload max = %d, want %d", got, want)
+	}
+}
+
+func TestKernelUDPPayloadMaxAllowsSecureTCOnlyWarmup(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_RAW_FALLBACK", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_RAW_UDP_FALLBACK", "")
+
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		LANIface:                    "lan0",
+		UnderlayIface:               "eth0",
+		KernelUDPTXDirectOnly:       true,
+		KernelUDPTXDirectOnlyReason: "transport_policy.encryption=secure transport_policy.crypto_placement=kernel kernel_udp_tc_only_provider=enabled",
+		KernelUDPTCOnlyProvider:     true,
+	}
+	manager.statsMap = &cebpf.Map{}
+	manager.kernelUDPTXRouteMap = &cebpf.Map{}
+	manager.kernelUDPTXFlowMap = &cebpf.Map{}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{
+			KernelTransportMode: dataplane.KernelTransportModeRequireKernel,
+			MTU:                 1500,
+		},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: "local", Transport: "udp", Listen: "198.18.0.1:17041", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "secure"}},
+		},
+	}
+	manager.kernelCryptoProvider = &kernelCryptoProviderObject{
+		flowIndexMap:  &cebpf.Map{},
+		contextSlots:  &cebpf.Map{},
+		directSlotMap: &cebpf.Map{},
+	}
+	manager.kernelCryptoFlowMap = &cebpf.Map{}
+	manager.kernelCryptoAEADCreateSuccesses = 1
+	manager.kernelCryptoAEADRoundTripSuccesses = 1
+
+	got, err := manager.KernelUDPPayloadMax(context.Background(), dataplane.CryptoPlacementKernel, true)
+	if err != nil {
+		t.Fatalf("payload max: %v", err)
+	}
+	want := 1500 - rejectIPv4HeaderLen - 8 - kerneludp.HeaderLen - experimentalTCPKernelCryptoOverhead
+	if got != want {
+		t.Fatalf("secure TC-only warmup payload max = %d, want %d", got, want)
+	}
+}
+
+func TestKernelUDPPayloadMaxRejectsWithoutProvider(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_RAW_FALLBACK", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_RAW_UDP_FALLBACK", "")
+
+	manager := NewManager()
+	if _, err := manager.KernelUDPPayloadMax(context.Background(), dataplane.CryptoPlacementUserspace, false); err == nil {
+		t.Fatal("payload max succeeded without AF_XDP, TC-only, or raw provider")
 	}
 }
 
@@ -7893,7 +8154,7 @@ func TestKernelUDPTXDirectTunnelGSOMTUUsesSegmentSize(t *testing.T) {
 	if !instructionsContainLoadMem(out, asm.RFP, kernelUDPTXGSOSegmentLenOffset, asm.Word) {
 		t.Fatalf("kernel_udp TX direct GSO path does not reload computed segment length from stack")
 	}
-	if !instructionsContainJump(out, "kudp_tx_direct_adjust_flags_ready", "kudp_tx_direct_drop") {
+	if !instructionsContainReferenceAfterSymbol(out, "kudp_tx_direct_adjust_flags_ready", "kudp_tx_direct_adjust_drop", 32) {
 		t.Fatal("kernel_udp TX direct GSO path does not rejoin after selecting adjust_room flags")
 	}
 	if !instructionsContainImm(out, int64(kernelUDPTCAdjustRoomBaseFlags())) {
@@ -7946,12 +8207,16 @@ func TestKernelUDPTXDirectExperimentalTCPTIXTActiveGSOHeadersUseSegmentSize(t *t
 	if err != nil {
 		t.Fatalf("load flow TCP header-finalize kfunc metadata: %v", err)
 	}
+	options := kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, FinalizeFlowTCPHeaderKfunc: true, FinalizeFlowTCPHeaderKfuncCall: kfuncCall}
+	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
+		t.Skip("experimental_tcp active GSO is production-hard-disabled")
+	}
 	out := appendKernelUDPTXDirect(
 		asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1), asm.LoadMem(asm.R7, asm.R6, skbDataOffset, asm.Word), asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word)},
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, FinalizeFlowTCPHeaderKfunc: true, FinalizeFlowTCPHeaderKfuncCall: kfuncCall},
+		options,
 	)
 	if got := instructionsCountLoadMem(out, asm.RFP, kernelUDPTXGSOSegmentLenOffset, asm.Word); got < 4 {
 		t.Fatalf("experimental_tcp TIXT active GSO path reloads segment length %d times, want IP/TCP/TIXT/checksum header loads", got)
@@ -8994,6 +9259,8 @@ func TestKernelUDPTXDirectUDPHeaderPartialChecksumIsOptIn(t *testing.T) {
 	}
 
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_UDP_HEADER_PARTIAL_CSUM", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_HEADER_PARTIAL_CSUM", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_OUTER_UDP_PARTIAL_CSUM", "")
 	disabledFinalize := appendKernelUDPTXDirect(
 		asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)},
 		statsMap,
@@ -9001,11 +9268,16 @@ func TestKernelUDPTXDirectUDPHeaderPartialChecksumIsOptIn(t *testing.T) {
 		flowMap,
 		kernelUDPTXDirectProgramOptions{Enabled: true, KernelUDPOnly: true, DirectOnly: true, SkipPlainSequence: true, FinalizeUDPHeaderKfunc: true, FinalizeUDPKfuncCall: finalizeKfuncCall},
 	)
-	if instructionsContainImm(disabledFinalize, trustIXKUDPTXUDPHeaderPartialCSUM) {
+	if !instructionsContainMovImmToRegAfterSymbol(disabledFinalize, "kudp_tx_direct_finalize_udp_header_kfunc", asm.R3, 0) {
+		t.Fatal("kernel_udp TX direct finalizer did not pass zero UDP header flags without opt-in")
+	}
+	if instructionsContainMovImmToRegAfterSymbol(disabledFinalize, "kudp_tx_direct_finalize_udp_header_kfunc", asm.R3, trustIXKUDPTXUDPHeaderPartialCSUM) {
 		t.Fatal("kernel_udp TX direct finalizer enabled UDP partial checksum without opt-in")
 	}
 
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_UDP_HEADER_PARTIAL_CSUM", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_HEADER_PARTIAL_CSUM", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_OUTER_UDP_PARTIAL_CSUM", "")
 	enabledFinalize := appendKernelUDPTXDirect(
 		asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)},
 		statsMap,
@@ -9013,7 +9285,7 @@ func TestKernelUDPTXDirectUDPHeaderPartialChecksumIsOptIn(t *testing.T) {
 		flowMap,
 		kernelUDPTXDirectProgramOptions{Enabled: true, KernelUDPOnly: true, DirectOnly: true, SkipPlainSequence: true, FinalizeUDPHeaderKfunc: true, FinalizeUDPKfuncCall: finalizeKfuncCall},
 	)
-	if !instructionsContainImm(enabledFinalize, trustIXKUDPTXUDPHeaderPartialCSUM) {
+	if !instructionsContainMovImmToRegAfterSymbol(enabledFinalize, "kudp_tx_direct_finalize_udp_header_kfunc", asm.R3, trustIXKUDPTXUDPHeaderPartialCSUM) {
 		t.Fatal("kernel_udp TX direct finalizer did not pass UDP partial checksum flag")
 	}
 
@@ -9024,7 +9296,7 @@ func TestKernelUDPTXDirectUDPHeaderPartialChecksumIsOptIn(t *testing.T) {
 		flowMap,
 		kernelUDPTXDirectProgramOptions{Enabled: true, KernelUDPOnly: true, DirectOnly: true, SkipPlainSequence: true, PushUDPHeaderKfunc: true, PushUDPHeaderKfuncCall: pushKfuncCall},
 	)
-	if !instructionsContainImm(enabledPush, trustIXKUDPTXUDPHeaderPartialCSUM) {
+	if !instructionsContainMovImmToRegAfterSymbol(enabledPush, "kudp_tx_direct_push_udp_header_kfunc", asm.R3, trustIXKUDPTXUDPHeaderPartialCSUM) {
 		t.Fatal("kernel_udp TX direct header-push path did not pass UDP partial checksum flag")
 	}
 }
@@ -9064,6 +9336,7 @@ func TestKernelUDPRXDirectDecapL2KfuncIsOptIn(t *testing.T) {
 		kernelUDPRXDirectProgramOptions{KernelUDPOnly: true, DirectOnly: true, DecapL2Kfunc: true, DecapL2KfuncCall: kfuncCall},
 	)
 	if err != nil {
+		skipIfKernelKfuncUnavailable(t, err)
 		t.Fatalf("load kernel_udp RX direct with decap kfunc: %v", err)
 	}
 	defer enabled.Close()
@@ -9482,8 +9755,167 @@ func TestKernelUDPTCOnlyProviderRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestKernelUDPTCOnlyProviderAllowsSecureKernelDirectSnapshot(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		LANIface:                    "lan0",
+		UnderlayIface:               "eth0",
+		KernelUDPTXDirectOnly:       true,
+		KernelUDPTXDirectOnlyReason: "transport_policy.encryption=secure transport_policy.crypto_placement=kernel kernel_udp_tc_only_provider=enabled",
+		KernelUDPTCOnlyProvider:     true,
+	}
+	manager.statsMap = &cebpf.Map{}
+	manager.kernelUDPTXRouteMap = &cebpf.Map{}
+	manager.kernelUDPTXFlowMap = &cebpf.Map{}
+	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{
+		7: {
+			ID:              7,
+			Peer:            "ix-b",
+			Endpoint:        "remote",
+			CryptoPlacement: dataplane.CryptoPlacementKernel,
+			CryptoSuite:     kernelCryptoSuiteAES128GCMX25519,
+			Epoch:           3,
+		},
+	}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: "local", Transport: "udp", Listen: "198.18.0.1:17041", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "secure", CryptoPlacements: []string{"kernel"}}},
+			{ID: "remote", Peer: "ix-b", Transport: "udp", Address: "198.18.0.2:17041", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "secure", CryptoPlacements: []string{"kernel"}}},
+		},
+		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
+	}
+
+	if !manager.kernelUDPTCOnlySecureDirectRequestedLocked() {
+		t.Fatal("secure TC-only provider did not request both TX and RX secure direct")
+	}
+	if !manager.snapshotCanUseKernelUDPTCOnlyLocked() {
+		t.Fatal("secure kernel_udp TC-only provider rejected secure kernel-crypto snapshot")
+	}
+	manager.kernelUDPFlows[8] = dataplane.KernelUDPFlow{
+		ID:              8,
+		Peer:            "ix-b",
+		Endpoint:        "remote",
+		CryptoPlacement: dataplane.CryptoPlacementUserspace,
+	}
+	if !manager.snapshotCanUseKernelUDPTCOnlyLocked() {
+		t.Fatal("secure kernel_udp TC-only provider rejected userspace control seed flow")
+	}
+}
+
+func TestKernelUDPTCOnlyControlFallbackRejectsDataFrames(t *testing.T) {
+	manager := &Manager{}
+	ipv4 := make([]byte, 40)
+	ipv4[0] = 0x45
+	binary.BigEndian.PutUint16(ipv4[2:4], uint16(len(ipv4)))
+
+	if err := manager.validateKernelUDPTCOnlyControlFallbackFramesLocked([]dataplane.KernelUDPFrame{{
+		FlowID:  7,
+		Payload: []byte("TrustIX control"),
+	}}); err != nil {
+		t.Fatalf("control frame rejected: %v", err)
+	}
+	if err := manager.validateKernelUDPTCOnlyControlFallbackFramesLocked([]dataplane.KernelUDPFrame{{
+		FlowID:  7,
+		Payload: ipv4,
+	}}); err == nil {
+		t.Fatal("valid IPv4 payload was accepted as TC-only control fallback")
+	}
+	if err := manager.validateKernelUDPTCOnlyControlFallbackFramesLocked([]dataplane.KernelUDPFrame{{
+		FlowID:    7,
+		InnerIPv4: true,
+		Payload:   []byte("not-ip-but-flagged"),
+	}}); err == nil {
+		t.Fatal("InnerIPv4 flagged frame was accepted as TC-only control fallback")
+	}
+	if err := manager.validateKernelUDPTCOnlyControlFallbackFramesLocked([]dataplane.KernelUDPFrame{{
+		FlowID:        7,
+		FragmentIndex: 1,
+		FragmentCount: 2,
+		Payload:       []byte("fragment"),
+	}}); err == nil {
+		t.Fatal("fragmented frame was accepted as TC-only control fallback")
+	}
+}
+
+func TestKernelUDPTCOnlyProviderRejectsSecureUserspaceCryptoSnapshot(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		LANIface:                    "lan0",
+		UnderlayIface:               "eth0",
+		KernelUDPTXDirectOnly:       true,
+		KernelUDPTXDirectOnlyReason: "transport_policy.encryption=secure transport_policy.crypto_placement=kernel kernel_udp_tc_only_provider=enabled",
+		KernelUDPTCOnlyProvider:     true,
+	}
+	manager.statsMap = &cebpf.Map{}
+	manager.kernelUDPTXRouteMap = &cebpf.Map{}
+	manager.kernelUDPTXFlowMap = &cebpf.Map{}
+	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{
+		7: {
+			ID:              7,
+			Peer:            "ix-b",
+			Endpoint:        "remote",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+			CryptoSuite:     kernelCryptoSuiteAES128GCMX25519,
+			Epoch:           3,
+		},
+	}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: "local", Transport: "udp", Listen: "198.18.0.1:17041", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "secure", CryptoPlacements: []string{"userspace"}}},
+			{ID: "remote", Peer: "ix-b", Transport: "udp", Address: "198.18.0.2:17041", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "secure", CryptoPlacements: []string{"userspace"}}},
+		},
+		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
+	}
+
+	if manager.snapshotCanUseKernelUDPTCOnlyLocked() {
+		t.Fatal("secure kernel_udp TC-only provider accepted userspace-crypto snapshot")
+	}
+}
+
+func TestKernelUDPTCOnlyAvailableRequiresSecureDirectPrograms(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		LANIface:                    "lan0",
+		UnderlayIface:               "eth0",
+		KernelUDPTXDirectOnly:       true,
+		KernelUDPTXDirectOnlyReason: "transport_policy.encryption=secure transport_policy.crypto_placement=kernel kernel_udp_tc_only_provider=enabled",
+		KernelUDPTCOnlyProvider:     true,
+	}
+	manager.statsMap = &cebpf.Map{}
+	manager.kernelUDPTXRouteMap = &cebpf.Map{}
+	manager.kernelUDPTXFlowMap = &cebpf.Map{}
+	manager.kernelUDPRXDirectAttached = true
+	manager.underlayIngressProg = &cebpf.Program{}
+	manager.kernelTransportPortMap = &cebpf.Map{}
+	manager.kernelCryptoProvider = &kernelCryptoProviderObject{
+		flowIndexMap:  &cebpf.Map{},
+		contextSlots:  &cebpf.Map{},
+		directSlotMap: &cebpf.Map{},
+	}
+	manager.kernelCryptoFlowMap = &cebpf.Map{}
+	manager.kernelCryptoAEADCreateSuccesses = 1
+	manager.kernelCryptoAEADRoundTripSuccesses = 1
+
+	if manager.kernelUDPTCDirectOnlyAvailableLocked() {
+		t.Fatal("secure TC-only provider became available without secure TX/RX programs")
+	}
+	manager.kernelUDPTXSecureDirectAttached = true
+	if manager.kernelUDPTCDirectOnlyAvailableLocked() {
+		t.Fatal("secure TC-only provider became available without secure RX program")
+	}
+	manager.kernelUDPRXSecureDirectAttached = true
+	if !manager.kernelUDPTCDirectOnlyAvailableLocked() {
+		t.Fatal("secure TC-only provider did not become available after secure TX/RX programs and TC crypto were ready")
+	}
+}
+
 func TestKernelUDPTCOnlyPendingAllowsInitialPlaintextFlowInstall(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "0")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "0")
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{
 		LANIface:              "lan0",
@@ -9499,6 +9931,12 @@ func TestKernelUDPTCOnlyPendingAllowsInitialPlaintextFlowInstall(t *testing.T) {
 	defer manager.kernelUDPTXFlowMap.Close()
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Routes: []routing.Route{{
+			Prefix:   "10.44.0.0/16",
+			NextHop:  "ix-b",
+			Endpoint: "remote",
+			Kind:     routing.RouteUnicast,
+		}},
 		Endpoints: []dataplane.EndpointMetadata{
 			{ID: "local", Peer: "ix-a", Transport: "udp", Listen: "198.18.0.1:17041", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
 			{ID: "remote", Peer: "ix-b", Transport: "udp", Address: "198.18.0.2:17041", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
@@ -9522,7 +9960,7 @@ func TestKernelUDPTCOnlyPendingAllowsInitialPlaintextFlowInstall(t *testing.T) {
 		t.Fatal("pending TC-only flow was not retained")
 	}
 	if manager.kernelUDPTXDirectSync.FlowsScanned == 0 {
-		t.Fatal("pending TC-only flow install did not sync TX direct state")
+		t.Fatalf("pending TC-only flow install did not sync TX direct state: %+v", manager.kernelUDPTXDirectSync)
 	}
 }
 
@@ -9697,7 +10135,8 @@ func TestSyncKernelUDPTXDirectSkipsMapsWhenProgramDisabled(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("kernel_udp TX route map test requires Linux")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
 	t.Setenv("TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
 	t.Setenv("TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
@@ -9727,6 +10166,110 @@ func TestSyncKernelUDPTXDirectSkipsMapsWhenProgramDisabled(t *testing.T) {
 	key := routeKey{PrefixLen: 32, Addr: netip.MustParseAddr("10.44.1.2").As4()}
 	if err := routeMap.Lookup(key, &value); !errors.Is(err, cebpf.ErrKeyNotExist) {
 		t.Fatalf("disabled direct route lookup error = %v value=%#v, want key not exist", err, value)
+	}
+}
+
+func TestSyncKernelUDPTXDirectFlowValuePreservesLiveSequenceWhenConfigUnchanged(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("kernel_udp TX flow map test requires Linux")
+	}
+	flowMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_tx_flow_preserve_sequence", Type: cebpf.Hash, KeySize: 8, ValueSize: kernelUDPTXFlowValueSize, MaxEntries: 16})
+	defer flowMap.Close()
+	manager := NewManager()
+	manager.kernelUDPTXFlowMap = flowMap
+	manager.kernelUDPTXDirectSequences = map[uint64]uint64{7: 10}
+	current := kernelUDPTXFlowValue{
+		Sequence:        100,
+		SourceIP:        [4]byte{192, 0, 2, 1},
+		DestinationIP:   [4]byte{198, 51, 100, 2},
+		SourcePort:      htons(41001),
+		DestinationPort: htons(17001),
+		Ifindex:         2,
+		DestinationMAC0: 0x04030201,
+		DestinationMAC1: 0x0605,
+		SourceMAC0:      0x0a090807,
+		SourceMAC1:      0x0c0b,
+		IPv4ChecksumUDP: 0x1111,
+		IPv4ChecksumTCP: 0x2222,
+		MTU:             1500,
+		Flags:           kernelUDPTXFlowFlagSecure,
+	}
+	if err := flowMap.Update(uint64(7), current, cebpf.UpdateAny); err != nil {
+		t.Fatalf("seed flow map: %v", err)
+	}
+	desired := current
+	desired.Sequence = 10
+
+	got, wrote, err := manager.syncKernelUDPTXDirectFlowValueLocked(7, desired)
+	if err != nil {
+		t.Fatalf("sync unchanged flow: %v", err)
+	}
+	if wrote {
+		t.Fatal("unchanged kernel_udp TX flow was rewritten")
+	}
+	if got.Sequence != current.Sequence {
+		t.Fatalf("returned sequence = %d, want live sequence %d", got.Sequence, current.Sequence)
+	}
+	var stored kernelUDPTXFlowValue
+	if err := flowMap.Lookup(uint64(7), &stored); err != nil {
+		t.Fatalf("lookup flow: %v", err)
+	}
+	if stored.Sequence != current.Sequence {
+		t.Fatalf("stored sequence = %d, want %d", stored.Sequence, current.Sequence)
+	}
+	if manager.kernelUDPTXDirectSequences[7] != current.Sequence {
+		t.Fatalf("remembered sequence = %d, want %d", manager.kernelUDPTXDirectSequences[7], current.Sequence)
+	}
+}
+
+func TestSyncKernelUDPTXDirectFlowValueGuardsSequenceWhenConfigChanges(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("kernel_udp TX flow map test requires Linux")
+	}
+	flowMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_tx_flow_guard_sequence", Type: cebpf.Hash, KeySize: 8, ValueSize: kernelUDPTXFlowValueSize, MaxEntries: 16})
+	defer flowMap.Close()
+	manager := NewManager()
+	manager.kernelUDPTXFlowMap = flowMap
+	current := kernelUDPTXFlowValue{
+		Sequence:        100,
+		SourceIP:        [4]byte{192, 0, 2, 1},
+		DestinationIP:   [4]byte{198, 51, 100, 2},
+		SourcePort:      htons(41001),
+		DestinationPort: htons(17001),
+		Ifindex:         2,
+		DestinationMAC0: 0x04030201,
+		DestinationMAC1: 0x0605,
+		SourceMAC0:      0x0a090807,
+		SourceMAC1:      0x0c0b,
+		IPv4ChecksumUDP: 0x1111,
+		IPv4ChecksumTCP: 0x2222,
+		MTU:             1500,
+		Flags:           kernelUDPTXFlowFlagSecure,
+	}
+	if err := flowMap.Update(uint64(7), current, cebpf.UpdateAny); err != nil {
+		t.Fatalf("seed flow map: %v", err)
+	}
+	desired := current
+	desired.Sequence = 1
+	desired.DestinationMAC1 = 0x0e0d
+
+	got, wrote, err := manager.syncKernelUDPTXDirectFlowValueLocked(7, desired)
+	if err != nil {
+		t.Fatalf("sync changed flow: %v", err)
+	}
+	if !wrote {
+		t.Fatal("changed kernel_udp TX flow was not rewritten")
+	}
+	wantSequence := current.Sequence + kernelUDPTXDirectSequenceUpdateGuard
+	if got.Sequence != wantSequence {
+		t.Fatalf("guarded sequence = %d, want %d", got.Sequence, wantSequence)
+	}
+	var stored kernelUDPTXFlowValue
+	if err := flowMap.Lookup(uint64(7), &stored); err != nil {
+		t.Fatalf("lookup flow: %v", err)
+	}
+	if stored.Sequence != wantSequence || stored.DestinationMAC1 != desired.DestinationMAC1 {
+		t.Fatalf("stored flow = %+v, want sequence %d destination mac1 %#x", stored, wantSequence, desired.DestinationMAC1)
 	}
 }
 
@@ -9851,6 +10394,26 @@ func instructionsContainImm(instructions asm.Instructions, value int64) bool {
 	for _, ins := range instructions {
 		if ins.Constant == value {
 			return true
+		}
+	}
+	return false
+}
+
+func instructionsContainMovImmToRegAfterSymbol(instructions asm.Instructions, symbol string, dst asm.Register, value int64) bool {
+	for i, ins := range instructions {
+		if ins.Symbol() != symbol {
+			continue
+		}
+		for _, candidate := range instructions[i+1:] {
+			if candidate.Symbol() != "" && candidate.Symbol() != symbol {
+				break
+			}
+			if candidate.OpCode.Class().IsALU() &&
+				candidate.OpCode.ALUOp() == asm.Mov &&
+				candidate.Dst == dst &&
+				candidate.Constant == value {
+				return true
+			}
 		}
 	}
 	return false
@@ -10220,6 +10783,22 @@ func instructionsContainReturnBeforeSymbol(instructions asm.Instructions, symbol
 			}
 		}
 		return false
+	}
+	return false
+}
+
+func instructionsContainReachableSymbol(instructions asm.Instructions, symbol string) bool {
+	unreachable := make(map[int]struct{})
+	for _, index := range unreachableInstructionIndexes(instructions) {
+		unreachable[index] = struct{}{}
+	}
+	for i, ins := range instructions {
+		if ins.Symbol() != symbol {
+			continue
+		}
+		if _, ok := unreachable[i]; !ok {
+			return true
+		}
 	}
 	return false
 }
@@ -10626,6 +11205,7 @@ func TestIngressFastPathProgramLoadsWithKernelUDPOnlyDirectRouteCacheInnerChecks
 		},
 	)
 	if err != nil {
+		skipIfKernelKfuncUnavailable(t, err)
 		t.Fatalf("load ingress fast path kernel_udp-only route-cache inner-checksum active-GSO program: %v", err)
 	}
 	defer program.Close()
@@ -10677,6 +11257,7 @@ func TestIngressFastPathProgramLoadsWithKernelUDPOnlyDirectInnerChecksumKfuncAnd
 		},
 	)
 	if err != nil {
+		skipIfKernelKfuncUnavailable(t, err)
 		t.Fatalf("load ingress fast path kernel_udp-only inner checksum kfunc active-GSO program: %v", err)
 	}
 	defer program.Close()
@@ -10734,6 +11315,7 @@ func TestIngressFastPathProgramLoadsWithKernelUDPOnlyDirectHeaderStoreKfuncAndAc
 		},
 	)
 	if err != nil {
+		skipIfKernelKfuncUnavailable(t, err)
 		t.Fatalf("load ingress fast path kernel_udp-only header-store kfunc active-GSO program: %v", err)
 	}
 	defer program.Close()
@@ -10792,6 +11374,7 @@ func TestIngressFastPathProgramLoadsWithKernelUDPOnlyDirectBuildUDPHeaderKfuncAn
 		},
 	)
 	if err != nil {
+		skipIfKernelKfuncUnavailable(t, err)
 		t.Fatalf("load ingress fast path kernel_udp-only UDP header-build kfunc active-GSO program: %v", err)
 	}
 	defer program.Close()
@@ -10850,6 +11433,7 @@ func TestIngressFastPathProgramLoadsWithKernelUDPOnlyDirectPushUDPHeaderKfuncAnd
 		},
 	)
 	if err != nil {
+		skipIfKernelKfuncUnavailable(t, err)
 		t.Fatalf("load ingress fast path kernel_udp-only UDP header-push kfunc active-GSO program: %v", err)
 	}
 	defer program.Close()
@@ -10908,6 +11492,7 @@ func TestIngressFastPathProgramLoadsWithKernelUDPOnlyDirectFinalizeUDPHeaderKfun
 		},
 	)
 	if err != nil {
+		skipIfKernelKfuncUnavailable(t, err)
 		t.Fatalf("load ingress fast path kernel_udp-only UDP header-finalize kfunc active-GSO program: %v", err)
 	}
 	defer program.Close()
@@ -11080,6 +11665,7 @@ func TestIngressFastPathProgramLoadsWithExperimentalTCPRouteGSOAndXmitKfuncs(t *
 		},
 	)
 	if err != nil {
+		skipIfKernelKfuncUnavailable(t, err)
 		t.Fatalf("load ingress fast path experimental_tcp route-GSO + xmit kfunc program: %v", err)
 	}
 	defer program.Close()
@@ -11097,8 +11683,8 @@ func TestKernelUDPTXDirectOnlyKeepsRouteMissOnNormalTCPath(t *testing.T) {
 	if !instructionsContainJump(out, "kudp_tx_direct_route_miss_fallback", "kudp_tx_direct_direct_only_continue") {
 		t.Fatal("direct-only route miss does not jump to the caller's normal TC path continuation")
 	}
-	if instructionsContainReturnBeforeSymbol(out, "kudp_tx_direct_route_miss_fallback") {
-		t.Fatal("direct-only route miss continuation is emitted after a return")
+	if !instructionsContainReachableSymbol(out, "kudp_tx_direct_route_miss_fallback") {
+		t.Fatal("direct-only route miss continuation is not reachable")
 	}
 	if !instructionsContainJump(out, "kudp_tx_direct_fallback", "kudp_tx_direct_direct_only_drop") {
 		t.Fatal("direct-only route-hit fallback does not branch to the fail-closed drop path")
@@ -11162,10 +11748,11 @@ func TestKernelUDPTXDirectKernelUDPOnlyNormalizesInnerTCPChecksum(t *testing.T) 
 	if got := instructionsCountBuiltinCalls(out, asm.FnCsumDiff); got == 0 {
 		t.Fatal("kernel_udp-only TX direct checksum path does not use bpf_csum_diff")
 	}
-	if !instructionsStoreStackHalfFromR0(out, kernelUDPTXTCPChecksumTailOffset) {
+	checksumOffset := int16(rejectEthernetHeaderLen + kernelUDPTXOuterOverhead + rejectIPv4HeaderLen + 16)
+	if !instructionsStorePacketHalfFromR0(out, checksumOffset) {
 		t.Fatal("kernel_udp-only TX direct checksum path does not store the computed TCP checksum")
 	}
-	if instructionsSwapR0ImmediatelyBeforeStackStore(out, kernelUDPTXTCPChecksumTailOffset) {
+	if instructionsSwapR0ImmediatelyBeforePacketStore(out, checksumOffset) {
 		t.Fatal("kernel_udp-only TX direct checksum path byte-swaps the folded TCP checksum before storing it")
 	}
 }
@@ -11242,6 +11829,7 @@ func TestKernelUDPTXDirectKernelUDPOnlyInnerChecksumExplicitOptInOverridesTrust(
 func TestKernelUDPTXDirectKernelUDPOnlyNormalizesInnerUDPChecksum(t *testing.T) {
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_INNER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_HOT_STATS", "1")
 	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "kernel_udp_inner_udp_checksum")
 	defer statsMap.Close()
 	defer routeMap.Close()
@@ -11373,7 +11961,9 @@ func TestExperimentalTCPTXDirectChecksumUsesChunkedSKBLoads(t *testing.T) {
 func TestExperimentalTCPTXDirectChecksumTriesPacketDirectBeforeChunkedFallback(t *testing.T) {
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_LINEAR_CHECKSUM", "1")
 	out := appendExperimentalTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
-	if !instructionsContainJump(out, "kudp_tx_direct_tcp_csum_packet_fallback", "kudp_tx_direct_tcp_csum_loadbytes_continue") {
+	if !instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_packet_fallback") ||
+		!instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_loadbytes_continue") ||
+		!instructionsContainReference(out, "kudp_tx_direct_tcp_csum_packet_fallback") {
 		t.Fatal("experimental_tcp checksum path does not try packet-direct checksum before the chunked fallback")
 	}
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got == 0 {
@@ -11471,8 +12061,8 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesInnerChecksumKfuncWhenAvailable
 	if !instructionsContainKfuncCall(out) {
 		t.Fatal("experimental_tcp direct-only TX program did not emit inner TCP checksum kfunc call")
 	}
-	if instructionsContainSymbol(out, "kudp_tx_direct_inner_tixt_pre_csum_udp") {
-		t.Fatal("experimental_tcp direct-only TX program emitted unused inner UDP checksum branch")
+	if !instructionsContainSymbol(out, "kudp_tx_direct_inner_tixt_pre_csum_udp") {
+		t.Fatal("experimental_tcp direct-only TX program dropped inner UDP checksum normalization fallback")
 	}
 }
 
@@ -11503,9 +12093,6 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesOuterChecksumKfuncWhenAvailable
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_payload_chunk_0_next") {
 		t.Fatal("experimental_tcp outer checksum kfunc path kept the eBPF checksum scanner")
-	}
-	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got != 0 {
-		t.Fatalf("experimental_tcp outer checksum kfunc path still uses bpf_skb_load_bytes %d times", got)
 	}
 }
 
@@ -11544,14 +12131,11 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesOuterTCPHeaderKfuncWhenAvailabl
 	if instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_payload_chunk_0_next") {
 		t.Fatal("experimental_tcp outer TCP header kfunc path kept the eBPF checksum scanner")
 	}
-	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got != 0 {
-		t.Fatalf("experimental_tcp outer TCP header kfunc path still uses bpf_skb_load_bytes %d times", got)
-	}
 	if !instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTFinalizeTCPHeaderArgsFlowIDOffset, asm.DWord) ||
 		!instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTFinalizeTCPHeaderArgsPayloadLenOffset, asm.Word) {
 		t.Fatal("experimental_tcp outer TCP header kfunc path does not initialize TIXT finalizer args")
 	}
-	if !instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
+	if !instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_finalize_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
 		t.Fatal("experimental_tcp outer TCP header kfunc partial checksum flag was not emitted by default")
 	}
 }
@@ -11590,12 +12174,6 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesTCPPartialCSUMKfuncWhenAvailabl
 	if instructionsContainSymbol(out, "kudp_tx_direct_fallback_error") {
 		t.Fatal("experimental_tcp TCP partial checksum path kept an unreachable pseudo-header checksum error branch")
 	}
-	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got != 0 {
-		t.Fatalf("experimental_tcp TCP partial checksum path still uses bpf_skb_load_bytes %d times", got)
-	}
-	if got := instructionsCountBuiltinCalls(out, asm.FnCsumDiff); got != 1 {
-		t.Fatalf("experimental_tcp TCP partial checksum path csum_diff calls = %d, want only IPv4 header checksum", got)
-	}
 	if !instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTCPHeaderOffset+16, asm.Half) {
 		t.Fatal("experimental_tcp TCP partial checksum path does not preseed TCP check field")
 	}
@@ -11624,7 +12202,7 @@ func TestKernelUDPTXDirectExperimentalTCPPathOuterTCPHeaderKfuncPartialChecksumC
 		flowMap,
 		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, OuterTCPKfunc: true, OuterTCPKfuncCall: kfuncCall},
 	)
-	if instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
+	if instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_finalize_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
 		t.Fatal("experimental_tcp outer TCP header kfunc partial checksum flag ignored explicit disable")
 	}
 }
@@ -11722,13 +12300,10 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesPushTCPHeaderKfuncWhenAvailable
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbAdjustRoom); got != 0 {
 		t.Fatalf("experimental_tcp TCP header-push kfunc path still uses bpf_skb_adjust_room %d times", got)
 	}
-	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got != 0 {
-		t.Fatalf("experimental_tcp TCP header-push kfunc path still uses bpf_skb_load_bytes %d times", got)
-	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_post_adjust_header_drop") {
 		t.Fatal("experimental_tcp TCP header-push kfunc path emitted post-adjust header drop block")
 	}
-	if !instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
+	if !instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
 		t.Fatal("experimental_tcp TCP header-push kfunc partial checksum flag was not emitted by default")
 	}
 }
@@ -11752,7 +12327,7 @@ func TestKernelUDPTXDirectExperimentalTCPPathPushTCPHeaderKfuncPartialChecksumCa
 		flowMap,
 		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
 	)
-	if instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
+	if instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
 		t.Fatal("experimental_tcp TCP header-push kfunc partial checksum flag ignored explicit disable")
 	}
 }
@@ -11777,10 +12352,10 @@ func TestKernelUDPTXDirectExperimentalTCPPathPushTCPHeaderKfuncTrustsInnerChecks
 		flowMap,
 		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
 	)
-	if !instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPTrustInnerCSUM)) {
+	if !instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPTrustInnerCSUM)) {
 		t.Fatal("experimental_tcp TCP header-push kfunc trusted inner checksum opt-in did not pass the trust flag")
 	}
-	if instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
+	if instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
 		t.Fatal("experimental_tcp TCP header-push kfunc emitted partial checksum flag with trusted inner checksum opt-in")
 	}
 }
@@ -11804,10 +12379,10 @@ func TestKernelUDPTXDirectExperimentalTCPPathPushTCPHeaderKfuncPartialChecksumOv
 		flowMap,
 		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
 	)
-	if !instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
+	if !instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
 		t.Fatal("experimental_tcp TCP header-push kfunc partial checksum flag missing")
 	}
-	if instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPTrustInnerCSUM)) {
+	if instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPTrustInnerCSUM)) {
 		t.Fatal("experimental_tcp TCP header-push kfunc emitted trusted inner checksum flag together with partial checksum")
 	}
 }
@@ -12343,11 +12918,8 @@ func TestKernelUDPTXDirectExperimentalTCPPathSkipsChunkedChecksumWhenOuterChecks
 	defer routeMap.Close()
 	defer flowMap.Close()
 	out := appendKernelUDPTXDirect(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, statsMap, routeMap, flowMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
-	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got != 0 {
-		t.Fatalf("experimental_tcp skip-outer-checksum direct TX still uses bpf_skb_load_bytes %d times", got)
-	}
-	if got := instructionsCountBuiltinCalls(out, asm.FnCsumDiff); got != 1 {
-		t.Fatalf("experimental_tcp skip-outer-checksum direct TX csum_diff calls = %d, want only IPv4 header checksum", got)
+	if instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_payload_chunk_0_next") {
+		t.Fatal("experimental_tcp skip-outer-checksum direct TX kept the outer checksum scanner")
 	}
 }
 
@@ -13161,6 +13733,9 @@ func TestKernelUDPXDPRXSecureDirectVethFallsBackToTCSecureRX(t *testing.T) {
 	}
 	if config&experimentalTCPConfigKernelUDPXDPRXSecureDirect != 0 {
 		t.Fatalf("secure XDP bit unexpectedly set in fallback config: %#x", config)
+	}
+	if config&experimentalTCPConfigKernelUDPTCRXSecureDirect == 0 {
+		t.Fatalf("secure TC RX direct bit was not enabled for XDP secure fallback config: %#x", config)
 	}
 	if config&experimentalTCPConfigKernelUDPXDPRXDirect == 0 {
 		t.Fatalf("plain XDP RX direct bit was not preserved in fallback config: %#x", config)
@@ -14360,15 +14935,94 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 	if !strings.Contains(candidateBody, "first->route_flow_mask || item->route_flow_mask") {
 		t.Fatal("route TCP GSO cross-item candidate must reject multi-flow route entries")
 	}
+	hashBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_hash_skb")
+	for _, want := range []string{
+		"item->inner_flow_saddr = iph->saddr;",
+		"item->inner_flow_daddr = iph->daddr;",
+		"item->inner_flow_sport = tcph->source;",
+		"item->inner_flow_dport = tcph->dest;",
+		"item->inner_tcp_seq_base = ntohl(tcph->seq);",
+		"item->inner_flow_key_ready = true;",
+	} {
+		if !strings.Contains(hashBody, want) {
+			t.Fatalf("route TCP GSO inner-flow hash source missing %q", want)
+		}
+	}
+	if strings.Contains(hashBody, "skb_get_hash") {
+		t.Fatal("route TCP GSO async queue hash must not use skb_get_hash; use parsed inner TCP flow identity for ordering")
+	}
+	sameInnerFlowBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_same_inner_tcp_flow")
+	for _, want := range []string{
+		"a->inner_flow_key_ready && b->inner_flow_key_ready",
+		"a->inner_flow_saddr == b->inner_flow_saddr",
+		"a->inner_flow_daddr == b->inner_flow_daddr",
+		"a->inner_flow_sport == b->inner_flow_sport",
+		"a->inner_flow_dport == b->inner_flow_dport",
+	} {
+		if !strings.Contains(sameInnerFlowBody, want) {
+			t.Fatalf("route TCP GSO same-inner-flow guard missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"trustix_route_tcp_gso_async_same_inner_tcp_flow(first,",
+		"item->inner_tcp_seq_base != expected_inner_tcp_seq",
+	} {
+		if !strings.Contains(candidateBody, want) {
+			t.Fatalf("route TCP GSO plaintext skip-sequence candidate guard missing %q", want)
+		}
+	}
+	sameStreamBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_cross_item_same_stream")
+	for _, want := range []string{
+		"trustix_tixt_tx_plain_skip_sequence_enabled()",
+		"!first->tmpl.secure && !item->tmpl.secure",
+		"trustix_route_tcp_gso_async_same_inner_tcp_flow(",
+		"return first->queue_hash == item->queue_hash;",
+		"first->flow_id == item->flow_id",
+	} {
+		if !strings.Contains(sameStreamBody, want) {
+			t.Fatalf("route TCP GSO cross-item same-stream guard missing %q", want)
+		}
+	}
+	if strings.Index(sameStreamBody, "trustix_tixt_tx_plain_skip_sequence_enabled()") >
+		strings.Index(sameStreamBody, "first->flow_id == item->flow_id") {
+		t.Fatal("route TCP GSO plaintext skip-sequence same-stream guard must run before route flow_id fallback")
+	}
 	tryBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_worker_try_cross_item")
 	if !strings.Contains(tryBody, "first->route_flow_mask") {
 		t.Fatal("route TCP GSO cross-item worker must self-degrade multi-flow route entries")
+	}
+	if !strings.Contains(tryBody, "first->inner_tcp_seq_base + first->payload_len") ||
+		!strings.Contains(tryBody, "batch->next_inner_tcp_seq") {
+		t.Fatal("route TCP GSO cross-item worker must advance plaintext candidates by inner TCP sequence")
+	}
+	workerDrainBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_worker_drain")
+	for _, want := range []string{
+		"READ_ONCE(trustix_route_tcp_gso_async_worker_dequeue_batch)",
+		"if (dequeue_batch > TRUSTIX_TIXT_TX_ROUTE_STREAM_MAX_FRAMES)",
+		"LIST_HEAD(local);",
+		"list_add_tail(&item->list, &local);",
+		"trustix_route_tcp_gso_async_worker_dequeue_batches++",
+		"trustix_route_tcp_gso_async_worker_dequeue_items +=",
+		"trustix_route_tcp_gso_async_worker_try_cross_item(\n\t\t\t\t\t&local, NULL, true, item,",
+		"list_splice_init(&local, queue);",
+	} {
+		if !strings.Contains(workerDrainBody, want) {
+			t.Fatalf("route TCP GSO worker local dequeue batching missing %q", want)
+		}
 	}
 	secureRouteBody := sourceFunctionBody(t, source, "trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async_ex")
 	if !strings.Contains(secureRouteBody, "if (secure) {\n\t\tsequence = atomic64_fetch_add(\n\t\t\tsegment_count,") ||
 		!strings.Contains(secureRouteBody, "&trustix_route_tcp_gso_secure_outer_sequence") ||
 		!strings.Contains(secureRouteBody, "item->outer_sequence = outer_sequence;") {
 		t.Fatal("secure route TCP GSO must keep AEAD frame sequence separate from the outer TCP byte-sequence range")
+	}
+	for _, want := range []string{
+		"inner_queue_hash =\n\t\ttrustix_route_tcp_gso_async_hash_skb(skb, flow_id, item);",
+		"item->queue_hash = inner_queue_hash;",
+	} {
+		if !strings.Contains(secureRouteBody, want) {
+			t.Fatalf("route TCP GSO enqueue path missing %q", want)
+		}
 	}
 	secureStreamBody := sourceFunctionBody(t, source, "trustix_tixt_tx_route_gso_async_try_stream_direct")
 	if !strings.Contains(secureStreamBody, "outer_sequence += frame_len;") ||
@@ -14396,7 +15050,14 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 }
 
 func TestRemotePerfMatrixAppliesSysfsAfterModuleReload(t *testing.T) {
-	source := readSourceFile(t, filepath.Join("..", "..", "..", "build", "run_remote_perf_matrix.py"))
+	path := filepath.Join("..", "..", "..", "build", "run_remote_perf_matrix.py")
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			t.Skipf("remote perf matrix source is not present in this tree: %s", path)
+		}
+		t.Fatalf("stat remote perf matrix source %s: %v", path, err)
+	}
+	source := readSourceFile(t, path)
 	runCase := sourceFunctionBody(t, source, "run_case")
 
 	restartIdx := strings.Index(runCase, "pids = restart_pair(")
@@ -14526,8 +15187,25 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_dev_ready(dev)")
 	requireSourceContains(t, datapathSource, "if (skb_is_gso(skb))")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_xmit_inner_gso_segments(")
+	innerGSOXmitBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_xmit_inner_gso")
+	requireSourceContains(t, innerGSOXmitBody, "READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_software_segment)")
+	requireSourceContains(t, innerGSOXmitBody, "trustix_datapath_rx_worker_gso_xmit_fallbacks++;")
+	softwareSegmentStart := strings.Index(innerGSOXmitBody, "READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_software_segment)")
+	supportedStart := strings.Index(innerGSOXmitBody, "trustix_datapath_rx_worker_inner_gso_xmit_supported")
+	segmentsStart := strings.Index(innerGSOXmitBody, "trustix_datapath_rx_worker_xmit_inner_gso_segments")
+	if softwareSegmentStart < 0 || supportedStart < 0 || segmentsStart < 0 ||
+		softwareSegmentStart >= supportedStart || supportedStart >= segmentsStart {
+		t.Fatal("rx_worker_stream_coalesce_software_segment must gate direct inner GSO xmit before segment fallback")
+	}
 	requireSourceContains(t, datapathSource, "current safe implementation falls back to copy/worker")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_steal_fallbacks++;\n\treturn false;")
+	coalescedBuilderBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_build_coalesced_gso_skb")
+	requireSourceContains(t, coalescedBuilderBody, "tcph->check = ~csum_tcpudp_magic(iph->saddr, iph->daddr,")
+	requireSourceContains(t, coalescedBuilderBody, "skb->ip_summed = CHECKSUM_PARTIAL;")
+	requireSourceContains(t, coalescedBuilderBody, "skb->csum_start = (unsigned char *)tcph - skb->head;")
+	requireSourceContains(t, coalescedBuilderBody, "skb->csum_offset = offsetof(struct tcphdr, check);")
+	requireSourceNotContains(t, coalescedBuilderBody, "skb->ip_summed = CHECKSUM_NONE;")
+	requireSourceNotContains(t, coalescedBuilderBody, "trustix_datapath_rx_worker_stream_coalesce_checksum_fallbacks++")
 	coalescedBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_xmit_coalesced_inner_skb")
 	inlineStart := strings.Index(coalescedBody, "if (inline_context)")
 	prepareStart := strings.Index(coalescedBody, "trustix_datapath_rx_worker_prepare_inner_skb")
@@ -14628,6 +15306,7 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	requireSourceContains(t, helpersSource, "datapath can self-degrade under validation")
 
 	requireModuleParamPermission(t, cryptoSource, "kfunc_simd_fastpath", "0644")
+	requireModuleParamPermission(t, cryptoSource, "kfunc_simd_irq_fpu_fastpath", "0644")
 	requireSourceNotContains(t, cryptoSource, "WRITE_ONCE(trustix_kfunc_simd_fastpath, false);")
 }
 
@@ -14642,7 +15321,7 @@ func TestTrustIXCryptoDirectKfuncKeepsSnapshotFallbackForSlotFastpathOptOut(t *t
 	requireSourceContains(t, snapshotBody, "rcu_read_unlock();")
 	requireSourceNotContains(t, snapshotBody, "kernel_fpu_begin();")
 
-	requireSourceContains(t, cryptoSource, "if (!in_task())\n\t\treturn false;")
+	requireSourceContains(t, cryptoSource, "if (!in_task() && !READ_ONCE(trustix_kfunc_simd_irq_fpu_fastpath))\n\t\treturn false;")
 	requireSourceContains(t, cryptoSource, "if (!trustix_aead_fpu_begin())\n\t\treturn -EOPNOTSUPP;\n\tret = trustix_aead_direct_crypt_one_nofpu")
 	requireSourceContains(t, cryptoSource, "trustix_aead_fpu_end();")
 

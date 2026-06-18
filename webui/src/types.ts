@@ -637,6 +637,12 @@ export type KernelRXStageStatus = {
   target_ifname?: string;
   target_ifindex?: number;
   flags?: number;
+  tx_plaintext_attached?: boolean;
+  tx_plaintext_ifname?: string;
+  tx_plaintext_ifindex?: number;
+  tx_plaintext_target_ifname?: string;
+  tx_plaintext_target_ifindex?: number;
+  tx_plaintext_flags?: number;
   queue_len?: number;
   capacity?: number;
   staged?: number;

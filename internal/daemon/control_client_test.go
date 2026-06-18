@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -408,14 +409,22 @@ func TestControlAdvertisementPostSchedulesRouteWarmup(t *testing.T) {
 	if got := fake.dialCount(); got == 0 {
 		t.Fatal("warmup transport was not dialed")
 	}
-	daemonA.dataMu.Lock()
-	defer daemonA.dataMu.Unlock()
-	for key := range daemonA.dataSessions {
-		if key.Peer == "ix-c" && key.Endpoint == "ix-c-udp" {
-			return
+	deadline := time.Now().Add(time.Second)
+	for {
+		daemonA.dataMu.Lock()
+		for key := range daemonA.dataSessions {
+			if key.Peer == "ix-c" && key.Endpoint == "ix-c-udp" {
+				daemonA.dataMu.Unlock()
+				return
+			}
 		}
+		sessions := maps.Clone(daemonA.dataSessions)
+		daemonA.dataMu.Unlock()
+		if !time.Now().Before(deadline) {
+			t.Fatalf("warmup session for ix-c was not registered: %#v", sessions)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("warmup session for ix-c was not registered: %#v", daemonA.dataSessions)
 }
 
 type warmupSignalTransport struct {

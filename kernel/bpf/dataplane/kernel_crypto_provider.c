@@ -20,7 +20,7 @@ typedef unsigned long long __u64;
 #define BPF_ANY 0
 #define XDP_PASS 2
 
-#define TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES 16384
+#define TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES 4096
 #define TRUSTIX_KERNEL_CRYPTO_CMD_INSTALL 1
 #define TRUSTIX_KERNEL_CRYPTO_CMD_DELETE 2
 #define TRUSTIX_KERNEL_CRYPTO_SUITE_AES_256_GCM_X25519 1
@@ -34,7 +34,7 @@ typedef unsigned long long __u64;
 #define TRUSTIX_KERNEL_CRYPTO_ROUNDTRIP_WIRE_LEN (TRUSTIX_KERNEL_CRYPTO_ROUNDTRIP_PLAIN_LEN + TRUSTIX_KERNEL_CRYPTO_ROUNDTRIP_TAG_LEN)
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_MAX 4095
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN 16
-#define TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS 64
+#define TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS 1024
 #define TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX ((TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS - 1) * 64)
 
 struct xdp_md {
@@ -214,9 +214,12 @@ static void trustix_fill_aead_params(struct bpf_crypto_params *params,
 static void trustix_fill_ctx_value(struct trustix_kernel_crypto_ctx_value *ctx_value,
                                    const struct trustix_kernel_crypto_flow_value *value)
 {
-    ctx_value->suite = value->suite;
-    ctx_value->wire_format = value->wire_format;
-    ctx_value->flags = value->flags;
+	volatile __u64 *replay_seen = ctx_value->replay_seen;
+	volatile __u64 *replay_blocks = ctx_value->replay_blocks;
+
+	ctx_value->suite = value->suite;
+	ctx_value->wire_format = value->wire_format;
+	ctx_value->flags = value->flags;
     ctx_value->epoch = value->epoch;
     ctx_value->replay_window = value->replay_window;
     ctx_value->installed_unix = value->installed_unix;
@@ -228,11 +231,11 @@ static void trustix_fill_ctx_value(struct trustix_kernel_crypto_ctx_value *ctx_v
     for (int i = 0; i < 12; i++)
         ctx_value->iv[i] = value->iv[i];
 
-#pragma clang loop unroll(full)
-    for (int i = 0; i < TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS; i++) {
-        ctx_value->replay_seen[i] = 0;
-        ctx_value->replay_blocks[i] = 0;
-    }
+#pragma clang loop unroll(disable)
+	for (int i = 0; i < TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS; i++) {
+		replay_seen[i] = 0;
+		replay_blocks[i] = 0;
+	}
 }
 
 static int trustix_kernel_crypto_validate_value(const struct trustix_kernel_crypto_flow_value *value)

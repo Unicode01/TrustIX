@@ -2936,7 +2936,7 @@ func (daemon *Daemon) persistPendingMembers() error {
 func (daemon *Daemon) pruneExpiredMembers() bool {
 	now := time.Now().UTC()
 	var changed bool
-	expired := make(map[core.IXID]struct{})
+	expiredDynamicOnly := make(map[core.IXID]struct{})
 	daemon.membershipMu.Lock()
 	for ixID, record := range daemon.members {
 		if ixID == daemon.desired.IX.ID {
@@ -2944,7 +2944,9 @@ func (daemon *Daemon) pruneExpiredMembers() bool {
 		}
 		if now.Sub(record.LastSeen) > memberRecordTTL {
 			delete(daemon.members, ixID)
-			expired[ixID] = struct{}{}
+			if _, static := daemon.staticPeerConfig(ixID); !static {
+				expiredDynamicOnly[ixID] = struct{}{}
+			}
 			changed = true
 		}
 	}
@@ -2952,9 +2954,9 @@ func (daemon *Daemon) pruneExpiredMembers() bool {
 	if changed {
 		_ = daemon.persistMembers()
 	}
-	if len(expired) > 0 {
-		daemon.closeDataSessionsForPeers(expired)
-		daemon.clearFlowsForPeers(expired)
+	if len(expiredDynamicOnly) > 0 {
+		daemon.closeDataSessionsForPeers(expiredDynamicOnly)
+		daemon.clearFlowsForPeers(expiredDynamicOnly)
 	}
 	if daemon.pruneExpiredPendingMembers() {
 		changed = true

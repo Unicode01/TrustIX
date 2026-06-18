@@ -60,6 +60,10 @@ const volatile __u32 trustix_kudp_tx_secure_route_gso_kfunc = 0;
 #define TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC 0
 #endif
 
+#ifndef TRUSTIX_KUDP_SECURE_ROUTE_GSO_KFUNC
+#define TRUSTIX_KUDP_SECURE_ROUTE_GSO_KFUNC 0
+#endif
+
 #define TC_ACT_OK 0
 #define TC_ACT_UNSPEC (-1)
 #define TC_ACT_SHOT 2
@@ -88,10 +92,11 @@ const volatile __u32 trustix_kudp_tx_secure_route_gso_kfunc = 0;
 #define TRUSTIX_KERNEL_CRYPTO_DIRECTION_SEND 1
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN 16
 #define TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN 24
+#define TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES 4096
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_MAX 4095
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_PADDED 4096
 #define TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX (TRUSTIX_KERNEL_CRYPTO_FRAME_MAX - TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
-#define TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS 64
+#define TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS 1024
 #define TRUSTIX_KERNEL_CRYPTO_CSUM_CHUNK 512
 #define TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD (20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
 #define TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN (14 + 20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
@@ -151,6 +156,18 @@ const volatile __u32 trustix_kudp_tx_secure_route_gso_kfunc = 0;
 #define TRUSTIX_KUDP_TX_SECURE_STAT_OUTER_TCP_PARTIAL_CSUM_KFUNC_ERRORS 187
 #define TRUSTIX_KUDP_TX_SECURE_STAT_INNER_TCP_CSUM_KFUNC_SUCCESSES 188
 #define TRUSTIX_KUDP_TX_SECURE_STAT_INNER_TCP_CSUM_KFUNC_FALLBACKS 189
+#define TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_ATTEMPTS 190
+#define TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_ERRORS 191
+#define TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EINVAL 192
+#define TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EOPNOTSUPP 193
+#define TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EFAULT 194
+#define TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_ENOENT 195
+#define TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EBADMSG 196
+#define TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_OTHER 197
+#define TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_CANDIDATES 206
+#define TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_CLAMPS 207
+#define TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_NOOPS 208
+#define TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_ERRORS 209
 
 #define TRUSTIX_TIXT_TX_FINALIZE_TCP_PARTIAL_CSUM (1U << 8)
 #define TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM (1U << 10)
@@ -304,7 +321,7 @@ struct trustix_tixt_tx_secure_route_gso_args {
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-    __uint(max_entries, 184);
+    __uint(max_entries, 210);
     __type(key, __u32);
     __type(value, __u64);
 } ix_stats_map SEC(".maps");
@@ -326,21 +343,21 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 16384);
+    __uint(max_entries, TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES);
     __type(key, struct trustix_kernel_crypto_flow_key);
     __type(value, __u32);
 } trustix_kernel_crypto_flow_index_map SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 16384);
+    __uint(max_entries, TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES);
     __type(key, __u32);
     __type(value, struct trustix_kernel_crypto_ctx_value);
 } trustix_kernel_crypto_ctx_slots SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 16384);
+    __uint(max_entries, TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES);
     __type(key, __u32);
     __type(value, struct trustix_kernel_crypto_direct_slot);
 } trustix_kernel_crypto_direct_slots SEC(".maps");
@@ -381,11 +398,13 @@ extern int trustix_kernel_skb_fix_inner_tcp_csum(struct __sk_buff *skb,
 #if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
 extern int trustix_kernel_skb_tixt_fix_outer_tcp_csum(struct __sk_buff *skb, __u32 flags) __ksym;
 #endif
+#if TRUSTIX_KUDP_SECURE_ROUTE_GSO_KFUNC
 extern int trustix_kernel_skb_tixt_tx_segment_secure_route_tcp_gso(
     struct __sk_buff *skb,
     struct trustix_kudp_tx_route_value *route,
     struct trustix_kudp_tx_flow_value *flow,
     const struct trustix_tixt_tx_secure_route_gso_args *args) __ksym;
+#endif
 
 static __always_inline void trustix_kudp_tx_count(__u32 key)
 {
@@ -404,6 +423,23 @@ static __always_inline void trustix_kudp_tx_count_hot(const struct trustix_kudp_
 {
     if (trustix_kudp_tx_hot_stats(flow))
         trustix_kudp_tx_count(key);
+}
+
+static __always_inline void trustix_kudp_tx_count_direct_seal_error(int err)
+{
+    trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_ERRORS);
+    if (err == -22)
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EINVAL);
+    else if (err == -95)
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EOPNOTSUPP);
+    else if (err == -14)
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EFAULT);
+    else if (err == -2)
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_ENOENT);
+    else if (err == -74)
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_EBADMSG);
+    else
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_OTHER);
 }
 
 static __always_inline int trustix_kernel_crypto_hot_stats(const struct trustix_kernel_crypto_ctx_value *state)
@@ -713,7 +749,7 @@ static __always_inline __u16 trustix_tcp_mss_clamp_for_mtu(__u32 mtu,
 
     if (!mtu)
         return 0;
-    mss = (__s32)mtu - (__s32)outer_overhead - 20 - TRUSTIX_TCP_MSS_OPTION_BUDGET;
+    mss = (__s32)mtu - (__s32)outer_overhead - 20 - 20 - TRUSTIX_TCP_MSS_OPTION_BUDGET;
     if (mss < TRUSTIX_TCP_MSS_MIN_IPV4)
         return TRUSTIX_TCP_MSS_MIN_IPV4;
     if (mss > TRUSTIX_TCP_MSS_MAX)
@@ -954,6 +990,7 @@ static __noinline int trustix_secure_route_gso_direct(struct __sk_buff *skb,
                                                       __u64 flow_id,
                                                       struct trustix_kudp_tx_flow_value *flow)
 {
+#if TRUSTIX_KUDP_SECURE_ROUTE_GSO_KFUNC
     struct trustix_kernel_crypto_flow_key key = {};
     struct trustix_kernel_crypto_ctx_value *state;
     struct trustix_kernel_crypto_direct_slot *direct_slot;
@@ -967,7 +1004,10 @@ static __noinline int trustix_secure_route_gso_direct(struct __sk_buff *skb,
 
     key.flow_id = flow_id;
     key.direction = TRUSTIX_KERNEL_CRYPTO_DIRECTION_SEND;
-    key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP;
+    if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)
+        key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP;
+    else
+        key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_KERNEL_UDP;
     slot_index = bpf_map_lookup_elem(&trustix_kernel_crypto_flow_index_map, &key);
     if (!slot_index) {
         trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_FLOW_INDEX_MISSES);
@@ -1018,6 +1058,13 @@ static __noinline int trustix_secure_route_gso_direct(struct __sk_buff *skb,
         }
     }
     return ret;
+#else
+    (void)skb;
+    (void)route;
+    (void)flow_id;
+    (void)flow;
+    return -95;
+#endif
 }
 
 static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
@@ -1087,6 +1134,7 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
 
     clamp_result = 0;
     if (trustix_inner_tcp_syn_candidate(scratch, inner_len)) {
+        trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_CANDIDATES);
         mss_clamp = trustix_tcp_mss_clamp_for_mtu(
             flow->mtu,
             (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)
@@ -1094,8 +1142,14 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
                 : TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD);
         if (mss_clamp) {
             clamp_result = trustix_clamp_inner_tcp_mss(scratch, inner_len, mss_clamp);
-            if (clamp_result < 0)
+            if (clamp_result < 0) {
+                trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_ERRORS);
                 return clamp_result;
+            }
+            if (clamp_result > 0)
+                trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_CLAMPS);
+            else
+                trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_NOOPS);
         }
     }
     if ((trustix_kudp_tx_fix_inner_checksums || clamp_result > 0) &&
@@ -1147,6 +1201,7 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
             scratch->epoch = direct_slot->epoch;
             trustix_prepare_direct_nonce(scratch->nonce, direct_slot, scratch->sequence);
         }
+        trustix_kudp_tx_count(TRUSTIX_KUDP_TX_SECURE_STAT_DIRECT_KFUNC_SEAL_ATTEMPTS);
         err = trustix_kernel_direct_seal(direct_slot->slot_id, scratch->plain,
                                            scratch->io.split.cipher, inner_len,
                                            scratch->nonce);
@@ -1161,6 +1216,9 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
             }
             return (__s32)wire_len;
         }
+        trustix_kudp_tx_count_direct_seal_error(err);
+        if (!state || state->suite == 0)
+            return -5;
     }
     if (!state || state->suite == 0)
         return -2;
@@ -1486,7 +1544,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
         goto header_error;
     if (skb->len != 14 + inner_len) {
         if (skb->len > 14 + inner_len) {
-            if (experimental_tcp && data[23] == IPPROTO_TCP) {
+            if (data[23] == IPPROTO_TCP) {
                 int route_gso_ret = trustix_secure_route_gso_direct(
                     skb, route, flow_id, flow);
 
@@ -1508,7 +1566,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
      * mismatches during direct-path validation.
      */
     if (inner_len > TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX) {
-        if (experimental_tcp && data[23] == IPPROTO_TCP) {
+        if (data[23] == IPPROTO_TCP) {
             int route_gso_ret = trustix_secure_route_gso_direct(
                 skb, route, flow_id, flow);
 
@@ -1544,7 +1602,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     if (outer_len > 0xffff)
         goto header_error;
     if (flow->mtu && outer_len > flow->mtu) {
-        if (experimental_tcp && data[23] == IPPROTO_TCP) {
+        if (data[23] == IPPROTO_TCP) {
             int route_gso_ret = trustix_secure_route_gso_direct(
                 skb, route, flow_id, flow);
 
