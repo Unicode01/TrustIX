@@ -865,7 +865,7 @@ func TestCrossHostProductionGateRejectsFullKmodWithoutPlaintextXmit(t *testing.T
 func TestCrossHostProductionGateAcceptsSecureKUDPRouteGSOArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeSecureKUDPProductionGateArtifacts(t, dir, true)
+	writeSecureKUDPProductionGateArtifacts(t, dir, true, true)
 
 	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=secure-kudp="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
@@ -877,7 +877,7 @@ func TestCrossHostProductionGateAcceptsSecureKUDPRouteGSOArtifacts(t *testing.T)
 func TestCrossHostProductionGateRejectsSecureKUDPWithoutRouteGSO(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeSecureKUDPProductionGateArtifacts(t, dir, false)
+	writeSecureKUDPProductionGateArtifacts(t, dir, false, true)
 
 	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=secure-kudp="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
@@ -886,6 +886,21 @@ func TestCrossHostProductionGateRejectsSecureKUDPWithoutRouteGSO(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc") {
 		t.Fatalf("production gate did not report missing secure route-GSO datapath stat:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsSecureKUDPWithoutRouteHelperXmit(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeSecureKUDPProductionGateArtifacts(t, dir, true, false)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=secure-kudp="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted secure-kUDP artifacts without route helper xmit:\n%s", output)
+	}
+	if !strings.Contains(string(output), "route_tcp_gso_async_xmit_packets") {
+		t.Fatalf("production gate did not report missing secure route helper xmit counter:\n%s", output)
 	}
 }
 
@@ -1260,7 +1275,7 @@ func writeFullKmodModuleParameters(t *testing.T, path string, plaintextXmit bool
 	})
 }
 
-func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO bool) {
+func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, routeHelperXmit bool) {
 	t.Helper()
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 900.2)
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 900.2)
@@ -1271,7 +1286,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "secure-kudp-sha")
 		writeSecureKUDPDatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO)
 		writeSecureKUDPTransportsJSON(t, filepath.Join(base, "transports.json"))
-		writeSecureKUDPModuleParameters(t, filepath.Join(base, "module-parameters.txt"))
+		writeSecureKUDPModuleParameters(t, filepath.Join(base, "module-parameters.txt"), routeHelperXmit)
 	}
 }
 
@@ -1353,8 +1368,12 @@ func writeSecureKUDPTransportsJSON(t *testing.T, path string) {
 	}
 }
 
-func writeSecureKUDPModuleParameters(t *testing.T, path string) {
+func writeSecureKUDPModuleParameters(t *testing.T, path string, routeHelperXmit bool) {
 	t.Helper()
+	xmitPackets := "0"
+	if routeHelperXmit {
+		xmitPackets = "8"
+	}
 	writeModuleParameters(t, path, map[string]map[string]string{
 		"trustix_crypto": {
 			"kfunc_simd_fastpath":         "1",
@@ -1365,8 +1384,8 @@ func writeSecureKUDPModuleParameters(t *testing.T, path string) {
 		},
 		"trustix_datapath_helpers": {
 			"route_tcp_gso_async_secure_seal_batch":                    "1",
-			"route_tcp_gso_async_stream_outer_gso_frames":              "8",
-			"route_tcp_gso_async_xmit_packets":                         "8",
+			"route_tcp_gso_async_stream_outer_gso_frames":              "0",
+			"route_tcp_gso_async_xmit_packets":                         xmitPackets,
 			"route_tcp_gso_async_flow_errors":                          "0",
 			"route_tcp_gso_async_plan_errors":                          "0",
 			"route_tcp_gso_async_mtu_errors":                           "0",
