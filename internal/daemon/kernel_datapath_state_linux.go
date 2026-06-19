@@ -81,11 +81,8 @@ func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot data
 		if ctx.Err() != nil {
 			return
 		}
-		if record, ok := kernelDatapathSessionRecord(item.key, item.runtime, item.session); ok {
-			records = append(records, record)
-		}
-		if record, ok := daemon.kernelDatapathSessionWireRecord(item.key, item.session); ok {
-			records = append(records, record)
+		if sessionRecord, wireRecord, ok := daemon.kernelDatapathSessionAndWireRecords(item.key, item.runtime, item.session); ok {
+			records = append(records, sessionRecord, wireRecord)
 		}
 	}
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(ctx)...)
@@ -118,14 +115,11 @@ func (daemon *Daemon) syncKernelDatapathSessionUpsert(key dataSessionKey, runtim
 	if !daemon.kernelDatapathAvailable() {
 		return
 	}
-	record, ok := kernelDatapathSessionRecord(key, runtime, session)
+	sessionRecord, wireRecord, ok := daemon.kernelDatapathSessionAndWireRecords(key, runtime, session)
 	if !ok {
 		return
 	}
-	records := []kernelmodule.DatapathStateRecord{record}
-	if wireRecord, ok := daemon.kernelDatapathSessionWireRecord(key, session); ok {
-		records = append(records, wireRecord)
-	}
+	records := []kernelmodule.DatapathStateRecord{sessionRecord, wireRecord}
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(context.Background())...)
 	records = append(records, daemon.kernelDatapathFullPlaintextRouteSessionRecords(context.Background(), daemon.runtimeDataplaneSnapshot().Routes)...)
 	daemon.applyKernelDatapathStateRecords(context.Background(), records)
@@ -235,6 +229,18 @@ func (daemon *Daemon) kernelDatapathSessionSnapshot() []kernelDatapathSessionSna
 		return left.PoolIndex < right.PoolIndex
 	})
 	return sessions
+}
+
+func (daemon *Daemon) kernelDatapathSessionAndWireRecords(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) (kernelmodule.DatapathStateRecord, kernelmodule.DatapathStateRecord, bool) {
+	sessionRecord, ok := kernelDatapathSessionRecord(key, runtime, session)
+	if !ok {
+		return kernelmodule.DatapathStateRecord{}, kernelmodule.DatapathStateRecord{}, false
+	}
+	wireRecord, ok := daemon.kernelDatapathSessionWireRecord(key, session)
+	if !ok {
+		return kernelmodule.DatapathStateRecord{}, kernelmodule.DatapathStateRecord{}, false
+	}
+	return sessionRecord, wireRecord, true
 }
 
 func (daemon *Daemon) kernelDatapathFullPlaintextRouteSessionRecords(ctx context.Context, routes []routing.Route) []kernelmodule.DatapathStateRecord {
@@ -552,11 +558,10 @@ func (daemon *Daemon) kernelDatapathKernelUDPFlowRecords(ctx context.Context) []
 		if flow.ID == 0 || sessionFlowIDs[flow.ID] {
 			continue
 		}
-		if record, ok := kernelDatapathKernelUDPFlowSessionRecord(flow); ok {
-			records = append(records, record)
-		}
-		if record, ok := kernelDatapathKernelUDPFlowSessionWireRecord(flow); ok {
-			records = append(records, record)
+		sessionRecord, sessionOK := kernelDatapathKernelUDPFlowSessionRecord(flow)
+		wireRecord, wireOK := kernelDatapathKernelUDPFlowSessionWireRecord(flow)
+		if sessionOK && wireOK {
+			records = append(records, sessionRecord, wireRecord)
 		}
 	}
 	return records

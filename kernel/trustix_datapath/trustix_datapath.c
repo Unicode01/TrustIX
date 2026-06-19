@@ -5092,6 +5092,118 @@ trustix_datapath_session_wire_for_key_locked(const __u64 key[4])
 }
 
 static struct trustix_datapath_state_slot *
+trustix_datapath_wire_for_session_locked(
+	struct trustix_datapath_state_slot *session)
+{
+	struct trustix_datapath_state_slot *wire;
+
+	if (!session)
+		return NULL;
+	wire = trustix_datapath_session_wire_for_key_locked(session->key);
+	if (!wire || wire->value[0] != session->value[0])
+		return NULL;
+	return wire;
+}
+
+static bool trustix_datapath_session_matches_route_locked(
+	struct trustix_datapath_state_slot *session, __u64 next_hop_hash,
+	__u64 endpoint_hash, bool require_pool, __u64 pool_index)
+{
+	if (!session || !session->used)
+		return false;
+	if (!(session->flags & TRUSTIX_DATAPATH_SESSION_FLAG_KERNEL_FLOW))
+		return false;
+	if (next_hop_hash && session->key[0] != next_hop_hash)
+		return false;
+	if (endpoint_hash && session->key[1] != endpoint_hash)
+		return false;
+	if (require_pool && session->value[7] != pool_index)
+		return false;
+	return true;
+}
+
+static struct trustix_datapath_state_slot *
+trustix_datapath_session_for_route_with_wire_locked(
+	struct trustix_datapath_state_slot *route,
+	struct trustix_datapath_state_slot *flow,
+	struct trustix_datapath_state_slot **wire_out)
+{
+	struct trustix_datapath_state_slot *cached;
+	struct trustix_datapath_state_slot *slots;
+	struct trustix_datapath_state_slot *wire;
+	__u64 next_hop_hash = 0;
+	__u64 endpoint_hash = 0;
+	__u64 pool_index = 0;
+	__u32 capacity;
+	__u32 i;
+
+	if (wire_out)
+		*wire_out = NULL;
+	if (!route ||
+	    !trustix_datapath_table_usable_locked(&trustix_datapath_sessions))
+		return NULL;
+	slots = trustix_datapath_sessions.slots;
+	capacity = trustix_datapath_sessions.capacity;
+	next_hop_hash = route->key[2];
+	endpoint_hash = route->key[3];
+	if (flow) {
+		if (flow->value[0])
+			next_hop_hash = flow->value[0];
+		if (flow->value[1])
+			endpoint_hash = flow->value[1];
+		pool_index = flow->value[2];
+	}
+
+	cached = trustix_datapath_session_route_cache_lookup_locked(
+		route, flow, next_hop_hash, endpoint_hash, pool_index);
+	wire = trustix_datapath_wire_for_session_locked(cached);
+	if (wire) {
+		if (wire_out)
+			*wire_out = wire;
+		return cached;
+	}
+
+	for (i = 0; i < capacity; i++) {
+		struct trustix_datapath_state_slot *slot = &slots[i];
+
+		if (!trustix_datapath_session_matches_route_locked(
+			    slot, next_hop_hash, endpoint_hash, !!flow,
+			    pool_index))
+			continue;
+		wire = trustix_datapath_wire_for_session_locked(slot);
+		if (!wire)
+			continue;
+		trustix_datapath_session_route_cache_insert_locked(
+			route, flow, next_hop_hash, endpoint_hash, pool_index,
+			slot);
+		if (wire_out)
+			*wire_out = wire;
+		return slot;
+	}
+
+	if (!flow)
+		return NULL;
+	for (i = 0; i < capacity; i++) {
+		struct trustix_datapath_state_slot *slot = &slots[i];
+
+		if (!trustix_datapath_session_matches_route_locked(
+			    slot, next_hop_hash, endpoint_hash, false,
+			    pool_index))
+			continue;
+		wire = trustix_datapath_wire_for_session_locked(slot);
+		if (!wire)
+			continue;
+		trustix_datapath_session_route_cache_insert_locked(
+			route, flow, next_hop_hash, endpoint_hash, pool_index,
+			slot);
+		if (wire_out)
+			*wire_out = wire;
+		return slot;
+	}
+	return NULL;
+}
+
+static struct trustix_datapath_state_slot *
 trustix_datapath_session_wire_for_tuple_locked(__u64 flow_id,
 					       __u32 src_ipv4, __u32 dst_ipv4,
 					       __u16 src_port, __u16 dst_port,
@@ -5823,19 +5935,15 @@ trustix_datapath_tx_plan_locked(struct trustix_datapath_ioc_classify *classify,
 				  classify->dst_ipv4, classify->src_port,
 				  classify->dst_port, classify->protocol);
 	flow = trustix_datapath_find_slot(&trustix_datapath_flows, flow_key);
-	session = trustix_datapath_session_for_route_locked(route, flow);
+	session = trustix_datapath_session_for_route_with_wire_locked(route,
+								     flow,
+								     &wire);
 	if (!session)
 		return -EHOSTUNREACH;
 	classify->flow_id = session->value[0];
 	classify->session_flags = session->flags;
 	if (session->flags & TRUSTIX_DATAPATH_SESSION_FLAGS_ENCRYPTED)
 		return -EOPNOTSUPP;
-
-	wire = trustix_datapath_session_wire_for_key_locked(session->key);
-	if (!wire)
-		return -ENOKEY;
-	if (wire->value[0] != session->value[0])
-		return -ESTALE;
 
 	transport = (__u32)wire->value[4];
 	switch (transport) {

@@ -203,6 +203,22 @@ func TestKernelDatapathSessionWireRecordSkipsUnresolvedUnderlay(t *testing.T) {
 	}
 }
 
+func TestKernelDatapathSessionAndWireRecordsSkipHalfReadySession(t *testing.T) {
+	key := dataSessionKey{Peer: "ix-b", Endpoint: "wan-udp", Transport: transport.ProtocolUDP}
+	session := kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:        7,
+		Protocol:      transport.ProtocolUDP,
+		LocalAddress:  "192.0.2.1:51820",
+		RemoteAddress: "peer.example.net:17041",
+	}}
+	if _, ok := kernelDatapathSessionRecord(key, nil, session); !ok {
+		t.Fatal("session record should still be encodable by itself")
+	}
+	if sessionRecord, wireRecord, ok := (*Daemon)(nil).kernelDatapathSessionAndWireRecords(key, nil, session); ok {
+		t.Fatalf("half-ready session should not be published to kernel datapath: session=%#v wire=%#v", sessionRecord, wireRecord)
+	}
+}
+
 func TestKernelDatapathSessionRecordSkipsUserspaceSession(t *testing.T) {
 	key := dataSessionKey{Peer: "ix-b", Endpoint: "wan-tcp", Transport: transport.ProtocolTCP}
 	if _, ok := kernelDatapathSessionRecord(key, nil, kernelDatapathUserspaceTestSession{}); ok {
@@ -286,6 +302,23 @@ func TestKernelDatapathKernelUDPFlowRecordsSkipExistingSessionFlowID(t *testing.
 	}
 	if records := daemon.kernelDatapathKernelUDPFlowRecords(context.Background()); len(records) != 0 {
 		t.Fatalf("records for existing session flow = %#v, want none", records)
+	}
+}
+
+func TestKernelDatapathKernelUDPFlowRecordsSkipHalfReadyFlow(t *testing.T) {
+	daemon := &Daemon{
+		dataplane: &kernelDatapathFlowSnapshotManager{flows: []dataplane.KernelUDPFlow{{
+			ID:            7,
+			Peer:          "ix-b",
+			Endpoint:      "wan-udp",
+			LocalAddress:  "192.0.2.1:17001",
+			RemoteAddress: "peer.example.net:52000",
+		}}},
+		dataSessions:     map[dataSessionKey]transport.Session{},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{},
+	}
+	if records := daemon.kernelDatapathKernelUDPFlowRecords(context.Background()); len(records) != 0 {
+		t.Fatalf("half-ready kernel UDP flow records = %#v, want none", records)
 	}
 }
 
