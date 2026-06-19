@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +16,18 @@ import (
 	"trustix.local/trustix/internal/pki"
 	securetransport "trustix.local/trustix/internal/transport/secure"
 )
+
+type productionTransportDefaultRowForProvisionTest struct {
+	Transport       string
+	Encryption      string
+	Profile         string
+	Datapath        string
+	CryptoPlacement string
+	ValidationScope string
+	GateFamily      string
+	MinGbps         string
+	MinSeconds      string
+}
 
 func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
@@ -148,6 +161,69 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	if againRecorder.Code != http.StatusGone {
 		t.Fatalf("second consume status = %d, want %d; body=%s", againRecorder.Code, http.StatusGone, againRecorder.Body.String())
 	}
+}
+
+func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
+	rows := readProductionTransportDefaultRowsForProvisionTest(t)
+
+	plaintext, err := ixProvisionDefaultsForProfile(ixProvisionDefaultProfile)
+	if err != nil {
+		t.Fatalf("plaintext performance defaults: %v", err)
+	}
+	if plaintext.TransportProfile != config.TransportProfilePerformance ||
+		plaintext.Datapath != config.TransportDatapathKernelModule ||
+		plaintext.Encryption != securetransport.EncryptionPlaintext ||
+		plaintext.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
+		plaintext.KernelTransport != string(dataplane.KernelTransportModeRequireKernel) ||
+		plaintext.KernelCapabilityProfile != config.KernelCapabilityProfileFullPlaintext {
+		t.Fatalf("plaintext performance defaults = %#v", plaintext)
+	}
+	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
+		Transport:       "udp",
+		Encryption:      plaintext.Encryption,
+		Profile:         plaintext.TransportProfile,
+		Datapath:        plaintext.Datapath,
+		CryptoPlacement: plaintext.CryptoPlacement,
+		ValidationScope: "cross_host",
+		GateFamily:      "full_kmod",
+		MinGbps:         "3",
+		MinSeconds:      "900",
+	})
+	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
+		Transport:       "udp",
+		Encryption:      plaintext.Encryption,
+		Profile:         plaintext.TransportProfile,
+		Datapath:        plaintext.Datapath,
+		CryptoPlacement: plaintext.CryptoPlacement,
+		ValidationScope: "cross_host",
+		GateFamily:      "owdeb_full_kmod",
+		MinGbps:         "3",
+		MinSeconds:      "900",
+	})
+
+	securePerformance, err := ixProvisionDefaultsForProfile("performance")
+	if err != nil {
+		t.Fatalf("secure performance defaults: %v", err)
+	}
+	if securePerformance.TransportProfile != config.TransportProfilePerformance ||
+		securePerformance.Datapath != config.TransportDatapathTCXDP ||
+		securePerformance.Encryption != securetransport.EncryptionSecure ||
+		securePerformance.CryptoPlacement != string(dataplane.CryptoPlacementKernel) ||
+		securePerformance.KernelTransport != string(dataplane.KernelTransportModeRequireKernel) ||
+		securePerformance.KernelCapabilityProfile != config.KernelCapabilityProfilePerformance {
+		t.Fatalf("secure performance defaults = %#v", securePerformance)
+	}
+	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
+		Transport:       "kernel_udp",
+		Encryption:      securePerformance.Encryption,
+		Profile:         securePerformance.TransportProfile,
+		Datapath:        securePerformance.Datapath,
+		CryptoPlacement: securePerformance.CryptoPlacement,
+		ValidationScope: "cross_host",
+		GateFamily:      "secure_kudp",
+		MinGbps:         "1.5",
+		MinSeconds:      "900",
+	})
 }
 
 func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
@@ -675,6 +751,47 @@ func TestIXProvisionEdgeActiveOnlyDoesNotPublishControlAPI(t *testing.T) {
 	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
 		t.Fatalf("active experimental_tcp provision config did not select full-kmod plaintext: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
+}
+
+func readProductionTransportDefaultRowsForProvisionTest(t *testing.T) []productionTransportDefaultRowForProvisionTest {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join("..", "..", "scripts", "production-transport-defaults.tsv"))
+	if err != nil {
+		t.Fatalf("read production transport defaults: %v", err)
+	}
+	var rows []productionTransportDefaultRowForProvisionTest
+	for lineNo, line := range strings.Split(string(payload), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 9 {
+			t.Fatalf("invalid production transport default row %d: %q", lineNo+1, line)
+		}
+		rows = append(rows, productionTransportDefaultRowForProvisionTest{
+			Transport:       fields[0],
+			Encryption:      fields[1],
+			Profile:         fields[2],
+			Datapath:        fields[3],
+			CryptoPlacement: fields[4],
+			ValidationScope: fields[5],
+			GateFamily:      fields[6],
+			MinGbps:         fields[7],
+			MinSeconds:      fields[8],
+		})
+	}
+	return rows
+}
+
+func requireProductionTransportDefaultForProvisionTest(t *testing.T, rows []productionTransportDefaultRowForProvisionTest, want productionTransportDefaultRowForProvisionTest) {
+	t.Helper()
+	for _, row := range rows {
+		if row == want {
+			return
+		}
+	}
+	t.Fatalf("production transport defaults missing selected provision row %#v; rows=%#v", want, rows)
 }
 
 func extractFirstPEMBlock(t *testing.T, script, blockType string) string {
