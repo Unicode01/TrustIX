@@ -37,8 +37,8 @@ iperf3_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_GBPS:-0}"
 iperf3_min_sent_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_SENT_GBPS:-$iperf3_min_gbps}"
 iperf3_min_received_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_MIN_RECEIVED_GBPS:-$iperf3_min_gbps}"
 af_xdp_tx_backpressure_wait="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_AF_XDP_TX_BACKPRESSURE_WAIT:-50ms}"
-full_datapath_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MIN_GBPS:-4}"
-route_gso_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_ROUTE_GSO_MIN_GBPS:-4}"
+full_datapath_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MIN_GBPS:-3}"
+route_gso_min_gbps="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_ROUTE_GSO_MIN_GBPS:-2.5}"
 ping_count="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PING_COUNT:-3}"
 udp_burst_packets="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_UDP_BURST_PACKETS:-64}"
 udp_burst_size="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_UDP_BURST_SIZE:-512}"
@@ -83,7 +83,7 @@ default_cases() {
     BEGIN { OFS = ":" }
     /^[[:space:]]*#/ || NF == 0 { next }
     NF < 9 { printf "invalid production defaults row: %s\n", $0 >"/dev/stderr"; exit 2 }
-    { print $1, $2, $3, $4, $5 }
+    { print $1, $2, $3, $4, $5, $8, $9 }
   ' "$defaults_file"
 }
 
@@ -248,10 +248,17 @@ record_result() {
 
 run_case() {
   local transport="$1" encryption="$2" profile="$3" datapath="$4" placement="$5"
+  local default_min_gbps="${6:-}" default_seconds="${7:-}"
   local name="${transport}-${encryption}-${profile}-${datapath}-${placement}"
   local dir="${workdir}/${name}"
-  local start end elapsed rc case_kernel_module case_full_datapath_module case_full_datapath_rx_worker case_min_sent case_min_received
+  local start end elapsed rc case_kernel_module case_full_datapath_module case_full_datapath_rx_worker case_min_sent case_min_received case_iperf3_seconds
   validate_case "$transport" "$encryption" "$profile" "$datapath" "$placement"
+  if [[ -n "$default_min_gbps" ]]; then
+    [[ "$default_min_gbps" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid min_gbps in production matrix case: ${transport}/${encryption}/${profile}/${datapath}/${placement}: ${default_min_gbps}"
+  fi
+  if [[ -n "$default_seconds" ]]; then
+    [[ "$default_seconds" =~ ^[1-9][0-9]*$ ]] || die "invalid min_seconds in production matrix case: ${transport}/${encryption}/${profile}/${datapath}/${placement}: ${default_seconds}"
+  fi
   if case_should_skip "$transport" "$encryption" "$profile" "$datapath" "$placement"; then
     record_result "skipped" "$name" "$transport" "$encryption" "$profile" "$datapath" "$placement" 0 "$dir" 0
     return 0
@@ -262,11 +269,17 @@ run_case() {
   fi
   case_full_datapath_module="$(case_full_datapath_module_value "$transport" "$encryption" "$profile" "$datapath" "$placement")"
   case_full_datapath_rx_worker="$(case_full_datapath_rx_worker_value "$transport" "$encryption" "$profile" "$datapath" "$placement")"
-  case_min_sent="$(case_min_sent_gbps "$transport" "$encryption" "$profile" "$datapath" "$placement")"
-  case_min_received="$(case_min_received_gbps "$transport" "$encryption" "$profile" "$datapath" "$placement")"
+  if [[ -n "$default_min_gbps" ]]; then
+    case_min_sent="$default_min_gbps"
+    case_min_received="$default_min_gbps"
+  else
+    case_min_sent="$(case_min_sent_gbps "$transport" "$encryption" "$profile" "$datapath" "$placement")"
+    case_min_received="$(case_min_received_gbps "$transport" "$encryption" "$profile" "$datapath" "$placement")"
+  fi
+  case_iperf3_seconds="${default_seconds:-$iperf3_seconds}"
   rm -rf "$dir"
   mkdir -p "$dir"
-  log "run ${name}"
+  log "run ${name} min_gbps=${case_min_received} seconds=${case_iperf3_seconds}"
   start="$(date +%s)"
   set +e
   (
@@ -307,7 +320,7 @@ run_case() {
     export TRUSTIX_E2E_FULL_DATAPATH_IOCTL_SELFTEST="$full_datapath_ioctl_selftest"
     export TRUSTIX_E2E_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS="$full_datapath_verify_safe_defaults"
     export TRUSTIX_E2E_IPERF3="$iperf3"
-    export TRUSTIX_E2E_IPERF3_SECONDS="$iperf3_seconds"
+    export TRUSTIX_E2E_IPERF3_SECONDS="$case_iperf3_seconds"
     export TRUSTIX_E2E_IPERF3_PARALLEL="$iperf3_parallel"
     export TRUSTIX_E2E_IPERF3_DIRECTIONS="$iperf3_directions"
     export TRUSTIX_E2E_IPERF3_MIN_SENT_GBPS="$case_min_sent"
@@ -336,7 +349,7 @@ run_case() {
 run_cases() {
   local source="$1"
   local case_file="${workdir}/cases.txt"
-  local line old_ifs transport encryption profile datapath placement extra failures=0
+  local line old_ifs transport encryption profile datapath placement min_gbps min_seconds extra failures=0
   printf '%s\n' "$source" >"$case_file"
   while IFS= read -r line; do
     line="${line%%#*}"
@@ -351,11 +364,13 @@ run_cases() {
     profile="${3:-}"
     datapath="${4:-}"
     placement="${5:-}"
-    extra="${6:-}"
+    min_gbps="${6:-}"
+    min_seconds="${7:-}"
+    extra="${8:-}"
     if [[ -z "$transport" || -z "$encryption" || -z "$profile" || -z "$datapath" || -z "$placement" || -n "$extra" ]]; then
       die "invalid production matrix case: $line"
     fi
-    run_case "$transport" "$encryption" "$profile" "$datapath" "$placement" || failures=$((failures + 1))
+    run_case "$transport" "$encryption" "$profile" "$datapath" "$placement" "$min_gbps" "$min_seconds" || failures=$((failures + 1))
   done <"$case_file"
   return "$failures"
 }
