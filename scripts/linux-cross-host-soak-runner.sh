@@ -1346,6 +1346,42 @@ exit 1
 "
 }
 
+case_endpoint_needs_tcp_listener() {
+  case "$(case_endpoint_transport)" in
+    tcp|websocket|http_connect|experimental_tcp) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+wait_for_tcp_listener() {
+  local node="$1"
+  local port
+  port="$(node_value "$node" "$data_a_port" "$data_b_port")"
+  run_node "$node" "set -Eeuo pipefail
+for _ in \$(seq 1 80); do
+  if command -v ss >/dev/null 2>&1; then
+    if ss -ltnH 2>/dev/null | awk '{print \$4}' | grep -Eq '(^|[.:])${port}$'; then
+      exit 0
+    fi
+  elif command -v netstat >/dev/null 2>&1; then
+    if netstat -ltn 2>/dev/null | awk 'NR > 2 {print \$4}' | grep -Eq '(^|[.:])${port}$'; then
+      exit 0
+    fi
+  fi
+  sleep 1
+done
+exit 1
+"
+}
+
+wait_for_endpoint_listeners() {
+  if ! case_endpoint_needs_tcp_listener; then
+    return 0
+  fi
+  wait_for_tcp_listener a
+  wait_for_tcp_listener b
+}
+
 run_tcp_health_direction() {
   local client="$1"
   local server="$2"
@@ -1670,6 +1706,7 @@ main() {
   start_daemon b
   wait_for_api a
   wait_for_api b
+  wait_for_endpoint_listeners
   run_connectivity_checks
   run_iperf_bidirectional_artifacts
   collect_all

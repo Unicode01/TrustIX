@@ -984,6 +984,7 @@ func (daemon *Daemon) warmEndpointSessionPoolResult(ctx context.Context, epoch u
 		_, _, _, err := daemon.sessionForEndpointWithOptions(ctx, peer, cfgEndpoint, routing.FlowKey{}, false, sessionForEndpointOptions{
 			AllowDial:                 true,
 			SuppressCanceledDialError: true,
+			SuppressDialErrorStats:    true,
 			RequireEpoch:              true,
 			ExpectedEpoch:             epoch,
 		})
@@ -998,6 +999,7 @@ func (daemon *Daemon) warmEndpointSessionPoolResult(ctx context.Context, epoch u
 		if _, _, err := daemon.sessionForEndpointPoolIndexWithOptions(ctx, epoch, peer, cfgEndpoint, endpoint, poolIndex, sessionForEndpointOptions{
 			AllowDial:                 true,
 			SuppressCanceledDialError: true,
+			SuppressDialErrorStats:    true,
 			RequireEpoch:              true,
 			ExpectedEpoch:             epoch,
 		}); err == nil {
@@ -3792,6 +3794,7 @@ type sessionForEndpointOptions struct {
 	AllowDial                 bool
 	ControlOnlyWarmup         bool
 	SuppressCanceledDialError bool
+	SuppressDialErrorStats    bool
 	RequireEpoch              bool
 	ExpectedEpoch             uint64
 }
@@ -3884,7 +3887,7 @@ func (daemon *Daemon) sessionForEndpointWithOptions(ctx context.Context, peer co
 		Endpoints: []transport.Endpoint{endpoint},
 	}, tlsConf)
 	if err != nil {
-		if !options.SuppressCanceledDialError || !errors.Is(err, context.Canceled) {
+		if !suppressDialErrorStats(err, options) {
 			daemon.dataStats.sessionDialErrors.Add(1)
 			daemon.dataStats.setLastSessionDialError(fmt.Errorf("dial peer %q endpoint %q: %w", peer.ID, endpoint.Name, err))
 			daemon.recordEndpointDownIfNoActiveSession(peer.ID, cfgEndpoint, err)
@@ -4017,7 +4020,7 @@ func (daemon *Daemon) sessionForEndpointPoolIndexWithOptions(ctx context.Context
 		Endpoints: []transport.Endpoint{endpoint},
 	}, tlsConf)
 	if err != nil {
-		if !options.SuppressCanceledDialError || !errors.Is(err, context.Canceled) {
+		if !suppressDialErrorStats(err, options) {
 			daemon.dataStats.sessionDialErrors.Add(1)
 			daemon.dataStats.setLastSessionDialError(fmt.Errorf("dial peer %q endpoint %q pool %d: %w", peer.ID, endpoint.Name, poolIndex, err))
 			daemon.recordEndpointDownIfNoActiveSession(peer.ID, cfgEndpoint, err)
@@ -4067,6 +4070,13 @@ func (daemon *Daemon) sessionForEndpointPoolIndexWithOptions(ctx context.Context
 	daemon.syncKernelDatapathSessionUpsert(key, runtime, session)
 	daemon.recordEndpointUp(peer.ID, cfgEndpoint, 0)
 	return session, key, nil
+}
+
+func suppressDialErrorStats(err error, options sessionForEndpointOptions) bool {
+	if options.SuppressDialErrorStats {
+		return true
+	}
+	return options.SuppressCanceledDialError && errors.Is(err, context.Canceled)
 }
 
 func (daemon *Daemon) reverseSessionForEndpoint(peer core.IXID, endpoint config.EndpointConfig, encryption string, preferredPoolIndex int) (transport.Session, dataSessionKey, *dataSessionRuntime) {

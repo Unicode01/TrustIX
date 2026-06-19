@@ -193,7 +193,11 @@ main() {
     run_gate tc-direct "$tc_direct_min_gbps" $tc_direct_args \
       --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
-      --require-status-max data_path.counters.session_heartbeat_timeouts=0
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
+      --require-datapath-stat kernel_udp.provider=tc_direct \
+      --require-datapath-stat kernel_udp.fast_path=true \
+      --require-datapath-stat kernel_udp.direct_only=true \
+      --require-datapath-any-min kernel_udp.active_flows=1
   fi
 
   if [[ "$full_kmod_case_count" -gt 0 ]]; then

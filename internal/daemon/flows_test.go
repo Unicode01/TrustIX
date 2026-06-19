@@ -3466,6 +3466,7 @@ func TestWarmRouteSessionsPreDialsSingleSession(t *testing.T) {
 			Metric:  100,
 		}},
 		TransportPolicy: config.TransportPolicyConfig{
+			Candidates:  []core.EndpointID{"tcp-b"},
 			Encryption:  securetransport.EncryptionPlaintext,
 			SessionPool: config.SessionPoolPolicyConfig{Size: 1, Warmup: true},
 		},
@@ -3539,6 +3540,67 @@ func TestWarmRouteSessionsParallelCandidatesDoesNotBlockOnSlowPreferred(t *testi
 	}
 	if _, ok := daemon.dataSessions[key]; !ok {
 		t.Fatalf("udp session was not warmed; sessions=%v", daemon.dataSessions)
+	}
+}
+
+func TestRouteSessionWarmupRetriesDoNotPolluteDialErrorStats(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_POOL_WARMUP_RETRY_DELAY", "1ms")
+	t.Setenv("TRUSTIX_DATA_SESSION_POOL_WARMUP_DEADLINE", "1s")
+
+	registry := transport.NewRegistry()
+	flaky := &flakyWarmupTransport{name: transport.ProtocolUDP, fail: 2}
+	if err := registry.Register(flaky); err != nil {
+		t.Fatalf("register udp transport: %v", err)
+	}
+	daemon := &Daemon{
+		transports:       registry,
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		endpointState:    make(map[endpointStateKey]rstate.EndpointState),
+		flows:            make(map[routing.FlowKey]routing.FlowBinding),
+	}
+	daemon.desired = config.Desired{
+		IX: config.IXConfig{ID: "ix-a"},
+		Peers: []config.PeerConfig{{
+			ID:     "ix-b",
+			Domain: "lab.local",
+			Endpoints: []config.EndpointConfig{{
+				Name:      "udp-b",
+				Address:   "127.0.0.1:17042",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			}},
+		}},
+		Routes: []config.RouteConfig{{
+			Prefix:  "10.0.1.0/24",
+			NextHop: "ix-b",
+			Metric:  100,
+		}},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption:  securetransport.EncryptionPlaintext,
+			SessionPool: config.SessionPoolPolicyConfig{Size: 1, Warmup: true},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	if err := daemon.warmRouteSessions(context.Background()); err == nil {
+		t.Fatal("first warm route session attempt unexpectedly succeeded")
+	}
+	if err := daemon.warmRouteSessions(context.Background()); err == nil {
+		t.Fatal("second warm route session attempt unexpectedly succeeded")
+	}
+	if err := daemon.warmRouteSessions(context.Background()); err != nil {
+		t.Fatalf("third warm route session attempt: %v", err)
+	}
+
+	if attempts := daemon.dataStats.sessionDialAttempts.Load(); attempts < 3 {
+		t.Fatalf("session dial attempts = %d, want >= 3", attempts)
+	}
+	if errors := daemon.dataStats.sessionDialErrors.Load(); errors != 0 {
+		t.Fatalf("session dial errors = %d, want 0", errors)
+	}
+	if got := len(daemon.dataSessions); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
 	}
 }
 
