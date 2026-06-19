@@ -4,6 +4,47 @@ This file records datapath performance findings and script changes so future run
 
 ## 2026-06-20
 
+### Zaozhuang PVE compatibility 900s strict gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-dd-a` (`10.203.3.200`) and VM201 `trustix-dd-b`
+(`10.203.3.201`) on the isolated `vmbr3` underlay. VM100 and all 1xx guests
+were not modified. Both guests were Debian 13 on
+`6.12.69+deb13-amd64`. The validation binary was built from
+`2bc85945ec7b4ad7d2cbb9be39e96e8f2d2772fd` with build time
+`2026-06-19T20:32:35Z`; binary identity matched on both guests.
+
+The cross-host verifier now rejects any iperf3 JSON artifact that contains a
+top-level `error` when it also contains final summary aggregates. The existing
+client-only exception remains limited to artifacts with no final summary and
+the specific `unable to receive results` error, where a separate clean server
+summary supplies the measured result. This prevents GRE or tunnel runs with
+server-side iperf errors from being promoted as clean production evidence.
+
+Strict 900s compatibility results:
+
+| Case | Transport policy | Duration per direction | Minimum received | Required gate | Result |
+| --- | --- | ---: | ---: | ---: | --- |
+| `udp-secure-stable-userspace-userspace` | `udp` / `secure` / `stable` / `userspace` / `userspace` | 900s | 1.986247 Gbps | session stats clean | pass |
+| `tcp-plaintext-stable-userspace-userspace` | `tcp` / `plaintext` / `stable` / `userspace` / `userspace` | 900s | 1.396604 Gbps | session stats clean | pass |
+| `udp-plaintext-performance-tc_xdp-userspace` | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 900s | 3.986123 Gbps | 3 Gbps plus TC-direct fast path | pass |
+| `gre-plaintext-performance-tc_xdp-userspace` | `gre` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 900s | not accepted | clean iperf artifacts | fail |
+
+The UDP and TCP userspace gates required matching binary identity, zero
+`session_dial_errors`, zero `session_heartbeat_timeouts`, and observed
+transport sessions. The TC-direct gate additionally required
+`kernel_udp.provider=tc_direct`, `kernel_udp.fast_path=true`,
+`kernel_udp.direct_only=true`, and nonzero `kernel_udp.active_flows`.
+
+The GRE run produced server-side received summaries around 4.73 to 5.10 Gbps,
+but both server artifacts also contained `Bad file descriptor` iperf errors.
+The strict verifier now rejects that shape, so GRE remains withheld from
+production evidence until a clean rerun is captured.
+
+Final suspicious kernel-log scans over the run window found no panic, Oops,
+BUG, call trace, page fault, watchdog, lockup, `tx_queue_len`, or TrustIX
+datapath crash signatures on either Debian guest.
+
 ### OpenWrt 24.10.2 full-kmod production gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:

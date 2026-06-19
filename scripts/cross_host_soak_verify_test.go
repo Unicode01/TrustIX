@@ -138,6 +138,27 @@ func TestCrossHostSoakVerifySkipsClientMissingServerResults(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRejectsServerSummaryWithIperfError(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfMissingServerResultsJSON(t, filepath.Join(dir, "a", "iperf3-a-to-b-forward.json"), 5.0e9)
+	writeIperfReceiverJSONWithError(t, filepath.Join(dir, "b", "iperf3-server.json"), 4.7e9, 120.1, "error - unable to receive control message: Bad file descriptor")
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted server summary with iperf error:\n%s", output)
+	}
+	if !strings.Contains(string(output), "iperf3-server.json: iperf JSON contains error") {
+		t.Fatalf("verify output did not report server iperf error:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyAcceptsSingleDirectionClientAndServerArtifacts(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -1025,6 +1046,11 @@ func writeIperfJSON(t *testing.T, path string, sentBPS, receivedBPS, seconds flo
 
 func writeIperfReceiverJSON(t *testing.T, path string, receivedBPS, seconds float64) {
 	t.Helper()
+	writeIperfReceiverJSONWithError(t, path, receivedBPS, seconds, "")
+}
+
+func writeIperfReceiverJSONWithError(t *testing.T, path string, receivedBPS, seconds float64, iperfError string) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("make iperf receiver artifact dir: %v", err)
 	}
@@ -1041,6 +1067,9 @@ func writeIperfReceiverJSON(t *testing.T, path string, receivedBPS, seconds floa
 				"sender":          false,
 			},
 		},
+	}
+	if iperfError != "" {
+		payload["error"] = iperfError
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

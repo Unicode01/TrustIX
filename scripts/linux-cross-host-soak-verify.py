@@ -360,6 +360,11 @@ def iperf_missing_server_results_only(path: Path) -> bool:
     return False
 
 
+def iperf_top_level_error(path: Path) -> str:
+    payload = read_json(path)
+    return str(payload.get("error") or "")
+
+
 def result_markers_pass(case_dir: Path) -> tuple[bool, list[str]]:
     markers = sorted(case_dir.glob("*.result"))
     values: list[str] = []
@@ -946,23 +951,31 @@ def validate_case(
     iperf_results: list[dict[str, Any]] = []
     skipped_iperf_files: list[str] = []
     for path in iperf_files:
+        rel = str(path.relative_to(case.path))
         try:
             sums = iperf_sums(path)
         except Exception as exc:  # noqa: BLE001 - artifact validation should report and continue.
-            errors.append(f"{path.relative_to(case.path)}: parse iperf JSON: {exc}")
+            errors.append(f"{rel}: parse iperf JSON: {exc}")
             continue
         if not sums:
             try:
                 if iperf_missing_server_results_only(path):
-                    skipped_iperf_files.append(str(path.relative_to(case.path)))
+                    skipped_iperf_files.append(rel)
                     continue
             except Exception as exc:  # noqa: BLE001 - report the original missing-summary error.
                 errors.append(
-                    f"{path.relative_to(case.path)}: parse iperf JSON for benign error check: {exc}"
+                    f"{rel}: parse iperf JSON for benign error check: {exc}"
                 )
-            errors.append(f"{path.relative_to(case.path)}: no iperf summary aggregates found")
+            errors.append(f"{rel}: no iperf summary aggregates found")
             continue
-        rel = str(path.relative_to(case.path))
+        try:
+            iperf_error = iperf_top_level_error(path)
+        except Exception as exc:  # noqa: BLE001 - artifact validation should report and continue.
+            errors.append(f"{rel}: parse iperf JSON for top-level error check: {exc}")
+            continue
+        if iperf_error:
+            errors.append(f"{rel}: iperf JSON contains error: {iperf_error[:200]}")
+            continue
         for item in sums:
             direction = str(item["direction"])
             sent_gbps = float(item["sent_gbps"])
