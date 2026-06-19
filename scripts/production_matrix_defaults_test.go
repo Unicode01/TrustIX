@@ -11,11 +11,43 @@ import (
 
 func readProductionTransportDefaults(t *testing.T) string {
 	t.Helper()
+	rows := loadProductionTransportDefaults(t)
+	var packed []string
+	for _, row := range rows {
+		packed = append(packed, strings.Join([]string{
+			row.Transport,
+			row.Encryption,
+			row.Profile,
+			row.Datapath,
+			row.CryptoPlacement,
+			row.ValidationScope,
+			row.GateFamily,
+			row.MinGbps,
+			row.MinSeconds,
+		}, ":"))
+	}
+	return strings.Join(packed, "\n")
+}
+
+type productionTransportDefault struct {
+	Transport       string
+	Encryption      string
+	Profile         string
+	Datapath        string
+	CryptoPlacement string
+	ValidationScope string
+	GateFamily      string
+	MinGbps         string
+	MinSeconds      string
+}
+
+func loadProductionTransportDefaults(t *testing.T) []productionTransportDefault {
+	t.Helper()
 	payload, err := os.ReadFile(filepath.Join(".", "production-transport-defaults.tsv"))
 	if err != nil {
 		t.Fatalf("read production-transport-defaults.tsv: %v", err)
 	}
-	var rows []string
+	var rows []productionTransportDefault
 	for _, line := range strings.Split(string(payload), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -25,9 +57,19 @@ func readProductionTransportDefaults(t *testing.T) string {
 		if len(fields) < 9 {
 			t.Fatalf("invalid production default row %q", line)
 		}
-		rows = append(rows, strings.Join(fields[:9], ":"))
+		rows = append(rows, productionTransportDefault{
+			Transport:       fields[0],
+			Encryption:      fields[1],
+			Profile:         fields[2],
+			Datapath:        fields[3],
+			CryptoPlacement: fields[4],
+			ValidationScope: fields[5],
+			GateFamily:      fields[6],
+			MinGbps:         fields[7],
+			MinSeconds:      fields[8],
+		})
 	}
-	return strings.Join(rows, "\n")
+	return rows
 }
 
 func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *testing.T) {
@@ -421,9 +463,25 @@ func TestCrossHostTransportMatrixDryRunIncludesOpenWrtDebianFullKmod(t *testing.
 			strings.HasSuffix(row.Case, "-owdeb") {
 			sawOpenWrtDebianFullKmod = true
 		}
+		if row.RunnerCase == "owdeb-secure-kudp" || row.GateFamily == "owdeb_secure_kudp" {
+			t.Fatalf("OpenWrt-Debian secure-kudp was promoted without a passing OpenWrt route-GSO/kfunc gate:\n%s", payload)
+		}
+		if strings.Contains(row.Case, "route-gso") && strings.HasSuffix(row.Case, "-owdeb") {
+			t.Fatalf("OpenWrt-Debian route-GSO was promoted without a passing OpenWrt route-GSO/kfunc gate:\n%s", payload)
+		}
 	}
 	if !sawDebianFullKmod || !sawOpenWrtDebianFullKmod {
 		t.Fatalf("dry-run summary missing full-kmod target cases: debian=%t owdeb=%t\n%s", sawDebianFullKmod, sawOpenWrtDebianFullKmod, payload)
+	}
+}
+
+func TestProductionDefaultsDoNotPromoteOpenWrtRouteGSOWithoutRuntimeEvidence(t *testing.T) {
+	rows := loadProductionTransportDefaults(t)
+	for _, row := range rows {
+		switch row.GateFamily {
+		case "owdeb_secure_kudp", "owdeb_route_gso":
+			t.Fatalf("production defaults include %s before OpenWrt route-GSO/kfunc runtime validation: %+v", row.GateFamily, row)
+		}
 	}
 }
 

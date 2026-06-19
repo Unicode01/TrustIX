@@ -128,6 +128,18 @@ plaintext TX xmit errors. This result applies to matching SDK-built OpenWrt
 modules only. OpenWrt 23.05.5 has no `/sys/kernel/btf/vmlinux`, so TC/eBPF
 CO-RE is not the primary OpenWrt performance path for that release.
 
+Follow-up PVE OpenWrt-to-Debian route-GSO probes on 2026-06-20 used OpenWrt
+23.05.5 x86_64 kernel `5.15.167` and Debian 13
+`6.12.90+deb13.1-cloud-amd64`. The OpenWrt SDK build produced device-only
+crypto, full plaintext datapath, and basic datapath helpers. The helper module
+loaded and passed selftests, but it did not provide
+`route_tcp_kfunc`/`route_tcp_xmit_kfunc`. Both secure-kUDP route-GSO and
+experimental TCP route-GSO failed closed before traffic with the expected
+missing-capability diagnostic. Do not select OpenWrt 23.05.5 route-GSO or
+secure-kUDP route-GSO as production defaults; use the validated UDP plaintext
+full-kmod path until a newer OpenWrt kernel/helper combination passes the
+runtime route-TCP kfunc gate.
+
 OpenWrt deployment is fail-closed for module ABI. Do not use release-embedded
 Debian/PVE `.ko` payloads on OpenWrt. Build the module with the matching
 OpenWrt SDK, copy it to `/etc/trustix/modules/trustix_datapath.ko`, and point

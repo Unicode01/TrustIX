@@ -2,6 +2,44 @@
 
 This file records datapath performance findings and script changes so future runs do not depend on chat context.
 
+## 2026-06-20
+
+### OpenWrt-Debian route-GSO capability check
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 Debian 13 (`192.168.100.200`) and VM202 OpenWrt 23.05.5 x86_64
+(`192.168.100.202`). VM100 and all 1xx guests were not modified. The release
+under test was built from `8507d2eb6183`.
+
+OpenWrt VM202 had to boot from a SATA disk; virtio/scsi imports booted QEMU but
+did not provide usable guest network/serial access. OpenWrt feeds were switched
+to TUNA and the rootfs was expanded for SDK/runtime work.
+
+OpenWrt SDK module build result for `23.05.5-x86_64`:
+
+| Module | SHA256 | Capability result |
+| --- | --- | --- |
+| `trustix_crypto.ko` | `beee8798173c08f1c8f867535ac60d1ac4fa2e4a8c5d213e13f66463fc63e503` | device-only crypto, `features=2` |
+| `trustix_datapath_helpers.ko` | `a6edb84b254a68e16fde54d17a90362c1509b0e620c68ca0e0cee3c5a97a72d8` | basic helpers, `features=0`, selftests passed |
+| `trustix_datapath.ko` | `b3bc3ff5da61ea3f23272f82375ca0e1175b8273cd89e79a2c16ef6e4a6e5634` | full plaintext module loaded with selected parameters |
+
+OpenWrt-to-Debian secure-kUDP route-GSO smoke failed closed before traffic:
+`secure kernel_udp route-GSO requires trustix_datapath_helpers full route TCP
+kfunc capability; missing=route_tcp_kfunc,route_tcp_xmit_kfunc`. Artifact:
+`/tmp/trustix-pve-owdeb.kBuFlE/results/owdeb-secure-kudp-30-20260620-000728`.
+
+OpenWrt-to-Debian experimental TCP route-GSO smoke also failed closed before
+traffic with the same missing helper capabilities. Artifact:
+`/tmp/trustix-pve-owdeb.kBuFlE/results/dd-routegso-30-20260620-000854`. The
+runner case name remained `dd-routegso`, but the endpoints were manually set to
+OpenWrt A and Debian B.
+
+Conclusion: this is not a throughput failure and not a panic reproduction; the
+OpenWrt 23.05.5 helper module cannot provide route-TCP kfuncs, so OpenWrt
+route-GSO and OpenWrt secure-kUDP route-GSO must stay unselected until a newer
+OpenWrt kernel/helper combination passes the runtime gate. The validated
+OpenWrt production path remains UDP plaintext full-kmod from the 900s gate.
+
 ## 2026-06-19
 
 ### Zaozhuang PVE selected transport matrix gate
