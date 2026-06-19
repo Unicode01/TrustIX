@@ -64,6 +64,7 @@ runner_case_name() {
     secure_kudp|dd_secure_kudp) printf 'secure-kudp\n'; return ;;
     owdeb_secure_kudp) printf 'owdeb-secure-kudp\n'; return ;;
     route_gso|dd_route_gso) printf 'dd-routegso\n'; return ;;
+    owdeb_route_gso) printf 'owdeb-routegso\n'; return ;;
   esac
   token="$(transport_token "$transport")"
   kind="userspace"
@@ -77,7 +78,7 @@ gate_family_class() {
   case "$1" in
     full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\n' ;;
     secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\n' ;;
-    route_gso|dd_route_gso) printf 'route_gso\n' ;;
+    route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\n' ;;
     *) printf '%s\n' "$1" ;;
   esac
 }
@@ -157,7 +158,7 @@ validate_case_values() {
     *) die "unsupported validation scope in matrix case: ${validation_scope}" ;;
   esac
   case "$gate_family" in
-    userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|route_gso|dd_route_gso|custom) ;;
+    userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|route_gso|dd_route_gso|owdeb_route_gso|custom) ;;
     *) die "unsupported gate family in matrix case: ${gate_family}" ;;
   esac
   validate_nonnegative_decimal "case min_gbps" "$min_gbps"

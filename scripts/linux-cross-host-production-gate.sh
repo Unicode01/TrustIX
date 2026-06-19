@@ -24,6 +24,7 @@ owdeb_full_kmod="${TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD:-}"
 dd_secure_kudp="${TRUSTIX_CROSS_HOST_DD_SECURE_KUDP:-}"
 owdeb_secure_kudp="${TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP:-}"
 dd_route_gso="${TRUSTIX_CROSS_HOST_DD_ROUTE_GSO:-}"
+owdeb_route_gso="${TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO:-}"
 full_kmod_cases_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASES:-}"
 secure_kudp_cases_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES:-}"
 route_gso_cases_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES:-}"
@@ -128,6 +129,10 @@ main() {
     route_gso_args="${route_gso_args} --case dd-routegso=${dd_route_gso}"
     route_gso_case_count=$((route_gso_case_count + 1))
   fi
+  if [[ -n "$owdeb_route_gso" ]]; then
+    route_gso_args="${route_gso_args} --case owdeb-routegso=${owdeb_route_gso}"
+    route_gso_case_count=$((route_gso_case_count + 1))
+  fi
   for token in $route_gso_cases_raw; do
     validate_case_token "$token"
     route_gso_args="${route_gso_args} --case ${token}"
@@ -135,7 +140,7 @@ main() {
   done
 
   if [[ "$full_kmod_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
-    die "set TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO or *_CASES"
+    die "set TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO/TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO or *_CASES"
   fi
 
   if [[ "$full_kmod_case_count" -gt 0 ]]; then

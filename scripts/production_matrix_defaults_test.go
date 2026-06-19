@@ -252,6 +252,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_DD_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_DD_ROUTE_GSO",
+		"TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO",
 		"validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS \"$full_kmod_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS \"$secure_kudp_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS \"$route_gso_min_gbps\"",
@@ -390,9 +391,11 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"secure_kudp|dd_secure_kudp) printf 'secure-kudp\\n'",
 		"owdeb_secure_kudp) printf 'owdeb-secure-kudp\\n'",
 		"route_gso|dd_route_gso) printf 'dd-routegso\\n'",
+		"owdeb_route_gso) printf 'owdeb-routegso\\n'",
 		"owdeb_*) printf '%s-owdeb\\n' \"$base\"",
 		"full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\\n'",
 		"secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\\n'",
+		"route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\\n'",
 		"TRUSTIX_CROSS_HOST_CASE=\"$runner_case\"",
 		"TRUSTIX_CROSS_HOST_TRANSPORT=\"$token\"",
 		"TRUSTIX_CROSS_HOST_PROFILE=\"$profile\"",
@@ -475,6 +478,62 @@ func TestCrossHostTransportMatrixDryRunIncludesOpenWrtDebianFullKmod(t *testing.
 	}
 }
 
+func TestCrossHostTransportMatrixCanRepresentOpenWrtRouteGSOWhenExplicitlyValidated(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	summary := filepath.Join(workdir, "summary.jsonl")
+	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\towdeb_route_gso\t2.5\t900\texplicit OpenWrt-Debian route-GSO validation input",
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+defaults,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY="+summary,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run explicit owdeb route-GSO matrix failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read dry-run summary: %v", err)
+	}
+	var row struct {
+		Case       string `json:"case"`
+		RunnerCase string `json:"runner_case"`
+		GateFamily string `json:"gate_family"`
+	}
+	lines := strings.Fields(strings.TrimSpace(string(payload)))
+	if len(lines) != 1 {
+		t.Fatalf("expected one summary row, got %d:\n%s", len(lines), payload)
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &row); err != nil {
+		t.Fatalf("decode summary row: %v\n%s", err, payload)
+	}
+	if row.RunnerCase != "owdeb-routegso" ||
+		row.GateFamily != "owdeb_route_gso" ||
+		!strings.HasSuffix(row.Case, "-owdeb") {
+		t.Fatalf("unexpected owdeb route-GSO dry-run row: %+v\n%s", row, payload)
+	}
+}
+
 func TestProductionDefaultsDoNotPromoteOpenWrtRouteGSOWithoutRuntimeEvidence(t *testing.T) {
 	rows := loadProductionTransportDefaults(t)
 	for _, row := range rows {
@@ -526,7 +585,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"iperf_artifact_suffix",
 		"dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod",
 		"dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel",
-		"dd-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso",
+		"dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso",
 		"ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct",
 		"userspace-*-secure|userspace-*-plaintext|crosshost-userspace-*-secure|crosshost-userspace-*-plaintext",
 		"tc-*-secure|tc-*-plaintext|crosshost-tc-*-secure|crosshost-tc-*-plaintext",
