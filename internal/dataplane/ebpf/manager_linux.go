@@ -169,6 +169,7 @@ type Manager struct {
 	expTCPOuterTXAcknowledgments                map[uint64]uint32
 	expTCPTelemetry                             map[uint64]*dataplane.TransportPathTelemetry
 	expTCPAllowed                               map[uint16]struct{}
+	expTCPAllowedPortHoldUntil                  map[uint16]time.Time
 	expTCPSubs                                  map[chan []dataplane.ExperimentalTCPFrame]struct{}
 	expTCPFlowSubs                              map[uint64]map[chan []dataplane.ExperimentalTCPFrame]struct{}
 	expTCPSubDrops                              uint64
@@ -1159,6 +1160,7 @@ const (
 	rejectICMPOffset                                                  = -384
 	rejectICMPQuoteOffset                                             = rejectICMPOffset + rejectICMPHeaderLen
 	experimentalTCPFlowTTL                                            = 5 * time.Minute
+	experimentalTCPAllowedPortHoldDownDefault                         = 2 * time.Minute
 	kernelTransportDNSCacheTTLDefault                                 = 60 * time.Second
 	kernelTransportDNSCacheTTLMin                                     = time.Second
 	kernelCryptoOpenRetryAttempts                                     = 20
@@ -1183,6 +1185,7 @@ var captureNormalizeChecksums = configuredCaptureNormalizeChecksums()
 var captureHistoryEnabled = configuredCaptureHistoryEnabled()
 var captureReaderBatchSize = configuredCaptureReaderBatchSize()
 var captureReaderDrainTimeout = configuredCaptureReaderDrainTimeout()
+var experimentalTCPAllowedPortHoldDown = configuredExperimentalTCPAllowedPortHoldDown()
 var kernelTransportDNSCacheTTL = configuredKernelTransportDNSCacheTTL()
 
 func withTCProgramBTFMetadata(instructions asm.Instructions) asm.Instructions {
@@ -1228,6 +1231,21 @@ func configuredKernelTransportDNSCacheTTL() time.Duration {
 		return kernelTransportDNSCacheTTLMin
 	}
 	return ttl
+}
+
+func configuredExperimentalTCPAllowedPortHoldDown() time.Duration {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOWED_PORT_HOLD_DOWN")))
+	switch value {
+	case "":
+		return experimentalTCPAllowedPortHoldDownDefault
+	case "0", "off", "false", "no", "disabled":
+		return 0
+	}
+	delay, err := time.ParseDuration(value)
+	if err != nil || delay < 0 {
+		return experimentalTCPAllowedPortHoldDownDefault
+	}
+	return delay
 }
 
 func configuredCaptureNormalizeChecksums() bool {
@@ -1611,6 +1629,7 @@ func NewManager() *Manager {
 		expTCPOuterTXAcknowledgments: make(map[uint64]uint32),
 		expTCPTelemetry:              make(map[uint64]*dataplane.TransportPathTelemetry),
 		expTCPAllowed:                make(map[uint16]struct{}),
+		expTCPAllowedPortHoldUntil:   make(map[uint16]time.Time),
 		expTCPSubs:                   make(map[chan []dataplane.ExperimentalTCPFrame]struct{}),
 		expTCPFlowSubs:               make(map[uint64]map[chan []dataplane.ExperimentalTCPFrame]struct{}),
 		kernelTransportAllowed:       make(map[uint16]struct{}),
@@ -2877,7 +2896,7 @@ func (manager *Manager) InstallExperimentalTCPFlows(ctx context.Context, flows [
 			flow = refreshExperimentalTCPFlowLifetime(flow, now)
 		}
 		manager.deleteDuplicateExperimentalTCPFlowsLocked(flow)
-		manager.expTCPFlows[flow.ID] = flow
+		manager.setExperimentalTCPFlowLocked(flow.ID, flow, now)
 		manager.invalidateExperimentalTCPTXTemplateLocked(flow.ID)
 		manager.updateExperimentalTCPTelemetryIdentityLocked(flow.ID, flow)
 	}
@@ -2904,6 +2923,7 @@ func (manager *Manager) InstallExperimentalTCPFlows(ctx context.Context, flows [
 }
 
 func (manager *Manager) deleteDuplicateExperimentalTCPFlowsLocked(flow dataplane.ExperimentalTCPFlow) {
+	now := time.Now().UTC()
 	for flowID, existing := range manager.expTCPFlows {
 		if flowID == flow.ID {
 			continue
@@ -2911,6 +2931,7 @@ func (manager *Manager) deleteDuplicateExperimentalTCPFlowsLocked(flow dataplane
 		if !experimentalTCPFlowsSharePathIdentity(existing, flow) {
 			continue
 		}
+		manager.holdExperimentalTCPAllowedPortsLocked(existing, now)
 		delete(manager.expTCPFlows, flowID)
 		delete(manager.kernelUDPTXDirectSequences, flowID)
 		delete(manager.expTCPOuterTXSequences, flowID)
@@ -2955,7 +2976,11 @@ func (manager *Manager) DeleteExperimentalTCPFlows(ctx context.Context, flowIDs 
 	if len(flowIDs) == 0 {
 		return nil
 	}
+	now := time.Now().UTC()
 	for _, flowID := range flowIDs {
+		if flow, ok := manager.expTCPFlows[flowID]; ok {
+			manager.holdExperimentalTCPAllowedPortsLocked(flow, now)
+		}
 		delete(manager.expTCPFlows, flowID)
 		delete(manager.kernelUDPTXDirectSequences, flowID)
 		delete(manager.expTCPOuterTXSequences, flowID)
@@ -3034,9 +3059,10 @@ func (manager *Manager) SetExperimentalTCPFlowPeer(ctx context.Context, flowID u
 		return nil
 	}
 	flow = next
-	flow = persistEstablishedExperimentalTCPFlowLifetime(flow, time.Now().UTC())
+	now := time.Now().UTC()
+	flow = persistEstablishedExperimentalTCPFlowLifetime(flow, now)
 	manager.deleteDuplicateExperimentalTCPFlowsLocked(flow)
-	manager.expTCPFlows[flowID] = flow
+	manager.setExperimentalTCPFlowLocked(flowID, flow, now)
 	manager.invalidateExperimentalTCPTXTemplateLocked(flowID)
 	manager.updateExperimentalTCPTelemetryIdentityLocked(flowID, flow)
 	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
@@ -6089,6 +6115,7 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 	manager.expTCPOuterTXSequences = make(map[uint64]uint32)
 	manager.expTCPOuterTXAcknowledgments = make(map[uint64]uint32)
 	manager.expTCPFlowSubs = make(map[uint64]map[chan []dataplane.ExperimentalTCPFrame]struct{})
+	manager.expTCPAllowedPortHoldUntil = make(map[uint16]time.Time)
 	manager.kernelUDPFlows = make(map[uint64]dataplane.KernelUDPFlow)
 	manager.kernelUDPTXTemplates = make(map[uint64]kernelUDPTXTemplate)
 	manager.kernelUDPFlowSubs = make(map[uint64]map[chan []dataplane.KernelUDPFrame]struct{})
@@ -7917,9 +7944,9 @@ func (manager *Manager) deliverExperimentalTCPFrames(frames []receivedExperiment
 					flowChanged = true
 					txDirectSyncNeeded = true
 				}
-				flow = refreshExperimentalTCPFlowLifetime(flow, now)
-				manager.expTCPFlows[frame.FlowID] = flow
 				if flowChanged {
+					flow = refreshExperimentalTCPFlowLifetime(flow, now)
+					manager.setExperimentalTCPFlowLocked(frame.FlowID, flow, now)
 					manager.invalidateExperimentalTCPTXTemplateLocked(frame.FlowID)
 					manager.updateExperimentalTCPTelemetryIdentityLocked(frame.FlowID, flow)
 					if err := manager.syncExperimentalTCPPortsLocked(); err != nil {
@@ -7930,6 +7957,9 @@ func (manager *Manager) deliverExperimentalTCPFrames(frames []receivedExperiment
 						return
 					}
 					txDirectSyncNeeded = true
+				} else {
+					flow = refreshExperimentalTCPFlowLifetime(flow, now)
+					manager.expTCPFlows[frame.FlowID] = flow
 				}
 			}
 			frame.Peer = flow.Peer
@@ -9864,7 +9894,11 @@ func (manager *Manager) prepareExperimentalTCPPacketLocked(flowID uint64, sequen
 		syncPorts = true
 	}
 	flow = refreshExperimentalTCPPreparedFlowLifetime(flow, now)
-	manager.expTCPFlows[flowID] = flow
+	if syncPorts {
+		manager.setExperimentalTCPFlowLocked(flowID, flow, now)
+	} else {
+		manager.expTCPFlows[flowID] = flow
+	}
 	manager.updateExperimentalTCPTelemetryIdentityLocked(flowID, flow)
 	if syncPorts {
 		if err := manager.syncExperimentalTCPPortsLocked(); err != nil {
@@ -12010,6 +12044,7 @@ func (manager *Manager) pruneExperimentalTCPFlowsLocked(now time.Time) bool {
 	var changed bool
 	for flowID, flow := range manager.expTCPFlows {
 		if !flow.ExpiresAt.IsZero() && !now.Before(flow.ExpiresAt) {
+			manager.holdExperimentalTCPAllowedPortsLocked(flow, now)
 			delete(manager.expTCPFlows, flowID)
 			delete(manager.expTCPOuterTXSequences, flowID)
 			delete(manager.expTCPOuterTXAcknowledgments, flowID)
@@ -12075,7 +12110,7 @@ func (manager *Manager) expireExperimentalTCPTXTemplateLocked(flowID uint64, tem
 	if flow.LocalAddress == template.flow.LocalAddress && flow.SourcePort == template.flow.SourcePort {
 		flow.LocalAddress = ""
 		flow.SourcePort = 0
-		manager.expTCPFlows[flowID] = flow
+		manager.setExperimentalTCPFlowLocked(flowID, flow, time.Now().UTC())
 		manager.updateExperimentalTCPTelemetryIdentityLocked(flowID, flow)
 	}
 }
@@ -12152,26 +12187,81 @@ func (manager *Manager) desiredExperimentalTCPPortsLocked() map[uint16]struct{} 
 		desired[port] = struct{}{}
 	}
 	for _, flow := range manager.expTCPFlows {
-		if flow.SourcePort != 0 {
-			desired[flow.SourcePort] = struct{}{}
+		addExperimentalTCPFlowPorts(desired, flow)
+	}
+	manager.addHeldExperimentalTCPAllowedPortsLocked(desired, time.Now().UTC())
+	return desired
+}
+
+func (manager *Manager) holdExperimentalTCPAllowedPortsLocked(flow dataplane.ExperimentalTCPFlow, now time.Time) {
+	if experimentalTCPAllowedPortHoldDown <= 0 {
+		return
+	}
+	ports := make(map[uint16]struct{})
+	addExperimentalTCPFlowPorts(ports, flow)
+	if len(ports) == 0 {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	expiresAt := now.Add(experimentalTCPAllowedPortHoldDown)
+	if manager.expTCPAllowedPortHoldUntil == nil {
+		manager.expTCPAllowedPortHoldUntil = make(map[uint16]time.Time, len(ports))
+	}
+	for port := range ports {
+		if previous, ok := manager.expTCPAllowedPortHoldUntil[port]; ok && previous.After(expiresAt) {
+			continue
 		}
-		if flow.DestinationPort != 0 {
-			desired[flow.DestinationPort] = struct{}{}
+		manager.expTCPAllowedPortHoldUntil[port] = expiresAt
+	}
+}
+
+func (manager *Manager) setExperimentalTCPFlowLocked(flowID uint64, flow dataplane.ExperimentalTCPFlow, now time.Time) {
+	if existing, ok := manager.expTCPFlows[flowID]; ok {
+		manager.holdExperimentalTCPAllowedPortsLocked(existing, now)
+	}
+	manager.expTCPFlows[flowID] = flow
+}
+
+func (manager *Manager) addHeldExperimentalTCPAllowedPortsLocked(desired map[uint16]struct{}, now time.Time) {
+	if len(manager.expTCPAllowedPortHoldUntil) == 0 {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	for port, expiresAt := range manager.expTCPAllowedPortHoldUntil {
+		if expiresAt.IsZero() || !now.Before(expiresAt) {
+			delete(manager.expTCPAllowedPortHoldUntil, port)
+			continue
 		}
-		if strings.TrimSpace(flow.LocalAddress) != "" {
-			port, err := experimentalTCPAddressPort(flow.LocalAddress)
-			if err == nil {
-				desired[port] = struct{}{}
-			}
-		}
-		if strings.TrimSpace(flow.RemoteAddress) != "" {
-			port, err := experimentalTCPAddressPort(flow.RemoteAddress)
-			if err == nil {
-				desired[port] = struct{}{}
-			}
+		desired[port] = struct{}{}
+	}
+}
+
+func addExperimentalTCPFlowPorts(ports map[uint16]struct{}, flow dataplane.ExperimentalTCPFlow) {
+	if ports == nil {
+		return
+	}
+	if flow.SourcePort != 0 {
+		ports[flow.SourcePort] = struct{}{}
+	}
+	if flow.DestinationPort != 0 {
+		ports[flow.DestinationPort] = struct{}{}
+	}
+	if strings.TrimSpace(flow.LocalAddress) != "" {
+		port, err := experimentalTCPAddressPort(flow.LocalAddress)
+		if err == nil {
+			ports[port] = struct{}{}
 		}
 	}
-	return desired
+	if strings.TrimSpace(flow.RemoteAddress) != "" {
+		port, err := experimentalTCPAddressPort(flow.RemoteAddress)
+		if err == nil {
+			ports[port] = struct{}{}
+		}
+	}
 }
 
 func (manager *Manager) syncKernelUDPPortsLocked() error {

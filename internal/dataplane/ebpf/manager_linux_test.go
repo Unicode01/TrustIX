@@ -5100,6 +5100,136 @@ func TestKernelTransportAllowedPortsUseLocalListenAndFlows(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPAllowedPortHoldKeepsDeletedFlowPorts(t *testing.T) {
+	oldHoldDown := experimentalTCPAllowedPortHoldDown
+	experimentalTCPAllowedPortHoldDown = time.Minute
+	t.Cleanup(func() { experimentalTCPAllowedPortHoldDown = oldHoldDown })
+
+	manager := NewManager()
+	manager.snapshot.PacketPolicy = dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel}
+	flow := dataplane.ExperimentalTCPFlow{
+		SourcePort:      41000,
+		DestinationPort: 27000,
+		LocalAddress:    "198.18.0.1:41001",
+		RemoteAddress:   "198.18.0.2:27002",
+	}
+	manager.expTCPFlows[7] = flow
+
+	now := time.Now().UTC()
+	manager.holdExperimentalTCPAllowedPortsLocked(flow, now)
+	delete(manager.expTCPFlows, 7)
+
+	ports := manager.desiredExperimentalTCPPortsLocked()
+	for _, port := range []uint16{41000, 27000, 41001, 27002} {
+		if _, ok := ports[port]; !ok {
+			t.Fatalf("held experimental_tcp desired ports missing %d: %#v", port, ports)
+		}
+		manager.expTCPAllowedPortHoldUntil[port] = now.Add(-time.Second)
+	}
+
+	ports = manager.desiredExperimentalTCPPortsLocked()
+	for _, port := range []uint16{41000, 27000, 41001, 27002} {
+		if _, ok := ports[port]; ok {
+			t.Fatalf("expired experimental_tcp held port %d is still desired: %#v", port, ports)
+		}
+	}
+	if len(manager.expTCPAllowedPortHoldUntil) != 0 {
+		t.Fatalf("expired experimental_tcp held ports were not pruned: %#v", manager.expTCPAllowedPortHoldUntil)
+	}
+}
+
+func TestExperimentalTCPAllowedPortHoldKeepsOverwrittenFlowPorts(t *testing.T) {
+	oldHoldDown := experimentalTCPAllowedPortHoldDown
+	experimentalTCPAllowedPortHoldDown = time.Minute
+	t.Cleanup(func() { experimentalTCPAllowedPortHoldDown = oldHoldDown })
+
+	manager := NewManager()
+	manager.snapshot.PacketPolicy = dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel}
+	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+		SourcePort:      41000,
+		DestinationPort: 27000,
+		LocalAddress:    "198.18.0.1:41001",
+		RemoteAddress:   "198.18.0.2:27002",
+	}
+
+	manager.setExperimentalTCPFlowLocked(7, dataplane.ExperimentalTCPFlow{
+		SourcePort:      42000,
+		DestinationPort: 28000,
+		LocalAddress:    "198.18.0.1:42001",
+		RemoteAddress:   "198.18.0.2:28002",
+	}, time.Now().UTC())
+
+	ports := manager.desiredExperimentalTCPPortsLocked()
+	for _, port := range []uint16{41000, 27000, 41001, 27002, 42000, 28000, 42001, 28002} {
+		if _, ok := ports[port]; !ok {
+			t.Fatalf("overwritten experimental_tcp desired ports missing %d: %#v", port, ports)
+		}
+	}
+}
+
+func TestExperimentalTCPAllowedPortHoldKeepsDuplicateDeletedFlowPorts(t *testing.T) {
+	oldHoldDown := experimentalTCPAllowedPortHoldDown
+	experimentalTCPAllowedPortHoldDown = time.Minute
+	t.Cleanup(func() { experimentalTCPAllowedPortHoldDown = oldHoldDown })
+
+	manager := NewManager()
+	manager.snapshot.PacketPolicy = dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel}
+	existing := dataplane.ExperimentalTCPFlow{
+		ID:              1,
+		Peer:            core.IXID("ix-b"),
+		Endpoint:        core.EndpointID("b-exp"),
+		SourcePort:      41000,
+		DestinationPort: 27000,
+		LocalAddress:    "198.18.0.1:41001",
+		RemoteAddress:   "198.18.0.2:27002",
+	}
+	manager.expTCPFlows[1] = existing
+	replacement := existing
+	replacement.ID = 2
+
+	manager.deleteDuplicateExperimentalTCPFlowsLocked(replacement)
+
+	if _, ok := manager.expTCPFlows[1]; ok {
+		t.Fatalf("duplicate experimental_tcp flow was retained: %#v", manager.expTCPFlows)
+	}
+	ports := manager.desiredExperimentalTCPPortsLocked()
+	for _, port := range []uint16{41000, 27000, 41001, 27002} {
+		if _, ok := ports[port]; !ok {
+			t.Fatalf("duplicate-deleted experimental_tcp desired ports missing %d: %#v", port, ports)
+		}
+	}
+}
+
+func TestExperimentalTCPAllowedPortHoldKeepsPrunedFlowPorts(t *testing.T) {
+	oldHoldDown := experimentalTCPAllowedPortHoldDown
+	experimentalTCPAllowedPortHoldDown = time.Minute
+	t.Cleanup(func() { experimentalTCPAllowedPortHoldDown = oldHoldDown })
+
+	manager := NewManager()
+	manager.snapshot.PacketPolicy = dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel}
+	now := time.Now().UTC()
+	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+		SourcePort:      41000,
+		DestinationPort: 27000,
+		LocalAddress:    "198.18.0.1:41001",
+		RemoteAddress:   "198.18.0.2:27002",
+		ExpiresAt:       now,
+	}
+
+	if !manager.pruneExperimentalTCPFlowsLocked(now) {
+		t.Fatal("expired experimental_tcp flow was not pruned")
+	}
+	if _, ok := manager.expTCPFlows[7]; ok {
+		t.Fatalf("expired experimental_tcp flow remains: %#v", manager.expTCPFlows)
+	}
+	ports := manager.desiredExperimentalTCPPortsLocked()
+	for _, port := range []uint16{41000, 27000, 41001, 27002} {
+		if _, ok := ports[port]; !ok {
+			t.Fatalf("pruned experimental_tcp desired ports missing %d: %#v", port, ports)
+		}
+	}
+}
+
 func TestKernelTransportAllowedPortsDisabledModeKeepsUserspaceUDPPortsOutOfXDP(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
