@@ -2,6 +2,57 @@
 
 This file records datapath performance findings and script changes so future runs do not depend on chat context.
 
+## 2026-06-19
+
+### Zaozhuang PVE selected transport matrix gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+. VM100 and
+all 1xx guests were not modified. The test VMs, temporary bridges (`vmbr3`,
+`vmbr5`), NAT rule, OpenWrt image cache, source syncs, test binaries, and cross
+host SSH key were removed after verification.
+
+Validation binaries were built from `74920a547fe51d21a985320563155d17a3058c4d`
+with a dirty tree containing harness-only changes. The current repo head after
+that run only changed scripts/tests around the matrix harness; datapath and
+kernel module sources were not changed by those commits.
+
+Selected Debian-to-Debian 900s matrix:
+
+| Case | Transport policy | Duration per direction | Minimum received | Gate |
+| --- | --- | ---: | ---: | --- |
+| `dd-fullkmod` | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 900s | 3.566969 Gbps | 3 Gbps |
+| `secure-kudp` | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 900s | 1.744620 Gbps | 1.5 Gbps |
+| `dd-routegso` | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 900s | 2.696084 Gbps | 2.5 Gbps |
+
+The selected production gate then passed all three families. It required
+matching binary identity, transport policy metadata, session pool warmup, route
+GSO helper stats, secure-kUDP crypto/kfunc readiness, full plaintext provider
+stats, and zero module error counters except the bounded secure-kUDP replay
+noise budget. Debian boot IDs stayed stable:
+`b77414e4-0ddc-4604-8f43-e2a98ce51cc8` and
+`e197a1d8-9a2c-4c29-adf7-c8785b0c090d`; final kernel log scans found zero
+panic, Oops, BUG, call trace, page fault, watchdog, lockup, hung-task, or
+`tx_queue_len` signatures.
+
+OpenWrt-to-Debian full plaintext validation used OpenWrt 23.05.5 x86_64
+kernel `5.15.167` with an OpenWrt SDK-built `trustix_datapath.ko`
+(`dc5c96d579f59de7299517e1869df85f2331b6eebba9893d081935fbd5144143`) and
+Debian 13 kernel `6.12.90+deb13.1-amd64`. The 900s bidirectional full-kmod run
+passed with minimum received throughput of 3.495550 Gbps against a 3 Gbps gate.
+Captured module counters stayed clean: both sides reported zero
+`rx_worker_dropped`, allocation/checksum/deliver/GSO xmit errors, plaintext TX
+errors, and `selftest_failures`. OpenWrt/Debian boot IDs stayed stable:
+`0761f435-1298-414b-89ef-189f9a9885f7` and
+`fc992768-3f54-4d7d-9396-2d44d927de25`.
+
+Change: provisioning defaults now align with the selected production paths.
+The default profile remains plaintext performance and emits UDP full-kmod with
+`crypto_placement: userspace` and `kernel_transport: require_kernel`. The
+explicit secure `performance` profile emits secure kernel-UDP with
+`datapath: tc_xdp`, `crypto_placement: kernel`, `kernel_transport:
+require_kernel`, and only the selected UDP endpoint; it no longer adds an
+unselected secure `experimental_tcp` secondary endpoint.
+
 ## 2026-06-16
 
 ### Zaozhuang PVE OpenWrt SDK full-kmod validation

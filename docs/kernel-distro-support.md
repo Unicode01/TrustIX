@@ -15,7 +15,7 @@ universal `.ko`.
 | Kernel crypto, full | Matching KDIR plus kernel/BTF support for BPF crypto kfuncs; upstream Linux 6.12+ is the intended full provider target | Builds where headers allow it, but runtime must still pass BTF/kfunc and selftest probes. Older kernels can load but may only provide device/ioctl crypto. |
 | Datapath helpers, basic | Matching KDIR | Build fallback when helper kfunc/BTF support is not available. Does not provide route-GSO/kfunc fast path. |
 | Datapath helpers, full | Matching KDIR plus module BTF/kfunc usability | Provides safe skb/GSO and route-TCP helper capability. Panic-risk route-TCP XMIT/async families are first-release hard-disabled unless separately validated. |
-| Full plaintext datapath module | Matching KDIR; explicit crash-risk gates plus `enable_features=128 rx_worker_inject=1 tx_plaintext=1`; passing module selftests | Crash-risk experimental only. Daemon defaults keep RX worker and TX plaintext disabled with explicit `rx_worker_inject=0 tx_plaintext=0`; OpenWrt requires an additional OpenWrt-specific opt-in gate. Secure full-kernel datapath and GSO LAN TX are not complete first-release guarantees. |
+| Full plaintext datapath module | Matching KDIR; selected full-plaintext policy plus `enable_features=128 rx_worker_inject=1 tx_plaintext=1`; passing module selftests and cross-host production gate | Selected plaintext performance path for the validated Debian 6.12 and OpenWrt 5.15 x86_64 targets. Daemon defaults still keep RX worker and TX plaintext disabled unless the selected policy/runtime config requires them. Modules remain target-kernel artifacts; secure full-kernel datapath and GSO LAN TX are not complete first-release guarantees. |
 
 ## Kernel module ABI boundary
 
@@ -46,7 +46,10 @@ now install for kernel module builds when dependency installation is enabled.
 
 ## Current validation snapshot
 
-The latest PVE compatibility audit was run on 2026-06-09 against current source.
+The latest PVE compatibility audit was run on 2026-06-19 against current source
+and selected production transport defaults. It covered Debian 13
+`6.12.90+deb13.1-amd64` and OpenWrt 23.05.5 x86_64 `5.15.167` guests with
+disposable PVE VM IDs 200+.
 
 Generic Linux Kbuild on Ubuntu 22.04.5:
 
@@ -73,21 +76,34 @@ xmit compatibility, and selected p8/8s high-risk cases all completed without a
 VM reboot, kernel panic, Oops, watchdog, or pstore record. A longer p8/30s
 high-risk soak then reproduced a VM101/A reboot in
 `build/pve/pve-datapath-risk-p8-30s-20260610.json` while VM102/B stayed up; no
-pstore record or previous-boot kernel stack was captured. This validates only
-the short PVE matrix. Full plaintext datapath remains crash-risk experimental
-and must not be described as production-safe until the route-GSO/RX-worker
-corner is isolated and a longer A/B soak passes with crash capture enabled.
+pstore record or previous-boot kernel stack was captured. At that point the
+full plaintext datapath was not a production claim; the later 2026-06-19 matrix
+below is the updated production-gate evidence for the selected safe profile.
 
-Follow-up PVE multitransport isolation narrowed the later hard reboot to the
+Follow-up PVE multitransport isolation narrowed the earlier hard reboot to the
 full datapath RX_STAGE hook attachment, not module load by itself. Runs with all
 TrustIX modules disabled, helper-only modules, and `trustix_datapath` loaded
 with `kernel_modules.datapath.rx_stage: disabled` stayed up. A datapath-only run
 with the daemon's previous default RX_STAGE hook reproduced a reboot. The daemon
 therefore defaults RX_STAGE/RX_WORKER hook attachment off; explicit
 `kernel_modules.datapath.rx_stage: stage|worker` or the matching environment
-override is required, and RX_WORKER/full plaintext still need their crash-risk
-gates. TC/eBPF plus `trustix_datapath_helpers` remains the recommended
-performance path.
+override is required unless a selected production policy enables the full
+plaintext datapath. TC/eBPF plus `trustix_datapath_helpers` remains the selected
+secure performance path.
+
+The 2026-06-19 selected cross-host matrix passed these 900s gates on Debian to
+Debian:
+
+| Family | Policy | Minimum received | Gate |
+| --- | --- | ---: | ---: |
+| Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.566969 Gbps | 3 Gbps |
+| Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.744620 Gbps | 1.5 Gbps |
+| Route-GSO fallback | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 2.696084 Gbps | 2.5 Gbps |
+
+The same audit passed OpenWrt-to-Debian full-kmod plaintext for 900s with a
+minimum received throughput of 3.495550 Gbps against a 3 Gbps gate. Final boot
+ID checks were stable and kernel log scans found no panic, Oops, BUG, call
+trace, page fault, watchdog, lockup, hung-task, or `tx_queue_len` signature.
 
 OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 

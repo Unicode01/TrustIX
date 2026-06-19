@@ -34,6 +34,16 @@ const (
 	ixProvisionPrimaryPriority     = 100
 	ixProvisionAcklessPriority     = 80
 	ixProvisionBootstrapClientPath = "/v1/provision/ix/bootstrap-client.sh"
+
+	ixProvisionDefaultProfile = "plaintext_performance"
+
+	ixProvisionPerformanceDatapath        = config.TransportDatapathTCXDP
+	ixProvisionPerformanceCryptoPlacement = string(dataplane.CryptoPlacementKernel)
+	ixProvisionPerformanceKernelTransport = string(dataplane.KernelTransportModeRequireKernel)
+
+	ixProvisionPlaintextPerformanceDatapath        = config.TransportDatapathKernelModule
+	ixProvisionPlaintextPerformanceCryptoPlacement = string(dataplane.CryptoPlacementUserspace)
+	ixProvisionPlaintextPerformanceKernelTransport = string(dataplane.KernelTransportModeRequireKernel)
 )
 
 type ixProvisionIssueRequest struct {
@@ -736,11 +746,11 @@ func normalizeIXProvisionProfile(profile string) string {
 	profile = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(profile), "-", "_"))
 	switch profile {
 	case "":
-		return "plaintext_performance"
+		return ixProvisionDefaultProfile
 	case "compat", "compatible":
 		return "compatibility"
 	case "plain", "plaintext", "plaintext_perf", "performance_plaintext":
-		return "plaintext_performance"
+		return ixProvisionDefaultProfile
 	default:
 		return profile
 	}
@@ -761,10 +771,10 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 	case "performance":
 		return ixProvisionProfileDefaults{
 			TransportProfile:        config.TransportProfilePerformance,
-			Datapath:                config.TransportDatapathAuto,
+			Datapath:                ixProvisionPerformanceDatapath,
 			Encryption:              securetransport.EncryptionSecure,
-			CryptoPlacement:         "auto",
-			KernelTransport:         "auto",
+			CryptoPlacement:         ixProvisionPerformanceCryptoPlacement,
+			KernelTransport:         ixProvisionPerformanceKernelTransport,
 			KernelCapabilityProfile: config.KernelCapabilityProfilePerformance,
 		}, nil
 	case "latency":
@@ -788,10 +798,10 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 	case "plaintext_performance":
 		return ixProvisionProfileDefaults{
 			TransportProfile:        config.TransportProfilePerformance,
-			Datapath:                config.TransportDatapathKernelModule,
+			Datapath:                ixProvisionPlaintextPerformanceDatapath,
 			Encryption:              securetransport.EncryptionPlaintext,
-			CryptoPlacement:         "auto",
-			KernelTransport:         "auto",
+			CryptoPlacement:         ixProvisionPlaintextPerformanceCryptoPlacement,
+			KernelTransport:         ixProvisionPlaintextPerformanceKernelTransport,
 			KernelCapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
 		}, nil
 	default:
@@ -1051,7 +1061,17 @@ func ixProvisionShouldAddAcklessEndpoint(request ixProvisionIssueRequest, profil
 	if ixProvisionOpenWRTTCOnly(request, profile) {
 		return false
 	}
+	if ixProvisionSecureKernelUDPPerformanceProfile(profile) {
+		return false
+	}
 	return !ixProvisionPlaintextPerformanceFullKmodProfile(profile)
+}
+
+func ixProvisionSecureKernelUDPPerformanceProfile(profile ixProvisionProfileDefaults) bool {
+	return profile.TransportProfile == config.TransportProfilePerformance &&
+		profile.Datapath == ixProvisionPerformanceDatapath &&
+		parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionSecure &&
+		profile.CryptoPlacement == ixProvisionPerformanceCryptoPlacement
 }
 
 func ixProvisionEndpointConfig(request ixProvisionIssueRequest, name core.EndpointID, endpointTransport string, priority int, profile ixProvisionProfileDefaults) config.EndpointConfig {
@@ -1167,6 +1187,12 @@ func ixProvisionKernelModuleModes(request ixProvisionIssueRequest, profile ixPro
 	}
 	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext ||
 		profile.TransportProfile != config.TransportProfilePerformance {
+		if profile.TransportProfile == config.TransportProfilePerformance &&
+			profile.Datapath == ixProvisionPerformanceDatapath &&
+			parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionSecure &&
+			profile.CryptoPlacement == ixProvisionPerformanceCryptoPlacement {
+			return "required", "disabled", "required"
+		}
 		return cryptoMode, datapathMode, helpersMode
 	}
 	switch profile.Datapath {

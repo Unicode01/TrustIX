@@ -11,6 +11,7 @@ import (
 
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/core"
+	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/pki"
 	securetransport "trustix.local/trustix/internal/transport/secure"
 )
@@ -183,7 +184,8 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	if target.TransportPolicy.Encryption != securetransport.EncryptionPlaintext ||
 		target.TransportPolicy.Profile != config.TransportProfilePerformance ||
 		target.TransportPolicy.Datapath != config.TransportDatapathKernelModule ||
-		target.TransportPolicy.KernelTransport.Mode != "auto" {
+		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
+		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
 		t.Fatalf("target transport policy = %#v", target.TransportPolicy)
 	}
 	if len(target.Endpoints) != 1 ||
@@ -277,6 +279,54 @@ func TestIXProvisionPlaintextPerformanceTunnelDeclarationDefaultsToNativeIPIP(t 
 	}
 	if request.EndpointAddress != "local=198.51.100.10,mtu=1480" || request.EndpointListen != "local=198.51.100.10,mtu=1480" {
 		t.Fatalf("endpoint tunnel declaration = %q listen %q", request.EndpointAddress, request.EndpointListen)
+	}
+}
+
+func TestIXProvisionPerformanceProfileUsesSecureKernelUDPDefaults(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:              "ix-perf-secure",
+		Profile:           "performance",
+		Advertise:         []core.Prefix{"10.43.0.0/24"},
+		EndpointAddress:   "ix-perf.example.com:7000",
+		EndpointTransport: "udp",
+		ProvisionURL:      "https://ix-a.example.com:18787",
+	}, desired)
+	if err != nil {
+		t.Fatalf("normalize provision request: %v", err)
+	}
+	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
+	if err != nil {
+		t.Fatalf("desired for provision: %v", err)
+	}
+	if target.TransportPolicy.Encryption != securetransport.EncryptionSecure ||
+		target.TransportPolicy.Profile != config.TransportProfilePerformance ||
+		target.TransportPolicy.Datapath != config.TransportDatapathTCXDP ||
+		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementKernel) ||
+		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
+		t.Fatalf("secure performance transport policy = %#v", target.TransportPolicy)
+	}
+	if len(target.Endpoints) != 1 ||
+		target.Endpoints[0].Transport != "udp" ||
+		target.Endpoints[0].Security.Encryption != securetransport.EncryptionSecure ||
+		target.Endpoints[0].Profile.Datapath != config.TransportDatapathTCXDP ||
+		target.Endpoints[0].Profile.CryptoPlacement != string(dataplane.CryptoPlacementKernel) {
+		t.Fatalf("secure performance endpoint = %#v", target.Endpoints)
+	}
+	if !kernelUDPSecureRouteGSOForDesired(target) {
+		t.Fatalf("secure performance profile did not select kernel UDP route-GSO")
+	}
+	if kernelDatapathFullPlaintextEnabledForDesired(target) {
+		t.Fatalf("secure performance profile should not enable full plaintext datapath")
+	}
+	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
+		t.Fatalf("secure performance kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
+	}
+	if target.KernelModules.TrustIXCrypto.Mode != "required" ||
+		target.KernelModules.TrustIXDatapath.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "required" {
+		t.Fatalf("secure performance kernel module modes = %#v, want crypto/helpers required only", target.KernelModules)
 	}
 }
 
@@ -412,7 +462,9 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if err != nil {
 		t.Fatalf("desired for provision: %v", err)
 	}
-	if target.TransportPolicy.KernelTransport.Mode != "auto" || len(target.Endpoints) != 1 || target.Endpoints[0].Transport != "udp" {
+	if target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) ||
+		len(target.Endpoints) != 1 ||
+		target.Endpoints[0].Transport != "udp" {
 		t.Fatalf("target OpenWrt performance defaults policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
