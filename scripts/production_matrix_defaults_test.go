@@ -296,6 +296,51 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 	}
 }
 
+func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join(".", "linux-cross-host-transport-matrix.sh"))
+	if err != nil {
+		t.Fatalf("read linux-cross-host-transport-matrix.sh: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS:-${repo_root}/scripts/production-transport-defaults.tsv",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_RUNNER:-${repo_root}/scripts/linux-cross-host-soak-runner.sh",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFIER:-${repo_root}/scripts/linux-cross-host-soak-verify.py",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_PRODUCTION_GATE:-${repo_root}/scripts/linux-cross-host-production-gate.sh",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE:-all",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_KEEP_REMOTE:-0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE:-1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN:-0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS",
+		"validation_scope",
+		"gate_family",
+		"\"runner_case\":\"%s\"",
+		"runner_case_name",
+		"full_kmod) printf 'dd-fullkmod\\n'",
+		"secure_kudp) printf 'secure-kudp\\n'",
+		"route_gso) printf 'dd-routegso\\n'",
+		"TRUSTIX_CROSS_HOST_CASE=\"$runner_case\"",
+		"TRUSTIX_CROSS_HOST_TRANSPORT=\"$token\"",
+		"TRUSTIX_CROSS_HOST_PROFILE=\"$profile\"",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=\"$datapath\"",
+		"TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT=\"$placement\"",
+		"TRUSTIX_CROSS_HOST_KEEP_REMOTE=\"$keep_remote\"",
+		"record_result \"dry_run\"",
+		"--require-transport-policy-stat\" \"encryption=${encryption}",
+		"--require-transport-policy-stat\" \"profile=${profile}",
+		"--require-transport-policy-stat\" \"datapath=${datapath}",
+		"--require-transport-policy-stat\" \"crypto_placement=${placement}",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases[*]}",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases[*]}",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases[*]}",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("linux-cross-host-transport-matrix.sh missing %q", want)
+		}
+	}
+}
+
 func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join(".", "linux-cross-host-soak-runner.sh"))
 	if err != nil {
@@ -407,6 +452,9 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL=1",
 		"TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN=1",
 		"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=1",
+		"TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=1",
+		"TRUSTIX_KERNEL_UDP_XDP_RX_SECURE_DIRECT=1",
+		"TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUMS=1",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_ROUTE_GSO:-0",
 		"printf 'TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC=%s\\n' \"$route_gso\"",
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1",
