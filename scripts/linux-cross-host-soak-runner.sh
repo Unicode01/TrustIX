@@ -57,11 +57,14 @@ data_b_port="${TRUSTIX_CROSS_HOST_DATA_B_PORT:-}"
 iperf_port="${TRUSTIX_CROSS_HOST_IPERF_PORT:-25201}"
 health_port="${TRUSTIX_CROSS_HOST_HEALTH_PORT:-}"
 iperf_seconds="${TRUSTIX_CROSS_HOST_IPERF_SECONDS:-900}"
+iperf_parallel_explicit="${TRUSTIX_CROSS_HOST_IPERF_PARALLEL+x}"
 iperf_parallel="${TRUSTIX_CROSS_HOST_IPERF_PARALLEL:-8}"
+iptunnel_iperf_parallel="${TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL:-4}"
 iperf_timeout="${TRUSTIX_CROSS_HOST_IPERF_TIMEOUT:-$((iperf_seconds + 60))}"
 iperf_mode="${TRUSTIX_CROSS_HOST_IPERF_MODE:-forward}"
 iperf_directions="${TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS:-both}"
 transport_snapshot_delay="${TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY:-5}"
+session_pool_size_explicit="${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE+x}"
 session_pool_size="${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE:-$iperf_parallel}"
 session_pool_strategy="${TRUSTIX_CROSS_HOST_SESSION_POOL_STRATEGY:-flow}"
 session_pool_warmup="${TRUSTIX_CROSS_HOST_SESSION_POOL_WARMUP:-true}"
@@ -491,6 +494,15 @@ case_tc_requested_but_falls_back_to_userspace() {
   [[ "$(case_fast_path)" == "userspace_tc" ]] && ! case_uses_tc_direct_fast_path
 }
 
+apply_case_runtime_defaults() {
+  if case_is_iptunnel_transport && [[ -z "$iperf_parallel_explicit" ]]; then
+    iperf_parallel="$iptunnel_iperf_parallel"
+    if [[ -z "$session_pool_size_explicit" ]]; then
+      session_pool_size="$iperf_parallel"
+    fi
+  fi
+}
+
 case_secure_kudp_route_gso() {
   case "$(case_fast_path)" in
     secure_kudp) return 0 ;;
@@ -730,6 +742,7 @@ check_local_inputs() {
   [[ -x "$trustix_ca" ]] || die "trustix-ca is not executable: $trustix_ca"
   case "$iperf_seconds" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_SECONDS must be an integer" ;; esac
   case "$iperf_parallel" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PARALLEL must be an integer" ;; esac
+  case "$iptunnel_iperf_parallel" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be an integer" ;; esac
   case "$iperf_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PORT must be an integer" ;; esac
   if [[ -z "$health_port" ]]; then
     health_port=$((iperf_port + 1))
@@ -743,6 +756,7 @@ check_local_inputs() {
   case "$vxlan_vni" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_VXLAN_VNI must be an integer" ;; esac
   case "$vxlan_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_VXLAN_PORT must be an integer" ;; esac
   [[ "$iperf_parallel" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_IPERF_PARALLEL must be >= 1"
+  [[ "$iptunnel_iperf_parallel" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1"
   [[ "$transport_snapshot_delay" -ge 0 ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be >= 0"
   [[ "$session_pool_size" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be >= 1"
   [[ "$iptunnel_port" -ge 1 && "$iptunnel_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_PORT must be in 1..65535"
@@ -1676,6 +1690,7 @@ cleanup_all() {
 
 main() {
   validate_case
+  apply_case_runtime_defaults
   if [[ "$(case_fast_path)" == "route_gso" && -z "${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE+x}" ]]; then
     session_pool_heartbeat_mode=disabled
   fi

@@ -17,6 +17,7 @@ http_connect	secure	stable	userspace	userspace	single_host	userspace	0	30	baseli
 http_connect	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext HTTP CONNECT compatibility path
 gre	secure	stable	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline secure GRE tunnel offload
 gre	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline plaintext GRE tunnel offload
+gre	plaintext	performance	tc_xdp	userspace	cross_host	userspace_tc	4	900	selected plaintext GRE tunnel compatibility path
 ipip	secure	stable	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline secure IPIP tunnel offload
 ipip	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline plaintext IPIP tunnel offload
 vxlan	secure	stable	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline secure VXLAN tunnel offload

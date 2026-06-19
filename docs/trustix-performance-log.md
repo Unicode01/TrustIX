@@ -45,6 +45,41 @@ Final suspicious kernel-log scans over the run window found no panic, Oops,
 BUG, call trace, page fault, watchdog, lockup, `tx_queue_len`, or TrustIX
 datapath crash signatures on either Debian guest.
 
+### Zaozhuang PVE GRE P4 900s strict gate
+
+The same PVE host and disposable Debian 13 VM200/VM201 pair were reused to
+isolate GRE tunnel iperf behavior after the strict verifier rejected the first
+P8 run. The validation binary was built from
+`c723a099cde1bb1ad5d739929dfb495bbe15663a` with build time
+`2026-06-19T22:54:00Z`; both guests used the same
+`trustix-linux-amd64` binary SHA256
+`6958dd0b7c94dcae7d83fee699c32ee4909992d30d90e3e04e4bf005c1343a7e`.
+
+Parallel sweep result:
+
+| GRE iperf parallel | Result | Minimum received | Notes |
+| ---: | --- | ---: | --- |
+| 1 | pass | about 5.00 Gbps | clean client and server iperf JSON |
+| 2 | pass | about 4.80 Gbps | clean client and server iperf JSON |
+| 4 | pass | about 4.88 Gbps | clean client and server iperf JSON |
+| 8 | fail | not accepted | client `unable to receive results`, server `Bad file descriptor` |
+
+The production candidate then ran GRE plaintext userspace-TC at P4 for 900s in
+both directions. Artifact:
+`/tmp/trustix-pve-compat-20260620-065444/results/gre-p4-900-20260620-072217`.
+The selected userspace-TC gate passed with `min_gbps=4`, `min_seconds=900`,
+`session_dial_errors=0`, `session_heartbeat_timeouts=0`, and eight observed
+transport sessions. Measured received throughput was 4.807613 Gbps A to B and
+4.951422 Gbps B to A. Neither iperf client/server JSON contained an `error`
+field, and final kernel-log scans found no panic, Oops, BUG, call trace, page
+fault, watchdog, lockup, `tx_queue_len`, or TrustIX datapath crash signatures.
+
+Change: tunnel transports now default to `TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL=4`
+when the caller has not explicitly set `TRUSTIX_CROSS_HOST_IPERF_PARALLEL`.
+The runner also aligns the default session pool size to that tunnel-specific
+parallelism unless `TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE` was explicitly set.
+Do not promote GRE P8; it remains negative evidence for dirty iperf artifacts.
+
 ### OpenWrt 24.10.2 full-kmod production gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
