@@ -83,7 +83,11 @@ default_cases() {
     BEGIN { OFS = ":" }
     /^[[:space:]]*#/ || NF == 0 { next }
     NF < 9 { printf "invalid production defaults row: %s\n", $0 >"/dev/stderr"; exit 2 }
-    { print $1, $2, $3, $4, $5, $8, $9 }
+    {
+      key = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5
+      if (seen[key]++) next
+      print $1, $2, $3, $4, $5, $8, $9
+    }
   ' "$defaults_file"
 }
 

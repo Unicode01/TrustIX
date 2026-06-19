@@ -1,7 +1,9 @@
 package scripts
 
 import (
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,6 +44,7 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 			defaults := readProductionTransportDefaults(t)
 			for _, wantCase := range []string{
 				"udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod:3:900",
+				"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:900",
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:900",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:900",
 				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
@@ -79,7 +82,9 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_ROUTE_GSO_MIN_GBPS:-2.5",
 		"TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_AF_XDP_TX_BACKPRESSURE_WAIT:-50ms",
 		"TRUSTIX_E2E_AF_XDP_TX_BACKPRESSURE_WAIT",
-		"{ print $1, $2, $3, $4, $5, $8, $9 }",
+		"key = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5",
+		"if (seen[key]++) next",
+		"print $1, $2, $3, $4, $5, $8, $9",
 		"case_iperf3_seconds=\"${default_seconds:-$iperf3_seconds}\"",
 		"export TRUSTIX_E2E_IPERF3_SECONDS=\"$case_iperf3_seconds\"",
 		"rx_worker_xmit=1",
@@ -107,6 +112,7 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 	for _, wantCase := range []string{
 		"udp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 		"udp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+		"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:900",
 		"tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 		"tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"quic:secure:stable:userspace:userspace:single_host:userspace:0:30",
@@ -335,9 +341,16 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"gate_family",
 		"\"runner_case\":\"%s\"",
 		"runner_case_name",
-		"full_kmod) printf 'dd-fullkmod\\n'",
-		"secure_kudp) printf 'secure-kudp\\n'",
-		"route_gso) printf 'dd-routegso\\n'",
+		"gate_family_class",
+		"matrix_case_name",
+		"full_kmod|dd_full_kmod) printf 'dd-fullkmod\\n'",
+		"owdeb_full_kmod) printf 'owdeb-fullkmod\\n'",
+		"secure_kudp|dd_secure_kudp) printf 'secure-kudp\\n'",
+		"owdeb_secure_kudp) printf 'owdeb-secure-kudp\\n'",
+		"route_gso|dd_route_gso) printf 'dd-routegso\\n'",
+		"owdeb_*) printf '%s-owdeb\\n' \"$base\"",
+		"full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\\n'",
+		"secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\\n'",
 		"TRUSTIX_CROSS_HOST_CASE=\"$runner_case\"",
 		"TRUSTIX_CROSS_HOST_TRANSPORT=\"$token\"",
 		"TRUSTIX_CROSS_HOST_PROFILE=\"$profile\"",
@@ -349,13 +362,68 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"--require-transport-policy-stat\" \"profile=${profile}",
 		"--require-transport-policy-stat\" \"datapath=${datapath}",
 		"--require-transport-policy-stat\" \"crypto_placement=${placement}",
-		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases[*]}",
-		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases[*]}",
-		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases[*]}",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases}",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-cross-host-transport-matrix.sh missing %q", want)
 		}
+	}
+}
+
+func TestCrossHostTransportMatrixDryRunIncludesOpenWrtDebianFullKmod(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+	workdir := t.TempDir()
+	summary := filepath.Join(workdir, "summary.jsonl")
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY="+summary,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run cross-host transport matrix failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read dry-run summary: %v", err)
+	}
+	var sawDebianFullKmod, sawOpenWrtDebianFullKmod bool
+	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var row struct {
+			Case       string `json:"case"`
+			RunnerCase string `json:"runner_case"`
+			GateFamily string `json:"gate_family"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("decode dry-run summary row %q: %v", line, err)
+		}
+		if row.RunnerCase == "dd-fullkmod" && row.GateFamily == "full_kmod" {
+			sawDebianFullKmod = true
+		}
+		if row.RunnerCase == "owdeb-fullkmod" &&
+			row.GateFamily == "owdeb_full_kmod" &&
+			strings.HasSuffix(row.Case, "-owdeb") {
+			sawOpenWrtDebianFullKmod = true
+		}
+	}
+	if !sawDebianFullKmod || !sawOpenWrtDebianFullKmod {
+		t.Fatalf("dry-run summary missing full-kmod target cases: debian=%t owdeb=%t\n%s", sawDebianFullKmod, sawOpenWrtDebianFullKmod, payload)
 	}
 }
 

@@ -59,9 +59,11 @@ runner_case_name() {
   local transport="$1" encryption="$2" datapath="$3" gate_family="$4"
   local token kind
   case "$gate_family" in
-    full_kmod) printf 'dd-fullkmod\n'; return ;;
-    secure_kudp) printf 'secure-kudp\n'; return ;;
-    route_gso) printf 'dd-routegso\n'; return ;;
+    full_kmod|dd_full_kmod) printf 'dd-fullkmod\n'; return ;;
+    owdeb_full_kmod) printf 'owdeb-fullkmod\n'; return ;;
+    secure_kudp|dd_secure_kudp) printf 'secure-kudp\n'; return ;;
+    owdeb_secure_kudp) printf 'owdeb-secure-kudp\n'; return ;;
+    route_gso|dd_route_gso) printf 'dd-routegso\n'; return ;;
   esac
   token="$(transport_token "$transport")"
   kind="userspace"
@@ -71,12 +73,33 @@ runner_case_name() {
   printf '%s-%s-%s\n' "$kind" "$token" "$encryption"
 }
 
+gate_family_class() {
+  case "$1" in
+    full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\n' ;;
+    secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\n' ;;
+    route_gso|dd_route_gso) printf 'route_gso\n' ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+matrix_case_name() {
+  local token="$1" encryption="$2" profile="$3" datapath="$4" placement="$5" gate_family="$6"
+  local base="${token}-${encryption}-${profile}-${datapath}-${placement}"
+  case "$gate_family" in
+    owdeb_*) printf '%s-owdeb\n' "$base" ;;
+    dd_*) printf '%s-dd\n' "$base" ;;
+    *) printf '%s\n' "$base" ;;
+  esac
+}
+
 case_selected_for_scope() {
   local validation_scope="$1" gate_family="$2"
+  local gate_class
+  gate_class="$(gate_family_class "$gate_family")"
   case "$scope" in
     all) return 0 ;;
     cross_host|selected) [[ "$validation_scope" == "cross_host" ]] ;;
-    compat|baseline) [[ "$validation_scope" != "cross_host" && "$gate_family" != "full_kmod" && "$gate_family" != "secure_kudp" && "$gate_family" != "route_gso" ]] ;;
+    compat|baseline) [[ "$validation_scope" != "cross_host" && "$gate_class" != "full_kmod" && "$gate_class" != "secure_kudp" && "$gate_class" != "route_gso" ]] ;;
     *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE must be all, cross_host, selected, compat, or baseline" ;;
   esac
 }
@@ -113,23 +136,53 @@ validate_case_values() {
     udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|kernel_udp|experimental_tcp) ;;
     *) die "unsupported transport in matrix case: ${transport}" ;;
   esac
-  case "$encryption" in secure|plaintext) ;; *) die "unsupported encryption in matrix case: ${encryption}" ;; esac
-  case "$profile" in stable|performance|latency) ;; *) die "unsupported profile in matrix case: ${profile}" ;; esac
-  case "$datapath" in userspace|auto|tc_xdp|kernel_module) ;; *) die "unsupported datapath in matrix case: ${datapath}" ;; esac
-  case "$placement" in userspace|auto|kernel) ;; *) die "unsupported crypto placement in matrix case: ${placement}" ;; esac
-  case "$validation_scope" in single_host|cross_host|custom) ;; *) die "unsupported validation scope in matrix case: ${validation_scope}" ;; esac
-  case "$gate_family" in userspace|userspace_tc|tc_direct|full_kmod|secure_kudp|route_gso|custom) ;; *) die "unsupported gate family in matrix case: ${gate_family}" ;; esac
+  case "$encryption" in
+    secure|plaintext) ;;
+    *) die "unsupported encryption in matrix case: ${encryption}" ;;
+  esac
+  case "$profile" in
+    stable|performance|latency) ;;
+    *) die "unsupported profile in matrix case: ${profile}" ;;
+  esac
+  case "$datapath" in
+    userspace|auto|tc_xdp|kernel_module) ;;
+    *) die "unsupported datapath in matrix case: ${datapath}" ;;
+  esac
+  case "$placement" in
+    userspace|auto|kernel) ;;
+    *) die "unsupported crypto placement in matrix case: ${placement}" ;;
+  esac
+  case "$validation_scope" in
+    single_host|cross_host|custom) ;;
+    *) die "unsupported validation scope in matrix case: ${validation_scope}" ;;
+  esac
+  case "$gate_family" in
+    userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|route_gso|dd_route_gso|custom) ;;
+    *) die "unsupported gate family in matrix case: ${gate_family}" ;;
+  esac
   validate_nonnegative_decimal "case min_gbps" "$min_gbps"
   validate_positive_integer "case min_seconds" "$min_seconds"
 }
 
 append_selected_gate_case() {
   local gate_family="$1" name="$2" dir="$3"
-  case "$gate_family" in
-    full_kmod) full_kmod_cases+=("${name}=${dir}") ;;
-    secure_kudp) secure_kudp_cases+=("${name}=${dir}") ;;
-    route_gso) route_gso_cases+=("${name}=${dir}") ;;
+  local gate_class
+  gate_class="$(gate_family_class "$gate_family")"
+  case "$gate_class" in
+    full_kmod) append_case_token full_kmod_cases "${name}=${dir}" ;;
+    secure_kudp) append_case_token secure_kudp_cases "${name}=${dir}" ;;
+    route_gso) append_case_token route_gso_cases "${name}=${dir}" ;;
   esac
+}
+
+append_case_token() {
+  local var_name="$1" token="$2" current
+  current="${!var_name:-}"
+  if [[ -n "$current" ]]; then
+    printf -v "$var_name" '%s %s' "$current" "$token"
+  else
+    printf -v "$var_name" '%s' "$token"
+  fi
 }
 
 run_verify() {
@@ -167,7 +220,7 @@ run_case() {
   validate_nonnegative_decimal "effective min_gbps" "$min_gbps"
   validate_positive_integer "effective min_seconds" "$min_seconds"
   token="$(transport_token "$transport")"
-  name="${token}-${encryption}-${profile}-${datapath}-${placement}"
+  name="$(matrix_case_name "$token" "$encryption" "$profile" "$datapath" "$placement" "$gate_family")"
   runner_case="$(runner_case_name "$transport" "$encryption" "$datapath" "$gate_family")"
   dir="${workdir}/${name}"
   timeout_seconds=$((min_seconds + timeout_slop))
@@ -214,14 +267,14 @@ run_selected_gate() {
   truthy "$verify" || return 0
   truthy "$selected_gate" || return 0
   local gate_env=()
-  if [[ "${#full_kmod_cases[@]}" -gt 0 ]]; then
-    gate_env+=("TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases[*]}")
+  if [[ -n "$full_kmod_cases" ]]; then
+    gate_env+=("TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases}")
   fi
-  if [[ "${#secure_kudp_cases[@]}" -gt 0 ]]; then
-    gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases[*]}")
+  if [[ -n "$secure_kudp_cases" ]]; then
+    gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}")
   fi
-  if [[ "${#route_gso_cases[@]}" -gt 0 ]]; then
-    gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases[*]}")
+  if [[ -n "$route_gso_cases" ]]; then
+    gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}")
   fi
   if [[ "${#gate_env[@]}" -eq 0 ]]; then
     return 0
@@ -277,8 +330,8 @@ main() {
   return "$failures"
 }
 
-full_kmod_cases=()
-secure_kudp_cases=()
-route_gso_cases=()
+full_kmod_cases=""
+secure_kudp_cases=""
+route_gso_cases=""
 
 main "$@"
