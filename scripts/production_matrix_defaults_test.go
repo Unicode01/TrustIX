@@ -42,6 +42,23 @@ type productionTransportDefault struct {
 	MinSeconds      string
 }
 
+type productionTransportEvidence struct {
+	GateFamily      string
+	Transport       string
+	Encryption      string
+	Profile         string
+	Datapath        string
+	CryptoPlacement string
+	ValidationScope string
+	OSMatrix        string
+	KernelMatrix    string
+	Result          string
+	MinGbps         string
+	MinSeconds      string
+	Artifact        string
+	Note            string
+}
+
 func loadProductionTransportDefaults(t *testing.T) []productionTransportDefault {
 	t.Helper()
 	payload, err := os.ReadFile(filepath.Join(".", "production-transport-defaults.tsv"))
@@ -71,6 +88,66 @@ func loadProductionTransportDefaults(t *testing.T) []productionTransportDefault 
 		})
 	}
 	return rows
+}
+
+func loadProductionTransportEvidence(t *testing.T) []productionTransportEvidence {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join(".", "production-transport-evidence.tsv"))
+	if err != nil {
+		t.Fatalf("read production-transport-evidence.tsv: %v", err)
+	}
+	var rows []productionTransportEvidence
+	for _, line := range strings.Split(string(payload), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 14 {
+			t.Fatalf("invalid production evidence row %q", line)
+		}
+		rows = append(rows, productionTransportEvidence{
+			GateFamily:      fields[0],
+			Transport:       fields[1],
+			Encryption:      fields[2],
+			Profile:         fields[3],
+			Datapath:        fields[4],
+			CryptoPlacement: fields[5],
+			ValidationScope: fields[6],
+			OSMatrix:        fields[7],
+			KernelMatrix:    fields[8],
+			Result:          fields[9],
+			MinGbps:         fields[10],
+			MinSeconds:      fields[11],
+			Artifact:        fields[12],
+			Note:            strings.Join(fields[13:], "\t"),
+		})
+	}
+	return rows
+}
+
+func productionDefaultEvidenceKey(row productionTransportDefault) string {
+	return strings.Join([]string{
+		row.Transport,
+		row.Encryption,
+		row.Profile,
+		row.Datapath,
+		row.CryptoPlacement,
+		row.ValidationScope,
+		row.GateFamily,
+	}, ":")
+}
+
+func productionEvidenceKey(row productionTransportEvidence) string {
+	return strings.Join([]string{
+		row.Transport,
+		row.Encryption,
+		row.Profile,
+		row.Datapath,
+		row.CryptoPlacement,
+		row.ValidationScope,
+		row.GateFamily,
+	}, ":")
 }
 
 func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *testing.T) {
@@ -148,6 +225,78 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("linux-production-transport-matrix.sh production defaults still include %q", unwanted)
 		}
+	}
+}
+
+func TestCrossHostProductionDefaultsHavePassingEvidence(t *testing.T) {
+	defaults := loadProductionTransportDefaults(t)
+	evidenceRows := loadProductionTransportEvidence(t)
+	evidenceByKey := map[string][]productionTransportEvidence{}
+	seenEvidence := map[string]bool{}
+	for _, evidence := range evidenceRows {
+		key := productionEvidenceKey(evidence)
+		identity := strings.Join([]string{key, evidence.OSMatrix, evidence.KernelMatrix, evidence.Result, evidence.Artifact}, ":")
+		if seenEvidence[identity] {
+			t.Fatalf("duplicate production evidence row %q", identity)
+		}
+		seenEvidence[identity] = true
+		if evidence.Artifact == "" {
+			t.Fatalf("production evidence row lacks artifact: %+v", evidence)
+		}
+		switch evidence.Result {
+		case "pass", "fail", "fail_closed":
+		default:
+			t.Fatalf("unknown production evidence result %q in %+v", evidence.Result, evidence)
+		}
+		evidenceMinGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+		if err != nil || evidenceMinGbps < 0 {
+			t.Fatalf("invalid production evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+		}
+		evidenceMinSeconds, err := strconv.Atoi(evidence.MinSeconds)
+		if err != nil || evidenceMinSeconds <= 0 {
+			t.Fatalf("invalid production evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+		}
+		evidenceByKey[key] = append(evidenceByKey[key], evidence)
+	}
+	for _, row := range defaults {
+		if row.ValidationScope != "cross_host" {
+			continue
+		}
+		minGbps, err := strconv.ParseFloat(row.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid production default min_gbps %q in %+v", row.MinGbps, row)
+		}
+		minSeconds, err := strconv.Atoi(row.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid production default min_seconds %q in %+v", row.MinSeconds, row)
+		}
+		key := productionDefaultEvidenceKey(row)
+		var candidates []string
+		found := false
+		for _, evidence := range evidenceByKey[key] {
+			evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+			if err != nil {
+				t.Fatalf("invalid production evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+			}
+			evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
+			if err != nil {
+				t.Fatalf("invalid production evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+			}
+			candidates = append(candidates, strings.Join([]string{
+				evidence.Result,
+				evidence.MinGbps,
+				evidence.MinSeconds,
+				evidence.Artifact,
+			}, " "))
+			if evidence.Result == "pass" && evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		t.Fatalf("cross-host production default lacks passing evidence at or above gate %s: %+v; candidates=%v", key, row, candidates)
 	}
 }
 
