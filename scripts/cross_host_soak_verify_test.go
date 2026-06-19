@@ -102,6 +102,42 @@ func TestCrossHostSoakVerifyAcceptsReceiverOnlyServerArtifact(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifySkipsClientMissingServerResults(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfMissingServerResultsJSON(t, filepath.Join(dir, "a", "iperf3-a-to-b-forward.json"), 5.0e9)
+	writeIperfReceiverJSON(t, filepath.Join(dir, "b", "iperf3-server.json"), 4.7e9, 120.1)
+	writeResultMarker(t, dir)
+	summary := filepath.Join(dir, "summary.jsonl")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--summary", summary, "--min-gbps", "4", "--min-seconds", "120", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify missing-server-results artifacts failed: %v\n%s", err, output)
+	}
+	lines, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	var row struct {
+		Skipped []string `json:"iperf_skipped_missing_server_results"`
+		Status  string   `json:"status"`
+	}
+	if err := json.Unmarshal(lines, &row); err != nil {
+		t.Fatalf("unmarshal summary: %v\n%s", err, lines)
+	}
+	if row.Status != "pass" {
+		t.Fatalf("status = %q, want pass: %s", row.Status, lines)
+	}
+	if len(row.Skipped) != 1 || filepath.ToSlash(row.Skipped[0]) != "a/iperf3-a-to-b-forward.json" {
+		t.Fatalf("skipped missing-server-results files = %#v, want client artifact", row.Skipped)
+	}
+}
+
 func TestCrossHostSoakVerifyAcceptsSingleDirectionClientAndServerArtifacts(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -989,6 +1025,9 @@ func writeIperfJSON(t *testing.T, path string, sentBPS, receivedBPS, seconds flo
 
 func writeIperfReceiverJSON(t *testing.T, path string, receivedBPS, seconds float64) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make iperf receiver artifact dir: %v", err)
+	}
 	payload := map[string]any{
 		"end": map[string]any{
 			"sum_sent": map[string]any{
@@ -1009,6 +1048,26 @@ func writeIperfReceiverJSON(t *testing.T, path string, receivedBPS, seconds floa
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write iperf receiver json: %v", err)
+	}
+}
+
+func writeIperfMissingServerResultsJSON(t *testing.T, path string, intervalBPS float64) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make iperf artifact dir: %v", err)
+	}
+	payload := map[string]any{
+		"error": "unable to receive results from server: Connection reset by peer",
+		"intervals": []map[string]any{
+			{"sum": map[string]any{"bits_per_second": intervalBPS}},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal missing-server-results iperf json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write missing-server-results iperf json: %v", err)
 	}
 }
 

@@ -345,6 +345,21 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def iperf_missing_server_results_only(path: Path) -> bool:
+    payload = read_json(path)
+    error = str(payload.get("error") or "")
+    if "unable to receive results" not in error:
+        return False
+    intervals = payload.get("intervals") or []
+    for interval in intervals:
+        if not isinstance(interval, dict):
+            continue
+        summary = interval.get("sum")
+        if isinstance(summary, dict) and float(summary.get("bits_per_second") or 0) > 0:
+            return True
+    return False
+
+
 def result_markers_pass(case_dir: Path) -> tuple[bool, list[str]]:
     markers = sorted(case_dir.glob("*.result"))
     values: list[str] = []
@@ -929,6 +944,7 @@ def validate_case(
     )
 
     iperf_results: list[dict[str, Any]] = []
+    skipped_iperf_files: list[str] = []
     for path in iperf_files:
         try:
             sums = iperf_sums(path)
@@ -936,6 +952,14 @@ def validate_case(
             errors.append(f"{path.relative_to(case.path)}: parse iperf JSON: {exc}")
             continue
         if not sums:
+            try:
+                if iperf_missing_server_results_only(path):
+                    skipped_iperf_files.append(str(path.relative_to(case.path)))
+                    continue
+            except Exception as exc:  # noqa: BLE001 - report the original missing-summary error.
+                errors.append(
+                    f"{path.relative_to(case.path)}: parse iperf JSON for benign error check: {exc}"
+                )
             errors.append(f"{path.relative_to(case.path)}: no iperf summary aggregates found")
             continue
         rel = str(path.relative_to(case.path))
@@ -1079,6 +1103,7 @@ def validate_case(
         "seconds_slop": seconds_slop,
         "iperf_json_count": len(iperf_files),
         "iperf_direction_count": len(iperf_results),
+        "iperf_skipped_missing_server_results": skipped_iperf_files,
         "min_sent_gbps": round(min_sent, 6),
         "min_received_gbps": round(min_received, 6),
         "min_required_received_gbps": round(min_required_received, 6),

@@ -319,8 +319,8 @@ validate_case() {
     return
   fi
   case "$case_name" in
-    dd-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) ;;
-    dd-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) ;;
+    dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) ;;
+    dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) ;;
     dd-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) ;;
     ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct) ;;
     *) die "unsupported TRUSTIX_CROSS_HOST_CASE=${case_name}" ;;
@@ -337,7 +337,7 @@ case_transport() {
     return
   fi
   case "$case_name" in
-    dd-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|dd-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'udp\n' ;;
+    dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'udp\n' ;;
     *) printf 'experimental_tcp\n' ;;
   esac
 }
@@ -348,8 +348,8 @@ case_fast_path() {
     return
   fi
   case "$case_name" in
-    dd-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) printf 'full_kmod\n' ;;
-    dd-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'secure_kudp\n' ;;
+    dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) printf 'full_kmod\n' ;;
+    dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'secure_kudp\n' ;;
     dd-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) printf 'route_gso\n' ;;
     ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct) printf 'tc_direct\n' ;;
     *) die "unsupported TRUSTIX_CROSS_HOST_CASE=${case_name}" ;;
@@ -1472,6 +1472,31 @@ run_iperf_client_with_snapshot() {
   return "$rc"
 }
 
+iperf_client_missing_server_results_only() {
+  local node="$1"
+  local out_name="$2"
+  local dir
+  dir="$(remote_dir "$node")"
+  run_node "$node" "set -Eeuo pipefail
+out=$(remote_quote "${dir}/${out_name}")
+[ -s \"\$out\" ]
+grep -Fq '\"error\"' \"\$out\"
+grep -Fq 'unable to receive results' \"\$out\"
+grep -Fq '\"intervals\"' \"\$out\"
+"
+}
+
+iperf_server_has_final_summary() {
+  local node="$1"
+  local dir
+  dir="$(remote_dir "$node")"
+  run_node "$node" "set -Eeuo pipefail
+out=$(remote_quote "${dir}/iperf3-server.json")
+[ -s \"\$out\" ]
+grep -Eq '\"sum_(sent|received|sent_bidir_reverse|received_bidir_reverse)\"' \"\$out\"
+"
+}
+
 iperf_artifact_suffix() {
   case "$iperf_mode" in
     bidir) printf 'bidir\n' ;;
@@ -1497,14 +1522,23 @@ exit 0
 }
 
 run_iperf_bidirectional_artifacts() {
-  local suffix rc=0
+  local suffix rc=0 client_rc out_name
   suffix="$(iperf_artifact_suffix)"
   case "$iperf_directions" in
     both|a2b|a-to-b)
       start_iperf_server b
       sleep 1
-      run_iperf_client_with_snapshot a "$host_b_ip" "iperf3-a-to-b-${suffix}.json" || rc=$?
+      out_name="iperf3-a-to-b-${suffix}.json"
+      client_rc=0
+      run_iperf_client_with_snapshot a "$host_b_ip" "$out_name" || client_rc=$?
       wait_iperf_server_exit b
+      if [[ "$client_rc" -ne 0 ]]; then
+        if iperf_client_missing_server_results_only a "$out_name" && iperf_server_has_final_summary b; then
+          log "iperf a-to-b client missed server results; accepting server-side summary artifact"
+        else
+          rc=$client_rc
+        fi
+      fi
       ;;
   esac
 
@@ -1512,8 +1546,17 @@ run_iperf_bidirectional_artifacts() {
     both|b2a|b-to-a)
       start_iperf_server a
       sleep 1
-      run_iperf_client_with_snapshot b "$host_a_ip" "iperf3-b-to-a-${suffix}.json" || rc=$?
+      out_name="iperf3-b-to-a-${suffix}.json"
+      client_rc=0
+      run_iperf_client_with_snapshot b "$host_a_ip" "$out_name" || client_rc=$?
       wait_iperf_server_exit a
+      if [[ "$client_rc" -ne 0 ]]; then
+        if iperf_client_missing_server_results_only b "$out_name" && iperf_server_has_final_summary a; then
+          log "iperf b-to-a client missed server results; accepting server-side summary artifact"
+        else
+          rc=$client_rc
+        fi
+      fi
       ;;
   esac
   return "$rc"
