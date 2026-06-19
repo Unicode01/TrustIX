@@ -195,6 +195,7 @@ main() {
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_attached=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_trust_inner_checksums=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_enabled=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_skb_open_kfunc=0 \
       --require-datapath-max kernel_udp.provider_stats.kernel_crypto_provider_unavailable_errors=0 \
@@ -215,7 +216,28 @@ main() {
       --require-module-param-any-min trustix_crypto.direct_kfunc_seal_calls=1 \
       --require-module-param-any-min trustix_crypto.direct_kfunc_open_calls=1 \
       --require-module-param-max trustix_crypto.direct_kfunc_errors="${secure_kudp_direct_error_budget}" \
-      --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_secure_seal_batch=1
+      --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_secure_seal_batch=1 \
+      --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1 \
+      --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_xmit_packets=1 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_flow_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_plan_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_mtu_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_queue_full=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_queue_bytes_full=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_alloc_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_clone_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_segment_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_prepare_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_drops=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_xmit_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_xmit_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_direct_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_blocked=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_verify_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_errors=0 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_tail_stitch_errors=0
   fi
 
   if [[ "$route_gso_case_count" -gt 0 ]]; then

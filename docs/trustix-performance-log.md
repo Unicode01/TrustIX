@@ -53,6 +53,12 @@ explicit secure `performance` profile emits secure kernel-UDP with
 require_kernel`, and only the selected UDP endpoint; it no longer adds an
 unselected secure `experimental_tcp` secondary endpoint.
 
+Gate hardening: secure-kUDP production verification now also requires the
+secure route-GSO TC option in datapath status plus nonzero helper route-GSO
+outer-GSO/xmit counters, with the same route-GSO helper error counters capped at
+zero. This prevents a secure direct run from passing the selected secure
+route-GSO gate without actually exercising the selected fast path.
+
 ## 2026-06-16
 
 ### Zaozhuang PVE OpenWrt SDK full-kmod validation
