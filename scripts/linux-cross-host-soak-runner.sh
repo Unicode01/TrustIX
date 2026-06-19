@@ -4,6 +4,11 @@ set -Eeuo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 case_name="${TRUSTIX_CROSS_HOST_CASE:-dd-fullkmod}"
+case_transport_override="${TRUSTIX_CROSS_HOST_TRANSPORT:-}"
+case_encryption_override="${TRUSTIX_CROSS_HOST_ENCRYPTION:-}"
+case_profile_override="${TRUSTIX_CROSS_HOST_PROFILE:-}"
+case_datapath_override="${TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH:-}"
+case_crypto_placement_override="${TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT:-}"
 workdir="${TRUSTIX_CROSS_HOST_WORKDIR:-$(mktemp -d /tmp/trustix-cross-host.XXXXXX)}"
 workdir="$(mkdir -p "$workdir" && cd "$workdir" && pwd -P)"
 keep_remote="${TRUSTIX_CROSS_HOST_KEEP_REMOTE:-0}"
@@ -63,6 +68,12 @@ session_pool_warmup="${TRUSTIX_CROSS_HOST_SESSION_POOL_WARMUP:-true}"
 session_pool_heartbeat_mode="${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE:-enabled}"
 session_pool_heartbeat_interval="${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_INTERVAL:-5s}"
 session_pool_heartbeat_timeout="${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_TIMEOUT:-1s}"
+iptunnel_port="${TRUSTIX_CROSS_HOST_IPTUNNEL_PORT:-47829}"
+iptunnel_mtu="${TRUSTIX_CROSS_HOST_IPTUNNEL_MTU:-1400}"
+iptunnel_a_carrier="${TRUSTIX_CROSS_HOST_IPTUNNEL_A_CARRIER:-10.255.10.1/30}"
+iptunnel_b_carrier="${TRUSTIX_CROSS_HOST_IPTUNNEL_B_CARRIER:-10.255.10.2/30}"
+vxlan_vni="${TRUSTIX_CROSS_HOST_VXLAN_VNI:-7}"
+vxlan_port="${TRUSTIX_CROSS_HOST_VXLAN_PORT:-4789}"
 
 lan_if_a="${TRUSTIX_CROSS_HOST_LAN_IF_A:-tix-lan}"
 lan_if_b="${TRUSTIX_CROSS_HOST_LAN_IF_B:-tix-lan}"
@@ -249,7 +260,64 @@ yaml_single_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
 }
 
+normalize_case_transport_token() {
+  local value="$1"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
+  case "$value" in
+    httpconnect) value="http_connect" ;;
+    experimentaltcp) value="experimental_tcp" ;;
+  esac
+  printf '%s\n' "$value"
+}
+
+generic_case_kind() {
+  case "$case_name" in
+    userspace-*-secure|userspace-*-plaintext|crosshost-userspace-*-secure|crosshost-userspace-*-plaintext) printf 'userspace\n' ;;
+    tc-*-secure|tc-*-plaintext|crosshost-tc-*-secure|crosshost-tc-*-plaintext) printf 'userspace_tc\n' ;;
+  esac
+}
+
+generic_case_encryption() {
+  case "$case_name" in
+    *-secure) printf 'secure\n' ;;
+    *-plaintext) printf 'plaintext\n' ;;
+  esac
+}
+
+generic_case_transport() {
+  local raw="$case_name"
+  raw="${raw#crosshost-}"
+  raw="${raw#userspace-}"
+  raw="${raw#tc-}"
+  raw="${raw%-secure}"
+  raw="${raw%-plaintext}"
+  normalize_case_transport_token "$raw"
+}
+
+supported_case_transport() {
+  case "$(normalize_case_transport_token "$1")" in
+    udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|experimental_tcp) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+case_is_iptunnel_transport() {
+  case "$(case_endpoint_transport)" in
+    gre|ipip|vxlan) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+case_is_generic() {
+  [[ -n "$(generic_case_kind)" ]]
+}
+
 validate_case() {
+  if case_is_generic; then
+    supported_case_transport "$(generic_case_transport)" || die "unsupported generic TRUSTIX_CROSS_HOST_CASE transport in ${case_name}"
+    case "$(generic_case_encryption)" in secure|plaintext) ;; *) die "unsupported generic TRUSTIX_CROSS_HOST_CASE encryption in ${case_name}" ;; esac
+    return
+  fi
   case "$case_name" in
     dd-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) ;;
     dd-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) ;;
@@ -260,6 +328,14 @@ validate_case() {
 }
 
 case_transport() {
+  if [[ -n "$case_transport_override" ]]; then
+    normalize_case_transport_token "$case_transport_override"
+    return
+  fi
+  if case_is_generic; then
+    generic_case_transport
+    return
+  fi
   case "$case_name" in
     dd-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|dd-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'udp\n' ;;
     *) printf 'experimental_tcp\n' ;;
@@ -267,6 +343,10 @@ case_transport() {
 }
 
 case_fast_path() {
+  if case_is_generic; then
+    generic_case_kind
+    return
+  fi
   case "$case_name" in
     dd-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) printf 'full_kmod\n' ;;
     dd-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'secure_kudp\n' ;;
@@ -277,6 +357,14 @@ case_fast_path() {
 }
 
 case_encryption() {
+  if [[ -n "$case_encryption_override" ]]; then
+    printf '%s\n' "$case_encryption_override"
+    return
+  fi
+  if case_is_generic; then
+    generic_case_encryption
+    return
+  fi
   case "$(case_fast_path)" in
     secure_kudp) printf 'secure\n' ;;
     *) printf 'plaintext\n' ;;
@@ -284,44 +372,174 @@ case_encryption() {
 }
 
 case_crypto_placement() {
+  if [[ -n "$case_crypto_placement_override" ]]; then
+    printf '%s\n' "$case_crypto_placement_override"
+    return
+  fi
+  if case_uses_secure_kudp_fast_path; then
+    printf 'kernel\n'
+    return
+  fi
   case "$(case_fast_path)" in
-    secure_kudp) printf 'kernel\n' ;;
     *) printf 'userspace\n' ;;
   esac
 }
 
 case_endpoint_transport() {
   if [[ -n "$endpoint_transport_override" ]]; then
-    printf '%s\n' "$endpoint_transport_override"
+    normalize_case_transport_token "$endpoint_transport_override"
     return
   fi
-  case "$(case_transport)" in
-    udp) printf 'udp\n' ;;
-    experimental_tcp) printf 'experimental_tcp\n' ;;
-  esac
+  case_transport
 }
 
 case_capability_profile() {
   case "$(case_fast_path)" in
     full_kmod) printf 'full_plaintext\n' ;;
-    tc_direct) printf 'disabled\n' ;;
+    tc_direct|userspace|userspace_tc) printf 'disabled\n' ;;
+    *) printf 'performance\n' ;;
+  esac
+}
+
+case_transport_profile() {
+  if [[ -n "$case_profile_override" ]]; then
+    printf '%s\n' "$case_profile_override"
+    return
+  fi
+  if case_uses_secure_kudp_fast_path; then
+    printf 'performance\n'
+    return
+  fi
+  case "$(case_fast_path)" in
+    userspace) printf 'stable\n' ;;
+    userspace_tc)
+      if case_uses_tc_direct_fast_path; then
+        printf 'performance\n'
+      else
+        printf 'stable\n'
+      fi
+      ;;
     *) printf 'performance\n' ;;
   esac
 }
 
 case_transport_datapath() {
+  if [[ -n "$case_datapath_override" ]]; then
+    printf '%s\n' "$case_datapath_override"
+    return
+  fi
   case "$(case_fast_path)" in
+    userspace) printf 'userspace\n' ;;
+    userspace_tc)
+      if case_uses_tc_direct_fast_path; then
+        printf 'tc_xdp\n'
+      else
+        printf 'userspace\n'
+      fi
+      ;;
     secure_kudp|tc_direct) printf 'tc_xdp\n' ;;
     *) printf 'kernel_module\n' ;;
   esac
 }
 
+case_kernel_transport_mode() {
+  if case_is_iptunnel_transport; then
+    printf 'require_kernel\n'
+    return
+  fi
+  case "$(case_fast_path)" in
+    userspace) printf '\n' ;;
+    userspace_tc)
+      if case_uses_tc_direct_fast_path; then
+        printf 'require_kernel\n'
+      else
+        printf '\n'
+      fi
+      ;;
+    *) printf 'require_kernel\n' ;;
+  esac
+}
+
+case_uses_secure_kudp_fast_path() {
+  case "$(case_fast_path)" in
+    secure_kudp) return 0 ;;
+    userspace_tc)
+      [[ "$(case_endpoint_transport)" == "udp" && "$(case_encryption)" == "secure" ]] &&
+        truthy "${TRUSTIX_CROSS_HOST_SECURE_KUDP_KERNEL_CRYPTO:-0}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+case_uses_tc_direct_fast_path() {
+  case "$(case_fast_path)" in
+    secure_kudp|tc_direct) return 0 ;;
+    userspace_tc)
+      if case_uses_secure_kudp_fast_path; then
+        return 0
+      fi
+      case "$(case_endpoint_transport):$(case_encryption)" in
+        udp:plaintext|experimental_tcp:plaintext) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+case_tc_requested_but_falls_back_to_userspace() {
+  [[ "$(case_fast_path)" == "userspace_tc" ]] && ! case_uses_tc_direct_fast_path
+}
+
+case_secure_kudp_route_gso() {
+  case "$(case_fast_path)" in
+    secure_kudp) return 0 ;;
+  esac
+  truthy "${TRUSTIX_CROSS_HOST_SECURE_KUDP_ROUTE_GSO:-0}"
+}
+
+case_link_tls_transport() {
+  case "$(case_endpoint_transport)" in
+    tcp|quic|websocket|http_connect) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+endpoint_security_yaml() {
+  local indent="$1"
+  local encryption="$2"
+  printf '%ssecurity:\n' "$indent"
+  if case_link_tls_transport; then
+    printf '%s  link_tls: required\n' "$indent"
+  fi
+  printf '%s  encryption: %s\n' "$indent" "$encryption"
+}
+
 case_endpoint_name() {
   local node="$1"
+  local transport
+  transport="$(case_endpoint_transport)"
   case "$(case_endpoint_transport)" in
     udp) node_value "$node" a-udp b-udp ;;
     experimental_tcp) node_value "$node" a-experimental-tcp b-experimental-tcp ;;
+    *) node_value "$node" "a-${transport//_/-}" "b-${transport//_/-}" ;;
   esac
+}
+
+tunnel_config_for_node() {
+  local node="$1"
+  local transport underlay_local underlay_remote underlay_if local_carrier remote_carrier remote_addr fields
+  transport="$(case_endpoint_transport)"
+  underlay_local="$(node_value "$node" "$underlay_a_ip" "$underlay_b_ip")"
+  underlay_remote="$(node_value "$node" "$underlay_b_ip" "$underlay_a_ip")"
+  underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  local_carrier="$(node_value "$node" "$iptunnel_a_carrier" "$iptunnel_b_carrier")"
+  remote_carrier="$(node_value "$node" "${iptunnel_b_carrier%/*}" "${iptunnel_a_carrier%/*}")"
+  fields="local=${underlay_local},remote=${underlay_remote},underlay_if=${underlay_if},local_carrier=${local_carrier},remote_carrier=${remote_carrier},port=${iptunnel_port},mtu=${iptunnel_mtu}"
+  if [[ "$transport" == "vxlan" ]]; then
+    fields="${fields},vni=${vxlan_vni},vxlan_port=${vxlan_port}"
+  fi
+  printf '%s\n' "$fields"
 }
 
 default_data_port() {
@@ -338,8 +556,57 @@ resolve_data_ports() {
   fi
 }
 
+secure_kudp_module_yaml() {
+  local node="${1:-a}"
+  local params="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PARAMETERS:-}"
+  local helper_params="${TRUSTIX_CROSS_HOST_SECURE_KUDP_HELPER_PARAMETERS:-}"
+  local path
+  local helper_path
+  path="$(node_value "$node" "$secure_kudp_crypto_path_a" "$secure_kudp_crypto_path_b")"
+  helper_path="$(node_value "$node" "$secure_kudp_helpers_path_a" "$secure_kudp_helpers_path_b")"
+  if [[ -z "$helper_path" ]]; then
+    helper_path="$(infer_helpers_path_from_module_path "$path")"
+  fi
+  cat <<'EOF'
+kernel_modules:
+  capability_profile: performance
+  trustix_crypto:
+    mode: required
+    reload_on_upgrade: always
+    unload_on_exit: true
+EOF
+  printf '    path: %s\n' "$(yaml_single_quote "$path")"
+  if [[ -n "$params" ]]; then
+    printf '    parameters: %s\n' "$(yaml_single_quote "$params")"
+  fi
+  cat <<'EOF'
+  trustix_datapath:
+    mode: disabled
+  trustix_datapath_helpers:
+EOF
+  if case_secure_kudp_route_gso && [[ -n "$helper_path" ]]; then
+    cat <<'EOF'
+    mode: required
+    reload_on_upgrade: always
+    unload_on_exit: true
+EOF
+    printf '    path: %s\n' "$(yaml_single_quote "$helper_path")"
+    if [[ -n "$helper_params" ]]; then
+      printf '    parameters: %s\n' "$(yaml_single_quote "$helper_params")"
+    fi
+  else
+    cat <<'EOF'
+    mode: disabled
+EOF
+  fi
+}
+
 case_module_yaml() {
   local node="${1:-a}"
+  if case_uses_secure_kudp_fast_path; then
+    secure_kudp_module_yaml "$node"
+    return
+  fi
   case "$(case_fast_path)" in
     full_kmod)
       local params="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PARAMETERS:-}"
@@ -389,6 +656,18 @@ EOF
       fi
       ;;
     tc_direct)
+      cat <<'EOF'
+kernel_modules:
+  capability_profile: disabled
+  trustix_crypto:
+    mode: disabled
+  trustix_datapath:
+    mode: disabled
+  trustix_datapath_helpers:
+    mode: disabled
+EOF
+      ;;
+    userspace|userspace_tc)
       cat <<'EOF'
 kernel_modules:
   capability_profile: disabled
@@ -459,15 +738,32 @@ check_local_inputs() {
   [[ "$health_port" -ne "$iperf_port" ]] || die "TRUSTIX_CROSS_HOST_HEALTH_PORT must differ from TRUSTIX_CROSS_HOST_IPERF_PORT"
   case "$transport_snapshot_delay" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be an integer" ;; esac
   case "$session_pool_size" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be an integer" ;; esac
+  case "$iptunnel_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_PORT must be an integer" ;; esac
+  case "$iptunnel_mtu" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_MTU must be an integer" ;; esac
+  case "$vxlan_vni" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_VXLAN_VNI must be an integer" ;; esac
+  case "$vxlan_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_VXLAN_PORT must be an integer" ;; esac
   [[ "$iperf_parallel" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_IPERF_PARALLEL must be >= 1"
   [[ "$transport_snapshot_delay" -ge 0 ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be >= 0"
   [[ "$session_pool_size" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be >= 1"
+  [[ "$iptunnel_port" -ge 1 && "$iptunnel_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_PORT must be in 1..65535"
+  [[ "$iptunnel_mtu" -ge 17 && "$iptunnel_mtu" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_MTU must be in 17..65535"
+  [[ "$vxlan_vni" -ge 1 && "$vxlan_vni" -le 16777215 ]] || die "TRUSTIX_CROSS_HOST_VXLAN_VNI must be in 1..16777215"
+  [[ "$vxlan_port" -ge 1 && "$vxlan_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_VXLAN_PORT must be in 1..65535"
   resolve_data_ports
   case "$data_a_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_A_PORT must be an integer" ;; esac
   case "$data_b_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_B_PORT must be an integer" ;; esac
   case "$iperf_mode" in bidir|forward|reverse) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_MODE must be bidir, forward, or reverse" ;; esac
   case "$iperf_directions" in both|a2b|b2a|a-to-b|b-to-a) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS must be both, a2b, or b2a" ;; esac
-  case "$endpoint_transport_override" in ""|udp|experimental_tcp) ;; *) die "TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORT must be empty, udp, or experimental_tcp" ;; esac
+  if [[ -n "$endpoint_transport_override" ]]; then
+    supported_case_transport "$endpoint_transport_override" || die "TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORT is unsupported: ${endpoint_transport_override}"
+  fi
+  if [[ -n "$case_transport_override" ]]; then
+    supported_case_transport "$case_transport_override" || die "TRUSTIX_CROSS_HOST_TRANSPORT is unsupported: ${case_transport_override}"
+  fi
+  case "$(case_encryption)" in secure|plaintext) ;; *) die "TRUSTIX_CROSS_HOST_ENCRYPTION/case encryption must be secure or plaintext" ;; esac
+  case "$(case_transport_profile)" in stable|performance|latency) ;; *) die "TRUSTIX_CROSS_HOST_PROFILE/case profile must be stable, performance, or latency" ;; esac
+  case "$(case_transport_datapath)" in userspace|tc_xdp|kernel_module|auto) ;; *) die "TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH/case datapath must be userspace, tc_xdp, kernel_module, or auto" ;; esac
+  case "$(case_crypto_placement)" in userspace|kernel|auto) ;; *) die "TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT/case crypto placement must be userspace, kernel, or auto" ;; esac
   case "$session_pool_strategy" in flow|five_tuple|5tuple|packet|round_robin) ;; *) die "TRUSTIX_CROSS_HOST_SESSION_POOL_STRATEGY must be flow, five_tuple, 5tuple, packet, or round_robin" ;; esac
   case "$session_pool_warmup" in true|false|1|0|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_SESSION_POOL_WARMUP must be boolean" ;; esac
   case "$session_pool_heartbeat_mode" in auto|enabled|on|disabled|off) ;; *) die "TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE must be auto, enabled, on, disabled, or off" ;; esac
@@ -568,6 +864,10 @@ generate_certs() {
   "$trustix_ca" quickstart -out "$workdir/certs" -domain "$domain_id" -ix "${ix_a},${ix_b}" >/dev/null
   "$trustix_ca" route authorize -out "$workdir/certs" -domain "$domain_id" -ix "$ix_a" -prefix "$lan_a_cidr" >/dev/null
   "$trustix_ca" route authorize -out "$workdir/certs" -domain "$domain_id" -ix "$ix_b" -prefix "$lan_b_cidr" >/dev/null
+  if case_link_tls_transport; then
+    "$trustix_ca" ix issue -out "$workdir/certs" -domain "$domain_id" -ix "${ix_a}-transport" -ip "$underlay_a_ip" -ca-cert "$workdir/certs/domain-ca.pem" -ca-key "$workdir/certs/domain-ca.key" >/dev/null
+    "$trustix_ca" ix issue -out "$workdir/certs" -domain "$domain_id" -ix "${ix_b}-transport" -ip "$underlay_b_ip" -ca-cert "$workdir/certs/domain-ca.pem" -ca-key "$workdir/certs/domain-ca.key" >/dev/null
+  fi
 }
 
 write_config() {
@@ -587,6 +887,10 @@ write_config() {
   remote_peer_api="$(node_value "$node" "${underlay_b_ip}:${peer_b_port}" "${underlay_a_ip}:${peer_a_port}")"
   local_data="$(node_value "$node" "${underlay_a_ip}:${data_a_port}" "${underlay_b_ip}:${data_b_port}")"
   remote_data="$(node_value "$node" "${underlay_b_ip}:${data_b_port}" "${underlay_a_ip}:${data_a_port}")"
+  if case_is_iptunnel_transport; then
+    local_data="$(tunnel_config_for_node "$node")"
+    remote_data="$local_data"
+  fi
   local_endpoint="$(case_endpoint_name "$node")"
   if [[ "$node" == "a" ]]; then
     remote_endpoint="$(case_endpoint_name b)"
@@ -632,8 +936,11 @@ endpoints:
     listen: ${local_data}
     address: ${local_data}
     transport: ${endpoint_transport}
-    security:
-      encryption: ${encryption}
+EOF
+    if ! case_is_iptunnel_transport; then
+      endpoint_security_yaml "    " "$encryption"
+    fi
+    cat <<EOF
     enabled: true
 
 peers:
@@ -644,8 +951,11 @@ peers:
       - name: ${remote_endpoint}
         address: ${remote_data}
         transport: ${endpoint_transport}
-        security:
-          encryption: ${encryption}
+EOF
+    if ! case_is_iptunnel_transport; then
+      endpoint_security_yaml "        " "$encryption"
+    fi
+    cat <<EOF
         enabled: true
     allowed_prefixes:
       - ${remote_lan}
@@ -666,7 +976,7 @@ policies:
 
 transport_policy:
   mode: user_defined
-  profile: performance
+  profile: $(case_transport_profile)
   datapath: $(case_transport_datapath)
   mtu: 1500
   candidates:
@@ -683,10 +993,27 @@ transport_policy:
       mode: ${session_pool_heartbeat_mode}
       interval: ${session_pool_heartbeat_interval}
       timeout: ${session_pool_heartbeat_timeout}
-  kernel_transport:
-    mode: require_kernel
-
 EOF
+    local kernel_mode
+    kernel_mode="$(case_kernel_transport_mode)"
+    if [[ -n "$kernel_mode" ]]; then
+      cat <<EOF
+  kernel_transport:
+    mode: ${kernel_mode}
+EOF
+    fi
+    if case_link_tls_transport; then
+      cat <<EOF
+  crypto_key_source: tls_exporter
+  tls_identity:
+    mode: custom_cert
+    cert: ${remote_dir_node}/certs/${local_ix}-transport.crt
+    key: ${remote_dir_node}/certs/${local_ix}-transport.key
+    trust_roots:
+      - ${remote_dir_node}/certs/domain-ca.pem
+EOF
+    fi
+    printf '\n'
     case_module_yaml "$node"
   } >"$config_path"
 }
@@ -698,7 +1025,38 @@ push_inputs() {
   copy_to_node b "$workdir/config-b.yaml" "${remote_b}/config.yaml"
 }
 
+secure_kudp_daemon_env() {
+  local route_gso=0
+  if case_secure_kudp_route_gso; then
+    route_gso=1
+  fi
+  cat <<'EOF'
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_SECURE_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=1
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT=1
+TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH=1
+TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH=1
+TRUSTIX_KERNEL_CRYPTO_KFUNC_FASTPATH_STATS=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL=1
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC=0
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC=0
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_FIX_INNER_CHECKSUMS=0
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
+EOF
+  printf 'TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC=%s\n' "$route_gso"
+  printf 'TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=%s\n' "$route_gso"
+}
+
 daemon_env() {
+  if case_uses_secure_kudp_fast_path; then
+    secure_kudp_daemon_env
+    return
+  fi
   case "$(case_fast_path)" in
     full_kmod)
       local rx_worker_experimental_tcp=0
@@ -749,24 +1107,37 @@ TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1
 TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
 EOF
       ;;
-    secure_kudp)
-      cat <<'EOF'
+    userspace_tc)
+      case "$(case_endpoint_transport):$(case_encryption)" in
+        udp:plaintext)
+          cat <<'EOF'
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT=1
 TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_KERNEL_UDP_TC_SECURE_DIRECT_ONLY=1
 TRUSTIX_KERNEL_UDP_TC_ONLY=1
-TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH=1
-TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH=1
-TRUSTIX_KERNEL_CRYPTO_KFUNC_FASTPATH_STATS=1
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL=1
-TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN=1
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC=0
-TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC=0
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=1
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_FIX_INNER_CHECKSUMS=0
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1
 TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
 TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=0
 EOF
+          ;;
+        experimental_tcp:plaintext)
+          cat <<'EOF'
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1
+TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
+EOF
+          ;;
+      esac
+      ;;
+    secure_kudp)
+      secure_kudp_daemon_env
       ;;
   esac
 }
@@ -1011,8 +1382,11 @@ run_tcp_health_checks() {
 }
 
 run_connectivity_checks() {
+  if case_uses_secure_kudp_fast_path; then
+    run_tcp_health_checks
+    return
+  fi
   case "$(case_fast_path)" in
-    secure_kudp) run_tcp_health_checks ;;
     *) run_ping_checks ;;
   esac
 }
@@ -1223,6 +1597,9 @@ main() {
   need_cmd find
   check_local_inputs
   log "case=${case_name} workdir=${workdir}"
+  if case_tc_requested_but_falls_back_to_userspace; then
+    log "WARNING: ${case_name} has no safe TC direct fast path with this configuration; using userspace datapath"
+  fi
   if [[ "$(case_transport)" == "udp" && "$(case_endpoint_transport)" == "experimental_tcp" ]]; then
     log "WARNING: full-kmod with experimental_tcp endpoint is diagnostic only; production uses UDP full-kmod or experimental_tcp route-GSO"
   fi
