@@ -118,6 +118,18 @@ covered RX/TX/module error counters. Kernel log scans on both guests found no
 panic, Oops, BUG, call trace, page fault, watchdog, lockup, hung-task, or
 `tx_queue_len` signature.
 
+The same OpenWrt 24.10.2 guest was then checked for the route-TCP kfunc paths
+used by secure-kUDP route-GSO and experimental TCP route-GSO. OpenWrt had no
+`/sys/kernel/btf/vmlinux`, while the paired Debian guest exposed kernel and
+module BTF. The SDK-built `trustix_datapath_helpers.ko` loaded on OpenWrt, but
+runtime capability detection reported no safe route-TCP kfunc features. Both
+OpenWrt-to-Debian secure-kUDP route-GSO and experimental TCP route-GSO failed
+closed before traffic with missing `route_tcp_kfunc` and
+`route_tcp_xmit_kfunc`. Do not promote OpenWrt 24.10.2 secure-kUDP route-GSO or
+OpenWrt route-GSO defaults until an OpenWrt kernel with usable BTF/kfunc support
+passes the runtime route-TCP gate. The selected OpenWrt 24.10.2 production
+kernel path remains UDP plaintext full-kmod.
+
 OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 
 | OpenWrt target | Kernel | Result |
@@ -148,10 +160,10 @@ crypto, full plaintext datapath, and basic datapath helpers. The helper module
 loaded and passed selftests, but it did not provide
 `route_tcp_kfunc`/`route_tcp_xmit_kfunc`. Both secure-kUDP route-GSO and
 experimental TCP route-GSO failed closed before traffic with the expected
-missing-capability diagnostic. Do not select OpenWrt 23.05.5 route-GSO or
-secure-kUDP route-GSO as production defaults; use the validated UDP plaintext
-full-kmod path until a newer OpenWrt kernel/helper combination passes the
-runtime route-TCP kfunc gate.
+missing-capability diagnostic. Do not select OpenWrt 23.05.5 or 24.10.2
+route-GSO or secure-kUDP route-GSO as production defaults; use the validated UDP
+plaintext full-kmod path until a newer OpenWrt kernel/helper combination passes
+the runtime route-TCP kfunc gate.
 
 OpenWrt deployment is fail-closed for module ABI. Do not use release-embedded
 Debian/PVE `.ko` payloads on OpenWrt. Build the module with the matching

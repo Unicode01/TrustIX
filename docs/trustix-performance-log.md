@@ -50,6 +50,22 @@ kernel log scans were clean for panic, Oops, BUG, call trace, page fault,
 watchdog, lockup, hung-task, `tx_queue_len`, and TrustIX datapath crash
 signatures.
 
+Follow-up OpenWrt 24.10.2 route-TCP kfunc checks reused VM200/VM202 on the same
+`vmbr3` underlay. Debian 13 exposed `/sys/kernel/btf/vmlinux` and
+`CONFIG_DEBUG_INFO_BTF=y`; OpenWrt 24.10.2 did not expose kernel BTF. The
+OpenWrt `trustix_datapath_helpers.ko` module loaded but reported no safe helper
+kfunc capability. Secure-kUDP route-GSO failed closed before traffic with
+`missing=route_tcp_kfunc,route_tcp_xmit_kfunc`. Artifact:
+`/tmp/trustix-pve-owrt24-next.S9YJo0/results/owdeb-secure-kudp-tconly-30-20260620-024040`.
+Experimental TCP route-GSO failed closed with the same missing helper
+capabilities. Artifact:
+`/tmp/trustix-pve-owrt24-next.S9YJo0/results/owdeb-routegso-30-20260620-024147`.
+
+Conclusion: OpenWrt 24.10.2 has a validated full plaintext kmod path, but the
+official x86_64 kernel image used here does not provide the BTF/kfunc runtime
+surface required for TrustIX route-GSO helpers. Do not select OpenWrt 24.10.2
+secure-kUDP route-GSO or experimental TCP route-GSO as production defaults.
+
 ### OpenWrt-Debian route-GSO capability check
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
