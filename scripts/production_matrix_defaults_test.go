@@ -163,8 +163,11 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 			}
 			defaults := readProductionTransportDefaults(t)
 			for _, wantCase := range []string{
+				"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:900",
 				"udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod:3:900",
 				"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:900",
+				"tcp:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
+				"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:900",
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:900",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:900",
 				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
@@ -304,10 +307,12 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 	defaults := readProductionTransportDefaults(t)
 	for _, wantCase := range []string{
 		"udp:secure:stable:userspace:userspace:single_host:userspace:0:30",
+		"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:900",
 		"udp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:900",
 		"tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 		"tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
 		"quic:secure:stable:userspace:userspace:single_host:userspace:0:30",
 		"quic:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"websocket:secure:stable:userspace:userspace:single_host:userspace:0:30",
@@ -321,6 +326,7 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"vxlan:secure:stable:tc_xdp:userspace:single_host:userspace_tc:0:30",
 		"vxlan:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
 		"kernel_udp:plaintext:performance:tc_xdp:userspace:single_host:tc_direct:0:30",
+		"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:900",
 		"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:900",
 		"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 		"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
