@@ -835,6 +835,33 @@ func TestCrossHostSoakVerifyRejectsModuleCounterAboveMaximum(t *testing.T) {
 	}
 }
 
+func TestCrossHostProductionGateAcceptsFullKmodArtifacts(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeFullKmodProductionGateArtifacts(t, dir, true)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production gate rejected full-kmod artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsFullKmodWithoutPlaintextXmit(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeFullKmodProductionGateArtifacts(t, dir, false)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted full-kmod artifacts without plaintext xmit:\n%s", output)
+	}
+	if !strings.Contains(string(output), "tx_plaintext_outer_gso_segments") {
+		t.Fatalf("production gate did not report missing full-kmod plaintext xmit counter:\n%s", output)
+	}
+}
+
 func TestCrossHostProductionGateAcceptsSecureKUDPRouteGSOArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
@@ -859,6 +886,33 @@ func TestCrossHostProductionGateRejectsSecureKUDPWithoutRouteGSO(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc") {
 		t.Fatalf("production gate did not report missing secure route-GSO datapath stat:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateAcceptsRouteGSOArtifacts(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeRouteGSOProductionGateArtifacts(t, dir, true)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=route-gso="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production gate rejected route-GSO artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsRouteGSOWithoutTCFlag(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeRouteGSOProductionGateArtifacts(t, dir, false)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=route-gso="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted route-GSO artifacts without TC route-GSO flag:\n%s", output)
+	}
+	if !strings.Contains(string(output), "tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc") {
+		t.Fatalf("production gate did not report missing route-GSO datapath stat:\n%s", output)
 	}
 }
 
@@ -1159,6 +1213,53 @@ func writeModuleParameters(t *testing.T, path string, modules map[string]map[str
 	}
 }
 
+func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmit bool) {
+	t.Helper()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 3.3e9, 3.2e9, 900.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 3.3e9, 3.2e9, 900.2)
+	writeResultMarker(t, dir)
+	for _, node := range []string{"a", "b"} {
+		base := filepath.Join(dir, "collect", node)
+		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
+		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "full-kmod-sha")
+		writeDatapathJSONWithRX(t, filepath.Join(base, "datapath.json"), 1, 42)
+		writeTransportsJSON(t, filepath.Join(base, "transports.json"), 8, "flow", true, 8)
+		writeFullKmodModuleParameters(t, filepath.Join(base, "module-parameters.txt"), plaintextXmit)
+	}
+}
+
+func writeFullKmodModuleParameters(t *testing.T, path string, plaintextXmit bool) {
+	t.Helper()
+	plaintextSegments := "0"
+	if plaintextXmit {
+		plaintextSegments = "128"
+	}
+	writeModuleParameters(t, path, map[string]map[string]string{
+		"trustix_datapath": {
+			"session_records":                             "8",
+			"session_wire_records":                        "8",
+			"rx_worker_single_coalesce_max_frames":        "32",
+			"tx_plaintext_outer_gso_segments":             plaintextSegments,
+			"tx_plaintext_direct_xmit_dst_mac_cache_hits": "8",
+			"rx_worker_gso_xmit_segments":                 "8",
+			"rx_worker_alloc_errors":                      "0",
+			"rx_worker_deliver_errors":                    "0",
+			"rx_worker_gso_xmit_errors":                   "0",
+			"rx_worker_xmit_ret_errors":                   "0",
+			"rx_worker_xmit_other_ret_errors":             "0",
+			"rx_worker_xmit_dev_forward_errors":           "0",
+			"rx_worker_xmit_peer_forward_errors":          "0",
+			"tx_plaintext_build_errors":                   "0",
+			"tx_plaintext_no_sessions":                    "0",
+			"tx_plaintext_no_wires":                       "0",
+			"tx_plaintext_stale_wires":                    "0",
+			"tx_plaintext_xmit_errors":                    "0",
+			"tx_plaintext_outer_gso_errors":               "0",
+			"tx_plaintext_queue_drops":                    "0",
+		},
+	})
+}
+
 func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO bool) {
 	t.Helper()
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 900.2)
@@ -1287,4 +1388,80 @@ func writeSecureKUDPModuleParameters(t *testing.T, path string) {
 			"route_tcp_gso_async_stream_cross_item_tail_stitch_errors": "0",
 		},
 	})
+}
+
+func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO bool) {
+	t.Helper()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 2.8e9, 2.7e9, 900.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 2.8e9, 2.7e9, 900.2)
+	writeResultMarker(t, dir)
+	for _, node := range []string{"a", "b"} {
+		base := filepath.Join(dir, "collect", node)
+		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
+		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "route-gso-sha")
+		writeRouteGSODatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO)
+		writeTransportsJSON(t, filepath.Join(base, "transports.json"), 8, "flow", true, 8)
+		writeRouteGSOModuleParameters(t, filepath.Join(base, "module-parameters.txt"))
+	}
+}
+
+func writeRouteGSODatapathJSON(t *testing.T, path string, routeGSO bool) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make route-GSO datapath dir: %v", err)
+	}
+	routeGSOValue := 0
+	if routeGSO {
+		routeGSOValue = 1
+	}
+	payload := map[string]any{
+		"kernel_udp": map[string]any{
+			"provider_stats": map[string]any{
+				"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc":           routeGSOValue,
+				"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested": 1,
+				"tc_kernel_udp_tx_direct_experimental_tcp_only":                     1,
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal route-GSO datapath json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write route-GSO datapath json: %v", err)
+	}
+}
+
+func writeRouteGSOModuleParameters(t *testing.T, path string) {
+	t.Helper()
+	writeModuleParameters(t, path, map[string]map[string]string{
+		"trustix_datapath_helpers": routeGSOHelperParameters(),
+	})
+}
+
+func routeGSOHelperParameters() map[string]string {
+	return map[string]string{
+		"route_tcp_gso_async_hash_tx_queue":                        "1",
+		"route_tcp_gso_async_stream_outer_gso_frames":              "8",
+		"route_tcp_gso_async_xmit_packets":                         "8",
+		"route_tcp_gso_async_flow_errors":                          "0",
+		"route_tcp_gso_async_plan_errors":                          "0",
+		"route_tcp_gso_async_mtu_errors":                           "0",
+		"route_tcp_gso_async_queue_full":                           "0",
+		"route_tcp_gso_async_queue_bytes_full":                     "0",
+		"route_tcp_gso_async_alloc_errors":                         "0",
+		"route_tcp_gso_async_clone_errors":                         "0",
+		"route_tcp_gso_async_segment_errors":                       "0",
+		"route_tcp_gso_async_prepare_errors":                       "0",
+		"route_tcp_gso_async_txq_stopped_drops":                    "0",
+		"route_tcp_gso_async_xmit_errors":                          "0",
+		"route_tcp_gso_async_stream_errors":                        "0",
+		"route_tcp_gso_async_stream_xmit_errors":                   "0",
+		"route_tcp_gso_async_stream_direct_errors":                 "0",
+		"route_tcp_gso_async_stream_outer_gso_errors":              "0",
+		"route_tcp_gso_async_stream_outer_gso_blocked":             "0",
+		"route_tcp_gso_async_stream_outer_gso_verify_errors":       "0",
+		"route_tcp_gso_async_stream_cross_item_errors":             "0",
+		"route_tcp_gso_async_stream_cross_item_tail_stitch_errors": "0",
+	}
 }
