@@ -22,4 +22,5 @@ vxlan	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	basel
 kernel_udp	plaintext	performance	tc_xdp	userspace	single_host	tc_direct	0	30	TC-only plaintext UDP provider smoke path
 kernel_udp	secure	performance	tc_xdp	kernel	cross_host	secure_kudp	1.5	900	selected secure kernel UDP route-GSO path
 experimental_tcp	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted experimental TCP compatibility path
+experimental_tcp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext experimental TCP compatibility path
 experimental_tcp	plaintext	performance	kernel_module	userspace	cross_host	route_gso	2.5	900	selected plaintext experimental TCP route-GSO path

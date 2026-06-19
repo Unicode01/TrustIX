@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -90,6 +91,7 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:900",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:900",
 				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
+				"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 			} {
 				if !strings.Contains(defaults, wantCase) {
 					t.Fatalf("production defaults missing %q", wantCase)
@@ -172,10 +174,105 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"kernel_udp:plaintext:performance:tc_xdp:userspace:single_host:tc_direct:0:30",
 		"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:900",
 		"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
+		"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:900",
 	} {
 		if !strings.Contains(defaults, wantCase) {
 			t.Fatalf("production defaults missing %q", wantCase)
+		}
+	}
+}
+
+func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
+	rows := loadProductionTransportDefaults(t)
+	knownTransport := map[string]bool{
+		"udp": true, "tcp": true, "quic": true, "websocket": true,
+		"http_connect": true, "gre": true, "ipip": true, "vxlan": true,
+		"kernel_udp": true, "experimental_tcp": true,
+	}
+	knownGate := map[string]bool{
+		"userspace": true, "userspace_tc": true, "tc_direct": true,
+		"full_kmod": true, "owdeb_full_kmod": true,
+		"secure_kudp": true, "route_gso": true,
+	}
+	crossHostGate := map[string]bool{
+		"full_kmod": true, "owdeb_full_kmod": true,
+		"secure_kudp": true, "route_gso": true,
+	}
+	seen := map[string]bool{}
+	baseline := map[string]bool{}
+	for _, row := range rows {
+		key := strings.Join([]string{
+			row.Transport, row.Encryption, row.Profile, row.Datapath,
+			row.CryptoPlacement, row.ValidationScope, row.GateFamily,
+		}, ":")
+		if seen[key] {
+			t.Fatalf("duplicate production default row key %q", key)
+		}
+		seen[key] = true
+		if !knownTransport[row.Transport] {
+			t.Fatalf("unknown production transport %q in %+v", row.Transport, row)
+		}
+		switch row.Encryption {
+		case "secure", "plaintext":
+		default:
+			t.Fatalf("unknown encryption %q in %+v", row.Encryption, row)
+		}
+		switch row.Profile {
+		case "stable", "performance", "latency":
+		default:
+			t.Fatalf("unknown profile %q in %+v", row.Profile, row)
+		}
+		switch row.Datapath {
+		case "userspace", "tc_xdp", "kernel_module", "auto":
+		default:
+			t.Fatalf("unknown datapath %q in %+v", row.Datapath, row)
+		}
+		switch row.CryptoPlacement {
+		case "userspace", "kernel", "auto":
+		default:
+			t.Fatalf("unknown crypto placement %q in %+v", row.CryptoPlacement, row)
+		}
+		switch row.ValidationScope {
+		case "single_host", "cross_host":
+		default:
+			t.Fatalf("unknown validation scope %q in %+v", row.ValidationScope, row)
+		}
+		if !knownGate[row.GateFamily] {
+			t.Fatalf("unknown gate family %q in %+v", row.GateFamily, row)
+		}
+		minGbps, err := strconv.ParseFloat(row.MinGbps, 64)
+		if err != nil || minGbps < 0 {
+			t.Fatalf("invalid min_gbps %q in %+v", row.MinGbps, row)
+		}
+		minSeconds, err := strconv.Atoi(row.MinSeconds)
+		if err != nil || minSeconds <= 0 {
+			t.Fatalf("invalid min_seconds %q in %+v", row.MinSeconds, row)
+		}
+		if row.ValidationScope == "cross_host" {
+			if !crossHostGate[row.GateFamily] {
+				t.Fatalf("cross-host production row uses non-production gate %q: %+v", row.GateFamily, row)
+			}
+			if minGbps <= 0 || minSeconds < 900 {
+				t.Fatalf("cross-host production row lacks throughput/soak gate: %+v", row)
+			}
+		}
+		if crossHostGate[row.GateFamily] && row.ValidationScope != "cross_host" {
+			t.Fatalf("production gate %q must be cross_host, got %+v", row.GateFamily, row)
+		}
+		if row.GateFamily == "userspace" &&
+			row.Profile == "stable" &&
+			row.Datapath == "userspace" &&
+			row.CryptoPlacement == "userspace" {
+			baseline[row.Transport+":"+row.Encryption] = true
+		}
+	}
+	for _, transport := range []string{"udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp"} {
+		for _, encryption := range []string{"secure", "plaintext"} {
+			key := transport + ":" + encryption
+			if !baseline[key] {
+				t.Fatalf("missing stable userspace baseline for %s", key)
+			}
 		}
 	}
 }
