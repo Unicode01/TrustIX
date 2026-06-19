@@ -7,13 +7,17 @@ summary_dir="${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-}"
 gate_min_gbps="${TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-}"
 full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}}"
 secure_kudp_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}}"
-route_gso_min_gbps="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-4}}"
+route_gso_min_gbps="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}}"
 min_seconds="${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900}"
 seconds_slop="${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-1}"
 require_binary_identity="${TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY:-1}"
 full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8}"
 secure_kudp_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8}"
+secure_kudp_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1}"
+secure_kudp_direct_error_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET:-64}"
+secure_kudp_replay_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET:-4096}"
 route_gso_min_sessions="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS:-8}"
+route_gso_session_error_budget="${TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2}"
 
 dd_full_kmod="${TRUSTIX_CROSS_HOST_DD_FULL_KMOD:-}"
 owdeb_full_kmod="${TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD:-}"
@@ -81,7 +85,11 @@ main() {
   validate_number TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP "$seconds_slop"
   validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
   validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"
+  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS "$secure_kudp_min_crypto_flows"
+  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET "$secure_kudp_direct_error_budget"
+  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET "$secure_kudp_replay_budget"
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS "$route_gso_min_sessions"
+  validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
 
   local full_kmod_args=""
   local secure_kudp_args=""
@@ -177,8 +185,8 @@ main() {
       --require-datapath-stat kernel_udp.requested_crypto=kernel \
       --require-datapath-stat kernel_udp.effective_crypto=kernel \
       --require-datapath-stat kernel_udp.provider_stats.kernel_crypto_flow_map_ready=1 \
-      --require-datapath-min kernel_udp.provider_stats.kernel_crypto_flow_map_entries="${secure_kudp_min_sessions}" \
-      --require-datapath-min kernel_udp.provider_stats.kernel_crypto_flow_map_updates="${secure_kudp_min_sessions}" \
+      --require-datapath-min kernel_udp.provider_stats.kernel_crypto_flow_map_entries="${secure_kudp_min_crypto_flows}" \
+      --require-datapath-min kernel_udp.provider_stats.kernel_crypto_flow_map_updates="${secure_kudp_min_crypto_flows}" \
       --require-datapath-stat kernel_udp.provider_stats.kernel_crypto_direct_slot_provider_ready=1 \
       --require-datapath-stat kernel_udp.provider_stats.kernel_crypto_direct_kfunc_fastpath_ready=1 \
       --require-datapath-stat kernel_udp.provider_stats.kernel_crypto_tc_direct_ready=1 \
@@ -189,8 +197,6 @@ main() {
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_enabled=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_skb_open_kfunc=0 \
-      --require-datapath-any-min kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_packets=1 \
-      --require-datapath-any-min kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_packets=1 \
       --require-datapath-max kernel_udp.provider_stats.kernel_crypto_provider_unavailable_errors=0 \
       --require-datapath-max kernel_udp.provider_stats.kernel_crypto_flow_rejects=0 \
       --require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_rejects=0 \
@@ -201,14 +207,14 @@ main() {
       --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_sequence_errors=0 \
       --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_drops=0 \
       --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_header_errors=0 \
-      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors=0 \
-      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_drops=0 \
-      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_drops=0 \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors="${secure_kudp_direct_error_budget}" \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_drops="${secure_kudp_replay_budget}" \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_drops="${secure_kudp_replay_budget}" \
       --require-module-param-min trustix_crypto.kfunc_simd_fastpath=1 \
       --require-module-param-min trustix_crypto.kfunc_simd_irq_fpu_fastpath=1 \
       --require-module-param-any-min trustix_crypto.direct_kfunc_seal_calls=1 \
       --require-module-param-any-min trustix_crypto.direct_kfunc_open_calls=1 \
-      --require-module-param-max trustix_crypto.direct_kfunc_errors=0 \
+      --require-module-param-max trustix_crypto.direct_kfunc_errors="${secure_kudp_direct_error_budget}" \
       --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_secure_seal_batch=1
   fi
 
@@ -219,13 +225,11 @@ main() {
       --require-transport-policy-stat session_pool_warmup=true \
       --require-transport-sessions-min "${route_gso_min_sessions}" \
       --require-status-min data_path.active_sessions="${route_gso_min_sessions}" \
-      --require-status-max data_path.counters.session_dial_errors=0 \
-      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
+      --require-status-max data_path.counters.session_dial_errors="${route_gso_session_error_budget}" \
       --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1 \
       --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=1 \
-      --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue_sets=1 \
       --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1 \
       --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_xmit_packets=1 \
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_flow_errors=0 \

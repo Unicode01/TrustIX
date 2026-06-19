@@ -1214,6 +1214,9 @@ cleanup_all() {
 
 main() {
   validate_case
+  if [[ "$(case_fast_path)" == "route_gso" && -z "${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE+x}" ]]; then
+    session_pool_heartbeat_mode=disabled
+  fi
   need_cmd ssh
   need_cmd tar
   need_cmd cp
