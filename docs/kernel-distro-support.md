@@ -15,7 +15,7 @@ universal `.ko`.
 | Kernel crypto, full | Matching KDIR plus kernel/BTF support for BPF crypto kfuncs; upstream Linux 6.12+ is the intended full provider target | Builds where headers allow it, but runtime must still pass BTF/kfunc and selftest probes. Older kernels can load but may only provide device/ioctl crypto. |
 | Datapath helpers, basic | Matching KDIR | Build fallback when helper kfunc/BTF support is not available. Does not provide route-GSO/kfunc fast path. |
 | Datapath helpers, full | Matching KDIR plus module BTF/kfunc usability | Provides safe skb/GSO and route-TCP helper capability. Panic-risk route-TCP XMIT/async families are first-release hard-disabled unless separately validated. |
-| Full plaintext datapath module | Matching KDIR; selected full-plaintext policy plus `enable_features=128 rx_worker_inject=1 tx_plaintext=1`; passing module selftests and cross-host production gate | Selected plaintext performance path for the validated Debian 6.12 and OpenWrt 5.15 x86_64 targets. Daemon defaults still keep RX worker and TX plaintext disabled unless the selected policy/runtime config requires them. Modules remain target-kernel artifacts; secure full-kernel datapath and GSO LAN TX are not complete first-release guarantees. |
+| Full plaintext datapath module | Matching KDIR; selected full-plaintext policy plus `enable_features=128 rx_worker_inject=1 tx_plaintext=1`; passing module selftests and cross-host production gate | Selected plaintext performance path for the validated Debian 6.12 and OpenWrt 5.15/6.6 x86_64 targets. Daemon defaults still keep RX worker and TX plaintext disabled unless the selected policy/runtime config requires them. Modules remain target-kernel artifacts; secure full-kernel datapath and GSO LAN TX are not complete first-release guarantees. |
 
 ## Kernel module ABI boundary
 
@@ -46,10 +46,10 @@ now install for kernel module builds when dependency installation is enabled.
 
 ## Current validation snapshot
 
-The latest PVE compatibility audit was run on 2026-06-19 against current source
-and selected production transport defaults. It covered Debian 13
-`6.12.90+deb13.1-amd64` and OpenWrt 23.05.5 x86_64 `5.15.167` guests with
-disposable PVE VM IDs 200+.
+The latest PVE compatibility audit was run on 2026-06-19 and 2026-06-20
+against current source and selected production transport defaults. It covered
+Debian 13 `6.12.90+deb13.1-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`, and
+OpenWrt 24.10.2 x86_64 `6.6.93` guests with disposable PVE VM IDs 200+.
 
 Generic Linux Kbuild on Ubuntu 22.04.5:
 
@@ -105,6 +105,19 @@ minimum received throughput of 3.495550 Gbps against a 3 Gbps gate. Final boot
 ID checks were stable and kernel log scans found no panic, Oops, BUG, call
 trace, page fault, watchdog, lockup, hung-task, or `tx_queue_len` signature.
 
+The 2026-06-20 OpenWrt 24.10.2 follow-up used VM202 OpenWrt x86_64 kernel
+`6.6.93` and VM200 Debian 13 `6.12.90+deb13.1-cloud-amd64` on an isolated
+PVE `vmbr3` underlay. The OpenWrt 24.10.2 SDK build passed with
+`crypto=full,datapath=full,helpers=full`; the datapath module SHA256 was
+`09339f3e18f0f536908736fb08cd6f91728ff8c6dcfd2b8d9cd1cfd7677fbe10`.
+The 900s bidirectional full-kmod production gate passed with minimum received
+throughput of 3.435125 Gbps against a 3 Gbps gate. The gate required matching
+binary identity, full plaintext provider status, RX worker injection, eight
+session records/wires, nonzero GSO/cached-destination counters, and zero
+covered RX/TX/module error counters. Kernel log scans on both guests found no
+panic, Oops, BUG, call trace, page fault, watchdog, lockup, hung-task, or
+`tx_queue_len` signature.
+
 OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 
 | OpenWrt target | Kernel | Result |
@@ -115,8 +128,8 @@ OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 | `23.05.5 armsr/armv8` | `5.15.167` | pass |
 
 Older performance-log runs also covered a wider OpenWrt compile matrix, but the
-table above is the current-source spot check. Runtime load/function coverage is
-strongest for Ubuntu `6.8.0-124-generic`.
+table above is the current-source spot check. Runtime full-kmod coverage now
+includes OpenWrt 23.05.5 and 24.10.2 x86_64 with matching SDK-built modules.
 
 OpenWrt `23.05.5 x86_64` runtime status was promoted after a cross-host PVE
 stress run on 2026-06-16. OpenWrt kernel `5.15.167` loaded an OpenWrt SDK-built
@@ -156,10 +169,11 @@ best-supported deployment target for the current scripts. `trustix-deploy.sh`,
 restart `trustixd@*.service` instances.
 
 OpenWrt and soft-router systems should prefer release tarballs plus target-side
-module builds using the OpenWrt SDK or matching KDIR. The current deployment
-scripts do not install an OpenWrt `/etc/init.d` service, and BTF may be missing;
-in that case TrustIX should fall back to userspace/device/basic-helper
-capabilities instead of pretending full kfunc offload is available.
+module builds using the OpenWrt SDK or matching KDIR. The deployment scripts
+install an OpenWrt `/etc/init.d` service. BTF may still be missing or helper
+kfuncs may be unavailable on a given release; in that case TrustIX should fall
+back to userspace/device/basic-helper capabilities instead of pretending full
+kfunc offload is available.
 
 Non-Linux hosts are not dataplane targets. The non-Linux code paths report TC/XDP
 and kernel module lifecycle as unsupported; use them only for development of

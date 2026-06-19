@@ -522,6 +522,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be >= 1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be >= 0",
 		"TRUSTIX_CROSS_HOST_SESSION_POOL_STRATEGY must be flow, five_tuple, 5tuple, packet, or round_robin",
+		"ssh -n \"${ssh_opts[@]}\" \"$dest\" \"bash -c $(remote_quote \"$script\")\"",
 		"iperf_artifact_suffix",
 		"dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod",
 		"dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel",
@@ -627,6 +628,10 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"run_tcp_health_direction",
 		"collect_one bpf bpf maps",
 		"${dir}/binary-identity.json",
+		"ip_cmd=\\$(command -v ip)",
+		"nohup \\\"\\$ip_cmd\\\" netns exec",
+		"setsid \\\"\\$ip_cmd\\\" netns exec",
+		"timeout ${iperf_timeout}s \\\"\\$ip_cmd\\\" netns exec",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-cross-host-soak-runner.sh missing %q", want)
@@ -639,6 +644,13 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"${prefix}-binary-identity.json",
 		"find \"$workdir/a\" \"$workdir/b\" -type f -name 'iperf3-*.json' -exec cp",
 		"trustixd\") -version 2>/dev/null | awk -F= '/^version=/{print $2; exit}'",
+		"ip netns exec",
+		"ip netns del",
+		"ip netns pids",
+		"nohup ip netns exec",
+		"setsid ip netns exec",
+		"\"$dest\" bash -s <<<\"$script\"",
+		"sh -c \"$iperf_cmd\"",
 	} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("linux-cross-host-soak-runner.sh contains non-portable %q", unwanted)

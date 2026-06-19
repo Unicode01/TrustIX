@@ -4,6 +4,52 @@ This file records datapath performance findings and script changes so future run
 
 ## 2026-06-20
 
+### OpenWrt 24.10.2 full-kmod production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 Debian 13 (`192.168.100.200`) and VM202 OpenWrt 24.10.2 x86_64
+(`192.168.100.202`). VM100 and all 1xx guests were not modified. A dedicated
+`vmbr3` underlay carried the test traffic.
+
+OpenWrt 24.10.2 x86_64 uses kernel `6.6.93`. The OpenWrt SDK kmod matrix
+passed after moving the `trustix_crypto` AEAD completion callback ABI gate from
+Linux 6.8 to Linux 6.6; OpenWrt 24.10's 6.6 headers use the newer
+`void (*)(void *, int)` completion callback signature.
+
+OpenWrt SDK module build result for `24.10.2-x86_64`:
+
+| Module | SHA256 | Capability result |
+| --- | --- | --- |
+| `trustix_crypto.ko` | `050371d0b1cbcfcf7e4d0fd739870db177b1dca3bbb46dd873c7eeceec45304e` | full crypto module built and loaded |
+| `trustix_datapath_helpers.ko` | `fd0df3e4748db2889e593997cf01c49f3fb87125f1b9560ead0a0db05e8710f0` | full helpers built and loaded |
+| `trustix_datapath.ko` | `09339f3e18f0f536908736fb08cd6f91728ff8c6dcfd2b8d9cd1cfd7677fbe10` | full plaintext module built and loaded |
+
+The runner also exposed two OpenWrt portability bugs in the test harness rather
+than the datapath: remote `ssh ... bash -s <<<"$script"` could leave ssh
+waiting on stdin while long iperf commands were still running, and some command
+paths could resolve BusyBox `ip`/`timeout` instead of `ip-full`. The cross-host
+runner now executes remote snippets with `ssh -n ... bash -c` and resolves
+`ip_cmd=$(command -v ip)` before netns setup, health checks, iperf server/client
+commands, ping checks, and cleanup.
+
+Validation:
+
+| Case | Artifact | Duration per direction | Minimum received | Gate | Result |
+| --- | --- | ---: | ---: | ---: | --- |
+| OpenWrt 24.10.2 to Debian full plaintext kmod | `/tmp/trustix-pve-owrt2410.mkjwgb/results/owdeb-fullkmod-vmbr3-both-900-fixed-20260620013755` | 900s | 3.435125 Gbps | 3 Gbps | pass |
+
+The production gate required matching binary identity, `session_pool_size=8`,
+flow session pool warmup, `kernel_datapath_full_plaintext_provider=1`,
+nonzero `kernel_rx_stage.rx_worker_injected`, eight session records/wires,
+nonzero `tx_plaintext_outer_gso_segments`,
+`tx_plaintext_direct_xmit_dst_mac_cache_hits`, and
+`rx_worker_gso_xmit_segments`. Covered module error counters stayed at zero,
+including RX worker allocation/deliver/GSO/xmit errors, plaintext TX build/no
+session/no wire/stale wire/xmit/outer-GSO errors, and queue drops. Both guest
+kernel log scans were clean for panic, Oops, BUG, call trace, page fault,
+watchdog, lockup, hung-task, `tx_queue_len`, and TrustIX datapath crash
+signatures.
+
 ### OpenWrt-Debian route-GSO capability check
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:

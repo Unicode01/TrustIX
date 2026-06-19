@@ -694,7 +694,7 @@ static int trustix_aead_aesni_prepared_slice(struct trustix_aead_tfm *ctx,
 static bool trustix_aead_aesni_capable(void);
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
 static void trustix_aead_complete(void *data, int err)
 {
 	struct trustix_aead_wait *wait = data;

@@ -155,7 +155,7 @@ run_node() {
     bash -s <<<"$script"
     return
   fi
-  ssh "${ssh_opts[@]}" "$dest" bash -s <<<"$script"
+  ssh -n "${ssh_opts[@]}" "$dest" "bash -c $(remote_quote "$script")"
 }
 
 ssh_no_stdin() {
@@ -841,20 +841,21 @@ prepare_node_topology() {
   host_addr="$(node_value "$node" "$host_a_addr" "$host_b_addr")"
   host_gw="$(node_value "$node" "${lan_a_gateway%/*}" "${lan_b_gateway%/*}")"
   run_node "$node" "set -Eeuo pipefail
+ip_cmd=\$(command -v ip)
 rm -rf $(remote_quote "$dir")
 mkdir -p $(remote_quote "$dir")/logs $(remote_quote "$dir")/certs $(remote_quote "$dir")/data
-for pid in \$(ip netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
-ip netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
-ip link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
-ip link del $(remote_quote "$host_if") >/dev/null 2>&1 || true
-ip link add $(remote_quote "$lan_if") type veth peer name $(remote_quote "$host_if")
-ip netns add $(remote_quote "$host_ns")
-ip link set $(remote_quote "$host_if") netns $(remote_quote "$host_ns")
-ip link set $(remote_quote "$lan_if") up
-ip netns exec $(remote_quote "$host_ns") ip link set lo up
-ip netns exec $(remote_quote "$host_ns") ip addr add $(remote_quote "$host_addr") dev $(remote_quote "$host_if")
-ip netns exec $(remote_quote "$host_ns") ip link set $(remote_quote "$host_if") up
-ip netns exec $(remote_quote "$host_ns") ip route replace default via $(remote_quote "$host_gw")
+for pid in \$(\"\$ip_cmd\" netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
+\"\$ip_cmd\" netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
+\"\$ip_cmd\" link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
+\"\$ip_cmd\" link del $(remote_quote "$host_if") >/dev/null 2>&1 || true
+\"\$ip_cmd\" link add $(remote_quote "$lan_if") type veth peer name $(remote_quote "$host_if")
+\"\$ip_cmd\" netns add $(remote_quote "$host_ns")
+\"\$ip_cmd\" link set $(remote_quote "$host_if") netns $(remote_quote "$host_ns")
+\"\$ip_cmd\" link set $(remote_quote "$lan_if") up
+\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" link set lo up
+\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" addr add $(remote_quote "$host_addr") dev $(remote_quote "$host_if")
+\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" link set $(remote_quote "$host_if") up
+\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" route replace default via $(remote_quote "$host_gw")
 "
 }
 
@@ -1328,15 +1329,17 @@ done
 
 run_ping_checks() {
   run_node a "set -Eeuo pipefail
+ip_cmd=\$(command -v ip)
 for _ in \$(seq 1 20); do
-  if ip netns exec $(remote_quote "$host_ns_a") ping -c 1 -W 1 $(remote_quote "$host_b_ip") >/dev/null 2>&1; then exit 0; fi
+  if \"\$ip_cmd\" netns exec $(remote_quote "$host_ns_a") ping -c 1 -W 1 $(remote_quote "$host_b_ip") >/dev/null 2>&1; then exit 0; fi
   sleep 1
 done
 exit 1
 "
   run_node b "set -Eeuo pipefail
+ip_cmd=\$(command -v ip)
 for _ in \$(seq 1 20); do
-  if ip netns exec $(remote_quote "$host_ns_b") ping -c 1 -W 1 $(remote_quote "$host_a_ip") >/dev/null 2>&1; then exit 0; fi
+  if \"\$ip_cmd\" netns exec $(remote_quote "$host_ns_b") ping -c 1 -W 1 $(remote_quote "$host_a_ip") >/dev/null 2>&1; then exit 0; fi
   sleep 1
 done
 exit 1
@@ -1354,17 +1357,18 @@ run_tcp_health_direction() {
   server_ns="$(node_value "$server" "$host_ns_a" "$host_ns_b")"
   client_ns="$(node_value "$client" "$host_ns_a" "$host_ns_b")"
   run_node "$server" "set -Eeuo pipefail
+ip_cmd=\$(command -v ip)
 rm -f $(remote_quote "${server_dir}/health-${label}-server.pid") $(remote_quote "${server_dir}/health-${label}-server.json")
-ip netns exec $(remote_quote "$server_ns") iperf3 -s -1 -p ${health_port} -J >$(remote_quote "${server_dir}/health-${label}-server.json") 2>$(remote_quote "${server_dir}/health-${label}-server.err") </dev/null &
+\"\$ip_cmd\" netns exec $(remote_quote "$server_ns") iperf3 -s -1 -p ${health_port} -J >$(remote_quote "${server_dir}/health-${label}-server.json") 2>$(remote_quote "${server_dir}/health-${label}-server.err") </dev/null &
 echo \$! >$(remote_quote "${server_dir}/health-${label}-server.pid")
 "
   sleep 1
   run_node "$client" "set -Eeuo pipefail
-cmd=\"ip netns exec $(remote_quote "$client_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${health_port} -t 1 -P 1 -J\"
+ip_cmd=\$(command -v ip)
 if command -v timeout >/dev/null 2>&1; then
-  timeout 20s sh -c \"\$cmd\" >$(remote_quote "${client_dir}/health-${label}-client.json") 2>$(remote_quote "${client_dir}/health-${label}-client.err")
+  timeout 20s \"\$ip_cmd\" netns exec $(remote_quote "$client_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${health_port} -t 1 -P 1 -J >$(remote_quote "${client_dir}/health-${label}-client.json") 2>$(remote_quote "${client_dir}/health-${label}-client.err")
 else
-  sh -c \"\$cmd\" >$(remote_quote "${client_dir}/health-${label}-client.json") 2>$(remote_quote "${client_dir}/health-${label}-client.err")
+  \"\$ip_cmd\" netns exec $(remote_quote "$client_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${health_port} -t 1 -P 1 -J >$(remote_quote "${client_dir}/health-${label}-client.json") 2>$(remote_quote "${client_dir}/health-${label}-client.err")
 fi
 "
   run_node "$server" "set +e
@@ -1400,13 +1404,14 @@ start_iperf_server() {
   dir="$(remote_dir "$node")"
   host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
 run_node "$node" "set -Eeuo pipefail
+ip_cmd=\$(command -v ip)
 rm -f $(remote_quote "${dir}/iperf3-server.pid") $(remote_quote "${dir}/iperf3-server.json")
 if command -v nohup >/dev/null 2>&1; then
-  nohup ip netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
+  nohup \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
 elif command -v setsid >/dev/null 2>&1; then
-  setsid ip netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
+  setsid \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
 else
-  ip netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
+  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
 fi
 echo \$! >$(remote_quote "${dir}/iperf3-server.pid")
 "
@@ -1425,14 +1430,14 @@ run_iperf_client() {
     reverse) mode_args="-R" ;;
   esac
   run_node "$node" "set -Eeuo pipefail
-iperf_cmd=\"ip netns exec $(remote_quote "$host_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${iperf_port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J\"
+ip_cmd=\$(command -v ip)
 out=$(remote_quote "${dir}/${out_name}")
 err=$(remote_quote "${dir}/${out_name%.json}.err")
 rc=0
 if command -v timeout >/dev/null 2>&1; then
-  timeout ${iperf_timeout}s sh -c \"\$iperf_cmd\" >\"\$out\" 2>\"\$err\" || rc=\$?
+  timeout ${iperf_timeout}s \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${iperf_port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
 else
-  sh -c \"\$iperf_cmd\" >\"\$out\" 2>\"\$err\" || rc=\$?
+  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${iperf_port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
 fi
 if [ \"\$rc\" -eq 0 ]; then
   json_error_pattern='\"error\"'
@@ -1590,12 +1595,13 @@ cleanup_node() {
   peer_port="$(node_value "$node" "$peer_a_port" "$peer_b_port")"
   env_exports="$(daemon_env_exports)"
   run_node "$node" "set +e
+ip_cmd=\$(command -v ip)
 if [ -x $(remote_quote "$trustixd") ] && [ -f $(remote_quote "${dir}/config.yaml") ]; then
   env ${env_exports} $(remote_quote "$trustixd") -config $(remote_quote "${dir}/config.yaml") -data-dir $(remote_quote "${dir}/data") -api 127.0.0.1:${api_port} -peer-api 0.0.0.0:${peer_port} -dataplane $(remote_quote "$dataplane_mode") -cleanup-dataplane >>$(remote_quote "${dir}/logs/cleanup.log") 2>&1
 fi
-for pid in \$(ip netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
-ip netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
-ip link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
+for pid in \$(\"\$ip_cmd\" netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
+\"\$ip_cmd\" netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
+\"\$ip_cmd\" link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
 if [ $(remote_quote "$unload_modules") = '1' ]; then
   rmmod trustix_datapath >/dev/null 2>&1 || true
   rmmod trustix_datapath_helpers >/dev/null 2>&1 || true
