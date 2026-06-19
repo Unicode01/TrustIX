@@ -5,6 +5,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 verifier="${TRUSTIX_CROSS_HOST_GATE_VERIFIER:-${repo_root}/scripts/linux-cross-host-soak-verify.py}"
 summary_dir="${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-}"
 gate_min_gbps="${TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-}"
+userspace_min_gbps="${TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS:-${gate_min_gbps:-0}}"
+userspace_tc_min_gbps="${TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS:-${gate_min_gbps:-0}}"
+tc_direct_min_gbps="${TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS:-${gate_min_gbps:-0}}"
 full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}}"
 secure_kudp_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}}"
 route_gso_min_gbps="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}}"
@@ -18,7 +21,11 @@ secure_kudp_direct_error_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_B
 secure_kudp_replay_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET:-4096}"
 route_gso_min_sessions="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS:-8}"
 route_gso_session_error_budget="${TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2}"
+compat_min_sessions="${TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS:-1}"
 
+userspace_cases_raw="${TRUSTIX_CROSS_HOST_USERSPACE_CASES:-}"
+userspace_tc_cases_raw="${TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES:-}"
+tc_direct_cases_raw="${TRUSTIX_CROSS_HOST_TC_DIRECT_CASES:-}"
 dd_full_kmod="${TRUSTIX_CROSS_HOST_DD_FULL_KMOD:-}"
 owdeb_full_kmod="${TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD:-}"
 dd_secure_kudp="${TRUSTIX_CROSS_HOST_DD_SECURE_KUDP:-}"
@@ -79,6 +86,9 @@ main() {
   if [[ -n "$gate_min_gbps" ]]; then
     validate_number TRUSTIX_CROSS_HOST_GATE_MIN_GBPS "$gate_min_gbps"
   fi
+  validate_number TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS "$userspace_min_gbps"
+  validate_number TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS "$userspace_tc_min_gbps"
+  validate_number TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS "$tc_direct_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS "$full_kmod_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS "$secure_kudp_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS "$route_gso_min_gbps"
@@ -91,13 +101,36 @@ main() {
   validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET "$secure_kudp_replay_budget"
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS "$route_gso_min_sessions"
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
+  validate_number TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS "$compat_min_sessions"
 
+  local userspace_args=""
+  local userspace_tc_args=""
+  local tc_direct_args=""
   local full_kmod_args=""
   local secure_kudp_args=""
   local route_gso_args=""
+  local userspace_case_count=0
+  local userspace_tc_case_count=0
+  local tc_direct_case_count=0
   local full_kmod_case_count=0
   local secure_kudp_case_count=0
   local route_gso_case_count=0
+  local token
+  for token in $userspace_cases_raw; do
+    validate_case_token "$token"
+    userspace_args="${userspace_args} --case ${token}"
+    userspace_case_count=$((userspace_case_count + 1))
+  done
+  for token in $userspace_tc_cases_raw; do
+    validate_case_token "$token"
+    userspace_tc_args="${userspace_tc_args} --case ${token}"
+    userspace_tc_case_count=$((userspace_tc_case_count + 1))
+  done
+  for token in $tc_direct_cases_raw; do
+    validate_case_token "$token"
+    tc_direct_args="${tc_direct_args} --case ${token}"
+    tc_direct_case_count=$((tc_direct_case_count + 1))
+  done
   if [[ -n "$dd_full_kmod" ]]; then
     full_kmod_args="${full_kmod_args} --case dd-fullkmod=${dd_full_kmod}"
     full_kmod_case_count=$((full_kmod_case_count + 1))
@@ -106,7 +139,6 @@ main() {
     full_kmod_args="${full_kmod_args} --case owdeb-fullkmod=${owdeb_full_kmod}"
     full_kmod_case_count=$((full_kmod_case_count + 1))
   fi
-  local token
   for token in $full_kmod_cases_raw; do
     validate_case_token "$token"
     full_kmod_args="${full_kmod_args} --case ${token}"
@@ -139,8 +171,29 @@ main() {
     route_gso_case_count=$((route_gso_case_count + 1))
   done
 
-  if [[ "$full_kmod_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
-    die "set TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO/TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO or *_CASES"
+  if [[ "$userspace_case_count" -eq 0 && "$userspace_tc_case_count" -eq 0 && "$tc_direct_case_count" -eq 0 && "$full_kmod_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
+    die "set TRUSTIX_CROSS_HOST_USERSPACE_CASES/TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES/TRUSTIX_CROSS_HOST_TC_DIRECT_CASES/TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO/TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO or *_CASES"
+  fi
+
+  if [[ "$userspace_case_count" -gt 0 ]]; then
+    run_gate userspace "$userspace_min_gbps" $userspace_args \
+      --require-transport-sessions-min "${compat_min_sessions}" \
+      --require-status-max data_path.counters.session_dial_errors=0 \
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0
+  fi
+
+  if [[ "$userspace_tc_case_count" -gt 0 ]]; then
+    run_gate userspace-tc "$userspace_tc_min_gbps" $userspace_tc_args \
+      --require-transport-sessions-min "${compat_min_sessions}" \
+      --require-status-max data_path.counters.session_dial_errors=0 \
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0
+  fi
+
+  if [[ "$tc_direct_case_count" -gt 0 ]]; then
+    run_gate tc-direct "$tc_direct_min_gbps" $tc_direct_args \
+      --require-transport-sessions-min "${compat_min_sessions}" \
+      --require-status-max data_path.counters.session_dial_errors=0 \
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0
   fi
 
   if [[ "$full_kmod_case_count" -gt 0 ]]; then

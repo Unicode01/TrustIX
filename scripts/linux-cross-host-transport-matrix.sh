@@ -170,6 +170,9 @@ append_selected_gate_case() {
   local gate_class
   gate_class="$(gate_family_class "$gate_family")"
   case "$gate_class" in
+    userspace) append_case_token userspace_cases "${name}=${dir}" ;;
+    userspace_tc) append_case_token userspace_tc_cases "${name}=${dir}" ;;
+    tc_direct) append_case_token tc_direct_cases "${name}=${dir}" ;;
     full_kmod) append_case_token full_kmod_cases "${name}=${dir}" ;;
     secure_kudp) append_case_token secure_kudp_cases "${name}=${dir}" ;;
     route_gso) append_case_token route_gso_cases "${name}=${dir}" ;;
@@ -256,7 +259,9 @@ run_case() {
     if truthy "$verify"; then
       run_verify "$name" "$dir" "$min_gbps" "$min_seconds" "$encryption" "$profile" "$datapath" "$placement"
     fi
-    append_selected_gate_case "$gate_family" "$name" "$dir"
+    if [[ "$validation_scope" == "cross_host" ]]; then
+      append_selected_gate_case "$gate_family" "$name" "$dir"
+    fi
   else
     log "case failed: ${name}; see ${dir}.err"
   fi
@@ -268,6 +273,15 @@ run_selected_gate() {
   truthy "$verify" || return 0
   truthy "$selected_gate" || return 0
   local gate_env=()
+  if [[ -n "$userspace_cases" ]]; then
+    gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_CASES=${userspace_cases}")
+  fi
+  if [[ -n "$userspace_tc_cases" ]]; then
+    gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES=${userspace_tc_cases}")
+  fi
+  if [[ -n "$tc_direct_cases" ]]; then
+    gate_env+=("TRUSTIX_CROSS_HOST_TC_DIRECT_CASES=${tc_direct_cases}")
+  fi
   if [[ -n "$full_kmod_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases}")
   fi
@@ -331,6 +345,9 @@ main() {
   return "$failures"
 }
 
+userspace_cases=""
+userspace_tc_cases=""
+tc_direct_cases=""
 full_kmod_cases=""
 secure_kudp_cases=""
 route_gso_cases=""

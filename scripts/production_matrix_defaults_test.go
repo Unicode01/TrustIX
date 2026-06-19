@@ -345,6 +345,11 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 		"secure_kudp": true, "route_gso": true,
 	}
 	crossHostGate := map[string]bool{
+		"userspace": true, "userspace_tc": true, "tc_direct": true,
+		"full_kmod": true, "owdeb_full_kmod": true,
+		"secure_kudp": true, "route_gso": true,
+	}
+	crossHostOnlyGate := map[string]bool{
 		"full_kmod": true, "owdeb_full_kmod": true,
 		"secure_kudp": true, "route_gso": true,
 	}
@@ -406,7 +411,7 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 				t.Fatalf("cross-host production row lacks throughput/soak gate: %+v", row)
 			}
 		}
-		if crossHostGate[row.GateFamily] && row.ValidationScope != "cross_host" {
+		if crossHostOnlyGate[row.GateFamily] && row.ValidationScope != "cross_host" {
 			t.Fatalf("production gate %q must be cross_host, got %+v", row.GateFamily, row)
 		}
 		if row.GateFamily == "userspace" &&
@@ -481,6 +486,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 	text := string(payload)
 	for _, want := range []string{
 		"gate_min_gbps=\"${TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-}\"",
+		"TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS:-${gate_min_gbps:-0}",
+		"TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS:-${gate_min_gbps:-0}",
+		"TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS:-${gate_min_gbps:-0}",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}",
@@ -493,12 +501,19 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET:-4096",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2",
+		"TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS:-1",
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASES",
+		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES",
+		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASES",
 		"TRUSTIX_CROSS_HOST_DD_FULL_KMOD",
 		"TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD",
 		"TRUSTIX_CROSS_HOST_DD_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_DD_ROUTE_GSO",
 		"TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO",
+		"validate_number TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS \"$userspace_min_gbps\"",
+		"validate_number TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS \"$userspace_tc_min_gbps\"",
+		"validate_number TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS \"$tc_direct_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS \"$full_kmod_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS \"$secure_kudp_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS \"$route_gso_min_gbps\"",
@@ -506,7 +521,12 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET \"$secure_kudp_direct_error_budget\"",
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET \"$secure_kudp_replay_budget\"",
 		"validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET \"$route_gso_session_error_budget\"",
+		"validate_number TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS \"$compat_min_sessions\"",
 		"--require-binary-identity",
+		"run_gate userspace \"$userspace_min_gbps\"",
+		"run_gate userspace-tc \"$userspace_tc_min_gbps\"",
+		"run_gate tc-direct \"$tc_direct_min_gbps\"",
+		"--require-transport-sessions-min \"${compat_min_sessions}\"",
 		"--require-transport-policy-stat encryption=secure",
 		"--require-transport-policy-stat crypto_placement=kernel",
 		"--require-transport-policy-stat datapath=tc_xdp",
@@ -639,6 +659,9 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"route_gso|dd_route_gso) printf 'dd-routegso\\n'",
 		"owdeb_route_gso) printf 'owdeb-routegso\\n'",
 		"owdeb_*) printf '%s-owdeb\\n' \"$base\"",
+		"userspace) append_case_token userspace_cases",
+		"userspace_tc) append_case_token userspace_tc_cases",
+		"tc_direct) append_case_token tc_direct_cases",
 		"full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\\n'",
 		"secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\\n'",
 		"route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\\n'",
@@ -653,12 +676,81 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"--require-transport-policy-stat\" \"profile=${profile}",
 		"--require-transport-policy-stat\" \"datapath=${datapath}",
 		"--require-transport-policy-stat\" \"crypto_placement=${placement}",
+		"if [[ \"$validation_scope\" == \"cross_host\" ]]; then",
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASES=${userspace_cases}",
+		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES=${userspace_tc_cases}",
+		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASES=${tc_direct_cases}",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-cross-host-transport-matrix.sh missing %q", want)
+		}
+	}
+}
+
+func TestCrossHostTransportMatrixCanRepresentCompatibilityCrossHostGates(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	summary := filepath.Join(workdir, "summary.jsonl")
+	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t0\t900\texplicit UDP userspace cross-host validation input",
+		"gre\tplaintext\tperformance\ttc_xdp\tuserspace\tcross_host\tuserspace_tc\t0\t900\texplicit GRE userspace-TC cross-host validation input",
+		"kernel_udp\tplaintext\tperformance\ttc_xdp\tuserspace\tcross_host\ttc_direct\t0\t900\texplicit kernel UDP TC-direct cross-host validation input",
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+defaults,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY="+summary,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run explicit compatibility matrix failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read dry-run summary: %v", err)
+	}
+	type row struct {
+		RunnerCase string `json:"runner_case"`
+		GateFamily string `json:"gate_family"`
+	}
+	got := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var decoded row
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Fatalf("decode dry-run summary row %q: %v", line, err)
+		}
+		got[decoded.RunnerCase+":"+decoded.GateFamily] = true
+	}
+	for _, want := range []string{
+		"userspace-udp-secure:userspace",
+		"tc-gre-plaintext:userspace_tc",
+		"tc-udp-plaintext:tc_direct",
+	} {
+		if !got[want] {
+			t.Fatalf("dry-run summary missing %s:\n%s", want, payload)
 		}
 	}
 }
