@@ -835,6 +835,60 @@ func TestCrossHostSoakVerifyRejectsModuleCounterAboveMaximum(t *testing.T) {
 	}
 }
 
+func TestCrossHostProductionGateAcceptsSecureKUDPRouteGSOArtifacts(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeSecureKUDPProductionGateArtifacts(t, dir, true)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=secure-kudp="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production gate rejected secure-kUDP route-GSO artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsSecureKUDPWithoutRouteGSO(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeSecureKUDPProductionGateArtifacts(t, dir, false)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=secure-kudp="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted secure-kUDP artifacts without route-GSO:\n%s", output)
+	}
+	if !strings.Contains(string(output), "tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc") {
+		t.Fatalf("production gate did not report missing secure route-GSO datapath stat:\n%s", output)
+	}
+}
+
+func requireProductionGateTools(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	output, err := exec.Command("bash", "--version").CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "GNU bash") {
+		t.Skip("GNU bash not available")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+}
+
+func productionGateCommand(t *testing.T, extraEnv ...string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command("bash", "linux-cross-host-production-gate.sh")
+	cmd.Dir = "."
+	verifier, err := filepath.Abs("linux-cross-host-soak-verify.py")
+	if err != nil {
+		t.Fatalf("resolve verifier path: %v", err)
+	}
+	cmd.Env = append(os.Environ(), "TRUSTIX_CROSS_HOST_GATE_VERIFIER="+filepath.ToSlash(verifier))
+	cmd.Env = append(cmd.Env, extraEnv...)
+	return cmd
+}
+
 func writeIperfJSON(t *testing.T, path string, sentBPS, receivedBPS, seconds float64) {
 	t.Helper()
 	payload := map[string]any{
@@ -1103,4 +1157,134 @@ func writeModuleParameters(t *testing.T, path string, modules map[string]map[str
 	if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
 		t.Fatalf("write module parameters: %v", err)
 	}
+}
+
+func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO bool) {
+	t.Helper()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 900.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 900.2)
+	writeResultMarker(t, dir)
+	for _, node := range []string{"a", "b"} {
+		base := filepath.Join(dir, "collect", node)
+		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
+		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "secure-kudp-sha")
+		writeSecureKUDPDatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO)
+		writeSecureKUDPTransportsJSON(t, filepath.Join(base, "transports.json"))
+		writeSecureKUDPModuleParameters(t, filepath.Join(base, "module-parameters.txt"))
+	}
+}
+
+func writeSecureKUDPDatapathJSON(t *testing.T, path string, routeGSO bool) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make secure-kudp datapath dir: %v", err)
+	}
+	routeGSOValue := 0
+	if routeGSO {
+		routeGSOValue = 1
+	}
+	payload := map[string]any{
+		"kernel_udp": map[string]any{
+			"kernel_crypto":    true,
+			"requested_crypto": "kernel",
+			"effective_crypto": "kernel",
+			"provider_stats": map[string]any{
+				"kernel_crypto_flow_map_ready":                         1,
+				"kernel_crypto_flow_map_entries":                       1,
+				"kernel_crypto_flow_map_updates":                       1,
+				"kernel_crypto_direct_slot_provider_ready":             1,
+				"kernel_crypto_direct_kfunc_fastpath_ready":            1,
+				"kernel_crypto_tc_direct_ready":                        1,
+				"tc_kernel_udp_tx_direct_only_enabled":                 1,
+				"tc_kernel_udp_tx_secure_direct_attached":              1,
+				"tc_kernel_udp_rx_secure_direct_attached":              1,
+				"tc_kernel_udp_tx_secure_direct_trust_inner_checksums": 1,
+				"tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled":    1,
+				"tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc":   routeGSOValue,
+				"tc_kernel_udp_rx_secure_direct_kfunc_open_enabled":    1,
+				"tc_kernel_udp_rx_secure_direct_skb_open_kfunc":        0,
+				"kernel_crypto_provider_unavailable_errors":            0,
+				"kernel_crypto_flow_rejects":                           0,
+				"kernel_crypto_frame_rejects":                          0,
+				"kernel_crypto_frame_seal_errors":                      0,
+				"kernel_crypto_frame_open_errors":                      0,
+				"kernel_crypto_frame_replay_drops":                     0,
+				"tc_kernel_udp_tx_secure_direct_encrypt_errors":        0,
+				"tc_kernel_udp_tx_secure_direct_sequence_errors":       0,
+				"tc_kernel_udp_tx_secure_direct_drops":                 0,
+				"tc_kernel_udp_rx_secure_direct_header_errors":         0,
+				"tc_kernel_udp_rx_secure_direct_decrypt_errors":        0,
+				"tc_kernel_udp_rx_secure_direct_replay_drops":          0,
+				"tc_kernel_udp_rx_secure_direct_drops":                 0,
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal secure-kudp datapath json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write secure-kudp datapath json: %v", err)
+	}
+}
+
+func writeSecureKUDPTransportsJSON(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make secure-kudp transports dir: %v", err)
+	}
+	payload := map[string]any{
+		"policy": map[string]any{
+			"encryption":            "secure",
+			"crypto_placement":      "kernel",
+			"datapath":              "tc_xdp",
+			"session_pool_size":     8,
+			"session_pool_strategy": "flow",
+			"session_pool_warmup":   true,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal secure-kudp transports json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write secure-kudp transports json: %v", err)
+	}
+}
+
+func writeSecureKUDPModuleParameters(t *testing.T, path string) {
+	t.Helper()
+	writeModuleParameters(t, path, map[string]map[string]string{
+		"trustix_crypto": {
+			"kfunc_simd_fastpath":         "1",
+			"kfunc_simd_irq_fpu_fastpath": "1",
+			"direct_kfunc_seal_calls":     "16",
+			"direct_kfunc_open_calls":     "16",
+			"direct_kfunc_errors":         "0",
+		},
+		"trustix_datapath_helpers": {
+			"route_tcp_gso_async_secure_seal_batch":                    "1",
+			"route_tcp_gso_async_stream_outer_gso_frames":              "8",
+			"route_tcp_gso_async_xmit_packets":                         "8",
+			"route_tcp_gso_async_flow_errors":                          "0",
+			"route_tcp_gso_async_plan_errors":                          "0",
+			"route_tcp_gso_async_mtu_errors":                           "0",
+			"route_tcp_gso_async_queue_full":                           "0",
+			"route_tcp_gso_async_queue_bytes_full":                     "0",
+			"route_tcp_gso_async_alloc_errors":                         "0",
+			"route_tcp_gso_async_clone_errors":                         "0",
+			"route_tcp_gso_async_segment_errors":                       "0",
+			"route_tcp_gso_async_prepare_errors":                       "0",
+			"route_tcp_gso_async_txq_stopped_drops":                    "0",
+			"route_tcp_gso_async_xmit_errors":                          "0",
+			"route_tcp_gso_async_stream_errors":                        "0",
+			"route_tcp_gso_async_stream_xmit_errors":                   "0",
+			"route_tcp_gso_async_stream_direct_errors":                 "0",
+			"route_tcp_gso_async_stream_outer_gso_errors":              "0",
+			"route_tcp_gso_async_stream_outer_gso_blocked":             "0",
+			"route_tcp_gso_async_stream_outer_gso_verify_errors":       "0",
+			"route_tcp_gso_async_stream_cross_item_errors":             "0",
+			"route_tcp_gso_async_stream_cross_item_tail_stitch_errors": "0",
+		},
+	})
 }
