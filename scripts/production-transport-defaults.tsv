@@ -20,8 +20,10 @@ gre	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	baselin
 gre	plaintext	performance	tc_xdp	userspace	cross_host	userspace_tc	4	900	selected plaintext GRE tunnel compatibility path
 ipip	secure	stable	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline secure IPIP tunnel offload
 ipip	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline plaintext IPIP tunnel offload
+ipip	plaintext	performance	tc_xdp	userspace	cross_host	userspace_tc	4	900	selected plaintext IPIP tunnel compatibility path
 vxlan	secure	stable	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline secure VXLAN tunnel offload
 vxlan	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline plaintext VXLAN tunnel offload
+vxlan	plaintext	performance	tc_xdp	userspace	cross_host	userspace_tc	4	900	selected plaintext VXLAN tunnel compatibility path
 kernel_udp	plaintext	performance	tc_xdp	userspace	single_host	tc_direct	0	30	TC-only plaintext UDP provider smoke path
 kernel_udp	plaintext	performance	tc_xdp	userspace	cross_host	tc_direct	3	900	selected plaintext kernel UDP TC-direct compatibility path
 kernel_udp	secure	performance	tc_xdp	kernel	cross_host	secure_kudp	1.5	900	selected secure kernel UDP route-GSO path

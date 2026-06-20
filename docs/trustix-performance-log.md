@@ -80,6 +80,28 @@ The runner also aligns the default session pool size to that tunnel-specific
 parallelism unless `TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE` was explicitly set.
 Do not promote GRE P8; it remains negative evidence for dirty iperf artifacts.
 
+### Zaozhuang PVE IPIP/VXLAN P4 900s strict gates
+
+The same Debian 13 VM200/VM201 pair and P4 tunnel default were used for IPIP
+and VXLAN after the GRE pass. Both runs used the same binary identity as the
+GRE P4 gate.
+
+| Case | Artifact | Duration per direction | Minimum received | Gate | Result |
+| --- | --- | ---: | ---: | ---: | --- |
+| IPIP plaintext userspace-TC | `/tmp/trustix-pve-compat-20260620-065444/results/ipip-p4-900-20260620-075840` | 900s | 4.798065 Gbps | 4 Gbps | pass |
+| VXLAN plaintext userspace-TC | `/tmp/trustix-pve-compat-20260620-065444/results/vxlan-p4-900-20260620-082923` | 900s | 4.786384 Gbps | 4 Gbps | pass |
+
+Both selected userspace-TC gates required matching binary identity,
+`session_dial_errors=0`, `session_heartbeat_timeouts=0`, and eight observed
+transport sessions. The IPIP run measured 4.798065 Gbps A to B and
+5.080735 Gbps B to A. The VXLAN run measured 4.786384 Gbps A to B and
+5.368512 Gbps B to A. All four client/server iperf JSON artifacts per run were
+clean, and the verifier reported no suspicious kernel-log findings.
+
+Conclusion: plaintext GRE/IPIP/VXLAN userspace-TC tunnel transports are now
+selected only at P4 for cross-host production compatibility. Secure tunnel
+variants remain unpromoted until they get the same strict cross-host evidence.
+
 ### OpenWrt 24.10.2 full-kmod production gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
