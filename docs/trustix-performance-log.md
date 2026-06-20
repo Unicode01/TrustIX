@@ -1726,3 +1726,45 @@ stable and modules remained loaded, but API/iperf calls timed out under
 TCP+UDP pressure. Treat this as evidence that the default-off hook removes the
 known hard-lock trigger, not as evidence that the mixed-transport performance
 profile is tuned.
+
+### 2026-06-21 Zaozhuang PVE userspace gap 900s strict gates
+
+Validation: on 2026-06-20/21, completed the missing Debian-to-Debian
+cross-host userspace compatibility gates on the Zaozhuang PVE host. The run
+used VM200 `trustix-userspace-a` (`10.203.3.200`) and VM201
+`trustix-userspace-b` (`10.203.3.201`) on isolated `vmbr3`.
+
+Environment:
+
+| Field | Value |
+| --- | --- |
+| OS matrix | Debian GNU/Linux 13 to Debian GNU/Linux 13 |
+| Kernel matrix | `6.12.57+deb13-cloud-amd64` to `6.12.57+deb13-cloud-amd64` |
+| TrustIX binary | `version=trustix-linux-amd64`, `commit=6cf9ae3-userspace-matrix`, `built_at=2026-06-20T11:50:03Z` |
+| Binary SHA256 | `93e0aa6bb4481965f118fd03d975be1fd65844a62d94822df14274d8f68dbff5` |
+| Runroot | `/tmp/trustix-userspace-matrix-20260620-1948/results/userspace-gap-900-20260620-202254` |
+
+The matrix ran with `TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=1`.
+The selected userspace production gate passed. Each promoted case had matching
+binary identity on both peers, 16 active transport sessions per peer, zero
+`session_dial_errors`, zero `session_heartbeat_timeouts`, and no verifier
+kernel-log crash findings.
+
+| Case | Gate | 900s minimum received throughput |
+| --- | ---: | ---: |
+| `udp` / `plaintext` / `stable` / `userspace` | 1.5 Gbps | 1.994069 Gbps |
+| `tcp` / `secure` / `stable` / `userspace` | 0.75 Gbps | 0.874594 Gbps |
+| `quic` / `secure` / `stable` / `userspace` | 0.75 Gbps | 1.052465 Gbps |
+| `quic` / `plaintext` / `stable` / `userspace` | 1.0 Gbps | 1.392558 Gbps |
+| `websocket` / `secure` / `stable` / `userspace` | 0.5 Gbps | 0.817087 Gbps |
+| `websocket` / `plaintext` / `stable` / `userspace` | 1.0 Gbps | 1.176969 Gbps |
+| `http_connect` / `secure` / `stable` / `userspace` | 0.75 Gbps | 0.874190 Gbps |
+| `http_connect` / `plaintext` / `stable` / `userspace` | 1.0 Gbps | 1.349766 Gbps |
+| `experimental_tcp` / `secure` / `stable` / `userspace` | 1.0 Gbps | 1.495637 Gbps |
+
+The earlier 60s smoke run also included `experimental_tcp` plaintext userspace,
+but that row is intentionally not promoted: it reported a near-zero reverse
+throughput sample around `0.000209 Gbps` and
+`session_heartbeat_timeouts=13`. Keep plaintext experimental TCP on the
+separate route-GSO production gate unless a fresh strict long run proves the
+plain userspace mode.

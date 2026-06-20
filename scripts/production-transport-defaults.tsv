@@ -4,17 +4,25 @@
 udp	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted UDP compatibility path
 udp	secure	stable	userspace	userspace	cross_host	userspace	1.5	900	selected encrypted UDP userspace compatibility path
 udp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext UDP compatibility path
+udp	plaintext	stable	userspace	userspace	cross_host	userspace	1.5	900	selected plaintext UDP userspace compatibility path
 udp	plaintext	performance	kernel_module	userspace	cross_host	full_kmod	3	900	selected UDP plaintext full-kmod datapath
 udp	plaintext	performance	kernel_module	userspace	cross_host	owdeb_full_kmod	3	900	selected OpenWrt-Debian UDP plaintext full-kmod datapath
 tcp	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted TCP compatibility path
+tcp	secure	stable	userspace	userspace	cross_host	userspace	0.75	900	selected encrypted TCP userspace compatibility path
 tcp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext TCP compatibility path
 tcp	plaintext	stable	userspace	userspace	cross_host	userspace	1	900	selected plaintext TCP userspace compatibility path
 quic	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted QUIC compatibility path
+quic	secure	stable	userspace	userspace	cross_host	userspace	0.75	900	selected encrypted QUIC userspace compatibility path
 quic	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext QUIC compatibility path
+quic	plaintext	stable	userspace	userspace	cross_host	userspace	1	900	selected plaintext QUIC userspace compatibility path
 websocket	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted WebSocket compatibility path
+websocket	secure	stable	userspace	userspace	cross_host	userspace	0.5	900	selected encrypted WebSocket userspace compatibility path
 websocket	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext WebSocket compatibility path
+websocket	plaintext	stable	userspace	userspace	cross_host	userspace	1	900	selected plaintext WebSocket userspace compatibility path
 http_connect	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted HTTP CONNECT compatibility path
+http_connect	secure	stable	userspace	userspace	cross_host	userspace	0.75	900	selected encrypted HTTP CONNECT userspace compatibility path
 http_connect	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext HTTP CONNECT compatibility path
+http_connect	plaintext	stable	userspace	userspace	cross_host	userspace	1	900	selected plaintext HTTP CONNECT userspace compatibility path
 gre	secure	stable	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline secure GRE tunnel offload
 gre	secure	stable	tc_xdp	userspace	cross_host	userspace_tc	1	900	selected secure GRE tunnel compatibility path
 gre	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline plaintext GRE tunnel offload
@@ -31,5 +39,6 @@ kernel_udp	plaintext	performance	tc_xdp	userspace	single_host	tc_direct	0	30	TC-
 kernel_udp	plaintext	performance	tc_xdp	userspace	cross_host	tc_direct	3	900	selected plaintext kernel UDP TC-direct compatibility path
 kernel_udp	secure	performance	tc_xdp	kernel	cross_host	secure_kudp	1.5	900	selected secure kernel UDP route-GSO path
 experimental_tcp	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted experimental TCP compatibility path
+experimental_tcp	secure	stable	userspace	userspace	cross_host	userspace	1	900	selected encrypted experimental TCP userspace compatibility path
 experimental_tcp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext experimental TCP compatibility path
 experimental_tcp	plaintext	performance	kernel_module	userspace	cross_host	route_gso	2.5	900	selected plaintext experimental TCP route-GSO path
