@@ -46,18 +46,17 @@ now install for kernel module builds when dependency installation is enabled.
 
 ## Current validation snapshot
 
-The latest PVE compatibility audit was run on 2026-06-19 and 2026-06-20
-against current source and selected production transport defaults. It covered
-Debian 13 `6.12.90+deb13.1-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`, and
-OpenWrt 24.10.2 x86_64 `6.6.93` guests with disposable PVE VM IDs 200+.
+The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20, and
+2026-06-21 against current source and selected production transport defaults.
+They covered Debian 13 `6.12.90+deb13.1-amd64`, OpenWrt 23.05.5 x86_64
+`5.15.167`, OpenWrt 24.10.2 x86_64 `6.6.93`, and OpenWrt 24.10.7 x86_64
+`6.6.141` guests with disposable PVE VM IDs 200+.
 The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
 the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
-OpenWrt 24.10.7 x86_64 `6.6.141` has since passed an SDK module build and a
-30s OpenWrt-to-Debian full-kmod smoke, but still requires a 900s production
-gate before it replaces the existing OpenWrt 24.10.2 production evidence.
-OpenWrt 24.10.7 route-GSO and secure-kUDP route-GSO both failed closed at the
-runtime capability gate because the tested image did not expose usable
-route-TCP kfunc capability.
+OpenWrt 24.10.7 x86_64 has since passed an SDK module build and a 900s
+OpenWrt-to-Debian full-kmod production gate. OpenWrt 24.10.7 route-GSO and
+secure-kUDP route-GSO both failed closed at the runtime capability gate because
+the tested image did not expose usable route-TCP kfunc capability.
 
 Generic Linux Kbuild on Ubuntu 22.04.5:
 
@@ -141,11 +140,20 @@ kernel path remains UDP plaintext full-kmod.
 The 2026-06-21 OpenWrt 24.10.7 follow-up used VM201 OpenWrt x86_64 kernel
 `6.6.141` and VM200 Debian 13 `6.12.90+deb13.1-cloud-amd64` on the same PVE
 host with isolated `vmbr3`. The OpenWrt 24.10.7 SDK build passed with
-`crypto=full,datapath=full,helpers=full`; the datapath module SHA256 was
-`005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce`.
-A 30s bidirectional full-kmod smoke passed with minimum received throughput of
-3.340066 Gbps, clean session counters, and no TrustIX kernel crash signatures.
-This is a function smoke, not a production promotion. The same guest still had
+`crypto=full,datapath=full,helpers=full`; the OpenWrt module SHA256 values
+were `f8be71eddc0bc09f38b0499a7dba81cfffb9a9e47f202e595358778aea2e2b88`
+for `trustix_crypto.ko`,
+`005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce` for
+`trustix_datapath.ko`, and
+`450e91c29b8d825788bf58291582a967a39b6eaa590d6b33eb39c8adcf12e773` for
+`trustix_datapath_helpers.ko`.
+The 900s bidirectional full-kmod production gate passed with minimum received
+throughput of 3.276205 Gbps against a 3 Gbps gate. The gate required matching
+binary and build identity, full plaintext provider status, RX worker injection,
+eight session records/wires, nonzero GSO/cached-destination counters, and zero
+covered RX/TX/module error counters. Kernel log scans on both guests found no
+panic, Oops, BUG, call trace, page fault, watchdog, lockup, hung-task,
+`tx_queue_len`, or TrustIX datapath crash signature. The same guest still had
 no `/sys/kernel/btf/vmlinux`, and both secure-kUDP route-GSO and experimental
 TCP route-GSO failed closed before traffic with missing `route_tcp_kfunc` and
 `route_tcp_xmit_kfunc`. The selected OpenWrt production kernel path therefore
@@ -163,9 +171,10 @@ OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 
 Older performance-log runs also covered a wider OpenWrt compile matrix, but the
 table above is the current-source spot check. Runtime full-kmod coverage now
-includes OpenWrt 23.05.5 and 24.10.2 x86_64 with matching SDK-built modules;
-OpenWrt 24.10.7 has smoke-level full-kmod coverage and route-GSO fail-closed
-coverage, but not a 900s production full-kmod gate.
+includes OpenWrt 23.05.5, 24.10.2, and 24.10.7 x86_64 with matching SDK-built
+modules. OpenWrt 24.10.7 also has route-GSO fail-closed coverage, but no
+OpenWrt route-GSO production default is selected until a tested OpenWrt kernel
+exposes usable route-TCP kfunc capability.
 
 OpenWrt `23.05.5 x86_64` runtime status was promoted after a cross-host PVE
 stress run on 2026-06-16. OpenWrt kernel `5.15.167` loaded an OpenWrt SDK-built

@@ -14,19 +14,21 @@ the default compile matrix. The download base order still prefers China mirrors
 first (`mirrors.tuna.tsinghua.edu.cn`, `mirrors.ustc.edu.cn`,
 `mirrors.aliyun.com`) and falls back to `downloads.openwrt.org`.
 
-Boundary: this is a compile-matrix default refresh only. It does not promote
-OpenWrt 24.10.7 or 25.12.4 route-GSO, secure-kUDP route-GSO, or full-kmod
-runtime support until those exact guests pass the runtime capability and
-cross-host soak gates on PVE.
+Boundary: this section is a compile-matrix default refresh only. The OpenWrt
+24.10.7 full-kmod runtime promotion is recorded in the production gate below.
+OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and OpenWrt 25.12.4 runtime
+support remain unpromoted until those exact guests pass the runtime capability
+and cross-host soak gates on PVE.
 
 ### OpenWrt 24.10.7 runtime capability check
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
 VM200 Debian 13 (`10.203.3.200`) and VM201 OpenWrt 24.10.7 x86_64
 (`10.203.3.201`) on isolated `vmbr3`. VM100 and all 1xx guests were not
-modified. The validation binary was built from `cbd5e2a` with build time
-`2026-06-20T17:10:20Z`; both guests used binary SHA256
-`e3ad56171e75c845acd978a67c2e030d55810eec6eddb5947e60789f34caf45a`.
+modified. The 900s full-kmod production gate binary was built from
+`b1e248cf17d8` with build time `2026-06-20T18:02:14Z`; both guests used
+binary SHA256
+`48a632b1da27e8d1ce8aefb40d7a84738efb2490ad0e08314cb1e5f36c0ad3b3`.
 
 OpenWrt 24.10.7 x86_64 uses kernel `6.6.141` and does not expose
 `/sys/kernel/btf/vmlinux` in the tested official image. The OpenWrt SDK build
@@ -41,22 +43,36 @@ OpenWrt SDK module hashes used on VM201:
 | `trustix_datapath.ko` | `005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce` |
 | `trustix_datapath_helpers.ko` | `450e91c29b8d825788bf58291582a967a39b6eaa590d6b33eb39c8adcf12e773` |
 
+Debian module hashes used on VM200:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `05a77f254f08009f0ffd36eb768d65f2e7e257b064d0bad44ae38f75dad9104d` |
+| `trustix_datapath.ko` | `052ee848af32f95012abf93c369ff0a1b1ebf5cedb4ef6122ed88f751a00d208` |
+| `trustix_datapath_helpers.ko` | `5bfb65a89948e1f31b0d36917898ec36577c4cc8933069613fe8efc5192e3f6d` |
+
 Runtime checks:
 
 | Case | Artifact | Duration | Minimum received | Result |
 | --- | --- | ---: | ---: | --- |
-| OpenWrt 24.10.7 to Debian full plaintext kmod smoke | `/root/trustix-owrt-runtime-20260621/results/owdeb-fullkmod-30-20260621-014015` | 30s | 3.340066 Gbps | pass |
+| OpenWrt 24.10.7 to Debian full plaintext kmod production gate | `/root/trustix-owrt24107-soak-20260621/results/owdeb-fullkmod-900-20260621-021812` | 900s | 3.276205 Gbps | pass |
 | OpenWrt 24.10.7 secure-kUDP route-GSO | `/root/trustix-owrt-runtime-20260621/results/owdeb-secure-kudp-routegso-30-20260621-014916` | startup gate | 0 | fail-closed |
 | OpenWrt 24.10.7 experimental TCP route-GSO | `/root/trustix-owrt-runtime-20260621/results/owdeb-routegso-30-20260621-014848` | startup gate | 0 | fail-closed |
 
-The full-kmod smoke required full plaintext provider status, RX worker
-injection, session pool size 8, zero session dial/heartbeat errors, and zero
-covered RX/TX/module error counters; it is not a 900s production promotion.
+The full-kmod production gate ran P8 in both directions. It required matching
+binary/build identity, full plaintext provider status, RX worker injection,
+session pool size 8, eight session records/wires, nonzero plaintext outer-GSO,
+RX-worker GSO xmit, and cached-destination counters, plus zero covered
+RX/TX/module error counters and zero session dial or heartbeat errors. A to B
+received `3.276205 Gbps`; B to A received `4.813018 Gbps`. Post-run boot IDs
+stayed stable and kernel-log scans found no panic, Oops, BUG, call trace, page
+fault, watchdog, lockup, hung-task, `tx_queue_len`, or TrustIX datapath crash
+signature.
+
 Both route-GSO cases loaded the OpenWrt helper module but failed closed before
-traffic with missing `route_tcp_kfunc` and `route_tcp_xmit_kfunc`. Post-run
-boot IDs stayed stable, TrustIX modules were unloaded, and kernel-log scans
-found no panic, Oops, BUG, call trace, page fault, watchdog, lockup, or
-TrustIX datapath crash signature.
+traffic with missing `route_tcp_kfunc` and `route_tcp_xmit_kfunc`. They remain
+runtime capability failures, so OpenWrt 24.10.7 secure-kUDP route-GSO and
+experimental TCP route-GSO are still not production defaults.
 
 ## 2026-06-20
 
