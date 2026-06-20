@@ -315,6 +315,35 @@ func TestCrossHostProductionDefaultsHavePassingEvidence(t *testing.T) {
 	}
 }
 
+func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
+	const (
+		wantOSMatrix     = "openwrt24.10.7-debian13"
+		wantKernelMatrix = "6.6.141_to_6.12.90+deb13.1-cloud-amd64"
+		minGbps          = 3.0
+		minSeconds       = 900
+	)
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		if evidence.GateFamily != "owdeb_full_kmod" ||
+			evidence.OSMatrix != wantOSMatrix ||
+			evidence.KernelMatrix != wantKernelMatrix {
+			continue
+		}
+		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid OpenWrt full-kmod evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+		}
+		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid OpenWrt full-kmod evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+		}
+		if evidence.Result == "pass" && evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
+			return
+		}
+		t.Fatalf("current OpenWrt full-kmod evidence is below production gate: %+v", evidence)
+	}
+	t.Fatalf("missing current OpenWrt full-kmod production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
+}
+
 func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing.T) {
 	defaults := readProductionTransportDefaults(t)
 	for _, wantCase := range []string{

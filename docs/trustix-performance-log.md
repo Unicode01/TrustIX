@@ -74,6 +74,40 @@ traffic with missing `route_tcp_kfunc` and `route_tcp_xmit_kfunc`. They remain
 runtime capability failures, so OpenWrt 24.10.7 secure-kUDP route-GSO and
 experimental TCP route-GSO are still not production defaults.
 
+### Debian route-GSO current-head production recheck
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-dd-routegso-a` (`10.203.3.200`) and VM201
+`trustix-dd-routegso-b` (`10.203.3.201`) on isolated `vmbr3`. VM100 and all
+1xx guests were not modified. Both guests were Debian 13 on
+`6.12.90+deb13.1-amd64`.
+
+The validation binary was built from
+`2366d99167457bf18de7e98a5d5e6e9af3fa55b2` with build time
+`2026-06-20T19:06:43Z`; both guests used binary SHA256
+`824219f63e7de7924208f36bc2b090362b64f68f80cd140df0bedfcde675799c`.
+The rebuilt `trustix_datapath_helpers.ko` SHA256 was
+`a6d4d492ca62e6c3c5798095e14c894d1bb14cafa1c3aceb67e73f6170432b24`.
+
+Artifact:
+`/root/trustix-routegso-recheck-20260621/results/dd-routegso-900-20260621-030950`.
+The 900s bidirectional route-GSO production gate passed against the 2.5 Gbps
+gate. Minimum received throughput was `2.653735 Gbps`; minimum sent throughput
+was `2.653610 Gbps`; minimum duration was `899.915125s` and was accepted by
+the existing 1s gate slop. Directional received throughput was `2.739697 Gbps`
+for A to B and `2.653735 Gbps` for B to A.
+
+The gate required matching binary/build identity, session pool size 8, route
+TCP/GSO async kfunc datapath stats, nonzero helper xmit and outer-GSO counters,
+and zero covered route-GSO helper error counters. A reported
+`route_tcp_gso_async_stream_outer_gso_frames=231918555` and
+`route_tcp_gso_async_xmit_packets=10026827`; B reported
+`route_tcp_gso_async_stream_outer_gso_frames=224633796` and
+`route_tcp_gso_async_xmit_packets=9671277`. Boot IDs stayed stable
+(`1507fd25-0a23-42fd-9dc3-7f3f186445c9` and
+`8067ce14-3116-4340-b356-9bf26bb5e304`), and the production verifier reported
+no kernel log crash findings.
+
 ## 2026-06-20
 
 ### Zaozhuang PVE compatibility 900s strict gate

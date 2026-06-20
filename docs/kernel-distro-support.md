@@ -107,6 +107,13 @@ Debian:
 | Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.744620 Gbps | 1.5 Gbps |
 | Route-GSO fallback | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 2.696084 Gbps | 2.5 Gbps |
 
+A 2026-06-21 current-head Debian-to-Debian route-GSO recheck on
+`6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
+`2366d99167457bf18de7e98a5d5e6e9af3fa55b2`, minimum received throughput was
+2.653735 Gbps against the 2.5 Gbps gate, route-GSO outer-GSO and xmit counters
+were nonzero on both peers, the covered helper error counters were zero, and
+the production verifier reported no kernel log crash findings.
+
 The same audit passed OpenWrt-to-Debian full-kmod plaintext for 900s with a
 minimum received throughput of 3.495550 Gbps against a 3 Gbps gate. Final boot
 ID checks were stable and kernel log scans found no panic, Oops, BUG, call
