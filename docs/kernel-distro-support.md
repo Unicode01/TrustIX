@@ -116,6 +116,14 @@ MAC, and RX-worker GSO xmit counters were nonzero, covered RX/TX/module error
 counters were zero, and the production verifier reported no kernel log crash
 findings.
 
+A 2026-06-21 current-head Debian-to-Debian TC-direct recheck on
+`6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
+`a3805571d930`, minimum received throughput was 3.915829 Gbps against the
+3 Gbps gate, both peers reported `kernel_udp.provider=tc_direct`,
+`kernel_udp.fast_path=true`, `kernel_udp.direct_only=true`, and eight active
+kernel UDP flows, no TrustIX kernel modules were loaded, and the production
+verifier reported no kernel log crash findings.
+
 A 2026-06-21 current-head Debian-to-Debian route-GSO recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
 `2366d99167457bf18de7e98a5d5e6e9af3fa55b2`, minimum received throughput was

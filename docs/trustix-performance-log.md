@@ -188,6 +188,36 @@ Boot IDs stayed stable (`4aa53388-32a8-4653-86f6-6b738a2758d7` and
 `88cbad84-d4a9-4e36-8c8d-52bbb5dee9a9`), and the production verifier reported
 no kernel log crash findings.
 
+### Debian TC-direct current-head production recheck
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-tcdirect-a` (`10.203.3.200`) and VM201
+`trustix-tcdirect-b` (`10.203.3.201`) on isolated `vmbr3`. VM100 and all
+1xx guests were not modified. Both guests were Debian 13 on
+`6.12.90+deb13.1-amd64`.
+
+The validation binary was built from `a3805571d930` with build time
+`2026-06-20T21:31:53Z`; both guests used binary SHA256
+`cda15e252f1614eb4a0d3d0cff6dfa01c1c88f99ceba64dbcb5080c51af7972a`.
+The build used embedded eBPF objects and `--build-ko 0`; no TrustIX kernel
+modules were loaded for this TC-direct gate.
+
+The temporary PVE run directory was cleaned after the evidence below was
+captured. The 900s bidirectional plaintext kernel-UDP TC-direct production
+gate passed against the 3 Gbps gate. Minimum received throughput was
+`3.915829 Gbps`; minimum sent throughput was `3.915923 Gbps`; minimum duration
+was `899.9934s` and was accepted by the existing 2s gate slop. Directional
+received throughput was `3.915829 Gbps` for A to B and `3.989502 Gbps` for B
+to A.
+
+The gate required matching binary/build identity, `kernel_udp.provider` equal
+to `tc_direct`, `kernel_udp.fast_path=true`, `kernel_udp.direct_only=true`,
+eight active kernel UDP flows on both peers, and zero session dial or heartbeat
+errors. Both peers reported `kernel_udp.active_flows=8`. Boot IDs stayed stable
+(`76900af4-5f3c-4a93-8bcb-d75204a2ca19` and
+`88cb8da9-e75c-4a02-8c34-b7ab9eb4c63c`), and the production verifier reported
+no kernel log crash findings.
+
 ## 2026-06-20
 
 ### Zaozhuang PVE compatibility 900s strict gate
