@@ -100,7 +100,54 @@ clean, and the verifier reported no suspicious kernel-log findings.
 
 Conclusion: plaintext GRE/IPIP/VXLAN userspace-TC tunnel transports are now
 selected only at P4 for cross-host production compatibility. Secure tunnel
-variants remain unpromoted until they get the same strict cross-host evidence.
+variants were evaluated separately below after the userspace-encrypted TIXB
+batch cap fix.
+
+### Zaozhuang PVE secure tunnel userspace-TC 900s strict gates
+
+Secure GRE/IPIP/VXLAN userspace-TC was slow because fragmenting native tunnel
+sessions let the daemon aggregate many inner packets into a large TIXB payload,
+then userspace crypto sealed that as one large datagram. With the old uncapped
+path, secure GRE flushed TIXB payloads up to about 261 KiB and throughput fell
+to about 0.10 Gbps. The fix caps userspace-encrypted TIXB flushes at 32 KiB by
+default while preserving `TRUSTIX_DATA_SESSION_USERSPACE_ENCRYPTED_BATCH_BYTES=0`
+as an explicit diagnostic escape hatch.
+
+The cap sweep showed the failure mode and the chosen default:
+
+| Userspace-encrypted cap | Secure GRE minimum received | Notes |
+| ---: | ---: | --- |
+| 8 KiB | 1.0587 Gbps | stable but lower throughput |
+| 16 KiB | 1.3500 Gbps | stable |
+| 32 KiB | 1.3633 Gbps | selected default |
+| 64 KiB | 1.4271 Gbps | effectively clamped to 32 KiB by code max |
+| disabled / 0 | 0.0964 Gbps | max TIXB flush about 261 KiB |
+
+The 60s smoke pass then covered all three secure tunnel transports with the
+new default cap: GRE 1.428362 Gbps, IPIP 1.446944 Gbps, and VXLAN
+1.441394 Gbps minimum received.
+
+Strict 900s gate artifact:
+`/tmp/trustix-pve-secure-tunnels-20260620-090838/results/secure-tunnel-defaultcap-900-20260620-180155`.
+The validation binary was `trustix-linux-amd64` built as
+`8061c62-secure-batchcap` at `2026-06-20T09:52:49Z`; both guests used SHA256
+`e4c5e1fe89f3a52bd18bdcbb1a89fe6da12a3d097b1938105e609c782a8158fd`.
+
+| Case | Duration per direction | A to B received | B to A received | Minimum received | Max TIXB flush | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| GRE secure userspace-TC | 900s | 1.498232 Gbps | 1.467427 Gbps | 1.467427 Gbps | 32,524 bytes | pass |
+| IPIP secure userspace-TC | 900s | 1.557929 Gbps | 1.555312 Gbps | 1.555312 Gbps | 32,471 bytes | pass |
+| VXLAN secure userspace-TC | 900s | 1.472346 Gbps | 1.452177 Gbps | 1.452177 Gbps | 32,476 bytes | pass |
+
+All three runs required matching binary identity, zero `session_dial_errors`,
+zero `session_heartbeat_timeouts`, observed transport sessions, and clean
+client/server iperf JSON. Final kernel-log scans across VM200 and VM201 found
+no panic, Oops, BUG, call trace, page fault, watchdog, lockup, `tx_queue_len`,
+or TrustIX datapath crash signatures.
+
+Conclusion: secure GRE/IPIP/VXLAN userspace-TC are now selected as stable
+cross-host compatibility defaults at a 1 Gbps / 900s gate. The plaintext tunnel
+performance defaults remain the separate P4 / 4 Gbps gates above.
 
 ### OpenWrt 24.10.2 full-kmod production gate
 

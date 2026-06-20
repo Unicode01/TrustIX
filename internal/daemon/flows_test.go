@@ -5163,23 +5163,30 @@ func TestSendDataSessionPacketsAggregatesUserspaceEncryptedExperimentalTCPByDefa
 }
 
 func TestDataSessionBatchMaxBytesCapsUserspaceEncryptedAggregationWhenConfigured(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_USERSPACE_ENCRYPTED_BATCH_BYTES", "")
 	session := &recordingSession{stats: transport.TransportStats{
 		Encrypted:       true,
 		CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
 		Datagram:        true,
 		MaxPacketSize:   65535,
 	}}
-	if got := dataSessionBatchMaxBytesForSession(262144, session); got != 65535 {
-		t.Fatalf("default userspace encrypted batch max bytes = %d, want datagram cap 65535", got)
+	if got := dataSessionBatchMaxBytesForSession(262144, session); got != dataSessionUserspaceEncryptedBatchDefaultBytes {
+		t.Fatalf("default userspace encrypted batch max bytes = %d, want %d", got, dataSessionUserspaceEncryptedBatchDefaultBytes)
 	}
 
 	t.Setenv("TRUSTIX_DATA_SESSION_USERSPACE_ENCRYPTED_BATCH_BYTES", "16384")
 	if got := dataSessionBatchMaxBytesForSession(262144, session); got != 16384 {
 		t.Fatalf("configured userspace encrypted batch max bytes = %d, want 16384", got)
 	}
+
+	t.Setenv("TRUSTIX_DATA_SESSION_USERSPACE_ENCRYPTED_BATCH_BYTES", "0")
+	if got := dataSessionBatchMaxBytesForSession(262144, session); got != 65535 {
+		t.Fatalf("disabled userspace encrypted batch cap = %d, want datagram cap 65535", got)
+	}
 }
 
-func TestDataSessionBatchMaxBytesAllowsFragmentingDatagramLogicalBatches(t *testing.T) {
+func TestDataSessionBatchMaxBytesCapsUserspaceEncryptedFragmentingDatagramByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_USERSPACE_ENCRYPTED_BATCH_BYTES", "")
 	session := &recordingSession{stats: transport.TransportStats{
 		Encrypted:           true,
 		CryptoPlacement:     string(dataplane.CryptoPlacementUserspace),
@@ -5187,8 +5194,24 @@ func TestDataSessionBatchMaxBytesAllowsFragmentingDatagramLogicalBatches(t *test
 		FragmentingDatagram: true,
 		MaxPacketSize:       1400,
 	}}
+	if got := dataSessionBatchMaxBytesForSession(262144, session); got != dataSessionUserspaceEncryptedBatchDefaultBytes {
+		t.Fatalf("userspace encrypted fragmenting datagram batch max bytes = %d, want %d", got, dataSessionUserspaceEncryptedBatchDefaultBytes)
+	}
+
+	t.Setenv("TRUSTIX_DATA_SESSION_USERSPACE_ENCRYPTED_BATCH_BYTES", "0")
 	if got := dataSessionBatchMaxBytesForSession(262144, session); got != 262144 {
-		t.Fatalf("fragmenting datagram batch max bytes = %d, want logical batch size", got)
+		t.Fatalf("disabled userspace encrypted fragmenting datagram batch cap = %d, want logical batch size", got)
+	}
+}
+
+func TestDataSessionBatchMaxBytesAllowsPlaintextFragmentingDatagramLogicalBatches(t *testing.T) {
+	session := &recordingSession{stats: transport.TransportStats{
+		Datagram:            true,
+		FragmentingDatagram: true,
+		MaxPacketSize:       1400,
+	}}
+	if got := dataSessionBatchMaxBytesForSession(262144, session); got != 262144 {
+		t.Fatalf("plaintext fragmenting datagram batch max bytes = %d, want logical batch size", got)
 	}
 }
 

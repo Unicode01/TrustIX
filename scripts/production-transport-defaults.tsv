@@ -16,12 +16,15 @@ websocket	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseli
 http_connect	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted HTTP CONNECT compatibility path
 http_connect	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext HTTP CONNECT compatibility path
 gre	secure	stable	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline secure GRE tunnel offload
+gre	secure	stable	tc_xdp	userspace	cross_host	userspace_tc	1	900	selected secure GRE tunnel compatibility path
 gre	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline plaintext GRE tunnel offload
 gre	plaintext	performance	tc_xdp	userspace	cross_host	userspace_tc	4	900	selected plaintext GRE tunnel compatibility path
 ipip	secure	stable	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline secure IPIP tunnel offload
+ipip	secure	stable	tc_xdp	userspace	cross_host	userspace_tc	1	900	selected secure IPIP tunnel compatibility path
 ipip	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline plaintext IPIP tunnel offload
 ipip	plaintext	performance	tc_xdp	userspace	cross_host	userspace_tc	4	900	selected plaintext IPIP tunnel compatibility path
 vxlan	secure	stable	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline secure VXLAN tunnel offload
+vxlan	secure	stable	tc_xdp	userspace	cross_host	userspace_tc	1	900	selected secure VXLAN tunnel compatibility path
 vxlan	plaintext	performance	tc_xdp	userspace	single_host	userspace_tc	0	30	baseline plaintext VXLAN tunnel offload
 vxlan	plaintext	performance	tc_xdp	userspace	cross_host	userspace_tc	4	900	selected plaintext VXLAN tunnel compatibility path
 kernel_udp	plaintext	performance	tc_xdp	userspace	single_host	tc_direct	0	30	TC-only plaintext UDP provider smoke path

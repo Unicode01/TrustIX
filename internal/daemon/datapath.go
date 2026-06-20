@@ -48,8 +48,8 @@ const dataSessionBatchItemHeaderLen = 2
 const dataSessionBatchPayloadRetainMax = 512 * 1024
 const dataSessionKernelCryptoBatchMaxBytes = 256 * 1024
 const dataSessionKernelCryptoBatchDefaultBytes = dataSessionKernelCryptoBatchMaxBytes
-const dataSessionUserspaceEncryptedBatchDefaultBytes = 0
 const dataSessionUserspaceEncryptedBatchMaxBytes = 32 * 1024
+const dataSessionUserspaceEncryptedBatchDefaultBytes = dataSessionUserspaceEncryptedBatchMaxBytes
 const captureForwarderDefaultBatch = 1024
 const captureForwarderDefaultBatchDelay = 0
 const dataSessionReceiveDefaultBatch = 256
@@ -1614,6 +1614,10 @@ func dataSessionUserspaceEncryptedBatchBytes() int {
 	value := strings.TrimSpace(os.Getenv("TRUSTIX_DATA_SESSION_USERSPACE_ENCRYPTED_BATCH_BYTES"))
 	if value == "" {
 		return dataSessionUserspaceEncryptedBatchDefaultBytes
+	}
+	switch strings.ToLower(value) {
+	case "0", "false", "no", "off", "disabled", "none":
+		return 0
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 1500 {
