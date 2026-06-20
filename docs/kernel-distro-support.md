@@ -50,6 +50,10 @@ The latest PVE compatibility audit was run on 2026-06-19 and 2026-06-20
 against current source and selected production transport defaults. It covered
 Debian 13 `6.12.90+deb13.1-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`, and
 OpenWrt 24.10.2 x86_64 `6.6.93` guests with disposable PVE VM IDs 200+.
+The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
+the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`, but
+those newer OpenWrt runtime targets still require PVE load/function and
+cross-host soak evidence before their kernel paths can be promoted.
 
 Generic Linux Kbuild on Ubuntu 22.04.5:
 

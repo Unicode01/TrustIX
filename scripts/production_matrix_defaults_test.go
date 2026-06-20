@@ -922,6 +922,44 @@ func TestProductionDefaultsDoNotPromoteOpenWrtRouteGSOWithoutRuntimeEvidence(t *
 	}
 }
 
+func TestOpenWrtKmodMatrixTracksCurrentStablePatchReleases(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join(".", "openwrt-full-datapath-kmod-matrix.sh"))
+	if err != nil {
+		t.Fatalf("read openwrt-full-datapath-kmod-matrix.sh: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases",
+		"https://mirrors.ustc.edu.cn/openwrt/releases",
+		"https://mirrors.aliyun.com/openwrt/releases",
+		"https://downloads.openwrt.org/releases",
+		"21.02.7-x86_64|21.02.7|x86/64",
+		"22.03.7-x86_64|22.03.7|x86/64",
+		"23.05.6-x86_64|23.05.6|x86/64",
+		"23.05.6-arm64|23.05.6|armsr/armv8",
+		"24.10.7-x86_64|24.10.7|x86/64",
+		"24.10.7-arm64|24.10.7|armsr/armv8",
+		"25.12.4-x86_64|25.12.4|x86/64",
+		"25.12.4-arm64|25.12.4|armsr/armv8",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("openwrt-full-datapath-kmod-matrix.sh missing %q", want)
+		}
+	}
+	for _, stale := range []string{
+		"23.05.5-x86_64|23.05.5|x86/64",
+		"23.05.5-arm64|23.05.5|armsr/armv8",
+		"24.10.2-x86_64|24.10.2|x86/64",
+		"24.10.2-arm64|24.10.2|armsr/armv8",
+		"25.12.1-x86_64|25.12.1|x86/64",
+		"25.12.1-arm64|25.12.1|armsr/armv8",
+	} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("openwrt-full-datapath-kmod-matrix.sh still defaults stale release %q", stale)
+		}
+	}
+}
+
 func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join(".", "linux-cross-host-soak-runner.sh"))
 	if err != nil {

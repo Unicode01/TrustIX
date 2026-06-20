@@ -2,6 +2,23 @@
 
 This file records datapath performance findings and script changes so future runs do not depend on chat context.
 
+## 2026-06-21
+
+### OpenWrt SDK matrix current stable defaults
+
+Change: `scripts/openwrt-full-datapath-kmod-matrix.sh` now defaults its SDK
+compile matrix to the current stable OpenWrt patch releases available from the
+official release index on 2026-06-21: `23.05.6`, `24.10.7`, and `25.12.4`.
+The older long-tail compatibility rows for `21.02.7` and `22.03.7` remain in
+the default compile matrix. The download base order still prefers China mirrors
+first (`mirrors.tuna.tsinghua.edu.cn`, `mirrors.ustc.edu.cn`,
+`mirrors.aliyun.com`) and falls back to `downloads.openwrt.org`.
+
+Boundary: this is a compile-matrix default refresh only. It does not promote
+OpenWrt 24.10.7 or 25.12.4 route-GSO, secure-kUDP route-GSO, or full-kmod
+runtime support until those exact guests pass the runtime capability and
+cross-host soak gates on PVE.
+
 ## 2026-06-20
 
 ### Zaozhuang PVE compatibility 900s strict gate
