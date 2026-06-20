@@ -19,6 +19,45 @@ OpenWrt 24.10.7 or 25.12.4 route-GSO, secure-kUDP route-GSO, or full-kmod
 runtime support until those exact guests pass the runtime capability and
 cross-host soak gates on PVE.
 
+### OpenWrt 24.10.7 runtime capability check
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 Debian 13 (`10.203.3.200`) and VM201 OpenWrt 24.10.7 x86_64
+(`10.203.3.201`) on isolated `vmbr3`. VM100 and all 1xx guests were not
+modified. The validation binary was built from `cbd5e2a` with build time
+`2026-06-20T17:10:20Z`; both guests used binary SHA256
+`e3ad56171e75c845acd978a67c2e030d55810eec6eddb5947e60789f34caf45a`.
+
+OpenWrt 24.10.7 x86_64 uses kernel `6.6.141` and does not expose
+`/sys/kernel/btf/vmlinux` in the tested official image. The OpenWrt SDK build
+for `24.10.7-x86_64` passed with `crypto=full`, `datapath=full`, and
+`helpers=full`.
+
+OpenWrt SDK module hashes used on VM201:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `f8be71eddc0bc09f38b0499a7dba81cfffb9a9e47f202e595358778aea2e2b88` |
+| `trustix_datapath.ko` | `005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce` |
+| `trustix_datapath_helpers.ko` | `450e91c29b8d825788bf58291582a967a39b6eaa590d6b33eb39c8adcf12e773` |
+
+Runtime checks:
+
+| Case | Artifact | Duration | Minimum received | Result |
+| --- | --- | ---: | ---: | --- |
+| OpenWrt 24.10.7 to Debian full plaintext kmod smoke | `/root/trustix-owrt-runtime-20260621/results/owdeb-fullkmod-30-20260621-014015` | 30s | 3.340066 Gbps | pass |
+| OpenWrt 24.10.7 secure-kUDP route-GSO | `/root/trustix-owrt-runtime-20260621/results/owdeb-secure-kudp-routegso-30-20260621-014916` | startup gate | 0 | fail-closed |
+| OpenWrt 24.10.7 experimental TCP route-GSO | `/root/trustix-owrt-runtime-20260621/results/owdeb-routegso-30-20260621-014848` | startup gate | 0 | fail-closed |
+
+The full-kmod smoke required full plaintext provider status, RX worker
+injection, session pool size 8, zero session dial/heartbeat errors, and zero
+covered RX/TX/module error counters; it is not a 900s production promotion.
+Both route-GSO cases loaded the OpenWrt helper module but failed closed before
+traffic with missing `route_tcp_kfunc` and `route_tcp_xmit_kfunc`. Post-run
+boot IDs stayed stable, TrustIX modules were unloaded, and kernel-log scans
+found no panic, Oops, BUG, call trace, page fault, watchdog, lockup, or
+TrustIX datapath crash signature.
+
 ## 2026-06-20
 
 ### Zaozhuang PVE compatibility 900s strict gate

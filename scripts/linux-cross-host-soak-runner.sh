@@ -37,6 +37,8 @@ full_kmod_datapath_path="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PATH:-embedded}
 full_kmod_datapath_path_a="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PATH_A:-$full_kmod_datapath_path}"
 full_kmod_datapath_path_b="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PATH_B:-$full_kmod_datapath_path}"
 route_gso_helpers_path="${TRUSTIX_CROSS_HOST_ROUTE_GSO_HELPERS_PATH:-embedded}"
+route_gso_helpers_path_a="${TRUSTIX_CROSS_HOST_ROUTE_GSO_HELPERS_PATH_A:-$route_gso_helpers_path}"
+route_gso_helpers_path_b="${TRUSTIX_CROSS_HOST_ROUTE_GSO_HELPERS_PATH_B:-$route_gso_helpers_path}"
 secure_kudp_crypto_path="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PATH:-embedded}"
 secure_kudp_crypto_path_a="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PATH_A:-$secure_kudp_crypto_path}"
 secure_kudp_crypto_path_b="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PATH_B:-$secure_kudp_crypto_path}"
@@ -650,6 +652,8 @@ EOF
       ;;
     route_gso)
       local params="${TRUSTIX_CROSS_HOST_ROUTE_GSO_HELPER_PARAMETERS:-}"
+      local path
+      path="$(node_value "$node" "$route_gso_helpers_path_a" "$route_gso_helpers_path_b")"
       cat <<'EOF'
 kernel_modules:
   capability_profile: performance
@@ -662,7 +666,7 @@ kernel_modules:
     reload_on_upgrade: always
     unload_on_exit: true
 EOF
-      printf '    path: %s\n' "$(yaml_single_quote "$route_gso_helpers_path")"
+      printf '    path: %s\n' "$(yaml_single_quote "$path")"
       if [[ -n "$params" ]]; then
         printf '    parameters: %s\n' "$(yaml_single_quote "$params")"
       fi
