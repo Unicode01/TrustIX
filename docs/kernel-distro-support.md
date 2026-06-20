@@ -114,6 +114,16 @@ A 2026-06-21 current-head Debian-to-Debian route-GSO recheck on
 were nonzero on both peers, the covered helper error counters were zero, and
 the production verifier reported no kernel log crash findings.
 
+A 2026-06-21 current-head Debian-to-Debian secure-kUDP recheck on
+`6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
+`ad28f0cc80205f119e32a6bc3fe4958ec144b7c1`, minimum received throughput was
+1.613567 Gbps against the 1.5 Gbps gate, TC secure direct and route-GSO kfunc
+stats were active on both peers, crypto module seal/open counters were
+nonzero, helper route-GSO xmit counters were nonzero, and the production
+verifier reported no kernel log crash findings. The run did observe two
+bounded direct-kfunc/decrypt errors on one peer and bounded replay/drop noise,
+both within the secure-kUDP production gate budget.
+
 The same audit passed OpenWrt-to-Debian full-kmod plaintext for 900s with a
 minimum received throughput of 3.495550 Gbps against a 3 Gbps gate. Final boot
 ID checks were stable and kernel log scans found no panic, Oops, BUG, call

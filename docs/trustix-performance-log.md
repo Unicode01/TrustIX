@@ -108,6 +108,48 @@ and zero covered route-GSO helper error counters. A reported
 `8067ce14-3116-4340-b356-9bf26bb5e304`), and the production verifier reported
 no kernel log crash findings.
 
+### Debian secure-kUDP current-head production recheck
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-secure-a` (`10.203.3.200`) and VM201 `trustix-secure-b`
+(`10.203.3.201`) on isolated `vmbr3`. VM100 and all 1xx guests were not
+modified. Both guests were Debian 13 on `6.12.90+deb13.1-amd64`.
+
+The validation binary was built from
+`ad28f0cc80205f119e32a6bc3fe4958ec144b7c1` with build time
+`2026-06-20T19:54:33Z`; both guests used binary SHA256
+`a5f51410d2de1d26f3033724168b5075cedac78f44cedabf7a1d4cd795434ba0`.
+The guest-built `trustix_crypto.ko` SHA256 was
+`13493b1fd70e2559dc491646e5f1a642f3a2cb01941d05ed38548f97a26c4613`;
+the guest-built `trustix_datapath_helpers.ko` SHA256 was
+`a6d4d492ca62e6c3c5798095e14c894d1bb14cafa1c3aceb67e73f6170432b24`.
+
+The temporary PVE run directory was cleaned after the evidence below was
+captured. The 900s bidirectional secure-kUDP production gate passed against the
+1.5 Gbps gate. Minimum received throughput was `1.613567 Gbps`; minimum sent
+throughput was `1.613684 Gbps`; minimum duration was `899.988124s` and was
+accepted by the existing 1s gate slop. Directional received throughput was
+`1.613567 Gbps` for A to B and `1.730863 Gbps` for B to A.
+
+The gate required matching binary/build identity, kernel crypto placement,
+kernel crypto flow-map readiness, TC secure direct TX/RX attachment, route-GSO
+kfunc use, nonzero crypto module direct kfunc seal/open calls, and nonzero
+helper route-GSO xmit packets. Both peers reported
+`kernel_crypto_flow_map_entries=6`, `kernel_crypto_flow_map_updates=6`, and
+`tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc=1`. A reported
+`direct_kfunc_seal_calls=165829351`,
+`direct_kfunc_open_calls=174303580`,
+`route_tcp_gso_async_xmit_packets=138450599`, and zero direct kfunc errors. B
+reported `direct_kfunc_seal_calls=174324455`,
+`direct_kfunc_open_calls=165810494`,
+`route_tcp_gso_async_xmit_packets=148552009`, and two direct kfunc/decrypt
+errors. The bounded replay/drop counters were `1875` on A and `1749` on B;
+covered helper route-GSO error counters stayed at zero.
+
+Boot IDs stayed stable (`47545a6a-ea20-4db2-b768-9a46142b82d2` and
+`126c23d8-fe3f-4fdb-aa8a-51cf364dc87f`), and the production verifier reported
+no kernel log crash findings.
+
 ## 2026-06-20
 
 ### Zaozhuang PVE compatibility 900s strict gate
