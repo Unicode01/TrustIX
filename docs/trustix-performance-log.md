@@ -150,6 +150,44 @@ Boot IDs stayed stable (`47545a6a-ea20-4db2-b768-9a46142b82d2` and
 `126c23d8-fe3f-4fdb-aa8a-51cf364dc87f`), and the production verifier reported
 no kernel log crash findings.
 
+### Debian full-kmod current-head production recheck
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-full-a` (`10.203.3.200`) and VM201 `trustix-full-b`
+(`10.203.3.201`) on isolated `vmbr3`. VM100 and all 1xx guests were not
+modified. Both guests were Debian 13 on `6.12.90+deb13.1-amd64`.
+
+The validation binary was built from
+`5155854d5077af628c776d586d5b735e4447b123` with build time
+`2026-06-20T20:41:54Z`; both guests used binary SHA256
+`4bab706b9b14bfaac36ef24780929d7b9c71bf377c0e18231eea0cc8d8b839e2`.
+The guest-built `trustix_datapath.ko` SHA256 was
+`7f4f39e5c6e1c403fad5c33f5993711e4929a892ead22158e1f700a5c846f1b8`.
+
+The temporary PVE run directory was cleaned after the evidence below was
+captured. The 900s bidirectional full-kmod production gate passed against the
+3 Gbps gate. Minimum received throughput was `3.550158 Gbps`; minimum sent
+throughput was `3.550447 Gbps`; minimum duration was `900.007095s`.
+Directional received throughput was `3.639226 Gbps` for A to B and
+`3.550158 Gbps` for B to A.
+
+The gate required matching binary/build identity, the full plaintext datapath
+provider, RX worker injection, session pool size 8, eight session records and
+wire records, nonzero plaintext outer-GSO segments, nonzero cached destination
+MAC hits, nonzero RX-worker GSO xmit segments, and zero covered RX/TX/module
+error counters. A reported `rx_worker_injected=305034692`,
+`tx_plaintext_outer_gso_segments=293271045`,
+`tx_plaintext_direct_xmit_dst_mac_cache_hits=30904174`, and
+`rx_worker_gso_xmit_segments=294207416`. B reported
+`rx_worker_injected=312124062`,
+`tx_plaintext_outer_gso_segments=286096505`,
+`tx_plaintext_direct_xmit_dst_mac_cache_hits=30734603`, and
+`rx_worker_gso_xmit_segments=301570332`.
+
+Boot IDs stayed stable (`4aa53388-32a8-4653-86f6-6b738a2758d7` and
+`88cbad84-d4a9-4e36-8c8d-52bbb5dee9a9`), and the production verifier reported
+no kernel log crash findings.
+
 ## 2026-06-20
 
 ### Zaozhuang PVE compatibility 900s strict gate
