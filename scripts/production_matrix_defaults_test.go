@@ -1218,6 +1218,8 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--min-iperf-interval-gbps-ratio \"$min_interval_gbps_ratio\"",
 		"--require-binary-identity",
 		"--require-stable-boot-id",
+		"--require-uname-artifacts",
+		"--min-uname-nodes 2",
 		"--require-iperf-pair-directions",
 		"--require-kernel-log-artifacts",
 		"--min-kernel-log-nodes 2",
@@ -1512,6 +1514,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	gotMinKernelLogNodes := map[string]string{}
 	gotRequireIdentity := map[string]bool{}
 	gotRequireStableBootID := map[string]bool{}
+	gotRequireUname := map[string]bool{}
+	gotMinUnameNodes := map[string]string{}
 	gotRequirePairDirections := map[string]bool{}
 	gotRequireKernelLogs := map[string]bool{}
 	gotArgs := map[string][]string{}
@@ -1539,6 +1543,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				minIperfIntervals = args[i+1]
 			case "--min-iperf-interval-gbps-ratio":
 				minIntervalGbpsRatio = args[i+1]
+			case "--min-uname-nodes":
+				gotMinUnameNodes[caseName] = args[i+1]
 			case "--min-kernel-log-nodes":
 				minKernelLogNodes = args[i+1]
 			}
@@ -1552,6 +1558,12 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		for _, arg := range args {
 			if arg == "--require-stable-boot-id" {
 				requireStableBootID = true
+			}
+		}
+		requireUname := false
+		for _, arg := range args {
+			if arg == "--require-uname-artifacts" {
+				requireUname = true
 			}
 		}
 		requirePairDirections := false
@@ -1574,6 +1586,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			gotMinKernelLogNodes[caseName] = minKernelLogNodes
 			gotRequireIdentity[caseName] = requireIdentity
 			gotRequireStableBootID[caseName] = requireStableBootID
+			gotRequireUname[caseName] = requireUname
 			gotRequirePairDirections[caseName] = requirePairDirections
 			gotRequireKernelLogs[caseName] = requireKernelLogs
 			gotArgs[caseName] = args
@@ -1605,6 +1618,12 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if !gotRequireStableBootID[name] {
 			t.Fatalf("case %s did not force --require-stable-boot-id; calls=%s", name, payload)
+		}
+		if !gotRequireUname[name] {
+			t.Fatalf("case %s did not force --require-uname-artifacts; calls=%s", name, payload)
+		}
+		if gotMinUnameNodes[name] != "2" {
+			t.Fatalf("case %s min uname nodes got %q want 2; calls=%s", name, gotMinUnameNodes[name], payload)
 		}
 		if !gotRequirePairDirections[name] {
 			t.Fatalf("case %s did not force --require-iperf-pair-directions; calls=%s", name, payload)

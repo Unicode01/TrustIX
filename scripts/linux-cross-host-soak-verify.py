@@ -152,6 +152,17 @@ def parse_args() -> argparse.Namespace:
         help="minimum distinct nodes with usable kernel/dmesg log artifacts when --require-kernel-log-artifacts is set",
     )
     parser.add_argument(
+        "--require-uname-artifacts",
+        action="store_true",
+        help="require collected uname-before/after artifacts for each case",
+    )
+    parser.add_argument(
+        "--min-uname-nodes",
+        type=int,
+        default=2,
+        help="minimum distinct nodes with matching before/after uname artifacts when --require-uname-artifacts is set",
+    )
+    parser.add_argument(
         "--require-build-identity",
         action="store_true",
         help="require at least two collected status.json build blocks and verify they match",
@@ -695,6 +706,95 @@ def validate_stable_boot_ids(
     return rows, errors
 
 
+def uname_kernel_release(value: str) -> str:
+    fields = value.split()
+    if len(fields) >= 3 and fields[0] == "Linux":
+        return fields[2]
+    return ""
+
+
+def collect_uname_artifacts(case_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    pattern = re.compile(r"^uname-([A-Za-z0-9_.-]+)[.]txt$")
+    for path in sorted(case_dir.rglob("uname-*.txt")):
+        match = pattern.match(path.name)
+        if not match:
+            continue
+        try:
+            value = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            value = ""
+        rows.append(
+            {
+                "source": str(path.relative_to(case_dir)),
+                "node": transport_node_key(path, case_dir),
+                "phase": match.group(1),
+                "uname": value,
+                "kernel_release": uname_kernel_release(value),
+            }
+        )
+    return rows
+
+
+def validate_uname_artifacts(
+    case_dir: Path,
+    *,
+    required: bool,
+    min_nodes: int,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    rows = collect_uname_artifacts(case_dir)
+    errors: list[str] = []
+    if not required:
+        nodes = sorted({str(row["node"]) for row in rows if row.get("kernel_release")})
+        return rows, errors, nodes
+
+    by_node: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in rows:
+        node = str(row["node"])
+        phase = str(row["phase"])
+        by_node.setdefault(node, {}).setdefault(phase, []).append(row)
+        if not str(row.get("uname") or ""):
+            errors.append(f"{row['source']}: empty uname artifact")
+        elif not row.get("kernel_release"):
+            errors.append(f"{row['source']}: invalid Linux uname artifact {row['uname']!r}")
+
+    complete_nodes: set[str] = set()
+    for node, phases in sorted(by_node.items()):
+        before_releases = {
+            str(row.get("kernel_release") or "")
+            for row in phases.get("before", [])
+            if row.get("kernel_release")
+        }
+        after_releases = {
+            str(row.get("kernel_release") or "")
+            for row in phases.get("after", [])
+            if row.get("kernel_release")
+        }
+        if before_releases and after_releases:
+            complete_nodes.add(node)
+        if len(before_releases) > 1:
+            errors.append(f"{node}: multiple before kernel releases: {sorted(before_releases)}")
+        if len(after_releases) > 1:
+            errors.append(f"{node}: multiple after kernel releases: {sorted(after_releases)}")
+        if not before_releases:
+            errors.append(f"{node}: missing before uname artifact")
+            continue
+        if not after_releases:
+            errors.append(f"{node}: missing after uname artifact")
+            continue
+        if before_releases != after_releases:
+            errors.append(
+                f"{node}: kernel release changed before={sorted(before_releases)} "
+                f"after={sorted(after_releases)}"
+            )
+    if len(complete_nodes) < min_nodes:
+        errors.append(
+            f"found matching before/after uname artifacts for {len(complete_nodes)} nodes, "
+            f"want >= {min_nodes}"
+        )
+    return rows, errors, sorted(complete_nodes)
+
+
 def identity_key(identity: dict[str, Any], fields: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(str(identity.get(field) or "") for field in fields)
 
@@ -1086,6 +1186,8 @@ def validate_case(
     require_kernel_log_artifacts: bool,
     min_kernel_log_artifacts: int,
     min_kernel_log_nodes: int,
+    require_uname_artifacts: bool,
+    min_uname_nodes: int,
     require_build_identity: bool,
     require_strong_build_identity: bool,
     require_binary_identity: bool,
@@ -1285,6 +1387,12 @@ def validate_case(
         required=require_stable_boot_id,
     )
     errors.extend(boot_id_errors)
+    uname_artifacts, uname_errors, uname_nodes = validate_uname_artifacts(
+        case.path,
+        required=require_uname_artifacts,
+        min_nodes=min_uname_nodes,
+    )
+    errors.extend(uname_errors)
 
     status_stat_results, status_stat_errors, status_json_count = validate_status_stats(
         case.path,
@@ -1356,6 +1464,8 @@ def validate_case(
         "build_identities": build_identities,
         "binary_identities": binary_identities,
         "boot_ids": boot_ids,
+        "uname_artifacts": uname_artifacts,
+        "uname_nodes": uname_nodes,
         "status_json_count": status_json_count,
         "status_stats": status_stat_results,
         "datapath_json_count": datapath_json_count,
@@ -1394,6 +1504,8 @@ def main() -> int:
         raise SystemExit("--min-kernel-log-artifacts must be non-negative")
     if args.min_kernel_log_nodes < 0:
         raise SystemExit("--min-kernel-log-nodes must be non-negative")
+    if args.min_uname_nodes < 0:
+        raise SystemExit("--min-uname-nodes must be non-negative")
     required_status_stats = parse_required_datapath_stats(args.require_status_stat)
     required_status_minima = parse_required_numeric_limits(
         args.require_status_min,
@@ -1490,6 +1602,8 @@ def main() -> int:
             require_kernel_log_artifacts=args.require_kernel_log_artifacts,
             min_kernel_log_artifacts=args.min_kernel_log_artifacts,
             min_kernel_log_nodes=args.min_kernel_log_nodes,
+            require_uname_artifacts=args.require_uname_artifacts,
+            min_uname_nodes=args.min_uname_nodes,
             require_build_identity=args.require_build_identity,
             require_strong_build_identity=args.require_strong_build_identity,
             require_binary_identity=args.require_binary_identity,

@@ -584,6 +584,69 @@ func TestCrossHostSoakVerifyRejectsChangedBootID(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRequiresUnameArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-uname-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing uname artifacts:\n%s", output)
+	}
+	if !strings.Contains(string(output), "uname artifacts") {
+		t.Fatalf("verify output did not report missing uname coverage:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyAcceptsStableUnameArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeStableUnames(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-uname-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected stable uname artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsChangedKernelRelease(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeStableUnames(t, dir)
+	writeTextFile(t, filepath.Join(dir, "a", "uname-after.txt"), "Linux ix-a 6.6.141 #1 SMP x86_64 GNU/Linux\n")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-uname-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted changed kernel release:\n%s", output)
+	}
+	if !strings.Contains(string(output), "kernel release changed") {
+		t.Fatalf("verify output did not report changed kernel release:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyChecksRequiredDatapathStats(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -1534,6 +1597,15 @@ func writeStableBootIDs(t *testing.T, dir string) {
 	}
 }
 
+func writeStableUnames(t *testing.T, dir string) {
+	t.Helper()
+	for _, node := range []string{"a", "b"} {
+		value := "Linux ix-" + node + " 6.12.90+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux\n"
+		writeTextFile(t, filepath.Join(dir, node, "uname-before.txt"), value)
+		writeTextFile(t, filepath.Join(dir, node, "uname-after.txt"), value)
+	}
+}
+
 func writeDatapathJSON(t *testing.T, path string, fullPlaintextProvider int) {
 	t.Helper()
 	writeDatapathJSONWithRX(t, path, fullPlaintextProvider, 0)
@@ -1646,6 +1718,7 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 3.3e9, 3.2e9, 900.2, 900, 0.8)
 	writeResultMarker(t, dir)
 	writeStableBootIDs(t, dir)
+	writeStableUnames(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
@@ -1711,6 +1784,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 900.2, 900, 0.8)
 	writeResultMarker(t, dir)
 	writeStableBootIDs(t, dir)
+	writeStableUnames(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
@@ -1847,6 +1921,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 2.8e9, 2.7e9, 900.2, 900, 0.8)
 	writeResultMarker(t, dir)
 	writeStableBootIDs(t, dir)
+	writeStableUnames(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
