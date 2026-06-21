@@ -1635,6 +1635,9 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN:-0",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0 is only allowed with DRY_RUN=1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0 is only allowed for dry-run or non-production scopes",
+		"selected production gate cannot represent",
+		"selected_gate_unmapped_case_count",
+		"selected_gate_case_count",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS",
 		"validation_scope",
@@ -1693,6 +1696,57 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-cross-host-transport-matrix.sh missing %q", want)
 		}
+	}
+}
+
+func TestCrossHostTransportMatrixRejectsUnmappedProductionGateFamily(t *testing.T) {
+	bash := requireBashAndPython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	runner := filepath.Join(workdir, "runner.sh")
+	verifier := filepath.Join(workdir, "verifier.py")
+	productionGate := filepath.Join(workdir, "production-gate.sh")
+	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tcustom\t0.5\t900\tcustom cross-host diagnostic must not pass production gate",
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	if err := os.WriteFile(runner, []byte(strings.Join([]string{
+		"#!/usr/bin/env bash",
+		"set -e",
+		"mkdir -p \"$TRUSTIX_CROSS_HOST_WORKDIR\"",
+		"",
+	}, "\n")), 0o755); err != nil {
+		t.Fatalf("write runner stub: %v", err)
+	}
+	if err := os.WriteFile(verifier, []byte("import sys\nsys.exit(0)\n"), 0o755); err != nil {
+		t.Fatalf("write verifier stub: %v", err)
+	}
+	if err := os.WriteFile(productionGate, []byte("#!/usr/bin/env bash\nexit 99\n"), 0o755); err != nil {
+		t.Fatalf("write production gate stub: %v", err)
+	}
+
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+slashPath(defaults),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+slashPath(filepath.Join(workdir, "matrix")),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_RUNNER="+slashPath(runner),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFIER="+slashPath(verifier),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_PRODUCTION_GATE="+slashPath(productionGate),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=1",
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("matrix unexpectedly accepted custom cross-host case as production:\n%s", output)
+	}
+	if !strings.Contains(string(output), "selected production gate cannot represent") {
+		t.Fatalf("matrix output did not report unmapped production gate family:\n%s", output)
 	}
 }
 

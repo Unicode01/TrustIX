@@ -181,34 +181,45 @@ validate_case_values() {
 
 append_selected_gate_case() {
   local gate_family="$1" name="$2" dir="$3" min_gbps="$4" min_seconds="$5"
-  local gate_class
+  local gate_class appended=0
   gate_class="$(gate_family_class "$gate_family")"
   case "$gate_class" in
     userspace)
       append_case_token userspace_cases "${name}=${dir}"
       append_case_token userspace_case_min_gbps "${name}=${min_gbps}"
+      appended=1
       ;;
     userspace_tc)
       append_case_token userspace_tc_cases "${name}=${dir}"
       append_case_token userspace_tc_case_min_gbps "${name}=${min_gbps}"
+      appended=1
       ;;
     tc_direct)
       append_case_token tc_direct_cases "${name}=${dir}"
       append_case_token tc_direct_case_min_gbps "${name}=${min_gbps}"
+      appended=1
       ;;
     full_kmod)
       append_case_token full_kmod_cases "${name}=${dir}"
       append_case_token full_kmod_case_min_gbps "${name}=${min_gbps}"
+      appended=1
       ;;
     secure_kudp)
       append_case_token secure_kudp_cases "${name}=${dir}"
       append_case_token secure_kudp_case_min_gbps "${name}=${min_gbps}"
+      appended=1
       ;;
     route_gso)
       append_case_token route_gso_cases "${name}=${dir}"
       append_case_token route_gso_case_min_gbps "${name}=${min_gbps}"
+      appended=1
       ;;
   esac
+  if [[ "$appended" -eq 1 ]]; then
+    selected_gate_case_count=$((selected_gate_case_count + 1))
+  else
+    selected_gate_unmapped_case_count=$((selected_gate_unmapped_case_count + 1))
+  fi
   selected_gate_min_seconds="$(max_integer "$selected_gate_min_seconds" "$min_seconds")"
 }
 
@@ -343,7 +354,13 @@ run_selected_gate() {
     gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}")
     gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=${route_gso_case_min_gbps}")
   fi
+  if [[ "$selected_gate_unmapped_case_count" -gt 0 ]]; then
+    die "selected production gate cannot represent ${selected_gate_unmapped_case_count} cross-host case(s); use a production gate family in ${defaults_file} instead of custom cases"
+  fi
   if [[ "${#gate_env[@]}" -eq 0 ]]; then
+    if [[ "$selected_gate_min_seconds" -gt 0 ]]; then
+      die "selected production gate has no mapped cross-host cases"
+    fi
     return 0
   fi
   if [[ "$selected_gate_min_seconds" -gt 0 ]]; then
@@ -415,5 +432,7 @@ full_kmod_case_min_gbps=""
 secure_kudp_case_min_gbps=""
 route_gso_case_min_gbps=""
 selected_gate_min_seconds=0
+selected_gate_case_count=0
+selected_gate_unmapped_case_count=0
 
 main "$@"
