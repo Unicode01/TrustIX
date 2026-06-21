@@ -712,6 +712,69 @@ func TestCrossHostSoakVerifyRejectsChangedKernelRelease(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRequiresOSReleaseArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-os-release-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing os-release artifacts:\n%s", output)
+	}
+	if !strings.Contains(string(output), "os-release artifacts") {
+		t.Fatalf("verify output did not report missing os-release coverage:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyAcceptsStableOSReleaseArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeStableOSReleases(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-os-release-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected stable os-release artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsChangedOSRelease(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeStableOSReleases(t, dir)
+	writeTextFile(t, filepath.Join(dir, "a", "os-release-after.txt"), "NAME=\"OpenWrt\"\nID=openwrt\nVERSION_ID=\"24.10.2\"\n")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-os-release-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted changed os-release:\n%s", output)
+	}
+	if !strings.Contains(string(output), "os-release changed") {
+		t.Fatalf("verify output did not report changed os-release:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyChecksRequiredDatapathStats(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -1691,6 +1754,15 @@ func writeStableUnames(t *testing.T, dir string) {
 	}
 }
 
+func writeStableOSReleases(t *testing.T, dir string) {
+	t.Helper()
+	for _, node := range []string{"a", "b"} {
+		value := "PRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nNAME=\"Debian GNU/Linux\"\nID=debian\nVERSION_ID=\"13\"\n"
+		writeTextFile(t, filepath.Join(dir, node, "os-release-before.txt"), value)
+		writeTextFile(t, filepath.Join(dir, node, "os-release-after.txt"), value)
+	}
+}
+
 func writeDatapathJSON(t *testing.T, path string, fullPlaintextProvider int) {
 	t.Helper()
 	writeDatapathJSONWithRX(t, path, fullPlaintextProvider, 0)
@@ -1805,6 +1877,7 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 	writeRunTiming(t, dir, 1000, 1901, 900)
 	writeStableBootIDs(t, dir)
 	writeStableUnames(t, dir)
+	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
@@ -1872,6 +1945,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 	writeRunTiming(t, dir, 1000, 1901, 900)
 	writeStableBootIDs(t, dir)
 	writeStableUnames(t, dir)
+	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
@@ -2010,6 +2084,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 	writeRunTiming(t, dir, 1000, 1901, 900)
 	writeStableBootIDs(t, dir)
 	writeStableUnames(t, dir)
+	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)

@@ -168,6 +168,17 @@ def parse_args() -> argparse.Namespace:
         help="minimum distinct nodes with matching before/after uname artifacts when --require-uname-artifacts is set",
     )
     parser.add_argument(
+        "--require-os-release-artifacts",
+        action="store_true",
+        help="require collected os-release-before/after artifacts for each case",
+    )
+    parser.add_argument(
+        "--min-os-release-nodes",
+        type=int,
+        default=2,
+        help="minimum distinct nodes with matching before/after os-release artifacts when --require-os-release-artifacts is set",
+    )
+    parser.add_argument(
         "--require-build-identity",
         action="store_true",
         help="require at least two collected status.json build blocks and verify they match",
@@ -856,6 +867,116 @@ def validate_uname_artifacts(
     return rows, errors, sorted(complete_nodes)
 
 
+def parse_os_release_text(value: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for line in value.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw = line.split("=", 1)
+        key = key.strip()
+        raw = raw.strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+            raw = raw[1:-1]
+        if key:
+            parsed[key] = raw
+    return parsed
+
+
+def os_release_identity(parsed: dict[str, str]) -> str:
+    os_id = parsed.get("ID", "").strip()
+    version_id = parsed.get("VERSION_ID", "").strip()
+    if not os_id or not version_id or os_id == "unknown" or version_id == "unknown":
+        return ""
+    return f"{os_id}:{version_id}"
+
+
+def collect_os_release_artifacts(case_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    pattern = re.compile(r"^os-release-([A-Za-z0-9_.-]+)[.]txt$")
+    for path in sorted(case_dir.rglob("os-release-*.txt")):
+        match = pattern.match(path.name)
+        if not match:
+            continue
+        try:
+            value = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            value = ""
+        parsed = parse_os_release_text(value)
+        rows.append(
+            {
+                "source": str(path.relative_to(case_dir)),
+                "node": transport_node_key(path, case_dir),
+                "phase": match.group(1),
+                "id": parsed.get("ID", ""),
+                "version_id": parsed.get("VERSION_ID", ""),
+                "pretty_name": parsed.get("PRETTY_NAME", parsed.get("NAME", "")),
+                "identity": os_release_identity(parsed),
+            }
+        )
+    return rows
+
+
+def validate_os_release_artifacts(
+    case_dir: Path,
+    *,
+    required: bool,
+    min_nodes: int,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    rows = collect_os_release_artifacts(case_dir)
+    errors: list[str] = []
+    if not required:
+        nodes = sorted({str(row["node"]) for row in rows if row.get("identity")})
+        return rows, errors, nodes
+
+    by_node: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in rows:
+        node = str(row["node"])
+        phase = str(row["phase"])
+        by_node.setdefault(node, {}).setdefault(phase, []).append(row)
+        if not row.get("identity"):
+            errors.append(
+                f"{row['source']}: invalid os-release artifact "
+                f"ID={row.get('id')!r} VERSION_ID={row.get('version_id')!r}"
+            )
+
+    complete_nodes: set[str] = set()
+    for node, phases in sorted(by_node.items()):
+        before_identities = {
+            str(row.get("identity") or "")
+            for row in phases.get("before", [])
+            if row.get("identity")
+        }
+        after_identities = {
+            str(row.get("identity") or "")
+            for row in phases.get("after", [])
+            if row.get("identity")
+        }
+        if before_identities and after_identities:
+            complete_nodes.add(node)
+        if len(before_identities) > 1:
+            errors.append(f"{node}: multiple before os-release identities: {sorted(before_identities)}")
+        if len(after_identities) > 1:
+            errors.append(f"{node}: multiple after os-release identities: {sorted(after_identities)}")
+        if not before_identities:
+            errors.append(f"{node}: missing before os-release artifact")
+            continue
+        if not after_identities:
+            errors.append(f"{node}: missing after os-release artifact")
+            continue
+        if before_identities != after_identities:
+            errors.append(
+                f"{node}: os-release changed before={sorted(before_identities)} "
+                f"after={sorted(after_identities)}"
+            )
+    if len(complete_nodes) < min_nodes:
+        errors.append(
+            f"found matching before/after os-release artifacts for {len(complete_nodes)} nodes, "
+            f"want >= {min_nodes}"
+        )
+    return rows, errors, sorted(complete_nodes)
+
+
 def identity_key(identity: dict[str, Any], fields: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(str(identity.get(field) or "") for field in fields)
 
@@ -1250,6 +1371,8 @@ def validate_case(
     min_kernel_log_nodes: int,
     require_uname_artifacts: bool,
     min_uname_nodes: int,
+    require_os_release_artifacts: bool,
+    min_os_release_nodes: int,
     require_build_identity: bool,
     require_strong_build_identity: bool,
     require_binary_identity: bool,
@@ -1462,6 +1585,12 @@ def validate_case(
         min_nodes=min_uname_nodes,
     )
     errors.extend(uname_errors)
+    os_release_artifacts, os_release_errors, os_release_nodes = validate_os_release_artifacts(
+        case.path,
+        required=require_os_release_artifacts,
+        min_nodes=min_os_release_nodes,
+    )
+    errors.extend(os_release_errors)
 
     status_stat_results, status_stat_errors, status_json_count = validate_status_stats(
         case.path,
@@ -1536,6 +1665,8 @@ def validate_case(
         "boot_ids": boot_ids,
         "uname_artifacts": uname_artifacts,
         "uname_nodes": uname_nodes,
+        "os_release_artifacts": os_release_artifacts,
+        "os_release_nodes": os_release_nodes,
         "status_json_count": status_json_count,
         "status_stats": status_stat_results,
         "datapath_json_count": datapath_json_count,
@@ -1576,6 +1707,8 @@ def main() -> int:
         raise SystemExit("--min-kernel-log-nodes must be non-negative")
     if args.min_uname_nodes < 0:
         raise SystemExit("--min-uname-nodes must be non-negative")
+    if args.min_os_release_nodes < 0:
+        raise SystemExit("--min-os-release-nodes must be non-negative")
     required_status_stats = parse_required_datapath_stats(args.require_status_stat)
     required_status_minima = parse_required_numeric_limits(
         args.require_status_min,
@@ -1675,6 +1808,8 @@ def main() -> int:
             min_kernel_log_nodes=args.min_kernel_log_nodes,
             require_uname_artifacts=args.require_uname_artifacts,
             min_uname_nodes=args.min_uname_nodes,
+            require_os_release_artifacts=args.require_os_release_artifacts,
+            min_os_release_nodes=args.min_os_release_nodes,
             require_build_identity=args.require_build_identity,
             require_strong_build_identity=args.require_strong_build_identity,
             require_binary_identity=args.require_binary_identity,

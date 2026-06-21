@@ -1327,6 +1327,11 @@ boot_id=\$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
 [ -n \"\$boot_id\" ] || boot_id=\$(sysctl -n kernel.random.boot_id 2>/dev/null || true)
 printf '%s\\n' \"\$boot_id\" >$(remote_quote "${dir}/boot-id-${phase}.txt")
 uname -a >$(remote_quote "${dir}/uname-${phase}.txt") 2>&1
+if [ -r /etc/os-release ]; then
+  cat /etc/os-release >$(remote_quote "${dir}/os-release-${phase}.txt") 2>&1
+else
+  printf 'NAME=unknown\\nID=unknown\\nVERSION_ID=unknown\\n' >$(remote_quote "${dir}/os-release-${phase}.txt")
+fi
 "
 }
 

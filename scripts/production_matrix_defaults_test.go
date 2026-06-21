@@ -1221,6 +1221,8 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-stable-boot-id",
 		"--require-uname-artifacts",
 		"--min-uname-nodes 2",
+		"--require-os-release-artifacts",
+		"--min-os-release-nodes 2",
 		"--require-iperf-pair-directions",
 		"--require-kernel-log-artifacts",
 		"--min-kernel-log-nodes 2",
@@ -1518,6 +1520,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	gotRequireStableBootID := map[string]bool{}
 	gotRequireUname := map[string]bool{}
 	gotMinUnameNodes := map[string]string{}
+	gotRequireOSRelease := map[string]bool{}
+	gotMinOSReleaseNodes := map[string]string{}
 	gotRequirePairDirections := map[string]bool{}
 	gotRequireKernelLogs := map[string]bool{}
 	gotArgs := map[string][]string{}
@@ -1547,6 +1551,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				minIntervalGbpsRatio = args[i+1]
 			case "--min-uname-nodes":
 				gotMinUnameNodes[caseName] = args[i+1]
+			case "--min-os-release-nodes":
+				gotMinOSReleaseNodes[caseName] = args[i+1]
 			case "--min-kernel-log-nodes":
 				minKernelLogNodes = args[i+1]
 			}
@@ -1571,6 +1577,12 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				requireUname = true
 			}
 		}
+		requireOSRelease := false
+		for _, arg := range args {
+			if arg == "--require-os-release-artifacts" {
+				requireOSRelease = true
+			}
+		}
 		requirePairDirections := false
 		for _, arg := range args {
 			if arg == "--require-iperf-pair-directions" {
@@ -1592,6 +1604,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			gotRequireIdentity[caseName] = requireIdentity
 			gotRequireStableBootID[caseName] = requireStableBootID
 			gotRequireUname[caseName] = requireUname
+			gotRequireOSRelease[caseName] = requireOSRelease
 			gotRequirePairDirections[caseName] = requirePairDirections
 			gotRequireKernelLogs[caseName] = requireKernelLogs
 			gotArgs[caseName] = args
@@ -1632,6 +1645,12 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if gotMinUnameNodes[name] != "2" {
 			t.Fatalf("case %s min uname nodes got %q want 2; calls=%s", name, gotMinUnameNodes[name], payload)
+		}
+		if !gotRequireOSRelease[name] {
+			t.Fatalf("case %s did not force --require-os-release-artifacts; calls=%s", name, payload)
+		}
+		if gotMinOSReleaseNodes[name] != "2" {
+			t.Fatalf("case %s min os-release nodes got %q want 2; calls=%s", name, gotMinOSReleaseNodes[name], payload)
 		}
 		if !gotRequirePairDirections[name] {
 			t.Fatalf("case %s did not force --require-iperf-pair-directions; calls=%s", name, payload)
