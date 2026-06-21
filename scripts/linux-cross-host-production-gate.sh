@@ -400,6 +400,15 @@ main() {
       --require-datapath-min kernel_rx_stage.rx_worker_injected=1 \
       --require-datapath-min counters.session_dials="${full_kmod_min_sessions}" \
       --require-datapath-max counters.session_dial_errors=0 \
+      --require-module-param-min trustix_datapath.enable_features=128 \
+      --require-module-param-min trustix_datapath.features=128 \
+      --require-module-param-min trustix_datapath.safe_features=128 \
+      --require-module-param-max trustix_datapath.unsafe_features=0 \
+      --require-module-param-max trustix_datapath.selftest_failures=0 \
+      --require-module-param-min trustix_datapath.rx_worker_inject=1 \
+      --require-module-param-min trustix_datapath.tx_plaintext=1 \
+      --require-module-param-max trustix_datapath.rx_worker_hot_stats=0 \
+      --require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0 \
       --require-module-param-min trustix_datapath.session_records="${full_kmod_min_sessions}" \
       --require-module-param-min trustix_datapath.session_wire_records="${full_kmod_min_sessions}" \
       --require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32 \

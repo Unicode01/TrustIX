@@ -985,6 +985,24 @@ func TestCrossHostProductionGateRejectsFullKmodWithoutPlaintextXmit(t *testing.T
 	}
 }
 
+func TestCrossHostProductionGateRejectsFullKmodUnsafeModuleState(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeFullKmodProductionGateArtifacts(t, dir, true)
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, map[string]string{
+		"unsafe_features": "1",
+	})
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted full-kmod artifacts with unsafe module features:\n%s", output)
+	}
+	if !strings.Contains(string(output), "unsafe_features") {
+		t.Fatalf("production gate did not report unsafe full-kmod module state:\n%s", output)
+	}
+}
+
 func TestCrossHostProductionGateAcceptsSecureKUDPRouteGSOArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
@@ -1423,34 +1441,50 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 
 func writeFullKmodModuleParameters(t *testing.T, path string, plaintextXmit bool) {
 	t.Helper()
+	writeFullKmodModuleParametersWithOverrides(t, path, plaintextXmit, nil)
+}
+
+func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plaintextXmit bool, overrides map[string]string) {
+	t.Helper()
 	plaintextSegments := "0"
 	if plaintextXmit {
 		plaintextSegments = "128"
 	}
-	writeModuleParameters(t, path, map[string]map[string]string{
-		"trustix_datapath": {
-			"session_records":                             "8",
-			"session_wire_records":                        "8",
-			"rx_worker_single_coalesce_max_frames":        "32",
-			"tx_plaintext_outer_gso_segments":             plaintextSegments,
-			"tx_plaintext_direct_xmit_dst_mac_cache_hits": "8",
-			"rx_worker_gso_xmit_segments":                 "8",
-			"rx_worker_alloc_errors":                      "0",
-			"rx_worker_deliver_errors":                    "0",
-			"rx_worker_gso_xmit_errors":                   "0",
-			"rx_worker_xmit_ret_errors":                   "0",
-			"rx_worker_xmit_other_ret_errors":             "0",
-			"rx_worker_xmit_dev_forward_errors":           "0",
-			"rx_worker_xmit_peer_forward_errors":          "0",
-			"tx_plaintext_build_errors":                   "0",
-			"tx_plaintext_no_sessions":                    "0",
-			"tx_plaintext_no_wires":                       "0",
-			"tx_plaintext_stale_wires":                    "0",
-			"tx_plaintext_xmit_errors":                    "0",
-			"tx_plaintext_outer_gso_errors":               "0",
-			"tx_plaintext_queue_drops":                    "0",
-		},
-	})
+	params := map[string]string{
+		"enable_features":                             "128",
+		"features":                                    "128",
+		"safe_features":                               "128",
+		"unsafe_features":                             "0",
+		"selftest_failures":                           "0",
+		"rx_worker_inject":                            "Y",
+		"tx_plaintext":                                "Y",
+		"rx_worker_hot_stats":                         "N",
+		"tx_plaintext_skip_inner_tcp_checksum":        "N",
+		"session_records":                             "8",
+		"session_wire_records":                        "8",
+		"rx_worker_single_coalesce_max_frames":        "32",
+		"tx_plaintext_outer_gso_segments":             plaintextSegments,
+		"tx_plaintext_direct_xmit_dst_mac_cache_hits": "8",
+		"rx_worker_gso_xmit_segments":                 "8",
+		"rx_worker_alloc_errors":                      "0",
+		"rx_worker_deliver_errors":                    "0",
+		"rx_worker_gso_xmit_errors":                   "0",
+		"rx_worker_xmit_ret_errors":                   "0",
+		"rx_worker_xmit_other_ret_errors":             "0",
+		"rx_worker_xmit_dev_forward_errors":           "0",
+		"rx_worker_xmit_peer_forward_errors":          "0",
+		"tx_plaintext_build_errors":                   "0",
+		"tx_plaintext_no_sessions":                    "0",
+		"tx_plaintext_no_wires":                       "0",
+		"tx_plaintext_stale_wires":                    "0",
+		"tx_plaintext_xmit_errors":                    "0",
+		"tx_plaintext_outer_gso_errors":               "0",
+		"tx_plaintext_queue_drops":                    "0",
+	}
+	for name, value := range overrides {
+		params[name] = value
+	}
+	writeModuleParameters(t, path, map[string]map[string]string{"trustix_datapath": params})
 }
 
 func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, routeHelperXmit bool) {
