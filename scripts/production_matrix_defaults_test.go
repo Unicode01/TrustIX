@@ -1138,6 +1138,11 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}",
+		"max_decimal()",
+		"tc_direct_min_gbps=\"$(max_decimal \"$tc_direct_min_gbps\" \"3\")\"",
+		"full_kmod_min_gbps=\"$(max_decimal \"$full_kmod_min_gbps\" \"3\")\"",
+		"secure_kudp_min_gbps=\"$(max_decimal \"$secure_kudp_min_gbps\" \"1.5\")\"",
+		"route_gso_min_gbps=\"$(max_decimal \"$route_gso_min_gbps\" \"2.5\")\"",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900",
 		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY:-1",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8",
@@ -1402,6 +1407,10 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 
 	fastDir := slashPath(filepath.Join(workdir, "fast"))
 	slowDir := slashPath(filepath.Join(workdir, "slow"))
+	tcDirectDir := slashPath(filepath.Join(workdir, "tc-direct"))
+	fullKmodDir := slashPath(filepath.Join(workdir, "full-kmod"))
+	secureKUDPDir := slashPath(filepath.Join(workdir, "secure-kudp"))
+	routeGSODir := slashPath(filepath.Join(workdir, "route-gso"))
 	cmd := exec.Command(bash, "linux-cross-host-production-gate.sh")
 	cmd.Dir = "."
 	cmd.Env = append(os.Environ(),
@@ -1411,6 +1420,18 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=30",
 		"TRUSTIX_CROSS_HOST_USERSPACE_CASES=fast="+fastDir+" slow="+slowDir,
 		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS=fast=1.5 slow=0.5",
+		"TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS=0",
+		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASES=tc="+tcDirectDir,
+		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS=tc=0",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS=0",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=full="+fullKmodDir,
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS=full=0",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS=0",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=secure="+secureKUDPDir,
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=secure=0",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS=0",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=route="+routeGSODir,
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=route=0",
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1442,7 +1463,14 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			got[caseName] = minGbps
 		}
 	}
-	for name, want := range map[string]string{"fast": "1.5", "slow": "0.5"} {
+	for name, want := range map[string]string{
+		"fast":   "1.5",
+		"slow":   "0.5",
+		"tc":     "3",
+		"full":   "3",
+		"secure": "1.5",
+		"route":  "2.5",
+	} {
 		if got[name] != want {
 			t.Fatalf("case %s min_gbps got %q want %q; calls=%s", name, got[name], want, payload)
 		}

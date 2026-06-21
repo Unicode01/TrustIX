@@ -64,6 +64,11 @@ validate_number() {
   [[ "$value" =~ $re ]] || die "${name} must be a non-negative number"
 }
 
+max_decimal() {
+  local a="$1" b="$2"
+  awk -v a="$a" -v b="$b" 'BEGIN { if ((a + 0) >= (b + 0)) print a; else print b }'
+}
+
 validate_case_token() {
   local token="$1"
   [[ "$token" == *=* ]] || die "case must be NAME=PATH, got ${token}"
@@ -98,10 +103,11 @@ append_case_token() {
 
 case_min_gbps() {
   local case_token="$1" default_min_gbps="$2" min_map_raw="$3"
-  local case_name="${case_token%%=*}" token
+  local case_name="${case_token%%=*}" token explicit_min
   for token in $min_map_raw; do
     if [[ "${token%%=*}" == "$case_name" ]]; then
-      printf '%s\n' "${token#*=}"
+      explicit_min="${token#*=}"
+      max_decimal "$explicit_min" "$default_min_gbps"
       return 0
     fi
   done
@@ -181,6 +187,10 @@ main() {
   validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS "$full_kmod_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS "$secure_kudp_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS "$route_gso_min_gbps"
+  tc_direct_min_gbps="$(max_decimal "$tc_direct_min_gbps" "3")"
+  full_kmod_min_gbps="$(max_decimal "$full_kmod_min_gbps" "3")"
+  secure_kudp_min_gbps="$(max_decimal "$secure_kudp_min_gbps" "1.5")"
+  route_gso_min_gbps="$(max_decimal "$route_gso_min_gbps" "2.5")"
   validate_number TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS "$min_seconds"
   validate_number TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP "$seconds_slop"
   validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
