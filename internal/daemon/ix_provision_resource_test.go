@@ -658,6 +658,60 @@ func TestIXProvisionOpenWRTActiveDefaultsToValidatedUDPFullKmod(t *testing.T) {
 	}
 }
 
+func TestIXProvisionOpenWRTExplicitExperimentalTCPStaysFullKmodNotRouteGSO(t *testing.T) {
+	for _, row := range readProductionTransportDefaultRowsForProvisionTest(t) {
+		switch row.GateFamily {
+		case "owdeb_secure_kudp", "owdeb_route_gso":
+			t.Fatalf("OpenWrt provision should not target unpromoted production gate %s: %#v", row.GateFamily, row)
+		}
+	}
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:              "ix-openwrt-explicit",
+		Profile:           "plaintext-performance",
+		Advertise:         []core.Prefix{"10.81.0.0/24"},
+		EndpointMode:      "active",
+		EndpointAddress:   "ix-upstream.example.com:7000",
+		EndpointTransport: "experimental_tcp",
+		ProvisionURL:      "https://ix-a.example.com:18787",
+		ServiceManager:    "openwrt",
+	}, desired)
+	if err != nil {
+		t.Fatalf("normalize provision request: %v", err)
+	}
+	if request.EndpointTransport != "experimental_tcp" {
+		t.Fatalf("explicit OpenWrt endpoint transport = %q, want experimental_tcp", request.EndpointTransport)
+	}
+	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
+	if err != nil {
+		t.Fatalf("desired for provision: %v", err)
+	}
+	if len(target.Endpoints) != 1 ||
+		target.Endpoints[0].Mode != config.EndpointModeActive ||
+		target.Endpoints[0].Transport != "experimental_tcp" ||
+		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
+		t.Fatalf("OpenWrt explicit experimental_tcp endpoint = %#v", target.Endpoints)
+	}
+	if target.TransportPolicy.Datapath != config.TransportDatapathKernelModule ||
+		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
+		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
+		t.Fatalf("OpenWrt explicit experimental_tcp policy = %#v, want full-kmod plaintext", target.TransportPolicy)
+	}
+	if len(target.TransportPolicy.Profiles) != 0 || experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("OpenWrt explicit experimental_tcp should not enable route-GSO by default: policy=%#v", target.TransportPolicy)
+	}
+	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
+		t.Fatalf("OpenWrt explicit experimental_tcp did not enable full-kmod plaintext: modules=%#v", target.KernelModules)
+	}
+	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapath.Mode != "required" ||
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapath.Path != "/etc/trustix/modules/trustix_datapath.ko" {
+		t.Fatalf("OpenWrt explicit experimental_tcp modules = %#v, want SDK-built datapath module only", target.KernelModules)
+	}
+}
+
 func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
