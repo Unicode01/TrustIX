@@ -153,6 +153,15 @@ HTTP CONNECT, and 1.550296 Gbps for secure experimental TCP. The verifier
 reported no log findings, no errors, and zero session dial or heartbeat
 failures.
 
+A 2026-06-21 current-head Debian-to-Debian userspace-TC tunnel recheck on
+`6.12.90+deb13.1-cloud-amd64` passed every current 900s cross-host
+GRE/IPIP/VXLAN secure and plaintext production default with no TrustIX kernel
+modules loaded. It used commit `51e6831bf50d`; minimum received throughput was
+1.224643 Gbps for secure GRE, 4.012349 Gbps for plaintext GRE, 1.178779 Gbps
+for secure IPIP, 4.523007 Gbps for plaintext IPIP, 1.050624 Gbps for secure
+VXLAN, and 4.696775 Gbps for plaintext VXLAN. The verifier reported no log
+findings, no errors, and zero session dial or heartbeat failures.
+
 The same audit passed OpenWrt-to-Debian full-kmod plaintext for 900s with a
 minimum received throughput of 3.495550 Gbps against a 3 Gbps gate. Final boot
 ID checks were stable and kernel log scans found no panic, Oops, BUG, call

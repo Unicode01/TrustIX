@@ -54,6 +54,36 @@ zero `data_path.counters.session_dial_errors`, and zero
 | HTTP CONNECT | plaintext | 1 Gbps | 1.353923 Gbps | 1.354159 Gbps | 900.133752s |
 | experimental TCP | secure | 1 Gbps | 1.550296 Gbps | 1.550500 Gbps | 900.065191s |
 
+### Debian userspace-TC current-head production gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200/VM201 for GRE, VM202/VM203 for IPIP, and VM204/VM205 for VXLAN on
+isolated `vmbr3`. VM100 and all 1xx guests were not modified. All guests were
+Debian 13 on `6.12.90+deb13.1-cloud-amd64`, with no TrustIX kernel modules
+loaded. The release was built with `--build-bpf 0 --build-ko 0` from commit
+`51e6831bf50d`, build time `2026-06-21T04:52:03Z`; all guests used binary
+SHA256 `6bbd9495cc87ca563c1d2ac13c7d45ef26fbb3c2b8820c4cbd929dc6a6d95734`.
+The embedded assets SHA256 was
+`18eb4b0fbb81b7dfe6a9639e2997cae6cd728c5a9d2db3ba367412487cb6e622`.
+
+Artifacts:
+`/root/trustix-tunnel-current-20260621/results/tunnels-current-900` for GRE,
+`/root/trustix-tunnel-current-20260621/results/ipip-current-900` for IPIP,
+and `/root/trustix-tunnel-current-20260621/results/vxlan-current-900` for
+VXLAN. The 900s cross-host userspace-TC gates passed every current GRE/IPIP/
+VXLAN secure and plaintext production default. All rows had `errors=[]`,
+`log_findings=[]`, zero `data_path.counters.session_dial_errors`, and zero
+`data_path.counters.session_heartbeat_timeouts`.
+
+| Transport | Encryption | Gate | Minimum received | Minimum sent | Minimum duration |
+| --- | --- | ---: | ---: | ---: | ---: |
+| GRE | secure | 1 Gbps | 1.224643 Gbps | 1.224679 Gbps | 900.004027s |
+| GRE | plaintext | 4 Gbps | 4.012349 Gbps | 4.012432 Gbps | 899.997339s |
+| IPIP | secure | 1 Gbps | 1.178779 Gbps | 1.178818 Gbps | 900.003524s |
+| IPIP | plaintext | 4 Gbps | 4.523007 Gbps | 4.523084 Gbps | 899.996810s |
+| VXLAN | secure | 1 Gbps | 1.050624 Gbps | 1.050743 Gbps | 900.038395s |
+| VXLAN | plaintext | 4 Gbps | 4.696775 Gbps | 4.696613 Gbps | 899.952633s |
+
 ### OpenWrt 24.10.7 runtime capability check
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
