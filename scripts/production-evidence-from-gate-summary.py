@@ -47,8 +47,14 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="directory containing production-gate-manifest.json and verifier *.jsonl summaries",
     )
-    parser.add_argument("--os-matrix", required=True)
-    parser.add_argument("--kernel-matrix", required=True)
+    parser.add_argument(
+        "--os-matrix",
+        help="override OS matrix; defaults to inferred os-release identities from gate summary",
+    )
+    parser.add_argument(
+        "--kernel-matrix",
+        help="override kernel matrix; defaults to inferred uname releases from gate summary",
+    )
     parser.add_argument(
         "--artifact",
         required=True,
@@ -173,6 +179,61 @@ def metric_seconds(row: dict[str, Any]) -> str:
     raise SystemExit(f"gate summary case {row.get('case')!r} lacks min_seconds_required")
 
 
+def normalize_matrix_token(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9.+_-]+", "", value).lower()
+
+
+def os_label(identity: str) -> str:
+    if ":" in identity:
+        os_id, version = identity.split(":", 1)
+        return normalize_matrix_token(f"{os_id}{version}")
+    return normalize_matrix_token(identity)
+
+
+def stable_node_values(row: dict[str, Any], artifact_key: str, value_key: str) -> dict[str, str]:
+    artifacts = row.get(artifact_key)
+    if not isinstance(artifacts, list) or not artifacts:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} lacks {artifact_key}; "
+            "rerun with the production gate so uname/os-release artifacts are required"
+        )
+    values: dict[str, dict[str, set[str]]] = {}
+    for item in artifacts:
+        if not isinstance(item, dict):
+            continue
+        node = str(item.get("node") or "")
+        phase = str(item.get("phase") or "")
+        value = str(item.get(value_key) or "")
+        if not node or phase not in {"before", "after"} or not value:
+            continue
+        values.setdefault(node, {}).setdefault(phase, set()).add(value)
+    stable: dict[str, str] = {}
+    for node, phases in sorted(values.items()):
+        before = phases.get("before") or set()
+        after = phases.get("after") or set()
+        if len(before) != 1 or before != after:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has unstable {artifact_key} "
+                f"for node {node}: before={sorted(before)} after={sorted(after)}"
+            )
+        stable[node] = next(iter(before))
+    if len(stable) < 2:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has {len(stable)} stable {artifact_key} nodes, want >= 2"
+        )
+    return stable
+
+
+def infer_os_matrix(row: dict[str, Any]) -> str:
+    by_node = stable_node_values(row, "os_release_artifacts", "identity")
+    return "-".join(os_label(by_node[node]) for node in sorted(by_node))
+
+
+def infer_kernel_matrix(row: dict[str, Any]) -> str:
+    by_node = stable_node_values(row, "uname_artifacts", "kernel_release")
+    return "_to_".join(by_node[node] for node in sorted(by_node))
+
+
 def validate_artifact(value: str) -> None:
     if not value.startswith("docs/") or "#" not in value:
         raise SystemExit("--artifact must be a local docs markdown anchor")
@@ -214,8 +275,8 @@ def evidence_row(
         str(matrix_row.get("datapath") or ""),
         str(matrix_row.get("crypto_placement") or ""),
         str(matrix_row.get("validation_scope") or ""),
-        args.os_matrix,
-        args.kernel_matrix,
+        args.os_matrix or infer_os_matrix(gate_row),
+        args.kernel_matrix or infer_kernel_matrix(gate_row),
         result,
         metric_gbps(gate_row),
         metric_seconds(gate_row),

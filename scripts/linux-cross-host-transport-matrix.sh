@@ -391,18 +391,20 @@ run_selected_gate() {
 emit_selected_gate_evidence() {
   [[ -n "$evidence_out" ]] || return 0
   [[ -f "$evidence_generator" ]] || die "production evidence generator not found: ${evidence_generator}"
-  [[ -n "$evidence_os_matrix" ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OS_MATRIX is required when EVIDENCE_OUT is set"
-  [[ -n "$evidence_kernel_matrix" ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_KERNEL_MATRIX is required when EVIDENCE_OUT is set"
   [[ -n "$evidence_artifact" ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_ARTIFACT is required when EVIDENCE_OUT is set"
   [[ "$selected_gate_case_count" -gt 0 ]] || die "production evidence output requires at least one selected production gate case"
   local args=(
     "--matrix-summary" "$summary_path"
     "--gate-summary-dir" "$selected_gate_summary_dir"
-    "--os-matrix" "$evidence_os_matrix"
-    "--kernel-matrix" "$evidence_kernel_matrix"
     "--artifact" "$evidence_artifact"
     "--note-template" "$evidence_note_template"
   )
+  if [[ -n "$evidence_os_matrix" ]]; then
+    args+=("--os-matrix" "$evidence_os_matrix")
+  fi
+  if [[ -n "$evidence_kernel_matrix" ]]; then
+    args+=("--kernel-matrix" "$evidence_kernel_matrix")
+  fi
   if truthy "$evidence_include_fail"; then
     args+=("--include-fail")
   fi

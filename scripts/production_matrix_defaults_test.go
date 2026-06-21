@@ -671,7 +671,19 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		"min_received_gbps":          1.765432,
 		"min_required_received_gbps": 1.654321,
 		"min_seconds":                899.95,
-		"errors":                     []string{},
+		"uname_artifacts": []map[string]any{
+			{"node": "a", "phase": "before", "kernel_release": "6.12.90+deb13.1-amd64"},
+			{"node": "a", "phase": "after", "kernel_release": "6.12.90+deb13.1-amd64"},
+			{"node": "b", "phase": "before", "kernel_release": "6.12.90+deb13.1-amd64"},
+			{"node": "b", "phase": "after", "kernel_release": "6.12.90+deb13.1-amd64"},
+		},
+		"os_release_artifacts": []map[string]any{
+			{"node": "a", "phase": "before", "identity": "debian:13"},
+			{"node": "a", "phase": "after", "identity": "debian:13"},
+			{"node": "b", "phase": "before", "identity": "debian:13"},
+			{"node": "b", "phase": "after", "identity": "debian:13"},
+		},
+		"errors": []string{},
 	}
 	gatePayload, err := json.Marshal(gateRow)
 	if err != nil {
@@ -704,8 +716,6 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 	cmd := exec.Command(python, "production-evidence-from-gate-summary.py",
 		"--matrix-summary", slashPath(matrixSummary),
 		"--gate-summary-dir", slashPath(gateSummaryDir),
-		"--os-matrix", "debian13-debian13",
-		"--kernel-matrix", "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
 		"--artifact", "docs/trustix-performance-log.md#example-production-gate",
 		"--note-template", "{transport} {encryption} {gate_family} evidence",
 	)
@@ -2310,7 +2320,7 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456}}`,
 		"JSON",
 		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/userspace-udp-secure.jsonl\" <<'JSON'",
-		`{"case":"udp-secure-stable-userspace-userspace","status":"pass","min_gbps_required":1.5,"min_seconds_required":900,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"errors":[]}`,
+		`{"case":"udp-secure-stable-userspace-userspace","status":"pass","min_gbps_required":1.5,"min_seconds_required":900,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"errors":[]}`,
 		"JSON",
 		"",
 	}, "\n")), 0o755); err != nil {
@@ -2331,8 +2341,6 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_REQUIRE_BINARY_IDENTITY=0",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT="+slashPath(evidenceOut),
-		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OS_MATRIX=debian13-debian13",
-		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_KERNEL_MATRIX=6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_ARTIFACT=docs/trustix-performance-log.md#matrix-evidence-example",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_NOTE_TEMPLATE={transport} {encryption} {gate_family} matrix evidence",
 	)
