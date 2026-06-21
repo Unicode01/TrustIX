@@ -368,6 +368,14 @@ main() {
   [[ -z "$min_gbps_override" ]] || validate_nonnegative_decimal TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS "$min_gbps_override"
   validate_nonnegative_decimal TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS_SLOP "$seconds_slop"
   validate_positive_integer TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_TIMEOUT_SLOP "$timeout_slop"
+  if ! truthy "$dry_run"; then
+    truthy "$verify" || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0 is only allowed with DRY_RUN=1"
+    case "$scope" in
+      all|cross_host|selected)
+        truthy "$selected_gate" || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0 is only allowed for dry-run or non-production scopes"
+        ;;
+    esac
+  fi
 
   : >"$summary_path"
   log "workdir=${workdir}"
