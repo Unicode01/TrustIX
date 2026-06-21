@@ -559,7 +559,7 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 	}
 	request.EndpointTransport = strings.ToLower(strings.TrimSpace(request.EndpointTransport))
 	if request.EndpointTransport == "" {
-		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile, request.EndpointMode, request.EndpointAddress)
+		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile, request.EndpointMode, request.EndpointAddress, request.ServiceManager)
 	}
 	if transportProtocolIsKernelTunnel(request.EndpointTransport) {
 		tunnelAddress, err := normalizeProvisionTunnelEndpointAddress(request.EndpointAddress)
@@ -809,8 +809,11 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 	}
 }
 
-func ixProvisionDefaultEndpointTransport(profile string, endpointMode string, endpointAddress string) string {
+func ixProvisionDefaultEndpointTransport(profile string, endpointMode string, endpointAddress string, serviceManager string) string {
 	if normalizeIXProvisionProfile(profile) == "plaintext_performance" {
+		if strings.ToLower(strings.TrimSpace(serviceManager)) == "openwrt" {
+			return string(transport.ProtocolUDP)
+		}
 		endpointMode = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(endpointMode), "-", "_"))
 		if endpointMode == string(config.EndpointModeActive) {
 			return string(transport.ProtocolExperimentalTCP)

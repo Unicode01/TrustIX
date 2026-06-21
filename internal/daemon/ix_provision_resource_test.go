@@ -602,6 +602,62 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	}
 }
 
+func TestIXProvisionOpenWRTActiveDefaultsToValidatedUDPFullKmod(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	desired.IX.ControlAPI = "https://ix-a.example.com:9443"
+	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:                "ix-openwrt-edge",
+		Role:                "edge_ix",
+		EndpointMode:        "active",
+		Advertise:           []core.Prefix{"10.80.0.0/24"},
+		BootstrapControlAPI: "https://ix-a.example.com:9443",
+		ProvisionURL:        "https://ix-a.example.com:18787",
+		ServiceManager:      "openwrt",
+	}, desired)
+	if err != nil {
+		t.Fatalf("normalize provision request: %v", err)
+	}
+	if request.Profile != "plaintext_performance" ||
+		request.EndpointTransport != "udp" ||
+		request.EndpointName != "ix-openwrt-edge-udp" {
+		t.Fatalf("OpenWrt active defaults profile/transport/name = %q/%q/%q, want plaintext_performance/udp/ix-openwrt-edge-udp", request.Profile, request.EndpointTransport, request.EndpointName)
+	}
+	if request.EndpointMode != "active" || request.EndpointListen != "" {
+		t.Fatalf("OpenWrt active endpoint mode/listen = %q/%q, want active without listen", request.EndpointMode, request.EndpointListen)
+	}
+	if request.BuildKO != "auto" {
+		t.Fatalf("OpenWrt active build_ko = %q, want auto for target-side SDK module build", request.BuildKO)
+	}
+	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
+	if err != nil {
+		t.Fatalf("desired for provision: %v", err)
+	}
+	if len(target.Endpoints) != 1 ||
+		target.Endpoints[0].Mode != config.EndpointModeActive ||
+		target.Endpoints[0].Transport != "udp" ||
+		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
+		t.Fatalf("OpenWrt active target endpoint = %#v, want active UDP plaintext full-kmod", target.Endpoints)
+	}
+	if target.TransportPolicy.Datapath != config.TransportDatapathKernelModule ||
+		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
+		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
+		t.Fatalf("OpenWrt active transport policy = %#v, want validated UDP plaintext full-kmod", target.TransportPolicy)
+	}
+	if len(target.TransportPolicy.Profiles) != 0 || experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("OpenWrt active default should not add experimental_tcp route-GSO profile: policy=%#v", target.TransportPolicy)
+	}
+	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
+		t.Fatalf("OpenWrt active default did not enable full-kmod plaintext datapath: modules=%#v", target.KernelModules)
+	}
+	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapath.Mode != "required" ||
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapath.Path != "/etc/trustix/modules/trustix_datapath.ko" {
+		t.Fatalf("OpenWrt active kernel modules = %#v, want SDK-built datapath module only", target.KernelModules)
+	}
+}
+
 func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
