@@ -13,6 +13,7 @@ matrix_iperf3_seconds="${TRUSTIX_PRODUCTION_SOAK_IPERF3_SECONDS:-120}"
 matrix_iperf3_parallel="${TRUSTIX_PRODUCTION_SOAK_IPERF3_PARALLEL:-4}"
 matrix_iperf3_directions="${TRUSTIX_PRODUCTION_SOAK_IPERF3_DIRECTIONS:-both}"
 matrix_perf_fast="${TRUSTIX_PRODUCTION_SOAK_PERF_FAST:-1}"
+matrix_scope="${TRUSTIX_PRODUCTION_SOAK_MATRIX_SCOPE:-single_host}"
 matrix_case_timeout="${TRUSTIX_PRODUCTION_SOAK_CASE_TIMEOUT:-15m}"
 matrix_ping_count="${TRUSTIX_PRODUCTION_SOAK_PING_COUNT:-5}"
 matrix_udp_burst_packets="${TRUSTIX_PRODUCTION_SOAK_UDP_BURST_PACKETS:-512}"
@@ -75,6 +76,7 @@ run_iteration() {
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_PARALLEL="$matrix_iperf3_parallel"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_IPERF3_DIRECTIONS="$matrix_iperf3_directions"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PERF_FAST="$matrix_perf_fast"
+    export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SCOPE="$matrix_scope"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_CASE_TIMEOUT="$matrix_case_timeout"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_PING_COUNT="$matrix_ping_count"
     export TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_UDP_BURST_PACKETS="$matrix_udp_burst_packets"
@@ -108,6 +110,10 @@ main() {
   case "$matrix_perf_fast" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
     *) die "TRUSTIX_PRODUCTION_SOAK_PERF_FAST must be truthy or falsey" ;;
+  esac
+  case "$matrix_scope" in
+    single_host|cross_host|all) ;;
+    *) die "TRUSTIX_PRODUCTION_SOAK_MATRIX_SCOPE must be single_host, cross_host, or all" ;;
   esac
   local timeout_duration_re='^[1-9][0-9]*(s|m|h|d)?$'
   [[ -z "$matrix_case_timeout" || "$matrix_case_timeout" =~ $timeout_duration_re ]] || die "TRUSTIX_PRODUCTION_SOAK_CASE_TIMEOUT must be a coreutils timeout duration"
