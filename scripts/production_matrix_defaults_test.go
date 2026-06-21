@@ -1784,11 +1784,17 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			requireArgPair(caseName, prefix, "encryption="+encryption)
 		}
 	}
+	requireSecureEndpointPlacement := func(caseName, placement string) {
+		t.Helper()
+		requireArgPair(caseName, "--require-transport-local-endpoint-stat", "crypto_placements="+placement)
+		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "crypto_placements="+placement)
+	}
 	requireArgPair(fastName, "--require-transport-policy-stat", "encryption=secure")
 	requireArgPair(fastName, "--require-transport-policy-stat", "profile=stable")
 	requireArgPair(fastName, "--require-transport-policy-stat", "datapath=userspace")
 	requireArgPair(fastName, "--require-transport-policy-stat", "crypto_placement=userspace")
 	requireEndpointArgs(fastName, "udp", "stable", "userspace", "secure")
+	requireSecureEndpointPlacement(fastName, "userspace")
 	requireArgPair(fastName, "--seconds-slop", "1")
 	requireArgPair(fastName, "--require-transport-sessions-min", "1")
 	requireArgPair(fastName, "--require-transport-session-stat", "transport=udp")
@@ -1846,6 +1852,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("full", "--require-lsmod-module", "trustix_datapath")
 	requireArgPair("secure", "--require-transport-policy-min", "session_pool_size=8")
 	requireEndpointArgs("secure", "udp", "performance", "tc_xdp", "secure")
+	requireSecureEndpointPlacement("secure", "kernel")
 	requireArgPair("secure", "--require-transport-sessions-min", "8")
 	requireArgPair("secure", "--require-transport-session-stat", "transport=udp")
 	requireArg("secure", "--require-transport-session-endpoint-suffix=-udp")

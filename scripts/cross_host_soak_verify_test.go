@@ -1187,6 +1187,47 @@ func TestCrossHostSoakVerifyRejectsWrongTransportEndpoint(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyMatchesTransportEndpointListStats(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	for _, node := range []string{"a", "b"} {
+		writeTransportsJSONWithSessionStats(t, filepath.Join(dir, "collect", node, "transports.json"), 8, "flow", true, 8, "udp", peerEndpointForNode(node, "-udp"), map[string]any{
+			"encryption":       "secure",
+			"bytes_sent":       4096,
+			"bytes_received":   4096,
+			"packets_sent":     4,
+			"packets_received": 4,
+		})
+	}
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps",
+		"4",
+		"--min-seconds",
+		"120",
+		"--require-transport-local-endpoint-stat",
+		"encryption=secure",
+		"--require-transport-local-endpoint-stat",
+		"crypto_placements=userspace",
+		"--require-transport-peer-endpoint-stat",
+		"crypto_placements=userspace",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected endpoint list stat match:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyRejectsWrongTransportSessionEndpoint(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {

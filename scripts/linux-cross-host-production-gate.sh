@@ -277,6 +277,8 @@ case_session_args() {
     --require-transport-session-any-min "stats.packets_received=1"
   if [[ "$encryption" == "secure" ]]; then
     printf '%s\n' \
+      --require-transport-local-endpoint-stat "crypto_placements=${placement}" \
+      --require-transport-peer-endpoint-stat "crypto_placements=${placement}" \
       --require-transport-session-stat "stats.encrypted=true" \
       --require-transport-session-stat "stats.send_encrypted=true" \
       --require-transport-session-stat "stats.receive_encrypted=true" \

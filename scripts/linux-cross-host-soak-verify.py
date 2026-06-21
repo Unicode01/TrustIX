@@ -1295,6 +1295,8 @@ def datapath_value(payload: Any, dotted_path: str) -> Any:
 
 
 def datapath_value_matches(actual: Any, expected: str) -> bool:
+    if isinstance(actual, (list, tuple)):
+        return any(datapath_value_matches(item, expected) for item in actual)
     expected_lower = expected.lower()
     if isinstance(actual, bool):
         return expected_lower in {"1", "true", "yes", "on"} if actual else expected_lower in {
