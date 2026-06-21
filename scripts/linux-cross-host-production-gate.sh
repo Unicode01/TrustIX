@@ -13,7 +13,6 @@ secure_kudp_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps
 route_gso_min_gbps="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}}"
 min_seconds="${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900}"
 seconds_slop="${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-1}"
-require_binary_identity="${TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY:-1}"
 full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8}"
 secure_kudp_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8}"
 secure_kudp_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1}"
@@ -49,13 +48,6 @@ log() {
 die() {
   log "ERROR: $*"
   exit 1
-}
-
-truthy() {
-  case "${1:-0}" in
-    1|true|yes|on|enabled) return 0 ;;
-    *) return 1 ;;
-  esac
 }
 
 validate_number() {
@@ -154,9 +146,7 @@ run_gate() {
   local category_min_gbps="$2"
   shift 2
   set -- --min-gbps "$category_min_gbps" --min-seconds "$min_seconds" --seconds-slop "$seconds_slop" "$@"
-  if truthy "$require_binary_identity"; then
-    set -- "$@" --require-binary-identity
-  fi
+  set -- "$@" --require-binary-identity
   if [[ -n "$summary_dir" ]]; then
     mkdir -p "$summary_dir"
     set -- "$@" --summary "${summary_dir}/${label}.jsonl"

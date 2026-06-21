@@ -1147,7 +1147,6 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"route_gso_min_gbps=\"$(max_decimal \"$route_gso_min_gbps\" \"2.5\")\"",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900",
 		"min_seconds=\"$(max_decimal \"$min_seconds\" \"900\")\"",
-		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY:-1",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1",
@@ -1290,6 +1289,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 	}
 	if got := strings.Count(text, "--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1"); got != 1 {
 		t.Fatalf("linux-cross-host-production-gate.sh should require outer-GSO frames only for route-GSO, got %d occurrences", got)
+	}
+	if strings.Contains(text, "TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY") {
+		t.Fatalf("linux-cross-host-production-gate.sh must not allow disabling binary identity checks")
 	}
 	for _, unwanted := range []string{
 		"TRUSTIX_CROSS_HOST_DD_FULL_KMOD_EXPERIMENTAL_TCP",
@@ -1451,6 +1453,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	}
 	gotMinGbps := map[string]string{}
 	gotMinSeconds := map[string]string{}
+	gotRequireIdentity := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -1460,6 +1463,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			t.Fatalf("decode verifier args %q: %v", line, err)
 		}
 		var caseName, minGbps, minSeconds string
+		requireIdentity := false
 		for i := 0; i+1 < len(args); i++ {
 			switch args[i] {
 			case "--case":
@@ -1470,9 +1474,15 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				minSeconds = args[i+1]
 			}
 		}
+		for _, arg := range args {
+			if arg == "--require-binary-identity" {
+				requireIdentity = true
+			}
+		}
 		if caseName != "" {
 			gotMinGbps[caseName] = minGbps
 			gotMinSeconds[caseName] = minSeconds
+			gotRequireIdentity[caseName] = requireIdentity
 		}
 	}
 	for name, want := range map[string]string{
@@ -1489,6 +1499,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if gotMinSeconds[name] != "900" {
 			t.Fatalf("case %s min_seconds got %q want 900; calls=%s", name, gotMinSeconds[name], payload)
+		}
+		if !gotRequireIdentity[name] {
+			t.Fatalf("case %s did not force --require-binary-identity; calls=%s", name, payload)
 		}
 	}
 }
