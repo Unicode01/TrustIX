@@ -135,6 +135,41 @@ validate_case_min_map_matches_cases() {
   done
 }
 
+case_policy_stat_args() {
+  local family="$1" case_token="$2" case_name transport encryption profile datapath placement extra
+  case "$family" in
+    userspace|userspace-tc) ;;
+    *) return 0 ;;
+  esac
+  case_name="${case_token%%=*}"
+  local old_ifs="$IFS"
+  IFS=-
+  read -r transport encryption profile datapath placement extra <<<"$case_name"
+  IFS="$old_ifs"
+  if [[ -z "$transport" || -z "$encryption" || -z "$profile" || -z "$datapath" || -z "$placement" || -n "${extra:-}" ]]; then
+    die "${family} case ${case_name} must use canonical NAME=PATH from the transport matrix"
+  fi
+  case "$transport" in
+    udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|experimental_tcp) ;;
+    *) die "${family} case ${case_name} has unsupported transport ${transport}" ;;
+  esac
+  case "$encryption" in secure|plaintext) ;; *) die "${family} case ${case_name} has unsupported encryption ${encryption}" ;; esac
+  case "$profile" in stable|performance|latency) ;; *) die "${family} case ${case_name} has unsupported profile ${profile}" ;; esac
+  case "$datapath" in userspace|tc_xdp) ;; *) die "${family} case ${case_name} has unsupported datapath ${datapath}" ;; esac
+  case "$placement" in userspace) ;; *) die "${family} case ${case_name} has unsupported crypto placement ${placement}" ;; esac
+  if [[ "$family" == "userspace" && ( "$datapath" != "userspace" || "$profile" != "stable" ) ]]; then
+    die "userspace case ${case_name} must be stable/userspace"
+  fi
+  if [[ "$family" == "userspace-tc" && "$datapath" != "tc_xdp" ]]; then
+    die "userspace-tc case ${case_name} must use tc_xdp"
+  fi
+  printf '%s\n' \
+    --require-transport-policy-stat "encryption=${encryption}" \
+    --require-transport-policy-stat "profile=${profile}" \
+    --require-transport-policy-stat "datapath=${datapath}" \
+    --require-transport-policy-stat "crypto_placement=${placement}"
+}
+
 case_label_name() {
   local prefix="$1" case_token="$2" case_name
   case_name="${case_token%%=*}"
@@ -160,9 +195,14 @@ run_gate_case_list() {
   shift 4
   local token min_gbps case_label
   for token in $cases; do
+    local policy_args=()
+    local policy_arg
     min_gbps="$(case_min_gbps "$token" "$category_min_gbps" "$min_map_raw")"
     case_label="$(case_label_name "$label" "$token")"
-    run_gate "$case_label" "$min_gbps" --case "$token" "$@"
+    while IFS= read -r policy_arg; do
+      policy_args+=("$policy_arg")
+    done < <(case_policy_stat_args "$label" "$token")
+    run_gate "$case_label" "$min_gbps" --case "$token" "${policy_args[@]}" "$@"
   done
 }
 
@@ -281,9 +321,6 @@ main() {
 
   if [[ "$userspace_case_count" -gt 0 ]]; then
     run_gate_case_list userspace "$userspace_min_gbps" "$userspace_cases" "$userspace_case_min_gbps_raw" \
-      --require-transport-policy-stat profile=stable \
-      --require-transport-policy-stat datapath=userspace \
-      --require-transport-policy-stat crypto_placement=userspace \
       --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0
@@ -291,8 +328,6 @@ main() {
 
   if [[ "$userspace_tc_case_count" -gt 0 ]]; then
     run_gate_case_list userspace-tc "$userspace_tc_min_gbps" "$userspace_tc_cases" "$userspace_tc_case_min_gbps_raw" \
-      --require-transport-policy-stat datapath=tc_xdp \
-      --require-transport-policy-stat crypto_placement=userspace \
       --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0

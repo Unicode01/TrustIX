@@ -1188,15 +1188,17 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS \"$secure_kudp_case_min_gbps_raw\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS \"$route_gso_case_min_gbps_raw\"",
 		"case_min_gbps()",
+		"case_policy_stat_args()",
+		"must use canonical NAME=PATH from the transport matrix",
+		"--require-transport-policy-stat \"encryption=${encryption}\"",
+		"--require-transport-policy-stat \"profile=${profile}\"",
+		"--require-transport-policy-stat \"datapath=${datapath}\"",
+		"--require-transport-policy-stat \"crypto_placement=${placement}\"",
 		"run_gate_case_list()",
 		"--require-binary-identity",
 		"run_gate_case_list userspace \"$userspace_min_gbps\"",
 		"run_gate_case_list userspace-tc \"$userspace_tc_min_gbps\"",
 		"run_gate_case_list tc-direct \"$tc_direct_min_gbps\"",
-		"--require-transport-policy-stat profile=stable",
-		"--require-transport-policy-stat datapath=userspace",
-		"--require-transport-policy-stat crypto_placement=userspace",
-		"--require-transport-policy-stat datapath=tc_xdp",
 		"--require-transport-sessions-min \"${compat_min_sessions}\"",
 		"--require-datapath-stat kernel_udp.provider=tc_direct",
 		"--require-datapath-stat kernel_udp.fast_path=true",
@@ -1414,6 +1416,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		t.Fatalf("write verifier stub: %v", err)
 	}
 
+	fastName := "udp-secure-stable-userspace-userspace"
+	slowName := "tcp-plaintext-stable-userspace-userspace"
+	userspaceTCName := "gre-plaintext-performance-tc_xdp-userspace"
 	fastDir := slashPath(filepath.Join(workdir, "fast"))
 	slowDir := slashPath(filepath.Join(workdir, "slow"))
 	userspaceTCDir := slashPath(filepath.Join(workdir, "userspace-tc"))
@@ -1429,11 +1434,11 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY=0",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=30",
 		"TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS=0",
-		"TRUSTIX_CROSS_HOST_USERSPACE_CASES=fast="+fastDir+" slow="+slowDir,
-		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS=fast=1.5 slow=0",
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASES="+fastName+"="+fastDir+" "+slowName+"="+slowDir,
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS="+fastName+"=1.5 "+slowName+"=0",
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS=0",
-		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES=tunnel="+userspaceTCDir,
-		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS=tunnel=0",
+		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES="+userspaceTCName+"="+userspaceTCDir,
+		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS="+userspaceTCName+"=0",
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASES=tc="+tcDirectDir,
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS=tc=0",
@@ -1492,13 +1497,13 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]string{
-		"fast":   "1.5",
-		"slow":   "0.5",
-		"tunnel": "1",
-		"tc":     "3",
-		"full":   "3",
-		"secure": "1.5",
-		"route":  "2.5",
+		fastName:        "1.5",
+		slowName:        "0.5",
+		userspaceTCName: "1",
+		"tc":            "3",
+		"full":          "3",
+		"secure":        "1.5",
+		"route":         "2.5",
 	} {
 		if gotMinGbps[name] != want {
 			t.Fatalf("case %s min_gbps got %q want %q; calls=%s", name, gotMinGbps[name], want, payload)
@@ -1520,13 +1525,18 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		t.Fatalf("case %s missing %s %s; calls=%s", caseName, key, value, payload)
 	}
-	for _, caseName := range []string{"fast", "slow"} {
-		requireArgPair(caseName, "--require-transport-policy-stat", "profile=stable")
-		requireArgPair(caseName, "--require-transport-policy-stat", "datapath=userspace")
-		requireArgPair(caseName, "--require-transport-policy-stat", "crypto_placement=userspace")
-	}
-	requireArgPair("tunnel", "--require-transport-policy-stat", "datapath=tc_xdp")
-	requireArgPair("tunnel", "--require-transport-policy-stat", "crypto_placement=userspace")
+	requireArgPair(fastName, "--require-transport-policy-stat", "encryption=secure")
+	requireArgPair(fastName, "--require-transport-policy-stat", "profile=stable")
+	requireArgPair(fastName, "--require-transport-policy-stat", "datapath=userspace")
+	requireArgPair(fastName, "--require-transport-policy-stat", "crypto_placement=userspace")
+	requireArgPair(slowName, "--require-transport-policy-stat", "encryption=plaintext")
+	requireArgPair(slowName, "--require-transport-policy-stat", "profile=stable")
+	requireArgPair(slowName, "--require-transport-policy-stat", "datapath=userspace")
+	requireArgPair(slowName, "--require-transport-policy-stat", "crypto_placement=userspace")
+	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "encryption=plaintext")
+	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "profile=performance")
+	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "datapath=tc_xdp")
+	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "crypto_placement=userspace")
 }
 
 func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) {
