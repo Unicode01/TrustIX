@@ -13,6 +13,8 @@ secure_kudp_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps
 route_gso_min_gbps="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}}"
 min_seconds="${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900}"
 seconds_slop="${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-1}"
+min_iperf_intervals="${TRUSTIX_CROSS_HOST_GATE_MIN_IPERF_INTERVALS:-600}"
+min_interval_gbps_ratio="${TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO:-0.25}"
 full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8}"
 secure_kudp_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8}"
 secure_kudp_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1}"
@@ -208,7 +210,9 @@ run_gate() {
   local label="$1"
   local category_min_gbps="$2"
   shift 2
-  set -- --min-gbps "$category_min_gbps" --min-seconds "$min_seconds" --seconds-slop "$seconds_slop" "$@"
+  set -- --min-gbps "$category_min_gbps" --min-seconds "$min_seconds" --seconds-slop "$seconds_slop" \
+    --min-iperf-intervals "$min_iperf_intervals" \
+    --min-iperf-interval-gbps-ratio "$min_interval_gbps_ratio" "$@"
   set -- "$@" --require-binary-identity --require-stable-boot-id --require-iperf-pair-directions --require-kernel-log-artifacts --min-kernel-log-nodes 2
   if [[ -n "$summary_dir" ]]; then
     mkdir -p "$summary_dir"
@@ -255,6 +259,10 @@ main() {
   min_seconds="$(max_decimal "$min_seconds" "900")"
   validate_number TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP "$seconds_slop"
   seconds_slop="$(min_decimal "$seconds_slop" "1")"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_GATE_MIN_IPERF_INTERVALS "$min_iperf_intervals"
+  min_iperf_intervals="$(max_integer "$min_iperf_intervals" "600")"
+  validate_number TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO "$min_interval_gbps_ratio"
+  min_interval_gbps_ratio="$(max_decimal "$min_interval_gbps_ratio" "0.25")"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS "$secure_kudp_min_crypto_flows"

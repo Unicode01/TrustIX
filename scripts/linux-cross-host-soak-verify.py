@@ -104,6 +104,18 @@ def parse_args() -> argparse.Namespace:
         help="minimum number of iperf3 JSON files expected per case",
     )
     parser.add_argument(
+        "--min-iperf-intervals",
+        type=int,
+        default=0,
+        help="minimum number of throughput interval samples expected per validated iperf direction",
+    )
+    parser.add_argument(
+        "--min-iperf-interval-gbps-ratio",
+        type=float,
+        default=0.0,
+        help="minimum interval throughput as a ratio of --min-gbps for each validated iperf direction",
+    )
+    parser.add_argument(
         "--require-iperf-pair-directions",
         action="store_true",
         help="require usable iperf artifacts covering both a-to-b and b-to-a traffic pairs",
@@ -1066,6 +1078,8 @@ def validate_case(
     min_seconds: float,
     seconds_slop: float,
     min_iperf_json: int,
+    min_iperf_intervals: int,
+    min_iperf_interval_gbps_ratio: float,
     require_iperf_pair_directions: bool,
     require_result_marker: bool,
     log_scan: bool,
@@ -1180,6 +1194,18 @@ def validate_case(
             if seconds + seconds_slop < min_seconds:
                 errors.append(
                     f"{label}: seconds {seconds:.3f} + slop {seconds_slop:.3f} < {min_seconds:.3f}"
+                )
+            intervals = int(item.get("intervals") or 0)
+            interval_min_gbps = float(item.get("interval_min_gbps") or 0)
+            if min_iperf_intervals > 0 and intervals < min_iperf_intervals:
+                errors.append(
+                    f"{label}: interval count {intervals}, want >= {min_iperf_intervals}"
+                )
+            interval_floor = min_gbps * min_iperf_interval_gbps_ratio
+            if min_iperf_interval_gbps_ratio > 0 and interval_min_gbps < interval_floor:
+                errors.append(
+                    f"{label}: interval min {interval_min_gbps:.3f}Gbps < "
+                    f"{interval_floor:.3f}Gbps"
                 )
     if len(iperf_files) < min_iperf_json and len(iperf_results) < min_iperf_json:
         errors.append(
@@ -1311,6 +1337,8 @@ def validate_case(
         "min_gbps_required": min_gbps,
         "min_seconds_required": min_seconds,
         "seconds_slop": seconds_slop,
+        "min_iperf_intervals_required": min_iperf_intervals,
+        "min_iperf_interval_gbps_ratio_required": min_iperf_interval_gbps_ratio,
         "iperf_json_count": len(iperf_files),
         "iperf_direction_count": len(iperf_results),
         "iperf_pair_directions": sorted(iperf_pair_directions),
@@ -1358,6 +1386,10 @@ def main() -> int:
         raise SystemExit("--seconds-slop must be non-negative")
     if args.min_iperf_json < 0:
         raise SystemExit("--min-iperf-json must be non-negative")
+    if args.min_iperf_intervals < 0:
+        raise SystemExit("--min-iperf-intervals must be non-negative")
+    if args.min_iperf_interval_gbps_ratio < 0:
+        raise SystemExit("--min-iperf-interval-gbps-ratio must be non-negative")
     if args.min_kernel_log_artifacts < 0:
         raise SystemExit("--min-kernel-log-artifacts must be non-negative")
     if args.min_kernel_log_nodes < 0:
@@ -1450,6 +1482,8 @@ def main() -> int:
             min_seconds=args.min_seconds,
             seconds_slop=args.seconds_slop,
             min_iperf_json=args.min_iperf_json,
+            min_iperf_intervals=args.min_iperf_intervals,
+            min_iperf_interval_gbps_ratio=args.min_iperf_interval_gbps_ratio,
             require_iperf_pair_directions=args.require_iperf_pair_directions,
             require_result_marker=not args.no_result_marker,
             log_scan=not args.no_log_scan,

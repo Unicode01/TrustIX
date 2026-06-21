@@ -222,6 +222,48 @@ func TestCrossHostSoakVerifyAcceptsIperfPairDirectionsFromServerArtifacts(t *tes
 	}
 }
 
+func TestCrossHostSoakVerifyRejectsTooFewIperfIntervals(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--min-iperf-intervals", "4", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted too few interval samples:\n%s", output)
+	}
+	if !strings.Contains(string(output), "interval count 3, want >= 4") {
+		t.Fatalf("verify output did not report too few interval samples:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsLowIperfIntervalFloor(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2, 8, 0.1)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2, 8, 0.8)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--min-iperf-interval-gbps-ratio", "0.5", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted low interval floor:\n%s", output)
+	}
+	if !strings.Contains(string(output), "interval min 0.510Gbps < 2.000Gbps") {
+		t.Fatalf("verify output did not report low interval floor:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyRejectsSlowArtifacts(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -1228,6 +1270,42 @@ func productionGateCommand(t *testing.T, extraEnv ...string) *exec.Cmd {
 
 func writeIperfJSON(t *testing.T, path string, sentBPS, receivedBPS, seconds float64) {
 	t.Helper()
+	writeIperfJSONWithIntervals(t, path, sentBPS, receivedBPS, seconds, 3, 0.8)
+}
+
+func writeIperfJSONWithIntervals(t *testing.T, path string, sentBPS, receivedBPS, seconds float64, intervalCount int, minFactor float64) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make iperf artifact dir: %v", err)
+	}
+	if intervalCount < 1 {
+		intervalCount = 1
+	}
+	if minFactor <= 0 {
+		minFactor = 0.8
+	}
+	intervals := make([]map[string]any, 0, intervalCount)
+	for i := 0; i < intervalCount; i++ {
+		factor := 1.0
+		retransmits := 0
+		switch i {
+		case 0:
+			factor = minFactor
+			retransmits = 1
+		case 1:
+			factor = 1.0
+			retransmits = 2
+		case 2:
+			factor = 1.1
+			retransmits = 3
+		}
+		intervals = append(intervals, map[string]any{
+			"sum": map[string]any{
+				"bits_per_second": sentBPS * factor,
+				"retransmits":     retransmits,
+			},
+		})
+	}
 	payload := map[string]any{
 		"end": map[string]any{
 			"sum_sent": map[string]any{
@@ -1240,11 +1318,7 @@ func writeIperfJSON(t *testing.T, path string, sentBPS, receivedBPS, seconds flo
 				"seconds":         seconds,
 			},
 		},
-		"intervals": []map[string]any{
-			{"sum": map[string]any{"bits_per_second": sentBPS * 0.8, "retransmits": 1}},
-			{"sum": map[string]any{"bits_per_second": sentBPS, "retransmits": 2}},
-			{"sum": map[string]any{"bits_per_second": sentBPS * 1.1, "retransmits": 3}},
-		},
+		"intervals": intervals,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -1568,8 +1642,8 @@ func writeModuleParameters(t *testing.T, path string, modules map[string]map[str
 
 func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmit bool) {
 	t.Helper()
-	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 3.3e9, 3.2e9, 900.2)
-	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 3.3e9, 3.2e9, 900.2)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 3.3e9, 3.2e9, 900.2, 900, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 3.3e9, 3.2e9, 900.2, 900, 0.8)
 	writeResultMarker(t, dir)
 	writeStableBootIDs(t, dir)
 	writeKernelLogArtifacts(t, dir)
@@ -1633,8 +1707,8 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 
 func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, routeHelperXmit bool) {
 	t.Helper()
-	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 900.2)
-	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 900.2)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 900.2, 900, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 900.2, 900, 0.8)
 	writeResultMarker(t, dir)
 	writeStableBootIDs(t, dir)
 	writeKernelLogArtifacts(t, dir)
@@ -1769,8 +1843,8 @@ func writeSecureKUDPModuleParameters(t *testing.T, path string, routeHelperXmit 
 
 func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO bool) {
 	t.Helper()
-	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 2.8e9, 2.7e9, 900.2)
-	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 2.8e9, 2.7e9, 900.2)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 2.8e9, 2.7e9, 900.2, 900, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 2.8e9, 2.7e9, 900.2, 900, 0.8)
 	writeResultMarker(t, dir)
 	writeStableBootIDs(t, dir)
 	writeKernelLogArtifacts(t, dir)

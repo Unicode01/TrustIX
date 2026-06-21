@@ -1151,6 +1151,10 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900",
 		"min_seconds=\"$(max_decimal \"$min_seconds\" \"900\")\"",
 		"seconds_slop=\"$(min_decimal \"$seconds_slop\" \"1\")\"",
+		"TRUSTIX_CROSS_HOST_GATE_MIN_IPERF_INTERVALS:-600",
+		"min_iperf_intervals=\"$(max_integer \"$min_iperf_intervals\" \"600\")\"",
+		"TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO:-0.25",
+		"min_interval_gbps_ratio=\"$(max_decimal \"$min_interval_gbps_ratio\" \"0.25\")\"",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1",
@@ -1210,6 +1214,8 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-transport-policy-stat \"datapath=${datapath}\"",
 		"--require-transport-policy-stat \"crypto_placement=${placement}\"",
 		"run_gate_case_list()",
+		"--min-iperf-intervals \"$min_iperf_intervals\"",
+		"--min-iperf-interval-gbps-ratio \"$min_interval_gbps_ratio\"",
 		"--require-binary-identity",
 		"--require-stable-boot-id",
 		"--require-iperf-pair-directions",
@@ -1462,6 +1468,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY=0",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=30",
 		"TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP=999",
+		"TRUSTIX_CROSS_HOST_GATE_MIN_IPERF_INTERVALS=0",
+		"TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO=0",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS=0",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS=0",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS=0",
@@ -1499,6 +1507,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	}
 	gotMinGbps := map[string]string{}
 	gotMinSeconds := map[string]string{}
+	gotMinIperfIntervals := map[string]string{}
+	gotMinIntervalGbpsRatio := map[string]string{}
 	gotMinKernelLogNodes := map[string]string{}
 	gotRequireIdentity := map[string]bool{}
 	gotRequireStableBootID := map[string]bool{}
@@ -1514,6 +1524,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			t.Fatalf("decode verifier args %q: %v", line, err)
 		}
 		var caseName, minGbps, minSeconds string
+		var minIperfIntervals, minIntervalGbpsRatio string
 		var minKernelLogNodes string
 		requireIdentity := false
 		for i := 0; i+1 < len(args); i++ {
@@ -1524,6 +1535,10 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				minGbps = args[i+1]
 			case "--min-seconds":
 				minSeconds = args[i+1]
+			case "--min-iperf-intervals":
+				minIperfIntervals = args[i+1]
+			case "--min-iperf-interval-gbps-ratio":
+				minIntervalGbpsRatio = args[i+1]
 			case "--min-kernel-log-nodes":
 				minKernelLogNodes = args[i+1]
 			}
@@ -1554,6 +1569,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		if caseName != "" {
 			gotMinGbps[caseName] = minGbps
 			gotMinSeconds[caseName] = minSeconds
+			gotMinIperfIntervals[caseName] = minIperfIntervals
+			gotMinIntervalGbpsRatio[caseName] = minIntervalGbpsRatio
 			gotMinKernelLogNodes[caseName] = minKernelLogNodes
 			gotRequireIdentity[caseName] = requireIdentity
 			gotRequireStableBootID[caseName] = requireStableBootID
@@ -1576,6 +1593,12 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if gotMinSeconds[name] != "900" {
 			t.Fatalf("case %s min_seconds got %q want 900; calls=%s", name, gotMinSeconds[name], payload)
+		}
+		if gotMinIperfIntervals[name] != "600" {
+			t.Fatalf("case %s min iperf intervals got %q want 600; calls=%s", name, gotMinIperfIntervals[name], payload)
+		}
+		if gotMinIntervalGbpsRatio[name] != "0.25" {
+			t.Fatalf("case %s min interval gbps ratio got %q want 0.25; calls=%s", name, gotMinIntervalGbpsRatio[name], payload)
 		}
 		if !gotRequireIdentity[name] {
 			t.Fatalf("case %s did not force --require-binary-identity; calls=%s", name, payload)
