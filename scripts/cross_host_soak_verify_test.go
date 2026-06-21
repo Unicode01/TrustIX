@@ -1277,6 +1277,12 @@ func writeTextFile(t *testing.T, path, contents string) {
 	}
 }
 
+func writeKernelLogArtifacts(t *testing.T, dir string) {
+	t.Helper()
+	writeTextFile(t, filepath.Join(dir, "collect", "a", "ix-a-kernel.log"), "kernel: TrustIX soak fixture clean\n")
+	writeTextFile(t, filepath.Join(dir, "collect", "b", "ix-b-dmesg.log"), "[    0.000000] TrustIX soak fixture clean\n")
+}
+
 func writeStatusJSON(t *testing.T, path, version, commit, builtAt string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1480,6 +1486,7 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 3.3e9, 3.2e9, 900.2)
 	writeResultMarker(t, dir)
 	writeStableBootIDs(t, dir)
+	writeKernelLogArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
@@ -1544,6 +1551,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 900.2)
 	writeResultMarker(t, dir)
 	writeStableBootIDs(t, dir)
+	writeKernelLogArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
@@ -1679,6 +1687,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 2.8e9, 2.7e9, 900.2)
 	writeResultMarker(t, dir)
 	writeStableBootIDs(t, dir)
+	writeKernelLogArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
