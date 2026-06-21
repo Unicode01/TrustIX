@@ -168,6 +168,38 @@ def parse_args() -> argparse.Namespace:
         help="minimum distinct nodes with collected pstore artifacts when --require-pstore-artifacts is set",
     )
     parser.add_argument(
+        "--require-lsmod-artifacts",
+        action="store_true",
+        help="require collected lsmod artifacts for each case",
+    )
+    parser.add_argument(
+        "--min-lsmod-nodes",
+        type=int,
+        default=2,
+        help="minimum distinct nodes with collected lsmod artifacts when --require-lsmod-artifacts is set",
+    )
+    parser.add_argument(
+        "--require-lsmod-module",
+        action="append",
+        default=[],
+        metavar="MODULE",
+        help="require every collected lsmod artifact to include MODULE; may be repeated",
+    )
+    parser.add_argument(
+        "--forbid-lsmod-module",
+        action="append",
+        default=[],
+        metavar="MODULE",
+        help="reject collected lsmod artifacts that include MODULE; may be repeated",
+    )
+    parser.add_argument(
+        "--forbid-lsmod-prefix",
+        action="append",
+        default=[],
+        metavar="PREFIX",
+        help="reject collected lsmod artifacts containing modules with PREFIX; may be repeated",
+    )
+    parser.add_argument(
         "--require-uname-artifacts",
         action="store_true",
         help="require collected uname-before/after artifacts for each case",
@@ -626,6 +658,76 @@ def pstore_artifacts(case_dir: Path) -> tuple[list[str], list[str], list[str]]:
         artifacts.append(str(rel))
         nodes.add(transport_node_key(path, case_dir))
     return artifacts, rejected, sorted(nodes)
+
+
+def collect_lsmod_artifacts(case_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    rows: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    for path in sorted(case_dir.rglob("*lsmod.txt")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(case_dir)
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            rejected.append(f"{rel}:read_error")
+            continue
+        modules: list[str] = []
+        collection_error = ""
+        for lineno, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if KERNEL_LOG_COLLECTION_FAILURE_RE.search(stripped):
+                collection_error = f"{rel}:{lineno}:collection_error:{line[:240]}"
+                break
+            modules.append(stripped.split()[0])
+        if collection_error:
+            rejected.append(collection_error)
+            continue
+        rows.append(
+            {
+                "source": str(rel),
+                "node": transport_node_key(path, case_dir),
+                "modules": modules,
+            }
+        )
+    return rows, rejected
+
+
+def validate_lsmod_artifacts(
+    case_dir: Path,
+    *,
+    required: bool,
+    min_nodes: int,
+    required_modules: list[str],
+    forbidden_modules: list[str],
+    forbidden_prefixes: list[str],
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    rows, rejected = collect_lsmod_artifacts(case_dir)
+    errors: list[str] = []
+    nodes = sorted({str(row["node"]) for row in rows})
+    if required:
+        errors.extend(f"lsmod artifact unusable: {finding}" for finding in rejected)
+    if required and len(nodes) < min_nodes:
+        errors.append(f"found lsmod artifacts for {len(nodes)} nodes, want >= {min_nodes}")
+
+    for row in rows:
+        modules = {str(module) for module in row.get("modules", [])}
+        source = str(row["source"])
+        for module in required_modules:
+            if module not in modules:
+                errors.append(f"{source}: missing loaded module {module!r}")
+        for module in forbidden_modules:
+            if module in modules:
+                errors.append(f"{source}: forbidden loaded module {module!r}")
+        for prefix in forbidden_prefixes:
+            blocked = sorted(module for module in modules if module.startswith(prefix))
+            if blocked:
+                errors.append(f"{source}: forbidden loaded modules with prefix {prefix!r}: {blocked}")
+    if (required_modules or forbidden_modules or forbidden_prefixes) and not rows:
+        errors.append("missing lsmod artifacts for module state validation")
+    return rows, errors, nodes
 
 
 def stable_digest(value: Any) -> str:
@@ -1414,6 +1516,11 @@ def validate_case(
     min_kernel_log_nodes: int,
     require_pstore_artifacts: bool,
     min_pstore_nodes: int,
+    require_lsmod_artifacts: bool,
+    min_lsmod_nodes: int,
+    required_lsmod_modules: list[str],
+    forbidden_lsmod_modules: list[str],
+    forbidden_lsmod_prefixes: list[str],
     require_uname_artifacts: bool,
     min_uname_nodes: int,
     require_os_release_artifacts: bool,
@@ -1590,6 +1697,15 @@ def validate_case(
             f"found pstore artifacts for {len(pstore_nodes)} nodes, "
             f"want >= {min_pstore_nodes}"
         )
+    lsmod_artifacts, lsmod_errors, lsmod_nodes = validate_lsmod_artifacts(
+        case.path,
+        required=require_lsmod_artifacts,
+        min_nodes=min_lsmod_nodes,
+        required_modules=required_lsmod_modules,
+        forbidden_modules=forbidden_lsmod_modules,
+        forbidden_prefixes=forbidden_lsmod_prefixes,
+    )
+    errors.extend(lsmod_errors)
 
     build_identities = collect_status_build_identities(case.path)
     build_identity_fields = (
@@ -1719,6 +1835,8 @@ def validate_case(
         "pstore_artifacts": collected_pstore,
         "pstore_rejected_artifacts": rejected_pstore,
         "pstore_nodes": pstore_nodes,
+        "lsmod_artifacts": lsmod_artifacts,
+        "lsmod_nodes": lsmod_nodes,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
         "boot_ids": boot_ids,
@@ -1766,6 +1884,8 @@ def main() -> int:
         raise SystemExit("--min-kernel-log-nodes must be non-negative")
     if args.min_pstore_nodes < 0:
         raise SystemExit("--min-pstore-nodes must be non-negative")
+    if args.min_lsmod_nodes < 0:
+        raise SystemExit("--min-lsmod-nodes must be non-negative")
     if args.min_uname_nodes < 0:
         raise SystemExit("--min-uname-nodes must be non-negative")
     if args.min_os_release_nodes < 0:
@@ -1869,6 +1989,11 @@ def main() -> int:
             min_kernel_log_nodes=args.min_kernel_log_nodes,
             require_pstore_artifacts=args.require_pstore_artifacts,
             min_pstore_nodes=args.min_pstore_nodes,
+            require_lsmod_artifacts=args.require_lsmod_artifacts,
+            min_lsmod_nodes=args.min_lsmod_nodes,
+            required_lsmod_modules=args.require_lsmod_module,
+            forbidden_lsmod_modules=args.forbid_lsmod_module,
+            forbidden_lsmod_prefixes=args.forbid_lsmod_prefix,
             require_uname_artifacts=args.require_uname_artifacts,
             min_uname_nodes=args.min_uname_nodes,
             require_os_release_artifacts=args.require_os_release_artifacts,

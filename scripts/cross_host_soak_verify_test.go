@@ -943,6 +943,99 @@ func TestCrossHostSoakVerifyChecksDatapathAndModuleCounterMinima(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRequiresLsmodArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-lsmod-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing lsmod artifacts:\n%s", output)
+	}
+	if !strings.Contains(string(output), "lsmod artifacts") {
+		t.Fatalf("verify output did not report missing lsmod artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyChecksRequiredLsmodModules(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeLsmodArtifacts(t, dir, map[string][]string{
+		"a": {"trustix_datapath"},
+		"b": {"trustix_datapath"},
+	})
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-lsmod-artifacts", "--require-lsmod-module", "trustix_datapath", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected required lsmod modules:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsMissingRequiredLsmodModule(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeLsmodArtifacts(t, dir, map[string][]string{
+		"a": {"trustix_datapath"},
+		"b": {},
+	})
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-lsmod-artifacts", "--require-lsmod-module", "trustix_datapath", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing required lsmod module:\n%s", output)
+	}
+	if !strings.Contains(string(output), "missing loaded module") {
+		t.Fatalf("verify output did not report missing lsmod module:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsForbiddenLsmodPrefix(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeLsmodArtifacts(t, dir, map[string][]string{
+		"a": {"trustix_datapath"},
+		"b": {},
+	})
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-lsmod-artifacts", "--forbid-lsmod-prefix", "trustix_", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted forbidden lsmod module prefix:\n%s", output)
+	}
+	if !strings.Contains(string(output), "forbidden loaded modules") {
+		t.Fatalf("verify output did not report forbidden lsmod module prefix:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyChecksTransportPolicyAndSessions(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -1939,6 +2032,17 @@ func writeModuleParameters(t *testing.T, path string, modules map[string]map[str
 	}
 }
 
+func writeLsmodArtifacts(t *testing.T, dir string, modulesByNode map[string][]string) {
+	t.Helper()
+	for _, node := range []string{"a", "b"} {
+		var builder strings.Builder
+		for _, module := range modulesByNode[node] {
+			builder.WriteString(module + " 16384 0\n")
+		}
+		writeTextFile(t, filepath.Join(dir, "collect", node, "ix-"+node+"-lsmod.txt"), builder.String())
+	}
+}
+
 func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmit bool) {
 	t.Helper()
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 3.3e9, 3.2e9, 900.2, 900, 0.8)
@@ -1950,6 +2054,10 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
+	writeLsmodArtifacts(t, dir, map[string][]string{
+		"a": {"trustix_datapath"},
+		"b": {"trustix_datapath"},
+	})
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
@@ -2019,6 +2127,10 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
+	writeLsmodArtifacts(t, dir, map[string][]string{
+		"a": {"trustix_crypto", "trustix_datapath_helpers"},
+		"b": {"trustix_crypto", "trustix_datapath_helpers"},
+	})
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
@@ -2159,6 +2271,10 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
+	writeLsmodArtifacts(t, dir, map[string][]string{
+		"a": {"trustix_datapath_helpers"},
+		"b": {"trustix_datapath_helpers"},
+	})
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)

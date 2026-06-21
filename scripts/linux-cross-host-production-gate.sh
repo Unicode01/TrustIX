@@ -213,7 +213,7 @@ run_gate() {
   set -- --min-gbps "$category_min_gbps" --min-seconds "$min_seconds" --seconds-slop "$seconds_slop" \
     --min-iperf-intervals "$min_iperf_intervals" \
     --min-iperf-interval-gbps-ratio "$min_interval_gbps_ratio" "$@"
-  set -- "$@" --require-run-timing --require-binary-identity --require-stable-boot-id --require-uname-artifacts --min-uname-nodes 2 --require-os-release-artifacts --min-os-release-nodes 2 --require-iperf-pair-directions --require-kernel-log-artifacts --min-kernel-log-nodes 2 --require-pstore-artifacts --min-pstore-nodes 2
+  set -- "$@" --require-run-timing --require-binary-identity --require-stable-boot-id --require-uname-artifacts --min-uname-nodes 2 --require-os-release-artifacts --min-os-release-nodes 2 --require-iperf-pair-directions --require-kernel-log-artifacts --min-kernel-log-nodes 2 --require-pstore-artifacts --min-pstore-nodes 2 --require-lsmod-artifacts --min-lsmod-nodes 2
   if [[ -n "$summary_dir" ]]; then
     mkdir -p "$summary_dir"
     set -- "$@" --summary "${summary_dir}/${label}.jsonl"
@@ -368,14 +368,16 @@ main() {
     run_gate_case_list userspace "$userspace_min_gbps" "$userspace_cases" "$userspace_case_min_gbps_raw" \
       --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
-      --require-status-max data_path.counters.session_heartbeat_timeouts=0
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
+      --forbid-lsmod-prefix trustix_
   fi
 
   if [[ "$userspace_tc_case_count" -gt 0 ]]; then
     run_gate_case_list userspace-tc "$userspace_tc_min_gbps" "$userspace_tc_cases" "$userspace_tc_case_min_gbps_raw" \
       --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
-      --require-status-max data_path.counters.session_heartbeat_timeouts=0
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
+      --forbid-lsmod-prefix trustix_
   fi
 
   if [[ "$tc_direct_case_count" -gt 0 ]]; then
@@ -390,7 +392,8 @@ main() {
       --require-datapath-stat kernel_udp.provider=tc_direct \
       --require-datapath-stat kernel_udp.fast_path=true \
       --require-datapath-stat kernel_udp.direct_only=true \
-      --require-datapath-any-min kernel_udp.active_flows=1
+      --require-datapath-any-min kernel_udp.active_flows=1 \
+      --forbid-lsmod-prefix trustix_
   fi
 
   if [[ "$full_kmod_case_count" -gt 0 ]]; then
@@ -436,7 +439,8 @@ main() {
       --require-module-param-max trustix_datapath.tx_plaintext_stale_wires=0 \
       --require-module-param-max trustix_datapath.tx_plaintext_xmit_errors=0 \
       --require-module-param-max trustix_datapath.tx_plaintext_outer_gso_errors=0 \
-      --require-module-param-max trustix_datapath.tx_plaintext_queue_drops=0
+      --require-module-param-max trustix_datapath.tx_plaintext_queue_drops=0 \
+      --require-lsmod-module trustix_datapath
   fi
 
   if [[ "$secure_kudp_case_count" -gt 0 ]]; then
@@ -504,7 +508,9 @@ main() {
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_blocked=0 \
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_verify_errors=0 \
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_tail_stitch_errors=0
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_tail_stitch_errors=0 \
+      --require-lsmod-module trustix_crypto \
+      --require-lsmod-module trustix_datapath_helpers
   fi
 
   if [[ "$route_gso_case_count" -gt 0 ]]; then
@@ -544,7 +550,8 @@ main() {
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_blocked=0 \
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_verify_errors=0 \
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_tail_stitch_errors=0
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_tail_stitch_errors=0 \
+      --require-lsmod-module trustix_datapath_helpers
   fi
 }
 
