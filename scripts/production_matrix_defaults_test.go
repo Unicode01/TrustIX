@@ -1481,6 +1481,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"#!/usr/bin/env bash",
 		"set -e",
 		"{",
+		"  printf 'GATE_MIN_SECONDS=%s\\n' \"${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-}\"",
 		"  printf 'USERSPACE_CASES=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASES\"",
 		"  printf 'USERSPACE_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS\"",
 		"  printf 'USERSPACE_TC_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS\"",
@@ -1503,6 +1504,8 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_REQUIRE_BINARY_IDENTITY=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS=5",
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1514,6 +1517,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 	}
 	text := string(payload)
 	for _, want := range []string{
+		"GATE_MIN_SECONDS=30",
 		"udp-secure-stable-userspace-userspace=1.5",
 		"tcp-secure-stable-userspace-userspace=0.75",
 		"gre-plaintext-performance-tc_xdp-userspace=4",

@@ -48,6 +48,20 @@ validate_positive_integer() {
   [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "${name} must be a positive integer"
 }
 
+max_decimal() {
+  local a="$1" b="$2"
+  awk -v a="$a" -v b="$b" 'BEGIN { if ((a + 0) >= (b + 0)) print a; else print b }'
+}
+
+max_integer() {
+  local a="$1" b="$2"
+  if (( a >= b )); then
+    printf '%s\n' "$a"
+  else
+    printf '%s\n' "$b"
+  fi
+}
+
 transport_token() {
   case "$1" in
     kernel_udp) printf 'udp\n' ;;
@@ -166,7 +180,7 @@ validate_case_values() {
 }
 
 append_selected_gate_case() {
-  local gate_family="$1" name="$2" dir="$3" min_gbps="$4"
+  local gate_family="$1" name="$2" dir="$3" min_gbps="$4" min_seconds="$5"
   local gate_class
   gate_class="$(gate_family_class "$gate_family")"
   case "$gate_class" in
@@ -195,6 +209,7 @@ append_selected_gate_case() {
       append_case_token route_gso_case_min_gbps "${name}=${min_gbps}"
       ;;
   esac
+  selected_gate_min_seconds="$(max_integer "$selected_gate_min_seconds" "$min_seconds")"
 }
 
 append_case_token() {
@@ -244,8 +259,14 @@ run_case() {
   case_selected_for_scope "$validation_scope" "$gate_family" || return 0
 
   local min_gbps min_seconds token name dir timeout_seconds rc status runner_case
-  min_gbps="${min_gbps_override:-$default_min_gbps}"
-  min_seconds="${seconds_override:-$default_min_seconds}"
+  min_gbps="$default_min_gbps"
+  if [[ -n "$min_gbps_override" ]]; then
+    min_gbps="$(max_decimal "$min_gbps_override" "$default_min_gbps")"
+  fi
+  min_seconds="$default_min_seconds"
+  if [[ -n "$seconds_override" ]]; then
+    min_seconds="$(max_integer "$seconds_override" "$default_min_seconds")"
+  fi
   validate_nonnegative_decimal "effective min_gbps" "$min_gbps"
   validate_positive_integer "effective min_seconds" "$min_seconds"
   token="$(transport_token "$transport")"
@@ -285,7 +306,7 @@ run_case() {
       run_verify "$name" "$dir" "$min_gbps" "$min_seconds" "$encryption" "$profile" "$datapath" "$placement" "$validation_scope"
     fi
     if [[ "$validation_scope" == "cross_host" ]]; then
-      append_selected_gate_case "$gate_family" "$name" "$dir" "$min_gbps"
+      append_selected_gate_case "$gate_family" "$name" "$dir" "$min_gbps" "$min_seconds"
     fi
   else
     log "case failed: ${name}; see ${dir}.err"
@@ -325,11 +346,8 @@ run_selected_gate() {
   if [[ "${#gate_env[@]}" -eq 0 ]]; then
     return 0
   fi
-  if [[ -n "$seconds_override" ]]; then
-    gate_env+=("TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=${seconds_override}")
-  fi
-  if [[ -n "$min_gbps_override" ]]; then
-    gate_env+=("TRUSTIX_CROSS_HOST_GATE_MIN_GBPS=${min_gbps_override}")
+  if [[ "$selected_gate_min_seconds" -gt 0 ]]; then
+    gate_env+=("TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=${selected_gate_min_seconds}")
   fi
   gate_env+=("TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP=${seconds_slop}")
   log "run selected production gate"
@@ -388,5 +406,6 @@ tc_direct_case_min_gbps=""
 full_kmod_case_min_gbps=""
 secure_kudp_case_min_gbps=""
 route_gso_case_min_gbps=""
+selected_gate_min_seconds=0
 
 main "$@"
