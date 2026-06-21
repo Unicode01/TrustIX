@@ -20,6 +20,40 @@ OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and OpenWrt 25.12.4 runtime
 support remain unpromoted until those exact guests pass the runtime capability
 and cross-host soak gates on PVE.
 
+### Debian userspace current-head production gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `10.203.3.200` and VM201 `10.203.3.201` on isolated `vmbr3`.
+VM100 and all 1xx guests were not modified. Both guests were Debian 13 on
+`6.12.90+deb13.1-amd64`, with no TrustIX kernel modules loaded. The release
+was built with `--build-bpf 0 --build-ko 0` from commit `a260eb71dcef`,
+build time `2026-06-20T22:21:56Z`; both guests used binary SHA256
+`20018944c7c0a29eb9c8a3f802f4746516a3b84c2c2754e606a8c22df93e1b3f`.
+The embedded assets SHA256 was
+`18eb4b0fbb81b7dfe6a9639e2997cae6cd728c5a9d2db3ba367412487cb6e622`.
+
+Artifact:
+`/root/trustix-userspace-current-20260621/results/userspace-current-900`.
+The thresholded 900s cross-host userspace matrix passed every current
+cross-host userspace production default, then the selected userspace production
+gate emitted matching pass rows. All rows had `errors=[]`, `log_findings=[]`,
+zero `data_path.counters.session_dial_errors`, and zero
+`data_path.counters.session_heartbeat_timeouts`.
+
+| Transport | Encryption | Gate | Minimum received | Minimum sent | Minimum duration |
+| --- | --- | ---: | ---: | ---: | ---: |
+| UDP | secure | 1.5 Gbps | 1.918875 Gbps | 1.919163 Gbps | 899.952472s |
+| UDP | plaintext | 1.5 Gbps | 2.158972 Gbps | 2.159122 Gbps | 899.915878s |
+| TCP | secure | 0.75 Gbps | 0.851568 Gbps | 0.851829 Gbps | 900.231512s |
+| TCP | plaintext | 1 Gbps | 1.283958 Gbps | 1.284213 Gbps | 900.156525s |
+| QUIC | secure | 0.75 Gbps | 0.977368 Gbps | 0.977592 Gbps | 900.201750s |
+| QUIC | plaintext | 1 Gbps | 1.405338 Gbps | 1.405596 Gbps | 900.081620s |
+| WebSocket | secure | 0.5 Gbps | 0.796914 Gbps | 0.797101 Gbps | 900.168679s |
+| WebSocket | plaintext | 1 Gbps | 1.248432 Gbps | 1.248699 Gbps | 900.053773s |
+| HTTP CONNECT | secure | 0.75 Gbps | 0.879747 Gbps | 0.879913 Gbps | 900.170533s |
+| HTTP CONNECT | plaintext | 1 Gbps | 1.353923 Gbps | 1.354159 Gbps | 900.133752s |
+| experimental TCP | secure | 1 Gbps | 1.550296 Gbps | 1.550500 Gbps | 900.065191s |
+
 ### OpenWrt 24.10.7 runtime capability check
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:

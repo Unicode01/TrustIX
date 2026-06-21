@@ -437,6 +437,65 @@ func TestCurrentDebianSecureKUDPEvidenceCoversProductionGate(t *testing.T) {
 	t.Fatalf("missing current Debian secure-kUDP production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
 }
 
+func TestCurrentDebianUserspaceEvidenceCoversProductionGates(t *testing.T) {
+	const (
+		wantOSMatrix     = "debian13-debian13"
+		wantKernelMatrix = "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#debian-userspace-current-head-production-gates"
+	)
+
+	evidenceByKey := map[string][]productionTransportEvidence{}
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		if evidence.OSMatrix != wantOSMatrix ||
+			evidence.KernelMatrix != wantKernelMatrix ||
+			evidence.Artifact != wantArtifact {
+			continue
+		}
+		evidenceByKey[productionEvidenceKey(evidence)] = append(evidenceByKey[productionEvidenceKey(evidence)], evidence)
+	}
+
+	var checked int
+	for _, row := range loadProductionTransportDefaults(t) {
+		if row.ValidationScope != "cross_host" ||
+			row.GateFamily != "userspace" ||
+			row.Datapath != "userspace" ||
+			row.CryptoPlacement != "userspace" {
+			continue
+		}
+		checked++
+		minGbps, err := strconv.ParseFloat(row.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid userspace default min_gbps %q in %+v", row.MinGbps, row)
+		}
+		minSeconds, err := strconv.Atoi(row.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid userspace default min_seconds %q in %+v", row.MinSeconds, row)
+		}
+		key := productionDefaultEvidenceKey(row)
+		found := false
+		for _, evidence := range evidenceByKey[key] {
+			evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+			if err != nil {
+				t.Fatalf("invalid userspace evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+			}
+			evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
+			if err != nil {
+				t.Fatalf("invalid userspace evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+			}
+			if evidence.Result == "pass" && evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing current Debian userspace evidence for %s", key)
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("no cross-host userspace production defaults checked")
+	}
+}
+
 func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing.T) {
 	defaults := readProductionTransportDefaults(t)
 	for _, wantCase := range []string{

@@ -141,6 +141,18 @@ verifier reported no kernel log crash findings. The run did observe two
 bounded direct-kfunc/decrypt errors on one peer and bounded replay/drop noise,
 both within the secure-kUDP production gate budget.
 
+A 2026-06-21 current-head Debian-to-Debian userspace recheck on
+`6.12.90+deb13.1-amd64` passed every current 900s cross-host userspace
+production default with no TrustIX kernel modules loaded. It used commit
+`a260eb71dcef`; minimum received throughput was 1.918875 Gbps for secure UDP,
+2.158972 Gbps for plaintext UDP, 0.851568 Gbps for secure TCP, 1.283958 Gbps
+for plaintext TCP, 0.977368 Gbps for secure QUIC, 1.405338 Gbps for plaintext
+QUIC, 0.796914 Gbps for secure WebSocket, 1.248432 Gbps for plaintext
+WebSocket, 0.879747 Gbps for secure HTTP CONNECT, 1.353923 Gbps for plaintext
+HTTP CONNECT, and 1.550296 Gbps for secure experimental TCP. The verifier
+reported no log findings, no errors, and zero session dial or heartbeat
+failures.
+
 The same audit passed OpenWrt-to-Debian full-kmod plaintext for 900s with a
 minimum received throughput of 3.495550 Gbps against a 3 Gbps gate. Final boot
 ID checks were stable and kernel log scans found no panic, Oops, BUG, call
