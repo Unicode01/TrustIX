@@ -20,6 +20,7 @@ min_gbps_override="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS:-}"
 seconds_slop="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS_SLOP:-1}"
 timeout_slop="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_TIMEOUT_SLOP:-120}"
 summary_path="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY:-${workdir}/summary.jsonl}"
+selected_gate_summary_dir="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_GATE_SUMMARY_DIR:-${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-${workdir}/selected-production-gate}}"
 
 log() {
   printf '[trustix-cross-host-transport-matrix] %s\n' "$*" >&2
@@ -371,6 +372,7 @@ run_selected_gate() {
   if [[ "$selected_gate_min_seconds" -gt 0 ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=${selected_gate_min_seconds}")
   fi
+  gate_env+=("TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR=${selected_gate_summary_dir}")
   gate_env+=("TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP=${seconds_slop}")
   log "run selected production gate"
   env "${gate_env[@]}" bash "$production_gate"

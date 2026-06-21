@@ -2065,6 +2065,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 	verifier := filepath.Join(workdir, "verifier.py")
 	productionGate := filepath.Join(workdir, "production-gate.sh")
 	capture := filepath.Join(workdir, "selected-gate.env")
+	matrixWorkdir := filepath.Join(workdir, "matrix")
 	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
 		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t1.5\t30\tselected UDP userspace gate",
@@ -2091,6 +2092,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"{",
 		"  printf 'GATE_MIN_SECONDS=%s\\n' \"${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-}\"",
 		"  printf 'GATE_SECONDS_SLOP=%s\\n' \"${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-}\"",
+		"  printf 'GATE_SUMMARY_DIR=%s\\n' \"${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-}\"",
 		"  printf 'USERSPACE_CASES=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASES\"",
 		"  printf 'USERSPACE_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS\"",
 		"  printf 'USERSPACE_TC_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS\"",
@@ -2105,7 +2107,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 	cmd.Env = append(os.Environ(),
 		"TRUSTIX_CAPTURE="+slashPath(capture),
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+slashPath(defaults),
-		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+slashPath(filepath.Join(workdir, "matrix")),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+slashPath(matrixWorkdir),
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_RUNNER="+slashPath(runner),
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFIER="+slashPath(verifier),
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_PRODUCTION_GATE="+slashPath(productionGate),
@@ -2129,6 +2131,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 	for _, want := range []string{
 		"GATE_MIN_SECONDS=30",
 		"GATE_SECONDS_SLOP=1",
+		"GATE_SUMMARY_DIR=" + slashPath(filepath.Join(matrixWorkdir, "selected-production-gate")),
 		"udp-secure-stable-userspace-userspace=1.5",
 		"tcp-secure-stable-userspace-userspace=0.75",
 		"gre-plaintext-performance-tc_xdp-userspace=4",
@@ -2153,6 +2156,8 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE:-all",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_KEEP_REMOTE:-0",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE:-1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_GATE_SUMMARY_DIR:-",
+		"selected-production-gate",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN:-0",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0 is only allowed with DRY_RUN=1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0 is only allowed for dry-run or non-production scopes",
@@ -2216,6 +2221,7 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=${secure_kudp_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=${route_gso_case_min_gbps}",
+		"TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR=${selected_gate_summary_dir}",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-cross-host-transport-matrix.sh missing %q", want)
