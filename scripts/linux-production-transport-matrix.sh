@@ -12,6 +12,7 @@ datapath_script="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DATAPATH_SCRIPT:-}"
 datapath_ko="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DATAPATH_KO:-}"
 datapath_kernelmodule_test_bin="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DATAPATH_KERNELMODULE_TEST_BIN:-}"
 defaults_file="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_DEFAULTS:-${repo_root}/scripts/production-transport-defaults.tsv}"
+matrix_scope="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SCOPE:-single_host}"
 full_datapath_module="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MODULE:-auto}"
 full_datapath_rx_worker="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_RX_WORKER:-auto}"
 full_datapath_script="${TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_SCRIPT:-${repo_root}/scripts/linux-full-datapath-module-smoke.sh}"
@@ -79,10 +80,11 @@ kernel_provider_available() {
 
 default_cases() {
   [[ -f "$defaults_file" ]] || die "production defaults file not found: $defaults_file"
-  awk -F '\t' '
+  awk -v scope="$matrix_scope" -F '\t' '
     BEGIN { OFS = ":" }
     /^[[:space:]]*#/ || NF == 0 { next }
     NF < 9 { printf "invalid production defaults row: %s\n", $0 >"/dev/stderr"; exit 2 }
+    scope != "all" && $6 != scope { next }
     {
       key = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5
       if (seen[key]++) next
@@ -390,6 +392,10 @@ main() {
   case "$full_datapath_module" in
     auto|1|true|yes|on|enabled|0|false|no|off|disabled) ;;
     *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_FULL_DATAPATH_MODULE must be auto, 1, or 0" ;;
+  esac
+  case "$matrix_scope" in
+    single_host|cross_host|all) ;;
+    *) die "TRUSTIX_PRODUCTION_TRANSPORT_MATRIX_SCOPE must be single_host, cross_host, or all" ;;
   esac
   case "$full_datapath_ioctl_selftest" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
