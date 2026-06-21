@@ -1226,6 +1226,8 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-iperf-pair-directions",
 		"--require-kernel-log-artifacts",
 		"--min-kernel-log-nodes 2",
+		"--require-pstore-artifacts",
+		"--min-pstore-nodes 2",
 		"run_gate_case_list userspace \"$userspace_min_gbps\"",
 		"run_gate_case_list userspace-tc \"$userspace_tc_min_gbps\"",
 		"run_gate_case_list tc-direct \"$tc_direct_min_gbps\"",
@@ -1525,6 +1527,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	gotRequirePairDirections := map[string]bool{}
 	gotRequireKernelLogs := map[string]bool{}
 	gotArgs := map[string][]string{}
+	gotRequirePstore := map[string]bool{}
+	gotMinPstoreNodes := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -1555,6 +1559,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				gotMinOSReleaseNodes[caseName] = args[i+1]
 			case "--min-kernel-log-nodes":
 				minKernelLogNodes = args[i+1]
+			case "--min-pstore-nodes":
+				gotMinPstoreNodes[caseName] = args[i+1]
 			}
 		}
 		for _, arg := range args {
@@ -1595,6 +1601,12 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				requireKernelLogs = true
 			}
 		}
+		requirePstore := false
+		for _, arg := range args {
+			if arg == "--require-pstore-artifacts" {
+				requirePstore = true
+			}
+		}
 		if caseName != "" {
 			gotMinGbps[caseName] = minGbps
 			gotMinSeconds[caseName] = minSeconds
@@ -1607,6 +1619,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			gotRequireOSRelease[caseName] = requireOSRelease
 			gotRequirePairDirections[caseName] = requirePairDirections
 			gotRequireKernelLogs[caseName] = requireKernelLogs
+			gotRequirePstore[caseName] = requirePstore
 			gotArgs[caseName] = args
 		}
 	}
@@ -1660,6 +1673,12 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if gotMinKernelLogNodes[name] != "2" {
 			t.Fatalf("case %s min kernel log nodes got %q want 2; calls=%s", name, gotMinKernelLogNodes[name], payload)
+		}
+		if !gotRequirePstore[name] {
+			t.Fatalf("case %s did not force --require-pstore-artifacts; calls=%s", name, payload)
+		}
+		if gotMinPstoreNodes[name] != "2" {
+			t.Fatalf("case %s min pstore nodes got %q want 2; calls=%s", name, gotMinPstoreNodes[name], payload)
 		}
 	}
 	requireArgPair := func(caseName, key, value string) {

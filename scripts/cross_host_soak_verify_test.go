@@ -497,6 +497,70 @@ func TestCrossHostSoakVerifyRejectsKernelLogCollectionErrors(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRequiresPstoreArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-pstore-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing pstore artifacts:\n%s", output)
+	}
+	if !strings.Contains(string(output), "pstore artifacts") {
+		t.Fatalf("verify output did not report missing pstore artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyAcceptsPstoreArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writePstoreArtifacts(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-pstore-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected pstore artifacts: %v\n%s", err, output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsPstoreCrashArtifact(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writePstoreArtifacts(t, dir)
+	writeTextFile(t, filepath.Join(dir, "collect", "a", "ix-a-pstore.txt"), "===== /sys/fs/pstore/dmesg-ramoops-0 =====\nKernel panic - not syncing: test\n")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-pstore-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted pstore crash artifact:\n%s", output)
+	}
+	if !strings.Contains(string(output), "log crash signature") ||
+		!strings.Contains(string(output), "pstore") {
+		t.Fatalf("verify output did not report pstore crash artifact:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyRejectsTxQueueLenMisconfigLogs(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -1654,6 +1718,12 @@ func writeKernelLogArtifacts(t *testing.T, dir string) {
 	writeTextFile(t, filepath.Join(dir, "collect", "b", "ix-b-dmesg.log"), "[    0.000000] TrustIX soak fixture clean\n")
 }
 
+func writePstoreArtifacts(t *testing.T, dir string) {
+	t.Helper()
+	writeTextFile(t, filepath.Join(dir, "collect", "a", "ix-a-pstore.txt"), "status=mounted\nstatus=empty\n")
+	writeTextFile(t, filepath.Join(dir, "collect", "b", "ix-b-pstore.txt"), "status=unavailable\n")
+}
+
 func writeStatusJSON(t *testing.T, path, version, commit, builtAt string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1879,6 +1949,7 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 	writeStableUnames(t, dir)
 	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
+	writePstoreArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
@@ -1947,6 +2018,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 	writeStableUnames(t, dir)
 	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
+	writePstoreArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
@@ -2086,6 +2158,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 	writeStableUnames(t, dir)
 	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
+	writePstoreArtifacts(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)

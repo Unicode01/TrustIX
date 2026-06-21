@@ -1364,6 +1364,21 @@ collect_kernel_logs() {
 journalctl -k -b --since '1 hour ago' --no-pager -o short-iso >$(remote_quote "${dir}/${prefix}-kernel.log") 2>&1
 dmesg -T >$(remote_quote "${dir}/${prefix}-dmesg.log") 2>&1
 lsmod | awk '/^trustix_/ {print}' >$(remote_quote "${dir}/${prefix}-lsmod.txt") 2>&1
+{
+  if [ -d /sys/fs/pstore ]; then
+    echo 'status=mounted'
+    found=0
+    for f in /sys/fs/pstore/*; do
+      [ -f \"\$f\" ] || continue
+      found=1
+      echo \"===== \$f =====\"
+      sed -n '1,220p' \"\$f\" 2>&1
+    done
+    [ \"\$found\" -eq 1 ] || echo 'status=empty'
+  else
+    echo 'status=unavailable'
+  fi
+} >$(remote_quote "${dir}/${prefix}-pstore.txt") 2>&1
 "
 }
 

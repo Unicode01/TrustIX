@@ -157,6 +157,17 @@ def parse_args() -> argparse.Namespace:
         help="minimum distinct nodes with usable kernel/dmesg log artifacts when --require-kernel-log-artifacts is set",
     )
     parser.add_argument(
+        "--require-pstore-artifacts",
+        action="store_true",
+        help="require collected pstore inspection artifacts for each case",
+    )
+    parser.add_argument(
+        "--min-pstore-nodes",
+        type=int,
+        default=2,
+        help="minimum distinct nodes with collected pstore artifacts when --require-pstore-artifacts is set",
+    )
+    parser.add_argument(
         "--require-uname-artifacts",
         action="store_true",
         help="require collected uname-before/after artifacts for each case",
@@ -559,6 +570,38 @@ def kernel_log_artifacts(case_dir: Path) -> tuple[list[str], list[str], list[str
             continue
         name = path.name.lower()
         if "kernel" not in name and "dmesg" not in name:
+            continue
+        rel = path.relative_to(case_dir)
+        try:
+            if path.stat().st_size <= 0:
+                rejected.append(f"{rel}:empty")
+                continue
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            rejected.append(f"{rel}:read_error")
+            continue
+        if not any(line.strip() for line in lines):
+            rejected.append(f"{rel}:empty")
+            continue
+        collection_error = ""
+        for lineno, line in enumerate(lines, 1):
+            if KERNEL_LOG_COLLECTION_FAILURE_RE.search(line.strip()):
+                collection_error = f"{rel}:{lineno}:collection_error:{line[:240]}"
+                break
+        if collection_error:
+            rejected.append(collection_error)
+            continue
+        artifacts.append(str(rel))
+        nodes.add(transport_node_key(path, case_dir))
+    return artifacts, rejected, sorted(nodes)
+
+
+def pstore_artifacts(case_dir: Path) -> tuple[list[str], list[str], list[str]]:
+    artifacts: list[str] = []
+    rejected: list[str] = []
+    nodes: set[str] = set()
+    for path in sorted(case_dir.rglob("*pstore*.txt")):
+        if not path.is_file():
             continue
         rel = path.relative_to(case_dir)
         try:
@@ -1369,6 +1412,8 @@ def validate_case(
     require_kernel_log_artifacts: bool,
     min_kernel_log_artifacts: int,
     min_kernel_log_nodes: int,
+    require_pstore_artifacts: bool,
+    min_pstore_nodes: int,
     require_uname_artifacts: bool,
     min_uname_nodes: int,
     require_os_release_artifacts: bool,
@@ -1534,6 +1579,17 @@ def validate_case(
             f"found usable kernel/dmesg log artifacts for {len(kernel_log_nodes)} nodes, "
             f"want >= {min_kernel_log_nodes}"
         )
+    collected_pstore, rejected_pstore, pstore_nodes = pstore_artifacts(case.path)
+    if require_pstore_artifacts:
+        errors.extend(
+            f"pstore artifact unusable: {finding}"
+            for finding in rejected_pstore
+        )
+    if require_pstore_artifacts and len(pstore_nodes) < min_pstore_nodes:
+        errors.append(
+            f"found pstore artifacts for {len(pstore_nodes)} nodes, "
+            f"want >= {min_pstore_nodes}"
+        )
 
     build_identities = collect_status_build_identities(case.path)
     build_identity_fields = (
@@ -1660,6 +1716,9 @@ def validate_case(
         "kernel_log_artifacts": collected_kernel_logs,
         "kernel_log_rejected_artifacts": rejected_kernel_logs,
         "kernel_log_nodes": kernel_log_nodes,
+        "pstore_artifacts": collected_pstore,
+        "pstore_rejected_artifacts": rejected_pstore,
+        "pstore_nodes": pstore_nodes,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
         "boot_ids": boot_ids,
@@ -1705,6 +1764,8 @@ def main() -> int:
         raise SystemExit("--min-kernel-log-artifacts must be non-negative")
     if args.min_kernel_log_nodes < 0:
         raise SystemExit("--min-kernel-log-nodes must be non-negative")
+    if args.min_pstore_nodes < 0:
+        raise SystemExit("--min-pstore-nodes must be non-negative")
     if args.min_uname_nodes < 0:
         raise SystemExit("--min-uname-nodes must be non-negative")
     if args.min_os_release_nodes < 0:
@@ -1806,6 +1867,8 @@ def main() -> int:
             require_kernel_log_artifacts=args.require_kernel_log_artifacts,
             min_kernel_log_artifacts=args.min_kernel_log_artifacts,
             min_kernel_log_nodes=args.min_kernel_log_nodes,
+            require_pstore_artifacts=args.require_pstore_artifacts,
+            min_pstore_nodes=args.min_pstore_nodes,
             require_uname_artifacts=args.require_uname_artifacts,
             min_uname_nodes=args.min_uname_nodes,
             require_os_release_artifacts=args.require_os_release_artifacts,
