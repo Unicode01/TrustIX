@@ -200,6 +200,23 @@ def parse_args() -> argparse.Namespace:
         help="reject collected lsmod artifacts containing modules with PREFIX; may be repeated",
     )
     parser.add_argument(
+        "--require-lan-state-artifacts",
+        action="store_true",
+        help="require collected LAN interface state artifacts for each case",
+    )
+    parser.add_argument(
+        "--min-lan-state-nodes",
+        type=int,
+        default=2,
+        help="minimum distinct nodes with valid LAN state artifacts when --require-lan-state-artifacts is set",
+    )
+    parser.add_argument(
+        "--min-lan-tx-queue-len",
+        type=int,
+        default=1,
+        help="minimum tx_queue_len accepted in LAN state artifacts",
+    )
+    parser.add_argument(
         "--require-uname-artifacts",
         action="store_true",
         help="require collected uname-before/after artifacts for each case",
@@ -728,6 +745,81 @@ def validate_lsmod_artifacts(
     if (required_modules or forbidden_modules or forbidden_prefixes) and not rows:
         errors.append("missing lsmod artifacts for module state validation")
     return rows, errors, nodes
+
+
+def parse_key_value_lines(value: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for raw in value.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("=====") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key = key.strip()
+        if key:
+            parsed[key] = val.strip()
+    return parsed
+
+
+def collect_lan_state_artifacts(case_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in sorted(case_dir.rglob("*lan-state.txt")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(case_dir)
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        parsed = parse_key_value_lines(text)
+        tx_queue_raw = parsed.get("tx_queue_len", "")
+        tx_queue_len: int | None = None
+        if re.fullmatch(r"[0-9]+", tx_queue_raw):
+            tx_queue_len = int(tx_queue_raw)
+        rows.append(
+            {
+                "source": str(rel),
+                "node": transport_node_key(path, case_dir),
+                "interface": parsed.get("interface", ""),
+                "tx_queue_len": tx_queue_len,
+                "tx_queue_len_raw": tx_queue_raw,
+            }
+        )
+    return rows
+
+
+def validate_lan_state_artifacts(
+    case_dir: Path,
+    *,
+    required: bool,
+    min_nodes: int,
+    min_tx_queue_len: int,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    rows = collect_lan_state_artifacts(case_dir)
+    errors: list[str] = []
+    valid_nodes: set[str] = set()
+    for row in rows:
+        source = str(row["source"])
+        interface = str(row.get("interface") or "")
+        tx_queue_len = row.get("tx_queue_len")
+        if not interface:
+            errors.append(f"{source}: missing LAN interface name")
+        if not isinstance(tx_queue_len, int):
+            errors.append(
+                f"{source}: invalid LAN tx_queue_len {row.get('tx_queue_len_raw')!r}"
+            )
+            continue
+        if tx_queue_len < min_tx_queue_len:
+            errors.append(
+                f"{source}: LAN tx_queue_len={tx_queue_len}, want >= {min_tx_queue_len}"
+            )
+            continue
+        valid_nodes.add(str(row["node"]))
+    if required and len(valid_nodes) < min_nodes:
+        errors.append(
+            f"found valid LAN state artifacts for {len(valid_nodes)} nodes, "
+            f"want >= {min_nodes}"
+        )
+    return rows, errors, sorted(valid_nodes)
 
 
 def stable_digest(value: Any) -> str:
@@ -1521,6 +1613,9 @@ def validate_case(
     required_lsmod_modules: list[str],
     forbidden_lsmod_modules: list[str],
     forbidden_lsmod_prefixes: list[str],
+    require_lan_state_artifacts: bool,
+    min_lan_state_nodes: int,
+    min_lan_tx_queue_len: int,
     require_uname_artifacts: bool,
     min_uname_nodes: int,
     require_os_release_artifacts: bool,
@@ -1706,6 +1801,13 @@ def validate_case(
         forbidden_prefixes=forbidden_lsmod_prefixes,
     )
     errors.extend(lsmod_errors)
+    lan_state_artifacts, lan_state_errors, lan_state_nodes = validate_lan_state_artifacts(
+        case.path,
+        required=require_lan_state_artifacts,
+        min_nodes=min_lan_state_nodes,
+        min_tx_queue_len=min_lan_tx_queue_len,
+    )
+    errors.extend(lan_state_errors)
 
     build_identities = collect_status_build_identities(case.path)
     build_identity_fields = (
@@ -1837,6 +1939,8 @@ def validate_case(
         "pstore_nodes": pstore_nodes,
         "lsmod_artifacts": lsmod_artifacts,
         "lsmod_nodes": lsmod_nodes,
+        "lan_state_artifacts": lan_state_artifacts,
+        "lan_state_nodes": lan_state_nodes,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
         "boot_ids": boot_ids,
@@ -1886,6 +1990,10 @@ def main() -> int:
         raise SystemExit("--min-pstore-nodes must be non-negative")
     if args.min_lsmod_nodes < 0:
         raise SystemExit("--min-lsmod-nodes must be non-negative")
+    if args.min_lan_state_nodes < 0:
+        raise SystemExit("--min-lan-state-nodes must be non-negative")
+    if args.min_lan_tx_queue_len < 0:
+        raise SystemExit("--min-lan-tx-queue-len must be non-negative")
     if args.min_uname_nodes < 0:
         raise SystemExit("--min-uname-nodes must be non-negative")
     if args.min_os_release_nodes < 0:
@@ -1994,6 +2102,9 @@ def main() -> int:
             required_lsmod_modules=args.require_lsmod_module,
             forbidden_lsmod_modules=args.forbid_lsmod_module,
             forbidden_lsmod_prefixes=args.forbid_lsmod_prefix,
+            require_lan_state_artifacts=args.require_lan_state_artifacts,
+            min_lan_state_nodes=args.min_lan_state_nodes,
+            min_lan_tx_queue_len=args.min_lan_tx_queue_len,
             require_uname_artifacts=args.require_uname_artifacts,
             min_uname_nodes=args.min_uname_nodes,
             require_os_release_artifacts=args.require_os_release_artifacts,

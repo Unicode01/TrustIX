@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -558,6 +559,68 @@ func TestCrossHostSoakVerifyRejectsPstoreCrashArtifact(t *testing.T) {
 	if !strings.Contains(string(output), "log crash signature") ||
 		!strings.Contains(string(output), "pstore") {
 		t.Fatalf("verify output did not report pstore crash artifact:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRequiresLANStateArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-lan-state-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing LAN state artifacts:\n%s", output)
+	}
+	if !strings.Contains(string(output), "LAN state artifacts") {
+		t.Fatalf("verify output did not report missing LAN state artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyAcceptsLANStateArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeLANStateArtifacts(t, dir, 1000, 1000)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-lan-state-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected LAN state artifacts: %v\n%s", err, output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsZeroLANTxQueueLen(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeLANStateArtifacts(t, dir, 1000, 0)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-lan-state-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted zero LAN tx_queue_len:\n%s", output)
+	}
+	if !strings.Contains(string(output), "LAN tx_queue_len=0") {
+		t.Fatalf("verify output did not report zero LAN tx_queue_len:\n%s", output)
 	}
 }
 
@@ -1817,6 +1880,17 @@ func writePstoreArtifacts(t *testing.T, dir string) {
 	writeTextFile(t, filepath.Join(dir, "collect", "b", "ix-b-pstore.txt"), "status=unavailable\n")
 }
 
+func writeLANStateArtifacts(t *testing.T, dir string, txQueueLenA, txQueueLenB int) {
+	t.Helper()
+	for node, txQueueLen := range map[string]int{"a": txQueueLenA, "b": txQueueLenB} {
+		value := "interface=tix-lan\n" +
+			"tx_queue_len=" + strconv.Itoa(txQueueLen) + "\n" +
+			"===== ip-link =====\n" +
+			"11: tix-lan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen " + strconv.Itoa(txQueueLen) + "\n"
+		writeTextFile(t, filepath.Join(dir, "collect", node, "ix-"+node+"-lan-state.txt"), value)
+	}
+}
+
 func writeStatusJSON(t *testing.T, path, version, commit, builtAt string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -2054,6 +2128,7 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
+	writeLANStateArtifacts(t, dir, 1000, 1000)
 	writeLsmodArtifacts(t, dir, map[string][]string{
 		"a": {"trustix_datapath"},
 		"b": {"trustix_datapath"},
@@ -2127,6 +2202,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
+	writeLANStateArtifacts(t, dir, 1000, 1000)
 	writeLsmodArtifacts(t, dir, map[string][]string{
 		"a": {"trustix_crypto", "trustix_datapath_helpers"},
 		"b": {"trustix_crypto", "trustix_datapath_helpers"},
@@ -2271,6 +2347,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 	writeStableOSReleases(t, dir)
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
+	writeLANStateArtifacts(t, dir, 1000, 1000)
 	writeLsmodArtifacts(t, dir, map[string][]string{
 		"a": {"trustix_datapath_helpers"},
 		"b": {"trustix_datapath_helpers"},

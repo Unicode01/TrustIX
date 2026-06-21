@@ -1230,6 +1230,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--min-pstore-nodes 2",
 		"--require-lsmod-artifacts",
 		"--min-lsmod-nodes 2",
+		"--require-lan-state-artifacts",
+		"--min-lan-state-nodes 2",
+		"--min-lan-tx-queue-len 1",
 		"run_gate_case_list userspace \"$userspace_min_gbps\"",
 		"run_gate_case_list userspace-tc \"$userspace_tc_min_gbps\"",
 		"run_gate_case_list tc-direct \"$tc_direct_min_gbps\"",
@@ -1537,6 +1540,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	gotMinPstoreNodes := map[string]string{}
 	gotRequireLsmod := map[string]bool{}
 	gotMinLsmodNodes := map[string]string{}
+	gotRequireLANState := map[string]bool{}
+	gotMinLANStateNodes := map[string]string{}
+	gotMinLANTxQueueLen := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -1571,6 +1577,10 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				gotMinPstoreNodes[caseName] = args[i+1]
 			case "--min-lsmod-nodes":
 				gotMinLsmodNodes[caseName] = args[i+1]
+			case "--min-lan-state-nodes":
+				gotMinLANStateNodes[caseName] = args[i+1]
+			case "--min-lan-tx-queue-len":
+				gotMinLANTxQueueLen[caseName] = args[i+1]
 			}
 		}
 		for _, arg := range args {
@@ -1623,6 +1633,12 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				requireLsmod = true
 			}
 		}
+		requireLANState := false
+		for _, arg := range args {
+			if arg == "--require-lan-state-artifacts" {
+				requireLANState = true
+			}
+		}
 		if caseName != "" {
 			gotMinGbps[caseName] = minGbps
 			gotMinSeconds[caseName] = minSeconds
@@ -1637,6 +1653,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			gotRequireKernelLogs[caseName] = requireKernelLogs
 			gotRequirePstore[caseName] = requirePstore
 			gotRequireLsmod[caseName] = requireLsmod
+			gotRequireLANState[caseName] = requireLANState
 			gotArgs[caseName] = args
 		}
 	}
@@ -1702,6 +1719,15 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if gotMinLsmodNodes[name] != "2" {
 			t.Fatalf("case %s min lsmod nodes got %q want 2; calls=%s", name, gotMinLsmodNodes[name], payload)
+		}
+		if !gotRequireLANState[name] {
+			t.Fatalf("case %s did not force --require-lan-state-artifacts; calls=%s", name, payload)
+		}
+		if gotMinLANStateNodes[name] != "2" {
+			t.Fatalf("case %s min LAN state nodes got %q want 2; calls=%s", name, gotMinLANStateNodes[name], payload)
+		}
+		if gotMinLANTxQueueLen[name] != "1" {
+			t.Fatalf("case %s min LAN tx queue len got %q want 1; calls=%s", name, gotMinLANTxQueueLen[name], payload)
 		}
 	}
 	requireArgPair := func(caseName, key, value string) {

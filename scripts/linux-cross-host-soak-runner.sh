@@ -1310,6 +1310,8 @@ collect_failure_snapshot() {
   collect_transport_snapshot "failed-${label}" || true
   collect_module_parameters a || true
   collect_module_parameters b || true
+  collect_lan_state a || true
+  collect_lan_state b || true
   collect_kernel_logs a || true
   collect_kernel_logs b || true
   fetch_from_node a "$remote_a" "$workdir/a" || true
@@ -1401,6 +1403,32 @@ for module_dir in /sys/module/trustix_*/parameters; do
     printf '%s=%s\\n' \"\$name\" \"\$value\" >>\"\$out\"
   done
 done
+"
+}
+
+collect_lan_state() {
+  local node="$1"
+  local dir prefix lan_if
+  dir="$(remote_dir "$node")"
+  prefix="$(node_value "$node" "$ix_a" "$ix_b")"
+  lan_if="$(node_value "$node" "$lan_if_a" "$lan_if_b")"
+  run_node "$node" "set +e
+out=$(remote_quote "${dir}/${prefix}-lan-state.txt")
+lan_if=$(remote_quote "$lan_if")
+{
+  printf 'interface=%s\\n' \"\$lan_if\"
+  if [ -r \"/sys/class/net/\$lan_if/tx_queue_len\" ]; then
+    printf 'tx_queue_len=%s\\n' \"\$(cat \"/sys/class/net/\$lan_if/tx_queue_len\" 2>/dev/null || true)\"
+  else
+    printf 'tx_queue_len=missing\\n'
+  fi
+  echo '===== ip-link ====='
+  ip -d link show \"\$lan_if\" 2>&1 || true
+  if command -v ethtool >/dev/null 2>&1; then
+    echo '===== ethtool-features ====='
+    ethtool -k \"\$lan_if\" 2>&1 || true
+  fi
+} >\"\$out\" 2>&1
 "
 }
 
@@ -1733,6 +1761,8 @@ collect_all() {
   collect_node_api b || true
   collect_module_parameters a || true
   collect_module_parameters b || true
+  collect_lan_state a || true
+  collect_lan_state b || true
   collect_binary_identity a || true
   collect_binary_identity b || true
   collect_kernel_logs a || true
