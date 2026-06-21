@@ -150,6 +150,70 @@ func productionEvidenceKey(row productionTransportEvidence) string {
 	}, ":")
 }
 
+type currentProductionEvidenceRequirement struct {
+	OSMatrix     string
+	KernelMatrix string
+	Artifact     string
+}
+
+func currentProductionEvidenceRequirementForDefault(row productionTransportDefault) (currentProductionEvidenceRequirement, bool) {
+	if row.ValidationScope != "cross_host" {
+		return currentProductionEvidenceRequirement{}, false
+	}
+	switch row.GateFamily {
+	case "userspace":
+		if row.Datapath != "userspace" || row.CryptoPlacement != "userspace" {
+			return currentProductionEvidenceRequirement{}, false
+		}
+		return currentProductionEvidenceRequirement{
+			OSMatrix:     "debian13-debian13",
+			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+			Artifact:     "docs/trustix-performance-log.md#debian-userspace-current-head-production-gates",
+		}, true
+	case "userspace_tc":
+		if row.Datapath != "tc_xdp" || row.CryptoPlacement != "userspace" {
+			return currentProductionEvidenceRequirement{}, false
+		}
+		return currentProductionEvidenceRequirement{
+			OSMatrix:     "debian13-debian13",
+			KernelMatrix: "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:     "docs/trustix-performance-log.md#debian-userspace-tc-current-head-production-gates",
+		}, true
+	case "tc_direct":
+		return currentProductionEvidenceRequirement{
+			OSMatrix:     "debian13-debian13",
+			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+			Artifact:     "docs/trustix-performance-log.md#debian-tc-direct-current-head-production-recheck",
+		}, true
+	case "full_kmod":
+		return currentProductionEvidenceRequirement{
+			OSMatrix:     "debian13-debian13",
+			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+			Artifact:     "docs/trustix-performance-log.md#debian-full-kmod-current-head-production-recheck",
+		}, true
+	case "owdeb_full_kmod":
+		return currentProductionEvidenceRequirement{
+			OSMatrix:     "openwrt24.10.7-debian13",
+			KernelMatrix: "6.6.141_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:     "docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check",
+		}, true
+	case "secure_kudp":
+		return currentProductionEvidenceRequirement{
+			OSMatrix:     "debian13-debian13",
+			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+			Artifact:     "docs/trustix-performance-log.md#debian-secure-kudp-current-head-production-recheck",
+		}, true
+	case "route_gso":
+		return currentProductionEvidenceRequirement{
+			OSMatrix:     "debian13-debian13",
+			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+			Artifact:     "docs/trustix-performance-log.md#debian-route-gso-current-head-production-recheck",
+		}, true
+	default:
+		return currentProductionEvidenceRequirement{}, false
+	}
+}
+
 func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *testing.T) {
 	for _, name := range []string{"linux-production-transport-matrix.sh"} {
 		t.Run(name, func(t *testing.T) {
@@ -312,6 +376,81 @@ func TestCrossHostProductionDefaultsHavePassingEvidence(t *testing.T) {
 			continue
 		}
 		t.Fatalf("cross-host production default lacks passing evidence at or above gate %s: %+v; candidates=%v", key, row, candidates)
+	}
+}
+
+func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
+	defaults := loadProductionTransportDefaults(t)
+	evidenceByKey := map[string][]productionTransportEvidence{}
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		evidenceByKey[productionEvidenceKey(evidence)] = append(evidenceByKey[productionEvidenceKey(evidence)], evidence)
+	}
+
+	checkedByFamily := map[string]int{}
+	for _, row := range defaults {
+		if row.ValidationScope != "cross_host" {
+			continue
+		}
+		requirement, ok := currentProductionEvidenceRequirementForDefault(row)
+		if !ok {
+			t.Fatalf("cross-host production default lacks current evidence requirement: %+v", row)
+		}
+		minGbps, err := strconv.ParseFloat(row.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid production default min_gbps %q in %+v", row.MinGbps, row)
+		}
+		minSeconds, err := strconv.Atoi(row.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid production default min_seconds %q in %+v", row.MinSeconds, row)
+		}
+		key := productionDefaultEvidenceKey(row)
+		var candidates []string
+		found := false
+		for _, evidence := range evidenceByKey[key] {
+			candidates = append(candidates, strings.Join([]string{
+				evidence.OSMatrix,
+				evidence.KernelMatrix,
+				evidence.Result,
+				evidence.MinGbps,
+				evidence.MinSeconds,
+				evidence.Artifact,
+			}, " "))
+			if evidence.OSMatrix != requirement.OSMatrix ||
+				evidence.KernelMatrix != requirement.KernelMatrix ||
+				evidence.Artifact != requirement.Artifact ||
+				evidence.Result != "pass" {
+				continue
+			}
+			evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+			if err != nil {
+				t.Fatalf("invalid production evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+			}
+			evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
+			if err != nil {
+				t.Fatalf("invalid production evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+			}
+			if evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("cross-host production default lacks current passing evidence at or above gate %s: %+v; requirement=%+v; candidates=%v", key, row, requirement, candidates)
+		}
+		checkedByFamily[row.GateFamily]++
+	}
+	for _, family := range []string{
+		"userspace",
+		"userspace_tc",
+		"tc_direct",
+		"full_kmod",
+		"owdeb_full_kmod",
+		"secure_kudp",
+		"route_gso",
+	} {
+		if checkedByFamily[family] == 0 {
+			t.Fatalf("no current cross-host production defaults checked for gate family %s", family)
+		}
 	}
 }
 
