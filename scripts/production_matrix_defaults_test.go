@@ -1261,6 +1261,8 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-transport-policy-min session_pool_size=\"${route_gso_min_sessions}\"",
 		"--require-transport-policy-stat session_pool_strategy=flow",
 		"--require-transport-policy-stat session_pool_warmup=true",
+		"--require-transport-sessions-min \"${full_kmod_min_sessions}\"",
+		"--require-transport-sessions-min \"${secure_kudp_min_sessions}\"",
 		"--require-status-min data_path.active_sessions=\"${route_gso_min_sessions}\"",
 		"--require-status-max data_path.counters.session_dial_errors=\"${route_gso_session_error_budget}\"",
 		"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
@@ -1798,6 +1800,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("tc", "--require-transport-session-stat", "stats.encryption=plaintext")
 	requireArgPair("tc", "--forbid-lsmod-prefix", "trustix_")
 	requireArgPair("full", "--require-transport-policy-min", "session_pool_size=8")
+	requireArgPair("full", "--require-transport-sessions-min", "8")
 	requireArgPair("full", "--require-transport-session-stat", "transport=udp")
 	requireArg("full", "--require-transport-session-endpoint-suffix=-udp")
 	requireArgPair("full", "--require-transport-session-stat", "stats.encryption=plaintext")
@@ -1811,6 +1814,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("full", "--require-module-param-min", "trustix_datapath.session_records=8")
 	requireArgPair("full", "--require-lsmod-module", "trustix_datapath")
 	requireArgPair("secure", "--require-transport-policy-min", "session_pool_size=8")
+	requireArgPair("secure", "--require-transport-sessions-min", "8")
 	requireArgPair("secure", "--require-transport-session-stat", "transport=udp")
 	requireArg("secure", "--require-transport-session-endpoint-suffix=-udp")
 	requireArgPair("secure", "--require-transport-session-stat", "stats.encryption=secure")

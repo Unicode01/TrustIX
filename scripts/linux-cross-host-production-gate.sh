@@ -478,6 +478,7 @@ main() {
       --require-transport-policy-min session_pool_size="${full_kmod_min_sessions}" \
       --require-transport-policy-stat session_pool_strategy=flow \
       --require-transport-policy-stat session_pool_warmup=true \
+      --require-transport-sessions-min "${full_kmod_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
       --require-datapath-stat kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1 \
@@ -524,6 +525,7 @@ main() {
       --require-transport-policy-min session_pool_size="${secure_kudp_min_sessions}" \
       --require-transport-policy-stat session_pool_strategy=flow \
       --require-transport-policy-stat session_pool_warmup=true \
+      --require-transport-sessions-min "${secure_kudp_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
       --require-datapath-stat kernel_udp.kernel_crypto=true \
