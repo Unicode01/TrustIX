@@ -1129,6 +1129,8 @@ func TestCrossHostSoakVerifyChecksTransportPolicyAndSessions(t *testing.T) {
 		"8",
 		"--require-transport-session-stat",
 		"transport=experimental_tcp",
+		"--require-transport-session-stat",
+		"stats.encryption=plaintext",
 		"--require-transport-session-endpoint-suffix=-experimental-tcp",
 		dir,
 	)
@@ -1173,6 +1175,45 @@ func TestCrossHostSoakVerifyRejectsWrongTransportSessionEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "matching transport sessions=0, want >= 8") {
 		t.Fatalf("verify did not report wrong transport session endpoint:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsWrongTransportSessionStats(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	for _, node := range []string{"a", "b"} {
+		writeTransportsJSONWithSession(t, filepath.Join(dir, "collect", node, "transports.json"), 8, "flow", true, 8, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"))
+	}
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps",
+		"4",
+		"--min-seconds",
+		"120",
+		"--require-transport-sessions-min",
+		"8",
+		"--require-transport-session-stat",
+		"transport=experimental_tcp",
+		"--require-transport-session-stat",
+		"stats.encryption=secure",
+		"--require-transport-session-endpoint-suffix=-experimental-tcp",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted wrong transport session stats:\n%s", output)
+	}
+	if !strings.Contains(string(output), "stats.encryption=secure") {
+		t.Fatalf("verify did not report wrong transport session stats:\n%s", output)
 	}
 }
 
@@ -1346,6 +1387,8 @@ func TestCrossHostSoakVerifyAcceptsActiveTransportSessionSnapshot(t *testing.T) 
 		"8",
 		"--require-transport-session-stat",
 		"transport=experimental_tcp",
+		"--require-transport-session-stat",
+		"stats.encryption=plaintext",
 		"--require-transport-session-endpoint-suffix=-experimental-tcp",
 		dir,
 	)
@@ -2115,6 +2158,9 @@ func writeTransportsJSONWithSession(t *testing.T, path string, poolSize int, str
 			"endpoint":   endpoint,
 			"transport":  sessionTransport,
 			"pool_index": i,
+			"stats": map[string]any{
+				"encryption": "plaintext",
+			},
 		})
 	}
 	payload := map[string]any{
@@ -2339,6 +2385,13 @@ func writeSecureKUDPTransportsJSON(t *testing.T, path string, node string) {
 			"endpoint":   peerEndpointForNode(node, "-udp"),
 			"transport":  "udp",
 			"pool_index": i,
+			"stats": map[string]any{
+				"encryption":        "secure",
+				"encrypted":         true,
+				"send_encrypted":    true,
+				"receive_encrypted": true,
+				"crypto_placement":  "kernel",
+			},
 		})
 	}
 	payload := map[string]any{

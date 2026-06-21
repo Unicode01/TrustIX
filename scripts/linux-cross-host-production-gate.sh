@@ -230,12 +230,22 @@ case_session_args() {
       ;;
     tc-direct|secure-kudp)
       transport="kernel_udp"
+      encryption="plaintext"
+      placement="userspace"
+      if [[ "$family" == "secure-kudp" ]]; then
+        encryption="secure"
+        placement="kernel"
+      fi
       ;;
     full-kmod)
       transport="udp"
+      encryption="plaintext"
+      placement="userspace"
       ;;
     route-gso)
       transport="experimental_tcp"
+      encryption="plaintext"
+      placement="userspace"
       ;;
     *)
       return 0
@@ -243,7 +253,20 @@ case_session_args() {
   esac
   printf '%s\n' \
     --require-transport-session-stat "transport=$(session_transport_for_matrix_transport "$transport")" \
-    "--require-transport-session-endpoint-suffix=$(session_endpoint_suffix_for_matrix_transport "$transport")"
+    "--require-transport-session-endpoint-suffix=$(session_endpoint_suffix_for_matrix_transport "$transport")" \
+    --require-transport-session-stat "stats.encryption=${encryption}"
+  if [[ "$encryption" == "secure" ]]; then
+    printf '%s\n' \
+      --require-transport-session-stat "stats.encrypted=true" \
+      --require-transport-session-stat "stats.send_encrypted=true" \
+      --require-transport-session-stat "stats.receive_encrypted=true" \
+      --require-transport-session-stat "stats.crypto_placement=${placement}"
+  fi
+  case "$(session_transport_for_matrix_transport "$transport")" in
+    tcp|quic|websocket|http_connect)
+      printf '%s\n' --require-transport-session-stat "stats.link_tls=true"
+      ;;
+  esac
 }
 
 case_label_name() {
