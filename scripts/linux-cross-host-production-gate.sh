@@ -26,6 +26,9 @@ compat_min_sessions="${TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS:-1}"
 userspace_cases_raw="${TRUSTIX_CROSS_HOST_USERSPACE_CASES:-}"
 userspace_tc_cases_raw="${TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES:-}"
 tc_direct_cases_raw="${TRUSTIX_CROSS_HOST_TC_DIRECT_CASES:-}"
+userspace_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS:-}"
+userspace_tc_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS:-}"
+tc_direct_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS:-}"
 dd_full_kmod="${TRUSTIX_CROSS_HOST_DD_FULL_KMOD:-}"
 owdeb_full_kmod="${TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD:-}"
 dd_secure_kudp="${TRUSTIX_CROSS_HOST_DD_SECURE_KUDP:-}"
@@ -35,6 +38,9 @@ owdeb_route_gso="${TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO:-}"
 full_kmod_cases_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASES:-}"
 secure_kudp_cases_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES:-}"
 route_gso_cases_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES:-}"
+full_kmod_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS:-}"
+secure_kudp_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS:-}"
+route_gso_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS:-}"
 
 log() {
   printf '[trustix-cross-host-gate] %s\n' "$*" >&2
@@ -65,6 +71,78 @@ validate_case_token() {
   [[ -n "${token#*=}" ]] || die "case must be NAME=PATH, got ${token}"
 }
 
+validate_case_min_token() {
+  local env_name="$1" token="$2"
+  [[ "$token" == *=* ]] || die "${env_name} entries must be NAME=MIN_GBPS, got ${token}"
+  [[ -n "${token%%=*}" ]] || die "${env_name} entries must be NAME=MIN_GBPS, got ${token}"
+  [[ -n "${token#*=}" ]] || die "${env_name} entries must be NAME=MIN_GBPS, got ${token}"
+  validate_number "$env_name" "${token#*=}"
+}
+
+validate_case_min_map() {
+  local env_name="$1" raw="$2" token
+  for token in $raw; do
+    validate_case_min_token "$env_name" "$token"
+  done
+}
+
+append_case_token() {
+  local var_name="$1" token="$2" current
+  current="${!var_name:-}"
+  if [[ -n "$current" ]]; then
+    printf -v "$var_name" '%s %s' "$current" "$token"
+  else
+    printf -v "$var_name" '%s' "$token"
+  fi
+}
+
+case_min_gbps() {
+  local case_token="$1" default_min_gbps="$2" min_map_raw="$3"
+  local case_name="${case_token%%=*}" token
+  for token in $min_map_raw; do
+    if [[ "${token%%=*}" == "$case_name" ]]; then
+      printf '%s\n' "${token#*=}"
+      return 0
+    fi
+  done
+  printf '%s\n' "$default_min_gbps"
+}
+
+case_name_exists() {
+  local name="$1" cases="$2" token
+  for token in $cases; do
+    [[ "${token%%=*}" == "$name" ]] && return 0
+  done
+  return 1
+}
+
+case_min_exists() {
+  local name="$1" min_map_raw="$2" token
+  for token in $min_map_raw; do
+    [[ "${token%%=*}" == "$name" ]] && return 0
+  done
+  return 1
+}
+
+validate_case_min_map_matches_cases() {
+  local env_name="$1" min_map_raw="$2" cases="$3" token name
+  [[ -n "$min_map_raw" ]] || return 0
+  for token in $min_map_raw; do
+    name="${token%%=*}"
+    case_name_exists "$name" "$cases" || die "${env_name} references unknown case ${name}"
+  done
+  for token in $cases; do
+    name="${token%%=*}"
+    case_min_exists "$name" "$min_map_raw" || die "${env_name} missing min_gbps for case ${name}"
+  done
+}
+
+case_label_name() {
+  local prefix="$1" case_token="$2" case_name
+  case_name="${case_token%%=*}"
+  printf '%s-%s\n' "$prefix" "$(printf '%s' "$case_name" | tr -c 'A-Za-z0-9_.-' '_')"
+}
+
 run_gate() {
   local label="$1"
   local category_min_gbps="$2"
@@ -79,6 +157,17 @@ run_gate() {
   fi
   log "run ${label}"
   python3 "$verifier" "$@"
+}
+
+run_gate_case_list() {
+  local label="$1" category_min_gbps="$2" cases="$3" min_map_raw="$4"
+  shift 4
+  local token min_gbps case_label
+  for token in $cases; do
+    min_gbps="$(case_min_gbps "$token" "$category_min_gbps" "$min_map_raw")"
+    case_label="$(case_label_name "$label" "$token")"
+    run_gate "$case_label" "$min_gbps" --case "$token" "$@"
+  done
 }
 
 main() {
@@ -102,13 +191,19 @@ main() {
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS "$route_gso_min_sessions"
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
   validate_number TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS "$compat_min_sessions"
+  validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS "$userspace_case_min_gbps_raw"
+  validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS "$userspace_tc_case_min_gbps_raw"
+  validate_case_min_map TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS "$tc_direct_case_min_gbps_raw"
+  validate_case_min_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS "$full_kmod_case_min_gbps_raw"
+  validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS "$secure_kudp_case_min_gbps_raw"
+  validate_case_min_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS "$route_gso_case_min_gbps_raw"
 
-  local userspace_args=""
-  local userspace_tc_args=""
-  local tc_direct_args=""
-  local full_kmod_args=""
-  local secure_kudp_args=""
-  local route_gso_args=""
+  local userspace_cases=""
+  local userspace_tc_cases=""
+  local tc_direct_cases=""
+  local full_kmod_cases=""
+  local secure_kudp_cases=""
+  local route_gso_cases=""
   local userspace_case_count=0
   local userspace_tc_case_count=0
   local tc_direct_case_count=0
@@ -118,79 +213,85 @@ main() {
   local token
   for token in $userspace_cases_raw; do
     validate_case_token "$token"
-    userspace_args="${userspace_args} --case ${token}"
+    append_case_token userspace_cases "$token"
     userspace_case_count=$((userspace_case_count + 1))
   done
   for token in $userspace_tc_cases_raw; do
     validate_case_token "$token"
-    userspace_tc_args="${userspace_tc_args} --case ${token}"
+    append_case_token userspace_tc_cases "$token"
     userspace_tc_case_count=$((userspace_tc_case_count + 1))
   done
   for token in $tc_direct_cases_raw; do
     validate_case_token "$token"
-    tc_direct_args="${tc_direct_args} --case ${token}"
+    append_case_token tc_direct_cases "$token"
     tc_direct_case_count=$((tc_direct_case_count + 1))
   done
   if [[ -n "$dd_full_kmod" ]]; then
-    full_kmod_args="${full_kmod_args} --case dd-fullkmod=${dd_full_kmod}"
+    append_case_token full_kmod_cases "dd-fullkmod=${dd_full_kmod}"
     full_kmod_case_count=$((full_kmod_case_count + 1))
   fi
   if [[ -n "$owdeb_full_kmod" ]]; then
-    full_kmod_args="${full_kmod_args} --case owdeb-fullkmod=${owdeb_full_kmod}"
+    append_case_token full_kmod_cases "owdeb-fullkmod=${owdeb_full_kmod}"
     full_kmod_case_count=$((full_kmod_case_count + 1))
   fi
   for token in $full_kmod_cases_raw; do
     validate_case_token "$token"
-    full_kmod_args="${full_kmod_args} --case ${token}"
+    append_case_token full_kmod_cases "$token"
     full_kmod_case_count=$((full_kmod_case_count + 1))
   done
   if [[ -n "$dd_secure_kudp" ]]; then
-    secure_kudp_args="${secure_kudp_args} --case dd-secure-kudp=${dd_secure_kudp}"
+    append_case_token secure_kudp_cases "dd-secure-kudp=${dd_secure_kudp}"
     secure_kudp_case_count=$((secure_kudp_case_count + 1))
   fi
   if [[ -n "$owdeb_secure_kudp" ]]; then
-    secure_kudp_args="${secure_kudp_args} --case owdeb-secure-kudp=${owdeb_secure_kudp}"
+    append_case_token secure_kudp_cases "owdeb-secure-kudp=${owdeb_secure_kudp}"
     secure_kudp_case_count=$((secure_kudp_case_count + 1))
   fi
   for token in $secure_kudp_cases_raw; do
     validate_case_token "$token"
-    secure_kudp_args="${secure_kudp_args} --case ${token}"
+    append_case_token secure_kudp_cases "$token"
     secure_kudp_case_count=$((secure_kudp_case_count + 1))
   done
   if [[ -n "$dd_route_gso" ]]; then
-    route_gso_args="${route_gso_args} --case dd-routegso=${dd_route_gso}"
+    append_case_token route_gso_cases "dd-routegso=${dd_route_gso}"
     route_gso_case_count=$((route_gso_case_count + 1))
   fi
   if [[ -n "$owdeb_route_gso" ]]; then
-    route_gso_args="${route_gso_args} --case owdeb-routegso=${owdeb_route_gso}"
+    append_case_token route_gso_cases "owdeb-routegso=${owdeb_route_gso}"
     route_gso_case_count=$((route_gso_case_count + 1))
   fi
   for token in $route_gso_cases_raw; do
     validate_case_token "$token"
-    route_gso_args="${route_gso_args} --case ${token}"
+    append_case_token route_gso_cases "$token"
     route_gso_case_count=$((route_gso_case_count + 1))
   done
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS "$userspace_case_min_gbps_raw" "$userspace_cases"
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS "$userspace_tc_case_min_gbps_raw" "$userspace_tc_cases"
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS "$tc_direct_case_min_gbps_raw" "$tc_direct_cases"
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS "$full_kmod_case_min_gbps_raw" "$full_kmod_cases"
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS "$secure_kudp_case_min_gbps_raw" "$secure_kudp_cases"
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS "$route_gso_case_min_gbps_raw" "$route_gso_cases"
 
   if [[ "$userspace_case_count" -eq 0 && "$userspace_tc_case_count" -eq 0 && "$tc_direct_case_count" -eq 0 && "$full_kmod_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
     die "set TRUSTIX_CROSS_HOST_USERSPACE_CASES/TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES/TRUSTIX_CROSS_HOST_TC_DIRECT_CASES/TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO/TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO or *_CASES"
   fi
 
   if [[ "$userspace_case_count" -gt 0 ]]; then
-    run_gate userspace "$userspace_min_gbps" $userspace_args \
+    run_gate_case_list userspace "$userspace_min_gbps" "$userspace_cases" "$userspace_case_min_gbps_raw" \
       --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0
   fi
 
   if [[ "$userspace_tc_case_count" -gt 0 ]]; then
-    run_gate userspace-tc "$userspace_tc_min_gbps" $userspace_tc_args \
+    run_gate_case_list userspace-tc "$userspace_tc_min_gbps" "$userspace_tc_cases" "$userspace_tc_case_min_gbps_raw" \
       --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0
   fi
 
   if [[ "$tc_direct_case_count" -gt 0 ]]; then
-    run_gate tc-direct "$tc_direct_min_gbps" $tc_direct_args \
+    run_gate_case_list tc-direct "$tc_direct_min_gbps" "$tc_direct_cases" "$tc_direct_case_min_gbps_raw" \
       --require-transport-policy-stat encryption=plaintext \
       --require-transport-policy-stat profile=performance \
       --require-transport-policy-stat datapath=tc_xdp \
@@ -205,7 +306,7 @@ main() {
   fi
 
   if [[ "$full_kmod_case_count" -gt 0 ]]; then
-    run_gate full-kmod "$full_kmod_min_gbps" $full_kmod_args \
+    run_gate_case_list full-kmod "$full_kmod_min_gbps" "$full_kmod_cases" "$full_kmod_case_min_gbps_raw" \
       --require-transport-policy-stat encryption=plaintext \
       --require-transport-policy-stat profile=performance \
       --require-transport-policy-stat datapath=kernel_module \
@@ -242,7 +343,7 @@ main() {
   fi
 
   if [[ "$secure_kudp_case_count" -gt 0 ]]; then
-    run_gate secure-kudp "$secure_kudp_min_gbps" $secure_kudp_args \
+    run_gate_case_list secure-kudp "$secure_kudp_min_gbps" "$secure_kudp_cases" "$secure_kudp_case_min_gbps_raw" \
       --require-transport-policy-stat encryption=secure \
       --require-transport-policy-stat crypto_placement=kernel \
       --require-transport-policy-stat datapath=tc_xdp \
@@ -310,7 +411,7 @@ main() {
   fi
 
   if [[ "$route_gso_case_count" -gt 0 ]]; then
-    run_gate route-gso "$route_gso_min_gbps" $route_gso_args \
+    run_gate_case_list route-gso "$route_gso_min_gbps" "$route_gso_cases" "$route_gso_case_min_gbps_raw" \
       --require-transport-policy-stat encryption=plaintext \
       --require-transport-policy-stat profile=performance \
       --require-transport-policy-stat datapath=kernel_module \

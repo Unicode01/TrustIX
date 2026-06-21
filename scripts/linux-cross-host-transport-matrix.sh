@@ -166,16 +166,34 @@ validate_case_values() {
 }
 
 append_selected_gate_case() {
-  local gate_family="$1" name="$2" dir="$3"
+  local gate_family="$1" name="$2" dir="$3" min_gbps="$4"
   local gate_class
   gate_class="$(gate_family_class "$gate_family")"
   case "$gate_class" in
-    userspace) append_case_token userspace_cases "${name}=${dir}" ;;
-    userspace_tc) append_case_token userspace_tc_cases "${name}=${dir}" ;;
-    tc_direct) append_case_token tc_direct_cases "${name}=${dir}" ;;
-    full_kmod) append_case_token full_kmod_cases "${name}=${dir}" ;;
-    secure_kudp) append_case_token secure_kudp_cases "${name}=${dir}" ;;
-    route_gso) append_case_token route_gso_cases "${name}=${dir}" ;;
+    userspace)
+      append_case_token userspace_cases "${name}=${dir}"
+      append_case_token userspace_case_min_gbps "${name}=${min_gbps}"
+      ;;
+    userspace_tc)
+      append_case_token userspace_tc_cases "${name}=${dir}"
+      append_case_token userspace_tc_case_min_gbps "${name}=${min_gbps}"
+      ;;
+    tc_direct)
+      append_case_token tc_direct_cases "${name}=${dir}"
+      append_case_token tc_direct_case_min_gbps "${name}=${min_gbps}"
+      ;;
+    full_kmod)
+      append_case_token full_kmod_cases "${name}=${dir}"
+      append_case_token full_kmod_case_min_gbps "${name}=${min_gbps}"
+      ;;
+    secure_kudp)
+      append_case_token secure_kudp_cases "${name}=${dir}"
+      append_case_token secure_kudp_case_min_gbps "${name}=${min_gbps}"
+      ;;
+    route_gso)
+      append_case_token route_gso_cases "${name}=${dir}"
+      append_case_token route_gso_case_min_gbps "${name}=${min_gbps}"
+      ;;
   esac
 }
 
@@ -267,7 +285,7 @@ run_case() {
       run_verify "$name" "$dir" "$min_gbps" "$min_seconds" "$encryption" "$profile" "$datapath" "$placement" "$validation_scope"
     fi
     if [[ "$validation_scope" == "cross_host" ]]; then
-      append_selected_gate_case "$gate_family" "$name" "$dir"
+      append_selected_gate_case "$gate_family" "$name" "$dir" "$min_gbps"
     fi
   else
     log "case failed: ${name}; see ${dir}.err"
@@ -282,21 +300,27 @@ run_selected_gate() {
   local gate_env=()
   if [[ -n "$userspace_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_CASES=${userspace_cases}")
+    gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS=${userspace_case_min_gbps}")
   fi
   if [[ -n "$userspace_tc_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES=${userspace_tc_cases}")
+    gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS=${userspace_tc_case_min_gbps}")
   fi
   if [[ -n "$tc_direct_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_TC_DIRECT_CASES=${tc_direct_cases}")
+    gate_env+=("TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS=${tc_direct_case_min_gbps}")
   fi
   if [[ -n "$full_kmod_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases}")
+    gate_env+=("TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS=${full_kmod_case_min_gbps}")
   fi
   if [[ -n "$secure_kudp_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}")
+    gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=${secure_kudp_case_min_gbps}")
   fi
   if [[ -n "$route_gso_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}")
+    gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=${route_gso_case_min_gbps}")
   fi
   if [[ "${#gate_env[@]}" -eq 0 ]]; then
     return 0
@@ -358,5 +382,11 @@ tc_direct_cases=""
 full_kmod_cases=""
 secure_kudp_cases=""
 route_gso_cases=""
+userspace_case_min_gbps=""
+userspace_tc_case_min_gbps=""
+tc_direct_case_min_gbps=""
+full_kmod_case_min_gbps=""
+secure_kudp_case_min_gbps=""
+route_gso_case_min_gbps=""
 
 main "$@"

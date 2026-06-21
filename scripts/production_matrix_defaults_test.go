@@ -1083,12 +1083,18 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_USERSPACE_CASES",
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES",
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASES",
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS",
+		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS",
+		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS",
 		"TRUSTIX_CROSS_HOST_DD_FULL_KMOD",
 		"TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD",
 		"TRUSTIX_CROSS_HOST_DD_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_DD_ROUTE_GSO",
 		"TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS",
 		"validate_number TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS \"$userspace_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS \"$userspace_tc_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS \"$tc_direct_min_gbps\"",
@@ -1100,10 +1106,18 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET \"$secure_kudp_replay_budget\"",
 		"validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET \"$route_gso_session_error_budget\"",
 		"validate_number TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS \"$compat_min_sessions\"",
+		"validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS \"$userspace_case_min_gbps_raw\"",
+		"validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS \"$userspace_tc_case_min_gbps_raw\"",
+		"validate_case_min_map TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS \"$tc_direct_case_min_gbps_raw\"",
+		"validate_case_min_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS \"$full_kmod_case_min_gbps_raw\"",
+		"validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS \"$secure_kudp_case_min_gbps_raw\"",
+		"validate_case_min_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS \"$route_gso_case_min_gbps_raw\"",
+		"case_min_gbps()",
+		"run_gate_case_list()",
 		"--require-binary-identity",
-		"run_gate userspace \"$userspace_min_gbps\"",
-		"run_gate userspace-tc \"$userspace_tc_min_gbps\"",
-		"run_gate tc-direct \"$tc_direct_min_gbps\"",
+		"run_gate_case_list userspace \"$userspace_min_gbps\"",
+		"run_gate_case_list userspace-tc \"$userspace_tc_min_gbps\"",
+		"run_gate_case_list tc-direct \"$tc_direct_min_gbps\"",
 		"--require-transport-sessions-min \"${compat_min_sessions}\"",
 		"--require-datapath-stat kernel_udp.provider=tc_direct",
 		"--require-datapath-stat kernel_udp.fast_path=true",
@@ -1240,7 +1254,7 @@ func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
 			name:   "tc-direct",
 			marker: `if [[ "$tc_direct_case_count" -gt 0 ]]; then`,
 			want: []string{
-				"run_gate tc-direct \"$tc_direct_min_gbps\"",
+				"run_gate_case_list tc-direct \"$tc_direct_min_gbps\"",
 				"--require-transport-policy-stat encryption=plaintext",
 				"--require-transport-policy-stat profile=performance",
 				"--require-transport-policy-stat datapath=tc_xdp",
@@ -1252,7 +1266,7 @@ func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
 			name:   "full-kmod",
 			marker: `if [[ "$full_kmod_case_count" -gt 0 ]]; then`,
 			want: []string{
-				"run_gate full-kmod \"$full_kmod_min_gbps\"",
+				"run_gate_case_list full-kmod \"$full_kmod_min_gbps\"",
 				"--require-transport-policy-stat encryption=plaintext",
 				"--require-transport-policy-stat profile=performance",
 				"--require-transport-policy-stat datapath=kernel_module",
@@ -1264,7 +1278,7 @@ func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
 			name:   "route-gso",
 			marker: `if [[ "$route_gso_case_count" -gt 0 ]]; then`,
 			want: []string{
-				"run_gate route-gso \"$route_gso_min_gbps\"",
+				"run_gate_case_list route-gso \"$route_gso_min_gbps\"",
 				"--require-transport-policy-stat encryption=plaintext",
 				"--require-transport-policy-stat profile=performance",
 				"--require-transport-policy-stat datapath=kernel_module",
@@ -1282,6 +1296,163 @@ func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func requireBashAndPython3(t *testing.T) string {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+	return bash
+}
+
+func slashPath(path string) string {
+	return filepath.ToSlash(path)
+}
+
+func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
+	bash := requireBashAndPython3(t)
+	workdir := t.TempDir()
+	verifier := filepath.Join(workdir, "verifier.py")
+	calls := filepath.Join(workdir, "calls.jsonl")
+	if err := os.WriteFile(verifier, []byte(strings.Join([]string{
+		"import json, os, sys",
+		"with open(os.environ['TRUSTIX_CAPTURE'], 'a', encoding='utf-8') as handle:",
+		"    handle.write(json.dumps(sys.argv[1:]) + '\\n')",
+		"",
+	}, "\n")), 0o755); err != nil {
+		t.Fatalf("write verifier stub: %v", err)
+	}
+
+	fastDir := slashPath(filepath.Join(workdir, "fast"))
+	slowDir := slashPath(filepath.Join(workdir, "slow"))
+	cmd := exec.Command(bash, "linux-cross-host-production-gate.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CAPTURE="+slashPath(calls),
+		"TRUSTIX_CROSS_HOST_GATE_VERIFIER="+slashPath(verifier),
+		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY=0",
+		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=30",
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASES=fast="+fastDir+" slow="+slowDir,
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS=fast=1.5 slow=0.5",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production gate with per-case min_gbps failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatalf("read verifier calls: %v", err)
+	}
+	got := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var args []string
+		if err := json.Unmarshal([]byte(line), &args); err != nil {
+			t.Fatalf("decode verifier args %q: %v", line, err)
+		}
+		var caseName, minGbps string
+		for i := 0; i+1 < len(args); i++ {
+			switch args[i] {
+			case "--case":
+				caseName = strings.SplitN(args[i+1], "=", 2)[0]
+			case "--min-gbps":
+				minGbps = args[i+1]
+			}
+		}
+		if caseName != "" {
+			got[caseName] = minGbps
+		}
+	}
+	for name, want := range map[string]string{"fast": "1.5", "slow": "0.5"} {
+		if got[name] != want {
+			t.Fatalf("case %s min_gbps got %q want %q; calls=%s", name, got[name], want, payload)
+		}
+	}
+}
+
+func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) {
+	bash := requireBashAndPython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	runner := filepath.Join(workdir, "runner.sh")
+	verifier := filepath.Join(workdir, "verifier.py")
+	productionGate := filepath.Join(workdir, "production-gate.sh")
+	capture := filepath.Join(workdir, "selected-gate.env")
+	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t1.5\t30\tselected UDP userspace gate",
+		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t0.75\t30\tselected TCP userspace gate",
+		"gre\tplaintext\tperformance\ttc_xdp\tuserspace\tcross_host\tuserspace_tc\t4\t30\tselected GRE userspace-TC gate",
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	if err := os.WriteFile(runner, []byte(strings.Join([]string{
+		"#!/usr/bin/env bash",
+		"set -e",
+		"mkdir -p \"$TRUSTIX_CROSS_HOST_WORKDIR\"",
+		"",
+	}, "\n")), 0o755); err != nil {
+		t.Fatalf("write runner stub: %v", err)
+	}
+	if err := os.WriteFile(verifier, []byte("import sys\nsys.exit(0)\n"), 0o755); err != nil {
+		t.Fatalf("write verifier stub: %v", err)
+	}
+	if err := os.WriteFile(productionGate, []byte(strings.Join([]string{
+		"#!/usr/bin/env bash",
+		"set -e",
+		"{",
+		"  printf 'USERSPACE_CASES=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASES\"",
+		"  printf 'USERSPACE_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS\"",
+		"  printf 'USERSPACE_TC_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS\"",
+		"} > \"$TRUSTIX_CAPTURE\"",
+		"",
+	}, "\n")), 0o755); err != nil {
+		t.Fatalf("write production gate stub: %v", err)
+	}
+
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CAPTURE="+slashPath(capture),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+slashPath(defaults),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+slashPath(filepath.Join(workdir, "matrix")),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_RUNNER="+slashPath(runner),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFIER="+slashPath(verifier),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_PRODUCTION_GATE="+slashPath(productionGate),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_REQUIRE_BINARY_IDENTITY=0",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("matrix selected gate capture failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read selected gate capture: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"udp-secure-stable-userspace-userspace=1.5",
+		"tcp-secure-stable-userspace-userspace=0.75",
+		"gre-plaintext-performance-tc_xdp-userspace=4",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("selected gate capture missing %q:\n%s", want, text)
+		}
 	}
 }
 
@@ -1315,9 +1486,15 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"route_gso|dd_route_gso) printf 'dd-routegso\\n'",
 		"owdeb_route_gso) printf 'owdeb-routegso\\n'",
 		"owdeb_*) printf '%s-owdeb\\n' \"$base\"",
-		"userspace) append_case_token userspace_cases",
-		"userspace_tc) append_case_token userspace_tc_cases",
-		"tc_direct) append_case_token tc_direct_cases",
+		"append_case_token userspace_cases",
+		"append_case_token userspace_tc_cases",
+		"append_case_token tc_direct_cases",
+		"append_case_token userspace_case_min_gbps",
+		"append_case_token userspace_tc_case_min_gbps",
+		"append_case_token tc_direct_case_min_gbps",
+		"append_case_token full_kmod_case_min_gbps",
+		"append_case_token secure_kudp_case_min_gbps",
+		"append_case_token route_gso_case_min_gbps",
 		"full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\\n'",
 		"secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\\n'",
 		"route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\\n'",
@@ -1337,11 +1514,17 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"--require-status-max\" \"data_path.counters.session_dial_errors=0",
 		"--require-status-max\" \"data_path.counters.session_heartbeat_timeouts=0",
 		"TRUSTIX_CROSS_HOST_USERSPACE_CASES=${userspace_cases}",
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS=${userspace_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES=${userspace_tc_cases}",
+		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS=${userspace_tc_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASES=${tc_direct_cases}",
+		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS=${tc_direct_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases}",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS=${full_kmod_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=${secure_kudp_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=${route_gso_case_min_gbps}",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-cross-host-transport-matrix.sh missing %q", want)
