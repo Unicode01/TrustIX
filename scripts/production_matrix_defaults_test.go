@@ -1237,6 +1237,165 @@ func TestCrossHostTransportMatrixCanRepresentCompatibilityCrossHostGates(t *test
 	}
 }
 
+type crossHostTransportMatrixDryRunRow struct {
+	Status          string  `json:"status"`
+	Case            string  `json:"case"`
+	RunnerCase      string  `json:"runner_case"`
+	Transport       string  `json:"transport"`
+	Encryption      string  `json:"encryption"`
+	Profile         string  `json:"profile"`
+	Datapath        string  `json:"datapath"`
+	CryptoPlacement string  `json:"crypto_placement"`
+	ValidationScope string  `json:"validation_scope"`
+	GateFamily      string  `json:"gate_family"`
+	MinGbps         float64 `json:"min_gbps"`
+	MinSeconds      int     `json:"min_seconds"`
+}
+
+func productionDefaultRunnerCase(row productionTransportDefault) string {
+	switch row.GateFamily {
+	case "full_kmod", "dd_full_kmod":
+		return "dd-fullkmod"
+	case "owdeb_full_kmod":
+		return "owdeb-fullkmod"
+	case "secure_kudp", "dd_secure_kudp":
+		return "secure-kudp"
+	case "owdeb_secure_kudp":
+		return "owdeb-secure-kudp"
+	case "route_gso", "dd_route_gso":
+		return "dd-routegso"
+	case "owdeb_route_gso":
+		return "owdeb-routegso"
+	}
+	token := row.Transport
+	if token == "kernel_udp" {
+		token = "udp"
+	}
+	kind := "userspace"
+	if row.Datapath == "tc_xdp" || row.Transport == "kernel_udp" {
+		kind = "tc"
+	}
+	return kind + "-" + token + "-" + row.Encryption
+}
+
+func productionDefaultMatrixCase(row productionTransportDefault) string {
+	token := row.Transport
+	if token == "kernel_udp" {
+		token = "udp"
+	}
+	name := strings.Join([]string{
+		token,
+		row.Encryption,
+		row.Profile,
+		row.Datapath,
+		row.CryptoPlacement,
+	}, "-")
+	switch {
+	case strings.HasPrefix(row.GateFamily, "owdeb_"):
+		return name + "-owdeb"
+	case strings.HasPrefix(row.GateFamily, "dd_"):
+		return name + "-dd"
+	default:
+		return name
+	}
+}
+
+func TestCrossHostTransportMatrixDryRunMatchesProductionDefaults(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+	workdir := t.TempDir()
+	summary := filepath.Join(workdir, "summary.jsonl")
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY="+summary,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run cross-host transport matrix failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read dry-run summary: %v", err)
+	}
+
+	got := map[string]crossHostTransportMatrixDryRunRow{}
+	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var row crossHostTransportMatrixDryRunRow
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("decode dry-run summary row %q: %v", line, err)
+		}
+		key := strings.Join([]string{
+			row.Transport,
+			row.Encryption,
+			row.Profile,
+			row.Datapath,
+			row.CryptoPlacement,
+			row.ValidationScope,
+			row.GateFamily,
+		}, ":")
+		if _, exists := got[key]; exists {
+			t.Fatalf("duplicate dry-run production matrix row %s:\n%s", key, payload)
+		}
+		got[key] = row
+	}
+
+	expected := map[string]productionTransportDefault{}
+	for _, row := range loadProductionTransportDefaults(t) {
+		if row.ValidationScope != "cross_host" {
+			continue
+		}
+		expected[productionDefaultEvidenceKey(row)] = row
+	}
+	for key, row := range expected {
+		dryRun, ok := got[key]
+		if !ok {
+			t.Fatalf("cross-host transport matrix dry-run missing production default %s:\n%s", key, payload)
+		}
+		if dryRun.Status != "dry_run" {
+			t.Fatalf("unexpected dry-run status for %s: %+v", key, dryRun)
+		}
+		if dryRun.Case != productionDefaultMatrixCase(row) {
+			t.Fatalf("unexpected dry-run case for %s: got %q want %q", key, dryRun.Case, productionDefaultMatrixCase(row))
+		}
+		if dryRun.RunnerCase != productionDefaultRunnerCase(row) {
+			t.Fatalf("unexpected dry-run runner case for %s: got %q want %q", key, dryRun.RunnerCase, productionDefaultRunnerCase(row))
+		}
+		wantGbps, err := strconv.ParseFloat(row.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid production default min_gbps %q in %+v", row.MinGbps, row)
+		}
+		if dryRun.MinGbps != wantGbps {
+			t.Fatalf("unexpected dry-run min_gbps for %s: got %v want %v", key, dryRun.MinGbps, wantGbps)
+		}
+		wantSeconds, err := strconv.Atoi(row.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid production default min_seconds %q in %+v", row.MinSeconds, row)
+		}
+		if dryRun.MinSeconds != wantSeconds {
+			t.Fatalf("unexpected dry-run min_seconds for %s: got %v want %v", key, dryRun.MinSeconds, wantSeconds)
+		}
+	}
+	for key, row := range got {
+		if _, ok := expected[key]; !ok {
+			t.Fatalf("cross-host transport matrix dry-run emitted non-default row %s: %+v", key, row)
+		}
+	}
+}
+
 func TestCrossHostTransportMatrixDryRunIncludesOpenWrtDebianFullKmod(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
