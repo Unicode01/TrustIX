@@ -200,6 +200,52 @@ case_policy_stat_args() {
     --require-transport-policy-stat "crypto_placement=${placement}"
 }
 
+session_transport_for_matrix_transport() {
+  local transport="$1"
+  case "$transport" in
+    kernel_udp) printf 'udp\n' ;;
+    *) printf '%s\n' "$transport" ;;
+  esac
+}
+
+session_endpoint_suffix_for_matrix_transport() {
+  local transport session_transport
+  transport="$1"
+  session_transport="$(session_transport_for_matrix_transport "$transport")"
+  printf -- '-%s\n' "${session_transport//_/-}"
+}
+
+case_session_args() {
+  local family="$1" case_token="$2" case_name transport encryption profile datapath placement extra
+  case "$family" in
+    userspace|userspace-tc)
+      case_name="${case_token%%=*}"
+      local old_ifs="$IFS"
+      IFS=-
+      read -r transport encryption profile datapath placement extra <<<"$case_name"
+      IFS="$old_ifs"
+      if [[ -z "$transport" || -z "$encryption" || -z "$profile" || -z "$datapath" || -z "$placement" || -n "${extra:-}" ]]; then
+        die "${family} case ${case_name} must use canonical NAME=PATH from the transport matrix"
+      fi
+      ;;
+    tc-direct|secure-kudp)
+      transport="kernel_udp"
+      ;;
+    full-kmod)
+      transport="udp"
+      ;;
+    route-gso)
+      transport="experimental_tcp"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  printf '%s\n' \
+    --require-transport-session-stat "transport=$(session_transport_for_matrix_transport "$transport")" \
+    "--require-transport-session-endpoint-suffix=$(session_endpoint_suffix_for_matrix_transport "$transport")"
+}
+
 case_label_name() {
   local prefix="$1" case_token="$2" case_name
   case_name="${case_token%%=*}"
@@ -228,13 +274,17 @@ run_gate_case_list() {
   local token min_gbps case_label
   for token in $cases; do
     local policy_args=()
+    local session_args=()
     local policy_arg
     min_gbps="$(case_min_gbps "$token" "$category_min_gbps" "$min_map_raw")"
     case_label="$(case_label_name "$label" "$token")"
     while IFS= read -r policy_arg; do
       policy_args+=("$policy_arg")
     done < <(case_policy_stat_args "$label" "$token")
-    run_gate "$case_label" "$min_gbps" --case "$token" "${policy_args[@]}" "$@"
+    while IFS= read -r policy_arg; do
+      session_args+=("$policy_arg")
+    done < <(case_session_args "$label" "$token")
+    run_gate "$case_label" "$min_gbps" --case "$token" "${policy_args[@]}" "${session_args[@]}" "$@"
   done
 }
 

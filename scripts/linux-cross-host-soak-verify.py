@@ -367,6 +367,20 @@ def parse_args() -> argparse.Namespace:
         help="require every collected transports.json to report at least this many sessions",
     )
     parser.add_argument(
+        "--require-transport-session-stat",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require each node to have transport sessions matching PATH with VALUE; may be repeated",
+    )
+    parser.add_argument(
+        "--require-transport-session-endpoint-suffix",
+        action="append",
+        default=[],
+        metavar="SUFFIX",
+        help="require each node to have transport sessions whose endpoint ends with SUFFIX; may be repeated",
+    )
+    parser.add_argument(
         "--min-transports-json",
         type=int,
         default=0,
@@ -1218,14 +1232,17 @@ def identity_key(identity: dict[str, Any], fields: tuple[str, ...]) -> tuple[str
     return tuple(str(identity.get(field) or "") for field in fields)
 
 
-def parse_required_datapath_stats(raw_items: list[str]) -> list[tuple[str, str]]:
+def parse_required_datapath_stats(
+    raw_items: list[str],
+    flag: str = "--require-datapath-stat",
+) -> list[tuple[str, str]]:
     required: list[tuple[str, str]] = []
     for raw in raw_items:
         path, sep, value = raw.partition("=")
         path = path.strip()
         value = value.strip()
         if not sep or not path:
-            raise SystemExit(f"invalid --require-datapath-stat {raw!r}; expected PATH=VALUE")
+            raise SystemExit(f"invalid {flag} {raw!r}; expected PATH=VALUE")
         required.append((path, value))
     return required
 
@@ -1513,18 +1530,56 @@ def transport_node_key(path: Path, case_dir: Path) -> str:
     return "__all__"
 
 
+def transport_session_matches(
+    session: Any,
+    *,
+    required_session_stats: list[tuple[str, str]],
+    required_endpoint_suffixes: list[str],
+) -> bool:
+    if not isinstance(session, dict):
+        return False
+    for dotted_path, expected in required_session_stats:
+        try:
+            actual = datapath_value(session, dotted_path)
+        except KeyError:
+            return False
+        if not datapath_value_matches(actual, expected):
+            return False
+    if required_endpoint_suffixes:
+        endpoint = str(session.get("endpoint") or "")
+        if not any(endpoint.endswith(suffix) for suffix in required_endpoint_suffixes):
+            return False
+    return True
+
+
+def transport_session_requirement_description(
+    required_session_stats: list[tuple[str, str]],
+    required_endpoint_suffixes: list[str],
+) -> str:
+    parts = [f"{path}={value}" for path, value in required_session_stats]
+    if required_endpoint_suffixes:
+        suffixes = ",".join(required_endpoint_suffixes)
+        parts.append(f"endpoint_suffix={suffixes}")
+    return ", ".join(parts) if parts else "any session"
+
+
 def validate_transports(
     case_dir: Path,
     *,
     required_policy_stats: list[tuple[str, str]],
     required_policy_minima: list[tuple[str, float]],
     required_sessions_min: int,
+    required_session_stats: list[tuple[str, str]],
+    required_session_endpoint_suffixes: list[str],
     min_transports_json: int,
 ) -> tuple[list[dict[str, Any]], list[str], int]:
     payloads = collect_transports_json(case_dir)
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     session_counts_by_node: dict[str, list[tuple[str, int]]] = {}
+    session_requirements_enabled = bool(
+        required_session_stats or required_session_endpoint_suffixes
+    )
     if len(payloads) < min_transports_json:
         errors.append(
             f"found {len(payloads)} transports.json files, want >= {min_transports_json}"
@@ -1533,6 +1588,7 @@ def validate_transports(
         required_policy_stats
         or required_policy_minima
         or required_sessions_min > 0
+        or session_requirements_enabled
     ) and not payloads:
         return rows, errors, len(payloads)
     for path, payload in payloads:
@@ -1570,22 +1626,43 @@ def validate_transports(
                 errors.append(
                     f"{rel}: transport policy {dotted_path}={actual_number:g}, want >= {minimum:g}"
                 )
-        if required_sessions_min > 0:
+        if required_sessions_min > 0 or session_requirements_enabled:
             sessions = payload.get("sessions") if isinstance(payload, dict) else None
-            count = len(sessions) if isinstance(sessions, list) else 0
+            session_rows = sessions if isinstance(sessions, list) else []
+            count = len(session_rows)
+            matching_count = count
+            if session_requirements_enabled:
+                matching_count = sum(
+                    1
+                    for session in session_rows
+                    if transport_session_matches(
+                        session,
+                        required_session_stats=required_session_stats,
+                        required_endpoint_suffixes=required_session_endpoint_suffixes,
+                    )
+                )
+                values["matching_sessions"] = matching_count
             values["sessions"] = count
             node_key = transport_node_key(path, case_dir)
-            session_counts_by_node.setdefault(node_key, []).append((rel, count))
+            session_counts_by_node.setdefault(node_key, []).append((rel, matching_count))
         if values:
             rows.append({"file": rel, "values": values})
-    if required_sessions_min > 0:
+    if required_sessions_min > 0 or session_requirements_enabled:
+        minimum = required_sessions_min
+        if session_requirements_enabled and minimum == 0:
+            minimum = 1
+        requirement = transport_session_requirement_description(
+            required_session_stats,
+            required_session_endpoint_suffixes,
+        )
         for node_key, counts in sorted(session_counts_by_node.items()):
             if not counts:
                 continue
             best_rel, best_count = max(counts, key=lambda item: item[1])
-            if best_count < required_sessions_min:
+            if best_count < minimum:
+                label = "matching transport sessions" if session_requirements_enabled else "transport sessions"
                 errors.append(
-                    f"{best_rel}: transport sessions={best_count}, want >= {required_sessions_min}"
+                    f"{best_rel}: {label}={best_count}, want >= {minimum} ({requirement})"
                 )
     return rows, errors, len(payloads)
 
@@ -1640,6 +1717,8 @@ def validate_case(
     required_transport_policy_stats: list[tuple[str, str]],
     required_transport_policy_minima: list[tuple[str, float]],
     required_transport_sessions_min: int,
+    required_transport_session_stats: list[tuple[str, str]],
+    required_transport_session_endpoint_suffixes: list[str],
     min_transports_json: int,
 ) -> dict[str, Any]:
     errors: list[str] = []
@@ -1896,6 +1975,8 @@ def validate_case(
         required_policy_stats=required_transport_policy_stats,
         required_policy_minima=required_transport_policy_minima,
         required_sessions_min=required_transport_sessions_min,
+        required_session_stats=required_transport_session_stats,
+        required_session_endpoint_suffixes=required_transport_session_endpoint_suffixes,
         min_transports_json=min_transports_json,
     )
     errors.extend(transport_errors)
@@ -1998,7 +2079,10 @@ def main() -> int:
         raise SystemExit("--min-uname-nodes must be non-negative")
     if args.min_os_release_nodes < 0:
         raise SystemExit("--min-os-release-nodes must be non-negative")
-    required_status_stats = parse_required_datapath_stats(args.require_status_stat)
+    required_status_stats = parse_required_datapath_stats(
+        args.require_status_stat,
+        "--require-status-stat",
+    )
     required_status_minima = parse_required_numeric_limits(
         args.require_status_min,
         "--require-status-min",
@@ -2007,7 +2091,10 @@ def main() -> int:
         args.require_status_max,
         "--require-status-max",
     )
-    required_datapath_stats = parse_required_datapath_stats(args.require_datapath_stat)
+    required_datapath_stats = parse_required_datapath_stats(
+        args.require_datapath_stat,
+        "--require-datapath-stat",
+    )
     required_datapath_minima = parse_required_numeric_limits(
         args.require_datapath_min,
         "--require-datapath-min",
@@ -2033,12 +2120,22 @@ def main() -> int:
         "--require-module-param-max",
     )
     required_transport_policy_stats = parse_required_datapath_stats(
-        args.require_transport_policy_stat
+        args.require_transport_policy_stat,
+        "--require-transport-policy-stat",
     )
     required_transport_policy_minima = parse_required_numeric_limits(
         args.require_transport_policy_min,
         "--require-transport-policy-min",
     )
+    required_transport_session_stats = parse_required_datapath_stats(
+        args.require_transport_session_stat,
+        "--require-transport-session-stat",
+    )
+    required_transport_session_endpoint_suffixes = [
+        item.strip() for item in args.require_transport_session_endpoint_suffix
+    ]
+    if any(not item for item in required_transport_session_endpoint_suffixes):
+        raise SystemExit("--require-transport-session-endpoint-suffix must not be empty")
     if args.min_status_json < 0:
         raise SystemExit("--min-status-json must be non-negative")
     if args.min_datapath_json < 0:
@@ -2076,6 +2173,8 @@ def main() -> int:
         required_transport_policy_stats
         or required_transport_policy_minima
         or args.require_transport_sessions_min > 0
+        or required_transport_session_stats
+        or required_transport_session_endpoint_suffixes
     ) and min_transports_json == 0:
         min_transports_json = 2
 
@@ -2129,6 +2228,8 @@ def main() -> int:
             required_transport_policy_stats=required_transport_policy_stats,
             required_transport_policy_minima=required_transport_policy_minima,
             required_transport_sessions_min=args.require_transport_sessions_min,
+            required_transport_session_stats=required_transport_session_stats,
+            required_transport_session_endpoint_suffixes=required_transport_session_endpoint_suffixes,
             min_transports_json=min_transports_json,
         )
         for case in parse_cases(args)

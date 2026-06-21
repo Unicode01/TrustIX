@@ -1127,12 +1127,52 @@ func TestCrossHostSoakVerifyChecksTransportPolicyAndSessions(t *testing.T) {
 		"session_pool_warmup=true",
 		"--require-transport-sessions-min",
 		"8",
+		"--require-transport-session-stat",
+		"transport=experimental_tcp",
+		"--require-transport-session-endpoint-suffix=-experimental-tcp",
 		dir,
 	)
 	cmd.Dir = "."
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("verify rejected valid transport session pool artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsWrongTransportSessionEndpoint(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	for _, node := range []string{"a", "b"} {
+		writeTransportsJSONWithSession(t, filepath.Join(dir, "collect", node, "transports.json"), 8, "flow", true, 8, "tcp", peerEndpointForNode(node, "-tcp"))
+	}
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps",
+		"4",
+		"--min-seconds",
+		"120",
+		"--require-transport-sessions-min",
+		"8",
+		"--require-transport-session-stat",
+		"transport=experimental_tcp",
+		"--require-transport-session-endpoint-suffix=-experimental-tcp",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted wrong transport session endpoint:\n%s", output)
+	}
+	if !strings.Contains(string(output), "matching transport sessions=0, want >= 8") {
+		t.Fatalf("verify did not report wrong transport session endpoint:\n%s", output)
 	}
 }
 
@@ -1304,6 +1344,9 @@ func TestCrossHostSoakVerifyAcceptsActiveTransportSessionSnapshot(t *testing.T) 
 		"session_pool_warmup=true",
 		"--require-transport-sessions-min",
 		"8",
+		"--require-transport-session-stat",
+		"transport=experimental_tcp",
+		"--require-transport-session-endpoint-suffix=-experimental-tcp",
 		dir,
 	)
 	cmd.Dir = "."
@@ -2057,6 +2100,11 @@ func writeDatapathJSONWithSecureCounters(t *testing.T, path string, txPackets, r
 
 func writeTransportsJSON(t *testing.T, path string, poolSize int, strategy string, warmup bool, sessions int) {
 	t.Helper()
+	writeTransportsJSONWithSession(t, path, poolSize, strategy, warmup, sessions, "experimental_tcp", "b-experimental-tcp")
+}
+
+func writeTransportsJSONWithSession(t *testing.T, path string, poolSize int, strategy string, warmup bool, sessions int, sessionTransport string, endpoint string) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("make transports dir: %v", err)
 	}
@@ -2064,7 +2112,8 @@ func writeTransportsJSON(t *testing.T, path string, poolSize int, strategy strin
 	for i := 0; i < sessions; i++ {
 		sessionRows = append(sessionRows, map[string]any{
 			"peer":       "ix-b",
-			"endpoint":   "b-experimental-tcp",
+			"endpoint":   endpoint,
+			"transport":  sessionTransport,
 			"pool_index": i,
 		})
 	}
@@ -2087,6 +2136,13 @@ func writeTransportsJSON(t *testing.T, path string, poolSize int, strategy strin
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write transports json: %v", err)
 	}
+}
+
+func peerEndpointForNode(node string, endpointSuffix string) string {
+	if node == "a" {
+		return "b" + endpointSuffix
+	}
+	return "a" + endpointSuffix
 }
 
 func writeModuleParameters(t *testing.T, path string, modules map[string]map[string]string) {
@@ -2138,7 +2194,7 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
 		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "full-kmod-sha")
 		writeDatapathJSONWithRX(t, filepath.Join(base, "datapath.json"), 1, 42)
-		writeTransportsJSON(t, filepath.Join(base, "transports.json"), 8, "flow", true, 8)
+		writeTransportsJSONWithSession(t, filepath.Join(base, "transports.json"), 8, "flow", true, 8, "udp", peerEndpointForNode(node, "-udp"))
 		writeFullKmodModuleParameters(t, filepath.Join(base, "module-parameters.txt"), plaintextXmit)
 	}
 }
@@ -2212,7 +2268,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
 		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "secure-kudp-sha")
 		writeSecureKUDPDatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO)
-		writeSecureKUDPTransportsJSON(t, filepath.Join(base, "transports.json"))
+		writeSecureKUDPTransportsJSON(t, filepath.Join(base, "transports.json"), node)
 		writeSecureKUDPModuleParameters(t, filepath.Join(base, "module-parameters.txt"), routeHelperXmit)
 	}
 }
@@ -2271,10 +2327,19 @@ func writeSecureKUDPDatapathJSON(t *testing.T, path string, routeGSO bool) {
 	}
 }
 
-func writeSecureKUDPTransportsJSON(t *testing.T, path string) {
+func writeSecureKUDPTransportsJSON(t *testing.T, path string, node string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("make secure-kudp transports dir: %v", err)
+	}
+	sessionRows := make([]any, 0, 8)
+	for i := 0; i < 8; i++ {
+		sessionRows = append(sessionRows, map[string]any{
+			"peer":       "ix-b",
+			"endpoint":   peerEndpointForNode(node, "-udp"),
+			"transport":  "udp",
+			"pool_index": i,
+		})
 	}
 	payload := map[string]any{
 		"policy": map[string]any{
@@ -2285,6 +2350,7 @@ func writeSecureKUDPTransportsJSON(t *testing.T, path string) {
 			"session_pool_strategy": "flow",
 			"session_pool_warmup":   true,
 		},
+		"sessions": sessionRows,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -2357,7 +2423,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
 		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "route-gso-sha")
 		writeRouteGSODatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO)
-		writeTransportsJSON(t, filepath.Join(base, "transports.json"), 8, "flow", true, 8)
+		writeTransportsJSONWithSession(t, filepath.Join(base, "transports.json"), 8, "flow", true, 8, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"))
 		writeRouteGSOModuleParameters(t, filepath.Join(base, "module-parameters.txt"))
 	}
 }
