@@ -234,6 +234,21 @@ def infer_kernel_matrix(row: dict[str, Any]) -> str:
     return "_to_".join(by_node[node] for node in sorted(by_node))
 
 
+def resolved_matrix_value(
+    row: dict[str, Any],
+    *,
+    override: str | None,
+    inferred: str,
+    label: str,
+) -> str:
+    if override and override != inferred:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} {label} override {override!r} "
+            f"does not match inferred value {inferred!r}"
+        )
+    return override or inferred
+
+
 def validate_artifact(value: str) -> None:
     if not value.startswith("docs/") or "#" not in value:
         raise SystemExit("--artifact must be a local docs markdown anchor")
@@ -257,6 +272,18 @@ def evidence_row(
             f"gate summary case {gate_row.get('case')!r} matched non-pass matrix row: "
             f"{matrix_row.get('status')!r}"
         )
+    os_matrix = resolved_matrix_value(
+        gate_row,
+        override=args.os_matrix,
+        inferred=infer_os_matrix(gate_row),
+        label="OS matrix",
+    )
+    kernel_matrix = resolved_matrix_value(
+        gate_row,
+        override=args.kernel_matrix,
+        inferred=infer_kernel_matrix(gate_row),
+        label="kernel matrix",
+    )
     note = args.note_template.format(**{key: str(matrix_row.get(key) or "") for key in [
         "case",
         "runner_case",
@@ -275,8 +302,8 @@ def evidence_row(
         str(matrix_row.get("datapath") or ""),
         str(matrix_row.get("crypto_placement") or ""),
         str(matrix_row.get("validation_scope") or ""),
-        args.os_matrix or infer_os_matrix(gate_row),
-        args.kernel_matrix or infer_kernel_matrix(gate_row),
+        os_matrix,
+        kernel_matrix,
         result,
         metric_gbps(gate_row),
         metric_seconds(gate_row),

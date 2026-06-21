@@ -756,6 +756,22 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 			t.Fatalf("field %d = %q, want %q\n%s", idx, fields[idx], want, output)
 		}
 	}
+
+	mismatchCmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--kernel-matrix", "6.6.141_to_6.12.90+deb13.1-amd64",
+		"--artifact", "docs/trustix-performance-log.md#example-production-gate",
+	)
+	mismatchCmd.Dir = "."
+	mismatchOutput, err := mismatchCmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("generator accepted mismatched kernel matrix override:\n%s", mismatchOutput)
+	}
+	if !strings.Contains(string(mismatchOutput), "kernel matrix override") ||
+		!strings.Contains(string(mismatchOutput), "does not match inferred value") {
+		t.Fatalf("generator did not explain kernel matrix mismatch:\n%s", mismatchOutput)
+	}
 }
 
 func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
