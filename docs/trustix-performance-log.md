@@ -2,6 +2,13 @@
 
 This file records datapath performance findings and script changes so future runs do not depend on chat context.
 
+Production evidence rows in `scripts/production-transport-evidence.tsv` record
+the gate manifest schema plus the SHA256 of the production gate script and
+verifier used for the run. Rows captured before
+`production-gate-manifest.json` existed are marked `legacy-pre-manifest`; new
+production evidence must copy the schema and hashes from that manifest instead
+of reusing the legacy marker.
+
 ## 2026-06-21
 
 ### OpenWrt SDK matrix current stable defaults

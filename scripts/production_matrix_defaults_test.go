@@ -43,21 +43,29 @@ type productionTransportDefault struct {
 }
 
 type productionTransportEvidence struct {
-	GateFamily      string
-	Transport       string
-	Encryption      string
-	Profile         string
-	Datapath        string
-	CryptoPlacement string
-	ValidationScope string
-	OSMatrix        string
-	KernelMatrix    string
-	Result          string
-	MinGbps         string
-	MinSeconds      string
-	Artifact        string
-	Note            string
+	GateFamily           string
+	Transport            string
+	Encryption           string
+	Profile              string
+	Datapath             string
+	CryptoPlacement      string
+	ValidationScope      string
+	OSMatrix             string
+	KernelMatrix         string
+	Result               string
+	MinGbps              string
+	MinSeconds           string
+	GateManifestSchema   string
+	ProductionGateSHA256 string
+	VerifierSHA256       string
+	Artifact             string
+	Note                 string
 }
+
+const (
+	productionGateManifestSchema      = "trustix-cross-host-production-gate-manifest-v1"
+	legacyProductionGateManifestValue = "legacy-pre-manifest"
+)
 
 func loadProductionTransportDefaults(t *testing.T) []productionTransportDefault {
 	t.Helper()
@@ -103,24 +111,27 @@ func loadProductionTransportEvidence(t *testing.T) []productionTransportEvidence
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) < 14 {
+		if len(fields) < 17 {
 			t.Fatalf("invalid production evidence row %q", line)
 		}
 		rows = append(rows, productionTransportEvidence{
-			GateFamily:      fields[0],
-			Transport:       fields[1],
-			Encryption:      fields[2],
-			Profile:         fields[3],
-			Datapath:        fields[4],
-			CryptoPlacement: fields[5],
-			ValidationScope: fields[6],
-			OSMatrix:        fields[7],
-			KernelMatrix:    fields[8],
-			Result:          fields[9],
-			MinGbps:         fields[10],
-			MinSeconds:      fields[11],
-			Artifact:        fields[12],
-			Note:            strings.Join(fields[13:], "\t"),
+			GateFamily:           fields[0],
+			Transport:            fields[1],
+			Encryption:           fields[2],
+			Profile:              fields[3],
+			Datapath:             fields[4],
+			CryptoPlacement:      fields[5],
+			ValidationScope:      fields[6],
+			OSMatrix:             fields[7],
+			KernelMatrix:         fields[8],
+			Result:               fields[9],
+			MinGbps:              fields[10],
+			MinSeconds:           fields[11],
+			GateManifestSchema:   fields[12],
+			ProductionGateSHA256: fields[13],
+			VerifierSHA256:       fields[14],
+			Artifact:             fields[15],
+			Note:                 strings.Join(fields[16:], "\t"),
 		})
 	}
 	return rows
@@ -148,6 +159,68 @@ func productionEvidenceKey(row productionTransportEvidence) string {
 		row.ValidationScope,
 		row.GateFamily,
 	}, ":")
+}
+
+func knownLegacyProductionEvidenceArtifacts() map[string]bool {
+	return map[string]bool{
+		"docs/trustix-performance-log.md#2026-06-19-zaozhuang-pve-selected-transport-matrix-gate":               true,
+		"docs/trustix-performance-log.md#2026-06-20-zaozhuang-pve-compatibility-900s-strict-gate":               true,
+		"docs/trustix-performance-log.md#2026-06-20-zaozhuang-pve-gre-p4-900s-strict-gate":                      true,
+		"docs/trustix-performance-log.md#2026-06-20-zaozhuang-pve-ipip-vxlan-p4-900s-strict-gates":              true,
+		"docs/trustix-performance-log.md#2026-06-20-zaozhuang-pve-secure-tunnel-userspace-tc-900s-strict-gates": true,
+		"docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-userspace-gap-900s-strict-gates":              true,
+		"docs/trustix-performance-log.md#debian-full-kmod-current-head-production-recheck":                      true,
+		"docs/trustix-performance-log.md#debian-route-gso-current-head-production-recheck":                      true,
+		"docs/trustix-performance-log.md#debian-secure-kudp-current-head-production-recheck":                    true,
+		"docs/trustix-performance-log.md#debian-tc-direct-current-head-production-recheck":                      true,
+		"docs/trustix-performance-log.md#debian-userspace-current-head-production-gates":                        true,
+		"docs/trustix-performance-log.md#debian-userspace-tc-current-head-production-gates":                     true,
+		"docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                               true,
+		"docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                                true,
+	}
+}
+
+func isSHA256Hex(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validateProductionEvidenceManifestIdentity(t *testing.T, evidence productionTransportEvidence) {
+	t.Helper()
+	if evidence.GateManifestSchema == "" ||
+		evidence.ProductionGateSHA256 == "" ||
+		evidence.VerifierSHA256 == "" {
+		t.Fatalf("production evidence row lacks manifest identity: %+v", evidence)
+	}
+	if evidence.GateManifestSchema == legacyProductionGateManifestValue {
+		if evidence.ProductionGateSHA256 != legacyProductionGateManifestValue ||
+			evidence.VerifierSHA256 != legacyProductionGateManifestValue {
+			t.Fatalf("legacy production evidence must mark all manifest identity fields as %q: %+v", legacyProductionGateManifestValue, evidence)
+		}
+		if !knownLegacyProductionEvidenceArtifacts()[evidence.Artifact] {
+			t.Fatalf("legacy production evidence artifact is not allowlisted; rerun with production-gate-manifest.json instead: %+v", evidence)
+		}
+		return
+	}
+	if evidence.GateManifestSchema != productionGateManifestSchema {
+		t.Fatalf("production evidence has unknown gate manifest schema %q in %+v", evidence.GateManifestSchema, evidence)
+	}
+	if !isSHA256Hex(evidence.ProductionGateSHA256) {
+		t.Fatalf("production evidence has invalid production gate SHA256 %q in %+v", evidence.ProductionGateSHA256, evidence)
+	}
+	if !isSHA256Hex(evidence.VerifierSHA256) {
+		t.Fatalf("production evidence has invalid verifier SHA256 %q in %+v", evidence.VerifierSHA256, evidence)
+	}
 }
 
 type currentProductionEvidenceRequirement struct {
@@ -460,11 +533,21 @@ func TestCrossHostProductionDefaultsHavePassingEvidence(t *testing.T) {
 	seenEvidence := map[string]bool{}
 	for _, evidence := range evidenceRows {
 		key := productionEvidenceKey(evidence)
-		identity := strings.Join([]string{key, evidence.OSMatrix, evidence.KernelMatrix, evidence.Result, evidence.Artifact}, ":")
+		identity := strings.Join([]string{
+			key,
+			evidence.OSMatrix,
+			evidence.KernelMatrix,
+			evidence.Result,
+			evidence.GateManifestSchema,
+			evidence.ProductionGateSHA256,
+			evidence.VerifierSHA256,
+			evidence.Artifact,
+		}, ":")
 		if seenEvidence[identity] {
 			t.Fatalf("duplicate production evidence row %q", identity)
 		}
 		seenEvidence[identity] = true
+		validateProductionEvidenceManifestIdentity(t, evidence)
 		if evidence.Artifact == "" {
 			t.Fatalf("production evidence row lacks artifact: %+v", evidence)
 		}
@@ -522,6 +605,28 @@ func TestCrossHostProductionDefaultsHavePassingEvidence(t *testing.T) {
 			continue
 		}
 		t.Fatalf("cross-host production default lacks passing evidence at or above gate %s: %+v; candidates=%v", key, row, candidates)
+	}
+}
+
+func TestProductionEvidenceRequiresGateManifestIdentity(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join(".", "production-transport-evidence.tsv"))
+	if err != nil {
+		t.Fatalf("read production-transport-evidence.tsv: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"gate_manifest_schema",
+		"production_gate_sha256",
+		"verifier_sha256",
+		productionGateManifestSchema,
+		legacyProductionGateManifestValue,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("production evidence schema missing %q", want)
+		}
+	}
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		validateProductionEvidenceManifestIdentity(t, evidence)
 	}
 }
 
