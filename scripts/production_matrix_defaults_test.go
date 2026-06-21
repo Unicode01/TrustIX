@@ -1213,6 +1213,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-binary-identity",
 		"--require-stable-boot-id",
 		"--require-kernel-log-artifacts",
+		"--min-kernel-log-nodes 2",
 		"run_gate_case_list userspace \"$userspace_min_gbps\"",
 		"run_gate_case_list userspace-tc \"$userspace_tc_min_gbps\"",
 		"run_gate_case_list tc-direct \"$tc_direct_min_gbps\"",
@@ -1497,6 +1498,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	}
 	gotMinGbps := map[string]string{}
 	gotMinSeconds := map[string]string{}
+	gotMinKernelLogNodes := map[string]string{}
 	gotRequireIdentity := map[string]bool{}
 	gotRequireStableBootID := map[string]bool{}
 	gotRequireKernelLogs := map[string]bool{}
@@ -1510,6 +1512,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			t.Fatalf("decode verifier args %q: %v", line, err)
 		}
 		var caseName, minGbps, minSeconds string
+		var minKernelLogNodes string
 		requireIdentity := false
 		for i := 0; i+1 < len(args); i++ {
 			switch args[i] {
@@ -1519,6 +1522,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				minGbps = args[i+1]
 			case "--min-seconds":
 				minSeconds = args[i+1]
+			case "--min-kernel-log-nodes":
+				minKernelLogNodes = args[i+1]
 			}
 		}
 		for _, arg := range args {
@@ -1541,6 +1546,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		if caseName != "" {
 			gotMinGbps[caseName] = minGbps
 			gotMinSeconds[caseName] = minSeconds
+			gotMinKernelLogNodes[caseName] = minKernelLogNodes
 			gotRequireIdentity[caseName] = requireIdentity
 			gotRequireStableBootID[caseName] = requireStableBootID
 			gotRequireKernelLogs[caseName] = requireKernelLogs
@@ -1570,6 +1576,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if !gotRequireKernelLogs[name] {
 			t.Fatalf("case %s did not force --require-kernel-log-artifacts; calls=%s", name, payload)
+		}
+		if gotMinKernelLogNodes[name] != "2" {
+			t.Fatalf("case %s min kernel log nodes got %q want 2; calls=%s", name, gotMinKernelLogNodes[name], payload)
 		}
 	}
 	requireArgPair := func(caseName, key, value string) {

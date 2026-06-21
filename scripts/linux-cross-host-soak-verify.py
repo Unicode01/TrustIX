@@ -129,6 +129,12 @@ def parse_args() -> argparse.Namespace:
         help="minimum collected kernel/dmesg log artifacts when --require-kernel-log-artifacts is set",
     )
     parser.add_argument(
+        "--min-kernel-log-nodes",
+        type=int,
+        default=2,
+        help="minimum distinct nodes with usable kernel/dmesg log artifacts when --require-kernel-log-artifacts is set",
+    )
+    parser.add_argument(
         "--require-build-identity",
         action="store_true",
         help="require at least two collected status.json build blocks and verify they match",
@@ -424,9 +430,10 @@ def scan_logs(case_dir: Path) -> list[str]:
     return findings
 
 
-def kernel_log_artifacts(case_dir: Path) -> tuple[list[str], list[str]]:
+def kernel_log_artifacts(case_dir: Path) -> tuple[list[str], list[str], list[str]]:
     artifacts: list[str] = []
     rejected: list[str] = []
+    nodes: set[str] = set()
     for path in sorted(case_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() != ".log":
             continue
@@ -454,7 +461,8 @@ def kernel_log_artifacts(case_dir: Path) -> tuple[list[str], list[str]]:
             rejected.append(collection_error)
             continue
         artifacts.append(str(rel))
-    return artifacts, rejected
+        nodes.add(transport_node_key(path, case_dir))
+    return artifacts, rejected, sorted(nodes)
 
 
 def stable_digest(value: Any) -> str:
@@ -1037,6 +1045,7 @@ def validate_case(
     log_scan: bool,
     require_kernel_log_artifacts: bool,
     min_kernel_log_artifacts: int,
+    min_kernel_log_nodes: int,
     require_build_identity: bool,
     require_strong_build_identity: bool,
     require_binary_identity: bool,
@@ -1153,7 +1162,7 @@ def validate_case(
     log_findings = scan_logs(case.path) if log_scan else []
     if log_findings:
         errors.extend(f"log crash signature: {finding}" for finding in log_findings)
-    collected_kernel_logs, rejected_kernel_logs = kernel_log_artifacts(case.path)
+    collected_kernel_logs, rejected_kernel_logs, kernel_log_nodes = kernel_log_artifacts(case.path)
     if require_kernel_log_artifacts:
         errors.extend(
             f"kernel/dmesg log artifact unusable: {finding}"
@@ -1163,6 +1172,11 @@ def validate_case(
         errors.append(
             f"found {len(collected_kernel_logs)} kernel/dmesg log artifacts, "
             f"want >= {min_kernel_log_artifacts}"
+        )
+    if require_kernel_log_artifacts and len(kernel_log_nodes) < min_kernel_log_nodes:
+        errors.append(
+            f"found usable kernel/dmesg log artifacts for {len(kernel_log_nodes)} nodes, "
+            f"want >= {min_kernel_log_nodes}"
         )
 
     build_identities = collect_status_build_identities(case.path)
@@ -1273,6 +1287,7 @@ def validate_case(
         "log_findings": log_findings,
         "kernel_log_artifacts": collected_kernel_logs,
         "kernel_log_rejected_artifacts": rejected_kernel_logs,
+        "kernel_log_nodes": kernel_log_nodes,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
         "boot_ids": boot_ids,
@@ -1308,6 +1323,8 @@ def main() -> int:
         raise SystemExit("--min-iperf-json must be non-negative")
     if args.min_kernel_log_artifacts < 0:
         raise SystemExit("--min-kernel-log-artifacts must be non-negative")
+    if args.min_kernel_log_nodes < 0:
+        raise SystemExit("--min-kernel-log-nodes must be non-negative")
     required_status_stats = parse_required_datapath_stats(args.require_status_stat)
     required_status_minima = parse_required_numeric_limits(
         args.require_status_min,
@@ -1400,6 +1417,7 @@ def main() -> int:
             log_scan=not args.no_log_scan,
             require_kernel_log_artifacts=args.require_kernel_log_artifacts,
             min_kernel_log_artifacts=args.min_kernel_log_artifacts,
+            min_kernel_log_nodes=args.min_kernel_log_nodes,
             require_build_identity=args.require_build_identity,
             require_strong_build_identity=args.require_strong_build_identity,
             require_binary_identity=args.require_binary_identity,
