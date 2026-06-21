@@ -44,6 +44,18 @@ CRASH_RE = re.compile(
 
 LOG_SUFFIXES = {".log", ".err", ".txt", ".out"}
 
+KERNEL_LOG_COLLECTION_FAILURE_RE = re.compile(
+    r"(?i)("
+    r"^-- No entries --$|"
+    r"^No journal files were found\.?$|"
+    r"^(?:.*\b(?:journalctl|dmesg|sh|bash):\s*).*\b(?:command not found|not found|permission denied|operation not permitted)\b|"
+    r"^Failed to .*Operation not permitted\b|"
+    r"^dmesg:\s+read kernel buffer failed\b|"
+    r"^dmesg:\s+cannot read kernel buffer\b|"
+    r"^.*\b(?:journalctl|dmesg):\s+(?:unrecognized|invalid) option\b"
+    r")"
+)
+
 
 @dataclass
 class CaseSpec:
@@ -412,21 +424,37 @@ def scan_logs(case_dir: Path) -> list[str]:
     return findings
 
 
-def kernel_log_artifacts(case_dir: Path) -> list[str]:
+def kernel_log_artifacts(case_dir: Path) -> tuple[list[str], list[str]]:
     artifacts: list[str] = []
+    rejected: list[str] = []
     for path in sorted(case_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() != ".log":
             continue
         name = path.name.lower()
         if "kernel" not in name and "dmesg" not in name:
             continue
+        rel = path.relative_to(case_dir)
         try:
             if path.stat().st_size <= 0:
+                rejected.append(f"{rel}:empty")
                 continue
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
+            rejected.append(f"{rel}:read_error")
             continue
-        artifacts.append(str(path.relative_to(case_dir)))
-    return artifacts
+        if not any(line.strip() for line in lines):
+            rejected.append(f"{rel}:empty")
+            continue
+        collection_error = ""
+        for lineno, line in enumerate(lines, 1):
+            if KERNEL_LOG_COLLECTION_FAILURE_RE.search(line.strip()):
+                collection_error = f"{rel}:{lineno}:collection_error:{line[:240]}"
+                break
+        if collection_error:
+            rejected.append(collection_error)
+            continue
+        artifacts.append(str(rel))
+    return artifacts, rejected
 
 
 def stable_digest(value: Any) -> str:
@@ -1125,7 +1153,12 @@ def validate_case(
     log_findings = scan_logs(case.path) if log_scan else []
     if log_findings:
         errors.extend(f"log crash signature: {finding}" for finding in log_findings)
-    collected_kernel_logs = kernel_log_artifacts(case.path)
+    collected_kernel_logs, rejected_kernel_logs = kernel_log_artifacts(case.path)
+    if require_kernel_log_artifacts:
+        errors.extend(
+            f"kernel/dmesg log artifact unusable: {finding}"
+            for finding in rejected_kernel_logs
+        )
     if require_kernel_log_artifacts and len(collected_kernel_logs) < min_kernel_log_artifacts:
         errors.append(
             f"found {len(collected_kernel_logs)} kernel/dmesg log artifacts, "
@@ -1239,6 +1272,7 @@ def validate_case(
         "iperf": iperf_results,
         "log_findings": log_findings,
         "kernel_log_artifacts": collected_kernel_logs,
+        "kernel_log_rejected_artifacts": rejected_kernel_logs,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
         "boot_ids": boot_ids,
