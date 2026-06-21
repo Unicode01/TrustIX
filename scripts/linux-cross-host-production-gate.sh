@@ -56,9 +56,37 @@ validate_number() {
   [[ "$value" =~ $re ]] || die "${name} must be a non-negative number"
 }
 
+validate_nonnegative_integer() {
+  local name="$1" value="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || die "${name} must be a non-negative integer"
+}
+
 max_decimal() {
   local a="$1" b="$2"
   awk -v a="$a" -v b="$b" 'BEGIN { if ((a + 0) >= (b + 0)) print a; else print b }'
+}
+
+min_decimal() {
+  local a="$1" b="$2"
+  awk -v a="$a" -v b="$b" 'BEGIN { if ((a + 0) <= (b + 0)) print a; else print b }'
+}
+
+max_integer() {
+  local a="$1" b="$2"
+  if (( a >= b )); then
+    printf '%s\n' "$a"
+  else
+    printf '%s\n' "$b"
+  fi
+}
+
+min_integer() {
+  local a="$1" b="$2"
+  if (( a <= b )); then
+    printf '%s\n' "$a"
+  else
+    printf '%s\n' "$b"
+  fi
 }
 
 validate_case_token() {
@@ -226,14 +254,23 @@ main() {
   validate_number TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS "$min_seconds"
   min_seconds="$(max_decimal "$min_seconds" "900")"
   validate_number TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP "$seconds_slop"
-  validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
-  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"
-  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS "$secure_kudp_min_crypto_flows"
-  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET "$secure_kudp_direct_error_budget"
-  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET "$secure_kudp_replay_budget"
-  validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS "$route_gso_min_sessions"
-  validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
-  validate_number TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS "$compat_min_sessions"
+  seconds_slop="$(min_decimal "$seconds_slop" "1")"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS "$secure_kudp_min_crypto_flows"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET "$secure_kudp_direct_error_budget"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET "$secure_kudp_replay_budget"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS "$route_gso_min_sessions"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS "$compat_min_sessions"
+  full_kmod_min_sessions="$(max_integer "$full_kmod_min_sessions" "8")"
+  secure_kudp_min_sessions="$(max_integer "$secure_kudp_min_sessions" "8")"
+  secure_kudp_min_crypto_flows="$(max_integer "$secure_kudp_min_crypto_flows" "1")"
+  secure_kudp_direct_error_budget="$(min_integer "$secure_kudp_direct_error_budget" "64")"
+  secure_kudp_replay_budget="$(min_integer "$secure_kudp_replay_budget" "4096")"
+  route_gso_min_sessions="$(max_integer "$route_gso_min_sessions" "8")"
+  route_gso_session_error_budget="$(min_integer "$route_gso_session_error_budget" "2")"
+  compat_min_sessions="$(max_integer "$compat_min_sessions" "1")"
   validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS "$userspace_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS "$userspace_tc_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS "$tc_direct_case_min_gbps_raw"

@@ -1139,6 +1139,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}",
 		"max_decimal()",
+		"min_decimal()",
+		"max_integer()",
+		"min_integer()",
 		"userspace_min_gbps=\"$(max_decimal \"$userspace_min_gbps\" \"0.5\")\"",
 		"userspace_tc_min_gbps=\"$(max_decimal \"$userspace_tc_min_gbps\" \"1\")\"",
 		"tc_direct_min_gbps=\"$(max_decimal \"$tc_direct_min_gbps\" \"3\")\"",
@@ -1147,6 +1150,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"route_gso_min_gbps=\"$(max_decimal \"$route_gso_min_gbps\" \"2.5\")\"",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900",
 		"min_seconds=\"$(max_decimal \"$min_seconds\" \"900\")\"",
+		"seconds_slop=\"$(min_decimal \"$seconds_slop\" \"1\")\"",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1",
@@ -1176,11 +1180,22 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS \"$full_kmod_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS \"$secure_kudp_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS \"$route_gso_min_gbps\"",
-		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS \"$secure_kudp_min_crypto_flows\"",
-		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET \"$secure_kudp_direct_error_budget\"",
-		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET \"$secure_kudp_replay_budget\"",
-		"validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET \"$route_gso_session_error_budget\"",
-		"validate_number TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS \"$compat_min_sessions\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS \"$full_kmod_min_sessions\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS \"$secure_kudp_min_sessions\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS \"$secure_kudp_min_crypto_flows\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET \"$secure_kudp_direct_error_budget\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET \"$secure_kudp_replay_budget\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS \"$route_gso_min_sessions\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET \"$route_gso_session_error_budget\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS \"$compat_min_sessions\"",
+		"full_kmod_min_sessions=\"$(max_integer \"$full_kmod_min_sessions\" \"8\")\"",
+		"secure_kudp_min_sessions=\"$(max_integer \"$secure_kudp_min_sessions\" \"8\")\"",
+		"secure_kudp_min_crypto_flows=\"$(max_integer \"$secure_kudp_min_crypto_flows\" \"1\")\"",
+		"secure_kudp_direct_error_budget=\"$(min_integer \"$secure_kudp_direct_error_budget\" \"64\")\"",
+		"secure_kudp_replay_budget=\"$(min_integer \"$secure_kudp_replay_budget\" \"4096\")\"",
+		"route_gso_min_sessions=\"$(max_integer \"$route_gso_min_sessions\" \"8\")\"",
+		"route_gso_session_error_budget=\"$(min_integer \"$route_gso_session_error_budget\" \"2\")\"",
+		"compat_min_sessions=\"$(max_integer \"$compat_min_sessions\" \"1\")\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS \"$userspace_case_min_gbps_raw\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS \"$userspace_tc_case_min_gbps_raw\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS \"$tc_direct_case_min_gbps_raw\"",
@@ -1433,6 +1448,15 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_GATE_VERIFIER="+slashPath(verifier),
 		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY=0",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=30",
+		"TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP=999",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS=0",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS=0",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS=0",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET=999",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET=999999",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS=0",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET=999",
+		"TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS=0",
 		"TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_USERSPACE_CASES="+fastName+"="+fastDir+" "+slowName+"="+slowDir,
 		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS="+fastName+"=1.5 "+slowName+"=0",
@@ -1529,6 +1553,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair(fastName, "--require-transport-policy-stat", "profile=stable")
 	requireArgPair(fastName, "--require-transport-policy-stat", "datapath=userspace")
 	requireArgPair(fastName, "--require-transport-policy-stat", "crypto_placement=userspace")
+	requireArgPair(fastName, "--seconds-slop", "1")
+	requireArgPair(fastName, "--require-transport-sessions-min", "1")
 	requireArgPair(slowName, "--require-transport-policy-stat", "encryption=plaintext")
 	requireArgPair(slowName, "--require-transport-policy-stat", "profile=stable")
 	requireArgPair(slowName, "--require-transport-policy-stat", "datapath=userspace")
@@ -1537,6 +1563,21 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "profile=performance")
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "datapath=tc_xdp")
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "crypto_placement=userspace")
+	requireArgPair("tc", "--require-transport-sessions-min", "1")
+	requireArgPair("full", "--require-transport-policy-min", "session_pool_size=8")
+	requireArgPair("full", "--require-datapath-min", "counters.session_dials=8")
+	requireArgPair("full", "--require-module-param-min", "trustix_datapath.session_records=8")
+	requireArgPair("secure", "--require-transport-policy-min", "session_pool_size=8")
+	requireArgPair("secure", "--require-datapath-min", "kernel_udp.provider_stats.kernel_crypto_flow_map_entries=1")
+	requireArgPair("secure", "--require-datapath-min", "kernel_udp.provider_stats.kernel_crypto_flow_map_updates=1")
+	requireArgPair("secure", "--require-datapath-max", "kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors=64")
+	requireArgPair("secure", "--require-datapath-max", "kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_drops=4096")
+	requireArgPair("secure", "--require-datapath-max", "kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_drops=4096")
+	requireArgPair("secure", "--require-module-param-max", "trustix_crypto.direct_kfunc_errors=64")
+	requireArgPair("route", "--require-transport-policy-min", "session_pool_size=8")
+	requireArgPair("route", "--require-transport-sessions-min", "8")
+	requireArgPair("route", "--require-status-min", "data_path.active_sessions=8")
+	requireArgPair("route", "--require-status-max", "data_path.counters.session_dial_errors=2")
 }
 
 func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) {
@@ -1572,6 +1613,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"set -e",
 		"{",
 		"  printf 'GATE_MIN_SECONDS=%s\\n' \"${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-}\"",
+		"  printf 'GATE_SECONDS_SLOP=%s\\n' \"${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-}\"",
 		"  printf 'USERSPACE_CASES=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASES\"",
 		"  printf 'USERSPACE_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS\"",
 		"  printf 'USERSPACE_TC_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS\"",
@@ -1596,6 +1638,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_REQUIRE_BINARY_IDENTITY=0",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS=5",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS_SLOP=999",
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1608,6 +1651,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 	text := string(payload)
 	for _, want := range []string{
 		"GATE_MIN_SECONDS=30",
+		"GATE_SECONDS_SLOP=1",
 		"udp-secure-stable-userspace-userspace=1.5",
 		"tcp-secure-stable-userspace-userspace=0.75",
 		"gre-plaintext-performance-tc_xdp-userspace=4",
@@ -1639,6 +1683,8 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"selected production gate cannot represent",
 		"selected_gate_unmapped_case_count",
 		"selected_gate_case_count",
+		"min_decimal()",
+		"seconds_slop=\"$(min_decimal \"$seconds_slop\" \"1\")\"",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS",
 		"validation_scope",

@@ -53,6 +53,11 @@ max_decimal() {
   awk -v a="$a" -v b="$b" 'BEGIN { if ((a + 0) >= (b + 0)) print a; else print b }'
 }
 
+min_decimal() {
+  local a="$1" b="$2"
+  awk -v a="$a" -v b="$b" 'BEGIN { if ((a + 0) <= (b + 0)) print a; else print b }'
+}
+
 max_integer() {
   local a="$1" b="$2"
   if (( a >= b )); then
@@ -384,6 +389,7 @@ main() {
   [[ -z "$seconds_override" ]] || validate_positive_integer TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS "$seconds_override"
   [[ -z "$min_gbps_override" ]] || validate_nonnegative_decimal TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS "$min_gbps_override"
   validate_nonnegative_decimal TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS_SLOP "$seconds_slop"
+  seconds_slop="$(min_decimal "$seconds_slop" "1")"
   validate_positive_integer TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_TIMEOUT_SLOP "$timeout_slop"
   if ! truthy "$dry_run"; then
     truthy "$verify" || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0 is only allowed with DRY_RUN=1"
