@@ -214,6 +214,87 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 	}
 }
 
+func markdownHeadingAnchor(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "#") {
+		return "", false
+	}
+	hashes := 0
+	for hashes < len(line) && line[hashes] == '#' {
+		hashes++
+	}
+	if hashes == 0 || hashes >= len(line) || line[hashes] != ' ' {
+		return "", false
+	}
+	title := strings.TrimSpace(line[hashes:])
+	title = strings.TrimSpace(strings.TrimRight(title, "#"))
+	title = strings.ToLower(title)
+	var slug strings.Builder
+	for _, r := range title {
+		switch {
+		case r >= 'a' && r <= 'z':
+			slug.WriteRune(r)
+		case r >= '0' && r <= '9':
+			slug.WriteRune(r)
+		case r == ' ' || r == '\t':
+			slug.WriteByte('-')
+		case r == '-' || r == '_':
+			slug.WriteRune(r)
+		}
+	}
+	anchor := slug.String()
+	return anchor, anchor != ""
+}
+
+func htmlAnchorIDs(line string) []string {
+	var anchors []string
+	for _, marker := range []string{`id="`, `name="`, `id='`, `name='`} {
+		quote := marker[len(marker)-1]
+		offset := 0
+		for {
+			idx := strings.Index(line[offset:], marker)
+			if idx < 0 {
+				break
+			}
+			start := offset + idx + len(marker)
+			end := strings.IndexByte(line[start:], quote)
+			if end < 0 {
+				break
+			}
+			if anchor := line[start : start+end]; anchor != "" {
+				anchors = append(anchors, anchor)
+			}
+			offset = start + end + 1
+		}
+	}
+	return anchors
+}
+
+func loadDocumentAnchors(t *testing.T, path string) map[string]bool {
+	t.Helper()
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read document %s: %v", path, err)
+	}
+	anchors := map[string]bool{}
+	headingCounts := map[string]int{}
+	for _, line := range strings.Split(string(payload), "\n") {
+		if base, ok := markdownHeadingAnchor(line); ok {
+			count := headingCounts[base]
+			anchor := base
+			if count > 0 {
+				anchor = base + "-" + strconv.Itoa(count)
+			}
+			headingCounts[base] = count + 1
+			anchors[anchor] = true
+		}
+		for _, anchor := range htmlAnchorIDs(line) {
+			anchors[anchor] = true
+		}
+	}
+	return anchors
+}
+
 func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *testing.T) {
 	for _, name := range []string{"linux-production-transport-matrix.sh"} {
 		t.Run(name, func(t *testing.T) {
@@ -450,6 +531,28 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 	} {
 		if checkedByFamily[family] == 0 {
 			t.Fatalf("no current cross-host production defaults checked for gate family %s", family)
+		}
+	}
+}
+
+func TestProductionEvidenceArtifactsResolveToDocsAnchors(t *testing.T) {
+	anchorsByPath := map[string]map[string]bool{}
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		parts := strings.SplitN(evidence.Artifact, "#", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			t.Fatalf("production evidence artifact must be a local markdown anchor: %+v", evidence)
+		}
+		docPath := filepath.Clean(filepath.FromSlash(parts[0]))
+		anchor := parts[1]
+		if !strings.HasPrefix(docPath, filepath.Clean("docs")+string(os.PathSeparator)) {
+			t.Fatalf("production evidence artifact must point under docs/: %+v", evidence)
+		}
+		repoDocPath := filepath.Join("..", docPath)
+		if _, ok := anchorsByPath[repoDocPath]; !ok {
+			anchorsByPath[repoDocPath] = loadDocumentAnchors(t, repoDocPath)
+		}
+		if !anchorsByPath[repoDocPath][anchor] {
+			t.Fatalf("production evidence artifact anchor does not exist: %s in %+v", evidence.Artifact, evidence)
 		}
 	}
 }

@@ -284,6 +284,8 @@ no kernel log crash findings.
 
 ## 2026-06-20
 
+<a id="2026-06-20-zaozhuang-pve-compatibility-900s-strict-gate"></a>
+
 ### Zaozhuang PVE compatibility 900s strict gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
@@ -325,6 +327,8 @@ Final suspicious kernel-log scans over the run window found no panic, Oops,
 BUG, call trace, page fault, watchdog, lockup, `tx_queue_len`, or TrustIX
 datapath crash signatures on either Debian guest.
 
+<a id="2026-06-20-zaozhuang-pve-gre-p4-900s-strict-gate"></a>
+
 ### Zaozhuang PVE GRE P4 900s strict gate
 
 The same PVE host and disposable Debian 13 VM200/VM201 pair were reused to
@@ -360,6 +364,8 @@ The runner also aligns the default session pool size to that tunnel-specific
 parallelism unless `TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE` was explicitly set.
 Do not promote GRE P8; it remains negative evidence for dirty iperf artifacts.
 
+<a id="2026-06-20-zaozhuang-pve-ipip-vxlan-p4-900s-strict-gates"></a>
+
 ### Zaozhuang PVE IPIP/VXLAN P4 900s strict gates
 
 The same Debian 13 VM200/VM201 pair and P4 tunnel default were used for IPIP
@@ -382,6 +388,8 @@ Conclusion: plaintext GRE/IPIP/VXLAN userspace-TC tunnel transports are now
 selected only at P4 for cross-host production compatibility. Secure tunnel
 variants were evaluated separately below after the userspace-encrypted TIXB
 batch cap fix.
+
+<a id="2026-06-20-zaozhuang-pve-secure-tunnel-userspace-tc-900s-strict-gates"></a>
 
 ### Zaozhuang PVE secure tunnel userspace-TC 900s strict gates
 
@@ -528,6 +536,8 @@ OpenWrt kernel/helper combination passes the runtime gate. The validated
 OpenWrt production path remains UDP plaintext full-kmod from the 900s gate.
 
 ## 2026-06-19
+
+<a id="2026-06-19-zaozhuang-pve-selected-transport-matrix-gate"></a>
 
 ### Zaozhuang PVE selected transport matrix gate
 
