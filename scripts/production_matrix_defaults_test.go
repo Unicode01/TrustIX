@@ -630,6 +630,124 @@ func TestProductionEvidenceRequiresGateManifestIdentity(t *testing.T) {
 	}
 }
 
+func TestProductionEvidenceFromGateSummary(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	matrixSummary := filepath.Join(workdir, "summary.jsonl")
+	gateSummaryDir := filepath.Join(workdir, "selected-production-gate")
+	if err := os.MkdirAll(gateSummaryDir, 0o755); err != nil {
+		t.Fatalf("create gate summary dir: %v", err)
+	}
+	matrixRow := map[string]any{
+		"status":           "pass",
+		"case":             "udp-secure-stable-userspace-userspace",
+		"runner_case":      "userspace-udp-secure",
+		"transport":        "udp",
+		"encryption":       "secure",
+		"profile":          "stable",
+		"datapath":         "userspace",
+		"crypto_placement": "userspace",
+		"validation_scope": "cross_host",
+		"gate_family":      "userspace",
+		"min_gbps":         1.5,
+		"min_seconds":      900,
+		"exit_code":        0,
+		"workdir":          filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
+	}
+	matrixPayload, err := json.Marshal(matrixRow)
+	if err != nil {
+		t.Fatalf("marshal matrix row: %v", err)
+	}
+	if err := os.WriteFile(matrixSummary, append(matrixPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write matrix summary: %v", err)
+	}
+	gateRow := map[string]any{
+		"case":                       "udp-secure-stable-userspace-userspace",
+		"path":                       filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
+		"status":                     "pass",
+		"min_gbps_required":          1.5,
+		"min_seconds_required":       900,
+		"min_sent_gbps":              1.876543,
+		"min_received_gbps":          1.765432,
+		"min_required_received_gbps": 1.654321,
+		"min_seconds":                899.95,
+		"errors":                     []string{},
+	}
+	gatePayload, err := json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal gate row: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write gate summary: %v", err)
+	}
+	manifest := map[string]any{
+		"schema": productionGateManifestSchema,
+		"production_gate": map[string]any{
+			"path":   "scripts/linux-cross-host-production-gate.sh",
+			"sha256": strings.Repeat("a", 64),
+			"size":   123,
+		},
+		"verifier": map[string]any{
+			"path":   "scripts/linux-cross-host-soak-verify.py",
+			"sha256": strings.Repeat("b", 64),
+			"size":   456,
+		},
+	}
+	manifestPayload, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--os-matrix", "debian13-debian13",
+		"--kernel-matrix", "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+		"--artifact", "docs/trustix-performance-log.md#example-production-gate",
+		"--note-template", "{transport} {encryption} {gate_family} evidence",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production evidence generator failed: %v\n%s", err, output)
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected one evidence row, got %d:\n%s", len(lines), output)
+	}
+	fields := strings.Split(lines[0], "\t")
+	if len(fields) != 17 {
+		t.Fatalf("expected 17 evidence fields, got %d:\n%s", len(fields), output)
+	}
+	wantFields := map[int]string{
+		0:  "userspace",
+		1:  "udp",
+		2:  "secure",
+		3:  "stable",
+		4:  "userspace",
+		5:  "userspace",
+		6:  "cross_host",
+		7:  "debian13-debian13",
+		8:  "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+		9:  "pass",
+		10: "1.654321",
+		11: "900",
+		12: productionGateManifestSchema,
+		13: strings.Repeat("a", 64),
+		14: strings.Repeat("b", 64),
+		15: "docs/trustix-performance-log.md#example-production-gate",
+		16: "udp secure userspace evidence",
+	}
+	for idx, want := range wantFields {
+		if fields[idx] != want {
+			t.Fatalf("field %d = %q, want %q\n%s", idx, fields[idx], want, output)
+		}
+	}
+}
+
 func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 	defaults := loadProductionTransportDefaults(t)
 	evidenceByKey := map[string][]productionTransportEvidence{}
@@ -1562,6 +1680,22 @@ func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
 	}
 }
 
+func requirePython3(t *testing.T) string {
+	t.Helper()
+	for _, name := range []string{"python3", "python"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, "-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)")
+		if err := cmd.Run(); err == nil {
+			return path
+		}
+	}
+	t.Skip("usable python3 not available")
+	return ""
+}
+
 func requireBashAndPython3(t *testing.T) string {
 	t.Helper()
 	bash, err := exec.LookPath("bash")
@@ -1571,9 +1705,7 @@ func requireBashAndPython3(t *testing.T) string {
 	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
 		t.Skipf("bash array syntax not available from %s", bash)
 	}
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 not available")
-	}
+	requirePython3(t)
 	return bash
 }
 
