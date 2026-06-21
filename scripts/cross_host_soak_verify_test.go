@@ -263,6 +263,30 @@ func TestCrossHostSoakVerifyRejectsKernelCrashLogs(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRejectsTxQueueLenMisconfigLogs(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "kernel.log"), []byte("tix-lan: Caught tx_queue_len zero misconfig\n"), 0o644); err != nil {
+		t.Fatalf("write tx_queue_len log: %v", err)
+	}
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted tx_queue_len log:\n%s", output)
+	}
+	if !strings.Contains(string(output), "tx_queue_len zero misconfig") {
+		t.Fatalf("verify output did not report tx_queue_len signature:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyIgnoresBenignKernelBugWords(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
