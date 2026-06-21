@@ -437,6 +437,37 @@ func TestCurrentDebianSecureKUDPEvidenceCoversProductionGate(t *testing.T) {
 	t.Fatalf("missing current Debian secure-kUDP production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
 }
 
+func TestCurrentDebianRouteGSOEvidenceCoversProductionGate(t *testing.T) {
+	const (
+		wantOSMatrix     = "debian13-debian13"
+		wantKernelMatrix = "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#debian-route-gso-current-head-production-recheck"
+		minGbps          = 2.5
+		minSeconds       = 900
+	)
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		if evidence.GateFamily != "route_gso" ||
+			evidence.OSMatrix != wantOSMatrix ||
+			evidence.KernelMatrix != wantKernelMatrix ||
+			evidence.Artifact != wantArtifact {
+			continue
+		}
+		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid Debian route-GSO evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+		}
+		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid Debian route-GSO evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+		}
+		if evidence.Result == "pass" && evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
+			return
+		}
+		t.Fatalf("current Debian route-GSO evidence is below production gate: %+v", evidence)
+	}
+	t.Fatalf("missing current Debian route-GSO production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
+}
+
 func TestCurrentDebianUserspaceEvidenceCoversProductionGates(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
