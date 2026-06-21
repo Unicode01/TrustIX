@@ -1211,6 +1211,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-transport-policy-stat \"crypto_placement=${placement}\"",
 		"run_gate_case_list()",
 		"--require-binary-identity",
+		"--require-stable-boot-id",
 		"run_gate_case_list userspace \"$userspace_min_gbps\"",
 		"run_gate_case_list userspace-tc \"$userspace_tc_min_gbps\"",
 		"run_gate_case_list tc-direct \"$tc_direct_min_gbps\"",
@@ -1487,6 +1488,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	gotMinGbps := map[string]string{}
 	gotMinSeconds := map[string]string{}
 	gotRequireIdentity := map[string]bool{}
+	gotRequireStableBootID := map[string]bool{}
 	gotArgs := map[string][]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -1513,10 +1515,17 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				requireIdentity = true
 			}
 		}
+		requireStableBootID := false
+		for _, arg := range args {
+			if arg == "--require-stable-boot-id" {
+				requireStableBootID = true
+			}
+		}
 		if caseName != "" {
 			gotMinGbps[caseName] = minGbps
 			gotMinSeconds[caseName] = minSeconds
 			gotRequireIdentity[caseName] = requireIdentity
+			gotRequireStableBootID[caseName] = requireStableBootID
 			gotArgs[caseName] = args
 		}
 	}
@@ -1537,6 +1546,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if !gotRequireIdentity[name] {
 			t.Fatalf("case %s did not force --require-binary-identity; calls=%s", name, payload)
+		}
+		if !gotRequireStableBootID[name] {
+			t.Fatalf("case %s did not force --require-stable-boot-id; calls=%s", name, payload)
 		}
 	}
 	requireArgPair := func(caseName, key, value string) {
@@ -2395,6 +2407,12 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"ssh -n \"${ssh_opts[@]}\" \"$dest\" \"$@\"",
 		"ssh_no_stdin \"$dest\" \"mkdir -p $(remote_quote \"$dest_path\")\"",
 		"ssh_no_stdin \"$dest\" \"test -d $(remote_quote \"$src\")\"",
+		"collect_boot_id()",
+		"boot-id-${phase}.txt",
+		"collect_boot_id a before",
+		"collect_boot_id b before",
+		"collect_boot_id a after",
+		"collect_boot_id b after",
 		"rx_worker_experimental_tcp=1",
 		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=%s",
 		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1",

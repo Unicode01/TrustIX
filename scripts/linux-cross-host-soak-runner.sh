@@ -1291,6 +1291,20 @@ collect_failure_snapshot() {
   fetch_from_node b "$remote_b" "$workdir/b" || true
 }
 
+collect_boot_id() {
+  local node="$1"
+  local phase="$2"
+  local dir
+  dir="$(remote_dir "$node")"
+  run_node "$node" "set +e
+mkdir -p $(remote_quote "$dir")
+boot_id=\$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
+[ -n \"\$boot_id\" ] || boot_id=\$(sysctl -n kernel.random.boot_id 2>/dev/null || true)
+printf '%s\\n' \"\$boot_id\" >$(remote_quote "${dir}/boot-id-${phase}.txt")
+uname -a >$(remote_quote "${dir}/uname-${phase}.txt") 2>&1
+"
+}
+
 collect_binary_identity() {
   local node="$1"
   local dir trustixd
@@ -1668,6 +1682,8 @@ fi
 }
 
 collect_all() {
+  collect_boot_id a after || true
+  collect_boot_id b after || true
   collect_node_api a || true
   collect_node_api b || true
   collect_module_parameters a || true
@@ -1717,6 +1733,8 @@ main() {
   trap cleanup_all EXIT
   prepare_node_topology a
   prepare_node_topology b
+  collect_boot_id a before
+  collect_boot_id b before
   generate_certs
   write_config a "$workdir/config-a.yaml"
   write_config b "$workdir/config-b.yaml"

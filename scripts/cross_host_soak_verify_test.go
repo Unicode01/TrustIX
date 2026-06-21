@@ -349,6 +349,48 @@ func TestCrossHostSoakVerifyRejectsMismatchedBinaryIdentity(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRequiresStableBootIDs(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeStableBootIDs(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-stable-boot-id", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected stable boot IDs:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsChangedBootID(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeStableBootIDs(t, dir)
+	writeBootID(t, filepath.Join(dir, "a", "boot-id-after.txt"), "boot-a-rebooted")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-stable-boot-id", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted changed boot ID:\n%s", output)
+	}
+	if !strings.Contains(string(output), "boot-id changed") {
+		t.Fatalf("verify did not report changed boot ID:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyChecksRequiredDatapathStats(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -1214,6 +1256,25 @@ func writeBinaryIdentityJSON(t *testing.T, path, sha256 string) {
 	}
 }
 
+func writeBootID(t *testing.T, path, value string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make boot ID dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o644); err != nil {
+		t.Fatalf("write boot ID: %v", err)
+	}
+}
+
+func writeStableBootIDs(t *testing.T, dir string) {
+	t.Helper()
+	for _, node := range []string{"a", "b"} {
+		value := "boot-" + node
+		writeBootID(t, filepath.Join(dir, node, "boot-id-before.txt"), value)
+		writeBootID(t, filepath.Join(dir, node, "boot-id-after.txt"), value)
+	}
+}
+
 func writeDatapathJSON(t *testing.T, path string, fullPlaintextProvider int) {
 	t.Helper()
 	writeDatapathJSONWithRX(t, path, fullPlaintextProvider, 0)
@@ -1325,6 +1386,7 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 3.3e9, 3.2e9, 900.2)
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 3.3e9, 3.2e9, 900.2)
 	writeResultMarker(t, dir)
+	writeStableBootIDs(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
@@ -1372,6 +1434,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 900.2)
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 900.2)
 	writeResultMarker(t, dir)
+	writeStableBootIDs(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
@@ -1506,6 +1569,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 2.8e9, 2.7e9, 900.2)
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 2.8e9, 2.7e9, 900.2)
 	writeResultMarker(t, dir)
+	writeStableBootIDs(t, dir)
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)

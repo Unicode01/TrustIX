@@ -119,6 +119,11 @@ def parse_args() -> argparse.Namespace:
         help="require at least two collected binary-identity.json files and verify their sha256 values match",
     )
     parser.add_argument(
+        "--require-stable-boot-id",
+        action="store_true",
+        help="require before/after boot-id artifacts for at least two nodes and verify they did not change",
+    )
+    parser.add_argument(
         "--require-status-stat",
         action="append",
         default=[],
@@ -523,6 +528,70 @@ def collect_binary_identities(case_dir: Path) -> list[dict[str, Any]]:
     return identities
 
 
+def collect_boot_ids(case_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    pattern = re.compile(r"^boot-id-([A-Za-z0-9_.-]+)[.]txt$")
+    for path in sorted(case_dir.rglob("boot-id-*.txt")):
+        match = pattern.match(path.name)
+        if not match:
+            continue
+        try:
+            value = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            value = ""
+        rows.append(
+            {
+                "source": str(path.relative_to(case_dir)),
+                "node": transport_node_key(path, case_dir),
+                "phase": match.group(1),
+                "boot_id": value,
+            }
+        )
+    return rows
+
+
+def validate_stable_boot_ids(
+    case_dir: Path,
+    *,
+    required: bool,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    rows = collect_boot_ids(case_dir)
+    errors: list[str] = []
+    if not required:
+        return rows, errors
+    by_node: dict[str, dict[str, list[str]]] = {}
+    for row in rows:
+        node = str(row["node"])
+        phase = str(row["phase"])
+        boot_id = str(row["boot_id"])
+        by_node.setdefault(node, {}).setdefault(phase, []).append(boot_id)
+        if not boot_id:
+            errors.append(f"{row['source']}: empty boot-id artifact")
+    complete_nodes = 0
+    for node, phases in sorted(by_node.items()):
+        before_values = {value for value in phases.get("before", []) if value}
+        after_values = {value for value in phases.get("after", []) if value}
+        if before_values and after_values:
+            complete_nodes += 1
+        if len(before_values) > 1:
+            errors.append(f"{node}: multiple before boot IDs: {sorted(before_values)}")
+        if len(after_values) > 1:
+            errors.append(f"{node}: multiple after boot IDs: {sorted(after_values)}")
+        if not before_values:
+            errors.append(f"{node}: missing before boot-id artifact")
+            continue
+        if not after_values:
+            errors.append(f"{node}: missing after boot-id artifact")
+            continue
+        if before_values != after_values:
+            errors.append(
+                f"{node}: boot-id changed before={sorted(before_values)} after={sorted(after_values)}"
+            )
+    if complete_nodes < 2:
+        errors.append(f"found stable boot-id pairs for {complete_nodes} nodes, want >= 2")
+    return rows, errors
+
+
 def identity_key(identity: dict[str, Any], fields: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(str(identity.get(field) or "") for field in fields)
 
@@ -911,6 +980,7 @@ def validate_case(
     require_build_identity: bool,
     require_strong_build_identity: bool,
     require_binary_identity: bool,
+    require_stable_boot_id: bool,
     required_status_stats: list[tuple[str, str]],
     required_status_minima: list[tuple[str, float]],
     required_status_maxima: list[tuple[str, float]],
@@ -1063,6 +1133,12 @@ def validate_case(
     if len(binary_sha256s) > 1:
         errors.append("binary identity sha256 mismatch across hosts")
 
+    boot_ids, boot_id_errors = validate_stable_boot_ids(
+        case.path,
+        required=require_stable_boot_id,
+    )
+    errors.extend(boot_id_errors)
+
     status_stat_results, status_stat_errors, status_json_count = validate_status_stats(
         case.path,
         required=required_status_stats,
@@ -1126,6 +1202,7 @@ def validate_case(
         "log_findings": log_findings,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
+        "boot_ids": boot_ids,
         "status_json_count": status_json_count,
         "status_stats": status_stat_results,
         "datapath_json_count": datapath_json_count,
@@ -1249,6 +1326,7 @@ def main() -> int:
             require_build_identity=args.require_build_identity,
             require_strong_build_identity=args.require_strong_build_identity,
             require_binary_identity=args.require_binary_identity,
+            require_stable_boot_id=args.require_stable_boot_id,
             required_status_stats=required_status_stats,
             required_status_minima=required_status_minima,
             required_status_maxima=required_status_maxima,
