@@ -9,6 +9,15 @@ verifier used for the run. Rows captured before
 production evidence must copy the schema and hashes from that manifest instead
 of reusing the legacy marker.
 
+Current production-default evidence boundary:
+
+| Default family | Evidence status | Boundary |
+| --- | --- | --- |
+| Debian `full_kmod`, `tc_direct`, `secure_kudp`, `route_gso` | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
+| Debian userspace and userspace-TC defaults | 900s PVE gates passed, still recorded as `legacy-pre-manifest` | Keep as explicit legacy-pending rows until rerun through the manifest-emitting gate. |
+| OpenWrt-Debian `owdeb_full_kmod` | 900s OpenWrt 24.10.7 to Debian gate passed, still recorded as `legacy-pre-manifest` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; rerun with gate manifest before treating it as manifest-backed evidence. |
+| OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
 ## 2026-06-21
 
 ### OpenWrt SDK matrix current stable defaults

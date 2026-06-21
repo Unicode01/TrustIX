@@ -224,9 +224,10 @@ func validateProductionEvidenceManifestIdentity(t *testing.T, evidence productio
 }
 
 type currentProductionEvidenceRequirement struct {
-	OSMatrix     string
-	KernelMatrix string
-	Artifact     string
+	OSMatrix           string
+	KernelMatrix       string
+	Artifact           string
+	GateManifestSchema string
 }
 
 func currentProductionEvidenceRequirementForDefault(row productionTransportDefault) (currentProductionEvidenceRequirement, bool) {
@@ -239,48 +240,55 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 			return currentProductionEvidenceRequirement{}, false
 		}
 		return currentProductionEvidenceRequirement{
-			OSMatrix:     "debian13-debian13",
-			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
-			Artifact:     "docs/trustix-performance-log.md#debian-userspace-current-head-production-gates",
+			OSMatrix:           "debian13-debian13",
+			KernelMatrix:       "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+			Artifact:           "docs/trustix-performance-log.md#debian-userspace-current-head-production-gates",
+			GateManifestSchema: legacyProductionGateManifestValue,
 		}, true
 	case "userspace_tc":
 		if row.Datapath != "tc_xdp" || row.CryptoPlacement != "userspace" {
 			return currentProductionEvidenceRequirement{}, false
 		}
 		return currentProductionEvidenceRequirement{
-			OSMatrix:     "debian13-debian13",
-			KernelMatrix: "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
-			Artifact:     "docs/trustix-performance-log.md#debian-userspace-tc-current-head-production-gates",
+			OSMatrix:           "debian13-debian13",
+			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#debian-userspace-tc-current-head-production-gates",
+			GateManifestSchema: legacyProductionGateManifestValue,
 		}, true
 	case "tc_direct":
 		return currentProductionEvidenceRequirement{
-			OSMatrix:     "debian13-debian13",
-			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
-			Artifact:     "docs/trustix-performance-log.md#debian-tc-direct-current-head-production-recheck",
+			OSMatrix:           "debian13-debian13",
+			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "full_kmod":
 		return currentProductionEvidenceRequirement{
-			OSMatrix:     "debian13-debian13",
-			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
-			Artifact:     "docs/trustix-performance-log.md#debian-full-kmod-current-head-production-recheck",
+			OSMatrix:           "debian13-debian13",
+			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "owdeb_full_kmod":
 		return currentProductionEvidenceRequirement{
-			OSMatrix:     "openwrt24.10.7-debian13",
-			KernelMatrix: "6.6.141_to_6.12.90+deb13.1-cloud-amd64",
-			Artifact:     "docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check",
+			OSMatrix:           "openwrt24.10.7-debian13",
+			KernelMatrix:       "6.6.141_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check",
+			GateManifestSchema: legacyProductionGateManifestValue,
 		}, true
 	case "secure_kudp":
 		return currentProductionEvidenceRequirement{
-			OSMatrix:     "debian13-debian13",
-			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
-			Artifact:     "docs/trustix-performance-log.md#debian-secure-kudp-current-head-production-recheck",
+			OSMatrix:           "debian13-debian13",
+			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "route_gso":
 		return currentProductionEvidenceRequirement{
-			OSMatrix:     "debian13-debian13",
-			KernelMatrix: "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
-			Artifact:     "docs/trustix-performance-log.md#debian-route-gso-current-head-production-recheck",
+			OSMatrix:           "debian13-debian13",
+			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	default:
 		return currentProductionEvidenceRequirement{}, false
@@ -808,10 +816,12 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 				evidence.Result,
 				evidence.MinGbps,
 				evidence.MinSeconds,
+				evidence.GateManifestSchema,
 				evidence.Artifact,
 			}, " "))
 			if evidence.OSMatrix != requirement.OSMatrix ||
 				evidence.KernelMatrix != requirement.KernelMatrix ||
+				evidence.GateManifestSchema != requirement.GateManifestSchema ||
 				evidence.Artifact != requirement.Artifact ||
 				evidence.Result != "pass" {
 				continue
@@ -845,6 +855,56 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 	} {
 		if checkedByFamily[family] == 0 {
 			t.Fatalf("no current cross-host production defaults checked for gate family %s", family)
+		}
+	}
+}
+
+func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
+	manifestRequiredFamilies := map[string]bool{
+		"tc_direct":   true,
+		"full_kmod":   true,
+		"secure_kudp": true,
+		"route_gso":   true,
+	}
+	legacyPendingFamilies := map[string]bool{
+		"userspace":       true,
+		"userspace_tc":    true,
+		"owdeb_full_kmod": true,
+	}
+	seen := map[string]bool{}
+	for _, row := range loadProductionTransportDefaults(t) {
+		if row.ValidationScope != "cross_host" {
+			continue
+		}
+		requirement, ok := currentProductionEvidenceRequirementForDefault(row)
+		if !ok {
+			t.Fatalf("cross-host production default lacks current evidence requirement: %+v", row)
+		}
+		seen[row.GateFamily] = true
+		switch {
+		case manifestRequiredFamilies[row.GateFamily]:
+			if requirement.GateManifestSchema != productionGateManifestSchema {
+				t.Fatalf("Debian kernel fast-path default must require manifest-backed evidence: row=%+v requirement=%+v", row, requirement)
+			}
+			if requirement.Artifact != "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates" {
+				t.Fatalf("Debian kernel fast-path default points at stale evidence: row=%+v requirement=%+v", row, requirement)
+			}
+		case legacyPendingFamilies[row.GateFamily]:
+			if requirement.GateManifestSchema != legacyProductionGateManifestValue {
+				t.Fatalf("legacy-pending default should remain explicit until rerun with a gate manifest: row=%+v requirement=%+v", row, requirement)
+			}
+		default:
+			t.Fatalf("cross-host production default has unclassified manifest policy: row=%+v requirement=%+v", row, requirement)
+		}
+	}
+	for family := range manifestRequiredFamilies {
+		if !seen[family] {
+			t.Fatalf("manifest-required production family was not exercised: %s", family)
+		}
+	}
+	for family := range legacyPendingFamilies {
+		if !seen[family] {
+			t.Fatalf("legacy-pending production family was not exercised: %s", family)
 		}
 	}
 }
