@@ -1635,6 +1635,7 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN:-0",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0 is only allowed with DRY_RUN=1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0 is only allowed for dry-run or non-production scopes",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_CASES is diagnostic-only for production scopes",
 		"selected production gate cannot represent",
 		"selected_gate_unmapped_case_count",
 		"selected_gate_case_count",
@@ -1696,6 +1697,44 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-cross-host-transport-matrix.sh missing %q", want)
 		}
+	}
+}
+
+func TestCrossHostTransportMatrixRejectsCustomCasesForProductionScope(t *testing.T) {
+	bash := requireBashAndPython3(t)
+	workdir := t.TempDir()
+	runner := filepath.Join(workdir, "runner.sh")
+	verifier := filepath.Join(workdir, "verifier.py")
+	productionGate := filepath.Join(workdir, "production-gate.sh")
+	if err := os.WriteFile(runner, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write runner stub: %v", err)
+	}
+	if err := os.WriteFile(verifier, []byte("import sys\nsys.exit(0)\n"), 0o755); err != nil {
+		t.Fatalf("write verifier stub: %v", err)
+	}
+	if err := os.WriteFile(productionGate, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write production gate stub: %v", err)
+	}
+
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+slashPath(filepath.Join(workdir, "matrix")),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_RUNNER="+slashPath(runner),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFIER="+slashPath(verifier),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_PRODUCTION_GATE="+slashPath(productionGate),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_CASES=udp:secure:stable:userspace:userspace:0.5:900",
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("matrix unexpectedly accepted custom CASES in production scope:\n%s", output)
+	}
+	if !strings.Contains(string(output), "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_CASES is diagnostic-only for production scopes") {
+		t.Fatalf("matrix output did not report custom CASES production guard:\n%s", output)
 	}
 }
 

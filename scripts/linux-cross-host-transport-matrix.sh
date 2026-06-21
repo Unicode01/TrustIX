@@ -390,6 +390,7 @@ main() {
     case "$scope" in
       all|cross_host|selected)
         truthy "$selected_gate" || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0 is only allowed for dry-run or non-production scopes"
+        [[ -z "$cases_raw" ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_CASES is diagnostic-only for production scopes; add selected rows to ${defaults_file} with a production gate family"
         ;;
     esac
   fi
