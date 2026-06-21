@@ -192,6 +192,7 @@ main() {
   secure_kudp_min_gbps="$(max_decimal "$secure_kudp_min_gbps" "1.5")"
   route_gso_min_gbps="$(max_decimal "$route_gso_min_gbps" "2.5")"
   validate_number TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS "$min_seconds"
+  min_seconds="$(max_decimal "$min_seconds" "900")"
   validate_number TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP "$seconds_slop"
   validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
   validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"

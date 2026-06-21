@@ -1144,6 +1144,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"secure_kudp_min_gbps=\"$(max_decimal \"$secure_kudp_min_gbps\" \"1.5\")\"",
 		"route_gso_min_gbps=\"$(max_decimal \"$route_gso_min_gbps\" \"2.5\")\"",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900",
+		"min_seconds=\"$(max_decimal \"$min_seconds\" \"900\")\"",
 		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY:-1",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8",
@@ -1441,7 +1442,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read verifier calls: %v", err)
 	}
-	got := map[string]string{}
+	gotMinGbps := map[string]string{}
+	gotMinSeconds := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -1450,17 +1452,20 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &args); err != nil {
 			t.Fatalf("decode verifier args %q: %v", line, err)
 		}
-		var caseName, minGbps string
+		var caseName, minGbps, minSeconds string
 		for i := 0; i+1 < len(args); i++ {
 			switch args[i] {
 			case "--case":
 				caseName = strings.SplitN(args[i+1], "=", 2)[0]
 			case "--min-gbps":
 				minGbps = args[i+1]
+			case "--min-seconds":
+				minSeconds = args[i+1]
 			}
 		}
 		if caseName != "" {
-			got[caseName] = minGbps
+			gotMinGbps[caseName] = minGbps
+			gotMinSeconds[caseName] = minSeconds
 		}
 	}
 	for name, want := range map[string]string{
@@ -1471,8 +1476,11 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"secure": "1.5",
 		"route":  "2.5",
 	} {
-		if got[name] != want {
-			t.Fatalf("case %s min_gbps got %q want %q; calls=%s", name, got[name], want, payload)
+		if gotMinGbps[name] != want {
+			t.Fatalf("case %s min_gbps got %q want %q; calls=%s", name, gotMinGbps[name], want, payload)
+		}
+		if gotMinSeconds[name] != "900" {
+			t.Fatalf("case %s min_seconds got %q want 900; calls=%s", name, gotMinSeconds[name], payload)
 		}
 	}
 }
