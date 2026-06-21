@@ -1284,6 +1284,10 @@ func writeTransportsJSON(t *testing.T, path string, poolSize int, strategy strin
 	}
 	payload := map[string]any{
 		"policy": map[string]any{
+			"encryption":            "plaintext",
+			"profile":               "performance",
+			"datapath":              "kernel_module",
+			"crypto_placement":      "userspace",
 			"session_pool_size":     poolSize,
 			"session_pool_strategy": strategy,
 			"session_pool_warmup":   warmup,
