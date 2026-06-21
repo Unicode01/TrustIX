@@ -1193,6 +1193,10 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"run_gate_case_list userspace \"$userspace_min_gbps\"",
 		"run_gate_case_list userspace-tc \"$userspace_tc_min_gbps\"",
 		"run_gate_case_list tc-direct \"$tc_direct_min_gbps\"",
+		"--require-transport-policy-stat profile=stable",
+		"--require-transport-policy-stat datapath=userspace",
+		"--require-transport-policy-stat crypto_placement=userspace",
+		"--require-transport-policy-stat datapath=tc_xdp",
 		"--require-transport-sessions-min \"${compat_min_sessions}\"",
 		"--require-datapath-stat kernel_udp.provider=tc_direct",
 		"--require-datapath-stat kernel_udp.fast_path=true",
@@ -1454,6 +1458,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	gotMinGbps := map[string]string{}
 	gotMinSeconds := map[string]string{}
 	gotRequireIdentity := map[string]bool{}
+	gotArgs := map[string][]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -1483,6 +1488,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			gotMinGbps[caseName] = minGbps
 			gotMinSeconds[caseName] = minSeconds
 			gotRequireIdentity[caseName] = requireIdentity
+			gotArgs[caseName] = args
 		}
 	}
 	for name, want := range map[string]string{
@@ -1504,6 +1510,23 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			t.Fatalf("case %s did not force --require-binary-identity; calls=%s", name, payload)
 		}
 	}
+	requireArgPair := func(caseName, key, value string) {
+		t.Helper()
+		args := gotArgs[caseName]
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == key && args[i+1] == value {
+				return
+			}
+		}
+		t.Fatalf("case %s missing %s %s; calls=%s", caseName, key, value, payload)
+	}
+	for _, caseName := range []string{"fast", "slow"} {
+		requireArgPair(caseName, "--require-transport-policy-stat", "profile=stable")
+		requireArgPair(caseName, "--require-transport-policy-stat", "datapath=userspace")
+		requireArgPair(caseName, "--require-transport-policy-stat", "crypto_placement=userspace")
+	}
+	requireArgPair("tunnel", "--require-transport-policy-stat", "datapath=tc_xdp")
+	requireArgPair("tunnel", "--require-transport-policy-stat", "crypto_placement=userspace")
 }
 
 func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) {
