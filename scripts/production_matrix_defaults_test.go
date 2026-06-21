@@ -344,6 +344,38 @@ func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	t.Fatalf("missing current OpenWrt full-kmod production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
 }
 
+func TestOpenWrtRouteGSOFamiliesHaveFailClosedRuntimeEvidence(t *testing.T) {
+	want := map[string]bool{
+		"owdeb_secure_kudp:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate": false,
+		"owdeb_route_gso:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":   false,
+		"owdeb_secure_kudp:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check": false,
+		"owdeb_route_gso:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":   false,
+	}
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		if evidence.Result != "fail_closed" || evidence.MinGbps != "0" || evidence.MinSeconds != "30" {
+			continue
+		}
+		key := strings.Join([]string{
+			evidence.GateFamily,
+			evidence.OSMatrix,
+			evidence.KernelMatrix,
+			evidence.Artifact,
+		}, ":")
+		if _, ok := want[key]; ok {
+			want[key] = true
+		}
+	}
+	var missing []string
+	for key, found := range want {
+		if !found {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("missing OpenWrt route-GSO fail-closed runtime evidence: %v", missing)
+	}
+}
+
 func TestCurrentDebianFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
