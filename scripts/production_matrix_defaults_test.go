@@ -393,6 +393,66 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 	}
 }
 
+func TestProductionTransportMatrixSingleHostScopeCannotSelectCrossHostOnlyGates(t *testing.T) {
+	rows := loadProductionTransportDefaults(t)
+	crossHostOnlyGate := map[string]bool{
+		"full_kmod":       true,
+		"owdeb_full_kmod": true,
+		"secure_kudp":     true,
+		"route_gso":       true,
+	}
+	forbiddenFastPathKey := map[string]bool{
+		"udp:plaintext:performance:kernel_module:userspace":              true,
+		"kernel_udp:secure:performance:tc_xdp:kernel":                    true,
+		"experimental_tcp:plaintext:performance:kernel_module:userspace": true,
+		"experimental_tcp:secure:performance:kernel_module:kernel":       true,
+		"experimental_tcp:secure:performance:kernel_module:userspace":    true,
+		"experimental_tcp:plaintext:performance:tc_xdp:userspace":        true,
+		"experimental_tcp:secure:performance:tc_xdp:kernel":              true,
+		"experimental_tcp:secure:performance:tc_xdp:userspace":           true,
+		"kernel_udp:plaintext:performance:kernel_module:userspace":       true,
+		"kernel_udp:plaintext:performance:kernel_module:kernel":          true,
+		"kernel_udp:secure:performance:kernel_module:kernel":             true,
+		"kernel_udp:secure:performance:kernel_module:userspace":          true,
+	}
+	selected := map[string]productionTransportDefault{}
+	for _, row := range rows {
+		if row.ValidationScope != "single_host" {
+			continue
+		}
+		key := strings.Join([]string{
+			row.Transport,
+			row.Encryption,
+			row.Profile,
+			row.Datapath,
+			row.CryptoPlacement,
+		}, ":")
+		if _, seen := selected[key]; seen {
+			continue
+		}
+		selected[key] = row
+	}
+	if len(selected) == 0 {
+		t.Fatalf("single-host production matrix scope selected no defaults")
+	}
+	for key, row := range selected {
+		if crossHostOnlyGate[row.GateFamily] {
+			t.Fatalf("single-host production matrix default selected cross-host-only gate %s: %+v", key, row)
+		}
+		if forbiddenFastPathKey[key] {
+			t.Fatalf("single-host production matrix default selected cross-host fast path %s: %+v", key, row)
+		}
+		if row.MinGbps != "0" || row.MinSeconds != "30" {
+			t.Fatalf("single-host production matrix default should remain a smoke gate, got %+v", row)
+		}
+	}
+	for key := range forbiddenFastPathKey {
+		if _, exists := selected[key]; exists {
+			t.Fatalf("single-host production matrix default unexpectedly selected %s", key)
+		}
+	}
+}
+
 func TestCrossHostProductionDefaultsHavePassingEvidence(t *testing.T) {
 	defaults := loadProductionTransportDefaults(t)
 	evidenceRows := loadProductionTransportEvidence(t)
