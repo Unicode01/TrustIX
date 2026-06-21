@@ -374,6 +374,13 @@ def parse_args() -> argparse.Namespace:
         help="require each node to have transport sessions matching PATH with VALUE; may be repeated",
     )
     parser.add_argument(
+        "--require-transport-session-any-min",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="require each node to have at least one matching transport session with numeric PATH >= VALUE; may be repeated",
+    )
+    parser.add_argument(
         "--require-transport-session-endpoint-suffix",
         action="append",
         default=[],
@@ -1570,6 +1577,7 @@ def validate_transports(
     required_policy_minima: list[tuple[str, float]],
     required_sessions_min: int,
     required_session_stats: list[tuple[str, str]],
+    required_session_any_minima: list[tuple[str, float]],
     required_session_endpoint_suffixes: list[str],
     min_transports_json: int,
 ) -> tuple[list[dict[str, Any]], list[str], int]:
@@ -1577,8 +1585,11 @@ def validate_transports(
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     session_counts_by_node: dict[str, list[tuple[str, int]]] = {}
+    session_any_max_by_node: dict[str, dict[str, tuple[str, float]]] = {}
     session_requirements_enabled = bool(
-        required_session_stats or required_session_endpoint_suffixes
+        required_session_stats
+        or required_session_any_minima
+        or required_session_endpoint_suffixes
     )
     if len(payloads) < min_transports_json:
         errors.append(
@@ -1632,16 +1643,32 @@ def validate_transports(
             count = len(session_rows)
             matching_count = count
             if session_requirements_enabled:
-                matching_count = sum(
-                    1
-                    for session in session_rows
+                matching_count = 0
+                matching_sessions = []
+                for session in session_rows:
                     if transport_session_matches(
                         session,
                         required_session_stats=required_session_stats,
                         required_endpoint_suffixes=required_session_endpoint_suffixes,
-                    )
-                )
+                    ):
+                        matching_count += 1
+                        matching_sessions.append(session)
                 values["matching_sessions"] = matching_count
+                node_key = transport_node_key(path, case_dir)
+                node_max = session_any_max_by_node.setdefault(node_key, {})
+                for dotted_path, _ in required_session_any_minima:
+                    best = node_max.get(dotted_path)
+                    for session in matching_sessions:
+                        try:
+                            actual = datapath_value(session, dotted_path)
+                            actual_number = numeric_value(actual)
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        if best is None or actual_number > best[1]:
+                            best = (rel, actual_number)
+                    if best is not None:
+                        node_max[dotted_path] = best
+                        values[f"matching_session_max.{dotted_path}"] = best[1]
             values["sessions"] = count
             node_key = transport_node_key(path, case_dir)
             session_counts_by_node.setdefault(node_key, []).append((rel, matching_count))
@@ -1664,6 +1691,21 @@ def validate_transports(
                 errors.append(
                     f"{best_rel}: {label}={best_count}, want >= {minimum} ({requirement})"
                 )
+        for node_key in sorted(session_counts_by_node):
+            for dotted_path, minimum in required_session_any_minima:
+                best = session_any_max_by_node.get(node_key, {}).get(dotted_path)
+                if best is None:
+                    errors.append(
+                        f"node {node_key}: no matching transport session stat "
+                        f"{dotted_path!r} reached >= {minimum:g} ({requirement})"
+                    )
+                    continue
+                best_rel, best_value = best
+                if best_value < minimum:
+                    errors.append(
+                        f"{best_rel}: matching transport session stat "
+                        f"{dotted_path}={best_value:g}, want >= {minimum:g} ({requirement})"
+                    )
     return rows, errors, len(payloads)
 
 
@@ -1718,6 +1760,7 @@ def validate_case(
     required_transport_policy_minima: list[tuple[str, float]],
     required_transport_sessions_min: int,
     required_transport_session_stats: list[tuple[str, str]],
+    required_transport_session_any_minima: list[tuple[str, float]],
     required_transport_session_endpoint_suffixes: list[str],
     min_transports_json: int,
 ) -> dict[str, Any]:
@@ -1976,6 +2019,7 @@ def validate_case(
         required_policy_minima=required_transport_policy_minima,
         required_sessions_min=required_transport_sessions_min,
         required_session_stats=required_transport_session_stats,
+        required_session_any_minima=required_transport_session_any_minima,
         required_session_endpoint_suffixes=required_transport_session_endpoint_suffixes,
         min_transports_json=min_transports_json,
     )
@@ -2131,6 +2175,10 @@ def main() -> int:
         args.require_transport_session_stat,
         "--require-transport-session-stat",
     )
+    required_transport_session_any_minima = parse_required_numeric_limits(
+        args.require_transport_session_any_min,
+        "--require-transport-session-any-min",
+    )
     required_transport_session_endpoint_suffixes = [
         item.strip() for item in args.require_transport_session_endpoint_suffix
     ]
@@ -2174,6 +2222,7 @@ def main() -> int:
         or required_transport_policy_minima
         or args.require_transport_sessions_min > 0
         or required_transport_session_stats
+        or required_transport_session_any_minima
         or required_transport_session_endpoint_suffixes
     ) and min_transports_json == 0:
         min_transports_json = 2
@@ -2229,6 +2278,7 @@ def main() -> int:
             required_transport_policy_minima=required_transport_policy_minima,
             required_transport_sessions_min=args.require_transport_sessions_min,
             required_transport_session_stats=required_transport_session_stats,
+            required_transport_session_any_minima=required_transport_session_any_minima,
             required_transport_session_endpoint_suffixes=required_transport_session_endpoint_suffixes,
             min_transports_json=min_transports_json,
         )

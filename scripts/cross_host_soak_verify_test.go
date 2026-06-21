@@ -1131,6 +1131,10 @@ func TestCrossHostSoakVerifyChecksTransportPolicyAndSessions(t *testing.T) {
 		"transport=experimental_tcp",
 		"--require-transport-session-stat",
 		"stats.encryption=plaintext",
+		"--require-transport-session-any-min",
+		"stats.bytes_sent=1",
+		"--require-transport-session-any-min",
+		"stats.bytes_received=1",
 		"--require-transport-session-endpoint-suffix=-experimental-tcp",
 		dir,
 	)
@@ -1214,6 +1218,53 @@ func TestCrossHostSoakVerifyRejectsWrongTransportSessionStats(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "stats.encryption=secure") {
 		t.Fatalf("verify did not report wrong transport session stats:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsIdleMatchingTransportSessions(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	for _, node := range []string{"a", "b"} {
+		writeTransportsJSONWithSessionStats(t, filepath.Join(dir, "collect", node, "transports.json"), 8, "flow", true, 8, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"), map[string]any{
+			"encryption":       "plaintext",
+			"bytes_sent":       0,
+			"bytes_received":   0,
+			"packets_sent":     0,
+			"packets_received": 0,
+		})
+	}
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps",
+		"4",
+		"--min-seconds",
+		"120",
+		"--require-transport-sessions-min",
+		"8",
+		"--require-transport-session-stat",
+		"transport=experimental_tcp",
+		"--require-transport-session-stat",
+		"stats.encryption=plaintext",
+		"--require-transport-session-any-min",
+		"stats.bytes_sent=1",
+		"--require-transport-session-endpoint-suffix=-experimental-tcp",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted idle matching transport sessions:\n%s", output)
+	}
+	if !strings.Contains(string(output), "stats.bytes_sent=0, want >= 1") {
+		t.Fatalf("verify did not report idle matching transport sessions:\n%s", output)
 	}
 }
 
@@ -1389,6 +1440,10 @@ func TestCrossHostSoakVerifyAcceptsActiveTransportSessionSnapshot(t *testing.T) 
 		"transport=experimental_tcp",
 		"--require-transport-session-stat",
 		"stats.encryption=plaintext",
+		"--require-transport-session-any-min",
+		"stats.bytes_sent=1",
+		"--require-transport-session-any-min",
+		"stats.bytes_received=1",
 		"--require-transport-session-endpoint-suffix=-experimental-tcp",
 		dir,
 	)
@@ -2148,6 +2203,17 @@ func writeTransportsJSON(t *testing.T, path string, poolSize int, strategy strin
 
 func writeTransportsJSONWithSession(t *testing.T, path string, poolSize int, strategy string, warmup bool, sessions int, sessionTransport string, endpoint string) {
 	t.Helper()
+	writeTransportsJSONWithSessionStats(t, path, poolSize, strategy, warmup, sessions, sessionTransport, endpoint, map[string]any{
+		"encryption":       "plaintext",
+		"bytes_sent":       4096,
+		"bytes_received":   4096,
+		"packets_sent":     4,
+		"packets_received": 4,
+	})
+}
+
+func writeTransportsJSONWithSessionStats(t *testing.T, path string, poolSize int, strategy string, warmup bool, sessions int, sessionTransport string, endpoint string, stats map[string]any) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("make transports dir: %v", err)
 	}
@@ -2158,9 +2224,7 @@ func writeTransportsJSONWithSession(t *testing.T, path string, poolSize int, str
 			"endpoint":   endpoint,
 			"transport":  sessionTransport,
 			"pool_index": i,
-			"stats": map[string]any{
-				"encryption": "plaintext",
-			},
+			"stats":      stats,
 		})
 	}
 	payload := map[string]any{
@@ -2391,6 +2455,10 @@ func writeSecureKUDPTransportsJSON(t *testing.T, path string, node string) {
 				"send_encrypted":    true,
 				"receive_encrypted": true,
 				"crypto_placement":  "kernel",
+				"bytes_sent":        4096,
+				"bytes_received":    4096,
+				"packets_sent":      4,
+				"packets_received":  4,
 			},
 		})
 	}

@@ -1224,6 +1224,10 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"stats.receive_encrypted=true",
 		"stats.crypto_placement=${placement}",
 		"stats.link_tls=true",
+		"--require-transport-session-any-min \"stats.bytes_sent=1\"",
+		"--require-transport-session-any-min \"stats.bytes_received=1\"",
+		"--require-transport-session-any-min \"stats.packets_sent=1\"",
+		"--require-transport-session-any-min \"stats.packets_received=1\"",
 		"run_gate_case_list()",
 		"--min-iperf-intervals \"$min_iperf_intervals\"",
 		"--min-iperf-interval-gbps-ratio \"$min_interval_gbps_ratio\"",
@@ -1763,6 +1767,13 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		t.Fatalf("case %s missing %s; calls=%s", caseName, value, payload)
 	}
+	requireTrafficArgs := func(caseName string) {
+		t.Helper()
+		requireArgPair(caseName, "--require-transport-session-any-min", "stats.bytes_sent=1")
+		requireArgPair(caseName, "--require-transport-session-any-min", "stats.bytes_received=1")
+		requireArgPair(caseName, "--require-transport-session-any-min", "stats.packets_sent=1")
+		requireArgPair(caseName, "--require-transport-session-any-min", "stats.packets_received=1")
+	}
 	requireArgPair(fastName, "--require-transport-policy-stat", "encryption=secure")
 	requireArgPair(fastName, "--require-transport-policy-stat", "profile=stable")
 	requireArgPair(fastName, "--require-transport-policy-stat", "datapath=userspace")
@@ -1776,6 +1787,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair(fastName, "--require-transport-session-stat", "stats.send_encrypted=true")
 	requireArgPair(fastName, "--require-transport-session-stat", "stats.receive_encrypted=true")
 	requireArgPair(fastName, "--require-transport-session-stat", "stats.crypto_placement=userspace")
+	requireTrafficArgs(fastName)
 	requireArgPair(slowName, "--require-transport-policy-stat", "encryption=plaintext")
 	requireArgPair(slowName, "--require-transport-policy-stat", "profile=stable")
 	requireArgPair(slowName, "--require-transport-policy-stat", "datapath=userspace")
@@ -1784,6 +1796,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArg(slowName, "--require-transport-session-endpoint-suffix=-tcp")
 	requireArgPair(slowName, "--require-transport-session-stat", "stats.encryption=plaintext")
 	requireArgPair(slowName, "--require-transport-session-stat", "stats.link_tls=true")
+	requireTrafficArgs(slowName)
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "encryption=plaintext")
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "profile=performance")
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "datapath=tc_xdp")
@@ -1791,6 +1804,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair(userspaceTCName, "--require-transport-session-stat", "transport=gre")
 	requireArg(userspaceTCName, "--require-transport-session-endpoint-suffix=-gre")
 	requireArgPair(userspaceTCName, "--require-transport-session-stat", "stats.encryption=plaintext")
+	requireTrafficArgs(userspaceTCName)
 	requireArgPair(fastName, "--forbid-lsmod-prefix", "trustix_")
 	requireArgPair(slowName, "--forbid-lsmod-prefix", "trustix_")
 	requireArgPair(userspaceTCName, "--forbid-lsmod-prefix", "trustix_")
@@ -1798,12 +1812,14 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("tc", "--require-transport-session-stat", "transport=udp")
 	requireArg("tc", "--require-transport-session-endpoint-suffix=-udp")
 	requireArgPair("tc", "--require-transport-session-stat", "stats.encryption=plaintext")
+	requireTrafficArgs("tc")
 	requireArgPair("tc", "--forbid-lsmod-prefix", "trustix_")
 	requireArgPair("full", "--require-transport-policy-min", "session_pool_size=8")
 	requireArgPair("full", "--require-transport-sessions-min", "8")
 	requireArgPair("full", "--require-transport-session-stat", "transport=udp")
 	requireArg("full", "--require-transport-session-endpoint-suffix=-udp")
 	requireArgPair("full", "--require-transport-session-stat", "stats.encryption=plaintext")
+	requireTrafficArgs("full")
 	requireArgPair("full", "--require-datapath-min", "counters.session_dials=8")
 	requireArgPair("full", "--require-module-param-min", "trustix_datapath.features=128")
 	requireArgPair("full", "--require-module-param-min", "trustix_datapath.safe_features=128")
@@ -1822,6 +1838,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("secure", "--require-transport-session-stat", "stats.send_encrypted=true")
 	requireArgPair("secure", "--require-transport-session-stat", "stats.receive_encrypted=true")
 	requireArgPair("secure", "--require-transport-session-stat", "stats.crypto_placement=kernel")
+	requireTrafficArgs("secure")
 	requireArgPair("secure", "--require-datapath-min", "kernel_udp.provider_stats.kernel_crypto_flow_map_entries=1")
 	requireArgPair("secure", "--require-datapath-min", "kernel_udp.provider_stats.kernel_crypto_flow_map_updates=1")
 	requireArgPair("secure", "--require-datapath-max", "kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors=64")
@@ -1835,6 +1852,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("route", "--require-transport-session-stat", "transport=experimental_tcp")
 	requireArg("route", "--require-transport-session-endpoint-suffix=-experimental-tcp")
 	requireArgPair("route", "--require-transport-session-stat", "stats.encryption=plaintext")
+	requireTrafficArgs("route")
 	requireArgPair("route", "--require-status-min", "data_path.active_sessions=8")
 	requireArgPair("route", "--require-status-max", "data_path.counters.session_dial_errors=2")
 	requireArgPair("route", "--require-lsmod-module", "trustix_datapath_helpers")

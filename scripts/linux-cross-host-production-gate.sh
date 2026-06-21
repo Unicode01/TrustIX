@@ -254,7 +254,11 @@ case_session_args() {
   printf '%s\n' \
     --require-transport-session-stat "transport=$(session_transport_for_matrix_transport "$transport")" \
     "--require-transport-session-endpoint-suffix=$(session_endpoint_suffix_for_matrix_transport "$transport")" \
-    --require-transport-session-stat "stats.encryption=${encryption}"
+    --require-transport-session-stat "stats.encryption=${encryption}" \
+    --require-transport-session-any-min "stats.bytes_sent=1" \
+    --require-transport-session-any-min "stats.bytes_received=1" \
+    --require-transport-session-any-min "stats.packets_sent=1" \
+    --require-transport-session-any-min "stats.packets_received=1"
   if [[ "$encryption" == "secure" ]]; then
     printf '%s\n' \
       --require-transport-session-stat "stats.encrypted=true" \
