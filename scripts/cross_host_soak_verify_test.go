@@ -183,6 +183,45 @@ func TestCrossHostSoakVerifyAcceptsSingleDirectionClientAndServerArtifacts(t *te
 	}
 }
 
+func TestCrossHostSoakVerifyRequiresIperfPairDirections(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b-forward.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a2b-retry.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-iperf-pair-directions", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted one-way iperf artifacts:\n%s", output)
+	}
+	if !strings.Contains(string(output), "missing iperf traffic pair directions: b-to-a") {
+		t.Fatalf("verify output did not report missing b-to-a pair direction:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyAcceptsIperfPairDirectionsFromServerArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfReceiverJSON(t, filepath.Join(dir, "a", "iperf3-server.json"), 4.8e9, 120.2)
+	writeIperfReceiverJSON(t, filepath.Join(dir, "b", "iperf3-server.json"), 4.8e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-iperf-pair-directions", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected server-side pair direction artifacts: %v\n%s", err, output)
+	}
+}
+
 func TestCrossHostSoakVerifyRejectsSlowArtifacts(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {

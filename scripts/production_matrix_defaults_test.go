@@ -1212,6 +1212,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"run_gate_case_list()",
 		"--require-binary-identity",
 		"--require-stable-boot-id",
+		"--require-iperf-pair-directions",
 		"--require-kernel-log-artifacts",
 		"--min-kernel-log-nodes 2",
 		"run_gate_case_list userspace \"$userspace_min_gbps\"",
@@ -1501,6 +1502,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	gotMinKernelLogNodes := map[string]string{}
 	gotRequireIdentity := map[string]bool{}
 	gotRequireStableBootID := map[string]bool{}
+	gotRequirePairDirections := map[string]bool{}
 	gotRequireKernelLogs := map[string]bool{}
 	gotArgs := map[string][]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
@@ -1537,6 +1539,12 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				requireStableBootID = true
 			}
 		}
+		requirePairDirections := false
+		for _, arg := range args {
+			if arg == "--require-iperf-pair-directions" {
+				requirePairDirections = true
+			}
+		}
 		requireKernelLogs := false
 		for _, arg := range args {
 			if arg == "--require-kernel-log-artifacts" {
@@ -1549,6 +1557,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			gotMinKernelLogNodes[caseName] = minKernelLogNodes
 			gotRequireIdentity[caseName] = requireIdentity
 			gotRequireStableBootID[caseName] = requireStableBootID
+			gotRequirePairDirections[caseName] = requirePairDirections
 			gotRequireKernelLogs[caseName] = requireKernelLogs
 			gotArgs[caseName] = args
 		}
@@ -1573,6 +1582,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if !gotRequireStableBootID[name] {
 			t.Fatalf("case %s did not force --require-stable-boot-id; calls=%s", name, payload)
+		}
+		if !gotRequirePairDirections[name] {
+			t.Fatalf("case %s did not force --require-iperf-pair-directions; calls=%s", name, payload)
 		}
 		if !gotRequireKernelLogs[name] {
 			t.Fatalf("case %s did not force --require-kernel-log-artifacts; calls=%s", name, payload)

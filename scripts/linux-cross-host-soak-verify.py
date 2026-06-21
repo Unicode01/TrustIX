@@ -104,6 +104,11 @@ def parse_args() -> argparse.Namespace:
         help="minimum number of iperf3 JSON files expected per case",
     )
     parser.add_argument(
+        "--require-iperf-pair-directions",
+        action="store_true",
+        help="require usable iperf artifacts covering both a-to-b and b-to-a traffic pairs",
+    )
+    parser.add_argument(
         "--summary",
         help="optional JSONL summary output path",
     )
@@ -379,6 +384,26 @@ def iperf_sums(path: Path) -> list[dict[str, Any]]:
         default_require_received=True,
     )
     return rows
+
+
+def infer_iperf_pair_directions(path: Path, case_dir: Path, sums: list[dict[str, Any]]) -> set[str]:
+    rel = path.relative_to(case_dir)
+    rel_text = str(rel).replace("\\", "/").lower()
+    directions: set[str] = set()
+    if "a-to-b" in rel_text or "a2b" in rel_text:
+        directions.add("a-to-b")
+    if "b-to-a" in rel_text or "b2a" in rel_text:
+        directions.add("b-to-a")
+    if path.name.lower().startswith("iperf3-server"):
+        node_key = transport_node_key(path, case_dir)
+        if node_key == "a":
+            directions.add("b-to-a")
+        elif node_key == "b":
+            directions.add("a-to-b")
+    sum_directions = {str(item.get("direction") or "") for item in sums}
+    if "bidir" in rel_text and {"forward", "reverse"}.issubset(sum_directions):
+        directions.update({"a-to-b", "b-to-a"})
+    return directions
 
 
 def iperf_missing_server_results_only(path: Path) -> bool:
@@ -1041,6 +1066,7 @@ def validate_case(
     min_seconds: float,
     seconds_slop: float,
     min_iperf_json: int,
+    require_iperf_pair_directions: bool,
     require_result_marker: bool,
     log_scan: bool,
     require_kernel_log_artifacts: bool,
@@ -1089,6 +1115,7 @@ def validate_case(
 
     iperf_results: list[dict[str, Any]] = []
     skipped_iperf_files: list[str] = []
+    iperf_pair_directions: set[str] = set()
     for path in iperf_files:
         rel = str(path.relative_to(case.path))
         try:
@@ -1115,6 +1142,7 @@ def validate_case(
         if iperf_error:
             errors.append(f"{rel}: iperf JSON contains error: {iperf_error[:200]}")
             continue
+        iperf_pair_directions.update(infer_iperf_pair_directions(path, case.path, sums))
         for item in sums:
             direction = str(item["direction"])
             sent_gbps = float(item["sent_gbps"])
@@ -1158,6 +1186,14 @@ def validate_case(
             f"found {len(iperf_files)} iperf JSON files / {len(iperf_results)} validated "
             f"directions, want >= {min_iperf_json}"
         )
+    if require_iperf_pair_directions:
+        required_pairs = {"a-to-b", "b-to-a"}
+        missing_pairs = sorted(required_pairs - iperf_pair_directions)
+        if missing_pairs:
+            errors.append(
+                "missing iperf traffic pair directions: "
+                f"{','.join(missing_pairs)}; found {','.join(sorted(iperf_pair_directions)) or 'none'}"
+            )
 
     log_findings = scan_logs(case.path) if log_scan else []
     if log_findings:
@@ -1277,6 +1313,7 @@ def validate_case(
         "seconds_slop": seconds_slop,
         "iperf_json_count": len(iperf_files),
         "iperf_direction_count": len(iperf_results),
+        "iperf_pair_directions": sorted(iperf_pair_directions),
         "iperf_skipped_missing_server_results": skipped_iperf_files,
         "min_sent_gbps": round(min_sent, 6),
         "min_received_gbps": round(min_received, 6),
@@ -1413,6 +1450,7 @@ def main() -> int:
             min_seconds=args.min_seconds,
             seconds_slop=args.seconds_slop,
             min_iperf_json=args.min_iperf_json,
+            require_iperf_pair_directions=args.require_iperf_pair_directions,
             require_result_marker=not args.no_result_marker,
             log_scan=not args.no_log_scan,
             require_kernel_log_artifacts=args.require_kernel_log_artifacts,

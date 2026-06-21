@@ -209,7 +209,7 @@ run_gate() {
   local category_min_gbps="$2"
   shift 2
   set -- --min-gbps "$category_min_gbps" --min-seconds "$min_seconds" --seconds-slop "$seconds_slop" "$@"
-  set -- "$@" --require-binary-identity --require-stable-boot-id --require-kernel-log-artifacts --min-kernel-log-nodes 2
+  set -- "$@" --require-binary-identity --require-stable-boot-id --require-iperf-pair-directions --require-kernel-log-artifacts --min-kernel-log-nodes 2
   if [[ -n "$summary_dir" ]]; then
     mkdir -p "$summary_dir"
     set -- "$@" --summary "${summary_dir}/${label}.jsonl"
