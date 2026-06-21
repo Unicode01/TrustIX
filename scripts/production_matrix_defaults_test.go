@@ -2274,6 +2274,106 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 	}
 }
 
+func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
+	bash := requireBashAndPython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	runner := filepath.Join(workdir, "runner.sh")
+	verifier := filepath.Join(workdir, "verifier.py")
+	productionGate := filepath.Join(workdir, "production-gate.sh")
+	matrixWorkdir := filepath.Join(workdir, "matrix")
+	evidenceOut := filepath.Join(workdir, "evidence.tsv")
+	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t1.5\t30\tselected UDP userspace gate",
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	if err := os.WriteFile(runner, []byte(strings.Join([]string{
+		"#!/usr/bin/env bash",
+		"set -e",
+		"mkdir -p \"$TRUSTIX_CROSS_HOST_WORKDIR\"",
+		"printf 'pass\\n' > \"$TRUSTIX_CROSS_HOST_WORKDIR/userspace.result\"",
+		"",
+	}, "\n")), 0o755); err != nil {
+		t.Fatalf("write runner stub: %v", err)
+	}
+	if err := os.WriteFile(verifier, []byte("import sys\nsys.exit(0)\n"), 0o755); err != nil {
+		t.Fatalf("write verifier stub: %v", err)
+	}
+	if err := os.WriteFile(productionGate, []byte(strings.Join([]string{
+		"#!/usr/bin/env bash",
+		"set -e",
+		"mkdir -p \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR\"",
+		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/production-gate-manifest.json\" <<'JSON'",
+		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456}}`,
+		"JSON",
+		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/userspace-udp-secure.jsonl\" <<'JSON'",
+		`{"case":"udp-secure-stable-userspace-userspace","status":"pass","min_gbps_required":1.5,"min_seconds_required":900,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"errors":[]}`,
+		"JSON",
+		"",
+	}, "\n")), 0o755); err != nil {
+		t.Fatalf("write production gate stub: %v", err)
+	}
+
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+slashPath(defaults),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+slashPath(matrixWorkdir),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_RUNNER="+slashPath(runner),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFIER="+slashPath(verifier),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_PRODUCTION_GATE="+slashPath(productionGate),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_GENERATOR="+slashPath(filepath.Join(".", "production-evidence-from-gate-summary.py")),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_REQUIRE_BINARY_IDENTITY=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT="+slashPath(evidenceOut),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OS_MATRIX=debian13-debian13",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_KERNEL_MATRIX=6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_ARTIFACT=docs/trustix-performance-log.md#matrix-evidence-example",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_NOTE_TEMPLATE={transport} {encryption} {gate_family} matrix evidence",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("matrix evidence run failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(evidenceOut)
+	if err != nil {
+		t.Fatalf("read evidence output: %v", err)
+	}
+	fields := strings.Split(strings.TrimSpace(string(payload)), "\t")
+	if len(fields) != 17 {
+		t.Fatalf("expected 17 evidence fields, got %d:\n%s", len(fields), payload)
+	}
+	wantFields := map[int]string{
+		0:  "userspace",
+		1:  "udp",
+		2:  "secure",
+		3:  "stable",
+		4:  "userspace",
+		5:  "userspace",
+		6:  "cross_host",
+		7:  "debian13-debian13",
+		8:  "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
+		9:  "pass",
+		10: "1.700000",
+		11: "900",
+		12: productionGateManifestSchema,
+		13: strings.Repeat("a", 64),
+		14: strings.Repeat("b", 64),
+		15: "docs/trustix-performance-log.md#matrix-evidence-example",
+		16: "udp secure userspace matrix evidence",
+	}
+	for idx, want := range wantFields {
+		if fields[idx] != want {
+			t.Fatalf("field %d = %q, want %q\n%s", idx, fields[idx], want, payload)
+		}
+	}
+}
+
 func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join(".", "linux-cross-host-transport-matrix.sh"))
 	if err != nil {
@@ -2285,14 +2385,25 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_RUNNER:-${repo_root}/scripts/linux-cross-host-soak-runner.sh",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFIER:-${repo_root}/scripts/linux-cross-host-soak-verify.py",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_PRODUCTION_GATE:-${repo_root}/scripts/linux-cross-host-production-gate.sh",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_GENERATOR:-${repo_root}/scripts/production-evidence-from-gate-summary.py",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE:-all",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_KEEP_REMOTE:-0",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE:-1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_GATE_SUMMARY_DIR:-",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT:-",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OS_MATRIX:-",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_KERNEL_MATRIX:-",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_ARTIFACT:-",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_NOTE_TEMPLATE:-",
+		"evidence_note_template='{transport} {encryption} {gate_family} production gate evidence'",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_INCLUDE_FAIL:-0",
 		"selected-production-gate",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN:-0",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0 is only allowed with DRY_RUN=1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0 is only allowed for dry-run or non-production scopes",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT cannot be used with DRY_RUN=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT requires VERIFY=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT requires SELECTED_GATE=1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_CASES is diagnostic-only for production scopes",
 		"selected production gate cannot represent",
 		"selected_gate_unmapped_case_count",
@@ -2354,6 +2465,8 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=${route_gso_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR=${selected_gate_summary_dir}",
+		"emit_selected_gate_evidence",
+		"production evidence output requires at least one selected production gate case",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-cross-host-transport-matrix.sh missing %q", want)

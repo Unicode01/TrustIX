@@ -6,6 +6,7 @@ defaults_file="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS:-${repo_root}/scri
 runner="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_RUNNER:-${repo_root}/scripts/linux-cross-host-soak-runner.sh}"
 verifier="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFIER:-${repo_root}/scripts/linux-cross-host-soak-verify.py}"
 production_gate="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_PRODUCTION_GATE:-${repo_root}/scripts/linux-cross-host-production-gate.sh}"
+evidence_generator="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_GENERATOR:-${repo_root}/scripts/production-evidence-from-gate-summary.py}"
 workdir="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR:-$(mktemp -d /tmp/trustix-cross-host-transport-matrix.XXXXXX)}"
 workdir="$(mkdir -p "$workdir" && cd "$workdir" && pwd -P)"
 cases_raw="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_CASES:-}"
@@ -21,6 +22,15 @@ seconds_slop="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS_SLOP:-1}"
 timeout_slop="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_TIMEOUT_SLOP:-120}"
 summary_path="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY:-${workdir}/summary.jsonl}"
 selected_gate_summary_dir="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_GATE_SUMMARY_DIR:-${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-${workdir}/selected-production-gate}}"
+evidence_out="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT:-}"
+evidence_os_matrix="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OS_MATRIX:-}"
+evidence_kernel_matrix="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_KERNEL_MATRIX:-}"
+evidence_artifact="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_ARTIFACT:-}"
+evidence_note_template="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_NOTE_TEMPLATE:-}"
+evidence_include_fail="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_INCLUDE_FAIL:-0}"
+if [[ -z "$evidence_note_template" ]]; then
+  evidence_note_template='{transport} {encryption} {gate_family} production gate evidence'
+fi
 
 log() {
   printf '[trustix-cross-host-transport-matrix] %s\n' "$*" >&2
@@ -378,6 +388,40 @@ run_selected_gate() {
   env "${gate_env[@]}" bash "$production_gate"
 }
 
+emit_selected_gate_evidence() {
+  [[ -n "$evidence_out" ]] || return 0
+  [[ -f "$evidence_generator" ]] || die "production evidence generator not found: ${evidence_generator}"
+  [[ -n "$evidence_os_matrix" ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OS_MATRIX is required when EVIDENCE_OUT is set"
+  [[ -n "$evidence_kernel_matrix" ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_KERNEL_MATRIX is required when EVIDENCE_OUT is set"
+  [[ -n "$evidence_artifact" ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_ARTIFACT is required when EVIDENCE_OUT is set"
+  [[ "$selected_gate_case_count" -gt 0 ]] || die "production evidence output requires at least one selected production gate case"
+  local args=(
+    "--matrix-summary" "$summary_path"
+    "--gate-summary-dir" "$selected_gate_summary_dir"
+    "--os-matrix" "$evidence_os_matrix"
+    "--kernel-matrix" "$evidence_kernel_matrix"
+    "--artifact" "$evidence_artifact"
+    "--note-template" "$evidence_note_template"
+  )
+  if truthy "$evidence_include_fail"; then
+    args+=("--include-fail")
+  fi
+  mkdir -p "$(dirname "$evidence_out")"
+  local tmp rc
+  tmp="${evidence_out}.tmp"
+  rm -f "$tmp"
+  set +e
+  python3 "$evidence_generator" "${args[@]}" >"$tmp"
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    rm -f "$tmp"
+    return "$rc"
+  fi
+  mv "$tmp" "$evidence_out"
+  log "evidence=${evidence_out}"
+}
+
 main() {
   [[ -f "$runner" ]] || die "runner not found: ${runner}"
   [[ -f "$verifier" ]] || die "verifier not found: ${verifier}"
@@ -388,11 +432,17 @@ main() {
   case "$selected_gate" in 0|1|true|false|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE must be truthy or falsey" ;; esac
   case "$require_binary_identity" in 0|1|true|false|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_REQUIRE_BINARY_IDENTITY must be truthy or falsey" ;; esac
   case "$dry_run" in 0|1|true|false|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN must be truthy or falsey" ;; esac
+  case "$evidence_include_fail" in 0|1|true|false|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_INCLUDE_FAIL must be truthy or falsey" ;; esac
   [[ -z "$seconds_override" ]] || validate_positive_integer TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS "$seconds_override"
   [[ -z "$min_gbps_override" ]] || validate_nonnegative_decimal TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS "$min_gbps_override"
   validate_nonnegative_decimal TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS_SLOP "$seconds_slop"
   seconds_slop="$(min_decimal "$seconds_slop" "1")"
   validate_positive_integer TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_TIMEOUT_SLOP "$timeout_slop"
+  if [[ -n "$evidence_out" ]]; then
+    truthy "$dry_run" && die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT cannot be used with DRY_RUN=1"
+    truthy "$verify" || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT requires VERIFY=1"
+    truthy "$selected_gate" || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT requires SELECTED_GATE=1"
+  fi
   if ! truthy "$dry_run"; then
     truthy "$verify" || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0 is only allowed with DRY_RUN=1"
     case "$scope" in
@@ -423,6 +473,9 @@ main() {
 
   if [[ "$failures" -eq 0 ]]; then
     run_selected_gate || failures=$((failures + 1))
+  fi
+  if [[ "$failures" -eq 0 ]]; then
+    emit_selected_gate_evidence || failures=$((failures + 1))
   fi
   log "summary=${summary_path}"
   return "$failures"
