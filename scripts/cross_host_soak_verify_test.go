@@ -1125,6 +1125,14 @@ func TestCrossHostSoakVerifyChecksTransportPolicyAndSessions(t *testing.T) {
 		"session_pool_strategy=flow",
 		"--require-transport-policy-stat",
 		"session_pool_warmup=true",
+		"--require-transport-local-endpoint-stat",
+		"transport=experimental_tcp",
+		"--require-transport-local-endpoint-stat",
+		"usable=true",
+		"--require-transport-peer-endpoint-stat",
+		"transport=experimental_tcp",
+		"--require-transport-peer-endpoint-stat",
+		"usable=true",
 		"--require-transport-sessions-min",
 		"8",
 		"--require-transport-session-stat",
@@ -1142,6 +1150,40 @@ func TestCrossHostSoakVerifyChecksTransportPolicyAndSessions(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("verify rejected valid transport session pool artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsWrongTransportEndpoint(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	for _, node := range []string{"a", "b"} {
+		writeTransportsJSONWithSession(t, filepath.Join(dir, "collect", node, "transports.json"), 8, "flow", true, 8, "tcp", peerEndpointForNode(node, "-tcp"))
+	}
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps",
+		"4",
+		"--min-seconds",
+		"120",
+		"--require-transport-local-endpoint-stat",
+		"transport=experimental_tcp",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted wrong transport endpoint:\n%s", output)
+	}
+	if !strings.Contains(string(output), "matching transport local_endpoints=0") {
+		t.Fatalf("verify did not report wrong transport local endpoint:\n%s", output)
 	}
 }
 
@@ -2217,6 +2259,10 @@ func writeTransportsJSONWithSessionStats(t *testing.T, path string, poolSize int
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("make transports dir: %v", err)
 	}
+	encryption, _ := stats["encryption"].(string)
+	if encryption == "" {
+		encryption = "plaintext"
+	}
 	sessionRows := make([]any, 0, sessions)
 	for i := 0; i < sessions; i++ {
 		sessionRows = append(sessionRows, map[string]any{
@@ -2237,6 +2283,35 @@ func writeTransportsJSONWithSessionStats(t *testing.T, path string, poolSize int
 			"session_pool_strategy": strategy,
 			"session_pool_warmup":   warmup,
 		},
+		"local_endpoints": []any{
+			map[string]any{
+				"name":                localEndpointForTransportPath(path, sessionTransport),
+				"transport":           sessionTransport,
+				"enabled":             true,
+				"usable":              true,
+				"profile":             "performance",
+				"datapath":            "kernel_module",
+				"encryption":          encryption,
+				"kernel_compatible":   true,
+				"security_compatible": true,
+				"profile_compatible":  true,
+				"crypto_placements":   []string{"userspace"},
+			},
+		},
+		"peer_endpoints": []any{
+			map[string]any{
+				"name":                endpoint,
+				"transport":           sessionTransport,
+				"usable":              true,
+				"profile":             "performance",
+				"datapath":            "kernel_module",
+				"encryption":          encryption,
+				"kernel_compatible":   true,
+				"security_compatible": true,
+				"profile_compatible":  true,
+				"crypto_placements":   []string{"userspace"},
+			},
+		},
 		"sessions": sessionRows,
 	}
 	data, err := json.Marshal(payload)
@@ -2253,6 +2328,18 @@ func peerEndpointForNode(node string, endpointSuffix string) string {
 		return "b" + endpointSuffix
 	}
 	return "a" + endpointSuffix
+}
+
+func localEndpointForTransportPath(path string, transport string) string {
+	clean := filepath.Clean(path)
+	node := "a"
+	for _, part := range strings.Split(clean, string(os.PathSeparator)) {
+		if part == "b" {
+			node = "b"
+			break
+		}
+	}
+	return node + "-" + strings.ReplaceAll(transport, "_", "-")
 }
 
 func writeModuleParameters(t *testing.T, path string, modules map[string]map[string]string) {
@@ -2465,11 +2552,41 @@ func writeSecureKUDPTransportsJSON(t *testing.T, path string, node string) {
 	payload := map[string]any{
 		"policy": map[string]any{
 			"encryption":            "secure",
+			"profile":               "performance",
 			"crypto_placement":      "kernel",
 			"datapath":              "tc_xdp",
 			"session_pool_size":     8,
 			"session_pool_strategy": "flow",
 			"session_pool_warmup":   true,
+		},
+		"local_endpoints": []any{
+			map[string]any{
+				"name":                localEndpointForTransportPath(path, "udp"),
+				"transport":           "udp",
+				"enabled":             true,
+				"usable":              true,
+				"profile":             "performance",
+				"datapath":            "tc_xdp",
+				"encryption":          "secure",
+				"kernel_compatible":   true,
+				"security_compatible": true,
+				"profile_compatible":  true,
+				"crypto_placements":   []string{"kernel"},
+			},
+		},
+		"peer_endpoints": []any{
+			map[string]any{
+				"name":                peerEndpointForNode(node, "-udp"),
+				"transport":           "udp",
+				"usable":              true,
+				"profile":             "performance",
+				"datapath":            "tc_xdp",
+				"encryption":          "secure",
+				"kernel_compatible":   true,
+				"security_compatible": true,
+				"profile_compatible":  true,
+				"crypto_placements":   []string{"kernel"},
+			},
 		},
 		"sessions": sessionRows,
 	}

@@ -231,6 +231,8 @@ case_session_args() {
     tc-direct|secure-kudp)
       transport="kernel_udp"
       encryption="plaintext"
+      profile="performance"
+      datapath="tc_xdp"
       placement="userspace"
       if [[ "$family" == "secure-kudp" ]]; then
         encryption="secure"
@@ -240,11 +242,15 @@ case_session_args() {
     full-kmod)
       transport="udp"
       encryption="plaintext"
+      profile="performance"
+      datapath="kernel_module"
       placement="userspace"
       ;;
     route-gso)
       transport="experimental_tcp"
       encryption="plaintext"
+      profile="performance"
+      datapath="kernel_module"
       placement="userspace"
       ;;
     *)
@@ -252,6 +258,16 @@ case_session_args() {
       ;;
   esac
   printf '%s\n' \
+    --require-transport-local-endpoint-stat "transport=$(session_transport_for_matrix_transport "$transport")" \
+    --require-transport-local-endpoint-stat "usable=true" \
+    --require-transport-local-endpoint-stat "profile=${profile}" \
+    --require-transport-local-endpoint-stat "datapath=${datapath}" \
+    --require-transport-local-endpoint-stat "encryption=${encryption}" \
+    --require-transport-peer-endpoint-stat "transport=$(session_transport_for_matrix_transport "$transport")" \
+    --require-transport-peer-endpoint-stat "usable=true" \
+    --require-transport-peer-endpoint-stat "profile=${profile}" \
+    --require-transport-peer-endpoint-stat "datapath=${datapath}" \
+    --require-transport-peer-endpoint-stat "encryption=${encryption}" \
     --require-transport-session-stat "transport=$(session_transport_for_matrix_transport "$transport")" \
     "--require-transport-session-endpoint-suffix=$(session_endpoint_suffix_for_matrix_transport "$transport")" \
     --require-transport-session-stat "stats.encryption=${encryption}" \
