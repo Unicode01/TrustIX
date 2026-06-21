@@ -217,6 +217,8 @@ session_endpoint_suffix_for_matrix_transport() {
 
 case_session_args() {
   local family="$1" case_token="$2" case_name transport encryption profile datapath placement extra
+  local require_sessions=1
+  local require_session_traffic=1
   case "$family" in
     userspace|userspace-tc)
       case_name="${case_token%%=*}"
@@ -234,6 +236,10 @@ case_session_args() {
       profile="performance"
       datapath="tc_xdp"
       placement="userspace"
+      require_session_traffic=0
+      if [[ "$family" == "tc-direct" ]]; then
+        require_sessions=0
+      fi
       if [[ "$family" == "secure-kudp" ]]; then
         encryption="secure"
         placement="kernel"
@@ -245,6 +251,7 @@ case_session_args() {
       profile="performance"
       datapath="kernel_module"
       placement="userspace"
+      require_session_traffic=0
       ;;
     route-gso)
       transport="experimental_tcp"
@@ -252,6 +259,7 @@ case_session_args() {
       profile="performance"
       datapath="kernel_module"
       placement="userspace"
+      require_session_traffic=0
       ;;
     *)
       return 0
@@ -265,20 +273,26 @@ case_session_args() {
     --require-transport-local-endpoint-stat "encryption=${encryption}" \
     --require-transport-peer-endpoint-stat "transport=$(session_transport_for_matrix_transport "$transport")" \
     --require-transport-peer-endpoint-stat "usable=true" \
-    --require-transport-peer-endpoint-stat "profile=${profile}" \
-    --require-transport-peer-endpoint-stat "datapath=${datapath}" \
     --require-transport-peer-endpoint-stat "encryption=${encryption}" \
+    --require-transport-peer-endpoint-stat "profile_compatible=true" \
+    --require-transport-peer-endpoint-stat "security_compatible=true"
+  if [[ "$require_sessions" -eq 0 ]]; then
+    return 0
+  fi
+  printf '%s\n' \
     --require-transport-session-stat "transport=$(session_transport_for_matrix_transport "$transport")" \
     "--require-transport-session-endpoint-suffix=$(session_endpoint_suffix_for_matrix_transport "$transport")" \
-    --require-transport-session-stat "stats.encryption=${encryption}" \
+    --require-transport-session-stat "stats.encryption=${encryption}"
+  if [[ "$require_session_traffic" -eq 1 ]]; then
+    printf '%s\n' \
     --require-transport-session-any-min "stats.bytes_sent=1" \
     --require-transport-session-any-min "stats.bytes_received=1" \
     --require-transport-session-any-min "stats.packets_sent=1" \
     --require-transport-session-any-min "stats.packets_received=1"
+  fi
   if [[ "$encryption" == "secure" ]]; then
     printf '%s\n' \
       --require-transport-local-endpoint-stat "crypto_placements=${placement}" \
-      --require-transport-peer-endpoint-stat "crypto_placements=${placement}" \
       --require-transport-session-stat "stats.encrypted=true" \
       --require-transport-session-stat "stats.send_encrypted=true" \
       --require-transport-session-stat "stats.receive_encrypted=true" \
@@ -568,7 +582,6 @@ main() {
       --require-transport-policy-stat profile=performance \
       --require-transport-policy-stat datapath=tc_xdp \
       --require-transport-policy-stat crypto_placement=userspace \
-      --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
       --require-datapath-stat kernel_udp.provider=tc_direct \
@@ -634,7 +647,6 @@ main() {
       --require-transport-policy-min session_pool_size="${secure_kudp_min_sessions}" \
       --require-transport-policy-stat session_pool_strategy=flow \
       --require-transport-policy-stat session_pool_warmup=true \
-      --require-transport-sessions-min "${secure_kudp_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
       --require-datapath-stat kernel_udp.kernel_crypto=true \

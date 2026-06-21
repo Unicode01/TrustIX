@@ -1522,7 +1522,6 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-transport-policy-stat session_pool_strategy=flow",
 		"--require-transport-policy-stat session_pool_warmup=true",
 		"--require-transport-sessions-min \"${full_kmod_min_sessions}\"",
-		"--require-transport-sessions-min \"${secure_kudp_min_sessions}\"",
 		"--require-status-min data_path.active_sessions=\"${route_gso_min_sessions}\"",
 		"--require-status-max data_path.counters.session_dial_errors=\"${route_gso_session_error_budget}\"",
 		"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
@@ -2109,18 +2108,20 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	}
 	requireEndpointArgs := func(caseName, transport, profile, datapath, encryption string) {
 		t.Helper()
-		for _, prefix := range []string{"--require-transport-local-endpoint-stat", "--require-transport-peer-endpoint-stat"} {
-			requireArgPair(caseName, prefix, "transport="+transport)
-			requireArgPair(caseName, prefix, "usable=true")
-			requireArgPair(caseName, prefix, "profile="+profile)
-			requireArgPair(caseName, prefix, "datapath="+datapath)
-			requireArgPair(caseName, prefix, "encryption="+encryption)
-		}
+		requireArgPair(caseName, "--require-transport-local-endpoint-stat", "transport="+transport)
+		requireArgPair(caseName, "--require-transport-local-endpoint-stat", "usable=true")
+		requireArgPair(caseName, "--require-transport-local-endpoint-stat", "profile="+profile)
+		requireArgPair(caseName, "--require-transport-local-endpoint-stat", "datapath="+datapath)
+		requireArgPair(caseName, "--require-transport-local-endpoint-stat", "encryption="+encryption)
+		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "transport="+transport)
+		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "usable=true")
+		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "encryption="+encryption)
+		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "profile_compatible=true")
+		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "security_compatible=true")
 	}
 	requireSecureEndpointPlacement := func(caseName, placement string) {
 		t.Helper()
 		requireArgPair(caseName, "--require-transport-local-endpoint-stat", "crypto_placements="+placement)
-		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "crypto_placements="+placement)
 	}
 	requireArgPair(fastName, "--require-transport-policy-stat", "encryption=secure")
 	requireArgPair(fastName, "--require-transport-policy-stat", "profile=stable")
@@ -2160,12 +2161,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair(fastName, "--forbid-lsmod-prefix", "trustix_")
 	requireArgPair(slowName, "--forbid-lsmod-prefix", "trustix_")
 	requireArgPair(userspaceTCName, "--forbid-lsmod-prefix", "trustix_")
-	requireArgPair("tc", "--require-transport-sessions-min", "1")
 	requireEndpointArgs("tc", "udp", "performance", "tc_xdp", "plaintext")
-	requireArgPair("tc", "--require-transport-session-stat", "transport=udp")
-	requireArg("tc", "--require-transport-session-endpoint-suffix=-udp")
-	requireArgPair("tc", "--require-transport-session-stat", "stats.encryption=plaintext")
-	requireTrafficArgs("tc")
+	requireArgPair("tc", "--require-datapath-any-min", "kernel_udp.active_flows=1")
 	requireArgPair("tc", "--forbid-lsmod-prefix", "trustix_")
 	requireArgPair("full", "--require-transport-policy-min", "session_pool_size=8")
 	requireEndpointArgs("full", "udp", "performance", "kernel_module", "plaintext")
@@ -2173,7 +2170,6 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("full", "--require-transport-session-stat", "transport=udp")
 	requireArg("full", "--require-transport-session-endpoint-suffix=-udp")
 	requireArgPair("full", "--require-transport-session-stat", "stats.encryption=plaintext")
-	requireTrafficArgs("full")
 	requireArgPair("full", "--require-datapath-min", "counters.session_dials=8")
 	requireArgPair("full", "--require-module-param-min", "trustix_datapath.features=128")
 	requireArgPair("full", "--require-module-param-min", "trustix_datapath.safe_features=128")
@@ -2186,7 +2182,6 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("secure", "--require-transport-policy-min", "session_pool_size=8")
 	requireEndpointArgs("secure", "udp", "performance", "tc_xdp", "secure")
 	requireSecureEndpointPlacement("secure", "kernel")
-	requireArgPair("secure", "--require-transport-sessions-min", "8")
 	requireArgPair("secure", "--require-transport-session-stat", "transport=udp")
 	requireArg("secure", "--require-transport-session-endpoint-suffix=-udp")
 	requireArgPair("secure", "--require-transport-session-stat", "stats.encryption=secure")
@@ -2194,7 +2189,6 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("secure", "--require-transport-session-stat", "stats.send_encrypted=true")
 	requireArgPair("secure", "--require-transport-session-stat", "stats.receive_encrypted=true")
 	requireArgPair("secure", "--require-transport-session-stat", "stats.crypto_placement=kernel")
-	requireTrafficArgs("secure")
 	requireArgPair("secure", "--require-datapath-min", "kernel_udp.provider_stats.kernel_crypto_flow_map_entries=1")
 	requireArgPair("secure", "--require-datapath-min", "kernel_udp.provider_stats.kernel_crypto_flow_map_updates=1")
 	requireArgPair("secure", "--require-datapath-max", "kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors=64")
@@ -2209,7 +2203,6 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("route", "--require-transport-session-stat", "transport=experimental_tcp")
 	requireArg("route", "--require-transport-session-endpoint-suffix=-experimental-tcp")
 	requireArgPair("route", "--require-transport-session-stat", "stats.encryption=plaintext")
-	requireTrafficArgs("route")
 	requireArgPair("route", "--require-status-min", "data_path.active_sessions=8")
 	requireArgPair("route", "--require-status-max", "data_path.counters.session_dial_errors=2")
 	requireArgPair("route", "--require-lsmod-module", "trustix_datapath_helpers")

@@ -250,7 +250,7 @@ append_case_token() {
 }
 
 run_verify() {
-  local name="$1" dir="$2" min_gbps="$3" min_seconds="$4" encryption="$5" profile="$6" datapath="$7" placement="$8" validation_scope="$9"
+  local name="$1" dir="$2" min_gbps="$3" min_seconds="$4" encryption="$5" profile="$6" datapath="$7" placement="$8" validation_scope="$9" gate_family="${10}"
   local args=(
     "--case" "${name}=${dir}"
     "--min-gbps" "$min_gbps"
@@ -263,10 +263,14 @@ run_verify() {
   )
   if [[ "$validation_scope" == "cross_host" ]]; then
     args+=(
-      "--require-transport-sessions-min" "1"
       "--require-status-max" "data_path.counters.session_dial_errors=0"
       "--require-status-max" "data_path.counters.session_heartbeat_timeouts=0"
     )
+    if [[ "$(gate_family_class "$gate_family")" == "tc_direct" ]]; then
+      args+=("--require-datapath-any-min" "kernel_udp.active_flows=1")
+    else
+      args+=("--require-transport-sessions-min" "1")
+    fi
   fi
   if truthy "$require_binary_identity"; then
     args+=("--require-binary-identity")
@@ -330,9 +334,18 @@ run_case() {
   if [[ "$rc" == "0" ]]; then
     status="pass"
     if truthy "$verify"; then
-      run_verify "$name" "$dir" "$min_gbps" "$min_seconds" "$encryption" "$profile" "$datapath" "$placement" "$validation_scope"
+      local verify_rc=0
+      set +e
+      run_verify "$name" "$dir" "$min_gbps" "$min_seconds" "$encryption" "$profile" "$datapath" "$placement" "$validation_scope" "$gate_family"
+      verify_rc=$?
+      set -e
+      if [[ "$verify_rc" -ne 0 ]]; then
+        status="fail"
+        rc="$verify_rc"
+        log "verification failed: ${name}"
+      fi
     fi
-    if [[ "$validation_scope" == "cross_host" ]]; then
+    if [[ "$status" == "pass" && "$validation_scope" == "cross_host" ]]; then
       append_selected_gate_case "$gate_family" "$name" "$dir" "$min_gbps" "$min_seconds"
     fi
   else

@@ -498,6 +498,26 @@ func TestCrossHostSoakVerifyRejectsKernelLogCollectionErrors(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyAcceptsEmptyJournalWindow(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeTextFile(t, filepath.Join(dir, "collect", "a", "ix-a-kernel.log"), "-- No entries --\n")
+	writeTextFile(t, filepath.Join(dir, "collect", "b", "ix-b-dmesg.log"), "[    0.000000] Linux version test\n")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-kernel-log-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected empty journal window: %v\n%s", err, output)
+	}
+}
+
 func TestCrossHostSoakVerifyRequiresPstoreArtifacts(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {

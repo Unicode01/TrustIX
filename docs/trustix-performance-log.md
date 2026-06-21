@@ -27,6 +27,50 @@ OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and OpenWrt 25.12.4 runtime
 support remain unpromoted until those exact guests pass the runtime capability
 and cross-host soak gates on PVE.
 
+<a id="2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates"></a>
+
+### Zaozhuang PVE DD kernel manifest gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-dd-a` (`10.203.3.200`) and VM201 `trustix-dd-b`
+(`10.203.3.201`) on isolated `vmbr3`. VM100 and all 1xx guests were not
+modified. Both guests were Debian 13 on
+`6.12.90+deb13.1-cloud-amd64`, using underlay interface `eth0`.
+
+The release binary was built from commit `83f6e2b`, build time
+`2026-06-21T13:19:46Z`; both guests used binary SHA256
+`8fe300e4a73d8359f927adedaee818cc8bd344dece04a85463d4007b85167f74`.
+The embedded asset SHA256 was
+`21251741874539ff6af5f8205b980fac3617d8d9a8d25f5c4b5b119d5e8a81d1`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`dab0c91b1d5768fc73340d45e83ed920ee1af9d75d86e21da3ce54f9724fa3e0`; the
+verifier SHA256 was
+`4c5aef66c564b3e149d1cd454ccc72e64fcf21f98b72d88ef8703252d7ead796`.
+
+| Gate family | Transport path | Gate | Minimum received | Minimum sent | Minimum duration |
+| --- | --- | ---: | ---: | ---: | ---: |
+| full-kmod | UDP plaintext full datapath module | 3 Gbps | 3.294880 Gbps | 3.295067 Gbps | 900.021685s |
+| TC-direct | plaintext kernel UDP TC direct-only | 3 Gbps | 3.883991 Gbps | 3.884176 Gbps | 900.005046s |
+| secure-kUDP | secure kernel UDP with kernel crypto and route-GSO | 1.5 Gbps | 1.722710 Gbps | 1.722862 Gbps | 899.989966s |
+| route-GSO | experimental TCP plaintext route-GSO | 2.5 Gbps | 2.667106 Gbps | 2.667310 Gbps | 900.011079s |
+
+All four cases passed the selected production gate with stable boot IDs
+(`b47e3cbe-676d-4ab1-8f4d-80a76491326b` and
+`3eb33a69-ac00-4169-876b-13ce8f33f00a`), `log_findings=[]`, pstore artifacts,
+kernel/dmesg artifacts, LAN `tx_queue_len=1000`, and binary/build identity
+matching across both guests.
+
+The gate was adjusted during this run to match the actual offload state model:
+TC-direct is direct-only and proves payload movement through
+`kernel_udp.active_flows`, not userspace transport sessions. Full-kmod,
+secure-kUDP, and route-GSO prove payload movement through iperf plus datapath
+and module counters; userspace session byte counters can remain zero because
+payload is offloaded. A journalctl window containing only `-- No entries --`
+is now accepted as an empty kernel-log window instead of a collection failure.
+
 ### Debian userspace current-head production gates
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:

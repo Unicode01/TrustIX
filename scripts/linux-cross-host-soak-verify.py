@@ -46,7 +46,6 @@ LOG_SUFFIXES = {".log", ".err", ".txt", ".out"}
 
 KERNEL_LOG_COLLECTION_FAILURE_RE = re.compile(
     r"(?i)("
-    r"^-- No entries --$|"
     r"^No journal files were found\.?$|"
     r"^(?:.*\b(?:journalctl|dmesg|sh|bash):\s*).*\b(?:command not found|not found|permission denied|operation not permitted)\b|"
     r"^Failed to .*Operation not permitted\b|"
