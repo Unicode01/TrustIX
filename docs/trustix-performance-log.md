@@ -15,8 +15,60 @@ Current production-default evidence boundary:
 | --- | --- | --- |
 | Debian `full_kmod`, `tc_direct`, `secure_kudp`, `route_gso` | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian userspace and userspace-TC defaults | 900s PVE gates passed, still recorded as `legacy-pre-manifest` | Keep as explicit legacy-pending rows until rerun through the manifest-emitting gate. |
-| OpenWrt-Debian `owdeb_full_kmod` | 900s OpenWrt 24.10.7 to Debian gate passed, still recorded as `legacy-pre-manifest` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; rerun with gate manifest before treating it as manifest-backed evidence. |
+| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 900s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-06-22
+
+<a id="2026-06-22-zaozhuang-pve-owdeb-full-kmod-manifest-gate"></a>
+
+### Zaozhuang PVE OpenWrt-Debian full-kmod manifest gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM201 `trustix-owdeb-openwrt` (`10.203.3.201`) and VM200
+`trustix-owdeb-debian` (`10.203.3.200`) on isolated `vmbr3`. VM100 and all
+1xx guests were not modified. VM201 ran OpenWrt 24.10.7 kernel `6.6.141`;
+VM200 ran Debian 13 kernel `6.12.94+deb13-cloud-amd64`.
+
+The release binary was built from commit `009a2f501b52`, build time
+`2026-06-21T16:08:52Z`; both guests used binary SHA256
+`1e4c9dff79fe161188848bd1c2d0e56579bbd616724f7d949fb4e5326698cd71`.
+The embedded assets SHA256 was
+`18eb4b0fbb81b7dfe6a9639e2997cae6cd728c5a9d2db3ba367412487cb6e622`.
+The OpenWrt `trustix_datapath.ko` SHA256 was
+`005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce`;
+the Debian `trustix_datapath.ko` SHA256 was
+`b1d4194a7892d1a786c7674177b78b525c1efc980e6c5f0f1387aff10fd25c60`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`dab0c91b1d5768fc73340d45e83ed920ee1af9d75d86e21da3ce54f9724fa3e0`; the
+verifier SHA256 was
+`4c5aef66c564b3e149d1cd454ccc72e64fcf21f98b72d88ef8703252d7ead796`.
+
+| Direction | Gate | Received | Sent | Duration |
+| --- | ---: | ---: | ---: | ---: |
+| OpenWrt to Debian | 3 Gbps | 3.418114 Gbps | 3.418333 Gbps | 900.007659s |
+| Debian to OpenWrt | 3 Gbps | 4.442237 Gbps | 4.442441 Gbps | 900.057601s |
+
+The manifest gate passed with stable boot IDs
+`281a471f-13c0-4549-9f02-d3ec3affcab2` and
+`cc357572-3ba0-404c-b1a3-a5620a643f37`, `log_findings=[]`,
+`kernel_log_rejected_artifacts=[]`, and pstore coverage on both nodes.
+Both nodes had `trustix_datapath` loaded, LAN `tx_queue_len=1000`,
+`enable_features=128`, `safe_features=128`, `unsafe_features=0`,
+`selftest_failures=0`, `rx_worker_inject=Y`, `tx_plaintext=Y`,
+`tx_plaintext_skip_inner_tcp_checksum=N`, and zero datapath allocation,
+delivery, GSO xmit, plaintext build, queue drop, stale wire, and xmit errors.
+
+During the first manifest attempt the datapath evidence was already clean, but
+the OpenWrt-side kernel log artifact was unusable because BusyBox `dmesg`
+does not accept `-T` and OpenWrt lacks `journalctl`. The OpenWrt dmesg was
+recaptured from the same stable boot before cleanup, the manifest gate was
+rerun, and `scripts/linux-cross-host-soak-runner.sh` now avoids emitting
+failing `*.log` artifacts when `journalctl` is unavailable while falling back
+from `dmesg -T` to plain `dmesg` on BusyBox systems.
 
 ## 2026-06-21
 

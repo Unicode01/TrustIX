@@ -1363,8 +1363,27 @@ collect_kernel_logs() {
   dir="$(remote_dir "$node")"
   prefix="$(node_value "$node" "$ix_a" "$ix_b")"
   run_node "$node" "set +e
-journalctl -k -b --since '1 hour ago' --no-pager -o short-iso >$(remote_quote "${dir}/${prefix}-kernel.log") 2>&1
-dmesg -T >$(remote_quote "${dir}/${prefix}-dmesg.log") 2>&1
+dir=$(remote_quote "$dir")
+prefix=$(remote_quote "$prefix")
+mkdir -p \"\$dir\"
+if command -v journalctl >/dev/null 2>&1; then
+  tmp=\"\${dir}/.\${prefix}-kernel.log.tmp\"
+  if journalctl -k -b --since '1 hour ago' --no-pager -o short-iso >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+    mv \"\$tmp\" \"\${dir}/\${prefix}-kernel.log\"
+  else
+    rm -f \"\$tmp\"
+  fi
+fi
+if command -v dmesg >/dev/null 2>&1; then
+  tmp=\"\${dir}/.\${prefix}-dmesg.log.tmp\"
+  if dmesg -T >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+    mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
+  elif dmesg >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+    mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
+  else
+    rm -f \"\$tmp\"
+  fi
+fi
 lsmod | awk '/^trustix_/ {print}' >$(remote_quote "${dir}/${prefix}-lsmod.txt") 2>&1
 {
   if [ -d /sys/fs/pstore ]; then

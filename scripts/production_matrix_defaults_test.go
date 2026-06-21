@@ -272,9 +272,9 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 	case "owdeb_full_kmod":
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "openwrt24.10.7-debian13",
-			KernelMatrix:       "6.6.141_to_6.12.90+deb13.1-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check",
-			GateManifestSchema: legacyProductionGateManifestValue,
+			KernelMatrix:       "6.6.141_to_6.12.94+deb13-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-manifest-gate",
+			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "secure_kudp":
 		return currentProductionEvidenceRequirement{
@@ -860,16 +860,16 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 }
 
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
-	manifestRequiredFamilies := map[string]bool{
-		"tc_direct":   true,
-		"full_kmod":   true,
-		"secure_kudp": true,
-		"route_gso":   true,
+	manifestRequiredArtifacts := map[string]string{
+		"tc_direct":       "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+		"full_kmod":       "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+		"secure_kudp":     "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+		"route_gso":       "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-manifest-gate",
 	}
 	legacyPendingFamilies := map[string]bool{
-		"userspace":       true,
-		"userspace_tc":    true,
-		"owdeb_full_kmod": true,
+		"userspace":    true,
+		"userspace_tc": true,
 	}
 	seen := map[string]bool{}
 	for _, row := range loadProductionTransportDefaults(t) {
@@ -882,12 +882,12 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		}
 		seen[row.GateFamily] = true
 		switch {
-		case manifestRequiredFamilies[row.GateFamily]:
+		case manifestRequiredArtifacts[row.GateFamily] != "":
 			if requirement.GateManifestSchema != productionGateManifestSchema {
-				t.Fatalf("Debian kernel fast-path default must require manifest-backed evidence: row=%+v requirement=%+v", row, requirement)
+				t.Fatalf("kernel fast-path default must require manifest-backed evidence: row=%+v requirement=%+v", row, requirement)
 			}
-			if requirement.Artifact != "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates" {
-				t.Fatalf("Debian kernel fast-path default points at stale evidence: row=%+v requirement=%+v", row, requirement)
+			if requirement.Artifact != manifestRequiredArtifacts[row.GateFamily] {
+				t.Fatalf("kernel fast-path default points at stale evidence: row=%+v requirement=%+v", row, requirement)
 			}
 		case legacyPendingFamilies[row.GateFamily]:
 			if requirement.GateManifestSchema != legacyProductionGateManifestValue {
@@ -897,7 +897,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 			t.Fatalf("cross-host production default has unclassified manifest policy: row=%+v requirement=%+v", row, requirement)
 		}
 	}
-	for family := range manifestRequiredFamilies {
+	for family := range manifestRequiredArtifacts {
 		if !seen[family] {
 			t.Fatalf("manifest-required production family was not exercised: %s", family)
 		}
@@ -934,7 +934,7 @@ func TestProductionEvidenceArtifactsResolveToDocsAnchors(t *testing.T) {
 func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "openwrt24.10.7-debian13"
-		wantKernelMatrix = "6.6.141_to_6.12.90+deb13.1-cloud-amd64"
+		wantKernelMatrix = "6.6.141_to_6.12.94+deb13-cloud-amd64"
 		minGbps          = 3.0
 		minSeconds       = 900
 	)
@@ -951,6 +951,9 @@ func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
 		if err != nil {
 			t.Fatalf("invalid OpenWrt full-kmod evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+		}
+		if evidence.GateManifestSchema != productionGateManifestSchema {
+			t.Fatalf("current OpenWrt full-kmod evidence must be manifest-backed: %+v", evidence)
 		}
 		if evidence.Result == "pass" && evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
 			return
