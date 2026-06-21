@@ -200,6 +200,17 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		MinGbps:         "3",
 		MinSeconds:      "900",
 	})
+	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
+		Transport:       "experimental_tcp",
+		Encryption:      plaintext.Encryption,
+		Profile:         plaintext.TransportProfile,
+		Datapath:        plaintext.Datapath,
+		CryptoPlacement: plaintext.CryptoPlacement,
+		ValidationScope: "cross_host",
+		GateFamily:      "route_gso",
+		MinGbps:         "2.5",
+		MinSeconds:      "900",
+	})
 
 	securePerformance, err := ixProvisionDefaultsForProfile("performance")
 	if err != nil {
