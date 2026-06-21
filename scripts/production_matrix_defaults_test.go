@@ -1212,6 +1212,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"run_gate_case_list()",
 		"--require-binary-identity",
 		"--require-stable-boot-id",
+		"--require-kernel-log-artifacts",
 		"run_gate_case_list userspace \"$userspace_min_gbps\"",
 		"run_gate_case_list userspace-tc \"$userspace_tc_min_gbps\"",
 		"run_gate_case_list tc-direct \"$tc_direct_min_gbps\"",
@@ -1498,6 +1499,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	gotMinSeconds := map[string]string{}
 	gotRequireIdentity := map[string]bool{}
 	gotRequireStableBootID := map[string]bool{}
+	gotRequireKernelLogs := map[string]bool{}
 	gotArgs := map[string][]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -1530,11 +1532,18 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 				requireStableBootID = true
 			}
 		}
+		requireKernelLogs := false
+		for _, arg := range args {
+			if arg == "--require-kernel-log-artifacts" {
+				requireKernelLogs = true
+			}
+		}
 		if caseName != "" {
 			gotMinGbps[caseName] = minGbps
 			gotMinSeconds[caseName] = minSeconds
 			gotRequireIdentity[caseName] = requireIdentity
 			gotRequireStableBootID[caseName] = requireStableBootID
+			gotRequireKernelLogs[caseName] = requireKernelLogs
 			gotArgs[caseName] = args
 		}
 	}
@@ -1558,6 +1567,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if !gotRequireStableBootID[name] {
 			t.Fatalf("case %s did not force --require-stable-boot-id; calls=%s", name, payload)
+		}
+		if !gotRequireKernelLogs[name] {
+			t.Fatalf("case %s did not force --require-kernel-log-artifacts; calls=%s", name, payload)
 		}
 	}
 	requireArgPair := func(caseName, key, value string) {

@@ -263,6 +263,47 @@ func TestCrossHostSoakVerifyRejectsKernelCrashLogs(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRequiresKernelLogArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-kernel-log-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing kernel log artifacts:\n%s", output)
+	}
+	if !strings.Contains(string(output), "kernel/dmesg log artifacts") {
+		t.Fatalf("verify output did not report missing kernel log artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyAcceptsKernelLogArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeTextFile(t, filepath.Join(dir, "collect", "a", "ix-a-kernel.log"), "kernel: Linux version test\n")
+	writeTextFile(t, filepath.Join(dir, "collect", "b", "ix-b-dmesg.log"), "[    0.000000] Linux version test\n")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-kernel-log-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected kernel log artifacts: %v\n%s", err, output)
+	}
+}
+
 func TestCrossHostSoakVerifyRejectsTxQueueLenMisconfigLogs(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -1223,6 +1264,16 @@ func writeResultMarker(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "case.result"), []byte("pass\n"), 0o644); err != nil {
 		t.Fatalf("write result marker: %v", err)
+	}
+}
+
+func writeTextFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create parent for %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }
 

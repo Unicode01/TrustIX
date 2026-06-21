@@ -106,6 +106,17 @@ def parse_args() -> argparse.Namespace:
         help="skip panic/oops/lockup log signature scanning",
     )
     parser.add_argument(
+        "--require-kernel-log-artifacts",
+        action="store_true",
+        help="require collected kernel/dmesg log artifacts for each case",
+    )
+    parser.add_argument(
+        "--min-kernel-log-artifacts",
+        type=int,
+        default=2,
+        help="minimum collected kernel/dmesg log artifacts when --require-kernel-log-artifacts is set",
+    )
+    parser.add_argument(
         "--require-build-identity",
         action="store_true",
         help="require at least two collected status.json build blocks and verify they match",
@@ -399,6 +410,23 @@ def scan_logs(case_dir: Path) -> list[str]:
             rel = path.relative_to(case_dir)
             findings.append(f"{rel}:read_error:{exc}")
     return findings
+
+
+def kernel_log_artifacts(case_dir: Path) -> list[str]:
+    artifacts: list[str] = []
+    for path in sorted(case_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() != ".log":
+            continue
+        name = path.name.lower()
+        if "kernel" not in name and "dmesg" not in name:
+            continue
+        try:
+            if path.stat().st_size <= 0:
+                continue
+        except OSError:
+            continue
+        artifacts.append(str(path.relative_to(case_dir)))
+    return artifacts
 
 
 def stable_digest(value: Any) -> str:
@@ -979,6 +1007,8 @@ def validate_case(
     min_iperf_json: int,
     require_result_marker: bool,
     log_scan: bool,
+    require_kernel_log_artifacts: bool,
+    min_kernel_log_artifacts: int,
     require_build_identity: bool,
     require_strong_build_identity: bool,
     require_binary_identity: bool,
@@ -1095,6 +1125,12 @@ def validate_case(
     log_findings = scan_logs(case.path) if log_scan else []
     if log_findings:
         errors.extend(f"log crash signature: {finding}" for finding in log_findings)
+    collected_kernel_logs = kernel_log_artifacts(case.path)
+    if require_kernel_log_artifacts and len(collected_kernel_logs) < min_kernel_log_artifacts:
+        errors.append(
+            f"found {len(collected_kernel_logs)} kernel/dmesg log artifacts, "
+            f"want >= {min_kernel_log_artifacts}"
+        )
 
     build_identities = collect_status_build_identities(case.path)
     build_identity_fields = (
@@ -1202,6 +1238,7 @@ def validate_case(
         "result_markers": marker_values,
         "iperf": iperf_results,
         "log_findings": log_findings,
+        "kernel_log_artifacts": collected_kernel_logs,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
         "boot_ids": boot_ids,
@@ -1235,6 +1272,8 @@ def main() -> int:
         raise SystemExit("--seconds-slop must be non-negative")
     if args.min_iperf_json < 0:
         raise SystemExit("--min-iperf-json must be non-negative")
+    if args.min_kernel_log_artifacts < 0:
+        raise SystemExit("--min-kernel-log-artifacts must be non-negative")
     required_status_stats = parse_required_datapath_stats(args.require_status_stat)
     required_status_minima = parse_required_numeric_limits(
         args.require_status_min,
@@ -1325,6 +1364,8 @@ def main() -> int:
             min_iperf_json=args.min_iperf_json,
             require_result_marker=not args.no_result_marker,
             log_scan=not args.no_log_scan,
+            require_kernel_log_artifacts=args.require_kernel_log_artifacts,
+            min_kernel_log_artifacts=args.min_kernel_log_artifacts,
             require_build_identity=args.require_build_identity,
             require_strong_build_identity=args.require_strong_build_identity,
             require_binary_identity=args.require_binary_identity,
