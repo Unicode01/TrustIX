@@ -116,6 +116,11 @@ def parse_args() -> argparse.Namespace:
         help="minimum interval throughput as a ratio of --min-gbps for each validated iperf direction",
     )
     parser.add_argument(
+        "--require-run-timing",
+        action="store_true",
+        help="require run-timing.json showing the measured long-test wall-clock window",
+    )
+    parser.add_argument(
         "--require-iperf-pair-directions",
         action="store_true",
         help="require usable iperf artifacts covering both a-to-b and b-to-a traffic pairs",
@@ -458,6 +463,62 @@ def result_markers_pass(case_dir: Path) -> tuple[bool, list[str]]:
         except OSError as exc:
             values.append(f"read_error:{exc}")
     return bool(markers) and all(value == "pass" for value in values), values
+
+
+def run_timing_artifacts(
+    case_dir: Path,
+    *,
+    required: bool,
+    min_seconds: float,
+    seconds_slop: float,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    artifacts: list[dict[str, Any]] = []
+    errors: list[str] = []
+    paths = sorted(case_dir.glob("run-timing*.json"))
+    if required and not paths:
+        errors.append("missing run-timing.json artifact")
+        return artifacts, errors
+    for path in paths:
+        rel = str(path.relative_to(case_dir))
+        try:
+            payload = read_json(path)
+        except Exception as exc:  # noqa: BLE001 - artifact validation should report and continue.
+            errors.append(f"{rel}: parse run timing JSON: {exc}")
+            continue
+        if not isinstance(payload, dict):
+            errors.append(f"{rel}: run timing artifact is not a JSON object")
+            continue
+        row = {"source": rel, **payload}
+        artifacts.append(row)
+        if not required:
+            continue
+        try:
+            start_epoch = numeric_value(payload.get("start_epoch"))
+            end_epoch = numeric_value(payload.get("end_epoch"))
+            elapsed = numeric_value(payload.get("elapsed_seconds"))
+            requested = numeric_value(payload.get("iperf_seconds_requested"))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{rel}: invalid run timing numeric field: {exc}")
+            continue
+        if end_epoch < start_epoch:
+            errors.append(f"{rel}: end_epoch {end_epoch:g} < start_epoch {start_epoch:g}")
+        computed_elapsed = end_epoch - start_epoch
+        if abs(computed_elapsed - elapsed) > max(2.0, seconds_slop):
+            errors.append(
+                f"{rel}: elapsed_seconds {elapsed:g} does not match end-start "
+                f"{computed_elapsed:g}"
+            )
+        if elapsed + seconds_slop < min_seconds:
+            errors.append(
+                f"{rel}: elapsed_seconds {elapsed:.3f} + slop {seconds_slop:.3f} "
+                f"< {min_seconds:.3f}"
+            )
+        if requested + seconds_slop < min_seconds:
+            errors.append(
+                f"{rel}: iperf_seconds_requested {requested:.3f} + slop "
+                f"{seconds_slop:.3f} < {min_seconds:.3f}"
+            )
+    return artifacts, errors
 
 
 def scan_logs(case_dir: Path) -> list[str]:
@@ -1180,6 +1241,7 @@ def validate_case(
     min_iperf_json: int,
     min_iperf_intervals: int,
     min_iperf_interval_gbps_ratio: float,
+    require_run_timing: bool,
     require_iperf_pair_directions: bool,
     require_result_marker: bool,
     log_scan: bool,
@@ -1222,6 +1284,13 @@ def validate_case(
     marker_ok, marker_values = result_markers_pass(case.path)
     if require_result_marker and not marker_ok:
         errors.append(f"missing or non-pass result marker: {marker_values!r}")
+    run_timing, run_timing_errors = run_timing_artifacts(
+        case.path,
+        required=require_run_timing,
+        min_seconds=min_seconds,
+        seconds_slop=seconds_slop,
+    )
+    errors.extend(run_timing_errors)
 
     iperf_files = sorted(
         path
@@ -1447,6 +1516,7 @@ def validate_case(
         "seconds_slop": seconds_slop,
         "min_iperf_intervals_required": min_iperf_intervals,
         "min_iperf_interval_gbps_ratio_required": min_iperf_interval_gbps_ratio,
+        "run_timing": run_timing,
         "iperf_json_count": len(iperf_files),
         "iperf_direction_count": len(iperf_results),
         "iperf_pair_directions": sorted(iperf_pair_directions),
@@ -1596,6 +1666,7 @@ def main() -> int:
             min_iperf_json=args.min_iperf_json,
             min_iperf_intervals=args.min_iperf_intervals,
             min_iperf_interval_gbps_ratio=args.min_iperf_interval_gbps_ratio,
+            require_run_timing=args.require_run_timing,
             require_iperf_pair_directions=args.require_iperf_pair_directions,
             require_result_marker=not args.no_result_marker,
             log_scan=not args.no_log_scan,

@@ -264,6 +264,71 @@ func TestCrossHostSoakVerifyRejectsLowIperfIntervalFloor(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRequiresRunTiming(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-run-timing", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing run timing:\n%s", output)
+	}
+	if !strings.Contains(string(output), "run-timing.json") {
+		t.Fatalf("verify output did not report missing run timing:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsShortRunTiming(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeRunTiming(t, dir, 1000, 1060, 120)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-run-timing", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted short run timing:\n%s", output)
+	}
+	if !strings.Contains(string(output), "elapsed_seconds") {
+		t.Fatalf("verify output did not report short run timing:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsShortRequestedRunTiming(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeRunTiming(t, dir, 1000, 1121, 60)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-run-timing", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted short requested timing:\n%s", output)
+	}
+	if !strings.Contains(string(output), "iperf_seconds_requested") {
+		t.Fatalf("verify output did not report short requested timing:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyRejectsSlowArtifacts(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -1490,6 +1555,26 @@ func writeResultMarker(t *testing.T, dir string) {
 	}
 }
 
+func writeRunTiming(t *testing.T, dir string, startEpoch, endEpoch, requestedSeconds int) {
+	t.Helper()
+	payload := map[string]any{
+		"case":                    "case",
+		"iperf_seconds_requested": requestedSeconds,
+		"start_epoch":             startEpoch,
+		"end_epoch":               endEpoch,
+		"elapsed_seconds":         endEpoch - startEpoch,
+		"start_time":              "2026-06-21T00:00:00Z",
+		"end_time":                "2026-06-21T00:15:00Z",
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal run timing: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run-timing.json"), data, 0o644); err != nil {
+		t.Fatalf("write run timing: %v", err)
+	}
+}
+
 func writeTextFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1717,6 +1802,7 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 3.3e9, 3.2e9, 900.2, 900, 0.8)
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 3.3e9, 3.2e9, 900.2, 900, 0.8)
 	writeResultMarker(t, dir)
+	writeRunTiming(t, dir, 1000, 1901, 900)
 	writeStableBootIDs(t, dir)
 	writeStableUnames(t, dir)
 	writeKernelLogArtifacts(t, dir)
@@ -1783,6 +1869,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 900.2, 900, 0.8)
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 900.2, 900, 0.8)
 	writeResultMarker(t, dir)
+	writeRunTiming(t, dir, 1000, 1901, 900)
 	writeStableBootIDs(t, dir)
 	writeStableUnames(t, dir)
 	writeKernelLogArtifacts(t, dir)
@@ -1920,6 +2007,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 2.8e9, 2.7e9, 900.2, 900, 0.8)
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 2.8e9, 2.7e9, 900.2, 900, 0.8)
 	writeResultMarker(t, dir)
+	writeRunTiming(t, dir, 1000, 1901, 900)
 	writeStableBootIDs(t, dir)
 	writeStableUnames(t, dir)
 	writeKernelLogArtifacts(t, dir)

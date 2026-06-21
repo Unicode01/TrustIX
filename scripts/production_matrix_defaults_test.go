@@ -1216,6 +1216,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"run_gate_case_list()",
 		"--min-iperf-intervals \"$min_iperf_intervals\"",
 		"--min-iperf-interval-gbps-ratio \"$min_interval_gbps_ratio\"",
+		"--require-run-timing",
 		"--require-binary-identity",
 		"--require-stable-boot-id",
 		"--require-uname-artifacts",
@@ -1512,6 +1513,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	gotMinIperfIntervals := map[string]string{}
 	gotMinIntervalGbpsRatio := map[string]string{}
 	gotMinKernelLogNodes := map[string]string{}
+	gotRequireRunTiming := map[string]bool{}
 	gotRequireIdentity := map[string]bool{}
 	gotRequireStableBootID := map[string]bool{}
 	gotRequireUname := map[string]bool{}
@@ -1550,6 +1552,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			}
 		}
 		for _, arg := range args {
+			if arg == "--require-run-timing" {
+				gotRequireRunTiming[caseName] = true
+			}
 			if arg == "--require-binary-identity" {
 				requireIdentity = true
 			}
@@ -1612,6 +1617,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		if gotMinIntervalGbpsRatio[name] != "0.25" {
 			t.Fatalf("case %s min interval gbps ratio got %q want 0.25; calls=%s", name, gotMinIntervalGbpsRatio[name], payload)
+		}
+		if !gotRequireRunTiming[name] {
+			t.Fatalf("case %s did not force --require-run-timing; calls=%s", name, payload)
 		}
 		if !gotRequireIdentity[name] {
 			t.Fatalf("case %s did not force --require-binary-identity; calls=%s", name, payload)

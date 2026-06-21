@@ -132,6 +132,31 @@ truthy() {
   esac
 }
 
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+soak_start_epoch=""
+soak_start_iso=""
+
+write_run_timing_start() {
+  soak_start_epoch="$(date +%s)"
+  soak_start_iso="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+}
+
+write_run_timing_end() {
+  local end_epoch end_iso elapsed tmp
+  [[ -n "$soak_start_epoch" ]] || return 0
+  end_epoch="$(date +%s)"
+  end_iso="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  elapsed=$((end_epoch - soak_start_epoch))
+  tmp="${workdir}/run-timing.json.tmp"
+  cat >"$tmp" <<EOF
+{"case":"$(json_escape "$case_name")","transport":"$(json_escape "$(case_transport)")","encryption":"$(json_escape "$(case_encryption)")","profile":"$(json_escape "$(case_transport_profile)")","datapath":"$(json_escape "$(case_transport_datapath)")","crypto_placement":"$(json_escape "$(case_crypto_placement)")","iperf_mode":"$(json_escape "$iperf_mode")","iperf_directions":"$(json_escape "$iperf_directions")","iperf_parallel":${iperf_parallel},"iperf_seconds_requested":${iperf_seconds},"start_epoch":${soak_start_epoch},"end_epoch":${end_epoch},"elapsed_seconds":${elapsed},"start_time":"${soak_start_iso}","end_time":"${end_iso}"}
+EOF
+  mv "$tmp" "${workdir}/run-timing.json"
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
@@ -1745,7 +1770,9 @@ main() {
   wait_for_api b
   wait_for_endpoint_listeners
   run_connectivity_checks
+  write_run_timing_start
   run_iperf_bidirectional_artifacts
+  write_run_timing_end
   collect_all
   printf 'pass\n' >"$workdir/${case_name}.result"
   log "pass result=${workdir}"
