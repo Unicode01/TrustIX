@@ -297,6 +297,91 @@ case_label_name() {
   printf '%s-%s\n' "$prefix" "$(printf '%s' "$case_name" | tr -c 'A-Za-z0-9_.-' '_')"
 }
 
+write_gate_manifest() {
+  [[ -n "$summary_dir" ]] || return 0
+  mkdir -p "$summary_dir"
+  TRUSTIX_GATE_MANIFEST_MIN_SECONDS="$min_seconds" \
+  TRUSTIX_GATE_MANIFEST_SECONDS_SLOP="$seconds_slop" \
+  TRUSTIX_GATE_MANIFEST_MIN_IPERF_INTERVALS="$min_iperf_intervals" \
+  TRUSTIX_GATE_MANIFEST_MIN_INTERVAL_GBPS_RATIO="$min_interval_gbps_ratio" \
+  TRUSTIX_GATE_MANIFEST_USERSPACE_MIN_GBPS="$userspace_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_USERSPACE_TC_MIN_GBPS="$userspace_tc_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_TC_DIRECT_MIN_GBPS="$tc_direct_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_GBPS="$full_kmod_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_GBPS="$secure_kudp_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_GBPS="$route_gso_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_SESSIONS="$full_kmod_min_sessions" \
+  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_SESSIONS="$secure_kudp_min_sessions" \
+  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_CRYPTO_FLOWS="$secure_kudp_min_crypto_flows" \
+  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DIRECT_ERROR_BUDGET="$secure_kudp_direct_error_budget" \
+  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_REPLAY_BUDGET="$secure_kudp_replay_budget" \
+  TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_SESSIONS="$route_gso_min_sessions" \
+  TRUSTIX_GATE_MANIFEST_ROUTE_GSO_SESSION_ERROR_BUDGET="$route_gso_session_error_budget" \
+  TRUSTIX_GATE_MANIFEST_COMPAT_MIN_SESSIONS="$compat_min_sessions" \
+  TRUSTIX_GATE_MANIFEST_USERSPACE_CASES="$userspace_cases" \
+  TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASES="$userspace_tc_cases" \
+  TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASES="$tc_direct_cases" \
+  TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASES="$full_kmod_cases" \
+  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASES="$secure_kudp_cases" \
+  TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASES="$route_gso_cases" \
+  python3 - "$summary_dir/production-gate-manifest.json" "${BASH_SOURCE[0]}" "$verifier" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import sys
+
+
+def file_info(raw_path):
+    path = pathlib.Path(raw_path)
+    payload = path.read_bytes()
+    return {
+        "path": str(path),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
+    }
+
+
+out_path, gate_path, verifier_path = sys.argv[1:4]
+env = os.environ
+manifest = {
+    "schema": "trustix-cross-host-production-gate-manifest-v1",
+    "production_gate": file_info(gate_path),
+    "verifier": file_info(verifier_path),
+    "thresholds": {
+        "min_seconds": env["TRUSTIX_GATE_MANIFEST_MIN_SECONDS"],
+        "seconds_slop": env["TRUSTIX_GATE_MANIFEST_SECONDS_SLOP"],
+        "min_iperf_intervals": env["TRUSTIX_GATE_MANIFEST_MIN_IPERF_INTERVALS"],
+        "min_interval_gbps_ratio": env["TRUSTIX_GATE_MANIFEST_MIN_INTERVAL_GBPS_RATIO"],
+        "userspace_min_gbps": env["TRUSTIX_GATE_MANIFEST_USERSPACE_MIN_GBPS"],
+        "userspace_tc_min_gbps": env["TRUSTIX_GATE_MANIFEST_USERSPACE_TC_MIN_GBPS"],
+        "tc_direct_min_gbps": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_MIN_GBPS"],
+        "full_kmod_min_gbps": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_GBPS"],
+        "secure_kudp_min_gbps": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_GBPS"],
+        "route_gso_min_gbps": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_GBPS"],
+        "full_kmod_min_sessions": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_SESSIONS"],
+        "secure_kudp_min_sessions": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_SESSIONS"],
+        "secure_kudp_min_crypto_flows": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_CRYPTO_FLOWS"],
+        "secure_kudp_direct_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DIRECT_ERROR_BUDGET"],
+        "secure_kudp_replay_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_REPLAY_BUDGET"],
+        "route_gso_min_sessions": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_SESSIONS"],
+        "route_gso_session_error_budget": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_SESSION_ERROR_BUDGET"],
+        "compat_min_sessions": env["TRUSTIX_GATE_MANIFEST_COMPAT_MIN_SESSIONS"],
+    },
+    "cases": {
+        "userspace": env["TRUSTIX_GATE_MANIFEST_USERSPACE_CASES"],
+        "userspace_tc": env["TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASES"],
+        "tc_direct": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASES"],
+        "full_kmod": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASES"],
+        "secure_kudp": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASES"],
+        "route_gso": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASES"],
+    },
+}
+out = pathlib.Path(out_path)
+out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
 run_gate() {
   local label="$1"
   local category_min_gbps="$2"
@@ -458,6 +543,8 @@ main() {
   if [[ "$userspace_case_count" -eq 0 && "$userspace_tc_case_count" -eq 0 && "$tc_direct_case_count" -eq 0 && "$full_kmod_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
     die "set TRUSTIX_CROSS_HOST_USERSPACE_CASES/TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES/TRUSTIX_CROSS_HOST_TC_DIRECT_CASES/TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO/TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO or *_CASES"
   fi
+
+  write_gate_manifest
 
   if [[ "$userspace_case_count" -gt 0 ]]; then
     run_gate_case_list userspace "$userspace_min_gbps" "$userspace_cases" "$userspace_case_min_gbps_raw" \

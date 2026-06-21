@@ -1211,6 +1211,13 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"session_transport_for_matrix_transport()",
 		"session_endpoint_suffix_for_matrix_transport()",
 		"case_session_args()",
+		"write_gate_manifest()",
+		"production-gate-manifest.json",
+		"trustix-cross-host-production-gate-manifest-v1",
+		"production_gate",
+		"verifier",
+		"thresholds",
+		"write_gate_manifest",
 		"must use canonical NAME=PATH from the transport matrix",
 		"--require-transport-policy-stat \"encryption=${encryption}\"",
 		"--require-transport-policy-stat \"profile=${profile}\"",
@@ -1474,6 +1481,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	workdir := t.TempDir()
 	verifier := filepath.Join(workdir, "verifier.py")
 	calls := filepath.Join(workdir, "calls.jsonl")
+	summaryDir := filepath.Join(workdir, "summary")
 	if err := os.WriteFile(verifier, []byte(strings.Join([]string{
 		"import json, os, sys",
 		"with open(os.environ['TRUSTIX_CAPTURE'], 'a', encoding='utf-8') as handle:",
@@ -1498,6 +1506,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"TRUSTIX_CAPTURE="+slashPath(calls),
 		"TRUSTIX_CROSS_HOST_GATE_VERIFIER="+slashPath(verifier),
+		"TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR="+slashPath(summaryDir),
 		"TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY=0",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=30",
 		"TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP=999",
@@ -1533,6 +1542,67 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("production gate with per-case min_gbps failed: %v\n%s", err, output)
+	}
+	manifestPayload, err := os.ReadFile(filepath.Join(summaryDir, "production-gate-manifest.json"))
+	if err != nil {
+		t.Fatalf("read production gate manifest: %v", err)
+	}
+	var manifest struct {
+		Schema         string `json:"schema"`
+		ProductionGate struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+			Size   int    `json:"size"`
+		} `json:"production_gate"`
+		Verifier struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+			Size   int    `json:"size"`
+		} `json:"verifier"`
+		Thresholds map[string]string `json:"thresholds"`
+		Cases      map[string]string `json:"cases"`
+	}
+	if err := json.Unmarshal(manifestPayload, &manifest); err != nil {
+		t.Fatalf("decode production gate manifest: %v\n%s", err, manifestPayload)
+	}
+	if manifest.Schema != "trustix-cross-host-production-gate-manifest-v1" {
+		t.Fatalf("manifest schema = %q", manifest.Schema)
+	}
+	if manifest.ProductionGate.SHA256 == "" || manifest.ProductionGate.Size <= 0 || !strings.Contains(filepath.ToSlash(manifest.ProductionGate.Path), "linux-cross-host-production-gate.sh") {
+		t.Fatalf("manifest production gate identity is incomplete: %+v", manifest.ProductionGate)
+	}
+	if manifest.Verifier.SHA256 == "" || manifest.Verifier.Size <= 0 || filepath.ToSlash(manifest.Verifier.Path) != slashPath(verifier) {
+		t.Fatalf("manifest verifier identity is incomplete: %+v", manifest.Verifier)
+	}
+	for key, want := range map[string]string{
+		"min_seconds":                     "900",
+		"seconds_slop":                    "1",
+		"min_iperf_intervals":             "600",
+		"min_interval_gbps_ratio":         "0.25",
+		"full_kmod_min_sessions":          "8",
+		"secure_kudp_min_sessions":        "8",
+		"secure_kudp_min_crypto_flows":    "1",
+		"secure_kudp_direct_error_budget": "64",
+		"secure_kudp_replay_budget":       "4096",
+		"route_gso_min_sessions":          "8",
+		"route_gso_session_error_budget":  "2",
+		"compat_min_sessions":             "1",
+	} {
+		if manifest.Thresholds[key] != want {
+			t.Fatalf("manifest threshold %s = %q, want %q\n%s", key, manifest.Thresholds[key], want, manifestPayload)
+		}
+	}
+	for key, wantSubstring := range map[string]string{
+		"userspace":    fastName + "=" + fastDir,
+		"userspace_tc": userspaceTCName + "=" + userspaceTCDir,
+		"tc_direct":    "tc=" + tcDirectDir,
+		"full_kmod":    "full=" + fullKmodDir,
+		"secure_kudp":  "secure=" + secureKUDPDir,
+		"route_gso":    "route=" + routeGSODir,
+	} {
+		if !strings.Contains(manifest.Cases[key], wantSubstring) {
+			t.Fatalf("manifest cases[%s] missing %q:\n%s", key, wantSubstring, manifestPayload)
+		}
 	}
 	payload, err := os.ReadFile(calls)
 	if err != nil {
