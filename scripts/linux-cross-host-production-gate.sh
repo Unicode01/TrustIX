@@ -191,6 +191,10 @@ main() {
 
   if [[ "$tc_direct_case_count" -gt 0 ]]; then
     run_gate tc-direct "$tc_direct_min_gbps" $tc_direct_args \
+      --require-transport-policy-stat encryption=plaintext \
+      --require-transport-policy-stat profile=performance \
+      --require-transport-policy-stat datapath=tc_xdp \
+      --require-transport-policy-stat crypto_placement=userspace \
       --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
@@ -202,6 +206,10 @@ main() {
 
   if [[ "$full_kmod_case_count" -gt 0 ]]; then
     run_gate full-kmod "$full_kmod_min_gbps" $full_kmod_args \
+      --require-transport-policy-stat encryption=plaintext \
+      --require-transport-policy-stat profile=performance \
+      --require-transport-policy-stat datapath=kernel_module \
+      --require-transport-policy-stat crypto_placement=userspace \
       --require-transport-policy-min session_pool_size="${full_kmod_min_sessions}" \
       --require-transport-policy-stat session_pool_strategy=flow \
       --require-transport-policy-stat session_pool_warmup=true \
@@ -303,12 +311,17 @@ main() {
 
   if [[ "$route_gso_case_count" -gt 0 ]]; then
     run_gate route-gso "$route_gso_min_gbps" $route_gso_args \
+      --require-transport-policy-stat encryption=plaintext \
+      --require-transport-policy-stat profile=performance \
+      --require-transport-policy-stat datapath=kernel_module \
+      --require-transport-policy-stat crypto_placement=userspace \
       --require-transport-policy-min session_pool_size="${route_gso_min_sessions}" \
       --require-transport-policy-stat session_pool_strategy=flow \
       --require-transport-policy-stat session_pool_warmup=true \
       --require-transport-sessions-min "${route_gso_min_sessions}" \
       --require-status-min data_path.active_sessions="${route_gso_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors="${route_gso_session_error_budget}" \
+      --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
       --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1 \

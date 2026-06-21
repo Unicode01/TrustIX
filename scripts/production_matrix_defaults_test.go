@@ -1211,6 +1211,80 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 	}
 }
 
+func shellIfBlock(t *testing.T, text, marker string) string {
+	t.Helper()
+	start := strings.Index(text, marker)
+	if start < 0 {
+		t.Fatalf("script block marker missing %q", marker)
+	}
+	block := text[start:]
+	end := strings.Index(block, "\n  fi")
+	if end < 0 {
+		t.Fatalf("script block for marker %q has no closing fi", marker)
+	}
+	return block[:end]
+}
+
+func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join(".", "linux-cross-host-production-gate.sh"))
+	if err != nil {
+		t.Fatalf("read linux-cross-host-production-gate.sh: %v", err)
+	}
+	text := string(payload)
+	tests := []struct {
+		name   string
+		marker string
+		want   []string
+	}{
+		{
+			name:   "tc-direct",
+			marker: `if [[ "$tc_direct_case_count" -gt 0 ]]; then`,
+			want: []string{
+				"run_gate tc-direct \"$tc_direct_min_gbps\"",
+				"--require-transport-policy-stat encryption=plaintext",
+				"--require-transport-policy-stat profile=performance",
+				"--require-transport-policy-stat datapath=tc_xdp",
+				"--require-transport-policy-stat crypto_placement=userspace",
+				"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
+			},
+		},
+		{
+			name:   "full-kmod",
+			marker: `if [[ "$full_kmod_case_count" -gt 0 ]]; then`,
+			want: []string{
+				"run_gate full-kmod \"$full_kmod_min_gbps\"",
+				"--require-transport-policy-stat encryption=plaintext",
+				"--require-transport-policy-stat profile=performance",
+				"--require-transport-policy-stat datapath=kernel_module",
+				"--require-transport-policy-stat crypto_placement=userspace",
+				"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
+			},
+		},
+		{
+			name:   "route-gso",
+			marker: `if [[ "$route_gso_case_count" -gt 0 ]]; then`,
+			want: []string{
+				"run_gate route-gso \"$route_gso_min_gbps\"",
+				"--require-transport-policy-stat encryption=plaintext",
+				"--require-transport-policy-stat profile=performance",
+				"--require-transport-policy-stat datapath=kernel_module",
+				"--require-transport-policy-stat crypto_placement=userspace",
+				"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			block := shellIfBlock(t, text, tc.marker)
+			for _, want := range tc.want {
+				if !strings.Contains(block, want) {
+					t.Fatalf("%s gate block missing %q:\n%s", tc.name, want, block)
+				}
+			}
+		})
+	}
+}
+
 func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join(".", "linux-cross-host-transport-matrix.sh"))
 	if err != nil {
