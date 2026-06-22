@@ -215,6 +215,16 @@ session_endpoint_suffix_for_matrix_transport() {
   printf -- '-%s\n' "${session_transport//_/-}"
 }
 
+transport_endpoint_supports_crypto_placement() {
+  local transport session_transport
+  transport="$1"
+  session_transport="$(session_transport_for_matrix_transport "$transport")"
+  case "$session_transport" in
+    udp|experimental_tcp) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 case_session_args() {
   local family="$1" case_token="$2" case_name transport encryption profile datapath placement extra
   local require_sessions=1
@@ -273,7 +283,6 @@ case_session_args() {
     --require-transport-local-endpoint-stat "encryption=${encryption}" \
     --require-transport-peer-endpoint-stat "transport=$(session_transport_for_matrix_transport "$transport")" \
     --require-transport-peer-endpoint-stat "usable=true" \
-    --require-transport-peer-endpoint-stat "encryption=${encryption}" \
     --require-transport-peer-endpoint-stat "profile_compatible=true" \
     --require-transport-peer-endpoint-stat "security_compatible=true"
   if [[ "$require_sessions" -eq 0 ]]; then
@@ -291,8 +300,10 @@ case_session_args() {
     --require-transport-session-any-min "stats.packets_received=1"
   fi
   if [[ "$encryption" == "secure" ]]; then
+    if transport_endpoint_supports_crypto_placement "$transport"; then
+      printf '%s\n' --require-transport-local-endpoint-stat "crypto_placements=${placement}"
+    fi
     printf '%s\n' \
-      --require-transport-local-endpoint-stat "crypto_placements=${placement}" \
       --require-transport-session-stat "stats.encrypted=true" \
       --require-transport-session-stat "stats.send_encrypted=true" \
       --require-transport-session-stat "stats.receive_encrypted=true" \

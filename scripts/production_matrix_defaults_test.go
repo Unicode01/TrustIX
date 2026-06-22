@@ -241,9 +241,9 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 		}
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
-			Artifact:           "docs/trustix-performance-log.md#debian-userspace-current-head-production-gates",
-			GateManifestSchema: legacyProductionGateManifestValue,
+			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
+			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "userspace_tc":
 		if row.Datapath != "tc_xdp" || row.CryptoPlacement != "userspace" {
@@ -252,8 +252,8 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "debian13-debian13",
 			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#debian-userspace-tc-current-head-production-gates",
-			GateManifestSchema: legacyProductionGateManifestValue,
+			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
+			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "tc_direct":
 		return currentProductionEvidenceRequirement{
@@ -866,11 +866,10 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"secure_kudp":     "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
 		"route_gso":       "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
 		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-manifest-gate",
+		"userspace":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
+		"userspace_tc":    "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
 	}
-	legacyPendingFamilies := map[string]bool{
-		"userspace":    true,
-		"userspace_tc": true,
-	}
+	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
 	for _, row := range loadProductionTransportDefaults(t) {
 		if row.ValidationScope != "cross_host" {
@@ -884,10 +883,10 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		switch {
 		case manifestRequiredArtifacts[row.GateFamily] != "":
 			if requirement.GateManifestSchema != productionGateManifestSchema {
-				t.Fatalf("kernel fast-path default must require manifest-backed evidence: row=%+v requirement=%+v", row, requirement)
+				t.Fatalf("production default must require manifest-backed evidence: row=%+v requirement=%+v", row, requirement)
 			}
 			if requirement.Artifact != manifestRequiredArtifacts[row.GateFamily] {
-				t.Fatalf("kernel fast-path default points at stale evidence: row=%+v requirement=%+v", row, requirement)
+				t.Fatalf("production default points at stale evidence: row=%+v requirement=%+v", row, requirement)
 			}
 		case legacyPendingFamilies[row.GateFamily]:
 			if requirement.GateManifestSchema != legacyProductionGateManifestValue {
@@ -1122,8 +1121,8 @@ func TestCurrentDebianRouteGSOEvidenceCoversProductionGate(t *testing.T) {
 func TestCurrentDebianUserspaceEvidenceCoversProductionGates(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
-		wantKernelMatrix = "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#debian-userspace-current-head-production-gates"
+		wantKernelMatrix = "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates"
 	)
 
 	evidenceByKey := map[string][]productionTransportEvidence{}
@@ -1182,7 +1181,7 @@ func TestCurrentDebianUserspaceTCEvidenceCoversProductionGates(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
 		wantKernelMatrix = "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#debian-userspace-tc-current-head-production-gates"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates"
 	)
 
 	evidenceByKey := map[string][]productionTransportEvidence{}
@@ -1818,9 +1817,11 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 
 	fastName := "udp-secure-stable-userspace-userspace"
 	slowName := "tcp-plaintext-stable-userspace-userspace"
+	secureTLSName := "tcp-secure-stable-userspace-userspace"
 	userspaceTCName := "gre-plaintext-performance-tc_xdp-userspace"
 	fastDir := slashPath(filepath.Join(workdir, "fast"))
 	slowDir := slashPath(filepath.Join(workdir, "slow"))
+	secureTLSDir := slashPath(filepath.Join(workdir, "secure-tls"))
 	userspaceTCDir := slashPath(filepath.Join(workdir, "userspace-tc"))
 	tcDirectDir := slashPath(filepath.Join(workdir, "tc-direct"))
 	fullKmodDir := slashPath(filepath.Join(workdir, "full-kmod"))
@@ -1846,8 +1847,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET=999",
 		"TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS=0",
 		"TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS=0",
-		"TRUSTIX_CROSS_HOST_USERSPACE_CASES="+fastName+"="+fastDir+" "+slowName+"="+slowDir,
-		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS="+fastName+"=1.5 "+slowName+"=0",
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASES="+fastName+"="+fastDir+" "+slowName+"="+slowDir+" "+secureTLSName+"="+secureTLSDir,
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS="+fastName+"=1.5 "+slowName+"=0 "+secureTLSName+"=0",
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES="+userspaceTCName+"="+userspaceTCDir,
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS="+userspaceTCName+"=0",
@@ -1918,7 +1919,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 	}
 	for key, wantSubstring := range map[string]string{
-		"userspace":    fastName + "=" + fastDir,
+		"userspace":    secureTLSName + "=" + secureTLSDir,
 		"userspace_tc": userspaceTCName + "=" + userspaceTCDir,
 		"tc_direct":    "tc=" + tcDirectDir,
 		"full_kmod":    "full=" + fullKmodDir,
@@ -2178,9 +2179,21 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		requireArgPair(caseName, "--require-transport-local-endpoint-stat", "encryption="+encryption)
 		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "transport="+transport)
 		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "usable=true")
-		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "encryption="+encryption)
 		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "profile_compatible=true")
 		requireArgPair(caseName, "--require-transport-peer-endpoint-stat", "security_compatible=true")
+	}
+	forbidArgPair := func(caseName, key, value string) {
+		t.Helper()
+		args := gotArgs[caseName]
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == key && args[i+1] == value {
+				t.Fatalf("case %s unexpectedly has %s %s; calls=%s", caseName, key, value, payload)
+			}
+		}
+	}
+	forbidPeerEndpointEncryption := func(caseName, encryption string) {
+		t.Helper()
+		forbidArgPair(caseName, "--require-transport-peer-endpoint-stat", "encryption="+encryption)
 	}
 	requireSecureEndpointPlacement := func(caseName, placement string) {
 		t.Helper()
@@ -2191,6 +2204,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair(fastName, "--require-transport-policy-stat", "datapath=userspace")
 	requireArgPair(fastName, "--require-transport-policy-stat", "crypto_placement=userspace")
 	requireEndpointArgs(fastName, "udp", "stable", "userspace", "secure")
+	forbidPeerEndpointEncryption(fastName, "secure")
 	requireSecureEndpointPlacement(fastName, "userspace")
 	requireArgPair(fastName, "--seconds-slop", "1")
 	requireArgPair(fastName, "--require-transport-sessions-min", "1")
@@ -2207,16 +2221,30 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair(slowName, "--require-transport-policy-stat", "datapath=userspace")
 	requireArgPair(slowName, "--require-transport-policy-stat", "crypto_placement=userspace")
 	requireEndpointArgs(slowName, "tcp", "stable", "userspace", "plaintext")
+	forbidPeerEndpointEncryption(slowName, "plaintext")
 	requireArgPair(slowName, "--require-transport-session-stat", "transport=tcp")
 	requireArg(slowName, "--require-transport-session-endpoint-suffix=-tcp")
 	requireArgPair(slowName, "--require-transport-session-stat", "stats.encryption=plaintext")
 	requireArgPair(slowName, "--require-transport-session-stat", "stats.link_tls=true")
 	requireTrafficArgs(slowName)
+	requireEndpointArgs(secureTLSName, "tcp", "stable", "userspace", "secure")
+	forbidPeerEndpointEncryption(secureTLSName, "secure")
+	forbidArgPair(secureTLSName, "--require-transport-local-endpoint-stat", "crypto_placements=userspace")
+	requireArgPair(secureTLSName, "--require-transport-session-stat", "transport=tcp")
+	requireArg(secureTLSName, "--require-transport-session-endpoint-suffix=-tcp")
+	requireArgPair(secureTLSName, "--require-transport-session-stat", "stats.encryption=secure")
+	requireArgPair(secureTLSName, "--require-transport-session-stat", "stats.encrypted=true")
+	requireArgPair(secureTLSName, "--require-transport-session-stat", "stats.send_encrypted=true")
+	requireArgPair(secureTLSName, "--require-transport-session-stat", "stats.receive_encrypted=true")
+	requireArgPair(secureTLSName, "--require-transport-session-stat", "stats.crypto_placement=userspace")
+	requireArgPair(secureTLSName, "--require-transport-session-stat", "stats.link_tls=true")
+	requireTrafficArgs(secureTLSName)
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "encryption=plaintext")
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "profile=performance")
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "datapath=tc_xdp")
 	requireArgPair(userspaceTCName, "--require-transport-policy-stat", "crypto_placement=userspace")
 	requireEndpointArgs(userspaceTCName, "gre", "performance", "tc_xdp", "plaintext")
+	forbidPeerEndpointEncryption(userspaceTCName, "plaintext")
 	requireArgPair(userspaceTCName, "--require-transport-session-stat", "transport=gre")
 	requireArg(userspaceTCName, "--require-transport-session-endpoint-suffix=-gre")
 	requireArgPair(userspaceTCName, "--require-transport-session-stat", "stats.encryption=plaintext")
@@ -3246,6 +3274,13 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"collect_binary_identity a",
 		"version_output=\\$(",
 		"collect_kernel_logs a",
+		"if command -v journalctl >/dev/null 2>&1; then",
+		"tmp=\\\"\\${dir}/.\\${prefix}-kernel.log.tmp\\\"",
+		"journalctl -k -b --since '1 hour ago' --no-pager -o short-iso >\\\"\\$tmp\\\"",
+		"if command -v dmesg >/dev/null 2>&1; then",
+		"tmp=\\\"\\${dir}/.\\${prefix}-dmesg.log.tmp\\\"",
+		"if dmesg -T >\\\"\\$tmp\\\"",
+		"elif dmesg >\\\"\\$tmp\\\"",
 		"collect_all",
 		"collect_module_parameters a",
 		"${dir}/module-parameters.txt",

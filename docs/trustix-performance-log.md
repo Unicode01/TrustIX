@@ -14,11 +14,73 @@ Current production-default evidence boundary:
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
 | Debian `full_kmod`, `tc_direct`, `secure_kudp`, `route_gso` | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
-| Debian userspace and userspace-TC defaults | 900s PVE gates passed, still recorded as `legacy-pre-manifest` | Keep as explicit legacy-pending rows until rerun through the manifest-emitting gate. |
+| Debian userspace and userspace-TC defaults | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 900s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-22
+
+<a id="2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates"></a>
+
+### Zaozhuang PVE userspace and userspace-TC manifest gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-userspace-a` (`10.203.3.200`), VM201
+`trustix-userspace-b` (`10.203.3.201`), VM202
+`trustix-userspace-202` (`10.203.3.202`), and VM203
+`trustix-userspace-203` (`10.203.3.203`) on isolated `vmbr3`. VM100 and all
+1xx guests were not modified. All guests ran Debian 13 on
+`6.12.90+deb13.1-cloud-amd64` with `cpu: host`; the guest CPU flags included
+`aes`, `pclmulqdq`, and `avx`. This matters for these userspace secure
+throughput gates because the PVE default `Common KVM processor` hides those
+features and previously produced misleadingly low secure TCP/QUIC results.
+
+The release binary was built with `--build-bpf 0 --build-ko 0 --skip-webui`
+from commit `4c3312c40a69`, build time `2026-06-21T17:24:33Z`; all guests
+used binary SHA256
+`e4c161ebb1731762d0fc5403cbd0117b0e04659ab1b54c322cd994d4f5cb79cc`.
+The embedded assets SHA256 was
+`18eb4b0fbb81b7dfe6a9639e2997cae6cd728c5a9d2db3ba367412487cb6e622`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`520750ae5e500023963c5b660f2f061343972afddf2dba85d116f3f6f6c1d876`; the
+verifier SHA256 was
+`4c5aef66c564b3e149d1cd454ccc72e64fcf21f98b72d88ef8703252d7ead796`.
+
+| Gate family | Transport | Encryption | Gate | Minimum received | Minimum sent | Minimum duration |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| userspace | UDP | secure | 1.5 Gbps | 2.001292 Gbps | 2.000753 Gbps | 899.698922s |
+| userspace | UDP | plaintext | 1.5 Gbps | 2.400691 Gbps | 2.400956 Gbps | 900.009047s |
+| userspace | TCP | secure | 0.75 Gbps | 0.832237 Gbps | 0.832460 Gbps | 900.191986s |
+| userspace | TCP | plaintext | 1 Gbps | 1.372582 Gbps | 1.372799 Gbps | 900.079583s |
+| userspace | QUIC | secure | 0.75 Gbps | 0.971089 Gbps | 0.971322 Gbps | 900.205557s |
+| userspace | QUIC | plaintext | 1 Gbps | 1.384400 Gbps | 1.384626 Gbps | 900.137116s |
+| userspace | WebSocket | secure | 0.5 Gbps | 0.775269 Gbps | 0.775496 Gbps | 900.206963s |
+| userspace | WebSocket | plaintext | 1 Gbps | 1.202630 Gbps | 1.202856 Gbps | 900.133695s |
+| userspace | HTTP CONNECT | secure | 0.75 Gbps | 0.897881 Gbps | 0.898088 Gbps | 900.188402s |
+| userspace | HTTP CONNECT | plaintext | 1 Gbps | 1.405207 Gbps | 1.405428 Gbps | 900.071849s |
+| userspace | experimental TCP | secure | 1 Gbps | 1.576181 Gbps | 1.576404 Gbps | 900.066391s |
+| userspace-TC | GRE | secure | 1 Gbps | 1.384943 Gbps | 1.384952 Gbps | 899.987127s |
+| userspace-TC | GRE | plaintext | 4 Gbps | 5.475852 Gbps | 5.475970 Gbps | 899.995435s |
+| userspace-TC | IPIP | secure | 1 Gbps | 1.374068 Gbps | 1.374109 Gbps | 900.006583s |
+| userspace-TC | IPIP | plaintext | 4 Gbps | 5.404188 Gbps | 5.404332 Gbps | 900.003861s |
+| userspace-TC | VXLAN | secure | 1 Gbps | 1.362260 Gbps | 1.362300 Gbps | 900.006735s |
+| userspace-TC | VXLAN | plaintext | 4 Gbps | 5.647205 Gbps | 5.647345 Gbps | 900.003044s |
+
+All 17 cases passed with `errors=[]`, `log_findings=[]`,
+`kernel_log_rejected_artifacts=[]`, `pstore_rejected_artifacts=[]`, stable
+boot IDs before and after each case, no TrustIX kernel modules loaded, matching
+binary/build identity, and zero session dial or heartbeat errors. The final
+manifest rows are now recorded in `scripts/production-transport-evidence.tsv`.
+
+The production gate was adjusted during this run to match the endpoint/session
+metadata split for TLS-backed transports: endpoint `crypto_placements` is now
+required only for endpoint transports that advertise it (`udp` and
+`experimental_tcp`), and peer endpoint `encryption=...` is no longer required.
+TCP, QUIC, WebSocket, and HTTP CONNECT continue to prove crypto placement and
+encryption via policy/session stats, including `stats.link_tls=true`.
 
 <a id="2026-06-22-zaozhuang-pve-owdeb-full-kmod-manifest-gate"></a>
 
