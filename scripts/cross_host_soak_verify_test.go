@@ -1437,6 +1437,73 @@ func TestCrossHostSoakVerifyRejectsMissingAnyDatapathCounterMinima(t *testing.T)
 	}
 }
 
+func TestCrossHostSoakVerifyChecksDatapathRatioMaxima(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeDatapathJSONWithReplayStats(t, filepath.Join(dir, "collect", "a", "datapath.json"), 20, 0, 1000000, 20)
+	writeDatapathJSONWithReplayStats(t, filepath.Join(dir, "collect", "b", "datapath.json"), 0, 0, 500000, 0)
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps",
+		"4",
+		"--min-seconds",
+		"120",
+		"--require-datapath-max",
+		"kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_old_drops=0",
+		"--require-datapath-ratio-max",
+		"kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_seen_drops/kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts=0.00002",
+		"--require-datapath-ratio-max",
+		"kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_drops/kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts=0.00002",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected bounded datapath ratios:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsHighDatapathRatio(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeDatapathJSONWithReplayStats(t, filepath.Join(dir, "collect", "a", "datapath.json"), 100, 0, 1000, 100)
+	writeDatapathJSONWithReplayStats(t, filepath.Join(dir, "collect", "b", "datapath.json"), 0, 0, 500000, 0)
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps",
+		"4",
+		"--min-seconds",
+		"120",
+		"--require-datapath-ratio-max",
+		"kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_seen_drops/kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts=0.00002",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted high datapath ratio:\n%s", output)
+	}
+	if !strings.Contains(string(output), "datapath ratio kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_seen_drops/kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts") {
+		t.Fatalf("verify did not report high datapath ratio:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyChecksStatusHealthCounters(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -2299,6 +2366,31 @@ func writeDatapathJSONWithSecureCounters(t *testing.T, path string, txPackets, r
 	}
 }
 
+func writeDatapathJSONWithReplayStats(t *testing.T, path string, replaySeen, replayOld, openAttempts, drops int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make datapath dir: %v", err)
+	}
+	payload := map[string]any{
+		"kernel_udp": map[string]any{
+			"provider_stats": map[string]any{
+				"tc_kernel_udp_rx_secure_direct_replay_seen_drops":   replaySeen,
+				"tc_kernel_udp_rx_secure_direct_replay_old_drops":    replayOld,
+				"tc_kernel_udp_rx_secure_direct_replay_drops":        replaySeen + replayOld,
+				"tc_kernel_udp_rx_secure_direct_drops":               drops,
+				"tc_kernel_udp_rx_secure_direct_kfunc_open_attempts": openAttempts,
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal datapath json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write datapath json: %v", err)
+	}
+}
+
 func writeTransportsJSON(t *testing.T, path string, poolSize int, strategy string, warmup bool, sessions int) {
 	t.Helper()
 	writeTransportsJSONWithSession(t, path, poolSize, strategy, warmup, sessions, "experimental_tcp", "b-experimental-tcp")
@@ -2571,6 +2663,9 @@ func writeSecureKUDPDatapathJSON(t *testing.T, path string, routeGSO bool) {
 				"tc_kernel_udp_tx_secure_direct_drops":                 0,
 				"tc_kernel_udp_rx_secure_direct_header_errors":         0,
 				"tc_kernel_udp_rx_secure_direct_decrypt_errors":        0,
+				"tc_kernel_udp_rx_secure_direct_kfunc_open_attempts":   1024,
+				"tc_kernel_udp_rx_secure_direct_replay_old_drops":      0,
+				"tc_kernel_udp_rx_secure_direct_replay_seen_drops":     0,
 				"tc_kernel_udp_rx_secure_direct_replay_drops":          0,
 				"tc_kernel_udp_rx_secure_direct_drops":                 0,
 			},

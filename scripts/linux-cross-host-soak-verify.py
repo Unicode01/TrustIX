@@ -313,6 +313,13 @@ def parse_args() -> argparse.Namespace:
         help="require every collected datapath.json to contain numeric PATH <= VALUE; may be repeated",
     )
     parser.add_argument(
+        "--require-datapath-ratio-max",
+        action="append",
+        default=[],
+        metavar="NUMERATOR_PATH/DENOMINATOR_PATH=VALUE",
+        help="require every collected datapath.json to have numeric NUMERATOR_PATH / DENOMINATOR_PATH <= VALUE; may be repeated",
+    )
+    parser.add_argument(
         "--min-datapath-json",
         type=int,
         default=0,
@@ -1283,6 +1290,29 @@ def parse_required_numeric_limits(raw_items: list[str], flag: str) -> list[tuple
     return required
 
 
+def parse_required_ratio_limits(raw_items: list[str], flag: str) -> list[tuple[str, str, float]]:
+    required: list[tuple[str, str, float]] = []
+    for raw in raw_items:
+        ratio_path, sep, value = raw.partition("=")
+        ratio_path = ratio_path.strip()
+        value = value.strip()
+        numerator, slash, denominator = ratio_path.partition("/")
+        numerator = numerator.strip()
+        denominator = denominator.strip()
+        if not sep or not slash or not numerator or not denominator:
+            raise SystemExit(
+                f"invalid {flag} {raw!r}; expected NUMERATOR_PATH/DENOMINATOR_PATH=VALUE"
+            )
+        try:
+            maximum = float(value)
+        except ValueError as exc:
+            raise SystemExit(f"invalid {flag} {raw!r}; VALUE must be numeric") from exc
+        if maximum < 0:
+            raise SystemExit(f"invalid {flag} {raw!r}; VALUE must be non-negative")
+        required.append((numerator, denominator, maximum))
+    return required
+
+
 def datapath_value(payload: Any, dotted_path: str) -> Any:
     current = payload
     for part in dotted_path.split("."):
@@ -1335,6 +1365,7 @@ def validate_datapath_stats(
     required_minima: list[tuple[str, float]],
     required_any_minima: list[tuple[str, float]],
     required_maxima: list[tuple[str, float]],
+    required_ratio_maxima: list[tuple[str, str, float]],
     min_datapath_json: int,
 ) -> tuple[list[dict[str, Any]], list[str], int]:
     datapath_files = sorted(case_dir.rglob("datapath.json"))
@@ -1345,7 +1376,13 @@ def validate_datapath_stats(
         errors.append(
             f"found {len(datapath_files)} datapath.json files, want >= {min_datapath_json}"
         )
-    if (required or required_minima or required_any_minima or required_maxima) and not datapath_files:
+    if (
+        required
+        or required_minima
+        or required_any_minima
+        or required_maxima
+        or required_ratio_maxima
+    ) and not datapath_files:
         return rows, errors, len(datapath_files)
     for path in datapath_files:
         rel = str(path.relative_to(case_dir))
@@ -1410,6 +1447,51 @@ def validate_datapath_stats(
             if actual_number > maximum:
                 errors.append(
                     f"{rel}: datapath stat {dotted_path}={actual_number:g}, want <= {maximum:g}"
+                )
+        for numerator_path, denominator_path, maximum in required_ratio_maxima:
+            ratio_key = f"{numerator_path}/{denominator_path}"
+            try:
+                numerator = datapath_value(payload, numerator_path)
+            except KeyError:
+                errors.append(f"{rel}: missing datapath ratio numerator {numerator_path!r}")
+                continue
+            try:
+                denominator = datapath_value(payload, denominator_path)
+            except KeyError:
+                errors.append(f"{rel}: missing datapath ratio denominator {denominator_path!r}")
+                continue
+            values[numerator_path] = numerator
+            values[denominator_path] = denominator
+            try:
+                numerator_number = numeric_value(numerator)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"{rel}: datapath ratio numerator {numerator_path}={numerator!r} is not numeric"
+                )
+                continue
+            try:
+                denominator_number = numeric_value(denominator)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"{rel}: datapath ratio denominator {denominator_path}={denominator!r} is not numeric"
+                )
+                continue
+            if denominator_number <= 0:
+                errors.append(
+                    f"{rel}: datapath ratio denominator {denominator_path}={denominator_number:g}, want > 0"
+                )
+                continue
+            ratio = numerator_number / denominator_number
+            values[ratio_key] = {
+                "numerator": numerator_number,
+                "denominator": denominator_number,
+                "ratio": ratio,
+                "maximum": maximum,
+            }
+            if ratio > maximum:
+                errors.append(
+                    f"{rel}: datapath ratio {ratio_key}={ratio:.9g}, want <= {maximum:.9g} "
+                    f"({numerator_number:g}/{denominator_number:g})"
                 )
         if values:
             rows.append({"file": rel, "values": values})
@@ -1836,6 +1918,7 @@ def validate_case(
     required_datapath_minima: list[tuple[str, float]],
     required_datapath_any_minima: list[tuple[str, float]],
     required_datapath_maxima: list[tuple[str, float]],
+    required_datapath_ratio_maxima: list[tuple[str, str, float]],
     min_datapath_json: int,
     required_module_param_minima: list[tuple[str, float]],
     required_module_param_any_minima: list[tuple[str, float]],
@@ -2089,6 +2172,7 @@ def validate_case(
         required_minima=required_datapath_minima,
         required_any_minima=required_datapath_any_minima,
         required_maxima=required_datapath_maxima,
+        required_ratio_maxima=required_datapath_ratio_maxima,
         min_datapath_json=min_datapath_json,
     )
     errors.extend(datapath_stat_errors)
@@ -2240,6 +2324,10 @@ def main() -> int:
         args.require_datapath_max,
         "--require-datapath-max",
     )
+    required_datapath_ratio_maxima = parse_required_ratio_limits(
+        args.require_datapath_ratio_max,
+        "--require-datapath-ratio-max",
+    )
     required_module_param_minima = parse_required_numeric_limits(
         args.require_module_param_min,
         "--require-module-param-min",
@@ -2304,6 +2392,7 @@ def main() -> int:
         or required_datapath_minima
         or required_datapath_any_minima
         or required_datapath_maxima
+        or required_datapath_ratio_maxima
     ) and min_datapath_json == 0:
         min_datapath_json = 2
     min_module_parameters = args.min_module_parameters
@@ -2368,6 +2457,7 @@ def main() -> int:
             required_datapath_minima=required_datapath_minima,
             required_datapath_any_minima=required_datapath_any_minima,
             required_datapath_maxima=required_datapath_maxima,
+            required_datapath_ratio_maxima=required_datapath_ratio_maxima,
             min_datapath_json=min_datapath_json,
             required_module_param_minima=required_module_param_minima,
             required_module_param_any_minima=required_module_param_any_minima,

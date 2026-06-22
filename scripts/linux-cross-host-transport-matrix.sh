@@ -20,6 +20,7 @@ seconds_override="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS:-}"
 min_gbps_override="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS:-}"
 seconds_slop="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS_SLOP:-1}"
 timeout_slop="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_TIMEOUT_SLOP:-120}"
+route_gso_session_error_budget="${TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2}"
 summary_path="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY:-${workdir}/summary.jsonl}"
 selected_gate_summary_dir="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_GATE_SUMMARY_DIR:-${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-${workdir}/selected-production-gate}}"
 evidence_out="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT:-}"
@@ -52,6 +53,11 @@ validate_nonnegative_decimal() {
   local name="$1" value="$2"
   local re='^[0-9]+([.][0-9]+)?$'
   [[ "$value" =~ $re ]] || die "${name} must be a non-negative number"
+}
+
+validate_nonnegative_integer() {
+  local name="$1" value="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || die "${name} must be a non-negative integer"
 }
 
 validate_positive_integer() {
@@ -251,6 +257,8 @@ append_case_token() {
 
 run_verify() {
   local name="$1" dir="$2" min_gbps="$3" min_seconds="$4" encryption="$5" profile="$6" datapath="$7" placement="$8" validation_scope="$9" gate_family="${10}"
+  local family_class=""
+  local session_dial_error_budget="0"
   local args=(
     "--case" "${name}=${dir}"
     "--min-gbps" "$min_gbps"
@@ -262,11 +270,15 @@ run_verify() {
     "--require-transport-policy-stat" "crypto_placement=${placement}"
   )
   if [[ "$validation_scope" == "cross_host" ]]; then
+    family_class="$(gate_family_class "$gate_family")"
+    if [[ "$family_class" == "route_gso" ]]; then
+      session_dial_error_budget="$route_gso_session_error_budget"
+    fi
     args+=(
-      "--require-status-max" "data_path.counters.session_dial_errors=0"
+      "--require-status-max" "data_path.counters.session_dial_errors=${session_dial_error_budget}"
       "--require-status-max" "data_path.counters.session_heartbeat_timeouts=0"
     )
-    if [[ "$(gate_family_class "$gate_family")" == "tc_direct" ]]; then
+    if [[ "$family_class" == "tc_direct" ]]; then
       args+=("--require-datapath-any-min" "kernel_udp.active_flows=1")
     else
       args+=("--require-transport-sessions-min" "1")
@@ -453,6 +465,7 @@ main() {
   validate_nonnegative_decimal TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS_SLOP "$seconds_slop"
   seconds_slop="$(min_decimal "$seconds_slop" "1")"
   validate_positive_integer TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_TIMEOUT_SLOP "$timeout_slop"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
   if [[ -n "$evidence_out" ]]; then
     truthy "$dry_run" && die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT cannot be used with DRY_RUN=1"
     truthy "$verify" || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT requires VERIFY=1"

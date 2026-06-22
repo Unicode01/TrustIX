@@ -14,7 +14,8 @@ Current production-default evidence boundary:
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
 | Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian `tc_direct`, `secure_kudp`, `route_gso` | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
+| Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
+| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 900s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
@@ -71,6 +72,88 @@ minimum was 2.028861 Gbps received and 2.028903 Gbps sent, below the current
 3 Gbps full-kmod production gate. A short P4 simultaneous bidir probe produced
 the same stability result and about 2.31 Gbps per direction. The production
 default therefore remains the sequential per-direction gate above.
+
+<a id="2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates"></a>
+
+### Zaozhuang PVE TC-direct and secure-kUDP 3600s ratio gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only. VM100
+and all 1xx guests were not modified. All checked peers ran Debian 13 kernel
+`6.12.94+deb13-cloud-amd64`.
+
+The release binary was built from commit `61c65bc3dc6a`, build time
+`2026-06-22T06:39:31Z`, with Go `1.25.0`; all checked peers used binary
+SHA256 `411ffc1de602afaa524a0604c491c53e31be002433931f9e43194b8552543f6c`.
+The embedded assets SHA256 was
+`72cf877436fb24ef91455f3368a87024c49c697c213f6ad2ef372cb0fb0aeaa4`.
+
+The gate was rechecked with production gate script SHA256
+`6004747ec9057258e80974d6e915b563b33e5cd9c8831062d820d660d6147bd5` and
+verifier SHA256
+`ac2dfae346e7f92bfc32bf8b1e379849506c26b9155a61181c9523b5c3abd38b`.
+The verifier adds `--require-datapath-ratio-max`; secure-kUDP now requires
+`tc_kernel_udp_rx_secure_direct_replay_old_drops=0` and bounds `replay_seen`,
+total replay drops, and total secure-direct RX drops against
+`tc_kernel_udp_rx_secure_direct_kfunc_open_attempts` at `<= 0.00002`.
+
+| Gate family | Direction | Gate | Received | Sent | Duration | Iperf intervals |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `tc_direct` | A to B | 3 Gbps | 3.575734 Gbps | 3.575770 Gbps | 3600.004793s | 3600 |
+| `tc_direct` | B to A | 3 Gbps | 3.725502 Gbps | 3.725542 Gbps | 3600.003238s | 3600 |
+| `secure_kudp` | A to B | 1.5 Gbps | 1.634107 Gbps | 1.634159 Gbps | 3600.013932s | 3600 |
+| `secure_kudp` | B to A | 1.5 Gbps | 1.654379 Gbps | 1.654424 Gbps | 3600.013547s | 3600 |
+
+Both gates passed with `errors=[]`, stable before/after boot IDs,
+`log_findings=[]`, `kernel_log_rejected_artifacts=[]`, and
+`pstore_rejected_artifacts=[]`. The secure-kUDP replay split was:
+
+| Node | `old` drops | `seen` drops | Open attempts | Seen/open ratio |
+| --- | ---: | ---: | ---: | ---: |
+| A | 0 | 6156 | 675832088 | 0.000009109 |
+| B | 0 | 7944 | 670683253 | 0.000011845 |
+
+This replaces the previous fixed `4096` absolute replay budget with a
+duration-aware gate. A future secure-kUDP failure with nonzero `old` drops is
+still a hard failure; a higher `seen/open` or `drops/open` ratio is also a hard
+failure.
+
+<a id="2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate"></a>
+
+### Zaozhuang PVE route-GSO 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 204 and 205 on
+isolated `vmbr3`; VM100 and all 1xx guests were not modified. Both guests ran
+Debian 13 kernel `6.12.94+deb13-cloud-amd64`.
+
+The release binary, embedded assets, production gate script, and verifier were
+the same artifacts as the TC-direct and secure-kUDP 3600s run above:
+binary SHA256 `411ffc1de602afaa524a0604c491c53e31be002433931f9e43194b8552543f6c`,
+assets SHA256 `72cf877436fb24ef91455f3368a87024c49c697c213f6ad2ef372cb0fb0aeaa4`,
+production gate SHA256
+`6004747ec9057258e80974d6e915b563b33e5cd9c8831062d820d660d6147bd5`, and
+verifier SHA256
+`ac2dfae346e7f92bfc32bf8b1e379849506c26b9155a61181c9523b5c3abd38b`.
+
+The initial transport matrix precheck used a legacy hard
+`session_dial_errors=0` threshold and failed only because node A reported one
+session dial error during the 7204s run. Rechecking the same artifacts with the
+current production gate passed with `route_gso_session_error_budget=2`,
+`errors=[]`, stable before/after boot IDs, `log_findings=[]`,
+`kernel_log_rejected_artifacts=[]`, and `pstore_rejected_artifacts=[]`.
+
+| Gate family | Direction | Gate | Received | Sent | Duration | Iperf intervals |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `route_gso` | A to B | 2.5 Gbps | 2.829761 Gbps | 2.829801 Gbps | 3600.007591s | 3600 |
+| `route_gso` | B to A | 2.5 Gbps | 2.972184 Gbps | 2.972355 Gbps | 3600.209198s | 3600 |
+
+Both nodes kept `data_path.active_sessions=8`; node A had
+`session_dial_errors=1` and node B had `session_dial_errors=0`. Route-GSO
+module counters showed active outer-GSO and no covered route-GSO errors:
+
+| Node | Outer-GSO frames | Xmit packets | Covered helper errors |
+| --- | ---: | ---: | ---: |
+| A | 958100425 | 41155257 | 0 |
+| B | 1006432316 | 43427472 | 0 |
 
 <a id="2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates"></a>
 

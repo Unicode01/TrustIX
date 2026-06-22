@@ -19,7 +19,8 @@ full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8}"
 secure_kudp_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8}"
 secure_kudp_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1}"
 secure_kudp_direct_error_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET:-64}"
-secure_kudp_replay_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET:-4096}"
+secure_kudp_replay_seen_ratio_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET:-0.00002}"
+secure_kudp_drop_ratio_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_DROP_RATIO_BUDGET:-0.00002}"
 route_gso_min_sessions="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS:-8}"
 route_gso_session_error_budget="${TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2}"
 compat_min_sessions="${TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS:-1}"
@@ -339,7 +340,8 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_SESSIONS="$secure_kudp_min_sessions" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_CRYPTO_FLOWS="$secure_kudp_min_crypto_flows" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DIRECT_ERROR_BUDGET="$secure_kudp_direct_error_budget" \
-  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_REPLAY_BUDGET="$secure_kudp_replay_budget" \
+  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET="$secure_kudp_replay_seen_ratio_budget" \
+  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DROP_RATIO_BUDGET="$secure_kudp_drop_ratio_budget" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_SESSIONS="$route_gso_min_sessions" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_SESSION_ERROR_BUDGET="$route_gso_session_error_budget" \
   TRUSTIX_GATE_MANIFEST_COMPAT_MIN_SESSIONS="$compat_min_sessions" \
@@ -388,7 +390,8 @@ manifest = {
         "secure_kudp_min_sessions": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_SESSIONS"],
         "secure_kudp_min_crypto_flows": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_CRYPTO_FLOWS"],
         "secure_kudp_direct_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DIRECT_ERROR_BUDGET"],
-        "secure_kudp_replay_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_REPLAY_BUDGET"],
+        "secure_kudp_replay_seen_ratio_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET"],
+        "secure_kudp_drop_ratio_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DROP_RATIO_BUDGET"],
         "route_gso_min_sessions": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_SESSIONS"],
         "route_gso_session_error_budget": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_SESSION_ERROR_BUDGET"],
         "compat_min_sessions": env["TRUSTIX_GATE_MANIFEST_COMPAT_MIN_SESSIONS"],
@@ -472,7 +475,8 @@ main() {
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS "$secure_kudp_min_crypto_flows"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET "$secure_kudp_direct_error_budget"
-  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_BUDGET "$secure_kudp_replay_budget"
+  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET "$secure_kudp_replay_seen_ratio_budget"
+  validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_DROP_RATIO_BUDGET "$secure_kudp_drop_ratio_budget"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS "$route_gso_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS "$compat_min_sessions"
@@ -480,7 +484,8 @@ main() {
   secure_kudp_min_sessions="$(max_integer "$secure_kudp_min_sessions" "8")"
   secure_kudp_min_crypto_flows="$(max_integer "$secure_kudp_min_crypto_flows" "1")"
   secure_kudp_direct_error_budget="$(min_integer "$secure_kudp_direct_error_budget" "64")"
-  secure_kudp_replay_budget="$(min_integer "$secure_kudp_replay_budget" "4096")"
+  secure_kudp_replay_seen_ratio_budget="$(min_decimal "$secure_kudp_replay_seen_ratio_budget" "0.00002")"
+  secure_kudp_drop_ratio_budget="$(min_decimal "$secure_kudp_drop_ratio_budget" "0.00002")"
   route_gso_min_sessions="$(max_integer "$route_gso_min_sessions" "8")"
   route_gso_session_error_budget="$(min_integer "$route_gso_session_error_budget" "2")"
   compat_min_sessions="$(max_integer "$compat_min_sessions" "1")"
@@ -688,8 +693,11 @@ main() {
       --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_drops=0 \
       --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_header_errors=0 \
       --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors="${secure_kudp_direct_error_budget}" \
-      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_drops="${secure_kudp_replay_budget}" \
-      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_drops="${secure_kudp_replay_budget}" \
+      --require-datapath-min kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts=1 \
+      --require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_old_drops=0 \
+      --require-datapath-ratio-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_seen_drops/kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts="${secure_kudp_replay_seen_ratio_budget}" \
+      --require-datapath-ratio-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_drops/kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts="${secure_kudp_replay_seen_ratio_budget}" \
+      --require-datapath-ratio-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_drops/kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts="${secure_kudp_drop_ratio_budget}" \
       --require-module-param-min trustix_crypto.kfunc_simd_fastpath=1 \
       --require-module-param-min trustix_crypto.kfunc_simd_irq_fpu_fastpath=1 \
       --require-module-param-any-min trustix_crypto.direct_kfunc_seal_calls=1 \
