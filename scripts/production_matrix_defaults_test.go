@@ -241,8 +241,8 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 		}
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
+			KernelMatrix:       "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates",
 			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "userspace_tc":
@@ -251,8 +251,8 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 		}
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
+			KernelMatrix:       "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates",
 			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "tc_direct":
@@ -866,8 +866,8 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"secure_kudp":     "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
 		"route_gso":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
 		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-3600s-production-gate",
-		"userspace":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
-		"userspace_tc":    "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
+		"userspace":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates",
+		"userspace_tc":    "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates",
 	}
 	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
@@ -1126,8 +1126,8 @@ func TestCurrentDebianRouteGSOEvidenceCoversProductionGate(t *testing.T) {
 func TestCurrentDebianUserspaceEvidenceCoversProductionGates(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
-		wantKernelMatrix = "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates"
+		wantKernelMatrix = "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates"
 	)
 
 	evidenceByKey := map[string][]productionTransportEvidence{}
@@ -1185,8 +1185,8 @@ func TestCurrentDebianUserspaceEvidenceCoversProductionGates(t *testing.T) {
 func TestCurrentDebianUserspaceTCEvidenceCoversProductionGates(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
-		wantKernelMatrix = "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates"
+		wantKernelMatrix = "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates"
 	)
 
 	evidenceByKey := map[string][]productionTransportEvidence{}

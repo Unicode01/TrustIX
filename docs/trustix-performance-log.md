@@ -16,7 +16,7 @@ Current production-default evidence boundary:
 | Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian userspace and userspace-TC defaults | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
+| Debian userspace and userspace-TC defaults | manifest-backed 900s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
@@ -198,6 +198,59 @@ module counters showed active outer-GSO and no covered route-GSO errors:
 | --- | ---: | ---: | ---: |
 | A | 958100425 | 41155257 | 0 |
 | B | 1006432316 | 43427472 | 0 |
+
+<a id="2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates"></a>
+
+### Zaozhuang PVE userspace and userspace-TC current forward gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200 and 201
+only: VM200 `trustix-dd-userspace-a` (`10.203.3.200`) and VM201
+`trustix-dd-userspace-b` (`10.203.3.201`) on isolated `vmbr3`. VM100 and all
+1xx guests were not modified. Both guests ran Debian 13 kernel
+`6.12.69+deb13-amd64`.
+
+The release binary was built from commit `2c94c12`, build time
+`2026-06-22T14:53:59Z`, with Go `1.25.0`; both guests used binary SHA256
+`53a04d8335befc1b5ec906c99fa664821c1c58966f2a9f0945a6063eeaa3e335`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`7069a7ca3516000c4313612fe7a57320c19a4717e56be05e131b3724317232ce`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+This is the first userspace/userspace-TC evidence set after the production gate
+started requiring `run-timing.json` to contain `iperf_mode=forward` and
+`iperf_directions=both`.
+
+The run started on 2026-06-22 CST and completed on 2026-06-23 CST. All 17
+cross-host cases passed the selected production gate with matching binary
+identity, stable before/after boot IDs
+`c1973b6a-af0b-4994-9de9-226f8a3febbd` and
+`4213490d-4a90-4ff2-9b01-739354f71a64`, `errors=[]`,
+`log_findings=[]`, `kernel_log_rejected_artifacts=[]`,
+`pstore_rejected_artifacts=[]`, no loaded `trustix_*` kernel modules, LAN
+`tx_queue_len=1000`, and zero session dial or heartbeat errors.
+
+| Gate family | Transport | Encryption | Gate | Minimum received | Minimum duration |
+| --- | --- | --- | ---: | ---: | ---: |
+| userspace | UDP | secure | 1.5 Gbps | 2.002442 Gbps | 900.007786s |
+| userspace | UDP | plaintext | 1.5 Gbps | 2.392241 Gbps | 900.009725s |
+| userspace | TCP | secure | 0.75 Gbps | 0.918289 Gbps | 900.199618s |
+| userspace | TCP | plaintext | 1 Gbps | 1.385983 Gbps | 900.082514s |
+| userspace | QUIC | secure | 0.75 Gbps | 1.029901 Gbps | 900.192999s |
+| userspace | QUIC | plaintext | 1 Gbps | 1.486415 Gbps | 900.140078s |
+| userspace | WebSocket | secure | 0.5 Gbps | 0.859811 Gbps | 900.197122s |
+| userspace | WebSocket | plaintext | 1 Gbps | 1.248472 Gbps | 900.089256s |
+| userspace | HTTP CONNECT | secure | 0.75 Gbps | 0.904721 Gbps | 900.156658s |
+| userspace | HTTP CONNECT | plaintext | 1 Gbps | 1.411984 Gbps | 900.066250s |
+| userspace | experimental TCP | secure | 1 Gbps | 1.564874 Gbps | 900.088089s |
+| userspace-TC | GRE | secure | 1 Gbps | 1.466421 Gbps | 900.003502s |
+| userspace-TC | GRE | plaintext | 4 Gbps | 4.631023 Gbps | 900.003790s |
+| userspace-TC | IPIP | secure | 1 Gbps | 1.483775 Gbps | 900.005694s |
+| userspace-TC | IPIP | plaintext | 4 Gbps | 5.062255 Gbps | 900.002207s |
+| userspace-TC | VXLAN | secure | 1 Gbps | 1.465202 Gbps | 899.997128s |
+| userspace-TC | VXLAN | plaintext | 4 Gbps | 4.978103 Gbps | 899.997485s |
 
 <a id="2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates"></a>
 
