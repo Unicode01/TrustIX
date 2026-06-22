@@ -198,7 +198,7 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		ValidationScope: "cross_host",
 		GateFamily:      "owdeb_full_kmod",
 		MinGbps:         "3",
-		MinSeconds:      "900",
+		MinSeconds:      "3600",
 	})
 	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
 		Transport:       "experimental_tcp",

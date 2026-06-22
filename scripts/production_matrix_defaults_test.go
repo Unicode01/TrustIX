@@ -273,7 +273,7 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "openwrt24.10.7-debian13",
 			KernelMatrix:       "6.6.141_to_6.12.94+deb13-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-manifest-gate",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-3600s-production-gate",
 			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "secure_kudp":
@@ -392,7 +392,7 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:900",
 				"udp:plaintext:stable:userspace:userspace:cross_host:userspace:1.5:900",
 				"udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod:3:3600",
-				"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:900",
+				"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:3600",
 				"tcp:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
 				"tcp:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
 				"quic:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
@@ -865,7 +865,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"full_kmod":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-dd-full-kmod-3600s-production-gate",
 		"secure_kudp":     "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
 		"route_gso":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
-		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-manifest-gate",
+		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-3600s-production-gate",
 		"userspace":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
 		"userspace_tc":    "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates",
 	}
@@ -934,13 +934,15 @@ func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "openwrt24.10.7-debian13"
 		wantKernelMatrix = "6.6.141_to_6.12.94+deb13-cloud-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-3600s-production-gate"
 		minGbps          = 3.0
-		minSeconds       = 900
+		minSeconds       = 3600
 	)
 	for _, evidence := range loadProductionTransportEvidence(t) {
 		if evidence.GateFamily != "owdeb_full_kmod" ||
 			evidence.OSMatrix != wantOSMatrix ||
-			evidence.KernelMatrix != wantKernelMatrix {
+			evidence.KernelMatrix != wantKernelMatrix ||
+			evidence.Artifact != wantArtifact {
 			continue
 		}
 		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
@@ -1246,7 +1248,7 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:900",
 		"udp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"udp:plaintext:stable:userspace:userspace:cross_host:userspace:1.5:900",
-		"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:900",
+		"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:3600",
 		"tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 		"tcp:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
 		"tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",

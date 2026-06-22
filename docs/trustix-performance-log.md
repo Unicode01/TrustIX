@@ -17,10 +17,54 @@ Current production-default evidence boundary:
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
-| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 900s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
+| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-22
+
+<a id="2026-06-22-zaozhuang-pve-owdeb-full-kmod-3600s-production-gate"></a>
+
+### Zaozhuang PVE OpenWrt-Debian full-kmod 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM201 `trustix-owdeb-openwrt` (`10.203.3.201`) and VM200
+`trustix-owdeb-debian` (`10.203.3.200`) on isolated `vmbr3`. VM100 and all
+1xx guests were not modified. VM201 ran OpenWrt 24.10.7 kernel `6.6.141`;
+VM200 ran Debian 13 kernel `6.12.94+deb13-cloud-amd64`.
+
+The release binary was built from commit
+`1103f5e12678ee9dde9bc9e18c8b742b1f700247`, build time
+`2026-06-22T11:43:10Z`, with Go `1.25.0`; both guests used binary SHA256
+`a1eefc166881dab34db4cae5ce5374903f5b582f5c70a6af957d7d87aaea6b84`.
+The embedded assets SHA256 was
+`4e0476a6fb315983cfb57f4dcb2c221e18d720aee4c90fc8c6c783f6d434681e`.
+The OpenWrt SDK `trustix_datapath.ko` SHA256 was
+`005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce`;
+the Debian `trustix_datapath.ko` SHA256 was
+`1f0b30b3faafbd6a58fc980ad72ce17327ff79fcc27c37cd12fd57dac34d5635`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`b856e9871bb59d41d41726047b10966e323fc53243a8c5493d9bf37ba52020bb`; the
+verifier SHA256 was
+`ac2dfae346e7f92bfc32bf8b1e379849506c26b9155a61181c9523b5c3abd38b`.
+
+| Direction | Gate | Received | Sent | Duration |
+| --- | ---: | ---: | ---: | ---: |
+| OpenWrt to Debian | 3 Gbps | 3.555770 Gbps | 3.555754 Gbps | 3599.936529s |
+| Debian to OpenWrt | 3 Gbps | 5.069192 Gbps | 5.069378 Gbps | 3600.116183s |
+
+The manifest gate passed with stable boot IDs
+`a44b1159-4aa8-440e-abed-b387d95e6dee` and
+`9dc04b53-6935-46e7-b34a-29dada2fd0fc`, `errors=[]`,
+`log_findings=[]`, `kernel_log_rejected_artifacts=[]`, and pstore coverage on
+both nodes. Both nodes had `trustix_datapath` loaded, LAN `tx_queue_len=1000`,
+`enable_features=128`, `safe_features=128`, `unsafe_features=0`,
+`selftest_failures=0`, `rx_worker_inject=Y`, `tx_plaintext=Y`,
+`tx_plaintext_skip_inner_tcp_checksum=N`, and zero covered datapath allocation,
+delivery, GSO xmit, plaintext build, outer-GSO, queue drop, stale wire, and
+xmit errors.
 
 <a id="2026-06-22-zaozhuang-pve-dd-full-kmod-3600s-production-gate"></a>
 

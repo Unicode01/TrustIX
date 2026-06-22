@@ -6,7 +6,7 @@ udp	secure	stable	userspace	userspace	cross_host	userspace	1.5	900	selected encr
 udp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext UDP compatibility path
 udp	plaintext	stable	userspace	userspace	cross_host	userspace	1.5	900	selected plaintext UDP userspace compatibility path
 udp	plaintext	performance	kernel_module	userspace	cross_host	full_kmod	3	3600	selected UDP plaintext full-kmod datapath
-udp	plaintext	performance	kernel_module	userspace	cross_host	owdeb_full_kmod	3	900	selected OpenWrt-Debian UDP plaintext full-kmod datapath
+udp	plaintext	performance	kernel_module	userspace	cross_host	owdeb_full_kmod	3	3600	selected OpenWrt-Debian UDP plaintext full-kmod datapath
 tcp	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted TCP compatibility path
 tcp	secure	stable	userspace	userspace	cross_host	userspace	0.75	900	selected encrypted TCP userspace compatibility path
 tcp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext TCP compatibility path
