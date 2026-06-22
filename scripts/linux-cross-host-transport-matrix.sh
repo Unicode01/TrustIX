@@ -209,31 +209,37 @@ append_selected_gate_case() {
     userspace)
       append_case_token userspace_cases "${name}=${dir}"
       append_case_token userspace_case_min_gbps "${name}=${min_gbps}"
+      append_case_token userspace_case_min_seconds "${name}=${min_seconds}"
       appended=1
       ;;
     userspace_tc)
       append_case_token userspace_tc_cases "${name}=${dir}"
       append_case_token userspace_tc_case_min_gbps "${name}=${min_gbps}"
+      append_case_token userspace_tc_case_min_seconds "${name}=${min_seconds}"
       appended=1
       ;;
     tc_direct)
       append_case_token tc_direct_cases "${name}=${dir}"
       append_case_token tc_direct_case_min_gbps "${name}=${min_gbps}"
+      append_case_token tc_direct_case_min_seconds "${name}=${min_seconds}"
       appended=1
       ;;
     full_kmod)
       append_case_token full_kmod_cases "${name}=${dir}"
       append_case_token full_kmod_case_min_gbps "${name}=${min_gbps}"
+      append_case_token full_kmod_case_min_seconds "${name}=${min_seconds}"
       appended=1
       ;;
     secure_kudp)
       append_case_token secure_kudp_cases "${name}=${dir}"
       append_case_token secure_kudp_case_min_gbps "${name}=${min_gbps}"
+      append_case_token secure_kudp_case_min_seconds "${name}=${min_seconds}"
       appended=1
       ;;
     route_gso)
       append_case_token route_gso_cases "${name}=${dir}"
       append_case_token route_gso_case_min_gbps "${name}=${min_gbps}"
+      append_case_token route_gso_case_min_seconds "${name}=${min_seconds}"
       appended=1
       ;;
   esac
@@ -374,26 +380,32 @@ run_selected_gate() {
   if [[ -n "$userspace_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_CASES=${userspace_cases}")
     gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS=${userspace_case_min_gbps}")
+    gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_SECONDS=${userspace_case_min_seconds}")
   fi
   if [[ -n "$userspace_tc_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES=${userspace_tc_cases}")
     gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS=${userspace_tc_case_min_gbps}")
+    gate_env+=("TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_SECONDS=${userspace_tc_case_min_seconds}")
   fi
   if [[ -n "$tc_direct_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_TC_DIRECT_CASES=${tc_direct_cases}")
     gate_env+=("TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS=${tc_direct_case_min_gbps}")
+    gate_env+=("TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_SECONDS=${tc_direct_case_min_seconds}")
   fi
   if [[ -n "$full_kmod_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases}")
     gate_env+=("TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS=${full_kmod_case_min_gbps}")
+    gate_env+=("TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS=${full_kmod_case_min_seconds}")
   fi
   if [[ -n "$secure_kudp_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}")
     gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=${secure_kudp_case_min_gbps}")
+    gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS=${secure_kudp_case_min_seconds}")
   fi
   if [[ -n "$route_gso_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}")
     gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=${route_gso_case_min_gbps}")
+    gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS=${route_gso_case_min_seconds}")
   fi
   if [[ "$selected_gate_unmapped_case_count" -gt 0 ]]; then
     die "selected production gate cannot represent ${selected_gate_unmapped_case_count} cross-host case(s); use a production gate family in ${defaults_file} instead of custom cases"
@@ -403,9 +415,6 @@ run_selected_gate() {
       die "selected production gate has no mapped cross-host cases"
     fi
     return 0
-  fi
-  if [[ "$selected_gate_min_seconds" -gt 0 ]]; then
-    gate_env+=("TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS=${selected_gate_min_seconds}")
   fi
   gate_env+=("TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR=${selected_gate_summary_dir}")
   gate_env+=("TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP=${seconds_slop}")
@@ -521,6 +530,12 @@ tc_direct_case_min_gbps=""
 full_kmod_case_min_gbps=""
 secure_kudp_case_min_gbps=""
 route_gso_case_min_gbps=""
+userspace_case_min_seconds=""
+userspace_tc_case_min_seconds=""
+tc_direct_case_min_seconds=""
+full_kmod_case_min_seconds=""
+secure_kudp_case_min_seconds=""
+route_gso_case_min_seconds=""
 selected_gate_min_seconds=0
 selected_gate_case_count=0
 selected_gate_unmapped_case_count=0

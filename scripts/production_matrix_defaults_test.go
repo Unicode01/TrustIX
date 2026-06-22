@@ -391,7 +391,7 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 			for _, wantCase := range []string{
 				"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:900",
 				"udp:plaintext:stable:userspace:userspace:cross_host:userspace:1.5:900",
-				"udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod:3:900",
+				"udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod:3:3600",
 				"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:900",
 				"tcp:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
 				"tcp:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
@@ -404,9 +404,9 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:900",
 				"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:900",
 				"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:900",
-				"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:900",
-				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:900",
-				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:900",
+				"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
+				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
+				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 				"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:900",
 				"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
@@ -1276,12 +1276,12 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"vxlan:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
 		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:900",
 		"kernel_udp:plaintext:performance:tc_xdp:userspace:single_host:tc_direct:0:30",
-		"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:900",
-		"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:900",
+		"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
+		"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
 		"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:900",
 		"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
-		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:900",
+		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 	} {
 		if !strings.Contains(defaults, wantCase) {
 			t.Fatalf("production defaults missing %q", wantCase)
@@ -1523,7 +1523,11 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"validate_case_min_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS \"$full_kmod_case_min_gbps_raw\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS \"$secure_kudp_case_min_gbps_raw\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS \"$route_gso_case_min_gbps_raw\"",
+		"validate_case_seconds_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS \"$full_kmod_case_min_seconds_raw\"",
+		"validate_case_seconds_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS \"$secure_kudp_case_min_seconds_raw\"",
+		"validate_case_seconds_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS \"$route_gso_case_min_seconds_raw\"",
 		"case_min_gbps()",
+		"case_min_seconds()",
 		"case_policy_stat_args()",
 		"session_transport_for_matrix_transport()",
 		"session_endpoint_suffix_for_matrix_transport()",
@@ -1859,21 +1863,27 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_USERSPACE_CASES="+fastName+"="+fastDir+" "+slowName+"="+slowDir+" "+secureTLSName+"="+secureTLSDir,
 		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS="+fastName+"=1.5 "+slowName+"=0 "+secureTLSName+"=0",
+		"TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_SECONDS="+fastName+"=900 "+slowName+"=900 "+secureTLSName+"=900",
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES="+userspaceTCName+"="+userspaceTCDir,
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS="+userspaceTCName+"=0",
+		"TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_SECONDS="+userspaceTCName+"=900",
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASES=tc="+tcDirectDir,
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS=tc=0",
+		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_SECONDS=tc=3600",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=full="+fullKmodDir,
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS=full=0",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS=full=3600",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=secure="+secureKUDPDir,
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=secure=0",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS=secure=3600",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=route="+routeGSODir,
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=route=0",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS=route=3600",
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1895,8 +1905,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			SHA256 string `json:"sha256"`
 			Size   int    `json:"size"`
 		} `json:"verifier"`
-		Thresholds map[string]string `json:"thresholds"`
-		Cases      map[string]string `json:"cases"`
+		Thresholds     map[string]string `json:"thresholds"`
+		Cases          map[string]string `json:"cases"`
+		CaseMinSeconds map[string]string `json:"case_min_seconds"`
 	}
 	if err := json.Unmarshal(manifestPayload, &manifest); err != nil {
 		t.Fatalf("decode production gate manifest: %v\n%s", err, manifestPayload)
@@ -1939,6 +1950,18 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	} {
 		if !strings.Contains(manifest.Cases[key], wantSubstring) {
 			t.Fatalf("manifest cases[%s] missing %q:\n%s", key, wantSubstring, manifestPayload)
+		}
+	}
+	for key, wantSubstring := range map[string]string{
+		"userspace":    fastName + "=900",
+		"userspace_tc": userspaceTCName + "=900",
+		"tc_direct":    "tc=3600",
+		"full_kmod":    "full=3600",
+		"secure_kudp":  "secure=3600",
+		"route_gso":    "route=3600",
+	} {
+		if !strings.Contains(manifest.CaseMinSeconds[key], wantSubstring) {
+			t.Fatalf("manifest case_min_seconds[%s] missing %q:\n%s", key, wantSubstring, manifestPayload)
 		}
 	}
 	payload, err := os.ReadFile(calls)
@@ -2093,8 +2116,13 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		if gotMinGbps[name] != want {
 			t.Fatalf("case %s min_gbps got %q want %q; calls=%s", name, gotMinGbps[name], want, payload)
 		}
-		if gotMinSeconds[name] != "900" {
-			t.Fatalf("case %s min_seconds got %q want 900; calls=%s", name, gotMinSeconds[name], payload)
+		wantSeconds := "900"
+		switch name {
+		case "tc", "full", "secure", "route":
+			wantSeconds = "3600"
+		}
+		if gotMinSeconds[name] != wantSeconds {
+			t.Fatalf("case %s min_seconds got %q want %s; calls=%s", name, gotMinSeconds[name], wantSeconds, payload)
 		}
 		if gotMinIperfIntervals[name] != "600" {
 			t.Fatalf("case %s min iperf intervals got %q want 600; calls=%s", name, gotMinIperfIntervals[name], payload)
@@ -2327,6 +2355,7 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t1.5\t30\tselected UDP userspace gate",
 		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t0.75\t30\tselected TCP userspace gate",
 		"gre\tplaintext\tperformance\ttc_xdp\tuserspace\tcross_host\tuserspace_tc\t4\t30\tselected GRE userspace-TC gate",
+		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t3600\tselected route-GSO gate",
 		"",
 	}, "\n")), 0o644); err != nil {
 		t.Fatalf("write defaults: %v", err)
@@ -2351,7 +2380,11 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"  printf 'GATE_SUMMARY_DIR=%s\\n' \"${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-}\"",
 		"  printf 'USERSPACE_CASES=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASES\"",
 		"  printf 'USERSPACE_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_GBPS\"",
+		"  printf 'USERSPACE_CASE_MIN_SECONDS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_SECONDS\"",
 		"  printf 'USERSPACE_TC_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS\"",
+		"  printf 'USERSPACE_TC_CASE_MIN_SECONDS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_SECONDS\"",
+		"  printf 'ROUTE_GSO_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS\"",
+		"  printf 'ROUTE_GSO_CASE_MIN_SECONDS=%s\\n' \"$TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS\"",
 		"} > \"$TRUSTIX_CAPTURE\"",
 		"",
 	}, "\n")), 0o755); err != nil {
@@ -2385,16 +2418,24 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 	}
 	text := string(payload)
 	for _, want := range []string{
-		"GATE_MIN_SECONDS=30",
+		"GATE_MIN_SECONDS=",
 		"GATE_SECONDS_SLOP=1",
 		"GATE_SUMMARY_DIR=" + slashPath(filepath.Join(matrixWorkdir, "selected-production-gate")),
 		"udp-secure-stable-userspace-userspace=1.5",
 		"tcp-secure-stable-userspace-userspace=0.75",
+		"udp-secure-stable-userspace-userspace=30",
+		"tcp-secure-stable-userspace-userspace=30",
 		"gre-plaintext-performance-tc_xdp-userspace=4",
+		"gre-plaintext-performance-tc_xdp-userspace=30",
+		"experimental_tcp-plaintext-performance-kernel_module-userspace=2.5",
+		"experimental_tcp-plaintext-performance-kernel_module-userspace=3600",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("selected gate capture missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "GATE_MIN_SECONDS=3600") || strings.Contains(text, "GATE_MIN_SECONDS=30") {
+		t.Fatalf("selected gate should pass per-case min seconds instead of a global max:\n%s", text)
 	}
 }
 
@@ -2558,6 +2599,9 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"append_case_token full_kmod_case_min_gbps",
 		"append_case_token secure_kudp_case_min_gbps",
 		"append_case_token route_gso_case_min_gbps",
+		"append_case_token full_kmod_case_min_seconds",
+		"append_case_token secure_kudp_case_min_seconds",
+		"append_case_token route_gso_case_min_seconds",
 		"full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\\n'",
 		"secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\\n'",
 		"route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\\n'",
@@ -2587,10 +2631,13 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS=${tc_direct_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases}",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS=${full_kmod_case_min_gbps}",
+		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS=${full_kmod_case_min_seconds}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=${secure_kudp_case_min_gbps}",
+		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS=${secure_kudp_case_min_seconds}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=${route_gso_case_min_gbps}",
+		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS=${route_gso_case_min_seconds}",
 		"TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR=${selected_gate_summary_dir}",
 		"emit_selected_gate_evidence",
 		"production evidence output requires at least one selected production gate case",

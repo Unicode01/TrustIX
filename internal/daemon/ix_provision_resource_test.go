@@ -187,7 +187,7 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		ValidationScope: "cross_host",
 		GateFamily:      "full_kmod",
 		MinGbps:         "3",
-		MinSeconds:      "900",
+		MinSeconds:      "3600",
 	})
 	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
 		Transport:       "udp",
@@ -209,7 +209,7 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		ValidationScope: "cross_host",
 		GateFamily:      "route_gso",
 		MinGbps:         "2.5",
-		MinSeconds:      "900",
+		MinSeconds:      "3600",
 	})
 
 	securePerformance, err := ixProvisionDefaultsForProfile("performance")
@@ -233,7 +233,7 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		ValidationScope: "cross_host",
 		GateFamily:      "secure_kudp",
 		MinGbps:         "1.5",
-		MinSeconds:      "900",
+		MinSeconds:      "3600",
 	})
 }
 
