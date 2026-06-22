@@ -46,11 +46,12 @@ now install for kernel module builds when dependency installation is enabled.
 
 ## Current validation snapshot
 
-The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20, and
-2026-06-21 against current source and selected production transport defaults.
-They covered Debian 13 `6.12.90+deb13.1-amd64`, OpenWrt 23.05.5 x86_64
-`5.15.167`, OpenWrt 24.10.2 x86_64 `6.6.93`, and OpenWrt 24.10.7 x86_64
-`6.6.141` guests with disposable PVE VM IDs 200+.
+The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
+2026-06-21, and 2026-06-22 against current source and selected production
+transport defaults. They covered Debian 13 `6.12.90+deb13.1-amd64`,
+Debian 13 `6.12.94+deb13-cloud-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
+OpenWrt 24.10.2 x86_64 `6.6.93`, and OpenWrt 24.10.7 x86_64 `6.6.141`
+guests with disposable PVE VM IDs 200+.
 The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
 the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
 OpenWrt 24.10.7 x86_64 has since passed an SDK module build and a 900s
@@ -115,6 +116,17 @@ RX worker were active on both peers, plaintext outer-GSO, cached destination
 MAC, and RX-worker GSO xmit counters were nonzero, covered RX/TX/module error
 counters were zero, and the production verifier reported no kernel log crash
 findings.
+
+A 2026-06-22 current-head Debian-to-Debian full-kmod long recheck on
+`6.12.94+deb13-cloud-amd64` passed a stricter 3600s-per-direction production
+gate. It used commit `24c7e17fc582`, minimum received throughput was
+3.533778 Gbps against the 3 Gbps gate, both peers kept stable boot IDs, pstore
+and kernel log scans were clean, the full plaintext datapath provider and RX
+worker were active on both peers, and covered RX/TX/module error counters were
+zero. A separate simultaneous bidirectional 3600s diagnostic on the same guests
+also stayed stable with clean logs and zero covered module errors, but was not
+promoted as throughput evidence because it reached 2.028861 Gbps minimum
+received throughput, below the 3 Gbps production gate.
 
 A 2026-06-21 current-head Debian-to-Debian TC-direct recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit

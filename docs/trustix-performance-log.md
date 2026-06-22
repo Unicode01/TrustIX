@@ -13,12 +13,64 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| Debian `full_kmod`, `tc_direct`, `secure_kudp`, `route_gso` | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
+| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
+| Debian `tc_direct`, `secure_kudp`, `route_gso` | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian userspace and userspace-TC defaults | manifest-backed 900s PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 900s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-22
+
+<a id="2026-06-22-zaozhuang-pve-dd-full-kmod-3600s-production-gate"></a>
+
+### Zaozhuang PVE Debian full-kmod 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-long-full-a` (`10.203.3.200`) and VM201
+`trustix-long-full-b` (`10.203.3.201`) on isolated `vmbr3`. VM100 and all
+1xx guests were not modified. Both guests ran Debian 13 kernel
+`6.12.94+deb13-cloud-amd64`.
+
+The release binary was built from commit `24c7e17fc582`, build time
+`2026-06-22T02:17:48Z`, with Go `1.25.0`; both guests used binary SHA256
+`befa7bca1be05e5f47635eff1a1fe96a4db8627d8394095af6e04f3fd829dd7d`.
+The embedded assets SHA256 was
+`dbfb9d5578d54b131f6d71a2e149041e8b8fa7347e7776a33c5e88bf1bf17068`.
+The embedded `trustix_datapath.ko` SHA256 was
+`b1d4194a7892d1a786c7674177b78b525c1efc980e6c5f0f1387aff10fd25c60`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`520750ae5e500023963c5b660f2f061343972afddf2dba85d116f3f6f6c1d876`; the
+verifier SHA256 was
+`4c5aef66c564b3e149d1cd454ccc72e64fcf21f98b72d88ef8703252d7ead796`.
+
+| Direction | Gate | Received | Sent | Duration | Iperf intervals |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A to B | 3 Gbps | 3.614027 Gbps | 3.614081 Gbps | 3600.025912s | 3600 |
+| B to A | 3 Gbps | 3.533778 Gbps | 3.533832 Gbps | 3600.021830s | 3600 |
+
+The manifest gate passed with `errors=[]`, stable boot IDs
+`e56ff869-02e8-4a21-bd39-b41ee788c236` and
+`f9d25564-fc55-48a3-a591-880733c9bc58`, `log_findings=[]`,
+`kernel_log_rejected_artifacts=[]`, and `pstore_rejected_artifacts=[]`.
+Both peers had `trustix_datapath` loaded with LAN `tx_queue_len=1000`,
+`enable_features=128`, `safe_features=128`, `unsafe_features=0`,
+`selftest_failures=0`, `rx_worker_inject=Y`, `tx_plaintext=Y`,
+`tx_plaintext_skip_inner_tcp_checksum=N`, eight session records and wire
+records, nonzero RX-worker and plaintext outer-GSO counters, and zero covered
+allocation, delivery, GSO xmit, plaintext build, stale wire, queue drop, and
+xmit errors.
+
+A stricter simultaneous bidirectional diagnostic run on the same guests also
+ran for 3600s with P8 full-kmod plaintext and did not produce a reboot, panic,
+pstore record, kernel-log rejection, or covered module error. It was not
+promoted as production throughput evidence because the simultaneous bidir
+minimum was 2.028861 Gbps received and 2.028903 Gbps sent, below the current
+3 Gbps full-kmod production gate. A short P4 simultaneous bidir probe produced
+the same stability result and about 2.31 Gbps per direction. The production
+default therefore remains the sequential per-direction gate above.
 
 <a id="2026-06-22-zaozhuang-pve-userspace-userspace-tc-manifest-gates"></a>
 

@@ -265,8 +265,8 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 	case "full_kmod":
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+			KernelMatrix:       "6.12.94+deb13-cloud-amd64_to_6.12.94+deb13-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-dd-full-kmod-3600s-production-gate",
 			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "owdeb_full_kmod":
@@ -862,7 +862,7 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":       "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
-		"full_kmod":       "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
+		"full_kmod":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-dd-full-kmod-3600s-production-gate",
 		"secure_kudp":     "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
 		"route_gso":       "docs/trustix-performance-log.md#2026-06-21-zaozhuang-pve-dd-kernel-manifest-gates",
 		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-manifest-gate",
@@ -997,10 +997,10 @@ func TestOpenWrtRouteGSOFamiliesHaveFailClosedRuntimeEvidence(t *testing.T) {
 func TestCurrentDebianFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
-		wantKernelMatrix = "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#debian-full-kmod-current-head-production-recheck"
+		wantKernelMatrix = "6.12.94+deb13-cloud-amd64_to_6.12.94+deb13-cloud-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-dd-full-kmod-3600s-production-gate"
 		minGbps          = 3.0
-		minSeconds       = 900
+		minSeconds       = 3600
 	)
 	for _, evidence := range loadProductionTransportEvidence(t) {
 		if evidence.GateFamily != "full_kmod" ||
@@ -1016,6 +1016,9 @@ func TestCurrentDebianFullKmodEvidenceCoversProductionGate(t *testing.T) {
 		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
 		if err != nil {
 			t.Fatalf("invalid Debian full-kmod evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+		}
+		if evidence.GateManifestSchema != productionGateManifestSchema {
+			t.Fatalf("current Debian full-kmod evidence must be manifest-backed: %+v", evidence)
 		}
 		if evidence.Result == "pass" && evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
 			return
