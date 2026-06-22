@@ -120,6 +120,13 @@ def parse_args() -> argparse.Namespace:
         help="require run-timing.json showing the measured long-test wall-clock window",
     )
     parser.add_argument(
+        "--require-run-timing-stat",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="require every run-timing.json artifact to contain KEY equal to VALUE; may be repeated",
+    )
+    parser.add_argument(
         "--require-iperf-pair-directions",
         action="store_true",
         help="require usable iperf artifacts covering both a-to-b and b-to-a traffic pairs",
@@ -583,6 +590,7 @@ def run_timing_artifacts(
     required: bool,
     min_seconds: float,
     seconds_slop: float,
+    required_stats: list[tuple[str, str]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     artifacts: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -604,6 +612,10 @@ def run_timing_artifacts(
         artifacts.append(row)
         if not required:
             continue
+        for key, want in required_stats:
+            got = payload.get(key)
+            if str(got) != want:
+                errors.append(f"{rel}: run timing {key}={got!r}, want {want!r}")
         try:
             start_epoch = numeric_value(payload.get("start_epoch"))
             end_epoch = numeric_value(payload.get("end_epoch"))
@@ -1886,6 +1898,7 @@ def validate_case(
     min_iperf_intervals: int,
     min_iperf_interval_gbps_ratio: float,
     require_run_timing: bool,
+    required_run_timing_stats: list[tuple[str, str]],
     require_iperf_pair_directions: bool,
     require_result_marker: bool,
     log_scan: bool,
@@ -1948,9 +1961,10 @@ def validate_case(
         errors.append(f"missing or non-pass result marker: {marker_values!r}")
     run_timing, run_timing_errors = run_timing_artifacts(
         case.path,
-        required=require_run_timing,
+        required=require_run_timing or bool(required_run_timing_stats),
         min_seconds=min_seconds,
         seconds_slop=seconds_slop,
+        required_stats=required_run_timing_stats,
     )
     errors.extend(run_timing_errors)
 
@@ -2425,6 +2439,10 @@ def main() -> int:
             min_iperf_intervals=args.min_iperf_intervals,
             min_iperf_interval_gbps_ratio=args.min_iperf_interval_gbps_ratio,
             require_run_timing=args.require_run_timing,
+            required_run_timing_stats=parse_required_datapath_stats(
+                args.require_run_timing_stat,
+                "--require-run-timing-stat",
+            ),
             require_iperf_pair_directions=args.require_iperf_pair_directions,
             require_result_marker=not args.no_result_marker,
             log_scan=not args.no_log_scan,

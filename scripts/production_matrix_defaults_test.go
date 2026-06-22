@@ -1562,6 +1562,8 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--min-iperf-intervals \"$min_iperf_intervals\"",
 		"--min-iperf-interval-gbps-ratio \"$min_interval_gbps_ratio\"",
 		"--require-run-timing",
+		"--require-run-timing-stat iperf_mode=forward",
+		"--require-run-timing-stat iperf_directions=both",
 		"--require-binary-identity",
 		"--require-stable-boot-id",
 		"--require-uname-artifacts",
@@ -2203,6 +2205,10 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 			}
 		}
 		t.Fatalf("case %s missing %s; calls=%s", caseName, value, payload)
+	}
+	for _, name := range []string{fastName, slowName, userspaceTCName, "tc", "full", "secure", "route"} {
+		requireArgPair(name, "--require-run-timing-stat", "iperf_mode=forward")
+		requireArgPair(name, "--require-run-timing-stat", "iperf_directions=both")
 	}
 	requireTrafficArgs := func(caseName string) {
 		t.Helper()

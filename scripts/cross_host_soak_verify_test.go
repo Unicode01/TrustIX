@@ -330,6 +330,40 @@ func TestCrossHostSoakVerifyRejectsShortRequestedRunTiming(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyChecksRequiredRunTimingStats(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeRunTimingWithStats(t, dir, 1000, 1121, 120, map[string]any{
+		"iperf_mode":       "bidir",
+		"iperf_directions": "a2b",
+	})
+
+	cmd := exec.Command(
+		python,
+		"linux-cross-host-soak-verify.py",
+		"--min-gbps", "4",
+		"--min-seconds", "120",
+		"--require-run-timing-stat", "iperf_mode=forward",
+		"--require-run-timing-stat", "iperf_directions=both",
+		dir,
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted wrong run timing stats:\n%s", output)
+	}
+	if !strings.Contains(string(output), "run timing iperf_mode='bidir', want 'forward'") ||
+		!strings.Contains(string(output), "run timing iperf_directions='a2b', want 'both'") {
+		t.Fatalf("verify output did not report run timing stat mismatch:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyRejectsSlowArtifacts(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -2151,6 +2185,11 @@ func writeResultMarker(t *testing.T, dir string) {
 
 func writeRunTiming(t *testing.T, dir string, startEpoch, endEpoch, requestedSeconds int) {
 	t.Helper()
+	writeRunTimingWithStats(t, dir, startEpoch, endEpoch, requestedSeconds, nil)
+}
+
+func writeRunTimingWithStats(t *testing.T, dir string, startEpoch, endEpoch, requestedSeconds int, extra map[string]any) {
+	t.Helper()
 	payload := map[string]any{
 		"case":                    "case",
 		"iperf_seconds_requested": requestedSeconds,
@@ -2159,6 +2198,9 @@ func writeRunTiming(t *testing.T, dir string, startEpoch, endEpoch, requestedSec
 		"elapsed_seconds":         endEpoch - startEpoch,
 		"start_time":              "2026-06-21T00:00:00Z",
 		"end_time":                "2026-06-21T00:15:00Z",
+	}
+	for key, value := range extra {
+		payload[key] = value
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
