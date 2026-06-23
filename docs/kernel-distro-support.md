@@ -47,14 +47,14 @@ now install for kernel module builds when dependency installation is enabled.
 ## Current validation snapshot
 
 The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
-2026-06-21, and 2026-06-22 against current source and selected production
+2026-06-21, 2026-06-22, and 2026-06-23 against current source and selected production
 transport defaults. They covered Debian 13 `6.12.90+deb13.1-amd64`,
-Debian 13 `6.12.94+deb13-cloud-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
+Debian 13 `6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
 OpenWrt 24.10.2 x86_64 `6.6.93`, and OpenWrt 24.10.7 x86_64 `6.6.141`
 guests with disposable PVE VM IDs 200+.
 The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
 the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
-OpenWrt 24.10.7 x86_64 has since passed an SDK module build and a 900s
+OpenWrt 24.10.7 x86_64 has since passed an SDK module build and a 3600s
 OpenWrt-to-Debian full-kmod production gate. OpenWrt 24.10.7 route-GSO and
 secure-kUDP route-GSO both failed closed at the runtime capability gate because
 the tested image did not expose usable route-TCP kfunc capability.
@@ -127,6 +127,13 @@ zero. A separate simultaneous bidirectional 3600s diagnostic on the same guests
 also stayed stable with clean logs and zero covered module errors, but was not
 promoted as throughput evidence because it reached 2.028861 Gbps minimum
 received throughput, below the 3 Gbps production gate.
+
+A 2026-06-23 current-head Debian-to-Debian full-kmod recheck on
+`6.12.94+deb13-amd64` passed the same 3600s-per-direction production gate. It
+used commit `1a72df194383d74fef5b03f68878f72734addb39`, minimum received
+throughput was 3.445860 Gbps against the 3 Gbps gate, both peers kept stable
+boot IDs, pstore and kernel log scans were clean, and covered datapath error
+counters were zero.
 
 A 2026-06-21 current-head Debian-to-Debian TC-direct recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
@@ -225,6 +232,17 @@ no `/sys/kernel/btf/vmlinux`, and both secure-kUDP route-GSO and experimental
 TCP route-GSO failed closed before traffic with missing `route_tcp_kfunc` and
 `route_tcp_xmit_kfunc`. The selected OpenWrt production kernel path therefore
 remains UDP plaintext full-kmod with exact-version runtime evidence.
+
+A 2026-06-23 current-head OpenWrt 24.10.7-to-Debian full-kmod recheck paired
+OpenWrt kernel `6.6.141` with Debian 13 `6.12.94+deb13-amd64` and passed the
+3600s-per-direction production gate. It used commit
+`1a72df194383d74fef5b03f68878f72734addb39`, minimum received throughput was
+3.507421 Gbps against the 3 Gbps gate, before/after boot IDs stayed stable,
+pstore and kernel log scans were clean, and covered datapath error counters
+were zero. A concurrent direct underlay probe while full-kmod was loaded reached
+3.752 Gbps from OpenWrt to Debian. OpenWrt route-GSO and secure-kUDP route-GSO
+remain unselected because the tested OpenWrt kernel still lacks usable
+route-TCP kfunc capability.
 
 OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 

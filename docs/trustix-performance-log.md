@@ -13,12 +13,51 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
+| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-amd64` at commit `1a72df194383d74fef5b03f68878f72734addb39` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 900s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
-| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
+| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-amd64` at commit `1a72df194383d74fef5b03f68878f72734addb39` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-06-23
+
+<a id="2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates"></a>
+
+### Zaozhuang PVE current-head full-kmod 3600s production gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only.
+VM100 and all 1xx guests were not modified. The run used commit
+`1a72df194383d74fef5b03f68878f72734addb39`.
+
+Debian-to-Debian full-kmod used VM200 and VM201 with Debian 13 kernel
+`6.12.94+deb13-amd64`. OpenWrt-to-Debian full-kmod used VM202 OpenWrt
+24.10.7 kernel `6.6.141` and VM200 Debian 13 kernel
+`6.12.94+deb13-amd64`. The OpenWrt module was built with the matching
+OpenWrt SDK; `trustix_datapath.ko` SHA256 was
+`005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce`.
+
+The selected production gates used
+`trustix-cross-host-production-gate-manifest-v1` identity. For the current
+HEAD, `scripts/linux-cross-host-production-gate.sh` SHA256 was
+`7069a7ca3516000c4313612fe7a57320c19a4717e56be05e131b3724317232ce`; verifier
+`scripts/linux-cross-host-soak-verify.py` SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+| Gate family | Direction | Gate | Received |
+| --- | --- | ---: | ---: |
+| `full_kmod` | Debian A to Debian B | 3 Gbps | 3.445860 Gbps |
+| `full_kmod` | Debian B to Debian A | 3 Gbps | 3.554549 Gbps |
+| `owdeb_full_kmod` | OpenWrt to Debian | 3 Gbps | 3.507421 Gbps |
+| `owdeb_full_kmod` | Debian to OpenWrt | 3 Gbps | 5.127633 Gbps |
+
+Both production gates ran 3600s per direction and passed. Before/after boot
+IDs stayed stable, pstore and kernel log scans were clean, and covered
+datapath error counters were zero. A concurrent underlay probe during the
+OpenWrt full-kmod run reached 3.752 Gbps from OpenWrt to Debian, confirming
+that the loaded full plaintext module did not block normal underlay traffic in
+that test environment. After verification, the disposable VMs, isolated
+`vmbr3`, NAT/FORWARD rules, and runroot were removed.
 
 ## 2026-06-22
 
