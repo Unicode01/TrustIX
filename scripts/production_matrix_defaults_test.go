@@ -1820,6 +1820,79 @@ func TestCurrentDebianUserspaceTCEvidenceCoversProductionGates(t *testing.T) {
 	}
 }
 
+func TestProductionDefaultsDoNotPromotePlainExperimentalTCPUserspaceWithoutStrictEvidence(t *testing.T) {
+	const (
+		minGbps    = 1.0
+		minSeconds = 3600
+	)
+
+	hasStrictEvidence := false
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		if evidence.Transport != "experimental_tcp" ||
+			evidence.Encryption != "plaintext" ||
+			evidence.Profile != "stable" ||
+			evidence.Datapath != "userspace" ||
+			evidence.CryptoPlacement != "userspace" ||
+			evidence.ValidationScope != "cross_host" ||
+			evidence.GateFamily != "userspace" ||
+			evidence.Result != "pass" ||
+			evidence.GateManifestSchema != productionGateManifestSchema {
+			continue
+		}
+		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid plaintext experimental_tcp userspace evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+		}
+		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid plaintext experimental_tcp userspace evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+		}
+		if evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
+			hasStrictEvidence = true
+			break
+		}
+	}
+
+	var sawBaseline, sawRouteGSO bool
+	for _, row := range loadProductionTransportDefaults(t) {
+		if row.Transport != "experimental_tcp" || row.Encryption != "plaintext" {
+			continue
+		}
+		if row.Profile == "stable" &&
+			row.Datapath == "userspace" &&
+			row.CryptoPlacement == "userspace" &&
+			row.ValidationScope == "single_host" &&
+			row.GateFamily == "userspace" &&
+			row.MinGbps == "0" &&
+			row.MinSeconds == "30" {
+			sawBaseline = true
+		}
+		if row.Profile == "performance" &&
+			row.Datapath == "kernel_module" &&
+			row.CryptoPlacement == "userspace" &&
+			row.ValidationScope == "cross_host" &&
+			row.GateFamily == "route_gso" &&
+			row.MinGbps == "2.5" &&
+			row.MinSeconds == "3600" {
+			sawRouteGSO = true
+		}
+		if row.Profile == "stable" &&
+			row.Datapath == "userspace" &&
+			row.CryptoPlacement == "userspace" &&
+			row.ValidationScope == "cross_host" &&
+			row.GateFamily == "userspace" &&
+			!hasStrictEvidence {
+			t.Fatalf("plaintext experimental_tcp userspace cross-host default requires fresh strict 3600s manifest evidence: %+v", row)
+		}
+	}
+	if !sawBaseline {
+		t.Fatal("plaintext experimental_tcp userspace single-host baseline default disappeared")
+	}
+	if !sawRouteGSO {
+		t.Fatal("plaintext experimental_tcp cross-host production default should stay on the selected route-GSO gate")
+	}
+}
+
 func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing.T) {
 	defaults := readProductionTransportDefaults(t)
 	for _, wantCase := range []string{
