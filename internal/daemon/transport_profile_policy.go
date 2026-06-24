@@ -140,6 +140,9 @@ func transportProfileFeatures(rawTransport string, profile config.EndpointProfil
 		}
 	case transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
 		add("native_tunnel")
+		if profile.Datapath != "" && profile.Datapath != config.TransportDatapathUserspace {
+			add("tc_xdp", "tunnel_tc_offload")
+		}
 	}
 	add(profile.Features...)
 	return normalizeEndpointProfileFeatures(features)
@@ -187,6 +190,13 @@ func endpointTransportProfileFeaturesForCompatibility(rawTransport string, profi
 }
 
 func requiredTransportProfileFeatures(rawTransport string, profile config.EndpointProfileConfig) []string {
+	protocol := transport.Protocol(strings.ToLower(strings.TrimSpace(rawTransport)))
+	switch protocol {
+	case transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
+		if profile.Datapath != "" && profile.Datapath != config.TransportDatapathUserspace {
+			return []string{"native_tunnel", "tc_xdp", "tunnel_tc_offload"}
+		}
+	}
 	if profile.Profile != config.TransportProfilePerformance {
 		return nil
 	}
@@ -195,7 +205,8 @@ func requiredTransportProfileFeatures(rawTransport string, profile config.Endpoi
 	for _, feature := range features {
 		switch feature {
 		case "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "large_frame_rx", "gso_rx", "gro_rx",
-			"secure_tx_direct", "secure_rx_direct", "secure_kfunc_seal", "secure_trust_inner_checksum":
+			"secure_tx_direct", "secure_rx_direct", "secure_kfunc_seal", "secure_trust_inner_checksum",
+			"native_tunnel", "tunnel_tc_offload":
 			required = append(required, feature)
 		}
 	}

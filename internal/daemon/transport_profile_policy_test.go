@@ -129,6 +129,27 @@ func TestTransportProfileFeaturesAdvertiseSafeExperimentalTCPPerformance(t *test
 	}
 }
 
+func TestTransportProfileFeaturesAdvertiseNativeTunnelTCOffload(t *testing.T) {
+	for _, protocol := range []transport.Protocol{
+		transport.ProtocolGRE,
+		transport.ProtocolIPIP,
+		transport.ProtocolVXLAN,
+	} {
+		t.Run(string(protocol), func(t *testing.T) {
+			features := transportProfileFeatures(string(protocol), config.EndpointProfileConfig{
+				Profile:    config.TransportProfileStable,
+				Datapath:   config.TransportDatapathTCXDP,
+				Encryption: "secure",
+			})
+			for _, feature := range []string{"native_tunnel", "tc_xdp", "tunnel_tc_offload"} {
+				if !stringListContains(features, feature) {
+					t.Fatalf("TC tunnel features = %#v, want %q", features, feature)
+				}
+			}
+		})
+	}
+}
+
 func TestEndpointTransportProfileCompatibleRequiresSecureKernelUDPDirectFeatures(t *testing.T) {
 	daemon := &Daemon{
 		desired: config.Desired{
@@ -155,5 +176,33 @@ func TestEndpointTransportProfileCompatibleRequiresSecureKernelUDPDirectFeatures
 
 	if daemon.endpointTransportProfileCompatible(endpoint) {
 		t.Fatal("secure kernel UDP performance endpoint without secure direct features should be incompatible")
+	}
+}
+
+func TestEndpointTransportProfileCompatibleRequiresNativeTunnelTCOffload(t *testing.T) {
+	daemon := &Daemon{
+		desired: config.Desired{
+			TransportPolicy: config.TransportPolicyConfig{
+				Profiles: []config.TransportProfileConfig{{
+					Transport:  string(transport.ProtocolGRE),
+					Profile:    config.TransportProfileStable,
+					Datapath:   config.TransportDatapathTCXDP,
+					Encryption: "secure",
+				}},
+			},
+		},
+	}
+	endpoint := config.EndpointConfig{
+		Transport: string(transport.ProtocolGRE),
+		Profile: config.EndpointProfileConfig{
+			Version:  transportProfileMetadataVersion,
+			Profile:  config.TransportProfileStable,
+			Datapath: config.TransportDatapathUserspace,
+			Features: []string{"native_tunnel"},
+		},
+	}
+
+	if daemon.endpointTransportProfileCompatible(endpoint) {
+		t.Fatal("TC tunnel endpoint without TC offload features should be incompatible")
 	}
 }
