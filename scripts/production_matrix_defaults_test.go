@@ -940,6 +940,193 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 	}
 }
 
+func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testing.T) {
+	python := requirePython3(t)
+	tests := []struct {
+		name      string
+		matrixRow map[string]any
+		want      []string
+	}{
+		{
+			name: "secure_kudp_wrong_transport",
+			matrixRow: map[string]any{
+				"status":           "pass",
+				"case":             "tcp-secure-performance-tc_xdp-kernel",
+				"runner_case":      "secure-kudp",
+				"transport":        "tcp",
+				"encryption":       "secure",
+				"profile":          "performance",
+				"datapath":         "tc_xdp",
+				"crypto_placement": "kernel",
+				"validation_scope": "cross_host",
+				"gate_family":      "secure_kudp",
+				"min_gbps":         1.5,
+				"min_seconds":      3600,
+			},
+			want: []string{
+				"gate_family=secure_kudp",
+				"requires transport='kernel_udp'",
+				"got 'tcp'",
+			},
+		},
+		{
+			name: "route_gso_wrong_runner",
+			matrixRow: map[string]any{
+				"status":           "pass",
+				"case":             "experimental_tcp-plaintext-performance-kernel_module-userspace",
+				"runner_case":      "userspace-tcp-plaintext",
+				"transport":        "experimental_tcp",
+				"encryption":       "plaintext",
+				"profile":          "performance",
+				"datapath":         "kernel_module",
+				"crypto_placement": "userspace",
+				"validation_scope": "cross_host",
+				"gate_family":      "route_gso",
+				"min_gbps":         2.5,
+				"min_seconds":      3600,
+			},
+			want: []string{
+				"gate_family=route_gso",
+				"requires runner_case='dd-routegso'",
+				"got 'userspace-tcp-plaintext'",
+			},
+		},
+		{
+			name: "owdeb_route_gso_missing_case_suffix",
+			matrixRow: map[string]any{
+				"status":           "pass",
+				"case":             "experimental_tcp-plaintext-performance-kernel_module-userspace",
+				"runner_case":      "owdeb-routegso",
+				"transport":        "experimental_tcp",
+				"encryption":       "plaintext",
+				"profile":          "performance",
+				"datapath":         "kernel_module",
+				"crypto_placement": "userspace",
+				"validation_scope": "cross_host",
+				"gate_family":      "owdeb_route_gso",
+				"min_gbps":         2.5,
+				"min_seconds":      3600,
+			},
+			want: []string{
+				"gate_family=owdeb_route_gso",
+				"requires case='experimental_tcp-plaintext-performance-kernel_module-userspace-owdeb'",
+				"got 'experimental_tcp-plaintext-performance-kernel_module-userspace'",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workdir := t.TempDir()
+			matrixSummary := filepath.Join(workdir, "summary.jsonl")
+			gateSummaryDir := filepath.Join(workdir, "selected-production-gate")
+			if err := os.MkdirAll(gateSummaryDir, 0o755); err != nil {
+				t.Fatalf("create gate summary dir: %v", err)
+			}
+			matrixPayload, err := json.Marshal(tt.matrixRow)
+			if err != nil {
+				t.Fatalf("marshal matrix row: %v", err)
+			}
+			if err := os.WriteFile(matrixSummary, append(matrixPayload, '\n'), 0o644); err != nil {
+				t.Fatalf("write matrix summary: %v", err)
+			}
+			caseName, _ := tt.matrixRow["case"].(string)
+			gateRow := map[string]any{
+				"case":                       caseName,
+				"status":                     "pass",
+				"min_gbps_required":          1.5,
+				"min_seconds_required":       3600,
+				"min_sent_gbps":              1.9,
+				"min_received_gbps":          1.8,
+				"min_required_received_gbps": 1.7,
+				"min_seconds":                3600.1,
+				"seconds_slop":               0,
+				"run_timing": []map[string]any{
+					{
+						"source":                  "run-timing.json",
+						"iperf_mode":              "forward",
+						"iperf_directions":        "both",
+						"iperf_seconds_requested": 3600,
+						"start_epoch":             1000,
+						"end_epoch":               4600.1,
+						"elapsed_seconds":         3600.1,
+					},
+				},
+				"uname_artifacts": []map[string]any{
+					{"node": "a", "phase": "before", "kernel_release": "6.12.90+deb13.1-amd64"},
+					{"node": "a", "phase": "after", "kernel_release": "6.12.90+deb13.1-amd64"},
+					{"node": "b", "phase": "before", "kernel_release": "6.12.90+deb13.1-amd64"},
+					{"node": "b", "phase": "after", "kernel_release": "6.12.90+deb13.1-amd64"},
+				},
+				"os_release_artifacts": []map[string]any{
+					{"node": "a", "phase": "before", "identity": "debian:13"},
+					{"node": "a", "phase": "after", "identity": "debian:13"},
+					{"node": "b", "phase": "before", "identity": "debian:13"},
+					{"node": "b", "phase": "after", "identity": "debian:13"},
+				},
+				"boot_ids": []map[string]any{
+					{"node": "a", "phase": "before", "boot_id": "boot-a"},
+					{"node": "a", "phase": "after", "boot_id": "boot-a"},
+					{"node": "b", "phase": "before", "boot_id": "boot-b"},
+					{"node": "b", "phase": "after", "boot_id": "boot-b"},
+				},
+				"errors":                        []string{},
+				"log_findings":                  []string{},
+				"kernel_log_artifacts":          []string{"collect/a/kernel.log", "collect/b/kernel.log"},
+				"kernel_log_nodes":              []string{"a", "b"},
+				"kernel_log_rejected_artifacts": []string{},
+				"pstore_artifacts":              []string{"collect/a/pstore.txt", "collect/b/pstore.txt"},
+				"pstore_nodes":                  []string{"a", "b"},
+				"pstore_rejected_artifacts":     []string{},
+			}
+			addProductionGatePassIperfCoverage(gateRow)
+			gatePayload, err := json.Marshal(gateRow)
+			if err != nil {
+				t.Fatalf("marshal gate row: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(gateSummaryDir, "gate.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+				t.Fatalf("write gate summary: %v", err)
+			}
+			manifestPayload, err := json.Marshal(map[string]any{
+				"schema": productionGateManifestSchema,
+				"production_gate": map[string]any{
+					"path":   "scripts/linux-cross-host-production-gate.sh",
+					"sha256": strings.Repeat("a", 64),
+					"size":   123,
+				},
+				"verifier": map[string]any{
+					"path":   "scripts/linux-cross-host-soak-verify.py",
+					"sha256": strings.Repeat("b", 64),
+					"size":   456,
+				},
+			})
+			if err != nil {
+				t.Fatalf("marshal manifest: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+				t.Fatalf("write manifest: %v", err)
+			}
+
+			cmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+				"--matrix-summary", slashPath(matrixSummary),
+				"--gate-summary-dir", slashPath(gateSummaryDir),
+				"--artifact", "docs/trustix-performance-log.md#semantic-mismatch",
+			)
+			cmd.Dir = "."
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("generator accepted semantically mismatched matrix row:\n%s", output)
+			}
+			text := string(output)
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("generator output missing %q:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
 func addProductionGatePassIperfCoverage(row map[string]any) {
 	row["min_iperf_intervals_required"] = 600
 	row["min_iperf_interval_gbps_ratio_required"] = 0.25
@@ -3630,6 +3817,78 @@ func TestCrossHostTransportMatrixRejectsCustomCasesForProductionScope(t *testing
 	}
 	if !strings.Contains(string(output), "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_CASES is diagnostic-only for production scopes") {
 		t.Fatalf("matrix output did not report custom CASES production guard:\n%s", output)
+	}
+}
+
+func TestCrossHostTransportMatrixRejectsGateFamilySemanticMismatch(t *testing.T) {
+	bash := requireBashAndPython3(t)
+	tests := []struct {
+		name string
+		row  string
+		want string
+	}{
+		{
+			name: "secure_kudp_wrong_transport",
+			row:  "experimental_tcp\tsecure\tperformance\ttc_xdp\tkernel\tcross_host\tsecure_kudp\t1.5\t3600\tsecure kernel TCP must not reuse secure-kUDP gate",
+			want: "gate_family=secure_kudp requires transport=kernel_udp; got transport=experimental_tcp",
+		},
+		{
+			name: "route_gso_wrong_transport",
+			row:  "udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t3600\tUDP full-kmod must not reuse route-GSO gate",
+			want: "gate_family=route_gso requires transport=experimental_tcp; got transport=udp",
+		},
+		{
+			name: "full_kmod_wrong_crypto",
+			row:  "udp\tsecure\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\t3\t3600\tfull-kmod production gate is plaintext-only",
+			want: "gate_family=full_kmod requires encryption=plaintext; got encryption=secure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workdir := t.TempDir()
+			defaults := filepath.Join(workdir, "defaults.tsv")
+			runner := filepath.Join(workdir, "runner.sh")
+			verifier := filepath.Join(workdir, "verifier.py")
+			productionGate := filepath.Join(workdir, "production-gate.sh")
+			if err := os.WriteFile(defaults, []byte(strings.Join([]string{
+				"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+				tt.row,
+				"",
+			}, "\n")), 0o644); err != nil {
+				t.Fatalf("write defaults: %v", err)
+			}
+			if err := os.WriteFile(runner, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+				t.Fatalf("write runner stub: %v", err)
+			}
+			if err := os.WriteFile(verifier, []byte("import sys\nsys.exit(0)\n"), 0o755); err != nil {
+				t.Fatalf("write verifier stub: %v", err)
+			}
+			if err := os.WriteFile(productionGate, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+				t.Fatalf("write production gate stub: %v", err)
+			}
+
+			cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+			cmd.Dir = "."
+			cmd.Env = append(os.Environ(),
+				"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+slashPath(defaults),
+				"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+slashPath(filepath.Join(workdir, "matrix")),
+				"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_RUNNER="+slashPath(runner),
+				"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFIER="+slashPath(verifier),
+				"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_PRODUCTION_GATE="+slashPath(productionGate),
+				"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+				"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=1",
+				"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0",
+				"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0",
+			)
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("matrix unexpectedly accepted semantically invalid gate family row:\n%s", output)
+			}
+			if !strings.Contains(string(output), tt.want) {
+				t.Fatalf("matrix output missing %q:\n%s", tt.want, output)
+			}
+		})
 	}
 }
 

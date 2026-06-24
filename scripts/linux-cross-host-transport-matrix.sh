@@ -119,6 +119,65 @@ gate_family_class() {
   esac
 }
 
+require_case_value() {
+  local field="$1" got="$2" want="$3" gate_family="$4"
+  [[ "$got" == "$want" ]] || die "gate_family=${gate_family} requires ${field}=${want}; got ${field}=${got}"
+}
+
+validate_gate_family_semantics() {
+  local transport="$1" encryption="$2" datapath="$3" placement="$4" gate_family="$5"
+  local gate_class
+  gate_class="$(gate_family_class "$gate_family")"
+  case "$gate_class" in
+    custom)
+      return 0
+      ;;
+    userspace)
+      case "$transport" in
+        udp|tcp|quic|websocket|http_connect|experimental_tcp) ;;
+        *) die "gate_family=${gate_family} requires a userspace transport; got transport=${transport}" ;;
+      esac
+      require_case_value datapath "$datapath" userspace "$gate_family"
+      require_case_value crypto_placement "$placement" userspace "$gate_family"
+      ;;
+    userspace_tc)
+      case "$transport" in
+        gre|ipip|vxlan) ;;
+        *) die "gate_family=${gate_family} requires a tunnel transport; got transport=${transport}" ;;
+      esac
+      require_case_value datapath "$datapath" tc_xdp "$gate_family"
+      require_case_value crypto_placement "$placement" userspace "$gate_family"
+      ;;
+    tc_direct)
+      require_case_value transport "$transport" kernel_udp "$gate_family"
+      require_case_value encryption "$encryption" plaintext "$gate_family"
+      require_case_value datapath "$datapath" tc_xdp "$gate_family"
+      require_case_value crypto_placement "$placement" userspace "$gate_family"
+      ;;
+    full_kmod)
+      require_case_value transport "$transport" udp "$gate_family"
+      require_case_value encryption "$encryption" plaintext "$gate_family"
+      require_case_value datapath "$datapath" kernel_module "$gate_family"
+      require_case_value crypto_placement "$placement" userspace "$gate_family"
+      ;;
+    secure_kudp)
+      require_case_value transport "$transport" kernel_udp "$gate_family"
+      require_case_value encryption "$encryption" secure "$gate_family"
+      require_case_value datapath "$datapath" tc_xdp "$gate_family"
+      require_case_value crypto_placement "$placement" kernel "$gate_family"
+      ;;
+    route_gso)
+      require_case_value transport "$transport" experimental_tcp "$gate_family"
+      require_case_value encryption "$encryption" plaintext "$gate_family"
+      require_case_value datapath "$datapath" kernel_module "$gate_family"
+      require_case_value crypto_placement "$placement" userspace "$gate_family"
+      ;;
+    *)
+      die "unsupported gate family class in matrix case: ${gate_class}"
+      ;;
+  esac
+}
+
 matrix_case_name() {
   local token="$1" encryption="$2" profile="$3" datapath="$4" placement="$5" gate_family="$6"
   local base="${token}-${encryption}-${profile}-${datapath}-${placement}"
@@ -197,6 +256,7 @@ validate_case_values() {
     userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|route_gso|dd_route_gso|owdeb_route_gso|custom) ;;
     *) die "unsupported gate family in matrix case: ${gate_family}" ;;
   esac
+  validate_gate_family_semantics "$transport" "$encryption" "$datapath" "$placement" "$gate_family"
   validate_nonnegative_decimal "case min_gbps" "$min_gbps"
   validate_positive_integer "case min_seconds" "$min_seconds"
 }

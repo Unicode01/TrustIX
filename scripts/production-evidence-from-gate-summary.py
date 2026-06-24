@@ -201,6 +201,259 @@ def format_metric_seconds(value: float) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".")
 
 
+def matrix_string_field(row: dict[str, Any], key: str, case: str) -> str:
+    value = str(row.get(key) or "")
+    if not value:
+        raise SystemExit(f"matrix summary case {case!r} lacks {key}")
+    return value
+
+
+def gate_family_class(gate_family: str) -> str:
+    if gate_family in {"full_kmod", "dd_full_kmod", "owdeb_full_kmod"}:
+        return "full_kmod"
+    if gate_family in {"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp"}:
+        return "secure_kudp"
+    if gate_family in {"route_gso", "dd_route_gso", "owdeb_route_gso"}:
+        return "route_gso"
+    return gate_family
+
+
+def require_matrix_value(
+    *,
+    row: dict[str, Any],
+    key: str,
+    got: str,
+    want: str,
+    gate_family: str,
+) -> None:
+    if got == want:
+        return
+    case = str(row.get("case") or "")
+    raise SystemExit(
+        f"matrix summary case {case!r} gate_family={gate_family} requires "
+        f"{key}={want!r}; got {got!r}"
+    )
+
+
+def require_transport_in(
+    *,
+    row: dict[str, Any],
+    transport: str,
+    allowed: set[str],
+    gate_family: str,
+    label: str,
+) -> None:
+    if transport in allowed:
+        return
+    case = str(row.get("case") or "")
+    allowed_text = ",".join(sorted(allowed))
+    raise SystemExit(
+        f"matrix summary case {case!r} gate_family={gate_family} requires "
+        f"{label} transport ({allowed_text}); got transport={transport!r}"
+    )
+
+
+def transport_token(transport: str) -> str:
+    if transport == "kernel_udp":
+        return "udp"
+    return transport
+
+
+def expected_runner_case(
+    *,
+    transport: str,
+    encryption: str,
+    datapath: str,
+    gate_family: str,
+) -> str:
+    if gate_family in {"full_kmod", "dd_full_kmod"}:
+        return "dd-fullkmod"
+    if gate_family == "owdeb_full_kmod":
+        return "owdeb-fullkmod"
+    if gate_family in {"secure_kudp", "dd_secure_kudp"}:
+        return "secure-kudp"
+    if gate_family == "owdeb_secure_kudp":
+        return "owdeb-secure-kudp"
+    if gate_family in {"route_gso", "dd_route_gso"}:
+        return "dd-routegso"
+    if gate_family == "owdeb_route_gso":
+        return "owdeb-routegso"
+    kind = "tc" if datapath == "tc_xdp" or transport == "kernel_udp" else "userspace"
+    return f"{kind}-{transport_token(transport)}-{encryption}"
+
+
+def expected_matrix_case(
+    *,
+    transport: str,
+    encryption: str,
+    profile: str,
+    datapath: str,
+    crypto_placement: str,
+    gate_family: str,
+) -> str:
+    base = "-".join(
+        [
+            transport_token(transport),
+            encryption,
+            profile,
+            datapath,
+            crypto_placement,
+        ]
+    )
+    if gate_family.startswith("owdeb_"):
+        return base + "-owdeb"
+    if gate_family.startswith("dd_"):
+        return base + "-dd"
+    return base
+
+
+def require_matrix_semantics(row: dict[str, Any]) -> None:
+    case = str(row.get("case") or "")
+    if not case:
+        raise SystemExit(f"matrix summary row lacks case: {row}")
+    transport = matrix_string_field(row, "transport", case)
+    encryption = matrix_string_field(row, "encryption", case)
+    profile = matrix_string_field(row, "profile", case)
+    datapath = matrix_string_field(row, "datapath", case)
+    crypto_placement = matrix_string_field(row, "crypto_placement", case)
+    gate_family = matrix_string_field(row, "gate_family", case)
+    gate_class = gate_family_class(gate_family)
+
+    if gate_class == "userspace":
+        require_transport_in(
+            row=row,
+            transport=transport,
+            allowed={"udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp"},
+            gate_family=gate_family,
+            label="a userspace",
+        )
+        require_matrix_value(
+            row=row,
+            key="datapath",
+            got=datapath,
+            want="userspace",
+            gate_family=gate_family,
+        )
+        require_matrix_value(
+            row=row,
+            key="crypto_placement",
+            got=crypto_placement,
+            want="userspace",
+            gate_family=gate_family,
+        )
+    elif gate_class == "userspace_tc":
+        require_transport_in(
+            row=row,
+            transport=transport,
+            allowed={"gre", "ipip", "vxlan"},
+            gate_family=gate_family,
+            label="a tunnel",
+        )
+        require_matrix_value(
+            row=row,
+            key="datapath",
+            got=datapath,
+            want="tc_xdp",
+            gate_family=gate_family,
+        )
+        require_matrix_value(
+            row=row,
+            key="crypto_placement",
+            got=crypto_placement,
+            want="userspace",
+            gate_family=gate_family,
+        )
+    elif gate_class == "tc_direct":
+        for key, got, want in [
+            ("transport", transport, "kernel_udp"),
+            ("encryption", encryption, "plaintext"),
+            ("datapath", datapath, "tc_xdp"),
+            ("crypto_placement", crypto_placement, "userspace"),
+        ]:
+            require_matrix_value(
+                row=row,
+                key=key,
+                got=got,
+                want=want,
+                gate_family=gate_family,
+            )
+    elif gate_class == "full_kmod":
+        for key, got, want in [
+            ("transport", transport, "udp"),
+            ("encryption", encryption, "plaintext"),
+            ("datapath", datapath, "kernel_module"),
+            ("crypto_placement", crypto_placement, "userspace"),
+        ]:
+            require_matrix_value(
+                row=row,
+                key=key,
+                got=got,
+                want=want,
+                gate_family=gate_family,
+            )
+    elif gate_class == "secure_kudp":
+        for key, got, want in [
+            ("transport", transport, "kernel_udp"),
+            ("encryption", encryption, "secure"),
+            ("datapath", datapath, "tc_xdp"),
+            ("crypto_placement", crypto_placement, "kernel"),
+        ]:
+            require_matrix_value(
+                row=row,
+                key=key,
+                got=got,
+                want=want,
+                gate_family=gate_family,
+            )
+    elif gate_class == "route_gso":
+        for key, got, want in [
+            ("transport", transport, "experimental_tcp"),
+            ("encryption", encryption, "plaintext"),
+            ("datapath", datapath, "kernel_module"),
+            ("crypto_placement", crypto_placement, "userspace"),
+        ]:
+            require_matrix_value(
+                row=row,
+                key=key,
+                got=got,
+                want=want,
+                gate_family=gate_family,
+            )
+    else:
+        raise SystemExit(
+            f"matrix summary case {case!r} has unsupported gate_family={gate_family!r}"
+        )
+
+    want_runner = expected_runner_case(
+        transport=transport,
+        encryption=encryption,
+        datapath=datapath,
+        gate_family=gate_family,
+    )
+    require_matrix_value(
+        row=row,
+        key="runner_case",
+        got=matrix_string_field(row, "runner_case", case),
+        want=want_runner,
+        gate_family=gate_family,
+    )
+    want_case = expected_matrix_case(
+        transport=transport,
+        encryption=encryption,
+        profile=profile,
+        datapath=datapath,
+        crypto_placement=crypto_placement,
+        gate_family=gate_family,
+    )
+    require_matrix_value(
+        row=row,
+        key="case",
+        got=case,
+        want=want_case,
+        gate_family=gate_family,
+    )
+
+
 def require_long_soak_for_pass(
     row: dict[str, Any],
     result: str,
@@ -700,6 +953,7 @@ def evidence_row(
     require_binary_identity_for_pass(gate_row, result)
     require_runtime_artifacts_for_pass(gate_row, result)
     require_crash_stability_for_pass(gate_row, result)
+    require_matrix_semantics(matrix_row)
     require_matrix_gate_alignment(gate_row, matrix_row, result, seconds)
     os_matrix = resolved_matrix_value(
         gate_row,
