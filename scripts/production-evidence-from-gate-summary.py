@@ -143,10 +143,24 @@ def load_matrix_rows(path: Path) -> dict[str, dict[str, Any]]:
         case = str(row.get("case") or "")
         if not case:
             raise SystemExit(f"{path}: matrix row lacks case: {row}")
-        if case in rows_by_case:
-            raise SystemExit(f"{path}: duplicate matrix case {case!r}")
-        rows_by_case[case] = row
+        keys = unique_nonempty_strings([case, str(row.get("runner_case") or "")])
+        for key in keys:
+            if key in rows_by_case and rows_by_case[key] is not row:
+                raise SystemExit(f"{path}: duplicate matrix case lookup key {key!r}")
+            rows_by_case[key] = row
     return rows_by_case
+
+
+def unique_nonempty_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        text = value.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
 
 
 def load_gate_rows(gate_summary_dir: Path) -> list[dict[str, Any]]:
@@ -577,25 +591,35 @@ def require_manifest_case_alignment(
     if result != "pass" or not manifest_has_case_maps(manifest):
         return
     case = str(gate_row.get("case") or matrix_row.get("case") or "")
+    case_aliases = unique_nonempty_strings([
+        str(gate_row.get("case") or ""),
+        str(matrix_row.get("case") or ""),
+        str(matrix_row.get("runner_case") or ""),
+    ])
     gate_family = matrix_string_field(matrix_row, "gate_family", case)
     family_class = gate_family_class(gate_family)
 
     cases = manifest_family_map(manifest, "cases", family_class)
-    if case not in cases:
+    manifest_case = ""
+    for alias in case_aliases:
+        if alias in cases:
+            manifest_case = alias
+            break
+    if not manifest_case:
         raise SystemExit(
             f"production gate manifest cases.{family_class} does not include "
-            f"case {case!r}"
+            f"case {case!r} or aliases {case_aliases!r}"
         )
-    manifest_case_path = cases[case]
+    manifest_case_path = cases[manifest_case]
     require_same_path(
-        case=case,
+        case=manifest_case,
         family_class=family_class,
         manifest_path=manifest_case_path,
         observed_path=gate_row.get("path"),
         observed_label="gate summary",
     )
     require_same_path(
-        case=case,
+        case=manifest_case,
         family_class=family_class,
         manifest_path=manifest_case_path,
         observed_path=matrix_row.get("workdir"),
@@ -603,17 +627,17 @@ def require_manifest_case_alignment(
     )
 
     min_gbps_by_case = manifest_family_map(manifest, "case_min_gbps", family_class)
-    if case not in min_gbps_by_case:
+    if manifest_case not in min_gbps_by_case:
         raise SystemExit(
             f"production gate manifest case_min_gbps.{family_class} lacks "
-            f"case {case!r}"
+            f"case {manifest_case!r}"
         )
     try:
-        manifest_min_gbps = float(min_gbps_by_case[case])
+        manifest_min_gbps = float(min_gbps_by_case[manifest_case])
     except ValueError as exc:
         raise SystemExit(
             f"production gate manifest case_min_gbps.{family_class} case "
-            f"{case!r} has invalid value {min_gbps_by_case[case]!r}"
+            f"{manifest_case!r} has invalid value {min_gbps_by_case[manifest_case]!r}"
         ) from exc
     gate_min_gbps = numeric_field(gate_row, "min_gbps_required", "gate summary")
     matrix_min_gbps = matrix_numeric_field(matrix_row, "min_gbps", case)
@@ -631,17 +655,17 @@ def require_manifest_case_alignment(
         )
 
     min_seconds_by_case = manifest_family_map(manifest, "case_min_seconds", family_class)
-    if case not in min_seconds_by_case:
+    if manifest_case not in min_seconds_by_case:
         raise SystemExit(
             f"production gate manifest case_min_seconds.{family_class} lacks "
-            f"case {case!r}"
+            f"case {manifest_case!r}"
         )
     try:
-        manifest_min_seconds = float(min_seconds_by_case[case])
+        manifest_min_seconds = float(min_seconds_by_case[manifest_case])
     except ValueError as exc:
         raise SystemExit(
             f"production gate manifest case_min_seconds.{family_class} case "
-            f"{case!r} has invalid value {min_seconds_by_case[case]!r}"
+            f"{manifest_case!r} has invalid value {min_seconds_by_case[manifest_case]!r}"
         ) from exc
     matrix_min_seconds = matrix_numeric_field(matrix_row, "min_seconds", case)
     if required_seconds < manifest_min_seconds:

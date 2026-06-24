@@ -878,6 +878,78 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		}
 	}
 
+	runnerCase := "userspace-udp-secure"
+	gateRow["case"] = runnerCase
+	gatePayload, err = json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal runner-case gate row: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write runner-case gate summary: %v", err)
+	}
+	manifest["cases"] = map[string]any{
+		"userspace": runnerCase + "=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+	}
+	manifest["case_min_gbps"] = map[string]any{
+		"userspace": runnerCase + "=1.5",
+	}
+	manifest["case_min_seconds"] = map[string]any{
+		"userspace": runnerCase + "=3600",
+	}
+	manifestPayload, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal runner-case manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write runner-case manifest: %v", err)
+	}
+	runnerCaseCmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--artifact", "docs/trustix-performance-log.md#example-production-gate",
+		"--note-template", "{transport} {encryption} {gate_family} evidence",
+	)
+	runnerCaseCmd.Dir = "."
+	runnerCaseOutput, err := runnerCaseCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production evidence generator rejected runner-case gate summary: %v\n%s", err, runnerCaseOutput)
+	}
+	runnerCaseLines := strings.Split(strings.TrimSpace(string(runnerCaseOutput)), "\n")
+	if len(runnerCaseLines) != 1 {
+		t.Fatalf("expected one runner-case evidence row, got %d:\n%s", len(runnerCaseLines), runnerCaseOutput)
+	}
+	runnerCaseFields := strings.Split(runnerCaseLines[0], "\t")
+	for idx, want := range wantFields {
+		if runnerCaseFields[idx] != want {
+			t.Fatalf("runner-case field %d = %q, want %q\n%s", idx, runnerCaseFields[idx], want, runnerCaseOutput)
+		}
+	}
+
+	gateRow["case"] = "udp-secure-stable-userspace-userspace"
+	gatePayload, err = json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal restored gate row: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write restored gate summary: %v", err)
+	}
+	manifest["cases"] = map[string]any{
+		"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+	}
+	manifest["case_min_gbps"] = map[string]any{
+		"userspace": "udp-secure-stable-userspace-userspace=1.5",
+	}
+	manifest["case_min_seconds"] = map[string]any{
+		"userspace": "udp-secure-stable-userspace-userspace=3600",
+	}
+	manifestPayload, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal restored manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write restored manifest: %v", err)
+	}
+
 	mismatchCmd := exec.Command(python, "production-evidence-from-gate-summary.py",
 		"--matrix-summary", slashPath(matrixSummary),
 		"--gate-summary-dir", slashPath(gateSummaryDir),
