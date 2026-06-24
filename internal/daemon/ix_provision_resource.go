@@ -1147,7 +1147,20 @@ func ixProvisionEffectiveProfileForRequest(request ixProvisionIssueRequest, prof
 	if ixProvisionOpenWRTTCOnly(request, profile) {
 		profile.KernelCapabilityProfile = config.KernelCapabilityProfilePerformance
 	}
+	if ixProvisionSecureExperimentalTCPKernelProfile(request, profile) {
+		profile.Datapath = config.TransportDatapathKernelModule
+	}
 	return profile
+}
+
+func ixProvisionSecureExperimentalTCPKernelProfile(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
+	if transport.Protocol(request.EndpointTransport) != transport.ProtocolExperimentalTCP {
+		return false
+	}
+	return profile.TransportProfile == config.TransportProfilePerformance &&
+		parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionSecure &&
+		profile.CryptoPlacement == ixProvisionPerformanceCryptoPlacement &&
+		profile.KernelTransport == ixProvisionPerformanceKernelTransport
 }
 
 func ixProvisionOpenWRTTCOnly(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
@@ -1190,10 +1203,11 @@ func ixProvisionKernelModuleModes(request ixProvisionIssueRequest, profile ixPro
 	}
 	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext ||
 		profile.TransportProfile != config.TransportProfilePerformance {
-		if profile.TransportProfile == config.TransportProfilePerformance &&
-			profile.Datapath == ixProvisionPerformanceDatapath &&
-			parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionSecure &&
-			profile.CryptoPlacement == ixProvisionPerformanceCryptoPlacement {
+		if ixProvisionSecureExperimentalTCPKernelProfile(request, profile) ||
+			(profile.TransportProfile == config.TransportProfilePerformance &&
+				profile.Datapath == ixProvisionPerformanceDatapath &&
+				parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionSecure &&
+				profile.CryptoPlacement == ixProvisionPerformanceCryptoPlacement) {
 			return "required", "disabled", "required"
 		}
 		return cryptoMode, datapathMode, helpersMode

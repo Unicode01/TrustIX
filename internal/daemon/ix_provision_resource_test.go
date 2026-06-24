@@ -235,6 +235,17 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		MinGbps:         "1.5",
 		MinSeconds:      "3600",
 	})
+	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
+		Transport:       "experimental_tcp",
+		Encryption:      securePerformance.Encryption,
+		Profile:         securePerformance.TransportProfile,
+		Datapath:        config.TransportDatapathKernelModule,
+		CryptoPlacement: securePerformance.CryptoPlacement,
+		ValidationScope: "cross_host",
+		GateFamily:      "secure_exp_tcp_kernel",
+		MinGbps:         "1.5",
+		MinSeconds:      "3600",
+	})
 }
 
 func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
@@ -414,6 +425,57 @@ func TestIXProvisionPerformanceProfileUsesSecureKernelUDPDefaults(t *testing.T) 
 		target.KernelModules.TrustIXDatapath.Mode != "disabled" ||
 		target.KernelModules.TrustIXDatapathHelpers.Mode != "required" {
 		t.Fatalf("secure performance kernel module modes = %#v, want crypto/helpers required only", target.KernelModules)
+	}
+}
+
+func TestIXProvisionPerformanceProfileExplicitExperimentalTCPUsesSecureKernelDefault(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+		IXID:              "ix-perf-exp",
+		Profile:           "performance",
+		Advertise:         []core.Prefix{"10.44.0.0/24"},
+		EndpointAddress:   "ix-perf-exp.example.com:7000",
+		EndpointTransport: "experimental_tcp",
+		ProvisionURL:      "https://ix-a.example.com:18787",
+	}, desired)
+	if err != nil {
+		t.Fatalf("normalize provision request: %v", err)
+	}
+	if request.BuildKO != "1" {
+		t.Fatalf("secure experimental_tcp build_ko = %q, want 1 for crypto/helpers modules", request.BuildKO)
+	}
+	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
+	if err != nil {
+		t.Fatalf("desired for provision: %v", err)
+	}
+	if target.TransportPolicy.Encryption != securetransport.EncryptionSecure ||
+		target.TransportPolicy.Profile != config.TransportProfilePerformance ||
+		target.TransportPolicy.Datapath != config.TransportDatapathKernelModule ||
+		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementKernel) ||
+		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
+		t.Fatalf("secure experimental_tcp transport policy = %#v", target.TransportPolicy)
+	}
+	if len(target.Endpoints) != 1 ||
+		target.Endpoints[0].Transport != "experimental_tcp" ||
+		target.Endpoints[0].Security.Encryption != securetransport.EncryptionSecure ||
+		target.Endpoints[0].Profile.Datapath != config.TransportDatapathKernelModule ||
+		target.Endpoints[0].Profile.CryptoPlacement != string(dataplane.CryptoPlacementKernel) {
+		t.Fatalf("secure experimental_tcp endpoint = %#v", target.Endpoints)
+	}
+	if !experimentalTCPSecureRouteGSOAsyncForDesired(target) {
+		t.Fatalf("secure experimental_tcp profile did not select secure route-GSO")
+	}
+	if kernelUDPSecureRouteGSOForDesired(target) || kernelDatapathFullPlaintextEnabledForDesired(target) {
+		t.Fatalf("secure experimental_tcp profile should not enable kernel_udp route-GSO or full plaintext: policy=%#v modules=%#v", target.TransportPolicy, target.KernelModules)
+	}
+	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
+		t.Fatalf("secure experimental_tcp kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
+	}
+	if target.KernelModules.TrustIXCrypto.Mode != "required" ||
+		target.KernelModules.TrustIXDatapath.Mode != "disabled" ||
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "required" {
+		t.Fatalf("secure experimental_tcp kernel module modes = %#v, want crypto/helpers required only", target.KernelModules)
 	}
 }
 
@@ -661,7 +723,7 @@ func TestIXProvisionOpenWRTActiveDefaultsToValidatedUDPFullKmod(t *testing.T) {
 func TestIXProvisionOpenWRTExplicitExperimentalTCPStaysFullKmodNotRouteGSO(t *testing.T) {
 	for _, row := range readProductionTransportDefaultRowsForProvisionTest(t) {
 		switch row.GateFamily {
-		case "owdeb_secure_kudp", "owdeb_route_gso":
+		case "owdeb_secure_kudp", "owdeb_secure_exp_tcp_kernel", "owdeb_route_gso":
 			t.Fatalf("OpenWrt provision should not target unpromoted production gate %s: %#v", row.GateFamily, row)
 		}
 	}
