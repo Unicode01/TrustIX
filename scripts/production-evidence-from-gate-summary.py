@@ -224,6 +224,73 @@ def require_long_soak_for_pass(
     )
 
 
+def list_field(row: dict[str, Any], key: str) -> list[Any]:
+    value = row.get(key)
+    if isinstance(value, list):
+        return value
+    raise SystemExit(f"gate summary case {row.get('case')!r} lacks list field {key}")
+
+
+def require_empty_list(row: dict[str, Any], key: str) -> None:
+    values = list_field(row, key)
+    if values:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has non-empty {key}: {values!r}"
+        )
+
+
+def require_min_list_items(row: dict[str, Any], key: str, minimum: int) -> None:
+    values = list_field(row, key)
+    if len(values) < minimum:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has {len(values)} {key}, "
+            f"want >= {minimum}"
+        )
+
+
+def require_stable_boot_ids(row: dict[str, Any]) -> None:
+    values = list_field(row, "boot_ids")
+    by_node: dict[str, dict[str, set[str]]] = {}
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        node = str(item.get("node") or "")
+        phase = str(item.get("phase") or "")
+        boot_id = str(item.get("boot_id") or "")
+        if not node or phase not in {"before", "after"} or not boot_id:
+            continue
+        by_node.setdefault(node, {}).setdefault(phase, set()).add(boot_id)
+    complete = 0
+    for node, phases in sorted(by_node.items()):
+        before = phases.get("before") or set()
+        after = phases.get("after") or set()
+        if len(before) != 1 or before != after:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has unstable boot-id "
+                f"for node {node}: before={sorted(before)} after={sorted(after)}"
+            )
+        complete += 1
+    if complete < 2:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has stable boot-id coverage "
+            f"for {complete} nodes, want >= 2"
+        )
+
+
+def require_crash_stability_for_pass(row: dict[str, Any], result: str) -> None:
+    if result != "pass":
+        return
+    require_empty_list(row, "errors")
+    require_empty_list(row, "log_findings")
+    require_empty_list(row, "kernel_log_rejected_artifacts")
+    require_empty_list(row, "pstore_rejected_artifacts")
+    require_stable_boot_ids(row)
+    require_min_list_items(row, "kernel_log_nodes", 2)
+    require_min_list_items(row, "kernel_log_artifacts", 2)
+    require_min_list_items(row, "pstore_nodes", 2)
+    require_min_list_items(row, "pstore_artifacts", 2)
+
+
 def normalize_matrix_token(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9.+_-]+", "", value).lower()
 
@@ -325,6 +392,7 @@ def evidence_row(
         observed_seconds_value(gate_row),
         seconds_slop_value(gate_row),
     )
+    require_crash_stability_for_pass(gate_row, result)
     os_matrix = resolved_matrix_value(
         gate_row,
         override=args.os_matrix,
