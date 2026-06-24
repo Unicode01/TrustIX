@@ -161,6 +161,71 @@ func productionEvidenceKey(row productionTransportEvidence) string {
 	}, ":")
 }
 
+func productionGateFamilyClass(gateFamily string) string {
+	switch gateFamily {
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod":
+		return "full_kmod"
+	case "secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp":
+		return "secure_kudp"
+	case "route_gso", "dd_route_gso", "owdeb_route_gso":
+		return "route_gso"
+	default:
+		return gateFamily
+	}
+}
+
+func assertProductionGateFamilySemantics(t *testing.T, label, transport, encryption, datapath, placement, gateFamily string) {
+	t.Helper()
+	require := func(field, got, want string) {
+		t.Helper()
+		if got != want {
+			t.Fatalf("%s gate_family=%s requires %s=%s, got %s=%s", label, gateFamily, field, want, field, got)
+		}
+	}
+	requireTransport := func(allowed ...string) {
+		t.Helper()
+		for _, value := range allowed {
+			if transport == value {
+				return
+			}
+		}
+		t.Fatalf("%s gate_family=%s does not allow transport=%s", label, gateFamily, transport)
+	}
+
+	switch productionGateFamilyClass(gateFamily) {
+	case "userspace":
+		requireTransport("udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp")
+		require("datapath", datapath, "userspace")
+		require("crypto_placement", placement, "userspace")
+	case "userspace_tc":
+		requireTransport("gre", "ipip", "vxlan")
+		require("datapath", datapath, "tc_xdp")
+		require("crypto_placement", placement, "userspace")
+	case "tc_direct":
+		require("transport", transport, "kernel_udp")
+		require("encryption", encryption, "plaintext")
+		require("datapath", datapath, "tc_xdp")
+		require("crypto_placement", placement, "userspace")
+	case "full_kmod":
+		require("transport", transport, "udp")
+		require("encryption", encryption, "plaintext")
+		require("datapath", datapath, "kernel_module")
+		require("crypto_placement", placement, "userspace")
+	case "secure_kudp":
+		require("transport", transport, "kernel_udp")
+		require("encryption", encryption, "secure")
+		require("datapath", datapath, "tc_xdp")
+		require("crypto_placement", placement, "kernel")
+	case "route_gso":
+		require("transport", transport, "experimental_tcp")
+		require("encryption", encryption, "plaintext")
+		require("datapath", datapath, "kernel_module")
+		require("crypto_placement", placement, "userspace")
+	default:
+		t.Fatalf("%s has unknown production gate family %q", label, gateFamily)
+	}
+}
+
 func knownLegacyProductionEvidenceArtifacts() map[string]bool {
 	return map[string]bool{
 		"docs/trustix-performance-log.md#2026-06-19-zaozhuang-pve-selected-transport-matrix-gate":               true,
@@ -560,6 +625,15 @@ func TestCrossHostProductionDefaultsHavePassingEvidence(t *testing.T) {
 		}
 		seenEvidence[identity] = true
 		validateProductionEvidenceManifestIdentity(t, evidence)
+		assertProductionGateFamilySemantics(
+			t,
+			"production evidence "+key,
+			evidence.Transport,
+			evidence.Encryption,
+			evidence.Datapath,
+			evidence.CryptoPlacement,
+			evidence.GateFamily,
+		)
 		if evidence.Artifact == "" {
 			t.Fatalf("production evidence row lacks artifact: %+v", evidence)
 		}
@@ -2389,6 +2463,15 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 		if !knownGate[row.GateFamily] {
 			t.Fatalf("unknown gate family %q in %+v", row.GateFamily, row)
 		}
+		assertProductionGateFamilySemantics(
+			t,
+			"production default "+key,
+			row.Transport,
+			row.Encryption,
+			row.Datapath,
+			row.CryptoPlacement,
+			row.GateFamily,
+		)
 		minGbps, err := strconv.ParseFloat(row.MinGbps, 64)
 		if err != nil || minGbps < 0 {
 			t.Fatalf("invalid min_gbps %q in %+v", row.MinGbps, row)
