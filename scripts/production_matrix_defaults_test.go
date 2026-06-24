@@ -242,7 +242,7 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "debian13-debian13",
 			KernelMatrix:       "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "userspace_tc":
@@ -252,7 +252,7 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "debian13-debian13",
 			KernelMatrix:       "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "tc_direct":
@@ -389,26 +389,26 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 			}
 			defaults := readProductionTransportDefaults(t)
 			for _, wantCase := range []string{
-				"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:900",
-				"udp:plaintext:stable:userspace:userspace:cross_host:userspace:1.5:900",
+				"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:3600",
+				"udp:plaintext:stable:userspace:userspace:cross_host:userspace:1.5:3600",
 				"udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod:3:3600",
 				"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:3600",
-				"tcp:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
-				"tcp:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
-				"quic:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
-				"quic:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
-				"websocket:secure:stable:userspace:userspace:cross_host:userspace:0.5:900",
-				"websocket:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
-				"http_connect:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
-				"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
-				"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:900",
-				"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:900",
-				"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:900",
+				"tcp:secure:stable:userspace:userspace:cross_host:userspace:0.75:3600",
+				"tcp:plaintext:stable:userspace:userspace:cross_host:userspace:1:3600",
+				"quic:secure:stable:userspace:userspace:cross_host:userspace:0.75:3600",
+				"quic:plaintext:stable:userspace:userspace:cross_host:userspace:1:3600",
+				"websocket:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
+				"websocket:plaintext:stable:userspace:userspace:cross_host:userspace:1:3600",
+				"http_connect:secure:stable:userspace:userspace:cross_host:userspace:0.75:3600",
+				"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace:1:3600",
+				"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
+				"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
+				"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
 				"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
-				"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:900",
+				"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:3600",
 				"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 			} {
 				if !strings.Contains(defaults, wantCase) {
@@ -866,8 +866,8 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"secure_kudp":     "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
 		"route_gso":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
 		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates",
-		"userspace":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates",
-		"userspace_tc":    "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates",
+		"userspace":       "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
+		"userspace_tc":    "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
 	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
@@ -1127,7 +1127,7 @@ func TestCurrentDebianUserspaceEvidenceCoversProductionGates(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
 		wantKernelMatrix = "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates"
 	)
 
 	evidenceByKey := map[string][]productionTransportEvidence{}
@@ -1186,7 +1186,7 @@ func TestCurrentDebianUserspaceTCEvidenceCoversProductionGates(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
 		wantKernelMatrix = "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-userspace-userspace-tc-current-forward-gates"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates"
 	)
 
 	evidenceByKey := map[string][]productionTransportEvidence{}
@@ -1245,43 +1245,43 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 	defaults := readProductionTransportDefaults(t)
 	for _, wantCase := range []string{
 		"udp:secure:stable:userspace:userspace:single_host:userspace:0:30",
-		"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:900",
+		"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:3600",
 		"udp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
-		"udp:plaintext:stable:userspace:userspace:cross_host:userspace:1.5:900",
+		"udp:plaintext:stable:userspace:userspace:cross_host:userspace:1.5:3600",
 		"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:3600",
 		"tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
-		"tcp:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
+		"tcp:secure:stable:userspace:userspace:cross_host:userspace:0.75:3600",
 		"tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
-		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
+		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace:1:3600",
 		"quic:secure:stable:userspace:userspace:single_host:userspace:0:30",
-		"quic:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
+		"quic:secure:stable:userspace:userspace:cross_host:userspace:0.75:3600",
 		"quic:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
-		"quic:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
+		"quic:plaintext:stable:userspace:userspace:cross_host:userspace:1:3600",
 		"websocket:secure:stable:userspace:userspace:single_host:userspace:0:30",
-		"websocket:secure:stable:userspace:userspace:cross_host:userspace:0.5:900",
+		"websocket:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
 		"websocket:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
-		"websocket:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
+		"websocket:plaintext:stable:userspace:userspace:cross_host:userspace:1:3600",
 		"http_connect:secure:stable:userspace:userspace:single_host:userspace:0:30",
-		"http_connect:secure:stable:userspace:userspace:cross_host:userspace:0.75:900",
+		"http_connect:secure:stable:userspace:userspace:cross_host:userspace:0.75:3600",
 		"http_connect:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
-		"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace:1:900",
+		"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace:1:3600",
 		"gre:secure:stable:tc_xdp:userspace:single_host:userspace_tc:0:30",
-		"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:900",
+		"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
 		"gre:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
-		"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:900",
+		"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 		"ipip:secure:stable:tc_xdp:userspace:single_host:userspace_tc:0:30",
-		"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:900",
+		"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
 		"ipip:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
-		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:900",
+		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 		"vxlan:secure:stable:tc_xdp:userspace:single_host:userspace_tc:0:30",
-		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:900",
+		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
 		"vxlan:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
-		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:900",
+		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 		"kernel_udp:plaintext:performance:tc_xdp:userspace:single_host:tc_direct:0:30",
 		"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
 		"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
 		"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
-		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:900",
+		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:3600",
 		"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 	} {

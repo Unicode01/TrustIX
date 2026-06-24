@@ -16,7 +16,7 @@ Current production-default evidence boundary:
 | Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-amd64` at commit `1a72df194383d74fef5b03f68878f72734addb39` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian userspace and userspace-TC defaults | manifest-backed 900s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
+| Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-amd64` at commit `1a72df194383d74fef5b03f68878f72734addb39` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
@@ -58,6 +58,60 @@ OpenWrt full-kmod run reached 3.752 Gbps from OpenWrt to Debian, confirming
 that the loaded full plaintext module did not block normal underlay traffic in
 that test environment. After verification, the disposable VMs, isolated
 `vmbr3`, NAT/FORWARD rules, and runroot were removed.
+
+<a id="2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates"></a>
+
+### Zaozhuang PVE userspace and userspace-TC 3600s production gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only.
+VM100 and all 1xx guests were not modified. The userspace runs used Debian 13
+VM pairs 200/201, 202/203, and 204/205; the retry runs used 200/201 and
+202/203. The userspace-TC secure tunnel run used VM206/VM207, and the
+userspace-TC plaintext tunnel run used VM208/VM209. All guests ran Debian 13
+kernel `6.12.69+deb13-amd64` on isolated `vmbr3`.
+
+The release binary was built from commit
+`efa9887c763c47a7a9b37483c54909fffdc7a65b`, build time
+`2026-06-23T07:58:23Z`, with Go `1.25.0`; all guests used binary SHA256
+`68200d00ed00a8eb6376d0a49e186604b523f7d0206cef15acb008e0b4f0aa19`.
+The embedded assets SHA256 was
+`18eb4b0fbb81b7dfe6a9639e2997cae6cd728c5a9d2db3ba367412487cb6e622`.
+
+The selected production gates emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`7069a7ca3516000c4313612fe7a57320c19a4717e56be05e131b3724317232ce`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+The runs started on 2026-06-23 CST and completed on 2026-06-24 CST. All 17
+cross-host userspace and userspace-TC cases passed 3600s production gates with
+`iperf_mode=forward` and `iperf_directions=both`. The production verifier
+reported `errors=[]`, `log_findings=[]`,
+`kernel_log_rejected_artifacts=[]`, `pstore_rejected_artifacts=[]`, stable
+before/after boot IDs, LAN `tx_queue_len=1000`, no loaded `trustix_*` kernel
+modules, and zero session dial or heartbeat errors. Final live kernel and
+pstore sweeps on the userspace-TC VMs were also clean.
+
+| Gate family | Transport | Encryption | Gate | Minimum received | Evidence seconds |
+| --- | --- | --- | ---: | ---: | ---: |
+| userspace | UDP | secure | 1.5 Gbps | 1.672798 Gbps | 3600 |
+| userspace | UDP | plaintext | 1.5 Gbps | 1.754013 Gbps | 3600 |
+| userspace | TCP | secure | 0.75 Gbps | 0.777460 Gbps | 3600 |
+| userspace | TCP | plaintext | 1 Gbps | 1.032665 Gbps | 3600 |
+| userspace | QUIC | secure | 0.75 Gbps | 0.954547 Gbps | 3600 |
+| userspace | QUIC | plaintext | 1 Gbps | 1.249522 Gbps | 3600 |
+| userspace | WebSocket | secure | 0.5 Gbps | 0.592369 Gbps | 3600 |
+| userspace | WebSocket | plaintext | 1 Gbps | 1.125059 Gbps | 3600 |
+| userspace | HTTP CONNECT | secure | 0.75 Gbps | 0.839874 Gbps | 3600 |
+| userspace | HTTP CONNECT | plaintext | 1 Gbps | 1.237984 Gbps | 3600 |
+| userspace | experimental TCP | secure | 1 Gbps | 1.246138 Gbps | 3600 |
+| userspace-TC | GRE | secure | 1 Gbps | 1.376135 Gbps | 3600 |
+| userspace-TC | GRE | plaintext | 4 Gbps | 5.110725 Gbps | 3600 |
+| userspace-TC | IPIP | secure | 1 Gbps | 1.383353 Gbps | 3600 |
+| userspace-TC | IPIP | plaintext | 4 Gbps | 5.231286 Gbps | 3600 |
+| userspace-TC | VXLAN | secure | 1 Gbps | 1.361865 Gbps | 3600 |
+| userspace-TC | VXLAN | plaintext | 4 Gbps | 5.286772 Gbps | 3600 |
 
 ## 2026-06-22
 
