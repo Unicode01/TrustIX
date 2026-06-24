@@ -398,6 +398,12 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASES="$full_kmod_cases" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASES="$secure_kudp_cases" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASES="$route_gso_cases" \
+  TRUSTIX_GATE_MANIFEST_USERSPACE_CASE_MIN_GBPS="$userspace_case_min_gbps_raw" \
+  TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASE_MIN_GBPS="$userspace_tc_case_min_gbps_raw" \
+  TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_GBPS="$tc_direct_case_min_gbps_raw" \
+  TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_GBPS="$full_kmod_case_min_gbps_raw" \
+  TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_GBPS="$secure_kudp_case_min_gbps_raw" \
+  TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_GBPS="$route_gso_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_USERSPACE_CASE_MIN_SECONDS="$userspace_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASE_MIN_SECONDS="$userspace_tc_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_SECONDS="$tc_direct_case_min_seconds_raw" \
@@ -456,6 +462,14 @@ manifest = {
         "full_kmod": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASES"],
         "secure_kudp": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASES"],
         "route_gso": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASES"],
+    },
+    "case_min_gbps": {
+        "userspace": env["TRUSTIX_GATE_MANIFEST_USERSPACE_CASE_MIN_GBPS"],
+        "userspace_tc": env["TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASE_MIN_GBPS"],
+        "tc_direct": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_GBPS"],
+        "full_kmod": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_GBPS"],
+        "secure_kudp": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_GBPS"],
+        "route_gso": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_GBPS"],
     },
     "case_min_seconds": {
         "userspace": env["TRUSTIX_GATE_MANIFEST_USERSPACE_CASE_MIN_SECONDS"],

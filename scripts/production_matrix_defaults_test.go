@@ -816,6 +816,15 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 			"sha256": strings.Repeat("b", 64),
 			"size":   456,
 		},
+		"cases": map[string]any{
+			"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+		},
+		"case_min_gbps": map[string]any{
+			"userspace": "udp-secure-stable-userspace-userspace=1.5",
+		},
+		"case_min_seconds": map[string]any{
+			"userspace": "udp-secure-stable-userspace-userspace=3600",
+		},
 	}
 	manifestPayload, err := json.Marshal(manifest)
 	if err != nil {
@@ -883,6 +892,31 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 	if !strings.Contains(string(mismatchOutput), "kernel matrix override") ||
 		!strings.Contains(string(mismatchOutput), "does not match inferred value") {
 		t.Fatalf("generator did not explain kernel matrix mismatch:\n%s", mismatchOutput)
+	}
+
+	manifest["case_min_gbps"] = map[string]any{
+		"userspace": "udp-secure-stable-userspace-userspace=1.0",
+	}
+	manifestPayload, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal mismatched manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write mismatched manifest: %v", err)
+	}
+	manifestMismatchCmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--artifact", "docs/trustix-performance-log.md#example-production-gate",
+	)
+	manifestMismatchCmd.Dir = "."
+	manifestMismatchOutput, err := manifestMismatchCmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("generator accepted manifest case_min_gbps below gate:\n%s", manifestMismatchOutput)
+	}
+	if !strings.Contains(string(manifestMismatchOutput), "case_min_gbps.userspace") ||
+		!strings.Contains(string(manifestMismatchOutput), "below matrix requirement 1.500000") {
+		t.Fatalf("generator did not explain manifest case_min_gbps mismatch:\n%s", manifestMismatchOutput)
 	}
 }
 
@@ -984,6 +1018,15 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 			"sha256": strings.Repeat("b", 64),
 			"size":   456,
 		},
+		"cases": map[string]any{
+			"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+		},
+		"case_min_gbps": map[string]any{
+			"userspace": "udp-secure-stable-userspace-userspace=1.5",
+		},
+		"case_min_seconds": map[string]any{
+			"userspace": "udp-secure-stable-userspace-userspace=3600",
+		},
 	}
 	manifestPayload, err := json.Marshal(manifest)
 	if err != nil {
@@ -1005,8 +1048,8 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 	}
 	text := string(output)
 	for _, want := range []string{
-		"min_gbps_required=1.500000",
-		"below matrix min_gbps=2.000000",
+		"case_min_gbps.userspace",
+		"below matrix requirement 2.000000",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("generator did not explain matrix/gate mismatch, missing %q:\n%s", want, output)
@@ -2658,9 +2701,16 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"write_gate_manifest()",
 		"production-gate-manifest.json",
 		"trustix-cross-host-production-gate-manifest-v1",
+		"TRUSTIX_GATE_MANIFEST_USERSPACE_CASE_MIN_GBPS",
+		"TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASE_MIN_GBPS",
+		"TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_GBPS",
+		"TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_GBPS",
+		"TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_GBPS",
+		"TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_GBPS",
 		"production_gate",
 		"verifier",
 		"thresholds",
+		"case_min_gbps",
 		"write_gate_manifest",
 		"must use canonical NAME=PATH from the transport matrix",
 		"--require-transport-policy-stat \"encryption=${encryption}\"",
@@ -3032,6 +3082,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		} `json:"verifier"`
 		Thresholds     map[string]string `json:"thresholds"`
 		Cases          map[string]string `json:"cases"`
+		CaseMinGbps    map[string]string `json:"case_min_gbps"`
 		CaseMinSeconds map[string]string `json:"case_min_seconds"`
 	}
 	if err := json.Unmarshal(manifestPayload, &manifest); err != nil {
@@ -3075,6 +3126,18 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	} {
 		if !strings.Contains(manifest.Cases[key], wantSubstring) {
 			t.Fatalf("manifest cases[%s] missing %q:\n%s", key, wantSubstring, manifestPayload)
+		}
+	}
+	for key, wantSubstring := range map[string]string{
+		"userspace":    fastName + "=1.5",
+		"userspace_tc": userspaceTCName + "=0",
+		"tc_direct":    "tc=0",
+		"full_kmod":    "full=0",
+		"secure_kudp":  "secure=0",
+		"route_gso":    "route=0",
+	} {
+		if !strings.Contains(manifest.CaseMinGbps[key], wantSubstring) {
+			t.Fatalf("manifest case_min_gbps[%s] missing %q:\n%s", key, wantSubstring, manifestPayload)
 		}
 	}
 	for key, wantSubstring := range map[string]string{
@@ -3597,7 +3660,7 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		"set -e",
 		"mkdir -p \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR\"",
 		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/production-gate-manifest.json\" <<'JSON'",
-		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456}}`,
+		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456},"cases":{"userspace":"udp-secure-stable-userspace-userspace=/tmp/udp-secure"},"case_min_gbps":{"userspace":"udp-secure-stable-userspace-userspace=1.5"},"case_min_seconds":{"userspace":"udp-secure-stable-userspace-userspace=3600"}}`,
 		"JSON",
 		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/userspace-udp-secure.jsonl\" <<'JSON'",
 		`{"case":"udp-secure-stable-userspace-userspace","status":"pass","min_gbps_required":1.5,"min_seconds_required":3600,"seconds_slop":0,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"min_seconds":3600.1,"min_iperf_intervals_required":600,"min_iperf_interval_gbps_ratio_required":0.25,"iperf_json_count":2,"iperf_direction_count":2,"iperf_pair_directions":["a-to-b","b-to-a"],"iperf":[{"direction":"forward","sent_gbps":1.9,"received_gbps":1.8,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true},{"direction":"forward","sent_gbps":1.8,"received_gbps":1.7,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true}],"result_markers":["pass"],"binary_identities":[{"source":"collect/a/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"source":"collect/b/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}],"lsmod_artifacts":[{"source":"collect/a/lsmod.txt","node":"a","modules":[]},{"source":"collect/b/lsmod.txt","node":"b","modules":[]}],"lsmod_nodes":["a","b"],"lan_state_artifacts":[{"source":"collect/a/lan-state.txt","node":"a","interface":"tix-lan-a","tx_queue_len":1000},{"source":"collect/b/lan-state.txt","node":"b","interface":"tix-lan-b","tx_queue_len":1000}],"lan_state_nodes":["a","b"],"run_timing":[{"source":"run-timing.json","iperf_mode":"forward","iperf_directions":"both","iperf_seconds_requested":3600,"start_epoch":1000,"end_epoch":4600.1,"elapsed_seconds":3600.1}],"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"boot_ids":[{"node":"a","phase":"before","boot_id":"boot-a"},{"node":"a","phase":"after","boot_id":"boot-a"},{"node":"b","phase":"before","boot_id":"boot-b"},{"node":"b","phase":"after","boot_id":"boot-b"}],"errors":[],"log_findings":[],"kernel_log_artifacts":["collect/a/kernel.log","collect/b/kernel.log"],"kernel_log_nodes":["a","b"],"kernel_log_rejected_artifacts":[],"pstore_artifacts":["collect/a/pstore.txt","collect/b/pstore.txt"],"pstore_nodes":["a","b"],"pstore_rejected_artifacts":[]}`,

@@ -109,7 +109,7 @@ def require_sha256(value: Any, label: str) -> str:
     return value
 
 
-def load_manifest(gate_summary_dir: Path) -> dict[str, str]:
+def load_manifest(gate_summary_dir: Path) -> dict[str, Any]:
     manifest_path = gate_summary_dir / "production-gate-manifest.json"
     if not manifest_path.is_file():
         raise SystemExit(f"missing production gate manifest: {manifest_path}")
@@ -124,13 +124,17 @@ def load_manifest(gate_summary_dir: Path) -> dict[str, str]:
     verifier = manifest.get("verifier")
     if not isinstance(production_gate, dict) or not isinstance(verifier, dict):
         raise SystemExit(f"{manifest_path}: manifest lacks production_gate/verifier objects")
-    return {
+    loaded: dict[str, Any] = {
         "schema": SCHEMA,
         "production_gate_sha256": require_sha256(
             production_gate.get("sha256"), "production_gate.sha256"
         ),
         "verifier_sha256": require_sha256(verifier.get("sha256"), "verifier.sha256"),
     }
+    for key in ("cases", "case_min_gbps", "case_min_seconds"):
+        if key in manifest:
+            loaded[key] = manifest[key]
+    return loaded
 
 
 def load_matrix_rows(path: Path) -> dict[str, dict[str, Any]]:
@@ -452,6 +456,150 @@ def require_matrix_semantics(row: dict[str, Any]) -> None:
         want=want_case,
         gate_family=gate_family,
     )
+
+
+def manifest_section(
+    manifest: dict[str, Any],
+    section: str,
+    *,
+    require_complete_maps: bool,
+) -> dict[str, Any] | None:
+    value = manifest.get(section)
+    if value is None and not require_complete_maps:
+        return None
+    if not isinstance(value, dict):
+        raise SystemExit(f"production gate manifest lacks object section {section!r}")
+    return value
+
+
+def manifest_has_case_maps(manifest: dict[str, Any]) -> bool:
+    present = [key in manifest for key in ("cases", "case_min_gbps", "case_min_seconds")]
+    if not all(present):
+        raise SystemExit(
+            "production gate manifest must include cases, case_min_gbps, and "
+            "case_min_seconds together"
+        )
+    return True
+
+
+def parse_manifest_token_map(raw: Any, label: str) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, str):
+        raise SystemExit(f"production gate manifest {label} must be a string")
+    parsed: dict[str, str] = {}
+    for token in raw.split():
+        if "=" not in token:
+            raise SystemExit(
+                f"production gate manifest {label} has invalid token {token!r}"
+            )
+        name, value = token.split("=", 1)
+        if not name or not value:
+            raise SystemExit(
+                f"production gate manifest {label} has invalid token {token!r}"
+            )
+        if name in parsed:
+            raise SystemExit(
+                f"production gate manifest {label} duplicates case {name!r}"
+            )
+        parsed[name] = value
+    return parsed
+
+
+def manifest_family_map(
+    manifest: dict[str, Any],
+    section: str,
+    family_class: str,
+) -> dict[str, str]:
+    maps_are_present = manifest_has_case_maps(manifest)
+    section_map = manifest_section(
+        manifest,
+        section,
+        require_complete_maps=maps_are_present,
+    )
+    if section_map is None:
+        return {}
+    return parse_manifest_token_map(
+        section_map.get(family_class),
+        f"{section}.{family_class}",
+    )
+
+
+def require_manifest_case_alignment(
+    gate_row: dict[str, Any],
+    matrix_row: dict[str, Any],
+    manifest: dict[str, Any],
+    result: str,
+    required_seconds: float,
+) -> None:
+    if result != "pass" or not manifest_has_case_maps(manifest):
+        return
+    case = str(gate_row.get("case") or matrix_row.get("case") or "")
+    gate_family = matrix_string_field(matrix_row, "gate_family", case)
+    family_class = gate_family_class(gate_family)
+
+    cases = manifest_family_map(manifest, "cases", family_class)
+    if case not in cases:
+        raise SystemExit(
+            f"production gate manifest cases.{family_class} does not include "
+            f"case {case!r}"
+        )
+
+    min_gbps_by_case = manifest_family_map(manifest, "case_min_gbps", family_class)
+    if case not in min_gbps_by_case:
+        raise SystemExit(
+            f"production gate manifest case_min_gbps.{family_class} lacks "
+            f"case {case!r}"
+        )
+    try:
+        manifest_min_gbps = float(min_gbps_by_case[case])
+    except ValueError as exc:
+        raise SystemExit(
+            f"production gate manifest case_min_gbps.{family_class} case "
+            f"{case!r} has invalid value {min_gbps_by_case[case]!r}"
+        ) from exc
+    gate_min_gbps = numeric_field(gate_row, "min_gbps_required", "gate summary")
+    matrix_min_gbps = matrix_numeric_field(matrix_row, "min_gbps", case)
+    if gate_min_gbps < manifest_min_gbps:
+        raise SystemExit(
+            f"gate summary case {case!r} min_gbps_required={gate_min_gbps:.6f} "
+            f"is below production gate manifest case_min_gbps.{family_class}="
+            f"{manifest_min_gbps:.6f}"
+        )
+    if manifest_min_gbps < matrix_min_gbps:
+        raise SystemExit(
+            f"production gate manifest case_min_gbps.{family_class} case "
+            f"{case!r}={manifest_min_gbps:.6f} is below matrix requirement "
+            f"{matrix_min_gbps:.6f}"
+        )
+
+    min_seconds_by_case = manifest_family_map(manifest, "case_min_seconds", family_class)
+    if case not in min_seconds_by_case:
+        raise SystemExit(
+            f"production gate manifest case_min_seconds.{family_class} lacks "
+            f"case {case!r}"
+        )
+    try:
+        manifest_min_seconds = float(min_seconds_by_case[case])
+    except ValueError as exc:
+        raise SystemExit(
+            f"production gate manifest case_min_seconds.{family_class} case "
+            f"{case!r} has invalid value {min_seconds_by_case[case]!r}"
+        ) from exc
+    matrix_min_seconds = matrix_numeric_field(matrix_row, "min_seconds", case)
+    if required_seconds < manifest_min_seconds:
+        raise SystemExit(
+            f"gate summary case {case!r} min_seconds_required="
+            f"{format_metric_seconds(required_seconds)}s is below production gate "
+            f"manifest case_min_seconds.{family_class}="
+            f"{format_metric_seconds(manifest_min_seconds)}s"
+        )
+    if manifest_min_seconds < matrix_min_seconds:
+        raise SystemExit(
+            f"production gate manifest case_min_seconds.{family_class} case "
+            f"{case!r}={format_metric_seconds(manifest_min_seconds)}s is below "
+            f"matrix requirement {format_metric_seconds(matrix_min_seconds)}s"
+        )
 
 
 def require_long_soak_for_pass(
@@ -928,7 +1076,7 @@ def evidence_row(
     *,
     gate_row: dict[str, Any],
     matrix_row: dict[str, Any],
-    manifest: dict[str, str],
+    manifest: dict[str, Any],
     args: argparse.Namespace,
     result: str,
 ) -> list[str]:
@@ -954,6 +1102,7 @@ def evidence_row(
     require_runtime_artifacts_for_pass(gate_row, result)
     require_crash_stability_for_pass(gate_row, result)
     require_matrix_semantics(matrix_row)
+    require_manifest_case_alignment(gate_row, matrix_row, manifest, result, seconds)
     require_matrix_gate_alignment(gate_row, matrix_row, result, seconds)
     os_matrix = resolved_matrix_value(
         gate_row,
