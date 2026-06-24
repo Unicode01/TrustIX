@@ -456,6 +456,83 @@ def require_iperf_coverage_for_pass(
             )
 
 
+def require_result_marker_for_pass(row: dict[str, Any], result: str) -> None:
+    if result != "pass":
+        return
+    markers = list_field(row, "result_markers")
+    if not markers:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has 0 result_markers, want >= 1"
+        )
+    bad = [str(item) for item in markers if str(item) != "pass"]
+    if bad:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has non-pass result_markers: {bad!r}"
+        )
+
+
+def require_binary_identity_for_pass(row: dict[str, Any], result: str) -> None:
+    if result != "pass":
+        return
+    identities = list_field(row, "binary_identities")
+    if len(identities) < 2:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has {len(identities)} "
+            "binary_identities, want >= 2"
+        )
+    hashes: set[str] = set()
+    for item in identities:
+        if not isinstance(item, dict):
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has invalid binary identity: {item!r}"
+            )
+        sha256 = str(item.get("sha256") or "")
+        if not SHA256_RE.fullmatch(sha256):
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has invalid binary sha256: "
+                f"{sha256!r}"
+            )
+        hashes.add(sha256)
+    if len(hashes) != 1:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has mismatched binary sha256s: "
+            f"{sorted(hashes)}"
+        )
+
+
+def require_runtime_artifacts_for_pass(row: dict[str, Any], result: str) -> None:
+    if result != "pass":
+        return
+    require_min_list_items(row, "lsmod_nodes", 2)
+    require_min_list_items(row, "lsmod_artifacts", 2)
+    require_min_list_items(row, "lan_state_nodes", 2)
+    lan_states = list_field(row, "lan_state_artifacts")
+    if len(lan_states) < 2:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has {len(lan_states)} "
+            "lan_state_artifacts, want >= 2"
+        )
+    valid_nodes: set[str] = set()
+    for item in lan_states:
+        if not isinstance(item, dict):
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has invalid LAN state: {item!r}"
+            )
+        node = str(item.get("node") or "")
+        iface = str(item.get("interface") or "")
+        tx_queue_len = item.get("tx_queue_len")
+        if not node or not iface or not isinstance(tx_queue_len, int) or tx_queue_len < 1:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has invalid LAN state: {item!r}"
+            )
+        valid_nodes.add(node)
+    if len(valid_nodes) < 2:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has valid LAN state coverage "
+            f"for {len(valid_nodes)} nodes, want >= 2"
+        )
+
+
 def require_crash_stability_for_pass(row: dict[str, Any], result: str) -> None:
     if result != "pass":
         return
@@ -575,6 +652,9 @@ def evidence_row(
     require_run_timing_for_pass(gate_row, result, seconds, seconds_slop)
     require_throughput_for_pass(gate_row, result)
     require_iperf_coverage_for_pass(gate_row, result, seconds, seconds_slop)
+    require_result_marker_for_pass(gate_row, result)
+    require_binary_identity_for_pass(gate_row, result)
+    require_runtime_artifacts_for_pass(gate_row, result)
     require_crash_stability_for_pass(gate_row, result)
     os_matrix = resolved_matrix_value(
         gate_row,

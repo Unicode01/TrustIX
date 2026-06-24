@@ -840,6 +840,21 @@ func addProductionGatePassIperfCoverage(row map[string]any) {
 			"received_required": true,
 		},
 	}
+	row["result_markers"] = []string{"pass"}
+	row["binary_identities"] = []map[string]any{
+		{"source": "collect/a/binary-identity.json", "sha256": strings.Repeat("c", 64)},
+		{"source": "collect/b/binary-identity.json", "sha256": strings.Repeat("c", 64)},
+	}
+	row["lsmod_artifacts"] = []map[string]any{
+		{"source": "collect/a/lsmod.txt", "node": "a", "modules": []string{}},
+		{"source": "collect/b/lsmod.txt", "node": "b", "modules": []string{}},
+	}
+	row["lsmod_nodes"] = []string{"a", "b"}
+	row["lan_state_artifacts"] = []map[string]any{
+		{"source": "collect/a/lan-state.txt", "node": "a", "interface": "tix-lan-a", "tx_queue_len": 1000},
+		{"source": "collect/b/lan-state.txt", "node": "b", "interface": "tix-lan-b", "tx_queue_len": 1000},
+	}
+	row["lan_state_nodes"] = []string{"a", "b"}
 }
 
 func TestProductionEvidenceFromGateSummaryRejectsShortPassSoak(t *testing.T) {
@@ -1162,6 +1177,92 @@ func TestProductionEvidenceFromGateSummaryRequiresIperfCoverageArtifacts(t *test
 	}
 	if !strings.Contains(string(output), "min_iperf_intervals_required") {
 		t.Fatalf("generator did not explain missing iperf coverage:\n%s", output)
+	}
+}
+
+func TestProductionEvidenceFromGateSummaryRequiresRuntimeIdentityArtifacts(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	matrixSummary := filepath.Join(workdir, "summary.jsonl")
+	gateSummaryDir := filepath.Join(workdir, "selected-production-gate")
+	if err := os.MkdirAll(gateSummaryDir, 0o755); err != nil {
+		t.Fatalf("create gate summary dir: %v", err)
+	}
+	matrixRow := map[string]any{
+		"status": "pass",
+		"case":   "udp-secure-stable-userspace-userspace",
+	}
+	matrixPayload, err := json.Marshal(matrixRow)
+	if err != nil {
+		t.Fatalf("marshal matrix row: %v", err)
+	}
+	if err := os.WriteFile(matrixSummary, append(matrixPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write matrix summary: %v", err)
+	}
+	gateRow := map[string]any{
+		"case":                       "udp-secure-stable-userspace-userspace",
+		"status":                     "pass",
+		"min_gbps_required":          1.5,
+		"min_seconds_required":       3600,
+		"min_sent_gbps":              1.9,
+		"min_received_gbps":          1.8,
+		"min_required_received_gbps": 1.7,
+		"min_seconds":                3600.1,
+		"seconds_slop":               0,
+		"run_timing": []map[string]any{
+			{
+				"source":                  "run-timing.json",
+				"iperf_mode":              "forward",
+				"iperf_directions":        "both",
+				"iperf_seconds_requested": 3600,
+				"start_epoch":             1000,
+				"end_epoch":               4600.1,
+				"elapsed_seconds":         3600.1,
+			},
+		},
+	}
+	addProductionGatePassIperfCoverage(gateRow)
+	delete(gateRow, "result_markers")
+	gatePayload, err := json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal gate row: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write gate summary: %v", err)
+	}
+	manifest := map[string]any{
+		"schema": productionGateManifestSchema,
+		"production_gate": map[string]any{
+			"path":   "scripts/linux-cross-host-production-gate.sh",
+			"sha256": strings.Repeat("a", 64),
+			"size":   123,
+		},
+		"verifier": map[string]any{
+			"path":   "scripts/linux-cross-host-soak-verify.py",
+			"sha256": strings.Repeat("b", 64),
+			"size":   456,
+		},
+	}
+	manifestPayload, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--artifact", "docs/trustix-performance-log.md#missing-runtime-identity",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("generator accepted pass evidence without result markers:\n%s", output)
+	}
+	if !strings.Contains(string(output), "result_markers") {
+		t.Fatalf("generator did not explain missing runtime identity:\n%s", output)
 	}
 }
 
@@ -2960,7 +3061,7 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456}}`,
 		"JSON",
 		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/userspace-udp-secure.jsonl\" <<'JSON'",
-		`{"case":"udp-secure-stable-userspace-userspace","status":"pass","min_gbps_required":1.5,"min_seconds_required":3600,"seconds_slop":0,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"min_seconds":3600.1,"min_iperf_intervals_required":600,"min_iperf_interval_gbps_ratio_required":0.25,"iperf_json_count":2,"iperf_direction_count":2,"iperf_pair_directions":["a-to-b","b-to-a"],"iperf":[{"direction":"forward","sent_gbps":1.9,"received_gbps":1.8,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true},{"direction":"forward","sent_gbps":1.8,"received_gbps":1.7,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true}],"run_timing":[{"source":"run-timing.json","iperf_mode":"forward","iperf_directions":"both","iperf_seconds_requested":3600,"start_epoch":1000,"end_epoch":4600.1,"elapsed_seconds":3600.1}],"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"boot_ids":[{"node":"a","phase":"before","boot_id":"boot-a"},{"node":"a","phase":"after","boot_id":"boot-a"},{"node":"b","phase":"before","boot_id":"boot-b"},{"node":"b","phase":"after","boot_id":"boot-b"}],"errors":[],"log_findings":[],"kernel_log_artifacts":["collect/a/kernel.log","collect/b/kernel.log"],"kernel_log_nodes":["a","b"],"kernel_log_rejected_artifacts":[],"pstore_artifacts":["collect/a/pstore.txt","collect/b/pstore.txt"],"pstore_nodes":["a","b"],"pstore_rejected_artifacts":[]}`,
+		`{"case":"udp-secure-stable-userspace-userspace","status":"pass","min_gbps_required":1.5,"min_seconds_required":3600,"seconds_slop":0,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"min_seconds":3600.1,"min_iperf_intervals_required":600,"min_iperf_interval_gbps_ratio_required":0.25,"iperf_json_count":2,"iperf_direction_count":2,"iperf_pair_directions":["a-to-b","b-to-a"],"iperf":[{"direction":"forward","sent_gbps":1.9,"received_gbps":1.8,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true},{"direction":"forward","sent_gbps":1.8,"received_gbps":1.7,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true}],"result_markers":["pass"],"binary_identities":[{"source":"collect/a/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"source":"collect/b/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}],"lsmod_artifacts":[{"source":"collect/a/lsmod.txt","node":"a","modules":[]},{"source":"collect/b/lsmod.txt","node":"b","modules":[]}],"lsmod_nodes":["a","b"],"lan_state_artifacts":[{"source":"collect/a/lan-state.txt","node":"a","interface":"tix-lan-a","tx_queue_len":1000},{"source":"collect/b/lan-state.txt","node":"b","interface":"tix-lan-b","tx_queue_len":1000}],"lan_state_nodes":["a","b"],"run_timing":[{"source":"run-timing.json","iperf_mode":"forward","iperf_directions":"both","iperf_seconds_requested":3600,"start_epoch":1000,"end_epoch":4600.1,"elapsed_seconds":3600.1}],"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"boot_ids":[{"node":"a","phase":"before","boot_id":"boot-a"},{"node":"a","phase":"after","boot_id":"boot-a"},{"node":"b","phase":"before","boot_id":"boot-b"},{"node":"b","phase":"after","boot_id":"boot-b"}],"errors":[],"log_findings":[],"kernel_log_artifacts":["collect/a/kernel.log","collect/b/kernel.log"],"kernel_log_nodes":["a","b"],"kernel_log_rejected_artifacts":[],"pstore_artifacts":["collect/a/pstore.txt","collect/b/pstore.txt"],"pstore_nodes":["a","b"],"pstore_rejected_artifacts":[]}`,
 		"JSON",
 		"",
 	}, "\n")), 0o755); err != nil {
