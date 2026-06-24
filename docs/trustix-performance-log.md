@@ -7,7 +7,11 @@ the gate manifest schema plus the SHA256 of the production gate script and
 verifier used for the run. Rows captured before
 `production-gate-manifest.json` existed are marked `legacy-pre-manifest`; new
 production evidence must copy the schema and hashes from that manifest instead
-of reusing the legacy marker.
+of reusing the legacy marker. New passing production evidence must be generated
+from production-gate summaries so `scripts/production-evidence-from-gate-summary.py`
+can verify the measured soak reached at least 3600 seconds, the run timing was
+`iperf_mode=forward` with `iperf_directions=both`, boot IDs stayed stable on at
+least two nodes, and kernel log plus pstore artifacts were collected cleanly.
 
 Current production-default evidence boundary:
 
