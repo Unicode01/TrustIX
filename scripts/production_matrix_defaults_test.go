@@ -3336,7 +3336,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"data_b_port=\"${TRUSTIX_CROSS_HOST_DATA_B_PORT:-}\"",
 		"default_data_port",
 		"node_value \"$node\" 13000 13001",
-		"TRUSTIX_CROSS_HOST_IPERF_SECONDS:-900",
+		"TRUSTIX_CROSS_HOST_IPERF_SECONDS:-3600",
 		"iperf_parallel_explicit=\"${TRUSTIX_CROSS_HOST_IPERF_PARALLEL+x}\"",
 		"health_port=\"${TRUSTIX_CROSS_HOST_HEALTH_PORT:-}\"",
 		"TRUSTIX_CROSS_HOST_IPERF_MODE:-forward",
