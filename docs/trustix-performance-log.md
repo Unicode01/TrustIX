@@ -26,7 +26,7 @@ Current production-default evidence boundary:
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` with direct-kfunc FPU fallback exercised | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `01ca47e` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
-| OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+| OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-25
 
@@ -195,11 +195,12 @@ experimental TCP case reported the same missing `route_tcp_kfunc` and
 `route_tcp_xmit_kfunc` runtime capability.
 
 Conclusion: upgrading the official OpenWrt x86_64 image to 25.12.4 does not
-enable TrustIX route-GSO or secure-kUDP route-GSO. Even with forced full
-modules built from the matching SDK, the official guest did not expose the
-runtime route-TCP kfunc capability required by these paths. No OpenWrt
-route-GSO or secure-kUDP route-GSO production default was promoted; the
-selected OpenWrt production kernel path remains UDP plaintext full-kmod.
+enable TrustIX route-GSO, secure-kUDP route-GSO, or secure experimental TCP
+kernel crypto route-GSO. Even with forced full modules built from the matching
+SDK, the official guest did not expose the runtime route-TCP kfunc capability
+required by these paths. No OpenWrt route-GSO, secure-kUDP route-GSO, or secure
+experimental TCP kernel production default was promoted; the selected OpenWrt
+production kernel path remains UDP plaintext full-kmod.
 
 ## 2026-06-23
 
@@ -816,7 +817,10 @@ signature.
 Both route-GSO cases loaded the OpenWrt helper module but failed closed before
 traffic with missing `route_tcp_kfunc` and `route_tcp_xmit_kfunc`. They remain
 runtime capability failures, so OpenWrt 24.10.7 secure-kUDP route-GSO and
-experimental TCP route-GSO are still not production defaults.
+experimental TCP route-GSO are still not production defaults. Secure
+experimental TCP kernel crypto shares the same route-TCP kfunc prerequisite, so
+it is also fail-closed on this OpenWrt kernel until a dedicated OpenWrt gate can
+actually run traffic.
 
 ### Debian route-GSO current-head production recheck
 

@@ -59,13 +59,13 @@ the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
 OpenWrt 24.10.7 x86_64 has since passed an SDK module build and 3600s
 OpenWrt-to-Debian full-kmod production gates, most recently on 2026-06-24
 against Debian `6.12.90+deb13.1-cloud-amd64` at commit `01ca47e`.
-OpenWrt 24.10.7 route-GSO and
-secure-kUDP route-GSO both failed closed at the runtime capability gate because
-the tested image did not expose usable route-TCP kfunc capability. OpenWrt
-25.12.4 x86_64 SDK modules also built in forced full mode, but the official
-runtime image used APK package feeds, did not expose `/sys/kernel/btf/vmlinux`,
-and route-GSO plus secure-kUDP route-GSO failed closed with missing
-`route_tcp_kfunc` and `route_tcp_xmit_kfunc`.
+OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and secure experimental TCP
+kernel crypto all failed closed at the runtime capability gate because the
+tested image did not expose usable route-TCP kfunc capability. OpenWrt 25.12.4
+x86_64 SDK modules also built in forced full mode, but the official runtime
+image used APK package feeds, did not expose `/sys/kernel/btf/vmlinux`, and
+route-GSO, secure-kUDP route-GSO, plus secure experimental TCP kernel crypto
+failed closed with missing `route_tcp_kfunc` and `route_tcp_xmit_kfunc`.
 
 Generic Linux Kbuild on Ubuntu 22.04.5:
 
@@ -217,8 +217,10 @@ OpenWrt-to-Debian secure-kUDP route-GSO and experimental TCP route-GSO failed
 closed before traffic with missing `route_tcp_kfunc` and
 `route_tcp_xmit_kfunc`. Do not promote OpenWrt 24.10.2 secure-kUDP route-GSO or
 OpenWrt route-GSO defaults until an OpenWrt kernel with usable BTF/kfunc support
-passes the runtime route-TCP gate. The selected OpenWrt 24.10.2 production
-kernel path remains UDP plaintext full-kmod.
+passes the runtime route-TCP gate. Secure experimental TCP kernel crypto shares
+the same route-TCP prerequisite, so it remains fail-closed on OpenWrt 24.10.2
+as well. The selected OpenWrt 24.10.2 production kernel path remains UDP
+plaintext full-kmod.
 
 The 2026-06-21 OpenWrt 24.10.7 follow-up used VM201 OpenWrt x86_64 kernel
 `6.6.141` and VM200 Debian 13 `6.12.90+deb13.1-cloud-amd64` on the same PVE
@@ -239,8 +241,9 @@ panic, Oops, BUG, call trace, page fault, watchdog, lockup, hung-task,
 `tx_queue_len`, or TrustIX datapath crash signature. The same guest still had
 no `/sys/kernel/btf/vmlinux`, and both secure-kUDP route-GSO and experimental
 TCP route-GSO failed closed before traffic with missing `route_tcp_kfunc` and
-`route_tcp_xmit_kfunc`. The selected OpenWrt production kernel path therefore
-remains UDP plaintext full-kmod with exact-version runtime evidence.
+`route_tcp_xmit_kfunc`; secure experimental TCP kernel crypto is blocked by the
+same route-TCP prerequisite. The selected OpenWrt production kernel path
+therefore remains UDP plaintext full-kmod with exact-version runtime evidence.
 
 A 2026-06-24 OpenWrt 25.12.4 follow-up used VM201 OpenWrt x86_64 kernel
 `6.12.87` and VM200 Debian 13 `6.12.94+deb13-amd64` on isolated `vmbr3`.
@@ -255,8 +258,9 @@ for `trustix_crypto.ko`,
 `d9990877dfdc431023d7c26b89924a47e070f537c5b0e94e76ed9bf263e28abe` for
 `trustix_datapath_helpers.ko`. Both secure-kUDP route-GSO and experimental TCP
 route-GSO failed closed before traffic with missing `route_tcp_kfunc` and
-`route_tcp_xmit_kfunc`, so upgrading to the official 25.12.4 image does not
-change the OpenWrt production default selection.
+`route_tcp_xmit_kfunc`; secure experimental TCP kernel crypto is blocked by the
+same route-TCP prerequisite, so upgrading to the official 25.12.4 image does
+not change the OpenWrt production default selection.
 
 A 2026-06-23 current-head OpenWrt 24.10.7-to-Debian full-kmod recheck paired
 OpenWrt kernel `6.6.141` with Debian 13 `6.12.94+deb13-amd64` and passed the
@@ -265,9 +269,9 @@ OpenWrt kernel `6.6.141` with Debian 13 `6.12.94+deb13-amd64` and passed the
 3.507421 Gbps against the 3 Gbps gate, before/after boot IDs stayed stable,
 pstore and kernel log scans were clean, and covered datapath error counters
 were zero. A concurrent direct underlay probe while full-kmod was loaded reached
-3.752 Gbps from OpenWrt to Debian. OpenWrt route-GSO and secure-kUDP route-GSO
-remain unselected because the tested OpenWrt kernel still lacks usable
-route-TCP kfunc capability.
+3.752 Gbps from OpenWrt to Debian. OpenWrt route-GSO, secure-kUDP route-GSO,
+and secure experimental TCP kernel crypto remain unselected because the tested
+OpenWrt kernel still lacks usable route-TCP kfunc capability.
 
 A 2026-06-24 current-head OpenWrt 24.10.7-to-Debian full-kmod recheck paired
 OpenWrt kernel `6.6.141` with Debian 13
@@ -296,8 +300,9 @@ Older performance-log runs also covered a wider OpenWrt compile matrix, but the
 table above is the current-source spot check. Runtime full-kmod coverage now
 includes OpenWrt 23.05.5, 24.10.2, and 24.10.7 x86_64 with matching SDK-built
 modules. OpenWrt 24.10.7 also has route-GSO fail-closed coverage, but no
-OpenWrt route-GSO production default is selected until a tested OpenWrt kernel
-exposes usable route-TCP kfunc capability.
+OpenWrt route-GSO, secure-kUDP route-GSO, or secure experimental TCP kernel
+production default is selected until a tested OpenWrt kernel exposes usable
+route-TCP kfunc capability.
 
 OpenWrt `23.05.5 x86_64` runtime status was promoted after a cross-host PVE
 stress run on 2026-06-16. OpenWrt kernel `5.15.167` loaded an OpenWrt SDK-built
@@ -317,7 +322,8 @@ loaded and passed selftests, but it did not provide
 `route_tcp_kfunc`/`route_tcp_xmit_kfunc`. Both secure-kUDP route-GSO and
 experimental TCP route-GSO failed closed before traffic with the expected
 missing-capability diagnostic. Do not select OpenWrt 23.05.5, 24.10.2, or
-24.10.7 route-GSO or secure-kUDP route-GSO as production defaults. The later
+24.10.7 route-GSO or secure-kUDP route-GSO as production defaults. Secure
+experimental TCP kernel crypto shares the same route-TCP prerequisite. The later
 OpenWrt 25.12.4 official x86_64 image also failed closed for the same
 capability boundary. Use the validated UDP plaintext full-kmod path until a
 newer OpenWrt kernel/helper combination passes the runtime route-TCP kfunc

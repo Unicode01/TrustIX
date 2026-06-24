@@ -2261,12 +2261,15 @@ func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 
 func TestOpenWrtRouteGSOFamiliesHaveFailClosedRuntimeEvidence(t *testing.T) {
 	want := map[string]bool{
-		"owdeb_secure_kudp:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                 false,
-		"owdeb_route_gso:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                   false,
-		"owdeb_secure_kudp:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                 false,
-		"owdeb_route_gso:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                   false,
-		"owdeb_secure_kudp:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check": false,
-		"owdeb_route_gso:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check":   false,
+		"owdeb_secure_kudp:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                           false,
+		"owdeb_route_gso:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                             false,
+		"owdeb_secure_exp_tcp_kernel:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                 false,
+		"owdeb_secure_kudp:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                           false,
+		"owdeb_route_gso:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                             false,
+		"owdeb_secure_exp_tcp_kernel:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                 false,
+		"owdeb_secure_kudp:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check":           false,
+		"owdeb_route_gso:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check":             false,
+		"owdeb_secure_exp_tcp_kernel:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check": false,
 	}
 	for _, evidence := range loadProductionTransportEvidence(t) {
 		if evidence.Result != "fail_closed" || evidence.MinGbps != "0" || evidence.MinSeconds != "30" {
@@ -2290,6 +2293,46 @@ func TestOpenWrtRouteGSOFamiliesHaveFailClosedRuntimeEvidence(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Fatalf("missing OpenWrt route-GSO fail-closed runtime evidence: %v", missing)
+	}
+}
+
+func TestOpenWrtSecureExperimentalTCPKernelFailClosedRowsInheritRouteTCPGate(t *testing.T) {
+	rows := loadProductionTransportEvidence(t)
+	routeTCPFailures := map[string]bool{}
+	keyFor := func(evidence productionTransportEvidence) string {
+		return strings.Join([]string{
+			evidence.OSMatrix,
+			evidence.KernelMatrix,
+			evidence.Artifact,
+		}, ":")
+	}
+	for _, evidence := range rows {
+		if evidence.GateFamily == "owdeb_route_gso" &&
+			evidence.Result == "fail_closed" &&
+			evidence.MinGbps == "0" &&
+			evidence.MinSeconds == "30" &&
+			strings.Contains(evidence.Note, "route-TCP kfunc") {
+			routeTCPFailures[keyFor(evidence)] = true
+		}
+	}
+	var seen int
+	for _, evidence := range rows {
+		if evidence.GateFamily != "owdeb_secure_exp_tcp_kernel" {
+			continue
+		}
+		seen++
+		if evidence.Result != "fail_closed" || evidence.MinGbps != "0" || evidence.MinSeconds != "30" {
+			t.Fatalf("OpenWrt secure experimental TCP kernel evidence must be fail-closed prerequisite evidence, got %+v", evidence)
+		}
+		if !strings.Contains(evidence.Note, "route-TCP kfunc") {
+			t.Fatalf("OpenWrt secure experimental TCP kernel evidence must name the missing route-TCP prerequisite: %+v", evidence)
+		}
+		if !routeTCPFailures[keyFor(evidence)] {
+			t.Fatalf("OpenWrt secure experimental TCP kernel fail-closed row is not tied to route-GSO route-TCP capability evidence: %+v", evidence)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("missing OpenWrt secure experimental TCP kernel fail-closed boundary rows")
 	}
 }
 
@@ -4735,6 +4778,9 @@ func TestCrossHostTransportMatrixDryRunIncludesOpenWrtDebianFullKmod(t *testing.
 		if row.RunnerCase == "owdeb-secure-kudp" || row.GateFamily == "owdeb_secure_kudp" {
 			t.Fatalf("OpenWrt-Debian secure-kudp was promoted without a passing OpenWrt route-GSO/kfunc gate:\n%s", payload)
 		}
+		if row.GateFamily == "owdeb_secure_exp_tcp_kernel" {
+			t.Fatalf("OpenWrt-Debian secure experimental TCP kernel path was promoted without a passing OpenWrt route-GSO/kfunc gate:\n%s", payload)
+		}
 		if strings.Contains(row.Case, "route-gso") && strings.HasSuffix(row.Case, "-owdeb") {
 			t.Fatalf("OpenWrt-Debian route-GSO was promoted without a passing OpenWrt route-GSO/kfunc gate:\n%s", payload)
 		}
@@ -4804,7 +4850,7 @@ func TestProductionDefaultsDoNotPromoteOpenWrtRouteGSOWithoutRuntimeEvidence(t *
 	rows := loadProductionTransportDefaults(t)
 	for _, row := range rows {
 		switch row.GateFamily {
-		case "owdeb_secure_kudp", "owdeb_route_gso":
+		case "owdeb_secure_kudp", "owdeb_secure_exp_tcp_kernel", "owdeb_route_gso":
 			t.Fatalf("production defaults include %s before OpenWrt route-GSO/kfunc runtime validation: %+v", row.GateFamily, row)
 		}
 	}
