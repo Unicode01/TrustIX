@@ -13,6 +13,8 @@ from typing import Any
 
 SCHEMA = "trustix-cross-host-production-gate-manifest-v1"
 MIN_PRODUCTION_PASS_SECONDS = 3600
+MIN_PRODUCTION_IPERF_INTERVALS = 600
+MIN_PRODUCTION_INTERVAL_GBPS_RATIO = 0.25
 COLUMNS = [
     "gate_family",
     "transport",
@@ -356,6 +358,104 @@ def require_run_timing_for_pass(
             )
 
 
+def require_throughput_for_pass(row: dict[str, Any], result: str) -> None:
+    if result != "pass":
+        return
+    required = numeric_field(row, "min_gbps_required", "gate summary")
+    if required <= 0:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has invalid min_gbps_required: "
+            f"{format_metric_seconds(required)}"
+        )
+    for key in ("min_sent_gbps", "min_required_received_gbps"):
+        observed = numeric_field(row, key, "gate summary")
+        if observed < required:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} {key}="
+                f"{observed:.6f} < min_gbps_required={required:.6f}"
+            )
+
+
+def require_iperf_coverage_for_pass(
+    row: dict[str, Any],
+    result: str,
+    required_seconds: float,
+    seconds_slop: float,
+) -> None:
+    if result != "pass":
+        return
+    min_intervals = numeric_field(
+        row,
+        "min_iperf_intervals_required",
+        "gate summary",
+    )
+    if min_intervals < MIN_PRODUCTION_IPERF_INTERVALS:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} requires only "
+            f"{format_metric_seconds(min_intervals)} iperf intervals, "
+            f"want >= {MIN_PRODUCTION_IPERF_INTERVALS}"
+        )
+    ratio = numeric_field(
+        row,
+        "min_iperf_interval_gbps_ratio_required",
+        "gate summary",
+    )
+    if ratio < MIN_PRODUCTION_INTERVAL_GBPS_RATIO:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} interval throughput ratio "
+            f"{format_metric_seconds(ratio)} < {MIN_PRODUCTION_INTERVAL_GBPS_RATIO}"
+        )
+    for key in ("iperf_json_count", "iperf_direction_count"):
+        count = numeric_field(row, key, "gate summary")
+        if count < 2:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has {format_metric_seconds(count)} "
+                f"{key}, want >= 2"
+            )
+    pair_directions = {str(item) for item in list_field(row, "iperf_pair_directions")}
+    missing = {"a-to-b", "b-to-a"} - pair_directions
+    if missing:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} missing iperf_pair_directions: "
+            f"{','.join(sorted(missing))}"
+        )
+    iperf_items = list_field(row, "iperf")
+    if len(iperf_items) < 2:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has {len(iperf_items)} iperf "
+            "result items, want >= 2"
+        )
+    interval_floor = numeric_field(row, "min_gbps_required", "gate summary") * ratio
+    for index, item in enumerate(iperf_items):
+        if not isinstance(item, dict):
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has invalid iperf item: {item!r}"
+            )
+        source = f"iperf[{index}]"
+        case = str(row.get("case") or "")
+        seconds = numeric_field(item, "seconds", source, case=case)
+        intervals = numeric_field(item, "intervals", source, case=case)
+        interval_min = numeric_field(item, "interval_min_gbps", source, case=case)
+        if seconds + seconds_slop < required_seconds:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} {source} seconds "
+                f"{format_metric_seconds(seconds)}s + "
+                f"seconds_slop={format_metric_seconds(seconds_slop)}s < "
+                f"required={format_metric_seconds(required_seconds)}s"
+            )
+        if intervals < min_intervals:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} {source} intervals "
+                f"{format_metric_seconds(intervals)}, want >= "
+                f"{format_metric_seconds(min_intervals)}"
+            )
+        if interval_min < interval_floor:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} {source} interval_min_gbps "
+                f"{interval_min:.6f} < floor {interval_floor:.6f}"
+            )
+
+
 def require_crash_stability_for_pass(row: dict[str, Any], result: str) -> None:
     if result != "pass":
         return
@@ -473,6 +573,8 @@ def evidence_row(
         seconds_slop,
     )
     require_run_timing_for_pass(gate_row, result, seconds, seconds_slop)
+    require_throughput_for_pass(gate_row, result)
+    require_iperf_coverage_for_pass(gate_row, result, seconds, seconds_slop)
     require_crash_stability_for_pass(gate_row, result)
     os_matrix = resolved_matrix_value(
         gate_row,
