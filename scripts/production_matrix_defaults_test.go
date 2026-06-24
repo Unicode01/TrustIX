@@ -1893,6 +1893,74 @@ func TestProductionDefaultsDoNotPromotePlainExperimentalTCPUserspaceWithoutStric
 	}
 }
 
+func TestProductionDefaultsDoNotReuseSecureKUDPForSecureExperimentalTCPKernelCrypto(t *testing.T) {
+	const (
+		minGbps    = 1.5
+		minSeconds = 3600
+	)
+
+	hasStrictDedicatedEvidence := false
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		if evidence.GateFamily == "secure_kudp" && evidence.Transport != "kernel_udp" {
+			t.Fatalf("secure_kudp evidence must describe kernel_udp, not another secure kernel crypto transport: %+v", evidence)
+		}
+		if evidence.Transport != "experimental_tcp" ||
+			evidence.Encryption != "secure" ||
+			evidence.Profile != "performance" ||
+			evidence.CryptoPlacement != "kernel" ||
+			evidence.ValidationScope != "cross_host" ||
+			evidence.Result != "pass" ||
+			evidence.GateManifestSchema != productionGateManifestSchema {
+			continue
+		}
+		switch evidence.Datapath {
+		case "tc_xdp", "kernel_module":
+		default:
+			continue
+		}
+		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid secure experimental_tcp kernel evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+		}
+		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid secure experimental_tcp kernel evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+		}
+		if evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
+			hasStrictDedicatedEvidence = true
+			break
+		}
+	}
+
+	var sawSecureUserspace bool
+	for _, row := range loadProductionTransportDefaults(t) {
+		if row.GateFamily == "secure_kudp" && row.Transport != "kernel_udp" {
+			t.Fatalf("secure_kudp production default must stay scoped to kernel_udp: %+v", row)
+		}
+		if row.Transport != "experimental_tcp" || row.Encryption != "secure" {
+			continue
+		}
+		if row.Profile == "stable" &&
+			row.Datapath == "userspace" &&
+			row.CryptoPlacement == "userspace" &&
+			row.ValidationScope == "cross_host" &&
+			row.GateFamily == "userspace" &&
+			row.MinGbps == "1" &&
+			row.MinSeconds == "3600" {
+			sawSecureUserspace = true
+		}
+		if row.Profile == "performance" &&
+			row.CryptoPlacement == "kernel" &&
+			row.ValidationScope == "cross_host" &&
+			!hasStrictDedicatedEvidence {
+			t.Fatalf("secure experimental_tcp kernel-crypto production default requires dedicated strict 3600s manifest evidence: %+v", row)
+		}
+	}
+	if !sawSecureUserspace {
+		t.Fatal("secure experimental_tcp userspace cross-host production default disappeared")
+	}
+}
+
 func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing.T) {
 	defaults := readProductionTransportDefaults(t)
 	for _, wantCase := range []string{
