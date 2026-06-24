@@ -720,6 +720,34 @@ func TestIXProvisionOpenWRTActiveDefaultsToValidatedUDPFullKmod(t *testing.T) {
 	}
 }
 
+func TestIXProvisionOpenWRTSecurePerformanceFailsClosedBeforeUnpromotedRouteGSO(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	for _, tc := range []struct {
+		name      string
+		transport string
+	}{
+		{name: "default udp"},
+		{name: "explicit experimental_tcp", transport: "experimental_tcp"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
+				IXID:              "ix-openwrt-secure",
+				Profile:           "performance",
+				Advertise:         []core.Prefix{"10.82.0.0/24"},
+				EndpointMode:      "active",
+				EndpointAddress:   "ix-upstream.example.com:7000",
+				EndpointTransport: tc.transport,
+				ProvisionURL:      "https://ix-a.example.com:18787",
+				ServiceManager:    "openwrt",
+			}, desired)
+			if err == nil || !strings.Contains(err.Error(), "OpenWrt secure performance route-GSO is not a production default yet") {
+				t.Fatalf("normalize OpenWrt secure performance error = %v, want route-GSO fail-closed", err)
+			}
+		})
+	}
+}
+
 func TestIXProvisionOpenWRTExplicitExperimentalTCPStaysFullKmodNotRouteGSO(t *testing.T) {
 	for _, row := range readProductionTransportDefaultRowsForProvisionTest(t) {
 		switch row.GateFamily {

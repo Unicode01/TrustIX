@@ -561,6 +561,9 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 	if request.EndpointTransport == "" {
 		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile, request.EndpointMode, request.EndpointAddress, request.ServiceManager)
 	}
+	if err := validateIXProvisionKernelRouteGSOSupport(request); err != nil {
+		return ixProvisionIssueRequest{}, nil, err
+	}
 	if transportProtocolIsKernelTunnel(request.EndpointTransport) {
 		tunnelAddress, err := normalizeProvisionTunnelEndpointAddress(request.EndpointAddress)
 		if err != nil {
@@ -1161,6 +1164,26 @@ func ixProvisionSecureExperimentalTCPKernelProfile(request ixProvisionIssueReque
 		parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionSecure &&
 		profile.CryptoPlacement == ixProvisionPerformanceCryptoPlacement &&
 		profile.KernelTransport == ixProvisionPerformanceKernelTransport
+}
+
+func validateIXProvisionKernelRouteGSOSupport(request ixProvisionIssueRequest) error {
+	if request.ServiceManager != "openwrt" {
+		return nil
+	}
+	profile, err := ixProvisionDefaultsForProfile(request.Profile)
+	if err != nil {
+		return err
+	}
+	if profile.TransportProfile != config.TransportProfilePerformance ||
+		parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionSecure {
+		return nil
+	}
+	switch transport.Protocol(request.EndpointTransport) {
+	case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+		return fmt.Errorf("OpenWrt secure performance route-GSO is not a production default yet; use profile=stable for secure userspace transport or profile=plaintext_performance for validated OpenWrt full-kmod")
+	default:
+		return nil
+	}
 }
 
 func ixProvisionOpenWRTTCOnly(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
