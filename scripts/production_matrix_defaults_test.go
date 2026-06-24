@@ -403,8 +403,11 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"http_connect:secure:stable:userspace:userspace:cross_host:userspace:0.75:3600",
 				"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace:1:3600",
 				"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
+				"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 				"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
+				"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 				"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
+				"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 				"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
@@ -1371,6 +1374,9 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 			}
 			if minGbps <= 0 || minSeconds < 900 {
 				t.Fatalf("cross-host production row lacks throughput/soak gate: %+v", row)
+			}
+			if minSeconds < 3600 {
+				t.Fatalf("cross-host production row must stay on long-soak evidence, got %+v", row)
 			}
 		}
 		if crossHostOnlyGate[row.GateFamily] && row.ValidationScope != "cross_host" {
