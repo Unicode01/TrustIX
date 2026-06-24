@@ -1997,7 +1997,7 @@ func TestCrossHostProductionGateRejectsSecureExpTCPKernelWithoutRouteGSO(t *test
 	}
 }
 
-func TestCrossHostProductionGateRejectsSecureExpTCPKernelWithoutPacketSeal(t *testing.T) {
+func TestCrossHostProductionGateRejectsSecureExpTCPKernelWithoutDirectKfuncCrypto(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
 	writeSecureExpTCPKernelProductionGateArtifacts(t, dir, true, false)
@@ -2005,10 +2005,10 @@ func TestCrossHostProductionGateRejectsSecureExpTCPKernelWithoutPacketSeal(t *te
 	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASES=secure-exp-tcp-kernel="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("production gate unexpectedly accepted secure experimental TCP kernel artifacts without TX packet seal:\n%s", output)
+		t.Fatalf("production gate unexpectedly accepted secure experimental TCP kernel artifacts without direct kfunc crypto:\n%s", output)
 	}
-	if !strings.Contains(string(output), "tx_kernel_crypto_packet_seal_successes") {
-		t.Fatalf("production gate did not report missing secure experimental TCP packet seal counter:\n%s", output)
+	if !strings.Contains(string(output), "kernel_crypto_module_direct_kfunc_seal_calls") {
+		t.Fatalf("production gate did not report missing secure experimental TCP direct kfunc counter:\n%s", output)
 	}
 }
 
@@ -2886,7 +2886,7 @@ func writeSecureKUDPModuleParameters(t *testing.T, path string, routeHelperXmit 
 	})
 }
 
-func writeSecureExpTCPKernelProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, txPacketSeal bool) {
+func writeSecureExpTCPKernelProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, directKfuncCrypto bool) {
 	t.Helper()
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 3600.2, 3600, 0.8)
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 3600.2, 3600, 0.8)
@@ -2909,13 +2909,13 @@ func writeSecureExpTCPKernelProductionGateArtifacts(t *testing.T, dir string, ro
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
 		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "secure-exp-tcp-kernel-sha")
-		writeSecureExpTCPKernelDatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO, txPacketSeal)
+		writeSecureExpTCPKernelDatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO, directKfuncCrypto)
 		writeSecureExpTCPKernelTransportsJSON(t, filepath.Join(base, "transports.json"), node)
-		writeSecureKUDPModuleParameters(t, filepath.Join(base, "module-parameters.txt"), routeGSO)
+		writeSecureExpTCPKernelModuleParameters(t, filepath.Join(base, "module-parameters.txt"), routeGSO, directKfuncCrypto)
 	}
 }
 
-func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO bool, txPacketSeal bool) {
+func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO bool, directKfuncCrypto bool) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("make secure experimental TCP datapath dir: %v", err)
@@ -2924,9 +2924,11 @@ func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO boo
 	if routeGSO {
 		routeGSOValue = 1
 	}
-	txPacketSealValue := 0
-	if txPacketSeal {
-		txPacketSealValue = 16
+	directSealCalls := 0
+	directOpenCalls := 0
+	if directKfuncCrypto {
+		directSealCalls = 16
+		directOpenCalls = 16
 	}
 	payload := map[string]any{
 		"experimental_tcp": map[string]any{
@@ -2943,22 +2945,22 @@ func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO boo
 				"kernel_crypto_direct_slot_provider_ready":                          1,
 				"kernel_crypto_direct_kfunc_fastpath_ready":                         1,
 				"kernel_crypto_tc_direct_ready":                                     1,
-				"kernel_crypto_rx_attached":                                         1,
-				"kernel_crypto_tx_packet":                                           1,
+				"kernel_crypto_rx_attached":                                         0,
+				"kernel_crypto_tx_packet":                                           0,
+				"kernel_crypto_module_direct_kfunc_seal_calls":                      directSealCalls,
+				"kernel_crypto_module_direct_kfunc_open_calls":                      directOpenCalls,
+				"kernel_crypto_module_direct_kfunc_errors":                          0,
 				"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc":           routeGSOValue,
 				"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested": 1,
 				"tc_kernel_udp_tx_secure_direct_attached":                           1,
-				"tc_kernel_udp_rx_secure_direct_attached":                           1,
 				"tc_kernel_udp_tx_secure_direct_trust_inner_checksums":              1,
 				"tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled":                 1,
 				"tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc":                routeGSOValue,
-				"tc_kernel_udp_rx_secure_direct_kfunc_open_enabled":                 1,
-				"tc_kernel_udp_rx_secure_direct_skb_open_kfunc":                     0,
-				"kernel_crypto_frame_seal_successes":                                16,
-				"kernel_crypto_frame_open_successes":                                16,
-				"xdp_kernel_crypto_open_attempts":                                   16,
-				"xdp_kernel_crypto_open_successes":                                  16,
-				"tx_kernel_crypto_packet_seal_successes":                            txPacketSealValue,
+				"kernel_crypto_frame_seal_successes":                                0,
+				"kernel_crypto_frame_open_successes":                                0,
+				"xdp_kernel_crypto_open_attempts":                                   0,
+				"xdp_kernel_crypto_open_successes":                                  0,
+				"tx_kernel_crypto_packet_seal_successes":                            0,
 				"kernel_crypto_provider_unavailable_errors":                         0,
 				"kernel_crypto_flow_rejects":                                        0,
 				"kernel_crypto_frame_rejects":                                       0,
@@ -2986,16 +2988,6 @@ func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO boo
 				"xdp_kernel_crypto_decrypt_errors":                                  0,
 				"xdp_kernel_crypto_replay_commit_errors":                            0,
 				"xdp_kernel_crypto_store_errors":                                    0,
-				"tc_kernel_udp_tx_secure_direct_encrypt_errors":                     0,
-				"tc_kernel_udp_tx_secure_direct_sequence_errors":                    0,
-				"tc_kernel_udp_tx_secure_direct_drops":                              0,
-				"tc_kernel_udp_rx_secure_direct_header_errors":                      0,
-				"tc_kernel_udp_rx_secure_direct_decrypt_errors":                     0,
-				"tc_kernel_udp_rx_secure_direct_kfunc_open_attempts":                1024,
-				"tc_kernel_udp_rx_secure_direct_replay_old_drops":                   0,
-				"tc_kernel_udp_rx_secure_direct_replay_seen_drops":                  0,
-				"tc_kernel_udp_rx_secure_direct_replay_drops":                       0,
-				"tc_kernel_udp_rx_secure_direct_drops":                              0,
 			},
 		},
 	}
@@ -3006,6 +2998,53 @@ func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO boo
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write secure experimental TCP datapath json: %v", err)
 	}
+}
+
+func writeSecureExpTCPKernelModuleParameters(t *testing.T, path string, routeHelperXmit bool, directKfuncCrypto bool) {
+	t.Helper()
+	xmitPackets := "0"
+	if routeHelperXmit {
+		xmitPackets = "8"
+	}
+	directSealCalls := "0"
+	directOpenCalls := "0"
+	if directKfuncCrypto {
+		directSealCalls = "16"
+		directOpenCalls = "16"
+	}
+	writeModuleParameters(t, path, map[string]map[string]string{
+		"trustix_crypto": {
+			"kfunc_simd_fastpath":         "1",
+			"kfunc_simd_irq_fpu_fastpath": "1",
+			"direct_kfunc_seal_calls":     directSealCalls,
+			"direct_kfunc_open_calls":     directOpenCalls,
+			"direct_kfunc_errors":         "0",
+		},
+		"trustix_datapath_helpers": {
+			"route_tcp_gso_async_secure_seal_batch":                    "1",
+			"route_tcp_gso_async_stream_outer_gso_frames":              "0",
+			"route_tcp_gso_async_xmit_packets":                         xmitPackets,
+			"route_tcp_gso_async_flow_errors":                          "0",
+			"route_tcp_gso_async_plan_errors":                          "0",
+			"route_tcp_gso_async_mtu_errors":                           "0",
+			"route_tcp_gso_async_queue_full":                           "0",
+			"route_tcp_gso_async_queue_bytes_full":                     "0",
+			"route_tcp_gso_async_alloc_errors":                         "0",
+			"route_tcp_gso_async_clone_errors":                         "0",
+			"route_tcp_gso_async_segment_errors":                       "0",
+			"route_tcp_gso_async_prepare_errors":                       "0",
+			"route_tcp_gso_async_txq_stopped_drops":                    "0",
+			"route_tcp_gso_async_xmit_errors":                          "0",
+			"route_tcp_gso_async_stream_errors":                        "0",
+			"route_tcp_gso_async_stream_xmit_errors":                   "0",
+			"route_tcp_gso_async_stream_direct_errors":                 "0",
+			"route_tcp_gso_async_stream_outer_gso_errors":              "0",
+			"route_tcp_gso_async_stream_outer_gso_blocked":             "0",
+			"route_tcp_gso_async_stream_outer_gso_verify_errors":       "0",
+			"route_tcp_gso_async_stream_cross_item_errors":             "0",
+			"route_tcp_gso_async_stream_cross_item_tail_stitch_errors": "0",
+		},
+	})
 }
 
 func writeSecureExpTCPKernelTransportsJSON(t *testing.T, path string, node string) {
@@ -3026,10 +3065,10 @@ func writeSecureExpTCPKernelTransportsJSON(t *testing.T, path string, node strin
 				"send_encrypted":    true,
 				"receive_encrypted": true,
 				"crypto_placement":  "kernel",
-				"bytes_sent":        4096,
-				"bytes_received":    4096,
-				"packets_sent":      4,
-				"packets_received":  4,
+				"bytes_sent":        112,
+				"bytes_received":    0,
+				"packets_sent":      7,
+				"packets_received":  0,
 			},
 		})
 	}

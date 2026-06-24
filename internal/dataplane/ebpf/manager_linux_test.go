@@ -15437,6 +15437,23 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 
 	requireModuleParamPermission(t, cryptoSource, "kfunc_simd_fastpath", "0644")
 	requireModuleParamPermission(t, cryptoSource, "kfunc_simd_irq_fpu_fastpath", "0644")
+	for _, name := range []string{
+		"direct_kfunc_batch_seal_errors",
+		"direct_kfunc_seal_errors",
+		"direct_kfunc_open_errors",
+		"direct_kfunc_skb_seal_errors",
+		"direct_kfunc_skb_open_errors",
+		"direct_kfunc_einval_errors",
+		"direct_kfunc_eopnotsupp_errors",
+		"direct_kfunc_efault_errors",
+		"direct_kfunc_enoent_errors",
+		"direct_kfunc_ebadmsg_errors",
+		"direct_kfunc_other_errors",
+		"direct_kfunc_fpu_unavailable_fallbacks",
+	} {
+		requireModuleParamPermission(t, cryptoSource, name, "0444")
+	}
+	requireSourceContains(t, cryptoSource, "trustix_direct_kfunc_record_error(\n\tint ret, enum trustix_direct_kfunc_error_site site)")
 	requireSourceNotContains(t, cryptoSource, "WRITE_ONCE(trustix_kfunc_simd_fastpath, false);")
 }
 
@@ -15452,7 +15469,7 @@ func TestTrustIXCryptoDirectKfuncKeepsSnapshotFallbackForSlotFastpathOptOut(t *t
 	requireSourceNotContains(t, snapshotBody, "kernel_fpu_begin();")
 
 	requireSourceContains(t, cryptoSource, "if (!in_task() && !READ_ONCE(trustix_kfunc_simd_irq_fpu_fastpath))\n\t\treturn false;")
-	requireSourceContains(t, cryptoSource, "if (!trustix_aead_fpu_begin())\n\t\treturn -EOPNOTSUPP;\n\tret = trustix_aead_direct_crypt_one_nofpu")
+	requireSourceContains(t, cryptoSource, "if (!trustix_aead_fpu_begin()) {\n\t\ttrustix_direct_kfunc_record_fpu_unavailable();\n\t\treturn trustix_aead_direct_crypt_one_soft(slot, op, decrypt);\n\t}\n\tret = trustix_aead_direct_crypt_one_nofpu")
 	requireSourceContains(t, cryptoSource, "trustix_aead_fpu_end();")
 
 	slotBody := sourceFunctionBody(t, cryptoSource, "trustix_aead_direct_crypt_one_slot_rcu")
@@ -15460,6 +15477,7 @@ func TestTrustIXCryptoDirectKfuncKeepsSnapshotFallbackForSlotFastpathOptOut(t *t
 	requireSourceContains(t, slotBody, "rcu_read_lock();")
 	requireSourceContains(t, slotBody, "rcu_read_unlock();")
 	requireSourceContains(t, slotBody, "trustix_aead_fpu_begin()")
+	requireSourceContains(t, slotBody, "trustix_aead_direct_crypt_one_soft_fields(\n\t\t\t\tslot->rk, slot->rounds, slot->h, op, decrypt);")
 	requireSourceContains(t, slotBody, "trustix_aead_fpu_end();")
 
 	for _, name := range []string{

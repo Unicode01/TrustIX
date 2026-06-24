@@ -460,6 +460,18 @@ MODULE_PARM_DESC(aesni_fallbacks,
 static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_seal_calls);
 static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_open_calls);
 static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_batch_seal_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_seal_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_open_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_skb_seal_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_skb_open_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_einval_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_eopnotsupp_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_efault_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_enoent_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_ebadmsg_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_other_errors);
+static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_fpu_unavailable_fallbacks);
 static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_vaes_calls);
 static DEFINE_PER_CPU(unsigned long, trustix_direct_kfunc_aesni_calls);
 
@@ -469,10 +481,15 @@ module_param_named(direct_xdp_available, trustix_direct_xdp_available, bool, 044
 MODULE_PARM_DESC(direct_xdp_available,
 		 "TrustIX direct AEAD kfuncs registered for XDP programs");
 
+struct trustix_percpu_ulong_param {
+	unsigned long __percpu *counter;
+};
+
 static int trustix_percpu_ulong_param_get(char *buffer,
 					  const struct kernel_param *kp)
 {
-	unsigned long __percpu *counter = kp ? kp->arg : NULL;
+	const struct trustix_percpu_ulong_param *param = kp ? kp->arg : NULL;
+	unsigned long __percpu *counter = param ? param->counter : NULL;
 	unsigned long total = 0;
 	unsigned int cpu;
 
@@ -487,30 +504,192 @@ static const struct kernel_param_ops trustix_percpu_ulong_param_ops = {
 	.get = trustix_percpu_ulong_param_get,
 };
 
+#define TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(param_name, counter_name) \
+	static struct trustix_percpu_ulong_param trustix_param_##param_name = { \
+		.counter = &counter_name \
+	}
+
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_seal_calls,
+				  trustix_direct_kfunc_seal_calls);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_open_calls,
+				  trustix_direct_kfunc_open_calls);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_errors,
+				  trustix_direct_kfunc_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_batch_seal_errors,
+				  trustix_direct_kfunc_batch_seal_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_seal_errors,
+				  trustix_direct_kfunc_seal_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_open_errors,
+				  trustix_direct_kfunc_open_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_skb_seal_errors,
+				  trustix_direct_kfunc_skb_seal_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_skb_open_errors,
+				  trustix_direct_kfunc_skb_open_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_einval_errors,
+				  trustix_direct_kfunc_einval_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_eopnotsupp_errors,
+				  trustix_direct_kfunc_eopnotsupp_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_efault_errors,
+				  trustix_direct_kfunc_efault_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_enoent_errors,
+				  trustix_direct_kfunc_enoent_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_ebadmsg_errors,
+				  trustix_direct_kfunc_ebadmsg_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_other_errors,
+				  trustix_direct_kfunc_other_errors);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_fpu_unavailable_fallbacks,
+				  trustix_direct_kfunc_fpu_unavailable_fallbacks);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_vaes_calls,
+				  trustix_direct_kfunc_vaes_calls);
+TRUSTIX_DEFINE_PERCPU_ULONG_PARAM(direct_kfunc_aesni_calls,
+				  trustix_direct_kfunc_aesni_calls);
+
 module_param_cb(direct_kfunc_seal_calls, &trustix_percpu_ulong_param_ops,
-		&trustix_direct_kfunc_seal_calls, 0444);
+		&trustix_param_direct_kfunc_seal_calls, 0444);
 MODULE_PARM_DESC(direct_kfunc_seal_calls,
 		 "TrustIX direct AEAD seal kfunc calls from BPF programs");
 
 module_param_cb(direct_kfunc_open_calls, &trustix_percpu_ulong_param_ops,
-		&trustix_direct_kfunc_open_calls, 0444);
+		&trustix_param_direct_kfunc_open_calls, 0444);
 MODULE_PARM_DESC(direct_kfunc_open_calls,
 		 "TrustIX direct AEAD open kfunc calls from BPF programs");
 
 module_param_cb(direct_kfunc_errors, &trustix_percpu_ulong_param_ops,
-		&trustix_direct_kfunc_errors, 0444);
+		&trustix_param_direct_kfunc_errors, 0444);
 MODULE_PARM_DESC(direct_kfunc_errors,
 		 "TrustIX direct AEAD kfunc failures");
 
+module_param_cb(direct_kfunc_batch_seal_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_batch_seal_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_batch_seal_errors,
+		 "TrustIX direct AEAD batch seal kfunc failures");
+
+module_param_cb(direct_kfunc_seal_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_seal_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_seal_errors,
+		 "TrustIX direct AEAD seal kfunc failures");
+
+module_param_cb(direct_kfunc_open_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_open_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_open_errors,
+		 "TrustIX direct AEAD open kfunc failures");
+
+module_param_cb(direct_kfunc_skb_seal_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_skb_seal_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_skb_seal_errors,
+		 "TrustIX direct AEAD skb seal kfunc failures");
+
+module_param_cb(direct_kfunc_skb_open_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_skb_open_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_skb_open_errors,
+		 "TrustIX direct AEAD skb open kfunc failures");
+
+module_param_cb(direct_kfunc_einval_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_einval_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_einval_errors,
+		 "TrustIX direct AEAD kfunc -EINVAL failures");
+
+module_param_cb(direct_kfunc_eopnotsupp_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_eopnotsupp_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_eopnotsupp_errors,
+		 "TrustIX direct AEAD kfunc -EOPNOTSUPP failures");
+
+module_param_cb(direct_kfunc_efault_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_efault_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_efault_errors,
+		 "TrustIX direct AEAD kfunc -EFAULT failures");
+
+module_param_cb(direct_kfunc_enoent_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_enoent_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_enoent_errors,
+		 "TrustIX direct AEAD kfunc -ENOENT failures");
+
+module_param_cb(direct_kfunc_ebadmsg_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_ebadmsg_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_ebadmsg_errors,
+		 "TrustIX direct AEAD kfunc -EBADMSG failures");
+
+module_param_cb(direct_kfunc_other_errors, &trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_other_errors, 0444);
+MODULE_PARM_DESC(direct_kfunc_other_errors,
+		 "TrustIX direct AEAD kfunc failures with uncategorized errno");
+
+module_param_cb(direct_kfunc_fpu_unavailable_fallbacks,
+		&trustix_percpu_ulong_param_ops,
+		&trustix_param_direct_kfunc_fpu_unavailable_fallbacks, 0444);
+MODULE_PARM_DESC(direct_kfunc_fpu_unavailable_fallbacks,
+		 "TrustIX direct AEAD kfunc scalar fallbacks because kernel FPU/SIMD was unavailable in the current context");
+
 module_param_cb(direct_kfunc_vaes_calls, &trustix_percpu_ulong_param_ops,
-		&trustix_direct_kfunc_vaes_calls, 0444);
+		&trustix_param_direct_kfunc_vaes_calls, 0444);
 MODULE_PARM_DESC(direct_kfunc_vaes_calls,
 		 "TrustIX direct AEAD kfunc calls served by the VAES one-packet engine");
 
 module_param_cb(direct_kfunc_aesni_calls, &trustix_percpu_ulong_param_ops,
-		&trustix_direct_kfunc_aesni_calls, 0444);
+		&trustix_param_direct_kfunc_aesni_calls, 0444);
 MODULE_PARM_DESC(direct_kfunc_aesni_calls,
 		 "TrustIX direct AEAD kfunc calls served by the AES-NI one-packet engine");
+
+enum trustix_direct_kfunc_error_site {
+	TRUSTIX_DIRECT_KFUNC_ERROR_BATCH_SEAL,
+	TRUSTIX_DIRECT_KFUNC_ERROR_SEAL,
+	TRUSTIX_DIRECT_KFUNC_ERROR_OPEN,
+	TRUSTIX_DIRECT_KFUNC_ERROR_SKB_SEAL,
+	TRUSTIX_DIRECT_KFUNC_ERROR_SKB_OPEN,
+};
+
+static void trustix_direct_kfunc_record_error(
+	int ret, enum trustix_direct_kfunc_error_site site)
+{
+	if (!trustix_kfunc_fastpath_stats)
+		return;
+
+	this_cpu_inc(trustix_direct_kfunc_errors);
+	switch (site) {
+	case TRUSTIX_DIRECT_KFUNC_ERROR_BATCH_SEAL:
+		this_cpu_inc(trustix_direct_kfunc_batch_seal_errors);
+		break;
+	case TRUSTIX_DIRECT_KFUNC_ERROR_SEAL:
+		this_cpu_inc(trustix_direct_kfunc_seal_errors);
+		break;
+	case TRUSTIX_DIRECT_KFUNC_ERROR_OPEN:
+		this_cpu_inc(trustix_direct_kfunc_open_errors);
+		break;
+	case TRUSTIX_DIRECT_KFUNC_ERROR_SKB_SEAL:
+		this_cpu_inc(trustix_direct_kfunc_skb_seal_errors);
+		break;
+	case TRUSTIX_DIRECT_KFUNC_ERROR_SKB_OPEN:
+		this_cpu_inc(trustix_direct_kfunc_skb_open_errors);
+		break;
+	}
+	switch (ret) {
+	case -EINVAL:
+		this_cpu_inc(trustix_direct_kfunc_einval_errors);
+		break;
+	case -EOPNOTSUPP:
+		this_cpu_inc(trustix_direct_kfunc_eopnotsupp_errors);
+		break;
+	case -EFAULT:
+		this_cpu_inc(trustix_direct_kfunc_efault_errors);
+		break;
+	case -ENOENT:
+		this_cpu_inc(trustix_direct_kfunc_enoent_errors);
+		break;
+	case -EBADMSG:
+		this_cpu_inc(trustix_direct_kfunc_ebadmsg_errors);
+		break;
+	default:
+		this_cpu_inc(trustix_direct_kfunc_other_errors);
+		break;
+	}
+}
+
+static void trustix_direct_kfunc_record_fpu_unavailable(void)
+{
+	if (!trustix_kfunc_fastpath_stats)
+		return;
+	this_cpu_inc(trustix_direct_kfunc_fpu_unavailable_fallbacks);
+}
 
 #endif
 
@@ -541,6 +720,7 @@ struct trustix_aead_direct_slot {
 	u32 key_len;
 #if TRUSTIX_X86_SIMD
 	u8 rk[15][16] __aligned(16);
+	u8 h[16] __aligned(16);
 	u8 shash[16] __aligned(16);
 	u8 shash4[4][16] __aligned(16);
 	int rounds;
@@ -552,6 +732,7 @@ struct trustix_aead_direct_slot {
 #if TRUSTIX_X86_SIMD
 struct trustix_aead_direct_snapshot {
 	u8 rk[15][16] __aligned(16);
+	u8 h[16] __aligned(16);
 	u8 shash[16] __aligned(16);
 	u8 shash4[4][16] __aligned(16);
 	int rounds;
@@ -2443,6 +2624,93 @@ static int trustix_aes_expand_key(const u8 *key, unsigned int key_len,
 	*rounds = nr;
 	memzero_explicit(w, sizeof(w));
 	return 0;
+}
+
+static u8 trustix_aes_xtime(u8 x)
+{
+	return (u8)((x << 1) ^ ((x & 0x80) ? 0x1b : 0x00));
+}
+
+static void trustix_aes_add_round_key(u8 state[16], const u8 round_key[16])
+{
+	unsigned int i;
+
+	for (i = 0; i < 16; i++)
+		state[i] ^= round_key[i];
+}
+
+static void trustix_aes_sub_shift_rows(u8 state[16])
+{
+	u8 tmp[16];
+
+	tmp[0] = trustix_aes_sbox[state[0]];
+	tmp[4] = trustix_aes_sbox[state[4]];
+	tmp[8] = trustix_aes_sbox[state[8]];
+	tmp[12] = trustix_aes_sbox[state[12]];
+
+	tmp[1] = trustix_aes_sbox[state[5]];
+	tmp[5] = trustix_aes_sbox[state[9]];
+	tmp[9] = trustix_aes_sbox[state[13]];
+	tmp[13] = trustix_aes_sbox[state[1]];
+
+	tmp[2] = trustix_aes_sbox[state[10]];
+	tmp[6] = trustix_aes_sbox[state[14]];
+	tmp[10] = trustix_aes_sbox[state[2]];
+	tmp[14] = trustix_aes_sbox[state[6]];
+
+	tmp[3] = trustix_aes_sbox[state[15]];
+	tmp[7] = trustix_aes_sbox[state[3]];
+	tmp[11] = trustix_aes_sbox[state[7]];
+	tmp[15] = trustix_aes_sbox[state[11]];
+
+	memcpy(state, tmp, sizeof(tmp));
+	memzero_explicit(tmp, sizeof(tmp));
+}
+
+static void trustix_aes_mix_columns(u8 state[16])
+{
+	unsigned int c;
+
+	for (c = 0; c < 4; c++) {
+		u8 *col = &state[c * 4];
+		u8 a0 = col[0];
+		u8 a1 = col[1];
+		u8 a2 = col[2];
+		u8 a3 = col[3];
+		u8 t = a0 ^ a1 ^ a2 ^ a3;
+
+		col[0] ^= t ^ trustix_aes_xtime(a0 ^ a1);
+		col[1] ^= t ^ trustix_aes_xtime(a1 ^ a2);
+		col[2] ^= t ^ trustix_aes_xtime(a2 ^ a3);
+		col[3] ^= t ^ trustix_aes_xtime(a3 ^ a0);
+	}
+}
+
+static void trustix_aes_encrypt1_soft(const u8 rk[15][16], int rounds,
+				      const u8 in[16], u8 out[16])
+{
+	u8 state[16];
+	int round;
+
+	memcpy(state, in, sizeof(state));
+	trustix_aes_add_round_key(state, rk[0]);
+	for (round = 1; round < rounds; round++) {
+		trustix_aes_sub_shift_rows(state);
+		trustix_aes_mix_columns(state);
+		trustix_aes_add_round_key(state, rk[round]);
+	}
+	trustix_aes_sub_shift_rows(state);
+	trustix_aes_add_round_key(state, rk[rounds]);
+	memcpy(out, state, sizeof(state));
+	memzero_explicit(state, sizeof(state));
+}
+
+static void trustix_xor16_soft(u8 *dst, const u8 *src, const u8 stream[16])
+{
+	unsigned int i;
+
+	for (i = 0; i < 16; i++)
+		dst[i] = src[i] ^ stream[i];
 }
 
 static TRUSTIX_VAES_ASM_TARGET void
@@ -5078,6 +5346,7 @@ static int trustix_aead_direct_prepare(struct trustix_aead_direct_slot *slot,
 		return -EOPNOTSUPP;
 	trustix_aes_encrypt1_asm(slot->rk, slot->rounds, zero, h_bytes);
 	trustix_aead_fpu_end();
+	memcpy(slot->h, h_bytes, sizeof(slot->h));
 	trustix_ghash_prepare_shash(h_bytes, slot->shash);
 	trustix_ghash_prepare_shash4(h_bytes, slot->shash4);
 	slot->key_len = key_len;
@@ -6427,6 +6696,7 @@ trustix_aead_direct_snapshot_slot(struct trustix_aead_direct_snapshot *snapshot,
 		ret = -EOPNOTSUPP;
 	} else {
 		memcpy(snapshot->rk, slot->rk, sizeof(snapshot->rk));
+		memcpy(snapshot->h, slot->h, sizeof(snapshot->h));
 		memcpy(snapshot->shash, slot->shash, sizeof(snapshot->shash));
 		memcpy(snapshot->shash4, slot->shash4,
 		       sizeof(snapshot->shash4));
@@ -6437,6 +6707,194 @@ trustix_aead_direct_snapshot_slot(struct trustix_aead_direct_snapshot *snapshot,
 	}
 	rcu_read_unlock();
 	return ret;
+}
+
+static int trustix_aead_soft_seal_one(const u8 rk[15][16], int rounds,
+				      const u8 h_raw[16],
+				      struct trustix_aead_prepared_op *op)
+{
+	struct trustix_u128_be h;
+	struct trustix_u128_be y = {};
+	u8 tmp[16];
+	u8 stream[16];
+	u8 tag_mask[16];
+	const u8 *src;
+	u8 *dst;
+	unsigned int len;
+	unsigned int off = 0;
+	u32 ctr = 2;
+
+	if (!rk || !h_raw || !op || !op->nonce || !op->src || !op->dst)
+		return -EINVAL;
+	if (rounds != 10 && rounds != 14)
+		return -EINVAL;
+	if (op->out_len != op->in_len + TRUSTIX_AEAD_IOC_TAG_LEN)
+		return -EINVAL;
+
+	src = op->src;
+	dst = op->dst;
+	len = op->in_len;
+	trustix_load_u128_be(&h, h_raw);
+
+	trustix_ctr_block(tmp, op->nonce, 1);
+	trustix_aes_encrypt1_soft(rk, rounds, tmp, tag_mask);
+
+	while (off + 16 <= len) {
+		trustix_ctr_block(tmp, op->nonce, ctr);
+		trustix_aes_encrypt1_soft(rk, rounds, tmp, stream);
+		trustix_xor16_soft(dst + off, src + off, stream);
+		trustix_ghash_block(&y, h, dst + off);
+		off += 16;
+		ctr++;
+	}
+	if (off < len) {
+		unsigned int rem = len - off;
+		unsigned int i;
+
+		trustix_ctr_block(tmp, op->nonce, ctr);
+		trustix_aes_encrypt1_soft(rk, rounds, tmp, stream);
+		memset(tmp, 0, sizeof(tmp));
+		for (i = 0; i < rem; i++) {
+			dst[off + i] = src[off + i] ^ stream[i];
+			tmp[i] = dst[off + i];
+		}
+		trustix_ghash_block(&y, h, tmp);
+	}
+
+	memset(tmp, 0, sizeof(tmp));
+	trustix_store_be64(tmp + 8, (u64)len * 8);
+	trustix_ghash_block(&y, h, tmp);
+	trustix_store_u128_be(tmp, y);
+	for (off = 0; off < TRUSTIX_AEAD_IOC_TAG_LEN; off++)
+		dst[len + off] = tmp[off] ^ tag_mask[off];
+
+	trustix_aead_wipe_fastpath(tmp, sizeof(tmp));
+	trustix_aead_wipe_fastpath(stream, sizeof(stream));
+	trustix_aead_wipe_fastpath(tag_mask, sizeof(tag_mask));
+	return 0;
+}
+
+static int trustix_aead_soft_open_one(const u8 rk[15][16], int rounds,
+				      const u8 h_raw[16],
+				      struct trustix_aead_prepared_op *op)
+{
+	struct trustix_u128_be h;
+	struct trustix_u128_be y = {};
+	u8 tmp[16];
+	u8 stream[16];
+	u8 tag_mask[16];
+	u8 expected[16];
+	const u8 *src;
+	u8 *dst;
+	unsigned int cipher_len;
+	unsigned int off = 0;
+	u32 ctr = 2;
+	int ret = 0;
+
+	if (!rk || !h_raw || !op || !op->nonce || !op->src || !op->dst)
+		return -EINVAL;
+	if (rounds != 10 && rounds != 14)
+		return -EINVAL;
+	if (op->in_len < TRUSTIX_AEAD_IOC_TAG_LEN ||
+	    op->out_len + TRUSTIX_AEAD_IOC_TAG_LEN != op->in_len)
+		return -EINVAL;
+
+	src = op->src;
+	dst = op->dst;
+	cipher_len = op->in_len - TRUSTIX_AEAD_IOC_TAG_LEN;
+	trustix_load_u128_be(&h, h_raw);
+
+	trustix_ctr_block(tmp, op->nonce, 1);
+	trustix_aes_encrypt1_soft(rk, rounds, tmp, tag_mask);
+
+	while (off + 16 <= cipher_len) {
+		trustix_ghash_block(&y, h, src + off);
+		off += 16;
+	}
+	if (off < cipher_len) {
+		unsigned int rem = cipher_len - off;
+
+		memset(tmp, 0, sizeof(tmp));
+		memcpy(tmp, src + off, rem);
+		trustix_ghash_block(&y, h, tmp);
+	}
+
+	memset(tmp, 0, sizeof(tmp));
+	trustix_store_be64(tmp + 8, (u64)cipher_len * 8);
+	trustix_ghash_block(&y, h, tmp);
+	trustix_store_u128_be(expected, y);
+	for (off = 0; off < TRUSTIX_AEAD_IOC_TAG_LEN; off++)
+		expected[off] ^= tag_mask[off];
+	if (trustix_consttime_memneq(expected, src + cipher_len,
+				     TRUSTIX_AEAD_IOC_TAG_LEN)) {
+		ret = -EBADMSG;
+		goto out_wipe;
+	}
+
+	off = 0;
+	while (off + 16 <= cipher_len) {
+		trustix_ctr_block(tmp, op->nonce, ctr);
+		trustix_aes_encrypt1_soft(rk, rounds, tmp, stream);
+		trustix_xor16_soft(dst + off, src + off, stream);
+		off += 16;
+		ctr++;
+	}
+	if (off < cipher_len) {
+		unsigned int rem = cipher_len - off;
+		unsigned int i;
+
+		trustix_ctr_block(tmp, op->nonce, ctr);
+		trustix_aes_encrypt1_soft(rk, rounds, tmp, stream);
+		for (i = 0; i < rem; i++)
+			dst[off + i] = src[off + i] ^ stream[i];
+	}
+
+out_wipe:
+	trustix_aead_wipe_fastpath(tmp, sizeof(tmp));
+	trustix_aead_wipe_fastpath(stream, sizeof(stream));
+	trustix_aead_wipe_fastpath(tag_mask, sizeof(tag_mask));
+	trustix_aead_wipe_fastpath(expected, sizeof(expected));
+	if (ret)
+		memzero_explicit(dst, op->out_len);
+	return ret;
+}
+
+static int trustix_aead_direct_crypt_one_soft_fields(
+					 const u8 rk[15][16], int rounds,
+					 const u8 h_raw[16],
+					 struct trustix_aead_prepared_op *op,
+					 bool decrypt)
+{
+	if (decrypt)
+		return trustix_aead_soft_open_one(rk, rounds, h_raw, op);
+	return trustix_aead_soft_seal_one(rk, rounds, h_raw, op);
+}
+
+static int trustix_aead_direct_crypt_one_soft(
+					 struct trustix_aead_direct_snapshot *slot,
+					 struct trustix_aead_prepared_op *op,
+					 bool decrypt)
+{
+	if (!slot || !op)
+		return -EINVAL;
+	if (!slot->aesni_ready)
+		return -EOPNOTSUPP;
+	return trustix_aead_direct_crypt_one_soft_fields(slot->rk, slot->rounds,
+							 slot->h, op, decrypt);
+}
+
+static void
+trustix_aead_prepare_direct_seal_batch_op(
+				struct trustix_aead_prepared_op *op,
+				const struct trustix_aead_direct_batch_op *batch)
+{
+	op->nonce = (u8 *)batch->nonce;
+	op->src = (u8 *)batch->src;
+	op->dst = batch->dst;
+	op->in_len = batch->plain_len;
+	op->out_len = batch->plain_len + TRUSTIX_AEAD_IOC_TAG_LEN;
+	op->pool_out_len = NULL;
+	op->pool_result = NULL;
 }
 
 static int trustix_aead_direct_crypt_one_nofpu(
@@ -6502,14 +6960,8 @@ static int trustix_aead_direct_seal4_nofpu(
 		return -EOPNOTSUPP;
 
 	for (i = 0; i < 4; i++) {
-		prepared[i].nonce = (u8 *)ops[i].nonce;
-		prepared[i].src = (u8 *)ops[i].src;
-		prepared[i].dst = ops[i].dst;
-		prepared[i].in_len = ops[i].plain_len;
-		prepared[i].out_len =
-			ops[i].plain_len + TRUSTIX_AEAD_IOC_TAG_LEN;
-		prepared[i].pool_out_len = NULL;
-		prepared[i].pool_result = NULL;
+		trustix_aead_prepare_direct_seal_batch_op(&prepared[i],
+							  &ops[i]);
 	}
 
 	if (trustix_experimental_vaes_kfunc && slot->vaes_ready) {
@@ -6539,8 +6991,10 @@ static int trustix_aead_direct_crypt_one(
 
 	if (!trustix_kfunc_simd_fastpath)
 		return -EOPNOTSUPP;
-	if (!trustix_aead_fpu_begin())
-		return -EOPNOTSUPP;
+	if (!trustix_aead_fpu_begin()) {
+		trustix_direct_kfunc_record_fpu_unavailable();
+		return trustix_aead_direct_crypt_one_soft(slot, op, decrypt);
+	}
 	ret = trustix_aead_direct_crypt_one_nofpu(slot, op, decrypt,
 						 &used_vaes);
 	trustix_aead_fpu_end();
@@ -6579,7 +7033,9 @@ static int trustix_aead_direct_crypt_one_slot_rcu(
 		ret = -EOPNOTSUPP;
 	} else {
 		if (!trustix_aead_fpu_begin()) {
-			ret = -EOPNOTSUPP;
+			trustix_direct_kfunc_record_fpu_unavailable();
+			ret = trustix_aead_direct_crypt_one_soft_fields(
+				slot->rk, slot->rounds, slot->h, op, decrypt);
 			goto out_unlock;
 		}
 		if (trustix_experimental_vaes_kfunc && slot->vaes_ready) {
@@ -6631,7 +7087,7 @@ int trustix_kernel_direct_seal_batch(u32 slot_id,
 {
 #if TRUSTIX_X86_SIMD
 	struct trustix_aead_direct_snapshot snapshot;
-	struct trustix_aead_prepared_op op;
+	struct trustix_aead_prepared_op op = {};
 	u32 i;
 	u32 j;
 	int ret;
@@ -6656,8 +7112,22 @@ int trustix_kernel_direct_seal_batch(u32 slot_id,
 
 		if (i + 4 <= count) {
 			if (!trustix_aead_fpu_begin()) {
-				ret = -EOPNOTSUPP;
-				break;
+				for (j = 0; j < 4; j++) {
+					trustix_direct_kfunc_record_fpu_unavailable();
+					trustix_aead_prepare_direct_seal_batch_op(
+						&op, &ops[i + j]);
+					ret = trustix_aead_direct_crypt_one_soft(
+						&snapshot, &op, false);
+					if (ret)
+						break;
+					if (trustix_kfunc_fastpath_stats)
+						this_cpu_inc(
+							trustix_direct_kfunc_seal_calls);
+				}
+				if (ret)
+					break;
+				i += 4;
+				continue;
 			}
 			ret = trustix_aead_direct_seal4_nofpu(
 				&snapshot, &ops[i], &used_vaes);
@@ -6682,16 +7152,17 @@ int trustix_kernel_direct_seal_batch(u32 slot_id,
 				break;
 		}
 
-		op.nonce = (u8 *)ops[i].nonce;
-		op.src = (u8 *)ops[i].src;
-		op.dst = ops[i].dst;
-		op.in_len = ops[i].plain_len;
-		op.out_len = ops[i].plain_len + TRUSTIX_AEAD_IOC_TAG_LEN;
+		trustix_aead_prepare_direct_seal_batch_op(&op, &ops[i]);
 		if (trustix_kfunc_fastpath_stats)
 			this_cpu_inc(trustix_direct_kfunc_seal_calls);
 		if (!trustix_aead_fpu_begin()) {
-			ret = -EOPNOTSUPP;
-			break;
+			trustix_direct_kfunc_record_fpu_unavailable();
+			ret = trustix_aead_direct_crypt_one_soft(&snapshot, &op,
+								 false);
+			if (ret)
+				break;
+			i++;
+			continue;
 		}
 		ret = trustix_aead_direct_crypt_one_nofpu(&snapshot, &op, false,
 							 &used_vaes);
@@ -6711,8 +7182,8 @@ out_wipe:
 	if (!ret)
 		return 0;
 out_error:
-	if (trustix_kfunc_fastpath_stats)
-		this_cpu_inc(trustix_direct_kfunc_errors);
+	trustix_direct_kfunc_record_error(
+		ret, TRUSTIX_DIRECT_KFUNC_ERROR_BATCH_SEAL);
 	return ret;
 #else
 	return -EOPNOTSUPP;
@@ -6728,7 +7199,7 @@ __bpf_kfunc int trustix_kernel_direct_seal(u32 slot_id, const u8 *src,
 {
 #if TRUSTIX_X86_SIMD
 	struct trustix_aead_direct_snapshot snapshot;
-	struct trustix_aead_prepared_op op;
+	struct trustix_aead_prepared_op op = {};
 	int ret;
 
 	if (!src || !dst || !nonce ||
@@ -6751,8 +7222,9 @@ __bpf_kfunc int trustix_kernel_direct_seal(u32 slot_id, const u8 *src,
 			memzero_explicit(&snapshot, sizeof(snapshot));
 		}
 	}
-	if (ret && trustix_kfunc_fastpath_stats)
-		this_cpu_inc(trustix_direct_kfunc_errors);
+	if (ret)
+		trustix_direct_kfunc_record_error(
+			ret, TRUSTIX_DIRECT_KFUNC_ERROR_SEAL);
 	return ret;
 #else
 	return -EOPNOTSUPP;
@@ -6765,7 +7237,7 @@ __bpf_kfunc int trustix_kernel_direct_open(u32 slot_id, const u8 *src,
 {
 #if TRUSTIX_X86_SIMD
 	struct trustix_aead_direct_snapshot snapshot;
-	struct trustix_aead_prepared_op op;
+	struct trustix_aead_prepared_op op = {};
 	int ret;
 
 	if (!src || !dst || !nonce || cipher_len < TRUSTIX_AEAD_IOC_TAG_LEN ||
@@ -6788,8 +7260,9 @@ __bpf_kfunc int trustix_kernel_direct_open(u32 slot_id, const u8 *src,
 			memzero_explicit(&snapshot, sizeof(snapshot));
 		}
 	}
-	if (ret && trustix_kfunc_fastpath_stats)
-		this_cpu_inc(trustix_direct_kfunc_errors);
+	if (ret)
+		trustix_direct_kfunc_record_error(
+			ret, TRUSTIX_DIRECT_KFUNC_ERROR_OPEN);
 	return ret;
 #else
 	return -EOPNOTSUPP;
@@ -6803,7 +7276,7 @@ trustix_kernel_skb_direct_open(struct __sk_buff *ctx,
 {
 #if TRUSTIX_X86_SIMD
 	struct trustix_aead_direct_snapshot snapshot;
-	struct trustix_aead_prepared_op op;
+	struct trustix_aead_prepared_op op = {};
 	struct sk_buff *skb = trustix_bpf_ctx_skb(ctx);
 	struct iphdr *iph;
 	u32 end;
@@ -6845,8 +7318,8 @@ trustix_kernel_skb_direct_open(struct __sk_buff *ctx,
 		}
 	}
 	if (ret) {
-		if (trustix_kfunc_fastpath_stats)
-			this_cpu_inc(trustix_direct_kfunc_errors);
+		trustix_direct_kfunc_record_error(
+			ret, TRUSTIX_DIRECT_KFUNC_ERROR_SKB_OPEN);
 		return ret;
 	}
 	if (plain_len < sizeof(*iph))
@@ -6871,7 +7344,7 @@ trustix_kernel_skb_direct_seal(struct __sk_buff *ctx,
 {
 #if TRUSTIX_X86_SIMD
 	struct trustix_aead_direct_snapshot snapshot;
-	struct trustix_aead_prepared_op op;
+	struct trustix_aead_prepared_op op = {};
 	struct sk_buff *skb = trustix_bpf_ctx_skb(ctx);
 	u32 plain_end;
 	u32 cipher_end;
@@ -6919,8 +7392,8 @@ trustix_kernel_skb_direct_seal(struct __sk_buff *ctx,
 		}
 	}
 	if (ret) {
-		if (trustix_kfunc_fastpath_stats)
-			this_cpu_inc(trustix_direct_kfunc_errors);
+		trustix_direct_kfunc_record_error(
+			ret, TRUSTIX_DIRECT_KFUNC_ERROR_SKB_SEAL);
 		return ret;
 	}
 	return (int)(args->plain_len + TRUSTIX_AEAD_IOC_TAG_LEN);

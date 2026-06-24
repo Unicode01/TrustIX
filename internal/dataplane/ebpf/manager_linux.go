@@ -11874,6 +11874,18 @@ func addKernelCryptoModuleStats(stats map[string]uint64) {
 		"direct_kfunc_vaes_calls",
 		"direct_kfunc_aesni_calls",
 		"direct_kfunc_errors",
+		"direct_kfunc_batch_seal_errors",
+		"direct_kfunc_seal_errors",
+		"direct_kfunc_open_errors",
+		"direct_kfunc_skb_seal_errors",
+		"direct_kfunc_skb_open_errors",
+		"direct_kfunc_einval_errors",
+		"direct_kfunc_eopnotsupp_errors",
+		"direct_kfunc_efault_errors",
+		"direct_kfunc_enoent_errors",
+		"direct_kfunc_ebadmsg_errors",
+		"direct_kfunc_other_errors",
+		"direct_kfunc_fpu_unavailable_fallbacks",
 	} {
 		if value, ok := readTrustIXAEADModuleParamUint64(name); ok {
 			stats["kernel_crypto_module_"+name] = value

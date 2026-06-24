@@ -1840,9 +1840,13 @@ cleanup_all() {
 main() {
   validate_case
   apply_case_runtime_defaults
-  if [[ "$(case_fast_path)" == "route_gso" && -z "${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE+x}" ]]; then
-    session_pool_heartbeat_mode=disabled
-  fi
+  case "$(case_fast_path)" in
+    route_gso|secure_exp_tcp_kernel)
+      if [[ -z "${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE+x}" ]]; then
+        session_pool_heartbeat_mode=disabled
+      fi
+      ;;
+  esac
   need_cmd ssh
   need_cmd tar
   need_cmd cp
