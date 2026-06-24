@@ -824,6 +824,8 @@ func TestProductionEvidenceFromGateSummaryRejectsShortPassSoak(t *testing.T) {
 		"min_sent_gbps":              1.9,
 		"min_received_gbps":          1.8,
 		"min_required_received_gbps": 1.7,
+		"min_seconds":                900,
+		"seconds_slop":               0,
 	}
 	gatePayload, err := json.Marshal(gateRow)
 	if err != nil {
@@ -866,6 +868,87 @@ func TestProductionEvidenceFromGateSummaryRejectsShortPassSoak(t *testing.T) {
 	text := string(output)
 	if !strings.Contains(text, "3600s production soak") || !strings.Contains(text, "900s") {
 		t.Fatalf("generator did not explain short pass soak rejection:\n%s", output)
+	}
+}
+
+func TestProductionEvidenceFromGateSummaryRejectsUnderMeasuredPassSoak(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	matrixSummary := filepath.Join(workdir, "summary.jsonl")
+	gateSummaryDir := filepath.Join(workdir, "selected-production-gate")
+	if err := os.MkdirAll(gateSummaryDir, 0o755); err != nil {
+		t.Fatalf("create gate summary dir: %v", err)
+	}
+	matrixRow := map[string]any{
+		"status": "pass",
+		"case":   "udp-secure-stable-userspace-userspace",
+	}
+	matrixPayload, err := json.Marshal(matrixRow)
+	if err != nil {
+		t.Fatalf("marshal matrix row: %v", err)
+	}
+	if err := os.WriteFile(matrixSummary, append(matrixPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write matrix summary: %v", err)
+	}
+	gateRow := map[string]any{
+		"case":                       "udp-secure-stable-userspace-userspace",
+		"status":                     "pass",
+		"min_gbps_required":          1.5,
+		"min_seconds_required":       3600,
+		"min_sent_gbps":              1.9,
+		"min_received_gbps":          1.8,
+		"min_required_received_gbps": 1.7,
+		"min_seconds":                3598.5,
+		"seconds_slop":               1,
+	}
+	gatePayload, err := json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal gate row: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write gate summary: %v", err)
+	}
+	manifest := map[string]any{
+		"schema": productionGateManifestSchema,
+		"production_gate": map[string]any{
+			"path":   "scripts/linux-cross-host-production-gate.sh",
+			"sha256": strings.Repeat("a", 64),
+			"size":   123,
+		},
+		"verifier": map[string]any{
+			"path":   "scripts/linux-cross-host-soak-verify.py",
+			"sha256": strings.Repeat("b", 64),
+			"size":   456,
+		},
+	}
+	manifestPayload, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--artifact", "docs/trustix-performance-log.md#under-measured-production-gate",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("generator accepted under-measured pass soak:\n%s", output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"measured soak is shorter than required",
+		"min_seconds=3598.5s",
+		"seconds_slop=1s",
+		"required=3600s",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("generator did not explain under-measured soak rejection, missing %q:\n%s", want, output)
+		}
 	}
 }
 

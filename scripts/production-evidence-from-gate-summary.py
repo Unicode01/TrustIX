@@ -177,20 +177,50 @@ def metric_seconds_value(row: dict[str, Any]) -> float:
     raise SystemExit(f"gate summary case {row.get('case')!r} lacks min_seconds_required")
 
 
+def observed_seconds_value(row: dict[str, Any]) -> float:
+    value = row.get("min_seconds")
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    raise SystemExit(f"gate summary case {row.get('case')!r} lacks measured min_seconds")
+
+
+def seconds_slop_value(row: dict[str, Any]) -> float:
+    value = row.get("seconds_slop")
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)) and value >= 0:
+        return float(value)
+    raise SystemExit(f"gate summary case {row.get('case')!r} has invalid seconds_slop")
+
+
 def format_metric_seconds(value: float) -> str:
     if value.is_integer():
         return str(int(value))
     return f"{value:.6f}".rstrip("0").rstrip(".")
 
 
-def require_long_soak_for_pass(row: dict[str, Any], result: str, seconds: float) -> None:
+def require_long_soak_for_pass(
+    row: dict[str, Any],
+    result: str,
+    required_seconds: float,
+    observed_seconds: float,
+    seconds_slop: float,
+) -> None:
     if result != "pass":
         return
-    if seconds >= MIN_PRODUCTION_PASS_SECONDS:
+    if required_seconds < MIN_PRODUCTION_PASS_SECONDS:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} pass evidence requires at least "
+            f"{MIN_PRODUCTION_PASS_SECONDS}s production soak; got "
+            f"{format_metric_seconds(required_seconds)}s"
+        )
+    if observed_seconds + seconds_slop >= required_seconds:
         return
     raise SystemExit(
-        f"gate summary case {row.get('case')!r} pass evidence requires at least "
-        f"{MIN_PRODUCTION_PASS_SECONDS}s production soak; got {format_metric_seconds(seconds)}s"
+        f"gate summary case {row.get('case')!r} measured soak is shorter than required: "
+        f"min_seconds={format_metric_seconds(observed_seconds)}s + "
+        f"seconds_slop={format_metric_seconds(seconds_slop)}s < "
+        f"required={format_metric_seconds(required_seconds)}s"
     )
 
 
@@ -288,7 +318,13 @@ def evidence_row(
             f"{matrix_row.get('status')!r}"
         )
     seconds = metric_seconds_value(gate_row)
-    require_long_soak_for_pass(gate_row, result, seconds)
+    require_long_soak_for_pass(
+        gate_row,
+        result,
+        seconds,
+        observed_seconds_value(gate_row),
+        seconds_slop_value(gate_row),
+    )
     os_matrix = resolved_matrix_value(
         gate_row,
         override=args.os_matrix,
