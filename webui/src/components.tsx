@@ -892,7 +892,7 @@ type IXProvisionEffectiveDefaults = {
 function ixProvisionProfileDefaults(profile: string): Pick<IXProvisionEffectiveDefaults, "transportProfile" | "datapath" | "encryption" | "cryptoPlacement" | "kernelTransport"> {
   switch (normalizeIXProvisionProfileName(profile)) {
     case "performance":
-      return { transportProfile: "performance", datapath: "auto", encryption: "secure", cryptoPlacement: "auto", kernelTransport: "auto" };
+      return { transportProfile: "performance", datapath: "tc_xdp", encryption: "secure", cryptoPlacement: "kernel", kernelTransport: "require_kernel" };
     case "latency":
       return { transportProfile: "latency", datapath: "auto", encryption: "secure", cryptoPlacement: "auto", kernelTransport: "auto" };
     case "compatibility":
@@ -903,7 +903,7 @@ function ixProvisionProfileDefaults(profile: string): Pick<IXProvisionEffectiveD
     case "plaintext-performance":
     case "plaintext":
     case "plain":
-      return { transportProfile: "performance", datapath: "kernel_module", encryption: "plaintext", cryptoPlacement: "auto", kernelTransport: "auto" };
+      return { transportProfile: "performance", datapath: "kernel_module", encryption: "plaintext", cryptoPlacement: "userspace", kernelTransport: "require_kernel" };
     default:
       return { transportProfile: "stable", datapath: "auto", encryption: "secure", cryptoPlacement: "auto", kernelTransport: "auto" };
   }
@@ -925,8 +925,11 @@ function normalizeIXProvisionProfileName(profile: string): string {
   }
 }
 
-function ixProvisionDefaultEndpointTransport(profile: string, endpointMode = "passive", endpointAddress = ""): string {
+function ixProvisionDefaultEndpointTransport(profile: string, endpointMode = "passive", endpointAddress = "", serviceManager = "auto"): string {
   if (normalizeIXProvisionProfileName(profile) !== "plaintext_performance") {
+    return "udp";
+  }
+  if (String(serviceManager || "").trim().toLowerCase().replaceAll("-", "_") === "openwrt") {
     return "udp";
   }
   if (String(endpointMode || "passive").trim().toLowerCase().replaceAll("-", "_") === "active") {
@@ -960,7 +963,7 @@ function plaintextPerformanceEndpoint(name: string, options: Partial<EndpointCon
       profile: "performance",
       datapath: "kernel_module",
       encryption: "plaintext",
-      crypto_placement: "auto",
+      crypto_placement: "userspace",
       ...(transportProfile || {}),
     },
     ...rest,
@@ -994,7 +997,7 @@ function ixProvisionEffectiveDefaults(input: {
   const attachMode = String(input.attachMode || "managed").trim().toLowerCase().replaceAll("_", "-");
   const derivedGateway = role === "transit_ix" ? "" : defaultLANGatewayForPrefix(input.advertisePrefixes[0] || "");
   const profile = ixProvisionProfileDefaults(input.profile);
-  const endpointTransport = String(input.endpointTransport || "").trim() || ixProvisionDefaultEndpointTransport(input.profile, endpointMode, endpointAddress);
+  const endpointTransport = String(input.endpointTransport || "").trim() || ixProvisionDefaultEndpointTransport(input.profile, endpointMode, endpointAddress, input.serviceManager);
   const endpointName = String(input.endpointName || "").trim() || `${safeShellName(input.ixID, "ix-new")}-${endpointTransport}`;
   const endpointAddressForConfig = transportIsKernelTunnel(endpointTransport) ? (normalizeProvisionTunnelEndpointAddress(endpointAddress) || endpointAddress) : endpointAddress;
   return {
@@ -1400,9 +1403,8 @@ export function AccessView(props: {
     }
   };
   const updateNewIXEndpointTransportDefault = (nextProfile: string, nextServiceManager = newIXServiceManager) => {
-    void nextServiceManager;
-    const previousDefault = ixProvisionDefaultEndpointTransport(newIXProfile, newIXEndpointMode, newIXEndpointAddress);
-    const nextDefault = ixProvisionDefaultEndpointTransport(nextProfile, newIXEndpointMode, newIXEndpointAddress);
+    const previousDefault = ixProvisionDefaultEndpointTransport(newIXProfile, newIXEndpointMode, newIXEndpointAddress, newIXServiceManager);
+    const nextDefault = ixProvisionDefaultEndpointTransport(nextProfile, newIXEndpointMode, newIXEndpointAddress, nextServiceManager);
     if (newIXEndpointTransport === previousDefault) {
       setNewIXEndpointTransport(nextDefault);
     }
@@ -1473,7 +1475,7 @@ export function AccessView(props: {
   const newIXAdvertiseRequired = newIXRole !== "transit_ix";
   const newIXBootstrapControlAPIEffective = newIXBootstrapControlAPI.trim() || desiredControlAPI.trim();
   const newIXCommandDisabled = !newIXID.trim() || !effectiveNewIXDomain || (!newIXActiveOnly && !newIXEndpointAddress.trim()) || (newIXActiveOnly && !newIXBootstrapControlAPIEffective) || (newIXAdvertiseRequired && newIXAdvertisePrefixes.length === 0) || newIXAdvertiseWarnings.length > 0;
-  const newIXEffectiveEndpointTransport = newIXEndpointTransport || ixProvisionDefaultEndpointTransport(newIXProfile, newIXEndpointMode, newIXEndpointAddress);
+  const newIXEffectiveEndpointTransport = newIXEndpointTransport || ixProvisionDefaultEndpointTransport(newIXProfile, newIXEndpointMode, newIXEndpointAddress, newIXServiceManager);
   const newIXResolvedEndpointName = newIXEndpointName.trim() || `${safeShellName(newIXID, "ix-new")}-${newIXEffectiveEndpointTransport}`;
   const newIXQuickJoinCommand = props.issuedIXProvision?.command || "";
   const newIXEffective = ixProvisionEffectiveDefaults({
