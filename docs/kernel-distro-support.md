@@ -47,17 +47,22 @@ now install for kernel module builds when dependency installation is enabled.
 ## Current validation snapshot
 
 The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
-2026-06-21, 2026-06-22, and 2026-06-23 against current source and selected production
+2026-06-21, 2026-06-22, 2026-06-23, and 2026-06-24 against current source and selected production
 transport defaults. They covered Debian 13 `6.12.90+deb13.1-amd64`,
 Debian 13 `6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
-OpenWrt 24.10.2 x86_64 `6.6.93`, and OpenWrt 24.10.7 x86_64 `6.6.141`
+OpenWrt 24.10.2 x86_64 `6.6.93`, OpenWrt 24.10.7 x86_64 `6.6.141`,
+and OpenWrt 25.12.4 x86_64 `6.12.87`
 guests with disposable PVE VM IDs 200+.
 The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
 the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
 OpenWrt 24.10.7 x86_64 has since passed an SDK module build and a 3600s
 OpenWrt-to-Debian full-kmod production gate. OpenWrt 24.10.7 route-GSO and
 secure-kUDP route-GSO both failed closed at the runtime capability gate because
-the tested image did not expose usable route-TCP kfunc capability.
+the tested image did not expose usable route-TCP kfunc capability. OpenWrt
+25.12.4 x86_64 SDK modules also built in forced full mode, but the official
+runtime image used APK package feeds, did not expose `/sys/kernel/btf/vmlinux`,
+and route-GSO plus secure-kUDP route-GSO failed closed with missing
+`route_tcp_kfunc` and `route_tcp_xmit_kfunc`.
 
 Generic Linux Kbuild on Ubuntu 22.04.5:
 
@@ -234,6 +239,22 @@ TCP route-GSO failed closed before traffic with missing `route_tcp_kfunc` and
 `route_tcp_xmit_kfunc`. The selected OpenWrt production kernel path therefore
 remains UDP plaintext full-kmod with exact-version runtime evidence.
 
+A 2026-06-24 OpenWrt 25.12.4 follow-up used VM201 OpenWrt x86_64 kernel
+`6.12.87` and VM200 Debian 13 `6.12.94+deb13-amd64` on isolated `vmbr3`.
+OpenWrt 25.12.4 uses APK package feeds. The official image still did not
+expose `/sys/kernel/btf/vmlinux`. After fixing the SDK matrix helper to parse
+`include/kernel-version.mk`, forced full OpenWrt modules built successfully
+with `crypto=full,datapath=full,helpers=full`; the OpenWrt module SHA256
+values were `8652ba0b78af1e7845e5adc466ef48654aeb68c675574652bc39fbd7f8febdac`
+for `trustix_crypto.ko`,
+`f7b9d3a00f9f90e44863bba514b8563a14312c0bc16990d34daddb08e490ed3c` for
+`trustix_datapath.ko`, and
+`d9990877dfdc431023d7c26b89924a47e070f537c5b0e94e76ed9bf263e28abe` for
+`trustix_datapath_helpers.ko`. Both secure-kUDP route-GSO and experimental TCP
+route-GSO failed closed before traffic with missing `route_tcp_kfunc` and
+`route_tcp_xmit_kfunc`, so upgrading to the official 25.12.4 image does not
+change the OpenWrt production default selection.
+
 A 2026-06-23 current-head OpenWrt 24.10.7-to-Debian full-kmod recheck paired
 OpenWrt kernel `6.6.141` with Debian 13 `6.12.94+deb13-amd64` and passed the
 3600s-per-direction production gate. It used commit
@@ -253,6 +274,7 @@ OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 | `23.05.5 x86/64` | `5.15.167` | pass |
 | `24.10.2 x86/64` | `6.6.93` | pass |
 | `24.10.7 x86/64` | `6.6.141` | pass |
+| `25.12.4 x86/64` | `6.12.87` | pass |
 | `23.05.5 armsr/armv8` | `5.15.167` | pass |
 
 Older performance-log runs also covered a wider OpenWrt compile matrix, but the
@@ -280,9 +302,11 @@ loaded and passed selftests, but it did not provide
 `route_tcp_kfunc`/`route_tcp_xmit_kfunc`. Both secure-kUDP route-GSO and
 experimental TCP route-GSO failed closed before traffic with the expected
 missing-capability diagnostic. Do not select OpenWrt 23.05.5, 24.10.2, or
-24.10.7 route-GSO or secure-kUDP route-GSO as production defaults; use the
-validated UDP plaintext full-kmod path until a newer OpenWrt kernel/helper
-combination passes the runtime route-TCP kfunc gate.
+24.10.7 route-GSO or secure-kUDP route-GSO as production defaults. The later
+OpenWrt 25.12.4 official x86_64 image also failed closed for the same
+capability boundary. Use the validated UDP plaintext full-kmod path until a
+newer OpenWrt kernel/helper combination passes the runtime route-TCP kfunc
+gate.
 
 OpenWrt deployment is fail-closed for module ABI. Do not use release-embedded
 Debian/PVE `.ko` payloads on OpenWrt. Build the module with the matching

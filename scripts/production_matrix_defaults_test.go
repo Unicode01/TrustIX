@@ -177,6 +177,7 @@ func knownLegacyProductionEvidenceArtifacts() map[string]bool {
 		"docs/trustix-performance-log.md#debian-userspace-tc-current-head-production-gates":                     true,
 		"docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                               true,
 		"docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                                true,
+		"docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check":        true,
 	}
 }
 
@@ -966,10 +967,12 @@ func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 
 func TestOpenWrtRouteGSOFamiliesHaveFailClosedRuntimeEvidence(t *testing.T) {
 	want := map[string]bool{
-		"owdeb_secure_kudp:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate": false,
-		"owdeb_route_gso:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":   false,
-		"owdeb_secure_kudp:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check": false,
-		"owdeb_route_gso:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":   false,
+		"owdeb_secure_kudp:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                 false,
+		"owdeb_route_gso:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                   false,
+		"owdeb_secure_kudp:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                 false,
+		"owdeb_route_gso:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                   false,
+		"owdeb_secure_kudp:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check": false,
+		"owdeb_route_gso:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check":   false,
 	}
 	for _, evidence := range loadProductionTransportEvidence(t) {
 		if evidence.Result != "fail_closed" || evidence.MinGbps != "0" || evidence.MinSeconds != "30" {
@@ -3293,6 +3296,23 @@ func TestOpenWrtKmodMatrixTracksCurrentStablePatchReleases(t *testing.T) {
 	} {
 		if strings.Contains(text, stale) {
 			t.Fatalf("openwrt-full-datapath-kmod-matrix.sh still defaults stale release %q", stale)
+		}
+	}
+}
+
+func TestOpenWrtKmodMatrixParsesKernelVersionMk(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join(".", "openwrt-full-datapath-kmod-matrix.sh"))
+	if err != nil {
+		t.Fatalf("read openwrt-full-datapath-kmod-matrix.sh: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"include/kernel-version.mk",
+		"KERNEL_PATCHVER",
+		"LINUX_VERSION",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("openwrt-full-datapath-kmod-matrix.sh should parse %s for OpenWrt SDKs without include/kernel-* files", want)
 		}
 	}
 }

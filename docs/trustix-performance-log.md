@@ -20,6 +20,70 @@ Current production-default evidence boundary:
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-amd64` at commit `1a72df194383d74fef5b03f68878f72734addb39` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
+## 2026-06-24
+
+<a id="2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check"></a>
+
+### Zaozhuang PVE OpenWrt 25.12.4 route-GSO runtime check
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 Debian 13 (`10.203.3.200`) and VM201 OpenWrt 25.12.4 x86_64
+(`10.203.3.201`) on isolated `vmbr3`. VM100 and all 1xx guests were not
+modified. The local source archive came from commit
+`b2aafdaa3d727efb4e70eab1a8c9d3c77b8c123a`; because it was built from an
+archive, the validation binary reported `commit=unknown`, build time
+`2026-06-24T05:01:50Z`, Go `1.25.0`.
+
+The Debian guest ran kernel `6.12.94+deb13-amd64` and exposed
+`/sys/kernel/btf/vmlinux`. The OpenWrt guest ran kernel `6.12.87`, used APK
+package feeds instead of opkg, and did not expose `/sys/kernel/btf/vmlinux`.
+OpenWrt runtime dependencies were installed with APK packages including
+`bash`, `curl`, `iperf3`, `ip-full`, `tc-bpf`, `kmod-sched-bpf`, `kmod-veth`,
+`kmod-crypto-gcm`, and CA bundles.
+
+The OpenWrt 25.12.4 SDK build initially auto-downgraded helpers to `basic`
+because the matrix helper only detected old `include/kernel-*` files. The SDK
+uses `include/kernel-version.mk`, so the helper now parses `KERNEL_PATCHVER`
+or `LINUX_VERSION` from that file. A forced full module build then succeeded
+with `crypto=full,datapath=full,helpers=full`.
+
+OpenWrt 25.12.4 module hashes:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `8652ba0b78af1e7845e5adc466ef48654aeb68c675574652bc39fbd7f8febdac` |
+| `trustix_datapath_helpers.ko` | `d9990877dfdc431023d7c26b89924a47e070f537c5b0e94e76ed9bf263e28abe` |
+| `trustix_datapath.ko` | `f7b9d3a00f9f90e44863bba514b8563a14312c0bc16990d34daddb08e490ed3c` |
+
+Debian module hashes:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `352f7a18dc484e287493d326f6e03fb20305aa0e77d661a1c1706160d7db397f` |
+| `trustix_datapath_helpers.ko` | `09353fa56bfedf67b48a6d5b46d65332963b4d76f5e7a72b485972f193ecb77d` |
+| `trustix_datapath.ko` | `4d7965107d974934384be8a4080d5972433328e8a229439a9d58da9cf27a89bd` |
+
+Runtime checks:
+
+| Case | Artifact | Duration | Result |
+| --- | --- | ---: | --- |
+| OpenWrt 25.12.4 secure-kUDP route-GSO | `/root/trustix-owrt25124-runtime/results/owdeb-secure-kudp-30-20260624-131448` | startup gate | fail-closed |
+| OpenWrt 25.12.4 experimental TCP route-GSO | `/root/trustix-owrt25124-runtime/results/owdeb-routegso-30-20260624-131436` | startup gate | fail-closed |
+
+Both cases loaded `trustix_datapath_helpers` on OpenWrt but failed closed before
+traffic. The secure-kUDP case reported:
+`secure kernel_udp route-GSO requires trustix_datapath_helpers full route TCP
+kfunc capability; missing=route_tcp_kfunc,route_tcp_xmit_kfunc`. The
+experimental TCP case reported the same missing `route_tcp_kfunc` and
+`route_tcp_xmit_kfunc` runtime capability.
+
+Conclusion: upgrading the official OpenWrt x86_64 image to 25.12.4 does not
+enable TrustIX route-GSO or secure-kUDP route-GSO. Even with forced full
+modules built from the matching SDK, the official guest did not expose the
+runtime route-TCP kfunc capability required by these paths. No OpenWrt
+route-GSO or secure-kUDP route-GSO production default was promoted; the
+selected OpenWrt production kernel path remains UDP plaintext full-kmod.
+
 ## 2026-06-23
 
 <a id="2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates"></a>

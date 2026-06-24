@@ -171,8 +171,18 @@ sdk_kernel_patchver() {
   local sdk_dir="$1"
   local kernel_file
   kernel_file="$(find "${sdk_dir}/include" -maxdepth 1 -type f -name 'kernel-[0-9]*' 2>/dev/null | sort -V | tail -n 1 || true)"
-  [[ -n "$kernel_file" ]] || return 0
-  basename "$kernel_file" | sed -E 's/^kernel-//'
+  if [[ -n "$kernel_file" ]]; then
+    basename "$kernel_file" | sed -E 's/^kernel-//'
+    return 0
+  fi
+
+  local version_file="${sdk_dir}/include/kernel-version.mk"
+  if [[ -f "$version_file" ]]; then
+    sed -nE \
+      -e 's/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*[:?+]?=[[:space:]]*([0-9][0-9.]*).*/\1/p' \
+      -e 's/^[[:space:]]*LINUX_VERSION[[:space:]]*[:?+]?=[[:space:]]*([0-9][0-9.]*).*/\1/p' \
+      "$version_file" | head -n 1
+  fi
 }
 
 kernel_patchver_major() {
