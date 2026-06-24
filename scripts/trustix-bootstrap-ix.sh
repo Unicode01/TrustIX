@@ -192,6 +192,8 @@ Common options:
   --endpoint-source-ip IP    outbound source IP for the generated default endpoint
   --endpoint-bind-iface IFACE
                              outbound Linux interface bind for the generated default endpoint
+  --profile PROFILE          stable, performance, latency, compatibility, or
+                             plaintext_performance (default: plaintext_performance)
   --bootstrap-peer SPEC      id=ix-a,domain=lab.local,control_api=https://...
   --bootstrap-control-api URL
   --api ADDR                 deployed management API listen
@@ -246,7 +248,9 @@ Use semicolons when a value itself contains commas, for example GRE/IPIP/VXLAN
 endpoint address strings.
 If no endpoint is supplied, one UDP passive endpoint is generated from
 --listen/--address/--endpoint-name/--endpoint-transport and optional
---endpoint-source-ip/--endpoint-bind-iface.
+--endpoint-source-ip/--endpoint-bind-iface. The default profile is the
+manifest-backed plaintext performance UDP full-kmod profile; use
+--profile stable or --profile compatibility for secure userspace defaults.
 EOF
 }
 
@@ -375,6 +379,97 @@ json_bool() {
   esac
 }
 
+normalize_bootstrap_profile() {
+  local value
+  value="$(lower_ascii "${1:-plaintext_performance}")"
+  value="${value//-/_}"
+  case "$value" in
+    ""|plain|plaintext|plaintext_perf|performance_plaintext)
+      printf 'plaintext_performance'
+      ;;
+    stable|performance|latency|compatibility|plaintext_performance)
+      printf '%s' "$value"
+      ;;
+    compat|compatible)
+      printf 'compatibility'
+      ;;
+    *)
+      die "--profile must be stable, performance, latency, compatibility, or plaintext_performance"
+      ;;
+  esac
+}
+
+bootstrap_profile_defaults() {
+  local selected="$1"
+  case "$selected" in
+    stable)
+      profile_transport_profile="stable"
+      profile_datapath="auto"
+      profile_encryption="secure"
+      profile_crypto_placement="auto"
+      profile_kernel_transport="auto"
+      profile_kernel_capability="stable"
+      ;;
+    performance)
+      profile_transport_profile="performance"
+      profile_datapath="tc_xdp"
+      profile_encryption="secure"
+      profile_crypto_placement="kernel"
+      profile_kernel_transport="require_kernel"
+      profile_kernel_capability="performance"
+      ;;
+    latency)
+      profile_transport_profile="latency"
+      profile_datapath="auto"
+      profile_encryption="secure"
+      profile_crypto_placement="auto"
+      profile_kernel_transport="auto"
+      profile_kernel_capability="stable"
+      ;;
+    compatibility)
+      profile_transport_profile="stable"
+      profile_datapath="userspace"
+      profile_encryption="secure"
+      profile_crypto_placement="userspace"
+      profile_kernel_transport="disabled"
+      profile_kernel_capability="disabled"
+      ;;
+    plaintext_performance)
+      profile_transport_profile="performance"
+      profile_datapath="kernel_module"
+      profile_encryption="plaintext"
+      profile_crypto_placement="userspace"
+      profile_kernel_transport="require_kernel"
+      profile_kernel_capability="full_plaintext"
+      ;;
+    *)
+      die "unsupported profile: $selected"
+      ;;
+  esac
+}
+
+bootstrap_kernel_module_modes() {
+  local selected="$1"
+  crypto_module_mode="$kernel_modules"
+  datapath_module_mode="$kernel_modules"
+  helpers_module_mode="$kernel_modules"
+  if [[ "$kernel_modules" != "auto" ]]; then
+    return 0
+  fi
+  case "$selected" in
+    plaintext_performance)
+      crypto_module_mode="disabled"
+      datapath_module_mode="required"
+      helpers_module_mode="disabled"
+      ;;
+    performance)
+      crypto_module_mode="required"
+      datapath_module_mode="disabled"
+      helpers_module_mode="required"
+      ;;
+  esac
+}
+
 trustix_bootstrap_provision_insecure_enabled() {
   case "$(lower_ascii "${TRUSTIX_BOOTSTRAP_PROVISION_INSECURE:-1}")" in
     0|false|no|off|disabled) return 1 ;;
@@ -447,9 +542,9 @@ find_trustix_ca_cmd() {
 
 run_trustix_ca() {
   if [[ "$trustix_ca_cmd" == go\ run* ]]; then
-    (cd "$repo_root" && go run ./cmd/trustix-ca "$@")
+    (cd "$repo_root" && go run ./cmd/trustix-ca "$@") >&2
   else
-    "$trustix_ca_cmd" "$@"
+    "$trustix_ca_cmd" "$@" >&2
   fi
 }
 
@@ -493,6 +588,7 @@ endpoint_listen="0.0.0.0:7000"
 endpoint_address=""
 endpoint_source_ip=""
 endpoint_bind_iface=""
+profile="plaintext_performance"
 control_api=""
 bootstrap_peers=()
 bootstrap_control_apis=()
@@ -554,6 +650,7 @@ while [[ $# -gt 0 ]]; do
     --address) [[ $# -ge 2 ]] || die "--address requires a value"; endpoint_address="$2"; shift 2 ;;
     --endpoint-source-ip) [[ $# -ge 2 ]] || die "--endpoint-source-ip requires a value"; endpoint_source_ip="$2"; shift 2 ;;
     --endpoint-bind-iface) [[ $# -ge 2 ]] || die "--endpoint-bind-iface requires a value"; endpoint_bind_iface="$2"; shift 2 ;;
+    --profile) [[ $# -ge 2 ]] || die "--profile requires a value"; profile="$2"; shift 2 ;;
     --control-api) [[ $# -ge 2 ]] || die "--control-api requires a value"; control_api="$2"; shift 2 ;;
     --bootstrap-peer) [[ $# -ge 2 ]] || die "--bootstrap-peer requires a value"; bootstrap_peers+=("$2"); shift 2 ;;
     --bootstrap-control-api) [[ $# -ge 2 ]] || die "--bootstrap-control-api requires a value"; bootstrap_control_apis+=("$2"); shift 2 ;;
@@ -598,9 +695,24 @@ kernel_modules="$(lower_ascii "$kernel_modules")"
 case "$kernel_modules" in disabled|auto|required) ;; *) die "--kernel-modules must be disabled, auto, or required" ;; esac
 service_manager="$(lower_ascii "$service_manager")"
 case "$service_manager" in auto|systemd|openwrt) ;; *) die "--service-manager must be auto, systemd, or openwrt" ;; esac
+profile="$(normalize_bootstrap_profile "$profile")"
+profile_transport_profile=""
+profile_datapath=""
+profile_encryption=""
+profile_crypto_placement=""
+profile_kernel_transport=""
+profile_kernel_capability=""
+bootstrap_profile_defaults "$profile"
+crypto_module_mode=""
+datapath_module_mode=""
+helpers_module_mode=""
+bootstrap_kernel_module_modes "$profile"
 openwrt_service_target=0
 if [[ "$service_manager" == "openwrt" || ( "$service_manager" == "auto" && -f /etc/openwrt_release ) ]]; then
   openwrt_service_target=1
+fi
+if [[ "$openwrt_service_target" == "1" && "$profile" == "performance" ]]; then
+  die "OpenWrt secure performance route-GSO is not a production default yet; use --profile stable for secure userspace or --profile plaintext_performance for validated OpenWrt full-kmod"
 fi
 if [[ "$kernel_modules" == "required" ]]; then
   if [[ "$openwrt_service_target" == "1" ]]; then
@@ -614,6 +726,7 @@ if [[ "$kernel_modules" == "required" ]]; then
     build_ko=1
   fi
 fi
+bootstrap_kernel_module_modes "$profile"
 case "$(json_bool "$dns_enabled")" in true) dns_enabled=1 ;; false) dns_enabled=0 ;; esac
 case "$(json_bool "$openwrt_dnsmasq")" in true) openwrt_dnsmasq=1; dns_enabled=1 ;; false) openwrt_dnsmasq=0 ;; esac
 if [[ -n "$target" && "$local_install" == "1" ]]; then
@@ -669,7 +782,8 @@ esac
 
 kernel_module_path_for_config() {
   local module_name="$1"
-  if [[ "$openwrt_service_target" == "1" && "$kernel_modules" != "disabled" && "$openwrt_embedded_kmod" != "1" ]]; then
+  local mode="${2:-$kernel_modules}"
+  if [[ "$openwrt_service_target" == "1" && ( "$mode" == "auto" || "$mode" == "required" ) && "$openwrt_embedded_kmod" != "1" ]]; then
     printf '/etc/trustix/modules/%s.ko' "$module_name"
     return 0
   fi
@@ -711,7 +825,7 @@ if [[ ${#endpoint_specs[@]} -eq 0 ]]; then
   if [[ -z "$endpoint_name" ]]; then
     endpoint_name="${ix_id}-${endpoint_transport}"
   fi
-  generated_endpoint_spec="name=${endpoint_name},transport=${endpoint_transport},mode=${endpoint_mode},listen=${endpoint_listen},address=${endpoint_address}"
+  generated_endpoint_spec="name=${endpoint_name},transport=${endpoint_transport},mode=${endpoint_mode},listen=${endpoint_listen},address=${endpoint_address},encryption=${profile_encryption},profile=${profile_transport_profile},datapath=${profile_datapath},crypto_placement=${profile_crypto_placement}"
   if [[ -n "$endpoint_source_ip" ]]; then
     generated_endpoint_spec+=",source_ip=${endpoint_source_ip}"
   fi
@@ -859,13 +973,17 @@ done
     fi
     printf '},\n'
   fi
-  crypto_module_path="$(kernel_module_path_for_config trustix_crypto)"
-  datapath_module_path="$(kernel_module_path_for_config trustix_datapath)"
-  helpers_module_path="$(kernel_module_path_for_config trustix_datapath_helpers)"
-  printf '  "kernel_modules":{"trustix_crypto":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath_helpers":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false}},\n' \
-    "$(json_escape "$kernel_modules")" "$(json_escape "$crypto_module_path")" \
-    "$(json_escape "$kernel_modules")" "$(json_escape "$datapath_module_path")" \
-    "$(json_escape "$kernel_modules")" "$(json_escape "$helpers_module_path")"
+  crypto_module_path="$(kernel_module_path_for_config trustix_crypto "$crypto_module_mode")"
+  datapath_module_path="$(kernel_module_path_for_config trustix_datapath "$datapath_module_mode")"
+  helpers_module_path="$(kernel_module_path_for_config trustix_datapath_helpers "$helpers_module_mode")"
+  printf '  "kernel_modules":{"capability_profile":"%s",' "$(json_escape "$profile_kernel_capability")"
+  if [[ "$profile" == "plaintext_performance" ]]; then
+    printf '"datapath":{"rx_stage":"worker","rx_worker":true,"tx_plaintext":true,"full_plaintext":true,"rx_worker_allow_experimental_tcp":true},'
+  fi
+  printf '"trustix_crypto":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath_helpers":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false}},\n' \
+    "$(json_escape "$crypto_module_mode")" "$(json_escape "$crypto_module_path")" \
+    "$(json_escape "$datapath_module_mode")" "$(json_escape "$datapath_module_path")" \
+    "$(json_escape "$helpers_module_mode")" "$(json_escape "$helpers_module_path")"
   printf '  "endpoints":['
   first=1
   for spec in "${endpoint_specs[@]}"; do
@@ -896,7 +1014,12 @@ done
   printf '  "policies":[{"name":"default-routed","route_selection":"longest_prefix","load_balance":"least_conn","flow_stickiness":true,"rewrite":"preserve_source"}],\n'
   printf '  "transport_policy":{"mode":"user_defined","candidates":'
   json_string_array "${endpoint_names[@]}"
-  printf ',"failover":"health_based","load_balance":"least_conn","profile":"stable","datapath":"auto","encryption":"secure","crypto_key_source":"auto","crypto_placement":"auto","kernel_transport":{"mode":"auto"}}\n'
+  printf ',"failover":"health_based","profile":"%s","datapath":"%s","encryption":"%s","crypto_key_source":"auto","crypto_placement":"%s","kernel_transport":{"mode":"%s"},"session_pool":{"warmup":true}}\n' \
+    "$(json_escape "$profile_transport_profile")" \
+    "$(json_escape "$profile_datapath")" \
+    "$(json_escape "$profile_encryption")" \
+    "$(json_escape "$profile_crypto_placement")" \
+    "$(json_escape "$profile_kernel_transport")"
   printf '}\n'
 } >"$config_path"
 
