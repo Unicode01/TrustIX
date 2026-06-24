@@ -242,6 +242,50 @@ def numeric_field(
     )
 
 
+def matrix_numeric_field(row: dict[str, Any], key: str, case: str) -> float:
+    value = row.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise SystemExit(
+                f"matrix summary case {case!r} has invalid {key}: {value!r}"
+            ) from exc
+    raise SystemExit(f"matrix summary case {case!r} lacks numeric {key}")
+
+
+def require_matrix_gate_alignment(
+    gate_row: dict[str, Any],
+    matrix_row: dict[str, Any],
+    result: str,
+    required_seconds: float,
+) -> None:
+    if result != "pass":
+        return
+    case = str(gate_row.get("case") or matrix_row.get("case") or "")
+    if matrix_row.get("validation_scope") != "cross_host":
+        raise SystemExit(
+            f"matrix summary case {case!r} validation_scope="
+            f"{matrix_row.get('validation_scope')!r}, want 'cross_host'"
+        )
+    matrix_min_gbps = matrix_numeric_field(matrix_row, "min_gbps", case)
+    matrix_min_seconds = matrix_numeric_field(matrix_row, "min_seconds", case)
+    gate_min_gbps = numeric_field(gate_row, "min_gbps_required", "gate summary")
+    if gate_min_gbps < matrix_min_gbps:
+        raise SystemExit(
+            f"gate summary case {case!r} min_gbps_required="
+            f"{gate_min_gbps:.6f} is below matrix min_gbps={matrix_min_gbps:.6f}"
+        )
+    if required_seconds < matrix_min_seconds:
+        raise SystemExit(
+            f"gate summary case {case!r} min_seconds_required="
+            f"{format_metric_seconds(required_seconds)}s is below matrix "
+            f"min_seconds={format_metric_seconds(matrix_min_seconds)}s"
+        )
+
+
 def list_field(row: dict[str, Any], key: str) -> list[Any]:
     value = row.get(key)
     if isinstance(value, list):
@@ -656,6 +700,7 @@ def evidence_row(
     require_binary_identity_for_pass(gate_row, result)
     require_runtime_artifacts_for_pass(gate_row, result)
     require_crash_stability_for_pass(gate_row, result)
+    require_matrix_gate_alignment(gate_row, matrix_row, result, seconds)
     os_matrix = resolved_matrix_value(
         gate_row,
         override=args.os_matrix,
