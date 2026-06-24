@@ -224,6 +224,22 @@ def require_long_soak_for_pass(
     )
 
 
+def numeric_field(
+    row: dict[str, Any],
+    key: str,
+    context: str,
+    *,
+    case: str | None = None,
+) -> float:
+    value = row.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    case_name = case or str(row.get("case") or "")
+    raise SystemExit(
+        f"gate summary case {case_name!r} has invalid {context} {key}: {value!r}"
+    )
+
+
 def list_field(row: dict[str, Any], key: str) -> list[Any]:
     value = row.get(key)
     if isinstance(value, list):
@@ -275,6 +291,69 @@ def require_stable_boot_ids(row: dict[str, Any]) -> None:
             f"gate summary case {row.get('case')!r} has stable boot-id coverage "
             f"for {complete} nodes, want >= 2"
         )
+
+
+def require_run_timing_for_pass(
+    row: dict[str, Any],
+    result: str,
+    required_seconds: float,
+    seconds_slop: float,
+) -> None:
+    if result != "pass":
+        return
+    timings = list_field(row, "run_timing")
+    if not timings:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has 0 run_timing artifacts, want >= 1"
+        )
+    for item in timings:
+        if not isinstance(item, dict):
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has invalid run_timing item: {item!r}"
+            )
+        source = str(item.get("source") or "run_timing")
+        for key, want in {
+            "iperf_mode": "forward",
+            "iperf_directions": "both",
+        }.items():
+            got = str(item.get(key) or "")
+            if got != want:
+                raise SystemExit(
+                    f"gate summary case {row.get('case')!r} {source} {key}={got!r}, "
+                    f"want {want!r}"
+                )
+        case = str(row.get("case") or "")
+        start_epoch = numeric_field(item, "start_epoch", source, case=case)
+        end_epoch = numeric_field(item, "end_epoch", source, case=case)
+        elapsed = numeric_field(item, "elapsed_seconds", source, case=case)
+        requested = numeric_field(item, "iperf_seconds_requested", source, case=case)
+        if end_epoch < start_epoch:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} {source} end_epoch "
+                f"{format_metric_seconds(end_epoch)} < start_epoch "
+                f"{format_metric_seconds(start_epoch)}"
+            )
+        computed_elapsed = end_epoch - start_epoch
+        if abs(computed_elapsed - elapsed) > max(2.0, seconds_slop):
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} {source} elapsed_seconds "
+                f"{format_metric_seconds(elapsed)} does not match end-start "
+                f"{format_metric_seconds(computed_elapsed)}"
+            )
+        if elapsed + seconds_slop < required_seconds:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} {source} elapsed_seconds "
+                f"{format_metric_seconds(elapsed)}s + "
+                f"seconds_slop={format_metric_seconds(seconds_slop)}s < "
+                f"required={format_metric_seconds(required_seconds)}s"
+            )
+        if requested + seconds_slop < required_seconds:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} {source} "
+                f"iperf_seconds_requested {format_metric_seconds(requested)}s + "
+                f"seconds_slop={format_metric_seconds(seconds_slop)}s < "
+                f"required={format_metric_seconds(required_seconds)}s"
+            )
 
 
 def require_crash_stability_for_pass(row: dict[str, Any], result: str) -> None:
@@ -385,13 +464,15 @@ def evidence_row(
             f"{matrix_row.get('status')!r}"
         )
     seconds = metric_seconds_value(gate_row)
+    seconds_slop = seconds_slop_value(gate_row)
     require_long_soak_for_pass(
         gate_row,
         result,
         seconds,
         observed_seconds_value(gate_row),
-        seconds_slop_value(gate_row),
+        seconds_slop,
     )
+    require_run_timing_for_pass(gate_row, result, seconds, seconds_slop)
     require_crash_stability_for_pass(gate_row, result)
     os_matrix = resolved_matrix_value(
         gate_row,
