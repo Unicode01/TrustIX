@@ -1473,8 +1473,8 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"full_kmod_min_gbps=\"$(max_decimal \"$full_kmod_min_gbps\" \"3\")\"",
 		"secure_kudp_min_gbps=\"$(max_decimal \"$secure_kudp_min_gbps\" \"1.5\")\"",
 		"route_gso_min_gbps=\"$(max_decimal \"$route_gso_min_gbps\" \"2.5\")\"",
-		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-900",
-		"min_seconds=\"$(max_decimal \"$min_seconds\" \"900\")\"",
+		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-3600",
+		"min_seconds=\"$(max_decimal \"$min_seconds\" \"3600\")\"",
 		"seconds_slop=\"$(min_decimal \"$seconds_slop\" \"1\")\"",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_IPERF_INTERVALS:-600",
 		"min_iperf_intervals=\"$(max_integer \"$min_iperf_intervals\" \"600\")\"",
@@ -1935,7 +1935,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		t.Fatalf("manifest verifier identity is incomplete: %+v", manifest.Verifier)
 	}
 	for key, want := range map[string]string{
-		"min_seconds":                          "900",
+		"min_seconds":                          "3600",
 		"seconds_slop":                         "1",
 		"min_iperf_intervals":                  "600",
 		"min_interval_gbps_ratio":              "0.25",
@@ -2129,11 +2129,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		if gotMinGbps[name] != want {
 			t.Fatalf("case %s min_gbps got %q want %q; calls=%s", name, gotMinGbps[name], want, payload)
 		}
-		wantSeconds := "900"
-		switch name {
-		case "tc", "full", "secure", "route":
-			wantSeconds = "3600"
-		}
+		wantSeconds := "3600"
 		if gotMinSeconds[name] != wantSeconds {
 			t.Fatalf("case %s min_seconds got %q want %s; calls=%s", name, gotMinSeconds[name], wantSeconds, payload)
 		}
