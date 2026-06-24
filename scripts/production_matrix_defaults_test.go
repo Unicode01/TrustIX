@@ -2008,6 +2008,113 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 	}
 }
 
+func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
+	python := requirePython3(t)
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--scope", "cross_host",
+		"--require-manifest",
+		"--fail-on-missing",
+		"--json",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production transport audit failed: %v\n%s", err, output)
+	}
+	var rows []struct {
+		Status  string `json:"status"`
+		Key     string `json:"key"`
+		Default struct {
+			MinGbps    string `json:"min_gbps"`
+			MinSeconds string `json:"min_seconds"`
+		} `json:"default"`
+		Evidence struct {
+			MinGbps            string `json:"min_gbps"`
+			MinSeconds         string `json:"min_seconds"`
+			GateManifestSchema string `json:"gate_manifest_schema"`
+			Artifact           string `json:"artifact"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(output, &rows); err != nil {
+		t.Fatalf("decode audit JSON: %v\n%s", err, output)
+	}
+	wantRows := 0
+	defaultByKey := map[string]productionTransportDefault{}
+	for _, row := range loadProductionTransportDefaults(t) {
+		if row.ValidationScope != "cross_host" {
+			continue
+		}
+		wantRows++
+		defaultByKey[productionDefaultEvidenceKey(row)] = row
+	}
+	if len(rows) != wantRows {
+		t.Fatalf("audit rows = %d, want %d\n%s", len(rows), wantRows, output)
+	}
+	for _, row := range rows {
+		if row.Status != "pass" {
+			t.Fatalf("audit row did not pass: %+v\n%s", row, output)
+		}
+		defaultRow, ok := defaultByKey[row.Key]
+		if !ok {
+			t.Fatalf("audit emitted non-default key %q\n%s", row.Key, output)
+		}
+		defaultGbps, err := strconv.ParseFloat(defaultRow.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid default min_gbps %q in %+v", defaultRow.MinGbps, defaultRow)
+		}
+		defaultSeconds, err := strconv.ParseFloat(defaultRow.MinSeconds, 64)
+		if err != nil {
+			t.Fatalf("invalid default min_seconds %q in %+v", defaultRow.MinSeconds, defaultRow)
+		}
+		evidenceGbps, err := strconv.ParseFloat(row.Evidence.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid audit evidence min_gbps %q in %+v", row.Evidence.MinGbps, row)
+		}
+		evidenceSeconds, err := strconv.ParseFloat(row.Evidence.MinSeconds, 64)
+		if err != nil {
+			t.Fatalf("invalid audit evidence min_seconds %q in %+v", row.Evidence.MinSeconds, row)
+		}
+		if evidenceGbps < defaultGbps || evidenceSeconds < defaultSeconds {
+			t.Fatalf("audit accepted below-threshold evidence for %s: %+v default=%+v", row.Key, row.Evidence, defaultRow)
+		}
+		if row.Evidence.GateManifestSchema != productionGateManifestSchema {
+			t.Fatalf("audit accepted non-manifest evidence for %s: %+v", row.Key, row.Evidence)
+		}
+		if !strings.HasPrefix(row.Evidence.Artifact, "docs/") || !strings.Contains(row.Evidence.Artifact, "#") {
+			t.Fatalf("audit evidence artifact should be a docs anchor for %s: %+v", row.Key, row.Evidence)
+		}
+	}
+}
+
+func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	payload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t100\t3600\timpossible threshold for audit failure",
+		"",
+	}, "\n")
+	if err := os.WriteFile(defaults, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", "production-transport-evidence.tsv",
+		"--scope", "cross_host",
+		"--require-manifest",
+		"--fail-on-missing",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted missing evidence:\n%s", output)
+	}
+	if !strings.Contains(string(output), "lack matching evidence") {
+		t.Fatalf("audit failure did not explain missing evidence:\n%s", output)
+	}
+}
+
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
