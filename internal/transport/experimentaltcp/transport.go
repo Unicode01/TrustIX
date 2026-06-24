@@ -187,6 +187,8 @@ func experimentalTCPRecvDrainBatchLimit() int {
 	return parsed
 }
 
+var experimentalTCPRecvCoalesceWaitHook func() // test hook; nil in production.
+
 func (transportImpl *Transport) Name() transport.Protocol {
 	return transport.ProtocolExperimentalTCP
 }
@@ -1618,6 +1620,9 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 				if coalesceDelay <= 0 || len(packets) >= max {
 					session.recordReceivedPackets(packets)
 					return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+				}
+				if hook := experimentalTCPRecvCoalesceWaitHook; hook != nil {
+					hook()
 				}
 				timer := time.NewTimer(coalesceDelay)
 				select {

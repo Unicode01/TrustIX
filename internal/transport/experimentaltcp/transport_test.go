@@ -2051,6 +2051,17 @@ func TestExperimentalTCPRecvPacketsDrainsQueuedBatchesWithoutDelay(t *testing.T)
 
 func TestExperimentalTCPRecvPacketsCoalesceDelayWaitsForNextBatch(t *testing.T) {
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_COALESCE_DELAY", "10ms")
+	coalesceReady := make(chan struct{}, 1)
+	experimentalTCPRecvCoalesceWaitHook = func() {
+		select {
+		case coalesceReady <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(func() {
+		experimentalTCPRecvCoalesceWaitHook = nil
+	})
+
 	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
 	session.handleFrame(dataplane.ExperimentalTCPFrame{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 1, Payload: []byte("one")})
 
@@ -2064,7 +2075,17 @@ func TestExperimentalTCPRecvPacketsCoalesceDelayWaitsForNextBatch(t *testing.T) 
 		}
 		result <- packets
 	}()
-	time.Sleep(time.Millisecond)
+
+	select {
+	case <-coalesceReady:
+	case err := <-errCh:
+		t.Fatalf("RecvPackets error before coalesce wait = %v", err)
+	case packets := <-result:
+		t.Fatalf("RecvPackets returned before coalesce wait: %q", packets)
+	case <-time.After(time.Second):
+		t.Fatal("RecvPackets did not enter coalesce wait")
+	}
+
 	session.handleFrame(dataplane.ExperimentalTCPFrame{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 2, Payload: []byte("two")})
 
 	select {
