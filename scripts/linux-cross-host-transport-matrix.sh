@@ -21,6 +21,7 @@ min_gbps_override="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_MIN_GBPS:-}"
 seconds_slop="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SECONDS_SLOP:-1}"
 timeout_slop="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_TIMEOUT_SLOP:-120}"
 route_gso_session_error_budget="${TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2}"
+secure_exp_tcp_kernel_session_error_budget="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_SESSION_ERROR_BUDGET:-2}"
 summary_path="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY:-${workdir}/summary.jsonl}"
 selected_gate_summary_dir="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_GATE_SUMMARY_DIR:-${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-${workdir}/selected-production-gate}}"
 evidence_out="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT:-}"
@@ -99,6 +100,7 @@ runner_case_name() {
     owdeb_full_kmod) printf 'owdeb-fullkmod\n'; return ;;
     secure_kudp|dd_secure_kudp) printf 'secure-kudp\n'; return ;;
     owdeb_secure_kudp) printf 'owdeb-secure-kudp\n'; return ;;
+    secure_exp_tcp_kernel|dd_secure_exp_tcp_kernel|owdeb_secure_exp_tcp_kernel) printf 'secure-exp-tcp-kernel\n'; return ;;
     route_gso|dd_route_gso) printf 'dd-routegso\n'; return ;;
     owdeb_route_gso) printf 'owdeb-routegso\n'; return ;;
   esac
@@ -114,6 +116,7 @@ gate_family_class() {
   case "$1" in
     full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\n' ;;
     secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\n' ;;
+    secure_exp_tcp_kernel|dd_secure_exp_tcp_kernel|owdeb_secure_exp_tcp_kernel) printf 'secure_exp_tcp_kernel\n' ;;
     route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\n' ;;
     *) printf '%s\n' "$1" ;;
   esac
@@ -166,6 +169,12 @@ validate_gate_family_semantics() {
       require_case_value datapath "$datapath" tc_xdp "$gate_family"
       require_case_value crypto_placement "$placement" kernel "$gate_family"
       ;;
+    secure_exp_tcp_kernel)
+      require_case_value transport "$transport" experimental_tcp "$gate_family"
+      require_case_value encryption "$encryption" secure "$gate_family"
+      require_case_value datapath "$datapath" kernel_module "$gate_family"
+      require_case_value crypto_placement "$placement" kernel "$gate_family"
+      ;;
     route_gso)
       require_case_value transport "$transport" experimental_tcp "$gate_family"
       require_case_value encryption "$encryption" plaintext "$gate_family"
@@ -195,7 +204,7 @@ case_selected_for_scope() {
   case "$scope" in
     all) return 0 ;;
     cross_host|selected) [[ "$validation_scope" == "cross_host" ]] ;;
-    compat|baseline) [[ "$validation_scope" != "cross_host" && "$gate_class" != "full_kmod" && "$gate_class" != "secure_kudp" && "$gate_class" != "route_gso" ]] ;;
+    compat|baseline) [[ "$validation_scope" != "cross_host" && "$gate_class" != "full_kmod" && "$gate_class" != "secure_kudp" && "$gate_class" != "secure_exp_tcp_kernel" && "$gate_class" != "route_gso" ]] ;;
     *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE must be all, cross_host, selected, compat, or baseline" ;;
   esac
 }
@@ -253,7 +262,7 @@ validate_case_values() {
     *) die "unsupported validation scope in matrix case: ${validation_scope}" ;;
   esac
   case "$gate_family" in
-    userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|route_gso|dd_route_gso|owdeb_route_gso|custom) ;;
+    userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|secure_exp_tcp_kernel|dd_secure_exp_tcp_kernel|owdeb_secure_exp_tcp_kernel|route_gso|dd_route_gso|owdeb_route_gso|custom) ;;
     *) die "unsupported gate family in matrix case: ${gate_family}" ;;
   esac
   validate_gate_family_semantics "$transport" "$encryption" "$datapath" "$placement" "$gate_family"
@@ -294,6 +303,12 @@ append_selected_gate_case() {
       append_case_token secure_kudp_cases "${name}=${dir}"
       append_case_token secure_kudp_case_min_gbps "${name}=${min_gbps}"
       append_case_token secure_kudp_case_min_seconds "${name}=${min_seconds}"
+      appended=1
+      ;;
+    secure_exp_tcp_kernel)
+      append_case_token secure_exp_tcp_kernel_cases "${name}=${dir}"
+      append_case_token secure_exp_tcp_kernel_case_min_gbps "${name}=${min_gbps}"
+      append_case_token secure_exp_tcp_kernel_case_min_seconds "${name}=${min_seconds}"
       appended=1
       ;;
     route_gso)
@@ -339,6 +354,8 @@ run_verify() {
     family_class="$(gate_family_class "$gate_family")"
     if [[ "$family_class" == "route_gso" ]]; then
       session_dial_error_budget="$route_gso_session_error_budget"
+    elif [[ "$family_class" == "secure_exp_tcp_kernel" ]]; then
+      session_dial_error_budget="$secure_exp_tcp_kernel_session_error_budget"
     fi
     args+=(
       "--require-status-max" "data_path.counters.session_dial_errors=${session_dial_error_budget}"
@@ -462,6 +479,11 @@ run_selected_gate() {
     gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=${secure_kudp_case_min_gbps}")
     gate_env+=("TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS=${secure_kudp_case_min_seconds}")
   fi
+  if [[ -n "$secure_exp_tcp_kernel_cases" ]]; then
+    gate_env+=("TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASES=${secure_exp_tcp_kernel_cases}")
+    gate_env+=("TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS=${secure_exp_tcp_kernel_case_min_gbps}")
+    gate_env+=("TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS=${secure_exp_tcp_kernel_case_min_seconds}")
+  fi
   if [[ -n "$route_gso_cases" ]]; then
     gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}")
     gate_env+=("TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=${route_gso_case_min_gbps}")
@@ -535,6 +557,7 @@ main() {
   seconds_slop="$(min_decimal "$seconds_slop" "1")"
   validate_positive_integer TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_TIMEOUT_SLOP "$timeout_slop"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_SESSION_ERROR_BUDGET "$secure_exp_tcp_kernel_session_error_budget"
   if [[ -n "$evidence_out" ]]; then
     truthy "$dry_run" && die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT cannot be used with DRY_RUN=1"
     truthy "$verify" || die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT requires VERIFY=1"
@@ -583,18 +606,21 @@ userspace_tc_cases=""
 tc_direct_cases=""
 full_kmod_cases=""
 secure_kudp_cases=""
+secure_exp_tcp_kernel_cases=""
 route_gso_cases=""
 userspace_case_min_gbps=""
 userspace_tc_case_min_gbps=""
 tc_direct_case_min_gbps=""
 full_kmod_case_min_gbps=""
 secure_kudp_case_min_gbps=""
+secure_exp_tcp_kernel_case_min_gbps=""
 route_gso_case_min_gbps=""
 userspace_case_min_seconds=""
 userspace_tc_case_min_seconds=""
 tc_direct_case_min_seconds=""
 full_kmod_case_min_seconds=""
 secure_kudp_case_min_seconds=""
+secure_exp_tcp_kernel_case_min_seconds=""
 route_gso_case_min_seconds=""
 selected_gate_min_seconds=0
 selected_gate_case_count=0

@@ -231,6 +231,12 @@ def gate_family_class(gate_family: str) -> str:
         return "full_kmod"
     if gate_family in {"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp"}:
         return "secure_kudp"
+    if gate_family in {
+        "secure_exp_tcp_kernel",
+        "dd_secure_exp_tcp_kernel",
+        "owdeb_secure_exp_tcp_kernel",
+    }:
+        return "secure_exp_tcp_kernel"
     if gate_family in {"route_gso", "dd_route_gso", "owdeb_route_gso"}:
         return "route_gso"
     return gate_family
@@ -292,6 +298,12 @@ def expected_runner_case(
         return "secure-kudp"
     if gate_family == "owdeb_secure_kudp":
         return "owdeb-secure-kudp"
+    if gate_family in {
+        "secure_exp_tcp_kernel",
+        "dd_secure_exp_tcp_kernel",
+        "owdeb_secure_exp_tcp_kernel",
+    }:
+        return "secure-exp-tcp-kernel"
     if gate_family in {"route_gso", "dd_route_gso"}:
         return "dd-routegso"
     if gate_family == "owdeb_route_gso":
@@ -414,6 +426,21 @@ def require_matrix_semantics(row: dict[str, Any]) -> None:
             ("transport", transport, "kernel_udp"),
             ("encryption", encryption, "secure"),
             ("datapath", datapath, "tc_xdp"),
+            ("crypto_placement", crypto_placement, "kernel"),
+        ]:
+            require_matrix_value(
+                row=row,
+                key=key,
+                got=got,
+                want=want,
+                gate_family=gate_family,
+            )
+    elif gate_class == "secure_exp_tcp_kernel":
+        for key, got, want in [
+            ("transport", transport, "experimental_tcp"),
+            ("encryption", encryption, "secure"),
+            ("profile", profile, "performance"),
+            ("datapath", datapath, "kernel_module"),
             ("crypto_placement", crypto_placement, "kernel"),
         ]:
             require_matrix_value(

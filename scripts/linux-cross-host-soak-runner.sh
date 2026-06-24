@@ -351,6 +351,7 @@ validate_case() {
   case "$case_name" in
     dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) ;;
     dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) ;;
+    secure-exp-tcp-kernel|secure_exp_tcp_kernel|experimental-tcp-secure-kernel|experimental_tcp_secure_kernel|secure-experimental-tcp-kernel|secure_experimental_tcp_kernel) ;;
     dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) ;;
     ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct) ;;
     *) die "unsupported TRUSTIX_CROSS_HOST_CASE=${case_name}" ;;
@@ -380,6 +381,7 @@ case_fast_path() {
   case "$case_name" in
     dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) printf 'full_kmod\n' ;;
     dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'secure_kudp\n' ;;
+    secure-exp-tcp-kernel|secure_exp_tcp_kernel|experimental-tcp-secure-kernel|experimental_tcp_secure_kernel|secure-experimental-tcp-kernel|secure_experimental_tcp_kernel) printf 'secure_exp_tcp_kernel\n' ;;
     dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) printf 'route_gso\n' ;;
     ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct) printf 'tc_direct\n' ;;
     *) die "unsupported TRUSTIX_CROSS_HOST_CASE=${case_name}" ;;
@@ -396,7 +398,7 @@ case_encryption() {
     return
   fi
   case "$(case_fast_path)" in
-    secure_kudp) printf 'secure\n' ;;
+    secure_kudp|secure_exp_tcp_kernel) printf 'secure\n' ;;
     *) printf 'plaintext\n' ;;
   esac
 }
@@ -468,6 +470,7 @@ case_transport_datapath() {
       fi
       ;;
     secure_kudp|tc_direct) printf 'tc_xdp\n' ;;
+    secure_exp_tcp_kernel) printf 'kernel_module\n' ;;
     *) printf 'kernel_module\n' ;;
   esac
 }
@@ -492,7 +495,7 @@ case_kernel_transport_mode() {
 
 case_uses_secure_kudp_fast_path() {
   case "$(case_fast_path)" in
-    secure_kudp) return 0 ;;
+    secure_kudp|secure_exp_tcp_kernel) return 0 ;;
     userspace_tc)
       [[ "$(case_endpoint_transport)" == "udp" && "$(case_encryption)" == "secure" ]] &&
         truthy "${TRUSTIX_CROSS_HOST_SECURE_KUDP_KERNEL_CRYPTO:-0}"
@@ -532,7 +535,7 @@ apply_case_runtime_defaults() {
 
 case_secure_kudp_route_gso() {
   case "$(case_fast_path)" in
-    secure_kudp) return 0 ;;
+    secure_kudp|secure_exp_tcp_kernel) return 0 ;;
   esac
   truthy "${TRUSTIX_CROSS_HOST_SECURE_KUDP_ROUTE_GSO:-0}"
 }
@@ -1099,7 +1102,39 @@ EOF
   printf 'TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=%s\n' "$route_gso"
 }
 
+secure_exp_tcp_kernel_daemon_env() {
+  cat <<'EOF'
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=1
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=1
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1
+TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=1
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT=1
+TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=1
+TRUSTIX_KERNEL_UDP_XDP_RX_SECURE_DIRECT=1
+TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUMS=1
+TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH=1
+TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH=1
+TRUSTIX_KERNEL_CRYPTO_KFUNC_FASTPATH_STATS=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL=1
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC=0
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC=0
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_FIX_INNER_CHECKSUMS=0
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_TCP_GSO_KFUNC=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=1
+EOF
+}
+
 daemon_env() {
+  if [[ "$(case_fast_path)" == "secure_exp_tcp_kernel" ]]; then
+    secure_exp_tcp_kernel_daemon_env
+    return
+  fi
   if case_uses_secure_kudp_fast_path; then
     secure_kudp_daemon_env
     return

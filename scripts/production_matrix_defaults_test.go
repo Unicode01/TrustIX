@@ -167,6 +167,8 @@ func productionGateFamilyClass(gateFamily string) string {
 		return "full_kmod"
 	case "secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp":
 		return "secure_kudp"
+	case "secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel":
+		return "secure_exp_tcp_kernel"
 	case "route_gso", "dd_route_gso", "owdeb_route_gso":
 		return "route_gso"
 	default:
@@ -215,6 +217,11 @@ func assertProductionGateFamilySemantics(t *testing.T, label, transport, encrypt
 		require("transport", transport, "kernel_udp")
 		require("encryption", encryption, "secure")
 		require("datapath", datapath, "tc_xdp")
+		require("crypto_placement", placement, "kernel")
+	case "secure_exp_tcp_kernel":
+		require("transport", transport, "experimental_tcp")
+		require("encryption", encryption, "secure")
+		require("datapath", datapath, "kernel_module")
 		require("crypto_placement", placement, "kernel")
 	case "route_gso":
 		require("transport", transport, "experimental_tcp")
@@ -1246,6 +1253,28 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testi
 				"gate_family=route_gso",
 				"requires runner_case='dd-routegso'",
 				"got 'userspace-tcp-plaintext'",
+			},
+		},
+		{
+			name: "secure_exp_tcp_kernel_wrong_datapath",
+			matrixRow: map[string]any{
+				"status":           "pass",
+				"case":             "experimental_tcp-secure-performance-tc_xdp-kernel",
+				"runner_case":      "secure-exp-tcp-kernel",
+				"transport":        "experimental_tcp",
+				"encryption":       "secure",
+				"profile":          "performance",
+				"datapath":         "tc_xdp",
+				"crypto_placement": "kernel",
+				"validation_scope": "cross_host",
+				"gate_family":      "secure_exp_tcp_kernel",
+				"min_gbps":         1.5,
+				"min_seconds":      3600,
+			},
+			want: []string{
+				"gate_family=secure_exp_tcp_kernel",
+				"requires datapath='kernel_module'",
+				"got 'tc_xdp'",
 			},
 		},
 		{
@@ -4233,6 +4262,11 @@ func TestCrossHostTransportMatrixRejectsGateFamilySemanticMismatch(t *testing.T)
 			want: "gate_family=route_gso requires transport=experimental_tcp; got transport=udp",
 		},
 		{
+			name: "secure_exp_tcp_kernel_wrong_datapath",
+			row:  "experimental_tcp\tsecure\tperformance\ttc_xdp\tkernel\tcross_host\tsecure_exp_tcp_kernel\t1.5\t3600\tsecure experimental TCP kernel crypto must use kernel-module datapath",
+			want: "gate_family=secure_exp_tcp_kernel requires datapath=kernel_module; got datapath=tc_xdp",
+		},
+		{
 			name: "full_kmod_wrong_crypto",
 			row:  "udp\tsecure\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\t3\t3600\tfull-kmod production gate is plaintext-only",
 			want: "gate_family=full_kmod requires encryption=plaintext; got encryption=secure",
@@ -4499,6 +4533,8 @@ func productionDefaultRunnerCase(row productionTransportDefault) string {
 		return "secure-kudp"
 	case "owdeb_secure_kudp":
 		return "owdeb-secure-kudp"
+	case "secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel":
+		return "secure-exp-tcp-kernel"
 	case "route_gso", "dd_route_gso":
 		return "dd-routegso"
 	case "owdeb_route_gso":
