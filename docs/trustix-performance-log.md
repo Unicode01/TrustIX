@@ -25,10 +25,70 @@ Current production-default evidence boundary:
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
 | Secure experimental TCP kernel crypto | runtime policy branch only; no dedicated 3600s production gate yet | Do not reuse `secure_kudp` evidence for this path. It needs its own cross-host gate family and manifest-backed long soak before becoming a production default. |
-| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-amd64` at commit `1a72df194383d74fef5b03f68878f72734addb39` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
+| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `01ca47e` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-24
+
+<a id="2026-06-24-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate"></a>
+
+### Zaozhuang PVE OpenWrt 24.10.7 current-head full-kmod 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 Debian 13 and VM201 OpenWrt 24.10.7 x86_64 on isolated `vmbr3`. VM100
+and all 1xx guests were not modified. The run used commit `01ca47e`, Go
+`1.25.0`, build time `2026-06-24T07:35:23Z`, and TrustIX binary SHA256
+`ae4f599dc714ade5252d09a5223d658bf307fee30157b5f9da8ea18364b4f4bb`.
+
+The OpenWrt guest ran kernel `6.6.141`; the Debian guest ran
+`6.12.90+deb13.1-cloud-amd64`. OpenWrt modules were built from the matching
+24.10.7 SDK and the Debian modules were built for the running Debian kernel.
+
+OpenWrt module hashes:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `f8be71eddc0bc09f38b0499a7dba81cfffb9a9e47f202e595358778aea2e2b88` |
+| `trustix_datapath.ko` | `005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce` |
+| `trustix_datapath_helpers.ko` | `450e91c29b8d825788bf58291582a967a39b6eaa590d6b33eb39c8adcf12e773` |
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`0d6f3860692393025c945ae445820477dbbe06c78576a1e3515078f8d9b7395e`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+| Direction | Gate | Received | Sent | Evidence seconds |
+| --- | ---: | ---: | ---: | ---: |
+| OpenWrt to Debian | 3 Gbps | 3.438634 Gbps | 3.438713 Gbps | 3600.035847 |
+| Debian to OpenWrt | 3 Gbps | 5.000735 Gbps | 5.000784 Gbps | 3600.037834 |
+
+The sequential `forward + both` run lasted 7204 seconds, from
+`2026-06-24T10:11:03Z` to `2026-06-24T12:11:07Z`, and passed with
+`errors=[]` and `log_findings=[]`. OpenWrt boot ID
+`3a283526-6ae0-490d-bcac-ecebc1e1d8b3` and Debian boot ID
+`69be813b-c67e-4123-8029-61ad560bca6c` were unchanged before and after the
+run. Kernel log and pstore artifacts were clean on both guests, `tix-lan`
+`tx_queue_len` was `1000`, `trustix_datapath` was loaded on both peers, and
+the verifier saw full plaintext provider status with eight session
+records/wires.
+
+Covered module counters were zero for allocation, delivery, GSO xmit, TX build,
+TX xmit, queue-drop, stale-wire, no-session, and no-wire errors. Runtime
+parameters reported `enable_features=128`, `safe_features=128`,
+`unsafe_features=0`, `selftest_failures=0`, `rx_worker_inject=Y`, and
+`tx_plaintext=Y`; GSO segment and cached destination MAC counters were nonzero.
+
+A separate simultaneous bidirectional 3600s diagnostic on the same VM pair
+also completed without reboot, panic, pstore, or covered module errors, but it
+was not promoted as throughput evidence because one direction dropped to
+0.466902 Gbps and 0.757769 Gbps in the strict bidirectional verifier. After
+verification, VM200, VM201, isolated `vmbr3`, local source copies, short smoke
+artifacts, and temporary keys were removed. The preserved evidence directories
+on the PVE host are
+`/root/trustix-runs/owdeb-fullkmod-forward-gate-20260624T101058Z` and
+`/root/trustix-runs/owdeb-fullkmod-bidir-1h-20260624T080100Z`.
 
 <a id="2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check"></a>
 

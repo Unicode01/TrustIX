@@ -49,14 +49,17 @@ now install for kernel module builds when dependency installation is enabled.
 The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
 2026-06-21, 2026-06-22, 2026-06-23, and 2026-06-24 against current source and selected production
 transport defaults. They covered Debian 13 `6.12.90+deb13.1-amd64`,
-Debian 13 `6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
+Debian 13 `6.12.90+deb13.1-cloud-amd64`, Debian 13
+`6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
 OpenWrt 24.10.2 x86_64 `6.6.93`, OpenWrt 24.10.7 x86_64 `6.6.141`,
 and OpenWrt 25.12.4 x86_64 `6.12.87`
 guests with disposable PVE VM IDs 200+.
 The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
 the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
-OpenWrt 24.10.7 x86_64 has since passed an SDK module build and a 3600s
-OpenWrt-to-Debian full-kmod production gate. OpenWrt 24.10.7 route-GSO and
+OpenWrt 24.10.7 x86_64 has since passed an SDK module build and 3600s
+OpenWrt-to-Debian full-kmod production gates, most recently on 2026-06-24
+against Debian `6.12.90+deb13.1-cloud-amd64` at commit `01ca47e`.
+OpenWrt 24.10.7 route-GSO and
 secure-kUDP route-GSO both failed closed at the runtime capability gate because
 the tested image did not expose usable route-TCP kfunc capability. OpenWrt
 25.12.4 x86_64 SDK modules also built in forced full mode, but the official
@@ -265,6 +268,18 @@ were zero. A concurrent direct underlay probe while full-kmod was loaded reached
 3.752 Gbps from OpenWrt to Debian. OpenWrt route-GSO and secure-kUDP route-GSO
 remain unselected because the tested OpenWrt kernel still lacks usable
 route-TCP kfunc capability.
+
+A 2026-06-24 current-head OpenWrt 24.10.7-to-Debian full-kmod recheck paired
+OpenWrt kernel `6.6.141` with Debian 13
+`6.12.90+deb13.1-cloud-amd64` and passed the same 3600s production gate. It
+used commit `01ca47e`; minimum received throughput was 3.438634 Gbps from
+OpenWrt to Debian and 5.000735 Gbps from Debian to OpenWrt against the 3 Gbps
+gate. Before/after boot IDs stayed stable, pstore and kernel log scans were
+clean, `tix-lan` kept `tx_queue_len=1000`, and covered datapath error counters
+were zero with full plaintext provider, RX worker, and TX plaintext active. A
+simultaneous bidirectional diagnostic stayed stable without crash evidence but
+was not promoted as throughput evidence because one direction fell below the
+3 Gbps production gate.
 
 OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 

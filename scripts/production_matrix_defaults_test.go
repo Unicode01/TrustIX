@@ -338,8 +338,8 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 	case "owdeb_full_kmod":
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "openwrt24.10.7-debian13",
-			KernelMatrix:       "6.6.141_to_6.12.94+deb13-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates",
+			KernelMatrix:       "6.6.141_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate",
 			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "secure_kudp":
@@ -1942,7 +1942,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"full_kmod":       "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates",
 		"secure_kudp":     "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
 		"route_gso":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
-		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates",
+		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate",
 		"userspace":       "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":    "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
@@ -2010,8 +2010,8 @@ func TestProductionEvidenceArtifactsResolveToDocsAnchors(t *testing.T) {
 func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "openwrt24.10.7-debian13"
-		wantKernelMatrix = "6.6.141_to_6.12.94+deb13-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-owdeb-full-kmod-3600s-production-gate"
+		wantKernelMatrix = "6.6.141_to_6.12.90+deb13.1-cloud-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate"
 		minGbps          = 3.0
 		minSeconds       = 3600
 	)
