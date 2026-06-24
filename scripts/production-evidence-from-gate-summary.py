@@ -12,6 +12,7 @@ from typing import Any
 
 
 SCHEMA = "trustix-cross-host-production-gate-manifest-v1"
+MIN_PRODUCTION_PASS_SECONDS = 3600
 COLUMNS = [
     "gate_family",
     "transport",
@@ -169,14 +170,28 @@ def metric_gbps(row: dict[str, Any]) -> str:
     )
 
 
-def metric_seconds(row: dict[str, Any]) -> str:
+def metric_seconds_value(row: dict[str, Any]) -> float:
     value = row.get("min_seconds_required")
     if isinstance(value, (int, float)) and value > 0:
-        as_float = float(value)
-        if as_float.is_integer():
-            return str(int(as_float))
-        return f"{as_float:.6f}".rstrip("0").rstrip(".")
+        return float(value)
     raise SystemExit(f"gate summary case {row.get('case')!r} lacks min_seconds_required")
+
+
+def format_metric_seconds(value: float) -> str:
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def require_long_soak_for_pass(row: dict[str, Any], result: str, seconds: float) -> None:
+    if result != "pass":
+        return
+    if seconds >= MIN_PRODUCTION_PASS_SECONDS:
+        return
+    raise SystemExit(
+        f"gate summary case {row.get('case')!r} pass evidence requires at least "
+        f"{MIN_PRODUCTION_PASS_SECONDS}s production soak; got {format_metric_seconds(seconds)}s"
+    )
 
 
 def normalize_matrix_token(value: str) -> str:
@@ -272,6 +287,8 @@ def evidence_row(
             f"gate summary case {gate_row.get('case')!r} matched non-pass matrix row: "
             f"{matrix_row.get('status')!r}"
         )
+    seconds = metric_seconds_value(gate_row)
+    require_long_soak_for_pass(gate_row, result, seconds)
     os_matrix = resolved_matrix_value(
         gate_row,
         override=args.os_matrix,
@@ -306,7 +323,7 @@ def evidence_row(
         kernel_matrix,
         result,
         metric_gbps(gate_row),
-        metric_seconds(gate_row),
+        format_metric_seconds(seconds),
         manifest["schema"],
         manifest["production_gate_sha256"],
         manifest["verifier_sha256"],

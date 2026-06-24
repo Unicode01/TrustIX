@@ -662,7 +662,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		"validation_scope": "cross_host",
 		"gate_family":      "userspace",
 		"min_gbps":         1.5,
-		"min_seconds":      900,
+		"min_seconds":      3600,
 		"exit_code":        0,
 		"workdir":          filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
 	}
@@ -678,11 +678,11 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		"path":                       filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
-		"min_seconds_required":       900,
+		"min_seconds_required":       3600,
 		"min_sent_gbps":              1.876543,
 		"min_received_gbps":          1.765432,
 		"min_required_received_gbps": 1.654321,
-		"min_seconds":                899.95,
+		"min_seconds":                3600.05,
 		"uname_artifacts": []map[string]any{
 			{"node": "a", "phase": "before", "kernel_release": "6.12.90+deb13.1-amd64"},
 			{"node": "a", "phase": "after", "kernel_release": "6.12.90+deb13.1-amd64"},
@@ -756,7 +756,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		8:  "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
 		9:  "pass",
 		10: "1.654321",
-		11: "900",
+		11: "3600",
 		12: productionGateManifestSchema,
 		13: strings.Repeat("a", 64),
 		14: strings.Repeat("b", 64),
@@ -783,6 +783,89 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 	if !strings.Contains(string(mismatchOutput), "kernel matrix override") ||
 		!strings.Contains(string(mismatchOutput), "does not match inferred value") {
 		t.Fatalf("generator did not explain kernel matrix mismatch:\n%s", mismatchOutput)
+	}
+}
+
+func TestProductionEvidenceFromGateSummaryRejectsShortPassSoak(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	matrixSummary := filepath.Join(workdir, "summary.jsonl")
+	gateSummaryDir := filepath.Join(workdir, "selected-production-gate")
+	if err := os.MkdirAll(gateSummaryDir, 0o755); err != nil {
+		t.Fatalf("create gate summary dir: %v", err)
+	}
+	matrixRow := map[string]any{
+		"status":           "pass",
+		"case":             "udp-secure-stable-userspace-userspace",
+		"runner_case":      "userspace-udp-secure",
+		"transport":        "udp",
+		"encryption":       "secure",
+		"profile":          "stable",
+		"datapath":         "userspace",
+		"crypto_placement": "userspace",
+		"validation_scope": "cross_host",
+		"gate_family":      "userspace",
+		"min_gbps":         1.5,
+		"min_seconds":      900,
+		"exit_code":        0,
+	}
+	matrixPayload, err := json.Marshal(matrixRow)
+	if err != nil {
+		t.Fatalf("marshal matrix row: %v", err)
+	}
+	if err := os.WriteFile(matrixSummary, append(matrixPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write matrix summary: %v", err)
+	}
+	gateRow := map[string]any{
+		"case":                       "udp-secure-stable-userspace-userspace",
+		"status":                     "pass",
+		"min_gbps_required":          1.5,
+		"min_seconds_required":       900,
+		"min_sent_gbps":              1.9,
+		"min_received_gbps":          1.8,
+		"min_required_received_gbps": 1.7,
+	}
+	gatePayload, err := json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal gate row: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write gate summary: %v", err)
+	}
+	manifest := map[string]any{
+		"schema": productionGateManifestSchema,
+		"production_gate": map[string]any{
+			"path":   "scripts/linux-cross-host-production-gate.sh",
+			"sha256": strings.Repeat("a", 64),
+			"size":   123,
+		},
+		"verifier": map[string]any{
+			"path":   "scripts/linux-cross-host-soak-verify.py",
+			"sha256": strings.Repeat("b", 64),
+			"size":   456,
+		},
+	}
+	manifestPayload, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--artifact", "docs/trustix-performance-log.md#short-production-gate",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("generator accepted short pass soak:\n%s", output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "3600s production soak") || !strings.Contains(text, "900s") {
+		t.Fatalf("generator did not explain short pass soak rejection:\n%s", output)
 	}
 }
 
@@ -2488,7 +2571,7 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456}}`,
 		"JSON",
 		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/userspace-udp-secure.jsonl\" <<'JSON'",
-		`{"case":"udp-secure-stable-userspace-userspace","status":"pass","min_gbps_required":1.5,"min_seconds_required":900,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"errors":[]}`,
+		`{"case":"udp-secure-stable-userspace-userspace","status":"pass","min_gbps_required":1.5,"min_seconds_required":3600,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"errors":[]}`,
 		"JSON",
 		"",
 	}, "\n")), 0o755); err != nil {
@@ -2536,7 +2619,7 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		8:  "6.12.90+deb13.1-amd64_to_6.12.90+deb13.1-amd64",
 		9:  "pass",
 		10: "1.700000",
-		11: "900",
+		11: "3600",
 		12: productionGateManifestSchema,
 		13: strings.Repeat("a", 64),
 		14: strings.Repeat("b", 64),
