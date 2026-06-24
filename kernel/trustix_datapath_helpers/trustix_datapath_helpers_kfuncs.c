@@ -686,6 +686,19 @@ static enum hrtimer_restart
 trustix_route_tcp_gso_async_schedule_timer_fn(struct hrtimer *timer);
 static enum hrtimer_restart
 trustix_route_tcp_gso_async_shard_schedule_timer_fn(struct hrtimer *timer);
+
+static void trustix_hrtimer_setup(struct hrtimer *timer,
+				  enum hrtimer_restart (*function)(struct hrtimer *),
+				  clockid_t clock_id,
+				  enum hrtimer_mode mode)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+	hrtimer_setup(timer, function, clock_id, mode);
+#else
+	hrtimer_init(timer, clock_id, mode);
+	timer->function = function;
+#endif
+}
 static DECLARE_DELAYED_WORK(trustix_route_tcp_gso_async_work,
 			    trustix_route_tcp_gso_async_worker_fn);
 static struct trustix_route_tcp_gso_async_queue_shard
@@ -14670,19 +14683,17 @@ int trustix_datapath_helpers_register(void)
 	WRITE_ONCE(trustix_tixt_rx_backlog_worker_depth, 0);
 	skb_queue_head_init(&trustix_tixt_rx_backlog_worker_queue);
 	skb_queue_head_init(&trustix_route_tcp_xmit_worker_queue);
-	hrtimer_init(&trustix_route_tcp_gso_async_schedule_timer,
-		     CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	trustix_route_tcp_gso_async_schedule_timer.function =
-		trustix_route_tcp_gso_async_schedule_timer_fn;
+	trustix_hrtimer_setup(&trustix_route_tcp_gso_async_schedule_timer,
+			      trustix_route_tcp_gso_async_schedule_timer_fn,
+			      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	for (i = 0; i < TRUSTIX_ROUTE_TCP_GSO_ASYNC_MAX_QUEUE_SHARDS; i++) {
 		INIT_LIST_HEAD(&trustix_route_tcp_gso_async_shards[i].queue);
 		spin_lock_init(&trustix_route_tcp_gso_async_shards[i].lock);
 		INIT_DELAYED_WORK(&trustix_route_tcp_gso_async_shards[i].work,
 				  trustix_route_tcp_gso_async_shard_worker_fn);
-		hrtimer_init(&trustix_route_tcp_gso_async_shards[i].schedule_timer,
-			     CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-		trustix_route_tcp_gso_async_shards[i].schedule_timer.function =
-			trustix_route_tcp_gso_async_shard_schedule_timer_fn;
+		trustix_hrtimer_setup(&trustix_route_tcp_gso_async_shards[i].schedule_timer,
+				      trustix_route_tcp_gso_async_shard_schedule_timer_fn,
+				      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 		trustix_route_tcp_gso_async_shards[i].scheduled = false;
 		trustix_route_tcp_gso_async_shards[i].delay_pending = false;
 		trustix_route_tcp_gso_async_shards[i].depth_defers = 0;
