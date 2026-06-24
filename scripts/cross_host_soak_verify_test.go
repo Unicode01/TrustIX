@@ -2567,10 +2567,13 @@ func writeLsmodArtifacts(t *testing.T, dir string, modulesByNode map[string][]st
 
 func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmit bool) {
 	t.Helper()
-	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 3.3e9, 3.2e9, 900.2, 900, 0.8)
-	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 3.3e9, 3.2e9, 900.2, 900, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 3.3e9, 3.2e9, 3600.2, 3600, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 3.3e9, 3.2e9, 3600.2, 3600, 0.8)
 	writeResultMarker(t, dir)
-	writeRunTiming(t, dir, 1000, 1901, 900)
+	writeRunTimingWithStats(t, dir, 1000, 4601, 3600, map[string]any{
+		"iperf_mode":       "forward",
+		"iperf_directions": "both",
+	})
 	writeStableBootIDs(t, dir)
 	writeStableUnames(t, dir)
 	writeStableOSReleases(t, dir)
@@ -2641,10 +2644,13 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 
 func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, routeHelperXmit bool) {
 	t.Helper()
-	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 900.2, 900, 0.8)
-	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 900.2, 900, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 3600.2, 3600, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 3600.2, 3600, 0.8)
 	writeResultMarker(t, dir)
-	writeRunTiming(t, dir, 1000, 1901, 900)
+	writeRunTimingWithStats(t, dir, 1000, 4601, 3600, map[string]any{
+		"iperf_mode":       "forward",
+		"iperf_directions": "both",
+	})
 	writeStableBootIDs(t, dir)
 	writeStableUnames(t, dir)
 	writeStableOSReleases(t, dir)
@@ -2840,10 +2846,13 @@ func writeSecureKUDPModuleParameters(t *testing.T, path string, routeHelperXmit 
 
 func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO bool) {
 	t.Helper()
-	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 2.8e9, 2.7e9, 900.2, 900, 0.8)
-	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 2.8e9, 2.7e9, 900.2, 900, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 2.8e9, 2.7e9, 3600.2, 3600, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 2.8e9, 2.7e9, 3600.2, 3600, 0.8)
 	writeResultMarker(t, dir)
-	writeRunTiming(t, dir, 1000, 1901, 900)
+	writeRunTimingWithStats(t, dir, 1000, 4601, 3600, map[string]any{
+		"iperf_mode":       "forward",
+		"iperf_directions": "both",
+	})
 	writeStableBootIDs(t, dir)
 	writeStableUnames(t, dir)
 	writeStableOSReleases(t, dir)
