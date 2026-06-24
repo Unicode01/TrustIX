@@ -363,6 +363,13 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
 			GateManifestSchema: productionGateManifestSchema,
 		}, true
+	case "secure_exp_tcp_kernel":
+		return currentProductionEvidenceRequirement{
+			OSMatrix:           "debian13-debian13",
+			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-secure-exp-tcp-kernel-fpu-fallback-3600s-production-gate",
+			GateManifestSchema: productionGateManifestSchema,
+		}, true
 	default:
 		return currentProductionEvidenceRequirement{}, false
 	}
@@ -485,6 +492,7 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 				"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:3600",
+				"experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel:1.5:3600",
 				"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 			} {
 				if !strings.Contains(defaults, wantCase) {
@@ -2029,6 +2037,7 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 		"full_kmod",
 		"owdeb_full_kmod",
 		"secure_kudp",
+		"secure_exp_tcp_kernel",
 		"route_gso",
 	} {
 		if checkedByFamily[family] == 0 {
@@ -2146,13 +2155,14 @@ func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	manifestRequiredArtifacts := map[string]string{
-		"tc_direct":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
-		"full_kmod":       "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates",
-		"secure_kudp":     "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
-		"route_gso":       "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
-		"owdeb_full_kmod": "docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate",
-		"userspace":       "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
-		"userspace_tc":    "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
+		"tc_direct":             "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
+		"full_kmod":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates",
+		"secure_kudp":           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
+		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-secure-exp-tcp-kernel-fpu-fallback-3600s-production-gate",
+		"route_gso":             "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
+		"owdeb_full_kmod":       "docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate",
+		"userspace":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
+		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
 	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
@@ -2710,6 +2720,7 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
 		"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:3600",
+		"experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel:1.5:3600",
 		"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 	} {
@@ -2729,16 +2740,16 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 	knownGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"secure_kudp": true, "route_gso": true,
+		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"secure_kudp": true, "route_gso": true,
+		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostOnlyGate := map[string]bool{
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"secure_kudp": true, "route_gso": true,
+		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
 	}
 	seen := map[string]bool{}
 	baseline := map[string]bool{}

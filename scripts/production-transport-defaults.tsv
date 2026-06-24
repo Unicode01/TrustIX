@@ -40,5 +40,6 @@ kernel_udp	plaintext	performance	tc_xdp	userspace	cross_host	tc_direct	3	3600	se
 kernel_udp	secure	performance	tc_xdp	kernel	cross_host	secure_kudp	1.5	3600	selected secure kernel UDP route-GSO path
 experimental_tcp	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted experimental TCP compatibility path
 experimental_tcp	secure	stable	userspace	userspace	cross_host	userspace	1	3600	selected encrypted experimental TCP userspace compatibility path
+experimental_tcp	secure	performance	kernel_module	kernel	cross_host	secure_exp_tcp_kernel	1.5	3600	selected secure experimental TCP kernel crypto route-GSO path
 experimental_tcp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext experimental TCP compatibility path
 experimental_tcp	plaintext	performance	kernel_module	userspace	cross_host	route_gso	2.5	3600	selected plaintext experimental TCP route-GSO path

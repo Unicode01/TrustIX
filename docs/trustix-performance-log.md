@@ -24,9 +24,58 @@ Current production-default evidence boundary:
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
-| Secure experimental TCP kernel crypto | runtime policy branch only; no dedicated 3600s production gate yet | Do not reuse `secure_kudp` evidence for this path. It needs its own cross-host gate family and manifest-backed long soak before becoming a production default. |
+| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` with direct-kfunc FPU fallback exercised | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `01ca47e` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO and secure-kUDP route-GSO | fail-closed capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-06-25
+
+<a id="2026-06-25-zaozhuang-pve-secure-exp-tcp-kernel-fpu-fallback-3600s-production-gate"></a>
+
+### Zaozhuang PVE secure experimental TCP kernel FPU fallback 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-dd-a` and VM201 `trustix-dd-b` on isolated `vmbr3`. VM100 and
+all 1xx guests were not modified. Both guests ran Debian 13 on
+`6.12.90+deb13.1-cloud-amd64`.
+
+The diagnostic build used TrustIX version `trustix-diag-fpu-fallback`, commit
+`diag-fpu-fallback-latest`, Go `1.25.0`, build time
+`2026-06-24T15:34:06Z`, binary SHA256
+`7e86caa610ed6805b7f5d6f3a87493ff7b47f5ebcb1d8b1922868a2315a8c744`, and
+embedded assets SHA256
+`baf9e41b7f025de66b661c8f0978b0bd292adb30e731939ee04140c649d9e36f`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`fd3b737826ee4256d3dd2169519edb000c5f010092820ae05cfda91442b2f70e`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+| Direction | Gate | Received | Sent | Evidence seconds | Retransmits |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A to B | 1.5 Gbps | 1.599325 Gbps | 1.599377 Gbps | 3600.010616 | 61487 |
+| B to A | 1.5 Gbps | 1.648179 Gbps | 1.648234 Gbps | 3600.015214 | 65598 |
+
+The sequential `forward + both` run lasted 7204 seconds, from
+`2026-06-24T16:10:50Z` to `2026-06-24T18:10:54Z`, and passed with
+`errors=[]`, `log_findings=[]`, stable boot IDs
+`ab48eea9-31ba-4efe-b342-9c4a333358c7` and
+`48d6ec49-05a8-4dd7-891c-2bf798234986`, clean kernel journal artifacts, and
+pstore coverage on both nodes.
+
+This gate used `experimental_tcp` secure mode with `datapath=kernel_module`,
+`crypto_placement=kernel`, 16 active sessions, direct kfunc crypto, and route
+TCP GSO async. Both peers loaded `trustix_crypto` and
+`trustix_datapath_helpers`; `tix-lan` `tx_queue_len` was `1000`.
+
+Direct kfunc counters prove the fixed FPU-unavailable path was covered rather
+than skipped. Node A reported `direct_kfunc_fpu_unavailable_fallbacks=1`; node
+B reported `direct_kfunc_fpu_unavailable_fallbacks=13`. On both nodes,
+`direct_kfunc_errors`, `direct_kfunc_open_errors`,
+`direct_kfunc_eopnotsupp_errors`, all per-site direct kfunc error counters,
+and route-GSO async stream/xmit/direct errors were zero.
 
 ## 2026-06-24
 

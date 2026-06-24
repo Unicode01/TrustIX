@@ -48,6 +48,17 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 				if spec.KernelUDPTXDirectOnly || spec.KernelDatapathFullPlaintext || spec.ExperimentalTCPRouteGSOAsync {
 					t.Fatalf("%s should not enable plaintext direct-only/full-kmod/experimental route-GSO: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
+			case "secure_exp_tcp_kernel":
+				if !spec.ExperimentalTCPTXDirect || !spec.ExperimentalTCPRouteGSOAsync ||
+					!spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker ||
+					!spec.KernelUDPTXSecureDirect || !spec.KernelUDPRXSecureDirect ||
+					!spec.KernelUDPSecureDirectTrustInnerChecksums {
+					t.Fatalf("%s should select secure experimental_tcp kernel route-GSO path: spec=%#v", productionDefaultRuntimeKey(row), spec)
+				}
+				if spec.KernelUDPTXDirectOnly || spec.KernelDatapathFullPlaintext || spec.KernelUDPSecureRouteGSO ||
+					spec.ExperimentalTCPPlainSkipSequence || spec.ExperimentalTCPPlainACKOnly {
+					t.Fatalf("%s should not enable plaintext/full-kmod/kernel_udp route-GSO shortcuts: spec=%#v", productionDefaultRuntimeKey(row), spec)
+				}
 			case "route_gso":
 				if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly || !spec.ExperimentalTCPRouteGSOAsync ||
 					!spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker ||
@@ -63,7 +74,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 			}
 		})
 	}
-	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "tc_direct", "secure_kudp", "route_gso"} {
+	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "tc_direct", "secure_kudp", "secure_exp_tcp_kernel", "route_gso"} {
 		if !seenGate[gate] {
 			t.Fatalf("production defaults missing cross-host runtime gate %q", gate)
 		}
@@ -121,6 +132,7 @@ type productionDefaultNoKernelFastPathFields struct {
 	KernelUDPTCOnlyProvider              bool
 	KernelUDPTXSecureDirect              bool
 	KernelUDPRXSecureDirect              bool
+	KernelUDPSecureDirectTrustChecksums  bool
 	KernelUDPSecureRouteGSO              bool
 	ExperimentalTCPTXDirect              bool
 	ExperimentalTCPRouteGSOAsync         bool
@@ -136,6 +148,7 @@ func productionDefaultNoKernelFastPathFieldsFromSpec(spec dataplane.AttachSpec) 
 		KernelUDPTCOnlyProvider:              spec.KernelUDPTCOnlyProvider,
 		KernelUDPTXSecureDirect:              spec.KernelUDPTXSecureDirect,
 		KernelUDPRXSecureDirect:              spec.KernelUDPRXSecureDirect,
+		KernelUDPSecureDirectTrustChecksums:  spec.KernelUDPSecureDirectTrustInnerChecksums,
 		KernelUDPSecureRouteGSO:              spec.KernelUDPSecureRouteGSO,
 		ExperimentalTCPTXDirect:              spec.ExperimentalTCPTXDirect,
 		ExperimentalTCPRouteGSOAsync:         spec.ExperimentalTCPRouteGSOAsync,
@@ -151,6 +164,7 @@ func (fields productionDefaultNoKernelFastPathFields) anyKernelFastPath() bool {
 		fields.KernelUDPTCOnlyProvider ||
 		fields.KernelUDPTXSecureDirect ||
 		fields.KernelUDPRXSecureDirect ||
+		fields.KernelUDPSecureDirectTrustChecksums ||
 		fields.KernelUDPSecureRouteGSO ||
 		fields.ExperimentalTCPTXDirect ||
 		fields.ExperimentalTCPRouteGSOAsync ||
