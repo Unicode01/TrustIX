@@ -894,6 +894,72 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		t.Fatalf("generator did not explain kernel matrix mismatch:\n%s", mismatchOutput)
 	}
 
+	manifest["cases"] = map[string]any{
+		"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "wrong-evidence-dir")),
+	}
+	manifestPayload, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest with mismatched path: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write manifest with mismatched path: %v", err)
+	}
+	pathMismatchCmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--artifact", "docs/trustix-performance-log.md#example-production-gate",
+	)
+	pathMismatchCmd.Dir = "."
+	pathMismatchOutput, err := pathMismatchCmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("generator accepted manifest path mismatch:\n%s", pathMismatchOutput)
+	}
+	if !strings.Contains(string(pathMismatchOutput), "cases.userspace") ||
+		!strings.Contains(string(pathMismatchOutput), "does not match gate summary path") {
+		t.Fatalf("generator did not explain manifest path mismatch:\n%s", pathMismatchOutput)
+	}
+
+	manifest["cases"] = map[string]any{
+		"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+	}
+	manifestPayload, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal restored manifest path: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write restored manifest path: %v", err)
+	}
+	matrixRow["workdir"] = filepath.Join(workdir, "wrong-matrix-dir")
+	matrixPayload, err = json.Marshal(matrixRow)
+	if err != nil {
+		t.Fatalf("marshal matrix row with mismatched workdir: %v", err)
+	}
+	if err := os.WriteFile(matrixSummary, append(matrixPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write matrix summary with mismatched workdir: %v", err)
+	}
+	matrixPathMismatchCmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--artifact", "docs/trustix-performance-log.md#example-production-gate",
+	)
+	matrixPathMismatchCmd.Dir = "."
+	matrixPathMismatchOutput, err := matrixPathMismatchCmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("generator accepted matrix workdir mismatch:\n%s", matrixPathMismatchOutput)
+	}
+	if !strings.Contains(string(matrixPathMismatchOutput), "cases.userspace") ||
+		!strings.Contains(string(matrixPathMismatchOutput), "does not match matrix summary workdir path") {
+		t.Fatalf("generator did not explain matrix workdir mismatch:\n%s", matrixPathMismatchOutput)
+	}
+	matrixRow["workdir"] = filepath.Join(workdir, "udp-secure-stable-userspace-userspace")
+	matrixPayload, err = json.Marshal(matrixRow)
+	if err != nil {
+		t.Fatalf("marshal restored matrix row: %v", err)
+	}
+	if err := os.WriteFile(matrixSummary, append(matrixPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write restored matrix summary: %v", err)
+	}
+
 	manifest["case_min_gbps"] = map[string]any{
 		"userspace": "udp-secure-stable-userspace-userspace=1.0",
 	}
@@ -942,6 +1008,7 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 		"min_gbps":         2.0,
 		"min_seconds":      3600,
 		"exit_code":        0,
+		"workdir":          filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
 	}
 	matrixPayload, err := json.Marshal(matrixRow)
 	if err != nil {
@@ -952,6 +1019,7 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 	}
 	gateRow := map[string]any{
 		"case":                       "udp-secure-stable-userspace-userspace",
+		"path":                       filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
 		"min_seconds_required":       3600,
@@ -3659,11 +3727,13 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		"#!/usr/bin/env bash",
 		"set -e",
 		"mkdir -p \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR\"",
-		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/production-gate-manifest.json\" <<'JSON'",
-		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456},"cases":{"userspace":"udp-secure-stable-userspace-userspace=/tmp/udp-secure"},"case_min_gbps":{"userspace":"udp-secure-stable-userspace-userspace=1.5"},"case_min_seconds":{"userspace":"udp-secure-stable-userspace-userspace=3600"}}`,
+		"case_token=\"$TRUSTIX_CROSS_HOST_USERSPACE_CASES\"",
+		"case_path=\"${case_token#*=}\"",
+		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/production-gate-manifest.json\" <<JSON",
+		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456},"cases":{"userspace":"${case_token}"},"case_min_gbps":{"userspace":"udp-secure-stable-userspace-userspace=1.5"},"case_min_seconds":{"userspace":"udp-secure-stable-userspace-userspace=3600"}}`,
 		"JSON",
-		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/userspace-udp-secure.jsonl\" <<'JSON'",
-		`{"case":"udp-secure-stable-userspace-userspace","status":"pass","min_gbps_required":1.5,"min_seconds_required":3600,"seconds_slop":0,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"min_seconds":3600.1,"min_iperf_intervals_required":600,"min_iperf_interval_gbps_ratio_required":0.25,"iperf_json_count":2,"iperf_direction_count":2,"iperf_pair_directions":["a-to-b","b-to-a"],"iperf":[{"direction":"forward","sent_gbps":1.9,"received_gbps":1.8,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true},{"direction":"forward","sent_gbps":1.8,"received_gbps":1.7,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true}],"result_markers":["pass"],"binary_identities":[{"source":"collect/a/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"source":"collect/b/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}],"lsmod_artifacts":[{"source":"collect/a/lsmod.txt","node":"a","modules":[]},{"source":"collect/b/lsmod.txt","node":"b","modules":[]}],"lsmod_nodes":["a","b"],"lan_state_artifacts":[{"source":"collect/a/lan-state.txt","node":"a","interface":"tix-lan-a","tx_queue_len":1000},{"source":"collect/b/lan-state.txt","node":"b","interface":"tix-lan-b","tx_queue_len":1000}],"lan_state_nodes":["a","b"],"run_timing":[{"source":"run-timing.json","iperf_mode":"forward","iperf_directions":"both","iperf_seconds_requested":3600,"start_epoch":1000,"end_epoch":4600.1,"elapsed_seconds":3600.1}],"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"boot_ids":[{"node":"a","phase":"before","boot_id":"boot-a"},{"node":"a","phase":"after","boot_id":"boot-a"},{"node":"b","phase":"before","boot_id":"boot-b"},{"node":"b","phase":"after","boot_id":"boot-b"}],"errors":[],"log_findings":[],"kernel_log_artifacts":["collect/a/kernel.log","collect/b/kernel.log"],"kernel_log_nodes":["a","b"],"kernel_log_rejected_artifacts":[],"pstore_artifacts":["collect/a/pstore.txt","collect/b/pstore.txt"],"pstore_nodes":["a","b"],"pstore_rejected_artifacts":[]}`,
+		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/userspace-udp-secure.jsonl\" <<JSON",
+		`{"case":"udp-secure-stable-userspace-userspace","path":"${case_path}","status":"pass","min_gbps_required":1.5,"min_seconds_required":3600,"seconds_slop":0,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"min_seconds":3600.1,"min_iperf_intervals_required":600,"min_iperf_interval_gbps_ratio_required":0.25,"iperf_json_count":2,"iperf_direction_count":2,"iperf_pair_directions":["a-to-b","b-to-a"],"iperf":[{"direction":"forward","sent_gbps":1.9,"received_gbps":1.8,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true},{"direction":"forward","sent_gbps":1.8,"received_gbps":1.7,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true}],"result_markers":["pass"],"binary_identities":[{"source":"collect/a/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"source":"collect/b/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}],"lsmod_artifacts":[{"source":"collect/a/lsmod.txt","node":"a","modules":[]},{"source":"collect/b/lsmod.txt","node":"b","modules":[]}],"lsmod_nodes":["a","b"],"lan_state_artifacts":[{"source":"collect/a/lan-state.txt","node":"a","interface":"tix-lan-a","tx_queue_len":1000},{"source":"collect/b/lan-state.txt","node":"b","interface":"tix-lan-b","tx_queue_len":1000}],"lan_state_nodes":["a","b"],"run_timing":[{"source":"run-timing.json","iperf_mode":"forward","iperf_directions":"both","iperf_seconds_requested":3600,"start_epoch":1000,"end_epoch":4600.1,"elapsed_seconds":3600.1}],"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"boot_ids":[{"node":"a","phase":"before","boot_id":"boot-a"},{"node":"a","phase":"after","boot_id":"boot-a"},{"node":"b","phase":"before","boot_id":"boot-b"},{"node":"b","phase":"after","boot_id":"boot-b"}],"errors":[],"log_findings":[],"kernel_log_artifacts":["collect/a/kernel.log","collect/b/kernel.log"],"kernel_log_nodes":["a","b"],"kernel_log_rejected_artifacts":[],"pstore_artifacts":["collect/a/pstore.txt","collect/b/pstore.txt"],"pstore_nodes":["a","b"],"pstore_rejected_artifacts":[]}`,
 		"JSON",
 		"",
 	}, "\n")), 0o755); err != nil {

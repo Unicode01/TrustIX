@@ -506,6 +506,48 @@ def parse_manifest_token_map(raw: Any, label: str) -> dict[str, str]:
     return parsed
 
 
+def normalize_path_text(value: str) -> str:
+    normalized = value.strip().replace("\\", "/")
+    while len(normalized) > 1 and normalized.endswith("/"):
+        normalized = normalized[:-1]
+    return normalized
+
+
+def path_match_keys(value: Any, label: str, case: str) -> set[str]:
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"{label} case {case!r} lacks path")
+    raw = value.strip()
+    keys = {normalize_path_text(raw)}
+    try:
+        keys.add(normalize_path_text(str(Path(raw).expanduser().resolve(strict=False))))
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return keys
+
+
+def require_same_path(
+    *,
+    case: str,
+    family_class: str,
+    manifest_path: str,
+    observed_path: Any,
+    observed_label: str,
+) -> None:
+    manifest_keys = path_match_keys(
+        manifest_path,
+        f"production gate manifest cases.{family_class}",
+        case,
+    )
+    observed_keys = path_match_keys(observed_path, observed_label, case)
+    if manifest_keys & observed_keys:
+        return
+    raise SystemExit(
+        f"production gate manifest cases.{family_class} case {case!r} path "
+        f"{manifest_path!r} does not match {observed_label} path "
+        f"{str(observed_path or '')!r}"
+    )
+
+
 def manifest_family_map(
     manifest: dict[str, Any],
     section: str,
@@ -544,6 +586,21 @@ def require_manifest_case_alignment(
             f"production gate manifest cases.{family_class} does not include "
             f"case {case!r}"
         )
+    manifest_case_path = cases[case]
+    require_same_path(
+        case=case,
+        family_class=family_class,
+        manifest_path=manifest_case_path,
+        observed_path=gate_row.get("path"),
+        observed_label="gate summary",
+    )
+    require_same_path(
+        case=case,
+        family_class=family_class,
+        manifest_path=manifest_case_path,
+        observed_path=matrix_row.get("workdir"),
+        observed_label="matrix summary workdir",
+    )
 
     min_gbps_by_case = manifest_family_map(manifest, "case_min_gbps", family_class)
     if case not in min_gbps_by_case:
