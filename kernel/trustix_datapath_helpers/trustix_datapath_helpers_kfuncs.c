@@ -8007,7 +8007,6 @@ struct trustix_tixt_tx_route_gso_async_work {
 	bool inner_header_ready;
 	bool sync_redirect;
 	bool xmit_more;
-	__wsum inner_tcp_header_sum_base;
 	netdev_features_t gso_features;
 	u8 secure_iv[12];
 	u8 inner_header[TRUSTIX_TIXT_TX_ROUTE_GSO_INNER_HEADER_MAX];
@@ -8064,10 +8063,6 @@ trustix_tixt_tx_route_gso_async_prepare_inner_header(
 	item->inner_ip_check_base =
 		trustix_ipv4_header_check20_base((const u8 *)iph);
 	item->inner_tcp_seq_base = ntohl(tcph->seq);
-	tcph->seq = 0;
-	tcph->check = 0;
-	item->inner_tcp_header_sum_base = csum_partial(
-		tcph, item->tcp_header_len, 0);
 	return 0;
 }
 
@@ -9439,6 +9434,12 @@ trustix_tixt_tx_copy_route_gso_stream_frag_fast(
 	return -ENOENT;
 }
 
+static bool
+trustix_tixt_tx_route_gso_stream_direct_sanitize_tcp_flags(
+				const struct trustix_tixt_tx_route_gso_async_work *item,
+				const struct trustix_tixt_tx_route_gso_stream_direct_frame *frame,
+				struct tcphdr *tcph);
+
 static int
 trustix_tixt_tx_copy_route_gso_stream_direct_plain_inner(
 				struct trustix_tixt_tx_route_gso_async_work *item,
@@ -9457,6 +9458,7 @@ trustix_tixt_tx_copy_route_gso_stream_direct_plain_inner(
 	__wsum header_sum;
 	__wsum payload_sum = 0;
 	__wsum sum;
+	bool flags_changed;
 	int ret;
 
 	if (!item || !item->skb || !dst || !frame ||
@@ -9516,12 +9518,15 @@ payload_ready:
 	iph->check = trustix_ipv4_header_check20_from_base(
 		item->inner_ip_check_base, frame->inner_len);
 	tcph->seq = htonl(item->inner_tcp_seq_base + frame->payload_offset);
+	flags_changed =
+		trustix_tixt_tx_route_gso_stream_direct_sanitize_tcp_flags(
+			item, frame, tcph);
+	if (flags_changed && !fix_inner_csum)
+		return -EOPNOTSUPP;
 	if (fix_inner_csum) {
 		tcp_len = tcp_header_len + frame->payload_len;
 		tcph->check = 0;
-		header_sum = csum_add(item->inner_tcp_header_sum_base,
-				      csum_partial(&tcph->seq,
-						   sizeof(tcph->seq), 0));
+		header_sum = csum_partial(tcph, tcp_header_len, 0);
 		sum = csum_block_add(header_sum, payload_sum,
 				     tcp_header_len);
 		tcph->check = csum_tcpudp_magic(iph->saddr, iph->daddr,
@@ -9530,6 +9535,42 @@ payload_ready:
 		tcph->check = 0;
 	}
 	return 0;
+}
+
+static bool
+trustix_tixt_tx_route_gso_stream_direct_sanitize_tcp_flags(
+				const struct trustix_tixt_tx_route_gso_async_work *item,
+				const struct trustix_tixt_tx_route_gso_stream_direct_frame *frame,
+				struct tcphdr *tcph)
+{
+	u32 payload_end;
+	bool changed = false;
+	bool first;
+	bool last;
+
+	if (!item || !frame || !tcph ||
+	    check_add_overflow(frame->payload_offset, frame->payload_len,
+			       &payload_end))
+		return false;
+
+	first = frame->payload_offset == 0;
+	last = payload_end >= item->payload_len;
+
+	if (!first && tcph->cwr) {
+		tcph->cwr = 0;
+		changed = true;
+	}
+	if (!last) {
+		if (tcph->psh) {
+			tcph->psh = 0;
+			changed = true;
+		}
+		if (tcph->fin) {
+			tcph->fin = 0;
+			changed = true;
+		}
+	}
+	return changed;
 }
 
 static int
@@ -9873,6 +9914,7 @@ trustix_tixt_tx_append_route_gso_stream_direct_nonlinear(
 	__wsum sum;
 	u32 stream_offset;
 	u32 tcp_len;
+	bool flags_changed;
 	int ret;
 
 	if (!item || !item->skb || !builder || !tmpl || !frame ||
@@ -9906,11 +9948,14 @@ trustix_tixt_tx_append_route_gso_stream_direct_nonlinear(
 	iph->check = trustix_ipv4_header_check20_from_base(
 		item->inner_ip_check_base, frame->inner_len);
 	tcph->seq = htonl(item->inner_tcp_seq_base + frame->payload_offset);
+	flags_changed =
+		trustix_tixt_tx_route_gso_stream_direct_sanitize_tcp_flags(
+			item, frame, tcph);
+	if (flags_changed && !fix_inner_csum)
+		return -EOPNOTSUPP;
 	tcph->check = 0;
 	if (fix_inner_csum)
-		header_sum = csum_add(item->inner_tcp_header_sum_base,
-				      csum_partial(&tcph->seq,
-						   sizeof(tcph->seq), 0));
+		header_sum = csum_partial(tcph, tcp_header_len, 0);
 
 	stream_offset = builder->len;
 	ret = trustix_tixt_tx_route_gso_nonlinear_append(
@@ -14164,7 +14209,6 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async_ex(
 	item->inner_header_len = 0;
 	item->inner_ip_check_base = 0;
 	item->inner_header_ready = false;
-	item->inner_tcp_header_sum_base = 0;
 	item->route_flow_mask = READ_ONCE(route->flow_mask);
 	inner_queue_hash =
 		trustix_route_tcp_gso_async_hash_skb(skb, flow_id, item);
