@@ -116,6 +116,7 @@ current production evidence boundary:
 | Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.518886 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-06-25 |
 | Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.634107 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-22 |
 | Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 2.829761 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-22 |
+| Secure experimental TCP kernel crypto | `experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 1.599325 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-06-25 |
 
 A 2026-06-21 current-head Debian-to-Debian full-kmod recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
@@ -178,6 +179,17 @@ coverage, and no kernel log crash findings. The current gate separately
 requires zero `replay_old` drops and bounds `replay_seen/open` plus total
 secure-direct drop ratios at `<= 0.00002`, replacing the older absolute replay
 budget.
+
+A 2026-06-25 Debian-to-Debian secure experimental TCP kernel crypto recheck on
+`6.12.90+deb13.1-cloud-amd64` passed the 3600s-per-direction production gate.
+Minimum received throughput was 1.599325 Gbps against the 1.5 Gbps gate,
+`experimental_tcp` used `datapath=kernel_module` and `crypto_placement=kernel`
+with direct kfunc crypto plus route TCP GSO async, both peers loaded
+`trustix_crypto` and `trustix_datapath_helpers`, FPU-unavailable direct-kfunc
+fallback counters were nonzero, and the production verifier reported stable
+boot IDs, clean pstore coverage, and no kernel log crash findings. This is a
+dedicated `secure_exp_tcp_kernel` production default and must not reuse
+secure-kUDP evidence.
 
 A 2026-06-23 to 2026-06-24 current-head Debian-to-Debian userspace recheck on
 `6.12.69+deb13-amd64` passed every current 3600s cross-host userspace
