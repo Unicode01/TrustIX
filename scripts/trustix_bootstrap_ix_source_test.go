@@ -49,6 +49,9 @@ func TestTrustIXBootstrapIXDirectDefaultsMatchProductionProfile(t *testing.T) {
 		`"datapath":{"rx_stage":"worker","rx_worker":true,"tx_plaintext":true,"full_plaintext":true,"rx_worker_allow_experimental_tcp":true}`,
 		`"session_pool":{"warmup":true}`,
 		`"profile":"%s","datapath":"%s","encryption":"%s","crypto_key_source":"auto","crypto_placement":"%s","kernel_transport":{"mode":"%s"}`,
+		`trustix_bootstrap_mktemp_dir()`,
+		`trustix_bootstrap_mktemp_file()`,
+		`payload="$(trustix_bootstrap_mktemp_file trustix-provision-payload)"`,
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(script, want) {
@@ -57,6 +60,10 @@ func TestTrustIXBootstrapIXDirectDefaultsMatchProductionProfile(t *testing.T) {
 	}
 	forbidden := []string{
 		`"profile":"stable","datapath":"auto","encryption":"secure","crypto_key_source":"auto","crypto_placement":"auto","kernel_transport":{"mode":"auto"}`,
+		`mktemp -d /tmp/trustix-bootstrap-archive.XXXXXX`,
+		`mktemp -d /tmp/trustix-bootstrap-src.XXXXXX`,
+		`mktemp /tmp/trustix-bootstrap-src.XXXXXX`,
+		`mktemp /tmp/trustix-provision-payload.XXXXXX`,
 	}
 	for _, bad := range forbidden {
 		if strings.Contains(script, bad) {

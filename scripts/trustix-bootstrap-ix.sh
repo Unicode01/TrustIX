@@ -9,6 +9,30 @@ trustix_bootstrap_log() {
   printf '[trustix-bootstrap] %s\n' "$*" >&2
 }
 
+trustix_bootstrap_mktemp_dir() {
+  local prefix="${1:-trustix-bootstrap}"
+  local dir
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX" 2>/dev/null || mktemp -d -t "${prefix}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "$dir" ]]; then
+    dir="${TMPDIR:-/tmp}/${prefix}.$$"
+    rm -rf "$dir"
+    mkdir -p "$dir" || return 1
+  fi
+  printf '%s\n' "$dir"
+}
+
+trustix_bootstrap_mktemp_file() {
+  local prefix="${1:-trustix-bootstrap}"
+  local file
+  file="$(mktemp "${TMPDIR:-/tmp}/${prefix}.XXXXXX" 2>/dev/null || mktemp -t "${prefix}.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "$file" ]]; then
+    file="${TMPDIR:-/tmp}/${prefix}.$$"
+    rm -f "$file"
+    : >"$file" || return 1
+  fi
+  printf '%s\n' "$file"
+}
+
 bootstrap_repo_root() {
   local source_path="${BASH_SOURCE[0]:-}"
   if [[ -n "$source_path" && -f "$source_path" ]]; then
@@ -44,7 +68,7 @@ trustix_bootstrap_extract_archive() {
   local archive_path="$1"
   local dest="$2"
   local stage archive_root candidate
-  stage="$(mktemp -d /tmp/trustix-bootstrap-archive.XXXXXX)"
+  stage="$(trustix_bootstrap_mktemp_dir trustix-bootstrap-archive)" || return 1
   if ! tar -xzf "$archive_path" -C "$stage"; then
     rm -rf "$stage"
     return 1
@@ -114,7 +138,7 @@ if ! repo_root="$(bootstrap_repo_root)"; then
   repo_ref="${TRUSTIX_BOOTSTRAP_REF:-main}"
   repo_root="${TRUSTIX_BOOTSTRAP_WORKDIR:-}"
   if [[ -z "$repo_root" ]]; then
-    repo_root="$(mktemp -d /tmp/trustix-bootstrap-src.XXXXXX)"
+    repo_root="$(trustix_bootstrap_mktemp_dir trustix-bootstrap-src)"
     trustix_bootstrap_temp_repo=1
   fi
   trap 'trustix_bootstrap_cleanup_temp_repo "$?"' EXIT
@@ -136,7 +160,7 @@ if ! repo_root="$(bootstrap_repo_root)"; then
     fi
     if [[ "$cloned" != "1" ]] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; } && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
       archive_url="${repo_url%.git}/archive/${repo_ref}.tar.gz"
-      archive_path="$(mktemp /tmp/trustix-bootstrap-src.XXXXXX)"
+      archive_path="$(trustix_bootstrap_mktemp_file trustix-bootstrap-src)" || exit 1
       mapfile -t archive_urls < <(trustix_bootstrap_github_url_candidates "$archive_url")
       trustix_bootstrap_download_file "$archive_path" "${archive_urls[@]}"
       trustix_bootstrap_extract_archive "$archive_path" "$repo_root"
@@ -507,7 +531,7 @@ run_provision_token() {
   local base_url="${provision_url%/}"
   local payload_url="${base_url}/v1/provision/ix/${provision_token}/bootstrap.sh"
   local payload
-  payload="$(mktemp /tmp/trustix-provision-payload.XXXXXX)"
+  payload="$(trustix_bootstrap_mktemp_file trustix-provision-payload)" || die "create provision payload path failed"
   log "fetch provision payload"
   if ! trustix_bootstrap_fetch_provision_payload "$payload_url" "$payload"; then
     log "failed to fetch provision payload from ${payload_url}"
