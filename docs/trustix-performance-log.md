@@ -20,7 +20,7 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `86bd936be4eb` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
+| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `b01a10dff63a` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
@@ -85,6 +85,60 @@ no-session, and no-wire error counters were zero. RX-worker GSO xmit segments,
 plaintext outer-GSO segments, and cached destination MAC counters were nonzero
 on both peers. A low-impact underlay ping over `10.203.3.202` and
 `10.203.3.203` also stayed reachable while full-kmod iperf was active.
+
+<a id="2026-06-25-zaozhuang-pve-current-main-dd-full-kmod-windowfix-3600s-production-gate"></a>
+
+### Zaozhuang PVE current-main Debian full-kmod window-filter 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-dd-a` and VM201 `trustix-dd-b` on isolated `vmbr3`. VM100 and
+all 1xx guests were not modified. Both guests ran Debian 13 on
+`6.12.90+deb13.1-cloud-amd64`.
+
+The release used TrustIX version `trustix-current-main-dd`, commit
+`b01a10dff63a`, Go `1.25.0`, build time `2026-06-25T07:16:04Z`, binary SHA256
+`dba10e1f622bea31c6cfd1cbbbaa94021688505c4fbedea0921d708e693d36d6`, and
+embedded assets SHA256
+`c64316438e073aadf5f9bc9902af4757e2ccdc3e2269b7cdc566b4621e2b4d0c`.
+The later `5ee74be` and `0fb27b8` commits only changed soak log collection,
+tests, and documentation; no daemon or kernel module runtime code changed.
+
+Debian module hashes built for the running kernel:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `7557ef1bdd056c26792e03201e6a32d4c3e646bb984b3771b91636616c85b67f` |
+| `trustix_datapath.ko` | `49023a55ebecaf615553ca50c66dc182b4cdc717cb238bbf801c710bc93fc65a` |
+| `trustix_datapath_helpers.ko` | `1357cf1c7bca5c1db7216ac67a408308967c9db8fff9f174465585d38b440a53` |
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`8d7855253e3941dc3bf2956c0cf6eae0a0c4cdf2238c810ef83b2d1c55c841f1`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+| Direction | Gate | Received | Sent | Evidence seconds | Retransmits |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A to B | 3 Gbps | 3.547532 Gbps | 3.547523 Gbps | 3599.962530 | 306821 |
+| B to A | 3 Gbps | 3.508709 Gbps | 3.508685 Gbps | 3599.946226 | 302177 |
+
+The sequential `forward + both` run lasted 7204 seconds, from
+`2026-06-25T07:33:43Z` to `2026-06-25T09:33:47Z`, and passed with
+`errors=[]` and `log_findings=[]`. Boot IDs
+`11b016f0-81fd-41ab-8dc4-099530f52e12` and
+`140cb311-55a3-4fbc-bc03-7899b30d81e3` were unchanged before and after the
+run. Journal kernel artifacts contained no entries during the soak window,
+pstore was mounted and empty on both guests, `tix-lan` `tx_queue_len` was
+`1000`, and `trustix_datapath` was loaded on both peers.
+
+The full plaintext datapath provider and eight warmed sessions were active on
+both nodes. `rx_worker_inject=Y`, `tx_plaintext=Y`, `enable_features=128`,
+`safe_features=128`, `unsafe_features=0`, and `selftest_failures=0`. Covered
+allocation, delivery, GSO xmit, TX build, TX xmit, queue-drop, stale-wire,
+no-session, and no-wire error counters were zero. RX-worker GSO xmit segments,
+plaintext outer-GSO segments, and cached destination MAC counters were nonzero
+on both peers.
 
 <a id="2026-06-25-zaozhuang-pve-current-head-dd-full-kmod-3600s-production-gate"></a>
 

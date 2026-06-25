@@ -147,11 +147,14 @@ counters were zero.
 
 A 2026-06-25 current-head Debian-to-Debian full-kmod recheck on
 `6.12.90+deb13.1-cloud-amd64` passed the same 3600s-per-direction production
-gate. It used commit `86bd936be4eb`, minimum received throughput was
-3.518886 Gbps against the 3 Gbps gate, both peers kept stable boot IDs, pstore
-and kernel log scans were clean, `tix-lan` kept `tx_queue_len=1000`, and
-covered datapath error counters were zero with full plaintext provider, RX
-worker, TX plaintext, and eight warmed sessions active.
+gate. It used commit `b01a10dff63a`, minimum received throughput was
+3.508709 Gbps against the 3 Gbps gate, both peers kept stable boot IDs, pstore
+was mounted and empty, the soak-window kernel journal had no entries,
+`tix-lan` kept `tx_queue_len=1000`, and covered datapath error counters were
+zero with full plaintext provider, RX worker, TX plaintext, and eight warmed
+sessions active. Later commits `5ee74be` and `0fb27b8` only changed soak log
+collection, tests, and documentation; no daemon or kernel module runtime code
+changed.
 
 A 2026-06-21 current-head Debian-to-Debian TC-direct recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
