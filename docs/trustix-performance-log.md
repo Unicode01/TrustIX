@@ -20,7 +20,7 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-amd64` at commit `1a72df194383d74fef5b03f68878f72734addb39` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
+| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `86bd936be4eb` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
@@ -29,6 +29,57 @@ Current production-default evidence boundary:
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-25
+
+<a id="2026-06-25-zaozhuang-pve-current-head-dd-full-kmod-3600s-production-gate"></a>
+
+### Zaozhuang PVE current-head Debian full-kmod 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-dd-a` and VM201 `trustix-dd-b` on isolated `vmbr3`. VM100 and
+all 1xx guests were not modified. Both guests ran Debian 13 on
+`6.12.90+deb13.1-cloud-amd64`.
+
+The release used TrustIX version `trustix-current-head-dd`, commit
+`86bd936be4eb`, Go `1.25.0`, build time `2026-06-24T22:53:05Z`, binary SHA256
+`1ee25aeb68867b5a705971b0e35ac1a3b2e2763e7f8d7c386c71c6b9c52129c4`, and
+embedded assets SHA256
+`18eb4b0fbb81b7dfe6a9639e2997cae6cd728c5a9d2db3ba367412487cb6e622`.
+
+Debian module hashes built for the running kernel:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `7557ef1bdd056c26792e03201e6a32d4c3e646bb984b3771b91636616c85b67f` |
+| `trustix_datapath.ko` | `49023a55ebecaf615553ca50c66dc182b4cdc717cb238bbf801c710bc93fc65a` |
+| `trustix_datapath_helpers.ko` | `1357cf1c7bca5c1db7216ac67a408308967c9db8fff9f174465585d38b440a53` |
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`fd3b737826ee4256d3dd2169519edb000c5f010092820ae05cfda91442b2f70e`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+| Direction | Gate | Received | Sent | Evidence seconds | Retransmits |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A to B | 3 Gbps | 3.614845 Gbps | 3.614905 Gbps | 3600.035142 | 307580 |
+| B to A | 3 Gbps | 3.518886 Gbps | 3.518933 Gbps | 3600.023007 | 296963 |
+
+The sequential `forward + both` run lasted 7203 seconds, from
+`2026-06-24T23:10:57Z` to `2026-06-25T01:11:00Z`, and passed with
+`errors=[]` and `log_findings=[]`. Boot IDs
+`aa49b74a-e7d8-449c-93ed-37196bba07b8` and
+`c22b9b63-50ba-4966-a9fa-850a7a13af68` were unchanged before and after the
+run. Kernel log and pstore artifacts were clean on both guests, `tix-lan`
+`tx_queue_len` was `1000`, and `trustix_datapath` was loaded on both peers.
+
+The full plaintext datapath provider and eight warmed sessions were active on
+both nodes. `rx_worker_inject=Y`, `tx_plaintext=Y`, `enable_features=128`,
+`safe_features=128`, `unsafe_features=0`, and `selftest_failures=0`. Covered
+allocation, delivery, GSO xmit, TX build, TX xmit, queue-drop, stale-wire,
+no-session, and no-wire error counters were zero. RX-worker GSO xmit segments,
+plaintext outer-GSO segments, and cached destination MAC counters were nonzero
+on both peers.
 
 <a id="2026-06-25-zaozhuang-pve-secure-exp-tcp-kernel-fpu-fallback-3600s-production-gate"></a>
 

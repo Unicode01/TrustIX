@@ -47,9 +47,9 @@ now install for kernel module builds when dependency installation is enabled.
 ## Current validation snapshot
 
 The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
-2026-06-21, 2026-06-22, 2026-06-23, and 2026-06-24 against current source and selected production
-transport defaults. They covered Debian 13 `6.12.90+deb13.1-amd64`,
-Debian 13 `6.12.90+deb13.1-cloud-amd64`, Debian 13
+2026-06-21, 2026-06-22, 2026-06-23, 2026-06-24, and 2026-06-25 against current
+source and selected production transport defaults. They covered Debian 13
+`6.12.90+deb13.1-amd64`, Debian 13 `6.12.90+deb13.1-cloud-amd64`, Debian 13
 `6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
 OpenWrt 24.10.2 x86_64 `6.6.93`, OpenWrt 24.10.7 x86_64 `6.6.141`,
 and OpenWrt 25.12.4 x86_64 `6.12.87`
@@ -142,6 +142,14 @@ used commit `1a72df194383d74fef5b03f68878f72734addb39`, minimum received
 throughput was 3.445860 Gbps against the 3 Gbps gate, both peers kept stable
 boot IDs, pstore and kernel log scans were clean, and covered datapath error
 counters were zero.
+
+A 2026-06-25 current-head Debian-to-Debian full-kmod recheck on
+`6.12.90+deb13.1-cloud-amd64` passed the same 3600s-per-direction production
+gate. It used commit `86bd936be4eb`, minimum received throughput was
+3.518886 Gbps against the 3 Gbps gate, both peers kept stable boot IDs, pstore
+and kernel log scans were clean, `tix-lan` kept `tx_queue_len=1000`, and
+covered datapath error counters were zero with full plaintext provider, RX
+worker, TX plaintext, and eight warmed sessions active.
 
 A 2026-06-21 current-head Debian-to-Debian TC-direct recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
