@@ -2770,7 +2770,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"full_kmod":             "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-current-main-dd-full-kmod-windowfix-3600s-production-gate",
 		"secure_kudp":           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
 		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-26-zaozhuang-pve-fa207ea-secure-exp-tcp-kernel-3600s-production-gate",
-		"route_gso":             "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
+		"route_gso":             "docs/trustix-performance-log.md#2026-06-26-zaozhuang-pve-fa207ea-route-gso-3600s-production-gate",
 		"owdeb_full_kmod":       "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate",
 		"userspace":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",

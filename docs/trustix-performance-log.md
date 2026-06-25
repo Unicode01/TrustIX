@@ -22,7 +22,7 @@ Current production-default evidence boundary:
 | --- | --- | --- |
 | Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `b01a10dff63a` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
-| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
+| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `395b2ba05013` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
@@ -92,6 +92,63 @@ TX packet seal errors, XDP crypto open/decrypt/header/payload/replay/store
 errors, and route-GSO async flow/plan/MTU/alloc/clone/segment/prepare/xmit,
 stream, outer-GSO, cross-item, and tail-stitch errors. Route-GSO async xmit
 packet counters were nonzero on both peers: 42690272 on A and 42551677 on B.
+
+<a id="2026-06-26-zaozhuang-pve-fa207ea-route-gso-3600s-production-gate"></a>
+
+### Zaozhuang PVE fa207ea route-GSO 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-rg-a` and VM201 `trustix-rg-b`. VM100 and all 1xx guests were
+not modified. Both guests ran Debian 13 on `6.12.94+deb13-cloud-amd64`.
+
+The release used TrustIX version `trustix-current-fa207ea`, commit
+`fa207ea`, Go `1.25.0`, build time `2026-06-25T18:13:14Z`, binary SHA256
+`e4d54d70a52cde32097229210b131cf1511da1e31fbed033877ca9d2157188c5`, and
+embedded assets SHA256
+`48478cb5bcca3d284964606be64b4bf0447ae6eb8a7cfd32d2408e3ff88051e7`.
+This is the plaintext route-GSO production gate for the `fa207ea` runtime,
+including the direct route-GSO TCP segment-header fix.
+
+Embedded Debian module hashes built for the running guest kernel:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `1b35c7232710948a154b87c1e98f8e8e3352827204db37d8fa88cdea64379423` |
+| `trustix_datapath.ko` | `b04932c552733ad35e797d5cb0b487a178fe7a4a1c59638db151c4db930642f6` |
+| `trustix_datapath_helpers.ko` | `e15b8623a7ce317f2b0a980ae320d516412e0d2b0f64de49b15206ee6890a09b` |
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`8d7855253e3941dc3bf2956c0cf6eae0a0c4cdf2238c810ef83b2d1c55c841f1`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+| Direction | Gate | Received | Sent | Evidence seconds | Retransmits |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A to B | 2.5 Gbps | 2.975477 Gbps | 2.975519 Gbps | 3600.014695 | 724700 |
+| B to A | 2.5 Gbps | 3.004100 Gbps | 3.004146 Gbps | 3600.015931 | 738958 |
+
+The sequential `forward + both` run lasted 7204 seconds, from
+`2026-06-25T20:41:55Z` to `2026-06-25T22:41:59Z`, and passed with
+`errors=[]` and `log_findings=[]`. VM200 boot ID
+`b1d92977-3dca-4fa3-b6fc-28e5a5af560d` and VM201 boot ID
+`829f66cf-ed57-461f-89d3-4b52dbe3f579` were unchanged before and after the
+run. Kernel log and pstore artifacts were clean on both guests, and both
+`tix-lan` interfaces had `tx_queue_len=1000`.
+
+The selected route-GSO path loaded `trustix_datapath_helpers`; both peers
+reported the experimental TCP direct route-GSO kfunc requested and selected,
+with 8 active sessions. Node A reported `session_dial_errors=1`, within the
+production route-GSO budget of 2, and node B reported `session_dial_errors=0`.
+
+Route-GSO module counters showed active outer-GSO and no covered route-GSO
+errors:
+
+| Node | Outer-GSO frames | Xmit packets | Covered helper errors |
+| --- | ---: | ---: | ---: |
+| A | 1008002417 | 43311681 | 0 |
+| B | 1017681020 | 43927358 | 0 |
 
 ## 2026-06-25
 
