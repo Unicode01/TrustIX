@@ -821,11 +821,22 @@ check_node_prereqs() {
   trustixd="$(node_bin "$node" trustixd)"
   trustixctl="$(node_bin "$node" trustixctl)"
   run_node "$node" "set -Eeuo pipefail
-command -v ip >/dev/null
-command -v iperf3 >/dev/null
-command -v curl >/dev/null
-test -x $(remote_quote "$trustixd")
-test -x $(remote_quote "$trustixctl")
+missing=0
+for cmd in ip iperf3 curl; do
+  if ! command -v \"\$cmd\" >/dev/null 2>&1; then
+    printf '%s\n' \"missing required command on node ${node}: \$cmd\" >&2
+    missing=1
+  fi
+done
+if [[ ! -x $(remote_quote "$trustixd") ]]; then
+  printf '%s\n' \"missing required executable on node ${node}: trustixd ${trustixd}\" >&2
+  missing=1
+fi
+if [[ ! -x $(remote_quote "$trustixctl") ]]; then
+  printf '%s\n' \"missing required executable on node ${node}: trustixctl ${trustixctl}\" >&2
+  missing=1
+fi
+[[ \"\$missing\" -eq 0 ]]
 "
 }
 
