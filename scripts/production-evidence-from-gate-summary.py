@@ -33,6 +33,11 @@ COLUMNS = [
     "verifier_sha256",
     "artifact",
     "evidence_note",
+    "binary_sha256",
+    "build_version",
+    "build_commit",
+    "build_built_at",
+    "build_go_version",
 ]
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -1097,6 +1102,52 @@ def require_binary_identity_for_pass(row: dict[str, Any], result: str) -> None:
         )
 
 
+def binary_sha256_for_pass(row: dict[str, Any], result: str) -> str:
+    if result != "pass":
+        return ""
+    identities = list_field(row, "binary_identities")
+    hashes = sorted({str(item.get("sha256") or "") for item in identities if isinstance(item, dict)})
+    if len(hashes) != 1 or not SHA256_RE.fullmatch(hashes[0]):
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} does not have exactly one valid binary sha256"
+        )
+    return hashes[0]
+
+
+def build_identity_for_pass(row: dict[str, Any], result: str) -> dict[str, str]:
+    if result != "pass":
+        return {
+            "version": "",
+            "commit": "",
+            "built_at": "",
+            "go_version": "",
+        }
+    identities = list_field(row, "build_identities")
+    values: set[tuple[str, str, str, str]] = set()
+    for item in identities:
+        if not isinstance(item, dict):
+            continue
+        values.add(
+            (
+                str(item.get("version") or ""),
+                str(item.get("commit") or ""),
+                str(item.get("built_at") or ""),
+                str(item.get("go_version") or ""),
+            )
+        )
+    if len(values) != 1:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} does not have exactly one build identity"
+        )
+    version, commit, built_at, go_version = next(iter(values))
+    return {
+        "version": version,
+        "commit": commit,
+        "built_at": built_at,
+        "go_version": go_version,
+    }
+
+
 def require_runtime_artifacts_for_pass(row: dict[str, Any], result: str) -> None:
     if result != "pass":
         return
@@ -1278,6 +1329,7 @@ def evidence_row(
         "crypto_placement",
         "gate_family",
     ]})
+    build = build_identity_for_pass(gate_row, result)
     return [
         str(matrix_row.get("gate_family") or ""),
         str(matrix_row.get("transport") or ""),
@@ -1296,6 +1348,11 @@ def evidence_row(
         manifest["verifier_sha256"],
         args.artifact,
         note,
+        binary_sha256_for_pass(gate_row, result),
+        build["version"],
+        build["commit"],
+        build["built_at"],
+        build["go_version"],
     ]
 
 

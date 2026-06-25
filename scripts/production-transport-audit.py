@@ -42,6 +42,11 @@ EVIDENCE_COLUMNS = [
     "verifier_sha256",
     "artifact",
     "evidence_note",
+    "binary_sha256",
+    "build_version",
+    "build_commit",
+    "build_built_at",
+    "build_go_version",
 ]
 CURRENT_REQUIREMENT_COLUMNS = [
     "transport",
@@ -58,6 +63,11 @@ CURRENT_REQUIREMENT_COLUMNS = [
     "verifier_sha256",
     "artifact",
     "note",
+    "binary_sha256",
+    "build_version",
+    "build_commit",
+    "build_built_at",
+    "build_go_version",
 ]
 KEY_FIELDS = [
     "transport",
@@ -67,6 +77,19 @@ KEY_FIELDS = [
     "crypto_placement",
     "validation_scope",
     "gate_family",
+]
+CURRENT_IDENTITY_FIELDS = [
+    "os_matrix",
+    "kernel_matrix",
+    "gate_manifest_schema",
+    "production_gate_sha256",
+    "verifier_sha256",
+    "artifact",
+    "binary_sha256",
+    "build_version",
+    "build_commit",
+    "build_built_at",
+    "build_go_version",
 ]
 
 
@@ -194,6 +217,11 @@ def compact_evidence(row: dict[str, str], reasons: list[str] | None = None) -> d
         "production_gate_sha256": row["production_gate_sha256"],
         "verifier_sha256": row["verifier_sha256"],
         "artifact": row["artifact"],
+        "binary_sha256": row["binary_sha256"],
+        "build_version": row["build_version"],
+        "build_commit": row["build_commit"],
+        "build_built_at": row["build_built_at"],
+        "build_go_version": row["build_go_version"],
     }
     if reasons:
         out["reasons"] = reasons
@@ -208,6 +236,11 @@ def compact_current_requirement(row: dict[str, str]) -> dict[str, str]:
         "production_gate_sha256": row["production_gate_sha256"],
         "verifier_sha256": row["verifier_sha256"],
         "artifact": row["artifact"],
+        "binary_sha256": row["binary_sha256"],
+        "build_version": row["build_version"],
+        "build_commit": row["build_commit"],
+        "build_built_at": row["build_built_at"],
+        "build_go_version": row["build_go_version"],
     }
 
 
@@ -232,7 +265,11 @@ def current_requirements_path(args: argparse.Namespace, defaults_path: Path) -> 
 
 
 def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> dict[str, dict[str, str]]:
-    rows = read_tsv(current_requirements_path(args, defaults_path), CURRENT_REQUIREMENT_COLUMNS, 13)
+    rows = read_tsv(
+        current_requirements_path(args, defaults_path),
+        CURRENT_REQUIREMENT_COLUMNS,
+        len(CURRENT_REQUIREMENT_COLUMNS),
+    )
     requirements: dict[str, dict[str, str]] = {}
     for row in rows:
         key = row_key(row)
@@ -284,14 +321,7 @@ def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
                     reasons.append("missing current evidence requirement")
                     ok = False
                 else:
-                    for field in (
-                        "os_matrix",
-                        "kernel_matrix",
-                        "gate_manifest_schema",
-                        "production_gate_sha256",
-                        "verifier_sha256",
-                        "artifact",
-                    ):
+                    for field in CURRENT_IDENTITY_FIELDS:
                         if candidate[field] != current_requirement[field]:
                             reasons.append(f"{field}={candidate[field]!r}!={current_requirement[field]!r}")
                     ok = not reasons
@@ -344,6 +374,18 @@ def emit_text(results: list[dict[str, Any]]) -> None:
         )
 
 
+def emit_missing_diagnostics(missing: list[dict[str, Any]]) -> None:
+    for row in missing:
+        for rejected in row.get("rejected_candidates") or []:
+            reasons = rejected.get("reasons") or []
+            if not reasons:
+                continue
+            print(
+                "\t".join(["rejected", row["key"], "; ".join(str(reason) for reason in reasons)]),
+                file=sys.stderr,
+            )
+
+
 def main() -> int:
     args = parse_args()
     results = audit(args)
@@ -357,6 +399,7 @@ def main() -> int:
             f"production transport audit failed: {len(missing)} default(s) lack matching evidence",
             file=sys.stderr,
         )
+        emit_missing_diagnostics(missing)
         return 1
     return 0
 
