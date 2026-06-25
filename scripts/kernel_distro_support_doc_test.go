@@ -19,13 +19,15 @@ func TestKernelDistroSupportUsesCurrentProductionEvidenceBoundary(t *testing.T) 
 		"3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-22",
 		"Secure experimental TCP kernel crypto",
 		"`experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel`",
-		"1.599325 Gbps",
+		"1.562075 Gbps",
 		"3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-06-25",
 		"Minimum received throughput was 1.634107 Gbps against the 1.5 Gbps gate",
 		"requires zero `replay_old` drops and bounds `replay_seen/open`",
 		"Minimum received throughput was 2.829761 Gbps against the 2.5 Gbps gate",
-		"Minimum received throughput was 1.599325 Gbps against the 1.5 Gbps gate",
-		"dedicated `secure_exp_tcp_kernel` production default and must not reuse",
+		"It used commit `b01a10dff63a`; minimum",
+		"received throughput was 1.562075 Gbps against the 1.5 Gbps gate",
+		"dedicated `secure_exp_tcp_kernel`",
+		"production default and must not reuse secure-kUDP evidence",
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("kernel distro support doc missing current production evidence fragment %q", want)

@@ -2769,7 +2769,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"tc_direct":             "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
 		"full_kmod":             "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-current-main-dd-full-kmod-windowfix-3600s-production-gate",
 		"secure_kudp":           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
-		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-secure-exp-tcp-kernel-fpu-fallback-3600s-production-gate",
+		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-current-main-dd-secure-exp-tcp-kernel-3600s-production-gate",
 		"route_gso":             "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
 		"owdeb_full_kmod":       "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate",
 		"userspace":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
@@ -3072,6 +3072,37 @@ func TestCurrentDebianRouteGSOEvidenceCoversProductionGate(t *testing.T) {
 		t.Fatalf("current Debian route-GSO evidence is below production gate: %+v", evidence)
 	}
 	t.Fatalf("missing current Debian route-GSO production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
+}
+
+func TestCurrentDebianSecureExpTCPKernelEvidenceCoversProductionGate(t *testing.T) {
+	const (
+		wantOSMatrix     = "debian13-debian13"
+		wantKernelMatrix = "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-current-main-dd-secure-exp-tcp-kernel-3600s-production-gate"
+		minGbps          = 1.5
+		minSeconds       = 3600
+	)
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		if evidence.GateFamily != "secure_exp_tcp_kernel" ||
+			evidence.OSMatrix != wantOSMatrix ||
+			evidence.KernelMatrix != wantKernelMatrix ||
+			evidence.Artifact != wantArtifact {
+			continue
+		}
+		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid Debian secure experimental TCP kernel evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+		}
+		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid Debian secure experimental TCP kernel evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+		}
+		if evidence.Result == "pass" && evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
+			return
+		}
+		t.Fatalf("current Debian secure experimental TCP kernel evidence is below production gate: %+v", evidence)
+	}
+	t.Fatalf("missing current Debian secure experimental TCP kernel production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
 }
 
 func TestCurrentDebianUserspaceEvidenceCoversProductionGates(t *testing.T) {

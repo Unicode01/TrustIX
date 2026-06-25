@@ -24,7 +24,7 @@ Current production-default evidence boundary:
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
-| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` with direct-kfunc FPU fallback exercised | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
+| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction current-main PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `b01a10dff63a` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `395b2ba05013` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
@@ -100,8 +100,9 @@ The release used TrustIX version `trustix-current-main-dd`, commit
 `dba10e1f622bea31c6cfd1cbbbaa94021688505c4fbedea0921d708e693d36d6`, and
 embedded assets SHA256
 `c64316438e073aadf5f9bc9902af4757e2ccdc3e2269b7cdc566b4621e2b4d0c`.
-The later `5ee74be` and `0fb27b8` commits only changed soak log collection,
-tests, and documentation; no daemon or kernel module runtime code changed.
+The later `5ee74be`, `0fb27b8`, `559145e`, and `ce101ec` commits only
+changed soak log collection, tests, documentation, and evidence; no daemon or
+kernel module runtime code changed.
 
 Debian module hashes built for the running kernel:
 
@@ -139,6 +140,64 @@ allocation, delivery, GSO xmit, TX build, TX xmit, queue-drop, stale-wire,
 no-session, and no-wire error counters were zero. RX-worker GSO xmit segments,
 plaintext outer-GSO segments, and cached destination MAC counters were nonzero
 on both peers.
+
+<a id="2026-06-25-zaozhuang-pve-current-main-dd-secure-exp-tcp-kernel-3600s-production-gate"></a>
+
+### Zaozhuang PVE current-main Debian secure experimental TCP kernel crypto 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-dd-a` and VM201 `trustix-dd-b` on isolated `vmbr3`. VM100 and
+all 1xx guests were not modified. Both guests ran Debian 13 on
+`6.12.90+deb13.1-cloud-amd64`.
+
+The release used TrustIX version `trustix-current-main-dd`, commit
+`b01a10dff63a`, Go `1.25.0`, build time `2026-06-25T07:16:04Z`, binary SHA256
+`dba10e1f622bea31c6cfd1cbbbaa94021688505c4fbedea0921d708e693d36d6`, and
+embedded assets SHA256
+`c64316438e073aadf5f9bc9902af4757e2ccdc3e2269b7cdc566b4621e2b4d0c`.
+The later `5ee74be`, `0fb27b8`, `559145e`, and `ce101ec` commits only
+changed soak log collection, tests, documentation, and evidence; no daemon or
+kernel module runtime code changed.
+
+Debian module hashes built for the running kernel:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `7557ef1bdd056c26792e03201e6a32d4c3e646bb984b3771b91636616c85b67f` |
+| `trustix_datapath.ko` | `49023a55ebecaf615553ca50c66dc182b4cdc717cb238bbf801c710bc93fc65a` |
+| `trustix_datapath_helpers.ko` | `1357cf1c7bca5c1db7216ac67a408308967c9db8fff9f174465585d38b440a53` |
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`8d7855253e3941dc3bf2956c0cf6eae0a0c4cdf2238c810ef83b2d1c55c841f1`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+| Direction | Gate | Received | Sent | Evidence seconds | Retransmits |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A to B | 1.5 Gbps | 1.669302 Gbps | 1.669360 Gbps | 3600.004387 | 66828 |
+| B to A | 1.5 Gbps | 1.562075 Gbps | 1.562133 Gbps | 3600.017111 | 60659 |
+
+The sequential `forward + both` run lasted 7204 seconds, from
+`2026-06-25T09:42:09Z` to `2026-06-25T11:42:13Z`, and passed with
+`errors=[]` and `log_findings=[]`. Boot IDs
+`11b016f0-81fd-41ab-8dc4-099530f52e12` and
+`140cb311-55a3-4fbc-bc03-7899b30d81e3` were unchanged before and after the
+run. Journal kernel artifacts contained no entries during the soak window,
+pstore was mounted and empty on both guests, `tix-lan` `tx_queue_len` was
+`1000`, and both peers loaded `trustix_crypto` and
+`trustix_datapath_helpers`.
+
+This gate used `experimental_tcp` secure mode with `datapath=kernel_module`,
+`crypto_placement=kernel`, 16 active sessions, direct kfunc crypto, and route
+TCP GSO async. Both peers reported `kernel_crypto=true`,
+`effective_crypto=kernel`, `fast_path=true`, `reinject=true`, 32 flow-map
+entries, 32 flow-map updates, and zero direct-kfunc, frame, replay, context,
+route-GSO async stream, and route-GSO async xmit errors. Direct kfunc
+seal/open counters were nonzero on both peers: node A reported
+`674825717` seal calls and `644019863` open calls; node B reported
+`644079880` seal calls and `674759232` open calls.
 
 <a id="2026-06-25-zaozhuang-pve-current-head-dd-full-kmod-3600s-production-gate"></a>
 
