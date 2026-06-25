@@ -190,8 +190,8 @@ def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
                 rejected.append(compact_evidence(candidate, reasons))
         accepted.sort(
             key=lambda row: (
-                int(row["_source_line"]),
                 parse_seconds(row["min_seconds"], "evidence min_seconds"),
+                int(row["_source_line"]),
                 parse_float(row["min_gbps"], "evidence min_gbps"),
             ),
             reverse=True,

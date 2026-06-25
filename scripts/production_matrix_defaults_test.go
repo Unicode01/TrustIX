@@ -2199,6 +2199,194 @@ func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 	}
 }
 
+func TestProductionTransportAuditScriptPrefersLongerSoakBeforeSourceOrder(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	evidence := filepath.Join(workdir, "evidence.tsv")
+	defaultPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t0.5\t30\tprefer strongest evidence",
+		"",
+	}, "\n")
+	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	strongerEarly := strings.Join([]string{
+		"userspace",
+		"udp",
+		"secure",
+		"stable",
+		"userspace",
+		"userspace",
+		"cross_host",
+		"debian13-debian13",
+		"6.12.90_to_6.12.90",
+		"pass",
+		"2.0",
+		"3600",
+		productionGateManifestSchema,
+		strings.Repeat("a", 64),
+		strings.Repeat("b", 64),
+		"docs/trustix-performance-log.md#stronger-early",
+		"stronger evidence listed first",
+	}, "\t")
+	weakerLater := strings.Join([]string{
+		"userspace",
+		"udp",
+		"secure",
+		"stable",
+		"userspace",
+		"userspace",
+		"cross_host",
+		"debian13-debian13",
+		"6.12.69_to_6.12.69",
+		"pass",
+		"0.75",
+		"60",
+		productionGateManifestSchema,
+		strings.Repeat("c", 64),
+		strings.Repeat("d", 64),
+		"docs/trustix-performance-log.md#weaker-later",
+		"weaker evidence listed later",
+	}, "\t")
+	evidencePayload := strings.Join([]string{
+		"# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note",
+		strongerEarly,
+		weakerLater,
+		"",
+	}, "\n")
+	if err := os.WriteFile(evidence, []byte(evidencePayload), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--scope", "cross_host",
+		"--require-manifest",
+		"--fail-on-missing",
+		"--json",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production transport audit failed: %v\n%s", err, output)
+	}
+	var rows []struct {
+		Evidence struct {
+			Artifact   string `json:"artifact"`
+			MinGbps    string `json:"min_gbps"`
+			MinSeconds string `json:"min_seconds"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(output, &rows); err != nil {
+		t.Fatalf("decode audit JSON: %v\n%s", err, output)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %d, want 1\n%s", len(rows), output)
+	}
+	if rows[0].Evidence.Artifact != "docs/trustix-performance-log.md#stronger-early" ||
+		rows[0].Evidence.MinSeconds != "3600" ||
+		rows[0].Evidence.MinGbps != "2.0" {
+		t.Fatalf("audit chose weaker accepted evidence: %+v\n%s", rows[0].Evidence, output)
+	}
+}
+
+func TestProductionTransportAuditScriptPrefersNewestEqualDurationEvidence(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	evidence := filepath.Join(workdir, "evidence.tsv")
+	defaultPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\t3\t3600\tprefer current equal-duration evidence",
+		"",
+	}, "\n")
+	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	olderHigherGbps := strings.Join([]string{
+		"full_kmod",
+		"udp",
+		"plaintext",
+		"performance",
+		"kernel_module",
+		"userspace",
+		"cross_host",
+		"debian13-debian13",
+		"6.12.94_to_6.12.94",
+		"pass",
+		"3.6",
+		"3600",
+		productionGateManifestSchema,
+		strings.Repeat("a", 64),
+		strings.Repeat("b", 64),
+		"docs/trustix-performance-log.md#older-higher-gbps",
+		"older equal-duration evidence",
+	}, "\t")
+	newerCurrent := strings.Join([]string{
+		"full_kmod",
+		"udp",
+		"plaintext",
+		"performance",
+		"kernel_module",
+		"userspace",
+		"cross_host",
+		"debian13-debian13",
+		"6.12.90_to_6.12.90",
+		"pass",
+		"3.1",
+		"3600",
+		productionGateManifestSchema,
+		strings.Repeat("c", 64),
+		strings.Repeat("d", 64),
+		"docs/trustix-performance-log.md#newer-current",
+		"newer equal-duration evidence",
+	}, "\t")
+	evidencePayload := strings.Join([]string{
+		"# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note",
+		olderHigherGbps,
+		newerCurrent,
+		"",
+	}, "\n")
+	if err := os.WriteFile(evidence, []byte(evidencePayload), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--scope", "cross_host",
+		"--require-manifest",
+		"--fail-on-missing",
+		"--json",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production transport audit failed: %v\n%s", err, output)
+	}
+	var rows []struct {
+		Evidence struct {
+			Artifact   string `json:"artifact"`
+			MinGbps    string `json:"min_gbps"`
+			MinSeconds string `json:"min_seconds"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(output, &rows); err != nil {
+		t.Fatalf("decode audit JSON: %v\n%s", err, output)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %d, want 1\n%s", len(rows), output)
+	}
+	if rows[0].Evidence.Artifact != "docs/trustix-performance-log.md#newer-current" ||
+		rows[0].Evidence.MinSeconds != "3600" ||
+		rows[0].Evidence.MinGbps != "3.1" {
+		t.Fatalf("audit chose stale equal-duration evidence: %+v\n%s", rows[0].Evidence, output)
+	}
+}
+
 func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 	python := requirePython3(t)
 	workdir := t.TempDir()
