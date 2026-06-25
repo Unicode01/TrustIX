@@ -1393,17 +1393,21 @@ printf '{\"path\":\"%s\",\"sha256\":\"%s\",\"size\":%s,\"version\":\"%s\",\"comm
 }
 
 collect_kernel_logs() {
-  local node="$1"
-  local dir prefix
-  dir="$(remote_dir "$node")"
-  prefix="$(node_value "$node" "$ix_a" "$ix_b")"
-  run_node "$node" "set +e
+	local node="$1"
+	local dir prefix since
+	dir="$(remote_dir "$node")"
+	prefix="$(node_value "$node" "$ix_a" "$ix_b")"
+	since="$soak_start_iso"
+	run_node "$node" "set +e
 dir=$(remote_quote "$dir")
 prefix=$(remote_quote "$prefix")
+since=$(remote_quote "$since")
 mkdir -p \"\$dir\"
 if command -v journalctl >/dev/null 2>&1; then
   tmp=\"\${dir}/.\${prefix}-kernel.log.tmp\"
-  if journalctl -k -b --since '1 hour ago' --no-pager -o short-iso >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+  journal_since=\"\$since\"
+  [ -n \"\$journal_since\" ] || journal_since='1 hour ago'
+  if journalctl -k -b --since \"\$journal_since\" --no-pager -o short-iso >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
     mv \"\$tmp\" \"\${dir}/\${prefix}-kernel.log\"
   else
     rm -f \"\$tmp\"
@@ -1411,9 +1415,11 @@ if command -v journalctl >/dev/null 2>&1; then
 fi
 if command -v dmesg >/dev/null 2>&1; then
   tmp=\"\${dir}/.\${prefix}-dmesg.log.tmp\"
-  if dmesg -T >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+  if [ -n \"\$since\" ] && dmesg --since \"\$since\" >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
     mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
-  elif dmesg >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+  elif [ -z \"\$since\" ] && dmesg -T >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+    mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
+  elif [ -z \"\$since\" ] && dmesg >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
     mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
   else
     rm -f \"\$tmp\"
