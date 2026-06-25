@@ -57,8 +57,8 @@ guests with disposable PVE VM IDs 200+.
 The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
 the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
 OpenWrt 24.10.7 x86_64 has since passed an SDK module build and 3600s
-OpenWrt-to-Debian full-kmod production gates, most recently on 2026-06-24
-against Debian `6.12.90+deb13.1-cloud-amd64` at commit `01ca47e`.
+OpenWrt-to-Debian full-kmod production gates, most recently on 2026-06-25
+against Debian `6.12.94+deb13-cloud-amd64` at commit `395b2ba05013`.
 OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and secure experimental TCP
 kernel crypto all failed closed at the runtime capability gate because the
 tested image did not expose usable route-TCP kfunc capability. OpenWrt 25.12.4
@@ -292,6 +292,16 @@ were zero with full plaintext provider, RX worker, and TX plaintext active. A
 simultaneous bidirectional diagnostic stayed stable without crash evidence but
 was not promoted as throughput evidence because one direction fell below the
 3 Gbps production gate.
+
+A 2026-06-25 current-head OpenWrt 24.10.7-to-Debian full-kmod recheck paired
+OpenWrt kernel `6.6.141` with Debian 13
+`6.12.94+deb13-cloud-amd64` and passed the same 3600s-per-direction production
+gate. It used commit `395b2ba05013`; minimum received throughput was
+3.493808 Gbps from OpenWrt to Debian and 5.108514 Gbps from Debian to OpenWrt
+against the 3 Gbps gate. Before/after boot IDs stayed stable, pstore and
+kernel log scans were clean, `tix-lan` kept `tx_queue_len=1000`, and covered
+datapath error counters were zero with full plaintext provider, RX worker, TX
+plaintext, and eight warmed sessions active.
 
 OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
 
