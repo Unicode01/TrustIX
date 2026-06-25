@@ -303,76 +303,48 @@ type currentProductionEvidenceRequirement struct {
 	GateManifestSchema string
 }
 
-func currentProductionEvidenceRequirementForDefault(row productionTransportDefault) (currentProductionEvidenceRequirement, bool) {
-	if row.ValidationScope != "cross_host" {
-		return currentProductionEvidenceRequirement{}, false
+func loadCurrentProductionEvidenceRequirements(t *testing.T) map[string]currentProductionEvidenceRequirement {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join(".", "production-transport-current-evidence.tsv"))
+	if err != nil {
+		t.Fatalf("read production-transport-current-evidence.tsv: %v", err)
 	}
-	switch row.GateFamily {
-	case "userspace":
-		if row.Datapath != "userspace" || row.CryptoPlacement != "userspace" {
-			return currentProductionEvidenceRequirement{}, false
+	requirements := map[string]currentProductionEvidenceRequirement{}
+	for _, line := range strings.Split(string(payload), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
-		return currentProductionEvidenceRequirement{
-			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
-			GateManifestSchema: productionGateManifestSchema,
-		}, true
-	case "userspace_tc":
-		if row.Datapath != "tc_xdp" || row.CryptoPlacement != "userspace" {
-			return currentProductionEvidenceRequirement{}, false
+		fields := strings.Split(line, "\t")
+		if len(fields) < 11 {
+			t.Fatalf("invalid current production evidence requirement row %q", line)
 		}
-		return currentProductionEvidenceRequirement{
-			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.69+deb13-amd64_to_6.12.69+deb13-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
-			GateManifestSchema: productionGateManifestSchema,
-		}, true
-	case "tc_direct":
-		return currentProductionEvidenceRequirement{
-			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.94+deb13-cloud-amd64_to_6.12.94+deb13-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
-			GateManifestSchema: productionGateManifestSchema,
-		}, true
-	case "full_kmod":
-		return currentProductionEvidenceRequirement{
-			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-current-head-dd-full-kmod-3600s-production-gate",
-			GateManifestSchema: productionGateManifestSchema,
-		}, true
-	case "owdeb_full_kmod":
-		return currentProductionEvidenceRequirement{
-			OSMatrix:           "openwrt24.10.7-debian13",
-			KernelMatrix:       "6.6.141_to_6.12.94+deb13-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate",
-			GateManifestSchema: productionGateManifestSchema,
-		}, true
-	case "secure_kudp":
-		return currentProductionEvidenceRequirement{
-			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.94+deb13-cloud-amd64_to_6.12.94+deb13-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
-			GateManifestSchema: productionGateManifestSchema,
-		}, true
-	case "route_gso":
-		return currentProductionEvidenceRequirement{
-			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.94+deb13-cloud-amd64_to_6.12.94+deb13-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
-			GateManifestSchema: productionGateManifestSchema,
-		}, true
-	case "secure_exp_tcp_kernel":
-		return currentProductionEvidenceRequirement{
-			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-secure-exp-tcp-kernel-fpu-fallback-3600s-production-gate",
-			GateManifestSchema: productionGateManifestSchema,
-		}, true
-	default:
-		return currentProductionEvidenceRequirement{}, false
+		row := productionTransportDefault{
+			Transport:       fields[0],
+			Encryption:      fields[1],
+			Profile:         fields[2],
+			Datapath:        fields[3],
+			CryptoPlacement: fields[4],
+			ValidationScope: fields[5],
+			GateFamily:      fields[6],
+		}
+		key := productionDefaultEvidenceKey(row)
+		if _, ok := requirements[key]; ok {
+			t.Fatalf("duplicate current production evidence requirement for %s", key)
+		}
+		requirements[key] = currentProductionEvidenceRequirement{
+			OSMatrix:           fields[7],
+			KernelMatrix:       fields[8],
+			GateManifestSchema: fields[9],
+			Artifact:           fields[10],
+		}
 	}
+	return requirements
+}
+
+func currentProductionEvidenceRequirementForDefault(requirements map[string]currentProductionEvidenceRequirement, row productionTransportDefault) (currentProductionEvidenceRequirement, bool) {
+	requirement, ok := requirements[productionDefaultEvidenceKey(row)]
+	return requirement, ok
 }
 
 func markdownHeadingAnchor(line string) (string, bool) {
@@ -2045,6 +2017,7 @@ func TestProductionEvidenceFromGateSummaryRequiresCrashStabilityArtifacts(t *tes
 
 func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 	defaults := loadProductionTransportDefaults(t)
+	requirements := loadCurrentProductionEvidenceRequirements(t)
 	evidenceByKey := map[string][]productionTransportEvidence{}
 	for _, evidence := range loadProductionTransportEvidence(t) {
 		evidenceByKey[productionEvidenceKey(evidence)] = append(evidenceByKey[productionEvidenceKey(evidence)], evidence)
@@ -2055,7 +2028,7 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 		if row.ValidationScope != "cross_host" {
 			continue
 		}
-		requirement, ok := currentProductionEvidenceRequirementForDefault(row)
+		requirement, ok := currentProductionEvidenceRequirementForDefault(requirements, row)
 		if !ok {
 			t.Fatalf("cross-host production default lacks current evidence requirement: %+v", row)
 		}
@@ -2121,11 +2094,41 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 	}
 }
 
+func TestCurrentProductionEvidenceRequirementsCoverCrossHostDefaults(t *testing.T) {
+	defaults := loadProductionTransportDefaults(t)
+	requirements := loadCurrentProductionEvidenceRequirements(t)
+	crossHostDefaults := map[string]productionTransportDefault{}
+	for _, row := range defaults {
+		if row.ValidationScope != "cross_host" {
+			continue
+		}
+		crossHostDefaults[productionDefaultEvidenceKey(row)] = row
+	}
+	for key, row := range crossHostDefaults {
+		requirement, ok := requirements[key]
+		if !ok {
+			t.Fatalf("cross-host production default lacks current evidence requirement: %+v", row)
+		}
+		if requirement.GateManifestSchema != productionGateManifestSchema {
+			t.Fatalf("current production evidence requirement must be manifest-backed: %s %+v", key, requirement)
+		}
+		if !strings.HasPrefix(requirement.Artifact, "docs/") || !strings.Contains(requirement.Artifact, "#") {
+			t.Fatalf("current production evidence requirement should point to a docs anchor: %s %+v", key, requirement)
+		}
+	}
+	for key := range requirements {
+		if _, ok := crossHostDefaults[key]; !ok {
+			t.Fatalf("current production evidence requirement has no matching cross-host default: %s", key)
+		}
+	}
+}
+
 func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 	python := requirePython3(t)
 	cmd := exec.Command(python, "production-transport-audit.py",
 		"--scope", "cross_host",
 		"--require-manifest",
+		"--require-current",
 		"--fail-on-missing",
 		"--json",
 	)
@@ -2147,6 +2150,12 @@ func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 			GateManifestSchema string `json:"gate_manifest_schema"`
 			Artifact           string `json:"artifact"`
 		} `json:"evidence"`
+		CurrentRequirement struct {
+			OSMatrix           string `json:"os_matrix"`
+			KernelMatrix       string `json:"kernel_matrix"`
+			GateManifestSchema string `json:"gate_manifest_schema"`
+			Artifact           string `json:"artifact"`
+		} `json:"current_requirement"`
 	}
 	if err := json.Unmarshal(output, &rows); err != nil {
 		t.Fatalf("decode audit JSON: %v\n%s", err, output)
@@ -2192,6 +2201,12 @@ func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 		}
 		if row.Evidence.GateManifestSchema != productionGateManifestSchema {
 			t.Fatalf("audit accepted non-manifest evidence for %s: %+v", row.Key, row.Evidence)
+		}
+		if row.CurrentRequirement.GateManifestSchema != productionGateManifestSchema {
+			t.Fatalf("audit did not report current manifest requirement for %s: %+v", row.Key, row.CurrentRequirement)
+		}
+		if row.Evidence.Artifact != row.CurrentRequirement.Artifact {
+			t.Fatalf("audit accepted stale artifact for %s: evidence=%+v current=%+v", row.Key, row.Evidence, row.CurrentRequirement)
 		}
 		if !strings.HasPrefix(row.Evidence.Artifact, "docs/") || !strings.Contains(row.Evidence.Artifact, "#") {
 			t.Fatalf("audit evidence artifact should be a docs anchor for %s: %+v", row.Key, row.Evidence)
@@ -2387,6 +2402,118 @@ func TestProductionTransportAuditScriptPrefersNewestEqualDurationEvidence(t *tes
 	}
 }
 
+func TestProductionTransportAuditScriptRequireCurrentRejectsStaleEvidence(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	evidence := filepath.Join(workdir, "evidence.tsv")
+	current := filepath.Join(workdir, "current.tsv")
+	defaultPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\t3\t3600\trequire current artifact",
+		"",
+	}, "\n")
+	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	evidencePayload := strings.Join([]string{
+		"# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note",
+		strings.Join([]string{
+			"full_kmod",
+			"udp",
+			"plaintext",
+			"performance",
+			"kernel_module",
+			"userspace",
+			"cross_host",
+			"debian13-debian13",
+			"6.12.90_to_6.12.90",
+			"pass",
+			"3.5",
+			"3600",
+			productionGateManifestSchema,
+			strings.Repeat("a", 64),
+			strings.Repeat("b", 64),
+			"docs/trustix-performance-log.md#stale-but-fast",
+			"stale evidence that still clears thresholds",
+		}, "\t"),
+		"",
+	}, "\n")
+	if err := os.WriteFile(evidence, []byte(evidencePayload), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+	currentPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tartifact\tnote",
+		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\tdocs/trustix-performance-log.md#current-required\tcurrent requirement",
+		"",
+	}, "\n")
+	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
+		t.Fatalf("write current requirements: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--current-requirements", slashPath(current),
+		"--scope", "cross_host",
+		"--require-manifest",
+		"--require-current",
+		"--fail-on-missing",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted stale evidence with --require-current:\n%s", output)
+	}
+	if !strings.Contains(string(output), "lack matching evidence") {
+		t.Fatalf("audit failure did not explain missing current evidence:\n%s", output)
+	}
+}
+
+func TestProductionTransportAuditScriptRequireCurrentRejectsRequirementDrift(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	evidence := filepath.Join(workdir, "evidence.tsv")
+	current := filepath.Join(workdir, "current.tsv")
+	defaultPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t0.5\t30\trequire current row",
+		"",
+	}, "\n")
+	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	evidencePayload := "# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note\n"
+	if err := os.WriteFile(evidence, []byte(evidencePayload), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+	currentPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tartifact\tnote",
+		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\tdebian13-debian13\t6.12.69_to_6.12.69\t" + productionGateManifestSchema + "\tdocs/trustix-performance-log.md#unexpected\tunexpected current requirement",
+		"",
+	}, "\n")
+	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
+		t.Fatalf("write current requirements: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--current-requirements", slashPath(current),
+		"--scope", "cross_host",
+		"--require-current",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted current requirement drift:\n%s", output)
+	}
+	if !strings.Contains(string(output), "current evidence requirements do not match audited defaults") {
+		t.Fatalf("audit failure did not explain current requirement drift:\n%s", output)
+	}
+}
+
 func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 	python := requirePython3(t)
 	workdir := t.TempDir()
@@ -2417,6 +2544,7 @@ func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 }
 
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
+	requirements := loadCurrentProductionEvidenceRequirements(t)
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":             "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
 		"full_kmod":             "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-current-head-dd-full-kmod-3600s-production-gate",
@@ -2433,7 +2561,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		if row.ValidationScope != "cross_host" {
 			continue
 		}
-		requirement, ok := currentProductionEvidenceRequirementForDefault(row)
+		requirement, ok := currentProductionEvidenceRequirementForDefault(requirements, row)
 		if !ok {
 			t.Fatalf("cross-host production default lacks current evidence requirement: %+v", row)
 		}

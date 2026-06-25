@@ -43,6 +43,20 @@ EVIDENCE_COLUMNS = [
     "artifact",
     "evidence_note",
 ]
+CURRENT_REQUIREMENT_COLUMNS = [
+    "transport",
+    "encryption",
+    "profile",
+    "datapath",
+    "crypto_placement",
+    "validation_scope",
+    "gate_family",
+    "os_matrix",
+    "kernel_matrix",
+    "gate_manifest_schema",
+    "artifact",
+    "note",
+]
 KEY_FIELDS = [
     "transport",
     "encryption",
@@ -80,6 +94,22 @@ def parse_args() -> argparse.Namespace:
         "--require-manifest",
         action="store_true",
         help="only accept trustix-cross-host-production-gate-manifest-v1 evidence",
+    )
+    parser.add_argument(
+        "--require-current",
+        action="store_true",
+        help=(
+            "only accept evidence matching production-transport-current-evidence.tsv "
+            "for each audited default"
+        ),
+    )
+    parser.add_argument(
+        "--current-requirements",
+        default="",
+        help=(
+            "current evidence requirement TSV; defaults to "
+            "production-transport-current-evidence.tsv beside --defaults"
+        ),
     )
     parser.add_argument(
         "--json",
@@ -164,17 +194,58 @@ def compact_evidence(row: dict[str, str], reasons: list[str] | None = None) -> d
     return out
 
 
+def compact_current_requirement(row: dict[str, str]) -> dict[str, str]:
+    return {
+        "os_matrix": row["os_matrix"],
+        "kernel_matrix": row["kernel_matrix"],
+        "gate_manifest_schema": row["gate_manifest_schema"],
+        "artifact": row["artifact"],
+    }
+
+
+def current_requirements_path(args: argparse.Namespace) -> Path:
+    if args.current_requirements:
+        return Path(args.current_requirements)
+    return Path(args.defaults).with_name("production-transport-current-evidence.tsv")
+
+
+def read_current_requirements(args: argparse.Namespace) -> dict[str, dict[str, str]]:
+    rows = read_tsv(current_requirements_path(args), CURRENT_REQUIREMENT_COLUMNS, 11)
+    requirements: dict[str, dict[str, str]] = {}
+    for row in rows:
+        key = row_key(row)
+        if key in requirements:
+            raise SystemExit(f"duplicate current evidence requirement for {key}")
+        requirements[key] = row
+    return requirements
+
+
 def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
     defaults = read_tsv(Path(args.defaults), DEFAULT_COLUMNS, 9)
     evidence_rows = read_tsv(Path(args.evidence), EVIDENCE_COLUMNS, 17)
+    current_requirements = read_current_requirements(args) if args.require_current else {}
+    audited_defaults = [
+        default
+        for default in defaults
+        if args.scope == "all" or default["validation_scope"] == args.scope
+    ]
+    if args.require_current:
+        audited_keys = {row_key(default) for default in audited_defaults}
+        requirement_keys = set(current_requirements)
+        missing_requirements = sorted(audited_keys - requirement_keys)
+        extra_requirements = sorted(requirement_keys - audited_keys)
+        if missing_requirements or extra_requirements:
+            raise SystemExit(
+                "current evidence requirements do not match audited defaults: "
+                f"missing={missing_requirements} extra={extra_requirements}"
+            )
     evidence_by_key: dict[str, list[dict[str, str]]] = {}
     for evidence in evidence_rows:
         evidence_by_key.setdefault(row_key(evidence), []).append(evidence)
 
     results: list[dict[str, Any]] = []
-    for default in defaults:
-        if args.scope != "all" and default["validation_scope"] != args.scope:
-            continue
+    for default in audited_defaults:
+        current_requirement = current_requirements.get(row_key(default))
         candidates = evidence_by_key.get(row_key(default), [])
         accepted: list[dict[str, str]] = []
         rejected: list[dict[str, Any]] = []
@@ -184,6 +255,15 @@ def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
                 default,
                 require_manifest=args.require_manifest,
             )
+            if ok and args.require_current:
+                if current_requirement is None:
+                    reasons.append("missing current evidence requirement")
+                    ok = False
+                else:
+                    for field in ("os_matrix", "kernel_matrix", "gate_manifest_schema", "artifact"):
+                        if candidate[field] != current_requirement[field]:
+                            reasons.append(f"{field}={candidate[field]!r}!={current_requirement[field]!r}")
+                    ok = not reasons
             if ok:
                 accepted.append(candidate)
             elif len(rejected) < 5:
@@ -208,6 +288,8 @@ def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
         }
         if accepted:
             result["evidence"] = compact_evidence(accepted[0])
+        if current_requirement is not None:
+            result["current_requirement"] = compact_current_requirement(current_requirement)
         if rejected:
             result["rejected_candidates"] = rejected
         results.append(result)
