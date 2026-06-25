@@ -33,7 +33,7 @@ func effectiveKernelTransportModeForDesired(desired config.Desired) dataplane.Ke
 	if mode == dataplane.KernelTransportModeDisabled {
 		return mode
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+	if experimentalTCPRouteGSOAsyncForDesired(desired) {
 		return dataplane.KernelTransportModeRequireKernel
 	}
 	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlyUserspaceUDP(desired) {

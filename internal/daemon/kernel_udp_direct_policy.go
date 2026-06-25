@@ -65,7 +65,7 @@ func experimentalTCPSecureKernelCryptoDirectForDesired(desired config.Desired) b
 	if profile.Profile != config.TransportProfilePerformance {
 		return false
 	}
-	if profile.Datapath == config.TransportDatapathUserspace {
+	if profile.Datapath != config.TransportDatapathKernelModule {
 		return false
 	}
 	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionSecure {

@@ -800,7 +800,7 @@ func TestDataplaneAttachSpecEnablesPerformanceSecureExperimentalTCPDirect(t *tes
 		},
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
-			Datapath:        config.TransportDatapathTCXDP,
+			Datapath:        config.TransportDatapathKernelModule,
 			Encryption:      securetransport.EncryptionSecure,
 			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
 			Candidates:      []core.EndpointID{"experimental-a"},
@@ -832,6 +832,38 @@ func TestDataplaneAttachSpecEnablesPerformanceSecureExperimentalTCPDirect(t *tes
 	}
 	if spec.KernelUDPSecureRouteGSO {
 		t.Fatalf("performance secure experimental_tcp should not mark kernel_udp route-GSO, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecKeepsTCXDPSecureExperimentalTCPOffRouteGSO(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"experimental-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "experimental-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	})
+
+	if spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync ||
+		spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
+		t.Fatalf("TC-XDP secure experimental_tcp should not select route-GSO production path, spec=%#v", spec)
+	}
+	if spec.KernelUDPTXSecureDirect || spec.KernelUDPRXSecureDirect ||
+		spec.KernelUDPSecureDirectTrustInnerChecksums || spec.KernelUDPSecureRouteGSO {
+		t.Fatalf("TC-XDP secure experimental_tcp should not request secure kernel direct path, spec=%#v", spec)
+	}
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
+		t.Fatalf("TC-XDP secure experimental_tcp should keep userspace fallback, spec=%#v", spec)
 	}
 }
 

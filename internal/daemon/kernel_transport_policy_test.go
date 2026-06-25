@@ -250,8 +250,38 @@ func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoExperimentalT
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
 		t.Fatalf("kernel transport mode = %q, want auto for secure kernel-crypto experimental_tcp", got)
 	}
+	if experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
+		t.Fatal("TC-XDP secure kernel-crypto experimental_tcp should not select route-GSO")
+	}
 	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
 		t.Fatalf("kernel crypto experimental_tcp unexpectedly disabled fast path: %q", reason)
+	}
+}
+
+func TestEffectiveKernelTransportModeRequiresKernelForSecureKernelModuleExperimentalTCPRouteGSO(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if !experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
+		t.Fatal("kernel-module secure experimental_tcp should select secure route-GSO")
+	}
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeRequireKernel {
+		t.Fatalf("kernel transport mode = %q, want require_kernel for secure experimental_tcp route-GSO", got)
+	}
+	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("kernel-module secure experimental_tcp unexpectedly disabled fast path: %q", reason)
 	}
 }
 

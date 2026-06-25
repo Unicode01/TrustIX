@@ -1845,6 +1845,41 @@ func TestTrustIXDatapathHelpersSecureExperimentalTCPBuildsValidInnerChecksum(t *
 	}
 }
 
+func TestTrustIXDatapathHelpersTCXDPSecureExperimentalTCPDoesNotEnableRouteGSO(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"exp-sec"},
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-sec",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
+		t.Fatal("TC-XDP secure experimental_tcp kernel crypto policy should not select route-GSO")
+	}
+	got := TrustIXDatapathHelpersModuleParametersForDesired("", desired)
+	for _, unexpected := range []string{
+		"route_tcp_gso=1",
+		"route_tcp_gso_async=1",
+		"route_tcp_gso_async_stream_direct_build=1",
+		"route_tcp_gso_async_stream_outer_gso=1",
+		"route_tcp_gso_async_stream_direct_build_inner_csum=1",
+		"route_tcp_gso_async_secure_seal_batch=1",
+	} {
+		if moduleParameterHasAssignment(got, unexpected) {
+			t.Fatalf("parameters = %q, unexpectedly enabled %q", got, unexpected)
+		}
+	}
+}
+
 func TestTrustIXDatapathHelpersSecureKernelUDPRouteGSOAvoidsPlaintextShortcuts(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
