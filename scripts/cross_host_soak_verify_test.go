@@ -2323,6 +2323,21 @@ func writeStatusHealthJSON(t *testing.T, path string, activeSessions, dialErrors
 		t.Fatalf("make status health dir: %v", err)
 	}
 	payload := map[string]any{
+		"build": map[string]any{
+			"version":    "trustix-test",
+			"commit":     "0123456789ab",
+			"built_at":   "2026-06-25T00:00:00Z",
+			"go_version": "go1.25.0",
+			"goos":       "linux",
+			"goarch":     "amd64",
+			"assets": map[string]any{
+				"kernel": map[string]any{
+					"trustix_crypto.ko": map[string]any{
+						"sha256": "status-health-asset-sha",
+					},
+				},
+			},
+		},
 		"data_path": map[string]any{
 			"active_sessions": activeSessions,
 			"counters": map[string]any{
