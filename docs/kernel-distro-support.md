@@ -107,14 +107,15 @@ override is required unless a selected production policy enables the full
 plaintext datapath. TC/eBPF plus `trustix_datapath_helpers` remains the selected
 secure performance path.
 
-The 2026-06-19 selected cross-host matrix passed these 900s gates on Debian to
-Debian:
+The 2026-06-19 selected cross-host matrix first promoted these Debian-to-Debian
+safe-profile gates, and later 3600s manifest-backed rechecks now provide the
+current production evidence boundary:
 
-| Family | Policy | Minimum received | Gate |
-| --- | --- | ---: | ---: |
-| Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.566969 Gbps | 3 Gbps |
-| Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.744620 Gbps | 1.5 Gbps |
-| Route-GSO fallback | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 2.696084 Gbps | 2.5 Gbps |
+| Family | Policy | Current minimum received | Gate | Evidence |
+| --- | --- | ---: | ---: | --- |
+| Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.518886 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-06-25 |
+| Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.634107 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-22 |
+| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 2.829761 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-22 |
 
 A 2026-06-21 current-head Debian-to-Debian full-kmod recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
@@ -159,22 +160,24 @@ A 2026-06-21 current-head Debian-to-Debian TC-direct recheck on
 kernel UDP flows, no TrustIX kernel modules were loaded, and the production
 verifier reported no kernel log crash findings.
 
-A 2026-06-21 current-head Debian-to-Debian route-GSO recheck on
-`6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
-`2366d99167457bf18de7e98a5d5e6e9af3fa55b2`, minimum received throughput was
-2.653735 Gbps against the 2.5 Gbps gate, route-GSO outer-GSO and xmit counters
-were nonzero on both peers, the covered helper error counters were zero, and
-the production verifier reported no kernel log crash findings.
+A 2026-06-22 Debian-to-Debian route-GSO long recheck on
+`6.12.94+deb13-cloud-amd64` passed the 3600s-per-direction production gate.
+Minimum received throughput was 2.829761 Gbps against the 2.5 Gbps gate,
+route-GSO outer-GSO and xmit counters were nonzero on both peers, covered
+helper error counters were zero, session dial errors stayed within the current
+budget, and the production verifier reported stable boot IDs, clean pstore
+coverage, and no kernel log crash findings.
 
-A 2026-06-21 current-head Debian-to-Debian secure-kUDP recheck on
-`6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
-`ad28f0cc80205f119e32a6bc3fe4958ec144b7c1`, minimum received throughput was
-1.613567 Gbps against the 1.5 Gbps gate, TC secure direct and route-GSO kfunc
-stats were active on both peers, crypto module seal/open counters were
-nonzero, helper route-GSO xmit counters were nonzero, and the production
-verifier reported no kernel log crash findings. The run did observe two
-bounded direct-kfunc/decrypt errors on one peer and bounded replay/drop noise,
-both within the secure-kUDP production gate budget.
+A 2026-06-22 Debian-to-Debian secure-kUDP long recheck on
+`6.12.94+deb13-cloud-amd64` passed the 3600s-per-direction production gate.
+Minimum received throughput was 1.634107 Gbps against the 1.5 Gbps gate, TC
+secure direct and route-GSO kfunc stats were active on both peers, crypto
+module seal/open counters were nonzero, helper route-GSO xmit counters were
+nonzero, and the production verifier reported stable boot IDs, clean pstore
+coverage, and no kernel log crash findings. The current gate separately
+requires zero `replay_old` drops and bounds `replay_seen/open` plus total
+secure-direct drop ratios at `<= 0.00002`, replacing the older absolute replay
+budget.
 
 A 2026-06-23 to 2026-06-24 current-head Debian-to-Debian userspace recheck on
 `6.12.69+deb13-amd64` passed every current 3600s cross-host userspace
