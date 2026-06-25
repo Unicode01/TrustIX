@@ -126,6 +126,8 @@ def parse_args() -> argparse.Namespace:
 
 def read_tsv(path: Path, columns: list[str], min_fields: int) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
+    if not path.exists():
+        raise SystemExit(f"{path}: file not found")
     with path.open("r", encoding="utf-8", newline="") as handle:
         for lineno, raw in enumerate(handle, 1):
             line = raw.strip()
@@ -203,14 +205,28 @@ def compact_current_requirement(row: dict[str, str]) -> dict[str, str]:
     }
 
 
-def current_requirements_path(args: argparse.Namespace) -> Path:
+def script_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def resolve_input_path(value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute() or path.exists():
+        return path
+    script_relative = script_dir() / path
+    if script_relative.exists():
+        return script_relative
+    return path
+
+
+def current_requirements_path(args: argparse.Namespace, defaults_path: Path) -> Path:
     if args.current_requirements:
-        return Path(args.current_requirements)
-    return Path(args.defaults).with_name("production-transport-current-evidence.tsv")
+        return resolve_input_path(args.current_requirements)
+    return defaults_path.with_name("production-transport-current-evidence.tsv")
 
 
-def read_current_requirements(args: argparse.Namespace) -> dict[str, dict[str, str]]:
-    rows = read_tsv(current_requirements_path(args), CURRENT_REQUIREMENT_COLUMNS, 11)
+def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> dict[str, dict[str, str]]:
+    rows = read_tsv(current_requirements_path(args, defaults_path), CURRENT_REQUIREMENT_COLUMNS, 11)
     requirements: dict[str, dict[str, str]] = {}
     for row in rows:
         key = row_key(row)
@@ -221,9 +237,11 @@ def read_current_requirements(args: argparse.Namespace) -> dict[str, dict[str, s
 
 
 def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
-    defaults = read_tsv(Path(args.defaults), DEFAULT_COLUMNS, 9)
-    evidence_rows = read_tsv(Path(args.evidence), EVIDENCE_COLUMNS, 17)
-    current_requirements = read_current_requirements(args) if args.require_current else {}
+    defaults_path = resolve_input_path(args.defaults)
+    evidence_path = resolve_input_path(args.evidence)
+    defaults = read_tsv(defaults_path, DEFAULT_COLUMNS, 9)
+    evidence_rows = read_tsv(evidence_path, EVIDENCE_COLUMNS, 17)
+    current_requirements = read_current_requirements(args, defaults_path) if args.require_current else {}
     audited_defaults = [
         default
         for default in defaults

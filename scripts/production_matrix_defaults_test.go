@@ -2214,6 +2214,36 @@ func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 	}
 }
 
+func TestProductionTransportAuditScriptDefaultsResolveFromRepoRoot(t *testing.T) {
+	python := requirePython3(t)
+	cmd := exec.Command(python, "scripts/production-transport-audit.py",
+		"--scope", "cross_host",
+		"--require-manifest",
+		"--require-current",
+		"--fail-on-missing",
+		"--json",
+	)
+	cmd.Dir = ".."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production transport audit should resolve default TSVs from repo root: %v\n%s", err, output)
+	}
+	var rows []struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(output, &rows); err != nil {
+		t.Fatalf("decode audit JSON: %v\n%s", err, output)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("audit from repo root returned no rows:\n%s", output)
+	}
+	for _, row := range rows {
+		if row.Status != "pass" {
+			t.Fatalf("audit from repo root emitted non-pass row: %+v\n%s", row, output)
+		}
+	}
+}
+
 func TestProductionTransportAuditScriptPrefersLongerSoakBeforeSourceOrder(t *testing.T) {
 	python := requirePython3(t)
 	workdir := t.TempDir()
