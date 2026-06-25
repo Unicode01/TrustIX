@@ -54,6 +54,8 @@ CURRENT_REQUIREMENT_COLUMNS = [
     "os_matrix",
     "kernel_matrix",
     "gate_manifest_schema",
+    "production_gate_sha256",
+    "verifier_sha256",
     "artifact",
     "note",
 ]
@@ -189,6 +191,8 @@ def compact_evidence(row: dict[str, str], reasons: list[str] | None = None) -> d
         "min_gbps": row["min_gbps"],
         "min_seconds": row["min_seconds"],
         "gate_manifest_schema": row["gate_manifest_schema"],
+        "production_gate_sha256": row["production_gate_sha256"],
+        "verifier_sha256": row["verifier_sha256"],
         "artifact": row["artifact"],
     }
     if reasons:
@@ -201,6 +205,8 @@ def compact_current_requirement(row: dict[str, str]) -> dict[str, str]:
         "os_matrix": row["os_matrix"],
         "kernel_matrix": row["kernel_matrix"],
         "gate_manifest_schema": row["gate_manifest_schema"],
+        "production_gate_sha256": row["production_gate_sha256"],
+        "verifier_sha256": row["verifier_sha256"],
         "artifact": row["artifact"],
     }
 
@@ -226,7 +232,7 @@ def current_requirements_path(args: argparse.Namespace, defaults_path: Path) -> 
 
 
 def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> dict[str, dict[str, str]]:
-    rows = read_tsv(current_requirements_path(args, defaults_path), CURRENT_REQUIREMENT_COLUMNS, 11)
+    rows = read_tsv(current_requirements_path(args, defaults_path), CURRENT_REQUIREMENT_COLUMNS, 13)
     requirements: dict[str, dict[str, str]] = {}
     for row in rows:
         key = row_key(row)
@@ -278,7 +284,14 @@ def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
                     reasons.append("missing current evidence requirement")
                     ok = False
                 else:
-                    for field in ("os_matrix", "kernel_matrix", "gate_manifest_schema", "artifact"):
+                    for field in (
+                        "os_matrix",
+                        "kernel_matrix",
+                        "gate_manifest_schema",
+                        "production_gate_sha256",
+                        "verifier_sha256",
+                        "artifact",
+                    ):
                         if candidate[field] != current_requirement[field]:
                             reasons.append(f"{field}={candidate[field]!r}!={current_requirement[field]!r}")
                     ok = not reasons

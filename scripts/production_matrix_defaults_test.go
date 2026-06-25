@@ -297,10 +297,12 @@ func validateProductionEvidenceManifestIdentity(t *testing.T, evidence productio
 }
 
 type currentProductionEvidenceRequirement struct {
-	OSMatrix           string
-	KernelMatrix       string
-	Artifact           string
-	GateManifestSchema string
+	OSMatrix             string
+	KernelMatrix         string
+	Artifact             string
+	GateManifestSchema   string
+	ProductionGateSHA256 string
+	VerifierSHA256       string
 }
 
 func loadCurrentProductionEvidenceRequirements(t *testing.T) map[string]currentProductionEvidenceRequirement {
@@ -316,7 +318,7 @@ func loadCurrentProductionEvidenceRequirements(t *testing.T) map[string]currentP
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) < 11 {
+		if len(fields) < 13 {
 			t.Fatalf("invalid current production evidence requirement row %q", line)
 		}
 		row := productionTransportDefault{
@@ -333,10 +335,12 @@ func loadCurrentProductionEvidenceRequirements(t *testing.T) map[string]currentP
 			t.Fatalf("duplicate current production evidence requirement for %s", key)
 		}
 		requirements[key] = currentProductionEvidenceRequirement{
-			OSMatrix:           fields[7],
-			KernelMatrix:       fields[8],
-			GateManifestSchema: fields[9],
-			Artifact:           fields[10],
+			OSMatrix:             fields[7],
+			KernelMatrix:         fields[8],
+			GateManifestSchema:   fields[9],
+			ProductionGateSHA256: fields[10],
+			VerifierSHA256:       fields[11],
+			Artifact:             fields[12],
 		}
 	}
 	return requirements
@@ -2112,6 +2116,9 @@ func TestCurrentProductionEvidenceRequirementsCoverCrossHostDefaults(t *testing.
 		if requirement.GateManifestSchema != productionGateManifestSchema {
 			t.Fatalf("current production evidence requirement must be manifest-backed: %s %+v", key, requirement)
 		}
+		if !isSHA256Hex(requirement.ProductionGateSHA256) || !isSHA256Hex(requirement.VerifierSHA256) {
+			t.Fatalf("current production evidence requirement must pin gate/verifier SHA256 values: %s %+v", key, requirement)
+		}
 		if !strings.HasPrefix(requirement.Artifact, "docs/") || !strings.Contains(requirement.Artifact, "#") {
 			t.Fatalf("current production evidence requirement should point to a docs anchor: %s %+v", key, requirement)
 		}
@@ -2145,16 +2152,20 @@ func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 			MinSeconds string `json:"min_seconds"`
 		} `json:"default"`
 		Evidence struct {
-			MinGbps            string `json:"min_gbps"`
-			MinSeconds         string `json:"min_seconds"`
-			GateManifestSchema string `json:"gate_manifest_schema"`
-			Artifact           string `json:"artifact"`
+			MinGbps              string `json:"min_gbps"`
+			MinSeconds           string `json:"min_seconds"`
+			GateManifestSchema   string `json:"gate_manifest_schema"`
+			ProductionGateSHA256 string `json:"production_gate_sha256"`
+			VerifierSHA256       string `json:"verifier_sha256"`
+			Artifact             string `json:"artifact"`
 		} `json:"evidence"`
 		CurrentRequirement struct {
-			OSMatrix           string `json:"os_matrix"`
-			KernelMatrix       string `json:"kernel_matrix"`
-			GateManifestSchema string `json:"gate_manifest_schema"`
-			Artifact           string `json:"artifact"`
+			OSMatrix             string `json:"os_matrix"`
+			KernelMatrix         string `json:"kernel_matrix"`
+			GateManifestSchema   string `json:"gate_manifest_schema"`
+			ProductionGateSHA256 string `json:"production_gate_sha256"`
+			VerifierSHA256       string `json:"verifier_sha256"`
+			Artifact             string `json:"artifact"`
 		} `json:"current_requirement"`
 	}
 	if err := json.Unmarshal(output, &rows); err != nil {
@@ -2207,6 +2218,13 @@ func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 		}
 		if row.Evidence.Artifact != row.CurrentRequirement.Artifact {
 			t.Fatalf("audit accepted stale artifact for %s: evidence=%+v current=%+v", row.Key, row.Evidence, row.CurrentRequirement)
+		}
+		if row.Evidence.ProductionGateSHA256 != row.CurrentRequirement.ProductionGateSHA256 ||
+			row.Evidence.VerifierSHA256 != row.CurrentRequirement.VerifierSHA256 {
+			t.Fatalf("audit accepted stale gate/verifier hashes for %s: evidence=%+v current=%+v", row.Key, row.Evidence, row.CurrentRequirement)
+		}
+		if row.CurrentRequirement.ProductionGateSHA256 == "" || row.CurrentRequirement.VerifierSHA256 == "" {
+			t.Fatalf("audit did not report pinned current gate/verifier hashes for %s: %+v", row.Key, row.CurrentRequirement)
 		}
 		if !strings.HasPrefix(row.Evidence.Artifact, "docs/") || !strings.Contains(row.Evidence.Artifact, "#") {
 			t.Fatalf("audit evidence artifact should be a docs anchor for %s: %+v", row.Key, row.Evidence)
@@ -2473,8 +2491,8 @@ func TestProductionTransportAuditScriptRequireCurrentRejectsStaleEvidence(t *tes
 		t.Fatalf("write evidence: %v", err)
 	}
 	currentPayload := strings.Join([]string{
-		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tartifact\tnote",
-		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\tdocs/trustix-performance-log.md#current-required\tcurrent requirement",
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote",
+		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("c", 64) + "\t" + strings.Repeat("d", 64) + "\tdocs/trustix-performance-log.md#current-required\tcurrent requirement",
 		"",
 	}, "\n")
 	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
@@ -2519,8 +2537,8 @@ func TestProductionTransportAuditScriptRequireCurrentRejectsRequirementDrift(t *
 		t.Fatalf("write evidence: %v", err)
 	}
 	currentPayload := strings.Join([]string{
-		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tartifact\tnote",
-		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\tdebian13-debian13\t6.12.69_to_6.12.69\t" + productionGateManifestSchema + "\tdocs/trustix-performance-log.md#unexpected\tunexpected current requirement",
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote",
+		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\tdebian13-debian13\t6.12.69_to_6.12.69\t" + productionGateManifestSchema + "\t" + strings.Repeat("c", 64) + "\t" + strings.Repeat("d", 64) + "\tdocs/trustix-performance-log.md#unexpected\tunexpected current requirement",
 		"",
 	}, "\n")
 	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
