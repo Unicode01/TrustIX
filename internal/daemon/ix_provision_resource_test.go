@@ -116,6 +116,10 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 		!strings.Contains(clientScript, "--token") {
 		t.Fatalf("bootstrap client does not contain source fetch/token runner logic:\n%s", clientScript)
 	}
+	if !strings.Contains(clientScript, "TRUSTIX_BOOTSTRAP_KEEP_WORKDIR") ||
+		!strings.Contains(clientScript, `*) rm -rf "$stage" ;;`) {
+		t.Fatalf("bootstrap client does not clean temporary source stage by default:\n%s", clientScript)
+	}
 	if strings.Contains(clientScript, response.Token) || strings.Contains(clientScript, "PRIVATE KEY") {
 		t.Fatalf("bootstrap client should not contain token-specific secret material:\n%s", clientScript)
 	}
@@ -150,6 +154,14 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	}
 	if !strings.Contains(script, "txqueuelen 1000 up") {
 		t.Fatalf("bootstrap script does not set a nonzero managed LAN tx queue length:\n%s", script)
+	}
+	if !strings.Contains(script, "work_dir_managed=1") ||
+		!strings.Contains(script, "cleanup_provision_workdir()") ||
+		!strings.Contains(script, "TRUSTIX_PROVISION_KEEP_WORKDIR") {
+		t.Fatalf("bootstrap script does not clean generated temporary cert/config workdir by default:\n%s", script)
+	}
+	if strings.Contains(script, "mktemp -d /tmp/trustix-provision.") {
+		t.Fatalf("bootstrap script uses BusyBox-incompatible mktemp template:\n%s", script)
 	}
 	if _, err := pki.ParseCertificatePEM([]byte(extractFirstPEMBlock(t, script, "CERTIFICATE"))); err != nil {
 		t.Fatalf("script does not contain a parseable certificate: %v", err)

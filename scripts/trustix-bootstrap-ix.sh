@@ -49,10 +49,17 @@ bootstrap_repo_root() {
 trustix_bootstrap_temp_repo=0
 
 trustix_bootstrap_cleanup_temp_repo() {
-  local status="$1"
-  if [[ "$status" != "0" && "${trustix_bootstrap_temp_repo:-0}" == "1" && "${repo_root:-}" == /tmp/trustix-bootstrap-src.* ]]; then
-    rm -rf "$repo_root" || true
+  if [[ "${trustix_bootstrap_temp_repo:-0}" == "1" && "${repo_root:-}" == /tmp/trustix-bootstrap-src.* ]]; then
+    case "${TRUSTIX_BOOTSTRAP_KEEP_WORKDIR:-0}" in
+      1|true|yes|on)
+        trustix_bootstrap_log "workdir preserved: ${repo_root}"
+        ;;
+      *)
+        rm -rf "$repo_root" || true
+        ;;
+    esac
   fi
+  return 0
 }
 
 trustix_bootstrap_dir_has_entries() {

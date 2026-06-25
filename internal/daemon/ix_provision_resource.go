@@ -1412,9 +1412,29 @@ func ixProvisionBootstrapScript(input ixProvisionScriptInput) (string, error) {
 	b.WriteString("repo_root=\"${TRUSTIX_BOOTSTRAP_REPO_ROOT:-${1:-}}\"\n")
 	b.WriteString("[[ -n \"$repo_root\" && -f \"${repo_root}/go.mod\" ]] || die \"TrustIX repo root is required\"\n")
 	b.WriteString("work_dir=\"${TRUSTIX_PROVISION_WORKDIR:-}\"\n")
-	b.WriteString("if [[ -z \"$work_dir\" ]]; then work_dir=\"$(mktemp -d /tmp/trustix-provision.")
+	b.WriteString("work_dir_managed=0\n")
+	b.WriteString("if [[ -z \"$work_dir\" ]]; then\n")
+	b.WriteString("  work_dir=\"$(mktemp -d \"${TMPDIR:-/tmp}/trustix-provision.")
 	b.WriteString(shellScriptLiteral(ixBase))
-	b.WriteString(".XXXXXX)\"; fi\n")
+	b.WriteString(".XXXXXX\" 2>/dev/null || mktemp -d -t \"trustix-provision.")
+	b.WriteString(shellScriptLiteral(ixBase))
+	b.WriteString(".XXXXXX\" 2>/dev/null || true)\"\n")
+	b.WriteString("  if [[ -z \"$work_dir\" ]]; then work_dir=\"${TMPDIR:-/tmp}/trustix-provision.")
+	b.WriteString(shellScriptLiteral(ixBase))
+	b.WriteString(".$$\"; rm -rf \"$work_dir\"; mkdir -p \"$work_dir\"; fi\n")
+	b.WriteString("  work_dir_managed=1\n")
+	b.WriteString("fi\n")
+	b.WriteString("cleanup_provision_workdir() {\n")
+	b.WriteString("  local rc=$?\n")
+	b.WriteString("  if [[ \"$work_dir_managed\" == \"1\" ]]; then\n")
+	b.WriteString("    case \"${TRUSTIX_PROVISION_KEEP_WORKDIR:-0}\" in\n")
+	b.WriteString("      1|true|yes|on) log \"workdir preserved: $work_dir\" ;;\n")
+	b.WriteString("      *) rm -rf \"$work_dir\" ;;\n")
+	b.WriteString("    esac\n")
+	b.WriteString("  fi\n")
+	b.WriteString("  return \"$rc\"\n")
+	b.WriteString("}\n")
+	b.WriteString("trap cleanup_provision_workdir EXIT\n")
 	b.WriteString("cert_dir=\"${work_dir}/certs\"\n")
 	b.WriteString("config_dir=\"${work_dir}/config\"\n")
 	b.WriteString("mkdir -p \"$cert_dir\" \"$config_dir\"\n")
@@ -1698,9 +1718,11 @@ stage="$(mktemp_dir)" || die "create temporary source directory failed"
 cleanup() {
   rc=$?
   rm -f "$archive"
-  if [ "$rc" -ne 0 ]; then
-    rm -rf "$stage"
-  fi
+  case "${TRUSTIX_BOOTSTRAP_KEEP_WORKDIR:-0}" in
+    1|true|yes|on) log "workdir preserved: $stage" ;;
+    *) rm -rf "$stage" ;;
+  esac
+  exit "$rc"
 }
 trap cleanup EXIT
 
