@@ -20,9 +20,6 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 		seenGate[row.GateFamily] = true
 		t.Run(strings.ReplaceAll(productionDefaultRuntimeKey(row), ":", "_"), func(t *testing.T) {
 			desired := desiredForProductionDefaultRuntimeTest(row)
-			if row.GateFamily == "route_gso" {
-				t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO", "1")
-			}
 			spec := dataplaneAttachSpec(t.TempDir(), desired)
 			switch row.GateFamily {
 			case "userspace", "userspace_tc":
@@ -64,7 +61,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 					!spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker ||
 					!spec.ExperimentalTCPPlainSkipSequence || !spec.ExperimentalTCPPlainACKOnly ||
 					!spec.KernelDatapathSuppressLegacyRXWorker {
-					t.Fatalf("%s should select explicit plaintext experimental_tcp route-GSO path: spec=%#v", productionDefaultRuntimeKey(row), spec)
+					t.Fatalf("%s should select plaintext experimental_tcp route-GSO path: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
 				if spec.KernelDatapathFullPlaintext || spec.KernelUDPSecureRouteGSO {
 					t.Fatalf("%s should not mix full-kmod plaintext ownership or secure-kUDP route-GSO: spec=%#v", productionDefaultRuntimeKey(row), spec)

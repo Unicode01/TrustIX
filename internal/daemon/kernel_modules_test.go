@@ -543,7 +543,6 @@ func TestValidateOpenWrtKernelModuleSourcesCanAllowEmbeddedOverride(t *testing.T
 }
 
 func TestEffectiveKernelModulesRequiresHelpersForExperimentalTCPRouteGSO(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO", "1")
 	desired := config.Desired{
 		KernelModules: config.KernelModulesConfig{
 			CapabilityProfile: config.KernelCapabilityProfileDisabled,
@@ -557,7 +556,7 @@ func TestEffectiveKernelModulesRequiresHelpersForExperimentalTCPRouteGSO(t *test
 		},
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:    config.TransportProfilePerformance,
-			Datapath:   config.TransportDatapathTCXDP,
+			Datapath:   config.TransportDatapathKernelModule,
 			Encryption: "plaintext",
 			Candidates: []core.EndpointID{"exp-a"},
 		},
@@ -913,7 +912,7 @@ func TestTrustIXDatapathModuleParametersForDesiredPerformanceExperimentalTCPKeep
 	}
 }
 
-func TestPerformanceKernelModuleExperimentalTCPKeepsRouteGSOOffByDefault(t *testing.T) {
+func TestPerformanceKernelModuleExperimentalTCPSelectsRouteGSOByDefault(t *testing.T) {
 	desired := config.Desired{
 		KernelModules: config.KernelModulesConfig{
 			CapabilityProfile: config.KernelCapabilityProfilePerformance,
@@ -931,14 +930,14 @@ func TestPerformanceKernelModuleExperimentalTCPKeepsRouteGSOOffByDefault(t *test
 		}},
 	}
 
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
-		t.Fatalf("performance experimental_tcp kernel_module should not auto-migrate to route-GSO")
+	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatalf("performance experimental_tcp kernel_module should select production route-GSO by default")
 	}
 	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
-		t.Fatalf("performance experimental_tcp kernel_module should not claim full-kmod plaintext ownership without full_plaintext policy")
+		t.Fatalf("performance experimental_tcp route-GSO should not claim full-kmod plaintext ownership")
 	}
-	if kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired) {
-		t.Fatalf("performance experimental_tcp kernel_module should not suppress full-kmod fallback without route-GSO opt-in")
+	if !kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired) {
+		t.Fatalf("performance experimental_tcp route-GSO should suppress legacy full-kmod plaintext parameters")
 	}
 }
 
@@ -969,6 +968,33 @@ func TestPerformanceKernelModuleExperimentalTCPRouteGSOExplicitOptIn(t *testing.
 	}
 	if !kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired) {
 		t.Fatalf("explicit route-GSO should suppress legacy full-kmod plaintext parameters")
+	}
+}
+
+func TestPerformanceKernelModuleExperimentalTCPRouteGSOExplicitDisable(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO", "0")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfilePerformance,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		t.Fatalf("explicit disable should keep performance experimental_tcp off route-GSO")
+	}
+	if kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired) {
+		t.Fatalf("explicit route-GSO disable should not suppress legacy full-kmod plaintext parameters")
 	}
 }
 

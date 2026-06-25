@@ -339,7 +339,16 @@ func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) b
 	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext {
 		return false
 	}
-	return experimentalTCPRouteGSOExplicitlyEnabledByEnv()
+	if experimentalTCPRouteGSOExplicitlyEnabledByEnv() {
+		return true
+	}
+	if profile.Datapath != config.TransportDatapathKernelModule {
+		return false
+	}
+	if kernelUDPFullPlaintextDatapathRequestedForDesired(desired) {
+		return false
+	}
+	return profile.Profile == config.TransportProfilePerformance
 }
 
 func experimentalTCPRouteGSOAsyncForDesired(desired config.Desired) bool {

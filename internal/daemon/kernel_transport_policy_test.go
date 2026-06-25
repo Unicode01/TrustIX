@@ -255,7 +255,7 @@ func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoExperimentalT
 	}
 }
 
-func TestEffectiveKernelTransportModeKeepsAutoForPlaintextPerformanceExperimentalTCP(t *testing.T) {
+func TestEffectiveKernelTransportModeKeepsAutoForTCXDPPlaintextPerformanceExperimentalTCP(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:    config.TransportProfilePerformance,
@@ -271,7 +271,7 @@ func TestEffectiveKernelTransportModeKeepsAutoForPlaintextPerformanceExperimenta
 	}
 
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
-		t.Fatalf("kernel transport mode = %q, want auto for plaintext experimental_tcp without route-GSO opt-in", got)
+		t.Fatalf("kernel transport mode = %q, want auto for TC-XDP plaintext experimental_tcp without route-GSO opt-in", got)
 	}
 	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
 		t.Fatalf("plaintext performance experimental_tcp unexpectedly disabled fast path: %q", reason)
