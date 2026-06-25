@@ -2262,6 +2262,26 @@ func TestProductionTransportAuditScriptDefaultsResolveFromRepoRoot(t *testing.T)
 	}
 }
 
+func TestCIWorkflowRunsCurrentProductionTransportAudit(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read ci workflow: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"Production Transport Evidence Audit",
+		"python3 scripts/production-transport-audit.py",
+		"--scope cross_host",
+		"--require-manifest",
+		"--require-current",
+		"--fail-on-missing",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("ci workflow production audit step missing %q", want)
+		}
+	}
+}
+
 func TestProductionTransportAuditScriptPrefersLongerSoakBeforeSourceOrder(t *testing.T) {
 	python := requirePython3(t)
 	workdir := t.TempDir()
