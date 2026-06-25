@@ -338,8 +338,8 @@ func currentProductionEvidenceRequirementForDefault(row productionTransportDefau
 	case "full_kmod":
 		return currentProductionEvidenceRequirement{
 			OSMatrix:           "debian13-debian13",
-			KernelMatrix:       "6.12.94+deb13-amd64_to_6.12.94+deb13-amd64",
-			Artifact:           "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates",
+			KernelMatrix:       "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64",
+			Artifact:           "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-current-head-dd-full-kmod-3600s-production-gate",
 			GateManifestSchema: productionGateManifestSchema,
 		}, true
 	case "owdeb_full_kmod":
@@ -2231,7 +2231,7 @@ func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":             "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
-		"full_kmod":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-current-head-full-kmod-3600s-production-gates",
+		"full_kmod":             "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-current-head-dd-full-kmod-3600s-production-gate",
 		"secure_kudp":           "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-tc-direct-secure-kudp-3600s-ratio-gates",
 		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-secure-exp-tcp-kernel-fpu-fallback-3600s-production-gate",
 		"route_gso":             "docs/trustix-performance-log.md#2026-06-22-zaozhuang-pve-route-gso-3600s-production-gate",
