@@ -1051,6 +1051,50 @@ def require_binary_identity_for_pass(row: dict[str, Any], result: str) -> None:
             f"gate summary case {row.get('case')!r} has mismatched binary sha256s: "
             f"{sorted(hashes)}"
         )
+    build_identities = list_field(row, "build_identities")
+    if len(build_identities) < 2:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has {len(build_identities)} "
+            "build_identities, want >= 2"
+        )
+    build_keys: set[tuple[str, str, str, str, str, str]] = set()
+    for item in build_identities:
+        if not isinstance(item, dict):
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has invalid build identity: "
+                f"{item!r}"
+            )
+        missing = [
+            field
+            for field in ("version", "commit", "built_at", "go_version", "goos", "goarch")
+            if str(item.get(field) or "") in {"", "unknown", "dev"}
+        ]
+        if missing:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has weak build identity "
+                f"{str(item.get('source') or '')}: missing/placeholder "
+                f"{','.join(missing)}"
+            )
+        if item.get("strong") is not True:
+            raise SystemExit(
+                f"gate summary case {row.get('case')!r} has non-strong build identity "
+                f"{str(item.get('source') or '')}"
+            )
+        build_keys.add(
+            (
+                str(item.get("version") or ""),
+                str(item.get("commit") or ""),
+                str(item.get("built_at") or ""),
+                str(item.get("go_version") or ""),
+                str(item.get("goos") or ""),
+                str(item.get("goarch") or ""),
+            )
+        )
+    if len(build_keys) != 1:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} has mismatched build identities: "
+            f"{sorted(build_keys)}"
+        )
 
 
 def require_runtime_artifacts_for_pass(row: dict[str, Any], result: str) -> None:
