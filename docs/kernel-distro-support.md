@@ -47,8 +47,8 @@ now install for kernel module builds when dependency installation is enabled.
 ## Current validation snapshot
 
 The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
-2026-06-21, 2026-06-22, 2026-06-23, 2026-06-24, and 2026-06-25 against current
-source and selected production transport defaults. They covered Debian 13
+2026-06-21, 2026-06-22, 2026-06-23, 2026-06-24, 2026-06-25, and 2026-06-26
+against current source and selected production transport defaults. They covered Debian 13
 `6.12.90+deb13.1-amd64`, Debian 13 `6.12.90+deb13.1-cloud-amd64`, Debian 13
 `6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
 OpenWrt 24.10.2 x86_64 `6.6.93`, OpenWrt 24.10.7 x86_64 `6.6.141`,
@@ -113,10 +113,11 @@ current production evidence boundary:
 
 | Family | Policy | Current minimum received | Gate | Evidence |
 | --- | --- | ---: | ---: | --- |
-| Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.518886 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-06-25 |
-| Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.634107 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-22 |
-| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 2.829761 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-22 |
-| Secure experimental TCP kernel crypto | `experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 1.562075 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-06-25 |
+| Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.508709 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-06-25 |
+| Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.765459 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-26 |
+| Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.709080 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-26 |
+| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 2.975477 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-26 |
+| Secure experimental TCP kernel crypto | `experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 1.662160 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-26 |
 
 A 2026-06-21 current-head Debian-to-Debian full-kmod recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
@@ -156,37 +157,38 @@ sessions active. Later commits `5ee74be`, `0fb27b8`, `559145e`, and
 `ce101ec` only changed soak log collection, tests, documentation, and
 evidence; no daemon or kernel module runtime code changed.
 
-A 2026-06-21 current-head Debian-to-Debian TC-direct recheck on
-`6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
-`a3805571d930`, minimum received throughput was 3.915829 Gbps against the
-3 Gbps gate, both peers reported `kernel_udp.provider=tc_direct`,
+A 2026-06-26 current-head Debian-to-Debian TC-direct recheck on
+`6.12.94+deb13-cloud-amd64` passed the 3600s-per-direction production gate. It
+used commit `fa207ea`; minimum received throughput was 3.765459 Gbps against
+the 3 Gbps gate, both peers reported `kernel_udp.provider=tc_direct`,
 `kernel_udp.fast_path=true`, `kernel_udp.direct_only=true`, and eight active
-kernel UDP flows, no TrustIX kernel modules were loaded, and the production
-verifier reported no kernel log crash findings.
+kernel UDP flows, no TrustIX kernel modules were loaded, boot IDs stayed
+stable, pstore and kernel log scans were clean, and there were zero session
+dial or heartbeat failures.
 
-A 2026-06-22 Debian-to-Debian route-GSO long recheck on
+A 2026-06-26 current-head Debian-to-Debian route-GSO long recheck on
 `6.12.94+deb13-cloud-amd64` passed the 3600s-per-direction production gate.
-Minimum received throughput was 2.829761 Gbps against the 2.5 Gbps gate,
-route-GSO outer-GSO and xmit counters were nonzero on both peers, covered
-helper error counters were zero, session dial errors stayed within the current
-budget, and the production verifier reported stable boot IDs, clean pstore
-coverage, and no kernel log crash findings.
+It used commit `fa207ea`; minimum received throughput was 2.975477 Gbps
+against the 2.5 Gbps gate, route-GSO outer-GSO and xmit counters were nonzero
+on both peers, covered helper error counters were zero, session dial errors
+stayed within the current budget, and the production verifier reported stable
+boot IDs, clean pstore coverage, and no kernel log crash findings.
 
-A 2026-06-22 Debian-to-Debian secure-kUDP long recheck on
+A 2026-06-26 current-head Debian-to-Debian secure-kUDP long recheck on
 `6.12.94+deb13-cloud-amd64` passed the 3600s-per-direction production gate.
-Minimum received throughput was 1.634107 Gbps against the 1.5 Gbps gate, TC
-secure direct and route-GSO kfunc stats were active on both peers, crypto
-module seal/open counters were nonzero, helper route-GSO xmit counters were
-nonzero, and the production verifier reported stable boot IDs, clean pstore
-coverage, and no kernel log crash findings. The current gate separately
-requires zero `replay_old` drops and bounds `replay_seen/open` plus total
-secure-direct drop ratios at `<= 0.00002`, replacing the older absolute replay
-budget.
+It used commit `fa207ea`; minimum received throughput was 1.709080 Gbps
+against the 1.5 Gbps gate, TC secure direct and route-GSO kfunc stats were
+active on both peers, crypto module seal/open counters were nonzero, helper
+route-GSO xmit counters were nonzero, boot IDs stayed stable, and pstore plus
+kernel log scans were clean. The current gate separately requires zero
+`replay_old` drops and bounds `replay_seen/open` plus total secure-direct drop
+ratios at `<= 0.00002`; this run had zero `replay_old` drops and replay/drop
+ratios of `0.000008339` on A and `0.000009062` on B.
 
-A 2026-06-25 current-main Debian-to-Debian secure experimental TCP kernel
-crypto recheck on `6.12.90+deb13.1-cloud-amd64` passed the
-3600s-per-direction production gate. It used commit `b01a10dff63a`; minimum
-received throughput was 1.562075 Gbps against the 1.5 Gbps gate,
+A 2026-06-26 current-head Debian-to-Debian secure experimental TCP kernel
+crypto recheck on `6.12.94+deb13-cloud-amd64` passed the
+3600s-per-direction production gate. It used commit `fa207ea`; minimum
+received throughput was 1.662160 Gbps against the 1.5 Gbps gate,
 `experimental_tcp` used `datapath=kernel_module` and `crypto_placement=kernel`
 with direct kfunc crypto plus route TCP GSO async, both peers loaded
 `trustix_crypto` and `trustix_datapath_helpers`, direct-kfunc seal/open and

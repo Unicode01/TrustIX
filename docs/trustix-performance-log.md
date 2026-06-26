@@ -21,7 +21,7 @@ Current production-default evidence boundary:
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
 | Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `b01a10dff63a` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` | Secure-kUDP now gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
+| Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
@@ -29,6 +29,78 @@ Current production-default evidence boundary:
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-26
+
+<a id="2026-06-26-zaozhuang-pve-fa207ea-tc-direct-secure-kudp-3600s-production-gates"></a>
+
+### Zaozhuang PVE fa207ea TC-direct and secure-kUDP 3600s production gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM200 `trustix-kudp-a` and VM201 `trustix-kudp-b`. VM100 and all 1xx guests
+were not modified. Both guests ran Debian 13 on
+`6.12.94+deb13-cloud-amd64`.
+
+The release used TrustIX version `trustix-current-fa207ea`, commit
+`fa207ea`, Go `1.25.0`, build time `2026-06-25T18:13:14Z`, binary SHA256
+`e4d54d70a52cde32097229210b131cf1511da1e31fbed033877ca9d2157188c5`, and
+embedded assets SHA256
+`48478cb5bcca3d284964606be64b4bf0447ae6eb8a7cfd32d2408e3ff88051e7`.
+
+Embedded Debian module hashes built for the running guest kernel:
+
+| Module | SHA256 |
+| --- | --- |
+| `trustix_crypto.ko` | `1b35c7232710948a154b87c1e98f8e8e3352827204db37d8fa88cdea64379423` |
+| `trustix_datapath.ko` | `b04932c552733ad35e797d5cb0b487a178fe7a4a1c59638db151c4db930642f6` |
+| `trustix_datapath_helpers.ko` | `e15b8623a7ce317f2b0a980ae320d516412e0d2b0f64de49b15206ee6890a09b` |
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`8d7855253e3941dc3bf2956c0cf6eae0a0c4cdf2238c810ef83b2d1c55c841f1`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+| Gate family | Direction | Gate | Received | Sent | Evidence seconds | Retransmits |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `tc_direct` | A to B | 3 Gbps | 3.765459 Gbps | 3.765510 Gbps | 3600.003746 | 478907 |
+| `tc_direct` | B to A | 3 Gbps | 3.978645 Gbps | 3.978687 Gbps | 3600.003616 | 430623 |
+| `secure_kudp` | A to B | 1.5 Gbps | 1.709080 Gbps | 1.709133 Gbps | 3600.013156 | 78915 |
+| `secure_kudp` | B to A | 1.5 Gbps | 1.747314 Gbps | 1.747367 Gbps | 3600.013687 | 80487 |
+
+The TC-direct `forward + both` run lasted 7204 seconds, from
+`2026-06-25T23:05:45Z` to `2026-06-26T01:05:49Z`. The secure-kUDP
+`forward + both` run lasted 7204 seconds, from `2026-06-26T01:06:22Z` to
+`2026-06-26T03:06:26Z`. Both passed with `errors=[]` and `log_findings=[]`.
+VM200 boot ID `255c8f48-850c-42ff-9928-ec99270f6996` and VM201 boot ID
+`79890ca1-d112-42bd-a234-3cec1443f7ee` were unchanged before and after both
+runs. Kernel log and pstore artifacts were clean on both guests, and both
+`tix-lan` interfaces had `tx_queue_len=1000`.
+
+The TC-direct gate loaded no TrustIX kernel modules. Both peers reported
+`kernel_udp.provider=tc_direct`, `kernel_udp.fast_path=true`,
+`kernel_udp.direct_only=true`, eight active kernel UDP flows, and zero session
+dial or heartbeat failures.
+
+The secure-kUDP gate loaded `trustix_crypto` and `trustix_datapath_helpers`,
+not the full plaintext `trustix_datapath` module. Both peers reported
+`kernel_udp.effective_crypto=kernel`, TC secure direct TX/RX attachment,
+route-GSO kfunc use, and eight kernel crypto flow-map entries. `trustix_crypto`
+reported SIMD fastpath and IRQ-FPU fastpath enabled. Direct kfunc activity was
+nonzero: A reported 698526668 seal calls and 709667600 open calls; B reported
+709747585 seal calls and 698447853 open calls. Helper route-GSO async xmit
+packets were nonzero on both peers: 587308862 on A and 600451578 on B.
+
+All gated secure-kUDP error counters were zero: provider unavailable errors,
+flow/frame rejects, frame seal/open errors, direct kfunc errors, TX secure
+direct drops/encrypt/sequence errors, RX secure direct decrypt/header errors,
+and route-GSO async alloc/clone/flow/MTU/plan/prepare/segment/stream/outer-GSO,
+cross-item, and xmit errors. Replay-old drops were zero on both peers. Bounded
+replay-seen and total secure-direct drop ratios stayed below `0.00002`:
+
+| Node | `old` drops | `seen` drops | Open attempts | Seen/open ratio |
+| --- | ---: | ---: | ---: | ---: |
+| A | 0 | 5918 | 709667600 | 0.000008339 |
+| B | 0 | 6329 | 698447853 | 0.000009062 |
 
 <a id="2026-06-26-zaozhuang-pve-fa207ea-secure-exp-tcp-kernel-3600s-production-gate"></a>
 
