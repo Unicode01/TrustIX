@@ -23,10 +23,59 @@ Current production-default evidence boundary:
 | Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `b01a10dff63a` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
+| Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64`; current VXLAN plaintext userspace-TC supplemental gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `b0f3c3a3b47b` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `395b2ba05013` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-06-27
+
+<a id="2026-06-27-zaozhuang-pve-b0f3c3a-vxlan-plaintext-heartbeat10s-3600s-production-gate"></a>
+
+### Zaozhuang PVE b0f3c3a VXLAN plaintext heartbeat10s 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM202 `trustix-us-c` and VM203 `trustix-us-d`. VM100 and all 1xx guests
+were not modified. Both guests ran Debian 13 on
+`6.12.94+deb13-cloud-amd64`.
+
+The release used TrustIX version `trustix-current-b0f3c3a`, commit
+`b0f3c3a3b47b`, Go `1.25.0`, build time `2026-06-26T03:40:01Z`, binary
+SHA256 `f0198b2365126063a7b19cc0a1b3b1f2d50f9ff4141bec763be34800a3a44695`,
+and embedded assets SHA256
+`4e0476a6fb315983cfb57f4dcb2c221e18d720aee4c90fc8c6c783f6d434681e`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`8d7855253e3941dc3bf2956c0cf6eae0a0c4cdf2238c810ef83b2d1c55c841f1`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+The runner heartbeat defaults were changed from an aggressive short timeout to
+`interval=10s` and `timeout=10s`. The verifier still requires zero
+`data_path.counters.session_heartbeat_timeouts`. A previous clean 3s-timeout
+run failed only on VM202 with `session_heartbeat_timeouts=1`; the hb10 rerun
+passed with zero heartbeat timeouts on both peers.
+
+| Direction | Gate | Received | Sent | Evidence seconds | Retransmits |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A to B | 4 Gbps | 5.064892 Gbps | 5.064919 Gbps | 3600.001859 | 449073 |
+| B to A | 4 Gbps | 4.987615 Gbps | 4.987653 Gbps | 3600.009990 | 408132 |
+
+The overall evidence minimum was `4.987615 Gbps`. The `forward + both` run
+lasted 7204 seconds, from `2026-06-26T16:05:36Z` to
+`2026-06-26T18:05:40Z`, with `iperf_parallel=4`. Iperf interval coverage was
+3600/3601 intervals and satisfied the selected verifier threshold.
+
+The gate passed with `errors=[]` and `log_findings=[]`. VM202 boot ID
+`8d3225d4-9e60-404d-a61d-cb0c834e1809` and VM203 boot ID
+`b6442f65-5b15-4746-82ff-62d9b648cec2` were unchanged before and after the
+run. Kernel log and pstore artifacts were clean on both guests. No TrustIX
+kernel modules were loaded, both `tix-lan` interfaces had `tx_queue_len=1000`,
+and both peers reported `session_dial_errors=0`,
+`session_heartbeat_timeouts=0`, one matching local endpoint, one matching peer
+endpoint, and eight VXLAN plaintext userspace-TC sessions.
 
 ## 2026-06-26
 

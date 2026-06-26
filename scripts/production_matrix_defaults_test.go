@@ -2775,6 +2775,9 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"userspace":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
+	manifestRequiredArtifactByDefault := map[string]string{
+		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc": "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-b0f3c3a-vxlan-plaintext-heartbeat10s-3600s-production-gate",
+	}
 	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
 	for _, row := range loadProductionTransportDefaults(t) {
@@ -2786,12 +2789,16 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 			t.Fatalf("cross-host production default lacks current evidence requirement: %+v", row)
 		}
 		seen[row.GateFamily] = true
+		wantManifestArtifact := manifestRequiredArtifactByDefault[productionDefaultEvidenceKey(row)]
+		if wantManifestArtifact == "" {
+			wantManifestArtifact = manifestRequiredArtifacts[row.GateFamily]
+		}
 		switch {
-		case manifestRequiredArtifacts[row.GateFamily] != "":
+		case wantManifestArtifact != "":
 			if requirement.GateManifestSchema != productionGateManifestSchema {
 				t.Fatalf("production default must require manifest-backed evidence: row=%+v requirement=%+v", row, requirement)
 			}
-			if requirement.Artifact != manifestRequiredArtifacts[row.GateFamily] {
+			if requirement.Artifact != wantManifestArtifact {
 				t.Fatalf("production default points at stale evidence: row=%+v requirement=%+v", row, requirement)
 			}
 		case legacyPendingFamilies[row.GateFamily]:
@@ -5594,12 +5601,16 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"transport_snapshot_delay=\"${TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY:-5}\"",
 		"session_pool_size_explicit=\"${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE+x}\"",
 		"session_pool_size=\"${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE:-$iperf_parallel}\"",
+		"session_pool_heartbeat_interval=\"${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_INTERVAL:-10s}\"",
+		"session_pool_heartbeat_timeout=\"${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_TIMEOUT:-10s}\"",
 		"session_pool:",
 		"size: ${session_pool_size}",
 		"strategy: ${session_pool_strategy}",
 		"warmup: ${session_pool_warmup}",
 		"heartbeat:",
 		"mode: ${session_pool_heartbeat_mode}",
+		"interval: ${session_pool_heartbeat_interval}",
+		"timeout: ${session_pool_heartbeat_timeout}",
 		"TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS must be both, a2b, or b2a",
 		"TRUSTIX_CROSS_HOST_HEALTH_PORT must differ from TRUSTIX_CROSS_HOST_IPERF_PORT",
 		"TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1",
