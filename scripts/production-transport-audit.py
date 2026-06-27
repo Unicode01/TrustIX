@@ -212,6 +212,84 @@ def evidence_candidate(
     return not reasons, reasons
 
 
+def gate_family_class(gate_family: str) -> str:
+    if gate_family in {"full_kmod", "dd_full_kmod", "owdeb_full_kmod"}:
+        return "full_kmod"
+    if gate_family in {"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp"}:
+        return "secure_kudp"
+    if gate_family in {
+        "secure_exp_tcp_kernel",
+        "dd_secure_exp_tcp_kernel",
+        "owdeb_secure_exp_tcp_kernel",
+    }:
+        return "secure_exp_tcp_kernel"
+    if gate_family in {"route_gso", "dd_route_gso", "owdeb_route_gso"}:
+        return "route_gso"
+    return gate_family
+
+
+def gate_family_semantic_errors(row: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    gate_family = row["gate_family"]
+    gate_class = gate_family_class(gate_family)
+    transport = row["transport"]
+    encryption = row["encryption"]
+    datapath = row["datapath"]
+    placement = row["crypto_placement"]
+
+    def require(field: str, got: str, want: str) -> None:
+        if got != want:
+            errors.append(f"gate_family={gate_family} requires {field}={want}; got {field}={got}")
+
+    def require_transport(*allowed: str) -> None:
+        if transport not in allowed:
+            errors.append(f"gate_family={gate_family} does not allow transport={transport}")
+
+    if gate_class == "userspace":
+        require_transport("udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp")
+        require("datapath", datapath, "userspace")
+        require("crypto_placement", placement, "userspace")
+    elif gate_class == "userspace_tc":
+        require_transport("gre", "ipip", "vxlan")
+        require("datapath", datapath, "tc_xdp")
+        require("crypto_placement", placement, "userspace")
+    elif gate_class == "tc_direct":
+        require("transport", transport, "kernel_udp")
+        require("encryption", encryption, "plaintext")
+        require("datapath", datapath, "tc_xdp")
+        require("crypto_placement", placement, "userspace")
+    elif gate_class == "full_kmod":
+        require("transport", transport, "udp")
+        require("encryption", encryption, "plaintext")
+        require("datapath", datapath, "kernel_module")
+        require("crypto_placement", placement, "userspace")
+    elif gate_class == "secure_kudp":
+        require("transport", transport, "kernel_udp")
+        require("encryption", encryption, "secure")
+        require("datapath", datapath, "tc_xdp")
+        require("crypto_placement", placement, "kernel")
+    elif gate_class == "secure_exp_tcp_kernel":
+        require("transport", transport, "experimental_tcp")
+        require("encryption", encryption, "secure")
+        require("datapath", datapath, "kernel_module")
+        require("crypto_placement", placement, "kernel")
+    elif gate_class == "route_gso":
+        require("transport", transport, "experimental_tcp")
+        require("encryption", encryption, "plaintext")
+        require("datapath", datapath, "kernel_module")
+        require("crypto_placement", placement, "userspace")
+    else:
+        errors.append(f"unsupported gate_family={gate_family}")
+    return errors
+
+
+def validate_gate_family_semantics(rows: list[dict[str, str]], label: str) -> None:
+    for row in rows:
+        errors = gate_family_semantic_errors(row)
+        if errors:
+            raise SystemExit(f"{label}:{row['_source_line']}: " + "; ".join(errors))
+
+
 def compact_evidence(row: dict[str, str], reasons: list[str] | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {
         "os_matrix": row["os_matrix"],
@@ -321,6 +399,7 @@ def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> 
         CURRENT_REQUIREMENT_COLUMNS,
         len(CURRENT_REQUIREMENT_COLUMNS),
     )
+    validate_gate_family_semantics(rows, "current evidence requirements")
     requirements: dict[str, dict[str, str]] = {}
     for row in rows:
         key = row_key(row)
@@ -335,6 +414,8 @@ def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
     evidence_path = resolve_input_path(args.evidence)
     defaults = read_tsv(defaults_path, DEFAULT_COLUMNS, 9)
     evidence_rows = read_tsv(evidence_path, EVIDENCE_COLUMNS, 17)
+    validate_gate_family_semantics(defaults, "production defaults")
+    validate_gate_family_semantics(evidence_rows, "production evidence")
     current_requirements = read_current_requirements(args, defaults_path) if args.require_current else {}
     audited_defaults = [
         default

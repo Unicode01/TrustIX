@@ -2422,6 +2422,90 @@ func TestProductionTransportAuditScriptRequireArtifactReferenceRejectsMissingAnc
 	}
 }
 
+func TestProductionTransportAuditScriptRejectsGateFamilySemanticMismatch(t *testing.T) {
+	python := requirePython3(t)
+	tests := []struct {
+		name     string
+		defaults []string
+		evidence []string
+		want     string
+	}{
+		{
+			name: "default_secure_kudp_wrong_transport",
+			defaults: []string{
+				"experimental_tcp\tsecure\tperformance\ttc_xdp\tkernel\tcross_host\tsecure_kudp\t1.5\t3600\tsecure kernel TCP must not reuse secure-kUDP gate",
+			},
+			want: "production defaults:2: gate_family=secure_kudp requires transport=kernel_udp; got transport=experimental_tcp",
+		},
+		{
+			name: "evidence_route_gso_wrong_transport",
+			defaults: []string{
+				"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t3600\tselected route-GSO gate",
+			},
+			evidence: []string{
+				strings.Join([]string{
+					"route_gso",
+					"udp",
+					"plaintext",
+					"performance",
+					"kernel_module",
+					"userspace",
+					"cross_host",
+					"debian13-debian13",
+					"6.12.90_to_6.12.90",
+					"pass",
+					"3",
+					"3600",
+					productionGateManifestSchema,
+					strings.Repeat("a", 64),
+					strings.Repeat("b", 64),
+					"docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
+					"route-GSO evidence with wrong transport",
+				}, "\t"),
+			},
+			want: "production evidence:2: gate_family=route_gso requires transport=experimental_tcp; got transport=udp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workdir := t.TempDir()
+			defaults := filepath.Join(workdir, "defaults.tsv")
+			evidence := filepath.Join(workdir, "evidence.tsv")
+			defaultPayload := append([]string{
+				"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+			}, tt.defaults...)
+			defaultPayload = append(defaultPayload, "")
+			if err := os.WriteFile(defaults, []byte(strings.Join(defaultPayload, "\n")), 0o644); err != nil {
+				t.Fatalf("write defaults: %v", err)
+			}
+			evidencePayload := append([]string{
+				"# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note",
+			}, tt.evidence...)
+			evidencePayload = append(evidencePayload, "")
+			if err := os.WriteFile(evidence, []byte(strings.Join(evidencePayload, "\n")), 0o644); err != nil {
+				t.Fatalf("write evidence: %v", err)
+			}
+
+			cmd := exec.Command(python, "production-transport-audit.py",
+				"--defaults", slashPath(defaults),
+				"--evidence", slashPath(evidence),
+				"--scope", "cross_host",
+				"--require-manifest",
+				"--fail-on-missing",
+			)
+			cmd.Dir = "."
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("audit accepted semantic mismatch:\n%s", output)
+			}
+			if !strings.Contains(string(output), tt.want) {
+				t.Fatalf("audit output missing %q:\n%s", tt.want, output)
+			}
+		})
+	}
+}
+
 func TestProductionTransportAuditScriptPrefersLongerSoakBeforeSourceOrder(t *testing.T) {
 	python := requirePython3(t)
 	workdir := t.TempDir()
