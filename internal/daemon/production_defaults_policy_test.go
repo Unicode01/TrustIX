@@ -21,6 +21,9 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 		seenGate[row.GateFamily] = true
 		t.Run(strings.ReplaceAll(productionDefaultRuntimeKey(row), ":", "_"), func(t *testing.T) {
 			desired := desiredForProductionDefaultRuntimeTest(row)
+			if got, want := effectiveKernelTransportModeForDesired(desired), productionDefaultRuntimeKernelTransportMode(row); got != want {
+				t.Fatalf("%s kernel transport mode = %q, want %q", productionDefaultRuntimeKey(row), got, want)
+			}
 			spec := dataplaneAttachSpec(t.TempDir(), desired)
 			switch row.GateFamily {
 			case "userspace", "userspace_tc":
@@ -149,6 +152,9 @@ func desiredForProductionDefaultRuntimeTest(row productionTransportDefaultRowFor
 			Encryption:      row.Encryption,
 			CryptoPlacement: row.CryptoPlacement,
 			Candidates:      []core.EndpointID{endpointName},
+			KernelTransport: config.KernelTransportPolicyConfig{
+				Mode: string(productionDefaultRuntimeKernelTransportMode(row)),
+			},
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      endpointName,
@@ -163,6 +169,23 @@ func productionDefaultRuntimeEndpointTransport(transport string) string {
 		return "udp"
 	}
 	return transport
+}
+
+func productionDefaultRuntimeKernelTransportMode(row productionTransportDefaultRowForProvisionTest) dataplane.KernelTransportMode {
+	switch row.Transport {
+	case "gre", "ipip", "vxlan":
+		return dataplane.KernelTransportModeRequireKernel
+	}
+	switch row.GateFamily {
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
+		"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
+		"secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel",
+		"route_gso", "dd_route_gso", "owdeb_route_gso",
+		"tc_direct":
+		return dataplane.KernelTransportModeRequireKernel
+	default:
+		return dataplane.KernelTransportModeDisabled
+	}
 }
 
 func productionDefaultRuntimeKey(row productionTransportDefaultRowForProvisionTest) string {
