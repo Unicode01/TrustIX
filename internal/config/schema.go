@@ -1677,7 +1677,7 @@ func validateTransportProfileName(label string, profile string) error {
 
 func validateTransportDatapath(label string, datapath string) error {
 	switch normalizeTransportDatapath(datapath) {
-	case "", "userspace", "tc_xdp", "kernel_module":
+	case "", "auto", "userspace", "tc_xdp", "kernel_module":
 		return nil
 	default:
 		return fmt.Errorf("%s %q is unsupported", label, datapath)

@@ -99,6 +99,7 @@ func Normalize(cfg Desired) Desired {
 	normalizeRoutes(cfg.Routes)
 	normalizeRoutePolicy(&cfg.RoutePolicy)
 	normalizeTransportPolicy(&cfg.TransportPolicy)
+	applyTransportPolicyProductionDefaults(&cfg.TransportPolicy)
 	return cfg
 }
 
@@ -335,8 +336,10 @@ func normalizeTransportProfile(value string) string {
 
 func normalizeTransportDatapath(value string) string {
 	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", "_")) {
-	case "", "auto":
+	case "":
 		return ""
+	case "auto":
+		return "auto"
 	case "userspace", "user", "raw_socket", "rawsocket":
 		return "userspace"
 	case "tc_xdp", "tcxdp", "tc", "xdp", "ebpf":
@@ -345,6 +348,30 @@ func normalizeTransportDatapath(value string) string {
 		return "kernel_module"
 	default:
 		return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", "_"))
+	}
+}
+
+func applyTransportPolicyProductionDefaults(policy *TransportPolicyConfig) {
+	if policy == nil {
+		return
+	}
+	if policy.Profile == "" {
+		policy.Profile = TransportProfileStable
+	}
+	if policy.Datapath == "" {
+		policy.Datapath = TransportDatapathUserspace
+	}
+	if strings.TrimSpace(policy.Encryption) == "" {
+		policy.Encryption = "secure"
+	}
+	if strings.TrimSpace(policy.CryptoKeySource) == "" {
+		policy.CryptoKeySource = "auto"
+	}
+	if strings.TrimSpace(policy.CryptoPlacement) == "" {
+		policy.CryptoPlacement = "userspace"
+	}
+	if strings.TrimSpace(policy.KernelTransport.Mode) == "" {
+		policy.KernelTransport.Mode = "disabled"
 	}
 }
 

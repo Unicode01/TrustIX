@@ -65,6 +65,52 @@ dns:
 	}
 }
 
+func TestLoadBytesPinsEmptyTransportPolicyToProductionCompatibilityDefault(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+endpoints:
+  - name: ix-a-udp
+    transport: udp
+    listen: 0.0.0.0:7000
+`), ".yaml")
+	if err != nil {
+		t.Fatalf("load yaml: %v", err)
+	}
+	if cfg.TransportPolicy.Profile != TransportProfileStable ||
+		cfg.TransportPolicy.Datapath != TransportDatapathUserspace ||
+		cfg.TransportPolicy.Encryption != "secure" ||
+		cfg.TransportPolicy.CryptoKeySource != "auto" ||
+		cfg.TransportPolicy.CryptoPlacement != "userspace" ||
+		cfg.TransportPolicy.KernelTransport.Mode != "disabled" {
+		t.Fatalf("transport policy defaults = %#v", cfg.TransportPolicy)
+	}
+}
+
+func TestLoadBytesPreservesExplicitTransportPolicyAuto(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+transport_policy:
+  datapath: auto
+  crypto_placement: auto
+  kernel_transport:
+    mode: auto
+`), ".yaml")
+	if err != nil {
+		t.Fatalf("load yaml: %v", err)
+	}
+	if cfg.TransportPolicy.Datapath != TransportDatapathAuto ||
+		cfg.TransportPolicy.CryptoPlacement != "auto" ||
+		cfg.TransportPolicy.KernelTransport.Mode != "auto" {
+		t.Fatalf("explicit auto transport policy = %#v", cfg.TransportPolicy)
+	}
+}
+
 func TestLoadBytesAcceptsOpenWRTDNSMasqConfig(t *testing.T) {
 	cfg, err := LoadBytes([]byte(`
 domain:
