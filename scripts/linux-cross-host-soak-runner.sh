@@ -14,6 +14,7 @@ workdir="$(mkdir -p "$workdir" && cd "$workdir" && pwd -P)"
 keep_remote="${TRUSTIX_CROSS_HOST_KEEP_REMOTE:-0}"
 keep_local="${TRUSTIX_CROSS_HOST_KEEP_LOCAL:-1}"
 unload_modules="${TRUSTIX_CROSS_HOST_UNLOAD_MODULES:-1}"
+dry_run_config="${TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG:-0}"
 
 node_a="${TRUSTIX_CROSS_HOST_A:-local}"
 node_b="${TRUSTIX_CROSS_HOST_B:-}"
@@ -1925,6 +1926,15 @@ main() {
       fi
       ;;
   esac
+  if truthy "$dry_run_config"; then
+    resolve_data_ports
+    mkdir -p "$workdir"
+    write_config a "$workdir/config-a.yaml"
+    write_config b "$workdir/config-b.yaml"
+    printf 'dry_run_config\n' >"$workdir/${case_name}.result"
+    log "dry-run-config result=${workdir}"
+    return
+  fi
   need_cmd ssh
   need_cmd tar
   need_cmd cp

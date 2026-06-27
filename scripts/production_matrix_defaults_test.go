@@ -5595,6 +5595,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"case_profile_override=\"${TRUSTIX_CROSS_HOST_PROFILE:-}\"",
 		"case_datapath_override=\"${TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH:-}\"",
 		"case_crypto_placement_override=\"${TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT:-}\"",
+		"dry_run_config=\"${TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG:-0}\"",
 		"data_a_port=\"${TRUSTIX_CROSS_HOST_DATA_A_PORT:-}\"",
 		"data_b_port=\"${TRUSTIX_CROSS_HOST_DATA_B_PORT:-}\"",
 		"default_data_port",
@@ -5625,6 +5626,10 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1",
 		"case \"$iperf_mode\" in bidir|forward|reverse)",
 		"apply_case_runtime_defaults",
+		"truthy \"$dry_run_config\"",
+		"write_config a \"$workdir/config-a.yaml\"",
+		"write_config b \"$workdir/config-b.yaml\"",
+		"dry_run_config",
 		"TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be >= 1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be >= 0",
 		"TRUSTIX_CROSS_HOST_SESSION_POOL_STRATEGY must be flow, five_tuple, 5tuple, packet, or round_robin",
@@ -5642,6 +5647,11 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"case_encryption",
 		"case_crypto_placement",
 		"case_transport_datapath",
+		"case_kernel_transport_mode",
+		"case_is_iptunnel_transport",
+		"userspace) printf '\\n' ;;",
+		"if case_uses_tc_direct_fast_path; then",
+		"*) printf 'require_kernel\\n' ;;",
 		"case_uses_tc_direct_fast_path",
 		"case_tc_requested_but_falls_back_to_userspace",
 		"has no safe TC direct fast path with this configuration; using userspace datapath",
@@ -5712,6 +5722,10 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"yaml_single_quote",
 		"endpoint_security_yaml \"    \" \"$encryption\"",
 		"crypto_placement: ${crypto_placement}",
+		"kernel_mode=\"$(case_kernel_transport_mode)\"",
+		"if [[ -n \"$kernel_mode\" ]]; then",
+		"  kernel_transport:",
+		"    mode: ${kernel_mode}",
 		"TRUSTIX_KERNEL_UDP_TC_SECURE_DIRECT_ONLY=1",
 		"TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH=1",
 		"TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH=1",
@@ -5787,5 +5801,112 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("linux-cross-host-soak-runner.sh contains non-portable %q", unwanted)
 		}
+	}
+}
+
+func TestCrossHostSoakRunnerDryRunPinsKernelTransportConfig(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+
+	tests := []struct {
+		name       string
+		caseName   string
+		extraEnv   []string
+		want       []string
+		wantAbsent []string
+	}{
+		{
+			name:     "userspace UDP keeps kernel transport absent",
+			caseName: "userspace-udp-secure",
+			want: []string{
+				"profile: stable",
+				"datapath: userspace",
+				"encryption: secure",
+				"crypto_placement: userspace",
+			},
+			wantAbsent: []string{"kernel_transport:"},
+		},
+		{
+			name:     "full kmod UDP requires kernel transport",
+			caseName: "dd-fullkmod",
+			want: []string{
+				"capability_profile: full_plaintext",
+				"datapath: kernel_module",
+				"encryption: plaintext",
+				"kernel_transport:\n    mode: require_kernel",
+			},
+		},
+		{
+			name:     "tc direct UDP requires kernel transport",
+			caseName: "tc-direct",
+			extraEnv: []string{"TRUSTIX_CROSS_HOST_TRANSPORT=udp"},
+			want: []string{
+				"datapath: tc_xdp",
+				"encryption: plaintext",
+				"kernel_transport:\n    mode: require_kernel",
+			},
+		},
+		{
+			name:     "native TC tunnel requires kernel transport",
+			caseName: "tc-gre-plaintext",
+			want: []string{
+				"transport: gre",
+				"datapath: tc_xdp",
+				"kernel_transport:\n    mode: require_kernel",
+			},
+		},
+		{
+			name:     "route GSO requires kernel transport",
+			caseName: "dd-routegso",
+			want: []string{
+				"capability_profile: performance",
+				"datapath: kernel_module",
+				"encryption: plaintext",
+				"kernel_transport:\n    mode: require_kernel",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workdir := filepath.Join(t.TempDir(), strings.NewReplacer(" ", "-", "/", "-", "\\", "-").Replace(test.caseName))
+			env := append(os.Environ(),
+				"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
+				"TRUSTIX_CROSS_HOST_CASE="+test.caseName,
+				"TRUSTIX_CROSS_HOST_WORKDIR="+workdir,
+				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=198.51.100.10",
+				"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=198.51.100.11",
+				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
+				"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
+			)
+			env = append(env, test.extraEnv...)
+			cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+			cmd.Dir = "."
+			cmd.Env = env
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("dry-run config failed: %v\n%s", err, output)
+			}
+			payload, err := os.ReadFile(filepath.Join(workdir, "config-a.yaml"))
+			if err != nil {
+				t.Fatalf("read dry-run config: %v", err)
+			}
+			text := string(payload)
+			for _, want := range test.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("dry-run config missing %q:\n%s", want, text)
+				}
+			}
+			for _, unwanted := range test.wantAbsent {
+				if strings.Contains(text, unwanted) {
+					t.Fatalf("dry-run config contains unwanted %q:\n%s", unwanted, text)
+				}
+			}
+		})
 	}
 }
