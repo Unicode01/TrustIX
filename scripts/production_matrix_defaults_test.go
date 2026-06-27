@@ -5279,6 +5279,72 @@ func productionDefaultRunnerCase(row productionTransportDefault) string {
 	return kind + "-" + token + "-" + row.Encryption
 }
 
+func productionDefaultEndpointTransport(row productionTransportDefault) string {
+	if row.Transport == "kernel_udp" {
+		return "udp"
+	}
+	return row.Transport
+}
+
+func productionDefaultNeedsKernelTransport(row productionTransportDefault) bool {
+	switch row.Transport {
+	case "gre", "ipip", "vxlan":
+		return true
+	}
+	switch row.GateFamily {
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
+		"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
+		"secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel",
+		"route_gso", "dd_route_gso", "owdeb_route_gso",
+		"tc_direct":
+		return true
+	default:
+		return false
+	}
+}
+
+func productionDefaultCapabilityProfile(row productionTransportDefault) string {
+	switch row.GateFamily {
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod":
+		return "full_plaintext"
+	case "userspace", "userspace_tc", "tc_direct":
+		return "disabled"
+	default:
+		return "performance"
+	}
+}
+
+func productionDefaultModuleSnippets(row productionTransportDefault) []string {
+	base := []string{"capability_profile: " + productionDefaultCapabilityProfile(row)}
+	switch row.GateFamily {
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod":
+		return append(base,
+			"trustix_crypto:\n    mode: disabled",
+			"trustix_datapath:\n    mode: required",
+			"trustix_datapath_helpers:\n    mode: disabled",
+		)
+	case "secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
+		"secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel":
+		return append(base,
+			"trustix_crypto:\n    mode: required",
+			"trustix_datapath:\n    mode: disabled",
+			"trustix_datapath_helpers:\n    mode: required",
+		)
+	case "route_gso", "dd_route_gso", "owdeb_route_gso":
+		return append(base,
+			"trustix_crypto:\n    mode: disabled",
+			"trustix_datapath:\n    mode: disabled",
+			"trustix_datapath_helpers:\n    mode: required",
+		)
+	default:
+		return append(base,
+			"trustix_crypto:\n    mode: disabled",
+			"trustix_datapath:\n    mode: disabled",
+			"trustix_datapath_helpers:\n    mode: disabled",
+		)
+	}
+}
+
 func productionDefaultMatrixCase(row productionTransportDefault) string {
 	token := row.Transport
 	if token == "kernel_udp" {
@@ -5813,82 +5879,29 @@ func TestCrossHostSoakRunnerDryRunPinsKernelTransportConfig(t *testing.T) {
 		t.Skipf("bash array syntax not available from %s", bash)
 	}
 
-	tests := []struct {
-		name       string
-		caseName   string
-		extraEnv   []string
-		want       []string
-		wantAbsent []string
-	}{
-		{
-			name:     "userspace UDP keeps kernel transport absent",
-			caseName: "userspace-udp-secure",
-			want: []string{
-				"profile: stable",
-				"datapath: userspace",
-				"encryption: secure",
-				"crypto_placement: userspace",
-			},
-			wantAbsent: []string{"kernel_transport:"},
-		},
-		{
-			name:     "full kmod UDP requires kernel transport",
-			caseName: "dd-fullkmod",
-			want: []string{
-				"capability_profile: full_plaintext",
-				"datapath: kernel_module",
-				"encryption: plaintext",
-				"kernel_transport:\n    mode: require_kernel",
-			},
-		},
-		{
-			name:     "tc direct UDP requires kernel transport",
-			caseName: "tc-direct",
-			extraEnv: []string{"TRUSTIX_CROSS_HOST_TRANSPORT=udp"},
-			want: []string{
-				"datapath: tc_xdp",
-				"encryption: plaintext",
-				"kernel_transport:\n    mode: require_kernel",
-			},
-		},
-		{
-			name:     "native TC tunnel requires kernel transport",
-			caseName: "tc-gre-plaintext",
-			extraEnv: []string{
-				"TRUSTIX_CROSS_HOST_PROFILE=performance",
-				"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=tc_xdp",
-			},
-			want: []string{
-				"transport: gre",
-				"datapath: tc_xdp",
-				"kernel_transport:\n    mode: require_kernel",
-			},
-		},
-		{
-			name:     "route GSO requires kernel transport",
-			caseName: "dd-routegso",
-			want: []string{
-				"capability_profile: performance",
-				"datapath: kernel_module",
-				"encryption: plaintext",
-				"kernel_transport:\n    mode: require_kernel",
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			workdir := filepath.Join(t.TempDir(), strings.NewReplacer(" ", "-", "/", "-", "\\", "-").Replace(test.caseName))
+	for _, row := range loadProductionTransportDefaults(t) {
+		if row.ValidationScope != "cross_host" {
+			continue
+		}
+		row := row
+		t.Run(productionDefaultEvidenceKey(row), func(t *testing.T) {
+			caseName := productionDefaultRunnerCase(row)
+			endpointTransport := productionDefaultEndpointTransport(row)
+			workdir := filepath.Join(t.TempDir(), strings.NewReplacer(" ", "-", "/", "-", "\\", "-", ":", "-").Replace(caseName))
 			env := append(os.Environ(),
 				"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
-				"TRUSTIX_CROSS_HOST_CASE="+test.caseName,
+				"TRUSTIX_CROSS_HOST_CASE="+caseName,
+				"TRUSTIX_CROSS_HOST_TRANSPORT="+endpointTransport,
+				"TRUSTIX_CROSS_HOST_ENCRYPTION="+row.Encryption,
+				"TRUSTIX_CROSS_HOST_PROFILE="+row.Profile,
+				"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH="+row.Datapath,
+				"TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT="+row.CryptoPlacement,
 				"TRUSTIX_CROSS_HOST_WORKDIR="+workdir,
 				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=198.51.100.10",
 				"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=198.51.100.11",
 				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
 				"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
 			)
-			env = append(env, test.extraEnv...)
 			cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
 			cmd.Dir = "."
 			cmd.Env = env
@@ -5901,15 +5914,24 @@ func TestCrossHostSoakRunnerDryRunPinsKernelTransportConfig(t *testing.T) {
 				t.Fatalf("read dry-run config: %v", err)
 			}
 			text := string(payload)
-			for _, want := range test.want {
+			want := []string{
+				"transport: " + endpointTransport,
+				"profile: " + row.Profile,
+				"datapath: " + row.Datapath,
+				"encryption: " + row.Encryption,
+				"crypto_placement: " + row.CryptoPlacement,
+			}
+			want = append(want, productionDefaultModuleSnippets(row)...)
+			if productionDefaultNeedsKernelTransport(row) {
+				want = append(want, "kernel_transport:\n    mode: require_kernel")
+			}
+			for _, want := range want {
 				if !strings.Contains(text, want) {
 					t.Fatalf("dry-run config missing %q:\n%s", want, text)
 				}
 			}
-			for _, unwanted := range test.wantAbsent {
-				if strings.Contains(text, unwanted) {
-					t.Fatalf("dry-run config contains unwanted %q:\n%s", unwanted, text)
-				}
+			if !productionDefaultNeedsKernelTransport(row) && strings.Contains(text, "kernel_transport:") {
+				t.Fatalf("dry-run config contains unwanted kernel_transport:\n%s", text)
 			}
 		})
 	}
