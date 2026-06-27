@@ -301,7 +301,11 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	if len(target.Endpoints) != 1 ||
 		target.Endpoints[0].Name != "ix-e-udp" ||
 		target.Endpoints[0].Transport != "udp" ||
-		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
+		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext ||
+		target.Endpoints[0].Profile.Profile != config.TransportProfilePerformance ||
+		target.Endpoints[0].Profile.Datapath != config.TransportDatapathKernelModule ||
+		target.Endpoints[0].Profile.Encryption != securetransport.EncryptionPlaintext ||
+		target.Endpoints[0].Profile.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) {
 		t.Fatalf("target endpoints = %#v, want udp plaintext performance primary", target.Endpoints)
 	}
 	if len(target.TransportPolicy.Candidates) != 1 ||
@@ -420,7 +424,9 @@ func TestIXProvisionPerformanceProfileUsesSecureKernelUDPDefaults(t *testing.T) 
 	if len(target.Endpoints) != 1 ||
 		target.Endpoints[0].Transport != "udp" ||
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionSecure ||
+		target.Endpoints[0].Profile.Profile != config.TransportProfilePerformance ||
 		target.Endpoints[0].Profile.Datapath != config.TransportDatapathTCXDP ||
+		target.Endpoints[0].Profile.Encryption != securetransport.EncryptionSecure ||
 		target.Endpoints[0].Profile.CryptoPlacement != string(dataplane.CryptoPlacementKernel) {
 		t.Fatalf("secure performance endpoint = %#v", target.Endpoints)
 	}
@@ -471,7 +477,9 @@ func TestIXProvisionPerformanceProfileExplicitExperimentalTCPUsesSecureKernelDef
 	if len(target.Endpoints) != 1 ||
 		target.Endpoints[0].Transport != "experimental_tcp" ||
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionSecure ||
+		target.Endpoints[0].Profile.Profile != config.TransportProfilePerformance ||
 		target.Endpoints[0].Profile.Datapath != config.TransportDatapathKernelModule ||
+		target.Endpoints[0].Profile.Encryption != securetransport.EncryptionSecure ||
 		target.Endpoints[0].Profile.CryptoPlacement != string(dataplane.CryptoPlacementKernel) {
 		t.Fatalf("secure experimental_tcp endpoint = %#v", target.Endpoints)
 	}
