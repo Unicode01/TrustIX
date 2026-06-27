@@ -944,6 +944,7 @@ write_endpoint_object() {
   printf '"transport_profile":{'
   printf '"profile":"%s",' "$(json_escape "$profile")"
   printf '"datapath":"%s",' "$(json_escape "$datapath")"
+  printf '"encryption":"%s",' "$(json_escape "$encryption")"
   printf '"crypto_placement":"%s"' "$(json_escape "$crypto")"
   printf '},'
   if [[ -n "$source_ip" || -n "$bind_iface" ]]; then
@@ -1042,7 +1043,7 @@ done
   printf '  "peers":[],\n'
   printf '  "routes":[],\n'
   printf '  "route_policy":{"import_prefixes":[],"export_prefixes":[],"dynamic_metric":1000},\n'
-  printf '  "policies":[{"name":"default-routed","route_selection":"longest_prefix","load_balance":"least_conn","flow_stickiness":true,"rewrite":"preserve_source"}],\n'
+  printf '  "policies":[{"name":"default-routed","route_selection":"longest_prefix","flow_stickiness":true,"rewrite":"preserve_source"}],\n'
   printf '  "transport_policy":{"mode":"user_defined","candidates":'
   json_string_array "${endpoint_names[@]}"
   printf ',"failover":"health_based","profile":"%s","datapath":"%s","encryption":"%s","crypto_key_source":"auto","crypto_placement":"%s","kernel_transport":{"mode":"%s"},"session_pool":{"warmup":true}}\n' \
