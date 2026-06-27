@@ -224,6 +224,30 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		MinSeconds:      "3600",
 	})
 
+	stable, err := ixProvisionDefaultsForProfile("stable")
+	if err != nil {
+		t.Fatalf("stable defaults: %v", err)
+	}
+	if stable.TransportProfile != config.TransportProfileStable ||
+		stable.Datapath != config.TransportDatapathUserspace ||
+		stable.Encryption != securetransport.EncryptionSecure ||
+		stable.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
+		stable.KernelTransport != string(dataplane.KernelTransportModeDisabled) ||
+		stable.KernelCapabilityProfile != config.KernelCapabilityProfileDisabled {
+		t.Fatalf("stable defaults = %#v", stable)
+	}
+	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
+		Transport:       "udp",
+		Encryption:      stable.Encryption,
+		Profile:         stable.TransportProfile,
+		Datapath:        stable.Datapath,
+		CryptoPlacement: stable.CryptoPlacement,
+		ValidationScope: "cross_host",
+		GateFamily:      "userspace",
+		MinGbps:         "1.5",
+		MinSeconds:      "3600",
+	})
+
 	securePerformance, err := ixProvisionDefaultsForProfile("performance")
 	if err != nil {
 		t.Fatalf("secure performance defaults: %v", err)
@@ -520,7 +544,10 @@ func TestIXProvisionExplicitStableKeepsSecureUDPCompatibility(t *testing.T) {
 		t.Fatalf("desired for provision: %v", err)
 	}
 	if target.TransportPolicy.Encryption != securetransport.EncryptionSecure ||
-		target.TransportPolicy.Profile != config.TransportProfileStable {
+		target.TransportPolicy.Profile != config.TransportProfileStable ||
+		target.TransportPolicy.Datapath != config.TransportDatapathUserspace ||
+		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
+		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeDisabled) {
 		t.Fatalf("target stable transport policy = %#v", target.TransportPolicy)
 	}
 	if len(target.Endpoints) != 2 ||
@@ -528,8 +555,21 @@ func TestIXProvisionExplicitStableKeepsSecureUDPCompatibility(t *testing.T) {
 		target.Endpoints[1].Transport != "experimental_tcp" {
 		t.Fatalf("target stable endpoints = %#v, want udp primary and experimental_tcp secondary", target.Endpoints)
 	}
+	for _, endpoint := range target.Endpoints {
+		if endpoint.Security.Encryption != securetransport.EncryptionSecure ||
+			endpoint.Profile.Profile != config.TransportProfileStable ||
+			endpoint.Profile.Datapath != config.TransportDatapathUserspace ||
+			endpoint.Profile.Encryption != securetransport.EncryptionSecure ||
+			endpoint.Profile.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) {
+			t.Fatalf("stable endpoint = %#v, want pinned userspace secure profile", endpoint)
+		}
+	}
 	if len(target.TransportPolicy.Profiles) != 1 ||
 		target.TransportPolicy.Profiles[0].Transport != "experimental_tcp" ||
+		target.TransportPolicy.Profiles[0].Profile != config.TransportProfileStable ||
+		target.TransportPolicy.Profiles[0].Datapath != config.TransportDatapathUserspace ||
+		target.TransportPolicy.Profiles[0].Encryption != securetransport.EncryptionSecure ||
+		target.TransportPolicy.Profiles[0].CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
 		target.TransportPolicy.Profiles[0].Advanced.BatchBytes != dataSessionBatchDefaultBytes ||
 		target.TransportPolicy.Profiles[0].Advanced.FlushDelay != "25us" ||
 		target.TransportPolicy.Profiles[0].Advanced.MaxFrames != dataSessionBatchMaxPackets {

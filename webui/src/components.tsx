@@ -891,6 +891,8 @@ type IXProvisionEffectiveDefaults = {
 
 function ixProvisionProfileDefaults(profile: string): Pick<IXProvisionEffectiveDefaults, "transportProfile" | "datapath" | "encryption" | "cryptoPlacement" | "kernelTransport"> {
   switch (normalizeIXProvisionProfileName(profile)) {
+    case "stable":
+      return { transportProfile: "stable", datapath: "userspace", encryption: "secure", cryptoPlacement: "userspace", kernelTransport: "disabled" };
     case "performance":
       return { transportProfile: "performance", datapath: "tc_xdp", encryption: "secure", cryptoPlacement: "kernel", kernelTransport: "require_kernel" };
     case "latency":
@@ -905,7 +907,7 @@ function ixProvisionProfileDefaults(profile: string): Pick<IXProvisionEffectiveD
     case "plain":
       return { transportProfile: "performance", datapath: "kernel_module", encryption: "plaintext", cryptoPlacement: "userspace", kernelTransport: "require_kernel" };
     default:
-      return { transportProfile: "stable", datapath: "auto", encryption: "secure", cryptoPlacement: "auto", kernelTransport: "auto" };
+      return { transportProfile: "stable", datapath: "userspace", encryption: "secure", cryptoPlacement: "userspace", kernelTransport: "disabled" };
   }
 }
 

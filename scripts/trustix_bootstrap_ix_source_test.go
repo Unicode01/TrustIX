@@ -42,6 +42,13 @@ func TestTrustIXBootstrapIXDirectDefaultsMatchProductionProfile(t *testing.T) {
 	mustContain := []string{
 		`profile="plaintext_performance"`,
 		`--profile PROFILE`,
+		`stable)
+      profile_transport_profile="stable"
+      profile_datapath="userspace"
+      profile_encryption="secure"
+      profile_crypto_placement="userspace"
+      profile_kernel_transport="disabled"
+      profile_kernel_capability="disabled"`,
 		`profile_transport_profile="performance"`,
 		`profile_datapath="kernel_module"`,
 		`profile_encryption="plaintext"`,
@@ -71,6 +78,9 @@ func TestTrustIXBootstrapIXDirectDefaultsMatchProductionProfile(t *testing.T) {
 		}
 	}
 	forbidden := []string{
+		`stable)
+      profile_transport_profile="stable"
+      profile_datapath="auto"`,
 		`"profile":"stable","datapath":"auto","encryption":"secure","crypto_key_source":"auto","crypto_placement":"auto","kernel_transport":{"mode":"auto"}`,
 		`mktemp -d /tmp/trustix-bootstrap-archive.XXXXXX`,
 		`mktemp -d /tmp/trustix-bootstrap-src.XXXXXX`,

@@ -435,11 +435,11 @@ bootstrap_profile_defaults() {
   case "$selected" in
     stable)
       profile_transport_profile="stable"
-      profile_datapath="auto"
+      profile_datapath="userspace"
       profile_encryption="secure"
-      profile_crypto_placement="auto"
-      profile_kernel_transport="auto"
-      profile_kernel_capability="stable"
+      profile_crypto_placement="userspace"
+      profile_kernel_transport="disabled"
+      profile_kernel_capability="disabled"
       ;;
     performance)
       profile_transport_profile="performance"
