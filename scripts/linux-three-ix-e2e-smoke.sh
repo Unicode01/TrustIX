@@ -7,6 +7,9 @@ keep="${TRUSTIX_3IX_E2E_KEEP:-0}"
 bin_dir="${TRUSTIX_3IX_E2E_BIN_DIR:-$workdir/bin}"
 dataplane="${TRUSTIX_3IX_E2E_DATAPLANE:-linux}"
 transport="${TRUSTIX_3IX_E2E_TRANSPORT:-experimental_tcp}"
+transport_profile="${TRUSTIX_3IX_E2E_TRANSPORT_PROFILE:-}"
+transport_datapath="${TRUSTIX_3IX_E2E_TRANSPORT_DATAPATH:-}"
+transport_encryption="${TRUSTIX_3IX_E2E_TRANSPORT_ENCRYPTION:-${TRUSTIX_3IX_E2E_ENCRYPTION:-secure}}"
 crypto_placement="${TRUSTIX_3IX_E2E_CRYPTO_PLACEMENT:-userspace}"
 dynamic_metric="${TRUSTIX_3IX_E2E_DYNAMIC_METRIC:-900}"
 af_xdp_queues="${TRUSTIX_3IX_E2E_AF_XDP_QUEUES:-1}"
@@ -116,6 +119,32 @@ transport_uses_required_link_tls() {
     tcp|websocket|http_connect) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+transport_policy_profile() {
+  if [[ -n "$transport_profile" ]]; then
+    printf '%s\n' "$transport_profile"
+    return 0
+  fi
+  case "$transport" in
+    experimental_tcp|kernel_udp|gre|ipip|vxlan) printf 'performance\n' ;;
+    *) printf 'stable\n' ;;
+  esac
+}
+
+transport_policy_datapath() {
+  if [[ -n "$transport_datapath" ]]; then
+    printf '%s\n' "$transport_datapath"
+    return 0
+  fi
+  case "$transport" in
+    experimental_tcp|kernel_udp|gre|ipip|vxlan) printf 'tc_xdp\n' ;;
+    *) printf 'userspace\n' ;;
+  esac
+}
+
+transport_policy_encryption() {
+  printf '%s\n' "${transport_encryption:-secure}"
 }
 
 is_iptunnel_transport() {
@@ -746,12 +775,16 @@ policies:
 
 transport_policy:
   mode: user_defined
+  profile: $(transport_policy_profile)
+  datapath: $(transport_policy_datapath)
   candidates:
 EOF
   transport_candidates_yaml "$ix" >>"$output"
   cat >>"$output" <<EOF
   failover: health_based
   load_balance: least_conn
+  encryption: $(transport_policy_encryption)
+  crypto_key_source: auto
 EOF
 
   if [[ "$transport" == "kernel_udp" ]]; then
@@ -1735,6 +1768,18 @@ validate_settings() {
     udp|kernel_udp|tcp|quic|websocket|http_connect|experimental_tcp|gre|ipip|vxlan) ;;
     *) die "TRUSTIX_3IX_E2E_TRANSPORT must be one of udp, kernel_udp, tcp, quic, websocket, http_connect, experimental_tcp, gre, ipip, or vxlan" ;;
   esac
+  case "$(transport_policy_profile)" in
+    stable|performance|latency) ;;
+    *) die "TRUSTIX_3IX_E2E_TRANSPORT_PROFILE must be stable, performance, or latency when set" ;;
+  esac
+  case "$(transport_policy_datapath)" in
+    auto|userspace|tc_xdp|kernel_module) ;;
+    *) die "TRUSTIX_3IX_E2E_TRANSPORT_DATAPATH must be auto, userspace, tc_xdp, or kernel_module when set" ;;
+  esac
+  case "$(transport_policy_encryption)" in
+    secure|plaintext|send_encrypted|receive_encrypted) ;;
+    *) die "TRUSTIX_3IX_E2E_TRANSPORT_ENCRYPTION must be secure, plaintext, send_encrypted, or receive_encrypted when set" ;;
+  esac
   case "$crypto_placement" in
     userspace|kernel|auto) ;;
     *) die "TRUSTIX_3IX_E2E_CRYPTO_PLACEMENT must be userspace, kernel, or auto" ;;
@@ -1797,7 +1842,7 @@ main() {
 
   mkdir -p "$workdir"
   log "workdir: $workdir"
-  log "dataplane=${dataplane} transport=${transport} crypto=${crypto_placement} af_xdp_queues=${af_xdp_queues} hot_stats=${hot_stats}"
+  log "dataplane=${dataplane} transport=${transport} profile=$(transport_policy_profile) datapath=$(transport_policy_datapath) encryption=$(transport_policy_encryption) crypto=${crypto_placement} af_xdp_queues=${af_xdp_queues} hot_stats=${hot_stats}"
   log "ports: api=${api_port} peer_api=${peer_api_port} ${transport}=${transport_port} udp_burst=${udp_burst_port},$((udp_burst_port + 1)) tcp_burst=${tcp_burst_port},$((tcp_burst_port + 1))"
 
   maybe_prepare_kernel_module
