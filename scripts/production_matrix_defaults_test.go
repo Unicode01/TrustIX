@@ -3108,11 +3108,11 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":             "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
-		"full_kmod":             "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
+		"full_kmod":             "docs/trustix-performance-log.md#pve-debian13-full-kmod-2026-06-27",
 		"secure_kudp":           "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
 		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
 		"route_gso":             "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
-		"owdeb_full_kmod":       "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-e02d15e-openwrt-24107-debian-full-kmod-3600s-production-gate",
+		"owdeb_full_kmod":       "docs/trustix-performance-log.md#pve-openwrt24107-debian13-full-kmod-2026-06-28",
 		"userspace":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
@@ -3188,7 +3188,7 @@ func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "openwrt24.10.7-debian13"
 		wantKernelMatrix = "6.6.141_to_6.12.90+deb13.1-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-e02d15e-openwrt-24107-debian-full-kmod-3600s-production-gate"
+		wantArtifact     = "docs/trustix-performance-log.md#pve-openwrt24107-debian13-full-kmod-2026-06-28"
 		minGbps          = 3.0
 		minSeconds       = 3600
 	)
