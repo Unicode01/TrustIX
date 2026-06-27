@@ -49,6 +49,10 @@ func TestKernelDistroSupportOpenWrtSDKSpotCheckTracksCurrentMatrixTargets(t *tes
 	source := string(payload)
 	for _, want := range []string{
 		"default `scripts/openwrt-full-datapath-kmod-matrix.sh` target list",
+		"| `21.02.7 x86/64` | SDK `kernel-version.mk` | long-tail compile target; historical pass |",
+		"| `21.02.7 armvirt/64` | SDK `kernel-version.mk` | long-tail compile target; historical pass |",
+		"| `22.03.7 x86/64` | SDK `kernel-version.mk` | long-tail compile target; historical pass |",
+		"| `22.03.7 armvirt/64` | SDK `kernel-version.mk` | long-tail compile target; historical pass |",
 		"| `23.05.6 x86/64` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |",
 		"| `23.05.6 armsr/armv8` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |",
 		"| `24.10.7 x86/64` | `6.6.141` | SDK build plus full-kmod runtime gate promoted |",
@@ -64,10 +68,12 @@ func TestKernelDistroSupportOpenWrtSDKSpotCheckTracksCurrentMatrixTargets(t *tes
 		}
 	}
 	for _, staleTableRow := range []string{
-		"| `21.02.7 x86/64` |",
 		"| `23.05.5 x86/64` |",
 		"| `23.05.5 armsr/armv8` |",
 		"| `24.10.2 x86/64` |",
+		"| `24.10.2 armsr/armv8` |",
+		"| `25.12.1 x86/64` |",
+		"| `25.12.1 armsr/armv8` |",
 	} {
 		if strings.Contains(source, staleTableRow) {
 			t.Fatalf("kernel distro support current SDK spot-check table still includes stale target row %q", staleTableRow)

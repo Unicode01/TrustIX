@@ -348,6 +348,10 @@ the default `scripts/openwrt-full-datapath-kmod-matrix.sh` target list:
 
 | OpenWrt target | Kernel source | Status |
 | --- | --- | --- |
+| `21.02.7 x86/64` | SDK `kernel-version.mk` | long-tail compile target; historical pass |
+| `21.02.7 armvirt/64` | SDK `kernel-version.mk` | long-tail compile target; historical pass |
+| `22.03.7 x86/64` | SDK `kernel-version.mk` | long-tail compile target; historical pass |
+| `22.03.7 armvirt/64` | SDK `kernel-version.mk` | long-tail compile target; historical pass |
 | `23.05.6 x86/64` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |
 | `23.05.6 armsr/armv8` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |
 | `24.10.7 x86/64` | `6.6.141` | SDK build plus full-kmod runtime gate promoted |
