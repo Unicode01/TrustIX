@@ -2,6 +2,7 @@ package scripts
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -58,6 +59,110 @@ func TestWebUIIXProvisionDefaultsMatchBackendProductionProfiles(t *testing.T) {
 	}
 }
 
+func TestWebUIIXProvisionProfileDefaultsArePinnedByProfile(t *testing.T) {
+	payload, err := os.ReadFile("../webui/src/components.tsx")
+	if err != nil {
+		t.Fatalf("read webui components: %v", err)
+	}
+	source := string(payload)
+	if got := parseWebUIStringArray(t, source, "newIXProfileOptions"); strings.Join(got, ",") != "stable,performance,latency,compatibility,plaintext_performance" {
+		t.Fatalf("newIXProfileOptions = %#v", got)
+	}
+
+	defaults := parseWebUIIXProvisionProfileDefaults(t, source)
+	expected := map[string]map[string]string{
+		"stable": {
+			"transportProfile": "stable",
+			"datapath":         "userspace",
+			"encryption":       "secure",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "disabled",
+		},
+		"latency": {
+			"transportProfile": "stable",
+			"datapath":         "userspace",
+			"encryption":       "secure",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "disabled",
+		},
+		"compatibility": {
+			"transportProfile": "stable",
+			"datapath":         "userspace",
+			"encryption":       "secure",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "disabled",
+		},
+		"compat": {
+			"transportProfile": "stable",
+			"datapath":         "userspace",
+			"encryption":       "secure",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "disabled",
+		},
+		"compatible": {
+			"transportProfile": "stable",
+			"datapath":         "userspace",
+			"encryption":       "secure",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "disabled",
+		},
+		"performance": {
+			"transportProfile": "performance",
+			"datapath":         "tc_xdp",
+			"encryption":       "secure",
+			"cryptoPlacement":  "kernel",
+			"kernelTransport":  "require_kernel",
+		},
+		"plaintext_performance": {
+			"transportProfile": "performance",
+			"datapath":         "kernel_module",
+			"encryption":       "plaintext",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "require_kernel",
+		},
+		"plaintext-performance": {
+			"transportProfile": "performance",
+			"datapath":         "kernel_module",
+			"encryption":       "plaintext",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "require_kernel",
+		},
+		"plaintext": {
+			"transportProfile": "performance",
+			"datapath":         "kernel_module",
+			"encryption":       "plaintext",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "require_kernel",
+		},
+		"plain": {
+			"transportProfile": "performance",
+			"datapath":         "kernel_module",
+			"encryption":       "plaintext",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "require_kernel",
+		},
+		"default": {
+			"transportProfile": "stable",
+			"datapath":         "userspace",
+			"encryption":       "secure",
+			"cryptoPlacement":  "userspace",
+			"kernelTransport":  "disabled",
+		},
+	}
+	for name, want := range expected {
+		got, ok := defaults[name]
+		if !ok {
+			t.Fatalf("webui profile %q missing from ixProvisionProfileDefaults; parsed=%#v", name, defaults)
+		}
+		assertWebUIStringMap(t, "profile "+name, got, want)
+	}
+	for name, got := range defaults {
+		if _, ok := expected[name]; !ok {
+			t.Fatalf("webui profile %q is not covered by pinned-default expectations: %#v", name, got)
+		}
+	}
+}
+
 func TestWebUITitleIncludesCurrentIXID(t *testing.T) {
 	payload, err := os.ReadFile("../webui/src/main.tsx")
 	if err != nil {
@@ -70,6 +175,85 @@ func TestWebUITitleIncludesCurrentIXID(t *testing.T) {
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("webui dynamic title missing fragment %q", want)
+		}
+	}
+}
+
+func parseWebUIStringArray(t *testing.T, source, name string) []string {
+	t.Helper()
+	re := regexp.MustCompile(`const\s+` + regexp.QuoteMeta(name) + `\s*=\s*\[([^\]]*)\];`)
+	matches := re.FindStringSubmatch(source)
+	if len(matches) != 2 {
+		t.Fatalf("webui string array %s not found", name)
+	}
+	itemRE := regexp.MustCompile(`"([^"]+)"`)
+	var out []string
+	for _, item := range itemRE.FindAllStringSubmatch(matches[1], -1) {
+		out = append(out, item[1])
+	}
+	return out
+}
+
+func parseWebUIIXProvisionProfileDefaults(t *testing.T, source string) map[string]map[string]string {
+	t.Helper()
+	start := strings.Index(source, "function ixProvisionProfileDefaults")
+	end := strings.Index(source, "\nfunction normalizeIXProvisionProfileName")
+	if start < 0 || end <= start {
+		t.Fatalf("ixProvisionProfileDefaults function body not found")
+	}
+	body := source[start:end]
+	caseRE := regexp.MustCompile(`^case\s+"([^"]+)":$`)
+	returnRE := regexp.MustCompile(`return\s+\{([^}]*)\};`)
+	defaults := map[string]map[string]string{}
+	var pending []string
+	for _, rawLine := range strings.Split(body, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "default:" {
+			pending = append(pending, "default")
+			continue
+		}
+		if matches := caseRE.FindStringSubmatch(line); len(matches) == 2 {
+			pending = append(pending, matches[1])
+			continue
+		}
+		matches := returnRE.FindStringSubmatch(line)
+		if len(matches) != 2 {
+			continue
+		}
+		if len(pending) == 0 {
+			t.Fatalf("return object in ixProvisionProfileDefaults has no pending cases: %s", line)
+		}
+		object := parseWebUIStringObject(matches[1])
+		for _, name := range pending {
+			defaults[name] = object
+		}
+		pending = nil
+	}
+	if len(pending) != 0 {
+		t.Fatalf("ixProvisionProfileDefaults cases without return: %#v", pending)
+	}
+	return defaults
+}
+
+func parseWebUIStringObject(raw string) map[string]string {
+	fieldRE := regexp.MustCompile(`([A-Za-z0-9_]+)\s*:\s*"([^"]*)"`)
+	out := map[string]string{}
+	for _, match := range fieldRE.FindAllStringSubmatch(raw, -1) {
+		out[match[1]] = match[2]
+	}
+	return out
+}
+
+func assertWebUIStringMap(t *testing.T, label string, got, want map[string]string) {
+	t.Helper()
+	for key, wantValue := range want {
+		if got[key] != wantValue {
+			t.Fatalf("%s field %s = %q, want %q; object=%#v", label, key, got[key], wantValue, got)
+		}
+	}
+	for key := range got {
+		if _, ok := want[key]; !ok {
+			t.Fatalf("%s has unexpected field %s in object %#v", label, key, got)
 		}
 	}
 }
