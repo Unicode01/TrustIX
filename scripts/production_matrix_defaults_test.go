@@ -2772,7 +2772,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"secure_kudp":           "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
 		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
 		"route_gso":             "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
-		"owdeb_full_kmod":       "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate",
+		"owdeb_full_kmod":       "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-e02d15e-openwrt-24107-debian-full-kmod-3600s-production-gate",
 		"userspace":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
@@ -2847,8 +2847,8 @@ func TestProductionEvidenceArtifactsResolveToDocsAnchors(t *testing.T) {
 func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "openwrt24.10.7-debian13"
-		wantKernelMatrix = "6.6.141_to_6.12.94+deb13-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate"
+		wantKernelMatrix = "6.6.141_to_6.12.90+deb13.1-cloud-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-e02d15e-openwrt-24107-debian-full-kmod-3600s-production-gate"
 		minGbps          = 3.0
 		minSeconds       = 3600
 	)
@@ -5744,8 +5744,8 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"if command -v dmesg >/dev/null 2>&1; then",
 		"tmp=\\\"\\${dir}/.\\${prefix}-dmesg.log.tmp\\\"",
 		"if [ -n \\\"\\$since\\\" ] && dmesg --since \\\"\\$since\\\" >\\\"\\$tmp\\\"",
-		"elif [ -z \\\"\\$since\\\" ] && dmesg -T >\\\"\\$tmp\\\"",
-		"elif [ -z \\\"\\$since\\\" ] && dmesg >\\\"\\$tmp\\\"",
+		"elif dmesg -T >\\\"\\$tmp\\\"",
+		"elif dmesg >\\\"\\$tmp\\\"",
 		"collect_all",
 		"collect_module_parameters a",
 		"${dir}/module-parameters.txt",

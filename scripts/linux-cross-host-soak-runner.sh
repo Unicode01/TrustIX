@@ -1430,9 +1430,9 @@ if command -v dmesg >/dev/null 2>&1; then
   tmp=\"\${dir}/.\${prefix}-dmesg.log.tmp\"
   if [ -n \"\$since\" ] && dmesg --since \"\$since\" >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
     mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
-  elif [ -z \"\$since\" ] && dmesg -T >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+  elif dmesg -T >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
     mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
-  elif [ -z \"\$since\" ] && dmesg >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+  elif dmesg >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
     mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
   else
     rm -f \"\$tmp\"
