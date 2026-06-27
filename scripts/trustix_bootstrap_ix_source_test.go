@@ -70,6 +70,7 @@ func TestTrustIXBootstrapIXDirectDefaultsMatchProductionProfile(t *testing.T) {
 		`"$trustix_ca_cmd" "$@" >&2`,
 		`"capability_profile":"%s"`,
 		`"datapath":{"rx_stage":"worker","rx_worker":true,"tx_plaintext":true,"full_plaintext":true,"rx_worker_allow_experimental_tcp":true}`,
+		`--env TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1`,
 		`"session_pool":{"warmup":true}`,
 		`printf '"encryption":"%s",' "$(json_escape "$encryption")"`,
 		`"profile":"%s","datapath":"%s","encryption":"%s","crypto_key_source":"auto","crypto_placement":"%s","kernel_transport":{"mode":"%s"}`,

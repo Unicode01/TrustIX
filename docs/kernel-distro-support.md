@@ -400,6 +400,13 @@ disabled on OpenWrt, and required OpenWrt modules with an embedded or empty path
 are rejected unless `TRUSTIX_KERNEL_MODULE_ALLOW_OPENWRT_EMBEDDED=1` is set as
 an explicit ABI override.
 
+OpenWrt full-kmod plaintext is also fail-closed at runtime: a selected
+`full_plaintext` policy must be paired with
+`TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1`, otherwise
+the daemon forces `rx_worker_inject=0 tx_plaintext=0` instead of attaching the
+RX worker or plaintext TX hook. The bootstrap deploy path sets this for the
+validated `plaintext_performance` OpenWrt profile.
+
 ## Distribution notes
 
 Systemd-based distributions such as Debian, Ubuntu, and Proxmox guests are the

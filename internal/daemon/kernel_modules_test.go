@@ -341,6 +341,59 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testin
 	}
 }
 
+func TestTrustIXDatapathModuleParametersForDesiredOpenWrtFullPlaintextProfileRequiresDedicatedGate(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("", desired)
+	want := "rx_worker_inject=0 tx_plaintext=0"
+	if got != want {
+		t.Fatalf("parameters = %q, want OpenWrt fail-closed profile parameters %q", got, want)
+	}
+	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("OpenWrt full plaintext profile should require the OpenWrt crash-risk gate")
+	}
+	if mode := kernelDatapathRXModeForDesired(desired); mode != "" {
+		t.Fatalf("OpenWrt full plaintext profile RX mode = %q, want disabled without gate", mode)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersForDesiredOpenWrtDedicatedGateAllowsFullPlaintextProfile(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("", desired)
+	for _, want := range []string{
+		"enable_features=128",
+		"rx_worker_inject=1",
+		"tx_plaintext=1",
+		"rx_worker_xmit=1",
+		"tx_plaintext_inline_xmit=1",
+		"rx_worker_budget=1024",
+		"rx_worker_slots=8192",
+		"rx_worker_hot_stats=0",
+	} {
+		if !moduleParameterHasAssignment(got, want) {
+			t.Fatalf("parameters = %q, missing %q", got, want)
+		}
+	}
+	if !kernelDatapathFullPlaintextEnabledForDesired(desired) {
+		t.Fatal("OpenWrt dedicated gate should enable full plaintext profile")
+	}
+	if mode := kernelDatapathRXModeForDesired(desired); mode != kernelDatapathRXModeWorker {
+		t.Fatalf("OpenWrt full plaintext profile RX mode = %q, want worker with gate", mode)
+	}
+}
+
 func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashRiskGate(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	desired := config.Desired{

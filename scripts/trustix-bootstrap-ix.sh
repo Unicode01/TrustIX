@@ -1077,6 +1077,9 @@ fi
 if [[ "$do_deploy" == "1" && ( -n "$target" || "$local_install" == "1" ) ]]; then
   [[ -n "$tarball" ]] || die "deployment requires a tarball; do not combine --no-build with --target unless deploying separately"
   deploy_args=(--tarball "$tarball" --instance "$ix_id" --config "$config_path" --cert-dir "$deploy_cert_dir" --target-cert-dir "$target_cert_dir" --api "$api_addr" --peer-api "$peer_api_addr" --dataplane "$dataplane" --service-manager "$service_manager" --admin-auth)
+  if [[ "$profile" == "plaintext_performance" ]]; then
+    deploy_args+=(--env TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1)
+  fi
   if [[ "$service_manager" == "openwrt" || ( "$service_manager" == "auto" && -f /etc/openwrt_release ) ]]; then
     deploy_args+=(--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1)
   fi

@@ -389,9 +389,10 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	profile := config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile)
 	fullPlaintextConfigured := runtime.FullPlaintext || runtime.TXPlaintext || kernelDatapathFullPlaintextPolicySelectedForDesired(desired)
+	fullPlaintextConfigAllowed := fullPlaintextConfigured && kernelDatapathOpenWrtCrashRiskAllowed()
 	suppressFullPlaintext := kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired)
-	rxWorkerAllowed := !suppressFullPlaintext && (fullPlaintextConfigured || kernelDatapathRXWorkerCrashRiskAllowed())
-	fullPlaintextAllowed := !suppressFullPlaintext && (fullPlaintextConfigured || kernelDatapathFullPlaintextCrashRiskAllowed())
+	rxWorkerAllowed := !suppressFullPlaintext && (fullPlaintextConfigAllowed || kernelDatapathRXWorkerCrashRiskAllowed())
+	fullPlaintextAllowed := !suppressFullPlaintext && (fullPlaintextConfigAllowed || kernelDatapathFullPlaintextCrashRiskAllowed())
 	params = filterTrustIXDatapathRuntimeCrashRiskParameters(params, rxWorkerAllowed, fullPlaintextAllowed)
 	rxWorker := runtime.RXWorker || runtime.RXStage == config.KernelDatapathRXStageWorker
 	fullPlaintext := fullPlaintextConfigured

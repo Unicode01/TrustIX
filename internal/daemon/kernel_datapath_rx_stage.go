@@ -569,6 +569,9 @@ func kernelDatapathRXModeForDesired(desired config.Desired) string {
 	if kernelDatapathFullPlaintextEnabledForDesired(desired) {
 		return kernelDatapathRXModeWorker
 	}
+	if kernelDatapathFullPlaintextRequestedForDesired(desired) {
+		return ""
+	}
 	switch requestedRXStage {
 	case config.KernelDatapathRXStageAuto, config.KernelDatapathRXStageStage:
 		return kernelDatapathRXModeStage
@@ -610,13 +613,13 @@ func kernelDatapathFullPlaintextEnabledForDesired(desired config.Desired) bool {
 		if suppressFullPlaintext {
 			return false
 		}
-		return true
+		return kernelDatapathOpenWrtCrashRiskAllowed()
 	}
 	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
 		if suppressFullPlaintext {
 			return false
 		}
-		return true
+		return kernelDatapathOpenWrtCrashRiskAllowed()
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled", "full":
@@ -695,6 +698,9 @@ func kernelDatapathRXDisabledReasonForDesired(desired config.Desired) string {
 	}
 	if kernelDatapathFullPlaintextRequestedByEnvOnlyForDesired(desired) && !kernelDatapathFullPlaintextCrashRiskAllowed() {
 		return "full plaintext datapath requires TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT=1"
+	}
+	if kernelDatapathFullPlaintextRequestedForDesired(desired) && !kernelDatapathOpenWrtCrashRiskAllowed() {
+		return "OpenWrt full plaintext datapath requires TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1"
 	}
 	if kernelDatapathRXWorkerRequestedForDesired(desired) &&
 		!kernelDatapathFullPlaintextEnabledForDesired(desired) &&
