@@ -5854,6 +5854,10 @@ func TestCrossHostSoakRunnerDryRunPinsKernelTransportConfig(t *testing.T) {
 		{
 			name:     "native TC tunnel requires kernel transport",
 			caseName: "tc-gre-plaintext",
+			extraEnv: []string{
+				"TRUSTIX_CROSS_HOST_PROFILE=performance",
+				"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=tc_xdp",
+			},
 			want: []string{
 				"transport: gre",
 				"datapath: tc_xdp",
