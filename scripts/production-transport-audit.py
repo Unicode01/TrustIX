@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 import subprocess
@@ -143,6 +144,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "require current evidence build_commit values to resolve in this "
             "repository and be ancestors of HEAD"
+        ),
+    )
+    parser.add_argument(
+        "--require-current-gate-tools",
+        action="store_true",
+        help=(
+            "require current evidence production_gate_sha256/verifier_sha256 "
+            "to match the current repository production gate and verifier scripts"
         ),
     )
     parser.add_argument(
@@ -324,6 +333,7 @@ def validate_current_requirement_identity(
     *,
     require_artifact_reference: bool,
     require_build_ancestor: bool,
+    require_current_gate_tools: bool,
 ) -> None:
     for row in rows:
         errors = current_requirement_identity_errors(row)
@@ -331,6 +341,8 @@ def validate_current_requirement_identity(
             errors.extend(artifact_reference_errors(row["artifact"]))
         if require_build_ancestor:
             errors.extend(build_commit_ancestor_errors(row["build_commit"]))
+        if require_current_gate_tools:
+            errors.extend(current_gate_tool_identity_errors(row))
         if errors:
             raise SystemExit(f"{label}:{row['_source_line']}: " + "; ".join(errors))
 
@@ -438,6 +450,36 @@ def artifact_reference_errors(artifact: str) -> list[str]:
     return []
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
+    root = repo_root()
+    gate_path = root / "scripts" / "linux-cross-host-production-gate.sh"
+    verifier_path = root / "scripts" / "linux-cross-host-soak-verify.py"
+    want_gate_sha = file_sha256(gate_path)
+    want_verifier_sha = file_sha256(verifier_path)
+    errors: list[str] = []
+    if row["production_gate_sha256"] != want_gate_sha:
+        errors.append(
+            "production_gate_sha256 must match current "
+            f"scripts/linux-cross-host-production-gate.sh sha256 {want_gate_sha}; "
+            f"got {row['production_gate_sha256']!r}"
+        )
+    if row["verifier_sha256"] != want_verifier_sha:
+        errors.append(
+            "verifier_sha256 must match current "
+            f"scripts/linux-cross-host-soak-verify.py sha256 {want_verifier_sha}; "
+            f"got {row['verifier_sha256']!r}"
+        )
+    return errors
+
+
 def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(repo_root()), *args],
@@ -483,6 +525,7 @@ def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> 
         "current evidence requirements",
         require_artifact_reference=args.require_artifact_reference,
         require_build_ancestor=args.require_current_build_ancestor,
+        require_current_gate_tools=args.require_current_gate_tools,
     )
     requirements: dict[str, dict[str, str]] = {}
     for row in rows:

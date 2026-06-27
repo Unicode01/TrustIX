@@ -1,6 +1,8 @@
 package scripts
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -290,6 +292,16 @@ func isSHA256Hex(value string) bool {
 		}
 	}
 	return true
+}
+
+func sha256File(t *testing.T, path string) string {
+	t.Helper()
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 func validateProductionEvidenceManifestIdentity(t *testing.T, evidence productionTransportEvidence) {
@@ -2941,6 +2953,77 @@ func TestProductionTransportAuditScriptRequireCurrentRejectsUnknownBuildCommit(t
 		"current evidence requirements:2",
 		"build_commit",
 		"must resolve to a commit in this repository",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("audit failure missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	evidence := filepath.Join(workdir, "evidence.tsv")
+	current := filepath.Join(workdir, "current.tsv")
+	defaultPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\t3\t3600\trequire current gate tooling",
+		"",
+	}, "\n")
+	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	evidencePayload := "# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note\n"
+	if err := os.WriteFile(evidence, []byte(evidencePayload), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+	currentPayload := func(productionGateSHA, verifierSHA string) string {
+		return strings.Join([]string{
+			"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version",
+			"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + productionGateSHA + "\t" + verifierSHA + "\tdocs/trustix-performance-log.md#current-tooling\tcurrent gate tooling\t" + strings.Repeat("c", 64) + "\ttrustix-current\tcurrent-commit\t2026-06-25T00:00:00Z\tgo1.25.0",
+			"",
+		}, "\n")
+	}
+	currentGateSHA := sha256File(t, "linux-cross-host-production-gate.sh")
+	currentVerifierSHA := sha256File(t, "linux-cross-host-soak-verify.py")
+	if err := os.WriteFile(current, []byte(currentPayload(currentGateSHA, currentVerifierSHA)), 0o644); err != nil {
+		t.Fatalf("write current requirements: %v", err)
+	}
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--current-requirements", slashPath(current),
+		"--scope", "cross_host",
+		"--require-current",
+		"--require-current-gate-tools",
+	)
+	cmd.Dir = "."
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("audit rejected current gate tool hashes: %v\n%s", err, output)
+	}
+
+	if err := os.WriteFile(current, []byte(currentPayload(strings.Repeat("a", 64), strings.Repeat("b", 64))), 0o644); err != nil {
+		t.Fatalf("write stale current requirements: %v", err)
+	}
+	staleCmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--current-requirements", slashPath(current),
+		"--scope", "cross_host",
+		"--require-current",
+		"--require-current-gate-tools",
+	)
+	staleCmd.Dir = "."
+	output, err := staleCmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted stale gate tool hashes:\n%s", output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"current evidence requirements:2",
+		"production_gate_sha256 must match current",
+		"verifier_sha256 must match current",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("audit failure missing %q:\n%s", want, output)
