@@ -16,6 +16,7 @@ import (
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/routing"
 	"trustix.local/trustix/internal/transport"
+	securetransport "trustix.local/trustix/internal/transport/secure"
 )
 
 func TestConfigValidateRejectsBadDesired(t *testing.T) {
@@ -726,6 +727,82 @@ func TestDataPathSessionsNeedRestartWhenTransportProfilePolicyChanges(t *testing
 	}
 	if !dataPathSessionsNeedRestart(oldDesired, newDesired) {
 		t.Fatal("transport profile policy changes should restart data sessions")
+	}
+}
+
+func TestDataplaneAttachSpecNeedsReloadWhenSecureExperimentalTCPRouteGSOChanges(t *testing.T) {
+	oldDesired := config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"experimental-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "experimental-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+	newDesired := oldDesired
+	newDesired.TransportPolicy.Datapath = config.TransportDatapathKernelModule
+
+	oldSpec := dataplaneAttachSpec(t.TempDir(), oldDesired)
+	newSpec := dataplaneAttachSpec(t.TempDir(), newDesired)
+	if oldSpec.ExperimentalTCPRouteGSOAsync || oldSpec.KernelUDPTXSecureDirect {
+		t.Fatalf("old TC-XDP secure experimental_tcp unexpectedly selected route-GSO: %#v", oldSpec)
+	}
+	if !newSpec.ExperimentalTCPRouteGSOAsync || !newSpec.ExperimentalTCPTXDirect ||
+		!newSpec.KernelUDPTXSecureDirect || !newSpec.KernelUDPRXSecureDirect {
+		t.Fatalf("new kernel-module secure experimental_tcp did not select route-GSO/direct path: %#v", newSpec)
+	}
+	if !dataplaneAttachSpecNeedsReload(oldDesired, newDesired) {
+		t.Fatal("secure experimental_tcp route-GSO attach-spec change should reload dataplane")
+	}
+}
+
+func TestDataplaneAttachSpecNeedsReloadWhenExperimentalTCPFastPathDisabledChanges(t *testing.T) {
+	oldDesired := config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathTCXDP,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"experimental-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "experimental-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+	newDesired := oldDesired
+	newDesired.TransportPolicy.Candidates = []core.EndpointID{"tcp-a", "experimental-a"}
+	newDesired.Endpoints = append([]config.EndpointConfig{{
+		Name:      "tcp-a",
+		Transport: string(transport.ProtocolTCP),
+		Enabled:   true,
+	}}, oldDesired.Endpoints...)
+
+	oldSpec := dataplaneAttachSpec(t.TempDir(), oldDesired)
+	newSpec := dataplaneAttachSpec(t.TempDir(), newDesired)
+	if oldSpec.ExperimentalTCPFastPathDisabled || oldSpec.KernelUDPTXDirectOnly {
+		t.Fatalf("old standalone experimental_tcp should keep fast path attach surface neutral: %#v", oldSpec)
+	}
+	if !newSpec.ExperimentalTCPFastPathDisabled || newSpec.ExperimentalTCPFastPathDisabledReason == "" {
+		t.Fatalf("new mixed TCP/experimental_tcp config should disable experimental_tcp fast path: %#v", newSpec)
+	}
+	if newSpec.KernelUDPTXDirectOnly {
+		t.Fatalf("mixed TCP/experimental_tcp should not rely on UDP direct-only reload signal: %#v", newSpec)
+	}
+	if !dataplaneAttachSpecNeedsReload(oldDesired, newDesired) {
+		t.Fatal("experimental_tcp fast-path disabled attach-spec change should reload dataplane")
 	}
 }
 

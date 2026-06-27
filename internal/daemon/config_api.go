@@ -719,12 +719,7 @@ func dataPathListenersNeedRestart(oldDesired, newDesired config.Desired) bool {
 }
 
 func dataplaneAttachSpecNeedsReload(oldDesired, newDesired config.Desired) bool {
-	return kernelUDPTXDirectOnlyAttachForDesired(oldDesired) != kernelUDPTXDirectOnlyAttachForDesired(newDesired) ||
-		kernelUDPTCOnlyProviderForDesired(oldDesired) != kernelUDPTCOnlyProviderForDesired(newDesired) ||
-		kernelUDPSecureFullDirectForDesired(oldDesired) != kernelUDPSecureFullDirectForDesired(newDesired) ||
-		nativePlaintextKernelTunnelRouteOffloadForDesired(oldDesired) != nativePlaintextKernelTunnelRouteOffloadForDesired(newDesired) ||
-		kernelDatapathFullPlaintextEnabledForDesired(oldDesired) != kernelDatapathFullPlaintextEnabledForDesired(newDesired) ||
-		!reflect.DeepEqual(dataplaneLANAttachSpecs(oldDesired), dataplaneLANAttachSpecs(newDesired))
+	return !reflect.DeepEqual(dataplaneAttachSpec("", oldDesired), dataplaneAttachSpec("", newDesired))
 }
 
 func managementHostAPINeedsRestart(oldDesired, newDesired config.Desired) bool {
