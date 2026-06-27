@@ -21,6 +21,11 @@ func TestWebUIIXProvisionDefaultsMatchBackendProductionProfiles(t *testing.T) {
 		`ixProvisionDefaultEndpointTransport(input.profile, endpointMode, endpointAddress, input.serviceManager)`,
 		`ixProvisionDefaultEndpointTransport(newIXProfile, newIXEndpointMode, newIXEndpointAddress, newIXServiceManager)`,
 		`ixProvisionDefaultEndpointTransport(nextProfile, newIXEndpointMode, newIXEndpointAddress, nextServiceManager)`,
+		`const { security, transport_profile: transportProfile, transport = "udp", ...rest } = options;`,
+		`plaintextPerformanceEndpoint("local-udp",`,
+		`plaintextPerformanceEndpoint(` + "`${id}-udp`" + `, { mode: "active", address: "" })`,
+		`{ transport: "udp", profile: "performance", datapath: "kernel_module", encryption: "plaintext", crypto_placement: "userspace", advanced: {} }`,
+		`plaintextPerformanceEndpoint(` + "`${selectedPeer.id || \"peer\"}-udp-${endpoints.length + 1}`" + `, { mode: "active", address: "" })`,
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(source, want) {
@@ -31,6 +36,10 @@ func TestWebUIIXProvisionDefaultsMatchBackendProductionProfiles(t *testing.T) {
 		`return { transportProfile: "performance", datapath: "auto", encryption: "secure", cryptoPlacement: "auto", kernelTransport: "auto" };`,
 		`return { transportProfile: "performance", datapath: "kernel_module", encryption: "plaintext", cryptoPlacement: "auto", kernelTransport: "auto" };`,
 		`crypto_placement: "auto",`,
+		`plaintextPerformanceEndpoint("local-experimental_tcp",`,
+		`plaintextPerformanceEndpoint(` + "`${id}-experimental_tcp`" + `, { mode: "active", address: "" })`,
+		`{ transport: "experimental_tcp", profile: "performance", datapath: "auto", advanced: {} }`,
+		`plaintextPerformanceEndpoint(` + "`${selectedPeer.id || \"peer\"}-experimental_tcp-${endpoints.length + 1}`" + `, { mode: "active", address: "" })`,
 	}
 	for _, bad := range forbidden {
 		if strings.Contains(source, bad) {
@@ -52,6 +61,30 @@ func TestWebUITitleIncludesCurrentIXID(t *testing.T) {
 		if !strings.Contains(source, want) {
 			t.Fatalf("webui dynamic title missing fragment %q", want)
 		}
+	}
+}
+
+func TestWebUITopologyQuickPeerUsesPinnedPlaintextFullKmodDefault(t *testing.T) {
+	payload, err := os.ReadFile("../webui/src/main.tsx")
+	if err != nil {
+		t.Fatalf("read webui main: %v", err)
+	}
+	source := string(payload)
+	for _, want := range []string{
+		`name: ` + "`${nextID}-udp`" + `,`,
+		`transport: "udp",`,
+		`encryption: "plaintext",`,
+		`transport_profile: {`,
+		`profile: "performance",`,
+		`datapath: "kernel_module",`,
+		`crypto_placement: "userspace",`,
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("webui topology quick peer default missing fragment %q", want)
+		}
+	}
+	if strings.Contains(source, `security: {},`) {
+		t.Fatal("webui topology quick peer still creates an endpoint without explicit plaintext security/profile defaults")
 	}
 }
 

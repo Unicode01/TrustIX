@@ -597,7 +597,15 @@ function App() {
         mode: "active",
         address: "",
         enabled: true,
-        security: {},
+        security: {
+          encryption: "plaintext",
+        },
+        transport_profile: {
+          profile: "performance",
+          datapath: "kernel_module",
+          encryption: "plaintext",
+          crypto_placement: "userspace",
+        },
       }],
     });
     updateDesired({ ...cfg, peers });

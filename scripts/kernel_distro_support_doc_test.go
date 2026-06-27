@@ -40,3 +40,37 @@ func TestKernelDistroSupportUsesCurrentProductionEvidenceBoundary(t *testing.T) 
 		t.Fatal("kernel distro support doc still describes selected plaintext route-GSO as fallback-only")
 	}
 }
+
+func TestKernelDistroSupportOpenWrtSDKSpotCheckTracksCurrentMatrixTargets(t *testing.T) {
+	payload, err := os.ReadFile("../docs/kernel-distro-support.md")
+	if err != nil {
+		t.Fatalf("read kernel distro support doc: %v", err)
+	}
+	source := string(payload)
+	for _, want := range []string{
+		"default `scripts/openwrt-full-datapath-kmod-matrix.sh` target list",
+		"| `23.05.6 x86/64` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |",
+		"| `23.05.6 armsr/armv8` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |",
+		"| `24.10.7 x86/64` | `6.6.141` | SDK build plus full-kmod runtime gate promoted |",
+		"| `24.10.7 armsr/armv8` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |",
+		"| `25.12.4 x86/64` | `6.12.87` | SDK build passed; route-GSO runtime failed closed |",
+		"| `25.12.4 armsr/armv8` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |",
+		"table above is the current-source default matrix",
+		"Runtime full-kmod coverage now",
+		"includes OpenWrt 23.05.5, 24.10.2, and 24.10.7 x86_64",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("kernel distro support doc missing OpenWrt current SDK/runtime boundary fragment %q", want)
+		}
+	}
+	for _, staleTableRow := range []string{
+		"| `21.02.7 x86/64` |",
+		"| `23.05.5 x86/64` |",
+		"| `23.05.5 armsr/armv8` |",
+		"| `24.10.2 x86/64` |",
+	} {
+		if strings.Contains(source, staleTableRow) {
+			t.Fatalf("kernel distro support current SDK spot-check table still includes stale target row %q", staleTableRow)
+		}
+	}
+}

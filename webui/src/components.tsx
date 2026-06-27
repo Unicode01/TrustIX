@@ -953,10 +953,10 @@ function ixProvisionAcklessEndpointName(endpointName: string, ixID: string): str
 }
 
 function plaintextPerformanceEndpoint(name: string, options: Partial<EndpointConfig>): EndpointConfig {
-  const { security, transport_profile: transportProfile, ...rest } = options;
+  const { security, transport_profile: transportProfile, transport = "udp", ...rest } = options;
   return {
     name,
-    transport: "experimental_tcp",
+    transport,
     enabled: true,
     security: { encryption: "plaintext", ...(security || {}) },
     transport_profile: {
@@ -2912,7 +2912,7 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
     props.onDesired({ ...cfg, endpoints });
   };
   const addEndpoint = () => {
-    const endpoints = [...arrayValue(cfg.endpoints), plaintextPerformanceEndpoint("local-experimental_tcp", {
+    const endpoints = [...arrayValue(cfg.endpoints), plaintextPerformanceEndpoint("local-udp", {
       mode: "passive",
       listen: "0.0.0.0:7000",
     })];
@@ -2935,7 +2935,7 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
         domain: cfg.domain?.id || cfg.ix?.domain || "",
         control_api: "",
         allowed_prefixes: [],
-        endpoints: [plaintextPerformanceEndpoint(`${id}-experimental_tcp`, { mode: "active", address: "" })],
+        endpoints: [plaintextPerformanceEndpoint(`${id}-udp`, { mode: "active", address: "" })],
       }],
     });
   };
@@ -3885,7 +3885,7 @@ function TransportAdvancedFields(props: { t: Translate; value: TransportAdvanced
 }
 
 function TransportProfileOverrides(props: { t: Translate; profiles: TransportProfileConfig[]; onChange: (profiles: TransportProfileConfig[]) => void }) {
-  const addProfile = () => props.onChange([...props.profiles, { transport: "experimental_tcp", profile: "performance", datapath: "auto", advanced: {} }]);
+  const addProfile = () => props.onChange([...props.profiles, { transport: "udp", profile: "performance", datapath: "kernel_module", encryption: "plaintext", crypto_placement: "userspace", advanced: {} }]);
   const updateProfile = (index: number, profile: TransportProfileConfig) => {
     const profiles = [...props.profiles];
     profiles[index] = profile;
@@ -4139,7 +4139,7 @@ function ConfigPeerTable(props: { t: Translate; lang: string; peers: PeerConfig[
     const endpoints = arrayValue(selectedPeer.endpoints);
     props.onUpdate(selectedIndex, {
       ...selectedPeer,
-      endpoints: [...endpoints, plaintextPerformanceEndpoint(`${selectedPeer.id || "peer"}-experimental_tcp-${endpoints.length + 1}`, { mode: "active", address: "" })],
+      endpoints: [...endpoints, plaintextPerformanceEndpoint(`${selectedPeer.id || "peer"}-udp-${endpoints.length + 1}`, { mode: "active", address: "" })],
     });
   };
   const updatePeerEndpoint = (endpointIndex: number, endpoint: EndpointConfig) => {

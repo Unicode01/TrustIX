@@ -343,19 +343,20 @@ plaintext, and eight warmed sessions active. This is the current pinned
 OpenWrt-Debian full-kmod production evidence; it validates Debian
 `6.12.90+deb13.1-cloud-amd64`, not Debian `6.12.94+deb13-cloud-amd64`.
 
-OpenWrt SDK compile spot check for `kernel/trustix_datapath`:
+Current OpenWrt SDK compile matrix targets for `kernel/trustix_datapath` from
+the default `scripts/openwrt-full-datapath-kmod-matrix.sh` target list:
 
-| OpenWrt target | Kernel | Result |
+| OpenWrt target | Kernel source | Status |
 | --- | --- | --- |
-| `21.02.7 x86/64` | `5.4.238` | pass |
-| `23.05.5 x86/64` | `5.15.167` | pass |
-| `24.10.2 x86/64` | `6.6.93` | pass |
-| `24.10.7 x86/64` | `6.6.141` | pass |
-| `25.12.4 x86/64` | `6.12.87` | pass |
-| `23.05.5 armsr/armv8` | `5.15.167` | pass |
+| `23.05.6 x86/64` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |
+| `23.05.6 armsr/armv8` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |
+| `24.10.7 x86/64` | `6.6.141` | SDK build plus full-kmod runtime gate promoted |
+| `24.10.7 armsr/armv8` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |
+| `25.12.4 x86/64` | `6.12.87` | SDK build passed; route-GSO runtime failed closed |
+| `25.12.4 armsr/armv8` | SDK `kernel-version.mk` | compile-matrix target; runtime not promoted |
 
 Older performance-log runs also covered a wider OpenWrt compile matrix, but the
-table above is the current-source spot check. Runtime full-kmod coverage now
+table above is the current-source default matrix. Runtime full-kmod coverage now
 includes OpenWrt 23.05.5, 24.10.2, and 24.10.7 x86_64 with matching SDK-built
 modules. OpenWrt 24.10.7 also has route-GSO fail-closed coverage, but no
 OpenWrt route-GSO, secure-kUDP route-GSO, or secure experimental TCP kernel
