@@ -131,7 +131,6 @@ route_policy:
 policies:
   - name: default-routed
     route_selection: longest_prefix
-    load_balance: least_conn
     flow_stickiness: true
     rewrite: preserve_source
 
@@ -141,7 +140,9 @@ transport_policy:
     - sh-udp
     - sh-quic
   failover: health_based
-  load_balance: least_conn
+  profile: stable
+  datapath: userspace
+  encryption: secure
   # auto uses TLS exporter when the selected transport has an IX-certificate
   # mTLS link (tcp/websocket/http_connect/quic), otherwise it falls back to the
   # TrustIX X25519 transcript used by UDP and experimental_tcp.
