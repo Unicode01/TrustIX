@@ -246,3 +246,164 @@ func TestTrustIXBootstrapIXGeneratesProductionPlaintextDefaults(t *testing.T) {
 		t.Fatalf("policy defaults = %#v", cfg.Policies)
 	}
 }
+
+type bootstrapProfileGeneratedConfig struct {
+	KernelModules struct {
+		CapabilityProfile string `json:"capability_profile"`
+		Datapath          struct {
+			RXStage                   string `json:"rx_stage"`
+			RXWorker                  bool   `json:"rx_worker"`
+			TXPlaintext               bool   `json:"tx_plaintext"`
+			FullPlaintext             bool   `json:"full_plaintext"`
+			RXWorkerAllowExperimental bool   `json:"rx_worker_allow_experimental_tcp"`
+		} `json:"datapath"`
+	} `json:"kernel_modules"`
+	Endpoints []struct {
+		Transport string `json:"transport"`
+		Security  struct {
+			Encryption string `json:"encryption"`
+		} `json:"security"`
+		TransportProfile struct {
+			Profile         string `json:"profile"`
+			Datapath        string `json:"datapath"`
+			Encryption      string `json:"encryption"`
+			CryptoPlacement string `json:"crypto_placement"`
+		} `json:"transport_profile"`
+	} `json:"endpoints"`
+	TransportPolicy struct {
+		Profile         string `json:"profile"`
+		Datapath        string `json:"datapath"`
+		Encryption      string `json:"encryption"`
+		CryptoPlacement string `json:"crypto_placement"`
+		KernelTransport struct {
+			Mode string `json:"mode"`
+		} `json:"kernel_transport"`
+		SessionPool struct {
+			Warmup bool `json:"warmup"`
+		} `json:"session_pool"`
+	} `json:"transport_policy"`
+}
+
+func TestTrustIXBootstrapIXGeneratesPinnedProfileDefaults(t *testing.T) {
+	bash := requireGNUBash4(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not available")
+	}
+
+	workDir, err := os.MkdirTemp(".", ".trustix-bootstrap-profile-test-")
+	if err != nil {
+		t.Fatalf("create temp work dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(workDir)
+	})
+	certDir := filepath.Join(workDir, "certs")
+	if out, err := exec.Command("go", "run", "../cmd/trustix-ca", "quickstart", "-out", certDir, "-domain", "trust.local", "-ix", "ix-bootstrap-profile-ca").CombinedOutput(); err != nil {
+		t.Fatalf("generate bootstrap profile test certs: %v\n%s", err, out)
+	}
+
+	cases := []struct {
+		profile          string
+		transportProfile string
+		datapath         string
+		encryption       string
+		cryptoPlacement  string
+		kernelTransport  string
+		kernelCapability string
+		fullPlaintext    bool
+	}{
+		{profile: "stable", transportProfile: "stable", datapath: "userspace", encryption: "secure", cryptoPlacement: "userspace", kernelTransport: "disabled", kernelCapability: "disabled"},
+		{profile: "latency", transportProfile: "stable", datapath: "userspace", encryption: "secure", cryptoPlacement: "userspace", kernelTransport: "disabled", kernelCapability: "disabled"},
+		{profile: "compatibility", transportProfile: "stable", datapath: "userspace", encryption: "secure", cryptoPlacement: "userspace", kernelTransport: "disabled", kernelCapability: "disabled"},
+		{profile: "performance", transportProfile: "performance", datapath: "tc_xdp", encryption: "secure", cryptoPlacement: "kernel", kernelTransport: "require_kernel", kernelCapability: "performance"},
+		{profile: "plaintext_performance", transportProfile: "performance", datapath: "kernel_module", encryption: "plaintext", cryptoPlacement: "userspace", kernelTransport: "require_kernel", kernelCapability: "full_plaintext", fullPlaintext: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.profile, func(t *testing.T) {
+			cfg := runBootstrapProfileConfig(t, bash, workDir, certDir, tc.profile)
+			if cfg.TransportPolicy.Profile != tc.transportProfile ||
+				cfg.TransportPolicy.Datapath != tc.datapath ||
+				cfg.TransportPolicy.Encryption != tc.encryption ||
+				cfg.TransportPolicy.CryptoPlacement != tc.cryptoPlacement ||
+				cfg.TransportPolicy.KernelTransport.Mode != tc.kernelTransport ||
+				!cfg.TransportPolicy.SessionPool.Warmup {
+				t.Fatalf("transport policy for profile %s = %#v", tc.profile, cfg.TransportPolicy)
+			}
+			if cfg.KernelModules.CapabilityProfile != tc.kernelCapability {
+				t.Fatalf("kernel capability for profile %s = %q, want %q", tc.profile, cfg.KernelModules.CapabilityProfile, tc.kernelCapability)
+			}
+			if cfg.KernelModules.Datapath.RXWorker != tc.fullPlaintext ||
+				cfg.KernelModules.Datapath.TXPlaintext != tc.fullPlaintext ||
+				cfg.KernelModules.Datapath.FullPlaintext != tc.fullPlaintext ||
+				cfg.KernelModules.Datapath.RXWorkerAllowExperimental != tc.fullPlaintext {
+				t.Fatalf("kernel datapath full-plaintext switches for profile %s = %#v", tc.profile, cfg.KernelModules.Datapath)
+			}
+			if tc.fullPlaintext && cfg.KernelModules.Datapath.RXStage != "worker" {
+				t.Fatalf("full plaintext profile rx_stage = %q, want worker", cfg.KernelModules.Datapath.RXStage)
+			}
+			if !tc.fullPlaintext && cfg.KernelModules.Datapath.RXStage != "" {
+				t.Fatalf("non-full-plaintext profile %s unexpectedly set rx_stage = %q", tc.profile, cfg.KernelModules.Datapath.RXStage)
+			}
+			if len(cfg.Endpoints) != 1 ||
+				cfg.Endpoints[0].Transport != "udp" ||
+				cfg.Endpoints[0].Security.Encryption != tc.encryption ||
+				cfg.Endpoints[0].TransportProfile.Profile != tc.transportProfile ||
+				cfg.Endpoints[0].TransportProfile.Datapath != tc.datapath ||
+				cfg.Endpoints[0].TransportProfile.Encryption != tc.encryption ||
+				cfg.Endpoints[0].TransportProfile.CryptoPlacement != tc.cryptoPlacement {
+				t.Fatalf("endpoint defaults for profile %s = %#v", tc.profile, cfg.Endpoints)
+			}
+		})
+	}
+}
+
+func runBootstrapProfileConfig(t *testing.T, bash, workDir, certDir, profile string) bootstrapProfileGeneratedConfig {
+	t.Helper()
+	profileWorkDir := filepath.Join(workDir, profile)
+	if err := os.MkdirAll(profileWorkDir, 0o755); err != nil {
+		t.Fatalf("create profile work dir: %v", err)
+	}
+	ixID := "ix-profile-" + strings.ReplaceAll(profile, "_", "-")
+	cmd := exec.Command(
+		bash,
+		"trustix-bootstrap-ix.sh",
+		"--ix", ixID,
+		"--domain", "trust.local",
+		"--control-api", "https://"+ixID+".example:9443",
+		"--advertise", "10.91.0.0/24",
+		"--listen", "0.0.0.0:7000",
+		"--address", ixID+".example:7000",
+		"--profile", profile,
+		"--source-certs", strings.ReplaceAll(certDir, "\\", "/"),
+		"--work-dir", strings.ReplaceAll(profileWorkDir, "\\", "/"),
+		"--target-cert-dir", "/etc/trustix/certs",
+		"--no-build",
+		"--no-deploy",
+		"--json",
+	)
+	cmd.Env = append(os.Environ(), "TRUSTIX_BOOTSTRAP_INSTALL_DEPS=0")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("trustix-bootstrap-ix.sh --profile %s failed: %v\nstderr:\n%s\nstdout:\n%s", profile, err, stderr.String(), string(stdout))
+	}
+	var summary struct {
+		Config string `json:"config"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout), &summary); err != nil {
+		t.Fatalf("parse bootstrap profile summary: %v\nstdout:\n%s\nstderr:\n%s", err, string(stdout), stderr.String())
+	}
+	if summary.Config == "" {
+		t.Fatalf("bootstrap profile summary did not include config path: %s", stdout)
+	}
+	configJSON, err := os.ReadFile(summary.Config)
+	if err != nil {
+		t.Fatalf("read generated profile config %q: %v\nstderr:\n%s", summary.Config, err, stderr.String())
+	}
+	var cfg bootstrapProfileGeneratedConfig
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		t.Fatalf("parse generated profile config: %v\n%s", err, string(configJSON))
+	}
+	return cfg
+}
