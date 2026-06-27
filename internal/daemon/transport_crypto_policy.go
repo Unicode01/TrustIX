@@ -18,7 +18,7 @@ func effectiveTransportCryptoPlacementConfig(policy config.TransportPolicyConfig
 	if normalized := normalizeTransportCryptoPlacementConfig(policy.CryptoPlacement); normalized != "" {
 		return normalized
 	}
-	return string(dataplane.CryptoPlacementAuto)
+	return string(dataplane.CryptoPlacementUserspace)
 }
 
 func normalizeTransportCryptoPlacementConfig(raw string) string {

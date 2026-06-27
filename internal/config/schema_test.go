@@ -7,6 +7,26 @@ import (
 	"trustix.local/trustix/internal/core"
 )
 
+func TestEffectiveTransportProfileEmptyPolicyUsesProductionCompatibilityDefaults(t *testing.T) {
+	profile := EffectiveTransportProfile(TransportPolicyConfig{}, "udp")
+	if profile.Profile != TransportProfileStable ||
+		profile.Datapath != TransportDatapathUserspace ||
+		profile.Encryption != "secure" ||
+		profile.CryptoPlacement != "userspace" {
+		t.Fatalf("effective transport profile = %#v, want stable/userspace/secure/userspace", profile)
+	}
+}
+
+func TestEffectiveTransportProfilePreservesExplicitAutoOverrides(t *testing.T) {
+	profile := EffectiveTransportProfile(TransportPolicyConfig{
+		Datapath:        TransportDatapathAuto,
+		CryptoPlacement: "auto",
+	}, "udp")
+	if profile.Datapath != TransportDatapathAuto || profile.CryptoPlacement != "auto" {
+		t.Fatalf("effective explicit auto profile = %#v, want datapath/crypto auto", profile)
+	}
+}
+
 func TestEndpointLocalBindValidation(t *testing.T) {
 	cfg := Desired{
 		Domain: DomainConfig{ID: core.DomainID("lab.local")},

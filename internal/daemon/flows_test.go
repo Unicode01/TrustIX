@@ -3398,6 +3398,7 @@ func TestWarmKernelDirectRouteSessionsUsesDynamicRuntimeRoutes(t *testing.T) {
 		}},
 		TransportPolicy: config.TransportPolicyConfig{
 			Encryption: securetransport.EncryptionPlaintext,
+			Datapath:   config.TransportDatapathKernelModule,
 			SessionPool: config.SessionPoolPolicyConfig{
 				Warmup: true,
 			},

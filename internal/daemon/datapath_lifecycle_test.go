@@ -283,6 +283,7 @@ func TestStartDataPathFullPlaintextWarmsKernelUDPRouteWithAutoKernelTransport(t 
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
 				Encryption: securetransport.EncryptionPlaintext,
+				Datapath:   config.TransportDatapathKernelModule,
 				KernelTransport: config.KernelTransportPolicyConfig{
 					Mode: string(dataplane.KernelTransportModeAuto),
 				},
@@ -1001,6 +1002,7 @@ func TestFullPlaintextKernelUDPRuntimeSkipsUserspaceReceiveLoopWithAutoDatapathP
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
 				Encryption: securetransport.EncryptionPlaintext,
+				Datapath:   config.TransportDatapathAuto,
 				Candidates: []core.EndpointID{"udp-a"},
 			},
 			KernelModules: config.KernelModulesConfig{

@@ -440,8 +440,8 @@ func EffectiveTransportProfile(policy TransportPolicyConfig, rawTransport string
 		Transport:       transportName,
 		Profile:         effectiveTransportProfileName(policy.Profile),
 		Datapath:        effectiveTransportDatapath(policy.Datapath),
-		Encryption:      strings.ToLower(strings.TrimSpace(policy.Encryption)),
-		CryptoPlacement: strings.ToLower(strings.TrimSpace(policy.CryptoPlacement)),
+		Encryption:      effectiveTransportEncryption(policy.Encryption),
+		CryptoPlacement: effectiveTransportCryptoPlacement(policy.CryptoPlacement),
 		Advanced:        policy.Advanced,
 	}
 	for _, candidate := range policy.Profiles {
@@ -505,7 +505,23 @@ func effectiveTransportDatapath(value string) string {
 	if normalized := normalizeTransportDatapath(value); normalized != "" {
 		return normalized
 	}
-	return TransportDatapathAuto
+	return TransportDatapathUserspace
+}
+
+func effectiveTransportEncryption(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value != "" {
+		return value
+	}
+	return "secure"
+}
+
+func effectiveTransportCryptoPlacement(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value != "" {
+		return value
+	}
+	return "userspace"
 }
 
 func mergeTransportAdvanced(base, override TransportAdvancedConfig) TransportAdvancedConfig {
