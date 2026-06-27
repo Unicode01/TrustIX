@@ -2350,6 +2350,7 @@ func TestCIWorkflowRunsCurrentProductionTransportAudit(t *testing.T) {
 	}
 	text := string(payload)
 	for _, want := range []string{
+		"fetch-depth: 0",
 		"Production Transport Evidence Audit",
 		"python3 scripts/production-transport-audit.py",
 		"--scope cross_host",
