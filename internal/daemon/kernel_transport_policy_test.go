@@ -30,6 +30,58 @@ func TestEffectiveKernelTransportModeDisablesAutoForUserspaceUDP(t *testing.T) {
 	}
 }
 
+func TestEffectiveKernelTransportModeDisablesEmptyPolicyForUserspaceUDP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Candidates: []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeDisabled {
+		t.Fatalf("kernel transport mode = %q, want disabled for empty userspace UDP policy", got)
+	}
+}
+
+func TestEffectiveKernelTransportModeDisablesEmptyPolicyForUserspaceExperimentalTCP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeDisabled {
+		t.Fatalf("kernel transport mode = %q, want disabled for empty userspace experimental_tcp policy", got)
+	}
+}
+
+func TestEffectiveKernelTransportModePreservesExplicitAutoForUserspaceExperimentalTCP(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeAuto)},
+			Candidates:      []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
+		t.Fatalf("kernel transport mode = %q, want explicit auto for userspace experimental_tcp policy", got)
+	}
+}
+
 func TestEffectiveKernelTransportModeKeepsExplicitPreferForUserspaceUDP(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{

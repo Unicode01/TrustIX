@@ -29,23 +29,33 @@ func (daemon *Daemon) kernelTransportMode() dataplane.KernelTransportMode {
 }
 
 func effectiveKernelTransportModeForDesired(desired config.Desired) dataplane.KernelTransportMode {
-	mode := normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode)
+	mode, explicit := effectiveKernelTransportModeConfig(desired.TransportPolicy.KernelTransport.Mode)
 	if mode == dataplane.KernelTransportModeDisabled {
 		return mode
 	}
 	if experimentalTCPRouteGSOAsyncForDesired(desired) {
 		return dataplane.KernelTransportModeRequireKernel
 	}
-	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlyUserspaceUDP(desired) {
+	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlyUserspaceUDP(desired) {
 		return dataplane.KernelTransportModeDisabled
 	}
-	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesSecureUserspaceKernelUDP(desired) {
+	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlyUserspaceExperimentalTCP(desired) {
 		return dataplane.KernelTransportModeDisabled
 	}
-	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlySecureUserspaceExperimentalTCP(desired) {
+	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesSecureUserspaceKernelUDP(desired) {
+		return dataplane.KernelTransportModeDisabled
+	}
+	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlySecureUserspaceExperimentalTCP(desired) {
 		return dataplane.KernelTransportModeDisabled
 	}
 	return mode
+}
+
+func effectiveKernelTransportModeConfig(raw string) (dataplane.KernelTransportMode, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return dataplane.KernelTransportModeAuto, false
+	}
+	return normalizeKernelTransportMode(raw), true
 }
 
 func desiredTransportPolicyUsesOnlyUserspaceUDP(desired config.Desired) bool {
@@ -56,6 +66,22 @@ func desiredTransportPolicyUsesOnlyUserspaceUDP(desired config.Desired) bool {
 		return false
 	}
 	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolUDP))
+	return profile.Datapath == config.TransportDatapathUserspace
+}
+
+func desiredTransportPolicyUsesOnlyUserspaceExperimentalTCP(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		return false
+	}
+	if desiredTransportPolicyUsesAnyProtocol(desired,
+		transport.ProtocolUDP,
+		transport.ProtocolGRE,
+		transport.ProtocolIPIP,
+		transport.ProtocolVXLAN,
+	) {
+		return false
+	}
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
 	return profile.Datapath == config.TransportDatapathUserspace
 }
 

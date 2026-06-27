@@ -7,6 +7,7 @@ import (
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/dataplane"
+	"trustix.local/trustix/internal/transport"
 )
 
 func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
@@ -102,6 +103,37 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 		if !seenGate[gate] {
 			t.Fatalf("production defaults missing cross-host runtime gate %q", gate)
 		}
+	}
+}
+
+func TestEmptyTransportPolicyRuntimeAttachSpecUsesProductionCompatibilityDefaults(t *testing.T) {
+	for _, protocol := range []transport.Protocol{
+		transport.ProtocolUDP,
+		transport.ProtocolExperimentalTCP,
+	} {
+		protocol := protocol
+		t.Run(string(protocol), func(t *testing.T) {
+			desired := config.Desired{
+				LAN: config.LANConfig{
+					Iface: "br-lan",
+				},
+				TransportPolicy: config.TransportPolicyConfig{
+					Candidates: []core.EndpointID{"runtime-default-a"},
+				},
+				Endpoints: []config.EndpointConfig{{
+					Name:      "runtime-default-a",
+					Transport: string(protocol),
+					Enabled:   true,
+				}},
+			}
+			spec := dataplaneAttachSpec(t.TempDir(), desired)
+			if productionDefaultNoKernelFastPathFieldsFromSpec(spec).anyKernelFastPath() {
+				t.Fatalf("empty %s transport policy should stay on production compatibility userspace defaults: spec=%#v", protocol, spec)
+			}
+			if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeDisabled {
+				t.Fatalf("empty %s kernel transport mode = %q, want disabled", protocol, got)
+			}
+		})
 	}
 }
 
