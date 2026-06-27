@@ -168,9 +168,10 @@ route_policy:
 policies: []
 transport_policy:
   mode: user_defined
+  profile: stable
+  datapath: userspace
   candidates: []
   failover: health_based
-  load_balance: least_conn
   encryption: secure
   crypto_key_source: trustix_x25519
   crypto_placement: userspace

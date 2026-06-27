@@ -264,16 +264,21 @@ route_policy:
 policies:
   - name: default-routed
     route_selection: longest_prefix
-    load_balance: least_conn
     flow_stickiness: true
     rewrite: preserve_source
 
 transport_policy:
   mode: user_defined
+  profile: stable
+  datapath: userspace
   candidates:
     - $ix-udp
   failover: health_based
-  load_balance: least_conn
+  encryption: secure
+  crypto_key_source: auto
+  crypto_placement: userspace
+  kernel_transport:
+    mode: disabled
 
 $bootstrap_yaml
 EOF

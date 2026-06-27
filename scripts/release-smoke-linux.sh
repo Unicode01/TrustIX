@@ -259,10 +259,15 @@ route_policy:
 policies: []
 transport_policy:
   mode: user_defined
+  profile: stable
+  datapath: userspace
   candidates: []
   failover: health_based
-  load_balance: least_conn
+  encryption: secure
+  crypto_key_source: auto
   crypto_placement: userspace
+  kernel_transport:
+    mode: disabled
 EOF
 
   log "start trustixd api=${api_addr} peer-api=${peer_api_addr} dataplane=noop module_mode=${module_mode}"

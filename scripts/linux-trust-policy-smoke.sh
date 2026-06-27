@@ -213,9 +213,15 @@ routes: []
 policies: []
 transport_policy:
   mode: user_defined
+  profile: stable
+  datapath: userspace
   candidates: []
   failover: health_based
-  load_balance: least_conn
+  encryption: secure
+  crypto_key_source: auto
+  crypto_placement: userspace
+  kernel_transport:
+    mode: disabled
 EOF
 
 cat > "$WORKDIR/b.yaml" <<EOF
@@ -252,9 +258,15 @@ routes: []
 policies: []
 transport_policy:
   mode: user_defined
+  profile: stable
+  datapath: userspace
   candidates: []
   failover: health_based
-  load_balance: least_conn
+  encryption: secure
+  crypto_key_source: auto
+  crypto_placement: userspace
+  kernel_transport:
+    mode: disabled
 EOF
 
 start_daemon() {
