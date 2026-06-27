@@ -13,6 +13,8 @@ from typing import Any
 
 
 PRODUCTION_GATE_SCHEMA = "trustix-cross-host-production-gate-manifest-v1"
+LEGACY_GATE_SCHEMA = "legacy-pre-manifest"
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DEFAULT_COLUMNS = [
     "transport",
     "encryption",
@@ -290,6 +292,37 @@ def validate_gate_family_semantics(rows: list[dict[str, str]], label: str) -> No
             raise SystemExit(f"{label}:{row['_source_line']}: " + "; ".join(errors))
 
 
+def current_requirement_identity_errors(row: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    if row["gate_manifest_schema"] != PRODUCTION_GATE_SCHEMA:
+        errors.append(
+            f"gate_manifest_schema must be {PRODUCTION_GATE_SCHEMA}; got {row['gate_manifest_schema']!r}"
+        )
+    for field in ("production_gate_sha256", "verifier_sha256", "binary_sha256"):
+        value = row[field]
+        if not SHA256_RE.fullmatch(value):
+            errors.append(f"{field} must be 64 lowercase hex; got {value!r}")
+    for field in ("build_version", "build_commit", "build_built_at", "build_go_version"):
+        value = row[field].strip()
+        if not value or value == LEGACY_GATE_SCHEMA:
+            errors.append(f"{field} must be non-empty current build metadata; got {row[field]!r}")
+    return errors
+
+
+def validate_current_requirement_identity(
+    rows: list[dict[str, str]],
+    label: str,
+    *,
+    require_artifact_reference: bool,
+) -> None:
+    for row in rows:
+        errors = current_requirement_identity_errors(row)
+        if require_artifact_reference:
+            errors.extend(artifact_reference_errors(row["artifact"]))
+        if errors:
+            raise SystemExit(f"{label}:{row['_source_line']}: " + "; ".join(errors))
+
+
 def compact_evidence(row: dict[str, str], reasons: list[str] | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {
         "os_matrix": row["os_matrix"],
@@ -400,6 +433,11 @@ def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> 
         len(CURRENT_REQUIREMENT_COLUMNS),
     )
     validate_gate_family_semantics(rows, "current evidence requirements")
+    validate_current_requirement_identity(
+        rows,
+        "current evidence requirements",
+        require_artifact_reference=args.require_artifact_reference,
+    )
     requirements: dict[str, dict[str, str]] = {}
     for row in rows:
         key = row_key(row)

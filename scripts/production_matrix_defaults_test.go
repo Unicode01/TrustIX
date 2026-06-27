@@ -2838,6 +2838,60 @@ func TestProductionTransportAuditScriptRequireCurrentRejectsStaleBinaryIdentity(
 	}
 }
 
+func TestProductionTransportAuditScriptRequireCurrentRejectsInvalidCurrentIdentity(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	evidence := filepath.Join(workdir, "evidence.tsv")
+	current := filepath.Join(workdir, "current.tsv")
+	defaultPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\t3\t3600\trequire current identity",
+		"",
+	}, "\n")
+	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	evidencePayload := "# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note\n"
+	if err := os.WriteFile(evidence, []byte(evidencePayload), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+	currentPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version",
+		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\tlegacy-pre-manifest\tnot-a-sha\t" + strings.Repeat("d", 64) + "\tdocs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates\tinvalid current requirement\tlegacy-pre-manifest\ttrustix-current\t\t2026-06-25T00:00:00Z\tgo1.25.0",
+		"",
+	}, "\n")
+	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
+		t.Fatalf("write current requirements: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--current-requirements", slashPath(current),
+		"--scope", "cross_host",
+		"--require-current",
+		"--require-artifact-reference",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted invalid current identity:\n%s", output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"current evidence requirements:2",
+		"gate_manifest_schema must be " + productionGateManifestSchema,
+		"production_gate_sha256 must be 64 lowercase hex",
+		"binary_sha256 must be 64 lowercase hex",
+		"build_commit must be non-empty current build metadata",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("audit failure missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestProductionTransportAuditScriptRequireCurrentRejectsRequirementDrift(t *testing.T) {
 	python := requirePython3(t)
 	workdir := t.TempDir()
