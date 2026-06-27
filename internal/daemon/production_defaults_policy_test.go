@@ -20,6 +20,10 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 		row := row
 		seenGate[row.GateFamily] = true
 		t.Run(strings.ReplaceAll(productionDefaultRuntimeKey(row), ":", "_"), func(t *testing.T) {
+			if row.GateFamily == "owdeb_full_kmod" {
+				t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+				t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
+			}
 			desired := desiredForProductionDefaultRuntimeTest(row)
 			if got, want := effectiveKernelTransportModeForDesired(desired), productionDefaultRuntimeKernelTransportMode(row); got != want {
 				t.Fatalf("%s kernel transport mode = %q, want %q", productionDefaultRuntimeKey(row), got, want)
@@ -106,6 +110,30 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 		if !seenGate[gate] {
 			t.Fatalf("production defaults missing cross-host runtime gate %q", gate)
 		}
+	}
+}
+
+func TestOpenWrtProductionFullKmodDefaultRequiresDedicatedRuntimeGate(t *testing.T) {
+	rows := readProductionTransportDefaultRowsForProvisionTest(t)
+	var found bool
+	for _, row := range rows {
+		if row.ValidationScope != "cross_host" || row.GateFamily != "owdeb_full_kmod" {
+			continue
+		}
+		found = true
+		t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+		desired := desiredForProductionDefaultRuntimeTest(row)
+		spec := dataplaneAttachSpec(t.TempDir(), desired)
+		if spec.KernelDatapathFullPlaintext {
+			t.Fatalf("%s should not enable OpenWrt full-kmod without dedicated gate: spec=%#v", productionDefaultRuntimeKey(row), spec)
+		}
+		if got := kernelDatapathRXDisabledReasonForDesired(desired); !strings.Contains(got, "TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1") {
+			t.Fatalf("%s disabled reason = %q, want OpenWrt full datapath gate", productionDefaultRuntimeKey(row), got)
+		}
+		return
+	}
+	if !found {
+		t.Fatal("production defaults missing OpenWrt-Debian full-kmod row")
 	}
 }
 
