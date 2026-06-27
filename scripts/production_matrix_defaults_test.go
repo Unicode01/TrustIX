@@ -2194,6 +2194,7 @@ func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 		"--require-manifest",
 		"--require-current",
 		"--require-artifact-reference",
+		"--require-current-build-ancestor",
 		"--fail-on-missing",
 		"--json",
 	)
@@ -2317,6 +2318,7 @@ func TestProductionTransportAuditScriptDefaultsResolveFromRepoRoot(t *testing.T)
 		"--require-manifest",
 		"--require-current",
 		"--require-artifact-reference",
+		"--require-current-build-ancestor",
 		"--fail-on-missing",
 		"--json",
 	)
@@ -2354,6 +2356,7 @@ func TestCIWorkflowRunsCurrentProductionTransportAudit(t *testing.T) {
 		"--require-manifest",
 		"--require-current",
 		"--require-artifact-reference",
+		"--require-current-build-ancestor",
 		"--fail-on-missing",
 	} {
 		if !strings.Contains(text, want) {
@@ -2885,6 +2888,58 @@ func TestProductionTransportAuditScriptRequireCurrentRejectsInvalidCurrentIdenti
 		"production_gate_sha256 must be 64 lowercase hex",
 		"binary_sha256 must be 64 lowercase hex",
 		"build_commit must be non-empty current build metadata",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("audit failure missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestProductionTransportAuditScriptRequireCurrentRejectsUnknownBuildCommit(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	evidence := filepath.Join(workdir, "evidence.tsv")
+	current := filepath.Join(workdir, "current.tsv")
+	defaultPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\t3\t3600\trequire resolvable build commit",
+		"",
+	}, "\n")
+	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	evidencePayload := "# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note\n"
+	if err := os.WriteFile(evidence, []byte(evidencePayload), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+	currentPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version",
+		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("a", 64) + "\t" + strings.Repeat("b", 64) + "\tdocs/trustix-performance-log.md#unknown-build-commit\tunknown build commit\t" + strings.Repeat("c", 64) + "\ttrustix-current\tffffffffffffffffffffffffffffffffffffffff\t2026-06-25T00:00:00Z\tgo1.25.0",
+		"",
+	}, "\n")
+	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
+		t.Fatalf("write current requirements: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--current-requirements", slashPath(current),
+		"--scope", "cross_host",
+		"--require-current",
+		"--require-current-build-ancestor",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted unknown current build commit:\n%s", output)
+	}
+	text := string(output)
+	for _, want := range []string{
+		"current evidence requirements:2",
+		"build_commit",
+		"must resolve to a commit in this repository",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("audit failure missing %q:\n%s", want, output)

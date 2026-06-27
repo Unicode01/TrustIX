@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -135,6 +136,14 @@ def parse_args() -> argparse.Namespace:
         "--require-artifact-reference",
         action="store_true",
         help="only accept evidence whose local markdown artifact path and anchor exist",
+    )
+    parser.add_argument(
+        "--require-current-build-ancestor",
+        action="store_true",
+        help=(
+            "require current evidence build_commit values to resolve in this "
+            "repository and be ancestors of HEAD"
+        ),
     )
     parser.add_argument(
         "--current-requirements",
@@ -314,11 +323,14 @@ def validate_current_requirement_identity(
     label: str,
     *,
     require_artifact_reference: bool,
+    require_build_ancestor: bool,
 ) -> None:
     for row in rows:
         errors = current_requirement_identity_errors(row)
         if require_artifact_reference:
             errors.extend(artifact_reference_errors(row["artifact"]))
+        if require_build_ancestor:
+            errors.extend(build_commit_ancestor_errors(row["build_commit"]))
         if errors:
             raise SystemExit(f"{label}:{row['_source_line']}: " + "; ".join(errors))
 
@@ -426,6 +438,39 @@ def artifact_reference_errors(artifact: str) -> list[str]:
     return []
 
 
+def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo_root()), *args],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def build_commit_ancestor_errors(build_commit: str) -> list[str]:
+    value = build_commit.strip()
+    if not value or value == LEGACY_GATE_SCHEMA:
+        return []
+    try:
+        resolved = run_git(["rev-parse", "--verify", f"{value}^{{commit}}"])
+    except FileNotFoundError:
+        return ["build_commit cannot be verified because git is not installed"]
+    if resolved.returncode != 0:
+        detail = (resolved.stderr or resolved.stdout).strip()
+        suffix = f": {detail}" if detail else ""
+        return [f"build_commit={value!r} must resolve to a commit in this repository{suffix}"]
+    resolved_commit = resolved.stdout.strip()
+    ancestor = run_git(["merge-base", "--is-ancestor", resolved_commit, "HEAD"])
+    if ancestor.returncode != 0:
+        detail = (ancestor.stderr or ancestor.stdout).strip()
+        suffix = f": {detail}" if detail else ""
+        return [
+            f"build_commit={value!r} ({resolved_commit}) must be an ancestor of HEAD{suffix}"
+        ]
+    return []
+
+
 def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> dict[str, dict[str, str]]:
     rows = read_tsv(
         current_requirements_path(args, defaults_path),
@@ -437,6 +482,7 @@ def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> 
         rows,
         "current evidence requirements",
         require_artifact_reference=args.require_artifact_reference,
+        require_build_ancestor=args.require_current_build_ancestor,
     )
     requirements: dict[str, dict[str, str]] = {}
     for row in rows:

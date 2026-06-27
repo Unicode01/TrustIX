@@ -65,6 +65,7 @@ jobs:
             --require-manifest \
             --require-current \
             --require-artifact-reference \
+            --require-current-build-ancestor \
             --fail-on-missing
 
       - name: Security Smoke
