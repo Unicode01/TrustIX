@@ -20,15 +20,94 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `b01a10dff63a` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
-| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
+| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `973a020` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
+| Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `973a020` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
+| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `973a020` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64`; current VXLAN plaintext userspace-TC supplemental gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `b0f3c3a3b47b` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
-| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `fa207ea` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
+| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `973a020` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `395b2ba05013` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-27
+
+<a id="2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates"></a>
+
+### Zaozhuang PVE 973a020 Debian kernel fast-path 3600s production gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
+VM202 and VM203 ran Debian 13 on isolated `vmbr3`. VM100 and all 1xx guests
+were not modified. Both guests ran kernel `6.12.94+deb13-cloud-amd64`.
+
+The release used TrustIX version `trustix-current-973a020`, commit `973a020`,
+Go `1.25.0`, build time `2026-06-26T18:32:30Z`, binary SHA256
+`6a96deffc0086b9cdfdf7db0eacb40b8a8b6efc6ef4a95aa37411e10b328d94a`, and
+embedded assets SHA256
+`4e0476a6fb315983cfb57f4dcb2c221e18d720aee4c90fc8c6c783f6d434681e`.
+The Debian `trustix_datapath.ko` staged for kernel `6.12.94` had SHA256
+`a7188fdaa2d0a5d98af56b57f2c4cdde3fece274741b092bfd56beb80b938cd8`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence. The production gate
+script SHA256 was
+`8d7855253e3941dc3bf2956c0cf6eae0a0c4cdf2238c810ef83b2d1c55c841f1`; the
+verifier SHA256 was
+`691bd691303fddbe6d8f243c99e21c25f75cfcb8ab3f0cfb5e47a2707b6ae34b`.
+
+| Gate family | Direction | Gate | Received | Sent | Evidence seconds | Retransmits |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `full_kmod` | A to B | 3 Gbps | 3.423127 Gbps | 3.423167 Gbps | 3600.018335 | 312281 |
+| `full_kmod` | B to A | 3 Gbps | 3.490581 Gbps | 3.490614 Gbps | 3600.003441 | 317734 |
+| `tc_direct` | A to B | 3 Gbps | 4.301701 Gbps | 4.301734 Gbps | 3600.010217 | 696409 |
+| `tc_direct` | B to A | 3 Gbps | 4.283978 Gbps | 4.284009 Gbps | 3600.006914 | 713810 |
+| `secure_kudp` | A to B | 1.5 Gbps | 1.720749 Gbps | 1.720797 Gbps | 3600.011191 | 80808 |
+| `secure_kudp` | B to A | 1.5 Gbps | 1.727528 Gbps | 1.727579 Gbps | 3600.010725 | 81184 |
+| `secure_exp_tcp_kernel` | A to B | 1.5 Gbps | 1.657549 Gbps | 1.657597 Gbps | 3600.013901 | 67084 |
+| `secure_exp_tcp_kernel` | B to A | 1.5 Gbps | 1.678906 Gbps | 1.678955 Gbps | 3600.009520 | 68257 |
+| `route_gso` | A to B | 2.5 Gbps | 2.797295 Gbps | 2.797330 Gbps | 3599.996674 | 600501 |
+| `route_gso` | B to A | 2.5 Gbps | 2.863178 Gbps | 2.863211 Gbps | 3600.003954 | 657085 |
+
+Each case ran `forward + both` with `iperf_parallel=8`; the per-case elapsed
+time was 7203 or 7204 seconds. All five gates passed with `errors=[]` and
+`log_findings=[]`. VM202 boot ID `86fc5a17-b38b-430b-adec-53505c3a1305` and
+VM203 boot ID `79745a98-b68c-4a47-bd31-a96b42a5d9ee` were unchanged before and
+after each case. Kernel log and pstore artifacts were clean on both guests.
+
+The full plaintext datapath provider and eight warmed sessions were active for
+`full_kmod`. `rx_worker_inject=Y`, `tx_plaintext=Y`,
+`tx_plaintext_payload_fast_copy=Y`, `rx_worker_hot_stats=N`, and
+`tx_queue_len=1000` were captured. Covered RX-worker, GSO xmit, plaintext
+outer-GSO, plaintext xmit, and queue-drop error counters were zero. TC-direct
+loaded no TrustIX kernel modules. The secure-kUDP, secure experimental TCP
+kernel crypto, and route-GSO cases loaded only the selected helper/crypto
+kernel paths and reported zero covered route-GSO/helper error counters.
+
+<a id="2026-06-27-zaozhuang-pve-973a020-openwrt-24107-debian-full-kmod-attempt"></a>
+
+### Zaozhuang PVE 973a020 OpenWrt-Debian full-kmod attempt
+
+The same PVE host was used with VM204 OpenWrt 24.10.7 kernel `6.6.141` and
+VM205 Debian 13 kernel `6.12.94+deb13-cloud-amd64`. The first 3600s
+OpenWrt-Debian `owdeb_full_kmod` attempt used the same TrustIX build
+(`973a020`) and staged OpenWrt `trustix_datapath.ko` SHA256
+`005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce` plus
+Debian `trustix_datapath.ko` SHA256
+`a7188fdaa2d0a5d98af56b57f2c4cdde3fece274741b092bfd56beb80b938cd8`.
+
+The run did not produce production evidence because throughput was below the
+3 Gbps OpenWrt full-kmod gate: OpenWrt to Debian measured `0.548679 Gbps`
+received, and Debian to OpenWrt measured `0.883587 Gbps` received. The failure
+was not a kernel panic or lockup. Boot IDs stayed stable, pstore was empty or
+unavailable on OpenWrt, and covered full-kmod error counters stayed zero:
+`rx_worker_xmit_ret_errors=0`, `rx_worker_gso_xmit_errors=0`,
+`tx_plaintext_xmit_errors=0`, `tx_plaintext_outer_gso_errors=0`, and
+`tx_plaintext_queue_drops=0`.
+
+The low result was attributed to the disposable OpenWrt VM configuration: VM204
+was initially created with `e1000` NICs and only 2 vCPUs. It was changed to
+virtio NICs and 4 vCPUs for follow-up smoke testing, but that follow-up did not
+complete as a production gate in this run. Therefore the current OpenWrt
+production boundary remains the earlier manifest-backed OpenWrt 24.10.7 to
+Debian gate at commit `395b2ba05013`.
 
 <a id="2026-06-27-zaozhuang-pve-b0f3c3a-vxlan-plaintext-heartbeat10s-3600s-production-gate"></a>
 

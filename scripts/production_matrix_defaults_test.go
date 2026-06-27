@@ -551,6 +551,7 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 		"rx_worker_xmit=1",
 		"rx_worker_single_coalesce=1",
 		"rx_worker_single_coalesce_max_frames=32",
+		"tx_plaintext_payload_fast_copy=1",
 		"tx_plaintext_skip_inner_tcp_checksum=0",
 		"production defaults file not found",
 		"invalid production defaults row",
@@ -2766,11 +2767,11 @@ func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	manifestRequiredArtifacts := map[string]string{
-		"tc_direct":             "docs/trustix-performance-log.md#2026-06-26-zaozhuang-pve-fa207ea-tc-direct-secure-kudp-3600s-production-gates",
-		"full_kmod":             "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-current-main-dd-full-kmod-windowfix-3600s-production-gate",
-		"secure_kudp":           "docs/trustix-performance-log.md#2026-06-26-zaozhuang-pve-fa207ea-tc-direct-secure-kudp-3600s-production-gates",
-		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-26-zaozhuang-pve-fa207ea-secure-exp-tcp-kernel-3600s-production-gate",
-		"route_gso":             "docs/trustix-performance-log.md#2026-06-26-zaozhuang-pve-fa207ea-route-gso-3600s-production-gate",
+		"tc_direct":             "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
+		"full_kmod":             "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
+		"secure_kudp":           "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
+		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
+		"route_gso":             "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
 		"owdeb_full_kmod":       "docs/trustix-performance-log.md#2026-06-25-zaozhuang-pve-openwrt-24107-current-head-full-kmod-3600s-production-gate",
 		"userspace":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
