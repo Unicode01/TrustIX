@@ -549,14 +549,14 @@ transport_policy:
       mode: auto
       interval: 10s
       timeout: 3s
-  crypto_placement: auto
+  crypto_placement: userspace
   kernel_transport:
-    # auto keeps existing socket transports usable; require_kernel filters out
-    # endpoints without a kernel TX/RX provider.
-    mode: auto
+    # Empty production configs default to disabled. Set auto or require_kernel
+    # explicitly only for validated kernel-provider deployments.
+    mode: disabled
 ```
 
-`crypto_placement` 可设为 `userspace`、`auto` 或 `kernel`，当前作用于 `experimental_tcp` 和 kernel UDP/TIXU 的 secure data AEAD offload。默认 `auto` 会按 `trustix_datapath` full_datapath、`trustix_datapath_helpers` skb/GSO helper、TC/XDP/BPF direct、`trustix_crypto` AEAD device、userspace AEAD 的顺序选择最快 ready 后端；`kernel` 是严格模式，provider 或 kernel crypto 不可用时应拒绝启用；普通 UDP socket、标准 TCP、QUIC、WebSocket 和 HTTP CONNECT 仍使用 userspace secure envelope。
+`crypto_placement` 可设为 `userspace`、`auto` 或 `kernel`，当前作用于 `experimental_tcp` 和 kernel UDP/TIXU 的 secure data AEAD offload。空配置默认 `userspace`；显式 `auto` 会按 `trustix_datapath` full_datapath、`trustix_datapath_helpers` skb/GSO helper、TC/XDP/BPF direct、`trustix_crypto` AEAD device、userspace AEAD 的顺序选择最快 ready 后端；`kernel` 是严格模式，provider 或 kernel crypto 不可用时应拒绝启用；普通 UDP socket、标准 TCP、QUIC、WebSocket 和 HTTP CONNECT 仍使用 userspace secure envelope。
 
 experimental TCP 要求：
 
@@ -822,10 +822,10 @@ transport_policy:
   candidates:
     - sh-udp
     - sh-quic
-  crypto_placement: auto
+  crypto_placement: userspace
   failover: health_based
   kernel_transport:
-    mode: auto
+    mode: disabled
 ```
 
 ## 项目边界

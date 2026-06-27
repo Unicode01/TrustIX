@@ -3464,17 +3464,17 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 			t.Fatalf("unknown encryption %q in %+v", row.Encryption, row)
 		}
 		switch row.Profile {
-		case "stable", "performance", "latency":
+		case "stable", "performance":
 		default:
 			t.Fatalf("unknown profile %q in %+v", row.Profile, row)
 		}
 		switch row.Datapath {
-		case "userspace", "tc_xdp", "kernel_module", "auto":
+		case "userspace", "tc_xdp", "kernel_module":
 		default:
 			t.Fatalf("unknown datapath %q in %+v", row.Datapath, row)
 		}
 		switch row.CryptoPlacement {
-		case "userspace", "kernel", "auto":
+		case "userspace", "kernel":
 		default:
 			t.Fatalf("unknown crypto placement %q in %+v", row.CryptoPlacement, row)
 		}
