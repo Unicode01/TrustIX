@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -98,6 +99,11 @@ func TestTrustIXBootstrapIXGeneratesProductionPlaintextDefaults(t *testing.T) {
 		_ = os.RemoveAll(workDir)
 	})
 	bashWorkDir := strings.ReplaceAll(workDir, "\\", "/")
+	certDir := filepath.Join(workDir, "certs")
+	if out, err := exec.Command("go", "run", "../cmd/trustix-ca", "quickstart", "-out", certDir, "-domain", "trust.local", "-ix", "ix-bootstrap-ca-seed").CombinedOutput(); err != nil {
+		t.Fatalf("generate bootstrap test certs: %v\n%s", err, out)
+	}
+	bashCertDir := strings.ReplaceAll(certDir, "\\", "/")
 
 	cmd := exec.Command(
 		bash,
@@ -108,7 +114,7 @@ func TestTrustIXBootstrapIXGeneratesProductionPlaintextDefaults(t *testing.T) {
 		"--advertise", "10.90.0.0/24",
 		"--listen", "0.0.0.0:7000",
 		"--address", "ix-script-test.example:7000",
-		"--source-certs", "../certs",
+		"--source-certs", bashCertDir,
 		"--work-dir", bashWorkDir,
 		"--target-cert-dir", "/etc/trustix/certs",
 		"--no-build",

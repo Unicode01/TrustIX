@@ -2743,6 +2743,7 @@ func writeFullKmodProductionGateArtifacts(t *testing.T, dir string, plaintextXmi
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
 	writeLANStateArtifacts(t, dir, 1000, 1000)
+	writeHostStateArtifacts(t, dir, 4, 4, "virtio_net", "virtio_net")
 	writeLsmodArtifacts(t, dir, map[string][]string{
 		"a": {"trustix_datapath"},
 		"b": {"trustix_datapath"},
@@ -2820,6 +2821,7 @@ func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO b
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
 	writeLANStateArtifacts(t, dir, 1000, 1000)
+	writeHostStateArtifacts(t, dir, 4, 4, "virtio_net", "virtio_net")
 	writeLsmodArtifacts(t, dir, map[string][]string{
 		"a": {"trustix_crypto", "trustix_datapath_helpers"},
 		"b": {"trustix_crypto", "trustix_datapath_helpers"},
@@ -3022,6 +3024,7 @@ func writeSecureExpTCPKernelProductionGateArtifacts(t *testing.T, dir string, ro
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
 	writeLANStateArtifacts(t, dir, 1000, 1000)
+	writeHostStateArtifacts(t, dir, 4, 4, "virtio_net", "virtio_net")
 	writeLsmodArtifacts(t, dir, map[string][]string{
 		"a": {"trustix_crypto", "trustix_datapath_helpers"},
 		"b": {"trustix_crypto", "trustix_datapath_helpers"},
@@ -3258,6 +3261,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 	writeKernelLogArtifacts(t, dir)
 	writePstoreArtifacts(t, dir)
 	writeLANStateArtifacts(t, dir, 1000, 1000)
+	writeHostStateArtifacts(t, dir, 4, 4, "virtio_net", "virtio_net")
 	writeLsmodArtifacts(t, dir, map[string][]string{
 		"a": {"trustix_datapath_helpers"},
 		"b": {"trustix_datapath_helpers"},
