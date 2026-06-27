@@ -1356,6 +1356,8 @@ collect_failure_snapshot() {
   collect_transport_snapshot "failed-${label}" || true
   collect_module_parameters a || true
   collect_module_parameters b || true
+  collect_host_state a || true
+  collect_host_state b || true
   collect_lan_state a || true
   collect_lan_state b || true
   collect_kernel_logs a || true
@@ -1474,6 +1476,63 @@ for module_dir in /sys/module/trustix_*/parameters; do
     printf '%s=%s\\n' \"\$name\" \"\$value\" >>\"\$out\"
   done
 done
+"
+}
+
+collect_host_state() {
+  local node="$1"
+  local dir prefix underlay_if
+  dir="$(remote_dir "$node")"
+  prefix="$(node_value "$node" "$ix_a" "$ix_b")"
+  underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  run_node "$node" "set +e
+out=$(remote_quote "${dir}/${prefix}-host-state.txt")
+underlay_if=$(remote_quote "$underlay_if")
+{
+  cpu_count=''
+  if command -v nproc >/dev/null 2>&1; then
+    cpu_count=\$(nproc 2>/dev/null || true)
+  fi
+  case \"\$cpu_count\" in ''|*[!0-9]*)
+    if command -v getconf >/dev/null 2>&1; then
+      cpu_count=\$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
+    fi
+    ;;
+  esac
+  case \"\$cpu_count\" in ''|*[!0-9]*)
+    if [ -r /proc/cpuinfo ]; then
+      cpu_count=\$(awk '/^processor[[:space:]]*:/{n++} END{if (n > 0) print n}' /proc/cpuinfo 2>/dev/null || true)
+    fi
+    ;;
+  esac
+  [ -n \"\$cpu_count\" ] || cpu_count=unknown
+  printf 'cpu_count=%s\\n' \"\$cpu_count\"
+  printf 'machine=%s\\n' \"\$(uname -m 2>/dev/null || true)\"
+  printf 'kernel_release=%s\\n' \"\$(uname -r 2>/dev/null || true)\"
+  printf 'underlay_interface=%s\\n' \"\$underlay_if\"
+  driver_for_iface() {
+    iface=\"\$1\"
+    driver=''
+    if [ -n \"\$iface\" ] && [ -e \"/sys/class/net/\$iface/device/driver\" ]; then
+      driver_path=\$(readlink -f \"/sys/class/net/\$iface/device/driver\" 2>/dev/null || readlink \"/sys/class/net/\$iface/device/driver\" 2>/dev/null || true)
+      driver=\"\${driver_path##*/}\"
+    fi
+    [ -n \"\$driver\" ] || driver=none
+    printf '%s\\n' \"\$driver\"
+  }
+  if [ -n \"\$underlay_if\" ]; then
+    printf 'underlay_driver=%s\\n' \"\$(driver_for_iface \"\$underlay_if\")\"
+  else
+    printf 'underlay_driver=unknown\\n'
+  fi
+  echo '===== net-drivers ====='
+  for iface_path in /sys/class/net/*; do
+    [ -e \"\$iface_path\" ] || continue
+    iface=\"\${iface_path##*/}\"
+    [ -n \"\$iface\" ] || continue
+    printf 'net_driver[%s]=%s\\n' \"\$iface\" \"\$(driver_for_iface \"\$iface\")\"
+  done
+} >\"\$out\" 2>&1
 "
 }
 
@@ -1832,6 +1891,8 @@ collect_all() {
   collect_node_api b || true
   collect_module_parameters a || true
   collect_module_parameters b || true
+  collect_host_state a || true
+  collect_host_state b || true
   collect_lan_state a || true
   collect_lan_state b || true
   collect_binary_identity a || true

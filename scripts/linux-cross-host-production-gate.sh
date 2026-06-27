@@ -16,6 +16,8 @@ min_seconds="${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-3600}"
 seconds_slop="${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-1}"
 min_iperf_intervals="${TRUSTIX_CROSS_HOST_GATE_MIN_IPERF_INTERVALS:-600}"
 min_interval_gbps_ratio="${TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO:-0.25}"
+min_host_cpus="${TRUSTIX_CROSS_HOST_GATE_MIN_HOST_CPUS:-4}"
+forbidden_host_net_drivers="${TRUSTIX_CROSS_HOST_GATE_FORBID_HOST_NET_DRIVER:-e1000 e1000e rtl8139 8139cp 8139too pcnet32 ne2k_pci}"
 full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8}"
 secure_kudp_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8}"
 secure_kudp_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1}"
@@ -524,11 +526,15 @@ run_gate() {
   local label="$1"
   local category_min_gbps="$2"
   local case_min_seconds="$3"
+  local driver
   shift 3
   set -- --min-gbps "$category_min_gbps" --min-seconds "$case_min_seconds" --seconds-slop "$seconds_slop" \
     --min-iperf-intervals "$min_iperf_intervals" \
     --min-iperf-interval-gbps-ratio "$min_interval_gbps_ratio" "$@"
-  set -- "$@" --require-run-timing --require-run-timing-stat iperf_mode=forward --require-run-timing-stat iperf_directions=both --require-binary-identity --require-strong-build-identity --require-stable-boot-id --require-uname-artifacts --min-uname-nodes 2 --require-os-release-artifacts --min-os-release-nodes 2 --require-iperf-pair-directions --require-kernel-log-artifacts --min-kernel-log-nodes 2 --require-pstore-artifacts --min-pstore-nodes 2 --require-lsmod-artifacts --min-lsmod-nodes 2 --require-lan-state-artifacts --min-lan-state-nodes 2 --min-lan-tx-queue-len 1
+  set -- "$@" --require-run-timing --require-run-timing-stat iperf_mode=forward --require-run-timing-stat iperf_directions=both --require-binary-identity --require-strong-build-identity --require-stable-boot-id --require-uname-artifacts --min-uname-nodes 2 --require-os-release-artifacts --min-os-release-nodes 2 --require-iperf-pair-directions --require-kernel-log-artifacts --min-kernel-log-nodes 2 --require-pstore-artifacts --min-pstore-nodes 2 --require-lsmod-artifacts --min-lsmod-nodes 2 --require-lan-state-artifacts --min-lan-state-nodes 2 --min-lan-tx-queue-len 1 --require-host-state-artifacts --min-host-state-nodes 2 --min-host-cpus "$min_host_cpus"
+  for driver in $forbidden_host_net_drivers; do
+    set -- "$@" --forbid-host-net-driver "$driver"
+  done
   if [[ -n "$summary_dir" ]]; then
     mkdir -p "$summary_dir"
     set -- "$@" --summary "${summary_dir}/${label}.jsonl"
@@ -585,6 +591,8 @@ main() {
   min_iperf_intervals="$(max_integer "$min_iperf_intervals" "600")"
   validate_number TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO "$min_interval_gbps_ratio"
   min_interval_gbps_ratio="$(max_decimal "$min_interval_gbps_ratio" "0.25")"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_GATE_MIN_HOST_CPUS "$min_host_cpus"
+  min_host_cpus="$(max_integer "$min_host_cpus" "4")"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS "$secure_kudp_min_crypto_flows"

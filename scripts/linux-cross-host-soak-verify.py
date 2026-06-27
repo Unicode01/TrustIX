@@ -223,6 +223,30 @@ def parse_args() -> argparse.Namespace:
         help="minimum tx_queue_len accepted in LAN state artifacts",
     )
     parser.add_argument(
+        "--require-host-state-artifacts",
+        action="store_true",
+        help="require collected host resource/state artifacts for each case",
+    )
+    parser.add_argument(
+        "--min-host-state-nodes",
+        type=int,
+        default=2,
+        help="minimum distinct nodes with valid host state artifacts when --require-host-state-artifacts is set",
+    )
+    parser.add_argument(
+        "--min-host-cpus",
+        type=int,
+        default=1,
+        help="minimum online CPU count accepted in host state artifacts",
+    )
+    parser.add_argument(
+        "--forbid-host-net-driver",
+        action="append",
+        default=[],
+        metavar="DRIVER",
+        help="reject host state artifacts containing network DRIVER; may be repeated",
+    )
+    parser.add_argument(
         "--require-uname-artifacts",
         action="store_true",
         help="require collected uname-before/after artifacts for each case",
@@ -870,6 +894,90 @@ def validate_lan_state_artifacts(
     if required and len(valid_nodes) < min_nodes:
         errors.append(
             f"found valid LAN state artifacts for {len(valid_nodes)} nodes, "
+            f"want >= {min_nodes}"
+        )
+    return rows, errors, sorted(valid_nodes)
+
+
+def collect_host_state_artifacts(case_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in sorted(case_dir.rglob("*host-state.txt")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(case_dir)
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        parsed = parse_key_value_lines(text)
+        cpu_count_raw = parsed.get("cpu_count", "")
+        cpu_count: int | None = None
+        if re.fullmatch(r"[0-9]+", cpu_count_raw):
+            cpu_count = int(cpu_count_raw)
+        net_drivers: dict[str, str] = {}
+        for key, value in parsed.items():
+            match = re.fullmatch(r"net_driver\[([^\]]+)\]", key)
+            if match:
+                net_drivers[match.group(1)] = value
+        rows.append(
+            {
+                "source": str(rel),
+                "node": transport_node_key(path, case_dir),
+                "cpu_count": cpu_count,
+                "cpu_count_raw": cpu_count_raw,
+                "machine": parsed.get("machine", ""),
+                "kernel_release": parsed.get("kernel_release", ""),
+                "underlay_interface": parsed.get("underlay_interface", ""),
+                "underlay_driver": parsed.get("underlay_driver", ""),
+                "net_drivers": net_drivers,
+            }
+        )
+    return rows
+
+
+def validate_host_state_artifacts(
+    case_dir: Path,
+    *,
+    required: bool,
+    min_nodes: int,
+    min_cpus: int,
+    forbidden_net_drivers: list[str],
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    rows = collect_host_state_artifacts(case_dir)
+    errors: list[str] = []
+    valid_nodes: set[str] = set()
+    forbidden = {driver.strip().lower() for driver in forbidden_net_drivers if driver.strip()}
+    for row in rows:
+        source = str(row["source"])
+        row_ok = True
+        cpu_count = row.get("cpu_count")
+        if not isinstance(cpu_count, int):
+            errors.append(
+                f"{source}: invalid host cpu_count {row.get('cpu_count_raw')!r}"
+            )
+            row_ok = False
+        elif cpu_count < min_cpus:
+            errors.append(f"{source}: host cpu_count={cpu_count}, want >= {min_cpus}")
+            row_ok = False
+        if not str(row.get("machine") or ""):
+            errors.append(f"{source}: missing host machine")
+            row_ok = False
+        drivers: dict[str, str] = dict(row.get("net_drivers") or {})
+        underlay_driver = str(row.get("underlay_driver") or "")
+        if underlay_driver:
+            drivers.setdefault("underlay", underlay_driver)
+        for iface, driver in sorted(drivers.items()):
+            normalized = str(driver).strip().lower()
+            if normalized and normalized in forbidden:
+                errors.append(
+                    f"{source}: forbidden host net driver {driver!r} on {iface}"
+                )
+                row_ok = False
+        if row_ok:
+            valid_nodes.add(str(row["node"]))
+    if required and len(valid_nodes) < min_nodes:
+        errors.append(
+            f"found valid host state artifacts for {len(valid_nodes)} nodes, "
             f"want >= {min_nodes}"
         )
     return rows, errors, sorted(valid_nodes)
@@ -1915,6 +2023,10 @@ def validate_case(
     require_lan_state_artifacts: bool,
     min_lan_state_nodes: int,
     min_lan_tx_queue_len: int,
+    require_host_state_artifacts: bool,
+    min_host_state_nodes: int,
+    min_host_cpus: int,
+    forbidden_host_net_drivers: list[str],
     require_uname_artifacts: bool,
     min_uname_nodes: int,
     require_os_release_artifacts: bool,
@@ -2114,6 +2226,14 @@ def validate_case(
         min_tx_queue_len=min_lan_tx_queue_len,
     )
     errors.extend(lan_state_errors)
+    host_state_artifacts, host_state_errors, host_state_nodes = validate_host_state_artifacts(
+        case.path,
+        required=require_host_state_artifacts,
+        min_nodes=min_host_state_nodes,
+        min_cpus=min_host_cpus,
+        forbidden_net_drivers=forbidden_host_net_drivers,
+    )
+    errors.extend(host_state_errors)
 
     build_identities = collect_status_build_identities(case.path)
     build_identity_fields = (
@@ -2253,6 +2373,8 @@ def validate_case(
         "lsmod_nodes": lsmod_nodes,
         "lan_state_artifacts": lan_state_artifacts,
         "lan_state_nodes": lan_state_nodes,
+        "host_state_artifacts": host_state_artifacts,
+        "host_state_nodes": host_state_nodes,
         "build_identities": build_identities,
         "binary_identities": binary_identities,
         "boot_ids": boot_ids,
@@ -2306,6 +2428,12 @@ def main() -> int:
         raise SystemExit("--min-lan-state-nodes must be non-negative")
     if args.min_lan_tx_queue_len < 0:
         raise SystemExit("--min-lan-tx-queue-len must be non-negative")
+    if args.min_host_state_nodes < 0:
+        raise SystemExit("--min-host-state-nodes must be non-negative")
+    if args.min_host_cpus < 0:
+        raise SystemExit("--min-host-cpus must be non-negative")
+    if any(not item.strip() for item in args.forbid_host_net_driver):
+        raise SystemExit("--forbid-host-net-driver must not be empty")
     if args.min_uname_nodes < 0:
         raise SystemExit("--min-uname-nodes must be non-negative")
     if args.min_os_release_nodes < 0:
@@ -2459,6 +2587,10 @@ def main() -> int:
             require_lan_state_artifacts=args.require_lan_state_artifacts,
             min_lan_state_nodes=args.min_lan_state_nodes,
             min_lan_tx_queue_len=args.min_lan_tx_queue_len,
+            require_host_state_artifacts=args.require_host_state_artifacts,
+            min_host_state_nodes=args.min_host_state_nodes,
+            min_host_cpus=args.min_host_cpus,
+            forbidden_host_net_drivers=args.forbid_host_net_driver,
             require_uname_artifacts=args.require_uname_artifacts,
             min_uname_nodes=args.min_uname_nodes,
             require_os_release_artifacts=args.require_os_release_artifacts,

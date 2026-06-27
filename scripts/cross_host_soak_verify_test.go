@@ -678,6 +678,91 @@ func TestCrossHostSoakVerifyRejectsZeroLANTxQueueLen(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRequiresHostStateArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-host-state-artifacts", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted missing host state artifacts:\n%s", output)
+	}
+	if !strings.Contains(string(output), "host state artifacts") {
+		t.Fatalf("verify output did not report missing host state artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyAcceptsHostStateArtifacts(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeHostStateArtifacts(t, dir, 4, 4, "virtio_net", "virtio_net")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-host-state-artifacts", "--min-host-cpus", "4", "--forbid-host-net-driver", "e1000", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify rejected host state artifacts: %v\n%s", err, output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsLowHostCPUCount(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeHostStateArtifacts(t, dir, 4, 2, "virtio_net", "virtio_net")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-host-state-artifacts", "--min-host-cpus", "4", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted low host CPU count:\n%s", output)
+	}
+	if !strings.Contains(string(output), "host cpu_count=2") {
+		t.Fatalf("verify output did not report low host CPU count:\n%s", output)
+	}
+}
+
+func TestCrossHostSoakVerifyRejectsForbiddenHostNetDriver(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	writeHostStateArtifacts(t, dir, 4, 4, "virtio_net", "e1000")
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", "--require-host-state-artifacts", "--forbid-host-net-driver", "e1000", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted forbidden host net driver:\n%s", output)
+	}
+	if !strings.Contains(string(output), "forbidden host net driver") ||
+		!strings.Contains(string(output), "e1000") {
+		t.Fatalf("verify output did not report forbidden host net driver:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyRejectsTxQueueLenMisconfigLogs(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -2283,6 +2368,27 @@ func writeLANStateArtifacts(t *testing.T, dir string, txQueueLenA, txQueueLenB i
 			"===== ip-link =====\n" +
 			"11: tix-lan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen " + strconv.Itoa(txQueueLen) + "\n"
 		writeTextFile(t, filepath.Join(dir, "collect", node, "ix-"+node+"-lan-state.txt"), value)
+	}
+}
+
+func writeHostStateArtifacts(t *testing.T, dir string, cpuCountA, cpuCountB int, driverA, driverB string) {
+	t.Helper()
+	for node, item := range map[string]struct {
+		cpuCount int
+		driver   string
+	}{
+		"a": {cpuCount: cpuCountA, driver: driverA},
+		"b": {cpuCount: cpuCountB, driver: driverB},
+	} {
+		value := "cpu_count=" + strconv.Itoa(item.cpuCount) + "\n" +
+			"machine=x86_64\n" +
+			"kernel_release=6.12.94+deb13-cloud-amd64\n" +
+			"underlay_interface=eth0\n" +
+			"underlay_driver=" + item.driver + "\n" +
+			"===== net-drivers =====\n" +
+			"net_driver[eth0]=" + item.driver + "\n" +
+			"net_driver[lo]=none\n"
+		writeTextFile(t, filepath.Join(dir, "collect", node, "ix-"+node+"-host-state.txt"), value)
 	}
 }
 
