@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,11 @@ def parse_args() -> argparse.Namespace:
             "only accept evidence matching production-transport-current-evidence.tsv "
             "for each audited default"
         ),
+    )
+    parser.add_argument(
+        "--require-artifact-reference",
+        action="store_true",
+        help="only accept evidence whose local markdown artifact path and anchor exist",
     )
     parser.add_argument(
         "--current-requirements",
@@ -264,6 +270,51 @@ def current_requirements_path(args: argparse.Namespace, defaults_path: Path) -> 
     return defaults_path.with_name("production-transport-current-evidence.tsv")
 
 
+def repo_root() -> Path:
+    return script_dir().parent
+
+
+def path_is_relative_to(child: Path, parent: Path) -> bool:
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def markdown_anchors(path: Path) -> set[str]:
+    text = path.read_text(encoding="utf-8")
+    anchors: set[str] = set()
+    for match in re.finditer(r"""<a\s+(?:[^>]*?\s)?(?:id|name)=["']([^"']+)["']""", text):
+        anchors.add(match.group(1))
+    return anchors
+
+
+def artifact_reference_errors(artifact: str) -> list[str]:
+    artifact = artifact.strip()
+    if not artifact:
+        return ["artifact is empty"]
+    if "://" in artifact:
+        return [f"artifact={artifact!r} is not a local markdown reference"]
+    path_part, sep, anchor = artifact.partition("#")
+    if sep == "" or not path_part or not anchor:
+        return [f"artifact={artifact!r} must be path.md#anchor"]
+    artifact_path = Path(path_part)
+    if artifact_path.is_absolute():
+        return [f"artifact path {path_part!r} must be repo-relative"]
+    root = repo_root().resolve()
+    resolved = (root / artifact_path).resolve()
+    if not path_is_relative_to(resolved, root):
+        return [f"artifact path {path_part!r} escapes repo root"]
+    if resolved.suffix.lower() != ".md":
+        return [f"artifact path {path_part!r} must be markdown"]
+    if not resolved.exists():
+        return [f"artifact path {path_part!r} does not exist"]
+    if anchor not in markdown_anchors(resolved):
+        return [f"artifact anchor {anchor!r} not found in {path_part!r}"]
+    return []
+
+
 def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> dict[str, dict[str, str]]:
     rows = read_tsv(
         current_requirements_path(args, defaults_path),
@@ -325,6 +376,9 @@ def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
                         if candidate[field] != current_requirement[field]:
                             reasons.append(f"{field}={candidate[field]!r}!={current_requirement[field]!r}")
                     ok = not reasons
+            if ok and args.require_artifact_reference:
+                reasons.extend(artifact_reference_errors(candidate["artifact"]))
+                ok = not reasons
             if ok:
                 accepted.append(candidate)
             elif len(rejected) < 5:

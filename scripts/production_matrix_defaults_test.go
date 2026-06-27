@@ -2193,6 +2193,7 @@ func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 		"--scope", "cross_host",
 		"--require-manifest",
 		"--require-current",
+		"--require-artifact-reference",
 		"--fail-on-missing",
 		"--json",
 	)
@@ -2315,6 +2316,7 @@ func TestProductionTransportAuditScriptDefaultsResolveFromRepoRoot(t *testing.T)
 		"--scope", "cross_host",
 		"--require-manifest",
 		"--require-current",
+		"--require-artifact-reference",
 		"--fail-on-missing",
 		"--json",
 	)
@@ -2351,11 +2353,72 @@ func TestCIWorkflowRunsCurrentProductionTransportAudit(t *testing.T) {
 		"--scope cross_host",
 		"--require-manifest",
 		"--require-current",
+		"--require-artifact-reference",
 		"--fail-on-missing",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("ci workflow production audit step missing %q", want)
 		}
+	}
+}
+
+func TestProductionTransportAuditScriptRequireArtifactReferenceRejectsMissingAnchor(t *testing.T) {
+	python := requirePython3(t)
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	evidence := filepath.Join(workdir, "evidence.tsv")
+	defaultPayload := strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t0.5\t30\trequire artifact reference",
+		"",
+	}, "\n")
+	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	evidencePayload := strings.Join([]string{
+		"# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note",
+		strings.Join([]string{
+			"userspace",
+			"udp",
+			"secure",
+			"stable",
+			"userspace",
+			"userspace",
+			"cross_host",
+			"debian13-debian13",
+			"6.12.90_to_6.12.90",
+			"pass",
+			"2.0",
+			"3600",
+			productionGateManifestSchema,
+			strings.Repeat("a", 64),
+			strings.Repeat("b", 64),
+			"docs/trustix-performance-log.md#missing-production-audit-anchor",
+			"missing docs anchor",
+		}, "\t"),
+		"",
+	}, "\n")
+	if err := os.WriteFile(evidence, []byte(evidencePayload), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--scope", "cross_host",
+		"--require-manifest",
+		"--require-artifact-reference",
+		"--fail-on-missing",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted missing artifact anchor:\n%s", output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "lack matching evidence") ||
+		!strings.Contains(text, "artifact anchor") {
+		t.Fatalf("audit failure did not explain missing artifact anchor:\n%s", output)
 	}
 }
 
