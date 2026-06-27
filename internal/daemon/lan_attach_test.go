@@ -572,6 +572,67 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextUDPFullKmod(t *testing.T)
 	}
 }
 
+func TestDataplaneAttachSpecOpenWrtFullKmodRequiresDedicatedGate(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+	})
+
+	if spec.KernelDatapathFullPlaintext {
+		t.Fatalf("OpenWrt full-kmod should stay disabled without dedicated gate, spec=%#v", spec)
+	}
+	if spec.KernelDatapathSuppressLegacyRXWorker || spec.KernelUDPTXDirectOnly || spec.KernelUDPTCOnlyProvider {
+		t.Fatalf("OpenWrt missing-gate full-kmod should not silently switch to another kernel provider, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecOpenWrtDedicatedGateAllowsFullKmod(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfilePerformance,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"udp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-a",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+	})
+
+	if !spec.KernelDatapathFullPlaintext {
+		t.Fatalf("OpenWrt dedicated gate should allow full-kmod ownership, spec=%#v", spec)
+	}
+	if spec.KernelDatapathSuppressLegacyRXWorker || spec.KernelUDPTXDirectOnly || spec.KernelUDPTCOnlyProvider {
+		t.Fatalf("OpenWrt full-kmod should not mix with other kernel UDP providers, spec=%#v", spec)
+	}
+}
+
 func TestDataplaneAttachSpecKeepsLegacyFullPlaintextUDPOnRXWorker(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
