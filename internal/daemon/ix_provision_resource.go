@@ -782,12 +782,12 @@ func ixProvisionDefaultsForProfile(profile string) (ixProvisionProfileDefaults, 
 		}, nil
 	case "latency":
 		return ixProvisionProfileDefaults{
-			TransportProfile:        config.TransportProfileLatency,
-			Datapath:                config.TransportDatapathAuto,
+			TransportProfile:        config.TransportProfileStable,
+			Datapath:                config.TransportDatapathUserspace,
 			Encryption:              securetransport.EncryptionSecure,
-			CryptoPlacement:         "auto",
-			KernelTransport:         "auto",
-			KernelCapabilityProfile: config.KernelCapabilityProfileStable,
+			CryptoPlacement:         string(dataplane.CryptoPlacementUserspace),
+			KernelTransport:         string(dataplane.KernelTransportModeDisabled),
+			KernelCapabilityProfile: config.KernelCapabilityProfileDisabled,
 		}, nil
 	case "compatibility":
 		return ixProvisionProfileDefaults{

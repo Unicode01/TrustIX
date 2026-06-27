@@ -450,12 +450,12 @@ bootstrap_profile_defaults() {
       profile_kernel_capability="performance"
       ;;
     latency)
-      profile_transport_profile="latency"
-      profile_datapath="auto"
+      profile_transport_profile="stable"
+      profile_datapath="userspace"
       profile_encryption="secure"
-      profile_crypto_placement="auto"
-      profile_kernel_transport="auto"
-      profile_kernel_capability="stable"
+      profile_crypto_placement="userspace"
+      profile_kernel_transport="disabled"
+      profile_kernel_capability="disabled"
       ;;
     compatibility)
       profile_transport_profile="stable"

@@ -896,7 +896,7 @@ function ixProvisionProfileDefaults(profile: string): Pick<IXProvisionEffectiveD
     case "performance":
       return { transportProfile: "performance", datapath: "tc_xdp", encryption: "secure", cryptoPlacement: "kernel", kernelTransport: "require_kernel" };
     case "latency":
-      return { transportProfile: "latency", datapath: "auto", encryption: "secure", cryptoPlacement: "auto", kernelTransport: "auto" };
+      return { transportProfile: "stable", datapath: "userspace", encryption: "secure", cryptoPlacement: "userspace", kernelTransport: "disabled" };
     case "compatibility":
     case "compat":
     case "compatible":

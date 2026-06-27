@@ -247,6 +247,13 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		MinGbps:         "1.5",
 		MinSeconds:      "3600",
 	})
+	latency, err := ixProvisionDefaultsForProfile("latency")
+	if err != nil {
+		t.Fatalf("latency defaults: %v", err)
+	}
+	if latency != stable {
+		t.Fatalf("latency defaults = %#v, want stable compatibility alias %#v", latency, stable)
+	}
 
 	securePerformance, err := ixProvisionDefaultsForProfile("performance")
 	if err != nil {
