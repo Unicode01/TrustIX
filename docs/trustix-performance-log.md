@@ -21,14 +21,88 @@ Current production-default evidence boundary:
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
 | Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `928c5d0939cc` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. The earlier Debian `6.12.94+deb13-cloud-amd64` gate at commit `973a020` remains historical coverage, not the current pinned row. |
-| Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `973a020` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
-| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `973a020` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64`; current VXLAN plaintext userspace-TC supplemental gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `b0f3c3a3b47b` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. |
-| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `973a020` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
+| Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
+| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
+| Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64`; current VXLAN plaintext userspace-TC supplemental gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `b0f3c3a3b47b` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
+| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `928c5d0939cc` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. The earlier gates at commits `395b2ba05013` and `e02d15edf6b4` remain historical evidence, not the current pinned row. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-28
+
+<a id="pve-debian13-current-userspace-b-2026-06-28"></a>
+
+### Zaozhuang PVE 8c9fa5f experimental TCP userspace fallback gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 202 and 203
+only. Both guests ran Debian 13 kernel `6.12.90+deb13.1-cloud-amd64` with
+virtio network devices. VM100 and all 1xx guests were not modified.
+
+This run validates the encrypted experimental TCP userspace compatibility path
+after the cross-host runner started setting
+`TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK=1` for userspace experimental TCP. The
+release used TrustIX version `trustix-linux-amd64`, commit `8c9fa5fcf2e0`, Go
+`1.25.0`, build time `2026-06-27T20:19:29Z`, and binary SHA256
+`7698a3d8c8e62eb7df3280e42633ea4336e00d1fd408006edb5540af9832a463`.
+
+The selected production gate emitted `trustix-cross-host-production-gate-manifest-v1`
+evidence. The production gate script SHA256 was
+`6150d4ccadd3b0614d389442c4a1084fcad2d0748700ad9d5eea9900e7d7a242`; the
+verifier SHA256 was
+`bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
+
+The gate ran `forward + both` with `iperf_parallel=8` from
+`2026-06-28T06:10:27Z` to `2026-06-28T08:10:30Z` and elapsed 7203 seconds.
+Minimum received throughput was `0.613955 Gbps` for at least `3600.001485s`,
+clearing the selected `0.5 Gbps` production threshold. Both nodes reported 16
+matching experimental TCP sessions, no loaded `trustix_*` kernel modules,
+stable boot IDs `bf292e69-ec9e-4173-918e-6279a5716131` and
+`836d6bee-e2e2-473f-a69c-24cc6eddcdbb`, zero session dial or heartbeat
+errors, `errors=[]`, `log_findings=[]`, `kernel_log_rejected_artifacts=[]`,
+and `pstore_rejected_artifacts=[]`.
+
+<a id="pve-debian13-current-kernel-fast-2026-06-28"></a>
+
+### Zaozhuang PVE 8c9fa5f current kernel-fast production gates
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 206 and 207
+only. Both guests ran Debian 13 kernel `6.12.90+deb13.1-cloud-amd64` with
+virtio network devices. VM100 and all 1xx guests were not modified.
+
+The release used TrustIX version `trustix-linux-amd64`, commit
+`8c9fa5fcf2e0`, Go `1.25.0`, build time `2026-06-27T20:19:29Z`, and binary
+SHA256 `7698a3d8c8e62eb7df3280e42633ea4336e00d1fd408006edb5540af9832a463`.
+The Debian module SHA256 values were
+`trustix_datapath.ko=3fabdbf7cb619bf7207ddeed1919ba5077c5fe997e41b84decbad56e74f04a47`,
+`trustix_crypto.ko=ab9152ebda704e90f7559a8e59b8aeb637b84a9e807d3f0b29e76c4eac67b3f7`,
+and
+`trustix_datapath_helpers.ko=6d8c156e461f1973dcd4232fcb717c9260ad2de22cd08f0df9b8ae53001290de`.
+
+The selected production gates emitted `trustix-cross-host-production-gate-manifest-v1`
+evidence. The production gate script SHA256 was
+`6150d4ccadd3b0614d389442c4a1084fcad2d0748700ad9d5eea9900e7d7a242`; the
+verifier SHA256 was
+`bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
+
+| Gate | Transport | Crypto | Module set | Minimum received | Minimum duration |
+| --- | --- | --- | --- | ---: | ---: |
+| `tc_direct` | kernel UDP plaintext TC-direct | userspace | none | 3.105795 Gbps | 3600.003409s |
+| `secure_kudp` | kernel UDP route-GSO | kernel | `trustix_crypto`, `trustix_datapath_helpers` | 1.592245 Gbps | 3600.001914s |
+| `secure_exp_tcp_kernel` | experimental TCP route-GSO | kernel | `trustix_crypto`, `trustix_datapath_helpers` | 1.633970 Gbps | 3600.017497s |
+| `route_gso` | experimental TCP plaintext route-GSO | userspace | `trustix_datapath_helpers` | 2.734667 Gbps | 3600.009225s |
+
+Each gate ran `forward + both` with `iperf_parallel=8` and elapsed 7204
+seconds. TC-direct ran from `2026-06-27T21:06:26Z` to
+`2026-06-27T23:06:30Z`; secure-kUDP ran from `2026-06-27T23:07:04Z` to
+`2026-06-28T01:07:08Z`; secure experimental TCP kernel crypto ran from
+`2026-06-28T01:07:39Z` to `2026-06-28T03:07:43Z`; route-GSO ran from
+`2026-06-28T03:08:06Z` to `2026-06-28T05:08:10Z`.
+
+Both guests kept stable boot IDs
+`ed4f9abb-45b0-42e9-828f-816116fb850d` and
+`297ef07d-a478-480a-83f5-e64b0aa7651d`. All four gates passed with
+`errors=[]`, `log_findings=[]`, `kernel_log_rejected_artifacts=[]`, and
+`pstore_rejected_artifacts=[]`; `tix-lan` kept `tx_queue_len=1000`.
 
 <a id="pve-debian13-full-kmod-2026-06-27"></a>
 <a id="pve-openwrt24107-debian13-full-kmod-2026-06-28"></a>

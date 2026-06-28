@@ -513,7 +513,7 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
-				"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:3600",
+				"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
 				"experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel:1.5:3600",
 				"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 			} {
@@ -3107,16 +3107,17 @@ func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	manifestRequiredArtifacts := map[string]string{
-		"tc_direct":             "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
+		"tc_direct":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 		"full_kmod":             "docs/trustix-performance-log.md#pve-debian13-full-kmod-2026-06-27",
-		"secure_kudp":           "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
-		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
-		"route_gso":             "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-973a020-kmod-6-12-94-3600s-production-gates",
+		"secure_kudp":           "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+		"route_gso":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 		"owdeb_full_kmod":       "docs/trustix-performance-log.md#pve-openwrt24107-debian13-full-kmod-2026-06-28",
 		"userspace":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
 	manifestRequiredArtifactByDefault := map[string]string{
+		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace": "docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
 		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc": "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-b0f3c3a-vxlan-plaintext-heartbeat10s-3600s-production-gate",
 	}
 	legacyPendingFamilies := map[string]bool{}
@@ -3696,7 +3697,7 @@ func TestProductionDefaultsDoNotReuseSecureKUDPForSecureExperimentalTCPKernelCry
 			row.CryptoPlacement == "userspace" &&
 			row.ValidationScope == "cross_host" &&
 			row.GateFamily == "userspace" &&
-			row.MinGbps == "1" &&
+			row.MinGbps == "0.5" &&
 			row.MinSeconds == "3600" {
 			sawSecureUserspace = true
 		}
@@ -3752,7 +3753,7 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
 		"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
 		"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
-		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:1:3600",
+		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
 		"experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel:1.5:3600",
 		"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
@@ -6115,6 +6116,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"net_driver[%s]=%s",
 		"collect_host_state a",
 		"collect_host_state b",
+		"TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK=1",
 		"rx_worker_experimental_tcp=1",
 		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=%s",
 		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1",

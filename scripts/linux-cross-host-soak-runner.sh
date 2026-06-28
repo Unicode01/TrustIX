@@ -1152,6 +1152,13 @@ daemon_env() {
     return
   fi
   case "$(case_fast_path)" in
+    userspace)
+      if [[ "$(case_endpoint_transport)" == "experimental_tcp" ]]; then
+        cat <<'EOF'
+TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK=1
+EOF
+      fi
+      ;;
     full_kmod)
       local rx_worker_experimental_tcp=0
       if [[ "$(case_endpoint_transport)" == "experimental_tcp" ]]; then
