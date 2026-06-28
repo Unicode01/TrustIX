@@ -20,7 +20,7 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `928c5d0939cc` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. The earlier Debian `6.12.94+deb13-cloud-amd64` gate at commit `973a020` remains historical coverage, not the current pinned row. |
+| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `b0d2fc642864` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. The modules were rebuilt inside the guests for the exact target kernel; earlier Debian `6.12.90+deb13.1-cloud-amd64` and `6.12.94+deb13-cloud-amd64` gates remain historical coverage, not the current pinned row. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64`; current VXLAN plaintext userspace-TC supplemental gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `b0f3c3a3b47b` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
@@ -103,6 +103,54 @@ Both guests kept stable boot IDs
 `297ef07d-a478-480a-83f5-e64b0aa7651d`. All four gates passed with
 `errors=[]`, `log_findings=[]`, `kernel_log_rejected_artifacts=[]`, and
 `pstore_rejected_artifacts=[]`; `tix-lan` kept `tx_queue_len=1000`.
+
+<a id="pve-debian13-b0d2fc6-full-kmod-2026-06-28"></a>
+
+### Zaozhuang PVE b0d2fc6 full-kmod 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 212 and 213
+only. Both guests ran Debian 13 kernel `6.12.94+deb13-cloud-amd64`, 8 vCPU,
+and virtio network devices on isolated `vmbr3`. VM100 and all 1xx guests were
+not modified.
+
+The release used TrustIX version `trustix-linux-amd64`, commit
+`b0d2fc642864`, Go `1.25.0`, build time `2026-06-28T08:35:21Z`, assets SHA256
+`ad1ada9cab41d80e5973ae5545873dcae7bfe0d795a579468ed6269763fc92f5`, and
+binary SHA256 `8598db5a4f2ff808690c2fa6f2845e51d920c144327c7b9578ea18cff2395c44`.
+
+The Debian modules were rebuilt inside the guests from the same source tree so
+their vermagic matched `6.12.94+deb13-cloud-amd64 SMP preempt mod_unload
+modversions`. The module SHA256 values were
+`trustix_datapath.ko=72d1f657b78f64d8956d427425e3aa44ed16d50f265d98b929680c53697d13c3`,
+`trustix_crypto.ko=44a9fde1c3b0ed7cf8b5da5f377b8987b33ab8620c6ef1b8639670931d569d49`,
+and
+`trustix_datapath_helpers.ko=ff72e9082b7fb324a1d1d556516022fead78fed5ad384ab3ea228aa999d6a5b4`.
+
+The selected production gate emitted `trustix-cross-host-production-gate-manifest-v1`
+evidence. The production gate script SHA256 was
+`6150d4ccadd3b0614d389442c4a1084fcad2d0748700ad9d5eea9900e7d7a242`; the
+verifier SHA256 was
+`bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
+
+The gate ran `forward + both` with `iperf_parallel=8` from
+`2026-06-28T14:17:21Z` to `2026-06-28T16:17:24Z` and elapsed 7203 seconds.
+Minimum received throughput was `3.365450 Gbps`, minimum sent throughput was
+`3.365496 Gbps`, and the minimum measured duration was `3600.021591s`,
+clearing the selected `3 Gbps` production threshold.
+
+Both guests kept stable boot IDs
+`53b7b820-1e93-467c-8784-b0df171f8b0d` and
+`644dabf4-2251-41cd-8dad-b34b95e2ebfe`. The verifier collected kernel logs
+and pstore from both nodes and passed with `errors=[]`, `log_findings=[]`,
+`kernel_log_rejected_artifacts=[]`, and `pstore_rejected_artifacts=[]`;
+`tix-lan` kept `tx_queue_len=1000`. The loaded module parameter snapshot had
+`trustix_datapath.safe_features=128`, `unsafe_features=0`,
+`selftest_failures=0`, `rx_worker_inject=Y`, `tx_plaintext=Y`, zero
+RX-worker/TX-plaintext error counters required by the production gate, and
+over one billion RX/TX GSO segment counters on each side. A concurrent underlay
+bypass check during the soak sent 100 Mbit/s UDP from VM212 to VM213 with
+`0.000000%` loss and successful ping, verifying ordinary underlay traffic still
+passed while full-kmod was loaded and busy.
 
 <a id="pve-debian13-full-kmod-2026-06-27"></a>
 <a id="pve-openwrt24107-debian13-full-kmod-2026-06-28"></a>
