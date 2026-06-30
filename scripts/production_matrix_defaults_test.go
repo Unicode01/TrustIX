@@ -403,17 +403,20 @@ func validateProductionEvidenceManifestIdentity(t *testing.T, evidence productio
 }
 
 type currentProductionEvidenceRequirement struct {
-	OSMatrix             string
-	KernelMatrix         string
-	Artifact             string
-	GateManifestSchema   string
-	ProductionGateSHA256 string
-	VerifierSHA256       string
-	BinarySHA256         string
-	BuildVersion         string
-	BuildCommit          string
-	BuildBuiltAt         string
-	BuildGoVersion       string
+	OSMatrix                string
+	KernelMatrix            string
+	Artifact                string
+	GateManifestSchema      string
+	ProductionGateSHA256    string
+	VerifierSHA256          string
+	BinarySHA256            string
+	BuildVersion            string
+	BuildCommit             string
+	BuildBuiltAt            string
+	BuildGoVersion          string
+	RunnerSHA256            string
+	TransportMatrixSHA256   string
+	EvidenceGeneratorSHA256 string
 }
 
 func loadCurrentProductionEvidenceRequirements(t *testing.T) map[string]currentProductionEvidenceRequirement {
@@ -432,6 +435,17 @@ func loadCurrentProductionEvidenceRequirements(t *testing.T) map[string]currentP
 		if len(fields) < 19 {
 			t.Fatalf("invalid current production evidence requirement row %q", line)
 		}
+		if len(fields) != 19 && len(fields) != 22 {
+			t.Fatalf("current production evidence requirement must have 19 legacy columns or 22 toolchain columns, got %d in %q", len(fields), line)
+		}
+		runnerSHA256 := ""
+		transportMatrixSHA256 := ""
+		evidenceGeneratorSHA256 := ""
+		if len(fields) == 22 {
+			runnerSHA256 = fields[19]
+			transportMatrixSHA256 = fields[20]
+			evidenceGeneratorSHA256 = fields[21]
+		}
 		row := productionTransportDefault{
 			Transport:       fields[0],
 			Encryption:      fields[1],
@@ -446,17 +460,20 @@ func loadCurrentProductionEvidenceRequirements(t *testing.T) map[string]currentP
 			t.Fatalf("duplicate current production evidence requirement for %s", key)
 		}
 		requirements[key] = currentProductionEvidenceRequirement{
-			OSMatrix:             fields[7],
-			KernelMatrix:         fields[8],
-			GateManifestSchema:   fields[9],
-			ProductionGateSHA256: fields[10],
-			VerifierSHA256:       fields[11],
-			Artifact:             fields[12],
-			BinarySHA256:         fields[14],
-			BuildVersion:         fields[15],
-			BuildCommit:          fields[16],
-			BuildBuiltAt:         fields[17],
-			BuildGoVersion:       fields[18],
+			OSMatrix:                fields[7],
+			KernelMatrix:            fields[8],
+			GateManifestSchema:      fields[9],
+			ProductionGateSHA256:    fields[10],
+			VerifierSHA256:          fields[11],
+			Artifact:                fields[12],
+			BinarySHA256:            fields[14],
+			BuildVersion:            fields[15],
+			BuildCommit:             fields[16],
+			BuildBuiltAt:            fields[17],
+			BuildGoVersion:          fields[18],
+			RunnerSHA256:            runnerSHA256,
+			TransportMatrixSHA256:   transportMatrixSHA256,
+			EvidenceGeneratorSHA256: evidenceGeneratorSHA256,
 		}
 	}
 	return requirements
@@ -465,6 +482,46 @@ func loadCurrentProductionEvidenceRequirements(t *testing.T) map[string]currentP
 func currentProductionEvidenceRequirementForDefault(requirements map[string]currentProductionEvidenceRequirement, row productionTransportDefault) (currentProductionEvidenceRequirement, bool) {
 	requirement, ok := requirements[productionDefaultEvidenceKey(row)]
 	return requirement, ok
+}
+
+func loadAuditCurrentToolchainLegacyRequirementKeys(t *testing.T) map[string]bool {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join(".", "production-transport-audit.py"))
+	if err != nil {
+		t.Fatalf("read production-transport-audit.py: %v", err)
+	}
+	text := string(payload)
+	start := strings.Index(text, "CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {")
+	if start < 0 {
+		t.Fatalf("production-transport-audit.py is missing CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS")
+	}
+	rest := text[start:]
+	end := strings.Index(rest, "\n}")
+	if end < 0 {
+		t.Fatalf("production-transport-audit.py has unterminated CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS")
+	}
+	block := rest[:end]
+	keys := map[string]bool{}
+	for _, line := range strings.Split(block, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, `"`) {
+			continue
+		}
+		line = strings.TrimPrefix(line, `"`)
+		quote := strings.Index(line, `"`)
+		if quote < 0 {
+			t.Fatalf("invalid CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS line: %q", line)
+		}
+		key := line[:quote]
+		if keys[key] {
+			t.Fatalf("duplicate CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS key: %s", key)
+		}
+		keys[key] = true
+	}
+	if len(keys) != 25 {
+		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 25 current legacy rows, got %d", len(keys))
+	}
+	return keys
 }
 
 func markdownHeadingAnchor(line string) (string, bool) {
@@ -2364,6 +2421,46 @@ func TestCurrentProductionEvidenceRequirementsCoverCrossHostDefaults(t *testing.
 	for key := range requirements {
 		if _, ok := crossHostDefaults[key]; !ok {
 			t.Fatalf("current production evidence requirement has no matching cross-host default: %s", key)
+		}
+	}
+}
+
+func TestCurrentProductionEvidenceToolchainLegacyAllowlistIsExact(t *testing.T) {
+	requirements := loadCurrentProductionEvidenceRequirements(t)
+	legacyAllowlist := loadAuditCurrentToolchainLegacyRequirementKeys(t)
+	seenLegacy := map[string]bool{}
+	for key, requirement := range requirements {
+		values := []string{
+			requirement.RunnerSHA256,
+			requirement.TransportMatrixSHA256,
+			requirement.EvidenceGeneratorSHA256,
+		}
+		present := 0
+		for _, value := range values {
+			if value != "" {
+				present++
+			}
+		}
+		legacyKey := key + "|" + requirement.Artifact
+		switch present {
+		case 0:
+			if !legacyAllowlist[legacyKey] {
+				t.Fatalf("current evidence requirement without toolchain hashes is not allowlisted: %s", legacyKey)
+			}
+			seenLegacy[legacyKey] = true
+		case 3:
+			for _, value := range values {
+				if !isSHA256Hex(value) {
+					t.Fatalf("current evidence requirement has invalid toolchain SHA256 fields: %s %+v", key, requirement)
+				}
+			}
+		default:
+			t.Fatalf("current evidence requirement must set all or none of runner/matrix/generator SHA256 fields: %s %+v", key, requirement)
+		}
+	}
+	for key := range legacyAllowlist {
+		if !seenLegacy[key] {
+			t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS contains stale or mismatched key: %s", key)
 		}
 	}
 }
