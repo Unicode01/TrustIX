@@ -14,6 +14,7 @@ workdir="$(mkdir -p "$workdir" && cd "$workdir" && pwd -P)"
 keep_remote="${TRUSTIX_CROSS_HOST_KEEP_REMOTE:-0}"
 keep_local="${TRUSTIX_CROSS_HOST_KEEP_LOCAL:-1}"
 unload_modules="${TRUSTIX_CROSS_HOST_UNLOAD_MODULES:-1}"
+preserve_on_failure="${TRUSTIX_CROSS_HOST_PRESERVE_ON_FAILURE:-0}"
 dry_run_config="${TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG:-0}"
 
 node_a="${TRUSTIX_CROSS_HOST_A:-local}"
@@ -904,6 +905,7 @@ prepare_node_topology() {
 ip_cmd=\$(command -v ip)
 rm -rf $(remote_quote "$dir")
 mkdir -p $(remote_quote "$dir")/logs $(remote_quote "$dir")/certs $(remote_quote "$dir")/data
+if command -v modprobe >/dev/null 2>&1; then modprobe veth >/dev/null 2>&1 || true; fi
 for pid in \$(\"\$ip_cmd\" netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
 \"\$ip_cmd\" netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
 \"\$ip_cmd\" link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
@@ -1617,6 +1619,20 @@ wait_for_tcp_listener() {
   local port
   port="$(node_value "$node" "$data_a_port" "$data_b_port")"
   run_node "$node" "set -Eeuo pipefail
+port_hex=\$(printf '%04X' ${port})
+proc_tcp_listening() {
+  local file=\"\$1\"
+  [ -r \"\$file\" ] || return 1
+  awk -v p=\"\$port_hex\" '
+    NR > 1 {
+      split(\$2, local_addr, \":\")
+      if (local_addr[2] == p && \$4 == \"0A\") {
+        found = 1
+      }
+    }
+    END { exit found ? 0 : 1 }
+  ' \"\$file\"
+}
 for _ in \$(seq 1 80); do
   if command -v ss >/dev/null 2>&1; then
     if ss -ltnH 2>/dev/null | awk '{print \$4}' | grep -Eq '(^|[.:])${port}$'; then
@@ -1627,8 +1643,22 @@ for _ in \$(seq 1 80); do
       exit 0
     fi
   fi
+  if proc_tcp_listening /proc/net/tcp || proc_tcp_listening /proc/net/tcp6; then
+    exit 0
+  fi
   sleep 1
 done
+{
+  echo 'listener wait failed for tcp port ${port}'
+  echo '===== ss ====='
+  ss -ltnp 2>&1 || true
+  echo '===== netstat ====='
+  netstat -ltnp 2>&1 || true
+  echo '===== proc tcp ====='
+  cat /proc/net/tcp 2>/dev/null || true
+  echo '===== proc tcp6 ====='
+  cat /proc/net/tcp6 2>/dev/null || true
+} >&2
 exit 1
 "
 }
@@ -1969,8 +1999,13 @@ collect_all() {
 }
 
 cleanup_all() {
+  local rc=$?
   set +e
   collect_all
+  if [[ "$rc" != "0" ]] && truthy "$preserve_on_failure"; then
+    log "preserving remote state after failure because TRUSTIX_CROSS_HOST_PRESERVE_ON_FAILURE=1"
+    return "$rc"
+  fi
   stop_daemon a
   stop_daemon b
   cleanup_node a
@@ -1978,6 +2013,7 @@ cleanup_all() {
   if [[ "$keep_local" != "1" && -d "$workdir" ]]; then
     rm -rf "$workdir"
   fi
+  return "$rc"
 }
 
 main() {
@@ -2009,7 +2045,7 @@ main() {
     log "WARNING: ${case_name} has no safe TC direct fast path with this configuration; using userspace datapath"
   fi
   if [[ "$(case_transport)" == "udp" && "$(case_endpoint_transport)" == "experimental_tcp" ]]; then
-    log "WARNING: full-kmod with experimental_tcp endpoint is diagnostic only; production uses UDP full-kmod or experimental_tcp route-GSO"
+    log "full-kmod transport override selected with experimental_tcp endpoint; require explicit exp_tcp_full_kmod gate evidence before treating this mix as production"
   fi
   check_node_prereqs a
   check_node_prereqs b

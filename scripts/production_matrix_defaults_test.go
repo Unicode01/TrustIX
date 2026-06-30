@@ -548,6 +548,8 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 				"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
+				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod:4:3600",
+				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_exp_tcp_full_kmod:4:3600",
 				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 				"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
@@ -621,12 +623,13 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 func TestProductionTransportMatrixSingleHostScopeCannotSelectCrossHostOnlyGates(t *testing.T) {
 	rows := loadProductionTransportDefaults(t)
 	crossHostOnlyGate := map[string]bool{
-		"full_kmod":             true,
-		"owdeb_full_kmod":       true,
-		"exp_tcp_full_kmod":     true,
-		"secure_kudp":           true,
-		"secure_exp_tcp_kernel": true,
-		"route_gso":             true,
+		"full_kmod":               true,
+		"owdeb_full_kmod":         true,
+		"exp_tcp_full_kmod":       true,
+		"owdeb_exp_tcp_full_kmod": true,
+		"secure_kudp":             true,
+		"secure_exp_tcp_kernel":   true,
+		"route_gso":               true,
 	}
 	forbiddenFastPathKey := map[string]bool{
 		"udp:plaintext:performance:kernel_module:userspace":              true,
@@ -2277,6 +2280,7 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 		"full_kmod",
 		"owdeb_full_kmod",
 		"exp_tcp_full_kmod",
+		"owdeb_exp_tcp_full_kmod",
 		"secure_kudp",
 		"secure_exp_tcp_kernel",
 		"route_gso",
@@ -3290,15 +3294,16 @@ func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	manifestRequiredArtifacts := map[string]string{
-		"tc_direct":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"full_kmod":             "docs/trustix-performance-log.md#pve-debian13-b0d2fc6-full-kmod-2026-06-28",
-		"exp_tcp_full_kmod":     "docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
-		"secure_kudp":           "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"route_gso":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"owdeb_full_kmod":       "docs/trustix-performance-log.md#pve-openwrt24107-debian13-full-kmod-2026-06-28",
-		"userspace":             "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
-		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
+		"tc_direct":               "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+		"full_kmod":               "docs/trustix-performance-log.md#pve-debian13-b0d2fc6-full-kmod-2026-06-28",
+		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
+		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-openwrt24107-debian13-exp-tcp-full-kmod-bbde20a-3600s-production-gate",
+		"secure_kudp":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+		"route_gso":               "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+		"owdeb_full_kmod":         "docs/trustix-performance-log.md#pve-openwrt24107-debian13-full-kmod-2026-06-28",
+		"userspace":               "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
+		"userspace_tc":            "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
 	manifestRequiredArtifactByDefault := map[string]string{
 		"udp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
@@ -3957,6 +3962,7 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel:1.5:3600",
 		"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod:4:3600",
+		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_exp_tcp_full_kmod:4:3600",
 		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 	} {
 		if !strings.Contains(defaults, wantCase) {
@@ -3975,19 +3981,19 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 	knownGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"exp_tcp_full_kmod": true,
-		"secure_kudp":       true, "secure_exp_tcp_kernel": true, "route_gso": true,
+		"exp_tcp_full_kmod": true, "owdeb_exp_tcp_full_kmod": true,
+		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"exp_tcp_full_kmod": true,
-		"secure_kudp":       true, "secure_exp_tcp_kernel": true, "route_gso": true,
+		"exp_tcp_full_kmod": true, "owdeb_exp_tcp_full_kmod": true,
+		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostOnlyGate := map[string]bool{
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"exp_tcp_full_kmod": true,
-		"secure_kudp":       true, "secure_exp_tcp_kernel": true, "route_gso": true,
+		"exp_tcp_full_kmod": true, "owdeb_exp_tcp_full_kmod": true,
+		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
 	}
 	seen := map[string]bool{}
 	baseline := map[string]bool{}
@@ -6370,6 +6376,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"default_data_port",
 		"node_value \"$node\" 13000 13001",
 		"TRUSTIX_CROSS_HOST_IPERF_SECONDS:-3600",
+		"preserve_on_failure=\"${TRUSTIX_CROSS_HOST_PRESERVE_ON_FAILURE:-0}\"",
 		"iperf_parallel_explicit=\"${TRUSTIX_CROSS_HOST_IPERF_PARALLEL+x}\"",
 		"health_port=\"${TRUSTIX_CROSS_HOST_HEALTH_PORT:-}\"",
 		"TRUSTIX_CROSS_HOST_IPERF_MODE:-forward",
@@ -6467,6 +6474,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"ssh -n \"${ssh_opts[@]}\" \"$dest\" \"$@\"",
 		"ssh_no_stdin \"$dest\" \"mkdir -p $(remote_quote \"$dest_path\")\"",
 		"ssh_no_stdin \"$dest\" \"test -d $(remote_quote \"$src\")\"",
+		"modprobe veth",
 		"collect_boot_id()",
 		"boot-id-${phase}.txt",
 		"collect_boot_id a before",
@@ -6483,7 +6491,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"rx_worker_experimental_tcp=1",
 		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=%s",
 		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1",
-		"full-kmod with experimental_tcp endpoint is diagnostic only",
+		"require explicit exp_tcp_full_kmod gate evidence before treating this mix as production",
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER_EXPERIMENTS=1",
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_RX_WORKER_EXPERIMENTS=1",
 		"TRUSTIX_CROSS_HOST_OPENWRT_RX_SINGLE_COALESCE",
@@ -6549,6 +6557,9 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"run_connectivity_checks",
 		"run_tcp_health_checks",
 		"run_tcp_health_direction",
+		"proc_tcp_listening /proc/net/tcp",
+		"proc_tcp_listening /proc/net/tcp6",
+		"listener wait failed for tcp port",
 		"collect_one bpf bpf maps",
 		"${dir}/binary-identity.json",
 		"ip_cmd=\\$(command -v ip)",

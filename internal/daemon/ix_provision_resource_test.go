@@ -230,6 +230,17 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		Datapath:        plaintext.Datapath,
 		CryptoPlacement: plaintext.CryptoPlacement,
 		ValidationScope: "cross_host",
+		GateFamily:      "owdeb_exp_tcp_full_kmod",
+		MinGbps:         "4",
+		MinSeconds:      "3600",
+	})
+	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
+		Transport:       "experimental_tcp",
+		Encryption:      plaintext.Encryption,
+		Profile:         plaintext.TransportProfile,
+		Datapath:        plaintext.Datapath,
+		CryptoPlacement: plaintext.CryptoPlacement,
+		ValidationScope: "cross_host",
 		GateFamily:      "route_gso",
 		MinGbps:         "2.5",
 		MinSeconds:      "3600",

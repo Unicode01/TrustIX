@@ -27,6 +27,7 @@ Current production-default evidence boundary:
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace and GRE/IPIP/VXLAN userspace-TC | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `928c5d0939cc` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. The earlier gates at commits `395b2ba05013` and `e02d15edf6b4` remain historical evidence, not the current pinned row. |
+| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `bbde20a43b43` | Selected OpenWrt experimental TCP plaintext full-kmod now has its own production default and current evidence row. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-30
@@ -73,6 +74,47 @@ nodes. The gate also verified `capture_forwarder_suppressed=true`,
 `experimental_tcp.fast_path=true`, `active_flows=16`, `rx_worker_inject=Y`,
 `tx_plaintext=Y`, `unsafe_features=0`, `selftest_failures=0`, and zero
 RX-worker/TX-plaintext error counters required by the production gate.
+
+<a id="2026-06-30-zaozhuang-pve-openwrt24107-debian13-exp-tcp-full-kmod-bbde20a-3600s-production-gate"></a>
+
+### Zaozhuang PVE bbde20a OpenWrt-Debian experimental TCP full-kmod 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 201 and 202
+only. VM100 and all 1xx guests were not modified. Node A ran OpenWrt 24.10.7
+kernel `6.6.141`; node B ran Debian 13 kernel
+`6.12.90+deb13.1-cloud-amd64`, both with virtio network devices.
+
+The release used TrustIX version `trustix-linux-amd64`, commit
+`bbde20a43b43`, Go `1.25.0`, build time `2026-06-30T10:17:50Z`, assets SHA256
+`4e0476a6fb315983cfb57f4dcb2c221e18d720aee4c90fc8c6c783f6d434681e`,
+and binary SHA256
+`57577bf6a9beaae29be2db2d7541d089e5d9fcf2a1faae00de8e441f1175bd37`.
+
+The selected production gate emitted `trustix-cross-host-production-gate-manifest-v1`
+evidence for gate family `owdeb_exp_tcp_full_kmod`. The production gate script
+SHA256 was `6419bd20300ec8abd8abb38d8c5cac076dd6cb7add0d6795b2c5938555c3584c`;
+the verifier SHA256 was
+`bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
+
+The run used `experimental_tcp` plaintext performance profile with
+`datapath=kernel_module`, `crypto_placement=userspace`,
+`session_pool_size=8`, and `session_pool_strategy=flow`. It ran
+`forward + both` from `2026-06-30T10:51:01Z` to `2026-06-30T12:51:05Z`,
+elapsed `7204` seconds, and requested `3600s` per direction. Minimum received
+throughput was `7.889513 Gbps`; OpenWrt-to-Debian received `7.889513 Gbps`
+and Debian-to-OpenWrt received `9.142070 Gbps`.
+
+Both guests kept stable boot IDs. The verifier passed with `errors=[]`,
+`log_findings=[]`, `kernel_log_rejected_artifacts=[]`, and
+`pstore_rejected_artifacts=[]`; `tix-lan` kept `tx_queue_len=1000` on both
+nodes. The gate also verified `capture_forwarder_suppressed=true`,
+`experimental_tcp.provider=kernel_datapath_full_plaintext`,
+`experimental_tcp.fast_path=true`, `active_flows=16`, `rx_worker_inject=Y`,
+`tx_plaintext=Y`, `unsafe_features=0`, `selftest_failures=0`, and zero
+RX-worker/TX-plaintext error counters required by the production gate. The
+long-run shell log had an EOF diagnostic because the runner script on disk was
+replaced while the process was still finishing; the production gate above was
+run afterward against completed artifacts and passed independently.
 
 ## 2026-06-29
 

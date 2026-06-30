@@ -20,7 +20,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 		row := row
 		seenGate[row.GateFamily] = true
 		t.Run(strings.ReplaceAll(productionDefaultRuntimeKey(row), ":", "_"), func(t *testing.T) {
-			if row.GateFamily == "owdeb_full_kmod" {
+			if row.GateFamily == "owdeb_full_kmod" || row.GateFamily == "owdeb_exp_tcp_full_kmod" {
 				t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
 				t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
 			}
@@ -32,7 +32,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 			switch row.GateFamily {
 			case "userspace", "userspace_tc":
 				assertProductionDefaultNoKernelFastPath(t, row, spec)
-			case "full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod":
+			case "full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
 				if !spec.KernelDatapathFullPlaintext {
 					t.Fatalf("%s should select full-kmod plaintext ownership: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
@@ -106,7 +106,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 			}
 		})
 	}
-	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod", "tc_direct", "secure_kudp", "secure_exp_tcp_kernel", "route_gso"} {
+	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod", "tc_direct", "secure_kudp", "secure_exp_tcp_kernel", "route_gso"} {
 		if !seenGate[gate] {
 			t.Fatalf("production defaults missing cross-host runtime gate %q", gate)
 		}
@@ -115,25 +115,32 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 
 func TestOpenWrtProductionFullKmodDefaultRequiresDedicatedRuntimeGate(t *testing.T) {
 	rows := readProductionTransportDefaultRowsForProvisionTest(t)
-	var found bool
-	for _, row := range rows {
-		if row.ValidationScope != "cross_host" || row.GateFamily != "owdeb_full_kmod" {
-			continue
-		}
-		found = true
-		t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
-		desired := desiredForProductionDefaultRuntimeTest(row)
-		spec := dataplaneAttachSpec(t.TempDir(), desired)
-		if spec.KernelDatapathFullPlaintext {
-			t.Fatalf("%s should not enable OpenWrt full-kmod without dedicated gate: spec=%#v", productionDefaultRuntimeKey(row), spec)
-		}
-		if got := kernelDatapathRXDisabledReasonForDesired(desired); !strings.Contains(got, "TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1") {
-			t.Fatalf("%s disabled reason = %q, want OpenWrt full datapath gate", productionDefaultRuntimeKey(row), got)
-		}
-		return
+	found := map[string]bool{}
+	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_exp_tcp_full_kmod"} {
+		gateFamily := gateFamily
+		t.Run(gateFamily, func(t *testing.T) {
+			for _, row := range rows {
+				if row.ValidationScope != "cross_host" || row.GateFamily != gateFamily {
+					continue
+				}
+				found[gateFamily] = true
+				t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+				desired := desiredForProductionDefaultRuntimeTest(row)
+				spec := dataplaneAttachSpec(t.TempDir(), desired)
+				if spec.KernelDatapathFullPlaintext {
+					t.Fatalf("%s should not enable OpenWrt full-kmod without dedicated gate: spec=%#v", productionDefaultRuntimeKey(row), spec)
+				}
+				if got := kernelDatapathRXDisabledReasonForDesired(desired); !strings.Contains(got, "TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1") {
+					t.Fatalf("%s disabled reason = %q, want OpenWrt full datapath gate", productionDefaultRuntimeKey(row), got)
+				}
+				return
+			}
+		})
 	}
-	if !found {
-		t.Fatal("production defaults missing OpenWrt-Debian full-kmod row")
+	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_exp_tcp_full_kmod"} {
+		if !found[gateFamily] {
+			t.Fatalf("production defaults missing OpenWrt-Debian full-kmod row for %s", gateFamily)
+		}
 	}
 }
 
@@ -218,7 +225,7 @@ func productionDefaultRuntimeKernelTransportMode(row productionTransportDefaultR
 		return dataplane.KernelTransportModeRequireKernel
 	}
 	switch row.GateFamily {
-	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod",
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod",
 		"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
 		"secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel",
 		"route_gso", "dd_route_gso", "owdeb_route_gso",

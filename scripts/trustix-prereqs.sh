@@ -413,7 +413,7 @@ trustix_prereqs_ensure_openwrt_dataplane_runtime_deps() {
   # makes TC attach fail with ENOENT and prevents the fast path from loading.
   trustix_prereqs_install_packages opkg \
     ca-bundle ca-certificates \
-    kmod-sched-core kmod-sched kmod-sched-bpf \
+    kmod-sched-core kmod-sched kmod-sched-bpf kmod-veth \
     ip-full tc-bpf
 }
 
