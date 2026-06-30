@@ -1514,6 +1514,7 @@ func ixProvisionBootstrapScript(input ixProvisionScriptInput) (string, error) {
 	b.WriteString(" == \"openwrt\" || ( ")
 	b.WriteString(shellQuote(input.ServiceManager))
 	b.WriteString(" == \"auto\" && -f /etc/openwrt_release ) ]]; then\n")
+	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1)\n")
 	b.WriteString("  deploy_args+=(--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1)\n")
 	b.WriteString("fi\n")
 	b.WriteString("log \"install TrustIX IX ")

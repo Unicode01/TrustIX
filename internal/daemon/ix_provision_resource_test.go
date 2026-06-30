@@ -740,6 +740,9 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if !strings.Contains(script, "--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1") {
 		t.Fatalf("bootstrap script does not enable OpenWrt experimental_tcp compat stream:\n%s", script)
 	}
+	if !strings.Contains(script, "--env TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1") {
+		t.Fatalf("bootstrap script does not allow the validated OpenWrt full-kmod datapath:\n%s", script)
+	}
 	for _, env := range []string{
 		"--env TRUSTIX_KERNEL_UDP_TC_ONLY=1",
 		"--env TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1",
