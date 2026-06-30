@@ -172,7 +172,6 @@ CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
     "experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
     "experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
     "experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod|docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
-    "experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_exp_tcp_full_kmod|docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-openwrt24107-debian13-exp-tcp-full-kmod-bbde20a-3600s-production-gate",
 }
 
 

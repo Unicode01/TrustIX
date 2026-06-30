@@ -518,8 +518,8 @@ func loadAuditCurrentToolchainLegacyRequirementKeys(t *testing.T) map[string]boo
 		}
 		keys[key] = true
 	}
-	if len(keys) != 25 {
-		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 25 current legacy rows, got %d", len(keys))
+	if len(keys) != 24 {
+		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 24 current legacy rows, got %d", len(keys))
 	}
 	return keys
 }
@@ -3529,7 +3529,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"tc_direct":               "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 		"full_kmod":               "docs/trustix-performance-log.md#pve-debian13-b0d2fc6-full-kmod-2026-06-28",
 		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
-		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-openwrt24107-debian13-exp-tcp-full-kmod-bbde20a-3600s-production-gate",
+		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#pve-ee378f-openwrt24107-debian13-exp-tcp-full-kmod-2026-06-30",
 		"secure_kudp":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 		"route_gso":               "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",

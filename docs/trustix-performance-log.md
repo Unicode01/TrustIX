@@ -30,7 +30,7 @@ Current production-default evidence boundary:
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace and GRE/IPIP/VXLAN userspace-TC | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `928c5d0939cc` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. The earlier gates at commits `395b2ba05013` and `e02d15edf6b4` remain historical evidence, not the current pinned row. |
-| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `bbde20a43b43` | Selected OpenWrt experimental TCP plaintext full-kmod now has its own production default and current evidence row. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
+| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `ee378f18a11c` | Selected OpenWrt experimental TCP plaintext full-kmod has a current toolchain-hashed production evidence row. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-06-30
@@ -77,6 +77,72 @@ nodes. The gate also verified `capture_forwarder_suppressed=true`,
 `experimental_tcp.fast_path=true`, `active_flows=16`, `rx_worker_inject=Y`,
 `tx_plaintext=Y`, `unsafe_features=0`, `selftest_failures=0`, and zero
 RX-worker/TX-plaintext error counters required by the production gate.
+
+<a id="pve-ee378f-openwrt24107-debian13-exp-tcp-full-kmod-2026-06-30"></a>
+
+### Zaozhuang PVE ee378f1 OpenWrt-Debian experimental TCP full-kmod 3600s production gate
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 201 and 200
+only. VM100 and all 1xx guests were not modified. Node A ran OpenWrt 24.10.7
+kernel `6.6.141`; node B ran Debian 13 kernel
+`6.12.90+deb13.1-cloud-amd64`, both with virtio network devices on isolated
+`vmbr3`.
+
+The release used TrustIX version `trustix-linux-amd64`, commit
+`ee378f18a11c`, Go `1.25.0`, build time `2026-06-30T14:43:06Z`, assets SHA256
+`4e0476a6fb315983cfb57f4dcb2c221e18d720aee4c90fc8c6c783f6d434681e`,
+and binary SHA256
+`89ee1fc7415821d6a56c8c98a13d7e109516d94332cf6ecc09b058bf558f3f41`.
+The OpenWrt `trustix_datapath.ko` SHA256 was
+`005fee841ca6cb82b030bd31abac799f9e9dbd7ce7d2b5ceda340612c0c91fce`;
+the Debian `trustix_datapath.ko` SHA256 was
+`59fc351df6ce225f11e96c997a722b7d2b80f31f559d563d8688d17355eaddac`.
+
+The selected production gate emitted `trustix-cross-host-production-gate-manifest-v1`
+evidence for gate family `owdeb_exp_tcp_full_kmod`. The production gate script
+SHA256 was `6419bd20300ec8abd8abb38d8c5cac076dd6cb7add0d6795b2c5938555c3584c`;
+the verifier SHA256 was
+`bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
+The cross-host runner SHA256 was
+`d58d3f101d193a465e690e33f628ebcc74793acf076375756d21f9bfca5aaa80`;
+the transport matrix SHA256 was
+`2ea54e4cccfb59a1fa2873eadac8ed090520af5582ce6b5958ce526c17272115`;
+the evidence generator SHA256 was
+`5e5cd2ab1b0fe8354542b3e6ea201abf8657b8b81740dccba8050a7be027ae1f`.
+
+The run used `experimental_tcp` plaintext performance profile with
+`datapath=kernel_module`, `crypto_placement=userspace`,
+`session_pool_size=8`, and `session_pool_strategy=flow`. It ran
+`forward + both` with `iperf_parallel=8` from `2026-06-30T15:10:30Z` to
+`2026-06-30T17:10:34Z`, elapsed `7204` seconds, and requested `3600s` per
+direction.
+
+| Direction | Minimum gate | Received | Sent | Duration | Retransmits |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| OpenWrt to Debian | 4 Gbps | 7.439896 Gbps | 7.439950 Gbps | 3600.024032s | 12944 |
+| Debian to OpenWrt | 4 Gbps | 9.226345 Gbps | 9.226468 Gbps | 3600.049735s | 91517 |
+
+Boot IDs stayed stable: OpenWrt node A
+`45592c05-4342-4154-961c-814b3d469302`; Debian node B
+`588e4bdd-7c6d-44e1-a0ce-8455135b702c`. The verifier passed with `errors=[]`,
+`log_findings=[]`, `kernel_log_rejected_artifacts=[]`, and
+`pstore_rejected_artifacts=[]`; `tix-lan` kept `tx_queue_len=1000` on both
+nodes. Both peers loaded `trustix_datapath` during the run and unloaded it
+after cleanup. Covered module counters stayed clean:
+`rx_worker_alloc_errors=0`, `rx_worker_deliver_errors=0`,
+`rx_worker_gso_xmit_errors=0`, `rx_worker_xmit_ret_errors=0`,
+`rx_worker_xmit_dev_forward_errors=0`, and
+`rx_worker_xmit_peer_forward_errors=0`.
+
+A separate 180s diagnostic run on the same OpenWrt-Debian pair kept full-kmod
+busy while ordinary underlay traffic was sent outside TrustIX. OpenWrt
+`10.203.3.201` to Debian `10.203.3.200` ping was `20/20` with `0%` loss
+and `3.101 ms` average RTT. A direct underlay TCP iperf3 P4 probe over the
+same addresses received `9.176325 Gbps`, sent `9.180990 Gbps`, ran
+`30.016597s`, and reported `0` retransmits. This is diagnostic coverage that
+loading and exercising the full plaintext datapath did not block normal
+underlay traffic in the tested PVE environment; it is not the promoted
+production evidence row.
 
 <a id="2026-06-30-zaozhuang-pve-openwrt24107-debian13-exp-tcp-full-kmod-bbde20a-3600s-production-gate"></a>
 
