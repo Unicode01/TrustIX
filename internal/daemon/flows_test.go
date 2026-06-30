@@ -3349,6 +3349,82 @@ func TestWarmKernelDirectSessionsPreDialsFullPool(t *testing.T) {
 	}
 }
 
+func TestWarmKernelDirectSessionsRetriesTransientDialErrors(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_PLAINTEXT_WARMUP_RETRY_DELAY", "1ms")
+	t.Setenv("TRUSTIX_KERNEL_UDP_PLAINTEXT_WARMUP_TIMEOUT", "1s")
+
+	registry := transport.NewRegistry()
+	fake := &retainingWarmupTransport{name: transport.ProtocolUDP, fail: 2}
+	if err := registry.Register(fake); err != nil {
+		t.Fatalf("register client transport: %v", err)
+	}
+	daemon := &Daemon{
+		transports:       registry,
+		dataplane:        &warmupKernelUDPDataplane{},
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		endpointState:    make(map[endpointStateKey]rstate.EndpointState),
+		flows:            make(map[routing.FlowKey]routing.FlowBinding),
+	}
+	daemon.desired = config.Desired{
+		IX: config.IXConfig{ID: "ix-a"},
+		Peers: []config.PeerConfig{{
+			ID:     "ix-b",
+			Domain: "lab.local",
+			Endpoints: []config.EndpointConfig{{
+				Name:      "udp-b",
+				Address:   "127.0.0.1:17042",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			}},
+		}},
+		Routes: []config.RouteConfig{{
+			Prefix:  "10.0.1.0/24",
+			NextHop: "ix-b",
+			Metric:  100,
+		}},
+		TransportPolicy: config.TransportPolicyConfig{
+			Encryption: securetransport.EncryptionPlaintext,
+			SessionPool: config.SessionPoolPolicyConfig{
+				Size:   4,
+				Warmup: true,
+			},
+			KernelTransport: config.KernelTransportPolicyConfig{
+				Mode: string(dataplane.KernelTransportModeRequireKernel),
+			},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	if err := daemon.warmKernelDirectSessions(context.Background()); err != nil {
+		t.Fatalf("warm kernel direct sessions after transient errors: %v", err)
+	}
+	if got := len(daemon.dataSessions); got != 4 {
+		t.Fatalf("active direct pool sessions = %d, want 4", got)
+	}
+	if attempts := daemon.dataStats.sessionDialAttempts.Load(); attempts < 6 {
+		t.Fatalf("session dial attempts = %d, want at least 6", attempts)
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.SessionDialErrors != 0 || counters.LastSessionDialError != "" {
+		t.Fatalf("session dial error counters after suppressed transient failures = errors:%d last:%q, want empty", counters.SessionDialErrors, counters.LastSessionDialError)
+	}
+	for i := 0; i < 4; i++ {
+		key := dataSessionKey{
+			Peer:       "ix-b",
+			Endpoint:   "udp-b",
+			Transport:  transport.ProtocolUDP,
+			Address:    "127.0.0.1:17042",
+			Encryption: securetransport.EncryptionPlaintext,
+			PoolIndex:  i,
+		}
+		if session, ok := daemon.dataSessions[key].(*retainingWarmupSession); !ok || !session.retained {
+			t.Fatalf("pool index %d retained session = %#v ok=%t, want retained warmup session", i, daemon.dataSessions[key], ok)
+		}
+	}
+}
+
 func TestWarmKernelDirectRouteSessionsUsesDynamicRuntimeRoutes(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	registry := transport.NewRegistry()
@@ -6191,6 +6267,52 @@ func TestHandleDataSessionControlRepliesToPingAndSwallowsFrame(t *testing.T) {
 	}
 }
 
+func TestHandleDataSessionControlWaitsForBusySendLockBeforePong(t *testing.T) {
+	daemon := &Daemon{}
+	runtime := &dataSessionRuntime{}
+	session := &recordingSession{}
+	packet := encodeDataSessionControl(dataSessionControlPing, 7)
+
+	runtime.sendMu.Lock()
+	done := make(chan bool, 1)
+	go func() {
+		done <- daemon.handleDataSessionControl(context.Background(), runtime, session, packet)
+	}()
+
+	select {
+	case handled := <-done:
+		t.Fatalf("ping handler returned while send lock was held: handled=%t", handled)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if len(session.sent) != 0 {
+		t.Fatalf("sent frames while send lock was held = %d, want 0", len(session.sent))
+	}
+
+	runtime.sendMu.Unlock()
+	select {
+	case handled := <-done:
+		if !handled {
+			t.Fatal("expected ping control frame to be handled")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ping handler did not finish after send lock was released")
+	}
+
+	if len(session.sent) != 1 {
+		t.Fatalf("sent frames after send lock release = %d, want pong", len(session.sent))
+	}
+	kind, nonce, ok := decodeDataSessionControl(session.sent[0])
+	if !ok || kind != dataSessionControlPong || nonce != 7 {
+		t.Fatalf("pong frame = kind %d nonce %d ok %v, want pong 7", kind, nonce, ok)
+	}
+	if runtime.lastTX.Load() == 0 {
+		t.Fatal("expected lastTX to be recorded after pong send")
+	}
+	if got := daemon.dataStats.snapshot().SessionHeartbeatReceived; got != 1 {
+		t.Fatalf("session heartbeat received counter = %d, want 1", got)
+	}
+}
+
 func TestHandleDataSessionControlRecordsPongNonce(t *testing.T) {
 	daemon := &Daemon{}
 	runtime := &dataSessionRuntime{}
@@ -6567,6 +6689,73 @@ func TestAddressedExperimentalTCPReverseSessionSatisfiesSessionPoolIndex(t *test
 		return
 	}
 	t.Fatalf("missing pool indexes = %v, want [0 1 3]", missing)
+}
+
+func TestFullPlaintextExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t *testing.T) {
+	peer := testPeer()
+	endpoint := peer.Endpoints[0]
+	endpoint.Name = core.EndpointID("b-experimental-tcp")
+	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Address = "198.51.100.2:7142"
+	endpoint.Security.Encryption = securetransport.EncryptionPlaintext
+	peer.Endpoints[0] = endpoint
+
+	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionPlaintext)
+	reverseKey.PoolIndex = 2
+	reverse := &recordingSession{}
+	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	registry := transport.NewRegistry()
+	if err := registry.Register(expTransport); err != nil {
+		t.Fatalf("register experimental_tcp transport: %v", err)
+	}
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX:     config.IXConfig{ID: core.IXID("ix-a")},
+			Domain: config.DomainConfig{ID: peer.Domain},
+			Peers:  []config.PeerConfig{peer},
+			KernelModules: config.KernelModulesConfig{
+				CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+			},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionPlaintext,
+				Datapath:   config.TransportDatapathKernelModule,
+				SessionPool: config.SessionPoolPolicyConfig{
+					Size: 4,
+				},
+			},
+		},
+		transports: registry,
+		dataSessions: map[dataSessionKey]transport.Session{
+			reverseKey: reverse,
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{
+			reverseKey: {key: reverseKey, session: reverse, peer: peer, endpoint: endpoint},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	if missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4); !reflect.DeepEqual(missing, []int{0, 1, 2, 3}) {
+		t.Fatalf("full plaintext missing pool indexes before outbound dial = %v, want [0 1 2 3]", missing)
+	}
+
+	transportEndpoint := transportEndpointFromConfig(endpoint)
+	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
+	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
+	if err != nil {
+		t.Fatalf("session for full plaintext addressed experimental_tcp pool index: %v", err)
+	}
+	if session == reverse {
+		t.Fatal("full plaintext addressed experimental_tcp reused reverse session for outbound pool index")
+	}
+	if key.Address != endpoint.Address {
+		t.Fatalf("session key address = %q, want direct address %q", key.Address, endpoint.Address)
+	}
+	if expTransport.dialCount() != 1 {
+		t.Fatalf("experimental_tcp dial count = %d, want 1", expTransport.dialCount())
+	}
+	if missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4); !reflect.DeepEqual(missing, []int{0, 1, 3}) {
+		t.Fatalf("full plaintext missing pool indexes after outbound dial = %v, want [0 1 3]", missing)
+	}
 }
 
 func TestAddressedSecureExperimentalTCPPrefersDirectSessionOverReversePoolIndex(t *testing.T) {
@@ -7807,6 +7996,8 @@ func (fake *flakyWarmupTransport) Listen(ctx context.Context, ep transport.Endpo
 
 type retainingWarmupTransport struct {
 	name transport.Protocol
+	mu   sync.Mutex
+	fail int
 }
 
 func (fake *retainingWarmupTransport) Name() transport.Protocol {
@@ -7818,6 +8009,13 @@ func (fake *retainingWarmupTransport) Probe(ctx context.Context, peer transport.
 }
 
 func (fake *retainingWarmupTransport) Dial(ctx context.Context, peer transport.Peer, tlsConf *tls.Config) (transport.Session, error) {
+	fake.mu.Lock()
+	if fake.fail > 0 {
+		fake.fail--
+		fake.mu.Unlock()
+		return nil, fmt.Errorf("temporary retaining warmup failure")
+	}
+	fake.mu.Unlock()
 	if len(peer.Endpoints) != 1 {
 		return nil, fmt.Errorf("retaining warmup transport expected one endpoint, got %d", len(peer.Endpoints))
 	}

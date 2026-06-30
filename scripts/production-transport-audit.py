@@ -256,11 +256,14 @@ def gate_family_class(gate_family: str) -> str:
         "full_kmod",
         "dd_full_kmod",
         "owdeb_full_kmod",
+    }:
+        return "full_kmod"
+    if gate_family in {
         "exp_tcp_full_kmod",
         "dd_exp_tcp_full_kmod",
         "owdeb_exp_tcp_full_kmod",
     }:
-        return "full_kmod"
+        return "exp_tcp_full_kmod"
     if gate_family in {"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp"}:
         return "secure_kudp"
     if gate_family in {
@@ -305,14 +308,12 @@ def gate_family_semantic_errors(row: dict[str, str]) -> list[str]:
         require("datapath", datapath, "tc_xdp")
         require("crypto_placement", placement, "userspace")
     elif gate_class == "full_kmod":
-        if gate_family in {
-            "exp_tcp_full_kmod",
-            "dd_exp_tcp_full_kmod",
-            "owdeb_exp_tcp_full_kmod",
-        }:
-            require("transport", transport, "experimental_tcp")
-        else:
-            require("transport", transport, "udp")
+        require("transport", transport, "udp")
+        require("encryption", encryption, "plaintext")
+        require("datapath", datapath, "kernel_module")
+        require("crypto_placement", placement, "userspace")
+    elif gate_class == "exp_tcp_full_kmod":
+        require("transport", transport, "experimental_tcp")
         require("encryption", encryption, "plaintext")
         require("datapath", datapath, "kernel_module")
         require("crypto_placement", placement, "userspace")

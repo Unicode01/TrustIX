@@ -1188,6 +1188,95 @@ func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlCarriesControlFr
 	}
 }
 
+func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlWakesBlockedReceive(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+	providerA, providerB := newProviderPair("ix-a", "ix-b")
+	providerA.statusProvider = experimentalTCPProviderFullPlaintextKernel
+	providerB.statusProvider = experimentalTCPProviderFullPlaintextKernel
+	clientTransport := New(providerA)
+	serverTransport := New(providerB)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
+		Name:       core.EndpointID("server"),
+		Transport:  transport.ProtocolExperimentalTCP,
+		Listen:     listenAddr,
+		Encryption: securetransport.EncryptionPlaintext,
+		Enabled:    true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	accepted := make(chan transport.Session, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		session, err := listener.Accept(ctx)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- session
+	}()
+
+	client, err := clientTransport.Dial(ctx, transport.Peer{
+		ID: core.IXID("ix-b"),
+		Endpoints: []transport.Endpoint{{
+			Name:       core.EndpointID("server"),
+			Transport:  transport.ProtocolExperimentalTCP,
+			Address:    listenAddr,
+			Encryption: securetransport.EncryptionPlaintext,
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	var server transport.Session
+	select {
+	case err := <-acceptErr:
+		t.Fatalf("accept: %v", err)
+	case server = <-accepted:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	defer server.Close()
+
+	received := make(chan []byte, 1)
+	recvErr := make(chan error, 1)
+	go func() {
+		packet, err := server.RecvPacket()
+		if err != nil {
+			recvErr <- err
+			return
+		}
+		received <- packet
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	control := make([]byte, 16)
+	copy(control[0:4], experimentalTCPCompatControlMagic[:])
+	control[4] = experimentalTCPCompatControlVersion
+	control[5] = 2
+	binary.BigEndian.PutUint64(control[8:16], 0x1020304050607080)
+	if err := client.SendPacket(control); err != nil {
+		t.Fatalf("send control: %v", err)
+	}
+	select {
+	case err := <-recvErr:
+		t.Fatalf("server recv control: %v", err)
+	case got := <-received:
+		if !bytes.Equal(got, control) {
+			t.Fatalf("server control = %x, want %x", got, control)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked receive was not woken by compat control frame")
+	}
+}
+
 func TestExperimentalTCPCompatStreamPlaintextUsesSecureHandshake(t *testing.T) {
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "1")

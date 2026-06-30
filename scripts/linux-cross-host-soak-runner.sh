@@ -1535,6 +1535,20 @@ underlay_if=$(remote_quote "$underlay_if")
   else
     printf 'underlay_driver=unknown\\n'
   fi
+  echo '===== ip-route ====='
+  ip route show table main 2>&1 || true
+  echo '===== tcp-listeners ====='
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnup 2>&1 || true
+    echo '===== tcp-sockets ====='
+    ss -tanp 2>&1 || true
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -ltnp 2>&1 || true
+    echo '===== tcp-sockets ====='
+    netstat -tanp 2>&1 || true
+  else
+    echo 'ss/netstat unavailable'
+  fi
   echo '===== net-drivers ====='
   for iface_path in /sys/class/net/*; do
     [ -e \"\$iface_path\" ] || continue

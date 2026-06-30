@@ -1061,10 +1061,12 @@ func (daemon *Daemon) warmKernelDirectEndpointSessionPool(ctx context.Context, e
 	endpoint.Enabled = true
 	endpoint.Encryption = daemon.endpointDialEncryption(cfgEndpoint)
 	options := sessionForEndpointOptions{
-		AllowDial:         true,
-		ControlOnlyWarmup: daemon.kernelDirectWarmupControlOnlyEndpoint(cfgEndpoint),
-		RequireEpoch:      true,
-		ExpectedEpoch:     epoch,
+		AllowDial:                 true,
+		ControlOnlyWarmup:         daemon.kernelDirectWarmupControlOnlyEndpoint(cfgEndpoint),
+		SuppressCanceledDialError: true,
+		SuppressDialErrorStats:    true,
+		RequireEpoch:              true,
+		ExpectedEpoch:             epoch,
 	}
 	if poolSize <= 1 {
 		_, _, _, err := daemon.sessionForEndpointWithOptions(ctx, peer, cfgEndpoint, routing.FlowKey{}, false, options)
@@ -1137,9 +1139,6 @@ func (daemon *Daemon) warmKernelDirectSessions(ctx context.Context) error {
 			}
 			if lastErr == nil {
 				return fmt.Errorf("warm kernel direct route %q: no kernel endpoint candidate", route.Prefix)
-			}
-			if !errors.Is(lastErr, errDataSessionEpochChanged) {
-				return fmt.Errorf("warm kernel direct route %q: %w", route.Prefix, lastErr)
 			}
 			if !time.Now().Before(deadline) {
 				return fmt.Errorf("warm kernel direct route %q: %w", route.Prefix, lastErr)
@@ -4191,6 +4190,10 @@ func (daemon *Daemon) preferReverseSessionForAddressedEndpoint(endpoint config.E
 	}
 	switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
 	case transport.ProtocolExperimentalTCP:
+		if parseSecureTransportEncryption(encryption) == securetransport.EncryptionPlaintext &&
+			kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
+			return false
+		}
 		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_SECURE_PREFER_REVERSE_SESSION") {
 			return true
 		}
@@ -5706,16 +5709,11 @@ func (daemon *Daemon) handleDataSessionControl(ctx context.Context, runtime *dat
 	daemon.dataStats.sessionHeartbeatReceived.Add(1)
 	switch kind {
 	case dataSessionControlPing:
-		sent, err := daemon.trySendDataSessionControlPacket(runtime, session, encodeDataSessionControl(dataSessionControlPong, nonce))
-		if err != nil {
+		if err := daemon.sendDataSessionWirePacket(runtime, session, encodeDataSessionControl(dataSessionControlPong, nonce)); err != nil {
 			if runtime != nil {
 				daemon.dropRuntimeSession(runtime)
 				daemon.recordEndpointDownIfNoActiveSession(runtime.peer.ID, runtime.endpoint, err)
 			}
-		} else if !sent && runtime != nil {
-			now := time.Now().UTC().UnixNano()
-			runtime.lastPong.Store(now)
-			runtime.lastRX.Store(now)
 		}
 	case dataSessionControlPong:
 		if runtime != nil {

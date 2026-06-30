@@ -2013,6 +2013,48 @@ func TestCrossHostProductionGateRejectsFullKmodUnsafeModuleState(t *testing.T) {
 	}
 }
 
+func TestCrossHostProductionGateAcceptsExpTCPFullKmodArtifacts(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeExpTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASES=exp-tcp-full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production gate rejected experimental TCP full-kmod artifacts:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsExpTCPFullKmodWithoutProvider(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeExpTCPFullKmodProductionGateArtifacts(t, dir, false, true)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASES=exp-tcp-full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted experimental TCP full-kmod artifacts without provider:\n%s", output)
+	}
+	if !strings.Contains(string(output), "kernel_datapath_full_plaintext") {
+		t.Fatalf("production gate did not report missing full plaintext provider:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsExpTCPFullKmodWithoutPlaintextTraffic(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeExpTCPFullKmodProductionGateArtifacts(t, dir, true, false)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASES=exp-tcp-full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted experimental TCP full-kmod artifacts without plaintext module traffic:\n%s", output)
+	}
+	if !strings.Contains(string(output), "tx_plaintext_packets") {
+		t.Fatalf("production gate did not report missing plaintext module traffic:\n%s", output)
+	}
+}
+
 func TestCrossHostProductionGateAcceptsSecureKUDPRouteGSOArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
@@ -2782,7 +2824,10 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		"session_records":                             "8",
 		"session_wire_records":                        "8",
 		"rx_worker_single_coalesce_max_frames":        "32",
+		"tx_plaintext_packets":                        plaintextSegments,
+		"tx_plaintext_gso_segments":                   plaintextSegments,
 		"tx_plaintext_outer_gso_segments":             plaintextSegments,
+		"rx_worker_injected":                          "8",
 		"tx_plaintext_direct_xmit_dst_mac_cache_hits": "8",
 		"rx_worker_gso_xmit_segments":                 "8",
 		"rx_worker_alloc_errors":                      "0",
@@ -2793,6 +2838,7 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		"rx_worker_xmit_dev_forward_errors":           "0",
 		"rx_worker_xmit_peer_forward_errors":          "0",
 		"tx_plaintext_build_errors":                   "0",
+		"tx_plaintext_gso_errors":                     "0",
 		"tx_plaintext_no_sessions":                    "0",
 		"tx_plaintext_no_wires":                       "0",
 		"tx_plaintext_stale_wires":                    "0",
@@ -2804,6 +2850,129 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		params[name] = value
 	}
 	writeModuleParameters(t, path, map[string]map[string]string{"trustix_datapath": params})
+}
+
+func writeExpTCPFullKmodProductionGateArtifacts(t *testing.T, dir string, provider bool, plaintextTraffic bool) {
+	t.Helper()
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 7.2e9, 7.1e9, 3600.2, 3600, 0.8)
+	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 7.2e9, 7.1e9, 3600.2, 3600, 0.8)
+	writeResultMarker(t, dir)
+	writeRunTimingWithStats(t, dir, 1000, 4601, 3600, map[string]any{
+		"iperf_mode":       "forward",
+		"iperf_directions": "both",
+	})
+	writeStableBootIDs(t, dir)
+	writeStableUnames(t, dir)
+	writeStableOSReleases(t, dir)
+	writeKernelLogArtifacts(t, dir)
+	writePstoreArtifacts(t, dir)
+	writeLANStateArtifacts(t, dir, 1000, 1000)
+	writeHostStateArtifacts(t, dir, 4, 4, "virtio_net", "virtio_net")
+	writeLsmodArtifacts(t, dir, map[string][]string{
+		"a": {"trustix_datapath"},
+		"b": {"trustix_datapath"},
+	})
+	for _, node := range []string{"a", "b"} {
+		base := filepath.Join(dir, "collect", node)
+		writeExpTCPFullKmodStatusJSON(t, filepath.Join(base, "status.json"))
+		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "exp-tcp-full-kmod-sha")
+		writeExpTCPFullKmodDatapathJSON(t, filepath.Join(base, "datapath.json"), provider)
+		writeExpTCPFullKmodTransportsJSON(t, filepath.Join(base, "transports.json"), node)
+		writeFullKmodModuleParametersWithOverrides(t, filepath.Join(base, "module-parameters.txt"), true, expTCPFullKmodModuleOverrides(plaintextTraffic))
+	}
+}
+
+func expTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
+	traffic := "0"
+	if plaintextTraffic {
+		traffic = "128"
+	}
+	return map[string]string{
+		"tx_plaintext_packets":      traffic,
+		"tx_plaintext_gso_segments": traffic,
+		"rx_worker_injected":        traffic,
+	}
+}
+
+func writeExpTCPFullKmodStatusJSON(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make experimental TCP full-kmod status dir: %v", err)
+	}
+	payload := map[string]any{
+		"build": map[string]any{
+			"version":    "trustix-test",
+			"commit":     "0123456789ab",
+			"built_at":   "2026-06-25T00:00:00Z",
+			"go_version": "go1.25.0",
+			"goos":       "linux",
+			"goarch":     "amd64",
+		},
+		"data_path": map[string]any{
+			"active_sessions": 16,
+			"counters": map[string]any{
+				"session_dial_errors":        0,
+				"session_heartbeat_timeouts": 0,
+				"session_resets_sent":        0,
+				"session_resets_received":    0,
+				"stale_sessions_dropped":     0,
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal experimental TCP full-kmod status json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write experimental TCP full-kmod status json: %v", err)
+	}
+}
+
+func writeExpTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextProvider bool) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make experimental TCP full-kmod datapath dir: %v", err)
+	}
+	provider := "af_xdp"
+	if fullPlaintextProvider {
+		provider = "kernel_datapath_full_plaintext"
+	}
+	payload := map[string]any{
+		"counters": map[string]any{
+			"session_dials":       8,
+			"session_dial_errors": 0,
+		},
+		"kernel_rx_stage": map[string]any{
+			"rx_worker_injected": 128,
+		},
+		"experimental_tcp": map[string]any{
+			"provider":                     provider,
+			"fast_path":                    true,
+			"capture_forwarder_suppressed": true,
+			"active_flows":                 16,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal experimental TCP full-kmod datapath json: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write experimental TCP full-kmod datapath json: %v", err)
+	}
+}
+
+func writeExpTCPFullKmodTransportsJSON(t *testing.T, path string, node string) {
+	t.Helper()
+	writeTransportsJSONWithSessionStats(t, path, 8, "flow", true, 16, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"), map[string]any{
+		"encryption":       "plaintext",
+		"bytes_sent":       0,
+		"bytes_received":   0,
+		"packets_sent":     8,
+		"packets_received": 0,
+		"extra": map[string]any{
+			"experimental_tcp_full_plaintext_kernel_datapath": 1,
+		},
+	})
 }
 
 func writeSecureKUDPProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, routeHelperXmit bool) {

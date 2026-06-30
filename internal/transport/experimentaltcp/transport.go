@@ -1630,6 +1630,15 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 					stopExperimentalTCPTimer(timer)
 					session.recordReceivedPackets(packets)
 					return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+				case pkt, ok := <-session.compatPriority:
+					stopExperimentalTCPTimer(timer)
+					if !ok || len(pkt) == 0 {
+						session.recordReceivedPackets(packets)
+						return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+					}
+					packets = append(packets, pkt)
+					session.recordReceivedPackets(packets)
+					return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 				case batch, ok := <-session.in:
 					stopExperimentalTCPTimer(timer)
 					if !ok {
@@ -1651,6 +1660,13 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 			select {
 			case <-session.closed:
 				return nil, nil, fmt.Errorf("experimental_tcp session is closed")
+			case pkt, ok := <-session.compatPriority:
+				if !ok || len(pkt) == 0 {
+					continue
+				}
+				packets = append(packets, pkt)
+				session.recordReceivedPackets(packets)
+				return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 			case batch, ok := <-session.in:
 				if !ok {
 					return nil, nil, fmt.Errorf("experimental_tcp session is closed")
