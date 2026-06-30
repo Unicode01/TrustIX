@@ -889,9 +889,9 @@ main() {
       --require-status-max data_path.counters.session_resets_sent=0 \
       --require-status-max data_path.counters.session_resets_received=0 \
       --require-status-max data_path.counters.stale_sessions_dropped=0 \
+      --require-datapath-stat capture_forwarder_suppressed=true \
       --require-datapath-stat experimental_tcp.provider=kernel_datapath_full_plaintext \
       --require-datapath-stat experimental_tcp.fast_path=true \
-      --require-datapath-stat experimental_tcp.capture_forwarder_suppressed=true \
       --require-datapath-min experimental_tcp.active_flows="${exp_tcp_full_kmod_min_sessions}" \
       --require-datapath-min kernel_rx_stage.rx_worker_injected=1 \
       --require-datapath-min counters.session_dials="${exp_tcp_full_kmod_min_pool_size}" \

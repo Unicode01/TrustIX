@@ -32,7 +32,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 			switch row.GateFamily {
 			case "userspace", "userspace_tc":
 				assertProductionDefaultNoKernelFastPath(t, row, spec)
-			case "full_kmod", "owdeb_full_kmod":
+			case "full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod":
 				if !spec.KernelDatapathFullPlaintext {
 					t.Fatalf("%s should select full-kmod plaintext ownership: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
@@ -106,7 +106,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 			}
 		})
 	}
-	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "tc_direct", "secure_kudp", "secure_exp_tcp_kernel", "route_gso"} {
+	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod", "tc_direct", "secure_kudp", "secure_exp_tcp_kernel", "route_gso"} {
 		if !seenGate[gate] {
 			t.Fatalf("production defaults missing cross-host runtime gate %q", gate)
 		}
@@ -170,7 +170,7 @@ func TestEmptyTransportPolicyRuntimeAttachSpecUsesProductionCompatibilityDefault
 
 func desiredForProductionDefaultRuntimeTest(row productionTransportDefaultRowForProvisionTest) config.Desired {
 	const endpointName core.EndpointID = "runtime-default-a"
-	return config.Desired{
+	desired := config.Desired{
 		LAN: config.LANConfig{
 			Iface: "br-lan",
 		},
@@ -190,6 +190,19 @@ func desiredForProductionDefaultRuntimeTest(row productionTransportDefaultRowFor
 			Enabled:   true,
 		}},
 	}
+	switch row.GateFamily {
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
+		"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
+		desired.KernelModules.CapabilityProfile = config.KernelCapabilityProfileFullPlaintext
+		desired.KernelModules.Datapath = config.KernelDatapathRuntimeConfig{
+			RXStage:                      config.KernelDatapathRXStageWorker,
+			RXWorker:                     true,
+			TXPlaintext:                  true,
+			FullPlaintext:                true,
+			RXWorkerAllowExperimentalTCP: true,
+		}
+	}
+	return desired
 }
 
 func productionDefaultRuntimeEndpointTransport(transport string) string {
@@ -205,7 +218,7 @@ func productionDefaultRuntimeKernelTransportMode(row productionTransportDefaultR
 		return dataplane.KernelTransportModeRequireKernel
 	}
 	switch row.GateFamily {
-	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod",
 		"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
 		"secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel",
 		"route_gso", "dd_route_gso", "owdeb_route_gso",

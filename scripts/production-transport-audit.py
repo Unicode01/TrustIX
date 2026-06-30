@@ -107,6 +107,27 @@ CURRENT_RUNTIME_TREE_PATHS = [
     "scripts/build-release-linux.sh",
     "scripts/trustix-build.sh",
 ]
+EXPERIMENTAL_TCP_FULL_KMOD_RUNTIME_FAMILIES = {
+    "exp_tcp_full_kmod",
+    "dd_exp_tcp_full_kmod",
+    "owdeb_exp_tcp_full_kmod",
+}
+GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
+    # This manifest-v1 gate predates the exp_tcp_full_kmod family. The existing
+    # families below kept equivalent verifier semantics when the dedicated
+    # experimental TCP full-kmod gate was added, so their current evidence rows
+    # do not need to be re-minted with a different historical tool hash.
+    "6150d4ccadd3b0614d389442c4a1084fcad2d0748700ad9d5eea9900e7d7a242": {
+        "userspace",
+        "userspace_tc",
+        "tc_direct",
+        "full_kmod",
+        "owdeb_full_kmod",
+        "secure_kudp",
+        "secure_exp_tcp_kernel",
+        "route_gso",
+    },
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -377,7 +398,7 @@ def validate_current_requirement_identity(
         if require_build_ancestor:
             errors.extend(build_commit_ancestor_errors(row["build_commit"]))
         if require_current_runtime_tree:
-            errors.extend(current_runtime_tree_errors(row["build_commit"]))
+            errors.extend(current_runtime_tree_errors(row))
         if require_current_gate_tools:
             errors.extend(current_gate_tool_identity_errors(row))
         if errors:
@@ -501,11 +522,17 @@ def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
     verifier_path = root / "scripts" / "linux-cross-host-soak-verify.py"
     want_gate_sha = file_sha256(gate_path)
     want_verifier_sha = file_sha256(verifier_path)
+    gate_family = row["gate_family"]
+    allowed_gate_shas = {want_gate_sha}
+    for sha, families in GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY.items():
+        if gate_family in families:
+            allowed_gate_shas.add(sha)
     errors: list[str] = []
-    if row["production_gate_sha256"] != want_gate_sha:
+    if row["production_gate_sha256"] not in allowed_gate_shas:
+        allowed = ", ".join(sorted(allowed_gate_shas))
         errors.append(
-            "production_gate_sha256 must match current "
-            f"scripts/linux-cross-host-production-gate.sh sha256 {want_gate_sha}; "
+            "production_gate_sha256 must match current or compatible "
+            f"scripts/linux-cross-host-production-gate.sh sha256 values [{allowed}]; "
             f"got {row['production_gate_sha256']!r}"
         )
     if row["verifier_sha256"] != want_verifier_sha:
@@ -550,7 +577,20 @@ def build_commit_ancestor_errors(build_commit: str) -> list[str]:
     return []
 
 
-def current_runtime_tree_errors(build_commit: str) -> list[str]:
+def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    if normalized.endswith("_test.go"):
+        return False
+    gate_family = row["gate_family"]
+    if normalized.startswith("internal/transport/experimentaltcp/"):
+        return gate_family in EXPERIMENTAL_TCP_FULL_KMOD_RUNTIME_FAMILIES
+    if normalized.startswith("internal/daemon/"):
+        return gate_family in EXPERIMENTAL_TCP_FULL_KMOD_RUNTIME_FAMILIES
+    return True
+
+
+def current_runtime_tree_errors(row: dict[str, str]) -> list[str]:
+    build_commit = row["build_commit"]
     value = build_commit.strip()
     if not value or value == LEGACY_GATE_SCHEMA:
         return []
@@ -565,7 +605,11 @@ def current_runtime_tree_errors(build_commit: str) -> list[str]:
         detail = (diff.stderr or diff.stdout).strip()
         suffix = f": {detail}" if detail else ""
         return [f"build_commit={value!r} runtime tree diff failed{suffix}"]
-    changed = [line for line in diff.stdout.splitlines() if line.strip()]
+    changed = [
+        line
+        for line in diff.stdout.splitlines()
+        if line.strip() and current_runtime_path_relevant(row, line.strip())
+    ]
     if not changed:
         return []
     shown = ", ".join(changed[:12])

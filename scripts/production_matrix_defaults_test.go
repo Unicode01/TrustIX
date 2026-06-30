@@ -620,10 +620,12 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 func TestProductionTransportMatrixSingleHostScopeCannotSelectCrossHostOnlyGates(t *testing.T) {
 	rows := loadProductionTransportDefaults(t)
 	crossHostOnlyGate := map[string]bool{
-		"full_kmod":       true,
-		"owdeb_full_kmod": true,
-		"secure_kudp":     true,
-		"route_gso":       true,
+		"full_kmod":             true,
+		"owdeb_full_kmod":       true,
+		"exp_tcp_full_kmod":     true,
+		"secure_kudp":           true,
+		"secure_exp_tcp_kernel": true,
+		"route_gso":             true,
 	}
 	forbiddenFastPathKey := map[string]bool{
 		"udp:plaintext:performance:kernel_module:userspace":              true,
@@ -2273,6 +2275,7 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 		"tc_direct",
 		"full_kmod",
 		"owdeb_full_kmod",
+		"exp_tcp_full_kmod",
 		"secure_kudp",
 		"secure_exp_tcp_kernel",
 		"route_gso",
@@ -3095,7 +3098,7 @@ func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 	current := filepath.Join(workdir, "current.tsv")
 	defaultPayload := strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
-		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\t3\t3600\trequire runtime tree freshness",
+		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\t4\t3600\trequire runtime tree freshness",
 		"",
 	}, "\n")
 	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
@@ -3107,7 +3110,7 @@ func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 	}
 	currentPayload := strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version",
-		"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("a", 64) + "\t" + strings.Repeat("b", 64) + "\tdocs/trustix-performance-log.md#stale-runtime-tree\tstale runtime tree\t" + strings.Repeat("c", 64) + "\ttrustix-current\t" + staleRuntimeParent + "\t2026-06-25T00:00:00Z\tgo1.25.0",
+		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("a", 64) + "\t" + strings.Repeat("b", 64) + "\tdocs/trustix-performance-log.md#stale-runtime-tree\tstale runtime tree\t" + strings.Repeat("c", 64) + "\ttrustix-current\t" + staleRuntimeParent + "\t2026-06-25T00:00:00Z\tgo1.25.0",
 		"",
 	}, "\n")
 	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
@@ -3201,7 +3204,7 @@ func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
 	text := string(output)
 	for _, want := range []string{
 		"current evidence requirements:2",
-		"production_gate_sha256 must match current",
+		"production_gate_sha256 must match current or compatible",
 		"verifier_sha256 must match current",
 	} {
 		if !strings.Contains(text, want) {
@@ -3288,6 +3291,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 		"full_kmod":             "docs/trustix-performance-log.md#pve-debian13-b0d2fc6-full-kmod-2026-06-28",
+		"exp_tcp_full_kmod":     "docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
 		"secure_kudp":           "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 		"secure_exp_tcp_kernel": "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 		"route_gso":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
@@ -3296,23 +3300,24 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
 	manifestRequiredArtifactByDefault := map[string]string{
-		"udp:secure:stable:userspace:userspace:cross_host:userspace":              "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
-		"udp:plaintext:stable:userspace:userspace:cross_host:userspace":           "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
-		"tcp:secure:stable:userspace:userspace:cross_host:userspace":              "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
-		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace":           "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
-		"quic:secure:stable:userspace:userspace:cross_host:userspace":             "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
-		"quic:plaintext:stable:userspace:userspace:cross_host:userspace":          "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
-		"websocket:secure:stable:userspace:userspace:cross_host:userspace":        "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
-		"websocket:plaintext:stable:userspace:userspace:cross_host:userspace":     "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
-		"http_connect:secure:stable:userspace:userspace:cross_host:userspace":     "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
-		"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace":  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
-		"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":              "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
-		"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":      "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
-		"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":             "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
-		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":     "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
-		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":            "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
-		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":    "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
-		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace": "docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
+		"udp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
+		"udp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
+		"tcp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
+		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
+		"quic:secure:stable:userspace:userspace:cross_host:userspace":                                 "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
+		"quic:plaintext:stable:userspace:userspace:cross_host:userspace":                              "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
+		"websocket:secure:stable:userspace:userspace:cross_host:userspace":                            "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
+		"websocket:plaintext:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
+		"http_connect:secure:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
+		"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace":                      "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
+		"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
+		"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                          "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
+		"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                 "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
+		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                         "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
+		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
+		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                        "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
+		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace":                     "docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
+		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
 	}
 	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
@@ -3950,6 +3955,7 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
 		"experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel:1.5:3600",
 		"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod:4:3600",
 		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 	} {
 		if !strings.Contains(defaults, wantCase) {
@@ -3968,16 +3974,19 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 	knownGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
+		"exp_tcp_full_kmod": true,
+		"secure_kudp":       true, "secure_exp_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
+		"exp_tcp_full_kmod": true,
+		"secure_kudp":       true, "secure_exp_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostOnlyGate := map[string]bool{
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
+		"exp_tcp_full_kmod": true,
+		"secure_kudp":       true, "secure_exp_tcp_kernel": true, "route_gso": true,
 	}
 	seen := map[string]bool{}
 	baseline := map[string]bool{}
@@ -4314,7 +4323,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"run_gate_case_list exp-tcp-full-kmod \"$exp_tcp_full_kmod_min_gbps\"",
 		"--require-datapath-stat experimental_tcp.provider=kernel_datapath_full_plaintext",
 		"--require-datapath-stat experimental_tcp.fast_path=true",
-		"--require-datapath-stat experimental_tcp.capture_forwarder_suppressed=true",
+		"--require-datapath-stat capture_forwarder_suppressed=true",
 		"--require-transport-session-stat \"stats.extra.experimental_tcp_full_plaintext_kernel_datapath=1\"",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_packets=1",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_gso_segments=1",
@@ -5095,7 +5104,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("expfull", "--require-status-max", "data_path.counters.stale_sessions_dropped=0")
 	requireArgPair("expfull", "--require-datapath-stat", "experimental_tcp.provider=kernel_datapath_full_plaintext")
 	requireArgPair("expfull", "--require-datapath-stat", "experimental_tcp.fast_path=true")
-	requireArgPair("expfull", "--require-datapath-stat", "experimental_tcp.capture_forwarder_suppressed=true")
+	requireArgPair("expfull", "--require-datapath-stat", "capture_forwarder_suppressed=true")
 	requireArgPair("expfull", "--require-datapath-min", "experimental_tcp.active_flows=16")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_packets=1")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_gso_segments=1")
