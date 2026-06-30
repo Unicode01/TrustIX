@@ -3956,6 +3956,7 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"udp:secure:stable:userspace:userspace:cross_host:userspace:1.5:3600",
 		"udp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 		"udp:plaintext:stable:userspace:userspace:cross_host:userspace:1.5:3600",
+		"udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod:3:3600",
 		"udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod:3:3600",
 		"tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
 		"tcp:secure:stable:userspace:userspace:cross_host:userspace:0.75:3600",
@@ -4111,6 +4112,48 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 			key := transport + ":" + encryption
 			if !baseline[key] {
 				t.Fatalf("missing stable userspace baseline for %s", key)
+			}
+		}
+	}
+}
+
+func TestCrossHostProductionDefaultsCoverTransportEncryptionModes(t *testing.T) {
+	requirements := loadCurrentProductionEvidenceRequirements(t)
+	coverage := map[string]map[string][]productionTransportDefault{}
+	for _, row := range loadProductionTransportDefaults(t) {
+		if row.ValidationScope != "cross_host" {
+			continue
+		}
+		requirement, ok := currentProductionEvidenceRequirementForDefault(requirements, row)
+		if !ok {
+			t.Fatalf("cross-host production default lacks current evidence requirement: %+v", row)
+		}
+		if requirement.GateManifestSchema != productionGateManifestSchema {
+			t.Fatalf("cross-host production default lacks manifest-backed current evidence requirement: %+v requirement=%+v", row, requirement)
+		}
+		if row.MinSeconds != "3600" {
+			t.Fatalf("cross-host production default must stay on 3600s soak evidence: %+v", row)
+		}
+		if coverage[row.Transport] == nil {
+			coverage[row.Transport] = map[string][]productionTransportDefault{}
+		}
+		coverage[row.Transport][row.Encryption] = append(coverage[row.Transport][row.Encryption], row)
+	}
+	for _, transport := range []string{
+		"udp",
+		"tcp",
+		"quic",
+		"websocket",
+		"http_connect",
+		"gre",
+		"ipip",
+		"vxlan",
+		"kernel_udp",
+		"experimental_tcp",
+	} {
+		for _, encryption := range []string{"secure", "plaintext"} {
+			if len(coverage[transport][encryption]) == 0 {
+				t.Fatalf("missing cross-host production default for %s %s; coverage=%#v", transport, encryption, coverage[transport])
 			}
 		}
 	}
