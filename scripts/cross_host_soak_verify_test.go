@@ -2569,6 +2569,7 @@ func writeDatapathJSONWithRX(t *testing.T, path string, fullPlaintextProvider in
 		t.Fatalf("make datapath dir: %v", err)
 	}
 	payload := map[string]any{
+		"capture_forwarder_suppressed": true,
 		"counters": map[string]any{
 			"session_dials":       8,
 			"session_dial_errors": 0,
@@ -2938,6 +2939,7 @@ func writeExpTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 		provider = "kernel_datapath_full_plaintext"
 	}
 	payload := map[string]any{
+		"capture_forwarder_suppressed": true,
 		"counters": map[string]any{
 			"session_dials":       8,
 			"session_dial_errors": 0,

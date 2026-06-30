@@ -323,6 +323,7 @@ func latestRuntimeTreeParentCommit(t *testing.T) string {
 		"scripts/build-embedded-bpf.sh",
 		"scripts/build-release-linux.sh",
 		"scripts/trustix-build.sh",
+		":(exclude)*_test.go",
 	}
 	args := append([]string{"-C", "..", "log", "--format=%H", "-n", "1", "--"}, paths...)
 	output, err := exec.Command("git", args...).CombinedOutput()
