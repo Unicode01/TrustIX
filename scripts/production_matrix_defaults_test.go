@@ -923,6 +923,68 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		}
 	}
 
+	originalIperf := gateRow["iperf"]
+	originalMinSent := gateRow["min_sent_gbps"]
+	gateRow["min_sent_gbps"] = 0.0
+	gateRow["min_required_received_gbps"] = 1.654321
+	gateRow["iperf"] = []map[string]any{
+		{
+			"direction":         "forward",
+			"sent_gbps":         0.0,
+			"received_gbps":     1.765432,
+			"seconds":           3600.05,
+			"intervals":         600,
+			"interval_min_gbps": 1.0,
+			"sent_required":     false,
+			"received_required": true,
+		},
+		{
+			"direction":         "forward",
+			"sent_gbps":         0.0,
+			"received_gbps":     1.654321,
+			"seconds":           3600.05,
+			"intervals":         600,
+			"interval_min_gbps": 1.0,
+			"sent_required":     false,
+			"received_required": true,
+		},
+	}
+	gatePayload, err = json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal receiver-only gate row: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write receiver-only gate summary: %v", err)
+	}
+	receiverOnlyCmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--artifact", "docs/trustix-performance-log.md#example-production-gate",
+		"--note-template", "{transport} {encryption} {gate_family} evidence",
+	)
+	receiverOnlyCmd.Dir = "."
+	receiverOnlyOutput, err := receiverOnlyCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production evidence generator rejected receiver-only server summary: %v\n%s", err, receiverOnlyOutput)
+	}
+	receiverOnlyFields := strings.Split(strings.TrimSpace(string(receiverOnlyOutput)), "\t")
+	if len(receiverOnlyFields) != 22 {
+		t.Fatalf("expected 22 receiver-only evidence fields, got %d:\n%s", len(receiverOnlyFields), receiverOnlyOutput)
+	}
+	if receiverOnlyFields[10] != "1.654321" {
+		t.Fatalf("receiver-only min_gbps = %q, want receiver metric\n%s", receiverOnlyFields[10], receiverOnlyOutput)
+	}
+	gateRow["iperf"] = originalIperf
+	gateRow["min_sent_gbps"] = originalMinSent
+	gateRow["min_required_received_gbps"] = 1.654321
+	gatePayload, err = json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal restored gate row after receiver-only check: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("restore gate summary after receiver-only check: %v", err)
+	}
+
 	strongBuildIdentities := gateRow["build_identities"]
 	gateRow["build_identities"] = []map[string]any{
 		{
@@ -3117,8 +3179,23 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"userspace_tc":          "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
 	manifestRequiredArtifactByDefault := map[string]string{
+		"udp:secure:stable:userspace:userspace:cross_host:userspace":              "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
+		"udp:plaintext:stable:userspace:userspace:cross_host:userspace":           "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
+		"tcp:secure:stable:userspace:userspace:cross_host:userspace":              "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
+		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace":           "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
+		"quic:secure:stable:userspace:userspace:cross_host:userspace":             "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
+		"quic:plaintext:stable:userspace:userspace:cross_host:userspace":          "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
+		"websocket:secure:stable:userspace:userspace:cross_host:userspace":        "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
+		"websocket:plaintext:stable:userspace:userspace:cross_host:userspace":     "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
+		"http_connect:secure:stable:userspace:userspace:cross_host:userspace":     "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
+		"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace":  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
+		"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":              "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
+		"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":      "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
+		"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":             "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
+		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":     "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
+		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":            "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
+		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":    "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
 		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace": "docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
-		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc": "docs/trustix-performance-log.md#2026-06-27-zaozhuang-pve-b0f3c3a-vxlan-plaintext-heartbeat10s-3600s-production-gate",
 	}
 	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
@@ -6158,6 +6235,12 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"collect_binary_identity a",
 		"version_output=\\$(",
 		"collect_kernel_logs a",
+		"accept_iperf_server_summary_artifact()",
+		"server-control-error-${label}.raw.json",
+		"iperf3-server-${label}.accepted-control-error.txt",
+		"accepted_server_summary=1",
+		"reason=client_missing_server_results_only",
+		"client missed server results; accepting server-side summary artifact",
 		"if command -v journalctl >/dev/null 2>&1; then",
 		"tmp=\\\"\\${dir}/.\\${prefix}-kernel.log.tmp\\\"",
 		"since=$(remote_quote \"$since\")",

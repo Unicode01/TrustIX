@@ -925,12 +925,27 @@ def require_throughput_for_pass(row: dict[str, Any], result: str) -> None:
             f"gate summary case {row.get('case')!r} has invalid min_gbps_required: "
             f"{format_metric_seconds(required)}"
         )
-    for key in ("min_sent_gbps", "min_required_received_gbps"):
-        observed = numeric_field(row, key, "gate summary")
-        if observed < required:
+    received = numeric_field(row, "min_required_received_gbps", "gate summary")
+    if received < required:
+        raise SystemExit(
+            f"gate summary case {row.get('case')!r} min_required_received_gbps="
+            f"{received:.6f} < min_gbps_required={required:.6f}"
+        )
+    iperf_items = row.get("iperf")
+    sent_optional = (
+        isinstance(iperf_items, list)
+        and bool(iperf_items)
+        and all(
+            isinstance(item, dict) and item.get("sent_required") is False
+            for item in iperf_items
+        )
+    )
+    if not sent_optional:
+        sent = numeric_field(row, "min_sent_gbps", "gate summary")
+        if sent < required:
             raise SystemExit(
-                f"gate summary case {row.get('case')!r} {key}="
-                f"{observed:.6f} < min_gbps_required={required:.6f}"
+                f"gate summary case {row.get('case')!r} min_sent_gbps="
+                f"{sent:.6f} < min_gbps_required={required:.6f}"
             )
 
 

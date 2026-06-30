@@ -23,10 +23,97 @@ Current production-default evidence boundary:
 | Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `b0d2fc642864` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. The modules were rebuilt inside the guests for the exact target kernel; earlier Debian `6.12.90+deb13.1-cloud-amd64` and `6.12.94+deb13-cloud-amd64` gates remain historical coverage, not the current pinned row. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.69+deb13-amd64`; current VXLAN plaintext userspace-TC supplemental gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `b0f3c3a3b47b` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
+| Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace and GRE/IPIP/VXLAN userspace-TC | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `928c5d0939cc` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. The earlier gates at commits `395b2ba05013` and `e02d15edf6b4` remain historical evidence, not the current pinned row. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-06-29
+
+<a id="pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29"></a>
+<a id="pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29"></a>
+<a id="pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29"></a>
+<a id="pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29"></a>
+<a id="pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29"></a>
+
+### Zaozhuang PVE 5fa2ba1 userspace transport reruns
+
+PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only.
+VM100 and all 1xx guests were not modified. Both Debian guests ran kernel
+`6.12.90+deb13.1-cloud-amd64` with virtio network devices. The release used
+TrustIX version `trustix-linux-amd64`, commit `5fa2ba1934d1550fec5ed46c2009fb9e527088c8`,
+Go `1.25.0`, build time `2026-06-28T16:33:57Z`, and binary SHA256
+`526a4f37f511dacffeffc6636fd2002e58bc71e4ffd4adfe306603303bf50d14`.
+
+Each selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence with production gate
+SHA256 `6150d4ccadd3b0614d389442c4a1084fcad2d0748700ad9d5eea9900e7d7a242`
+and verifier SHA256
+`bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
+Every case ran `forward + both` with `iperf_parallel=8` and
+`iperf_seconds_requested=3600`.
+
+| Transport | Secure minimum received | Plaintext minimum received | Gate duration |
+| --- | ---: | ---: | ---: |
+| UDP | 1.899332 Gbps | 2.454052 Gbps | 3600s |
+| TCP | 1.013314 Gbps | 1.219392 Gbps | 3600s |
+| QUIC | 0.833756 Gbps | 1.467998 Gbps | 3600s |
+| WebSocket | 0.979802 Gbps | 1.237721 Gbps | 3600s |
+| HTTP CONNECT | 1.004310 Gbps | 1.291495 Gbps | 3600s |
+
+<a id="pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29"></a>
+<a id="pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29"></a>
+
+### Zaozhuang PVE 5fa2ba1 GRE/IPIP userspace-TC sequential rerun
+
+The same PVE host and Debian `6.12.90+deb13.1-cloud-amd64` disposable VM pair
+were used for the GRE and IPIP slices of the sequential userspace-TC rerun. The
+same TrustIX binary identity and gate/verifier SHA256 values listed above
+apply. Each case ran `forward + both` with `iperf_parallel=8` and
+`iperf_seconds_requested=3600`.
+
+| Transport | Crypto | Minimum received | Gate duration |
+| --- | --- | ---: | ---: |
+| GRE | secure | 1.613899 Gbps | 3600s |
+| GRE | plaintext | 4.783691 Gbps | 3600s |
+| IPIP | secure | 1.662262 Gbps | 3600s |
+| IPIP | plaintext | 4.766003 Gbps | 3600s |
+
+<a id="pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30"></a>
+
+### Zaozhuang PVE 5fa2ba1 VXLAN userspace-TC p4 current-tool gate
+
+The same PVE host and Debian `6.12.90+deb13.1-cloud-amd64` VM200/VM201 pair
+were used. The VXLAN secure artifact came from the sequential userspace-TC run
+above; VXLAN plaintext was rerun separately with the tunnel default
+`iperf_parallel=4` and `session_pool.size=4` after the p8 diagnostic artifact
+completed traffic but was rejected by the verifier for nonzero heartbeat
+timeouts.
+
+The selected production gate reverified both VXLAN artifacts with production
+gate SHA256 `6150d4ccadd3b0614d389442c4a1084fcad2d0748700ad9d5eea9900e7d7a242`
+and verifier SHA256
+`bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
+
+| Transport | Crypto | Minimum received | Gate duration | Notes |
+| --- | --- | ---: | ---: | --- |
+| VXLAN | secure | 1.613818 Gbps | 3600s | seq rerun4 artifact |
+| VXLAN | plaintext | 4.975144 Gbps | 3600s | p4 rerun, zero heartbeat timeouts |
+
+The plaintext p4 rerun lasted 7204 seconds from `2026-06-30T02:09:28Z` to
+`2026-06-30T04:09:32Z`, with `iperf_mode=forward`,
+`iperf_directions=both`, and `iperf_seconds_requested=3600`. Both nodes
+reported `session_dial_errors=0` and `session_heartbeat_timeouts=0`; kernel log
+and pstore artifacts were clean. The earlier p8 plaintext artifact remains
+diagnostic only and is not used as current production evidence.
+
+The first GRE matrix invocation returned nonzero only because the older
+evidence generator required `min_sent_gbps` even for receiver-only accepted
+server-summary artifacts. The runner and generator changes recorded in this
+commit preserve the raw server control-error artifact, sanitize only the known
+top-level iperf3 control-message error when a final server summary exists, and
+make the evidence generator use `min_required_received_gbps` when all iperf
+items have `sent_required=false`.
 
 ## 2026-06-28
 

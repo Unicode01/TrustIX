@@ -1781,6 +1781,45 @@ grep -Eq '\"sum_(sent|received|sent_bidir_reverse|received_bidir_reverse)\"' \"\
 "
 }
 
+accept_iperf_server_summary_artifact() {
+  local node="$1"
+  local label="$2"
+  local dir
+  dir="$(remote_dir "$node")"
+  run_node "$node" "set -Eeuo pipefail
+out=$(remote_quote "${dir}/iperf3-server.json")
+raw=$(remote_quote "${dir}/server-control-error-${label}.raw.json")
+marker=$(remote_quote "${dir}/iperf3-server-${label}.accepted-control-error.txt")
+tmp=\${out}.accepted
+[ -s \"\$out\" ]
+if ! grep -Fq '\"error\"' \"\$out\"; then
+  exit 0
+fi
+grep -Fq 'unable to receive control message' \"\$out\"
+grep -Fq 'Bad file descriptor' \"\$out\"
+grep -Eq '\"sum_(sent|received|sent_bidir_reverse|received_bidir_reverse)\"' \"\$out\"
+cp \"\$out\" \"\$raw\"
+awk '
+  /\"error\"[[:space:]]*:/ && /unable to receive control message/ && /Bad file descriptor/ {
+    if (n > 0 && lines[n] ~ /^[[:space:]]*},[[:space:]]*$/) {
+      sub(/,[[:space:]]*$/, \"\", lines[n])
+    }
+    next
+  }
+  { lines[++n] = \$0 }
+  END {
+    for (i = 1; i <= n; i++) print lines[i]
+  }
+' \"\$raw\" >\"\$tmp\"
+mv \"\$tmp\" \"\$out\"
+{
+  printf 'accepted_server_summary=1\\n'
+  printf 'raw_artifact=%s\\n' \"\$raw\"
+  printf 'reason=client_missing_server_results_only\\n'
+} >\"\$marker\"
+"
+}
+
 iperf_artifact_suffix() {
   case "$iperf_mode" in
     bidir) printf 'bidir\n' ;;
@@ -1818,6 +1857,7 @@ run_iperf_bidirectional_artifacts() {
       wait_iperf_server_exit b
       if [[ "$client_rc" -ne 0 ]]; then
         if iperf_client_missing_server_results_only a "$out_name" && iperf_server_has_final_summary b; then
+          accept_iperf_server_summary_artifact b "a-to-b-${suffix}"
           log "iperf a-to-b client missed server results; accepting server-side summary artifact"
         else
           rc=$client_rc
@@ -1836,6 +1876,7 @@ run_iperf_bidirectional_artifacts() {
       wait_iperf_server_exit a
       if [[ "$client_rc" -ne 0 ]]; then
         if iperf_client_missing_server_results_only b "$out_name" && iperf_server_has_final_summary a; then
+          accept_iperf_server_summary_artifact a "b-to-a-${suffix}"
           log "iperf b-to-a client missed server results; accepting server-side summary artifact"
         else
           rc=$client_rc
