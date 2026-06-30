@@ -214,6 +214,9 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextKernelModuleExperimentalT
 	if !spec.ExperimentalTCPRouteGSOAsync || !spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker {
 		t.Fatalf("performance experimental_tcp kernel_module route-GSO flags missing, spec=%#v", spec)
 	}
+	if !spec.KernelUDPTCOnlyProvider {
+		t.Fatalf("performance experimental_tcp kernel_module route-GSO should use TC-only provider, spec=%#v", spec)
+	}
 	if !spec.KernelDatapathSuppressLegacyRXWorker {
 		t.Fatalf("performance experimental_tcp route-GSO should suppress legacy RX worker ownership, spec=%#v", spec)
 	}
@@ -873,8 +876,11 @@ func TestDataplaneAttachSpecEnablesPerformanceSecureExperimentalTCPDirect(t *tes
 		}},
 	})
 
-	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
-		t.Fatalf("performance secure experimental_tcp should keep userspace fallback, spec=%#v", spec)
+	if !spec.KernelUDPTXDirectOnly || !spec.KernelUDPTCOnlyProvider {
+		t.Fatalf("performance secure experimental_tcp route-GSO should use TC-only provider, spec=%#v", spec)
+	}
+	if spec.KernelUDPTXDirectOnlyReason == "" || spec.KernelUDPTCOnlyProviderReason == "" {
+		t.Fatalf("performance secure experimental_tcp route-GSO should record direct-only reasons, spec=%#v", spec)
 	}
 	if !spec.ExperimentalTCPTXDirect {
 		t.Fatalf("performance secure experimental_tcp should enable TC direct flow-map sync, spec=%#v", spec)

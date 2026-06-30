@@ -4824,6 +4824,178 @@ func TestExperimentalTCPStatusReportsFullPlaintextKernelDatapathProvider(t *test
 	}
 }
 
+func TestExperimentalTCPStatusReportsRouteGSOTCOnlyProvider(t *testing.T) {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{
+		LANIface:                             "lan0",
+		UnderlayIface:                        "eth0",
+		KernelUDPTXDirectOnly:                true,
+		KernelUDPTCOnlyProvider:              true,
+		ExperimentalTCPTXDirect:              true,
+		ExperimentalTCPRouteGSOSync:          true,
+		ExperimentalTCPRouteGSOAsync:         true,
+		ExperimentalTCPRouteXmitWorker:       true,
+		KernelDatapathSuppressLegacyRXWorker: true,
+	}
+	manager.statsMap = &cebpf.Map{}
+	manager.kernelUDPTXRouteMap = &cebpf.Map{}
+	manager.kernelUDPTXFlowMap = &cebpf.Map{}
+	manager.kernelUDPRXDirectAttached = true
+	manager.underlayIngressProg = &cebpf.Program{}
+	manager.kernelTransportPortMap = &cebpf.Map{}
+	manager.kernelUDPTXDirectPushRouteTCPHeaderKfunc = true
+	manager.kernelUDPTXDirectRouteTCPGSOKfunc = true
+	manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = true
+	manager.kernelUDPTXDirectRouteTCPXmitKfunc = true
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		9: {
+			ID:              9,
+			Peer:            "ix-b",
+			Endpoint:        "remote",
+			RemoteAddress:   "198.18.0.2:9443",
+			SourcePort:      41000,
+			DestinationPort: 9443,
+		},
+	}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: "local", Peer: "ix-a", Transport: "experimental_tcp", Listen: "198.18.0.1:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+			{ID: "remote", Peer: "ix-b", Transport: "experimental_tcp", Address: "198.18.0.2:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+		},
+		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
+	}
+
+	status, err := manager.ExperimentalTCPStatus(context.Background())
+	if err != nil {
+		t.Fatalf("experimental_tcp status: %v", err)
+	}
+	if !status.Available || !status.Reinject || !status.FastPath {
+		t.Fatalf("route-GSO TC-only status = %+v, want available fast-path reinject", status)
+	}
+	if status.Provider != "kernel_udp_tc_only" {
+		t.Fatalf("provider = %q, want kernel_udp_tc_only", status.Provider)
+	}
+	if !status.UserspaceCrypto || status.KernelCrypto {
+		t.Fatalf("route-GSO plaintext crypto status = userspace:%t kernel:%t, want userspace placeholder without kernel crypto", status.UserspaceCrypto, status.KernelCrypto)
+	}
+	protocol := kernelTransportProtocolExperimentalTCP(status)
+	if !protocol.Available || protocol.Placement != "kernel" || protocol.UserspaceFallback {
+		t.Fatalf("route-GSO TC-only protocol = %+v, want kernel placement without userspace fallback", protocol)
+	}
+
+	manager.spec.ExperimentalTCPRouteGSOSync = false
+	manager.spec.ExperimentalTCPRouteGSOAsync = false
+	status, err = manager.ExperimentalTCPStatus(context.Background())
+	if err != nil {
+		t.Fatalf("experimental_tcp status without route-GSO: %v", err)
+	}
+	if status.Available || status.Reinject || status.Provider == "kernel_udp_tc_only" {
+		t.Fatalf("experimental_tcp status without route-GSO = %+v, want TC-only provider unavailable", status)
+	}
+}
+
+func TestExperimentalTCPStatusRejectsRouteGSOTCOnlyProviderWithoutRequestedKfuncs(t *testing.T) {
+	tests := []struct {
+		name string
+		miss func(*Manager)
+		want string
+	}{
+		{
+			name: "push_route_tcp_header",
+			miss: func(manager *Manager) {
+				manager.kernelUDPTXDirectPushRouteTCPHeaderKfunc = false
+			},
+			want: "push_route_tcp_header",
+		},
+		{
+			name: "route_tcp_gso",
+			miss: func(manager *Manager) {
+				manager.kernelUDPTXDirectRouteTCPGSOKfunc = false
+			},
+			want: "route_tcp_gso",
+		},
+		{
+			name: "route_tcp_gso_async",
+			miss: func(manager *Manager) {
+				manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = false
+			},
+			want: "route_tcp_gso_async",
+		},
+		{
+			name: "route_tcp_xmit",
+			miss: func(manager *Manager) {
+				manager.kernelUDPTXDirectRouteTCPXmitKfunc = false
+			},
+			want: "route_tcp_xmit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+			tt.miss(manager)
+
+			status, err := manager.ExperimentalTCPStatus(context.Background())
+			if err != nil {
+				t.Fatalf("experimental_tcp status: %v", err)
+			}
+			if status.Available || status.Reinject || status.FastPath || status.Provider == "kernel_udp_tc_only" {
+				t.Fatalf("status with missing %s = %+v, want route-GSO TC-only unavailable", tt.want, status)
+			}
+			if !strings.Contains(status.FastPathFallback, tt.want) {
+				t.Fatalf("fast path fallback = %q, want missing kfunc %q", status.FastPathFallback, tt.want)
+			}
+		})
+	}
+}
+
+func newRouteGSOTCOnlyExperimentalTCPManagerForTest() *Manager {
+	manager := NewManager()
+	manager.attached = true
+	manager.spec = dataplane.AttachSpec{
+		LANIface:                             "lan0",
+		UnderlayIface:                        "eth0",
+		KernelUDPTXDirectOnly:                true,
+		KernelUDPTCOnlyProvider:              true,
+		ExperimentalTCPTXDirect:              true,
+		ExperimentalTCPRouteGSOSync:          true,
+		ExperimentalTCPRouteGSOAsync:         true,
+		ExperimentalTCPRouteXmitWorker:       true,
+		KernelDatapathSuppressLegacyRXWorker: true,
+	}
+	manager.statsMap = &cebpf.Map{}
+	manager.kernelUDPTXRouteMap = &cebpf.Map{}
+	manager.kernelUDPTXFlowMap = &cebpf.Map{}
+	manager.kernelUDPRXDirectAttached = true
+	manager.underlayIngressProg = &cebpf.Program{}
+	manager.kernelTransportPortMap = &cebpf.Map{}
+	manager.kernelUDPTXDirectPushRouteTCPHeaderKfunc = true
+	manager.kernelUDPTXDirectRouteTCPGSOKfunc = true
+	manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = true
+	manager.kernelUDPTXDirectRouteTCPXmitKfunc = true
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		42: {
+			ID:              42,
+			Peer:            "ix-b",
+			Endpoint:        "remote",
+			RemoteAddress:   "198.18.0.2:9443",
+			SourcePort:      41000,
+			DestinationPort: 9443,
+		},
+	}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: "local", Peer: "ix-a", Transport: "experimental_tcp", Listen: "198.18.0.1:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+			{ID: "remote", Peer: "ix-b", Transport: "experimental_tcp", Address: "198.18.0.2:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+		},
+		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
+	}
+	return manager
+}
+
 func TestSubscribeExperimentalTCPAllowsFullPlaintextKernelDatapathProvider(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
@@ -4841,6 +5013,24 @@ func TestSubscribeExperimentalTCPAllowsFullPlaintextKernelDatapathProvider(t *te
 	}
 }
 
+func TestSubscribeExperimentalTCPAllowsRouteGSOTCOnlyProvider(t *testing.T) {
+	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+
+	subscription, err := manager.SubscribeExperimentalTCP(context.Background(), 8)
+	if err != nil {
+		t.Fatalf("subscribe experimental_tcp: %v", err)
+	}
+	if subscription == nil {
+		t.Fatal("subscription is nil")
+	}
+	if manager.expTCPRawFD != -1 {
+		t.Fatalf("raw TCP receiver fd = %d, want unopened for route-GSO TC-only provider", manager.expTCPRawFD)
+	}
+	if err := subscription.Close(); err != nil {
+		t.Fatalf("close subscription: %v", err)
+	}
+}
+
 func TestSubscribeExperimentalTCPFlowAllowsFullPlaintextKernelDatapathProvider(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
@@ -4852,6 +5042,24 @@ func TestSubscribeExperimentalTCPFlowAllowsFullPlaintextKernelDatapathProvider(t
 	}
 	if subscription == nil {
 		t.Fatal("subscription is nil")
+	}
+	if err := subscription.Close(); err != nil {
+		t.Fatalf("close subscription: %v", err)
+	}
+}
+
+func TestSubscribeExperimentalTCPFlowAllowsRouteGSOTCOnlyProvider(t *testing.T) {
+	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+
+	subscription, err := manager.SubscribeExperimentalTCPFlow(context.Background(), 42, 8)
+	if err != nil {
+		t.Fatalf("subscribe experimental_tcp flow: %v", err)
+	}
+	if subscription == nil {
+		t.Fatal("subscription is nil")
+	}
+	if manager.expTCPRawFD != -1 {
+		t.Fatalf("raw TCP receiver fd = %d, want unopened for route-GSO TC-only provider", manager.expTCPRawFD)
 	}
 	if err := subscription.Close(); err != nil {
 		t.Fatalf("close subscription: %v", err)
@@ -4879,6 +5087,20 @@ func TestSubmitExperimentalTCPFrameRejectsFullPlaintextKernelDatapathProvider(t 
 	}
 }
 
+func TestSubmitExperimentalTCPFrameRejectsRouteGSOTCOnlyProvider(t *testing.T) {
+	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+
+	err := manager.SubmitExperimentalTCPFrame(context.Background(), dataplane.ExperimentalTCPFrame{
+		FlowID:    42,
+		Direction: dataplane.ExperimentalTCPOutbound,
+		Sequence:  1,
+		Payload:   []byte("data"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "route-GSO TC-only kernel datapath owns data frames") {
+		t.Fatalf("submit error = %v, want route-GSO TC-only kernel datapath ownership", err)
+	}
+}
+
 func TestSubmitExperimentalTCPFramesRejectsFullPlaintextKernelDatapathProvider(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
@@ -4897,6 +5119,20 @@ func TestSubmitExperimentalTCPFramesRejectsFullPlaintextKernelDatapathProvider(t
 	}})
 	if err == nil || !strings.Contains(err.Error(), "full plaintext kernel datapath owns data frames") {
 		t.Fatalf("batch submit error = %v, want full plaintext kernel datapath ownership", err)
+	}
+}
+
+func TestSubmitExperimentalTCPFramesRejectsRouteGSOTCOnlyProvider(t *testing.T) {
+	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+
+	err := manager.SubmitExperimentalTCPFrames(context.Background(), []dataplane.ExperimentalTCPFrame{{
+		FlowID:    42,
+		Direction: dataplane.ExperimentalTCPOutbound,
+		Sequence:  1,
+		Payload:   []byte("data"),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "route-GSO TC-only kernel datapath owns data frames") {
+		t.Fatalf("batch submit error = %v, want route-GSO TC-only kernel datapath ownership", err)
 	}
 }
 
@@ -9930,6 +10166,50 @@ func TestKernelUDPTCOnlyProviderAllowsSecureKernelDirectSnapshot(t *testing.T) {
 	}
 	if !manager.snapshotCanUseKernelUDPTCOnlyLocked() {
 		t.Fatal("secure kernel_udp TC-only provider rejected userspace control seed flow")
+	}
+}
+
+func TestKernelUDPTCOnlyProviderAllowsExperimentalTCPRouteGSOSnapshot(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		LANIface:                             "lan0",
+		UnderlayIface:                        "eth0",
+		KernelUDPTXDirectOnly:                true,
+		KernelUDPTCOnlyProvider:              true,
+		ExperimentalTCPTXDirect:              true,
+		ExperimentalTCPRouteGSOSync:          true,
+		ExperimentalTCPRouteGSOAsync:         true,
+		KernelDatapathSuppressLegacyRXWorker: true,
+	}
+	manager.statsMap = &cebpf.Map{}
+	manager.kernelUDPTXRouteMap = &cebpf.Map{}
+	manager.kernelUDPTXFlowMap = &cebpf.Map{}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		9: {
+			ID:              9,
+			Peer:            "ix-b",
+			Endpoint:        "remote",
+			RemoteAddress:   "198.18.0.2:9443",
+			SourcePort:      41000,
+			DestinationPort: 9443,
+		},
+	}
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{
+			{ID: "local", Peer: "ix-a", Transport: "experimental_tcp", Listen: "198.18.0.1:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+			{ID: "remote", Peer: "ix-b", Transport: "experimental_tcp", Address: "198.18.0.2:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+		},
+		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
+	}
+
+	if !manager.snapshotCanUseKernelUDPTCOnlyLocked() {
+		t.Fatal("experimental_tcp route-GSO TC-only provider rejected plaintext route-GSO snapshot")
+	}
+	manager.spec.ExperimentalTCPRouteGSOSync = false
+	manager.spec.ExperimentalTCPRouteGSOAsync = false
+	if manager.snapshotCanUseKernelUDPTCOnlyLocked() {
+		t.Fatal("experimental_tcp snapshot used TC-only provider without route-GSO")
 	}
 }
 

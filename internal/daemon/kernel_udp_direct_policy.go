@@ -119,7 +119,7 @@ func kernelUDPTXDirectOnlyFailClosedReasonForDesired(desired config.Desired) str
 }
 
 func kernelUDPTXDirectOnlyAttachForDesired(desired config.Desired) bool {
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+	if experimentalTCPRouteGSOAsyncForDesired(desired) {
 		return true
 	}
 	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
@@ -138,6 +138,13 @@ func kernelUDPTXDirectOnlyAttachReasonForDesired(desired config.Desired) string 
 	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		return "transport_policy.experimental_tcp=performance route_gso_async_outer_gso=enabled encryption=plaintext"
 	}
+	if experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
+		placement := effectiveTransportCryptoPlacementConfig(desired.TransportPolicy)
+		if placement == "" {
+			placement = string(dataplane.CryptoPlacementKernel)
+		}
+		return "transport_policy.experimental_tcp=performance route_gso_async=enabled encryption=secure transport_policy.crypto_placement=" + placement
+	}
 	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
 		return "transport_policy.udp=performance tc_direct=enabled encryption=plaintext"
 	}
@@ -151,13 +158,17 @@ func kernelUDPTXDirectOnlyAttachReasonForDesired(desired config.Desired) string 
 }
 
 func kernelUDPTCOnlyProviderForDesired(desired config.Desired) bool {
-	return kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) ||
+	return experimentalTCPRouteGSOAsyncForDesired(desired) ||
+		kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) ||
 		kernelUDPTXDirectOnlyFailClosedForDesired(desired)
 }
 
 func kernelUDPTCOnlyProviderReasonForDesired(desired config.Desired) string {
 	if !kernelUDPTCOnlyProviderForDesired(desired) {
 		return ""
+	}
+	if experimentalTCPRouteGSOAsyncForDesired(desired) {
+		return kernelUDPTXDirectOnlyAttachReasonForDesired(desired) + " kernel_udp_tc_only_provider=route_gso"
 	}
 	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
 		return kernelUDPTXDirectOnlyAttachReasonForDesired(desired)

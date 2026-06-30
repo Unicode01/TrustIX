@@ -11,6 +11,8 @@ import (
 
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/kernelmodule"
+	"trustix.local/trustix/internal/transport"
+	securetransport "trustix.local/trustix/internal/transport/secure"
 )
 
 func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.Desired) ([]kernelmodule.Status, error) {
@@ -425,7 +427,7 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 			params = appendTrustIXDatapathRXWorkerTCPBaseParameters(params)
 		}
 		if fullPlaintext {
-			params = appendTrustIXDatapathTXPlaintextBaseParameters(params)
+			params = appendTrustIXDatapathTXPlaintextBaseParameters(params, kernelDatapathTXPlaintextStreamCoalesceDefaultForDesired(desired))
 		}
 		if fullPlaintext || profile == config.KernelCapabilityProfilePerformance || profile == config.KernelCapabilityProfileFullPlaintext {
 			params = appendModuleParameterIfMissing(params, "rx_worker_budget=1024")
@@ -444,7 +446,7 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 
 func appendTrustIXDatapathFullPlaintextBaseParameters(params string) string {
 	params = appendTrustIXDatapathRXWorkerTCPBaseParameters(params)
-	params = appendTrustIXDatapathTXPlaintextBaseParameters(params)
+	params = appendTrustIXDatapathTXPlaintextBaseParameters(params, false)
 	return params
 }
 
@@ -470,17 +472,34 @@ func appendTrustIXDatapathRXWorkerTCPBaseParameters(params string) string {
 	return params
 }
 
-func appendTrustIXDatapathTXPlaintextBaseParameters(params string) string {
+func appendTrustIXDatapathTXPlaintextBaseParameters(params string, defaultStreamCoalesce bool) string {
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_inline_xmit=1")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_direct_xmit=1")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_payload_fast_copy=1")
+	if defaultStreamCoalesce {
+		params = appendModuleParameterIfMissing(params, "tx_plaintext_stream_coalesce=1")
+		params = appendModuleParameterIfMissing(params, "tx_plaintext_stream_coalesce_max_frames=4")
+	}
 	if !kernelDatapathTXPlaintextExperimentsAllowed() {
 		params = setModuleParameter(params, "tx_plaintext_skip_inner_tcp_checksum", "0")
-		params = setModuleParameter(params, "tx_plaintext_stream_coalesce", "0")
+		if !defaultStreamCoalesce {
+			params = setModuleParameter(params, "tx_plaintext_stream_coalesce", "0")
+		}
 	}
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_stream_coalesce_max_frames=16")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_slots=8192")
 	return params
+}
+
+func kernelDatapathTXPlaintextStreamCoalesceDefaultForDesired(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		return false
+	}
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
+	if profile.Datapath != config.TransportDatapathKernelModule {
+		return false
+	}
+	return parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionPlaintext
 }
 
 type kernelSysctlMinimum struct {

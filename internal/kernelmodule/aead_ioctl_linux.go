@@ -785,23 +785,7 @@ func ProbeDatapath(path string) (DatapathQuery, error) {
 		Selftests:          req.Reserved0,
 		SelftestFailures:   req.Reserved1,
 	}
-	if datapathQueryModuleName(path) != "" {
-		query.Features, _ = filterModuleFeaturesByRuntimeBTF(datapathQueryModuleName(path), query.Features)
-		query.SafeFeatures, _ = filterModuleFeaturesByRuntimeBTF(datapathQueryModuleName(path), query.SafeFeatures)
-		query.UnsafeFeatures, _ = filterModuleFeaturesByRuntimeBTF(datapathQueryModuleName(path), query.UnsafeFeatures)
-	}
 	return query, nil
-}
-
-func datapathQueryModuleName(path string) string {
-	switch path {
-	case "", TrustIXDatapathHelpersDevicePath:
-		return "trustix_datapath_helpers"
-	case TrustIXDatapathDevicePath:
-		return "trustix_datapath"
-	default:
-		return ""
-	}
 }
 
 func RunDatapathSelftest(path string, requested uint64) (DatapathSelftest, error) {

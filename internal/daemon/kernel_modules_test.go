@@ -1088,6 +1088,101 @@ func TestTrustIXDatapathModuleParametersForDesiredKeepsLegacyFullPlaintextExperi
 	}
 }
 
+func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextExperimentalTCPDefaultsStreamCoalesce(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfileStable,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("", desired)
+	for _, want := range []string{
+		"tx_plaintext_stream_coalesce=1",
+		"tx_plaintext_stream_coalesce_max_frames=4",
+	} {
+		if !moduleParameterHasAssignment(got, want) {
+			t.Fatalf("parameters = %q, missing experimental_tcp stream coalesce default %q", got, want)
+		}
+	}
+	if moduleParameterHasAssignment(got, "tx_plaintext_stream_coalesce=0") {
+		t.Fatalf("parameters = %q, disabled experimental_tcp stream coalesce default", got)
+	}
+	if kernelDatapathTXPlaintextExperimentsAllowed() {
+		t.Fatal("test should not require the TX plaintext experiments gate")
+	}
+}
+
+func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextExperimentalTCPDefaultsStreamCoalesceWithExperimentsGate(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_TX_PLAINTEXT_EXPERIMENTS", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfileStable,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("", desired)
+	for _, want := range []string{
+		"tx_plaintext_stream_coalesce=1",
+		"tx_plaintext_stream_coalesce_max_frames=4",
+	} {
+		if !moduleParameterHasAssignment(got, want) {
+			t.Fatalf("parameters = %q, missing experimental_tcp stream coalesce default with experiments gate %q", got, want)
+		}
+	}
+}
+
+func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextExperimentalTCPAllowsExplicitStreamCoalesceDisable(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:    config.TransportProfileStable,
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-a",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("tx_plaintext_stream_coalesce=0", desired)
+	if !moduleParameterHasAssignment(got, "tx_plaintext_stream_coalesce=0") {
+		t.Fatalf("parameters = %q, missing explicit stream coalesce disable", got)
+	}
+	if moduleParameterHasAssignment(got, "tx_plaintext_stream_coalesce=1") {
+		t.Fatalf("parameters = %q, ignored explicit stream coalesce disable", got)
+	}
+}
+
 func TestTrustIXDatapathModuleParametersForDesiredKeepsLegacyFullPlaintextUDP(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
@@ -1127,6 +1222,9 @@ func TestTrustIXDatapathModuleParametersForDesiredKeepsLegacyFullPlaintextUDP(t 
 	}
 	if mode := kernelDatapathRXModeForDesired(desired); mode != kernelDatapathRXModeWorker {
 		t.Fatalf("full plaintext UDP should attach RX worker hook, mode=%q", mode)
+	}
+	if !moduleParameterHasAssignment(got, "tx_plaintext_stream_coalesce=0") {
+		t.Fatalf("parameters = %q, UDP full plaintext should keep stream coalesce off by default", got)
 	}
 }
 
