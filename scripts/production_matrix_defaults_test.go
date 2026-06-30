@@ -3596,6 +3596,61 @@ func TestOpenWrtRouteGSOFamiliesHaveFailClosedRuntimeEvidence(t *testing.T) {
 	}
 }
 
+func TestOpenWrtRouteGSOFamiliesRequirePassingCurrentGateBeforeDefault(t *testing.T) {
+	openWrtRouteGSOFamilies := map[string]bool{
+		"owdeb_secure_kudp":           true,
+		"owdeb_route_gso":             true,
+		"owdeb_secure_exp_tcp_kernel": true,
+	}
+	passingEvidence := map[string][]productionTransportEvidence{}
+	for _, evidence := range loadProductionTransportEvidence(t) {
+		if !openWrtRouteGSOFamilies[evidence.GateFamily] {
+			continue
+		}
+		if evidence.GateManifestSchema != productionGateManifestSchema ||
+			evidence.Result != "pass" ||
+			!strings.HasPrefix(evidence.OSMatrix, "openwrt") {
+			continue
+		}
+		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
+		if err != nil {
+			t.Fatalf("invalid OpenWrt route-GSO evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+		}
+		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
+		if err != nil {
+			t.Fatalf("invalid OpenWrt route-GSO evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+		}
+		if evidenceSeconds >= 3600 && evidenceGbps > 0 {
+			passingEvidence[evidence.GateFamily] = append(passingEvidence[evidence.GateFamily], evidence)
+		}
+	}
+
+	requirements := loadCurrentProductionEvidenceRequirements(t)
+	for _, row := range loadProductionTransportDefaults(t) {
+		if row.ValidationScope != "cross_host" || !openWrtRouteGSOFamilies[row.GateFamily] {
+			continue
+		}
+		requirement, ok := currentProductionEvidenceRequirementForDefault(requirements, row)
+		if !ok {
+			t.Fatalf("OpenWrt route-GSO default lacks current evidence requirement: %+v", row)
+		}
+		var matchesCurrent bool
+		for _, evidence := range passingEvidence[row.GateFamily] {
+			if evidence.OSMatrix == requirement.OSMatrix &&
+				evidence.KernelMatrix == requirement.KernelMatrix &&
+				evidence.Artifact == requirement.Artifact &&
+				evidence.BinarySHA256 == requirement.BinarySHA256 &&
+				evidence.BuildCommit == requirement.BuildCommit {
+				matchesCurrent = true
+				break
+			}
+		}
+		if !matchesCurrent {
+			t.Fatalf("OpenWrt route-GSO family %s cannot be a production default until it has current 3600s passing OpenWrt evidence: row=%+v requirement=%+v passing=%+v", row.GateFamily, row, requirement, passingEvidence[row.GateFamily])
+		}
+	}
+}
+
 func TestOpenWrtSecureExperimentalTCPKernelFailClosedRowsInheritRouteTCPGate(t *testing.T) {
 	rows := loadProductionTransportEvidence(t)
 	routeTCPFailures := map[string]bool{}
