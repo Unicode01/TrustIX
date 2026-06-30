@@ -68,6 +68,8 @@ jobs:
             --require-current \
             --require-artifact-reference \
             --require-current-build-ancestor \
+            --require-current-gate-tools \
+            --require-current-runtime-tree \
             --fail-on-missing
 
       - name: Security Smoke

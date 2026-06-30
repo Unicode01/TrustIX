@@ -96,6 +96,17 @@ CURRENT_IDENTITY_FIELDS = [
     "build_built_at",
     "build_go_version",
 ]
+CURRENT_RUNTIME_TREE_PATHS = [
+    "cmd",
+    "internal",
+    "kernel",
+    "configs",
+    "go.mod",
+    "go.sum",
+    "scripts/build-embedded-bpf.sh",
+    "scripts/build-release-linux.sh",
+    "scripts/trustix-build.sh",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -152,6 +163,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "require current evidence production_gate_sha256/verifier_sha256 "
             "to match the current repository production gate and verifier scripts"
+        ),
+    )
+    parser.add_argument(
+        "--require-current-runtime-tree",
+        action="store_true",
+        help=(
+            "require current evidence build_commit..HEAD to have no changes "
+            "under TrustIX runtime/dataplane/build input paths"
         ),
     )
     parser.add_argument(
@@ -334,6 +353,7 @@ def validate_current_requirement_identity(
     require_artifact_reference: bool,
     require_build_ancestor: bool,
     require_current_gate_tools: bool,
+    require_current_runtime_tree: bool,
 ) -> None:
     for row in rows:
         errors = current_requirement_identity_errors(row)
@@ -341,6 +361,8 @@ def validate_current_requirement_identity(
             errors.extend(artifact_reference_errors(row["artifact"]))
         if require_build_ancestor:
             errors.extend(build_commit_ancestor_errors(row["build_commit"]))
+        if require_current_runtime_tree:
+            errors.extend(current_runtime_tree_errors(row["build_commit"]))
         if require_current_gate_tools:
             errors.extend(current_gate_tool_identity_errors(row))
         if errors:
@@ -513,6 +535,33 @@ def build_commit_ancestor_errors(build_commit: str) -> list[str]:
     return []
 
 
+def current_runtime_tree_errors(build_commit: str) -> list[str]:
+    value = build_commit.strip()
+    if not value or value == LEGACY_GATE_SCHEMA:
+        return []
+    resolved = run_git(["rev-parse", "--verify", f"{value}^{{commit}}"])
+    if resolved.returncode != 0:
+        detail = (resolved.stderr or resolved.stdout).strip()
+        suffix = f": {detail}" if detail else ""
+        return [f"build_commit={value!r} must resolve before runtime tree audit{suffix}"]
+    resolved_commit = resolved.stdout.strip()
+    diff = run_git(["diff", "--name-only", f"{resolved_commit}..HEAD", "--", *CURRENT_RUNTIME_TREE_PATHS])
+    if diff.returncode != 0:
+        detail = (diff.stderr or diff.stdout).strip()
+        suffix = f": {detail}" if detail else ""
+        return [f"build_commit={value!r} runtime tree diff failed{suffix}"]
+    changed = [line for line in diff.stdout.splitlines() if line.strip()]
+    if not changed:
+        return []
+    shown = ", ".join(changed[:12])
+    if len(changed) > 12:
+        shown += f", ... ({len(changed)} files total)"
+    return [
+        "current evidence build_commit does not cover runtime/dataplane tree changes "
+        f"since {value!r}: {shown}"
+    ]
+
+
 def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> dict[str, dict[str, str]]:
     rows = read_tsv(
         current_requirements_path(args, defaults_path),
@@ -526,6 +575,7 @@ def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> 
         require_artifact_reference=args.require_artifact_reference,
         require_build_ancestor=args.require_current_build_ancestor,
         require_current_gate_tools=args.require_current_gate_tools,
+        require_current_runtime_tree=args.require_current_runtime_tree,
     )
     requirements: dict[str, dict[str, str]] = {}
     for row in rows:
