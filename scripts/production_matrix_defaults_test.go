@@ -311,19 +311,10 @@ func sha256File(t *testing.T, path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func latestRuntimeTreeParentCommit(t *testing.T) string {
+func latestDatapathRuntimeParentCommit(t *testing.T) string {
 	t.Helper()
 	paths := []string{
-		"cmd",
-		"internal",
-		"kernel",
-		"configs",
-		"go.mod",
-		"go.sum",
-		"scripts/build-embedded-bpf.sh",
-		"scripts/build-release-linux.sh",
-		"scripts/trustix-build.sh",
-		":(exclude)*_test.go",
+		"internal/daemon/datapath.go",
 	}
 	args := append([]string{"-C", "..", "log", "--format=%H", "-n", "1", "--"}, paths...)
 	output, err := exec.Command("git", args...).CombinedOutput()
@@ -332,11 +323,11 @@ func latestRuntimeTreeParentCommit(t *testing.T) string {
 	}
 	commit := strings.TrimSpace(string(output))
 	if commit == "" {
-		t.Skip("no runtime tree commit found")
+		t.Skip("no datapath runtime commit found")
 	}
 	parentOutput, err := exec.Command("git", "-C", "..", "rev-parse", commit+"^").CombinedOutput()
 	if err != nil {
-		t.Skipf("latest runtime tree commit %s has no parent: %v\n%s", commit, err, parentOutput)
+		t.Skipf("latest datapath runtime commit %s has no parent: %v\n%s", commit, err, parentOutput)
 	}
 	return strings.TrimSpace(string(parentOutput))
 }
@@ -3096,7 +3087,7 @@ func TestProductionTransportAuditScriptRequireCurrentRejectsUnknownBuildCommit(t
 
 func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 	python := requirePython3(t)
-	staleRuntimeParent := latestRuntimeTreeParentCommit(t)
+	staleRuntimeParent := latestDatapathRuntimeParentCommit(t)
 	workdir := t.TempDir()
 	defaults := filepath.Join(workdir, "defaults.tsv")
 	evidence := filepath.Join(workdir, "evidence.tsv")
@@ -3144,6 +3135,46 @@ func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("audit failure missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestProductionTransportAuditScriptRuntimePathRelevance(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+cases = [
+    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/ix_provision_resource.go", False),
+    ({"gate_family": "exp_tcp_full_kmod"}, r"internal\daemon\ix_provision_resource.go", False),
+    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/datapath.go", True),
+    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/kernel_modules.go", True),
+    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/transports_status.go", True),
+    ({"gate_family": "exp_tcp_full_kmod"}, "internal/transport/experimentaltcp/runtime.go", True),
+    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/kernel_modules_test.go", False),
+    ({"gate_family": "userspace"}, "internal/daemon/datapath.go", False),
+    ({"gate_family": "userspace"}, "internal/config/config.go", True),
+]
+for row, path, want in cases:
+    got = module.current_runtime_path_relevant(row, path)
+    if got != want:
+        print(f"{path}: got {got}, want {want}", file=sys.stderr)
+        sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("runtime path relevance filter failed: %v\n%s", err, output)
 	}
 }
 

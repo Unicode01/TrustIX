@@ -112,6 +112,10 @@ EXPERIMENTAL_TCP_FULL_KMOD_RUNTIME_FAMILIES = {
     "dd_exp_tcp_full_kmod",
     "owdeb_exp_tcp_full_kmod",
 }
+CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS = {
+    # Provision output changes do not alter already-soaked datapath/runtime behavior.
+    "internal/daemon/ix_provision_resource.go",
+}
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     # This manifest-v1 gate predates the exp_tcp_full_kmod family. The existing
     # families below kept equivalent verifier semantics when the dedicated
@@ -580,6 +584,8 @@ def build_commit_ancestor_errors(build_commit: str) -> list[str]:
 def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
     normalized = path.replace("\\", "/")
     if normalized.endswith("_test.go"):
+        return False
+    if normalized in CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS:
         return False
     gate_family = row["gate_family"]
     if normalized.startswith("internal/transport/experimentaltcp/"):
