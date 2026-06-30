@@ -351,6 +351,7 @@ validate_case() {
   fi
   case "$case_name" in
     dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) ;;
+    experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod) ;;
     dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) ;;
     secure-exp-tcp-kernel|secure_exp_tcp_kernel|experimental-tcp-secure-kernel|experimental_tcp_secure_kernel|secure-experimental-tcp-kernel|secure_experimental_tcp_kernel) ;;
     dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) ;;
@@ -370,6 +371,7 @@ case_transport() {
   fi
   case "$case_name" in
     dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'udp\n' ;;
+    experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod) printf 'experimental_tcp\n' ;;
     *) printf 'experimental_tcp\n' ;;
   esac
 }
@@ -380,7 +382,7 @@ case_fast_path() {
     return
   fi
   case "$case_name" in
-    dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) printf 'full_kmod\n' ;;
+    dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod) printf 'full_kmod\n' ;;
     dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'secure_kudp\n' ;;
     secure-exp-tcp-kernel|secure_exp_tcp_kernel|experimental-tcp-secure-kernel|experimental_tcp_secure_kernel|secure-experimental-tcp-kernel|secure_experimental_tcp_kernel) printf 'secure_exp_tcp_kernel\n' ;;
     dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) printf 'route_gso\n' ;;

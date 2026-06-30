@@ -98,6 +98,8 @@ runner_case_name() {
   case "$gate_family" in
     full_kmod|dd_full_kmod) printf 'dd-fullkmod\n'; return ;;
     owdeb_full_kmod) printf 'owdeb-fullkmod\n'; return ;;
+    exp_tcp_full_kmod|dd_exp_tcp_full_kmod) printf 'experimental-tcp-full-kmod\n'; return ;;
+    owdeb_exp_tcp_full_kmod) printf 'owdeb-experimental-tcp-full-kmod\n'; return ;;
     secure_kudp|dd_secure_kudp) printf 'secure-kudp\n'; return ;;
     owdeb_secure_kudp) printf 'owdeb-secure-kudp\n'; return ;;
     secure_exp_tcp_kernel|dd_secure_exp_tcp_kernel|owdeb_secure_exp_tcp_kernel) printf 'secure-exp-tcp-kernel\n'; return ;;
@@ -114,7 +116,7 @@ runner_case_name() {
 
 gate_family_class() {
   case "$1" in
-    full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\n' ;;
+    full_kmod|dd_full_kmod|owdeb_full_kmod|exp_tcp_full_kmod|dd_exp_tcp_full_kmod|owdeb_exp_tcp_full_kmod) printf 'full_kmod\n' ;;
     secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\n' ;;
     secure_exp_tcp_kernel|dd_secure_exp_tcp_kernel|owdeb_secure_exp_tcp_kernel) printf 'secure_exp_tcp_kernel\n' ;;
     route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\n' ;;
@@ -158,7 +160,14 @@ validate_gate_family_semantics() {
       require_case_value crypto_placement "$placement" userspace "$gate_family"
       ;;
     full_kmod)
-      require_case_value transport "$transport" udp "$gate_family"
+      case "$gate_family" in
+        exp_tcp_full_kmod|dd_exp_tcp_full_kmod|owdeb_exp_tcp_full_kmod)
+          require_case_value transport "$transport" experimental_tcp "$gate_family"
+          ;;
+        *)
+          require_case_value transport "$transport" udp "$gate_family"
+          ;;
+      esac
       require_case_value encryption "$encryption" plaintext "$gate_family"
       require_case_value datapath "$datapath" kernel_module "$gate_family"
       require_case_value crypto_placement "$placement" userspace "$gate_family"
@@ -262,7 +271,7 @@ validate_case_values() {
     *) die "unsupported validation scope in matrix case: ${validation_scope}" ;;
   esac
   case "$gate_family" in
-    userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|secure_exp_tcp_kernel|dd_secure_exp_tcp_kernel|owdeb_secure_exp_tcp_kernel|route_gso|dd_route_gso|owdeb_route_gso|custom) ;;
+    userspace|userspace_tc|tc_direct|full_kmod|dd_full_kmod|owdeb_full_kmod|exp_tcp_full_kmod|dd_exp_tcp_full_kmod|owdeb_exp_tcp_full_kmod|secure_kudp|dd_secure_kudp|owdeb_secure_kudp|secure_exp_tcp_kernel|dd_secure_exp_tcp_kernel|owdeb_secure_exp_tcp_kernel|route_gso|dd_route_gso|owdeb_route_gso|custom) ;;
     *) die "unsupported gate family in matrix case: ${gate_family}" ;;
   esac
   validate_gate_family_semantics "$transport" "$encryption" "$datapath" "$placement" "$gate_family"

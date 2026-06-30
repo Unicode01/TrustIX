@@ -189,7 +189,8 @@ func productionEvidenceKey(row productionTransportEvidence) string {
 
 func productionGateFamilyClass(gateFamily string) string {
 	switch gateFamily {
-	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod":
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
+		"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
 		return "full_kmod"
 	case "secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp":
 		return "secure_kudp"
@@ -235,7 +236,12 @@ func assertProductionGateFamilySemantics(t *testing.T, label, transport, encrypt
 		require("datapath", datapath, "tc_xdp")
 		require("crypto_placement", placement, "userspace")
 	case "full_kmod":
-		require("transport", transport, "udp")
+		switch gateFamily {
+		case "exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
+			require("transport", transport, "experimental_tcp")
+		default:
+			require("transport", transport, "udp")
+		}
 		require("encryption", encryption, "plaintext")
 		require("datapath", datapath, "kernel_module")
 		require("crypto_placement", placement, "userspace")
@@ -5285,6 +5291,8 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"matrix_case_name",
 		"full_kmod|dd_full_kmod) printf 'dd-fullkmod\\n'",
 		"owdeb_full_kmod) printf 'owdeb-fullkmod\\n'",
+		"exp_tcp_full_kmod|dd_exp_tcp_full_kmod) printf 'experimental-tcp-full-kmod\\n'",
+		"owdeb_exp_tcp_full_kmod) printf 'owdeb-experimental-tcp-full-kmod\\n'",
 		"secure_kudp|dd_secure_kudp) printf 'secure-kudp\\n'",
 		"owdeb_secure_kudp) printf 'owdeb-secure-kudp\\n'",
 		"route_gso|dd_route_gso) printf 'dd-routegso\\n'",
@@ -5302,7 +5310,7 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"append_case_token full_kmod_case_min_seconds",
 		"append_case_token secure_kudp_case_min_seconds",
 		"append_case_token route_gso_case_min_seconds",
-		"full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\\n'",
+		"full_kmod|dd_full_kmod|owdeb_full_kmod|exp_tcp_full_kmod|dd_exp_tcp_full_kmod|owdeb_exp_tcp_full_kmod) printf 'full_kmod\\n'",
 		"secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\\n'",
 		"route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\\n'",
 		"TRUSTIX_CROSS_HOST_CASE=\"$runner_case\"",
@@ -5504,6 +5512,11 @@ func TestCrossHostTransportMatrixRejectsGateFamilySemanticMismatch(t *testing.T)
 			name: "full_kmod_wrong_crypto",
 			row:  "udp\tsecure\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\t3\t3600\tfull-kmod production gate is plaintext-only",
 			want: "gate_family=full_kmod requires encryption=plaintext; got encryption=secure",
+		},
+		{
+			name: "exp_tcp_full_kmod_wrong_transport",
+			row:  "udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\t3\t3600\texperimental TCP full-kmod must not reuse UDP full-kmod gate",
+			want: "gate_family=exp_tcp_full_kmod requires transport=experimental_tcp; got transport=udp",
 		},
 	}
 
@@ -5763,6 +5776,10 @@ func productionDefaultRunnerCase(row productionTransportDefault) string {
 		return "dd-fullkmod"
 	case "owdeb_full_kmod":
 		return "owdeb-fullkmod"
+	case "exp_tcp_full_kmod", "dd_exp_tcp_full_kmod":
+		return "experimental-tcp-full-kmod"
+	case "owdeb_exp_tcp_full_kmod":
+		return "owdeb-experimental-tcp-full-kmod"
 	case "secure_kudp", "dd_secure_kudp":
 		return "secure-kudp"
 	case "owdeb_secure_kudp":
@@ -5799,6 +5816,7 @@ func productionDefaultNeedsKernelTransport(row productionTransportDefault) bool 
 	}
 	switch row.GateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
+		"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod",
 		"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
 		"secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel",
 		"route_gso", "dd_route_gso", "owdeb_route_gso",
@@ -5811,7 +5829,8 @@ func productionDefaultNeedsKernelTransport(row productionTransportDefault) bool 
 
 func productionDefaultCapabilityProfile(row productionTransportDefault) string {
 	switch row.GateFamily {
-	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod":
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
+		"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
 		return "full_plaintext"
 	case "userspace", "userspace_tc", "tc_direct":
 		return "disabled"
@@ -5823,7 +5842,8 @@ func productionDefaultCapabilityProfile(row productionTransportDefault) string {
 func productionDefaultModuleSnippets(row productionTransportDefault) []string {
 	base := []string{"capability_profile: " + productionDefaultCapabilityProfile(row)}
 	switch row.GateFamily {
-	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod":
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
+		"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
 		return append(base,
 			"trustix_crypto:\n    mode: disabled",
 			"trustix_datapath:\n    mode: required",
@@ -6089,6 +6109,73 @@ func TestCrossHostTransportMatrixCanRepresentOpenWrtRouteGSOWhenExplicitlyValida
 	}
 }
 
+func TestCrossHostTransportMatrixCanRepresentExperimentalTCPFullKmodWhenExplicitlyValidated(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	summary := filepath.Join(workdir, "summary.jsonl")
+	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\t3\t900\texplicit experimental TCP full-kmod validation input",
+		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\towdeb_exp_tcp_full_kmod\t3\t900\texplicit OpenWrt-Debian experimental TCP full-kmod validation input",
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+defaults,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY="+summary,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run explicit experimental TCP full-kmod matrix failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read dry-run summary: %v", err)
+	}
+	got := map[string]crossHostTransportMatrixDryRunRow{}
+	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var row crossHostTransportMatrixDryRunRow
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("decode summary row %q: %v", line, err)
+		}
+		got[row.GateFamily] = row
+	}
+	tests := map[string]string{
+		"exp_tcp_full_kmod":       "experimental-tcp-full-kmod",
+		"owdeb_exp_tcp_full_kmod": "owdeb-experimental-tcp-full-kmod",
+	}
+	for family, runner := range tests {
+		row, ok := got[family]
+		if !ok {
+			t.Fatalf("summary missing %s:\n%s", family, payload)
+		}
+		if row.Transport != "experimental_tcp" ||
+			row.RunnerCase != runner ||
+			row.Datapath != "kernel_module" ||
+			row.CryptoPlacement != "userspace" {
+			t.Fatalf("unexpected %s dry-run row: %+v\n%s", family, row, payload)
+		}
+	}
+}
+
 func TestProductionDefaultsDoNotPromoteOpenWrtRouteGSOWithoutRuntimeEvidence(t *testing.T) {
 	rows := loadProductionTransportDefaults(t)
 	for _, row := range rows {
@@ -6208,6 +6295,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"ssh -n \"${ssh_opts[@]}\" \"$dest\" \"bash -c $(remote_quote \"$script\")\"",
 		"iperf_artifact_suffix",
 		"dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod",
+		"experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod",
 		"dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel",
 		"dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso",
 		"ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct",
