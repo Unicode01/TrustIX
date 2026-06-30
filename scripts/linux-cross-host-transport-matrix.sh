@@ -30,6 +30,8 @@ evidence_kernel_matrix="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_KERNEL_MA
 evidence_artifact="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_ARTIFACT:-}"
 evidence_note_template="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_NOTE_TEMPLATE:-}"
 evidence_include_fail="${TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_INCLUDE_FAIL:-0}"
+runner_sha256=""
+transport_matrix_sha256=""
 if [[ -z "$evidence_note_template" ]]; then
   evidence_note_template='{transport} {encryption} {gate_family} production gate evidence'
 fi
@@ -48,6 +50,17 @@ truthy() {
     1|true|yes|on|enabled) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+file_sha256() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  else
+    die "missing sha256sum or shasum for tool identity: ${path}"
+  fi
 }
 
 validate_nonnegative_decimal() {
@@ -397,8 +410,8 @@ run_verify() {
 
 record_result() {
   local status="$1" name="$2" runner_case="$3" transport="$4" encryption="$5" profile="$6" datapath="$7" placement="$8" validation_scope="$9" gate_family="${10}" min_gbps="${11}" min_seconds="${12}" dir="${13}" rc="${14}"
-  printf '{"status":"%s","case":"%s","runner_case":"%s","transport":"%s","encryption":"%s","profile":"%s","datapath":"%s","crypto_placement":"%s","validation_scope":"%s","gate_family":"%s","min_gbps":%s,"min_seconds":%s,"exit_code":%s,"workdir":"%s"}\n' \
-    "$status" "$name" "$runner_case" "$transport" "$encryption" "$profile" "$datapath" "$placement" "$validation_scope" "$gate_family" "$min_gbps" "$min_seconds" "$rc" "$dir" >>"$summary_path"
+  printf '{"status":"%s","case":"%s","runner_case":"%s","transport":"%s","encryption":"%s","profile":"%s","datapath":"%s","crypto_placement":"%s","validation_scope":"%s","gate_family":"%s","min_gbps":%s,"min_seconds":%s,"exit_code":%s,"workdir":"%s","runner_sha256":"%s","transport_matrix_sha256":"%s"}\n' \
+    "$status" "$name" "$runner_case" "$transport" "$encryption" "$profile" "$datapath" "$placement" "$validation_scope" "$gate_family" "$min_gbps" "$min_seconds" "$rc" "$dir" "$runner_sha256" "$transport_matrix_sha256" >>"$summary_path"
 }
 
 run_case() {
@@ -571,6 +584,8 @@ main() {
   [[ -f "$runner" ]] || die "runner not found: ${runner}"
   [[ -f "$verifier" ]] || die "verifier not found: ${verifier}"
   [[ -f "$production_gate" ]] || die "production gate not found: ${production_gate}"
+  runner_sha256="$(file_sha256 "$runner")"
+  transport_matrix_sha256="$(file_sha256 "${BASH_SOURCE[0]}")"
   case "$scope" in all|cross_host|selected|compat|baseline) ;; *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE must be all, cross_host, selected, compat, or baseline" ;; esac
   case "$keep_remote" in 0|1|true|false|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_KEEP_REMOTE must be truthy or falsey" ;; esac
   case "$verify" in 0|1|true|false|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY must be truthy or falsey" ;; esac

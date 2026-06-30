@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -38,6 +39,9 @@ COLUMNS = [
     "build_commit",
     "build_built_at",
     "build_go_version",
+    "runner_sha256",
+    "transport_matrix_sha256",
+    "evidence_generator_sha256",
 ]
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -112,6 +116,18 @@ def require_sha256(value: Any, label: str) -> str:
     if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         raise SystemExit(f"{label} must be a 64-character lowercase SHA256")
     return value
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def matrix_sha256_field(row: dict[str, Any], key: str, case: str) -> str:
+    return require_sha256(row.get(key), f"matrix summary case {case!r} {key}")
 
 
 def load_manifest(gate_summary_dir: Path) -> dict[str, Any]:
@@ -1370,6 +1386,11 @@ def evidence_row(
         "gate_family",
     ]})
     build = build_identity_for_pass(gate_row, result)
+    case = str(matrix_row.get("case") or gate_row.get("case") or "")
+    runner_sha256 = matrix_sha256_field(matrix_row, "runner_sha256", case)
+    transport_matrix_sha256 = matrix_sha256_field(
+        matrix_row, "transport_matrix_sha256", case
+    )
     return [
         str(matrix_row.get("gate_family") or ""),
         str(matrix_row.get("transport") or ""),
@@ -1393,6 +1414,9 @@ def evidence_row(
         build["commit"],
         build["built_at"],
         build["go_version"],
+        runner_sha256,
+        transport_matrix_sha256,
+        file_sha256(Path(__file__)),
     ]
 
 

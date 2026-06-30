@@ -45,28 +45,31 @@ type productionTransportDefault struct {
 }
 
 type productionTransportEvidence struct {
-	GateFamily           string
-	Transport            string
-	Encryption           string
-	Profile              string
-	Datapath             string
-	CryptoPlacement      string
-	ValidationScope      string
-	OSMatrix             string
-	KernelMatrix         string
-	Result               string
-	MinGbps              string
-	MinSeconds           string
-	GateManifestSchema   string
-	ProductionGateSHA256 string
-	VerifierSHA256       string
-	Artifact             string
-	Note                 string
-	BinarySHA256         string
-	BuildVersion         string
-	BuildCommit          string
-	BuildBuiltAt         string
-	BuildGoVersion       string
+	GateFamily              string
+	Transport               string
+	Encryption              string
+	Profile                 string
+	Datapath                string
+	CryptoPlacement         string
+	ValidationScope         string
+	OSMatrix                string
+	KernelMatrix            string
+	Result                  string
+	MinGbps                 string
+	MinSeconds              string
+	GateManifestSchema      string
+	ProductionGateSHA256    string
+	VerifierSHA256          string
+	Artifact                string
+	Note                    string
+	BinarySHA256            string
+	BuildVersion            string
+	BuildCommit             string
+	BuildBuiltAt            string
+	BuildGoVersion          string
+	RunnerSHA256            string
+	TransportMatrixSHA256   string
+	EvidenceGeneratorSHA256 string
 }
 
 const (
@@ -135,29 +138,40 @@ func loadProductionTransportEvidence(t *testing.T) []productionTransportEvidence
 			buildBuiltAt = fields[20]
 			buildGoVersion = fields[21]
 		}
+		runnerSHA256 := ""
+		transportMatrixSHA256 := ""
+		evidenceGeneratorSHA256 := ""
+		if len(fields) >= 25 {
+			runnerSHA256 = fields[22]
+			transportMatrixSHA256 = fields[23]
+			evidenceGeneratorSHA256 = fields[24]
+		}
 		rows = append(rows, productionTransportEvidence{
-			GateFamily:           fields[0],
-			Transport:            fields[1],
-			Encryption:           fields[2],
-			Profile:              fields[3],
-			Datapath:             fields[4],
-			CryptoPlacement:      fields[5],
-			ValidationScope:      fields[6],
-			OSMatrix:             fields[7],
-			KernelMatrix:         fields[8],
-			Result:               fields[9],
-			MinGbps:              fields[10],
-			MinSeconds:           fields[11],
-			GateManifestSchema:   fields[12],
-			ProductionGateSHA256: fields[13],
-			VerifierSHA256:       fields[14],
-			Artifact:             fields[15],
-			Note:                 note,
-			BinarySHA256:         binarySHA256,
-			BuildVersion:         buildVersion,
-			BuildCommit:          buildCommit,
-			BuildBuiltAt:         buildBuiltAt,
-			BuildGoVersion:       buildGoVersion,
+			GateFamily:              fields[0],
+			Transport:               fields[1],
+			Encryption:              fields[2],
+			Profile:                 fields[3],
+			Datapath:                fields[4],
+			CryptoPlacement:         fields[5],
+			ValidationScope:         fields[6],
+			OSMatrix:                fields[7],
+			KernelMatrix:            fields[8],
+			Result:                  fields[9],
+			MinGbps:                 fields[10],
+			MinSeconds:              fields[11],
+			GateManifestSchema:      fields[12],
+			ProductionGateSHA256:    fields[13],
+			VerifierSHA256:          fields[14],
+			Artifact:                fields[15],
+			Note:                    note,
+			BinarySHA256:            binarySHA256,
+			BuildVersion:            buildVersion,
+			BuildCommit:             buildCommit,
+			BuildBuiltAt:            buildBuiltAt,
+			BuildGoVersion:          buildGoVersion,
+			RunnerSHA256:            runnerSHA256,
+			TransportMatrixSHA256:   transportMatrixSHA256,
+			EvidenceGeneratorSHA256: evidenceGeneratorSHA256,
 		})
 	}
 	return rows
@@ -311,6 +325,16 @@ func sha256File(t *testing.T, path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func withMatrixToolchain(row map[string]any) map[string]any {
+	if _, ok := row["runner_sha256"]; !ok {
+		row["runner_sha256"] = strings.Repeat("d", 64)
+	}
+	if _, ok := row["transport_matrix_sha256"]; !ok {
+		row["transport_matrix_sha256"] = strings.Repeat("e", 64)
+	}
+	return row
+}
+
 func latestDatapathRuntimeParentCommit(t *testing.T) string {
 	t.Helper()
 	paths := []string{
@@ -357,6 +381,24 @@ func validateProductionEvidenceManifestIdentity(t *testing.T, evidence productio
 	}
 	if !isSHA256Hex(evidence.VerifierSHA256) {
 		t.Fatalf("production evidence has invalid verifier SHA256 %q in %+v", evidence.VerifierSHA256, evidence)
+	}
+	toolchainFields := []string{
+		evidence.RunnerSHA256,
+		evidence.TransportMatrixSHA256,
+		evidence.EvidenceGeneratorSHA256,
+	}
+	toolchainPresent := false
+	for _, value := range toolchainFields {
+		if value != "" {
+			toolchainPresent = true
+		}
+	}
+	if toolchainPresent {
+		for _, value := range toolchainFields {
+			if !isSHA256Hex(value) {
+				t.Fatalf("production evidence has incomplete or invalid toolchain SHA256 fields in %+v", evidence)
+			}
+		}
 	}
 }
 
@@ -777,6 +819,9 @@ func TestProductionEvidenceRequiresGateManifestIdentity(t *testing.T) {
 		"verifier_sha256",
 		"binary_sha256",
 		"build_commit",
+		"runner_sha256",
+		"transport_matrix_sha256",
+		"evidence_generator_sha256",
 		productionGateManifestSchema,
 		legacyProductionGateManifestValue,
 	} {
@@ -798,22 +843,24 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		t.Fatalf("create gate summary dir: %v", err)
 	}
 	matrixRow := map[string]any{
-		"status":           "pass",
-		"case":             "udp-secure-stable-userspace-userspace",
-		"runner_case":      "userspace-udp-secure",
-		"transport":        "udp",
-		"encryption":       "secure",
-		"profile":          "stable",
-		"datapath":         "userspace",
-		"crypto_placement": "userspace",
-		"validation_scope": "cross_host",
-		"gate_family":      "userspace",
-		"min_gbps":         1.5,
-		"min_seconds":      3600,
-		"exit_code":        0,
-		"workdir":          filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
+		"status":                  "pass",
+		"case":                    "udp-secure-stable-userspace-userspace",
+		"runner_case":             "userspace-udp-secure",
+		"transport":               "udp",
+		"encryption":              "secure",
+		"profile":                 "stable",
+		"datapath":                "userspace",
+		"crypto_placement":        "userspace",
+		"validation_scope":        "cross_host",
+		"gate_family":             "userspace",
+		"min_gbps":                1.5,
+		"min_seconds":             3600,
+		"exit_code":               0,
+		"workdir":                 filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
+		"runner_sha256":           strings.Repeat("d", 64),
+		"transport_matrix_sha256": strings.Repeat("e", 64),
 	}
-	matrixPayload, err := json.Marshal(matrixRow)
+	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal matrix row: %v", err)
 	}
@@ -923,8 +970,8 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		t.Fatalf("expected one evidence row, got %d:\n%s", len(lines), output)
 	}
 	fields := strings.Split(lines[0], "\t")
-	if len(fields) != 22 {
-		t.Fatalf("expected 22 evidence fields, got %d:\n%s", len(fields), output)
+	if len(fields) != 25 {
+		t.Fatalf("expected 25 evidence fields, got %d:\n%s", len(fields), output)
 	}
 	wantFields := map[int]string{
 		0:  "userspace",
@@ -949,6 +996,9 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		19: "0123456789ab",
 		20: "2026-06-25T00:00:00Z",
 		21: "go1.25.0",
+		22: strings.Repeat("d", 64),
+		23: strings.Repeat("e", 64),
+		24: sha256File(t, "production-evidence-from-gate-summary.py"),
 	}
 	for idx, want := range wantFields {
 		if fields[idx] != want {
@@ -1001,8 +1051,8 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		t.Fatalf("production evidence generator rejected receiver-only server summary: %v\n%s", err, receiverOnlyOutput)
 	}
 	receiverOnlyFields := strings.Split(strings.TrimSpace(string(receiverOnlyOutput)), "\t")
-	if len(receiverOnlyFields) != 22 {
-		t.Fatalf("expected 22 receiver-only evidence fields, got %d:\n%s", len(receiverOnlyFields), receiverOnlyOutput)
+	if len(receiverOnlyFields) != 25 {
+		t.Fatalf("expected 25 receiver-only evidence fields, got %d:\n%s", len(receiverOnlyFields), receiverOnlyOutput)
 	}
 	if receiverOnlyFields[10] != "1.654321" {
 		t.Fatalf("receiver-only min_gbps = %q, want receiver metric\n%s", receiverOnlyFields[10], receiverOnlyOutput)
@@ -1195,7 +1245,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		t.Fatalf("write restored manifest path: %v", err)
 	}
 	matrixRow["workdir"] = filepath.Join(workdir, "wrong-matrix-dir")
-	matrixPayload, err = json.Marshal(matrixRow)
+	matrixPayload, err = json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal matrix row with mismatched workdir: %v", err)
 	}
@@ -1217,7 +1267,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		t.Fatalf("generator did not explain matrix workdir mismatch:\n%s", matrixPathMismatchOutput)
 	}
 	matrixRow["workdir"] = filepath.Join(workdir, "udp-secure-stable-userspace-userspace")
-	matrixPayload, err = json.Marshal(matrixRow)
+	matrixPayload, err = json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal restored matrix row: %v", err)
 	}
@@ -1275,7 +1325,7 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 		"exit_code":        0,
 		"workdir":          filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
 	}
-	matrixPayload, err := json.Marshal(matrixRow)
+	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal matrix row: %v", err)
 	}
@@ -1517,7 +1567,7 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testi
 			if err := os.MkdirAll(gateSummaryDir, 0o755); err != nil {
 				t.Fatalf("create gate summary dir: %v", err)
 			}
-			matrixPayload, err := json.Marshal(tt.matrixRow)
+			matrixPayload, err := json.Marshal(withMatrixToolchain(tt.matrixRow))
 			if err != nil {
 				t.Fatalf("marshal matrix row: %v", err)
 			}
@@ -1711,7 +1761,7 @@ func TestProductionEvidenceFromGateSummaryRejectsShortPassSoak(t *testing.T) {
 		"min_seconds":      900,
 		"exit_code":        0,
 	}
-	matrixPayload, err := json.Marshal(matrixRow)
+	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal matrix row: %v", err)
 	}
@@ -1785,7 +1835,7 @@ func TestProductionEvidenceFromGateSummaryRejectsUnderMeasuredPassSoak(t *testin
 		"status": "pass",
 		"case":   "udp-secure-stable-userspace-userspace",
 	}
-	matrixPayload, err := json.Marshal(matrixRow)
+	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal matrix row: %v", err)
 	}
@@ -1866,7 +1916,7 @@ func TestProductionEvidenceFromGateSummaryRequiresRunTimingArtifacts(t *testing.
 		"status": "pass",
 		"case":   "udp-secure-stable-userspace-userspace",
 	}
-	matrixPayload, err := json.Marshal(matrixRow)
+	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal matrix row: %v", err)
 	}
@@ -1939,7 +1989,7 @@ func TestProductionEvidenceFromGateSummaryRequiresIperfCoverageArtifacts(t *test
 		"status": "pass",
 		"case":   "udp-secure-stable-userspace-userspace",
 	}
-	matrixPayload, err := json.Marshal(matrixRow)
+	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal matrix row: %v", err)
 	}
@@ -2023,7 +2073,7 @@ func TestProductionEvidenceFromGateSummaryRequiresRuntimeIdentityArtifacts(t *te
 		"status": "pass",
 		"case":   "udp-secure-stable-userspace-userspace",
 	}
-	matrixPayload, err := json.Marshal(matrixRow)
+	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal matrix row: %v", err)
 	}
@@ -2109,7 +2159,7 @@ func TestProductionEvidenceFromGateSummaryRequiresCrashStabilityArtifacts(t *tes
 		"status": "pass",
 		"case":   "udp-secure-stable-userspace-userspace",
 	}
-	matrixPayload, err := json.Marshal(matrixRow)
+	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal matrix row: %v", err)
 	}
@@ -3196,16 +3246,30 @@ func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
 	if err := os.WriteFile(evidence, []byte(evidencePayload), 0o644); err != nil {
 		t.Fatalf("write evidence: %v", err)
 	}
-	currentPayload := func(productionGateSHA, verifierSHA string) string {
+	currentHeader := "# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version\trunner_sha256\ttransport_matrix_sha256\tevidence_generator_sha256"
+	currentRowPrefix := func(productionGateSHA, verifierSHA string) string {
+		return "udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + productionGateSHA + "\t" + verifierSHA + "\tdocs/trustix-performance-log.md#current-tooling\tcurrent gate tooling\t" + strings.Repeat("c", 64) + "\ttrustix-current\tcurrent-commit\t2026-06-25T00:00:00Z\tgo1.25.0"
+	}
+	currentPayload := func(productionGateSHA, verifierSHA, runnerSHA, matrixSHA, generatorSHA string) string {
+		return strings.Join([]string{
+			currentHeader,
+			currentRowPrefix(productionGateSHA, verifierSHA) + "\t" + runnerSHA + "\t" + matrixSHA + "\t" + generatorSHA,
+			"",
+		}, "\n")
+	}
+	currentPayloadWithoutToolchain := func(productionGateSHA, verifierSHA string) string {
 		return strings.Join([]string{
 			"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version",
-			"udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\tfull_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + productionGateSHA + "\t" + verifierSHA + "\tdocs/trustix-performance-log.md#current-tooling\tcurrent gate tooling\t" + strings.Repeat("c", 64) + "\ttrustix-current\tcurrent-commit\t2026-06-25T00:00:00Z\tgo1.25.0",
+			currentRowPrefix(productionGateSHA, verifierSHA),
 			"",
 		}, "\n")
 	}
 	currentGateSHA := sha256File(t, "linux-cross-host-production-gate.sh")
 	currentVerifierSHA := sha256File(t, "linux-cross-host-soak-verify.py")
-	if err := os.WriteFile(current, []byte(currentPayload(currentGateSHA, currentVerifierSHA)), 0o644); err != nil {
+	currentRunnerSHA := sha256File(t, "linux-cross-host-soak-runner.sh")
+	currentMatrixSHA := sha256File(t, "linux-cross-host-transport-matrix.sh")
+	currentGeneratorSHA := sha256File(t, "production-evidence-from-gate-summary.py")
+	if err := os.WriteFile(current, []byte(currentPayload(currentGateSHA, currentVerifierSHA, currentRunnerSHA, currentMatrixSHA, currentGeneratorSHA)), 0o644); err != nil {
 		t.Fatalf("write current requirements: %v", err)
 	}
 	cmd := exec.Command(python, "production-transport-audit.py",
@@ -3221,7 +3285,27 @@ func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
 		t.Fatalf("audit rejected current gate tool hashes: %v\n%s", err, output)
 	}
 
-	if err := os.WriteFile(current, []byte(currentPayload(strings.Repeat("a", 64), strings.Repeat("b", 64))), 0o644); err != nil {
+	if err := os.WriteFile(current, []byte(currentPayloadWithoutToolchain(currentGateSHA, currentVerifierSHA)), 0o644); err != nil {
+		t.Fatalf("write missing-toolchain current requirements: %v", err)
+	}
+	missingToolchainCmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--current-requirements", slashPath(current),
+		"--scope", "cross_host",
+		"--require-current",
+		"--require-current-gate-tools",
+	)
+	missingToolchainCmd.Dir = "."
+	output, err := missingToolchainCmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted new current requirement without toolchain hashes:\n%s", output)
+	}
+	if !strings.Contains(string(output), "are required for new current evidence rows") {
+		t.Fatalf("missing-toolchain failure did not explain toolchain requirement:\n%s", output)
+	}
+
+	if err := os.WriteFile(current, []byte(currentPayload(strings.Repeat("a", 64), strings.Repeat("b", 64), currentRunnerSHA, currentMatrixSHA, currentGeneratorSHA)), 0o644); err != nil {
 		t.Fatalf("write stale current requirements: %v", err)
 	}
 	staleCmd := exec.Command(python, "production-transport-audit.py",
@@ -3233,7 +3317,7 @@ func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
 		"--require-current-gate-tools",
 	)
 	staleCmd.Dir = "."
-	output, err := staleCmd.CombinedOutput()
+	output, err = staleCmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("audit accepted stale gate tool hashes:\n%s", output)
 	}
@@ -3246,6 +3330,26 @@ func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("audit failure missing %q:\n%s", want, output)
 		}
+	}
+
+	if err := os.WriteFile(current, []byte(currentPayload(currentGateSHA, currentVerifierSHA, strings.Repeat("d", 64), currentMatrixSHA, currentGeneratorSHA)), 0o644); err != nil {
+		t.Fatalf("write stale runner current requirements: %v", err)
+	}
+	staleRunnerCmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--current-requirements", slashPath(current),
+		"--scope", "cross_host",
+		"--require-current",
+		"--require-current-gate-tools",
+	)
+	staleRunnerCmd.Dir = "."
+	output, err = staleRunnerCmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted stale runner hash:\n%s", output)
+	}
+	if !strings.Contains(string(output), "runner_sha256 must match current") {
+		t.Fatalf("stale runner failure missing runner hash diagnostic:\n%s", output)
 	}
 }
 
@@ -5393,8 +5497,8 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		t.Fatalf("read evidence output: %v", err)
 	}
 	fields := strings.Split(strings.TrimSpace(string(payload)), "\t")
-	if len(fields) != 22 {
-		t.Fatalf("expected 22 evidence fields, got %d:\n%s", len(fields), payload)
+	if len(fields) != 25 {
+		t.Fatalf("expected 25 evidence fields, got %d:\n%s", len(fields), payload)
 	}
 	wantFields := map[int]string{
 		0:  "userspace",
@@ -5419,6 +5523,9 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		19: "0123456789ab",
 		20: "2026-06-25T00:00:00Z",
 		21: "go1.25.0",
+		22: sha256File(t, runner),
+		23: sha256File(t, "linux-cross-host-transport-matrix.sh"),
+		24: sha256File(t, "production-evidence-from-gate-summary.py"),
 	}
 	for idx, want := range wantFields {
 		if fields[idx] != want {

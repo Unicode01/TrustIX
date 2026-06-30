@@ -52,6 +52,9 @@ EVIDENCE_COLUMNS = [
     "build_commit",
     "build_built_at",
     "build_go_version",
+    "runner_sha256",
+    "transport_matrix_sha256",
+    "evidence_generator_sha256",
 ]
 CURRENT_REQUIREMENT_COLUMNS = [
     "transport",
@@ -73,7 +76,11 @@ CURRENT_REQUIREMENT_COLUMNS = [
     "build_commit",
     "build_built_at",
     "build_go_version",
+    "runner_sha256",
+    "transport_matrix_sha256",
+    "evidence_generator_sha256",
 ]
+CURRENT_REQUIREMENT_MIN_FIELDS = 19
 KEY_FIELDS = [
     "transport",
     "encryption",
@@ -95,6 +102,14 @@ CURRENT_IDENTITY_FIELDS = [
     "build_commit",
     "build_built_at",
     "build_go_version",
+    "runner_sha256",
+    "transport_matrix_sha256",
+    "evidence_generator_sha256",
+]
+TOOLCHAIN_SHA256_FIELDS = [
+    "runner_sha256",
+    "transport_matrix_sha256",
+    "evidence_generator_sha256",
 ]
 CURRENT_RUNTIME_TREE_PATHS = [
     "cmd",
@@ -131,6 +146,33 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "secure_exp_tcp_kernel",
         "route_gso",
     },
+}
+CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
+    "udp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
+    "udp:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
+    "udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod|docs/trustix-performance-log.md#pve-debian13-b0d2fc6-full-kmod-2026-06-28",
+    "udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod|docs/trustix-performance-log.md#pve-openwrt24107-debian13-full-kmod-2026-06-28",
+    "tcp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
+    "tcp:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
+    "quic:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
+    "quic:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
+    "websocket:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
+    "websocket:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
+    "http_connect:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
+    "http_connect:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
+    "gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
+    "gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
+    "ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
+    "ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
+    "vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
+    "vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
+    "kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+    "kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+    "experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
+    "experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+    "experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
+    "experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod|docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
+    "experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_exp_tcp_full_kmod|docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-openwrt24107-debian13-exp-tcp-full-kmod-bbde20a-3600s-production-gate",
 }
 
 
@@ -187,7 +229,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "require current evidence production_gate_sha256/verifier_sha256 "
-            "to match the current repository production gate and verifier scripts"
+            "and generated evidence toolchain hashes to match current repository scripts"
         ),
     )
     parser.add_argument(
@@ -379,6 +421,10 @@ def current_requirement_identity_errors(row: dict[str, str]) -> list[str]:
         value = row[field]
         if not SHA256_RE.fullmatch(value):
             errors.append(f"{field} must be 64 lowercase hex; got {value!r}")
+    for field in TOOLCHAIN_SHA256_FIELDS:
+        value = row[field].strip()
+        if value and not SHA256_RE.fullmatch(value):
+            errors.append(f"{field} must be empty or 64 lowercase hex; got {value!r}")
     for field in ("build_version", "build_commit", "build_built_at", "build_go_version"):
         value = row[field].strip()
         if not value or value == LEGACY_GATE_SCHEMA:
@@ -425,6 +471,9 @@ def compact_evidence(row: dict[str, str], reasons: list[str] | None = None) -> d
         "build_commit": row["build_commit"],
         "build_built_at": row["build_built_at"],
         "build_go_version": row["build_go_version"],
+        "runner_sha256": row["runner_sha256"],
+        "transport_matrix_sha256": row["transport_matrix_sha256"],
+        "evidence_generator_sha256": row["evidence_generator_sha256"],
     }
     if reasons:
         out["reasons"] = reasons
@@ -444,6 +493,9 @@ def compact_current_requirement(row: dict[str, str]) -> dict[str, str]:
         "build_commit": row["build_commit"],
         "build_built_at": row["build_built_at"],
         "build_go_version": row["build_go_version"],
+        "runner_sha256": row["runner_sha256"],
+        "transport_matrix_sha256": row["transport_matrix_sha256"],
+        "evidence_generator_sha256": row["evidence_generator_sha256"],
     }
 
 
@@ -520,12 +572,22 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def current_toolchain_legacy_key(row: dict[str, str]) -> str:
+    return f"{row_key(row)}|{row['artifact']}"
+
+
 def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
     root = repo_root()
     gate_path = root / "scripts" / "linux-cross-host-production-gate.sh"
     verifier_path = root / "scripts" / "linux-cross-host-soak-verify.py"
+    runner_path = root / "scripts" / "linux-cross-host-soak-runner.sh"
+    matrix_path = root / "scripts" / "linux-cross-host-transport-matrix.sh"
+    evidence_generator_path = root / "scripts" / "production-evidence-from-gate-summary.py"
     want_gate_sha = file_sha256(gate_path)
     want_verifier_sha = file_sha256(verifier_path)
+    want_runner_sha = file_sha256(runner_path)
+    want_matrix_sha = file_sha256(matrix_path)
+    want_evidence_generator_sha = file_sha256(evidence_generator_path)
     gate_family = row["gate_family"]
     allowed_gate_shas = {want_gate_sha}
     for sha, families in GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY.items():
@@ -545,6 +607,35 @@ def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
             f"scripts/linux-cross-host-soak-verify.py sha256 {want_verifier_sha}; "
             f"got {row['verifier_sha256']!r}"
         )
+    toolchain_values = {field: row[field].strip() for field in TOOLCHAIN_SHA256_FIELDS}
+    if not any(toolchain_values.values()):
+        if current_toolchain_legacy_key(row) in CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS:
+            return errors
+        errors.append(
+            "runner_sha256/transport_matrix_sha256/evidence_generator_sha256 "
+            "are required for new current evidence rows"
+        )
+        return errors
+    expected_toolchain = {
+        "runner_sha256": (
+            want_runner_sha,
+            "scripts/linux-cross-host-soak-runner.sh",
+        ),
+        "transport_matrix_sha256": (
+            want_matrix_sha,
+            "scripts/linux-cross-host-transport-matrix.sh",
+        ),
+        "evidence_generator_sha256": (
+            want_evidence_generator_sha,
+            "scripts/production-evidence-from-gate-summary.py",
+        ),
+    }
+    for field, (want_sha, label) in expected_toolchain.items():
+        if toolchain_values[field] != want_sha:
+            errors.append(
+                f"{field} must match current {label} sha256 {want_sha}; "
+                f"got {row[field]!r}"
+            )
     return errors
 
 
@@ -631,7 +722,7 @@ def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> 
     rows = read_tsv(
         current_requirements_path(args, defaults_path),
         CURRENT_REQUIREMENT_COLUMNS,
-        len(CURRENT_REQUIREMENT_COLUMNS),
+        CURRENT_REQUIREMENT_MIN_FIELDS,
     )
     validate_gate_family_semantics(rows, "current evidence requirements")
     validate_current_requirement_identity(

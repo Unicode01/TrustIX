@@ -7,7 +7,10 @@ the gate manifest schema plus the SHA256 of the production gate script and
 verifier used for the run. Rows captured before
 `production-gate-manifest.json` existed are marked `legacy-pre-manifest`; new
 production evidence must copy the schema and hashes from that manifest instead
-of reusing the legacy marker. New passing production evidence must be generated
+of reusing the legacy marker. New generated production evidence also records
+the cross-host runner, transport matrix, and evidence generator SHA256 values;
+historical current rows that predate those columns are allowlisted by exact
+artifact and transport key in the audit script. New passing production evidence must be generated
 from production-gate summaries so `scripts/production-evidence-from-gate-summary.py`
 can verify the measured soak reached at least 3600 seconds, the run timing was
 `iperf_mode=forward` with `iperf_directions=both`, boot IDs stayed stable on at
