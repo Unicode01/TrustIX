@@ -20,6 +20,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/netdevice.h>
+#include <linux/notifier.h>
 #include <linux/overflow.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
@@ -733,6 +734,7 @@ static void trustix_route_tcp_xmit_worker_flush(void);
 static void trustix_route_tcp_gso_async_flush(void);
 static DECLARE_WORK(trustix_route_tcp_xmit_work,
 		    trustix_route_tcp_xmit_worker_fn);
+static bool trustix_datapath_helpers_netdev_notifier_registered;
 
 static unsigned long trustix_tixt_rx_stream_candidates;
 static unsigned long trustix_tixt_rx_stream_disabled;
@@ -14416,6 +14418,50 @@ static void trustix_route_tcp_gso_async_flush(void)
 	}
 }
 
+static void trustix_datapath_helpers_release_netdev_refs(struct net_device *dev)
+{
+	bool was_async_quiescing;
+	bool was_backlog_quiescing;
+
+	if (!dev)
+		return;
+
+	was_async_quiescing =
+		READ_ONCE(trustix_route_tcp_gso_async_quiescing);
+	was_backlog_quiescing =
+		READ_ONCE(trustix_tixt_rx_backlog_worker_quiescing);
+	WRITE_ONCE(trustix_route_tcp_gso_async_quiescing, true);
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_quiescing, true);
+	smp_mb();
+
+	trustix_route_tcp_gso_async_flush();
+	trustix_route_tcp_xmit_worker_flush();
+	trustix_tixt_rx_backlog_worker_flush();
+	trustix_tixt_rx_single_coalesce_drop_all();
+
+	smp_mb();
+	if (READ_ONCE(trustix_datapath_helpers_registered)) {
+		WRITE_ONCE(trustix_tixt_rx_backlog_worker_quiescing,
+			   was_backlog_quiescing);
+		WRITE_ONCE(trustix_route_tcp_gso_async_quiescing,
+			   was_async_quiescing);
+	}
+}
+
+static int trustix_datapath_helpers_netdev_event(struct notifier_block *nb,
+						unsigned long event, void *ptr)
+{
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
+
+	if (event == NETDEV_UNREGISTER)
+		trustix_datapath_helpers_release_netdev_refs(dev);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block trustix_datapath_helpers_netdev_notifier = {
+	.notifier_call = trustix_datapath_helpers_netdev_event,
+};
+
 __bpf_kfunc int
 trustix_kernel_skb_tixt_tx_segment_route_tcp_gso(
 				struct __sk_buff *ctx,
@@ -14885,9 +14931,25 @@ int trustix_datapath_helpers_register(void)
 		return -ENOMEM;
 	}
 
+	ret = register_netdevice_notifier(
+		&trustix_datapath_helpers_netdev_notifier);
+	if (ret) {
+		destroy_workqueue(trustix_route_tcp_gso_async_wq);
+		trustix_route_tcp_gso_async_wq = NULL;
+		kmem_cache_destroy(trustix_route_tcp_gso_async_cross_item_cache);
+		trustix_route_tcp_gso_async_cross_item_cache = NULL;
+		kmem_cache_destroy(trustix_route_tcp_gso_async_work_cache);
+		trustix_route_tcp_gso_async_work_cache = NULL;
+		return ret;
+	}
+	trustix_datapath_helpers_netdev_notifier_registered = true;
+
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS,
 					&trustix_datapath_helpers_tc_kfunc_set);
 	if (ret) {
+		unregister_netdevice_notifier(
+			&trustix_datapath_helpers_netdev_notifier);
+		trustix_datapath_helpers_netdev_notifier_registered = false;
 		destroy_workqueue(trustix_route_tcp_gso_async_wq);
 		trustix_route_tcp_gso_async_wq = NULL;
 		kmem_cache_destroy(trustix_route_tcp_gso_async_cross_item_cache);
@@ -14903,6 +14965,11 @@ int trustix_datapath_helpers_register(void)
 void trustix_datapath_helpers_unregister(void)
 {
 	WRITE_ONCE(trustix_datapath_helpers_registered, false);
+	if (trustix_datapath_helpers_netdev_notifier_registered) {
+		unregister_netdevice_notifier(
+			&trustix_datapath_helpers_netdev_notifier);
+		trustix_datapath_helpers_netdev_notifier_registered = false;
+	}
 	WRITE_ONCE(trustix_tixt_rx_single_coalesce_slots_ready, false);
 	WRITE_ONCE(trustix_tixt_rx_backlog_worker_quiescing, true);
 	WRITE_ONCE(trustix_route_tcp_gso_async_quiescing, true);

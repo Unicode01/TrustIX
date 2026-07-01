@@ -527,7 +527,12 @@ static int __init trustix_datapath_helpers_init(void)
 	if (ret)
 		return ret;
 	trustix_datapath_helpers_refresh_features();
-	return misc_register(&trustix_datapath_helpers_miscdev);
+	ret = misc_register(&trustix_datapath_helpers_miscdev);
+	if (ret) {
+		trustix_datapath_helpers_unregister();
+		return ret;
+	}
+	return 0;
 }
 
 static void __exit trustix_datapath_helpers_module_exit(void)

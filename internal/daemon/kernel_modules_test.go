@@ -111,6 +111,57 @@ func TestTrustIXDatapathReleasesHeldNetdevRefsOnUnregister(t *testing.T) {
 	}
 }
 
+func TestTrustIXDatapathHelpersFlushQueuedNetdevRefsOnUnregister(t *testing.T) {
+	kfuncsBytes, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_kfuncs.c"))
+	if err != nil {
+		t.Fatalf("read trustix_datapath_helpers kfunc source: %v", err)
+	}
+	kfuncs := string(kfuncsBytes)
+	releaseBody := daemonTestSourceFunctionBody(t, kfuncs, "trustix_datapath_helpers_release_netdev_refs")
+	for _, want := range []string{
+		"WRITE_ONCE(trustix_route_tcp_gso_async_quiescing, true);",
+		"WRITE_ONCE(trustix_tixt_rx_backlog_worker_quiescing, true);",
+		"trustix_route_tcp_gso_async_flush();",
+		"trustix_route_tcp_xmit_worker_flush();",
+		"trustix_tixt_rx_backlog_worker_flush();",
+		"trustix_tixt_rx_single_coalesce_drop_all();",
+	} {
+		if !strings.Contains(releaseBody, want) {
+			t.Fatalf("helper release netdev refs missing %q:\n%s", want, releaseBody)
+		}
+	}
+	eventBody := daemonTestSourceFunctionBody(t, kfuncs, "trustix_datapath_helpers_netdev_event")
+	if !strings.Contains(eventBody, "event == NETDEV_UNREGISTER") ||
+		!strings.Contains(eventBody, "trustix_datapath_helpers_release_netdev_refs(dev)") {
+		t.Fatalf("helper netdev notifier does not flush refs on unregister:\n%s", eventBody)
+	}
+	registerBody := daemonTestSourceFunctionBody(t, kfuncs, "trustix_datapath_helpers_register")
+	notifier := strings.Index(registerBody, "register_netdevice_notifier(")
+	btf := strings.Index(registerBody, "register_btf_kfunc_id_set(")
+	if notifier < 0 || btf < 0 || notifier > btf {
+		t.Fatalf("helper register must install netdev notifier before BTF kfunc registration:\n%s", registerBody)
+	}
+	if !strings.Contains(registerBody, "unregister_netdevice_notifier(") {
+		t.Fatalf("helper register failure path must unregister netdev notifier:\n%s", registerBody)
+	}
+	unregisterBody := daemonTestSourceFunctionBody(t, kfuncs, "trustix_datapath_helpers_unregister")
+	if !strings.Contains(unregisterBody, "WRITE_ONCE(trustix_datapath_helpers_registered, false);") ||
+		!strings.Contains(unregisterBody, "unregister_netdevice_notifier(") {
+		t.Fatalf("helper unregister must fail closed and unregister notifier:\n%s", unregisterBody)
+	}
+
+	mainBytes, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_main.c"))
+	if err != nil {
+		t.Fatalf("read trustix_datapath_helpers main source: %v", err)
+	}
+	initBody := daemonTestSourceFunctionBody(t, string(mainBytes), "trustix_datapath_helpers_init")
+	misc := strings.Index(initBody, "misc_register(&trustix_datapath_helpers_miscdev)")
+	cleanup := strings.Index(initBody, "trustix_datapath_helpers_unregister();")
+	if misc < 0 || cleanup < 0 || cleanup < misc {
+		t.Fatalf("helper init must unregister helper runtime if misc_register fails:\n%s", initBody)
+	}
+}
+
 func TestCrossHostRunnerUnloadsDatapathBeforeDeletingLAN(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("..", "..", "scripts", "linux-cross-host-soak-runner.sh"))
 	if err != nil {
