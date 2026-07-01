@@ -15,6 +15,7 @@
 #include <linux/netdevice.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
+#include <linux/notifier.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/nsproxy.h>
@@ -720,6 +721,7 @@ static void trustix_datapath_rx_worker_single_coalesce_flush_work(
 static void trustix_datapath_rx_worker_single_coalesce_drop_all(void);
 static void trustix_datapath_rx_worker_drop_pending_sync(void);
 static void trustix_datapath_tx_plaintext_drop_pending_sync(void);
+static void trustix_datapath_release_netdev_refs(struct net_device *dev);
 static void trustix_datapath_tx_plaintext_run(struct work_struct *work);
 static void trustix_datapath_tx_plaintext_coalesce_flush_work(
 	struct work_struct *work);
@@ -15198,6 +15200,102 @@ static void trustix_datapath_hook_detach_all(void)
 		dev_put(target_devs[i]);
 }
 
+static void trustix_datapath_hook_release_netdev(struct net_device *dev)
+{
+	struct trustix_datapath_hook_entry *entry;
+	struct trustix_datapath_hook_entry *clear[TRUSTIX_DATAPATH_HOOK_MAX];
+	struct nf_hook_ops *ops[TRUSTIX_DATAPATH_HOOK_MAX];
+	struct net *nets[TRUSTIX_DATAPATH_HOOK_MAX];
+	struct net *put_nets[TRUSTIX_DATAPATH_HOOK_MAX];
+	struct net_device *target_devs[TRUSTIX_DATAPATH_HOOK_MAX];
+	unsigned int clear_count = 0;
+	unsigned int count = 0;
+	unsigned int put_net_count = 0;
+	unsigned int target_dev_count = 0;
+	unsigned int i;
+
+	if (!dev)
+		return;
+
+	write_lock_bh(&trustix_datapath_state_lock);
+	for (i = 0; i < ARRAY_SIZE(trustix_datapath_hooks); i++) {
+		bool hook_dev_match;
+		bool target_dev_match;
+
+		entry = &trustix_datapath_hooks[i];
+		if (!entry->in_use)
+			continue;
+		hook_dev_match = entry->registered &&
+				 (entry->ops.dev == dev ||
+				  entry->ifindex == dev->ifindex);
+		target_dev_match = entry->target_dev == dev;
+		if (!hook_dev_match && !target_dev_match)
+			continue;
+		if (target_dev_match &&
+		    target_dev_count < ARRAY_SIZE(target_devs)) {
+			target_devs[target_dev_count++] = entry->target_dev;
+			entry->target_dev = NULL;
+			entry->target_ifindex = 0;
+			memset(entry->target_ifname, 0,
+			       sizeof(entry->target_ifname));
+		}
+		if (!hook_dev_match)
+			continue;
+		if (count < ARRAY_SIZE(ops)) {
+			ops[count] = &entry->ops;
+			nets[count] = entry->net;
+			count++;
+		}
+		entry->registered = false;
+		entry->in_use = false;
+		if (clear_count < ARRAY_SIZE(clear))
+			clear[clear_count++] = entry;
+	}
+	write_unlock_bh(&trustix_datapath_state_lock);
+
+	for (i = 0; i < count; i++)
+		nf_unregister_net_hook(nets[i] ? nets[i] : &init_net, ops[i]);
+
+	write_lock_bh(&trustix_datapath_state_lock);
+	for (i = 0; i < clear_count; i++) {
+		struct net *net = clear[i]->net;
+
+		memset(clear[i], 0, sizeof(*clear[i]));
+		if (net && put_net_count < ARRAY_SIZE(put_nets))
+			put_nets[put_net_count++] = net;
+	}
+	write_unlock_bh(&trustix_datapath_state_lock);
+
+	for (i = 0; i < put_net_count; i++)
+		put_net(put_nets[i]);
+	for (i = 0; i < target_dev_count; i++)
+		dev_put(target_devs[i]);
+}
+
+static void trustix_datapath_release_netdev_refs(struct net_device *dev)
+{
+	if (!dev)
+		return;
+
+	trustix_datapath_hook_release_netdev(dev);
+	trustix_datapath_rx_worker_drop_pending_sync();
+	trustix_datapath_tx_plaintext_drop_pending_sync();
+}
+
+static int trustix_datapath_netdev_event(struct notifier_block *nb,
+					 unsigned long event, void *ptr)
+{
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
+
+	if (event == NETDEV_UNREGISTER)
+		trustix_datapath_release_netdev_refs(dev);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block trustix_datapath_netdev_notifier = {
+	.notifier_call = trustix_datapath_netdev_event,
+};
+
 static int
 trustix_datapath_hook_apply(struct trustix_datapath_ioc_hook *hook)
 {
@@ -17020,13 +17118,21 @@ static int __init trustix_datapath_init(void)
 				       &failed);
 	trustix_datapath_update_features_from_selftests(passed, failed);
 	ret = misc_register(&trustix_datapath_miscdev);
-	if (ret)
+	if (ret) {
 		trustix_datapath_free_state();
+		return ret;
+	}
+	ret = register_netdevice_notifier(&trustix_datapath_netdev_notifier);
+	if (ret) {
+		misc_deregister(&trustix_datapath_miscdev);
+		trustix_datapath_free_state();
+	}
 	return ret;
 }
 
 static void __exit trustix_datapath_exit(void)
 {
+	unregister_netdevice_notifier(&trustix_datapath_netdev_notifier);
 	trustix_datapath_hook_detach_all();
 	synchronize_net();
 	misc_deregister(&trustix_datapath_miscdev);

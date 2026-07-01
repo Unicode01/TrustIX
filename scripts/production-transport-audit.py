@@ -149,6 +149,19 @@ KERNEL_MODULE_RUNTIME_GATE_CLASSES = {
     "secure_exp_tcp_kernel",
     "route_gso",
 }
+FULL_DATAPATH_MODULE_GATE_CLASSES = {
+    "full_kmod",
+    "exp_tcp_full_kmod",
+}
+CRYPTO_MODULE_GATE_CLASSES = {
+    "secure_kudp",
+    "secure_exp_tcp_kernel",
+}
+DATAPATH_HELPERS_MODULE_GATE_CLASSES = {
+    "secure_kudp",
+    "secure_exp_tcp_kernel",
+    "route_gso",
+}
 KERNEL_UDP_DIRECT_POLICY_GATE_CLASSES = {
     "tc_direct",
     "secure_kudp",
@@ -720,6 +733,12 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
         return gate_class in KERNEL_MODULE_RUNTIME_GATE_CLASSES
     if normalized.startswith("kernel/bpf/"):
         return gate_class in EBPF_RUNTIME_GATE_CLASSES
+    if normalized.startswith("kernel/trustix_crypto/"):
+        return gate_class in CRYPTO_MODULE_GATE_CLASSES
+    if normalized.startswith("kernel/trustix_datapath/"):
+        return gate_class in FULL_DATAPATH_MODULE_GATE_CLASSES
+    if normalized.startswith("kernel/trustix_datapath_helpers/"):
+        return gate_class in DATAPATH_HELPERS_MODULE_GATE_CLASSES
     if normalized.startswith("kernel/trustix_"):
         return gate_class in KERNEL_MODULE_RUNTIME_GATE_CLASSES
     if normalized == "scripts/build-embedded-bpf.sh":

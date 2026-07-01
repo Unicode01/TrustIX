@@ -78,6 +78,52 @@ func TestTrustIXDatapathRXWorkerSoftwareSegmentGatesDirectGSOXmit(t *testing.T) 
 	}
 }
 
+func TestTrustIXDatapathReleasesHeldNetdevRefsOnUnregister(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+	if err != nil {
+		t.Fatalf("read trustix_datapath source: %v", err)
+	}
+	source := string(body)
+	releaseBody := daemonTestSourceFunctionBody(t, source, "trustix_datapath_release_netdev_refs")
+	for _, want := range []string{
+		"trustix_datapath_hook_release_netdev(dev);",
+		"trustix_datapath_rx_worker_drop_pending_sync();",
+		"trustix_datapath_tx_plaintext_drop_pending_sync();",
+	} {
+		if !strings.Contains(releaseBody, want) {
+			t.Fatalf("release netdev refs missing %q:\n%s", want, releaseBody)
+		}
+	}
+	eventBody := daemonTestSourceFunctionBody(t, source, "trustix_datapath_netdev_event")
+	if !strings.Contains(eventBody, "event == NETDEV_UNREGISTER") ||
+		!strings.Contains(eventBody, "trustix_datapath_release_netdev_refs(dev)") {
+		t.Fatalf("netdev notifier does not release refs on unregister:\n%s", eventBody)
+	}
+	initBody := daemonTestSourceFunctionBody(t, source, "trustix_datapath_init")
+	if !strings.Contains(initBody, "register_netdevice_notifier(&trustix_datapath_netdev_notifier)") {
+		t.Fatalf("datapath init does not register netdev notifier:\n%s", initBody)
+	}
+	exitBody := daemonTestSourceFunctionBody(t, source, "trustix_datapath_exit")
+	unregister := strings.Index(exitBody, "unregister_netdevice_notifier(&trustix_datapath_netdev_notifier)")
+	detach := strings.Index(exitBody, "trustix_datapath_hook_detach_all()")
+	if unregister < 0 || detach < 0 || unregister > detach {
+		t.Fatalf("datapath exit must unregister notifier before detach-all:\n%s", exitBody)
+	}
+}
+
+func TestCrossHostRunnerUnloadsDatapathBeforeDeletingLAN(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "scripts", "linux-cross-host-soak-runner.sh"))
+	if err != nil {
+		t.Fatalf("read runner source: %v", err)
+	}
+	source := string(body)
+	unload := strings.Index(source, "rmmod trustix_datapath >/dev/null 2>&1 || true")
+	deleteLAN := strings.LastIndex(source, `link del $(remote_quote "$lan_if")`)
+	if unload < 0 || deleteLAN < 0 || unload > deleteLAN {
+		t.Fatalf("runner must unload trustix_datapath before deleting the LAN link")
+	}
+}
+
 func TestTrustIXDatapathModuleParametersAutoEnableRXWorker(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
 

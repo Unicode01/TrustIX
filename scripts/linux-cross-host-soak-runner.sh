@@ -1982,13 +1982,13 @@ if [ -x $(remote_quote "$trustixd") ] && [ -f $(remote_quote "${dir}/config.yaml
   env ${env_exports} $(remote_quote "$trustixd") -config $(remote_quote "${dir}/config.yaml") -data-dir $(remote_quote "${dir}/data") -api 127.0.0.1:${api_port} -peer-api 0.0.0.0:${peer_port} -dataplane $(remote_quote "$dataplane_mode") -cleanup-dataplane >>$(remote_quote "${dir}/logs/cleanup.log") 2>&1
 fi
 for pid in \$(\"\$ip_cmd\" netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
-\"\$ip_cmd\" netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
-\"\$ip_cmd\" link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
 if [ $(remote_quote "$unload_modules") = '1' ]; then
   rmmod trustix_datapath >/dev/null 2>&1 || true
   rmmod trustix_datapath_helpers >/dev/null 2>&1 || true
   rmmod trustix_crypto >/dev/null 2>&1 || true
 fi
+\"\$ip_cmd\" netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
+\"\$ip_cmd\" link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
 if [ $(remote_quote "$keep_remote") != '1' ]; then
   rm -rf $(remote_quote "$dir")
 fi
