@@ -479,6 +479,7 @@ static bool trustix_tixt_rx_single_coalesce_hot_stats;
 static bool trustix_tixt_rx_single_coalesce_defer_full_flush;
 static bool trustix_tixt_rx_single_coalesce_keep_full_timer;
 static bool trustix_tixt_rx_single_coalesce_set_hash;
+static unsigned int trustix_tixt_rx_backlog_worker_budget = 2048;
 static unsigned int trustix_tixt_rx_backlog_worker_queue_limit = 8192;
 static unsigned int trustix_tixt_rx_single_coalesce_schedule_stride = 1;
 static unsigned int trustix_tixt_rx_stream_max_frames = 16;
@@ -2187,6 +2188,11 @@ module_param_named(tixt_rx_coalesce_segment_gso,
 MODULE_PARM_DESC(tixt_rx_coalesce_segment_gso,
 		 "Segment coalesced TIXT RX GSO skbs before publishing them through the RX stack");
 
+module_param_named(tixt_rx_backlog_worker_budget,
+		   trustix_tixt_rx_backlog_worker_budget, uint, 0644);
+MODULE_PARM_DESC(tixt_rx_backlog_worker_budget,
+		 "Maximum skb count delivered by one deferred TIXT RX backlog worker run");
+
 module_param_named(tixt_rx_single_coalesce_skip_tcp_csum,
 		   trustix_tixt_rx_single_coalesce_skip_tcp_csum, bool, 0644);
 MODULE_PARM_DESC(tixt_rx_single_coalesce_skip_tcp_csum,
@@ -3064,11 +3070,22 @@ static unsigned int trustix_tixt_rx_backlog_worker_queue_limit_value(void)
 	return value;
 }
 
+static unsigned int trustix_tixt_rx_backlog_worker_budget_value(void)
+{
+	unsigned int value = READ_ONCE(trustix_tixt_rx_backlog_worker_budget);
+
+	if (!value)
+		return 1;
+	if (value > 65536)
+		return 65536;
+	return value;
+}
+
 static void trustix_tixt_rx_backlog_worker_fn(struct work_struct *work)
 {
 	struct sk_buff *skb;
 	bool reschedule = false;
-	unsigned int budget = 256;
+	unsigned int budget = trustix_tixt_rx_backlog_worker_budget_value();
 	unsigned int done = 0;
 	int ret;
 
@@ -3161,15 +3178,74 @@ trustix_tixt_rx_publish_skb_chain_backlog(struct sk_buff *head,
 					  unsigned long *drops)
 {
 	struct sk_buff *next;
+	struct sk_buff *drop_head = NULL;
+	struct sk_buff *drop_tail = NULL;
 	unsigned int count = 0;
+	unsigned int depth;
+	unsigned int limit;
+	bool schedule_worker;
+
+	if (!head)
+		return 0;
+	if (READ_ONCE(trustix_tixt_rx_backlog_worker_quiescing) ||
+	    !READ_ONCE(trustix_datapath_helpers_registered)) {
+		while (head) {
+			next = head->next;
+			head->next = NULL;
+			trustix_tixt_rx_backlog_worker_disabled++;
+			if (drops)
+				(*drops)++;
+			kfree_skb(head);
+			head = next;
+			count++;
+		}
+		return count;
+	}
+
+	limit = trustix_tixt_rx_backlog_worker_queue_limit_value();
+	spin_lock_bh(&trustix_tixt_rx_backlog_worker_queue.lock);
+	depth = skb_queue_len(&trustix_tixt_rx_backlog_worker_queue);
+	schedule_worker = !READ_ONCE(trustix_tixt_rx_backlog_worker_scheduled);
+	if (schedule_worker)
+		WRITE_ONCE(trustix_tixt_rx_backlog_worker_scheduled, true);
 
 	while (head) {
 		next = head->next;
 		head->next = NULL;
-		trustix_tixt_rx_publish_one_backlog(head, packets, drops);
+		head->prev = NULL;
+		INIT_LIST_HEAD(&head->list);
+		if (depth >= limit) {
+			trustix_tixt_rx_backlog_worker_queue_full++;
+			if (drops)
+				(*drops)++;
+			if (!drop_head)
+				drop_head = head;
+			else
+				drop_tail->next = head;
+			drop_tail = head;
+			count++;
+			head = next;
+			continue;
+		}
+		__skb_queue_tail(&trustix_tixt_rx_backlog_worker_queue, head);
+		depth++;
+		trustix_tixt_rx_backlog_worker_enqueued++;
+		if (packets)
+			(*packets)++;
 		head = next;
 		count++;
 	}
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_depth, depth);
+	spin_unlock_bh(&trustix_tixt_rx_backlog_worker_queue.lock);
+
+	while (drop_head) {
+		next = drop_head->next;
+		drop_head->next = NULL;
+		kfree_skb(drop_head);
+		drop_head = next;
+	}
+	if (schedule_worker)
+		schedule_work(&trustix_tixt_rx_backlog_work);
 	return count;
 }
 
@@ -3180,13 +3256,57 @@ trustix_tixt_rx_publish_receive_list_backlog(struct list_head *rx_list,
 {
 	struct sk_buff *skb;
 	struct sk_buff *tmp;
+	LIST_HEAD(drop_list);
 	unsigned int count = 0;
+	unsigned int depth;
+	unsigned int limit;
+	bool schedule_worker;
+
+	if (!rx_list || list_empty(rx_list))
+		return 0;
+	if (READ_ONCE(trustix_tixt_rx_backlog_worker_quiescing) ||
+	    !READ_ONCE(trustix_datapath_helpers_registered)) {
+		list_for_each_entry_safe(skb, tmp, rx_list, list) {
+			list_del_init(&skb->list);
+			trustix_tixt_rx_backlog_worker_disabled++;
+			if (drops)
+				(*drops)++;
+			kfree_skb(skb);
+			count++;
+		}
+		return count;
+	}
+
+	limit = trustix_tixt_rx_backlog_worker_queue_limit_value();
+	spin_lock_bh(&trustix_tixt_rx_backlog_worker_queue.lock);
+	depth = skb_queue_len(&trustix_tixt_rx_backlog_worker_queue);
+	schedule_worker = !READ_ONCE(trustix_tixt_rx_backlog_worker_scheduled);
+	if (schedule_worker)
+		WRITE_ONCE(trustix_tixt_rx_backlog_worker_scheduled, true);
 
 	list_for_each_entry_safe(skb, tmp, rx_list, list) {
 		list_del_init(&skb->list);
-		trustix_tixt_rx_publish_one_backlog(skb, packets, drops);
+		if (depth >= limit) {
+			trustix_tixt_rx_backlog_worker_queue_full++;
+			if (drops)
+				(*drops)++;
+			list_add_tail(&skb->list, &drop_list);
+			count++;
+			continue;
+		}
+		__skb_queue_tail(&trustix_tixt_rx_backlog_worker_queue, skb);
+		depth++;
+		trustix_tixt_rx_backlog_worker_enqueued++;
+		if (packets)
+			(*packets)++;
 		count++;
 	}
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_depth, depth);
+	spin_unlock_bh(&trustix_tixt_rx_backlog_worker_queue.lock);
+
+	trustix_tixt_rx_free_receive_list(&drop_list);
+	if (schedule_worker)
+		schedule_work(&trustix_tixt_rx_backlog_work);
 	return count;
 }
 
@@ -7473,8 +7593,6 @@ trustix_tixt_tx_validate_route_plain_flow_pulled(
 	if (!data || !data_end || !route || !flow || !flow_id)
 		return -EINVAL;
 	if (READ_ONCE(route->flags) & TRUSTIX_KUDP_TX_ROUTE_FLAG_BYPASS)
-		return -EPROTONOSUPPORT;
-	if (READ_ONCE(route->flow_mask))
 		return -EPROTONOSUPPORT;
 	selected = trustix_tixt_tx_select_inline_flow(data, data_end, route,
 						     flow_id);
@@ -12340,11 +12458,6 @@ trustix_route_tcp_gso_async_cross_item_candidate(
 		*reason = 0;
 	if (!first || !item || !item->skb)
 		return false;
-	if (first->route_flow_mask || item->route_flow_mask) {
-		if (reason)
-			*reason = 1;
-		return false;
-	}
 	if (item->resliced || !item->sequence_cost || !item->segment_count ||
 	    item->segment_count > max_frames ||
 	    frame_count + item->segment_count > max_frames) {
@@ -13431,7 +13544,6 @@ trustix_route_tcp_gso_async_worker_try_cross_item(
 		*items_out = 0;
 	if (!first || !first->skb || first->resliced ||
 	    first->tmpl.kernel_udp ||
-	    first->route_flow_mask ||
 	    !trustix_route_tcp_gso_async_cross_item_enabled()) {
 		trustix_route_tcp_gso_async_cross_item_record_miss(1);
 		return trustix_tixt_tx_route_gso_async_process_item(first);
@@ -14870,6 +14982,8 @@ void trustix_datapath_helpers_unregister(void)
 	WRITE_ONCE(trustix_route_tcp_gso_async_xmit_busy_retries, 2);
 	WRITE_ONCE(trustix_route_tcp_gso_async_xmit_busy_sleep_usecs, 0);
 	trustix_tixt_rx_backlog_worker_flush();
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_budget, 2048);
+	WRITE_ONCE(trustix_tixt_rx_backlog_worker_queue_limit, 8192);
 	WRITE_ONCE(trustix_tixt_rx_stream_ordered_list, false);
 	WRITE_ONCE(trustix_tixt_rx_stream_gso_xmit, false);
 	WRITE_ONCE(trustix_tixt_rx_stream_coalesce_gso, false);

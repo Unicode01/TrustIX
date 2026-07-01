@@ -4352,10 +4352,7 @@ func TestInstallExperimentalTCPRouteGSOFlowReplacesStaleEndpointAddressFlow(t *t
 			ID:              1,
 			Peer:            "ix-b",
 			Endpoint:        "exp-b",
-			LocalAddress:    "198.18.0.1:56145",
 			RemoteAddress:   "198.18.0.2:17042",
-			SourcePort:      56145,
-			DestinationPort: 17042,
 			CryptoPlacement: dataplane.CryptoPlacementUserspace,
 		},
 	}
@@ -4395,6 +4392,69 @@ func TestInstallExperimentalTCPRouteGSOFlowReplacesStaleEndpointAddressFlow(t *t
 	}
 	if _, ok := manager.expTCPOuterTXAcknowledgments[1]; ok {
 		t.Fatal("stale route-GSO outer TX acknowledgment was not removed")
+	}
+}
+
+func TestInstallExperimentalTCPRouteGSOFlowsKeepsEndpointAddressPoolMembers(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{ExperimentalTCPRouteGSOSync: true}
+	manager.snapshot = dataplane.Snapshot{
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        "exp-b",
+			Peer:      "ix-b",
+			Transport: "experimental_tcp",
+			Address:   "198.18.0.2:17042",
+			Enabled:   true,
+			Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+		}},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		1: {
+			ID:              1,
+			Peer:            "ix-b",
+			Endpoint:        "exp-b",
+			LocalAddress:    "198.18.0.1:56145",
+			RemoteAddress:   "198.18.0.2:17042",
+			SourcePort:      56145,
+			DestinationPort: 17042,
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+	}
+	manager.expTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{
+		1: {Protocol: "experimental_tcp", FlowID: 1},
+	}
+	manager.kernelUDPTXDirectSequences = map[uint64]uint64{1: 7}
+	manager.expTCPOuterTXSequences = map[uint64]uint32{1: 8}
+	manager.expTCPOuterTXAcknowledgments = map[uint64]uint32{1: 9}
+
+	if err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+		ID:              2,
+		Peer:            "ix-b",
+		Endpoint:        "exp-b",
+		LocalAddress:    "198.18.0.1:47484",
+		RemoteAddress:   "198.18.0.2:17042",
+		SourcePort:      47484,
+		DestinationPort: 17042,
+		CryptoPlacement: dataplane.CryptoPlacementUserspace,
+	}}); err != nil {
+		t.Fatalf("install pooled experimental_tcp route-GSO flow: %v", err)
+	}
+	for _, flowID := range []uint64{1, 2} {
+		if _, ok := manager.expTCPFlows[flowID]; !ok {
+			t.Fatalf("route-GSO endpoint-address pool flow %d was removed: %#v", flowID, manager.expTCPFlows)
+		}
+	}
+	if _, ok := manager.expTCPTelemetry[1]; !ok {
+		t.Fatal("retained route-GSO pool flow telemetry was removed")
+	}
+	if _, ok := manager.kernelUDPTXDirectSequences[1]; !ok {
+		t.Fatal("retained route-GSO pool flow direct sequence was removed")
+	}
+	if _, ok := manager.expTCPOuterTXSequences[1]; !ok {
+		t.Fatal("retained route-GSO pool flow outer TX sequence was removed")
+	}
+	if _, ok := manager.expTCPOuterTXAcknowledgments[1]; !ok {
+		t.Fatal("retained route-GSO pool flow outer TX acknowledgment was removed")
 	}
 }
 
@@ -7250,6 +7310,81 @@ func TestExperimentalTCPTXPlaintextDirectPrefersEndpointAddressOutboundFlow(t *t
 	}
 	if flows[0].expTCPPacket.SourcePort != 44000 || flows[0].expTCPPacket.DestinationPort != 13001 {
 		t.Fatalf("selected packet ports = %d/%d, want 44000/13001", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	}
+}
+
+func TestExperimentalTCPRouteGSOUsesEndpointAddressFlowPool(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{
+		ExperimentalTCPTXDirect:     true,
+		ExperimentalTCPRouteGSOSync: true,
+	}
+	manager.snapshot = dataplane.Snapshot{
+		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
+		Endpoints: []dataplane.EndpointMetadata{
+			{
+				ID:        core.EndpointID("ix-a-tixt"),
+				Peer:      core.IXID("ix-a"),
+				Transport: "experimental_tcp",
+				Listen:    "10.203.3.204:13000",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+			{
+				ID:        core.EndpointID("ix-b-tixt"),
+				Peer:      core.IXID("ix-b"),
+				Transport: "experimental_tcp",
+				Address:   "10.203.3.205:13001",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+		},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		10: {
+			ID:              10,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "10.203.3.204:13000",
+			RemoteAddress:   "10.203.3.205:58299",
+			SourcePort:      13000,
+			DestinationPort: 58299,
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+	}
+	for i := 0; i < 10; i++ {
+		flowID := uint64(100 + i)
+		sourcePort := uint16(44000 + i)
+		manager.expTCPFlows[flowID] = dataplane.ExperimentalTCPFlow{
+			ID:              flowID,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    fmt.Sprintf("10.203.3.204:%d", sourcePort),
+			RemoteAddress:   "10.203.3.205:13001",
+			SourcePort:      sourcePort,
+			DestinationPort: 13001,
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		}
+	}
+	route := routing.Route{
+		Prefix:   core.Prefix("10.205.0.0/16"),
+		NextHop:  core.IXID("ix-b"),
+		Endpoint: core.EndpointID("ix-b-tixt"),
+	}
+
+	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, false, kernelUDPTXRouteMaxFlows)
+	if len(flows) != kernelUDPTXRouteMaxFlows {
+		t.Fatalf("route-GSO endpoint-address flow pool = %d, want %d: %+v", len(flows), kernelUDPTXRouteMaxFlows, flows)
+	}
+	for i, flow := range flows {
+		wantID := uint64(100 + i)
+		if flow.id != wantID {
+			t.Fatalf("route-GSO flow[%d] = %d, want %d", i, flow.id, wantID)
+		}
+		if flow.expTCPPacket.SourcePort == 13000 || flow.expTCPPacket.DestinationPort != 13001 {
+			t.Fatalf("route-GSO flow[%d] ports = %d/%d, want outbound source and destination 13001", i, flow.expTCPPacket.SourcePort, flow.expTCPPacket.DestinationPort)
+		}
 	}
 }
 
@@ -13362,17 +13497,14 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesPushRouteTCPHeaderKfuncWhenAvai
 	if routeKfuncIndex < 0 {
 		t.Fatal("experimental_tcp route TCP header-push kfunc label is missing")
 	}
-	routeKfuncGuard := out[routeKfuncIndex]
-	if !routeKfuncGuard.OpCode.Class().IsLoad() ||
-		routeKfuncGuard.OpCode.Mode() != asm.MemMode ||
-		routeKfuncGuard.Dst != asm.R4 ||
-		routeKfuncGuard.Src != asm.R0 ||
-		routeKfuncGuard.Offset != 72 ||
-		routeKfuncGuard.OpCode.Size() != asm.Word {
-		t.Fatal("experimental_tcp route TCP header-push kfunc is not guarded by route flow_mask")
-	}
-	if !instructionsContainJump(out, "kudp_tx_direct_push_route_outer_tcp_header_kfunc", "kudp_tx_direct_inline_route_unsupported") {
-		t.Fatal("experimental_tcp route TCP header-push kfunc does not fallback for multi-flow inline routes")
+	routeKfuncEntry := out[routeKfuncIndex]
+	if routeKfuncEntry.OpCode.Class().IsLoad() &&
+		routeKfuncEntry.OpCode.Mode() == asm.MemMode &&
+		routeKfuncEntry.Dst == asm.R4 &&
+		routeKfuncEntry.Src == asm.R0 &&
+		routeKfuncEntry.Offset == 72 &&
+		routeKfuncEntry.OpCode.Size() == asm.Word {
+		t.Fatal("experimental_tcp route TCP header-push kfunc still pre-checks route flow_mask before helper selection")
 	}
 	if instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPTrustInnerCSUM)) {
 		t.Fatal("experimental_tcp route TCP header-push path should compute a full outer TCP checksum by default")
@@ -13425,6 +13557,9 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPGSOKfuncWhenAvailable(t
 	}
 	if !instructionsContainJump(out, "kudp_tx_direct_route_tcp_linear_kfunc", "kudp_tx_direct_fallback") {
 		t.Fatal("experimental_tcp route TCP GSO linear kfunc fallback should fall back to userspace when the kfunc cannot handle the skb")
+	}
+	if instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_single_flow_guard") {
+		t.Fatal("experimental_tcp route TCP GSO path still rejects multi-flow route entries before helper selection")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_xmit_stolen") ||
 		instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_xmit_queued") {
@@ -15737,11 +15872,17 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 		"TRUSTIX_TIXT_TX_ROUTE_SYNC_STREAM_MAX_BATCHES",
 		"u32 route_flow_mask;",
 		"item->route_flow_mask = READ_ONCE(route->flow_mask);",
-		"READ_ONCE(route->flow_mask))\n\t\treturn -EPROTONOSUPPORT;",
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("route TCP GSO async worker source missing %q", want)
 		}
+	}
+	plainValidateBody := sourceFunctionBody(t, source, "trustix_tixt_tx_validate_route_plain_flow_pulled")
+	if !strings.Contains(plainValidateBody, "trustix_tixt_tx_select_inline_flow(data, data_end, route,") {
+		t.Fatal("route TCP plaintext route validation must select the inline flow from the route")
+	}
+	if strings.Contains(plainValidateBody, "READ_ONCE(route->flow_mask))\n\t\treturn -EPROTONOSUPPORT;") {
+		t.Fatal("route TCP plaintext route validation must allow multi-flow route entries")
 	}
 	templateMatchBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_cross_item_template_match")
 	for _, want := range []string{
@@ -15753,8 +15894,8 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 		}
 	}
 	candidateBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_cross_item_candidate")
-	if !strings.Contains(candidateBody, "first->route_flow_mask || item->route_flow_mask") {
-		t.Fatal("route TCP GSO cross-item candidate must reject multi-flow route entries")
+	if strings.Contains(candidateBody, "first->route_flow_mask || item->route_flow_mask") {
+		t.Fatal("route TCP GSO cross-item candidate must not reject multi-flow route entries before template selection")
 	}
 	hashBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_hash_skb")
 	for _, want := range []string{
@@ -15809,8 +15950,8 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 		t.Fatal("route TCP GSO plaintext skip-sequence same-stream guard must run before route flow_id fallback")
 	}
 	tryBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_worker_try_cross_item")
-	if !strings.Contains(tryBody, "first->route_flow_mask") {
-		t.Fatal("route TCP GSO cross-item worker must self-degrade multi-flow route entries")
+	if strings.Contains(tryBody, "first->route_flow_mask") {
+		t.Fatal("route TCP GSO cross-item worker must not self-degrade multi-flow route entries")
 	}
 	if !strings.Contains(tryBody, "first->inner_tcp_seq_base + first->payload_len") ||
 		!strings.Contains(tryBody, "batch->next_inner_tcp_seq") {

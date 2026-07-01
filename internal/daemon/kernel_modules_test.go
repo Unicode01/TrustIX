@@ -1804,8 +1804,8 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDP
 		"route_tcp_gso_async_stream_outer_gso=1",
 		"route_tcp_gso_async_stream_outer_gso_hard_enable=1",
 		"route_tcp_gso_async_stream_cross_item_batch=1",
-		"route_tcp_gso_async_flow_shard_queue=0",
-		"route_tcp_gso_async_hash_tx_queue=1",
+		"route_tcp_gso_async_flow_shard_queue=1",
+		"route_tcp_gso_async_hash_tx_queue=0",
 		"route_tcp_gso_async_queue_shards=8",
 		"route_tcp_gso_async_worker_item_budget=64",
 		"route_tcp_gso_async_worker_segment_budget=2048",
@@ -1813,8 +1813,8 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDP
 		"route_tcp_gso_async_stream_cross_item_max_frames=128",
 		"route_tcp_gso_async_stream_cross_item_dynamic_cap=0",
 		"route_tcp_gso_async_worker_emit_budget=0",
-		"route_tcp_gso_async_worker_dequeue_batch=4",
-		"route_tcp_gso_async_worker_min_queue_depth=1",
+		"route_tcp_gso_async_worker_dequeue_batch=32",
+		"route_tcp_gso_async_worker_min_queue_depth=0",
 		"route_tcp_gso_async_worker_schedule_delay_usecs=0",
 		"route_tcp_xmit_worker=1",
 		"route_tcp_xmit_worker_budget=1024",
@@ -1825,6 +1825,9 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDP
 		"tixt_rx_stream_max_frames=128",
 		"tixt_rx_stream_coalesce_gso=1",
 		"tixt_rx_stream_coalesce_mark_gso=1",
+		"tixt_rx_coalesce_segment_gso=0",
+		"tixt_rx_backlog_worker_budget=2048",
+		"tixt_rx_backlog_worker_queue_limit=65536",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
@@ -1903,6 +1906,7 @@ func TestTrustIXDatapathHelpersModuleParametersStripsPanicRiskRawParameters(t *t
 		"route_tcp_gso_async_dev_xmit=1",
 		"route_tcp_gso_async_limit=4096",
 		"route_tcp_gso_async_worker_item_budget=64",
+		"route_tcp_gso_async_worker_emit_budget=0",
 		"route_tcp_gso_async_stream=1",
 		"route_tcp_gso_async_stream_direct_build=1",
 		"route_tcp_gso_async_stream_direct_build_fast_copy=1",
@@ -1920,6 +1924,7 @@ func TestTrustIXDatapathHelpersModuleParametersStripsPanicRiskRawParameters(t *t
 		"tixt_rx_stream_xmit_extra=1",
 		"tixt_rx_stream_gso_xmit=1",
 		"tixt_rx_stream_max_frames=16",
+		"tixt_rx_backlog_worker_budget=4096",
 		"tixt_rx_stream_ordered_list=1",
 		"tixt_rx_single_coalesce_gso=1",
 		"tixt_rx_single_coalesce_max_frames=64",
@@ -1928,7 +1933,7 @@ func TestTrustIXDatapathHelpersModuleParametersStripsPanicRiskRawParameters(t *t
 	}, " ")
 
 	got := TrustIXDatapathHelpersModuleParameters(raw)
-	want := "tixt_tx_plain_skip_sequence=1 route_tcp_gso=1 route_tcp_gso_async=1 route_tcp_gso_async_dev_xmit=1 route_tcp_gso_async_limit=4096 route_tcp_gso_async_worker_item_budget=64 route_tcp_gso_async_stream=1 route_tcp_gso_async_stream_direct_build=1 route_tcp_gso_async_stream_direct_build_fast_copy=1 route_tcp_gso_async_unbound_worker=1 route_tcp_gso_async_sharded_queue=1 route_tcp_gso_async_queue_shards=8 route_tcp_gso_async_stream_cross_item_debug=1 route_tcp_gso_async_stream_outer_gso=1 route_tcp_gso_async_xmit_busy_retries=4 route_tcp_gso_async_xmit_busy_sleep_usecs=50 route_tcp_xmit_worker=1 route_tcp_xmit_worker_steal=1 route_tcp_xmit_worker_budget=128 tixt_rx_stream_parse=1 tixt_rx_stream_xmit_extra=1 tixt_rx_stream_gso_xmit=1 tixt_rx_stream_max_frames=16 tixt_rx_single_coalesce_gso=1 tixt_rx_single_coalesce_max_frames=64 tixt_rx_single_coalesce_netif_rx=1 tixt_rx_coalesce_segment_gso=1"
+	want := "tixt_tx_plain_skip_sequence=1 route_tcp_gso=1 route_tcp_gso_async=1 route_tcp_gso_async_dev_xmit=1 route_tcp_gso_async_limit=4096 route_tcp_gso_async_worker_item_budget=64 route_tcp_gso_async_worker_emit_budget=0 route_tcp_gso_async_stream=1 route_tcp_gso_async_stream_direct_build=1 route_tcp_gso_async_stream_direct_build_fast_copy=1 route_tcp_gso_async_unbound_worker=1 route_tcp_gso_async_sharded_queue=1 route_tcp_gso_async_queue_shards=8 route_tcp_gso_async_stream_cross_item_debug=1 route_tcp_gso_async_stream_outer_gso=1 route_tcp_gso_async_xmit_busy_retries=4 route_tcp_gso_async_xmit_busy_sleep_usecs=50 route_tcp_xmit_worker=1 route_tcp_xmit_worker_steal=1 route_tcp_xmit_worker_budget=128 tixt_rx_stream_parse=1 tixt_rx_stream_xmit_extra=1 tixt_rx_stream_gso_xmit=1 tixt_rx_stream_max_frames=16 tixt_rx_backlog_worker_budget=4096 tixt_rx_single_coalesce_gso=1 tixt_rx_single_coalesce_max_frames=64 tixt_rx_single_coalesce_netif_rx=1 tixt_rx_coalesce_segment_gso=1"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}

@@ -529,6 +529,16 @@ case_tc_requested_but_falls_back_to_userspace() {
 }
 
 apply_case_runtime_defaults() {
+  case "$case_name" in
+    owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod)
+      if [[ -z "$iperf_parallel_explicit" ]]; then
+        iperf_parallel=16
+      fi
+      if [[ -z "$session_pool_size_explicit" ]]; then
+        session_pool_size="$iperf_parallel"
+      fi
+      ;;
+  esac
   if case_is_iptunnel_transport && [[ -z "$iperf_parallel_explicit" ]]; then
     iperf_parallel="$iptunnel_iperf_parallel"
     if [[ -z "$session_pool_size_explicit" ]]; then
@@ -1714,6 +1724,12 @@ run_tcp_health_checks() {
 }
 
 run_connectivity_checks() {
+  case "$(case_fast_path)" in
+    route_gso|secure_kudp|secure_exp_tcp_kernel)
+      run_tcp_health_checks
+      return
+      ;;
+  esac
   if case_uses_secure_kudp_fast_path; then
     run_tcp_health_checks
     return

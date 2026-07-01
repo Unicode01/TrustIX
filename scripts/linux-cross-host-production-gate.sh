@@ -234,7 +234,7 @@ validate_case_seconds_map_matches_cases() {
 }
 
 case_policy_stat_args() {
-  local family="$1" case_token="$2" case_name transport encryption profile datapath placement extra
+  local family="$1" case_token="$2" case_name transport encryption profile datapath placement gate_class extra
   case "$family" in
     userspace|userspace-tc) ;;
     *) return 0 ;;
@@ -242,11 +242,15 @@ case_policy_stat_args() {
   case_name="${case_token%%=*}"
   local old_ifs="$IFS"
   IFS=-
-  read -r transport encryption profile datapath placement extra <<<"$case_name"
+  read -r transport encryption profile datapath placement gate_class extra <<<"$case_name"
   IFS="$old_ifs"
-  if [[ -z "$transport" || -z "$encryption" || -z "$profile" || -z "$datapath" || -z "$placement" || -n "${extra:-}" ]]; then
+  if [[ -z "$transport" || -z "$encryption" || -z "$profile" || -z "$datapath" || -z "$placement" || -z "$gate_class" || -n "${extra:-}" ]]; then
     die "${family} case ${case_name} must use canonical NAME=PATH from the transport matrix"
   fi
+  case "$family:$gate_class" in
+    userspace:userspace|userspace-tc:userspace_tc) ;;
+    *) die "${family} case ${case_name} has unsupported gate class ${gate_class}" ;;
+  esac
   case "$transport" in
     udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|experimental_tcp) ;;
     *) die "${family} case ${case_name} has unsupported transport ${transport}" ;;
@@ -294,7 +298,7 @@ transport_endpoint_supports_crypto_placement() {
 }
 
 case_session_args() {
-  local family="$1" case_token="$2" case_name transport encryption profile datapath placement extra
+  local family="$1" case_token="$2" case_name transport encryption profile datapath placement gate_class extra
   local require_sessions=1
   local require_session_traffic=1
   case "$family" in
@@ -302,11 +306,15 @@ case_session_args() {
       case_name="${case_token%%=*}"
       local old_ifs="$IFS"
       IFS=-
-      read -r transport encryption profile datapath placement extra <<<"$case_name"
+      read -r transport encryption profile datapath placement gate_class extra <<<"$case_name"
       IFS="$old_ifs"
-      if [[ -z "$transport" || -z "$encryption" || -z "$profile" || -z "$datapath" || -z "$placement" || -n "${extra:-}" ]]; then
+      if [[ -z "$transport" || -z "$encryption" || -z "$profile" || -z "$datapath" || -z "$placement" || -z "$gate_class" || -n "${extra:-}" ]]; then
         die "${family} case ${case_name} must use canonical NAME=PATH from the transport matrix"
       fi
+      case "$family:$gate_class" in
+        userspace:userspace|userspace-tc:userspace_tc) ;;
+        *) die "${family} case ${case_name} has unsupported gate class ${gate_class}" ;;
+      esac
       ;;
     tc-direct|secure-kudp)
       transport="kernel_udp"
@@ -1110,7 +1118,7 @@ main() {
       --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1 \
-      --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=1 \
+      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=0 \
       --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1 \
       --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_xmit_packets=1 \
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_flow_errors=0 \

@@ -3483,7 +3483,7 @@ func writeRouteGSOModuleParameters(t *testing.T, path string) {
 
 func routeGSOHelperParameters() map[string]string {
 	return map[string]string{
-		"route_tcp_gso_async_hash_tx_queue":                        "1",
+		"route_tcp_gso_async_hash_tx_queue":                        "0",
 		"route_tcp_gso_async_stream_outer_gso_frames":              "8",
 		"route_tcp_gso_async_xmit_packets":                         "8",
 		"route_tcp_gso_async_flow_errors":                          "0",

@@ -359,6 +359,7 @@ def expected_matrix_case(
             profile,
             datapath,
             crypto_placement,
+            gate_family_class(gate_family),
         ]
     )
     if gate_family.startswith("owdeb_"):

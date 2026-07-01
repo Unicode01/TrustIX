@@ -127,6 +127,41 @@ EXPERIMENTAL_TCP_FULL_KMOD_RUNTIME_FAMILIES = {
     "dd_exp_tcp_full_kmod",
     "owdeb_exp_tcp_full_kmod",
 }
+LOW_LEVEL_RUNTIME_GATE_CLASSES = {
+    "userspace_tc",
+    "tc_direct",
+    "full_kmod",
+    "exp_tcp_full_kmod",
+    "secure_kudp",
+    "secure_exp_tcp_kernel",
+    "route_gso",
+}
+EBPF_RUNTIME_GATE_CLASSES = {
+    "tc_direct",
+    "secure_kudp",
+    "secure_exp_tcp_kernel",
+    "route_gso",
+}
+KERNEL_MODULE_RUNTIME_GATE_CLASSES = {
+    "full_kmod",
+    "exp_tcp_full_kmod",
+    "secure_kudp",
+    "secure_exp_tcp_kernel",
+    "route_gso",
+}
+KERNEL_UDP_DIRECT_POLICY_GATE_CLASSES = {
+    "tc_direct",
+    "secure_kudp",
+    "secure_exp_tcp_kernel",
+    "route_gso",
+}
+DAEMON_DATAPATH_SESSION_GATE_CLASSES = {
+    "full_kmod",
+    "exp_tcp_full_kmod",
+    "secure_kudp",
+    "secure_exp_tcp_kernel",
+    "route_gso",
+}
 CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS = {
     # Provision output changes do not alter already-soaked datapath/runtime behavior.
     "internal/daemon/ix_provision_resource.go",
@@ -677,11 +712,35 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
         return False
     if normalized in CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS:
         return False
-    gate_family = row["gate_family"]
+    gate_class = gate_family_class(row["gate_family"])
+    transport = row.get("transport", "")
+    if normalized.startswith("internal/dataplane/ebpf/"):
+        return gate_class in EBPF_RUNTIME_GATE_CLASSES
+    if normalized.startswith("internal/kernelmodule/"):
+        return gate_class in KERNEL_MODULE_RUNTIME_GATE_CLASSES
+    if normalized.startswith("kernel/bpf/"):
+        return gate_class in EBPF_RUNTIME_GATE_CLASSES
+    if normalized.startswith("kernel/trustix_"):
+        return gate_class in KERNEL_MODULE_RUNTIME_GATE_CLASSES
+    if normalized == "scripts/build-embedded-bpf.sh":
+        return gate_class in EBPF_RUNTIME_GATE_CLASSES
     if normalized.startswith("internal/transport/experimentaltcp/"):
-        return gate_family in EXPERIMENTAL_TCP_FULL_KMOD_RUNTIME_FAMILIES
+        return transport == "experimental_tcp" or gate_class in {
+            "exp_tcp_full_kmod",
+            "secure_exp_tcp_kernel",
+            "route_gso",
+        }
     if normalized.startswith("internal/daemon/"):
-        return gate_family in EXPERIMENTAL_TCP_FULL_KMOD_RUNTIME_FAMILIES
+        if normalized == "internal/daemon/kernel_modules.go":
+            return gate_class in KERNEL_MODULE_RUNTIME_GATE_CLASSES
+        if normalized == "internal/daemon/kernel_udp_direct_policy.go":
+            return gate_class in KERNEL_UDP_DIRECT_POLICY_GATE_CLASSES
+        if normalized == "internal/daemon/datapath.go":
+            return (
+                gate_class in DAEMON_DATAPATH_SESSION_GATE_CLASSES
+                or transport == "experimental_tcp"
+            )
+        return gate_class in LOW_LEVEL_RUNTIME_GATE_CLASSES
     return True
 
 

@@ -218,7 +218,9 @@ validate_gate_family_semantics() {
 
 matrix_case_name() {
   local token="$1" encryption="$2" profile="$3" datapath="$4" placement="$5" gate_family="$6"
-  local base="${token}-${encryption}-${profile}-${datapath}-${placement}"
+  local gate_class
+  gate_class="$(gate_family_class "$gate_family")"
+  local base="${token}-${encryption}-${profile}-${datapath}-${placement}-${gate_class}"
   case "$gate_family" in
     owdeb_*) printf '%s-owdeb\n' "$base" ;;
     dd_*) printf '%s-dd\n' "$base" ;;

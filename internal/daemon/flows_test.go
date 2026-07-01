@@ -6758,6 +6758,80 @@ func TestFullPlaintextExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolInd
 	}
 }
 
+func TestRouteGSOExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t *testing.T) {
+	peer := testPeer()
+	endpoint := peer.Endpoints[0]
+	endpoint.Name = core.EndpointID("b-experimental-tcp")
+	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Address = "198.51.100.2:7142"
+	endpoint.Security.Encryption = securetransport.EncryptionPlaintext
+	peer.Endpoints[0] = endpoint
+
+	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionPlaintext)
+	reverseKey.PoolIndex = 2
+	reverse := &recordingSession{}
+	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	registry := transport.NewRegistry()
+	if err := registry.Register(expTransport); err != nil {
+		t.Fatalf("register experimental_tcp transport: %v", err)
+	}
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX:     config.IXConfig{ID: core.IXID("ix-a")},
+			Domain: config.DomainConfig{ID: peer.Domain},
+			Peers:  []config.PeerConfig{peer},
+			Endpoints: []config.EndpointConfig{{
+				Name:      core.EndpointID("a-experimental-tcp"),
+				Transport: string(transport.ProtocolExperimentalTCP),
+				Enabled:   true,
+			}},
+			TransportPolicy: config.TransportPolicyConfig{
+				Profile:    config.TransportProfilePerformance,
+				Datapath:   config.TransportDatapathKernelModule,
+				Encryption: securetransport.EncryptionPlaintext,
+				Candidates: []core.EndpointID{"a-experimental-tcp"},
+				SessionPool: config.SessionPoolPolicyConfig{
+					Size: 4,
+				},
+			},
+		},
+		transports: registry,
+		dataSessions: map[dataSessionKey]transport.Session{
+			reverseKey: reverse,
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{
+			reverseKey: {key: reverseKey, session: reverse, peer: peer, endpoint: endpoint},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) {
+		t.Fatal("test setup did not select route-GSO")
+	}
+	if missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4); !reflect.DeepEqual(missing, []int{0, 1, 2, 3}) {
+		t.Fatalf("route-GSO missing pool indexes before outbound dial = %v, want [0 1 2 3]", missing)
+	}
+
+	transportEndpoint := transportEndpointFromConfig(endpoint)
+	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
+	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
+	if err != nil {
+		t.Fatalf("session for route-GSO addressed experimental_tcp pool index: %v", err)
+	}
+	if session == reverse {
+		t.Fatal("route-GSO addressed experimental_tcp reused reverse session for outbound pool index")
+	}
+	if key.Address != endpoint.Address {
+		t.Fatalf("session key address = %q, want direct address %q", key.Address, endpoint.Address)
+	}
+	if expTransport.dialCount() != 1 {
+		t.Fatalf("experimental_tcp dial count = %d, want 1", expTransport.dialCount())
+	}
+	if missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4); !reflect.DeepEqual(missing, []int{0, 1, 3}) {
+		t.Fatalf("route-GSO missing pool indexes after outbound dial = %v, want [0 1 3]", missing)
+	}
+}
+
 func TestAddressedSecureExperimentalTCPPrefersDirectSessionOverReversePoolIndex(t *testing.T) {
 	peer := testPeer()
 	endpoint := peer.Endpoints[0]

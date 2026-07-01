@@ -901,7 +901,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 	}
 	matrixRow := map[string]any{
 		"status":                  "pass",
-		"case":                    "udp-secure-stable-userspace-userspace",
+		"case":                    "udp-secure-stable-userspace-userspace-userspace",
 		"runner_case":             "userspace-udp-secure",
 		"transport":               "udp",
 		"encryption":              "secure",
@@ -913,7 +913,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		"min_gbps":                1.5,
 		"min_seconds":             3600,
 		"exit_code":               0,
-		"workdir":                 filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
+		"workdir":                 filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace"),
 		"runner_sha256":           strings.Repeat("d", 64),
 		"transport_matrix_sha256": strings.Repeat("e", 64),
 	}
@@ -925,8 +925,8 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		t.Fatalf("write matrix summary: %v", err)
 	}
 	gateRow := map[string]any{
-		"case":                       "udp-secure-stable-userspace-userspace",
-		"path":                       filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
+		"case":                       "udp-secure-stable-userspace-userspace-userspace",
+		"path":                       filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace"),
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
 		"min_seconds_required":       3600,
@@ -994,13 +994,13 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 			"size":   456,
 		},
 		"cases": map[string]any{
-			"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+			"userspace": "udp-secure-stable-userspace-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace")),
 		},
 		"case_min_gbps": map[string]any{
-			"userspace": "udp-secure-stable-userspace-userspace=1.5",
+			"userspace": "udp-secure-stable-userspace-userspace-userspace=1.5",
 		},
 		"case_min_seconds": map[string]any{
-			"userspace": "udp-secure-stable-userspace-userspace=3600",
+			"userspace": "udp-secure-stable-userspace-userspace-userspace=3600",
 		},
 	}
 	manifestPayload, err := json.Marshal(manifest)
@@ -1188,7 +1188,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		t.Fatalf("write runner-case gate summary: %v", err)
 	}
 	manifest["cases"] = map[string]any{
-		"userspace": runnerCase + "=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+		"userspace": runnerCase + "=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace")),
 	}
 	manifest["case_min_gbps"] = map[string]any{
 		"userspace": runnerCase + "=1.5",
@@ -1225,7 +1225,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		}
 	}
 
-	gateRow["case"] = "udp-secure-stable-userspace-userspace"
+	gateRow["case"] = "udp-secure-stable-userspace-userspace-userspace"
 	gatePayload, err = json.Marshal(gateRow)
 	if err != nil {
 		t.Fatalf("marshal restored gate row: %v", err)
@@ -1234,13 +1234,13 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		t.Fatalf("write restored gate summary: %v", err)
 	}
 	manifest["cases"] = map[string]any{
-		"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+		"userspace": "udp-secure-stable-userspace-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace")),
 	}
 	manifest["case_min_gbps"] = map[string]any{
-		"userspace": "udp-secure-stable-userspace-userspace=1.5",
+		"userspace": "udp-secure-stable-userspace-userspace-userspace=1.5",
 	}
 	manifest["case_min_seconds"] = map[string]any{
-		"userspace": "udp-secure-stable-userspace-userspace=3600",
+		"userspace": "udp-secure-stable-userspace-userspace-userspace=3600",
 	}
 	manifestPayload, err = json.Marshal(manifest)
 	if err != nil {
@@ -1267,7 +1267,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 	}
 
 	manifest["cases"] = map[string]any{
-		"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "wrong-evidence-dir")),
+		"userspace": "udp-secure-stable-userspace-userspace-userspace=" + slashPath(filepath.Join(workdir, "wrong-evidence-dir")),
 	}
 	manifestPayload, err = json.Marshal(manifest)
 	if err != nil {
@@ -1292,7 +1292,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 	}
 
 	manifest["cases"] = map[string]any{
-		"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+		"userspace": "udp-secure-stable-userspace-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace")),
 	}
 	manifestPayload, err = json.Marshal(manifest)
 	if err != nil {
@@ -1323,7 +1323,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		!strings.Contains(string(matrixPathMismatchOutput), "does not match matrix summary workdir path") {
 		t.Fatalf("generator did not explain matrix workdir mismatch:\n%s", matrixPathMismatchOutput)
 	}
-	matrixRow["workdir"] = filepath.Join(workdir, "udp-secure-stable-userspace-userspace")
+	matrixRow["workdir"] = filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace")
 	matrixPayload, err = json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
 		t.Fatalf("marshal restored matrix row: %v", err)
@@ -1333,7 +1333,7 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 	}
 
 	manifest["case_min_gbps"] = map[string]any{
-		"userspace": "udp-secure-stable-userspace-userspace=1.0",
+		"userspace": "udp-secure-stable-userspace-userspace-userspace=1.0",
 	}
 	manifestPayload, err = json.Marshal(manifest)
 	if err != nil {
@@ -1368,7 +1368,7 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 	}
 	matrixRow := map[string]any{
 		"status":           "pass",
-		"case":             "udp-secure-stable-userspace-userspace",
+		"case":             "udp-secure-stable-userspace-userspace-userspace",
 		"runner_case":      "userspace-udp-secure",
 		"transport":        "udp",
 		"encryption":       "secure",
@@ -1380,7 +1380,7 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 		"min_gbps":         2.0,
 		"min_seconds":      3600,
 		"exit_code":        0,
-		"workdir":          filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
+		"workdir":          filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace"),
 	}
 	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
@@ -1390,8 +1390,8 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 		t.Fatalf("write matrix summary: %v", err)
 	}
 	gateRow := map[string]any{
-		"case":                       "udp-secure-stable-userspace-userspace",
-		"path":                       filepath.Join(workdir, "udp-secure-stable-userspace-userspace"),
+		"case":                       "udp-secure-stable-userspace-userspace-userspace",
+		"path":                       filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace"),
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
 		"min_seconds_required":       3600,
@@ -1459,13 +1459,13 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixGateMismatch(t *testing.T
 			"size":   456,
 		},
 		"cases": map[string]any{
-			"userspace": "udp-secure-stable-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace")),
+			"userspace": "udp-secure-stable-userspace-userspace-userspace=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace")),
 		},
 		"case_min_gbps": map[string]any{
-			"userspace": "udp-secure-stable-userspace-userspace=1.5",
+			"userspace": "udp-secure-stable-userspace-userspace-userspace=1.5",
 		},
 		"case_min_seconds": map[string]any{
-			"userspace": "udp-secure-stable-userspace-userspace=3600",
+			"userspace": "udp-secure-stable-userspace-userspace-userspace=3600",
 		},
 	}
 	manifestPayload, err := json.Marshal(manifest)
@@ -1530,7 +1530,7 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testi
 			name: "route_gso_wrong_runner",
 			matrixRow: map[string]any{
 				"status":           "pass",
-				"case":             "experimental_tcp-plaintext-performance-kernel_module-userspace",
+				"case":             "experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso",
 				"runner_case":      "userspace-tcp-plaintext",
 				"transport":        "experimental_tcp",
 				"encryption":       "plaintext",
@@ -1596,7 +1596,7 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testi
 			name: "owdeb_route_gso_missing_case_suffix",
 			matrixRow: map[string]any{
 				"status":           "pass",
-				"case":             "experimental_tcp-plaintext-performance-kernel_module-userspace",
+				"case":             "experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso",
 				"runner_case":      "owdeb-routegso",
 				"transport":        "experimental_tcp",
 				"encryption":       "plaintext",
@@ -1610,8 +1610,8 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testi
 			},
 			want: []string{
 				"gate_family=owdeb_route_gso",
-				"requires case='experimental_tcp-plaintext-performance-kernel_module-userspace-owdeb'",
-				"got 'experimental_tcp-plaintext-performance-kernel_module-userspace'",
+				"requires case='experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso-owdeb'",
+				"got 'experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso'",
 			},
 		},
 	}
@@ -1805,7 +1805,7 @@ func TestProductionEvidenceFromGateSummaryRejectsShortPassSoak(t *testing.T) {
 	}
 	matrixRow := map[string]any{
 		"status":           "pass",
-		"case":             "udp-secure-stable-userspace-userspace",
+		"case":             "udp-secure-stable-userspace-userspace-userspace",
 		"runner_case":      "userspace-udp-secure",
 		"transport":        "udp",
 		"encryption":       "secure",
@@ -1826,7 +1826,7 @@ func TestProductionEvidenceFromGateSummaryRejectsShortPassSoak(t *testing.T) {
 		t.Fatalf("write matrix summary: %v", err)
 	}
 	gateRow := map[string]any{
-		"case":                       "udp-secure-stable-userspace-userspace",
+		"case":                       "udp-secure-stable-userspace-userspace-userspace",
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
 		"min_seconds_required":       900,
@@ -1890,7 +1890,7 @@ func TestProductionEvidenceFromGateSummaryRejectsUnderMeasuredPassSoak(t *testin
 	}
 	matrixRow := map[string]any{
 		"status": "pass",
-		"case":   "udp-secure-stable-userspace-userspace",
+		"case":   "udp-secure-stable-userspace-userspace-userspace",
 	}
 	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
@@ -1900,7 +1900,7 @@ func TestProductionEvidenceFromGateSummaryRejectsUnderMeasuredPassSoak(t *testin
 		t.Fatalf("write matrix summary: %v", err)
 	}
 	gateRow := map[string]any{
-		"case":                       "udp-secure-stable-userspace-userspace",
+		"case":                       "udp-secure-stable-userspace-userspace-userspace",
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
 		"min_seconds_required":       3600,
@@ -1971,7 +1971,7 @@ func TestProductionEvidenceFromGateSummaryRequiresRunTimingArtifacts(t *testing.
 	}
 	matrixRow := map[string]any{
 		"status": "pass",
-		"case":   "udp-secure-stable-userspace-userspace",
+		"case":   "udp-secure-stable-userspace-userspace-userspace",
 	}
 	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
@@ -1981,7 +1981,7 @@ func TestProductionEvidenceFromGateSummaryRequiresRunTimingArtifacts(t *testing.
 		t.Fatalf("write matrix summary: %v", err)
 	}
 	gateRow := map[string]any{
-		"case":                       "udp-secure-stable-userspace-userspace",
+		"case":                       "udp-secure-stable-userspace-userspace-userspace",
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
 		"min_seconds_required":       3600,
@@ -2044,7 +2044,7 @@ func TestProductionEvidenceFromGateSummaryRequiresIperfCoverageArtifacts(t *test
 	}
 	matrixRow := map[string]any{
 		"status": "pass",
-		"case":   "udp-secure-stable-userspace-userspace",
+		"case":   "udp-secure-stable-userspace-userspace-userspace",
 	}
 	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
@@ -2054,7 +2054,7 @@ func TestProductionEvidenceFromGateSummaryRequiresIperfCoverageArtifacts(t *test
 		t.Fatalf("write matrix summary: %v", err)
 	}
 	gateRow := map[string]any{
-		"case":                       "udp-secure-stable-userspace-userspace",
+		"case":                       "udp-secure-stable-userspace-userspace-userspace",
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
 		"min_seconds_required":       3600,
@@ -2128,7 +2128,7 @@ func TestProductionEvidenceFromGateSummaryRequiresRuntimeIdentityArtifacts(t *te
 	}
 	matrixRow := map[string]any{
 		"status": "pass",
-		"case":   "udp-secure-stable-userspace-userspace",
+		"case":   "udp-secure-stable-userspace-userspace-userspace",
 	}
 	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
@@ -2138,7 +2138,7 @@ func TestProductionEvidenceFromGateSummaryRequiresRuntimeIdentityArtifacts(t *te
 		t.Fatalf("write matrix summary: %v", err)
 	}
 	gateRow := map[string]any{
-		"case":                       "udp-secure-stable-userspace-userspace",
+		"case":                       "udp-secure-stable-userspace-userspace-userspace",
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
 		"min_seconds_required":       3600,
@@ -2214,7 +2214,7 @@ func TestProductionEvidenceFromGateSummaryRequiresCrashStabilityArtifacts(t *tes
 	}
 	matrixRow := map[string]any{
 		"status": "pass",
-		"case":   "udp-secure-stable-userspace-userspace",
+		"case":   "udp-secure-stable-userspace-userspace-userspace",
 	}
 	matrixPayload, err := json.Marshal(withMatrixToolchain(matrixRow))
 	if err != nil {
@@ -2224,7 +2224,7 @@ func TestProductionEvidenceFromGateSummaryRequiresCrashStabilityArtifacts(t *tes
 		t.Fatalf("write matrix summary: %v", err)
 	}
 	gateRow := map[string]any{
-		"case":                       "udp-secure-stable-userspace-userspace",
+		"case":                       "udp-secure-stable-userspace-userspace-userspace",
 		"status":                     "pass",
 		"min_gbps_required":          1.5,
 		"min_seconds_required":       3600,
@@ -3307,8 +3307,24 @@ cases = [
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/kernel_modules.go", True),
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/transports_status.go", True),
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/transport/experimentaltcp/runtime.go", True),
+    ({"gate_family": "exp_tcp_full_kmod"}, "internal/kernelmodule/aead_ioctl_linux.go", True),
+    ({"gate_family": "full_kmod"}, "internal/kernelmodule/aead_ioctl_linux.go", True),
+    ({"gate_family": "full_kmod"}, "internal/dataplane/ebpf/manager_linux.go", False),
+    ({"gate_family": "userspace_tc"}, "internal/dataplane/ebpf/manager_linux.go", False),
+    ({"gate_family": "userspace_tc"}, "internal/kernelmodule/aead_ioctl_linux.go", False),
+    ({"gate_family": "userspace_tc"}, "internal/daemon/datapath.go", False),
+    ({"gate_family": "userspace_tc"}, "internal/daemon/kernel_modules.go", False),
+    ({"gate_family": "tc_direct"}, "kernel/bpf/dataplane/kernel_udp_tx_tc.c", True),
+    ({"gate_family": "tc_direct"}, "scripts/build-embedded-bpf.sh", True),
+    ({"gate_family": "tc_direct"}, "internal/daemon/kernel_udp_direct_policy.go", True),
+    ({"gate_family": "full_kmod"}, "internal/daemon/kernel_udp_direct_policy.go", False),
+    ({"gate_family": "route_gso"}, "internal/kernelmodule/aead_ioctl_linux.go", True),
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/kernel_modules_test.go", False),
     ({"gate_family": "userspace"}, "internal/daemon/datapath.go", False),
+    ({"gate_family": "userspace"}, "internal/dataplane/ebpf/manager_linux.go", False),
+    ({"gate_family": "userspace"}, "internal/kernelmodule/aead_ioctl_linux.go", False),
+    ({"gate_family": "userspace", "transport": "tcp"}, "internal/transport/experimentaltcp/runtime.go", False),
+    ({"gate_family": "userspace", "transport": "experimental_tcp"}, "internal/transport/experimentaltcp/runtime.go", True),
     ({"gate_family": "userspace"}, "internal/config/config.go", True),
 ]
 for row, path, want in cases:
@@ -4427,14 +4443,17 @@ func TestE2ESmokeDefaultsAvoidUnsafeDirectKfuncCrypto(t *testing.T) {
 		"TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN:-0",
 		"TRUSTIX_E2E_AF_XDP_TX_BACKPRESSURE_WAIT must be a Go duration or 0",
 		"route_tcp_gso_async_worker_emit_budget=0",
-		"route_tcp_gso_async_worker_dequeue_batch=4",
-		"route_tcp_gso_async_hash_tx_queue=1",
-		"route_tcp_gso_async_worker_min_queue_depth=1",
+		"route_tcp_gso_async_worker_dequeue_batch=32",
+		"route_tcp_gso_async_hash_tx_queue=0",
+		"route_tcp_gso_async_worker_min_queue_depth=0",
 		"route_tcp_gso_async_worker_schedule_delay_usecs=0",
 		"experimental_tcp_route_gso_async_worker_item_budget=64",
 		"experimental_tcp_route_gso_async_worker_segment_budget=2048",
 		"route_tcp_gso_async_worker_item_budget=${experimental_tcp_route_gso_async_worker_item_budget}",
 		"route_tcp_gso_async_worker_segment_budget=${experimental_tcp_route_gso_async_worker_segment_budget}",
+		"tixt_rx_coalesce_segment_gso=0",
+		"tixt_rx_backlog_worker_budget=2048",
+		"tixt_rx_backlog_worker_queue_limit=65536",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-e2e-smoke.sh default missing %q", want)
@@ -4745,7 +4764,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1",
 		"--require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1",
 		"--require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1",
-		"--require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=1",
+		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=0",
 		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1",
 		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_xmit_packets=1",
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_queue_full=0",
@@ -4912,10 +4931,10 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		t.Fatalf("write verifier stub: %v", err)
 	}
 
-	fastName := "udp-secure-stable-userspace-userspace"
-	slowName := "tcp-plaintext-stable-userspace-userspace"
-	secureTLSName := "tcp-secure-stable-userspace-userspace"
-	userspaceTCName := "gre-plaintext-performance-tc_xdp-userspace"
+	fastName := "udp-secure-stable-userspace-userspace-userspace"
+	slowName := "tcp-plaintext-stable-userspace-userspace-userspace"
+	secureTLSName := "tcp-secure-stable-userspace-userspace-userspace"
+	userspaceTCName := "gre-plaintext-performance-tc_xdp-userspace-userspace_tc"
 	fastDir := slashPath(filepath.Join(workdir, "fast"))
 	slowDir := slashPath(filepath.Join(workdir, "slow"))
 	secureTLSDir := slashPath(filepath.Join(workdir, "secure-tls"))
@@ -5560,14 +5579,14 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"GATE_MIN_SECONDS=",
 		"GATE_SECONDS_SLOP=1",
 		"GATE_SUMMARY_DIR=" + slashPath(filepath.Join(matrixWorkdir, "selected-production-gate")),
-		"udp-secure-stable-userspace-userspace=1.5",
-		"tcp-secure-stable-userspace-userspace=0.75",
-		"udp-secure-stable-userspace-userspace=30",
-		"tcp-secure-stable-userspace-userspace=30",
-		"gre-plaintext-performance-tc_xdp-userspace=4",
-		"gre-plaintext-performance-tc_xdp-userspace=30",
-		"experimental_tcp-plaintext-performance-kernel_module-userspace=2.5",
-		"experimental_tcp-plaintext-performance-kernel_module-userspace=3600",
+		"udp-secure-stable-userspace-userspace-userspace=1.5",
+		"tcp-secure-stable-userspace-userspace-userspace=0.75",
+		"udp-secure-stable-userspace-userspace-userspace=30",
+		"tcp-secure-stable-userspace-userspace-userspace=30",
+		"gre-plaintext-performance-tc_xdp-userspace-userspace_tc=4",
+		"gre-plaintext-performance-tc_xdp-userspace-userspace_tc=30",
+		"experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso=2.5",
+		"experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso=3600",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("selected gate capture missing %q:\n%s", want, text)
@@ -5613,10 +5632,10 @@ func TestCrossHostTransportMatrixEmitsManifestBackedEvidence(t *testing.T) {
 		"case_token=\"$TRUSTIX_CROSS_HOST_USERSPACE_CASES\"",
 		"case_path=\"${case_token#*=}\"",
 		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/production-gate-manifest.json\" <<JSON",
-		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456},"cases":{"userspace":"${case_token}"},"case_min_gbps":{"userspace":"udp-secure-stable-userspace-userspace=1.5"},"case_min_seconds":{"userspace":"udp-secure-stable-userspace-userspace=3600"}}`,
+		`{"schema":"trustix-cross-host-production-gate-manifest-v1","production_gate":{"path":"production-gate.sh","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":123},"verifier":{"path":"verifier.py","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":456},"cases":{"userspace":"${case_token}"},"case_min_gbps":{"userspace":"udp-secure-stable-userspace-userspace-userspace=1.5"},"case_min_seconds":{"userspace":"udp-secure-stable-userspace-userspace-userspace=3600"}}`,
 		"JSON",
 		"cat > \"$TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR/userspace-udp-secure.jsonl\" <<JSON",
-		`{"case":"udp-secure-stable-userspace-userspace","path":"${case_path}","status":"pass","min_gbps_required":1.5,"min_seconds_required":3600,"seconds_slop":0,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"min_seconds":3600.1,"min_iperf_intervals_required":600,"min_iperf_interval_gbps_ratio_required":0.25,"iperf_json_count":2,"iperf_direction_count":2,"iperf_pair_directions":["a-to-b","b-to-a"],"iperf":[{"direction":"forward","sent_gbps":1.9,"received_gbps":1.8,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true},{"direction":"forward","sent_gbps":1.8,"received_gbps":1.7,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true}],"result_markers":["pass"],"binary_identities":[{"source":"collect/a/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"source":"collect/b/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}],"build_identities":[{"source":"collect/a/status.json","version":"trustix-test","commit":"0123456789ab","built_at":"2026-06-25T00:00:00Z","go_version":"go1.25.0","goos":"linux","goarch":"amd64","strong":true},{"source":"collect/b/status.json","version":"trustix-test","commit":"0123456789ab","built_at":"2026-06-25T00:00:00Z","go_version":"go1.25.0","goos":"linux","goarch":"amd64","strong":true}],"lsmod_artifacts":[{"source":"collect/a/lsmod.txt","node":"a","modules":[]},{"source":"collect/b/lsmod.txt","node":"b","modules":[]}],"lsmod_nodes":["a","b"],"lan_state_artifacts":[{"source":"collect/a/lan-state.txt","node":"a","interface":"tix-lan-a","tx_queue_len":1000},{"source":"collect/b/lan-state.txt","node":"b","interface":"tix-lan-b","tx_queue_len":1000}],"lan_state_nodes":["a","b"],"run_timing":[{"source":"run-timing.json","iperf_mode":"forward","iperf_directions":"both","iperf_seconds_requested":3600,"start_epoch":1000,"end_epoch":4600.1,"elapsed_seconds":3600.1}],"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"boot_ids":[{"node":"a","phase":"before","boot_id":"boot-a"},{"node":"a","phase":"after","boot_id":"boot-a"},{"node":"b","phase":"before","boot_id":"boot-b"},{"node":"b","phase":"after","boot_id":"boot-b"}],"errors":[],"log_findings":[],"kernel_log_artifacts":["collect/a/kernel.log","collect/b/kernel.log"],"kernel_log_nodes":["a","b"],"kernel_log_rejected_artifacts":[],"pstore_artifacts":["collect/a/pstore.txt","collect/b/pstore.txt"],"pstore_nodes":["a","b"],"pstore_rejected_artifacts":[]}`,
+		`{"case":"udp-secure-stable-userspace-userspace-userspace","path":"${case_path}","status":"pass","min_gbps_required":1.5,"min_seconds_required":3600,"seconds_slop":0,"min_sent_gbps":1.9,"min_received_gbps":1.8,"min_required_received_gbps":1.7,"min_seconds":3600.1,"min_iperf_intervals_required":600,"min_iperf_interval_gbps_ratio_required":0.25,"iperf_json_count":2,"iperf_direction_count":2,"iperf_pair_directions":["a-to-b","b-to-a"],"iperf":[{"direction":"forward","sent_gbps":1.9,"received_gbps":1.8,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true},{"direction":"forward","sent_gbps":1.8,"received_gbps":1.7,"seconds":3600.1,"intervals":600,"interval_min_gbps":1.0,"sent_required":true,"received_required":true}],"result_markers":["pass"],"binary_identities":[{"source":"collect/a/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"source":"collect/b/binary-identity.json","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}],"build_identities":[{"source":"collect/a/status.json","version":"trustix-test","commit":"0123456789ab","built_at":"2026-06-25T00:00:00Z","go_version":"go1.25.0","goos":"linux","goarch":"amd64","strong":true},{"source":"collect/b/status.json","version":"trustix-test","commit":"0123456789ab","built_at":"2026-06-25T00:00:00Z","go_version":"go1.25.0","goos":"linux","goarch":"amd64","strong":true}],"lsmod_artifacts":[{"source":"collect/a/lsmod.txt","node":"a","modules":[]},{"source":"collect/b/lsmod.txt","node":"b","modules":[]}],"lsmod_nodes":["a","b"],"lan_state_artifacts":[{"source":"collect/a/lan-state.txt","node":"a","interface":"tix-lan-a","tx_queue_len":1000},{"source":"collect/b/lan-state.txt","node":"b","interface":"tix-lan-b","tx_queue_len":1000}],"lan_state_nodes":["a","b"],"run_timing":[{"source":"run-timing.json","iperf_mode":"forward","iperf_directions":"both","iperf_seconds_requested":3600,"start_epoch":1000,"end_epoch":4600.1,"elapsed_seconds":3600.1}],"uname_artifacts":[{"node":"a","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"a","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"before","kernel_release":"6.12.90+deb13.1-amd64"},{"node":"b","phase":"after","kernel_release":"6.12.90+deb13.1-amd64"}],"os_release_artifacts":[{"node":"a","phase":"before","identity":"debian:13"},{"node":"a","phase":"after","identity":"debian:13"},{"node":"b","phase":"before","identity":"debian:13"},{"node":"b","phase":"after","identity":"debian:13"}],"boot_ids":[{"node":"a","phase":"before","boot_id":"boot-a"},{"node":"a","phase":"after","boot_id":"boot-a"},{"node":"b","phase":"before","boot_id":"boot-b"},{"node":"b","phase":"after","boot_id":"boot-b"}],"errors":[],"log_findings":[],"kernel_log_artifacts":["collect/a/kernel.log","collect/b/kernel.log"],"kernel_log_nodes":["a","b"],"kernel_log_rejected_artifacts":[],"pstore_artifacts":["collect/a/pstore.txt","collect/b/pstore.txt"],"pstore_nodes":["a","b"],"pstore_rejected_artifacts":[]}`,
 		"JSON",
 		"",
 	}, "\n")), 0o755); err != nil {
@@ -5732,6 +5751,8 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"runner_case_name",
 		"gate_family_class",
 		"matrix_case_name",
+		"gate_class=\"$(gate_family_class \"$gate_family\")\"",
+		"local base=\"${token}-${encryption}-${profile}-${datapath}-${placement}-${gate_class}\"",
 		"full_kmod|dd_full_kmod) printf 'dd-fullkmod\\n'",
 		"owdeb_full_kmod) printf 'owdeb-fullkmod\\n'",
 		"exp_tcp_full_kmod|dd_exp_tcp_full_kmod) printf 'experimental-tcp-full-kmod\\n'",
@@ -5888,8 +5909,8 @@ func TestCrossHostTransportMatrixUsesRouteGSODialErrorBudget(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]string{
-		"udp-secure-stable-userspace-userspace":                          "data_path.counters.session_dial_errors=0",
-		"experimental_tcp-plaintext-performance-kernel_module-userspace": "data_path.counters.session_dial_errors=2",
+		"udp-secure-stable-userspace-userspace-userspace":                          "data_path.counters.session_dial_errors=0",
+		"experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso": "data_path.counters.session_dial_errors=2",
 	} {
 		if gotByCase[name] != want {
 			t.Fatalf("case %s dial-error gate got %q want %q\ncapture:\n%s", name, gotByCase[name], want, payload)
@@ -6331,6 +6352,7 @@ func productionDefaultMatrixCase(row productionTransportDefault) string {
 		row.Profile,
 		row.Datapath,
 		row.CryptoPlacement,
+		productionGateFamilyClass(row.GateFamily),
 	}, "-")
 	switch {
 	case strings.HasPrefix(row.GateFamily, "owdeb_"):
@@ -6553,8 +6575,70 @@ func TestCrossHostTransportMatrixCanRepresentOpenWrtRouteGSOWhenExplicitlyValida
 	}
 	if row.RunnerCase != "owdeb-routegso" ||
 		row.GateFamily != "owdeb_route_gso" ||
-		!strings.HasSuffix(row.Case, "-owdeb") {
+		row.Case != "experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso-owdeb" {
 		t.Fatalf("unexpected owdeb route-GSO dry-run row: %+v\n%s", row, payload)
+	}
+}
+
+func TestCrossHostTransportMatrixDisambiguatesExperimentalTCPFullKmodAndRouteGSO(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+	workdir := t.TempDir()
+	defaults := filepath.Join(workdir, "defaults.tsv")
+	summary := filepath.Join(workdir, "summary.jsonl")
+	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
+		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
+		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\t4\t30\texplicit experimental TCP full-kmod validation input",
+		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t30\texplicit route-GSO validation input",
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	cmd := exec.Command(bash, "linux-cross-host-transport-matrix.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DEFAULTS="+defaults,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SCOPE=cross_host",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_DRY_RUN=1",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_VERIFY=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SELECTED_GATE=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_SUMMARY="+summary,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run explicit experimental TCP matrix failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read dry-run summary: %v", err)
+	}
+	got := map[string]crossHostTransportMatrixDryRunRow{}
+	for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var row crossHostTransportMatrixDryRunRow
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("decode summary row %q: %v", line, err)
+		}
+		got[row.GateFamily] = row
+	}
+	expFull := got["exp_tcp_full_kmod"]
+	routeGSO := got["route_gso"]
+	if expFull.Case != "experimental_tcp-plaintext-performance-kernel_module-userspace-exp_tcp_full_kmod" {
+		t.Fatalf("unexpected exp_tcp_full_kmod case name: %+v\n%s", expFull, payload)
+	}
+	if routeGSO.Case != "experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso" {
+		t.Fatalf("unexpected route_gso case name: %+v\n%s", routeGSO, payload)
+	}
+	if expFull.Case == routeGSO.Case {
+		t.Fatalf("exp_tcp_full_kmod and route_gso share a case directory:\n%s", payload)
 	}
 }
 
@@ -6611,6 +6695,10 @@ func TestCrossHostTransportMatrixCanRepresentExperimentalTCPFullKmodWhenExplicit
 		"exp_tcp_full_kmod":       "experimental-tcp-full-kmod",
 		"owdeb_exp_tcp_full_kmod": "owdeb-experimental-tcp-full-kmod",
 	}
+	wantCases := map[string]string{
+		"exp_tcp_full_kmod":       "experimental_tcp-plaintext-performance-kernel_module-userspace-exp_tcp_full_kmod",
+		"owdeb_exp_tcp_full_kmod": "experimental_tcp-plaintext-performance-kernel_module-userspace-exp_tcp_full_kmod-owdeb",
+	}
 	for family, runner := range tests {
 		row, ok := got[family]
 		if !ok {
@@ -6621,6 +6709,9 @@ func TestCrossHostTransportMatrixCanRepresentExperimentalTCPFullKmodWhenExplicit
 			row.Datapath != "kernel_module" ||
 			row.CryptoPlacement != "userspace" {
 			t.Fatalf("unexpected %s dry-run row: %+v\n%s", family, row, payload)
+		}
+		if row.Case != wantCases[family] {
+			t.Fatalf("unexpected %s case name: got %q want %q\n%s", family, row.Case, wantCases[family], payload)
 		}
 	}
 }
@@ -6735,6 +6826,8 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1",
 		"case \"$iperf_mode\" in bidir|forward|reverse)",
 		"apply_case_runtime_defaults",
+		"owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod)",
+		"iperf_parallel=16",
 		"truthy \"$dry_run_config\"",
 		"write_config a \"$workdir/config-a.yaml\"",
 		"write_config b \"$workdir/config-b.yaml\"",
@@ -6888,6 +6981,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"collect_transport_snapshot",
 		"run_iperf_client_with_snapshot",
 		"run_connectivity_checks",
+		"route_gso|secure_kudp|secure_exp_tcp_kernel)",
 		"run_tcp_health_checks",
 		"run_tcp_health_direction",
 		"proc_tcp_listening /proc/net/tcp",

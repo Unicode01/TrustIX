@@ -4191,7 +4191,8 @@ func (daemon *Daemon) preferReverseSessionForAddressedEndpoint(endpoint config.E
 	switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
 	case transport.ProtocolExperimentalTCP:
 		if parseSecureTransportEncryption(encryption) == securetransport.EncryptionPlaintext &&
-			kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
+			(kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) ||
+				experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired)) {
 			return false
 		}
 		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_SECURE_PREFER_REVERSE_SESSION") {

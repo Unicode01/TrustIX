@@ -3000,6 +3000,9 @@ func (manager *Manager) deleteReplacedExperimentalTCPRouteGSOFlowsLocked(flow da
 		if !kernelTransportHostPortEqual(existing.RemoteAddress, endpointAddress) {
 			continue
 		}
+		if experimentalTCPRouteGSOEndpointAddressFlowHasCompleteTuple(existing) {
+			continue
+		}
 		manager.holdExperimentalTCPAllowedPortsLocked(existing, now)
 		delete(manager.expTCPFlows, flowID)
 		delete(manager.kernelUDPTXDirectSequences, flowID)
@@ -3011,6 +3014,13 @@ func (manager *Manager) deleteReplacedExperimentalTCPRouteGSOFlowsLocked(flow da
 		manager.deleteKernelCryptoFlowLocked(flowID)
 		manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceExperimentalTCP, flowID)
 	}
+}
+
+func experimentalTCPRouteGSOEndpointAddressFlowHasCompleteTuple(flow dataplane.ExperimentalTCPFlow) bool {
+	return strings.TrimSpace(flow.LocalAddress) != "" &&
+		strings.TrimSpace(flow.RemoteAddress) != "" &&
+		flow.SourcePort != 0 &&
+		flow.DestinationPort != 0
 }
 
 func (manager *Manager) experimentalTCPFlowEndpointAddressLocked(flow dataplane.ExperimentalTCPFlow) (string, bool) {
@@ -16645,8 +16655,6 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 			}
 			instructions = append(instructions,
 				asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord),
-				asm.LoadMem(asm.R4, asm.R0, 72, asm.Word).WithSymbol("kudp_tx_direct_route_tcp_single_flow_guard"),
-				asm.JNE.Imm(asm.R4, 0, "kudp_tx_direct_fallback"),
 				asm.StoreImm(asm.RFP, kernelUDPTXTIXTSegmentRouteTCPGSOArgsClearFlagsOffset, int64(gsoFlags), asm.Word),
 				asm.Mov.Reg(asm.R2, asm.R0),
 				asm.Mov.Reg(asm.R1, asm.R6).WithSymbol("kudp_tx_direct_route_tcp_kfunc"),
@@ -16667,8 +16675,6 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 					asm.JEq.Imm(asm.R0, 0, "kudp_tx_direct_adjust_drop"),
 					asm.Ja.Label("kudp_tx_direct_route_tcp_gso_redirect"),
 					asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord).WithSymbol("kudp_tx_direct_route_tcp_xmit_kfunc_prepare"),
-					asm.LoadMem(asm.R4, asm.R0, 72, asm.Word),
-					asm.JNE.Imm(asm.R4, 0, "kudp_tx_direct_fallback"),
 					asm.StoreImm(asm.RFP, kernelUDPTXTIXTSegmentRouteTCPGSOArgsClearFlagsOffset, int64(gsoFlags), asm.Word),
 					asm.Mov.Reg(asm.R2, asm.R0),
 					asm.Mov.Reg(asm.R1, asm.R6).WithSymbol("kudp_tx_direct_route_tcp_xmit_kfunc"),
@@ -16696,9 +16702,7 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 			}
 		} else {
 			instructions = append(instructions,
-				asm.StoreImm(asm.RFP, kernelUDPTXTIXTPushRouteTCPHeaderArgsClearFlagsOffset, int64(flags), asm.Word),
-				asm.LoadMem(asm.R4, asm.R0, 72, asm.Word).WithSymbol("kudp_tx_direct_push_route_outer_tcp_header_kfunc"),
-				asm.JNE.Imm(asm.R4, 0, "kudp_tx_direct_inline_route_unsupported"),
+				asm.StoreImm(asm.RFP, kernelUDPTXTIXTPushRouteTCPHeaderArgsClearFlagsOffset, int64(flags), asm.Word).WithSymbol("kudp_tx_direct_push_route_outer_tcp_header_kfunc"),
 				asm.Mov.Reg(asm.R2, asm.R0),
 				asm.Mov.Reg(asm.R1, asm.R6),
 				asm.Mov.Reg(asm.R3, asm.RFP),
@@ -16792,8 +16796,6 @@ func appendKernelUDPTXDirect(instructions asm.Instructions, statsMap *cebpf.Map,
 			instructions = append(instructions,
 				asm.StoreImm(asm.RFP, kernelUDPTXTIXTPushRouteTCPHeaderArgsClearFlagsOffset, int64(flags), asm.Word).WithSymbol("kudp_tx_direct_route_tcp_linear_kfunc"),
 				asm.LoadMem(asm.R0, asm.RFP, kernelUDPTXRoutePtrOffset, asm.DWord),
-				asm.LoadMem(asm.R4, asm.R0, 72, asm.Word),
-				asm.JNE.Imm(asm.R4, 0, "kudp_tx_direct_fallback"),
 				asm.Mov.Reg(asm.R2, asm.R0),
 				asm.Mov.Reg(asm.R1, asm.R6),
 				asm.Mov.Reg(asm.R3, asm.RFP),
@@ -23372,15 +23374,18 @@ func (manager *Manager) kernelUDPTXDirectFlowsForRouteLocked(route routing.Route
 			return nil
 		}
 	}
-	expTCPRouteMultiFlow := !secureDirect && experimentalTCPTXPlaintextDirectRouteMultiFlowEnabled()
+	routeGSO := experimentalTCPRouteGSORequestedForSpec(manager.spec)
+	expTCPRouteMultiFlow := !secureDirect && (routeGSO || experimentalTCPTXPlaintextDirectRouteMultiFlowEnabled())
 	if expTCPRouteMultiFlow {
 		candidates = manager.filterExperimentalTCPTXPlaintextDirectListenerSourcedFlowsLocked(route, candidates)
 		if len(candidates) == 0 {
 			return nil
 		}
 	}
-	if flow, ok := manager.selectExperimentalTCPTXPlaintextDirectFlowLocked(route, candidates, secureDirect); ok {
-		return []kernelUDPTXRouteFlow{flow}
+	if !expTCPRouteMultiFlow {
+		if flow, ok := manager.selectExperimentalTCPTXPlaintextDirectFlowLocked(route, candidates, secureDirect); ok {
+			return []kernelUDPTXRouteFlow{flow}
+		}
 	}
 	if !secureDirect {
 		candidates = manager.filterKernelUDPTXPlaintextDirectListenerSourcedFlowsLocked(route, candidates)

@@ -815,9 +815,9 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_item_budget=64")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_segment_budget=2048")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_emit_budget=0")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_resched_stride=16")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_dequeue_batch=4")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_min_queue_depth=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_resched_stride=0")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_dequeue_batch=32")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_min_queue_depth=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_worker_schedule_delay_usecs=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_max_segments_per_item=128")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_force_inner_checksum=0")
@@ -825,8 +825,8 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_unbound_worker=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_sharded_queue=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_queue_shards=8")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_flow_shard_queue=0")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_hash_tx_queue=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_flow_shard_queue=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_hash_tx_queue=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build_inner_csum=1")
@@ -846,6 +846,9 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_max_frames=128")
 		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_coalesce_gso=1")
 		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_coalesce_mark_gso=1")
+		params = appendModuleParameterIfMissing(params, "tixt_rx_coalesce_segment_gso=0")
+		params = appendModuleParameterIfMissing(params, "tixt_rx_backlog_worker_budget=2048")
+		params = appendModuleParameterIfMissing(params, "tixt_rx_backlog_worker_queue_limit=65536")
 		params = appendModuleParameterIfMissing(params, "route_tcp_xmit_worker=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_xmit_worker_budget=1024")
 		params = appendModuleParameterIfMissing(params, "route_tcp_xmit_worker_queue_limit=32768")
@@ -1089,6 +1092,7 @@ var trustIXDatapathHelpersSafeAsyncModuleParameters = map[string]struct{}{
 	"route_tcp_gso_async_worker_budget_reschedule_delay_jiffies":        {},
 	"route_tcp_gso_async_worker_budget_reschedule_delay_usecs":          {},
 	"route_tcp_gso_async_worker_dequeue_batch":                          {},
+	"route_tcp_gso_async_worker_emit_budget":                            {},
 	"route_tcp_gso_async_worker_item_budget":                            {},
 	"route_tcp_gso_async_worker_max_depth_defers":                       {},
 	"route_tcp_gso_async_worker_min_queue_depth":                        {},
@@ -1108,6 +1112,8 @@ var trustIXDatapathHelpersSafeAsyncModuleParameters = map[string]struct{}{
 	"tixt_rx_stream_max_frames":                                         {},
 	"tixt_rx_stream_parse":                                              {},
 	"tixt_rx_stream_xmit_extra":                                         {},
+	"tixt_rx_backlog_worker_budget":                                     {},
+	"tixt_rx_backlog_worker_queue_limit":                                {},
 	"tixt_rx_coalesce_mark_gso_partial_csum":                            {},
 	"tixt_rx_coalesce_segment_gso":                                      {},
 	"tixt_rx_single_coalesce_gso":                                       {},
