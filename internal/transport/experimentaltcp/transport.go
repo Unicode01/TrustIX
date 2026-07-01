@@ -217,7 +217,7 @@ func (transportImpl *Transport) Probe(ctx context.Context, peer transport.Peer) 
 		return transport.ProbeResult{Healthy: false, Error: err.Error(), CheckedAt: time.Now()}
 	}
 	if !status.Available || !status.Reinject {
-		return transport.ProbeResult{Healthy: false, Error: "experimental_tcp TC/XDP reinject is unavailable", CheckedAt: time.Now()}
+		return transport.ProbeResult{Healthy: false, Error: experimentalTCPReinjectUnavailableError(status).Error(), CheckedAt: time.Now()}
 	}
 	for _, endpoint := range peer.Endpoints {
 		if endpoint.Transport == transport.ProtocolExperimentalTCP && endpoint.Address != "" {
@@ -263,7 +263,7 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			return nil, err
 		}
 		if !status.Available || !status.Reinject {
-			return nil, fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable")
+			return nil, experimentalTCPReinjectUnavailableError(status)
 		}
 		placement, err := transportImpl.selectCryptoPlacementFromStatus(status, endpoint.Encryption)
 		if err != nil {
@@ -361,7 +361,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 		return nil, err
 	}
 	if !status.Available || !status.Reinject {
-		return nil, fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable")
+		return nil, experimentalTCPReinjectUnavailableError(status)
 	}
 	placement, err := transportImpl.selectCryptoPlacementFromStatus(status, ep.Encryption)
 	if err != nil {
@@ -454,9 +454,30 @@ func (transportImpl *Transport) selectCryptoPlacement(ctx context.Context, encry
 		return "", err
 	}
 	if !status.Available || !status.Reinject {
-		return "", fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable")
+		return "", experimentalTCPReinjectUnavailableError(status)
 	}
 	return transportImpl.selectCryptoPlacementFromStatus(status, encryption)
+}
+
+func experimentalTCPReinjectUnavailableError(status dataplane.ExperimentalTCPStatus) error {
+	reason := strings.TrimSpace(status.FastPathFallback)
+	if reason == "" {
+		for _, note := range status.Notes {
+			note = strings.TrimSpace(note)
+			if strings.Contains(note, "unavailable:") {
+				reason = note
+				break
+			}
+		}
+	}
+	if reason != "" {
+		return fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable: %s", reason)
+	}
+	provider := strings.TrimSpace(status.Provider)
+	if provider == "" {
+		provider = "none"
+	}
+	return fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable: provider=%s available=%t reinject=%t", provider, status.Available, status.Reinject)
 }
 
 func (transportImpl *Transport) selectCryptoPlacementFromStatus(status dataplane.ExperimentalTCPStatus, encryption string) (dataplane.CryptoPlacement, error) {

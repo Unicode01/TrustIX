@@ -146,6 +146,7 @@ type Manager struct {
 	kernelUDPTXDirectRouteTCPGSOKfunc           bool
 	kernelUDPTXDirectRouteTCPGSOAsyncKfunc      bool
 	kernelUDPTXDirectRouteTCPXmitKfunc          bool
+	kernelUDPTXDirectKfuncFallbackWarning       string
 	kernelUDPTXDirectExperimentalTCPSafeGSO     bool
 	kernelUDPTXSecureDirectAttached             bool
 	kernelUDPTXDirectSync                       kernelUDPTXDirectSyncStats
@@ -2957,6 +2958,7 @@ func (manager *Manager) InstallExperimentalTCPFlows(ctx context.Context, flows [
 
 func (manager *Manager) deleteDuplicateExperimentalTCPFlowsLocked(flow dataplane.ExperimentalTCPFlow) {
 	now := time.Now().UTC()
+	manager.deleteReplacedExperimentalTCPRouteGSOFlowsLocked(flow, now)
 	for flowID, existing := range manager.expTCPFlows {
 		if flowID == flow.ID {
 			continue
@@ -2975,6 +2977,79 @@ func (manager *Manager) deleteDuplicateExperimentalTCPFlowsLocked(flow dataplane
 		manager.deleteKernelCryptoFlowLocked(flowID)
 		manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceExperimentalTCP, flowID)
 	}
+}
+
+func (manager *Manager) deleteReplacedExperimentalTCPRouteGSOFlowsLocked(flow dataplane.ExperimentalTCPFlow, now time.Time) {
+	if !experimentalTCPRouteGSORequestedForSpec(manager.spec) && !kernelDatapathFullPlaintextOwnsKernelUDPForSpec(manager.spec) {
+		return
+	}
+	if flow.Peer == "" || flow.Endpoint == "" || strings.TrimSpace(flow.RemoteAddress) == "" {
+		return
+	}
+	endpointAddress, ok := manager.experimentalTCPFlowEndpointAddressLocked(flow)
+	if !ok || !kernelTransportHostPortEqual(flow.RemoteAddress, endpointAddress) {
+		return
+	}
+	for flowID, existing := range manager.expTCPFlows {
+		if flowID == flow.ID {
+			continue
+		}
+		if existing.Peer != flow.Peer || existing.Endpoint != flow.Endpoint {
+			continue
+		}
+		if !kernelTransportHostPortEqual(existing.RemoteAddress, endpointAddress) {
+			continue
+		}
+		manager.holdExperimentalTCPAllowedPortsLocked(existing, now)
+		delete(manager.expTCPFlows, flowID)
+		delete(manager.kernelUDPTXDirectSequences, flowID)
+		delete(manager.expTCPOuterTXSequences, flowID)
+		delete(manager.expTCPOuterTXAcknowledgments, flowID)
+		manager.invalidateExperimentalTCPTXTemplateLocked(flowID)
+		delete(manager.expTCPTelemetry, flowID)
+		manager.deleteExperimentalTCPCryptoFragmentsLocked(flowID)
+		manager.deleteKernelCryptoFlowLocked(flowID)
+		manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceExperimentalTCP, flowID)
+	}
+}
+
+func (manager *Manager) experimentalTCPFlowEndpointAddressLocked(flow dataplane.ExperimentalTCPFlow) (string, bool) {
+	for _, endpoint := range manager.snapshot.Endpoints {
+		if !endpoint.Enabled || !strings.EqualFold(strings.TrimSpace(endpoint.Transport), "experimental_tcp") {
+			continue
+		}
+		if endpoint.Peer != flow.Peer || endpoint.ID != flow.Endpoint {
+			continue
+		}
+		address := strings.TrimSpace(endpoint.Address)
+		if address == "" {
+			return "", false
+		}
+		return address, true
+	}
+	return "", false
+}
+
+func kernelTransportHostPortEqual(left string, right string) bool {
+	leftHost, leftPort, leftOK := kernelTransportHostPortKey(left)
+	rightHost, rightPort, rightOK := kernelTransportHostPortKey(right)
+	return leftOK && rightOK && leftHost == rightHost && leftPort == rightPort
+}
+
+func kernelTransportHostPortKey(address string) (string, uint16, bool) {
+	host, portText, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return "", 0, false
+	}
+	port, err := parseExperimentalTCPPort(portText)
+	if err != nil {
+		return "", 0, false
+	}
+	host = strings.ToLower(strings.TrimSpace(host))
+	if addr, err := netip.ParseAddr(host); err == nil {
+		host = addr.Unmap().String()
+	}
+	return host, port, true
 }
 
 func experimentalTCPFlowsSharePathIdentity(left, right dataplane.ExperimentalTCPFlow) bool {
@@ -3381,7 +3456,11 @@ func (manager *Manager) experimentalTCPRouteGSOTCOnlyUnavailableReasonLocked() s
 		return "kernel_udp TC direct-only programs are not attached"
 	}
 	if missing := manager.experimentalTCPRouteGSOTCOnlyMissingKfuncsLocked(); len(missing) > 0 {
-		return "missing requested kfuncs: " + strings.Join(missing, ",")
+		reason := "missing requested kfuncs: " + strings.Join(missing, ",")
+		if fallback := strings.TrimSpace(manager.kernelUDPTXDirectKfuncFallbackWarning); fallback != "" {
+			reason += "; " + fallback
+		}
+		return reason
 	}
 	return ""
 }
@@ -13323,7 +13402,10 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		return err
 	}
 	if kfuncFallbackWarning != "" {
+		manager.kernelUDPTXDirectKfuncFallbackWarning = kfuncFallbackWarning
 		manager.warnings = append(manager.warnings, kfuncFallbackWarning)
+	} else {
+		manager.kernelUDPTXDirectKfuncFallbackWarning = ""
 	}
 	var kernelUDPTXSecureDirect *kernelUDPTXSecureDirectObject
 	if kernelUDPTXSecureDirectRequestedForSpec(spec) && !manager.kernelCryptoTCDirectReadyLocked() {
@@ -13821,20 +13903,22 @@ func (manager *Manager) kernelUDPRXDirectProgramOptionsForLink(lanLink netlink.L
 		options.StaticDestinationPort = manager.kernelUDPRXDirectStaticDestinationPortLocked(options)
 	}
 	options.TrustInnerChecksum = manager.spec.KernelUDPSecureDirectTrustInnerChecksums || kernelUDPRXDirectTrustInnerChecksumEnabledForOptions(options)
-	if kernelUDPRXDirectLocalDeliverEnabled() {
-		if localIPv4, localIPv4Mask := firstIPv4PrefixKeyForLink(lanLink); localIPv4 != 0 {
+	localIPv4, localIPv4Mask := firstIPv4PrefixKeyForLink(lanLink)
+	parseDecapLocalDeliverDev := kernelUDPRXDirectParseDecapL2LocalDeliverDevRequiredForOptions(options)
+	if kernelUDPRXDirectLocalDeliverEnabled() || parseDecapLocalDeliverDev {
+		if localIPv4 != 0 {
 			options.LocalDeliver = true
 			options.LocalIPv4 = localIPv4
 			options.LocalIPv4Mask = localIPv4Mask
 		}
 	}
-	if kernelUDPRXDirectLocalDeliverDevEnabled() {
-		if localIPv4, localIPv4Mask := firstIPv4PrefixKeyForLink(lanLink); localIPv4 != 0 {
+	if kernelUDPRXDirectLocalDeliverDevEnabled() || parseDecapLocalDeliverDev {
+		if localIPv4 != 0 {
 			manager.enableKernelUDPRXDirectLocalDeliverDevKfunc(&options, ifindex, localIPv4, localIPv4Mask, loadSKBKernelUDPRXDecapL2DevKfuncCall)
 		}
 	}
 	if options.TrustInnerChecksum && options.LocalDeliver && !options.LocalDeliverDev {
-		if localIPv4, localIPv4Mask := firstIPv4PrefixKeyForLink(lanLink); localIPv4 != 0 {
+		if localIPv4 != 0 {
 			manager.enableKernelUDPRXDirectLocalDeliverDevKfunc(&options, ifindex, localIPv4, localIPv4Mask, loadSKBKernelUDPRXDecapL2DevKfuncCall)
 		}
 	}
@@ -13842,7 +13926,11 @@ func (manager *Manager) kernelUDPRXDirectProgramOptionsForLink(lanLink netlink.L
 		manager.enableKernelUDPRXDirectDecapL2Kfunc(&options, loadSKBKernelUDPRXDecapL2KfuncCall)
 	}
 	if kernelUDPRXDirectParseDecapL2KfuncEnabledForOptions(options) {
-		manager.enableKernelUDPRXDirectParseDecapL2Kfunc(&options, loadSKBKernelUDPRXParseDecapL2KfuncCall)
+		if parseDecapLocalDeliverDev && !options.LocalDeliverDev {
+			manager.warnings = append(manager.warnings, "kernel_udp TC RX parse+decap L2 kfunc disabled: experimental_tcp stream local-deliver-dev target is unavailable")
+		} else {
+			manager.enableKernelUDPRXDirectParseDecapL2Kfunc(&options, loadSKBKernelUDPRXParseDecapL2KfuncCall)
+		}
 	}
 	return options
 }
@@ -14668,14 +14756,29 @@ func kernelUDPRXDirectParseDecapL2KfuncEnabledForOptions(options kernelUDPRXDire
 	if options.StaticDestinationPort == 0 && !options.ExperimentalTCPOnly {
 		return false
 	}
-	if options.ExperimentalTCPOnly && options.DirectOnly && options.DestinationPortOnly &&
-		envTruthy("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_PARSE", "TRUSTIX_TIXT_RX_STREAM_PARSE") {
+	if options.ExperimentalTCPOnly && options.DirectOnly && options.DestinationPortOnly {
+		if envFalsey("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_PARSE", "TRUSTIX_TIXT_RX_STREAM_PARSE") {
+			return false
+		}
 		return true
 	}
 	if kernelUDPRXDirectParseDecapL2KfuncEnabled() {
 		return true
 	}
 	return false
+}
+
+func kernelUDPRXDirectParseDecapL2LocalDeliverDevRequiredForOptions(options kernelUDPRXDirectProgramOptions) bool {
+	if envFalsey(
+		"TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_LOCAL_DELIVER_DEV",
+		"TRUSTIX_TIXT_RX_STREAM_LOCAL_DELIVER_DEV",
+	) {
+		return false
+	}
+	return options.ExperimentalTCPOnly &&
+		options.DirectOnly &&
+		options.DestinationPortOnly &&
+		kernelUDPRXDirectParseDecapL2KfuncEnabledForOptions(options)
 }
 
 func kernelUDPRXDirectParseDecapL2PrefilterEnabled() bool {
@@ -14920,6 +15023,7 @@ func (manager *Manager) detachTCPrograms(link netlink.Link) error {
 	manager.kernelUDPTXDirectRouteTCPGSOKfunc = false
 	manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = false
 	manager.kernelUDPTXDirectRouteTCPXmitKfunc = false
+	manager.kernelUDPTXDirectKfuncFallbackWarning = ""
 	if manager.routeMap != nil {
 		if err := manager.routeMap.Close(); err != nil {
 			errs = append(errs, "close route LPM BPF map: "+err.Error())
@@ -23262,6 +23366,12 @@ func (manager *Manager) kernelUDPTXDirectFlowsForRouteLocked(route routing.Route
 			return nil
 		}
 	}
+	if !secureDirect {
+		candidates = manager.filterExperimentalTCPTXPlaintextEndpointAddressFlowsLocked(route, candidates)
+		if len(candidates) == 0 {
+			return nil
+		}
+	}
 	expTCPRouteMultiFlow := !secureDirect && experimentalTCPTXPlaintextDirectRouteMultiFlowEnabled()
 	if expTCPRouteMultiFlow {
 		candidates = manager.filterExperimentalTCPTXPlaintextDirectListenerSourcedFlowsLocked(route, candidates)
@@ -23305,6 +23415,9 @@ func (manager *Manager) filterKernelUDPTXSecureDirectFlowsLocked(route routing.R
 			continue
 		}
 		if candidate.experimentalTCP && hasExpTCPListenPort && candidate.expTCPPacket.SourcePort == expTCPListenPort {
+			if adjusted, ok := manager.experimentalTCPTXRouteFlowWithEndpointAddressLocked(route, candidate); ok {
+				candidate = adjusted
+			}
 			listenerSourcedFallbacks = append(listenerSourcedFallbacks, candidate)
 			continue
 		}
@@ -23481,6 +23594,82 @@ func (manager *Manager) kernelUDPTXRouteFlowWithEndpointAddressLocked(route rout
 	return kernelUDPTXRouteFlow{}, false
 }
 
+func (manager *Manager) experimentalTCPRouteEndpointAddressLocked(route routing.Route) (netip.Addr, uint16, bool) {
+	if route.Endpoint == "" {
+		return netip.Addr{}, 0, false
+	}
+	for _, endpoint := range manager.snapshot.Endpoints {
+		if !endpoint.Enabled || !strings.EqualFold(strings.TrimSpace(endpoint.Transport), "experimental_tcp") || endpoint.Peer != route.NextHop || endpoint.ID != route.Endpoint {
+			continue
+		}
+		address := strings.TrimSpace(endpoint.Address)
+		if address == "" {
+			return netip.Addr{}, 0, false
+		}
+		remoteIP, remotePort, err := resolveExperimentalTCPAddress(address)
+		if err != nil || !remoteIP.Is4() || remotePort == 0 {
+			return netip.Addr{}, 0, false
+		}
+		return remoteIP, remotePort, true
+	}
+	return netip.Addr{}, 0, false
+}
+
+func (manager *Manager) experimentalTCPTXRouteFlowWithEndpointAddressLocked(route routing.Route, routeFlow kernelUDPTXRouteFlow) (kernelUDPTXRouteFlow, bool) {
+	if !routeFlow.experimentalTCP {
+		return kernelUDPTXRouteFlow{}, false
+	}
+	remoteIP, remotePort, ok := manager.experimentalTCPRouteEndpointAddressLocked(route)
+	if !ok {
+		return kernelUDPTXRouteFlow{}, false
+	}
+	if routeFlow.expTCPPacket.SourcePort == 0 || !routeFlow.expTCPPacket.SourceIP.Is4() {
+		return kernelUDPTXRouteFlow{}, false
+	}
+	routeFlow.expTCPPacket.DestinationIP = remoteIP
+	routeFlow.expTCPPacket.DestinationPort = remotePort
+	return routeFlow, true
+}
+
+func (manager *Manager) filterExperimentalTCPTXPlaintextEndpointAddressFlowsLocked(route routing.Route, candidates []kernelUDPTXRouteFlow) []kernelUDPTXRouteFlow {
+	remoteIP, remotePort, ok := manager.experimentalTCPRouteEndpointAddressLocked(route)
+	if !ok {
+		return candidates
+	}
+	expTCPListenPort, hasExpTCPListenPort := manager.localExperimentalTCPListenPortLocked()
+	filtered := make([]kernelUDPTXRouteFlow, 0, len(candidates))
+	for _, candidate := range candidates {
+		if !candidate.experimentalTCP {
+			filtered = append(filtered, candidate)
+			continue
+		}
+		if !manager.experimentalTCPTXDirectPlaintextAllowed(route, candidate.expTCPFlow) {
+			filtered = append(filtered, candidate)
+			continue
+		}
+		if hasExpTCPListenPort && candidate.expTCPPacket.SourcePort == expTCPListenPort {
+			if experimentalTCPTXPlaintextEstablishedListenerRouteFlow(candidate, remoteIP, remotePort) {
+				filtered = append(filtered, candidate)
+			}
+			continue
+		}
+		if candidate.expTCPPacket.SourcePort != 0 && candidate.expTCPPacket.DestinationIP == remoteIP && candidate.expTCPPacket.DestinationPort == remotePort {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered
+}
+
+func experimentalTCPTXPlaintextEstablishedListenerRouteFlow(candidate kernelUDPTXRouteFlow, endpointIP netip.Addr, endpointPort uint16) bool {
+	if !candidate.experimentalTCP {
+		return false
+	}
+	if candidate.expTCPPacket.SourcePort == 0 || candidate.expTCPPacket.DestinationPort == 0 || !candidate.expTCPPacket.DestinationIP.Is4() {
+		return false
+	}
+	return candidate.expTCPPacket.DestinationIP != endpointIP || candidate.expTCPPacket.DestinationPort != endpointPort
+}
+
 func (manager *Manager) selectExperimentalTCPTXPlaintextDirectFlowLocked(route routing.Route, candidates []kernelUDPTXRouteFlow, secureDirect bool) (kernelUDPTXRouteFlow, bool) {
 	expTCPOnly := false
 	for _, candidate := range candidates {
@@ -23498,27 +23687,63 @@ func (manager *Manager) selectExperimentalTCPTXPlaintextDirectFlowLocked(route r
 	expTCPListenPort, hasExpTCPListenPort := manager.localExperimentalTCPListenPortLocked()
 	var listenerSourcedFallback kernelUDPTXRouteFlow
 	var hasListenerSourcedFallback bool
+	var selected kernelUDPTXRouteFlow
+	var hasSelected bool
 	preferListenerSourced := experimentalTCPTXPlaintextDirectPreferListenerSourcedEnabled()
+	remoteIP, remotePort, hasEndpointAddress := manager.experimentalTCPRouteEndpointAddressLocked(route)
 	for _, candidate := range candidates {
 		if !manager.experimentalTCPTXDirectPlaintextAllowed(route, candidate.expTCPFlow) {
 			continue
 		}
-		if candidate.experimentalTCP && hasExpTCPListenPort && candidate.expTCPPacket.SourcePort == expTCPListenPort {
+		listenerSourced := candidate.experimentalTCP && hasExpTCPListenPort && candidate.expTCPPacket.SourcePort == expTCPListenPort
+		if hasEndpointAddress {
+			endpointAddressMatch := candidate.expTCPPacket.DestinationIP == remoteIP && candidate.expTCPPacket.DestinationPort == remotePort
+			if listenerSourced {
+				if !experimentalTCPTXPlaintextEstablishedListenerRouteFlow(candidate, remoteIP, remotePort) {
+					continue
+				}
+			} else if !endpointAddressMatch {
+				continue
+			}
+		}
+		if listenerSourced {
 			if preferListenerSourced {
 				return candidate, true
 			}
-			if !hasListenerSourcedFallback {
+			if !hasListenerSourcedFallback || hasEndpointAddress && experimentalTCPRouteFlowPreferred(candidate, listenerSourcedFallback) {
 				listenerSourcedFallback = candidate
 				hasListenerSourcedFallback = true
 			}
 			continue
 		}
-		return candidate, true
+		if !hasSelected || hasEndpointAddress && experimentalTCPRouteFlowPreferred(candidate, selected) {
+			selected = candidate
+			hasSelected = true
+		}
+	}
+	if hasSelected {
+		return selected, true
 	}
 	if hasListenerSourcedFallback {
 		return listenerSourcedFallback, true
 	}
 	return kernelUDPTXRouteFlow{}, false
+}
+
+func experimentalTCPRouteFlowPreferred(candidate kernelUDPTXRouteFlow, current kernelUDPTXRouteFlow) bool {
+	candidateTime := experimentalTCPFlowActivityTime(candidate.expTCPFlow)
+	currentTime := experimentalTCPFlowActivityTime(current.expTCPFlow)
+	if !candidateTime.Equal(currentTime) {
+		return candidateTime.After(currentTime)
+	}
+	return candidate.id < current.id
+}
+
+func experimentalTCPFlowActivityTime(flow dataplane.ExperimentalTCPFlow) time.Time {
+	if !flow.LastSeen.IsZero() {
+		return flow.LastSeen
+	}
+	return flow.CreatedAt
 }
 
 func (manager *Manager) filterExperimentalTCPTXPlaintextDirectListenerSourcedFlowsLocked(route routing.Route, candidates []kernelUDPTXRouteFlow) []kernelUDPTXRouteFlow {

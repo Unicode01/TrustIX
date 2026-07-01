@@ -4334,6 +4334,70 @@ func TestInstallExperimentalTCPFlowsKeepsSameEndpointPoolMembers(t *testing.T) {
 	}
 }
 
+func TestInstallExperimentalTCPRouteGSOFlowReplacesStaleEndpointAddressFlow(t *testing.T) {
+	manager := NewManager()
+	manager.spec = dataplane.AttachSpec{ExperimentalTCPRouteGSOSync: true}
+	manager.snapshot = dataplane.Snapshot{
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        "exp-b",
+			Peer:      "ix-b",
+			Transport: "experimental_tcp",
+			Address:   "198.18.0.2:17042",
+			Enabled:   true,
+			Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+		}},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		1: {
+			ID:              1,
+			Peer:            "ix-b",
+			Endpoint:        "exp-b",
+			LocalAddress:    "198.18.0.1:56145",
+			RemoteAddress:   "198.18.0.2:17042",
+			SourcePort:      56145,
+			DestinationPort: 17042,
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+	}
+	manager.expTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{
+		1: {Protocol: "experimental_tcp", FlowID: 1},
+	}
+	manager.kernelUDPTXDirectSequences = map[uint64]uint64{1: 7}
+	manager.expTCPOuterTXSequences = map[uint64]uint32{1: 8}
+	manager.expTCPOuterTXAcknowledgments = map[uint64]uint32{1: 9}
+
+	if err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+		ID:              2,
+		Peer:            "ix-b",
+		Endpoint:        "exp-b",
+		LocalAddress:    "198.18.0.1:47484",
+		RemoteAddress:   "198.18.0.2:17042",
+		SourcePort:      47484,
+		DestinationPort: 17042,
+		CryptoPlacement: dataplane.CryptoPlacementUserspace,
+	}}); err != nil {
+		t.Fatalf("install replacement experimental_tcp route-GSO flow: %v", err)
+	}
+	if _, ok := manager.expTCPFlows[1]; ok {
+		t.Fatal("stale route-GSO endpoint-address flow was not removed")
+	}
+	if _, ok := manager.expTCPFlows[2]; !ok {
+		t.Fatal("replacement route-GSO endpoint-address flow was not installed")
+	}
+	if _, ok := manager.expTCPTelemetry[1]; ok {
+		t.Fatal("stale route-GSO telemetry was not removed")
+	}
+	if _, ok := manager.kernelUDPTXDirectSequences[1]; ok {
+		t.Fatal("stale route-GSO direct sequence was not removed")
+	}
+	if _, ok := manager.expTCPOuterTXSequences[1]; ok {
+		t.Fatal("stale route-GSO outer TX sequence was not removed")
+	}
+	if _, ok := manager.expTCPOuterTXAcknowledgments[1]; ok {
+		t.Fatal("stale route-GSO outer TX acknowledgment was not removed")
+	}
+}
+
 func TestInstallKernelUDPFlowsKeepsDuplicatePathFlowIDs(t *testing.T) {
 	manager := NewManager()
 	fastPath := testExperimentalTCPFastPathWithQueues(1)
@@ -4948,6 +5012,26 @@ func TestExperimentalTCPStatusRejectsRouteGSOTCOnlyProviderWithoutRequestedKfunc
 				t.Fatalf("fast path fallback = %q, want missing kfunc %q", status.FastPathFallback, tt.want)
 			}
 		})
+	}
+}
+
+func TestExperimentalTCPStatusRouteGSOUnavailableIncludesKfuncFallbackWarning(t *testing.T) {
+	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+	manager.kernelUDPTXDirectRouteTCPGSOKfunc = false
+	manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = false
+	manager.kernelUDPTXDirectKfuncFallbackWarning = "experimental_tcp TC TX direct route TCP GSO kfunc disabled after verifier/load rejection: load ingress BPF program: fixing up kfuncs: finding kfunc in kernel: no BTF found"
+
+	status, err := manager.ExperimentalTCPStatus(context.Background())
+	if err != nil {
+		t.Fatalf("experimental_tcp status: %v", err)
+	}
+	if status.Available || status.Reinject || status.FastPath || status.Provider == "kernel_udp_tc_only" {
+		t.Fatalf("status with fallback-disabled route-GSO = %+v, want unavailable", status)
+	}
+	for _, want := range []string{"route_tcp_gso", "route_tcp_gso_async", "no BTF found"} {
+		if !strings.Contains(status.FastPathFallback, want) {
+			t.Fatalf("fast path fallback = %q, want %q", status.FastPathFallback, want)
+		}
 	}
 }
 
@@ -6782,6 +6866,62 @@ func TestKernelUDPTXSecureDirectRewritesListenerFallbackToEndpointAddress(t *tes
 	}
 }
 
+func TestExperimentalTCPTXSecureDirectRewritesListenerFallbackToEndpointAddress(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	manager := NewManager()
+	manager.kernelUDPTXSecureDirectAttached = true
+	manager.snapshot = dataplane.Snapshot{
+		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
+		Endpoints: []dataplane.EndpointMetadata{
+			{
+				ID:        core.EndpointID("ix-a-tixt"),
+				Peer:      core.IXID("ix-a"),
+				Transport: "experimental_tcp",
+				Listen:    "192.0.2.1:37001",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
+			},
+			{
+				ID:        core.EndpointID("ix-b-tixt"),
+				Peer:      core.IXID("ix-b"),
+				Transport: "experimental_tcp",
+				Address:   "198.51.100.2:37002",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
+			},
+		},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		10: {
+			ID:              10,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "192.0.2.1:37001",
+			RemoteAddress:   "198.51.100.2:50960",
+			CryptoPlacement: dataplane.CryptoPlacementKernel,
+		},
+	}
+	route := routing.Route{
+		Prefix:   core.Prefix("10.50.0.0/16"),
+		NextHop:  core.IXID("ix-b"),
+		Endpoint: core.EndpointID("ix-b-tixt"),
+	}
+
+	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, true, kernelUDPTXRouteMaxFlows)
+	if len(flows) != 1 {
+		t.Fatalf("secure experimental_tcp direct flows = %d, want 1 listener fallback: %+v", len(flows), flows)
+	}
+	if flows[0].id != 10 {
+		t.Fatalf("secure experimental_tcp direct flow id = %d, want fallback flow 10", flows[0].id)
+	}
+	if flows[0].expTCPPacket.SourcePort != 37001 || flows[0].expTCPPacket.DestinationPort != 37002 {
+		t.Fatalf("selected packet ports = %d/%d, want 37001/37002", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	}
+	if got := flows[0].expTCPPacket.DestinationIP; got != netip.MustParseAddr("198.51.100.2") {
+		t.Fatalf("selected destination IP = %s, want endpoint address", got)
+	}
+}
+
 func TestExperimentalTCPTXPlaintextDirectPrefersOutboundFlowOverListenerSource(t *testing.T) {
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
 	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
@@ -6949,6 +7089,233 @@ func TestExperimentalTCPTXPlaintextDirectFallsBackToListenerSource(t *testing.T)
 	}
 	if flows[0].id != 10 {
 		t.Fatalf("plaintext direct fallback flow id = %d, want listener flow 10", flows[0].id)
+	}
+}
+
+func TestExperimentalTCPTXPlaintextDirectUsesEstablishedListenerReverseFlowForEndpointAddressRoute(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+	manager := NewManager()
+	manager.snapshot = dataplane.Snapshot{
+		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
+		Endpoints: []dataplane.EndpointMetadata{
+			{
+				ID:        core.EndpointID("ix-a-tixt"),
+				Peer:      core.IXID("ix-a"),
+				Transport: "experimental_tcp",
+				Listen:    "10.203.3.204:13000",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+			{
+				ID:        core.EndpointID("ix-b-tixt"),
+				Peer:      core.IXID("ix-b"),
+				Transport: "experimental_tcp",
+				Address:   "10.203.3.205:13001",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+		},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		10: {
+			ID:              10,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "10.203.3.204:13000",
+			RemoteAddress:   "10.203.3.205:58299",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+	}
+	route := routing.Route{
+		Prefix:   core.Prefix("10.205.0.0/16"),
+		NextHop:  core.IXID("ix-b"),
+		Endpoint: core.EndpointID("ix-b-tixt"),
+	}
+
+	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, false, kernelUDPTXRouteMaxFlows)
+	if len(flows) != 1 {
+		t.Fatalf("plaintext direct fallback flows = %d, want established listener reverse flow: %+v", len(flows), flows)
+	}
+	if flows[0].id != 10 {
+		t.Fatalf("plaintext direct fallback flow id = %d, want listener flow 10", flows[0].id)
+	}
+	if flows[0].expTCPPacket.SourcePort != 13000 || flows[0].expTCPPacket.DestinationPort != 58299 {
+		t.Fatalf("selected packet ports = %d/%d, want established reverse tuple 13000/58299", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	}
+}
+
+func TestExperimentalTCPTXPlaintextDirectSkipsFakeListenerEndpointTuple(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+	manager := NewManager()
+	manager.snapshot = dataplane.Snapshot{
+		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
+		Endpoints: []dataplane.EndpointMetadata{
+			{
+				ID:        core.EndpointID("ix-a-tixt"),
+				Peer:      core.IXID("ix-a"),
+				Transport: "experimental_tcp",
+				Listen:    "10.203.3.204:13000",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+			{
+				ID:        core.EndpointID("ix-b-tixt"),
+				Peer:      core.IXID("ix-b"),
+				Transport: "experimental_tcp",
+				Address:   "10.203.3.205:13001",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+		},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		10: {
+			ID:              10,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "10.203.3.204:13000",
+			RemoteAddress:   "10.203.3.205:13001",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+	}
+	route := routing.Route{
+		Prefix:   core.Prefix("10.205.0.0/16"),
+		NextHop:  core.IXID("ix-b"),
+		Endpoint: core.EndpointID("ix-b-tixt"),
+	}
+
+	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, false, kernelUDPTXRouteMaxFlows)
+	if len(flows) != 0 {
+		t.Fatalf("plaintext direct fallback flows = %d, want fake listener-sourced endpoint tuple skipped: %+v", len(flows), flows)
+	}
+}
+
+func TestExperimentalTCPTXPlaintextDirectPrefersEndpointAddressOutboundFlow(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+	manager := NewManager()
+	manager.snapshot = dataplane.Snapshot{
+		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
+		Endpoints: []dataplane.EndpointMetadata{
+			{
+				ID:        core.EndpointID("ix-a-tixt"),
+				Peer:      core.IXID("ix-a"),
+				Transport: "experimental_tcp",
+				Listen:    "10.203.3.204:13000",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+			{
+				ID:        core.EndpointID("ix-b-tixt"),
+				Peer:      core.IXID("ix-b"),
+				Transport: "experimental_tcp",
+				Address:   "10.203.3.205:13001",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+		},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		10: {
+			ID:              10,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "10.203.3.204:13000",
+			RemoteAddress:   "10.203.3.205:58299",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+		20: {
+			ID:              20,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "10.203.3.204:44000",
+			RemoteAddress:   "10.203.3.205:13001",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+		},
+	}
+	route := routing.Route{
+		Prefix:   core.Prefix("10.205.0.0/16"),
+		NextHop:  core.IXID("ix-b"),
+		Endpoint: core.EndpointID("ix-b-tixt"),
+	}
+
+	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, false, kernelUDPTXRouteMaxFlows)
+	if len(flows) != 1 {
+		t.Fatalf("plaintext direct flows = %d, want endpoint-address outbound flow: %+v", len(flows), flows)
+	}
+	if flows[0].id != 20 {
+		t.Fatalf("plaintext direct flow id = %d, want outbound flow 20", flows[0].id)
+	}
+	if flows[0].expTCPPacket.SourcePort != 44000 || flows[0].expTCPPacket.DestinationPort != 13001 {
+		t.Fatalf("selected packet ports = %d/%d, want 44000/13001", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	}
+}
+
+func TestExperimentalTCPTXPlaintextDirectPrefersFreshEndpointAddressOutboundFlow(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+	now := time.Date(2026, 7, 1, 9, 55, 0, 0, time.UTC)
+	manager := NewManager()
+	manager.snapshot = dataplane.Snapshot{
+		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
+		Endpoints: []dataplane.EndpointMetadata{
+			{
+				ID:        core.EndpointID("ix-a-tixt"),
+				Peer:      core.IXID("ix-a"),
+				Transport: "experimental_tcp",
+				Listen:    "10.203.3.204:13000",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+			{
+				ID:        core.EndpointID("ix-b-tixt"),
+				Peer:      core.IXID("ix-b"),
+				Transport: "experimental_tcp",
+				Address:   "10.203.3.205:13001",
+				Enabled:   true,
+				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
+			},
+		},
+	}
+	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+		10: {
+			ID:              10,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "10.203.3.204:56145",
+			RemoteAddress:   "10.203.3.205:13001",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+			CreatedAt:       now.Add(-10 * time.Minute),
+			LastSeen:        now.Add(-10 * time.Minute),
+		},
+		20: {
+			ID:              20,
+			Peer:            core.IXID("ix-b"),
+			Endpoint:        core.EndpointID("ix-b-tixt"),
+			LocalAddress:    "10.203.3.204:47484",
+			RemoteAddress:   "10.203.3.205:13001",
+			CryptoPlacement: dataplane.CryptoPlacementUserspace,
+			CreatedAt:       now,
+			LastSeen:        now,
+		},
+	}
+	route := routing.Route{
+		Prefix:   core.Prefix("10.205.0.0/16"),
+		NextHop:  core.IXID("ix-b"),
+		Endpoint: core.EndpointID("ix-b-tixt"),
+	}
+
+	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, false, kernelUDPTXRouteMaxFlows)
+	if len(flows) != 1 {
+		t.Fatalf("plaintext direct flows = %d, want fresh endpoint-address outbound flow: %+v", len(flows), flows)
+	}
+	if flows[0].id != 20 {
+		t.Fatalf("plaintext direct flow id = %d, want fresh flow 20", flows[0].id)
+	}
+	if flows[0].expTCPPacket.SourcePort != 47484 || flows[0].expTCPPacket.DestinationPort != 13001 {
+		t.Fatalf("selected packet ports = %d/%d, want 47484/13001", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
 	}
 }
 
@@ -9814,6 +10181,8 @@ func TestKernelUDPRXDirectParseDecapL2KfuncFailureFallsBack(t *testing.T) {
 
 func TestKernelUDPRXDirectParseDecapL2KfuncIsOptIn(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT_PARSE_DECAP_L2_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_PARSE", "")
+	t.Setenv("TRUSTIX_TIXT_RX_STREAM_PARSE", "")
 
 	options := kernelUDPRXDirectProgramOptions{
 		KernelUDPOnly:         true,
@@ -9843,7 +10212,49 @@ func TestKernelUDPRXDirectParseDecapL2KfuncIsOptIn(t *testing.T) {
 		DirectOnly:          true,
 		DestinationPortOnly: true,
 	}) {
-		t.Fatal("experimental_tcp parse+decap L2 kfunc should allow dynamic destination ports with explicit opt-in")
+		t.Fatal("experimental_tcp direct-only parse+decap L2 kfunc should default on for dynamic destination ports")
+	}
+
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_PARSE", "0")
+	if kernelUDPRXDirectParseDecapL2KfuncEnabledForOptions(kernelUDPRXDirectProgramOptions{
+		ExperimentalTCPOnly: true,
+		DirectOnly:          true,
+		DestinationPortOnly: true,
+	}) {
+		t.Fatal("experimental_tcp parse+decap L2 kfunc should honor explicit stream parser disable")
+	}
+}
+
+func TestKernelUDPRXDirectParseDecapL2RequiresLocalDeliverDevForExperimentalTCPStream(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT_PARSE_DECAP_L2_KFUNC", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_PARSE", "")
+	t.Setenv("TRUSTIX_TIXT_RX_STREAM_PARSE", "")
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_LOCAL_DELIVER_DEV", "")
+	t.Setenv("TRUSTIX_TIXT_RX_STREAM_LOCAL_DELIVER_DEV", "")
+
+	if !kernelUDPRXDirectParseDecapL2LocalDeliverDevRequiredForOptions(kernelUDPRXDirectProgramOptions{
+		ExperimentalTCPOnly: true,
+		DirectOnly:          true,
+		DestinationPortOnly: true,
+	}) {
+		t.Fatal("experimental_tcp stream parse should require local-deliver-dev by default")
+	}
+
+	if kernelUDPRXDirectParseDecapL2LocalDeliverDevRequiredForOptions(kernelUDPRXDirectProgramOptions{
+		KernelUDPOnly:       true,
+		DirectOnly:          true,
+		DestinationPortOnly: true,
+	}) {
+		t.Fatal("kernel_udp direct-only parse should not require experimental_tcp stream local-deliver-dev")
+	}
+
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_LOCAL_DELIVER_DEV", "0")
+	if kernelUDPRXDirectParseDecapL2LocalDeliverDevRequiredForOptions(kernelUDPRXDirectProgramOptions{
+		ExperimentalTCPOnly: true,
+		DirectOnly:          true,
+		DestinationPortOnly: true,
+	}) {
+		t.Fatal("experimental_tcp stream local-deliver-dev should honor explicit disable")
 	}
 }
 

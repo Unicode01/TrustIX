@@ -1809,13 +1809,22 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDP
 		"route_tcp_gso_async_queue_shards=8",
 		"route_tcp_gso_async_worker_item_budget=64",
 		"route_tcp_gso_async_worker_segment_budget=2048",
-		"route_tcp_gso_async_stream_cross_item_max_frames=64",
+		"route_tcp_gso_async_stream_max_frames=128",
+		"route_tcp_gso_async_stream_cross_item_max_frames=128",
 		"route_tcp_gso_async_stream_cross_item_dynamic_cap=0",
 		"route_tcp_gso_async_worker_emit_budget=0",
 		"route_tcp_gso_async_worker_dequeue_batch=4",
 		"route_tcp_gso_async_worker_min_queue_depth=1",
 		"route_tcp_gso_async_worker_schedule_delay_usecs=0",
 		"route_tcp_xmit_worker=1",
+		"route_tcp_xmit_worker_budget=1024",
+		"route_tcp_xmit_worker_queue_limit=32768",
+		"tixt_rx_stream_parse=1",
+		"tixt_rx_stream_xmit_extra=1",
+		"tixt_rx_stream_gso_xmit=1",
+		"tixt_rx_stream_max_frames=128",
+		"tixt_rx_stream_coalesce_gso=1",
+		"tixt_rx_stream_coalesce_mark_gso=1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
@@ -1824,9 +1833,6 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDP
 	for _, unexpected := range []string{
 		"route_tcp_gso_sync_stream=1",
 		"route_tcp_gso_sync_stream_outer_gso=1",
-		"tixt_rx_stream_parse=1",
-		"tixt_rx_stream_xmit_extra=1",
-		"tixt_rx_stream_gso_xmit=1",
 	} {
 		if strings.Contains(got, unexpected) {
 			t.Fatalf("parameters = %q, unexpectedly enabled legacy path %q", got, unexpected)

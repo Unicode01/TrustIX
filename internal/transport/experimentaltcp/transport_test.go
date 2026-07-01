@@ -2935,21 +2935,64 @@ func TestExperimentalTCPSessionSetPeerEndpointAnnotatesFlow(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPUnavailableErrorsIncludeFastPathFallback(t *testing.T) {
+	provider := &fakeProvider{
+		subs:             make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
+		flows:            make(map[uint64]dataplane.ExperimentalTCPFlow),
+		cryptos:          make(map[uint64]fakeCrypto),
+		availableSet:     true,
+		available:        false,
+		reinjectSet:      true,
+		reinject:         false,
+		fastPathFallback: "missing requested kfuncs: route_tcp_gso; fixing up kfuncs: no BTF found",
+	}
+	transportImpl := New(provider)
+	peer := transport.Peer{
+		ID: "ix-b",
+		Endpoints: []transport.Endpoint{{
+			Name:      "exp",
+			Address:   "198.18.0.2:13000",
+			Transport: transport.ProtocolExperimentalTCP,
+		}},
+	}
+	endpoint := transport.Endpoint{
+		Name:      "exp",
+		Listen:    "127.0.0.1:0",
+		Transport: transport.ProtocolExperimentalTCP,
+	}
+
+	probe := transportImpl.Probe(context.Background(), peer)
+	if probe.Healthy || !strings.Contains(probe.Error, "no BTF found") {
+		t.Fatalf("probe = %+v, want unavailable error with fallback detail", probe)
+	}
+	if _, err := transportImpl.Dial(context.Background(), peer, nil); err == nil || !strings.Contains(err.Error(), "no BTF found") {
+		t.Fatalf("dial error = %v, want fallback detail", err)
+	}
+	if _, err := transportImpl.Listen(context.Background(), endpoint, nil); err == nil || !strings.Contains(err.Error(), "no BTF found") {
+		t.Fatalf("listen error = %v, want fallback detail", err)
+	}
+}
+
 type fakeProvider struct {
-	local          core.IXID
-	remote         *fakeProvider
-	mu             sync.Mutex
-	subs           map[chan dataplane.ExperimentalTCPFrame]struct{}
-	flows          map[uint64]dataplane.ExperimentalTCPFlow
-	cryptos        map[uint64]fakeCrypto
-	kernelCrypto   bool
-	statusProvider string
-	payloadMax     int
-	sealBeforeMax  int
-	lastWire       []byte
-	frames         []dataplane.ExperimentalTCPFrame
-	submitted      atomic.Uint64
-	received       atomic.Uint64
+	local            core.IXID
+	remote           *fakeProvider
+	mu               sync.Mutex
+	subs             map[chan dataplane.ExperimentalTCPFrame]struct{}
+	flows            map[uint64]dataplane.ExperimentalTCPFlow
+	cryptos          map[uint64]fakeCrypto
+	kernelCrypto     bool
+	statusProvider   string
+	availableSet     bool
+	available        bool
+	reinjectSet      bool
+	reinject         bool
+	fastPathFallback string
+	payloadMax       int
+	sealBeforeMax    int
+	lastWire         []byte
+	frames           []dataplane.ExperimentalTCPFrame
+	submitted        atomic.Uint64
+	received         atomic.Uint64
 }
 
 type capturingCryptoInstallerProvider struct {
@@ -3044,17 +3087,26 @@ func (provider *fakeProvider) ExperimentalTCPStatus(ctx context.Context) (datapl
 	provider.mu.Lock()
 	activeFlows := len(provider.flows)
 	provider.mu.Unlock()
+	available := true
+	if provider.availableSet {
+		available = provider.available
+	}
+	reinject := true
+	if provider.reinjectSet {
+		reinject = provider.reinject
+	}
 	return dataplane.ExperimentalTCPStatus{
-		Available:       true,
-		Provider:        provider.statusProvider,
-		UserspaceCrypto: true,
-		KernelCrypto:    provider.kernelCrypto,
-		Reinject:        true,
-		PreferredCrypto: provider.preferredCrypto(),
-		SupportedCrypto: provider.supportedCrypto(),
-		ActiveFlows:     activeFlows,
-		SubmittedFrames: provider.submitted.Load(),
-		ReceivedFrames:  provider.received.Load(),
+		Available:        available,
+		Provider:         provider.statusProvider,
+		UserspaceCrypto:  true,
+		KernelCrypto:     provider.kernelCrypto,
+		Reinject:         reinject,
+		FastPathFallback: provider.fastPathFallback,
+		PreferredCrypto:  provider.preferredCrypto(),
+		SupportedCrypto:  provider.supportedCrypto(),
+		ActiveFlows:      activeFlows,
+		SubmittedFrames:  provider.submitted.Load(),
+		ReceivedFrames:   provider.received.Load(),
 	}, nil
 }
 
