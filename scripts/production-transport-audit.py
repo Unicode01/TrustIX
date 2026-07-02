@@ -198,8 +198,6 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
 CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
     "udp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
     "udp:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
-    "udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod|docs/trustix-performance-log.md#pve-debian13-b0d2fc6-full-kmod-2026-06-28",
-    "udp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_full_kmod|docs/trustix-performance-log.md#pve-openwrt24107-debian13-full-kmod-2026-06-28",
     "tcp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
     "tcp:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
     "quic:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
@@ -218,8 +216,6 @@ CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
     "kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
     "experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
     "experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-    "experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-    "experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod|docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
 }
 
 
@@ -623,6 +619,12 @@ def current_toolchain_legacy_key(row: dict[str, str]) -> str:
     return f"{row_key(row)}|{row['artifact']}"
 
 
+def is_current_toolchain_legacy(row: dict[str, str]) -> bool:
+    if current_toolchain_legacy_key(row) not in CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS:
+        return False
+    return not any(row[field].strip() for field in TOOLCHAIN_SHA256_FIELDS)
+
+
 def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
     root = repo_root()
     gate_path = root / "scripts" / "linux-cross-host-production-gate.sh"
@@ -655,9 +657,9 @@ def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
             f"got {row['verifier_sha256']!r}"
         )
     toolchain_values = {field: row[field].strip() for field in TOOLCHAIN_SHA256_FIELDS}
+    if is_current_toolchain_legacy(row):
+        return errors
     if not any(toolchain_values.values()):
-        if current_toolchain_legacy_key(row) in CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS:
-            return errors
         errors.append(
             "runner_sha256/transport_matrix_sha256/evidence_generator_sha256 "
             "are required for new current evidence rows"
@@ -764,6 +766,8 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
 
 
 def current_runtime_tree_errors(row: dict[str, str]) -> list[str]:
+    if is_current_toolchain_legacy(row):
+        return []
     build_commit = row["build_commit"]
     value = build_commit.strip()
     if not value or value == LEGACY_GATE_SCHEMA:

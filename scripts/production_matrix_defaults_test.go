@@ -518,8 +518,8 @@ func loadAuditCurrentToolchainLegacyRequirementKeys(t *testing.T) map[string]boo
 		}
 		keys[key] = true
 	}
-	if len(keys) != 24 {
-		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 24 current legacy rows, got %d", len(keys))
+	if len(keys) != 20 {
+		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 20 current legacy rows, got %d", len(keys))
 	}
 	return keys
 }
@@ -3555,13 +3555,13 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":               "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"full_kmod":               "docs/trustix-performance-log.md#pve-debian13-b0d2fc6-full-kmod-2026-06-28",
-		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
-		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#pve-ee378f-openwrt24107-debian13-exp-tcp-full-kmod-2026-06-30",
+		"full_kmod":               "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-debian-full-kmod-multiqueue-production",
+		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-debian-exp-tcp-full-kmod-multiqueue-production",
+		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-openwrt24107-debian-current-tools-iperf-server-fix",
 		"secure_kudp":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"route_gso":               "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"owdeb_full_kmod":         "docs/trustix-performance-log.md#pve-openwrt24107-debian13-full-kmod-2026-06-28",
+		"route_gso":               "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-route-gso-multiqueue-production",
+		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-openwrt24107-debian-current-tools-iperf-server-fix",
 		"userspace":               "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":            "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
@@ -3583,7 +3583,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
 		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                        "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
 		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace":                     "docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
-		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate",
+		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-debian-exp-tcp-full-kmod-multiqueue-production",
 	}
 	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
@@ -3654,7 +3654,7 @@ func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "openwrt24.10.7-debian13"
 		wantKernelMatrix = "6.6.141_to_6.12.90+deb13.1-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#pve-openwrt24107-debian13-full-kmod-2026-06-28"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-openwrt24107-debian-current-tools-iperf-server-fix"
 		minGbps          = 3.0
 		minSeconds       = 3600
 	)
@@ -3819,8 +3819,8 @@ func TestOpenWrtSecureExperimentalTCPKernelFailClosedRowsInheritRouteTCPGate(t *
 func TestCurrentDebianFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
-		wantKernelMatrix = "6.12.94+deb13-cloud-amd64_to_6.12.94+deb13-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#pve-debian13-b0d2fc6-full-kmod-2026-06-28"
+		wantKernelMatrix = "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-debian-full-kmod-multiqueue-production"
 		minGbps          = 3.0
 		minSeconds       = 3600
 	)
@@ -4531,7 +4531,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_GATE_MIN_HOST_CPUS:-4",
 		"TRUSTIX_CROSS_HOST_GATE_FORBID_HOST_NET_DRIVER:-e1000 e1000e rtl8139 8139cp 8139too pcnet32 ne2k_pci",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_POOL_SIZE:-8",
+		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_POOL_SIZE:-16",
 		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_SESSIONS:-16",
 		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_SESSION_ERROR_BUDGET:-0",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8",
@@ -4579,7 +4579,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET \"$route_gso_session_error_budget\"",
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS \"$compat_min_sessions\"",
 		"full_kmod_min_sessions=\"$(max_integer \"$full_kmod_min_sessions\" \"8\")\"",
-		"exp_tcp_full_kmod_min_pool_size=\"$(max_integer \"$exp_tcp_full_kmod_min_pool_size\" \"8\")\"",
+		"exp_tcp_full_kmod_min_pool_size=\"$(max_integer \"$exp_tcp_full_kmod_min_pool_size\" \"16\")\"",
 		"exp_tcp_full_kmod_min_sessions=\"$(max_integer \"$exp_tcp_full_kmod_min_sessions\" \"16\")\"",
 		"exp_tcp_full_kmod_session_error_budget=\"$(min_integer \"$exp_tcp_full_kmod_session_error_budget\" \"0\")\"",
 		"secure_kudp_min_sessions=\"$(max_integer \"$secure_kudp_min_sessions\" \"8\")\"",
@@ -5049,7 +5049,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"min_interval_gbps_ratio":                "0.25",
 		"full_kmod_min_sessions":                 "8",
 		"exp_tcp_full_kmod_min_gbps":             "4",
-		"exp_tcp_full_kmod_min_pool_size":        "8",
+		"exp_tcp_full_kmod_min_pool_size":        "16",
 		"exp_tcp_full_kmod_min_sessions":         "16",
 		"exp_tcp_full_kmod_session_error_budget": "0",
 		"secure_kudp_min_sessions":               "8",
@@ -5457,7 +5457,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("full", "--require-module-param-min", "trustix_datapath.tx_plaintext=1")
 	requireArgPair("full", "--require-module-param-min", "trustix_datapath.session_records=8")
 	requireArgPair("full", "--require-lsmod-module", "trustix_datapath")
-	requireArgPair("expfull", "--require-transport-policy-min", "session_pool_size=8")
+	requireArgPair("expfull", "--require-transport-policy-min", "session_pool_size=16")
 	requireEndpointArgs("expfull", "experimental_tcp", "performance", "kernel_module", "plaintext")
 	requireArgPair("expfull", "--require-transport-sessions-min", "16")
 	requireArgPair("expfull", "--require-transport-session-stat", "transport=experimental_tcp")
@@ -6838,7 +6838,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1",
 		"case \"$iperf_mode\" in bidir|forward|reverse)",
 		"apply_case_runtime_defaults",
-		"owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod)",
+		"experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod)",
 		"iperf_parallel=16",
 		"truthy \"$dry_run_config\"",
 		"write_config a \"$workdir/config-a.yaml\"",
@@ -6849,6 +6849,9 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_SESSION_POOL_STRATEGY must be flow, five_tuple, 5tuple, packet, or round_robin",
 		"ssh -n \"${ssh_opts[@]}\" \"$dest\" \"bash -c $(remote_quote \"$script\")\"",
 		"iperf_artifact_suffix",
+		"route_a_if=\"$(detect_underlay_if a \"$underlay_b_ip\" | tail -n 1 || true)\"",
+		"configured underlay interface ${underlay_a_if} does not match route to peer",
+		"using route interface",
 		"dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod",
 		"experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod",
 		"dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel",

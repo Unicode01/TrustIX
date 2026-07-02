@@ -530,7 +530,7 @@ case_tc_requested_but_falls_back_to_userspace() {
 
 apply_case_runtime_defaults() {
   case "$case_name" in
-    owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod)
+    experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod)
       if [[ -z "$iperf_parallel_explicit" ]]; then
         iperf_parallel=16
       fi
@@ -892,11 +892,30 @@ resolve_underlay() {
   if [[ -z "$underlay_a_ip" || -z "$underlay_b_ip" ]]; then
     die "set TRUSTIX_CROSS_HOST_A_UNDERLAY_IP and TRUSTIX_CROSS_HOST_B_UNDERLAY_IP"
   fi
+  local route_a_if route_b_if route_a_src route_b_src
+  route_a_if="$(detect_underlay_if a "$underlay_b_ip" | tail -n 1 || true)"
+  route_b_if="$(detect_underlay_if b "$underlay_a_ip" | tail -n 1 || true)"
   if [[ -z "$underlay_a_if" ]]; then
-    underlay_a_if="$(detect_underlay_if a "$underlay_b_ip" | tail -n 1)"
+    underlay_a_if="$route_a_if"
+  elif [[ -n "$route_a_if" && "$underlay_a_if" != "$route_a_if" ]]; then
+    route_a_src="$(detect_underlay_ip a "$underlay_b_ip" | tail -n 1 || true)"
+    if [[ "$route_a_src" == "$underlay_a_ip" ]]; then
+      log "WARNING: node A configured underlay interface ${underlay_a_if} does not match route to peer ${underlay_b_ip} dev ${route_a_if}; using route interface"
+      underlay_a_if="$route_a_if"
+    else
+      die "node A configured underlay interface ${underlay_a_if} does not match route to peer ${underlay_b_ip} dev ${route_a_if} src ${route_a_src:-unknown}; configured underlay IP is ${underlay_a_ip}"
+    fi
   fi
   if [[ -z "$underlay_b_if" ]]; then
-    underlay_b_if="$(detect_underlay_if b "$underlay_a_ip" | tail -n 1)"
+    underlay_b_if="$route_b_if"
+  elif [[ -n "$route_b_if" && "$underlay_b_if" != "$route_b_if" ]]; then
+    route_b_src="$(detect_underlay_ip b "$underlay_a_ip" | tail -n 1 || true)"
+    if [[ "$route_b_src" == "$underlay_b_ip" ]]; then
+      log "WARNING: node B configured underlay interface ${underlay_b_if} does not match route to peer ${underlay_a_ip} dev ${route_b_if}; using route interface"
+      underlay_b_if="$route_b_if"
+    else
+      die "node B configured underlay interface ${underlay_b_if} does not match route to peer ${underlay_a_ip} dev ${route_b_if} src ${route_b_src:-unknown}; configured underlay IP is ${underlay_b_ip}"
+    fi
   fi
   [[ -n "$underlay_a_if" ]] || die "could not detect node A underlay interface"
   [[ -n "$underlay_b_if" ]] || die "could not detect node B underlay interface"
@@ -913,10 +932,42 @@ prepare_node_topology() {
   host_gw="$(node_value "$node" "${lan_a_gateway%/*}" "${lan_b_gateway%/*}")"
   run_node "$node" "set -Eeuo pipefail
 ip_cmd=\$(command -v ip)
-rm -rf $(remote_quote "$dir")
-mkdir -p $(remote_quote "$dir")/logs $(remote_quote "$dir")/certs $(remote_quote "$dir")/data
-if command -v modprobe >/dev/null 2>&1; then modprobe veth >/dev/null 2>&1 || true; fi
+dir=$(remote_quote "$dir")
+target_data=\"\${dir}/data\"
+if [ -f \"\${dir}/trustixd.pid\" ]; then
+  old_pid=\$(cat \"\${dir}/trustixd.pid\" 2>/dev/null || true)
+  if [ -n \"\$old_pid\" ]; then
+    kill \"\$old_pid\" >/dev/null 2>&1 || true
+  fi
+fi
+for proc in /proc/[0-9]*; do
+  [ -d \"\$proc\" ] || continue
+  pid=\"\${proc##*/}\"
+  [ \"\$pid\" = \"\$\$\" ] && continue
+  cmdline=\$(tr '\000' ' ' <\"\$proc/cmdline\" 2>/dev/null || true)
+  case \" \$cmdline \" in
+    *\" -data-dir \$target_data \"*|*\" -data-dir=\$target_data \"*)
+      kill \"\$pid\" >/dev/null 2>&1 || true
+      ;;
+  esac
+done
 for pid in \$(\"\$ip_cmd\" netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
+for _ in \$(seq 1 5); do
+  live=0
+  if [ -f \"\${dir}/trustixd.pid\" ]; then
+    old_pid=\$(cat \"\${dir}/trustixd.pid\" 2>/dev/null || true)
+    [ -n \"\$old_pid\" ] && kill -0 \"\$old_pid\" >/dev/null 2>&1 && live=1
+  fi
+  [ \"\$live\" -eq 0 ] && break
+  sleep 1
+done
+if [ -f \"\${dir}/trustixd.pid\" ]; then
+  old_pid=\$(cat \"\${dir}/trustixd.pid\" 2>/dev/null || true)
+  [ -n \"\$old_pid\" ] && kill -KILL \"\$old_pid\" >/dev/null 2>&1 || true
+fi
+rm -rf \"\$dir\"
+mkdir -p \"\$dir\"/logs \"\$dir\"/certs \"\$dir\"/data
+if command -v modprobe >/dev/null 2>&1; then modprobe veth >/dev/null 2>&1 || true; fi
 \"\$ip_cmd\" netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
 \"\$ip_cmd\" link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
 \"\$ip_cmd\" link del $(remote_quote "$host_if") >/dev/null 2>&1 || true
@@ -1746,15 +1797,45 @@ start_iperf_server() {
   host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
 run_node "$node" "set -Eeuo pipefail
 ip_cmd=\$(command -v ip)
-rm -f $(remote_quote "${dir}/iperf3-server.pid") $(remote_quote "${dir}/iperf3-server.json")
-if command -v nohup >/dev/null 2>&1; then
-  nohup \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
-elif command -v setsid >/dev/null 2>&1; then
-  setsid \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
-else
-  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -s -1 -p ${iperf_port} -J >$(remote_quote "${dir}/iperf3-server.json") 2>$(remote_quote "${dir}/iperf3-server.err") </dev/null &
+pid_file=$(remote_quote "${dir}/iperf3-server.pid")
+json_file=$(remote_quote "${dir}/iperf3-server.json")
+err_file=$(remote_quote "${dir}/iperf3-server.err")
+if [ -f \"\$pid_file\" ]; then
+  old_pid=\$(cat \"\$pid_file\" 2>/dev/null || true)
+  if [ -n \"\$old_pid\" ]; then
+    kill \"\$old_pid\" >/dev/null 2>&1 || true
+  fi
 fi
-echo \$! >$(remote_quote "${dir}/iperf3-server.pid")
+if command -v ss >/dev/null 2>&1; then
+  for old_pid in \$(\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") ss -ltnp \"sport = :${iperf_port}\" 2>/dev/null | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u); do
+    kill \"\$old_pid\" >/dev/null 2>&1 || true
+  done
+fi
+rm -f \"\$pid_file\" \"\$json_file\" \"\$err_file\"
+if command -v nohup >/dev/null 2>&1; then
+  nohup \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") sh -c 'echo \$\$ >\"\$1\"; exec iperf3 -s -1 -p \"\$2\" -J' sh \"\$pid_file\" ${iperf_port} >\"\$json_file\" 2>\"\$err_file\" </dev/null &
+elif command -v setsid >/dev/null 2>&1; then
+  setsid \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") sh -c 'echo \$\$ >\"\$1\"; exec iperf3 -s -1 -p \"\$2\" -J' sh \"\$pid_file\" ${iperf_port} >\"\$json_file\" 2>\"\$err_file\" </dev/null &
+else
+  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") sh -c 'echo \$\$ >\"\$1\"; exec iperf3 -s -1 -p \"\$2\" -J' sh \"\$pid_file\" ${iperf_port} >\"\$json_file\" 2>\"\$err_file\" </dev/null &
+fi
+for _ in \$(seq 1 10); do
+  [ -s \"\$pid_file\" ] && break
+  sleep 1
+done
+pid=\$(cat \"\$pid_file\" 2>/dev/null || true)
+if [ -z \"\$pid\" ]; then
+  printf '%s\n' 'trustix-cross-host-runner: iperf server did not write pid' >>\"\$err_file\"
+  exit 1
+fi
+if ! kill -0 \"\$pid\" >/dev/null 2>&1; then
+  printf '%s\n' 'trustix-cross-host-runner: iperf server exited during startup' >>\"\$err_file\"
+  exit 1
+fi
+if grep -Fq '\"error\"' \"\$json_file\" 2>/dev/null || grep -iq 'address already in use\\|unable to start listener' \"\$err_file\" \"\$json_file\" 2>/dev/null; then
+  printf '%s\n' 'trustix-cross-host-runner: iperf server startup failed' >>\"\$err_file\"
+  exit 1
+fi
 "
 }
 
@@ -1892,16 +1973,29 @@ iperf_artifact_suffix() {
 
 wait_iperf_server_exit() {
   local node="$1"
-  local dir
+  local dir host_ns
   dir="$(remote_dir "$node")"
+  host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
   run_node "$node" "set +e
-pid=\$(cat $(remote_quote "${dir}/iperf3-server.pid") 2>/dev/null || true)
-[ -z \"\$pid\" ] && exit 0
-for _ in \$(seq 1 40); do
-  kill -0 \"\$pid\" >/dev/null 2>&1 || exit 0
+ip_cmd=\$(command -v ip)
+pid_file=$(remote_quote "${dir}/iperf3-server.pid")
+pid=\$(cat \"\$pid_file\" 2>/dev/null || true)
+if [ -n \"\$pid\" ]; then
+  for _ in \$(seq 1 40); do
+    kill -0 \"\$pid\" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  kill \"\$pid\" >/dev/null 2>&1 || true
   sleep 1
-done
-kill \"\$pid\" >/dev/null 2>&1 || true
+  kill -9 \"\$pid\" >/dev/null 2>&1 || true
+fi
+if command -v ss >/dev/null 2>&1; then
+  for old_pid in \$(\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") ss -ltnp \"sport = :${iperf_port}\" 2>/dev/null | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u); do
+    kill \"\$old_pid\" >/dev/null 2>&1 || true
+  done
+  sleep 1
+fi
+rm -f \"\$pid_file\"
 exit 0
 "
 }

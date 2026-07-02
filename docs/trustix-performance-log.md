@@ -23,15 +23,103 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `b0d2fc642864` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. The modules were rebuilt inside the guests for the exact target kernel; earlier Debian `6.12.90+deb13.1-cloud-amd64` and `6.12.94+deb13-cloud-amd64` gates remain historical coverage, not the current pinned row. |
+| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Current-tool multi-queue gate with production gate script, cross-host runner, transport matrix, and evidence generator SHA256 pinned. The modules were matched to the exact target kernel; earlier Debian full-kmod gates remain historical coverage. |
 | Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
-| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian `exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `31b35f150bd9` | Selected plaintext experimental TCP full-kmod uses the dedicated full-kmod gate family and must not reuse UDP full-kmod or route-GSO evidence. |
+| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Current-tool multi-queue gate passed with route-GSO helper counters clean. The single-queue diagnostic failure was throughput-only and is not promoted. |
+| Debian `exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected plaintext experimental TCP full-kmod uses the dedicated full-kmod gate family, current-tool hashes, and the P16 runtime default; it must not reuse UDP full-kmod or route-GSO evidence. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace and GRE/IPIP/VXLAN userspace-TC | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
-| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `928c5d0939cc` | Selected OpenWrt kernel path remains UDP plaintext full-kmod; production default tests now require manifest evidence for this family. The earlier gates at commits `395b2ba05013` and `e02d15edf6b4` remain historical evidence, not the current pinned row. |
-| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `ee378f18a11c` | Selected OpenWrt experimental TCP plaintext full-kmod has a current toolchain-hashed production evidence row. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
+| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected OpenWrt kernel path remains UDP plaintext full-kmod with current-tool hashes. The runner corrects a configured underlay interface to the route device when the route source matches, covering OpenWrt `eth0` versus `br-lan`; the iperf server PID/listener cleanup fix is included. |
+| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected OpenWrt experimental TCP plaintext full-kmod has current-tool production evidence and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-07-02
+
+<a id="2026-07-02-zaozhuang-pve-9884a92-debian-full-kmod-multiqueue-production"></a>
+
+### Zaozhuang PVE 9884a92 Debian full-kmod multi-queue gate
+
+PVE host `120.220.44.72:8006` ran the current `9884a92a255740ef13e754b1ad2e8b162d6bbcf9`
+TrustIX build on Debian 13 to Debian 13, kernel
+`6.12.90+deb13.1-cloud-amd64` on both sides. The guests used virtio underlay
+NICs with 4 queues. The binary SHA256 was
+`6b72cf30dd46b900f09ab7fc3b9f3c46abe055f97e1156da5c936b5dd938cda7`,
+Go was `go1.25.0`, and build time was `2026-07-01T16:12:01Z`.
+
+The selected production gate emitted
+`trustix-cross-host-production-gate-manifest-v1` evidence with production gate
+SHA256 `89d4f86eb164603d22678bfa8636042bb7be4c1040de8dbf9d151211962906c9`,
+verifier SHA256 `bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`,
+cross-host runner SHA256
+`adcff9cfd21254c429f340d94de2293e3cbfb58b11d1d7fd2f799f5c351f52d0`,
+transport matrix SHA256
+`dbb478869377c98e4a6727309c413418dea46a49cc9191dc49d50c111ac743db`, and
+evidence generator SHA256
+`6c5ab13a29f7a2cb0e0b6b941bfa8abd749c464ac792a771baf63f70b40da0fb`.
+
+The selected UDP plaintext full kernel module production gate passed for 3600
+seconds per direction with minimum received throughput `4.464254 Gbps`.
+The gate recorded 8 sessions, `trustix_datapath` loaded on both nodes, stable
+boot IDs, clean kernel log and pstore artifacts, and zero `tx_plaintext_*`,
+`rx_worker_*`, self-test, session dial, or heartbeat errors.
+
+Before this rerun, VMs 204 and 205 were accidentally rebooted into
+`6.12.94+deb13-cloud-amd64` while still carrying `6.12.90+deb13.1-cloud-amd64`
+modules. That failed immediately with a `module_layout` mismatch and was not
+promoted. The passing run booted both guests back to
+`6.12.90+deb13.1-cloud-amd64`, matching the module vermagic.
+
+<a id="2026-07-02-zaozhuang-pve-9884a92-route-gso-multiqueue-production"></a>
+
+### Zaozhuang PVE 9884a92 route-GSO multi-queue gate
+
+The same current build ran the Debian 13 to Debian 13 experimental TCP
+route-GSO production gate on 4-queue virtio guests. The selected gate passed
+for 3600 seconds per direction with minimum received throughput
+`3.712796 Gbps`. The gate recorded 16 sessions, `trustix_datapath_helpers`
+loaded on both nodes, route-GSO async helper counters with zero alloc, clone,
+flow, MTU, prepare, queue, segment, stream, and xmit errors, stable boot IDs,
+and clean kernel log and pstore artifacts.
+
+A single-queue diagnostic run on Debian guests completed without panic, lockup,
+pstore output, or kernel findings, but failed the production throughput floor.
+That result is retained as a topology diagnostic only; production evidence uses
+the 4-queue run above.
+
+<a id="2026-07-02-zaozhuang-pve-9884a92-debian-exp-tcp-full-kmod-multiqueue-production"></a>
+
+### Zaozhuang PVE 9884a92 Debian experimental TCP full-kmod multi-queue gate
+
+The same current build ran the Debian 13 to Debian 13 experimental TCP
+plaintext full kernel module production gate on 4-queue virtio guests. The
+selected gate passed for 3600 seconds per direction with P16 runtime defaults,
+32 sessions, and minimum received throughput `8.978477 Gbps`. The gate recorded
+`kernel_datapath_full_plaintext`, zero session dial, heartbeat, reset, stale
+session, `tx_plaintext_*`, `rx_worker_*`, and self-test errors, stable boot IDs,
+and clean kernel log and pstore artifacts.
+
+<a id="2026-07-02-zaozhuang-pve-9884a92-openwrt24107-debian-current-tools-iperf-server-fix"></a>
+
+### Zaozhuang PVE 9884a92 OpenWrt-Debian full-kmod current-tool gates
+
+The same current `9884a92a255740ef13e754b1ad2e8b162d6bbcf9` build was gated
+from OpenWrt 24.10.7 kernel `6.6.141` to Debian 13 kernel
+`6.12.90+deb13.1-cloud-amd64`. The runner resolved the OpenWrt underlay from
+the configured `eth0` to the route device `br-lan` when the route source still
+matched the configured underlay IP; that fixed the previous false setup
+failure without weakening the mismatched-route check.
+
+Both OpenWrt-Debian production gates passed for 3600 seconds per direction:
+
+| Gate family | Transport | Minimum received |
+| --- | --- | ---: |
+| `owdeb_full_kmod` | UDP plaintext full kernel module | 3.100370 Gbps |
+| `owdeb_exp_tcp_full_kmod` | experimental TCP plaintext full kernel module, P16 | 6.482369 Gbps |
+
+The production gate used the same tool hashes as the Debian run above. The
+gate summaries recorded stable boot IDs, clean kernel log and pstore artifacts,
+loaded full-kmod fast-path state during the run, and clean cleanup state
+afterward. This run also covers the iperf server PID/listener cleanup fix.
 
 ## 2026-06-30
 
