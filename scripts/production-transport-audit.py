@@ -179,6 +179,14 @@ CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS = {
     # Provision output changes do not alter already-soaked datapath/runtime behavior.
     "internal/daemon/ix_provision_resource.go",
 }
+OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
+    # 9235159 only changes the OpenWrt rx_worker_single_coalesce default behind
+    # runtimeLooksLikeOpenWrt(). It does not invalidate non-OpenWrt current
+    # kernel-module evidence rows.
+    "internal/daemon/kernel_modules.go": {
+        "9235159503ed1746a41af9a86cbe9baebd67ed8f",
+    },
+}
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     # This manifest-v1 gate predates the exp_tcp_full_kmod family. The existing
     # families below kept equivalent verifier semantics when the dedicated
@@ -823,6 +831,28 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
     return True
 
 
+def row_targets_openwrt(row: dict[str, str]) -> bool:
+    return "openwrt" in row.get("os_matrix", "").lower() or row.get(
+        "gate_family", ""
+    ).startswith("owdeb_")
+
+
+def current_runtime_path_change_irrelevant(
+    row: dict[str, str], resolved_commit: str, path: str
+) -> bool:
+    normalized = path.replace("\\", "/")
+    if row_targets_openwrt(row):
+        return False
+    allowed_commits = OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH.get(normalized)
+    if not allowed_commits:
+        return False
+    path_log = run_git(["log", "--format=%H", f"{resolved_commit}..HEAD", "--", normalized])
+    if path_log.returncode != 0:
+        return False
+    changed_commits = {line.strip() for line in path_log.stdout.splitlines() if line.strip()}
+    return bool(changed_commits) and changed_commits.issubset(allowed_commits)
+
+
 def current_runtime_tree_errors(row: dict[str, str]) -> list[str]:
     if is_current_toolchain_legacy(row):
         return []
@@ -844,7 +874,9 @@ def current_runtime_tree_errors(row: dict[str, str]) -> list[str]:
     changed = [
         line
         for line in diff.stdout.splitlines()
-        if line.strip() and current_runtime_path_relevant(row, line.strip())
+        if line.strip()
+        and current_runtime_path_relevant(row, line.strip())
+        and not current_runtime_path_change_irrelevant(row, resolved_commit, line.strip())
     ]
     if not changed:
         return []

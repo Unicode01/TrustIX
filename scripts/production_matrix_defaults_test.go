@@ -3557,11 +3557,11 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"tc_direct":               "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
 		"full_kmod":               "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-current-dd-kmod-regate",
 		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-current-dd-kmod-regate",
-		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-openwrt24107-debian-current-tools-iperf-server-fix",
+		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-openwrt24107-debian13-full-kernel-production",
 		"secure_kudp":             "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
 		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
 		"route_gso":               "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-route-gso-production",
-		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-openwrt24107-debian-current-tools-iperf-server-fix",
+		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-openwrt24107-debian13-full-kernel-production",
 		"userspace":               "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":            "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 	}
@@ -3654,7 +3654,7 @@ func TestCurrentOpenWrtFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "openwrt24.10.7-debian13"
 		wantKernelMatrix = "6.6.141_to_6.12.90+deb13.1-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-openwrt24107-debian-current-tools-iperf-server-fix"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-openwrt24107-debian13-full-kernel-production"
 		minGbps          = 3.0
 		minSeconds       = 3600
 	)

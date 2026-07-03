@@ -29,11 +29,47 @@ Current production-default evidence boundary:
 | Debian `exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557`, revalidated with the netdevfix verifier | Selected plaintext experimental TCP full-kmod uses the dedicated full-kmod gate family, current-tool hashes, and the P16 runtime default; it must not reuse UDP full-kmod or route-GSO evidence. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace and GRE/IPIP/VXLAN userspace-TC | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `a88aec3dd688a73aa3cd54342ca4b8fb8d71d424` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
-| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected OpenWrt kernel path remains UDP plaintext full-kmod with historical current-tool hashes. Rechecking that old artifact with the netdevfix verifier rejects stale `unregister_netdevice` cleanup logs, so it needs a fresh OpenWrt-Debian run before claiming netdevfix verifier coverage. |
-| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected OpenWrt experimental TCP plaintext full-kmod has historical current-tool production evidence and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence; it also needs a fresh OpenWrt-Debian run before claiming netdevfix verifier coverage. |
+| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9235159503ed` | Fresh netdevfix OpenWrt-Debian UDP plaintext full-kmod evidence uses current production gate, verifier, runner, transport matrix, and evidence generator SHA256 values. The OpenWrt node ran with `trustix_datapath.rx_worker_single_coalesce=N`; Debian kept the default `Y`. |
+| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9235159503ed` | Fresh netdevfix OpenWrt-Debian experimental TCP plaintext full-kmod evidence uses the dedicated full-kmod gate family and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-07-03
+
+<a id="2026-07-03-zaozhuang-pve-netdevfix-openwrt24107-debian13-full-kernel-production"></a>
+
+### Zaozhuang PVE netdevfix OpenWrt-Debian full-kernel production gate
+
+PVE host `120.220.44.72:8006` ran fresh OpenWrt-Debian full-kernel gates on
+disposable VM IDs 200 and 201 only. VM200 `trustix-owdeb-openwrt` ran
+OpenWrt 24.10.7 kernel `6.6.141` at `10.203.3.200`; VM201
+`trustix-owdeb-debian` ran Debian 13 kernel
+`6.12.90+deb13.1-cloud-amd64` at `10.203.3.201`. Both used isolated `vmbr3`;
+VM100 and all 1xx guests were not modified.
+
+The TrustIX binary was `trustix-linux-amd64-netdevfix`, commit
+`9235159503ed1746a41af9a86cbe9baebd67ed8f`, build time
+`2026-07-03T09:41:34Z`, Go `go1.25.0`, and binary SHA256
+`952874623231c3bd9e846f6a9810b892517e180a91272418ba470570a70e8892`.
+The production gate script SHA256 was
+`f10f2307e6c4d0b3282616acb8ecf3cf1dc45aa481902c5aa3a38ed8c4124faf`;
+the verifier SHA256 was
+`0a171df97959d753eeebcb6bea17199d5a1bda69bafd2720b49259068768aee9`.
+
+| Gate family | Transport | Minimum received | Duration |
+| --- | --- | ---: | ---: |
+| `owdeb_full_kmod` | UDP plaintext full kernel module | 4.130908 Gbps | 3600s |
+| `owdeb_exp_tcp_full_kmod` | experimental TCP plaintext full kernel module, P16 | 7.818210 Gbps | 3600s |
+
+Per-direction throughput for `owdeb_full_kmod` was 4.688/4.688 Gbps
+OpenWrt-to-Debian and 4.130908/4.130908 Gbps Debian-to-OpenWrt. Per-direction
+throughput for `owdeb_exp_tcp_full_kmod` was 10.666/10.666 Gbps
+OpenWrt-to-Debian and 7.818210/7.818210 Gbps Debian-to-OpenWrt.
+
+The OpenWrt node recorded `trustix_datapath.rx_worker_single_coalesce=N`; the
+Debian node recorded `trustix_datapath.rx_worker_single_coalesce=Y`. Both
+production gate summaries passed with stable boot IDs, clean pstore artifacts,
+no kernel log crash findings, no `unregister_netdevice` wait logs, no
+`tx_queue_len` findings, and loaded full-kmod fast-path state during the runs.
 
 <a id="2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate"></a>
 
