@@ -2351,6 +2351,22 @@ func TestPlanCleanupIncludesMultipleLANs(t *testing.T) {
 	}
 }
 
+func TestDetachClosesDataplaneSocketRefsBeforeDeletingManagedLANs(t *testing.T) {
+	payload, err := os.ReadFile("manager_linux.go")
+	if err != nil {
+		t.Fatalf("read manager_linux.go: %v", err)
+	}
+	text := string(payload)
+	closeMarker := "if err := manager.closeDataplaneSocketRefsLocked(); err != nil {\n\t\terrs = append(errs, err.Error())\n\t}\n\tfor _, lan := range effectiveLANAttachSpecs(manager.spec) {"
+	closeIdx := strings.Index(text, closeMarker)
+	if closeIdx < 0 {
+		t.Fatalf("detachLocked does not close dataplane socket refs immediately before managed LAN cleanup")
+	}
+	if !strings.Contains(text[closeIdx:], "netlink.LinkDel(target)") {
+		t.Fatalf("detachLocked managed LAN cleanup no longer deletes links with netlink.LinkDel")
+	}
+}
+
 func TestPlanCleanupIncludesDistinctUnderlayTCFilters(t *testing.T) {
 	pinPath := t.TempDir()
 	state := persistedDataplaneState{

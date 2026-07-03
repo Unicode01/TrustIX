@@ -6698,6 +6698,9 @@ func (manager *Manager) detachLocked(ctx context.Context, staleXDP *persistedExp
 		}
 	}
 	manager.restoreSysctls = make(map[string]string)
+	if err := manager.closeDataplaneSocketRefsLocked(); err != nil {
+		errs = append(errs, err.Error())
+	}
 	for _, lan := range effectiveLANAttachSpecs(manager.spec) {
 		if lan.Iface == "" {
 			continue
@@ -6714,6 +6717,30 @@ func (manager *Manager) detachLocked(ctx context.Context, staleXDP *persistedExp
 			errs = append(errs, fmt.Sprintf("delete managed LAN iface %q: %v", lan.Iface, err))
 		}
 	}
+	if err := manager.closeDataplaneSocketRefsLocked(); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if err := manager.closeKernelCryptoProviderMapLocked(); err != nil {
+		errs = append(errs, err.Error())
+	}
+	manager.attached = false
+	manager.linkAddedLANs = make(map[string]bool)
+	manager.addressAdded = false
+	manager.addressAddedLANs = make(map[string]bool)
+	manager.qdiscPrepared = false
+	manager.qdiscPreparedLANs = make(map[string]bool)
+	manager.underlayQdiscPrepared = false
+	if err := manager.persistStateLocked(); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("detach linux dataplane: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func (manager *Manager) closeDataplaneSocketRefsLocked() error {
+	var errs []string
 	if manager.expTCPRawFD >= 0 {
 		if err := unix.Close(manager.expTCPRawFD); err != nil {
 			errs = append(errs, "close experimental_tcp raw socket: "+err.Error())
@@ -6732,21 +6759,8 @@ func (manager *Manager) detachLocked(ctx context.Context, staleXDP *persistedExp
 	if err := manager.closeRawIPv4TXSocketLocked(); err != nil {
 		errs = append(errs, err.Error())
 	}
-	if err := manager.closeKernelCryptoProviderMapLocked(); err != nil {
-		errs = append(errs, err.Error())
-	}
-	manager.attached = false
-	manager.linkAddedLANs = make(map[string]bool)
-	manager.addressAdded = false
-	manager.addressAddedLANs = make(map[string]bool)
-	manager.qdiscPrepared = false
-	manager.qdiscPreparedLANs = make(map[string]bool)
-	manager.underlayQdiscPrepared = false
-	if err := manager.persistStateLocked(); err != nil {
-		errs = append(errs, err.Error())
-	}
 	if len(errs) > 0 {
-		return fmt.Errorf("detach linux dataplane: %s", strings.Join(errs, "; "))
+		return fmt.Errorf("close dataplane socket refs: %s", strings.Join(errs, "; "))
 	}
 	return nil
 }
