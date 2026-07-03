@@ -700,8 +700,15 @@ func kernelDatapathOpenWrtRXSingleCoalesceDisabled() bool {
 	if !runtimeLooksLikeOpenWrt() {
 		return false
 	}
-	return envTruthyAny("TRUSTIX_KERNEL_DATAPATH_DISABLE_OPENWRT_RX_SINGLE_COALESCE") ||
-		envFalsey("TRUSTIX_KERNEL_DATAPATH_OPENWRT_RX_SINGLE_COALESCE")
+	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_DISABLE_OPENWRT_RX_SINGLE_COALESCE") ||
+		envFalsey("TRUSTIX_KERNEL_DATAPATH_OPENWRT_RX_SINGLE_COALESCE") {
+		return true
+	}
+	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_ENABLE_OPENWRT_RX_SINGLE_COALESCE") ||
+		envTruthyAny("TRUSTIX_KERNEL_DATAPATH_OPENWRT_RX_SINGLE_COALESCE") {
+		return false
+	}
+	return true
 }
 
 func runtimeLooksLikeOpenWrt() bool {

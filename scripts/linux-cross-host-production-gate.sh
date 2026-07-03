@@ -419,6 +419,28 @@ case_label_name() {
   printf '%s-%s\n' "$prefix" "$(printf '%s' "$case_name" | tr -c 'A-Za-z0-9_.-' '_')"
 }
 
+case_is_openwrt_debian() {
+  local case_token="$1" case_name
+  case_name="${case_token%%=*}"
+  case "$case_name" in
+    owdeb-*|owdeb_*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+case_module_param_args() {
+  local family="$1" case_token="$2"
+  case "$family" in
+    full-kmod|exp-tcp-full-kmod) ;;
+    *) return 0 ;;
+  esac
+  if case_is_openwrt_debian "$case_token"; then
+    printf '%s\n' --require-module-param-node-max a.trustix_datapath.rx_worker_single_coalesce=0
+  else
+    printf '%s\n' --require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32
+  fi
+}
+
 write_gate_manifest() {
   [[ -n "$summary_dir" ]] || return 0
   mkdir -p "$summary_dir"
@@ -594,6 +616,7 @@ run_gate_case_list() {
   for token in $cases; do
     local policy_args=()
     local session_args=()
+    local module_args=()
     local policy_arg
     min_gbps="$(case_min_gbps "$token" "$category_min_gbps" "$min_map_raw")"
     token_min_seconds="$(case_min_seconds "$token" "$min_seconds" "$min_seconds_map_raw")"
@@ -604,7 +627,10 @@ run_gate_case_list() {
     while IFS= read -r policy_arg; do
       session_args+=("$policy_arg")
     done < <(case_session_args "$label" "$token")
-    run_gate "$case_label" "$min_gbps" "$token_min_seconds" --case "$token" "${policy_args[@]}" "${session_args[@]}" "$@"
+    while IFS= read -r policy_arg; do
+      module_args+=("$policy_arg")
+    done < <(case_module_param_args "$label" "$token")
+    run_gate "$case_label" "$min_gbps" "$token_min_seconds" --case "$token" "${policy_args[@]}" "${session_args[@]}" "${module_args[@]}" "$@"
   done
 }
 
@@ -860,7 +886,6 @@ main() {
       --require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0 \
       --require-module-param-min trustix_datapath.session_records="${full_kmod_min_sessions}" \
       --require-module-param-min trustix_datapath.session_wire_records="${full_kmod_min_sessions}" \
-      --require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_segments=1 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_direct_xmit_dst_mac_cache_hits=1 \
       --require-module-param-any-min trustix_datapath.rx_worker_gso_xmit_segments=1 \
@@ -915,7 +940,6 @@ main() {
       --require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0 \
       --require-module-param-min trustix_datapath.session_records="${exp_tcp_full_kmod_min_pool_size}" \
       --require-module-param-min trustix_datapath.session_wire_records="${exp_tcp_full_kmod_min_pool_size}" \
-      --require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_packets=1 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_gso_segments=1 \
       --require-module-param-any-min trustix_datapath.rx_worker_injected=1 \

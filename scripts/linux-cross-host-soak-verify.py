@@ -379,6 +379,13 @@ def parse_args() -> argparse.Namespace:
         help="require every collected module-parameters.txt to contain numeric MODULE.PARAM <= VALUE; may be repeated",
     )
     parser.add_argument(
+        "--require-module-param-node-max",
+        action="append",
+        default=[],
+        metavar="NODE.MODULE.PARAM=VALUE",
+        help="require module-parameters.txt for NODE to contain numeric MODULE.PARAM <= VALUE; may be repeated",
+    )
+    parser.add_argument(
         "--min-module-parameters",
         type=int,
         default=0,
@@ -1434,6 +1441,29 @@ def parse_required_ratio_limits(raw_items: list[str], flag: str) -> list[tuple[s
     return required
 
 
+def parse_required_node_numeric_limits(
+    raw_items: list[str], flag: str
+) -> list[tuple[str, str, float]]:
+    required: list[tuple[str, str, float]] = []
+    for raw in raw_items:
+        path, sep, value = raw.partition("=")
+        path = path.strip()
+        value = value.strip()
+        node, dot, dotted_path = path.partition(".")
+        node = node.strip()
+        dotted_path = dotted_path.strip()
+        if not sep or not dot or not node or not dotted_path:
+            raise SystemExit(
+                f"invalid {flag} {raw!r}; expected NODE.MODULE.PARAM=VALUE"
+            )
+        try:
+            numeric = float(value)
+        except ValueError as exc:
+            raise SystemExit(f"invalid {flag} {raw!r}; VALUE must be numeric") from exc
+        required.append((node, dotted_path, numeric))
+    return required
+
+
 def datapath_value(payload: Any, dotted_path: str) -> Any:
     current = payload
     for part in dotted_path.split("."):
@@ -1655,6 +1685,7 @@ def validate_module_parameters(
     required_minima: list[tuple[str, float]],
     required_any_minima: list[tuple[str, float]],
     required_maxima: list[tuple[str, float]],
+    required_node_maxima: list[tuple[str, str, float]],
     min_module_parameters: int,
 ) -> tuple[list[dict[str, Any]], list[str], int]:
     files = sorted(case_dir.rglob("module-parameters.txt"))
@@ -1663,14 +1694,23 @@ def validate_module_parameters(
     any_hits: dict[str, bool] = {
         dotted_path: False for dotted_path, _ in required_any_minima
     }
+    node_hits: dict[tuple[str, str], bool] = {
+        (node, dotted_path): False for node, dotted_path, _ in required_node_maxima
+    }
     if len(files) < min_module_parameters:
         errors.append(
             f"found {len(files)} module-parameters.txt files, want >= {min_module_parameters}"
         )
-    if (required_minima or required_any_minima or required_maxima) and not files:
+    if (
+        required_minima
+        or required_any_minima
+        or required_maxima
+        or required_node_maxima
+    ) and not files:
         return rows, errors, len(files)
     for path in files:
         rel = str(path.relative_to(case_dir))
+        node = transport_node_key(path, case_dir)
         try:
             modules = parse_module_parameters(path)
         except OSError as exc:
@@ -1722,12 +1762,40 @@ def validate_module_parameters(
                 errors.append(
                     f"{rel}: module parameter {dotted_path}={actual_number:g}, want <= {maximum:g}"
                 )
+        for required_node, dotted_path, maximum in required_node_maxima:
+            if node != required_node:
+                continue
+            node_hits[(required_node, dotted_path)] = True
+            try:
+                actual = module_parameter_value(modules, dotted_path)
+            except KeyError:
+                errors.append(
+                    f"{rel}: missing module parameter {required_node}.{dotted_path!r}"
+                )
+                continue
+            values[f"{required_node}.{dotted_path}"] = actual
+            try:
+                actual_number = numeric_value(actual)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"{rel}: module parameter {required_node}.{dotted_path}={actual!r} is not numeric"
+                )
+                continue
+            if actual_number > maximum:
+                errors.append(
+                    f"{rel}: module parameter {required_node}.{dotted_path}={actual_number:g}, want <= {maximum:g}"
+                )
         if values:
             rows.append({"file": rel, "values": values})
     for dotted_path, minimum in required_any_minima:
         if not any_hits.get(dotted_path, False):
             errors.append(
                 f"no collected module parameter {dotted_path!r} reached >= {minimum:g}"
+            )
+    for node, dotted_path, _ in required_node_maxima:
+        if not node_hits.get((node, dotted_path), False):
+            errors.append(
+                f"no collected module parameters for node {node!r} contained {dotted_path!r}"
             )
     return rows, errors, len(files)
 
@@ -2049,6 +2117,7 @@ def validate_case(
     required_module_param_minima: list[tuple[str, float]],
     required_module_param_any_minima: list[tuple[str, float]],
     required_module_param_maxima: list[tuple[str, float]],
+    required_module_param_node_maxima: list[tuple[str, str, float]],
     min_module_parameters: int,
     required_transport_policy_stats: list[tuple[str, str]],
     required_transport_policy_minima: list[tuple[str, float]],
@@ -2316,6 +2385,7 @@ def validate_case(
         required_minima=required_module_param_minima,
         required_any_minima=required_module_param_any_minima,
         required_maxima=required_module_param_maxima,
+        required_node_maxima=required_module_param_node_maxima,
         min_module_parameters=min_module_parameters,
     )
     errors.extend(module_param_errors)
@@ -2483,6 +2553,10 @@ def main() -> int:
         args.require_module_param_max,
         "--require-module-param-max",
     )
+    required_module_param_node_maxima = parse_required_node_numeric_limits(
+        args.require_module_param_node_max,
+        "--require-module-param-node-max",
+    )
     required_transport_policy_stats = parse_required_datapath_stats(
         args.require_transport_policy_stat,
         "--require-transport-policy-stat",
@@ -2543,6 +2617,7 @@ def main() -> int:
         required_module_param_minima
         or required_module_param_any_minima
         or required_module_param_maxima
+        or required_module_param_node_maxima
     ) and min_module_parameters == 0:
         min_module_parameters = 2
     min_transports_json = args.min_transports_json
@@ -2613,6 +2688,7 @@ def main() -> int:
             required_module_param_minima=required_module_param_minima,
             required_module_param_any_minima=required_module_param_any_minima,
             required_module_param_maxima=required_module_param_maxima,
+            required_module_param_node_maxima=required_module_param_node_maxima,
             min_module_parameters=min_module_parameters,
             required_transport_policy_stats=required_transport_policy_stats,
             required_transport_policy_minima=required_transport_policy_minima,

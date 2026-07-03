@@ -2004,6 +2004,45 @@ func TestCrossHostProductionGateAcceptsFullKmodArtifacts(t *testing.T) {
 	}
 }
 
+func TestCrossHostProductionGateAcceptsOpenWrtDebianFullKmodWithSingleCoalesceDisabled(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeFullKmodProductionGateArtifacts(t, dir, true)
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "a", "module-parameters.txt"), true, map[string]string{
+		"rx_worker_single_coalesce": "N",
+	})
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, map[string]string{
+		"rx_worker_single_coalesce": "Y",
+	})
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=owdeb-fullkmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production gate rejected OpenWrt-Debian full-kmod artifacts with single-coalesce disabled:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsOpenWrtDebianFullKmodWithSingleCoalesceEnabled(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeFullKmodProductionGateArtifacts(t, dir, true)
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "a", "module-parameters.txt"), true, map[string]string{
+		"rx_worker_single_coalesce": "Y",
+	})
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, map[string]string{
+		"rx_worker_single_coalesce": "N",
+	})
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=owdeb-fullkmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted OpenWrt-Debian full-kmod artifacts with single-coalesce enabled:\n%s", output)
+	}
+	if !strings.Contains(string(output), "rx_worker_single_coalesce") {
+		t.Fatalf("production gate did not report enabled OpenWrt single-coalesce:\n%s", output)
+	}
+}
+
 func TestCrossHostProductionGateRejectsFullKmodWithoutPlaintextXmit(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()

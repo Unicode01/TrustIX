@@ -194,6 +194,16 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "secure_exp_tcp_kernel",
         "route_gso",
     },
+    # This gate predates the OpenWrt-Debian single-coalesce verifier split.
+    # Non-OpenWrt kernel families kept equivalent verifier semantics.
+    "662c176c1888bd3c89d775ef61e2cff70b2c0be39d929e35d18a6e11b78f7446": {
+        "tc_direct",
+        "full_kmod",
+        "exp_tcp_full_kmod",
+        "secure_kudp",
+        "secure_exp_tcp_kernel",
+        "route_gso",
+    },
     # OpenWrt-Debian current rows were minted with this gate before the
     # netdev-unregister verifier hardening. Keep the tool identity explicit
     # until a fresh OpenWrt-Debian run replaces or demotes those rows.
@@ -203,6 +213,16 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     },
 }
 VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
+    # This verifier predates the node-specific module-parameter requirement.
+    # Existing non-OpenWrt current rows do not depend on that new predicate.
+    "039cb91ef61fa4187baf16ed279e2dc09faf5aaaa69c0e7d1b2b597905e8eb9b": {
+        "tc_direct",
+        "full_kmod",
+        "exp_tcp_full_kmod",
+        "secure_kudp",
+        "secure_exp_tcp_kernel",
+        "route_gso",
+    },
     # Historical current rows that have not yet been re-minted with the
     # stricter netdev-unregister verifier.
     "bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b": {
