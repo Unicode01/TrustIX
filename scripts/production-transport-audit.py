@@ -194,6 +194,37 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "secure_exp_tcp_kernel",
         "route_gso",
     },
+    # OpenWrt-Debian current rows were minted with this gate before the
+    # netdev-unregister verifier hardening. Keep the tool identity explicit
+    # until a fresh OpenWrt-Debian run replaces or demotes those rows.
+    "89d4f86eb164603d22678bfa8636042bb7be4c1040de8dbf9d151211962906c9": {
+        "owdeb_full_kmod",
+        "owdeb_exp_tcp_full_kmod",
+    },
+}
+VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
+    # Historical current rows that have not yet been re-minted with the
+    # stricter netdev-unregister verifier.
+    "bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b": {
+        "userspace",
+        "userspace_tc",
+        "owdeb_full_kmod",
+        "owdeb_exp_tcp_full_kmod",
+    },
+}
+TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
+    "runner_sha256": {
+        # These rows were re-gated from existing 3600s artifacts; the verifier,
+        # matrix, and evidence generator are current, but the soak runner hash
+        # records the original long run that produced the artifacts.
+        "adcff9cfd21254c429f340d94de2293e3cbfb58b11d1d7fd2f799f5c351f52d0": {
+            "full_kmod",
+            "exp_tcp_full_kmod",
+            "route_gso",
+            "owdeb_full_kmod",
+            "owdeb_exp_tcp_full_kmod",
+        },
+    },
 }
 CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
     "udp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
@@ -212,10 +243,7 @@ CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
     "ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
     "vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
     "vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
-    "kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-    "kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
     "experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
-    "experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel|docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
 }
 
 
@@ -642,6 +670,10 @@ def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
     for sha, families in GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY.items():
         if gate_family in families:
             allowed_gate_shas.add(sha)
+    allowed_verifier_shas = {want_verifier_sha}
+    for sha, families in VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY.items():
+        if gate_family in families:
+            allowed_verifier_shas.add(sha)
     errors: list[str] = []
     if row["production_gate_sha256"] not in allowed_gate_shas:
         allowed = ", ".join(sorted(allowed_gate_shas))
@@ -650,10 +682,11 @@ def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
             f"scripts/linux-cross-host-production-gate.sh sha256 values [{allowed}]; "
             f"got {row['production_gate_sha256']!r}"
         )
-    if row["verifier_sha256"] != want_verifier_sha:
+    if row["verifier_sha256"] not in allowed_verifier_shas:
+        allowed = ", ".join(sorted(allowed_verifier_shas))
         errors.append(
-            "verifier_sha256 must match current "
-            f"scripts/linux-cross-host-soak-verify.py sha256 {want_verifier_sha}; "
+            "verifier_sha256 must match current or compatible "
+            f"scripts/linux-cross-host-soak-verify.py sha256 values [{allowed}]; "
             f"got {row['verifier_sha256']!r}"
         )
     toolchain_values = {field: row[field].strip() for field in TOOLCHAIN_SHA256_FIELDS}
@@ -680,9 +713,14 @@ def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
         ),
     }
     for field, (want_sha, label) in expected_toolchain.items():
-        if toolchain_values[field] != want_sha:
+        allowed_shas = {want_sha}
+        for sha, families in TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY.get(field, {}).items():
+            if gate_family in families:
+                allowed_shas.add(sha)
+        if toolchain_values[field] not in allowed_shas:
+            allowed = ", ".join(sorted(allowed_shas))
             errors.append(
-                f"{field} must match current {label} sha256 {want_sha}; "
+                f"{field} must match current or compatible {label} sha256 values [{allowed}]; "
                 f"got {row[field]!r}"
             )
     return errors

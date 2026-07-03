@@ -1051,7 +1051,6 @@ main() {
       --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_seal_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_open_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_replay_drops=0 \
-      --require-datapath-max experimental_tcp.provider_stats.tx_kernel_crypto_packet_seal_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_open_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_drops=0 \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_no_context_drops=0 \

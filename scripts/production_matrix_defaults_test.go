@@ -518,8 +518,8 @@ func loadAuditCurrentToolchainLegacyRequirementKeys(t *testing.T) map[string]boo
 		}
 		keys[key] = true
 	}
-	if len(keys) != 20 {
-		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 20 current legacy rows, got %d", len(keys))
+	if len(keys) != 17 {
+		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 17 current legacy rows, got %d", len(keys))
 	}
 	return keys
 }
@@ -3554,13 +3554,13 @@ func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	manifestRequiredArtifacts := map[string]string{
-		"tc_direct":               "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"full_kmod":               "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-debian-full-kmod-multiqueue-production",
-		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-debian-exp-tcp-full-kmod-multiqueue-production",
+		"tc_direct":               "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
+		"full_kmod":               "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-current-dd-kmod-regate",
+		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-current-dd-kmod-regate",
 		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-openwrt24107-debian-current-tools-iperf-server-fix",
-		"secure_kudp":             "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#pve-debian13-current-kernel-fast-2026-06-28",
-		"route_gso":               "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-route-gso-multiqueue-production",
+		"secure_kudp":             "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
+		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
+		"route_gso":               "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-route-gso-production",
 		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-openwrt24107-debian-current-tools-iperf-server-fix",
 		"userspace":               "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":            "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
@@ -3583,7 +3583,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
 		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                        "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
 		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace":                     "docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
-		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-debian-exp-tcp-full-kmod-multiqueue-production",
+		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-current-dd-kmod-regate",
 	}
 	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
@@ -3820,7 +3820,7 @@ func TestCurrentDebianFullKmodEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
 		wantKernelMatrix = "6.12.90+deb13.1-cloud-amd64_to_6.12.90+deb13.1-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-07-02-zaozhuang-pve-9884a92-debian-full-kmod-multiqueue-production"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-current-dd-kmod-regate"
 		minGbps          = 3.0
 		minSeconds       = 3600
 	)
@@ -4801,6 +4801,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 	for _, unwanted := range []string{
 		"TRUSTIX_CROSS_HOST_DD_FULL_KMOD_EXPERIMENTAL_TCP",
 		"dd-fullkmod-experimental-tcp",
+		"tx_kernel_crypto_packet_seal_errors",
 	} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("linux-cross-host-production-gate.sh still promotes diagnostic full-kmod experimental_tcp case %q", unwanted)
@@ -6856,6 +6857,8 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod",
 		"dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel",
 		"dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso",
+		"ow-tc-direct|tc-direct) printf 'udp\\n'",
+		"experimental-tcp-tc-direct|experimental_tcp_tc_direct) printf 'experimental_tcp\\n'",
 		"ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct",
 		"userspace-*-secure|userspace-*-plaintext|crosshost-userspace-*-secure|crosshost-userspace-*-plaintext",
 		"tc-*-secure|tc-*-plaintext|crosshost-tc-*-secure|crosshost-tc-*-plaintext",
@@ -6939,6 +6942,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_KERNEL_DATAPATH_OPENWRT_RX_SINGLE_COALESCE=%s",
 		"daemon_env_exports",
 		"env ${env_exports} $(remote_quote \"$trustixd\") -config",
+		"prepare-cleanup.log",
 		"yaml_single_quote",
 		"endpoint_security_yaml \"    \" \"$encryption\"",
 		"crypto_placement: ${crypto_placement}",

@@ -23,15 +23,96 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Current-tool multi-queue gate with production gate script, cross-host runner, transport matrix, and evidence generator SHA256 pinned. The modules were matched to the exact target kernel; earlier Debian full-kmod gates remain historical coverage. |
-| Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
-| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Current-tool multi-queue gate passed with route-GSO helper counters clean. The single-queue diagnostic failure was throughput-only and is not promoted. |
-| Debian `exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected plaintext experimental TCP full-kmod uses the dedicated full-kmod gate family, current-tool hashes, and the P16 runtime default; it must not reuse UDP full-kmod or route-GSO evidence. |
+| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557`, revalidated with the netdevfix verifier | Current-tool multi-queue gate with production gate script, cross-host runner, transport matrix, and evidence generator SHA256 pinned. The modules were matched to the exact target kernel; earlier Debian full-kmod gates remain historical coverage. |
+| Debian `tc_direct`, `secure_kudp` | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `a88aec3dd688a73aa3cd54342ca4b8fb8d71d424` | TC-direct still runs with no TrustIX kernel modules loaded. Secure-kUDP gates replay-old separately from replay-seen/drop ratios. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families. |
+| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `a88aec3dd688a73aa3cd54342ca4b8fb8d71d424` | Current netdevfix route-GSO gate passed with route-GSO helper counters clean and supersedes the 9884a92 verifier-only recheck. The single-queue diagnostic failure was throughput-only and is not promoted. |
+| Debian `exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557`, revalidated with the netdevfix verifier | Selected plaintext experimental TCP full-kmod uses the dedicated full-kmod gate family, current-tool hashes, and the P16 runtime default; it must not reuse UDP full-kmod or route-GSO evidence. |
 | Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace and GRE/IPIP/VXLAN userspace-TC | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
-| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `8c9fa5fcf2e0` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
-| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected OpenWrt kernel path remains UDP plaintext full-kmod with current-tool hashes. The runner corrects a configured underlay interface to the route device when the route source matches, covering OpenWrt `eth0` versus `br-lan`; the iperf server PID/listener cleanup fix is included. |
-| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected OpenWrt experimental TCP plaintext full-kmod has current-tool production evidence and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
+| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `a88aec3dd688a73aa3cd54342ca4b8fb8d71d424` | This is now a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. |
+| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected OpenWrt kernel path remains UDP plaintext full-kmod with historical current-tool hashes. Rechecking that old artifact with the netdevfix verifier rejects stale `unregister_netdevice` cleanup logs, so it needs a fresh OpenWrt-Debian run before claiming netdevfix verifier coverage. |
+| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `9884a92a2557` | Selected OpenWrt experimental TCP plaintext full-kmod has historical current-tool production evidence and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence; it also needs a fresh OpenWrt-Debian run before claiming netdevfix verifier coverage. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-07-03
+
+<a id="2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate"></a>
+
+### Zaozhuang PVE netdevfix kernel-fast selected gate
+
+PVE host `120.220.44.72:8006` revalidated the completed netdevfix selected
+production matrix artifacts with the updated verifier that rejects
+`unregister_netdevice: waiting for ... to become free`. The TrustIX binary was
+`trustix-linux-amd64-netdevfix`, commit
+`a88aec3dd688a73aa3cd54342ca4b8fb8d71d424`, build time
+`2026-07-02T22:21:11Z`, Go `1.25.0`, and binary SHA256
+`1f0654720c07df1e8606fa834db35577fa3f10339a62deaa9868ec9c4ec5748c`.
+
+The production gate script SHA256 was
+`662c176c1888bd3c89d775ef61e2cff70b2c0be39d929e35d18a6e11b78f7446`; the
+verifier SHA256 was
+`039cb91ef61fa4187baf16ed279e2dc09faf5aaaa69c0e7d1b2b597905e8eb9b`.
+
+| Gate family | Minimum received | Duration | Notes |
+| --- | ---: | ---: | --- |
+| `tc_direct` | 3.196574 Gbps | 3600s | no `trustix_*` modules loaded |
+| `secure_kudp` | 1.602571 Gbps | 3600s | `trustix_crypto` and `trustix_datapath_helpers`; replay/drop ratios below gate budgets |
+| `secure_exp_tcp_kernel` | 4.543153 Gbps | 3600s | direct kfunc seal/open counters active; `kernel_crypto_module_direct_kfunc_errors=0` |
+
+All three artifacts passed with stable boot IDs, clean pstore artifacts, no
+kernel log crash findings, and `tix-lan` `tx_queue_len=1000`.
+
+<a id="2026-07-03-zaozhuang-pve-netdevfix-route-gso-production"></a>
+
+### Zaozhuang PVE netdevfix route-GSO production gate
+
+PVE host `120.220.44.72:8006` ran a fresh Debian-to-Debian route-GSO selected
+production gate with the netdevfix binary. The TrustIX binary was
+`trustix-linux-amd64-netdevfix`, commit
+`a88aec3dd688a73aa3cd54342ca4b8fb8d71d424`, build time
+`2026-07-02T22:21:11Z`, Go `1.25.0`, and binary SHA256
+`1f0654720c07df1e8606fa834db35577fa3f10339a62deaa9868ec9c4ec5748c`.
+
+The production gate script SHA256 was
+`662c176c1888bd3c89d775ef61e2cff70b2c0be39d929e35d18a6e11b78f7446`; the
+verifier SHA256 was
+`039cb91ef61fa4187baf16ed279e2dc09faf5aaaa69c0e7d1b2b597905e8eb9b`.
+
+| Gate family | Minimum received | Duration | Notes |
+| --- | ---: | ---: | --- |
+| `route_gso` | 7.978215 Gbps | 3600s | `trustix_datapath_helpers`; route-GSO async helper error counters all 0 |
+
+The run completed both A-to-B and B-to-A 3600s iperf directions, with stable
+boot IDs, clean pstore artifacts, no kernel log crash findings, no
+`unregister_netdevice` wait logs, and `tix-lan` `tx_queue_len=1000`.
+
+<a id="2026-07-03-zaozhuang-pve-current-dd-kmod-regate"></a>
+
+### Zaozhuang PVE current Debian kmod verifier recheck
+
+The existing 9884a92 Debian-to-Debian 3600s artifacts for full-kmod and
+experimental TCP full-kmod were rechecked with the same netdevfix production
+gate and verifier hashes listed above. The TrustIX binary was
+`trustix-linux-amd64`, commit
+`9884a92a255740ef13e754b1ad2e8b162d6bbcf9`, build time
+`2026-07-01T16:12:01Z`, and binary SHA256
+`6b72cf30dd46b900f09ab7fc3b9f3c46abe055f97e1156da5c936b5dd938cda7`.
+
+| Gate family | Minimum received | Duration |
+| --- | ---: | ---: |
+| `full_kmod` | 4.464254 Gbps | 3600s |
+| `exp_tcp_full_kmod` | 8.978477 Gbps | 3600s |
+
+Both rechecks passed with stable boot IDs, clean pstore artifacts, no kernel log
+crash findings, and `tix-lan` `tx_queue_len=1000`. The 9884a92 route-GSO
+recheck remains historical evidence, but current route-GSO evidence now points
+at the fresh netdevfix run above because the runtime tree changed in
+`internal/dataplane/ebpf/manager_linux.go`.
+
+The old OpenWrt-Debian 9884a92 artifacts were also probed with the new
+verifier. They were not re-promoted because the Debian-side kernel log artifact
+contains repeated `unregister_netdevice: waiting for tix-lan to become free`
+cleanup messages. Keep those rows as historical evidence until a fresh
+OpenWrt-Debian run passes the stricter verifier.
 
 ## 2026-07-02
 

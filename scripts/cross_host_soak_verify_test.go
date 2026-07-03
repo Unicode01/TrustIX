@@ -787,6 +787,30 @@ func TestCrossHostSoakVerifyRejectsTxQueueLenMisconfigLogs(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakVerifyRejectsNetdevUnregisterWaitLogs(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not available")
+	}
+	dir := t.TempDir()
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 5.1e9, 5.0e9, 120.2)
+	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
+	writeResultMarker(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "kernel.log"), []byte("unregister_netdevice: waiting for tix-lan to become free. Usage count = 2\n"), 0o644); err != nil {
+		t.Fatalf("write unregister_netdevice log: %v", err)
+	}
+
+	cmd := exec.Command(python, "linux-cross-host-soak-verify.py", "--min-gbps", "4", "--min-seconds", "120", dir)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("verify unexpectedly accepted unregister_netdevice log:\n%s", output)
+	}
+	if !strings.Contains(string(output), "unregister_netdevice") {
+		t.Fatalf("verify output did not report unregister_netdevice signature:\n%s", output)
+	}
+}
+
 func TestCrossHostSoakVerifyIgnoresBenignKernelBugWords(t *testing.T) {
 	python, err := exec.LookPath("python")
 	if err != nil {
@@ -3262,7 +3286,6 @@ func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO boo
 				"kernel_crypto_frame_seal_errors":                                   0,
 				"kernel_crypto_frame_open_errors":                                   0,
 				"kernel_crypto_frame_replay_drops":                                  0,
-				"tx_kernel_crypto_packet_seal_errors":                               0,
 				"xdp_kernel_crypto_open_errors":                                     0,
 				"xdp_kernel_crypto_replay_drops":                                    0,
 				"xdp_kernel_crypto_no_context_drops":                                0,

@@ -373,6 +373,8 @@ case_transport() {
   case "$case_name" in
     dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'udp\n' ;;
     experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod) printf 'experimental_tcp\n' ;;
+    ow-tc-direct|tc-direct) printf 'udp\n' ;;
+    experimental-tcp-tc-direct|experimental_tcp_tc_direct) printf 'experimental_tcp\n' ;;
     *) printf 'experimental_tcp\n' ;;
   esac
 }
@@ -923,13 +925,17 @@ resolve_underlay() {
 
 prepare_node_topology() {
   local node="$1"
-  local dir lan_if host_if host_ns host_addr host_gw
+  local dir lan_if host_if host_ns host_addr host_gw trustixd api_port peer_port env_exports
   dir="$(remote_dir "$node")"
   lan_if="$(node_value "$node" "$lan_if_a" "$lan_if_b")"
   host_if="$(node_value "$node" "$host_if_a" "$host_if_b")"
   host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
   host_addr="$(node_value "$node" "$host_a_addr" "$host_b_addr")"
   host_gw="$(node_value "$node" "${lan_a_gateway%/*}" "${lan_b_gateway%/*}")"
+  trustixd="$(node_bin "$node" trustixd)"
+  api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
+  peer_port="$(node_value "$node" "$peer_a_port" "$peer_b_port")"
+  env_exports="$(daemon_env_exports)"
   run_node "$node" "set -Eeuo pipefail
 ip_cmd=\$(command -v ip)
 dir=$(remote_quote "$dir")
@@ -964,6 +970,10 @@ done
 if [ -f \"\${dir}/trustixd.pid\" ]; then
   old_pid=\$(cat \"\${dir}/trustixd.pid\" 2>/dev/null || true)
   [ -n \"\$old_pid\" ] && kill -KILL \"\$old_pid\" >/dev/null 2>&1 || true
+fi
+if [ -x $(remote_quote "$trustixd") ] && [ -f \"\${dir}/config.yaml\" ]; then
+  mkdir -p \"\${dir}/logs\"
+  env ${env_exports} $(remote_quote "$trustixd") -config \"\${dir}/config.yaml\" -data-dir \"\${dir}/data\" -api 127.0.0.1:${api_port} -peer-api 0.0.0.0:${peer_port} -dataplane $(remote_quote "$dataplane_mode") -cleanup-dataplane >>\"\${dir}/logs/prepare-cleanup.log\" 2>&1 || true
 fi
 rm -rf \"\$dir\"
 mkdir -p \"\$dir\"/logs \"\$dir\"/certs \"\$dir\"/data

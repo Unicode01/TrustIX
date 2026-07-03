@@ -37,6 +37,7 @@ CRASH_RE = re.compile(
     r"watchdog: BUG|"
     r"rcu: .*stall|"
     r"blocked for more than [0-9]+ seconds|"
+    r"unregister_netdevice: waiting for .* to become free|"
     r"tx_queue_len zero|"
     r"Caught tx_queue_len"
     r")"
