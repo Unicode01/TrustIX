@@ -4662,6 +4662,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"case_session_args()",
 		"case_module_param_args()",
 		"case_is_openwrt_debian()",
+		"route_tcp_helper_capability_args()",
 		"write_gate_manifest()",
 		"production-gate-manifest.json",
 		"trustix-cross-host-production-gate-manifest-v1",
@@ -4784,6 +4785,12 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-any-min trustix_crypto.direct_kfunc_seal_calls=1",
 		"--require-module-param-any-min trustix_crypto.direct_kfunc_open_calls=1",
 		"--require-module-param-max trustix_crypto.direct_kfunc_errors=\"${secure_kudp_direct_error_budget}\"",
+		"--require-module-param-min trustix_datapath_helpers.enable_features=768",
+		"--require-module-param-min trustix_datapath_helpers.features=768",
+		"--require-module-param-min trustix_datapath_helpers.safe_features=768",
+		"--require-module-param-min trustix_datapath_helpers.selftests=3",
+		"--require-module-param-max trustix_datapath_helpers.unsafe_features=0",
+		"--require-module-param-max trustix_datapath_helpers.selftest_failures=0",
 		"--require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_secure_seal_batch=1",
 		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_xmit_packets=1",
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_flow_errors=0",
@@ -5403,6 +5410,15 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		}
 		t.Fatalf("case %s missing %s; calls=%s", caseName, value, payload)
 	}
+	requireRouteTCPHelperArgs := func(caseName string) {
+		t.Helper()
+		requireArgPair(caseName, "--require-module-param-min", "trustix_datapath_helpers.enable_features=768")
+		requireArgPair(caseName, "--require-module-param-min", "trustix_datapath_helpers.features=768")
+		requireArgPair(caseName, "--require-module-param-min", "trustix_datapath_helpers.safe_features=768")
+		requireArgPair(caseName, "--require-module-param-min", "trustix_datapath_helpers.selftests=3")
+		requireArgPair(caseName, "--require-module-param-max", "trustix_datapath_helpers.unsafe_features=0")
+		requireArgPair(caseName, "--require-module-param-max", "trustix_datapath_helpers.selftest_failures=0")
+	}
 	for _, name := range []string{fastName, slowName, userspaceTCName, "tc", "full", "expfull", "secure", "route"} {
 		requireArgPair(name, "--require-run-timing-stat", "iperf_mode=forward")
 		requireArgPair(name, "--require-run-timing-stat", "iperf_directions=both")
@@ -5555,6 +5571,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("secure", "--require-datapath-ratio-max", "kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_replay_drops/kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts=0.00002")
 	requireArgPair("secure", "--require-datapath-ratio-max", "kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_drops/kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts=0.00002")
 	requireArgPair("secure", "--require-module-param-max", "trustix_crypto.direct_kfunc_errors=64")
+	requireRouteTCPHelperArgs("secure")
 	requireArgPair("secure", "--require-lsmod-module", "trustix_crypto")
 	requireArgPair("secure", "--require-lsmod-module", "trustix_datapath_helpers")
 	requireArgPair("route", "--require-transport-policy-min", "session_pool_size=8")
@@ -5565,6 +5582,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("route", "--require-transport-session-stat", "stats.encryption=plaintext")
 	requireArgPair("route", "--require-status-min", "data_path.active_sessions=8")
 	requireArgPair("route", "--require-status-max", "data_path.counters.session_dial_errors=2")
+	requireRouteTCPHelperArgs("route")
 	requireArgPair("route", "--require-lsmod-module", "trustix_datapath_helpers")
 }
 

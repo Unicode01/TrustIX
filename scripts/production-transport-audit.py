@@ -219,6 +219,13 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "owdeb_full_kmod",
         "owdeb_exp_tcp_full_kmod",
     },
+    # This gate is equivalent for OpenWrt-Debian full-kmod families after the
+    # route-TCP helper capability check was added for route-GSO and secure
+    # kernel families only.
+    "f10f2307e6c4d0b3282616acb8ecf3cf1dc45aa481902c5aa3a38ed8c4124faf": {
+        "owdeb_full_kmod",
+        "owdeb_exp_tcp_full_kmod",
+    },
 }
 VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     # This verifier predates the node-specific module-parameter requirement.

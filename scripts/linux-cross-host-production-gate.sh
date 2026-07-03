@@ -428,9 +428,23 @@ case_is_openwrt_debian() {
   esac
 }
 
+route_tcp_helper_capability_args() {
+  printf '%s\n' \
+    --require-module-param-min trustix_datapath_helpers.enable_features=768 \
+    --require-module-param-min trustix_datapath_helpers.features=768 \
+    --require-module-param-min trustix_datapath_helpers.safe_features=768 \
+    --require-module-param-min trustix_datapath_helpers.selftests=3 \
+    --require-module-param-max trustix_datapath_helpers.unsafe_features=0 \
+    --require-module-param-max trustix_datapath_helpers.selftest_failures=0
+}
+
 case_module_param_args() {
   local family="$1" case_token="$2"
   case "$family" in
+    secure-kudp|secure-exp-tcp-kernel|route-gso)
+      route_tcp_helper_capability_args
+      return 0
+      ;;
     full-kmod|exp-tcp-full-kmod) ;;
     *) return 0 ;;
   esac
