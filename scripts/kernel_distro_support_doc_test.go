@@ -41,6 +41,8 @@ func TestKernelDistroSupportUsesCurrentProductionEvidenceBoundary(t *testing.T) 
 		"received throughput was 1.662160 Gbps",
 		"dedicated `secure_exp_tcp_kernel`",
 		"production default and must not reuse secure-kUDP evidence",
+		"Route-TCP GSO/XMIT families are enabled only by selected policies",
+		"production route-GSO uses separate cross-host gates",
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("kernel distro support doc missing current production evidence fragment %q", want)
@@ -48,6 +50,52 @@ func TestKernelDistroSupportUsesCurrentProductionEvidenceBoundary(t *testing.T) 
 	}
 	if strings.Contains(source, "Route-GSO fallback | `experimental_tcp`") {
 		t.Fatal("kernel distro support doc still describes selected plaintext route-GSO as fallback-only")
+	}
+}
+
+func TestFirstRunDocsDoNotDescribeProductionRouteGSOAsHardDisabled(t *testing.T) {
+	tests := []struct {
+		path string
+		want []string
+	}{
+		{
+			path: "../docs/first-run.md",
+			want: []string{
+				"route_gso",
+				"secure_kudp",
+				"secure_exp_tcp_kernel",
+				"route-TCP GSO/XMIT",
+			},
+		},
+		{
+			path: "../docs/implementation-boundaries.md",
+			want: []string{
+				"route-GSO/XMIT helper",
+				"runtime 参数",
+				"cross-host gate",
+			},
+		},
+	}
+	for _, tt := range tests {
+		payload, err := os.ReadFile(tt.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", tt.path, err)
+		}
+		source := string(payload)
+		for _, want := range tt.want {
+			if !strings.Contains(source, want) {
+				t.Fatalf("%s missing current route-GSO helper boundary fragment %q", tt.path, want)
+			}
+		}
+		for _, stale := range []string{
+			"当前第一版只允许它报告安全 `gso_skb` helper 能力",
+			"route-TCP GSO async、outer-GSO batch 和 TIXT RX stream/coalesce 第一版由模块 init 与 daemon 参数过滤共同 hard-disable",
+			"route-TCP GSO async、route-TCP XMIT worker、outer-GSO batch、TIXT RX stream/coalesce 等曾触发 panic 或未完成验证的路径第一版 hard-disabled",
+		} {
+			if strings.Contains(source, stale) {
+				t.Fatalf("%s still contains stale route-GSO hard-disabled wording %q", tt.path, stale)
+			}
+		}
 	}
 }
 
