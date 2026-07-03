@@ -661,6 +661,59 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 	}
 }
 
+func TestCrossHostProductionDefaultsCoverTransportEncryptionPairsWithCurrentEvidence(t *testing.T) {
+	rows := loadProductionTransportDefaults(t)
+	requirements := loadCurrentProductionEvidenceRequirements(t)
+	expected := map[string]bool{
+		"udp:secure":                 false,
+		"udp:plaintext":              false,
+		"tcp:secure":                 false,
+		"tcp:plaintext":              false,
+		"quic:secure":                false,
+		"quic:plaintext":             false,
+		"websocket:secure":           false,
+		"websocket:plaintext":        false,
+		"http_connect:secure":        false,
+		"http_connect:plaintext":     false,
+		"gre:secure":                 false,
+		"gre:plaintext":              false,
+		"ipip:secure":                false,
+		"ipip:plaintext":             false,
+		"vxlan:secure":               false,
+		"vxlan:plaintext":            false,
+		"kernel_udp:secure":          false,
+		"kernel_udp:plaintext":       false,
+		"experimental_tcp:secure":    false,
+		"experimental_tcp:plaintext": false,
+	}
+	for _, row := range rows {
+		if row.ValidationScope != "cross_host" {
+			continue
+		}
+		key := row.Transport + ":" + row.Encryption
+		if _, ok := expected[key]; !ok {
+			continue
+		}
+		requirement, ok := currentProductionEvidenceRequirementForDefault(requirements, row)
+		if !ok {
+			t.Fatalf("cross-host production default lacks current evidence requirement: %+v", row)
+		}
+		if requirement.GateManifestSchema != productionGateManifestSchema {
+			t.Fatalf("cross-host production default must use manifest-backed current evidence: row=%+v requirement=%+v", row, requirement)
+		}
+		expected[key] = true
+	}
+	var missing []string
+	for key, found := range expected {
+		if !found {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("missing cross-host production defaults with current evidence for transport/encryption pairs: %v", missing)
+	}
+}
+
 func TestProductionTransportMatrixDefaults(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join(".", "linux-production-transport-matrix.sh"))
 	if err != nil {
