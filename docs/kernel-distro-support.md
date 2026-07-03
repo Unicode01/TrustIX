@@ -48,7 +48,7 @@ now install for kernel module builds when dependency installation is enabled.
 
 The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
 2026-06-21, 2026-06-22, 2026-06-23, 2026-06-24, 2026-06-25, 2026-06-26,
-and 2026-06-27
+2026-06-27, 2026-07-02, and 2026-07-03
 against current source and selected production transport defaults. They covered Debian 13
 `6.12.90+deb13.1-amd64`, Debian 13 `6.12.90+deb13.1-cloud-amd64`, Debian 13
 `6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
@@ -57,11 +57,13 @@ and OpenWrt 25.12.4 x86_64 `6.12.87`
 guests with disposable PVE VM IDs 200+.
 The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
 the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
-OpenWrt 24.10.7 x86_64 has since passed an SDK module build and 3600s
-OpenWrt-to-Debian full-kmod production gates, most recently on 2026-06-27
-against Debian `6.12.90+deb13.1-cloud-amd64` at commit `e02d15edf6b4`.
-The previous 2026-06-25 gate against Debian `6.12.94+deb13-cloud-amd64` at
-commit `395b2ba05013` remains historical evidence.
+OpenWrt 24.10.7 x86_64 has since passed an SDK module build and fresh 3600s
+OpenWrt-to-Debian full-kmod production gates, most recently on 2026-07-03
+against Debian `6.12.90+deb13.1-cloud-amd64` at commit
+`9235159503ed1746a41af9a86cbe9baebd67ed8f`. That run covers both UDP
+plaintext full-kmod and experimental TCP plaintext full-kmod with the OpenWrt
+node running `trustix_datapath.rx_worker_single_coalesce=N`. Earlier 2026-06-27
+and 2026-06-25 gates remain historical evidence.
 OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and secure experimental TCP
 kernel crypto all failed closed at the runtime capability gate because the
 tested image did not expose usable route-TCP kfunc capability. OpenWrt 25.12.4
@@ -116,11 +118,14 @@ current production evidence boundary:
 
 | Family | Policy | Current minimum received | Gate | Evidence |
 | --- | --- | ---: | ---: | --- |
-| Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.508709 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-06-25 |
-| Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.765459 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-26 |
-| Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.709080 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-26 |
-| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 2.975477 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-26 |
-| Secure experimental TCP kernel crypto | `experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 1.662160 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-06-26 |
+| Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 4.464254 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, rechecked 2026-07-03 |
+| OpenWrt-Debian full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 4.130908 Gbps | 3 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
+| Experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 8.978477 Gbps | 4 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, rechecked 2026-07-03 |
+| OpenWrt-Debian experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.818210 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
+| Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.196574 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
+| Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.602571 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
+| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.978215 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
+| Secure experimental TCP kernel crypto | `experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 4.543153 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 
 A 2026-06-21 current-head Debian-to-Debian full-kmod recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
