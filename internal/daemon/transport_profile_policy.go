@@ -30,6 +30,15 @@ func endpointTransportProfileMetadataForPolicy(endpoint config.EndpointConfig, p
 	return metadata
 }
 
+func endpointTransportProfileMetadataForDesired(endpoint config.EndpointConfig, desired config.Desired) dataplane.TransportProfileMetadata {
+	metadata := endpointTransportProfileMetadataForPolicy(endpoint, desired.TransportPolicy)
+	metadata.Features = normalizeEndpointProfileFeatures(append(
+		metadata.Features,
+		transportProfileRuntimeFeatures(endpoint.Transport, desired)...,
+	))
+	return metadata
+}
+
 func endpointTransportProfileConfigFromMetadata(profile dataplane.TransportProfileMetadata) config.EndpointProfileConfig {
 	return config.EndpointProfileConfig{
 		Version:         profile.Version,
@@ -146,6 +155,33 @@ func transportProfileFeatures(rawTransport string, profile config.EndpointProfil
 	}
 	add(profile.Features...)
 	return normalizeEndpointProfileFeatures(features)
+}
+
+func transportProfileRuntimeFeatures(rawTransport string, desired config.Desired) []string {
+	protocol := transport.Protocol(strings.ToLower(strings.TrimSpace(rawTransport)))
+	switch protocol {
+	case transport.ProtocolUDP:
+		if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
+			return []string{"full_kmod", "kernel_datapath_full_plaintext", "rx_worker", "tx_plaintext"}
+		}
+		if kernelUDPSecureRouteGSOForDesired(desired) {
+			return []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_kudp"}
+		}
+		if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
+			return []string{"tc_direct"}
+		}
+	case transport.ProtocolExperimentalTCP:
+		if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
+			return []string{"exp_tcp_full_kmod", "full_kmod", "kernel_datapath_full_plaintext", "rx_worker", "tx_plaintext"}
+		}
+		if experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
+			return []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_exp_tcp_kernel"}
+		}
+		if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+			return []string{"route_gso", "route_gso_async", "route_gso_sync", "route_tcp_kfunc", "route_xmit_worker"}
+		}
+	}
+	return nil
 }
 
 func (daemon *Daemon) endpointTransportProfileCompatible(endpoint config.EndpointConfig) bool {

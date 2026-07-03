@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"trustix.local/trustix/internal/config"
+	"trustix.local/trustix/internal/core"
+	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/transport"
 )
 
@@ -144,6 +146,126 @@ func TestTransportProfileFeaturesAdvertiseNativeTunnelTCOffload(t *testing.T) {
 			for _, feature := range []string{"native_tunnel", "tc_xdp", "tunnel_tc_offload"} {
 				if !stringListContains(features, feature) {
 					t.Fatalf("TC tunnel features = %#v, want %q", features, feature)
+				}
+			}
+		})
+	}
+}
+
+func TestTransportProfileMetadataForDesiredAdvertisesFullKmodRuntimeGate(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      "plaintext",
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Candidates:      []core.EndpointID{"exp-full"},
+		},
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-full",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	profile := endpointTransportProfileMetadataForDesired(desired.Endpoints[0], desired)
+	for _, feature := range []string{"full_kmod", "exp_tcp_full_kmod", "kernel_datapath_full_plaintext", "rx_worker", "tx_plaintext"} {
+		if !stringListContains(profile.Features, feature) {
+			t.Fatalf("full-kmod metadata features = %#v, missing %q", profile.Features, feature)
+		}
+	}
+	if stringListContains(profile.Features, "route_gso") {
+		t.Fatalf("full-kmod metadata features = %#v, should not advertise route-GSO", profile.Features)
+	}
+}
+
+func TestTransportProfileMetadataForDesiredAdvertisesPlaintextRouteGSORuntimeGate(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      "plaintext",
+			CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+			Candidates:      []core.EndpointID{"exp-route"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "exp-route",
+			Transport: string(transport.ProtocolExperimentalTCP),
+			Enabled:   true,
+		}},
+	}
+
+	profile := endpointTransportProfileMetadataForDesired(desired.Endpoints[0], desired)
+	for _, feature := range []string{"route_gso", "route_gso_async", "route_gso_sync", "route_tcp_kfunc", "route_xmit_worker"} {
+		if !stringListContains(profile.Features, feature) {
+			t.Fatalf("route-GSO metadata features = %#v, missing %q", profile.Features, feature)
+		}
+	}
+	for _, feature := range []string{"full_kmod", "exp_tcp_full_kmod", "kernel_datapath_full_plaintext"} {
+		if stringListContains(profile.Features, feature) {
+			t.Fatalf("route-GSO metadata features = %#v, should not advertise %q", profile.Features, feature)
+		}
+	}
+}
+
+func TestTransportProfileMetadataForDesiredAdvertisesSecureKernelRuntimeGates(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		transport  transport.Protocol
+		datapath   string
+		want       []string
+		mustAbsent []string
+	}{
+		{
+			name:      "secure kernel udp",
+			transport: transport.ProtocolUDP,
+			datapath:  config.TransportDatapathTCXDP,
+			want:      []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_kudp"},
+			mustAbsent: []string{
+				"secure_exp_tcp_kernel",
+			},
+		},
+		{
+			name:      "secure experimental tcp",
+			transport: transport.ProtocolExperimentalTCP,
+			datapath:  config.TransportDatapathKernelModule,
+			want:      []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_exp_tcp_kernel"},
+			mustAbsent: []string{
+				"secure_kudp",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			desired := config.Desired{
+				TransportPolicy: config.TransportPolicyConfig{
+					Profile:         config.TransportProfilePerformance,
+					Datapath:        test.datapath,
+					Encryption:      "secure",
+					CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+					KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+					Candidates:      []core.EndpointID{"secure"},
+				},
+				Endpoints: []config.EndpointConfig{{
+					Name:      "secure",
+					Transport: string(test.transport),
+					Enabled:   true,
+				}},
+			}
+
+			profile := endpointTransportProfileMetadataForDesired(desired.Endpoints[0], desired)
+			for _, feature := range test.want {
+				if !stringListContains(profile.Features, feature) {
+					t.Fatalf("%s metadata features = %#v, missing %q", test.name, profile.Features, feature)
+				}
+			}
+			for _, feature := range test.mustAbsent {
+				if stringListContains(profile.Features, feature) {
+					t.Fatalf("%s metadata features = %#v, should not advertise %q", test.name, profile.Features, feature)
 				}
 			}
 		})

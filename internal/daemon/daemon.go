@@ -1347,7 +1347,7 @@ func (daemon *Daemon) endpointsFromConfig(desired config.Desired) []dataplane.En
 			Priority:  ep.Priority,
 			Enabled:   ep.Enabled,
 			Security:  daemon.endpointSecurityMetadata(ep),
-			Profile:   endpointTransportProfileMetadataForPolicy(ep, desired.TransportPolicy),
+			Profile:   endpointTransportProfileMetadataForDesired(ep, desired),
 			Access:    endpointAccessMetadataFromConfig(ep.Access),
 		})
 	}

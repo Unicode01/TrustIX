@@ -138,7 +138,7 @@ func (daemon *Daemon) transportMatrixLocalEndpoints() []transportMatrixEndpoint 
 	out := make([]transportMatrixEndpoint, 0, len(daemon.desired.Endpoints))
 	for _, endpoint := range daemon.desired.Endpoints {
 		security := daemon.endpointSecurityMetadata(endpoint)
-		profile := endpointTransportProfileMetadataForPolicy(endpoint, daemon.desired.TransportPolicy)
+		profile := endpointTransportProfileMetadataForDesired(endpoint, daemon.desired)
 		kernelCompatible := daemon.endpointKernelTransportCompatible(endpoint.Transport)
 		securityCompatible := daemon.endpointSecurityCompatible(endpoint)
 		profileCompatible := daemon.endpointTransportProfileCompatible(endpoint)

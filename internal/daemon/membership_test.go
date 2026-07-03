@@ -209,12 +209,15 @@ func TestLocalAdvertisementCarriesTransportProfile(t *testing.T) {
 	if profile.Version != transportProfileMetadataVersion || profile.Profile != "performance" || profile.Datapath != "kernel_module" || profile.Encryption != "plaintext" {
 		t.Fatalf("advertised transport profile = %#v", profile)
 	}
-	for _, feature := range []string{"tixt_v1", "ackless_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "plaintext_ack_only"} {
+	for _, feature := range []string{
+		"tixt_v1", "ackless_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "plaintext_ack_only",
+		"route_gso", "route_gso_async", "route_gso_sync", "route_tcp_kfunc", "route_xmit_worker",
+	} {
 		if !containsString(profile.Features, feature) {
 			t.Fatalf("advertised transport profile features = %#v, missing %q", profile.Features, feature)
 		}
 	}
-	for _, feature := range []string{"route_gso_async", "route_gso_async_outer_gso", "route_xmit_worker", "route_gso_sync", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx"} {
+	for _, feature := range []string{"route_gso_async_outer_gso", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx", "full_kmod", "exp_tcp_full_kmod"} {
 		if containsString(profile.Features, feature) {
 			t.Fatalf("advertised transport profile features = %#v, must not include opt-in/unselected feature %q", profile.Features, feature)
 		}

@@ -445,7 +445,7 @@ func (daemon *Daemon) localAdvertisementEndpointsForDesiredTarget(desired config
 			Priority:  endpoint.Priority,
 			Enabled:   endpoint.Enabled,
 			Security:  endpointSecurityMetadataForPolicy(endpoint, desired.TransportPolicy),
-			Profile:   endpointTransportProfileMetadataForPolicy(endpoint, desired.TransportPolicy),
+			Profile:   endpointTransportProfileMetadataForDesired(endpoint, desired),
 			Access:    endpointAccessMetadataFromConfig(endpoint.Access),
 		}
 		if !daemon.endpointTransportUsable(metadata) {
