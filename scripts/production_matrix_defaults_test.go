@@ -3613,7 +3613,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-openwrt24107-debian13-full-kernel-production",
 		"secure_kudp":             "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
 		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
-		"route_gso":               "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-route-gso-production",
+		"route_gso":               "docs/trustix-performance-log.md#2026-07-04-zaozhuang-pve-add2971-route-gso-txq-backoff-production",
 		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-openwrt24107-debian13-full-kernel-production",
 		"userspace":               "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":            "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
@@ -3969,7 +3969,7 @@ func TestCurrentDebianRouteGSOEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
 		wantKernelMatrix = "6.12.94+deb13-cloud-amd64_to_6.12.94+deb13-cloud-amd64"
-		wantArtifact     = "docs/trustix-performance-log.md#2026-06-26-zaozhuang-pve-fa207ea-route-gso-3600s-production-gate"
+		wantArtifact     = "docs/trustix-performance-log.md#2026-07-04-zaozhuang-pve-add2971-route-gso-txq-backoff-production"
 		minGbps          = 2.5
 		minSeconds       = 3600
 	)

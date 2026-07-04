@@ -187,6 +187,36 @@ OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
         "9235159503ed1746a41af9a86cbe9baebd67ed8f",
     },
 }
+ROUTE_GSO_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
+    # add2971 only changes the selected route-GSO helper defaults/gate
+    # contract and the route TCP GSO helper's stopped-TXQ handling. It does
+    # not invalidate full-kmod, secure-kUDP, or secure experimental TCP kernel
+    # evidence rows.
+    "internal/daemon/kernel_modules.go": {
+        "add2971946b4948fbdd49d973aa94581b2e87a50",
+    },
+    "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c": {
+        "add2971946b4948fbdd49d973aa94581b2e87a50",
+    },
+}
+RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH = {
+    # aee1046 only adds selected runtime-gate feature names to local endpoint,
+    # membership, and status metadata. The selected datapath/crypto code paths
+    # and hard compatibility feature requirements are unchanged, so it does not
+    # make already-soaked steady-state transport gate evidence stale by itself.
+    "internal/daemon/daemon.go": {
+        "aee1046d917c97dddbc800d6a4fb203491c057f6",
+    },
+    "internal/daemon/membership.go": {
+        "aee1046d917c97dddbc800d6a4fb203491c057f6",
+    },
+    "internal/daemon/transport_profile_policy.go": {
+        "aee1046d917c97dddbc800d6a4fb203491c057f6",
+    },
+    "internal/daemon/transports_status.go": {
+        "aee1046d917c97dddbc800d6a4fb203491c057f6",
+    },
+}
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     # This manifest-v1 gate predates the exp_tcp_full_kmod family. The existing
     # families below kept equivalent verifier semantics when the dedicated
@@ -844,20 +874,33 @@ def row_targets_openwrt(row: dict[str, str]) -> bool:
     ).startswith("owdeb_")
 
 
-def current_runtime_path_change_irrelevant(
-    row: dict[str, str], resolved_commit: str, path: str
-) -> bool:
-    normalized = path.replace("\\", "/")
-    if row_targets_openwrt(row):
-        return False
-    allowed_commits = OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH.get(normalized)
-    if not allowed_commits:
-        return False
-    path_log = run_git(["log", "--format=%H", f"{resolved_commit}..HEAD", "--", normalized])
+def path_changed_only_by(resolved_commit: str, normalized_path: str, allowed_commits: set[str]) -> bool:
+    path_log = run_git(["log", "--format=%H", f"{resolved_commit}..HEAD", "--", normalized_path])
     if path_log.returncode != 0:
         return False
     changed_commits = {line.strip() for line in path_log.stdout.splitlines() if line.strip()}
     return bool(changed_commits) and changed_commits.issubset(allowed_commits)
+
+
+def current_runtime_path_change_irrelevant(
+    row: dict[str, str], resolved_commit: str, path: str
+) -> bool:
+    normalized = path.replace("\\", "/")
+    gate_class = gate_family_class(row["gate_family"])
+    allowed_change_commits: set[str] = set()
+    allowed_commits = RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits and gate_class in LOW_LEVEL_RUNTIME_GATE_CLASSES:
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = ROUTE_GSO_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits and gate_class != "route_gso":
+        allowed_change_commits.update(allowed_commits)
+    if not row_targets_openwrt(row):
+        allowed_commits = OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH.get(normalized)
+        if allowed_commits:
+            allowed_change_commits.update(allowed_commits)
+    if not allowed_change_commits:
+        return False
+    return path_changed_only_by(resolved_commit, normalized, allowed_change_commits)
 
 
 def current_runtime_tree_errors(row: dict[str, str]) -> list[str]:
