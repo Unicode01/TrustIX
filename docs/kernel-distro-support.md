@@ -48,7 +48,7 @@ now install for kernel module builds when dependency installation is enabled.
 
 The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
 2026-06-21, 2026-06-22, 2026-06-23, 2026-06-24, 2026-06-25, 2026-06-26,
-2026-06-27, 2026-07-02, and 2026-07-03
+2026-06-27, 2026-07-02, 2026-07-03, and 2026-07-04
 against current source and selected production transport defaults. They covered Debian 13
 `6.12.90+deb13.1-amd64`, Debian 13 `6.12.90+deb13.1-cloud-amd64`, Debian 13
 `6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
@@ -124,7 +124,7 @@ current production evidence boundary:
 | OpenWrt-Debian experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.818210 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 | Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.196574 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 | Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.602571 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
-| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.978215 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
+| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.515116 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-04, stopped-TXQ backoff enabled |
 | Secure experimental TCP kernel crypto | `experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 4.543153 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 
 A 2026-06-21 current-head Debian-to-Debian full-kmod recheck on
@@ -181,6 +181,15 @@ against the 2.5 Gbps gate, route-GSO outer-GSO and xmit counters were nonzero
 on both peers, covered helper error counters were zero, session dial errors
 stayed within the current budget, and the production verifier reported stable
 boot IDs, clean pstore coverage, and no kernel log crash findings.
+
+A 2026-07-04 current-head Debian-to-Debian route-GSO recheck on
+`6.12.94+deb13-cloud-amd64` superseded that route-GSO boundary after adding
+bounded stopped-TXQ backoff to the route TCP GSO helper. It used commit
+`add2971946b4948fbdd49d973aa94581b2e87a50`; minimum received throughput was
+7.515116 Gbps against the 2.5 Gbps gate, per-direction throughput was
+9.519236 Gbps A-to-B and 7.515116 Gbps B-to-A received, route-GSO async xmit,
+queue, stream, and stopped-TXQ drop error counters were zero, boot IDs stayed
+stable, and pstore plus kernel log scans were clean.
 
 A 2026-06-26 current-head Debian-to-Debian secure-kUDP long recheck on
 `6.12.94+deb13-cloud-amd64` passed the 3600s-per-direction production gate.
