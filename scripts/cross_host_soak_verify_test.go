@@ -2952,6 +2952,8 @@ func expTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		traffic = "128"
 	}
 	return map[string]string{
+		"session_records":           "16",
+		"session_wire_records":      "16",
 		"tx_plaintext_packets":      traffic,
 		"tx_plaintext_gso_segments": traffic,
 		"rx_worker_injected":        traffic,
@@ -3004,7 +3006,7 @@ func writeExpTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 	payload := map[string]any{
 		"capture_forwarder_suppressed": true,
 		"counters": map[string]any{
-			"session_dials":       8,
+			"session_dials":       16,
 			"session_dial_errors": 0,
 		},
 		"kernel_rx_stage": map[string]any{
@@ -3028,7 +3030,7 @@ func writeExpTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 
 func writeExpTCPFullKmodTransportsJSON(t *testing.T, path string, node string) {
 	t.Helper()
-	writeTransportsJSONWithSessionStats(t, path, 8, "flow", true, 16, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"), map[string]any{
+	writeTransportsJSONWithSessionStats(t, path, 16, "flow", true, 16, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"), map[string]any{
 		"encryption":       "plaintext",
 		"bytes_sent":       0,
 		"bytes_received":   0,
@@ -3208,6 +3210,10 @@ func writeSecureKUDPModuleParameters(t *testing.T, path string, routeHelperXmit 
 	if routeHelperXmit {
 		xmitPackets = "8"
 	}
+	helperParams := routeGSOHelperParameters()
+	helperParams["route_tcp_gso_async_secure_seal_batch"] = "1"
+	helperParams["route_tcp_gso_async_stream_outer_gso_frames"] = "0"
+	helperParams["route_tcp_gso_async_xmit_packets"] = xmitPackets
 	writeModuleParameters(t, path, map[string]map[string]string{
 		"trustix_crypto": {
 			"kfunc_simd_fastpath":         "1",
@@ -3216,30 +3222,7 @@ func writeSecureKUDPModuleParameters(t *testing.T, path string, routeHelperXmit 
 			"direct_kfunc_open_calls":     "16",
 			"direct_kfunc_errors":         "0",
 		},
-		"trustix_datapath_helpers": {
-			"route_tcp_gso_async_secure_seal_batch":                    "1",
-			"route_tcp_gso_async_stream_outer_gso_frames":              "0",
-			"route_tcp_gso_async_xmit_packets":                         xmitPackets,
-			"route_tcp_gso_async_flow_errors":                          "0",
-			"route_tcp_gso_async_plan_errors":                          "0",
-			"route_tcp_gso_async_mtu_errors":                           "0",
-			"route_tcp_gso_async_queue_full":                           "0",
-			"route_tcp_gso_async_queue_bytes_full":                     "0",
-			"route_tcp_gso_async_alloc_errors":                         "0",
-			"route_tcp_gso_async_clone_errors":                         "0",
-			"route_tcp_gso_async_segment_errors":                       "0",
-			"route_tcp_gso_async_prepare_errors":                       "0",
-			"route_tcp_gso_async_txq_stopped_drops":                    "0",
-			"route_tcp_gso_async_xmit_errors":                          "0",
-			"route_tcp_gso_async_stream_errors":                        "0",
-			"route_tcp_gso_async_stream_xmit_errors":                   "0",
-			"route_tcp_gso_async_stream_direct_errors":                 "0",
-			"route_tcp_gso_async_stream_outer_gso_errors":              "0",
-			"route_tcp_gso_async_stream_outer_gso_blocked":             "0",
-			"route_tcp_gso_async_stream_outer_gso_verify_errors":       "0",
-			"route_tcp_gso_async_stream_cross_item_errors":             "0",
-			"route_tcp_gso_async_stream_cross_item_tail_stitch_errors": "0",
-		},
+		"trustix_datapath_helpers": helperParams,
 	})
 }
 
@@ -3369,6 +3352,10 @@ func writeSecureExpTCPKernelModuleParameters(t *testing.T, path string, routeHel
 		directSealCalls = "16"
 		directOpenCalls = "16"
 	}
+	helperParams := routeGSOHelperParameters()
+	helperParams["route_tcp_gso_async_secure_seal_batch"] = "1"
+	helperParams["route_tcp_gso_async_stream_outer_gso_frames"] = "0"
+	helperParams["route_tcp_gso_async_xmit_packets"] = xmitPackets
 	writeModuleParameters(t, path, map[string]map[string]string{
 		"trustix_crypto": {
 			"kfunc_simd_fastpath":         "1",
@@ -3377,30 +3364,7 @@ func writeSecureExpTCPKernelModuleParameters(t *testing.T, path string, routeHel
 			"direct_kfunc_open_calls":     directOpenCalls,
 			"direct_kfunc_errors":         "0",
 		},
-		"trustix_datapath_helpers": {
-			"route_tcp_gso_async_secure_seal_batch":                    "1",
-			"route_tcp_gso_async_stream_outer_gso_frames":              "0",
-			"route_tcp_gso_async_xmit_packets":                         xmitPackets,
-			"route_tcp_gso_async_flow_errors":                          "0",
-			"route_tcp_gso_async_plan_errors":                          "0",
-			"route_tcp_gso_async_mtu_errors":                           "0",
-			"route_tcp_gso_async_queue_full":                           "0",
-			"route_tcp_gso_async_queue_bytes_full":                     "0",
-			"route_tcp_gso_async_alloc_errors":                         "0",
-			"route_tcp_gso_async_clone_errors":                         "0",
-			"route_tcp_gso_async_segment_errors":                       "0",
-			"route_tcp_gso_async_prepare_errors":                       "0",
-			"route_tcp_gso_async_txq_stopped_drops":                    "0",
-			"route_tcp_gso_async_xmit_errors":                          "0",
-			"route_tcp_gso_async_stream_errors":                        "0",
-			"route_tcp_gso_async_stream_xmit_errors":                   "0",
-			"route_tcp_gso_async_stream_direct_errors":                 "0",
-			"route_tcp_gso_async_stream_outer_gso_errors":              "0",
-			"route_tcp_gso_async_stream_outer_gso_blocked":             "0",
-			"route_tcp_gso_async_stream_outer_gso_verify_errors":       "0",
-			"route_tcp_gso_async_stream_cross_item_errors":             "0",
-			"route_tcp_gso_async_stream_cross_item_tail_stitch_errors": "0",
-		},
+		"trustix_datapath_helpers": helperParams,
 	})
 }
 
@@ -3545,7 +3509,15 @@ func writeRouteGSOModuleParameters(t *testing.T, path string) {
 
 func routeGSOHelperParameters() map[string]string {
 	return map[string]string{
-		"route_tcp_gso_async_hash_tx_queue":                        "0",
+		"enable_features":                   "768",
+		"features":                          "768",
+		"safe_features":                     "768",
+		"selftests":                         "3",
+		"unsafe_features":                   "0",
+		"selftest_failures":                 "0",
+		"route_tcp_gso_async_hash_tx_queue": "0",
+		"route_tcp_gso_async_txq_stopped_backoff_retries":          "1",
+		"route_tcp_gso_async_txq_stopped_backoff_sleep_usecs":      "50",
 		"route_tcp_gso_async_stream_outer_gso_frames":              "8",
 		"route_tcp_gso_async_xmit_packets":                         "8",
 		"route_tcp_gso_async_flow_errors":                          "0",
