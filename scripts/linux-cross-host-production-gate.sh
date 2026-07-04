@@ -1156,6 +1156,8 @@ main() {
       --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
       --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1 \
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=0 \
+      --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_backoff_retries=1 \
+      --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_backoff_sleep_usecs=50 \
       --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1 \
       --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_xmit_packets=1 \
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_flow_errors=0 \

@@ -1902,6 +1902,8 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDP
 		"route_tcp_gso_async_stream_cross_item_batch=1",
 		"route_tcp_gso_async_flow_shard_queue=1",
 		"route_tcp_gso_async_hash_tx_queue=0",
+		"route_tcp_gso_async_txq_stopped_backoff_retries=1",
+		"route_tcp_gso_async_txq_stopped_backoff_sleep_usecs=50",
 		"route_tcp_gso_async_queue_shards=8",
 		"route_tcp_gso_async_worker_item_budget=64",
 		"route_tcp_gso_async_worker_segment_budget=2048",

@@ -530,6 +530,13 @@ static unsigned long trustix_route_tcp_gso_async_segment_errors;
 static unsigned long trustix_route_tcp_gso_async_prepare_errors;
 static unsigned long trustix_route_tcp_gso_async_txq_stopped_drops;
 static unsigned long trustix_route_tcp_gso_async_txq_stopped_queued;
+static unsigned int trustix_route_tcp_gso_async_txq_stopped_backoff_retries;
+static unsigned int trustix_route_tcp_gso_async_txq_stopped_backoff_sleep_usecs;
+static unsigned long trustix_route_tcp_gso_async_txq_stopped_backoff_attempts;
+static unsigned long trustix_route_tcp_gso_async_txq_stopped_backoff_sleeps;
+static unsigned long trustix_route_tcp_gso_async_txq_stopped_backoff_yields;
+static unsigned long trustix_route_tcp_gso_async_txq_stopped_backoff_recovered;
+static unsigned long trustix_route_tcp_gso_async_txq_stopped_backoff_still_stopped;
 static unsigned long trustix_route_tcp_gso_async_xmit_packets;
 static unsigned long trustix_route_tcp_gso_async_xmit_errors;
 static unsigned long trustix_route_tcp_gso_async_xmit_cn;
@@ -1628,6 +1635,50 @@ module_param_named(route_tcp_gso_async_txq_stopped_queued,
 		   trustix_route_tcp_gso_async_txq_stopped_queued, ulong, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_queued,
 		 "Route-TCP GSO async skbs handed to dev_queue_xmit while the selected TX queue was transiently stopped");
+
+module_param_cb(route_tcp_gso_async_txq_stopped_backoff_retries,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_txq_stopped_backoff_retries,
+		0644);
+MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_backoff_retries,
+		 "Retry/sleep this many times before sending a route-TCP GSO async skb while its selected TX queue is stopped; 0 disables");
+
+module_param_cb(route_tcp_gso_async_txq_stopped_backoff_sleep_usecs,
+		&trustix_route_tcp_gso_quiesced_uint_ops,
+		&trustix_route_tcp_gso_async_txq_stopped_backoff_sleep_usecs,
+		0644);
+MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_backoff_sleep_usecs,
+		 "Sleep this many microseconds for each route-TCP GSO async stopped-TXQ backoff attempt; 0 yields only and values are clamped to 20000us");
+
+module_param_named(route_tcp_gso_async_txq_stopped_backoff_attempts,
+		   trustix_route_tcp_gso_async_txq_stopped_backoff_attempts,
+		   ulong, 0444);
+MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_backoff_attempts,
+		 "Route-TCP GSO async stopped-TXQ backoff attempts");
+
+module_param_named(route_tcp_gso_async_txq_stopped_backoff_sleeps,
+		   trustix_route_tcp_gso_async_txq_stopped_backoff_sleeps,
+		   ulong, 0444);
+MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_backoff_sleeps,
+		 "Route-TCP GSO async stopped-TXQ backoff attempts that slept");
+
+module_param_named(route_tcp_gso_async_txq_stopped_backoff_yields,
+		   trustix_route_tcp_gso_async_txq_stopped_backoff_yields,
+		   ulong, 0444);
+MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_backoff_yields,
+		 "Route-TCP GSO async stopped-TXQ backoff attempts that yielded");
+
+module_param_named(route_tcp_gso_async_txq_stopped_backoff_recovered,
+		   trustix_route_tcp_gso_async_txq_stopped_backoff_recovered,
+		   ulong, 0444);
+MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_backoff_recovered,
+		 "Route-TCP GSO async stopped-TXQ backoffs after which the selected TX queue resumed");
+
+module_param_named(route_tcp_gso_async_txq_stopped_backoff_still_stopped,
+		   trustix_route_tcp_gso_async_txq_stopped_backoff_still_stopped,
+		   ulong, 0444);
+MODULE_PARM_DESC(route_tcp_gso_async_txq_stopped_backoff_still_stopped,
+		 "Route-TCP GSO async stopped-TXQ backoffs after which the selected TX queue was still stopped or could not sleep");
 
 module_param_named(route_tcp_gso_async_xmit_packets,
 		   trustix_route_tcp_gso_async_xmit_packets, ulong, 0444);
@@ -8785,6 +8836,50 @@ static int trustix_tixt_tx_validate_route_gso_xmit_skb_gso(
 	return 0;
 }
 
+static bool trustix_route_tcp_gso_async_can_txq_backoff_sleep(void)
+{
+	return !in_interrupt() && !irqs_disabled() && !in_atomic();
+}
+
+static void
+trustix_tixt_tx_route_gso_maybe_backoff_stopped_txq(struct netdev_queue *txq)
+{
+	unsigned int retries =
+		READ_ONCE(trustix_route_tcp_gso_async_txq_stopped_backoff_retries);
+	unsigned int sleep_usecs = READ_ONCE(
+		trustix_route_tcp_gso_async_txq_stopped_backoff_sleep_usecs);
+	unsigned int i;
+
+	if (!txq || !netif_xmit_stopped(txq))
+		return;
+	trustix_route_tcp_gso_async_txq_stopped_queued++;
+	if (!retries)
+		return;
+	if (!trustix_route_tcp_gso_async_can_txq_backoff_sleep()) {
+		trustix_route_tcp_gso_async_txq_stopped_backoff_still_stopped++;
+		return;
+	}
+	retries = min_t(unsigned int, retries, 16U);
+	sleep_usecs = min_t(unsigned int, sleep_usecs, 20000U);
+	for (i = 0; i < retries; i++) {
+		trustix_route_tcp_gso_async_txq_stopped_backoff_attempts++;
+		if (sleep_usecs) {
+			trustix_route_tcp_gso_async_txq_stopped_backoff_sleeps++;
+			usleep_range(sleep_usecs,
+				     sleep_usecs + min_t(unsigned int,
+							 sleep_usecs, 1000U));
+		} else {
+			trustix_route_tcp_gso_async_txq_stopped_backoff_yields++;
+			cond_resched();
+		}
+		if (!netif_xmit_stopped(txq)) {
+			trustix_route_tcp_gso_async_txq_stopped_backoff_recovered++;
+			return;
+		}
+	}
+	trustix_route_tcp_gso_async_txq_stopped_backoff_still_stopped++;
+}
+
 static int trustix_tixt_tx_sanitize_route_gso_xmit_skb(struct sk_buff *skb,
 						       struct net_device *out_dev)
 {
@@ -8833,8 +8928,7 @@ static int trustix_tixt_tx_sanitize_route_gso_xmit_skb(struct sk_buff *skb,
 	if (skb_get_queue_mapping(skb) >= txq_count)
 		skb_set_queue_mapping(skb, 0);
 	txq = netdev_get_tx_queue(out_dev, skb_get_queue_mapping(skb));
-	if (netif_xmit_stopped(txq))
-		trustix_route_tcp_gso_async_txq_stopped_queued++;
+	trustix_tixt_tx_route_gso_maybe_backoff_stopped_txq(txq);
 	return 0;
 }
 

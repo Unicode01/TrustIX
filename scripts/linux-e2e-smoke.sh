@@ -468,6 +468,8 @@ datapath_extra_module_params() {
     add_param "route_tcp_gso_async_queue_shards=8"
     add_param "route_tcp_gso_async_flow_shard_queue=1"
     add_param "route_tcp_gso_async_hash_tx_queue=0"
+    add_param "route_tcp_gso_async_txq_stopped_backoff_retries=1"
+    add_param "route_tcp_gso_async_txq_stopped_backoff_sleep_usecs=50"
     add_param "route_tcp_gso_async_stream_direct_build_inner_csum=1"
     add_param "route_tcp_gso_async_stream_direct_build_fast_copy=1"
     add_param "route_tcp_gso_async_stream_direct_build_frag_fast_copy=1"

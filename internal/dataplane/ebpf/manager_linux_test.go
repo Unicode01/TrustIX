@@ -16017,8 +16017,11 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 		t.Fatal("route TCP xmit worker must sanitize skb before dev_queue_xmit")
 	}
 	sanitizeBody := sourceFunctionBody(t, source, "trustix_tixt_tx_sanitize_route_gso_xmit_skb")
-	if !strings.Contains(sanitizeBody, "trustix_route_tcp_gso_async_txq_stopped_queued++") ||
-		strings.Contains(sanitizeBody, "return -EBUSY;") {
+	backoffBody := sourceFunctionBody(t, source, "trustix_tixt_tx_route_gso_maybe_backoff_stopped_txq")
+	if !strings.Contains(sanitizeBody, "trustix_tixt_tx_route_gso_maybe_backoff_stopped_txq(txq)") ||
+		!strings.Contains(backoffBody, "trustix_route_tcp_gso_async_txq_stopped_queued++") ||
+		strings.Contains(sanitizeBody, "return -EBUSY;") ||
+		strings.Contains(backoffBody, "return -EBUSY;") {
 		t.Fatal("route TCP GSO sanitize must not drop dev_queue_xmit skbs only because the selected TX queue is transiently stopped")
 	}
 	readyBody := sourceFunctionBody(t, source, "trustix_tixt_tx_route_gso_xmit_ready")

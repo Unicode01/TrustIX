@@ -834,6 +834,8 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_queue_shards=8")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_flow_shard_queue=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_hash_tx_queue=0")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_txq_stopped_backoff_retries=1")
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_txq_stopped_backoff_sleep_usecs=50")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build_inner_csum=1")
@@ -1096,6 +1098,8 @@ var trustIXDatapathHelpersSafeAsyncModuleParameters = map[string]struct{}{
 	"route_tcp_gso_async_flow_shard_queue":                              {},
 	"route_tcp_gso_async_hash_tx_queue":                                 {},
 	"route_tcp_gso_async_reslice_to_mtu":                                {},
+	"route_tcp_gso_async_txq_stopped_backoff_retries":                   {},
+	"route_tcp_gso_async_txq_stopped_backoff_sleep_usecs":               {},
 	"route_tcp_gso_async_worker_budget_reschedule_delay_jiffies":        {},
 	"route_tcp_gso_async_worker_budget_reschedule_delay_usecs":          {},
 	"route_tcp_gso_async_worker_dequeue_batch":                          {},
