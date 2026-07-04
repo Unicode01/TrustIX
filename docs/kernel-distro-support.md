@@ -58,12 +58,12 @@ guests with disposable PVE VM IDs 200+.
 The OpenWrt SDK compile matrix defaults were refreshed on 2026-06-21 to cover
 the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
 OpenWrt 24.10.7 x86_64 has since passed an SDK module build and fresh 3600s
-OpenWrt-to-Debian full-kmod production gates, most recently on 2026-07-03
-against Debian `6.12.90+deb13.1-cloud-amd64` at commit
-`9235159503ed1746a41af9a86cbe9baebd67ed8f`. That run covers both UDP
-plaintext full-kmod and experimental TCP plaintext full-kmod with the OpenWrt
-node running `trustix_datapath.rx_worker_single_coalesce=N`. Earlier 2026-06-27
-and 2026-06-25 gates remain historical evidence.
+OpenWrt-to-Debian full-kmod production gates, most recently on 2026-07-05
+against Debian `6.12.94+deb13-cloud-amd64` at commit
+`8c2eebccbcf031f0133c8dbf192d826526c5187c`. That run covers both UDP
+plaintext full-kmod and experimental TCP plaintext full-kmod with full-kmod
+modules loaded on both nodes and clean pstore/kernel log artifacts. Earlier
+2026-07-03, 2026-06-27, and 2026-06-25 gates remain historical evidence.
 OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and secure experimental TCP
 kernel crypto all failed closed at the runtime capability gate because the
 tested image did not expose usable route-TCP kfunc capability. OpenWrt 25.12.4
@@ -119,9 +119,9 @@ current production evidence boundary:
 | Family | Policy | Current minimum received | Gate | Evidence |
 | --- | --- | ---: | ---: | --- |
 | Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 5.053889 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
-| OpenWrt-Debian full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 4.130908 Gbps | 3 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
+| OpenWrt-Debian full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.995213 Gbps | 3 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 11.819391 Gbps | 4 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
-| OpenWrt-Debian experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.818210 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
+| OpenWrt-Debian experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.754582 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.196574 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 | Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.602571 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 | Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.515116 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-04, stopped-TXQ backoff enabled |
@@ -366,9 +366,18 @@ production gate. It used commit `e02d15edf6b4`; minimum received throughput was
 against the 3 Gbps gate. Before/after boot IDs stayed stable, pstore and
 kernel log scans were clean, `tix-lan` kept `tx_queue_len=1000`, and covered
 datapath error counters were zero with full plaintext provider, RX worker, TX
-plaintext, and eight warmed sessions active. This is the current pinned
-OpenWrt-Debian full-kmod production evidence; it validates Debian
-`6.12.90+deb13.1-cloud-amd64`, not Debian `6.12.94+deb13-cloud-amd64`.
+plaintext, and eight warmed sessions active.
+
+A 2026-07-05 current-head OpenWrt 24.10.7-to-Debian full-kmod recheck paired
+OpenWrt kernel `6.6.141` with Debian 13
+`6.12.94+deb13-cloud-amd64` and passed the same 3600s-per-direction production
+gate. It used commit `8c2eebccbcf031f0133c8dbf192d826526c5187c`; minimum
+received throughput was 3.995213 Gbps for UDP full-kmod and 7.754582 Gbps for
+experimental TCP full-kmod against the 3 Gbps and 4 Gbps gates. Before/after
+boot IDs stayed stable, pstore and kernel log scans were clean, `tix-lan` kept
+`tx_queue_len=1000`, and both nodes loaded full-kmod fast-path modules. This
+is the current pinned OpenWrt-Debian full-kmod production evidence for Debian
+`6.12.94+deb13-cloud-amd64`.
 
 Current OpenWrt SDK compile matrix targets for `kernel/trustix_datapath` from
 the default `scripts/openwrt-full-datapath-kmod-matrix.sh` target list:
