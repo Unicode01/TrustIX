@@ -4930,6 +4930,17 @@ func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
 		want   []string
 	}{
 		{
+			name:   "userspace-tc",
+			marker: `if [[ "$userspace_tc_case_count" -gt 0 ]]; then`,
+			want: []string{
+				"run_gate_case_list userspace-tc \"$userspace_tc_min_gbps\"",
+				"--require-transport-policy-stat datapath=tc_xdp",
+				"--require-transport-policy-stat crypto_placement=userspace",
+				"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
+				"--forbid-lsmod-prefix trustix_",
+			},
+		},
+		{
 			name:   "tc-direct",
 			marker: `if [[ "$tc_direct_case_count" -gt 0 ]]; then`,
 			want: []string{

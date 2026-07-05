@@ -852,6 +852,8 @@ main() {
 
   if [[ "$userspace_tc_case_count" -gt 0 ]]; then
     run_gate_case_list userspace-tc "$userspace_tc_min_gbps" "$userspace_tc_cases" "$userspace_tc_case_min_gbps_raw" "$userspace_tc_case_min_seconds_raw" \
+      --require-transport-policy-stat datapath=tc_xdp \
+      --require-transport-policy-stat crypto_placement=userspace \
       --require-transport-sessions-min "${compat_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors=0 \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
