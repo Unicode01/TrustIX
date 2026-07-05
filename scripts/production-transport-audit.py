@@ -256,6 +256,19 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "owdeb_full_kmod",
         "owdeb_exp_tcp_full_kmod",
     },
+    # This gate predates secure_exp_tcp_kernel direct-error clamp and replay
+    # ratio hardening. Existing pass evidence remains equivalent: the default
+    # direct-error budget was already zero, replay drops were already max-zero,
+    # and non-secure_exp_tcp_kernel family checks were unchanged.
+    "e6e2c7c69807adaa8bd171b59225ce15b307c668c280b12b027baab19f12f029": {
+        "full_kmod",
+        "owdeb_full_kmod",
+        "exp_tcp_full_kmod",
+        "owdeb_exp_tcp_full_kmod",
+        "secure_kudp",
+        "secure_exp_tcp_kernel",
+        "route_gso",
+    },
 }
 VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     # This verifier predates the node-specific module-parameter requirement.

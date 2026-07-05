@@ -708,7 +708,7 @@ main() {
   secure_exp_tcp_kernel_min_sessions="$(max_integer "$secure_exp_tcp_kernel_min_sessions" "8")"
   secure_exp_tcp_kernel_min_crypto_flows="$(max_integer "$secure_exp_tcp_kernel_min_crypto_flows" "1")"
   secure_exp_tcp_kernel_session_error_budget="$(min_integer "$secure_exp_tcp_kernel_session_error_budget" "2")"
-  secure_exp_tcp_kernel_direct_error_budget="$(min_integer "$secure_exp_tcp_kernel_direct_error_budget" "64")"
+  secure_exp_tcp_kernel_direct_error_budget="$(min_integer "$secure_exp_tcp_kernel_direct_error_budget" "0")"
   secure_exp_tcp_kernel_replay_ratio_budget="$(min_decimal "$secure_exp_tcp_kernel_replay_ratio_budget" "0.00002")"
   route_gso_min_sessions="$(max_integer "$route_gso_min_sessions" "8")"
   route_gso_session_error_budget="$(min_integer "$route_gso_session_error_budget" "2")"
@@ -1089,8 +1089,10 @@ main() {
       --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_seal_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_open_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_replay_drops=0 \
+      --require-datapath-ratio-max experimental_tcp.provider_stats.kernel_crypto_frame_replay_drops/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_exp_tcp_kernel_replay_ratio_budget}" \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_open_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_drops=0 \
+      --require-datapath-ratio-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_drops/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_exp_tcp_kernel_replay_ratio_budget}" \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_no_context_drops=0 \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_header_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_payload_len_errors=0 \
@@ -1108,6 +1110,7 @@ main() {
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_dynptr_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_decrypt_errors=0 \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors=0 \
+      --require-datapath-ratio-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_exp_tcp_kernel_replay_ratio_budget}" \
       --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_store_errors=0 \
       --require-module-param-min trustix_crypto.kfunc_simd_fastpath=1 \
       --require-module-param-min trustix_crypto.kfunc_simd_irq_fpu_fastpath=1 \
