@@ -71,6 +71,9 @@ func TestQUICConfigUsesThroughputWindows(t *testing.T) {
 	if conf.MaxConnectionReceiveWindow != quicMaxConnectionReceiveWindow {
 		t.Fatalf("MaxConnectionReceiveWindow = %d, want %d", conf.MaxConnectionReceiveWindow, quicMaxConnectionReceiveWindow)
 	}
+	if !conf.EnableDatagrams {
+		t.Fatal("EnableDatagrams = false, want true")
+	}
 }
 
 func TestTransportSendPacketsBatch(t *testing.T) {
@@ -130,6 +133,12 @@ func TestTransportSendPacketsBatch(t *testing.T) {
 	if !client.Stats().NativeBatching {
 		t.Fatal("quic session should advertise NativeBatching")
 	}
+	if !client.Stats().Datagram {
+		t.Fatal("quic session should advertise Datagram")
+	}
+	if got, want := client.Stats().MaxPacketSize, uint64(quicDatagramMaxPacket); got != want {
+		t.Fatalf("MaxPacketSize = %d, want %d", got, want)
+	}
 	packets := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
 	if err := batch.SendPackets(packets); err != nil {
 		t.Fatalf("send batch: %v", err)
@@ -142,6 +151,54 @@ func TestTransportSendPacketsBatch(t *testing.T) {
 		if string(got) != string(want) {
 			t.Fatalf("recv packet %d = %q, want %q", i, got, want)
 		}
+	}
+}
+
+func TestTransportRejectsOversizedDatagram(t *testing.T) {
+	addr := freeUDPAddr(t)
+	tr := New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	listener, err := tr.Listen(ctx, transport.Endpoint{
+		Name:      core.EndpointID("server"),
+		Transport: transport.ProtocolQUIC,
+		Listen:    addr,
+		Enabled:   true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan transport.Session, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		session, err := listener.Accept(ctx)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- session
+	}()
+
+	client, err := tr.Dial(ctx, transport.Peer{
+		ID:       core.IXID("ix-b"),
+		DomainID: core.DomainID("lab.local"),
+		Endpoints: []transport.Endpoint{
+			{Name: core.EndpointID("server"), Transport: transport.ProtocolQUIC, Address: addr},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	server := acceptSession(t, ctx, accepted, acceptErr)
+	defer server.Close()
+
+	if err := client.SendPacket(make([]byte, quicDatagramMaxPacket+1)); err == nil {
+		t.Fatal("oversized datagram send succeeded")
 	}
 }
 

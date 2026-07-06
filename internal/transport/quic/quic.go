@@ -1,9 +1,9 @@
-// Package quic implements TrustIX packet sessions over QUIC bidirectional
-// streams. The TrustIX secure transport still owns overlay encryption.
+// Package quic implements TrustIX packet sessions over QUIC datagrams with a
+// bidirectional stream preface. The TrustIX secure transport still owns overlay
+// encryption.
 package quic
 
 import (
-	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -11,7 +11,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"math/big"
@@ -24,16 +23,13 @@ import (
 
 	"trustix.local/trustix/internal/transport"
 	"trustix.local/trustix/internal/transport/bind"
-	"trustix.local/trustix/internal/transport/stream"
 )
 
 const (
 	nextProto     = "trustix-quic"
 	streamPreface = byte('T')
 
-	sendBatchArenaRetainMax = 4 * 1024 * 1024
-	readBufferSize          = 64 * 1024
-	recvArenaBytesPerPacket = 2048
+	quicDatagramMaxPacket = 1150
 
 	quicInitialStreamReceiveWindow     = 4 * 1024 * 1024
 	quicMaxStreamReceiveWindow         = 32 * 1024 * 1024
@@ -187,12 +183,8 @@ type session struct {
 	conn            *quicgo.Conn
 	stream          *quicgo.Stream
 	packetConn      net.PacketConn
-	reader          *bufio.Reader
-	writeMu         sync.Mutex
 	closeOnce       sync.Once
-	sendBatchArena  []byte
 	recvBatch       [][]byte
-	recvArena       []byte
 	bytesSent       atomic.Uint64
 	bytesReceived   atomic.Uint64
 	packetsSent     atomic.Uint64
@@ -200,26 +192,16 @@ type session struct {
 }
 
 func newSession(conn *quicgo.Conn, str *quicgo.Stream, packetConn net.PacketConn) *session {
-	return &session{conn: conn, stream: str, packetConn: packetConn, reader: bufio.NewReaderSize(str, readBufferSize)}
+	return &session{conn: conn, stream: str, packetConn: packetConn}
 }
 
 func (session *session) SendPacket(pkt []byte) error {
-	if len(pkt) > stream.MaxPacketSize {
-		return fmt.Errorf("packet size %d exceeds max %d", len(pkt), stream.MaxPacketSize)
+	if len(pkt) > quicDatagramMaxPacket {
+		return fmt.Errorf("packet size %d exceeds max %d", len(pkt), quicDatagramMaxPacket)
 	}
-	needed := 4 + len(pkt)
-	session.writeMu.Lock()
-	defer session.writeMu.Unlock()
-	if cap(session.sendBatchArena) < needed {
-		session.sendBatchArena = make([]byte, 0, needed)
-	}
-	wire := session.sendBatchArena[:0]
-	wire = binary.BigEndian.AppendUint32(wire, uint32(len(pkt)))
-	wire = append(wire, pkt...)
-	if err := writeFull(session.stream, wire); err != nil {
+	if err := session.conn.SendDatagram(pkt); err != nil {
 		return err
 	}
-	session.sendBatchArena = retainSendBatchArena(wire, needed)
 	session.bytesSent.Add(uint64(len(pkt)))
 	session.packetsSent.Add(1)
 	return nil
@@ -229,45 +211,21 @@ func (session *session) SendPackets(pkts [][]byte) error {
 	if len(pkts) == 0 {
 		return nil
 	}
-	maxInt := int(^uint(0) >> 1)
-	total := 0
 	totalPayload := uint64(0)
 	for _, pkt := range pkts {
-		if len(pkt) > stream.MaxPacketSize {
-			return fmt.Errorf("packet size %d exceeds max %d", len(pkt), stream.MaxPacketSize)
+		if len(pkt) > quicDatagramMaxPacket {
+			return fmt.Errorf("packet size %d exceeds max %d", len(pkt), quicDatagramMaxPacket)
 		}
-		if len(pkt) > maxInt-total-4 {
-			return fmt.Errorf("quic packet batch is too large")
-		}
-		total += 4 + len(pkt)
 		totalPayload += uint64(len(pkt))
 	}
-	session.writeMu.Lock()
-	defer session.writeMu.Unlock()
-	if cap(session.sendBatchArena) < total {
-		session.sendBatchArena = make([]byte, 0, total)
-	}
-	wire := session.sendBatchArena[:0]
-	var header [4]byte
 	for _, pkt := range pkts {
-		binary.BigEndian.PutUint32(header[:], uint32(len(pkt)))
-		wire = append(wire, header[:]...)
-		wire = append(wire, pkt...)
+		if err := session.conn.SendDatagram(pkt); err != nil {
+			return err
+		}
 	}
-	if err := writeFull(session.stream, wire); err != nil {
-		return err
-	}
-	session.sendBatchArena = retainSendBatchArena(wire, total)
 	session.bytesSent.Add(totalPayload)
 	session.packetsSent.Add(uint64(len(pkts)))
 	return nil
-}
-
-func retainSendBatchArena(arena []byte, used int) []byte {
-	if cap(arena) > sendBatchArenaRetainMax && used < sendBatchArenaRetainMax/2 {
-		return nil
-	}
-	return arena[:0]
 }
 
 func (session *session) RecvPacket() ([]byte, error) {
@@ -288,28 +246,25 @@ func (session *session) RecvPackets(max int) ([][]byte, error) {
 }
 
 func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error) {
+	packet, err := session.readBorrowedPacket()
+	if err != nil {
+		return nil, nil, err
+	}
 	if max <= 1 {
-		packet, err := session.readPacket()
-		if err != nil {
-			return nil, nil, err
-		}
 		return [][]byte{packet}, nil, nil
 	}
 	session.prepareRecvBatch(max)
-	packet, err := session.readBorrowedPacket()
-	if err != nil {
-		session.releaseRecvBatch()
-		return nil, nil, err
-	}
 	session.recvBatch = append(session.recvBatch, packet)
+	drainCtx, cancel := context.WithCancel(session.conn.Context())
+	cancel()
 	for len(session.recvBatch) < max {
-		packet, ok, err := session.tryReadBufferedBorrowedPacket()
+		packet, err := session.recvDatagram(drainCtx)
+		if err == context.Canceled || err == context.DeadlineExceeded {
+			break
+		}
 		if err != nil {
 			session.releaseRecvBatch()
 			return nil, nil, err
-		}
-		if !ok {
-			break
 		}
 		session.recvBatch = append(session.recvBatch, packet)
 	}
@@ -323,114 +278,29 @@ func (session *session) prepareRecvBatch(max int) {
 		clear(session.recvBatch)
 		session.recvBatch = session.recvBatch[:0]
 	}
-	target := max * recvArenaBytesPerPacket
-	if target > sendBatchArenaRetainMax {
-		target = sendBatchArenaRetainMax
-	}
-	if cap(session.recvArena) < target {
-		session.recvArena = make([]byte, 0, target)
-	} else {
-		session.recvArena = session.recvArena[:0]
-	}
 }
 
 func (session *session) releaseRecvBatch() {
 	clear(session.recvBatch)
 	session.recvBatch = session.recvBatch[:0]
-	used := len(session.recvArena)
-	if cap(session.recvArena) > sendBatchArenaRetainMax && used < sendBatchArenaRetainMax/2 {
-		session.recvArena = nil
-		return
-	}
-	session.recvArena = session.recvArena[:0]
 }
 
 func (session *session) readPacket() ([]byte, error) {
-	var header [4]byte
-	if _, err := io.ReadFull(session.reader, header[:]); err != nil {
-		return nil, err
-	}
-	size := binary.BigEndian.Uint32(header[:])
-	if size > stream.MaxPacketSize {
-		return nil, fmt.Errorf("packet size %d exceeds max %d", size, stream.MaxPacketSize)
-	}
-	payload := make([]byte, size)
-	if _, err := io.ReadFull(session.reader, payload); err != nil {
-		return nil, err
-	}
-	session.bytesReceived.Add(uint64(size))
-	session.packetsReceived.Add(1)
-	return payload, nil
+	return session.recvDatagram(session.conn.Context())
 }
 
 func (session *session) readBorrowedPacket() ([]byte, error) {
-	var header [4]byte
-	if _, err := io.ReadFull(session.reader, header[:]); err != nil {
-		return nil, err
-	}
-	size := binary.BigEndian.Uint32(header[:])
-	if size > stream.MaxPacketSize {
-		return nil, fmt.Errorf("packet size %d exceeds max %d", size, stream.MaxPacketSize)
-	}
-	if len(session.recvArena) == 0 && int(size) > cap(session.recvArena) {
-		session.recvArena = make([]byte, 0, int(size))
-	}
-	payload, err := session.appendBorrowedPayload(int(size))
+	return session.recvDatagram(session.conn.Context())
+}
+
+func (session *session) recvDatagram(ctx context.Context) ([]byte, error) {
+	payload, err := session.conn.ReceiveDatagram(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := io.ReadFull(session.reader, payload); err != nil {
-		return nil, err
-	}
-	session.bytesReceived.Add(uint64(size))
+	session.bytesReceived.Add(uint64(len(payload)))
 	session.packetsReceived.Add(1)
 	return payload, nil
-}
-
-func (session *session) tryReadBufferedBorrowedPacket() ([]byte, bool, error) {
-	if session.reader.Buffered() < 4 {
-		return nil, false, nil
-	}
-	header, err := session.reader.Peek(4)
-	if err != nil {
-		return nil, false, err
-	}
-	size := binary.BigEndian.Uint32(header)
-	if size > stream.MaxPacketSize {
-		return nil, false, fmt.Errorf("packet size %d exceeds max %d", size, stream.MaxPacketSize)
-	}
-	needed := 4 + int(size)
-	if session.reader.Buffered() < needed {
-		return nil, false, nil
-	}
-	if len(session.recvArena)+int(size) > cap(session.recvArena) {
-		return nil, false, nil
-	}
-	if _, err := session.reader.Discard(4); err != nil {
-		return nil, false, err
-	}
-	payload, err := session.appendBorrowedPayload(int(size))
-	if err != nil {
-		return nil, false, err
-	}
-	if _, err := io.ReadFull(session.reader, payload); err != nil {
-		return nil, false, err
-	}
-	session.bytesReceived.Add(uint64(size))
-	session.packetsReceived.Add(1)
-	return payload, true, nil
-}
-
-func (session *session) appendBorrowedPayload(size int) ([]byte, error) {
-	if size < 0 || size > stream.MaxPacketSize {
-		return nil, fmt.Errorf("packet size %d exceeds max %d", size, stream.MaxPacketSize)
-	}
-	base := len(session.recvArena)
-	if size > cap(session.recvArena)-base {
-		return nil, fmt.Errorf("quic receive batch arena exhausted")
-	}
-	session.recvArena = session.recvArena[:base+size]
-	return session.recvArena[base : base+size], nil
 }
 
 func (session *session) Close() error {
@@ -463,6 +333,8 @@ func (session *session) Stats() transport.TransportStats {
 		TLSVersion:      tlsState.Version,
 		TLSCipherSuite:  tlsState.CipherSuite,
 		NativeBatching:  true,
+		Datagram:        true,
+		MaxPacketSize:   quicDatagramMaxPacket,
 	}
 }
 
@@ -506,6 +378,7 @@ func quicConfig() *quicgo.Config {
 		MaxStreamReceiveWindow:         quicMaxStreamReceiveWindow,
 		InitialConnectionReceiveWindow: quicInitialConnectionReceiveWindow,
 		MaxConnectionReceiveWindow:     quicMaxConnectionReceiveWindow,
+		EnableDatagrams:                true,
 	}
 }
 
