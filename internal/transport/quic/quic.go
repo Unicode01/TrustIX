@@ -32,7 +32,7 @@ const (
 	streamPreface = byte('T')
 
 	sendBatchArenaRetainMax = 4 * 1024 * 1024
-	readBufferSize          = 64 * 1024
+	readBufferSize          = 512 * 1024
 	recvArenaBytesPerPacket = 2048
 
 	quicInitialStreamReceiveWindow     = 4 * 1024 * 1024

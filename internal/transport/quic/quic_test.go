@@ -74,6 +74,13 @@ func TestQUICConfigUsesThroughputWindows(t *testing.T) {
 	}
 }
 
+func TestQUICReadBufferCoversCoalescedFrames(t *testing.T) {
+	const gsoSizedFrame = 64 * 1024
+	if readBufferSize < 8*gsoSizedFrame {
+		t.Fatalf("readBufferSize = %d, want at least eight 64KiB coalesced frames", readBufferSize)
+	}
+}
+
 func TestTransportSendPacketsBatch(t *testing.T) {
 	addr := freeUDPAddr(t)
 	tr := New()
