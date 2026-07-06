@@ -463,6 +463,8 @@ func (session *session) Stats() transport.TransportStats {
 		TLSVersion:      tlsState.Version,
 		TLSCipherSuite:  tlsState.CipherSuite,
 		NativeBatching:  true,
+		Datagram:        true,
+		MaxPacketSize:   uint64(stream.MaxPacketSize),
 	}
 }
 

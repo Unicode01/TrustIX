@@ -9,6 +9,7 @@ import (
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/transport"
 	securetransport "trustix.local/trustix/internal/transport/secure"
+	"trustix.local/trustix/internal/transport/stream"
 )
 
 func TestTransportSendReceive(t *testing.T) {
@@ -129,6 +130,9 @@ func TestTransportSendPacketsBatch(t *testing.T) {
 	}
 	if !client.Stats().NativeBatching {
 		t.Fatal("quic session should advertise NativeBatching")
+	}
+	if stats := client.Stats(); !stats.Datagram || stats.MaxPacketSize != uint64(stream.MaxPacketSize) {
+		t.Fatalf("quic stats datagram=%t max_packet_size=%d, want true/%d", stats.Datagram, stats.MaxPacketSize, stream.MaxPacketSize)
 	}
 	packets := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
 	if err := batch.SendPackets(packets); err != nil {
