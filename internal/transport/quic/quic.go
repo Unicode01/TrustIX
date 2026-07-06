@@ -34,6 +34,11 @@ const (
 	sendBatchArenaRetainMax = 4 * 1024 * 1024
 	readBufferSize          = 64 * 1024
 	recvArenaBytesPerPacket = 2048
+
+	quicInitialStreamReceiveWindow     = 4 * 1024 * 1024
+	quicMaxStreamReceiveWindow         = 32 * 1024 * 1024
+	quicInitialConnectionReceiveWindow = 8 * 1024 * 1024
+	quicMaxConnectionReceiveWindow     = 64 * 1024 * 1024
 )
 
 type Transport struct{}
@@ -494,9 +499,13 @@ func writeFull(writer io.Writer, payload []byte) error {
 
 func quicConfig() *quicgo.Config {
 	return &quicgo.Config{
-		HandshakeIdleTimeout: 5 * time.Second,
-		MaxIdleTimeout:       30 * time.Second,
-		KeepAlivePeriod:      10 * time.Second,
+		HandshakeIdleTimeout:           5 * time.Second,
+		MaxIdleTimeout:                 30 * time.Second,
+		KeepAlivePeriod:                10 * time.Second,
+		InitialStreamReceiveWindow:     quicInitialStreamReceiveWindow,
+		MaxStreamReceiveWindow:         quicMaxStreamReceiveWindow,
+		InitialConnectionReceiveWindow: quicInitialConnectionReceiveWindow,
+		MaxConnectionReceiveWindow:     quicMaxConnectionReceiveWindow,
 	}
 }
 

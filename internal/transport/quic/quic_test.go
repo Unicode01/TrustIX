@@ -57,6 +57,22 @@ func TestTransportSendReceive(t *testing.T) {
 	assertPacketRoundTrip(t, client, server)
 }
 
+func TestQUICConfigUsesThroughputWindows(t *testing.T) {
+	conf := quicConfig()
+	if conf.InitialStreamReceiveWindow != quicInitialStreamReceiveWindow {
+		t.Fatalf("InitialStreamReceiveWindow = %d, want %d", conf.InitialStreamReceiveWindow, quicInitialStreamReceiveWindow)
+	}
+	if conf.MaxStreamReceiveWindow != quicMaxStreamReceiveWindow {
+		t.Fatalf("MaxStreamReceiveWindow = %d, want %d", conf.MaxStreamReceiveWindow, quicMaxStreamReceiveWindow)
+	}
+	if conf.InitialConnectionReceiveWindow != quicInitialConnectionReceiveWindow {
+		t.Fatalf("InitialConnectionReceiveWindow = %d, want %d", conf.InitialConnectionReceiveWindow, quicInitialConnectionReceiveWindow)
+	}
+	if conf.MaxConnectionReceiveWindow != quicMaxConnectionReceiveWindow {
+		t.Fatalf("MaxConnectionReceiveWindow = %d, want %d", conf.MaxConnectionReceiveWindow, quicMaxConnectionReceiveWindow)
+	}
+}
+
 func TestTransportSendPacketsBatch(t *testing.T) {
 	addr := freeUDPAddr(t)
 	tr := New()
