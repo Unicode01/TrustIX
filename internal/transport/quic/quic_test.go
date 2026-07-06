@@ -76,8 +76,16 @@ func TestQUICConfigUsesThroughputWindows(t *testing.T) {
 
 func TestQUICReadBufferCoversCoalescedFrames(t *testing.T) {
 	const gsoSizedFrame = 64 * 1024
-	if readBufferSize < 8*gsoSizedFrame {
-		t.Fatalf("readBufferSize = %d, want at least eight 64KiB coalesced frames", readBufferSize)
+	if readBufferSize < 32*gsoSizedFrame {
+		t.Fatalf("readBufferSize = %d, want at least thirty-two 64KiB coalesced frames", readBufferSize)
+	}
+}
+
+func TestQUICRecvBatchArenaCoversReadBuffer(t *testing.T) {
+	var session session
+	session.prepareRecvBatch(256)
+	if cap(session.recvArena) < readBufferSize {
+		t.Fatalf("recv arena cap = %d, want at least read buffer size %d", cap(session.recvArena), readBufferSize)
 	}
 }
 
@@ -152,6 +160,87 @@ func TestTransportSendPacketsBatch(t *testing.T) {
 		}
 		if string(got) != string(want) {
 			t.Fatalf("recv packet %d = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestTransportRecvPacketsWithReleaseDrainsAvailableBatch(t *testing.T) {
+	addr := freeUDPAddr(t)
+	tr := New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	listener, err := tr.Listen(ctx, transport.Endpoint{
+		Name:      core.EndpointID("server"),
+		Transport: transport.ProtocolQUIC,
+		Listen:    addr,
+		Enabled:   true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan transport.Session, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		session, err := listener.Accept(ctx)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- session
+	}()
+
+	client, err := tr.Dial(ctx, transport.Peer{
+		ID:       core.IXID("ix-b"),
+		DomainID: core.DomainID("lab.local"),
+		Endpoints: []transport.Endpoint{
+			{Name: core.EndpointID("server"), Transport: transport.ProtocolQUIC, Address: addr},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	server := acceptSession(t, ctx, accepted, acceptErr)
+	defer server.Close()
+
+	batch, ok := client.(transport.PacketBatchSession)
+	if !ok {
+		t.Fatal("quic session does not implement PacketBatchSession")
+	}
+	receiver, ok := server.(transport.PacketBatchReceiverWithRelease)
+	if !ok {
+		t.Fatal("quic session does not implement PacketBatchReceiverWithRelease")
+	}
+
+	const packetSize = 60 * 1024
+	packets := make([][]byte, 32)
+	for i := range packets {
+		packet := make([]byte, packetSize)
+		packet[0] = byte(i)
+		packet[len(packet)-1] = byte(255 - i)
+		packets[i] = packet
+	}
+	if err := batch.SendPackets(packets); err != nil {
+		t.Fatalf("send batch: %v", err)
+	}
+
+	got, release, err := receiver.RecvPacketsWithRelease(len(packets))
+	if err != nil {
+		t.Fatalf("recv batch: %v", err)
+	}
+	if release != nil {
+		defer release()
+	}
+	if len(got) < 2 {
+		t.Fatalf("RecvPacketsWithRelease returned %d packet, want a drained batch", len(got))
+	}
+	for i, packet := range got {
+		if len(packet) != packetSize || packet[0] != byte(i) || packet[len(packet)-1] != byte(255-i) {
+			t.Fatalf("packet %d was not preserved", i)
 		}
 	}
 }

@@ -32,8 +32,9 @@ const (
 	streamPreface = byte('T')
 
 	sendBatchArenaRetainMax = 4 * 1024 * 1024
-	readBufferSize          = 512 * 1024
-	recvArenaBytesPerPacket = 2048
+	readBufferSize          = 2 * 1024 * 1024
+	recvArenaBytesPerPacket = 64 * 1024
+	recvArenaRetainMax      = readBufferSize
 
 	quicInitialStreamReceiveWindow     = 4 * 1024 * 1024
 	quicMaxStreamReceiveWindow         = 32 * 1024 * 1024
@@ -324,8 +325,8 @@ func (session *session) prepareRecvBatch(max int) {
 		session.recvBatch = session.recvBatch[:0]
 	}
 	target := max * recvArenaBytesPerPacket
-	if target > sendBatchArenaRetainMax {
-		target = sendBatchArenaRetainMax
+	if target > recvArenaRetainMax {
+		target = recvArenaRetainMax
 	}
 	if cap(session.recvArena) < target {
 		session.recvArena = make([]byte, 0, target)
@@ -337,8 +338,7 @@ func (session *session) prepareRecvBatch(max int) {
 func (session *session) releaseRecvBatch() {
 	clear(session.recvBatch)
 	session.recvBatch = session.recvBatch[:0]
-	used := len(session.recvArena)
-	if cap(session.recvArena) > sendBatchArenaRetainMax && used < sendBatchArenaRetainMax/2 {
+	if cap(session.recvArena) > recvArenaRetainMax {
 		session.recvArena = nil
 		return
 	}
@@ -388,11 +388,8 @@ func (session *session) readBorrowedPacket() ([]byte, error) {
 }
 
 func (session *session) tryReadBufferedBorrowedPacket() ([]byte, bool, error) {
-	if session.reader.Buffered() < 4 {
-		return nil, false, nil
-	}
-	header, err := session.reader.Peek(4)
-	if err != nil {
+	header, ok, err := session.peekAvailable(4)
+	if err != nil || !ok {
 		return nil, false, err
 	}
 	size := binary.BigEndian.Uint32(header)
@@ -400,8 +397,11 @@ func (session *session) tryReadBufferedBorrowedPacket() ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("packet size %d exceeds max %d", size, stream.MaxPacketSize)
 	}
 	needed := 4 + int(size)
-	if session.reader.Buffered() < needed {
+	if needed > readBufferSize {
 		return nil, false, nil
+	}
+	if _, ok, err := session.peekAvailable(needed); err != nil || !ok {
+		return nil, false, err
 	}
 	if len(session.recvArena)+int(size) > cap(session.recvArena) {
 		return nil, false, nil
@@ -419,6 +419,37 @@ func (session *session) tryReadBufferedBorrowedPacket() ([]byte, bool, error) {
 	session.bytesReceived.Add(uint64(size))
 	session.packetsReceived.Add(1)
 	return payload, true, nil
+}
+
+func (session *session) peekAvailable(size int) ([]byte, bool, error) {
+	if session.reader.Buffered() >= size {
+		payload, err := session.reader.Peek(size)
+		return payload, err == nil, err
+	}
+	if err := session.stream.SetReadDeadline(time.Now()); err != nil {
+		return nil, false, err
+	}
+	defer func() {
+		_ = session.stream.SetReadDeadline(time.Time{})
+	}()
+	payload, err := session.reader.Peek(size)
+	if err == nil {
+		return payload, true, nil
+	}
+	if quicReadErrorTimeout(err) || err == bufio.ErrBufferFull {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
+func quicReadErrorTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return true
+	}
+	return false
 }
 
 func (session *session) appendBorrowedPayload(size int) ([]byte, error) {
