@@ -199,6 +199,12 @@ func TestUserspaceUDPSessionStatsAdvertisesDatagramMaxPacketSize(t *testing.T) {
 	}
 }
 
+func TestUserspaceUDPDefaultDatagramLimitAvoidsUnderlayIPFragmentation(t *testing.T) {
+	if got, want := defaultUserspaceUDPDatagramMaxPacketSize(), userspaceUDPDatagramBatchMax; got != want {
+		t.Fatalf("default datagram max = %d, want safe underlay payload %d", got, want)
+	}
+}
+
 func TestUserspaceUDPServerSessionStatsAdvertisesDatagramMaxPacketSize(t *testing.T) {
 	session := &serverSession{}
 	stats := session.Stats()
