@@ -28,13 +28,85 @@ Current production-default evidence boundary:
 | Debian `secure_kudp` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current secure-kUDP uses `trustix_crypto` plus `trustix_datapath_helpers`, keeps replay/drop gates, and passed with clean pstore/kernel log artifacts. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `add2971946b4948fbdd49d973aa94581b2e87a50` | Current route-GSO gate passed with stopped-TXQ backoff enabled, stable boot IDs, clean kernel log/pstore artifacts, and route-GSO helper error counters clean. The single-queue diagnostic failure was throughput-only and is not promoted. |
 | Debian `exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Selected plaintext experimental TCP full-kmod uses the dedicated full-kmod gate family, current-tool hashes, and the P16 runtime default; it must not reuse UDP full-kmod or route-GSO evidence. |
-| Debian userspace and userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace and GRE/IPIP/VXLAN userspace-TC | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. |
+| Debian userspace defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. A fresh 8c2eebc userspace queue is running and has not been promoted yet. |
+| Debian userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` for GRE/IPIP/VXLAN secure and plaintext userspace-TC tunnels | Current-head userspace-TC evidence uses `datapath=tc_xdp`, `crypto_placement=userspace`, current production gate, runner, transport matrix, and evidence generator SHA256 values. Both nodes kept stable boot IDs and clean kernel/pstore artifacts. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | This is a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. Direct kfunc and route-TCP GSO helper error gates passed cleanly. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current-head OpenWrt-Debian UDP plaintext full-kmod evidence uses current production gate, verifier, runner, transport matrix, and evidence generator SHA256 values. Both nodes loaded the full-kmod fast path, boot IDs stayed stable, and pstore/kernel logs were clean. |
 | OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current-head OpenWrt-Debian experimental TCP plaintext full-kmod evidence uses the dedicated full-kmod gate family and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
+## 2026-07-07
+
+### Zaozhuang PVE QUIC capture-forwarder auto-worker short gate
+
+PVE host `120.220.44.72:8006` ran a Debian-to-Debian userspace QUIC plaintext
+short gate with fresh disposable VM IDs 210 and 211. Both guests ran Debian 13
+kernel `6.12.90+deb13.1-cloud-amd64`, with VM210 underlay
+`10.203.3.210/24` on `eth1` and VM211 underlay `10.203.3.211/24` on `eth1`.
+VM210 and VM211 were destroyed after the run; VM100 and all 1xx guests were not
+modified.
+
+The TrustIX binary was `trustix-linux-amd64-autocap`, commit `autocap-local`,
+build time `2026-07-06T23:34:20Z`, Go `go1.25.0`. This was a local validation
+build for the capture-forwarder default change, not a promoted production
+3600s artifact. Evidence artifacts are preserved on the PVE host at:
+
+- `/root/trustix-pve-work/results/autocap-c1eb-quic-default-20260707-074908`
+- `/root/trustix-pve-work/results/autocap-c1eb-quic-workers1-20260707-075505`
+
+Direct underlay iperf from VM210 to VM211 reached `18.963 Gbps` with one stream
+and `16.328 Gbps` with eight streams, so the QUIC result was not underlay-bound.
+With the new default `TRUSTIX_CAPTURE_FORWARDER_WORKERS=auto` and runner
+default `TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BUFFER=65536`, an 8-parallel,
+8-session-pool QUIC plaintext run reached `1.814 Gbps` A-to-B and `1.824 Gbps`
+B-to-A over 90 seconds. The explicit old-style `TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_WORKERS=1`
+control reached `0.885 Gbps` A-to-B and `0.964 Gbps` B-to-A over 45 seconds on
+the same guests. Both runs returned runner `pass`, cleaned remote workdirs, and
+had clean pstore artifacts with no TrustIX panic/oops/watchdog findings in
+kernel logs.
+
 ## 2026-07-05
+
+<a id="2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production"></a>
+
+### Zaozhuang PVE 8c2eebc Debian userspace-TC production gates
+
+PVE host `120.220.44.72:8006` ran fresh Debian-to-Debian userspace-TC
+tunnel production gates on disposable VM IDs 200 and 201 only. Both guests ran
+Debian 13 kernel `6.12.94+deb13-cloud-amd64`, with VM200 underlay
+`10.203.3.200/24` on `eth1` and VM201 underlay `10.203.3.201/24` on `eth1`.
+VM100 and all 1xx guests were not modified.
+
+The TrustIX binary was `trustix-linux-amd64`, commit
+`8c2eebccbcf031f0133c8dbf192d826526c5187c`, build time
+`2026-07-04T11:27:03Z`, Go `go1.25.0`, and binary SHA256
+`e836a5e75515b81ee4874ac7e456624e8375fe4431d8a8f3b2f31e37982d2ee2`.
+The production gate script SHA256 was
+`1371160cca3cceb50617f1cae8704b1755b858bcf08ca530f32b7d46245b19d3`;
+the verifier SHA256 was
+`0a171df97959d753eeebcb6bea17199d5a1bda69bafd2720b49259068768aee9`.
+Evidence artifacts are preserved on the PVE host at
+`/root/trustix-pve-work/results/current-8c2eebc-userspace-tc-production-20260705-163042`.
+
+| Transport | Encryption | Minimum received | Gate | Per-direction received |
+| --- | --- | ---: | ---: | --- |
+| GRE | secure | 1.468416 Gbps | 1 Gbps | 1.468416 Gbps A-to-B, 1.527218 Gbps B-to-A |
+| GRE | plaintext | 10.385386 Gbps | 4 Gbps | 11.038300 Gbps A-to-B, 10.385386 Gbps B-to-A |
+| IPIP | secure | 1.467942 Gbps | 1 Gbps | 1.467942 Gbps A-to-B, 1.471061 Gbps B-to-A |
+| IPIP | plaintext | 10.700284 Gbps | 4 Gbps | 10.700284 Gbps A-to-B, 11.152082 Gbps B-to-A |
+| VXLAN | secure | 1.424523 Gbps | 1 Gbps | 1.427364 Gbps A-to-B, 1.424523 Gbps B-to-A |
+| VXLAN | plaintext | 6.366737 Gbps | 4 Gbps | 6.366737 Gbps A-to-B, 7.501153 Gbps B-to-A |
+
+All six gates ran `forward + both` with `iperf_parallel=4` and elapsed
+7209-7210 seconds per gate. The run started with GRE secure at
+`2026-07-05T08:30:48Z` and finished VXLAN plaintext at
+`2026-07-05T20:33:17Z`. Both guests kept stable boot IDs
+(`46cf03ff-2df0-4f4a-926f-7112df2a1935` on VM200 and
+`1e81a222-1a70-45fa-a066-dbe53f3f07f6` on VM201), loaded no
+`trustix_*` kernel modules, used `transport_policy.datapath=tc_xdp` with
+`crypto_placement=userspace`, kept `tix-lan` `tx_queue_len=1000`, and passed
+with clean pstore artifacts, no kernel log crash findings, and zero session
+dial or heartbeat failures.
 
 <a id="2026-07-05-zaozhuang-pve-8c2eebc-secure-kernel-production"></a>
 

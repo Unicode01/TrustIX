@@ -122,6 +122,7 @@ current production evidence boundary:
 | OpenWrt-Debian full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.995213 Gbps | 3 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 11.819391 Gbps | 4 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | OpenWrt-Debian experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.754582 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
+| Userspace-TC tunnels | GRE/IPIP/VXLAN / secure or plaintext / `tc_xdp` / `userspace` | 1.424523 Gbps secure, 6.366737 Gbps plaintext | 1 Gbps secure, 4 Gbps plaintext | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.196574 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 | Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.577411 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.515116 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-04, stopped-TXQ backoff enabled |
@@ -231,6 +232,17 @@ clean pstore coverage, and no kernel log crash findings. This is a dedicated
 evidence. Earlier 2026-06-26 `fa207ea` gates and the 2026-06-24 to
 2026-06-25 direct-kfunc FPU-unavailable diagnostic build remain historical
 coverage, not the current production-default identity.
+
+A 2026-07-05 current-head Debian-to-Debian userspace-TC tunnel recheck on
+`6.12.94+deb13-cloud-amd64` superseded the earlier GRE/IPIP/VXLAN userspace-TC
+boundaries. It used commit `8c2eebccbcf031f0133c8dbf192d826526c5187c`;
+minimum received throughput was 1.468416 Gbps for secure GRE, 10.385386 Gbps
+for plaintext GRE, 1.467942 Gbps for secure IPIP, 10.700284 Gbps for plaintext
+IPIP, 1.424523 Gbps for secure VXLAN, and 6.366737 Gbps for plaintext VXLAN.
+All six gates used `datapath=tc_xdp` with `crypto_placement=userspace`, loaded
+no TrustIX kernel modules, ran `forward + both` for 7209-7210 seconds per
+gate, kept stable boot IDs, and passed with clean pstore and kernel log scans
+plus zero session dial or heartbeat failures.
 
 A 2026-06-23 to 2026-06-24 current-head Debian-to-Debian userspace recheck on
 `6.12.69+deb13-amd64` passed every current 3600s cross-host userspace

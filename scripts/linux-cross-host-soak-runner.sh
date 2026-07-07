@@ -75,6 +75,10 @@ session_pool_warmup="${TRUSTIX_CROSS_HOST_SESSION_POOL_WARMUP:-true}"
 session_pool_heartbeat_mode="${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE:-enabled}"
 session_pool_heartbeat_interval="${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_INTERVAL:-10s}"
 session_pool_heartbeat_timeout="${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_TIMEOUT:-10s}"
+capture_forwarder_workers="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_WORKERS:-auto}"
+capture_forwarder_buffer="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BUFFER:-65536}"
+capture_forwarder_batch="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH:-1024}"
+capture_forwarder_batch_delay="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH_DELAY:-0}"
 iptunnel_port="${TRUSTIX_CROSS_HOST_IPTUNNEL_PORT:-47829}"
 iptunnel_mtu="${TRUSTIX_CROSS_HOST_IPTUNNEL_MTU:-1400}"
 iptunnel_a_carrier="${TRUSTIX_CROSS_HOST_IPTUNNEL_A_CARRIER:-10.255.10.1/30}"
@@ -799,6 +803,9 @@ check_local_inputs() {
   [[ "$health_port" -ne "$iperf_port" ]] || die "TRUSTIX_CROSS_HOST_HEALTH_PORT must differ from TRUSTIX_CROSS_HOST_IPERF_PORT"
   case "$transport_snapshot_delay" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be an integer" ;; esac
   case "$session_pool_size" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be an integer" ;; esac
+  case "$capture_forwarder_workers" in auto) ;; *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_WORKERS must be auto or a positive integer" ;; esac
+  case "$capture_forwarder_buffer" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BUFFER must be a positive integer" ;; esac
+  case "$capture_forwarder_batch" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH must be a positive integer" ;; esac
   case "$iptunnel_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_PORT must be an integer" ;; esac
   case "$iptunnel_mtu" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_MTU must be an integer" ;; esac
   case "$vxlan_vni" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_VXLAN_VNI must be an integer" ;; esac
@@ -807,6 +814,12 @@ check_local_inputs() {
   [[ "$iptunnel_iperf_parallel" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1"
   [[ "$transport_snapshot_delay" -ge 0 ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be >= 0"
   [[ "$session_pool_size" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be >= 1"
+  if [[ "$capture_forwarder_workers" != "auto" ]]; then
+    [[ "$capture_forwarder_workers" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_WORKERS must be >= 1"
+  fi
+  [[ "$capture_forwarder_buffer" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BUFFER must be >= 1"
+  [[ "$capture_forwarder_batch" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH must be >= 1"
+  [[ "$capture_forwarder_batch" -le 4096 ]] || die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH must be <= 4096"
   [[ "$iptunnel_port" -ge 1 && "$iptunnel_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_PORT must be in 1..65535"
   [[ "$iptunnel_mtu" -ge 17 && "$iptunnel_mtu" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_MTU must be in 17..65535"
   [[ "$vxlan_vni" -ge 1 && "$vxlan_vni" -le 16777215 ]] || die "TRUSTIX_CROSS_HOST_VXLAN_VNI must be in 1..16777215"
@@ -1217,7 +1230,15 @@ TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=1
 EOF
 }
 
+common_daemon_env() {
+  printf 'TRUSTIX_CAPTURE_FORWARDER_WORKERS=%s\n' "$capture_forwarder_workers"
+  printf 'TRUSTIX_CAPTURE_FORWARDER_BUFFER=%s\n' "$capture_forwarder_buffer"
+  printf 'TRUSTIX_CAPTURE_FORWARDER_BATCH=%s\n' "$capture_forwarder_batch"
+  printf 'TRUSTIX_CAPTURE_FORWARDER_BATCH_DELAY=%s\n' "$capture_forwarder_batch_delay"
+}
+
 daemon_env() {
+  common_daemon_env
   if [[ "$(case_fast_path)" == "secure_exp_tcp_kernel" ]]; then
     secure_exp_tcp_kernel_daemon_env
     return

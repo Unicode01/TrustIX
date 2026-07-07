@@ -78,6 +78,36 @@ func TestCaptureForwarderWorkerIndexFallsBackRoundRobin(t *testing.T) {
 	}
 }
 
+func TestCaptureForwarderWorkerCountAutoScalesWithCPUs(t *testing.T) {
+	cases := []struct {
+		cpus int
+		want int
+	}{
+		{cpus: 0, want: 1},
+		{cpus: 1, want: 1},
+		{cpus: 2, want: 2},
+		{cpus: 4, want: 8},
+		{cpus: 8, want: 16},
+		{cpus: 32, want: 16},
+	}
+	for _, tc := range cases {
+		if got := captureForwarderAutoWorkerCount(tc.cpus); got != tc.want {
+			t.Fatalf("auto workers for cpus=%d = %d, want %d", tc.cpus, got, tc.want)
+		}
+	}
+}
+
+func TestCaptureForwarderWorkerCountHonorsExplicitEnv(t *testing.T) {
+	t.Setenv("TRUSTIX_CAPTURE_FORWARDER_WORKERS", "3")
+	if got := captureForwarderWorkerCount(); got != 3 {
+		t.Fatalf("explicit capture forwarder workers = %d, want 3", got)
+	}
+	t.Setenv("TRUSTIX_CAPTURE_FORWARDER_WORKERS", "999")
+	if got := captureForwarderWorkerCount(); got != captureForwarderMaxWorkers {
+		t.Fatalf("clamped capture forwarder workers = %d, want %d", got, captureForwarderMaxWorkers)
+	}
+}
+
 func TestForwardCaptureEventDropsFragmentedPacketWhenPolicyRequires(t *testing.T) {
 	packet := tcpIPv4Packet()
 	binary.BigEndian.PutUint16(packet[6:8], ipv4MoreFragments)

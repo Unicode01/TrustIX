@@ -518,8 +518,8 @@ func loadAuditCurrentToolchainLegacyRequirementKeys(t *testing.T) map[string]boo
 		}
 		keys[key] = true
 	}
-	if len(keys) != 17 {
-		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 17 current legacy rows, got %d", len(keys))
+	if len(keys) != 11 {
+		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 11 current legacy rows, got %d", len(keys))
 	}
 	return keys
 }
@@ -3390,6 +3390,9 @@ cases = [
     ({"gate_family": "userspace"}, "internal/kernelmodule/aead_ioctl_linux.go", False),
     ({"gate_family": "userspace", "transport": "tcp"}, "internal/transport/experimentaltcp/runtime.go", False),
     ({"gate_family": "userspace", "transport": "experimental_tcp"}, "internal/transport/experimentaltcp/runtime.go", True),
+    ({"gate_family": "userspace", "transport": "quic"}, "internal/transport/quic/quic.go", True),
+    ({"gate_family": "userspace", "transport": "udp"}, "internal/transport/quic/quic.go", False),
+    ({"gate_family": "userspace_tc", "transport": "gre"}, "internal/transport/quic/quic.go", False),
     ({"gate_family": "userspace"}, "internal/config/config.go", True),
 ]
 for row, path, want in cases:
@@ -3616,7 +3619,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"route_gso":               "docs/trustix-performance-log.md#2026-07-04-zaozhuang-pve-add2971-route-gso-txq-backoff-production",
 		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-openwrt24107-debian13-full-kmod-production",
 		"userspace":               "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
-		"userspace_tc":            "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
+		"userspace_tc":            "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
 	}
 	manifestRequiredArtifactByDefault := map[string]string{
 		"udp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
@@ -3629,12 +3632,12 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"websocket:plaintext:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
 		"http_connect:secure:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
 		"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace":                      "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
-		"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
-		"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                          "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
-		"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                 "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
-		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                         "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
-		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
-		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                        "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
+		"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                  "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
+		"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                          "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
+		"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                 "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
+		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                         "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
+		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
+		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                        "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
 		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace":                     "docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
 		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-exp-tcp-full-kmod-production",
 	}
@@ -7017,6 +7020,12 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"session_pool_size=\"${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE:-$iperf_parallel}\"",
 		"session_pool_heartbeat_interval=\"${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_INTERVAL:-10s}\"",
 		"session_pool_heartbeat_timeout=\"${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_TIMEOUT:-10s}\"",
+		"capture_forwarder_workers=\"${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_WORKERS:-auto}\"",
+		"capture_forwarder_buffer=\"${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BUFFER:-65536}\"",
+		"TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_WORKERS must be auto or a positive integer",
+		"TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH must be <= 4096",
+		"printf 'TRUSTIX_CAPTURE_FORWARDER_WORKERS=%s\\n' \"$capture_forwarder_workers\"",
+		"printf 'TRUSTIX_CAPTURE_FORWARDER_BUFFER=%s\\n' \"$capture_forwarder_buffer\"",
 		"session_pool:",
 		"size: ${session_pool_size}",
 		"strategy: ${session_pool_strategy}",

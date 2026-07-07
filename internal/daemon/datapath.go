@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,8 @@ const deviceAccessExpiryReaperInterval = 5 * time.Second
 const captureForwarderDefaultBuffer = 8192
 const captureForwarderMaxBuffer = 65536
 const captureForwarderDefaultWorkers = 1
+const captureForwarderAutoMaxWorkers = 16
+const captureForwarderMaxWorkers = 64
 const captureForwarderMaxBatch = 4096
 const reverseSessionAddress = "reverse://inbound"
 const dataSessionBatchDefaultBytes = 256 * 1024
@@ -1437,17 +1440,36 @@ func captureForwarderBufferSize() int {
 
 func captureForwarderWorkerCount() int {
 	value := strings.TrimSpace(os.Getenv("TRUSTIX_CAPTURE_FORWARDER_WORKERS"))
-	if value == "" {
-		return captureForwarderDefaultWorkers
+	switch strings.ToLower(value) {
+	case "", "auto", "default":
+		return captureForwarderDefaultWorkerCount()
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
-		return captureForwarderDefaultWorkers
+		return captureForwarderDefaultWorkerCount()
 	}
-	if parsed > 64 {
-		return 64
+	if parsed > captureForwarderMaxWorkers {
+		return captureForwarderMaxWorkers
 	}
 	return parsed
+}
+
+func captureForwarderDefaultWorkerCount() int {
+	return captureForwarderAutoWorkerCount(goruntime.NumCPU())
+}
+
+func captureForwarderAutoWorkerCount(cpus int) int {
+	if cpus <= 1 {
+		return captureForwarderDefaultWorkers
+	}
+	if cpus <= 2 {
+		return cpus
+	}
+	workers := cpus * 2
+	if workers > captureForwarderAutoMaxWorkers {
+		return captureForwarderAutoMaxWorkers
+	}
+	return workers
 }
 
 func captureForwarderBatchSize() int {

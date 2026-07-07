@@ -302,6 +302,17 @@ TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
             "owdeb_full_kmod",
             "owdeb_exp_tcp_full_kmod",
         },
+        "80836a54f5ecc4b66bdf447372ff15f7703c61f0430368379c7fa7d3be04a82e": {
+            "full_kmod",
+            "exp_tcp_full_kmod",
+            "route_gso",
+            "owdeb_full_kmod",
+            "owdeb_exp_tcp_full_kmod",
+            "secure_kudp",
+            "secure_exp_tcp_kernel",
+            "tc_direct",
+            "userspace_tc",
+        },
     },
 }
 CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
@@ -315,12 +326,6 @@ CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
     "websocket:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
     "http_connect:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
     "http_connect:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
-    "gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
-    "gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-gre-userspace-tc-seq-rerun4-2026-06-29",
-    "ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
-    "ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-ipip-userspace-tc-seq-rerun4-2026-06-29",
-    "vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
-    "vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-vxlan-userspace-tc-p4-rerun-2026-06-30",
     "experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
 }
 
@@ -867,6 +872,8 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
             "secure_exp_tcp_kernel",
             "route_gso",
         }
+    if normalized.startswith("internal/transport/quic/"):
+        return transport == "quic"
     if normalized.startswith("internal/daemon/"):
         if normalized == "internal/daemon/kernel_modules.go":
             return gate_class in KERNEL_MODULE_RUNTIME_GATE_CLASSES
