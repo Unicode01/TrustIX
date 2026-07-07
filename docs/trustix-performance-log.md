@@ -26,11 +26,11 @@ Current production-default evidence boundary:
 | Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current-head gate with production gate script, cross-host runner, transport matrix, and evidence generator SHA256 pinned. The modules were rebuilt inside each VM against the exact target kernel; earlier Debian full-kmod gates remain historical coverage. |
 | Debian `tc_direct` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `a88aec3dd688a73aa3cd54342ca4b8fb8d71d424` | TC-direct still runs with no TrustIX kernel modules loaded. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
 | Debian `secure_kudp` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current secure-kUDP uses `trustix_crypto` plus `trustix_datapath_helpers`, keeps replay/drop gates, and passed with clean pstore/kernel log artifacts. |
-| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `add2971946b4948fbdd49d973aa94581b2e87a50` | Current route-GSO gate passed with stopped-TXQ backoff enabled, stable boot IDs, clean kernel log/pstore artifacts, and route-GSO helper error counters clean. The single-queue diagnostic failure was throughput-only and is not promoted. |
+| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` to `6.12.95+deb13-cloud-amd64` at commit `1dfaf51caac8bc03177de4ec428e23659db69173` | Current route-GSO gate passed after rebooting the disposable guests, with stable boot IDs, clean kernel log/pstore artifacts, and route-GSO helper error counters clean. Pre-reboot same-commit and `add2971` reruns were also degraded, so the promoted artifact is the post-reboot run. |
 | Debian `exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Selected plaintext experimental TCP full-kmod uses the dedicated full-kmod gate family, current-tool hashes, and the P16 runtime default; it must not reuse UDP full-kmod or route-GSO evidence. |
 | Debian userspace defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. A fresh 8c2eebc userspace queue is running and has not been promoted yet. |
 | Debian userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` for GRE/IPIP/VXLAN secure and plaintext userspace-TC tunnels | Current-head userspace-TC evidence uses `datapath=tc_xdp`, `crypto_placement=userspace`, current production gate, runner, transport matrix, and evidence generator SHA256 values. Both nodes kept stable boot IDs and clean kernel/pstore artifacts. |
-| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | This is a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. Direct kfunc and route-TCP GSO helper error gates passed cleanly. |
+| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `1dfaf51caac8bc03177de4ec428e23659db69173` | This is a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. Current direct kfunc and route-TCP GSO helper error gates passed cleanly. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current-head OpenWrt-Debian UDP plaintext full-kmod evidence uses current production gate, verifier, runner, transport matrix, and evidence generator SHA256 values. Both nodes loaded the full-kmod fast path, boot IDs stayed stable, and pstore/kernel logs were clean. |
 | OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current-head OpenWrt-Debian experimental TCP plaintext full-kmod evidence uses the dedicated full-kmod gate family and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
@@ -64,6 +64,73 @@ control reached `0.885 Gbps` A-to-B and `0.964 Gbps` B-to-A over 45 seconds on
 the same guests. Both runs returned runner `pass`, cleaned remote workdirs, and
 had clean pstore artifacts with no TrustIX panic/oops/watchdog findings in
 kernel logs.
+
+<a id="2026-07-07-zaozhuang-pve-1dfaf51-secure-exp-tcp-kernel-production"></a>
+
+### Zaozhuang PVE 1dfaf51 secure experimental TCP kernel production gate
+
+PVE host `120.220.44.72:8006` ran the selected Debian-to-Debian
+`secure_exp_tcp_kernel` production gate on disposable VM IDs 200 and 201 only.
+Both guests ran Debian 13 kernel `6.12.94+deb13-cloud-amd64`. VM100 and all
+1xx guests were not modified.
+
+The TrustIX binary was `trustix-linux-amd64`, commit
+`1dfaf51caac8bc03177de4ec428e23659db69173`, build time
+`2026-07-07T00:21:59Z`, Go `go1.25.0`, and binary SHA256
+`f2e24bef83499b2f7df47402ae283cda26ccd46772a6f6c5f05679d7b82bccd0`.
+The production gate script SHA256 was
+`1371160cca3cceb50617f1cae8704b1755b858bcf08ca530f32b7d46245b19d3`;
+the verifier SHA256 was
+`0a171df97959d753eeebcb6bea17199d5a1bda69bafd2720b49259068768aee9`.
+Evidence artifacts are preserved on the PVE host at
+`/root/trustix-pve-work/results/current-1dfaf51-selected-production-20260707-083236`.
+
+| Gate family | Direction | Received | Duration |
+| --- | --- | ---: | ---: |
+| `secure_exp_tcp_kernel` | A to B | 5.485418 Gbps | 3600.025833s |
+| `secure_exp_tcp_kernel` | B to A | 5.405340 Gbps | 3600.025654s |
+
+The generated production evidence row records `min_gbps=5.405340` and
+`min_seconds=3600`. The gate loaded `trustix_crypto` plus
+`trustix_datapath_helpers`, kept the direct kernel crypto path enabled, and
+passed with clean production verifier output for pstore, kernel crash logs,
+LAN state, loaded modules, boot ID stability, and route-TCP GSO helper errors.
+
+<a id="2026-07-07-zaozhuang-pve-1dfaf51-route-gso-postreboot-production"></a>
+
+### Zaozhuang PVE 1dfaf51 route-GSO post-reboot production gate
+
+PVE host `120.220.44.72:8006` reran the Debian-to-Debian plaintext
+`route_gso` production gate on disposable VM IDs 200 and 201 after rebooting
+both guests. VM200 ran Debian 13 kernel `6.12.94+deb13-cloud-amd64`; VM201 ran
+`6.12.95+deb13-cloud-amd64`. VM100 and all 1xx guests were not modified.
+
+The TrustIX binary was `trustix-linux-amd64`, commit
+`1dfaf51caac8bc03177de4ec428e23659db69173`, build time
+`2026-07-07T00:21:59Z`, Go `go1.25.0`, and binary SHA256
+`f2e24bef83499b2f7df47402ae283cda26ccd46772a6f6c5f05679d7b82bccd0`.
+The production gate script SHA256 was
+`1371160cca3cceb50617f1cae8704b1755b858bcf08ca530f32b7d46245b19d3`;
+the verifier SHA256 was
+`0a171df97959d753eeebcb6bea17199d5a1bda69bafd2720b49259068768aee9`.
+Evidence artifacts are preserved on the PVE host at
+`/root/trustix-pve-work/results/current-1dfaf51-routegso-postreboot-production-20260707-133050`.
+
+| Gate family | Direction | Received | Duration |
+| --- | --- | ---: | ---: |
+| `route_gso` | A to B | 8.288802 Gbps | 3600.003701s |
+| `route_gso` | B to A | 7.081862 Gbps | 3599.999070s |
+
+The generated production evidence row records `min_gbps=7.081862` and
+`min_seconds=3600` with the corrected kernel matrix
+`6.12.94+deb13-cloud-amd64_to_6.12.95+deb13-cloud-amd64`. Before the reboot,
+current `1dfaf51` and historical `add2971` reruns on the same disposable guests
+both stayed near `1.86-2.36 Gbps`; after reboot, current `1dfaf51` recovered to
+the values above. That points to degraded guest networking state after repeated
+low-level kmod/TC testing, not a demonstrated TrustIX code regression. The
+promoted artifact is the post-reboot pass with clean production verifier output
+for pstore, kernel crash logs, LAN state, loaded modules, boot ID stability,
+and route-GSO helper errors.
 
 ## 2026-07-05
 

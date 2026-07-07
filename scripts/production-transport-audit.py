@@ -217,6 +217,20 @@ RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH = {
         "aee1046d917c97dddbc800d6a4fb203491c057f6",
     },
 }
+CAPTURE_FORWARDER_DEFAULT_COMMITS_BY_PATH = {
+    # 1dfaf51 changes only the userspace capture-forwarder worker defaults and
+    # cross-host runner capture-forwarder env injection. Current full plaintext
+    # and secure-kUDP production rows below have artifacts proving the capture
+    # forwarder was suppressed, so their steady-state datapath is unchanged.
+    "internal/daemon/datapath.go": {
+        "1dfaf51caac8bc03177de4ec428e23659db69173",
+    },
+}
+CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
+    "full_kmod",
+    "exp_tcp_full_kmod",
+    "secure_kudp",
+}
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     # This manifest-v1 gate predates the exp_tcp_full_kmod family. The existing
     # families below kept equivalent verifier semantics when the dedicated
@@ -918,6 +932,9 @@ def current_runtime_path_change_irrelevant(
         allowed_commits = OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH.get(normalized)
         if allowed_commits:
             allowed_change_commits.update(allowed_commits)
+    allowed_commits = CAPTURE_FORWARDER_DEFAULT_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits and gate_class in CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES:
+        allowed_change_commits.update(allowed_commits)
     if not allowed_change_commits:
         return False
     return path_changed_only_by(resolved_commit, normalized, allowed_change_commits)

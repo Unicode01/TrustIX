@@ -335,23 +335,20 @@ func withMatrixToolchain(row map[string]any) map[string]any {
 	return row
 }
 
-func latestDatapathRuntimeParentCommit(t *testing.T) string {
+func latestRuntimeParentCommit(t *testing.T, path string) string {
 	t.Helper()
-	paths := []string{
-		"internal/daemon/datapath.go",
-	}
-	args := append([]string{"-C", "..", "log", "--format=%H", "-n", "1", "--"}, paths...)
+	args := []string{"-C", "..", "log", "--format=%H", "-n", "1", "--", path}
 	output, err := exec.Command("git", args...).CombinedOutput()
 	if err != nil {
 		t.Skipf("git log unavailable for runtime tree audit test: %v\n%s", err, output)
 	}
 	commit := strings.TrimSpace(string(output))
 	if commit == "" {
-		t.Skip("no datapath runtime commit found")
+		t.Skipf("no runtime commit found for %s", path)
 	}
 	parentOutput, err := exec.Command("git", "-C", "..", "rev-parse", commit+"^").CombinedOutput()
 	if err != nil {
-		t.Skipf("latest datapath runtime commit %s has no parent: %v\n%s", commit, err, parentOutput)
+		t.Skipf("latest runtime commit %s for %s has no parent: %v\n%s", commit, path, err, parentOutput)
 	}
 	return strings.TrimSpace(string(parentOutput))
 }
@@ -3287,14 +3284,14 @@ func TestProductionTransportAuditScriptRequireCurrentRejectsUnknownBuildCommit(t
 
 func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 	python := requirePython3(t)
-	staleRuntimeParent := latestDatapathRuntimeParentCommit(t)
+	staleRuntimeParent := latestRuntimeParentCommit(t, "kernel/trustix_crypto/trustix_crypto.c")
 	workdir := t.TempDir()
 	defaults := filepath.Join(workdir, "defaults.tsv")
 	evidence := filepath.Join(workdir, "evidence.tsv")
 	current := filepath.Join(workdir, "current.tsv")
 	defaultPayload := strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
-		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\t4\t3600\trequire runtime tree freshness",
+		"experimental_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_exp_tcp_kernel\t1.5\t3600\trequire runtime tree freshness",
 		"",
 	}, "\n")
 	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
@@ -3306,7 +3303,7 @@ func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 	}
 	currentPayload := strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version",
-		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("a", 64) + "\t" + strings.Repeat("b", 64) + "\tdocs/trustix-performance-log.md#stale-runtime-tree\tstale runtime tree\t" + strings.Repeat("c", 64) + "\ttrustix-current\t" + staleRuntimeParent + "\t2026-06-25T00:00:00Z\tgo1.25.0",
+		"experimental_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_exp_tcp_kernel\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("a", 64) + "\t" + strings.Repeat("b", 64) + "\tdocs/trustix-performance-log.md#stale-runtime-tree\tstale runtime tree\t" + strings.Repeat("c", 64) + "\ttrustix-current\t" + staleRuntimeParent + "\t2026-06-25T00:00:00Z\tgo1.25.0",
 		"",
 	}, "\n")
 	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
@@ -3615,8 +3612,8 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-exp-tcp-full-kmod-production",
 		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-openwrt24107-debian13-full-kmod-production",
 		"secure_kudp":             "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-secure-kernel-production",
-		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-secure-kernel-production",
-		"route_gso":               "docs/trustix-performance-log.md#2026-07-04-zaozhuang-pve-add2971-route-gso-txq-backoff-production",
+		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#2026-07-07-zaozhuang-pve-1dfaf51-secure-exp-tcp-kernel-production",
+		"route_gso":               "docs/trustix-performance-log.md#2026-07-07-zaozhuang-pve-1dfaf51-route-gso-postreboot-production",
 		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-openwrt24107-debian13-full-kmod-production",
 		"userspace":               "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":            "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
