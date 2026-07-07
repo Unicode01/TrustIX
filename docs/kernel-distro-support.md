@@ -48,7 +48,7 @@ now install for kernel module builds when dependency installation is enabled.
 
 The latest PVE compatibility audits were run on 2026-06-19, 2026-06-20,
 2026-06-21, 2026-06-22, 2026-06-23, 2026-06-24, 2026-06-25, 2026-06-26,
-2026-06-27, 2026-07-02, 2026-07-03, 2026-07-04, and 2026-07-05
+2026-06-27, 2026-07-02, 2026-07-03, 2026-07-04, 2026-07-05, and 2026-07-07
 against current source and selected production transport defaults. They covered Debian 13
 `6.12.90+deb13.1-amd64`, Debian 13 `6.12.90+deb13.1-cloud-amd64`, Debian 13
 `6.12.94+deb13-cloud-amd64`, Debian 13 `6.12.94+deb13-amd64`, OpenWrt 23.05.5 x86_64 `5.15.167`,
@@ -125,8 +125,8 @@ current production evidence boundary:
 | Userspace-TC tunnels | GRE/IPIP/VXLAN / secure or plaintext / `tc_xdp` / `userspace` | 1.424523 Gbps secure, 6.366737 Gbps plaintext | 1 Gbps secure, 4 Gbps plaintext | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.196574 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 | Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.577411 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
-| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.515116 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-04, stopped-TXQ backoff enabled |
-| Secure experimental TCP kernel crypto | `experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 5.424119 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
+| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.081862 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64` to `6.12.95+deb13-cloud-amd64`, 2026-07-07 post-reboot |
+| Secure experimental TCP kernel crypto | `experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 5.405340 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-07 |
 
 A 2026-06-21 current-head Debian-to-Debian full-kmod recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
@@ -192,6 +192,16 @@ bounded stopped-TXQ backoff to the route TCP GSO helper. It used commit
 queue, stream, and stopped-TXQ drop error counters were zero, boot IDs stayed
 stable, and pstore plus kernel log scans were clean.
 
+A 2026-07-07 current-head Debian-to-Debian route-GSO post-reboot recheck on
+Debian `6.12.94+deb13-cloud-amd64` to `6.12.95+deb13-cloud-amd64` is the
+current promoted route-GSO production-default identity. It used commit
+`1dfaf51caac8bc03177de4ec428e23659db69173`; minimum received throughput was
+7.081862 Gbps against the 2.5 Gbps gate, with per-direction throughput of
+8.288802 Gbps A-to-B and 7.081862 Gbps B-to-A received. Earlier same-commit and
+`add2971` reruns on the same disposable guests were degraded before reboot, so
+the promoted evidence is the post-reboot run with stable boot IDs, clean pstore
+and kernel log scans, and clean route-GSO helper error counters.
+
 A 2026-07-05 current-head Debian-to-Debian full plaintext kernel-module
 recheck on `6.12.94+deb13-cloud-amd64` superseded the earlier Debian
 full-kmod and experimental TCP full-kmod boundaries. It used commit
@@ -217,11 +227,13 @@ nonzero, boot IDs stayed stable, and pstore plus kernel log scans were clean.
 The current gate separately requires zero `replay_old` drops and bounds
 `replay_seen/open` plus total secure-direct drop ratios at `<= 0.00002`.
 
-The same 2026-07-05 run promoted current secure experimental TCP kernel crypto
-evidence on `6.12.94+deb13-cloud-amd64`. The `secure_exp_tcp_kernel` gate
-reached minimum received throughput of 5.424119 Gbps against the 1.5 Gbps
-gate, with per-direction throughput of 5.424119 Gbps A-to-B and 5.561685 Gbps
-B-to-A. `experimental_tcp` used `datapath=kernel_module` and
+The 2026-07-07 secure experimental TCP kernel crypto recheck is the current
+promoted `secure_exp_tcp_kernel` production-default identity on
+`6.12.94+deb13-cloud-amd64`. It used commit
+`1dfaf51caac8bc03177de4ec428e23659db69173`; minimum received throughput was
+5.405340 Gbps against the 1.5 Gbps gate, with per-direction throughput of
+5.485418 Gbps A-to-B and 5.405340 Gbps B-to-A. `experimental_tcp` used
+`datapath=kernel_module` and
 `crypto_placement=kernel` with direct kfunc crypto plus route TCP GSO async,
 both peers loaded `trustix_crypto` and `trustix_datapath_helpers`,
 direct-kfunc seal/open and route-GSO async xmit counters were nonzero, and
