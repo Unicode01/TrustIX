@@ -2599,7 +2599,10 @@ func TestProductionTransportAuditReportsCurrentRefreshGaps(t *testing.T) {
 		t.Fatalf("production transport audit with refresh report failed: %v\n%s", err, output)
 	}
 	var rows []struct {
-		Key            string `json:"key"`
+		Key     string `json:"key"`
+		Default struct {
+			GateFamily string `json:"gate_family"`
+		} `json:"default"`
 		CurrentRefresh struct {
 			Status  string   `json:"status"`
 			Reasons []string `json:"reasons"`
@@ -2617,6 +2620,9 @@ func TestProductionTransportAuditReportsCurrentRefreshGaps(t *testing.T) {
 		legacyKey := row.Key + "|" + row.CurrentRequirement.Artifact
 		if row.CurrentRefresh.Status == "refresh_needed" {
 			refreshNeeded[legacyKey] = true
+			if row.Default.GateFamily != "userspace" {
+				t.Fatalf("low-level production default current evidence is stale: key=%s gate_family=%s reasons=%v\n%s", row.Key, row.Default.GateFamily, row.CurrentRefresh.Reasons, output)
+			}
 			if len(row.CurrentRefresh.Reasons) == 0 {
 				t.Fatalf("refresh-needed row lacks reasons: %+v\n%s", row, output)
 			}
