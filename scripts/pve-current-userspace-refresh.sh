@@ -10,6 +10,7 @@ dry_run=0
 refresh_gaps=0
 next_refresh_gap=0
 skip_hygiene="${TRUSTIX_PVE_SKIP_HYGIENE_CHECK:-0}"
+quarantine_loose_root_artifacts="${TRUSTIX_PVE_QUARANTINE_LOOSE_ROOT_ARTIFACTS:-0}"
 
 usage() {
   cat <<'EOF'
@@ -28,6 +29,8 @@ Options:
   --foreground           Run the matrix in the foreground
   --dry-run              Generate the selected defaults and print the command
   --skip-hygiene-check   Do not run pve-workspace-hygiene.sh before starting
+  --quarantine-loose-root-artifacts
+                         Move TrustIX-like /root leftovers into WORKSPACE/_scratch first
 
 Required or defaulted environment:
   TRUSTIX_PVE_USERSPACE_A              default root@192.168.100.204
@@ -247,6 +250,10 @@ while [[ $# -gt 0 ]]; do
       skip_hygiene=1
       shift
       ;;
+    --quarantine-loose-root-artifacts)
+      quarantine_loose_root_artifacts=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -272,7 +279,11 @@ case "$workspace" in
 esac
 
 if ! truthy "$skip_hygiene" && [[ -x "${repo_root}/scripts/pve-workspace-hygiene.sh" && "$workspace" == /root/* ]]; then
-  "${repo_root}/scripts/pve-workspace-hygiene.sh" --workspace "$workspace" --check
+  hygiene_mode="--check"
+  if truthy "$quarantine_loose_root_artifacts"; then
+    hygiene_mode="--quarantine"
+  fi
+  "${repo_root}/scripts/pve-workspace-hygiene.sh" --workspace "$workspace" "$hygiene_mode"
 fi
 
 commit_short="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || printf 'current')"
