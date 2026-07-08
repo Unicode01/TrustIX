@@ -35,6 +35,8 @@ Required or defaulted environment:
   TRUSTIX_PVE_USERSPACE_BIN_DIR_B      default /opt/trustix-COMMIT/bin
   TRUSTIX_PVE_USERSPACE_A_UNDERLAY_IP  default 10.203.3.204
   TRUSTIX_PVE_USERSPACE_B_UNDERLAY_IP  default 10.203.3.203
+  TRUSTIX_PVE_USERSPACE_EVIDENCE_KERNEL_MATRIX
+                                      default auto, collected with uname -r
 EOF
 }
 
@@ -286,7 +288,7 @@ underlay_b_ip="${TRUSTIX_PVE_USERSPACE_B_UNDERLAY_IP:-10.203.3.203}"
 underlay_a_if="${TRUSTIX_PVE_USERSPACE_A_UNDERLAY_IF:-eth1}"
 underlay_b_if="${TRUSTIX_PVE_USERSPACE_B_UNDERLAY_IF:-eth1}"
 os_matrix="${TRUSTIX_PVE_USERSPACE_EVIDENCE_OS_MATRIX:-debian13-debian13}"
-kernel_matrix="${TRUSTIX_PVE_USERSPACE_EVIDENCE_KERNEL_MATRIX:-6.12.94+deb13-cloud-amd64_to_6.12.94+deb13-cloud-amd64}"
+kernel_matrix="${TRUSTIX_PVE_USERSPACE_EVIDENCE_KERNEL_MATRIX:-auto}"
 artifact="${TRUSTIX_PVE_USERSPACE_EVIDENCE_ARTIFACT:-docs/trustix-performance-log.md#$(date +%Y-%m-%d)-zaozhuang-pve-${commit_short}-userspace-${label}-production}"
 note_template="${TRUSTIX_PVE_USERSPACE_EVIDENCE_NOTE_TEMPLATE:-current ${commit_short} Debian {transport} {encryption} userspace 3600s production gate evidence}"
 
@@ -304,6 +306,25 @@ cd $(printf '%q' "$repo_root")
   echo "commit=${commit_short}"
   echo "transports=${transports}"
 } >$(printf '%q' "${run_root}/run.meta")
+
+kernel_matrix=$(printf '%q' "$kernel_matrix")
+node_a=$(printf '%q' "$node_a")
+node_b=$(printf '%q' "$node_b")
+ssh_opts=$(printf '%q' "$ssh_opts")
+if [[ "\$kernel_matrix" == "auto" ]]; then
+  ssh_args=()
+  # shellcheck disable=SC2206
+  ssh_args=(\${ssh_opts})
+  kernel_a="\$(ssh -n "\${ssh_args[@]}" "\$node_a" uname -r)"
+  kernel_b="\$(ssh -n "\${ssh_args[@]}" "\$node_b" uname -r)"
+  [[ -n "\$kernel_a" && -n "\$kernel_b" ]] || {
+    echo "failed to collect guest kernel matrix" >&2
+    exit 1
+  }
+  kernel_matrix="\${kernel_a}_to_\${kernel_b}"
+fi
+echo "kernel_matrix=\$kernel_matrix" >>$(printf '%q' "${run_root}/run.meta")
+
 set +e
 env \\
   TRUSTIX_CROSS_HOST_A=$(printf '%q' "$node_a") \\
@@ -323,7 +344,7 @@ env \\
   TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_GATE_SUMMARY_DIR=$(printf '%q' "${run_root}/selected-production-gate") \\
   TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OUT=$(printf '%q' "${run_root}/evidence.tsv") \\
   TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_OS_MATRIX=$(printf '%q' "$os_matrix") \\
-  TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_KERNEL_MATRIX=$(printf '%q' "$kernel_matrix") \\
+  TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_KERNEL_MATRIX="\$kernel_matrix" \\
   TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_ARTIFACT=$(printf '%q' "$artifact") \\
   TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_EVIDENCE_NOTE_TEMPLATE=$(printf '%q' "$note_template") \\
   TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_KEEP_REMOTE=0 \\
