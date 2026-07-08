@@ -33,6 +33,14 @@ func TestPVECurrentRunStatusScriptSyntax(t *testing.T) {
 	}
 }
 
+func TestPVEPromoteRunEvidenceScriptSyntax(t *testing.T) {
+	bash := requireGNUBash4(t)
+	cmd := exec.Command(bash, "-n", "pve-promote-run-evidence.sh")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n pve-promote-run-evidence.sh: %v\n%s", err, out)
+	}
+}
+
 func TestPVECurrentUserspaceRefreshScriptKeepsPVEWorkspaceScoped(t *testing.T) {
 	payload, err := os.ReadFile("pve-current-userspace-refresh.sh")
 	if err != nil {
@@ -95,6 +103,63 @@ func TestPVECurrentRunStatusScriptIsReadOnlyAndScoped(t *testing.T) {
 		if strings.Contains(script, bad) {
 			t.Fatalf("pve-current-run-status.sh contains mutating or unsafe fragment %q", bad)
 		}
+	}
+}
+
+func TestPVEPromoteRunEvidenceScriptIsScopedAndDryRunByDefault(t *testing.T) {
+	payload, err := os.ReadFile("pve-promote-run-evidence.sh")
+	if err != nil {
+		t.Fatalf("read pve-promote-run-evidence.sh: %v", err)
+	}
+	script := string(payload)
+	for _, want := range []string{
+		`workspace="${TRUSTIX_PVE_WORKSPACE:-/root/trustix-pve-work}"`,
+		`promote-production-evidence.py`,
+		`args+=(--dry-run)`,
+		`"${workspace}/results/"*`,
+		`refusing --write with dirty production evidence TSVs`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("pve-promote-run-evidence.sh missing %q", want)
+		}
+	}
+	for _, bad := range []string{
+		`/root/current-`,
+		`mktemp -d /root`,
+		`rm -`,
+		`mv `,
+	} {
+		if strings.Contains(script, bad) {
+			t.Fatalf("pve-promote-run-evidence.sh contains unsafe fragment %q", bad)
+		}
+	}
+}
+
+func TestPVEPromoteRunEvidenceRejectsFailedRunBeforePromotion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pve-promote-run-evidence.sh functional test expects Linux-style paths")
+	}
+	bash := requireGNUBash4(t)
+	root := t.TempDir()
+	workspace := filepath.Join(root, "trustix-pve-work")
+	runRoot := filepath.Join(workspace, "results", "current-test-userspace-udp-production-20260708-000000")
+	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		t.Fatalf("mkdir run root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "run.meta"), []byte("exit_code=1\n"), 0o644); err != nil {
+		t.Fatalf("write run meta: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "evidence.tsv"), []byte("# evidence\nuserspace\tudp\n"), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	cmd := exec.Command(bash, "pve-promote-run-evidence.sh", "--workspace", workspace, "--run-root", runRoot)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("promote unexpectedly accepted failed run:\n%s", out)
+	}
+	if !strings.Contains(string(out), "run exit_code must be 0 before promotion") {
+		t.Fatalf("promote failure did not mention run exit code:\n%s", out)
 	}
 }
 
