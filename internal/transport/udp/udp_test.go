@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -199,9 +200,13 @@ func TestUserspaceUDPSessionStatsAdvertisesDatagramMaxPacketSize(t *testing.T) {
 	}
 }
 
-func TestUserspaceUDPDefaultDatagramLimitAvoidsUnderlayIPFragmentation(t *testing.T) {
-	if got, want := defaultUserspaceUDPDatagramMaxPacketSize(), userspaceUDPDatagramBatchMax; got != want {
-		t.Fatalf("default datagram max = %d, want safe underlay payload %d", got, want)
+func TestUserspaceUDPDefaultDatagramLimit(t *testing.T) {
+	want := userspaceUDPDatagramBatchMax
+	if runtime.GOOS == "linux" {
+		want = userspaceUDPDatagramPayloadMax
+	}
+	if got := defaultUserspaceUDPDatagramMaxPacketSize(); got != want {
+		t.Fatalf("default datagram max = %d, want %d", got, want)
 	}
 }
 
