@@ -11,7 +11,7 @@ refresh_gaps=0
 next_refresh_gap=0
 skip_hygiene="${TRUSTIX_PVE_SKIP_HYGIENE_CHECK:-0}"
 quarantine_loose_root_artifacts="${TRUSTIX_PVE_QUARANTINE_LOOSE_ROOT_ARTIFACTS:-0}"
-host_health_interval="${TRUSTIX_PVE_HOST_HEALTH_INTERVAL:-60}"
+host_health_interval="${TRUSTIX_PVE_HOST_HEALTH_INTERVAL:-0}"
 
 usage() {
   cat <<'EOF'
@@ -33,8 +33,8 @@ Options:
   --quarantine-loose-root-artifacts
                          Move TrustIX-like /root leftovers into WORKSPACE/_scratch first
   TRUSTIX_PVE_HOST_HEALTH_INTERVAL
-                         Host health sample interval in seconds. Default: 60;
-                         set to 0 to disable per-run host-health.log.
+                         Host health sample interval in seconds. Default: 0;
+                         set to a positive value to write per-run host-health.log.
 
 Required or defaulted environment:
   TRUSTIX_PVE_USERSPACE_A              default root@192.168.100.204
@@ -442,7 +442,9 @@ env \\
   bash scripts/linux-cross-host-transport-matrix.sh >$(printf '%q' "${run_root}/matrix.stdout") 2>$(printf '%q' "${run_root}/matrix.stderr")
 rc=\$?
 set -e
-sample_host_health
+if [[ "\$host_health_interval" != "0" ]]; then
+  sample_host_health
+fi
 echo "finished_at=\$(date -Is)" >>$(printf '%q' "${run_root}/run.meta")
 echo "exit_code=\$rc" >>$(printf '%q' "${run_root}/run.meta")
 exit "\$rc"
