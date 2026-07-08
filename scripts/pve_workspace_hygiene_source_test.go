@@ -16,6 +16,45 @@ func TestPVEWorkspaceHygieneScriptSyntax(t *testing.T) {
 	}
 }
 
+func TestPVECurrentUserspaceRefreshScriptSyntax(t *testing.T) {
+	bash := requireGNUBash4(t)
+	cmd := exec.Command(bash, "-n", "pve-current-userspace-refresh.sh")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n pve-current-userspace-refresh.sh: %v\n%s", err, out)
+	}
+}
+
+func TestPVECurrentUserspaceRefreshScriptKeepsPVEWorkspaceScoped(t *testing.T) {
+	payload, err := os.ReadFile("pve-current-userspace-refresh.sh")
+	if err != nil {
+		t.Fatalf("read pve-current-userspace-refresh.sh: %v", err)
+	}
+	script := string(payload)
+	mustContain := []string{
+		`workspace="${TRUSTIX_PVE_WORKSPACE:-/root/trustix-pve-work}"`,
+		`pve-workspace-hygiene.sh" --workspace "$workspace" --check`,
+		`"${workspace}/results/current-${commit_short}-userspace-${label}-production-${stamp}"`,
+		`"${scratch}/scripts/start-current-${commit_short}-userspace-${label}-production-${stamp}.sh"`,
+		`"${scratch}/pids/current-${commit_short}-userspace-${label}-production-${stamp}.pid"`,
+		`TRUSTIX_CROSS_HOST_TRANSPORT_MATRIX_KEEP_REMOTE=0`,
+		`TRUSTIX_CROSS_HOST_KEEP_REMOTE=0`,
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(script, want) {
+			t.Fatalf("pve-current-userspace-refresh.sh missing %q", want)
+		}
+	}
+	forbidden := []string{
+		`/root/current-`,
+		`mktemp -d /root`,
+	}
+	for _, bad := range forbidden {
+		if strings.Contains(script, bad) {
+			t.Fatalf("pve-current-userspace-refresh.sh contains unsafe root fragment %q", bad)
+		}
+	}
+}
+
 func TestPVEWorkspaceHygieneQuarantinesOnlyLooseArtifacts(t *testing.T) {
 	bash := requireGNUBash4(t)
 	root := t.TempDir()

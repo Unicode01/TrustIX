@@ -103,31 +103,40 @@ case "$workspace_abs" in
   *) die "workspace must be inside $root_abs, got $workspace_abs" ;;
 esac
 
-mapfile -d '' entries < <(find "$root_abs" -mindepth 1 -maxdepth 1 -print0)
-candidates=()
-for entry in "${entries[@]}"; do
+mkdir -p "${workspace_abs}/_scratch"
+entries_file="$(mktemp "${workspace_abs}/_scratch/pve-hygiene-entries.XXXXXX")"
+candidates_file="$(mktemp "${workspace_abs}/_scratch/pve-hygiene-candidates.XXXXXX")"
+cleanup_tmp() {
+  rm -f "$entries_file" "$candidates_file"
+}
+trap cleanup_tmp EXIT
+
+find "$root_abs" -mindepth 1 -maxdepth 1 -print0 >"$entries_file"
+count=0
+while IFS= read -r -d '' entry; do
   entry_abs="$(abs_path "$entry")"
   [[ "$entry_abs" == "$workspace_abs" ]] && continue
   name="$(basename "$entry_abs")"
   if is_candidate_name "$name"; then
-    candidates+=("$entry_abs")
+    printf '%s\0' "$entry_abs" >>"$candidates_file"
+    count=$((count + 1))
   fi
-done
+done <"$entries_file"
 
-if [[ "${#candidates[@]}" -eq 0 ]]; then
+if [[ "$count" -eq 0 ]]; then
   log "ok: no loose TrustIX test artifacts under $root_abs"
   exit 0
 fi
 
-printf '%s\n' "${candidates[@]}"
+tr '\0' '\n' <"$candidates_file"
 if [[ "$mode" == "check" ]]; then
-  log "found ${#candidates[@]} loose artifact(s); rerun with --quarantine to move them under $workspace_abs/_scratch"
+  log "found ${count} loose artifact(s); rerun with --quarantine to move them under $workspace_abs/_scratch"
   exit 1
 fi
 
 archive="${workspace_abs}/_scratch/root-loose-${stamp}"
 mkdir -p "$archive"
-for entry in "${candidates[@]}"; do
+while IFS= read -r -d '' entry; do
   name="$(basename "$entry")"
   target="${archive}/${name}"
   if [[ -e "$target" ]]; then
@@ -139,6 +148,6 @@ for entry in "${candidates[@]}"; do
   fi
   mv -- "$entry" "$target"
   log "moved $entry -> $target"
-done
+done <"$candidates_file"
 
-log "quarantined ${#candidates[@]} loose artifact(s) under $archive"
+log "quarantined ${count} loose artifact(s) under $archive"
