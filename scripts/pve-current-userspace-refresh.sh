@@ -7,6 +7,7 @@ transports="${TRUSTIX_PVE_USERSPACE_TRANSPORTS:-udp}"
 run_root=""
 background=1
 dry_run=0
+refresh_gaps=0
 skip_hygiene="${TRUSTIX_PVE_SKIP_HYGIENE_CHECK:-0}"
 
 usage() {
@@ -20,6 +21,7 @@ Options:
   --workspace DIR        PVE workspace root. Default: /root/trustix-pve-work
   --run-root DIR         Exact result directory. Must be under WORKSPACE/results
   --transports LIST      Comma-separated userspace transports. Default: udp
+  --refresh-gaps         Run only userspace transports whose current evidence is stale
   --all-userspace        Run all cross-host userspace defaults
   --foreground           Run the matrix in the foreground
   --dry-run              Generate the selected defaults and print the command
@@ -115,6 +117,85 @@ generate_defaults() {
   ' "$defaults_in" >"$defaults_out"
 }
 
+detect_refresh_gap_transports() {
+  local py output rc
+  if command -v python3 >/dev/null 2>&1; then
+    py=python3
+  elif command -v python >/dev/null 2>&1; then
+    py=python
+  else
+    die "--refresh-gaps requires python3 or python"
+  fi
+
+  set +e
+  output="$("$py" - "$repo_root" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+cmd = [
+    sys.executable,
+    str(repo / "scripts" / "production-transport-audit.py"),
+    "--scope",
+    "cross_host",
+    "--require-manifest",
+    "--require-current",
+    "--require-artifact-reference",
+    "--require-current-build-ancestor",
+    "--require-current-gate-tools",
+    "--require-current-runtime-tree",
+    "--fail-on-missing",
+    "--report-refresh-gaps",
+    "--json",
+]
+try:
+    completed = subprocess.run(
+        cmd,
+        cwd=str(repo),
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+except subprocess.CalledProcessError as exc:
+    if exc.stdout:
+        print(exc.stdout, file=sys.stderr, end="")
+    raise
+
+rows = json.loads(completed.stdout)
+transports = []
+for row in rows:
+    refresh = row.get("current_refresh") or {}
+    default = row.get("default") or {}
+    if refresh.get("status") != "refresh_needed":
+        continue
+    if default.get("gate_family") != "userspace":
+        continue
+    transport = default.get("transport") or ""
+    if transport and transport not in transports:
+        transports.append(transport)
+
+if not transports:
+    raise SystemExit(2)
+print(",".join(transports))
+PY
+  )"
+  rc=$?
+  set -e
+  case "$rc" in
+    0)
+      printf '%s\n' "$output"
+      ;;
+    2)
+      die "no cross-host userspace current refresh gaps detected"
+      ;;
+    *)
+      die "failed to detect current userspace refresh gaps"
+      ;;
+  esac
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --workspace)
@@ -131,6 +212,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "--transports requires LIST"
       transports="$2"
       shift 2
+      ;;
+    --refresh-gaps)
+      refresh_gaps=1
+      shift
       ;;
     --all-userspace)
       transports="udp,tcp,quic,websocket,http_connect,experimental_tcp"
@@ -158,6 +243,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if truthy "$refresh_gaps"; then
+  transports="$(detect_refresh_gap_transports)"
+  log "selected refresh-gap userspace transports: $transports"
+fi
 validate_list "$transports"
 mkdir -p "$workspace"
 workspace="$(abs_path "$workspace")"

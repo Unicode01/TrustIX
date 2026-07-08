@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -32,6 +33,9 @@ func TestPVECurrentUserspaceRefreshScriptKeepsPVEWorkspaceScoped(t *testing.T) {
 	script := string(payload)
 	mustContain := []string{
 		`workspace="${TRUSTIX_PVE_WORKSPACE:-/root/trustix-pve-work}"`,
+		`--refresh-gaps`,
+		`detect_refresh_gap_transports()`,
+		`production-transport-audit.py`,
 		`pve-workspace-hygiene.sh" --workspace "$workspace" --check`,
 		`"${workspace}/results/current-${commit_short}-userspace-${label}-production-${stamp}"`,
 		`"${scratch}/scripts/start-current-${commit_short}-userspace-${label}-production-${stamp}.sh"`,
@@ -51,6 +55,72 @@ func TestPVECurrentUserspaceRefreshScriptKeepsPVEWorkspaceScoped(t *testing.T) {
 	for _, bad := range forbidden {
 		if strings.Contains(script, bad) {
 			t.Fatalf("pve-current-userspace-refresh.sh contains unsafe root fragment %q", bad)
+		}
+	}
+}
+
+func TestPVECurrentUserspaceRefreshDetectsRefreshGapTransports(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pve-current-userspace-refresh.sh dry-run expects Linux-style paths")
+	}
+	bash := requireGNUBash4(t)
+	requirePython3(t)
+	root := t.TempDir()
+	workspace := filepath.Join(root, "trustix-pve-work")
+	runRoot := filepath.Join(workspace, "results", "refresh-gaps-dry-run")
+
+	cmd := exec.Command(
+		bash,
+		"pve-current-userspace-refresh.sh",
+		"--workspace", workspace,
+		"--run-root", runRoot,
+		"--refresh-gaps",
+		"--dry-run",
+		"--skip-hygiene-check",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("refresh-gap dry-run failed: %v\n%s", err, out)
+	}
+	text := string(out)
+	for _, want := range []string{
+		"RUN_ROOT=" + runRoot,
+		"DEFAULTS=" + filepath.Join(runRoot, "userspace-defaults.tsv"),
+		"DRY_RUN=1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, text)
+		}
+	}
+
+	payload, err := os.ReadFile(filepath.Join(runRoot, "userspace-defaults.tsv"))
+	if err != nil {
+		t.Fatalf("read generated defaults: %v", err)
+	}
+	defaults := string(payload)
+	for _, want := range []string{
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"udp\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"tcp\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"quic\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"quic\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"websocket\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"websocket\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"http_connect\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"http_connect\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"experimental_tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+	} {
+		if !strings.Contains(defaults, want) {
+			t.Fatalf("refresh-gap defaults missing %q:\n%s", want, defaults)
+		}
+	}
+	for _, bad := range []string{
+		"kernel_module",
+		"experimental_tcp\tplaintext",
+	} {
+		if strings.Contains(defaults, bad) {
+			t.Fatalf("refresh-gap defaults unexpectedly contain %q:\n%s", bad, defaults)
 		}
 	}
 }
