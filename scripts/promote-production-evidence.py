@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -108,6 +111,11 @@ def parse_args() -> argparse.Namespace:
         help="current evidence requirement TSV to update",
     )
     parser.add_argument("--dry-run", action="store_true", help="validate and print actions only")
+    parser.add_argument(
+        "--skip-post-audit",
+        action="store_true",
+        help="skip strict production-transport-audit.py validation of the updated TSVs",
+    )
     return parser.parse_args()
 
 
@@ -270,6 +278,59 @@ def validate_generated(
                 raise SystemExit(f"{row_key}: generated evidence field {field} is empty")
 
 
+def run_post_audit(
+    defaults_path: Path,
+    evidence_path: Path,
+    current_comments: list[str],
+    updated_current_rows: list[dict[str, str]],
+    append_rows: list[dict[str, str]],
+) -> None:
+    audit_path = script_dir() / "production-transport-audit.py"
+    if not audit_path.exists():
+        raise SystemExit(f"{audit_path}: production audit script not found")
+
+    with tempfile.TemporaryDirectory(prefix="trustix-promote-evidence.") as temp:
+        temp_dir = Path(temp)
+        temp_evidence = temp_dir / "production-transport-evidence.tsv"
+        temp_current = temp_dir / "production-transport-current-evidence.tsv"
+        shutil.copyfile(evidence_path, temp_evidence)
+        append_raw_rows(temp_evidence, append_rows)
+        write_tsv(temp_current, current_comments, updated_current_rows, CURRENT_COLUMNS)
+
+        cmd = [
+            sys.executable,
+            str(audit_path),
+            "--scope",
+            "cross_host",
+            "--require-manifest",
+            "--require-current",
+            "--require-artifact-reference",
+            "--require-current-build-ancestor",
+            "--require-current-gate-tools",
+            "--require-current-runtime-tree",
+            "--fail-on-missing",
+            "--defaults",
+            str(defaults_path),
+            "--evidence",
+            str(temp_evidence),
+            "--current-requirements",
+            str(temp_current),
+        ]
+        completed = subprocess.run(
+            cmd,
+            cwd=str(script_dir()),
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if completed.returncode != 0:
+            output = completed.stdout.strip()
+            if len(output) > 6000:
+                output = output[-6000:]
+            raise SystemExit("post-promotion strict audit failed:\n" + output)
+
+
 def main() -> int:
     args = parse_args()
     generated_path = resolve_path(args.generated)
@@ -302,6 +363,15 @@ def main() -> int:
     print(f"generated_rows={len(generated)}")
     print(f"append_evidence_rows={len(append_rows)}")
     print("replace_current_keys=" + ",".join(sorted(replace_by_key)))
+    if not args.skip_post_audit:
+        run_post_audit(
+            defaults_path,
+            evidence_path,
+            current_comments,
+            updated_current_rows,
+            append_rows,
+        )
+        print("post_audit=pass")
     if args.dry_run:
         return 0
 

@@ -49,6 +49,7 @@ func TestPromoteProductionEvidenceUpdatesHistoryAndCurrentRows(t *testing.T) {
 		"--defaults", defaults,
 		"--evidence", evidence,
 		"--current", current,
+		"--skip-post-audit",
 		"--dry-run",
 	)
 	dryRun.Dir = "."
@@ -67,6 +68,7 @@ func TestPromoteProductionEvidenceUpdatesHistoryAndCurrentRows(t *testing.T) {
 		"--defaults", defaults,
 		"--evidence", evidence,
 		"--current", current,
+		"--skip-post-audit",
 	)
 	cmd.Dir = "."
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -90,6 +92,64 @@ func TestPromoteProductionEvidenceUpdatesHistoryAndCurrentRows(t *testing.T) {
 		if !strings.Contains(currentText, want) {
 			t.Fatalf("current evidence missing %q:\n%s", want, currentText)
 		}
+	}
+}
+
+func TestPromoteProductionEvidencePostAuditRejectsMissingArtifact(t *testing.T) {
+	python := requirePython3(t)
+	headBytes, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Skipf("git rev-parse HEAD unavailable: %v", err)
+	}
+	head := strings.TrimSpace(string(headBytes))
+	dir := t.TempDir()
+	defaults := filepath.Join(dir, "defaults.tsv")
+	evidence := filepath.Join(dir, "evidence.tsv")
+	current := filepath.Join(dir, "current.tsv")
+	generated := filepath.Join(dir, "generated.tsv")
+
+	sha := func(ch string) string { return strings.Repeat(ch, 64) }
+	defaultHeader := "# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote\n"
+	evidenceHeader := "# gate_family\ttransport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tos_matrix\tkernel_matrix\tresult\tmin_gbps\tmin_seconds\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tevidence_note\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version\trunner_sha256\ttransport_matrix_sha256\tevidence_generator_sha256\n"
+	currentHeader := "# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version\trunner_sha256\ttransport_matrix_sha256\tevidence_generator_sha256\n"
+	writeText(t, defaults, defaultHeader+"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t1.5\t3600\tselected\n")
+	writeText(t, evidence, evidenceHeader)
+	writeText(t, current, currentHeader+"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\tdebian13-debian13\t6.12.94\ttrustix-cross-host-production-gate-manifest-v1\t"+sha("1")+"\t"+sha("2")+"\tdocs/trustix-performance-log.md#old\told\t"+sha("3")+"\ttrustix-linux-amd64\t"+head+"\t2026-07-08T00:00:00Z\tgo1.25.0\t"+sha("4")+"\t"+sha("5")+"\t"+sha("6")+"\n")
+	writeText(t, generated, evidenceHeader+strings.Join([]string{
+		"userspace", "udp", "secure", "stable", "userspace", "userspace", "cross_host",
+		"debian13-debian13", "6.12.94", "pass", "1.9", "3600",
+		"trustix-cross-host-production-gate-manifest-v1",
+		sha256File(t, "linux-cross-host-production-gate.sh"),
+		sha256File(t, "linux-cross-host-soak-verify.py"),
+		"docs/trustix-performance-log.md#missing-promote-test-anchor",
+		"current synthetic udp secure userspace evidence",
+		sha("a"), "trustix-linux-amd64", head, "2026-07-08T00:00:00Z", "go1.25.0",
+		sha256File(t, "linux-cross-host-soak-runner.sh"),
+		sha256File(t, "linux-cross-host-transport-matrix.sh"),
+		sha256File(t, "production-evidence-from-gate-summary.py"),
+	}, "\t")+"\n")
+
+	cmd := exec.Command(python, "promote-production-evidence.py",
+		"--generated", generated,
+		"--defaults", defaults,
+		"--evidence", evidence,
+		"--current", current,
+		"--dry-run",
+	)
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("promotion unexpectedly accepted missing artifact:\n%s", out)
+	}
+	if !strings.Contains(string(out), "post-promotion strict audit failed") ||
+		!strings.Contains(string(out), "missing-promote-test-anchor") {
+		t.Fatalf("promotion failure did not mention strict audit artifact failure:\n%s", out)
+	}
+	if got := readText(t, evidence); strings.Contains(got, "missing-promote-test-anchor") {
+		t.Fatalf("dry-run post-audit failure changed evidence file:\n%s", got)
+	}
+	if got := readText(t, current); strings.Contains(got, "missing-promote-test-anchor") {
+		t.Fatalf("dry-run post-audit failure changed current file:\n%s", got)
 	}
 }
 
