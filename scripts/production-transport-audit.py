@@ -452,6 +452,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="exit nonzero if any audited default lacks matching evidence",
     )
+    parser.add_argument(
+        "--report-refresh-gaps",
+        action="store_true",
+        help=(
+            "include diagnostics for current evidence rows that still rely on "
+            "legacy/unpinned tooling, non-HEAD builds, or relevant runtime tree "
+            "changes since the recorded build"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -974,8 +983,12 @@ def current_runtime_path_change_irrelevant(
     return path_changed_only_by(resolved_commit, normalized, allowed_change_commits)
 
 
-def current_runtime_tree_errors(row: dict[str, str]) -> list[str]:
-    if is_current_toolchain_legacy(row):
+def current_runtime_tree_errors(
+    row: dict[str, str],
+    *,
+    allow_legacy_skip: bool = True,
+) -> list[str]:
+    if allow_legacy_skip and is_current_toolchain_legacy(row):
         return []
     build_commit = row["build_commit"]
     value = build_commit.strip()
@@ -1008,6 +1021,20 @@ def current_runtime_tree_errors(row: dict[str, str]) -> list[str]:
         "current evidence build_commit does not cover runtime/dataplane tree changes "
         f"since {value!r}: {shown}"
     ]
+
+
+def current_refresh_gap_reasons(row: dict[str, str]) -> list[str]:
+    reasons: list[str] = []
+    for field in TOOLCHAIN_SHA256_FIELDS:
+        if not row[field].strip():
+            reasons.append(f"{field} is empty; refresh with generated current-tool evidence")
+    reasons.extend(
+        current_runtime_tree_errors(
+            row,
+            allow_legacy_skip=False,
+        )
+    )
+    return reasons
 
 
 def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> dict[str, dict[str, str]]:
@@ -1111,27 +1138,38 @@ def audit(args: argparse.Namespace) -> list[dict[str, Any]]:
             result["evidence"] = compact_evidence(accepted[0])
         if current_requirement is not None:
             result["current_requirement"] = compact_current_requirement(current_requirement)
+            if args.report_refresh_gaps:
+                refresh_reasons = current_refresh_gap_reasons(current_requirement)
+                result["current_refresh"] = {
+                    "status": "refresh_needed" if refresh_reasons else "current",
+                    "reasons": refresh_reasons,
+                }
         if rejected:
             result["rejected_candidates"] = rejected
         results.append(result)
     return results
 
 
-def emit_text(results: list[dict[str, Any]]) -> None:
+def emit_text(results: list[dict[str, Any]], *, report_refresh_gaps: bool = False) -> None:
     for row in results:
         evidence = row.get("evidence") or {}
-        print(
-            "\t".join(
+        fields = [
+            row["status"],
+            row["key"],
+            str(evidence.get("min_gbps", "")),
+            str(evidence.get("min_seconds", "")),
+            str(evidence.get("gate_manifest_schema", "")),
+            str(evidence.get("artifact", "")),
+        ]
+        if report_refresh_gaps:
+            refresh = row.get("current_refresh") or {}
+            fields.extend(
                 [
-                    row["status"],
-                    row["key"],
-                    str(evidence.get("min_gbps", "")),
-                    str(evidence.get("min_seconds", "")),
-                    str(evidence.get("gate_manifest_schema", "")),
-                    str(evidence.get("artifact", "")),
+                    str(refresh.get("status", "")),
+                    "; ".join(str(reason) for reason in refresh.get("reasons", [])),
                 ]
             )
-        )
+        print("\t".join(fields))
 
 
 def emit_missing_diagnostics(missing: list[dict[str, Any]]) -> None:
@@ -1152,7 +1190,7 @@ def main() -> int:
     if args.json:
         print(json.dumps(results, indent=2, sort_keys=True))
     else:
-        emit_text(results)
+        emit_text(results, report_refresh_gaps=args.report_refresh_gaps)
     missing = [row for row in results if row["status"] != "pass"]
     if args.fail_on_missing and missing:
         print(

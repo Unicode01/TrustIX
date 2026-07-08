@@ -2579,6 +2579,60 @@ func TestCurrentProductionEvidenceToolchainLegacyAllowlistIsExact(t *testing.T) 
 	}
 }
 
+func TestProductionTransportAuditReportsCurrentRefreshGaps(t *testing.T) {
+	python := requirePython3(t)
+	cmd := exec.Command(python, "production-transport-audit.py",
+		"--scope", "cross_host",
+		"--require-manifest",
+		"--require-current",
+		"--require-artifact-reference",
+		"--require-current-build-ancestor",
+		"--require-current-gate-tools",
+		"--require-current-runtime-tree",
+		"--fail-on-missing",
+		"--report-refresh-gaps",
+		"--json",
+	)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production transport audit with refresh report failed: %v\n%s", err, output)
+	}
+	var rows []struct {
+		Key            string `json:"key"`
+		CurrentRefresh struct {
+			Status  string   `json:"status"`
+			Reasons []string `json:"reasons"`
+		} `json:"current_refresh"`
+		CurrentRequirement struct {
+			Artifact string `json:"artifact"`
+		} `json:"current_requirement"`
+	}
+	if err := json.Unmarshal(output, &rows); err != nil {
+		t.Fatalf("decode audit refresh JSON: %v\n%s", err, output)
+	}
+	legacyAllowlist := loadAuditCurrentToolchainLegacyRequirementKeys(t)
+	refreshNeeded := map[string]bool{}
+	for _, row := range rows {
+		legacyKey := row.Key + "|" + row.CurrentRequirement.Artifact
+		if row.CurrentRefresh.Status == "refresh_needed" {
+			refreshNeeded[legacyKey] = true
+			if len(row.CurrentRefresh.Reasons) == 0 {
+				t.Fatalf("refresh-needed row lacks reasons: %+v\n%s", row, output)
+			}
+			continue
+		}
+		if legacyAllowlist[legacyKey] {
+			t.Fatalf("legacy current evidence row was not reported as refresh-needed: %s\n%s", legacyKey, output)
+		}
+	}
+	for legacyKey := range legacyAllowlist {
+		if !refreshNeeded[legacyKey] {
+			t.Fatalf("legacy current evidence row missing from refresh report: %s\n%s", legacyKey, output)
+		}
+	}
+}
+
 func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 	python := requirePython3(t)
 	cmd := exec.Command(python, "production-transport-audit.py",
