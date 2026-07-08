@@ -119,9 +119,6 @@ func dataSessionTXGSOCoalesceDefaultForStats(stats transport.TransportStats) boo
 }
 
 func dataSessionTXGSOCoalesceDefaultForRuntime(runtime *dataSessionRuntime, stats transport.TransportStats) bool {
-	if !stats.Encrypted && dataSessionRuntimeTransport(runtime) == transport.ProtocolUDP {
-		return false
-	}
 	if stats.Encrypted &&
 		stats.CryptoPlacement == "userspace" &&
 		stats.Datagram &&

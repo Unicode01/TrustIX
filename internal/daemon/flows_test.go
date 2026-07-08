@@ -867,7 +867,7 @@ func TestPrepareCaptureForwardWireBatchDefaultsOffForPlaintext(t *testing.T) {
 	}
 }
 
-func TestPrepareCaptureForwardWireBatchDefaultsOffForUDPPlaintext(t *testing.T) {
+func TestPrepareCaptureForwardWireBatchDefaultsOnForUDPPlaintext(t *testing.T) {
 	daemon := &Daemon{}
 	session := &recordingNativeBatchSession{stats: transport.TransportStats{
 		NativeBatching: true,
@@ -886,12 +886,15 @@ func TestPrepareCaptureForwardWireBatchDefaultsOffForUDPPlaintext(t *testing.T) 
 
 	wire := daemon.prepareCaptureForwardWireBatch(runtime, session, batch, &scratch)
 
-	if len(wire.Packets) != 2 {
-		t.Fatalf("wire packets = %d, want default UDP plaintext uncoalesced 2", len(wire.Packets))
+	if len(wire.Packets) != 1 {
+		t.Fatalf("wire packets = %d, want default UDP plaintext coalesced 1", len(wire.Packets))
+	}
+	if got := string(wire.Packets[0][40:]); got != "helloworld" {
+		t.Fatalf("coalesced payload = %q, want helloworld", got)
 	}
 	counters := daemon.dataStats.snapshot()
-	if counters.SendGSOCoalesceBatches != 0 || counters.SendGSOCoalescePackets != 0 || counters.SendGSOCoalesceWires != 0 {
-		t.Fatalf("TX GSO coalesce counters = %+v, want UDP plaintext default disabled", counters)
+	if counters.SendGSOCoalesceBatches != 1 || counters.SendGSOCoalescePackets != 2 || counters.SendGSOCoalesceWires != 1 {
+		t.Fatalf("TX GSO coalesce counters = %+v, want UDP plaintext default enabled", counters)
 	}
 }
 
