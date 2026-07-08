@@ -150,8 +150,11 @@ else
 fi
 
 printf '== root top trustix-like entries ==\n'
-find /root -mindepth 1 -maxdepth 1 \( -name 'trustix*' -o -name 'current-*' -o -name '*.tar' -o -name '*.tsv' \) \
-  -printf '%M %s %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null || true
+while IFS= read -r -d '' entry; do
+  entry_abs="$(abs_path_existing "$entry")"
+  [[ "$entry_abs" == "$workspace" ]] && continue
+  find "$entry_abs" -maxdepth 0 -printf '%M %s %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null || true
+done < <(find /root -mindepth 1 -maxdepth 1 \( -name 'trustix*' -o -name 'current-*' -o -name '*.tar' -o -name '*.tsv' \) -print0 2>/dev/null) || true
 
 printf '== run tree ==\n'
 find "$run_root" -maxdepth 2 -printf '%M %s %TY-%Tm-%Td %TH:%TM %p\n' | sort || true
@@ -159,10 +162,17 @@ find "$run_root" -maxdepth 2 -printf '%M %s %TY-%Tm-%Td %TH:%TM %p\n' | sort || 
 print_file_if_present "run.meta" "${run_root}/run.meta"
 
 printf '== pid ==\n'
+pid_status="missing"
 if [[ -f "$pid_file" ]]; then
   pid="$(sed -n '1p' "$pid_file")"
   printf 'pid_file=%s\npid=%s\n' "$pid_file" "$pid"
-  ps -fp "$pid" || true
+  if [[ "$pid" =~ ^[0-9]+$ ]] && ps -p "$pid" >/dev/null 2>&1; then
+    pid_status="alive"
+    ps -fp "$pid" || true
+  else
+    pid_status="stale"
+    printf 'pid_status=stale\n'
+  fi
 else
   printf 'missing: %s\n' "$pid_file"
 fi
@@ -202,6 +212,8 @@ if [[ "$exit_code" == "0" && -s "${run_root}/evidence.tsv" ]]; then
   printf 'status=ready_to_review_or_promote\n'
 elif [[ -n "$exit_code" ]]; then
   printf 'status=finished_nonzero\nexit_code=%s\n' "$exit_code"
+elif [[ "$pid_status" == "stale" ]]; then
+  printf 'status=interrupted_or_stale\n'
 else
   printf 'status=running_or_incomplete\n'
 fi

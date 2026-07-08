@@ -53,11 +53,14 @@ func TestPVECurrentUserspaceRefreshScriptKeepsPVEWorkspaceScoped(t *testing.T) {
 		`--refresh-gaps`,
 		`--next-refresh-gap`,
 		`--quarantine-loose-root-artifacts`,
+		`TRUSTIX_PVE_HOST_HEALTH_INTERVAL`,
 		`detect_refresh_gap_transports()`,
 		`production-transport-audit.py`,
 		`hygiene_mode="--check"`,
 		`hygiene_mode="--quarantine"`,
 		`pve-workspace-hygiene.sh" --workspace "$workspace" "$hygiene_mode"`,
+		`host-health.log`,
+		`sample_host_health()`,
 		`"${workspace}/results/current-${commit_short}-userspace-${label}-production-${stamp}"`,
 		`"${scratch}/scripts/start-current-${commit_short}-userspace-${label}-production-${stamp}.sh"`,
 		`"${scratch}/pids/current-${commit_short}-userspace-${label}-production-${stamp}.pid"`,
@@ -94,6 +97,7 @@ func TestPVECurrentRunStatusScriptIsReadOnlyAndScoped(t *testing.T) {
 		`"${workspace}/results/"*`,
 		`root top trustix-like entries`,
 		`status=ready_to_review_or_promote`,
+		`status=interrupted_or_stale`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("pve-current-run-status.sh missing %q", want)
@@ -157,6 +161,44 @@ func TestPVECurrentRunStatusSelectsLatestProductionRun(t *testing.T) {
 	}
 	if !strings.Contains(string(userspaceOut), "run_root="+oldUserspace) {
 		t.Fatalf("latest userspace did not stay scoped to userspace runs:\n%s", userspaceOut)
+	}
+}
+
+func TestPVECurrentRunStatusDetectsStalePID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pve-current-run-status.sh functional test expects Linux-style paths")
+	}
+	bash := requireGNUBash4(t)
+	root := t.TempDir()
+	workspace := filepath.Join(root, "trustix-pve-work")
+	runName := "current-test-userspace-udp-production-20260708-000000"
+	runRoot := filepath.Join(workspace, "results", runName)
+	pidDir := filepath.Join(workspace, "_scratch", "pids")
+	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		t.Fatalf("mkdir run root: %v", err)
+	}
+	if err := os.MkdirAll(pidDir, 0o755); err != nil {
+		t.Fatalf("mkdir pid dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "run.meta"), []byte("started_at=2026-07-08T00:00:00+08:00\n"), 0o644); err != nil {
+		t.Fatalf("write run meta: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pidDir, runName+".pid"), []byte("999999999\n"), 0o644); err != nil {
+		t.Fatalf("write pid file: %v", err)
+	}
+
+	cmd := exec.Command(bash, "pve-current-run-status.sh", "--workspace", workspace, "--run-root", runRoot, "--tail", "0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run status failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"pid_status=stale",
+		"status=interrupted_or_stale",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("stale pid status output missing %q:\n%s", want, out)
+		}
 	}
 }
 

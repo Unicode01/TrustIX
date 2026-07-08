@@ -11,6 +11,7 @@ refresh_gaps=0
 next_refresh_gap=0
 skip_hygiene="${TRUSTIX_PVE_SKIP_HYGIENE_CHECK:-0}"
 quarantine_loose_root_artifacts="${TRUSTIX_PVE_QUARANTINE_LOOSE_ROOT_ARTIFACTS:-0}"
+host_health_interval="${TRUSTIX_PVE_HOST_HEALTH_INTERVAL:-60}"
 
 usage() {
   cat <<'EOF'
@@ -31,6 +32,9 @@ Options:
   --skip-hygiene-check   Do not run pve-workspace-hygiene.sh before starting
   --quarantine-loose-root-artifacts
                          Move TrustIX-like /root leftovers into WORKSPACE/_scratch first
+  TRUSTIX_PVE_HOST_HEALTH_INTERVAL
+                         Host health sample interval in seconds. Default: 60;
+                         set to 0 to disable per-run host-health.log.
 
 Required or defaulted environment:
   TRUSTIX_PVE_USERSPACE_A              default root@192.168.100.204
@@ -272,6 +276,9 @@ if truthy "$refresh_gaps"; then
   log "selected refresh-gap userspace transports: $transports"
 fi
 validate_list "$transports"
+case "$host_health_interval" in
+  ''|*[!0-9]*) die "TRUSTIX_PVE_HOST_HEALTH_INTERVAL must be a non-negative integer" ;;
+esac
 mkdir -p "$workspace"
 workspace="$(abs_path "$workspace")"
 case "$workspace" in
@@ -331,7 +338,63 @@ cd $(printf '%q' "$repo_root")
   echo "repo=$(printf '%q' "$repo_root")"
   echo "commit=${commit_short}"
   echo "transports=${transports}"
+  echo "host_boot_id=\$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+  echo "host_health_interval=${host_health_interval}"
+  echo "host_health_log=$(printf '%q' "${run_root}/host-health.log")"
 } >$(printf '%q' "${run_root}/run.meta")
+
+host_health_interval=$(printf '%q' "$host_health_interval")
+host_health_log=$(printf '%q' "${run_root}/host-health.log")
+host_health_pid=""
+
+sample_host_health() {
+  {
+    printf '===== %s =====\n' "\$(date -Is)"
+    printf 'boot_id=%s\n' "\$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+    printf 'kernel=%s\n' "\$(uname -r 2>/dev/null || true)"
+    uptime 2>/dev/null || true
+    free -h 2>/dev/null || true
+    df -h / $(printf '%q' "$workspace") /mnt/sdb 2>/dev/null || true
+    if command -v smartctl >/dev/null 2>&1; then
+      for dev in /dev/sda /dev/sdb; do
+        if [[ -e "\$dev" ]]; then
+          printf -- '--- smart %s ---\n' "\$dev"
+          smartctl -H -A "\$dev" 2>/dev/null | egrep -i 'SMART overall|Power_On_Hours|Percent_Lifetime|Wear|Reallocated|Pending|Offline_Uncorrectable|UDMA_CRC|Temperature|Command_Timeout|Reported_Uncorrect' || true
+        fi
+      done
+    fi
+    printf -- '--- services ---\n'
+    systemctl is-active ssh.service pveproxy.service pvedaemon.service pvestatd.service forward.service 2>/dev/null || true
+    printf -- '--- kernel warnings tail ---\n'
+    journalctl -k -b --since '2 min ago' -p warning..emerg --no-pager -o short-iso 2>/dev/null | tail -n 80 || true
+    printf '\n'
+  } >>"\$host_health_log" 2>&1
+}
+
+start_host_health_monitor() {
+  [[ "\$host_health_interval" == "0" ]] && return 0
+  sample_host_health
+  (
+    while true; do
+      sleep "\$host_health_interval"
+      sample_host_health
+    done
+  ) &
+  host_health_pid="\$!"
+  echo "host_health_pid=\$host_health_pid" >>$(printf '%q' "${run_root}/run.meta")
+}
+
+stop_host_health_monitor() {
+  local rc=\$?
+  if [[ -n "\$host_health_pid" ]]; then
+    kill "\$host_health_pid" >/dev/null 2>&1 || true
+    wait "\$host_health_pid" >/dev/null 2>&1 || true
+  fi
+  return "\$rc"
+}
+trap stop_host_health_monitor EXIT
+
+start_host_health_monitor
 
 kernel_matrix=$(printf '%q' "$kernel_matrix")
 node_a=$(printf '%q' "$node_a")
@@ -379,6 +442,7 @@ env \\
   bash scripts/linux-cross-host-transport-matrix.sh >$(printf '%q' "${run_root}/matrix.stdout") 2>$(printf '%q' "${run_root}/matrix.stderr")
 rc=\$?
 set -e
+sample_host_health
 echo "finished_at=\$(date -Is)" >>$(printf '%q' "${run_root}/run.meta")
 echo "exit_code=\$rc" >>$(printf '%q' "${run_root}/run.meta")
 exit "\$rc"
