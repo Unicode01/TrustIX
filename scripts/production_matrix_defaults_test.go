@@ -1275,6 +1275,70 @@ func TestProductionEvidenceFromGateSummary(t *testing.T) {
 		}
 	}
 
+	directGateCase := "direct-production-gate-userspace"
+	matrixRow["gate_case"] = directGateCase
+	matrixPayload, err = json.Marshal(withMatrixToolchain(matrixRow))
+	if err != nil {
+		t.Fatalf("marshal matrix row with direct gate case: %v", err)
+	}
+	if err := os.WriteFile(matrixSummary, append(matrixPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write matrix summary with direct gate case: %v", err)
+	}
+	gateRow["case"] = directGateCase
+	gatePayload, err = json.Marshal(gateRow)
+	if err != nil {
+		t.Fatalf("marshal direct-gate row: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "userspace-udp-secure.jsonl"), append(gatePayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write direct-gate summary: %v", err)
+	}
+	manifest["cases"] = map[string]any{
+		"userspace": directGateCase + "=" + slashPath(filepath.Join(workdir, "udp-secure-stable-userspace-userspace-userspace")),
+	}
+	manifest["case_min_gbps"] = map[string]any{
+		"userspace": directGateCase + "=1.5",
+	}
+	manifest["case_min_seconds"] = map[string]any{
+		"userspace": directGateCase + "=3600",
+	}
+	manifestPayload, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal direct-gate manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gateSummaryDir, "production-gate-manifest.json"), append(manifestPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write direct-gate manifest: %v", err)
+	}
+	directGateCmd := exec.Command(python, "production-evidence-from-gate-summary.py",
+		"--matrix-summary", slashPath(matrixSummary),
+		"--gate-summary-dir", slashPath(gateSummaryDir),
+		"--artifact", "docs/trustix-performance-log.md#example-production-gate",
+		"--note-template", "{transport} {encryption} {gate_family} evidence",
+	)
+	directGateCmd.Dir = "."
+	directGateOutput, err := directGateCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("production evidence generator rejected direct gate case alias: %v\n%s", err, directGateOutput)
+	}
+	directGateLines := strings.Split(strings.TrimSpace(string(directGateOutput)), "\n")
+	if len(directGateLines) != 1 {
+		t.Fatalf("expected one direct-gate evidence row, got %d:\n%s", len(directGateLines), directGateOutput)
+	}
+	directGateFields := strings.Split(directGateLines[0], "\t")
+	for idx, want := range wantFields {
+		if directGateFields[idx] != want {
+			t.Fatalf("direct-gate field %d = %q, want %q\n%s", idx, directGateFields[idx], want, directGateOutput)
+		}
+	}
+
+	delete(matrixRow, "gate_case")
+	matrixPayload, err = json.Marshal(withMatrixToolchain(matrixRow))
+	if err != nil {
+		t.Fatalf("marshal restored matrix row after direct gate case: %v", err)
+	}
+	if err := os.WriteFile(matrixSummary, append(matrixPayload, '\n'), 0o644); err != nil {
+		t.Fatalf("write restored matrix summary after direct gate case: %v", err)
+	}
+
 	gateRow["case"] = "udp-secure-stable-userspace-userspace-userspace"
 	gatePayload, err = json.Marshal(gateRow)
 	if err != nil {
@@ -3610,11 +3674,11 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"tc_direct":               "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
 		"full_kmod":               "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-exp-tcp-full-kmod-production",
 		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-exp-tcp-full-kmod-production",
-		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-openwrt24107-debian13-full-kmod-production",
+		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-08-zaozhuang-pve-6d3a219-openwrt24107-debian13-full-kmod-production",
 		"secure_kudp":             "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-secure-kernel-production",
 		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#2026-07-07-zaozhuang-pve-1dfaf51-secure-exp-tcp-kernel-production",
 		"route_gso":               "docs/trustix-performance-log.md#2026-07-07-zaozhuang-pve-1dfaf51-route-gso-postreboot-production",
-		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-openwrt24107-debian13-full-kmod-production",
+		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-08-zaozhuang-pve-6d3a219-openwrt24107-debian13-full-kmod-production",
 		"userspace":               "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
 		"userspace_tc":            "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
 	}

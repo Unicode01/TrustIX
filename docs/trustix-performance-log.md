@@ -31,9 +31,57 @@ Current production-default evidence boundary:
 | Debian userspace defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. A fresh 8c2eebc userspace queue is running and has not been promoted yet. |
 | Debian userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` for GRE/IPIP/VXLAN secure and plaintext userspace-TC tunnels | Current-head userspace-TC evidence uses `datapath=tc_xdp`, `crypto_placement=userspace`, current production gate, runner, transport matrix, and evidence generator SHA256 values. Both nodes kept stable boot IDs and clean kernel/pstore artifacts. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `1dfaf51caac8bc03177de4ec428e23659db69173` | This is a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. Current direct kfunc and route-TCP GSO helper error gates passed cleanly. |
-| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current-head OpenWrt-Debian UDP plaintext full-kmod evidence uses current production gate, verifier, runner, transport matrix, and evidence generator SHA256 values. Both nodes loaded the full-kmod fast path, boot IDs stayed stable, and pstore/kernel logs were clean. |
-| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current-head OpenWrt-Debian experimental TCP plaintext full-kmod evidence uses the dedicated full-kmod gate family and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
+| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `6d3a219f86ec` | Current-head OpenWrt-Debian UDP plaintext full-kmod evidence uses current production gate, verifier, runner, transport matrix, and evidence generator SHA256 values. Both nodes loaded the full-kmod fast path, boot IDs stayed stable, pstore/kernel logs were clean, and module error counters stayed zero. |
+| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `6d3a219f86ec` | Current-head OpenWrt-Debian experimental TCP plaintext full-kmod evidence uses the dedicated full-kmod gate family and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-07-08
+
+<a id="2026-07-08-zaozhuang-pve-6d3a219-openwrt24107-debian13-full-kmod-production"></a>
+
+### Zaozhuang PVE 6d3a219 OpenWrt-Debian full-kmod production gate
+
+PVE host `120.220.44.72:8006` ran the OpenWrt-to-Debian full-kmod production
+gate on disposable VM IDs 202 and 203. VM100 and all 1xx guests were not
+modified. Evidence artifacts are preserved on the PVE host at:
+
+`/root/trustix-pve-work/results/owdeb-6d3a219-production-20260707-143025`
+
+VM202 ran OpenWrt 24.10.7 x86_64 kernel `6.6.141`, with 4 vCPU and underlay
+`10.203.3.202` on `eth1`. VM203 ran Debian 13 kernel
+`6.12.94+deb13-cloud-amd64`, with 4 vCPU and underlay `10.203.3.203` on
+`eth1`. The TrustIX binary was `trustix-linux-amd64`, commit `6d3a219f86ec`,
+build time `2026-07-07T09:46:04Z`, Go `go1.25.0`, and binary SHA256
+`a86913db43db8fc17d722df16ed5053e72d8f5366dfb5b656ffae827e63ea2e7`.
+
+The production gate result was `pass` for both selected OpenWrt-Debian
+full-kmod families:
+
+| Case | Sessions | OpenWrt to Debian | Debian to OpenWrt | Gate |
+| --- | ---: | ---: | ---: | ---: |
+| `owdeb_full_kmod` UDP plaintext full-kmod | P8 | 3.554661 Gbps received, 3.554714 Gbps sent | 4.898228 Gbps received, 4.898301 Gbps sent | 3 Gbps, 3600s |
+| `owdeb_exp_tcp_full_kmod` experimental TCP plaintext full-kmod | P16 | 7.329137 Gbps received, 7.329261 Gbps sent | 8.141763 Gbps received, 8.141837 Gbps sent | 4 Gbps, 3600s |
+
+The gate used `trustix-cross-host-production-gate-manifest-v1`, production gate
+SHA256 `1371160cca3cceb50617f1cae8704b1755b858bcf08ca530f32b7d46245b19d3`,
+verifier SHA256 `0a171df97959d753eeebcb6bea17199d5a1bda69bafd2720b49259068768aee9`,
+cross-host runner SHA256 `c1ebd81698f0a308a2bfa4737daae06d9c09b07c56310fcb49bcf34b3d01a54c`,
+and transport matrix SHA256
+`dbb478869377c98e4a6727309c413418dea46a49cc9191dc49d50c111ac743db`.
+
+Both nodes kept stable boot IDs throughout the gate:
+OpenWrt `187fd5cc-e0d4-4b8e-ba57-1a4d1e164d22` and Debian
+`701afccb-7cf4-420b-9d26-0f8c844dc238`. Pstore artifacts were present for both
+nodes, kernel log findings were empty, `tix-lan` kept `tx_queue_len=1000`, and
+both nodes loaded `trustix_datapath`. Full plaintext `rx_worker` and
+`tx_plaintext` were active; covered module selftest, allocation, delivery, GSO,
+stale-wire, missing-session, queue-drop, and xmit error counters stayed zero.
+
+A previous run under
+`/root/trustix-pve-work/results/owdeb-6d3a219-production-20260707-101946`
+exercised the same OpenWrt-Debian traffic and also stayed clean, but the
+production gate rejected it only because VM202 still had 2 vCPU. The promoted
+evidence is the later 4-vCPU run above.
 
 ## 2026-07-07
 

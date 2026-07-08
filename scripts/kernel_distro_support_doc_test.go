@@ -14,13 +14,16 @@ func TestKernelDistroSupportUsesCurrentProductionEvidenceBoundary(t *testing.T) 
 	source := string(payload)
 	for _, want := range []string{
 		"later 3600s manifest-backed rechecks now provide the",
-		"2026-06-27, 2026-07-02, 2026-07-03, 2026-07-04, 2026-07-05, and 2026-07-07",
-		"most recently on 2026-07-05",
+		"2026-06-27, 2026-07-02, 2026-07-03, 2026-07-04, 2026-07-05, 2026-07-07, and 2026-07-08",
+		"most recently on 2026-07-08",
+		"`6d3a219f86ec`",
 		"`8c2eebccbcf031f0133c8dbf192d826526c5187c`",
 		"full-kmod\nmodules loaded on both nodes",
 		"OpenWrt-Debian full-kmod plaintext",
+		"3.554661 Gbps",
 		"3.995213 Gbps",
 		"OpenWrt-Debian experimental TCP full-kmod plaintext",
+		"7.329137 Gbps",
 		"7.754582 Gbps",
 		"Full-kmod plaintext",
 		"5.053889 Gbps",

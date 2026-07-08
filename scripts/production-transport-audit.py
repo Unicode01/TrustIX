@@ -231,6 +231,16 @@ CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
     "exp_tcp_full_kmod",
     "secure_kudp",
 }
+USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH = {
+    # dd8da09 caps the default userspace UDP datagram payload below MTU. It
+    # does not affect full-kmod production rows whose verifier artifacts prove
+    # capture_forwarder_suppressed=true and kernel_datapath_full_plaintext was
+    # the provider; userspace UDP rows still need fresh evidence for this
+    # runtime/default change.
+    "internal/transport/udp/udp_read_packet_size_linux.go": {
+        "dd8da09cfc73e14cc7dcc771d08505f850deae94",
+    },
+}
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     # This manifest-v1 gate predates the exp_tcp_full_kmod family. The existing
     # families below kept equivalent verifier semantics when the dedicated
@@ -305,6 +315,22 @@ VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     },
 }
 TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
+    "evidence_generator_sha256": {
+        # 524a170 only adds direct production-gate short-case alias support
+        # (`gate_case`). Evidence rows generated from canonical matrix/gate
+        # case names keep the same verification semantics.
+        "6c5ab13a29f7a2cb0e0b6b941bfa8abd749c464ac792a771baf63f70b40da0fb": {
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "exp_tcp_full_kmod",
+            "owdeb_exp_tcp_full_kmod",
+            "secure_kudp",
+            "secure_exp_tcp_kernel",
+            "route_gso",
+        },
+    },
     "runner_sha256": {
         # These rows were re-gated from existing 3600s artifacts; the verifier,
         # matrix, and evidence generator are current, but the soak runner hash
@@ -886,6 +912,8 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
             "secure_exp_tcp_kernel",
             "route_gso",
         }
+    if normalized.startswith("internal/transport/udp/"):
+        return transport in {"udp", "kernel_udp"} or gate_class == "full_kmod"
     if normalized.startswith("internal/transport/quic/"):
         return transport == "quic"
     if normalized.startswith("internal/daemon/"):
@@ -934,6 +962,12 @@ def current_runtime_path_change_irrelevant(
             allowed_change_commits.update(allowed_commits)
     allowed_commits = CAPTURE_FORWARDER_DEFAULT_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class in CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES:
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits and (
+        gate_class in FULL_DATAPATH_MODULE_GATE_CLASSES
+        or gate_class in KERNEL_UDP_DIRECT_POLICY_GATE_CLASSES
+    ):
         allowed_change_commits.update(allowed_commits)
     if not allowed_change_commits:
         return False

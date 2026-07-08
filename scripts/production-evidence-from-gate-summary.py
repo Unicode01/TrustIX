@@ -50,7 +50,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Convert linux-cross-host-transport-matrix summary.jsonl plus "
-            "selected production-gate summary files into production evidence TSV rows."
+            "selected production-gate summary files into production evidence TSV rows. "
+            "Matrix rows may include gate_case when a production gate was run "
+            "directly with a short case name."
         )
     )
     parser.add_argument("--matrix-summary", required=True, help="matrix summary.jsonl")
@@ -164,7 +166,9 @@ def load_matrix_rows(path: Path) -> dict[str, dict[str, Any]]:
         case = str(row.get("case") or "")
         if not case:
             raise SystemExit(f"{path}: matrix row lacks case: {row}")
-        keys = unique_nonempty_strings([case, str(row.get("runner_case") or "")])
+        keys = unique_nonempty_strings(
+            [case, str(row.get("runner_case") or ""), str(row.get("gate_case") or "")]
+        )
         for key in keys:
             if key in rows_by_case and rows_by_case[key] is not row:
                 raise SystemExit(f"{path}: duplicate matrix case lookup key {key!r}")
@@ -669,6 +673,7 @@ def require_manifest_case_alignment(
         str(gate_row.get("case") or ""),
         str(matrix_row.get("case") or ""),
         str(matrix_row.get("runner_case") or ""),
+        str(matrix_row.get("gate_case") or ""),
     ])
     gate_family = matrix_string_field(matrix_row, "gate_family", case)
     family_class = gate_family_class(gate_family)
