@@ -203,7 +203,7 @@ func TestUserspaceUDPSessionStatsAdvertisesDatagramMaxPacketSize(t *testing.T) {
 func TestUserspaceUDPDefaultDatagramLimit(t *testing.T) {
 	want := userspaceUDPDatagramBatchMax
 	if runtime.GOOS == "linux" {
-		want = userspaceUDPDatagramPayloadMax
+		want = userspaceUDPDatagramDefaultMax
 	}
 	if got := defaultUserspaceUDPDatagramMaxPacketSize(); got != want {
 		t.Fatalf("default datagram max = %d, want %d", got, want)

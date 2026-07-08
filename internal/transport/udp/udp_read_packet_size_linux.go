@@ -7,5 +7,5 @@ func defaultUserspaceUDPReadPacketSize() int {
 }
 
 func defaultUserspaceUDPDatagramMaxPacketSize() int {
-	return userspaceUDPDatagramPayloadMax
+	return userspaceUDPDatagramDefaultMax
 }

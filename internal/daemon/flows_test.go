@@ -898,6 +898,37 @@ func TestPrepareCaptureForwardWireBatchDefaultsOnForLargeSocketDatagram(t *testi
 	}
 }
 
+func TestPrepareCaptureForwardWireBatchDefaultsOnForBoundedSocketDatagram(t *testing.T) {
+	daemon := &Daemon{}
+	session := &recordingNativeBatchSession{stats: transport.TransportStats{
+		NativeBatching: true,
+		Datagram:       true,
+		MaxPacketSize:  16 * 1024,
+	}}
+	runtime := &dataSessionRuntime{session: session}
+	var scratch captureForwardScratch
+	scratch.begin(2, daemon)
+	packetA := tcpPayloadIPv4PacketWithSeq(1, []byte("hello"))
+	packetB := tcpPayloadIPv4PacketWithSeq(6, []byte("world"))
+	batch := prepareCaptureForwardBatch([]captureForwardBatchCandidate{
+		{Packet: packetA},
+		{Packet: packetB},
+	}, &scratch)
+
+	wire := daemon.prepareCaptureForwardWireBatch(runtime, session, batch, &scratch)
+
+	if len(wire.Packets) != 1 {
+		t.Fatalf("wire packets = %d, want bounded socket datagram coalesced 1", len(wire.Packets))
+	}
+	if got := string(wire.Packets[0][40:]); got != "helloworld" {
+		t.Fatalf("coalesced payload = %q", got)
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.SendGSOCoalesceBatches != 1 || counters.SendGSOCoalescePackets != 2 || counters.SendGSOCoalesceWires != 1 {
+		t.Fatalf("TX GSO coalesce counters = %+v, want bounded socket datagram default enabled", counters)
+	}
+}
+
 func TestPrepareCaptureForwardWireBatchDefaultsOffForSmallSocketDatagram(t *testing.T) {
 	daemon := &Daemon{}
 	session := &recordingNativeBatchSession{stats: transport.TransportStats{

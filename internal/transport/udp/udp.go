@@ -49,6 +49,7 @@ const (
 const (
 	userspaceUDPSessionMaxPacket      = 64*1024 - 1
 	userspaceUDPDatagramPayloadMax    = userspaceUDPSessionMaxPacket - 20 - 8
+	userspaceUDPDatagramDefaultMax    = 16 * 1024
 	userspaceUDPDatagramBatchMax      = 1500 - 20 - 8
 	userspaceUDPListenerBufferDefault = 64
 	userspaceUDPListenerBufferMax     = 256

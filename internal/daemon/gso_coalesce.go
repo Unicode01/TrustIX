@@ -16,7 +16,7 @@ const (
 	dataSessionRXGSOCoalesceDefaultMaxPackets = 128
 	dataSessionTXGSOCoalesceDefaultMaxBytes   = 65535
 	dataSessionTXGSOCoalesceDefaultMaxPackets = 128
-	dataSessionTXGSOCoalesceLargeDatagramMin  = 32 * 1024
+	dataSessionTXGSOCoalesceLargeDatagramMin  = 8 * 1024
 	dataSessionGSOCoalesceMaxActiveFlows      = 64
 )
 
