@@ -4,7 +4,8 @@ set -Eeuo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workspace="${TRUSTIX_PVE_WORKSPACE:-/root/trustix-pve-work}"
 run_root=""
-latest_userspace=1
+latest_selection=1
+latest_mode="userspace"
 write=0
 
 usage() {
@@ -20,6 +21,7 @@ Options:
   --workspace DIR        PVE workspace root. Default: /root/trustix-pve-work
   --run-root DIR         Exact result directory to promote
   --latest-userspace     Promote latest current-*-userspace-*-production-* run
+  --latest-production    Promote latest *-production-* run
   --write                Modify repo evidence TSVs after validation
   --dry-run              Validate only. This is the default
   -h, --help             Show this help
@@ -44,10 +46,17 @@ abs_path_existing() {
 }
 
 latest_run_root() {
-  local pattern
-  pattern="current-*-userspace-*-production-*"
+  local pattern="$1"
   find "${workspace}/results" -mindepth 1 -maxdepth 1 -type d -name "$pattern" \
     -printf '%T@\t%p\n' 2>/dev/null | sort -n | tail -n 1 | cut -f2-
+}
+
+latest_pattern() {
+  case "$latest_mode" in
+    userspace) printf 'current-*-userspace-*-production-*' ;;
+    production) printf '*-production-*' ;;
+    *) die "unknown latest mode: $latest_mode" ;;
+  esac
 }
 
 python_bin() {
@@ -72,11 +81,17 @@ while [[ $# -gt 0 ]]; do
     --run-root)
       [[ $# -ge 2 ]] || die "--run-root requires DIR"
       run_root="$2"
-      latest_userspace=0
+      latest_selection=0
       shift 2
       ;;
     --latest-userspace)
-      latest_userspace=1
+      latest_selection=1
+      latest_mode="userspace"
+      shift
+      ;;
+    --latest-production)
+      latest_selection=1
+      latest_mode="production"
       shift
       ;;
     --write)
@@ -103,11 +118,12 @@ case "$workspace" in
 esac
 [[ -d "$workspace" ]] || die "workspace does not exist: $workspace"
 
-if [[ "$latest_userspace" == "1" && -z "$run_root" ]]; then
-  run_root="$(latest_run_root)"
-  [[ -n "$run_root" ]] || die "no current userspace production run found under ${workspace}/results"
+if [[ "$latest_selection" == "1" && -z "$run_root" ]]; then
+  pattern="$(latest_pattern)"
+  run_root="$(latest_run_root "$pattern")"
+  [[ -n "$run_root" ]] || die "no $latest_mode production run found under ${workspace}/results"
 fi
-[[ -n "$run_root" ]] || die "--run-root is required unless --latest-userspace can find a run"
+[[ -n "$run_root" ]] || die "--run-root is required unless latest selection can find a run"
 run_root="$(abs_path_existing "$run_root")"
 case "$run_root" in
   "${workspace}/results/"*) ;;

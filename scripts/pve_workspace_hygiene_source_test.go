@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPVEWorkspaceHygieneScriptSyntax(t *testing.T) {
@@ -87,6 +88,8 @@ func TestPVECurrentRunStatusScriptIsReadOnlyAndScoped(t *testing.T) {
 	script := string(payload)
 	for _, want := range []string{
 		`workspace="${TRUSTIX_PVE_WORKSPACE:-/root/trustix-pve-work}"`,
+		`--latest-production`,
+		`latest_pattern()`,
 		`pve-workspace-hygiene.sh" --workspace "$workspace" --check`,
 		`"${workspace}/results/"*`,
 		`root top trustix-like entries`,
@@ -110,6 +113,53 @@ func TestPVECurrentRunStatusScriptIsReadOnlyAndScoped(t *testing.T) {
 	}
 }
 
+func TestPVECurrentRunStatusSelectsLatestProductionRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pve-current-run-status.sh functional test expects Linux-style paths")
+	}
+	bash := requireGNUBash4(t)
+	root := t.TempDir()
+	workspace := filepath.Join(root, "trustix-pve-work")
+	oldUserspace := filepath.Join(workspace, "results", "current-old-userspace-udp-production-20260708-000000")
+	newProduction := filepath.Join(workspace, "results", "owdeb-new-production-20260708-010000")
+	createStatusRun := func(path string, ts time.Time) {
+		t.Helper()
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir run root: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "run.meta"), []byte("exit_code=0\n"), 0o644); err != nil {
+			t.Fatalf("write run meta: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "evidence.tsv"), []byte("# evidence\nrow\n"), 0o644); err != nil {
+			t.Fatalf("write evidence: %v", err)
+		}
+		if err := os.Chtimes(path, ts, ts); err != nil {
+			t.Fatalf("chtimes run root: %v", err)
+		}
+	}
+	base := time.Unix(1_800_000_000, 0)
+	createStatusRun(oldUserspace, base)
+	createStatusRun(newProduction, base.Add(time.Hour))
+
+	productionCmd := exec.Command(bash, "pve-current-run-status.sh", "--workspace", workspace, "--latest-production", "--tail", "0")
+	productionOut, err := productionCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("latest production status failed: %v\n%s", err, productionOut)
+	}
+	if !strings.Contains(string(productionOut), "run_root="+newProduction) {
+		t.Fatalf("latest production did not select newest production run:\n%s", productionOut)
+	}
+
+	userspaceCmd := exec.Command(bash, "pve-current-run-status.sh", "--workspace", workspace, "--latest-userspace", "--tail", "0")
+	userspaceOut, err := userspaceCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("latest userspace status failed: %v\n%s", err, userspaceOut)
+	}
+	if !strings.Contains(string(userspaceOut), "run_root="+oldUserspace) {
+		t.Fatalf("latest userspace did not stay scoped to userspace runs:\n%s", userspaceOut)
+	}
+}
+
 func TestPVEPromoteRunEvidenceScriptIsScopedAndDryRunByDefault(t *testing.T) {
 	payload, err := os.ReadFile("pve-promote-run-evidence.sh")
 	if err != nil {
@@ -119,6 +169,8 @@ func TestPVEPromoteRunEvidenceScriptIsScopedAndDryRunByDefault(t *testing.T) {
 	for _, want := range []string{
 		`workspace="${TRUSTIX_PVE_WORKSPACE:-/root/trustix-pve-work}"`,
 		`promote-production-evidence.py`,
+		`--latest-production`,
+		`latest_pattern()`,
 		`args+=(--dry-run)`,
 		`"${workspace}/results/"*`,
 		`refusing --write with dirty production evidence TSVs`,
