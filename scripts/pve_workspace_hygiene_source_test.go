@@ -96,6 +96,13 @@ func TestPVECurrentRunStatusScriptIsReadOnlyAndScoped(t *testing.T) {
 		`pve-workspace-hygiene.sh" --workspace "$workspace" --check`,
 		`"${workspace}/results/"*`,
 		`root top trustix-like entries`,
+		`== progress ==`,
+		`cases_total=`,
+		`summary_rows=`,
+		`active_case=`,
+		`== host health ==`,
+		`latest_sample=`,
+		`latest_kernel_warnings_tail`,
 		`status=ready_to_review_or_promote`,
 		`status=interrupted_or_stale`,
 	} {

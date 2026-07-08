@@ -67,6 +67,69 @@ print_file_if_present() {
   fi
 }
 
+count_data_rows() {
+  local path="$1"
+  if [[ -f "$path" ]]; then
+    awk 'BEGIN{count=0} /^[[:space:]]*#/ || NF==0 {next} {count++} END{print count}' "$path"
+  else
+    printf '0\n'
+  fi
+}
+
+print_progress_summary() {
+  local cases_path="${run_root}/matrix/cases.tsv"
+  local summary_path="${run_root}/summary.jsonl"
+  local matrix_stderr="${run_root}/matrix.stderr"
+  local cases completed active_line
+
+  printf '== progress ==\n'
+  cases="$(count_data_rows "$cases_path")"
+  completed="$(count_data_rows "$summary_path")"
+  printf 'cases_total=%s\n' "$cases"
+  printf 'summary_rows=%s\n' "$completed"
+  if [[ -f "$matrix_stderr" ]]; then
+    active_line="$(awk '/\[trustix-cross-host-transport-matrix\] run /{line=$0} END{print line}' "$matrix_stderr")"
+    if [[ -n "$active_line" ]]; then
+      active_line="${active_line#*] run }"
+      printf 'active_case=%s\n' "$active_line"
+    fi
+  fi
+}
+
+print_host_health_summary() {
+  local health_log="${run_root}/host-health.log"
+  local latest_sample latest_boot latest_kernel latest_warning
+
+  printf '== host health ==\n'
+  if [[ ! -f "$health_log" ]]; then
+    printf 'missing: %s\n' "$health_log"
+    return
+  fi
+
+  latest_sample="$(grep '^===== ' "$health_log" 2>/dev/null | tail -n 1 || true)"
+  if [[ -n "$latest_sample" ]]; then
+    latest_sample="${latest_sample#===== }"
+    latest_sample="${latest_sample% =====}"
+    printf 'latest_sample=%s\n' "$latest_sample"
+  fi
+  latest_boot="$(awk -F= '/^boot_id=/{value=$2} END{print value}' "$health_log" 2>/dev/null || true)"
+  [[ -n "$latest_boot" ]] && printf 'latest_boot_id=%s\n' "$latest_boot"
+  latest_kernel="$(awk -F= '/^kernel=/{value=$2} END{print value}' "$health_log" 2>/dev/null || true)"
+  [[ -n "$latest_kernel" ]] && printf 'latest_kernel=%s\n' "$latest_kernel"
+
+  latest_warning="$(awk '
+    /^===== / { in_sample = 1; in_warnings = 0; warning = "" }
+    /^--- kernel warnings tail ---/ { in_warnings = 1; next }
+    in_sample && in_warnings && NF > 0 { warning = warning (warning ? "\n" : "") $0 }
+    END { print warning }
+  ' "$health_log" 2>/dev/null || true)"
+  if [[ -n "$latest_warning" ]]; then
+    printf 'latest_kernel_warnings_tail:\n%s\n' "$latest_warning"
+  else
+    printf 'latest_kernel_warnings_tail=empty\n'
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --workspace)
@@ -161,6 +224,10 @@ find "$run_root" -maxdepth 2 -printf '%M %s %TY-%Tm-%Td %TH:%TM %p\n' | sort || 
 
 print_file_if_present "run.meta" "${run_root}/run.meta"
 
+print_progress_summary
+
+print_host_health_summary
+
 printf '== pid ==\n'
 pid_status="missing"
 if [[ -f "$pid_file" ]]; then
@@ -179,7 +246,7 @@ fi
 
 printf '== evidence ==\n'
 if [[ -f "${run_root}/evidence.tsv" ]]; then
-  awk 'BEGIN{count=0} /^[[:space:]]*#/ || NF==0 {next} {count++} END{printf "rows=%d\n", count}' "${run_root}/evidence.tsv"
+  printf 'rows=%s\n' "$(count_data_rows "${run_root}/evidence.tsv")"
   sed -n '1,80p' "${run_root}/evidence.tsv"
 else
   printf 'missing: %s\n' "${run_root}/evidence.tsv"
