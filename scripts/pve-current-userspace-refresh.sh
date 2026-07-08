@@ -8,6 +8,7 @@ run_root=""
 background=1
 dry_run=0
 refresh_gaps=0
+next_refresh_gap=0
 skip_hygiene="${TRUSTIX_PVE_SKIP_HYGIENE_CHECK:-0}"
 
 usage() {
@@ -22,6 +23,7 @@ Options:
   --run-root DIR         Exact result directory. Must be under WORKSPACE/results
   --transports LIST      Comma-separated userspace transports. Default: udp
   --refresh-gaps         Run only userspace transports whose current evidence is stale
+  --next-refresh-gap     Run only the first stale userspace transport
   --all-userspace        Run all cross-host userspace defaults
   --foreground           Run the matrix in the foreground
   --dry-run              Generate the selected defaults and print the command
@@ -74,6 +76,11 @@ abs_path() {
 
 transport_label() {
   printf '%s' "$transports" | tr ',[:space:]' '-' | tr -cs 'A-Za-z0-9_.-' '-'
+}
+
+first_csv_item() {
+  local list="$1"
+  printf '%s' "$list" | awk -F, '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1}'
 }
 
 validate_list() {
@@ -219,6 +226,11 @@ while [[ $# -gt 0 ]]; do
       refresh_gaps=1
       shift
       ;;
+    --next-refresh-gap)
+      refresh_gaps=1
+      next_refresh_gap=1
+      shift
+      ;;
     --all-userspace)
       transports="udp,tcp,quic,websocket,http_connect,experimental_tcp"
       shift
@@ -247,6 +259,9 @@ done
 
 if truthy "$refresh_gaps"; then
   transports="$(detect_refresh_gap_transports)"
+  if truthy "$next_refresh_gap"; then
+    transports="$(first_csv_item "$transports")"
+  fi
   log "selected refresh-gap userspace transports: $transports"
 fi
 validate_list "$transports"

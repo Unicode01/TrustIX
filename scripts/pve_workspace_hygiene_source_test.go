@@ -50,6 +50,7 @@ func TestPVECurrentUserspaceRefreshScriptKeepsPVEWorkspaceScoped(t *testing.T) {
 	mustContain := []string{
 		`workspace="${TRUSTIX_PVE_WORKSPACE:-/root/trustix-pve-work}"`,
 		`--refresh-gaps`,
+		`--next-refresh-gap`,
 		`detect_refresh_gap_transports()`,
 		`production-transport-audit.py`,
 		`pve-workspace-hygiene.sh" --workspace "$workspace" --check`,
@@ -131,6 +132,56 @@ func TestPVEPromoteRunEvidenceScriptIsScopedAndDryRunByDefault(t *testing.T) {
 	} {
 		if strings.Contains(script, bad) {
 			t.Fatalf("pve-promote-run-evidence.sh contains unsafe fragment %q", bad)
+		}
+	}
+}
+
+func TestPVECurrentUserspaceRefreshSelectsNextRefreshGap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pve-current-userspace-refresh.sh dry-run expects Linux-style paths")
+	}
+	bash := requireGNUBash4(t)
+	requirePython3(t)
+	root := t.TempDir()
+	workspace := filepath.Join(root, "trustix-pve-work")
+	runRoot := filepath.Join(workspace, "results", "next-refresh-gap-dry-run")
+
+	cmd := exec.Command(
+		bash,
+		"pve-current-userspace-refresh.sh",
+		"--workspace", workspace,
+		"--run-root", runRoot,
+		"--next-refresh-gap",
+		"--dry-run",
+		"--skip-hygiene-check",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("next-refresh-gap dry-run failed: %v\n%s", err, out)
+	}
+	payload, err := os.ReadFile(filepath.Join(runRoot, "userspace-defaults.tsv"))
+	if err != nil {
+		t.Fatalf("read generated defaults: %v", err)
+	}
+	defaults := string(payload)
+	for _, want := range []string{
+		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"udp\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+	} {
+		if !strings.Contains(defaults, want) {
+			t.Fatalf("next refresh defaults missing %q:\n%s", want, defaults)
+		}
+	}
+	for _, bad := range []string{
+		"tcp\t",
+		"quic\t",
+		"websocket\t",
+		"http_connect\t",
+		"experimental_tcp\t",
+		"kernel_module",
+	} {
+		if strings.Contains(defaults, bad) {
+			t.Fatalf("next refresh defaults unexpectedly contain %q:\n%s", bad, defaults)
 		}
 	}
 }
