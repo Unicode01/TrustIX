@@ -241,14 +241,18 @@ USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH = {
         "945687793cc7a5b844fecaf5370e66cbd2ab9d45",
         "d4796543b2640792bc28e1edc93f10def92ec47d",
     },
-    # d479654 keeps userspace UDP TX coalescing enabled after lowering the
-    # default UDP datagram size to 16 KiB. It does not change already-promoted
-    # low-level kernel/TC paths; userspace UDP itself is refreshed separately.
     "internal/transport/udp/udp.go": {
         "d4796543b2640792bc28e1edc93f10def92ec47d",
     },
+    # d479654 keeps userspace UDP TX coalescing enabled after lowering the
+    # default UDP datagram size to 16 KiB; 8cc10c7 disables UDP plaintext
+    # userspace TX/RX coalescing by default after long-tail stalls were seen.
+    # Neither change affects already-promoted low-level kernel/TC paths whose
+    # verifier artifacts prove the kernel/TC fast path in use; userspace UDP
+    # itself is refreshed separately.
     "internal/daemon/gso_coalesce.go": {
         "d4796543b2640792bc28e1edc93f10def92ec47d",
+        "8cc10c757df4f228e8ec0f5625e8480109aa9cad",
     },
 }
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
