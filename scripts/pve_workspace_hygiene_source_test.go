@@ -25,6 +25,14 @@ func TestPVECurrentUserspaceRefreshScriptSyntax(t *testing.T) {
 	}
 }
 
+func TestPVECurrentRunStatusScriptSyntax(t *testing.T) {
+	bash := requireGNUBash4(t)
+	cmd := exec.Command(bash, "-n", "pve-current-run-status.sh")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n pve-current-run-status.sh: %v\n%s", err, out)
+	}
+}
+
 func TestPVECurrentUserspaceRefreshScriptKeepsPVEWorkspaceScoped(t *testing.T) {
 	payload, err := os.ReadFile("pve-current-userspace-refresh.sh")
 	if err != nil {
@@ -55,6 +63,37 @@ func TestPVECurrentUserspaceRefreshScriptKeepsPVEWorkspaceScoped(t *testing.T) {
 	for _, bad := range forbidden {
 		if strings.Contains(script, bad) {
 			t.Fatalf("pve-current-userspace-refresh.sh contains unsafe root fragment %q", bad)
+		}
+	}
+}
+
+func TestPVECurrentRunStatusScriptIsReadOnlyAndScoped(t *testing.T) {
+	payload, err := os.ReadFile("pve-current-run-status.sh")
+	if err != nil {
+		t.Fatalf("read pve-current-run-status.sh: %v", err)
+	}
+	script := string(payload)
+	for _, want := range []string{
+		`workspace="${TRUSTIX_PVE_WORKSPACE:-/root/trustix-pve-work}"`,
+		`pve-workspace-hygiene.sh" --workspace "$workspace" --check`,
+		`"${workspace}/results/"*`,
+		`root top trustix-like entries`,
+		`status=ready_to_review_or_promote`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("pve-current-run-status.sh missing %q", want)
+		}
+	}
+	for _, bad := range []string{
+		`rm -`,
+		`mv `,
+		`mkdir `,
+		`mktemp`,
+		`> /root`,
+		`/root/current-`,
+	} {
+		if strings.Contains(script, bad) {
+			t.Fatalf("pve-current-run-status.sh contains mutating or unsafe fragment %q", bad)
 		}
 	}
 }
