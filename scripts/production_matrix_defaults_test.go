@@ -3530,6 +3530,45 @@ for row, path, want in cases:
 	}
 }
 
+func TestProductionTransportAuditScriptD479UserspaceUDPDefaultOnlyExemptions(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+commit = "d4796543b2640792bc28e1edc93f10def92ec47d"
+parent = subprocess.check_output(["git", "rev-parse", commit + "^"], text=True).strip()
+cases = [
+    ({"gate_family": "full_kmod", "transport": "udp"}, "internal/daemon/gso_coalesce.go", True),
+    ({"gate_family": "userspace_tc", "transport": "gre"}, "internal/daemon/gso_coalesce.go", True),
+    ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, "internal/daemon/gso_coalesce.go", True),
+    ({"gate_family": "userspace", "transport": "udp"}, "internal/transport/udp/udp.go", False),
+    ({"gate_family": "userspace", "transport": "udp"}, "internal/transport/udp/udp_read_packet_size_linux.go", False),
+]
+for row, path, want in cases:
+    got = module.current_runtime_path_change_irrelevant(row, parent, path)
+    if got != want:
+        print(f"{path} row={row}: got {got}, want {want}", file=sys.stderr)
+        sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("d479 userspace UDP exemption regression failed: %v\n%s", err, output)
+	}
+}
+
 func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
 	python := requirePython3(t)
 	workdir := t.TempDir()

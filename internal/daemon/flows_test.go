@@ -7164,7 +7164,10 @@ func TestRegisterInboundReverseOnlyDataSessionDropsMatchingOutboundSession(t *te
 			}: 1,
 		},
 	}
-	inbound := &identitySession{peer: peer.ID, domain: peer.Domain}
+	inbound := &identitySession{peer: peer.ID, domain: peer.Domain, recv: make(chan struct{})}
+	t.Cleanup(func() {
+		_ = inbound.Close()
+	})
 
 	runtime, err := daemon.registerInboundDataSession(context.Background(), transport.Endpoint{
 		Name:      endpoint.Name,
@@ -7948,9 +7951,14 @@ type identitySession struct {
 	domain core.DomainID
 	err    error
 	closed bool
+	recv   chan struct{}
 }
 
 func (session *identitySession) RecvPacket() ([]byte, error) {
+	if session.recv != nil {
+		<-session.recv
+		return nil, fmt.Errorf("identity session closed")
+	}
 	if session.err != nil {
 		return nil, session.err
 	}
@@ -7959,6 +7967,13 @@ func (session *identitySession) RecvPacket() ([]byte, error) {
 
 func (session *identitySession) Close() error {
 	session.closed = true
+	if session.recv != nil {
+		select {
+		case <-session.recv:
+		default:
+			close(session.recv)
+		}
+	}
 	return nil
 }
 

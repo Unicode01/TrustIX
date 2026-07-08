@@ -232,13 +232,23 @@ CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
     "secure_kudp",
 }
 USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH = {
-    # dd8da09 caps the default userspace UDP datagram payload below MTU. It
-    # does not affect full-kmod production rows whose verifier artifacts prove
-    # capture_forwarder_suppressed=true and kernel_datapath_full_plaintext was
-    # the provider; userspace UDP rows still need fresh evidence for this
-    # runtime/default change.
+    # dd8da09/9456877/d479654 only adjust default userspace UDP datagram
+    # sizing. They do not affect promoted low-level production rows whose
+    # verifier artifacts prove the kernel/TC fast path in use; userspace UDP
+    # rows still need fresh evidence for these runtime/default changes.
     "internal/transport/udp/udp_read_packet_size_linux.go": {
         "dd8da09cfc73e14cc7dcc771d08505f850deae94",
+        "945687793cc7a5b844fecaf5370e66cbd2ab9d45",
+        "d4796543b2640792bc28e1edc93f10def92ec47d",
+    },
+    # d479654 keeps userspace UDP TX coalescing enabled after lowering the
+    # default UDP datagram size to 16 KiB. It does not change already-promoted
+    # low-level kernel/TC paths; userspace UDP itself is refreshed separately.
+    "internal/transport/udp/udp.go": {
+        "d4796543b2640792bc28e1edc93f10def92ec47d",
+    },
+    "internal/daemon/gso_coalesce.go": {
+        "d4796543b2640792bc28e1edc93f10def92ec47d",
     },
 }
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
@@ -976,6 +986,7 @@ def current_runtime_path_change_irrelevant(
     if allowed_commits and (
         gate_class in FULL_DATAPATH_MODULE_GATE_CLASSES
         or gate_class in KERNEL_UDP_DIRECT_POLICY_GATE_CLASSES
+        or gate_class == "userspace_tc"
     ):
         allowed_change_commits.update(allowed_commits)
     if not allowed_change_commits:
