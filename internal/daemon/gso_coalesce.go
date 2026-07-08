@@ -119,6 +119,9 @@ func dataSessionTXGSOCoalesceDefaultForStats(stats transport.TransportStats) boo
 }
 
 func dataSessionTXGSOCoalesceDefaultForRuntime(runtime *dataSessionRuntime, stats transport.TransportStats) bool {
+	if !stats.Encrypted && dataSessionRuntimeTransport(runtime) == transport.ProtocolUDP {
+		return false
+	}
 	if stats.Encrypted &&
 		stats.CryptoPlacement == "userspace" &&
 		stats.Datagram &&
@@ -204,6 +207,13 @@ func dataSessionRXGSOCoalesceDisabledForSession(runtime *dataSessionRuntime, ses
 		return !dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(runtime)
 	}
 	if !stats.Encrypted {
+		if dataSessionRuntimeTransport(runtime) == transport.ProtocolUDP {
+			enabled, explicit := dataSessionRXGSOCoalescePlaintextPreference()
+			if explicit {
+				return !enabled
+			}
+			return true
+		}
 		return !dataSessionRXGSOCoalescePlaintextEnabled()
 	}
 	return false
@@ -238,13 +248,18 @@ func dataSessionRXGSOCoalesceUserspaceEncryptedPreference() (bool, bool) {
 }
 
 func dataSessionRXGSOCoalescePlaintextEnabled() bool {
+	enabled, _ := dataSessionRXGSOCoalescePlaintextPreference()
+	return enabled
+}
+
+func dataSessionRXGSOCoalescePlaintextPreference() (bool, bool) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_PLAINTEXT"))) {
 	case "1", "true", "yes", "on", "enabled":
-		return true
+		return true, true
 	case "0", "false", "no", "off", "disabled":
-		return false
+		return false, true
 	default:
-		return true
+		return true, false
 	}
 }
 

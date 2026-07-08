@@ -867,6 +867,34 @@ func TestPrepareCaptureForwardWireBatchDefaultsOffForPlaintext(t *testing.T) {
 	}
 }
 
+func TestPrepareCaptureForwardWireBatchDefaultsOffForUDPPlaintext(t *testing.T) {
+	daemon := &Daemon{}
+	session := &recordingNativeBatchSession{stats: transport.TransportStats{
+		NativeBatching: true,
+		Datagram:       true,
+		MaxPacketSize:  16 * 1024,
+	}}
+	runtime := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolUDP}, session: session}
+	var scratch captureForwardScratch
+	scratch.begin(2, daemon)
+	packetA := tcpPayloadIPv4PacketWithSeq(1, []byte("hello"))
+	packetB := tcpPayloadIPv4PacketWithSeq(6, []byte("world"))
+	batch := prepareCaptureForwardBatch([]captureForwardBatchCandidate{
+		{Packet: packetA},
+		{Packet: packetB},
+	}, &scratch)
+
+	wire := daemon.prepareCaptureForwardWireBatch(runtime, session, batch, &scratch)
+
+	if len(wire.Packets) != 2 {
+		t.Fatalf("wire packets = %d, want default UDP plaintext uncoalesced 2", len(wire.Packets))
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.SendGSOCoalesceBatches != 0 || counters.SendGSOCoalescePackets != 0 || counters.SendGSOCoalesceWires != 0 {
+		t.Fatalf("TX GSO coalesce counters = %+v, want UDP plaintext default disabled", counters)
+	}
+}
+
 func TestPrepareCaptureForwardWireBatchDefaultsOnForLargeSocketDatagram(t *testing.T) {
 	daemon := &Daemon{}
 	session := &recordingNativeBatchSession{stats: transport.TransportStats{
@@ -6136,6 +6164,59 @@ func TestHandleReceivedDataPathPacketsAllowsCoalesceForPlaintextByDefault(t *tes
 	counters := daemon.dataStats.snapshot()
 	if counters.InjectGSOCoalesceBatches != 1 || counters.InjectGSOCoalescePackets != 2 || counters.InjectGSOCoalesceWires != 1 {
 		t.Fatalf("GSO coalesce counters = %+v, want one 2-to-1 coalesce", counters)
+	}
+}
+
+func TestHandleReceivedDataPathPacketsDisablesCoalesceForUDPPlaintextByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE", "1")
+	daemon := &Daemon{
+		desired: config.Desired{
+			LAN: config.LANConfig{
+				Advertise: []core.Prefix{"10.0.1.0/24"},
+			},
+		},
+	}
+	runtime := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolUDP}}
+	injector := &recordingInjector{}
+	session := &recordingSession{}
+	packetA := tcpPayloadIPv4PacketWithSeq(1, []byte("hello "))
+	packetB := tcpPayloadIPv4PacketWithSeq(7, []byte("world"))
+
+	daemon.handleReceivedDataPathPackets(context.Background(), runtime, session, [][]byte{packetA, packetB}, injector, injector, &dataReceiveScratch{})
+
+	if len(injector.batchPackets) != 1 || len(injector.batchPackets[0]) != 2 {
+		t.Fatalf("batch injections = %#v, want one uncoalesced two-packet batch", injector.batchPackets)
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.InjectGSOCoalesceBatches != 0 || counters.InjectGSOCoalescePackets != 0 || counters.InjectGSOCoalesceWires != 0 {
+		t.Fatalf("GSO coalesce counters = %+v, want UDP plaintext default disabled", counters)
+	}
+}
+
+func TestHandleReceivedDataPathPacketsAllowsCoalesceForUDPPlaintextWhenEnabled(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE", "1")
+	t.Setenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_PLAINTEXT", "1")
+	daemon := &Daemon{
+		desired: config.Desired{
+			LAN: config.LANConfig{
+				Advertise: []core.Prefix{"10.0.1.0/24"},
+			},
+		},
+	}
+	runtime := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolUDP}}
+	injector := &recordingInjector{}
+	session := &recordingSession{}
+	packetA := tcpPayloadIPv4PacketWithSeq(1, []byte("hello "))
+	packetB := tcpPayloadIPv4PacketWithSeq(7, []byte("world"))
+
+	daemon.handleReceivedDataPathPackets(context.Background(), runtime, session, [][]byte{packetA, packetB}, injector, injector, &dataReceiveScratch{})
+
+	if len(injector.batchPackets) != 1 || len(injector.batchPackets[0]) != 1 {
+		t.Fatalf("batch injections = %#v, want one coalesced wire packet", injector.batchPackets)
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.InjectGSOCoalesceBatches != 1 || counters.InjectGSOCoalescePackets != 2 || counters.InjectGSOCoalesceWires != 1 {
+		t.Fatalf("GSO coalesce counters = %+v, want explicit UDP plaintext coalesce", counters)
 	}
 }
 
