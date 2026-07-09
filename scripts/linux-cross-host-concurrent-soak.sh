@@ -25,6 +25,10 @@ base_peer_port="${TRUSTIX_CROSS_HOST_CONCURRENT_PEER_BASE:-29443}"
 base_data_port="${TRUSTIX_CROSS_HOST_CONCURRENT_DATA_BASE:-29700}"
 base_iperf_port="${TRUSTIX_CROSS_HOST_CONCURRENT_IPERF_BASE:-35201}"
 base_lan_octet="${TRUSTIX_CROSS_HOST_CONCURRENT_LAN_OCTET_BASE:-80}"
+base_carrier_octet="${TRUSTIX_CROSS_HOST_CONCURRENT_CARRIER_OCTET_BASE:-100}"
+base_iptunnel_port="${TRUSTIX_CROSS_HOST_CONCURRENT_IPTUNNEL_PORT_BASE:-47829}"
+base_vxlan_vni="${TRUSTIX_CROSS_HOST_CONCURRENT_VXLAN_VNI_BASE:-700}"
+base_vxlan_port="${TRUSTIX_CROSS_HOST_CONCURRENT_VXLAN_PORT_BASE:-4789}"
 port_stride="${TRUSTIX_CROSS_HOST_CONCURRENT_PORT_STRIDE:-10}"
 transport_snapshot_delay="${TRUSTIX_CROSS_HOST_CONCURRENT_TRANSPORT_SNAPSHOT_DELAY:-5}"
 forbid_trustix_modules="${TRUSTIX_CROSS_HOST_CONCURRENT_FORBID_TRUSTIX_MODULES:-1}"
@@ -126,7 +130,7 @@ record_summary() {
 
 write_case_env() {
   local index="$1" name="$2" dir="$3" env_file="$4"
-  local port_offset api_a api_b peer_a peer_b data_a data_b iperf health lan_a_octet lan_b_octet label transport encryption
+  local port_offset api_a api_b peer_a peer_b data_a data_b iperf health lan_a_octet lan_b_octet carrier_octet iptunnel_port vxlan_vni vxlan_port label transport encryption
   label="$(case_label "$name")"
   transport="$(case_transport_token "$name")"
   encryption="$(case_encryption_token "$name")"
@@ -143,7 +147,15 @@ write_case_env() {
   health=$((base_iperf_port + port_offset + 1))
   lan_a_octet=$((base_lan_octet + index * 2))
   lan_b_octet=$((lan_a_octet + 1))
+  carrier_octet=$((base_carrier_octet + index))
+  iptunnel_port=$((base_iptunnel_port + index))
+  vxlan_vni=$((base_vxlan_vni + index))
+  vxlan_port=$((base_vxlan_port + index))
   [[ "$lan_b_octet" -le 254 ]] || die "LAN octet ${lan_b_octet} is out of range; lower TRUSTIX_CROSS_HOST_CONCURRENT_LAN_OCTET_BASE or use fewer cases"
+  [[ "$carrier_octet" -le 254 ]] || die "carrier octet ${carrier_octet} is out of range; lower TRUSTIX_CROSS_HOST_CONCURRENT_CARRIER_OCTET_BASE or use fewer cases"
+  [[ "$iptunnel_port" -le 65535 ]] || die "IP tunnel port ${iptunnel_port} is out of range; lower TRUSTIX_CROSS_HOST_CONCURRENT_IPTUNNEL_PORT_BASE"
+  [[ "$vxlan_vni" -le 16777215 ]] || die "VXLAN VNI ${vxlan_vni} is out of range; lower TRUSTIX_CROSS_HOST_CONCURRENT_VXLAN_VNI_BASE"
+  [[ "$vxlan_port" -le 65535 ]] || die "VXLAN port ${vxlan_port} is out of range; lower TRUSTIX_CROSS_HOST_CONCURRENT_VXLAN_PORT_BASE"
   cat >"$env_file" <<EOF
 TRUSTIX_CROSS_HOST_CASE=${name}
 TRUSTIX_CROSS_HOST_TRANSPORT=${transport}
@@ -182,6 +194,11 @@ TRUSTIX_CROSS_HOST_LAN_A_GATEWAY=10.74.${lan_a_octet}.1/24
 TRUSTIX_CROSS_HOST_LAN_B_GATEWAY=10.74.${lan_b_octet}.1/24
 TRUSTIX_CROSS_HOST_HOST_A_ADDR=10.74.${lan_a_octet}.2/24
 TRUSTIX_CROSS_HOST_HOST_B_ADDR=10.74.${lan_b_octet}.2/24
+TRUSTIX_CROSS_HOST_IPTUNNEL_A_CARRIER=10.75.${carrier_octet}.1/30
+TRUSTIX_CROSS_HOST_IPTUNNEL_B_CARRIER=10.75.${carrier_octet}.2/30
+TRUSTIX_CROSS_HOST_IPTUNNEL_PORT=${iptunnel_port}
+TRUSTIX_CROSS_HOST_VXLAN_VNI=${vxlan_vni}
+TRUSTIX_CROSS_HOST_VXLAN_PORT=${vxlan_port}
 EOF
   write_optional_env "$env_file" TRUSTIX_CROSS_HOST_A "$node_a"
   write_optional_env "$env_file" TRUSTIX_CROSS_HOST_B "$node_b"
@@ -244,6 +261,10 @@ main() {
   require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_TIMEOUT_SLOP "$timeout_slop"
   require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_PORT_STRIDE "$port_stride"
   require_integer TRUSTIX_CROSS_HOST_CONCURRENT_LAN_OCTET_BASE "$base_lan_octet"
+  require_integer TRUSTIX_CROSS_HOST_CONCURRENT_CARRIER_OCTET_BASE "$base_carrier_octet"
+  require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_IPTUNNEL_PORT_BASE "$base_iptunnel_port"
+  require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_VXLAN_VNI_BASE "$base_vxlan_vni"
+  require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_VXLAN_PORT_BASE "$base_vxlan_port"
   require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_IPERF_PARALLEL "$iperf_parallel"
   require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_SESSION_POOL_SIZE "$session_pool_size"
   require_decimal TRUSTIX_CROSS_HOST_CONCURRENT_MIN_GBPS "$min_gbps"

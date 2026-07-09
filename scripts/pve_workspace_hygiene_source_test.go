@@ -75,6 +75,10 @@ func TestCrossHostConcurrentSoakScriptKeepsCasesIsolated(t *testing.T) {
 		`TRUSTIX_CROSS_HOST_LAN_IF_A=tix-lan-c${index}a`,
 		`TRUSTIX_CROSS_HOST_HOST_NS_A=tix-host-c${index}a`,
 		`TRUSTIX_CROSS_HOST_LAN_A_CIDR=10.74.${lan_a_octet}.0/24`,
+		`TRUSTIX_CROSS_HOST_IPTUNNEL_A_CARRIER=10.75.${carrier_octet}.1/30`,
+		`TRUSTIX_CROSS_HOST_IPTUNNEL_PORT=${iptunnel_port}`,
+		`TRUSTIX_CROSS_HOST_VXLAN_VNI=${vxlan_vni}`,
+		`TRUSTIX_CROSS_HOST_VXLAN_PORT=${vxlan_port}`,
 		`case "$dir" in "$workdir"/*)`,
 		`run_one "$name" "$dir" "$env_file" >"${dir}.out" 2>"${dir}.err" &`,
 		`"--require-stable-boot-id"`,
@@ -129,6 +133,10 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_CONCURRENT_B_UNDERLAY_IP=198.51.100.11",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_A_UNDERLAY_IF=eth1",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_B_UNDERLAY_IF=eth2",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_CARRIER_OCTET_BASE=120",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_IPTUNNEL_PORT_BASE=48000",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_VXLAN_VNI_BASE=900",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_VXLAN_PORT_BASE=4900",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_IPERF_PARALLEL=3",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_SESSION_POOL_SIZE=5",
 	)
@@ -176,6 +184,11 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth1",
 		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth2",
 		"TRUSTIX_CROSS_HOST_LAN_A_CIDR=10.74.80.0/24",
+		"TRUSTIX_CROSS_HOST_IPTUNNEL_A_CARRIER=10.75.120.1/30",
+		"TRUSTIX_CROSS_HOST_IPTUNNEL_B_CARRIER=10.75.120.2/30",
+		"TRUSTIX_CROSS_HOST_IPTUNNEL_PORT=48000",
+		"TRUSTIX_CROSS_HOST_VXLAN_VNI=900",
+		"TRUSTIX_CROSS_HOST_VXLAN_PORT=4900",
 	} {
 		if !strings.Contains(string(env0), want) {
 			t.Fatalf("case 0 env missing %q:\n%s", want, env0)
@@ -188,6 +201,11 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_DATA_A_PORT=29710",
 		"TRUSTIX_CROSS_HOST_IPERF_PORT=35211",
 		"TRUSTIX_CROSS_HOST_LAN_A_CIDR=10.74.82.0/24",
+		"TRUSTIX_CROSS_HOST_IPTUNNEL_A_CARRIER=10.75.121.1/30",
+		"TRUSTIX_CROSS_HOST_IPTUNNEL_B_CARRIER=10.75.121.2/30",
+		"TRUSTIX_CROSS_HOST_IPTUNNEL_PORT=48001",
+		"TRUSTIX_CROSS_HOST_VXLAN_VNI=901",
+		"TRUSTIX_CROSS_HOST_VXLAN_PORT=4901",
 	} {
 		if !strings.Contains(string(env1), want) {
 			t.Fatalf("case 1 env missing %q:\n%s", want, env1)
