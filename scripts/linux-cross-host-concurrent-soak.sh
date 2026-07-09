@@ -29,6 +29,19 @@ port_stride="${TRUSTIX_CROSS_HOST_CONCURRENT_PORT_STRIDE:-10}"
 transport_snapshot_delay="${TRUSTIX_CROSS_HOST_CONCURRENT_TRANSPORT_SNAPSHOT_DELAY:-5}"
 forbid_trustix_modules="${TRUSTIX_CROSS_HOST_CONCURRENT_FORBID_TRUSTIX_MODULES:-1}"
 require_binary_identity="${TRUSTIX_CROSS_HOST_CONCURRENT_REQUIRE_BINARY_IDENTITY:-1}"
+node_a="${TRUSTIX_CROSS_HOST_CONCURRENT_A:-${TRUSTIX_CROSS_HOST_A:-local}}"
+node_b="${TRUSTIX_CROSS_HOST_CONCURRENT_B:-${TRUSTIX_CROSS_HOST_B:-}}"
+ssh_opts="${TRUSTIX_CROSS_HOST_CONCURRENT_SSH_OPTS:-${TRUSTIX_CROSS_HOST_SSH_OPTS:-}}"
+bin_dir="${TRUSTIX_CROSS_HOST_CONCURRENT_BIN_DIR:-${TRUSTIX_CROSS_HOST_BIN_DIR:-}}"
+bin_dir_a="${TRUSTIX_CROSS_HOST_CONCURRENT_BIN_DIR_A:-${TRUSTIX_CROSS_HOST_BIN_DIR_A:-$bin_dir}}"
+bin_dir_b="${TRUSTIX_CROSS_HOST_CONCURRENT_BIN_DIR_B:-${TRUSTIX_CROSS_HOST_BIN_DIR_B:-$bin_dir}}"
+trustix_ca="${TRUSTIX_CROSS_HOST_CONCURRENT_TRUSTIX_CA:-${TRUSTIX_CROSS_HOST_TRUSTIX_CA:-}}"
+underlay_a_ip="${TRUSTIX_CROSS_HOST_CONCURRENT_A_UNDERLAY_IP:-${TRUSTIX_CROSS_HOST_A_UNDERLAY_IP:-}}"
+underlay_b_ip="${TRUSTIX_CROSS_HOST_CONCURRENT_B_UNDERLAY_IP:-${TRUSTIX_CROSS_HOST_B_UNDERLAY_IP:-}}"
+underlay_a_if="${TRUSTIX_CROSS_HOST_CONCURRENT_A_UNDERLAY_IF:-${TRUSTIX_CROSS_HOST_A_UNDERLAY_IF:-}}"
+underlay_b_if="${TRUSTIX_CROSS_HOST_CONCURRENT_B_UNDERLAY_IF:-${TRUSTIX_CROSS_HOST_B_UNDERLAY_IF:-}}"
+iperf_parallel="${TRUSTIX_CROSS_HOST_CONCURRENT_IPERF_PARALLEL:-${TRUSTIX_CROSS_HOST_IPERF_PARALLEL:-8}}"
+session_pool_size="${TRUSTIX_CROSS_HOST_CONCURRENT_SESSION_POOL_SIZE:-${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE:-$iperf_parallel}}"
 
 log() {
   printf '[trustix-cross-host-concurrent] %s\n' "$*" >&2
@@ -70,6 +83,12 @@ require_decimal() {
       die "${name} must be a non-negative decimal, got ${value}"
       ;;
   esac
+}
+
+write_optional_env() {
+  local env_file="$1" name="$2" value="$3"
+  [[ -n "$value" ]] || return 0
+  printf '%s=%q\n' "$name" "$value" >>"$env_file"
 }
 
 case_label() {
@@ -148,6 +167,8 @@ TRUSTIX_CROSS_HOST_IPERF_PORT=${iperf}
 TRUSTIX_CROSS_HOST_HEALTH_PORT=${health}
 TRUSTIX_CROSS_HOST_IPERF_SECONDS=${seconds}
 TRUSTIX_CROSS_HOST_IPERF_TIMEOUT=$((seconds + timeout_slop))
+TRUSTIX_CROSS_HOST_IPERF_PARALLEL=${iperf_parallel}
+TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE=${session_pool_size}
 TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY=${transport_snapshot_delay}
 TRUSTIX_CROSS_HOST_LAN_IF_A=tix-lan-c${index}a
 TRUSTIX_CROSS_HOST_LAN_IF_B=tix-lan-c${index}b
@@ -162,6 +183,16 @@ TRUSTIX_CROSS_HOST_LAN_B_GATEWAY=10.74.${lan_b_octet}.1/24
 TRUSTIX_CROSS_HOST_HOST_A_ADDR=10.74.${lan_a_octet}.2/24
 TRUSTIX_CROSS_HOST_HOST_B_ADDR=10.74.${lan_b_octet}.2/24
 EOF
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_A "$node_a"
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_B "$node_b"
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_SSH_OPTS "$ssh_opts"
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_BIN_DIR_A "$bin_dir_a"
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_BIN_DIR_B "$bin_dir_b"
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_TRUSTIX_CA "$trustix_ca"
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_A_UNDERLAY_IP "$underlay_a_ip"
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_B_UNDERLAY_IP "$underlay_b_ip"
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_A_UNDERLAY_IF "$underlay_a_if"
+  write_optional_env "$env_file" TRUSTIX_CROSS_HOST_B_UNDERLAY_IF "$underlay_b_if"
 }
 
 run_one() {
@@ -213,6 +244,8 @@ main() {
   require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_TIMEOUT_SLOP "$timeout_slop"
   require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_PORT_STRIDE "$port_stride"
   require_integer TRUSTIX_CROSS_HOST_CONCURRENT_LAN_OCTET_BASE "$base_lan_octet"
+  require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_IPERF_PARALLEL "$iperf_parallel"
+  require_positive_integer TRUSTIX_CROSS_HOST_CONCURRENT_SESSION_POOL_SIZE "$session_pool_size"
   require_decimal TRUSTIX_CROSS_HOST_CONCURRENT_MIN_GBPS "$min_gbps"
   case "$verify" in 0|1|true|false|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_CONCURRENT_VERIFY must be truthy or falsey" ;; esac
   case "$dry_run" in 0|1|true|false|yes|no|on|off|enabled|disabled) ;; *) die "TRUSTIX_CROSS_HOST_CONCURRENT_DRY_RUN must be truthy or falsey" ;; esac
