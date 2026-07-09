@@ -95,6 +95,46 @@ func TestPromoteProductionEvidenceUpdatesHistoryAndCurrentRows(t *testing.T) {
 	}
 }
 
+func TestPromoteProductionEvidenceResolvesRepositoryRelativePaths(t *testing.T) {
+	python := requirePython3(t)
+	script, err := filepath.Abs("promote-production-evidence.py")
+	if err != nil {
+		t.Fatalf("resolve promotion script: %v", err)
+	}
+	code := strings.Join([]string{
+		"import importlib.util, sys",
+		"spec = importlib.util.spec_from_file_location('promote_production_evidence', sys.argv[1])",
+		"module = importlib.util.module_from_spec(spec)",
+		"spec.loader.exec_module(module)",
+		"print(module.resolve_path(sys.argv[2]))",
+	}, "; ")
+	cmd := exec.Command(python, "-c", code, script, "scripts/production-transport-defaults.tsv")
+	cmd.Dir = ".."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("resolve repository-relative promotion path: %v\n%s", err, out)
+	}
+	got := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(got) {
+		t.Fatalf("resolved promotion path = %q, want absolute", got)
+	}
+	want, err := filepath.Abs("production-transport-defaults.tsv")
+	if err != nil {
+		t.Fatalf("resolve expected defaults path: %v", err)
+	}
+	gotInfo, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("stat resolved promotion path: %v", err)
+	}
+	wantInfo, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("stat expected defaults path: %v", err)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("resolved promotion path = %q, want %q", got, want)
+	}
+}
+
 func TestPromoteProductionEvidencePostAuditRejectsMissingArtifact(t *testing.T) {
 	python := requirePython3(t)
 	headBytes, err := exec.Command("git", "rev-parse", "HEAD").Output()

@@ -515,8 +515,8 @@ func loadAuditCurrentToolchainLegacyRequirementKeys(t *testing.T) map[string]boo
 		}
 		keys[key] = true
 	}
-	if len(keys) != 9 {
-		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 9 current legacy rows, got %d", len(keys))
+	if len(keys) != 0 {
+		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should be empty after the current userspace refresh, got %d", len(keys))
 	}
 	return keys
 }
@@ -3784,21 +3784,21 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	manifestRequiredArtifactByDefault := map[string]string{
 		"udp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-3528328-userspace-udp-production",
 		"udp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-3528328-userspace-udp-production",
-		"tcp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
-		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
-		"quic:secure:stable:userspace:userspace:cross_host:userspace":                                 "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
-		"quic:plaintext:stable:userspace:userspace:cross_host:userspace":                              "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
-		"websocket:secure:stable:userspace:userspace:cross_host:userspace":                            "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
-		"websocket:plaintext:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
-		"http_connect:secure:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
-		"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace":                      "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
+		"tcp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
+		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
+		"quic:secure:stable:userspace:userspace:cross_host:userspace":                                 "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
+		"quic:plaintext:stable:userspace:userspace:cross_host:userspace":                              "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
+		"websocket:secure:stable:userspace:userspace:cross_host:userspace":                            "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
+		"websocket:plaintext:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
+		"http_connect:secure:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
+		"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace":                      "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
 		"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                  "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
 		"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                          "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
 		"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                 "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
 		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                         "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
 		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
 		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                        "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
-		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace":                     "docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
+		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace":                     "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
 		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-exp-tcp-full-kmod-production",
 	}
 	legacyPendingFamilies := map[string]bool{}

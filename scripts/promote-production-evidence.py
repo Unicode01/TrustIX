@@ -126,11 +126,11 @@ def script_dir() -> Path:
 def resolve_path(value: str) -> Path:
     path = Path(value)
     if path.is_absolute() or path.exists():
-        return path
+        return path.resolve()
     script_relative = script_dir() / path
     if script_relative.exists():
-        return script_relative
-    return path
+        return script_relative.resolve()
+    return path.resolve()
 
 
 def read_tsv(path: Path, columns: list[str], min_fields: int) -> tuple[list[str], list[dict[str, str]]]:

@@ -387,15 +387,6 @@ TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
     },
 }
 CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
-    "tcp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
-    "tcp:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
-    "quic:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
-    "quic:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",
-    "websocket:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
-    "websocket:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-websocket-userspace-rerun-2026-06-29",
-    "http_connect:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
-    "http_connect:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-http-connect-userspace-rerun-2026-06-29",
-    "experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-current-userspace-b-2026-06-28",
 }
 
 
