@@ -372,8 +372,6 @@ TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
     },
 }
 CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS = {
-    "udp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
-    "udp:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
     "tcp:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
     "tcp:plaintext:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
     "quic:secure:stable:userspace:userspace:cross_host:userspace|docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",

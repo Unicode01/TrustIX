@@ -515,8 +515,8 @@ func loadAuditCurrentToolchainLegacyRequirementKeys(t *testing.T) map[string]boo
 		}
 		keys[key] = true
 	}
-	if len(keys) != 11 {
-		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 11 current legacy rows, got %d", len(keys))
+	if len(keys) != 9 {
+		t.Fatalf("CURRENT_TOOLCHAIN_LEGACY_REQUIREMENTS should cover exactly the 9 current legacy rows, got %d", len(keys))
 	}
 	return keys
 }
@@ -3782,8 +3782,8 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 		"userspace_tc":            "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
 	}
 	manifestRequiredArtifactByDefault := map[string]string{
-		"udp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
-		"udp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-udp-userspace-rerun2-2026-06-29",
+		"udp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-3528328-userspace-udp-production",
+		"udp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-3528328-userspace-udp-production",
 		"tcp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
 		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-tcp-userspace-rerun-2026-06-29",
 		"quic:secure:stable:userspace:userspace:cross_host:userspace":                                 "docs/trustix-performance-log.md#pve-debian13-5fa2ba1-quic-userspace-rerun-2026-06-29",

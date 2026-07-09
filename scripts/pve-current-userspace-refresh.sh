@@ -323,7 +323,10 @@ underlay_b_if="${TRUSTIX_PVE_USERSPACE_B_UNDERLAY_IF:-eth1}"
 os_matrix="${TRUSTIX_PVE_USERSPACE_EVIDENCE_OS_MATRIX:-debian13-debian13}"
 kernel_matrix="${TRUSTIX_PVE_USERSPACE_EVIDENCE_KERNEL_MATRIX:-auto}"
 artifact="${TRUSTIX_PVE_USERSPACE_EVIDENCE_ARTIFACT:-docs/trustix-performance-log.md#$(date +%Y-%m-%d)-zaozhuang-pve-${commit_short}-userspace-${label}-production}"
-note_template="${TRUSTIX_PVE_USERSPACE_EVIDENCE_NOTE_TEMPLATE:-current ${commit_short} Debian {transport} {encryption} userspace 3600s production gate evidence}"
+note_template="${TRUSTIX_PVE_USERSPACE_EVIDENCE_NOTE_TEMPLATE:-}"
+if [[ -z "$note_template" ]]; then
+  note_template="current ${commit_short} Debian {transport} {encryption} userspace 3600s production gate evidence"
+fi
 
 runner_script="${scratch}/scripts/start-current-${commit_short}-userspace-${label}-production-${stamp}.sh"
 pid_file="${scratch}/pids/current-${commit_short}-userspace-${label}-production-${stamp}.pid"

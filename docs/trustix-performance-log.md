@@ -28,12 +28,64 @@ Current production-default evidence boundary:
 | Debian `secure_kudp` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current secure-kUDP uses `trustix_crypto` plus `trustix_datapath_helpers`, keeps replay/drop gates, and passed with clean pstore/kernel log artifacts. |
 | Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` to `6.12.95+deb13-cloud-amd64` at commit `1dfaf51caac8bc03177de4ec428e23659db69173` | Current route-GSO gate passed after rebooting the disposable guests, with stable boot IDs, clean kernel log/pstore artifacts, and route-GSO helper error counters clean. Pre-reboot same-commit and `add2971` reruns were also degraded, so the promoted artifact is the post-reboot run. |
 | Debian `exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Selected plaintext experimental TCP full-kmod uses the dedicated full-kmod gate family, current-tool hashes, and the P16 runtime default; it must not reuse UDP full-kmod or route-GSO evidence. |
-| Debian userspace defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for UDP/TCP/QUIC/WebSocket/HTTP CONNECT userspace | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. Current-head userspace evidence refresh remains pending and must not be inferred from the older 5fa2ba1 rows. |
+| Debian UDP userspace defaults | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `3528328a8935` | Current-head UDP secure/plaintext userspace evidence uses the current production gate, verifier, cross-host runner, transport matrix, and evidence generator SHA256 values. Plaintext UDP keeps TX GSO coalescing enabled for throughput while plaintext RX GSO coalescing remains disabled by default for stability. |
+| Other Debian userspace defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `5fa2ba1934d1` for TCP/QUIC/WebSocket/HTTP CONNECT userspace, plus the separate existing secure experimental TCP userspace fallback gate | Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for these families and require `run-timing.json` to prove `iperf_mode=forward`, `iperf_directions=both`. Secure experimental TCP userspace now has a raw-fallback runner env for compatibility when TC/XDP reinject is unavailable. Current-head refresh for these non-UDP userspace rows remains pending and must not be inferred from the older rows. |
 | Debian userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` for GRE/IPIP/VXLAN secure and plaintext userspace-TC tunnels | Current-head userspace-TC evidence uses `datapath=tc_xdp`, `crypto_placement=userspace`, current production gate, runner, transport matrix, and evidence generator SHA256 values. Both nodes kept stable boot IDs and clean kernel/pstore artifacts. |
 | Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `1dfaf51caac8bc03177de4ec428e23659db69173` | This is a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. Current direct kfunc and route-TCP GSO helper error gates passed cleanly. |
 | OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `6d3a219f86ec` | Current-head OpenWrt-Debian UDP plaintext full-kmod evidence uses current production gate, verifier, runner, transport matrix, and evidence generator SHA256 values. Both nodes loaded the full-kmod fast path, boot IDs stayed stable, pstore/kernel logs were clean, and module error counters stayed zero. |
 | OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `6d3a219f86ec` | Current-head OpenWrt-Debian experimental TCP plaintext full-kmod evidence uses the dedicated full-kmod gate family and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-07-09
+
+<a id="2026-07-09-zaozhuang-pve-3528328-userspace-udp-production"></a>
+
+### Zaozhuang PVE 3528328 UDP userspace production gate
+
+PVE host `120.220.44.72:8006` ran the current-head Debian-to-Debian UDP
+userspace production gate on the existing disposable VM IDs 203 and 204. VM100
+and all 1xx guests were not modified. Evidence artifacts are preserved on the
+PVE host at:
+
+`/root/trustix-pve-work/results/current-3528328-userspace-udp-production-20260709-0740`
+
+Both guests ran Debian 13 kernel `6.12.94+deb13-cloud-amd64` with 4 vCPU and
+virtio underlay interfaces on `eth1`. The TrustIX binary was
+`trustix-linux-amd64`, commit `3528328a8935`, build time
+`2026-07-08T23:29:04Z`, Go `go1.25.0`, and binary SHA256
+`f18e8f479e5e25aaa4e5734042e08fb9ae9b84150075d9d3e90968ca1d5dec2b`.
+
+The selected production gate passed both UDP userspace defaults:
+
+| Case | Minimum received | Minimum sent | Minimum interval | Gate |
+| --- | ---: | ---: | ---: | ---: |
+| UDP secure userspace | 1.750550 Gbps | 1.750610 Gbps | 1.358833 Gbps | 1.5 Gbps, 3600s |
+| UDP plaintext userspace | 1.814131 Gbps | 1.814188 Gbps | 1.183304 Gbps | 1.5 Gbps, 3600s |
+
+Both cases ran `iperf_mode=forward` with `iperf_directions=both`; each
+direction reached at least 3600 seconds with 3600+ interval samples. The gate
+used `trustix-cross-host-production-gate-manifest-v1`, production gate SHA256
+`1371160cca3cceb50617f1cae8704b1755b858bcf08ca530f32b7d46245b19d3`,
+verifier SHA256 `0a171df97959d753eeebcb6bea17199d5a1bda69bafd2720b49259068768aee9`,
+cross-host runner SHA256
+`c1ebd81698f0a308a2bfa4737daae06d9c09b07c56310fcb49bcf34b3d01a54c`,
+transport matrix SHA256
+`dbb478869377c98e4a6727309c413418dea46a49cc9191dc49d50c111ac743db`, and
+evidence generator SHA256
+`524a170235903217e3415b3ab2dbdc07aacd8918ae1f196c56e31215c1e26894`.
+
+Boot IDs stayed stable on both guests:
+`4227ae71-3608-4204-8fc4-4fafa1e430a4` and
+`801f0dc6-3277-4dcc-8b13-e2e469389932`. Kernel log findings were empty,
+pstore artifacts were clean, no `trustix_*` kernel modules were loaded, and
+`tix-lan` kept `tx_queue_len=1000` on both nodes.
+
+The initial wrapper exited nonzero only after both selected gates had passed,
+because `pve-current-userspace-refresh.sh` built its default note template with
+a Bash `${VAR:-...}` expansion containing `{transport}` placeholders. The
+completed selected-gate artifacts were reused after fixing that template
+expansion to generate the promoted `evidence.tsv`; the 3600s traffic was not
+rerun.
 
 ## 2026-07-08
 
