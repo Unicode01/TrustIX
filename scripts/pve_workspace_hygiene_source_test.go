@@ -75,6 +75,8 @@ func TestCrossHostConcurrentSoakScriptKeepsCasesIsolated(t *testing.T) {
 		`write_optional_env "$env_file" TRUSTIX_CROSS_HOST_A "$node_a"`,
 		`write_optional_env "$env_file" TRUSTIX_CROSS_HOST_BIN_DIR_A "$bin_dir_a"`,
 		`write_optional_env "$env_file" TRUSTIX_CROSS_HOST_A_UNDERLAY_IP "$underlay_a_ip"`,
+		`write_optional_env "$env_file" TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS "$endpoint_transports_raw"`,
+		`unset TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS`,
 		`TRUSTIX_CROSS_HOST_LAN_IF_A=tix-lan-c${index}a`,
 		`TRUSTIX_CROSS_HOST_HOST_NS_A=tix-host-c${index}a`,
 		`TRUSTIX_CROSS_HOST_LAN_A_CIDR=10.74.${lan_a_octet}.0/24`,
@@ -88,6 +90,8 @@ func TestCrossHostConcurrentSoakScriptKeepsCasesIsolated(t *testing.T) {
 		`"--require-kernel-log-artifacts"`,
 		`"--require-transport-policy-stat" "profile=${profile}"`,
 		`"--require-transport-policy-stat" "datapath=${datapath}"`,
+		`--require-transport-session-any-min "stats.bytes_sent=1"`,
+		`--require-transport-session-any-min "stats.bytes_received=1"`,
 		`"--forbid-lsmod-prefix" "trustix_"`,
 	} {
 		if !strings.Contains(script, want) {
@@ -127,7 +131,8 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_CONCURRENT_WORKDIR="+workdir,
 		"TRUSTIX_CROSS_HOST_CONCURRENT_RUNNER="+runner,
 		"TRUSTIX_CROSS_HOST_CONCURRENT_VERIFIER="+verifier,
-		"TRUSTIX_CROSS_HOST_CONCURRENT_CASES=userspace-udp-secure tc-gre-plaintext userspace-experimental-tcp-secure",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_CASES=userspace-udp-secure tc-gre-plaintext userspace-experimental-tcp-secure userspace-mixed-secure",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_ENDPOINT_TRANSPORTS=udp,tcp,quic,websocket,http_connect,experimental_tcp",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_A=root@192.0.2.10",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_B=root@192.0.2.11",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_SSH_OPTS=-i /tmp/test-key -o BatchMode=yes",
@@ -156,6 +161,7 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 		`"case":"userspace-udp-secure"`,
 		`"case":"tc-gre-plaintext"`,
 		`"case":"userspace-experimental-tcp-secure"`,
+		`"case":"userspace-mixed-secure"`,
 		`"status":"dry_run"`,
 	} {
 		if !strings.Contains(string(summary), want) {
@@ -223,6 +229,111 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 		if !strings.Contains(string(env1), want) {
 			t.Fatalf("case 1 env missing %q:\n%s", want, env1)
 		}
+	}
+	envMixed, err := os.ReadFile(filepath.Join(workdir, "userspace-mixed-secure", "case.env"))
+	if err != nil {
+		t.Fatalf("read mixed case env: %v", err)
+	}
+	for _, want := range []string{
+		"TRUSTIX_CROSS_HOST_TRANSPORT=mixed",
+		"TRUSTIX_CROSS_HOST_PROFILE=stable",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=userspace",
+		"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp\\,tcp\\,quic\\,websocket\\,http_connect\\,experimental_tcp",
+	} {
+		if !strings.Contains(string(envMixed), want) {
+			t.Fatalf("mixed case env missing %q:\n%s", want, envMixed)
+		}
+	}
+}
+
+func TestCrossHostRunnerMultiEndpointDryRunConfig(t *testing.T) {
+	bash := requireGNUBash4(t)
+	workdir := filepath.Join(t.TempDir(), "mixed")
+	cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
+		"TRUSTIX_CROSS_HOST_CASE=userspace-mixed-secure",
+		"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp,tcp,quic,websocket,http_connect,experimental_tcp",
+		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=192.0.2.10",
+		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=192.0.2.11",
+		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
+		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
+		"TRUSTIX_CROSS_HOST_WORKDIR="+workdir,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("multi-endpoint dry-run config failed: %v\n%s", err, out)
+	}
+	for _, name := range []string{"config-a.yaml", "config-b.yaml"} {
+		payload, err := os.ReadFile(filepath.Join(workdir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		config := string(payload)
+		for _, transport := range []string{"udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp"} {
+			if got := strings.Count(config, "transport: "+transport+"\n"); got != 2 {
+				t.Fatalf("%s transport %s count = %d, want local+peer; config:\n%s", name, transport, got, config)
+			}
+		}
+		if got := strings.Count(config, "  candidates:\n"); got != 1 {
+			t.Fatalf("%s candidates block count = %d; config:\n%s", name, got, config)
+		}
+		if strings.Contains(config, "    endpoint:") {
+			t.Fatalf("%s route unexpectedly pins one endpoint:\n%s", name, config)
+		}
+		for _, want := range []string{
+			"  crypto_key_source: auto",
+			"  tls_identity:",
+			"    mode: custom_cert",
+		} {
+			if !strings.Contains(config, want) {
+				t.Fatalf("%s missing %q:\n%s", name, want, config)
+			}
+		}
+	}
+}
+
+func TestCrossHostConcurrentSoakScopesInheritedEndpointTransports(t *testing.T) {
+	bash := requireGNUBash4(t)
+	root := t.TempDir()
+	runner := filepath.Join(root, "runner.sh")
+	verifier := filepath.Join(root, "verifier.py")
+	workdir := filepath.Join(root, "concurrent")
+	if err := os.WriteFile(runner, []byte(`#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "${TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS-unset}" >"${TRUSTIX_CROSS_HOST_WORKDIR}/observed-endpoint-transports.txt"
+`), 0o755); err != nil {
+		t.Fatalf("write runner: %v", err)
+	}
+	if err := os.WriteFile(verifier, []byte("#!/usr/bin/env python3\n"), 0o755); err != nil {
+		t.Fatalf("write verifier: %v", err)
+	}
+	cmd := exec.Command(bash, "linux-cross-host-concurrent-soak.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_CONCURRENT_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_CONCURRENT_RUNNER="+runner,
+		"TRUSTIX_CROSS_HOST_CONCURRENT_VERIFIER="+verifier,
+		"TRUSTIX_CROSS_HOST_CONCURRENT_VERIFY=0",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_CASES=userspace-udp-secure userspace-mixed-secure",
+		"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp,tcp",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("concurrent inherited endpoint scope run failed: %v\n%s", err, out)
+	}
+	regular, err := os.ReadFile(filepath.Join(workdir, "userspace-udp-secure", "observed-endpoint-transports.txt"))
+	if err != nil {
+		t.Fatalf("read regular observed endpoint transports: %v", err)
+	}
+	if got := strings.TrimSpace(string(regular)); got != "unset" {
+		t.Fatalf("regular case inherited endpoint transports = %q, want unset", got)
+	}
+	mixed, err := os.ReadFile(filepath.Join(workdir, "userspace-mixed-secure", "observed-endpoint-transports.txt"))
+	if err != nil {
+		t.Fatalf("read mixed observed endpoint transports: %v", err)
+	}
+	if got := strings.TrimSpace(string(mixed)); got != "udp,tcp" {
+		t.Fatalf("mixed case endpoint transports = %q, want udp,tcp", got)
 	}
 }
 

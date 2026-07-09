@@ -9,6 +9,7 @@ case_encryption_override="${TRUSTIX_CROSS_HOST_ENCRYPTION:-}"
 case_profile_override="${TRUSTIX_CROSS_HOST_PROFILE:-}"
 case_datapath_override="${TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH:-}"
 case_crypto_placement_override="${TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT:-}"
+endpoint_transports_raw="${TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS:-}"
 workdir="${TRUSTIX_CROSS_HOST_WORKDIR:-$(mktemp -d /tmp/trustix-cross-host.XXXXXX)}"
 workdir="$(mkdir -p "$workdir" && cd "$workdir" && pwd -P)"
 keep_remote="${TRUSTIX_CROSS_HOST_KEEP_REMOTE:-0}"
@@ -113,6 +114,7 @@ daemon_ready_sleep="${TRUSTIX_CROSS_HOST_READY_SLEEP:-1}"
 
 ssh_opts=()
 scp_opts=()
+endpoint_transports=()
 if [[ -n "$ssh_opts_raw" ]]; then
   # shellcheck disable=SC2206
   ssh_opts=($ssh_opts_raw)
@@ -306,6 +308,40 @@ normalize_case_transport_token() {
   printf '%s\n' "$value"
 }
 
+parse_endpoint_transports() {
+  local raw item normalized
+  [[ -n "$endpoint_transports_raw" ]] || return 0
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    normalized="$(normalize_case_transport_token "$item")"
+    case "$normalized" in
+      udp|tcp|quic|websocket|http_connect|experimental_tcp) ;;
+      *) die "unsupported TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS item ${item}" ;;
+    esac
+    for raw in "${endpoint_transports[@]}"; do
+      [[ "$raw" != "$normalized" ]] || die "duplicate TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS item ${normalized}"
+    done
+    endpoint_transports+=("$normalized")
+  done < <(printf '%s\n' "$endpoint_transports_raw" | tr ',\t ' '\n')
+  [[ "${#endpoint_transports[@]}" -ge 2 ]] || die "TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS requires at least two transports"
+}
+
+case_is_multi_endpoint() {
+  [[ "${#endpoint_transports[@]}" -gt 0 ]]
+}
+
+first_endpoint_transport() {
+  case_is_multi_endpoint || return 1
+  printf '%s\n' "${endpoint_transports[0]}"
+}
+
+transport_uses_link_tls() {
+  case "$(normalize_case_transport_token "$1")" in
+    tcp|quic|websocket|http_connect) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 generic_case_kind() {
   case "$case_name" in
     userspace-*-secure|userspace-*-plaintext|crosshost-userspace-*-secure|crosshost-userspace-*-plaintext) printf 'userspace\n' ;;
@@ -350,7 +386,12 @@ case_is_generic() {
 
 validate_case() {
   if case_is_generic; then
-    supported_case_transport "$(generic_case_transport)" || die "unsupported generic TRUSTIX_CROSS_HOST_CASE transport in ${case_name}"
+    if case_is_multi_endpoint; then
+      [[ "$(generic_case_kind)" == "userspace" ]] || die "multi-endpoint soak currently requires a userspace case"
+      [[ "$(generic_case_transport)" == "mixed" ]] || die "multi-endpoint soak case must use userspace-mixed-secure/plaintext"
+    else
+      supported_case_transport "$(generic_case_transport)" || die "unsupported generic TRUSTIX_CROSS_HOST_CASE transport in ${case_name}"
+    fi
     case "$(generic_case_encryption)" in secure|plaintext) ;; *) die "unsupported generic TRUSTIX_CROSS_HOST_CASE encryption in ${case_name}" ;; esac
     return
   fi
@@ -428,11 +469,27 @@ case_crypto_placement() {
 }
 
 case_endpoint_transport() {
+  if case_is_multi_endpoint; then
+    first_endpoint_transport
+    return
+  fi
   if [[ -n "$endpoint_transport_override" ]]; then
     normalize_case_transport_token "$endpoint_transport_override"
     return
   fi
   case_transport
+}
+
+case_has_endpoint_transport() {
+  local wanted transport
+  wanted="$(normalize_case_transport_token "$1")"
+  if case_is_multi_endpoint; then
+    for transport in "${endpoint_transports[@]}"; do
+      [[ "$transport" != "$wanted" ]] || return 0
+    done
+    return 1
+  fi
+  [[ "$(case_endpoint_transport)" == "$wanted" ]]
 }
 
 case_capability_profile() {
@@ -561,6 +618,13 @@ case_secure_kudp_route_gso() {
 }
 
 case_link_tls_transport() {
+  local transport
+  if case_is_multi_endpoint; then
+    for transport in "${endpoint_transports[@]}"; do
+      transport_uses_link_tls "$transport" && return 0
+    done
+    return 1
+  fi
   case "$(case_endpoint_transport)" in
     tcp|quic|websocket|http_connect) return 0 ;;
     *) return 1 ;;
@@ -570,8 +634,9 @@ case_link_tls_transport() {
 endpoint_security_yaml() {
   local indent="$1"
   local encryption="$2"
+  local endpoint_transport="${3:-$(case_endpoint_transport)}"
   printf '%ssecurity:\n' "$indent"
-  if case_link_tls_transport; then
+  if transport_uses_link_tls "$endpoint_transport"; then
     printf '%s  link_tls: required\n' "$indent"
   fi
   printf '%s  encryption: %s\n' "$indent" "$encryption"
@@ -581,11 +646,25 @@ case_endpoint_name() {
   local node="$1"
   local transport
   transport="$(case_endpoint_transport)"
-  case "$(case_endpoint_transport)" in
+  case_endpoint_name_for_transport "$node" "$transport"
+}
+
+case_endpoint_name_for_transport() {
+  local node="$1"
+  local transport="$2"
+  case "$transport" in
     udp) node_value "$node" a-udp b-udp ;;
     experimental_tcp) node_value "$node" a-experimental-tcp b-experimental-tcp ;;
     *) node_value "$node" "a-${transport//_/-}" "b-${transport//_/-}" ;;
   esac
+}
+
+case_endpoint_port_for_index() {
+  local node="$1"
+  local index="$2"
+  local base
+  base="$(node_value "$node" "$data_a_port" "$data_b_port")"
+  printf '%s\n' "$((base + index))"
 }
 
 tunnel_config_for_node() {
@@ -616,6 +695,17 @@ resolve_data_ports() {
   if [[ -z "$data_b_port" ]]; then
     data_b_port="$(default_data_port b)"
   fi
+}
+
+validate_multi_endpoint_data_ports() {
+  local max_a max_b
+  case_is_multi_endpoint || return 0
+  case "$data_a_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_A_PORT must be an integer" ;; esac
+  case "$data_b_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_B_PORT must be an integer" ;; esac
+  [[ "$data_a_port" -gt 0 && "$data_b_port" -gt 0 ]] || die "multi-endpoint data ports must be greater than zero"
+  max_a=$((data_a_port + ${#endpoint_transports[@]} - 1))
+  max_b=$((data_b_port + ${#endpoint_transports[@]} - 1))
+  [[ "$max_a" -le 65535 && "$max_b" -le 65535 ]] || die "multi-endpoint data port range exceeds 65535"
 }
 
 secure_kudp_module_yaml() {
@@ -827,13 +917,16 @@ check_local_inputs() {
   resolve_data_ports
   case "$data_a_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_A_PORT must be an integer" ;; esac
   case "$data_b_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_B_PORT must be an integer" ;; esac
+  validate_multi_endpoint_data_ports
   case "$iperf_mode" in bidir|forward|reverse) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_MODE must be bidir, forward, or reverse" ;; esac
   case "$iperf_directions" in both|a2b|b2a|a-to-b|b-to-a) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS must be both, a2b, or b2a" ;; esac
   if [[ -n "$endpoint_transport_override" ]]; then
     supported_case_transport "$endpoint_transport_override" || die "TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORT is unsupported: ${endpoint_transport_override}"
   fi
   if [[ -n "$case_transport_override" ]]; then
-    supported_case_transport "$case_transport_override" || die "TRUSTIX_CROSS_HOST_TRANSPORT is unsupported: ${case_transport_override}"
+    if ! case_is_multi_endpoint || [[ "$(normalize_case_transport_token "$case_transport_override")" != "mixed" ]]; then
+      supported_case_transport "$case_transport_override" || die "TRUSTIX_CROSS_HOST_TRANSPORT is unsupported: ${case_transport_override}"
+    fi
   fi
   case "$(case_encryption)" in secure|plaintext) ;; *) die "TRUSTIX_CROSS_HOST_ENCRYPTION/case encryption must be secure or plaintext" ;; esac
   case "$(case_transport_profile)" in stable|performance|latency) ;; *) die "TRUSTIX_CROSS_HOST_PROFILE/case profile must be stable, performance, or latency" ;; esac
@@ -1017,9 +1110,164 @@ generate_certs() {
   fi
 }
 
+write_multi_endpoint_config() {
+  local node="$1"
+  local config_path="$2"
+  local local_ix peer_ix local_lan remote_lan local_gateway local_lan_if local_underlay_if
+  local local_peer_api remote_peer_api remote_dir_node encryption crypto_placement local_underlay remote_underlay
+  local index transport local_endpoint remote_endpoint local_port remote_port
+  local_ix="$(node_value "$node" "$ix_a" "$ix_b")"
+  peer_ix="$(node_value "$node" "$ix_b" "$ix_a")"
+  local_lan="$(node_value "$node" "$lan_a_cidr" "$lan_b_cidr")"
+  remote_lan="$(node_value "$node" "$lan_b_cidr" "$lan_a_cidr")"
+  local_gateway="$(node_value "$node" "$lan_a_gateway" "$lan_b_gateway")"
+  local_lan_if="$(node_value "$node" "$lan_if_a" "$lan_if_b")"
+  local_underlay_if="$(node_value "$node" "$underlay_a_if" "$underlay_b_if")"
+  local_underlay="$(node_value "$node" "$underlay_a_ip" "$underlay_b_ip")"
+  remote_underlay="$(node_value "$node" "$underlay_b_ip" "$underlay_a_ip")"
+  local_peer_api="$(node_value "$node" "${underlay_a_ip}:${peer_a_port}" "${underlay_b_ip}:${peer_b_port}")"
+  remote_peer_api="$(node_value "$node" "${underlay_b_ip}:${peer_b_port}" "${underlay_a_ip}:${peer_a_port}")"
+  remote_dir_node="$(remote_dir "$node")"
+  encryption="$(case_encryption)"
+  crypto_placement="$(case_crypto_placement)"
+
+  cat >"$config_path" <<EOF
+domain:
+  id: ${domain_id}
+  trust_roots:
+    - ${remote_dir_node}/certs/root-ca.pem
+    - ${remote_dir_node}/certs/domain-ca.pem
+    - ${remote_dir_node}/certs/config-ca.pem
+
+ix:
+  id: ${local_ix}
+  domain: ${domain_id}
+  cert: ${remote_dir_node}/certs/${local_ix}.crt
+  key: ${remote_dir_node}/certs/${local_ix}.key
+  control_api: https://${local_peer_api}
+  route_authorizations:
+    - ${remote_dir_node}/certs/${local_ix}-route.crt
+
+lan:
+  iface: ${local_lan_if}
+  underlay_iface: ${local_underlay_if}
+  gateway: ${local_gateway}
+  advertise:
+    - ${local_lan}
+  mode: routed
+  manage_address: true
+  manage_forwarding: true
+  manage_rp_filter: true
+
+endpoints:
+EOF
+  index=0
+  for transport in "${endpoint_transports[@]}"; do
+    local_endpoint="$(case_endpoint_name_for_transport "$node" "$transport")"
+    local_port="$(case_endpoint_port_for_index "$node" "$index")"
+    cat >>"$config_path" <<EOF
+  - name: ${local_endpoint}
+    mode: passive
+    listen: ${local_underlay}:${local_port}
+    address: ${local_underlay}:${local_port}
+    transport: ${transport}
+EOF
+    endpoint_security_yaml "    " "$encryption" "$transport" >>"$config_path"
+    printf '    enabled: true\n' >>"$config_path"
+    index=$((index + 1))
+  done
+
+  cat >>"$config_path" <<EOF
+
+peers:
+  - id: ${peer_ix}
+    domain: ${domain_id}
+    control_api: https://${remote_peer_api}
+    endpoints:
+EOF
+  index=0
+  for transport in "${endpoint_transports[@]}"; do
+    if [[ "$node" == "a" ]]; then
+      remote_endpoint="$(case_endpoint_name_for_transport b "$transport")"
+      remote_port="$(case_endpoint_port_for_index b "$index")"
+    else
+      remote_endpoint="$(case_endpoint_name_for_transport a "$transport")"
+      remote_port="$(case_endpoint_port_for_index a "$index")"
+    fi
+    cat >>"$config_path" <<EOF
+      - name: ${remote_endpoint}
+        address: ${remote_underlay}:${remote_port}
+        transport: ${transport}
+EOF
+    endpoint_security_yaml "        " "$encryption" "$transport" >>"$config_path"
+    printf '        enabled: true\n' >>"$config_path"
+    index=$((index + 1))
+  done
+
+  cat >>"$config_path" <<EOF
+    allowed_prefixes:
+      - ${remote_lan}
+
+routes:
+  - prefix: ${remote_lan}
+    next_hop: ${peer_ix}
+    policy: default-routed
+    metric: 100
+
+policies:
+  - name: default-routed
+    route_selection: longest_prefix
+    load_balance: least_conn
+    flow_stickiness: true
+    rewrite: preserve_source
+
+transport_policy:
+  mode: user_defined
+  profile: $(case_transport_profile)
+  datapath: $(case_transport_datapath)
+  mtu: 1500
+  candidates:
+EOF
+  for transport in "${endpoint_transports[@]}"; do
+    local_endpoint="$(case_endpoint_name_for_transport "$node" "$transport")"
+    printf '    - %s\n' "$local_endpoint" >>"$config_path"
+  done
+  cat >>"$config_path" <<EOF
+  failover: health_based
+  load_balance: least_conn
+  encryption: ${encryption}
+  crypto_placement: ${crypto_placement}
+  session_pool:
+    size: ${session_pool_size}
+    strategy: ${session_pool_strategy}
+    warmup: ${session_pool_warmup}
+    heartbeat:
+      mode: ${session_pool_heartbeat_mode}
+      interval: ${session_pool_heartbeat_interval}
+      timeout: ${session_pool_heartbeat_timeout}
+  crypto_key_source: auto
+EOF
+  if case_link_tls_transport; then
+    cat >>"$config_path" <<EOF
+  tls_identity:
+    mode: custom_cert
+    cert: ${remote_dir_node}/certs/${local_ix}-transport.crt
+    key: ${remote_dir_node}/certs/${local_ix}-transport.key
+    trust_roots:
+      - ${remote_dir_node}/certs/domain-ca.pem
+EOF
+  fi
+  printf '\n' >>"$config_path"
+  case_module_yaml "$node" >>"$config_path"
+}
+
 write_config() {
   local node="$1"
   local config_path="$2"
+  if case_is_multi_endpoint; then
+    write_multi_endpoint_config "$node" "$config_path"
+    return
+  fi
   local local_ix peer_ix local_lan remote_lan local_gateway local_lan_if local_underlay_if
   local local_peer_api remote_peer_api local_endpoint remote_endpoint local_data remote_data endpoint_transport
   local remote_dir_node encryption crypto_placement
@@ -1249,7 +1497,7 @@ daemon_env() {
   fi
   case "$(case_fast_path)" in
     userspace)
-      if [[ "$(case_endpoint_transport)" == "experimental_tcp" ]]; then
+      if case_has_endpoint_transport experimental_tcp; then
         cat <<'EOF'
 TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK=1
 EOF
@@ -1700,7 +1948,8 @@ exit 1
 }
 
 case_endpoint_needs_tcp_listener() {
-  case "$(case_endpoint_transport)" in
+  local transport="${1:-$(case_endpoint_transport)}"
+  case "$transport" in
     tcp|websocket|http_connect|experimental_tcp) return 0 ;;
     *) return 1 ;;
   esac
@@ -1708,8 +1957,7 @@ case_endpoint_needs_tcp_listener() {
 
 wait_for_tcp_listener() {
   local node="$1"
-  local port
-  port="$(node_value "$node" "$data_a_port" "$data_b_port")"
+  local port="${2:-$(node_value "$node" "$data_a_port" "$data_b_port")}"
   run_node "$node" "set -Eeuo pipefail
 port_hex=\$(printf '%04X' ${port})
 proc_tcp_listening() {
@@ -1756,6 +2004,18 @@ exit 1
 }
 
 wait_for_endpoint_listeners() {
+  local index transport
+  if case_is_multi_endpoint; then
+    index=0
+    for transport in "${endpoint_transports[@]}"; do
+      if case_endpoint_needs_tcp_listener "$transport"; then
+        wait_for_tcp_listener a "$(case_endpoint_port_for_index a "$index")"
+        wait_for_tcp_listener b "$(case_endpoint_port_for_index b "$index")"
+      fi
+      index=$((index + 1))
+    done
+    return 0
+  fi
   if ! case_endpoint_needs_tcp_listener; then
     return 0
   fi
@@ -2158,6 +2418,7 @@ cleanup_all() {
 }
 
 main() {
+  parse_endpoint_transports
   validate_case
   apply_case_runtime_defaults
   case "$(case_fast_path)" in
@@ -2169,6 +2430,7 @@ main() {
   esac
   if truthy "$dry_run_config"; then
     resolve_data_ports
+    validate_multi_endpoint_data_ports
     mkdir -p "$workdir"
     write_config a "$workdir/config-a.yaml"
     write_config b "$workdir/config-b.yaml"
@@ -2198,6 +2460,9 @@ main() {
   collect_boot_id a before
   collect_boot_id b before
   generate_certs
+  if case_is_multi_endpoint; then
+    printf '%s\n' "${endpoint_transports[@]}" >"$workdir/endpoint-transports.txt"
+  fi
   write_config a "$workdir/config-a.yaml"
   write_config b "$workdir/config-b.yaml"
   push_inputs

@@ -46,6 +46,7 @@ underlay_a_if="${TRUSTIX_CROSS_HOST_CONCURRENT_A_UNDERLAY_IF:-${TRUSTIX_CROSS_HO
 underlay_b_if="${TRUSTIX_CROSS_HOST_CONCURRENT_B_UNDERLAY_IF:-${TRUSTIX_CROSS_HOST_B_UNDERLAY_IF:-}}"
 iperf_parallel="${TRUSTIX_CROSS_HOST_CONCURRENT_IPERF_PARALLEL:-${TRUSTIX_CROSS_HOST_IPERF_PARALLEL:-8}}"
 session_pool_size="${TRUSTIX_CROSS_HOST_CONCURRENT_SESSION_POOL_SIZE:-${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE:-$iperf_parallel}}"
+endpoint_transports_raw="${TRUSTIX_CROSS_HOST_CONCURRENT_ENDPOINT_TRANSPORTS:-${TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS:-}}"
 
 log() {
   printf '[trustix-cross-host-concurrent] %s\n' "$*" >&2
@@ -238,10 +239,15 @@ EOF
   write_optional_env "$env_file" TRUSTIX_CROSS_HOST_B_UNDERLAY_IP "$underlay_b_ip"
   write_optional_env "$env_file" TRUSTIX_CROSS_HOST_A_UNDERLAY_IF "$underlay_a_if"
   write_optional_env "$env_file" TRUSTIX_CROSS_HOST_B_UNDERLAY_IF "$underlay_b_if"
+  if [[ "$transport" == "mixed" ]]; then
+    [[ -n "$endpoint_transports_raw" ]] || die "${name} requires TRUSTIX_CROSS_HOST_CONCURRENT_ENDPOINT_TRANSPORTS"
+    write_optional_env "$env_file" TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS "$endpoint_transports_raw"
+  fi
 }
 
 run_one() {
   local name="$1" dir="$2" env_file="$3"
+  unset TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS
   set -a
   # shellcheck disable=SC1090
   source "$env_file"
@@ -251,7 +257,7 @@ run_one() {
 
 verify_one() {
   local name="$1" dir="$2" summary="$3"
-  local encryption profile datapath
+  local encryption profile datapath transport item transport_summary index
   encryption="$(case_encryption_token "$name")"
   profile="$(case_profile_token "$name")"
   datapath="$(case_datapath_token "$name")"
@@ -287,7 +293,29 @@ verify_one() {
   if truthy "$forbid_trustix_modules"; then
     args+=("--forbid-lsmod-prefix" "trustix_")
   fi
-  python3 "$verifier" "${args[@]}"
+  python3 "$verifier" "${args[@]}" || return
+  transport="$(case_transport_token "$name")"
+  [[ "$transport" == "mixed" ]] || return 0
+  index=0
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    transport="$(case_transport_token "userspace-${item}-secure")"
+    transport_summary="${dir}/verify-transport-${index}-${transport}.jsonl"
+    python3 "$verifier" \
+      --case "${name}=${dir}" \
+      --min-gbps "$min_gbps" \
+      --min-seconds "$seconds" \
+      --seconds-slop 1 \
+      --require-transport-local-endpoint-stat "transport=${transport}" \
+      --require-transport-local-endpoint-stat "usable=true" \
+      --require-transport-peer-endpoint-stat "transport=${transport}" \
+      --require-transport-peer-endpoint-stat "usable=true" \
+      --require-transport-session-stat "transport=${transport}" \
+      --require-transport-session-any-min "stats.bytes_sent=1" \
+      --require-transport-session-any-min "stats.bytes_received=1" \
+      --summary "$transport_summary" || return
+    index=$((index + 1))
+  done < <(printf '%s\n' "$endpoint_transports_raw" | tr ',\t ' '\n')
 }
 
 main() {

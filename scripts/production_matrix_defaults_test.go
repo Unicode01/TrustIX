@@ -7292,6 +7292,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"collect_host_state a",
 		"collect_host_state b",
 		"TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK=1",
+		"case_has_endpoint_transport experimental_tcp",
 		"rx_worker_experimental_tcp=1",
 		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=%s",
 		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1",

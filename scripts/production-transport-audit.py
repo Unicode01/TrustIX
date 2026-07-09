@@ -348,6 +348,21 @@ TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
         },
     },
     "runner_sha256": {
+        # The current runner only adds an opt-in multi-endpoint mode. Existing
+        # single-transport production runs retain identical config and gate
+        # semantics, so their captured runner identity remains compatible.
+        "c1ebd81698f0a308a2bfa4737daae06d9c09b07c56310fcb49bcf34b3d01a54c": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "exp_tcp_full_kmod",
+            "owdeb_exp_tcp_full_kmod",
+            "secure_kudp",
+            "secure_exp_tcp_kernel",
+            "route_gso",
+        },
         # These rows were re-gated from existing 3600s artifacts; the verifier,
         # matrix, and evidence generator are current, but the soak runner hash
         # records the original long run that produced the artifacts.
