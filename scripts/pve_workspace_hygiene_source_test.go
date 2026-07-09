@@ -166,7 +166,7 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read case 0 env: %v", err)
 	}
-	env1, err := os.ReadFile(filepath.Join(workdir, "userspace-tcp-plaintext", "case.env"))
+	env1, err := os.ReadFile(filepath.Join(workdir, "tc-gre-plaintext", "case.env"))
 	if err != nil {
 		t.Fatalf("read case 1 env: %v", err)
 	}
