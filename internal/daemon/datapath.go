@@ -4267,7 +4267,13 @@ func (daemon *Daemon) warmSessionPool(ctx context.Context, epoch uint64, peer co
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, _, _ = daemon.sessionForEndpointPoolIndex(ctx, epoch, peer, cfgEndpoint, endpoint, poolIndex)
+				_, _, _ = daemon.sessionForEndpointPoolIndexWithOptions(ctx, epoch, peer, cfgEndpoint, endpoint, poolIndex, sessionForEndpointOptions{
+					AllowDial:                 true,
+					SuppressCanceledDialError: true,
+					SuppressDialErrorStats:    true,
+					RequireEpoch:              true,
+					ExpectedEpoch:             epoch,
+				})
 			}()
 		}
 		wg.Wait()

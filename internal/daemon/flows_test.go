@@ -3365,6 +3365,13 @@ func TestWarmSessionPoolRetriesMissingMembers(t *testing.T) {
 	if got := len(clientDaemon.dataSessions); got != 4 {
 		t.Fatalf("active pooled sessions = %d, want 4", got)
 	}
+	if attempts := clientDaemon.dataStats.sessionDialAttempts.Load(); attempts < 6 {
+		t.Fatalf("session dial attempts = %d, want at least 6", attempts)
+	}
+	counters := clientDaemon.dataStats.snapshot()
+	if counters.SessionDialErrors != 0 || counters.LastSessionDialError != "" {
+		t.Fatalf("session dial error counters after suppressed background warmup retries = errors:%d last:%q, want empty", counters.SessionDialErrors, counters.LastSessionDialError)
+	}
 }
 
 func TestWarmKernelDirectSessionsPreDialsFullPool(t *testing.T) {
