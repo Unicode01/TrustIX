@@ -122,6 +122,29 @@ case_encryption_token() {
   esac
 }
 
+case_kind_token() {
+  case "$1" in
+    userspace-*-secure|userspace-*-plaintext|crosshost-userspace-*-secure|crosshost-userspace-*-plaintext) printf 'userspace\n' ;;
+    tc-*-secure|tc-*-plaintext|crosshost-tc-*-secure|crosshost-tc-*-plaintext) printf 'tc_xdp\n' ;;
+    *) die "cannot infer concurrent case kind from ${1}" ;;
+  esac
+}
+
+case_profile_token() {
+  local kind encryption
+  kind="$(case_kind_token "$1")"
+  encryption="$(case_encryption_token "$1")"
+  if [[ "$kind" == "tc_xdp" && "$encryption" == "plaintext" ]]; then
+    printf 'performance\n'
+  else
+    printf 'stable\n'
+  fi
+}
+
+case_datapath_token() {
+  case_kind_token "$1"
+}
+
 record_summary() {
   local status="$1" name="$2" dir="$3" pid="$4" rc="$5" verify_rc="$6"
   printf '{"status":"%s","case":"%s","workdir":"%s","pid":%s,"exit_code":%s,"verify_exit_code":%s}\n' \
@@ -130,10 +153,12 @@ record_summary() {
 
 write_case_env() {
   local index="$1" name="$2" dir="$3" env_file="$4"
-  local port_offset api_a api_b peer_a peer_b data_a data_b iperf health lan_a_octet lan_b_octet carrier_octet iptunnel_port vxlan_vni vxlan_port label transport encryption
+  local port_offset api_a api_b peer_a peer_b data_a data_b iperf health lan_a_octet lan_b_octet carrier_octet iptunnel_port vxlan_vni vxlan_port label transport encryption profile datapath
   label="$(case_label "$name")"
   transport="$(case_transport_token "$name")"
   encryption="$(case_encryption_token "$name")"
+  profile="$(case_profile_token "$name")"
+  datapath="$(case_datapath_token "$name")"
   [[ -n "$transport" ]] || die "cannot infer transport from case ${name}"
   [[ -n "$encryption" ]] || die "cannot infer encryption from case ${name}; use userspace-TRANSPORT-secure/plaintext style"
   port_offset=$((index * port_stride))
@@ -160,6 +185,9 @@ write_case_env() {
 TRUSTIX_CROSS_HOST_CASE=${name}
 TRUSTIX_CROSS_HOST_TRANSPORT=${transport}
 TRUSTIX_CROSS_HOST_ENCRYPTION=${encryption}
+TRUSTIX_CROSS_HOST_PROFILE=${profile}
+TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=${datapath}
+TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT=userspace
 TRUSTIX_CROSS_HOST_WORKDIR=${dir}
 TRUSTIX_CROSS_HOST_KEEP_LOCAL=${keep_local}
 TRUSTIX_CROSS_HOST_KEEP_REMOTE=${keep_remote}
@@ -223,6 +251,10 @@ run_one() {
 
 verify_one() {
   local name="$1" dir="$2" summary="$3"
+  local encryption profile datapath
+  encryption="$(case_encryption_token "$name")"
+  profile="$(case_profile_token "$name")"
+  datapath="$(case_datapath_token "$name")"
   local args=(
     "--case" "${name}=${dir}"
     "--min-gbps" "$min_gbps"
@@ -242,6 +274,10 @@ verify_one() {
     "--require-host-state-artifacts" "--min-host-state-nodes" "2"
     "--require-status-max" "data_path.counters.session_dial_errors=0"
     "--require-status-max" "data_path.counters.session_heartbeat_timeouts=0"
+    "--require-transport-policy-stat" "profile=${profile}"
+    "--require-transport-policy-stat" "datapath=${datapath}"
+    "--require-transport-policy-stat" "encryption=${encryption}"
+    "--require-transport-policy-stat" "crypto_placement=userspace"
     "--require-transport-sessions-min" "1"
     "--summary" "$summary"
   )

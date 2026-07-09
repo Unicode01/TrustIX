@@ -61,6 +61,9 @@ func TestCrossHostConcurrentSoakScriptKeepsCasesIsolated(t *testing.T) {
 		`remote_base="${TRUSTIX_CROSS_HOST_CONCURRENT_REMOTE_BASE:-${remote_parent}/trustix-cross-host-concurrent-$(date +%Y%m%d-%H%M%S)-$$}"`,
 		`unload_modules="${TRUSTIX_CROSS_HOST_CONCURRENT_UNLOAD_MODULES:-0}"`,
 		`TRUSTIX_CROSS_HOST_UNLOAD_MODULES=${unload_modules}`,
+		`TRUSTIX_CROSS_HOST_PROFILE=${profile}`,
+		`TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=${datapath}`,
+		`TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT=userspace`,
 		`TRUSTIX_CROSS_HOST_REMOTE_A=${remote_base}/${label}/a`,
 		`TRUSTIX_CROSS_HOST_REMOTE_B=${remote_base}/${label}/b`,
 		`TRUSTIX_CROSS_HOST_API_A_PORT=${api_a}`,
@@ -83,6 +86,8 @@ func TestCrossHostConcurrentSoakScriptKeepsCasesIsolated(t *testing.T) {
 		`run_one "$name" "$dir" "$env_file" >"${dir}.out" 2>"${dir}.err" &`,
 		`"--require-stable-boot-id"`,
 		`"--require-kernel-log-artifacts"`,
+		`"--require-transport-policy-stat" "profile=${profile}"`,
+		`"--require-transport-policy-stat" "datapath=${datapath}"`,
 		`"--forbid-lsmod-prefix" "trustix_"`,
 	} {
 		if !strings.Contains(script, want) {
@@ -122,7 +127,7 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_CONCURRENT_WORKDIR="+workdir,
 		"TRUSTIX_CROSS_HOST_CONCURRENT_RUNNER="+runner,
 		"TRUSTIX_CROSS_HOST_CONCURRENT_VERIFIER="+verifier,
-		"TRUSTIX_CROSS_HOST_CONCURRENT_CASES=userspace-udp-secure userspace-tcp-plaintext userspace-experimental-tcp-secure",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_CASES=userspace-udp-secure tc-gre-plaintext userspace-experimental-tcp-secure",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_A=root@192.0.2.10",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_B=root@192.0.2.11",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_SSH_OPTS=-i /tmp/test-key -o BatchMode=yes",
@@ -149,7 +154,7 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"case":"userspace-udp-secure"`,
-		`"case":"userspace-tcp-plaintext"`,
+		`"case":"tc-gre-plaintext"`,
 		`"case":"userspace-experimental-tcp-secure"`,
 		`"status":"dry_run"`,
 	} {
@@ -167,6 +172,9 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 	}
 	for _, want := range []string{
 		"TRUSTIX_CROSS_HOST_UNLOAD_MODULES=0",
+		"TRUSTIX_CROSS_HOST_PROFILE=stable",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=userspace",
+		"TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT=userspace",
 		"TRUSTIX_CROSS_HOST_API_A_PORT=28787",
 		"TRUSTIX_CROSS_HOST_PEER_A_PORT=29443",
 		"TRUSTIX_CROSS_HOST_DATA_A_PORT=29700",
@@ -196,6 +204,11 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 	}
 	for _, want := range []string{
 		"TRUSTIX_CROSS_HOST_UNLOAD_MODULES=0",
+		"TRUSTIX_CROSS_HOST_TRANSPORT=gre",
+		"TRUSTIX_CROSS_HOST_ENCRYPTION=plaintext",
+		"TRUSTIX_CROSS_HOST_PROFILE=performance",
+		"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=tc_xdp",
+		"TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT=userspace",
 		"TRUSTIX_CROSS_HOST_API_A_PORT=28797",
 		"TRUSTIX_CROSS_HOST_PEER_A_PORT=29453",
 		"TRUSTIX_CROSS_HOST_DATA_A_PORT=29710",
