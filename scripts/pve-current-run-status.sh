@@ -7,6 +7,11 @@ run_root=""
 tail_lines=120
 latest_selection=1
 latest_mode="userspace"
+check_nodes="${TRUSTIX_PVE_STATUS_CHECK_NODES:-0}"
+node_a="${TRUSTIX_PVE_STATUS_NODE_A:-${TRUSTIX_PVE_USERSPACE_A:-root@192.168.100.204}}"
+node_b="${TRUSTIX_PVE_STATUS_NODE_B:-${TRUSTIX_PVE_USERSPACE_B:-root@192.168.100.203}}"
+node_ssh_opts_raw="${TRUSTIX_PVE_STATUS_SSH_OPTS:-${TRUSTIX_PVE_USERSPACE_SSH_OPTS:--i /root/.ssh/trustix-cross-run -o BatchMode=yes -o StrictHostKeyChecking=accept-new}}"
+node_since="${TRUSTIX_PVE_STATUS_NODE_SINCE:-2 hours ago}"
 
 usage() {
   cat <<'EOF'
@@ -22,6 +27,11 @@ Options:
   --latest-userspace     Inspect latest current-*-userspace-*-production-* run
   --latest-production    Inspect latest *-production-* run
   --tail N               Lines of matrix stderr/stdout to show. Default: 120
+  --check-nodes          Also SSH to the cross-host nodes and print read-only state
+  --node-a USER@HOST     Node A for --check-nodes. Default: root@192.168.100.204
+  --node-b USER@HOST     Node B for --check-nodes. Default: root@192.168.100.203
+  --ssh-opts OPTS        SSH options for --check-nodes
+  --node-since WHEN      Kernel log window for --check-nodes. Default: 2 hours ago
   -h, --help             Show this help
 EOF
 }
@@ -73,6 +83,57 @@ count_data_rows() {
     awk 'BEGIN{count=0} /^[[:space:]]*#/ || NF==0 {next} {count++} END{print count}' "$path"
   else
     printf '0\n'
+  fi
+}
+
+truthy() {
+  case "${1:-0}" in
+    1|true|yes|on|enabled) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+print_node_status() {
+  local label="$1" node="$2" since="$3" remote_script
+  printf '== node %s status ==\n' "$label"
+  if [[ -z "$node" ]]; then
+    printf 'status=skipped-empty-node\n'
+    return
+  fi
+  if ! command -v ssh >/dev/null 2>&1; then
+    printf 'status=skipped-missing-ssh\n'
+    return
+  fi
+
+  remote_script=$(cat <<EOF
+set -u
+printf 'status=reachable\n'
+printf 'date=%s\n' "\$(date -Is 2>/dev/null || date)"
+printf 'hostname=%s\n' "\$(hostname 2>/dev/null || printf unknown)"
+printf 'kernel=%s\n' "\$(uname -r 2>/dev/null || printf unknown)"
+printf 'boot_id='
+cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'missing\n'
+printf 'trustix_modules:\n'
+lsmod 2>/dev/null | grep '^trustix_' || true
+printf 'trustix_processes:\n'
+ps -eo pid,ppid,etime,cmd 2>/dev/null | grep -E 'trustixd|iperf3|linux-cross-host|soak' | grep -v grep || true
+printf 'trustix_listeners:\n'
+(ss -lntup 2>/dev/null || netstat -lntup 2>/dev/null || true) | grep -E '1878|1944|2520|8787|9443' || true
+printf 'kernel_suspicious:\n'
+if command -v journalctl >/dev/null 2>&1; then
+  journalctl -k -b --since $(shell_quote "$since") --no-pager -o short-iso 2>/dev/null | grep -E -i 'panic|oops|BUG|Call Trace|RIP:|general protection|page fault|watchdog|lockup|trustix|datapath|rx_worker|xmit|gso|tx_queue_len' || true
+else
+  dmesg 2>/dev/null | grep -E -i 'panic|oops|BUG|Call Trace|RIP:|general protection|page fault|watchdog|lockup|trustix|datapath|rx_worker|xmit|gso|tx_queue_len' || true
+fi
+EOF
+)
+
+  if ! ssh -n "${node_ssh_opts[@]}" "$node" "bash -c $(shell_quote "$remote_script")"; then
+    printf 'status=unreachable\nnode=%s\n' "$node"
   fi
 }
 
@@ -158,6 +219,30 @@ while [[ $# -gt 0 ]]; do
       tail_lines="$2"
       shift 2
       ;;
+    --check-nodes)
+      check_nodes=1
+      shift
+      ;;
+    --node-a)
+      [[ $# -ge 2 ]] || die "--node-a requires USER@HOST"
+      node_a="$2"
+      shift 2
+      ;;
+    --node-b)
+      [[ $# -ge 2 ]] || die "--node-b requires USER@HOST"
+      node_b="$2"
+      shift 2
+      ;;
+    --ssh-opts)
+      [[ $# -ge 2 ]] || die "--ssh-opts requires OPTS"
+      node_ssh_opts_raw="$2"
+      shift 2
+      ;;
+    --node-since)
+      [[ $# -ge 2 ]] || die "--node-since requires WHEN"
+      node_since="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -171,6 +256,12 @@ done
 case "$tail_lines" in
   ''|*[!0-9]*) die "--tail must be a non-negative integer" ;;
 esac
+
+node_ssh_opts=()
+if [[ -n "$node_ssh_opts_raw" ]]; then
+  # shellcheck disable=SC2206
+  node_ssh_opts=($node_ssh_opts_raw)
+fi
 
 workspace="$(abs_path_existing "$workspace")"
 case "$workspace" in
@@ -227,6 +318,11 @@ print_file_if_present "run.meta" "${run_root}/run.meta"
 print_progress_summary
 
 print_host_health_summary
+
+if truthy "$check_nodes"; then
+  print_node_status "a" "$node_a" "$node_since"
+  print_node_status "b" "$node_b" "$node_since"
+fi
 
 printf '== pid ==\n'
 pid_status="missing"

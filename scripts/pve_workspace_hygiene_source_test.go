@@ -230,6 +230,10 @@ func TestPVECurrentRunStatusScriptIsReadOnlyAndScoped(t *testing.T) {
 		`== host health ==`,
 		`latest_sample=`,
 		`latest_kernel_warnings_tail`,
+		`TRUSTIX_PVE_STATUS_CHECK_NODES`,
+		`--check-nodes`,
+		`print_node_status()`,
+		`ssh -n "${node_ssh_opts[@]}"`,
 		`status=ready_to_review_or_promote`,
 		`status=interrupted_or_stale`,
 	} {
