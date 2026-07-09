@@ -226,6 +226,14 @@ CAPTURE_FORWARDER_DEFAULT_COMMITS_BY_PATH = {
         "1dfaf51caac8bc03177de4ec428e23659db69173",
     },
 }
+SESSION_POOL_WARMUP_OBSERVABILITY_COMMITS_BY_PATH = {
+    # 9a3fc75 only suppresses transient dial-error counter updates from
+    # background session-pool warmup retries. It does not change endpoint
+    # selection, dialing, transport I/O, packet handling, or retry behavior.
+    "internal/daemon/datapath.go": {
+        "9a3fc75839a4dc1ba65810656f5686d988d92d33",
+    },
+}
 CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
     "full_kmod",
     "exp_tcp_full_kmod",
@@ -991,6 +999,9 @@ def current_runtime_path_change_irrelevant(
             allowed_change_commits.update(allowed_commits)
     allowed_commits = CAPTURE_FORWARDER_DEFAULT_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class in CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES:
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = SESSION_POOL_WARMUP_OBSERVABILITY_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits:
         allowed_change_commits.update(allowed_commits)
     allowed_commits = USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and (

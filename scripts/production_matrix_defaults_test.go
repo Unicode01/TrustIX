@@ -3569,6 +3569,47 @@ for row, path, want in cases:
 	}
 }
 
+func TestProductionTransportAuditScriptSessionWarmupObservabilityExemption(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+commit = "9a3fc75839a4dc1ba65810656f5686d988d92d33"
+parent = subprocess.check_output(["git", "rev-parse", commit + "^"], text=True).strip()
+path = "internal/daemon/datapath.go"
+for row in [
+    {"gate_family": "full_kmod", "transport": "udp"},
+    {"gate_family": "userspace", "transport": "experimental_tcp"},
+]:
+    if not module.current_runtime_path_change_irrelevant(row, parent, path):
+        print(f"session warmup observability change not exempt for {row}", file=sys.stderr)
+        sys.exit(1)
+
+older_parent = subprocess.check_output(["git", "rev-parse", "1dfaf51caac8bc03177de4ec428e23659db69173^"], text=True).strip()
+row = {"gate_family": "userspace", "transport": "experimental_tcp"}
+if module.current_runtime_path_change_irrelevant(row, older_parent, path):
+    print("exemption incorrectly covered unrelated datapath.go commits", file=sys.stderr)
+    sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("session warmup observability exemption regression failed: %v\n%s", err, output)
+	}
+}
+
 func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
 	python := requirePython3(t)
 	workdir := t.TempDir()
