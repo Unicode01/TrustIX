@@ -542,7 +542,7 @@ func TestPVEPromoteRunEvidenceScriptIsScopedAndDryRunByDefault(t *testing.T) {
 	}
 }
 
-func TestPVECurrentUserspaceRefreshSelectsNextRefreshGap(t *testing.T) {
+func TestPVECurrentUserspaceRefreshRejectsNextRefreshGapWhenCurrent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("pve-current-userspace-refresh.sh dry-run expects Linux-style paths")
 	}
@@ -562,33 +562,14 @@ func TestPVECurrentUserspaceRefreshSelectsNextRefreshGap(t *testing.T) {
 		"--skip-hygiene-check",
 	)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("next-refresh-gap dry-run failed: %v\n%s", err, out)
+	if err == nil {
+		t.Fatalf("next-refresh-gap unexpectedly succeeded with no gaps:\n%s", out)
 	}
-	payload, err := os.ReadFile(filepath.Join(runRoot, "userspace-defaults.tsv"))
-	if err != nil {
-		t.Fatalf("read generated defaults: %v", err)
+	if !strings.Contains(string(out), "no cross-host userspace current refresh gaps detected") {
+		t.Fatalf("next-refresh-gap failure did not explain that evidence is current:\n%s", out)
 	}
-	defaults := string(payload)
-	for _, want := range []string{
-		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"tcp\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-	} {
-		if !strings.Contains(defaults, want) {
-			t.Fatalf("next refresh defaults missing %q:\n%s", want, defaults)
-		}
-	}
-	for _, bad := range []string{
-		"udp\t",
-		"quic\t",
-		"websocket\t",
-		"http_connect\t",
-		"experimental_tcp\t",
-		"kernel_module",
-	} {
-		if strings.Contains(defaults, bad) {
-			t.Fatalf("next refresh defaults unexpectedly contain %q:\n%s", bad, defaults)
-		}
+	if _, err := os.Stat(filepath.Join(runRoot, "userspace-defaults.tsv")); !os.IsNotExist(err) {
+		t.Fatalf("next-refresh-gap wrote defaults despite having no gaps: %v", err)
 	}
 }
 
@@ -620,7 +601,7 @@ func TestPVEPromoteRunEvidenceRejectsFailedRunBeforePromotion(t *testing.T) {
 	}
 }
 
-func TestPVECurrentUserspaceRefreshDetectsRefreshGapTransports(t *testing.T) {
+func TestPVECurrentUserspaceRefreshRejectsRefreshGapsWhenCurrent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("pve-current-userspace-refresh.sh dry-run expects Linux-style paths")
 	}
@@ -640,48 +621,14 @@ func TestPVECurrentUserspaceRefreshDetectsRefreshGapTransports(t *testing.T) {
 		"--skip-hygiene-check",
 	)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("refresh-gap dry-run failed: %v\n%s", err, out)
+	if err == nil {
+		t.Fatalf("refresh-gap unexpectedly succeeded with no gaps:\n%s", out)
 	}
-	text := string(out)
-	for _, want := range []string{
-		"RUN_ROOT=" + runRoot,
-		"DEFAULTS=" + filepath.Join(runRoot, "userspace-defaults.tsv"),
-		"DRY_RUN=1",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("dry-run output missing %q:\n%s", want, text)
-		}
+	if !strings.Contains(string(out), "no cross-host userspace current refresh gaps detected") {
+		t.Fatalf("refresh-gap failure did not explain that evidence is current:\n%s", out)
 	}
-
-	payload, err := os.ReadFile(filepath.Join(runRoot, "userspace-defaults.tsv"))
-	if err != nil {
-		t.Fatalf("read generated defaults: %v", err)
-	}
-	defaults := string(payload)
-	for _, want := range []string{
-		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"tcp\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"quic\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"quic\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"websocket\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"websocket\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"http_connect\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"http_connect\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"experimental_tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-	} {
-		if !strings.Contains(defaults, want) {
-			t.Fatalf("refresh-gap defaults missing %q:\n%s", want, defaults)
-		}
-	}
-	for _, bad := range []string{
-		"udp\t",
-		"kernel_module",
-		"experimental_tcp\tplaintext",
-	} {
-		if strings.Contains(defaults, bad) {
-			t.Fatalf("refresh-gap defaults unexpectedly contain %q:\n%s", bad, defaults)
-		}
+	if _, err := os.Stat(filepath.Join(runRoot, "userspace-defaults.tsv")); !os.IsNotExist(err) {
+		t.Fatalf("refresh-gap wrote defaults despite having no gaps: %v", err)
 	}
 }
 
