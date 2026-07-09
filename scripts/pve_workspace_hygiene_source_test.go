@@ -42,6 +42,130 @@ func TestPVEPromoteRunEvidenceScriptSyntax(t *testing.T) {
 	}
 }
 
+func TestCrossHostConcurrentSoakScriptSyntax(t *testing.T) {
+	bash := requireGNUBash4(t)
+	cmd := exec.Command(bash, "-n", "linux-cross-host-concurrent-soak.sh")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n linux-cross-host-concurrent-soak.sh: %v\n%s", err, out)
+	}
+}
+
+func TestCrossHostConcurrentSoakScriptKeepsCasesIsolated(t *testing.T) {
+	payload, err := os.ReadFile("linux-cross-host-concurrent-soak.sh")
+	if err != nil {
+		t.Fatalf("read linux-cross-host-concurrent-soak.sh: %v", err)
+	}
+	script := string(payload)
+	for _, want := range []string{
+		`workdir="${TRUSTIX_CROSS_HOST_CONCURRENT_WORKDIR:-$(mktemp -d /tmp/trustix-cross-host-concurrent.XXXXXX)}"`,
+		`remote_base="${TRUSTIX_CROSS_HOST_CONCURRENT_REMOTE_BASE:-${remote_parent}/trustix-cross-host-concurrent-$(date +%Y%m%d-%H%M%S)-$$}"`,
+		`unload_modules="${TRUSTIX_CROSS_HOST_CONCURRENT_UNLOAD_MODULES:-0}"`,
+		`TRUSTIX_CROSS_HOST_UNLOAD_MODULES=${unload_modules}`,
+		`TRUSTIX_CROSS_HOST_REMOTE_A=${remote_base}/${label}/a`,
+		`TRUSTIX_CROSS_HOST_REMOTE_B=${remote_base}/${label}/b`,
+		`TRUSTIX_CROSS_HOST_API_A_PORT=${api_a}`,
+		`TRUSTIX_CROSS_HOST_PEER_A_PORT=${peer_a}`,
+		`TRUSTIX_CROSS_HOST_DATA_A_PORT=${data_a}`,
+		`TRUSTIX_CROSS_HOST_IPERF_PORT=${iperf}`,
+		`TRUSTIX_CROSS_HOST_LAN_IF_A=tix-lan-c${index}a`,
+		`TRUSTIX_CROSS_HOST_HOST_NS_A=tix-host-c${index}a`,
+		`TRUSTIX_CROSS_HOST_LAN_A_CIDR=10.74.${lan_a_octet}.0/24`,
+		`case "$dir" in "$workdir"/*)`,
+		`run_one "$name" "$dir" "$env_file" >"${dir}.out" 2>"${dir}.err" &`,
+		`"--require-stable-boot-id"`,
+		`"--require-kernel-log-artifacts"`,
+		`"--forbid-lsmod-prefix" "trustix_"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("linux-cross-host-concurrent-soak.sh missing %q", want)
+		}
+	}
+	for _, bad := range []string{
+		`/root/current-`,
+		`mktemp -d /root`,
+		`TRUSTIX_CROSS_HOST_CONCURRENT_UNLOAD_MODULES:-1`,
+	} {
+		if strings.Contains(script, bad) {
+			t.Fatalf("linux-cross-host-concurrent-soak.sh contains unsafe fragment %q", bad)
+		}
+	}
+}
+
+func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("concurrent soak dry-run expects GNU bash and Linux-style paths")
+	}
+	bash := requireGNUBash4(t)
+	root := t.TempDir()
+	runner := filepath.Join(root, "runner.sh")
+	verifier := filepath.Join(root, "verifier.py")
+	workdir := filepath.Join(root, "concurrent")
+	if err := os.WriteFile(runner, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write runner: %v", err)
+	}
+	if err := os.WriteFile(verifier, []byte("#!/usr/bin/env python3\n"), 0o755); err != nil {
+		t.Fatalf("write verifier: %v", err)
+	}
+	cmd := exec.Command(bash, "linux-cross-host-concurrent-soak.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_CONCURRENT_DRY_RUN=1",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_CONCURRENT_RUNNER="+runner,
+		"TRUSTIX_CROSS_HOST_CONCURRENT_VERIFIER="+verifier,
+		"TRUSTIX_CROSS_HOST_CONCURRENT_CASES=userspace-udp-secure userspace-tcp-plaintext userspace-experimental-tcp-secure",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("concurrent dry-run failed: %v\n%s", err, out)
+	}
+	summary, err := os.ReadFile(filepath.Join(workdir, "summary.jsonl"))
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	for _, want := range []string{
+		`"case":"userspace-udp-secure"`,
+		`"case":"userspace-tcp-plaintext"`,
+		`"case":"userspace-experimental-tcp-secure"`,
+		`"status":"dry_run"`,
+	} {
+		if !strings.Contains(string(summary), want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
+	}
+	env0, err := os.ReadFile(filepath.Join(workdir, "userspace-udp-secure", "case.env"))
+	if err != nil {
+		t.Fatalf("read case 0 env: %v", err)
+	}
+	env1, err := os.ReadFile(filepath.Join(workdir, "userspace-tcp-plaintext", "case.env"))
+	if err != nil {
+		t.Fatalf("read case 1 env: %v", err)
+	}
+	for _, want := range []string{
+		"TRUSTIX_CROSS_HOST_UNLOAD_MODULES=0",
+		"TRUSTIX_CROSS_HOST_API_A_PORT=28787",
+		"TRUSTIX_CROSS_HOST_PEER_A_PORT=29443",
+		"TRUSTIX_CROSS_HOST_DATA_A_PORT=29700",
+		"TRUSTIX_CROSS_HOST_IPERF_PORT=35201",
+		"TRUSTIX_CROSS_HOST_LAN_A_CIDR=10.74.80.0/24",
+	} {
+		if !strings.Contains(string(env0), want) {
+			t.Fatalf("case 0 env missing %q:\n%s", want, env0)
+		}
+	}
+	for _, want := range []string{
+		"TRUSTIX_CROSS_HOST_UNLOAD_MODULES=0",
+		"TRUSTIX_CROSS_HOST_API_A_PORT=28797",
+		"TRUSTIX_CROSS_HOST_PEER_A_PORT=29453",
+		"TRUSTIX_CROSS_HOST_DATA_A_PORT=29710",
+		"TRUSTIX_CROSS_HOST_IPERF_PORT=35211",
+		"TRUSTIX_CROSS_HOST_LAN_A_CIDR=10.74.82.0/24",
+	} {
+		if !strings.Contains(string(env1), want) {
+			t.Fatalf("case 1 env missing %q:\n%s", want, env1)
+		}
+	}
+}
+
 func TestPVECurrentUserspaceRefreshScriptKeepsPVEWorkspaceScoped(t *testing.T) {
 	payload, err := os.ReadFile("pve-current-userspace-refresh.sh")
 	if err != nil {
