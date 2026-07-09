@@ -396,15 +396,15 @@ func TestPVECurrentUserspaceRefreshSelectsNextRefreshGap(t *testing.T) {
 	}
 	defaults := string(payload)
 	for _, want := range []string{
-		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"udp\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
+		"tcp\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
 	} {
 		if !strings.Contains(defaults, want) {
 			t.Fatalf("next refresh defaults missing %q:\n%s", want, defaults)
 		}
 	}
 	for _, bad := range []string{
-		"tcp\t",
+		"udp\t",
 		"quic\t",
 		"websocket\t",
 		"http_connect\t",
@@ -485,8 +485,6 @@ func TestPVECurrentUserspaceRefreshDetectsRefreshGapTransports(t *testing.T) {
 	}
 	defaults := string(payload)
 	for _, want := range []string{
-		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
-		"udp\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
 		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
 		"tcp\tplaintext\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
 		"quic\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace",
@@ -502,6 +500,7 @@ func TestPVECurrentUserspaceRefreshDetectsRefreshGapTransports(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{
+		"udp\t",
 		"kernel_module",
 		"experimental_tcp\tplaintext",
 	} {
