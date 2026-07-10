@@ -3384,6 +3384,68 @@ func TestExperimentalTCPDeliverDoesNotDropRemoteFrameWithSamePorts(t *testing.T)
 	}
 }
 
+func TestExperimentalTCPDeliverUsesExclusiveFlowSubscriber(t *testing.T) {
+	manager := NewManager()
+	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+		ID:              7,
+		LocalAddress:    "198.51.100.10:17041",
+		RemoteAddress:   "192.0.2.20:54000",
+		SourcePort:      17041,
+		DestinationPort: 54000,
+	}
+	globalEvents := make(chan []dataplane.ExperimentalTCPFrame, 1)
+	flowEvents := make(chan []dataplane.ExperimentalTCPFrame, 1)
+	manager.expTCPSubs[globalEvents] = struct{}{}
+	manager.expTCPFlowSubs[7] = map[chan []dataplane.ExperimentalTCPFrame]struct{}{flowEvents: {}}
+
+	var calls atomic.Int32
+	manager.deliverExperimentalTCPFrame(dataplane.ExperimentalTCPFrame{
+		FlowID:  7,
+		Payload: []byte("flow-owned"),
+		Release: func() {
+			calls.Add(1)
+		},
+	}, experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("192.0.2.20"),
+		DestinationIP:   netip.MustParseAddr("198.51.100.10"),
+		SourcePort:      17041,
+		DestinationPort: 54000,
+	})
+
+	select {
+	case batch := <-flowEvents:
+		if len(batch) != 1 || string(batch[0].Payload) != "flow-owned" {
+			t.Fatalf("flow delivery batch = %#v, want flow-owned frame", batch)
+		}
+		releaseExperimentalTCPFramePayloads(batch)
+	default:
+		t.Fatal("flow-owned frame was not delivered to flow subscriber")
+	}
+	select {
+	case batch := <-globalEvents:
+		releaseExperimentalTCPFramePayloads(batch)
+		t.Fatal("flow-owned frame was also delivered to global subscriber")
+	default:
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("release calls = %d, want 1 for exclusive flow delivery", got)
+	}
+}
+
+func TestExperimentalTCPGlobalDeliveryFramesExcludesFlowOwnedFrames(t *testing.T) {
+	flowEvents := make(chan []dataplane.ExperimentalTCPFrame, 1)
+	frames := []dataplane.ExperimentalTCPFrame{
+		{FlowID: 7, Payload: []byte("flow-owned")},
+		{FlowID: 8, Payload: []byte("global")},
+	}
+	global := experimentalTCPGlobalDeliveryFrames(frames, map[uint64]map[chan []dataplane.ExperimentalTCPFrame]struct{}{
+		7: {flowEvents: {}},
+	})
+	if len(global) != 1 || global[0].FlowID != 8 || string(global[0].Payload) != "global" {
+		t.Fatalf("global delivery frames = %#v, want only flow 8", global)
+	}
+}
+
 func TestExperimentalTCPDeliverLearnsTupleForControlOnlyFlow(t *testing.T) {
 	manager := NewManager()
 	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{

@@ -8247,8 +8247,10 @@ func (manager *Manager) deliverExperimentalTCPFrames(frames []receivedExperiment
 	}
 	manager.prepareExperimentalTCPDeliveredReleasesLocked(delivered)
 	manager.prepareExperimentalTCPDeliveredBatchReleaseLocked(delivered, deliveredHolder)
+	allDeliveredToFlowSubscribers := false
 	if len(manager.expTCPFlowSubs) > 0 {
 		if _, subscribers, ok := experimentalTCPSingleFlowSubscriberSet(delivered, manager.expTCPFlowSubs); ok {
+			allDeliveredToFlowSubscribers = true
 			for subscriber := range subscribers {
 				select {
 				case subscriber <- delivered:
@@ -8279,12 +8281,22 @@ func (manager *Manager) deliverExperimentalTCPFrames(frames []receivedExperiment
 			}
 		}
 	}
-	for subscriber := range manager.expTCPSubs {
-		select {
-		case subscriber <- delivered:
-		default:
-			manager.expTCPSubDrops += uint64(len(delivered))
-			releaseExperimentalTCPFramePayloads(delivered)
+	if len(manager.expTCPSubs) > 0 {
+		globalDelivered := delivered
+		if allDeliveredToFlowSubscribers {
+			globalDelivered = nil
+		} else if len(manager.expTCPFlowSubs) > 0 {
+			globalDelivered = experimentalTCPGlobalDeliveryFrames(delivered, manager.expTCPFlowSubs)
+		}
+		if len(globalDelivered) > 0 {
+			for subscriber := range manager.expTCPSubs {
+				select {
+				case subscriber <- globalDelivered:
+				default:
+					manager.expTCPSubDrops += uint64(len(globalDelivered))
+					releaseExperimentalTCPFramePayloads(globalDelivered)
+				}
+			}
 		}
 	}
 }
@@ -8390,6 +8402,30 @@ func experimentalTCPSingleFlowSubscriberSet(frames []dataplane.ExperimentalTCPFr
 	return flowID, subscribers, true
 }
 
+func experimentalTCPGlobalDeliveryFrames(frames []dataplane.ExperimentalTCPFrame, flowSubs map[uint64]map[chan []dataplane.ExperimentalTCPFrame]struct{}) []dataplane.ExperimentalTCPFrame {
+	var filtered []dataplane.ExperimentalTCPFrame
+	for i, frame := range frames {
+		if len(flowSubs[frame.FlowID]) == 0 {
+			if filtered != nil {
+				filtered = append(filtered, frame)
+			}
+			continue
+		}
+		if filtered == nil {
+			filtered = make([]dataplane.ExperimentalTCPFrame, 0, len(frames)-1)
+			for _, previous := range frames[:i] {
+				if len(flowSubs[previous.FlowID]) == 0 {
+					filtered = append(filtered, previous)
+				}
+			}
+		}
+	}
+	if filtered == nil {
+		return frames
+	}
+	return filtered
+}
+
 func experimentalTCPPacketMatchesLocalEcho(flow dataplane.ExperimentalTCPFlow, packet experimentaltcp.TCPPacket) bool {
 	if flow.SourcePort == 0 || flow.DestinationPort == 0 {
 		return false
@@ -8422,6 +8458,9 @@ func (manager *Manager) prepareExperimentalTCPDeliveredReleasesLocked(frames []d
 			flowRecipients = len(subs)
 		}
 		recipients := len(manager.expTCPSubs) + flowRecipients
+		if flowRecipients > 0 {
+			recipients = flowRecipients
+		}
 		switch {
 		case recipients == 0:
 			release()
@@ -8445,6 +8484,9 @@ func (manager *Manager) prepareExperimentalTCPDeliveredBatchReleaseLocked(frames
 			flowRecipients = len(subs)
 		}
 		recipients := len(manager.expTCPSubs) + flowRecipients
+		if flowRecipients > 0 {
+			recipients = flowRecipients
+		}
 		frameRecipients[i] = recipients
 		totalFrameReleases += recipients
 	}
