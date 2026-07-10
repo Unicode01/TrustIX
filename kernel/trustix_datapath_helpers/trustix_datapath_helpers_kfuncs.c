@@ -25,6 +25,7 @@
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/delay.h>
+#include <linux/device.h>
 #include <linux/slab.h>
 #include <linux/skbuff.h>
 #include <linux/stddef.h>
@@ -580,6 +581,7 @@ static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_frames;
 static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_fallbacks;
 static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_errors;
 static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_blocked;
+static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_virtio_blocked;
 static unsigned long trustix_route_tcp_gso_async_stream_outer_gso_verify_errors;
 static unsigned long trustix_route_tcp_gso_async_stream_cross_item_batches;
 static unsigned long trustix_route_tcp_gso_async_stream_cross_item_items;
@@ -1353,7 +1355,8 @@ module_param_cb(route_tcp_gso_async_stream_allow_virtio_net,
 		&trustix_route_tcp_gso_quiesced_bool_ops,
 		&trustix_route_tcp_gso_async_stream_allow_virtio_net, 0644);
 MODULE_PARM_DESC(route_tcp_gso_async_stream_allow_virtio_net,
-		 "Reserved stream hardware-GSO virtio_net override");
+		 "Allow route-TCP outer GSO to remain offloaded on virtio_net; "
+		 "disabled by default to avoid unstable receive-side skb shapes");
 
 module_param_cb(route_tcp_gso_async_stream_outer_gso,
 		&trustix_route_tcp_gso_quiesced_bool_ops,
@@ -1810,6 +1813,9 @@ module_param_named(route_tcp_gso_async_stream_outer_gso_errors,
 		   0444);
 module_param_named(route_tcp_gso_async_stream_outer_gso_blocked,
 		   trustix_route_tcp_gso_async_stream_outer_gso_blocked,
+		   ulong, 0444);
+module_param_named(route_tcp_gso_async_stream_outer_gso_virtio_blocked,
+		   trustix_route_tcp_gso_async_stream_outer_gso_virtio_blocked,
 		   ulong, 0444);
 module_param_named(route_tcp_gso_async_stream_outer_gso_verify_errors,
 		   trustix_route_tcp_gso_async_stream_outer_gso_verify_errors,
@@ -9194,6 +9200,21 @@ static u32 trustix_tixt_tx_route_gso_effective_mtu(
 	return mtu;
 }
 
+static bool trustix_tixt_tx_route_gso_virtio_net(
+				const struct net_device *out_dev)
+{
+	const struct device *parent;
+	const struct device_driver *driver;
+
+	if (!out_dev)
+		return false;
+	parent = READ_ONCE(out_dev->dev.parent);
+	if (!parent)
+		return false;
+	driver = READ_ONCE(parent->driver);
+	return driver && driver->name && !strcmp(driver->name, "virtio_net");
+}
+
 static bool trustix_tixt_tx_route_gso_outer_gso_capable(
 				const struct trustix_tixt_tx_route_gso_template *tmpl,
 				bool record_block)
@@ -9204,6 +9225,14 @@ static bool trustix_tixt_tx_route_gso_outer_gso_capable(
 	if (!tmpl || !tmpl->out_dev)
 		return false;
 	out_dev = tmpl->out_dev;
+	if (!READ_ONCE(trustix_route_tcp_gso_async_stream_allow_virtio_net) &&
+	    trustix_tixt_tx_route_gso_virtio_net(out_dev)) {
+		if (record_block) {
+			trustix_route_tcp_gso_async_stream_outer_gso_blocked++;
+			trustix_route_tcp_gso_async_stream_outer_gso_virtio_blocked++;
+		}
+		return false;
+	}
 	features = READ_ONCE(out_dev->features);
 	if (!(features & NETIF_F_TSO) || !(features & NETIF_F_HW_CSUM)) {
 		if (record_block)

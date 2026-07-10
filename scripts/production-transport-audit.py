@@ -252,6 +252,20 @@ SESSION_POOL_LIFECYCLE_COMMITS_BY_PATH = {
         "34cfd42838f5b6e0c25143a9996c81698165846c",
     },
 }
+ADDRESSED_REVERSE_SESSION_POOL_COMMITS_BY_PATH = {
+    # 774ed8d makes addressed reverse-session reuse pool-index exact during
+    # targeted warmup. It changes session cardinality for secure kernel UDP
+    # and plaintext experimental TCP modes that prefer accepted sessions, but
+    # it does not affect full-kmod/route-GSO or secure experimental TCP modes.
+    "internal/daemon/datapath.go": {
+        "774ed8d5633c51079dc8fb9bcae6de970ea023ea",
+    },
+}
+ADDRESSED_REVERSE_SESSION_POOL_UNAFFECTED_EXPERIMENTAL_TCP_GATE_CLASSES = {
+    "full_kmod",
+    "exp_tcp_full_kmod",
+    "route_gso",
+}
 KERNEL_UDP_SESSION_LIFECYCLE_COMMITS_BY_PATH = {
     # f61fbad only synchronizes shutdown and release ownership for kernel UDP
     # sessions. Userspace UDP sessions never instantiate kernelSession, so
@@ -1065,6 +1079,15 @@ def current_runtime_path_change_irrelevant(
         allowed_change_commits.update(allowed_commits)
     allowed_commits = SESSION_POOL_LIFECYCLE_COMMITS_BY_PATH.get(normalized)
     if allowed_commits:
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = ADDRESSED_REVERSE_SESSION_POOL_COMMITS_BY_PATH.get(normalized)
+    addressed_reverse_session_pool_impacted = gate_class == "secure_kudp" or (
+        transport == "experimental_tcp"
+        and row.get("encryption") == "plaintext"
+        and gate_class
+        not in ADDRESSED_REVERSE_SESSION_POOL_UNAFFECTED_EXPERIMENTAL_TCP_GATE_CLASSES
+    )
+    if allowed_commits and not addressed_reverse_session_pool_impacted:
         allowed_change_commits.update(allowed_commits)
     allowed_commits = KERNEL_UDP_SESSION_LIFECYCLE_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class != "secure_kudp":

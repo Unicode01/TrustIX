@@ -16322,6 +16322,26 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 	if strings.Contains(readyBody, "netif_xmit_stopped") {
 		t.Fatal("route TCP GSO dev_queue_xmit readiness must not treat a transiently stopped TX queue as a hard failure")
 	}
+	virtioBody := sourceFunctionBody(t, source, "trustix_tixt_tx_route_gso_virtio_net")
+	for _, want := range []string{
+		"out_dev->dev.parent",
+		"parent->driver",
+		`!strcmp(driver->name, "virtio_net")`,
+	} {
+		if !strings.Contains(virtioBody, want) {
+			t.Fatalf("route TCP GSO virtio detection missing %q", want)
+		}
+	}
+	outerGSOCapableBody := sourceFunctionBody(t, source, "trustix_tixt_tx_route_gso_outer_gso_capable")
+	for _, want := range []string{
+		"trustix_route_tcp_gso_async_stream_allow_virtio_net",
+		"trustix_tixt_tx_route_gso_virtio_net(out_dev)",
+		"trustix_route_tcp_gso_async_stream_outer_gso_virtio_blocked++",
+	} {
+		if !strings.Contains(outerGSOCapableBody, want) {
+			t.Fatalf("route TCP GSO virtio outer-GSO guard missing %q", want)
+		}
+	}
 }
 
 func TestRemotePerfMatrixAppliesSysfsAfterModuleReload(t *testing.T) {
