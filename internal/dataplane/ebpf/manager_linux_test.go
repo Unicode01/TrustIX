@@ -4077,6 +4077,7 @@ func TestPreparedExperimentalTCPFlowPreservesPersistentLifetime(t *testing.T) {
 }
 
 func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T) {
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
@@ -4097,6 +4098,13 @@ func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T
 				Enabled:   true,
 			},
 		},
+	}
+	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+		ID:              77,
+		LocalAddress:    "192.0.2.10:18001",
+		RemoteAddress:   "198.51.100.20:43000",
+		SourcePort:      18001,
+		DestinationPort: 43000,
 	}
 	manager.expTCPRawReceiveFilter.Store(manager.experimentalTCPRawReceiveFilterLocked())
 
@@ -4140,6 +4148,29 @@ func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T
 	); ok {
 		t.Fatal("raw decode accepted another instance using a different local port")
 	}
+	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+		ID:              77,
+		LocalAddress:    "192.0.2.10:18001",
+		RemoteAddress:   "198.51.100.20:40077",
+		SourcePort:      18001,
+		DestinationPort: 40077,
+	}
+	manager.expTCPRawReceiveFilter.Store(manager.experimentalTCPRawReceiveFilterLocked())
+	if _, ok := manager.decodeExperimentalTCPRawPacket(
+		makeWire("192.0.2.10", 18001, false),
+		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+	); ok {
+		t.Fatal("raw decode accepted compat primer temporary source port for an installed flow")
+	}
+
+	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+		ID:              77,
+		LocalAddress:    "192.0.2.10:18001",
+		RemoteAddress:   "198.51.100.20:43000",
+		SourcePort:      18001,
+		DestinationPort: 43000,
+	}
+	manager.expTCPRawReceiveFilter.Store(manager.experimentalTCPRawReceiveFilterLocked())
 	if got := manager.dropReasons["CHECKSUM_ERROR"]; got != 0 {
 		t.Fatalf("disallowed instance packets recorded checksum drops = %d, want 0", got)
 	}
@@ -4165,17 +4196,103 @@ func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T
 func TestExperimentalTCPRawReceiveFilterIncludesEstablishedLocalFlowPort(t *testing.T) {
 	manager := NewManager()
 	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
-		ID:           7,
-		LocalAddress: "192.0.2.10:43000",
-		SourcePort:   43000,
+		ID:              7,
+		LocalAddress:    "192.0.2.10:43000",
+		RemoteAddress:   "198.51.100.20:17041",
+		SourcePort:      43000,
+		DestinationPort: 17041,
 	}
 	filter := manager.experimentalTCPRawReceiveFilterLocked()
 
-	if !filter.allows(netip.MustParseAddr("192.0.2.10"), 43000) {
+	packet := experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("198.51.100.20"),
+		DestinationIP:   netip.MustParseAddr("192.0.2.10"),
+		SourcePort:      17041,
+		DestinationPort: 43000,
+	}
+	if !filter.allows(packet, 7) {
 		t.Fatal("established flow local receive tuple was not allowed")
 	}
-	if filter.allows(netip.MustParseAddr("192.0.2.11"), 43000) {
+	packet.DestinationIP = netip.MustParseAddr("192.0.2.11")
+	if filter.allows(packet, 7) {
 		t.Fatal("established flow port was allowed on another local address")
+	}
+	packet.DestinationIP = netip.MustParseAddr("192.0.2.10")
+	packet.SourcePort = 17042
+	if filter.allows(packet, 7) {
+		t.Fatal("established flow accepted another remote source port")
+	}
+}
+
+func TestExperimentalTCPRawReceiveFilterAllowsUnknownFlowOnlyWithoutPrimer(t *testing.T) {
+	manager := NewManager()
+	manager.snapshot = dataplane.Snapshot{
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        core.EndpointID("ix-a-tixt"),
+			Peer:      core.IXID("ix-a"),
+			Transport: "experimental_tcp",
+			Listen:    "192.0.2.10:18001",
+			Enabled:   true,
+		}},
+	}
+	packet := experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("198.51.100.20"),
+		DestinationIP:   netip.MustParseAddr("192.0.2.10"),
+		SourcePort:      43000,
+		DestinationPort: 18001,
+	}
+
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
+	if manager.experimentalTCPRawReceiveFilterLocked().allows(packet, 77) {
+		t.Fatal("primer mode accepted an unknown raw flow")
+	}
+	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "0")
+	if !manager.experimentalTCPRawReceiveFilterLocked().allows(packet, 77) {
+		t.Fatal("explicit no-primer mode rejected an unknown raw listener flow")
+	}
+}
+
+func TestExperimentalTCPRawValidatedDeliveryDoesNotRewriteInstalledTuple(t *testing.T) {
+	manager := NewManager()
+	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+		ID:              77,
+		LocalAddress:    "192.0.2.10:18001",
+		RemoteAddress:   "198.51.100.20:40077",
+		SourcePort:      18001,
+		DestinationPort: 40077,
+	}
+	events := make(chan []dataplane.ExperimentalTCPFrame, 1)
+	manager.expTCPFlowSubs[77] = map[chan []dataplane.ExperimentalTCPFrame]struct{}{events: {}}
+	var releases atomic.Int32
+
+	manager.deliverExperimentalTCPFrames([]receivedExperimentalTCPFrame{{
+		frame: dataplane.ExperimentalTCPFrame{
+			FlowID:  77,
+			Payload: []byte("primer-tuple"),
+			Release: func() { releases.Add(1) },
+		},
+		packet: experimentaltcp.TCPPacket{
+			SourceIP:        netip.MustParseAddr("198.51.100.20"),
+			DestinationIP:   netip.MustParseAddr("192.0.2.10"),
+			SourcePort:      43000,
+			DestinationPort: 18001,
+		},
+		rawTupleValidated: true,
+	}})
+
+	select {
+	case batch := <-events:
+		releaseExperimentalTCPFramePayloads(batch)
+		t.Fatal("raw delivery accepted a stale compat primer tuple")
+	default:
+	}
+	flow := manager.expTCPFlows[77]
+	if flow.LocalAddress != "192.0.2.10:18001" || flow.RemoteAddress != "198.51.100.20:40077" ||
+		flow.SourcePort != 18001 || flow.DestinationPort != 40077 {
+		t.Fatalf("raw delivery rewrote installed flow tuple: %+v", flow)
+	}
+	if got := releases.Load(); got != 1 {
+		t.Fatalf("rejected raw frame release calls = %d, want 1", got)
 	}
 }
 

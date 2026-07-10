@@ -161,6 +161,7 @@ type experimentalTCPTXAffinityStats struct {
 type receivedExperimentalTCPFrame struct {
 	frame                   dataplane.ExperimentalTCPFrame
 	packet                  experimentaltcp.TCPPacket
+	rawTupleValidated       bool
 	kernelOpenPlain         []byte
 	kernelOpenPlainRelease  func()
 	kernelOpenPlainInPlace  bool

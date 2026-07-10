@@ -529,6 +529,7 @@ type experimentalTCPCryptoFragmentAssembly struct {
 	createdAt           time.Time
 	frame               dataplane.ExperimentalTCPFrame
 	packet              experimentaltcp.TCPPacket
+	rawTupleValidated   bool
 	innerIPv4           bool
 	payload             []byte
 	pending             [][]byte
@@ -7348,10 +7349,11 @@ func (manager *Manager) handleExperimentalTCPRawPacket(raw []byte, parseTCP func
 
 func (manager *Manager) decodeExperimentalTCPRawPacket(raw []byte, parseTCP func([]byte) (experimentaltcp.TCPPacket, error)) (receivedExperimentalTCPFrame, bool) {
 	candidate, err := experimentaltcp.ParseTCPShapedIPv4NoCopySkipTCPChecksum(raw)
-	if err != nil || !manager.experimentalTCPRawPacketAllowed(candidate) {
+	if err != nil {
 		return receivedExperimentalTCPFrame{}, false
 	}
-	if _, err := experimentaltcp.ParseFrameNoCopy(candidate.Payload); err != nil {
+	candidateFrame, err := experimentaltcp.ParseFrameNoCopy(candidate.Payload)
+	if err != nil || !manager.experimentalTCPRawPacketAllowed(candidate, candidateFrame.FlowID) {
 		return receivedExperimentalTCPFrame{}, false
 	}
 	packet, err := parseTCP(raw)
@@ -7407,6 +7409,7 @@ func (manager *Manager) decodeExperimentalTCPRawPacket(raw []byte, parseTCP func
 			CryptoPlacement: placement,
 		},
 		packet:                  packet,
+		rawTupleValidated:       true,
 		kernelOpenPlain:         openPlain,
 		kernelOpenPlainRelease:  openRelease,
 		encryptedKernelPayload:  encrypted && !kernelOpened,
@@ -8145,6 +8148,10 @@ func (manager *Manager) deliverExperimentalTCPFrames(frames []receivedExperiment
 			packet := item.packet
 			identity := manager.inferKernelTransportEndpointLocked("experimental_tcp", packet.SourceIP, packet.SourcePort, packet.DestinationIP, packet.DestinationPort)
 			flow, ok := manager.expTCPFlows[frame.FlowID]
+			if item.rawTupleValidated && ok && !experimentalTCPPacketMatchesInstalledInboundFlow(flow, packet) {
+				releaseExperimentalTCPFramePayloads([]dataplane.ExperimentalTCPFrame{frame})
+				continue
+			}
 			if ok && experimentalTCPPacketMatchesLocalEcho(flow, packet) {
 				releaseExperimentalTCPFramePayloads([]dataplane.ExperimentalTCPFrame{frame})
 				continue
@@ -8447,6 +8454,21 @@ func experimentalTCPPacketMatchesLocalEcho(flow dataplane.ExperimentalTCPFlow, p
 		remoteIP == packet.DestinationIP
 }
 
+func experimentalTCPPacketMatchesInstalledInboundFlow(flow dataplane.ExperimentalTCPFlow, packet experimentaltcp.TCPPacket) bool {
+	if flow.SourcePort == 0 || flow.DestinationPort == 0 {
+		return true
+	}
+	if flow.SourcePort != packet.DestinationPort || flow.DestinationPort != packet.SourcePort {
+		return false
+	}
+	localIP, _ := experimentalTCPRawAddress(flow.LocalAddress)
+	if localIP.IsValid() && !localIP.IsUnspecified() && localIP != packet.DestinationIP.Unmap() {
+		return false
+	}
+	remoteIP, _ := experimentalTCPRawAddress(flow.RemoteAddress)
+	return !remoteIP.IsValid() || remoteIP.IsUnspecified() || remoteIP == packet.SourceIP.Unmap()
+}
+
 func (manager *Manager) prepareExperimentalTCPDeliveredReleasesLocked(frames []dataplane.ExperimentalTCPFrame) {
 	for i := range frames {
 		release := frames[i].Release
@@ -8604,6 +8626,7 @@ func reassembleExperimentalTCPCryptoFragmentRun(frames []receivedExperimentalTCP
 	}
 	totalLen := 0
 	innerIPv4 := firstFrame.InnerIPv4
+	rawTupleValidated := first.rawTupleValidated
 	for index := 0; index < count; index++ {
 		item := frames[index]
 		frame := item.frame
@@ -8625,6 +8648,7 @@ func reassembleExperimentalTCPCryptoFragmentRun(frames []receivedExperimentalTCP
 			return receivedExperimentalTCPFrame{}, 0, false
 		}
 		innerIPv4 = innerIPv4 || frame.InnerIPv4
+		rawTupleValidated = rawTupleValidated && item.rawTupleValidated
 		totalLen += payloadLen
 		if totalLen > experimentalTCPCryptoFragmentAssembledMaxPayload() {
 			return receivedExperimentalTCPFrame{}, 0, false
@@ -8649,6 +8673,7 @@ func reassembleExperimentalTCPCryptoFragmentRun(frames []receivedExperimentalTCP
 	return receivedExperimentalTCPFrame{
 		frame:                  completeFrame,
 		packet:                 first.packet,
+		rawTupleValidated:      rawTupleValidated,
 		kernelOpenPlain:        experimentalTCPCryptoFragmentPlainBuffer(payload),
 		kernelOpenPlainRelease: releasePayload,
 		encryptedKernelPayload: true,
@@ -8686,12 +8711,16 @@ func (manager *Manager) ingestExperimentalTCPCryptoFragment(item receivedExperim
 			createdAt:         now,
 			frame:             frame,
 			packet:            item.packet,
+			rawTupleValidated: item.rawTupleValidated,
 			innerIPv4:         frame.InnerIPv4,
 			receivedFragments: make([]bool, count),
 		}
 		manager.expTCPCryptoFragments[key] = assembly
-	} else if frame.InnerIPv4 {
-		assembly.innerIPv4 = true
+	} else {
+		if frame.InnerIPv4 {
+			assembly.innerIPv4 = true
+		}
+		assembly.rawTupleValidated = assembly.rawTupleValidated && item.rawTupleValidated
 	}
 	if len(assembly.receivedFragments) != count {
 		delete(manager.expTCPCryptoFragments, key)
@@ -8726,6 +8755,7 @@ func (manager *Manager) ingestExperimentalTCPCryptoFragment(item receivedExperim
 	return receivedExperimentalTCPFrame{
 		frame:                  completeFrame,
 		packet:                 packet,
+		rawTupleValidated:      assembly.rawTupleValidated,
 		encryptedKernelPayload: true,
 		wireSequenceCount:      uint64(count),
 	}, true
@@ -12487,8 +12517,18 @@ func (bitmap *experimentalTCPPortBitmap) contains(port uint16) bool {
 }
 
 type experimentalTCPRawReceiveFilter struct {
-	anyAddress experimentalTCPPortBitmap
-	byAddress  map[netip.Addr]*experimentalTCPPortBitmap
+	anyAddress        experimentalTCPPortBitmap
+	byAddress         map[netip.Addr]*experimentalTCPPortBitmap
+	flows             map[uint64]experimentalTCPRawReceiveFlow
+	allowUnknownFlows bool
+}
+
+type experimentalTCPRawReceiveFlow struct {
+	localAddress  netip.Addr
+	remoteAddress netip.Addr
+	localPort     uint16
+	remotePort    uint16
+	complete      bool
 }
 
 func (filter *experimentalTCPRawReceiveFilter) add(address string, fallbackPort uint16) {
@@ -12527,18 +12567,92 @@ func (filter *experimentalTCPRawReceiveFilter) add(address string, fallbackPort 
 	bitmap.add(port)
 }
 
-func (filter *experimentalTCPRawReceiveFilter) allows(address netip.Addr, port uint16) bool {
-	if filter == nil || port == 0 {
+func (filter *experimentalTCPRawReceiveFilter) addFlow(flow dataplane.ExperimentalTCPFlow) {
+	if flow.ID == 0 {
+		return
+	}
+	localAddress, localPort := experimentalTCPRawAddress(flow.LocalAddress)
+	remoteAddress, remotePort := experimentalTCPRawAddress(flow.RemoteAddress)
+	if flow.SourcePort != 0 {
+		localPort = flow.SourcePort
+	}
+	if flow.DestinationPort != 0 {
+		remotePort = flow.DestinationPort
+	}
+	if localPort == 0 && remotePort != 0 {
+		localPort = experimentalTCPDerivedSourcePort(flow.ID)
+	}
+	if filter.flows == nil {
+		filter.flows = make(map[uint64]experimentalTCPRawReceiveFlow)
+	}
+	filter.flows[flow.ID] = experimentalTCPRawReceiveFlow{
+		localAddress:  localAddress,
+		remoteAddress: remoteAddress,
+		localPort:     localPort,
+		remotePort:    remotePort,
+		complete:      localPort != 0 && remotePort != 0,
+	}
+}
+
+func experimentalTCPRawAddress(address string) (netip.Addr, uint16) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return netip.Addr{}, 0
+	}
+	if addr, err := netip.ParseAddr(strings.Trim(address, "[]")); err == nil {
+		addr = addr.Unmap()
+		if addr.Is4() {
+			return addr, 0
+		}
+		return netip.Addr{}, 0
+	}
+	host, rawPort, err := net.SplitHostPort(address)
+	if err != nil {
+		return netip.Addr{}, 0
+	}
+	parsedPort, err := strconv.ParseUint(rawPort, 10, 16)
+	if err != nil || parsedPort == 0 {
+		return netip.Addr{}, 0
+	}
+	addr, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(host), "[]"))
+	if err != nil {
+		return netip.Addr{}, uint16(parsedPort)
+	}
+	addr = addr.Unmap()
+	if !addr.Is4() {
+		return netip.Addr{}, uint16(parsedPort)
+	}
+	return addr, uint16(parsedPort)
+}
+
+func (flow experimentalTCPRawReceiveFlow) allows(packet experimentaltcp.TCPPacket) bool {
+	if !flow.complete || packet.SourcePort != flow.remotePort || packet.DestinationPort != flow.localPort {
 		return false
 	}
-	if filter.anyAddress.contains(port) {
+	if flow.localAddress.IsValid() && !flow.localAddress.IsUnspecified() && flow.localAddress != packet.DestinationIP.Unmap() {
+		return false
+	}
+	return !flow.remoteAddress.IsValid() || flow.remoteAddress.IsUnspecified() || flow.remoteAddress == packet.SourceIP.Unmap()
+}
+
+func (filter *experimentalTCPRawReceiveFilter) allows(packet experimentaltcp.TCPPacket, flowID uint64) bool {
+	if filter == nil || flowID == 0 {
+		return false
+	}
+	if flow, ok := filter.flows[flowID]; ok {
+		return flow.allows(packet)
+	}
+	if !filter.allowUnknownFlows || packet.DestinationPort == 0 {
+		return false
+	}
+	if filter.anyAddress.contains(packet.DestinationPort) {
 		return true
 	}
-	return filter.byAddress[address.Unmap()].contains(port)
+	return filter.byAddress[packet.DestinationIP.Unmap()].contains(packet.DestinationPort)
 }
 
 func (manager *Manager) experimentalTCPRawReceiveFilterLocked() *experimentalTCPRawReceiveFilter {
-	filter := &experimentalTCPRawReceiveFilter{}
+	filter := &experimentalTCPRawReceiveFilter{allowUnknownFlows: experimentalTCPRawUnknownFlowAllowed()}
 	localIX := manager.snapshotLocalIXLocked()
 	for _, endpoint := range manager.snapshot.Endpoints {
 		if endpoint.Transport != "experimental_tcp" || !endpoint.Enabled || !snapshotEndpointIsLocal(localIX, endpoint) {
@@ -12551,14 +12665,23 @@ func (manager *Manager) experimentalTCPRawReceiveFilterLocked() *experimentalTCP
 		filter.add(address, 0)
 	}
 	for _, flow := range manager.expTCPFlows {
-		filter.add(flow.LocalAddress, flow.SourcePort)
+		filter.addFlow(flow)
 	}
 	return filter
 }
 
-func (manager *Manager) experimentalTCPRawPacketAllowed(packet experimentaltcp.TCPPacket) bool {
+func (manager *Manager) experimentalTCPRawPacketAllowed(packet experimentaltcp.TCPPacket, flowID uint64) bool {
 	filter := manager.expTCPRawReceiveFilter.Load()
-	return filter != nil && filter.allows(packet.DestinationIP, packet.DestinationPort)
+	return filter != nil && filter.allows(packet, flowID)
+}
+
+func experimentalTCPRawUnknownFlowAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER"))) {
+	case "0", "false", "no", "off", "disabled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (manager *Manager) desiredExperimentalTCPPortsLocked() map[uint16]struct{} {
@@ -23269,12 +23392,13 @@ func (manager *Manager) kernelUDPTXDirectFlowFlagsLocked(route routing.Route, ro
 }
 
 type kernelUDPTXRouteFlow struct {
-	id              uint64
-	flow            dataplane.KernelUDPFlow
-	expTCPFlow      dataplane.ExperimentalTCPFlow
-	packet          kerneludp.UDPPacket
-	expTCPPacket    experimentaltcp.TCPPacket
-	experimentalTCP bool
+	id                 uint64
+	flow               dataplane.KernelUDPFlow
+	expTCPFlow         dataplane.ExperimentalTCPFlow
+	expTCPActivityTime time.Time
+	packet             kerneludp.UDPPacket
+	expTCPPacket       experimentaltcp.TCPPacket
+	experimentalTCP    bool
 }
 
 func (routeFlow kernelUDPTXRouteFlow) endpoint() core.EndpointID {
@@ -23888,8 +24012,14 @@ func (manager *Manager) selectExperimentalTCPTXPlaintextDirectFlowLocked(route r
 }
 
 func experimentalTCPRouteFlowPreferred(candidate kernelUDPTXRouteFlow, current kernelUDPTXRouteFlow) bool {
-	candidateTime := experimentalTCPFlowActivityTime(candidate.expTCPFlow)
-	currentTime := experimentalTCPFlowActivityTime(current.expTCPFlow)
+	candidateTime := candidate.expTCPActivityTime
+	if candidateTime.IsZero() {
+		candidateTime = experimentalTCPFlowActivityTime(candidate.expTCPFlow)
+	}
+	currentTime := current.expTCPActivityTime
+	if currentTime.IsZero() {
+		currentTime = experimentalTCPFlowActivityTime(current.expTCPFlow)
+	}
 	if !candidateTime.Equal(currentTime) {
 		return candidateTime.After(currentTime)
 	}
@@ -24076,6 +24206,7 @@ func (manager *Manager) collectExperimentalTCPTXDirectFlowsForRouteLocked(candid
 			continue
 		}
 		manager.kernelUDPTXDirectSync.FlowsSecurityAllowed++
+		activityTime := experimentalTCPFlowActivityTime(flow)
 		packet, _, err := manager.prepareExperimentalTCPPacketLocked(flowID, 0)
 		if err != nil {
 			manager.kernelUDPTXDirectSync.PreparePacketErrors++
@@ -24085,10 +24216,11 @@ func (manager *Manager) collectExperimentalTCPTXDirectFlowsForRouteLocked(candid
 			flow = latest
 		}
 		*candidates = append(*candidates, kernelUDPTXRouteFlow{
-			id:              flowID,
-			expTCPFlow:      flow,
-			expTCPPacket:    packet,
-			experimentalTCP: true,
+			id:                 flowID,
+			expTCPFlow:         flow,
+			expTCPActivityTime: activityTime,
+			expTCPPacket:       packet,
+			experimentalTCP:    true,
 		})
 	}
 }
