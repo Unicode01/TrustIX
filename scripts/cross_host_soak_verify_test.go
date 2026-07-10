@@ -1672,6 +1672,8 @@ func TestCrossHostSoakVerifyChecksStatusHealthCounters(t *testing.T) {
 		"data_path.counters.session_dial_errors=0",
 		"--require-status-max",
 		"data_path.counters.session_heartbeat_timeouts=0",
+		"--require-status-max",
+		"data_path.drop_reasons.FLOW_NOT_INSTALLED=0",
 		dir,
 	)
 	cmd.Dir = "."

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3259,6 +3260,87 @@ func TestSessionPoolFlowStrategyKeepsFiveTupleOnSameConnection(t *testing.T) {
 			t.Fatalf("flow pool index changed from %d to %d", first.PoolIndex, key.PoolIndex)
 		}
 	}
+}
+
+func TestConcurrentSessionPoolDialUsesSingleflight(t *testing.T) {
+	registry := transport.NewRegistry()
+	fake := &singleflightDialTransport{
+		name:    transport.ProtocolTCP,
+		started: make(chan struct{}, 16),
+		release: make(chan struct{}),
+	}
+	if err := registry.Register(fake); err != nil {
+		t.Fatalf("register singleflight transport: %v", err)
+	}
+	daemon := &Daemon{
+		transports:       registry,
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+		dataSessionDials: make(map[dataSessionKey]chan struct{}),
+		desired: config.Desired{
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: "secure",
+				TLSIdentity: config.TransportTLSIdentityConfig{
+					Mode:        "custom_cert",
+					SystemRoots: true,
+				},
+			},
+		},
+	}
+	peer := config.PeerConfig{ID: core.IXID("ix-b"), Domain: core.DomainID("lab.local")}
+	cfgEndpoint := config.EndpointConfig{Name: core.EndpointID("server"), Address: "127.0.0.1:7001", Transport: "tcp"}
+	endpoint := transportEndpointFromConfig(cfgEndpoint)
+	endpoint.Enabled = true
+	endpoint.Encryption = securetransport.EncryptionSecure
+	epoch := daemon.currentDataSessionEpoch()
+
+	const callers = 8
+	results := make(chan transport.Session, callers)
+	errs := make(chan error, callers)
+	for range callers {
+		go func() {
+			session, _, err := daemon.sessionForEndpointPoolIndexWithOptions(context.Background(), epoch, peer, cfgEndpoint, endpoint, 0, sessionForEndpointOptions{
+				AllowDial:         true,
+				ControlOnlyWarmup: true,
+			})
+			results <- session
+			errs <- err
+		}()
+	}
+
+	select {
+	case <-fake.started:
+	case <-time.After(time.Second):
+		t.Fatal("first dial did not start")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := fake.attempts.Load(); got != 1 {
+		t.Fatalf("concurrent dial attempts before release = %d, want 1", got)
+	}
+	close(fake.release)
+
+	var first transport.Session
+	for range callers {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent session dial: %v", err)
+		}
+		session := <-results
+		if session == nil {
+			t.Fatal("concurrent session dial returned nil session")
+		}
+		if first == nil {
+			first = session
+		} else if session != first {
+			t.Fatal("concurrent session dial returned more than one session")
+		}
+	}
+	if got := fake.attempts.Load(); got != 1 {
+		t.Fatalf("concurrent dial attempts = %d, want 1", got)
+	}
+	if got := len(daemon.dataSessions); got != 1 {
+		t.Fatalf("active sessions = %d, want 1", got)
+	}
+	daemon.closeDataSessions()
 }
 
 func TestSessionPoolFlowStrategySelectsMatchingReversePoolMember(t *testing.T) {
@@ -8387,6 +8469,44 @@ func (session *retainingWarmupSession) RetainKernelFlowOnClose() {
 type blockingWarmupTransport struct {
 	name    transport.Protocol
 	started chan struct{}
+}
+
+type singleflightDialTransport struct {
+	name     transport.Protocol
+	started  chan struct{}
+	release  chan struct{}
+	attempts atomic.Int32
+}
+
+func (fake *singleflightDialTransport) Name() transport.Protocol {
+	return fake.name
+}
+
+func (fake *singleflightDialTransport) Probe(ctx context.Context, peer transport.Peer) transport.ProbeResult {
+	return transport.ProbeResult{}
+}
+
+func (fake *singleflightDialTransport) Dial(ctx context.Context, peer transport.Peer, tlsConf *tls.Config) (transport.Session, error) {
+	fake.attempts.Add(1)
+	select {
+	case fake.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-fake.release:
+	}
+	return &statsSession{stats: transport.TransportStats{
+		Encryption:       peer.Endpoints[0].Encryption,
+		Encrypted:        true,
+		SendEncrypted:    true,
+		ReceiveEncrypted: true,
+	}}, nil
+}
+
+func (fake *singleflightDialTransport) Listen(ctx context.Context, ep transport.Endpoint, tlsConf *tls.Config) (transport.Listener, error) {
+	return nil, fmt.Errorf("unexpected singleflight transport listen")
 }
 
 func (fake *blockingWarmupTransport) Name() transport.Protocol {

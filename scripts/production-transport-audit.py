@@ -337,6 +337,21 @@ VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "owdeb_full_kmod",
         "owdeb_exp_tcp_full_kmod",
     },
+    # Historical current rows remain equivalent after missing drop-reason
+    # counters started being interpreted as zero. A missing sparse-map key and
+    # an explicit zero both mean that the drop was never observed.
+    "0a171df97959d753eeebcb6bea17199d5a1bda69bafd2720b49259068768aee9": {
+        "userspace",
+        "userspace_tc",
+        "tc_direct",
+        "full_kmod",
+        "owdeb_full_kmod",
+        "exp_tcp_full_kmod",
+        "owdeb_exp_tcp_full_kmod",
+        "secure_kudp",
+        "secure_exp_tcp_kernel",
+        "route_gso",
+    },
 }
 TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
     "evidence_generator_sha256": {

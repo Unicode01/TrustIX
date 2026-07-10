@@ -7351,6 +7351,9 @@ func (manager *Manager) decodeExperimentalTCPRawPacket(raw []byte, parseTCP func
 	if err != nil || !manager.experimentalTCPRawPacketAllowed(candidate) {
 		return receivedExperimentalTCPFrame{}, false
 	}
+	if _, err := experimentaltcp.ParseFrameNoCopy(candidate.Payload); err != nil {
+		return receivedExperimentalTCPFrame{}, false
+	}
 	packet, err := parseTCP(raw)
 	if err != nil {
 		if errors.Is(err, experimentaltcp.ErrChecksum) {

@@ -105,6 +105,7 @@ type Daemon struct {
 	dataMetrics          dataPathMetrics
 	dataSessions         map[dataSessionKey]transport.Session
 	dataSessionState     map[dataSessionKey]*dataSessionRuntime
+	dataSessionDials     map[dataSessionKey]chan struct{}
 	deviceLeases         map[deviceLeaseKey]deviceAccessLease
 	sessionPoolRR        map[dataSessionPoolKey]uint64
 	sessionPoolFlow      map[dataSessionFlowPoolKey]int
@@ -188,6 +189,7 @@ func New(cfg Config, options ...Option) (*Daemon, error) {
 		provisionTokens:      make(map[string]ixProvisionTokenRecord),
 		dataSessions:         make(map[dataSessionKey]transport.Session),
 		dataSessionState:     make(map[dataSessionKey]*dataSessionRuntime),
+		dataSessionDials:     make(map[dataSessionKey]chan struct{}),
 		deviceLeases:         make(map[deviceLeaseKey]deviceAccessLease),
 		flows:                make(map[routing.FlowKey]routing.FlowBinding),
 		nat:                  newNATTable(),

@@ -1080,8 +1080,11 @@ def validate_status_stats(
             try:
                 actual = datapath_value(payload, dotted_path)
             except KeyError:
-                errors.append(f"{rel}: missing status stat {dotted_path!r}")
-                continue
+                if dotted_path.startswith("data_path.drop_reasons."):
+                    actual = 0
+                else:
+                    errors.append(f"{rel}: missing status stat {dotted_path!r}")
+                    continue
             values[dotted_path] = actual
             try:
                 actual_number = numeric_value(actual)

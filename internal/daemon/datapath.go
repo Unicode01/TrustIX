@@ -161,6 +161,7 @@ type dataPathStats struct {
 	lastLinkTLSVersion              string
 	lastLinkTLSCipherSuite          string
 	lastSessionDialError            atomic.Value
+	lastListenerAcceptError         atomic.Value
 	lastReceiveError                atomic.Value
 	lastInjectError                 atomic.Value
 	dropMu                          sync.Mutex
@@ -187,6 +188,7 @@ type dataPathCounters struct {
 	PacketsInjected                 uint64 `json:"packets_injected"`
 	InjectErrors                    uint64 `json:"inject_errors"`
 	ListenerAcceptErrors            uint64 `json:"listener_accept_errors"`
+	LastListenerAcceptError         string `json:"last_listener_accept_error,omitempty"`
 	UnsupportedTransport            uint64 `json:"unsupported_transport"`
 	SessionHeartbeatSent            uint64 `json:"session_heartbeat_sent"`
 	SessionHeartbeatReceived        uint64 `json:"session_heartbeat_received"`
@@ -1712,6 +1714,7 @@ func (daemon *Daemon) acceptDataPathSessions(ctx context.Context, endpoint trans
 				daemon.dataStats.sessionResetsSent.Add(1)
 			}
 			daemon.dataStats.listenerAcceptErrors.Add(1)
+			daemon.dataStats.setLastListenerAcceptError(fmt.Errorf("accept endpoint %q transport %q: %w", endpoint.Name, endpoint.Transport, err))
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
@@ -3849,6 +3852,45 @@ type sessionForEndpointOptions struct {
 	ExpectedEpoch             uint64
 }
 
+func (daemon *Daemon) acquireDataSessionDial(ctx context.Context, key dataSessionKey, epoch uint64, requireEpoch bool) (transport.Session, *dataSessionRuntime, func(), error) {
+	for {
+		daemon.dataMu.Lock()
+		if requireEpoch && daemon.dataSessionEpoch != epoch {
+			daemon.dataMu.Unlock()
+			return nil, nil, nil, errDataSessionEpochChanged
+		}
+		if session := daemon.dataSessions[key]; session != nil {
+			runtime := daemon.dataSessionState[key]
+			daemon.dataMu.Unlock()
+			return session, runtime, nil, nil
+		}
+		if daemon.dataSessionDials == nil {
+			daemon.dataSessionDials = make(map[dataSessionKey]chan struct{})
+		}
+		if wait := daemon.dataSessionDials[key]; wait != nil {
+			daemon.dataMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, nil, nil, ctx.Err()
+			case <-wait:
+				continue
+			}
+		}
+		wait := make(chan struct{})
+		daemon.dataSessionDials[key] = wait
+		daemon.dataMu.Unlock()
+		release := func() {
+			daemon.dataMu.Lock()
+			if daemon.dataSessionDials[key] == wait {
+				delete(daemon.dataSessionDials, key)
+				close(wait)
+			}
+			daemon.dataMu.Unlock()
+		}
+		return nil, nil, release, nil
+	}
+}
+
 func (daemon *Daemon) sessionForEndpoint(ctx context.Context, peer config.PeerConfig, cfgEndpoint config.EndpointConfig, flowKey routing.FlowKey, hasFlow bool) (transport.Session, dataSessionKey, *dataSessionRuntime, error) {
 	return daemon.sessionForEndpointWithOptions(ctx, peer, cfgEndpoint, flowKey, hasFlow, sessionForEndpointOptions{AllowDial: true})
 }
@@ -3930,6 +3972,13 @@ func (daemon *Daemon) sessionForEndpointWithOptions(ctx context.Context, peer co
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, dataPathDialTimeout)
 	defer cancel()
+	if existing, runtime, release, err := daemon.acquireDataSessionDial(dialCtx, key, epoch, options.RequireEpoch); err != nil {
+		return nil, key, nil, err
+	} else if existing != nil {
+		return existing, key, runtime, nil
+	} else {
+		defer release()
+	}
 	daemon.dataStats.sessionDialAttempts.Add(1)
 	session, err := tr.Dial(dialCtx, transport.Peer{
 		ID:        peer.ID,
@@ -4063,6 +4112,13 @@ func (daemon *Daemon) sessionForEndpointPoolIndexWithOptions(ctx context.Context
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, dataPathDialTimeout)
 	defer cancel()
+	if existing, _, release, err := daemon.acquireDataSessionDial(dialCtx, key, epoch, options.RequireEpoch); err != nil {
+		return nil, key, err
+	} else if existing != nil {
+		return existing, key, nil
+	} else {
+		defer release()
+	}
 	daemon.dataStats.sessionDialAttempts.Add(1)
 	session, err := tr.Dial(dialCtx, transport.Peer{
 		ID:        peer.ID,
@@ -6888,6 +6944,7 @@ func observeAtomicUint64Max(counter *atomic.Uint64, value uint64) {
 func (stats *dataPathStats) snapshot() dataPathCounters {
 	lastReceiveError, _ := stats.lastReceiveError.Load().(string)
 	lastSessionDialError, _ := stats.lastSessionDialError.Load().(string)
+	lastListenerAcceptError, _ := stats.lastListenerAcceptError.Load().(string)
 	lastInjectError, _ := stats.lastInjectError.Load().(string)
 	return dataPathCounters{
 		CaptureEvents:                   stats.captureEvents.Load(),
@@ -6909,6 +6966,7 @@ func (stats *dataPathStats) snapshot() dataPathCounters {
 		PacketsInjected:                 stats.packetsInjected.Load(),
 		InjectErrors:                    stats.injectErrors.Load(),
 		ListenerAcceptErrors:            stats.listenerAcceptErrors.Load(),
+		LastListenerAcceptError:         lastListenerAcceptError,
 		UnsupportedTransport:            stats.unsupportedTransport.Load(),
 		SessionHeartbeatSent:            stats.sessionHeartbeatSent.Load(),
 		SessionHeartbeatReceived:        stats.sessionHeartbeatReceived.Load(),
@@ -6975,6 +7033,13 @@ func (stats *dataPathStats) setLastSessionDialError(err error) {
 		return
 	}
 	stats.lastSessionDialError.Store(err.Error())
+}
+
+func (stats *dataPathStats) setLastListenerAcceptError(err error) {
+	if err == nil {
+		return
+	}
+	stats.lastListenerAcceptError.Store(err.Error())
 }
 
 func (stats *dataPathStats) setLastReceiveError(err error) {
