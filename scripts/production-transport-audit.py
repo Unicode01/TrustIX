@@ -234,6 +234,32 @@ SESSION_POOL_WARMUP_OBSERVABILITY_COMMITS_BY_PATH = {
         "9a3fc75839a4dc1ba65810656f5686d988d92d33",
     },
 }
+SESSION_POOL_LIFECYCLE_COMMITS_BY_PATH = {
+    # These changes repair shared session creation, health accounting, and
+    # pool refill/warmup orchestration. They do not alter packet formats or
+    # low-level module/TC execution. Current full-kmod evidence is rechecked
+    # separately whenever those low-level paths change.
+    "internal/daemon/daemon.go": {
+        "1e366c3a8b18ec06eae23ba1dfc6c3891909a7ef",
+    },
+    "internal/daemon/datapath.go": {
+        "00287ffb271104305be95ae1a2773a74a1e92b95",
+        "1e366c3a8b18ec06eae23ba1dfc6c3891909a7ef",
+        "55c8268fb4552f33c680b01a5faa08a8a1dd6bcc",
+    },
+    "internal/daemon/endpoint_health.go": {
+        "00287ffb271104305be95ae1a2773a74a1e92b95",
+        "34cfd42838f5b6e0c25143a9996c81698165846c",
+    },
+}
+KERNEL_UDP_SESSION_LIFECYCLE_COMMITS_BY_PATH = {
+    # f61fbad only synchronizes shutdown and release ownership for kernel UDP
+    # sessions. Userspace UDP sessions never instantiate kernelSession, so
+    # their previously promoted socket-UDP evidence remains applicable.
+    "internal/transport/udp/udp.go": {
+        "f61fbaddd6bb8de8678be3a37bce3bc426622b7e",
+    },
+}
 CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
     "full_kmod",
     "exp_tcp_full_kmod",
@@ -1017,6 +1043,12 @@ def current_runtime_path_change_irrelevant(
         allowed_change_commits.update(allowed_commits)
     allowed_commits = SESSION_POOL_WARMUP_OBSERVABILITY_COMMITS_BY_PATH.get(normalized)
     if allowed_commits:
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = SESSION_POOL_LIFECYCLE_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits:
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = KERNEL_UDP_SESSION_LIFECYCLE_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits and gate_class != "secure_kudp":
         allowed_change_commits.update(allowed_commits)
     allowed_commits = USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and (

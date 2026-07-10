@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func readProductionTransportDefaults(t *testing.T) string {
@@ -3585,8 +3587,8 @@ if spec.loader is None:
     sys.exit(1)
 spec.loader.exec_module(module)
 
-commit = "9a3fc75839a4dc1ba65810656f5686d988d92d33"
-parent = subprocess.check_output(["git", "rev-parse", commit + "^"], text=True).strip()
+commit = "55c8268fb4552f33c680b01a5faa08a8a1dd6bcc"
+parent = subprocess.check_output(["git", "rev-parse", "9a3fc75839a4dc1ba65810656f5686d988d92d33^"], text=True).strip()
 path = "internal/daemon/datapath.go"
 for row in [
     {"gate_family": "full_kmod", "transport": "udp"},
@@ -3607,6 +3609,51 @@ if module.current_runtime_path_change_irrelevant(row, older_parent, path):
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("session warmup observability exemption regression failed: %v\n%s", err, output)
+	}
+}
+
+func TestProductionTransportAuditScriptKernelUDPSessionLifecycleExemption(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+commit = "f61fbaddd6bb8de8678be3a37bce3bc426622b7e"
+parent = subprocess.check_output(["git", "rev-parse", commit + "^"], text=True).strip()
+path = "internal/transport/udp/udp.go"
+cases = [
+    ({"gate_family": "userspace", "transport": "udp"}, True),
+    ({"gate_family": "full_kmod", "transport": "udp"}, True),
+    ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, False),
+    ({"gate_family": "owdeb_full_kmod", "transport": "udp"}, True),
+]
+for row, want in cases:
+    got = module.current_runtime_path_change_irrelevant(row, parent, path)
+    if got != want:
+        print(f"kernel UDP lifecycle exemption mismatch for {row}: got {got}, want {want}", file=sys.stderr)
+        sys.exit(1)
+
+older_parent = subprocess.check_output(["git", "rev-parse", "d4796543b2640792bc28e1edc93f10def92ec47d^"], text=True).strip()
+row = {"gate_family": "userspace", "transport": "udp"}
+if module.current_runtime_path_change_irrelevant(row, older_parent, path):
+    print("exemption incorrectly covered unrelated udp.go commits", file=sys.stderr)
+    sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("kernel UDP session lifecycle exemption regression failed: %v\n%s", err, output)
 	}
 }
 
@@ -7243,8 +7290,12 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod)",
 		"iperf_parallel=16",
 		"truthy \"$dry_run_config\"",
+		"acquire_pair_lock || die \"another soak runner owns this VM pair\"",
+		"release_pair_lock",
+		"trustix-cross-host-pair-${pair_key}.lock",
 		"write_config a \"$workdir/config-a.yaml\"",
 		"write_config b \"$workdir/config-b.yaml\"",
+		"daemon_env >\"$workdir/daemon-env.txt\"",
 		"dry_run_config",
 		"TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be >= 1",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be >= 0",
@@ -7367,6 +7418,10 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1",
 		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0",
 		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0",
+		"plaintext_tc_direct_daemon_env",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT=1",
+		"TRUSTIX_KERNEL_UDP_TC_ONLY=1",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1",
 		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1",
 		"unload_on_exit: true",
 		"-cleanup-dataplane",
@@ -7509,5 +7564,162 @@ func TestCrossHostSoakRunnerDryRunPinsKernelTransportConfig(t *testing.T) {
 				t.Fatalf("dry-run config contains unwanted kernel_transport:\n%s", text)
 			}
 		})
+	}
+}
+
+func TestCrossHostSoakRunnerDryRunPinsPlaintextTCDirectTransport(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+
+	tests := []struct {
+		name      string
+		caseName  string
+		transport string
+		want      []string
+		forbid    []string
+	}{
+		{
+			name:      "kernel-udp",
+			caseName:  "tc-direct",
+			transport: "udp",
+			want: []string{
+				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT=1",
+				"TRUSTIX_KERNEL_UDP_TC_ONLY=1",
+				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1",
+			},
+			forbid: []string{
+				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1",
+				"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1",
+			},
+		},
+		{
+			name:      "experimental-tcp",
+			caseName:  "experimental-tcp-tc-direct",
+			transport: "experimental_tcp",
+			want: []string{
+				"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1",
+				"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1",
+				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1",
+			},
+			forbid: []string{
+				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workdir := filepath.Join(t.TempDir(), tt.name)
+			cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+			cmd.Dir = "."
+			cmd.Env = append(os.Environ(),
+				"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
+				"TRUSTIX_CROSS_HOST_CASE="+tt.caseName,
+				"TRUSTIX_CROSS_HOST_TRANSPORT="+tt.transport,
+				"TRUSTIX_CROSS_HOST_ENCRYPTION=plaintext",
+				"TRUSTIX_CROSS_HOST_PROFILE=performance",
+				"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=tc_xdp",
+				"TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT=userspace",
+				"TRUSTIX_CROSS_HOST_WORKDIR="+workdir,
+				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=198.51.100.10",
+				"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=198.51.100.11",
+				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
+				"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
+			)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("dry-run config failed: %v\n%s", err, output)
+			}
+			payload, err := os.ReadFile(filepath.Join(workdir, "daemon-env.txt"))
+			if err != nil {
+				t.Fatalf("read dry-run daemon environment: %v", err)
+			}
+			text := string(payload)
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("dry-run daemon environment missing %q:\n%s", want, text)
+				}
+			}
+			for _, forbidden := range tt.forbid {
+				if strings.Contains(text, forbidden) {
+					t.Fatalf("dry-run daemon environment contains forbidden %q:\n%s", forbidden, text)
+				}
+			}
+		})
+	}
+}
+
+func TestCrossHostSoakRunnerRejectsConcurrentVMPairUse(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"trustixd", "trustixctl", "trustix-ca"} {
+		path := filepath.Join(binDir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	baseEnv := append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_A=local",
+		"TRUSTIX_CROSS_HOST_B=local",
+		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=198.51.100.10",
+		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=198.51.100.11",
+		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
+		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
+		"TRUSTIX_CROSS_HOST_BIN_DIR="+binDir,
+		"TRUSTIX_CROSS_HOST_PAIR_LOCK_ROOT="+filepath.Join(root, "locks"),
+		"TRUSTIX_CROSS_HOST_PAIR_LOCK_HOLD_SECONDS=3",
+	)
+	first := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	first.Dir = "."
+	first.Env = append(baseEnv, "TRUSTIX_CROSS_HOST_WORKDIR="+filepath.Join(root, "first"))
+	var firstOutput bytes.Buffer
+	first.Stdout = &firstOutput
+	first.Stderr = &firstOutput
+	if err := first.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if first.Process != nil {
+			_ = first.Process.Kill()
+		}
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(firstOutput.String(), "holding VM-pair lock") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(firstOutput.String(), "holding VM-pair lock") {
+		t.Fatalf("first runner did not acquire lock:\n%s", firstOutput.String())
+	}
+
+	second := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	second.Dir = "."
+	second.Env = append(baseEnv, "TRUSTIX_CROSS_HOST_WORKDIR="+filepath.Join(root, "second"))
+	output, err := second.CombinedOutput()
+	if err == nil {
+		t.Fatalf("second runner unexpectedly acquired the same VM pair lock:\n%s", output)
+	}
+	if !strings.Contains(string(output), "another soak runner owns this VM pair") {
+		t.Fatalf("second runner failure did not identify VM pair contention:\n%s", output)
+	}
+
+	if err := first.Wait(); err == nil {
+		t.Fatal("first runner unexpectedly completed its synthetic preflight")
 	}
 }

@@ -17,6 +17,7 @@ keep_local="${TRUSTIX_CROSS_HOST_KEEP_LOCAL:-1}"
 unload_modules="${TRUSTIX_CROSS_HOST_UNLOAD_MODULES:-1}"
 preserve_on_failure="${TRUSTIX_CROSS_HOST_PRESERVE_ON_FAILURE:-0}"
 dry_run_config="${TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG:-0}"
+pair_lock_hold_seconds="${TRUSTIX_CROSS_HOST_PAIR_LOCK_HOLD_SECONDS:-0}"
 
 node_a="${TRUSTIX_CROSS_HOST_A:-local}"
 node_b="${TRUSTIX_CROSS_HOST_B:-}"
@@ -35,6 +36,9 @@ trustix_ca="${TRUSTIX_CROSS_HOST_TRUSTIX_CA:-${bin_dir_a}/trustix-ca}"
 remote_base="${TRUSTIX_CROSS_HOST_REMOTE_BASE:-/tmp}"
 remote_a="${TRUSTIX_CROSS_HOST_REMOTE_A:-${remote_base}/trustix-cross-host-a}"
 remote_b="${TRUSTIX_CROSS_HOST_REMOTE_B:-${remote_base}/trustix-cross-host-b}"
+pair_lock_root="${TRUSTIX_CROSS_HOST_PAIR_LOCK_ROOT:-${TMPDIR:-/tmp}}"
+pair_lock_dir=""
+pair_lock_acquired=0
 
 full_kmod_datapath_path="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PATH:-embedded}"
 full_kmod_datapath_path_a="${TRUSTIX_CROSS_HOST_FULL_KMOD_DATAPATH_PATH_A:-$full_kmod_datapath_path}"
@@ -138,6 +142,69 @@ truthy() {
     1|true|yes|on|enabled) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+acquire_pair_lock() {
+  local first second pair_key owner_pid owner_start current_start attempt
+  first="$node_a"
+  second="$node_b"
+  if [[ "$second" < "$first" ]]; then
+    first="$node_b"
+    second="$node_a"
+  fi
+  pair_key="$(printf '%s\n%s\n' "$first" "$second" | cksum | awk '{print $1}')"
+  mkdir -p "$pair_lock_root"
+  pair_lock_root="$(cd "$pair_lock_root" && pwd -P)"
+  pair_lock_dir="${pair_lock_root}/trustix-cross-host-pair-${pair_key}.lock"
+
+  for attempt in 1 2 3; do
+    if mkdir "$pair_lock_dir" 2>/dev/null; then
+      printf '%s\n' "$$" >"${pair_lock_dir}/owner.pid"
+      if [[ -r "/proc/$$/stat" ]]; then
+        awk '{print $22}' "/proc/$$/stat" >"${pair_lock_dir}/owner.start"
+      fi
+      {
+        printf 'case=%s\n' "$case_name"
+        printf 'workdir=%s\n' "$workdir"
+        printf 'node_a=%s\n' "$node_a"
+        printf 'node_b=%s\n' "$node_b"
+        printf 'started=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+      } >"${pair_lock_dir}/owner.txt"
+      pair_lock_acquired=1
+      log "acquired VM-pair lock ${pair_lock_dir}"
+      return 0
+    fi
+
+    owner_pid="$(cat "${pair_lock_dir}/owner.pid" 2>/dev/null || true)"
+    owner_start="$(cat "${pair_lock_dir}/owner.start" 2>/dev/null || true)"
+    current_start=""
+    if [[ "$owner_pid" =~ ^[0-9]+$ && -r "/proc/${owner_pid}/stat" ]]; then
+      current_start="$(awk '{print $22}' "/proc/${owner_pid}/stat" 2>/dev/null || true)"
+    fi
+    if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null &&
+      { [[ -z "$owner_start" ]] || [[ "$owner_start" == "$current_start" ]]; }; then
+      log "VM pair is already in use by runner pid=${owner_pid}"
+      cat "${pair_lock_dir}/owner.txt" >&2 2>/dev/null || true
+      return 1
+    fi
+
+    log "removing stale VM-pair lock ${pair_lock_dir}"
+    rm -f "${pair_lock_dir}/owner.pid" "${pair_lock_dir}/owner.start" "${pair_lock_dir}/owner.txt"
+    rmdir "$pair_lock_dir" 2>/dev/null || true
+  done
+  log "VM pair lock remains unavailable: ${pair_lock_dir}"
+  return 1
+}
+
+release_pair_lock() {
+  local owner_pid
+  [[ "$pair_lock_acquired" == "1" && -n "$pair_lock_dir" ]] || return 0
+  owner_pid="$(cat "${pair_lock_dir}/owner.pid" 2>/dev/null || true)"
+  if [[ "$owner_pid" == "$$" ]]; then
+    rm -f "${pair_lock_dir}/owner.pid" "${pair_lock_dir}/owner.start" "${pair_lock_dir}/owner.txt"
+    rmdir "$pair_lock_dir" 2>/dev/null || true
+  fi
+  pair_lock_acquired=0
 }
 
 json_escape() {
@@ -907,6 +974,7 @@ check_local_inputs() {
   case "$health_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_HEALTH_PORT must be an integer" ;; esac
   [[ "$health_port" -ne "$iperf_port" ]] || die "TRUSTIX_CROSS_HOST_HEALTH_PORT must differ from TRUSTIX_CROSS_HOST_IPERF_PORT"
   case "$transport_snapshot_delay" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be an integer" ;; esac
+  case "$pair_lock_hold_seconds" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_PAIR_LOCK_HOLD_SECONDS must be an integer" ;; esac
   case "$session_pool_size" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be an integer" ;; esac
   case "$capture_forwarder_workers" in auto) ;; *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_WORKERS must be auto or a positive integer" ;; esac
   case "$capture_forwarder_buffer" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BUFFER must be a positive integer" ;; esac
@@ -1500,6 +1568,39 @@ common_daemon_env() {
   printf 'TRUSTIX_CAPTURE_FORWARDER_BATCH_DELAY=%s\n' "$capture_forwarder_batch_delay"
 }
 
+plaintext_tc_direct_daemon_env() {
+  case "$(case_endpoint_transport)" in
+    udp)
+      cat <<'EOF'
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=0
+EOF
+      ;;
+    experimental_tcp)
+      cat <<'EOF'
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
+TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
+TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1
+TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
+EOF
+      ;;
+    *)
+      die "plaintext TC-direct requires udp or experimental_tcp endpoint transport"
+      ;;
+  esac
+}
+
 daemon_env() {
   common_daemon_env
   if [[ "$(case_fast_path)" == "secure_exp_tcp_kernel" ]]; then
@@ -1554,45 +1655,15 @@ TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
 EOF
       ;;
     tc_direct)
-      cat <<'EOF'
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1
-TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
-EOF
+      plaintext_tc_direct_daemon_env
       ;;
     userspace_tc)
       case "$(case_endpoint_transport):$(case_encryption)" in
         udp:plaintext)
-          cat <<'EOF'
-TRUSTIX_KERNEL_UDP_TC_TX_DIRECT=1
-TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_KERNEL_UDP_TC_ONLY=1
-TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=0
-EOF
+          plaintext_tc_direct_daemon_env
           ;;
         experimental_tcp:plaintext)
-          cat <<'EOF'
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1
-TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
-EOF
+          plaintext_tc_direct_daemon_env
           ;;
       esac
       ;;
@@ -2442,6 +2513,7 @@ cleanup_all() {
   collect_all
   if [[ "$rc" != "0" ]] && truthy "$preserve_on_failure"; then
     log "preserving remote state after failure because TRUSTIX_CROSS_HOST_PRESERVE_ON_FAILURE=1"
+    release_pair_lock
     return "$rc"
   fi
   stop_daemon a
@@ -2451,6 +2523,7 @@ cleanup_all() {
   if [[ "$keep_local" != "1" && -d "$workdir" ]]; then
     rm -rf "$workdir"
   fi
+  release_pair_lock
   return "$rc"
 }
 
@@ -2471,6 +2544,7 @@ main() {
     mkdir -p "$workdir"
     write_config a "$workdir/config-a.yaml"
     write_config b "$workdir/config-b.yaml"
+    daemon_env >"$workdir/daemon-env.txt"
     printf 'dry_run_config\n' >"$workdir/${case_name}.result"
     log "dry-run-config result=${workdir}"
     return
@@ -2479,6 +2553,7 @@ main() {
   need_cmd tar
   need_cmd cp
   need_cmd find
+  need_cmd cksum
   check_local_inputs
   log "case=${case_name} workdir=${workdir}"
   if case_tc_requested_but_falls_back_to_userspace; then
@@ -2491,7 +2566,12 @@ main() {
   check_node_prereqs b
   resolve_underlay
   log "underlay a=${underlay_a_ip}/${underlay_a_if} b=${underlay_b_ip}/${underlay_b_if}"
+  acquire_pair_lock || die "another soak runner owns this VM pair"
   trap cleanup_all EXIT
+  if [[ "$pair_lock_hold_seconds" -gt 0 ]]; then
+    log "holding VM-pair lock for ${pair_lock_hold_seconds}s"
+    sleep "$pair_lock_hold_seconds"
+  fi
   mark_kernel_log_start
   prepare_node_topology a
   prepare_node_topology b

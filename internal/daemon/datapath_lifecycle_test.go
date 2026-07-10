@@ -1185,6 +1185,46 @@ func TestControlOnlyKernelUDPSessionRuntimeStartsReceiveLoop(t *testing.T) {
 	}
 }
 
+func TestPlaintextKernelDirectOnlyRuntimeSkipsUnsupportedHeartbeat(t *testing.T) {
+	daemon := &Daemon{
+		desired: config.Desired{
+			TransportPolicy: config.TransportPolicyConfig{
+				SessionPool: config.SessionPoolPolicyConfig{
+					Size: 8,
+					Heartbeat: config.SessionPoolHeartbeatConfig{
+						Mode: "enabled",
+					},
+				},
+			},
+		},
+	}
+	runtime := &dataSessionRuntime{
+		key: dataSessionKey{
+			Transport:  transport.ProtocolUDP,
+			Encryption: securetransport.EncryptionPlaintext,
+		},
+		controlOnly: true,
+		receiveLoop: true,
+	}
+	if daemon.sessionHeartbeatEnabledForRuntimeLocked(runtime) {
+		t.Fatal("plaintext UDP direct-only runtime must not start an unsupported userspace heartbeat")
+	}
+
+	runtime.key.Encryption = securetransport.EncryptionSecure
+	if !daemon.sessionHeartbeatEnabledForRuntimeLocked(runtime) {
+		t.Fatal("secure UDP control runtime should retain heartbeat support")
+	}
+	runtime.key.Encryption = securetransport.EncryptionPlaintext
+	runtime.controlOnly = false
+	if !daemon.sessionHeartbeatEnabledForRuntimeLocked(runtime) {
+		t.Fatal("ordinary plaintext UDP runtime should retain heartbeat support")
+	}
+	runtime.receiveLoop = false
+	if daemon.sessionHeartbeatEnabledForRuntimeLocked(runtime) {
+		t.Fatal("runtime without a receive loop must not start a heartbeat")
+	}
+}
+
 func TestControlOnlyWarmupRetainsUDPKernelFlowOnClose(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	session := &epochBumpSession{stats: transport.TransportStats{Datagram: true, NativeBatching: true, FragmentingDatagram: true, MaxPacketSize: 1500}}

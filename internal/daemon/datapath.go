@@ -4472,7 +4472,7 @@ func (daemon *Daemon) startDataSessionRuntimeLockedWithOptions(key dataSessionKe
 	if runtime.receiveLoop {
 		go daemon.receiveDataPathSession(runtimeCtx, runtime, session)
 	}
-	if runtime.receiveLoop && daemon.sessionHeartbeatEnabledLocked() {
+	if daemon.sessionHeartbeatEnabledForRuntimeLocked(runtime) {
 		go daemon.runDataSessionHeartbeat(runtimeCtx, runtime)
 	}
 	if runtime.batching.enabled {
@@ -5390,6 +5390,18 @@ func (daemon *Daemon) sessionHeartbeatEnabledLocked() bool {
 	default:
 		return daemon.desired.TransportPolicy.SessionPool.Size > 1
 	}
+}
+
+func (daemon *Daemon) sessionHeartbeatEnabledForRuntimeLocked(runtime *dataSessionRuntime) bool {
+	if runtime == nil || !runtime.receiveLoop || !daemon.sessionHeartbeatEnabledLocked() {
+		return false
+	}
+	// Plaintext UDP direct-only sessions have no userspace control
+	// subscription. Sending a ping through them fails closed and used to tear
+	// down and refill the entire kernel flow pool on every heartbeat cycle.
+	return !runtime.controlOnly ||
+		runtime.key.Transport != transport.ProtocolUDP ||
+		parseSecureTransportEncryption(runtime.key.Encryption) != securetransport.EncryptionPlaintext
 }
 
 func (daemon *Daemon) sessionHeartbeatInterval() time.Duration {
