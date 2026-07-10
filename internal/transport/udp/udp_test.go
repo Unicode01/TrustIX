@@ -696,6 +696,72 @@ func TestKernelListenerClosedInboundSessionIsRemovedAndRecreated(t *testing.T) {
 	}
 }
 
+func TestKernelSessionCloseReleasesQueuedAndPendingBatches(t *testing.T) {
+	session := newKernelSession(nil, nil, 7, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	var released atomic.Int32
+	makeBatch := func(payload string) kernelUDPPacketBatch {
+		return kernelUDPPacketBatch{
+			packets:  [][]byte{[]byte(payload)},
+			releases: []func(){func() { released.Add(1) }},
+		}
+	}
+	session.recvPending = makeBatch("pending")
+	session.in <- makeBatch("queued")
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("close kernel UDP session: %v", err)
+	}
+	if got := released.Load(); got != 2 {
+		t.Fatalf("released queued and pending batches = %d, want 2", got)
+	}
+}
+
+func TestKernelSessionCloseConcurrentRecvReleasesEveryBatch(t *testing.T) {
+	const iterations = 200
+	for iteration := 0; iteration < iterations; iteration++ {
+		session := newKernelSession(nil, nil, uint64(iteration+1), "ix-b", "server", dataplane.CryptoPlacementUserspace)
+		var released atomic.Int32
+		batch := kernelUDPPacketBatch{
+			packets: [][]byte{
+				[]byte("one"),
+				[]byte("two"),
+				[]byte("three"),
+				[]byte("four"),
+			},
+			releases: []func(){
+				func() { released.Add(1) },
+				func() { released.Add(1) },
+				func() { released.Add(1) },
+				func() { released.Add(1) },
+			},
+		}
+		session.in <- batch
+
+		started := make(chan struct{})
+		recvDone := make(chan struct{})
+		go func() {
+			close(started)
+			_, release, _ := session.RecvPacketsWithRelease(1)
+			if release != nil {
+				release()
+			}
+			close(recvDone)
+		}()
+		<-started
+		closeDone := make(chan struct{})
+		go func() {
+			_ = session.Close()
+			close(closeDone)
+		}()
+		<-recvDone
+		<-closeDone
+
+		if got := released.Load(); got != 4 {
+			t.Fatalf("iteration %d released batches = %d, want 4", iteration, got)
+		}
+	}
+}
+
 func TestKernelTransportRequireKernelRejectsUnavailableProvider(t *testing.T) {
 	providerA, providerB := newKernelUDPProviderPair()
 	providerA.available = false

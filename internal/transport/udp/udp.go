@@ -1678,6 +1678,7 @@ type kernelSession struct {
 	localAddress              string
 	remoteAddress             string
 	in                        chan kernelUDPPacketBatch
+	inputMu                   sync.RWMutex
 	recvPending               kernelUDPPacketBatch
 	closeOnce                 sync.Once
 	closeInputOnce            sync.Once
@@ -1685,6 +1686,7 @@ type kernelSession struct {
 	sendSeq                   atomic.Uint64
 	sendMu                    sync.Mutex
 	sendFrames                []dataplane.KernelUDPFrame
+	recvReadMu                sync.Mutex
 	recvMu                    sync.Mutex
 	reassembly                map[uint64]*kernelUDPFragmentAssembly
 	bytesSent                 atomic.Uint64
@@ -2156,6 +2158,8 @@ func (session *kernelSession) RecvPacketsWithRelease(max int) ([][]byte, func(),
 	if max <= 0 {
 		max = 1
 	}
+	session.recvReadMu.Lock()
+	defer session.recvReadMu.Unlock()
 	var packets [][]byte
 	var releases []func()
 	var releaseBatch kernelUDPPacketBatch
@@ -2524,6 +2528,8 @@ func (session *kernelSession) enqueueBatch(batch kernelUDPPacketBatch) {
 		return
 	default:
 	}
+	session.inputMu.RLock()
+	defer session.inputMu.RUnlock()
 	select {
 	case <-session.closed:
 		kernelUDPReleaseBatch(batch)
@@ -2752,8 +2758,21 @@ func (session *kernelSession) pruneOldestReassemblyIfFullLocked(maxAssemblies in
 func (session *kernelSession) closeInput() {
 	session.closeInputOnce.Do(func() {
 		close(session.closed)
+		session.inputMu.Lock()
+		for {
+			select {
+			case batch := <-session.in:
+				kernelUDPReleaseBatch(batch)
+			default:
+				session.inputMu.Unlock()
+				goto inputDrained
+			}
+		}
+	inputDrained:
+		session.recvReadMu.Lock()
 		kernelUDPReleaseBatch(session.recvPending)
 		session.recvPending = kernelUDPPacketBatch{}
+		session.recvReadMu.Unlock()
 		session.recvMu.Lock()
 		for _, assembly := range session.reassembly {
 			kernelUDPReleaseFragmentAssembly(assembly)
