@@ -260,6 +260,16 @@ KERNEL_UDP_SESSION_LIFECYCLE_COMMITS_BY_PATH = {
         "f61fbaddd6bb8de8678be3a37bce3bc426622b7e",
     },
 }
+PLAINTEXT_KERNEL_UDP_HEARTBEAT_COMMITS_BY_PATH = {
+    # 20c9778 suppresses an unsupported userspace heartbeat only for
+    # plaintext UDP runtimes whose data plane is direct-only. Those runtimes
+    # are exercised by UDP full-kmod and TC-direct gates. Userspace sessions,
+    # secure kernel UDP, and experimental TCP paths retain their prior
+    # heartbeat behavior and packet path.
+    "internal/daemon/datapath.go": {
+        "20c977829b7665996d65b9567e09a4b491c9c4e4",
+    },
+}
 CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
     "full_kmod",
     "exp_tcp_full_kmod",
@@ -1027,6 +1037,7 @@ def current_runtime_path_change_irrelevant(
 ) -> bool:
     normalized = path.replace("\\", "/")
     gate_class = gate_family_class(row["gate_family"])
+    transport = row.get("transport", "")
     allowed_change_commits: set[str] = set()
     allowed_commits = RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class in LOW_LEVEL_RUNTIME_GATE_CLASSES:
@@ -1049,6 +1060,14 @@ def current_runtime_path_change_irrelevant(
         allowed_change_commits.update(allowed_commits)
     allowed_commits = KERNEL_UDP_SESSION_LIFECYCLE_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class != "secure_kudp":
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = PLAINTEXT_KERNEL_UDP_HEARTBEAT_COMMITS_BY_PATH.get(normalized)
+    plaintext_kernel_udp_direct = row.get("encryption") == "plaintext" and (
+        (gate_class == "full_kmod" and transport == "udp")
+        or (gate_class == "tc_direct" and transport in {"udp", "kernel_udp"})
+        or (gate_class == "userspace_tc" and transport in {"udp", "kernel_udp"})
+    )
+    if allowed_commits and not plaintext_kernel_udp_direct:
         allowed_change_commits.update(allowed_commits)
     allowed_commits = USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and (

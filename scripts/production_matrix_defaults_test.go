@@ -3465,6 +3465,7 @@ func TestProductionTransportAuditScriptRuntimePathRelevance(t *testing.T) {
 	code := `
 import importlib.util
 import pathlib
+import subprocess
 import sys
 
 script = pathlib.Path("production-transport-audit.py")
@@ -3536,6 +3537,7 @@ func TestProductionTransportAuditScriptD479UserspaceUDPDefaultOnlyExemptions(t *
 	code := `
 import importlib.util
 import pathlib
+import subprocess
 import sys
 
 script = pathlib.Path("production-transport-audit.py")
@@ -3695,6 +3697,48 @@ if module.current_runtime_path_change_irrelevant(row, parent, path):
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("kernel UDP session lifecycle exemption regression failed: %v\n%s", err, output)
+	}
+}
+
+func TestProductionTransportAuditScriptPlaintextKernelUDPHeartbeatScope(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+probe = {"commit": "20c977829b7665996d65b9567e09a4b491c9c4e4"}
+module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
+parent = "parent-does-not-matter-for-probed-history"
+path = "internal/daemon/datapath.go"
+cases = [
+    ({"gate_family": "full_kmod", "transport": "udp", "encryption": "plaintext"}, False),
+    ({"gate_family": "owdeb_full_kmod", "transport": "udp", "encryption": "plaintext"}, False),
+    ({"gate_family": "tc_direct", "transport": "kernel_udp", "encryption": "plaintext"}, False),
+    ({"gate_family": "userspace", "transport": "udp", "encryption": "plaintext"}, True),
+    ({"gate_family": "exp_tcp_full_kmod", "transport": "experimental_tcp", "encryption": "plaintext"}, True),
+    ({"gate_family": "secure_kudp", "transport": "kernel_udp", "encryption": "secure"}, True),
+    ({"gate_family": "route_gso", "transport": "experimental_tcp", "encryption": "plaintext"}, True),
+]
+for row, want in cases:
+    got = module.current_runtime_path_change_irrelevant(row, parent, path)
+    if got != want:
+        print(f"plaintext kernel UDP heartbeat scope mismatch for {row}: got {got}, want {want}", file=sys.stderr)
+        sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("plaintext kernel UDP heartbeat scope regression failed: %v\n%s", err, output)
 	}
 }
 
