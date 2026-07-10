@@ -1796,7 +1796,7 @@ func TestPruneExpiredStaticMemberKeepsDataSessions(t *testing.T) {
 	if got := daemon.dataSessions[key]; got != session {
 		t.Fatalf("static peer session = %#v, want existing session", got)
 	}
-	if session.closed {
+	if session.closed.Load() {
 		t.Fatal("static peer session was closed by dynamic member pruning")
 	}
 	if counters := daemon.dataStats.snapshot(); counters.StaleSessionsDropped != 0 {
@@ -1924,7 +1924,7 @@ func TestAdvertisementRouteOnlyUpdateKeepsDataSession(t *testing.T) {
 	if !changed {
 		t.Fatal("updated advertisement did not report a dynamic member change")
 	}
-	if session.closed {
+	if session.closed.Load() {
 		t.Fatal("route-only advertisement update closed an existing data session")
 	}
 	if daemonA.dataSessions[key] != session {
@@ -1964,7 +1964,7 @@ func TestAdvertisementEndpointUpdateClosesDataSession(t *testing.T) {
 	if _, err := daemonA.mergeAdvertisement(updated, "test-bootstrap"); err != nil {
 		t.Fatalf("merge endpoint update advertisement: %v", err)
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("endpoint advertisement update did not close an existing data session")
 	}
 	if _, ok := daemonA.dataSessions[key]; ok {
@@ -2005,7 +2005,7 @@ func TestAdvertisementEndpointPriorityUpdateClosesDataSession(t *testing.T) {
 	if _, err := daemonA.mergeAdvertisement(updated, "test-bootstrap"); err != nil {
 		t.Fatalf("merge endpoint priority update advertisement: %v", err)
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("endpoint priority advertisement update did not close an existing data session")
 	}
 }

@@ -95,7 +95,7 @@ func TestEndpointGrantIssueListRevokeAndInboundEnforcement(t *testing.T) {
 	if revokeRecorder.Code != http.StatusOK {
 		t.Fatalf("revoke grant status = %d body=%s", revokeRecorder.Code, revokeRecorder.Body.String())
 	}
-	if !accepted.closed {
+	if !accepted.closed.Load() {
 		t.Fatal("revoking endpoint grant did not close the reverse data session")
 	}
 
@@ -152,7 +152,7 @@ func TestEndpointGrantExpiryDropsExistingInboundSession(t *testing.T) {
 	if dropped != 1 {
 		t.Fatalf("expired grant dropped %d sessions, want 1", dropped)
 	}
-	if !accepted.closed {
+	if !accepted.closed.Load() {
 		t.Fatal("expired endpoint grant did not close the reverse data session")
 	}
 }
@@ -193,7 +193,7 @@ func TestEndpointGrantCleanupFailsClosedWhenGrantLogUnreadable(t *testing.T) {
 	if dropped != 1 {
 		t.Fatalf("grant cleanup with unreadable log dropped %d sessions, want 1", dropped)
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("grant cleanup with unreadable log did not close require_grant session")
 	}
 }

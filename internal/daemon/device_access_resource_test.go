@@ -74,7 +74,7 @@ func TestDeviceAccessListShowAndRevoke(t *testing.T) {
 	if revoke.Fingerprint != session.identity.CertFingerprint || revoke.DroppedSessions != 1 || !revoke.Changed {
 		t.Fatalf("revoke response = %#v", revoke)
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("device session was not closed")
 	}
 	if len(daemon.deviceLeases) != 0 {
@@ -112,7 +112,7 @@ func TestTrustRevokeDropsDeviceAccessSession(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("trust revoke status = %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("device session was not closed by trust revoke")
 	}
 	if len(daemon.deviceLeases) != 0 {
@@ -142,7 +142,7 @@ func TestDeviceAccessLeaseExpiryDropsSession(t *testing.T) {
 	if dropped != 1 {
 		t.Fatalf("expired device lease dropped %d sessions, want 1", dropped)
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("expired device lease did not close the session")
 	}
 	if len(daemon.deviceLeases) != 0 {
@@ -179,7 +179,7 @@ func TestDeviceAccessRevokeRequiresAdminAuth(t *testing.T) {
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("unsigned revoke status = %d, want %d; body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
 	}
-	if session.closed {
+	if session.closed.Load() {
 		t.Fatal("unsigned revoke closed the device session")
 	}
 	if len(daemon.deviceLeases) != 1 {

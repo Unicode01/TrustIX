@@ -4498,7 +4498,7 @@ func TestInboundDataSessionCapsReversePoolMembers(t *testing.T) {
 	if got := daemon.activeReverseSessionsForEndpoint(peer.ID, peer.Endpoints[0]); got != 2 {
 		t.Fatalf("active reverse sessions = %d, want capped at 2", got)
 	}
-	if !first.closed {
+	if !first.closed.Load() {
 		t.Fatal("oldest reverse pool member was not closed when the pool was full")
 	}
 	if daemon.dataSessions[key0] != third {
@@ -6807,7 +6807,7 @@ func TestDropRuntimeSessionRefillsWarmSessionPool(t *testing.T) {
 	if got := len(daemon.dataSessions); got != 2 {
 		t.Fatalf("warm session pool size after runtime drop = %d, want 2", got)
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("dropped session was not closed")
 	}
 }
@@ -6988,7 +6988,7 @@ func TestRegisterInboundPublicEndpointKeepsOutboundSession(t *testing.T) {
 	if _, ok := daemon.dataSessions[outboundKey]; !ok {
 		t.Fatal("public inbound session dropped existing outbound session")
 	}
-	if outbound.closed {
+	if outbound.closed.Load() {
 		t.Fatal("public inbound session closed existing outbound session")
 	}
 	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionSecure)
@@ -7415,10 +7415,10 @@ func TestDropSessionsForPeerTransportDropsOnlyMatchingSessions(t *testing.T) {
 			t.Fatal("GRE pool cursor was not deleted")
 		}
 	}
-	if !greSession.closed {
+	if !greSession.closed.Load() {
 		t.Fatal("GRE session was not closed")
 	}
-	if udpSession.closed || otherSession.closed {
+	if udpSession.closed.Load() || otherSession.closed.Load() {
 		t.Fatal("unrelated session was closed")
 	}
 }
@@ -7498,10 +7498,10 @@ func TestRegisterInboundReverseOnlyDataSessionDropsMatchingOutboundSession(t *te
 	if !outboundCanceled {
 		t.Fatal("matching outbound runtime cancel was not called")
 	}
-	if !outboundSession.closed {
+	if !outboundSession.closed.Load() {
 		t.Fatal("matching outbound session was not closed")
 	}
-	if otherCanceled || otherSession.closed {
+	if otherCanceled || otherSession.closed.Load() {
 		t.Fatal("unrelated endpoint session was canceled or closed")
 	}
 	if len(daemon.sessionPoolRR) != 0 {
@@ -7898,7 +7898,7 @@ func TestRegisterInboundExperimentalTCPSessionKeepsDialableOutboundSession(t *te
 	if outboundCanceled {
 		t.Fatal("dialable outbound experimental_tcp runtime cancel was called")
 	}
-	if outboundSession.closed {
+	if outboundSession.closed.Load() {
 		t.Fatal("dialable outbound experimental_tcp session was closed")
 	}
 }
@@ -8120,7 +8120,7 @@ func (manager *recordingLocalPacketDataplane) InjectLocalPacket(ctx context.Cont
 
 type recordingSession struct {
 	sent   [][]byte
-	closed bool
+	closed atomic.Bool
 	stats  transport.TransportStats
 }
 
@@ -8134,7 +8134,7 @@ func (session *recordingSession) RecvPacket() ([]byte, error) {
 }
 
 func (session *recordingSession) Close() error {
-	session.closed = true
+	session.closed.Store(true)
 	return nil
 }
 

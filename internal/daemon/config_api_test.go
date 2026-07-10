@@ -281,7 +281,7 @@ func TestConfigApplyRouteOnlyKeepsDataSessions(t *testing.T) {
 	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
 		t.Fatalf("apply route-only desired changed=%t err=%v", changed, err)
 	}
-	if session.closed {
+	if session.closed.Load() {
 		t.Fatal("route-only config apply closed an existing data session")
 	}
 	if daemon.dataSessions[key] != session {
@@ -321,7 +321,7 @@ func TestConfigApplyRouteEndpointChangeRestartsPeerSessions(t *testing.T) {
 	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
 		t.Fatalf("apply route endpoint change changed=%t err=%v", changed, err)
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("route endpoint change should close existing peer data session")
 	}
 	if _, ok := daemon.dataSessions[key]; ok {
@@ -350,7 +350,7 @@ func TestConfigApplyDisablingRouteEndpointRestartsPeerSessions(t *testing.T) {
 	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
 		t.Fatalf("apply endpoint disable changed=%t err=%v", changed, err)
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("disabling a selected endpoint should close existing peer data session")
 	}
 	if _, ok := daemon.dataSessions[key]; ok {
@@ -424,7 +424,7 @@ func TestConfigApplyRouteEndpointChangeWarmsNewKernelDirectSession(t *testing.T)
 	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
 		t.Fatalf("apply route endpoint change changed=%t err=%v", changed, err)
 	}
-	if !session.closed {
+	if !session.closed.Load() {
 		t.Fatal("route endpoint change should close old udp session")
 	}
 
@@ -494,13 +494,13 @@ func TestConfigApplyRouteEndpointChangeReconcilesStaleOutboundSession(t *testing
 	if dropped := daemon.reconcileRouteSelectedOutboundSessions(); dropped != 1 {
 		t.Fatalf("dropped sessions = %d, want 1", dropped)
 	}
-	if !stale.closed {
+	if !stale.closed.Load() {
 		t.Fatal("stale route endpoint session should be closed")
 	}
 	if _, ok := daemon.dataSessions[staleKey]; ok {
 		t.Fatal("stale route endpoint session should be removed")
 	}
-	if current.closed {
+	if current.closed.Load() {
 		t.Fatal("current route endpoint session should be kept")
 	}
 	if daemon.dataSessions[currentKey] != current {
@@ -556,7 +556,7 @@ func TestConfigApplyDynamicToStaticPeerKeepsEquivalentSession(t *testing.T) {
 	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
 		t.Fatalf("apply static peer desired changed=%t err=%v", changed, err)
 	}
-	if session.closed {
+	if session.closed.Load() {
 		t.Fatal("dynamic-to-static equivalent peer update closed an existing data session")
 	}
 	if daemon.dataSessions[key] != session {
