@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -7823,5 +7824,43 @@ func TestCrossHostSoakRunnerRejectsConcurrentVMPairUse(t *testing.T) {
 	}
 	if err := first.Wait(); err == nil {
 		t.Fatal("killed first runner unexpectedly exited successfully")
+	}
+}
+
+func TestCrossHostSoakRunnerCleanupTrapReturnsCleanly(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+
+	scriptPath, err := filepath.Abs("linux-cross-host-soak-runner.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := fmt.Sprintf(`
+set -Eeuo pipefail
+source %q
+collect_all() { :; }
+stop_daemon() { :; }
+cleanup_node() { :; }
+workdir=$(mktemp -d)
+pair_lock_dir="$workdir/pair.lock"
+mkdir "$pair_lock_dir"
+printf '%%s\n' "$$" >"$pair_lock_dir/owner.pid"
+pair_lock_acquired=1
+keep_local=1
+preserve_on_failure=0
+cleanup_all
+test "$pair_lock_acquired" = 0
+test ! -e "$pair_lock_dir"
+`, scriptPath)
+	cmd := exec.Command(bash, "-c", code)
+	cmd.Env = append(os.Environ(), "TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cleanup trap returned a shell parse/runtime error: %v\n%s", err, output)
 	}
 }
