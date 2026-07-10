@@ -190,6 +190,41 @@ func TestKernelDatapathSessionWireRecordKeepsExperimentalTCPEpoch(t *testing.T) 
 	}
 }
 
+func TestKernelDatapathSessionStateKeySeparatesReverseDirection(t *testing.T) {
+	outbound := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "wan-exp-tcp",
+		Transport:  transport.ProtocolExperimentalTCP,
+		Address:    "198.51.100.2:17041",
+		Encryption: "plaintext",
+		PoolIndex:  3,
+	}
+	reverse := outbound
+	reverse.Address = reverseSessionAddress
+	if kernelDatapathSessionStateKey(outbound) == kernelDatapathSessionStateKey(reverse) {
+		t.Fatal("outbound and reverse sessions must not share a kernel state key")
+	}
+}
+
+func TestKernelDatapathSessionStateRecordsKeepFlowWithoutWireTuple(t *testing.T) {
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "wan-exp-tcp",
+		Transport:  transport.ProtocolExperimentalTCP,
+		Address:    reverseSessionAddress,
+		Encryption: "plaintext",
+	}
+	records := (*Daemon)(nil).kernelDatapathSessionStateRecords(key, nil, kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:   0x1020304050607080,
+		Protocol: transport.ProtocolExperimentalTCP,
+	}})
+	if len(records) != 1 ||
+		records[0].Kind != kernelmodule.TrustIXDatapathStateKindSession ||
+		records[0].Value[0] != 0x1020304050607080 {
+		t.Fatalf("session-only kernel records = %#v, want negotiated flow record", records)
+	}
+}
+
 func TestKernelDatapathSessionWireRecordSkipsUnresolvedUnderlay(t *testing.T) {
 	key := dataSessionKey{Peer: "ix-b", Endpoint: "wan-udp", Transport: transport.ProtocolUDP}
 	session := kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
@@ -384,9 +419,11 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsIgnoreExistingSessionKey(
 	if len(records) != 2 {
 		t.Fatalf("full plaintext records = %#v, want session+wire", records)
 	}
+	syntheticKey := existingKey
+	syntheticKey.Address = kernelDatapathFullPlaintextAddressPrefix + existingKey.Address
 	if records[0].Kind != kernelmodule.TrustIXDatapathStateKindSession ||
 		records[1].Kind != kernelmodule.TrustIXDatapathStateKindSessionWire ||
-		records[0].Key != kernelDatapathSessionStateKey(existingKey) ||
+		records[0].Key != kernelDatapathSessionStateKey(syntheticKey) ||
 		records[1].Key != records[0].Key {
 		t.Fatalf("unexpected full plaintext records: %#v", records)
 	}
@@ -435,11 +472,15 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsCoverActivePoolIndexes(t 
 		dataSessionState: map[dataSessionKey]*dataSessionRuntime{},
 	}
 	for _, poolIndex := range []int{0, 7, 1} {
+		address := "198.51.100.2:17042"
+		if poolIndex == 7 {
+			address = reverseSessionAddress
+		}
 		key := dataSessionKey{
 			Peer:       "ix-b",
 			Endpoint:   "wan-udp",
 			Transport:  transport.ProtocolUDP,
-			Address:    "198.51.100.2:17042",
+			Address:    address,
 			Encryption: "plaintext",
 			PoolIndex:  poolIndex,
 		}
@@ -467,7 +508,7 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsCoverActivePoolIndexes(t 
 			Peer:       "ix-b",
 			Endpoint:   "wan-udp",
 			Transport:  transport.ProtocolUDP,
-			Address:    "198.51.100.2:17042",
+			Address:    kernelDatapathFullPlaintextAddressPrefix + "198.51.100.2:17042",
 			Encryption: "plaintext",
 			PoolIndex:  poolIndex,
 		}
@@ -481,6 +522,109 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsCoverActivePoolIndexes(t 
 			wire.Value[0] == 0 {
 			t.Fatalf("unexpected pool %d records: session=%#v wire=%#v", poolIndex, session, wire)
 		}
+	}
+}
+
+func TestKernelDatapathStateRecordsSeparateSyntheticFallbackFromIncompleteNegotiatedSession(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX", "1")
+	localEndpoint := config.EndpointConfig{
+		Name:      "wan-exp-tcp",
+		Mode:      config.EndpointModePassive,
+		Listen:    "192.0.2.1:17041",
+		Address:   "192.0.2.1:17041",
+		Transport: string(transport.ProtocolExperimentalTCP),
+		Security:  config.EndpointSecurityConfig{Encryption: "plaintext"},
+		Enabled:   true,
+	}
+	remoteEndpoint := config.EndpointConfig{
+		Name:      "wan-exp-tcp",
+		Mode:      config.EndpointModePassive,
+		Address:   "198.51.100.2:17042",
+		Transport: string(transport.ProtocolExperimentalTCP),
+		Security:  config.EndpointSecurityConfig{Encryption: "plaintext"},
+		Enabled:   true,
+	}
+	outboundKey := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   remoteEndpoint.Name,
+		Transport:  transport.ProtocolExperimentalTCP,
+		Address:    remoteEndpoint.Address,
+		Encryption: "plaintext",
+	}
+	reverseKey := outboundKey
+	reverseKey.Address = reverseSessionAddress
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX:              config.IXConfig{ID: "ix-a"},
+			KernelModules:   config.KernelModulesConfig{CapabilityProfile: config.KernelCapabilityProfileFullPlaintext},
+			TransportPolicy: config.TransportPolicyConfig{Encryption: "plaintext"},
+			Endpoints:       []config.EndpointConfig{localEndpoint},
+			Peers: []config.PeerConfig{{
+				ID:        "ix-b",
+				Endpoints: []config.EndpointConfig{remoteEndpoint},
+			}},
+		},
+		dataSessions: map[dataSessionKey]transport.Session{
+			outboundKey: kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+				FlowID:   7,
+				Protocol: transport.ProtocolExperimentalTCP,
+				Peer:     "ix-b",
+				Endpoint: remoteEndpoint.Name,
+			}},
+			reverseKey: kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+				FlowID:   9,
+				Protocol: transport.ProtocolExperimentalTCP,
+				Peer:     "ix-b",
+				Endpoint: remoteEndpoint.Name,
+			}},
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{},
+	}
+	route := routing.Route{
+		Prefix:   core.Prefix("10.202.12.0/24"),
+		NextHop:  "ix-b",
+		Endpoint: remoteEndpoint.Name,
+		Kind:     routing.RouteUnicast,
+	}
+	records := daemon.kernelDatapathStateRecords(context.Background(), dataplane.Snapshot{Routes: []routing.Route{route}})
+	syntheticKey := outboundKey
+	syntheticKey.Address = kernelDatapathFullPlaintextAddressPrefix + remoteEndpoint.Address
+	negotiatedFlowID := uint64(0)
+	negotiatedWireFound := false
+	syntheticSessionFlowID := uint64(0)
+	syntheticWireFlowID := uint64(0)
+	reverseFound := false
+	for _, record := range records {
+		if record.Op != kernelmodule.TrustIXDatapathStateOpUpsert {
+			continue
+		}
+		switch {
+		case record.Kind == kernelmodule.TrustIXDatapathStateKindSession && record.Key == kernelDatapathSessionStateKey(outboundKey):
+			negotiatedFlowID = record.Value[0]
+		case record.Kind == kernelmodule.TrustIXDatapathStateKindSessionWire && record.Key == kernelDatapathSessionStateKey(outboundKey):
+			negotiatedWireFound = true
+		case record.Kind == kernelmodule.TrustIXDatapathStateKindSession && record.Key == kernelDatapathSessionStateKey(syntheticKey):
+			syntheticSessionFlowID = record.Value[0]
+			if record.Flags&kernelDatapathSessionFlagSyntheticFallback == 0 {
+				t.Fatalf("synthetic fallback flags = %#x, want synthetic marker", record.Flags)
+			}
+		case record.Kind == kernelmodule.TrustIXDatapathStateKindSessionWire && record.Key == kernelDatapathSessionStateKey(syntheticKey):
+			syntheticWireFlowID = record.Value[0]
+		case record.Kind == kernelmodule.TrustIXDatapathStateKindSession && record.Key == kernelDatapathSessionStateKey(reverseKey):
+			reverseFound = record.Value[0] == 9
+		}
+	}
+	if negotiatedFlowID != 7 {
+		t.Fatalf("negotiated outbound session flow id = %d, want 7; records=%#v", negotiatedFlowID, records)
+	}
+	if negotiatedWireFound {
+		t.Fatalf("incomplete negotiated session unexpectedly has a wire record: %#v", records)
+	}
+	if syntheticSessionFlowID == 0 || syntheticSessionFlowID != syntheticWireFlowID {
+		t.Fatalf("synthetic session/wire flow ids = %d/%d, want a matching nonzero fallback; records=%#v", syntheticSessionFlowID, syntheticWireFlowID, records)
+	}
+	if !reverseFound {
+		t.Fatalf("negotiated reverse flow 9 missing from kernel records: %#v", records)
 	}
 }
 

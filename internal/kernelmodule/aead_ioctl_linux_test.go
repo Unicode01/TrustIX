@@ -217,6 +217,11 @@ func TestTrustIXFullDatapathRXWorkerWithTCClsactDoesNotPanic(t *testing.T) {
 			t.Skipf("unable to bring RX worker TC netdev %s up: %v", name, err)
 		}
 	}
+	recvFD, err := openIPv4PacketSocket(targetPeer)
+	if err != nil {
+		t.Skipf("unable to monitor RX worker TC target peer: %v", err)
+	}
+	defer syscall.Close(recvFD)
 	if err := tcQdiscAddClsact(ingress); err != nil {
 		t.Skipf("unable to add clsact qdisc to RX worker ingress: %v", err)
 	}
@@ -247,6 +252,16 @@ func TestTrustIXFullDatapathRXWorkerWithTCClsactDoesNotPanic(t *testing.T) {
 	}
 	if err := sendIPv4EthernetFrame(peer, outer.Outer); err != nil {
 		t.Skipf("unable to inject RX worker TC outer ingress frame: %v", err)
+	}
+	received, packetType, err := recvIPv4PacketWithType(recvFD, 2*time.Second)
+	if err != nil {
+		t.Fatalf("receive RX worker inner packet on target veth peer: %v", err)
+	}
+	if packetType != 0 {
+		t.Fatalf("RX worker inner packet type = %d, want PACKET_HOST", packetType)
+	}
+	if !bytes.Equal(received, inner) {
+		t.Fatalf("RX worker inner packet mismatch: got=%x want=%x", received, inner)
 	}
 	var query DatapathHookStatus
 	deadline := time.Now().Add(2 * time.Second)
@@ -1789,18 +1804,27 @@ func openIPv4PacketSocket(ifname string) (int, error) {
 }
 
 func recvIPv4Packet(fd int, timeout time.Duration) ([]byte, error) {
+	packet, _, err := recvIPv4PacketWithType(fd, timeout)
+	return packet, err
+}
+
+func recvIPv4PacketWithType(fd int, timeout time.Duration) ([]byte, uint8, error) {
 	deadline := time.Now().Add(timeout)
 	buf := make([]byte, 65536)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		n, _, err := syscall.Recvfrom(fd, buf, 0)
+		n, from, err := syscall.Recvfrom(fd, buf, 0)
 		if err == nil {
 			if n < 14 || binary.BigEndian.Uint16(buf[12:14]) != 0x0800 {
 				continue
 			}
+			link, ok := from.(*syscall.SockaddrLinklayer)
+			if !ok {
+				continue
+			}
 			packet := make([]byte, n-14)
 			copy(packet, buf[14:n])
-			return packet, nil
+			return packet, link.Pkttype, nil
 		}
 		if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
 			time.Sleep(10 * time.Millisecond)
@@ -1810,9 +1834,9 @@ func recvIPv4Packet(fd int, timeout time.Duration) ([]byte, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if lastErr != nil {
-		return nil, lastErr
+		return nil, 0, lastErr
 	}
-	return nil, syscall.ETIMEDOUT
+	return nil, 0, syscall.ETIMEDOUT
 }
 
 func htons(value uint16) uint16 {

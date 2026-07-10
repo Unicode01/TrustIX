@@ -298,6 +298,162 @@ func TestCrossHostRunnerMultiEndpointDryRunConfig(t *testing.T) {
 	}
 }
 
+func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
+	bash := requireGNUBash4(t)
+	for _, tc := range []struct {
+		name       string
+		datapath   string
+		crypto     string
+		configWant []string
+		envWant    []string
+	}{
+		{
+			name:     "mixed-plaintext-full-kmod",
+			datapath: "kernel_module",
+			crypto:   "userspace",
+			configWant: []string{
+				"capability_profile: full_plaintext",
+				"trustix_datapath:\n    mode: required",
+			},
+			envWant: []string{
+				"TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT=1",
+				"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=1",
+				"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1",
+			},
+		},
+		{
+			name:     "mixed-secure-kernel",
+			datapath: "kernel_module",
+			crypto:   "kernel",
+			configWant: []string{
+				"capability_profile: performance",
+				"trustix_crypto:\n    mode: required",
+				"trustix_datapath_helpers:\n    mode: required",
+			},
+			envWant: []string{
+				"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=1",
+				"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=1",
+				"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=1",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workdir := filepath.Join(t.TempDir(), tc.name)
+			cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+			cmd.Dir = "."
+			cmd.Env = append(os.Environ(),
+				"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
+				"TRUSTIX_CROSS_HOST_CASE="+tc.name,
+				"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp,experimental_tcp",
+				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=192.0.2.10",
+				"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=192.0.2.11",
+				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
+				"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
+				"TRUSTIX_CROSS_HOST_WORKDIR="+workdir,
+			)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("kernel mixed-endpoint dry-run config failed: %v\n%s", err, out)
+			}
+			configRaw, err := os.ReadFile(filepath.Join(workdir, "config-a.yaml"))
+			if err != nil {
+				t.Fatalf("read config-a.yaml: %v", err)
+			}
+			config := string(configRaw)
+			for _, transport := range []string{"udp", "experimental_tcp"} {
+				if got := strings.Count(config, "transport: "+transport+"\n"); got != 2 {
+					t.Fatalf("transport %s count = %d, want local+peer; config:\n%s", transport, got, config)
+				}
+			}
+			for _, want := range append([]string{
+				"datapath: " + tc.datapath,
+				"crypto_placement: " + tc.crypto,
+				"kernel_transport:\n    mode: require_kernel",
+				"  - prefix: 10.64.1.0/25\n    next_hop: ix-b\n    endpoint: b-udp",
+				"  - prefix: 10.64.1.128/25\n    next_hop: ix-b\n    endpoint: b-experimental-tcp",
+			}, tc.configWant...) {
+				if !strings.Contains(config, want) {
+					t.Fatalf("config missing %q:\n%s", want, config)
+				}
+			}
+			envRaw, err := os.ReadFile(filepath.Join(workdir, "daemon-env.txt"))
+			if err != nil {
+				t.Fatalf("read daemon-env.txt: %v", err)
+			}
+			for _, want := range tc.envWant {
+				if !strings.Contains(string(envRaw), want) {
+					t.Fatalf("daemon environment missing %q:\n%s", want, envRaw)
+				}
+			}
+			contractRaw, err := os.ReadFile(filepath.Join(workdir, "pinned-mixed-routes.txt"))
+			if err != nil {
+				t.Fatalf("read pinned mixed route contract: %v", err)
+			}
+			for _, want := range []string{
+				"udp.a_prefix=10.64.0.0/25",
+				"udp.b_prefix=10.64.1.0/25",
+				"udp.a_host=10.64.0.2",
+				"udp.b_host=10.64.1.2",
+				"udp.iperf_port=25201",
+				"experimental_tcp.a_prefix=10.64.0.128/25",
+				"experimental_tcp.b_prefix=10.64.1.128/25",
+				"experimental_tcp.a_host=10.64.0.130",
+				"experimental_tcp.b_host=10.64.1.130",
+				"experimental_tcp.iperf_port=25203",
+			} {
+				if !strings.Contains(string(contractRaw), want+"\n") {
+					t.Fatalf("pinned mixed route contract missing %q:\n%s", want, contractRaw)
+				}
+			}
+		})
+	}
+}
+
+func TestCrossHostRunnerPinnedMixedThroughputGate(t *testing.T) {
+	bash := requireGNUBash4(t)
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+	root := t.TempDir()
+	fast := `{"end":{"sum_sent":{"bits_per_second":2500000000},"sum_received":{"bits_per_second":2400000000}}}`
+	slow := `{"end":{"sum_sent":{"bits_per_second":2500000000},"sum_received":{"bits_per_second":140000}}}`
+	if err := os.WriteFile(filepath.Join(root, "fast.json"), []byte(fast), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "slow.json"), []byte(slow), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := filepath.Abs("linux-cross-host-soak-runner.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := `
+set -Eeuo pipefail
+source "$RUNNER"
+node_a=local
+remote_a="$FIXTURES"
+workdir="$RESULTS"
+mkdir -p "$workdir"
+assert_iperf_min_gbps a fast.json fast-carrier 1
+if assert_iperf_min_gbps a slow.json slow-carrier 1; then
+  echo 'slow carrier unexpectedly passed' >&2
+  exit 1
+fi
+grep -Fq '"status": "pass"' "$workdir/mixed-throughput-gates.jsonl"
+grep -Fq '"status": "fail"' "$workdir/mixed-throughput-gates.jsonl"
+`
+	cmd := exec.Command(bash, "-c", code)
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
+		"RUNNER="+runner,
+		"FIXTURES="+root,
+		"RESULTS="+filepath.Join(root, "results"),
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("pinned mixed throughput gate failed: %v\n%s", err, output)
+	}
+}
+
 func TestCrossHostConcurrentSoakScopesInheritedEndpointTransports(t *testing.T) {
 	bash := requireGNUBash4(t)
 	root := t.TempDir()

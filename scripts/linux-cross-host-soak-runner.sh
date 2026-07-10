@@ -64,6 +64,7 @@ peer_b_port="${TRUSTIX_CROSS_HOST_PEER_B_PORT:-19444}"
 data_a_port="${TRUSTIX_CROSS_HOST_DATA_A_PORT:-}"
 data_b_port="${TRUSTIX_CROSS_HOST_DATA_B_PORT:-}"
 iperf_port="${TRUSTIX_CROSS_HOST_IPERF_PORT:-25201}"
+mixed_iperf_port="${TRUSTIX_CROSS_HOST_MIXED_IPERF_PORT:-}"
 health_port="${TRUSTIX_CROSS_HOST_HEALTH_PORT:-}"
 iperf_seconds="${TRUSTIX_CROSS_HOST_IPERF_SECONDS:-3600}"
 iperf_parallel_explicit="${TRUSTIX_CROSS_HOST_IPERF_PARALLEL+x}"
@@ -72,6 +73,9 @@ iptunnel_iperf_parallel="${TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL:-4}"
 iperf_timeout="${TRUSTIX_CROSS_HOST_IPERF_TIMEOUT:-$((iperf_seconds + 60))}"
 iperf_mode="${TRUSTIX_CROSS_HOST_IPERF_MODE:-forward}"
 iperf_directions="${TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS:-both}"
+mixed_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS:-0}"
+mixed_udp_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_UDP_MIN_GBPS:-$mixed_min_gbps}"
+mixed_experimental_tcp_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_EXPERIMENTAL_TCP_MIN_GBPS:-$mixed_min_gbps}"
 transport_snapshot_delay="${TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY:-5}"
 session_pool_size_explicit="${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE+x}"
 session_pool_size="${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE:-$iperf_parallel}"
@@ -105,6 +109,14 @@ host_a_addr="${TRUSTIX_CROSS_HOST_HOST_A_ADDR:-10.64.0.2/24}"
 host_b_addr="${TRUSTIX_CROSS_HOST_HOST_B_ADDR:-10.64.1.2/24}"
 host_a_ip="${host_a_addr%/*}"
 host_b_ip="${host_b_addr%/*}"
+mixed_udp_lan_a_cidr="${TRUSTIX_CROSS_HOST_MIXED_UDP_LAN_A_CIDR:-}"
+mixed_udp_lan_b_cidr="${TRUSTIX_CROSS_HOST_MIXED_UDP_LAN_B_CIDR:-}"
+mixed_experimental_tcp_lan_a_cidr="${TRUSTIX_CROSS_HOST_MIXED_EXPERIMENTAL_TCP_LAN_A_CIDR:-}"
+mixed_experimental_tcp_lan_b_cidr="${TRUSTIX_CROSS_HOST_MIXED_EXPERIMENTAL_TCP_LAN_B_CIDR:-}"
+mixed_host_a_addr="${TRUSTIX_CROSS_HOST_MIXED_HOST_A_ADDR:-}"
+mixed_host_b_addr="${TRUSTIX_CROSS_HOST_MIXED_HOST_B_ADDR:-}"
+mixed_host_a_ip=""
+mixed_host_b_ip=""
 
 underlay_a_ip="${TRUSTIX_CROSS_HOST_A_UNDERLAY_IP:-}"
 underlay_b_ip="${TRUSTIX_CROSS_HOST_B_UNDERLAY_IP:-}"
@@ -130,6 +142,14 @@ fi
 
 log() {
   printf '[trustix-cross-host-runner] %s\n' "$*" >&2
+}
+
+nonnegative_decimal() {
+  [[ "${1:-}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]
+}
+
+decimal_is_zero() {
+  [[ "${1:-}" =~ ^0+([.]0*)?$ ]]
 }
 
 die() {
@@ -412,6 +432,81 @@ case_is_multi_endpoint() {
   [[ "${#endpoint_transports[@]}" -gt 0 ]]
 }
 
+case_uses_pinned_mixed_routes() {
+  case "$case_name" in
+    mixed-plaintext-full-kmod|mixed_plaintext_full_kmod|mixed-secure-kernel|mixed_secure_kernel) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+mixed_ipv4_24_default() {
+  local cidr="$1"
+  local kind="$2"
+  local address prefix a b c d octet
+  address="${cidr%/*}"
+  prefix="${cidr##*/}"
+  [[ "$prefix" == "24" ]] || die "pinned mixed routes require a /24 LAN or explicit TRUSTIX_CROSS_HOST_MIXED_* overrides: ${cidr}"
+  IFS=. read -r a b c d <<<"$address"
+  for octet in "$a" "$b" "$c" "$d"; do
+    [[ "$octet" =~ ^[0-9]+$ ]] || die "pinned mixed routes require an IPv4 /24 LAN: ${cidr}"
+    [[ "$((10#$octet))" -le 255 ]] || die "pinned mixed routes require an IPv4 /24 LAN: ${cidr}"
+  done
+  [[ "$((10#$d))" -eq 0 ]] || die "pinned mixed route LAN must use its canonical /24 network address: ${cidr}"
+  a=$((10#$a))
+  b=$((10#$b))
+  c=$((10#$c))
+  case "$kind" in
+    udp_prefix) printf '%s.%s.%s.0/25\n' "$a" "$b" "$c" ;;
+    experimental_tcp_prefix) printf '%s.%s.%s.128/25\n' "$a" "$b" "$c" ;;
+    experimental_tcp_host) printf '%s.%s.%s.130/24\n' "$a" "$b" "$c" ;;
+    *) die "unknown pinned mixed IPv4 default kind: ${kind}" ;;
+  esac
+}
+
+resolve_pinned_mixed_lan() {
+  case_uses_pinned_mixed_routes || return 0
+  case "$iperf_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PORT must be an integer" ;; esac
+  if [[ -z "$mixed_iperf_port" ]]; then
+    mixed_iperf_port=$((iperf_port + 2))
+  fi
+  if [[ -z "$mixed_udp_lan_a_cidr" ]]; then
+    mixed_udp_lan_a_cidr="$(mixed_ipv4_24_default "$lan_a_cidr" udp_prefix)"
+  fi
+  if [[ -z "$mixed_udp_lan_b_cidr" ]]; then
+    mixed_udp_lan_b_cidr="$(mixed_ipv4_24_default "$lan_b_cidr" udp_prefix)"
+  fi
+  if [[ -z "$mixed_experimental_tcp_lan_a_cidr" ]]; then
+    mixed_experimental_tcp_lan_a_cidr="$(mixed_ipv4_24_default "$lan_a_cidr" experimental_tcp_prefix)"
+  fi
+  if [[ -z "$mixed_experimental_tcp_lan_b_cidr" ]]; then
+    mixed_experimental_tcp_lan_b_cidr="$(mixed_ipv4_24_default "$lan_b_cidr" experimental_tcp_prefix)"
+  fi
+  if [[ -z "$mixed_host_a_addr" ]]; then
+    mixed_host_a_addr="$(mixed_ipv4_24_default "$lan_a_cidr" experimental_tcp_host)"
+  fi
+  if [[ -z "$mixed_host_b_addr" ]]; then
+    mixed_host_b_addr="$(mixed_ipv4_24_default "$lan_b_cidr" experimental_tcp_host)"
+  fi
+  mixed_host_a_ip="${mixed_host_a_addr%/*}"
+  mixed_host_b_ip="${mixed_host_b_addr%/*}"
+}
+
+write_pinned_mixed_contract() {
+  case_uses_pinned_mixed_routes || return 0
+  cat >"$workdir/pinned-mixed-routes.txt" <<EOF
+udp.a_prefix=${mixed_udp_lan_a_cidr}
+udp.b_prefix=${mixed_udp_lan_b_cidr}
+udp.a_host=${host_a_ip}
+udp.b_host=${host_b_ip}
+udp.iperf_port=${iperf_port}
+experimental_tcp.a_prefix=${mixed_experimental_tcp_lan_a_cidr}
+experimental_tcp.b_prefix=${mixed_experimental_tcp_lan_b_cidr}
+experimental_tcp.a_host=${mixed_host_a_ip}
+experimental_tcp.b_host=${mixed_host_b_ip}
+experimental_tcp.iperf_port=${mixed_iperf_port}
+EOF
+}
+
 first_endpoint_transport() {
   case_is_multi_endpoint || return 1
   printf '%s\n' "${endpoint_transports[0]}"
@@ -480,6 +575,11 @@ validate_case() {
   case "$case_name" in
     dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) ;;
     experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod) ;;
+    mixed-plaintext-full-kmod|mixed_plaintext_full_kmod|mixed-secure-kernel|mixed_secure_kernel)
+      [[ "${#endpoint_transports[@]}" -eq 2 ]] || die "${case_name} requires exactly udp,experimental_tcp endpoints"
+      case_has_endpoint_transport udp || die "${case_name} requires a UDP endpoint"
+      case_has_endpoint_transport experimental_tcp || die "${case_name} requires an experimental_tcp endpoint"
+      ;;
     dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) ;;
     secure-exp-tcp-kernel|secure_exp_tcp_kernel|experimental-tcp-secure-kernel|experimental_tcp_secure_kernel|secure-experimental-tcp-kernel|secure_experimental_tcp_kernel) ;;
     dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) ;;
@@ -498,6 +598,7 @@ case_transport() {
     return
   fi
   case "$case_name" in
+    mixed-plaintext-full-kmod|mixed_plaintext_full_kmod|mixed-secure-kernel|mixed_secure_kernel) printf 'mixed\n' ;;
     dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'udp\n' ;;
     experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod) printf 'experimental_tcp\n' ;;
     ow-tc-direct|tc-direct) printf 'udp\n' ;;
@@ -512,7 +613,8 @@ case_fast_path() {
     return
   fi
   case "$case_name" in
-    dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod) printf 'full_kmod\n' ;;
+    dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod|mixed-plaintext-full-kmod|mixed_plaintext_full_kmod) printf 'full_kmod\n' ;;
+    mixed-secure-kernel|mixed_secure_kernel) printf 'secure_exp_tcp_kernel\n' ;;
     dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'secure_kudp\n' ;;
     secure-exp-tcp-kernel|secure_exp_tcp_kernel|experimental-tcp-secure-kernel|experimental_tcp_secure_kernel|secure-experimental-tcp-kernel|secure_experimental_tcp_kernel) printf 'secure_exp_tcp_kernel\n' ;;
     dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) printf 'route_gso\n' ;;
@@ -968,11 +1070,22 @@ check_local_inputs() {
   case "$iperf_parallel" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PARALLEL must be an integer" ;; esac
   case "$iptunnel_iperf_parallel" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be an integer" ;; esac
   case "$iperf_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PORT must be an integer" ;; esac
+  if [[ -z "$mixed_iperf_port" ]]; then
+    mixed_iperf_port=$((iperf_port + 2))
+  fi
+  case "$mixed_iperf_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_MIXED_IPERF_PORT must be an integer" ;; esac
   if [[ -z "$health_port" ]]; then
     health_port=$((iperf_port + 1))
   fi
   case "$health_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_HEALTH_PORT must be an integer" ;; esac
   [[ "$health_port" -ne "$iperf_port" ]] || die "TRUSTIX_CROSS_HOST_HEALTH_PORT must differ from TRUSTIX_CROSS_HOST_IPERF_PORT"
+  [[ "$iperf_port" -ge 1 && "$iperf_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPERF_PORT must be in 1..65535"
+  [[ "$mixed_iperf_port" -ge 1 && "$mixed_iperf_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_MIXED_IPERF_PORT must be in 1..65535"
+  [[ "$health_port" -ge 1 && "$health_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_HEALTH_PORT must be in 1..65535"
+  if case_uses_pinned_mixed_routes; then
+    [[ "$mixed_iperf_port" -ne "$iperf_port" ]] || die "TRUSTIX_CROSS_HOST_MIXED_IPERF_PORT must differ from TRUSTIX_CROSS_HOST_IPERF_PORT"
+    [[ "$mixed_iperf_port" -ne "$health_port" ]] || die "TRUSTIX_CROSS_HOST_MIXED_IPERF_PORT must differ from TRUSTIX_CROSS_HOST_HEALTH_PORT"
+  fi
   case "$transport_snapshot_delay" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be an integer" ;; esac
   case "$pair_lock_hold_seconds" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_PAIR_LOCK_HOLD_SECONDS must be an integer" ;; esac
   case "$session_pool_size" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be an integer" ;; esac
@@ -1003,6 +1116,15 @@ check_local_inputs() {
   validate_multi_endpoint_data_ports
   case "$iperf_mode" in bidir|forward|reverse) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_MODE must be bidir, forward, or reverse" ;; esac
   case "$iperf_directions" in both|a2b|b2a|a-to-b|b-to-a) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS must be both, a2b, or b2a" ;; esac
+  nonnegative_decimal "$mixed_udp_min_gbps" || die "TRUSTIX_CROSS_HOST_MIXED_UDP_MIN_GBPS/TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS must be a non-negative number"
+  nonnegative_decimal "$mixed_experimental_tcp_min_gbps" || die "TRUSTIX_CROSS_HOST_MIXED_EXPERIMENTAL_TCP_MIN_GBPS/TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS must be a non-negative number"
+  if case_uses_pinned_mixed_routes && [[ "$iperf_mode" != "forward" ]]; then
+    die "pinned mixed routes require TRUSTIX_CROSS_HOST_IPERF_MODE=forward so each carrier uses its matching source and destination prefix"
+  fi
+  if case_uses_pinned_mixed_routes &&
+    { ! decimal_is_zero "$mixed_udp_min_gbps" || ! decimal_is_zero "$mixed_experimental_tcp_min_gbps"; }; then
+    need_cmd python3
+  fi
   if [[ -n "$endpoint_transport_override" ]]; then
     supported_case_transport "$endpoint_transport_override" || die "TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORT is unsupported: ${endpoint_transport_override}"
   fi
@@ -1114,12 +1236,16 @@ resolve_underlay() {
 
 prepare_node_topology() {
   local node="$1"
-  local dir lan_if host_if host_ns host_addr host_gw trustixd api_port peer_port env_exports
+  local dir lan_if host_if host_ns host_addr secondary_host_addr host_gw trustixd api_port peer_port env_exports
   dir="$(remote_dir "$node")"
   lan_if="$(node_value "$node" "$lan_if_a" "$lan_if_b")"
   host_if="$(node_value "$node" "$host_if_a" "$host_if_b")"
   host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
   host_addr="$(node_value "$node" "$host_a_addr" "$host_b_addr")"
+  secondary_host_addr=""
+  if case_uses_pinned_mixed_routes; then
+    secondary_host_addr="$(node_value "$node" "$mixed_host_a_addr" "$mixed_host_b_addr")"
+  fi
   host_gw="$(node_value "$node" "${lan_a_gateway%/*}" "${lan_b_gateway%/*}")"
   trustixd="$(node_bin "$node" trustixd)"
   api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
@@ -1128,6 +1254,7 @@ prepare_node_topology() {
   run_node "$node" "set -Eeuo pipefail
 ip_cmd=\$(command -v ip)
 dir=$(remote_quote "$dir")
+secondary_host_addr=$(remote_quote "$secondary_host_addr")
 target_data=\"\${dir}/data\"
 if [ -f \"\${dir}/trustixd.pid\" ]; then
   old_pid=\$(cat \"\${dir}/trustixd.pid\" 2>/dev/null || true)
@@ -1176,6 +1303,9 @@ if command -v modprobe >/dev/null 2>&1; then modprobe veth >/dev/null 2>&1 || tr
 \"\$ip_cmd\" link set $(remote_quote "$lan_if") up
 \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" link set lo up
 \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" addr add $(remote_quote "$host_addr") dev $(remote_quote "$host_if")
+if [ -n "\$secondary_host_addr" ]; then
+  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" addr add "\$secondary_host_addr" dev $(remote_quote "$host_if")
+fi
 \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" link set $(remote_quote "$host_if") up
 \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" route replace default via $(remote_quote "$host_gw")
 "
@@ -1198,7 +1328,8 @@ write_multi_endpoint_config() {
   local config_path="$2"
   local local_ix peer_ix local_lan remote_lan local_gateway local_lan_if local_underlay_if
   local local_peer_api remote_peer_api remote_dir_node encryption crypto_placement local_underlay remote_underlay
-  local index transport local_endpoint remote_endpoint local_port remote_port
+  local index transport local_endpoint remote_endpoint local_port remote_port kernel_mode
+  local remote_udp_lan remote_experimental_tcp_lan remote_udp_endpoint remote_experimental_tcp_endpoint
   local_ix="$(node_value "$node" "$ix_a" "$ix_b")"
   peer_ix="$(node_value "$node" "$ix_b" "$ix_a")"
   local_lan="$(node_value "$node" "$lan_a_cidr" "$lan_b_cidr")"
@@ -1291,12 +1422,42 @@ EOF
     allowed_prefixes:
       - ${remote_lan}
 
+EOF
+  if case_uses_pinned_mixed_routes; then
+    remote_udp_lan="$(node_value "$node" "$mixed_udp_lan_b_cidr" "$mixed_udp_lan_a_cidr")"
+    remote_experimental_tcp_lan="$(node_value "$node" "$mixed_experimental_tcp_lan_b_cidr" "$mixed_experimental_tcp_lan_a_cidr")"
+    if [[ "$node" == "a" ]]; then
+      remote_udp_endpoint="$(case_endpoint_name_for_transport b udp)"
+      remote_experimental_tcp_endpoint="$(case_endpoint_name_for_transport b experimental_tcp)"
+    else
+      remote_udp_endpoint="$(case_endpoint_name_for_transport a udp)"
+      remote_experimental_tcp_endpoint="$(case_endpoint_name_for_transport a experimental_tcp)"
+    fi
+    cat >>"$config_path" <<EOF
+routes:
+  - prefix: ${remote_udp_lan}
+    next_hop: ${peer_ix}
+    endpoint: ${remote_udp_endpoint}
+    policy: default-routed
+    metric: 100
+  - prefix: ${remote_experimental_tcp_lan}
+    next_hop: ${peer_ix}
+    endpoint: ${remote_experimental_tcp_endpoint}
+    policy: default-routed
+    metric: 100
+
+EOF
+  else
+    cat >>"$config_path" <<EOF
 routes:
   - prefix: ${remote_lan}
     next_hop: ${peer_ix}
     policy: default-routed
     metric: 100
 
+EOF
+  fi
+  cat >>"$config_path" <<EOF
 policies:
   - name: default-routed
     route_selection: longest_prefix
@@ -1328,6 +1489,15 @@ EOF
       mode: ${session_pool_heartbeat_mode}
       interval: ${session_pool_heartbeat_interval}
       timeout: ${session_pool_heartbeat_timeout}
+EOF
+  kernel_mode="$(case_kernel_transport_mode)"
+  if [[ -n "$kernel_mode" ]]; then
+    cat >>"$config_path" <<EOF
+  kernel_transport:
+    mode: ${kernel_mode}
+EOF
+  fi
+  cat >>"$config_path" <<EOF
   crypto_key_source: auto
 EOF
   if case_link_tls_transport; then
@@ -1621,7 +1791,7 @@ EOF
       ;;
     full_kmod)
       local rx_worker_experimental_tcp=0
-      if [[ "$(case_endpoint_transport)" == "experimental_tcp" ]]; then
+      if case_has_endpoint_transport experimental_tcp; then
         rx_worker_experimental_tcp=1
       fi
       cat <<'EOF'
@@ -2172,7 +2342,50 @@ run_tcp_health_checks() {
   run_tcp_health_direction b a "$host_a_ip" "b-to-a"
 }
 
+run_pinned_mixed_health_checks() {
+  run_tcp_health_direction a b "$host_b_ip" "a-to-b-udp"
+  run_tcp_health_direction a b "$mixed_host_b_ip" "a-to-b-experimental-tcp"
+  run_tcp_health_direction b a "$host_a_ip" "b-to-a-udp"
+  run_tcp_health_direction b a "$mixed_host_a_ip" "b-to-a-experimental-tcp"
+}
+
+run_pinned_mixed_ping_checks() {
+  run_node a "set -Eeuo pipefail
+ip_cmd=\$(command -v ip)
+for pair in $(remote_quote "${host_a_ip},${host_b_ip}") $(remote_quote "${mixed_host_a_ip},${mixed_host_b_ip}"); do
+  src=\${pair%%,*}
+  dst=\${pair#*,}
+  ok=0
+  for _ in \$(seq 1 20); do
+    if \"\$ip_cmd\" netns exec $(remote_quote "$host_ns_a") ping -I \"\$src\" -c 1 -W 1 \"\$dst\" >/dev/null 2>&1; then ok=1; break; fi
+    sleep 1
+  done
+  [ \"\$ok\" -eq 1 ]
+done
+"
+  run_node b "set -Eeuo pipefail
+ip_cmd=\$(command -v ip)
+for pair in $(remote_quote "${host_b_ip},${host_a_ip}") $(remote_quote "${mixed_host_b_ip},${mixed_host_a_ip}"); do
+  src=\${pair%%,*}
+  dst=\${pair#*,}
+  ok=0
+  for _ in \$(seq 1 20); do
+    if \"\$ip_cmd\" netns exec $(remote_quote "$host_ns_b") ping -I \"\$src\" -c 1 -W 1 \"\$dst\" >/dev/null 2>&1; then ok=1; break; fi
+    sleep 1
+  done
+  [ \"\$ok\" -eq 1 ]
+done
+"
+}
+
 run_connectivity_checks() {
+  if case_uses_pinned_mixed_routes; then
+    if [[ "$(case_fast_path)" == "full_kmod" ]]; then
+      run_pinned_mixed_ping_checks
+    fi
+    run_pinned_mixed_health_checks
+    return
+  fi
   case "$(case_fast_path)" in
     route_gso|secure_kudp|secure_exp_tcp_kernel)
       run_tcp_health_checks
@@ -2190,14 +2403,25 @@ run_connectivity_checks() {
 
 start_iperf_server() {
   local node="$1"
-  local dir host_ns
+  local port="${2:-$iperf_port}"
+  local label="${3:-}"
+  local bind_ip="${4:-}"
+  local dir host_ns artifact_suffix bind_args
   dir="$(remote_dir "$node")"
   host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
-run_node "$node" "set -Eeuo pipefail
+  artifact_suffix=""
+  if [[ -n "$label" ]]; then
+    artifact_suffix="-${label}"
+  fi
+  bind_args=""
+  if [[ -n "$bind_ip" ]]; then
+    bind_args="-B $(remote_quote "$bind_ip")"
+  fi
+  run_node "$node" "set -Eeuo pipefail
 ip_cmd=\$(command -v ip)
-pid_file=$(remote_quote "${dir}/iperf3-server.pid")
-json_file=$(remote_quote "${dir}/iperf3-server.json")
-err_file=$(remote_quote "${dir}/iperf3-server.err")
+pid_file=$(remote_quote "${dir}/iperf3-server${artifact_suffix}.pid")
+json_file=$(remote_quote "${dir}/iperf3-server${artifact_suffix}.json")
+err_file=$(remote_quote "${dir}/iperf3-server${artifact_suffix}.err")
 if [ -f \"\$pid_file\" ]; then
   old_pid=\$(cat \"\$pid_file\" 2>/dev/null || true)
   if [ -n \"\$old_pid\" ]; then
@@ -2205,17 +2429,17 @@ if [ -f \"\$pid_file\" ]; then
   fi
 fi
 if command -v ss >/dev/null 2>&1; then
-  for old_pid in \$(\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") ss -ltnp \"sport = :${iperf_port}\" 2>/dev/null | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u); do
+  for old_pid in \$(\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") ss -ltnp \"sport = :${port}\" 2>/dev/null | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u); do
     kill \"\$old_pid\" >/dev/null 2>&1 || true
   done
 fi
 rm -f \"\$pid_file\" \"\$json_file\" \"\$err_file\"
 if command -v nohup >/dev/null 2>&1; then
-  nohup \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") sh -c 'echo \$\$ >\"\$1\"; exec iperf3 -s -1 -p \"\$2\" -J' sh \"\$pid_file\" ${iperf_port} >\"\$json_file\" 2>\"\$err_file\" </dev/null &
+  nohup \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") sh -c 'echo \$\$ >\"\$1\"; shift; exec iperf3 \"\$@\"' sh \"\$pid_file\" ${bind_args} -s -1 -p ${port} -J >\"\$json_file\" 2>\"\$err_file\" </dev/null &
 elif command -v setsid >/dev/null 2>&1; then
-  setsid \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") sh -c 'echo \$\$ >\"\$1\"; exec iperf3 -s -1 -p \"\$2\" -J' sh \"\$pid_file\" ${iperf_port} >\"\$json_file\" 2>\"\$err_file\" </dev/null &
+  setsid \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") sh -c 'echo \$\$ >\"\$1\"; shift; exec iperf3 \"\$@\"' sh \"\$pid_file\" ${bind_args} -s -1 -p ${port} -J >\"\$json_file\" 2>\"\$err_file\" </dev/null &
 else
-  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") sh -c 'echo \$\$ >\"\$1\"; exec iperf3 -s -1 -p \"\$2\" -J' sh \"\$pid_file\" ${iperf_port} >\"\$json_file\" 2>\"\$err_file\" </dev/null &
+  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") sh -c 'echo \$\$ >\"\$1\"; shift; exec iperf3 \"\$@\"' sh \"\$pid_file\" ${bind_args} -s -1 -p ${port} -J >\"\$json_file\" 2>\"\$err_file\" </dev/null &
 fi
 for _ in \$(seq 1 10); do
   [ -s \"\$pid_file\" ] && break
@@ -2241,7 +2465,9 @@ run_iperf_client() {
   local node="$1"
   local dst_ip="$2"
   local out_name="$3"
-  local dir host_ns mode_args
+  local port="${4:-$iperf_port}"
+  local source_ip="${5:-}"
+  local dir host_ns mode_args bind_args
   dir="$(remote_dir "$node")"
   host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
   case "$iperf_mode" in
@@ -2249,15 +2475,19 @@ run_iperf_client() {
     forward) mode_args="" ;;
     reverse) mode_args="-R" ;;
   esac
+  bind_args=""
+  if [[ -n "$source_ip" ]]; then
+    bind_args="-B $(remote_quote "$source_ip")"
+  fi
   run_node "$node" "set -Eeuo pipefail
 ip_cmd=\$(command -v ip)
 out=$(remote_quote "${dir}/${out_name}")
 err=$(remote_quote "${dir}/${out_name%.json}.err")
 rc=0
 if command -v timeout >/dev/null 2>&1; then
-  timeout ${iperf_timeout}s \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${iperf_port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
+  timeout ${iperf_timeout}s \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 ${bind_args} -c $(remote_quote "$dst_ip") -p ${port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
 else
-  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 -c $(remote_quote "$dst_ip") -p ${iperf_port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
+  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 ${bind_args} -c $(remote_quote "$dst_ip") -p ${port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
 fi
 if [ \"\$rc\" -eq 0 ]; then
   json_error_pattern='\"error\"'
@@ -2279,8 +2509,10 @@ run_iperf_client_with_snapshot() {
   local node="$1"
   local dst_ip="$2"
   local out_name="$3"
+  local port="${4:-$iperf_port}"
+  local source_ip="${5:-}"
   local client_pid snapshot_label rc
-  run_iperf_client "$node" "$dst_ip" "$out_name" &
+  run_iperf_client "$node" "$dst_ip" "$out_name" "$port" "$source_ip" &
   client_pid=$!
   if [[ "$transport_snapshot_delay" -gt 0 ]]; then
     sleep "$transport_snapshot_delay"
@@ -2295,6 +2527,44 @@ run_iperf_client_with_snapshot() {
   fi
   collect_failure_snapshot "$snapshot_label"
   return "$rc"
+}
+
+assert_iperf_min_gbps() {
+  local node="$1"
+  local out_name="$2"
+  local label="$3"
+  local minimum="$4"
+  local dir
+  decimal_is_zero "$minimum" && return 0
+  dir="$(remote_dir "$node")"
+  run_node "$node" "cat $(remote_quote "${dir}/${out_name}")" | python3 -c '
+import json
+import sys
+
+label = sys.argv[1]
+minimum = float(sys.argv[2])
+payload = json.load(sys.stdin)
+end = payload.get("end") or {}
+sent = (end.get("sum_sent") or {}).get("bits_per_second")
+received = (end.get("sum_received") or {}).get("bits_per_second")
+if not isinstance(sent, (int, float)) or not isinstance(received, (int, float)):
+    raise SystemExit(f"{label}: iperf JSON is missing numeric end.sum_sent/end.sum_received throughput")
+sent_gbps = sent / 1_000_000_000
+received_gbps = received / 1_000_000_000
+status = "pass" if sent_gbps >= minimum and received_gbps >= minimum else "fail"
+print(json.dumps({
+    "label": label,
+    "sent_gbps": round(sent_gbps, 6),
+    "received_gbps": round(received_gbps, 6),
+    "min_gbps": minimum,
+    "status": status,
+}, sort_keys=True))
+if status != "pass":
+    raise SystemExit(
+        f"{label}: sent/received {sent_gbps:.3f}/{received_gbps:.3f} Gbps "
+        f"is below minimum {minimum:.3f} Gbps"
+    )
+' "$label" "$minimum" | tee -a "$workdir/mixed-throughput-gates.jsonl"
 }
 
 iperf_client_missing_server_results_only() {
@@ -2371,12 +2641,18 @@ iperf_artifact_suffix() {
 
 wait_iperf_server_exit() {
   local node="$1"
-  local dir host_ns
+  local port="${2:-$iperf_port}"
+  local label="${3:-}"
+  local dir host_ns artifact_suffix
   dir="$(remote_dir "$node")"
   host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
+  artifact_suffix=""
+  if [[ -n "$label" ]]; then
+    artifact_suffix="-${label}"
+  fi
   run_node "$node" "set +e
 ip_cmd=\$(command -v ip)
-pid_file=$(remote_quote "${dir}/iperf3-server.pid")
+pid_file=$(remote_quote "${dir}/iperf3-server${artifact_suffix}.pid")
 pid=\$(cat \"\$pid_file\" 2>/dev/null || true)
 if [ -n \"\$pid\" ]; then
   for _ in \$(seq 1 40); do
@@ -2388,7 +2664,7 @@ if [ -n \"\$pid\" ]; then
   kill -9 \"\$pid\" >/dev/null 2>&1 || true
 fi
 if command -v ss >/dev/null 2>&1; then
-  for old_pid in \$(\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") ss -ltnp \"sport = :${iperf_port}\" 2>/dev/null | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u); do
+  for old_pid in \$(\"\$ip_cmd\" netns exec $(remote_quote "$host_ns") ss -ltnp \"sport = :${port}\" 2>/dev/null | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u); do
     kill \"\$old_pid\" >/dev/null 2>&1 || true
   done
   sleep 1
@@ -2398,8 +2674,89 @@ exit 0
 "
 }
 
+run_pinned_mixed_iperf_direction() {
+  local client="$1"
+  local server="$2"
+  local pair_label="$3"
+  local suffix udp_dst experimental_tcp_dst udp_src experimental_tcp_src
+  local udp_out experimental_tcp_out udp_pid experimental_tcp_pid udp_rc=0 experimental_tcp_rc=0
+  suffix="$(iperf_artifact_suffix)"
+  udp_dst="$(node_value "$server" "$host_a_ip" "$host_b_ip")"
+  experimental_tcp_dst="$(node_value "$server" "$mixed_host_a_ip" "$mixed_host_b_ip")"
+  udp_src="$(node_value "$client" "$host_a_ip" "$host_b_ip")"
+  experimental_tcp_src="$(node_value "$client" "$mixed_host_a_ip" "$mixed_host_b_ip")"
+  udp_out="iperf3-${pair_label}-udp-${suffix}.json"
+  experimental_tcp_out="iperf3-${pair_label}-experimental-tcp-${suffix}.json"
+
+  start_iperf_server "$server" "$iperf_port" udp "$udp_dst"
+  start_iperf_server "$server" "$mixed_iperf_port" experimental-tcp "$experimental_tcp_dst"
+  sleep 1
+  run_iperf_client "$client" "$udp_dst" "$udp_out" "$iperf_port" "$udp_src" &
+  udp_pid=$!
+  run_iperf_client "$client" "$experimental_tcp_dst" "$experimental_tcp_out" "$mixed_iperf_port" "$experimental_tcp_src" &
+  experimental_tcp_pid=$!
+  if [[ "$transport_snapshot_delay" -gt 0 ]]; then
+    sleep "$transport_snapshot_delay"
+  fi
+  collect_transport_snapshot "during-${pair_label}-mixed-${suffix}"
+  if wait "$udp_pid"; then
+    :
+  else
+    udp_rc=$?
+  fi
+  if wait "$experimental_tcp_pid"; then
+    :
+  else
+    experimental_tcp_rc=$?
+  fi
+  wait_iperf_server_exit "$server" "$iperf_port" udp
+  wait_iperf_server_exit "$server" "$mixed_iperf_port" experimental-tcp
+  if [[ "$udp_rc" -eq 0 ]] && ! assert_iperf_min_gbps "$client" "$udp_out" "${pair_label}-udp-${suffix}" "$mixed_udp_min_gbps"; then
+    udp_rc=1
+  fi
+  if [[ "$experimental_tcp_rc" -eq 0 ]] && ! assert_iperf_min_gbps "$client" "$experimental_tcp_out" "${pair_label}-experimental-tcp-${suffix}" "$mixed_experimental_tcp_min_gbps"; then
+    experimental_tcp_rc=1
+  fi
+  if [[ "$udp_rc" -ne 0 || "$experimental_tcp_rc" -ne 0 ]]; then
+    collect_failure_snapshot "${pair_label}-mixed-${suffix}"
+    return 1
+  fi
+}
+
+assert_pinned_mixed_sessions_node() {
+  local node="$1"
+  local dir api_port trustixctl peer_node udp_endpoint experimental_tcp_endpoint
+  dir="$(remote_dir "$node")"
+  api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
+  trustixctl="$(node_bin "$node" trustixctl)"
+  peer_node="$(node_value "$node" b a)"
+  udp_endpoint="$(case_endpoint_name_for_transport "$peer_node" udp)"
+  experimental_tcp_endpoint="$(case_endpoint_name_for_transport "$peer_node" experimental_tcp)"
+  run_node "$node" "set -Eeuo pipefail
+out=$(remote_quote "${dir}/pinned-mixed-session-assert.json")
+$(remote_quote "$trustixctl") -api http://127.0.0.1:${api_port} transports >\"\$out\"
+grep -Eq '\"endpoint\"[[:space:]]*:[[:space:]]*\"${udp_endpoint}\"' \"\$out\"
+grep -Eq '\"endpoint\"[[:space:]]*:[[:space:]]*\"${experimental_tcp_endpoint}\"' \"\$out\"
+"
+}
+
+assert_pinned_mixed_sessions() {
+  case_uses_pinned_mixed_routes || return 0
+  assert_pinned_mixed_sessions_node a
+  assert_pinned_mixed_sessions_node b
+}
+
 run_iperf_bidirectional_artifacts() {
   local suffix rc=0 client_rc out_name
+  if case_uses_pinned_mixed_routes; then
+    case "$iperf_directions" in
+      both|a2b|a-to-b) run_pinned_mixed_iperf_direction a b a-to-b || rc=$? ;;
+    esac
+    case "$iperf_directions" in
+      both|b2a|b-to-a) run_pinned_mixed_iperf_direction b a b-to-a || rc=$? ;;
+    esac
+    return "$rc"
+  fi
   suffix="$(iperf_artifact_suffix)"
   case "$iperf_directions" in
     both|a2b|a-to-b)
@@ -2530,6 +2887,7 @@ cleanup_all() {
 main() {
   parse_endpoint_transports
   validate_case
+  resolve_pinned_mixed_lan
   apply_case_runtime_defaults
   case "$(case_fast_path)" in
     route_gso|secure_exp_tcp_kernel)
@@ -2545,6 +2903,7 @@ main() {
     write_config a "$workdir/config-a.yaml"
     write_config b "$workdir/config-b.yaml"
     daemon_env >"$workdir/daemon-env.txt"
+    write_pinned_mixed_contract
     printf 'dry_run_config\n' >"$workdir/${case_name}.result"
     log "dry-run-config result=${workdir}"
     return
@@ -2579,6 +2938,7 @@ main() {
   collect_boot_id a before
   collect_boot_id b before
   generate_certs
+  write_pinned_mixed_contract
   if case_is_multi_endpoint; then
     printf '%s\n' "${endpoint_transports[@]}" >"$workdir/endpoint-transports.txt"
   fi
@@ -2593,6 +2953,7 @@ main() {
   run_connectivity_checks
   write_run_timing_start
   run_iperf_bidirectional_artifacts
+  assert_pinned_mixed_sessions
   write_run_timing_end
   collect_all
   printf 'pass\n' >"$workdir/${case_name}.result"

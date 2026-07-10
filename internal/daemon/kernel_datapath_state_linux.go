@@ -33,6 +33,7 @@ const (
 	kernelDatapathSessionFlagNativeBatching      = uint32(1 << 8)
 	kernelDatapathSessionFlagDatagram            = uint32(1 << 9)
 	kernelDatapathSessionFlagFragmentingDatagram = uint32(1 << 10)
+	kernelDatapathSessionFlagSyntheticFallback   = uint32(1 << 11)
 
 	kernelDatapathFlowFlagIPv4 = uint32(1 << 0)
 
@@ -43,6 +44,7 @@ const (
 
 const (
 	kernelDatapathKernelUDPFlowAddressPrefix = "kernel_udp_flow:"
+	kernelDatapathFullPlaintextAddressPrefix = "full_plaintext_fallback:"
 	kernelDatapathStateSyncInterval          = 2 * time.Second
 )
 
@@ -63,6 +65,11 @@ func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot data
 	if err != nil || stats.MaxRoutes == 0 || stats.MaxSessions == 0 || stats.MaxFlows == 0 {
 		return
 	}
+	records := daemon.kernelDatapathStateRecords(ctx, snapshot)
+	daemon.applyKernelDatapathStateRecords(ctx, records)
+}
+
+func (daemon *Daemon) kernelDatapathStateRecords(ctx context.Context, snapshot dataplane.Snapshot) []kernelmodule.DatapathStateRecord {
 	records := make([]kernelmodule.DatapathStateRecord, 0, len(snapshot.Routes))
 	for _, kind := range []uint32{
 		kernelmodule.TrustIXDatapathStateKindRoute,
@@ -77,25 +84,25 @@ func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot data
 			records = append(records, record)
 		}
 	}
+	// Synthetic full-plaintext records use distinct keys so an incomplete
+	// negotiated session cannot leave a mismatched synthetic wire record.
+	records = append(records, daemon.kernelDatapathFullPlaintextRouteSessionRecords(ctx, snapshot.Routes)...)
 	for _, item := range daemon.kernelDatapathSessionSnapshot() {
 		if ctx.Err() != nil {
-			return
+			return records
 		}
-		if sessionRecord, wireRecord, ok := daemon.kernelDatapathSessionAndWireRecords(item.key, item.runtime, item.session); ok {
-			records = append(records, sessionRecord, wireRecord)
-		}
+		records = append(records, daemon.kernelDatapathSessionStateRecords(item.key, item.runtime, item.session)...)
 	}
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(ctx)...)
-	records = append(records, daemon.kernelDatapathFullPlaintextRouteSessionRecords(ctx, snapshot.Routes)...)
 	for _, flow := range daemon.flowSnapshot() {
 		if ctx.Err() != nil {
-			return
+			return records
 		}
 		if record, ok := kernelDatapathFlowRecord(flow); ok {
 			records = append(records, record)
 		}
 	}
-	daemon.applyKernelDatapathStateRecords(ctx, records)
+	return records
 }
 
 func (daemon *Daemon) runKernelDatapathStateSync(ctx context.Context) {
@@ -115,13 +122,11 @@ func (daemon *Daemon) syncKernelDatapathSessionUpsert(key dataSessionKey, runtim
 	if !daemon.kernelDatapathAvailable() {
 		return
 	}
-	sessionRecord, wireRecord, ok := daemon.kernelDatapathSessionAndWireRecords(key, runtime, session)
-	if !ok {
+	records := daemon.kernelDatapathSessionStateRecords(key, runtime, session)
+	if len(records) == 0 {
 		return
 	}
-	records := []kernelmodule.DatapathStateRecord{sessionRecord, wireRecord}
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(context.Background())...)
-	records = append(records, daemon.kernelDatapathFullPlaintextRouteSessionRecords(context.Background(), daemon.runtimeDataplaneSnapshot().Routes)...)
 	daemon.applyKernelDatapathStateRecords(context.Background(), records)
 }
 
@@ -243,6 +248,18 @@ func (daemon *Daemon) kernelDatapathSessionAndWireRecords(key dataSessionKey, ru
 	return sessionRecord, wireRecord, true
 }
 
+func (daemon *Daemon) kernelDatapathSessionStateRecords(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) []kernelmodule.DatapathStateRecord {
+	sessionRecord, ok := kernelDatapathSessionRecord(key, runtime, session)
+	if !ok {
+		return nil
+	}
+	records := []kernelmodule.DatapathStateRecord{sessionRecord}
+	if wireRecord, ok := daemon.kernelDatapathSessionWireRecord(key, session); ok {
+		records = append(records, wireRecord)
+	}
+	return records
+}
+
 func (daemon *Daemon) kernelDatapathFullPlaintextRouteSessionRecords(ctx context.Context, routes []routing.Route) []kernelmodule.DatapathStateRecord {
 	if daemon == nil || !kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
 		return nil
@@ -335,10 +352,11 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointPoolIndexes(peer config
 	indexes := map[int]bool{}
 	for _, item := range daemon.kernelDatapathSessionSnapshot() {
 		key := item.key
+		address := strings.TrimSpace(key.Address)
 		if key.Peer != peer.ID ||
 			key.Endpoint != endpoint.Name ||
 			key.Transport != protocol ||
-			strings.TrimSpace(key.Address) != strings.TrimSpace(endpoint.Address) ||
+			(address != strings.TrimSpace(endpoint.Address) && address != reverseSessionAddress) ||
 			parseSecureTransportEncryption(key.Encryption) != securetransport.EncryptionPlaintext ||
 			key.PoolIndex < 0 {
 			continue
@@ -364,7 +382,7 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Con
 		Peer:       peer.ID,
 		Endpoint:   endpoint.Name,
 		Transport:  transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))),
-		Address:    endpoint.Address,
+		Address:    kernelDatapathFullPlaintextAddressPrefix + strings.TrimSpace(endpoint.Address),
 		Encryption: securetransport.EncryptionPlaintext,
 		PoolIndex:  poolIndex,
 	}
@@ -373,7 +391,9 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Con
 		return kernelmodule.DatapathStateRecord{}, kernelmodule.DatapathStateRecord{}, false
 	}
 	flowID := kernelDatapathFullPlaintextFlowID(key.Transport, localIP, localPort, remoteIP, remotePort)
-	flags := kernelDatapathSessionFlagKernelFlow | kernelDatapathSessionFlagCryptoUserspace
+	flags := kernelDatapathSessionFlagKernelFlow |
+		kernelDatapathSessionFlagCryptoUserspace |
+		kernelDatapathSessionFlagSyntheticFallback
 	if key.Transport == transport.ProtocolUDP {
 		flags |= kernelDatapathSessionFlagDatagram |
 			kernelDatapathSessionFlagNativeBatching |
@@ -829,7 +849,7 @@ func kernelDatapathSessionStateKey(key dataSessionKey) [4]uint64 {
 		hashString64(string(key.Peer)),
 		hashString64(string(key.Endpoint)),
 		hashString64(string(key.Transport)),
-		hashString64(key.Encryption + "\x00" + strconv.Itoa(key.PoolIndex)),
+		hashString64(key.Encryption + "\x00" + strconv.Itoa(key.PoolIndex) + "\x00" + key.Address),
 	}
 }
 

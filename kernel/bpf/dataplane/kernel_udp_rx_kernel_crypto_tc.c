@@ -20,6 +20,10 @@ typedef int __s32;
 typedef long long __s64;
 typedef unsigned long long __u64;
 
+struct bpf_spin_lock {
+    __u32 val;
+};
+
 #define BPF_MAP_TYPE_HASH 1
 #define BPF_MAP_TYPE_ARRAY 2
 #define BPF_MAP_TYPE_PERCPU_ARRAY 6
@@ -208,6 +212,8 @@ struct trustix_kernel_crypto_ctx_value {
     __u64 last_sequence;
     __u64 replay_seen[TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS];
     __u64 replay_blocks[TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS];
+    struct bpf_spin_lock replay_lock;
+    __u32 replay_lock_pad;
 };
 
 struct trustix_kernel_crypto_direct_slot {
@@ -225,6 +231,8 @@ struct trustix_kernel_crypto_direct_slot {
     __u64 last_sequence;
     __u64 replay_seen[TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS];
     __u64 replay_blocks[TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS];
+    struct bpf_spin_lock replay_lock;
+    __u32 replay_lock_pad;
 };
 
 struct trustix_kudp_rx_secure_scratch {
@@ -297,6 +305,8 @@ struct {
 } ix_kudp_rx_secure_scratch SEC(".maps");
 
 static void *(*bpf_map_lookup_elem)(const void *map, const void *key) = (void *)1;
+static long (*bpf_spin_lock)(struct bpf_spin_lock *lock) = (void *)93;
+static long (*bpf_spin_unlock)(struct bpf_spin_lock *lock) = (void *)94;
 static long (*bpf_skb_store_bytes)(struct __sk_buff *skb, __u32 offset, const void *from, __u32 len, __u64 flags) = (void *)9;
 static long (*bpf_skb_load_bytes)(const struct __sk_buff *skb, __u32 offset, void *to, __u32 len) = (void *)26;
 static long (*bpf_skb_pull_data)(struct __sk_buff *skb, __u32 len) = (void *)39;
@@ -533,88 +543,41 @@ static __always_inline void trustix_direct_replay_mark(struct trustix_kernel_cry
 }
 
 #if TRUSTIX_KUDP_SECURE_BPF_CRYPTO || TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
-static __always_inline int trustix_replay_check(const struct trustix_kernel_crypto_ctx_value *state,
-                                                __u64 sequence)
-{
-    __u32 window;
-    __u64 delta;
-
-    if (trustix_kernel_crypto_no_replay(state))
-        return sequence == 0 ? -22 : 0;
-    if (sequence == 0)
-        return -22;
-    if (sequence > state->last_sequence)
-        return 0;
-
-    window = trustix_replay_window(state);
-    delta = state->last_sequence - sequence;
-    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX) {
-        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS);
-        return -114;
-    }
-    if (trustix_replay_seen(state, sequence)) {
-        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS);
-        return -114;
-    }
-    return 0;
-}
-#endif
-
-static __always_inline int trustix_direct_replay_check(const struct trustix_kernel_crypto_direct_slot *slot,
-                                                       __u64 sequence)
-{
-    __u32 window;
-    __u64 delta;
-
-    if (trustix_kernel_crypto_direct_no_replay(slot))
-        return sequence == 0 ? -22 : 0;
-    if (sequence == 0)
-        return -22;
-    if (sequence > slot->last_sequence)
-        return 0;
-
-    window = trustix_direct_replay_window(slot);
-    delta = slot->last_sequence - sequence;
-    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX) {
-        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS);
-        return -114;
-    }
-    if (trustix_direct_replay_seen(slot, sequence)) {
-        trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS);
-        return -114;
-    }
-    return 0;
-}
-
-#if TRUSTIX_KUDP_SECURE_BPF_CRYPTO || TRUSTIX_KUDP_SECURE_SKB_OPEN_KFUNC
 static __always_inline int trustix_replay_commit(struct trustix_kernel_crypto_ctx_value *state,
                                                  __u64 sequence)
 {
     __u32 window;
     __u64 delta;
+    int replay_error = 0;
 
     if (trustix_kernel_crypto_no_replay(state))
         return sequence == 0 ? -22 : 0;
     if (sequence == 0)
         return -22;
+
+    bpf_spin_lock(&state->replay_lock);
     if (sequence > state->last_sequence) {
         state->last_sequence = sequence;
         trustix_replay_mark(state, sequence);
-        return 0;
+        goto out_unlock;
     }
 
     window = trustix_replay_window(state);
     delta = state->last_sequence - sequence;
-    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX) {
+    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX)
+        replay_error = 1;
+    else if (trustix_replay_seen(state, sequence))
+        replay_error = 2;
+    else
+        trustix_replay_mark(state, sequence);
+
+out_unlock:
+    bpf_spin_unlock(&state->replay_lock);
+    if (replay_error == 1)
         trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS);
-        return -114;
-    }
-    if (trustix_replay_seen(state, sequence)) {
+    else if (replay_error == 2)
         trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS);
-        return -114;
-    }
-    trustix_replay_mark(state, sequence);
-    return 0;
+    return replay_error ? -114 : 0;
 }
 #endif
 
@@ -623,29 +586,36 @@ static __always_inline int trustix_direct_replay_commit(struct trustix_kernel_cr
 {
     __u32 window;
     __u64 delta;
+    int replay_error = 0;
 
     if (trustix_kernel_crypto_direct_no_replay(slot))
         return sequence == 0 ? -22 : 0;
     if (sequence == 0)
         return -22;
+
+    bpf_spin_lock(&slot->replay_lock);
     if (sequence > slot->last_sequence) {
         slot->last_sequence = sequence;
         trustix_direct_replay_mark(slot, sequence);
-        return 0;
+        goto out_unlock;
     }
 
     window = trustix_direct_replay_window(slot);
     delta = slot->last_sequence - sequence;
-    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX) {
+    if (delta >= window || delta >= TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX)
+        replay_error = 1;
+    else if (trustix_direct_replay_seen(slot, sequence))
+        replay_error = 2;
+    else
+        trustix_direct_replay_mark(slot, sequence);
+
+out_unlock:
+    bpf_spin_unlock(&slot->replay_lock);
+    if (replay_error == 1)
         trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_OLD_DROPS);
-        return -114;
-    }
-    if (trustix_direct_replay_seen(slot, sequence)) {
+    else if (replay_error == 2)
         trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_REPLAY_SEEN_DROPS);
-        return -114;
-    }
-    trustix_direct_replay_mark(slot, sequence);
-    return 0;
+    return replay_error ? -114 : 0;
 }
 
 static __always_inline int trustix_exp_tcp_unfragmented(__u8 *frame)
@@ -709,9 +679,6 @@ static TRUSTIX_KUDP_RX_SECURE_FALLBACK_INLINE int trustix_open_secure_frame(
             trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_ERR_CTX_EPOCH);
             return -74;
         }
-        err = trustix_direct_replay_check(direct_slot, scratch->sequence);
-        if (err)
-            return err;
         trustix_prepare_direct_nonce(scratch->nonce, direct_slot, scratch->sequence);
         scratch->plain_buffer = TRUSTIX_KUDP_RX_PLAIN_BUFFER_PLAIN;
         trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_DIRECT_KFUNC_OPEN_ATTEMPTS);
@@ -741,9 +708,6 @@ static TRUSTIX_KUDP_RX_SECURE_FALLBACK_INLINE int trustix_open_secure_frame(
         trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_ERR_CTX_EPOCH);
         return -74;
     }
-    err = trustix_replay_check(state, scratch->sequence);
-    if (err)
-        return err;
     trustix_prepare_nonce(scratch->nonce, state, scratch->sequence);
     scratch->plain_buffer = TRUSTIX_KUDP_RX_PLAIN_BUFFER_PLAIN;
     if (trustix_kudp_rx_secure_direct_open_kfunc) {
@@ -835,9 +799,6 @@ static __noinline int trustix_open_secure_frame_skb_direct(
             trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_ERR_CTX_EPOCH);
             return -74;
         }
-        err = trustix_direct_replay_check(direct_slot, scratch->sequence);
-        if (err)
-            return err;
         trustix_prepare_direct_nonce(scratch->nonce, direct_slot, scratch->sequence);
         args.slot_id = direct_slot->slot_id;
         args.cipher_offset = cipher_offset;
@@ -862,9 +823,6 @@ static __noinline int trustix_open_secure_frame_skb_direct(
         trustix_kudp_rx_secure_count(TRUSTIX_KUDP_RX_SECURE_STAT_ERR_CTX_EPOCH);
         return -74;
     }
-    err = trustix_replay_check(state, scratch->sequence);
-    if (err)
-        return err;
     trustix_prepare_nonce(scratch->nonce, state, scratch->sequence);
     args.slot_id = direct_slot->slot_id;
     args.cipher_offset = cipher_offset;

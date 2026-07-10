@@ -1119,6 +1119,7 @@ const (
 	kernelUDPRXSecureDirectStatFallbackPortMiss                       = 220
 	kernelUDPRXSecureDirectStatFallbackTIXUFlags                      = 221
 	kernelUDPRXSecureDirectStatFallbackTIXULen                        = 222
+	kernelUDPRXDirectStatGSOTailSegments                              = 223
 	trustIXSKBClearTXOffloadCSUM                                      = 1
 	trustIXSKBClearTXOffloadGSO                                       = 2
 	trustIXSKBClearTXOffloadEncap                                     = 4
@@ -1494,7 +1495,10 @@ func configuredCaptureOutputMode() string {
 	}
 }
 
-var tunnelCapabilityProbeCache sync.Map
+var (
+	tunnelCapabilityProbeCache sync.Map
+	tunnelCapabilityProbeMu    sync.Mutex
+)
 
 type tunnelCapabilityProbeResult struct {
 	ready     bool
@@ -2769,20 +2773,41 @@ func kernelTransportProtocolTunnel(protocol string, carrier string) dataplane.Ke
 }
 
 func probeTunnelCapability(protocol string) (bool, string) {
-	now := time.Now()
+	return probeTunnelCapabilityCached(protocol, time.Now, probeTunnelCapabilityUncached)
+}
+
+func probeTunnelCapabilityCached(protocol string, now func() time.Time, probe func(string) (bool, string)) (bool, string) {
+	current := now()
 	if cached, ok := tunnelCapabilityProbeCache.Load(protocol); ok {
 		result := cached.(tunnelCapabilityProbeResult)
-		if now.Before(result.expiresAt) {
+		if tunnelCapabilityProbeCacheValid(current, result) {
 			return result.ready, result.reason
 		}
 	}
-	ready, reason := probeTunnelCapabilityUncached(protocol)
+
+	tunnelCapabilityProbeMu.Lock()
+	defer tunnelCapabilityProbeMu.Unlock()
+	current = now()
+	if cached, ok := tunnelCapabilityProbeCache.Load(protocol); ok {
+		result := cached.(tunnelCapabilityProbeResult)
+		if tunnelCapabilityProbeCacheValid(current, result) {
+			return result.ready, result.reason
+		}
+	}
+
+	ready, reason := probe(protocol)
 	tunnelCapabilityProbeCache.Store(protocol, tunnelCapabilityProbeResult{
 		ready:     ready,
 		reason:    reason,
-		expiresAt: now.Add(tunnelCapabilityCacheTTL),
+		expiresAt: current.Add(tunnelCapabilityCacheTTL),
 	})
 	return ready, reason
+}
+
+func tunnelCapabilityProbeCacheValid(now time.Time, result tunnelCapabilityProbeResult) bool {
+	// Successful netdev probes remain valid until this daemon exits. Repeating
+	// them from status requests unregisters temporary links during live traffic.
+	return result.ready || now.Before(result.expiresAt)
 }
 
 func probeTunnelCapabilityUncached(protocol string) (bool, string) {
@@ -11636,6 +11661,7 @@ func (manager *Manager) addKernelUDPTCHotStatsLocked(stats map[string]uint64) {
 		{key: kernelUDPRXDirectStatInnerHeaderErrors, name: "tc_kernel_udp_rx_direct_inner_header_errors"},
 		{key: kernelUDPRXDirectStatInnerLenErrors, name: "tc_kernel_udp_rx_direct_inner_len_errors"},
 		{key: kernelUDPRXDirectStatOuterLenErrors, name: "tc_kernel_udp_rx_direct_outer_len_errors"},
+		{key: kernelUDPRXDirectStatGSOTailSegments, name: "tc_kernel_udp_rx_direct_gso_tail_segments"},
 		{key: kernelUDPRXDirectStatAdjustDrops, name: "tc_kernel_udp_rx_direct_adjust_drops"},
 		{key: kernelUDPRXDirectStatStoreDrops, name: "tc_kernel_udp_rx_direct_store_drops"},
 		{key: kernelUDPRXDirectStatLocalDeliveries, name: "tc_kernel_udp_rx_direct_local_deliveries"},
@@ -15943,6 +15969,8 @@ func loadKernelUDPRXDirectProgramWithOptions(name string, statsMap *cebpf.Map, p
 	}
 	commonFrameChecks := func(instructions asm.Instructions, frameOffset int32, outerOverhead int32, l4HeaderLen int32, frameLen int32, payloadOffset int32, payloadLenField int32, portKeyOffset int32, outerProtocol uint8, magic uint32) asm.Instructions {
 		innerLenExactLabel := flowLabel("kudp_rx_direct_inner_len_exact", outerProtocol, magic)
+		innerLenGSOMismatchLabel := flowLabel("kudp_rx_direct_inner_len_gso_mismatch", outerProtocol, magic)
+		innerLenGSOTailLabel := flowLabel("kudp_rx_direct_inner_len_gso_tail", outerProtocol, magic)
 		innerLenReadyLabel := flowLabel("kudp_rx_direct_inner_len_ready", outerProtocol, magic)
 		outerLenOKLabel := flowLabel("kudp_rx_direct_outer_len_ok", outerProtocol, magic)
 		instructions = append(instructions,
@@ -15976,7 +16004,23 @@ func loadKernelUDPRXDirectProgramWithOptions(name string, statsMap *cebpf.Map, p
 			asm.LoadMem(asm.R2, asm.R7, loadOffset(payloadOffset+2), asm.Half),
 			asm.HostTo(asm.BE, asm.R2, asm.Half),
 			asm.JEq.Reg(asm.R1, asm.R2, innerLenExactLabel),
-			asm.LoadMem(asm.R3, asm.R6, skbGSOSizeOffset, asm.Word),
+			// TSO copies the custom frame header to every wire segment but only
+			// rewrites the outer and inner IP lengths. Accept a short plaintext
+			// tail only when both rewritten lengths describe the same TCP packet.
+			asm.JGT.Imm(asm.R1, kerneludp.MaxPayload, innerLenGSOMismatchLabel),
+			asm.JGT.Reg(asm.R1, asm.R2, innerLenGSOTailLabel),
+			asm.Ja.Label(innerLenGSOMismatchLabel),
+			asm.LoadMem(asm.R3, asm.R7, loadOffset(payloadOffset+9), asm.Byte).WithSymbol(innerLenGSOTailLabel),
+			asm.JNE.Imm(asm.R3, ipProtocolTCP, innerLenGSOMismatchLabel),
+			asm.Mov.Reg(asm.R3, asm.R2),
+			asm.Add.Imm(asm.R3, rejectIPv4HeaderLen+l4HeaderLen+frameLen),
+			asm.JNE.Reg(asm.R3, asm.R9, innerLenGSOMismatchLabel),
+			asm.StoreMem(asm.RFP, kernelUDPRXDirectSegmentLenOffset, asm.R2, asm.Word),
+		)
+		instructions = appendHotPathCounter(instructions, statsMap, kernelUDPRXDirectStatGSOTailSegments, flowLabel("kudp_rx_direct_gso_tail_counter_done", outerProtocol, magic))
+		instructions = append(instructions,
+			asm.Ja.Label(innerLenReadyLabel),
+			asm.LoadMem(asm.R3, asm.R6, skbGSOSizeOffset, asm.Word).WithSymbol(innerLenGSOMismatchLabel),
 			asm.JEq.Imm(asm.R3, 0, "kudp_rx_direct_inner_len_error"),
 			asm.LoadMem(asm.R3, asm.R7, loadOffset(payloadOffset+9), asm.Byte),
 			asm.JNE.Imm(asm.R3, ipProtocolTCP, "kudp_rx_direct_inner_len_error"),
@@ -20774,6 +20818,7 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 		{key: kernelUDPRXDirectStatInnerHeaderErrors, name: "tc_kernel_udp_rx_direct_inner_header_errors"},
 		{key: kernelUDPRXDirectStatInnerLenErrors, name: "tc_kernel_udp_rx_direct_inner_len_errors"},
 		{key: kernelUDPRXDirectStatOuterLenErrors, name: "tc_kernel_udp_rx_direct_outer_len_errors"},
+		{key: kernelUDPRXDirectStatGSOTailSegments, name: "tc_kernel_udp_rx_direct_gso_tail_segments"},
 		{key: kernelUDPRXDirectStatAdjustDrops, name: "tc_kernel_udp_rx_direct_adjust_drops"},
 		{key: kernelUDPRXDirectStatStoreDrops, name: "tc_kernel_udp_rx_direct_store_drops"},
 		{key: kernelUDPRXDirectStatLocalDeliveries, name: "tc_kernel_udp_rx_direct_local_deliveries"},

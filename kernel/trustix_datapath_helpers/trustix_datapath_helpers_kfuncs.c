@@ -502,6 +502,9 @@ static unsigned long trustix_route_tcp_gso_async_queued;
 static unsigned long trustix_route_tcp_gso_async_calls;
 static unsigned long trustix_route_tcp_gso_async_invalid_args;
 static unsigned long trustix_route_tcp_gso_async_disabled;
+static unsigned long trustix_netdev_unregister_events;
+static unsigned long trustix_netdev_unregister_probe_ignored;
+static unsigned long trustix_netdev_unregister_flushes;
 static unsigned long trustix_route_tcp_gso_async_no_dev;
 static unsigned long trustix_route_tcp_gso_async_no_gso;
 static unsigned long trustix_route_tcp_gso_async_invalid_flags;
@@ -1483,6 +1486,21 @@ module_param_named(route_tcp_gso_async_disabled,
 		   trustix_route_tcp_gso_async_disabled, ulong, 0444);
 MODULE_PARM_DESC(route_tcp_gso_async_disabled,
 		 "Route-TCP GSO async attempts rejected because the path is disabled");
+
+module_param_named(netdev_unregister_events,
+		   trustix_netdev_unregister_events, ulong, 0444);
+MODULE_PARM_DESC(netdev_unregister_events,
+		 "NETDEV_UNREGISTER events observed by the TrustIX helper notifier");
+
+module_param_named(netdev_unregister_probe_ignored,
+		   trustix_netdev_unregister_probe_ignored, ulong, 0444);
+MODULE_PARM_DESC(netdev_unregister_probe_ignored,
+		 "TrustIX tunnel capability-probe netdev unregisters ignored by the helper notifier");
+
+module_param_named(netdev_unregister_flushes,
+		   trustix_netdev_unregister_flushes, ulong, 0444);
+MODULE_PARM_DESC(netdev_unregister_flushes,
+		 "NETDEV_UNREGISTER events that quiesced and flushed TrustIX helper queues");
 
 module_param_named(route_tcp_gso_async_no_dev,
 		   trustix_route_tcp_gso_async_no_dev, ulong, 0444);
@@ -14571,13 +14589,30 @@ static void trustix_datapath_helpers_release_netdev_refs(struct net_device *dev)
 	}
 }
 
+static bool
+trustix_datapath_helpers_is_capability_probe_dev(const struct net_device *dev)
+{
+	if (!dev)
+		return false;
+	return !strncmp(dev->name, "tixcapgre", sizeof("tixcapgre") - 1) ||
+	       !strncmp(dev->name, "tixcapipip", sizeof("tixcapipip") - 1) ||
+	       !strncmp(dev->name, "tixcapvxlan", sizeof("tixcapvxlan") - 1);
+}
+
 static int trustix_datapath_helpers_netdev_event(struct notifier_block *nb,
 						unsigned long event, void *ptr)
 {
 	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 
-	if (event == NETDEV_UNREGISTER)
+	if (event == NETDEV_UNREGISTER) {
+		trustix_netdev_unregister_events++;
+		if (trustix_datapath_helpers_is_capability_probe_dev(dev)) {
+			trustix_netdev_unregister_probe_ignored++;
+			return NOTIFY_DONE;
+		}
+		trustix_netdev_unregister_flushes++;
 		trustix_datapath_helpers_release_netdev_refs(dev);
+	}
 	return NOTIFY_DONE;
 }
 

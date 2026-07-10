@@ -5,6 +5,8 @@ package ebpf
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -147,11 +149,8 @@ func TestExperimentalTCPKernelCryptoXDPDirectOpenObjectOpensFrame(t *testing.T) 
 		t.Fatalf("load manager: %v", err)
 	}
 	defer manager.closeKernelCryptoProviderMapLocked()
-	if !manager.kernelCryptoProductionReadyLocked() {
-		t.Skipf("kernel crypto provider is not ready: %s", manager.kernelCryptoUnavailableReasonLocked())
-	}
 	if !manager.kernelCryptoTCDirectReadyLocked() {
-		t.Skipf("kernel crypto direct provider is not ready: %s", manager.kernelCryptoUnavailableReasonLocked())
+		t.Skipf("kernel crypto direct provider is not ready: %s", manager.kernelCryptoTCDirectUnavailableReasonLocked())
 	}
 
 	const (
@@ -182,7 +181,7 @@ func TestExperimentalTCPKernelCryptoXDPDirectOpenObjectOpensFrame(t *testing.T) 
 	}
 
 	plaintext := []byte("trustix attached xdp direct open")
-	sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
+	sealed, err := sealKernelCryptoFrameForTest(spec.SendKey, spec.SendIV, kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
 	if err != nil {
 		t.Fatalf("seal frame: %v", err)
 	}
@@ -221,6 +220,38 @@ func TestExperimentalTCPKernelCryptoXDPDirectOpenObjectOpensFrame(t *testing.T) 
 	assertXDPStat(t, object, 5, 1)
 	assertXDPStat(t, object, 31, 1)
 	assertXDPStat(t, object, 33, 0)
+
+	replay := &cebpf.RunOptions{Data: append([]byte(nil), packet...), DataOut: make([]byte, len(packet))}
+	ret, err = object.program.Run(replay)
+	if err != nil {
+		t.Fatalf("run XDP direct replay: %v", err)
+	}
+	if ret != 1 {
+		t.Fatalf("XDP direct replay return = %d, want XDP_DROP", ret)
+	}
+	assertXDPStat(t, object, 7, 1)
+	assertXDPStat(t, object, 48, 1)
+}
+
+func sealKernelCryptoFrameForTest(key, iv []byte, suiteID uint16, epoch, sequence uint64, plaintext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := append([]byte(nil), iv...)
+	if len(nonce) != kernelCryptoAESGCMIVLen {
+		return nil, fmt.Errorf("kernel crypto test IV length = %d, want %d", len(nonce), kernelCryptoAESGCMIVLen)
+	}
+	binary.BigEndian.PutUint64(nonce[4:], sequence)
+	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
+	sealed := make([]byte, kernelCryptoSecureHeaderLen+len(ciphertext))
+	kernelCryptoPutSecureHeader(sealed[:kernelCryptoSecureHeaderLen], byte(suiteID), epoch, sequence)
+	copy(sealed[kernelCryptoSecureHeaderLen:], ciphertext)
+	return sealed, nil
 }
 
 func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedTIXTByDefault(t *testing.T) {
@@ -2257,6 +2288,8 @@ type kernelCryptoCtxStateForTest struct {
 	LastSequence  uint64
 	ReplaySeen    [1024]uint64
 	ReplayBlocks  [1024]uint64
+	ReplayLock    uint32
+	_             uint32
 }
 
 func kernelCryptoCtxStateSnapshotForTest(t *testing.T, provider *kernelCryptoProviderObject, key kernelCryptoFlowKey) kernelCryptoCtxStateForTest {

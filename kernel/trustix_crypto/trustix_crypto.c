@@ -5916,7 +5916,8 @@ static long trustix_aead_ioc_crypt(struct file *file, unsigned long arg)
 		ctx = state->ctx;
 		scratch = &state->scratch;
 	} else {
-		ctx = trustix_aead_ioc_alloc_ctx(req.key_ptr, req.key_len, false);
+		/* Ioctl callers run in process context; providers may need to sleep. */
+		ctx = trustix_aead_ioc_alloc_ctx(req.key_ptr, req.key_len, true);
 		if (IS_ERR(ctx)) {
 			req.result = PTR_ERR(ctx);
 			if (copy_to_user((void __user *)arg, &req, sizeof(req)))
@@ -5984,7 +5985,8 @@ static long trustix_aead_ioc_batch(struct file *file, unsigned long arg)
 		ctx = state->ctx;
 		scratch = &state->scratch;
 	} else {
-		ctx = trustix_aead_ioc_alloc_ctx(batch.key_ptr, batch.key_len, false);
+		/* Avoid pinning a CPU across distro-specific crypto providers. */
+		ctx = trustix_aead_ioc_alloc_ctx(batch.key_ptr, batch.key_len, true);
 		if (IS_ERR(ctx)) {
 			batch.result = PTR_ERR(ctx);
 			if (copy_to_user((void __user *)arg, &batch, sizeof(batch)))

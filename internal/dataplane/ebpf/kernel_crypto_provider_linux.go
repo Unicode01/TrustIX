@@ -84,6 +84,8 @@ type kernelCryptoCtxSlotValue struct {
 	LastSequence  uint64
 	ReplaySeen    [1024]uint64
 	ReplayBlocks  [1024]uint64
+	ReplayLock    uint32
+	_             uint32
 }
 
 type kernelCryptoProviderObject struct {
@@ -102,7 +104,7 @@ type kernelCryptoProviderObject struct {
 }
 
 const (
-	kernelCryptoCtxSlotValueSize = 16456
+	kernelCryptoCtxSlotValueSize = 16464
 )
 
 type kernelCryptoDirectSlotValue struct {
@@ -120,6 +122,8 @@ type kernelCryptoDirectSlotValue struct {
 	LastSequence  uint64
 	ReplaySeen    [1024]uint64
 	ReplayBlocks  [1024]uint64
+	ReplayLock    uint32
+	_             uint32
 }
 
 type kernelCryptoProviderInstallEntry struct {
@@ -906,6 +910,22 @@ func loadKernelCryptoProviderObject() (provider *kernelCryptoProviderObject, err
 }
 
 func loadKernelCryptoDirectSlotProviderMaps() (*kernelCryptoProviderObject, error) {
+	object, err := kernelCryptoProviderFS.ReadFile("bpf/kernel_crypto_provider_bpfel.o")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded provider object for direct slot map: %w", err)
+	}
+	spec, err := cebpf.LoadCollectionSpecFromReader(bytes.NewReader(object))
+	if err != nil {
+		return nil, fmt.Errorf("parse embedded provider object for direct slot map: %w", err)
+	}
+	directSlotSpec := spec.Maps["trustix_kernel_crypto_direct_slots"]
+	if directSlotSpec == nil {
+		return nil, fmt.Errorf("embedded provider object is missing direct slot map")
+	}
+	if directSlotSpec.ValueSize != uint32(binary.Size(kernelCryptoDirectSlotValue{})) {
+		return nil, fmt.Errorf("embedded provider direct slot size %d != Go size %d", directSlotSpec.ValueSize, binary.Size(kernelCryptoDirectSlotValue{}))
+	}
+
 	flowIndexMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "trustix_kernel_crypto_flow_index_map",
 		Type:       cebpf.Hash,
@@ -927,13 +947,7 @@ func loadKernelCryptoDirectSlotProviderMaps() (*kernelCryptoProviderObject, erro
 		_ = flowIndexMap.Close()
 		return nil, fmt.Errorf("create kernel crypto placeholder ctx slot map: %w", err)
 	}
-	directSlotMap, err := cebpf.NewMap(&cebpf.MapSpec{
-		Name:       "trustix_kernel_crypto_direct_slots",
-		Type:       cebpf.Array,
-		KeySize:    uint32(binary.Size(uint32(0))),
-		ValueSize:  uint32(binary.Size(kernelCryptoDirectSlotValue{})),
-		MaxEntries: kernelCryptoMaxEntries,
-	})
+	directSlotMap, err := cebpf.NewMap(directSlotSpec)
 	if err != nil {
 		_ = contextSlots.Close()
 		_ = flowIndexMap.Close()
@@ -1204,7 +1218,7 @@ func (provider *kernelCryptoProviderObject) publishDirectSlot(install kernelCryp
 		ReplayWindow:  install.Entry.Value.ReplayWindow,
 		InstalledUnix: install.Entry.Value.InstalledUnix,
 	}
-	if err := provider.directSlotMap.Update(install.Slot, value, cebpf.UpdateAny); err != nil {
+	if err := provider.directSlotMap.Update(install.Slot, value, cebpf.UpdateLock); err != nil {
 		return fmt.Errorf("update direct slot %d: %w", install.Slot, err)
 	}
 	return nil
@@ -1215,11 +1229,11 @@ func (provider *kernelCryptoProviderObject) clearDirectSlot(slot uint32) error {
 		return nil
 	}
 	var existing kernelCryptoDirectSlotValue
-	if err := provider.directSlotMap.Lookup(slot, &existing); err == nil && existing.Enabled != 0 &&
+	if err := provider.directSlotMap.LookupWithFlags(slot, &existing, cebpf.LookupLock); err == nil && existing.Enabled != 0 &&
 		existing.SlotID < kernelmodule.TrustIXAEADDirectMaxSlots {
 		_ = kernelmodule.AEADDirectClearKey("", existing.SlotID)
 	}
-	if err := provider.directSlotMap.Update(slot, kernelCryptoDirectSlotValue{}, cebpf.UpdateAny); err != nil {
+	if err := provider.directSlotMap.Update(slot, kernelCryptoDirectSlotValue{}, cebpf.UpdateLock); err != nil {
 		return fmt.Errorf("clear direct slot %d: %w", slot, err)
 	}
 	return nil

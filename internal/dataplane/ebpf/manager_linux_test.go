@@ -1021,6 +1021,7 @@ func TestTCStatsCounterKeysDoNotOverlap(t *testing.T) {
 		{"kernel_udp_rx_direct_inner_header_errors", kernelUDPRXDirectStatInnerHeaderErrors},
 		{"kernel_udp_rx_direct_inner_len_errors", kernelUDPRXDirectStatInnerLenErrors},
 		{"kernel_udp_rx_direct_outer_len_errors", kernelUDPRXDirectStatOuterLenErrors},
+		{"kernel_udp_rx_direct_gso_tail_segments", kernelUDPRXDirectStatGSOTailSegments},
 		{"kernel_udp_rx_direct_adjust_drops", kernelUDPRXDirectStatAdjustDrops},
 		{"kernel_udp_rx_direct_store_drops", kernelUDPRXDirectStatStoreDrops},
 		{"kernel_udp_rx_direct_local_deliveries", kernelUDPRXDirectStatLocalDeliveries},
@@ -1884,6 +1885,34 @@ func TestTrustIXCryptoTCKfuncSetIsCryptoOnly(t *testing.T) {
 	} {
 		if bytes.Contains(source, []byte(forbidden)) {
 			t.Fatalf("trustix_crypto source still carries datapath/XMIT implementation %q", forbidden)
+		}
+	}
+}
+
+func TestTrustIXCryptoUserspaceIOCTLUsesWaitableRequests(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "trustix_crypto", "trustix_crypto.c"))
+	if err != nil {
+		t.Fatalf("read kernel module C source: %v", err)
+	}
+	for _, bounds := range [][2]string{
+		{"static long trustix_aead_ioc_crypt(", "static long trustix_aead_ioc_batch("},
+		{"static long trustix_aead_ioc_batch(", "static long trustix_aead_ioc_set_key("},
+	} {
+		start := bytes.Index(source, []byte(bounds[0]))
+		if start < 0 {
+			t.Fatalf("crypto ioctl function %q not found", bounds[0])
+		}
+		endRelative := bytes.Index(source[start:], []byte(bounds[1]))
+		if endRelative < 0 {
+			t.Fatalf("crypto ioctl function end %q not found", bounds[1])
+		}
+		body := source[start : start+endRelative]
+		if !bytes.Contains(body, []byte("trustix_aead_ioc_alloc_ctx")) ||
+			!bytes.Contains(body, []byte("key_len, true)")) {
+			t.Fatalf("crypto ioctl %q must allocate a waitable request", bounds[0])
+		}
+		if bytes.Contains(body, []byte("key_len, false)")) {
+			t.Fatalf("crypto ioctl %q still allocates a non-waitable request", bounds[0])
 		}
 	}
 }
@@ -14532,6 +14561,99 @@ func TestKernelUDPRXDirectProgramLoadsWithTIXTPath(t *testing.T) {
 		t.Fatalf("load experimental_tcp TIXT RX direct program: %v", err)
 	}
 	defer program.Close()
+}
+
+func TestKernelUDPRXDirectAcceptsSegmentedGSOTails(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("kernel_udp RX direct packet test requires Linux")
+	}
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_HOT_STATS", "1")
+	if err := rlimit.RemoveMemlock(); err != nil {
+		t.Skipf("raise memlock limit for BPF packet test: %v", err)
+	}
+	statsMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_stats_rx_gso_tail_test", Type: cebpf.Array, KeySize: 4, ValueSize: 8, MaxEntries: tcStatsMapMaxEntries})
+	defer statsMap.Close()
+	portMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_rx_gso_tail_port_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 1, MaxEntries: 16})
+	defer portMap.Close()
+	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_rx_gso_tail_neigh_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 16})
+	defer neighMap.Close()
+
+	program, err := loadKernelUDPRXDirectProgramWithOptions(
+		"trustix_rx_gso_tail_test",
+		statsMap,
+		portMap,
+		neighMap,
+		1,
+		net.HardwareAddr{2, 0, 0, 0, 0, 1},
+		kernelUDPRXDirectProgramOptions{Broadcast: true},
+	)
+	if err != nil {
+		t.Fatalf("load kernel_udp RX GSO-tail program: %v", err)
+	}
+	defer program.Close()
+
+	inner := ipv4PacketForXDPTCRXDirectTest()
+	udpPacket := mustKernelUDPXDPEthernetFrame(t, kerneludp.Frame{
+		Flags:    kerneludp.FlagInnerIPv4,
+		FlowID:   11,
+		Sequence: 12,
+		Payload:  inner,
+	}, 17001)
+	binary.BigEndian.PutUint32(udpPacket[66:70], 1130)
+
+	tcpFrame := experimentaltcp.Frame{Flags: experimentaltcp.FlagInnerIPv4, FlowID: 21, Sequence: 22, Payload: inner}
+	tcpFrameLen, err := experimentaltcp.FrameWireLen(len(inner))
+	if err != nil {
+		t.Fatalf("experimental_tcp frame length: %v", err)
+	}
+	tcpPacketLen, err := experimentaltcp.TCPShapedIPv4WireLen(tcpFrameLen)
+	if err != nil {
+		t.Fatalf("experimental_tcp packet length: %v", err)
+	}
+	tcpPacket := make([]byte, ethernetHeaderLen+tcpPacketLen)
+	copy(tcpPacket[0:6], []byte{0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x01})
+	copy(tcpPacket[6:12], []byte{0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x02})
+	binary.BigEndian.PutUint16(tcpPacket[12:14], etherTypeIPv4)
+	if _, err := experimentaltcp.MarshalTCPShapedIPv4FrameIntoSkipTCPChecksum(experimentaltcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("192.0.2.10"),
+		DestinationIP:   netip.MustParseAddr("198.51.100.20"),
+		SourcePort:      43000,
+		DestinationPort: 17002,
+		Acknowledgment:  1,
+	}, tcpFrame, tcpPacket[ethernetHeaderLen:]); err != nil {
+		t.Fatalf("marshal experimental_tcp GSO tail: %v", err)
+	}
+	binary.BigEndian.PutUint32(tcpPacket[86:90], 1130)
+
+	for name, packet := range map[string][]byte{"udp": udpPacket, "experimental_tcp": tcpPacket} {
+		if _, _, err := program.Test(packet); err != nil {
+			t.Fatalf("run %s GSO-tail packet: %v", name, err)
+		}
+	}
+	if got, err := bpfCounterValue(statsMap, kernelUDPRXDirectStatGSOTailSegments); err != nil || got != 2 {
+		t.Fatalf("GSO-tail counter = %d, %v; want 2", got, err)
+	}
+	if got, err := bpfCounterValue(statsMap, kernelUDPRXDirectStatInnerLenErrors); err != nil || got != 0 {
+		t.Fatalf("inner-length errors after valid tails = %d, %v; want 0", got, err)
+	}
+
+	for name, packet := range map[string][]byte{"udp": udpPacket, "experimental_tcp": tcpPacket} {
+		invalid := append([]byte(nil), packet...)
+		innerOffset := 74
+		if name == "experimental_tcp" {
+			innerOffset = 94
+		}
+		invalid[innerOffset+9] = ipProtocolUDP
+		if _, _, err := program.Test(invalid); err != nil {
+			t.Fatalf("run %s non-TCP length mismatch: %v", name, err)
+		}
+	}
+	if got, err := bpfCounterValue(statsMap, kernelUDPRXDirectStatGSOTailSegments); err != nil || got != 2 {
+		t.Fatalf("GSO-tail counter after invalid packets = %d, %v; want 2", got, err)
+	}
+	if got, err := bpfCounterValue(statsMap, kernelUDPRXDirectStatInnerLenErrors); err != nil || got != 2 {
+		t.Fatalf("inner-length errors after invalid packets = %d, %v; want 2", got, err)
+	}
 }
 
 func TestKernelUDPRXDirectKernelUDPOnlyProgramLoads(t *testing.T) {

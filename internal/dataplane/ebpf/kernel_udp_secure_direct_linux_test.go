@@ -25,9 +25,9 @@ func TestKernelUDPTCSecureDirectObjectsLoadWithKernelDirectKfunc(t *testing.T) {
 
 	statsMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tc_secure_load_stats", Type: cebpf.PerCPUArray, KeySize: 4, ValueSize: 8, MaxEntries: tcStatsMapMaxEntries})
 	defer statsMap.Close()
-	routeMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tc_secure_load_tx_route", Type: cebpf.LPMTrie, KeySize: 8, ValueSize: 80, MaxEntries: 4096, Flags: 1})
+	routeMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tc_secure_load_tx_route", Type: cebpf.LPMTrie, KeySize: 8, ValueSize: kernelUDPTXRouteValueSize, MaxEntries: 4096, Flags: 1})
 	defer routeMap.Close()
-	flowMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tc_secure_load_tx_flow", Type: cebpf.Hash, KeySize: 8, ValueSize: 48, MaxEntries: 4096})
+	flowMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tc_secure_load_tx_flow", Type: cebpf.Hash, KeySize: 8, ValueSize: kernelUDPTXFlowValueSize, MaxEntries: 4096})
 	defer flowMap.Close()
 
 	tx, err := loadKernelUDPTXSecureDirectObject(manager.kernelCryptoProvider, statsMap, routeMap, flowMap, kernelUDPTXSecureDirectProgramOptions{})

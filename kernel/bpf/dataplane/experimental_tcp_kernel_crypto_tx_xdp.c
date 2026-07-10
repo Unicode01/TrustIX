@@ -19,6 +19,10 @@ typedef int __s32;
 typedef long long __s64;
 typedef unsigned long long __u64;
 
+struct bpf_spin_lock {
+    __u32 val;
+};
+
 #define BPF_MAP_TYPE_HASH 1
 #define BPF_MAP_TYPE_ARRAY 2
 #define BPF_MAP_TYPE_PERCPU_ARRAY 6
@@ -88,6 +92,8 @@ struct trustix_kernel_crypto_ctx_value {
     __u64 last_sequence;
     __u64 replay_seen[TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS];
     __u64 replay_blocks[TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS];
+    struct bpf_spin_lock replay_lock;
+    __u32 replay_lock_pad;
 };
 
 struct trustix_exp_tcp_tx_scratch {
