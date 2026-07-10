@@ -1031,8 +1031,6 @@ func (daemon *Daemon) warmAnyEndpointSessionPool(ctx context.Context, epoch uint
 	if len(candidates) == 1 {
 		return daemon.warmEndpointSessionPoolResult(ctx, epoch, peer, candidates[0], poolSize)
 	}
-	warmCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	type result struct {
 		warmed bool
 		err    error
@@ -1041,24 +1039,30 @@ func (daemon *Daemon) warmAnyEndpointSessionPool(ctx context.Context, epoch uint
 	for _, endpoint := range candidates {
 		endpoint := endpoint
 		go func() {
-			warmed, err := daemon.warmEndpointSessionPoolResult(warmCtx, epoch, peer, endpoint, poolSize)
+			warmed, err := daemon.warmEndpointSessionPoolResult(ctx, epoch, peer, endpoint, poolSize)
 			results <- result{warmed: warmed, err: err}
 		}()
 	}
+	warmed := false
 	var lastErr error
 	for range candidates {
 		select {
 		case <-ctx.Done():
+			if warmed {
+				return true, nil
+			}
 			return false, ctx.Err()
 		case result := <-results:
 			if result.warmed {
-				cancel()
-				return true, nil
+				warmed = true
 			}
 			if result.err != nil {
 				lastErr = result.err
 			}
 		}
+	}
+	if warmed {
+		return true, nil
 	}
 	return false, lastErr
 }

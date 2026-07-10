@@ -3739,9 +3739,13 @@ func TestWarmRouteSessionsPreDialsSingleSession(t *testing.T) {
 	}
 }
 
-func TestWarmRouteSessionsParallelCandidatesDoesNotBlockOnSlowPreferred(t *testing.T) {
+func TestWarmRouteSessionsParallelCandidatesCompleteAllHealthyPools(t *testing.T) {
 	registry := transport.NewRegistry()
-	slow := &blockingWarmupTransport{name: transport.ProtocolHTTPConnect, started: make(chan struct{}, 1)}
+	slow := &blockingWarmupTransport{
+		name:    transport.ProtocolTCP,
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
 	if err := registry.Register(slow); err != nil {
 		t.Fatalf("register slow transport: %v", err)
 	}
@@ -3761,7 +3765,7 @@ func TestWarmRouteSessionsParallelCandidatesDoesNotBlockOnSlowPreferred(t *testi
 			ID:     "ix-a",
 			Domain: "lab.local",
 			Endpoints: []config.EndpointConfig{
-				{Name: "a-http-connect", Address: "127.0.0.1:7091", Transport: string(transport.ProtocolHTTPConnect), Priority: 50},
+				{Name: "a-tcp", Address: "127.0.0.1:7091", Transport: string(transport.ProtocolTCP), Priority: 50},
 				{Name: "a-udp", Address: "127.0.0.1:7001", Transport: string(transport.ProtocolUDP), Priority: 10},
 			},
 		}},
@@ -3772,32 +3776,59 @@ func TestWarmRouteSessionsParallelCandidatesDoesNotBlockOnSlowPreferred(t *testi
 		}},
 		TransportPolicy: config.TransportPolicyConfig{
 			Encryption: "plaintext",
+			TLSIdentity: config.TransportTLSIdentityConfig{
+				Mode:        "custom_cert",
+				SystemRoots: true,
+			},
 			KernelTransport: config.KernelTransportPolicyConfig{
 				Mode: string(dataplane.KernelTransportModeDisabled),
 			},
-			SessionPool: config.SessionPoolPolicyConfig{Warmup: true},
+			SessionPool: config.SessionPoolPolicyConfig{Size: 2, Warmup: true},
 		},
 	}
 	defer daemon.closeDataSessions()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := daemon.warmRouteSessions(ctx); err != nil {
-		t.Fatalf("warm route sessions: %v", err)
+	candidates, _, err := daemon.candidatePeerEndpoints(daemon.desired.Peers[0], routesFromConfig(daemon.desired)[0], routing.FlowKey{}, false)
+	if err != nil || len(candidates) != 2 {
+		t.Fatalf("warmup candidates = %v, err = %v", candidates, err)
 	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- daemon.warmRouteSessions(context.Background())
+	}()
 	select {
 	case <-slow.started:
+	case <-time.After(time.Second):
+		t.Fatal("slow endpoint dial did not start")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("warm route sessions returned before slow endpoint completed: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
-	key := dataSessionKey{
-		Peer:       "ix-a",
-		Endpoint:   "a-udp",
-		Transport:  transport.ProtocolUDP,
-		Address:    "127.0.0.1:7001",
-		Encryption: "plaintext",
+	close(slow.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("warm route sessions: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("warm route sessions did not complete after releasing slow endpoint")
 	}
-	if _, ok := daemon.dataSessions[key]; !ok {
-		t.Fatalf("udp session was not warmed; sessions=%v", daemon.dataSessions)
+	for _, endpoint := range daemon.desired.Peers[0].Endpoints {
+		for poolIndex := 0; poolIndex < 2; poolIndex++ {
+			key := dataSessionKey{
+				Peer:       "ix-a",
+				Endpoint:   endpoint.Name,
+				Transport:  transport.Protocol(endpoint.Transport),
+				Address:    endpoint.Address,
+				Encryption: "plaintext",
+				PoolIndex:  poolIndex,
+			}
+			if _, ok := daemon.dataSessions[key]; !ok {
+				t.Fatalf("endpoint pool session %v was not warmed; sessions=%v", key, daemon.dataSessions)
+			}
+		}
 	}
 }
 
@@ -8469,6 +8500,7 @@ func (session *retainingWarmupSession) RetainKernelFlowOnClose() {
 type blockingWarmupTransport struct {
 	name    transport.Protocol
 	started chan struct{}
+	release chan struct{}
 }
 
 type singleflightDialTransport struct {
@@ -8522,8 +8554,17 @@ func (fake *blockingWarmupTransport) Dial(ctx context.Context, peer transport.Pe
 	case fake.started <- struct{}{}:
 	default:
 	}
-	<-ctx.Done()
-	return nil, ctx.Err()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-fake.release:
+	}
+	return &statsSession{stats: transport.TransportStats{
+		Encryption:       peer.Endpoints[0].Encryption,
+		Encrypted:        peer.Endpoints[0].Encryption != "plaintext",
+		SendEncrypted:    peer.Endpoints[0].Encryption == "secure" || peer.Endpoints[0].Encryption == "send_encrypted",
+		ReceiveEncrypted: peer.Endpoints[0].Encryption == "secure" || peer.Endpoints[0].Encryption == "receive_encrypted",
+	}}, nil
 }
 
 func (fake *blockingWarmupTransport) Listen(ctx context.Context, ep transport.Endpoint, tlsConf *tls.Config) (transport.Listener, error) {
@@ -8617,8 +8658,10 @@ func (listener *statsListener) Close() error {
 }
 
 type statsSession struct {
-	stats  transport.TransportStats
-	closed chan struct{}
+	stats     transport.TransportStats
+	closeMu   sync.Mutex
+	closeOnce sync.Once
+	closed    chan struct{}
 }
 
 func (session *statsSession) SendPacket(packet []byte) error {
@@ -8626,23 +8669,24 @@ func (session *statsSession) SendPacket(packet []byte) error {
 }
 
 func (session *statsSession) RecvPacket() ([]byte, error) {
-	if session.closed == nil {
-		session.closed = make(chan struct{})
-	}
-	<-session.closed
+	closed := session.closeSignal()
+	<-closed
 	return nil, fmt.Errorf("stats session closed")
 }
 
 func (session *statsSession) Close() error {
+	closed := session.closeSignal()
+	session.closeOnce.Do(func() { close(closed) })
+	return nil
+}
+
+func (session *statsSession) closeSignal() chan struct{} {
+	session.closeMu.Lock()
+	defer session.closeMu.Unlock()
 	if session.closed == nil {
 		session.closed = make(chan struct{})
 	}
-	select {
-	case <-session.closed:
-	default:
-		close(session.closed)
-	}
-	return nil
+	return session.closed
 }
 
 func (session *statsSession) Stats() transport.TransportStats {
