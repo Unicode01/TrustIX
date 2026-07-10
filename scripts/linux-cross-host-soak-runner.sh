@@ -146,6 +146,21 @@ json_escape() {
 
 soak_start_epoch=""
 soak_start_iso=""
+kernel_log_start_iso=""
+
+mark_kernel_log_start() {
+  local node dir
+  kernel_log_start_iso="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  for node in a b; do
+    dir="$(remote_dir "$node")"
+    run_node "$node" "set +e
+mkdir -p $(remote_quote "$dir")
+if [ -r /proc/uptime ]; then
+  awk '{print \$1}' /proc/uptime >$(remote_quote "${dir}.kernel-log-start-uptime")
+fi
+"
+  done
+}
 
 write_run_timing_start() {
   soak_start_epoch="$(date +%s)"
@@ -1762,11 +1777,12 @@ collect_kernel_logs() {
 	local dir prefix since
 	dir="$(remote_dir "$node")"
 	prefix="$(node_value "$node" "$ix_a" "$ix_b")"
-	since="$soak_start_iso"
+	since="$kernel_log_start_iso"
 	run_node "$node" "set +e
 dir=$(remote_quote "$dir")
 prefix=$(remote_quote "$prefix")
 since=$(remote_quote "$since")
+baseline_file=\"\${dir}.kernel-log-start-uptime\"
 mkdir -p \"\$dir\"
 if command -v journalctl >/dev/null 2>&1; then
   tmp=\"\${dir}/.\${prefix}-kernel.log.tmp\"
@@ -1780,7 +1796,27 @@ if command -v journalctl >/dev/null 2>&1; then
 fi
 if command -v dmesg >/dev/null 2>&1; then
   tmp=\"\${dir}/.\${prefix}-dmesg.log.tmp\"
-  if [ -n \"\$since\" ] && dmesg --since \"\$since\" >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+  dmesg_since=\"\$since\"
+  if [ -n \"\$since\" ] && command -v date >/dev/null 2>&1; then
+    parsed_since=\$(date -d \"\$since\" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true)
+    [ -z \"\$parsed_since\" ] || dmesg_since=\"\$parsed_since\"
+  fi
+  if [ -n \"\$dmesg_since\" ] && dmesg --since \"\$dmesg_since\" >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
+    mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
+  elif [ -s \"\$baseline_file\" ]; then
+    baseline=\$(cat \"\$baseline_file\" 2>/dev/null || true)
+    dmesg 2>/dev/null | awk -v start=\"\$baseline\" '
+      {
+        stamp=\$1
+        if (stamp == \"[\") stamp=\$2
+        gsub(/^\\[/, \"\", stamp)
+        gsub(/\\].*\$/, \"\", stamp)
+        if (stamp ~ /^[0-9]+([.][0-9]+)?\$/ && stamp + 0 >= start + 0) print
+      }
+    ' >\"\$tmp\"
+    if [ ! -s \"\$tmp\" ]; then
+      printf 'trustix-soak: no dmesg entries since uptime %s\\n' \"\$baseline\" >\"\$tmp\"
+    fi
     mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
   elif dmesg -T >\"\$tmp\" 2>&1 && [ -s \"\$tmp\" ]; then
     mv \"\$tmp\" \"\${dir}/\${prefix}-dmesg.log\"
@@ -2376,6 +2412,7 @@ fi
 \"\$ip_cmd\" link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
 if [ $(remote_quote "$keep_remote") != '1' ]; then
   rm -rf $(remote_quote "$dir")
+  rm -f $(remote_quote "${dir}.kernel-log-start-uptime")
 fi
 "
 }
@@ -2455,6 +2492,7 @@ main() {
   resolve_underlay
   log "underlay a=${underlay_a_ip}/${underlay_a_if} b=${underlay_b_ip}/${underlay_b_if}"
   trap cleanup_all EXIT
+  mark_kernel_log_start
   prepare_node_topology a
   prepare_node_topology b
   collect_boot_id a before
