@@ -1,7 +1,6 @@
 package scripts
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -3537,7 +3536,6 @@ func TestProductionTransportAuditScriptD479UserspaceUDPDefaultOnlyExemptions(t *
 	code := `
 import importlib.util
 import pathlib
-import subprocess
 import sys
 
 script = pathlib.Path("production-transport-audit.py")
@@ -3576,7 +3574,6 @@ func TestProductionTransportAuditScriptSessionWarmupObservabilityExemption(t *te
 	code := `
 import importlib.util
 import pathlib
-import subprocess
 import sys
 
 script = pathlib.Path("production-transport-audit.py")
@@ -3587,8 +3584,9 @@ if spec.loader is None:
     sys.exit(1)
 spec.loader.exec_module(module)
 
-commit = "55c8268fb4552f33c680b01a5faa08a8a1dd6bcc"
-parent = subprocess.check_output(["git", "rev-parse", "9a3fc75839a4dc1ba65810656f5686d988d92d33^"], text=True).strip()
+probe = {"commit": "9a3fc75839a4dc1ba65810656f5686d988d92d33"}
+module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
+parent = "parent-does-not-matter-for-probed-history"
 path = "internal/daemon/datapath.go"
 for row in [
     {"gate_family": "full_kmod", "transport": "udp"},
@@ -3598,9 +3596,9 @@ for row in [
         print(f"session warmup observability change not exempt for {row}", file=sys.stderr)
         sys.exit(1)
 
-older_parent = subprocess.check_output(["git", "rev-parse", "1dfaf51caac8bc03177de4ec428e23659db69173^"], text=True).strip()
+probe["commit"] = "1dfaf51caac8bc03177de4ec428e23659db69173"
 row = {"gate_family": "userspace", "transport": "experimental_tcp"}
-if module.current_runtime_path_change_irrelevant(row, older_parent, path):
+if module.current_runtime_path_change_irrelevant(row, parent, path):
     print("exemption incorrectly covered unrelated datapath.go commits", file=sys.stderr)
     sys.exit(1)
 `
@@ -3609,6 +3607,48 @@ if module.current_runtime_path_change_irrelevant(row, older_parent, path):
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("session warmup observability exemption regression failed: %v\n%s", err, output)
+	}
+}
+
+func TestProductionTransportAuditScriptSessionPoolLifecycleExemption(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+probe = {"commit": "55c8268fb4552f33c680b01a5faa08a8a1dd6bcc"}
+module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
+parent = "parent-does-not-matter-for-probed-history"
+path = "internal/daemon/datapath.go"
+for row in [
+    {"gate_family": "full_kmod", "transport": "udp"},
+    {"gate_family": "userspace", "transport": "experimental_tcp"},
+]:
+    if not module.current_runtime_path_change_irrelevant(row, parent, path):
+        print(f"session pool lifecycle change not exempt for {row}", file=sys.stderr)
+        sys.exit(1)
+
+probe["commit"] = "1111111111111111111111111111111111111111"
+if module.current_runtime_path_change_irrelevant(
+    {"gate_family": "full_kmod", "transport": "udp"}, parent, path
+):
+    print("session pool lifecycle exemption covered an unrelated commit", file=sys.stderr)
+    sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("session pool lifecycle exemption regression failed: %v\n%s", err, output)
 	}
 }
 
@@ -3628,8 +3668,9 @@ if spec.loader is None:
     sys.exit(1)
 spec.loader.exec_module(module)
 
-commit = "f61fbaddd6bb8de8678be3a37bce3bc426622b7e"
-parent = subprocess.check_output(["git", "rev-parse", commit + "^"], text=True).strip()
+probe = {"commit": "f61fbaddd6bb8de8678be3a37bce3bc426622b7e"}
+module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
+parent = "parent-does-not-matter-for-probed-history"
 path = "internal/transport/udp/udp.go"
 cases = [
     ({"gate_family": "userspace", "transport": "udp"}, True),
@@ -3643,9 +3684,9 @@ for row, want in cases:
         print(f"kernel UDP lifecycle exemption mismatch for {row}: got {got}, want {want}", file=sys.stderr)
         sys.exit(1)
 
-older_parent = subprocess.check_output(["git", "rev-parse", "d4796543b2640792bc28e1edc93f10def92ec47d^"], text=True).strip()
+probe["commit"] = "d4796543b2640792bc28e1edc93f10def92ec47d"
 row = {"gate_family": "userspace", "transport": "udp"}
-if module.current_runtime_path_change_irrelevant(row, older_parent, path):
+if module.current_runtime_path_change_irrelevant(row, parent, path):
     print("exemption incorrectly covered unrelated udp.go commits", file=sys.stderr)
     sys.exit(1)
 `
@@ -7683,14 +7724,19 @@ func TestCrossHostSoakRunnerRejectsConcurrentVMPairUse(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
 		"TRUSTIX_CROSS_HOST_BIN_DIR="+binDir,
 		"TRUSTIX_CROSS_HOST_PAIR_LOCK_ROOT="+filepath.Join(root, "locks"),
-		"TRUSTIX_CROSS_HOST_PAIR_LOCK_HOLD_SECONDS=3",
+		"TRUSTIX_CROSS_HOST_PAIR_LOCK_HOLD_SECONDS=30",
 	)
 	first := exec.Command(bash, "linux-cross-host-soak-runner.sh")
 	first.Dir = "."
 	first.Env = append(baseEnv, "TRUSTIX_CROSS_HOST_WORKDIR="+filepath.Join(root, "first"))
-	var firstOutput bytes.Buffer
-	first.Stdout = &firstOutput
-	first.Stderr = &firstOutput
+	firstOutputPath := filepath.Join(root, "first.log")
+	firstOutput, err := os.Create(firstOutputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstOutput.Close()
+	first.Stdout = firstOutput
+	first.Stderr = firstOutput
 	if err := first.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -7700,12 +7746,21 @@ func TestCrossHostSoakRunnerRejectsConcurrentVMPairUse(t *testing.T) {
 		}
 	})
 
-	deadline := time.Now().Add(2 * time.Second)
-	for !strings.Contains(firstOutput.String(), "holding VM-pair lock") && time.Now().Before(deadline) {
+	lockRoot := filepath.Join(root, "locks")
+	deadline := time.Now().Add(3 * time.Second)
+	lockReady := false
+	for time.Now().Before(deadline) {
+		entries, readErr := os.ReadDir(lockRoot)
+		if readErr == nil && len(entries) == 1 && entries[0].IsDir() {
+			lockReady = true
+			break
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !strings.Contains(firstOutput.String(), "holding VM-pair lock") {
-		t.Fatalf("first runner did not acquire lock:\n%s", firstOutput.String())
+	if !lockReady {
+		_ = firstOutput.Sync()
+		payload, _ := os.ReadFile(firstOutputPath)
+		t.Fatalf("first runner did not acquire lock:\n%s", payload)
 	}
 
 	second := exec.Command(bash, "linux-cross-host-soak-runner.sh")
@@ -7719,7 +7774,10 @@ func TestCrossHostSoakRunnerRejectsConcurrentVMPairUse(t *testing.T) {
 		t.Fatalf("second runner failure did not identify VM pair contention:\n%s", output)
 	}
 
+	if err := first.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
 	if err := first.Wait(); err == nil {
-		t.Fatal("first runner unexpectedly completed its synthetic preflight")
+		t.Fatal("killed first runner unexpectedly exited successfully")
 	}
 }

@@ -2555,6 +2555,12 @@ main() {
   need_cmd find
   need_cmd cksum
   check_local_inputs
+  acquire_pair_lock || die "another soak runner owns this VM pair"
+  trap release_pair_lock EXIT
+  if [[ "$pair_lock_hold_seconds" -gt 0 ]]; then
+    log "holding VM-pair lock for ${pair_lock_hold_seconds}s"
+    sleep "$pair_lock_hold_seconds"
+  fi
   log "case=${case_name} workdir=${workdir}"
   if case_tc_requested_but_falls_back_to_userspace; then
     log "WARNING: ${case_name} has no safe TC direct fast path with this configuration; using userspace datapath"
@@ -2566,12 +2572,7 @@ main() {
   check_node_prereqs b
   resolve_underlay
   log "underlay a=${underlay_a_ip}/${underlay_a_if} b=${underlay_b_ip}/${underlay_b_if}"
-  acquire_pair_lock || die "another soak runner owns this VM pair"
   trap cleanup_all EXIT
-  if [[ "$pair_lock_hold_seconds" -gt 0 ]]; then
-    log "holding VM-pair lock for ${pair_lock_hold_seconds}s"
-    sleep "$pair_lock_hold_seconds"
-  fi
   mark_kernel_log_start
   prepare_node_topology a
   prepare_node_topology b
