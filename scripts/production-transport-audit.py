@@ -199,6 +199,19 @@ ROUTE_GSO_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
         "add2971946b4948fbdd49d973aa94581b2e87a50",
     },
 }
+EXPERIMENTAL_TCP_ROUTE_GSO_DEVICE_GUARD_COMMITS_BY_PATH = {
+    # 5af52d4 keeps route-TCP outer GSO enabled as a capability but blocks its
+    # unstable virtio_net offload shape unless explicitly opted in. This only
+    # changes plaintext and secure experimental-TCP route-GSO packet emission;
+    # the secure kernel-UDP branch still emits one UDP frame per segment.
+    "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c": {
+        "5af52d414e1f120e78d0441ec5501ef6ae57e7ab",
+    },
+}
+EXPERIMENTAL_TCP_ROUTE_GSO_DEVICE_GUARD_IMPACTED_GATE_CLASSES = {
+    "route_gso",
+    "secure_exp_tcp_kernel",
+}
 RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH = {
     # aee1046 only adds selected runtime-gate feature names to local endpoint,
     # membership, and status metadata. The selected datapath/crypto code paths
@@ -1066,6 +1079,13 @@ def current_runtime_path_change_irrelevant(
         allowed_change_commits.update(allowed_commits)
     allowed_commits = ROUTE_GSO_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class != "route_gso":
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = EXPERIMENTAL_TCP_ROUTE_GSO_DEVICE_GUARD_COMMITS_BY_PATH.get(normalized)
+    if (
+        allowed_commits
+        and gate_class
+        not in EXPERIMENTAL_TCP_ROUTE_GSO_DEVICE_GUARD_IMPACTED_GATE_CLASSES
+    ):
         allowed_change_commits.update(allowed_commits)
     if not row_targets_openwrt(row):
         allowed_commits = OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH.get(normalized)
