@@ -4075,7 +4075,7 @@ func (daemon *Daemon) sessionForEndpointPoolIndexWithOptions(ctx context.Context
 		return nil, key, fmt.Errorf("peer %q endpoint %q address is empty", peer.ID, endpoint.Name)
 	}
 	if daemon.preferReverseSessionForAddressedEndpoint(cfgEndpoint, endpoint.Encryption) {
-		if session, reverseKey, _ := daemon.reverseSessionForEndpoint(peer.ID, cfgEndpoint, endpoint.Encryption, poolIndex); session != nil {
+		if session, reverseKey, _ := daemon.reverseSessionForEndpointPoolIndex(peer.ID, cfgEndpoint, endpoint.Encryption, poolIndex); session != nil {
 			if options.RequireEpoch && !daemon.dataSessionEpochActive(epoch) {
 				return nil, key, errDataSessionEpochChanged
 			}
@@ -4193,6 +4193,18 @@ func (daemon *Daemon) reverseSessionForEndpoint(peer core.IXID, endpoint config.
 	daemon.dataMu.Lock()
 	defer daemon.dataMu.Unlock()
 	return daemon.reverseSessionForEndpointLocked(peer, endpoint, encryption, preferredPoolIndex)
+}
+
+func (daemon *Daemon) reverseSessionForEndpointPoolIndex(peer core.IXID, endpoint config.EndpointConfig, encryption string, poolIndex int) (transport.Session, dataSessionKey, *dataSessionRuntime) {
+	daemon.dataMu.Lock()
+	defer daemon.dataMu.Unlock()
+	for key, session := range daemon.dataSessions {
+		if session == nil || key.PoolIndex != poolIndex || !reverseDataSessionKeyMatches(key, peer, endpoint, encryption) {
+			continue
+		}
+		return session, key, daemon.dataSessionState[key]
+	}
+	return nil, dataSessionKey{}, nil
 }
 
 func (daemon *Daemon) reverseSessionForEndpointLocked(peer core.IXID, endpoint config.EndpointConfig, encryption string, preferredPoolIndex int) (transport.Session, dataSessionKey, *dataSessionRuntime) {

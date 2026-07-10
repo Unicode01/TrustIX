@@ -7058,6 +7058,78 @@ func TestAddressedExperimentalTCPReverseSessionSatisfiesSessionPoolIndex(t *test
 	t.Fatalf("missing pool indexes = %v, want [0 1 3]", missing)
 }
 
+func TestAddressedSecureKernelUDPWarmupDialsMissingReversePoolIndex(t *testing.T) {
+	peer := testPeer()
+	endpoint := peer.Endpoints[0]
+	endpoint.Name = core.EndpointID("b-kernel-udp")
+	endpoint.Transport = string(transport.ProtocolUDP)
+	endpoint.Address = "198.51.100.2:7142"
+	endpoint.Security.Encryption = securetransport.EncryptionSecure
+	peer.Endpoints[0] = endpoint
+
+	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionSecure)
+	reverseKey.PoolIndex = 1
+	reverse := &recordingSession{}
+	udpTransport := &recordingDialTransport{name: transport.ProtocolUDP}
+	registry := transport.NewRegistry()
+	if err := registry.Register(udpTransport); err != nil {
+		t.Fatalf("register UDP transport: %v", err)
+	}
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX:     config.IXConfig{ID: core.IXID("ix-a")},
+			Domain: config.DomainConfig{ID: peer.Domain},
+			Peers:  []config.PeerConfig{peer},
+			TransportPolicy: config.TransportPolicyConfig{
+				Encryption: securetransport.EncryptionSecure,
+				KernelTransport: config.KernelTransportPolicyConfig{
+					Mode: string(dataplane.KernelTransportModeRequireKernel),
+				},
+				SessionPool: config.SessionPoolPolicyConfig{Size: 4},
+			},
+		},
+		transports: registry,
+		dataSessions: map[dataSessionKey]transport.Session{
+			reverseKey: reverse,
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{
+			reverseKey: {key: reverseKey, session: reverse, peer: peer, endpoint: endpoint},
+		},
+	}
+	defer daemon.closeDataSessions()
+
+	transportEndpoint := transportEndpointFromConfig(endpoint)
+	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
+	epoch := daemon.currentDataSessionEpoch()
+	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), epoch, peer, endpoint, transportEndpoint, 1)
+	if err != nil {
+		t.Fatalf("reuse matching reverse pool index: %v", err)
+	}
+	if session != reverse || key != reverseKey {
+		t.Fatalf("matching reverse session = %p/%#v, want %p/%#v", session, key, reverse, reverseKey)
+	}
+	if udpTransport.dialCount() != 0 {
+		t.Fatalf("matching reverse session dial count = %d, want 0", udpTransport.dialCount())
+	}
+
+	session, key, err = daemon.sessionForEndpointPoolIndex(context.Background(), epoch, peer, endpoint, transportEndpoint, 2)
+	if err != nil {
+		t.Fatalf("dial missing reverse pool index: %v", err)
+	}
+	if session == reverse {
+		t.Fatal("missing reverse pool index reused a different reverse member")
+	}
+	if key.Address != endpoint.Address || key.PoolIndex != 2 {
+		t.Fatalf("dialed session key = %#v, want direct address pool index 2", key)
+	}
+	if udpTransport.dialCount() != 1 {
+		t.Fatalf("missing reverse pool index dial count = %d, want 1", udpTransport.dialCount())
+	}
+	if missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionSecure, 4); !reflect.DeepEqual(missing, []int{0, 3}) {
+		t.Fatalf("missing pool indexes after exact reuse and dial = %v, want [0 3]", missing)
+	}
+}
+
 func TestFullPlaintextExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t *testing.T) {
 	peer := testPeer()
 	endpoint := peer.Endpoints[0]
