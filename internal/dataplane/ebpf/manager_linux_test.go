@@ -4014,6 +4014,109 @@ func TestPreparedExperimentalTCPFlowPreservesPersistentLifetime(t *testing.T) {
 	}
 }
 
+func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T) {
+	manager := NewManager()
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Peers:        []dataplane.PeerMetadata{{ID: core.IXID("ix-b"), Trusted: true}},
+		Endpoints: []dataplane.EndpointMetadata{
+			{
+				ID:        core.EndpointID("ix-a-tixt"),
+				Peer:      core.IXID("ix-a"),
+				Transport: "experimental_tcp",
+				Listen:    "192.0.2.10:18001",
+				Enabled:   true,
+			},
+			{
+				ID:        core.EndpointID("ix-b-tixt"),
+				Peer:      core.IXID("ix-b"),
+				Transport: "experimental_tcp",
+				Address:   "198.51.100.20:18002",
+				Enabled:   true,
+			},
+		},
+	}
+	manager.expTCPRawReceiveFilter.Store(manager.experimentalTCPRawReceiveFilterLocked())
+
+	makeWire := func(destination string, port uint16, corruptTCPChecksum bool) []byte {
+		t.Helper()
+		frameWire, err := (experimentaltcp.Frame{
+			FlowID:   77,
+			Sequence: 1,
+			Payload:  []byte("payload"),
+		}).MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal experimental_tcp frame: %v", err)
+		}
+		wire, err := experimentaltcp.MarshalTCPShapedIPv4(experimentaltcp.TCPPacket{
+			SourceIP:        netip.MustParseAddr("198.51.100.20"),
+			DestinationIP:   netip.MustParseAddr(destination),
+			SourcePort:      43000,
+			DestinationPort: port,
+			Sequence:        100,
+			Acknowledgment:  1,
+			Payload:         frameWire,
+		})
+		if err != nil {
+			t.Fatalf("marshal experimental_tcp packet: %v", err)
+		}
+		if corruptTCPChecksum {
+			wire[36] ^= 0xff
+		}
+		return wire
+	}
+
+	if _, ok := manager.decodeExperimentalTCPRawPacket(
+		makeWire("192.0.2.11", 18001, true),
+		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+	); ok {
+		t.Fatal("raw decode accepted another instance using the same port on a different local address")
+	}
+	if _, ok := manager.decodeExperimentalTCPRawPacket(
+		makeWire("192.0.2.10", 18011, true),
+		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+	); ok {
+		t.Fatal("raw decode accepted another instance using a different local port")
+	}
+	if got := manager.dropReasons["CHECKSUM_ERROR"]; got != 0 {
+		t.Fatalf("disallowed instance packets recorded checksum drops = %d, want 0", got)
+	}
+
+	item, ok := manager.decodeExperimentalTCPRawPacket(
+		makeWire("192.0.2.10", 18001, false),
+		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+	)
+	if !ok || item.frame.FlowID != 77 {
+		t.Fatalf("allowed instance packet decode = (%#v, %t), want flow 77", item.frame, ok)
+	}
+	if _, ok := manager.decodeExperimentalTCPRawPacket(
+		makeWire("192.0.2.10", 18001, true),
+		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+	); ok {
+		t.Fatal("raw decode accepted an allowed packet with a bad TCP checksum")
+	}
+	if got := manager.dropReasons["CHECKSUM_ERROR"]; got != 1 {
+		t.Fatalf("allowed bad packet checksum drops = %d, want 1", got)
+	}
+}
+
+func TestExperimentalTCPRawReceiveFilterIncludesEstablishedLocalFlowPort(t *testing.T) {
+	manager := NewManager()
+	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+		ID:           7,
+		LocalAddress: "192.0.2.10:43000",
+		SourcePort:   43000,
+	}
+	filter := manager.experimentalTCPRawReceiveFilterLocked()
+
+	if !filter.allows(netip.MustParseAddr("192.0.2.10"), 43000) {
+		t.Fatal("established flow local receive tuple was not allowed")
+	}
+	if filter.allows(netip.MustParseAddr("192.0.2.11"), 43000) {
+		t.Fatal("established flow port was allowed on another local address")
+	}
+}
+
 func TestKernelTransportDNSTemplatesExpireAndRefresh(t *testing.T) {
 	oldTTL := kernelTransportDNSCacheTTL
 	kernelTransportDNSCacheTTL = time.Second

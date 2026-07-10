@@ -170,6 +170,7 @@ type Manager struct {
 	expTCPOuterTXAcknowledgments                map[uint64]uint32
 	expTCPTelemetry                             map[uint64]*dataplane.TransportPathTelemetry
 	expTCPAllowed                               map[uint16]struct{}
+	expTCPRawReceiveFilter                      atomic.Pointer[experimentalTCPRawReceiveFilter]
 	expTCPAllowedPortHoldUntil                  map[uint16]time.Time
 	expTCPSubs                                  map[chan []dataplane.ExperimentalTCPFrame]struct{}
 	expTCPFlowSubs                              map[uint64]map[chan []dataplane.ExperimentalTCPFrame]struct{}
@@ -7346,6 +7347,10 @@ func (manager *Manager) handleExperimentalTCPRawPacket(raw []byte, parseTCP func
 }
 
 func (manager *Manager) decodeExperimentalTCPRawPacket(raw []byte, parseTCP func([]byte) (experimentaltcp.TCPPacket, error)) (receivedExperimentalTCPFrame, bool) {
+	candidate, err := experimentaltcp.ParseTCPShapedIPv4NoCopySkipTCPChecksum(raw)
+	if err != nil || !manager.experimentalTCPRawPacketAllowed(candidate) {
+		return receivedExperimentalTCPFrame{}, false
+	}
 	packet, err := parseTCP(raw)
 	if err != nil {
 		if errors.Is(err, experimentaltcp.ErrChecksum) {
@@ -12420,7 +12425,95 @@ func (manager *Manager) syncExperimentalTCPPortsLocked() error {
 		manager.expTCPAllowed = make(map[uint16]struct{})
 	}
 	manager.expTCPAllowed = clonePortSet(desired)
+	manager.expTCPRawReceiveFilter.Store(manager.experimentalTCPRawReceiveFilterLocked())
 	return manager.syncKernelTransportPortsLocked()
+}
+
+const experimentalTCPPortBitmapWords = 1 << 10
+
+type experimentalTCPPortBitmap [experimentalTCPPortBitmapWords]uint64
+
+func (bitmap *experimentalTCPPortBitmap) add(port uint16) {
+	bitmap[uint32(port)>>6] |= uint64(1) << (uint32(port) & 63)
+}
+
+func (bitmap *experimentalTCPPortBitmap) contains(port uint16) bool {
+	return bitmap != nil && bitmap[uint32(port)>>6]&(uint64(1)<<(uint32(port)&63)) != 0
+}
+
+type experimentalTCPRawReceiveFilter struct {
+	anyAddress experimentalTCPPortBitmap
+	byAddress  map[netip.Addr]*experimentalTCPPortBitmap
+}
+
+func (filter *experimentalTCPRawReceiveFilter) add(address string, fallbackPort uint16) {
+	address = strings.TrimSpace(address)
+	port := fallbackPort
+	host := ""
+	if address != "" {
+		parsedHost, rawPort, err := net.SplitHostPort(address)
+		if err == nil {
+			host = strings.TrimSpace(parsedHost)
+			if parsedPort, parseErr := strconv.ParseUint(rawPort, 10, 16); parseErr == nil && parsedPort != 0 {
+				port = uint16(parsedPort)
+			}
+		}
+	}
+	if port == 0 {
+		return
+	}
+	addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil || addr.IsUnspecified() {
+		filter.anyAddress.add(port)
+		return
+	}
+	addr = addr.Unmap()
+	if !addr.Is4() {
+		return
+	}
+	if filter.byAddress == nil {
+		filter.byAddress = make(map[netip.Addr]*experimentalTCPPortBitmap)
+	}
+	bitmap := filter.byAddress[addr]
+	if bitmap == nil {
+		bitmap = new(experimentalTCPPortBitmap)
+		filter.byAddress[addr] = bitmap
+	}
+	bitmap.add(port)
+}
+
+func (filter *experimentalTCPRawReceiveFilter) allows(address netip.Addr, port uint16) bool {
+	if filter == nil || port == 0 {
+		return false
+	}
+	if filter.anyAddress.contains(port) {
+		return true
+	}
+	return filter.byAddress[address.Unmap()].contains(port)
+}
+
+func (manager *Manager) experimentalTCPRawReceiveFilterLocked() *experimentalTCPRawReceiveFilter {
+	filter := &experimentalTCPRawReceiveFilter{}
+	localIX := manager.snapshotLocalIXLocked()
+	for _, endpoint := range manager.snapshot.Endpoints {
+		if endpoint.Transport != "experimental_tcp" || !endpoint.Enabled || !snapshotEndpointIsLocal(localIX, endpoint) {
+			continue
+		}
+		address := strings.TrimSpace(endpoint.Listen)
+		if address == "" {
+			address = strings.TrimSpace(endpoint.Address)
+		}
+		filter.add(address, 0)
+	}
+	for _, flow := range manager.expTCPFlows {
+		filter.add(flow.LocalAddress, flow.SourcePort)
+	}
+	return filter
+}
+
+func (manager *Manager) experimentalTCPRawPacketAllowed(packet experimentaltcp.TCPPacket) bool {
+	filter := manager.expTCPRawReceiveFilter.Load()
+	return filter != nil && filter.allows(packet.DestinationIP, packet.DestinationPort)
 }
 
 func (manager *Manager) desiredExperimentalTCPPortsLocked() map[uint16]struct{} {

@@ -25,6 +25,18 @@ func TestEndpointSupportsPassiveProbeIncludesNativeTunnels(t *testing.T) {
 	}
 }
 
+func TestEndpointSupportsPassiveProbeExcludesHandshakeStreams(t *testing.T) {
+	for _, protocol := range []transport.Protocol{
+		transport.ProtocolTCP,
+		transport.ProtocolWebSocket,
+		transport.ProtocolHTTPConnect,
+	} {
+		if endpointSupportsPassiveProbe(protocol) {
+			t.Fatalf("%s must not use a bare connection as an endpoint probe", protocol)
+		}
+	}
+}
+
 func TestEndpointProbeIntervalTimeoutAndTTLDefaultsAndEnv(t *testing.T) {
 	t.Setenv("TRUSTIX_ENDPOINT_PROBE_INTERVAL", "")
 	t.Setenv("TRUSTIX_ENDPOINT_PROBE_TIMEOUT", "")
@@ -101,5 +113,41 @@ func TestProbePeerEndpointsUsesActiveSessionWithoutOpeningProbeConnection(t *tes
 	state, ok := daemon.endpointStateFor(peer.ID, endpoint)
 	if !ok || state.Health != rstate.EndpointUp {
 		t.Fatalf("endpoint state = %#v, want up", state)
+	}
+}
+
+func TestProbePeerEndpointsDoesNotOpenInactiveHandshakeStream(t *testing.T) {
+	endpoint := config.EndpointConfig{
+		Name:      core.EndpointID("tcp-b"),
+		Address:   "192.0.2.20:7000",
+		Transport: string(transport.ProtocolTCP),
+	}
+	peer := config.PeerConfig{
+		ID:        core.IXID("ix-b"),
+		Endpoints: []config.EndpointConfig{endpoint},
+	}
+	probe := &recordingProbeTransport{
+		name:   transport.ProtocolTCP,
+		result: transport.ProbeResult{Healthy: true, CheckedAt: time.Now()},
+	}
+	registry := transport.NewRegistry()
+	if err := registry.Register(probe); err != nil {
+		t.Fatalf("register probe transport: %v", err)
+	}
+	daemon := &Daemon{
+		desired:       config.Desired{Peers: []config.PeerConfig{peer}},
+		transports:    registry,
+		dataSessions:  make(map[dataSessionKey]transport.Session),
+		endpointState: make(map[endpointStateKey]rstate.EndpointState),
+	}
+
+	if daemon.probePeerEndpoints(context.Background()) {
+		t.Fatal("inactive handshake stream unexpectedly changed endpoint health")
+	}
+	if probe.peer.ID != "" {
+		t.Fatalf("inactive handshake stream opened a probe connection for peer %q", probe.peer.ID)
+	}
+	if _, ok := daemon.endpointStateFor(peer.ID, endpoint); ok {
+		t.Fatal("inactive handshake stream unexpectedly recorded endpoint state")
 	}
 }

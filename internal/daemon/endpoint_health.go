@@ -61,13 +61,13 @@ func (daemon *Daemon) probePeerEndpoints(ctx context.Context) bool {
 				continue
 			}
 			protocol := transport.Protocol(endpoint.Transport)
-			if !endpointSupportsPassiveProbe(protocol) {
-				continue
-			}
 			if daemon.endpointHasActiveDataSession(peer.ID, endpoint) {
 				if daemon.recordEndpointUp(peer.ID, endpoint, 0) {
 					changed = true
 				}
+				continue
+			}
+			if !endpointSupportsPassiveProbe(protocol) {
 				continue
 			}
 			tr, ok := daemon.transports.Get(protocol)
@@ -105,10 +105,7 @@ func (daemon *Daemon) probePeerEndpoints(ctx context.Context) bool {
 
 func endpointSupportsPassiveProbe(protocol transport.Protocol) bool {
 	switch protocol {
-	case transport.ProtocolTCP,
-		transport.ProtocolWebSocket,
-		transport.ProtocolHTTPConnect,
-		transport.ProtocolQUIC,
+	case transport.ProtocolQUIC,
 		transport.ProtocolExperimentalTCP,
 		transport.ProtocolUDP,
 		transport.ProtocolGRE,
