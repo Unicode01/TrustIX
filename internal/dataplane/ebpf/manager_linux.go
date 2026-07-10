@@ -231,6 +231,7 @@ type Manager struct {
 	kernelUDPRawRXFrames                        uint64
 	kernelUDPRawTXBatches                       uint64
 	kernelUDPRawRXBatches                       uint64
+	kernelUDPTXSequenceGuardUpdates             uint64
 	expTCPCryptoFragments                       map[experimentalTCPCryptoFragmentKey]*experimentalTCPCryptoFragmentAssembly
 	kernelUDPCryptoFragments                    map[kernelUDPCryptoFragmentKey]*kernelUDPCryptoFragmentAssembly
 	kernelCryptoProbe                           dataplane.KernelCryptoProbe
@@ -423,14 +424,15 @@ type experimentalTCPTXTelemetryBatch struct {
 }
 
 type kernelUDPTXSequenceBatch struct {
-	flowID       uint64
-	current      uint64
-	value        kernelUDPTXFlowValue
-	haveValue    bool
-	mapChecked   bool
-	mapDirty     bool
-	initialized  bool
-	reservedHigh uint64
+	flowID        uint64
+	current       uint64
+	value         kernelUDPTXFlowValue
+	haveValue     bool
+	mapChecked    bool
+	mapDirty      bool
+	initialized   bool
+	updateGuarded bool
+	reservedHigh  uint64
 }
 
 type pendingKernelUDPSealFrame struct {
@@ -11346,6 +11348,7 @@ func (manager *Manager) kernelUDPProviderStatsLocked() map[string]uint64 {
 	stats["tc_packet_policy_mtu"] = uint64(manager.snapshot.PacketPolicy.MTU)
 	stats["tc_packet_policy_drop_fragments"] = boolCounter(manager.snapshot.PacketPolicy.DropFragments)
 	stats["tc_packet_policy_tcp_mss_clamp"] = uint64(manager.snapshot.PacketPolicy.TCPMSSClamp)
+	stats["kernel_udp_tx_sequence_guard_updates"] = manager.kernelUDPTXSequenceGuardUpdates
 	tcOnlyControlFallback := manager.kernelUDPTCOnlyControlFallbackEnabledLocked()
 	stats["tc_only_control_fallback_enabled"] = boolCounter(tcOnlyControlFallback)
 	if kernelUDPRawFallbackEnabled() || tcOnlyControlFallback {
@@ -23103,11 +23106,21 @@ func (manager *Manager) reserveKernelUDPTXSequenceLocked(flowID uint64, requeste
 		}
 	}
 	sequence := requested
-	if sequence <= current {
-		if current == ^uint64(0) {
+	minimum := current
+	if haveFlowValue {
+		// Updating the whole map value can race with kernel-side atomic sequence
+		// reservations. Skip ahead so reservations made on the old value cannot
+		// overlap the userspace control frame or the replacement value.
+		minimum = kernelUDPTXDirectSequenceWithUpdateGuard(current)
+		manager.kernelUDPTXSequenceGuardUpdates++
+	} else if current != ^uint64(0) {
+		minimum = current + 1
+	}
+	if sequence < minimum || sequence <= current {
+		if minimum <= current {
 			return 0, fmt.Errorf("kernel_udp flow %d TX sequence exhausted", flowID)
 		}
-		sequence = current + 1
+		sequence = minimum
 	}
 	manager.kernelUDPTXDirectSequences[flowID] = sequence
 	if haveFlowValue && value.Sequence < sequence {
@@ -23139,11 +23152,19 @@ func (manager *Manager) reserveKernelUDPTXSequenceBatchLocked(pendingByFlow *map
 		}
 	}
 	sequence := requested
-	if sequence <= pending.current {
-		if pending.current == ^uint64(0) {
+	minimum := pending.current
+	if pending.haveValue && !pending.updateGuarded {
+		minimum = kernelUDPTXDirectSequenceWithUpdateGuard(pending.current)
+		pending.updateGuarded = true
+		manager.kernelUDPTXSequenceGuardUpdates++
+	} else if pending.current != ^uint64(0) {
+		minimum = pending.current + 1
+	}
+	if sequence < minimum || sequence <= pending.current {
+		if minimum <= pending.current {
 			return 0, fmt.Errorf("kernel_udp flow %d TX sequence exhausted", flowID)
 		}
-		sequence = pending.current + 1
+		sequence = minimum
 	}
 	pending.current = sequence
 	if manager.kernelUDPTXDirectSequences == nil {

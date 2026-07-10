@@ -11539,6 +11539,104 @@ func TestSyncKernelUDPTXDirectFlowValueGuardsSequenceWhenConfigChanges(t *testin
 	}
 }
 
+func TestReserveKernelUDPTXSequenceGuardsConcurrentKernelUpdates(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("kernel_udp TX flow map test requires Linux")
+	}
+	flowMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_tx_sequence_guard", Type: cebpf.Hash, KeySize: 8, ValueSize: kernelUDPTXFlowValueSize, MaxEntries: 16})
+	defer flowMap.Close()
+	manager := NewManager()
+	manager.kernelUDPTXFlowMap = flowMap
+	const flowID = uint64(7)
+	seed := kernelUDPTXFlowValue{Sequence: 100}
+	if err := flowMap.Update(flowID, seed, cebpf.UpdateAny); err != nil {
+		t.Fatalf("seed flow map: %v", err)
+	}
+
+	first, err := manager.reserveKernelUDPTXSequenceLocked(flowID, 1)
+	if err != nil {
+		t.Fatalf("reserve first userspace sequence: %v", err)
+	}
+	wantFirst := kernelUDPTXDirectSequenceWithUpdateGuard(seed.Sequence)
+	if first != wantFirst {
+		t.Fatalf("first sequence = %d, want guarded sequence %d", first, wantFirst)
+	}
+	if manager.kernelUDPTXSequenceGuardUpdates != 1 {
+		t.Fatalf("sequence guard updates after first reserve = %d, want 1", manager.kernelUDPTXSequenceGuardUpdates)
+	}
+	second, err := manager.reserveKernelUDPTXSequenceLocked(flowID, first+1)
+	if err != nil {
+		t.Fatalf("reserve second userspace sequence: %v", err)
+	}
+	wantSecond := kernelUDPTXDirectSequenceWithUpdateGuard(first)
+	if second != wantSecond {
+		t.Fatalf("second sequence = %d, want guarded sequence %d", second, wantSecond)
+	}
+	if manager.kernelUDPTXSequenceGuardUpdates != 2 {
+		t.Fatalf("sequence guard updates after second reserve = %d, want 2", manager.kernelUDPTXSequenceGuardUpdates)
+	}
+	var stored kernelUDPTXFlowValue
+	if err := flowMap.Lookup(flowID, &stored); err != nil {
+		t.Fatalf("lookup guarded flow: %v", err)
+	}
+	if stored.Sequence != wantSecond || manager.kernelUDPTXDirectSequences[flowID] != wantSecond {
+		t.Fatalf("stored/remembered sequence = %d/%d, want %d", stored.Sequence, manager.kernelUDPTXDirectSequences[flowID], wantSecond)
+	}
+}
+
+func TestReserveKernelUDPTXSequenceBatchGuardsMapOnce(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("kernel_udp TX flow map test requires Linux")
+	}
+	flowMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_tx_batch_guard", Type: cebpf.Hash, KeySize: 8, ValueSize: kernelUDPTXFlowValueSize, MaxEntries: 16})
+	defer flowMap.Close()
+	manager := NewManager()
+	manager.kernelUDPTXFlowMap = flowMap
+	const flowID = uint64(9)
+	seed := kernelUDPTXFlowValue{Sequence: 250}
+	if err := flowMap.Update(flowID, seed, cebpf.UpdateAny); err != nil {
+		t.Fatalf("seed flow map: %v", err)
+	}
+
+	var pendingByFlow map[uint64]*kernelUDPTXSequenceBatch
+	var singleFlowID uint64
+	var single *kernelUDPTXSequenceBatch
+	first, err := manager.reserveKernelUDPTXSequenceBatchLocked(&pendingByFlow, &singleFlowID, &single, flowID, 1, 8)
+	if err != nil {
+		t.Fatalf("reserve first batched userspace sequence: %v", err)
+	}
+	wantFirst := kernelUDPTXDirectSequenceWithUpdateGuard(seed.Sequence)
+	if first != wantFirst {
+		t.Fatalf("first batched sequence = %d, want guarded sequence %d", first, wantFirst)
+	}
+	second, err := manager.reserveKernelUDPTXSequenceBatchLocked(&pendingByFlow, &singleFlowID, &single, flowID, first+1, 8)
+	if err != nil {
+		t.Fatalf("reserve second batched userspace sequence: %v", err)
+	}
+	if second != first+1 {
+		t.Fatalf("second batched sequence = %d, want contiguous sequence %d", second, first+1)
+	}
+	if manager.kernelUDPTXSequenceGuardUpdates != 1 {
+		t.Fatalf("batched sequence guard updates = %d, want 1", manager.kernelUDPTXSequenceGuardUpdates)
+	}
+	var stored kernelUDPTXFlowValue
+	if err := flowMap.Lookup(flowID, &stored); err != nil {
+		t.Fatalf("lookup flow before batch flush: %v", err)
+	}
+	if stored.Sequence != seed.Sequence {
+		t.Fatalf("sequence before batch flush = %d, want %d", stored.Sequence, seed.Sequence)
+	}
+	if err := manager.flushKernelUDPTXSequenceBatchesLocked(pendingByFlow, single); err != nil {
+		t.Fatalf("flush batched userspace sequences: %v", err)
+	}
+	if err := flowMap.Lookup(flowID, &stored); err != nil {
+		t.Fatalf("lookup flow after batch flush: %v", err)
+	}
+	if stored.Sequence != second || manager.kernelUDPTXDirectSequences[flowID] != second {
+		t.Fatalf("stored/remembered batch sequence = %d/%d, want %d", stored.Sequence, manager.kernelUDPTXDirectSequences[flowID], second)
+	}
+}
+
 func TestKernelUDPTXDirectAppendCanBeDisabled(t *testing.T) {
 	statsMap := &cebpf.Map{}
 	routeMap := &cebpf.Map{}
