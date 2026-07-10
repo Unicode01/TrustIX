@@ -270,6 +270,10 @@ PLAINTEXT_KERNEL_UDP_HEARTBEAT_COMMITS_BY_PATH = {
         "20c977829b7665996d65b9567e09a4b491c9c4e4",
     },
 }
+PLAINTEXT_KERNEL_UDP_HEARTBEAT_IMPACTED_GATE_CLASSES = {
+    "full_kmod",
+    "tc_direct",
+}
 CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
     "full_kmod",
     "exp_tcp_full_kmod",
@@ -1062,10 +1066,10 @@ def current_runtime_path_change_irrelevant(
     if allowed_commits and gate_class != "secure_kudp":
         allowed_change_commits.update(allowed_commits)
     allowed_commits = PLAINTEXT_KERNEL_UDP_HEARTBEAT_COMMITS_BY_PATH.get(normalized)
-    plaintext_kernel_udp_direct = row.get("encryption") == "plaintext" and (
-        (gate_class == "full_kmod" and transport == "udp")
-        or (gate_class == "tc_direct" and transport in {"udp", "kernel_udp"})
-        or (gate_class == "userspace_tc" and transport in {"udp", "kernel_udp"})
+    plaintext_kernel_udp_direct = (
+        row.get("encryption") == "plaintext"
+        and gate_class in PLAINTEXT_KERNEL_UDP_HEARTBEAT_IMPACTED_GATE_CLASSES
+        and transport in {"udp", "kernel_udp"}
     )
     if allowed_commits and not plaintext_kernel_udp_direct:
         allowed_change_commits.update(allowed_commits)
