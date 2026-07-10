@@ -3379,6 +3379,9 @@ func TestExperimentalTCPDeliverDoesNotDropRemoteFrameWithSamePorts(t *testing.T)
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("release calls after subscriber release = %d, want 1", got)
 	}
+	if flow := manager.expTCPFlows[7]; !flow.ExpiresAt.IsZero() {
+		t.Fatalf("established experimental_tcp flow expires_at = %s after RX, want persistent zero value", flow.ExpiresAt)
+	}
 }
 
 func TestExperimentalTCPDeliverLearnsTupleForControlOnlyFlow(t *testing.T) {
@@ -3681,6 +3684,9 @@ func TestExperimentalTCPDeliverSingleFlowBatchToSubscriber(t *testing.T) {
 	if got := manager.expTCPReceived; got != 2 {
 		t.Fatalf("expTCPReceived = %d, want 2", got)
 	}
+	if flow := manager.expTCPFlows[7]; !flow.ExpiresAt.IsZero() {
+		t.Fatalf("established experimental_tcp flow expires_at = %s after batched RX, want persistent zero value", flow.ExpiresAt)
+	}
 }
 
 func TestKernelUDPDeliverDoesNotDowngradeKernelCryptoFlow(t *testing.T) {
@@ -3714,6 +3720,9 @@ func TestKernelUDPDeliverDoesNotDowngradeKernelCryptoFlow(t *testing.T) {
 	}
 	if got := manager.kernelUDPTelemetry[7].CryptoPlacement; got != dataplane.CryptoPlacementKernel {
 		t.Fatalf("telemetry crypto placement = %q, want kernel", got)
+	}
+	if !flow.ExpiresAt.IsZero() {
+		t.Fatalf("established kernel UDP flow expires_at = %s after RX, want persistent zero value", flow.ExpiresAt)
 	}
 }
 
@@ -4200,6 +4209,9 @@ func TestKernelUDPDeliverSingleFlowBatchToSubscribers(t *testing.T) {
 	telemetry := manager.kernelUDPTelemetry[7]
 	if telemetry == nil || telemetry.RXFrames != 2 || telemetry.RXBytes != 6 || telemetry.RXLastSequence != 11 || telemetry.RXExpectedSequence != 12 {
 		t.Fatalf("telemetry = %+v, want two sequential RX frames", telemetry)
+	}
+	if flow := manager.kernelUDPFlows[7]; !flow.ExpiresAt.IsZero() {
+		t.Fatalf("established kernel UDP flow expires_at = %s after batched RX, want persistent zero value", flow.ExpiresAt)
 	}
 }
 

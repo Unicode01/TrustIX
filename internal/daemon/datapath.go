@@ -101,6 +101,7 @@ type dataPathStats struct {
 	unsupportedTransport            atomic.Uint64
 	sessionHeartbeatSent            atomic.Uint64
 	sessionHeartbeatReceived        atomic.Uint64
+	sessionHeartbeatMisses          atomic.Uint64
 	sessionHeartbeatTimeouts        atomic.Uint64
 	sessionResetsSent               atomic.Uint64
 	sessionResetsReceived           atomic.Uint64
@@ -189,6 +190,7 @@ type dataPathCounters struct {
 	UnsupportedTransport            uint64 `json:"unsupported_transport"`
 	SessionHeartbeatSent            uint64 `json:"session_heartbeat_sent"`
 	SessionHeartbeatReceived        uint64 `json:"session_heartbeat_received"`
+	SessionHeartbeatMisses          uint64 `json:"session_heartbeat_misses"`
 	SessionHeartbeatTimeouts        uint64 `json:"session_heartbeat_timeouts"`
 	SessionResetsSent               uint64 `json:"session_resets_sent"`
 	SessionResetsReceived           uint64 `json:"session_resets_received"`
@@ -1724,6 +1726,29 @@ func (daemon *Daemon) acceptDataPathSessions(ctx context.Context, endpoint trans
 		default:
 		}
 	}
+}
+
+func (daemon *Daemon) refillSessionPoolAfterRuntimeDrop(runtime *dataSessionRuntime) {
+	if runtime == nil || !daemon.sessionPoolWarmupEnabled() || runtime.key.Address == reverseSessionAddress {
+		return
+	}
+	peer, ok := daemon.peerConfig(runtime.peer.ID)
+	if !ok {
+		return
+	}
+	endpoint, ok := endpointByName(peer.Endpoints, runtime.endpoint.Name)
+	if !ok || endpoint.Address == "" || transport.Protocol(endpoint.Transport) != runtime.key.Transport {
+		return
+	}
+	poolSize := daemon.sessionPoolSize()
+	if poolSize <= 1 {
+		return
+	}
+	dialEndpoint := transportEndpointFromConfig(endpoint)
+	dialEndpoint.Enabled = true
+	dialEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
+	epoch := daemon.currentDataSessionEpoch()
+	go daemon.warmSessionPool(context.Background(), epoch, peer, endpoint, dialEndpoint, poolSize, -1)
 }
 
 func (daemon *Daemon) registerInboundDataSession(ctx context.Context, listenerEndpoint transport.Endpoint, session transport.Session) (*dataSessionRuntime, error) {
@@ -5476,9 +5501,10 @@ func (daemon *Daemon) runDataSessionHeartbeat(ctx context.Context, runtime *data
 				missed = 0
 				continue
 			}
-			daemon.dataStats.sessionHeartbeatTimeouts.Add(1)
 			missed++
+			daemon.dataStats.sessionHeartbeatMisses.Add(1)
 			if missed >= dataSessionHeartbeatMaxMisses {
+				daemon.dataStats.sessionHeartbeatTimeouts.Add(1)
 				err := fmt.Errorf("session heartbeat timeout after %d consecutive misses of %s", missed, timeout)
 				daemon.dropRuntimeSession(runtime)
 				daemon.recordEndpointDownIfNoActiveSession(runtime.peer.ID, runtime.endpoint, err)
@@ -6288,6 +6314,7 @@ func (daemon *Daemon) dropRuntimeSession(runtime *dataSessionRuntime) {
 			_ = daemon.refreshLocalAdvertisement()
 		}
 	}
+	daemon.refillSessionPoolAfterRuntimeDrop(runtime)
 }
 
 func (daemon *Daemon) deleteDeviceAccessLeaseForSessionLocked(key dataSessionKey) bool {
@@ -6885,6 +6912,7 @@ func (stats *dataPathStats) snapshot() dataPathCounters {
 		UnsupportedTransport:            stats.unsupportedTransport.Load(),
 		SessionHeartbeatSent:            stats.sessionHeartbeatSent.Load(),
 		SessionHeartbeatReceived:        stats.sessionHeartbeatReceived.Load(),
+		SessionHeartbeatMisses:          stats.sessionHeartbeatMisses.Load(),
 		SessionHeartbeatTimeouts:        stats.sessionHeartbeatTimeouts.Load(),
 		SessionResetsSent:               stats.sessionResetsSent.Load(),
 		SessionResetsReceived:           stats.sessionResetsReceived.Load(),

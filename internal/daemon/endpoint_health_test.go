@@ -1,9 +1,13 @@
 package daemon
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"trustix.local/trustix/internal/config"
+	"trustix.local/trustix/internal/core"
+	rstate "trustix.local/trustix/internal/runtime"
 	"trustix.local/trustix/internal/transport"
 )
 
@@ -54,5 +58,48 @@ func TestEndpointHealthTTLDoesNotExpireBeforeThreeProbeIntervals(t *testing.T) {
 	t.Setenv("TRUSTIX_ENDPOINT_HEALTH_TTL", "10s")
 	if got := endpointHealthTTL(); got != 90*time.Second {
 		t.Fatalf("short endpoint health ttl = %s, want 90s", got)
+	}
+}
+
+func TestProbePeerEndpointsUsesActiveSessionWithoutOpeningProbeConnection(t *testing.T) {
+	endpoint := config.EndpointConfig{
+		Name:      core.EndpointID("tcp-b"),
+		Address:   "192.0.2.20:7000",
+		Transport: string(transport.ProtocolTCP),
+	}
+	peer := config.PeerConfig{
+		ID:        core.IXID("ix-b"),
+		Endpoints: []config.EndpointConfig{endpoint},
+	}
+	probe := &recordingProbeTransport{
+		name:   transport.ProtocolTCP,
+		result: transport.ProbeResult{Healthy: false, Error: "probe should not run"},
+	}
+	registry := transport.NewRegistry()
+	if err := registry.Register(probe); err != nil {
+		t.Fatalf("register probe transport: %v", err)
+	}
+	key := dataSessionKey{
+		Peer:      peer.ID,
+		Endpoint:  endpoint.Name,
+		Transport: transport.ProtocolTCP,
+		Address:   endpoint.Address,
+	}
+	daemon := &Daemon{
+		desired:       config.Desired{Peers: []config.PeerConfig{peer}},
+		transports:    registry,
+		dataSessions:  map[dataSessionKey]transport.Session{key: &recordingSession{}},
+		endpointState: make(map[endpointStateKey]rstate.EndpointState),
+	}
+
+	if !daemon.probePeerEndpoints(context.Background()) {
+		t.Fatal("active session did not establish endpoint health")
+	}
+	if probe.peer.ID != "" {
+		t.Fatalf("transport probe ran for active session: peer=%q", probe.peer.ID)
+	}
+	state, ok := daemon.endpointStateFor(peer.ID, endpoint)
+	if !ok || state.Health != rstate.EndpointUp {
+		t.Fatalf("endpoint state = %#v, want up", state)
 	}
 }

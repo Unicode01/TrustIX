@@ -39,9 +39,6 @@ type endpointByteCounter struct {
 }
 
 func (daemon *Daemon) endpointHealthPoller(ctx context.Context) {
-	if daemon.probePeerEndpoints(ctx) {
-		_ = daemon.applyRuntimeDataplaneSnapshot(ctx)
-	}
 	ticker := time.NewTicker(endpointProbeInterval())
 	defer ticker.Stop()
 	for {
@@ -65,6 +62,12 @@ func (daemon *Daemon) probePeerEndpoints(ctx context.Context) bool {
 			}
 			protocol := transport.Protocol(endpoint.Transport)
 			if !endpointSupportsPassiveProbe(protocol) {
+				continue
+			}
+			if daemon.endpointHasActiveDataSession(peer.ID, endpoint) {
+				if daemon.recordEndpointUp(peer.ID, endpoint, 0) {
+					changed = true
+				}
 				continue
 			}
 			tr, ok := daemon.transports.Get(protocol)

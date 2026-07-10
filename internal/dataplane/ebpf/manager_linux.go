@@ -8200,7 +8200,7 @@ func (manager *Manager) deliverExperimentalTCPFrames(frames []receivedExperiment
 					txDirectSyncNeeded = true
 				}
 				if flowChanged {
-					flow = refreshExperimentalTCPFlowLifetime(flow, now)
+					flow = refreshExperimentalTCPPreparedFlowLifetime(flow, now)
 					manager.setExperimentalTCPFlowLocked(frame.FlowID, flow, now)
 					manager.invalidateExperimentalTCPTXTemplateLocked(frame.FlowID)
 					manager.updateExperimentalTCPTelemetryIdentityLocked(frame.FlowID, flow)
@@ -8213,7 +8213,7 @@ func (manager *Manager) deliverExperimentalTCPFrames(frames []receivedExperiment
 					}
 					txDirectSyncNeeded = true
 				} else {
-					flow = refreshExperimentalTCPFlowLifetime(flow, now)
+					flow = refreshExperimentalTCPPreparedFlowLifetime(flow, now)
 					manager.expTCPFlows[frame.FlowID] = flow
 				}
 			}
@@ -8337,7 +8337,7 @@ func (manager *Manager) prepareExperimentalTCPDeliveredSingleFlowLocked(frames [
 		}
 		manager.recordExperimentalTCPOuterAcknowledgmentLocked(frame.FlowID, packet)
 	}
-	flow = refreshExperimentalTCPFlowLifetime(flow, now)
+	flow = refreshExperimentalTCPPreparedFlowLifetime(flow, now)
 	manager.expTCPFlows[firstFrame.FlowID] = flow
 	holder, delivered := takeDeliveredExperimentalTCPFrameBatch(len(frames))
 	for _, item := range frames {
@@ -9422,7 +9422,7 @@ func (manager *Manager) deliverKernelUDPFrames(frames []receivedKernelUDPFrame) 
 					flowChanged = true
 					txDirectSyncNeeded = true
 				}
-				flow = refreshKernelUDPFlowLifetime(flow, now)
+				flow = refreshKernelUDPPreparedFlowLifetime(flow, now)
 				if frame.Epoch != 0 {
 					flow.Epoch = frame.Epoch
 				}
@@ -9497,7 +9497,7 @@ func (manager *Manager) deliverKernelUDPFrames(frames []receivedKernelUDPFrame) 
 					flow.CryptoPlacement = frame.CryptoPlacement
 					flowChanged = true
 				}
-				flow = refreshKernelUDPFlowLifetime(flow, now)
+				flow = refreshKernelUDPPreparedFlowLifetime(flow, now)
 				manager.kernelUDPFlows[frame.FlowID] = flow
 				if flowChanged {
 					manager.invalidateKernelUDPTXTemplateLocked(frame.FlowID)
@@ -9672,7 +9672,7 @@ func (manager *Manager) prepareKernelUDPDeliveredSingleFlowLocked(frames []recei
 			bytes += uint64(len(frame.Payload))
 		}
 	}
-	flow = refreshKernelUDPFlowLifetime(flow, now)
+	flow = refreshKernelUDPPreparedFlowLifetime(flow, now)
 	if epoch != 0 {
 		flow.Epoch = epoch
 	}
