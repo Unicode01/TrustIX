@@ -123,14 +123,27 @@ trustix_prereqs_download_file() {
   local out="$1"
   shift
   local url
+  local connect_timeout="${TRUSTIX_BOOTSTRAP_CONNECT_TIMEOUT:-8}"
+  local download_timeout="${TRUSTIX_BOOTSTRAP_DOWNLOAD_TIMEOUT:-600}"
+  local stall_timeout="${TRUSTIX_BOOTSTRAP_STALL_TIMEOUT:-20}"
+  local min_speed="${TRUSTIX_BOOTSTRAP_MIN_DOWNLOAD_SPEED:-1024}"
+  case "$connect_timeout" in *[!0-9]*|"") connect_timeout=8 ;; esac
+  case "$download_timeout" in *[!0-9]*|"") download_timeout=600 ;; esac
+  case "$stall_timeout" in *[!0-9]*|"") stall_timeout=20 ;; esac
+  case "$min_speed" in *[!0-9]*|"") min_speed=1024 ;; esac
   for url in "$@"; do
     [[ -n "$url" ]] || continue
     rm -f "$out"
     trustix_prereqs_log "download ${url}"
-    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 8 "$url" -o "$out"; then
+    if command -v curl >/dev/null 2>&1 && curl -fsSL \
+      --connect-timeout "$connect_timeout" \
+      --max-time "$download_timeout" \
+      --speed-time "$stall_timeout" \
+      --speed-limit "$min_speed" \
+      "$url" -o "$out"; then
       return 0
     fi
-    if command -v wget >/dev/null 2>&1 && wget -T 12 -qO "$out" "$url"; then
+    if command -v wget >/dev/null 2>&1 && wget -T "$stall_timeout" -qO "$out" "$url"; then
       return 0
     fi
   done
