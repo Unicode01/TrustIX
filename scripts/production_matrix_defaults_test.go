@@ -3721,9 +3721,10 @@ module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commi
 parent = "parent-does-not-matter-for-probed-history"
 path = "internal/daemon/datapath.go"
 cases = [
-    ({"gate_family": "full_kmod", "transport": "udp", "encryption": "plaintext"}, False),
-    ({"gate_family": "owdeb_full_kmod", "transport": "udp", "encryption": "plaintext"}, False),
+    ({"gate_family": "full_kmod", "transport": "udp", "encryption": "plaintext"}, True),
+    ({"gate_family": "owdeb_full_kmod", "transport": "udp", "encryption": "plaintext"}, True),
     ({"gate_family": "tc_direct", "transport": "kernel_udp", "encryption": "plaintext"}, False),
+    ({"gate_family": "userspace_tc", "transport": "udp", "encryption": "plaintext"}, False),
     ({"gate_family": "userspace", "transport": "udp", "encryption": "plaintext"}, True),
     ({"gate_family": "exp_tcp_full_kmod", "transport": "experimental_tcp", "encryption": "plaintext"}, True),
     ({"gate_family": "secure_kudp", "transport": "kernel_udp", "encryption": "secure"}, True),

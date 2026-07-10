@@ -262,17 +262,17 @@ KERNEL_UDP_SESSION_LIFECYCLE_COMMITS_BY_PATH = {
 }
 PLAINTEXT_KERNEL_UDP_HEARTBEAT_COMMITS_BY_PATH = {
     # 20c9778 suppresses an unsupported userspace heartbeat only for
-    # plaintext UDP runtimes whose data plane is direct-only. Those runtimes
-    # are exercised by UDP full-kmod and TC-direct gates. Userspace sessions,
-    # secure kernel UDP, and experimental TCP paths retain their prior
-    # heartbeat behavior and packet path.
+    # plaintext UDP runtimes whose data plane is direct-only and whose receive
+    # loop remains active. Full-kmod UDP already disables that receive loop,
+    # so its prior evidence is unaffected. Userspace sessions, secure kernel
+    # UDP, and experimental TCP paths retain their prior heartbeat behavior.
     "internal/daemon/datapath.go": {
         "20c977829b7665996d65b9567e09a4b491c9c4e4",
     },
 }
 PLAINTEXT_KERNEL_UDP_HEARTBEAT_IMPACTED_GATE_CLASSES = {
-    "full_kmod",
     "tc_direct",
+    "userspace_tc",
 }
 CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
     "full_kmod",
@@ -726,6 +726,7 @@ def validate_current_requirement_identity(
     require_build_ancestor: bool,
     require_current_gate_tools: bool,
     require_current_runtime_tree: bool,
+    report_refresh_gaps: bool,
 ) -> None:
     for row in rows:
         errors = current_requirement_identity_errors(row)
@@ -733,7 +734,10 @@ def validate_current_requirement_identity(
             errors.extend(artifact_reference_errors(row["artifact"]))
         if require_build_ancestor:
             errors.extend(build_commit_ancestor_errors(row["build_commit"]))
-        if require_current_runtime_tree:
+        # Refresh gaps are reported per row below. Loading the current
+        # requirement table must not abort before that report can identify
+        # exactly which production families need new evidence.
+        if require_current_runtime_tree and not report_refresh_gaps:
             errors.extend(current_runtime_tree_errors(row))
         if require_current_gate_tools:
             errors.extend(current_gate_tool_identity_errors(row))
@@ -1153,6 +1157,7 @@ def read_current_requirements(args: argparse.Namespace, defaults_path: Path) -> 
         require_build_ancestor=args.require_current_build_ancestor,
         require_current_gate_tools=args.require_current_gate_tools,
         require_current_runtime_tree=args.require_current_runtime_tree,
+        report_refresh_gaps=args.report_refresh_gaps,
     )
     requirements: dict[str, dict[str, str]] = {}
     for row in rows:
