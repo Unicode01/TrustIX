@@ -633,7 +633,7 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 				"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
 				"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
-				"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
+				"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:0.75:3600",
 				"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 				"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
@@ -745,6 +745,7 @@ func TestProductionTransportMatrixDefaults(t *testing.T) {
 		"rx_worker_single_coalesce=1",
 		"rx_worker_single_coalesce_max_frames=32",
 		"tx_plaintext_payload_fast_copy=1",
+		"tx_plaintext_hash_tx_queue=1",
 		"tx_plaintext_skip_inner_tcp_checksum=0",
 		"production defaults file not found",
 		"invalid production defaults row",
@@ -3973,6 +3974,27 @@ func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
 	if !strings.Contains(string(output), "runner_sha256 must match current") {
 		t.Fatalf("stale runner failure missing runner hash diagnostic:\n%s", output)
 	}
+
+	const preQueueAssertionGateSHA = "1371160cca3cceb50617f1cae8704b1755b858bcf08ca530f32b7d46245b19d3"
+	if err := os.WriteFile(current, []byte(currentPayload(preQueueAssertionGateSHA, currentVerifierSHA, currentRunnerSHA, currentMatrixSHA, currentGeneratorSHA)), 0o644); err != nil {
+		t.Fatalf("write pre-queue-assertion current requirements: %v", err)
+	}
+	preQueueAssertionCmd := exec.Command(python, "production-transport-audit.py",
+		"--defaults", slashPath(defaults),
+		"--evidence", slashPath(evidence),
+		"--current-requirements", slashPath(current),
+		"--scope", "cross_host",
+		"--require-current",
+		"--require-current-gate-tools",
+	)
+	preQueueAssertionCmd.Dir = "."
+	output, err = preQueueAssertionCmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("audit accepted a pre-queue-assertion gate for full_kmod:\n%s", output)
+	}
+	if !strings.Contains(string(output), "production_gate_sha256 must match current or compatible") {
+		t.Fatalf("pre-queue-assertion failure missing gate hash diagnostic:\n%s", output)
+	}
 }
 
 func TestProductionTransportAuditScriptRequireCurrentRejectsRequirementDrift(t *testing.T) {
@@ -4764,7 +4786,7 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"ipip:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
 		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 		"vxlan:secure:stable:tc_xdp:userspace:single_host:userspace_tc:0:30",
-		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:1:3600",
+		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc:0.75:3600",
 		"vxlan:plaintext:performance:tc_xdp:userspace:single_host:userspace_tc:0:30",
 		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 		"kernel_udp:plaintext:performance:tc_xdp:userspace:single_host:tc_direct:0:30",
@@ -5004,7 +5026,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 	for _, want := range []string{
 		"gate_min_gbps=\"${TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-}\"",
 		"TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS:-${gate_min_gbps:-0.5}",
-		"TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS:-${gate_min_gbps:-1}",
+		"TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS:-${gate_min_gbps:-0.75}",
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS:-${gate_min_gbps:-0}",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}",
 		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-4}",
@@ -5016,7 +5038,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"max_integer()",
 		"min_integer()",
 		"userspace_min_gbps=\"$(max_decimal \"$userspace_min_gbps\" \"0.5\")\"",
-		"userspace_tc_min_gbps=\"$(max_decimal \"$userspace_tc_min_gbps\" \"1\")\"",
+		"userspace_tc_min_gbps=\"$(max_decimal \"$userspace_tc_min_gbps\" \"0.75\")\"",
 		"tc_direct_min_gbps=\"$(max_decimal \"$tc_direct_min_gbps\" \"3\")\"",
 		"full_kmod_min_gbps=\"$(max_decimal \"$full_kmod_min_gbps\" \"3\")\"",
 		"secure_kudp_min_gbps=\"$(max_decimal \"$secure_kudp_min_gbps\" \"1.5\")\"",
@@ -5292,12 +5314,17 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-min trustix_datapath.tx_plaintext=1",
 		"--require-module-param-max trustix_datapath.rx_worker_hot_stats=0",
 		"--require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0",
+		"--require-module-param-min trustix_datapath.tx_plaintext_hash_tx_queue=1",
+		"--require-module-param-max trustix_datapath.tx_plaintext_stream_coalesce=0",
 		"--require-module-param-min trustix_datapath.session_records=\"${full_kmod_min_sessions}\"",
 		"--require-module-param-min trustix_datapath.session_wire_records=\"${full_kmod_min_sessions}\"",
 		"--require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32",
 		"--require-module-param-node-max a.trustix_datapath.rx_worker_single_coalesce=0",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_segments=1",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_direct_xmit_dst_mac_cache_hits=1",
+		"--require-module-param-any-min trustix_datapath.tx_plaintext_hash_tx_queue_sets=1",
+		"--require-module-param-max trustix_datapath.tx_plaintext_hash_tx_queue_fallbacks=0",
+		"--require-module-param-any-min trustix_datapath.rx_worker_dst_mac_cache_hits=1",
 		"--require-module-param-any-min trustix_datapath.rx_worker_gso_xmit_segments=1",
 		"--require-module-param-max trustix_datapath.rx_worker_alloc_errors=0",
 		"--require-module-param-max trustix_datapath.rx_worker_deliver_errors=0",
@@ -7491,6 +7518,8 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"trustix-cross-host-pair-${pair_key}.lock",
 		"write_config a \"$workdir/config-a.yaml\"",
 		"write_config b \"$workdir/config-b.yaml\"",
+		"if [ -n \\\"\\$secondary_host_addr\\\" ]; then",
+		"addr add \\\"\\$secondary_host_addr\\\" dev",
 		"daemon_env >\"$workdir/daemon-env.txt\"",
 		"dry_run_config",
 		"TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be >= 1",

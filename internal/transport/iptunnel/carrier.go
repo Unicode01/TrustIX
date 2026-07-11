@@ -23,6 +23,7 @@ import (
 const (
 	carrierHeaderLen                    = 16
 	carrierFragmentHeaderLen            = 8
+	carrierIPv4UDPHeaderLen             = 20 + 8
 	carrierVersion                 byte = 1
 	carrierTypeData                byte = 1
 	carrierTypeFragment            byte = 2
@@ -144,6 +145,7 @@ func carrierReadBufferSize(size int) int {
 }
 
 type tunnelConfig struct {
+	Protocol       transport.Protocol
 	LocalUnderlay  netip.Addr
 	RemoteUnderlay netip.Addr
 	UnderlayIf     string
@@ -796,36 +798,66 @@ func decodeCarrierFrameView(wire []byte) (carrierReceivedPacket, error) {
 	}
 }
 
-func carrierMaxFragmentPayloadForMTU(mtu int) int {
-	if carrierKernelFragmentEnabled() {
+func carrierUDPPayloadSizeForMTU(mtu int) int {
+	if mtu <= carrierIPv4UDPHeaderLen {
+		return 0
+	}
+	return min(mtu-carrierIPv4UDPHeaderLen, carrierMaxUDPPayload)
+}
+
+func carrierMaxFragmentPayloadForMTUWithMode(mtu int, kernelFragment bool) int {
+	if kernelFragment {
 		return carrierMaxUDPPayload - carrierHeaderLen - carrierFragmentHeaderLen
 	}
-	maxPayload := mtu - carrierHeaderLen - carrierFragmentHeaderLen
+	maxPayload := carrierUDPPayloadSizeForMTU(mtu) - carrierHeaderLen - carrierFragmentHeaderLen
 	if wireMax := carrierMaxUnfragmentedPacket - carrierFragmentHeaderLen; maxPayload > wireMax {
 		maxPayload = wireMax
 	}
 	return maxPayload
 }
 
-func carrierPacketFitsUnfragmented(packetLen int, mtu int) bool {
-	if carrierKernelFragmentEnabled() {
+func carrierMaxFragmentPayloadForMTU(mtu int) int {
+	return carrierMaxFragmentPayloadForMTUWithMode(mtu, carrierKernelFragmentEnabled())
+}
+
+func carrierPacketFitsUnfragmentedWithMode(packetLen int, mtu int, kernelFragment bool) bool {
+	if kernelFragment {
 		return packetLen <= carrierMaxUnfragmentedPacket
 	}
-	return packetLen <= carrierMaxUnfragmentedPacket && packetLen+carrierHeaderLen <= mtu
+	return packetLen <= carrierMaxUnfragmentedPacket &&
+		packetLen+carrierHeaderLen <= carrierUDPPayloadSizeForMTU(mtu)
+}
+
+func carrierPacketFitsUnfragmented(packetLen int, mtu int) bool {
+	return carrierPacketFitsUnfragmentedWithMode(packetLen, mtu, carrierKernelFragmentEnabled())
+}
+
+func carrierReadWireSizeForMTUWithMode(mtu int, kernelFragment bool) int {
+	if kernelFragment {
+		return carrierMaxUDPPayload
+	}
+	return carrierUDPPayloadSizeForMTU(mtu)
 }
 
 func carrierReadWireSizeForMTU(mtu int) int {
-	if carrierKernelFragmentEnabled() {
-		return carrierMaxUDPPayload
+	return carrierReadWireSizeForMTUWithMode(mtu, carrierKernelFragmentEnabled())
+}
+
+func carrierReceiveWireSize() int {
+	// Always accept legacy/kernel-fragmented carrier datagrams during rolling
+	// upgrades, even when this side uses MTU-bounded application fragments.
+	return carrierMaxUDPPayload
+}
+
+func carrierMaxUnfragmentedPayloadForMTUWithMode(mtu int, kernelFragment bool) int {
+	if kernelFragment {
+		return carrierMaxUnfragmentedPacket
 	}
-	return mtu
+	return max(0, carrierUDPPayloadSizeForMTU(mtu)-carrierHeaderLen)
 }
 
 func carrierMaxUnfragmentedPayloadForMTU(mtu int) int {
-	if carrierKernelFragmentEnabled() {
-		return carrierMaxUnfragmentedPacket
-	}
-	return max(0, mtu-carrierHeaderLen)
+	return carrierMaxUnfragmentedPayloadForMTUWithMode(mtu, carrierKernelFragmentEnabled())
 }
 
 func boolUint64(value bool) uint64 {
@@ -835,22 +867,26 @@ func boolUint64(value bool) uint64 {
 	return 0
 }
 
-func carrierPacketFragmentCount(packetLen int, mtu int) (int, error) {
+func carrierPacketFragmentCountWithMode(packetLen int, mtu int, kernelFragment bool) (int, error) {
 	if packetLen <= 0 {
 		return 0, nil
 	}
 	if packetLen > carrierMaxPacket {
 		return 0, fmt.Errorf("tunnel carrier packet size %d exceeds max %d", packetLen, carrierMaxPacket)
 	}
-	maxPayload := carrierMaxFragmentPayloadForMTU(mtu)
+	maxPayload := carrierMaxFragmentPayloadForMTUWithMode(mtu, kernelFragment)
 	if maxPayload <= 0 {
 		return 0, fmt.Errorf("tunnel carrier mtu %d cannot carry fragment header", mtu)
 	}
 	return (packetLen + maxPayload - 1) / maxPayload, nil
 }
 
-func buildCarrierFragmentPackets(packetScratch []carrierBatchPacket, headerArena []byte, pkt []byte, sequence uint64, mtu int) ([]carrierBatchPacket, []byte, error) {
-	fragments, err := carrierPacketFragmentCount(len(pkt), mtu)
+func carrierPacketFragmentCount(packetLen int, mtu int) (int, error) {
+	return carrierPacketFragmentCountWithMode(packetLen, mtu, carrierKernelFragmentEnabled())
+}
+
+func buildCarrierFragmentPacketsWithMode(packetScratch []carrierBatchPacket, headerArena []byte, pkt []byte, sequence uint64, mtu int, kernelFragment bool) ([]carrierBatchPacket, []byte, error) {
+	fragments, err := carrierPacketFragmentCountWithMode(len(pkt), mtu, kernelFragment)
 	if err != nil {
 		return nil, headerArena, err
 	}
@@ -870,7 +906,7 @@ func buildCarrierFragmentPackets(packetScratch []carrierBatchPacket, headerArena
 		headerArena = headerArena[:headerBytes]
 		clear(headerArena)
 	}
-	maxPayload := carrierMaxFragmentPayloadForMTU(mtu)
+	maxPayload := carrierMaxFragmentPayloadForMTUWithMode(mtu, kernelFragment)
 	for i, offset := 0, 0; offset < len(pkt); i, offset = i+1, offset+maxPayload {
 		end := offset + maxPayload
 		if end > len(pkt) {
@@ -884,6 +920,10 @@ func buildCarrierFragmentPackets(packetScratch []carrierBatchPacket, headerArena
 		packetScratch[i] = carrierBatchPacket{header: header, payload: pkt[offset:end]}
 	}
 	return packetScratch, headerArena, nil
+}
+
+func buildCarrierFragmentPackets(packetScratch []carrierBatchPacket, headerArena []byte, pkt []byte, sequence uint64, mtu int) ([]carrierBatchPacket, []byte, error) {
+	return buildCarrierFragmentPacketsWithMode(packetScratch, headerArena, pkt, sequence, mtu, carrierKernelFragmentEnabled())
 }
 
 func (reassembler *carrierReassembler) accept(packet carrierReceivedPacket) (carrierReceivedPacket, bool, bool) {
@@ -1055,12 +1095,13 @@ func dialUDPOnCarrier(ctx context.Context, local netip.Addr, remote netip.Addr, 
 
 func (session *carrier) SendPacket(pkt []byte) error {
 	mtu := effectiveTunnelMTU(session.cfg.MTU)
+	kernelFragment := carrierKernelFragmentEnabledForConfig(session.cfg)
 	if len(pkt) > carrierMaxPacket {
 		session.mtuDrops.Add(1)
 		return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(pkt), carrierMaxPacket)
 	}
 	seq := session.sendSeq.Add(1)
-	if !carrierPacketFitsUnfragmented(len(pkt), mtu) {
+	if !carrierPacketFitsUnfragmentedWithMode(len(pkt), mtu, kernelFragment) {
 		return session.sendFragmentedPacket(pkt, seq, mtu)
 	}
 	needed := carrierHeaderLen + len(pkt)
@@ -1082,12 +1123,13 @@ func (session *carrier) SendPacket(pkt []byte) error {
 }
 
 func (session *carrier) sendFragmentedPacket(pkt []byte, sequence uint64, mtu int) error {
-	fragments, err := carrierPacketFragmentCount(len(pkt), mtu)
+	kernelFragment := carrierKernelFragmentEnabledForConfig(session.cfg)
+	fragments, err := carrierPacketFragmentCountWithMode(len(pkt), mtu, kernelFragment)
 	if err != nil {
 		session.mtuDrops.Add(1)
 		return err
 	}
-	batch, headers, err := buildCarrierFragmentPackets(session.sendBatchPacketScratch, session.sendBatchArena, pkt, sequence, mtu)
+	batch, headers, err := buildCarrierFragmentPacketsWithMode(session.sendBatchPacketScratch, session.sendBatchArena, pkt, sequence, mtu, kernelFragment)
 	session.sendBatchPacketScratch = batch
 	session.sendBatchArena = headers
 	if err != nil {
@@ -1117,13 +1159,14 @@ func (session *carrier) SendPackets(pkts [][]byte) error {
 		return session.SendPacket(pkts[0])
 	}
 	mtu := effectiveTunnelMTU(session.cfg.MTU)
+	kernelFragment := carrierKernelFragmentEnabledForConfig(session.cfg)
 	for _, pkt := range pkts {
 		if len(pkt) > carrierMaxPacket {
 			session.mtuDrops.Add(1)
 			return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(pkt), carrierMaxPacket)
 		}
 	}
-	if carrierPacketBatchNeedsFragmentation(pkts, mtu) {
+	if carrierPacketBatchNeedsFragmentationWithMode(pkts, mtu, kernelFragment) {
 		for _, pkt := range pkts {
 			if err := session.SendPacket(pkt); err != nil {
 				return err
@@ -1168,13 +1211,17 @@ func (session *carrier) SendPackets(pkts [][]byte) error {
 	return nil
 }
 
-func carrierPacketBatchNeedsFragmentation(pkts [][]byte, mtu int) bool {
+func carrierPacketBatchNeedsFragmentationWithMode(pkts [][]byte, mtu int, kernelFragment bool) bool {
 	for _, pkt := range pkts {
-		if !carrierPacketFitsUnfragmented(len(pkt), mtu) {
+		if !carrierPacketFitsUnfragmentedWithMode(len(pkt), mtu, kernelFragment) {
 			return true
 		}
 	}
 	return false
+}
+
+func carrierPacketBatchNeedsFragmentation(pkts [][]byte, mtu int) bool {
+	return carrierPacketBatchNeedsFragmentationWithMode(pkts, mtu, carrierKernelFragmentEnabled())
 }
 
 func (session *carrier) sendPacketsContiguous(pkts [][]byte) error {
@@ -1255,7 +1302,7 @@ func (session *carrier) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 	session.recvMu.Lock()
 	defer session.recvMu.Unlock()
 	for {
-		received, result, release, err := recvCarrierBatch(session.conn, max, carrierReadWireSizeForMTU(effectiveTunnelMTU(session.cfg.MTU)))
+		received, result, release, err := recvCarrierBatch(session.conn, max, carrierReceiveWireSize())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1327,7 +1374,7 @@ func completedWireLen(packets []carrierReceivedPacket) uint64 {
 }
 
 func (session *carrier) readCarrierPacket() ([]byte, int, []byte, error) {
-	buf := takeCarrierReadBuffer(carrierReadWireSizeForMTU(effectiveTunnelMTU(session.cfg.MTU)))
+	buf := takeCarrierReadBuffer(carrierReceiveWireSize())
 	n, err := session.conn.Read(buf)
 	if err != nil {
 		putCarrierReadBuffer(buf)
@@ -1367,6 +1414,7 @@ func (session *carrier) Close() error {
 
 func (session *carrier) Stats() transport.TransportStats {
 	mtu := effectiveTunnelMTU(session.cfg.MTU)
+	kernelFragment := carrierKernelFragmentEnabledForConfig(session.cfg)
 	return transport.TransportStats{
 		BytesSent:           session.bytesSent.Load(),
 		BytesReceived:       session.bytesReceived.Load(),
@@ -1379,10 +1427,10 @@ func (session *carrier) Stats() transport.TransportStats {
 		Extra: map[string]uint64{
 			"iptunnel_carrier_port":             uint64(session.cfg.CarrierPort),
 			"iptunnel_mtu":                      uint64(mtu),
-			"iptunnel_kernel_fragment":          boolUint64(carrierKernelFragmentEnabled()),
-			"iptunnel_udp_payload_size":         uint64(carrierReadWireSizeForMTU(mtu)),
-			"iptunnel_wire_max_packet_size":     uint64(carrierMaxUnfragmentedPayloadForMTU(mtu)),
-			"iptunnel_fragment_payload_size":    uint64(max(0, carrierMaxFragmentPayloadForMTU(mtu))),
+			"iptunnel_kernel_fragment":          boolUint64(kernelFragment),
+			"iptunnel_udp_payload_size":         uint64(carrierReadWireSizeForMTUWithMode(mtu, kernelFragment)),
+			"iptunnel_wire_max_packet_size":     uint64(carrierMaxUnfragmentedPayloadForMTUWithMode(mtu, kernelFragment)),
+			"iptunnel_fragment_payload_size":    uint64(max(0, carrierMaxFragmentPayloadForMTUWithMode(mtu, kernelFragment))),
 			"iptunnel_decode_errors":            session.decodeErrors.Load(),
 			"iptunnel_mtu_drops":                session.mtuDrops.Load(),
 			"iptunnel_send_batch_calls":         session.sendBatchCalls.Load(),
@@ -1489,7 +1537,7 @@ func (listener *packetListener) Close() error {
 
 func (listener *packetListener) readLoop(conn *net.UDPConn) {
 	for {
-		packets, _, release, err := recvCarrierBatchFrom(conn, carrierReadBatch(), carrierReadWireSizeForMTU(effectiveTunnelMTU(listener.cfg.MTU)))
+		packets, _, release, err := recvCarrierBatchFrom(conn, carrierReadBatch(), carrierReceiveWireSize())
 		if err != nil {
 			if release != nil {
 				release()
@@ -1598,13 +1646,19 @@ func carrierUDPSegmentEnabled() bool {
 	}
 }
 
-func carrierKernelFragmentEnabled() bool {
+func carrierKernelFragmentEnabledForConfig(cfg tunnelConfig) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT"))) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
 	case "0", "false", "no", "off", "disabled":
 		return false
 	default:
-		return true
+		return cfg.Protocol != transport.ProtocolVXLAN
 	}
+}
+
+func carrierKernelFragmentEnabled() bool {
+	return carrierKernelFragmentEnabledForConfig(tunnelConfig{})
 }
 
 func udpReadErrorClosed(err error) bool {
@@ -1634,12 +1688,13 @@ func (session *carrierServerSession) SendPacket(pkt []byte) error {
 	if session.listener != nil {
 		mtu = effectiveTunnelMTU(session.listener.cfg.MTU)
 	}
+	kernelFragment := session.kernelFragmentEnabled()
 	if len(pkt) > carrierMaxPacket {
 		session.mtuDrops.Add(1)
 		return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(pkt), carrierMaxPacket)
 	}
 	seq := session.sendSeq.Add(1)
-	if !carrierPacketFitsUnfragmented(len(pkt), mtu) {
+	if !carrierPacketFitsUnfragmentedWithMode(len(pkt), mtu, kernelFragment) {
 		return session.sendFragmentedPacket(pkt, seq, mtu)
 	}
 	needed := carrierHeaderLen + len(pkt)
@@ -1661,12 +1716,13 @@ func (session *carrierServerSession) SendPacket(pkt []byte) error {
 }
 
 func (session *carrierServerSession) sendFragmentedPacket(pkt []byte, sequence uint64, mtu int) error {
-	fragments, err := carrierPacketFragmentCount(len(pkt), mtu)
+	kernelFragment := session.kernelFragmentEnabled()
+	fragments, err := carrierPacketFragmentCountWithMode(len(pkt), mtu, kernelFragment)
 	if err != nil {
 		session.mtuDrops.Add(1)
 		return err
 	}
-	batch, headers, err := buildCarrierFragmentPackets(session.sendBatchPacketScratch, session.sendBatchArena, pkt, sequence, mtu)
+	batch, headers, err := buildCarrierFragmentPacketsWithMode(session.sendBatchPacketScratch, session.sendBatchArena, pkt, sequence, mtu, kernelFragment)
 	session.sendBatchPacketScratch = batch
 	session.sendBatchArena = headers
 	if err != nil {
@@ -1699,13 +1755,14 @@ func (session *carrierServerSession) SendPackets(pkts [][]byte) error {
 	if session.listener != nil {
 		mtu = effectiveTunnelMTU(session.listener.cfg.MTU)
 	}
+	kernelFragment := session.kernelFragmentEnabled()
 	for _, pkt := range pkts {
 		if len(pkt) > carrierMaxPacket {
 			session.mtuDrops.Add(1)
 			return fmt.Errorf("tunnel carrier packet size %d exceeds max %d", len(pkt), carrierMaxPacket)
 		}
 	}
-	if carrierPacketBatchNeedsFragmentation(pkts, mtu) {
+	if carrierPacketBatchNeedsFragmentationWithMode(pkts, mtu, kernelFragment) {
 		for _, pkt := range pkts {
 			if err := session.SendPacket(pkt); err != nil {
 				return err
@@ -1932,6 +1989,7 @@ func releaseCarrierReceivedPacket(packet carrierReceivedPacket) {
 
 func (session *carrierServerSession) Stats() transport.TransportStats {
 	mtu := session.listenerMTU()
+	kernelFragment := session.kernelFragmentEnabled()
 	return transport.TransportStats{
 		BytesSent:           session.bytesSent.Load(),
 		BytesReceived:       session.bytesReceived.Load(),
@@ -1944,10 +2002,10 @@ func (session *carrierServerSession) Stats() transport.TransportStats {
 		Extra: map[string]uint64{
 			"iptunnel_carrier_port":             uint64(session.listenerCarrierPort()),
 			"iptunnel_mtu":                      uint64(mtu),
-			"iptunnel_kernel_fragment":          boolUint64(carrierKernelFragmentEnabled()),
-			"iptunnel_udp_payload_size":         uint64(carrierReadWireSizeForMTU(mtu)),
-			"iptunnel_wire_max_packet_size":     uint64(carrierMaxUnfragmentedPayloadForMTU(mtu)),
-			"iptunnel_fragment_payload_size":    uint64(max(0, carrierMaxFragmentPayloadForMTU(mtu))),
+			"iptunnel_kernel_fragment":          boolUint64(kernelFragment),
+			"iptunnel_udp_payload_size":         uint64(carrierReadWireSizeForMTUWithMode(mtu, kernelFragment)),
+			"iptunnel_wire_max_packet_size":     uint64(carrierMaxUnfragmentedPayloadForMTUWithMode(mtu, kernelFragment)),
+			"iptunnel_fragment_payload_size":    uint64(max(0, carrierMaxFragmentPayloadForMTUWithMode(mtu, kernelFragment))),
 			"iptunnel_packets_dropped":          session.packetsDropped.Load(),
 			"iptunnel_mtu_drops":                session.mtuDrops.Load(),
 			"iptunnel_send_batch_calls":         session.sendBatchCalls.Load(),
@@ -2000,6 +2058,13 @@ func (session *carrierServerSession) listenerMTU() int {
 		return defaultTunnelMTU
 	}
 	return effectiveTunnelMTU(session.listener.cfg.MTU)
+}
+
+func (session *carrierServerSession) kernelFragmentEnabled() bool {
+	if session == nil || session.listener == nil {
+		return carrierKernelFragmentEnabled()
+	}
+	return carrierKernelFragmentEnabledForConfig(session.listener.cfg)
 }
 
 func effectiveTunnelMTU(mtu int) int {

@@ -314,6 +314,74 @@ func TestCarrierStatsAdvertisesFragmentingDatagram(t *testing.T) {
 	}
 }
 
+func TestCarrierVXLANDefaultsToApplicationFragmentsWithinL3MTU(t *testing.T) {
+	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "")
+	const mtu = 1400
+	session := &carrier{cfg: tunnelConfig{
+		Protocol:    transport.ProtocolVXLAN,
+		MTU:         mtu,
+		CarrierPort: 47820,
+	}}
+	stats := session.Stats()
+	if got := stats.Extra["iptunnel_kernel_fragment"]; got != 0 {
+		t.Fatalf("VXLAN kernel fragment = %d, want 0", got)
+	}
+	if got, want := stats.Extra["iptunnel_udp_payload_size"], uint64(mtu-carrierIPv4UDPHeaderLen); got != want {
+		t.Fatalf("VXLAN UDP payload size = %d, want %d", got, want)
+	}
+	if got, want := stats.Extra["iptunnel_wire_max_packet_size"], uint64(mtu-carrierIPv4UDPHeaderLen-carrierHeaderLen); got != want {
+		t.Fatalf("VXLAN max packet size = %d, want %d", got, want)
+	}
+	if got, want := stats.Extra["iptunnel_fragment_payload_size"], uint64(mtu-carrierIPv4UDPHeaderLen-carrierHeaderLen-carrierFragmentHeaderLen); got != want {
+		t.Fatalf("VXLAN fragment payload size = %d, want %d", got, want)
+	}
+	if got := int(stats.Extra["iptunnel_udp_payload_size"]) + carrierIPv4UDPHeaderLen; got > mtu {
+		t.Fatalf("VXLAN carrier datagram L3 size = %d, exceeds tunnel MTU %d", got, mtu)
+	}
+}
+
+func TestCarrierVXLANKernelFragmentExplicitOverride(t *testing.T) {
+	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "1")
+	session := &carrier{cfg: tunnelConfig{Protocol: transport.ProtocolVXLAN, MTU: 1400}}
+	if got := session.Stats().Extra["iptunnel_kernel_fragment"]; got != 1 {
+		t.Fatalf("VXLAN explicit kernel fragment = %d, want 1", got)
+	}
+}
+
+func TestCarrierVXLANReceivesLegacyLargeDatagramDuringRollingUpgrade(t *testing.T) {
+	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "")
+	server, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	defer server.Close()
+	client, err := net.DialUDP("udp4", nil, server.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("dial udp: %v", err)
+	}
+	defer client.Close()
+
+	sender := &carrier{cfg: tunnelConfig{MTU: 1400}, conn: client}
+	receiver := &carrier{cfg: tunnelConfig{Protocol: transport.ProtocolVXLAN, MTU: 1400}, conn: server}
+	payload := bytes.Repeat([]byte("u"), 4096)
+	if err := sender.SendPacket(payload); err != nil {
+		t.Fatalf("send legacy large datagram: %v", err)
+	}
+	if got := sender.Stats().Extra["iptunnel_fragmented_packets_sent"]; got != 0 {
+		t.Fatalf("legacy sender application fragments = %d, want 0", got)
+	}
+	if err := server.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	packet, err := receiver.RecvPacket()
+	if err != nil {
+		t.Fatalf("receive legacy large datagram: %v", err)
+	}
+	if !bytes.Equal(packet, payload) {
+		t.Fatalf("received payload length = %d, want %d", len(packet), len(payload))
+	}
+}
+
 func TestCarrierSendPacketFragmentsAboveMTU(t *testing.T) {
 	t.Setenv("TRUSTIX_IPTUNNEL_KERNEL_FRAGMENT", "0")
 	server, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})

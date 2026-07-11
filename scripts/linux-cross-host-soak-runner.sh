@@ -1303,8 +1303,8 @@ if command -v modprobe >/dev/null 2>&1; then modprobe veth >/dev/null 2>&1 || tr
 \"\$ip_cmd\" link set $(remote_quote "$lan_if") up
 \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" link set lo up
 \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" addr add $(remote_quote "$host_addr") dev $(remote_quote "$host_if")
-if [ -n "\$secondary_host_addr" ]; then
-  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" addr add "\$secondary_host_addr" dev $(remote_quote "$host_if")
+if [ -n \"\$secondary_host_addr\" ]; then
+  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" addr add \"\$secondary_host_addr\" dev $(remote_quote "$host_if")
 fi
 \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" link set $(remote_quote "$host_if") up
 \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") \"\$ip_cmd\" route replace default via $(remote_quote "$host_gw")

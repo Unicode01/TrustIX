@@ -8,6 +8,7 @@
 #include <linux/in.h>
 #include <linux/ioctl.h>
 #include <linux/ip.h>
+#include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/limits.h>
 #include <linux/miscdevice.h>
@@ -1036,6 +1037,13 @@ module_param_named(tx_plaintext_hash_tx_queue,
 MODULE_PARM_DESC(tx_plaintext_hash_tx_queue,
 		 "Hash plaintext TX outer skbs across the underlay device TX queues");
 
+static bool trustix_datapath_tx_plaintext_hash_tx_queue_partition_transport;
+module_param_named(tx_plaintext_hash_tx_queue_partition_transport,
+		   trustix_datapath_tx_plaintext_hash_tx_queue_partition_transport,
+		   bool, 0644);
+MODULE_PARM_DESC(tx_plaintext_hash_tx_queue_partition_transport,
+		 "Reserve even plaintext TX queues for UDP by restricting experimental TCP to odd queues when both transports are active");
+
 static bool trustix_datapath_tx_plaintext_skip_inner_tcp_checksum;
 module_param_named(tx_plaintext_skip_inner_tcp_checksum,
 		   trustix_datapath_tx_plaintext_skip_inner_tcp_checksum, bool,
@@ -1249,21 +1257,21 @@ module_param_cb(rx_worker_xmit_dst_mac_cache,
 		&trustix_datapath_rx_worker_bool_ops,
 		&trustix_datapath_rx_worker_xmit_dst_mac_cache, 0644);
 MODULE_PARM_DESC(rx_worker_xmit_dst_mac_cache,
-		 "Cache the last RX worker xmit destination MAC lookup by output device and inner IPv4 destination");
+		 "Cache recent RX worker xmit destination MAC lookups by output device and inner IPv4 destination");
 
 static bool trustix_datapath_rx_worker_xmit_dst_mac_pcpu_cache;
 module_param_cb(rx_worker_xmit_dst_mac_pcpu_cache,
 		&trustix_datapath_rx_worker_bool_ops,
 		&trustix_datapath_rx_worker_xmit_dst_mac_pcpu_cache, 0644);
 MODULE_PARM_DESC(rx_worker_xmit_dst_mac_pcpu_cache,
-		 "Cache the last RX worker xmit destination MAC lookup per CPU by output device and inner IPv4 destination");
+		 "Cache recent RX worker xmit destination MAC lookups per CPU by output device and inner IPv4 destination");
 
 static bool trustix_datapath_rx_worker_xmit_dst_mac_seq_cache;
 module_param_cb(rx_worker_xmit_dst_mac_seq_cache,
 		&trustix_datapath_rx_worker_bool_ops,
 		&trustix_datapath_rx_worker_xmit_dst_mac_seq_cache, 0644);
 MODULE_PARM_DESC(rx_worker_xmit_dst_mac_seq_cache,
-		 "Cache the last RX worker xmit destination MAC lookup with seqlock readers by output device and inner IPv4 destination");
+		 "Cache recent RX worker xmit destination MAC lookups with seqlock readers by output device and inner IPv4 destination");
 
 static bool trustix_datapath_rx_worker_queue_skb;
 module_param_cb(rx_worker_queue_skb, &trustix_datapath_rx_worker_bool_ops,
@@ -2393,6 +2401,27 @@ module_param_named(tx_plaintext_hash_tx_queue_fallbacks,
 MODULE_PARM_DESC(tx_plaintext_hash_tx_queue_fallbacks,
 		 "TrustIX plaintext TX outer skbs that could not be assigned to a target device TX queue");
 
+static unsigned long long trustix_datapath_tx_plaintext_hash_tx_queue_partition_udp_sets;
+module_param_named(tx_plaintext_hash_tx_queue_partition_udp_sets,
+		   trustix_datapath_tx_plaintext_hash_tx_queue_partition_udp_sets,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_hash_tx_queue_partition_udp_sets,
+		 "TrustIX plaintext UDP TX outer skbs assigned while mixed-transport queue partitioning is active");
+
+static unsigned long long trustix_datapath_tx_plaintext_hash_tx_queue_partition_tcp_sets;
+module_param_named(tx_plaintext_hash_tx_queue_partition_tcp_sets,
+		   trustix_datapath_tx_plaintext_hash_tx_queue_partition_tcp_sets,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_hash_tx_queue_partition_tcp_sets,
+		 "TrustIX plaintext experimental TCP TX outer skbs assigned to the TCP queue partition");
+
+static unsigned long long trustix_datapath_tx_plaintext_hash_tx_queue_partition_fallbacks;
+module_param_named(tx_plaintext_hash_tx_queue_partition_fallbacks,
+		   trustix_datapath_tx_plaintext_hash_tx_queue_partition_fallbacks,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_hash_tx_queue_partition_fallbacks,
+		 "TrustIX plaintext TX outer skbs that used all queues while transport partitioning was enabled");
+
 static unsigned long long trustix_datapath_tx_plaintext_hash_tx_queue_q0;
 module_param_named(tx_plaintext_hash_tx_queue_q0,
 		   trustix_datapath_tx_plaintext_hash_tx_queue_q0, ullong,
@@ -3235,21 +3264,29 @@ static void trustix_datapath_rx_worker_kick(void)
 		trustix_datapath_rx_worker_queue_work_enqueued++;
 }
 
-struct trustix_datapath_rx_worker_mac_cache {
-	int ifindex;
-	__be32 dst_ipv4;
-	__u8 addr[ETH_ALEN];
-	bool valid;
-};
+#define TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_SETS 64
+#define TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS 4
+#define TRUSTIX_DATAPATH_MAC_CACHE_TTL (30 * HZ)
 
-struct trustix_datapath_rx_worker_seq_mac_cache {
+struct trustix_datapath_rx_worker_mac_cache_entry {
 	int ifindex;
 	__be32 dst_ipv4;
 	__u64 addr64;
+	unsigned long expires;
 	bool valid;
 };
 
-struct trustix_datapath_tx_plaintext_seq_mac_cache {
+struct trustix_datapath_rx_worker_mac_cache {
+	struct trustix_datapath_rx_worker_mac_cache_entry entries[
+		TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_SETS *
+		TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS];
+	__u8 next[TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_SETS];
+};
+
+#define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_SETS 16
+#define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS 4
+
+struct trustix_datapath_tx_plaintext_mac_cache_entry {
 	int ifindex;
 	__be32 local_ipv4;
 	__be32 remote_ipv4;
@@ -3257,20 +3294,129 @@ struct trustix_datapath_tx_plaintext_seq_mac_cache {
 	__be16 remote_port;
 	__u8 protocol;
 	__u64 addr64;
+	unsigned long expires;
 	bool valid;
+};
+
+struct trustix_datapath_tx_plaintext_mac_cache {
+	struct trustix_datapath_tx_plaintext_mac_cache_entry entries[
+		TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_SETS *
+		TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS];
+	__u8 next[TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_SETS];
 };
 
 static DEFINE_SPINLOCK(trustix_datapath_rx_worker_mac_cache_lock);
 static struct trustix_datapath_rx_worker_mac_cache
 	trustix_datapath_rx_worker_mac_cache;
-static DEFINE_PER_CPU(struct trustix_datapath_rx_worker_mac_cache,
-		      trustix_datapath_rx_worker_pcpu_mac_cache);
+static struct trustix_datapath_rx_worker_mac_cache __percpu
+	*trustix_datapath_rx_worker_pcpu_mac_cache;
 static DEFINE_SEQLOCK(trustix_datapath_rx_worker_seq_mac_cache_lock);
-static struct trustix_datapath_rx_worker_seq_mac_cache
+static struct trustix_datapath_rx_worker_mac_cache
 	trustix_datapath_rx_worker_seq_mac_cache;
 static DEFINE_SEQLOCK(trustix_datapath_tx_plaintext_seq_mac_cache_lock);
-static struct trustix_datapath_tx_plaintext_seq_mac_cache
+static struct trustix_datapath_tx_plaintext_mac_cache
 	trustix_datapath_tx_plaintext_seq_mac_cache;
+
+static int trustix_datapath_alloc_rx_worker_pcpu_mac_cache(void)
+{
+	trustix_datapath_rx_worker_pcpu_mac_cache =
+		alloc_percpu(struct trustix_datapath_rx_worker_mac_cache);
+	if (!trustix_datapath_rx_worker_pcpu_mac_cache)
+		return -ENOMEM;
+	return 0;
+}
+
+static void trustix_datapath_free_rx_worker_pcpu_mac_cache(void)
+{
+	if (!trustix_datapath_rx_worker_pcpu_mac_cache)
+		return;
+	free_percpu(trustix_datapath_rx_worker_pcpu_mac_cache);
+	trustix_datapath_rx_worker_pcpu_mac_cache = NULL;
+}
+
+static __always_inline unsigned int
+trustix_datapath_rx_worker_mac_cache_set(int ifindex, __be32 dst_ipv4)
+{
+	__u32 hash = (__u32)ifindex;
+
+	hash = (hash * 16777619U) ^ (__force __u32)dst_ipv4;
+	hash ^= hash >> 16;
+	hash *= 0x7feb352dU;
+	hash ^= hash >> 15;
+	hash *= 0x846ca68bU;
+	hash ^= hash >> 16;
+	return hash & (TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_SETS - 1);
+}
+
+static bool trustix_datapath_rx_worker_mac_cache_lookup(
+	const struct trustix_datapath_rx_worker_mac_cache *cache, int ifindex,
+	__be32 dst_ipv4, __u8 *addr)
+{
+	unsigned int set;
+	unsigned int start;
+	unsigned int i;
+
+	if (!cache || !addr)
+		return false;
+	set = trustix_datapath_rx_worker_mac_cache_set(ifindex, dst_ipv4);
+	start = set * TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS;
+	for (i = 0; i < TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS; i++) {
+		const struct trustix_datapath_rx_worker_mac_cache_entry *entry =
+			&cache->entries[start + i];
+
+		if (!entry->valid || time_after_eq(jiffies, entry->expires) ||
+		    entry->ifindex != ifindex ||
+		    entry->dst_ipv4 != dst_ipv4)
+			continue;
+		trustix_datapath_rx_worker_u64_to_mac(entry->addr64, addr);
+		return true;
+	}
+	return false;
+}
+
+static void trustix_datapath_rx_worker_mac_cache_store(
+	struct trustix_datapath_rx_worker_mac_cache *cache, int ifindex,
+	__be32 dst_ipv4, const __u8 *addr)
+{
+	struct trustix_datapath_rx_worker_mac_cache_entry *entry = NULL;
+	struct trustix_datapath_rx_worker_mac_cache_entry *empty = NULL;
+	unsigned int set;
+	unsigned int start;
+	unsigned int i;
+
+	if (!cache || !addr)
+		return;
+	set = trustix_datapath_rx_worker_mac_cache_set(ifindex, dst_ipv4);
+	start = set * TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS;
+	for (i = 0; i < TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS; i++) {
+		struct trustix_datapath_rx_worker_mac_cache_entry *candidate =
+			&cache->entries[start + i];
+
+		if (candidate->valid && candidate->ifindex == ifindex &&
+		    candidate->dst_ipv4 == dst_ipv4) {
+			entry = candidate;
+			break;
+		}
+		if ((!candidate->valid ||
+		     time_after_eq(jiffies, candidate->expires)) &&
+		    !empty)
+			empty = candidate;
+	}
+	if (!entry)
+		entry = empty;
+	if (!entry) {
+		i = cache->next[set] %
+		    TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS;
+		entry = &cache->entries[start + i];
+		cache->next[set] =
+			(i + 1) % TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS;
+	}
+	entry->ifindex = ifindex;
+	entry->dst_ipv4 = dst_ipv4;
+	entry->addr64 = trustix_datapath_rx_worker_mac_to_u64(addr);
+	entry->expires = jiffies + TRUSTIX_DATAPATH_MAC_CACHE_TTL;
+	entry->valid = true;
+}
 
 static __u16 trustix_datapath_get_be16(const __u8 *ptr)
 {
@@ -6177,19 +6323,119 @@ static __u32 trustix_datapath_tx_outer_tcp_next_seq(__u32 payload_len)
 	return (__u32)(end - step);
 }
 
+static __always_inline unsigned int
+trustix_datapath_tx_plaintext_dst_mac_cache_set(
+	const struct net_device *target_dev,
+	const struct trustix_datapath_tx_plan *plan)
+{
+	__u32 hash = (__u32)target_dev->ifindex;
+
+	hash = (hash * 16777619U) ^ plan->local_ipv4;
+	hash = (hash * 16777619U) ^ plan->remote_ipv4;
+	hash = (hash * 16777619U) ^
+	       (((__u32)plan->local_port << 16) | plan->remote_port);
+	hash = (hash * 16777619U) ^ plan->outer_protocol;
+	hash ^= hash >> 16;
+	hash *= 0x7feb352dU;
+	hash ^= hash >> 15;
+	hash *= 0x846ca68bU;
+	hash ^= hash >> 16;
+	return hash & (TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_SETS - 1);
+}
+
+static bool trustix_datapath_tx_plaintext_mac_cache_lookup(
+	const struct trustix_datapath_tx_plaintext_mac_cache *cache,
+	const struct net_device *target_dev,
+	const struct trustix_datapath_tx_plan *plan, __u8 *addr)
+{
+	unsigned int set;
+	unsigned int start;
+	unsigned int i;
+
+	if (!cache || !target_dev || !plan || !addr)
+		return false;
+	set = trustix_datapath_tx_plaintext_dst_mac_cache_set(target_dev,
+							    plan);
+	start = set * TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS;
+	for (i = 0; i < TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS; i++) {
+		const struct trustix_datapath_tx_plaintext_mac_cache_entry *entry =
+			&cache->entries[start + i];
+
+		if (!entry->valid || time_after_eq(jiffies, entry->expires) ||
+		    entry->ifindex != target_dev->ifindex ||
+		    entry->local_ipv4 != htonl(plan->local_ipv4) ||
+		    entry->remote_ipv4 != htonl(plan->remote_ipv4) ||
+		    entry->local_port != htons(plan->local_port) ||
+		    entry->remote_port != htons(plan->remote_port) ||
+		    entry->protocol != plan->outer_protocol)
+			continue;
+		trustix_datapath_rx_worker_u64_to_mac(entry->addr64, addr);
+		return true;
+	}
+	return false;
+}
+
+static void trustix_datapath_tx_plaintext_mac_cache_store(
+	struct trustix_datapath_tx_plaintext_mac_cache *cache,
+	const struct net_device *target_dev,
+	const struct trustix_datapath_tx_plan *plan, const __u8 *addr)
+{
+	struct trustix_datapath_tx_plaintext_mac_cache_entry *entry = NULL;
+	struct trustix_datapath_tx_plaintext_mac_cache_entry *empty = NULL;
+	unsigned int set;
+	unsigned int start;
+	unsigned int i;
+
+	if (!cache || !target_dev || !plan || !addr)
+		return;
+	set = trustix_datapath_tx_plaintext_dst_mac_cache_set(target_dev,
+							    plan);
+	start = set * TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS;
+	for (i = 0; i < TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS; i++) {
+		struct trustix_datapath_tx_plaintext_mac_cache_entry *candidate =
+			&cache->entries[start + i];
+
+		if (candidate->valid &&
+		    candidate->ifindex == target_dev->ifindex &&
+		    candidate->local_ipv4 == htonl(plan->local_ipv4) &&
+		    candidate->remote_ipv4 == htonl(plan->remote_ipv4) &&
+		    candidate->local_port == htons(plan->local_port) &&
+		    candidate->remote_port == htons(plan->remote_port) &&
+		    candidate->protocol == plan->outer_protocol) {
+			entry = candidate;
+			break;
+		}
+		if ((!candidate->valid ||
+		     time_after_eq(jiffies, candidate->expires)) &&
+		    !empty)
+			empty = candidate;
+	}
+	if (!entry)
+		entry = empty;
+	if (!entry) {
+		i = cache->next[set] %
+		    TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS;
+		entry = &cache->entries[start + i];
+		cache->next[set] =
+			(i + 1) % TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS;
+	}
+	entry->ifindex = target_dev->ifindex;
+	entry->local_ipv4 = htonl(plan->local_ipv4);
+	entry->remote_ipv4 = htonl(plan->remote_ipv4);
+	entry->local_port = htons(plan->local_port);
+	entry->remote_port = htons(plan->remote_port);
+	entry->protocol = (__u8)plan->outer_protocol;
+	entry->addr64 = trustix_datapath_rx_worker_mac_to_u64(addr);
+	entry->expires = jiffies + TRUSTIX_DATAPATH_MAC_CACHE_TTL;
+	entry->valid = true;
+}
+
 static bool trustix_datapath_tx_plaintext_dst_mac_cache_lookup(
 	const struct net_device *target_dev,
 	const struct trustix_datapath_tx_plan *plan, __u8 *addr)
 {
 	unsigned int seq;
-	__u64 cached_addr;
-	__be32 cached_local;
-	__be32 cached_remote;
-	__be16 cached_local_port;
-	__be16 cached_remote_port;
-	int cached_ifindex;
-	__u8 cached_protocol;
-	bool cached_valid;
+	bool cached;
 
 	if (!target_dev || !plan || !addr ||
 	    !READ_ONCE(trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache))
@@ -6197,35 +6443,15 @@ static bool trustix_datapath_tx_plaintext_dst_mac_cache_lookup(
 	do {
 		seq = read_seqbegin(
 			&trustix_datapath_tx_plaintext_seq_mac_cache_lock);
-		cached_valid =
-			trustix_datapath_tx_plaintext_seq_mac_cache.valid;
-		cached_ifindex =
-			trustix_datapath_tx_plaintext_seq_mac_cache.ifindex;
-		cached_local =
-			trustix_datapath_tx_plaintext_seq_mac_cache.local_ipv4;
-		cached_remote =
-			trustix_datapath_tx_plaintext_seq_mac_cache.remote_ipv4;
-		cached_local_port =
-			trustix_datapath_tx_plaintext_seq_mac_cache.local_port;
-		cached_remote_port =
-			trustix_datapath_tx_plaintext_seq_mac_cache.remote_port;
-		cached_protocol =
-			trustix_datapath_tx_plaintext_seq_mac_cache.protocol;
-		cached_addr =
-			trustix_datapath_tx_plaintext_seq_mac_cache.addr64;
+		cached = trustix_datapath_tx_plaintext_mac_cache_lookup(
+			&trustix_datapath_tx_plaintext_seq_mac_cache, target_dev,
+			plan, addr);
 	} while (read_seqretry(
 		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, seq));
-
-	if (!cached_valid || cached_ifindex != target_dev->ifindex ||
-	    cached_local != htonl(plan->local_ipv4) ||
-	    cached_remote != htonl(plan->remote_ipv4) ||
-	    cached_local_port != htons(plan->local_port) ||
-	    cached_remote_port != htons(plan->remote_port) ||
-	    cached_protocol != plan->outer_protocol) {
+	if (!cached) {
 		trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_misses++;
 		return false;
 	}
-	trustix_datapath_rx_worker_u64_to_mac(cached_addr, addr);
 	trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_hits++;
 	return true;
 }
@@ -6241,21 +6467,9 @@ static void trustix_datapath_tx_plaintext_dst_mac_cache_store(
 		return;
 	write_seqlock_irqsave(
 		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, flags);
-	trustix_datapath_tx_plaintext_seq_mac_cache.ifindex =
-		target_dev->ifindex;
-	trustix_datapath_tx_plaintext_seq_mac_cache.local_ipv4 =
-		htonl(plan->local_ipv4);
-	trustix_datapath_tx_plaintext_seq_mac_cache.remote_ipv4 =
-		htonl(plan->remote_ipv4);
-	trustix_datapath_tx_plaintext_seq_mac_cache.local_port =
-		htons(plan->local_port);
-	trustix_datapath_tx_plaintext_seq_mac_cache.remote_port =
-		htons(plan->remote_port);
-	trustix_datapath_tx_plaintext_seq_mac_cache.protocol =
-		(__u8)plan->outer_protocol;
-	trustix_datapath_tx_plaintext_seq_mac_cache.addr64 =
-		trustix_datapath_rx_worker_mac_to_u64(addr);
-	trustix_datapath_tx_plaintext_seq_mac_cache.valid = true;
+	trustix_datapath_tx_plaintext_mac_cache_store(
+		&trustix_datapath_tx_plaintext_seq_mac_cache, target_dev, plan,
+		addr);
 	write_sequnlock_irqrestore(
 		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, flags);
 }
@@ -6266,7 +6480,8 @@ static void trustix_datapath_tx_plaintext_dst_mac_cache_invalidate(void)
 
 	write_seqlock_irqsave(
 		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, flags);
-	trustix_datapath_tx_plaintext_seq_mac_cache.valid = false;
+	memset(&trustix_datapath_tx_plaintext_seq_mac_cache, 0,
+	       sizeof(trustix_datapath_tx_plaintext_seq_mac_cache));
 	write_sequnlock_irqrestore(
 		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, flags);
 }
@@ -9511,6 +9726,31 @@ trustix_datapath_rx_worker_mix_hash(__u32 hash)
 	return hash ?: 1;
 }
 
+static __always_inline __u16
+trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+	__u32 hash, unsigned int txq_count, __u8 outer_protocol,
+	bool partition_transport)
+{
+	unsigned int subset_count;
+	__u32 mixed;
+
+	if (!txq_count)
+		return 0;
+	mixed = trustix_datapath_rx_worker_mix_hash(hash);
+	if (!partition_transport || txq_count <= 1)
+		return (__u16)(mixed % txq_count);
+
+	switch (outer_protocol) {
+	case IPPROTO_UDP:
+		return (__u16)(mixed % txq_count);
+	case IPPROTO_TCP:
+		subset_count = txq_count / 2;
+		return (__u16)((mixed % subset_count) * 2 + 1);
+	default:
+		return (__u16)(mixed % txq_count);
+	}
+}
+
 static bool trustix_datapath_rx_worker_hash_ipv4_at_offset(
 	struct sk_buff *skb, unsigned int offset, unsigned int head_len,
 	__u32 *hash_out)
@@ -9595,7 +9835,7 @@ trustix_datapath_rx_worker_set_hash_tx_queue(struct sk_buff *skb,
 		goto fallback;
 	txq_count = READ_ONCE(dev->real_num_tx_queues);
 	if (txq_count <= 1)
-		goto fallback;
+		return;
 	head_len = skb_headlen(skb);
 	if (!trustix_datapath_rx_worker_hash_inner_ipv4(skb, head_len,
 							&hash))
@@ -9699,7 +9939,9 @@ trustix_datapath_tx_plaintext_set_hash_tx_queue(struct sk_buff *skb,
 						const struct net_device *dev,
 						const struct trustix_datapath_tx_plan *plan)
 {
+	bool partition_transport;
 	unsigned int txq_count;
+	__u8 outer_protocol;
 	__u32 hash;
 	__u16 queue;
 
@@ -9709,7 +9951,8 @@ trustix_datapath_tx_plaintext_set_hash_tx_queue(struct sk_buff *skb,
 		goto fallback;
 	txq_count = READ_ONCE(dev->real_num_tx_queues);
 	if (txq_count <= 1)
-		goto fallback;
+		return;
+	outer_protocol = plan ? plan->outer_protocol : 0;
 	if (!trustix_datapath_tx_plaintext_hash_outer_inner_ipv4(skb, &hash)) {
 		if (plan) {
 			hash = plan->local_ipv4 ^
@@ -9724,10 +9967,25 @@ trustix_datapath_tx_plaintext_set_hash_tx_queue(struct sk_buff *skb,
 			goto fallback;
 		}
 	}
-	queue = (__u16)(trustix_datapath_rx_worker_mix_hash(hash) %
-			txq_count);
+	partition_transport = READ_ONCE(
+		trustix_datapath_tx_plaintext_hash_tx_queue_partition_transport);
+	queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+		hash, txq_count, outer_protocol, partition_transport);
 	skb_set_queue_mapping(skb, queue);
 	trustix_datapath_tx_plaintext_count_hash_tx_queue(queue);
+	if (partition_transport) {
+		switch (outer_protocol) {
+		case IPPROTO_UDP:
+			trustix_datapath_tx_plaintext_hash_tx_queue_partition_udp_sets++;
+			break;
+		case IPPROTO_TCP:
+			trustix_datapath_tx_plaintext_hash_tx_queue_partition_tcp_sets++;
+			break;
+		default:
+			trustix_datapath_tx_plaintext_hash_tx_queue_partition_fallbacks++;
+			break;
+		}
+	}
 	return;
 
 fallback:
@@ -10167,27 +10425,17 @@ trustix_datapath_rx_worker_lookup_inner_dst_mac(struct sk_buff *skb,
 		return false;
 	if (READ_ONCE(trustix_datapath_rx_worker_xmit_dst_mac_seq_cache)) {
 		unsigned int seq;
-		__u64 cached_addr;
-		__be32 cached_dst;
-		int cached_ifindex;
-		bool cached_valid;
+		bool cached;
 
 		do {
 			seq = read_seqbegin(
 				&trustix_datapath_rx_worker_seq_mac_cache_lock);
-			cached_valid =
-				trustix_datapath_rx_worker_seq_mac_cache.valid;
-			cached_ifindex =
-				trustix_datapath_rx_worker_seq_mac_cache.ifindex;
-			cached_dst =
-				trustix_datapath_rx_worker_seq_mac_cache.dst_ipv4;
-			cached_addr =
-				trustix_datapath_rx_worker_seq_mac_cache.addr64;
+			cached = trustix_datapath_rx_worker_mac_cache_lookup(
+				&trustix_datapath_rx_worker_seq_mac_cache,
+				dev->ifindex, iph->daddr, addr);
 		} while (read_seqretry(
 			&trustix_datapath_rx_worker_seq_mac_cache_lock, seq));
-		if (cached_valid && cached_ifindex == dev->ifindex &&
-		    cached_dst == iph->daddr) {
-			trustix_datapath_rx_worker_u64_to_mac(cached_addr, addr);
+		if (cached) {
 			trustix_datapath_rx_worker_dst_mac_cache_hits++;
 			return true;
 		}
@@ -10198,13 +10446,9 @@ trustix_datapath_rx_worker_lookup_inner_dst_mac(struct sk_buff *skb,
 
 		spin_lock_irqsave(&trustix_datapath_rx_worker_mac_cache_lock,
 				  flags);
-		if (trustix_datapath_rx_worker_mac_cache.valid &&
-		    trustix_datapath_rx_worker_mac_cache.ifindex ==
-			    dev->ifindex &&
-		    trustix_datapath_rx_worker_mac_cache.dst_ipv4 ==
-			    iph->daddr) {
-			ether_addr_copy(addr,
-					trustix_datapath_rx_worker_mac_cache.addr);
+		if (trustix_datapath_rx_worker_mac_cache_lookup(
+			    &trustix_datapath_rx_worker_mac_cache, dev->ifindex,
+			    iph->daddr, addr)) {
 			spin_unlock_irqrestore(
 				&trustix_datapath_rx_worker_mac_cache_lock,
 				flags);
@@ -10219,10 +10463,9 @@ trustix_datapath_rx_worker_lookup_inner_dst_mac(struct sk_buff *skb,
 		struct trustix_datapath_rx_worker_mac_cache *cache;
 
 		cache = get_cpu_ptr(
-			&trustix_datapath_rx_worker_pcpu_mac_cache);
-		if (cache->valid && cache->ifindex == dev->ifindex &&
-		    cache->dst_ipv4 == iph->daddr) {
-			ether_addr_copy(addr, cache->addr);
+			trustix_datapath_rx_worker_pcpu_mac_cache);
+		if (trustix_datapath_rx_worker_mac_cache_lookup(
+			    cache, dev->ifindex, iph->daddr, addr)) {
 			put_cpu_ptr(cache);
 			trustix_datapath_rx_worker_dst_mac_cache_hits++;
 			return true;
@@ -10256,11 +10499,9 @@ trustix_datapath_rx_worker_lookup_inner_dst_mac(struct sk_buff *skb,
 
 		spin_lock_irqsave(&trustix_datapath_rx_worker_mac_cache_lock,
 				  flags);
-		trustix_datapath_rx_worker_mac_cache.ifindex = dev->ifindex;
-		trustix_datapath_rx_worker_mac_cache.dst_ipv4 = iph->daddr;
-		ether_addr_copy(trustix_datapath_rx_worker_mac_cache.addr,
-				addr);
-		trustix_datapath_rx_worker_mac_cache.valid = true;
+		trustix_datapath_rx_worker_mac_cache_store(
+			&trustix_datapath_rx_worker_mac_cache, dev->ifindex,
+			iph->daddr, addr);
 		spin_unlock_irqrestore(&trustix_datapath_rx_worker_mac_cache_lock,
 				       flags);
 	}
@@ -10268,11 +10509,9 @@ trustix_datapath_rx_worker_lookup_inner_dst_mac(struct sk_buff *skb,
 		struct trustix_datapath_rx_worker_mac_cache *cache;
 
 		cache = get_cpu_ptr(
-			&trustix_datapath_rx_worker_pcpu_mac_cache);
-		cache->ifindex = dev->ifindex;
-		cache->dst_ipv4 = iph->daddr;
-		ether_addr_copy(cache->addr, addr);
-		cache->valid = true;
+			trustix_datapath_rx_worker_pcpu_mac_cache);
+		trustix_datapath_rx_worker_mac_cache_store(
+			cache, dev->ifindex, iph->daddr, addr);
 		put_cpu_ptr(cache);
 	}
 	if (ok && READ_ONCE(trustix_datapath_rx_worker_xmit_dst_mac_seq_cache)) {
@@ -10280,13 +10519,9 @@ trustix_datapath_rx_worker_lookup_inner_dst_mac(struct sk_buff *skb,
 
 		write_seqlock_irqsave(
 			&trustix_datapath_rx_worker_seq_mac_cache_lock, flags);
-		trustix_datapath_rx_worker_seq_mac_cache.ifindex =
-			dev->ifindex;
-		trustix_datapath_rx_worker_seq_mac_cache.dst_ipv4 =
-			iph->daddr;
-		trustix_datapath_rx_worker_seq_mac_cache.addr64 =
-			trustix_datapath_rx_worker_mac_to_u64(addr);
-		trustix_datapath_rx_worker_seq_mac_cache.valid = true;
+		trustix_datapath_rx_worker_mac_cache_store(
+			&trustix_datapath_rx_worker_seq_mac_cache,
+			dev->ifindex, iph->daddr, addr);
 		write_sequnlock_irqrestore(
 			&trustix_datapath_rx_worker_seq_mac_cache_lock, flags);
 	}
@@ -16461,6 +16696,192 @@ trustix_datapath_build_tixt_header(__u8 *wire, __u8 flags, __u64 flow_id,
 	trustix_datapath_put_be16(wire + 38, fragment_count);
 }
 
+static int trustix_datapath_selftest_rx_worker_mac_cache(void)
+{
+	struct trustix_datapath_rx_worker_mac_cache *cache;
+	const __u8 first[ETH_ALEN] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
+	const __u8 second[ETH_ALEN] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x02 };
+	const __u8 updated[ETH_ALEN] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x03 };
+	__u8 addr[ETH_ALEN];
+	unsigned int set;
+	unsigned int i;
+	bool expired = false;
+	int ret = 0;
+
+	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
+	if (!cache)
+		return -ENOMEM;
+	trustix_datapath_rx_worker_mac_cache_store(cache, 10,
+						      htonl(0x0a400001), first);
+	trustix_datapath_rx_worker_mac_cache_store(cache, 10,
+						      htonl(0x0a400081), second);
+	if (!trustix_datapath_rx_worker_mac_cache_lookup(
+		    cache, 10, htonl(0x0a400001), addr) ||
+	    !ether_addr_equal(addr, first)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (!trustix_datapath_rx_worker_mac_cache_lookup(
+		    cache, 10, htonl(0x0a400081), addr) ||
+	    !ether_addr_equal(addr, second)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	trustix_datapath_rx_worker_mac_cache_store(cache, 10,
+						      htonl(0x0a400001), updated);
+	if (!trustix_datapath_rx_worker_mac_cache_lookup(
+		    cache, 10, htonl(0x0a400001), addr) ||
+	    !ether_addr_equal(addr, updated)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (!trustix_datapath_rx_worker_mac_cache_lookup(
+		    cache, 10, htonl(0x0a400081), addr) ||
+	    !ether_addr_equal(addr, second))
+		ret = -EINVAL;
+	if (ret)
+		goto out;
+	set = trustix_datapath_rx_worker_mac_cache_set(
+		10, htonl(0x0a400001));
+	for (i = 0; i < TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS; i++) {
+		struct trustix_datapath_rx_worker_mac_cache_entry *entry =
+			&cache->entries[
+				set * TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS + i];
+
+		if (!entry->valid || entry->ifindex != 10 ||
+		    entry->dst_ipv4 != htonl(0x0a400001))
+			continue;
+		entry->expires = jiffies - 1;
+		expired = true;
+		break;
+	}
+	if (!expired || trustix_datapath_rx_worker_mac_cache_lookup(
+				cache, 10, htonl(0x0a400001), addr))
+		ret = -EINVAL;
+out:
+	kfree(cache);
+	return ret;
+}
+
+static int trustix_datapath_selftest_tx_plaintext_mac_cache(void)
+{
+	struct trustix_datapath_tx_plaintext_mac_cache *cache;
+	struct trustix_datapath_tx_plan plan = {
+		.local_ipv4 = 0x0a000001,
+		.remote_ipv4 = 0x0a000002,
+		.remote_port = 13000,
+		.outer_protocol = IPPROTO_UDP,
+	};
+	struct net_device *dev;
+	const __u8 mac[ETH_ALEN] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
+	__u8 addr[ETH_ALEN];
+	unsigned int set;
+	unsigned int i;
+	bool expired = false;
+	int ret = 0;
+
+	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	if (!cache || !dev) {
+		kfree(cache);
+		kfree(dev);
+		return -ENOMEM;
+	}
+	dev->ifindex = 10;
+	for (i = 0; i < 16; i++) {
+		plan.local_port = 20000 + i;
+		plan.outer_protocol = (i & 1) ? IPPROTO_TCP : IPPROTO_UDP;
+		trustix_datapath_tx_plaintext_mac_cache_store(
+			cache, dev, &plan, mac);
+	}
+	for (i = 0; i < 16; i++) {
+		plan.local_port = 20000 + i;
+		plan.outer_protocol = (i & 1) ? IPPROTO_TCP : IPPROTO_UDP;
+		if (!trustix_datapath_tx_plaintext_mac_cache_lookup(
+			    cache, dev, &plan, addr) ||
+		    !ether_addr_equal(addr, mac)) {
+			ret = -EINVAL;
+			break;
+		}
+	}
+	if (ret)
+		goto out;
+	plan.local_port = 20000;
+	plan.outer_protocol = IPPROTO_UDP;
+	set = trustix_datapath_tx_plaintext_dst_mac_cache_set(dev, &plan);
+	for (i = 0; i < TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS; i++) {
+		struct trustix_datapath_tx_plaintext_mac_cache_entry *entry =
+			&cache->entries[
+				set * TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS + i];
+
+		if (!entry->valid || entry->ifindex != dev->ifindex ||
+		    entry->local_port != htons(plan.local_port) ||
+		    entry->protocol != plan.outer_protocol)
+			continue;
+		entry->expires = jiffies - 1;
+		expired = true;
+		break;
+	}
+	if (!expired || trustix_datapath_tx_plaintext_mac_cache_lookup(
+				cache, dev, &plan, addr))
+		ret = -EINVAL;
+out:
+	kfree(dev);
+	kfree(cache);
+	return ret;
+}
+
+static int trustix_datapath_selftest_tx_plaintext_hash_tx_queue(void)
+{
+	unsigned int i;
+	__u16 queue;
+	__u16 seen_partitioned_tcp = 0;
+	__u16 seen_partitioned_udp = 0;
+	__u16 seen_unpartitioned = 0;
+
+	for (i = 0; i < 1024; i++) {
+		queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+			i, 4, IPPROTO_UDP, true);
+		if (queue >= 4)
+			return -EINVAL;
+		seen_partitioned_udp |= (__u16)(1U << queue);
+
+		queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+			i, 4, IPPROTO_TCP, true);
+		if (queue >= 4 || !(queue & 1))
+			return -EINVAL;
+		seen_partitioned_tcp |= (__u16)(1U << queue);
+
+		queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+			i, 4, IPPROTO_UDP, false);
+		if (queue >= 4)
+			return -EINVAL;
+		seen_unpartitioned |= (__u16)(1U << queue);
+	}
+	if (seen_partitioned_udp != 0x0f || seen_partitioned_tcp != 0x0a ||
+	    seen_unpartitioned != 0x0f)
+		return -EINVAL;
+
+	for (i = 0; i < 128; i++) {
+		queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+			i, 2, IPPROTO_UDP, true);
+		if (queue >= 2 ||
+		    trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+			    i, 2, IPPROTO_TCP, true) != 1)
+			return -EINVAL;
+
+		queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+			i, 3, IPPROTO_UDP, true);
+		if (queue >= 3)
+			return -EINVAL;
+		if (trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+			    i, 3, IPPROTO_TCP, true) != 1)
+			return -EINVAL;
+	}
+	return 0;
+}
+
 static void
 trustix_datapath_build_tixt(__u8 *wire, __u8 flags, __u64 flow_id,
 			    __u64 epoch, __u64 sequence, __u32 payload_len,
@@ -16675,7 +17096,10 @@ static void trustix_datapath_run_selftests(__u64 requested, __u64 *passed,
 			pass |= TRUSTIX_DATAPATH_SELFTEST_TIXT_STREAM;
 	}
 	if (requested & TRUSTIX_DATAPATH_SELFTEST_STATE_TABLE) {
-		if (trustix_datapath_selftest_state_table())
+		if (trustix_datapath_selftest_state_table() ||
+		    trustix_datapath_selftest_rx_worker_mac_cache() ||
+		    trustix_datapath_selftest_tx_plaintext_mac_cache() ||
+		    trustix_datapath_selftest_tx_plaintext_hash_tx_queue())
 			fail |= TRUSTIX_DATAPATH_SELFTEST_STATE_TABLE;
 		else
 			pass |= TRUSTIX_DATAPATH_SELFTEST_STATE_TABLE;
@@ -17291,22 +17715,30 @@ static int __init trustix_datapath_init(void)
 	__u64 failed = 0;
 	int ret;
 
-	ret = trustix_datapath_alloc_state();
+	ret = trustix_datapath_alloc_rx_worker_pcpu_mac_cache();
 	if (ret)
 		return ret;
+	ret = trustix_datapath_alloc_state();
+	if (ret)
+		goto free_pcpu_mac_cache;
 	trustix_datapath_run_selftests(TRUSTIX_DATAPATH_SELFTEST_ALL, &passed,
 				       &failed);
 	trustix_datapath_update_features_from_selftests(passed, failed);
 	ret = misc_register(&trustix_datapath_miscdev);
 	if (ret) {
 		trustix_datapath_free_state();
-		return ret;
+		goto free_pcpu_mac_cache;
 	}
 	ret = register_netdevice_notifier(&trustix_datapath_netdev_notifier);
 	if (ret) {
 		misc_deregister(&trustix_datapath_miscdev);
 		trustix_datapath_free_state();
+		goto free_pcpu_mac_cache;
 	}
+	return ret;
+
+free_pcpu_mac_cache:
+	trustix_datapath_free_rx_worker_pcpu_mac_cache();
 	return ret;
 }
 
@@ -17317,6 +17749,7 @@ static void __exit trustix_datapath_exit(void)
 	synchronize_net();
 	misc_deregister(&trustix_datapath_miscdev);
 	trustix_datapath_free_state();
+	trustix_datapath_free_rx_worker_pcpu_mac_cache();
 }
 
 module_init(trustix_datapath_init);

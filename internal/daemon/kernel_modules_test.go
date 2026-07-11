@@ -111,6 +111,143 @@ func TestTrustIXDatapathReleasesHeldNetdevRefsOnUnregister(t *testing.T) {
 	}
 }
 
+func TestTrustIXDatapathRXWorkerMACCacheKeepsMultipleDestinations(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+	if err != nil {
+		t.Fatalf("read trustix_datapath source: %v", err)
+	}
+	source := string(body)
+	for _, want := range []string{
+		"#define TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_SETS 64",
+		"#define TRUSTIX_DATAPATH_RX_WORKER_MAC_CACHE_WAYS 4",
+		"#define TRUSTIX_DATAPATH_MAC_CACHE_TTL (30 * HZ)",
+		"trustix_datapath_selftest_rx_worker_mac_cache()",
+		"alloc_percpu(struct trustix_datapath_rx_worker_mac_cache)",
+		"free_percpu(trustix_datapath_rx_worker_pcpu_mac_cache)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("multi-destination RX worker MAC cache missing %q", want)
+		}
+	}
+	if strings.Contains(source, "DEFINE_PER_CPU(struct trustix_datapath_rx_worker_mac_cache") {
+		t.Fatal("large RX worker MAC cache remains in the module static per-CPU area")
+	}
+	init := daemonTestSourceFunctionBody(t, source, "trustix_datapath_init")
+	if !strings.Contains(init, "trustix_datapath_alloc_rx_worker_pcpu_mac_cache()") ||
+		!strings.Contains(init, "trustix_datapath_free_rx_worker_pcpu_mac_cache()") {
+		t.Fatal("RX worker per-CPU MAC cache allocation is not covered by init failure cleanup")
+	}
+	exit := daemonTestSourceFunctionBody(t, source, "trustix_datapath_exit")
+	if !strings.Contains(exit, "trustix_datapath_free_rx_worker_pcpu_mac_cache()") {
+		t.Fatal("RX worker per-CPU MAC cache is not freed during module exit")
+	}
+	lookup := daemonTestSourceFunctionBody(t, source, "trustix_datapath_rx_worker_mac_cache_lookup")
+	if !strings.Contains(lookup, "time_after_eq(jiffies, entry->expires)") {
+		t.Fatal("RX worker MAC cache entries do not expire")
+	}
+	selftest := daemonTestSourceFunctionBody(t, source, "trustix_datapath_selftest_rx_worker_mac_cache")
+	for _, dst := range []string{"htonl(0x0a400001)", "htonl(0x0a400081)"} {
+		if !strings.Contains(selftest, dst) {
+			t.Fatalf("RX worker MAC cache selftest does not retain destination %s", dst)
+		}
+	}
+}
+
+func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+	if err != nil {
+		t.Fatalf("read trustix_datapath source: %v", err)
+	}
+	source := string(body)
+	for _, want := range []string{
+		"#define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_SETS 16",
+		"#define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAC_CACHE_WAYS 4",
+		"trustix_datapath_selftest_tx_plaintext_mac_cache()",
+		"tx_plaintext_hash_tx_queue_partition_transport",
+		"trustix_datapath_selftest_tx_plaintext_hash_tx_queue()",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("multi-session TX plaintext MAC cache missing %q", want)
+		}
+	}
+	lookup := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_plaintext_mac_cache_lookup")
+	if !strings.Contains(lookup, "time_after_eq(jiffies, entry->expires)") {
+		t.Fatal("TX plaintext MAC cache entries do not expire")
+	}
+	queue := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_plaintext_set_hash_tx_queue")
+	if !strings.Contains(queue, "if (txq_count <= 1)\n\t\treturn;") {
+		t.Fatal("single-queue devices must skip TX queue hashing without recording per-packet fallbacks")
+	}
+	for _, want := range []string{
+		"trustix_datapath_tx_plaintext_hash_tx_queue_for_transport",
+		"trustix_datapath_tx_plaintext_hash_tx_queue_partition_udp_sets",
+		"trustix_datapath_tx_plaintext_hash_tx_queue_partition_tcp_sets",
+		"trustix_datapath_tx_plaintext_hash_tx_queue_partition_fallbacks",
+	} {
+		if !strings.Contains(queue, want) {
+			t.Fatalf("plaintext TX queue selection missing transport partition behavior %q", want)
+		}
+	}
+	partition := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_plaintext_hash_tx_queue_for_transport")
+	for _, want := range []string{
+		"mixed % txq_count",
+		"(mixed % subset_count) * 2 + 1",
+	} {
+		if !strings.Contains(partition, want) {
+			t.Fatalf("plaintext TX queue partition missing mapping %q", want)
+		}
+	}
+	selftest := daemonTestSourceFunctionBody(t, source, "trustix_datapath_selftest_tx_plaintext_mac_cache")
+	if !strings.Contains(selftest, "for (i = 0; i < 16; i++)") ||
+		!strings.Contains(selftest, "plan.outer_protocol = (i & 1) ? IPPROTO_TCP : IPPROTO_UDP") {
+		t.Fatalf("TX plaintext MAC cache selftest does not retain mixed session-pool tuples")
+	}
+}
+
+func TestTrustIXDatapathModuleParametersForDesiredPartitionsMixedPlaintextTransports(t *testing.T) {
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfileFullPlaintext,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Datapath:   config.TransportDatapathKernelModule,
+			Encryption: securetransport.EncryptionPlaintext,
+			Candidates: []core.EndpointID{"udp-a", "exp-a"},
+		},
+		Endpoints: []config.EndpointConfig{
+			{Name: "udp-a", Transport: string(transport.ProtocolUDP), Enabled: true},
+			{Name: "exp-a", Transport: string(transport.ProtocolExperimentalTCP), Enabled: true},
+		},
+	}
+
+	got := TrustIXDatapathModuleParametersForDesired("", desired)
+	if !moduleParameterHasAssignment(got, "tx_plaintext_hash_tx_queue_partition_transport=1") {
+		t.Fatalf("mixed plaintext full-kmod parameters = %q, missing transport queue partition", got)
+	}
+
+	got = TrustIXDatapathModuleParametersForDesired("tx_plaintext_hash_tx_queue_partition_transport=0", desired)
+	if !moduleParameterHasAssignment(got, "tx_plaintext_hash_tx_queue_partition_transport=0") ||
+		moduleParameterHasAssignment(got, "tx_plaintext_hash_tx_queue_partition_transport=1") {
+		t.Fatalf("mixed plaintext full-kmod parameters = %q, ignored explicit partition disable", got)
+	}
+
+	for _, candidate := range []core.EndpointID{"udp-a", "exp-a"} {
+		single := desired
+		single.TransportPolicy.Candidates = []core.EndpointID{candidate}
+		got = TrustIXDatapathModuleParametersForDesired("", single)
+		if moduleParameterHasAssignment(got, "tx_plaintext_hash_tx_queue_partition_transport=1") {
+			t.Fatalf("single-transport %s parameters = %q, halved available TX queues", candidate, got)
+		}
+	}
+
+	secure := desired
+	secure.TransportPolicy.Encryption = securetransport.EncryptionSecure
+	got = TrustIXDatapathModuleParametersForDesired("", secure)
+	if moduleParameterHasAssignment(got, "tx_plaintext_hash_tx_queue_partition_transport=1") {
+		t.Fatalf("secure mixed-transport parameters = %q, enabled plaintext TX queue partition", got)
+	}
+}
+
 func TestTrustIXDatapathHelpersFlushQueuedNetdevRefsOnUnregister(t *testing.T) {
 	kfuncsBytes, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_kfuncs.c"))
 	if err != nil {
@@ -211,7 +348,7 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTXWithCrashRiskGate(
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -236,7 +373,7 @@ func TestTrustIXDatapathModuleParametersOpenWrtDedicatedGateAllowsFullPlaintext(
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -352,9 +489,12 @@ func TestTrustIXDatapathModuleParametersPreservesExplicitTXPlaintextHashTXQueue(
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
-	got := TrustIXDatapathModuleParameters("tx_plaintext_hash_tx_queue=1")
-	if !moduleParameterHasAssignment(got, "tx_plaintext_hash_tx_queue=1") {
-		t.Fatalf("parameters = %q, missing explicit plaintext TX hash queue assignment", got)
+	for _, value := range []string{"0", "1"} {
+		want := "tx_plaintext_hash_tx_queue=" + value
+		got := TrustIXDatapathModuleParameters(want)
+		if !moduleParameterHasAssignment(got, want) {
+			t.Fatalf("parameters = %q, missing explicit plaintext TX hash queue assignment %q", got, want)
+		}
 	}
 }
 
@@ -422,6 +562,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testin
 		"tx_plaintext_inline_xmit=1",
 		"tx_plaintext_direct_xmit=1",
 		"tx_plaintext_payload_fast_copy=1",
+		"tx_plaintext_hash_tx_queue=1",
 		"tx_plaintext_skip_inner_tcp_checksum=0",
 		"tx_plaintext_stream_coalesce=0",
 		"tx_plaintext_stream_coalesce_max_frames=16",
@@ -510,6 +651,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashR
 		"rx_worker_stream_tcp=1",
 		"tx_plaintext_inline_xmit=1",
 		"tx_plaintext_payload_fast_copy=1",
+		"tx_plaintext_hash_tx_queue=1",
 		"tx_plaintext_slots=8192",
 		"rx_worker_budget=1024",
 		"rx_worker_slots=8192",
@@ -1184,7 +1326,7 @@ func TestTrustIXDatapathModuleParametersForDesiredKeepsLegacyFullPlaintextExperi
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextExperimentalTCPDefaultsStreamCoalesce(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextExperimentalTCPDefaultsHashQueues(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	desired := config.Desired{
 		KernelModules: config.KernelModulesConfig{
@@ -1205,22 +1347,23 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextExperimentalTCPDe
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"tx_plaintext_stream_coalesce=1",
-		"tx_plaintext_stream_coalesce_max_frames=4",
+		"tx_plaintext_hash_tx_queue=1",
+		"tx_plaintext_stream_coalesce=0",
+		"tx_plaintext_stream_coalesce_max_frames=16",
 	} {
 		if !moduleParameterHasAssignment(got, want) {
-			t.Fatalf("parameters = %q, missing experimental_tcp stream coalesce default %q", got, want)
+			t.Fatalf("parameters = %q, missing experimental_tcp full-plaintext default %q", got, want)
 		}
 	}
-	if moduleParameterHasAssignment(got, "tx_plaintext_stream_coalesce=0") {
-		t.Fatalf("parameters = %q, disabled experimental_tcp stream coalesce default", got)
+	if moduleParameterHasAssignment(got, "tx_plaintext_stream_coalesce=1") {
+		t.Fatalf("parameters = %q, enabled low-yield stream coalesce by default", got)
 	}
 	if kernelDatapathTXPlaintextExperimentsAllowed() {
 		t.Fatal("test should not require the TX plaintext experiments gate")
 	}
 }
 
-func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextExperimentalTCPDefaultsStreamCoalesceWithExperimentsGate(t *testing.T) {
+func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextExperimentalTCPKeepsDefaultsWithExperimentsGate(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_TX_PLAINTEXT_EXPERIMENTS", "1")
 	desired := config.Desired{
@@ -1242,11 +1385,12 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextExperimentalTCPDe
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"tx_plaintext_stream_coalesce=1",
-		"tx_plaintext_stream_coalesce_max_frames=4",
+		"tx_plaintext_hash_tx_queue=1",
+		"tx_plaintext_stream_coalesce=0",
+		"tx_plaintext_stream_coalesce_max_frames=16",
 	} {
 		if !moduleParameterHasAssignment(got, want) {
-			t.Fatalf("parameters = %q, missing experimental_tcp stream coalesce default with experiments gate %q", got, want)
+			t.Fatalf("parameters = %q, missing experimental_tcp default with experiments gate %q", got, want)
 		}
 	}
 }

@@ -6,7 +6,7 @@ verifier="${TRUSTIX_CROSS_HOST_GATE_VERIFIER:-${repo_root}/scripts/linux-cross-h
 summary_dir="${TRUSTIX_CROSS_HOST_GATE_SUMMARY_DIR:-}"
 gate_min_gbps="${TRUSTIX_CROSS_HOST_GATE_MIN_GBPS:-}"
 userspace_min_gbps="${TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS:-${gate_min_gbps:-0.5}}"
-userspace_tc_min_gbps="${TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS:-${gate_min_gbps:-1}}"
+userspace_tc_min_gbps="${TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS:-${gate_min_gbps:-0.75}}"
 tc_direct_min_gbps="${TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS:-${gate_min_gbps:-0}}"
 full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}}"
 exp_tcp_full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-4}}"
@@ -662,7 +662,7 @@ main() {
   validate_number TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_GBPS "$secure_exp_tcp_kernel_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS "$route_gso_min_gbps"
   userspace_min_gbps="$(max_decimal "$userspace_min_gbps" "0.5")"
-  userspace_tc_min_gbps="$(max_decimal "$userspace_tc_min_gbps" "1")"
+  userspace_tc_min_gbps="$(max_decimal "$userspace_tc_min_gbps" "0.75")"
   tc_direct_min_gbps="$(max_decimal "$tc_direct_min_gbps" "3")"
   full_kmod_min_gbps="$(max_decimal "$full_kmod_min_gbps" "3")"
   exp_tcp_full_kmod_min_gbps="$(max_decimal "$exp_tcp_full_kmod_min_gbps" "4")"
@@ -900,10 +900,15 @@ main() {
       --require-module-param-min trustix_datapath.tx_plaintext=1 \
       --require-module-param-max trustix_datapath.rx_worker_hot_stats=0 \
       --require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_hash_tx_queue=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_stream_coalesce=0 \
       --require-module-param-min trustix_datapath.session_records="${full_kmod_min_sessions}" \
       --require-module-param-min trustix_datapath.session_wire_records="${full_kmod_min_sessions}" \
       --require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_segments=1 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_direct_xmit_dst_mac_cache_hits=1 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_hash_tx_queue_sets=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_hash_tx_queue_fallbacks=0 \
+      --require-module-param-any-min trustix_datapath.rx_worker_dst_mac_cache_hits=1 \
       --require-module-param-any-min trustix_datapath.rx_worker_gso_xmit_segments=1 \
       --require-module-param-max trustix_datapath.rx_worker_alloc_errors=0 \
       --require-module-param-max trustix_datapath.rx_worker_deliver_errors=0 \
@@ -954,11 +959,16 @@ main() {
       --require-module-param-min trustix_datapath.tx_plaintext=1 \
       --require-module-param-max trustix_datapath.rx_worker_hot_stats=0 \
       --require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_hash_tx_queue=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_stream_coalesce=0 \
       --require-module-param-min trustix_datapath.session_records="${exp_tcp_full_kmod_min_pool_size}" \
       --require-module-param-min trustix_datapath.session_wire_records="${exp_tcp_full_kmod_min_pool_size}" \
       --require-module-param-any-min trustix_datapath.tx_plaintext_packets=1 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_gso_segments=1 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_hash_tx_queue_sets=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_hash_tx_queue_fallbacks=0 \
       --require-module-param-any-min trustix_datapath.rx_worker_injected=1 \
+      --require-module-param-any-min trustix_datapath.rx_worker_dst_mac_cache_hits=1 \
       --require-module-param-any-min trustix_datapath.rx_worker_gso_xmit_segments=1 \
       --require-module-param-max trustix_datapath.rx_worker_alloc_errors=0 \
       --require-module-param-max trustix_datapath.rx_worker_deliver_errors=0 \

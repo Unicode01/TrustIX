@@ -333,6 +333,19 @@ USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH = {
     },
 }
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
+    # This gate is the immediate predecessor of the current queue-partitioned
+    # full-kmod gate. The userspace, TC-direct, secure-kernel, and route-GSO
+    # checks are unchanged (the userspace-TC floor was stricter at 1 Gbps), but
+    # full-kmod families must be re-gated because the current script requires
+    # the new queue-selection and destination-MAC-cache counters.
+    "1371160cca3cceb50617f1cae8704b1755b858bcf08ca530f32b7d46245b19d3": {
+        "userspace",
+        "userspace_tc",
+        "tc_direct",
+        "secure_kudp",
+        "secure_exp_tcp_kernel",
+        "route_gso",
+    },
     # This manifest-v1 gate predates the exp_tcp_full_kmod family. The existing
     # families below kept equivalent verifier semantics when the dedicated
     # experimental TCP full-kmod gate was added, so their current evidence rows

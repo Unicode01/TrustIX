@@ -71,6 +71,7 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			if err != nil {
 				return nil, fmt.Errorf("%s endpoint %q carrier config: %w", transportImpl.protocol, endpoint.Name, err)
 			}
+			cfg.Protocol = transportImpl.protocol
 			name, err := transportImpl.acquireTunnel(ctx, string(endpoint.Name), "dial", cfg)
 			if err != nil {
 				return nil, err
@@ -101,6 +102,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	if err != nil {
 		return nil, fmt.Errorf("%s endpoint %q carrier config: %w", transportImpl.protocol, ep.Name, err)
 	}
+	cfg.Protocol = transportImpl.protocol
 	name, err := transportImpl.acquireTunnel(ctx, string(ep.Name), "listen", cfg)
 	if err != nil {
 		return nil, err
