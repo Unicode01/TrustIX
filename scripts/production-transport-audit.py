@@ -332,6 +332,18 @@ USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH = {
         "c5bb5cf236c7ff95a3fa29fad0b28da69f387744",
     },
 }
+VXLAN_CARRIER_FRAGMENT_COMMITS_BY_PATH = {
+    # c7ea32e makes MTU-bounded application fragmentation the VXLAN default
+    # while preserving the existing kernel-fragmented behavior for GRE/IPIP.
+    # The protocol assignment in iptunnel.go only selects that VXLAN-specific
+    # behavior; non-tunnel transports never instantiate this carrier.
+    "internal/transport/iptunnel/carrier.go": {
+        "c7ea32e25422dea4849b7ae8abe885556eabfa62",
+    },
+    "internal/transport/iptunnel/iptunnel.go": {
+        "c7ea32e25422dea4849b7ae8abe885556eabfa62",
+    },
+}
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     # This gate is the immediate predecessor of the current queue-partitioned
     # full-kmod gate. The userspace, TC-direct, secure-kernel, and route-GSO
@@ -1052,7 +1064,11 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
         return transport in {"udp", "kernel_udp"} or gate_class == "full_kmod"
     if normalized.startswith("internal/transport/quic/"):
         return transport == "quic"
+    if normalized.startswith("internal/transport/iptunnel/"):
+        return transport in {"gre", "ipip", "vxlan"}
     if normalized.startswith("internal/daemon/"):
+        if normalized == "internal/daemon/kernel_datapath_state_linux.go":
+            return gate_class in FULL_DATAPATH_MODULE_GATE_CLASSES
         if normalized == "internal/daemon/kernel_modules.go":
             return gate_class in KERNEL_MODULE_RUNTIME_GATE_CLASSES
         if normalized == "internal/daemon/kernel_udp_direct_policy.go":
@@ -1139,6 +1155,9 @@ def current_runtime_path_change_irrelevant(
         or gate_class in KERNEL_UDP_DIRECT_POLICY_GATE_CLASSES
         or gate_class == "userspace_tc"
     ):
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = VXLAN_CARRIER_FRAGMENT_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits and transport != "vxlan":
         allowed_change_commits.update(allowed_commits)
     if not allowed_change_commits:
         return False

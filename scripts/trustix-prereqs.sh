@@ -56,7 +56,7 @@ trustix_prereqs_required_go_version() {
       fi
     done <"${TRUSTIX_REPO_ROOT}/go.mod"
   fi
-  [[ -n "$version" ]] || version="1.25.0"
+  [[ -n "$version" ]] || version="1.25.12"
   case "$version" in
     *.*.*) ;;
     *.*) version="${version}.0" ;;

@@ -1,6 +1,6 @@
 module trustix.local/trustix
 
-go 1.25
+go 1.25.12
 
 require (
 	github.com/cilium/ebpf v0.21.0

@@ -44,3 +44,23 @@ func TestTrustIXPrereqsDownloadsHaveTotalAndStallTimeouts(t *testing.T) {
 		}
 	}
 }
+
+func TestTrustIXPrereqsPinsPatchedGoToolchain(t *testing.T) {
+	const version = "1.25.12"
+
+	goMod, err := os.ReadFile("../go.mod")
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	if !strings.Contains(string(goMod), "\ngo "+version+"\n") {
+		t.Fatalf("go.mod must pin Go %s", version)
+	}
+
+	prereqs, err := os.ReadFile("trustix-prereqs.sh")
+	if err != nil {
+		t.Fatalf("read trustix-prereqs.sh: %v", err)
+	}
+	if !strings.Contains(string(prereqs), `version="`+version+`"`) {
+		t.Fatalf("trustix-prereqs.sh fallback must pin Go %s", version)
+	}
+}

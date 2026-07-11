@@ -3482,6 +3482,9 @@ cases = [
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/ix_provision_resource.go", False),
     ({"gate_family": "exp_tcp_full_kmod"}, r"internal\daemon\ix_provision_resource.go", False),
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/datapath.go", True),
+    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/kernel_datapath_state_linux.go", True),
+    ({"gate_family": "secure_kudp"}, "internal/daemon/kernel_datapath_state_linux.go", False),
+    ({"gate_family": "userspace_tc"}, "internal/daemon/kernel_datapath_state_linux.go", False),
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/kernel_modules.go", True),
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/transports_status.go", True),
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/transport/experimentaltcp/runtime.go", True),
@@ -3518,6 +3521,9 @@ cases = [
     ({"gate_family": "userspace", "transport": "quic"}, "internal/transport/quic/quic.go", True),
     ({"gate_family": "userspace", "transport": "udp"}, "internal/transport/quic/quic.go", False),
     ({"gate_family": "userspace_tc", "transport": "gre"}, "internal/transport/quic/quic.go", False),
+    ({"gate_family": "userspace", "transport": "udp"}, "internal/transport/iptunnel/carrier.go", False),
+    ({"gate_family": "userspace_tc", "transport": "gre"}, "internal/transport/iptunnel/carrier.go", True),
+    ({"gate_family": "userspace_tc", "transport": "vxlan"}, "internal/transport/iptunnel/iptunnel.go", True),
     ({"gate_family": "userspace"}, "internal/config/config.go", True),
 ]
 for row, path, want in cases:
@@ -3531,6 +3537,57 @@ for row, path, want in cases:
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("runtime path relevance filter failed: %v\n%s", err, output)
+	}
+}
+
+func TestProductionTransportAuditScriptVXLANCarrierFragmentScope(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+probe = {"commit": "c7ea32e25422dea4849b7ae8abe885556eabfa62"}
+module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
+parent = "parent-does-not-matter-for-probed-history"
+for path in [
+    "internal/transport/iptunnel/carrier.go",
+    "internal/transport/iptunnel/iptunnel.go",
+]:
+    cases = [
+        ({"gate_family": "userspace_tc", "transport": "vxlan"}, False),
+        ({"gate_family": "userspace_tc", "transport": "gre"}, True),
+        ({"gate_family": "userspace_tc", "transport": "ipip"}, True),
+        ({"gate_family": "userspace", "transport": "udp"}, True),
+    ]
+    for row, want in cases:
+        got = module.current_runtime_path_change_irrelevant(row, parent, path)
+        if got != want:
+            print(f"VXLAN carrier scope mismatch for {path} row={row}: got {got}, want {want}", file=sys.stderr)
+            sys.exit(1)
+
+probe["commit"] = "1111111111111111111111111111111111111111"
+if module.current_runtime_path_change_irrelevant(
+    {"gate_family": "userspace_tc", "transport": "gre"},
+    parent,
+    "internal/transport/iptunnel/carrier.go",
+):
+    print("VXLAN carrier exemption covered an unrelated commit", file=sys.stderr)
+    sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("VXLAN carrier scope regression failed: %v\n%s", err, output)
 	}
 }
 
