@@ -69,6 +69,7 @@ coverage.out
 /kernel/**/modules.order
 /kernel/**/.tmp_versions/
 /kernel/**/.*.cmd
+/kernel/**/.*.o.d
 
 # Local lab and benchmark wrappers. Keep release/deploy/smoke scripts tracked;
 # these high-churn matrix tools are useful locally but noisy in a first source
