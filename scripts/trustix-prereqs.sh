@@ -64,9 +64,35 @@ trustix_prereqs_required_go_version() {
   printf '%s\n' "$version"
 }
 
+trustix_prereqs_go_version_at_least() {
+  local actual="${1#go}"
+  local required="${2#go}"
+  local actual_major actual_minor actual_patch
+  local required_major required_minor required_patch
+
+  [[ "$actual" =~ ^([0-9]+)[.]([0-9]+)([.]([0-9]+))?$ ]] || return 1
+  actual_major="${BASH_REMATCH[1]}"
+  actual_minor="${BASH_REMATCH[2]}"
+  actual_patch="${BASH_REMATCH[4]:-0}"
+  [[ "$required" =~ ^([0-9]+)[.]([0-9]+)([.]([0-9]+))?$ ]] || return 1
+  required_major="${BASH_REMATCH[1]}"
+  required_minor="${BASH_REMATCH[2]}"
+  required_patch="${BASH_REMATCH[4]:-0}"
+
+  if (( 10#$actual_major != 10#$required_major )); then
+    (( 10#$actual_major > 10#$required_major ))
+    return
+  fi
+  if (( 10#$actual_minor != 10#$required_minor )); then
+    (( 10#$actual_minor > 10#$required_minor ))
+    return
+  fi
+  (( 10#$actual_patch >= 10#$required_patch ))
+}
+
 trustix_prereqs_go_bootstrap_ok() {
   command -v go >/dev/null 2>&1 || return 1
-  local raw version major rest minor
+  local raw version required
   raw="$(go env GOVERSION 2>/dev/null || true)"
   if [[ -z "$raw" ]]; then
     raw="$(go version 2>/dev/null || true)"
@@ -74,14 +100,8 @@ trustix_prereqs_go_bootstrap_ok() {
     raw="${raw%% *}"
   fi
   version="${raw#go}"
-  major="${version%%.*}"
-  rest="${version#*.}"
-  minor="${rest%%.*}"
-  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
-  if (( major > 1 )); then
-    return 0
-  fi
-  (( major == 1 && minor >= 21 ))
+  required="$(trustix_prereqs_required_go_version)"
+  trustix_prereqs_go_version_at_least "$version" "$required"
 }
 
 trustix_prereqs_go_arch() {
