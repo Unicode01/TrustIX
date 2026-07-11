@@ -252,6 +252,7 @@ main() {
   need_cmd install
   need_cmd sha256sum
   need_cmd stat
+  trustix_prereqs_prepare_go_module_network
   case "$cgo_enabled" in 0|1) ;; *) die "TRUSTIX_RELEASE_CGO_ENABLED must be 0 or 1" ;; esac
   log "$("$go_bin" version)"
   log "version=${release_version} commit=${release_commit} built_at=${release_built_at}"

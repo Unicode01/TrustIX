@@ -124,6 +124,23 @@ trustix_prereqs_mirrors_enabled() {
   esac
 }
 
+trustix_prereqs_default_goproxy() {
+  printf '%s\n' 'https://goproxy.cn|https://mirrors.aliyun.com/goproxy/|https://goproxy.io|direct'
+}
+
+trustix_prereqs_prepare_go_module_network() {
+  if [[ -n "${TRUSTIX_BOOTSTRAP_GOPROXY:-}" ]]; then
+    export GOPROXY="$TRUSTIX_BOOTSTRAP_GOPROXY"
+    return 0
+  fi
+  trustix_prereqs_mirrors_enabled || return 0
+  case "${GOPROXY:-}" in
+    ""|https://proxy.golang.org,direct)
+      export GOPROXY="$(trustix_prereqs_default_goproxy)"
+      ;;
+  esac
+}
+
 trustix_prereqs_go_url_candidates() {
   local version="$1"
   local arch="$2"
@@ -451,7 +468,8 @@ trustix_prereqs_ensure_openwrt_dataplane_runtime_deps() {
 }
 
 trustix_prereqs_ensure_source_build_deps() {
-  trustix_prereqs_ensure_commands git go clang make gcc install realpath sha256sum stat tar gzip
+  trustix_prereqs_ensure_commands git go clang make gcc install realpath sha256sum stat tar gzip || return 1
+  trustix_prereqs_prepare_go_module_network
 }
 
 trustix_prereqs_ensure_kernel_module_build_deps() {

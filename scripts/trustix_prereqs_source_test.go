@@ -105,3 +105,52 @@ EOF
 		t.Fatalf("Go patch floor probe failed: %v\n%s", err, output)
 	}
 }
+
+func TestTrustIXPrereqsSelectsReachableGoProxy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a native GNU bash")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("GNU bash is unavailable")
+	}
+
+	const probe = `
+set -euo pipefail
+source ./trustix-prereqs.sh
+expected='https://goproxy.cn|https://mirrors.aliyun.com/goproxy/|https://goproxy.io|direct'
+
+unset GOPROXY TRUSTIX_BOOTSTRAP_GOPROXY
+TRUSTIX_BOOTSTRAP_MIRRORS=auto
+trustix_prereqs_prepare_go_module_network
+[[ "$GOPROXY" == "$expected" ]]
+
+GOPROXY=https://proxy.example.test
+trustix_prereqs_prepare_go_module_network
+[[ "$GOPROXY" == https://proxy.example.test ]]
+
+TRUSTIX_BOOTSTRAP_GOPROXY=https://override.example.test
+trustix_prereqs_prepare_go_module_network
+[[ "$GOPROXY" == https://override.example.test ]]
+
+unset GOPROXY TRUSTIX_BOOTSTRAP_GOPROXY
+TRUSTIX_BOOTSTRAP_MIRRORS=off
+trustix_prereqs_prepare_go_module_network
+[[ -z "${GOPROXY:-}" ]]
+`
+	cmd := exec.Command(bash, "-c", probe)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Go proxy selection probe failed: %v\n%s", err, output)
+	}
+}
+
+func TestReleaseBuildPreparesGoModuleNetwork(t *testing.T) {
+	payload, err := os.ReadFile("build-release-linux.sh")
+	if err != nil {
+		t.Fatalf("read build-release-linux.sh: %v", err)
+	}
+	if !strings.Contains(string(payload), "trustix_prereqs_prepare_go_module_network") {
+		t.Fatal("build-release-linux.sh must prepare the Go module network before building")
+	}
+}
