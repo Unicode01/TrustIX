@@ -16562,6 +16562,15 @@ func TestRouteTCPGSOAsyncWorkerHasMemoryAndBatchingGuards(t *testing.T) {
 			t.Fatalf("route TCP GSO virtio outer-GSO guard missing %q", want)
 		}
 	}
+	templateBody := sourceFunctionBody(t, source, "trustix_tixt_tx_init_route_gso_template")
+	if !strings.Contains(templateBody,
+		"trustix_tixt_tx_route_gso_outer_gso_capable(tmpl, false)") {
+		t.Fatal("route TCP GSO template must select outer GSO from the actual output device capability")
+	}
+	crossItemBody := sourceFunctionBody(t, source, "trustix_route_tcp_gso_async_worker_try_cross_item")
+	if !strings.Contains(crossItemBody, "!first->tmpl.stream_outer_gso") {
+		t.Fatal("route TCP GSO cross-item batching must bypass devices guarded from outer GSO")
+	}
 }
 
 func TestRemotePerfMatrixAppliesSysfsAfterModuleReload(t *testing.T) {

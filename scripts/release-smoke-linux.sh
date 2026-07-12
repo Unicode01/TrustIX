@@ -35,6 +35,13 @@ exp_tcp_bench_smoke="${TRUSTIX_RELEASE_SMOKE_EXP_TCP_BENCH:-0}"
 iptunnel_smoke="${TRUSTIX_RELEASE_SMOKE_IPTUNNEL:-auto}"
 device_access_smoke="${TRUSTIX_RELEASE_SMOKE_DEVICE_ACCESS:-auto}"
 allocated_ports=""
+preexisting_crypto=0
+preexisting_datapath=0
+preexisting_helpers=0
+
+grep -q '^trustix_crypto ' /proc/modules 2>/dev/null && preexisting_crypto=1
+grep -q '^trustix_datapath ' /proc/modules 2>/dev/null && preexisting_datapath=1
+grep -q '^trustix_datapath_helpers ' /proc/modules 2>/dev/null && preexisting_helpers=1
 
 log() {
   printf '[trustix-smoke] %s\n' "$*" >&2
@@ -123,13 +130,78 @@ stop_daemon() {
 }
 
 daemon_pid=""
+cleanup_leaked_release_processes() {
+  local proc exe pid
+  local -a leaked=()
+  for proc in /proc/[0-9]*; do
+    [[ -e "$proc/exe" ]] || continue
+    exe="$(readlink "$proc/exe" 2>/dev/null || true)"
+    case "$exe" in
+      "$workdir"/extract/bin/*)
+        leaked+=("${proc##*/}")
+        ;;
+    esac
+  done
+  ((${#leaked[@]} > 0)) || return 0
+
+  log "ERROR: release smoke leaked packaged process(es): ${leaked[*]}"
+  kill "${leaked[@]}" >/dev/null 2>&1 || true
+  for _ in {1..50}; do
+    local alive=0
+    for pid in "${leaked[@]}"; do
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        alive=1
+        break
+      fi
+    done
+    [[ "$alive" == "1" ]] || return 1
+    sleep 0.1
+  done
+  kill -9 "${leaked[@]}" >/dev/null 2>&1 || true
+  return 1
+}
+
+unload_new_module() {
+  local module_name="$1" preexisting="$2"
+  [[ "$preexisting" == "0" ]] || return 0
+  grep -q "^${module_name} " /proc/modules 2>/dev/null || return 0
+  local attempt
+  for attempt in {1..50}; do
+    rmmod "$module_name" >/dev/null 2>&1 || true
+    grep -q "^${module_name} " /proc/modules 2>/dev/null || return 0
+    sleep 0.1
+  done
+  log "ERROR: ${module_name} remained loaded after release smoke cleanup"
+  return 1
+}
+
 cleanup() {
+  local exit_code=$?
+  trap - EXIT
+  set +e
   stop_daemon
+  if ! cleanup_leaked_release_processes && [[ "$exit_code" == "0" ]]; then
+    exit_code=1
+  fi
+  case "$module_unload_on_exit" in
+    1|true|yes|on)
+      if ! unload_new_module trustix_datapath "$preexisting_datapath" && [[ "$exit_code" == "0" ]]; then
+        exit_code=1
+      fi
+      if ! unload_new_module trustix_datapath_helpers "$preexisting_helpers" && [[ "$exit_code" == "0" ]]; then
+        exit_code=1
+      fi
+      if ! unload_new_module trustix_crypto "$preexisting_crypto" && [[ "$exit_code" == "0" ]]; then
+        exit_code=1
+      fi
+      ;;
+  esac
   if [[ "$keep" != "1" ]]; then
     rm -rf "$workdir"
   else
     log "kept workdir: $workdir"
   fi
+  exit "$exit_code"
 }
 trap cleanup EXIT
 
@@ -138,6 +210,7 @@ main() {
   [[ -f "$tarball" ]] || die "release tarball not found: $tarball"
   need_cmd tar
   need_cmd python3
+  need_cmd readlink
   need_cmd realpath
 
   allocate_ports

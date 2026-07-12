@@ -26,6 +26,13 @@ loaded_by_script=0
 loaded_variant=""
 roundtrip_tests="${TRUSTIX_KERNEL_ROUNDTRIP_TESTS:-TestKernelCryptoProviderObjectSyntheticContextLifecycle|TestKernelCryptoProviderFrameSealOpenAndReplay|TestKernelCryptoProviderFrameSealOpenAES128|TestKernelCryptoProviderFrameSealOpenVariableSizes|TestExperimentalTCPKernelCryptoXDPOpensFrameAndRejectsReplay|TestExperimentalTCPKernelCryptoXDPDirectOpenObjectOpensFrame}"
 
+if [[ -z "$test_bin" && -x "${repo_root}/bin/ebpf.test" ]]; then
+  test_bin="${repo_root}/bin/ebpf.test"
+fi
+if [[ -z "$kernelmodule_test_bin" && -x "${repo_root}/bin/kernelmodule.test" ]]; then
+  kernelmodule_test_bin="${repo_root}/bin/kernelmodule.test"
+fi
+
 log() {
   printf '[trustix-kernel] %s\n' "$*" >&2
 }
@@ -296,7 +303,7 @@ run_roundtrip_test() {
   fi
   need_cmd go
   log "running eBPF provider roundtrip/frame/RX-open tests through go test"
-  output="$(cd "$repo_root" && go test ./internal/dataplane/ebpf -run "$roundtrip_tests" -v 2>&1)" || {
+  output="$(cd "$repo_root" && go test -count=1 ./internal/dataplane/ebpf -run "$roundtrip_tests" -v 2>&1)" || {
     printf '%s\n' "$output"
     return 1
   }

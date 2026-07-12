@@ -260,6 +260,15 @@ kernel_provider_expected() {
   [[ "$kernel_module" == "1" ]] || grep -q '^trustix_crypto ' /proc/modules 2>/dev/null
 }
 
+kernel_provider_loadable() {
+  kernel_provider_expected ||
+    {
+      [[ -x "${bin_dir}/trustixd" ]] &&
+        "${bin_dir}/trustixd" -version 2>/dev/null |
+          grep -q '^asset.embedded_kos.trustix_crypto.ko.embedded=true$'
+    }
+}
+
 is_af_xdp_transport() {
   [[ "$transport" == "experimental_tcp" || "$transport" == "kernel_udp" ]]
 }
@@ -1559,7 +1568,7 @@ EOF
 EOF
   fi
 
-  if is_kernel_udp_transport || is_iptunnel_transport || experimental_tcp_direct_enabled || kernel_plaintext_direct_fastpath_enabled; then
+  if is_af_xdp_transport || is_iptunnel_transport || experimental_tcp_direct_enabled || kernel_plaintext_direct_fastpath_enabled; then
     cat >>"$config_path" <<EOF
   kernel_transport:
     mode: require_kernel
@@ -1873,8 +1882,8 @@ assert_experimental_tcp_kernel_crypto_rejects() {
   if [[ "$crypto_placement" == "kernel" || "$kernel_module" == "1" ]]; then
     return 0
   fi
-  if kernel_provider_expected; then
-    log "skipping unavailable-kernel-crypto rejection check because trustix_crypto is already loaded"
+  if kernel_provider_loadable; then
+    log "skipping unavailable-kernel-crypto rejection check because trustix_crypto is loaded or embedded"
     return 0
   fi
   local node="$1"
@@ -4127,7 +4136,7 @@ fi
     auto|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
     *) die "TRUSTIX_E2E_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED must be auto or 0/1" ;;
   esac
-  if [[ "$transport" == "experimental_tcp" && "$crypto_placement" == "kernel" && "$kernel_module" != "1" ]] && ! kernel_provider_expected; then
+  if [[ "$transport" == "experimental_tcp" && "$crypto_placement" == "kernel" && "$kernel_module" != "1" ]] && ! kernel_provider_loadable; then
     die "TRUSTIX_E2E_CRYPTO_PLACEMENT=kernel requires TRUSTIX_E2E_KERNEL_MODULE=1"
   fi
 

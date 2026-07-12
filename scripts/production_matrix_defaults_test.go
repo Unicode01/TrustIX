@@ -5400,13 +5400,15 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=0",
 		"--require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_backoff_retries=1",
 		"--require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_backoff_sleep_usecs=50",
-		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1",
+		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_builds=1",
+		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_frames=1",
 		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_xmit_packets=1",
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_queue_full=0",
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_xmit_errors=0",
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_errors=0",
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_errors=0",
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_blocked=0",
+		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_virtio_blocked=0",
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_verify_errors=0",
 		"--require-lsmod-module trustix_crypto",
 		"--require-lsmod-module trustix_datapath_helpers",
@@ -5415,8 +5417,16 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 			t.Fatalf("linux-cross-host-production-gate.sh missing %q", want)
 		}
 	}
-	if got := strings.Count(text, "--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1"); got != 1 {
-		t.Fatalf("linux-cross-host-production-gate.sh should require outer-GSO frames only for route-GSO, got %d occurrences", got)
+	if strings.Contains(text, "--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1") {
+		t.Fatal("linux-cross-host-production-gate.sh must not require outer-GSO on guarded devices")
+	}
+	for _, requirement := range []string{
+		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_builds=1",
+		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_frames=1",
+	} {
+		if got := strings.Count(text, requirement); got != 2 {
+			t.Fatalf("linux-cross-host-production-gate.sh should require %q for plaintext and secure route-GSO, got %d occurrences", requirement, got)
+		}
 	}
 	if strings.Contains(text, "TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY") {
 		t.Fatalf("linux-cross-host-production-gate.sh must not allow disabling binary identity checks")
@@ -5921,7 +5931,7 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	for name, want := range map[string]string{
 		fastName:        "1.5",
 		slowName:        "0.5",
-		userspaceTCName: "1",
+		userspaceTCName: "0.75",
 		"tc":            "3",
 		"full":          "3",
 		"expfull":       "4",

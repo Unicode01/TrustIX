@@ -305,12 +305,12 @@ main() {
   write_configs
 
   log "starting IX daemon"
-  run_ns "$ns_ix" "$trustixd" -config "$workdir/ix.yaml" -data-dir "$workdir/state-ix" -api "$api_addr" -peer-api "$peer_api_addr" -dataplane linux -api-admin-auth >"$workdir/ix.log" 2>&1 &
+  ip netns exec "$ns_ix" "$trustixd" -config "$workdir/ix.yaml" -data-dir "$workdir/state-ix" -api "$api_addr" -peer-api "$peer_api_addr" -dataplane linux -api-admin-auth >"$workdir/ix.log" 2>&1 &
   daemon_pid=$!
   wait_for_udp_listener
 
   log "starting device client"
-  run_ns "$ns_dev" "$trustixdevice" -config "$workdir/device.yaml" >"$workdir/device.log" 2>&1 &
+  ip netns exec "$ns_dev" "$trustixdevice" -config "$workdir/device.yaml" >"$workdir/device.log" 2>&1 &
   device_pid=$!
   wait_for_device_lease
 

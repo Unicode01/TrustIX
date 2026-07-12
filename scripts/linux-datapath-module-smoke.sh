@@ -16,6 +16,10 @@ loaded_by_script=0
 loaded_variant=""
 reload_loaded_module=0
 
+if [[ -z "$kernelmodule_test_bin" && -x "${repo_root}/bin/kernelmodule.test" ]]; then
+  kernelmodule_test_bin="${repo_root}/bin/kernelmodule.test"
+fi
+
 log() {
   printf '[trustix-datapath] %s\n' "$*" >&2
 }
@@ -335,7 +339,7 @@ run_ioctl_test() {
   fi
   need_cmd go
   log "running datapath ioctl selftest through go test"
-  (cd "$repo_root" && go test ./internal/kernelmodule -run '^TestTrustIXDatapathHelpersDeviceQueryAndSelftest$' -v)
+  (cd "$repo_root" && go test -count=1 ./internal/kernelmodule -run '^TestTrustIXDatapathHelpersDeviceQueryAndSelftest$' -v)
 }
 
 main() {

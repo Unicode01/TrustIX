@@ -848,7 +848,6 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build_frag_fast_copy=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_software_segment=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_outer_gso=1")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_outer_gso_hard_enable=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_max_frames=128")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_cross_item_batch=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_cross_item_dequeue_batch=1")

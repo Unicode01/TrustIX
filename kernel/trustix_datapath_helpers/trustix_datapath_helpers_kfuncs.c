@@ -8158,6 +8158,10 @@ struct trustix_tixt_tx_route_gso_template {
 	bool stream_outer_gso;
 };
 
+static bool trustix_tixt_tx_route_gso_outer_gso_capable(
+				const struct trustix_tixt_tx_route_gso_template *tmpl,
+				bool record_block);
+
 struct trustix_tixt_tx_route_gso_stream_direct_frame {
 	u64 sequence;
 	u32 payload_offset;
@@ -8522,8 +8526,10 @@ trustix_tixt_tx_init_route_gso_template(
 	tmpl->trust_partial_inner_csum =
 		clear_flags &
 		TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM;
+	/* Select outer GSO per device; guarded devices keep the direct-build path. */
 	tmpl->stream_outer_gso =
-		READ_ONCE(trustix_route_tcp_gso_async_stream_outer_gso);
+		READ_ONCE(trustix_route_tcp_gso_async_stream_outer_gso) &&
+		trustix_tixt_tx_route_gso_outer_gso_capable(tmpl, false);
 	tmpl->saddr = READ_ONCE(flow->saddr);
 	tmpl->daddr = READ_ONCE(flow->daddr);
 	tmpl->mtu = READ_ONCE(flow->mtu);
@@ -13686,7 +13692,7 @@ trustix_route_tcp_gso_async_worker_try_cross_item(
 	if (items_out)
 		*items_out = 0;
 	if (!first || !first->skb || first->resliced ||
-	    first->tmpl.kernel_udp ||
+	    first->tmpl.kernel_udp || !first->tmpl.stream_outer_gso ||
 	    !trustix_route_tcp_gso_async_cross_item_enabled()) {
 		trustix_route_tcp_gso_async_cross_item_record_miss(1);
 		return trustix_tixt_tx_route_gso_async_process_item(first);
@@ -14433,7 +14439,9 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async_ex(
 	}
 	if (sync_redirect && READ_ONCE(trustix_route_tcp_gso_sync_stream)) {
 		item->tmpl.stream_outer_gso =
-			READ_ONCE(trustix_route_tcp_gso_sync_stream_outer_gso);
+			READ_ONCE(trustix_route_tcp_gso_sync_stream_outer_gso) &&
+			trustix_tixt_tx_route_gso_outer_gso_capable(
+				&item->tmpl, false);
 	}
 	if (secure) {
 		sequence = atomic64_fetch_add(

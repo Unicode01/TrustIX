@@ -420,6 +420,11 @@ main() {
     esac
     copy_file "$script_src" "${pkg_dir}/scripts/${script_name}" 0755
   done
+  for script_src in "${repo_root}"/scripts/*.py; do
+    [[ -f "$script_src" ]] || continue
+    script_name="$(basename "$script_src")"
+    copy_file "$script_src" "${pkg_dir}/scripts/${script_name}" 0755
+  done
   cp -R "$bin_dir" "${pkg_dir}/bin"
   write_manifest
 

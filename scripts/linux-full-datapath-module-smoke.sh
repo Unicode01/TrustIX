@@ -17,6 +17,10 @@ verify_safe_defaults="${TRUSTIX_FULL_DATAPATH_VERIFY_SAFE_DEFAULTS:-1}"
 loaded_by_script=0
 clean_legacy_modules="${TRUSTIX_FULL_DATAPATH_CLEAN_LEGACY_MODULES:-1}"
 
+if [[ -z "$kernelmodule_test_bin" && -x "${repo_root}/bin/kernelmodule.test" ]]; then
+  kernelmodule_test_bin="${repo_root}/bin/kernelmodule.test"
+fi
+
 log() {
   printf '[trustix-full-datapath] %s\n' "$*" >&2
 }
@@ -264,7 +268,7 @@ run_ioctl_test() {
   fi
   need_cmd go
   log "running full datapath ioctl selftest through go test"
-  (cd "$repo_root" && go test ./internal/kernelmodule -run '^TestTrustIXFullDatapathDeviceQueryAndSelftest$' -v)
+  (cd "$repo_root" && go test -count=1 ./internal/kernelmodule -run '^TestTrustIXFullDatapathDeviceQueryAndSelftest$' -v)
 }
 
 main() {

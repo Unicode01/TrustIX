@@ -2042,7 +2042,6 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDP
 		"route_tcp_gso_async_stream_direct_build=1",
 		"route_tcp_gso_async_stream_software_segment=0",
 		"route_tcp_gso_async_stream_outer_gso=1",
-		"route_tcp_gso_async_stream_outer_gso_hard_enable=1",
 		"route_tcp_gso_async_stream_cross_item_batch=1",
 		"route_tcp_gso_async_flow_shard_queue=1",
 		"route_tcp_gso_async_hash_tx_queue=0",
@@ -2078,6 +2077,7 @@ func TestTrustIXDatapathHelpersModuleParametersForDesiredEnablesSafeAcklessTCXDP
 	for _, unexpected := range []string{
 		"route_tcp_gso_sync_stream=1",
 		"route_tcp_gso_sync_stream_outer_gso=1",
+		"route_tcp_gso_async_stream_outer_gso_hard_enable=1",
 	} {
 		if strings.Contains(got, unexpected) {
 			t.Fatalf("parameters = %q, unexpectedly enabled legacy path %q", got, unexpected)

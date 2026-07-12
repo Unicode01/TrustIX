@@ -24,3 +24,19 @@ func TestBuildReleaseLinuxDisablesGoVCSStamping(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildReleaseLinuxPackagesPythonScriptDependencies(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join(".", "build-release-linux.sh"))
+	if err != nil {
+		t.Fatalf("read build-release-linux.sh: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		`for script_src in "${repo_root}"/scripts/*.py`,
+		`copy_file "$script_src" "${pkg_dir}/scripts/${script_name}" 0755`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("build-release-linux.sh should package Python script dependencies with %q", want)
+		}
+	}
+}
