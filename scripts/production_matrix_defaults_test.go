@@ -3479,6 +3479,8 @@ if spec.loader is None:
 spec.loader.exec_module(module)
 
 cases = [
+    ({"gate_family": "full_kmod"}, "internal/webui/assets/app.js", False),
+    ({"gate_family": "userspace"}, r"internal\webui\assets\app.css", False),
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/ix_provision_resource.go", False),
     ({"gate_family": "exp_tcp_full_kmod"}, r"internal\daemon\ix_provision_resource.go", False),
     ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/datapath.go", True),

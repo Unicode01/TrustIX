@@ -1034,6 +1034,8 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
     normalized = path.replace("\\", "/")
     if normalized.endswith("_test.go"):
         return False
+    if normalized.startswith("internal/webui/assets/"):
+        return False
     if normalized in CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS:
         return False
     gate_class = gate_family_class(row["gate_family"])
