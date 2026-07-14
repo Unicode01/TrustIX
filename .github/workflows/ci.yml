@@ -64,9 +64,21 @@ jobs:
         run: |
           bash scripts/trustix-update-smoke.sh
 
+      - name: Uninstall Lifecycle Smoke
+        run: |
+          bash scripts/trustix-uninstall-smoke.sh
+
+      - name: OpenWrt Init Discovery Smoke
+        run: |
+          sh scripts/trustix-openwrt-init-smoke.sh
+
       - name: Encrypted Backup Recovery Smoke
         run: |
           bash scripts/trustix-backup-smoke.sh
+
+      - name: Active Standby Lifecycle Smoke
+        run: |
+          bash scripts/trustix-ha-smoke.sh
 
       - name: Production Transport Evidence Audit
         run: |

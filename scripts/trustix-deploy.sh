@@ -620,6 +620,11 @@ openwrt_firewall_rules="${1:-auto}"
 [ -n "$initdir" ] || initdir=/etc/init.d
 [ -n "$target_cert_dir" ] || target_cert_dir="${sysconfdir}/certs"
 
+if [ -f "$sysconfdir/$instance.ha.env" ] && { [ "$enable_service" = 1 ] || [ "$start_service" = 1 ]; }; then
+  echo "instance $instance is managed by active-standby HA; rerun with --no-enable --no-start" >&2
+  exit 1
+fi
+
 install_openwrt_dataplane_runtime_deps() {
   [ -f /etc/openwrt_release ] || return 0
   command -v opkg >/dev/null 2>&1 || return 0
@@ -913,6 +918,11 @@ install_from_package() {
   elif [[ -f "${repo_root}/scripts/trustix-backup.sh" ]]; then
     install_file "${repo_root}/scripts/trustix-backup.sh" "${prefix}/libexec/trustix/trustix-backup.sh" 0755
   fi
+  if [[ -f "${package_dir}/scripts/trustix-ha.sh" ]]; then
+    install_file "${package_dir}/scripts/trustix-ha.sh" "${prefix}/libexec/trustix/trustix-ha.sh" 0755
+  elif [[ -f "${repo_root}/scripts/trustix-ha.sh" ]]; then
+    install_file "${repo_root}/scripts/trustix-ha.sh" "${prefix}/libexec/trustix/trustix-ha.sh" 0755
+  fi
   case "$service_manager" in
     systemd)
       if [[ -f "${package_dir}/packaging/systemd/trustixd@.service" ]]; then
@@ -1010,6 +1020,9 @@ install_config() {
 local_deploy() {
   [[ "$(uname -s)" == "Linux" ]] || die "deployment must run on Linux"
   apply_target_defaults
+  if [[ -f "${sysconfdir}/${instance}.ha.env" && ( "$enable_service" == "1" || "$start_service" == "1" ) ]]; then
+    die "instance $instance is managed by active-standby HA; rerun with --no-enable --no-start so keepalived remains the only service owner"
+  fi
   if [[ "$service_manager" == "openwrt" ]]; then
     ensure_openwrt_dataplane_runtime_deps || die "OpenWrt dataplane runtime dependencies are missing; automatic dependency install failed"
   fi

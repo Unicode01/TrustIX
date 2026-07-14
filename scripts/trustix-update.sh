@@ -43,7 +43,7 @@ Source-build input, used when no release tarball is provided:
 Install/restart:
   --instance NAME           trustixd@NAME instance to restart; repeatable
   --service-manager MODE    auto, systemd, or openwrt (default: auto)
-  --no-restart              install only; do not restart service instances
+  --no-restart              install only; required for HA-managed instances after demotion
   --prefix DIR              install prefix (default: /usr/local, OpenWrt: /opt/trustix)
   --bindir DIR              binary dir (default: PREFIX/bin)
   --libexecdir DIR          helper script dir (default: PREFIX/libexec/trustix)
@@ -527,6 +527,10 @@ install_package() {
     log "install encrypted backup helper"
     install_regular_file "${package_dir}/scripts/trustix-backup.sh" "${libexecdir}/trustix-backup.sh" 0755
   fi
+  if [[ -f "${package_dir}/scripts/trustix-ha.sh" ]]; then
+    log "install active-standby helper"
+    install_regular_file "${package_dir}/scripts/trustix-ha.sh" "${libexecdir}/trustix-ha.sh" 0755
+  fi
   if [[ -f "${package_dir}/packaging/systemd/trustixd@.service" ]]; then
     if [[ "$service_manager" == "systemd" ]]; then
       log "install systemd unit"
@@ -585,6 +589,9 @@ discover_instances() {
   for env_file in "${sysconfdir}"/*.env; do
     [[ -f "$env_file" ]] || continue
     name="$(basename "$env_file")"
+    case "$name" in
+      *.backup.env|*.ha.env) continue ;;
+    esac
     add_configured_instance "${name%.env}"
   done
   if [[ "$service_manager" == "systemd" ]] && command -v systemctl >/dev/null 2>&1; then
@@ -611,6 +618,17 @@ discover_instances() {
   done
   for name in "${instances[@]}"; do
     add_preflight_instance "$name"
+  done
+}
+
+assert_ha_restart_safe() {
+  local name ha_env
+  [[ "$restart" == "1" ]] || return 0
+  for name in "${instances[@]}"; do
+    ha_env="${sysconfdir}/${name}.ha.env"
+    if [[ -f "$ha_env" ]]; then
+      die "instance $name is managed by active-standby HA; demote this node and rerun with --no-restart so keepalived remains the only service owner"
+    fi
   done
 }
 
@@ -757,6 +775,9 @@ prepare_transaction_snapshot() {
   done
   if [[ -f "${package_dir}/scripts/trustix-backup.sh" ]]; then
     snapshot_transaction_file "${libexecdir}/trustix-backup.sh" 0755
+  fi
+  if [[ -f "${package_dir}/scripts/trustix-ha.sh" ]]; then
+    snapshot_transaction_file "${libexecdir}/trustix-ha.sh" 0755
   fi
   case "$service_manager" in
     systemd)
@@ -1094,6 +1115,7 @@ trap update_exit_trap EXIT
 prepare_tarball
 package_dir="$(extract_package)"
 discover_instances
+assert_ha_restart_safe
 preflight_candidate "${package_dir}/bin/trustixd"
 prepare_transaction_snapshot "$package_dir"
 transaction_started=1

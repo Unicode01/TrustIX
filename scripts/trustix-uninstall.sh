@@ -21,6 +21,7 @@ Scope:
 Paths:
   --prefix DIR              install prefix (default: /usr/local, OpenWrt: /opt/trustix)
   --bindir DIR              binary dir (default: PREFIX/bin)
+  --libexecdir DIR          helper dir (default: PREFIX/libexec/trustix)
   --sysconfdir DIR          config/env dir (default: /etc/trustix)
   --unitdir DIR             systemd unit dir (default: /etc/systemd/system)
   --initdir DIR             OpenWrt init dir (default: /etc/init.d)
@@ -40,6 +41,7 @@ Removal:
   --no-cleanup-dataplane    skip trustixd -cleanup-dataplane
   --unload-kernel-modules   unload TrustIX kernel modules after cleanup
   --keep-kernel-modules     leave loaded TrustIX kernel modules in place
+  --ha-offline              confirm selected HA instances are demoted and detached from keepalived
 
 Remote:
   --target USER@HOST        copy this script to target and run it there
@@ -124,6 +126,7 @@ all_instances=0
 service_manager="${TRUSTIX_UNINSTALL_SERVICE_MANAGER:-auto}"
 prefix=""
 bindir=""
+libexecdir=""
 sysconfdir=""
 unitdir=""
 initdir=""
@@ -139,6 +142,7 @@ purge_certs_dir=0
 remove_binaries=""
 remove_service=""
 json=0
+ha_offline=0
 script_url="${TRUSTIX_UNINSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-uninstall.sh}"
 unloaded_modules=()
 failed_modules=()
@@ -155,6 +159,7 @@ while [[ $# -gt 0 ]]; do
     --service-manager) [[ $# -ge 2 ]] || die "--service-manager requires a value"; service_manager="$2"; shift 2 ;;
     --prefix) [[ $# -ge 2 ]] || die "--prefix requires a value"; prefix="$2"; shift 2 ;;
     --bindir) [[ $# -ge 2 ]] || die "--bindir requires a value"; bindir="$2"; shift 2 ;;
+    --libexecdir) [[ $# -ge 2 ]] || die "--libexecdir requires a value"; libexecdir="$2"; shift 2 ;;
     --sysconfdir) [[ $# -ge 2 ]] || die "--sysconfdir requires a value"; sysconfdir="$2"; shift 2 ;;
     --unitdir) [[ $# -ge 2 ]] || die "--unitdir requires a value"; unitdir="$2"; shift 2 ;;
     --initdir) [[ $# -ge 2 ]] || die "--initdir requires a value"; initdir="$2"; shift 2 ;;
@@ -172,6 +177,7 @@ while [[ $# -gt 0 ]]; do
     --no-cleanup-dataplane) cleanup_dataplane=0; shift ;;
     --unload-kernel-modules) unload_kernel_modules=1; shift ;;
     --keep-kernel-modules) unload_kernel_modules=0; shift ;;
+    --ha-offline) ha_offline=1; shift ;;
     --no-sudo) sudo_cmd=""; shift ;;
     --json) json=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -228,6 +234,7 @@ remote_uninstall() {
   remote_args+=(--service-manager "$service_manager")
   [[ -n "$prefix" ]] && remote_args+=(--prefix "$prefix")
   [[ -n "$bindir" ]] && remote_args+=(--bindir "$bindir")
+  [[ -n "$libexecdir" ]] && remote_args+=(--libexecdir "$libexecdir")
   [[ -n "$sysconfdir" ]] && remote_args+=(--sysconfdir "$sysconfdir")
   [[ -n "$unitdir" ]] && remote_args+=(--unitdir "$unitdir")
   [[ -n "$initdir" ]] && remote_args+=(--initdir "$initdir")
@@ -244,6 +251,7 @@ remote_uninstall() {
   [[ "$remove_service" == "1" ]] && remote_args+=(--remove-service)
   [[ "$unload_kernel_modules" == "0" ]] && remote_args+=(--keep-kernel-modules)
   [[ "$unload_kernel_modules" == "1" ]] && remote_args+=(--unload-kernel-modules)
+  [[ "$ha_offline" == "1" ]] && remote_args+=(--ha-offline)
   [[ -z "$sudo_cmd" ]] && remote_args+=(--no-sudo)
   [[ "$json" == "1" ]] && remote_args+=(--json)
 
@@ -288,6 +296,7 @@ apply_defaults() {
     esac
   fi
   [[ -n "$bindir" ]] || bindir="${prefix}/bin"
+  [[ -n "$libexecdir" ]] || libexecdir="${prefix}/libexec/trustix"
   [[ -n "$unitdir" ]] || unitdir="/etc/systemd/system"
   [[ -n "$initdir" ]] || initdir="/etc/init.d"
   if [[ -z "$state_root" ]]; then
@@ -332,6 +341,9 @@ discover_instances() {
       [[ -f "$file" ]] || continue
       base="${file##*/}"
       base="${base%.env}"
+      case "$base" in
+        *.backup|*.ha) continue ;;
+      esac
       [[ -n "$base" ]] || continue
       found=1
       printf '%s\n' "$base"
@@ -421,6 +433,25 @@ stop_openwrt_instance() {
   fi
 }
 
+disable_instance_backup_schedule() {
+  local instance="$1"
+  case "$service_manager" in
+    systemd)
+      if command -v systemctl >/dev/null 2>&1; then
+        run_root systemctl disable --now "trustix-backup@${instance}.timer" >/dev/null 2>&1 || true
+      fi
+      ;;
+    openwrt)
+      if [[ -x "${libexecdir}/trustix-backup.sh" && -f "${sysconfdir}/${instance}.backup.env" ]]; then
+        run_root "${libexecdir}/trustix-backup.sh" remove-schedule \
+          --instance "$instance" \
+          --instance-env "${sysconfdir}/${instance}.env" \
+          --backup-env "${sysconfdir}/${instance}.backup.env" >/dev/null 2>&1 || true
+      fi
+      ;;
+  esac
+}
+
 cleanup_instance_dataplane() {
   local instance="$1"
   load_instance_env "$instance"
@@ -487,7 +518,10 @@ remove_instance_files() {
   local instance="$1"
   load_instance_env "$instance"
   if [[ "$purge_config" == "1" ]]; then
-    run_root rm -f "${sysconfdir}/${instance}.env"
+    run_root rm -f \
+      "${sysconfdir}/${instance}.env" \
+      "${sysconfdir}/${instance}.backup.env" \
+      "${sysconfdir}/${instance}.ha.env"
     if path_under "$TRUSTIX_CONFIG" "$sysconfdir"; then
       run_root rm -f "$TRUSTIX_CONFIG"
     else
@@ -513,7 +547,10 @@ remove_instance_files() {
 remove_shared_service() {
   case "$service_manager" in
     systemd)
-      run_root rm -f "${unitdir}/trustixd@.service"
+      run_root rm -f \
+        "${unitdir}/trustixd@.service" \
+        "${unitdir}/trustix-backup@.service" \
+        "${unitdir}/trustix-backup@.timer"
       if command -v systemctl >/dev/null 2>&1; then
         run_root systemctl daemon-reload >/dev/null 2>&1 || true
       fi
@@ -529,9 +566,11 @@ remove_shared_service() {
 
 remove_shared_binaries() {
   local name
-  for name in trustixd trustixctl trustix-ca trustix-device; do
+  for name in trustixd trustixctl trustix-ca trustix-device trustix-iptunnel-smoke; do
     run_root rm -f "${bindir}/${name}"
   done
+  run_root rm -f "${libexecdir}/trustix-backup.sh" "${libexecdir}/trustix-ha.sh"
+  run_root rmdir "$libexecdir" >/dev/null 2>&1 || true
   run_root rmdir "$bindir" >/dev/null 2>&1 || true
   case "$prefix" in
     /opt/trustix|/usr/local/trustix)
@@ -583,7 +622,14 @@ local_uninstall() {
   done < <(discover_instances)
 
   for instance in "${resolved_instances[@]}"; do
+    if [[ -f "${sysconfdir}/${instance}.ha.env" && "$ha_offline" != "1" ]]; then
+      die "instance $instance is managed by active-standby HA; detach it from keepalived, demote it, and rerun with --ha-offline"
+    fi
+  done
+
+  for instance in "${resolved_instances[@]}"; do
     log "stop instance ${instance}"
+    disable_instance_backup_schedule "$instance"
     case "$service_manager" in
       openwrt) stop_openwrt_instance "$instance" ;;
       *) stop_systemd_instance "$instance" ;;

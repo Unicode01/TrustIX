@@ -1,0 +1,50 @@
+# Replace interface, source/peer IPs, VIPs, instance name, and priorities on
+# each node. Both nodes start in BACKUP; nopreempt avoids an automatic failback.
+# The tracking script is intentionally unweighted. A sustained failure moves
+# the local VRRP instance to FAULT and releases VIPs; nopreempt then prevents
+# an automatic failback when the old node recovers.
+
+global_defs {
+    enable_script_security
+    script_user root
+}
+
+vrrp_script chk_trustix_ix_a {
+    script "/usr/local/libexec/trustix/trustix-ha.sh check --instance ix-a"
+    interval 2
+    timeout 2
+    fall 3
+    rise 2
+    user root
+}
+
+vrrp_instance TRUSTIX_IX_A {
+    state BACKUP
+    interface eth1
+    virtual_router_id 51
+    priority 150
+    advert_int 1
+    nopreempt
+
+    unicast_src_ip 192.0.2.11
+    unicast_peer {
+        192.0.2.12
+    }
+
+    virtual_ipaddress {
+        10.0.0.1/24 dev br-lan
+        198.51.100.10/32 dev eth0
+    }
+
+    track_script {
+        chk_trustix_ix_a
+    }
+
+    notify_master "/usr/local/libexec/trustix/trustix-ha.sh notify --instance ix-a --state MASTER"
+    notify_backup "/usr/local/libexec/trustix/trustix-ha.sh notify --instance ix-a --state BACKUP"
+    notify_fault  "/usr/local/libexec/trustix/trustix-ha.sh notify --instance ix-a --state FAULT"
+    notify_stop   "/usr/local/libexec/trustix/trustix-ha.sh notify --instance ix-a --state STOP"
+
+    garp_master_delay 1
+    garp_master_repeat 5
+}

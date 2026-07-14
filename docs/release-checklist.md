@@ -42,11 +42,14 @@ Use this checklist before cutting a Linux release tarball.
 
 - Transactional updater smoke: `bash scripts/trustix-update-smoke.sh`
 - Encrypted backup/recovery smoke: `bash scripts/trustix-backup-smoke.sh`; confirm wrong identities and modified ciphertext fail, retention is bounded, and `validate-archive` leaves runtime/config head unchanged.
+- Active-standby lifecycle smoke: `bash scripts/trustix-ha-smoke.sh`. On disposable dual nodes, additionally validate real keepalived election, gateway/data/control VIP movement, readiness-triggered takeover, no automatic failback, state synchronization, and the actual fencing provider under partition.
+- Uninstall lifecycle smoke: `bash scripts/trustix-uninstall-smoke.sh`; confirm sidecar env files are not discovered as IX instances, HA uninstall requires `--ha-offline`, backup schedules are disabled, and shared helpers/units are removed.
 - Verify an old configuration rejected by the candidate leaves binaries and services untouched.
 - Verify a candidate startup failure restores the previous binaries, systemd/OpenWrt service definition, and listening management API.
 - Verify a candidate that keeps its process and listener alive but returns HTTP 503 from `/readyz` is rolled back. The rollback probe must still accept a legacy daemon that predates `/readyz` when its process and listener recover.
 - On disposable hosts, upgrade with TrustIX kernel modules already loaded and confirm the old version is restored if the new service fails health checks.
 - Coordinate a two-node breaking upgrade and confirm traffic recovers after both configurations and binaries are migrated.
+- For HA nodes, confirm direct restart is rejected and perform the rolling update with each node demoted plus `--no-restart` before controlled failover.
 - Build on target kernel or with matching `KDIR`: `sudo -E bash scripts/build-release-linux.sh`
 - Optional multi-kernel module bundle: `TRUSTIX_KERNEL_MODULE_KDIRS=/path/to/k1/build,/path/to/k2/build ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- bash scripts/build-kernel-modules-linux.sh`
 - Package smoke: `arch=$(go env GOARCH); sudo -E TRUSTIX_RELEASE_TARBALL=build/release/trustix-linux-${arch}.tar.gz bash scripts/release-smoke-linux.sh`

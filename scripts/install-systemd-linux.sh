@@ -27,6 +27,7 @@ unit_src="${TRUSTIX_INSTALL_UNIT:-${repo_root}/packaging/systemd/trustixd@.servi
 backup_unit_src="${TRUSTIX_INSTALL_BACKUP_UNIT:-${repo_root}/packaging/systemd/trustix-backup@.service}"
 backup_timer_src="${TRUSTIX_INSTALL_BACKUP_TIMER:-${repo_root}/packaging/systemd/trustix-backup@.timer}"
 backup_script_src="${TRUSTIX_INSTALL_BACKUP_SCRIPT:-${repo_root}/scripts/trustix-backup.sh}"
+ha_script_src="${TRUSTIX_INSTALL_HA_SCRIPT:-${repo_root}/scripts/trustix-ha.sh}"
 
 log() {
   printf '[trustix-install] %s\n' "$*" >&2
@@ -68,6 +69,9 @@ main() {
   install -D -m 0755 "${bin_src}/trustix-ca" "${bindir}/trustix-ca"
   if [[ -f "$backup_script_src" ]]; then
     install -D -m 0755 "$backup_script_src" "${prefix}/libexec/trustix/trustix-backup.sh"
+  fi
+  if [[ -f "$ha_script_src" ]]; then
+    install -D -m 0755 "$ha_script_src" "${prefix}/libexec/trustix/trustix-ha.sh"
   fi
 
   log "install systemd unit to ${unitdir}"

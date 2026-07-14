@@ -112,6 +112,12 @@ trustix_for_each_instance() {
 	local env_file instance found
 
 	if [ -n "$requested" ]; then
+		case "$requested" in
+		*.backup|*.ha)
+			trustix_log "refusing sidecar env as an instance: $requested"
+			return 1
+			;;
+		esac
 		env_file="$(trustix_instance_env "$requested")"
 		"$callback" "$requested" "$env_file"
 		return $?
@@ -122,6 +128,9 @@ trustix_for_each_instance() {
 		[ -f "$env_file" ] || continue
 		instance="${env_file##*/}"
 		instance="${instance%.env}"
+		case "$instance" in
+		*.backup|*.ha) continue ;;
+		esac
 		[ -n "$instance" ] || continue
 		found=1
 		"$callback" "$instance" "$env_file" || return $?

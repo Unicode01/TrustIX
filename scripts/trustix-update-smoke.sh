@@ -285,10 +285,13 @@ create_package() {
   local root="$1"
   local manager="$2"
   local package="${root}/package"
-  mkdir -p "${package}/bin" "${package}/packaging/${manager}"
+  mkdir -p "${package}/bin" "${package}/packaging/${manager}" "${package}/scripts"
   cp "${workdir}/trustixd-new" "${package}/bin/trustixd"
   cp "${workdir}/trustixd-new" "${package}/bin/trustixctl"
   cp "${workdir}/trustixd-new" "${package}/bin/trustix-ca"
+  printf '#!/usr/bin/env bash\n# FIXTURE_VERSION=new\n' >"${package}/scripts/trustix-backup.sh"
+  printf '#!/usr/bin/env bash\n# FIXTURE_VERSION=new\n' >"${package}/scripts/trustix-ha.sh"
+  chmod 0755 "${package}/scripts/trustix-backup.sh" "${package}/scripts/trustix-ha.sh"
   if [[ "$manager" == "systemd" ]]; then
     printf '# FIXTURE_VERSION=new\n' >"${package}/packaging/systemd/trustixd@.service"
   else
@@ -307,11 +310,14 @@ setup_scenario() {
   local old_legacy="${7:-0}"
   local root="${workdir}/${name}"
   scenario_roots+=("$root")
-  mkdir -p "${root}/bin" "${root}/etc/trustix" "${root}/etc/init.d" "${root}/etc/systemd" "${root}/fake-bin" "${root}/run" "${root}/state"
+  mkdir -p "${root}/bin" "${root}/libexec" "${root}/etc/trustix" "${root}/etc/init.d" "${root}/etc/systemd" "${root}/fake-bin" "${root}/run" "${root}/state"
   cp "${workdir}/trustixd-old" "${root}/bin/trustixd"
   chmod 0755 "${root}/bin/trustixd"
   write_fake_init "${root}/etc/init.d/trustix" "$root" old
   printf '# FIXTURE_VERSION=old\n' >"${root}/etc/systemd/trustixd@.service"
+  printf '#!/usr/bin/env bash\n# FIXTURE_VERSION=old\n' >"${root}/libexec/trustix-backup.sh"
+  printf '#!/usr/bin/env bash\n# FIXTURE_VERSION=old\n' >"${root}/libexec/trustix-ha.sh"
+  chmod 0755 "${root}/libexec/trustix-backup.sh" "${root}/libexec/trustix-ha.sh"
   cat >"${root}/etc/trustix/ix-test.yaml" <<EOF
 domain:
   id: lab.local
@@ -322,6 +328,10 @@ endpoints:
     transport: ${config_transport}
     listen: 127.0.0.1:17001
 EOF
+  cat >"${root}/etc/trustix/ix-test.backup.env" <<EOF
+TRUSTIX_BACKUP_RECIPIENT=${root}/offline-recovery.pub
+EOF
+  chmod 0600 "${root}/etc/trustix/ix-test.backup.env"
   cat >"${root}/etc/trustix/ix-test.env" <<EOF
 TRUSTIX_BIN=${root}/bin/trustixd
 TRUSTIX_CONFIG=${root}/etc/trustix/ix-test.yaml
@@ -352,6 +362,7 @@ run_update() {
       --tarball "${root}/package.tar.gz" \
       --service-manager "$manager" \
       --bindir "${root}/bin" \
+      --libexecdir "${root}/libexec" \
       --unitdir "${root}/etc/systemd" \
       --initdir "${root}/etc/init.d" \
       --sysconfdir "${root}/etc/trustix" \
@@ -398,6 +409,7 @@ fi
 assert_version "$root" old
 assert_running "$root"
 grep -q 'FIXTURE_VERSION=old' "${root}/etc/systemd/trustixd@.service" || die "systemd unit was not rolled back"
+grep -q 'FIXTURE_VERSION=old' "${root}/libexec/trustix-ha.sh" || die "HA helper was not rolled back"
 [[ ! -e "${root}/bin/trustixctl" ]] || die "new systemd binary was not removed during rollback"
 grep -q 'rollback complete' "${root}/update.err" || die "systemd rollback did not complete"
 "${root}/etc/init.d/trustix" stop ix-test
@@ -423,6 +435,7 @@ run_update "$root" openwrt --json >"${root}/update.out" 2>"${root}/update.err"
 assert_version "$root" new
 assert_running "$root"
 grep -q 'FIXTURE_VERSION=new' "${root}/etc/init.d/trustix" || die "OpenWrt init script was not updated"
+grep -q 'FIXTURE_VERSION=new' "${root}/libexec/trustix-ha.sh" || die "HA helper was not updated"
 grep -q '"restarted":\["trustix:ix-test"\]' "${root}/update.out" || die "OpenWrt JSON summary is missing restarted instance"
 "${root}/etc/init.d/trustix" stop ix-test
 
@@ -435,6 +448,7 @@ fi
 assert_version "$root" old
 assert_running "$root"
 grep -q 'FIXTURE_VERSION=old' "${root}/etc/init.d/trustix" || die "OpenWrt init script was not rolled back"
+grep -q 'FIXTURE_VERSION=old' "${root}/libexec/trustix-ha.sh" || die "OpenWrt HA helper was not rolled back"
 [[ ! -e "${root}/bin/trustixctl" ]] || die "new OpenWrt binary was not removed during rollback"
 [[ ! -e "${root}/backup" ]] || die "--no-backup unexpectedly kept a persistent backup"
 grep -q 'rollback complete' "${root}/update.err" || die "OpenWrt rollback did not complete"
@@ -452,6 +466,33 @@ grep -q 'FIXTURE_VERSION=old' "${root}/etc/systemd/trustixd@.service" || die "le
 [[ ! -e "${root}/bin/trustixctl" ]] || die "not-ready candidate binary was not removed during rollback"
 grep -q 'readiness is not healthy' "${root}/update.err" || die "candidate readiness failure was not reported"
 grep -q 'rollback complete' "${root}/update.err" || die "legacy rollback after readiness failure did not complete"
+"${root}/etc/init.d/trustix" stop ix-test
+
+log "HA-managed instances require a demoted no-restart rolling update"
+setup_scenario systemd-ha-guard systemd tix_tcp 0 "$((base_port + 6))"
+root="$scenario_root"
+cat >"${root}/etc/trustix/ix-test.ha.env" <<'EOF'
+TRUSTIX_HA_SERVICE_MANAGER=systemd
+TRUSTIX_HA_REQUIRE_FENCE=1
+EOF
+chmod 0600 "${root}/etc/trustix/ix-test.ha.env"
+pid_before="$(cat "${root}/run/ix-test.pid")"
+if run_update "$root" systemd >"${root}/update.out" 2>"${root}/update.err"; then
+  die "HA-managed instance was restarted directly"
+fi
+assert_version "$root" old
+assert_running "$root"
+[[ "$(cat "${root}/run/ix-test.pid")" == "$pid_before" ]] || die "HA guard restarted the old service"
+grep -q 'managed by active-standby HA' "${root}/update.err" || die "HA restart rejection was not explained"
+grep -q 'FIXTURE_VERSION=old' "${root}/libexec/trustix-ha.sh" || die "HA guard modified files before rejecting the update"
+
+run_update "$root" systemd --no-restart --json >"${root}/update-no-restart.out" 2>"${root}/update-no-restart.err"
+assert_version "$root" new
+assert_running "$root"
+[[ "$(cat "${root}/run/ix-test.pid")" == "$pid_before" ]] || die "HA no-restart update replaced the running process"
+grep -q 'FIXTURE_VERSION=new' "${root}/libexec/trustix-ha.sh" || die "HA no-restart update did not install the helper"
+grep -q '"preflighted":\["ix-test"\]' "${root}/update-no-restart.out" || die "HA sidecar env files were treated as instances"
+grep -q '"restarted":\[\]' "${root}/update-no-restart.out" || die "HA no-restart update reported a restarted service"
 "${root}/etc/init.d/trustix" stop ix-test
 
 log "all transactional update scenarios passed"
