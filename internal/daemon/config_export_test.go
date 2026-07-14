@@ -16,11 +16,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"trustix.local/trustix/internal/config"
 )
 
 func TestConfigExportArchiveOmitsPrivateKeysByDefault(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	desired.Endpoints = append(desired.Endpoints, config.EndpointConfig{
+		Name:      "ix-a-tix-tcp",
+		Mode:      config.EndpointModePassive,
+		Listen:    "127.0.0.1:7443",
+		Transport: "experimental_tcp",
+		Enabled:   true,
+	})
 	daemon := newConfigApplyTestDaemon(t, desired)
 	daemon.cfg.ConfigPath = writeConfigExportSourceFile(t, desired)
 	daemon.logPath = "memory"
@@ -39,6 +48,10 @@ func TestConfigExportArchiveOmitsPrivateKeysByDefault(t *testing.T) {
 	}
 	if _, ok := entries["desired.json"]; !ok {
 		t.Fatal("archive missing desired.json")
+	}
+	if !bytes.Contains(entries["desired.json"], []byte(`"transport": "tix_tcp"`)) ||
+		bytes.Contains(entries["desired.json"], []byte(`"transport": "experimental_tcp"`)) {
+		t.Fatalf("exported desired config did not use public TIX-TCP name:\n%s", entries["desired.json"])
 	}
 	if len(entries["config.log"]) == 0 {
 		t.Fatal("archive missing config.log payload")

@@ -298,7 +298,7 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 	if err != nil {
 		return ixProvisionIssueResponse{}, err
 	}
-	configJSON, err := json.MarshalIndent(targetDesired, "", "  ")
+	configJSON, err := json.MarshalIndent(config.PublicDesired(targetDesired), "", "  ")
 	if err != nil {
 		return ixProvisionIssueResponse{}, fmt.Errorf("encode provisioned IX config: %w", err)
 	}
@@ -557,7 +557,7 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 			return ixProvisionIssueRequest{}, nil, fmt.Errorf("control_api: %w", err)
 		}
 	}
-	request.EndpointTransport = strings.ToLower(strings.TrimSpace(request.EndpointTransport))
+	request.EndpointTransport = string(transport.RuntimeProtocol(transport.Protocol(request.EndpointTransport)))
 	if request.EndpointTransport == "" {
 		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile, request.EndpointMode, request.EndpointAddress, request.ServiceManager)
 	}
@@ -590,7 +590,7 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 	}
 	request.EndpointName = core.EndpointID(strings.TrimSpace(string(request.EndpointName)))
 	if request.EndpointName == "" {
-		request.EndpointName = core.EndpointID(safeProvisionFileName(string(request.IXID), "ix-new") + "-" + request.EndpointTransport)
+		request.EndpointName = core.EndpointID(safeProvisionFileName(string(request.IXID), "ix-new") + "-" + ixProvisionEndpointNameSuffix(request.EndpointTransport))
 	}
 	if err := request.EndpointName.Validate(); err != nil {
 		return ixProvisionIssueRequest{}, nil, err
@@ -829,6 +829,14 @@ func ixProvisionDefaultEndpointTransport(profile string, endpointMode string, en
 	return string(transport.ProtocolUDP)
 }
 
+func ixProvisionEndpointNameSuffix(endpointTransport string) string {
+	name := config.PublicTransportName(endpointTransport)
+	if name == string(transport.ProtocolTIXTCP) {
+		return "tix-tcp"
+	}
+	return name
+}
+
 func normalizeProvisionControlAPI(raw string) string {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	if raw == "" {
@@ -1054,7 +1062,7 @@ func ixProvisionEndpointConfigs(request ixProvisionIssueRequest, profile ixProvi
 	candidates := []core.EndpointID{primary.Name}
 	if ixProvisionShouldAddAcklessEndpoint(request, profile) {
 		acklessName := ixProvisionAcklessEndpointName(request)
-		endpoints = append(endpoints, ixProvisionEndpointConfig(request, acklessName, string(transport.ProtocolExperimentalTCP), ixProvisionAcklessPriority, profile))
+		endpoints = append(endpoints, ixProvisionEndpointConfig(request, acklessName, string(transport.ProtocolTIXTCP), ixProvisionAcklessPriority, profile))
 		candidates = append(candidates, acklessName)
 	}
 	return endpoints, candidates
@@ -1086,7 +1094,7 @@ func ixProvisionEndpointConfig(request ixProvisionIssueRequest, name core.Endpoi
 		Mode:      config.EndpointMode(request.EndpointMode),
 		Listen:    request.EndpointListen,
 		Address:   request.EndpointAddress,
-		Transport: endpointTransport,
+		Transport: string(transport.RuntimeProtocol(transport.Protocol(endpointTransport))),
 		Priority:  priority,
 		Security: config.EndpointSecurityConfig{
 			Encryption: profile.Encryption,
@@ -1105,12 +1113,12 @@ func ixProvisionEndpointConfig(request ixProvisionIssueRequest, name core.Endpoi
 func ixProvisionAcklessEndpointName(request ixProvisionIssueRequest) core.EndpointID {
 	name := strings.TrimSpace(string(request.EndpointName))
 	if strings.HasSuffix(name, "-udp") {
-		return core.EndpointID(strings.TrimSuffix(name, "-udp") + "-experimental_tcp")
+		return core.EndpointID(strings.TrimSuffix(name, "-udp") + "-tix-tcp")
 	}
 	if name != "" {
-		return core.EndpointID(name + "-experimental_tcp")
+		return core.EndpointID(name + "-tix-tcp")
 	}
-	return core.EndpointID(safeProvisionFileName(string(request.IXID), "ix-new") + "-experimental_tcp")
+	return core.EndpointID(safeProvisionFileName(string(request.IXID), "ix-new") + "-tix-tcp")
 }
 
 func ixProvisionTransportProfiles(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) []config.TransportProfileConfig {
@@ -1118,7 +1126,7 @@ func ixProvisionTransportProfiles(request ixProvisionIssueRequest, profile ixPro
 		return nil
 	}
 	return []config.TransportProfileConfig{{
-		Transport:       string(transport.ProtocolExperimentalTCP),
+		Transport:       string(transport.ProtocolTIXTCP),
 		Profile:         profile.TransportProfile,
 		Datapath:        profile.Datapath,
 		Encryption:      profile.Encryption,
@@ -1157,7 +1165,7 @@ func ixProvisionEffectiveProfileForRequest(request ixProvisionIssueRequest, prof
 }
 
 func ixProvisionSecureExperimentalTCPKernelProfile(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
-	if transport.Protocol(request.EndpointTransport) != transport.ProtocolExperimentalTCP {
+	if transport.RuntimeProtocol(transport.Protocol(request.EndpointTransport)) != transport.ProtocolExperimentalTCP {
 		return false
 	}
 	return profile.TransportProfile == config.TransportProfilePerformance &&
@@ -1178,7 +1186,7 @@ func validateIXProvisionKernelRouteGSOSupport(request ixProvisionIssueRequest) e
 		parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionSecure {
 		return nil
 	}
-	switch transport.Protocol(request.EndpointTransport) {
+	switch transport.RuntimeProtocol(transport.Protocol(request.EndpointTransport)) {
 	case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
 		return fmt.Errorf("OpenWrt secure performance route-GSO is not a production default yet; use profile=stable for secure userspace transport or profile=plaintext_performance for validated OpenWrt full-kmod")
 	default:
@@ -1239,7 +1247,7 @@ func ixProvisionKernelModuleModes(request ixProvisionIssueRequest, profile ixPro
 	case config.TransportDatapathKernelModule:
 		return "disabled", "required", "disabled"
 	case config.TransportDatapathTCXDP:
-		if transport.Protocol(request.EndpointTransport) == transport.ProtocolExperimentalTCP {
+		if transport.RuntimeProtocol(transport.Protocol(request.EndpointTransport)) == transport.ProtocolExperimentalTCP {
 			return "disabled", "required", "required"
 		}
 	}
@@ -1383,7 +1391,7 @@ func ixProvisionKernelModulePath(request ixProvisionIssueRequest, mode string, m
 }
 
 func ixProvisionTransportSupportsFullPlaintextDatapath(endpointTransport string) bool {
-	switch transport.Protocol(endpointTransport) {
+	switch transport.RuntimeProtocol(transport.Protocol(endpointTransport)) {
 	case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
 		return true
 	default:

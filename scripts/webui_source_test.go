@@ -59,6 +59,45 @@ func TestWebUIIXProvisionDefaultsMatchBackendProductionProfiles(t *testing.T) {
 	}
 }
 
+func TestWebUITIXTCPPublicNamingKeepsLegacyReadCompatibility(t *testing.T) {
+	utilsPayload, err := os.ReadFile("../webui/src/utils.ts")
+	if err != nil {
+		t.Fatalf("read webui utils: %v", err)
+	}
+	utils := string(utilsPayload)
+	for _, want := range []string{
+		`return ["udp", "kernel_udp", "tix_tcp",`,
+		`case "experimental_tcp":`,
+		`case "ackless_tcp":`,
+		`return "tix_tcp";`,
+		`return value === "tix_tcp" ? "TIX-TCP" : value;`,
+	} {
+		if !strings.Contains(utils, want) {
+			t.Fatalf("webui TIX-TCP normalization missing fragment %q", want)
+		}
+	}
+	if strings.Contains(utils, `return ["udp", "kernel_udp", "experimental_tcp",`) {
+		t.Fatal("webui transport options still expose experimental_tcp")
+	}
+
+	componentsPayload, err := os.ReadFile("../webui/src/components.tsx")
+	if err != nil {
+		t.Fatalf("read webui components: %v", err)
+	}
+	components := string(componentsPayload)
+	for _, want := range []string{
+		`dataPath.tix_tcp || dataPath.experimental_tcp`,
+		`name: "TIX-TCP"`,
+		`return "tix_tcp";`,
+		`return ` + "`${name.slice(0, -4)}-tix-tcp`" + `;`,
+		`optionLabels={transportOptionLabels(props.t)}`,
+	} {
+		if !strings.Contains(components, want) {
+			t.Fatalf("webui TIX-TCP presentation missing fragment %q", want)
+		}
+	}
+}
+
 func TestWebUIIXProvisionProfileDefaultsArePinnedByProfile(t *testing.T) {
 	payload, err := os.ReadFile("../webui/src/components.tsx")
 	if err != nil {

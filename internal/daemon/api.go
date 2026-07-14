@@ -101,6 +101,7 @@ type kernelCapabilitiesResponse struct {
 	RXStage         kernelDatapathRXStageStatus      `json:"rx_stage,omitempty"`
 	KernelTransport *dataplane.KernelTransportStatus `json:"kernel_transport,omitempty"`
 	KernelUDP       *dataplane.KernelUDPStatus       `json:"kernel_udp,omitempty"`
+	TIXTCP          *dataplane.ExperimentalTCPStatus `json:"tix_tcp,omitempty"`
 	ExperimentalTCP *dataplane.ExperimentalTCPStatus `json:"experimental_tcp,omitempty"`
 	DataPathMode    string                           `json:"datapath_mode,omitempty"`
 	Capabilities    []string                         `json:"capabilities,omitempty"`
@@ -297,7 +298,7 @@ func (daemon *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Runtime:        view.Runtime,
 		StateFiles:     daemon.stateFilesStatus(),
 		TransportTLS:   daemon.transportTLSStatus(view.DataPath),
-		DataPath:       view.DataPath,
+		DataPath:       publicDataPathStatus(view.DataPath),
 		ConfigSync:     daemon.configSyncSnapshot(),
 	})
 }
@@ -538,6 +539,7 @@ type routeProbeDatapathHints struct {
 	CaptureForwarderSuppressed bool   `json:"capture_forwarder_suppressed,omitempty"`
 	KernelTransportMode        string `json:"kernel_transport_mode,omitempty"`
 	KernelTransportReady       bool   `json:"kernel_transport_ready,omitempty"`
+	TIXTCPReady                bool   `json:"tix_tcp_ready,omitempty"`
 	ExperimentalTCPReady       bool   `json:"experimental_tcp_ready,omitempty"`
 	ActiveSessions             int    `json:"active_sessions"`
 }
@@ -1033,7 +1035,8 @@ func (daemon *Daemon) routeProbeDatapathHints() routeProbeDatapathHints {
 		hints.KernelTransportMode = string(status.KernelTransport.Mode)
 	}
 	if status.ExperimentalTCP != nil {
-		hints.ExperimentalTCPReady = status.ExperimentalTCP.Available && status.ExperimentalTCP.FastPath
+		hints.TIXTCPReady = status.ExperimentalTCP.Available && status.ExperimentalTCP.FastPath
+		hints.ExperimentalTCPReady = hints.TIXTCPReady
 	}
 	return hints
 }
@@ -1043,7 +1046,7 @@ func (daemon *Daemon) routeProbeEndpoints(endpoints []config.EndpointConfig) []r
 	for _, endpoint := range endpoints {
 		out = append(out, routeProbeEndpoint{
 			Name:          string(endpoint.Name),
-			Transport:     endpoint.Transport,
+			Transport:     config.PublicTransportName(endpoint.Transport),
 			Priority:      endpoint.Priority,
 			PriorityScore: daemon.endpointPriorityScore("", endpoint),
 			Preference:    daemon.endpointTransportPreferenceRank(endpoint),
@@ -1072,7 +1075,7 @@ func (daemon *Daemon) handleFlows(w http.ResponseWriter, r *http.Request) {
 }
 
 func (daemon *Daemon) handleEndpoints(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, endpointsFromConfig(daemon.desired))
+	writeJSON(w, http.StatusOK, publicEndpointMetadata(endpointsFromConfig(daemon.desired)))
 }
 
 func (daemon *Daemon) handleEndpointProbe(w http.ResponseWriter, r *http.Request) {
@@ -1113,7 +1116,7 @@ func (daemon *Daemon) endpointProbeFromRequest(r *http.Request) (endpointProbeRe
 	response := endpointProbeResponse{
 		Peer:      string(peer.ID),
 		Endpoint:  string(endpoint.Name),
-		Transport: endpoint.Transport,
+		Transport: config.PublicTransportName(endpoint.Transport),
 		Address:   endpoint.Address,
 		CheckedAt: time.Now().UTC(),
 	}
@@ -1365,7 +1368,7 @@ func (daemon *Daemon) handleBPFMaps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (daemon *Daemon) handleDataPath(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, daemon.controlViewSnapshot().DataPath)
+	writeJSON(w, http.StatusOK, publicDataPathStatus(daemon.controlViewSnapshot().DataPath))
 }
 
 func (daemon *Daemon) handleKernelCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -1374,15 +1377,17 @@ func (daemon *Daemon) handleKernelCapabilities(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, view.DataplaneStatsErr)
 		return
 	}
+	dataPath := publicDataPathStatus(view.DataPath)
 	writeJSON(w, http.StatusOK, kernelCapabilitiesResponse{
 		Modules:         daemon.kernelModuleStatuses(),
-		Offload:         view.DataPath.KernelOffload,
-		RXStage:         view.DataPath.KernelRXStage,
-		KernelTransport: view.DataPath.KernelTransport,
-		KernelUDP:       view.DataPath.KernelUDP,
-		ExperimentalTCP: view.DataPath.ExperimentalTCP,
-		DataPathMode:    view.DataPath.KernelOffload.DataplaneMode,
-		Capabilities:    append([]string(nil), view.DataPath.KernelOffload.Capabilities...),
+		Offload:         dataPath.KernelOffload,
+		RXStage:         dataPath.KernelRXStage,
+		KernelTransport: dataPath.KernelTransport,
+		KernelUDP:       dataPath.KernelUDP,
+		TIXTCP:          dataPath.TIXTCP,
+		ExperimentalTCP: dataPath.ExperimentalTCP,
+		DataPathMode:    dataPath.KernelOffload.DataplaneMode,
+		Capabilities:    append([]string(nil), dataPath.KernelOffload.Capabilities...),
 	})
 }
 
@@ -1427,7 +1432,7 @@ func (daemon *Daemon) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	}
 	if daemon.experimentalTCPDoctorEnabled(view.DataPath) {
 		checks = append(checks, doctorCheck{
-			Name:   "experimental_tcp",
+			Name:   "tix_tcp",
 			Status: experimentalTCPDoctorStatus(view.DataPath),
 			Detail: experimentalTCPDoctorDetail(view.DataPath),
 		})
@@ -1753,11 +1758,66 @@ func peerControlStatus(healthy, total int) string {
 }
 
 func transportNames(protocols []transport.Protocol) []string {
+	seen := make(map[string]struct{}, len(protocols))
 	names := make([]string, 0, len(protocols))
 	for _, protocol := range protocols {
-		names = append(names, string(protocol))
+		name := string(transport.PublicProtocol(protocol))
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
+}
+
+func publicEndpointMetadata(endpoints []dataplane.EndpointMetadata) []dataplane.EndpointMetadata {
+	out := append([]dataplane.EndpointMetadata(nil), endpoints...)
+	for i := range out {
+		out[i].Transport = config.PublicTransportName(out[i].Transport)
+	}
+	return out
+}
+
+func publicDataPathStatus(status dataPathStatus) dataPathStatus {
+	status.Listeners = append([]dataPathListenerStatus(nil), status.Listeners...)
+	for i := range status.Listeners {
+		status.Listeners[i].Transport = config.PublicTransportName(status.Listeners[i].Transport)
+	}
+	status.Sessions = publicDataPathSessions(status.Sessions)
+	status.EndpointStats = append([]dataPathEndpointStats(nil), status.EndpointStats...)
+	for i := range status.EndpointStats {
+		status.EndpointStats[i].Transport = config.PublicTransportName(status.EndpointStats[i].Transport)
+	}
+	status.KernelTransport = publicKernelTransportStatus(status.KernelTransport)
+	if status.TIXTCP == nil {
+		status.TIXTCP = status.ExperimentalTCP
+	}
+	if status.ExperimentalTCP == nil {
+		status.ExperimentalTCP = status.TIXTCP
+	}
+	return status
+}
+
+func publicDataPathSessions(sessions []dataPathSessionStatus) []dataPathSessionStatus {
+	out := append([]dataPathSessionStatus(nil), sessions...)
+	for i := range out {
+		out[i].Transport = config.PublicTransportName(out[i].Transport)
+	}
+	return out
+}
+
+func publicKernelTransportStatus(status *dataplane.KernelTransportStatus) *dataplane.KernelTransportStatus {
+	if status == nil {
+		return nil
+	}
+	out := *status
+	out.Protocols = append([]dataplane.KernelTransportProtocol(nil), status.Protocols...)
+	for i := range out.Protocols {
+		out.Protocols[i].Protocol = config.PublicTransportName(out.Protocols[i].Protocol)
+	}
+	return &out
 }
 
 func dataplaneStatus(stats dataplane.Stats) string {
@@ -1974,7 +2034,7 @@ func experimentalTCPDoctorStatus(status dataPathStatus) string {
 func experimentalTCPDoctorDetail(status dataPathStatus) string {
 	exp := status.ExperimentalTCP
 	if exp == nil {
-		return "experimental_tcp status is unavailable"
+		return "TIX-TCP status is unavailable"
 	}
 	detail := fmt.Sprintf("provider=%s available=%t fast_path=%t reinject=%t requested_crypto=%s effective_crypto=%s kernel_crypto=%t",
 		exp.Provider,

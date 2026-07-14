@@ -36,9 +36,13 @@ import type {
   TopologyNode,
 } from "./types";
 import { edgeMidpoint, edgePath } from "./topology";
-import { arrayValue, compactList, cryptoSuiteOptions, encryptionOptions, formatBytes, formatDurationNanos, formatNumber, formatTime, joinLines, kernelCapabilityProfileOptions, kernelRXStageOptions, shortHash, splitLines, transportDatapathOptions, transportOptions, transportProfileOptions, transportToggleOptions } from "./utils";
+import { arrayValue, compactList, cryptoSuiteOptions, encryptionOptions, formatBytes, formatDurationNanos, formatNumber, formatTime, joinLines, kernelCapabilityProfileOptions, kernelRXStageOptions, shortHash, splitLines, transportDatapathOptions, transportLabel, transportOptions, transportProfileOptions, transportToggleOptions } from "./utils";
 
 export type Translate = (key: string, fallback?: string) => string;
+
+function transportOptionLabels(t: Translate): Record<string, string> {
+  return { tix_tcp: t("tix_tcp", "TIX-TCP") };
+}
 
 export function IconButton(props: {
   title: string;
@@ -309,7 +313,7 @@ export function OverviewView(props: { t: Translate; lang: string; status: Status
               <StatusRow label={props.t("management", "Management")} value={compactListener(status.management?.primary)} />
               <StatusRow label={props.t("web_ui", "WebUI")} value={status.management?.web_ui?.enabled ? props.t("enabled", "Enabled") : props.t("disabled", "Disabled")} />
               <StatusRow label={props.t("dns", "DNS")} value={compactDNSStatus(status.dns, props.t)} />
-              <StatusRow label={props.t("transport", "Transport")} value={(status.transports || []).join(", ") || "-"} />
+              <StatusRow label={props.t("transport", "Transport")} value={compactTransportList(status.transports || [])} />
               <StatusRow label={props.t("warnings", "Warnings")} value={warnings.map((warning) => `${warning.name}: ${warning.detail}`).join(" · ") || "-"} />
             </div>
           </div>
@@ -397,7 +401,7 @@ function firstRunDatapathSummary(t: Translate, lang: string, status: StatusPaylo
   const runtimeRows = [
     dataPath.kernel_transport ? kernelTransportStatusRow(t, dataPath.kernel_transport) : null,
     kernelUDPStatusRow(t, lang, dataPath.kernel_udp),
-    experimentalTCPStatusRow(t, lang, dataPath.experimental_tcp),
+    experimentalTCPStatusRow(t, lang, dataPath.tix_tcp || dataPath.experimental_tcp),
     kernelRXStageStatusRow(t, lang, dataPath.kernel_rx_stage),
   ].filter((row): row is KernelCapabilityRow => Boolean(row));
   const loadedModuleRows = arrayValue(status.kernel_modules)
@@ -455,7 +459,7 @@ function KernelCapabilitiesPanel(props: { t: Translate; lang: string; status?: S
   const rxStage = capabilities.rx_stage || dataPath.kernel_rx_stage;
   const kernelTransport = capabilities.kernel_transport || dataPath.kernel_transport;
   const kernelUDP = capabilities.kernel_udp || dataPath.kernel_udp;
-  const experimentalTCP = capabilities.experimental_tcp || dataPath.experimental_tcp;
+  const experimentalTCP = capabilities.tix_tcp || capabilities.experimental_tcp || dataPath.tix_tcp || dataPath.experimental_tcp;
   const kernelRows = [
     ...modules.map((module) => kernelModuleCapabilityRow(props.t, module)),
     ...kernelTransportCapabilityRows(props.t, kernelTransport),
@@ -548,7 +552,7 @@ function kernelModuleCapabilityRow(t: Translate, module: KernelModuleStatus): Ke
 
 function kernelTransportCapabilityRows(t: Translate, status: KernelTransportStatus | undefined): KernelCapabilityRow[] {
   return arrayValue(status?.protocols).map((protocol) => ({
-    name: `${t("kernel_transport", "Kernel transport")} / ${protocol.protocol || "-"}`,
+    name: `${t("kernel_transport", "Kernel transport")} / ${transportLabel(protocol.protocol) || "-"}`,
     state: protocol.available ? (protocol.userspace_fallback ? "warn" : "ok") : "bad",
     badge: protocol.available ? protocol.placement || t("available", "Available") : t("not_usable", "Not usable"),
     meta: compactList([
@@ -612,7 +616,7 @@ function experimentalTCPStatusRow(t: Translate, lang: string, status: Experiment
   }
   const probe = status.kernel_crypto_probe;
   return {
-    name: "ackless_tcp",
+    name: "TIX-TCP",
     state: status.fast_path ? "ok" : status.raw_socket_fallback ? "warn" : status.available ? "warn" : "bad",
     badge: status.fast_path ? t("fast_path", "Fast path") : status.raw_socket_fallback ? t("raw_socket_fallback", "Raw socket fallback") : status.available ? t("available", "Available") : t("not_usable", "Not usable"),
     meta: compactList([
@@ -709,7 +713,7 @@ function endpointPublicAddress(endpoint: EndpointConfig | undefined): string {
 }
 
 function endpointLabel(endpoint: EndpointConfig): string {
-  return compactList([endpoint.name, endpoint.transport], " · ");
+  return compactList([endpoint.name, transportLabel(endpoint.transport)], " · ");
 }
 
 function localPassiveEndpoint(endpoint: EndpointConfig): boolean {
@@ -875,7 +879,7 @@ type IXProvisionEffectiveDefaults = {
   endpointAddress: string;
   endpointListen: string;
   endpointName: string;
-  acklessEndpointName: string;
+  tixTCPEndpointName: string;
   endpointMode: string;
   lanIface: string;
   lanGateway: string;
@@ -935,7 +939,7 @@ function ixProvisionDefaultEndpointTransport(profile: string, endpointMode = "pa
     return "udp";
   }
   if (String(endpointMode || "passive").trim().toLowerCase().replaceAll("-", "_") === "active") {
-    return "experimental_tcp";
+    return "tix_tcp";
   }
   if (String(endpointAddress || "").includes("=") && provisionEndpointAddressHasIPv4(endpointAddress)) {
     return "ipip";
@@ -943,15 +947,15 @@ function ixProvisionDefaultEndpointTransport(profile: string, endpointMode = "pa
   return "udp";
 }
 
-function ixProvisionAcklessEndpointName(endpointName: string, ixID: string): string {
+function ixProvisionTIXTCPEndpointName(endpointName: string, ixID: string): string {
   const name = String(endpointName || "").trim();
   if (name.endsWith("-udp")) {
-    return `${name.slice(0, -4)}-experimental_tcp`;
+    return `${name.slice(0, -4)}-tix-tcp`;
   }
   if (name) {
-    return `${name}-experimental_tcp`;
+    return `${name}-tix-tcp`;
   }
-  return `${safeShellName(ixID, "ix-new")}-experimental_tcp`;
+  return `${safeShellName(ixID, "ix-new")}-tix-tcp`;
 }
 
 function plaintextPerformanceEndpoint(name: string, options: Partial<EndpointConfig>): EndpointConfig {
@@ -1000,14 +1004,15 @@ function ixProvisionEffectiveDefaults(input: {
   const derivedGateway = role === "transit_ix" ? "" : defaultLANGatewayForPrefix(input.advertisePrefixes[0] || "");
   const profile = ixProvisionProfileDefaults(input.profile);
   const endpointTransport = String(input.endpointTransport || "").trim() || ixProvisionDefaultEndpointTransport(input.profile, endpointMode, endpointAddress, input.serviceManager);
-  const endpointName = String(input.endpointName || "").trim() || `${safeShellName(input.ixID, "ix-new")}-${endpointTransport}`;
+  const endpointNameSuffix = endpointTransport === "tix_tcp" ? "tix-tcp" : endpointTransport;
+  const endpointName = String(input.endpointName || "").trim() || `${safeShellName(input.ixID, "ix-new")}-${endpointNameSuffix}`;
   const endpointAddressForConfig = transportIsKernelTunnel(endpointTransport) ? (normalizeProvisionTunnelEndpointAddress(endpointAddress) || endpointAddress) : endpointAddress;
   return {
     controlAPI: String(input.controlAPI || "").trim() || (endpointMode === "passive" ? provisionControlAPIFromEndpointAddress(endpointAddress, "9443") : ""),
     endpointAddress: endpointAddressForConfig,
     endpointListen: endpointMode === "passive" ? (String(input.endpointListen || "").trim() || (transportIsKernelTunnel(endpointTransport) ? endpointAddressForConfig : (endpointPort ? `0.0.0.0:${endpointPort}` : ""))) : "",
     endpointName,
-    acklessEndpointName: endpointTransport === "udp" ? ixProvisionAcklessEndpointName(endpointName, input.ixID) : "",
+    tixTCPEndpointName: endpointTransport === "udp" ? ixProvisionTIXTCPEndpointName(endpointName, input.ixID) : "",
     endpointMode,
     lanIface: String(input.lanIface || "").trim() || (attachMode === "existing" ? "" : `trustix-${safeShellName(input.ixID, "ix")}`),
     lanGateway: String(input.lanGateway || "").trim() || derivedGateway,
@@ -1450,7 +1455,7 @@ export function AccessView(props: {
   const grantEndpointOptions = ["", ...grantEndpointCandidates.map((endpoint) => endpoint.name || "").filter(Boolean)];
   const grantEndpointLabels = Object.fromEntries(grantEndpointCandidates.map((endpoint) => [
     endpoint.name || "",
-    compactList([endpoint.name, endpoint.transport, endpointAccessMode(endpoint)], " · "),
+    compactList([endpoint.name, transportLabel(endpoint.transport), endpointAccessMode(endpoint)], " · "),
   ]));
   const peerOptions = ["", ...peers];
   const now = Date.now();
@@ -1478,7 +1483,8 @@ export function AccessView(props: {
   const newIXBootstrapControlAPIEffective = newIXBootstrapControlAPI.trim() || desiredControlAPI.trim();
   const newIXCommandDisabled = !newIXID.trim() || !effectiveNewIXDomain || (!newIXActiveOnly && !newIXEndpointAddress.trim()) || (newIXActiveOnly && !newIXBootstrapControlAPIEffective) || (newIXAdvertiseRequired && newIXAdvertisePrefixes.length === 0) || newIXAdvertiseWarnings.length > 0;
   const newIXEffectiveEndpointTransport = newIXEndpointTransport || ixProvisionDefaultEndpointTransport(newIXProfile, newIXEndpointMode, newIXEndpointAddress, newIXServiceManager);
-  const newIXResolvedEndpointName = newIXEndpointName.trim() || `${safeShellName(newIXID, "ix-new")}-${newIXEffectiveEndpointTransport}`;
+  const newIXEndpointNameSuffix = newIXEffectiveEndpointTransport === "tix_tcp" ? "tix-tcp" : newIXEffectiveEndpointTransport;
+  const newIXResolvedEndpointName = newIXEndpointName.trim() || `${safeShellName(newIXID, "ix-new")}-${newIXEndpointNameSuffix}`;
   const newIXQuickJoinCommand = props.issuedIXProvision?.command || "";
   const newIXEffective = ixProvisionEffectiveDefaults({
     ixID: newIXID,
@@ -1642,7 +1648,7 @@ export function AccessView(props: {
                 <Field label={props.t("new_ix_control_api", "New IX public control API")} help={newIXActiveOnly ? props.t("help_new_ix_control_api_active", "Optional published control API for this edge IX. Leave empty when it has no public inbound control-plane address.") : props.t("help_new_ix_control_api", "Optional public URL for the new IX control API. Empty derives https://host:9443 from the public endpoint.")} placeholder={newIXActiveOnly ? props.t("no_control_api", "No control API published") : (newIXEffective.controlAPI || "https://ix-c.example.com:9443")} value={newIXControlAPI} onChange={setNewIXControlAPI} />
                 <Field label={props.t("new_ix_bootstrap_peer", "Bootstrap peer IX")} help={props.t("help_new_ix_bootstrap_peer", "Existing IX used as the first control-plane peer for the generated config.")} value={newIXBootstrapIX} onChange={setNewIXBootstrapIX} />
                 <Field label={props.t("new_ix_bootstrap_control_api", "Bootstrap control API")} help={props.t("help_new_ix_bootstrap_control_api", "Control API URL of the bootstrap peer. Empty uses the current IX control API from this config.")} placeholder={newIXEffective.bootstrapControlAPI || "https://ix-a.example.com:9443"} value={newIXBootstrapControlAPI} onChange={setNewIXBootstrapControlAPI} />
-                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. Plaintext performance defaults to UDP full-kmod; explicit tunnel declarations like local=198.51.100.10 use IPIP.")} value={newIXEffectiveEndpointTransport} options={transportOptions()} onChange={setNewIXEndpointTransport} />
+                <SelectField label={props.t("transport", "Transport")} help={newIXActiveOnly ? props.t("help_new_ix_transport_active", "Data transport used to dial the upstream endpoint. It should match the selected upstream endpoint transport.") : props.t("help_new_ix_transport", "Initial passive data transport for the new IX endpoint. Plaintext performance defaults to UDP full-kmod; explicit tunnel declarations like local=198.51.100.10 use IPIP.")} value={newIXEffectiveEndpointTransport} options={transportOptions()} optionLabels={transportOptionLabels(props.t)} onChange={setNewIXEndpointTransport} />
                 {!newIXActiveOnly && <Field label={props.t("new_ix_endpoint_listen", "Endpoint listen")} help={props.t("help_new_ix_endpoint_listen", "Optional listen address. Empty listens on 0.0.0.0 with the public endpoint port.")} placeholder={newIXEffective.endpointListen || "0.0.0.0:7000"} value={newIXEndpointListen} onChange={setNewIXEndpointListen} />}
                 <Field label={props.t("new_ix_endpoint_name", "Endpoint name")} help={props.t("help_new_ix_endpoint_name", "Optional local endpoint name written into the generated config. Empty derives <ix_id>-<transport>.")} placeholder={newIXResolvedEndpointName} value={newIXEndpointName} onChange={setNewIXEndpointName} />
                 <Field label={props.t("new_ix_lan_iface", "LAN interface")} help={props.t("help_new_ix_lan_iface", "Optional LAN interface. Managed mode creates trustix-<ix_id> when empty; existing mode requires a host interface.")} placeholder={newIXEffective.lanIface || "br-lan / eth1"} value={newIXLANIface} onChange={setNewIXLANIface} />
@@ -1676,7 +1682,7 @@ export function AccessView(props: {
                   </div>
                   <div className="ix-bootstrap-effective-grid">
                     <StatusRow label={props.t("new_ix_control_api", "New IX public control API")} value={newIXEffective.controlAPI || props.t("no_control_api", "No control API published")} />
-                    <StatusRow label={props.t("endpoint", "Endpoint")} value={compactList([compactList([newIXEffective.endpointName, newIXEffective.acklessEndpointName], " + "), newIXEndpointModeLabels[newIXEffective.endpointMode as keyof typeof newIXEndpointModeLabels] || newIXEffective.endpointMode, newIXEffectiveEndpointTransport, newIXEffective.endpointListen, newIXEffective.endpointAddress], " / ")} />
+                    <StatusRow label={props.t("endpoint", "Endpoint")} value={compactList([compactList([newIXEffective.endpointName, newIXEffective.tixTCPEndpointName], " + "), newIXEndpointModeLabels[newIXEffective.endpointMode as keyof typeof newIXEndpointModeLabels] || newIXEffective.endpointMode, transportLabel(newIXEffectiveEndpointTransport), newIXEffective.endpointListen, newIXEffective.endpointAddress], " / ")} />
                     <StatusRow label={props.t("lan", "LAN")} value={compactList([newIXEffective.lanIface, newIXEffective.lanGateway || props.t("no_gateway", "No gateway"), newIXAttachMode], " / ")} />
                     <StatusRow label={props.t("transport_policy", "Transport policy")} value={compactList([newIXEffective.transportProfile, newIXEffective.datapath, newIXEffective.encryption, newIXEffective.cryptoPlacement, `kernel=${newIXEffective.kernelTransport}`], " / ")} />
                     <StatusRow label={props.t("service_manager", "Service manager")} value={newIXServiceManagerLabels[newIXServiceManager as keyof typeof newIXServiceManagerLabels] || newIXServiceManager} />
@@ -1865,7 +1871,7 @@ export function AccessView(props: {
               <div className="endpoint-access-row" key={`${endpoint.name}-${index}`}>
                 <div>
                   <strong>{endpoint.name || props.t("endpoint", "Endpoint")}</strong>
-                  <span>{compactList([endpoint.transport, endpointAddressSummary(endpoint, props.t)], " · ")}</span>
+                  <span>{compactList([transportLabel(endpoint.transport), endpointAddressSummary(endpoint, props.t)], " · ")}</span>
                 </div>
                 <EndpointAccessFields t={props.t} endpoint={endpoint} onUpdate={(next) => updateEndpointAccess(index, next)} />
               </div>
@@ -2416,7 +2422,7 @@ function EdgeEditor(props: { t: Translate; lang: string; edge: TopologyEdge; des
       <div className="runtime-cards">
         {sessions.length ? sessions.map((session, index) => (
           <div className="runtime-card" key={`${session.endpoint}-${session.pool_index}-${index}`}>
-            <strong>{session.transport || "-"} · {session.endpoint || "-"}</strong>
+            <strong>{transportLabel(session.transport) || "-"} · {session.endpoint || "-"}</strong>
             <span>{compactList([session.direction, session.address, session.pool_index != null ? `pool ${session.pool_index}` : ""], "-")}</span>
             <span>{formatBytes(session.stats?.bytes_sent || 0, props.lang)} / {formatBytes(session.stats?.bytes_received || 0, props.lang)} · {session.stats?.crypto_placement || "-"}</span>
           </div>
@@ -2444,7 +2450,7 @@ function EdgeEditor(props: { t: Translate; lang: string; edge: TopologyEdge; des
           const profile = compactList([runtime.profile || linkRuntime.profile || endpoint.transport_profile?.profile, runtime.datapath || linkRuntime.datapath || endpoint.transport_profile?.datapath, (arrayValue(runtime.features).length ? arrayValue(runtime.features) : arrayValue(linkRuntime.features)).join("/")], "");
           const capability = compactList([(runtime.usable ?? linkRuntime.usable) ? props.t("usable", "Usable") : props.t("not_usable", "Not usable"), (runtime.kernel_compatible ?? linkRuntime.kernel_compatible) === false ? "no-kernel" : "kernel", (runtime.profile_compatible ?? linkRuntime.profile_compatible) === false ? "profile-mismatch" : (runtime.profile_compatible ?? linkRuntime.profile_compatible) === true ? "profile-ok" : "", runtime.encryption || linkRuntime.encryption || endpoint.security?.encryption, profile, arrayValue(runtime.crypto_placements).length ? arrayValue(runtime.crypto_placements).join("/") : arrayValue(linkRuntime.crypto_placements).join("/")], "-");
           const traffic = compactList([activeSessions != null ? `${activeSessions} ${props.t("sessions", "Sessions")}` : "", currentFlows != null ? `${currentFlows} ${props.t("flows", "Flows")}` : "", linkRuntime.health, rtt ? `rtt ${formatDurationNanos(rtt, props.lang)}` : ""], "-");
-          const meta = compactList([endpoint.transport, endpoint.priority ? `prio ${endpoint.priority}` : "", capability, traffic], "-");
+          const meta = compactList([transportLabel(endpoint.transport), endpoint.priority ? `prio ${endpoint.priority}` : "", capability, traffic], "-");
           const source = dynamicEndpoint ? props.t("negotiated", "Negotiated") : props.t("static", "Static");
           return (
             <div key={`${endpoint.name}-${index}`} className={`endpoint-row ${dynamicEndpoint ? "is-runtime" : ""}`}>
@@ -2505,7 +2511,7 @@ function EdgeEditor(props: { t: Translate; lang: string; edge: TopologyEdge; des
               </select>
               <select className="inline-select" title={props.t("help_route_endpoint", "Preferred endpoint for this route. Empty lets transport policy choose among usable endpoints.")} aria-label={props.t("endpoint", "Endpoint")} value={route.endpoint || ""} onChange={(event) => setRouteEndpoint(index, event.currentTarget.value)}>
                 <option value="">{props.t("auto", "Auto")}</option>
-                {routeEndpointOptions.map((endpoint) => <option key={endpoint.name || ""} value={endpoint.name || ""}>{compactList([endpoint.name, endpoint.transport], "-")}</option>)}
+                {routeEndpointOptions.map((endpoint) => <option key={endpoint.name || ""} value={endpoint.name || ""}>{compactList([endpoint.name, transportLabel(endpoint.transport)], "-")}</option>)}
               </select>
             </div>
           );
@@ -2567,7 +2573,7 @@ function LocalEndpointPublishList(props: { t: Translate; peerId: string; endpoin
           <div className="publish-row" key={`${endpoint.name}-${index}`}>
             <div className="publish-main">
               <strong>{endpoint.name || "-"}</strong>
-              <span>{compactList([endpoint.transport, endpoint.security?.encryption, state.label], "-")}</span>
+              <span>{compactList([transportLabel(endpoint.transport), endpoint.security?.encryption, state.label], "-")}</span>
             </div>
             <div className="publish-controls">
               <label className="mini-toggle" title={props.t("help_endpoint_publish_to_peer", "Controls whether this local endpoint is advertised to the selected IX peer.")}>
@@ -3489,7 +3495,7 @@ function ConfigKernelCapabilityEditor(props: { t: Translate; lang: string; desir
         <CheckField label={props.t("rx_worker", "RX worker")} help={props.t("help_kernel_rx_worker", "Enable the experimental trustix_datapath RX worker path. Use only after validating the target kernel under real traffic.")} checked={Boolean(datapath.rx_worker)} onChange={(value) => updateDatapath({ rx_worker: value })} />
         <CheckField label={props.t("full_plaintext", "Full plaintext")} help={props.t("help_kernel_full_plaintext", "Experimental: for plaintext transports, let trustix_datapath own both RX and TX hooks when the module supports full_datapath.")} checked={Boolean(datapath.full_plaintext)} onChange={(value) => updateDatapath({ full_plaintext: value, tx_plaintext: value || datapath.tx_plaintext })} />
         <CheckField label={props.t("tx_plaintext", "TX plaintext")} help={props.t("help_kernel_tx_plaintext", "Experimental kernel plaintext TX hook without secure userspace reinjection. Use only with plaintext transport policy after target-kernel validation.")} checked={Boolean(datapath.tx_plaintext)} onChange={(value) => updateDatapath({ tx_plaintext: value })} />
-        <CheckField label={props.t("allow_ackless_tcp_rx_worker", "Allow ackless TCP RX worker")} help={props.t("help_kernel_rx_worker_allow_experimental_tcp", "Allow RX worker with experimental_tcp TC direct. This is needed for full-kernel ackless TCP testing and should be validated on the target kernel.")} checked={Boolean(datapath.rx_worker_allow_experimental_tcp)} onChange={(value) => updateDatapath({ rx_worker_allow_experimental_tcp: value })} />
+        <CheckField label={props.t("allow_ackless_tcp_rx_worker", "Allow TIX-TCP RX worker")} help={props.t("help_kernel_rx_worker_allow_experimental_tcp", "Allow RX worker with TIX-TCP TC direct. This is needed for full-kernel TIX-TCP and should be validated on the target kernel.")} checked={Boolean(datapath.rx_worker_allow_experimental_tcp)} onChange={(value) => updateDatapath({ rx_worker_allow_experimental_tcp: value })} />
         <CheckField label={props.t("rx_worker_hot_stats", "RX worker hot stats")} help={props.t("help_kernel_rx_worker_hot_stats", "Keep per-packet hot-path counters enabled. Disable for lower CPU overhead during throughput tests.")} checked={datapath.rx_worker_hot_stats !== false} onChange={(value) => updateDatapath({ rx_worker_hot_stats: value })} />
       </div>
     </div>
@@ -3577,7 +3583,7 @@ function CandidateEndpointPicker(props: { t: Translate; endpoints: EndpointConfi
               <input type="checkbox" disabled={disabled} checked={Boolean(name && selected.has(name))} onChange={(event) => toggle(name, event.currentTarget.checked)} />
               <span>
                 <strong>{name || props.t("endpoint", "Endpoint")}</strong>
-                <em>{compactList([endpoint.transport, endpoint.mode || "passive", endpoint.security?.encryption || endpoint.transport_profile?.encryption, endpoint.enabled === false ? props.t("disabled", "Disabled") : props.t("enabled", "Enabled")], "-")}</em>
+                <em>{compactList([transportLabel(endpoint.transport), endpoint.mode || "passive", endpoint.security?.encryption || endpoint.transport_profile?.encryption, endpoint.enabled === false ? props.t("disabled", "Disabled") : props.t("enabled", "Enabled")], "-")}</em>
               </span>
               <small title={endpointAddressSummary(endpoint, props.t)}>{endpointAddressSummary(endpoint, props.t)}</small>
             </label>
@@ -3904,7 +3910,7 @@ function TransportProfileOverrides(props: { t: Translate; profiles: TransportPro
       </div>
       {props.profiles.length ? props.profiles.map((profile, index) => (
         <div className="config-card" key={index}>
-          <SelectField label={props.t("transport", "Transport")} help={props.t("help_transport_override_transport", "Transport this override applies to, for example experimental_tcp or udp.")} value={profile.transport || ""} options={transportOptions()} onChange={(value) => updateProfile(index, { ...profile, transport: value })} />
+          <SelectField label={props.t("transport", "Transport")} help={props.t("help_transport_override_transport", "Transport this override applies to, for example TIX-TCP or UDP.")} value={profile.transport || ""} options={transportOptions()} optionLabels={transportOptionLabels(props.t)} onChange={(value) => updateProfile(index, { ...profile, transport: value })} />
           <SelectField label={props.t("profile", "Profile")} help={props.t("help_transport_override_profile", "Profile advertised and preferred for this transport override.")} value={profile.profile || ""} options={transportProfileOptions()} onChange={(value) => updateProfile(index, { ...profile, profile: value })} />
           <SelectField label={props.t("datapath", "Datapath")} help={props.t("help_transport_override_datapath", "Datapath preferred for this transport override.")} value={profile.datapath || ""} options={transportDatapathOptions()} onChange={(value) => updateProfile(index, { ...profile, datapath: value })} />
           <SelectField label={props.t("encryption", "Encryption")} help={props.t("help_transport_override_encryption", "Encryption behavior for this transport override. Empty inherits the global transport policy.")} value={profile.encryption || ""} options={encryptionOptions()} onChange={(value) => updateProfile(index, { ...profile, encryption: value })} />
@@ -3942,7 +3948,7 @@ function ConfigEndpointTable(props: { t: Translate; endpoints: EndpointConfig[];
             {props.endpoints.map((endpoint, index) => (
               <button key={index} type="button" className={`config-list-row ${index === selectedIndex ? "is-selected" : ""}`} onClick={() => setSelectedIndex(index)}>
                 <strong>{endpoint.name || props.t("endpoint", "Endpoint")}</strong>
-                <span>{compactList([endpoint.transport, endpoint.mode || "passive", endpoint.security?.encryption, endpoint.enabled === false ? props.t("disabled", "Disabled") : props.t("enabled", "Enabled")], "-")}</span>
+                <span>{compactList([transportLabel(endpoint.transport), endpoint.mode || "passive", endpoint.security?.encryption, endpoint.enabled === false ? props.t("disabled", "Disabled") : props.t("enabled", "Enabled")], "-")}</span>
                 <span>{endpointAddressSummary(endpoint, props.t)}</span>
               </button>
             ))}
@@ -3993,7 +3999,7 @@ function EndpointConfigFields(props: { t: Translate; scope: EndpointScope; endpo
   return (
     <>
       <Field label={props.t("name", "Name")} help={props.t("help_endpoint_name", "Endpoint name referenced by peers, routes, and transport policies.")} value={endpoint.name || ""} onChange={(value) => props.onUpdate({ ...endpoint, name: value })} />
-      <SelectField label={props.t("transport", "Transport")} help={props.t("help_endpoint_transport", "Underlying transport used by this endpoint, such as udp, experimental_tcp, gre, or ipip.")} value={endpoint.transport || "udp"} options={transportOptions()} onChange={(value) => props.onUpdate({ ...endpoint, transport: value })} />
+      <SelectField label={props.t("transport", "Transport")} help={props.t("help_endpoint_transport", "Underlying transport used by this endpoint, such as UDP, TIX-TCP, GRE, or IPIP.")} value={endpoint.transport || "udp"} options={transportOptions()} optionLabels={transportOptionLabels(props.t)} onChange={(value) => props.onUpdate({ ...endpoint, transport: value })} />
       <SelectField label={props.t("mode", "Mode")} help={props.t("help_endpoint_mode", "passive listens for inbound sessions; active dials the peer address.")} value={endpoint.mode || (props.scope === "peer" ? "active" : "passive")} options={["active", "passive"]} onChange={(value) => props.onUpdate({ ...endpoint, mode: value })} />
       {tunnel && props.scope === "local" ? (
         <TunnelEndpointFields
@@ -4236,7 +4242,7 @@ function PeerEndpointEditorList(props: { t: Translate; endpoints: EndpointConfig
         {props.endpoints.map((endpoint, index) => (
           <button key={index} type="button" className={`config-list-row ${index === selectedIndex ? "is-selected" : ""}`} onClick={() => setSelectedIndex(index)}>
             <strong>{endpoint.name || props.t("endpoint", "Endpoint")}</strong>
-            <span>{compactList([endpoint.transport, endpoint.mode || "active", endpoint.security?.encryption, endpoint.enabled === false ? props.t("disabled", "Disabled") : props.t("enabled", "Enabled")], "-")}</span>
+            <span>{compactList([transportLabel(endpoint.transport), endpoint.mode || "active", endpoint.security?.encryption, endpoint.enabled === false ? props.t("disabled", "Disabled") : props.t("enabled", "Enabled")], "-")}</span>
             <span>{endpointAddressSummary(endpoint, props.t)}</span>
           </button>
         ))}
@@ -4355,7 +4361,7 @@ function PeerEndpointReadonlyList(props: { t: Translate; lang: string; endpoints
         ], "");
         const profile = compactList([endpoint.profile, endpoint.datapath, arrayValue(endpoint.features).join("/")], "");
         const meta = compactList([
-          endpoint.transport,
+          transportLabel(endpoint.transport),
           endpoint.mode,
           endpoint.priority ? `prio ${endpoint.priority}` : "",
           endpoint.encryption || endpoint.security?.encryption,
@@ -5018,7 +5024,7 @@ function compactTransportList(transports: string[]): string {
   if (!transports.length) {
     return "-";
   }
-  const shown = transports.slice(0, 4);
+  const shown = transports.slice(0, 4).map(transportLabel);
   const hidden = transports.length - shown.length;
   return hidden > 0 ? `${shown.join(", ")} +${hidden}` : shown.join(", ");
 }

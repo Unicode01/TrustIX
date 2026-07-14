@@ -269,6 +269,7 @@ type dataPathStatus struct {
 	EndpointState                    []rstate.EndpointState              `json:"endpoint_state,omitempty"`
 	DropReasons                      map[observability.DropReason]uint64 `json:"drop_reasons,omitempty"`
 	NAT                              *natStatus                          `json:"nat,omitempty"`
+	TIXTCP                           *dataplane.ExperimentalTCPStatus    `json:"tix_tcp,omitempty"`
 	ExperimentalTCP                  *dataplane.ExperimentalTCPStatus    `json:"experimental_tcp,omitempty"`
 }
 

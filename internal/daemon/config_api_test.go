@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,35 @@ import (
 	"trustix.local/trustix/internal/transport"
 	securetransport "trustix.local/trustix/internal/transport/secure"
 )
+
+func TestConfigDesiredUsesPublicTIXTCPName(t *testing.T) {
+	daemon := &Daemon{desired: config.Desired{
+		Endpoints: []config.EndpointConfig{{Name: "ix-a-tix-tcp", Transport: "experimental_tcp"}},
+		Peers: []config.PeerConfig{{
+			ID:        "ix-b",
+			Endpoints: []config.EndpointConfig{{Name: "ix-b-tix-tcp", Transport: "experimental_tcp"}},
+		}},
+		TransportPolicy: config.TransportPolicyConfig{Profiles: []config.TransportProfileConfig{{Transport: "experimental_tcp"}}},
+	}}
+	recorder := httptest.NewRecorder()
+	daemon.handleConfigDesired(recorder, httptest.NewRequest(http.MethodGet, "/v1/config/desired", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var got config.Desired
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode desired response: %v", err)
+	}
+	if got.Endpoints[0].Transport != "tix_tcp" ||
+		got.Peers[0].Endpoints[0].Transport != "tix_tcp" ||
+		got.TransportPolicy.Profiles[0].Transport != "tix_tcp" {
+		t.Fatalf("public desired transports = %#v", got)
+	}
+	if daemon.desired.Endpoints[0].Transport != "experimental_tcp" {
+		t.Fatalf("desired response mutated runtime transport: %q", daemon.desired.Endpoints[0].Transport)
+	}
+}
 
 func TestConfigValidateRejectsBadDesired(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)

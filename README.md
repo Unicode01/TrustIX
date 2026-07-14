@@ -13,12 +13,18 @@ Start here: [TrustIX Bootstrap Command Generator](https://unicode01.github.io/Tr
 
 - Root/Domain/Admin/IX/Device certificate tooling through `trustix-ca`.
 - Signed desired config, config log, trust policy, admission, endpoint grants, route authorization, and device-access control plane.
-- UDP, QUIC, TCP, WebSocket, HTTP CONNECT, GRE/IPIP carrier, `kernel_udp`, and experimental ACKless TCP transport paths.
+- UDP, QUIC, TCP, WebSocket, HTTP CONNECT, GRE/IPIP carrier, `kernel_udp`, and TIX-TCP transport paths.
 - Userspace secure envelope with AES-GCM and ChaCha20-Poly1305 support; optional kernel crypto placement where supported.
 - Embedded Web UI served by `trustixd`.
 - Built-in TrustIX DNS resolver with OpenWrt `dnsmasq` conditional forwarding support.
 - Linux dataplane automation for managed LAN interfaces, routes, TC/eBPF capture, AF_XDP paths, and kernel module capability reporting.
 - Fallback paths for systems without the full kernel module capability set.
+
+TIX-TCP uses `tix_tcp` in new configuration and management API output. Existing
+`experimental_tcp`, `experimental-tcp`, and `ackless_tcp` configuration values
+remain accepted as compatibility aliases. Low-level runtime statistics,
+environment variables, and historical production evidence retain the
+`experimental_tcp` name during the rolling migration.
 
 ## Repository Layout
 

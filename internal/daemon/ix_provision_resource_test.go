@@ -41,6 +41,7 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 		IXID:                "ix-d",
 		ControlAPI:          "https://ix-d.example.com:9443",
 		Advertise:           []core.Prefix{"10.9.0.0/24"},
+		EndpointTransport:   "tix_tcp",
 		EndpointAddress:     "ix-d.example.com:7000",
 		LANIface:            "trustix-lan0",
 		LANGateway:          "10.9.0.1/24",
@@ -148,6 +149,12 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	script := consumeRecorder.Body.String()
 	if !strings.Contains(script, "PRIVATE KEY") || !strings.Contains(script, `"id": "ix-d"`) || strings.Contains(script, "domain-ca.key") {
 		t.Fatalf("unexpected bootstrap script:\n%s", script)
+	}
+	if !strings.Contains(script, `"transport": "tix_tcp"`) || !strings.Contains(script, `"name": "ix-d-tix-tcp"`) {
+		t.Fatalf("bootstrap script did not publish TIX-TCP config:\n%s", script)
+	}
+	if strings.Contains(script, `"transport": "experimental_tcp"`) {
+		t.Fatalf("bootstrap script still writes the legacy transport name:\n%s", script)
 	}
 	if !strings.Contains(script, `"warmup": true`) {
 		t.Fatalf("bootstrap script did not enable session warmup:\n%s", script)

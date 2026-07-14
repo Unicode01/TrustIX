@@ -45,6 +45,7 @@ export function normalizeDesiredConfig(raw: DesiredConfig | null | undefined): D
   cfg.transport_policy.crypto_suites = arrayValue(cfg.transport_policy.crypto_suites);
   cfg.transport_policy.profiles = arrayValue(cfg.transport_policy.profiles).map((profile) => ({
     ...(isObject(profile) ? profile : {}),
+    transport: normalizeTransportName(profile?.transport),
     advanced: isObject(profile?.advanced) ? profile.advanced : {},
   }));
   cfg.transport_policy.advanced = isObject(cfg.transport_policy.advanced)
@@ -61,6 +62,7 @@ export function normalizeDesiredConfig(raw: DesiredConfig | null | undefined): D
 
 export function normalizeEndpointConfig(raw: EndpointConfig | null | undefined): EndpointConfig {
   const endpoint = isObject(raw) ? raw : {};
+  endpoint.transport = normalizeTransportName(endpoint.transport);
   endpoint.security = isObject(endpoint.security) ? endpoint.security : {};
   endpoint.security.crypto_placements = arrayValue(endpoint.security.crypto_placements);
   endpoint.security.crypto_suites = arrayValue(endpoint.security.crypto_suites);
@@ -214,7 +216,25 @@ export function compactList(values: Array<string | undefined>, fallback = "-"): 
 }
 
 export function transportOptions(): string[] {
-  return ["udp", "kernel_udp", "experimental_tcp", "tcp", "quic", "websocket", "http_connect", "gre", "ipip", "vxlan"];
+  return ["udp", "kernel_udp", "tix_tcp", "tcp", "quic", "websocket", "http_connect", "gre", "ipip", "vxlan"];
+}
+
+export function normalizeTransportName(raw: string | undefined): string {
+  const value = String(raw || "").trim().toLowerCase().replaceAll("-", "_");
+  switch (value) {
+    case "experimental_tcp":
+    case "ackless_tcp":
+    case "ackless":
+    case "tix_tcp":
+      return "tix_tcp";
+    default:
+      return value;
+  }
+}
+
+export function transportLabel(raw: string | undefined): string {
+  const value = normalizeTransportName(raw);
+  return value === "tix_tcp" ? "TIX-TCP" : value;
 }
 
 export function encryptionOptions(): string[] {

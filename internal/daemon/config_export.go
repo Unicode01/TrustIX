@@ -320,7 +320,7 @@ func configExportFileCandidates(desired config.Desired, configPath string) []con
 }
 
 func writeConfigExportTar(tarWriter *tar.Writer, createdAt time.Time, desired config.Desired, snapshot configSnapshotEnvelope, files []configExportFile, manifest *configExportManifest) error {
-	desiredPayload, err := json.MarshalIndent(desired, "", "  ")
+	desiredPayload, err := json.MarshalIndent(config.PublicDesired(desired), "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode desired config: %w", err)
 	}

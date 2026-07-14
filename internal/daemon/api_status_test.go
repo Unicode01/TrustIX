@@ -6,7 +6,41 @@ import (
 
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/core"
+	"trustix.local/trustix/internal/dataplane"
+	"trustix.local/trustix/internal/transport"
 )
+
+func TestPublicDataPathStatusUsesTIXTCPNameAndKeepsLegacyStatusKey(t *testing.T) {
+	experimental := &dataplane.ExperimentalTCPStatus{Available: true}
+	status := dataPathStatus{
+		Listeners:       []dataPathListenerStatus{{Endpoint: "local", Transport: "experimental_tcp"}},
+		Sessions:        []dataPathSessionStatus{{Peer: "ix-b", Transport: "experimental-tcp"}},
+		EndpointStats:   []dataPathEndpointStats{{Peer: "ix-b", Transport: "ackless_tcp"}},
+		KernelTransport: &dataplane.KernelTransportStatus{Protocols: []dataplane.KernelTransportProtocol{{Protocol: "experimental_tcp"}}},
+		ExperimentalTCP: experimental,
+	}
+
+	public := publicDataPathStatus(status)
+	if public.Listeners[0].Transport != "tix_tcp" ||
+		public.Sessions[0].Transport != "tix_tcp" ||
+		public.EndpointStats[0].Transport != "tix_tcp" ||
+		public.KernelTransport.Protocols[0].Protocol != "tix_tcp" {
+		t.Fatalf("public data path = %#v", public)
+	}
+	if public.TIXTCP != experimental || public.ExperimentalTCP != experimental {
+		t.Fatalf("TIX-TCP status aliases = %#v/%#v", public.TIXTCP, public.ExperimentalTCP)
+	}
+	if status.Listeners[0].Transport != "experimental_tcp" || status.KernelTransport.Protocols[0].Protocol != "experimental_tcp" {
+		t.Fatalf("public conversion mutated runtime status = %#v", status)
+	}
+}
+
+func TestTransportNamesPublishesAndDeduplicatesTIXTCP(t *testing.T) {
+	got := transportNames([]transport.Protocol{transport.ProtocolUDP, transport.ProtocolExperimentalTCP, transport.ProtocolTIXTCP})
+	if len(got) != 2 || got[0] != "tix_tcp" || got[1] != "udp" {
+		t.Fatalf("transport names = %#v", got)
+	}
+}
 
 func TestDomainIXStatusCountsT1WithoutDownstream(t *testing.T) {
 	now := time.Now().UTC()

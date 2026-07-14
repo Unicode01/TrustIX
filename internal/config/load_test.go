@@ -89,6 +89,56 @@ endpoints:
 	}
 }
 
+func TestLoadBytesAcceptsTIXTCPAndLegacyAliases(t *testing.T) {
+	cfg, err := LoadBytes([]byte(`
+domain:
+  id: lab.local
+ix:
+  id: ix-a
+endpoints:
+  - name: ix-a-tix-tcp
+    transport: tix_tcp
+    listen: 0.0.0.0:7443
+peers:
+  - id: ix-b
+    domain: lab.local
+    endpoints:
+      - name: ix-b-legacy
+        transport: experimental_tcp
+        address: 192.0.2.2:7443
+transport_policy:
+  profiles:
+    - transport: tix-tcp
+      profile: performance
+`), ".yaml")
+	if err != nil {
+		t.Fatalf("load yaml: %v", err)
+	}
+	if got := cfg.Endpoints[0].Transport; got != "experimental_tcp" {
+		t.Fatalf("local runtime transport = %q", got)
+	}
+	if got := cfg.Peers[0].Endpoints[0].Transport; got != "experimental_tcp" {
+		t.Fatalf("peer runtime transport = %q", got)
+	}
+	if got := cfg.TransportPolicy.Profiles[0].Transport; got != "experimental_tcp" {
+		t.Fatalf("profile runtime transport = %q", got)
+	}
+
+	public := PublicDesired(cfg)
+	if got := public.Endpoints[0].Transport; got != "tix_tcp" {
+		t.Fatalf("public local transport = %q", got)
+	}
+	if got := public.Peers[0].Endpoints[0].Transport; got != "tix_tcp" {
+		t.Fatalf("public peer transport = %q", got)
+	}
+	if got := public.TransportPolicy.Profiles[0].Transport; got != "tix_tcp" {
+		t.Fatalf("public profile transport = %q", got)
+	}
+	if got := cfg.Endpoints[0].Transport; got != "experimental_tcp" {
+		t.Fatalf("PublicDesired mutated runtime config: %q", got)
+	}
+}
+
 func TestLoadBytesPreservesExplicitTransportPolicyAuto(t *testing.T) {
 	cfg, err := LoadBytes([]byte(`
 domain:

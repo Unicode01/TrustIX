@@ -274,6 +274,8 @@ Environment:
 
 Endpoint SPEC fields are comma-separated or semicolon-separated:
   name=ix-new-udp,transport=udp,mode=passive,listen=0.0.0.0:7000,address=ddns.example:7000
+  TIX-TCP uses transport=tix_tcp. Legacy experimental_tcp, experimental-tcp,
+  and ackless_tcp inputs are accepted and written as tix_tcp.
   Optional local bind fields: source_ip=192.0.2.10,bind_iface=wan2
 Use semicolons when a value itself contains commas, for example GRE/IPIP/VXLAN
 endpoint address strings.
@@ -356,6 +358,26 @@ split_values() {
 lower_ascii() {
   local value="$1"
   printf '%s' "${value,,}"
+}
+
+normalize_transport_name() {
+  local value
+  value="$(lower_ascii "${1:-}")"
+  value="${value//-/_}"
+  case "$value" in
+    tix_tcp|experimental_tcp|ackless_tcp|ackless) printf 'tix_tcp' ;;
+    *) printf '%s' "$value" ;;
+  esac
+}
+
+transport_endpoint_name_suffix() {
+  local value
+  value="$(normalize_transport_name "$1")"
+  if [[ "$value" == "tix_tcp" ]]; then
+    printf 'tix-tcp'
+    return
+  fi
+  printf '%s' "$value"
 }
 
 absolute_path() {
@@ -853,8 +875,9 @@ for root in "${trust_roots[@]}"; do
 done
 
 if [[ ${#endpoint_specs[@]} -eq 0 ]]; then
+  endpoint_transport="$(normalize_transport_name "$endpoint_transport")"
   if [[ -z "$endpoint_name" ]]; then
-    endpoint_name="${ix_id}-${endpoint_transport}"
+    endpoint_name="${ix_id}-$(transport_endpoint_name_suffix "$endpoint_transport")"
   fi
   generated_endpoint_spec="name=${endpoint_name},transport=${endpoint_transport},mode=${endpoint_mode},listen=${endpoint_listen},address=${endpoint_address},encryption=${profile_encryption},profile=${profile_transport_profile},datapath=${profile_datapath},crypto_placement=${profile_crypto_placement}"
   if [[ -n "$endpoint_source_ip" ]]; then
@@ -913,7 +936,7 @@ write_endpoint_object() {
   local spec="$1"
   local name transport mode listen address source_ip bind_iface priority link_tls encryption profile datapath crypto first_bind
   name="$(field_value "$spec" name "")"
-  transport="$(field_value "$spec" transport "udp")"
+  transport="$(normalize_transport_name "$(field_value "$spec" transport "udp")")"
   mode="$(field_value "$spec" mode "passive")"
   listen="$(field_value "$spec" listen "")"
   address="$(field_value "$spec" address "")"

@@ -225,6 +225,7 @@ func (daemon *Daemon) buildLinkDiagnostic(peer config.PeerConfig, static map[cor
 		status.SendErrors += endpoint.SendErrors
 	}
 	status.State, status.Warnings = linkDiagnosticState(status)
+	status.Sessions = publicDataPathSessions(status.Sessions)
 	return status
 }
 
@@ -263,7 +264,7 @@ func (daemon *Daemon) linkDiagnosticEndpoints(peer config.PeerConfig, sessions [
 		usable := endpoint.Enabled && kernelCompatible && securityCompatible && profileCompatible && (!reverseOnly || activeReverse > 0)
 		out = append(out, linkDiagnosticEndpoint{
 			Name:               string(endpoint.Name),
-			Transport:          endpoint.Transport,
+			Transport:          config.PublicTransportName(endpoint.Transport),
 			Mode:               string(endpoint.Mode),
 			Address:            endpoint.Address,
 			Enabled:            endpoint.Enabled,

@@ -14,6 +14,7 @@ import (
 
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/routing"
+	"trustix.local/trustix/internal/transport"
 )
 
 func LoadFile(path string) (Desired, error) {
@@ -101,6 +102,38 @@ func Normalize(cfg Desired) Desired {
 	normalizeTransportPolicy(&cfg.TransportPolicy)
 	applyTransportPolicyProductionDefaults(&cfg.TransportPolicy)
 	return cfg
+}
+
+// PublicDesired returns a copy using canonical operator-facing transport
+// names. Runtime normalization keeps the legacy identity for rolling upgrades.
+func PublicDesired(cfg Desired) Desired {
+	cfg.Endpoints = publicEndpoints(cfg.Endpoints)
+	cfg.Peers = append([]PeerConfig(nil), cfg.Peers...)
+	for i := range cfg.Peers {
+		cfg.Peers[i].Endpoints = publicEndpoints(cfg.Peers[i].Endpoints)
+	}
+	cfg.TransportPolicy.Profiles = append([]TransportProfileConfig(nil), cfg.TransportPolicy.Profiles...)
+	for i := range cfg.TransportPolicy.Profiles {
+		cfg.TransportPolicy.Profiles[i].Transport = PublicTransportName(cfg.TransportPolicy.Profiles[i].Transport)
+	}
+	return cfg
+}
+
+func publicEndpoints(endpoints []EndpointConfig) []EndpointConfig {
+	out := append([]EndpointConfig(nil), endpoints...)
+	for i := range out {
+		out[i].Transport = PublicTransportName(out[i].Transport)
+	}
+	return out
+}
+
+// PublicTransportName canonicalizes transport names exposed to operators.
+func PublicTransportName(value string) string {
+	return string(transport.PublicProtocol(transport.Protocol(value)))
+}
+
+func normalizeTransportName(value string) string {
+	return string(transport.RuntimeProtocol(transport.Protocol(value)))
 }
 
 func normalizeControlAPIPublish(mode string) string {
@@ -226,7 +259,7 @@ func normalizeKernelModule(module *KernelModuleConfig) {
 
 func normalizeEndpoint(ep *EndpointConfig) {
 	ep.TLSServerName = strings.TrimSpace(ep.TLSServerName)
-	ep.Transport = strings.ToLower(strings.TrimSpace(ep.Transport))
+	ep.Transport = normalizeTransportName(ep.Transport)
 	normalizeEndpointAccess(&ep.Access)
 	ep.Security.CryptoSuites = normalizeCryptoSuiteList(ep.Security.CryptoSuites)
 	normalizeEndpointProfile(&ep.Profile)
@@ -377,12 +410,10 @@ func applyTransportPolicyProductionDefaults(policy *TransportPolicyConfig) {
 
 func normalizeTransportProfileTransport(value string) string {
 	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", "_")) {
-	case "ackless_tcp", "ackless", "experimental-tcp":
-		return "experimental_tcp"
 	case "kernel_udp", "kudp":
 		return "udp"
 	default:
-		return strings.ToLower(strings.TrimSpace(value))
+		return normalizeTransportName(value)
 	}
 }
 

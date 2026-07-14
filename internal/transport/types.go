@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,16 +19,40 @@ import (
 type Protocol string
 
 const (
-	ProtocolUDP             Protocol = "udp"
-	ProtocolQUIC            Protocol = "quic"
-	ProtocolTCP             Protocol = "tcp"
-	ProtocolWebSocket       Protocol = "websocket"
-	ProtocolHTTPConnect     Protocol = "http_connect"
+	ProtocolUDP         Protocol = "udp"
+	ProtocolQUIC        Protocol = "quic"
+	ProtocolTCP         Protocol = "tcp"
+	ProtocolWebSocket   Protocol = "websocket"
+	ProtocolHTTPConnect Protocol = "http_connect"
+	ProtocolTIXTCP      Protocol = "tix_tcp"
+	// ProtocolExperimentalTCP is the legacy runtime identity retained during
+	// the TIX-TCP rolling migration.
 	ProtocolExperimentalTCP Protocol = "experimental_tcp"
 	ProtocolGRE             Protocol = "gre"
 	ProtocolIPIP            Protocol = "ipip"
 	ProtocolVXLAN           Protocol = "vxlan"
 )
+
+// RuntimeProtocol maps public and legacy TIX-TCP names to the established
+// runtime identity so upgraded nodes remain wire-compatible with older peers.
+func RuntimeProtocol(protocol Protocol) Protocol {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(string(protocol)), "-", "_"))
+	switch normalized {
+	case string(ProtocolTIXTCP), string(ProtocolExperimentalTCP), "ackless_tcp", "ackless":
+		return ProtocolExperimentalTCP
+	default:
+		return Protocol(normalized)
+	}
+}
+
+// PublicProtocol returns the canonical operator-facing protocol name.
+func PublicProtocol(protocol Protocol) Protocol {
+	runtimeProtocol := RuntimeProtocol(protocol)
+	if runtimeProtocol == ProtocolExperimentalTCP {
+		return ProtocolTIXTCP
+	}
+	return runtimeProtocol
+}
 
 type EndpointMode string
 
@@ -225,7 +250,7 @@ func (registry *Registry) Register(transport Transport) error {
 	if transport == nil {
 		return fmt.Errorf("transport is nil")
 	}
-	name := transport.Name()
+	name := RuntimeProtocol(transport.Name())
 	if name == "" {
 		return fmt.Errorf("transport name is required")
 	}
@@ -242,7 +267,7 @@ func (registry *Registry) Register(transport Transport) error {
 func (registry *Registry) Get(protocol Protocol) (Transport, bool) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
-	transport, ok := registry.transports[protocol]
+	transport, ok := registry.transports[RuntimeProtocol(protocol)]
 	return transport, ok
 }
 

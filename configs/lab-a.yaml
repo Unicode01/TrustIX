@@ -33,7 +33,7 @@ lan:
   # Use attach_mode: existing with manage_address: false to reuse an already
   # addressed physical LAN port or bridge.
   attach_mode: managed
-  # Set this to the Linux underlay NIC when enabling experimental_tcp AF_XDP.
+  # Set this to the Linux underlay NIC when enabling TIX-TCP AF_XDP.
   # underlay_iface: eth0
   gateway: 10.0.0.1/24
   advertise:
@@ -90,11 +90,11 @@ endpoints:
     transport: quic
     enabled: true
 
-  - name: sh-experimental-tcp
+  - name: sh-tix-tcp
     mode: passive
     listen: 127.0.0.1:7041
     address: 127.0.0.1:7041
-    transport: experimental_tcp
+    transport: tix_tcp
     enabled: false
 
 peers:
@@ -108,9 +108,9 @@ peers:
       - name: hk-quic
         address: 127.0.0.1:7442
         transport: quic
-      - name: hk-experimental-tcp
+      - name: hk-tix-tcp
         address: 127.0.0.1:7042
-        transport: experimental_tcp
+        transport: tix_tcp
     allowed_prefixes:
       - 10.0.1.0/24
 
@@ -145,7 +145,7 @@ transport_policy:
   encryption: secure
   # auto uses TLS exporter when the selected transport has an IX-certificate
   # mTLS link (tcp/websocket/http_connect/quic), otherwise it falls back to the
-  # TrustIX X25519 transcript used by UDP and experimental_tcp.
+  # TrustIX X25519 transcript used by UDP and TIX-TCP.
   crypto_key_source: auto
   # By default the transport TLS layer also uses ix.cert/ix.key. To use a
   # separate IP/public certificate for TCP/WebSocket/HTTP CONNECT/QUIC link TLS,

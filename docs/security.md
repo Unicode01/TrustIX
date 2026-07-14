@@ -98,7 +98,7 @@ On a dedicated root Linux/PVE test host, include root data-plane checks:
 sudo -E TRUSTIX_SECURITY_SMOKE_ROOT=1 bash scripts/linux-security-smoke.sh
 ```
 
-For heavier pre-release validation, add TCP TLS and experimental TCP data-plane
+For heavier pre-release validation, add TCP TLS and TIX-TCP data-plane
 coverage:
 
 ```bash

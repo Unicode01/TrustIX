@@ -61,9 +61,9 @@
 - `scripts/linux-clean-release-smoke.sh`：干净测试机 release 全链路烟测。脚本会先清理 TrustIX 命名的 tmp、`tix-*` netns、`trustix_crypto.ko`、`trustix_datapath.ko` 与 `trustix_datapath_helpers.ko` 模块树残留，再从源码运行 `build-release-linux.sh`，用 `release-smoke-linux.sh` 验证 embedded `.ko` 自动加载/卸载、TCP TLS e2e 和 UDP/TCP/kernel_udp/experimental_tcp NAT reverse e2e，用 release 包内预编译 `.ko` 跑 TrustIX kernel/full-datapath/helper module smoke，并默认继续跑 package 内的双 IX `kernel_udp`、NAT reverse `kernel_udp`、三 IX `kernel_udp` 与 `experimental_tcp` kernel crypto e2e；每个阶段后都断言没有模块/netns/tmp 残留。如果目标 cloud 内核可以加载 `.ko` 和通过 device ioctl 使用 batch AEAD，但 BPF verifier 不支持 crypto kfunc provider selftest，kernel module smoke 会以能力不支持退出码返回，clean release 会继续验证 release 包和 kernel transport，并跳过严格 `experimental_tcp` kernel crypto e2e。`TRUSTIX_CLEAN_RELEASE_SMOKE_NAT_REVERSE=0` 和 `TRUSTIX_CLEAN_RELEASE_SMOKE_3IX_KERNEL_UDP=0` 可关闭对应阶段。该脚本会删除 TrustIX 命名残留，只应在专用测试机执行。
 - `internal/buildinfo` / `internal/buildassets`：构建元数据和嵌入资源摘要边界。`buildinfo` 只保存 ldflags 注入的版本信息和 Go/platform 信息；`buildassets` 汇总 eBPF `.o` 与 kernel module `.ko` 的 `embedded_kos` hash/size/ELF 状态，供 daemon status 和 `trustixd -version` 输出使用。
 
-## experimental_tcp 目标边界
+## TIX-TCP 目标边界
 
-`experimental_tcp` 不使用系统 TCP 传输数据包。目标模型是：
+TIX-TCP 的公开配置/API 名称是 `tix_tcp`；`experimental_tcp`、`experimental-tcp` 和 `ackless_tcp` 仅作为兼容别名继续可读。运行时协议身份、内核/BPF 统计键和测试环境变量暂时保留 `experimental_tcp`，以保证滚动升级与历史证据连续。TIX-TCP 不使用系统 TCP 传输数据包。目标模型是：
 
 - 控制面可以用真实 TCP/TLS/mTLS 做认证、协商 flow id、epoch、cookie 和 key。
 - 数据面是 TCP-shaped ACKless frame，不进入 TCP socket buffer、TCP 重传队列或拥塞控制。

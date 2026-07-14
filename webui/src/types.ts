@@ -63,6 +63,7 @@ export type StatusPayload = {
     kernel_rx_stage?: KernelRXStageStatus;
     kernel_transport?: KernelTransportStatus;
     kernel_udp?: KernelUDPStatus;
+    tix_tcp?: ExperimentalTCPStatus;
     experimental_tcp?: ExperimentalTCPStatus;
     sessions?: DataPathSession[];
   };
@@ -74,6 +75,7 @@ export type KernelCapabilitiesPayload = {
   rx_stage?: KernelRXStageStatus;
   kernel_transport?: KernelTransportStatus;
   kernel_udp?: KernelUDPStatus;
+  tix_tcp?: ExperimentalTCPStatus;
   experimental_tcp?: ExperimentalTCPStatus;
   datapath_mode?: string;
   capabilities?: string[];
@@ -516,6 +518,7 @@ export type TransportMatrix = {
   local_endpoints?: Array<EndpointView & TransportMatrixEndpointRuntime>;
   peer_endpoints?: Array<EndpointView & TransportMatrixEndpointRuntime & { peer?: string; reverse_only?: boolean; active_reverse_sessions?: number }>;
   kernel_transport?: KernelTransportStatus;
+  tix_tcp?: Record<string, unknown>;
   experimental_tcp?: Record<string, unknown>;
   kernel_udp?: Record<string, unknown>;
   transport_tls?: Record<string, unknown>;

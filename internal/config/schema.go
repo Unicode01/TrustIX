@@ -2158,7 +2158,7 @@ func validatePrefixConflicts(cfg Desired) error {
 }
 
 func supportedTransport(name string) bool {
-	switch name {
+	switch normalizeTransportName(name) {
 	case "udp", "quic", "tcp", "websocket", "http_connect", "experimental_tcp", "gre", "ipip", "vxlan":
 		return true
 	default:

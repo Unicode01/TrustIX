@@ -260,6 +260,7 @@ type bootstrapProfileGeneratedConfig struct {
 		} `json:"datapath"`
 	} `json:"kernel_modules"`
 	Endpoints []struct {
+		Name      string `json:"name"`
 		Transport string `json:"transport"`
 		Security  struct {
 			Encryption string `json:"encryption"`
@@ -356,32 +357,47 @@ func TestTrustIXBootstrapIXGeneratesPinnedProfileDefaults(t *testing.T) {
 			}
 		})
 	}
+	t.Run("legacy transport alias", func(t *testing.T) {
+		cfg := runBootstrapProfileConfig(t, bash, workDir, certDir, "stable", "experimental_tcp")
+		if len(cfg.Endpoints) != 1 || cfg.Endpoints[0].Transport != "tix_tcp" || !strings.HasSuffix(cfg.Endpoints[0].Name, "-tix-tcp") {
+			t.Fatalf("legacy transport alias generated endpoints = %#v", cfg.Endpoints)
+		}
+	})
 }
 
-func runBootstrapProfileConfig(t *testing.T, bash, workDir, certDir, profile string) bootstrapProfileGeneratedConfig {
+func runBootstrapProfileConfig(t *testing.T, bash, workDir, certDir, profile string, endpointTransport ...string) bootstrapProfileGeneratedConfig {
 	t.Helper()
-	profileWorkDir := filepath.Join(workDir, profile)
+	testName := profile
+	if len(endpointTransport) > 0 {
+		testName += "-" + strings.ReplaceAll(endpointTransport[0], "_", "-")
+	}
+	profileWorkDir := filepath.Join(workDir, testName)
 	if err := os.MkdirAll(profileWorkDir, 0o755); err != nil {
 		t.Fatalf("create profile work dir: %v", err)
 	}
-	ixID := "ix-profile-" + strings.ReplaceAll(profile, "_", "-")
-	cmd := exec.Command(
-		bash,
+	ixID := "ix-profile-" + strings.ReplaceAll(testName, "_", "-")
+	args := []string{
 		"trustix-bootstrap-ix.sh",
 		"--ix", ixID,
 		"--domain", "trust.local",
-		"--control-api", "https://"+ixID+".example:9443",
+		"--control-api", "https://" + ixID + ".example:9443",
 		"--advertise", "10.91.0.0/24",
 		"--listen", "0.0.0.0:7000",
-		"--address", ixID+".example:7000",
+		"--address", ixID + ".example:7000",
 		"--profile", profile,
 		"--source-certs", strings.ReplaceAll(certDir, "\\", "/"),
 		"--work-dir", strings.ReplaceAll(profileWorkDir, "\\", "/"),
 		"--target-cert-dir", "/etc/trustix/certs",
+	}
+	if len(endpointTransport) > 0 {
+		args = append(args, "--endpoint-transport", endpointTransport[0])
+	}
+	args = append(args,
 		"--no-build",
 		"--no-deploy",
 		"--json",
 	)
+	cmd := exec.Command(bash, args...)
 	cmd.Env = append(os.Environ(), "TRUSTIX_BOOTSTRAP_INSTALL_DEPS=0")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
