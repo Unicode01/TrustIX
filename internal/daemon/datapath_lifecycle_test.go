@@ -16,8 +16,8 @@ import (
 	"trustix.local/trustix/internal/routing"
 	rstate "trustix.local/trustix/internal/runtime"
 	"trustix.local/trustix/internal/transport"
-	experimentaltcptransport "trustix.local/trustix/internal/transport/experimentaltcp"
 	securetransport "trustix.local/trustix/internal/transport/secure"
+	tixtcptransport "trustix.local/trustix/internal/transport/tixtcp"
 	udptransport "trustix.local/trustix/internal/transport/udp"
 )
 
@@ -424,7 +424,7 @@ func TestStartDataPathKeepsCaptureForwarderForSecureKernelUDPTCOnlyProviderByDef
 	}
 }
 
-func TestStartDataPathKeepsCaptureForwarderForExperimentalTCPTCOnlyProvider(t *testing.T) {
+func TestStartDataPathKeepsCaptureForwarderForTIXTCPTCOnlyProvider(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	manager := &captureCountingManager{}
 	daemon := &Daemon{
@@ -433,7 +433,7 @@ func TestStartDataPathKeepsCaptureForwarderForExperimentalTCPTCOnlyProvider(t *t
 		desired: config.Desired{
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
@@ -448,22 +448,22 @@ func TestStartDataPathKeepsCaptureForwarderForExperimentalTCPTCOnlyProvider(t *t
 		t.Fatalf("start data path: %v", err)
 	}
 	if manager.subscription == nil {
-		t.Fatal("capture subscription should start for experimental_tcp userspace fallback")
+		t.Fatal("capture subscription should start for tix_tcp userspace fallback")
 	}
 	status := daemon.dataPathStatus()
 	if !status.CaptureForwarderActive {
-		t.Fatal("capture forwarder should stay active for experimental_tcp userspace fallback")
+		t.Fatal("capture forwarder should stay active for tix_tcp userspace fallback")
 	}
 	if status.CaptureForwarderSuppressed {
-		t.Fatal("capture forwarder should not report suppressed for experimental_tcp fallback")
+		t.Fatal("capture forwarder should not report suppressed for tix_tcp fallback")
 	}
 }
 
-func TestStartDataPathDegradesExperimentalTCPKernelListenerUnavailable(t *testing.T) {
+func TestStartDataPathDegradesTIXTCPKernelListenerUnavailable(t *testing.T) {
 	registry := transport.NewRegistry()
 	if err := registry.Register(&failingListenTransport{
-		name: transport.ProtocolExperimentalTCP,
-		err:  fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable"),
+		name: transport.ProtocolTIXTCP,
+		err:  fmt.Errorf("tix_tcp TC/XDP reinject is unavailable"),
 	}); err != nil {
 		t.Fatalf("register transport: %v", err)
 	}
@@ -477,7 +477,7 @@ func TestStartDataPathDegradesExperimentalTCPKernelListenerUnavailable(t *testin
 				Name:      "exp-a",
 				Mode:      config.EndpointModePassive,
 				Listen:    "127.0.0.1:17043",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
@@ -492,10 +492,10 @@ func TestStartDataPathDegradesExperimentalTCPKernelListenerUnavailable(t *testin
 	state, ok := daemon.endpointStateFor("ix-a", config.EndpointConfig{
 		Name:      "exp-a",
 		Address:   "127.0.0.1:17043",
-		Transport: string(transport.ProtocolExperimentalTCP),
+		Transport: string(transport.ProtocolTIXTCP),
 	})
 	if !ok {
-		t.Fatal("local experimental_tcp listener failure was not recorded")
+		t.Fatal("local tix_tcp listener failure was not recorded")
 	}
 	if state.Health != rstate.EndpointDown {
 		t.Fatalf("endpoint health = %q, want down", state.Health)
@@ -505,11 +505,11 @@ func TestStartDataPathDegradesExperimentalTCPKernelListenerUnavailable(t *testin
 	}
 }
 
-func TestStartDataPathRequiresExperimentalTCPKernelListener(t *testing.T) {
+func TestStartDataPathRequiresTIXTCPKernelListener(t *testing.T) {
 	registry := transport.NewRegistry()
 	if err := registry.Register(&failingListenTransport{
-		name: transport.ProtocolExperimentalTCP,
-		err:  fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable"),
+		name: transport.ProtocolTIXTCP,
+		err:  fmt.Errorf("tix_tcp TC/XDP reinject is unavailable"),
 	}); err != nil {
 		t.Fatalf("register transport: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestStartDataPathRequiresExperimentalTCPKernelListener(t *testing.T) {
 				Name:      "exp-a",
 				Mode:      config.EndpointModePassive,
 				Listen:    "127.0.0.1:17043",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
@@ -537,12 +537,12 @@ func TestStartDataPathRequiresExperimentalTCPKernelListener(t *testing.T) {
 	}
 }
 
-func TestWarmKernelPlaintextDirectSessionsWarmsExperimentalTCPPolicy(t *testing.T) {
+func TestWarmKernelPlaintextDirectSessionsWarmsTIXTCPPolicy(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
 	manager := &captureCountingManager{}
 	registry := transport.NewRegistry()
-	if err := registry.Register(experimentaltcptransport.New(manager)); err != nil {
-		t.Fatalf("register experimental_tcp transport: %v", err)
+	if err := registry.Register(tixtcptransport.New(manager)); err != nil {
+		t.Fatalf("register tix_tcp transport: %v", err)
 	}
 	daemon := &Daemon{
 		dataplane:        manager,
@@ -553,7 +553,7 @@ func TestWarmKernelPlaintextDirectSessionsWarmsExperimentalTCPPolicy(t *testing.
 			IX: config.IXConfig{ID: "ix-a"},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			Peers: []config.PeerConfig{{
@@ -562,7 +562,7 @@ func TestWarmKernelPlaintextDirectSessionsWarmsExperimentalTCPPolicy(t *testing.
 				Endpoints: []config.EndpointConfig{{
 					Name:      "exp-a",
 					Address:   "127.0.0.1:17042",
-					Transport: string(transport.ProtocolExperimentalTCP),
+					Transport: string(transport.ProtocolTIXTCP),
 					Enabled:   true,
 				}},
 			}},
@@ -581,21 +581,21 @@ func TestWarmKernelPlaintextDirectSessionsWarmsExperimentalTCPPolicy(t *testing.
 	defer daemon.closeDataSessions()
 
 	if err := daemon.warmKernelPlaintextDirectSessions(context.Background()); err != nil {
-		t.Fatalf("warm experimental_tcp plaintext policy: %v", err)
+		t.Fatalf("warm tix_tcp plaintext policy: %v", err)
 	}
-	if got := manager.experimentalTCPFlows.Load(); got != 1 {
-		t.Fatalf("experimental_tcp flow installs = %d, want 1", got)
+	if got := manager.tixTCPFlows.Load(); got != 1 {
+		t.Fatalf("tix_tcp flow installs = %d, want 1", got)
 	}
 	if got := len(daemon.dataSessions); got != 1 {
 		t.Fatalf("sessions = %d, want 1", got)
 	}
 }
 
-func TestWarmKernelSecureDirectSessionsWarmsExperimentalTCPPolicy(t *testing.T) {
+func TestWarmKernelSecureDirectSessionsWarmsTIXTCPPolicy(t *testing.T) {
 	manager := &captureCountingManager{}
 	registry := transport.NewRegistry()
-	if err := registry.Register(experimentaltcptransport.New(manager)); err != nil {
-		t.Fatalf("register experimental_tcp transport: %v", err)
+	if err := registry.Register(tixtcptransport.New(manager)); err != nil {
+		t.Fatalf("register tix_tcp transport: %v", err)
 	}
 	daemon := &Daemon{
 		dataplane:        manager,
@@ -606,7 +606,7 @@ func TestWarmKernelSecureDirectSessionsWarmsExperimentalTCPPolicy(t *testing.T) 
 			IX: config.IXConfig{ID: "ix-a"},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			Peers: []config.PeerConfig{{
@@ -615,7 +615,7 @@ func TestWarmKernelSecureDirectSessionsWarmsExperimentalTCPPolicy(t *testing.T) 
 				Endpoints: []config.EndpointConfig{{
 					Name:      "exp-a",
 					Address:   "127.0.0.1:17042",
-					Transport: string(transport.ProtocolExperimentalTCP),
+					Transport: string(transport.ProtocolTIXTCP),
 					Enabled:   true,
 				}},
 			}},
@@ -635,10 +635,10 @@ func TestWarmKernelSecureDirectSessionsWarmsExperimentalTCPPolicy(t *testing.T) 
 	defer daemon.closeDataSessions()
 
 	if err := daemon.warmKernelPlaintextDirectSessions(context.Background()); err != nil {
-		t.Fatalf("warm experimental_tcp secure kernel policy: %v", err)
+		t.Fatalf("warm tix_tcp secure kernel policy: %v", err)
 	}
-	if got := manager.experimentalTCPFlows.Load(); got != 1 {
-		t.Fatalf("experimental_tcp flow installs = %d, want 1", got)
+	if got := manager.tixTCPFlows.Load(); got != 1 {
+		t.Fatalf("tix_tcp flow installs = %d, want 1", got)
 	}
 	if got := len(daemon.dataSessions); got != 1 {
 		t.Fatalf("sessions = %d, want 1", got)
@@ -774,13 +774,13 @@ func TestWarmKernelUDPPlaintextSessionsRetriesEpochChange(t *testing.T) {
 	}
 }
 
-func TestDataSessionControlOnlyKeepsExperimentalTCPTCOnlyProviderInUserspace(t *testing.T) {
+func TestDataSessionControlOnlyKeepsTIXTCPTCOnlyProviderInUserspace(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	daemon := &Daemon{
 		desired: config.Desired{
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
@@ -791,26 +791,26 @@ func TestDataSessionControlOnlyKeepsExperimentalTCPTCOnlyProviderInUserspace(t *
 		},
 	}
 	if daemon.dataSessionControlOnly(dataSessionKey{
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Encryption: securetransport.EncryptionPlaintext,
-	}, config.EndpointConfig{Transport: string(transport.ProtocolExperimentalTCP)}) {
-		t.Fatal("experimental_tcp plaintext session should keep userspace RX/TX under UDP TC-only provider")
+	}, config.EndpointConfig{Transport: string(transport.ProtocolTIXTCP)}) {
+		t.Fatal("tix_tcp plaintext session should keep userspace RX/TX under UDP TC-only provider")
 	}
 	if daemon.dataSessionControlOnly(dataSessionKey{
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Encryption: securetransport.EncryptionSecure,
-	}, config.EndpointConfig{Transport: string(transport.ProtocolExperimentalTCP)}) {
-		t.Fatal("secure experimental_tcp session should not be control-only")
+	}, config.EndpointConfig{Transport: string(transport.ProtocolTIXTCP)}) {
+		t.Fatal("secure tix_tcp session should not be control-only")
 	}
 }
 
-func TestKernelUDPDirectOnlyProgramEnabledForExperimentalTCPPolicy(t *testing.T) {
+func TestKernelUDPDirectOnlyProgramEnabledForTIXTCPPolicy(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
 	daemon := &Daemon{
 		desired: config.Desired{
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
@@ -821,19 +821,19 @@ func TestKernelUDPDirectOnlyProgramEnabledForExperimentalTCPPolicy(t *testing.T)
 		},
 	}
 	if !daemon.kernelUDPDirectOnlyProgramEnabledForPolicy() {
-		t.Fatal("experimental_tcp direct-only policy did not enable the direct program")
+		t.Fatal("tix_tcp direct-only policy did not enable the direct program")
 	}
 }
 
-func TestDataSessionControlOnlyExcludesExperimentalTCPTXDirectOnlyWithUserspaceRX(t *testing.T) {
+func TestDataSessionControlOnlyExcludesTIXTCPTXDirectOnlyWithUserspaceRX(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT", "0")
 	daemon := &Daemon{
 		desired: config.Desired{
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
@@ -844,23 +844,23 @@ func TestDataSessionControlOnlyExcludesExperimentalTCPTXDirectOnlyWithUserspaceR
 		},
 	}
 	if daemon.dataSessionControlOnly(dataSessionKey{
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Encryption: securetransport.EncryptionPlaintext,
-	}, config.EndpointConfig{Transport: string(transport.ProtocolExperimentalTCP)}) {
-		t.Fatal("experimental_tcp TX direct-only with userspace RX must keep the receive loop")
+	}, config.EndpointConfig{Transport: string(transport.ProtocolTIXTCP)}) {
+		t.Fatal("tix_tcp TX direct-only with userspace RX must keep the receive loop")
 	}
 }
 
-func TestDataSessionControlOnlyExcludesExperimentalTCPCompatStream(t *testing.T) {
+func TestDataSessionControlOnlyExcludesTIXTCPCompatStream(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "1")
 	daemon := &Daemon{
 		desired: config.Desired{
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
@@ -871,10 +871,10 @@ func TestDataSessionControlOnlyExcludesExperimentalTCPCompatStream(t *testing.T)
 		},
 	}
 	if daemon.dataSessionControlOnly(dataSessionKey{
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Encryption: securetransport.EncryptionPlaintext,
-	}, config.EndpointConfig{Transport: string(transport.ProtocolExperimentalTCP)}) {
-		t.Fatal("experimental_tcp compat stream must keep userspace receive loop")
+	}, config.EndpointConfig{Transport: string(transport.ProtocolTIXTCP)}) {
+		t.Fatal("tix_tcp compat stream must keep userspace receive loop")
 	}
 }
 
@@ -896,10 +896,10 @@ func TestDataSessionControlOnlyKeepsSecureUDPFallbackByDefault(t *testing.T) {
 		t.Fatal("secure UDP should keep userspace receive fallback unless secure direct-only is explicitly enabled")
 	}
 	if daemon.dataSessionControlOnly(dataSessionKey{
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Encryption: securetransport.EncryptionSecure,
-	}, config.EndpointConfig{Transport: string(transport.ProtocolExperimentalTCP)}) {
-		t.Fatal("secure experimental_tcp session should keep userspace RX/TX under UDP TC-only provider")
+	}, config.EndpointConfig{Transport: string(transport.ProtocolTIXTCP)}) {
+		t.Fatal("secure tix_tcp session should keep userspace RX/TX under UDP TC-only provider")
 	}
 }
 
@@ -1270,9 +1270,9 @@ func TestControlOnlyWarmupRetainsUDPKernelFlowOnClose(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPCompatStreamWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
+func TestTIXTCPCompatStreamWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
 	session := &epochBumpSession{stats: transport.TransportStats{
-		Extra: map[string]uint64{"experimental_tcp_compat_stream": 1},
+		Extra: map[string]uint64{"tix_tcp_compat_stream": 1},
 	}}
 	daemon := &Daemon{
 		dataSessions:     make(map[dataSessionKey]transport.Session),
@@ -1281,14 +1281,14 @@ func TestExperimentalTCPCompatStreamWarmupRuntimeKeepsReceiveLoop(t *testing.T) 
 	key := dataSessionKey{
 		Peer:      "ix-b",
 		Endpoint:  "exp-a",
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Address:   "127.0.0.1:17042",
 	}
 	daemon.dataSessions[key] = session
 	daemon.dataMu.Lock()
 	runtime := daemon.startDataSessionRuntimeLockedWithOptions(key, session, config.PeerConfig{ID: "ix-b"}, config.EndpointConfig{
 		Name:      "exp-a",
-		Transport: string(transport.ProtocolExperimentalTCP),
+		Transport: string(transport.ProtocolTIXTCP),
 	}, true)
 	daemon.dataMu.Unlock()
 	defer daemon.closeDataSessions()
@@ -1296,14 +1296,14 @@ func TestExperimentalTCPCompatStreamWarmupRuntimeKeepsReceiveLoop(t *testing.T) 
 		t.Fatal("runtime should be created")
 	}
 	if runtime.controlOnly {
-		t.Fatal("experimental_tcp compat stream warmup runtime must keep the userspace receive loop")
+		t.Fatal("tix_tcp compat stream warmup runtime must keep the userspace receive loop")
 	}
 }
 
-func TestExperimentalTCPDirectWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
+func TestTIXTCPDirectWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "1")
 	session := &epochBumpSession{stats: transport.TransportStats{Datagram: true}}
 	daemon := &Daemon{
 		dataSessions:     make(map[dataSessionKey]transport.Session),
@@ -1311,7 +1311,7 @@ func TestExperimentalTCPDirectWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
 		desired: config.Desired{
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
@@ -1324,7 +1324,7 @@ func TestExperimentalTCPDirectWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
 	key := dataSessionKey{
 		Peer:       "ix-b",
 		Endpoint:   "exp-a",
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Address:    "127.0.0.1:17042",
 		Encryption: securetransport.EncryptionPlaintext,
 	}
@@ -1332,15 +1332,15 @@ func TestExperimentalTCPDirectWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
 	daemon.dataMu.Lock()
 	runtime := daemon.startDataSessionRuntimeLockedWithOptions(key, session, config.PeerConfig{ID: "ix-b"}, config.EndpointConfig{
 		Name:      "exp-a",
-		Transport: string(transport.ProtocolExperimentalTCP),
-	}, daemon.kernelDirectWarmupControlOnlyEndpoint(config.EndpointConfig{Transport: string(transport.ProtocolExperimentalTCP)}))
+		Transport: string(transport.ProtocolTIXTCP),
+	}, daemon.kernelDirectWarmupControlOnlyEndpoint(config.EndpointConfig{Transport: string(transport.ProtocolTIXTCP)}))
 	daemon.dataMu.Unlock()
 	defer daemon.closeDataSessions()
 	if runtime == nil {
 		t.Fatal("runtime should be created")
 	}
 	if runtime.controlOnly {
-		t.Fatal("experimental_tcp direct warmup runtime must keep the userspace receive loop")
+		t.Fatal("tix_tcp direct warmup runtime must keep the userspace receive loop")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -1349,19 +1349,19 @@ func TestExperimentalTCPDirectWarmupRuntimeKeepsReceiveLoop(t *testing.T) {
 	for !session.closed.Load() {
 		select {
 		case <-ctx.Done():
-			t.Fatal("experimental_tcp direct warmup runtime did not start the receive loop")
+			t.Fatal("tix_tcp direct warmup runtime did not start the receive loop")
 		case <-ticker.C:
 		}
 	}
 }
 
 type captureCountingManager struct {
-	subscription         *captureCountingSubscription
-	kernelUDPStatus      *dataplane.KernelUDPStatus
-	kernelUDPFlows       atomic.Uint64
-	experimentalTCPFlows atomic.Uint64
-	attachCount          atomic.Uint64
-	detachCount          atomic.Uint64
+	subscription    *captureCountingSubscription
+	kernelUDPStatus *dataplane.KernelUDPStatus
+	kernelUDPFlows  atomic.Uint64
+	tixTCPFlows     atomic.Uint64
+	attachCount     atomic.Uint64
+	detachCount     atomic.Uint64
 }
 
 func (manager *captureCountingManager) Load(ctx context.Context) error {
@@ -1432,11 +1432,11 @@ func (manager *captureCountingManager) SubscribeKernelUDP(ctx context.Context, b
 	return &captureCountingKernelUDPSubscription{events: make(chan dataplane.KernelUDPFrame)}, nil
 }
 
-func (manager *captureCountingManager) ExperimentalTCPStatus(ctx context.Context) (dataplane.ExperimentalTCPStatus, error) {
+func (manager *captureCountingManager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatus, error) {
 	if err := ctx.Err(); err != nil {
-		return dataplane.ExperimentalTCPStatus{}, err
+		return dataplane.TIXTCPStatus{}, err
 	}
-	return dataplane.ExperimentalTCPStatus{
+	return dataplane.TIXTCPStatus{
 		Available:       true,
 		Provider:        "test",
 		FastPath:        true,
@@ -1445,27 +1445,27 @@ func (manager *captureCountingManager) ExperimentalTCPStatus(ctx context.Context
 		Reinject:        true,
 		PreferredCrypto: dataplane.CryptoPlacementKernel,
 		SupportedCrypto: []dataplane.CryptoPlacement{dataplane.CryptoPlacementUserspace, dataplane.CryptoPlacementKernel},
-		ActiveFlows:     int(manager.experimentalTCPFlows.Load()),
+		ActiveFlows:     int(manager.tixTCPFlows.Load()),
 	}, nil
 }
 
-func (manager *captureCountingManager) InstallExperimentalTCPFlows(ctx context.Context, flows []dataplane.ExperimentalTCPFlow) error {
+func (manager *captureCountingManager) InstallTIXTCPFlows(ctx context.Context, flows []dataplane.TIXTCPFlow) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	manager.experimentalTCPFlows.Add(uint64(len(flows)))
+	manager.tixTCPFlows.Add(uint64(len(flows)))
 	return nil
 }
 
-func (manager *captureCountingManager) SubmitExperimentalTCPFrame(ctx context.Context, frame dataplane.ExperimentalTCPFrame) error {
+func (manager *captureCountingManager) SubmitTIXTCPFrame(ctx context.Context, frame dataplane.TIXTCPFrame) error {
 	return ctx.Err()
 }
 
-func (manager *captureCountingManager) SubscribeExperimentalTCP(ctx context.Context, buffer int) (dataplane.ExperimentalTCPSubscription, error) {
+func (manager *captureCountingManager) SubscribeTIXTCP(ctx context.Context, buffer int) (dataplane.TIXTCPSubscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &captureCountingExperimentalTCPSubscription{events: make(chan dataplane.ExperimentalTCPFrame)}, nil
+	return &captureCountingTIXTCPSubscription{events: make(chan dataplane.TIXTCPFrame)}, nil
 }
 
 func (manager *captureCountingManager) KernelTransportStatus(ctx context.Context) (dataplane.KernelTransportStatus, error) {
@@ -1484,7 +1484,7 @@ func (manager *captureCountingManager) KernelTransportStatus(ctx context.Context
 			Provider:          "test",
 			UserspaceFallback: false,
 		}, {
-			Protocol:          string(transport.ProtocolExperimentalTCP),
+			Protocol:          string(transport.ProtocolTIXTCP),
 			Available:         true,
 			CapabilityReady:   true,
 			Placement:         "kernel",
@@ -1515,15 +1515,15 @@ func (subscription *captureCountingKernelUDPSubscription) Close() error {
 	return nil
 }
 
-type captureCountingExperimentalTCPSubscription struct {
-	events chan dataplane.ExperimentalTCPFrame
+type captureCountingTIXTCPSubscription struct {
+	events chan dataplane.TIXTCPFrame
 }
 
-func (subscription *captureCountingExperimentalTCPSubscription) Events() <-chan dataplane.ExperimentalTCPFrame {
+func (subscription *captureCountingTIXTCPSubscription) Events() <-chan dataplane.TIXTCPFrame {
 	return subscription.events
 }
 
-func (subscription *captureCountingExperimentalTCPSubscription) Close() error {
+func (subscription *captureCountingTIXTCPSubscription) Close() error {
 	close(subscription.events)
 	return nil
 }

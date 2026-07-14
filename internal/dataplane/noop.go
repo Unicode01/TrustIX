@@ -192,11 +192,11 @@ func (manager *NoopManager) SyncLocalVIPs(ctx context.Context, vips []LocalVIP) 
 	return ctx.Err()
 }
 
-func (manager *NoopManager) ExperimentalTCPStatus(ctx context.Context) (ExperimentalTCPStatus, error) {
+func (manager *NoopManager) TIXTCPStatus(ctx context.Context) (TIXTCPStatus, error) {
 	if err := ctx.Err(); err != nil {
-		return ExperimentalTCPStatus{}, err
+		return TIXTCPStatus{}, err
 	}
-	return ExperimentalTCPStatus{
+	return TIXTCPStatus{
 		Available:          false,
 		Provider:           "none",
 		FastPath:           false,
@@ -214,7 +214,7 @@ func (manager *NoopManager) ExperimentalTCPStatus(ctx context.Context) (Experime
 		RawSocketFallback: false,
 		PreferredCrypto:   CryptoPlacementUserspace,
 		SupportedCrypto:   []CryptoPlacement{CryptoPlacementUserspace},
-		Notes:             []string{"experimental_tcp contract is available; dataplane implementation is not active"},
+		Notes:             []string{"tix_tcp contract is available; dataplane implementation is not active"},
 	}, nil
 }
 
@@ -228,12 +228,12 @@ func (manager *NoopManager) KernelTransportStatus(ctx context.Context) (KernelTr
 		Provider:  "none",
 		Protocols: []KernelTransportProtocol{
 			{
-				Protocol:          "experimental_tcp",
+				Protocol:          "tix_tcp",
 				Available:         false,
 				CapabilityReady:   false,
 				Placement:         "userspace",
 				Carrier:           "tcp-shaped-ipv4",
-				Contract:          "trustix-experimental-tcp-frame-v1",
+				Contract:          "trustix-tix-tcp-frame-v1",
 				UserspaceFallback: true,
 				Reason:            "noop dataplane has no TC/XDP or AF_XDP transport provider",
 			},
@@ -347,35 +347,35 @@ func (manager *NoopManager) SubscribeKernelUDP(ctx context.Context, buffer int) 
 	return nil, ErrUnsupported
 }
 
-func (manager *NoopManager) InstallExperimentalTCPFlows(ctx context.Context, flows []ExperimentalTCPFlow) error {
+func (manager *NoopManager) InstallTIXTCPFlows(ctx context.Context, flows []TIXTCPFlow) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return ErrUnsupported
 }
 
-func (manager *NoopManager) DeleteExperimentalTCPFlows(ctx context.Context, flowIDs []uint64) error {
+func (manager *NoopManager) DeleteTIXTCPFlows(ctx context.Context, flowIDs []uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return ErrUnsupported
 }
 
-func (manager *NoopManager) ExperimentalTCPFlow(ctx context.Context, flowID uint64) (ExperimentalTCPFlow, bool, error) {
+func (manager *NoopManager) TIXTCPFlow(ctx context.Context, flowID uint64) (TIXTCPFlow, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return ExperimentalTCPFlow{}, false, err
+		return TIXTCPFlow{}, false, err
 	}
-	return ExperimentalTCPFlow{}, false, ErrUnsupported
+	return TIXTCPFlow{}, false, ErrUnsupported
 }
 
-func (manager *NoopManager) SubmitExperimentalTCPFrame(ctx context.Context, frame ExperimentalTCPFrame) error {
+func (manager *NoopManager) SubmitTIXTCPFrame(ctx context.Context, frame TIXTCPFrame) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return ErrUnsupported
 }
 
-func (manager *NoopManager) SubscribeExperimentalTCP(ctx context.Context, buffer int) (ExperimentalTCPSubscription, error) {
+func (manager *NoopManager) SubscribeTIXTCP(ctx context.Context, buffer int) (TIXTCPSubscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

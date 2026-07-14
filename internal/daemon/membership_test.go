@@ -187,10 +187,10 @@ func TestLocalAdvertisementCarriesPlaintextEndpointSecurity(t *testing.T) {
 func TestLocalAdvertisementCarriesTransportProfile(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "https://127.0.0.1:9443", "10.0.0.0/24")
-	desired.Endpoints[0].Transport = "experimental_tcp"
+	desired.Endpoints[0].Transport = "tix_tcp"
 	desired.TransportPolicy = config.TransportPolicyConfig{
 		Profiles: []config.TransportProfileConfig{{
-			Transport:  "experimental_tcp",
+			Transport:  "tix_tcp",
 			Profile:    "performance",
 			Datapath:   "kernel_module",
 			Encryption: "plaintext",
@@ -210,14 +210,14 @@ func TestLocalAdvertisementCarriesTransportProfile(t *testing.T) {
 		t.Fatalf("advertised transport profile = %#v", profile)
 	}
 	for _, feature := range []string{
-		"tixt_v1", "ackless_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "plaintext_ack_only",
+		"tixt_v1", "tix_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "plaintext_ack_only",
 		"route_gso", "route_gso_async", "route_gso_sync", "route_tcp_kfunc", "route_xmit_worker",
 	} {
 		if !containsString(profile.Features, feature) {
 			t.Fatalf("advertised transport profile features = %#v, missing %q", profile.Features, feature)
 		}
 	}
-	for _, feature := range []string{"route_gso_async_outer_gso", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx", "full_kmod", "exp_tcp_full_kmod"} {
+	for _, feature := range []string{"route_gso_async_outer_gso", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx", "full_kmod", "tix_tcp_full_kmod"} {
 		if containsString(profile.Features, feature) {
 			t.Fatalf("advertised transport profile features = %#v, must not include opt-in/unselected feature %q", profile.Features, feature)
 		}
@@ -230,7 +230,7 @@ func TestPeerConfigFromAdvertisementPreservesTransportProfile(t *testing.T) {
 		IXID:     "ix-b",
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        "ix-b-tcp",
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Address:   "203.0.113.10:7001",
 			Enabled:   true,
 			Profile: dataplane.TransportProfileMetadata{
@@ -550,7 +550,7 @@ func TestDynamicRouteRejectsEndpointWithUnusableTransport(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	daemonA := newMembershipTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "https://127.0.0.1:9443", "10.0.0.0/24"), 1)
 	desiredC := desiredForMembershipTest(pkiSet, "ix-c", "127.0.0.1:7003", "https://127.0.0.1:9445", "10.0.2.0/24")
-	desiredC.Endpoints[0].Transport = "experimental_tcp"
+	desiredC.Endpoints[0].Transport = "tix_tcp"
 	desiredC.Endpoints[0].Address = ""
 	daemonC := newMembershipTestDaemon(t, desiredC, 2)
 	authorizeMembershipTestIX(t, daemonA, pkiSet, "ix-c", "10.0.2.0/24")

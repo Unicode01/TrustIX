@@ -4,11 +4,11 @@ package ebpf
 
 import "testing"
 
-func TestExperimentalTCPBPFConfigPassOpenedRequiresExplicitEnv(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "")
+func TestTIXTCPBPFConfigPassOpenedRequiresExplicitEnv(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "")
 	t.Setenv("TRUSTIX_XDP_HOT_STATS", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_HOT_STATS", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT", "")
@@ -25,87 +25,87 @@ func TestExperimentalTCPBPFConfigPassOpenedRequiresExplicitEnv(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_OPEN", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_PASS_OPENED", "")
 
-	config := experimentalTCPBPFConfigValue(4, true)
-	if config&experimentalTCPConfigKernelUDPXDPOpen == 0 {
+	config := tixTCPBPFConfigValue(4, true)
+	if config&tixTCPConfigKernelUDPXDPOpen == 0 {
 		t.Fatalf("kernel_udp XDP open bit was not set: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPTCRXDirect == 0 {
+	if config&tixTCPConfigKernelUDPTCRXDirect == 0 {
 		t.Fatalf("kernel_udp TC RX direct bit was not set: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXDirect != 0 {
+	if config&tixTCPConfigKernelUDPXDPRXDirect != 0 {
 		t.Fatalf("kernel_udp XDP RX direct bit set by TC-only config: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPPassOpened != 0 {
+	if config&tixTCPConfigKernelUDPXDPPassOpened != 0 {
 		t.Fatalf("kernel_udp XDP pass-opened bit set without explicit opt-in: %#x", config)
 	}
-	if config&experimentalTCPConfigHotPathStats != 0 {
+	if config&tixTCPConfigHotPathStats != 0 {
 		t.Fatalf("hot-path stats bit set without explicit opt-in: %#x", config)
 	}
-	config = experimentalTCPBPFConfigValueForOptions(4, true, false, false, experimentalTCPBPFConfigOptions{ForcePassOpened: true})
-	if config&experimentalTCPConfigKernelUDPXDPPassOpened == 0 {
+	config = tixTCPBPFConfigValueForOptions(4, true, false, false, tixTCPBPFConfigOptions{ForcePassOpened: true})
+	if config&tixTCPConfigKernelUDPXDPPassOpened == 0 {
 		t.Fatalf("kernel_udp XDP pass-opened bit was not forced for TC fallback: %#x", config)
 	}
 
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_PASS_OPENED", "1")
-	config = experimentalTCPBPFConfigValue(4, true)
-	if config&experimentalTCPConfigKernelUDPXDPPassOpened == 0 {
+	config = tixTCPBPFConfigValue(4, true)
+	if config&tixTCPConfigKernelUDPXDPPassOpened == 0 {
 		t.Fatalf("kernel_udp XDP pass-opened bit was not set after opt-in: %#x", config)
 	}
 
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_HOT_STATS", "1")
-	config = experimentalTCPBPFConfigValue(4, true)
-	if config&experimentalTCPConfigHotPathStats == 0 {
+	config = tixTCPBPFConfigValue(4, true)
+	if config&tixTCPConfigHotPathStats == 0 {
 		t.Fatalf("hot-path stats bit was not set after opt-in: %#x", config)
 	}
 
-	config = experimentalTCPBPFConfigValueFor(4, true, true, false)
-	if config&experimentalTCPConfigKernelUDPXDPRXDirect == 0 {
+	config = tixTCPBPFConfigValueFor(4, true, true, false)
+	if config&tixTCPConfigKernelUDPXDPRXDirect == 0 {
 		t.Fatalf("kernel_udp XDP RX direct bit was not set by explicit XDP config: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXDirectFixedL2 != 0 {
+	if config&tixTCPConfigKernelUDPXDPRXDirectFixedL2 != 0 {
 		t.Fatalf("kernel_udp XDP RX fixed L2 bit set without explicit opt-in: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXSecureDirect != 0 {
+	if config&tixTCPConfigKernelUDPXDPRXSecureDirect != 0 {
 		t.Fatalf("kernel_udp XDP secure RX direct bit set without explicit secure-XDP opt-in: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum != 0 {
+	if config&tixTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum != 0 {
 		t.Fatalf("kernel_udp XDP RX trust-inner-checksum bit set without explicit opt-in: %#x", config)
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_MODE", "fixed_l2")
-	config = experimentalTCPBPFConfigValueFor(4, true, true, false)
-	if config&experimentalTCPConfigKernelUDPXDPRXDirectFixedL2 == 0 {
+	config = tixTCPBPFConfigValueFor(4, true, true, false)
+	if config&tixTCPConfigKernelUDPXDPRXDirectFixedL2 == 0 {
 		t.Fatalf("kernel_udp XDP RX fixed L2 bit was not set by mode: %#x", config)
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_MODE", "")
-	config = experimentalTCPBPFConfigValueForOptions(4, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true})
-	if config&experimentalTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum == 0 {
+	config = tixTCPBPFConfigValueForOptions(4, true, true, false, tixTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true})
+	if config&tixTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum == 0 {
 		t.Fatalf("kernel_udp XDP RX trust-inner-checksum bit was not set by explicit option: %#x", config)
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUM", "1")
 	if !kernelUDPXDPRXDirectTrustInnerChecksumEnabled() {
 		t.Fatalf("kernel_udp XDP RX trust-inner-checksum env gate did not enable")
 	}
-	config = experimentalTCPBPFConfigValueFor(4, true, true, false)
-	if config&experimentalTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum == 0 {
+	config = tixTCPBPFConfigValueFor(4, true, true, false)
+	if config&tixTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum == 0 {
 		t.Fatalf("kernel_udp XDP RX trust-inner-checksum bit was not set by env: %#x", config)
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUM", "")
-	if config&experimentalTCPConfigKernelUDPTCRXSecureDirect != 0 {
+	if config&tixTCPConfigKernelUDPTCRXSecureDirect != 0 {
 		t.Fatalf("kernel_udp TC secure RX direct bit set without explicit secure opt-in: %#x", config)
 	}
-	config = experimentalTCPBPFConfigValueFor(4, true, false, true)
-	if config&experimentalTCPConfigKernelUDPTCRXSecureDirect == 0 {
+	config = tixTCPBPFConfigValueFor(4, true, false, true)
+	if config&tixTCPConfigKernelUDPTCRXSecureDirect == 0 {
 		t.Fatalf("kernel_udp TC secure RX direct bit was not set by explicit secure config: %#x", config)
 	}
-	config = experimentalTCPBPFConfigValueForOptions(4, true, true, true, experimentalTCPBPFConfigOptions{XDPRXSecureDirect: true})
-	if config&experimentalTCPConfigKernelUDPXDPRXSecureDirect == 0 {
+	config = tixTCPBPFConfigValueForOptions(4, true, true, true, tixTCPBPFConfigOptions{XDPRXSecureDirect: true})
+	if config&tixTCPConfigKernelUDPXDPRXSecureDirect == 0 {
 		t.Fatalf("kernel_udp XDP secure RX direct bit was not set by explicit secure-XDP config: %#x", config)
 	}
-	if config&experimentalTCPConfigXDPFallbackPass != 0 {
+	if config&tixTCPConfigXDPFallbackPass != 0 {
 		t.Fatalf("XDP fallback-pass bit set without explicit option: %#x", config)
 	}
-	config = experimentalTCPBPFConfigValueForOptions(4, true, true, false, experimentalTCPBPFConfigOptions{XDPFallbackPass: true})
-	if config&experimentalTCPConfigXDPFallbackPass == 0 {
+	config = tixTCPBPFConfigValueForOptions(4, true, true, false, tixTCPBPFConfigOptions{XDPFallbackPass: true})
+	if config&tixTCPConfigXDPFallbackPass == 0 {
 		t.Fatalf("XDP fallback-pass bit was not set by explicit option: %#x", config)
 	}
 	if kernelUDPXDPRXSecureDirectEnabled() {
@@ -124,16 +124,16 @@ func TestExperimentalTCPBPFConfigPassOpenedRequiresExplicitEnv(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPSkipOuterChecksumSetsBPFSkipChecksum(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "1")
-	if !experimentalTCPSkipTCPChecksum() {
-		t.Fatal("experimental_tcp outer-checksum skip did not enable TCP checksum skip")
+func TestTIXTCPSkipOuterChecksumSetsBPFSkipChecksum(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "1")
+	if !tixTCPSkipTCPChecksum() {
+		t.Fatal("tix_tcp outer-checksum skip did not enable TCP checksum skip")
 	}
-	config := experimentalTCPBPFConfigValue(1, false)
-	if config&experimentalTCPConfigSkipTCPChecksum == 0 {
-		t.Fatalf("experimental_tcp BPF config %#x missing skip TCP checksum bit", config)
+	config := tixTCPBPFConfigValue(1, false)
+	if config&tixTCPConfigSkipTCPChecksum == 0 {
+		t.Fatalf("tix_tcp BPF config %#x missing skip TCP checksum bit", config)
 	}
 }
 

@@ -89,7 +89,7 @@ endpoints:
 	}
 }
 
-func TestLoadBytesAcceptsTIXTCPAndLegacyAliases(t *testing.T) {
+func TestLoadBytesAcceptsTIXTCP(t *testing.T) {
 	cfg, err := LoadBytes([]byte(`
 domain:
   id: lab.local
@@ -103,8 +103,8 @@ peers:
   - id: ix-b
     domain: lab.local
     endpoints:
-      - name: ix-b-legacy
-        transport: experimental_tcp
+      - name: ix-b-tix-tcp
+        transport: tix_tcp
         address: 192.0.2.2:7443
 transport_policy:
   profiles:
@@ -114,28 +114,31 @@ transport_policy:
 	if err != nil {
 		t.Fatalf("load yaml: %v", err)
 	}
-	if got := cfg.Endpoints[0].Transport; got != "experimental_tcp" {
+	if got := cfg.Endpoints[0].Transport; got != "tix_tcp" {
 		t.Fatalf("local runtime transport = %q", got)
 	}
-	if got := cfg.Peers[0].Endpoints[0].Transport; got != "experimental_tcp" {
+	if got := cfg.Peers[0].Endpoints[0].Transport; got != "tix_tcp" {
 		t.Fatalf("peer runtime transport = %q", got)
 	}
-	if got := cfg.TransportPolicy.Profiles[0].Transport; got != "experimental_tcp" {
+	if got := cfg.TransportPolicy.Profiles[0].Transport; got != "tix_tcp" {
 		t.Fatalf("profile runtime transport = %q", got)
 	}
 
-	public := PublicDesired(cfg)
-	if got := public.Endpoints[0].Transport; got != "tix_tcp" {
-		t.Fatalf("public local transport = %q", got)
+}
+
+func TestLoadBytesRejectsLegacyTIXTCPNames(t *testing.T) {
+	legacy := []string{
+		"experimental" + "_tcp",
+		"experimental" + "-tcp",
+		"ackless" + "_tcp",
 	}
-	if got := public.Peers[0].Endpoints[0].Transport; got != "tix_tcp" {
-		t.Fatalf("public peer transport = %q", got)
-	}
-	if got := public.TransportPolicy.Profiles[0].Transport; got != "tix_tcp" {
-		t.Fatalf("public profile transport = %q", got)
-	}
-	if got := cfg.Endpoints[0].Transport; got != "experimental_tcp" {
-		t.Fatalf("PublicDesired mutated runtime config: %q", got)
+	for _, value := range legacy {
+		t.Run(value, func(t *testing.T) {
+			payload := []byte("domain:\n  id: lab.local\nix:\n  id: ix-a\nendpoints:\n  - name: legacy\n    transport: " + value + "\n    listen: 0.0.0.0:7443\n")
+			if _, err := LoadBytes(payload, ".yaml"); err == nil {
+				t.Fatalf("legacy transport %q unexpectedly accepted", value)
+			}
+		})
 	}
 }
 
@@ -443,7 +446,7 @@ func TestLoadJSONNormalizesTransportProfiles(t *testing.T) {
     "datapath": "TC-XDP",
     "profiles": [
       {
-        "transport": "ackless_tcp",
+        "transport": "tix_tcp",
         "profile": "throughput",
         "datapath": "full-kernel",
         "encryption": "PLAINTEXT",
@@ -472,8 +475,8 @@ func TestLoadJSONNormalizesTransportProfiles(t *testing.T) {
 		t.Fatalf("transport profiles = %#v, want one profile", cfg.TransportPolicy.Profiles)
 	}
 	profile := cfg.TransportPolicy.Profiles[0]
-	if profile.Transport != "experimental_tcp" || profile.Profile != "performance" || profile.Datapath != "kernel_module" || profile.Encryption != "plaintext" || profile.CryptoPlacement != "userspace" {
-		t.Fatalf("transport profile override = %#v, want normalized ackless tcp performance kernel module plaintext", profile)
+	if profile.Transport != "tix_tcp" || profile.Profile != "performance" || profile.Datapath != "kernel_module" || profile.Encryption != "plaintext" || profile.CryptoPlacement != "userspace" {
+		t.Fatalf("transport profile override = %#v, want normalized TIX-TCP performance kernel module plaintext", profile)
 	}
 	if !profile.Advanced.AllowOuterGSOUnsafe || profile.Advanced.LargeFrames != "enabled" || profile.Advanced.GSO != "enabled" || profile.Advanced.Shards != 8 || profile.Advanced.MaxFrames != 64 {
 		t.Fatalf("transport profile advanced = %#v", profile.Advanced)
@@ -563,7 +566,7 @@ domain:
 ix:
   id: ix-a
 transport_policy:
-  experimental_tcp:
+  tix_tcp:
     crypto_placement: userspace
 `), ".yaml")
 	if err == nil {
@@ -961,7 +964,7 @@ kernel_modules:
 		t.Fatalf("rx_stage = %q, want %q", cfg.KernelModules.Datapath.RXStage, KernelDatapathRXStageStage)
 	}
 	effective := EffectiveKernelDatapathRuntime(cfg.KernelModules)
-	if effective.RXStage != KernelDatapathRXStageWorker || !effective.RXWorker || !effective.FullPlaintext || !effective.TXPlaintext || !effective.RXWorkerAllowExperimentalTCP {
+	if effective.RXStage != KernelDatapathRXStageWorker || !effective.RXWorker || !effective.FullPlaintext || !effective.TXPlaintext || !effective.RXWorkerAllowTIXTCP {
 		t.Fatalf("effective kernel datapath runtime = %#v", effective)
 	}
 	if effective.RXWorkerHotStats == nil || *effective.RXWorkerHotStats {

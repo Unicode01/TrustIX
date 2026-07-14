@@ -153,7 +153,7 @@ func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {
 	if !strings.Contains(script, `"transport": "tix_tcp"`) || !strings.Contains(script, `"name": "ix-d-tix-tcp"`) {
 		t.Fatalf("bootstrap script did not publish TIX-TCP config:\n%s", script)
 	}
-	if strings.Contains(script, `"transport": "experimental_tcp"`) {
+	if strings.Contains(script, `"transport": "experimental`+`_tcp"`) {
 		t.Fatalf("bootstrap script still writes the legacy transport name:\n%s", script)
 	}
 	if !strings.Contains(script, `"warmup": true`) {
@@ -220,29 +220,29 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		MinSeconds:      "3600",
 	})
 	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
-		Transport:       "experimental_tcp",
+		Transport:       "tix_tcp",
 		Encryption:      plaintext.Encryption,
 		Profile:         plaintext.TransportProfile,
 		Datapath:        plaintext.Datapath,
 		CryptoPlacement: plaintext.CryptoPlacement,
 		ValidationScope: "cross_host",
-		GateFamily:      "exp_tcp_full_kmod",
+		GateFamily:      "tix_tcp_full_kmod",
 		MinGbps:         "4",
 		MinSeconds:      "3600",
 	})
 	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
-		Transport:       "experimental_tcp",
+		Transport:       "tix_tcp",
 		Encryption:      plaintext.Encryption,
 		Profile:         plaintext.TransportProfile,
 		Datapath:        plaintext.Datapath,
 		CryptoPlacement: plaintext.CryptoPlacement,
 		ValidationScope: "cross_host",
-		GateFamily:      "owdeb_exp_tcp_full_kmod",
+		GateFamily:      "owdeb_tix_tcp_full_kmod",
 		MinGbps:         "4",
 		MinSeconds:      "3600",
 	})
 	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
-		Transport:       "experimental_tcp",
+		Transport:       "tix_tcp",
 		Encryption:      plaintext.Encryption,
 		Profile:         plaintext.TransportProfile,
 		Datapath:        plaintext.Datapath,
@@ -308,13 +308,13 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 		MinSeconds:      "3600",
 	})
 	requireProductionTransportDefaultForProvisionTest(t, rows, productionTransportDefaultRowForProvisionTest{
-		Transport:       "experimental_tcp",
+		Transport:       "tix_tcp",
 		Encryption:      securePerformance.Encryption,
 		Profile:         securePerformance.TransportProfile,
 		Datapath:        config.TransportDatapathKernelModule,
 		CryptoPlacement: securePerformance.CryptoPlacement,
 		ValidationScope: "cross_host",
-		GateFamily:      "secure_exp_tcp_kernel",
+		GateFamily:      "secure_tix_tcp_kernel",
 		MinGbps:         "1.5",
 		MinSeconds:      "3600",
 	})
@@ -373,10 +373,10 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 		t.Fatalf("transport candidates = %#v, want udp", target.TransportPolicy.Candidates)
 	}
 	if len(target.TransportPolicy.Profiles) != 0 {
-		t.Fatalf("transport profiles = %#v, want none for experimental_tcp primary", target.TransportPolicy.Profiles)
+		t.Fatalf("transport profiles = %#v, want none for tix_tcp primary", target.TransportPolicy.Profiles)
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
-		t.Fatalf("default provision config should prefer full-kmod plaintext over experimental_tcp route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	if tixTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("default provision config should prefer full-kmod plaintext over tix_tcp route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
 		t.Fatalf("default provision config did not enable full-kmod plaintext: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
@@ -427,7 +427,7 @@ func TestIXProvisionPlaintextPerformanceIPv4DefaultsToUDPFullKmod(t *testing.T) 
 	if len(target.TransportPolicy.Candidates) != 1 || target.TransportPolicy.Candidates[0] != "ix-e-udp" {
 		t.Fatalf("transport candidates = %#v, want udp", target.TransportPolicy.Candidates)
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+	if tixTCPPerformanceRouteGSOAsyncForDesired(target) {
 		t.Fatalf("target IPv4 provision config should prefer UDP full-kmod over route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
@@ -506,7 +506,7 @@ func TestIXProvisionPerformanceProfileUsesSecureKernelUDPDefaults(t *testing.T) 
 	}
 }
 
-func TestIXProvisionPerformanceProfileExplicitExperimentalTCPUsesSecureKernelDefault(t *testing.T) {
+func TestIXProvisionPerformanceProfileExplicitTIXTCPUsesSecureKernelDefault(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
 	request, prefixes, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
@@ -514,14 +514,14 @@ func TestIXProvisionPerformanceProfileExplicitExperimentalTCPUsesSecureKernelDef
 		Profile:           "performance",
 		Advertise:         []core.Prefix{"10.44.0.0/24"},
 		EndpointAddress:   "ix-perf-exp.example.com:7000",
-		EndpointTransport: "experimental_tcp",
+		EndpointTransport: "tix_tcp",
 		ProvisionURL:      "https://ix-a.example.com:18787",
 	}, desired)
 	if err != nil {
 		t.Fatalf("normalize provision request: %v", err)
 	}
 	if request.BuildKO != "1" {
-		t.Fatalf("secure experimental_tcp build_ko = %q, want 1 for crypto/helpers modules", request.BuildKO)
+		t.Fatalf("secure tix_tcp build_ko = %q, want 1 for crypto/helpers modules", request.BuildKO)
 	}
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
@@ -532,30 +532,30 @@ func TestIXProvisionPerformanceProfileExplicitExperimentalTCPUsesSecureKernelDef
 		target.TransportPolicy.Datapath != config.TransportDatapathKernelModule ||
 		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementKernel) ||
 		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
-		t.Fatalf("secure experimental_tcp transport policy = %#v", target.TransportPolicy)
+		t.Fatalf("secure tix_tcp transport policy = %#v", target.TransportPolicy)
 	}
 	if len(target.Endpoints) != 1 ||
-		target.Endpoints[0].Transport != "experimental_tcp" ||
+		target.Endpoints[0].Transport != "tix_tcp" ||
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionSecure ||
 		target.Endpoints[0].Profile.Profile != config.TransportProfilePerformance ||
 		target.Endpoints[0].Profile.Datapath != config.TransportDatapathKernelModule ||
 		target.Endpoints[0].Profile.Encryption != securetransport.EncryptionSecure ||
 		target.Endpoints[0].Profile.CryptoPlacement != string(dataplane.CryptoPlacementKernel) {
-		t.Fatalf("secure experimental_tcp endpoint = %#v", target.Endpoints)
+		t.Fatalf("secure tix_tcp endpoint = %#v", target.Endpoints)
 	}
-	if !experimentalTCPSecureRouteGSOAsyncForDesired(target) {
-		t.Fatalf("secure experimental_tcp profile did not select secure route-GSO")
+	if !tixTCPSecureRouteGSOAsyncForDesired(target) {
+		t.Fatalf("secure tix_tcp profile did not select secure route-GSO")
 	}
 	if kernelUDPSecureRouteGSOForDesired(target) || kernelDatapathFullPlaintextEnabledForDesired(target) {
-		t.Fatalf("secure experimental_tcp profile should not enable kernel_udp route-GSO or full plaintext: policy=%#v modules=%#v", target.TransportPolicy, target.KernelModules)
+		t.Fatalf("secure tix_tcp profile should not enable kernel_udp route-GSO or full plaintext: policy=%#v modules=%#v", target.TransportPolicy, target.KernelModules)
 	}
 	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
-		t.Fatalf("secure experimental_tcp kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
+		t.Fatalf("secure tix_tcp kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
 	}
 	if target.KernelModules.TrustIXCrypto.Mode != "required" ||
 		target.KernelModules.TrustIXDatapath.Mode != "disabled" ||
 		target.KernelModules.TrustIXDatapathHelpers.Mode != "required" {
-		t.Fatalf("secure experimental_tcp kernel module modes = %#v, want crypto/helpers required only", target.KernelModules)
+		t.Fatalf("secure tix_tcp kernel module modes = %#v, want crypto/helpers required only", target.KernelModules)
 	}
 }
 
@@ -588,8 +588,8 @@ func TestIXProvisionExplicitStableKeepsSecureUDPCompatibility(t *testing.T) {
 	}
 	if len(target.Endpoints) != 2 ||
 		target.Endpoints[0].Transport != "udp" ||
-		target.Endpoints[1].Transport != "experimental_tcp" {
-		t.Fatalf("target stable endpoints = %#v, want udp primary and experimental_tcp secondary", target.Endpoints)
+		target.Endpoints[1].Transport != "tix_tcp" {
+		t.Fatalf("target stable endpoints = %#v, want udp primary and tix_tcp secondary", target.Endpoints)
 	}
 	for _, endpoint := range target.Endpoints {
 		if endpoint.Security.Encryption != securetransport.EncryptionSecure ||
@@ -601,7 +601,7 @@ func TestIXProvisionExplicitStableKeepsSecureUDPCompatibility(t *testing.T) {
 		}
 	}
 	if len(target.TransportPolicy.Profiles) != 1 ||
-		target.TransportPolicy.Profiles[0].Transport != "experimental_tcp" ||
+		target.TransportPolicy.Profiles[0].Transport != "tix_tcp" ||
 		target.TransportPolicy.Profiles[0].Profile != config.TransportProfileStable ||
 		target.TransportPolicy.Profiles[0].Datapath != config.TransportDatapathUserspace ||
 		target.TransportPolicy.Profiles[0].Encryption != securetransport.EncryptionSecure ||
@@ -609,7 +609,7 @@ func TestIXProvisionExplicitStableKeepsSecureUDPCompatibility(t *testing.T) {
 		target.TransportPolicy.Profiles[0].Advanced.BatchBytes != dataSessionBatchDefaultBytes ||
 		target.TransportPolicy.Profiles[0].Advanced.FlushDelay != "25us" ||
 		target.TransportPolicy.Profiles[0].Advanced.MaxFrames != dataSessionBatchMaxPackets {
-		t.Fatalf("stable experimental_tcp profile = %#v, want fixed ackless batching profile", target.TransportPolicy.Profiles)
+		t.Fatalf("stable tix_tcp profile = %#v, want fixed TIX-TCP batching profile", target.TransportPolicy.Profiles)
 	}
 }
 
@@ -744,8 +744,8 @@ func TestIXProvisionOpenWRTDNSMasqAndServiceManager(t *testing.T) {
 	if !strings.Contains(script, "--service-manager 'openwrt'") {
 		t.Fatalf("bootstrap script does not force OpenWrt service manager:\n%s", script)
 	}
-	if !strings.Contains(script, "--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1") {
-		t.Fatalf("bootstrap script does not enable OpenWrt experimental_tcp compat stream:\n%s", script)
+	if !strings.Contains(script, "--env TRUSTIX_TIX_TCP_COMPAT_STREAM=1") {
+		t.Fatalf("bootstrap script does not enable OpenWrt tix_tcp compat stream:\n%s", script)
 	}
 	if !strings.Contains(script, "--env TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1") {
 		t.Fatalf("bootstrap script does not allow the validated OpenWrt full-kmod datapath:\n%s", script)
@@ -805,8 +805,8 @@ func TestIXProvisionOpenWRTActiveDefaultsToValidatedUDPFullKmod(t *testing.T) {
 		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
 		t.Fatalf("OpenWrt active transport policy = %#v, want validated UDP plaintext full-kmod", target.TransportPolicy)
 	}
-	if len(target.TransportPolicy.Profiles) != 0 || experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
-		t.Fatalf("OpenWrt active default should not add experimental_tcp route-GSO profile: policy=%#v", target.TransportPolicy)
+	if len(target.TransportPolicy.Profiles) != 0 || tixTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("OpenWrt active default should not add tix_tcp route-GSO profile: policy=%#v", target.TransportPolicy)
 	}
 	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
 		t.Fatalf("OpenWrt active default did not enable full-kmod plaintext datapath: modules=%#v", target.KernelModules)
@@ -827,7 +827,7 @@ func TestIXProvisionOpenWRTSecurePerformanceFailsClosedBeforeUnpromotedRouteGSO(
 		transport string
 	}{
 		{name: "default udp"},
-		{name: "explicit experimental_tcp", transport: "experimental_tcp"},
+		{name: "explicit tix_tcp", transport: "tix_tcp"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := normalizeIXProvisionIssueRequest(ixProvisionIssueRequest{
@@ -847,10 +847,10 @@ func TestIXProvisionOpenWRTSecurePerformanceFailsClosedBeforeUnpromotedRouteGSO(
 	}
 }
 
-func TestIXProvisionOpenWRTExplicitExperimentalTCPStaysFullKmodNotRouteGSO(t *testing.T) {
+func TestIXProvisionOpenWRTExplicitTIXTCPStaysFullKmodNotRouteGSO(t *testing.T) {
 	for _, row := range readProductionTransportDefaultRowsForProvisionTest(t) {
 		switch row.GateFamily {
-		case "owdeb_secure_kudp", "owdeb_secure_exp_tcp_kernel", "owdeb_route_gso":
+		case "owdeb_secure_kudp", "owdeb_secure_tix_tcp_kernel", "owdeb_route_gso":
 			t.Fatalf("OpenWrt provision should not target unpromoted production gate %s: %#v", row.GateFamily, row)
 		}
 	}
@@ -862,15 +862,15 @@ func TestIXProvisionOpenWRTExplicitExperimentalTCPStaysFullKmodNotRouteGSO(t *te
 		Advertise:         []core.Prefix{"10.81.0.0/24"},
 		EndpointMode:      "active",
 		EndpointAddress:   "ix-upstream.example.com:7000",
-		EndpointTransport: "experimental_tcp",
+		EndpointTransport: "tix_tcp",
 		ProvisionURL:      "https://ix-a.example.com:18787",
 		ServiceManager:    "openwrt",
 	}, desired)
 	if err != nil {
 		t.Fatalf("normalize provision request: %v", err)
 	}
-	if request.EndpointTransport != "experimental_tcp" {
-		t.Fatalf("explicit OpenWrt endpoint transport = %q, want experimental_tcp", request.EndpointTransport)
+	if request.EndpointTransport != "tix_tcp" {
+		t.Fatalf("explicit OpenWrt endpoint transport = %q, want tix_tcp", request.EndpointTransport)
 	}
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
@@ -878,26 +878,26 @@ func TestIXProvisionOpenWRTExplicitExperimentalTCPStaysFullKmodNotRouteGSO(t *te
 	}
 	if len(target.Endpoints) != 1 ||
 		target.Endpoints[0].Mode != config.EndpointModeActive ||
-		target.Endpoints[0].Transport != "experimental_tcp" ||
+		target.Endpoints[0].Transport != "tix_tcp" ||
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
-		t.Fatalf("OpenWrt explicit experimental_tcp endpoint = %#v", target.Endpoints)
+		t.Fatalf("OpenWrt explicit tix_tcp endpoint = %#v", target.Endpoints)
 	}
 	if target.TransportPolicy.Datapath != config.TransportDatapathKernelModule ||
 		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
 		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
-		t.Fatalf("OpenWrt explicit experimental_tcp policy = %#v, want full-kmod plaintext", target.TransportPolicy)
+		t.Fatalf("OpenWrt explicit tix_tcp policy = %#v, want full-kmod plaintext", target.TransportPolicy)
 	}
-	if len(target.TransportPolicy.Profiles) != 0 || experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
-		t.Fatalf("OpenWrt explicit experimental_tcp should not enable route-GSO by default: policy=%#v", target.TransportPolicy)
+	if len(target.TransportPolicy.Profiles) != 0 || tixTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("OpenWrt explicit tix_tcp should not enable route-GSO by default: policy=%#v", target.TransportPolicy)
 	}
 	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
-		t.Fatalf("OpenWrt explicit experimental_tcp did not enable full-kmod plaintext: modules=%#v", target.KernelModules)
+		t.Fatalf("OpenWrt explicit tix_tcp did not enable full-kmod plaintext: modules=%#v", target.KernelModules)
 	}
 	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
 		target.KernelModules.TrustIXDatapath.Mode != "required" ||
 		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" ||
 		target.KernelModules.TrustIXDatapath.Path != "/etc/trustix/modules/trustix_datapath.ko" {
-		t.Fatalf("OpenWrt explicit experimental_tcp modules = %#v, want SDK-built datapath module only", target.KernelModules)
+		t.Fatalf("OpenWrt explicit tix_tcp modules = %#v, want SDK-built datapath module only", target.KernelModules)
 	}
 }
 
@@ -938,7 +938,7 @@ func TestIXProvisionProfileControlsGeneratedTransportPolicy(t *testing.T) {
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
 		t.Fatalf("target plaintext performance policy endpoint=%#v policy=%#v", target.Endpoints[0], target.TransportPolicy)
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
+	if tixTCPPerformanceRouteGSOAsyncForDesired(target) {
 		t.Fatalf("target plaintext performance config should prefer full-kmod plaintext over route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(target) {
@@ -1035,31 +1035,31 @@ func TestIXProvisionEdgeActiveOnlyDoesNotPublishControlAPI(t *testing.T) {
 	}
 	if len(target.Endpoints) != 1 ||
 		target.Endpoints[0].Mode != config.EndpointModeActive ||
-		target.Endpoints[0].Transport != "experimental_tcp" ||
+		target.Endpoints[0].Transport != "tix_tcp" ||
 		target.Endpoints[0].Address != "ix-a.example.com:7000" ||
 		target.Endpoints[0].Listen != "" ||
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionPlaintext {
-		t.Fatalf("target endpoint = %#v, want active experimental_tcp plaintext dial to upstream", target.Endpoints)
+		t.Fatalf("target endpoint = %#v, want active tix_tcp plaintext dial to upstream", target.Endpoints)
 	}
 	if len(target.Bootstrap.Peers) != 1 || target.Bootstrap.Peers[0].ControlAPI != "https://ix-a.example.com:9443" {
 		t.Fatalf("bootstrap peers = %#v", target.Bootstrap.Peers)
 	}
 	if target.TransportPolicy.Datapath != config.TransportDatapathKernelModule {
-		t.Fatalf("active experimental_tcp datapath = %q, want kernel_module full-kmod", target.TransportPolicy.Datapath)
+		t.Fatalf("active tix_tcp datapath = %q, want kernel_module full-kmod", target.TransportPolicy.Datapath)
 	}
 	if request.BuildKO != "1" {
-		t.Fatalf("active experimental_tcp build_ko = %q, want 1 for full-kmod modules", request.BuildKO)
+		t.Fatalf("active tix_tcp build_ko = %q, want 1 for full-kmod modules", request.BuildKO)
 	}
 	if target.KernelModules.TrustIXCrypto.Mode != "disabled" ||
 		target.KernelModules.TrustIXDatapath.Mode != "required" ||
 		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" {
-		t.Fatalf("active experimental_tcp kernel module modes = %#v, want datapath required only", target.KernelModules)
+		t.Fatalf("active tix_tcp kernel module modes = %#v, want datapath required only", target.KernelModules)
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(target) {
-		t.Fatalf("active experimental_tcp provision config should prefer full-kmod over route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+	if tixTCPPerformanceRouteGSOAsyncForDesired(target) {
+		t.Fatalf("active tix_tcp provision config should prefer full-kmod over route-GSO: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 	if !kernelDatapathFullPlaintextEnabledForDesired(target) {
-		t.Fatalf("active experimental_tcp provision config did not select full-kmod plaintext: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
+		t.Fatalf("active tix_tcp provision config did not select full-kmod plaintext: policy=%#v endpoints=%#v", target.TransportPolicy, target.Endpoints)
 	}
 }
 

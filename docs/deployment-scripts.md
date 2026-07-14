@@ -248,14 +248,14 @@ Current config supports:
 - `lan` plus `lans[]` for multiple local or trusted-public LANs.
 - Per-LAN `iface`, `underlay_iface`, `gateway`, `advertise`, `attach_mode`, and management flags.
 - Multiple endpoint listeners by binding each endpoint `listen` to a specific IP and publishing a separate `address`.
-- Per-endpoint `local_bind.source_ip` and `local_bind.iface` for outbound underlay selection. `source_ip` is supported by UDP/TCP/QUIC/WebSocket/HTTP CONNECT and is carried into `kernel_udp`/`experimental_tcp` kernel flows. `iface` uses Linux `SO_BINDTODEVICE` on socket-based dials and experimental TCP primer/control connections.
+- Per-endpoint `local_bind.source_ip` and `local_bind.iface` for outbound underlay selection. `source_ip` is supported by UDP/TCP/QUIC/WebSocket/HTTP CONNECT and is carried into `kernel_udp`/`tix_tcp` kernel flows. `iface` uses Linux `SO_BINDTODEVICE` on socket-based dials and TIX-TCP primer/control connections.
 - GRE/IPIP/VXLAN endpoint strings with explicit `local`, `remote`, carrier addresses, and optional `underlay_if`.
 
 Current dataplane boundary:
 
 - Linux dataplane receives all LAN attach specs and manages address/qdisc/cleanup for multiple LANs.
 - LAN reinject chooses the matching LAN by destination prefix.
-- TC/eBPF and kernel fast-path underlay selection still have a primary-LAN bias for `kernel_udp`, `experimental_tcp`, and negotiated tunnel defaults.
+- TC/eBPF and kernel fast-path underlay selection still have a primary-LAN bias for `kernel_udp`, `tix_tcp`, and negotiated tunnel defaults.
 - `local_bind.iface` is not currently serialized into full-kernel TX route templates; use `local_bind.source_ip`, endpoint `listen`, explicit tunnel `underlay_if`, or OS routing when a pure kernel path must pick a specific uplink.
 
 Example JSON endpoint:

@@ -24,8 +24,8 @@ func TestKernelCryptoReplayCommitsUseMapSpinLocks(t *testing.T) {
 			lockCount: 2,
 		},
 		{
-			name: "experimental_tcp_xdp_rx",
-			path: filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "experimental_tcp_kernel_crypto_xdp.c"),
+			name: "tix_tcp_xdp_rx",
+			path: filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "tix_tcp_kernel_crypto_xdp.c"),
 			functions: []string{
 				"trustix_replay_commit",
 				"trustix_direct_replay_commit",

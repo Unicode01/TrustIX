@@ -7,25 +7,32 @@ import (
 	"testing"
 )
 
-func TestTIXTCPProtocolAliases(t *testing.T) {
-	for _, alias := range []Protocol{ProtocolTIXTCP, ProtocolExperimentalTCP, "tix-tcp", "experimental-tcp", "ackless_tcp"} {
-		if got := RuntimeProtocol(alias); got != ProtocolExperimentalTCP {
-			t.Fatalf("RuntimeProtocol(%q) = %q, want %q", alias, got, ProtocolExperimentalTCP)
-		}
-		if got := PublicProtocol(alias); got != ProtocolTIXTCP {
-			t.Fatalf("PublicProtocol(%q) = %q, want %q", alias, got, ProtocolTIXTCP)
+func TestNormalizeProtocolCanonicalizesTIXTCP(t *testing.T) {
+	for _, value := range []Protocol{ProtocolTIXTCP, "tix-tcp", " TIX_TCP "} {
+		if got := NormalizeProtocol(value); got != ProtocolTIXTCP {
+			t.Fatalf("NormalizeProtocol(%q) = %q, want %q", value, got, ProtocolTIXTCP)
 		}
 	}
 }
 
-func TestRegistryAcceptsTIXTCPPublicAlias(t *testing.T) {
+func TestRegistryUsesOnlyTIXTCPIdentity(t *testing.T) {
 	registry := NewRegistry()
-	implementation := protocolOnlyTransport{name: ProtocolExperimentalTCP}
+	implementation := protocolOnlyTransport{name: ProtocolTIXTCP}
 	if err := registry.Register(implementation); err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := registry.Get(ProtocolTIXTCP); !ok || got.Name() != ProtocolExperimentalTCP {
+	if got, ok := registry.Get(ProtocolTIXTCP); !ok || got.Name() != ProtocolTIXTCP {
 		t.Fatalf("Get(%q) = %#v, %v", ProtocolTIXTCP, got, ok)
+	}
+	legacy := []Protocol{
+		Protocol("experimental" + "_tcp"),
+		Protocol("experimental" + "-tcp"),
+		Protocol("ackless" + "_tcp"),
+	}
+	for _, value := range legacy {
+		if _, ok := registry.Get(value); ok {
+			t.Fatalf("legacy transport %q unexpectedly resolved", value)
+		}
 	}
 }
 

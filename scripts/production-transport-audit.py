@@ -122,100 +122,67 @@ CURRENT_RUNTIME_TREE_PATHS = [
     "scripts/build-release-linux.sh",
     "scripts/trustix-build.sh",
 ]
-EXPERIMENTAL_TCP_FULL_KMOD_RUNTIME_FAMILIES = {
-    "exp_tcp_full_kmod",
-    "dd_exp_tcp_full_kmod",
-    "owdeb_exp_tcp_full_kmod",
+TIX_TCP_FULL_KMOD_RUNTIME_FAMILIES = {
+    "tix_tcp_full_kmod",
+    "dd_tix_tcp_full_kmod",
+    "owdeb_tix_tcp_full_kmod",
 }
 LOW_LEVEL_RUNTIME_GATE_CLASSES = {
     "userspace_tc",
     "tc_direct",
     "full_kmod",
-    "exp_tcp_full_kmod",
+    "tix_tcp_full_kmod",
     "secure_kudp",
-    "secure_exp_tcp_kernel",
+    "secure_tix_tcp_kernel",
     "route_gso",
 }
 EBPF_RUNTIME_GATE_CLASSES = {
     "tc_direct",
     "secure_kudp",
-    "secure_exp_tcp_kernel",
+    "secure_tix_tcp_kernel",
     "route_gso",
 }
 KERNEL_MODULE_RUNTIME_GATE_CLASSES = {
     "full_kmod",
-    "exp_tcp_full_kmod",
+    "tix_tcp_full_kmod",
     "secure_kudp",
-    "secure_exp_tcp_kernel",
+    "secure_tix_tcp_kernel",
     "route_gso",
 }
 FULL_DATAPATH_MODULE_GATE_CLASSES = {
     "full_kmod",
-    "exp_tcp_full_kmod",
+    "tix_tcp_full_kmod",
 }
 CRYPTO_MODULE_GATE_CLASSES = {
     "secure_kudp",
-    "secure_exp_tcp_kernel",
+    "secure_tix_tcp_kernel",
 }
 DATAPATH_HELPERS_MODULE_GATE_CLASSES = {
     "secure_kudp",
-    "secure_exp_tcp_kernel",
+    "secure_tix_tcp_kernel",
     "route_gso",
 }
 KERNEL_UDP_DIRECT_POLICY_GATE_CLASSES = {
     "tc_direct",
     "secure_kudp",
-    "secure_exp_tcp_kernel",
+    "secure_tix_tcp_kernel",
     "route_gso",
 }
 DAEMON_DATAPATH_SESSION_GATE_CLASSES = {
     "full_kmod",
-    "exp_tcp_full_kmod",
+    "tix_tcp_full_kmod",
     "secure_kudp",
-    "secure_exp_tcp_kernel",
+    "secure_tix_tcp_kernel",
     "route_gso",
 }
 CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS = {
     # Provision output changes do not alter already-soaked datapath/runtime behavior.
     "internal/daemon/ix_provision_resource.go",
 }
-PUBLIC_PROTOCOL_ALIAS_COMMITS_BY_PATH = {
-    # f0173d5 migrates the operator-facing experimental_tcp name to tix_tcp.
-    # Runtime normalization still resolves every alias to the unchanged legacy
-    # transport identity, wire protocol, datapath, kernel ABI, and statistics.
-    "configs/lab-a.yaml": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "configs/lab-b.yaml": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "internal/config/load.go": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "internal/config/schema.go": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "internal/daemon/api.go": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "internal/daemon/config_api.go": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "internal/daemon/config_export.go": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "internal/daemon/datapath.go": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "internal/daemon/link_diagnostics.go": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "internal/daemon/transports_status.go": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
-    "internal/transport/types.go": {
-        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
-    },
+PROTOCOL_NAMING_ONLY_COMMITS = {
+    # Public-name preparation changed labels only; it did not alter packets,
+    # crypto, datapath selection, or kernel execution.
+    "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
 }
 OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
     # 9235159 only changes the OpenWrt rx_worker_single_coalesce default behind
@@ -228,7 +195,7 @@ OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
 ROUTE_GSO_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
     # add2971 only changes the selected route-GSO helper defaults/gate
     # contract and the route TCP GSO helper's stopped-TXQ handling. It does
-    # not invalidate full-kmod, secure-kUDP, or secure experimental TCP kernel
+    # not invalidate full-kmod, secure-kUDP, or secure TIX-TCP kernel
     # evidence rows.
     "internal/daemon/kernel_modules.go": {
         "add2971946b4948fbdd49d973aa94581b2e87a50",
@@ -237,18 +204,18 @@ ROUTE_GSO_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
         "add2971946b4948fbdd49d973aa94581b2e87a50",
     },
 }
-EXPERIMENTAL_TCP_ROUTE_GSO_DEVICE_GUARD_COMMITS_BY_PATH = {
+TIX_TCP_ROUTE_GSO_DEVICE_GUARD_COMMITS_BY_PATH = {
     # 5af52d4 keeps route-TCP outer GSO enabled as a capability but blocks its
     # unstable virtio_net offload shape unless explicitly opted in. This only
-    # changes plaintext and secure experimental-TCP route-GSO packet emission;
+    # changes plaintext and secure TIX-TCP route-GSO packet emission;
     # the secure kernel-UDP branch still emits one UDP frame per segment.
     "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c": {
         "5af52d414e1f120e78d0441ec5501ef6ae57e7ab",
     },
 }
-EXPERIMENTAL_TCP_ROUTE_GSO_DEVICE_GUARD_IMPACTED_GATE_CLASSES = {
+TIX_TCP_ROUTE_GSO_DEVICE_GUARD_IMPACTED_GATE_CLASSES = {
     "route_gso",
-    "secure_exp_tcp_kernel",
+    "secure_tix_tcp_kernel",
 }
 RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH = {
     # aee1046 only adds selected runtime-gate feature names to local endpoint,
@@ -306,15 +273,15 @@ SESSION_POOL_LIFECYCLE_COMMITS_BY_PATH = {
 ADDRESSED_REVERSE_SESSION_POOL_COMMITS_BY_PATH = {
     # 774ed8d makes addressed reverse-session reuse pool-index exact during
     # targeted warmup. It changes session cardinality for secure kernel UDP
-    # and plaintext experimental TCP modes that prefer accepted sessions, but
-    # it does not affect full-kmod/route-GSO or secure experimental TCP modes.
+    # and plaintext TIX-TCP modes that prefer accepted sessions, but
+    # it does not affect full-kmod/route-GSO or secure TIX-TCP modes.
     "internal/daemon/datapath.go": {
         "774ed8d5633c51079dc8fb9bcae6de970ea023ea",
     },
 }
-ADDRESSED_REVERSE_SESSION_POOL_UNAFFECTED_EXPERIMENTAL_TCP_GATE_CLASSES = {
+ADDRESSED_REVERSE_SESSION_POOL_UNAFFECTED_TIX_TCP_GATE_CLASSES = {
     "full_kmod",
-    "exp_tcp_full_kmod",
+    "tix_tcp_full_kmod",
     "route_gso",
 }
 KERNEL_UDP_SESSION_LIFECYCLE_COMMITS_BY_PATH = {
@@ -330,7 +297,7 @@ PLAINTEXT_KERNEL_UDP_HEARTBEAT_COMMITS_BY_PATH = {
     # plaintext UDP runtimes whose data plane is direct-only and whose receive
     # loop remains active. Full-kmod UDP already disables that receive loop,
     # so its prior evidence is unaffected. Userspace sessions, secure kernel
-    # UDP, and experimental TCP paths retain their prior heartbeat behavior.
+    # UDP, and TIX-TCP paths retain their prior heartbeat behavior.
     "internal/daemon/datapath.go": {
         "20c977829b7665996d65b9567e09a4b491c9c4e4",
     },
@@ -341,7 +308,7 @@ PLAINTEXT_KERNEL_UDP_HEARTBEAT_IMPACTED_GATE_CLASSES = {
 }
 CAPTURE_FORWARDER_SUPPRESSED_GATE_CLASSES = {
     "full_kmod",
-    "exp_tcp_full_kmod",
+    "tix_tcp_full_kmod",
     "secure_kudp",
 }
 USERSPACE_UDP_DEFAULT_ONLY_COMMITS_BY_PATH = {
@@ -383,6 +350,20 @@ VXLAN_CARRIER_FRAGMENT_COMMITS_BY_PATH = {
     },
 }
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
+    # The gate used by the current 3600s evidence predates the protocol-wide
+    # TIX-TCP identifier rename. Gate predicates and thresholds are unchanged.
+    "dd8f99453b1d385e6d07cd775614573f1f05cea1927fa79a9eb70bcb4e7753cf": {
+        "userspace",
+        "userspace_tc",
+        "tc_direct",
+        "full_kmod",
+        "owdeb_full_kmod",
+        "tix_tcp_full_kmod",
+        "owdeb_tix_tcp_full_kmod",
+        "secure_kudp",
+        "secure_tix_tcp_kernel",
+        "route_gso",
+    },
     # This gate is the immediate predecessor of the current queue-partitioned
     # full-kmod gate. The userspace, TC-direct, secure-kernel, and route-GSO
     # checks are unchanged (the userspace-TC floor was stricter at 1 Gbps), but
@@ -393,12 +374,12 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "userspace_tc",
         "tc_direct",
         "secure_kudp",
-        "secure_exp_tcp_kernel",
+        "secure_tix_tcp_kernel",
         "route_gso",
     },
-    # This manifest-v1 gate predates the exp_tcp_full_kmod family. The existing
+    # This manifest-v1 gate predates the tix_tcp_full_kmod family. The existing
     # families below kept equivalent verifier semantics when the dedicated
-    # experimental TCP full-kmod gate was added, so their current evidence rows
+    # TIX-TCP full-kmod gate was added, so their current evidence rows
     # do not need to be re-minted with a different historical tool hash.
     "6150d4ccadd3b0614d389442c4a1084fcad2d0748700ad9d5eea9900e7d7a242": {
         "userspace",
@@ -407,7 +388,7 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "full_kmod",
         "owdeb_full_kmod",
         "secure_kudp",
-        "secure_exp_tcp_kernel",
+        "secure_tix_tcp_kernel",
         "route_gso",
     },
     # This gate predates the OpenWrt-Debian single-coalesce verifier split.
@@ -415,9 +396,9 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     "662c176c1888bd3c89d775ef61e2cff70b2c0be39d929e35d18a6e11b78f7446": {
         "tc_direct",
         "full_kmod",
-        "exp_tcp_full_kmod",
+        "tix_tcp_full_kmod",
         "secure_kudp",
-        "secure_exp_tcp_kernel",
+        "secure_tix_tcp_kernel",
         "route_gso",
     },
     # OpenWrt-Debian current rows were minted with this gate before the
@@ -425,26 +406,26 @@ GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     # until a fresh OpenWrt-Debian run replaces or demotes those rows.
     "89d4f86eb164603d22678bfa8636042bb7be4c1040de8dbf9d151211962906c9": {
         "owdeb_full_kmod",
-        "owdeb_exp_tcp_full_kmod",
+        "owdeb_tix_tcp_full_kmod",
     },
     # This gate is equivalent for OpenWrt-Debian full-kmod families after the
     # route-TCP helper capability check was added for route-GSO and secure
     # kernel families only.
     "f10f2307e6c4d0b3282616acb8ecf3cf1dc45aa481902c5aa3a38ed8c4124faf": {
         "owdeb_full_kmod",
-        "owdeb_exp_tcp_full_kmod",
+        "owdeb_tix_tcp_full_kmod",
     },
-    # This gate predates secure_exp_tcp_kernel direct-error clamp and replay
+    # This gate predates secure_tix_tcp_kernel direct-error clamp and replay
     # ratio hardening. Existing pass evidence remains equivalent: the default
     # direct-error budget was already zero, replay drops were already max-zero,
-    # and non-secure_exp_tcp_kernel family checks were unchanged.
+    # and non-secure_tix_tcp_kernel family checks were unchanged.
     "e6e2c7c69807adaa8bd171b59225ce15b307c668c280b12b027baab19f12f029": {
         "full_kmod",
         "owdeb_full_kmod",
-        "exp_tcp_full_kmod",
-        "owdeb_exp_tcp_full_kmod",
+        "tix_tcp_full_kmod",
+        "owdeb_tix_tcp_full_kmod",
         "secure_kudp",
-        "secure_exp_tcp_kernel",
+        "secure_tix_tcp_kernel",
         "route_gso",
     },
 }
@@ -454,9 +435,9 @@ VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
     "039cb91ef61fa4187baf16ed279e2dc09faf5aaaa69c0e7d1b2b597905e8eb9b": {
         "tc_direct",
         "full_kmod",
-        "exp_tcp_full_kmod",
+        "tix_tcp_full_kmod",
         "secure_kudp",
-        "secure_exp_tcp_kernel",
+        "secure_tix_tcp_kernel",
         "route_gso",
     },
     # Historical current rows that have not yet been re-minted with the
@@ -465,7 +446,7 @@ VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "userspace",
         "userspace_tc",
         "owdeb_full_kmod",
-        "owdeb_exp_tcp_full_kmod",
+        "owdeb_tix_tcp_full_kmod",
     },
     # Historical current rows remain equivalent after missing drop-reason
     # counters started being interpreted as zero. A missing sparse-map key and
@@ -476,15 +457,29 @@ VERIFIER_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
         "tc_direct",
         "full_kmod",
         "owdeb_full_kmod",
-        "exp_tcp_full_kmod",
-        "owdeb_exp_tcp_full_kmod",
+        "tix_tcp_full_kmod",
+        "owdeb_tix_tcp_full_kmod",
         "secure_kudp",
-        "secure_exp_tcp_kernel",
+        "secure_tix_tcp_kernel",
         "route_gso",
     },
 }
 TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
     "evidence_generator_sha256": {
+        # Identifier-only TIX-TCP rename; evidence parsing semantics are
+        # unchanged for the recorded production rows.
+        "524a170235903217e3415b3ab2dbdc07aacd8918ae1f196c56e31215c1e26894": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "tix_tcp_full_kmod",
+            "owdeb_tix_tcp_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
         # 524a170 only adds direct production-gate short-case alias support
         # (`gate_case`). Evidence rows generated from canonical matrix/gate
         # case names keep the same verification semantics.
@@ -493,14 +488,28 @@ TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
             "tc_direct",
             "full_kmod",
             "owdeb_full_kmod",
-            "exp_tcp_full_kmod",
-            "owdeb_exp_tcp_full_kmod",
+            "tix_tcp_full_kmod",
+            "owdeb_tix_tcp_full_kmod",
             "secure_kudp",
-            "secure_exp_tcp_kernel",
+            "secure_tix_tcp_kernel",
             "route_gso",
         },
     },
     "runner_sha256": {
+        # Identifier-only TIX-TCP rename; the runner topology, duration, and
+        # workload behavior used by these artifacts are unchanged.
+        "3b1359247f1850aab93ab88d50293796ca157a57860cbd0a2f9c5f3fb60fe99c": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "tix_tcp_full_kmod",
+            "owdeb_tix_tcp_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
         # The current runner only adds an opt-in multi-endpoint mode. Existing
         # single-transport production runs retain identical config and gate
         # semantics, so their captured runner identity remains compatible.
@@ -510,10 +519,10 @@ TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
             "tc_direct",
             "full_kmod",
             "owdeb_full_kmod",
-            "exp_tcp_full_kmod",
-            "owdeb_exp_tcp_full_kmod",
+            "tix_tcp_full_kmod",
+            "owdeb_tix_tcp_full_kmod",
             "secure_kudp",
-            "secure_exp_tcp_kernel",
+            "secure_tix_tcp_kernel",
             "route_gso",
         },
         # These rows were re-gated from existing 3600s artifacts; the verifier,
@@ -521,21 +530,37 @@ TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
         # records the original long run that produced the artifacts.
         "adcff9cfd21254c429f340d94de2293e3cbfb58b11d1d7fd2f799f5c351f52d0": {
             "full_kmod",
-            "exp_tcp_full_kmod",
+            "tix_tcp_full_kmod",
             "route_gso",
             "owdeb_full_kmod",
-            "owdeb_exp_tcp_full_kmod",
+            "owdeb_tix_tcp_full_kmod",
         },
         "80836a54f5ecc4b66bdf447372ff15f7703c61f0430368379c7fa7d3be04a82e": {
             "full_kmod",
-            "exp_tcp_full_kmod",
+            "tix_tcp_full_kmod",
             "route_gso",
             "owdeb_full_kmod",
-            "owdeb_exp_tcp_full_kmod",
+            "owdeb_tix_tcp_full_kmod",
             "secure_kudp",
-            "secure_exp_tcp_kernel",
+            "secure_tix_tcp_kernel",
             "tc_direct",
             "userspace_tc",
+        },
+    },
+    "transport_matrix_sha256": {
+        # Identifier-only TIX-TCP rename; selected cases and workload
+        # parameters remain equivalent to the recorded matrix.
+        "dbb478869377c98e4a6727309c413418dea46a49cc9191dc49d50c111ac743db": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "tix_tcp_full_kmod",
+            "owdeb_tix_tcp_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
         },
     },
 }
@@ -702,19 +727,19 @@ def gate_family_class(gate_family: str) -> str:
     }:
         return "full_kmod"
     if gate_family in {
-        "exp_tcp_full_kmod",
-        "dd_exp_tcp_full_kmod",
-        "owdeb_exp_tcp_full_kmod",
+        "tix_tcp_full_kmod",
+        "dd_tix_tcp_full_kmod",
+        "owdeb_tix_tcp_full_kmod",
     }:
-        return "exp_tcp_full_kmod"
+        return "tix_tcp_full_kmod"
     if gate_family in {"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp"}:
         return "secure_kudp"
     if gate_family in {
-        "secure_exp_tcp_kernel",
-        "dd_secure_exp_tcp_kernel",
-        "owdeb_secure_exp_tcp_kernel",
+        "secure_tix_tcp_kernel",
+        "dd_secure_tix_tcp_kernel",
+        "owdeb_secure_tix_tcp_kernel",
     }:
-        return "secure_exp_tcp_kernel"
+        return "secure_tix_tcp_kernel"
     if gate_family in {"route_gso", "dd_route_gso", "owdeb_route_gso"}:
         return "route_gso"
     return gate_family
@@ -738,7 +763,7 @@ def gate_family_semantic_errors(row: dict[str, str]) -> list[str]:
             errors.append(f"gate_family={gate_family} does not allow transport={transport}")
 
     if gate_class == "userspace":
-        require_transport("udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp")
+        require_transport("udp", "tcp", "quic", "websocket", "http_connect", "tix_tcp")
         require("datapath", datapath, "userspace")
         require("crypto_placement", placement, "userspace")
     elif gate_class == "userspace_tc":
@@ -755,8 +780,8 @@ def gate_family_semantic_errors(row: dict[str, str]) -> list[str]:
         require("encryption", encryption, "plaintext")
         require("datapath", datapath, "kernel_module")
         require("crypto_placement", placement, "userspace")
-    elif gate_class == "exp_tcp_full_kmod":
-        require("transport", transport, "experimental_tcp")
+    elif gate_class == "tix_tcp_full_kmod":
+        require("transport", transport, "tix_tcp")
         require("encryption", encryption, "plaintext")
         require("datapath", datapath, "kernel_module")
         require("crypto_placement", placement, "userspace")
@@ -765,13 +790,13 @@ def gate_family_semantic_errors(row: dict[str, str]) -> list[str]:
         require("encryption", encryption, "secure")
         require("datapath", datapath, "tc_xdp")
         require("crypto_placement", placement, "kernel")
-    elif gate_class == "secure_exp_tcp_kernel":
-        require("transport", transport, "experimental_tcp")
+    elif gate_class == "secure_tix_tcp_kernel":
+        require("transport", transport, "tix_tcp")
         require("encryption", encryption, "secure")
         require("datapath", datapath, "kernel_module")
         require("crypto_placement", placement, "kernel")
     elif gate_class == "route_gso":
-        require("transport", transport, "experimental_tcp")
+        require("transport", transport, "tix_tcp")
         require("encryption", encryption, "plaintext")
         require("datapath", datapath, "kernel_module")
         require("crypto_placement", placement, "userspace")
@@ -1094,10 +1119,10 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
         return gate_class in KERNEL_MODULE_RUNTIME_GATE_CLASSES
     if normalized == "scripts/build-embedded-bpf.sh":
         return gate_class in EBPF_RUNTIME_GATE_CLASSES
-    if normalized.startswith("internal/transport/experimentaltcp/"):
-        return transport == "experimental_tcp" or gate_class in {
-            "exp_tcp_full_kmod",
-            "secure_exp_tcp_kernel",
+    if normalized.startswith("internal/transport/tixtcp/"):
+        return transport == "tix_tcp" or gate_class in {
+            "tix_tcp_full_kmod",
+            "secure_tix_tcp_kernel",
             "route_gso",
         }
     if normalized.startswith("internal/transport/udp/"):
@@ -1116,7 +1141,7 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
         if normalized == "internal/daemon/datapath.go":
             return (
                 gate_class in DAEMON_DATAPATH_SESSION_GATE_CLASSES
-                or transport == "experimental_tcp"
+                or transport == "tix_tcp"
             )
         return gate_class in LOW_LEVEL_RUNTIME_GATE_CLASSES
     return True
@@ -1143,20 +1168,18 @@ def current_runtime_path_change_irrelevant(
     gate_class = gate_family_class(row["gate_family"])
     transport = row.get("transport", "")
     allowed_change_commits: set[str] = set()
-    allowed_commits = PUBLIC_PROTOCOL_ALIAS_COMMITS_BY_PATH.get(normalized)
-    if allowed_commits:
-        allowed_change_commits.update(allowed_commits)
+    allowed_change_commits.update(PROTOCOL_NAMING_ONLY_COMMITS)
     allowed_commits = RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class in LOW_LEVEL_RUNTIME_GATE_CLASSES:
         allowed_change_commits.update(allowed_commits)
     allowed_commits = ROUTE_GSO_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class != "route_gso":
         allowed_change_commits.update(allowed_commits)
-    allowed_commits = EXPERIMENTAL_TCP_ROUTE_GSO_DEVICE_GUARD_COMMITS_BY_PATH.get(normalized)
+    allowed_commits = TIX_TCP_ROUTE_GSO_DEVICE_GUARD_COMMITS_BY_PATH.get(normalized)
     if (
         allowed_commits
         and gate_class
-        not in EXPERIMENTAL_TCP_ROUTE_GSO_DEVICE_GUARD_IMPACTED_GATE_CLASSES
+        not in TIX_TCP_ROUTE_GSO_DEVICE_GUARD_IMPACTED_GATE_CLASSES
     ):
         allowed_change_commits.update(allowed_commits)
     if not row_targets_openwrt(row):
@@ -1174,10 +1197,10 @@ def current_runtime_path_change_irrelevant(
         allowed_change_commits.update(allowed_commits)
     allowed_commits = ADDRESSED_REVERSE_SESSION_POOL_COMMITS_BY_PATH.get(normalized)
     addressed_reverse_session_pool_impacted = gate_class == "secure_kudp" or (
-        transport == "experimental_tcp"
+        transport == "tix_tcp"
         and row.get("encryption") == "plaintext"
         and gate_class
-        not in ADDRESSED_REVERSE_SESSION_POOL_UNAFFECTED_EXPERIMENTAL_TCP_GATE_CLASSES
+        not in ADDRESSED_REVERSE_SESSION_POOL_UNAFFECTED_TIX_TCP_GATE_CLASSES
     )
     if allowed_commits and not addressed_reverse_session_pool_impacted:
         allowed_change_commits.update(allowed_commits)

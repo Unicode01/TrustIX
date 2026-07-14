@@ -97,7 +97,7 @@ trustix_bpf_ctx_skb(struct __sk_buff *ctx)
 #define TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_PARTIAL_INNER_CSUM BIT(10)
 #define TRUSTIX_TIXT_TX_FINALIZE_TCP_TRUST_VALIDATED_LEN BIT(11)
 #define TRUSTIX_KUDP_RX_DECAP_L2_TRUST_INNER_L4_CSUM BIT(0)
-#define TRUSTIX_KUDP_RX_PARSE_EXPERIMENTAL_TCP_ONLY BIT(0)
+#define TRUSTIX_KUDP_RX_PARSE_TIX_TCP_ONLY BIT(0)
 #define TRUSTIX_KUDP_RX_PARSE_KERNEL_UDP_ONLY BIT(1)
 #define TRUSTIX_KUDP_RX_PARSE_DECAP_L2_LOCAL_DELIVERED 1
 #define TRUSTIX_KUDP_RX_PARSE_DECAP_L2_STOLEN 2
@@ -121,7 +121,7 @@ trustix_bpf_ctx_skb(struct __sk_buff *ctx)
 #define TRUSTIX_TIXT_TX_GSO_SEGMENTS_STOLEN 4
 #define TRUSTIX_KUDP_TX_FLOW_FLAG_SECURE BIT(0)
 #define TRUSTIX_KUDP_TX_FLOW_FLAG_TRUST_INNER_CSUM BIT(1)
-#define TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP BIT(3)
+#define TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP BIT(3)
 #define TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CSUM BIT(4)
 #define TRUSTIX_KUDP_TX_ROUTE_FLAG_INLINE_FLOW BIT(1)
 #define TRUSTIX_KUDP_TX_ROUTE_FLAG_BYPASS BIT(2)
@@ -4407,15 +4407,15 @@ trustix_skb_kudp_rx_parse_plain(struct sk_buff *skb,
 
 	if (!skb || !args || !outer_len || !next_hop)
 		return -EINVAL;
-	if (args->flags & ~(TRUSTIX_KUDP_RX_PARSE_EXPERIMENTAL_TCP_ONLY |
+	if (args->flags & ~(TRUSTIX_KUDP_RX_PARSE_TIX_TCP_ONLY |
 			    TRUSTIX_KUDP_RX_PARSE_KERNEL_UDP_ONLY))
 		return -EINVAL;
-	if ((args->flags & TRUSTIX_KUDP_RX_PARSE_EXPERIMENTAL_TCP_ONLY) &&
+	if ((args->flags & TRUSTIX_KUDP_RX_PARSE_TIX_TCP_ONLY) &&
 	    (args->flags & TRUSTIX_KUDP_RX_PARSE_KERNEL_UDP_ONLY))
 		return -EINVAL;
 	if (outer_protocol != IPPROTO_UDP && outer_protocol != IPPROTO_TCP)
 		return -EINVAL;
-	if ((args->flags & TRUSTIX_KUDP_RX_PARSE_EXPERIMENTAL_TCP_ONLY) &&
+	if ((args->flags & TRUSTIX_KUDP_RX_PARSE_TIX_TCP_ONLY) &&
 	    outer_protocol != IPPROTO_TCP)
 		return -EPROTONOSUPPORT;
 	if ((args->flags & TRUSTIX_KUDP_RX_PARSE_KERNEL_UDP_ONLY) &&
@@ -7347,7 +7347,7 @@ trustix_kernel_skb_tixt_tx_push_flow_tcp_header(
 		return -EINVAL;
 
 	flow_flags = READ_ONCE(flow->flags);
-	if (!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP) ||
+	if (!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP) ||
 	    (flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SECURE) ||
 	    (flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CSUM))
 		return -EPROTONOSUPPORT;
@@ -7466,7 +7466,7 @@ trustix_kernel_skb_tixt_tx_finalize_flow_tcp_header(
 		return -EINVAL;
 
 	flow_flags = READ_ONCE(flow->flags);
-	if (!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP) ||
+	if (!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP) ||
 	    (flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SECURE) ||
 	    (flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CSUM))
 		return -EPROTONOSUPPORT;
@@ -7676,7 +7676,7 @@ trustix_tixt_tx_validate_route_plain_flow_pulled(
 	if (!selected || !*flow_id)
 		return -EPROTONOSUPPORT;
 	flow_flags = READ_ONCE(selected->flags);
-	if (!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP) ||
+	if (!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP) ||
 	    (flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SECURE) ||
 	    (flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CSUM))
 		return -EPROTONOSUPPORT;
@@ -8585,7 +8585,7 @@ trustix_tixt_tx_init_secure_route_gso_template(
 	u8 *kudp;
 	u16 tail1;
 
-	if (READ_ONCE(flow->flags) & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP) {
+	if (READ_ONCE(flow->flags) & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP) {
 		trustix_tixt_tx_init_route_gso_template(flow, out_dev, flow_id,
 							clear_flags, tmpl);
 		tmpl->secure = true;

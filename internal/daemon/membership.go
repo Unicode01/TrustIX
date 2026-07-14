@@ -2540,7 +2540,7 @@ func (daemon *Daemon) endpointTransportUsable(endpoint dataplane.EndpointMetadat
 	if _, ok := daemon.transports.Get(protocol); !ok {
 		return false
 	}
-	if protocol != transport.ProtocolExperimentalTCP && protocol != transport.ProtocolUDP {
+	if protocol != transport.ProtocolTIXTCP && protocol != transport.ProtocolUDP {
 		return true
 	}
 	if protocol == transport.ProtocolUDP {
@@ -2560,18 +2560,18 @@ func (daemon *Daemon) endpointTransportUsable(endpoint dataplane.EndpointMetadat
 		}
 		return daemon.kernelUDPCryptoPlacementAvailable(status) == nil
 	}
-	provider, ok := daemon.dataplane.(dataplane.ExperimentalTCPProvider)
+	provider, ok := daemon.dataplane.(dataplane.TIXTCPProvider)
 	if !ok {
 		return false
 	}
-	status, err := provider.ExperimentalTCPStatus(context.Background())
+	status, err := provider.TIXTCPStatus(context.Background())
 	if err != nil {
 		return false
 	}
 	if !status.Available || !status.Reinject {
 		return false
 	}
-	return daemon.experimentalTCPCryptoPlacementAvailable(status) == nil
+	return daemon.tixTCPCryptoPlacementAvailable(status) == nil
 }
 
 func prefixOverlapsAny(prefix netip.Prefix, candidates []netip.Prefix) bool {

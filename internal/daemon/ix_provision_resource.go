@@ -32,7 +32,7 @@ const (
 	defaultIXProvisionTokenTTL     = 30 * time.Minute
 	maxIXProvisionTokenTTL         = 24 * time.Hour
 	ixProvisionPrimaryPriority     = 100
-	ixProvisionAcklessPriority     = 80
+	ixProvisionTIXTCPPriority      = 80
 	ixProvisionBootstrapClientPath = "/v1/provision/ix/bootstrap-client.sh"
 
 	ixProvisionDefaultProfile = "plaintext_performance"
@@ -298,7 +298,7 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 	if err != nil {
 		return ixProvisionIssueResponse{}, err
 	}
-	configJSON, err := json.MarshalIndent(config.PublicDesired(targetDesired), "", "  ")
+	configJSON, err := json.MarshalIndent(targetDesired, "", "  ")
 	if err != nil {
 		return ixProvisionIssueResponse{}, fmt.Errorf("encode provisioned IX config: %w", err)
 	}
@@ -557,7 +557,7 @@ func normalizeIXProvisionIssueRequest(request ixProvisionIssueRequest, desired c
 			return ixProvisionIssueRequest{}, nil, fmt.Errorf("control_api: %w", err)
 		}
 	}
-	request.EndpointTransport = string(transport.RuntimeProtocol(transport.Protocol(request.EndpointTransport)))
+	request.EndpointTransport = string(transport.NormalizeProtocol(transport.Protocol(request.EndpointTransport)))
 	if request.EndpointTransport == "" {
 		request.EndpointTransport = ixProvisionDefaultEndpointTransport(request.Profile, request.EndpointMode, request.EndpointAddress, request.ServiceManager)
 	}
@@ -819,7 +819,7 @@ func ixProvisionDefaultEndpointTransport(profile string, endpointMode string, en
 		}
 		endpointMode = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(endpointMode), "-", "_"))
 		if endpointMode == string(config.EndpointModeActive) {
-			return string(transport.ProtocolExperimentalTCP)
+			return string(transport.ProtocolTIXTCP)
 		}
 		if strings.Contains(endpointAddress, "=") && provisionEndpointAddressHasIPv4(endpointAddress) {
 			return string(transport.ProtocolIPIP)
@@ -830,7 +830,7 @@ func ixProvisionDefaultEndpointTransport(profile string, endpointMode string, en
 }
 
 func ixProvisionEndpointNameSuffix(endpointTransport string) string {
-	name := config.PublicTransportName(endpointTransport)
+	name := config.CanonicalTransportName(endpointTransport)
 	if name == string(transport.ProtocolTIXTCP) {
 		return "tix-tcp"
 	}
@@ -1060,15 +1060,15 @@ func ixProvisionEndpointConfigs(request ixProvisionIssueRequest, profile ixProvi
 	primary := ixProvisionEndpointConfig(request, request.EndpointName, request.EndpointTransport, ixProvisionPrimaryPriority, profile)
 	endpoints := []config.EndpointConfig{primary}
 	candidates := []core.EndpointID{primary.Name}
-	if ixProvisionShouldAddAcklessEndpoint(request, profile) {
-		acklessName := ixProvisionAcklessEndpointName(request)
-		endpoints = append(endpoints, ixProvisionEndpointConfig(request, acklessName, string(transport.ProtocolTIXTCP), ixProvisionAcklessPriority, profile))
-		candidates = append(candidates, acklessName)
+	if ixProvisionShouldAddTIXTCPEndpoint(request, profile) {
+		tixTCPName := ixProvisionTIXTCPEndpointName(request)
+		endpoints = append(endpoints, ixProvisionEndpointConfig(request, tixTCPName, string(transport.ProtocolTIXTCP), ixProvisionTIXTCPPriority, profile))
+		candidates = append(candidates, tixTCPName)
 	}
 	return endpoints, candidates
 }
 
-func ixProvisionShouldAddAcklessEndpoint(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
+func ixProvisionShouldAddTIXTCPEndpoint(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
 	if transport.Protocol(request.EndpointTransport) != transport.ProtocolUDP {
 		return false
 	}
@@ -1094,7 +1094,7 @@ func ixProvisionEndpointConfig(request ixProvisionIssueRequest, name core.Endpoi
 		Mode:      config.EndpointMode(request.EndpointMode),
 		Listen:    request.EndpointListen,
 		Address:   request.EndpointAddress,
-		Transport: string(transport.RuntimeProtocol(transport.Protocol(endpointTransport))),
+		Transport: string(transport.NormalizeProtocol(transport.Protocol(endpointTransport))),
 		Priority:  priority,
 		Security: config.EndpointSecurityConfig{
 			Encryption: profile.Encryption,
@@ -1110,7 +1110,7 @@ func ixProvisionEndpointConfig(request ixProvisionIssueRequest, name core.Endpoi
 	}
 }
 
-func ixProvisionAcklessEndpointName(request ixProvisionIssueRequest) core.EndpointID {
+func ixProvisionTIXTCPEndpointName(request ixProvisionIssueRequest) core.EndpointID {
 	name := strings.TrimSpace(string(request.EndpointName))
 	if strings.HasSuffix(name, "-udp") {
 		return core.EndpointID(strings.TrimSuffix(name, "-udp") + "-tix-tcp")
@@ -1122,7 +1122,7 @@ func ixProvisionAcklessEndpointName(request ixProvisionIssueRequest) core.Endpoi
 }
 
 func ixProvisionTransportProfiles(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) []config.TransportProfileConfig {
-	if !ixProvisionShouldAddAcklessEndpoint(request, profile) {
+	if !ixProvisionShouldAddTIXTCPEndpoint(request, profile) {
 		return nil
 	}
 	return []config.TransportProfileConfig{{
@@ -1131,11 +1131,11 @@ func ixProvisionTransportProfiles(request ixProvisionIssueRequest, profile ixPro
 		Datapath:        profile.Datapath,
 		Encryption:      profile.Encryption,
 		CryptoPlacement: profile.CryptoPlacement,
-		Advanced:        ixProvisionAcklessAdvanced(request.Profile),
+		Advanced:        ixProvisionTIXTCPAdvanced(request.Profile),
 	}}
 }
 
-func ixProvisionAcklessAdvanced(profile string) config.TransportAdvancedConfig {
+func ixProvisionTIXTCPAdvanced(profile string) config.TransportAdvancedConfig {
 	advanced := config.TransportAdvancedConfig{
 		BatchBytes: dataSessionBatchDefaultBytes,
 		FlushDelay: "25us",
@@ -1158,14 +1158,14 @@ func ixProvisionEffectiveProfileForRequest(request ixProvisionIssueRequest, prof
 	if ixProvisionOpenWRTTCOnly(request, profile) {
 		profile.KernelCapabilityProfile = config.KernelCapabilityProfilePerformance
 	}
-	if ixProvisionSecureExperimentalTCPKernelProfile(request, profile) {
+	if ixProvisionSecureTIXTCPKernelProfile(request, profile) {
 		profile.Datapath = config.TransportDatapathKernelModule
 	}
 	return profile
 }
 
-func ixProvisionSecureExperimentalTCPKernelProfile(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
-	if transport.RuntimeProtocol(transport.Protocol(request.EndpointTransport)) != transport.ProtocolExperimentalTCP {
+func ixProvisionSecureTIXTCPKernelProfile(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) bool {
+	if transport.NormalizeProtocol(transport.Protocol(request.EndpointTransport)) != transport.ProtocolTIXTCP {
 		return false
 	}
 	return profile.TransportProfile == config.TransportProfilePerformance &&
@@ -1186,8 +1186,8 @@ func validateIXProvisionKernelRouteGSOSupport(request ixProvisionIssueRequest) e
 		parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionSecure {
 		return nil
 	}
-	switch transport.RuntimeProtocol(transport.Protocol(request.EndpointTransport)) {
-	case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+	switch transport.NormalizeProtocol(transport.Protocol(request.EndpointTransport)) {
+	case transport.ProtocolUDP, transport.ProtocolTIXTCP:
 		return fmt.Errorf("OpenWrt secure performance route-GSO is not a production default yet; use profile=stable for secure userspace transport or profile=plaintext_performance for validated OpenWrt full-kmod")
 	default:
 		return nil
@@ -1234,7 +1234,7 @@ func ixProvisionKernelModuleModes(request ixProvisionIssueRequest, profile ixPro
 	}
 	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext ||
 		profile.TransportProfile != config.TransportProfilePerformance {
-		if ixProvisionSecureExperimentalTCPKernelProfile(request, profile) ||
+		if ixProvisionSecureTIXTCPKernelProfile(request, profile) ||
 			(profile.TransportProfile == config.TransportProfilePerformance &&
 				profile.Datapath == ixProvisionPerformanceDatapath &&
 				parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionSecure &&
@@ -1247,7 +1247,7 @@ func ixProvisionKernelModuleModes(request ixProvisionIssueRequest, profile ixPro
 	case config.TransportDatapathKernelModule:
 		return "disabled", "required", "disabled"
 	case config.TransportDatapathTCXDP:
-		if transport.RuntimeProtocol(transport.Protocol(request.EndpointTransport)) == transport.ProtocolExperimentalTCP {
+		if transport.NormalizeProtocol(transport.Protocol(request.EndpointTransport)) == transport.ProtocolTIXTCP {
 			return "disabled", "required", "required"
 		}
 	}
@@ -1342,11 +1342,11 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 		ixProvisionTransportSupportsFullPlaintextDatapath(request.EndpointTransport) &&
 		!ixProvisionOpenWRTTCOnly(request, profile) {
 		desired.KernelModules.Datapath = config.KernelDatapathRuntimeConfig{
-			RXStage:                      config.KernelDatapathRXStageWorker,
-			RXWorker:                     true,
-			TXPlaintext:                  true,
-			FullPlaintext:                true,
-			RXWorkerAllowExperimentalTCP: true,
+			RXStage:             config.KernelDatapathRXStageWorker,
+			RXWorker:            true,
+			TXPlaintext:         true,
+			FullPlaintext:       true,
+			RXWorkerAllowTIXTCP: true,
 		}
 	}
 	if len(prefixes) > 0 {
@@ -1391,8 +1391,8 @@ func ixProvisionKernelModulePath(request ixProvisionIssueRequest, mode string, m
 }
 
 func ixProvisionTransportSupportsFullPlaintextDatapath(endpointTransport string) bool {
-	switch transport.RuntimeProtocol(transport.Protocol(endpointTransport)) {
-	case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+	switch transport.NormalizeProtocol(transport.Protocol(endpointTransport)) {
+	case transport.ProtocolUDP, transport.ProtocolTIXTCP:
 		return true
 	default:
 		return false
@@ -1523,7 +1523,7 @@ func ixProvisionBootstrapScript(input ixProvisionScriptInput) (string, error) {
 	b.WriteString(shellQuote(input.ServiceManager))
 	b.WriteString(" == \"auto\" && -f /etc/openwrt_release ) ]]; then\n")
 	b.WriteString("  deploy_args+=(--env TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1)\n")
-	b.WriteString("  deploy_args+=(--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1)\n")
+	b.WriteString("  deploy_args+=(--env TRUSTIX_TIX_TCP_COMPAT_STREAM=1)\n")
 	b.WriteString("fi\n")
 	b.WriteString("log \"install TrustIX IX ")
 	b.WriteString(shellScriptLiteral(string(input.IXID)))

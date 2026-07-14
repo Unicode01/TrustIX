@@ -30,7 +30,7 @@ func TestEffectiveSecureTransportCryptoSuitesPerformanceKernelSecureOffersAES128
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
@@ -54,7 +54,7 @@ func TestEffectiveSecureTransportCryptoSuitesExplicitConfigWins(t *testing.T) {
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
@@ -77,7 +77,7 @@ func TestEffectiveSecureTransportCryptoSuitesUserspaceCryptoKeepsDefault(t *test
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}

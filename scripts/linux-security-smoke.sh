@@ -127,10 +127,10 @@ run_root_smokes() {
       TRUSTIX_E2E_CRASH_RESTART=0 \
       bash "${repo_root}/scripts/linux-e2e-smoke.sh"
 
-    log "running experimental_tcp data-plane root smoke"
+    log "running tix_tcp data-plane root smoke"
     TRUSTIX_E2E_BIN_DIR="$bin_dir" \
-      TRUSTIX_E2E_WORKDIR="${workdir}/e2e-experimental-tcp" \
-      TRUSTIX_E2E_TRANSPORT=experimental_tcp \
+      TRUSTIX_E2E_WORKDIR="${workdir}/e2e-tix-tcp" \
+      TRUSTIX_E2E_TRANSPORT=tix_tcp \
       TRUSTIX_E2E_CRASH_RESTART=0 \
       bash "${repo_root}/scripts/linux-e2e-smoke.sh"
   fi

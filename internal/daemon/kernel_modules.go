@@ -73,7 +73,7 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	return statuses, nil
 }
 
-func validateExperimentalTCPRouteGSOHelpersStatus(desired config.Desired, status kernelmodule.Status) error {
+func validateTIXTCPRouteGSOHelpersStatus(desired config.Desired, status kernelmodule.Status) error {
 	return validateRouteGSOHelpersStatus(desired, status)
 }
 
@@ -88,7 +88,7 @@ func validateRouteGSOHelpersStatus(desired config.Desired, status kernelmodule.S
 		}
 	}
 	if len(missing) == 0 {
-		return validateExperimentalTCPRouteGSOHelperRuntimeParameters(desired, status)
+		return validateTIXTCPRouteGSOHelperRuntimeParameters(desired, status)
 	}
 	detail := status.CapabilityReason
 	if status.Reason != "" {
@@ -115,7 +115,7 @@ var readTrustIXDatapathHelpersParameter = func(name string) (string, error) {
 	return strings.TrimSpace(string(payload)), err
 }
 
-func validateExperimentalTCPRouteGSOHelperRuntimeParameters(desired config.Desired, status kernelmodule.Status) error {
+func validateTIXTCPRouteGSOHelperRuntimeParameters(desired config.Desired, status kernelmodule.Status) error {
 	return validateRouteGSOHelperRuntimeParameters(desired, status)
 }
 
@@ -134,7 +134,7 @@ func validateRouteGSOHelperRuntimeParameters(desired config.Desired, status kern
 		"route_tcp_gso_async_force_inner_checksum",
 		"route_tcp_gso_async_force_software_outer_csum",
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+	if tixTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		required = append(required,
 			"tixt_tx_plain_skip_sequence",
 			"tixt_tx_plain_ack_only",
@@ -176,8 +176,8 @@ func validateRouteGSOHelperRuntimeParameters(desired config.Desired, status kern
 
 func routeGSOHelpersLabelForDesired(desired config.Desired) string {
 	var labels []string
-	if experimentalTCPRouteGSOAsyncForDesired(desired) {
-		labels = append(labels, "experimental_tcp route-GSO")
+	if tixTCPRouteGSOAsyncForDesired(desired) {
+		labels = append(labels, "tix_tcp route-GSO")
 	}
 	if kernelUDPSecureRouteGSOForDesired(desired) {
 		labels = append(labels, "secure kernel_udp route-GSO")
@@ -339,8 +339,8 @@ func TrustIXCryptoModuleParameters(raw string) string {
 }
 
 func TrustIXCryptoModuleParametersForDesired(raw string, desired config.Desired) string {
-	experimentalTCPSecureDirect := experimentalTCPSecureKernelCryptoDirectForDesired(desired)
-	performanceSecureDirect := kernelUDPSecureFullDirectForDesired(desired) || experimentalTCPSecureDirect
+	tixTCPSecureDirect := tixTCPSecureKernelCryptoDirectForDesired(desired)
+	performanceSecureDirect := kernelUDPSecureFullDirectForDesired(desired) || tixTCPSecureDirect
 	explicitSIMDFastpath := envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH")
 	explicitSIMDIRQFPUFastpath := envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH")
 	explicitKfuncFastpathStats := envTruthyAny("TRUSTIX_KERNEL_CRYPTO_KFUNC_FASTPATH_STATS")
@@ -371,7 +371,7 @@ func TrustIXDatapathModuleParameters(raw string) string {
 }
 
 func kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired config.Desired) bool {
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+	if tixTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		return !envTruthyAny("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX")
 	}
 	if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
@@ -493,7 +493,7 @@ func appendTrustIXDatapathTXPlaintextBaseParameters(params string) string {
 func kernelDatapathTXPlaintextTransportQueuePartitionForDesired(desired config.Desired) bool {
 	for _, protocol := range []transport.Protocol{
 		transport.ProtocolUDP,
-		transport.ProtocolExperimentalTCP,
+		transport.ProtocolTIXTCP,
 	} {
 		if !desiredTransportPolicyUsesAnyProtocol(desired, protocol) {
 			return false
@@ -812,7 +812,7 @@ func TrustIXDatapathHelpersModuleParameters(raw string) string {
 
 func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config.Desired) string {
 	params := TrustIXDatapathHelpersModuleParameters(raw)
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+	if tixTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		params = appendModuleParameterIfMissing(params, "tixt_tx_plain_skip_sequence=1")
 		params = appendModuleParameterIfMissing(params, "tixt_tx_plain_ack_only=1")
 	}
@@ -874,46 +874,46 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 
 func appendTrustIXDatapathHelpersTIXTParameters(params string) string {
 	if envTruthyAny(
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_WORKER_KFUNC",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_WORKER_KFUNC",
 	) {
 		params = appendModuleParameterIfMissing(params, "route_tcp_xmit_worker=1")
 	}
 	if envTruthyAny(
-		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_SYNC_STREAM",
+		"TRUSTIX_TIX_TCP_ROUTE_GSO_SYNC_STREAM",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_SYNC_STREAM",
 	) {
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_sync_stream=1")
-		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_sync_stream_max_frames", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_sync_stream_max_frames", "TRUSTIX_TIX_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES")
 		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_parse=1")
 		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_xmit_extra=1")
 		params = appendModuleParameterIfMissing(params, "tixt_rx_stream_gso_xmit=1")
-		params = appendModuleParameterFromEnvIfMissing(params, "tixt_rx_stream_max_frames", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES")
+		params = appendModuleParameterFromEnvIfMissing(params, "tixt_rx_stream_max_frames", "TRUSTIX_TIX_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES")
 	}
 	if envTruthyAny(
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC",
 	) {
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_dev_xmit=1")
-		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_limit", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT")
-		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_bytes_limit", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_BYTES_LIMIT")
-		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_worker_item_budget", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET")
-		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_worker_segment_budget", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET")
-		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_max_segments_per_item", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM")
-		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM") {
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_limit", "TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_LIMIT")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_bytes_limit", "TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_BYTES_LIMIT")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_worker_item_budget", "TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_worker_segment_budget", "TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET")
+		params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_max_segments_per_item", "TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM")
+		if envTruthyAny("TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM") {
 			params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream=1")
-			params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_stream_max_frames", "TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES")
+			params = appendModuleParameterFromEnvIfMissing(params, "route_tcp_gso_async_stream_max_frames", "TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES")
 		}
-		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD") {
+		if envTruthyAny("TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD") {
 			params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_direct_build=1")
 		}
-		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO") {
+		if envTruthyAny("TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO") {
 			params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_stream_outer_gso=1")
 		}
-		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_SECURE_SEAL_BATCH") {
+		if envTruthyAny("TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_SECURE_SEAL_BATCH") {
 			params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_secure_seal_batch=1")
 		}
 	}

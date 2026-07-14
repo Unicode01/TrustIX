@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
-// BPF_PROG_RUN-compatible XDP program for experimental_tcp TX kernel seal.
+// BPF_PROG_RUN-compatible XDP program for tix_tcp TX kernel seal.
 // It parses an Ethernet/IPv4/TCP/TIXT plaintext packet, seals the TIXT
 // payload with provider-owned AEAD ctx slots, grows the packet by the secure
 // envelope overhead, and refreshes IPv4/TCP checksums.
@@ -30,14 +30,14 @@ struct bpf_spin_lock {
 #define XDP_DROP 1
 #define XDP_PASS 2
 
-#define TRUSTIX_EXP_TCP_TX_STATS_ATTEMPTS 0
-#define TRUSTIX_EXP_TCP_TX_STATS_SUCCESSES 1
-#define TRUSTIX_EXP_TCP_TX_STATS_ERRORS 2
-#define TRUSTIX_EXP_TCP_TX_STATS_NO_CONTEXT_ERRORS 3
-#define TRUSTIX_EXP_TCP_TX_STATS_HEADER_ERRORS 4
-#define TRUSTIX_EXP_TCP_TX_STATS_ENCRYPT_ERRORS 5
-#define TRUSTIX_EXP_TCP_TX_STATS_SEQUENCE_ERRORS 6
-#define TRUSTIX_EXP_TCP_TX_STATS_TCP_CHECKSUM_SKIPPED 7
+#define TRUSTIX_TIX_TCP_TX_STATS_ATTEMPTS 0
+#define TRUSTIX_TIX_TCP_TX_STATS_SUCCESSES 1
+#define TRUSTIX_TIX_TCP_TX_STATS_ERRORS 2
+#define TRUSTIX_TIX_TCP_TX_STATS_NO_CONTEXT_ERRORS 3
+#define TRUSTIX_TIX_TCP_TX_STATS_HEADER_ERRORS 4
+#define TRUSTIX_TIX_TCP_TX_STATS_ENCRYPT_ERRORS 5
+#define TRUSTIX_TIX_TCP_TX_STATS_SEQUENCE_ERRORS 6
+#define TRUSTIX_TIX_TCP_TX_STATS_TCP_CHECKSUM_SKIPPED 7
 
 #define TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES 4096
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_MAX 4095
@@ -45,14 +45,14 @@ struct bpf_spin_lock {
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN 16
 #define TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN 24
 #define TRUSTIX_KERNEL_CRYPTO_DIRECTION_SEND 1
-#define TRUSTIX_EXP_TCP_HEADER_LEN 40
-#define TRUSTIX_EXP_TCP_TCP_HEADER_LEN 20
-#define TRUSTIX_EXP_TCP_TCP_CSUM_HEADER_LEN (12 + TRUSTIX_EXP_TCP_TCP_HEADER_LEN + TRUSTIX_EXP_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
-#define TRUSTIX_EXP_TCP_CSUM_CHUNK 512
-#define TRUSTIX_EXP_TCP_OVERHEAD (TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
-#define TRUSTIX_EXP_TCP_FLAG_ENCRYPTED 1
-#define TRUSTIX_EXP_TCP_FLAG_KERNEL_OPENED 2
-#define TRUSTIX_EXP_TCP_CONFIG_SKIP_TCP_CHECKSUM 1
+#define TRUSTIX_TIX_TCP_HEADER_LEN 40
+#define TRUSTIX_TIX_TCP_TCP_HEADER_LEN 20
+#define TRUSTIX_TIX_TCP_TCP_CSUM_HEADER_LEN (12 + TRUSTIX_TIX_TCP_TCP_HEADER_LEN + TRUSTIX_TIX_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
+#define TRUSTIX_TIX_TCP_CSUM_CHUNK 512
+#define TRUSTIX_TIX_TCP_OVERHEAD (TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
+#define TRUSTIX_TIX_TCP_FLAG_ENCRYPTED 1
+#define TRUSTIX_TIX_TCP_FLAG_KERNEL_OPENED 2
+#define TRUSTIX_TIX_TCP_CONFIG_SKIP_TCP_CHECKSUM 1
 #define TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_HOT_STATS 1
 #define TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_NO_REPLAY 2
 #define TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS 1024
@@ -96,7 +96,7 @@ struct trustix_kernel_crypto_ctx_value {
     __u32 replay_lock_pad;
 };
 
-struct trustix_exp_tcp_tx_scratch {
+struct trustix_tix_tcp_tx_scratch {
     __u8 plain[TRUSTIX_KERNEL_CRYPTO_FRAME_PADDED];
     __u8 cipher[TRUSTIX_KERNEL_CRYPTO_FRAME_PADDED];
     __u8 nonce[12];
@@ -104,10 +104,10 @@ struct trustix_exp_tcp_tx_scratch {
     __u32 hot_stats;
 };
 
-struct trustix_exp_tcp_tx_csum_header {
+struct trustix_tix_tcp_tx_csum_header {
     __u8 pseudo[12];
-    __u8 tcp[TRUSTIX_EXP_TCP_TCP_HEADER_LEN];
-    __u8 frame[TRUSTIX_EXP_TCP_HEADER_LEN];
+    __u8 tcp[TRUSTIX_TIX_TCP_TCP_HEADER_LEN];
+    __u8 frame[TRUSTIX_TIX_TCP_HEADER_LEN];
     __u8 secure[TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN];
 };
 
@@ -129,22 +129,22 @@ struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 1);
     __type(key, __u32);
-    __type(value, struct trustix_exp_tcp_tx_scratch);
-} ix_exp_tcp_tx_scratch SEC(".maps");
+    __type(value, struct trustix_tix_tcp_tx_scratch);
+} ix_tix_tcp_tx_scratch SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 8);
     __type(key, __u32);
     __type(value, __u64);
-} ix_exp_tcp_tx_stat SEC(".maps");
+} ix_tix_tcp_tx_stat SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
     __type(key, __u32);
     __type(value, __u32);
-} ix_exp_tcp_tx_config SEC(".maps");
+} ix_tix_tcp_tx_config SEC(".maps");
 
 static void *(*bpf_map_lookup_elem)(const void *map, const void *key) = (void *)1;
 static long (*bpf_csum_diff)(const void *from, __u32 from_size, const void *to, __u32 to_size, __u32 seed) = (void *)28;
@@ -157,19 +157,19 @@ extern void bpf_rcu_read_lock(void) __ksym;
 extern void bpf_rcu_read_unlock(void) __ksym;
 extern int bpf_crypto_encrypt(struct bpf_crypto_ctx *ctx, const struct bpf_dynptr *src, const struct bpf_dynptr *dst, const struct bpf_dynptr *siv__nullable) __ksym;
 
-static __always_inline void trustix_exp_tcp_tx_count(__u32 key)
+static __always_inline void trustix_tix_tcp_tx_count(__u32 key)
 {
-    __u64 *value = bpf_map_lookup_elem(&ix_exp_tcp_tx_stat, &key);
+    __u64 *value = bpf_map_lookup_elem(&ix_tix_tcp_tx_stat, &key);
     if (value)
         (*value)++;
 }
 
-static __always_inline int trustix_exp_tcp_tx_skip_tcp_checksum(void)
+static __always_inline int trustix_tix_tcp_tx_skip_tcp_checksum(void)
 {
     __u32 key = 0;
-    __u32 *config = bpf_map_lookup_elem(&ix_exp_tcp_tx_config, &key);
+    __u32 *config = bpf_map_lookup_elem(&ix_tix_tcp_tx_config, &key);
 
-    return config && (*config & TRUSTIX_EXP_TCP_CONFIG_SKIP_TCP_CHECKSUM);
+    return config && (*config & TRUSTIX_TIX_TCP_CONFIG_SKIP_TCP_CHECKSUM);
 }
 
 static __always_inline int trustix_kernel_crypto_hot_stats(const struct trustix_kernel_crypto_ctx_value *state)
@@ -313,7 +313,7 @@ static __always_inline __u16 trustix_fold_checksum(__u32 sum)
 
 static __noinline int trustix_xdp_load_plain(struct xdp_md *ctx,
                                              __u32 packet_offset, __u32 len,
-                                             struct trustix_exp_tcp_tx_scratch *scratch)
+                                             struct trustix_tix_tcp_tx_scratch *scratch)
 {
     __u32 copied = 0;
 
@@ -349,7 +349,7 @@ static __noinline int trustix_xdp_load_plain(struct xdp_md *ctx,
 
 static __noinline int trustix_xdp_store_cipher(struct xdp_md *ctx,
                                                __u32 packet_offset, __u32 len,
-                                               struct trustix_exp_tcp_tx_scratch *scratch)
+                                               struct trustix_tix_tcp_tx_scratch *scratch)
 {
     __u32 copied = 0;
 
@@ -392,7 +392,7 @@ static __noinline int trustix_add_csum_chunk(__u8 *data, __u32 len, __u32 *sum)
     if (len == 0)
         return 0;
     len &= 0x7fffffffU;
-    if (len > TRUSTIX_EXP_TCP_CSUM_CHUNK)
+    if (len > TRUSTIX_TIX_TCP_CSUM_CHUNK)
         return -22;
     if (len & 3)
         return -22;
@@ -405,12 +405,12 @@ static __noinline int trustix_add_csum_chunk(__u8 *data, __u32 len, __u32 *sum)
 
 static __noinline int trustix_fix_tcp_checksum(__u8 *ip, __u8 *tcp,
                                                __u8 *data_end,
-                                               struct trustix_exp_tcp_tx_scratch *scratch,
+                                               struct trustix_tix_tcp_tx_scratch *scratch,
                                                __u32 cipher_len)
 {
-    struct trustix_exp_tcp_tx_csum_header header = {};
-    __u8 *frame = tcp + TRUSTIX_EXP_TCP_TCP_HEADER_LEN;
-    __u8 *secure = frame + TRUSTIX_EXP_TCP_HEADER_LEN;
+    struct trustix_tix_tcp_tx_csum_header header = {};
+    __u8 *frame = tcp + TRUSTIX_TIX_TCP_TCP_HEADER_LEN;
+    __u8 *secure = frame + TRUSTIX_TIX_TCP_HEADER_LEN;
     volatile __u32 raw_cipher_len;
     __u32 bounded_cipher_len;
     __u32 tcp_len;
@@ -424,11 +424,11 @@ static __noinline int trustix_fix_tcp_checksum(__u8 *ip, __u8 *tcp,
     if (!scratch || bounded_cipher_len != raw_cipher_len)
         return -22;
     cipher_len = bounded_cipher_len;
-    tcp_len = TRUSTIX_EXP_TCP_TCP_HEADER_LEN + TRUSTIX_EXP_TCP_HEADER_LEN +
+    tcp_len = TRUSTIX_TIX_TCP_TCP_HEADER_LEN + TRUSTIX_TIX_TCP_HEADER_LEN +
               TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + cipher_len;
     if (ip + 20 > data_end ||
-        tcp + TRUSTIX_EXP_TCP_TCP_HEADER_LEN > data_end ||
-        frame + TRUSTIX_EXP_TCP_HEADER_LEN > data_end ||
+        tcp + TRUSTIX_TIX_TCP_TCP_HEADER_LEN > data_end ||
+        frame + TRUSTIX_TIX_TCP_HEADER_LEN > data_end ||
         secure + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN > data_end)
         return -14;
 
@@ -445,13 +445,13 @@ static __noinline int trustix_fix_tcp_checksum(__u8 *ip, __u8 *tcp,
     trustix_write_be16(header.pseudo + 10, (__u16)tcp_len);
 
 #pragma clang loop unroll(full)
-    for (int i = 0; i < TRUSTIX_EXP_TCP_TCP_HEADER_LEN; i++)
+    for (int i = 0; i < TRUSTIX_TIX_TCP_TCP_HEADER_LEN; i++)
         header.tcp[i] = tcp[i];
     header.tcp[16] = 0;
     header.tcp[17] = 0;
 
 #pragma clang loop unroll(full)
-    for (int i = 0; i < TRUSTIX_EXP_TCP_HEADER_LEN; i++)
+    for (int i = 0; i < TRUSTIX_TIX_TCP_HEADER_LEN; i++)
         header.frame[i] = frame[i];
 
 #pragma clang loop unroll(full)
@@ -478,58 +478,58 @@ static __noinline int trustix_fix_tcp_checksum(__u8 *ip, __u8 *tcp,
 
     if (cipher_padded > 0) {
         chunk = cipher_padded;
-        if (chunk > TRUSTIX_EXP_TCP_CSUM_CHUNK)
-            chunk = TRUSTIX_EXP_TCP_CSUM_CHUNK;
+        if (chunk > TRUSTIX_TIX_TCP_CSUM_CHUNK)
+            chunk = TRUSTIX_TIX_TCP_CSUM_CHUNK;
         if (trustix_add_csum_chunk(scratch->cipher, chunk, &sum32))
             return -22;
     }
-    if (cipher_padded > TRUSTIX_EXP_TCP_CSUM_CHUNK) {
-        chunk = cipher_padded - TRUSTIX_EXP_TCP_CSUM_CHUNK;
-        if (chunk > TRUSTIX_EXP_TCP_CSUM_CHUNK)
-            chunk = TRUSTIX_EXP_TCP_CSUM_CHUNK;
-        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_EXP_TCP_CSUM_CHUNK, chunk, &sum32))
+    if (cipher_padded > TRUSTIX_TIX_TCP_CSUM_CHUNK) {
+        chunk = cipher_padded - TRUSTIX_TIX_TCP_CSUM_CHUNK;
+        if (chunk > TRUSTIX_TIX_TCP_CSUM_CHUNK)
+            chunk = TRUSTIX_TIX_TCP_CSUM_CHUNK;
+        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_TIX_TCP_CSUM_CHUNK, chunk, &sum32))
             return -22;
     }
-    if (cipher_padded > TRUSTIX_EXP_TCP_CSUM_CHUNK * 2) {
-        chunk = cipher_padded - TRUSTIX_EXP_TCP_CSUM_CHUNK * 2;
-        if (chunk > TRUSTIX_EXP_TCP_CSUM_CHUNK)
-            chunk = TRUSTIX_EXP_TCP_CSUM_CHUNK;
-        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_EXP_TCP_CSUM_CHUNK * 2, chunk, &sum32))
+    if (cipher_padded > TRUSTIX_TIX_TCP_CSUM_CHUNK * 2) {
+        chunk = cipher_padded - TRUSTIX_TIX_TCP_CSUM_CHUNK * 2;
+        if (chunk > TRUSTIX_TIX_TCP_CSUM_CHUNK)
+            chunk = TRUSTIX_TIX_TCP_CSUM_CHUNK;
+        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_TIX_TCP_CSUM_CHUNK * 2, chunk, &sum32))
             return -22;
     }
-    if (cipher_padded > TRUSTIX_EXP_TCP_CSUM_CHUNK * 3) {
-        chunk = cipher_padded - TRUSTIX_EXP_TCP_CSUM_CHUNK * 3;
-        if (chunk > TRUSTIX_EXP_TCP_CSUM_CHUNK)
-            chunk = TRUSTIX_EXP_TCP_CSUM_CHUNK;
-        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_EXP_TCP_CSUM_CHUNK * 3, chunk, &sum32))
+    if (cipher_padded > TRUSTIX_TIX_TCP_CSUM_CHUNK * 3) {
+        chunk = cipher_padded - TRUSTIX_TIX_TCP_CSUM_CHUNK * 3;
+        if (chunk > TRUSTIX_TIX_TCP_CSUM_CHUNK)
+            chunk = TRUSTIX_TIX_TCP_CSUM_CHUNK;
+        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_TIX_TCP_CSUM_CHUNK * 3, chunk, &sum32))
             return -22;
     }
-    if (cipher_padded > TRUSTIX_EXP_TCP_CSUM_CHUNK * 4) {
-        chunk = cipher_padded - TRUSTIX_EXP_TCP_CSUM_CHUNK * 4;
-        if (chunk > TRUSTIX_EXP_TCP_CSUM_CHUNK)
-            chunk = TRUSTIX_EXP_TCP_CSUM_CHUNK;
-        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_EXP_TCP_CSUM_CHUNK * 4, chunk, &sum32))
+    if (cipher_padded > TRUSTIX_TIX_TCP_CSUM_CHUNK * 4) {
+        chunk = cipher_padded - TRUSTIX_TIX_TCP_CSUM_CHUNK * 4;
+        if (chunk > TRUSTIX_TIX_TCP_CSUM_CHUNK)
+            chunk = TRUSTIX_TIX_TCP_CSUM_CHUNK;
+        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_TIX_TCP_CSUM_CHUNK * 4, chunk, &sum32))
             return -22;
     }
-    if (cipher_padded > TRUSTIX_EXP_TCP_CSUM_CHUNK * 5) {
-        chunk = cipher_padded - TRUSTIX_EXP_TCP_CSUM_CHUNK * 5;
-        if (chunk > TRUSTIX_EXP_TCP_CSUM_CHUNK)
-            chunk = TRUSTIX_EXP_TCP_CSUM_CHUNK;
-        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_EXP_TCP_CSUM_CHUNK * 5, chunk, &sum32))
+    if (cipher_padded > TRUSTIX_TIX_TCP_CSUM_CHUNK * 5) {
+        chunk = cipher_padded - TRUSTIX_TIX_TCP_CSUM_CHUNK * 5;
+        if (chunk > TRUSTIX_TIX_TCP_CSUM_CHUNK)
+            chunk = TRUSTIX_TIX_TCP_CSUM_CHUNK;
+        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_TIX_TCP_CSUM_CHUNK * 5, chunk, &sum32))
             return -22;
     }
-    if (cipher_padded > TRUSTIX_EXP_TCP_CSUM_CHUNK * 6) {
-        chunk = cipher_padded - TRUSTIX_EXP_TCP_CSUM_CHUNK * 6;
-        if (chunk > TRUSTIX_EXP_TCP_CSUM_CHUNK)
-            chunk = TRUSTIX_EXP_TCP_CSUM_CHUNK;
-        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_EXP_TCP_CSUM_CHUNK * 6, chunk, &sum32))
+    if (cipher_padded > TRUSTIX_TIX_TCP_CSUM_CHUNK * 6) {
+        chunk = cipher_padded - TRUSTIX_TIX_TCP_CSUM_CHUNK * 6;
+        if (chunk > TRUSTIX_TIX_TCP_CSUM_CHUNK)
+            chunk = TRUSTIX_TIX_TCP_CSUM_CHUNK;
+        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_TIX_TCP_CSUM_CHUNK * 6, chunk, &sum32))
             return -22;
     }
-    if (cipher_padded > TRUSTIX_EXP_TCP_CSUM_CHUNK * 7) {
-        chunk = cipher_padded - TRUSTIX_EXP_TCP_CSUM_CHUNK * 7;
-        if (chunk > TRUSTIX_EXP_TCP_CSUM_CHUNK)
-            chunk = TRUSTIX_EXP_TCP_CSUM_CHUNK;
-        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_EXP_TCP_CSUM_CHUNK * 7, chunk, &sum32))
+    if (cipher_padded > TRUSTIX_TIX_TCP_CSUM_CHUNK * 7) {
+        chunk = cipher_padded - TRUSTIX_TIX_TCP_CSUM_CHUNK * 7;
+        if (chunk > TRUSTIX_TIX_TCP_CSUM_CHUNK)
+            chunk = TRUSTIX_TIX_TCP_CSUM_CHUNK;
+        if (trustix_add_csum_chunk(scratch->cipher + TRUSTIX_TIX_TCP_CSUM_CHUNK * 7, chunk, &sum32))
             return -22;
     }
     trustix_write_be16(tcp + 16, trustix_bswap16(trustix_fold_checksum(sum32)));
@@ -538,7 +538,7 @@ static __noinline int trustix_fix_tcp_checksum(__u8 *ip, __u8 *tcp,
 
 static __noinline int trustix_encrypt_payload(struct xdp_md *ctx,
                                               __u32 payload_len, __u8 *frame,
-                                              struct trustix_exp_tcp_tx_scratch *scratch)
+                                              struct trustix_tix_tcp_tx_scratch *scratch)
 {
     __u8 *data = (__u8 *)(long)ctx->data;
     __u8 *data_end = (__u8 *)(long)ctx->data_end;
@@ -566,9 +566,9 @@ static __noinline int trustix_encrypt_payload(struct xdp_md *ctx,
         bounded_payload_len > TRUSTIX_KERNEL_CRYPTO_FRAME_MAX - TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
         return -22;
     payload_len = bounded_payload_len;
-    if (!frame || frame + TRUSTIX_EXP_TCP_HEADER_LEN > data_end)
+    if (!frame || frame + TRUSTIX_TIX_TCP_HEADER_LEN > data_end)
         return -14;
-    payload = frame + TRUSTIX_EXP_TCP_HEADER_LEN;
+    payload = frame + TRUSTIX_TIX_TCP_HEADER_LEN;
     if (payload + payload_len > data_end)
         return -14;
     if (!ctx || payload < data)
@@ -643,7 +643,7 @@ out_unlock:
 }
 
 SEC("xdp")
-int trustix_exp_tcp_tx_seal(struct xdp_md *ctx)
+int trustix_tix_tcp_tx_seal(struct xdp_md *ctx)
 {
     __u8 *data = (__u8 *)(long)ctx->data;
     __u8 *data_end = (__u8 *)(long)ctx->data_end;
@@ -653,7 +653,7 @@ int trustix_exp_tcp_tx_seal(struct xdp_md *ctx)
     __u8 *payload;
     __u8 *secure;
     __u32 scratch_key = 0;
-    struct trustix_exp_tcp_tx_scratch *scratch;
+    struct trustix_tix_tcp_tx_scratch *scratch;
     __u32 payload_len;
     __u32 old_total_len;
     __u32 new_total_len;
@@ -664,7 +664,7 @@ int trustix_exp_tcp_tx_seal(struct xdp_md *ctx)
     int cipher_len;
     __u32 cipher_u32;
 
-    trustix_exp_tcp_tx_count(TRUSTIX_EXP_TCP_TX_STATS_ATTEMPTS);
+    trustix_tix_tcp_tx_count(TRUSTIX_TIX_TCP_TX_STATS_ATTEMPTS);
     if (data + 14 > data_end)
         goto header_error;
     if (data[12] != 0x08 || data[13] != 0x00)
@@ -677,31 +677,31 @@ int trustix_exp_tcp_tx_seal(struct xdp_md *ctx)
         goto header_error;
 
     tcp = ip + 20;
-    if (tcp + TRUSTIX_EXP_TCP_TCP_HEADER_LEN > data_end)
+    if (tcp + TRUSTIX_TIX_TCP_TCP_HEADER_LEN > data_end)
         goto header_error;
     if (tcp[12] != 0x50)
         goto header_error;
 
-    frame = tcp + TRUSTIX_EXP_TCP_TCP_HEADER_LEN;
-    if (frame + TRUSTIX_EXP_TCP_HEADER_LEN > data_end)
+    frame = tcp + TRUSTIX_TIX_TCP_TCP_HEADER_LEN;
+    if (frame + TRUSTIX_TIX_TCP_HEADER_LEN > data_end)
         goto header_error;
     if (frame[0] != 'T' || frame[1] != 'I' ||
         frame[2] != 'X' || frame[3] != 'T' ||
-        frame[4] != 1 || frame[6] != 0 || frame[7] != TRUSTIX_EXP_TCP_HEADER_LEN)
+        frame[4] != 1 || frame[6] != 0 || frame[7] != TRUSTIX_TIX_TCP_HEADER_LEN)
         goto header_error;
-    if (frame[5] & (TRUSTIX_EXP_TCP_FLAG_ENCRYPTED | TRUSTIX_EXP_TCP_FLAG_KERNEL_OPENED))
+    if (frame[5] & (TRUSTIX_TIX_TCP_FLAG_ENCRYPTED | TRUSTIX_TIX_TCP_FLAG_KERNEL_OPENED))
         goto header_error;
 
     payload_len = trustix_read_be32(frame + 32);
     if (payload_len > TRUSTIX_KERNEL_CRYPTO_FRAME_MAX - TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
         goto header_error;
-    payload = frame + TRUSTIX_EXP_TCP_HEADER_LEN;
+    payload = frame + TRUSTIX_TIX_TCP_HEADER_LEN;
     if (payload + payload_len > data_end)
         goto header_error;
 
     epoch = trustix_read_be64(frame + 16);
     sequence = trustix_read_be64(frame + 24);
-    scratch = bpf_map_lookup_elem(&ix_exp_tcp_tx_scratch, &scratch_key);
+    scratch = bpf_map_lookup_elem(&ix_tix_tcp_tx_scratch, &scratch_key);
     if (!scratch)
         goto no_context_error;
     cipher_len = trustix_encrypt_payload(ctx, payload_len, frame, scratch);
@@ -712,7 +712,7 @@ int trustix_exp_tcp_tx_seal(struct xdp_md *ctx)
             goto header_error;
         if (cipher_len == -114)
             goto sequence_error;
-        trustix_exp_tcp_tx_count(TRUSTIX_EXP_TCP_TX_STATS_ENCRYPT_ERRORS);
+        trustix_tix_tcp_tx_count(TRUSTIX_TIX_TCP_TX_STATS_ENCRYPT_ERRORS);
         goto error;
     }
     cipher_u32 = (__u32)cipher_len;
@@ -720,19 +720,19 @@ int trustix_exp_tcp_tx_seal(struct xdp_md *ctx)
         goto header_error;
 
     old_total_len = ((__u32)ip[2] << 8) | ip[3];
-    if (old_total_len < 20 + TRUSTIX_EXP_TCP_TCP_HEADER_LEN + TRUSTIX_EXP_TCP_HEADER_LEN + payload_len)
+    if (old_total_len < 20 + TRUSTIX_TIX_TCP_TCP_HEADER_LEN + TRUSTIX_TIX_TCP_HEADER_LEN + payload_len)
         goto header_error;
     if (ip + old_total_len > data_end)
         goto header_error;
-    if (bpf_xdp_adjust_tail(ctx, TRUSTIX_EXP_TCP_OVERHEAD))
+    if (bpf_xdp_adjust_tail(ctx, TRUSTIX_TIX_TCP_OVERHEAD))
         goto error;
 
     data = (__u8 *)(long)ctx->data;
     data_end = (__u8 *)(long)ctx->data_end;
     ip = data + 14;
     tcp = ip + 20;
-    frame = tcp + TRUSTIX_EXP_TCP_TCP_HEADER_LEN;
-    secure = frame + TRUSTIX_EXP_TCP_HEADER_LEN;
+    frame = tcp + TRUSTIX_TIX_TCP_TCP_HEADER_LEN;
+    secure = frame + TRUSTIX_TIX_TCP_HEADER_LEN;
     if (secure + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN > data_end)
         goto header_error;
     if (secure + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + cipher_u32 > data_end)
@@ -748,37 +748,37 @@ int trustix_exp_tcp_tx_seal(struct xdp_md *ctx)
     if (trustix_xdp_store_cipher(ctx, cipher_offset, cipher_u32, scratch))
         goto header_error;
 
-    new_total_len = old_total_len + TRUSTIX_EXP_TCP_OVERHEAD;
-    frame[5] = frame[5] | TRUSTIX_EXP_TCP_FLAG_ENCRYPTED;
+    new_total_len = old_total_len + TRUSTIX_TIX_TCP_OVERHEAD;
+    frame[5] = frame[5] | TRUSTIX_TIX_TCP_FLAG_ENCRYPTED;
     trustix_write_be32(frame + 32, (__u32)(TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + cipher_len));
     trustix_write_be16(ip + 2, (__u16)new_total_len);
     trustix_fix_ipv4_checksum(ip);
     tcp[16] = 0;
     tcp[17] = 0;
-    if (trustix_exp_tcp_tx_skip_tcp_checksum()) {
+    if (trustix_tix_tcp_tx_skip_tcp_checksum()) {
         if (scratch->hot_stats)
-            trustix_exp_tcp_tx_count(TRUSTIX_EXP_TCP_TX_STATS_TCP_CHECKSUM_SKIPPED);
+            trustix_tix_tcp_tx_count(TRUSTIX_TIX_TCP_TX_STATS_TCP_CHECKSUM_SKIPPED);
     } else if (trustix_fix_tcp_checksum(ip, tcp, data_end, scratch, cipher_u32)) {
         goto header_error;
     }
 
-    trustix_exp_tcp_tx_count(TRUSTIX_EXP_TCP_TX_STATS_SUCCESSES);
+    trustix_tix_tcp_tx_count(TRUSTIX_TIX_TCP_TX_STATS_SUCCESSES);
     return XDP_PASS;
 
 no_context_error:
-    trustix_exp_tcp_tx_count(TRUSTIX_EXP_TCP_TX_STATS_NO_CONTEXT_ERRORS);
+    trustix_tix_tcp_tx_count(TRUSTIX_TIX_TCP_TX_STATS_NO_CONTEXT_ERRORS);
     goto error;
 
 header_error:
-    trustix_exp_tcp_tx_count(TRUSTIX_EXP_TCP_TX_STATS_HEADER_ERRORS);
+    trustix_tix_tcp_tx_count(TRUSTIX_TIX_TCP_TX_STATS_HEADER_ERRORS);
     goto error;
 
 sequence_error:
-    trustix_exp_tcp_tx_count(TRUSTIX_EXP_TCP_TX_STATS_SEQUENCE_ERRORS);
+    trustix_tix_tcp_tx_count(TRUSTIX_TIX_TCP_TX_STATS_SEQUENCE_ERRORS);
     goto error;
 
 error:
-    trustix_exp_tcp_tx_count(TRUSTIX_EXP_TCP_TX_STATS_ERRORS);
+    trustix_tix_tcp_tx_count(TRUSTIX_TIX_TCP_TX_STATS_ERRORS);
     return XDP_DROP;
 }
 

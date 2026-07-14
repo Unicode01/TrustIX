@@ -1,4 +1,4 @@
-package experimentaltcp
+package tixtcp
 
 import (
 	"context"
@@ -22,75 +22,75 @@ import (
 	"trustix.local/trustix/internal/transport/stream"
 )
 
-const experimentalTCPKernelCryptoReplayWindow = 65536
+const tixTCPKernelCryptoReplayWindow = 65536
 
 // AF_XDP can deliver short bursts much faster than userspace crypto/inject can
 // drain them. Keep the default bounded; oversized queues can pin hundreds of
 // MiB of borrowed packet buffers per session when downstream stalls.
 const (
-	experimentalTCPSessionBufferDefault           = 512
-	experimentalTCPSessionBufferMax               = 8192
-	experimentalTCPFragmentPayloadSize            = 2000
-	experimentalTCPFragmentPayloadMax             = 32000
-	experimentalTCPKernelFragmentPayloadMax       = 4079
-	experimentalTCPKernelSealBeforeMax            = 512*1024 - 16
-	experimentalTCPSecureFrameOverhead            = 24 + 16
-	experimentalTCPUserspaceCryptoPayloadHint     = experimentalTCPFragmentPayloadSize
-	experimentalTCPMaxFragments                   = 256
-	experimentalTCPReassemblyTTL                  = 30 * time.Second
-	experimentalTCPReassemblyMaxAssembliesDefault = 1024
-	experimentalTCPReassemblyMaxAssembliesMax     = 8192
-	experimentalTCPRecvCoalesceDelayMax           = 10 * time.Millisecond
-	experimentalTCPRecvDrainDefault               = 0
-	experimentalTCPRecvDrainMax                   = 256
-	experimentalTCPTIXBVersion                    = 1
-	experimentalTCPTIXBHeaderLen                  = 8
-	experimentalTCPTIXBItemHeaderLen              = 2
-	experimentalTCPTIXBMaxPackets                 = 256
+	tixTCPSessionBufferDefault           = 512
+	tixTCPSessionBufferMax               = 8192
+	tixTCPFragmentPayloadSize            = 2000
+	tixTCPFragmentPayloadMax             = 32000
+	tixTCPKernelFragmentPayloadMax       = 4079
+	tixTCPKernelSealBeforeMax            = 512*1024 - 16
+	tixTCPSecureFrameOverhead            = 24 + 16
+	tixTCPUserspaceCryptoPayloadHint     = tixTCPFragmentPayloadSize
+	tixTCPMaxFragments                   = 256
+	tixTCPReassemblyTTL                  = 30 * time.Second
+	tixTCPReassemblyMaxAssembliesDefault = 1024
+	tixTCPReassemblyMaxAssembliesMax     = 8192
+	tixTCPRecvCoalesceDelayMax           = 10 * time.Millisecond
+	tixTCPRecvDrainDefault               = 0
+	tixTCPRecvDrainMax                   = 256
+	tixTCPTIXBVersion                    = 1
+	tixTCPTIXBHeaderLen                  = 8
+	tixTCPTIXBItemHeaderLen              = 2
+	tixTCPTIXBMaxPackets                 = 256
 )
 
 const (
-	experimentalTCPStatFragmentedPacketsSent     = "experimental_tcp_fragmented_packets_sent"
-	experimentalTCPStatFragmentsSent             = "experimental_tcp_fragments_sent"
-	experimentalTCPStatFragmentsReceived         = "experimental_tcp_fragments_received"
-	experimentalTCPStatFragmentedPacketsReceived = "experimental_tcp_fragmented_packets_received"
-	experimentalTCPStatFragmentsReassembled      = "experimental_tcp_fragments_reassembled"
-	experimentalTCPStatFragmentAssembliesCurrent = "experimental_tcp_fragment_assemblies_current"
-	experimentalTCPStatFragmentDuplicates        = "experimental_tcp_fragment_duplicates"
-	experimentalTCPStatFragmentExpiredAssemblies = "experimental_tcp_fragment_expired_assemblies"
-	experimentalTCPStatFragmentExpiredFragments  = "experimental_tcp_fragment_expired_fragments"
-	experimentalTCPStatFragmentMismatches        = "experimental_tcp_fragment_mismatches"
-	experimentalTCPStatFragmentRejects           = "experimental_tcp_fragment_rejects"
-	experimentalTCPStatFragmentPayloadSize       = "experimental_tcp_fragment_payload_size"
-	experimentalTCPStatTIXBExpandedPackets       = "experimental_tcp_tixb_expanded_packets"
-	experimentalTCPStatTIXBExpandedItems         = "experimental_tcp_tixb_expanded_items"
-	experimentalTCPStatFullPlaintextKernel       = "experimental_tcp_full_plaintext_kernel_datapath"
+	tixTCPStatFragmentedPacketsSent     = "tix_tcp_fragmented_packets_sent"
+	tixTCPStatFragmentsSent             = "tix_tcp_fragments_sent"
+	tixTCPStatFragmentsReceived         = "tix_tcp_fragments_received"
+	tixTCPStatFragmentedPacketsReceived = "tix_tcp_fragmented_packets_received"
+	tixTCPStatFragmentsReassembled      = "tix_tcp_fragments_reassembled"
+	tixTCPStatFragmentAssembliesCurrent = "tix_tcp_fragment_assemblies_current"
+	tixTCPStatFragmentDuplicates        = "tix_tcp_fragment_duplicates"
+	tixTCPStatFragmentExpiredAssemblies = "tix_tcp_fragment_expired_assemblies"
+	tixTCPStatFragmentExpiredFragments  = "tix_tcp_fragment_expired_fragments"
+	tixTCPStatFragmentMismatches        = "tix_tcp_fragment_mismatches"
+	tixTCPStatFragmentRejects           = "tix_tcp_fragment_rejects"
+	tixTCPStatFragmentPayloadSize       = "tix_tcp_fragment_payload_size"
+	tixTCPStatTIXBExpandedPackets       = "tix_tcp_tixb_expanded_packets"
+	tixTCPStatTIXBExpandedItems         = "tix_tcp_tixb_expanded_items"
+	tixTCPStatFullPlaintextKernel       = "tix_tcp_full_plaintext_kernel_datapath"
 )
 
 const (
-	experimentalTCPProviderFullPlaintextKernel = "kernel_datapath_full_plaintext"
+	tixTCPProviderFullPlaintextKernel = "kernel_datapath_full_plaintext"
 )
 
 const (
-	experimentalTCPCompatTCPPrimerDefault  = true
-	experimentalTCPCompatTCPPrimerTimeout  = 3 * time.Second
-	experimentalTCPCompatHandshakePriority = 200 * time.Millisecond
-	experimentalTCPCompatPriorityBuffer    = 8
-	experimentalTCPCompatControlVersion    = 1
-	experimentalTCPCompatControlInitType   = 1
-	experimentalTCPCompatControlInitLen    = 16
-	experimentalTCPCompatControlInitOldLen = 14
+	tixTCPCompatTCPPrimerDefault  = true
+	tixTCPCompatTCPPrimerTimeout  = 3 * time.Second
+	tixTCPCompatHandshakePriority = 200 * time.Millisecond
+	tixTCPCompatPriorityBuffer    = 8
+	tixTCPCompatControlVersion    = 1
+	tixTCPCompatControlInitType   = 1
+	tixTCPCompatControlInitLen    = 16
+	tixTCPCompatControlInitOldLen = 14
 )
 
 var (
-	experimentalTCPCompatControlMagic = [4]byte{'T', 'I', 'X', 'C'}
-	experimentalTCPSecureHelloMagic   = [4]byte{'T', 'I', 'X', 'H'}
-	experimentalTCPTIXBMagic          = [4]byte{'T', 'I', 'X', 'B'}
+	tixTCPCompatControlMagic = [4]byte{'T', 'I', 'X', 'C'}
+	tixTCPSecureHelloMagic   = [4]byte{'T', 'I', 'X', 'H'}
+	tixTCPTIXBMagic          = [4]byte{'T', 'I', 'X', 'B'}
 )
 
-var experimentalTCPPacketBatchPool = sync.Pool{
+var tixTCPPacketBatchPool = sync.Pool{
 	New: func() any {
-		return &experimentalTCPPacketBatch{
+		return &tixTCPPacketBatch{
 			packets: make([][]byte, 0, 256),
 		}
 	},
@@ -102,11 +102,11 @@ type Options struct {
 }
 
 type Transport struct {
-	provider dataplane.ExperimentalTCPProvider
+	provider dataplane.TIXTCPProvider
 	options  Options
 }
 
-func New(provider dataplane.ExperimentalTCPProvider, options ...Options) *Transport {
+func New(provider dataplane.TIXTCPProvider, options ...Options) *Transport {
 	var opts Options
 	if len(options) > 0 {
 		opts = options[0]
@@ -114,40 +114,40 @@ func New(provider dataplane.ExperimentalTCPProvider, options ...Options) *Transp
 	return &Transport{provider: provider, options: opts}
 }
 
-func experimentalTCPSessionBuffer() int {
-	value := strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_SESSION_BUFFER"))
+func tixTCPSessionBuffer() int {
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_SESSION_BUFFER"))
 	if value == "" {
-		return experimentalTCPSessionBufferDefault
+		return tixTCPSessionBufferDefault
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 1 {
-		return experimentalTCPSessionBufferDefault
+		return tixTCPSessionBufferDefault
 	}
-	if parsed > experimentalTCPSessionBufferMax {
-		return experimentalTCPSessionBufferMax
+	if parsed > tixTCPSessionBufferMax {
+		return tixTCPSessionBufferMax
 	}
 	return parsed
 }
 
-func experimentalTCPReassemblyMaxAssemblies() int {
-	value := strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_REASSEMBLY_MAX_ASSEMBLIES"))
+func tixTCPReassemblyMaxAssemblies() int {
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_REASSEMBLY_MAX_ASSEMBLIES"))
 	if value == "" {
-		return experimentalTCPReassemblyMaxAssembliesDefault
+		return tixTCPReassemblyMaxAssembliesDefault
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 1 {
-		return experimentalTCPReassemblyMaxAssembliesDefault
+		return tixTCPReassemblyMaxAssembliesDefault
 	}
-	if parsed > experimentalTCPReassemblyMaxAssembliesMax {
-		return experimentalTCPReassemblyMaxAssembliesMax
+	if parsed > tixTCPReassemblyMaxAssembliesMax {
+		return tixTCPReassemblyMaxAssembliesMax
 	}
 	return parsed
 }
 
-func experimentalTCPRecvCoalesceDelay() time.Duration {
-	value := strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_COALESCE_DELAY"))
+func tixTCPRecvCoalesceDelay() time.Duration {
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_RECV_COALESCE_DELAY"))
 	if value == "" {
-		value = strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_BATCH_DELAY"))
+		value = strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_RECV_BATCH_DELAY"))
 	}
 	if value == "" {
 		return 0
@@ -156,8 +156,8 @@ func experimentalTCPRecvCoalesceDelay() time.Duration {
 		if parsed < 0 {
 			return 0
 		}
-		if parsed > experimentalTCPRecvCoalesceDelayMax {
-			return experimentalTCPRecvCoalesceDelayMax
+		if parsed > tixTCPRecvCoalesceDelayMax {
+			return tixTCPRecvCoalesceDelayMax
 		}
 		return parsed
 	}
@@ -166,81 +166,81 @@ func experimentalTCPRecvCoalesceDelay() time.Duration {
 		return 0
 	}
 	delay := time.Duration(micros) * time.Microsecond
-	if delay > experimentalTCPRecvCoalesceDelayMax {
-		return experimentalTCPRecvCoalesceDelayMax
+	if delay > tixTCPRecvCoalesceDelayMax {
+		return tixTCPRecvCoalesceDelayMax
 	}
 	return delay
 }
 
-func experimentalTCPRecvDrainBatchLimit() int {
-	value := strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_DRAIN_BATCHES"))
+func tixTCPRecvDrainBatchLimit() int {
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_RECV_DRAIN_BATCHES"))
 	if value == "" {
-		return experimentalTCPRecvDrainDefault
+		return tixTCPRecvDrainDefault
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 0 {
-		return experimentalTCPRecvDrainDefault
+		return tixTCPRecvDrainDefault
 	}
-	if parsed > experimentalTCPRecvDrainMax {
-		return experimentalTCPRecvDrainMax
+	if parsed > tixTCPRecvDrainMax {
+		return tixTCPRecvDrainMax
 	}
 	return parsed
 }
 
-var experimentalTCPRecvCoalesceWaitHook func() // test hook; nil in production.
+var tixTCPRecvCoalesceWaitHook func() // test hook; nil in production.
 
 func (transportImpl *Transport) Name() transport.Protocol {
-	return transport.ProtocolExperimentalTCP
+	return transport.ProtocolTIXTCP
 }
 
 func (transportImpl *Transport) Probe(ctx context.Context, peer transport.Peer) transport.ProbeResult {
-	if experimentalTCPCompatStreamDataEnabled() {
-		hasExperimentalTCPEndpoint := false
+	if tixTCPCompatStreamDataEnabled() {
+		hasTIXTCPEndpoint := false
 		for _, endpoint := range peer.Endpoints {
-			if endpoint.Transport != transport.ProtocolExperimentalTCP || endpoint.Address == "" {
+			if endpoint.Transport != transport.ProtocolTIXTCP || endpoint.Address == "" {
 				continue
 			}
-			hasExperimentalTCPEndpoint = true
-			if experimentalTCPCompatPrimerEnabled() && experimentalTCPCompatPrimerAddressSupported(endpoint.Address, false) {
+			hasTIXTCPEndpoint = true
+			if tixTCPCompatPrimerEnabled() && tixTCPCompatPrimerAddressSupported(endpoint.Address, false) {
 				return transport.ProbeResult{Healthy: true, CheckedAt: time.Now()}
 			}
 		}
-		if hasExperimentalTCPEndpoint && transportImpl.provider == nil {
-			return transport.ProbeResult{Healthy: false, Error: "experimental_tcp compat stream requires a supported TCP primer address", CheckedAt: time.Now()}
+		if hasTIXTCPEndpoint && transportImpl.provider == nil {
+			return transport.ProbeResult{Healthy: false, Error: "tix_tcp compat stream requires a supported TCP primer address", CheckedAt: time.Now()}
 		}
 	}
 	if transportImpl.provider == nil {
-		return transport.ProbeResult{Healthy: false, Error: "experimental_tcp dataplane provider is unavailable", CheckedAt: time.Now()}
+		return transport.ProbeResult{Healthy: false, Error: "tix_tcp dataplane provider is unavailable", CheckedAt: time.Now()}
 	}
-	status, err := transportImpl.provider.ExperimentalTCPStatus(ctx)
+	status, err := transportImpl.provider.TIXTCPStatus(ctx)
 	if err != nil {
 		return transport.ProbeResult{Healthy: false, Error: err.Error(), CheckedAt: time.Now()}
 	}
 	if !status.Available || !status.Reinject {
-		return transport.ProbeResult{Healthy: false, Error: experimentalTCPReinjectUnavailableError(status).Error(), CheckedAt: time.Now()}
+		return transport.ProbeResult{Healthy: false, Error: tixTCPReinjectUnavailableError(status).Error(), CheckedAt: time.Now()}
 	}
 	for _, endpoint := range peer.Endpoints {
-		if endpoint.Transport == transport.ProtocolExperimentalTCP && endpoint.Address != "" {
+		if endpoint.Transport == transport.ProtocolTIXTCP && endpoint.Address != "" {
 			if _, err := transportImpl.selectCryptoPlacementFromStatus(status, endpoint.Encryption); err != nil {
 				return transport.ProbeResult{Healthy: false, Error: err.Error(), CheckedAt: time.Now()}
 			}
 			return transport.ProbeResult{Healthy: true, CheckedAt: time.Now()}
 		}
 	}
-	return transport.ProbeResult{Healthy: false, Error: "no experimental_tcp endpoint", CheckedAt: time.Now()}
+	return transport.ProbeResult{Healthy: false, Error: "no tix_tcp endpoint", CheckedAt: time.Now()}
 }
 
 func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, tlsConf *tls.Config) (transport.Session, error) {
 	var lastErr error
 	for _, endpoint := range peer.Endpoints {
-		if endpoint.Transport != transport.ProtocolExperimentalTCP || endpoint.Address == "" {
+		if endpoint.Transport != transport.ProtocolTIXTCP || endpoint.Address == "" {
 			continue
 		}
-		if experimentalTCPCompatStreamDataEnabled() {
-			primerConn, err := dialExperimentalTCPCompatPrimer(ctx, endpoint)
+		if tixTCPCompatStreamDataEnabled() {
+			primerConn, err := dialTIXTCPCompatPrimer(ctx, endpoint)
 			if err != nil {
 				lastErr = err
-				if experimentalTCPCompatPrimerRequired() || transportImpl.provider == nil {
+				if tixTCPCompatPrimerRequired() || transportImpl.provider == nil {
 					return nil, err
 				}
 			}
@@ -254,37 +254,37 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		}
 		if transportImpl.provider == nil {
 			if lastErr != nil {
-				return nil, fmt.Errorf("experimental_tcp compat stream unavailable and dataplane provider is unavailable: %w", lastErr)
+				return nil, fmt.Errorf("tix_tcp compat stream unavailable and dataplane provider is unavailable: %w", lastErr)
 			}
-			return nil, fmt.Errorf("experimental_tcp dataplane provider is unavailable")
+			return nil, fmt.Errorf("tix_tcp dataplane provider is unavailable")
 		}
-		status, err := transportImpl.provider.ExperimentalTCPStatus(ctx)
+		status, err := transportImpl.provider.TIXTCPStatus(ctx)
 		if err != nil {
 			return nil, err
 		}
 		if !status.Available || !status.Reinject {
-			return nil, experimentalTCPReinjectUnavailableError(status)
+			return nil, tixTCPReinjectUnavailableError(status)
 		}
 		placement, err := transportImpl.selectCryptoPlacementFromStatus(status, endpoint.Encryption)
 		if err != nil {
 			return nil, err
 		}
-		fullPlaintextKernel := experimentalTCPFullPlaintextKernelDatapathStatus(status)
+		fullPlaintextKernel := tixTCPFullPlaintextKernelDatapathStatus(status)
 		flowID, err := randomFlowID()
 		if err != nil {
 			return nil, err
 		}
-		primerConn, err := dialExperimentalTCPCompatPrimer(ctx, endpoint)
+		primerConn, err := dialTIXTCPCompatPrimer(ctx, endpoint)
 		if err != nil {
-			if experimentalTCPCompatPrimerRequired() || fullPlaintextKernel {
+			if tixTCPCompatPrimerRequired() || fullPlaintextKernel {
 				return nil, err
 			}
 			primerConn = nil
 		}
 		if primerConn == nil && fullPlaintextKernel {
-			return nil, fmt.Errorf("experimental_tcp full plaintext kernel datapath requires compat TCP control primer for endpoint %q", endpoint.Name)
+			return nil, fmt.Errorf("tix_tcp full plaintext kernel datapath requires compat TCP control primer for endpoint %q", endpoint.Name)
 		}
-		flow := dataplane.ExperimentalTCPFlow{
+		flow := dataplane.TIXTCPFlow{
 			ID:              flowID,
 			Peer:            peer.ID,
 			Endpoint:        endpoint.Name,
@@ -293,7 +293,7 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			CryptoPlacement: placement,
 			CreatedAt:       time.Now().UTC(),
 		}
-		if err := transportImpl.provider.InstallExperimentalTCPFlows(ctx, []dataplane.ExperimentalTCPFlow{flow}); err != nil {
+		if err := transportImpl.provider.InstallTIXTCPFlows(ctx, []dataplane.TIXTCPFlow{flow}); err != nil {
 			if primerConn != nil {
 				_ = primerConn.Close()
 			}
@@ -302,12 +302,12 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		var compatControl *stream.Session
 		if primerConn != nil {
 			compatControl = stream.NewSession(primerConn)
-			if err := compatControl.SendPacket(encodeExperimentalTCPCompatControlInit(flowID)); err != nil {
+			if err := compatControl.SendPacket(encodeTIXTCPCompatControlInit(flowID)); err != nil {
 				_ = compatControl.Close()
-				if deleter, ok := transportImpl.provider.(dataplane.ExperimentalTCPFlowDeleter); ok {
-					_ = deleter.DeleteExperimentalTCPFlows(context.Background(), []uint64{flowID})
+				if deleter, ok := transportImpl.provider.(dataplane.TIXTCPFlowDeleter); ok {
+					_ = deleter.DeleteTIXTCPFlows(context.Background(), []uint64{flowID})
 				}
-				return nil, fmt.Errorf("send experimental_tcp compat control init: %w", err)
+				return nil, fmt.Errorf("send tix_tcp compat control init: %w", err)
 			}
 		}
 		subscription, err := transportImpl.subscribeFlow(ctx, flowID)
@@ -315,8 +315,8 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			if compatControl != nil {
 				_ = compatControl.Close()
 			}
-			if deleter, ok := transportImpl.provider.(dataplane.ExperimentalTCPFlowDeleter); ok {
-				_ = deleter.DeleteExperimentalTCPFlows(context.Background(), []uint64{flowID})
+			if deleter, ok := transportImpl.provider.(dataplane.TIXTCPFlowDeleter); ok {
+				_ = deleter.DeleteTIXTCPFlows(context.Background(), []uint64{flowID})
 			}
 			return nil, err
 		}
@@ -330,21 +330,21 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		go session.readCompatControl(context.Background())
 		return session, nil
 	}
-	return nil, fmt.Errorf("peer %q has no dialable experimental_tcp endpoint", peer.ID)
+	return nil, fmt.Errorf("peer %q has no dialable tix_tcp endpoint", peer.ID)
 }
 
-func (transportImpl *Transport) subscribeFlow(ctx context.Context, flowID uint64) (dataplane.ExperimentalTCPSubscription, error) {
-	if subscriber, ok := transportImpl.provider.(dataplane.ExperimentalTCPFlowSubscriber); ok {
-		return subscriber.SubscribeExperimentalTCPFlow(ctx, flowID, experimentalTCPSessionBuffer())
+func (transportImpl *Transport) subscribeFlow(ctx context.Context, flowID uint64) (dataplane.TIXTCPSubscription, error) {
+	if subscriber, ok := transportImpl.provider.(dataplane.TIXTCPFlowSubscriber); ok {
+		return subscriber.SubscribeTIXTCPFlow(ctx, flowID, tixTCPSessionBuffer())
 	}
-	return transportImpl.provider.SubscribeExperimentalTCP(ctx, experimentalTCPSessionBuffer())
+	return transportImpl.provider.SubscribeTIXTCP(ctx, tixTCPSessionBuffer())
 }
 
 func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoint, tlsConf *tls.Config) (transport.Listener, error) {
-	if ep.Transport != transport.ProtocolExperimentalTCP {
-		return nil, fmt.Errorf("endpoint %q transport is %q, want experimental_tcp", ep.Name, ep.Transport)
+	if ep.Transport != transport.ProtocolTIXTCP {
+		return nil, fmt.Errorf("endpoint %q transport is %q, want tix_tcp", ep.Name, ep.Transport)
 	}
-	if experimentalTCPCompatStreamDataEnabled() {
+	if tixTCPCompatStreamDataEnabled() {
 		listener, err := transportImpl.listenCompatStream(ctx, ep)
 		if err != nil {
 			return nil, err
@@ -354,21 +354,21 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 		}
 	}
 	if transportImpl.provider == nil {
-		return nil, fmt.Errorf("experimental_tcp dataplane provider is unavailable")
+		return nil, fmt.Errorf("tix_tcp dataplane provider is unavailable")
 	}
-	status, err := transportImpl.provider.ExperimentalTCPStatus(ctx)
+	status, err := transportImpl.provider.TIXTCPStatus(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !status.Available || !status.Reinject {
-		return nil, experimentalTCPReinjectUnavailableError(status)
+		return nil, tixTCPReinjectUnavailableError(status)
 	}
 	placement, err := transportImpl.selectCryptoPlacementFromStatus(status, ep.Encryption)
 	if err != nil {
 		return nil, err
 	}
-	fullPlaintextKernel := experimentalTCPFullPlaintextKernelDatapathStatus(status)
-	subscription, err := transportImpl.provider.SubscribeExperimentalTCP(ctx, experimentalTCPSessionBuffer())
+	fullPlaintextKernel := tixTCPFullPlaintextKernelDatapathStatus(status)
+	subscription, err := transportImpl.provider.SubscribeTIXTCP(ctx, tixTCPSessionBuffer())
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +383,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 		placement:                   placement,
 		fullPlaintextKernelDatapath: fullPlaintextKernel,
 	}
-	if compatListener, err := listenExperimentalTCPCompatPrimer(ep.Listen); err != nil {
+	if compatListener, err := listenTIXTCPCompatPrimer(ep.Listen); err != nil {
 		_ = subscription.Close()
 		return nil, err
 	} else {
@@ -392,7 +392,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	}
 	if fullPlaintextKernel && listener.compatListener == nil {
 		_ = subscription.Close()
-		return nil, fmt.Errorf("experimental_tcp full plaintext kernel datapath requires compat TCP control listener for endpoint %q", ep.Name)
+		return nil, fmt.Errorf("tix_tcp full plaintext kernel datapath requires compat TCP control listener for endpoint %q", ep.Name)
 	}
 	go listener.readSubscription(ctx)
 	go listener.acceptCompatPrimers()
@@ -400,13 +400,13 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 }
 
 func (transportImpl *Transport) listenCompatStream(ctx context.Context, ep transport.Endpoint) (transport.Listener, error) {
-	compatListener, err := listenExperimentalTCPCompatPrimer(ep.Listen)
+	compatListener, err := listenTIXTCPCompatPrimer(ep.Listen)
 	if err != nil {
 		return nil, err
 	}
 	if compatListener == nil {
 		if transportImpl.provider == nil {
-			return nil, fmt.Errorf("experimental_tcp compat stream requires a supported TCP primer listen address")
+			return nil, fmt.Errorf("tix_tcp compat stream requires a supported TCP primer listen address")
 		}
 		return nil, nil
 	}
@@ -426,9 +426,9 @@ func (transportImpl *Transport) listenCompatStream(ctx context.Context, ep trans
 }
 
 type listener struct {
-	provider                    dataplane.ExperimentalTCPProvider
+	provider                    dataplane.TIXTCPProvider
 	endpoint                    transport.Endpoint
-	subscription                dataplane.ExperimentalTCPSubscription
+	subscription                dataplane.TIXTCPSubscription
 	acceptCh                    chan transport.Session
 	compatAcceptCh              chan transport.Session
 	done                        chan struct{}
@@ -449,17 +449,17 @@ func (transportImpl *Transport) requestedCryptoPlacement() dataplane.CryptoPlace
 }
 
 func (transportImpl *Transport) selectCryptoPlacement(ctx context.Context, encryption string) (dataplane.CryptoPlacement, error) {
-	status, err := transportImpl.provider.ExperimentalTCPStatus(ctx)
+	status, err := transportImpl.provider.TIXTCPStatus(ctx)
 	if err != nil {
 		return "", err
 	}
 	if !status.Available || !status.Reinject {
-		return "", experimentalTCPReinjectUnavailableError(status)
+		return "", tixTCPReinjectUnavailableError(status)
 	}
 	return transportImpl.selectCryptoPlacementFromStatus(status, encryption)
 }
 
-func experimentalTCPReinjectUnavailableError(status dataplane.ExperimentalTCPStatus) error {
+func tixTCPReinjectUnavailableError(status dataplane.TIXTCPStatus) error {
 	reason := strings.TrimSpace(status.FastPathFallback)
 	if reason == "" {
 		for _, note := range status.Notes {
@@ -471,24 +471,24 @@ func experimentalTCPReinjectUnavailableError(status dataplane.ExperimentalTCPSta
 		}
 	}
 	if reason != "" {
-		return fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable: %s", reason)
+		return fmt.Errorf("tix_tcp TC/XDP reinject is unavailable: %s", reason)
 	}
 	provider := strings.TrimSpace(status.Provider)
 	if provider == "" {
 		provider = "none"
 	}
-	return fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable: provider=%s available=%t reinject=%t", provider, status.Available, status.Reinject)
+	return fmt.Errorf("tix_tcp TC/XDP reinject is unavailable: provider=%s available=%t reinject=%t", provider, status.Available, status.Reinject)
 }
 
-func (transportImpl *Transport) selectCryptoPlacementFromStatus(status dataplane.ExperimentalTCPStatus, encryption string) (dataplane.CryptoPlacement, error) {
-	if experimentalTCPPlaintextEncryption(transportImpl.effectiveEncryption(encryption)) {
+func (transportImpl *Transport) selectCryptoPlacementFromStatus(status dataplane.TIXTCPStatus, encryption string) (dataplane.CryptoPlacement, error) {
+	if tixTCPPlaintextEncryption(transportImpl.effectiveEncryption(encryption)) {
 		return dataplane.CryptoPlacementUserspace, nil
 	}
 	return selectCryptoPlacement(transportImpl.requestedCryptoPlacement(), status)
 }
 
-func experimentalTCPFullPlaintextKernelDatapathStatus(status dataplane.ExperimentalTCPStatus) bool {
-	return strings.EqualFold(strings.TrimSpace(status.Provider), experimentalTCPProviderFullPlaintextKernel)
+func tixTCPFullPlaintextKernelDatapathStatus(status dataplane.TIXTCPStatus) bool {
+	return strings.EqualFold(strings.TrimSpace(status.Provider), tixTCPProviderFullPlaintextKernel)
 }
 
 func (transportImpl *Transport) effectiveEncryption(encryption string) string {
@@ -501,7 +501,7 @@ func (transportImpl *Transport) effectiveEncryption(encryption string) string {
 	return ""
 }
 
-func experimentalTCPPlaintextEncryption(encryption string) bool {
+func tixTCPPlaintextEncryption(encryption string) bool {
 	switch strings.ToLower(strings.TrimSpace(encryption)) {
 	case "plaintext", "none", "disabled", "off":
 		return true
@@ -510,7 +510,7 @@ func experimentalTCPPlaintextEncryption(encryption string) bool {
 	}
 }
 
-func selectCryptoPlacement(requested dataplane.CryptoPlacement, status dataplane.ExperimentalTCPStatus) (dataplane.CryptoPlacement, error) {
+func selectCryptoPlacement(requested dataplane.CryptoPlacement, status dataplane.TIXTCPStatus) (dataplane.CryptoPlacement, error) {
 	requested = normalizeCryptoPlacement(requested)
 	switch requested {
 	case dataplane.CryptoPlacementKernel:
@@ -521,7 +521,7 @@ func selectCryptoPlacement(requested dataplane.CryptoPlacement, status dataplane
 		if reason == "" {
 			reason = "kernel crypto provider is not available"
 		}
-		return "", fmt.Errorf("experimental_tcp kernel crypto requested but unavailable: %s", reason)
+		return "", fmt.Errorf("tix_tcp kernel crypto requested but unavailable: %s", reason)
 	case dataplane.CryptoPlacementAuto:
 		preferred := normalizeCryptoPlacement(status.PreferredCrypto)
 		if preferred == dataplane.CryptoPlacementKernel && status.KernelCrypto {
@@ -533,14 +533,14 @@ func selectCryptoPlacement(requested dataplane.CryptoPlacement, status dataplane
 		if status.UserspaceCrypto {
 			return dataplane.CryptoPlacementUserspace, nil
 		}
-		return "", fmt.Errorf("experimental_tcp has no available crypto placement")
+		return "", fmt.Errorf("tix_tcp has no available crypto placement")
 	case dataplane.CryptoPlacementUserspace:
 		if status.UserspaceCrypto {
 			return dataplane.CryptoPlacementUserspace, nil
 		}
-		return "", fmt.Errorf("experimental_tcp userspace crypto is not available")
+		return "", fmt.Errorf("tix_tcp userspace crypto is not available")
 	default:
-		return "", fmt.Errorf("experimental_tcp crypto placement %q is unsupported", requested)
+		return "", fmt.Errorf("tix_tcp crypto placement %q is unsupported", requested)
 	}
 }
 
@@ -562,15 +562,15 @@ func (listener *listener) Accept(ctx context.Context) (transport.Session, error)
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-listener.done:
-		return nil, fmt.Errorf("experimental_tcp listener is closed")
+		return nil, fmt.Errorf("tix_tcp listener is closed")
 	case session := <-listener.compatAcceptCh:
 		if session == nil {
-			return nil, fmt.Errorf("experimental_tcp listener is closed")
+			return nil, fmt.Errorf("tix_tcp listener is closed")
 		}
 		return session, nil
 	case session := <-listener.acceptCh:
 		if session == nil {
-			return nil, fmt.Errorf("experimental_tcp listener is closed")
+			return nil, fmt.Errorf("tix_tcp listener is closed")
 		}
 		return session, nil
 	}
@@ -615,8 +615,8 @@ func (listener *listener) acceptCompatPrimers() {
 				return
 			}
 		}
-		tuneExperimentalTCPCompatConn(conn)
-		if experimentalTCPCompatStreamDataEnabled() {
+		tuneTIXTCPCompatConn(conn)
+		if tixTCPCompatStreamDataEnabled() {
 			select {
 			case <-listener.done:
 				_ = conn.Close()
@@ -630,13 +630,13 @@ func (listener *listener) acceptCompatPrimers() {
 			}
 			continue
 		}
-		control, init, err := acceptExperimentalTCPCompatControl(conn)
+		control, init, err := acceptTIXTCPCompatControl(conn)
 		if err != nil {
 			_ = conn.Close()
 			continue
 		}
-		flow := experimentalTCPCompatInboundFlow(init, conn, listener.endpoint, listener.placement)
-		if err := listener.provider.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{flow}); err != nil {
+		flow := tixTCPCompatInboundFlow(init, conn, listener.endpoint, listener.placement)
+		if err := listener.provider.InstallTIXTCPFlows(context.Background(), []dataplane.TIXTCPFlow{flow}); err != nil {
 			_ = control.Close()
 			continue
 		}
@@ -665,8 +665,8 @@ func (listener *listener) acceptCompatPrimers() {
 			delete(listener.sessions, init.flowID)
 			listener.mu.Unlock()
 			_ = control.Close()
-			if deleter, ok := listener.provider.(dataplane.ExperimentalTCPFlowDeleter); ok {
-				_ = deleter.DeleteExperimentalTCPFlows(context.Background(), []uint64{init.flowID})
+			if deleter, ok := listener.provider.(dataplane.TIXTCPFlowDeleter); ok {
+				_ = deleter.DeleteTIXTCPFlows(context.Background(), []uint64{init.flowID})
 			}
 		}
 	}
@@ -687,7 +687,7 @@ func (listener *listener) forgetSessionWhenClosed(flowID uint64, sess *session) 
 }
 
 func (listener *listener) readSubscription(ctx context.Context) {
-	if batchSubscription, ok := listener.subscription.(dataplane.ExperimentalTCPBatchSubscription); ok {
+	if batchSubscription, ok := listener.subscription.(dataplane.TIXTCPBatchSubscription); ok {
 		listener.readBatchSubscription(ctx, batchSubscription)
 		return
 	}
@@ -703,8 +703,8 @@ func (listener *listener) readSubscription(ctx context.Context) {
 				_ = listener.Close()
 				return
 			}
-			if frame.Direction != dataplane.ExperimentalTCPInbound {
-				releaseExperimentalTCPFrame(frame)
+			if frame.Direction != dataplane.TIXTCPInbound {
+				releaseTIXTCPFrame(frame)
 				continue
 			}
 			listener.dispatch(frame)
@@ -712,7 +712,7 @@ func (listener *listener) readSubscription(ctx context.Context) {
 	}
 }
 
-func (listener *listener) readBatchSubscription(ctx context.Context, subscription dataplane.ExperimentalTCPBatchSubscription) {
+func (listener *listener) readBatchSubscription(ctx context.Context, subscription dataplane.TIXTCPBatchSubscription) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -730,7 +730,7 @@ func (listener *listener) readBatchSubscription(ctx context.Context, subscriptio
 	}
 }
 
-func (listener *listener) dispatch(frame dataplane.ExperimentalTCPFrame) {
+func (listener *listener) dispatch(frame dataplane.TIXTCPFrame) {
 	listener.mu.Lock()
 	sess := listener.sessions[frame.FlowID]
 	if sess != nil && sess.isClosed() {
@@ -740,12 +740,12 @@ func (listener *listener) dispatch(frame dataplane.ExperimentalTCPFrame) {
 	if sess == nil {
 		if frame.Endpoint != "" && frame.Endpoint != listener.endpoint.Name {
 			listener.mu.Unlock()
-			releaseExperimentalTCPFrame(frame)
+			releaseTIXTCPFrame(frame)
 			return
 		}
 		if listener.primerFlowRequired {
 			listener.mu.Unlock()
-			releaseExperimentalTCPFrame(frame)
+			releaseTIXTCPFrame(frame)
 			return
 		}
 		sess = newSession(listener.provider, nil, frame.FlowID, frame.Peer, listener.endpoint.Name, listener.placement, "", "")
@@ -757,7 +757,7 @@ func (listener *listener) dispatch(frame dataplane.ExperimentalTCPFrame) {
 			delete(listener.sessions, frame.FlowID)
 			sess.closeInput()
 			listener.mu.Unlock()
-			releaseExperimentalTCPFrame(frame)
+			releaseTIXTCPFrame(frame)
 			return
 		}
 	}
@@ -765,17 +765,17 @@ func (listener *listener) dispatch(frame dataplane.ExperimentalTCPFrame) {
 	sess.handleFrame(frame)
 }
 
-func (listener *listener) dispatchBatch(frames []dataplane.ExperimentalTCPFrame) {
+func (listener *listener) dispatchBatch(frames []dataplane.TIXTCPFrame) {
 	if len(frames) == 0 {
 		return
 	}
 	var singleSession *session
-	var singleFrames []dataplane.ExperimentalTCPFrame
-	var accepted map[*session][]dataplane.ExperimentalTCPFrame
+	var singleFrames []dataplane.TIXTCPFrame
+	var accepted map[*session][]dataplane.TIXTCPFrame
 	listener.mu.Lock()
 	for _, frame := range frames {
-		if frame.Direction != dataplane.ExperimentalTCPInbound {
-			releaseExperimentalTCPFrame(frame)
+		if frame.Direction != dataplane.TIXTCPInbound {
+			releaseTIXTCPFrame(frame)
 			continue
 		}
 		sess := listener.sessions[frame.FlowID]
@@ -785,11 +785,11 @@ func (listener *listener) dispatchBatch(frames []dataplane.ExperimentalTCPFrame)
 		}
 		if sess == nil {
 			if frame.Endpoint != "" && frame.Endpoint != listener.endpoint.Name {
-				releaseExperimentalTCPFrame(frame)
+				releaseTIXTCPFrame(frame)
 				continue
 			}
 			if listener.primerFlowRequired {
-				releaseExperimentalTCPFrame(frame)
+				releaseTIXTCPFrame(frame)
 				continue
 			}
 			sess = newSession(listener.provider, nil, frame.FlowID, frame.Peer, listener.endpoint.Name, listener.placement, "", "")
@@ -800,7 +800,7 @@ func (listener *listener) dispatchBatch(frames []dataplane.ExperimentalTCPFrame)
 			default:
 				delete(listener.sessions, frame.FlowID)
 				sess.closeInput()
-				releaseExperimentalTCPFrame(frame)
+				releaseTIXTCPFrame(frame)
 				continue
 			}
 		}
@@ -817,7 +817,7 @@ func (listener *listener) dispatchBatch(frames []dataplane.ExperimentalTCPFrame)
 			singleFrames = append(singleFrames, frame)
 			continue
 		}
-		accepted = map[*session][]dataplane.ExperimentalTCPFrame{
+		accepted = map[*session][]dataplane.TIXTCPFrame{
 			singleSession: singleFrames,
 			sess:          {frame},
 		}
@@ -837,16 +837,16 @@ func (listener *listener) dispatchBatch(frames []dataplane.ExperimentalTCPFrame)
 }
 
 type session struct {
-	provider                    dataplane.ExperimentalTCPProvider
-	subscription                dataplane.ExperimentalTCPSubscription
+	provider                    dataplane.TIXTCPProvider
+	subscription                dataplane.TIXTCPSubscription
 	flowID                      uint64
 	peer                        core.IXID
 	peerIdentity                transport.PeerIdentity
 	endpoint                    core.EndpointID
 	localAddress                string
 	remoteAddress               string
-	in                          chan experimentalTCPPacketBatch
-	recvPending                 experimentalTCPPacketBatch
+	in                          chan tixTCPPacketBatch
+	recvPending                 tixTCPPacketBatch
 	closeOnce                   sync.Once
 	closeInputOnce              sync.Once
 	sendMu                      sync.Mutex
@@ -878,7 +878,7 @@ type session struct {
 	compatControl               *stream.Session
 	compatPriority              chan []byte
 	compatPriorityWaited        atomic.Bool
-	sendFrames                  []dataplane.ExperimentalTCPFrame
+	sendFrames                  []dataplane.TIXTCPFrame
 	sendExpandedPackets         [][]byte
 	reassemblyMaxAssemblies     int
 	configuredFragmentPayload   int
@@ -902,7 +902,7 @@ type compatStreamSession struct {
 	endpoint     core.EndpointID
 }
 
-type experimentalTCPCompatControlInit struct {
+type tixTCPCompatControlInit struct {
 	flowID     uint64
 	sourcePort uint16
 }
@@ -914,14 +914,14 @@ type fragmentAssembly struct {
 	totalLen  int
 }
 
-type experimentalTCPPacketBatch struct {
+type tixTCPPacketBatch struct {
 	packets  [][]byte
 	releases []func()
-	owner    *experimentalTCPPacketBatch
+	owner    *tixTCPPacketBatch
 }
 
-func takeExperimentalTCPPacketBatch(size int) experimentalTCPPacketBatch {
-	owner := experimentalTCPPacketBatchPool.Get().(*experimentalTCPPacketBatch)
+func takeTIXTCPPacketBatch(size int) tixTCPPacketBatch {
+	owner := tixTCPPacketBatchPool.Get().(*tixTCPPacketBatch)
 	if cap(owner.packets) < size {
 		owner.packets = make([][]byte, 0, size)
 	} else {
@@ -929,13 +929,13 @@ func takeExperimentalTCPPacketBatch(size int) experimentalTCPPacketBatch {
 	}
 	owner.releases = nil
 	owner.owner = owner
-	return experimentalTCPPacketBatch{
+	return tixTCPPacketBatch{
 		packets: owner.packets,
 		owner:   owner,
 	}
 }
 
-func syncExperimentalTCPPacketBatchOwner(batch *experimentalTCPPacketBatch) {
+func syncTIXTCPPacketBatchOwner(batch *tixTCPPacketBatch) {
 	if batch == nil || batch.owner == nil {
 		return
 	}
@@ -944,29 +944,29 @@ func syncExperimentalTCPPacketBatchOwner(batch *experimentalTCPPacketBatch) {
 	batch.owner.owner = batch.owner
 }
 
-func putExperimentalTCPPacketBatch(owner *experimentalTCPPacketBatch) {
+func putTIXTCPPacketBatch(owner *tixTCPPacketBatch) {
 	if owner == nil {
 		return
 	}
 	clear(owner.packets)
 	clear(owner.releases)
 	if cap(owner.packets) > 4096 || cap(owner.releases) > 4096 {
-		*owner = experimentalTCPPacketBatch{}
+		*owner = tixTCPPacketBatch{}
 		return
 	}
 	owner.packets = owner.packets[:0]
 	owner.releases = nil
 	owner.owner = nil
-	experimentalTCPPacketBatchPool.Put(owner)
+	tixTCPPacketBatchPool.Put(owner)
 }
 
-func releaseExperimentalTCPPacketBatchOwner(batch experimentalTCPPacketBatch) {
+func releaseTIXTCPPacketBatchOwner(batch tixTCPPacketBatch) {
 	if batch.owner != nil {
-		putExperimentalTCPPacketBatch(batch.owner)
+		putTIXTCPPacketBatch(batch.owner)
 	}
 }
 
-func experimentalTCPPacketBatchReleases(batch *experimentalTCPPacketBatch, prefix int, size int) []func() {
+func tixTCPPacketBatchReleases(batch *tixTCPPacketBatch, prefix int, size int) []func() {
 	if prefix < 0 {
 		prefix = 0
 	}
@@ -984,7 +984,7 @@ func experimentalTCPPacketBatchReleases(batch *experimentalTCPPacketBatch, prefi
 	return make([]func(), prefix, size)
 }
 
-func newSession(provider dataplane.ExperimentalTCPProvider, subscription dataplane.ExperimentalTCPSubscription, flowID uint64, peer core.IXID, endpoint core.EndpointID, placement dataplane.CryptoPlacement, wireAddresses ...string) *session {
+func newSession(provider dataplane.TIXTCPProvider, subscription dataplane.TIXTCPSubscription, flowID uint64, peer core.IXID, endpoint core.EndpointID, placement dataplane.CryptoPlacement, wireAddresses ...string) *session {
 	placement = normalizeCryptoPlacement(placement)
 	var localAddress string
 	var remoteAddress string
@@ -1002,11 +1002,11 @@ func newSession(provider dataplane.ExperimentalTCPProvider, subscription datapla
 		endpoint:                  endpoint,
 		localAddress:              localAddress,
 		remoteAddress:             remoteAddress,
-		in:                        make(chan experimentalTCPPacketBatch, experimentalTCPSessionBuffer()),
+		in:                        make(chan tixTCPPacketBatch, tixTCPSessionBuffer()),
 		closed:                    make(chan struct{}),
 		cryptoPlacement:           placement,
-		reassemblyMaxAssemblies:   experimentalTCPReassemblyMaxAssemblies(),
-		configuredFragmentPayload: experimentalTCPFragmentPayloadSizeForPlacement(placement, false),
+		reassemblyMaxAssemblies:   tixTCPReassemblyMaxAssemblies(),
+		configuredFragmentPayload: tixTCPFragmentPayloadSizeForPlacement(placement, false),
 	}
 }
 
@@ -1014,14 +1014,14 @@ func (session *session) enableCompatPriority() {
 	if session == nil || session.compatPriority != nil {
 		return
 	}
-	session.compatPriority = make(chan []byte, experimentalTCPCompatPriorityBuffer)
+	session.compatPriority = make(chan []byte, tixTCPCompatPriorityBuffer)
 }
 
 func (session *session) readSubscription(ctx context.Context) {
 	if session.subscription == nil {
 		return
 	}
-	if batchSubscription, ok := session.subscription.(dataplane.ExperimentalTCPBatchSubscription); ok {
+	if batchSubscription, ok := session.subscription.(dataplane.TIXTCPBatchSubscription); ok {
 		session.readBatchSubscription(ctx, batchSubscription)
 		return
 	}
@@ -1036,8 +1036,8 @@ func (session *session) readSubscription(ctx context.Context) {
 			if !ok {
 				return
 			}
-			if frame.Direction != dataplane.ExperimentalTCPInbound || frame.FlowID != session.flowID {
-				releaseExperimentalTCPFrame(frame)
+			if frame.Direction != dataplane.TIXTCPInbound || frame.FlowID != session.flowID {
+				releaseTIXTCPFrame(frame)
 				continue
 			}
 			session.handleFrame(frame)
@@ -1062,7 +1062,7 @@ func (session *session) readCompatControl(ctx context.Context) {
 			_ = session.Close()
 			return
 		}
-		if !experimentalTCPCompatControlEligible(packet) {
+		if !tixTCPCompatControlEligible(packet) {
 			continue
 		}
 		if session.enqueueCompatPriority(packet) {
@@ -1072,7 +1072,7 @@ func (session *session) readCompatControl(ctx context.Context) {
 	}
 }
 
-func (session *session) readBatchSubscription(ctx context.Context, subscription dataplane.ExperimentalTCPBatchSubscription) {
+func (session *session) readBatchSubscription(ctx context.Context, subscription dataplane.TIXTCPBatchSubscription) {
 	defer session.closeInput()
 	for {
 		select {
@@ -1084,25 +1084,25 @@ func (session *session) readBatchSubscription(ctx context.Context, subscription 
 			if !ok {
 				return
 			}
-			var filtered []dataplane.ExperimentalTCPFrame
+			var filtered []dataplane.TIXTCPFrame
 			for i, frame := range frames {
-				if frame.Direction == dataplane.ExperimentalTCPInbound && frame.FlowID == session.flowID {
+				if frame.Direction == dataplane.TIXTCPInbound && frame.FlowID == session.flowID {
 					if filtered != nil {
 						filtered = append(filtered, frame)
 					}
 					continue
 				}
 				if filtered == nil {
-					filtered = make([]dataplane.ExperimentalTCPFrame, 0, len(frames))
+					filtered = make([]dataplane.TIXTCPFrame, 0, len(frames))
 					for _, previous := range frames[:i] {
-						if previous.Direction == dataplane.ExperimentalTCPInbound && previous.FlowID == session.flowID {
+						if previous.Direction == dataplane.TIXTCPInbound && previous.FlowID == session.flowID {
 							filtered = append(filtered, previous)
 						} else {
-							releaseExperimentalTCPFrame(previous)
+							releaseTIXTCPFrame(previous)
 						}
 					}
 				}
-				releaseExperimentalTCPFrame(frame)
+				releaseTIXTCPFrame(frame)
 			}
 			if filtered == nil {
 				session.handleFrames(frames)
@@ -1114,7 +1114,7 @@ func (session *session) readBatchSubscription(ctx context.Context, subscription 
 }
 
 func (session *session) SendPacket(pkt []byte) error {
-	if session.compatControl != nil && experimentalTCPCompatControlEligible(pkt) {
+	if session.compatControl != nil && tixTCPCompatControlEligible(pkt) {
 		if err := session.compatControl.SendPacket(pkt); err != nil {
 			return err
 		}
@@ -1123,7 +1123,7 @@ func (session *session) SendPacket(pkt []byte) error {
 		return nil
 	}
 	if session.fullPlaintextKernelDatapath {
-		return fmt.Errorf("experimental_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
+		return fmt.Errorf("tix_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
 	}
 	return session.SendPackets([][]byte{pkt})
 }
@@ -1134,16 +1134,16 @@ func (session *session) SendPackets(pkts [][]byte) error {
 	}
 	select {
 	case <-session.closed:
-		return fmt.Errorf("experimental_tcp session is closed")
+		return fmt.Errorf("tix_tcp session is closed")
 	default:
 	}
 	if session.fullPlaintextKernelDatapath {
 		if session.compatControl == nil {
-			return fmt.Errorf("experimental_tcp full plaintext kernel datapath requires compat TCP control")
+			return fmt.Errorf("tix_tcp full plaintext kernel datapath requires compat TCP control")
 		}
 		for _, pkt := range pkts {
-			if !experimentalTCPCompatControlEligible(pkt) {
-				return fmt.Errorf("experimental_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
+			if !tixTCPCompatControlEligible(pkt) {
+				return fmt.Errorf("tix_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
 			}
 		}
 		session.sendMu.Lock()
@@ -1163,7 +1163,7 @@ func (session *session) SendPackets(pkts [][]byte) error {
 	defer session.sendMu.Unlock()
 	select {
 	case <-session.closed:
-		return fmt.Errorf("experimental_tcp session is closed")
+		return fmt.Errorf("tix_tcp session is closed")
 	default:
 	}
 	payloadSize := session.fragmentPayloadSize()
@@ -1179,7 +1179,7 @@ func (session *session) SendPackets(pkts [][]byte) error {
 	}
 	sealBeforeFragment := session.kernelCryptoSealBeforeFragment()
 	if sealBeforeFragment {
-		if _, ok := session.provider.(dataplane.ExperimentalTCPBatchProvider); !ok {
+		if _, ok := session.provider.(dataplane.TIXTCPBatchProvider); !ok {
 			sealBeforeFragment = false
 		}
 	}
@@ -1191,19 +1191,19 @@ func (session *session) SendPackets(pkts [][]byte) error {
 	totalFragments := 0
 	for _, pkt := range pkts {
 		count := session.wireFragmentCount(len(pkt), payloadSize, sealBeforeFragmentPayloadSize, sealBeforeFragment, sealBeforeFragmentMax)
-		if count > experimentalTCPMaxFragments {
-			return fmt.Errorf("experimental_tcp packet size %d requires %d fragments, max %d", len(pkt), count, experimentalTCPMaxFragments)
+		if count > tixTCPMaxFragments {
+			return fmt.Errorf("tix_tcp packet size %d requires %d fragments, max %d", len(pkt), count, tixTCPMaxFragments)
 		}
 		totalFragments += count
 	}
 	if cap(session.sendFrames) < totalFragments {
-		session.sendFrames = make([]dataplane.ExperimentalTCPFrame, 0, totalFragments)
+		session.sendFrames = make([]dataplane.TIXTCPFrame, 0, totalFragments)
 	} else {
 		session.sendFrames = session.sendFrames[:0]
 	}
 	frames := session.sendFrames
 	defer func() {
-		clearExperimentalTCPFrames(frames)
+		clearTIXTCPFrames(frames)
 		session.sendFrames = frames[:0]
 	}()
 	packetBytes := uint64(0)
@@ -1214,15 +1214,15 @@ func (session *session) SendPackets(pkts [][]byte) error {
 		count := session.wireFragmentCount(len(pkt), payloadSize, sealBeforeFragmentPayloadSize, sealBeforeFragment, sealBeforeFragmentMax)
 		if session.shouldSealBeforeFragment(len(pkt), payloadSize, sealBeforeFragment, sealBeforeFragmentMax) {
 			baseSeq := session.sendSeq.Add(uint64(count)) - uint64(count) + 1
-			frames = append(frames, dataplane.ExperimentalTCPFrame{
+			frames = append(frames, dataplane.TIXTCPFrame{
 				FlowID:              session.flowID,
-				Direction:           dataplane.ExperimentalTCPOutbound,
+				Direction:           dataplane.TIXTCPOutbound,
 				Peer:                session.peer,
 				Endpoint:            session.endpoint,
 				Sequence:            baseSeq,
 				FragmentPayloadSize: sealBeforeFragmentPayloadSize,
 				Payload:             pkt,
-				InnerIPv4:           experimentalTCPInnerIPv4Eligible(pkt),
+				InnerIPv4:           tixTCPInnerIPv4Eligible(pkt),
 				CryptoSuite:         session.cryptoSuite,
 				CryptoPlacement:     placement,
 			})
@@ -1234,7 +1234,7 @@ func (session *session) SendPackets(pkts [][]byte) error {
 			}
 			continue
 		}
-		innerIPv4 := count == 1 && experimentalTCPInnerIPv4Eligible(pkt)
+		innerIPv4 := count == 1 && tixTCPInnerIPv4Eligible(pkt)
 		lastSeq := session.sendSeq.Add(uint64(count))
 		baseSeq := lastSeq - uint64(count) + 1
 		for i := 0; i < count; i++ {
@@ -1249,9 +1249,9 @@ func (session *session) SendPackets(pkts [][]byte) error {
 				fragmentIndex = uint16(i)
 				fragmentCount = uint16(count)
 			}
-			frames = append(frames, dataplane.ExperimentalTCPFrame{
+			frames = append(frames, dataplane.TIXTCPFrame{
 				FlowID:          session.flowID,
-				Direction:       dataplane.ExperimentalTCPOutbound,
+				Direction:       dataplane.TIXTCPOutbound,
 				Peer:            session.peer,
 				Endpoint:        session.endpoint,
 				Sequence:        baseSeq + uint64(i),
@@ -1270,13 +1270,13 @@ func (session *session) SendPackets(pkts [][]byte) error {
 			fragments += uint64(count)
 		}
 	}
-	if batch, ok := session.provider.(dataplane.ExperimentalTCPBatchProvider); ok {
-		if err := batch.SubmitExperimentalTCPFrames(context.Background(), frames); err != nil {
+	if batch, ok := session.provider.(dataplane.TIXTCPBatchProvider); ok {
+		if err := batch.SubmitTIXTCPFrames(context.Background(), frames); err != nil {
 			return err
 		}
 	} else {
 		for _, frame := range frames {
-			if err := session.provider.SubmitExperimentalTCPFrame(context.Background(), frame); err != nil {
+			if err := session.provider.SubmitTIXTCPFrame(context.Background(), frame); err != nil {
 				return err
 			}
 		}
@@ -1295,13 +1295,13 @@ func (session *session) SendPackets(pkts [][]byte) error {
 }
 
 func (session *session) expandDataSessionTIXBPackets(pkts [][]byte) ([][]byte, uint64, uint64) {
-	if session == nil || session.cryptoOffloaded || !experimentalTCPTIXBExpandEnabled() {
+	if session == nil || session.cryptoOffloaded || !tixTCPTIXBExpandEnabled() {
 		return pkts, 0, 0
 	}
 	var expandedPackets uint64
 	var expandedItems uint64
 	for i, pkt := range pkts {
-		items, ok := decodeExperimentalTCPTIXBInto(pkt, nil)
+		items, ok := decodeTIXTCPTIXBInto(pkt, nil)
 		if !ok {
 			continue
 		}
@@ -1317,7 +1317,7 @@ func (session *session) expandDataSessionTIXBPackets(pkts [][]byte) ([][]byte, u
 		expandedPackets++
 		expandedItems += uint64(len(items))
 		for _, candidate := range pkts[i+1:] {
-			items, ok = decodeExperimentalTCPTIXBInto(candidate, nil)
+			items, ok = decodeTIXTCPTIXBInto(candidate, nil)
 			if !ok {
 				out = append(out, candidate)
 				continue
@@ -1344,29 +1344,29 @@ func (session *session) clearExpandedPackets() {
 	session.sendExpandedPackets = session.sendExpandedPackets[:0]
 }
 
-func experimentalTCPTIXBExpandEnabled() bool {
+func tixTCPTIXBExpandEnabled() bool {
 	return envTruthy(
-		"TRUSTIX_EXPERIMENTAL_TCP_EXPAND_TIXB",
-		"TRUSTIX_EXPERIMENTAL_TCP_TIXB_EXPAND",
+		"TRUSTIX_TIX_TCP_EXPAND_TIXB",
+		"TRUSTIX_TIX_TCP_TIXB_EXPAND",
 	)
 }
 
-func decodeExperimentalTCPTIXBInto(packet []byte, dst [][]byte) ([][]byte, bool) {
-	if len(packet) < experimentalTCPTIXBHeaderLen {
+func decodeTIXTCPTIXBInto(packet []byte, dst [][]byte) ([][]byte, bool) {
+	if len(packet) < tixTCPTIXBHeaderLen {
 		return nil, false
 	}
-	if packet[0] != experimentalTCPTIXBMagic[0] ||
-		packet[1] != experimentalTCPTIXBMagic[1] ||
-		packet[2] != experimentalTCPTIXBMagic[2] ||
-		packet[3] != experimentalTCPTIXBMagic[3] ||
-		packet[4] != experimentalTCPTIXBVersion {
+	if packet[0] != tixTCPTIXBMagic[0] ||
+		packet[1] != tixTCPTIXBMagic[1] ||
+		packet[2] != tixTCPTIXBMagic[2] ||
+		packet[3] != tixTCPTIXBMagic[3] ||
+		packet[4] != tixTCPTIXBVersion {
 		return nil, false
 	}
 	count := int(binary.BigEndian.Uint16(packet[6:8]))
-	if count <= 0 || count > experimentalTCPTIXBMaxPackets {
+	if count <= 0 || count > tixTCPTIXBMaxPackets {
 		return nil, false
 	}
-	offset := experimentalTCPTIXBHeaderLen
+	offset := tixTCPTIXBHeaderLen
 	var items [][]byte
 	if cap(dst) < count {
 		items = make([][]byte, 0, count)
@@ -1374,11 +1374,11 @@ func decodeExperimentalTCPTIXBInto(packet []byte, dst [][]byte) ([][]byte, bool)
 		items = dst[:0]
 	}
 	for i := 0; i < count; i++ {
-		if len(packet)-offset < experimentalTCPTIXBItemHeaderLen {
+		if len(packet)-offset < tixTCPTIXBItemHeaderLen {
 			return nil, false
 		}
-		size := int(binary.BigEndian.Uint16(packet[offset : offset+experimentalTCPTIXBItemHeaderLen]))
-		offset += experimentalTCPTIXBItemHeaderLen
+		size := int(binary.BigEndian.Uint16(packet[offset : offset+tixTCPTIXBItemHeaderLen]))
+		offset += tixTCPTIXBItemHeaderLen
 		if size <= 0 || len(packet)-offset < size {
 			return nil, false
 		}
@@ -1391,7 +1391,7 @@ func decodeExperimentalTCPTIXBInto(packet []byte, dst [][]byte) ([][]byte, bool)
 	return items, true
 }
 
-func experimentalTCPInnerIPv4Eligible(packet []byte) bool {
+func tixTCPInnerIPv4Eligible(packet []byte) bool {
 	if len(packet) < 20 || len(packet) > MaxPayload {
 		return false
 	}
@@ -1410,7 +1410,7 @@ func (session *session) kernelCryptoSealBeforeFragment() bool {
 	if session == nil || !session.cryptoOffloaded || session.cryptoPlacement != dataplane.CryptoPlacementKernel {
 		return false
 	}
-	return experimentalTCPKernelSealBeforeFragmentEnabled()
+	return tixTCPKernelSealBeforeFragmentEnabled()
 }
 
 func (session *session) sealBeforeFragmentMax(enabled bool) int {
@@ -1419,7 +1419,7 @@ func (session *session) sealBeforeFragmentMax(enabled bool) int {
 	}
 	configured := session.configuredFragmentPayload
 	if configured == 0 {
-		configured = experimentalTCPFragmentPayloadSizeForPlacement(session.cryptoPlacement, session.cryptoOffloaded)
+		configured = tixTCPFragmentPayloadSizeForPlacement(session.cryptoPlacement, session.cryptoOffloaded)
 	}
 	key := fragmentPayloadCacheKey{
 		placement:  session.cryptoPlacement,
@@ -1429,9 +1429,9 @@ func (session *session) sealBeforeFragmentMax(enabled bool) int {
 	if session.sealBeforeMaxCached > 0 && session.sealBeforeMaxCacheKey == key {
 		return session.sealBeforeMaxCached
 	}
-	maxPlain := experimentalTCPKernelSealBeforeMax
-	if sizer, ok := session.provider.(dataplane.ExperimentalTCPSealBeforeFragmentSizer); ok {
-		if maxSize, err := sizer.ExperimentalTCPSealBeforeFragmentMax(context.Background(), session.cryptoPlacement); err == nil && maxSize > 0 && maxSize < maxPlain {
+	maxPlain := tixTCPKernelSealBeforeMax
+	if sizer, ok := session.provider.(dataplane.TIXTCPSealBeforeFragmentSizer); ok {
+		if maxSize, err := sizer.TIXTCPSealBeforeFragmentMax(context.Background(), session.cryptoPlacement); err == nil && maxSize > 0 && maxSize < maxPlain {
 			maxPlain = maxSize
 		}
 	}
@@ -1448,7 +1448,7 @@ func (session *session) shouldSealBeforeFragment(packetLen int, payloadSize int,
 		return false
 	}
 	if maxPlain <= 0 {
-		maxPlain = experimentalTCPKernelSealBeforeMax
+		maxPlain = tixTCPKernelSealBeforeMax
 	}
 	return packetLen > 0 && packetLen <= maxPlain
 }
@@ -1457,14 +1457,14 @@ func (session *session) sealBeforeFragmentPayloadSize(fallback int) int {
 	if fallback < 1 {
 		fallback = 1
 	}
-	if !experimentalTCPKernelSealBeforeFragmentWireMaxEnabled() {
+	if !tixTCPKernelSealBeforeFragmentWireMaxEnabled() {
 		return fallback
 	}
-	sizer, ok := session.provider.(dataplane.ExperimentalTCPPayloadSizer)
+	sizer, ok := session.provider.(dataplane.TIXTCPPayloadSizer)
 	if !ok {
 		return fallback
 	}
-	maxSize, err := sizer.ExperimentalTCPPayloadMax(context.Background(), dataplane.CryptoPlacementUserspace, false)
+	maxSize, err := sizer.TIXTCPPayloadMax(context.Background(), dataplane.CryptoPlacementUserspace, false)
 	if err != nil || maxSize < 1 {
 		return fallback
 	}
@@ -1473,7 +1473,7 @@ func (session *session) sealBeforeFragmentPayloadSize(fallback int) int {
 
 func (session *session) wireFragmentCount(packetLen int, payloadSize int, sealBeforeFragmentPayloadSize int, sealBeforeFragment bool, sealBeforeFragmentMax int) int {
 	if session.shouldSealBeforeFragment(packetLen, payloadSize, sealBeforeFragment, sealBeforeFragmentMax) {
-		return fragmentCountForSize(packetLen+experimentalTCPSecureFrameOverhead, sealBeforeFragmentPayloadSize)
+		return fragmentCountForSize(packetLen+tixTCPSecureFrameOverhead, sealBeforeFragmentPayloadSize)
 	}
 	return fragmentCountForSize(packetLen, payloadSize)
 }
@@ -1511,17 +1511,17 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 	if max <= 0 {
 		max = 1
 	}
-	coalesceDelay := experimentalTCPRecvCoalesceDelay()
-	drainLimit := experimentalTCPRecvDrainBatchLimit()
+	coalesceDelay := tixTCPRecvCoalesceDelay()
+	drainLimit := tixTCPRecvDrainBatchLimit()
 	var packets [][]byte
 	var releases []func()
-	var releaseBatch experimentalTCPPacketBatch
-	var borrowedBatches []*experimentalTCPPacketBatch
-	appendBatch := func(batch experimentalTCPPacketBatch, limit int) (experimentalTCPPacketBatch, bool) {
-		batch = trimExperimentalTCPPacketBatch(batch)
+	var releaseBatch tixTCPPacketBatch
+	var borrowedBatches []*tixTCPPacketBatch
+	appendBatch := func(batch tixTCPPacketBatch, limit int) (tixTCPPacketBatch, bool) {
+		batch = trimTIXTCPPacketBatch(batch)
 		if len(batch.packets) == 0 {
-			releaseExperimentalTCPPacketBatchOwner(batch)
-			return experimentalTCPPacketBatch{}, false
+			releaseTIXTCPPacketBatchOwner(batch)
+			return tixTCPPacketBatch{}, false
 		}
 		if limit > len(batch.packets) {
 			limit = len(batch.packets)
@@ -1564,13 +1564,13 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 			if retainOwnerForRelease {
 				borrowedBatches = append(borrowedBatches, batch.owner)
 			} else if !usedBatchDirect {
-				releaseExperimentalTCPPacketBatchOwner(batch)
+				releaseTIXTCPPacketBatchOwner(batch)
 			}
-			return experimentalTCPPacketBatch{}, false
+			return tixTCPPacketBatch{}, false
 		}
-		remaining := experimentalTCPPacketBatch{packets: batch.packets[limit:]}
+		remaining := tixTCPPacketBatch{packets: batch.packets[limit:]}
 		if len(batch.releases) > 0 {
-			remaining.releases = experimentalTCPReleaseSuffix(batch.releases, limit)
+			remaining.releases = tixTCPReleaseSuffix(batch.releases, limit)
 		}
 		remaining.owner = batch.owner
 		return remaining, true
@@ -1584,7 +1584,7 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 		session.recvPending = remaining
 		if len(packets) > 0 || hasRemaining {
 			session.recordReceivedPackets(packets)
-			return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+			return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 		}
 	}
 	for len(packets) < max {
@@ -1592,29 +1592,29 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 		case <-session.closed:
 			if len(packets) > 0 {
 				session.recordReceivedPackets(packets)
-				return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+				return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 			}
-			return nil, nil, fmt.Errorf("experimental_tcp session is closed")
+			return nil, nil, fmt.Errorf("tix_tcp session is closed")
 		case pkt, ok := <-session.compatPriority:
 			if !ok || len(pkt) == 0 {
 				continue
 			}
 			packets = append(packets, pkt)
 			session.recordReceivedPackets(packets)
-			return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+			return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 		case batch, ok := <-session.in:
 			if !ok {
 				if len(packets) > 0 {
 					session.recordReceivedPackets(packets)
-					return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+					return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 				}
-				return nil, nil, fmt.Errorf("experimental_tcp session is closed")
+				return nil, nil, fmt.Errorf("tix_tcp session is closed")
 			}
 			remaining, hasRemaining := appendBatch(batch, max-len(packets))
 			if hasRemaining {
 				session.recvPending = remaining
 				session.recordReceivedPackets(packets)
-				return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+				return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 			}
 			if len(packets) == 0 {
 				continue
@@ -1626,13 +1626,13 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 					case batch, ok := <-session.in:
 						if !ok {
 							session.recordReceivedPackets(packets)
-							return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+							return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 						}
 						remaining, hasRemaining := appendBatch(batch, max-len(packets))
 						if hasRemaining {
 							session.recvPending = remaining
 							session.recordReceivedPackets(packets)
-							return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+							return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 						}
 					default:
 						drained = drainLimit
@@ -1640,57 +1640,57 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 				}
 				if coalesceDelay <= 0 || len(packets) >= max {
 					session.recordReceivedPackets(packets)
-					return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+					return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 				}
-				if hook := experimentalTCPRecvCoalesceWaitHook; hook != nil {
+				if hook := tixTCPRecvCoalesceWaitHook; hook != nil {
 					hook()
 				}
 				timer := time.NewTimer(coalesceDelay)
 				select {
 				case <-session.closed:
-					stopExperimentalTCPTimer(timer)
+					stopTIXTCPTimer(timer)
 					session.recordReceivedPackets(packets)
-					return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+					return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 				case pkt, ok := <-session.compatPriority:
-					stopExperimentalTCPTimer(timer)
+					stopTIXTCPTimer(timer)
 					if !ok || len(pkt) == 0 {
 						session.recordReceivedPackets(packets)
-						return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+						return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 					}
 					packets = append(packets, pkt)
 					session.recordReceivedPackets(packets)
-					return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+					return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 				case batch, ok := <-session.in:
-					stopExperimentalTCPTimer(timer)
+					stopTIXTCPTimer(timer)
 					if !ok {
 						session.recordReceivedPackets(packets)
-						return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+						return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 					}
 					remaining, hasRemaining := appendBatch(batch, max-len(packets))
 					if hasRemaining {
 						session.recvPending = remaining
 						session.recordReceivedPackets(packets)
-						return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+						return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 					}
 				case <-timer.C:
 					session.recordReceivedPackets(packets)
-					return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+					return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 				}
 				continue
 			}
 			select {
 			case <-session.closed:
-				return nil, nil, fmt.Errorf("experimental_tcp session is closed")
+				return nil, nil, fmt.Errorf("tix_tcp session is closed")
 			case pkt, ok := <-session.compatPriority:
 				if !ok || len(pkt) == 0 {
 					continue
 				}
 				packets = append(packets, pkt)
 				session.recordReceivedPackets(packets)
-				return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+				return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 			case batch, ok := <-session.in:
 				if !ok {
-					return nil, nil, fmt.Errorf("experimental_tcp session is closed")
+					return nil, nil, fmt.Errorf("tix_tcp session is closed")
 				}
 				remaining, hasRemaining := appendBatch(batch, max)
 				if hasRemaining {
@@ -1703,10 +1703,10 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 		}
 	}
 	session.recordReceivedPackets(packets)
-	return packets, experimentalTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
+	return packets, tixTCPReleaseFunc(releaseBatch, releases, borrowedBatches), nil
 }
 
-func stopExperimentalTCPTimer(timer *time.Timer) {
+func stopTIXTCPTimer(timer *time.Timer) {
 	if timer == nil || timer.Stop() {
 		return
 	}
@@ -1716,7 +1716,7 @@ func stopExperimentalTCPTimer(timer *time.Timer) {
 	}
 }
 
-func trimExperimentalTCPPacketBatch(batch experimentalTCPPacketBatch) experimentalTCPPacketBatch {
+func trimTIXTCPPacketBatch(batch tixTCPPacketBatch) tixTCPPacketBatch {
 	for len(batch.packets) > 0 && batch.packets[0] == nil {
 		batch.packets = batch.packets[1:]
 		if len(batch.releases) > 0 {
@@ -1732,7 +1732,7 @@ func trimExperimentalTCPPacketBatch(batch experimentalTCPPacketBatch) experiment
 	return batch
 }
 
-func experimentalTCPReleaseSuffix(releases []func(), offset int) []func() {
+func tixTCPReleaseSuffix(releases []func(), offset int) []func() {
 	if len(releases) == 0 || offset >= len(releases) {
 		return nil
 	}
@@ -1742,7 +1742,7 @@ func experimentalTCPReleaseSuffix(releases []func(), offset int) []func() {
 	return releases[offset:]
 }
 
-func experimentalTCPReleaseFunc(batch experimentalTCPPacketBatch, releases []func(), owners []*experimentalTCPPacketBatch) func() {
+func tixTCPReleaseFunc(batch tixTCPPacketBatch, releases []func(), owners []*tixTCPPacketBatch) func() {
 	if len(batch.releases) == 0 && len(releases) == 0 && len(owners) == 0 {
 		return nil
 	}
@@ -1758,7 +1758,7 @@ func experimentalTCPReleaseFunc(batch experimentalTCPPacketBatch, releases []fun
 			}
 		}
 		for _, owner := range owners {
-			putExperimentalTCPPacketBatch(owner)
+			putTIXTCPPacketBatch(owner)
 		}
 	}
 }
@@ -1779,7 +1779,7 @@ func (session *session) KernelDatapathSessionInfo() (transport.KernelDatapathSes
 	stats := session.Stats()
 	info := transport.KernelDatapathSessionInfo{
 		FlowID:              session.flowID,
-		Protocol:            transport.ProtocolExperimentalTCP,
+		Protocol:            transport.ProtocolTIXTCP,
 		Peer:                session.peer,
 		Endpoint:            session.endpoint,
 		LocalAddress:        session.localAddress,
@@ -1802,14 +1802,14 @@ func (session *session) EnableCryptoOffload(spec transport.CryptoOffloadSpec) er
 	if session.cryptoPlacement != dataplane.CryptoPlacementKernel {
 		return transport.ErrCryptoOffloadUnavailable
 	}
-	installer, ok := session.provider.(dataplane.ExperimentalTCPCryptoInstaller)
+	installer, ok := session.provider.(dataplane.TIXTCPCryptoInstaller)
 	if !ok {
-		return fmt.Errorf("experimental_tcp kernel crypto requested but provider does not implement crypto installer")
+		return fmt.Errorf("tix_tcp kernel crypto requested but provider does not implement crypto installer")
 	}
 	if spec.WireFormat != transport.CryptoWireFormatTrustIXSecureDataV1 {
-		return fmt.Errorf("experimental_tcp crypto offload wire format %q is unsupported", spec.WireFormat)
+		return fmt.Errorf("tix_tcp crypto offload wire format %q is unsupported", spec.WireFormat)
 	}
-	cryptoSpec := dataplane.ExperimentalTCPCryptoSpec{
+	cryptoSpec := dataplane.TIXTCPCryptoSpec{
 		FlowID:       session.flowID,
 		Suite:        spec.Suite,
 		WireFormat:   spec.WireFormat,
@@ -1819,26 +1819,26 @@ func (session *session) EnableCryptoOffload(spec transport.CryptoOffloadSpec) er
 		SendIV:       append([]byte(nil), spec.SendIV...),
 		RecvKey:      append([]byte(nil), spec.RecvKey...),
 		RecvIV:       append([]byte(nil), spec.RecvIV...),
-		ReplayWindow: experimentalTCPReplayWindowForKernelCrypto(spec.ReplayWindow),
+		ReplayWindow: tixTCPReplayWindowForKernelCrypto(spec.ReplayWindow),
 		InstalledAt:  time.Now().UTC(),
 	}
-	defer clearExperimentalTCPCryptoSpec(&cryptoSpec)
-	if err := installer.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{cryptoSpec}); err != nil {
+	defer clearTIXTCPCryptoSpec(&cryptoSpec)
+	if err := installer.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{cryptoSpec}); err != nil {
 		return err
 	}
 	session.epoch = spec.Epoch
 	session.cryptoSuite = spec.Suite
 	session.cryptoOffloaded = true
-	session.configuredFragmentPayload = experimentalTCPFragmentPayloadSizeForPlacement(session.cryptoPlacement, true)
+	session.configuredFragmentPayload = tixTCPFragmentPayloadSizeForPlacement(session.cryptoPlacement, true)
 	session.fragmentPayloadCached = 0
 	return nil
 }
 
-func experimentalTCPReplayWindowForKernelCrypto(window uint) uint {
-	if window >= experimentalTCPKernelCryptoReplayWindow {
+func tixTCPReplayWindowForKernelCrypto(window uint) uint {
+	if window >= tixTCPKernelCryptoReplayWindow {
 		return window
 	}
-	return experimentalTCPKernelCryptoReplayWindow
+	return tixTCPKernelCryptoReplayWindow
 }
 
 func (session *session) SetPeerIdentity(peer core.IXID, domain core.DomainID) {
@@ -1847,8 +1847,8 @@ func (session *session) SetPeerIdentity(peer core.IXID, domain core.DomainID) {
 	}
 	session.peer = peer
 	session.peerIdentity = transport.PeerIdentity{Peer: peer, Domain: domain}
-	if annotator, ok := session.provider.(dataplane.ExperimentalTCPFlowAnnotator); ok {
-		_ = annotator.SetExperimentalTCPFlowPeer(context.Background(), session.flowID, peer, session.endpoint)
+	if annotator, ok := session.provider.(dataplane.TIXTCPFlowAnnotator); ok {
+		_ = annotator.SetTIXTCPFlowPeer(context.Background(), session.flowID, peer, session.endpoint)
 	}
 }
 
@@ -1882,8 +1882,8 @@ func (session *session) SetPeerEndpoint(peer core.IXID, endpoint core.EndpointID
 	if endpoint != "" {
 		session.endpoint = endpoint
 	}
-	if annotator, ok := session.provider.(dataplane.ExperimentalTCPFlowAnnotator); ok {
-		_ = annotator.SetExperimentalTCPFlowPeer(context.Background(), session.flowID, session.peer, session.endpoint)
+	if annotator, ok := session.provider.(dataplane.TIXTCPFlowAnnotator); ok {
+		_ = annotator.SetTIXTCPFlowPeer(context.Background(), session.flowID, session.peer, session.endpoint)
 	}
 }
 
@@ -1937,11 +1937,11 @@ func (session *compatStreamSession) Stats() transport.TransportStats {
 	if stats.Extra == nil {
 		stats.Extra = make(map[string]uint64, 2)
 	}
-	stats.Extra["experimental_tcp_compat_stream"] = 1
+	stats.Extra["tix_tcp_compat_stream"] = 1
 	return stats
 }
 
-func clearExperimentalTCPCryptoSpec(spec *dataplane.ExperimentalTCPCryptoSpec) {
+func clearTIXTCPCryptoSpec(spec *dataplane.TIXTCPCryptoSpec) {
 	if spec == nil {
 		return
 	}
@@ -1963,8 +1963,8 @@ func clearBytes(payload []byte) {
 
 func (session *session) Close() error {
 	session.closeOnce.Do(func() {
-		if deleter, ok := session.provider.(dataplane.ExperimentalTCPFlowDeleter); ok && !session.keepFlowOnClose {
-			_ = deleter.DeleteExperimentalTCPFlows(context.Background(), []uint64{session.flowID})
+		if deleter, ok := session.provider.(dataplane.TIXTCPFlowDeleter); ok && !session.keepFlowOnClose {
+			_ = deleter.DeleteTIXTCPFlows(context.Background(), []uint64{session.flowID})
 		}
 		session.closeInput()
 		if session.subscription != nil {
@@ -1981,22 +1981,22 @@ func (session *session) RetainKernelFlowOnClose() {
 	session.keepFlowOnClose = true
 }
 
-func experimentalTCPCompatPrimerEnabled() bool {
-	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER")))
+func tixTCPCompatPrimerEnabled() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER")))
 	switch raw {
 	case "", "auto", "require", "required", "force", "forced", "must":
-		return experimentalTCPCompatTCPPrimerDefault
+		return tixTCPCompatTCPPrimerDefault
 	case "1", "true", "yes", "on", "enabled":
 		return true
 	case "0", "false", "no", "off", "disabled":
 		return false
 	default:
-		return experimentalTCPCompatTCPPrimerDefault
+		return tixTCPCompatTCPPrimerDefault
 	}
 }
 
-func experimentalTCPCompatPrimerRequired() bool {
-	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER")))
+func tixTCPCompatPrimerRequired() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER")))
 	switch raw {
 	case "require", "required", "force", "forced", "must":
 		return true
@@ -2005,8 +2005,8 @@ func experimentalTCPCompatPrimerRequired() bool {
 	}
 }
 
-func experimentalTCPCompatStreamEnabled() bool {
-	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM")))
+func tixTCPCompatStreamEnabled() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_COMPAT_STREAM")))
 	switch raw {
 	case "", "auto":
 		return false
@@ -2019,17 +2019,17 @@ func experimentalTCPCompatStreamEnabled() bool {
 	}
 }
 
-func experimentalTCPCompatStreamDataEnabled() bool {
-	if !experimentalTCPCompatStreamEnabled() {
+func tixTCPCompatStreamDataEnabled() bool {
+	if !tixTCPCompatStreamEnabled() {
 		return false
 	}
 	if envTruthy(
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY",
-		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY",
+		"TRUSTIX_TIX_TCP_TC_TX_DIRECT",
+		"TRUSTIX_REMOTE_TIX_TCP_TC_TX_DIRECT",
+		"TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT",
+		"TRUSTIX_IPERF3_CRYPTO_BENCH_TIX_TCP_TC_TX_DIRECT",
+		"TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY",
 	) {
 		return false
 	}
@@ -2046,47 +2046,47 @@ func envTruthy(names ...string) bool {
 	return false
 }
 
-func dialExperimentalTCPCompatPrimer(ctx context.Context, endpoint transport.Endpoint) (net.Conn, error) {
-	if !experimentalTCPCompatPrimerEnabled() {
+func dialTIXTCPCompatPrimer(ctx context.Context, endpoint transport.Endpoint) (net.Conn, error) {
+	if !tixTCPCompatPrimerEnabled() {
 		return nil, nil
 	}
 	address := strings.TrimSpace(endpoint.Address)
 	if address == "" {
 		return nil, nil
 	}
-	if !experimentalTCPCompatPrimerAddressSupported(address, false) {
+	if !tixTCPCompatPrimerAddressSupported(address, false) {
 		return nil, nil
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, experimentalTCPCompatTCPPrimerTimeout)
+	dialCtx, cancel := context.WithTimeout(ctx, tixTCPCompatTCPPrimerTimeout)
 	defer cancel()
 	dialer, err := bind.Dialer(endpoint, "tcp")
 	if err != nil {
 		return nil, err
 	}
-	dialer.Timeout = experimentalTCPCompatTCPPrimerTimeout
+	dialer.Timeout = tixTCPCompatTCPPrimerTimeout
 	dialer.KeepAlive = 30 * time.Second
 	conn, err := dialer.DialContext(dialCtx, "tcp", address)
 	if err != nil {
-		return nil, fmt.Errorf("experimental_tcp compat TCP primer to %s: %w", address, err)
+		return nil, fmt.Errorf("tix_tcp compat TCP primer to %s: %w", address, err)
 	}
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tuneExperimentalTCPCompatConn(tcpConn)
+		tuneTIXTCPCompatConn(tcpConn)
 	}
 	return conn, nil
 }
 
-func tuneExperimentalTCPCompatConn(conn net.Conn) {
+func tuneTIXTCPCompatConn(conn net.Conn) {
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok {
 		return
 	}
 	_ = tcpConn.SetKeepAlive(true)
 	_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
-	_ = tcpConn.SetNoDelay(experimentalTCPCompatNoDelay())
+	_ = tcpConn.SetNoDelay(tixTCPCompatNoDelay())
 }
 
-func experimentalTCPCompatNoDelay() bool {
-	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_NODELAY")))
+func tixTCPCompatNoDelay() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_COMPAT_NODELAY")))
 	switch raw {
 	case "", "auto", "1", "true", "yes", "on", "enabled":
 		return true
@@ -2097,25 +2097,25 @@ func experimentalTCPCompatNoDelay() bool {
 	}
 }
 
-func listenExperimentalTCPCompatPrimer(address string) (net.Listener, error) {
-	if !experimentalTCPCompatPrimerEnabled() {
+func listenTIXTCPCompatPrimer(address string) (net.Listener, error) {
+	if !tixTCPCompatPrimerEnabled() {
 		return nil, nil
 	}
 	address = strings.TrimSpace(address)
 	if address == "" {
 		return nil, nil
 	}
-	if !experimentalTCPCompatPrimerAddressSupported(address, true) {
+	if !tixTCPCompatPrimerAddressSupported(address, true) {
 		return nil, nil
 	}
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		return nil, fmt.Errorf("experimental_tcp compat TCP primer listen on %s: %w", address, err)
+		return nil, fmt.Errorf("tix_tcp compat TCP primer listen on %s: %w", address, err)
 	}
 	return listener, nil
 }
 
-func experimentalTCPCompatPrimerAddressSupported(address string, listen bool) bool {
+func tixTCPCompatPrimerAddressSupported(address string, listen bool) bool {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return false
@@ -2134,20 +2134,20 @@ func experimentalTCPCompatPrimerAddressSupported(address string, listen bool) bo
 	return addr.Is4()
 }
 
-func experimentalTCPCompatDerivedSourcePort(flowID uint64) uint16 {
+func tixTCPCompatDerivedSourcePort(flowID uint64) uint16 {
 	return uint16(40000 + flowID%20000)
 }
 
-func experimentalTCPCompatInboundFlow(init experimentalTCPCompatControlInit, conn net.Conn, endpoint transport.Endpoint, placement dataplane.CryptoPlacement) dataplane.ExperimentalTCPFlow {
+func tixTCPCompatInboundFlow(init tixTCPCompatControlInit, conn net.Conn, endpoint transport.Endpoint, placement dataplane.CryptoPlacement) dataplane.TIXTCPFlow {
 	now := time.Now().UTC()
-	flow := dataplane.ExperimentalTCPFlow{
+	flow := dataplane.TIXTCPFlow{
 		ID:              init.flowID,
 		Endpoint:        endpoint.Name,
 		CryptoPlacement: placement,
 		CreatedAt:       now,
 	}
-	localIP, localPort, localOK := experimentalTCPCompatTCPAddrParts(conn.LocalAddr())
-	remoteIP, _, remoteOK := experimentalTCPCompatTCPAddrParts(conn.RemoteAddr())
+	localIP, localPort, localOK := tixTCPCompatTCPAddrParts(conn.LocalAddr())
+	remoteIP, _, remoteOK := tixTCPCompatTCPAddrParts(conn.RemoteAddr())
 	if localOK && init.sourcePort != 0 && remoteOK {
 		flow.LocalAddress = net.JoinHostPort(localIP.String(), strconv.Itoa(int(localPort)))
 		flow.RemoteAddress = net.JoinHostPort(remoteIP.String(), strconv.Itoa(int(init.sourcePort)))
@@ -2156,7 +2156,7 @@ func experimentalTCPCompatInboundFlow(init experimentalTCPCompatControlInit, con
 		return flow
 	}
 	if listen := strings.TrimSpace(endpoint.Listen); listen != "" && init.sourcePort != 0 && remoteOK {
-		if ip, port, err := resolveExperimentalTCPCompatHostPort(listen); err == nil && port != 0 {
+		if ip, port, err := resolveTIXTCPCompatHostPort(listen); err == nil && port != 0 {
 			flow.LocalAddress = net.JoinHostPort(ip.String(), strconv.Itoa(int(port)))
 			flow.RemoteAddress = net.JoinHostPort(remoteIP.String(), strconv.Itoa(int(init.sourcePort)))
 			flow.SourcePort = port
@@ -2166,7 +2166,7 @@ func experimentalTCPCompatInboundFlow(init experimentalTCPCompatControlInit, con
 	return flow
 }
 
-func experimentalTCPCompatTCPAddrParts(addr net.Addr) (netip.Addr, uint16, bool) {
+func tixTCPCompatTCPAddrParts(addr net.Addr) (netip.Addr, uint16, bool) {
 	tcpAddr, ok := addr.(*net.TCPAddr)
 	if !ok || tcpAddr == nil || tcpAddr.IP == nil || tcpAddr.Port <= 0 || tcpAddr.Port > 65535 {
 		return netip.Addr{}, 0, false
@@ -2182,7 +2182,7 @@ func experimentalTCPCompatTCPAddrParts(addr net.Addr) (netip.Addr, uint16, bool)
 	return ip, uint16(tcpAddr.Port), true
 }
 
-func resolveExperimentalTCPCompatHostPort(address string) (netip.Addr, uint16, error) {
+func resolveTIXTCPCompatHostPort(address string) (netip.Addr, uint16, error) {
 	host, portText, err := net.SplitHostPort(strings.TrimSpace(address))
 	if err != nil {
 		return netip.Addr{}, 0, err
@@ -2205,54 +2205,54 @@ func resolveExperimentalTCPCompatHostPort(address string) (netip.Addr, uint16, e
 	return ip, uint16(port), nil
 }
 
-func encodeExperimentalTCPCompatControlInit(flowID uint64) []byte {
-	sourcePort := experimentalTCPCompatDerivedSourcePort(flowID)
-	payload := make([]byte, experimentalTCPCompatControlInitLen)
-	copy(payload[0:4], experimentalTCPCompatControlMagic[:])
-	payload[4] = experimentalTCPCompatControlVersion
-	payload[5] = experimentalTCPCompatControlInitType
+func encodeTIXTCPCompatControlInit(flowID uint64) []byte {
+	sourcePort := tixTCPCompatDerivedSourcePort(flowID)
+	payload := make([]byte, tixTCPCompatControlInitLen)
+	copy(payload[0:4], tixTCPCompatControlMagic[:])
+	payload[4] = tixTCPCompatControlVersion
+	payload[5] = tixTCPCompatControlInitType
 	binary.BigEndian.PutUint64(payload[6:14], flowID)
 	binary.BigEndian.PutUint16(payload[14:16], sourcePort)
 	return payload
 }
 
-func decodeExperimentalTCPCompatControlInit(payload []byte) (experimentalTCPCompatControlInit, bool) {
-	if (len(payload) != experimentalTCPCompatControlInitLen && len(payload) != experimentalTCPCompatControlInitOldLen) ||
-		string(payload[0:4]) != string(experimentalTCPCompatControlMagic[:]) ||
-		payload[4] != experimentalTCPCompatControlVersion ||
-		payload[5] != experimentalTCPCompatControlInitType {
-		return experimentalTCPCompatControlInit{}, false
+func decodeTIXTCPCompatControlInit(payload []byte) (tixTCPCompatControlInit, bool) {
+	if (len(payload) != tixTCPCompatControlInitLen && len(payload) != tixTCPCompatControlInitOldLen) ||
+		string(payload[0:4]) != string(tixTCPCompatControlMagic[:]) ||
+		payload[4] != tixTCPCompatControlVersion ||
+		payload[5] != tixTCPCompatControlInitType {
+		return tixTCPCompatControlInit{}, false
 	}
-	init := experimentalTCPCompatControlInit{flowID: binary.BigEndian.Uint64(payload[6:14])}
-	if len(payload) >= experimentalTCPCompatControlInitLen {
+	init := tixTCPCompatControlInit{flowID: binary.BigEndian.Uint64(payload[6:14])}
+	if len(payload) >= tixTCPCompatControlInitLen {
 		init.sourcePort = binary.BigEndian.Uint16(payload[14:16])
 	}
 	return init, init.flowID != 0
 }
 
-func acceptExperimentalTCPCompatControl(conn net.Conn) (*stream.Session, experimentalTCPCompatControlInit, error) {
+func acceptTIXTCPCompatControl(conn net.Conn) (*stream.Session, tixTCPCompatControlInit, error) {
 	control := stream.NewSession(conn)
 	initPacket, err := control.RecvPacket()
 	if err != nil {
 		_ = control.Close()
-		return nil, experimentalTCPCompatControlInit{}, err
+		return nil, tixTCPCompatControlInit{}, err
 	}
-	init, ok := decodeExperimentalTCPCompatControlInit(initPacket)
+	init, ok := decodeTIXTCPCompatControlInit(initPacket)
 	if !ok {
 		_ = control.Close()
-		return nil, experimentalTCPCompatControlInit{}, fmt.Errorf("invalid experimental_tcp compat control init")
+		return nil, tixTCPCompatControlInit{}, fmt.Errorf("invalid tix_tcp compat control init")
 	}
 	return control, init, nil
 }
 
-func experimentalTCPCompatControlEligible(packet []byte) bool {
+func tixTCPCompatControlEligible(packet []byte) bool {
 	if len(packet) < 6 {
 		return false
 	}
-	if string(packet[0:4]) == string(experimentalTCPSecureHelloMagic[:]) {
+	if string(packet[0:4]) == string(tixTCPSecureHelloMagic[:]) {
 		return true
 	}
-	if string(packet[0:4]) != string(experimentalTCPCompatControlMagic[:]) || packet[4] != experimentalTCPCompatControlVersion {
+	if string(packet[0:4]) != string(tixTCPCompatControlMagic[:]) || packet[4] != tixTCPCompatControlVersion {
 		return false
 	}
 	switch packet[5] {
@@ -2263,33 +2263,33 @@ func experimentalTCPCompatControlEligible(packet []byte) bool {
 	}
 }
 
-func experimentalTCPCompatHandshakePriorityDelay() time.Duration {
-	value := strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_HANDSHAKE_PRIORITY_DELAY"))
+func tixTCPCompatHandshakePriorityDelay() time.Duration {
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_COMPAT_HANDSHAKE_PRIORITY_DELAY"))
 	if value == "" {
-		return experimentalTCPCompatHandshakePriority
+		return tixTCPCompatHandshakePriority
 	}
 	if parsed, err := time.ParseDuration(value); err == nil {
 		if parsed < 0 {
 			return 0
 		}
-		if parsed > experimentalTCPCompatTCPPrimerTimeout {
-			return experimentalTCPCompatTCPPrimerTimeout
+		if parsed > tixTCPCompatTCPPrimerTimeout {
+			return tixTCPCompatTCPPrimerTimeout
 		}
 		return parsed
 	}
 	millis, err := strconv.Atoi(value)
 	if err != nil || millis <= 0 {
-		return experimentalTCPCompatHandshakePriority
+		return tixTCPCompatHandshakePriority
 	}
 	delay := time.Duration(millis) * time.Millisecond
-	if delay > experimentalTCPCompatTCPPrimerTimeout {
-		return experimentalTCPCompatTCPPrimerTimeout
+	if delay > tixTCPCompatTCPPrimerTimeout {
+		return tixTCPCompatTCPPrimerTimeout
 	}
 	return delay
 }
 
 func (session *session) enqueue(pkt []byte) {
-	session.enqueueBatch(experimentalTCPPacketBatch{packets: [][]byte{pkt}})
+	session.enqueueBatch(tixTCPPacketBatch{packets: [][]byte{pkt}})
 }
 
 func (session *session) enqueueCompatPriority(pkt []byte) bool {
@@ -2324,7 +2324,7 @@ func (session *session) recvCompatPriorityPackets(max int) [][]byte {
 	default:
 	}
 	if len(packets) == 0 && session.compatPriorityWaited.CompareAndSwap(false, true) {
-		delay := experimentalTCPCompatHandshakePriorityDelay()
+		delay := tixTCPCompatHandshakePriorityDelay()
 		if delay > 0 {
 			timer := time.NewTimer(delay)
 			select {
@@ -2333,7 +2333,7 @@ func (session *session) recvCompatPriorityPackets(max int) [][]byte {
 			case <-session.closed:
 			case <-timer.C:
 			}
-			stopExperimentalTCPTimer(timer)
+			stopTIXTCPTimer(timer)
 		}
 	}
 	for len(packets) < max {
@@ -2349,54 +2349,54 @@ func (session *session) recvCompatPriorityPackets(max int) [][]byte {
 	return packets
 }
 
-func (session *session) enqueueBatch(batch experimentalTCPPacketBatch) {
-	batch = trimExperimentalTCPPacketBatch(batch)
+func (session *session) enqueueBatch(batch tixTCPPacketBatch) {
+	batch = trimTIXTCPPacketBatch(batch)
 	if len(batch.packets) == 0 {
-		releaseExperimentalTCPBatch(batch)
+		releaseTIXTCPBatch(batch)
 		return
 	}
 	select {
 	case <-session.closed:
-		releaseExperimentalTCPBatch(batch)
+		releaseTIXTCPBatch(batch)
 		return
 	default:
 	}
 	select {
 	case <-session.closed:
-		releaseExperimentalTCPBatch(batch)
+		releaseTIXTCPBatch(batch)
 		return
 	case session.in <- batch:
 	}
 }
 
-func (session *session) handleFrame(frame dataplane.ExperimentalTCPFrame) {
-	session.handleFrames([]dataplane.ExperimentalTCPFrame{frame})
+func (session *session) handleFrame(frame dataplane.TIXTCPFrame) {
+	session.handleFrames([]dataplane.TIXTCPFrame{frame})
 }
 
-func (session *session) handleFrames(frames []dataplane.ExperimentalTCPFrame) {
+func (session *session) handleFrames(frames []dataplane.TIXTCPFrame) {
 	if len(frames) == 0 {
 		return
 	}
 	if len(frames) == 1 {
 		if pkt, release, ok := session.handleFrameOne(frames[0]); ok {
-			ready := takeExperimentalTCPPacketBatch(1)
+			ready := takeTIXTCPPacketBatch(1)
 			ready.packets = append(ready.packets, pkt)
 			if release != nil {
-				ready.releases = experimentalTCPPacketBatchReleases(&ready, 0, 1)
+				ready.releases = tixTCPPacketBatchReleases(&ready, 0, 1)
 				ready.releases = append(ready.releases, release)
 			}
-			syncExperimentalTCPPacketBatchOwner(&ready)
+			syncTIXTCPPacketBatchOwner(&ready)
 			session.enqueueBatch(ready)
 		}
 		return
 	}
-	ready := takeExperimentalTCPPacketBatch(len(frames))
+	ready := takeTIXTCPPacketBatch(len(frames))
 	for _, frame := range frames {
 		if pkt, release, ok := session.handleFrameOne(frame); ok {
 			ready.packets = append(ready.packets, pkt)
 			if release != nil {
 				if ready.releases == nil {
-					ready.releases = experimentalTCPPacketBatchReleases(&ready, len(ready.packets)-1, len(frames))
+					ready.releases = tixTCPPacketBatchReleases(&ready, len(ready.packets)-1, len(frames))
 				}
 				ready.releases = append(ready.releases, release)
 			} else if ready.releases != nil {
@@ -2404,15 +2404,15 @@ func (session *session) handleFrames(frames []dataplane.ExperimentalTCPFrame) {
 			}
 		}
 	}
-	syncExperimentalTCPPacketBatchOwner(&ready)
+	syncTIXTCPPacketBatchOwner(&ready)
 	session.enqueueBatch(ready)
 }
 
-func (session *session) handleFrameOne(frame dataplane.ExperimentalTCPFrame) ([]byte, func(), bool) {
+func (session *session) handleFrameOne(frame dataplane.TIXTCPFrame) ([]byte, func(), bool) {
 	if frame.FragmentCount == 0 {
 		if frame.FragmentIndex != 0 {
 			session.fragmentRejects.Add(1)
-			releaseExperimentalTCPFrame(frame)
+			releaseTIXTCPFrame(frame)
 			return nil, nil, false
 		}
 		return frame.Payload, frame.Release, true
@@ -2420,19 +2420,19 @@ func (session *session) handleFrameOne(frame dataplane.ExperimentalTCPFrame) ([]
 	if frame.FragmentCount == 1 {
 		if frame.FragmentIndex != 0 {
 			session.fragmentRejects.Add(1)
-			releaseExperimentalTCPFrame(frame)
+			releaseTIXTCPFrame(frame)
 			return nil, nil, false
 		}
 		return frame.Payload, frame.Release, true
 	}
-	if frame.FragmentCount > experimentalTCPMaxFragments || frame.FragmentIndex >= frame.FragmentCount {
+	if frame.FragmentCount > tixTCPMaxFragments || frame.FragmentIndex >= frame.FragmentCount {
 		session.fragmentRejects.Add(1)
-		releaseExperimentalTCPFrame(frame)
+		releaseTIXTCPFrame(frame)
 		return nil, nil, false
 	}
 	if frame.Sequence <= uint64(frame.FragmentIndex) {
 		session.fragmentRejects.Add(1)
-		releaseExperimentalTCPFrame(frame)
+		releaseTIXTCPFrame(frame)
 		return nil, nil, false
 	}
 	baseSeq := frame.Sequence - uint64(frame.FragmentIndex)
@@ -2458,14 +2458,14 @@ func (session *session) handleFrameOne(frame dataplane.ExperimentalTCPFrame) ([]
 		session.fragmentMismatches.Add(1)
 		session.fragmentRejects.Add(1)
 		session.recvMu.Unlock()
-		releaseExperimentalTCPFrame(frame)
+		releaseTIXTCPFrame(frame)
 		return nil, nil, false
 	}
 	index := int(frame.FragmentIndex)
 	if assembly.fragments[index] != nil {
 		session.fragmentDuplicates.Add(1)
 		session.recvMu.Unlock()
-		releaseExperimentalTCPFrame(frame)
+		releaseTIXTCPFrame(frame)
 		return nil, nil, false
 	}
 	if frame.Release != nil {
@@ -2486,7 +2486,7 @@ func (session *session) handleFrameOne(frame dataplane.ExperimentalTCPFrame) ([]
 		if fragment == nil {
 			session.fragmentRejects.Add(1)
 			session.recvMu.Unlock()
-			releaseExperimentalTCPFrame(frame)
+			releaseTIXTCPFrame(frame)
 			return nil, nil, false
 		}
 		packet = append(packet, fragment...)
@@ -2498,39 +2498,39 @@ func (session *session) handleFrameOne(frame dataplane.ExperimentalTCPFrame) ([]
 	return packet, nil, true
 }
 
-func experimentalTCPReleaseSlice(release func()) []func() {
+func tixTCPReleaseSlice(release func()) []func() {
 	if release == nil {
 		return nil
 	}
 	return []func(){release}
 }
 
-func releaseExperimentalTCPFrame(frame dataplane.ExperimentalTCPFrame) {
+func releaseTIXTCPFrame(frame dataplane.TIXTCPFrame) {
 	if frame.Release != nil {
 		frame.Release()
 	}
 }
 
-func clearExperimentalTCPFrames(frames []dataplane.ExperimentalTCPFrame) {
+func clearTIXTCPFrames(frames []dataplane.TIXTCPFrame) {
 	for i := range frames {
-		frames[i] = dataplane.ExperimentalTCPFrame{}
+		frames[i] = dataplane.TIXTCPFrame{}
 	}
 }
 
-func releaseExperimentalTCPBatch(batch experimentalTCPPacketBatch) {
+func releaseTIXTCPBatch(batch tixTCPPacketBatch) {
 	for _, release := range batch.releases {
 		if release != nil {
 			release()
 		}
 	}
-	releaseExperimentalTCPPacketBatchOwner(batch)
+	releaseTIXTCPPacketBatchOwner(batch)
 }
 
 func (session *session) pruneReassemblyLocked(now time.Time) {
 	var expiredAssemblies uint64
 	var expiredFragments uint64
 	for baseSeq, assembly := range session.reassembly {
-		if now.Sub(assembly.createdAt) > experimentalTCPReassemblyTTL {
+		if now.Sub(assembly.createdAt) > tixTCPReassemblyTTL {
 			expiredAssemblies++
 			for _, fragment := range assembly.fragments {
 				if fragment != nil {
@@ -2578,8 +2578,8 @@ func (session *session) pruneOldestReassemblyIfFullLocked(maxAssemblies int) {
 func (session *session) closeInput() {
 	session.closeInputOnce.Do(func() {
 		close(session.closed)
-		releaseExperimentalTCPBatch(session.recvPending)
-		session.recvPending = experimentalTCPPacketBatch{}
+		releaseTIXTCPBatch(session.recvPending)
+		session.recvPending = tixTCPPacketBatch{}
 		session.drainQueuedBatches()
 		session.recvMu.Lock()
 		session.reassembly = nil
@@ -2591,7 +2591,7 @@ func (session *session) drainQueuedBatches() {
 	for {
 		select {
 		case batch := <-session.in:
-			releaseExperimentalTCPBatch(batch)
+			releaseTIXTCPBatch(batch)
 		default:
 			return
 		}
@@ -2629,25 +2629,25 @@ func (session *session) Stats() transport.TransportStats {
 
 func (session *session) fragmentStats() map[string]uint64 {
 	extra := map[string]uint64{
-		experimentalTCPStatFragmentedPacketsSent:     session.fragmentedPacketsSent.Load(),
-		experimentalTCPStatFragmentsSent:             session.fragmentsSent.Load(),
-		experimentalTCPStatFragmentsReceived:         session.fragmentsReceived.Load(),
-		experimentalTCPStatFragmentedPacketsReceived: session.fragmentedPacketsReceived.Load(),
-		experimentalTCPStatFragmentsReassembled:      session.fragmentsReassembled.Load(),
-		experimentalTCPStatFragmentDuplicates:        session.fragmentDuplicates.Load(),
-		experimentalTCPStatFragmentExpiredAssemblies: session.fragmentExpiredAssemblies.Load(),
-		experimentalTCPStatFragmentExpiredFragments:  session.fragmentExpiredFragments.Load(),
-		experimentalTCPStatFragmentMismatches:        session.fragmentMismatches.Load(),
-		experimentalTCPStatFragmentRejects:           session.fragmentRejects.Load(),
-		experimentalTCPStatFragmentPayloadSize:       uint64(session.fragmentPayloadSize()),
-		experimentalTCPStatTIXBExpandedPackets:       session.tixbExpandedPackets.Load(),
-		experimentalTCPStatTIXBExpandedItems:         session.tixbExpandedItems.Load(),
+		tixTCPStatFragmentedPacketsSent:     session.fragmentedPacketsSent.Load(),
+		tixTCPStatFragmentsSent:             session.fragmentsSent.Load(),
+		tixTCPStatFragmentsReceived:         session.fragmentsReceived.Load(),
+		tixTCPStatFragmentedPacketsReceived: session.fragmentedPacketsReceived.Load(),
+		tixTCPStatFragmentsReassembled:      session.fragmentsReassembled.Load(),
+		tixTCPStatFragmentDuplicates:        session.fragmentDuplicates.Load(),
+		tixTCPStatFragmentExpiredAssemblies: session.fragmentExpiredAssemblies.Load(),
+		tixTCPStatFragmentExpiredFragments:  session.fragmentExpiredFragments.Load(),
+		tixTCPStatFragmentMismatches:        session.fragmentMismatches.Load(),
+		tixTCPStatFragmentRejects:           session.fragmentRejects.Load(),
+		tixTCPStatFragmentPayloadSize:       uint64(session.fragmentPayloadSize()),
+		tixTCPStatTIXBExpandedPackets:       session.tixbExpandedPackets.Load(),
+		tixTCPStatTIXBExpandedItems:         session.tixbExpandedItems.Load(),
 	}
 	if session.fullPlaintextKernelDatapath {
-		extra[experimentalTCPStatFullPlaintextKernel] = 1
+		extra[tixTCPStatFullPlaintextKernel] = 1
 	}
 	session.recvMu.Lock()
-	extra[experimentalTCPStatFragmentAssembliesCurrent] = uint64(len(session.reassembly))
+	extra[tixTCPStatFragmentAssembliesCurrent] = uint64(len(session.reassembly))
 	session.recvMu.Unlock()
 	return extra
 }
@@ -2662,7 +2662,7 @@ func (session *session) effectiveCryptoPlacement() dataplane.CryptoPlacement {
 func randomFlowID() (uint64, error) {
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		return 0, fmt.Errorf("generate experimental_tcp flow id: %w", err)
+		return 0, fmt.Errorf("generate tix_tcp flow id: %w", err)
 	}
 	flowID := binary.BigEndian.Uint64(buf[:])
 	if flowID == 0 {
@@ -2672,12 +2672,12 @@ func randomFlowID() (uint64, error) {
 }
 
 func fragmentCount(packetLen int) int {
-	return fragmentCountForSize(packetLen, experimentalTCPFragmentPayloadSize)
+	return fragmentCountForSize(packetLen, tixTCPFragmentPayloadSize)
 }
 
 func fragmentCountForSize(packetLen int, payloadSize int) int {
 	if payloadSize <= 0 {
-		payloadSize = experimentalTCPFragmentPayloadSize
+		payloadSize = tixTCPFragmentPayloadSize
 	}
 	if packetLen <= payloadSize {
 		return 1
@@ -2688,7 +2688,7 @@ func fragmentCountForSize(packetLen int, payloadSize int) int {
 func (session *session) fragmentPayloadSize() int {
 	configured := session.configuredFragmentPayload
 	if configured == 0 {
-		configured = experimentalTCPFragmentPayloadSizeForPlacement(session.cryptoPlacement, session.cryptoOffloaded)
+		configured = tixTCPFragmentPayloadSizeForPlacement(session.cryptoPlacement, session.cryptoOffloaded)
 	}
 	key := fragmentPayloadCacheKey{
 		placement:  session.cryptoPlacement,
@@ -2706,17 +2706,17 @@ func (session *session) fragmentPayloadSize() int {
 
 func (session *session) maxPacketSize() int {
 	payloadSize := session.fragmentPayloadSize()
-	maxPacket := payloadSize * experimentalTCPMaxFragments
+	maxPacket := payloadSize * tixTCPMaxFragments
 	if payloadSize < 1 {
 		return 1
 	}
 	if session.kernelCryptoSealBeforeFragment() {
-		maxPacket -= experimentalTCPSecureFrameOverhead
+		maxPacket -= tixTCPSecureFrameOverhead
 	}
 	if maxPacket < 1 {
 		return 1
 	}
-	if configured := experimentalTCPConfiguredMaxPacketSize(); configured > 0 && maxPacket > configured {
+	if configured := tixTCPConfiguredMaxPacketSize(); configured > 0 && maxPacket > configured {
 		maxPacket = configured
 	}
 	if maxPacket < 1 {
@@ -2729,9 +2729,9 @@ func (session *session) maxPacketSize() int {
 }
 
 func (session *session) clampFragmentPayloadSize(payloadSize int) int {
-	if sizer, ok := session.provider.(dataplane.ExperimentalTCPPayloadSizer); ok {
-		if maxSize, err := sizer.ExperimentalTCPPayloadMax(context.Background(), session.cryptoPlacement, session.cryptoOffloaded); err == nil && maxSize > 0 {
-			if experimentalTCPAutoFragmentPayloadEnabled() && payloadSize < maxSize {
+	if sizer, ok := session.provider.(dataplane.TIXTCPPayloadSizer); ok {
+		if maxSize, err := sizer.TIXTCPPayloadMax(context.Background(), session.cryptoPlacement, session.cryptoOffloaded); err == nil && maxSize > 0 {
+			if tixTCPAutoFragmentPayloadEnabled() && payloadSize < maxSize {
 				payloadSize = maxSize
 			}
 			if payloadSize > maxSize {
@@ -2745,9 +2745,9 @@ func (session *session) clampFragmentPayloadSize(payloadSize int) int {
 	return payloadSize
 }
 
-func experimentalTCPConfiguredMaxPacketSize() int {
+func tixTCPConfiguredMaxPacketSize() int {
 	const minSize = 576
-	value := strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_MAX_PACKET_SIZE"))
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_MAX_PACKET_SIZE"))
 	if value == "" {
 		return 0
 	}
@@ -2761,19 +2761,19 @@ func experimentalTCPConfiguredMaxPacketSize() int {
 	return parsed
 }
 
-func experimentalTCPFragmentPayloadSizeForPlacement(placement dataplane.CryptoPlacement, offloaded bool) int {
+func tixTCPFragmentPayloadSizeForPlacement(placement dataplane.CryptoPlacement, offloaded bool) int {
 	if placement == dataplane.CryptoPlacementKernel || offloaded {
-		return experimentalTCPConfiguredFragmentPayloadSize(experimentalTCPKernelFragmentPayloadMax)
+		return tixTCPConfiguredFragmentPayloadSize(tixTCPKernelFragmentPayloadMax)
 	}
-	return experimentalTCPConfiguredFragmentPayloadSize(experimentalTCPFragmentPayloadMax)
+	return tixTCPConfiguredFragmentPayloadSize(tixTCPFragmentPayloadMax)
 }
 
-func experimentalTCPConfiguredFragmentPayloadSize(maxSize int) int {
+func tixTCPConfiguredFragmentPayloadSize(maxSize int) int {
 	const (
-		defaultSize = experimentalTCPFragmentPayloadSize
+		defaultSize = tixTCPFragmentPayloadSize
 		minSize     = 576
 	)
-	value := strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE"))
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE"))
 	if value == "" {
 		return defaultSize
 	}
@@ -2784,8 +2784,8 @@ func experimentalTCPConfiguredFragmentPayloadSize(maxSize int) int {
 		return maxSize
 	}
 	if strings.EqualFold(value, "legacy") {
-		if experimentalTCPUserspaceCryptoPayloadHint < maxSize {
-			return experimentalTCPUserspaceCryptoPayloadHint
+		if tixTCPUserspaceCryptoPayloadHint < maxSize {
+			return tixTCPUserspaceCryptoPayloadHint
 		}
 		return maxSize
 	}
@@ -2799,16 +2799,16 @@ func experimentalTCPConfiguredFragmentPayloadSize(maxSize int) int {
 	return parsed
 }
 
-func experimentalTCPAutoFragmentPayloadEnabled() bool {
-	value := strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE"))
+func tixTCPAutoFragmentPayloadEnabled() bool {
+	value := strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE"))
 	return value == "" && envTruthy(
-		"TRUSTIX_EXPERIMENTAL_TCP_AUTO_FRAGMENT_PAYLOAD",
-		"TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_AUTO_MAX",
+		"TRUSTIX_TIX_TCP_AUTO_FRAGMENT_PAYLOAD",
+		"TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_AUTO_MAX",
 	)
 }
 
-func experimentalTCPKernelSealBeforeFragmentEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_SEAL_BEFORE_FRAGMENT"))) {
+func tixTCPKernelSealBeforeFragmentEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_KERNEL_SEAL_BEFORE_FRAGMENT"))) {
 	case "", "1", "true", "yes", "on", "enabled":
 		return true
 	case "0", "false", "no", "off", "disabled":
@@ -2818,14 +2818,14 @@ func experimentalTCPKernelSealBeforeFragmentEnabled() bool {
 	}
 }
 
-func experimentalTCPKernelSealBeforeFragmentWireMaxEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_SEAL_BEFORE_FRAGMENT_WIRE_MAX"))) {
+func tixTCPKernelSealBeforeFragmentWireMaxEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_KERNEL_SEAL_BEFORE_FRAGMENT_WIRE_MAX"))) {
 	case "0", "false", "no", "off", "disabled":
 		return false
 	case "1", "true", "yes", "on", "enabled", "force":
 		return true
 	}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_SEAL_BEFORE_FRAGMENT_MAX_WIRE"))) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_KERNEL_SEAL_BEFORE_FRAGMENT_MAX_WIRE"))) {
 	case "0", "false", "no", "off", "disabled":
 		return false
 	case "1", "true", "yes", "on", "enabled", "force":

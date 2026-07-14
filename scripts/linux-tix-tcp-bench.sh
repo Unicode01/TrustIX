@@ -2,41 +2,41 @@
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-workdir="${TRUSTIX_EXP_TCP_BENCH_WORKDIR:-$(mktemp -d /tmp/trustix-exp-tcp-bench.XXXXXX)}"
-keep="${TRUSTIX_EXP_TCP_BENCH_KEEP:-0}"
-bin_dir="${TRUSTIX_EXP_TCP_BENCH_BIN_DIR:-}"
+workdir="${TRUSTIX_TIX_TCP_BENCH_WORKDIR:-$(mktemp -d /tmp/trustix-tix-tcp-bench.XXXXXX)}"
+keep="${TRUSTIX_TIX_TCP_BENCH_KEEP:-0}"
+bin_dir="${TRUSTIX_TIX_TCP_BENCH_BIN_DIR:-}"
 default_smoke_script="${repo_root}/scripts/linux-e2e-smoke.sh"
-smoke_script="${TRUSTIX_EXP_TCP_BENCH_E2E_SCRIPT:-$default_smoke_script}"
-run_kernel="${TRUSTIX_EXP_TCP_BENCH_KERNEL:-auto}"
-kernel_module="${TRUSTIX_EXP_TCP_BENCH_KERNEL_MODULE:-0}"
-e2e_crash_restart="${TRUSTIX_EXP_TCP_BENCH_E2E_CRASH_RESTART:-0}"
+smoke_script="${TRUSTIX_TIX_TCP_BENCH_E2E_SCRIPT:-$default_smoke_script}"
+run_kernel="${TRUSTIX_TIX_TCP_BENCH_KERNEL:-auto}"
+kernel_module="${TRUSTIX_TIX_TCP_BENCH_KERNEL_MODULE:-0}"
+e2e_crash_restart="${TRUSTIX_TIX_TCP_BENCH_E2E_CRASH_RESTART:-0}"
 
-ping_count="${TRUSTIX_EXP_TCP_BENCH_PING_COUNT:-5}"
-ping_parallel="${TRUSTIX_EXP_TCP_BENCH_PING_PARALLEL:-1}"
-ping_rounds="${TRUSTIX_EXP_TCP_BENCH_PING_ROUNDS:-1}"
-udp_burst_packets="${TRUSTIX_EXP_TCP_BENCH_UDP_BURST_PACKETS:-64}"
-udp_burst_size="${TRUSTIX_EXP_TCP_BENCH_UDP_BURST_SIZE:-512}"
-udp_burst_parallel="${TRUSTIX_EXP_TCP_BENCH_UDP_BURST_PARALLEL:-1}"
-udp_burst_rounds="${TRUSTIX_EXP_TCP_BENCH_UDP_BURST_ROUNDS:-1}"
-udp_burst_rate_pps="${TRUSTIX_EXP_TCP_BENCH_UDP_BURST_RATE_PPS:-0}"
-udp_burst_allow_loss="${TRUSTIX_EXP_TCP_BENCH_UDP_BURST_ALLOW_LOSS:-0}"
-tcp_burst_connections="${TRUSTIX_EXP_TCP_BENCH_TCP_BURST_CONNECTIONS:-16}"
-tcp_burst_size="${TRUSTIX_EXP_TCP_BENCH_TCP_BURST_SIZE:-1024}"
-tcp_burst_parallel="${TRUSTIX_EXP_TCP_BENCH_TCP_BURST_PARALLEL:-1}"
-tcp_burst_rounds="${TRUSTIX_EXP_TCP_BENCH_TCP_BURST_ROUNDS:-1}"
-burst_timeout="${TRUSTIX_EXP_TCP_BENCH_BURST_TIMEOUT:-15}"
-tcp_connect_timeout="${TRUSTIX_EXP_TCP_BENCH_TCP_CONNECT_TIMEOUT:-5}"
-session_pool_size="${TRUSTIX_EXP_TCP_BENCH_SESSION_POOL_SIZE:-0}"
-session_pool_strategy="${TRUSTIX_EXP_TCP_BENCH_SESSION_POOL_STRATEGY:-flow}"
-session_pool_warmup="${TRUSTIX_EXP_TCP_BENCH_SESSION_POOL_WARMUP:-false}"
-capture_forwarder_workers="${TRUSTIX_EXP_TCP_BENCH_CAPTURE_FORWARDER_WORKERS:-1}"
-capture_forwarder_buffer="${TRUSTIX_EXP_TCP_BENCH_CAPTURE_FORWARDER_BUFFER:-65536}"
-af_xdp_queues="${TRUSTIX_EXP_TCP_BENCH_AF_XDP_QUEUES:-1}"
-af_xdp_tx_backpressure_wait="${TRUSTIX_EXP_TCP_BENCH_AF_XDP_TX_BACKPRESSURE_WAIT:-2ms}"
-af_xdp_tx_kick_batch="${TRUSTIX_EXP_TCP_BENCH_AF_XDP_TX_KICK_BATCH:-256}"
+ping_count="${TRUSTIX_TIX_TCP_BENCH_PING_COUNT:-5}"
+ping_parallel="${TRUSTIX_TIX_TCP_BENCH_PING_PARALLEL:-1}"
+ping_rounds="${TRUSTIX_TIX_TCP_BENCH_PING_ROUNDS:-1}"
+udp_burst_packets="${TRUSTIX_TIX_TCP_BENCH_UDP_BURST_PACKETS:-64}"
+udp_burst_size="${TRUSTIX_TIX_TCP_BENCH_UDP_BURST_SIZE:-512}"
+udp_burst_parallel="${TRUSTIX_TIX_TCP_BENCH_UDP_BURST_PARALLEL:-1}"
+udp_burst_rounds="${TRUSTIX_TIX_TCP_BENCH_UDP_BURST_ROUNDS:-1}"
+udp_burst_rate_pps="${TRUSTIX_TIX_TCP_BENCH_UDP_BURST_RATE_PPS:-0}"
+udp_burst_allow_loss="${TRUSTIX_TIX_TCP_BENCH_UDP_BURST_ALLOW_LOSS:-0}"
+tcp_burst_connections="${TRUSTIX_TIX_TCP_BENCH_TCP_BURST_CONNECTIONS:-16}"
+tcp_burst_size="${TRUSTIX_TIX_TCP_BENCH_TCP_BURST_SIZE:-1024}"
+tcp_burst_parallel="${TRUSTIX_TIX_TCP_BENCH_TCP_BURST_PARALLEL:-1}"
+tcp_burst_rounds="${TRUSTIX_TIX_TCP_BENCH_TCP_BURST_ROUNDS:-1}"
+burst_timeout="${TRUSTIX_TIX_TCP_BENCH_BURST_TIMEOUT:-15}"
+tcp_connect_timeout="${TRUSTIX_TIX_TCP_BENCH_TCP_CONNECT_TIMEOUT:-5}"
+session_pool_size="${TRUSTIX_TIX_TCP_BENCH_SESSION_POOL_SIZE:-0}"
+session_pool_strategy="${TRUSTIX_TIX_TCP_BENCH_SESSION_POOL_STRATEGY:-flow}"
+session_pool_warmup="${TRUSTIX_TIX_TCP_BENCH_SESSION_POOL_WARMUP:-false}"
+capture_forwarder_workers="${TRUSTIX_TIX_TCP_BENCH_CAPTURE_FORWARDER_WORKERS:-1}"
+capture_forwarder_buffer="${TRUSTIX_TIX_TCP_BENCH_CAPTURE_FORWARDER_BUFFER:-65536}"
+af_xdp_queues="${TRUSTIX_TIX_TCP_BENCH_AF_XDP_QUEUES:-1}"
+af_xdp_tx_backpressure_wait="${TRUSTIX_TIX_TCP_BENCH_AF_XDP_TX_BACKPRESSURE_WAIT:-2ms}"
+af_xdp_tx_kick_batch="${TRUSTIX_TIX_TCP_BENCH_AF_XDP_TX_KICK_BATCH:-256}"
 
 log() {
-  printf '[trustix-exp-tcp-bench] %s\n' "$*" >&2
+  printf '[trustix-tix-tcp-bench] %s\n' "$*" >&2
 }
 
 die() {
@@ -51,7 +51,7 @@ need_cmd() {
 cleanup() {
   local exit_code=$?
   stop_bench_processes
-  if [[ "$keep" != "1" && "$exit_code" == "0" && -z "${TRUSTIX_EXP_TCP_BENCH_WORKDIR:-}" ]]; then
+  if [[ "$keep" != "1" && "$exit_code" == "0" && -z "${TRUSTIX_TIX_TCP_BENCH_WORKDIR:-}" ]]; then
     rm -rf "$workdir"
   else
     log "workdir preserved: $workdir"
@@ -118,7 +118,7 @@ run_one() {
       TRUSTIX_E2E_BIN_DIR="$bin_dir" \
       TRUSTIX_E2E_WORKDIR="$dir" \
       TRUSTIX_E2E_CRASH_RESTART="$e2e_crash_restart" \
-      TRUSTIX_E2E_TRANSPORT=experimental_tcp \
+      TRUSTIX_E2E_TRANSPORT=tix_tcp \
       TRUSTIX_E2E_CRYPTO_PLACEMENT="$placement" \
       TRUSTIX_E2E_KERNEL_MODULE="$e2e_kernel_module" \
       TRUSTIX_E2E_AF_XDP_QUEUES="$af_xdp_queues" \
@@ -149,7 +149,7 @@ run_one() {
     env \
       TRUSTIX_E2E_WORKDIR="$dir" \
       TRUSTIX_E2E_CRASH_RESTART="$e2e_crash_restart" \
-      TRUSTIX_E2E_TRANSPORT=experimental_tcp \
+      TRUSTIX_E2E_TRANSPORT=tix_tcp \
       TRUSTIX_E2E_CRYPTO_PLACEMENT="$placement" \
       TRUSTIX_E2E_KERNEL_MODULE="$e2e_kernel_module" \
       TRUSTIX_E2E_AF_XDP_QUEUES="$af_xdp_queues" \
@@ -226,7 +226,7 @@ def bpf_counters(payload):
     return {item.get("name"): item.get("value") for item in stats.get("counters", []) if isinstance(item, dict)}
 
 def exp(payload):
-    return payload.get("experimental_tcp") or {}
+    return payload.get("tix_tcp") or {}
 
 def pick(counter_map, names):
     return {name: int(counter_map.get(name, 0) or 0) for name in names}
@@ -337,7 +337,7 @@ def bottleneck_hints(nodes, bursts):
         hints.append({"area": "af_xdp_ring_or_umem", "counters": ring_pressure})
     capture_pressure = nonzero(
         [node.get("capture_pressure", {}) for node in nodes.values()],
-        ["tc_capture_lost", "tc_capture_subscriber_drops", "experimental_tcp_subscriber_drops"],
+        ["tc_capture_lost", "tc_capture_subscriber_drops", "tix_tcp_subscriber_drops"],
     )
     if capture_pressure:
         hints.append({"area": "capture_or_userspace_backpressure", "counters": capture_pressure})
@@ -423,7 +423,7 @@ for node in ("ix-a", "ix-b"):
             "tc_capture_events",
             "tc_capture_lost",
             "tc_capture_subscriber_drops",
-            "experimental_tcp_subscriber_drops",
+            "tix_tcp_subscriber_drops",
         ]),
     }
 
@@ -453,7 +453,7 @@ main() {
   need_cmd python3
   case "$run_kernel" in
     auto|1|true|yes|on|0|false|no|off) ;;
-    *) die "TRUSTIX_EXP_TCP_BENCH_KERNEL must be auto, 1, or 0" ;;
+    *) die "TRUSTIX_TIX_TCP_BENCH_KERNEL must be auto, 1, or 0" ;;
   esac
 
   mkdir -p "$workdir"
@@ -468,7 +468,7 @@ main() {
       if kernel_provider_loaded || bool_enabled "$kernel_module"; then
         run_one kernel
       else
-        log "skip kernel placement benchmark: trustix_crypto is not loaded and TRUSTIX_EXP_TCP_BENCH_KERNEL_MODULE is not enabled"
+        log "skip kernel placement benchmark: trustix_crypto is not loaded and TRUSTIX_TIX_TCP_BENCH_KERNEL_MODULE is not enabled"
       fi
       ;;
     0|false|no|off)

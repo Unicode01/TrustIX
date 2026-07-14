@@ -1,8 +1,8 @@
-// Package experimentaltcp defines the shared wire frame used by TrustIX's
-// TCP-shaped ACKless datapath. The outer packet can be emitted by TC/XDP or a
+// Package tixtcp defines the shared wire frame used by TrustIX's
+// TCP-shaped TIX-TCP datapath. The outer packet can be emitted by TC/XDP or a
 // userspace reinjector; this frame is the stable payload contract between
 // userspace crypto and a future kernel crypto implementation.
-package experimentaltcp
+package tixtcp
 
 import (
 	"encoding/binary"
@@ -49,21 +49,21 @@ func (frame Frame) MarshalBinary() ([]byte, error) {
 
 func FrameWireLen(payloadLen int) (int, error) {
 	if payloadLen > MaxPayload {
-		return 0, fmt.Errorf("experimental_tcp payload size %d exceeds max %d", payloadLen, MaxPayload)
+		return 0, fmt.Errorf("tix_tcp payload size %d exceeds max %d", payloadLen, MaxPayload)
 	}
 	if payloadLen < 0 {
-		return 0, fmt.Errorf("experimental_tcp payload size %d is invalid", payloadLen)
+		return 0, fmt.Errorf("tix_tcp payload size %d is invalid", payloadLen)
 	}
 	return HeaderLen + payloadLen, nil
 }
 
 func (frame Frame) MarshalBinaryInto(wire []byte) (int, error) {
 	if len(frame.Payload) > MaxPayload {
-		return 0, fmt.Errorf("experimental_tcp payload size %d exceeds max %d", len(frame.Payload), MaxPayload)
+		return 0, fmt.Errorf("tix_tcp payload size %d exceeds max %d", len(frame.Payload), MaxPayload)
 	}
 	wireLen := HeaderLen + len(frame.Payload)
 	if len(wire) < wireLen {
-		return 0, fmt.Errorf("experimental_tcp frame buffer size %d is smaller than wire length %d", len(wire), wireLen)
+		return 0, fmt.Errorf("tix_tcp frame buffer size %d is smaller than wire length %d", len(wire), wireLen)
 	}
 	wire = wire[:wireLen]
 	binary.BigEndian.PutUint32(wire[0:4], Magic)
@@ -111,32 +111,32 @@ func parseFrame(wire []byte, copyPayload bool) (Frame, error) {
 		return Frame{}, err
 	}
 	if next != len(wire) {
-		return Frame{}, fmt.Errorf("experimental_tcp length mismatch: frame=%d wire=%d", next, len(wire))
+		return Frame{}, fmt.Errorf("tix_tcp length mismatch: frame=%d wire=%d", next, len(wire))
 	}
 	return frame, nil
 }
 
 func parseFramePrefix(wire []byte, copyPayload bool) (Frame, int, error) {
 	if len(wire) < HeaderLen {
-		return Frame{}, 0, fmt.Errorf("experimental_tcp frame too short: %d", len(wire))
+		return Frame{}, 0, fmt.Errorf("tix_tcp frame too short: %d", len(wire))
 	}
 	if binary.BigEndian.Uint32(wire[0:4]) != Magic {
-		return Frame{}, 0, fmt.Errorf("experimental_tcp bad magic")
+		return Frame{}, 0, fmt.Errorf("tix_tcp bad magic")
 	}
 	if wire[4] != Version {
-		return Frame{}, 0, fmt.Errorf("experimental_tcp version %d is unsupported", wire[4])
+		return Frame{}, 0, fmt.Errorf("tix_tcp version %d is unsupported", wire[4])
 	}
 	headerLen := int(binary.BigEndian.Uint16(wire[6:8]))
 	if headerLen != HeaderLen {
-		return Frame{}, 0, fmt.Errorf("experimental_tcp header length %d is unsupported", headerLen)
+		return Frame{}, 0, fmt.Errorf("tix_tcp header length %d is unsupported", headerLen)
 	}
 	payloadLen := int(binary.BigEndian.Uint32(wire[32:36]))
 	if payloadLen > MaxPayload {
-		return Frame{}, 0, fmt.Errorf("experimental_tcp payload size %d exceeds max %d", payloadLen, MaxPayload)
+		return Frame{}, 0, fmt.Errorf("tix_tcp payload size %d exceeds max %d", payloadLen, MaxPayload)
 	}
 	wireLen := HeaderLen + payloadLen
 	if len(wire) < wireLen {
-		return Frame{}, 0, fmt.Errorf("experimental_tcp length mismatch: header payload=%d wire=%d", payloadLen, len(wire))
+		return Frame{}, 0, fmt.Errorf("tix_tcp length mismatch: header payload=%d wire=%d", payloadLen, len(wire))
 	}
 	payload := wire[HeaderLen:wireLen]
 	if copyPayload {

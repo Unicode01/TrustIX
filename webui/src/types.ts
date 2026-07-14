@@ -63,8 +63,7 @@ export type StatusPayload = {
     kernel_rx_stage?: KernelRXStageStatus;
     kernel_transport?: KernelTransportStatus;
     kernel_udp?: KernelUDPStatus;
-    tix_tcp?: ExperimentalTCPStatus;
-    experimental_tcp?: ExperimentalTCPStatus;
+    tix_tcp?: TIXTCPStatus;
     sessions?: DataPathSession[];
   };
 };
@@ -75,8 +74,7 @@ export type KernelCapabilitiesPayload = {
   rx_stage?: KernelRXStageStatus;
   kernel_transport?: KernelTransportStatus;
   kernel_udp?: KernelUDPStatus;
-  tix_tcp?: ExperimentalTCPStatus;
-  experimental_tcp?: ExperimentalTCPStatus;
+  tix_tcp?: TIXTCPStatus;
   datapath_mode?: string;
   capabilities?: string[];
 };
@@ -193,7 +191,7 @@ export type KernelDatapathRuntimeConfig = {
   rx_worker?: boolean;
   tx_plaintext?: boolean;
   full_plaintext?: boolean;
-  rx_worker_allow_experimental_tcp?: boolean;
+  rx_worker_allow_tix_tcp?: boolean;
   rx_worker_hot_stats?: boolean;
 };
 
@@ -519,7 +517,6 @@ export type TransportMatrix = {
   peer_endpoints?: Array<EndpointView & TransportMatrixEndpointRuntime & { peer?: string; reverse_only?: boolean; active_reverse_sessions?: number }>;
   kernel_transport?: KernelTransportStatus;
   tix_tcp?: Record<string, unknown>;
-  experimental_tcp?: Record<string, unknown>;
   kernel_udp?: Record<string, unknown>;
   transport_tls?: Record<string, unknown>;
   sessions?: DataPathSession[];
@@ -706,7 +703,7 @@ export type KernelUDPStatus = {
   notes?: string[];
 };
 
-export type ExperimentalTCPStatus = KernelUDPStatus & {
+export type TIXTCPStatus = KernelUDPStatus & {
   raw_socket_fallback?: boolean;
   fast_path_fallback_reason?: string;
   fast_path_queues?: number;

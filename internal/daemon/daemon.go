@@ -35,12 +35,12 @@ import (
 	"trustix.local/trustix/internal/routing"
 	rstate "trustix.local/trustix/internal/runtime"
 	"trustix.local/trustix/internal/transport"
-	experimentaltcptransport "trustix.local/trustix/internal/transport/experimentaltcp"
 	httpconnecttransport "trustix.local/trustix/internal/transport/httpconnect"
 	iptunneltransport "trustix.local/trustix/internal/transport/iptunnel"
 	quictransport "trustix.local/trustix/internal/transport/quic"
 	securetransport "trustix.local/trustix/internal/transport/secure"
 	tcptransport "trustix.local/trustix/internal/transport/tcp"
+	tixtcptransport "trustix.local/trustix/internal/transport/tixtcp"
 	udptransport "trustix.local/trustix/internal/transport/udp"
 	websockettransport "trustix.local/trustix/internal/transport/websocket"
 )
@@ -247,8 +247,8 @@ func New(cfg Config, options ...Option) (*Daemon, error) {
 	if err := daemon.transports.Register(securetransport.New(iptunneltransport.NewVXLANWithManager(tunnelManager), secureOptions)); err != nil {
 		return nil, err
 	}
-	if provider, ok := daemon.dataplane.(dataplane.ExperimentalTCPProvider); ok {
-		if err := daemon.transports.Register(securetransport.New(experimentaltcptransport.New(provider, experimentaltcptransport.Options{
+	if provider, ok := daemon.dataplane.(dataplane.TIXTCPProvider); ok {
+		if err := daemon.transports.Register(securetransport.New(tixtcptransport.New(provider, tixtcptransport.Options{
 			CryptoPlacement: daemon.transportCryptoPlacement,
 			Encryption:      daemon.secureTransportEncryption,
 		}), secureOptions)); err != nil {
@@ -860,12 +860,12 @@ func (daemon *Daemon) attachDataplane(ctx context.Context, desired config.Desire
 func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.AttachSpec {
 	lan := config.PrimaryLAN(desired)
 	lanSpec := dataplaneLANAttachSpec(lan, desired)
-	experimentalTCPSecureDirect := experimentalTCPSecureKernelCryptoDirectForDesired(desired)
-	secureFullDirect := kernelUDPSecureFullDirectForDesired(desired) || experimentalTCPSecureDirect
+	tixTCPSecureDirect := tixTCPSecureKernelCryptoDirectForDesired(desired)
+	secureFullDirect := kernelUDPSecureFullDirectForDesired(desired) || tixTCPSecureDirect
 	kernelUDPSecureRouteGSO := kernelUDPSecureRouteGSOForDesired(desired)
-	experimentalTCPRouteGSOAsync := experimentalTCPRouteGSOAsyncForDesired(desired)
-	experimentalTCPPlainRouteGSOAsync := experimentalTCPPerformanceRouteGSOAsyncForDesired(desired)
-	experimentalTCPFastPathDisabledReason := experimentalTCPFastPathDisabledReasonForDesired(desired)
+	tixTCPRouteGSOAsync := tixTCPRouteGSOAsyncForDesired(desired)
+	tixTCPPlainRouteGSOAsync := tixTCPPerformanceRouteGSOAsyncForDesired(desired)
+	tixTCPFastPathDisabledReason := tixTCPFastPathDisabledReasonForDesired(desired)
 	return dataplane.AttachSpec{
 		LANIface:                                 lanSpec.Iface,
 		UnderlayIface:                            lanSpec.UnderlayIface,
@@ -884,14 +884,14 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		KernelUDPRXSecureDirect:                  secureFullDirect,
 		KernelUDPSecureDirectTrustInnerChecksums: secureFullDirect,
 		KernelUDPSecureRouteGSO:                  kernelUDPSecureRouteGSO,
-		ExperimentalTCPTXDirect:                  experimentalTCPTXDirectForDesired(desired) || experimentalTCPSecureDirect,
-		ExperimentalTCPRouteGSOSync:              experimentalTCPRouteGSOAsync,
-		ExperimentalTCPRouteGSOAsync:             experimentalTCPRouteGSOAsync,
-		ExperimentalTCPRouteXmitWorker:           experimentalTCPRouteGSOAsync,
-		ExperimentalTCPPlainSkipSequence:         experimentalTCPPlainRouteGSOAsync,
-		ExperimentalTCPPlainACKOnly:              experimentalTCPPlainRouteGSOAsync,
-		ExperimentalTCPFastPathDisabled:          experimentalTCPFastPathDisabledReason != "",
-		ExperimentalTCPFastPathDisabledReason:    experimentalTCPFastPathDisabledReason,
+		TIXTCPTXDirect:                           tixTCPTXDirectForDesired(desired) || tixTCPSecureDirect,
+		TIXTCPRouteGSOSync:                       tixTCPRouteGSOAsync,
+		TIXTCPRouteGSOAsync:                      tixTCPRouteGSOAsync,
+		TIXTCPRouteXmitWorker:                    tixTCPRouteGSOAsync,
+		TIXTCPPlainSkipSequence:                  tixTCPPlainRouteGSOAsync,
+		TIXTCPPlainACKOnly:                       tixTCPPlainRouteGSOAsync,
+		TIXTCPFastPathDisabled:                   tixTCPFastPathDisabledReason != "",
+		TIXTCPFastPathDisabledReason:             tixTCPFastPathDisabledReason,
 		KernelDatapathFullPlaintext:              kernelDatapathFullPlaintextEnabledForDesired(desired),
 		KernelDatapathSuppressLegacyRXWorker:     kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired),
 		PinPath:                                  filepath.Join(dataDir, "bpf"),

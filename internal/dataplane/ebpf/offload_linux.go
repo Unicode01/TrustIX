@@ -309,7 +309,7 @@ func lanOffloadProtectionApplies(spec dataplane.AttachSpec) bool {
 	case "managed", "auto":
 		return strings.EqualFold(spec.LANAttachMode, "managed") ||
 			spec.KernelUDPTXDirectOnly ||
-			spec.ExperimentalTCPTXDirect
+			spec.TIXTCPTXDirect
 	default:
 		return strings.EqualFold(spec.LANAttachMode, "managed")
 	}
@@ -333,7 +333,7 @@ func lanOffloadProtectionPreservesRouteGSO(spec dataplane.AttachSpec) bool {
 	default:
 		return false
 	}
-	if !spec.ExperimentalTCPTXDirect &&
+	if !spec.TIXTCPTXDirect &&
 		kernelUDPTXDirectOnlyEnabled(spec) &&
 		kernelUDPTunnelGSOEnabledForOptions(kernelUDPTXDirectProgramOptions{
 			Enabled:       true,
@@ -347,46 +347,46 @@ func lanOffloadProtectionPreservesRouteGSO(spec dataplane.AttachSpec) bool {
 		}) {
 		return true
 	}
-	if experimentalTCPActiveGSOLANOffloadPreserveRequested(spec) {
+	if tixTCPActiveGSOLANOffloadPreserveRequested(spec) {
 		return true
 	}
 	return false
 }
 
-func experimentalTCPActiveGSOLANOffloadPreserveRequested(spec dataplane.AttachSpec) bool {
-	if !spec.ExperimentalTCPTXDirect || !kernelUDPTXDirectOnlyEnabled(spec) {
+func tixTCPActiveGSOLANOffloadPreserveRequested(spec dataplane.AttachSpec) bool {
+	if !spec.TIXTCPTXDirect || !kernelUDPTXDirectOnlyEnabled(spec) {
 		return false
 	}
-	if spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync {
+	if spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync {
 		return true
 	}
-	if !experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() {
+	if !tixTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() {
 		return false
 	}
-	if experimentalTCPSkipOuterTCPChecksum() || experimentalTCPTXDirectPreOuterInnerChecksumEnabled() {
+	if tixTCPSkipOuterTCPChecksum() || tixTCPTXDirectPreOuterInnerChecksumEnabled() {
 		return false
 	}
 	if envFalsey(
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_SAFE_ACTIVE_GSO",
+		"TRUSTIX_TIX_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE",
+		"TRUSTIX_TIX_TCP_TC_TX_DIRECT_SAFE_ACTIVE_GSO",
 	) {
 		return false
 	}
-	if !experimentalTCPUnsafeActiveGSOAcknowledged() {
+	if !tixTCPUnsafeActiveGSOAcknowledged() {
 		return false
 	}
 	return kernelUDPTunnelGSOEnabledForOptions(kernelUDPTXDirectProgramOptions{
-		Enabled:             true,
-		ExperimentalTCPOnly: true,
-		DirectOnly:          true,
+		Enabled:    true,
+		TIXTCPOnly: true,
+		DirectOnly: true,
 	}) &&
 		envTruthy(
 			"TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO",
 			"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ACTIVE_GSO",
 		) &&
 		envTruthy(
-			"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE",
-			"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_SAFE_ACTIVE_GSO",
+			"TRUSTIX_TIX_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE",
+			"TRUSTIX_TIX_TCP_TC_TX_DIRECT_SAFE_ACTIVE_GSO",
 		)
 }
 

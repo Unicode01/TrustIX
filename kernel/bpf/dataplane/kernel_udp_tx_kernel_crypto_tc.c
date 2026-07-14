@@ -87,11 +87,11 @@ const volatile __u32 trustix_kudp_tx_secure_route_gso_kfunc = 0;
 #define TRUSTIX_KERNEL_UDP_HEADER_LEN 32
 #define TRUSTIX_KERNEL_UDP_FLAG_ENCRYPTED 1
 #define TRUSTIX_KERNEL_UDP_FLAG_INNER_IPV4 8
-#define TRUSTIX_EXP_TCP_VERSION 1
-#define TRUSTIX_EXP_TCP_HEADER_LEN 40
-#define TRUSTIX_EXP_TCP_FLAG_ENCRYPTED 1
-#define TRUSTIX_EXP_TCP_FLAG_INNER_IPV4 8
-#define TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP 0
+#define TRUSTIX_TIX_TCP_VERSION 1
+#define TRUSTIX_TIX_TCP_HEADER_LEN 40
+#define TRUSTIX_TIX_TCP_FLAG_ENCRYPTED 1
+#define TRUSTIX_TIX_TCP_FLAG_INNER_IPV4 8
+#define TRUSTIX_KERNEL_CRYPTO_NAMESPACE_TIX_TCP 0
 #define TRUSTIX_KERNEL_CRYPTO_NAMESPACE_KERNEL_UDP 1
 #define TRUSTIX_KERNEL_CRYPTO_DIRECTION_SEND 1
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN 16
@@ -105,15 +105,15 @@ const volatile __u32 trustix_kudp_tx_secure_route_gso_kfunc = 0;
 #define TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD (20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
 #define TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN (14 + 20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
 #define TRUSTIX_KUDP_SECURE_CIPHER_OFFSET TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN
-#define TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD (20 + 20 + TRUSTIX_EXP_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
-#define TRUSTIX_EXP_TCP_SECURE_PACKET_HEADER_LEN (14 + 20 + 20 + TRUSTIX_EXP_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
-#define TRUSTIX_EXP_TCP_SECURE_CIPHER_OFFSET TRUSTIX_EXP_TCP_SECURE_PACKET_HEADER_LEN
-#define TRUSTIX_KTX_SECURE_PACKET_HEADER_LEN TRUSTIX_EXP_TCP_SECURE_PACKET_HEADER_LEN
+#define TRUSTIX_TIX_TCP_SECURE_OUTER_OVERHEAD (20 + 20 + TRUSTIX_TIX_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
+#define TRUSTIX_TIX_TCP_SECURE_PACKET_HEADER_LEN (14 + 20 + 20 + TRUSTIX_TIX_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
+#define TRUSTIX_TIX_TCP_SECURE_CIPHER_OFFSET TRUSTIX_TIX_TCP_SECURE_PACKET_HEADER_LEN
+#define TRUSTIX_KTX_SECURE_PACKET_HEADER_LEN TRUSTIX_TIX_TCP_SECURE_PACKET_HEADER_LEN
 #define TRUSTIX_KTX_SECURE_PACKET_MAX (TRUSTIX_KTX_SECURE_PACKET_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_PADDED)
 #define TRUSTIX_KUDP_TX_FLOW_FLAG_SECURE 1
 #define TRUSTIX_KUDP_TX_FLOW_FLAG_TRUST_INNER_CHECKSUM 2
 #define TRUSTIX_KUDP_TX_FLOW_FLAG_HOT_STATS 4
-#define TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP 8
+#define TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP 8
 #define TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM 16
 #define TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_HOT_STATS 1
 #define TRUSTIX_KUDP_TX_ROUTE_FLAG_BYPASS 4
@@ -915,8 +915,8 @@ static __noinline int trustix_encrypt_inner_ipv4_skb_direct(struct __sk_buff *sk
 
     key.flow_id = flow_id;
     key.direction = TRUSTIX_KERNEL_CRYPTO_DIRECTION_SEND;
-    if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)
-        key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP;
+    if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP)
+        key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_TIX_TCP;
     else
         key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_KERNEL_UDP;
     slot_index = bpf_map_lookup_elem(&trustix_kernel_crypto_flow_index_map, &key);
@@ -1012,8 +1012,8 @@ static __noinline int trustix_secure_route_gso_direct(struct __sk_buff *skb,
 
     key.flow_id = flow_id;
     key.direction = TRUSTIX_KERNEL_CRYPTO_DIRECTION_SEND;
-    if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)
-        key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP;
+    if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP)
+        key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_TIX_TCP;
     else
         key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_KERNEL_UDP;
     slot_index = bpf_map_lookup_elem(&trustix_kernel_crypto_flow_index_map, &key);
@@ -1145,8 +1145,8 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
         trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_TCP_MSS_CANDIDATES);
         mss_clamp = trustix_tcp_mss_clamp_for_mtu(
             flow->mtu,
-            (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)
-                ? TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD
+            (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP)
+                ? TRUSTIX_TIX_TCP_SECURE_OUTER_OVERHEAD
                 : TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD);
         if (mss_clamp) {
             clamp_result = trustix_clamp_inner_tcp_mss(scratch, inner_len, mss_clamp);
@@ -1169,8 +1169,8 @@ static __noinline int trustix_encrypt_inner_ipv4(struct __sk_buff *skb,
 
     key.flow_id = flow_id;
     key.direction = TRUSTIX_KERNEL_CRYPTO_DIRECTION_SEND;
-    if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)
-        key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP;
+    if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP)
+        key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_TIX_TCP;
     else
         key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_KERNEL_UDP;
     slot_index = bpf_map_lookup_elem(&trustix_kernel_crypto_flow_index_map, &key);
@@ -1306,7 +1306,7 @@ static __noinline int trustix_store_cipher_to_packet(struct __sk_buff *skb,
                                     BPF_F_INVALIDATE_HASH);
 }
 
-static __noinline int trustix_exp_tcp_outer_checksum(struct trustix_kudp_tx_scratch *scratch,
+static __noinline int trustix_tix_tcp_outer_checksum(struct trustix_kudp_tx_scratch *scratch,
                                                      __u32 cipher_len,
                                                      __u16 *checksum)
 {
@@ -1326,7 +1326,7 @@ static __noinline int trustix_exp_tcp_outer_checksum(struct trustix_kudp_tx_scra
     cipher_len &= TRUSTIX_KERNEL_CRYPTO_FRAME_MAX;
     if (cipher_len < TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
         return -22;
-    l4_header_len = TRUSTIX_EXP_TCP_SECURE_PACKET_HEADER_LEN - 14 - 20;
+    l4_header_len = TRUSTIX_TIX_TCP_SECURE_PACKET_HEADER_LEN - 14 - 20;
     l4_len = l4_header_len + cipher_len;
     if (l4_len > 0xffff)
         return -22;
@@ -1388,10 +1388,10 @@ static __noinline void trustix_build_outer_header(struct trustix_kudp_tx_scratch
     __u32 payload_len = TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + cipher_len;
     __u32 outer_len = inner_len + TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD;
     __u32 udp_len = 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + payload_len;
-    int experimental_tcp = flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP;
+    int tix_tcp = flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP;
 
-    if (experimental_tcp) {
-        outer_len = inner_len + TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD;
+    if (tix_tcp) {
+        outer_len = inner_len + TRUSTIX_TIX_TCP_SECURE_OUTER_OVERHEAD;
         data = scratch->io.split.header;
     } else {
         data = scratch->io.split.header;
@@ -1410,7 +1410,7 @@ static __noinline void trustix_build_outer_header(struct trustix_kudp_tx_scratch
     data[20] = 0x40;
     data[21] = 0;
     data[22] = 64;
-    data[23] = experimental_tcp ? IPPROTO_TCP : IPPROTO_UDP;
+    data[23] = tix_tcp ? IPPROTO_TCP : IPPROTO_UDP;
     data[24] = 0;
     data[25] = 0;
     trustix_copy_ip(data + 26, flow->source_ip);
@@ -1419,7 +1419,7 @@ static __noinline void trustix_build_outer_header(struct trustix_kudp_tx_scratch
 
     trustix_copy_port(data + 34, flow->source_port);
     trustix_copy_port(data + 36, flow->destination_port);
-    if (experimental_tcp) {
+    if (tix_tcp) {
         trustix_write_be32(data + 38, (__u32)scratch->sequence);
         trustix_write_be32(data + 42, 1);
         data[46] = 0x50;
@@ -1434,9 +1434,9 @@ static __noinline void trustix_build_outer_header(struct trustix_kudp_tx_scratch
         data[55] = 'I';
         data[56] = 'X';
         data[57] = 'T';
-        data[58] = TRUSTIX_EXP_TCP_VERSION;
-        data[59] = TRUSTIX_EXP_TCP_FLAG_ENCRYPTED | TRUSTIX_EXP_TCP_FLAG_INNER_IPV4;
-        trustix_write_be16(data + 60, TRUSTIX_EXP_TCP_HEADER_LEN);
+        data[58] = TRUSTIX_TIX_TCP_VERSION;
+        data[59] = TRUSTIX_TIX_TCP_FLAG_ENCRYPTED | TRUSTIX_TIX_TCP_FLAG_INNER_IPV4;
+        trustix_write_be16(data + 60, TRUSTIX_TIX_TCP_HEADER_LEN);
         trustix_write_be64(data + 62, flow_id);
         trustix_write_be64(data + 70, scratch->epoch);
         trustix_write_be64(data + 78, scratch->sequence);
@@ -1496,7 +1496,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     __u32 redirect_ifindex;
     __u64 flow_id;
     __u16 outer_tcp_checksum;
-    int experimental_tcp;
+    int tix_tcp;
     int skb_sealed = 0;
     int outer_tcp_csum_kfunc = 0;
 #if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
@@ -1532,7 +1532,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
         goto flow_miss;
     if (!(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SECURE))
         goto flag_miss;
-    experimental_tcp = flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP;
+    tix_tcp = flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP;
 
     trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_ATTEMPTS);
     trustix_kudp_tx_count_hot(flow, TRUSTIX_KUDP_TX_SECURE_STAT_CANDIDATES);
@@ -1590,10 +1590,10 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     outer_overhead = TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD;
     packet_header_len = TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN;
     cipher_offset = TRUSTIX_KUDP_SECURE_CIPHER_OFFSET;
-    if (experimental_tcp) {
-        outer_overhead = TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD;
-        packet_header_len = TRUSTIX_EXP_TCP_SECURE_PACKET_HEADER_LEN;
-        cipher_offset = TRUSTIX_EXP_TCP_SECURE_CIPHER_OFFSET;
+    if (tix_tcp) {
+        outer_overhead = TRUSTIX_TIX_TCP_SECURE_OUTER_OVERHEAD;
+        packet_header_len = TRUSTIX_TIX_TCP_SECURE_PACKET_HEADER_LEN;
+        cipher_offset = TRUSTIX_TIX_TCP_SECURE_CIPHER_OFFSET;
 #if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
         if (trustix_kudp_tx_secure_outer_tcp_csum_kfunc &&
             !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM))
@@ -1667,9 +1667,9 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     redirect_ifindex = flow->ifindex;
     trustix_build_outer_header(scratch, flow, flow_id, inner_len,
                                (__u32)cipher_len);
-    if (!skb_sealed && experimental_tcp && !outer_tcp_csum_kfunc &&
+    if (!skb_sealed && tix_tcp && !outer_tcp_csum_kfunc &&
         !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM)) {
-        if (trustix_exp_tcp_outer_checksum(scratch, (__u32)cipher_len, &outer_tcp_checksum))
+        if (trustix_tix_tcp_outer_checksum(scratch, (__u32)cipher_len, &outer_tcp_checksum))
             goto checksum_fallback;
         trustix_write_be16(scratch->io.split.header + 50, outer_tcp_checksum);
     }
@@ -1693,7 +1693,7 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     if (!skb_sealed &&
         trustix_store_cipher_to_packet(skb, cipher_offset, scratch, (__u32)cipher_len))
         goto drop;
-    if ((skb_sealed || outer_tcp_csum_kfunc) && experimental_tcp &&
+    if ((skb_sealed || outer_tcp_csum_kfunc) && tix_tcp &&
         !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM)) {
 #if TRUSTIX_KUDP_SECURE_OUTER_TCP_CSUM_KFUNC
         __u32 csum_flags = outer_tcp_partial_csum_kfunc ?

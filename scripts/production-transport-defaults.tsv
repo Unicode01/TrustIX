@@ -38,10 +38,10 @@ vxlan	plaintext	performance	tc_xdp	userspace	cross_host	userspace_tc	4	3600	sele
 kernel_udp	plaintext	performance	tc_xdp	userspace	single_host	tc_direct	0	30	TC-only plaintext UDP provider smoke path
 kernel_udp	plaintext	performance	tc_xdp	userspace	cross_host	tc_direct	3	3600	selected plaintext kernel UDP TC-direct compatibility path
 kernel_udp	secure	performance	tc_xdp	kernel	cross_host	secure_kudp	1.5	3600	selected secure kernel UDP route-GSO path
-experimental_tcp	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted experimental TCP compatibility path
-experimental_tcp	secure	stable	userspace	userspace	cross_host	userspace	0.5	3600	selected encrypted experimental TCP userspace compatibility path
-experimental_tcp	secure	performance	kernel_module	kernel	cross_host	secure_exp_tcp_kernel	1.5	3600	selected secure experimental TCP kernel crypto route-GSO path
-experimental_tcp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext experimental TCP compatibility path
-experimental_tcp	plaintext	performance	kernel_module	userspace	cross_host	exp_tcp_full_kmod	4	3600	selected plaintext experimental TCP full-kmod datapath
-experimental_tcp	plaintext	performance	kernel_module	userspace	cross_host	owdeb_exp_tcp_full_kmod	4	3600	selected OpenWrt-Debian plaintext experimental TCP full-kmod datapath
-experimental_tcp	plaintext	performance	kernel_module	userspace	cross_host	route_gso	2.5	3600	selected plaintext experimental TCP route-GSO path
+tix_tcp	secure	stable	userspace	userspace	single_host	userspace	0	30	baseline encrypted TIX-TCP compatibility path
+tix_tcp	secure	stable	userspace	userspace	cross_host	userspace	0.5	3600	selected encrypted TIX-TCP userspace compatibility path
+tix_tcp	secure	performance	kernel_module	kernel	cross_host	secure_tix_tcp_kernel	1.5	3600	selected secure TIX-TCP kernel crypto route-GSO path
+tix_tcp	plaintext	stable	userspace	userspace	single_host	userspace	0	30	baseline plaintext TIX-TCP compatibility path
+tix_tcp	plaintext	performance	kernel_module	userspace	cross_host	tix_tcp_full_kmod	4	3600	selected plaintext TIX-TCP full-kmod datapath
+tix_tcp	plaintext	performance	kernel_module	userspace	cross_host	owdeb_tix_tcp_full_kmod	4	3600	selected OpenWrt-Debian plaintext TIX-TCP full-kmod datapath
+tix_tcp	plaintext	performance	kernel_module	userspace	cross_host	route_gso	2.5	3600	selected plaintext TIX-TCP route-GSO path

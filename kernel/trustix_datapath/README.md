@@ -14,15 +14,15 @@ route/session/session-wire/flow state batch ioctl tables, a route/flow/session
 classify path, a dry-run IPv4 packet classify path with counters, and a
 pass-through IPv4 prerouting hook that can classify real skb traffic without
 modifying or forwarding it. The hook also keeps pass-through counters for outer
-IPv4 UDP or experimental-TCP TIXT packets that match session-wire state. It also
+IPv4 UDP or TIX-TCP TIXT packets that match session-wire state. It also
 has controlled TIXT encap/decap ioctls plus outer-packet build/parse ioctls. The
 build path uses the same route/session/flow plus session-wire state to produce
-an IPv4 UDP or experimental-TCP packet containing TIXT and the accepted inner
+an IPv4 UDP or TIX-TCP packet containing TIXT and the accepted inner
 IPv4 payload. The parse path validates a single outer IPv4 UDP or
-experimental-TCP packet against session-wire state and copies the inner IPv4
+TIX-TCP packet against session-wire state and copies the inner IPv4
 payload back out. When attached with `TX_PLAINTEXT`, the prerouting hook can
 classify plaintext LAN IPv4 ingress, skip encrypted sessions, build an outer
-TIXT UDP or experimental-TCP packet from session-wire state, send it through the
+TIXT UDP or TIX-TCP packet from session-wire state, send it through the
 configured underlay target with `ip_local_out`, and drop the original inner skb
 after successful encapsulation. GSO ingress is currently skipped and counted so
 large-frame TX can be added separately. When attached with `RX_STAGE`, the

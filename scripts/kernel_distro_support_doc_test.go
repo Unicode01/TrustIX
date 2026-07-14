@@ -22,24 +22,24 @@ func TestKernelDistroSupportUsesCurrentProductionEvidenceBoundary(t *testing.T) 
 		"OpenWrt-Debian full-kmod plaintext",
 		"3.554661 Gbps",
 		"3.995213 Gbps",
-		"OpenWrt-Debian experimental TCP full-kmod plaintext",
+		"OpenWrt-Debian TIX-TCP full-kmod plaintext",
 		"7.329137 Gbps",
 		"7.754582 Gbps",
 		"Full-kmod plaintext",
 		"5.053889 Gbps",
 		"Plaintext kernel UDP TC-direct",
 		"3.196574 Gbps",
-		"Experimental TCP full-kmod plaintext",
+		"TIX-TCP full-kmod plaintext",
 		"11.819391 Gbps",
-		"Plaintext experimental TCP route-GSO",
+		"Plaintext TIX-TCP route-GSO",
 		"7.081862 Gbps",
 		"3600s per direction on Debian `6.12.94+deb13-cloud-amd64` to `6.12.95+deb13-cloud-amd64`, 2026-07-07 post-reboot",
 		"`add2971946b4948fbdd49d973aa94581b2e87a50`",
 		"`1dfaf51caac8bc03177de4ec428e23659db69173`",
 		"route-GSO async xmit",
 		"stopped-TXQ drop error counters were zero",
-		"Secure experimental TCP kernel crypto",
-		"`experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel`",
+		"Secure TIX-TCP kernel crypto",
+		"`tix_tcp` / `secure` / `performance` / `kernel_module` / `kernel`",
 		"5.405340 Gbps",
 		"used commit `fa207ea`; minimum received throughput was 3.765459 Gbps",
 		"minimum received throughput of 1.577411 Gbps",
@@ -54,7 +54,7 @@ func TestKernelDistroSupportUsesCurrentProductionEvidenceBoundary(t *testing.T) 
 		"`8c2eebccbcf031f0133c8dbf192d826526c5187c`",
 		"per-direction throughput of\n5.485418 Gbps A-to-B and 5.405340 Gbps",
 		"This is a dedicated",
-		"`secure_exp_tcp_kernel` production default",
+		"`secure_tix_tcp_kernel` production default",
 		"production default and must not reuse secure-kUDP",
 		"Route-TCP GSO/XMIT families are enabled only by selected policies",
 		"production route-GSO uses separate cross-host gates",
@@ -63,7 +63,7 @@ func TestKernelDistroSupportUsesCurrentProductionEvidenceBoundary(t *testing.T) 
 			t.Fatalf("kernel distro support doc missing current production evidence fragment %q", want)
 		}
 	}
-	if strings.Contains(source, "Route-GSO fallback | `experimental_tcp`") {
+	if strings.Contains(source, "Route-GSO fallback | `tix_tcp`") {
 		t.Fatal("kernel distro support doc still describes selected plaintext route-GSO as fallback-only")
 	}
 }
@@ -78,7 +78,7 @@ func TestFirstRunDocsDoNotDescribeProductionRouteGSOAsHardDisabled(t *testing.T)
 			want: []string{
 				"route_gso",
 				"secure_kudp",
-				"secure_exp_tcp_kernel",
+				"secure_tix_tcp_kernel",
 				"route-TCP GSO/XMIT",
 			},
 		},

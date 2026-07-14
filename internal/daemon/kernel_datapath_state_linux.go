@@ -306,7 +306,7 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointCompatible(endpoint con
 		return false
 	}
 	switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
-	case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+	case transport.ProtocolUDP, transport.ProtocolTIXTCP:
 	default:
 		return false
 	}
@@ -808,12 +808,12 @@ func (daemon *Daemon) kernelDatapathResolveSessionWireInfo(info transport.Kernel
 		if flow.DestinationPort != 0 {
 			info.DestinationPort = flow.DestinationPort
 		}
-	case transport.ProtocolExperimentalTCP:
-		lookup, ok := daemon.dataplane.(dataplane.ExperimentalTCPFlowLookup)
+	case transport.ProtocolTIXTCP:
+		lookup, ok := daemon.dataplane.(dataplane.TIXTCPFlowLookup)
 		if !ok {
 			return info
 		}
-		flow, found, err := lookup.ExperimentalTCPFlow(context.Background(), info.FlowID)
+		flow, found, err := lookup.TIXTCPFlow(context.Background(), info.FlowID)
 		if err != nil || !found {
 			return info
 		}
@@ -968,7 +968,7 @@ func kernelDatapathTransportCode(protocol transport.Protocol) uint32 {
 	switch protocol {
 	case transport.ProtocolUDP:
 		return 1
-	case transport.ProtocolExperimentalTCP:
+	case transport.ProtocolTIXTCP:
 		return 2
 	case transport.ProtocolGRE:
 		return 3

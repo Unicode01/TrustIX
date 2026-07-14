@@ -25,57 +25,57 @@ typedef unsigned long long __u64;
 #define XDP_PASS 2
 #define XDP_REDIRECT 4
 
-#define TRUSTIX_EXP_TCP_STATS_REDIRECTED 0
-#define TRUSTIX_EXP_TCP_STATS_UNAUTHORIZED_DROPS 1
-#define TRUSTIX_EXP_TCP_STATS_PASS 2
-#define TRUSTIX_EXP_TCP_STATS_PARSE_ERRORS 3
-#define TRUSTIX_EXP_TCP_STATS_TCP_CHECKSUM_SKIPPED 11
-#define TRUSTIX_EXP_TCP_STATS_QUEUE_FALLBACK 12
-#define TRUSTIX_EXP_TCP_STATS_ALLOWED_INVALID_DROPS 13
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS 14
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_PLAINTEXT_CANDIDATES 15
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_INNER_IPV4_MISSES 16
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_INNER_IPV4_AT88 17
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_REDIRECTS 18
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_NEIGH_MISSES 19
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_ERRORS 20
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CANDIDATES 21
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_NEIGH_HITS 22
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_BROADCASTS 23
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_ADJUST_HEAD_ERRORS 24
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_TAIL_ERRORS 25
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_POST_ADJUST_ERRORS 26
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_LEN_ERRORS 27
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX_REDIRECTS 28
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_DEVMAP_REDIRECTS 29
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CONFIG_MISSES 30
-#define TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS 50
+#define TRUSTIX_TIX_TCP_STATS_REDIRECTED 0
+#define TRUSTIX_TIX_TCP_STATS_UNAUTHORIZED_DROPS 1
+#define TRUSTIX_TIX_TCP_STATS_PASS 2
+#define TRUSTIX_TIX_TCP_STATS_PARSE_ERRORS 3
+#define TRUSTIX_TIX_TCP_STATS_TCP_CHECKSUM_SKIPPED 11
+#define TRUSTIX_TIX_TCP_STATS_QUEUE_FALLBACK 12
+#define TRUSTIX_TIX_TCP_STATS_ALLOWED_INVALID_DROPS 13
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS 14
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_PLAINTEXT_CANDIDATES 15
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_INNER_IPV4_MISSES 16
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_INNER_IPV4_AT88 17
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_REDIRECTS 18
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_NEIGH_MISSES 19
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_ERRORS 20
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CANDIDATES 21
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_NEIGH_HITS 22
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_BROADCASTS 23
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_ADJUST_HEAD_ERRORS 24
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_TAIL_ERRORS 25
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_POST_ADJUST_ERRORS 26
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_LEN_ERRORS 27
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX_REDIRECTS 28
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_DEVMAP_REDIRECTS 29
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CONFIG_MISSES 30
+#define TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS 50
 
-#define TRUSTIX_EXP_TCP_CONFIG_SKIP_TCP_CHECKSUM 1
-#define TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_TC_RX_DIRECT 2
-#define TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT 32
-#define TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX 64
-#define TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_TC_RX_SECURE_DIRECT 128
-#define TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_SECURE_DIRECT 256
-#define TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_FIXED_L2 512
-#define TRUSTIX_EXP_TCP_CONFIG_XDP_FALLBACK_PASS 1024
-#define TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUM 2048
-#define TRUSTIX_EXP_TCP_CONFIG_HOT_PATH_STATS 16
-#define TRUSTIX_EXP_TCP_CONFIG_QUEUE_COUNT_SHIFT 16
-#define TRUSTIX_EXP_TCP_CONFIG_QUEUE_COUNT_MASK 0xffff0000U
+#define TRUSTIX_TIX_TCP_CONFIG_SKIP_TCP_CHECKSUM 1
+#define TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_TC_RX_DIRECT 2
+#define TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT 32
+#define TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX 64
+#define TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_TC_RX_SECURE_DIRECT 128
+#define TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_SECURE_DIRECT 256
+#define TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_FIXED_L2 512
+#define TRUSTIX_TIX_TCP_CONFIG_XDP_FALLBACK_PASS 1024
+#define TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUM 2048
+#define TRUSTIX_TIX_TCP_CONFIG_HOT_PATH_STATS 16
+#define TRUSTIX_TIX_TCP_CONFIG_QUEUE_COUNT_SHIFT 16
+#define TRUSTIX_TIX_TCP_CONFIG_QUEUE_COUNT_MASK 0xffff0000U
 #define TRUSTIX_KERNEL_UDP_HEADER_LEN 32
-#define TRUSTIX_EXP_TCP_HEADER_LEN 40
-#define TRUSTIX_EXP_TCP_TCP_HEADER_LEN 20
+#define TRUSTIX_TIX_TCP_HEADER_LEN 40
+#define TRUSTIX_TIX_TCP_TCP_HEADER_LEN 20
 #define TRUSTIX_XDP_RX_DIRECT_CSUM_CHUNK 512
 #define TRUSTIX_XDP_RX_DIRECT_FRAME_MAX 1535
 #define TRUSTIX_XDP_RX_DIRECT_FRAME_PADDED 1536
 #define TRUSTIX_XDP_TCP_SMALL_CSUM_MAX 96
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
-#define TRUSTIX_EXP_TCP_FLAG_ENCRYPTED 1
-#define TRUSTIX_EXP_TCP_FLAG_KERNEL_OPENED 2
-#define TRUSTIX_EXP_TCP_FLAG_CRYPTO_FRAGMENT 4
-#define TRUSTIX_EXP_TCP_FLAG_INNER_IPV4 8
+#define TRUSTIX_TIX_TCP_FLAG_ENCRYPTED 1
+#define TRUSTIX_TIX_TCP_FLAG_KERNEL_OPENED 2
+#define TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT 4
+#define TRUSTIX_TIX_TCP_FLAG_INNER_IPV4 8
 #define TRUSTIX_XDP_DIRECT_FALLBACK -1
 
 struct trustix_xdp_l4_csum_header {
@@ -124,28 +124,28 @@ struct {
     __uint(max_entries, 1);
     __type(key, __u32);
     __type(value, __u32);
-} ix_exp_tcp_xsk SEC(".maps");
+} ix_tix_tcp_xsk SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
     __type(key, __u32);
     __type(value, __u8);
-} ix_exp_tcp_port SEC(".maps");
+} ix_tix_tcp_port SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 51);
     __type(key, __u32);
     __type(value, __u64);
-} ix_exp_tcp_stat SEC(".maps");
+} ix_tix_tcp_stat SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
     __type(key, __u32);
     __type(value, __u32);
-} ix_exp_tcp_config SEC(".maps");
+} ix_tix_tcp_config SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -178,52 +178,52 @@ struct {
 static void *(*bpf_map_lookup_elem)(const void *map, const void *key) = (void *)1;
 static long (*bpf_redirect)(__u32 ifindex, __u64 flags) = (void *)23;
 static long (*bpf_redirect_map)(const void *map, __u32 key, __u64 flags) = (void *)51;
-#if defined(TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CHECKSUM) || \
-    defined(TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM)
+#if defined(TRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CHECKSUM) || \
+    defined(TRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM)
 static long (*bpf_csum_diff)(const void *from, __u32 from_size, const void *to, __u32 to_size, __u32 seed) = (void *)28;
 #endif
-#ifdef TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CHECKSUM
+#ifdef TRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CHECKSUM
 static long (*bpf_xdp_load_bytes)(struct xdp_md *ctx, __u32 offset, void *buf, __u32 len) = (void *)189;
 #endif
 static long (*bpf_xdp_adjust_head)(struct xdp_md *ctx, int delta) = (void *)44;
 static long (*bpf_xdp_adjust_tail)(struct xdp_md *ctx, int delta) = (void *)65;
 
-static __always_inline void trustix_exp_tcp_count(__u32 key)
+static __always_inline void trustix_tix_tcp_count(__u32 key)
 {
     __u64 *value;
 
-    value = bpf_map_lookup_elem(&ix_exp_tcp_stat, &key);
+    value = bpf_map_lookup_elem(&ix_tix_tcp_stat, &key);
     if (value)
         (*value)++;
 }
 
-static __always_inline void trustix_exp_tcp_count_hot_config(__u32 key, __u32 config)
+static __always_inline void trustix_tix_tcp_count_hot_config(__u32 key, __u32 config)
 {
-    if (config & TRUSTIX_EXP_TCP_CONFIG_HOT_PATH_STATS)
-        trustix_exp_tcp_count(key);
+    if (config & TRUSTIX_TIX_TCP_CONFIG_HOT_PATH_STATS)
+        trustix_tix_tcp_count(key);
 }
 
-static __always_inline __u32 trustix_exp_tcp_redirect_queue_config(struct xdp_md *ctx,
+static __always_inline __u32 trustix_tix_tcp_redirect_queue_config(struct xdp_md *ctx,
                                                                    __u32 config)
 {
-    __u32 queue_count = (config & TRUSTIX_EXP_TCP_CONFIG_QUEUE_COUNT_MASK) >>
-                        TRUSTIX_EXP_TCP_CONFIG_QUEUE_COUNT_SHIFT;
+    __u32 queue_count = (config & TRUSTIX_TIX_TCP_CONFIG_QUEUE_COUNT_MASK) >>
+                        TRUSTIX_TIX_TCP_CONFIG_QUEUE_COUNT_SHIFT;
 
     if (queue_count == 0 || ctx->rx_queue_index < queue_count)
         return ctx->rx_queue_index;
 
-    trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_QUEUE_FALLBACK,
+    trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_QUEUE_FALLBACK,
                                      config);
     return 0;
 }
 
-static __always_inline int trustix_exp_tcp_port_allowed(__u8 *l4)
+static __always_inline int trustix_tix_tcp_port_allowed(__u8 *l4)
 {
     __u32 dst_key = ((__u32)l4[2]) | ((__u32)l4[3] << 8);
     __u32 src_key = ((__u32)l4[0]) | ((__u32)l4[1] << 8);
 
-    return bpf_map_lookup_elem(&ix_exp_tcp_port, &dst_key) ||
-           bpf_map_lookup_elem(&ix_exp_tcp_port, &src_key);
+    return bpf_map_lookup_elem(&ix_tix_tcp_port, &dst_key) ||
+           bpf_map_lookup_elem(&ix_tix_tcp_port, &src_key);
 }
 
 static __always_inline int trustix_kernel_udp_unfragmented(__u8 *frame)
@@ -232,8 +232,8 @@ static __always_inline int trustix_kernel_udp_unfragmented(__u8 *frame)
            frame[30] == 0 && frame[31] == 0;
 }
 
-#if defined(TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CHECKSUM) || \
-    defined(TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM)
+#if defined(TRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CHECKSUM) || \
+    defined(TRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM)
 static __always_inline __u16 trustix_read_be16(__u8 *src)
 {
     return ((__u16)src[0] << 8) | src[1];
@@ -259,7 +259,7 @@ static __always_inline __u16 trustix_fold_checksum(__u32 sum)
 }
 #endif
 
-#ifdef TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CHECKSUM
+#ifdef TRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CHECKSUM
 static __noinline int trustix_xdp_add_csum_chunk(__u8 *data, __u32 len, __u32 *sum)
 {
     __s64 next;
@@ -479,7 +479,7 @@ static __noinline int trustix_xdp_fix_inner_l4_checksum(__u8 *inner,
 }
 #endif
 
-#ifdef TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM
+#ifdef TRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM
 static __noinline int trustix_xdp_add_tcp_control_checksum(__u8 *tcp,
                                                            __u8 *data_end,
                                                            __u32 tcp_len,
@@ -669,7 +669,7 @@ static __noinline int trustix_xdp_fix_inner_tcp_control_checksum(__u8 *inner,
 }
 #endif
 
-static __always_inline int trustix_exp_tcp_unfragmented(__u8 *frame)
+static __always_inline int trustix_tix_tcp_unfragmented(__u8 *frame)
 {
     return frame[36] == 0 && frame[37] == 0 &&
            frame[38] == 0 && frame[39] == 0;
@@ -687,17 +687,17 @@ static __always_inline int trustix_kernel_udp_xdp_redirect_lan(
     __u32 trim = available - inner_len;
 
     if (trim && bpf_xdp_adjust_tail(ctx, -(int)trim)) {
-        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_TAIL_ERRORS);
+        trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_TAIL_ERRORS);
         return XDP_PASS;
     }
     if (bpf_xdp_adjust_head(ctx, delta)) {
-        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_ADJUST_HEAD_ERRORS);
+        trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_ADJUST_HEAD_ERRORS);
         return XDP_PASS;
     }
     data = (__u8 *)(long)ctx->data;
     data_end = (__u8 *)(long)ctx->data_end;
     if (data + 14 > data_end) {
-        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_POST_ADJUST_ERRORS);
+        trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_POST_ADJUST_ERRORS);
         return XDP_PASS;
     }
 
@@ -709,14 +709,14 @@ static __always_inline int trustix_kernel_udp_xdp_redirect_lan(
     *(__u16 *)(data + 10) = source_mac1;
     data[12] = 0x08;
     data[13] = 0x00;
-    trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_REDIRECTS,
+    trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_REDIRECTS,
                                      config);
-    if ((config & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX) && ifindex) {
-        trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX_REDIRECTS,
+    if ((config & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX) && ifindex) {
+        trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX_REDIRECTS,
                                          config);
         return bpf_redirect(ifindex, 0);
     }
-    trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_DEVMAP_REDIRECTS,
+    trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_DEVMAP_REDIRECTS,
                                      config);
     return bpf_redirect_map(&ix_kudp_rx_devmap, 0, 0);
 }
@@ -725,20 +725,20 @@ static __always_inline int trustix_kernel_udp_xdp_rx_direct_fix_inner_checksums(
     struct xdp_md *ctx, __u8 *inner, __u32 inner_offset, __u32 inner_len,
     __u8 *data_end, __u32 config_value)
 {
-#ifdef TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM
+#ifdef TRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM
     if (trustix_xdp_fix_inner_tcp_control_checksum(inner, inner_len, data_end)) {
-        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
+        trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
         return TRUSTIX_XDP_DIRECT_FALLBACK;
     }
 #endif
-    if (!(config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUM)) {
-#ifdef TRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CHECKSUM
+    if (!(config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUM)) {
+#ifdef TRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CHECKSUM
         if (trustix_xdp_fix_inner_l4_checksum(inner, ctx, inner_offset, inner_len, data_end)) {
-            trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
+            trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
             return TRUSTIX_XDP_DIRECT_FALLBACK;
         }
 #else
-        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
+        trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CSUM_ERRORS);
         return TRUSTIX_XDP_DIRECT_FALLBACK;
 #endif
     }
@@ -757,7 +757,7 @@ static __always_inline int trustix_kernel_udp_xdp_rx_direct_inner(
     struct trustix_kudp_rx_neigh_value *neigh;
     struct trustix_kudp_rx_config_value *rx_config;
 
-    trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CANDIDATES,
+    trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CANDIDATES,
                                      config_value);
     if (inner + 20 > data_end)
         goto direct_len_error;
@@ -768,15 +768,15 @@ static __always_inline int trustix_kernel_udp_xdp_rx_direct_inner(
     if (inner_len < 20 || inner_len > available)
         goto direct_len_error;
 
-    if (config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_FIXED_L2) {
+    if (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT_FIXED_L2) {
         __u32 config_key = 0;
 
         rx_config = bpf_map_lookup_elem(&ix_kudp_rx_config, &config_key);
         if (!rx_config || !rx_config->ifindex) {
-            trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CONFIG_MISSES);
+            trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_CONFIG_MISSES);
             return TRUSTIX_XDP_DIRECT_FALLBACK;
         }
-        trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_BROADCASTS,
+        trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_BROADCASTS,
                                          config_value);
         if (trustix_kernel_udp_xdp_rx_direct_fix_inner_checksums(ctx, inner, inner_offset, inner_len,
                                                                  data_end, config_value))
@@ -792,11 +792,11 @@ static __always_inline int trustix_kernel_udp_xdp_rx_direct_inner(
           ((__u32)inner[18] << 16) | ((__u32)inner[19] << 24);
     neigh = bpf_map_lookup_elem(&ix_kudp_rx_neigh, &key);
     if (!neigh) {
-        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_NEIGH_MISSES);
+        trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_NEIGH_MISSES);
         return TRUSTIX_XDP_DIRECT_FALLBACK;
     }
 
-    trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_NEIGH_HITS,
+    trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_NEIGH_HITS,
                                      config_value);
     if (trustix_kernel_udp_xdp_rx_direct_fix_inner_checksums(ctx, inner, inner_offset, inner_len,
                                                              data_end, config_value))
@@ -808,15 +808,15 @@ static __always_inline int trustix_kernel_udp_xdp_rx_direct_inner(
         config_value);
 
 direct_len_error:
-    trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_LEN_ERRORS);
+    trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_LEN_ERRORS);
     return TRUSTIX_XDP_DIRECT_FALLBACK;
 direct_error:
-    trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_ERRORS);
+    trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_XDP_RX_DIRECT_ERRORS);
     return TRUSTIX_XDP_DIRECT_FALLBACK;
 }
 
 SEC("xdp")
-int trustix_exp_tcp(struct xdp_md *ctx)
+int trustix_tix_tcp(struct xdp_md *ctx)
 {
     __u8 *data = (__u8 *)(long)ctx->data;
     __u8 *data_end = (__u8 *)(long)ctx->data_end;
@@ -857,29 +857,29 @@ tcp:
     if (data[54] != 'T' || data[55] != 'I' ||
         data[56] != 'X' || data[57] != 'T')
         goto pass;
-    config = bpf_map_lookup_elem(&ix_exp_tcp_config, &config_key);
+    config = bpf_map_lookup_elem(&ix_tix_tcp_config, &config_key);
     if (config)
         config_value = *config;
-    if (config_value & TRUSTIX_EXP_TCP_CONFIG_SKIP_TCP_CHECKSUM)
-        trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_TCP_CHECKSUM_SKIPPED,
+    if (config_value & TRUSTIX_TIX_TCP_CONFIG_SKIP_TCP_CHECKSUM)
+        trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_TCP_CHECKSUM_SKIPPED,
                                          config_value);
-    if (!trustix_exp_tcp_port_allowed(data + 34))
+    if (!trustix_tix_tcp_port_allowed(data + 34))
         goto drop;
     if (data + 94 <= data_end &&
-        (data[59] & TRUSTIX_EXP_TCP_FLAG_ENCRYPTED) &&
-        (data[59] & TRUSTIX_EXP_TCP_FLAG_INNER_IPV4) &&
-        !(data[59] & TRUSTIX_EXP_TCP_FLAG_CRYPTO_FRAGMENT) &&
-        trustix_exp_tcp_unfragmented(data + 54) &&
-        (config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_TC_RX_SECURE_DIRECT)) {
-        trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
+        (data[59] & TRUSTIX_TIX_TCP_FLAG_ENCRYPTED) &&
+        (data[59] & TRUSTIX_TIX_TCP_FLAG_INNER_IPV4) &&
+        !(data[59] & TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT) &&
+        trustix_tix_tcp_unfragmented(data + 54) &&
+        (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_TC_RX_SECURE_DIRECT)) {
+        trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
                                          config_value);
         goto pass;
     }
     if (data + 94 <= data_end &&
-        (data[59] == TRUSTIX_EXP_TCP_FLAG_INNER_IPV4 ||
-         data[59] == (TRUSTIX_EXP_TCP_FLAG_KERNEL_OPENED | TRUSTIX_EXP_TCP_FLAG_INNER_IPV4)) &&
+        (data[59] == TRUSTIX_TIX_TCP_FLAG_INNER_IPV4 ||
+         data[59] == (TRUSTIX_TIX_TCP_FLAG_KERNEL_OPENED | TRUSTIX_TIX_TCP_FLAG_INNER_IPV4)) &&
         data[90] == 0 && data[91] == 0 && data[92] == 0 && data[93] == 0) {
-        trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_PLAINTEXT_CANDIDATES,
+        trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_PLAINTEXT_CANDIDATES,
                                          config_value);
         frame_payload_len = ((__u32)data[86] << 24) |
                             ((__u32)data[87] << 16) |
@@ -890,33 +890,33 @@ tcp:
             frame_end_offset = 94 + frame_payload_len;
         if (frame_end_offset == packet_len &&
             data + 114 <= data_end && data[94] == 0x45 &&
-            trustix_exp_tcp_unfragmented(data + 54)) {
-            if (config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT) {
+            trustix_tix_tcp_unfragmented(data + 54)) {
+            if (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT) {
                 direct_action = trustix_kernel_udp_xdp_rx_direct_inner(ctx, 94, config_value);
                 if (direct_action >= 0)
                     return direct_action;
                 goto redirect;
             }
-            if (config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_TC_RX_DIRECT) {
-                trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
+            if (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_TC_RX_DIRECT) {
+                trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
                                                  config_value);
                 goto pass;
             }
         }
         if (frame_end_offset != 0 &&
             frame_end_offset < packet_len &&
-            packet_len - frame_end_offset >= TRUSTIX_EXP_TCP_HEADER_LEN &&
+            packet_len - frame_end_offset >= TRUSTIX_TIX_TCP_HEADER_LEN &&
             data + 114 <= data_end && data[94] == 0x45 &&
-            trustix_exp_tcp_unfragmented(data + 54) &&
-            (config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_TC_RX_DIRECT)) {
-            trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
+            trustix_tix_tcp_unfragmented(data + 54) &&
+            (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_TC_RX_DIRECT)) {
+            trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
                                              config_value);
             goto pass;
         }
         if (data + 108 <= data_end && data[88] == 0x45)
-            trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_INNER_IPV4_AT88,
+            trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_INNER_IPV4_AT88,
                                              config_value);
-        trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_INNER_IPV4_MISSES,
+        trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_INNER_IPV4_MISSES,
                                          config_value);
     }
     goto redirect;
@@ -931,68 +931,68 @@ udp:
         data[44] != 'X' || data[45] != 'U')
         goto pass;
 
-    config = bpf_map_lookup_elem(&ix_exp_tcp_config, &config_key);
+    config = bpf_map_lookup_elem(&ix_tix_tcp_config, &config_key);
     if (config)
         config_value = *config;
-    if (!trustix_exp_tcp_port_allowed(data + 34))
+    if (!trustix_tix_tcp_port_allowed(data + 34))
         goto drop;
     if (data + 74 <= data_end &&
-        (data[47] & TRUSTIX_EXP_TCP_FLAG_ENCRYPTED) &&
-        (data[47] & TRUSTIX_EXP_TCP_FLAG_INNER_IPV4) &&
-        !(data[47] & TRUSTIX_EXP_TCP_FLAG_CRYPTO_FRAGMENT) &&
+        (data[47] & TRUSTIX_TIX_TCP_FLAG_ENCRYPTED) &&
+        (data[47] & TRUSTIX_TIX_TCP_FLAG_INNER_IPV4) &&
+        !(data[47] & TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT) &&
         trustix_kernel_udp_unfragmented(data + 42) &&
-        (config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_TC_RX_SECURE_DIRECT)) {
-        trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
+        (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_TC_RX_SECURE_DIRECT)) {
+        trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
                                          config_value);
         goto pass;
     }
     if (data + 74 <= data_end &&
-        (data[47] == TRUSTIX_EXP_TCP_FLAG_INNER_IPV4 ||
-         data[47] == (TRUSTIX_EXP_TCP_FLAG_KERNEL_OPENED | TRUSTIX_EXP_TCP_FLAG_INNER_IPV4)) &&
+        (data[47] == TRUSTIX_TIX_TCP_FLAG_INNER_IPV4 ||
+         data[47] == (TRUSTIX_TIX_TCP_FLAG_KERNEL_OPENED | TRUSTIX_TIX_TCP_FLAG_INNER_IPV4)) &&
         data[70] == 0 && data[71] == 0 && data[72] == 0 && data[73] == 0) {
-        trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_PLAINTEXT_CANDIDATES,
+        trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_PLAINTEXT_CANDIDATES,
                                          config_value);
         if (data + 94 <= data_end && data[74] == 0x45 &&
             trustix_kernel_udp_unfragmented(data + 42)) {
-            if (config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT) {
+            if (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_XDP_RX_DIRECT) {
                 direct_action = trustix_kernel_udp_xdp_rx_direct_inner(ctx, 74, config_value);
                 if (direct_action >= 0)
                     return direct_action;
                 goto redirect;
             }
-            if (config_value & TRUSTIX_EXP_TCP_CONFIG_KERNEL_UDP_TC_RX_DIRECT) {
-                trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
+            if (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_TC_RX_DIRECT) {
+                trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_TC_RX_DIRECT_PASS,
                                                  config_value);
                 goto pass;
             }
         }
         if (data + 108 <= data_end && data[88] == 0x45)
-            trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_INNER_IPV4_AT88,
+            trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_INNER_IPV4_AT88,
                                              config_value);
-        trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_KERNEL_UDP_INNER_IPV4_MISSES,
+        trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_KERNEL_UDP_INNER_IPV4_MISSES,
                                          config_value);
     }
 
 redirect:
-    if (config_value & TRUSTIX_EXP_TCP_CONFIG_XDP_FALLBACK_PASS)
+    if (config_value & TRUSTIX_TIX_TCP_CONFIG_XDP_FALLBACK_PASS)
         goto pass;
-    trustix_exp_tcp_count_hot_config(TRUSTIX_EXP_TCP_STATS_REDIRECTED,
+    trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_REDIRECTED,
                                      config_value);
-    return bpf_redirect_map(&ix_exp_tcp_xsk,
-                            trustix_exp_tcp_redirect_queue_config(ctx, config_value),
+    return bpf_redirect_map(&ix_tix_tcp_xsk,
+                            trustix_tix_tcp_redirect_queue_config(ctx, config_value),
                             XDP_DROP);
 
 drop:
-    trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_UNAUTHORIZED_DROPS);
+    trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_UNAUTHORIZED_DROPS);
     return XDP_DROP;
 
 pass:
-    if (config_value & TRUSTIX_EXP_TCP_CONFIG_HOT_PATH_STATS)
-        trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_PASS);
+    if (config_value & TRUSTIX_TIX_TCP_CONFIG_HOT_PATH_STATS)
+        trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_PASS);
     return XDP_PASS;
 
 parse_error:
-    trustix_exp_tcp_count(TRUSTIX_EXP_TCP_STATS_PARSE_ERRORS);
+    trustix_tix_tcp_count(TRUSTIX_TIX_TCP_STATS_PARSE_ERRORS);
     return XDP_PASS;
 }
 

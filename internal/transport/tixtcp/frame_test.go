@@ -1,4 +1,4 @@
-package experimentaltcp
+package tixtcp
 
 import (
 	"bytes"

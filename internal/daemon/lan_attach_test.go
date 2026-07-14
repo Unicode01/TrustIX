@@ -125,13 +125,13 @@ func TestDataplaneAttachSpecKeepsUserspaceFallbackForPlaintextUDPByDefault(t *te
 	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
 		t.Fatalf("ordinary plaintext UDP should keep userspace fallback available, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPTXDirect {
-		t.Fatalf("ordinary plaintext UDP should not request experimental_tcp TX direct protection, spec=%#v", spec)
+	if spec.TIXTCPTXDirect {
+		t.Fatalf("ordinary plaintext UDP should not request tix_tcp TX direct protection, spec=%#v", spec)
 	}
 }
 
-func TestDataplaneAttachSpecMarksExperimentalTCPTXDirect(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+func TestDataplaneAttachSpecMarksTIXTCPTXDirect(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -143,17 +143,17 @@ func TestDataplaneAttachSpecMarksExperimentalTCPTXDirect(t *testing.T) {
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if !spec.ExperimentalTCPTXDirect {
-		t.Fatalf("experimental_tcp TC direct policy was not marked in attach spec: %#v", spec)
+	if !spec.TIXTCPTXDirect {
+		t.Fatalf("tix_tcp TC direct policy was not marked in attach spec: %#v", spec)
 	}
 }
 
-func TestDataplaneAttachSpecKeepsTCXDPPerformancePlaintextExperimentalTCPRouteGSOOffByDefault(t *testing.T) {
+func TestDataplaneAttachSpecKeepsTCXDPPerformancePlaintextTIXTCPRouteGSOOffByDefault(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -167,26 +167,26 @@ func TestDataplaneAttachSpecKeepsTCXDPPerformancePlaintextExperimentalTCPRouteGS
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly {
-		t.Fatalf("TC-XDP performance plaintext experimental_tcp should keep route-GSO off without explicit enable, spec=%#v", spec)
+	if spec.TIXTCPTXDirect || spec.KernelUDPTXDirectOnly {
+		t.Fatalf("TC-XDP performance plaintext tix_tcp should keep route-GSO off without explicit enable, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker || spec.ExperimentalTCPPlainSkipSequence || spec.ExperimentalTCPPlainACKOnly {
-		t.Fatalf("TC-XDP performance plaintext experimental_tcp route-GSO flags should be opt-in, spec=%#v", spec)
+	if spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker || spec.TIXTCPPlainSkipSequence || spec.TIXTCPPlainACKOnly {
+		t.Fatalf("TC-XDP performance plaintext tix_tcp route-GSO flags should be opt-in, spec=%#v", spec)
 	}
 	if spec.KernelDatapathSuppressLegacyRXWorker {
-		t.Fatalf("TC-XDP performance plaintext experimental_tcp should not suppress full-kmod fallback by default, spec=%#v", spec)
+		t.Fatalf("TC-XDP performance plaintext tix_tcp should not suppress full-kmod fallback by default, spec=%#v", spec)
 	}
 	if spec.KernelUDPTXDirectOnlyReason != "" {
 		t.Fatalf("direct-only reason = %q", spec.KernelUDPTXDirectOnlyReason)
 	}
 }
 
-func TestDataplaneAttachSpecEnablesPerformancePlaintextKernelModuleExperimentalTCPRouteGSOByDefault(t *testing.T) {
+func TestDataplaneAttachSpecEnablesPerformancePlaintextKernelModuleTIXTCPRouteGSOByDefault(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -203,26 +203,26 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextKernelModuleExperimentalT
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly {
-		t.Fatalf("performance experimental_tcp kernel_module should enable route-GSO direct path by default, spec=%#v", spec)
+	if !spec.TIXTCPTXDirect || !spec.KernelUDPTXDirectOnly {
+		t.Fatalf("performance tix_tcp kernel_module should enable route-GSO direct path by default, spec=%#v", spec)
 	}
-	if !spec.ExperimentalTCPRouteGSOAsync || !spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker {
-		t.Fatalf("performance experimental_tcp kernel_module route-GSO flags missing, spec=%#v", spec)
+	if !spec.TIXTCPRouteGSOAsync || !spec.TIXTCPRouteGSOSync || !spec.TIXTCPRouteXmitWorker {
+		t.Fatalf("performance tix_tcp kernel_module route-GSO flags missing, spec=%#v", spec)
 	}
 	if !spec.KernelUDPTCOnlyProvider {
-		t.Fatalf("performance experimental_tcp kernel_module route-GSO should use TC-only provider, spec=%#v", spec)
+		t.Fatalf("performance tix_tcp kernel_module route-GSO should use TC-only provider, spec=%#v", spec)
 	}
 	if !spec.KernelDatapathSuppressLegacyRXWorker {
-		t.Fatalf("performance experimental_tcp route-GSO should suppress legacy RX worker ownership, spec=%#v", spec)
+		t.Fatalf("performance tix_tcp route-GSO should suppress legacy RX worker ownership, spec=%#v", spec)
 	}
 }
 
-func TestDataplaneAttachSpecKeepsFullPlaintextExperimentalTCPOnRXWorker(t *testing.T) {
+func TestDataplaneAttachSpecKeepsFullPlaintextTIXTCPOnRXWorker(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -239,23 +239,23 @@ func TestDataplaneAttachSpecKeepsFullPlaintextExperimentalTCPOnRXWorker(t *testi
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly {
-		t.Fatalf("full plaintext experimental_tcp should not migrate to route-GSO direct path, spec=%#v", spec)
+	if spec.TIXTCPTXDirect || spec.KernelUDPTXDirectOnly {
+		t.Fatalf("full plaintext tix_tcp should not migrate to route-GSO direct path, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker || spec.ExperimentalTCPPlainSkipSequence || spec.ExperimentalTCPPlainACKOnly {
-		t.Fatalf("full plaintext experimental_tcp should keep route-GSO flags off, spec=%#v", spec)
+	if spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker || spec.TIXTCPPlainSkipSequence || spec.TIXTCPPlainACKOnly {
+		t.Fatalf("full plaintext tix_tcp should keep route-GSO flags off, spec=%#v", spec)
 	}
 	if spec.KernelDatapathSuppressLegacyRXWorker {
-		t.Fatalf("full plaintext experimental_tcp should keep RX worker ownership, spec=%#v", spec)
+		t.Fatalf("full plaintext tix_tcp should keep RX worker ownership, spec=%#v", spec)
 	}
 }
 
-func TestDataplaneAttachSpecKeepsFullPlaintextPerformanceExperimentalTCPOnRXWorker(t *testing.T) {
+func TestDataplaneAttachSpecKeepsFullPlaintextPerformanceTIXTCPOnRXWorker(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -272,24 +272,24 @@ func TestDataplaneAttachSpecKeepsFullPlaintextPerformanceExperimentalTCPOnRXWork
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly {
-		t.Fatalf("full plaintext performance experimental_tcp should prefer full-kmod over route-GSO, spec=%#v", spec)
+	if spec.TIXTCPTXDirect || spec.KernelUDPTXDirectOnly {
+		t.Fatalf("full plaintext performance tix_tcp should prefer full-kmod over route-GSO, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker || spec.ExperimentalTCPPlainSkipSequence || spec.ExperimentalTCPPlainACKOnly {
-		t.Fatalf("full plaintext performance experimental_tcp should keep route-GSO flags off, spec=%#v", spec)
+	if spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker || spec.TIXTCPPlainSkipSequence || spec.TIXTCPPlainACKOnly {
+		t.Fatalf("full plaintext performance tix_tcp should keep route-GSO flags off, spec=%#v", spec)
 	}
 	if spec.KernelDatapathSuppressLegacyRXWorker {
-		t.Fatalf("full plaintext performance experimental_tcp should keep RX worker ownership, spec=%#v", spec)
+		t.Fatalf("full plaintext performance tix_tcp should keep RX worker ownership, spec=%#v", spec)
 	}
 }
 
 func TestDataplaneAttachSpecKeepsFullPlaintextFallbackWhenRouteGSOExplicitlyDisabled(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_ROUTE_GSO", "0")
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -306,12 +306,12 @@ func TestDataplaneAttachSpecKeepsFullPlaintextFallbackWhenRouteGSOExplicitlyDisa
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly || spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
+	if spec.TIXTCPTXDirect || spec.KernelUDPTXDirectOnly || spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker {
 		t.Fatalf("explicit TC direct disable should keep route-GSO off for full plaintext fallback, spec=%#v", spec)
 	}
 	if spec.KernelDatapathSuppressLegacyRXWorker {
@@ -337,12 +337,12 @@ func TestDataplaneAttachSpecKeepsFullPlaintextFallbackWhenKernelTransportDisable
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly || spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
+	if spec.TIXTCPTXDirect || spec.KernelUDPTXDirectOnly || spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker {
 		t.Fatalf("disabled kernel_transport should keep route-GSO off for full plaintext fallback, spec=%#v", spec)
 	}
 	if spec.KernelDatapathSuppressLegacyRXWorker {
@@ -350,7 +350,7 @@ func TestDataplaneAttachSpecKeepsFullPlaintextFallbackWhenKernelTransportDisable
 	}
 }
 
-func TestDataplaneAttachSpecGenericUDPDirectDisableKeepsFullPlaintextExperimentalTCP(t *testing.T) {
+func TestDataplaneAttachSpecGenericUDPDirectDisableKeepsFullPlaintextTIXTCP(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
@@ -369,15 +369,15 @@ func TestDataplaneAttachSpecGenericUDPDirectDisableKeepsFullPlaintextExperimenta
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly {
-		t.Fatalf("generic UDP direct disable should keep full plaintext experimental_tcp off route-GSO, spec=%#v", spec)
+	if spec.TIXTCPTXDirect || spec.KernelUDPTXDirectOnly {
+		t.Fatalf("generic UDP direct disable should keep full plaintext tix_tcp off route-GSO, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
+	if spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker {
 		t.Fatalf("generic UDP direct disable should keep route-GSO flags off for full plaintext, spec=%#v", spec)
 	}
 	if spec.KernelDatapathSuppressLegacyRXWorker {
@@ -385,7 +385,7 @@ func TestDataplaneAttachSpecGenericUDPDirectDisableKeepsFullPlaintextExperimenta
 	}
 }
 
-func TestDataplaneAttachSpecDisablesExperimentalTCPFastPathForMixedTCP(t *testing.T) {
+func TestDataplaneAttachSpecDisablesTIXTCPFastPathForMixedTCP(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -405,21 +405,21 @@ func TestDataplaneAttachSpecDisablesExperimentalTCPFastPathForMixedTCP(t *testin
 			},
 			{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			},
 		},
 	})
 
-	if !spec.ExperimentalTCPFastPathDisabled || spec.ExperimentalTCPFastPathDisabledReason == "" {
-		t.Fatalf("mixed tcp+experimental_tcp should disable experimental_tcp fast path, spec=%#v", spec)
+	if !spec.TIXTCPFastPathDisabled || spec.TIXTCPFastPathDisabledReason == "" {
+		t.Fatalf("mixed tcp+tix_tcp should disable tix_tcp fast path, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPTXDirect || spec.KernelUDPTXDirectOnly || spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
-		t.Fatalf("mixed tcp+experimental_tcp enabled experimental_tcp direct flags, spec=%#v", spec)
+	if spec.TIXTCPTXDirect || spec.KernelUDPTXDirectOnly || spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker {
+		t.Fatalf("mixed tcp+tix_tcp enabled tix_tcp direct flags, spec=%#v", spec)
 	}
 }
 
-func TestDataplaneAttachSpecKeepsExperimentalTCPFastPathForMixedUDP(t *testing.T) {
+func TestDataplaneAttachSpecKeepsTIXTCPFastPathForMixedUDP(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -439,26 +439,26 @@ func TestDataplaneAttachSpecKeepsExperimentalTCPFastPathForMixedUDP(t *testing.T
 			},
 			{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			},
 		},
 	})
 
-	if spec.ExperimentalTCPFastPathDisabled {
-		t.Fatalf("udp+experimental_tcp should keep experimental_tcp fast path enabled, spec=%#v", spec)
+	if spec.TIXTCPFastPathDisabled {
+		t.Fatalf("udp+tix_tcp should keep tix_tcp fast path enabled, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync {
-		t.Fatalf("udp+experimental_tcp TC-XDP performance policy should not enable experimental_tcp route-GSO without explicit opt-in, spec=%#v", spec)
+	if spec.TIXTCPTXDirect || spec.TIXTCPRouteGSOAsync {
+		t.Fatalf("udp+tix_tcp TC-XDP performance policy should not enable tix_tcp route-GSO without explicit opt-in, spec=%#v", spec)
 	}
 	if !spec.KernelUDPTXDirectOnly || !spec.KernelUDPTCOnlyProvider {
-		t.Fatalf("udp+experimental_tcp performance policy should keep UDP TC-only provider, spec=%#v", spec)
+		t.Fatalf("udp+tix_tcp performance policy should keep UDP TC-only provider, spec=%#v", spec)
 	}
 }
 
-func TestDataplaneAttachSpecAllowsForcedMixedTCPExperimentalTCPFastPath(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO", "1")
+func TestDataplaneAttachSpecAllowsForcedMixedTCPTIXTCPFastPath(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_MIXED_TCP_FAST_PATH", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_ROUTE_GSO", "1")
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface:      "br-lan",
@@ -478,17 +478,17 @@ func TestDataplaneAttachSpecAllowsForcedMixedTCPExperimentalTCPFastPath(t *testi
 			},
 			{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			},
 		},
 	})
 
-	if spec.ExperimentalTCPFastPathDisabled {
-		t.Fatalf("forced mixed tcp+experimental_tcp unexpectedly disabled fast path, spec=%#v", spec)
+	if spec.TIXTCPFastPathDisabled {
+		t.Fatalf("forced mixed tcp+tix_tcp unexpectedly disabled fast path, spec=%#v", spec)
 	}
-	if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly || !spec.ExperimentalTCPRouteGSOAsync {
-		t.Fatalf("forced mixed tcp+experimental_tcp did not enable direct route-GSO, spec=%#v", spec)
+	if !spec.TIXTCPTXDirect || !spec.KernelUDPTXDirectOnly || !spec.TIXTCPRouteGSOAsync {
+		t.Fatalf("forced mixed tcp+tix_tcp did not enable direct route-GSO, spec=%#v", spec)
 	}
 }
 
@@ -567,8 +567,8 @@ func TestDataplaneAttachSpecEnablesPerformancePlaintextUDPFullKmod(t *testing.T)
 	if spec.KernelUDPTXDirectOnlyReason != "" {
 		t.Fatalf("direct-only reason = %q", spec.KernelUDPTXDirectOnlyReason)
 	}
-	if spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync {
-		t.Fatalf("UDP performance direct path should not enable experimental_tcp route-GSO flags, spec=%#v", spec)
+	if spec.TIXTCPTXDirect || spec.TIXTCPRouteGSOAsync {
+		t.Fatalf("UDP performance direct path should not enable tix_tcp route-GSO flags, spec=%#v", spec)
 	}
 	if !spec.KernelDatapathFullPlaintext {
 		t.Fatalf("performance plaintext UDP kernel_module should mark full plaintext ownership, spec=%#v", spec)
@@ -830,7 +830,7 @@ func TestDataplaneAttachSpecKeepsFallbackForRequireKernelSecureKernelCryptoByDef
 	}
 }
 
-func TestDataplaneAttachSpecRecordsForcedExperimentalTCPSecureDirectOnly(t *testing.T) {
+func TestDataplaneAttachSpecRecordsForcedTIXTCPSecureDirectOnly(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
@@ -844,7 +844,7 @@ func TestDataplaneAttachSpecRecordsForcedExperimentalTCPSecureDirectOnly(t *test
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "experimental-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
@@ -857,7 +857,7 @@ func TestDataplaneAttachSpecRecordsForcedExperimentalTCPSecureDirectOnly(t *test
 	}
 }
 
-func TestDataplaneAttachSpecEnablesPerformanceSecureExperimentalTCPDirect(t *testing.T) {
+func TestDataplaneAttachSpecEnablesPerformanceSecureTIXTCPDirect(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface: "br-lan",
@@ -871,38 +871,38 @@ func TestDataplaneAttachSpecEnablesPerformanceSecureExperimentalTCPDirect(t *tes
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "experimental-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
 	if !spec.KernelUDPTXDirectOnly || !spec.KernelUDPTCOnlyProvider {
-		t.Fatalf("performance secure experimental_tcp route-GSO should use TC-only provider, spec=%#v", spec)
+		t.Fatalf("performance secure tix_tcp route-GSO should use TC-only provider, spec=%#v", spec)
 	}
 	if spec.KernelUDPTXDirectOnlyReason == "" || spec.KernelUDPTCOnlyProviderReason == "" {
-		t.Fatalf("performance secure experimental_tcp route-GSO should record direct-only reasons, spec=%#v", spec)
+		t.Fatalf("performance secure tix_tcp route-GSO should record direct-only reasons, spec=%#v", spec)
 	}
-	if !spec.ExperimentalTCPTXDirect {
-		t.Fatalf("performance secure experimental_tcp should enable TC direct flow-map sync, spec=%#v", spec)
+	if !spec.TIXTCPTXDirect {
+		t.Fatalf("performance secure tix_tcp should enable TC direct flow-map sync, spec=%#v", spec)
 	}
-	if !spec.ExperimentalTCPRouteGSOAsync || !spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker {
-		t.Fatalf("performance secure experimental_tcp should enable secure route-GSO, spec=%#v", spec)
+	if !spec.TIXTCPRouteGSOAsync || !spec.TIXTCPRouteGSOSync || !spec.TIXTCPRouteXmitWorker {
+		t.Fatalf("performance secure tix_tcp should enable secure route-GSO, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPPlainSkipSequence || spec.ExperimentalTCPPlainACKOnly {
-		t.Fatalf("performance secure experimental_tcp must not enable plaintext route-GSO sequence shortcuts, spec=%#v", spec)
+	if spec.TIXTCPPlainSkipSequence || spec.TIXTCPPlainACKOnly {
+		t.Fatalf("performance secure tix_tcp must not enable plaintext route-GSO sequence shortcuts, spec=%#v", spec)
 	}
 	if !spec.KernelUDPTXSecureDirect || !spec.KernelUDPRXSecureDirect {
-		t.Fatalf("performance secure experimental_tcp should enable TX/RX secure direct, spec=%#v", spec)
+		t.Fatalf("performance secure tix_tcp should enable TX/RX secure direct, spec=%#v", spec)
 	}
 	if !spec.KernelUDPSecureDirectTrustInnerChecksums {
-		t.Fatalf("performance secure experimental_tcp should enable secure direct checksum trust, spec=%#v", spec)
+		t.Fatalf("performance secure tix_tcp should enable secure direct checksum trust, spec=%#v", spec)
 	}
 	if spec.KernelUDPSecureRouteGSO {
-		t.Fatalf("performance secure experimental_tcp should not mark kernel_udp route-GSO, spec=%#v", spec)
+		t.Fatalf("performance secure tix_tcp should not mark kernel_udp route-GSO, spec=%#v", spec)
 	}
 }
 
-func TestDataplaneAttachSpecKeepsTCXDPSecureExperimentalTCPOffRouteGSO(t *testing.T) {
+func TestDataplaneAttachSpecKeepsTCXDPSecureTIXTCPOffRouteGSO(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface: "br-lan",
@@ -916,26 +916,26 @@ func TestDataplaneAttachSpecKeepsTCXDPSecureExperimentalTCPOffRouteGSO(t *testin
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "experimental-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync ||
-		spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
-		t.Fatalf("TC-XDP secure experimental_tcp should not select route-GSO production path, spec=%#v", spec)
+	if spec.TIXTCPTXDirect || spec.TIXTCPRouteGSOAsync ||
+		spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker {
+		t.Fatalf("TC-XDP secure tix_tcp should not select route-GSO production path, spec=%#v", spec)
 	}
 	if spec.KernelUDPTXSecureDirect || spec.KernelUDPRXSecureDirect ||
 		spec.KernelUDPSecureDirectTrustInnerChecksums || spec.KernelUDPSecureRouteGSO {
-		t.Fatalf("TC-XDP secure experimental_tcp should not request secure kernel direct path, spec=%#v", spec)
+		t.Fatalf("TC-XDP secure tix_tcp should not request secure kernel direct path, spec=%#v", spec)
 	}
 	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTXDirectOnlyReason != "" {
-		t.Fatalf("TC-XDP secure experimental_tcp should keep userspace fallback, spec=%#v", spec)
+		t.Fatalf("TC-XDP secure tix_tcp should keep userspace fallback, spec=%#v", spec)
 	}
 }
 
 func TestDataplaneAttachSpecEnablesPerformanceSecureKernelUDPRouteGSO(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_ROUTE_GSO", "0")
 
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
@@ -961,8 +961,8 @@ func TestDataplaneAttachSpecEnablesPerformanceSecureKernelUDPRouteGSO(t *testing
 	if !spec.KernelUDPSecureRouteGSO {
 		t.Fatalf("performance secure udp should enable secure route-GSO, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPRouteGSOAsync || spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker {
-		t.Fatalf("performance secure udp should not mark experimental_tcp route-GSO, spec=%#v", spec)
+	if spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker {
+		t.Fatalf("performance secure udp should not mark tix_tcp route-GSO, spec=%#v", spec)
 	}
 }
 
@@ -995,7 +995,7 @@ func TestDataplaneAttachSpecCanDisablePerformanceSecureKernelUDPRouteGSO(t *test
 	}
 }
 
-func TestDataplaneAttachSpecDisablesAutoExperimentalTCPSecureUserspaceFastPath(t *testing.T) {
+func TestDataplaneAttachSpecDisablesAutoTIXTCPSecureUserspaceFastPath(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface: "br-lan",
@@ -1009,16 +1009,16 @@ func TestDataplaneAttachSpecDisablesAutoExperimentalTCPSecureUserspaceFastPath(t
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "experimental-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	})
 
-	if !spec.ExperimentalTCPFastPathDisabled || spec.ExperimentalTCPFastPathDisabledReason == "" {
-		t.Fatalf("secure userspace-crypto experimental_tcp auto policy should disable AF_XDP fast path, spec=%#v", spec)
+	if !spec.TIXTCPFastPathDisabled || spec.TIXTCPFastPathDisabledReason == "" {
+		t.Fatalf("secure userspace-crypto tix_tcp auto policy should disable AF_XDP fast path, spec=%#v", spec)
 	}
-	if spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync || spec.KernelUDPTXDirectOnly {
-		t.Fatalf("secure userspace-crypto experimental_tcp auto policy should not request direct TX, spec=%#v", spec)
+	if spec.TIXTCPTXDirect || spec.TIXTCPRouteGSOAsync || spec.KernelUDPTXDirectOnly {
+		t.Fatalf("secure userspace-crypto tix_tcp auto policy should not request direct TX, spec=%#v", spec)
 	}
 }
 

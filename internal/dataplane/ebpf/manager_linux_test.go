@@ -35,8 +35,8 @@ import (
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/kernelmodule"
 	"trustix.local/trustix/internal/routing"
-	"trustix.local/trustix/internal/transport/experimentaltcp"
 	"trustix.local/trustix/internal/transport/kerneludp"
+	"trustix.local/trustix/internal/transport/tixtcp"
 )
 
 func skipIfKernelKfuncUnavailable(t *testing.T, err error) {
@@ -151,24 +151,24 @@ func TestKernelUDPTXRouteCacheValueABI(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPRouteGSOAsyncSpecRequestsSafeKfuncPath(t *testing.T) {
+func TestTIXTCPRouteGSOAsyncSpecRequestsSafeKfuncPath(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_SAFE_MODE", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_ASYNC_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_ASYNC_KFUNC", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "")
 
-	spec := dataplane.AttachSpec{ExperimentalTCPRouteGSOAsync: true}
-	if !experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec) {
+	spec := dataplane.AttachSpec{TIXTCPRouteGSOAsync: true}
+	if !tixTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec) {
 		t.Fatal("async route-GSO spec did not request async kfunc path")
 	}
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) {
+	if !tixTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) {
 		t.Fatal("async route-GSO spec did not request route-GSO kfunc")
 	}
 	options := kernelUDPTXDirectProgramOptions{
-		ExperimentalTCPOnly:   true,
+		TIXTCPOnly:            true,
 		DirectOnly:            true,
 		RouteTCPGSOKfunc:      true,
 		RouteTCPGSOAsyncKfunc: true,
@@ -181,25 +181,25 @@ func TestExperimentalTCPRouteGSOAsyncSpecRequestsSafeKfuncPath(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPRouteGSOAttachIgnoresGenericUDPDirectDisable(t *testing.T) {
+func TestTIXTCPRouteGSOAttachIgnoresGenericUDPDirectDisable(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
 
 	spec := dataplane.AttachSpec{
-		KernelUDPTXDirectOnly:        true,
-		ExperimentalTCPTXDirect:      true,
-		ExperimentalTCPRouteGSOAsync: true,
+		KernelUDPTXDirectOnly: true,
+		TIXTCPTXDirect:        true,
+		TIXTCPRouteGSOAsync:   true,
 	}
 	if !kernelUDPTXDirectProgramEnabledForSpec(spec) {
-		t.Fatal("generic UDP TX direct disable must not disable experimental_tcp route-GSO TC program")
+		t.Fatal("generic UDP TX direct disable must not disable tix_tcp route-GSO TC program")
 	}
 	if !kernelUDPTXDirectOnlyEnabled(spec) {
-		t.Fatal("generic UDP direct-only disable must not disable experimental_tcp route-GSO direct-only mode")
+		t.Fatal("generic UDP direct-only disable must not disable tix_tcp route-GSO direct-only mode")
 	}
-	if !kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec) {
-		t.Fatal("route-GSO attach should remain experimental_tcp-only")
+	if !kernelUDPTXDirectTIXTCPOnlyEnabledForSpec(spec) {
+		t.Fatal("route-GSO attach should remain tix_tcp-only")
 	}
 }
 
@@ -215,42 +215,42 @@ func TestKernelUDPTCOnlyProviderRequestedForSpecIgnoresFalseyEnv(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPRouteGSOAttachWithFullKmodEnvEmitsRouteKfuncPath(t *testing.T) {
+func TestTIXTCPRouteGSOAttachWithFullKmodEnvEmitsRouteKfuncPath(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "0")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "")
 
 	spec := dataplane.AttachSpec{
-		KernelUDPTXDirectOnly:            true,
-		ExperimentalTCPTXDirect:          true,
-		ExperimentalTCPRouteGSOSync:      true,
-		ExperimentalTCPRouteGSOAsync:     true,
-		ExperimentalTCPRouteXmitWorker:   true,
-		ExperimentalTCPPlainSkipSequence: true,
-		ExperimentalTCPPlainACKOnly:      true,
+		KernelUDPTXDirectOnly:   true,
+		TIXTCPTXDirect:          true,
+		TIXTCPRouteGSOSync:      true,
+		TIXTCPRouteGSOAsync:     true,
+		TIXTCPRouteXmitWorker:   true,
+		TIXTCPPlainSkipSequence: true,
+		TIXTCPPlainACKOnly:      true,
 	}
 	if !kernelUDPTXDirectProgramEnabledForSpec(spec) {
 		t.Fatal("full_kmod route-GSO spec should keep the TC TX direct program enabled")
 	}
-	if !kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec) || kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec) {
-		t.Fatal("full_kmod route-GSO spec should select the experimental_tcp-only TC program")
+	if !kernelUDPTXDirectTIXTCPOnlyEnabledForSpec(spec) || kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec) {
+		t.Fatal("full_kmod route-GSO spec should select the tix_tcp-only TC program")
 	}
 	if !kernelUDPTXDirectOnlyEnabled(spec) {
 		t.Fatal("full_kmod route-GSO spec should force direct-only mode")
 	}
 
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_gso_full_kmod_env")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_route_gso_full_kmod_env")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -267,19 +267,19 @@ func TestExperimentalTCPRouteGSOAttachWithFullKmodEnvEmitsRouteKfuncPath(t *test
 		t.Fatalf("load route TCP xmit kfunc metadata: %v", err)
 	}
 	options := kernelUDPTXDirectProgramOptions{
-		Enabled:                          kernelUDPTXDirectProgramEnabledForSpec(spec),
-		ExperimentalTCPOnly:              kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec),
-		KernelUDPOnly:                    kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec),
-		DirectOnly:                       kernelUDPTXDirectOnlyEnabled(spec),
-		ExperimentalTCPSkipPlainSequence: experimentalTCPTXPlainSkipSequenceEnabledForSpec(spec),
-		ExperimentalTCPACKOnly:           experimentalTCPTXPlainACKOnlyEnabledForSpec(spec),
-		PushRouteTCPHeaderKfunc:          experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec),
-		PushRouteTCPHeaderKfuncCall:      routeKfuncCall,
-		RouteTCPGSOKfunc:                 experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec),
-		RouteTCPGSOKfuncCall:             gsoKfuncCall,
-		RouteTCPGSOAsyncKfunc:            experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec),
-		RouteTCPXmitKfunc:                experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec),
-		RouteTCPXmitKfuncCall:            xmitKfuncCall,
+		Enabled:                     kernelUDPTXDirectProgramEnabledForSpec(spec),
+		TIXTCPOnly:                  kernelUDPTXDirectTIXTCPOnlyEnabledForSpec(spec),
+		KernelUDPOnly:               kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec),
+		DirectOnly:                  kernelUDPTXDirectOnlyEnabled(spec),
+		TIXTCPSkipPlainSequence:     tixTCPTXPlainSkipSequenceEnabledForSpec(spec),
+		TIXTCPACKOnly:               tixTCPTXPlainACKOnlyEnabledForSpec(spec),
+		PushRouteTCPHeaderKfunc:     tixTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec),
+		PushRouteTCPHeaderKfuncCall: routeKfuncCall,
+		RouteTCPGSOKfunc:            tixTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec),
+		RouteTCPGSOKfuncCall:        gsoKfuncCall,
+		RouteTCPGSOAsyncKfunc:       tixTCPTXDirectRouteTCPGSOAsyncKfuncRequestedForSpec(spec),
+		RouteTCPXmitKfunc:           tixTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec),
+		RouteTCPXmitKfuncCall:       xmitKfuncCall,
 	}
 	if !kernelUDPTunnelGSOEnabledForOptions(options) || !kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
 		t.Fatalf("full_kmod route-GSO options did not enable tunnel/active GSO: %+v", options)
@@ -299,16 +299,16 @@ func TestExperimentalTCPRouteGSOAttachWithFullKmodEnvEmitsRouteKfuncPath(t *test
 	}
 }
 
-func TestExperimentalTCPRouteGSORXDirectIgnoresGenericUDPDirectDisable(t *testing.T) {
+func TestTIXTCPRouteGSORXDirectIgnoresGenericUDPDirectDisable(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT", "0")
 
 	spec := dataplane.AttachSpec{
-		ExperimentalTCPTXDirect:      true,
-		ExperimentalTCPRouteGSOAsync: true,
+		TIXTCPTXDirect:      true,
+		TIXTCPRouteGSOAsync: true,
 	}
 	if kernelUDPRXDirectDisabledForSpec(spec) {
-		t.Fatal("generic UDP RX direct disable must not disable experimental_tcp route-GSO RX direct")
+		t.Fatal("generic UDP RX direct disable must not disable tix_tcp route-GSO RX direct")
 	}
 
 	manager := NewManager()
@@ -404,7 +404,7 @@ func TestKernelUDPTXBPFMapSnapshotIncludesRoutesFlowsAndInlineSlots(t *testing.T
 		SourceMAC0:      binary.LittleEndian.Uint32([]byte{0xaa, 0xbb, 0xcc, 0xdd}),
 		SourceMAC1:      binary.LittleEndian.Uint16([]byte{0xee, 0xff}),
 		MTU:             1500,
-		Flags:           kernelUDPTXFlowFlagExperimentalTCP | kernelUDPTXFlowFlagTrustInnerChecksum,
+		Flags:           kernelUDPTXFlowFlagTIXTCP | kernelUDPTXFlowFlagTrustInnerChecksum,
 	}
 	if err := flowMap.Update(uint64(42), flow, cebpf.UpdateAny); err != nil {
 		t.Fatalf("seed flow map: %v", err)
@@ -433,7 +433,7 @@ func TestKernelUDPTXBPFMapSnapshotIncludesRoutesFlowsAndInlineSlots(t *testing.T
 	}
 	gotFlow := snapshot.KernelUDPTXFlows[0]
 	if gotFlow.FlowID != 42 || gotFlow.Sequence != 123 || gotFlow.SourcePort != 32000 || gotFlow.DestinationPort != 18100 ||
-		gotFlow.SourceIP != "192.0.2.1" || gotFlow.DestinationIP != "198.51.100.2" || !gotFlow.ExperimentalTCP || !gotFlow.TrustInnerChecksum {
+		gotFlow.SourceIP != "192.0.2.1" || gotFlow.DestinationIP != "198.51.100.2" || !gotFlow.TIXTCP || !gotFlow.TrustInnerChecksum {
 		t.Fatalf("flow snapshot = %#v", gotFlow)
 	}
 	if gotFlow.DestinationMAC != "00:11:22:33:44:55" || gotFlow.SourceMAC != "aa:bb:cc:dd:ee:ff" {
@@ -1208,9 +1208,9 @@ func TestKernelUDPTXSecureDirectEncryptsTCPSYNBeforeFallback(t *testing.T) {
 	if got := bytes.Count([]byte(sourceFunctionBody(t, string(source), "trustix_encrypt_inner_ipv4")), guard); got != 1 {
 		t.Fatalf("kernel_udp TX secure direct shared MSS clamp guard count = %d, want 1", got)
 	}
-	if !bytes.Contains(source, []byte("? TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD")) ||
+	if !bytes.Contains(source, []byte("? TRUSTIX_TIX_TCP_SECURE_OUTER_OVERHEAD")) ||
 		!bytes.Contains(source, []byte(": TRUSTIX_KUDP_SECURE_OUTER_OVERHEAD")) {
-		t.Fatal("kernel_udp TX secure direct MSS clamp does not select experimental_tcp and kernel_udp overheads in the shared encrypt path")
+		t.Fatal("kernel_udp TX secure direct MSS clamp does not select tix_tcp and kernel_udp overheads in the shared encrypt path")
 	}
 	encrypt := bytes.Index(body, []byte("cipher_len = trustix_encrypt_inner_ipv4"))
 	if encrypt < 0 {
@@ -1225,39 +1225,39 @@ func TestKernelUDPTXSecureDirectEncryptsTCPSYNBeforeFallback(t *testing.T) {
 	}
 }
 
-func TestKernelUDPTXSecureDirectExperimentalTCPComputesOuterChecksum(t *testing.T) {
+func TestKernelUDPTXSecureDirectTIXTCPComputesOuterChecksum(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "bpf", "dataplane", "kernel_udp_tx_kernel_crypto_tc.c"))
 	if err != nil {
 		t.Fatalf("read kernel_udp TX secure C source: %v", err)
 	}
-	if !bytes.Contains(source, []byte("static __noinline int trustix_exp_tcp_outer_checksum")) {
-		t.Fatal("experimental_tcp secure TX outer TCP checksum helper not found")
+	if !bytes.Contains(source, []byte("static __noinline int trustix_tix_tcp_outer_checksum")) {
+		t.Fatal("tix_tcp secure TX outer TCP checksum helper not found")
 	}
 	if !bytes.Contains(source, []byte("trustix_kudp_tx_secure_outer_tcp_csum_kfunc")) {
-		t.Fatal("experimental_tcp secure TX outer TCP checksum kfunc gate not found")
+		t.Fatal("tix_tcp secure TX outer TCP checksum kfunc gate not found")
 	}
 	if !bytes.Contains(source, []byte("trustix_kudp_tx_secure_outer_tcp_partial_csum_kfunc")) {
-		t.Fatal("experimental_tcp secure TX outer TCP partial checksum kfunc gate not found")
+		t.Fatal("tix_tcp secure TX outer TCP partial checksum kfunc gate not found")
 	}
 	bodyStart := bytes.Index(source, []byte("int trustix_kudp_tx_secure(struct __sk_buff *skb)"))
 	if bodyStart < 0 {
 		t.Fatal("kernel_udp TX secure classifier entry not found")
 	}
 	body := source[bodyStart:]
-	condition := bytes.Index(body, []byte("if (!skb_sealed && experimental_tcp && !outer_tcp_csum_kfunc &&\n        !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM))"))
+	condition := bytes.Index(body, []byte("if (!skb_sealed && tix_tcp && !outer_tcp_csum_kfunc &&\n        !(flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM))"))
 	if condition < 0 {
-		t.Fatal("experimental_tcp secure TX does not gate checksum generation on the explicit skip flag")
+		t.Fatal("tix_tcp secure TX does not gate checksum generation on the explicit skip flag")
 	}
-	compute := bytes.Index(body, []byte("trustix_exp_tcp_outer_checksum(scratch, (__u32)cipher_len, &outer_tcp_checksum)"))
+	compute := bytes.Index(body, []byte("trustix_tix_tcp_outer_checksum(scratch, (__u32)cipher_len, &outer_tcp_checksum)"))
 	if compute < 0 {
-		t.Fatal("experimental_tcp secure TX outer checksum helper is not called")
+		t.Fatal("tix_tcp secure TX outer checksum helper is not called")
 	}
-	if !bytes.Contains(body, []byte("if (!skb_sealed && experimental_tcp && !outer_tcp_csum_kfunc")) {
-		t.Fatal("experimental_tcp secure TX pre-adjust checksum is not gated by the kfunc checksum path")
+	if !bytes.Contains(body, []byte("if (!skb_sealed && tix_tcp && !outer_tcp_csum_kfunc")) {
+		t.Fatal("tix_tcp secure TX pre-adjust checksum is not gated by the kfunc checksum path")
 	}
 	store := bytes.Index(body, []byte("trustix_write_be16(scratch->io.split.header + 50, outer_tcp_checksum)"))
 	if store < 0 {
-		t.Fatal("experimental_tcp secure TX outer checksum is not written to the TCP header")
+		t.Fatal("tix_tcp secure TX outer checksum is not written to the TCP header")
 	}
 	adjust := bytes.Index(body, []byte("bpf_skb_adjust_room"))
 	if adjust < 0 {
@@ -1370,13 +1370,13 @@ func TestKernelUDPTXSecureDirectRouteGSOHandlesKernelUDP(t *testing.T) {
 	}
 	txBody := sourceFunctionBody(t, string(txSource), "trustix_secure_route_gso_direct")
 	for _, want := range []string{
-		"if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)",
+		"if (flow->flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP)",
 		"key.reserved[0] = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_KERNEL_UDP",
 	} {
 		requireSourceContains(t, txBody, want)
 	}
-	if strings.Contains(string(txSource), "if (experimental_tcp && data[23] == IPPROTO_TCP)") {
-		t.Fatal("secure kernel_udp TX still gates route-GSO on experimental_tcp")
+	if strings.Contains(string(txSource), "if (tix_tcp && data[23] == IPPROTO_TCP)") {
+		t.Fatal("secure kernel_udp TX still gates route-GSO on tix_tcp")
 	}
 
 	helperSource, err := os.ReadFile(filepath.Join("..", "..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_kfuncs.c"))
@@ -1385,7 +1385,7 @@ func TestKernelUDPTXSecureDirectRouteGSOHandlesKernelUDP(t *testing.T) {
 	}
 	helper := string(helperSource)
 	validateBody := sourceFunctionBody(t, helper, "trustix_tixt_tx_validate_route_secure_flow_pulled")
-	if strings.Contains(validateBody, "!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_EXPERIMENTAL_TCP)") {
+	if strings.Contains(validateBody, "!(flow_flags & TRUSTIX_KUDP_TX_FLOW_FLAG_TIX_TCP)") {
 		t.Fatal("secure route-GSO helper still rejects kernel_udp secure flows")
 	}
 	initBody := sourceFunctionBody(t, helper, "trustix_tixt_tx_init_secure_route_gso_template")
@@ -1416,7 +1416,7 @@ func TestKernelUDPTXSecureDirectKfuncSealUsesSplitCipherBuffer(t *testing.T) {
 		t.Fatalf("direct seal reference count = %d, want declaration plus shared call site", got)
 	}
 	if got := bytes.Count(source, []byte("trustix_kernel_direct_seal(direct_slot->slot_id, scratch->plain")); got != 1 {
-		t.Fatalf("direct seal call count = %d, want shared kernel_udp and experimental_tcp path", got)
+		t.Fatalf("direct seal call count = %d, want shared kernel_udp and tix_tcp path", got)
 	}
 	if got := bytes.Count(source, []byte("scratch->io.split.cipher")); got < 3 {
 		t.Fatalf("split cipher buffer references = %d, want direct seal plus dynptr fallback users", got)
@@ -2026,7 +2026,7 @@ func TestTrustIXDatapathHelpersOwnsSKBAndRouteHeaderKfuncs(t *testing.T) {
 }
 
 func TestKernelUDPTXDirectTIXTHeaderStoreImmediates(t *testing.T) {
-	wire := make([]byte, 20+experimentaltcp.HeaderLen+20)
+	wire := make([]byte, 20+tixtcp.HeaderLen+20)
 	binary.LittleEndian.PutUint16(wire[12:14], 0x1850)
 	binary.LittleEndian.PutUint16(wire[14:16], 0xffff)
 	binary.LittleEndian.PutUint32(wire[16:20], 0)
@@ -2045,11 +2045,11 @@ func TestKernelUDPTXDirectTIXTHeaderStoreImmediates(t *testing.T) {
 	if got := binary.BigEndian.Uint16(wire[14:16]); got != 0xffff {
 		t.Fatalf("TCP window = %#x, want 0xffff", got)
 	}
-	frame, err := experimentaltcp.ParseFrameNoCopy(wire[20:])
+	frame, err := tixtcp.ParseFrameNoCopy(wire[20:])
 	if err != nil {
 		t.Fatalf("parse TC TX TIXT header immediates: %v", err)
 	}
-	if frame.Flags != experimentaltcp.FlagInnerIPv4 || frame.FlowID != 7 || frame.Epoch != 0 ||
+	if frame.Flags != tixtcp.FlagInnerIPv4 || frame.FlowID != 7 || frame.Epoch != 0 ||
 		frame.Sequence != 9 || len(frame.Payload) != 20 {
 		t.Fatalf("parsed frame = %+v payload=%d", frame, len(frame.Payload))
 	}
@@ -2169,13 +2169,13 @@ func TestKernelUDPTXDirectBlockedRouteSkippedOutsideDirectOnly(t *testing.T) {
 	}
 }
 
-func TestKernelUDPTXDirectBlockedRouteSkippedForExperimentalTCPFallback(t *testing.T) {
+func TestKernelUDPTXDirectBlockedRouteSkippedForTIXTCPFallback(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("kernel_udp TX route map test requires Linux")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "")
 	m := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_tx_blocked_route_exp_skip_test", Type: cebpf.LPMTrie, KeySize: 8, ValueSize: kernelUDPTXRouteValueSize, MaxEntries: 16, Flags: 1})
 	defer m.Close()
 	manager := &Manager{
@@ -2184,7 +2184,7 @@ func TestKernelUDPTXDirectBlockedRouteSkippedForExperimentalTCPFallback(t *testi
 		snapshot: dataplane.Snapshot{Endpoints: []dataplane.EndpointMetadata{{
 			ID:        "exp-b",
 			Peer:      "ix-b",
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 		}}},
 	}
@@ -2196,7 +2196,7 @@ func TestKernelUDPTXDirectBlockedRouteSkippedForExperimentalTCPFallback(t *testi
 	key := routeKey{PrefixLen: 32, Addr: netip.MustParseAddr("10.83.1.2").As4()}
 	var value kernelUDPTXRouteValue
 	if err := m.Lookup(key, &value); !errors.Is(err, cebpf.ErrKeyNotExist) {
-		t.Fatalf("lookup experimental_tcp fallback route error = %v value=%#v, want key not exist", err, value)
+		t.Fatalf("lookup tix_tcp fallback route error = %v value=%#v, want key not exist", err, value)
 	}
 }
 
@@ -2882,8 +2882,8 @@ func TestKernelTransportStatusReportsNativeTunnelRouteStats(t *testing.T) {
 	}
 }
 
-func TestKernelTransportProtocolExperimentalTCPReportsRawFallbackAvailable(t *testing.T) {
-	protocol := kernelTransportProtocolExperimentalTCP(dataplane.ExperimentalTCPStatus{
+func TestKernelTransportProtocolTIXTCPReportsRawFallbackAvailable(t *testing.T) {
+	protocol := kernelTransportProtocolTIXTCP(dataplane.TIXTCPStatus{
 		Available:         true,
 		Provider:          "raw_socket_fallback",
 		UserspaceCrypto:   true,
@@ -2892,21 +2892,21 @@ func TestKernelTransportProtocolExperimentalTCPReportsRawFallbackAvailable(t *te
 	})
 
 	if !protocol.Available {
-		t.Fatalf("experimental_tcp raw fallback available = false, want true: %+v", protocol)
+		t.Fatalf("tix_tcp raw fallback available = false, want true: %+v", protocol)
 	}
 	if protocol.Placement != "fallback" {
-		t.Fatalf("experimental_tcp raw fallback placement = %q, want fallback", protocol.Placement)
+		t.Fatalf("tix_tcp raw fallback placement = %q, want fallback", protocol.Placement)
 	}
 	if protocol.Provider != "raw_socket_fallback" {
-		t.Fatalf("experimental_tcp raw fallback provider = %q, want raw_socket_fallback", protocol.Provider)
+		t.Fatalf("tix_tcp raw fallback provider = %q, want raw_socket_fallback", protocol.Provider)
 	}
 	if !protocol.UserspaceFallback {
-		t.Fatalf("experimental_tcp raw fallback userspace_fallback = false, want true")
+		t.Fatalf("tix_tcp raw fallback userspace_fallback = false, want true")
 	}
 }
 
-func TestKernelTransportProtocolExperimentalTCPReportsRawFallbackKernelCrypto(t *testing.T) {
-	protocol := kernelTransportProtocolExperimentalTCP(dataplane.ExperimentalTCPStatus{
+func TestKernelTransportProtocolTIXTCPReportsRawFallbackKernelCrypto(t *testing.T) {
+	protocol := kernelTransportProtocolTIXTCP(dataplane.TIXTCPStatus{
 		Available:         true,
 		Provider:          "raw_socket_fallback",
 		UserspaceCrypto:   true,
@@ -2916,13 +2916,13 @@ func TestKernelTransportProtocolExperimentalTCPReportsRawFallbackKernelCrypto(t 
 	})
 
 	if !protocol.Available {
-		t.Fatalf("experimental_tcp raw fallback kernel crypto available = false: %+v", protocol)
+		t.Fatalf("tix_tcp raw fallback kernel crypto available = false: %+v", protocol)
 	}
 	if protocol.Placement != "kernel" {
-		t.Fatalf("experimental_tcp raw fallback kernel crypto placement = %q, want kernel", protocol.Placement)
+		t.Fatalf("tix_tcp raw fallback kernel crypto placement = %q, want kernel", protocol.Placement)
 	}
 	if protocol.UserspaceFallback {
-		t.Fatalf("experimental_tcp raw fallback kernel crypto userspace_fallback = true, want false")
+		t.Fatalf("tix_tcp raw fallback kernel crypto userspace_fallback = true, want false")
 	}
 }
 
@@ -2934,7 +2934,7 @@ func TestEnsureKernelTransportFastPathAutoDegradesAttachFailure(t *testing.T) {
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        "exp-a",
 			Peer:      "ix-a",
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Listen:    "127.0.0.1:17043",
 			Enabled:   true,
 		}},
@@ -2956,7 +2956,7 @@ func TestEnsureKernelTransportFastPathRequireKernelFailsAttachFailure(t *testing
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        "exp-a",
 			Peer:      "ix-a",
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Listen:    "127.0.0.1:17043",
 			Enabled:   true,
 		}},
@@ -2976,21 +2976,21 @@ func TestEnsureKernelTransportFastPathDetachesAFXDPPForFullPlaintext(t *testing.
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        "exp-a",
 			Peer:      "ix-a",
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Listen:    "127.0.0.1:17043",
 			Enabled:   true,
 		}},
 	}
-	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
-	manager.expTCPFastPath.provider = "af_xdp"
-	manager.expTCPFastPath.done = make(chan struct{})
-	manager.expTCPFastPath.ready.Store(true)
+	manager.tixTCPFastPath = testTIXTCPFastPathWithQueues(1)
+	manager.tixTCPFastPath.provider = "af_xdp"
+	manager.tixTCPFastPath.done = make(chan struct{})
+	manager.tixTCPFastPath.ready.Store(true)
 
 	if err := manager.ensureKernelTransportFastPathLocked(context.Background()); err != nil {
 		t.Fatalf("full plaintext should detach AF_XDP without error: %v", err)
 	}
-	if manager.expTCPFastPath != nil {
-		t.Fatal("full plaintext left experimental_tcp AF_XDP attached")
+	if manager.tixTCPFastPath != nil {
+		t.Fatal("full plaintext left tix_tcp AF_XDP attached")
 	}
 }
 
@@ -3006,15 +3006,15 @@ func TestEnsureKernelTransportFastPathDetachesStaleXDPForFullPlaintext(t *testin
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        "exp-a",
 			Peer:      "ix-a",
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Listen:    "127.0.0.1:17043",
 			Enabled:   true,
 		}},
 	}
 
 	calls := 0
-	oldDetach := detachIdleStaleExperimentalTCPXDP
-	detachIdleStaleExperimentalTCPXDP = func(got *Manager) error {
+	oldDetach := detachIdleStaleTIXTCPXDP
+	detachIdleStaleTIXTCPXDP = func(got *Manager) error {
 		calls++
 		if got != manager {
 			t.Fatal("stale XDP detach called with wrong manager")
@@ -3022,7 +3022,7 @@ func TestEnsureKernelTransportFastPathDetachesStaleXDPForFullPlaintext(t *testin
 		return nil
 	}
 	t.Cleanup(func() {
-		detachIdleStaleExperimentalTCPXDP = oldDetach
+		detachIdleStaleTIXTCPXDP = oldDetach
 	})
 
 	if err := manager.ensureKernelTransportFastPathLocked(context.Background()); err != nil {
@@ -3341,9 +3341,9 @@ func TestKernelUDPDeliveredBatchReleaseWaitsForAllRecipients(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPDeliverReleasesLoopbackFrame(t *testing.T) {
+func TestTIXTCPDeliverReleasesLoopbackFrame(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		ID:              7,
 		LocalAddress:    "198.51.100.10:17041",
 		RemoteAddress:   "192.0.2.20:54000",
@@ -3352,13 +3352,13 @@ func TestExperimentalTCPDeliverReleasesLoopbackFrame(t *testing.T) {
 	}
 
 	var calls atomic.Int32
-	manager.deliverExperimentalTCPFrame(dataplane.ExperimentalTCPFrame{
+	manager.deliverTIXTCPFrame(dataplane.TIXTCPFrame{
 		FlowID:  7,
 		Payload: []byte("loopback"),
 		Release: func() {
 			calls.Add(1)
 		},
-	}, experimentaltcp.TCPPacket{
+	}, tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("198.51.100.10"),
 		DestinationIP:   netip.MustParseAddr("192.0.2.20"),
 		SourcePort:      17041,
@@ -3370,26 +3370,26 @@ func TestExperimentalTCPDeliverReleasesLoopbackFrame(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPDeliverDoesNotDropRemoteFrameWithSamePorts(t *testing.T) {
+func TestTIXTCPDeliverDoesNotDropRemoteFrameWithSamePorts(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		ID:              7,
 		LocalAddress:    "198.51.100.10:17041",
 		RemoteAddress:   "192.0.2.20:54000",
 		SourcePort:      17041,
 		DestinationPort: 54000,
 	}
-	events := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	manager.expTCPSubs[events] = struct{}{}
+	events := make(chan []dataplane.TIXTCPFrame, 1)
+	manager.tixTCPSubs[events] = struct{}{}
 
 	var calls atomic.Int32
-	manager.deliverExperimentalTCPFrame(dataplane.ExperimentalTCPFrame{
+	manager.deliverTIXTCPFrame(dataplane.TIXTCPFrame{
 		FlowID:  7,
 		Payload: []byte("remote"),
 		Release: func() {
 			calls.Add(1)
 		},
-	}, experimentaltcp.TCPPacket{
+	}, tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.20"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.10"),
 		SourcePort:      17041,
@@ -3401,40 +3401,40 @@ func TestExperimentalTCPDeliverDoesNotDropRemoteFrameWithSamePorts(t *testing.T)
 		if len(batch) != 1 || string(batch[0].Payload) != "remote" {
 			t.Fatalf("delivered batch = %#v, want remote frame", batch)
 		}
-		releaseExperimentalTCPFramePayloads(batch)
+		releaseTIXTCPFramePayloads(batch)
 	default:
 		t.Fatal("remote frame with matching ports was dropped")
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("release calls after subscriber release = %d, want 1", got)
 	}
-	if flow := manager.expTCPFlows[7]; !flow.ExpiresAt.IsZero() {
-		t.Fatalf("established experimental_tcp flow expires_at = %s after RX, want persistent zero value", flow.ExpiresAt)
+	if flow := manager.tixTCPFlows[7]; !flow.ExpiresAt.IsZero() {
+		t.Fatalf("established tix_tcp flow expires_at = %s after RX, want persistent zero value", flow.ExpiresAt)
 	}
 }
 
-func TestExperimentalTCPDeliverUsesExclusiveFlowSubscriber(t *testing.T) {
+func TestTIXTCPDeliverUsesExclusiveFlowSubscriber(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		ID:              7,
 		LocalAddress:    "198.51.100.10:17041",
 		RemoteAddress:   "192.0.2.20:54000",
 		SourcePort:      17041,
 		DestinationPort: 54000,
 	}
-	globalEvents := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	flowEvents := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	manager.expTCPSubs[globalEvents] = struct{}{}
-	manager.expTCPFlowSubs[7] = map[chan []dataplane.ExperimentalTCPFrame]struct{}{flowEvents: {}}
+	globalEvents := make(chan []dataplane.TIXTCPFrame, 1)
+	flowEvents := make(chan []dataplane.TIXTCPFrame, 1)
+	manager.tixTCPSubs[globalEvents] = struct{}{}
+	manager.tixTCPFlowSubs[7] = map[chan []dataplane.TIXTCPFrame]struct{}{flowEvents: {}}
 
 	var calls atomic.Int32
-	manager.deliverExperimentalTCPFrame(dataplane.ExperimentalTCPFrame{
+	manager.deliverTIXTCPFrame(dataplane.TIXTCPFrame{
 		FlowID:  7,
 		Payload: []byte("flow-owned"),
 		Release: func() {
 			calls.Add(1)
 		},
-	}, experimentaltcp.TCPPacket{
+	}, tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.20"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.10"),
 		SourcePort:      17041,
@@ -3446,13 +3446,13 @@ func TestExperimentalTCPDeliverUsesExclusiveFlowSubscriber(t *testing.T) {
 		if len(batch) != 1 || string(batch[0].Payload) != "flow-owned" {
 			t.Fatalf("flow delivery batch = %#v, want flow-owned frame", batch)
 		}
-		releaseExperimentalTCPFramePayloads(batch)
+		releaseTIXTCPFramePayloads(batch)
 	default:
 		t.Fatal("flow-owned frame was not delivered to flow subscriber")
 	}
 	select {
 	case batch := <-globalEvents:
-		releaseExperimentalTCPFramePayloads(batch)
+		releaseTIXTCPFramePayloads(batch)
 		t.Fatal("flow-owned frame was also delivered to global subscriber")
 	default:
 	}
@@ -3461,13 +3461,13 @@ func TestExperimentalTCPDeliverUsesExclusiveFlowSubscriber(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPGlobalDeliveryFramesExcludesFlowOwnedFrames(t *testing.T) {
-	flowEvents := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	frames := []dataplane.ExperimentalTCPFrame{
+func TestTIXTCPGlobalDeliveryFramesExcludesFlowOwnedFrames(t *testing.T) {
+	flowEvents := make(chan []dataplane.TIXTCPFrame, 1)
+	frames := []dataplane.TIXTCPFrame{
 		{FlowID: 7, Payload: []byte("flow-owned")},
 		{FlowID: 8, Payload: []byte("global")},
 	}
-	global := experimentalTCPGlobalDeliveryFrames(frames, map[uint64]map[chan []dataplane.ExperimentalTCPFrame]struct{}{
+	global := tixTCPGlobalDeliveryFrames(frames, map[uint64]map[chan []dataplane.TIXTCPFrame]struct{}{
 		7: {flowEvents: {}},
 	})
 	if len(global) != 1 || global[0].FlowID != 8 || string(global[0].Payload) != "global" {
@@ -3475,20 +3475,20 @@ func TestExperimentalTCPGlobalDeliveryFramesExcludesFlowOwnedFrames(t *testing.T
 	}
 }
 
-func TestExperimentalTCPDeliverLearnsTupleForControlOnlyFlow(t *testing.T) {
+func TestTIXTCPDeliverLearnsTupleForControlOnlyFlow(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		ID:       7,
 		Peer:     core.IXID("ix-a"),
 		Endpoint: core.EndpointID("ix-a-tixt"),
 	}
-	events := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	manager.expTCPSubs[events] = struct{}{}
+	events := make(chan []dataplane.TIXTCPFrame, 1)
+	manager.tixTCPSubs[events] = struct{}{}
 
-	manager.deliverExperimentalTCPFrame(dataplane.ExperimentalTCPFrame{
+	manager.deliverTIXTCPFrame(dataplane.TIXTCPFrame{
 		FlowID:  7,
 		Payload: []byte("learn"),
-	}, experimentaltcp.TCPPacket{
+	}, tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.20"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.10"),
 		SourcePort:      41017,
@@ -3503,7 +3503,7 @@ func TestExperimentalTCPDeliverLearnsTupleForControlOnlyFlow(t *testing.T) {
 	default:
 		t.Fatal("learned control-only flow frame was not delivered")
 	}
-	flow := manager.expTCPFlows[7]
+	flow := manager.tixTCPFlows[7]
 	if flow.LocalAddress != "198.51.100.10:17041" || flow.RemoteAddress != "192.0.2.20:41017" {
 		t.Fatalf("learned addresses local=%q remote=%q", flow.LocalAddress, flow.RemoteAddress)
 	}
@@ -3512,7 +3512,7 @@ func TestExperimentalTCPDeliverLearnsTupleForControlOnlyFlow(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPDeliverInfersInboundPeerIdentityFromEndpointAddress(t *testing.T) {
+func TestTIXTCPDeliverInfersInboundPeerIdentityFromEndpointAddress(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b"), Trusted: true}},
@@ -3520,7 +3520,7 @@ func TestExperimentalTCPDeliverInfersInboundPeerIdentityFromEndpointAddress(t *t
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.20:17041",
 				Address:   "192.0.2.20:17041",
 				Enabled:   true,
@@ -3528,19 +3528,19 @@ func TestExperimentalTCPDeliverInfersInboundPeerIdentityFromEndpointAddress(t *t
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "198.51.100.10:17041",
 				Enabled:   true,
 			},
 		},
 	}
-	events := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	manager.expTCPSubs[events] = struct{}{}
+	events := make(chan []dataplane.TIXTCPFrame, 1)
+	manager.tixTCPSubs[events] = struct{}{}
 
-	manager.deliverExperimentalTCPFrame(dataplane.ExperimentalTCPFrame{
+	manager.deliverTIXTCPFrame(dataplane.TIXTCPFrame{
 		FlowID:  7,
 		Payload: []byte("plain"),
-	}, experimentaltcp.TCPPacket{
+	}, tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("198.51.100.10"),
 		DestinationIP:   netip.MustParseAddr("192.0.2.20"),
 		SourcePort:      17041,
@@ -3558,7 +3558,7 @@ func TestExperimentalTCPDeliverInfersInboundPeerIdentityFromEndpointAddress(t *t
 	if frame.Endpoint != "ix-a-tixt" {
 		t.Fatalf("delivered endpoint = %q, want local listener endpoint", frame.Endpoint)
 	}
-	flow := manager.expTCPFlows[7]
+	flow := manager.tixTCPFlows[7]
 	if flow.Peer != "ix-b" || flow.Endpoint != "ix-b-tixt" {
 		t.Fatalf("learned flow identity peer=%q endpoint=%q, want ix-b/ix-b-tixt", flow.Peer, flow.Endpoint)
 	}
@@ -3567,7 +3567,7 @@ func TestExperimentalTCPDeliverInfersInboundPeerIdentityFromEndpointAddress(t *t
 	}
 }
 
-func TestExperimentalTCPDeliverCorrectsEndpointFilledControlFlowTuple(t *testing.T) {
+func TestTIXTCPDeliverCorrectsEndpointFilledControlFlowTuple(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b"), Trusted: true}},
@@ -3575,33 +3575,33 @@ func TestExperimentalTCPDeliverCorrectsEndpointFilledControlFlowTuple(t *testing
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.20:17041",
 				Enabled:   true,
 			},
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "198.51.100.10:17041",
 				Enabled:   true,
 			},
 		},
 	}
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		ID:              7,
 		Peer:            core.IXID("ix-b"),
 		Endpoint:        core.EndpointID("ix-b-tixt"),
 		RemoteAddress:   "198.51.100.10:17041",
 		CryptoPlacement: dataplane.CryptoPlacementUserspace,
 	}
-	events := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	manager.expTCPSubs[events] = struct{}{}
+	events := make(chan []dataplane.TIXTCPFrame, 1)
+	manager.tixTCPSubs[events] = struct{}{}
 
-	manager.deliverExperimentalTCPFrame(dataplane.ExperimentalTCPFrame{
+	manager.deliverTIXTCPFrame(dataplane.TIXTCPFrame{
 		FlowID:  7,
 		Payload: []byte("learn"),
-	}, experimentaltcp.TCPPacket{
+	}, tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("198.51.100.10"),
 		DestinationIP:   netip.MustParseAddr("192.0.2.20"),
 		SourcePort:      49231,
@@ -3612,7 +3612,7 @@ func TestExperimentalTCPDeliverCorrectsEndpointFilledControlFlowTuple(t *testing
 	if frame.Endpoint != "ix-a-tixt" {
 		t.Fatalf("delivered endpoint = %q, want local listener endpoint", frame.Endpoint)
 	}
-	flow := manager.expTCPFlows[7]
+	flow := manager.tixTCPFlows[7]
 	if flow.RemoteAddress != "198.51.100.10:49231" {
 		t.Fatalf("remote address = %q, want learned packet tuple", flow.RemoteAddress)
 	}
@@ -3621,9 +3621,9 @@ func TestExperimentalTCPDeliverCorrectsEndpointFilledControlFlowTuple(t *testing
 	}
 }
 
-func TestExperimentalTCPDeliverCorrectsPreparedOutboundTupleFromInboundPacket(t *testing.T) {
+func TestTIXTCPDeliverCorrectsPreparedOutboundTupleFromInboundPacket(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		ID:              7,
 		Peer:            core.IXID("ix-a"),
 		Endpoint:        core.EndpointID("ix-a-tixt"),
@@ -3633,13 +3633,13 @@ func TestExperimentalTCPDeliverCorrectsPreparedOutboundTupleFromInboundPacket(t 
 		DestinationPort: 7141,
 		CryptoPlacement: dataplane.CryptoPlacementUserspace,
 	}
-	events := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	manager.expTCPFlowSubs[7] = map[chan []dataplane.ExperimentalTCPFrame]struct{}{events: {}}
+	events := make(chan []dataplane.TIXTCPFrame, 1)
+	manager.tixTCPFlowSubs[7] = map[chan []dataplane.TIXTCPFrame]struct{}{events: {}}
 
-	manager.deliverExperimentalTCPFrame(dataplane.ExperimentalTCPFrame{
+	manager.deliverTIXTCPFrame(dataplane.TIXTCPFrame{
 		FlowID:  7,
 		Payload: []byte("reverse"),
-	}, experimentaltcp.TCPPacket{
+	}, tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("10.10.0.11"),
 		DestinationIP:   netip.MustParseAddr("10.10.0.12"),
 		SourcePort:      57390,
@@ -3647,7 +3647,7 @@ func TestExperimentalTCPDeliverCorrectsPreparedOutboundTupleFromInboundPacket(t 
 	})
 
 	<-events
-	flow := manager.expTCPFlows[7]
+	flow := manager.tixTCPFlows[7]
 	if flow.LocalAddress != "10.10.0.12:7142" || flow.RemoteAddress != "10.10.0.11:57390" {
 		t.Fatalf("corrected addresses local=%q remote=%q", flow.LocalAddress, flow.RemoteAddress)
 	}
@@ -3656,9 +3656,9 @@ func TestExperimentalTCPDeliverCorrectsPreparedOutboundTupleFromInboundPacket(t 
 	}
 }
 
-func TestExperimentalTCPDeliverPreservesFlowEndpointWhenLocalEndpointUnknown(t *testing.T) {
+func TestTIXTCPDeliverPreservesFlowEndpointWhenLocalEndpointUnknown(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		ID:              7,
 		Peer:            core.IXID("ix-a"),
 		Endpoint:        core.EndpointID("ix-a-tixt"),
@@ -3667,17 +3667,17 @@ func TestExperimentalTCPDeliverPreservesFlowEndpointWhenLocalEndpointUnknown(t *
 		SourcePort:      17041,
 		DestinationPort: 54000,
 	}
-	events := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	manager.expTCPFlowSubs[7] = map[chan []dataplane.ExperimentalTCPFrame]struct{}{events: {}}
+	events := make(chan []dataplane.TIXTCPFrame, 1)
+	manager.tixTCPFlowSubs[7] = map[chan []dataplane.TIXTCPFrame]struct{}{events: {}}
 
-	manager.deliverExperimentalTCPFrames([]receivedExperimentalTCPFrame{
+	manager.deliverTIXTCPFrames([]receivedTIXTCPFrame{
 		{
-			frame: dataplane.ExperimentalTCPFrame{
+			frame: dataplane.TIXTCPFrame{
 				FlowID:   7,
 				Sequence: 10,
 				Payload:  []byte("first"),
 			},
-			packet: experimentaltcp.TCPPacket{
+			packet: tixtcp.TCPPacket{
 				SourceIP:        netip.MustParseAddr("192.0.2.20"),
 				DestinationIP:   netip.MustParseAddr("198.51.100.10"),
 				SourcePort:      54000,
@@ -3687,12 +3687,12 @@ func TestExperimentalTCPDeliverPreservesFlowEndpointWhenLocalEndpointUnknown(t *
 			},
 		},
 		{
-			frame: dataplane.ExperimentalTCPFrame{
+			frame: dataplane.TIXTCPFrame{
 				FlowID:   7,
 				Sequence: 11,
 				Payload:  []byte("second"),
 			},
-			packet: experimentaltcp.TCPPacket{
+			packet: tixtcp.TCPPacket{
 				SourceIP:        netip.MustParseAddr("192.0.2.20"),
 				DestinationIP:   netip.MustParseAddr("198.51.100.10"),
 				SourcePort:      54000,
@@ -3709,10 +3709,10 @@ func TestExperimentalTCPDeliverPreservesFlowEndpointWhenLocalEndpointUnknown(t *
 	}
 }
 
-func TestExperimentalTCPDeliverSingleFlowBatchToSubscriber(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RX_SINGLE_FLOW_BATCH", "1")
+func TestTIXTCPDeliverSingleFlowBatchToSubscriber(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_RX_SINGLE_FLOW_BATCH", "1")
 	manager := NewManager()
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		ID:              7,
 		Peer:            core.IXID("ix-a"),
 		Endpoint:        core.EndpointID("ix-a-tixt"),
@@ -3721,11 +3721,11 @@ func TestExperimentalTCPDeliverSingleFlowBatchToSubscriber(t *testing.T) {
 		SourcePort:      17041,
 		DestinationPort: 54000,
 	}
-	events := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	manager.expTCPFlowSubs[7] = map[chan []dataplane.ExperimentalTCPFrame]struct{}{events: {}}
+	events := make(chan []dataplane.TIXTCPFrame, 1)
+	manager.tixTCPFlowSubs[7] = map[chan []dataplane.TIXTCPFrame]struct{}{events: {}}
 
 	var releases atomic.Int32
-	packet := experimentaltcp.TCPPacket{
+	packet := tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.20"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.10"),
 		SourcePort:      54000,
@@ -3733,9 +3733,9 @@ func TestExperimentalTCPDeliverSingleFlowBatchToSubscriber(t *testing.T) {
 		Sequence:        100,
 		Payload:         bytes.Repeat([]byte{0x5a}, 80),
 	}
-	manager.deliverExperimentalTCPFrames([]receivedExperimentalTCPFrame{
+	manager.deliverTIXTCPFrames([]receivedTIXTCPFrame{
 		{
-			frame: dataplane.ExperimentalTCPFrame{
+			frame: dataplane.TIXTCPFrame{
 				FlowID:   7,
 				Sequence: 10,
 				Payload:  []byte("first"),
@@ -3744,7 +3744,7 @@ func TestExperimentalTCPDeliverSingleFlowBatchToSubscriber(t *testing.T) {
 			packet: packet,
 		},
 		{
-			frame: dataplane.ExperimentalTCPFrame{
+			frame: dataplane.TIXTCPFrame{
 				FlowID:   7,
 				Sequence: 11,
 				Payload:  []byte("second"),
@@ -3765,18 +3765,18 @@ func TestExperimentalTCPDeliverSingleFlowBatchToSubscriber(t *testing.T) {
 		if batch[0].Peer != "ix-a" || batch[0].Endpoint != "ix-a-tixt" {
 			t.Fatalf("delivered identity = %s/%s", batch[0].Peer, batch[0].Endpoint)
 		}
-		releaseExperimentalTCPFramePayloads(batch)
+		releaseTIXTCPFramePayloads(batch)
 	default:
 		t.Fatal("single-flow batch was not delivered to flow subscriber")
 	}
 	if got := releases.Load(); got != 2 {
 		t.Fatalf("release calls = %d, want 2", got)
 	}
-	if got := manager.expTCPReceived; got != 2 {
-		t.Fatalf("expTCPReceived = %d, want 2", got)
+	if got := manager.tixTCPReceived; got != 2 {
+		t.Fatalf("tixTCPReceived = %d, want 2", got)
 	}
-	if flow := manager.expTCPFlows[7]; !flow.ExpiresAt.IsZero() {
-		t.Fatalf("established experimental_tcp flow expires_at = %s after batched RX, want persistent zero value", flow.ExpiresAt)
+	if flow := manager.tixTCPFlows[7]; !flow.ExpiresAt.IsZero() {
+		t.Fatalf("established tix_tcp flow expires_at = %s after batched RX, want persistent zero value", flow.ExpiresAt)
 	}
 }
 
@@ -4040,16 +4040,16 @@ func TestPreparedKernelUDPFlowPreservesPersistentLifetime(t *testing.T) {
 	}
 }
 
-func TestInstalledExperimentalTCPFlowLifetimeIsSessionPersistent(t *testing.T) {
+func TestInstalledTIXTCPFlowLifetimeIsSessionPersistent(t *testing.T) {
 	manager := NewManager()
 
-	if err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+	if err := manager.InstallTIXTCPFlows(context.Background(), []dataplane.TIXTCPFlow{{
 		ID:            7,
 		RemoteAddress: "198.51.100.2:17041",
 	}}); err != nil {
-		t.Fatalf("install experimental_tcp flow: %v", err)
+		t.Fatalf("install tix_tcp flow: %v", err)
 	}
-	flow := manager.expTCPFlows[7]
+	flow := manager.tixTCPFlows[7]
 
 	if flow.CreatedAt.IsZero() {
 		t.Fatal("created_at was not set")
@@ -4058,55 +4058,55 @@ func TestInstalledExperimentalTCPFlowLifetimeIsSessionPersistent(t *testing.T) {
 		t.Fatal("last_seen was not set")
 	}
 	if !flow.ExpiresAt.IsZero() {
-		t.Fatalf("installed experimental_tcp flow expires_at = %s, want persistent zero value", flow.ExpiresAt)
+		t.Fatalf("installed tix_tcp flow expires_at = %s, want persistent zero value", flow.ExpiresAt)
 	}
 }
 
-func TestControlOnlyExperimentalTCPFlowKeepsLearnedTTL(t *testing.T) {
+func TestControlOnlyTIXTCPFlowKeepsLearnedTTL(t *testing.T) {
 	manager := NewManager()
 
-	if err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+	if err := manager.InstallTIXTCPFlows(context.Background(), []dataplane.TIXTCPFlow{{
 		ID: 7,
 	}}); err != nil {
-		t.Fatalf("install control-only experimental_tcp flow: %v", err)
+		t.Fatalf("install control-only tix_tcp flow: %v", err)
 	}
-	flow := manager.expTCPFlows[7]
+	flow := manager.tixTCPFlows[7]
 
 	if flow.ExpiresAt.IsZero() {
-		t.Fatal("control-only experimental_tcp flow should keep a TTL until a remote tuple is learned or a session annotates it")
+		t.Fatal("control-only tix_tcp flow should keep a TTL until a remote tuple is learned or a session annotates it")
 	}
 }
 
-func TestEstablishedExperimentalTCPFlowClearsLearnedExpiry(t *testing.T) {
+func TestEstablishedTIXTCPFlowClearsLearnedExpiry(t *testing.T) {
 	now := time.Unix(1700000000, 0).UTC()
-	learned := refreshExperimentalTCPFlowLifetime(dataplane.ExperimentalTCPFlow{ID: 7}, now.Add(-time.Minute))
+	learned := refreshTIXTCPFlowLifetime(dataplane.TIXTCPFlow{ID: 7}, now.Add(-time.Minute))
 
-	flow := persistEstablishedExperimentalTCPFlowLifetime(learned, now)
+	flow := persistEstablishedTIXTCPFlowLifetime(learned, now)
 
 	if flow.LastSeen != now {
 		t.Fatalf("last_seen = %s, want %s", flow.LastSeen, now)
 	}
 	if !flow.ExpiresAt.IsZero() {
-		t.Fatalf("established experimental_tcp flow expires_at = %s, want persistent zero value", flow.ExpiresAt)
+		t.Fatalf("established tix_tcp flow expires_at = %s, want persistent zero value", flow.ExpiresAt)
 	}
 }
 
-func TestPreparedExperimentalTCPFlowPreservesPersistentLifetime(t *testing.T) {
+func TestPreparedTIXTCPFlowPreservesPersistentLifetime(t *testing.T) {
 	now := time.Unix(1700000000, 0).UTC()
-	persistent := persistEstablishedExperimentalTCPFlowLifetime(dataplane.ExperimentalTCPFlow{ID: 7}, now.Add(-time.Minute))
+	persistent := persistEstablishedTIXTCPFlowLifetime(dataplane.TIXTCPFlow{ID: 7}, now.Add(-time.Minute))
 
-	flow := refreshExperimentalTCPPreparedFlowLifetime(persistent, now)
+	flow := refreshTIXTCPPreparedFlowLifetime(persistent, now)
 
 	if flow.LastSeen != now {
 		t.Fatalf("last_seen = %s, want %s", flow.LastSeen, now)
 	}
 	if !flow.ExpiresAt.IsZero() {
-		t.Fatalf("prepared persistent experimental_tcp flow expires_at = %s, want zero value", flow.ExpiresAt)
+		t.Fatalf("prepared persistent tix_tcp flow expires_at = %s, want zero value", flow.ExpiresAt)
 	}
 }
 
-func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
+func TestTIXTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
@@ -4115,39 +4115,39 @@ func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.10:18001",
 				Enabled:   true,
 			},
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "198.51.100.20:18002",
 				Enabled:   true,
 			},
 		},
 	}
-	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
 		ID:              77,
 		LocalAddress:    "192.0.2.10:18001",
 		RemoteAddress:   "198.51.100.20:43000",
 		SourcePort:      18001,
 		DestinationPort: 43000,
 	}
-	manager.expTCPRawReceiveFilter.Store(manager.experimentalTCPRawReceiveFilterLocked())
+	manager.tixTCPRawReceiveFilter.Store(manager.tixTCPRawReceiveFilterLocked())
 
 	makeWire := func(destination string, port uint16, corruptTCPChecksum bool) []byte {
 		t.Helper()
-		frameWire, err := (experimentaltcp.Frame{
+		frameWire, err := (tixtcp.Frame{
 			FlowID:   77,
 			Sequence: 1,
 			Payload:  []byte("payload"),
 		}).MarshalBinary()
 		if err != nil {
-			t.Fatalf("marshal experimental_tcp frame: %v", err)
+			t.Fatalf("marshal tix_tcp frame: %v", err)
 		}
-		wire, err := experimentaltcp.MarshalTCPShapedIPv4(experimentaltcp.TCPPacket{
+		wire, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
 			SourceIP:        netip.MustParseAddr("198.51.100.20"),
 			DestinationIP:   netip.MustParseAddr(destination),
 			SourcePort:      43000,
@@ -4157,7 +4157,7 @@ func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T
 			Payload:         frameWire,
 		})
 		if err != nil {
-			t.Fatalf("marshal experimental_tcp packet: %v", err)
+			t.Fatalf("marshal tix_tcp packet: %v", err)
 		}
 		if corruptTCPChecksum {
 			wire[36] ^= 0xff
@@ -4165,55 +4165,55 @@ func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T
 		return wire
 	}
 
-	if _, ok := manager.decodeExperimentalTCPRawPacket(
+	if _, ok := manager.decodeTIXTCPRawPacket(
 		makeWire("192.0.2.11", 18001, true),
-		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+		tixtcp.ParseTCPShapedIPv4NoCopy,
 	); ok {
 		t.Fatal("raw decode accepted another instance using the same port on a different local address")
 	}
-	if _, ok := manager.decodeExperimentalTCPRawPacket(
+	if _, ok := manager.decodeTIXTCPRawPacket(
 		makeWire("192.0.2.10", 18011, true),
-		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+		tixtcp.ParseTCPShapedIPv4NoCopy,
 	); ok {
 		t.Fatal("raw decode accepted another instance using a different local port")
 	}
-	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
 		ID:              77,
 		LocalAddress:    "192.0.2.10:18001",
 		RemoteAddress:   "198.51.100.20:40077",
 		SourcePort:      18001,
 		DestinationPort: 40077,
 	}
-	manager.expTCPRawReceiveFilter.Store(manager.experimentalTCPRawReceiveFilterLocked())
-	if _, ok := manager.decodeExperimentalTCPRawPacket(
+	manager.tixTCPRawReceiveFilter.Store(manager.tixTCPRawReceiveFilterLocked())
+	if _, ok := manager.decodeTIXTCPRawPacket(
 		makeWire("192.0.2.10", 18001, false),
-		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+		tixtcp.ParseTCPShapedIPv4NoCopy,
 	); ok {
 		t.Fatal("raw decode accepted compat primer temporary source port for an installed flow")
 	}
 
-	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
 		ID:              77,
 		LocalAddress:    "192.0.2.10:18001",
 		RemoteAddress:   "198.51.100.20:43000",
 		SourcePort:      18001,
 		DestinationPort: 43000,
 	}
-	manager.expTCPRawReceiveFilter.Store(manager.experimentalTCPRawReceiveFilterLocked())
+	manager.tixTCPRawReceiveFilter.Store(manager.tixTCPRawReceiveFilterLocked())
 	if got := manager.dropReasons["CHECKSUM_ERROR"]; got != 0 {
 		t.Fatalf("disallowed instance packets recorded checksum drops = %d, want 0", got)
 	}
 
-	item, ok := manager.decodeExperimentalTCPRawPacket(
+	item, ok := manager.decodeTIXTCPRawPacket(
 		makeWire("192.0.2.10", 18001, false),
-		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+		tixtcp.ParseTCPShapedIPv4NoCopy,
 	)
 	if !ok || item.frame.FlowID != 77 {
 		t.Fatalf("allowed instance packet decode = (%#v, %t), want flow 77", item.frame, ok)
 	}
-	if _, ok := manager.decodeExperimentalTCPRawPacket(
+	if _, ok := manager.decodeTIXTCPRawPacket(
 		makeWire("192.0.2.10", 18001, true),
-		experimentaltcp.ParseTCPShapedIPv4NoCopy,
+		tixtcp.ParseTCPShapedIPv4NoCopy,
 	); ok {
 		t.Fatal("raw decode accepted an allowed packet with a bad TCP checksum")
 	}
@@ -4222,18 +4222,18 @@ func TestExperimentalTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T
 	}
 }
 
-func TestExperimentalTCPRawReceiveFilterIncludesEstablishedLocalFlowPort(t *testing.T) {
+func TestTIXTCPRawReceiveFilterIncludesEstablishedLocalFlowPort(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		ID:              7,
 		LocalAddress:    "192.0.2.10:43000",
 		RemoteAddress:   "198.51.100.20:17041",
 		SourcePort:      43000,
 		DestinationPort: 17041,
 	}
-	filter := manager.experimentalTCPRawReceiveFilterLocked()
+	filter := manager.tixTCPRawReceiveFilterLocked()
 
-	packet := experimentaltcp.TCPPacket{
+	packet := tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("198.51.100.20"),
 		DestinationIP:   netip.MustParseAddr("192.0.2.10"),
 		SourcePort:      17041,
@@ -4253,54 +4253,54 @@ func TestExperimentalTCPRawReceiveFilterIncludesEstablishedLocalFlowPort(t *test
 	}
 }
 
-func TestExperimentalTCPRawReceiveFilterAllowsUnknownFlowOnlyWithoutPrimer(t *testing.T) {
+func TestTIXTCPRawReceiveFilterAllowsUnknownFlowOnlyWithoutPrimer(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        core.EndpointID("ix-a-tixt"),
 			Peer:      core.IXID("ix-a"),
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Listen:    "192.0.2.10:18001",
 			Enabled:   true,
 		}},
 	}
-	packet := experimentaltcp.TCPPacket{
+	packet := tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("198.51.100.20"),
 		DestinationIP:   netip.MustParseAddr("192.0.2.10"),
 		SourcePort:      43000,
 		DestinationPort: 18001,
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	if manager.experimentalTCPRawReceiveFilterLocked().allows(packet, 77) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	if manager.tixTCPRawReceiveFilterLocked().allows(packet, 77) {
 		t.Fatal("primer mode accepted an unknown raw flow")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "0")
-	if !manager.experimentalTCPRawReceiveFilterLocked().allows(packet, 77) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "0")
+	if !manager.tixTCPRawReceiveFilterLocked().allows(packet, 77) {
 		t.Fatal("explicit no-primer mode rejected an unknown raw listener flow")
 	}
 }
 
-func TestExperimentalTCPRawValidatedDeliveryDoesNotRewriteInstalledTuple(t *testing.T) {
+func TestTIXTCPRawValidatedDeliveryDoesNotRewriteInstalledTuple(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
 		ID:              77,
 		LocalAddress:    "192.0.2.10:18001",
 		RemoteAddress:   "198.51.100.20:40077",
 		SourcePort:      18001,
 		DestinationPort: 40077,
 	}
-	events := make(chan []dataplane.ExperimentalTCPFrame, 1)
-	manager.expTCPFlowSubs[77] = map[chan []dataplane.ExperimentalTCPFrame]struct{}{events: {}}
+	events := make(chan []dataplane.TIXTCPFrame, 1)
+	manager.tixTCPFlowSubs[77] = map[chan []dataplane.TIXTCPFrame]struct{}{events: {}}
 	var releases atomic.Int32
 
-	manager.deliverExperimentalTCPFrames([]receivedExperimentalTCPFrame{{
-		frame: dataplane.ExperimentalTCPFrame{
+	manager.deliverTIXTCPFrames([]receivedTIXTCPFrame{{
+		frame: dataplane.TIXTCPFrame{
 			FlowID:  77,
 			Payload: []byte("primer-tuple"),
 			Release: func() { releases.Add(1) },
 		},
-		packet: experimentaltcp.TCPPacket{
+		packet: tixtcp.TCPPacket{
 			SourceIP:        netip.MustParseAddr("198.51.100.20"),
 			DestinationIP:   netip.MustParseAddr("192.0.2.10"),
 			SourcePort:      43000,
@@ -4311,11 +4311,11 @@ func TestExperimentalTCPRawValidatedDeliveryDoesNotRewriteInstalledTuple(t *test
 
 	select {
 	case batch := <-events:
-		releaseExperimentalTCPFramePayloads(batch)
+		releaseTIXTCPFramePayloads(batch)
 		t.Fatal("raw delivery accepted a stale compat primer tuple")
 	default:
 	}
-	flow := manager.expTCPFlows[77]
+	flow := manager.tixTCPFlows[77]
 	if flow.LocalAddress != "192.0.2.10:18001" || flow.RemoteAddress != "198.51.100.20:40077" ||
 		flow.SourcePort != 18001 || flow.DestinationPort != 40077 {
 		t.Fatalf("raw delivery rewrote installed flow tuple: %+v", flow)
@@ -4337,7 +4337,7 @@ func TestKernelTransportDNSTemplatesExpireAndRefresh(t *testing.T) {
 		LocalAddress:  "127.0.0.1:47007",
 		RemoteAddress: "localhost:17041",
 	}
-	manager.expTCPFlows[8] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[8] = dataplane.TIXTCPFlow{
 		ID:            8,
 		LocalAddress:  "127.0.0.1:47008",
 		RemoteAddress: "localhost:17042",
@@ -4349,11 +4349,11 @@ func TestKernelTransportDNSTemplatesExpireAndRefresh(t *testing.T) {
 	if _, ok := manager.kernelUDPTXTemplates[7]; !ok {
 		t.Fatal("kernel_udp DNS template was not cached")
 	}
-	if _, _, err := manager.prepareExperimentalTCPPacketLocked(8, 1); err != nil {
-		t.Fatalf("prepare experimental_tcp hostname packet: %v", err)
+	if _, _, err := manager.prepareTIXTCPPacketLocked(8, 1); err != nil {
+		t.Fatalf("prepare tix_tcp hostname packet: %v", err)
 	}
-	if _, ok := manager.expTCPTXTemplates[8]; !ok {
-		t.Fatal("experimental_tcp DNS template was not cached")
+	if _, ok := manager.tixTCPTXTemplates[8]; !ok {
+		t.Fatal("tix_tcp DNS template was not cached")
 	}
 	if !manager.refreshKernelTransportDNSTemplatesLocked(time.Now().UTC().Add(time.Second)) {
 		t.Fatal("DNS template refresh reported no expired templates")
@@ -4361,8 +4361,8 @@ func TestKernelTransportDNSTemplatesExpireAndRefresh(t *testing.T) {
 	if _, ok := manager.kernelUDPTXTemplates[7]; ok {
 		t.Fatal("expired kernel_udp DNS template survived refresh")
 	}
-	if _, ok := manager.expTCPTXTemplates[8]; ok {
-		t.Fatal("expired experimental_tcp DNS template survived refresh")
+	if _, ok := manager.tixTCPTXTemplates[8]; ok {
+		t.Fatal("expired tix_tcp DNS template survived refresh")
 	}
 }
 
@@ -4373,7 +4373,7 @@ func TestKernelTransportLiteralTemplatesDoNotExpire(t *testing.T) {
 		LocalAddress:  "127.0.0.1:47007",
 		RemoteAddress: "127.0.0.1:17041",
 	}
-	manager.expTCPFlows[8] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[8] = dataplane.TIXTCPFlow{
 		ID:            8,
 		LocalAddress:  "127.0.0.1:47008",
 		RemoteAddress: "127.0.0.1:17042",
@@ -4382,8 +4382,8 @@ func TestKernelTransportLiteralTemplatesDoNotExpire(t *testing.T) {
 	if _, _, err := manager.prepareKernelUDPPacketLocked(7); err != nil {
 		t.Fatalf("prepare kernel_udp literal packet: %v", err)
 	}
-	if _, _, err := manager.prepareExperimentalTCPPacketLocked(8, 1); err != nil {
-		t.Fatalf("prepare experimental_tcp literal packet: %v", err)
+	if _, _, err := manager.prepareTIXTCPPacketLocked(8, 1); err != nil {
+		t.Fatalf("prepare tix_tcp literal packet: %v", err)
 	}
 	if manager.refreshKernelTransportDNSTemplatesLocked(time.Now().UTC().Add(24 * time.Hour)) {
 		t.Fatal("literal endpoint templates should not expire through DNS refresh")
@@ -4391,8 +4391,8 @@ func TestKernelTransportLiteralTemplatesDoNotExpire(t *testing.T) {
 	if _, ok := manager.kernelUDPTXTemplates[7]; !ok {
 		t.Fatal("literal kernel_udp template was removed")
 	}
-	if _, ok := manager.expTCPTXTemplates[8]; !ok {
-		t.Fatal("literal experimental_tcp template was removed")
+	if _, ok := manager.tixTCPTXTemplates[8]; !ok {
+		t.Fatal("literal tix_tcp template was removed")
 	}
 }
 
@@ -4530,7 +4530,7 @@ func TestKernelCryptoInstallStats(t *testing.T) {
 	manager := NewManager()
 	spec := validKernelCryptoSpec(42)
 
-	err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec})
+	err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec})
 	if err == nil || !strings.Contains(err.Error(), "kernel crypto provider is not available") {
 		t.Fatalf("install crypto error = %v, want provider unavailable", err)
 	}
@@ -4538,12 +4538,12 @@ func TestKernelCryptoInstallStats(t *testing.T) {
 	badSpec := spec
 	badSpec.FlowID = 43
 	badSpec.SendKey = badSpec.SendKey[:kernelCryptoAES256KeyLen-1]
-	err = manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{badSpec})
+	err = manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{badSpec})
 	if err == nil || !strings.Contains(err.Error(), "send key length") {
 		t.Fatalf("install bad crypto error = %v, want send key length", err)
 	}
 
-	status, err := manager.ExperimentalTCPStatus(context.Background())
+	status, err := manager.TIXTCPStatus(context.Background())
 	if err != nil {
 		t.Fatalf("experimental tcp status: %v", err)
 	}
@@ -4585,9 +4585,9 @@ func TestKernelCryptoInstallStats(t *testing.T) {
 	}
 }
 
-func TestInstallExperimentalTCPFlowsReplacesDuplicatePath(t *testing.T) {
+func TestInstallTIXTCPFlowsReplacesDuplicatePath(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		1: {
 			ID:              1,
 			Peer:            "ix-b",
@@ -4599,14 +4599,14 @@ func TestInstallExperimentalTCPFlowsReplacesDuplicatePath(t *testing.T) {
 			CryptoPlacement: dataplane.CryptoPlacementKernel,
 		},
 	}
-	manager.expTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{
-		1: {Protocol: "experimental_tcp", FlowID: 1},
+	manager.tixTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{
+		1: {Protocol: "tix_tcp", FlowID: 1},
 	}
 	manager.kernelUDPTXDirectSequences = map[uint64]uint64{1: 7}
-	manager.expTCPOuterTXSequences = map[uint64]uint32{1: 8}
-	manager.expTCPOuterTXAcknowledgments = map[uint64]uint32{1: 9}
+	manager.tixTCPOuterTXSequences = map[uint64]uint32{1: 8}
+	manager.tixTCPOuterTXAcknowledgments = map[uint64]uint32{1: 9}
 
-	if err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+	if err := manager.InstallTIXTCPFlows(context.Background(), []dataplane.TIXTCPFlow{{
 		ID:              2,
 		Peer:            "ix-b",
 		Endpoint:        "exp-b",
@@ -4616,31 +4616,31 @@ func TestInstallExperimentalTCPFlowsReplacesDuplicatePath(t *testing.T) {
 		DestinationPort: 17042,
 		CryptoPlacement: dataplane.CryptoPlacementUserspace,
 	}}); err != nil {
-		t.Fatalf("install duplicate experimental_tcp flow: %v", err)
+		t.Fatalf("install duplicate tix_tcp flow: %v", err)
 	}
-	if _, ok := manager.expTCPFlows[1]; ok {
-		t.Fatal("old duplicate experimental_tcp flow was not removed")
+	if _, ok := manager.tixTCPFlows[1]; ok {
+		t.Fatal("old duplicate tix_tcp flow was not removed")
 	}
-	if _, ok := manager.expTCPFlows[2]; !ok {
-		t.Fatal("new experimental_tcp flow was not installed")
+	if _, ok := manager.tixTCPFlows[2]; !ok {
+		t.Fatal("new tix_tcp flow was not installed")
 	}
-	if _, ok := manager.expTCPTelemetry[1]; ok {
-		t.Fatal("old experimental_tcp telemetry was not removed")
+	if _, ok := manager.tixTCPTelemetry[1]; ok {
+		t.Fatal("old tix_tcp telemetry was not removed")
 	}
 	if _, ok := manager.kernelUDPTXDirectSequences[1]; ok {
 		t.Fatal("old kernel UDP direct sequence was not removed")
 	}
-	if _, ok := manager.expTCPOuterTXSequences[1]; ok {
-		t.Fatal("old experimental_tcp outer TX sequence was not removed")
+	if _, ok := manager.tixTCPOuterTXSequences[1]; ok {
+		t.Fatal("old tix_tcp outer TX sequence was not removed")
 	}
-	if _, ok := manager.expTCPOuterTXAcknowledgments[1]; ok {
-		t.Fatal("old experimental_tcp outer TX acknowledgment was not removed")
+	if _, ok := manager.tixTCPOuterTXAcknowledgments[1]; ok {
+		t.Fatal("old tix_tcp outer TX acknowledgment was not removed")
 	}
 }
 
-func TestInstallExperimentalTCPFlowsKeepsSameEndpointPoolMembers(t *testing.T) {
+func TestInstallTIXTCPFlowsKeepsSameEndpointPoolMembers(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		1: {
 			ID:              1,
 			Peer:            "ix-b",
@@ -4653,7 +4653,7 @@ func TestInstallExperimentalTCPFlowsKeepsSameEndpointPoolMembers(t *testing.T) {
 		},
 	}
 
-	if err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+	if err := manager.InstallTIXTCPFlows(context.Background(), []dataplane.TIXTCPFlow{{
 		ID:              2,
 		Peer:            "ix-b",
 		Endpoint:        "exp-b",
@@ -4663,30 +4663,30 @@ func TestInstallExperimentalTCPFlowsKeepsSameEndpointPoolMembers(t *testing.T) {
 		DestinationPort: 17042,
 		CryptoPlacement: dataplane.CryptoPlacementUserspace,
 	}}); err != nil {
-		t.Fatalf("install pooled experimental_tcp flow: %v", err)
+		t.Fatalf("install pooled tix_tcp flow: %v", err)
 	}
-	if _, ok := manager.expTCPFlows[1]; !ok {
-		t.Fatal("existing pooled experimental_tcp flow was removed")
+	if _, ok := manager.tixTCPFlows[1]; !ok {
+		t.Fatal("existing pooled tix_tcp flow was removed")
 	}
-	if _, ok := manager.expTCPFlows[2]; !ok {
-		t.Fatal("new pooled experimental_tcp flow was not installed")
+	if _, ok := manager.tixTCPFlows[2]; !ok {
+		t.Fatal("new pooled tix_tcp flow was not installed")
 	}
 }
 
-func TestInstallExperimentalTCPRouteGSOFlowReplacesStaleEndpointAddressFlow(t *testing.T) {
+func TestInstallTIXTCPRouteGSOFlowReplacesStaleEndpointAddressFlow(t *testing.T) {
 	manager := NewManager()
-	manager.spec = dataplane.AttachSpec{ExperimentalTCPRouteGSOSync: true}
+	manager.spec = dataplane.AttachSpec{TIXTCPRouteGSOSync: true}
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        "exp-b",
 			Peer:      "ix-b",
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Address:   "198.18.0.2:17042",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 		}},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		1: {
 			ID:              1,
 			Peer:            "ix-b",
@@ -4695,14 +4695,14 @@ func TestInstallExperimentalTCPRouteGSOFlowReplacesStaleEndpointAddressFlow(t *t
 			CryptoPlacement: dataplane.CryptoPlacementUserspace,
 		},
 	}
-	manager.expTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{
-		1: {Protocol: "experimental_tcp", FlowID: 1},
+	manager.tixTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{
+		1: {Protocol: "tix_tcp", FlowID: 1},
 	}
 	manager.kernelUDPTXDirectSequences = map[uint64]uint64{1: 7}
-	manager.expTCPOuterTXSequences = map[uint64]uint32{1: 8}
-	manager.expTCPOuterTXAcknowledgments = map[uint64]uint32{1: 9}
+	manager.tixTCPOuterTXSequences = map[uint64]uint32{1: 8}
+	manager.tixTCPOuterTXAcknowledgments = map[uint64]uint32{1: 9}
 
-	if err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+	if err := manager.InstallTIXTCPFlows(context.Background(), []dataplane.TIXTCPFlow{{
 		ID:              2,
 		Peer:            "ix-b",
 		Endpoint:        "exp-b",
@@ -4712,42 +4712,42 @@ func TestInstallExperimentalTCPRouteGSOFlowReplacesStaleEndpointAddressFlow(t *t
 		DestinationPort: 17042,
 		CryptoPlacement: dataplane.CryptoPlacementUserspace,
 	}}); err != nil {
-		t.Fatalf("install replacement experimental_tcp route-GSO flow: %v", err)
+		t.Fatalf("install replacement tix_tcp route-GSO flow: %v", err)
 	}
-	if _, ok := manager.expTCPFlows[1]; ok {
+	if _, ok := manager.tixTCPFlows[1]; ok {
 		t.Fatal("stale route-GSO endpoint-address flow was not removed")
 	}
-	if _, ok := manager.expTCPFlows[2]; !ok {
+	if _, ok := manager.tixTCPFlows[2]; !ok {
 		t.Fatal("replacement route-GSO endpoint-address flow was not installed")
 	}
-	if _, ok := manager.expTCPTelemetry[1]; ok {
+	if _, ok := manager.tixTCPTelemetry[1]; ok {
 		t.Fatal("stale route-GSO telemetry was not removed")
 	}
 	if _, ok := manager.kernelUDPTXDirectSequences[1]; ok {
 		t.Fatal("stale route-GSO direct sequence was not removed")
 	}
-	if _, ok := manager.expTCPOuterTXSequences[1]; ok {
+	if _, ok := manager.tixTCPOuterTXSequences[1]; ok {
 		t.Fatal("stale route-GSO outer TX sequence was not removed")
 	}
-	if _, ok := manager.expTCPOuterTXAcknowledgments[1]; ok {
+	if _, ok := manager.tixTCPOuterTXAcknowledgments[1]; ok {
 		t.Fatal("stale route-GSO outer TX acknowledgment was not removed")
 	}
 }
 
-func TestInstallExperimentalTCPRouteGSOFlowsKeepsEndpointAddressPoolMembers(t *testing.T) {
+func TestInstallTIXTCPRouteGSOFlowsKeepsEndpointAddressPoolMembers(t *testing.T) {
 	manager := NewManager()
-	manager.spec = dataplane.AttachSpec{ExperimentalTCPRouteGSOSync: true}
+	manager.spec = dataplane.AttachSpec{TIXTCPRouteGSOSync: true}
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        "exp-b",
 			Peer:      "ix-b",
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Address:   "198.18.0.2:17042",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 		}},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		1: {
 			ID:              1,
 			Peer:            "ix-b",
@@ -4759,14 +4759,14 @@ func TestInstallExperimentalTCPRouteGSOFlowsKeepsEndpointAddressPoolMembers(t *t
 			CryptoPlacement: dataplane.CryptoPlacementUserspace,
 		},
 	}
-	manager.expTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{
-		1: {Protocol: "experimental_tcp", FlowID: 1},
+	manager.tixTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{
+		1: {Protocol: "tix_tcp", FlowID: 1},
 	}
 	manager.kernelUDPTXDirectSequences = map[uint64]uint64{1: 7}
-	manager.expTCPOuterTXSequences = map[uint64]uint32{1: 8}
-	manager.expTCPOuterTXAcknowledgments = map[uint64]uint32{1: 9}
+	manager.tixTCPOuterTXSequences = map[uint64]uint32{1: 8}
+	manager.tixTCPOuterTXAcknowledgments = map[uint64]uint32{1: 9}
 
-	if err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+	if err := manager.InstallTIXTCPFlows(context.Background(), []dataplane.TIXTCPFlow{{
 		ID:              2,
 		Peer:            "ix-b",
 		Endpoint:        "exp-b",
@@ -4776,32 +4776,32 @@ func TestInstallExperimentalTCPRouteGSOFlowsKeepsEndpointAddressPoolMembers(t *t
 		DestinationPort: 17042,
 		CryptoPlacement: dataplane.CryptoPlacementUserspace,
 	}}); err != nil {
-		t.Fatalf("install pooled experimental_tcp route-GSO flow: %v", err)
+		t.Fatalf("install pooled tix_tcp route-GSO flow: %v", err)
 	}
 	for _, flowID := range []uint64{1, 2} {
-		if _, ok := manager.expTCPFlows[flowID]; !ok {
-			t.Fatalf("route-GSO endpoint-address pool flow %d was removed: %#v", flowID, manager.expTCPFlows)
+		if _, ok := manager.tixTCPFlows[flowID]; !ok {
+			t.Fatalf("route-GSO endpoint-address pool flow %d was removed: %#v", flowID, manager.tixTCPFlows)
 		}
 	}
-	if _, ok := manager.expTCPTelemetry[1]; !ok {
+	if _, ok := manager.tixTCPTelemetry[1]; !ok {
 		t.Fatal("retained route-GSO pool flow telemetry was removed")
 	}
 	if _, ok := manager.kernelUDPTXDirectSequences[1]; !ok {
 		t.Fatal("retained route-GSO pool flow direct sequence was removed")
 	}
-	if _, ok := manager.expTCPOuterTXSequences[1]; !ok {
+	if _, ok := manager.tixTCPOuterTXSequences[1]; !ok {
 		t.Fatal("retained route-GSO pool flow outer TX sequence was removed")
 	}
-	if _, ok := manager.expTCPOuterTXAcknowledgments[1]; !ok {
+	if _, ok := manager.tixTCPOuterTXAcknowledgments[1]; !ok {
 		t.Fatal("retained route-GSO pool flow outer TX acknowledgment was removed")
 	}
 }
 
 func TestInstallKernelUDPFlowsKeepsDuplicatePathFlowIDs(t *testing.T) {
 	manager := NewManager()
-	fastPath := testExperimentalTCPFastPathWithQueues(1)
+	fastPath := testTIXTCPFastPathWithQueues(1)
 	fastPath.ready.Store(true)
-	manager.expTCPFastPath = fastPath
+	manager.tixTCPFastPath = fastPath
 	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{
 		1: {
 			ID:              1,
@@ -4871,9 +4871,9 @@ func TestInstallKernelUDPFlowsKeepsDuplicatePathFlowIDs(t *testing.T) {
 
 func TestInstallKernelUDPFlowsKeepsSameEndpointPoolMembers(t *testing.T) {
 	manager := NewManager()
-	fastPath := testExperimentalTCPFastPathWithQueues(1)
+	fastPath := testTIXTCPFastPathWithQueues(1)
 	fastPath.ready.Store(true)
-	manager.expTCPFastPath = fastPath
+	manager.tixTCPFastPath = fastPath
 	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{
 		1: {
 			ID:              1,
@@ -4907,9 +4907,9 @@ func TestInstallKernelUDPFlowsKeepsSameEndpointPoolMembers(t *testing.T) {
 	}
 }
 
-func TestSetExperimentalTCPFlowPeerReplacesDuplicatePath(t *testing.T) {
+func TestSetTIXTCPFlowPeerReplacesDuplicatePath(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		1: {
 			ID:              1,
 			Peer:            "ix-b",
@@ -4930,48 +4930,48 @@ func TestSetExperimentalTCPFlowPeerReplacesDuplicatePath(t *testing.T) {
 		},
 	}
 
-	if err := manager.SetExperimentalTCPFlowPeer(context.Background(), 2, "ix-b", "exp-b"); err != nil {
-		t.Fatalf("set experimental_tcp flow peer: %v", err)
+	if err := manager.SetTIXTCPFlowPeer(context.Background(), 2, "ix-b", "exp-b"); err != nil {
+		t.Fatalf("set tix_tcp flow peer: %v", err)
 	}
-	if _, ok := manager.expTCPFlows[1]; ok {
-		t.Fatal("old duplicate experimental_tcp flow was not removed after annotation")
+	if _, ok := manager.tixTCPFlows[1]; ok {
+		t.Fatal("old duplicate tix_tcp flow was not removed after annotation")
 	}
-	flow, ok := manager.expTCPFlows[2]
+	flow, ok := manager.tixTCPFlows[2]
 	if !ok {
-		t.Fatal("annotated experimental_tcp flow was removed")
+		t.Fatal("annotated tix_tcp flow was removed")
 	}
 	if flow.Peer != "ix-b" || flow.Endpoint != "exp-b" {
 		t.Fatalf("annotated flow identity = peer %q endpoint %q", flow.Peer, flow.Endpoint)
 	}
 	if !flow.ExpiresAt.IsZero() {
-		t.Fatalf("annotated experimental_tcp flow expires_at = %s, want persistent zero value", flow.ExpiresAt)
+		t.Fatalf("annotated tix_tcp flow expires_at = %s, want persistent zero value", flow.ExpiresAt)
 	}
 }
 
-func TestSetExperimentalTCPFlowPeerFillsRemoteAddressFromEndpoint(t *testing.T) {
+func TestSetTIXTCPFlowPeerFillsRemoteAddressFromEndpoint(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{
 			{
 				ID:        core.EndpointID("exp-b"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "198.51.100.2:17042",
 				Enabled:   true,
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		7: {
 			ID:              7,
 			CryptoPlacement: dataplane.CryptoPlacementUserspace,
 		},
 	}
 
-	if err := manager.SetExperimentalTCPFlowPeer(context.Background(), 7, "ix-b", "exp-b"); err != nil {
-		t.Fatalf("set experimental_tcp flow peer: %v", err)
+	if err := manager.SetTIXTCPFlowPeer(context.Background(), 7, "ix-b", "exp-b"); err != nil {
+		t.Fatalf("set tix_tcp flow peer: %v", err)
 	}
-	flow := manager.expTCPFlows[7]
+	flow := manager.tixTCPFlows[7]
 	if flow.RemoteAddress != "198.51.100.2:17042" {
 		t.Fatalf("remote address = %q, want endpoint address", flow.RemoteAddress)
 	}
@@ -4980,20 +4980,20 @@ func TestSetExperimentalTCPFlowPeerFillsRemoteAddressFromEndpoint(t *testing.T) 
 	}
 }
 
-func TestSetExperimentalTCPFlowPeerKeepsLearnedRemoteAddress(t *testing.T) {
+func TestSetTIXTCPFlowPeerKeepsLearnedRemoteAddress(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{
 			{
 				ID:        core.EndpointID("exp-b"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "198.51.100.2:17042",
 				Enabled:   true,
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		7: {
 			ID:              7,
 			RemoteAddress:   "198.51.100.2:48865",
@@ -5001,15 +5001,15 @@ func TestSetExperimentalTCPFlowPeerKeepsLearnedRemoteAddress(t *testing.T) {
 		},
 	}
 
-	if err := manager.SetExperimentalTCPFlowPeer(context.Background(), 7, "ix-b", "exp-b"); err != nil {
-		t.Fatalf("set experimental_tcp flow peer: %v", err)
+	if err := manager.SetTIXTCPFlowPeer(context.Background(), 7, "ix-b", "exp-b"); err != nil {
+		t.Fatalf("set tix_tcp flow peer: %v", err)
 	}
-	if got := manager.expTCPFlows[7].RemoteAddress; got != "198.51.100.2:48865" {
+	if got := manager.tixTCPFlows[7].RemoteAddress; got != "198.51.100.2:48865" {
 		t.Fatalf("remote address = %q, want learned tuple preserved", got)
 	}
 }
 
-func TestSetExperimentalTCPFlowPeerDoesNotFillLocalListenerFlowRemoteAddress(t *testing.T) {
+func TestSetTIXTCPFlowPeerDoesNotFillLocalListenerFlowRemoteAddress(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b"), Trusted: true}},
@@ -5017,20 +5017,20 @@ func TestSetExperimentalTCPFlowPeerDoesNotFillLocalListenerFlowRemoteAddress(t *
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.1:17041",
 				Enabled:   true,
 			},
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "198.51.100.2:17042",
 				Enabled:   true,
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		7: {
 			ID:              7,
 			LocalAddress:    "192.0.2.1:17041",
@@ -5039,10 +5039,10 @@ func TestSetExperimentalTCPFlowPeerDoesNotFillLocalListenerFlowRemoteAddress(t *
 		},
 	}
 
-	if err := manager.SetExperimentalTCPFlowPeer(context.Background(), 7, "ix-b", "ix-b-tixt"); err != nil {
-		t.Fatalf("set experimental_tcp flow peer: %v", err)
+	if err := manager.SetTIXTCPFlowPeer(context.Background(), 7, "ix-b", "ix-b-tixt"); err != nil {
+		t.Fatalf("set tix_tcp flow peer: %v", err)
 	}
-	flow := manager.expTCPFlows[7]
+	flow := manager.tixTCPFlows[7]
 	if flow.RemoteAddress != "" {
 		t.Fatalf("remote address = %q, want no endpoint fill for local listener flow", flow.RemoteAddress)
 	}
@@ -5166,9 +5166,9 @@ func TestKernelUDPTXSecureDirectPrefersInboundReverseFlowRole(t *testing.T) {
 	}
 }
 
-func TestSetExperimentalTCPFlowPeerNoopDoesNotResyncTXDirect(t *testing.T) {
+func TestSetTIXTCPFlowPeerNoopDoesNotResyncTXDirect(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		7: {
 			ID:              7,
 			Peer:            "ix-b",
@@ -5181,8 +5181,8 @@ func TestSetExperimentalTCPFlowPeerNoopDoesNotResyncTXDirect(t *testing.T) {
 		},
 	}
 
-	if err := manager.SetExperimentalTCPFlowPeer(context.Background(), 7, "ix-b", "exp-b"); err != nil {
-		t.Fatalf("noop set experimental_tcp flow peer: %v", err)
+	if err := manager.SetTIXTCPFlowPeer(context.Background(), 7, "ix-b", "exp-b"); err != nil {
+		t.Fatalf("noop set tix_tcp flow peer: %v", err)
 	}
 	if got := manager.kernelUDPTXDirectSync.Attempts; got != 0 {
 		t.Fatalf("TX direct sync attempts = %d, want 0 for unchanged identity", got)
@@ -5207,9 +5207,9 @@ func TestShouldUpdateKernelUDPFlowCryptoPlacementIgnoresNoop(t *testing.T) {
 func TestKernelTransportStatusReportsUDPFastPath(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
-	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(2)
-	manager.expTCPFastPath.provider = "af_xdp"
-	manager.expTCPFastPath.ready.Store(true)
+	manager.tixTCPFastPath = testTIXTCPFastPathWithQueues(2)
+	manager.tixTCPFastPath.provider = "af_xdp"
+	manager.tixTCPFastPath.ready.Store(true)
 
 	status, err := manager.KernelTransportStatus(context.Background())
 	if err != nil {
@@ -5243,9 +5243,9 @@ func TestKernelUDPStatusReportsFullPlaintextKernelDatapathProvider(t *testing.T)
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
-	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
-	manager.expTCPFastPath.provider = "af_xdp"
-	manager.expTCPFastPath.ready.Store(true)
+	manager.tixTCPFastPath = testTIXTCPFastPathWithQueues(1)
+	manager.tixTCPFastPath.provider = "af_xdp"
+	manager.tixTCPFastPath.ready.Store(true)
 
 	status, err := manager.KernelUDPStatus(context.Background())
 	if err != nil {
@@ -5263,31 +5263,31 @@ func TestKernelUDPStatusReportsFullPlaintextKernelDatapathProvider(t *testing.T)
 	}
 }
 
-func TestExperimentalTCPStatusReportsFullPlaintextKernelDatapathProvider(t *testing.T) {
+func TestTIXTCPStatusReportsFullPlaintextKernelDatapathProvider(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
-	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
-	manager.expTCPFastPath.provider = "af_xdp"
-	manager.expTCPFastPath.ready.Store(true)
+	manager.tixTCPFastPath = testTIXTCPFastPathWithQueues(1)
+	manager.tixTCPFastPath.provider = "af_xdp"
+	manager.tixTCPFastPath.ready.Store(true)
 
-	status, err := manager.ExperimentalTCPStatus(context.Background())
+	status, err := manager.TIXTCPStatus(context.Background())
 	if err != nil {
-		t.Fatalf("experimental_tcp status: %v", err)
+		t.Fatalf("tix_tcp status: %v", err)
 	}
 	if !status.Available || !status.Reinject || !status.FastPath {
-		t.Fatalf("full plaintext experimental_tcp status = %+v, want available kernel provider", status)
+		t.Fatalf("full plaintext tix_tcp status = %+v, want available kernel provider", status)
 	}
 	if status.Provider != "kernel_datapath_full_plaintext" {
 		t.Fatalf("provider = %q, want kernel_datapath_full_plaintext", status.Provider)
 	}
-	protocol := kernelTransportProtocolExperimentalTCP(status)
+	protocol := kernelTransportProtocolTIXTCP(status)
 	if !protocol.Available || protocol.Placement != "kernel" || protocol.UserspaceFallback {
-		t.Fatalf("full plaintext experimental_tcp protocol = %+v, want kernel placement without userspace fallback", protocol)
+		t.Fatalf("full plaintext tix_tcp protocol = %+v, want kernel placement without userspace fallback", protocol)
 	}
 }
 
-func TestExperimentalTCPStatusReportsRouteGSOTCOnlyProvider(t *testing.T) {
+func TestTIXTCPStatusReportsRouteGSOTCOnlyProvider(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{
@@ -5295,10 +5295,10 @@ func TestExperimentalTCPStatusReportsRouteGSOTCOnlyProvider(t *testing.T) {
 		UnderlayIface:                        "eth0",
 		KernelUDPTXDirectOnly:                true,
 		KernelUDPTCOnlyProvider:              true,
-		ExperimentalTCPTXDirect:              true,
-		ExperimentalTCPRouteGSOSync:          true,
-		ExperimentalTCPRouteGSOAsync:         true,
-		ExperimentalTCPRouteXmitWorker:       true,
+		TIXTCPTXDirect:                       true,
+		TIXTCPRouteGSOSync:                   true,
+		TIXTCPRouteGSOAsync:                  true,
+		TIXTCPRouteXmitWorker:                true,
 		KernelDatapathSuppressLegacyRXWorker: true,
 	}
 	manager.statsMap = &cebpf.Map{}
@@ -5311,7 +5311,7 @@ func TestExperimentalTCPStatusReportsRouteGSOTCOnlyProvider(t *testing.T) {
 	manager.kernelUDPTXDirectRouteTCPGSOKfunc = true
 	manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = true
 	manager.kernelUDPTXDirectRouteTCPXmitKfunc = true
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		9: {
 			ID:              9,
 			Peer:            "ix-b",
@@ -5324,15 +5324,15 @@ func TestExperimentalTCPStatusReportsRouteGSOTCOnlyProvider(t *testing.T) {
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
 		Endpoints: []dataplane.EndpointMetadata{
-			{ID: "local", Peer: "ix-a", Transport: "experimental_tcp", Listen: "198.18.0.1:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
-			{ID: "remote", Peer: "ix-b", Transport: "experimental_tcp", Address: "198.18.0.2:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+			{ID: "local", Peer: "ix-a", Transport: "tix_tcp", Listen: "198.18.0.1:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+			{ID: "remote", Peer: "ix-b", Transport: "tix_tcp", Address: "198.18.0.2:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
 		},
 		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
 	}
 
-	status, err := manager.ExperimentalTCPStatus(context.Background())
+	status, err := manager.TIXTCPStatus(context.Background())
 	if err != nil {
-		t.Fatalf("experimental_tcp status: %v", err)
+		t.Fatalf("tix_tcp status: %v", err)
 	}
 	if !status.Available || !status.Reinject || !status.FastPath {
 		t.Fatalf("route-GSO TC-only status = %+v, want available fast-path reinject", status)
@@ -5343,23 +5343,23 @@ func TestExperimentalTCPStatusReportsRouteGSOTCOnlyProvider(t *testing.T) {
 	if !status.UserspaceCrypto || status.KernelCrypto {
 		t.Fatalf("route-GSO plaintext crypto status = userspace:%t kernel:%t, want userspace placeholder without kernel crypto", status.UserspaceCrypto, status.KernelCrypto)
 	}
-	protocol := kernelTransportProtocolExperimentalTCP(status)
+	protocol := kernelTransportProtocolTIXTCP(status)
 	if !protocol.Available || protocol.Placement != "kernel" || protocol.UserspaceFallback {
 		t.Fatalf("route-GSO TC-only protocol = %+v, want kernel placement without userspace fallback", protocol)
 	}
 
-	manager.spec.ExperimentalTCPRouteGSOSync = false
-	manager.spec.ExperimentalTCPRouteGSOAsync = false
-	status, err = manager.ExperimentalTCPStatus(context.Background())
+	manager.spec.TIXTCPRouteGSOSync = false
+	manager.spec.TIXTCPRouteGSOAsync = false
+	status, err = manager.TIXTCPStatus(context.Background())
 	if err != nil {
-		t.Fatalf("experimental_tcp status without route-GSO: %v", err)
+		t.Fatalf("tix_tcp status without route-GSO: %v", err)
 	}
 	if status.Available || status.Reinject || status.Provider == "kernel_udp_tc_only" {
-		t.Fatalf("experimental_tcp status without route-GSO = %+v, want TC-only provider unavailable", status)
+		t.Fatalf("tix_tcp status without route-GSO = %+v, want TC-only provider unavailable", status)
 	}
 }
 
-func TestExperimentalTCPStatusRejectsRouteGSOTCOnlyProviderWithoutRequestedKfuncs(t *testing.T) {
+func TestTIXTCPStatusRejectsRouteGSOTCOnlyProviderWithoutRequestedKfuncs(t *testing.T) {
 	tests := []struct {
 		name string
 		miss func(*Manager)
@@ -5397,12 +5397,12 @@ func TestExperimentalTCPStatusRejectsRouteGSOTCOnlyProviderWithoutRequestedKfunc
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+			manager := newRouteGSOTCOnlyTIXTCPManagerForTest()
 			tt.miss(manager)
 
-			status, err := manager.ExperimentalTCPStatus(context.Background())
+			status, err := manager.TIXTCPStatus(context.Background())
 			if err != nil {
-				t.Fatalf("experimental_tcp status: %v", err)
+				t.Fatalf("tix_tcp status: %v", err)
 			}
 			if status.Available || status.Reinject || status.FastPath || status.Provider == "kernel_udp_tc_only" {
 				t.Fatalf("status with missing %s = %+v, want route-GSO TC-only unavailable", tt.want, status)
@@ -5414,15 +5414,15 @@ func TestExperimentalTCPStatusRejectsRouteGSOTCOnlyProviderWithoutRequestedKfunc
 	}
 }
 
-func TestExperimentalTCPStatusRouteGSOUnavailableIncludesKfuncFallbackWarning(t *testing.T) {
-	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+func TestTIXTCPStatusRouteGSOUnavailableIncludesKfuncFallbackWarning(t *testing.T) {
+	manager := newRouteGSOTCOnlyTIXTCPManagerForTest()
 	manager.kernelUDPTXDirectRouteTCPGSOKfunc = false
 	manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = false
-	manager.kernelUDPTXDirectKfuncFallbackWarning = "experimental_tcp TC TX direct route TCP GSO kfunc disabled after verifier/load rejection: load ingress BPF program: fixing up kfuncs: finding kfunc in kernel: no BTF found"
+	manager.kernelUDPTXDirectKfuncFallbackWarning = "tix_tcp TC TX direct route TCP GSO kfunc disabled after verifier/load rejection: load ingress BPF program: fixing up kfuncs: finding kfunc in kernel: no BTF found"
 
-	status, err := manager.ExperimentalTCPStatus(context.Background())
+	status, err := manager.TIXTCPStatus(context.Background())
 	if err != nil {
-		t.Fatalf("experimental_tcp status: %v", err)
+		t.Fatalf("tix_tcp status: %v", err)
 	}
 	if status.Available || status.Reinject || status.FastPath || status.Provider == "kernel_udp_tc_only" {
 		t.Fatalf("status with fallback-disabled route-GSO = %+v, want unavailable", status)
@@ -5434,7 +5434,7 @@ func TestExperimentalTCPStatusRouteGSOUnavailableIncludesKfuncFallbackWarning(t 
 	}
 }
 
-func newRouteGSOTCOnlyExperimentalTCPManagerForTest() *Manager {
+func newRouteGSOTCOnlyTIXTCPManagerForTest() *Manager {
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{
@@ -5442,10 +5442,10 @@ func newRouteGSOTCOnlyExperimentalTCPManagerForTest() *Manager {
 		UnderlayIface:                        "eth0",
 		KernelUDPTXDirectOnly:                true,
 		KernelUDPTCOnlyProvider:              true,
-		ExperimentalTCPTXDirect:              true,
-		ExperimentalTCPRouteGSOSync:          true,
-		ExperimentalTCPRouteGSOAsync:         true,
-		ExperimentalTCPRouteXmitWorker:       true,
+		TIXTCPTXDirect:                       true,
+		TIXTCPRouteGSOSync:                   true,
+		TIXTCPRouteGSOAsync:                  true,
+		TIXTCPRouteXmitWorker:                true,
 		KernelDatapathSuppressLegacyRXWorker: true,
 	}
 	manager.statsMap = &cebpf.Map{}
@@ -5458,7 +5458,7 @@ func newRouteGSOTCOnlyExperimentalTCPManagerForTest() *Manager {
 	manager.kernelUDPTXDirectRouteTCPGSOKfunc = true
 	manager.kernelUDPTXDirectRouteTCPGSOAsyncKfunc = true
 	manager.kernelUDPTXDirectRouteTCPXmitKfunc = true
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		42: {
 			ID:              42,
 			Peer:            "ix-b",
@@ -5471,22 +5471,22 @@ func newRouteGSOTCOnlyExperimentalTCPManagerForTest() *Manager {
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
 		Endpoints: []dataplane.EndpointMetadata{
-			{ID: "local", Peer: "ix-a", Transport: "experimental_tcp", Listen: "198.18.0.1:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
-			{ID: "remote", Peer: "ix-b", Transport: "experimental_tcp", Address: "198.18.0.2:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+			{ID: "local", Peer: "ix-a", Transport: "tix_tcp", Listen: "198.18.0.1:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+			{ID: "remote", Peer: "ix-b", Transport: "tix_tcp", Address: "198.18.0.2:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
 		},
 		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
 	}
 	return manager
 }
 
-func TestSubscribeExperimentalTCPAllowsFullPlaintextKernelDatapathProvider(t *testing.T) {
+func TestSubscribeTIXTCPAllowsFullPlaintextKernelDatapathProvider(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
 
-	subscription, err := manager.SubscribeExperimentalTCP(context.Background(), 8)
+	subscription, err := manager.SubscribeTIXTCP(context.Background(), 8)
 	if err != nil {
-		t.Fatalf("subscribe experimental_tcp: %v", err)
+		t.Fatalf("subscribe tix_tcp: %v", err)
 	}
 	if subscription == nil {
 		t.Fatal("subscription is nil")
@@ -5496,32 +5496,32 @@ func TestSubscribeExperimentalTCPAllowsFullPlaintextKernelDatapathProvider(t *te
 	}
 }
 
-func TestSubscribeExperimentalTCPAllowsRouteGSOTCOnlyProvider(t *testing.T) {
-	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+func TestSubscribeTIXTCPAllowsRouteGSOTCOnlyProvider(t *testing.T) {
+	manager := newRouteGSOTCOnlyTIXTCPManagerForTest()
 
-	subscription, err := manager.SubscribeExperimentalTCP(context.Background(), 8)
+	subscription, err := manager.SubscribeTIXTCP(context.Background(), 8)
 	if err != nil {
-		t.Fatalf("subscribe experimental_tcp: %v", err)
+		t.Fatalf("subscribe tix_tcp: %v", err)
 	}
 	if subscription == nil {
 		t.Fatal("subscription is nil")
 	}
-	if manager.expTCPRawFD != -1 {
-		t.Fatalf("raw TCP receiver fd = %d, want unopened for route-GSO TC-only provider", manager.expTCPRawFD)
+	if manager.tixTCPRawFD != -1 {
+		t.Fatalf("raw TCP receiver fd = %d, want unopened for route-GSO TC-only provider", manager.tixTCPRawFD)
 	}
 	if err := subscription.Close(); err != nil {
 		t.Fatalf("close subscription: %v", err)
 	}
 }
 
-func TestSubscribeExperimentalTCPFlowAllowsFullPlaintextKernelDatapathProvider(t *testing.T) {
+func TestSubscribeTIXTCPFlowAllowsFullPlaintextKernelDatapathProvider(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
 
-	subscription, err := manager.SubscribeExperimentalTCPFlow(context.Background(), 42, 8)
+	subscription, err := manager.SubscribeTIXTCPFlow(context.Background(), 42, 8)
 	if err != nil {
-		t.Fatalf("subscribe experimental_tcp flow: %v", err)
+		t.Fatalf("subscribe tix_tcp flow: %v", err)
 	}
 	if subscription == nil {
 		t.Fatal("subscription is nil")
@@ -5531,37 +5531,37 @@ func TestSubscribeExperimentalTCPFlowAllowsFullPlaintextKernelDatapathProvider(t
 	}
 }
 
-func TestSubscribeExperimentalTCPFlowAllowsRouteGSOTCOnlyProvider(t *testing.T) {
-	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+func TestSubscribeTIXTCPFlowAllowsRouteGSOTCOnlyProvider(t *testing.T) {
+	manager := newRouteGSOTCOnlyTIXTCPManagerForTest()
 
-	subscription, err := manager.SubscribeExperimentalTCPFlow(context.Background(), 42, 8)
+	subscription, err := manager.SubscribeTIXTCPFlow(context.Background(), 42, 8)
 	if err != nil {
-		t.Fatalf("subscribe experimental_tcp flow: %v", err)
+		t.Fatalf("subscribe tix_tcp flow: %v", err)
 	}
 	if subscription == nil {
 		t.Fatal("subscription is nil")
 	}
-	if manager.expTCPRawFD != -1 {
-		t.Fatalf("raw TCP receiver fd = %d, want unopened for route-GSO TC-only provider", manager.expTCPRawFD)
+	if manager.tixTCPRawFD != -1 {
+		t.Fatalf("raw TCP receiver fd = %d, want unopened for route-GSO TC-only provider", manager.tixTCPRawFD)
 	}
 	if err := subscription.Close(); err != nil {
 		t.Fatalf("close subscription: %v", err)
 	}
 }
 
-func TestSubmitExperimentalTCPFrameRejectsFullPlaintextKernelDatapathProvider(t *testing.T) {
+func TestSubmitTIXTCPFrameRejectsFullPlaintextKernelDatapathProvider(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
-	manager.expTCPFlows[42] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[42] = dataplane.TIXTCPFlow{
 		ID:       42,
 		Peer:     core.IXID("ix-b"),
 		Endpoint: core.EndpointID("exp-b"),
 	}
 
-	err := manager.SubmitExperimentalTCPFrame(context.Background(), dataplane.ExperimentalTCPFrame{
+	err := manager.SubmitTIXTCPFrame(context.Background(), dataplane.TIXTCPFrame{
 		FlowID:    42,
-		Direction: dataplane.ExperimentalTCPOutbound,
+		Direction: dataplane.TIXTCPOutbound,
 		Sequence:  1,
 		Payload:   []byte("data"),
 	})
@@ -5570,12 +5570,12 @@ func TestSubmitExperimentalTCPFrameRejectsFullPlaintextKernelDatapathProvider(t 
 	}
 }
 
-func TestSubmitExperimentalTCPFrameRejectsRouteGSOTCOnlyProvider(t *testing.T) {
-	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+func TestSubmitTIXTCPFrameRejectsRouteGSOTCOnlyProvider(t *testing.T) {
+	manager := newRouteGSOTCOnlyTIXTCPManagerForTest()
 
-	err := manager.SubmitExperimentalTCPFrame(context.Background(), dataplane.ExperimentalTCPFrame{
+	err := manager.SubmitTIXTCPFrame(context.Background(), dataplane.TIXTCPFrame{
 		FlowID:    42,
-		Direction: dataplane.ExperimentalTCPOutbound,
+		Direction: dataplane.TIXTCPOutbound,
 		Sequence:  1,
 		Payload:   []byte("data"),
 	})
@@ -5584,19 +5584,19 @@ func TestSubmitExperimentalTCPFrameRejectsRouteGSOTCOnlyProvider(t *testing.T) {
 	}
 }
 
-func TestSubmitExperimentalTCPFramesRejectsFullPlaintextKernelDatapathProvider(t *testing.T) {
+func TestSubmitTIXTCPFramesRejectsFullPlaintextKernelDatapathProvider(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
-	manager.expTCPFlows[42] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[42] = dataplane.TIXTCPFlow{
 		ID:       42,
 		Peer:     core.IXID("ix-b"),
 		Endpoint: core.EndpointID("exp-b"),
 	}
 
-	err := manager.SubmitExperimentalTCPFrames(context.Background(), []dataplane.ExperimentalTCPFrame{{
+	err := manager.SubmitTIXTCPFrames(context.Background(), []dataplane.TIXTCPFrame{{
 		FlowID:    42,
-		Direction: dataplane.ExperimentalTCPOutbound,
+		Direction: dataplane.TIXTCPOutbound,
 		Sequence:  1,
 		Payload:   []byte("data"),
 	}})
@@ -5605,12 +5605,12 @@ func TestSubmitExperimentalTCPFramesRejectsFullPlaintextKernelDatapathProvider(t
 	}
 }
 
-func TestSubmitExperimentalTCPFramesRejectsRouteGSOTCOnlyProvider(t *testing.T) {
-	manager := newRouteGSOTCOnlyExperimentalTCPManagerForTest()
+func TestSubmitTIXTCPFramesRejectsRouteGSOTCOnlyProvider(t *testing.T) {
+	manager := newRouteGSOTCOnlyTIXTCPManagerForTest()
 
-	err := manager.SubmitExperimentalTCPFrames(context.Background(), []dataplane.ExperimentalTCPFrame{{
+	err := manager.SubmitTIXTCPFrames(context.Background(), []dataplane.TIXTCPFrame{{
 		FlowID:    42,
-		Direction: dataplane.ExperimentalTCPOutbound,
+		Direction: dataplane.TIXTCPOutbound,
 		Sequence:  1,
 		Payload:   []byte("data"),
 	}})
@@ -5622,9 +5622,9 @@ func TestSubmitExperimentalTCPFramesRejectsRouteGSOTCOnlyProvider(t *testing.T) 
 func TestKernelUDPStatusReportsKernelCryptoWhenDeviceFlowExists(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
-	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
-	manager.expTCPFastPath.provider = "af_xdp"
-	manager.expTCPFastPath.ready.Store(true)
+	manager.tixTCPFastPath = testTIXTCPFastPathWithQueues(1)
+	manager.tixTCPFastPath.provider = "af_xdp"
+	manager.tixTCPFastPath.ready.Store(true)
 	manager.kernelCryptoDevices = map[uint64]*kernelCryptoDevice{42: {}}
 
 	status, err := manager.KernelUDPStatus(context.Background())
@@ -5758,7 +5758,7 @@ func TestKernelTransportAllowedPortsUseLocalListenAndFlows(t *testing.T) {
 			{
 				ID:        core.EndpointID("local-exp"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "198.18.0.1:17041",
 				Address:   "",
 				Enabled:   true,
@@ -5774,7 +5774,7 @@ func TestKernelTransportAllowedPortsUseLocalListenAndFlows(t *testing.T) {
 			{
 				ID:        core.EndpointID("remote-exp"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "198.18.0.2:27041",
 				Enabled:   true,
 			},
@@ -5787,22 +5787,22 @@ func TestKernelTransportAllowedPortsUseLocalListenAndFlows(t *testing.T) {
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {SourcePort: 41000, LocalAddress: "198.18.0.1:41001"},
 	}
 	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{
 		20: {SourcePort: 42000, LocalAddress: "198.18.0.1:42001"},
 	}
 
-	expTCPPorts := manager.desiredExperimentalTCPPortsLocked()
+	tixTCPPorts := manager.desiredTIXTCPPortsLocked()
 	for _, port := range []uint16{17041, 41000, 41001} {
-		if _, ok := expTCPPorts[port]; !ok {
-			t.Fatalf("experimental_tcp desired ports missing %d: %#v", port, expTCPPorts)
+		if _, ok := tixTCPPorts[port]; !ok {
+			t.Fatalf("tix_tcp desired ports missing %d: %#v", port, tixTCPPorts)
 		}
 	}
 	for _, port := range []uint16{27041, 17001} {
-		if _, ok := expTCPPorts[port]; ok {
-			t.Fatalf("experimental_tcp desired ports unexpectedly include %d: %#v", port, expTCPPorts)
+		if _, ok := tixTCPPorts[port]; ok {
+			t.Fatalf("tix_tcp desired ports unexpectedly include %d: %#v", port, tixTCPPorts)
 		}
 	}
 
@@ -5819,81 +5819,81 @@ func TestKernelTransportAllowedPortsUseLocalListenAndFlows(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPAllowedPortHoldKeepsDeletedFlowPorts(t *testing.T) {
-	oldHoldDown := experimentalTCPAllowedPortHoldDown
-	experimentalTCPAllowedPortHoldDown = time.Minute
-	t.Cleanup(func() { experimentalTCPAllowedPortHoldDown = oldHoldDown })
+func TestTIXTCPAllowedPortHoldKeepsDeletedFlowPorts(t *testing.T) {
+	oldHoldDown := tixTCPAllowedPortHoldDown
+	tixTCPAllowedPortHoldDown = time.Minute
+	t.Cleanup(func() { tixTCPAllowedPortHoldDown = oldHoldDown })
 
 	manager := NewManager()
 	manager.snapshot.PacketPolicy = dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel}
-	flow := dataplane.ExperimentalTCPFlow{
+	flow := dataplane.TIXTCPFlow{
 		SourcePort:      41000,
 		DestinationPort: 27000,
 		LocalAddress:    "198.18.0.1:41001",
 		RemoteAddress:   "198.18.0.2:27002",
 	}
-	manager.expTCPFlows[7] = flow
+	manager.tixTCPFlows[7] = flow
 
 	now := time.Now().UTC()
-	manager.holdExperimentalTCPAllowedPortsLocked(flow, now)
-	delete(manager.expTCPFlows, 7)
+	manager.holdTIXTCPAllowedPortsLocked(flow, now)
+	delete(manager.tixTCPFlows, 7)
 
-	ports := manager.desiredExperimentalTCPPortsLocked()
+	ports := manager.desiredTIXTCPPortsLocked()
 	for _, port := range []uint16{41000, 27000, 41001, 27002} {
 		if _, ok := ports[port]; !ok {
-			t.Fatalf("held experimental_tcp desired ports missing %d: %#v", port, ports)
+			t.Fatalf("held tix_tcp desired ports missing %d: %#v", port, ports)
 		}
-		manager.expTCPAllowedPortHoldUntil[port] = now.Add(-time.Second)
+		manager.tixTCPAllowedPortHoldUntil[port] = now.Add(-time.Second)
 	}
 
-	ports = manager.desiredExperimentalTCPPortsLocked()
+	ports = manager.desiredTIXTCPPortsLocked()
 	for _, port := range []uint16{41000, 27000, 41001, 27002} {
 		if _, ok := ports[port]; ok {
-			t.Fatalf("expired experimental_tcp held port %d is still desired: %#v", port, ports)
+			t.Fatalf("expired tix_tcp held port %d is still desired: %#v", port, ports)
 		}
 	}
-	if len(manager.expTCPAllowedPortHoldUntil) != 0 {
-		t.Fatalf("expired experimental_tcp held ports were not pruned: %#v", manager.expTCPAllowedPortHoldUntil)
+	if len(manager.tixTCPAllowedPortHoldUntil) != 0 {
+		t.Fatalf("expired tix_tcp held ports were not pruned: %#v", manager.tixTCPAllowedPortHoldUntil)
 	}
 }
 
-func TestExperimentalTCPAllowedPortHoldKeepsOverwrittenFlowPorts(t *testing.T) {
-	oldHoldDown := experimentalTCPAllowedPortHoldDown
-	experimentalTCPAllowedPortHoldDown = time.Minute
-	t.Cleanup(func() { experimentalTCPAllowedPortHoldDown = oldHoldDown })
+func TestTIXTCPAllowedPortHoldKeepsOverwrittenFlowPorts(t *testing.T) {
+	oldHoldDown := tixTCPAllowedPortHoldDown
+	tixTCPAllowedPortHoldDown = time.Minute
+	t.Cleanup(func() { tixTCPAllowedPortHoldDown = oldHoldDown })
 
 	manager := NewManager()
 	manager.snapshot.PacketPolicy = dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel}
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		SourcePort:      41000,
 		DestinationPort: 27000,
 		LocalAddress:    "198.18.0.1:41001",
 		RemoteAddress:   "198.18.0.2:27002",
 	}
 
-	manager.setExperimentalTCPFlowLocked(7, dataplane.ExperimentalTCPFlow{
+	manager.setTIXTCPFlowLocked(7, dataplane.TIXTCPFlow{
 		SourcePort:      42000,
 		DestinationPort: 28000,
 		LocalAddress:    "198.18.0.1:42001",
 		RemoteAddress:   "198.18.0.2:28002",
 	}, time.Now().UTC())
 
-	ports := manager.desiredExperimentalTCPPortsLocked()
+	ports := manager.desiredTIXTCPPortsLocked()
 	for _, port := range []uint16{41000, 27000, 41001, 27002, 42000, 28000, 42001, 28002} {
 		if _, ok := ports[port]; !ok {
-			t.Fatalf("overwritten experimental_tcp desired ports missing %d: %#v", port, ports)
+			t.Fatalf("overwritten tix_tcp desired ports missing %d: %#v", port, ports)
 		}
 	}
 }
 
-func TestExperimentalTCPAllowedPortHoldKeepsDuplicateDeletedFlowPorts(t *testing.T) {
-	oldHoldDown := experimentalTCPAllowedPortHoldDown
-	experimentalTCPAllowedPortHoldDown = time.Minute
-	t.Cleanup(func() { experimentalTCPAllowedPortHoldDown = oldHoldDown })
+func TestTIXTCPAllowedPortHoldKeepsDuplicateDeletedFlowPorts(t *testing.T) {
+	oldHoldDown := tixTCPAllowedPortHoldDown
+	tixTCPAllowedPortHoldDown = time.Minute
+	t.Cleanup(func() { tixTCPAllowedPortHoldDown = oldHoldDown })
 
 	manager := NewManager()
 	manager.snapshot.PacketPolicy = dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel}
-	existing := dataplane.ExperimentalTCPFlow{
+	existing := dataplane.TIXTCPFlow{
 		ID:              1,
 		Peer:            core.IXID("ix-b"),
 		Endpoint:        core.EndpointID("b-exp"),
@@ -5902,32 +5902,32 @@ func TestExperimentalTCPAllowedPortHoldKeepsDuplicateDeletedFlowPorts(t *testing
 		LocalAddress:    "198.18.0.1:41001",
 		RemoteAddress:   "198.18.0.2:27002",
 	}
-	manager.expTCPFlows[1] = existing
+	manager.tixTCPFlows[1] = existing
 	replacement := existing
 	replacement.ID = 2
 
-	manager.deleteDuplicateExperimentalTCPFlowsLocked(replacement)
+	manager.deleteDuplicateTIXTCPFlowsLocked(replacement)
 
-	if _, ok := manager.expTCPFlows[1]; ok {
-		t.Fatalf("duplicate experimental_tcp flow was retained: %#v", manager.expTCPFlows)
+	if _, ok := manager.tixTCPFlows[1]; ok {
+		t.Fatalf("duplicate tix_tcp flow was retained: %#v", manager.tixTCPFlows)
 	}
-	ports := manager.desiredExperimentalTCPPortsLocked()
+	ports := manager.desiredTIXTCPPortsLocked()
 	for _, port := range []uint16{41000, 27000, 41001, 27002} {
 		if _, ok := ports[port]; !ok {
-			t.Fatalf("duplicate-deleted experimental_tcp desired ports missing %d: %#v", port, ports)
+			t.Fatalf("duplicate-deleted tix_tcp desired ports missing %d: %#v", port, ports)
 		}
 	}
 }
 
-func TestExperimentalTCPAllowedPortHoldKeepsPrunedFlowPorts(t *testing.T) {
-	oldHoldDown := experimentalTCPAllowedPortHoldDown
-	experimentalTCPAllowedPortHoldDown = time.Minute
-	t.Cleanup(func() { experimentalTCPAllowedPortHoldDown = oldHoldDown })
+func TestTIXTCPAllowedPortHoldKeepsPrunedFlowPorts(t *testing.T) {
+	oldHoldDown := tixTCPAllowedPortHoldDown
+	tixTCPAllowedPortHoldDown = time.Minute
+	t.Cleanup(func() { tixTCPAllowedPortHoldDown = oldHoldDown })
 
 	manager := NewManager()
 	manager.snapshot.PacketPolicy = dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel}
 	now := time.Now().UTC()
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
 		SourcePort:      41000,
 		DestinationPort: 27000,
 		LocalAddress:    "198.18.0.1:41001",
@@ -5935,16 +5935,16 @@ func TestExperimentalTCPAllowedPortHoldKeepsPrunedFlowPorts(t *testing.T) {
 		ExpiresAt:       now,
 	}
 
-	if !manager.pruneExperimentalTCPFlowsLocked(now) {
-		t.Fatal("expired experimental_tcp flow was not pruned")
+	if !manager.pruneTIXTCPFlowsLocked(now) {
+		t.Fatal("expired tix_tcp flow was not pruned")
 	}
-	if _, ok := manager.expTCPFlows[7]; ok {
-		t.Fatalf("expired experimental_tcp flow remains: %#v", manager.expTCPFlows)
+	if _, ok := manager.tixTCPFlows[7]; ok {
+		t.Fatalf("expired tix_tcp flow remains: %#v", manager.tixTCPFlows)
 	}
-	ports := manager.desiredExperimentalTCPPortsLocked()
+	ports := manager.desiredTIXTCPPortsLocked()
 	for _, port := range []uint16{41000, 27000, 41001, 27002} {
 		if _, ok := ports[port]; !ok {
-			t.Fatalf("pruned experimental_tcp desired ports missing %d: %#v", port, ports)
+			t.Fatalf("pruned tix_tcp desired ports missing %d: %#v", port, ports)
 		}
 	}
 }
@@ -5957,7 +5957,7 @@ func TestKernelTransportAllowedPortsDisabledModeKeepsUserspaceUDPPortsOutOfXDP(t
 			{
 				ID:        core.EndpointID("local-exp"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "198.18.0.1:17041",
 				Enabled:   true,
 			},
@@ -5970,26 +5970,26 @@ func TestKernelTransportAllowedPortsDisabledModeKeepsUserspaceUDPPortsOutOfXDP(t
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {SourcePort: 41000, LocalAddress: "198.18.0.1:41001"},
 	}
 	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{
 		20: {SourcePort: 42000, LocalAddress: "198.18.0.1:42001"},
 	}
 
-	if ports := manager.desiredExperimentalTCPPortsLocked(); len(ports) != 0 {
-		t.Fatalf("experimental_tcp desired ports = %#v, want none while disabled", ports)
+	if ports := manager.desiredTIXTCPPortsLocked(); len(ports) != 0 {
+		t.Fatalf("tix_tcp desired ports = %#v, want none while disabled", ports)
 	}
 	if ports := manager.desiredKernelUDPPortsLocked(); len(ports) != 0 {
 		t.Fatalf("kernel_udp desired ports = %#v, want none while disabled", ports)
 	}
 }
 
-func TestExperimentalTCPFastPathDisabledKeepsExperimentalPortsOutOfXDP(t *testing.T) {
+func TestTIXTCPFastPathDisabledKeepsExperimentalPortsOutOfXDP(t *testing.T) {
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{
-		ExperimentalTCPFastPathDisabled:       true,
-		ExperimentalTCPFastPathDisabledReason: "mixed tcp+experimental_tcp",
+		TIXTCPFastPathDisabled:       true,
+		TIXTCPFastPathDisabledReason: "mixed tcp+tix_tcp",
 	}
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
@@ -5997,24 +5997,24 @@ func TestExperimentalTCPFastPathDisabledKeepsExperimentalPortsOutOfXDP(t *testin
 			{ID: core.IXID("ix-b"), DomainID: core.DomainID("lab.local"), Trusted: true},
 		},
 		Endpoints: []dataplane.EndpointMetadata{
-			{ID: core.EndpointID("local-exp"), Peer: core.IXID("ix-a"), Transport: "experimental_tcp", Listen: "198.18.0.1:17041", Enabled: true},
+			{ID: core.EndpointID("local-exp"), Peer: core.IXID("ix-a"), Transport: "tix_tcp", Listen: "198.18.0.1:17041", Enabled: true},
 			{ID: core.EndpointID("local-udp"), Peer: core.IXID("ix-a"), Transport: "udp", Listen: "198.18.0.1:17001", Enabled: true},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {SourcePort: 41000, LocalAddress: "198.18.0.1:41001"},
 	}
 	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{
 		20: {SourcePort: 42000, LocalAddress: "198.18.0.1:42001"},
 	}
 
-	if ports := manager.desiredExperimentalTCPPortsLocked(); len(ports) != 0 {
-		t.Fatalf("experimental_tcp desired ports = %#v, want none while fast path is disabled", ports)
+	if ports := manager.desiredTIXTCPPortsLocked(); len(ports) != 0 {
+		t.Fatalf("tix_tcp desired ports = %#v, want none while fast path is disabled", ports)
 	}
 	udpPorts := manager.desiredKernelUDPPortsLocked()
 	for _, port := range []uint16{17001, 42000, 42001} {
 		if _, ok := udpPorts[port]; !ok {
-			t.Fatalf("kernel_udp desired ports missing %d while experimental_tcp is disabled: %#v", port, udpPorts)
+			t.Fatalf("kernel_udp desired ports missing %d while tix_tcp is disabled: %#v", port, udpPorts)
 		}
 	}
 }
@@ -6035,11 +6035,11 @@ func TestKernelTransportFastPathNotNeededForNativeTunnelEndpoints(t *testing.T) 
 	}
 }
 
-func TestExperimentalTCPFastPathDisabledDoesNotRequestFastPathForExperimentalTCPOnly(t *testing.T) {
+func TestTIXTCPFastPathDisabledDoesNotRequestFastPathForTIXTCPOnly(t *testing.T) {
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{
-		ExperimentalTCPFastPathDisabled:       true,
-		ExperimentalTCPFastPathDisabledReason: "mixed tcp+experimental_tcp",
+		TIXTCPFastPathDisabled:       true,
+		TIXTCPFastPathDisabledReason: "mixed tcp+tix_tcp",
 	}
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
@@ -6047,14 +6047,14 @@ func TestExperimentalTCPFastPathDisabledDoesNotRequestFastPathForExperimentalTCP
 			{ID: core.IXID("ix-b"), DomainID: core.DomainID("lab.local"), Trusted: true},
 		},
 		Endpoints: []dataplane.EndpointMetadata{
-			{ID: core.EndpointID("local"), Peer: core.IXID("ix-a"), Transport: "experimental_tcp", Listen: "198.18.0.1:17001", Enabled: true},
-			{ID: core.EndpointID("remote"), Peer: core.IXID("ix-b"), Transport: "experimental_tcp", Address: "198.18.0.2:27001", Enabled: true},
+			{ID: core.EndpointID("local"), Peer: core.IXID("ix-a"), Transport: "tix_tcp", Listen: "198.18.0.1:17001", Enabled: true},
+			{ID: core.EndpointID("remote"), Peer: core.IXID("ix-b"), Transport: "tix_tcp", Address: "198.18.0.2:27001", Enabled: true},
 		},
 	}
-	manager.expTCPFlows[7] = dataplane.ExperimentalTCPFlow{ID: 7}
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{ID: 7}
 
 	if manager.snapshotNeedsKernelTransportFastPathLocked() {
-		t.Fatal("disabled experimental_tcp requested AF_XDP kernel transport fast path")
+		t.Fatal("disabled tix_tcp requested AF_XDP kernel transport fast path")
 	}
 	manager.snapshot.Endpoints = append(manager.snapshot.Endpoints, dataplane.EndpointMetadata{
 		ID: core.EndpointID("local-udp"), Peer: core.IXID("ix-a"), Transport: "udp", Listen: "198.18.0.1:17002", Enabled: true,
@@ -6064,8 +6064,8 @@ func TestExperimentalTCPFastPathDisabledDoesNotRequestFastPathForExperimentalTCP
 	}
 }
 
-func TestKernelTransportFastPathNeededForLocalUDPAndExperimentalTCP(t *testing.T) {
-	for _, transport := range []string{"udp", "kernel_udp", "experimental_tcp"} {
+func TestKernelTransportFastPathNeededForLocalUDPAndTIXTCP(t *testing.T) {
+	for _, transport := range []string{"udp", "kernel_udp", "tix_tcp"} {
 		t.Run(transport, func(t *testing.T) {
 			manager := NewManager()
 			manager.snapshot = dataplane.Snapshot{
@@ -6086,7 +6086,7 @@ func TestKernelTransportFastPathNeededForLocalUDPAndExperimentalTCP(t *testing.T
 	}
 }
 
-func TestSnapshotHasLocalExperimentalTCPEndpoint(t *testing.T) {
+func TestSnapshotHasLocalTIXTCPEndpoint(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
@@ -6094,17 +6094,17 @@ func TestSnapshotHasLocalExperimentalTCPEndpoint(t *testing.T) {
 			{ID: core.IXID("ix-b"), DomainID: core.DomainID("lab.local"), Trusted: true},
 		},
 		Endpoints: []dataplane.EndpointMetadata{
-			{ID: core.EndpointID("remote"), Peer: core.IXID("ix-b"), Transport: "experimental_tcp", Address: "198.18.0.2:27001", Enabled: true},
+			{ID: core.EndpointID("remote"), Peer: core.IXID("ix-b"), Transport: "tix_tcp", Address: "198.18.0.2:27001", Enabled: true},
 		},
 	}
-	if manager.snapshotHasLocalExperimentalTCPEndpointLocked() {
-		t.Fatal("remote-only experimental_tcp endpoint should not enable raw fallback attach degradation")
+	if manager.snapshotHasLocalTIXTCPEndpointLocked() {
+		t.Fatal("remote-only tix_tcp endpoint should not enable raw fallback attach degradation")
 	}
 	manager.snapshot.Endpoints = append(manager.snapshot.Endpoints, dataplane.EndpointMetadata{
-		ID: core.EndpointID("local"), Peer: core.IXID("ix-a"), Transport: "experimental_tcp", Listen: "198.18.0.1:17001", Enabled: true,
+		ID: core.EndpointID("local"), Peer: core.IXID("ix-a"), Transport: "tix_tcp", Listen: "198.18.0.1:17001", Enabled: true,
 	})
-	if !manager.snapshotHasLocalExperimentalTCPEndpointLocked() {
-		t.Fatal("local experimental_tcp endpoint was not detected")
+	if !manager.snapshotHasLocalTIXTCPEndpointLocked() {
+		t.Fatal("local tix_tcp endpoint was not detected")
 	}
 }
 
@@ -6166,22 +6166,22 @@ func TestInstallKernelUDPFlowAllowsFullPlaintextKernelDatapathWithoutAFXDPPProvi
 	}
 }
 
-func TestKernelTransportFastPathNotNeededForExperimentalTCPWithFullPlaintextSpec(t *testing.T) {
+func TestKernelTransportFastPathNotNeededForTIXTCPWithFullPlaintextSpec(t *testing.T) {
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{KernelDatapathFullPlaintext: true}
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
 		Endpoints: []dataplane.EndpointMetadata{
-			{ID: core.EndpointID("local-exp"), Peer: core.IXID("ix-a"), Transport: "experimental_tcp", Listen: "198.18.0.1:17041", Enabled: true},
+			{ID: core.EndpointID("local-exp"), Peer: core.IXID("ix-a"), Transport: "tix_tcp", Listen: "198.18.0.1:17041", Enabled: true},
 		},
 	}
 
 	if manager.snapshotNeedsKernelTransportFastPathLocked() {
-		t.Fatal("full plaintext experimental_tcp should not request AF_XDP")
+		t.Fatal("full plaintext tix_tcp should not request AF_XDP")
 	}
 }
 
-func TestExperimentalTCPLocalAddressUsesPerFlowSourcePortWithLocalEndpoint(t *testing.T) {
+func TestTIXTCPLocalAddressUsesPerFlowSourcePortWithLocalEndpoint(t *testing.T) {
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
@@ -6192,73 +6192,73 @@ func TestExperimentalTCPLocalAddressUsesPerFlowSourcePortWithLocalEndpoint(t *te
 			{
 				ID:        core.EndpointID("local-exp"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "198.18.0.1:17041",
 				Enabled:   true,
 			},
 			{
 				ID:        core.EndpointID("remote-exp"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "198.18.0.2:27041",
 				Enabled:   true,
 			},
 		},
 	}
-	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
 		ID:            77,
 		Peer:          core.IXID("ix-b"),
 		Endpoint:      core.EndpointID("remote-exp"),
 		RemoteAddress: "198.51.100.77:27041",
 	}
 
-	packet, _, err := manager.prepareExperimentalTCPPacketLocked(77, 9)
+	packet, _, err := manager.prepareTIXTCPPacketLocked(77, 9)
 	if err != nil {
-		t.Fatalf("prepare experimental_tcp packet: %v", err)
+		t.Fatalf("prepare tix_tcp packet: %v", err)
 	}
 	if packet.SourcePort != 40077 {
 		t.Fatalf("source port = %d, want derived per-flow port 40077", packet.SourcePort)
 	}
-	flow := manager.expTCPFlows[77]
+	flow := manager.tixTCPFlows[77]
 	if flow.SourcePort != 40077 || !strings.HasSuffix(flow.LocalAddress, ":40077") {
 		t.Fatalf("flow local identity = %+v, want derived per-flow port", flow)
 	}
 }
 
-func TestExperimentalTCPLocalAddressFallsBackToDerivedSourcePort(t *testing.T) {
+func TestTIXTCPLocalAddressFallsBackToDerivedSourcePort(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
 		ID:            77,
 		Peer:          core.IXID("ix-b"),
 		RemoteAddress: "198.51.100.77:27041",
 	}
 
-	packet, _, err := manager.prepareExperimentalTCPPacketLocked(77, 9)
+	packet, _, err := manager.prepareTIXTCPPacketLocked(77, 9)
 	if err != nil {
-		t.Fatalf("prepare experimental_tcp packet: %v", err)
+		t.Fatalf("prepare tix_tcp packet: %v", err)
 	}
 	if packet.SourcePort != 40077 {
 		t.Fatalf("source port = %d, want derived port 40077", packet.SourcePort)
 	}
 }
 
-func TestExperimentalTCPLocalAddressAcceptsSourceIPOnly(t *testing.T) {
+func TestTIXTCPLocalAddressAcceptsSourceIPOnly(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
 		ID:            77,
 		Peer:          core.IXID("ix-b"),
 		LocalAddress:  "192.0.2.10",
 		RemoteAddress: "198.51.100.77:27041",
 	}
 
-	packet, _, err := manager.prepareExperimentalTCPPacketLocked(77, 9)
+	packet, _, err := manager.prepareTIXTCPPacketLocked(77, 9)
 	if err != nil {
-		t.Fatalf("prepare experimental_tcp packet: %v", err)
+		t.Fatalf("prepare tix_tcp packet: %v", err)
 	}
 	if packet.SourceIP.String() != "192.0.2.10" || packet.SourcePort != 40077 {
 		t.Fatalf("source tuple = %s:%d, want 192.0.2.10:40077", packet.SourceIP, packet.SourcePort)
 	}
-	if got := manager.expTCPFlows[77].LocalAddress; got != "192.0.2.10:40077" {
+	if got := manager.tixTCPFlows[77].LocalAddress; got != "192.0.2.10:40077" {
 		t.Fatalf("normalized local address = %q, want 192.0.2.10:40077", got)
 	}
 }
@@ -6284,15 +6284,15 @@ func TestKernelUDPLocalAddressAcceptsSourceIPOnly(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPPacketUsesObservedOuterAcknowledgment(t *testing.T) {
+func TestTIXTCPPacketUsesObservedOuterAcknowledgment(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows[77] = dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
 		ID:            77,
 		LocalAddress:  "192.0.2.10:41000",
 		RemoteAddress: "198.51.100.20:17041",
 	}
 
-	packet, _, err := manager.prepareExperimentalTCPPacketLocked(77, 1)
+	packet, _, err := manager.prepareTIXTCPPacketLocked(77, 1)
 	if err != nil {
 		t.Fatalf("prepare packet: %v", err)
 	}
@@ -6300,12 +6300,12 @@ func TestExperimentalTCPPacketUsesObservedOuterAcknowledgment(t *testing.T) {
 		t.Fatalf("initial ack = %d, want 1", packet.Acknowledgment)
 	}
 
-	manager.recordExperimentalTCPOuterAcknowledgmentLocked(77, experimentaltcp.TCPPacket{
+	manager.recordTIXTCPOuterAcknowledgmentLocked(77, tixtcp.TCPPacket{
 		Sequence: 9000,
 		Payload:  []byte("payload"),
 	})
-	manager.invalidateExperimentalTCPTXTemplateLocked(77)
-	packet, _, err = manager.prepareExperimentalTCPPacketLocked(77, 2)
+	manager.invalidateTIXTCPTXTemplateLocked(77)
+	packet, _, err = manager.prepareTIXTCPPacketLocked(77, 2)
 	if err != nil {
 		t.Fatalf("prepare packet after ack: %v", err)
 	}
@@ -6314,66 +6314,66 @@ func TestExperimentalTCPPacketUsesObservedOuterAcknowledgment(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPPayloadMaxClampsToUnderlayMTU(t *testing.T) {
+func TestTIXTCPPayloadMaxClampsToUnderlayMTU(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
-	manager.expTCPFastPath.ready.Store(true)
-	manager.expTCPFastPath.sockets[0].umemFrameSize = 4096
+	manager.tixTCPFastPath = testTIXTCPFastPathWithQueues(1)
+	manager.tixTCPFastPath.ready.Store(true)
+	manager.tixTCPFastPath.sockets[0].umemFrameSize = 4096
 	manager.snapshot.PacketPolicy.MTU = 1500
 
-	got, err := manager.ExperimentalTCPPayloadMax(context.Background(), dataplane.CryptoPlacementKernel, true)
+	got, err := manager.TIXTCPPayloadMax(context.Background(), dataplane.CryptoPlacementKernel, true)
 	if err != nil {
 		t.Fatalf("payload max: %v", err)
 	}
-	want := 1500 - rejectIPv4HeaderLen - rejectTCPHeaderLen - experimentaltcp.HeaderLen - experimentalTCPKernelCryptoOverhead
+	want := 1500 - rejectIPv4HeaderLen - rejectTCPHeaderLen - tixtcp.HeaderLen - tixTCPKernelCryptoOverhead
 	if got != want {
 		t.Fatalf("kernel secure payload max = %d, want %d", got, want)
 	}
 	if got > 1500 {
 		t.Fatalf("payload max %d was not clamped by underlay MTU", got)
 	}
-	stats := manager.experimentalTCPProviderStatsLocked()
+	stats := manager.tixTCPProviderStatsLocked()
 	if stats["effective_payload_max_kernel"] != uint64(want) || stats["underlay_mtu_l3"] != 1500 {
 		t.Fatalf("stats payload/mtu = %d/%d, want %d/1500", stats["effective_payload_max_kernel"], stats["underlay_mtu_l3"], want)
 	}
 }
 
-func TestExperimentalTCPPayloadMaxUsesFastPathLinkMTU(t *testing.T) {
+func TestTIXTCPPayloadMaxUsesFastPathLinkMTU(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
-	manager.expTCPFastPath.ready.Store(true)
-	manager.expTCPFastPath.sockets[0].umemFrameSize = 4096
-	manager.expTCPFastPath.sockets[0].linkMTU = 1500
+	manager.tixTCPFastPath = testTIXTCPFastPathWithQueues(1)
+	manager.tixTCPFastPath.ready.Store(true)
+	manager.tixTCPFastPath.sockets[0].umemFrameSize = 4096
+	manager.tixTCPFastPath.sockets[0].linkMTU = 1500
 
-	got, err := manager.ExperimentalTCPPayloadMax(context.Background(), dataplane.CryptoPlacementUserspace, false)
+	got, err := manager.TIXTCPPayloadMax(context.Background(), dataplane.CryptoPlacementUserspace, false)
 	if err != nil {
 		t.Fatalf("payload max: %v", err)
 	}
-	want := 1500 - rejectIPv4HeaderLen - rejectTCPHeaderLen - experimentaltcp.HeaderLen
+	want := 1500 - rejectIPv4HeaderLen - rejectTCPHeaderLen - tixtcp.HeaderLen
 	if got != want {
 		t.Fatalf("userspace payload max = %d, want %d", got, want)
 	}
-	stats := manager.experimentalTCPProviderStatsLocked()
+	stats := manager.tixTCPProviderStatsLocked()
 	if stats["effective_payload_max"] != uint64(want) || stats["underlay_mtu_l3"] != 1500 {
 		t.Fatalf("stats payload/mtu = %d/%d, want %d/1500", stats["effective_payload_max"], stats["underlay_mtu_l3"], want)
 	}
 }
 
-func TestExperimentalTCPPayloadMaxUsesRawFallbackMTU(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK", "1")
+func TestTIXTCPPayloadMaxUsesRawFallbackMTU(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_RAW_FALLBACK", "1")
 	manager := NewManager()
 	manager.attached = true
 	manager.snapshot.PacketPolicy.MTU = 1500
 
-	got, err := manager.ExperimentalTCPPayloadMax(context.Background(), dataplane.CryptoPlacementUserspace, true)
+	got, err := manager.TIXTCPPayloadMax(context.Background(), dataplane.CryptoPlacementUserspace, true)
 	if err != nil {
 		t.Fatalf("payload max: %v", err)
 	}
-	want := 1500 - rejectIPv4HeaderLen - rejectTCPHeaderLen - experimentaltcp.HeaderLen - experimentalTCPKernelCryptoOverhead
+	want := 1500 - rejectIPv4HeaderLen - rejectTCPHeaderLen - tixtcp.HeaderLen - tixTCPKernelCryptoOverhead
 	if got != want {
 		t.Fatalf("raw fallback secure payload max = %d, want %d", got, want)
 	}
-	stats := manager.experimentalTCPProviderStatsLocked()
+	stats := manager.tixTCPProviderStatsLocked()
 	if stats["effective_payload_max_secure"] != uint64(want) || stats["underlay_mtu_l3"] != 1500 {
 		t.Fatalf("stats payload/mtu = %d/%d, want %d/1500", stats["effective_payload_max_secure"], stats["underlay_mtu_l3"], want)
 	}
@@ -6381,9 +6381,9 @@ func TestExperimentalTCPPayloadMaxUsesRawFallbackMTU(t *testing.T) {
 
 func TestKernelUDPPayloadMaxClampsAFXDPCryptoPayloadToUnderlayMTU(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFastPath = testExperimentalTCPFastPathWithQueues(1)
-	manager.expTCPFastPath.ready.Store(true)
-	manager.expTCPFastPath.sockets[0].umemFrameSize = 4096
+	manager.tixTCPFastPath = testTIXTCPFastPathWithQueues(1)
+	manager.tixTCPFastPath.ready.Store(true)
+	manager.tixTCPFastPath.sockets[0].umemFrameSize = 4096
 	manager.snapshot.PacketPolicy.MTU = 1500
 	manager.kernelCryptoDevices = map[uint64]*kernelCryptoDevice{1: {}}
 
@@ -6391,7 +6391,7 @@ func TestKernelUDPPayloadMaxClampsAFXDPCryptoPayloadToUnderlayMTU(t *testing.T) 
 	if err != nil {
 		t.Fatalf("payload max: %v", err)
 	}
-	want := 1500 - rejectIPv4HeaderLen - 8 - kerneludp.HeaderLen - experimentalTCPKernelCryptoOverhead
+	want := 1500 - rejectIPv4HeaderLen - 8 - kerneludp.HeaderLen - tixTCPKernelCryptoOverhead
 	if got != want {
 		t.Fatalf("kernel UDP crypto payload max = %d, want %d", got, want)
 	}
@@ -6434,7 +6434,7 @@ func TestKernelUDPPayloadMaxAllowsSecureTCOnlyWarmup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("payload max: %v", err)
 	}
-	want := 1500 - rejectIPv4HeaderLen - 8 - kerneludp.HeaderLen - experimentalTCPKernelCryptoOverhead
+	want := 1500 - rejectIPv4HeaderLen - 8 - kerneludp.HeaderLen - tixTCPKernelCryptoOverhead
 	if got != want {
 		t.Fatalf("secure TC-only warmup payload max = %d, want %d", got, want)
 	}
@@ -6543,8 +6543,8 @@ func TestKernelUDPTXDirectRouteForSyncAllowsManagementVIPLocalRoute(t *testing.T
 }
 
 func TestKernelUDPTXDirectManagementVIPLocalRouteSkipsSecureDirectFlows(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{
@@ -6558,7 +6558,7 @@ func TestKernelUDPTXDirectManagementVIPLocalRouteSkipsSecureDirectFlows(t *testi
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 			},
@@ -6575,7 +6575,7 @@ func TestKernelUDPTXDirectManagementVIPLocalRouteSkipsSecureDirectFlows(t *testi
 			CryptoPlacement: dataplane.CryptoPlacementKernel,
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		8: {
 			ID:              8,
 			Peer:            core.IXID("ix-b"),
@@ -6666,29 +6666,29 @@ func TestKernelUDPTXDirectFlowsForRouteRequiresExplicitEndpointFlow(t *testing.T
 	}
 }
 
-func TestExperimentalTCPTXDirectFlowsRequirePlaintextAndSkipChecksum(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPTXDirectFlowsRequirePlaintextAndSkipChecksum(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 			{
 				ID:        core.EndpointID("ix-c-tixt"),
 				Peer:      core.IXID("ix-c"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		21: {
 			ID:              21,
 			Peer:            core.IXID("ix-b"),
@@ -6722,13 +6722,13 @@ func TestExperimentalTCPTXDirectFlowsRequirePlaintextAndSkipChecksum(t *testing.
 
 	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, false, kernelUDPTXRouteMaxFlows)
 	if len(flows) != 1 {
-		t.Fatalf("matched experimental_tcp flows = %d, want 1: %+v", len(flows), flows)
+		t.Fatalf("matched tix_tcp flows = %d, want 1: %+v", len(flows), flows)
 	}
-	if flows[0].id != 21 || !flows[0].experimentalTCP {
-		t.Fatalf("matched flow = %+v, want experimental_tcp flow 21", flows[0])
+	if flows[0].id != 21 || !flows[0].tixTCP {
+		t.Fatalf("matched flow = %+v, want tix_tcp flow 21", flows[0])
 	}
-	if flows[0].expTCPPacket.SourcePort != 42021 || flows[0].expTCPPacket.DestinationPort != 18001 {
-		t.Fatalf("packet ports = %d/%d", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 42021 || flows[0].tixTCPPacket.DestinationPort != 18001 {
+		t.Fatalf("packet ports = %d/%d", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
 	stats := manager.kernelUDPTXDirectSync
 	if stats.FlowsSecurityAllowed != 1 || stats.FlowsSecurityBlocked != 1 {
@@ -6736,9 +6736,9 @@ func TestExperimentalTCPTXDirectFlowsRequirePlaintextAndSkipChecksum(t *testing.
 	}
 }
 
-func TestExperimentalTCPTXDirectFlowsAllowSecureKernelPlacement(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPTXDirectFlowsAllowSecureKernelPlacement(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.kernelUDPTXSecureDirectAttached = true
 	manager.snapshot = dataplane.Snapshot{
@@ -6746,13 +6746,13 @@ func TestExperimentalTCPTXDirectFlowsAllowSecureKernelPlacement(t *testing.T) {
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		31: {
 			ID:              31,
 			Peer:            core.IXID("ix-b"),
@@ -6778,13 +6778,13 @@ func TestExperimentalTCPTXDirectFlowsAllowSecureKernelPlacement(t *testing.T) {
 
 	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, true, kernelUDPTXRouteMaxFlows)
 	if len(flows) != 1 {
-		t.Fatalf("matched secure experimental_tcp flows = %d, want 1: %+v", len(flows), flows)
+		t.Fatalf("matched secure tix_tcp flows = %d, want 1: %+v", len(flows), flows)
 	}
-	if flows[0].id != 31 || !flows[0].experimentalTCP {
-		t.Fatalf("matched flow = %+v, want experimental_tcp flow 31", flows[0])
+	if flows[0].id != 31 || !flows[0].tixTCP {
+		t.Fatalf("matched flow = %+v, want tix_tcp flow 31", flows[0])
 	}
-	if flows[0].expTCPPacket.SourcePort != 42031 || flows[0].expTCPPacket.DestinationPort != 18001 {
-		t.Fatalf("packet ports = %d/%d", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 42031 || flows[0].tixTCPPacket.DestinationPort != 18001 {
+		t.Fatalf("packet ports = %d/%d", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
 	stats := manager.kernelUDPTXDirectSync
 	if stats.FlowsSecurityAllowed != 1 || stats.FlowsSecurityBlocked != 1 {
@@ -6792,20 +6792,20 @@ func TestExperimentalTCPTXDirectFlowsAllowSecureKernelPlacement(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPTXSecureDirectKeepsStableFlowSet(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+func TestTIXTCPTXSecureDirectKeepsStableFlowSet(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.kernelUDPTXSecureDirectAttached = true
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        core.EndpointID("ix-b-tixt"),
 			Peer:      core.IXID("ix-b"),
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 		}},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		34: {
 			ID:              34,
 			Peer:            core.IXID("ix-b"),
@@ -6848,8 +6848,8 @@ func TestExperimentalTCPTXSecureDirectKeepsStableFlowSet(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPTXSecureDirectPrefersOutboundFlowOverListenerSource(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+func TestTIXTCPTXSecureDirectPrefersOutboundFlowOverListenerSource(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.kernelUDPTXSecureDirectAttached = true
 	manager.snapshot = dataplane.Snapshot{
@@ -6858,7 +6858,7 @@ func TestExperimentalTCPTXSecureDirectPrefersOutboundFlowOverListenerSource(t *t
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.1:17041",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
@@ -6866,13 +6866,13 @@ func TestExperimentalTCPTXSecureDirectPrefersOutboundFlowOverListenerSource(t *t
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -6913,13 +6913,13 @@ func TestExperimentalTCPTXSecureDirectPrefersOutboundFlowOverListenerSource(t *t
 			t.Fatalf("secure direct flow[%d] = %d, want %d", i, flows[i].id, wantID)
 		}
 	}
-	if flows[0].expTCPPacket.SourcePort != 50158 || flows[0].expTCPPacket.DestinationPort != 17042 {
-		t.Fatalf("selected packet ports = %d/%d, want 50158/17042", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 50158 || flows[0].tixTCPPacket.DestinationPort != 17042 {
+		t.Fatalf("selected packet ports = %d/%d, want 50158/17042", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
 }
 
 func TestKernelUDPTXSecureDirectRouteWithoutEndpointUsesPreferredTransportOnly(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.kernelUDPTXSecureDirectAttached = true
 	manager.snapshot = dataplane.Snapshot{
@@ -6935,7 +6935,7 @@ func TestKernelUDPTXSecureDirectRouteWithoutEndpointUsesPreferredTransportOnly(t
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Priority:  90,
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
@@ -6952,7 +6952,7 @@ func TestKernelUDPTXSecureDirectRouteWithoutEndpointUsesPreferredTransportOnly(t
 			CryptoPlacement: dataplane.CryptoPlacementKernel,
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		21: {
 			ID:              21,
 			Peer:            core.IXID("ix-b"),
@@ -6977,19 +6977,19 @@ func TestKernelUDPTXSecureDirectRouteWithoutEndpointUsesPreferredTransportOnly(t
 
 	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, true, kernelUDPTXRouteMaxFlows)
 	if len(flows) != 2 {
-		t.Fatalf("secure direct route flows = %d, want preferred experimental_tcp set only: %+v", len(flows), flows)
+		t.Fatalf("secure direct route flows = %d, want preferred tix_tcp set only: %+v", len(flows), flows)
 	}
 	for i, wantID := range []uint64{21, 22} {
-		if flows[i].id != wantID || !flows[i].experimentalTCP {
-			t.Fatalf("flow[%d] = %+v, want experimental_tcp flow %d", i, flows[i], wantID)
+		if flows[i].id != wantID || !flows[i].tixTCP {
+			t.Fatalf("flow[%d] = %+v, want tix_tcp flow %d", i, flows[i], wantID)
 		}
 	}
 }
 
-func TestKernelUDPTXSecureDirectExperimentalTCPUsesAttachSpecDirectFlag(t *testing.T) {
+func TestKernelUDPTXSecureDirectTIXTCPUsesAttachSpecDirectFlag(t *testing.T) {
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{
-		ExperimentalTCPTXDirect:                  true,
+		TIXTCPTXDirect:                           true,
 		KernelUDPTXSecureDirect:                  true,
 		KernelUDPSecureDirectTrustInnerChecksums: true,
 	}
@@ -6998,12 +6998,12 @@ func TestKernelUDPTXSecureDirectExperimentalTCPUsesAttachSpecDirectFlag(t *testi
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        core.EndpointID("ix-b-tixt"),
 			Peer:      core.IXID("ix-b"),
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 		}},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		21: {
 			ID:              21,
 			Peer:            core.IXID("ix-b"),
@@ -7021,15 +7021,15 @@ func TestKernelUDPTXSecureDirectExperimentalTCPUsesAttachSpecDirectFlag(t *testi
 
 	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, true, kernelUDPTXRouteMaxFlows)
 	if len(flows) != 1 {
-		t.Fatalf("secure experimental_tcp direct flows = %d, want one flow from attach spec: %+v", len(flows), flows)
+		t.Fatalf("secure tix_tcp direct flows = %d, want one flow from attach spec: %+v", len(flows), flows)
 	}
-	if flows[0].id != 21 || !flows[0].experimentalTCP {
-		t.Fatalf("secure experimental_tcp flow = %+v, want experimental_tcp flow 21", flows[0])
+	if flows[0].id != 21 || !flows[0].tixTCP {
+		t.Fatalf("secure tix_tcp flow = %+v, want tix_tcp flow 21", flows[0])
 	}
 }
 
 func TestKernelUDPTXSecureDirectRouteWithoutEndpointFallsBackToSingleTransport(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.kernelUDPTXSecureDirectAttached = true
 	manager.snapshot = dataplane.Snapshot{
@@ -7044,7 +7044,7 @@ func TestKernelUDPTXSecureDirectRouteWithoutEndpointFallsBackToSingleTransport(t
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 			},
@@ -7060,7 +7060,7 @@ func TestKernelUDPTXSecureDirectRouteWithoutEndpointFallsBackToSingleTransport(t
 			CryptoPlacement: dataplane.CryptoPlacementKernel,
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		21: {
 			ID:              21,
 			Peer:            core.IXID("ix-b"),
@@ -7079,13 +7079,13 @@ func TestKernelUDPTXSecureDirectRouteWithoutEndpointFallsBackToSingleTransport(t
 	if len(flows) != 1 {
 		t.Fatalf("secure direct route flows = %d, want one transport family: %+v", len(flows), flows)
 	}
-	if flows[0].experimentalTCP {
-		t.Fatalf("fallback selected experimental_tcp flow = %+v, want first sorted transport family kernel_udp", flows[0])
+	if flows[0].tixTCP {
+		t.Fatalf("fallback selected tix_tcp flow = %+v, want first sorted transport family kernel_udp", flows[0])
 	}
 }
 
 func TestKernelUDPTXPlaintextDirectRouteWithoutEndpointUsesPreferredTransportOnly(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{
@@ -7100,7 +7100,7 @@ func TestKernelUDPTXPlaintextDirectRouteWithoutEndpointUsesPreferredTransportOnl
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Priority:  90,
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7117,7 +7117,7 @@ func TestKernelUDPTXPlaintextDirectRouteWithoutEndpointUsesPreferredTransportOnl
 			CryptoPlacement: dataplane.CryptoPlacementUserspace,
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		21: {
 			ID:              21,
 			Peer:            core.IXID("ix-b"),
@@ -7134,10 +7134,10 @@ func TestKernelUDPTXPlaintextDirectRouteWithoutEndpointUsesPreferredTransportOnl
 
 	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, false, kernelUDPTXRouteMaxFlows)
 	if len(flows) != 1 {
-		t.Fatalf("plaintext direct route flows = %d, want preferred experimental_tcp only: %+v", len(flows), flows)
+		t.Fatalf("plaintext direct route flows = %d, want preferred tix_tcp only: %+v", len(flows), flows)
 	}
-	if flows[0].id != 21 || !flows[0].experimentalTCP {
-		t.Fatalf("selected flow = %+v, want experimental_tcp flow 21", flows[0])
+	if flows[0].id != 21 || !flows[0].tixTCP {
+		t.Fatalf("selected flow = %+v, want tix_tcp flow 21", flows[0])
 	}
 }
 
@@ -7265,8 +7265,8 @@ func TestKernelUDPTXSecureDirectRewritesListenerFallbackToEndpointAddress(t *tes
 	}
 }
 
-func TestExperimentalTCPTXSecureDirectRewritesListenerFallbackToEndpointAddress(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+func TestTIXTCPTXSecureDirectRewritesListenerFallbackToEndpointAddress(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.kernelUDPTXSecureDirectAttached = true
 	manager.snapshot = dataplane.Snapshot{
@@ -7275,7 +7275,7 @@ func TestExperimentalTCPTXSecureDirectRewritesListenerFallbackToEndpointAddress(
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.1:37001",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
@@ -7283,14 +7283,14 @@ func TestExperimentalTCPTXSecureDirectRewritesListenerFallbackToEndpointAddress(
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "198.51.100.2:37002",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7308,22 +7308,22 @@ func TestExperimentalTCPTXSecureDirectRewritesListenerFallbackToEndpointAddress(
 
 	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, true, kernelUDPTXRouteMaxFlows)
 	if len(flows) != 1 {
-		t.Fatalf("secure experimental_tcp direct flows = %d, want 1 listener fallback: %+v", len(flows), flows)
+		t.Fatalf("secure tix_tcp direct flows = %d, want 1 listener fallback: %+v", len(flows), flows)
 	}
 	if flows[0].id != 10 {
-		t.Fatalf("secure experimental_tcp direct flow id = %d, want fallback flow 10", flows[0].id)
+		t.Fatalf("secure tix_tcp direct flow id = %d, want fallback flow 10", flows[0].id)
 	}
-	if flows[0].expTCPPacket.SourcePort != 37001 || flows[0].expTCPPacket.DestinationPort != 37002 {
-		t.Fatalf("selected packet ports = %d/%d, want 37001/37002", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 37001 || flows[0].tixTCPPacket.DestinationPort != 37002 {
+		t.Fatalf("selected packet ports = %d/%d, want 37001/37002", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
-	if got := flows[0].expTCPPacket.DestinationIP; got != netip.MustParseAddr("198.51.100.2") {
+	if got := flows[0].tixTCPPacket.DestinationIP; got != netip.MustParseAddr("198.51.100.2") {
 		t.Fatalf("selected destination IP = %s, want endpoint address", got)
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectPrefersOutboundFlowOverListenerSource(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPTXPlaintextDirectPrefersOutboundFlowOverListenerSource(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -7331,7 +7331,7 @@ func TestExperimentalTCPTXPlaintextDirectPrefersOutboundFlowOverListenerSource(t
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.1:17041",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7339,13 +7339,13 @@ func TestExperimentalTCPTXPlaintextDirectPrefersOutboundFlowOverListenerSource(t
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7376,15 +7376,15 @@ func TestExperimentalTCPTXPlaintextDirectPrefersOutboundFlowOverListenerSource(t
 	if flows[0].id != 20 {
 		t.Fatalf("plaintext direct flow id = %d, want outbound flow 20", flows[0].id)
 	}
-	if flows[0].expTCPPacket.SourcePort != 50158 || flows[0].expTCPPacket.DestinationPort != 17042 {
-		t.Fatalf("selected packet ports = %d/%d, want 50158/17042", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 50158 || flows[0].tixTCPPacket.DestinationPort != 17042 {
+		t.Fatalf("selected packet ports = %d/%d, want 50158/17042", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectCanPreferListenerSource(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PREFER_LISTENER_SOURCE", "1")
+func TestTIXTCPTXPlaintextDirectCanPreferListenerSource(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PREFER_LISTENER_SOURCE", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -7392,7 +7392,7 @@ func TestExperimentalTCPTXPlaintextDirectCanPreferListenerSource(t *testing.T) {
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.1:17041",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7400,13 +7400,13 @@ func TestExperimentalTCPTXPlaintextDirectCanPreferListenerSource(t *testing.T) {
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7437,14 +7437,14 @@ func TestExperimentalTCPTXPlaintextDirectCanPreferListenerSource(t *testing.T) {
 	if flows[0].id != 10 {
 		t.Fatalf("plaintext direct flow id = %d, want listener flow 10", flows[0].id)
 	}
-	if flows[0].expTCPPacket.SourcePort != 17041 || flows[0].expTCPPacket.DestinationPort != 48865 {
-		t.Fatalf("selected packet ports = %d/%d, want listener/reverse tuple", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 17041 || flows[0].tixTCPPacket.DestinationPort != 48865 {
+		t.Fatalf("selected packet ports = %d/%d, want listener/reverse tuple", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectFallsBackToListenerSource(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPTXPlaintextDirectFallsBackToListenerSource(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -7452,7 +7452,7 @@ func TestExperimentalTCPTXPlaintextDirectFallsBackToListenerSource(t *testing.T)
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.1:17041",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7460,13 +7460,13 @@ func TestExperimentalTCPTXPlaintextDirectFallsBackToListenerSource(t *testing.T)
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7491,9 +7491,9 @@ func TestExperimentalTCPTXPlaintextDirectFallsBackToListenerSource(t *testing.T)
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectUsesEstablishedListenerReverseFlowForEndpointAddressRoute(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPTXPlaintextDirectUsesEstablishedListenerReverseFlowForEndpointAddressRoute(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -7501,7 +7501,7 @@ func TestExperimentalTCPTXPlaintextDirectUsesEstablishedListenerReverseFlowForEn
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "10.203.3.204:13000",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7509,14 +7509,14 @@ func TestExperimentalTCPTXPlaintextDirectUsesEstablishedListenerReverseFlowForEn
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "10.203.3.205:13001",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7539,14 +7539,14 @@ func TestExperimentalTCPTXPlaintextDirectUsesEstablishedListenerReverseFlowForEn
 	if flows[0].id != 10 {
 		t.Fatalf("plaintext direct fallback flow id = %d, want listener flow 10", flows[0].id)
 	}
-	if flows[0].expTCPPacket.SourcePort != 13000 || flows[0].expTCPPacket.DestinationPort != 58299 {
-		t.Fatalf("selected packet ports = %d/%d, want established reverse tuple 13000/58299", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 13000 || flows[0].tixTCPPacket.DestinationPort != 58299 {
+		t.Fatalf("selected packet ports = %d/%d, want established reverse tuple 13000/58299", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectSkipsFakeListenerEndpointTuple(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPTXPlaintextDirectSkipsFakeListenerEndpointTuple(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -7554,7 +7554,7 @@ func TestExperimentalTCPTXPlaintextDirectSkipsFakeListenerEndpointTuple(t *testi
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "10.203.3.204:13000",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7562,14 +7562,14 @@ func TestExperimentalTCPTXPlaintextDirectSkipsFakeListenerEndpointTuple(t *testi
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "10.203.3.205:13001",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7591,9 +7591,9 @@ func TestExperimentalTCPTXPlaintextDirectSkipsFakeListenerEndpointTuple(t *testi
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectPrefersEndpointAddressOutboundFlow(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPTXPlaintextDirectPrefersEndpointAddressOutboundFlow(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -7601,7 +7601,7 @@ func TestExperimentalTCPTXPlaintextDirectPrefersEndpointAddressOutboundFlow(t *t
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "10.203.3.204:13000",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7609,14 +7609,14 @@ func TestExperimentalTCPTXPlaintextDirectPrefersEndpointAddressOutboundFlow(t *t
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "10.203.3.205:13001",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7647,17 +7647,17 @@ func TestExperimentalTCPTXPlaintextDirectPrefersEndpointAddressOutboundFlow(t *t
 	if flows[0].id != 20 {
 		t.Fatalf("plaintext direct flow id = %d, want outbound flow 20", flows[0].id)
 	}
-	if flows[0].expTCPPacket.SourcePort != 44000 || flows[0].expTCPPacket.DestinationPort != 13001 {
-		t.Fatalf("selected packet ports = %d/%d, want 44000/13001", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 44000 || flows[0].tixTCPPacket.DestinationPort != 13001 {
+		t.Fatalf("selected packet ports = %d/%d, want 44000/13001", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
 }
 
-func TestExperimentalTCPRouteGSOUsesEndpointAddressFlowPool(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPRouteGSOUsesEndpointAddressFlowPool(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{
-		ExperimentalTCPTXDirect:     true,
-		ExperimentalTCPRouteGSOSync: true,
+		TIXTCPTXDirect:     true,
+		TIXTCPRouteGSOSync: true,
 	}
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -7665,7 +7665,7 @@ func TestExperimentalTCPRouteGSOUsesEndpointAddressFlowPool(t *testing.T) {
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "10.203.3.204:13000",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7673,14 +7673,14 @@ func TestExperimentalTCPRouteGSOUsesEndpointAddressFlowPool(t *testing.T) {
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "10.203.3.205:13001",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7695,7 +7695,7 @@ func TestExperimentalTCPRouteGSOUsesEndpointAddressFlowPool(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		flowID := uint64(100 + i)
 		sourcePort := uint16(44000 + i)
-		manager.expTCPFlows[flowID] = dataplane.ExperimentalTCPFlow{
+		manager.tixTCPFlows[flowID] = dataplane.TIXTCPFlow{
 			ID:              flowID,
 			Peer:            core.IXID("ix-b"),
 			Endpoint:        core.EndpointID("ix-b-tixt"),
@@ -7721,15 +7721,15 @@ func TestExperimentalTCPRouteGSOUsesEndpointAddressFlowPool(t *testing.T) {
 		if flow.id != wantID {
 			t.Fatalf("route-GSO flow[%d] = %d, want %d", i, flow.id, wantID)
 		}
-		if flow.expTCPPacket.SourcePort == 13000 || flow.expTCPPacket.DestinationPort != 13001 {
-			t.Fatalf("route-GSO flow[%d] ports = %d/%d, want outbound source and destination 13001", i, flow.expTCPPacket.SourcePort, flow.expTCPPacket.DestinationPort)
+		if flow.tixTCPPacket.SourcePort == 13000 || flow.tixTCPPacket.DestinationPort != 13001 {
+			t.Fatalf("route-GSO flow[%d] ports = %d/%d, want outbound source and destination 13001", i, flow.tixTCPPacket.SourcePort, flow.tixTCPPacket.DestinationPort)
 		}
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectPrefersFreshEndpointAddressOutboundFlow(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPTXPlaintextDirectPrefersFreshEndpointAddressOutboundFlow(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	now := time.Date(2026, 7, 1, 9, 55, 0, 0, time.UTC)
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
@@ -7738,7 +7738,7 @@ func TestExperimentalTCPTXPlaintextDirectPrefersFreshEndpointAddressOutboundFlow
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "10.203.3.204:13000",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7746,14 +7746,14 @@ func TestExperimentalTCPTXPlaintextDirectPrefersFreshEndpointAddressOutboundFlow
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Address:   "10.203.3.205:13001",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7788,26 +7788,26 @@ func TestExperimentalTCPTXPlaintextDirectPrefersFreshEndpointAddressOutboundFlow
 	if flows[0].id != 20 {
 		t.Fatalf("plaintext direct flow id = %d, want fresh flow 20", flows[0].id)
 	}
-	if flows[0].expTCPPacket.SourcePort != 47484 || flows[0].expTCPPacket.DestinationPort != 13001 {
-		t.Fatalf("selected packet ports = %d/%d, want 47484/13001", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 47484 || flows[0].tixTCPPacket.DestinationPort != 13001 {
+		t.Fatalf("selected packet ports = %d/%d, want 47484/13001", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectMultiFlowKeepsSingleRouteFlowByDefault(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
+func TestTIXTCPTXPlaintextDirectMultiFlowKeepsSingleRouteFlowByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        core.EndpointID("ix-b-tixt"),
 			Peer:      core.IXID("ix-b"),
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 		}},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		34: {
 			ID:              34,
 			Peer:            core.IXID("ix-b"),
@@ -7848,22 +7848,22 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowKeepsSingleRouteFlowByDefault(
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectMultiFlowKeepsStableFlowSet(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE", "1")
+func TestTIXTCPTXPlaintextDirectMultiFlowKeepsStableFlowSet(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        core.EndpointID("ix-b-tixt"),
 			Peer:      core.IXID("ix-b"),
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 		}},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		34: {
 			ID:              34,
 			Peer:            core.IXID("ix-b"),
@@ -7906,11 +7906,11 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowKeepsStableFlowSet(t *testing.
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectMultiFlowPrefersOutboundFlowOverListenerSource(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE", "1")
+func TestTIXTCPTXPlaintextDirectMultiFlowPrefersOutboundFlowOverListenerSource(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -7918,7 +7918,7 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowPrefersOutboundFlowOverListene
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.1:17041",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7926,13 +7926,13 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowPrefersOutboundFlowOverListene
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -7973,17 +7973,17 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowPrefersOutboundFlowOverListene
 			t.Fatalf("plaintext direct multi-flow[%d] = %d, want %d", i, flows[i].id, wantID)
 		}
 	}
-	if flows[0].expTCPPacket.SourcePort != 50158 || flows[0].expTCPPacket.DestinationPort != 17042 {
-		t.Fatalf("selected packet ports = %d/%d, want 50158/17042", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort)
+	if flows[0].tixTCPPacket.SourcePort != 50158 || flows[0].tixTCPPacket.DestinationPort != 17042 {
+		t.Fatalf("selected packet ports = %d/%d, want 50158/17042", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort)
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectMultiFlowCanPreferListenerSource(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PREFER_LISTENER_SOURCE", "1")
+func TestTIXTCPTXPlaintextDirectMultiFlowCanPreferListenerSource(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PLAINTEXT_MULTI_FLOW", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PLAINTEXT_ROUTE_MULTI_FLOW_UNSAFE", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PREFER_LISTENER_SOURCE", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -7991,7 +7991,7 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowCanPreferListenerSource(t *tes
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.1:17041",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -7999,13 +7999,13 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowCanPreferListenerSource(t *tes
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -8045,15 +8045,15 @@ func TestExperimentalTCPTXPlaintextDirectMultiFlowCanPreferListenerSource(t *tes
 		if flows[i].id != wantID {
 			t.Fatalf("plaintext direct multi-flow[%d] = %d, want %d", i, flows[i].id, wantID)
 		}
-		if flows[i].expTCPPacket.SourcePort != 17041 {
-			t.Fatalf("plaintext direct multi-flow[%d] source port = %d, want listener port", i, flows[i].expTCPPacket.SourcePort)
+		if flows[i].tixTCPPacket.SourcePort != 17041 {
+			t.Fatalf("plaintext direct multi-flow[%d] source port = %d, want listener port", i, flows[i].tixTCPPacket.SourcePort)
 		}
 	}
 }
 
-func TestExperimentalTCPTXPlaintextDirectSkipsControlOnlyFlowWithoutRemoteTuple(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestTIXTCPTXPlaintextDirectSkipsControlOnlyFlowWithoutRemoteTuple(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Peers: []dataplane.PeerMetadata{{ID: core.IXID("ix-b")}},
@@ -8061,7 +8061,7 @@ func TestExperimentalTCPTXPlaintextDirectSkipsControlOnlyFlowWithoutRemoteTuple(
 			{
 				ID:        core.EndpointID("ix-a-tixt"),
 				Peer:      core.IXID("ix-a"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Listen:    "192.0.2.1:17041",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
@@ -8069,13 +8069,13 @@ func TestExperimentalTCPTXPlaintextDirectSkipsControlOnlyFlowWithoutRemoteTuple(
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -8103,18 +8103,18 @@ func TestExperimentalTCPTXPlaintextDirectSkipsControlOnlyFlowWithoutRemoteTuple(
 	if flows[0].id != 20 {
 		t.Fatalf("plaintext direct flow id = %d, want outbound flow 20", flows[0].id)
 	}
-	if flows[0].expTCPPacket.SourcePort != experimentalTCPDerivedSourcePort(20) || flows[0].expTCPPacket.DestinationPort != 17042 {
-		t.Fatalf("selected packet ports = %d/%d, want derived/%d", flows[0].expTCPPacket.SourcePort, flows[0].expTCPPacket.DestinationPort, 17042)
+	if flows[0].tixTCPPacket.SourcePort != tixTCPDerivedSourcePort(20) || flows[0].tixTCPPacket.DestinationPort != 17042 {
+		t.Fatalf("selected packet ports = %d/%d, want derived/%d", flows[0].tixTCPPacket.SourcePort, flows[0].tixTCPPacket.DestinationPort, 17042)
 	}
 }
 
-func TestExperimentalTCPStatusIncludesActiveFlowSnapshot(t *testing.T) {
+func TestTIXTCPStatusIncludesActiveFlowSnapshot(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		20: {
 			ID:              20,
 			Peer:            core.IXID("ix-b"),
-			Endpoint:        core.EndpointID("b-experimental-tcp"),
+			Endpoint:        core.EndpointID("b-tix-tcp"),
 			LocalAddress:    "192.0.2.1:50158",
 			RemoteAddress:   "198.51.100.2:7142",
 			SourcePort:      50158,
@@ -8124,7 +8124,7 @@ func TestExperimentalTCPStatusIncludesActiveFlowSnapshot(t *testing.T) {
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-a"),
-			Endpoint:        core.EndpointID("a-experimental-tcp"),
+			Endpoint:        core.EndpointID("a-tix-tcp"),
 			LocalAddress:    "192.0.2.1:7141",
 			RemoteAddress:   "198.51.100.1:51585",
 			SourcePort:      7141,
@@ -8133,9 +8133,9 @@ func TestExperimentalTCPStatusIncludesActiveFlowSnapshot(t *testing.T) {
 		},
 	}
 
-	status, err := manager.ExperimentalTCPStatus(context.Background())
+	status, err := manager.TIXTCPStatus(context.Background())
 	if err != nil {
-		t.Fatalf("experimental_tcp status: %v", err)
+		t.Fatalf("tix_tcp status: %v", err)
 	}
 	if status.ActiveFlows != 2 {
 		t.Fatalf("active flows = %d, want 2", status.ActiveFlows)
@@ -8151,27 +8151,27 @@ func TestExperimentalTCPStatusIncludesActiveFlowSnapshot(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPStatusReportsFastPathDisabled(t *testing.T) {
+func TestTIXTCPStatusReportsFastPathDisabled(t *testing.T) {
 	manager := NewManager()
 	manager.attached = true
 	manager.spec = dataplane.AttachSpec{
-		ExperimentalTCPFastPathDisabled:       true,
-		ExperimentalTCPFastPathDisabledReason: "mixed tcp+experimental_tcp",
+		TIXTCPFastPathDisabled:       true,
+		TIXTCPFastPathDisabledReason: "mixed tcp+tix_tcp",
 	}
 
-	status, err := manager.ExperimentalTCPStatus(context.Background())
+	status, err := manager.TIXTCPStatus(context.Background())
 	if err != nil {
-		t.Fatalf("experimental_tcp status: %v", err)
+		t.Fatalf("tix_tcp status: %v", err)
 	}
 	if status.Available || status.FastPath || status.Reinject {
-		t.Fatalf("disabled experimental_tcp status = %+v, want unavailable/no fast path", status)
+		t.Fatalf("disabled tix_tcp status = %+v, want unavailable/no fast path", status)
 	}
-	if !strings.Contains(status.FastPathFallback, "mixed tcp+experimental_tcp") {
+	if !strings.Contains(status.FastPathFallback, "mixed tcp+tix_tcp") {
 		t.Fatalf("fast path fallback = %q, want disabled reason", status.FastPathFallback)
 	}
 	found := false
 	for _, note := range status.Notes {
-		if strings.Contains(note, "mixed tcp+experimental_tcp") {
+		if strings.Contains(note, "mixed tcp+tix_tcp") {
 			found = true
 			break
 		}
@@ -8181,30 +8181,30 @@ func TestExperimentalTCPStatusReportsFastPathDisabled(t *testing.T) {
 	}
 }
 
-func TestInstallExperimentalTCPFlowsRejectsFastPathDisabled(t *testing.T) {
+func TestInstallTIXTCPFlowsRejectsFastPathDisabled(t *testing.T) {
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{
-		ExperimentalTCPFastPathDisabled:       true,
-		ExperimentalTCPFastPathDisabledReason: "mixed tcp+experimental_tcp",
+		TIXTCPFastPathDisabled:       true,
+		TIXTCPFastPathDisabledReason: "mixed tcp+tix_tcp",
 	}
 
-	err := manager.InstallExperimentalTCPFlows(context.Background(), []dataplane.ExperimentalTCPFlow{{
+	err := manager.InstallTIXTCPFlows(context.Background(), []dataplane.TIXTCPFlow{{
 		ID:              7,
 		Peer:            core.IXID("ix-b"),
 		Endpoint:        core.EndpointID("exp-b"),
 		RemoteAddress:   "198.51.100.2:7142",
 		CryptoPlacement: dataplane.CryptoPlacementUserspace,
 	}})
-	if err == nil || !strings.Contains(err.Error(), "mixed tcp+experimental_tcp") {
-		t.Fatalf("install experimental_tcp flow error = %v, want disabled reason", err)
+	if err == nil || !strings.Contains(err.Error(), "mixed tcp+tix_tcp") {
+		t.Fatalf("install tix_tcp flow error = %v, want disabled reason", err)
 	}
-	if len(manager.expTCPFlows) != 0 {
-		t.Fatalf("disabled experimental_tcp installed flows: %#v", manager.expTCPFlows)
+	if len(manager.tixTCPFlows) != 0 {
+		t.Fatalf("disabled tix_tcp installed flows: %#v", manager.tixTCPFlows)
 	}
 }
 
-func TestKernelUDPTXDirectPlaintextReadyIgnoresExperimentalTCPControlOnlyFlow(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+func TestKernelUDPTXDirectPlaintextReadyIgnoresTIXTCPControlOnlyFlow(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Routes: []routing.Route{{
@@ -8216,13 +8216,13 @@ func TestKernelUDPTXDirectPlaintextReadyIgnoresExperimentalTCPControlOnlyFlow(t 
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		10: {
 			ID:              10,
 			Peer:            core.IXID("ix-b"),
@@ -8231,14 +8231,14 @@ func TestKernelUDPTXDirectPlaintextReadyIgnoresExperimentalTCPControlOnlyFlow(t 
 		},
 	}
 	if manager.kernelUDPTXDirectPlaintextReadyLocked() {
-		t.Fatal("plaintext direct ready with only control-only experimental_tcp flow")
+		t.Fatal("plaintext direct ready with only control-only tix_tcp flow")
 	}
 
-	flow := manager.expTCPFlows[10]
+	flow := manager.tixTCPFlows[10]
 	flow.RemoteAddress = "198.51.100.2:17042"
-	manager.expTCPFlows[10] = flow
+	manager.tixTCPFlows[10] = flow
 	if !manager.kernelUDPTXDirectPlaintextReadyLocked() {
-		t.Fatal("plaintext direct not ready after experimental_tcp remote tuple is available")
+		t.Fatal("plaintext direct not ready after tix_tcp remote tuple is available")
 	}
 }
 
@@ -8416,11 +8416,11 @@ func TestKernelUDPTXDirectPlaintextFallsBackToListenerSourcedKernelUDPFlow(t *te
 	}
 }
 
-func TestKernelUDPTXDirectFlowValueMarksSecureExperimentalTCP(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+func TestKernelUDPTXDirectFlowValueMarksSecureTIXTCP(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	manager := NewManager()
 	manager.kernelUDPTXSecureDirectAttached = true
-	flow := dataplane.ExperimentalTCPFlow{
+	flow := dataplane.TIXTCPFlow{
 		ID:              41,
 		Peer:            core.IXID("ix-b"),
 		Endpoint:        core.EndpointID("ix-b-tixt"),
@@ -8436,29 +8436,29 @@ func TestKernelUDPTXDirectFlowValueMarksSecureExperimentalTCP(t *testing.T) {
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        core.EndpointID("ix-b-tixt"),
 			Peer:      core.IXID("ix-b"),
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 		}},
 	}
 
 	flags := manager.kernelUDPTXDirectFlowFlagsLocked(route, kernelUDPTXRouteFlow{
-		id:              41,
-		expTCPFlow:      flow,
-		experimentalTCP: true,
+		id:         41,
+		tixTCPFlow: flow,
+		tixTCP:     true,
 	}, true)
-	if flags&kernelUDPTXFlowFlagExperimentalTCP == 0 {
-		t.Fatalf("flow flags %#x missing experimental_tcp", flags)
+	if flags&kernelUDPTXFlowFlagTIXTCP == 0 {
+		t.Fatalf("flow flags %#x missing tix_tcp", flags)
 	}
 	if flags&kernelUDPTXFlowFlagSecure == 0 {
 		t.Fatalf("flow flags %#x missing secure", flags)
 	}
 }
 
-func TestKernelUDPTXDirectFlowValueSkipsExperimentalTCPOuterChecksum(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "1")
+func TestKernelUDPTXDirectFlowValueSkipsTIXTCPOuterChecksum(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "1")
 	manager := NewManager()
-	flow := dataplane.ExperimentalTCPFlow{
+	flow := dataplane.TIXTCPFlow{
 		ID:              42,
 		Peer:            core.IXID("ix-b"),
 		Endpoint:        core.EndpointID("ix-b-tixt"),
@@ -8473,16 +8473,16 @@ func TestKernelUDPTXDirectFlowValueSkipsExperimentalTCPOuterChecksum(t *testing.
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        core.EndpointID("ix-b-tixt"),
 			Peer:      core.IXID("ix-b"),
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 		}},
 	}
 
 	flags := manager.kernelUDPTXDirectFlowFlagsLocked(route, kernelUDPTXRouteFlow{
-		id:              42,
-		expTCPFlow:      flow,
-		experimentalTCP: true,
+		id:         42,
+		tixTCPFlow: flow,
+		tixTCP:     true,
 	}, true)
 	if flags&kernelUDPTXFlowFlagSkipOuterTCPChecksum == 0 {
 		t.Fatalf("flow flags %#x missing skip outer TCP checksum", flags)
@@ -8491,16 +8491,16 @@ func TestKernelUDPTXDirectFlowValueSkipsExperimentalTCPOuterChecksum(t *testing.
 
 func TestKernelUDPTXInlineRouteFlowAllowedForKernelUDPPlaintext(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_PLAIN_SKIP_SEQUENCE", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_TIX_TCP", "")
 	if !kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7}}, 1) {
 		t.Fatal("single kernel_udp plaintext route flow should allow inline route value")
 	}
 	if !kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7}, {id: 8}}, 2) {
 		t.Fatal("multi-flow kernel_udp plaintext route should allow inline route values")
 	}
-	if kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
-		t.Fatal("experimental_tcp route flow should not allow inline route value")
+	if kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, tixTCP: true}}, 1) {
+		t.Fatal("tix_tcp route flow should not allow inline route value")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_PLAIN_SKIP_SEQUENCE", "0")
 	if kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7}}, 1) {
@@ -8508,76 +8508,76 @@ func TestKernelUDPTXInlineRouteFlowAllowedForKernelUDPPlaintext(t *testing.T) {
 	}
 }
 
-func TestKernelUDPTXInlineRouteFlowAllowsExperimentalTCPWithRouteKfunc(t *testing.T) {
+func TestKernelUDPTXInlineRouteFlowAllowsTIXTCPWithRouteKfunc(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_PLAIN_SKIP_SEQUENCE", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "")
-	if !kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
-		t.Fatal("experimental_tcp route kfunc path should allow inline route value by default")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_TIX_TCP", "")
+	if !kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, tixTCP: true}}, 1) {
+		t.Fatal("tix_tcp route kfunc path should allow inline route value by default")
 	}
-	if !kernelUDPTXInlineRouteFlowValueAllowed(kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagExperimentalTCP}) {
-		t.Fatal("experimental_tcp route kfunc path should allow inline flow value by default")
+	if !kernelUDPTXInlineRouteFlowValueAllowed(kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagTIXTCP}) {
+		t.Fatal("tix_tcp route kfunc path should allow inline flow value by default")
 	}
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "0")
-	if kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
-		t.Fatal("explicit inline experimental_tcp disable should be honored")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_TIX_TCP", "0")
+	if kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, tixTCP: true}}, 1) {
+		t.Fatal("explicit inline tix_tcp disable should be honored")
 	}
 }
 
-func TestKernelUDPTXInlineRouteFlowAllowsExperimentalTCPWithFinalizeFlowKfunc(t *testing.T) {
+func TestKernelUDPTXInlineRouteFlowAllowsTIXTCPWithFinalizeFlowKfunc(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_PLAIN_SKIP_SEQUENCE", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC", "1")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "")
-	if !kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
-		t.Fatal("experimental_tcp finalize-flow kfunc path should allow inline route value by default")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_TIX_TCP", "")
+	if !kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, tixTCP: true}}, 1) {
+		t.Fatal("tix_tcp finalize-flow kfunc path should allow inline route value by default")
 	}
-	if !kernelUDPTXInlineRouteFlowValueAllowed(kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagExperimentalTCP}) {
-		t.Fatal("experimental_tcp finalize-flow kfunc path should allow inline flow value by default")
+	if !kernelUDPTXInlineRouteFlowValueAllowed(kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagTIXTCP}) {
+		t.Fatal("tix_tcp finalize-flow kfunc path should allow inline flow value by default")
 	}
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "0")
-	if kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
-		t.Fatal("explicit inline experimental_tcp disable should be honored")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_TIX_TCP", "0")
+	if kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, tixTCP: true}}, 1) {
+		t.Fatal("explicit inline tix_tcp disable should be honored")
 	}
 }
 
-func TestKernelUDPTXInlineRouteFlowAllowsExperimentalTCPRouteGSOEnv(t *testing.T) {
+func TestKernelUDPTXInlineRouteFlowAllowsTIXTCPRouteGSOEnv(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_PLAIN_SKIP_SEQUENCE", "1")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
-	if !kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
-		t.Fatal("experimental_tcp route-GSO path requires an inline route value")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_TIX_TCP", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	if !kernelUDPTXInlineRouteFlowAllowed([]kernelUDPTXRouteFlow{{id: 7, tixTCP: true}}, 1) {
+		t.Fatal("tix_tcp route-GSO path requires an inline route value")
 	}
-	if !kernelUDPTXInlineRouteFlowValueAllowed(kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagExperimentalTCP}) {
-		t.Fatal("experimental_tcp route-GSO path should allow inline flow values")
+	if !kernelUDPTXInlineRouteFlowValueAllowed(kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagTIXTCP}) {
+		t.Fatal("tix_tcp route-GSO path should allow inline flow values")
 	}
 }
 
-func TestKernelUDPTXInlineRouteFlowAllowsExperimentalTCPRouteGSOSpec(t *testing.T) {
+func TestKernelUDPTXInlineRouteFlowAllowsTIXTCPRouteGSOSpec(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_PLAIN_SKIP_SEQUENCE", "1")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_TIX_TCP", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
 
-	spec := dataplane.AttachSpec{ExperimentalTCPRouteGSOSync: true}
-	if !kernelUDPTXInlineRouteFlowAllowedForSpec(spec, []kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
-		t.Fatal("experimental_tcp route-GSO spec requires an inline route value for the route kfunc path")
+	spec := dataplane.AttachSpec{TIXTCPRouteGSOSync: true}
+	if !kernelUDPTXInlineRouteFlowAllowedForSpec(spec, []kernelUDPTXRouteFlow{{id: 7, tixTCP: true}}, 1) {
+		t.Fatal("tix_tcp route-GSO spec requires an inline route value for the route kfunc path")
 	}
-	if !kernelUDPTXInlineRouteFlowValueAllowedForSpec(spec, kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagExperimentalTCP}) {
-		t.Fatal("experimental_tcp route-GSO spec should allow inline experimental_tcp flow values")
+	if !kernelUDPTXInlineRouteFlowValueAllowedForSpec(spec, kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagTIXTCP}) {
+		t.Fatal("tix_tcp route-GSO spec should allow inline tix_tcp flow values")
 	}
 	routeValue := kernelUDPTXRouteValue{}
 	if !appendKernelUDPTXRouteFlow(&routeValue, 7, 0) {
 		t.Fatal("append route flow")
 	}
 	if !appendKernelUDPTXRouteInlineFlowsForSpec(spec, &routeValue, map[uint64]kernelUDPTXFlowValue{
-		7: {Ifindex: 101, Flags: kernelUDPTXFlowFlagExperimentalTCP},
+		7: {Ifindex: 101, Flags: kernelUDPTXFlowFlagTIXTCP},
 	}, 1) {
-		t.Fatal("experimental_tcp route-GSO spec should append inline route flow values")
+		t.Fatal("tix_tcp route-GSO spec should append inline route flow values")
 	}
 
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_EXPERIMENTAL_TCP", "0")
-	if kernelUDPTXInlineRouteFlowAllowedForSpec(spec, []kernelUDPTXRouteFlow{{id: 7, experimentalTCP: true}}, 1) {
-		t.Fatal("explicit inline experimental_tcp disable should override the route-GSO spec")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_INLINE_TIX_TCP", "0")
+	if kernelUDPTXInlineRouteFlowAllowedForSpec(spec, []kernelUDPTXRouteFlow{{id: 7, tixTCP: true}}, 1) {
+		t.Fatal("explicit inline tix_tcp disable should override the route-GSO spec")
 	}
 }
 
@@ -8609,8 +8609,8 @@ func TestKernelUDPTXInlineRouteFlowValueRejectsSecureOrExperimental(t *testing.T
 	if kernelUDPTXInlineRouteFlowValueAllowed(kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagSecure}) {
 		t.Fatal("secure flow value should not allow inline route value")
 	}
-	if kernelUDPTXInlineRouteFlowValueAllowed(kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagExperimentalTCP}) {
-		t.Fatal("experimental_tcp flow value should not allow inline route value")
+	if kernelUDPTXInlineRouteFlowValueAllowed(kernelUDPTXFlowValue{Flags: kernelUDPTXFlowFlagTIXTCP}) {
+		t.Fatal("tix_tcp flow value should not allow inline route value")
 	}
 }
 
@@ -8923,11 +8923,11 @@ func TestKernelUDPRXSecureDirectHelperKfuncsAreCompileTimeOptional(t *testing.T)
 	}
 }
 
-func TestKernelUDPOpenBorrowedPoolDefaultsOffAndExperimentalTCPAutoOn(t *testing.T) {
+func TestKernelUDPOpenBorrowedPoolDefaultsOffAndTIXTCPAutoOn(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_OPEN_BORROW_POOL", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_SEAL_BORROW_POOL", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_OPEN_BORROW_POOL", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_OPEN_INPLACE", "")
+	t.Setenv("TRUSTIX_TIX_TCP_OPEN_BORROW_POOL", "")
+	t.Setenv("TRUSTIX_TIX_TCP_KERNEL_OPEN_INPLACE", "")
 	t.Setenv("TRUSTIX_AF_XDP_TX_DEFER_FLUSH", "")
 	if kernelUDPOpenBorrowedPoolEnabled() {
 		t.Fatal("kernel_udp borrowed-open default enabled")
@@ -8935,8 +8935,8 @@ func TestKernelUDPOpenBorrowedPoolDefaultsOffAndExperimentalTCPAutoOn(t *testing
 	if kernelUDPSealBorrowedPoolEnabled() {
 		t.Fatal("kernel_udp borrowed-seal default enabled")
 	}
-	if !experimentalTCPOpenBorrowedPoolEnabled() {
-		t.Fatal("experimental_tcp borrowed-open auto default disabled")
+	if !tixTCPOpenBorrowedPoolEnabled() {
+		t.Fatal("tix_tcp borrowed-open auto default disabled")
 	}
 
 	t.Setenv("TRUSTIX_KERNEL_UDP_OPEN_BORROW_POOL", "1")
@@ -8958,27 +8958,27 @@ func TestKernelUDPOpenBorrowedPoolDefaultsOffAndExperimentalTCPAutoOn(t *testing
 	t.Setenv("TRUSTIX_KERNEL_UDP_OPEN_BORROW_POOL", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_SEAL_BORROW_POOL", "")
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_OPEN_INPLACE", "1")
-	if experimentalTCPOpenBorrowedPoolEnabled() {
-		t.Fatal("experimental_tcp borrowed-open auto ignored kernel open-in-place")
+	t.Setenv("TRUSTIX_TIX_TCP_KERNEL_OPEN_INPLACE", "1")
+	if tixTCPOpenBorrowedPoolEnabled() {
+		t.Fatal("tix_tcp borrowed-open auto ignored kernel open-in-place")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_OPEN_INPLACE", "")
+	t.Setenv("TRUSTIX_TIX_TCP_KERNEL_OPEN_INPLACE", "")
 	t.Setenv("TRUSTIX_AF_XDP_TX_DEFER_FLUSH", "1")
-	if experimentalTCPOpenBorrowedPoolEnabled() {
-		t.Fatal("experimental_tcp borrowed-open auto ignored deferred TX flush")
+	if tixTCPOpenBorrowedPoolEnabled() {
+		t.Fatal("tix_tcp borrowed-open auto ignored deferred TX flush")
 	}
 	t.Setenv("TRUSTIX_AF_XDP_TX_DEFER_FLUSH", "")
-	if !experimentalTCPOpenBorrowedPoolEnabled() {
-		t.Fatal("experimental_tcp borrowed-open incorrectly inherited kernel_udp opt-out")
+	if !tixTCPOpenBorrowedPoolEnabled() {
+		t.Fatal("tix_tcp borrowed-open incorrectly inherited kernel_udp opt-out")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_OPEN_BORROW_POOL", "1")
-	if !experimentalTCPOpenBorrowedPoolEnabled() {
-		t.Fatal("experimental_tcp borrowed-open ignored explicit opt-in")
+	t.Setenv("TRUSTIX_TIX_TCP_OPEN_BORROW_POOL", "1")
+	if !tixTCPOpenBorrowedPoolEnabled() {
+		t.Fatal("tix_tcp borrowed-open ignored explicit opt-in")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_OPEN_BORROW_POOL", "0")
-	if experimentalTCPOpenBorrowedPoolEnabled() {
-		t.Fatal("experimental_tcp borrowed-open ignored explicit opt-out")
+	t.Setenv("TRUSTIX_TIX_TCP_OPEN_BORROW_POOL", "0")
+	if tixTCPOpenBorrowedPoolEnabled() {
+		t.Fatal("tix_tcp borrowed-open ignored explicit opt-out")
 	}
 }
 
@@ -9151,15 +9151,15 @@ func TestKernelUDPTXDirectActiveGSODefaultsOnForDirectOnly(t *testing.T) {
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(kernelUDPTXDirectProgramOptions{Enabled: true}) {
 		t.Fatal("kernel_udp non-direct-only enabled active GSO by default")
 	}
-	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, ExperimentalTCPOnly: true}) {
-		t.Fatal("experimental_tcp direct-only enabled kernel_udp active GSO by default")
+	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, TIXTCPOnly: true}) {
+		t.Fatal("tix_tcp direct-only enabled kernel_udp active GSO by default")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "1")
 	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true}) {
 		t.Fatal("kernel_udp plaintext direct-only ignored explicit active GSO opt-in")
 	}
-	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, ExperimentalTCPOnly: true}) {
-		t.Fatal("experimental_tcp active GSO should require its separate unsafe ack")
+	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, TIXTCPOnly: true}) {
+		t.Fatal("tix_tcp active GSO should require its separate unsafe ack")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "0")
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true}) {
@@ -9167,29 +9167,29 @@ func TestKernelUDPTXDirectActiveGSODefaultsOnForDirectOnly(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPRouteTCPGSOKfuncEnablesSafeActiveGSO(t *testing.T) {
+func TestTIXTCPRouteTCPGSOKfuncEnablesSafeActiveGSO(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
 
-	withoutRouteKfunc := kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, ExperimentalTCPOnly: true}
+	withoutRouteKfunc := kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, TIXTCPOnly: true}
 	if kernelUDPTunnelGSOEnabledForOptions(withoutRouteKfunc) {
-		t.Fatal("experimental_tcp route-GSO env enabled tunnel-GSO without an available route GSO kfunc")
+		t.Fatal("tix_tcp route-GSO env enabled tunnel-GSO without an available route GSO kfunc")
 	}
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(withoutRouteKfunc) {
-		t.Fatal("experimental_tcp route-GSO env enabled active-GSO without an available route GSO kfunc")
+		t.Fatal("tix_tcp route-GSO env enabled active-GSO without an available route GSO kfunc")
 	}
 
 	withRouteKfunc := withoutRouteKfunc
 	withRouteKfunc.RouteTCPGSOKfunc = true
 	if !kernelUDPTunnelGSOEnabledForOptions(withRouteKfunc) {
-		t.Fatal("experimental_tcp route-GSO kfunc should enable tunnel-GSO packet handling")
+		t.Fatal("tix_tcp route-GSO kfunc should enable tunnel-GSO packet handling")
 	}
 	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(withRouteKfunc) {
-		t.Fatal("experimental_tcp route-GSO kfunc should enable active GSO input without unsafe active-GSO ack")
+		t.Fatal("tix_tcp route-GSO kfunc should enable active GSO input without unsafe active-GSO ack")
 	}
 
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "0")
@@ -9211,62 +9211,62 @@ func TestKernelUDPTXDirectKernelUDPOnlyDefaultsNoChecksumReset(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPActiveGSOAllowsSafeFinalizeFlowMode(t *testing.T) {
+func TestTIXTCPActiveGSOAllowsSafeFinalizeFlowMode(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
 	kfuncCall, err := loadSKBTIXTTXFinalizeFlowTCPHeaderKfuncCall()
 	if err != nil {
 		t.Fatalf("load flow TCP header-finalize kfunc metadata: %v", err)
 	}
-	options := kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, ExperimentalTCPOnly: true}
+	options := kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, TIXTCPOnly: true}
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
-		t.Fatal("experimental_tcp safe active-GSO should require the finalize-flow kfunc")
+		t.Fatal("tix_tcp safe active-GSO should require the finalize-flow kfunc")
 	}
 	options.FinalizeFlowTCPHeaderKfunc = true
 	options.FinalizeFlowTCPHeaderKfuncCall = kfuncCall
-	if experimentalTCPTXDirectSafeActiveGSOEnabledForOptions(options) {
-		t.Fatal("experimental_tcp active-GSO should require the explicit unsafe ack")
+	if tixTCPTXDirectSafeActiveGSOEnabledForOptions(options) {
+		t.Fatal("tix_tcp active-GSO should require the explicit unsafe ack")
 	}
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
-		t.Fatal("experimental_tcp active-GSO should stay disabled without unsafe ack")
+		t.Fatal("tix_tcp active-GSO should stay disabled without unsafe ack")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
-	if experimentalTCPTXDirectSafeActiveGSOEnabledForOptions(options) {
-		t.Fatal("experimental_tcp active-GSO accepted unsafe ack after production hard-disable")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
+	if tixTCPTXDirectSafeActiveGSOEnabledForOptions(options) {
+		t.Fatal("tix_tcp active-GSO accepted unsafe ack after production hard-disable")
 	}
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
-		t.Fatal("experimental_tcp active-GSO enabled after production hard-disable")
+		t.Fatal("tix_tcp active-GSO enabled after production hard-disable")
 	}
 	options.PushRouteTCPHeaderKfunc = true
-	if experimentalTCPTXDirectSafeActiveGSOEnabledForOptions(options) {
-		t.Fatal("experimental_tcp active-GSO allowed route TCP kfuncs")
+	if tixTCPTXDirectSafeActiveGSOEnabledForOptions(options) {
+		t.Fatal("tix_tcp active-GSO allowed route TCP kfuncs")
 	}
 }
 
-func TestExperimentalTCPActiveGSORequiresUnsafeAck(t *testing.T) {
+func TestTIXTCPActiveGSORequiresUnsafeAck(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ACTIVE_GSO_UNSAFE", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ACTIVE_GSO_UNSAFE", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "")
 
-	options := kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, ExperimentalTCPOnly: true}
-	if experimentalTCPTXDirectActiveGSOUnsafeEnabled() {
-		t.Fatal("experimental_tcp active GSO unsafe flag should require its ack")
+	options := kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true, TIXTCPOnly: true}
+	if tixTCPTXDirectActiveGSOUnsafeEnabled() {
+		t.Fatal("tix_tcp active GSO unsafe flag should require its ack")
 	}
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
-		t.Fatal("experimental_tcp unsafe active-GSO should stay disabled without unsafe ack")
+		t.Fatal("tix_tcp unsafe active-GSO should stay disabled without unsafe ack")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
-	if experimentalTCPTXDirectActiveGSOUnsafeEnabled() {
-		t.Fatal("experimental_tcp active GSO unsafe flag accepted explicit ack after production hard-disable")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
+	if tixTCPTXDirectActiveGSOUnsafeEnabled() {
+		t.Fatal("tix_tcp active GSO unsafe flag accepted explicit ack after production hard-disable")
 	}
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
-		t.Fatal("experimental_tcp unsafe active-GSO enabled after production hard-disable")
+		t.Fatal("tix_tcp unsafe active-GSO enabled after production hard-disable")
 	}
 }
 
@@ -9296,8 +9296,8 @@ func TestKernelUDPTXDirectRouteCacheDefaultsOnForDirectPaths(t *testing.T) {
 	if !kernelUDPTXDirectRouteCacheEnabled(kernelUDPTXDirectProgramOptions{DirectOnly: true}) {
 		t.Fatal("kernel_udp route cache should default on for direct-only paths")
 	}
-	if !kernelUDPTXDirectRouteCacheEnabled(kernelUDPTXDirectProgramOptions{ExperimentalTCPOnly: true}) {
-		t.Fatal("kernel_udp route cache should default on for experimental_tcp direct paths")
+	if !kernelUDPTXDirectRouteCacheEnabled(kernelUDPTXDirectProgramOptions{TIXTCPOnly: true}) {
+		t.Fatal("kernel_udp route cache should default on for tix_tcp direct paths")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_ROUTE_CACHE", "1")
 	if !kernelUDPTXDirectRouteCacheEnabled() {
@@ -9393,20 +9393,20 @@ func TestKernelUDPTXDirectTunnelGSOHeadersUseSegmentSize(t *testing.T) {
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPTIXTActiveGSOHeadersUseSegmentSize(t *testing.T) {
+func TestKernelUDPTXDirectTIXTCPTIXTActiveGSOHeadersUseSegmentSize(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("experimental_tcp TX direct BPF instruction test requires Linux maps")
+		t.Skip("tix_tcp TX direct BPF instruction test requires Linux maps")
 	}
 	if err := rlimit.RemoveMemlock(); err != nil {
 		t.Skipf("raise memlock limit for BPF map test: %v", err)
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_tixt_active_gso_headers")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_tixt_active_gso_headers")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -9414,9 +9414,9 @@ func TestKernelUDPTXDirectExperimentalTCPTIXTActiveGSOHeadersUseSegmentSize(t *t
 	if err != nil {
 		t.Fatalf("load flow TCP header-finalize kfunc metadata: %v", err)
 	}
-	options := kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, FinalizeFlowTCPHeaderKfunc: true, FinalizeFlowTCPHeaderKfuncCall: kfuncCall}
+	options := kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, FinalizeFlowTCPHeaderKfunc: true, FinalizeFlowTCPHeaderKfuncCall: kfuncCall}
 	if !kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
-		t.Skip("experimental_tcp active GSO is production-hard-disabled")
+		t.Skip("tix_tcp active GSO is production-hard-disabled")
 	}
 	out := appendKernelUDPTXDirect(
 		asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1), asm.LoadMem(asm.R7, asm.R6, skbDataOffset, asm.Word), asm.LoadMem(asm.R8, asm.R6, skbDataEndOffset, asm.Word)},
@@ -9426,30 +9426,30 @@ func TestKernelUDPTXDirectExperimentalTCPTIXTActiveGSOHeadersUseSegmentSize(t *t
 		options,
 	)
 	if got := instructionsCountLoadMem(out, asm.RFP, kernelUDPTXGSOSegmentLenOffset, asm.Word); got < 4 {
-		t.Fatalf("experimental_tcp TIXT active GSO path reloads segment length %d times, want IP/TCP/TIXT/checksum header loads", got)
+		t.Fatalf("tix_tcp TIXT active GSO path reloads segment length %d times, want IP/TCP/TIXT/checksum header loads", got)
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_build_tixt") {
-		t.Fatal("experimental_tcp TIXT active GSO path lost the TIXT build label")
+		t.Fatal("tix_tcp TIXT active GSO path lost the TIXT build label")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_gso_success_counter_skip") {
-		t.Fatal("experimental_tcp TIXT active GSO path does not preserve GSO success accounting")
+		t.Fatal("tix_tcp TIXT active GSO path does not preserve GSO success accounting")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPActiveGSOSkipsMTUCheckBeforeFlowLoad(t *testing.T) {
+func TestKernelUDPTXDirectTIXTCPActiveGSOSkipsMTUCheckBeforeFlowLoad(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("experimental_tcp TX direct BPF instruction test requires Linux maps")
+		t.Skip("tix_tcp TX direct BPF instruction test requires Linux maps")
 	}
 	if err := rlimit.RemoveMemlock(); err != nil {
 		t.Skipf("raise memlock limit for BPF map test: %v", err)
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_active_gso_mtu_skip")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_UNSAFE_ACTIVE_GSO", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_active_gso_mtu_skip")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -9462,10 +9462,10 @@ func TestKernelUDPTXDirectExperimentalTCPActiveGSOSkipsMTUCheckBeforeFlowLoad(t 
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, FinalizeFlowTCPHeaderKfunc: true, FinalizeFlowTCPHeaderKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, FinalizeFlowTCPHeaderKfunc: true, FinalizeFlowTCPHeaderKfuncCall: kfuncCall},
 	)
 	if !instructionsJumpBeforeLoadMem(out, "kudp_tx_direct_len_ok", "kudp_tx_direct_mtu_ok", asm.R0, 40, asm.Word) {
-		t.Fatal("experimental_tcp active-GSO path does not skip MTU flow load before the MTU check")
+		t.Fatal("tix_tcp active-GSO path does not skip MTU flow load before the MTU check")
 	}
 }
 
@@ -9519,8 +9519,8 @@ func TestKernelUDPTXDirectSafeModeDisablesImplicitGSOButAllowsExplicitRouteTCPKf
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "1")
 
 	options := kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true}
 	if kernelUDPTunnelGSOEnabledForOptions(options) {
@@ -9529,16 +9529,16 @@ func TestKernelUDPTXDirectSafeModeDisablesImplicitGSOButAllowsExplicitRouteTCPKf
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
 		t.Fatal("safe direct mode should disable implicit active-GSO")
 	}
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("safe direct mode should allow explicit experimental_tcp route TCP GSO kfunc")
+	if !tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("safe direct mode should allow explicit tix_tcp route TCP GSO kfunc")
 	}
-	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("safe direct mode should allow explicit experimental_tcp route TCP clone-worker xmit kfunc")
+	if !tixTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("safe direct mode should allow explicit tix_tcp route TCP clone-worker xmit kfunc")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "1")
-	if experimentalTCPTXDirectRouteTCPGSOAsyncKfuncRequested() {
-		t.Fatal("safe direct mode should block experimental_tcp route TCP async GSO kfunc")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "1")
+	if tixTCPTXDirectRouteTCPGSOAsyncKfuncRequested() {
+		t.Fatal("safe direct mode should block tix_tcp route TCP async GSO kfunc")
 	}
 }
 
@@ -9874,327 +9874,327 @@ func TestKernelUDPTXDirectInnerTCPChecksumKfuncIsOptIn(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPTXDirectOuterTCPChecksumKfuncIsOptIn(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_CHECKSUM_KFUNC", "")
-	if experimentalTCPTXDirectOuterTCPChecksumKfuncRequested() {
-		t.Fatal("experimental_tcp outer TCP checksum kfunc should be opt-in")
+func TestTIXTCPTXDirectOuterTCPChecksumKfuncIsOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_CHECKSUM_KFUNC", "")
+	if tixTCPTXDirectOuterTCPChecksumKfuncRequested() {
+		t.Fatal("tix_tcp outer TCP checksum kfunc should be opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_CHECKSUM_KFUNC", "1")
-	if !experimentalTCPTXDirectOuterTCPChecksumKfuncRequested() {
-		t.Fatal("experimental_tcp outer TCP checksum kfunc was not requested after opt-in")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_CHECKSUM_KFUNC", "1")
+	if !tixTCPTXDirectOuterTCPChecksumKfuncRequested() {
+		t.Fatal("tix_tcp outer TCP checksum kfunc was not requested after opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_CHECKSUM_KFUNC", "0")
-	if experimentalTCPTXDirectOuterTCPChecksumKfuncRequested() {
-		t.Fatal("experimental_tcp outer TCP checksum kfunc ignored explicit disable")
-	}
-}
-
-func TestExperimentalTCPTXDirectOuterTCPHeaderKfuncIsOptIn(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC", "")
-	if experimentalTCPTXDirectOuterTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp outer TCP header kfunc should be opt-in")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC", "1")
-	if !experimentalTCPTXDirectOuterTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp outer TCP header kfunc was not requested after opt-in")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC", "0")
-	if experimentalTCPTXDirectOuterTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp outer TCP header kfunc ignored explicit disable")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_CHECKSUM_KFUNC", "0")
+	if tixTCPTXDirectOuterTCPChecksumKfuncRequested() {
+		t.Fatal("tix_tcp outer TCP checksum kfunc ignored explicit disable")
 	}
 }
 
-func TestExperimentalTCPTXDirectPushTCPHeaderKfuncIsOptIn(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_TCP_HEADER_KFUNC", "")
-	if experimentalTCPTXDirectPushTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp TCP header-push kfunc should be opt-in")
+func TestTIXTCPTXDirectOuterTCPHeaderKfuncIsOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC", "")
+	if tixTCPTXDirectOuterTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp outer TCP header kfunc should be opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_TCP_HEADER_KFUNC", "1")
-	if !experimentalTCPTXDirectPushTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp TCP header-push kfunc was not requested after opt-in")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC", "1")
+	if !tixTCPTXDirectOuterTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp outer TCP header kfunc was not requested after opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_TCP_HEADER_KFUNC", "0")
-	if experimentalTCPTXDirectPushTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp TCP header-push kfunc ignored explicit disable")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_TCP_HEADER_KFUNC_REQUIRED", "1")
-	if !experimentalTCPTXDirectPushTCPHeaderKfuncRequired() {
-		t.Fatal("experimental_tcp TCP header-push kfunc required flag was not detected")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC", "0")
+	if tixTCPTXDirectOuterTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp outer TCP header kfunc ignored explicit disable")
 	}
 }
 
-func TestExperimentalTCPTXDirectPushFlowTCPHeaderKfuncIsOptIn(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_FLOW_TCP_HEADER_KFUNC", "")
-	if experimentalTCPTXDirectPushFlowTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp flow TCP header-push kfunc should be opt-in")
+func TestTIXTCPTXDirectPushTCPHeaderKfuncIsOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_TCP_HEADER_KFUNC", "")
+	if tixTCPTXDirectPushTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp TCP header-push kfunc should be opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_FLOW_TCP_HEADER_KFUNC", "1")
-	if !experimentalTCPTXDirectPushFlowTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp flow TCP header-push kfunc was not requested after opt-in")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_TCP_HEADER_KFUNC", "1")
+	if !tixTCPTXDirectPushTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp TCP header-push kfunc was not requested after opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_FLOW_TCP_HEADER_KFUNC", "0")
-	if experimentalTCPTXDirectPushFlowTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp flow TCP header-push kfunc ignored explicit disable")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_TCP_HEADER_KFUNC", "0")
+	if tixTCPTXDirectPushTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp TCP header-push kfunc ignored explicit disable")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_FLOW_TCP_HEADER_KFUNC_REQUIRED", "1")
-	if !experimentalTCPTXDirectPushFlowTCPHeaderKfuncRequired() {
-		t.Fatal("experimental_tcp flow TCP header-push kfunc required flag was not detected")
-	}
-}
-
-func TestExperimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncIsOptIn(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC", "")
-	if experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp flow TCP header-finalize kfunc should be opt-in")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC", "1")
-	if !experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp flow TCP header-finalize kfunc was not requested after opt-in")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC", "0")
-	if experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp flow TCP header-finalize kfunc ignored explicit disable")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC_REQUIRED", "1")
-	if !experimentalTCPTXDirectFinalizeFlowTCPHeaderKfuncRequired() {
-		t.Fatal("experimental_tcp flow TCP header-finalize kfunc required flag was not detected")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_TCP_HEADER_KFUNC_REQUIRED", "1")
+	if !tixTCPTXDirectPushTCPHeaderKfuncRequired() {
+		t.Fatal("tix_tcp TCP header-push kfunc required flag was not detected")
 	}
 }
 
-func TestExperimentalTCPTXDirectPushRouteTCPHeaderKfuncIsExplicitOptIn(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
-	if experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP header-push kfunc should stay off without direct mode or explicit opt-in")
+func TestTIXTCPTXDirectPushFlowTCPHeaderKfuncIsOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_FLOW_TCP_HEADER_KFUNC", "")
+	if tixTCPTXDirectPushFlowTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp flow TCP header-push kfunc should be opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	if experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP header-push kfunc should stay off without explicit opt-in")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_FLOW_TCP_HEADER_KFUNC", "1")
+	if !tixTCPTXDirectPushFlowTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp flow TCP header-push kfunc was not requested after opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
-	if !experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP header-push kfunc was not requested after opt-in")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_FLOW_TCP_HEADER_KFUNC", "0")
+	if tixTCPTXDirectPushFlowTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp flow TCP header-push kfunc ignored explicit disable")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "0")
-	if experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP header-push kfunc ignored explicit disable")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC_REQUIRED", "1")
-	if !experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequired() {
-		t.Fatal("experimental_tcp route TCP header-push kfunc required flag was not detected")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_FLOW_TCP_HEADER_KFUNC_REQUIRED", "1")
+	if !tixTCPTXDirectPushFlowTCPHeaderKfuncRequired() {
+		t.Fatal("tix_tcp flow TCP header-push kfunc required flag was not detected")
 	}
 }
 
-func TestExperimentalTCPTXDirectRouteTCPGSOKfuncIsExplicitOptIn(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc should stay off without explicit opt-in")
+func TestTIXTCPTXDirectFinalizeFlowTCPHeaderKfuncIsOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC", "")
+	if tixTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp flow TCP header-finalize kfunc should be opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc should not default on with direct mode")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC", "1")
+	if !tixTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp flow TCP header-finalize kfunc was not requested after opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc should not follow route header-push kfunc by default")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC", "0")
+	if tixTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp flow TCP header-finalize kfunc ignored explicit disable")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc was not requested after safe sync opt-in")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ROUTE_TCP_KFUNCS", "1")
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc should ignore legacy unsafe ack and keep safe sync opt-in")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "1")
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc should stay requested while async stays separately gated")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC", "1")
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc should not depend on async crash-risk ack")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP async GSO opt-in should request the route GSO kfunc")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT", "1")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc accepted unrelated crash-risk opt-in without explicit GSO request")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "0")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc ignored explicit disable")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC_REQUIRED", "1")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequired() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc required flag should require the route GSO kfunc request")
-	}
-
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequired() {
-		t.Fatal("experimental_tcp route TCP GSO kfunc required flag was not detected")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_FINALIZE_FLOW_TCP_HEADER_KFUNC_REQUIRED", "1")
+	if !tixTCPTXDirectFinalizeFlowTCPHeaderKfuncRequired() {
+		t.Fatal("tix_tcp flow TCP header-finalize kfunc required flag was not detected")
 	}
 }
 
-func TestExperimentalTCPTXDirectRouteTCPGSOKfuncCanFollowAttachSpec(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY", "")
+func TestTIXTCPTXDirectPushRouteTCPHeaderKfuncIsExplicitOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	if tixTCPTXDirectPushRouteTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp route TCP header-push kfunc should stay off without direct mode or explicit opt-in")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	if tixTCPTXDirectPushRouteTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp route TCP header-push kfunc should stay off without explicit opt-in")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
+	if !tixTCPTXDirectPushRouteTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp route TCP header-push kfunc was not requested after opt-in")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "0")
+	if tixTCPTXDirectPushRouteTCPHeaderKfuncRequested() {
+		t.Fatal("tix_tcp route TCP header-push kfunc ignored explicit disable")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC_REQUIRED", "1")
+	if !tixTCPTXDirectPushRouteTCPHeaderKfuncRequired() {
+		t.Fatal("tix_tcp route TCP header-push kfunc required flag was not detected")
+	}
+}
+
+func TestTIXTCPTXDirectRouteTCPGSOKfuncIsExplicitOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	if tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP GSO kfunc should stay off without explicit opt-in")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	if tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP GSO kfunc should not default on with direct mode")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
+	if tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP GSO kfunc should not follow route header-push kfunc by default")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	if !tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP GSO kfunc was not requested after safe sync opt-in")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_UNSAFE_ROUTE_TCP_KFUNCS", "1")
+	if !tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP GSO kfunc should ignore legacy unsafe ack and keep safe sync opt-in")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "1")
+	if !tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP GSO kfunc should stay requested while async stays separately gated")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC", "1")
+	if !tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP GSO kfunc should not depend on async crash-risk ack")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	if !tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP async GSO opt-in should request the route GSO kfunc")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT", "1")
+	if tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP GSO kfunc accepted unrelated crash-risk opt-in without explicit GSO request")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "0")
+	if tixTCPTXDirectRouteTCPGSOKfuncRequested() {
+		t.Fatal("tix_tcp route TCP GSO kfunc ignored explicit disable")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC_REQUIRED", "1")
+	if tixTCPTXDirectRouteTCPGSOKfuncRequired() {
+		t.Fatal("tix_tcp route TCP GSO kfunc required flag should require the route GSO kfunc request")
+	}
+
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	if !tixTCPTXDirectRouteTCPGSOKfuncRequired() {
+		t.Fatal("tix_tcp route TCP GSO kfunc required flag was not detected")
+	}
+}
+
+func TestTIXTCPTXDirectRouteTCPGSOKfuncCanFollowAttachSpec(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TX_PLAIN_SKIP_SEQUENCE", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TX_PLAIN_ACK_ONLY", "")
 
 	spec := dataplane.AttachSpec{
-		ExperimentalTCPTXDirect:          true,
-		ExperimentalTCPRouteGSOSync:      true,
-		ExperimentalTCPRouteXmitWorker:   true,
-		ExperimentalTCPPlainSkipSequence: true,
-		ExperimentalTCPPlainACKOnly:      true,
+		TIXTCPTXDirect:          true,
+		TIXTCPRouteGSOSync:      true,
+		TIXTCPRouteXmitWorker:   true,
+		TIXTCPPlainSkipSequence: true,
+		TIXTCPPlainACKOnly:      true,
 	}
-	if !experimentalTCPTXDirectEnabledForSpec(spec) {
-		t.Fatal("attach spec did not enable experimental_tcp TX direct")
+	if !tixTCPTXDirectEnabledForSpec(spec) {
+		t.Fatal("attach spec did not enable tix_tcp TX direct")
 	}
 	if !kernelUDPTXDirectProgramEnabledForSpec(spec) {
 		t.Fatal("attach spec did not enable the TX direct program")
 	}
-	if !kernelUDPTXDirectExperimentalTCPOnlyEnabledForSpec(spec) || kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec) {
-		t.Fatal("attach spec should request experimental_tcp-only direct program")
+	if !kernelUDPTXDirectTIXTCPOnlyEnabledForSpec(spec) || kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec) {
+		t.Fatal("attach spec should request tix_tcp-only direct program")
 	}
-	if !experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec) {
+	if !tixTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec) {
 		t.Fatal("route-GSO sync spec did not request route TCP header kfunc")
 	}
-	if !experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) {
+	if !tixTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) {
 		t.Fatal("route-GSO sync spec did not request route TCP GSO kfunc")
 	}
-	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec) {
+	if !tixTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec) {
 		t.Fatal("route-GSO sync spec did not request route TCP clone-worker xmit kfunc")
 	}
-	if !experimentalTCPTXPlainSkipSequenceEnabledForSpec(spec) || !experimentalTCPTXPlainACKOnlyEnabledForSpec(spec) {
+	if !tixTCPTXPlainSkipSequenceEnabledForSpec(spec) || !tixTCPTXPlainACKOnlyEnabledForSpec(spec) {
 		t.Fatal("route-GSO sync spec did not enable plaintext fast flags")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "0")
-	if experimentalTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "0")
+	if tixTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) {
 		t.Fatal("explicit route TCP GSO kfunc disable should override attach spec")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "0")
-	if experimentalTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "0")
+	if tixTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec) {
 		t.Fatal("explicit route TCP header kfunc disable should override attach spec")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
-	if experimentalTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
+	if tixTCPTXDirectRouteTCPXmitKfuncRequestedForSpec(spec) {
 		t.Fatal("explicit route TCP clone-worker xmit kfunc disable should override attach spec")
 	}
 }
 
-func TestExperimentalTCPTXDirectRouteTCPXmitKfuncIsExplicitOptIn(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "")
-	if experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP xmit kfunc should stay off without explicit opt-in")
+func TestTIXTCPTXDirectRouteTCPXmitKfuncIsExplicitOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "")
+	if tixTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("tix_tcp route TCP xmit kfunc should stay off without explicit opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	if experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP xmit kfunc should not default on with direct mode")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	if tixTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("tix_tcp route TCP xmit kfunc should not default on with direct mode")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
-	if experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP xmit kfunc should not follow route GSO kfunc by default")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	if tixTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("tix_tcp route TCP xmit kfunc should not follow route GSO kfunc by default")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
-	if experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP xmit kfunc ignored explicit disable")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
+	if tixTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("tix_tcp route TCP xmit kfunc ignored explicit disable")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "1")
-	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP clone-worker xmit kfunc was not requested after explicit opt-in")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "1")
+	if !tixTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("tix_tcp route TCP clone-worker xmit kfunc was not requested after explicit opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_UNSAFE_ROUTE_TCP_KFUNCS", "1")
-	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP clone-worker xmit kfunc should ignore legacy unsafe ack and keep explicit opt-in")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_UNSAFE_ROUTE_TCP_KFUNCS", "1")
+	if !tixTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("tix_tcp route TCP clone-worker xmit kfunc should ignore legacy unsafe ack and keep explicit opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT", "1")
-	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequested() {
-		t.Fatal("experimental_tcp route TCP clone-worker xmit kfunc should ignore crash-risk ack and keep explicit opt-in")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT", "1")
+	if !tixTCPTXDirectRouteTCPXmitKfuncRequested() {
+		t.Fatal("tix_tcp route TCP clone-worker xmit kfunc should ignore crash-risk ack and keep explicit opt-in")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC_REQUIRED", "1")
-	if !experimentalTCPTXDirectRouteTCPXmitKfuncRequired() {
-		t.Fatal("experimental_tcp route TCP clone-worker xmit kfunc required flag was not detected")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC_REQUIRED", "1")
+	if !tixTCPTXDirectRouteTCPXmitKfuncRequired() {
+		t.Fatal("tix_tcp route TCP clone-worker xmit kfunc required flag was not detected")
 	}
 }
 
-func TestExperimentalTCPTXDirectPreOuterInnerChecksumDefaultsOffForRouteTCPKfuncs(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "")
-	if experimentalTCPTXDirectPreOuterInnerChecksumEnabled() {
+func TestTIXTCPTXDirectPreOuterInnerChecksumDefaultsOffForRouteTCPKfuncs(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "")
+	if tixTCPTXDirectPreOuterInnerChecksumEnabled() {
 		t.Fatal("route TCP GSO/XMIT kfuncs should disable pre-outer inner checksum by default")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "1")
-	if !experimentalTCPTXDirectPreOuterInnerChecksumEnabled() {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "1")
+	if !tixTCPTXDirectPreOuterInnerChecksumEnabled() {
 		t.Fatal("explicit pre-outer inner checksum enable should be honored")
 	}
 }
 
-func TestExperimentalTCPTXDirectPreOuterInnerChecksumDefaultsOffForRouteTCPGSOOptions(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "")
+func TestTIXTCPTXDirectPreOuterInnerChecksumDefaultsOffForRouteTCPGSOOptions(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "")
 	options := kernelUDPTXDirectProgramOptions{
-		ExperimentalTCPOnly:     true,
+		TIXTCPOnly:              true,
 		DirectOnly:              true,
 		PushRouteTCPHeaderKfunc: true,
 		RouteTCPGSOKfunc:        true,
 	}
-	if experimentalTCPTXDirectPreOuterInnerChecksumEnabledForOptions(options) {
+	if tixTCPTXDirectPreOuterInnerChecksumEnabledForOptions(options) {
 		t.Fatal("route TCP GSO options should disable pre-outer inner checksum by default")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "1")
-	if !experimentalTCPTXDirectPreOuterInnerChecksumEnabledForOptions(options) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "1")
+	if !tixTCPTXDirectPreOuterInnerChecksumEnabledForOptions(options) {
 		t.Fatal("explicit pre-outer inner checksum enable should override route TCP GSO options")
 	}
 }
@@ -10609,20 +10609,20 @@ func TestKernelUDPRXDirectParseDecapL2KfuncRequiresStaticPortForKernelUDP(t *tes
 	}
 }
 
-func TestKernelUDPRXDirectParseDecapL2KfuncAllowsExperimentalTCPDynamicPort(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_PARSE", "1")
+func TestKernelUDPRXDirectParseDecapL2KfuncAllowsTIXTCPDynamicPort(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_RX_STREAM_PARSE", "1")
 	t.Setenv("TRUSTIX_TIXT_RX_STREAM_PARSE", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT_PARSE_DECAP_L2_KFUNC", "")
 	manager := NewManager()
 	loaderCalled := false
 	options := kernelUDPRXDirectProgramOptions{
-		ExperimentalTCPOnly: true,
+		TIXTCPOnly:          true,
 		DirectOnly:          true,
 		DestinationPortOnly: true,
 	}
 
 	if !kernelUDPRXDirectParseDecapL2KfuncEnabledForOptions(options) {
-		t.Fatal("experimental_tcp stream parser should enable parse+decap L2 kfunc without a static destination port")
+		t.Fatal("tix_tcp stream parser should enable parse+decap L2 kfunc without a static destination port")
 	}
 	manager.enableKernelUDPRXDirectParseDecapL2Kfunc(&options, func() (asm.Instruction, error) {
 		loaderCalled = true
@@ -10630,7 +10630,7 @@ func TestKernelUDPRXDirectParseDecapL2KfuncAllowsExperimentalTCPDynamicPort(t *t
 	})
 
 	if !loaderCalled {
-		t.Fatal("experimental_tcp parse+decap loader was not called for dynamic-port options")
+		t.Fatal("tix_tcp parse+decap loader was not called for dynamic-port options")
 	}
 	if options.ParseDecapL2Kfunc || options.ParseDecapL2KfuncCall.IsKfuncCall() {
 		t.Fatalf("parse+decap kfunc options stayed enabled after loader failure: %+v", options)
@@ -10655,7 +10655,7 @@ func TestKernelUDPRXDirectParseDecapL2KfuncFailureFallsBack(t *testing.T) {
 
 func TestKernelUDPRXDirectParseDecapL2KfuncIsOptIn(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT_PARSE_DECAP_L2_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_PARSE", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_RX_STREAM_PARSE", "")
 	t.Setenv("TRUSTIX_TIXT_RX_STREAM_PARSE", "")
 
 	options := kernelUDPRXDirectProgramOptions{
@@ -10682,36 +10682,36 @@ func TestKernelUDPRXDirectParseDecapL2KfuncIsOptIn(t *testing.T) {
 	}
 
 	if !kernelUDPRXDirectParseDecapL2KfuncEnabledForOptions(kernelUDPRXDirectProgramOptions{
-		ExperimentalTCPOnly: true,
+		TIXTCPOnly:          true,
 		DirectOnly:          true,
 		DestinationPortOnly: true,
 	}) {
-		t.Fatal("experimental_tcp direct-only parse+decap L2 kfunc should default on for dynamic destination ports")
+		t.Fatal("tix_tcp direct-only parse+decap L2 kfunc should default on for dynamic destination ports")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_PARSE", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_RX_STREAM_PARSE", "0")
 	if kernelUDPRXDirectParseDecapL2KfuncEnabledForOptions(kernelUDPRXDirectProgramOptions{
-		ExperimentalTCPOnly: true,
+		TIXTCPOnly:          true,
 		DirectOnly:          true,
 		DestinationPortOnly: true,
 	}) {
-		t.Fatal("experimental_tcp parse+decap L2 kfunc should honor explicit stream parser disable")
+		t.Fatal("tix_tcp parse+decap L2 kfunc should honor explicit stream parser disable")
 	}
 }
 
-func TestKernelUDPRXDirectParseDecapL2RequiresLocalDeliverDevForExperimentalTCPStream(t *testing.T) {
+func TestKernelUDPRXDirectParseDecapL2RequiresLocalDeliverDevForTIXTCPStream(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT_PARSE_DECAP_L2_KFUNC", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_PARSE", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_RX_STREAM_PARSE", "")
 	t.Setenv("TRUSTIX_TIXT_RX_STREAM_PARSE", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_LOCAL_DELIVER_DEV", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_RX_STREAM_LOCAL_DELIVER_DEV", "")
 	t.Setenv("TRUSTIX_TIXT_RX_STREAM_LOCAL_DELIVER_DEV", "")
 
 	if !kernelUDPRXDirectParseDecapL2LocalDeliverDevRequiredForOptions(kernelUDPRXDirectProgramOptions{
-		ExperimentalTCPOnly: true,
+		TIXTCPOnly:          true,
 		DirectOnly:          true,
 		DestinationPortOnly: true,
 	}) {
-		t.Fatal("experimental_tcp stream parse should require local-deliver-dev by default")
+		t.Fatal("tix_tcp stream parse should require local-deliver-dev by default")
 	}
 
 	if kernelUDPRXDirectParseDecapL2LocalDeliverDevRequiredForOptions(kernelUDPRXDirectProgramOptions{
@@ -10719,16 +10719,16 @@ func TestKernelUDPRXDirectParseDecapL2RequiresLocalDeliverDevForExperimentalTCPS
 		DirectOnly:          true,
 		DestinationPortOnly: true,
 	}) {
-		t.Fatal("kernel_udp direct-only parse should not require experimental_tcp stream local-deliver-dev")
+		t.Fatal("kernel_udp direct-only parse should not require tix_tcp stream local-deliver-dev")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_RX_STREAM_LOCAL_DELIVER_DEV", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_RX_STREAM_LOCAL_DELIVER_DEV", "0")
 	if kernelUDPRXDirectParseDecapL2LocalDeliverDevRequiredForOptions(kernelUDPRXDirectProgramOptions{
-		ExperimentalTCPOnly: true,
+		TIXTCPOnly:          true,
 		DirectOnly:          true,
 		DestinationPortOnly: true,
 	}) {
-		t.Fatal("experimental_tcp stream local-deliver-dev should honor explicit disable")
+		t.Fatal("tix_tcp stream local-deliver-dev should honor explicit disable")
 	}
 }
 
@@ -10761,7 +10761,7 @@ func TestKernelUDPRXDirectParseDecapL2PrefilterDefaultsOn(t *testing.T) {
 	}
 }
 
-func TestKernelUDPRXDirectParseDecapL2PrefilterSkipsExperimentalTCPStaticPort(t *testing.T) {
+func TestKernelUDPRXDirectParseDecapL2PrefilterSkipsTIXTCPStaticPort(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT_PARSE_DECAP_L2_PREFILTER", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_PARSE_DECAP_L2_PREFILTER", "")
 
@@ -10769,7 +10769,7 @@ func TestKernelUDPRXDirectParseDecapL2PrefilterSkipsExperimentalTCPStaticPort(t 
 		nil,
 		nil,
 		kernelUDPRXDirectProgramOptions{
-			ExperimentalTCPOnly:   true,
+			TIXTCPOnly:            true,
 			DirectOnly:            true,
 			DestinationPortOnly:   true,
 			StaticDestinationPort: 18001,
@@ -10783,10 +10783,10 @@ func TestKernelUDPRXDirectParseDecapL2PrefilterSkipsExperimentalTCPStaticPort(t 
 		t.Fatal("parse+decap L2 kfunc path is missing")
 	}
 	if instructionsContainLoadMem(out, asm.R7, 36, asm.Half) {
-		t.Fatal("experimental_tcp parse+decap L2 path still uses static destination-port prefilter")
+		t.Fatal("tix_tcp parse+decap L2 path still uses static destination-port prefilter")
 	}
 	if instructionsContainLoadMem(out, asm.R7, 54, asm.Word) {
-		t.Fatal("experimental_tcp parse+decap L2 path still uses static magic prefilter")
+		t.Fatal("tix_tcp parse+decap L2 path still uses static magic prefilter")
 	}
 }
 
@@ -10814,7 +10814,7 @@ func TestKernelUDPRXDirectParseDecapL2KfuncStaticPortArgument(t *testing.T) {
 		nil,
 		nil,
 		kernelUDPRXDirectProgramOptions{
-			ExperimentalTCPOnly:   true,
+			TIXTCPOnly:            true,
 			DirectOnly:            true,
 			DestinationPortOnly:   true,
 			StaticDestinationPort: 18001,
@@ -10824,10 +10824,10 @@ func TestKernelUDPRXDirectParseDecapL2KfuncStaticPortArgument(t *testing.T) {
 		0x0002, 0, 0, 0x0002, 0, 0,
 	)
 	if !instructionsContainStoreImm(exp, asm.RFP, kernelUDPRXDirectKfuncParseArgsStaticPortOffset, asm.Word, 0) {
-		t.Fatal("experimental_tcp parse+decap L2 kfunc should allow dynamic derived destination ports")
+		t.Fatal("tix_tcp parse+decap L2 kfunc should allow dynamic derived destination ports")
 	}
 	if instructionsContainStoreImm(exp, asm.RFP, kernelUDPRXDirectKfuncParseArgsStaticPortOffset, asm.Word, 18001) {
-		t.Fatal("experimental_tcp parse+decap L2 kfunc still receives the static listen port")
+		t.Fatal("tix_tcp parse+decap L2 kfunc still receives the static listen port")
 	}
 }
 
@@ -10839,7 +10839,7 @@ func TestKernelUDPRXDirectParseDecapL2PrefilterCanBeDisabled(t *testing.T) {
 		nil,
 		nil,
 		kernelUDPRXDirectProgramOptions{
-			ExperimentalTCPOnly:   true,
+			TIXTCPOnly:            true,
 			DirectOnly:            true,
 			DestinationPortOnly:   true,
 			StaticDestinationPort: 18001,
@@ -10856,7 +10856,7 @@ func TestKernelUDPRXDirectParseDecapL2PrefilterCanBeDisabled(t *testing.T) {
 		t.Fatal("disabled parse+decap L2 prefilter still loads static destination port")
 	}
 	if instructionsContainLoadMem(out, asm.R7, 54, asm.Word) {
-		t.Fatal("disabled parse+decap L2 prefilter still loads experimental_tcp magic")
+		t.Fatal("disabled parse+decap L2 prefilter still loads tix_tcp magic")
 	}
 }
 
@@ -10867,7 +10867,7 @@ func TestKernelUDPRXDirectParseDecapL2LocalDeliveredFastReturn(t *testing.T) {
 		nil,
 		nil,
 		kernelUDPRXDirectProgramOptions{
-			ExperimentalTCPOnly:   true,
+			TIXTCPOnly:            true,
 			DirectOnly:            true,
 			DestinationPortOnly:   true,
 			StaticDestinationPort: 18001,
@@ -10893,38 +10893,38 @@ func TestKernelUDPRXDirectParseDecapL2LocalDeliveredFastReturn(t *testing.T) {
 
 func TestKernelUDPTXDirectProgramEnabledForExperimentalOnlyDirectOnly(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_REMOTE_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_TIX_TCP_TC_TX_DIRECT", "")
 	if !kernelUDPTXDirectProgramEnabled() {
-		t.Fatal("kernel_udp TX direct program ignored experimental_tcp direct-only mode")
+		t.Fatal("kernel_udp TX direct program ignored tix_tcp direct-only mode")
 	}
 
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "1")
 	if !kernelUDPTXDirectProgramEnabled() {
-		t.Fatal("kernel_udp TX direct program ignored experimental_tcp-only route mode")
+		t.Fatal("kernel_udp TX direct program ignored tix_tcp-only route mode")
 	}
 }
 
 func TestKernelUDPTXDirectKernelUDPOnlyEnv(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_REMOTE_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_TIX_TCP_TC_TX_DIRECT", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ONLY_PROVIDER", "")
 	if !kernelUDPTXDirectKernelUDPOnlyEnabled() {
-		t.Fatal("kernel_udp-only specialization should be automatic when experimental_tcp direct is disabled")
+		t.Fatal("kernel_udp-only specialization should be automatic when tix_tcp direct is disabled")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	if kernelUDPTXDirectKernelUDPOnlyEnabled() {
-		t.Fatal("kernel_udp-only specialization stayed automatic when experimental_tcp direct is enabled")
+		t.Fatal("kernel_udp-only specialization stayed automatic when tix_tcp direct is enabled")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "1")
 	if !kernelUDPTXDirectKernelUDPOnlyEnabled() {
@@ -10935,9 +10935,9 @@ func TestKernelUDPTXDirectKernelUDPOnlyEnv(t *testing.T) {
 		t.Fatal("kernel_udp-only specialization ignored explicit opt-out")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "1")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "1")
 	if kernelUDPTXDirectKernelUDPOnlyEnabled() {
-		t.Fatal("kernel_udp-only specialization stayed enabled in experimental_tcp-only mode")
+		t.Fatal("kernel_udp-only specialization stayed enabled in tix_tcp-only mode")
 	}
 }
 
@@ -10946,14 +10946,14 @@ func TestKernelUDPTXDirectKernelUDPOnlyDisabledForTCOnlyProvider(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ONLY_PROVIDER", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_ONLY", "")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_REMOTE_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_TIX_TCP_TC_TX_DIRECT", "")
 	if kernelUDPTXDirectKernelUDPOnlyEnabled() {
-		t.Fatal("TC-only provider defaulted to kernel_udp-only and omitted experimental_tcp TX direct")
+		t.Fatal("TC-only provider defaulted to kernel_udp-only and omitted tix_tcp TX direct")
 	}
 }
 
@@ -11054,22 +11054,22 @@ func TestKernelUDPTCOnlyProviderAllowsSecureKernelDirectSnapshot(t *testing.T) {
 	}
 }
 
-func TestKernelUDPTCOnlyProviderAllowsExperimentalTCPRouteGSOSnapshot(t *testing.T) {
+func TestKernelUDPTCOnlyProviderAllowsTIXTCPRouteGSOSnapshot(t *testing.T) {
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{
 		LANIface:                             "lan0",
 		UnderlayIface:                        "eth0",
 		KernelUDPTXDirectOnly:                true,
 		KernelUDPTCOnlyProvider:              true,
-		ExperimentalTCPTXDirect:              true,
-		ExperimentalTCPRouteGSOSync:          true,
-		ExperimentalTCPRouteGSOAsync:         true,
+		TIXTCPTXDirect:                       true,
+		TIXTCPRouteGSOSync:                   true,
+		TIXTCPRouteGSOAsync:                  true,
 		KernelDatapathSuppressLegacyRXWorker: true,
 	}
 	manager.statsMap = &cebpf.Map{}
 	manager.kernelUDPTXRouteMap = &cebpf.Map{}
 	manager.kernelUDPTXFlowMap = &cebpf.Map{}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		9: {
 			ID:              9,
 			Peer:            "ix-b",
@@ -11082,19 +11082,19 @@ func TestKernelUDPTCOnlyProviderAllowsExperimentalTCPRouteGSOSnapshot(t *testing
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
 		Endpoints: []dataplane.EndpointMetadata{
-			{ID: "local", Peer: "ix-a", Transport: "experimental_tcp", Listen: "198.18.0.1:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
-			{ID: "remote", Peer: "ix-b", Transport: "experimental_tcp", Address: "198.18.0.2:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+			{ID: "local", Peer: "ix-a", Transport: "tix_tcp", Listen: "198.18.0.1:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
+			{ID: "remote", Peer: "ix-b", Transport: "tix_tcp", Address: "198.18.0.2:9443", Enabled: true, Security: dataplane.EndpointSecurityMetadata{Encryption: "plaintext"}},
 		},
 		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
 	}
 
 	if !manager.snapshotCanUseKernelUDPTCOnlyLocked() {
-		t.Fatal("experimental_tcp route-GSO TC-only provider rejected plaintext route-GSO snapshot")
+		t.Fatal("tix_tcp route-GSO TC-only provider rejected plaintext route-GSO snapshot")
 	}
-	manager.spec.ExperimentalTCPRouteGSOSync = false
-	manager.spec.ExperimentalTCPRouteGSOAsync = false
+	manager.spec.TIXTCPRouteGSOSync = false
+	manager.spec.TIXTCPRouteGSOAsync = false
 	if manager.snapshotCanUseKernelUDPTCOnlyLocked() {
-		t.Fatal("experimental_tcp snapshot used TC-only provider without route-GSO")
+		t.Fatal("tix_tcp snapshot used TC-only provider without route-GSO")
 	}
 }
 
@@ -11209,8 +11209,8 @@ func TestKernelUDPTCOnlyAvailableRequiresSecureDirectPrograms(t *testing.T) {
 func TestKernelUDPTCOnlyPendingAllowsInitialPlaintextFlowInstall(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "0")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "0")
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{
 		LANIface:              "lan0",
@@ -11261,7 +11261,7 @@ func TestKernelUDPTCOnlyPendingAllowsInitialPlaintextFlowInstall(t *testing.T) {
 
 func TestSnapshotReconcileDropsStaleKernelTransportFlows(t *testing.T) {
 	manager := NewManager()
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		1: {
 			ID:              1,
 			Peer:            "ix-b",
@@ -11270,10 +11270,10 @@ func TestSnapshotReconcileDropsStaleKernelTransportFlows(t *testing.T) {
 			CryptoPlacement: dataplane.CryptoPlacementUserspace,
 		},
 	}
-	manager.expTCPOuterTXSequences = map[uint64]uint32{1: 11}
-	manager.expTCPOuterTXAcknowledgments = map[uint64]uint32{1: 7}
-	manager.expTCPTXTemplates = map[uint64]experimentalTCPTXTemplate{1: {}}
-	manager.expTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{1: {Protocol: "experimental_tcp", FlowID: 1}}
+	manager.tixTCPOuterTXSequences = map[uint64]uint32{1: 11}
+	manager.tixTCPOuterTXAcknowledgments = map[uint64]uint32{1: 7}
+	manager.tixTCPTXTemplates = map[uint64]tixTCPTXTemplate{1: {}}
+	manager.tixTCPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{1: {Protocol: "tix_tcp", FlowID: 1}}
 	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{
 		2: {
 			ID:              2,
@@ -11305,7 +11305,7 @@ func TestSnapshotReconcileDropsStaleKernelTransportFlows(t *testing.T) {
 		Endpoints: []dataplane.EndpointMetadata{
 			{ID: "local-udp", Peer: "ix-a", Transport: "udp", Listen: "198.18.0.1:17041", Enabled: true},
 			{ID: "udp-b", Peer: "ix-b", Transport: "udp", Address: "198.18.0.2:17041", Enabled: true},
-			{ID: "exp-b", Peer: "ix-b", Transport: "experimental_tcp", Address: "198.18.0.2:17042", Enabled: true},
+			{ID: "exp-b", Peer: "ix-b", Transport: "tix_tcp", Address: "198.18.0.2:17042", Enabled: true},
 			{ID: "old-udp-b", Peer: "ix-b", Transport: "udp", Address: "198.18.0.2:17043", Enabled: true},
 		},
 	}
@@ -11313,8 +11313,8 @@ func TestSnapshotReconcileDropsStaleKernelTransportFlows(t *testing.T) {
 	if !manager.reconcileKernelTransportFlowsForSnapshotLocked(snapshot) {
 		t.Fatal("expected stale kernel transport flow cleanup")
 	}
-	if _, ok := manager.expTCPFlows[1]; ok {
-		t.Fatal("stale experimental_tcp flow survived route endpoint switch")
+	if _, ok := manager.tixTCPFlows[1]; ok {
+		t.Fatal("stale tix_tcp flow survived route endpoint switch")
 	}
 	if _, ok := manager.kernelUDPFlows[3]; ok {
 		t.Fatal("stale kernel_udp flow for unselected endpoint survived")
@@ -11322,8 +11322,8 @@ func TestSnapshotReconcileDropsStaleKernelTransportFlows(t *testing.T) {
 	if _, ok := manager.kernelUDPFlows[2]; !ok {
 		t.Fatal("selected kernel_udp flow was removed")
 	}
-	if len(manager.expTCPOuterTXSequences) != 0 || len(manager.expTCPOuterTXAcknowledgments) != 0 || len(manager.expTCPTXTemplates) != 0 || len(manager.expTCPTelemetry) != 0 {
-		t.Fatal("stale experimental_tcp auxiliary state was not cleaned")
+	if len(manager.tixTCPOuterTXSequences) != 0 || len(manager.tixTCPOuterTXAcknowledgments) != 0 || len(manager.tixTCPTXTemplates) != 0 || len(manager.tixTCPTelemetry) != 0 {
+		t.Fatal("stale tix_tcp auxiliary state was not cleaned")
 	}
 	if _, ok := manager.kernelUDPTXDirectSequences[3]; ok {
 		t.Fatal("stale kernel_udp TX direct sequence was not cleaned")
@@ -11431,11 +11431,11 @@ func TestSyncKernelUDPTXDirectSkipsMapsWhenProgramDisabled(t *testing.T) {
 		t.Skip("kernel_udp TX route map test requires Linux")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_REMOTE_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_TIX_TCP_TC_TX_DIRECT", "")
 	routeMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_tx_disabled_route_test", Type: cebpf.LPMTrie, KeySize: 8, ValueSize: kernelUDPTXRouteValueSize, MaxEntries: 16, Flags: 1})
 	defer routeMap.Close()
 	flowMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_tx_disabled_flow_test", Type: cebpf.Hash, KeySize: 8, ValueSize: kernelUDPTXFlowValueSize, MaxEntries: 16})
@@ -11447,7 +11447,7 @@ func TestSyncKernelUDPTXDirectSkipsMapsWhenProgramDisabled(t *testing.T) {
 	manager.snapshot = dataplane.Snapshot{
 		Routes: []routing.Route{{Prefix: "10.44.0.0/16", NextHop: "ix-b", Endpoint: "ix-b-tixt"}},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		21: {ID: 21, Peer: "ix-b", Endpoint: "ix-b-tixt", LocalAddress: "192.0.2.1:42021", RemoteAddress: "198.51.100.21:18001", CryptoPlacement: dataplane.CryptoPlacementUserspace},
 	}
 
@@ -12261,21 +12261,21 @@ func instructionsStoreImmNearSymbol(instructions asm.Instructions, symbol string
 	return false
 }
 
-func TestExperimentalTCPTXDirectPlaintextFlowsDoNotRequireSkipChecksum(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+func TestTIXTCPTXDirectPlaintextFlowsDoNotRequireSkipChecksum(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        core.EndpointID("ix-b-tixt"),
 			Peer:      core.IXID("ix-b"),
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 		}},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		21: {
 			ID:              21,
 			Peer:            core.IXID("ix-b"),
@@ -12293,29 +12293,29 @@ func TestExperimentalTCPTXDirectPlaintextFlowsDoNotRequireSkipChecksum(t *testin
 
 	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, false, kernelUDPTXRouteMaxFlows)
 	if len(flows) != 1 {
-		t.Fatalf("matched experimental_tcp flows without skip checksum = %d, want 1: %+v", len(flows), flows)
+		t.Fatalf("matched tix_tcp flows without skip checksum = %d, want 1: %+v", len(flows), flows)
 	}
-	if flows[0].id != 21 || !flows[0].experimentalTCP {
-		t.Fatalf("matched flow = %+v, want experimental_tcp flow 21", flows[0])
+	if flows[0].id != 21 || !flows[0].tixTCP {
+		t.Fatalf("matched flow = %+v, want tix_tcp flow 21", flows[0])
 	}
 }
 
-func TestExperimentalTCPTXDirectSecureFlowsDoNotRequireSkipChecksum(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+func TestTIXTCPTXDirectSecureFlowsDoNotRequireSkipChecksum(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.kernelUDPTXSecureDirectAttached = true
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{{
 			ID:        core.EndpointID("ix-b-tixt"),
 			Peer:      core.IXID("ix-b"),
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 			Security:  dataplane.EndpointSecurityMetadata{Encryption: "secure"},
 		}},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		21: {
 			ID:              21,
 			Peer:            core.IXID("ix-b"),
@@ -12333,10 +12333,10 @@ func TestExperimentalTCPTXDirectSecureFlowsDoNotRequireSkipChecksum(t *testing.T
 
 	flows := manager.kernelUDPTXDirectFlowsForRouteLocked(route, false, true, kernelUDPTXRouteMaxFlows)
 	if len(flows) != 1 {
-		t.Fatalf("matched secure experimental_tcp flows without skip checksum = %d, want 1: %+v", len(flows), flows)
+		t.Fatalf("matched secure tix_tcp flows without skip checksum = %d, want 1: %+v", len(flows), flows)
 	}
-	if flows[0].id != 21 || !flows[0].experimentalTCP {
-		t.Fatalf("matched flow = %+v, want secure experimental_tcp flow 21", flows[0])
+	if flows[0].id != 21 || !flows[0].tixTCP {
+		t.Fatalf("matched flow = %+v, want secure tix_tcp flow 21", flows[0])
 	}
 }
 
@@ -12891,11 +12891,11 @@ func TestIngressFastPathProgramLoadsWithKernelUDPOnlyDirectFinalizeUDPHeaderKfun
 	defer program.Close()
 }
 
-func TestIngressFastPathProgramLoadsWithExperimentalTCPDirectOnly(t *testing.T) {
+func TestIngressFastPathProgramLoadsWithTIXTCPDirectOnly(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("ingress fast path verifier test requires Linux")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	if err := rlimit.RemoveMemlock(); err != nil {
 		t.Skipf("raise memlock limit for BPF verifier test: %v", err)
 	}
@@ -12911,18 +12911,18 @@ func TestIngressFastPathProgramLoadsWithExperimentalTCPDirectOnly(t *testing.T) 
 	defer natExcludeMap.Close()
 	defer captureMap.Close()
 
-	program, err := loadIngressFastPathProgram("trustix_ingress_exp_direct_only_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
+	program, err := loadIngressFastPathProgram("trustix_ingress_exp_direct_only_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true})
 	if err != nil {
-		t.Fatalf("load ingress fast path experimental_tcp direct-only program: %v", err)
+		t.Fatalf("load ingress fast path tix_tcp direct-only program: %v", err)
 	}
 	defer program.Close()
 }
 
-func TestIngressFastPathProgramLoadsWithExperimentalTCPDirectOnlyChecksumRequired(t *testing.T) {
+func TestIngressFastPathProgramLoadsWithTIXTCPDirectOnlyChecksumRequired(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("ingress fast path verifier test requires Linux")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "")
 	if err := rlimit.RemoveMemlock(); err != nil {
 		t.Skipf("raise memlock limit for BPF verifier test: %v", err)
 	}
@@ -12938,18 +12938,18 @@ func TestIngressFastPathProgramLoadsWithExperimentalTCPDirectOnlyChecksumRequire
 	defer natExcludeMap.Close()
 	defer captureMap.Close()
 
-	program, err := loadIngressFastPathProgram("trustix_ingress_exp_checksum_required_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
+	program, err := loadIngressFastPathProgram("trustix_ingress_exp_checksum_required_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true})
 	if err != nil {
-		t.Fatalf("load ingress fast path experimental_tcp checksum-required direct-only program: %v", err)
+		t.Fatalf("load ingress fast path tix_tcp checksum-required direct-only program: %v", err)
 	}
 	defer program.Close()
 }
 
-func TestIngressFastPathProgramLoadsWithExperimentalTCPSkipOuterChecksum(t *testing.T) {
+func TestIngressFastPathProgramLoadsWithTIXTCPSkipOuterChecksum(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("ingress fast path verifier test requires Linux")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "1")
 	if err := rlimit.RemoveMemlock(); err != nil {
 		t.Skipf("raise memlock limit for BPF verifier test: %v", err)
 	}
@@ -12965,19 +12965,19 @@ func TestIngressFastPathProgramLoadsWithExperimentalTCPSkipOuterChecksum(t *test
 	defer natExcludeMap.Close()
 	defer captureMap.Close()
 
-	program, err := loadIngressFastPathProgram("trustix_ingress_exp_skip_outer_csum_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
+	program, err := loadIngressFastPathProgram("trustix_ingress_exp_skip_outer_csum_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true})
 	if err != nil {
-		t.Fatalf("load ingress fast path experimental_tcp skip-outer-checksum direct-only program: %v", err)
+		t.Fatalf("load ingress fast path tix_tcp skip-outer-checksum direct-only program: %v", err)
 	}
 	defer program.Close()
 }
 
-func TestIngressFastPathProgramLoadsWithExperimentalTCPTrustedInnerChecksum(t *testing.T) {
+func TestIngressFastPathProgramLoadsWithTIXTCPTrustedInnerChecksum(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("ingress fast path verifier test requires Linux")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "1")
 	if err := rlimit.RemoveMemlock(); err != nil {
 		t.Skipf("raise memlock limit for BPF verifier test: %v", err)
 	}
@@ -12993,19 +12993,19 @@ func TestIngressFastPathProgramLoadsWithExperimentalTCPTrustedInnerChecksum(t *t
 	defer natExcludeMap.Close()
 	defer captureMap.Close()
 
-	program, err := loadIngressFastPathProgram("trustix_ingress_exp_trusted_csum_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
+	program, err := loadIngressFastPathProgram("trustix_ingress_exp_trusted_csum_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true})
 	if err != nil {
-		t.Fatalf("load ingress fast path experimental_tcp trusted-checksum direct-only program: %v", err)
+		t.Fatalf("load ingress fast path tix_tcp trusted-checksum direct-only program: %v", err)
 	}
 	defer program.Close()
 }
 
-func TestIngressFastPathProgramLoadsWithExperimentalTCPRouteGSOAndXmitKfuncs(t *testing.T) {
+func TestIngressFastPathProgramLoadsWithTIXTCPRouteGSOAndXmitKfuncs(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("ingress fast path verifier test requires Linux")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
 	if err := rlimit.RemoveMemlock(); err != nil {
 		t.Skipf("raise memlock limit for BPF verifier test: %v", err)
 	}
@@ -13047,7 +13047,7 @@ func TestIngressFastPathProgramLoadsWithExperimentalTCPRouteGSOAndXmitKfuncs(t *
 		captureMap,
 		kernelUDPTXDirectProgramOptions{
 			Enabled:                     true,
-			ExperimentalTCPOnly:         true,
+			TIXTCPOnly:                  true,
 			DirectOnly:                  true,
 			PushRouteTCPHeaderKfunc:     true,
 			PushRouteTCPHeaderKfuncCall: routeKfuncCall,
@@ -13059,7 +13059,7 @@ func TestIngressFastPathProgramLoadsWithExperimentalTCPRouteGSOAndXmitKfuncs(t *
 	)
 	if err != nil {
 		skipIfKernelKfuncUnavailable(t, err)
-		t.Fatalf("load ingress fast path experimental_tcp route-GSO + xmit kfunc program: %v", err)
+		t.Fatalf("load ingress fast path tix_tcp route-GSO + xmit kfunc program: %v", err)
 	}
 	defer program.Close()
 }
@@ -13085,7 +13085,7 @@ func TestKernelUDPTXDirectOnlyKeepsRouteMissOnNormalTCPath(t *testing.T) {
 }
 
 func TestKernelUDPTXDirectKernelUDPOnlyDropsTIXTInstructionPath(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_INNER_TCP_CHECKSUM", "0")
 	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "kernel_udp_only")
 	defer statsMap.Close()
@@ -13269,17 +13269,17 @@ func TestKernelUDPTXDirectMixedModeNormalizesKernelUDPInnerUDPChecksum(t *testin
 	if !instructionsContainJump(out, "kudp_tx_direct_inner_l4_post_csum_done", "kudp_tx_direct_stores_done") {
 		t.Fatal("mixed TX direct does not rejoin UDP header store after inner checksum normalization")
 	}
-	if !instructionsContainImmJumpTo(out, int64(kernelUDPTXFlowFlagExperimentalTCP), "kudp_tx_direct_after_adjust_tixt") {
-		t.Fatal("mixed TX direct does not keep experimental_tcp bypass around kernel_udp checksum normalization")
+	if !instructionsContainImmJumpTo(out, int64(kernelUDPTXFlowFlagTIXTCP), "kudp_tx_direct_after_adjust_tixt") {
+		t.Fatal("mixed TX direct does not keep tix_tcp bypass around kernel_udp checksum normalization")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_inner_tixt_pre_csum_tcp") {
-		t.Fatal("mixed TX direct does not normalize experimental_tcp inner TCP checksums before TIXT outer checksum")
+		t.Fatal("mixed TX direct does not normalize tix_tcp inner TCP checksums before TIXT outer checksum")
 	}
 }
 
-func TestKernelUDPTXDirectKernelUDPOnlySkipsExperimentalTCPFlows(t *testing.T) {
+func TestKernelUDPTXDirectKernelUDPOnlySkipsTIXTCPFlows(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		Endpoints: []dataplane.EndpointMetadata{
@@ -13293,7 +13293,7 @@ func TestKernelUDPTXDirectKernelUDPOnlySkipsExperimentalTCPFlows(t *testing.T) {
 			{
 				ID:        core.EndpointID("ix-b-tixt"),
 				Peer:      core.IXID("ix-b"),
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Enabled:   true,
 				Security:  dataplane.EndpointSecurityMetadata{Encryption: "plaintext"},
 			},
@@ -13308,7 +13308,7 @@ func TestKernelUDPTXDirectKernelUDPOnlySkipsExperimentalTCPFlows(t *testing.T) {
 			RemoteAddress: "198.51.100.11:17001",
 		},
 	}
-	manager.expTCPFlows = map[uint64]dataplane.ExperimentalTCPFlow{
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{
 		21: {
 			ID:            21,
 			Peer:          core.IXID("ix-b"),
@@ -13326,113 +13326,113 @@ func TestKernelUDPTXDirectKernelUDPOnlySkipsExperimentalTCPFlows(t *testing.T) {
 	if len(flows) != 1 {
 		t.Fatalf("kernel_udp-only route flows = %d, want 1: %+v", len(flows), flows)
 	}
-	if flows[0].id != 11 || flows[0].experimentalTCP {
+	if flows[0].id != 11 || flows[0].tixTCP {
 		t.Fatalf("kernel_udp-only selected flow = %+v, want kernel_udp flow 11", flows[0])
 	}
 }
 
-func TestExperimentalTCPTXDirectChecksumUsesChunkedSKBLoads(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_LINEAR_CHECKSUM", "0")
+func TestTIXTCPTXDirectChecksumUsesChunkedSKBLoads(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_LINEAR_CHECKSUM", "0")
 	if kernelUDPTXTCPChecksumChunkLen != 256 {
-		t.Fatalf("experimental_tcp TX direct checksum chunk length = %d, want 256", kernelUDPTXTCPChecksumChunkLen)
+		t.Fatalf("tix_tcp TX direct checksum chunk length = %d, want 256", kernelUDPTXTCPChecksumChunkLen)
 	}
-	out := appendExperimentalTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
+	out := appendTIXTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got == 0 {
-		t.Fatal("experimental_tcp TX direct checksum path does not use bpf_skb_load_bytes")
+		t.Fatal("tix_tcp TX direct checksum path does not use bpf_skb_load_bytes")
 	}
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbPullData); got != 0 {
-		t.Fatalf("experimental_tcp TX direct checksum path calls bpf_skb_pull_data %d times, want 0", got)
+		t.Fatalf("tix_tcp TX direct checksum path calls bpf_skb_pull_data %d times, want 0", got)
 	}
 	if got := instructionsCountBuiltinCalls(out, asm.FnCsumDiff); got < 4 {
-		t.Fatalf("experimental_tcp TX direct checksum path calls bpf_csum_diff %d times, want pseudo/header/payload chunks", got)
+		t.Fatalf("tix_tcp TX direct checksum path calls bpf_csum_diff %d times, want pseudo/header/payload chunks", got)
 	}
 	if !instructionsContainCallWithImmediateR4(out, asm.FnSkbLoadBytes, kernelUDPTXTCPChecksumChunkLen) {
-		t.Fatalf("experimental_tcp TX direct checksum path does not load %d-byte payload chunks", kernelUDPTXTCPChecksumChunkLen)
+		t.Fatalf("tix_tcp TX direct checksum path does not load %d-byte payload chunks", kernelUDPTXTCPChecksumChunkLen)
 	}
 }
 
-func TestExperimentalTCPTXDirectChecksumTriesPacketDirectBeforeChunkedFallback(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_LINEAR_CHECKSUM", "1")
-	out := appendExperimentalTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
+func TestTIXTCPTXDirectChecksumTriesPacketDirectBeforeChunkedFallback(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_LINEAR_CHECKSUM", "1")
+	out := appendTIXTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
 	if !instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_packet_fallback") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_loadbytes_continue") ||
 		!instructionsContainReference(out, "kudp_tx_direct_tcp_csum_packet_fallback") {
-		t.Fatal("experimental_tcp checksum path does not try packet-direct checksum before the chunked fallback")
+		t.Fatal("tix_tcp checksum path does not try packet-direct checksum before the chunked fallback")
 	}
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got == 0 {
-		t.Fatal("experimental_tcp packet-direct checksum path dropped the chunked skb_load_bytes fallback")
+		t.Fatal("tix_tcp packet-direct checksum path dropped the chunked skb_load_bytes fallback")
 	}
 	if got := instructionsCountBuiltinCalls(out, asm.FnCsumDiff); got < 10 {
-		t.Fatalf("experimental_tcp packet-direct checksum path csum_diff calls = %d, want packet-direct plus chunked fallback", got)
+		t.Fatalf("tix_tcp packet-direct checksum path csum_diff calls = %d, want packet-direct plus chunked fallback", got)
 	}
 }
 
-func TestExperimentalTCPTXDirectTrustedChecksumUsesPacketIPHeader(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "1")
-	out := appendExperimentalTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
+func TestTIXTCPTXDirectTrustedChecksumUsesPacketIPHeader(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "1")
+	out := appendTIXTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
 	if !instructionsContainJump(out, "kudp_tx_direct_tcp_csum_trusted_pseudo", "kudp_tx_direct_tcp_csum_done") {
-		t.Fatal("experimental_tcp trusted-checksum path does not bypass payload checksum scan on success")
+		t.Fatal("tix_tcp trusted-checksum path does not bypass payload checksum scan on success")
 	}
 	if !instructionsContainLoadMem(out, asm.R7, rejectEthernetHeaderLen+12, asm.Half) ||
 		!instructionsContainLoadMem(out, asm.R7, rejectEthernetHeaderLen+14, asm.Half) ||
 		!instructionsContainLoadMem(out, asm.R7, rejectEthernetHeaderLen+16, asm.Half) ||
 		!instructionsContainLoadMem(out, asm.R7, rejectEthernetHeaderLen+18, asm.Half) {
-		t.Fatal("experimental_tcp trusted-checksum path does not read inner IPv4 pseudo-header from packet memory")
+		t.Fatal("tix_tcp trusted-checksum path does not read inner IPv4 pseudo-header from packet memory")
 	}
 	if instructionsContainLoadMem(out, asm.RFP, rejectEthernetHeaderLen+12, asm.Half) {
-		t.Fatal("experimental_tcp trusted-checksum path reads packet pseudo-header offsets from stack memory")
+		t.Fatal("tix_tcp trusted-checksum path reads packet pseudo-header offsets from stack memory")
 	}
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got == 0 {
-		t.Fatal("experimental_tcp trusted-checksum path dropped the skb_load_bytes fallback")
+		t.Fatal("tix_tcp trusted-checksum path dropped the skb_load_bytes fallback")
 	}
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbPullData); got != 0 {
-		t.Fatalf("experimental_tcp trusted-checksum path calls bpf_skb_pull_data %d times, want 0", got)
+		t.Fatalf("tix_tcp trusted-checksum path calls bpf_skb_pull_data %d times, want 0", got)
 	}
 }
 
-func TestExperimentalTCPTXDirectTrustedChecksumRequiresExplicitOptIn(t *testing.T) {
+func TestTIXTCPTXDirectTrustedChecksumRequiresExplicitOptIn(t *testing.T) {
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "1")
-	out := appendExperimentalTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
+	out := appendTIXTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
 	if instructionsContainJump(out, "kudp_tx_direct_tcp_csum_trusted_pseudo", "kudp_tx_direct_tcp_csum_done") {
-		t.Fatal("experimental_tcp trusted-checksum path followed captured-checksum trust without explicit opt-in")
+		t.Fatal("tix_tcp trusted-checksum path followed captured-checksum trust without explicit opt-in")
 	}
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got == 0 {
-		t.Fatal("experimental_tcp checksum path did not keep skb_load_bytes checksum scan")
+		t.Fatal("tix_tcp checksum path did not keep skb_load_bytes checksum scan")
 	}
 }
 
-func TestExperimentalTCPTXDirectTrustedChecksumDisabledExplicitly(t *testing.T) {
+func TestTIXTCPTXDirectTrustedChecksumDisabledExplicitly(t *testing.T) {
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "0")
-	out := appendExperimentalTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "0")
+	out := appendTIXTCPTXDirectTCPChecksum(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, "checksum_error")
 	if instructionsContainJump(out, "kudp_tx_direct_tcp_csum_trusted_pseudo", "kudp_tx_direct_tcp_csum_done") {
-		t.Fatal("experimental_tcp trusted-checksum path ignored explicit opt-out")
+		t.Fatal("tix_tcp trusted-checksum path ignored explicit opt-out")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathKeepsChunkedChecksum(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathKeepsChunkedChecksum(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_chunked_checksum")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_chunked_checksum")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
-	out := appendKernelUDPTXDirect(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, statsMap, routeMap, flowMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
+	out := appendKernelUDPTXDirect(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, statsMap, routeMap, flowMap, kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true})
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbLoadBytes); got == 0 {
-		t.Fatal("experimental_tcp direct-only TX program does not include bpf_skb_load_bytes checksum loads")
+		t.Fatal("tix_tcp direct-only TX program does not include bpf_skb_load_bytes checksum loads")
 	}
 	if !instructionsContainCallWithImmediateR4(out, asm.FnSkbLoadBytes, kernelUDPTXTCPChecksumChunkLen) {
-		t.Fatalf("experimental_tcp direct-only TX program does not include %d-byte checksum chunks", kernelUDPTXTCPChecksumChunkLen)
+		t.Fatalf("tix_tcp direct-only TX program does not include %d-byte checksum chunks", kernelUDPTXTCPChecksumChunkLen)
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_inner_tixt_pre_csum_tcp") {
-		t.Fatal("experimental_tcp direct-only TX program does not normalize the inner TCP checksum before TIXT outer checksum")
+		t.Fatal("tix_tcp direct-only TX program does not normalize the inner TCP checksum before TIXT outer checksum")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesInnerChecksumKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathUsesInnerChecksumKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_inner_kfunc")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_inner_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13445,24 +13445,24 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesInnerChecksumKfuncWhenAvailable
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, InnerTCPKfunc: true, InnerTCPKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, InnerTCPKfunc: true, InnerTCPKfuncCall: kfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_inner_tixt_pre_csum_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_inner_tixt_pre_csum_kfunc_success") {
-		t.Fatal("experimental_tcp direct-only TX program does not use inner TCP checksum kfunc")
+		t.Fatal("tix_tcp direct-only TX program does not use inner TCP checksum kfunc")
 	}
 	if !instructionsContainKfuncCall(out) {
-		t.Fatal("experimental_tcp direct-only TX program did not emit inner TCP checksum kfunc call")
+		t.Fatal("tix_tcp direct-only TX program did not emit inner TCP checksum kfunc call")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_inner_tixt_pre_csum_udp") {
-		t.Fatal("experimental_tcp direct-only TX program dropped inner UDP checksum normalization fallback")
+		t.Fatal("tix_tcp direct-only TX program dropped inner UDP checksum normalization fallback")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesOuterChecksumKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathUsesOuterChecksumKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_outer_kfunc")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_outer_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13475,25 +13475,25 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesOuterChecksumKfuncWhenAvailable
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, OuterTCPCsumKfunc: true, OuterTCPCsumKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, OuterTCPCsumKfunc: true, OuterTCPCsumKfuncCall: kfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_outer_tcp_csum_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_outer_tcp_csum_kfunc_done") {
-		t.Fatal("experimental_tcp direct-only TX program does not use outer TCP checksum kfunc")
+		t.Fatal("tix_tcp direct-only TX program does not use outer TCP checksum kfunc")
 	}
 	if !instructionsContainKfuncCall(out) {
-		t.Fatal("experimental_tcp direct-only TX program did not emit outer TCP checksum kfunc call")
+		t.Fatal("tix_tcp direct-only TX program did not emit outer TCP checksum kfunc call")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_payload_chunk_0_next") {
-		t.Fatal("experimental_tcp outer checksum kfunc path kept the eBPF checksum scanner")
+		t.Fatal("tix_tcp outer checksum kfunc path kept the eBPF checksum scanner")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesOuterTCPHeaderKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathUsesOuterTCPHeaderKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_outer_header_kfunc")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_outer_header_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13506,37 +13506,37 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesOuterTCPHeaderKfuncWhenAvailabl
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, OuterTCPKfunc: true, OuterTCPKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, OuterTCPKfunc: true, OuterTCPKfuncCall: kfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_finalize_outer_tcp_header_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_finalize_outer_tcp_header_kfunc_done") {
-		t.Fatal("experimental_tcp direct-only TX program does not use outer TCP header kfunc")
+		t.Fatal("tix_tcp direct-only TX program does not use outer TCP header kfunc")
 	}
 	if !instructionsContainKfuncCall(out) {
-		t.Fatal("experimental_tcp direct-only TX program did not emit outer TCP header kfunc call")
+		t.Fatal("tix_tcp direct-only TX program did not emit outer TCP header kfunc call")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_outer_tcp_csum_kfunc") {
-		t.Fatal("experimental_tcp outer TCP header kfunc path should not also call the outer checksum kfunc")
+		t.Fatal("tix_tcp outer TCP header kfunc path should not also call the outer checksum kfunc")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_fallback_error") {
-		t.Fatal("experimental_tcp outer TCP header kfunc path emitted an unused checksum fallback error block")
+		t.Fatal("tix_tcp outer TCP header kfunc path emitted an unused checksum fallback error block")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_payload_chunk_0_next") {
-		t.Fatal("experimental_tcp outer TCP header kfunc path kept the eBPF checksum scanner")
+		t.Fatal("tix_tcp outer TCP header kfunc path kept the eBPF checksum scanner")
 	}
 	if !instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTFinalizeTCPHeaderArgsFlowIDOffset, asm.DWord) ||
 		!instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTFinalizeTCPHeaderArgsPayloadLenOffset, asm.Word) {
-		t.Fatal("experimental_tcp outer TCP header kfunc path does not initialize TIXT finalizer args")
+		t.Fatal("tix_tcp outer TCP header kfunc path does not initialize TIXT finalizer args")
 	}
 	if !instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_finalize_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
-		t.Fatal("experimental_tcp outer TCP header kfunc partial checksum flag was not emitted by default")
+		t.Fatal("tix_tcp outer TCP header kfunc partial checksum flag was not emitted by default")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesTCPPartialCSUMKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathUsesTCPPartialCSUMKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_partial_csum_kfunc")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_partial_csum_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13549,38 +13549,38 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesTCPPartialCSUMKfuncWhenAvailabl
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, TCPPartialCSUMKfunc: true, TCPPartialCSUMKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, TCPPartialCSUMKfunc: true, TCPPartialCSUMKfuncCall: kfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_tcp_partial_csum_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_tcp_partial_csum_kfunc_done") {
-		t.Fatal("experimental_tcp direct-only TX program does not use TCP partial checksum kfunc")
+		t.Fatal("tix_tcp direct-only TX program does not use TCP partial checksum kfunc")
 	}
 	if !instructionsContainKfuncCall(out) {
-		t.Fatal("experimental_tcp direct-only TX program did not emit TCP partial checksum kfunc call")
+		t.Fatal("tix_tcp direct-only TX program did not emit TCP partial checksum kfunc call")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_finalize_outer_tcp_header_kfunc") {
-		t.Fatal("experimental_tcp TCP partial checksum path should not call outer TCP header finalizer")
+		t.Fatal("tix_tcp TCP partial checksum path should not call outer TCP header finalizer")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_payload_chunk_0_next") {
-		t.Fatal("experimental_tcp TCP partial checksum path kept the payload checksum scanner")
+		t.Fatal("tix_tcp TCP partial checksum path kept the payload checksum scanner")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_fallback_error") {
-		t.Fatal("experimental_tcp TCP partial checksum path kept an unreachable pseudo-header checksum error branch")
+		t.Fatal("tix_tcp TCP partial checksum path kept an unreachable pseudo-header checksum error branch")
 	}
 	if !instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTCPHeaderOffset+16, asm.Half) {
-		t.Fatal("experimental_tcp TCP partial checksum path does not preseed TCP check field")
+		t.Fatal("tix_tcp TCP partial checksum path does not preseed TCP check field")
 	}
 	if !instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTCPHeaderOffset, asm.Half) ||
 		!instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTCPFrameHeaderOffset+32, asm.Word) {
-		t.Fatal("experimental_tcp TCP partial checksum path does not build the stack TCP/TIXT header")
+		t.Fatal("tix_tcp TCP partial checksum path does not build the stack TCP/TIXT header")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathOuterTCPHeaderKfuncPartialChecksumCanBeDisabled(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathOuterTCPHeaderKfuncPartialChecksumCanBeDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_outer_header_partial_csum")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_outer_header_partial_csum")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13593,17 +13593,17 @@ func TestKernelUDPTXDirectExperimentalTCPPathOuterTCPHeaderKfuncPartialChecksumC
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, OuterTCPKfunc: true, OuterTCPKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, OuterTCPKfunc: true, OuterTCPKfuncCall: kfuncCall},
 	)
 	if instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_finalize_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
-		t.Fatal("experimental_tcp outer TCP header kfunc partial checksum flag ignored explicit disable")
+		t.Fatal("tix_tcp outer TCP header kfunc partial checksum flag ignored explicit disable")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPSkipPlainSequenceRemovesStackAtomic(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPSkipPlainSequenceRemovesStackAtomic(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_skip_plain_seq_stack")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_skip_plain_seq_stack")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13613,27 +13613,27 @@ func TestKernelUDPTXDirectExperimentalTCPSkipPlainSequenceRemovesStackAtomic(t *
 		routeMap,
 		flowMap,
 		kernelUDPTXDirectProgramOptions{
-			Enabled:                          true,
-			ExperimentalTCPOnly:              true,
-			DirectOnly:                       true,
-			ExperimentalTCPSkipPlainSequence: true,
+			Enabled:                 true,
+			TIXTCPOnly:              true,
+			DirectOnly:              true,
+			TIXTCPSkipPlainSequence: true,
 		},
 	)
 	if instructionsContainFetchAddAt(out, asm.R0, asm.R2) {
-		t.Fatal("experimental_tcp plaintext sequence skip kept a flow sequence atomic add")
+		t.Fatal("tix_tcp plaintext sequence skip kept a flow sequence atomic add")
 	}
 	if !instructionsContainStoreImm(out, asm.RFP, kernelUDPTXTCPHeaderOffset+4, asm.Word, 0) ||
 		!instructionsContainStoreImm(out, asm.RFP, kernelUDPTXTCPFrameHeaderOffset+24, asm.Word, 0) ||
 		!instructionsContainStoreImm(out, asm.RFP, kernelUDPTXTCPFrameHeaderOffset+28, asm.Word, 0) {
-		t.Fatal("experimental_tcp plaintext sequence skip did not zero outer/TIXT sequence fields")
+		t.Fatal("tix_tcp plaintext sequence skip did not zero outer/TIXT sequence fields")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPSkipPlainSequenceRemovesFinalizeAtomic(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPSkipPlainSequenceRemovesFinalizeAtomic(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_skip_plain_seq_finalize")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_skip_plain_seq_finalize")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13647,28 +13647,28 @@ func TestKernelUDPTXDirectExperimentalTCPSkipPlainSequenceRemovesFinalizeAtomic(
 		routeMap,
 		flowMap,
 		kernelUDPTXDirectProgramOptions{
-			Enabled:                          true,
-			ExperimentalTCPOnly:              true,
-			DirectOnly:                       true,
-			OuterTCPKfunc:                    true,
-			OuterTCPKfuncCall:                kfuncCall,
-			ExperimentalTCPSkipPlainSequence: true,
+			Enabled:                 true,
+			TIXTCPOnly:              true,
+			DirectOnly:              true,
+			OuterTCPKfunc:           true,
+			OuterTCPKfuncCall:       kfuncCall,
+			TIXTCPSkipPlainSequence: true,
 		},
 	)
 	if instructionsContainFetchAddAt(out, asm.R0, asm.R2) {
-		t.Fatal("experimental_tcp finalize plaintext sequence skip kept a flow sequence atomic add")
+		t.Fatal("tix_tcp finalize plaintext sequence skip kept a flow sequence atomic add")
 	}
 	if !instructionsContainStoreImm(out, asm.RFP, kernelUDPTXTIXTFinalizeTCPHeaderArgsSequenceOffset, asm.Word, 0) ||
 		!instructionsContainStoreImm(out, asm.RFP, kernelUDPTXTIXTFinalizeTCPHeaderArgsSequenceOffset+4, asm.Word, 0) {
-		t.Fatal("experimental_tcp finalize plaintext sequence skip did not zero finalizer sequence args")
+		t.Fatal("tix_tcp finalize plaintext sequence skip did not zero finalizer sequence args")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesPushTCPHeaderKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathUsesPushTCPHeaderKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_push_header_kfunc")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_push_header_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13681,31 +13681,31 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesPushTCPHeaderKfuncWhenAvailable
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc_done") {
-		t.Fatal("experimental_tcp direct-only TX program does not use TCP header-push kfunc")
+		t.Fatal("tix_tcp direct-only TX program does not use TCP header-push kfunc")
 	}
 	if !instructionsContainKfuncCall(out) {
-		t.Fatal("experimental_tcp direct-only TX program did not emit TCP header-push kfunc call")
+		t.Fatal("tix_tcp direct-only TX program did not emit TCP header-push kfunc call")
 	}
 	if got := instructionsCountBuiltinCalls(out, asm.FnSkbAdjustRoom); got != 0 {
-		t.Fatalf("experimental_tcp TCP header-push kfunc path still uses bpf_skb_adjust_room %d times", got)
+		t.Fatalf("tix_tcp TCP header-push kfunc path still uses bpf_skb_adjust_room %d times", got)
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_post_adjust_header_drop") {
-		t.Fatal("experimental_tcp TCP header-push kfunc path emitted post-adjust header drop block")
+		t.Fatal("tix_tcp TCP header-push kfunc path emitted post-adjust header drop block")
 	}
 	if !instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
-		t.Fatal("experimental_tcp TCP header-push kfunc partial checksum flag was not emitted by default")
+		t.Fatal("tix_tcp TCP header-push kfunc partial checksum flag was not emitted by default")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathPushTCPHeaderKfuncPartialChecksumCanBeDisabled(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathPushTCPHeaderKfuncPartialChecksumCanBeDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_push_header_partial")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_push_header_partial")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13718,19 +13718,19 @@ func TestKernelUDPTXDirectExperimentalTCPPathPushTCPHeaderKfuncPartialChecksumCa
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
 	)
 	if instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
-		t.Fatal("experimental_tcp TCP header-push kfunc partial checksum flag ignored explicit disable")
+		t.Fatal("tix_tcp TCP header-push kfunc partial checksum flag ignored explicit disable")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathPushTCPHeaderKfuncTrustsInnerChecksumOptIn(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathPushTCPHeaderKfuncTrustsInnerChecksumOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "1")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_push_header_trust_inner")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "1")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_push_header_trust_inner")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13743,21 +13743,21 @@ func TestKernelUDPTXDirectExperimentalTCPPathPushTCPHeaderKfuncTrustsInnerChecks
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
 	)
 	if !instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPTrustInnerCSUM)) {
-		t.Fatal("experimental_tcp TCP header-push kfunc trusted inner checksum opt-in did not pass the trust flag")
+		t.Fatal("tix_tcp TCP header-push kfunc trusted inner checksum opt-in did not pass the trust flag")
 	}
 	if instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
-		t.Fatal("experimental_tcp TCP header-push kfunc emitted partial checksum flag with trusted inner checksum opt-in")
+		t.Fatal("tix_tcp TCP header-push kfunc emitted partial checksum flag with trusted inner checksum opt-in")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathPushTCPHeaderKfuncPartialChecksumOverridesTrust(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "1")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_push_header_partial_over_trust")
+func TestKernelUDPTXDirectTIXTCPPathPushTCPHeaderKfuncPartialChecksumOverridesTrust(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_TRUST_INNER_CHECKSUMS", "1")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_push_header_partial_over_trust")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13770,20 +13770,20 @@ func TestKernelUDPTXDirectExperimentalTCPPathPushTCPHeaderKfuncPartialChecksumOv
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushTCPHeaderKfunc: true, PushTCPHeaderKfuncCall: kfuncCall},
 	)
 	if !instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPPartialCSUM)) {
-		t.Fatal("experimental_tcp TCP header-push kfunc partial checksum flag missing")
+		t.Fatal("tix_tcp TCP header-push kfunc partial checksum flag missing")
 	}
 	if instructionsContainMovImmToRegAfterSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc", asm.R3, int64(trustIXTIXTTXFinalizeTCPTrustInnerCSUM)) {
-		t.Fatal("experimental_tcp TCP header-push kfunc emitted trusted inner checksum flag together with partial checksum")
+		t.Fatal("tix_tcp TCP header-push kfunc emitted trusted inner checksum flag together with partial checksum")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesPushFlowTCPHeaderKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_push_flow_header_kfunc")
+func TestKernelUDPTXDirectTIXTCPPathUsesPushFlowTCPHeaderKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_push_flow_header_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13796,26 +13796,26 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesPushFlowTCPHeaderKfuncWhenAvail
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushFlowTCPHeaderKfunc: true, PushFlowTCPHeaderKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushFlowTCPHeaderKfunc: true, PushFlowTCPHeaderKfuncCall: kfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_push_flow_outer_tcp_header_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_push_flow_outer_tcp_header_kfunc_done") {
-		t.Fatal("experimental_tcp direct-only TX program does not use flow TCP header-push kfunc")
+		t.Fatal("tix_tcp direct-only TX program does not use flow TCP header-push kfunc")
 	}
 	if !instructionsContainKfuncCall(out) {
-		t.Fatal("experimental_tcp direct-only TX program did not emit flow TCP header-push kfunc call")
+		t.Fatal("tix_tcp direct-only TX program did not emit flow TCP header-push kfunc call")
 	}
 	if !instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTPushFlowTCPHeaderArgsFlowIDOffset, asm.DWord) ||
 		!instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTPushFlowTCPHeaderArgsPayloadLenOffset, asm.Word) {
-		t.Fatal("experimental_tcp flow TCP header-push path does not initialize flow kfunc args")
+		t.Fatal("tix_tcp flow TCP header-push path does not initialize flow kfunc args")
 	}
 	if !instructionsContainStoreMem(out, asm.RFP, kernelUDPTXFlowPtrOffset, asm.DWord) ||
 		!instructionsContainLoadMemInto(out, asm.R2, asm.RFP, kernelUDPTXFlowPtrOffset, asm.DWord) {
-		t.Fatal("experimental_tcp flow TCP header-push path does not preserve the selected flow pointer for the kfunc call")
+		t.Fatal("tix_tcp flow TCP header-push path does not preserve the selected flow pointer for the kfunc call")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc") ||
 		instructionsContainSymbol(out, "kudp_tx_direct_adjust_ready") {
-		t.Fatal("experimental_tcp flow TCP header-push path did not bypass old push/adjust paths")
+		t.Fatal("tix_tcp flow TCP header-push path did not bypass old push/adjust paths")
 	}
 }
 
@@ -13840,11 +13840,11 @@ func TestKernelUDPTXDirectPlainHeaderStoreDoesNotSpillFlowPointerIntoHeaderBuffe
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesFinalizeFlowTCPHeaderKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_finalize_flow_header_kfunc")
+func TestKernelUDPTXDirectTIXTCPPathUsesFinalizeFlowTCPHeaderKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_finalize_flow_header_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13857,48 +13857,48 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesFinalizeFlowTCPHeaderKfuncWhenA
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, FinalizeFlowTCPHeaderKfunc: true, FinalizeFlowTCPHeaderKfuncCall: kfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, FinalizeFlowTCPHeaderKfunc: true, FinalizeFlowTCPHeaderKfuncCall: kfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_finalize_flow_outer_tcp_header_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_finalize_flow_outer_tcp_header_kfunc_done") {
-		t.Fatal("experimental_tcp direct-only TX program does not use flow TCP header-finalize kfunc")
+		t.Fatal("tix_tcp direct-only TX program does not use flow TCP header-finalize kfunc")
 	}
 	if !instructionsContainKfuncCall(out) {
-		t.Fatal("experimental_tcp direct-only TX program did not emit flow TCP header-finalize kfunc call")
+		t.Fatal("tix_tcp direct-only TX program did not emit flow TCP header-finalize kfunc call")
 	}
 	if !instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTFinalizeFlowTCPHeaderArgsFlowIDOffset, asm.DWord) ||
 		!instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTFinalizeFlowTCPHeaderArgsPayloadLenOffset, asm.Word) {
-		t.Fatal("experimental_tcp flow TCP header-finalize path does not initialize compact flow kfunc args")
+		t.Fatal("tix_tcp flow TCP header-finalize path does not initialize compact flow kfunc args")
 	}
 	if !instructionsContainStoreMem(out, asm.RFP, kernelUDPTXFlowPtrOffset, asm.DWord) ||
 		!instructionsContainLoadMemInto(out, asm.R2, asm.RFP, kernelUDPTXFlowPtrOffset, asm.DWord) {
-		t.Fatal("experimental_tcp flow TCP header-finalize path does not preserve the selected flow pointer for the kfunc call")
+		t.Fatal("tix_tcp flow TCP header-finalize path does not preserve the selected flow pointer for the kfunc call")
 	}
 	if instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTFinalizeTCPHeaderArgsSourceIPOffset, asm.Word) ||
 		instructionsContainStoreMem(out, asm.RFP, kernelUDPTXTIXTFinalizeTCPHeaderArgsDestinationIPOffset, asm.Word) {
-		t.Fatal("experimental_tcp flow TCP header-finalize path still builds full TCP header args")
+		t.Fatal("tix_tcp flow TCP header-finalize path still builds full TCP header args")
 	}
 	if !instructionsContainStoreImm(out, asm.RFP, kernelUDPTXTIXTFinalizeFlowTCPHeaderArgsClearFlagsOffset, asm.Word, int64(trustIXTIXTTXFinalizeTCPTrustValidatedLen|trustIXTIXTTXFinalizeTCPPartialCSUM)) {
-		t.Fatal("experimental_tcp flow TCP header-finalize path did not pass partial checksum flag")
+		t.Fatal("tix_tcp flow TCP header-finalize path did not pass partial checksum flag")
 	}
 	if !instructionsContainReference(out, "kudp_tx_direct_post_adjust_header_drop") {
-		t.Fatal("experimental_tcp flow TCP header-finalize path did not keep the post-adjust header guard")
+		t.Fatal("tix_tcp flow TCP header-finalize path did not keep the post-adjust header guard")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_post_adjust_header_drop") {
-		t.Fatal("experimental_tcp flow TCP header-finalize path references unresolved post-adjust header drop label")
+		t.Fatal("tix_tcp flow TCP header-finalize path references unresolved post-adjust header drop label")
 	}
 	if instructionsContainStoreMem(out, asm.R7, rejectEthernetHeaderLen+rejectIPv4HeaderLen, asm.Byte) ||
 		instructionsContainStoreMem(out, asm.R7, rejectEthernetHeaderLen+rejectIPv4HeaderLen, asm.Half) ||
 		instructionsContainStoreMem(out, asm.R7, rejectEthernetHeaderLen+rejectIPv4HeaderLen, asm.Word) {
-		t.Fatal("experimental_tcp flow TCP header-finalize path still stores the TCP header from the eBPF stack")
+		t.Fatal("tix_tcp flow TCP header-finalize path still stores the TCP header from the eBPF stack")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesPushRouteTCPHeaderKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_push_route_header_kfunc")
+func TestKernelUDPTXDirectTIXTCPPathUsesPushRouteTCPHeaderKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_push_route_header_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13915,24 +13915,24 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesPushRouteTCPHeaderKfuncWhenAvai
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: kfuncCall, PushFlowTCPHeaderKfunc: true, PushFlowTCPHeaderKfuncCall: flowKfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: kfuncCall, PushFlowTCPHeaderKfunc: true, PushFlowTCPHeaderKfuncCall: flowKfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_push_route_outer_tcp_header_kfunc") {
-		t.Fatal("experimental_tcp direct-only TX program does not use route TCP header-push kfunc")
+		t.Fatal("tix_tcp direct-only TX program does not use route TCP header-push kfunc")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_push_flow_outer_tcp_header_kfunc") {
-		t.Fatal("experimental_tcp route TCP header-push path lost lower-granularity fallback")
+		t.Fatal("tix_tcp route TCP header-push path lost lower-granularity fallback")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_push_outer_tcp_header_kfunc") ||
 		instructionsContainSymbol(out, "kudp_tx_direct_adjust_ready") {
-		t.Fatal("experimental_tcp route TCP header-push path did not bypass old push/adjust paths")
+		t.Fatal("tix_tcp route TCP header-push path did not bypass old push/adjust paths")
 	}
 	if !instructionsContainKfuncCall(out) {
-		t.Fatal("experimental_tcp direct-only TX program did not emit route TCP header-push kfunc call")
+		t.Fatal("tix_tcp direct-only TX program did not emit route TCP header-push kfunc call")
 	}
 	routeKfuncIndex := instructionSymbolIndex(out, "kudp_tx_direct_push_route_outer_tcp_header_kfunc")
 	if routeKfuncIndex < 0 {
-		t.Fatal("experimental_tcp route TCP header-push kfunc label is missing")
+		t.Fatal("tix_tcp route TCP header-push kfunc label is missing")
 	}
 	routeKfuncEntry := out[routeKfuncIndex]
 	if routeKfuncEntry.OpCode.Class().IsLoad() &&
@@ -13941,19 +13941,19 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesPushRouteTCPHeaderKfuncWhenAvai
 		routeKfuncEntry.Src == asm.R0 &&
 		routeKfuncEntry.Offset == 72 &&
 		routeKfuncEntry.OpCode.Size() == asm.Word {
-		t.Fatal("experimental_tcp route TCP header-push kfunc still pre-checks route flow_mask before helper selection")
+		t.Fatal("tix_tcp route TCP header-push kfunc still pre-checks route flow_mask before helper selection")
 	}
 	if instructionsContainImm(out, int64(trustIXTIXTTXFinalizeTCPTrustInnerCSUM)) {
-		t.Fatal("experimental_tcp route TCP header-push path should compute a full outer TCP checksum by default")
+		t.Fatal("tix_tcp route TCP header-push path should compute a full outer TCP checksum by default")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPGSOKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+func TestKernelUDPTXDirectTIXTCPPathUsesRouteTCPGSOKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_HOT_STATS", "1")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_gso_kfunc")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_route_gso_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -13970,49 +13970,49 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPGSOKfuncWhenAvailable(t
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_segment_route_tcp_gso_stolen") {
-		t.Fatal("experimental_tcp direct-only TX program does not use route TCP GSO kfunc")
+		t.Fatal("tix_tcp direct-only TX program does not use route TCP GSO kfunc")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_gso_check") {
-		t.Fatal("experimental_tcp route TCP GSO path does not gate on skb gso_size")
+		t.Fatal("tix_tcp route TCP GSO path does not gate on skb gso_size")
 	}
 	if !instructionsContainLoadMemInto(out, asm.R4, asm.R6, skbGSOSizeOffset, asm.Word) {
-		t.Fatalf("experimental_tcp route TCP GSO path does not read skb gso_size offset %d", skbGSOSizeOffset)
+		t.Fatalf("tix_tcp route TCP GSO path does not read skb gso_size offset %d", skbGSOSizeOffset)
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_gso_active_accept_counter_done") {
-		t.Fatal("experimental_tcp route TCP GSO path does not accept active GSO input before the route kfunc")
+		t.Fatal("tix_tcp route TCP GSO path does not accept active GSO input before the route kfunc")
 	}
 	if !instructionsContainImmJumpTo(out, 0, "kudp_tx_direct_route_tcp_linear_kfunc") {
-		t.Fatal("experimental_tcp route TCP GSO path does not send linear skbs through the safe route TCP kfunc fallback")
+		t.Fatal("tix_tcp route TCP GSO path does not send linear skbs through the safe route TCP kfunc fallback")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_linear_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_linear_success_counter_done") {
-		t.Fatal("experimental_tcp route TCP GSO path missing safe linear route TCP kfunc fallback")
+		t.Fatal("tix_tcp route TCP GSO path missing safe linear route TCP kfunc fallback")
 	}
 	if !instructionsContainJump(out, "kudp_tx_direct_route_tcp_linear_kfunc", "kudp_tx_direct_fallback") {
-		t.Fatal("experimental_tcp route TCP GSO linear kfunc fallback should fall back to userspace when the kfunc cannot handle the skb")
+		t.Fatal("tix_tcp route TCP GSO linear kfunc fallback should fall back to userspace when the kfunc cannot handle the skb")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_single_flow_guard") {
-		t.Fatal("experimental_tcp route TCP GSO path still rejects multi-flow route entries before helper selection")
+		t.Fatal("tix_tcp route TCP GSO path still rejects multi-flow route entries before helper selection")
 	}
 	if instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_xmit_stolen") ||
 		instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_xmit_queued") {
-		t.Fatal("experimental_tcp route TCP GSO path emitted route TCP xmit-only result blocks without the xmit kfunc")
+		t.Fatal("tix_tcp route TCP GSO path emitted route TCP xmit-only result blocks without the xmit kfunc")
 	}
 	if !instructionsContainKfuncCall(out) {
-		t.Fatal("experimental_tcp route TCP GSO path did not emit a kfunc call")
+		t.Fatal("tix_tcp route TCP GSO path did not emit a kfunc call")
 	}
-	if !instructionsContainImm(out, int64(experimentalTCPTXRouteGSOSegmentsStolen)) {
-		t.Fatal("experimental_tcp route TCP GSO path does not recognize the stolen sentinel")
+	if !instructionsContainImm(out, int64(tixTCPTXRouteGSOSegmentsStolen)) {
+		t.Fatal("tix_tcp route TCP GSO path does not recognize the stolen sentinel")
 	}
 	if !instructionsContainImm(out, -int64(unix.EOPNOTSUPP)) {
-		t.Fatal("experimental_tcp route TCP GSO path does not fallback on EOPNOTSUPP")
+		t.Fatal("tix_tcp route TCP GSO path does not fallback on EOPNOTSUPP")
 	}
 	if !instructionsRouteTCPKfuncUsesCurrentRoutePtr(out) {
-		t.Fatal("experimental_tcp route TCP kfunc does not pass the current route pointer")
+		t.Fatal("tix_tcp route TCP kfunc does not pass the current route pointer")
 	}
 	if duplicates := duplicateInstructionSymbols(out); len(duplicates) > 0 {
 		t.Fatalf("duplicate instruction symbols: %v", duplicates)
@@ -14022,12 +14022,12 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPGSOKfuncWhenAvailable(t
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPRouteGSOAsyncHasNoUnreachableInstructions(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+func TestKernelUDPTXDirectTIXTCPRouteGSOAsyncHasNoUnreachableInstructions(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_HOT_STATS", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM", "1")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_gso_async_reach")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM", "1")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_route_gso_async_reach")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -14044,20 +14044,20 @@ func TestKernelUDPTXDirectExperimentalTCPRouteGSOAsyncHasNoUnreachableInstructio
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall, RouteTCPGSOAsyncKfunc: true},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall, RouteTCPGSOAsyncKfunc: true},
 	)
 	if unreachable := unreachableInstructionIndexes(out); len(unreachable) > 0 {
 		t.Fatalf("route TCP async GSO path emitted verifier-unreachable instructions: %s", describeInstructionIndexes(out, unreachable, 8))
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPRouteGSOAsyncCannotEnableActiveGSO(t *testing.T) {
+func TestKernelUDPTXDirectTIXTCPRouteGSOAsyncCannotEnableActiveGSO(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC", "1")
 
-	options := kernelUDPTXDirectProgramOptions{ExperimentalTCPOnly: true, DirectOnly: true}
+	options := kernelUDPTXDirectProgramOptions{TIXTCPOnly: true, DirectOnly: true}
 	if kernelUDPTunnelGSOActiveSKBEnabledForOptions(options) {
 		t.Fatal("route TCP async GSO opt-in enabled active-GSO without an available route GSO kfunc")
 	}
@@ -14067,22 +14067,22 @@ func TestKernelUDPTXDirectExperimentalTCPRouteGSOAsyncCannotEnableActiveGSO(t *t
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPRouteGSOEnvCombinationEmitsRouteKfuncBeforeAdjustRoom(t *testing.T) {
+func TestKernelUDPTXDirectTIXTCPRouteGSOEnvCombinationEmitsRouteKfuncBeforeAdjustRoom(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_SAFE", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "0")
-	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "1")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_gso_env")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_route_gso_env")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -14096,12 +14096,12 @@ func TestKernelUDPTXDirectExperimentalTCPRouteGSOEnvCombinationEmitsRouteKfuncBe
 	}
 	options := kernelUDPTXDirectProgramOptions{
 		Enabled:                     kernelUDPTXDirectProgramEnabled(),
-		ExperimentalTCPOnly:         kernelUDPTXDirectExperimentalTCPOnlyEnabled(),
+		TIXTCPOnly:                  kernelUDPTXDirectTIXTCPOnlyEnabled(),
 		KernelUDPOnly:               kernelUDPTXDirectKernelUDPOnlyEnabled(),
 		DirectOnly:                  kernelUDPTXDirectOnlyEnabled(dataplane.AttachSpec{}),
 		PushRouteTCPHeaderKfunc:     routeKfuncCall.IsKfuncCall(),
 		PushRouteTCPHeaderKfuncCall: routeKfuncCall,
-		RouteTCPGSOKfunc:            gsoKfuncCall.IsKfuncCall() && experimentalTCPTXDirectRouteTCPGSOKfuncRequested(),
+		RouteTCPGSOKfunc:            gsoKfuncCall.IsKfuncCall() && tixTCPTXDirectRouteTCPGSOKfuncRequested(),
 		RouteTCPGSOKfuncCall:        gsoKfuncCall,
 	}
 	if !kernelUDPTunnelGSOEnabledForOptions(options) {
@@ -14120,17 +14120,17 @@ func TestKernelUDPTXDirectExperimentalTCPRouteGSOEnvCombinationEmitsRouteKfuncBe
 	routeIndex := instructionSymbolIndex(out, "kudp_tx_direct_route_tcp_kfunc")
 	adjustIndex := instructionBuiltinCallIndex(out, asm.FnSkbAdjustRoom)
 	if routeIndex < 0 {
-		t.Fatalf("experimental_tcp route-GSO environment did not emit route TCP kfunc path; options=%+v", options)
+		t.Fatalf("tix_tcp route-GSO environment did not emit route TCP kfunc path; options=%+v", options)
 	}
 	if adjustIndex >= 0 && routeIndex > adjustIndex {
 		t.Fatalf("route TCP kfunc appears after adjust_room: routeIndex=%d adjustIndex=%d", routeIndex, adjustIndex)
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPRouteTCPGSOFallbackHasResolvedPostAdjustDrop(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_gso_post_drop")
+func TestKernelUDPTXDirectTIXTCPRouteTCPGSOFallbackHasResolvedPostAdjustDrop(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_route_gso_post_drop")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -14147,20 +14147,20 @@ func TestKernelUDPTXDirectExperimentalTCPRouteTCPGSOFallbackHasResolvedPostAdjus
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall},
 	)
 	if !instructionsContainReference(out, "kudp_tx_direct_post_adjust_header_drop") {
-		t.Fatal("experimental_tcp route TCP GSO fallback did not keep the post-adjust header guard")
+		t.Fatal("tix_tcp route TCP GSO fallback did not keep the post-adjust header guard")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_post_adjust_header_drop") {
-		t.Fatal("experimental_tcp route TCP GSO fallback references unresolved post-adjust header drop label")
+		t.Fatal("tix_tcp route TCP GSO fallback references unresolved post-adjust header drop label")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPXmitKfuncWhenAvailable(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_xmit_kfunc")
+func TestKernelUDPTXDirectTIXTCPPathUsesRouteTCPXmitKfuncWhenAvailable(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_route_xmit_kfunc")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -14181,30 +14181,30 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPXmitKfuncWhenAvailable(
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall, RouteTCPXmitKfunc: true, RouteTCPXmitKfuncCall: xmitKfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall, RouteTCPXmitKfunc: true, RouteTCPXmitKfuncCall: xmitKfuncCall},
 	)
 	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_kfunc") ||
 		!instructionsContainSymbol(out, "kudp_tx_direct_segment_route_tcp_gso_stolen") {
-		t.Fatal("experimental_tcp route TCP xmit path must preserve the route-GSO branch for GSO skbs")
+		t.Fatal("tix_tcp route TCP xmit path must preserve the route-GSO branch for GSO skbs")
 	}
 	if !instructionsContainImmJumpTo(out, 0, "kudp_tx_direct_route_tcp_xmit_kfunc_prepare") {
-		t.Fatal("experimental_tcp route TCP xmit path should only take linear skbs from the GSO-size gate")
+		t.Fatal("tix_tcp route TCP xmit path should only take linear skbs from the GSO-size gate")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_xmit_stolen") {
-		t.Fatal("experimental_tcp direct-only TX program does not recognize route TCP xmit kfunc stolen sentinel")
+		t.Fatal("tix_tcp direct-only TX program does not recognize route TCP xmit kfunc stolen sentinel")
 	}
-	if !instructionsContainImm(out, int64(experimentalTCPTXRouteXmitStolen)) {
-		t.Fatal("experimental_tcp route TCP xmit path does not recognize the stolen sentinel")
+	if !instructionsContainImm(out, int64(tixTCPTXRouteXmitStolen)) {
+		t.Fatal("tix_tcp route TCP xmit path does not recognize the stolen sentinel")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_xmit_queued") {
-		t.Fatal("experimental_tcp direct-only TX program does not recognize route TCP worker queued sentinel")
+		t.Fatal("tix_tcp direct-only TX program does not recognize route TCP worker queued sentinel")
 	}
-	if !instructionsContainImm(out, int64(experimentalTCPTXRouteXmitQueued)) {
-		t.Fatal("experimental_tcp route TCP xmit path does not recognize the worker queued sentinel")
+	if !instructionsContainImm(out, int64(tixTCPTXRouteXmitQueued)) {
+		t.Fatal("tix_tcp route TCP xmit path does not recognize the worker queued sentinel")
 	}
 	if !instructionsContainSymbol(out, "kudp_tx_direct_route_tcp_gso_redirect") ||
 		!instructionsContainReferenceAfterSymbol(out, "kudp_tx_direct_route_tcp_kfunc", "kudp_tx_direct_route_tcp_gso_redirect", 32) {
-		t.Fatal("experimental_tcp route TCP xmit path must redirect positive route-GSO kfunc returns instead of dropping them")
+		t.Fatal("tix_tcp route TCP xmit path must redirect positive route-GSO kfunc returns instead of dropping them")
 	}
 	routeIndex := instructionSymbolIndex(out, "kudp_tx_direct_route_tcp_kfunc")
 	xmitPrepareIndex := instructionSymbolIndex(out, "kudp_tx_direct_route_tcp_xmit_kfunc_prepare")
@@ -14215,22 +14215,22 @@ func TestKernelUDPTXDirectExperimentalTCPPathUsesRouteTCPXmitKfuncWhenAvailable(
 		if out[i].OpCode.Class() == asm.JumpClass &&
 			out[i].OpCode.JumpOp() == asm.Ja &&
 			out[i].Reference() == "kudp_tx_direct_adjust_drop" {
-			t.Fatal("experimental_tcp route TCP xmit path still drops positive route-GSO kfunc returns")
+			t.Fatal("tix_tcp route TCP xmit path still drops positive route-GSO kfunc returns")
 		}
 	}
 	if !instructionsContainReferenceAfterSymbol(out, "kudp_tx_direct_route_tcp_xmit_fallback", "kudp_tx_direct_route_tcp_linear_kfunc", 16) {
-		t.Fatal("experimental_tcp route TCP xmit fallback does not return to the safe linear route TCP kfunc")
+		t.Fatal("tix_tcp route TCP xmit fallback does not return to the safe linear route TCP kfunc")
 	}
 	if unreachable := unreachableInstructionIndexes(out); len(unreachable) > 0 {
 		t.Fatalf("route TCP xmit path emitted verifier-unreachable instructions: %s", describeInstructionIndexes(out, unreachable, 8))
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPRouteXmitHotStatsHasUniqueSymbols(t *testing.T) {
+func TestKernelUDPTXDirectTIXTCPRouteXmitHotStatsHasUniqueSymbols(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_HOT_STATS", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_xmit_hotstats")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_route_xmit_hotstats")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -14251,19 +14251,19 @@ func TestKernelUDPTXDirectExperimentalTCPRouteXmitHotStatsHasUniqueSymbols(t *te
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall, RouteTCPXmitKfunc: true, RouteTCPXmitKfuncCall: xmitKfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall, RouteTCPXmitKfunc: true, RouteTCPXmitKfuncCall: xmitKfuncCall},
 	)
 	if duplicates := duplicateInstructionSymbols(out); len(duplicates) > 0 {
 		t.Fatalf("duplicate instruction symbols: %v", duplicates)
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathRouteTCPGSOKfuncCanTrustPartialInnerChecksum(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM", "1")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_route_gso_trust_partial")
+func TestKernelUDPTXDirectTIXTCPPathRouteTCPGSOKfuncCanTrustPartialInnerChecksum(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM", "1")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_route_gso_trust_partial")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
@@ -14280,39 +14280,39 @@ func TestKernelUDPTXDirectExperimentalTCPPathRouteTCPGSOKfuncCanTrustPartialInne
 		statsMap,
 		routeMap,
 		flowMap,
-		kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall},
+		kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true, PushRouteTCPHeaderKfunc: true, PushRouteTCPHeaderKfuncCall: routeKfuncCall, RouteTCPGSOKfunc: true, RouteTCPGSOKfuncCall: gsoKfuncCall},
 	)
 	gsoFlags := int64(trustIXTIXTTXFinalizeTCPPartialCSUM | trustIXTIXTTXFinalizeTCPTrustPartialInnerCSUM)
 	if !instructionsStoreImmNearSymbol(out, "kudp_tx_direct_route_tcp_kfunc", kernelUDPTXTIXTSegmentRouteTCPGSOArgsClearFlagsOffset, gsoFlags, 8) {
-		t.Fatal("experimental_tcp route TCP GSO path did not pass trust-partial-inner flag to the GSO kfunc")
+		t.Fatal("tix_tcp route TCP GSO path did not pass trust-partial-inner flag to the GSO kfunc")
 	}
 	if !instructionsStoreImmNearSymbol(out, "kudp_tx_direct_route_tcp_linear_kfunc", kernelUDPTXTIXTPushRouteTCPHeaderArgsClearFlagsOffset, int64(trustIXTIXTTXFinalizeTCPPartialCSUM), 4) {
-		t.Fatal("experimental_tcp route TCP GSO linear fallback should keep normal partial checksum flags without trusting partial inner checksums")
+		t.Fatal("tix_tcp route TCP GSO linear fallback should keep normal partial checksum flags without trusting partial inner checksums")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathTrustsNormalizedCapturedChecksumsByDefault(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
+func TestKernelUDPTXDirectTIXTCPPathTrustsNormalizedCapturedChecksumsByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "")
 	t.Setenv("TRUSTIX_TRUST_CAPTURED_CHECKSUMS", "1")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_trusted_capture")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_trusted_capture")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
-	out := appendKernelUDPTXDirect(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, statsMap, routeMap, flowMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
+	out := appendKernelUDPTXDirect(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, statsMap, routeMap, flowMap, kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true})
 	if instructionsContainSymbol(out, "kudp_tx_direct_inner_tixt_pre_csum_tcp") {
-		t.Fatal("experimental_tcp direct-only TX program re-normalized inner TCP checksums despite trusted captured checksums")
+		t.Fatal("tix_tcp direct-only TX program re-normalized inner TCP checksums despite trusted captured checksums")
 	}
 }
 
-func TestKernelUDPTXDirectExperimentalTCPPathSkipsChunkedChecksumWhenOuterChecksumDisabled(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM", "1")
-	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "exp_tcp_skip_outer_checksum")
+func TestKernelUDPTXDirectTIXTCPPathSkipsChunkedChecksumWhenOuterChecksumDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM", "1")
+	statsMap, routeMap, flowMap := newKernelUDPTXDirectInstructionTestMaps(t, "tix_tcp_skip_outer_checksum")
 	defer statsMap.Close()
 	defer routeMap.Close()
 	defer flowMap.Close()
-	out := appendKernelUDPTXDirect(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, statsMap, routeMap, flowMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
+	out := appendKernelUDPTXDirect(asm.Instructions{asm.Mov.Reg(asm.R6, asm.R1)}, statsMap, routeMap, flowMap, kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true})
 	if instructionsContainSymbol(out, "kudp_tx_direct_tcp_csum_payload_chunk_0_next") {
-		t.Fatal("experimental_tcp skip-outer-checksum direct TX kept the outer checksum scanner")
+		t.Fatal("tix_tcp skip-outer-checksum direct TX kept the outer checksum scanner")
 	}
 }
 
@@ -14462,11 +14462,11 @@ func TestEgressFastPathProgramLoadsWithKernelUDPTXDirectOnly(t *testing.T) {
 	defer program.Close()
 }
 
-func TestEgressFastPathProgramLoadsWithExperimentalTCPDirectOnly(t *testing.T) {
+func TestEgressFastPathProgramLoadsWithTIXTCPDirectOnly(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("egress fast path verifier test requires Linux")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM", "1")
 	if err := rlimit.RemoveMemlock(); err != nil {
 		t.Skipf("raise memlock limit for BPF verifier test: %v", err)
 	}
@@ -14484,9 +14484,9 @@ func TestEgressFastPathProgramLoadsWithExperimentalTCPDirectOnly(t *testing.T) {
 	natBindingMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_nat_bindings_egress_exp_direct_only_test", Type: cebpf.Hash, KeySize: 20, ValueSize: 16, MaxEntries: 16})
 	defer natBindingMap.Close()
 
-	program, err := loadEgressFastPathProgram("trustix_egress_exp_direct_only_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, natBindingMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, ExperimentalTCPOnly: true, DirectOnly: true})
+	program, err := loadEgressFastPathProgram("trustix_egress_exp_direct_only_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, natBindingMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, TIXTCPOnly: true, DirectOnly: true})
 	if err != nil {
-		t.Fatalf("load egress fast path experimental_tcp direct-only program: %v", err)
+		t.Fatalf("load egress fast path tix_tcp direct-only program: %v", err)
 	}
 	defer program.Close()
 }
@@ -14558,7 +14558,7 @@ func TestKernelUDPRXDirectProgramLoadsWithTIXTPath(t *testing.T) {
 
 	program, err := loadKernelUDPRXDirectProgramWithOptions("trustix_tixt_rx_test", statsMap, portMap, neighMap, 1, net.HardwareAddr{2, 0, 0, 0, 0, 1}, kernelUDPRXDirectProgramOptions{Broadcast: true})
 	if err != nil {
-		t.Fatalf("load experimental_tcp TIXT RX direct program: %v", err)
+		t.Fatalf("load tix_tcp TIXT RX direct program: %v", err)
 	}
 	defer program.Close()
 }
@@ -14601,31 +14601,31 @@ func TestKernelUDPRXDirectAcceptsSegmentedGSOTails(t *testing.T) {
 	}, 17001)
 	binary.BigEndian.PutUint32(udpPacket[66:70], 1130)
 
-	tcpFrame := experimentaltcp.Frame{Flags: experimentaltcp.FlagInnerIPv4, FlowID: 21, Sequence: 22, Payload: inner}
-	tcpFrameLen, err := experimentaltcp.FrameWireLen(len(inner))
+	tcpFrame := tixtcp.Frame{Flags: tixtcp.FlagInnerIPv4, FlowID: 21, Sequence: 22, Payload: inner}
+	tcpFrameLen, err := tixtcp.FrameWireLen(len(inner))
 	if err != nil {
-		t.Fatalf("experimental_tcp frame length: %v", err)
+		t.Fatalf("tix_tcp frame length: %v", err)
 	}
-	tcpPacketLen, err := experimentaltcp.TCPShapedIPv4WireLen(tcpFrameLen)
+	tcpPacketLen, err := tixtcp.TCPShapedIPv4WireLen(tcpFrameLen)
 	if err != nil {
-		t.Fatalf("experimental_tcp packet length: %v", err)
+		t.Fatalf("tix_tcp packet length: %v", err)
 	}
 	tcpPacket := make([]byte, ethernetHeaderLen+tcpPacketLen)
 	copy(tcpPacket[0:6], []byte{0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x01})
 	copy(tcpPacket[6:12], []byte{0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x02})
 	binary.BigEndian.PutUint16(tcpPacket[12:14], etherTypeIPv4)
-	if _, err := experimentaltcp.MarshalTCPShapedIPv4FrameIntoSkipTCPChecksum(experimentaltcp.TCPPacket{
+	if _, err := tixtcp.MarshalTCPShapedIPv4FrameIntoSkipTCPChecksum(tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.10"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.20"),
 		SourcePort:      43000,
 		DestinationPort: 17002,
 		Acknowledgment:  1,
 	}, tcpFrame, tcpPacket[ethernetHeaderLen:]); err != nil {
-		t.Fatalf("marshal experimental_tcp GSO tail: %v", err)
+		t.Fatalf("marshal tix_tcp GSO tail: %v", err)
 	}
 	binary.BigEndian.PutUint32(tcpPacket[86:90], 1130)
 
-	for name, packet := range map[string][]byte{"udp": udpPacket, "experimental_tcp": tcpPacket} {
+	for name, packet := range map[string][]byte{"udp": udpPacket, "tix_tcp": tcpPacket} {
 		if _, _, err := program.Test(packet); err != nil {
 			t.Fatalf("run %s GSO-tail packet: %v", name, err)
 		}
@@ -14637,10 +14637,10 @@ func TestKernelUDPRXDirectAcceptsSegmentedGSOTails(t *testing.T) {
 		t.Fatalf("inner-length errors after valid tails = %d, %v; want 0", got, err)
 	}
 
-	for name, packet := range map[string][]byte{"udp": udpPacket, "experimental_tcp": tcpPacket} {
+	for name, packet := range map[string][]byte{"udp": udpPacket, "tix_tcp": tcpPacket} {
 		invalid := append([]byte(nil), packet...)
 		innerOffset := 74
-		if name == "experimental_tcp" {
+		if name == "tix_tcp" {
 			innerOffset = 94
 		}
 		invalid[innerOffset+9] = ipProtocolUDP
@@ -14678,7 +14678,7 @@ func TestKernelUDPRXDirectKernelUDPOnlyProgramLoads(t *testing.T) {
 }
 
 func TestKernelUDPRXDirectMagicWireOrder(t *testing.T) {
-	if got, want := htonl(experimentaltcp.Magic), binary.LittleEndian.Uint32([]byte{'T', 'I', 'X', 'T'}); got != want {
+	if got, want := htonl(tixtcp.Magic), binary.LittleEndian.Uint32([]byte{'T', 'I', 'X', 'T'}); got != want {
 		t.Fatalf("TIXT magic wire-order immediate = %#x, want %#x", got, want)
 	}
 	if got, want := htonl(kerneludp.Magic), binary.LittleEndian.Uint32([]byte{'T', 'I', 'X', 'U'}); got != want {
@@ -14801,10 +14801,10 @@ func TestKernelUDPRXDirectOptionsForLink(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "1")
-	t.Setenv("TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
-	t.Setenv("TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "1")
+	t.Setenv("TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT_ONLY", "")
 	if got := kernelUDPRXDirectOptionsForLink(&netlink.Veth{}); got != (kernelUDPRXDirectProgramOptions{RedirectPeer: true, Broadcast: true}) {
 		t.Fatalf("veth RX direct options = %+v", got)
 	}
@@ -14846,8 +14846,8 @@ func TestKernelUDPRXDirectOptionsFollowAttachSpecAndDummyDirectOnly(t *testing.T
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "0")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_ONLY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 
 	spec := dataplane.AttachSpec{KernelUDPTXDirectOnly: true}
@@ -14939,7 +14939,7 @@ func TestKernelUDPRXDirectParseDecapL2KfuncProgramLoads(t *testing.T) {
 		net.HardwareAddr{2, 0, 0, 0, 0, 1},
 		kernelUDPRXDirectProgramOptions{
 			Broadcast:             true,
-			ExperimentalTCPOnly:   true,
+			TIXTCPOnly:            true,
 			DirectOnly:            true,
 			DestinationPortOnly:   true,
 			StaticDestinationPort: 18001,
@@ -14982,7 +14982,7 @@ func TestKernelUDPRXDirectParseDecapL2KfuncProgramLoadsWithLocalDeliverDev(t *te
 		net.HardwareAddr{2, 0, 0, 0, 0, 1},
 		kernelUDPRXDirectProgramOptions{
 			Broadcast:             true,
-			ExperimentalTCPOnly:   true,
+			TIXTCPOnly:            true,
 			DirectOnly:            true,
 			DestinationPortOnly:   true,
 			StaticDestinationPort: 18001,
@@ -15038,15 +15038,15 @@ func TestKernelUDPRXDirectStaticDestinationPortIgnoresOtherTransportPorts(t *tes
 		Endpoints: []dataplane.EndpointMetadata{
 			{ID: "local-udp", Peer: "ix-a", Transport: "udp", Listen: "198.18.0.1:17001", Enabled: true},
 			{ID: "remote-udp", Peer: "ix-b", Transport: "udp", Address: "198.18.0.2:17002", Enabled: true},
-			{ID: "local-tcp", Peer: "ix-a", Transport: "experimental_tcp", Listen: "198.18.0.1:18001", Enabled: true},
-			{ID: "remote-tcp", Peer: "ix-b", Transport: "experimental_tcp", Address: "198.18.0.2:18002", Enabled: true},
+			{ID: "local-tcp", Peer: "ix-a", Transport: "tix_tcp", Listen: "198.18.0.1:18001", Enabled: true},
+			{ID: "remote-tcp", Peer: "ix-b", Transport: "tix_tcp", Address: "198.18.0.2:18002", Enabled: true},
 		},
 		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
 	}
 	manager.kernelUDPAllowed = map[uint16]struct{}{
 		17001: {},
 	}
-	manager.expTCPAllowed = map[uint16]struct{}{
+	manager.tixTCPAllowed = map[uint16]struct{}{
 		18001: {},
 	}
 
@@ -15060,39 +15060,39 @@ func TestKernelUDPRXDirectStaticDestinationPortIgnoresOtherTransportPorts(t *tes
 	}
 
 	got = manager.kernelUDPRXDirectStaticDestinationPortLocked(kernelUDPRXDirectProgramOptions{
-		ExperimentalTCPOnly: true,
+		TIXTCPOnly:          true,
 		DirectOnly:          true,
 		DestinationPortOnly: true,
 	})
 	if got != 18001 {
-		t.Fatalf("experimental_tcp static destination port = %d, want local TCP listen port 18001", got)
+		t.Fatalf("tix_tcp static destination port = %d, want local TCP listen port 18001", got)
 	}
 }
 
-func TestKernelUDPRXDirectStaticDestinationPortUsesLocalExperimentalTCPListenPort(t *testing.T) {
+func TestKernelUDPRXDirectStaticDestinationPortUsesLocalTIXTCPListenPort(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_RX_DIRECT_STATIC_DESTINATION_PORT", "")
 	manager := NewManager()
 	manager.snapshot = dataplane.Snapshot{
 		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
 		Endpoints: []dataplane.EndpointMetadata{
-			{ID: "local", Peer: "ix-a", Transport: "experimental_tcp", Listen: "198.18.0.1:18001", Enabled: true},
-			{ID: "remote", Peer: "ix-b", Transport: "experimental_tcp", Address: "198.18.0.2:18002", Enabled: true},
+			{ID: "local", Peer: "ix-a", Transport: "tix_tcp", Listen: "198.18.0.1:18001", Enabled: true},
+			{ID: "remote", Peer: "ix-b", Transport: "tix_tcp", Address: "198.18.0.2:18002", Enabled: true},
 		},
 		Peers: []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
 	}
-	manager.expTCPAllowed = map[uint16]struct{}{
+	manager.tixTCPAllowed = map[uint16]struct{}{
 		18001: {},
 		41000: {},
 		42000: {},
 	}
 
 	got := manager.kernelUDPRXDirectStaticDestinationPortLocked(kernelUDPRXDirectProgramOptions{
-		ExperimentalTCPOnly: true,
+		TIXTCPOnly:          true,
 		DirectOnly:          true,
 		DestinationPortOnly: true,
 	})
 	if got != 18001 {
-		t.Fatalf("static destination port = %d, want local experimental_tcp listen port 18001", got)
+		t.Fatalf("static destination port = %d, want local tix_tcp listen port 18001", got)
 	}
 }
 
@@ -15132,7 +15132,7 @@ func TestKernelUDPXDPRXDirectVethUsesSKBAttachWithoutFallback(t *testing.T) {
 	defer rxConfigMap.Close()
 
 	manager := NewManager()
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpAttachMode: expTCPXDPAttachSKB, xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpAttachMode: tixTCPXDPAttachSKB, xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	manager.kernelUDPRXNeighMap = neighMap
 	manager.kernelUDPRXDevMap = devMap
 	manager.kernelUDPRXConfigMap = rxConfigMap
@@ -15161,7 +15161,7 @@ func TestKernelUDPXDPRXDirectVethNativeFallsBackToTC(t *testing.T) {
 	defer rxConfigMap.Close()
 
 	manager := NewManager()
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpAttachMode: expTCPXDPAttachNative, xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpAttachMode: tixTCPXDPAttachNative, xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	manager.kernelUDPRXNeighMap = neighMap
 	manager.kernelUDPRXDevMap = devMap
 	manager.kernelUDPRXConfigMap = rxConfigMap
@@ -15192,7 +15192,7 @@ func TestKernelUDPXDPRXSecureDirectVethFallsBackToTCSecureRX(t *testing.T) {
 	defer rxConfigMap.Close()
 
 	manager := NewManager()
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpAttachMode: expTCPXDPAttachSKB, xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpAttachMode: tixTCPXDPAttachSKB, xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	manager.kernelUDPRXNeighMap = neighMap
 	manager.kernelUDPRXDevMap = devMap
 	manager.kernelUDPRXConfigMap = rxConfigMap
@@ -15209,7 +15209,7 @@ func TestKernelUDPXDPRXSecureDirectVethFallsBackToTCSecureRX(t *testing.T) {
 	if !manager.kernelUDPXDPRXSecureDirectVethFallback {
 		t.Fatal("secure XDP RX direct did not fall back for veth peer/broadcast path")
 	}
-	if manager.expTCPFastPath.KernelUDPXDPRXSecureDirectEnabled() {
+	if manager.tixTCPFastPath.KernelUDPXDPRXSecureDirectEnabled() {
 		t.Fatal("secure XDP RX direct remained enabled despite veth fallback")
 	}
 	var config uint32
@@ -15217,13 +15217,13 @@ func TestKernelUDPXDPRXSecureDirectVethFallsBackToTCSecureRX(t *testing.T) {
 	if err := configMap.Lookup(key, &config); err != nil {
 		t.Fatalf("read XDP config map: %v", err)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXSecureDirect != 0 {
+	if config&tixTCPConfigKernelUDPXDPRXSecureDirect != 0 {
 		t.Fatalf("secure XDP bit unexpectedly set in fallback config: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPTCRXSecureDirect == 0 {
+	if config&tixTCPConfigKernelUDPTCRXSecureDirect == 0 {
 		t.Fatalf("secure TC RX direct bit was not enabled for XDP secure fallback config: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXDirect == 0 {
+	if config&tixTCPConfigKernelUDPXDPRXDirect == 0 {
 		t.Fatalf("plain XDP RX direct bit was not preserved in fallback config: %#x", config)
 	}
 }
@@ -15266,7 +15266,7 @@ func TestKernelUDPRXConfigKeepsPlaintextOnAFXDPMixedProvider(t *testing.T) {
 	defer configMap.Close()
 
 	manager := NewManager()
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	manager.kernelUDPRXDirectAttached = true
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
 		t.Fatalf("sync mixed RX direct config: %v", err)
@@ -15276,7 +15276,7 @@ func TestKernelUDPRXConfigKeepsPlaintextOnAFXDPMixedProvider(t *testing.T) {
 	if err := configMap.Lookup(key, &config); err != nil {
 		t.Fatalf("read XDP config map: %v", err)
 	}
-	if config&experimentalTCPConfigKernelUDPTCRXDirect != 0 {
+	if config&tixTCPConfigKernelUDPTCRXDirect != 0 {
 		t.Fatalf("mixed AF_XDP config set TC plaintext direct bit: %#x", config)
 	}
 }
@@ -15291,7 +15291,7 @@ func TestKernelUDPRXConfigPassesPlaintextToTCForSafeDirect(t *testing.T) {
 	defer configMap.Close()
 
 	manager := NewManager()
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	manager.kernelUDPRXDirectAttached = true
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
 		t.Fatalf("sync safe-direct RX direct config: %v", err)
@@ -15301,7 +15301,7 @@ func TestKernelUDPRXConfigPassesPlaintextToTCForSafeDirect(t *testing.T) {
 	if err := configMap.Lookup(key, &config); err != nil {
 		t.Fatalf("read XDP config map: %v", err)
 	}
-	if config&experimentalTCPConfigKernelUDPTCRXDirect == 0 {
+	if config&tixTCPConfigKernelUDPTCRXDirect == 0 {
 		t.Fatalf("safe-direct config did not set TC plaintext direct bit: %#x", config)
 	}
 }
@@ -15316,7 +15316,7 @@ func TestKernelUDPRXConfigPassesPlaintextToTCForDirectOnly(t *testing.T) {
 	defer configMap.Close()
 
 	manager := NewManager()
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	manager.kernelUDPRXDirectAttached = true
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
 		t.Fatalf("sync direct-only RX direct config: %v", err)
@@ -15326,7 +15326,7 @@ func TestKernelUDPRXConfigPassesPlaintextToTCForDirectOnly(t *testing.T) {
 	if err := configMap.Lookup(key, &config); err != nil {
 		t.Fatalf("read XDP config map: %v", err)
 	}
-	if config&experimentalTCPConfigKernelUDPTCRXDirect == 0 {
+	if config&tixTCPConfigKernelUDPTCRXDirect == 0 {
 		t.Fatalf("direct-only config did not set TC plaintext direct bit: %#x", config)
 	}
 }
@@ -15344,7 +15344,7 @@ func TestKernelUDPRXConfigPassesToKernelDatapathWorker(t *testing.T) {
 	defer configMap.Close()
 
 	manager := NewManager()
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	manager.kernelUDPRXDirectAttached = true
 	manager.kernelUDPXDPRXDirectEnabled = true
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
@@ -15355,13 +15355,13 @@ func TestKernelUDPRXConfigPassesToKernelDatapathWorker(t *testing.T) {
 	if err := configMap.Lookup(key, &config); err != nil {
 		t.Fatalf("read XDP config map: %v", err)
 	}
-	if config&experimentalTCPConfigKernelUDPTCRXDirect == 0 {
+	if config&tixTCPConfigKernelUDPTCRXDirect == 0 {
 		t.Fatalf("kernel datapath worker config did not set TC plaintext pass bit: %#x", config)
 	}
-	if config&experimentalTCPConfigXDPFallbackPass == 0 {
+	if config&tixTCPConfigXDPFallbackPass == 0 {
 		t.Fatalf("kernel datapath worker config did not set XDP fallback-pass bit: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXDirect != 0 {
+	if config&tixTCPConfigKernelUDPXDPRXDirect != 0 {
 		t.Fatalf("kernel datapath worker config left XDP RX direct enabled: %#x", config)
 	}
 }
@@ -15423,10 +15423,10 @@ func TestKernelUDPRXConfigRouteGSOSuppressionIgnoresLegacyWorkerEnv(t *testing.T
 
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{
-		ExperimentalTCPTXDirect:              true,
+		TIXTCPTXDirect:                       true,
 		KernelDatapathSuppressLegacyRXWorker: true,
 	}
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	manager.kernelUDPRXDirectAttached = true
 	manager.kernelUDPXDPRXDirectEnabled = true
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
@@ -15437,10 +15437,10 @@ func TestKernelUDPRXConfigRouteGSOSuppressionIgnoresLegacyWorkerEnv(t *testing.T
 	if err := configMap.Lookup(key, &config); err != nil {
 		t.Fatalf("read XDP config map: %v", err)
 	}
-	if config&experimentalTCPConfigKernelUDPTCRXDirect == 0 {
+	if config&tixTCPConfigKernelUDPTCRXDirect == 0 {
 		t.Fatalf("route-GSO suppressed-worker config did not set TC RX direct bit: %#x", config)
 	}
-	if config&experimentalTCPConfigXDPFallbackPass != 0 {
+	if config&tixTCPConfigXDPFallbackPass != 0 {
 		t.Fatalf("route-GSO suppressed-worker config should not keep legacy XDP fallback-pass bit: %#x", config)
 	}
 }
@@ -15458,7 +15458,7 @@ func TestKernelDatapathRXWorkerConfiguresXDPStackPassWithoutTCRXDirect(t *testin
 	defer configMap.Close()
 
 	manager := NewManager()
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
 		t.Fatalf("sync kernel datapath worker stack-pass config: %v", err)
 	}
@@ -15467,13 +15467,13 @@ func TestKernelDatapathRXWorkerConfiguresXDPStackPassWithoutTCRXDirect(t *testin
 	if err := configMap.Lookup(key, &config); err != nil {
 		t.Fatalf("read XDP config map: %v", err)
 	}
-	if config&experimentalTCPConfigXDPFallbackPass == 0 {
+	if config&tixTCPConfigXDPFallbackPass == 0 {
 		t.Fatalf("kernel datapath worker did not set XDP fallback-pass without TC RX direct: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPTCRXDirect != 0 {
+	if config&tixTCPConfigKernelUDPTCRXDirect != 0 {
 		t.Fatalf("kernel datapath worker unexpectedly enabled TC RX direct: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXDirect != 0 {
+	if config&tixTCPConfigKernelUDPXDPRXDirect != 0 {
 		t.Fatalf("kernel datapath worker unexpectedly enabled XDP RX direct: %#x", config)
 	}
 }
@@ -15491,7 +15491,7 @@ func TestKernelUDPRXConfigKernelDatapathPassCanBeDisabled(t *testing.T) {
 	defer configMap.Close()
 
 	manager := NewManager()
-	manager.expTCPFastPath = &experimentalTCPFastPath{xdpObject: &experimentalTCPXDPObject{configMap: configMap}, queueCount: 1}
+	manager.tixTCPFastPath = &tixTCPFastPath{xdpObject: &tixTCPXDPObject{configMap: configMap}, queueCount: 1}
 	manager.kernelUDPRXDirectAttached = true
 	manager.kernelUDPXDPRXDirectEnabled = true
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
@@ -15502,10 +15502,10 @@ func TestKernelUDPRXConfigKernelDatapathPassCanBeDisabled(t *testing.T) {
 	if err := configMap.Lookup(key, &config); err != nil {
 		t.Fatalf("read XDP config map: %v", err)
 	}
-	if config&experimentalTCPConfigXDPFallbackPass != 0 {
+	if config&tixTCPConfigXDPFallbackPass != 0 {
 		t.Fatalf("disabled kernel datapath pass still set XDP fallback-pass bit: %#x", config)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXDirect == 0 {
+	if config&tixTCPConfigKernelUDPXDPRXDirect == 0 {
 		t.Fatalf("disabled kernel datapath pass should preserve XDP RX direct: %#x", config)
 	}
 }
@@ -15519,7 +15519,7 @@ func TestStandaloneKernelUDPXDPRXDirectConfigUsesFallbackPass(t *testing.T) {
 	defer configMap.Close()
 
 	manager := NewManager()
-	manager.kernelUDPXDPRXDirectObject = &experimentalTCPXDPObject{configMap: configMap}
+	manager.kernelUDPXDPRXDirectObject = &tixTCPXDPObject{configMap: configMap}
 	manager.kernelUDPRXDirectAttached = true
 	manager.kernelUDPXDPRXDirectEnabled = true
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
@@ -15530,10 +15530,10 @@ func TestStandaloneKernelUDPXDPRXDirectConfigUsesFallbackPass(t *testing.T) {
 	if err := configMap.Lookup(key, &config); err != nil {
 		t.Fatalf("read standalone XDP config map: %v", err)
 	}
-	if config&experimentalTCPConfigKernelUDPXDPRXDirect == 0 {
+	if config&tixTCPConfigKernelUDPXDPRXDirect == 0 {
 		t.Fatalf("standalone XDP RX direct bit was not set: %#x", config)
 	}
-	if config&experimentalTCPConfigXDPFallbackPass == 0 {
+	if config&tixTCPConfigXDPFallbackPass == 0 {
 		t.Fatalf("standalone XDP fallback-pass bit was not set: %#x", config)
 	}
 }
@@ -16031,17 +16031,17 @@ func TestSplitPreparedKernelUDPFramesFragmentsSealedPayload(t *testing.T) {
 	}
 }
 
-func TestSplitPreparedExperimentalTCPFramesFragmentsSealedPayload(t *testing.T) {
-	packet := experimentaltcp.TCPPacket{
+func TestSplitPreparedTIXTCPFramesFragmentsSealedPayload(t *testing.T) {
+	packet := tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.1"),
 		DestinationIP:   netip.MustParseAddr("192.0.2.2"),
 		SourcePort:      40000,
 		DestinationPort: 50000,
 	}
-	item := preparedExperimentalTCPTXFrame{
+	item := preparedTIXTCPTXFrame{
 		packet: packet,
-		wireFrame: experimentaltcp.Frame{
-			Flags:    experimentaltcp.FlagEncrypted | experimentaltcp.FlagInnerIPv4,
+		wireFrame: tixtcp.Frame{
+			Flags:    tixtcp.FlagEncrypted | tixtcp.FlagInnerIPv4,
 			FlowID:   9,
 			Sequence: 100,
 			Payload:  bytesOf(0x5a, 2500),
@@ -16056,7 +16056,7 @@ func TestSplitPreparedExperimentalTCPFramesFragmentsSealedPayload(t *testing.T) 
 		txInnerHashValid: true,
 	}
 
-	got, err := splitPreparedExperimentalTCPFrames([]preparedExperimentalTCPTXFrame{item})
+	got, err := splitPreparedTIXTCPFrames([]preparedTIXTCPTXFrame{item})
 	if err != nil {
 		t.Fatalf("split prepared frames: %v", err)
 	}
@@ -16064,7 +16064,7 @@ func TestSplitPreparedExperimentalTCPFramesFragmentsSealedPayload(t *testing.T) 
 		t.Fatalf("fragments = %d, want 3", len(got))
 	}
 	for i, fragment := range got {
-		wantFlags := experimentaltcp.FlagEncrypted | experimentaltcp.FlagCryptoFragment | experimentaltcp.FlagInnerIPv4
+		wantFlags := tixtcp.FlagEncrypted | tixtcp.FlagCryptoFragment | tixtcp.FlagInnerIPv4
 		if fragment.wireFrame.Flags&wantFlags != wantFlags {
 			t.Fatalf("fragment %d flags = %#x", i, fragment.wireFrame.Flags)
 		}
@@ -16091,12 +16091,12 @@ func TestSplitPreparedExperimentalTCPFramesFragmentsSealedPayload(t *testing.T) 
 	}
 }
 
-func TestReassembleExperimentalTCPCryptoFragments(t *testing.T) {
+func TestReassembleTIXTCPCryptoFragments(t *testing.T) {
 	manager := NewManager()
 	payload := bytesOf(0x8c, 2500)
-	frames := []receivedExperimentalTCPFrame{
+	frames := []receivedTIXTCPFrame{
 		{
-			frame: dataplane.ExperimentalTCPFrame{
+			frame: dataplane.TIXTCPFrame{
 				FlowID:          7,
 				Epoch:           3,
 				Sequence:        100,
@@ -16111,7 +16111,7 @@ func TestReassembleExperimentalTCPCryptoFragments(t *testing.T) {
 			encryptedKernelFragment: true,
 		},
 		{
-			frame: dataplane.ExperimentalTCPFrame{
+			frame: dataplane.TIXTCPFrame{
 				FlowID:          7,
 				Epoch:           3,
 				Sequence:        101,
@@ -16125,7 +16125,7 @@ func TestReassembleExperimentalTCPCryptoFragments(t *testing.T) {
 			encryptedKernelFragment: true,
 		},
 		{
-			frame: dataplane.ExperimentalTCPFrame{
+			frame: dataplane.TIXTCPFrame{
 				FlowID:          7,
 				Epoch:           3,
 				Sequence:        102,
@@ -16140,8 +16140,8 @@ func TestReassembleExperimentalTCPCryptoFragments(t *testing.T) {
 		},
 	}
 
-	got := manager.reassembleExperimentalTCPCryptoFragments(frames)
-	defer releaseReceivedExperimentalTCPFrames(got)
+	got := manager.reassembleTIXTCPCryptoFragments(frames)
+	defer releaseReceivedTIXTCPFrames(got)
 	if len(got) != 1 {
 		t.Fatalf("frames = %d, want 1", len(got))
 	}
@@ -16360,8 +16360,8 @@ func TestIngestKernelUDPCryptoFragmentHandlesLastFragmentFirst(t *testing.T) {
 	}
 }
 
-func validKernelCryptoSpec(flowID uint64) dataplane.ExperimentalTCPCryptoSpec {
-	return dataplane.ExperimentalTCPCryptoSpec{
+func validKernelCryptoSpec(flowID uint64) dataplane.TIXTCPCryptoSpec {
+	return dataplane.TIXTCPCryptoSpec{
 		FlowID:       flowID,
 		Suite:        kernelCryptoSuiteAES256GCMX25519,
 		WireFormat:   kernelCryptoWireFormatTrustIXSecureDataV1,

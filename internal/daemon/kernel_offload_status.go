@@ -21,7 +21,7 @@ const (
 	placementFallback  = "fallback"
 )
 
-func (daemon *Daemon) dataPathKernelOffloadStatus(stats dataplane.Stats, statsOK bool, experimentalTCP *dataplane.ExperimentalTCPStatus, kernelTransport *dataplane.KernelTransportStatus, kernelUDP *dataplane.KernelUDPStatus) dataPathKernelOffloadStatus {
+func (daemon *Daemon) dataPathKernelOffloadStatus(stats dataplane.Stats, statsOK bool, tixTCP *dataplane.TIXTCPStatus, kernelTransport *dataplane.KernelTransportStatus, kernelUDP *dataplane.KernelUDPStatus) dataPathKernelOffloadStatus {
 	packetPolicy := daemon.dataplanePacketPolicy()
 	modulePlacements := kernelModulePlacements(daemon.kernelModuleStatuses())
 	status := dataPathKernelOffloadStatus{
@@ -39,7 +39,7 @@ func (daemon *Daemon) dataPathKernelOffloadStatus(stats dataplane.Stats, statsOK
 			{Name: "transit_routing_after_decrypt", Layer: kernelLayerControl, Placement: placementUserspace, Detail: "post-decrypt route lookup and next-hop session selection stay in daemon"},
 		},
 		KernelCandidates: []dataPathKernelCandidate{
-			{Name: "experimental_tcp_plaintext_forward", Layer: kernelLayerXDP, Complexity: "medium", Detail: "eligible plaintext experimental_tcp frames can avoid secure crypto workers; routing still needs explicit flow/session context"},
+			{Name: "tix_tcp_plaintext_forward", Layer: kernelLayerXDP, Complexity: "medium", Detail: "eligible plaintext tix_tcp frames can avoid secure crypto workers; routing still needs explicit flow/session context"},
 			{Name: "endpoint_flow_map", Layer: kernelLayerTC, Complexity: "high", Detail: "requires kernel-visible endpoint/flow/session maps and health state ownership"},
 		},
 		UserspaceRemaining: []dataPathUserspaceResponsibility{
@@ -54,8 +54,8 @@ func (daemon *Daemon) dataPathKernelOffloadStatus(stats dataplane.Stats, statsOK
 		status.DataplaneMode = stats.Mode
 		status.Capabilities = append([]string(nil), stats.Capabilities...)
 	}
-	if experimentalTCP != nil {
-		status.Placements = append(status.Placements, experimentalTCPPlacement(*experimentalTCP))
+	if tixTCP != nil {
+		status.Placements = append(status.Placements, tixTCPPlacement(*tixTCP))
 	}
 	if kernelUDP != nil {
 		status.Placements = append(status.Placements, kernelUDPPlacement(*kernelUDP))
@@ -187,9 +187,9 @@ func packetPolicyDetail(policy dataplane.PacketPolicy) string {
 	}
 }
 
-func experimentalTCPPlacement(status dataplane.ExperimentalTCPStatus) dataPathKernelPlacement {
+func tixTCPPlacement(status dataplane.TIXTCPStatus) dataPathKernelPlacement {
 	placement := placementUserspace
-	detail := "experimental_tcp provider is unavailable"
+	detail := "tix_tcp provider is unavailable"
 	switch {
 	case status.FastPath && status.KernelCrypto:
 		placement = placementKernel
@@ -202,7 +202,7 @@ func experimentalTCPPlacement(status dataplane.ExperimentalTCPStatus) dataPathKe
 		detail = "raw socket fallback is active and is not a kernel fast path"
 	case status.Available:
 		placement = placementFallback
-		detail = "experimental_tcp contract is available but no TC/XDP fast path is attached"
+		detail = "tix_tcp contract is available but no TC/XDP fast path is attached"
 	}
 	if status.Provider != "" {
 		detail += "; provider=" + status.Provider
@@ -214,7 +214,7 @@ func experimentalTCPPlacement(status dataplane.ExperimentalTCPStatus) dataPathKe
 		detail += "; crypto_backend=" + status.CryptoFallback.Selected
 	}
 	return dataPathKernelPlacement{
-		Name:      "experimental_tcp",
+		Name:      "tix_tcp",
 		Layer:     kernelLayerAFXDP,
 		Placement: placement,
 		Detail:    detail,

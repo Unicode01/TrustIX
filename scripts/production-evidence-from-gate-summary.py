@@ -255,19 +255,19 @@ def gate_family_class(gate_family: str) -> str:
     if gate_family in {"full_kmod", "dd_full_kmod", "owdeb_full_kmod"}:
         return "full_kmod"
     if gate_family in {
-        "exp_tcp_full_kmod",
-        "dd_exp_tcp_full_kmod",
-        "owdeb_exp_tcp_full_kmod",
+        "tix_tcp_full_kmod",
+        "dd_tix_tcp_full_kmod",
+        "owdeb_tix_tcp_full_kmod",
     }:
-        return "exp_tcp_full_kmod"
+        return "tix_tcp_full_kmod"
     if gate_family in {"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp"}:
         return "secure_kudp"
     if gate_family in {
-        "secure_exp_tcp_kernel",
-        "dd_secure_exp_tcp_kernel",
-        "owdeb_secure_exp_tcp_kernel",
+        "secure_tix_tcp_kernel",
+        "dd_secure_tix_tcp_kernel",
+        "owdeb_secure_tix_tcp_kernel",
     }:
-        return "secure_exp_tcp_kernel"
+        return "secure_tix_tcp_kernel"
     if gate_family in {"route_gso", "dd_route_gso", "owdeb_route_gso"}:
         return "route_gso"
     return gate_family
@@ -325,20 +325,20 @@ def expected_runner_case(
         return "dd-fullkmod"
     if gate_family == "owdeb_full_kmod":
         return "owdeb-fullkmod"
-    if gate_family in {"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod"}:
-        return "experimental-tcp-full-kmod"
-    if gate_family == "owdeb_exp_tcp_full_kmod":
-        return "owdeb-experimental-tcp-full-kmod"
+    if gate_family in {"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod"}:
+        return "tix-tcp-full-kmod"
+    if gate_family == "owdeb_tix_tcp_full_kmod":
+        return "owdeb-tix-tcp-full-kmod"
     if gate_family in {"secure_kudp", "dd_secure_kudp"}:
         return "secure-kudp"
     if gate_family == "owdeb_secure_kudp":
         return "owdeb-secure-kudp"
     if gate_family in {
-        "secure_exp_tcp_kernel",
-        "dd_secure_exp_tcp_kernel",
-        "owdeb_secure_exp_tcp_kernel",
+        "secure_tix_tcp_kernel",
+        "dd_secure_tix_tcp_kernel",
+        "owdeb_secure_tix_tcp_kernel",
     }:
-        return "secure-exp-tcp-kernel"
+        return "secure-tix-tcp-kernel"
     if gate_family in {"route_gso", "dd_route_gso"}:
         return "dd-routegso"
     if gate_family == "owdeb_route_gso":
@@ -389,7 +389,7 @@ def require_matrix_semantics(row: dict[str, Any]) -> None:
         require_transport_in(
             row=row,
             transport=transport,
-            allowed={"udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp"},
+            allowed={"udp", "tcp", "quic", "websocket", "http_connect", "tix_tcp"},
             gate_family=gate_family,
             label="a userspace",
         )
@@ -457,9 +457,9 @@ def require_matrix_semantics(row: dict[str, Any]) -> None:
                 want=want,
                 gate_family=gate_family,
             )
-    elif gate_class == "exp_tcp_full_kmod":
+    elif gate_class == "tix_tcp_full_kmod":
         for key, got, want in [
-            ("transport", transport, "experimental_tcp"),
+            ("transport", transport, "tix_tcp"),
             ("encryption", encryption, "plaintext"),
             ("profile", profile, "performance"),
             ("datapath", datapath, "kernel_module"),
@@ -486,9 +486,9 @@ def require_matrix_semantics(row: dict[str, Any]) -> None:
                 want=want,
                 gate_family=gate_family,
             )
-    elif gate_class == "secure_exp_tcp_kernel":
+    elif gate_class == "secure_tix_tcp_kernel":
         for key, got, want in [
-            ("transport", transport, "experimental_tcp"),
+            ("transport", transport, "tix_tcp"),
             ("encryption", encryption, "secure"),
             ("profile", profile, "performance"),
             ("datapath", datapath, "kernel_module"),
@@ -503,7 +503,7 @@ def require_matrix_semantics(row: dict[str, Any]) -> None:
             )
     elif gate_class == "route_gso":
         for key, got, want in [
-            ("transport", transport, "experimental_tcp"),
+            ("transport", transport, "tix_tcp"),
             ("encryption", encryption, "plaintext"),
             ("datapath", datapath, "kernel_module"),
             ("crypto_placement", crypto_placement, "userspace"),

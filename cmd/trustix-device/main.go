@@ -14,11 +14,11 @@ import (
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/device"
 	"trustix.local/trustix/internal/transport"
-	experimentaltcptransport "trustix.local/trustix/internal/transport/experimentaltcp"
 	httpconnecttransport "trustix.local/trustix/internal/transport/httpconnect"
 	quictransport "trustix.local/trustix/internal/transport/quic"
 	securetransport "trustix.local/trustix/internal/transport/secure"
 	tcptransport "trustix.local/trustix/internal/transport/tcp"
+	tixtcptransport "trustix.local/trustix/internal/transport/tixtcp"
 	udptransport "trustix.local/trustix/internal/transport/udp"
 	websockettransport "trustix.local/trustix/internal/transport/websocket"
 )
@@ -52,7 +52,7 @@ func main() {
 	ix := fs.String("ix", "", "IX id that issued this device certificate")
 	endpoint := fs.String("endpoint", "", "IX data endpoint address")
 	endpointName := fs.String("endpoint-name", "device-access", "IX data endpoint name")
-	protocol := fs.String("transport", "udp", "transport: udp, tcp, quic, websocket, http_connect, experimental_tcp")
+	protocol := fs.String("transport", "udp", "transport: udp, tcp, quic, websocket, http_connect, tix_tcp")
 	certPath := fs.String("cert", "", "device certificate PEM, including IX intermediate when available")
 	keyPath := fs.String("key", "", "device private key PEM")
 	serverName := fs.String("server-name", "", "TLS/secure server name; defaults to domain")
@@ -166,7 +166,7 @@ func main() {
 	mustRegister(registry, securetransport.New(quictransport.New(), secureOptions))
 	mustRegister(registry, securetransport.New(websockettransport.New(), secureOptions))
 	mustRegister(registry, securetransport.New(httpconnecttransport.New(), secureOptions))
-	mustRegister(registry, securetransport.New(experimentaltcptransport.New(nil), secureOptions))
+	mustRegister(registry, securetransport.New(tixtcptransport.New(nil), secureOptions))
 	tr, ok := registry.Get(clientCfg.Endpoint.Transport)
 	if !ok {
 		fatal(fmt.Errorf("unsupported transport %q", clientCfg.Endpoint.Transport))

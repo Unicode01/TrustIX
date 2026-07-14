@@ -127,8 +127,8 @@ func transportProfileFeatures(rawTransport string, profile config.EndpointProfil
 		features = append(features, values...)
 	}
 	switch protocol {
-	case transport.ProtocolExperimentalTCP:
-		add("tixt_v1", "ackless_tcp")
+	case transport.ProtocolTIXTCP:
+		add("tixt_v1", "tix_tcp")
 		if profile.Profile == config.TransportProfilePerformance {
 			add("tixb_batching")
 			if profile.Datapath != config.TransportDatapathUserspace {
@@ -170,14 +170,14 @@ func transportProfileRuntimeFeatures(rawTransport string, desired config.Desired
 		if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
 			return []string{"tc_direct"}
 		}
-	case transport.ProtocolExperimentalTCP:
+	case transport.ProtocolTIXTCP:
 		if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
-			return []string{"exp_tcp_full_kmod", "full_kmod", "kernel_datapath_full_plaintext", "rx_worker", "tx_plaintext"}
+			return []string{"tix_tcp_full_kmod", "full_kmod", "kernel_datapath_full_plaintext", "rx_worker", "tx_plaintext"}
 		}
-		if experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
-			return []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_exp_tcp_kernel"}
+		if tixTCPSecureRouteGSOAsyncForDesired(desired) {
+			return []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_tix_tcp_kernel"}
 		}
-		if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		if tixTCPPerformanceRouteGSOAsyncForDesired(desired) {
 			return []string{"route_gso", "route_gso_async", "route_gso_sync", "route_tcp_kfunc", "route_xmit_worker"}
 		}
 	}

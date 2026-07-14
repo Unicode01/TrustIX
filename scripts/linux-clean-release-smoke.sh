@@ -25,8 +25,8 @@ run_nat_reverse="${TRUSTIX_CLEAN_RELEASE_SMOKE_NAT_REVERSE:-1}"
 run_kernel="${TRUSTIX_CLEAN_RELEASE_SMOKE_KERNEL:-1}"
 run_kernel_udp="${TRUSTIX_CLEAN_RELEASE_SMOKE_KERNEL_UDP:-1}"
 run_kernel_udp_3ix="${TRUSTIX_CLEAN_RELEASE_SMOKE_3IX_KERNEL_UDP:-1}"
-run_exp_tcp_kernel="${TRUSTIX_CLEAN_RELEASE_SMOKE_EXP_TCP_KERNEL:-1}"
-exp_tcp_kernel_capable=1
+run_tix_tcp_kernel="${TRUSTIX_CLEAN_RELEASE_SMOKE_TIX_TCP_KERNEL:-1}"
+tix_tcp_kernel_capable=1
 ping_count="${TRUSTIX_CLEAN_RELEASE_SMOKE_PING_COUNT:-1}"
 ping_size="${TRUSTIX_CLEAN_RELEASE_SMOKE_PING_SIZE:-56}"
 ping_parallel="${TRUSTIX_CLEAN_RELEASE_SMOKE_PING_PARALLEL:-1}"
@@ -212,17 +212,17 @@ run_kernel_udp_3ix_e2e() {
     bash "${package_dir}/scripts/linux-three-ix-e2e-smoke.sh"
 }
 
-run_exp_tcp_kernel_e2e() {
+run_tix_tcp_kernel_e2e() {
   local package_dir="$1"
   local ko="${package_dir}/kernel/trustix_crypto.ko"
   [[ -f "$ko" ]] || die "release package has no kernel/trustix_crypto.ko"
-  log "load packaged .ko for experimental_tcp kernel e2e"
+  log "load packaged .ko for tix_tcp kernel e2e"
   insmod "$ko"
   trap 'cleanup' EXIT
   env \
     TRUSTIX_E2E_BIN_DIR="${package_dir}/bin" \
-    TRUSTIX_E2E_WORKDIR="${workdir}/experimental-tcp-kernel-e2e" \
-    TRUSTIX_E2E_TRANSPORT=experimental_tcp \
+    TRUSTIX_E2E_WORKDIR="${workdir}/tix-tcp-kernel-e2e" \
+    TRUSTIX_E2E_TRANSPORT=tix_tcp \
     TRUSTIX_E2E_CRYPTO_PLACEMENT=kernel \
     TRUSTIX_E2E_CRASH_RESTART=0 \
     TRUSTIX_E2E_PING_COUNT="$ping_count" \
@@ -308,7 +308,7 @@ main() {
     set -e
     if [[ "$kernel_rc" == "2" ]]; then
       log "kernel AEAD kfunc provider unsupported on this kernel; strict kernel crypto e2e will be skipped"
-      exp_tcp_kernel_capable=0
+      tix_tcp_kernel_capable=0
     elif [[ "$kernel_rc" != "0" ]]; then
       die "TrustIX kernel module smoke failed with exit code ${kernel_rc}"
     fi
@@ -348,11 +348,11 @@ main() {
     assert_clean_trustix_state
   fi
 
-  if truthy "$run_exp_tcp_kernel" && [[ "$exp_tcp_kernel_capable" == "1" ]]; then
-    run_exp_tcp_kernel_e2e "$package_dir"
+  if truthy "$run_tix_tcp_kernel" && [[ "$tix_tcp_kernel_capable" == "1" ]]; then
+    run_tix_tcp_kernel_e2e "$package_dir"
     assert_clean_trustix_state
-  elif truthy "$run_exp_tcp_kernel"; then
-    log "skip experimental_tcp kernel crypto e2e: kernel AEAD kfunc provider unsupported on this kernel"
+  elif truthy "$run_tix_tcp_kernel"; then
+    log "skip tix_tcp kernel crypto e2e: kernel AEAD kfunc provider unsupported on this kernel"
   fi
 
   log "ok: clean release build, embedded .ko lifecycle, packaged .ko smoke, e2e cleanup checks passed"

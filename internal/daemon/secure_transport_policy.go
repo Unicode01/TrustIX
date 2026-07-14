@@ -122,7 +122,7 @@ func performanceKernelSecureCryptoSuites() []string {
 }
 
 func performanceKernelSecureCryptoForDesired(desired config.Desired) bool {
-	return experimentalTCPSecureKernelCryptoDirectForDesired(desired) ||
+	return tixTCPSecureKernelCryptoDirectForDesired(desired) ||
 		kernelUDPSecureFullDirectForDesired(desired)
 }
 
@@ -131,7 +131,7 @@ func performanceKernelSecureCryptoForEndpointPolicy(endpoint config.EndpointConf
 		return false
 	}
 	switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
-	case transport.ProtocolExperimentalTCP, transport.ProtocolUDP:
+	case transport.ProtocolTIXTCP, transport.ProtocolUDP:
 	default:
 		return false
 	}

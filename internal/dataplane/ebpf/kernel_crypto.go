@@ -24,7 +24,7 @@ const (
 	kernelCryptoMaxKeyLen                                = 32
 	kernelCryptoAESGCMIVLen                              = 12
 	kernelCryptoMaxEntries                               = 4096
-	kernelCryptoNamespaceExperimentalTCP          uint8  = 0
+	kernelCryptoNamespaceTIXTCP                   uint8  = 0
 	kernelCryptoNamespaceKernelUDP                uint8  = 1
 	kernelCryptoDirectionSend                     uint8  = 1
 	kernelCryptoDirectionRecv                     uint8  = 2
@@ -178,7 +178,7 @@ func kernelCryptoMapSchema() *dataplane.KernelCryptoMapSchema {
 		FlowKeySize:      binary.Size(kernelCryptoFlowKey{}),
 		FlowValueSize:    binary.Size(kernelCryptoFlowValue{}),
 		Directions:       []string{"send", "recv"},
-		KeyNamespaces:    []string{"experimental_tcp", "kernel_udp"},
+		KeyNamespaces:    []string{"tix_tcp", "kernel_udp"},
 		SupportedSuites:  []string{kernelCryptoSuiteAES256GCMX25519, kernelCryptoSuiteAES128GCMX25519},
 		SoftwareFallback: []string{kernelCryptoSuiteAES256GCMX25519, kernelCryptoSuiteAES128GCMX25519},
 		UnsupportedSuites: []string{
@@ -191,10 +191,10 @@ func kernelCryptoMapSchema() *dataplane.KernelCryptoMapSchema {
 	}
 }
 
-func encodeKernelCryptoSpec(spec dataplane.ExperimentalTCPCryptoSpec) ([]kernelCryptoFlowEntry, error) {
+func encodeKernelCryptoSpec(spec dataplane.TIXTCPCryptoSpec) ([]kernelCryptoFlowEntry, error) {
 	return encodeKernelCryptoInstallSpec(kernelCryptoInstallSpec{
-		component:    "experimental_tcp",
-		namespace:    kernelCryptoNamespaceExperimentalTCP,
+		component:    "tix_tcp",
+		namespace:    kernelCryptoNamespaceTIXTCP,
 		flowID:       spec.FlowID,
 		suite:        spec.Suite,
 		wireFormat:   spec.WireFormat,
@@ -295,7 +295,7 @@ func kernelCryptoFlowFlags() uint32 {
 
 func kernelCryptoHotPathStatsRequested() bool {
 	for _, name := range []string{
-		"TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS",
+		"TRUSTIX_TIX_TCP_HOT_STATS",
 		"TRUSTIX_XDP_HOT_STATS",
 		"TRUSTIX_KERNEL_UDP_XDP_HOT_STATS",
 		"TRUSTIX_KERNEL_UDP_TC_HOT_STATS",
@@ -313,7 +313,7 @@ func kernelCryptoHotPathStatsRequested() bool {
 func kernelCryptoNoReplayRequested() bool {
 	for _, name := range []string{
 		"TRUSTIX_KERNEL_CRYPTO_NO_REPLAY",
-		"TRUSTIX_EXPERIMENTAL_TCP_KERNEL_CRYPTO_NO_REPLAY",
+		"TRUSTIX_TIX_TCP_KERNEL_CRYPTO_NO_REPLAY",
 		"TRUSTIX_KERNEL_UDP_KERNEL_CRYPTO_NO_REPLAY",
 	} {
 		switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
@@ -324,10 +324,10 @@ func kernelCryptoNoReplayRequested() bool {
 	return false
 }
 
-func validateKernelCryptoSpec(spec dataplane.ExperimentalTCPCryptoSpec) error {
+func validateKernelCryptoSpec(spec dataplane.TIXTCPCryptoSpec) error {
 	_, _, err := validateKernelCryptoInstallSpec(kernelCryptoInstallSpec{
-		component:    "experimental_tcp",
-		namespace:    kernelCryptoNamespaceExperimentalTCP,
+		component:    "tix_tcp",
+		namespace:    kernelCryptoNamespaceTIXTCP,
 		flowID:       spec.FlowID,
 		suite:        spec.Suite,
 		wireFormat:   spec.WireFormat,
@@ -389,9 +389,9 @@ func kernelCryptoSuiteID(suite string) (uint16, error) {
 	return suiteID, err
 }
 
-func encodeKernelCryptoSpecs(specs []dataplane.ExperimentalTCPCryptoSpec) ([]kernelCryptoFlowEntry, error) {
+func encodeKernelCryptoSpecs(specs []dataplane.TIXTCPCryptoSpec) ([]kernelCryptoFlowEntry, error) {
 	if len(specs) > int(kernelCryptoMaxEntries)/2 {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto spec count %d exceeds map capacity %d", len(specs), kernelCryptoMaxEntries/2)
+		return nil, fmt.Errorf("tix_tcp kernel crypto spec count %d exceeds map capacity %d", len(specs), kernelCryptoMaxEntries/2)
 	}
 	entries := make([]kernelCryptoFlowEntry, 0, len(specs)*2)
 	for _, spec := range specs {

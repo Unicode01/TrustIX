@@ -24,11 +24,11 @@ Current production-default evidence boundary:
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
 | All 25 selected cross-host defaults | manifest-backed 3600s per-direction PVE gates at commit `0ceffe6f3d2396a363c6062474474c4d03ec09fe` | Every current evidence key now uses one binary and one pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases passed both directions with stable boot IDs and clean pstore/kernel-log findings. |
-| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | Covers `secure_kudp`, `secure_exp_tcp_kernel`, `route_gso`, `full_kmod`, `exp_tcp_full_kmod`, and `tc_direct`. The virtio route-GSO guard keeps unsupported outer GSO on the direct-build path. |
-| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.95+deb13-cloud-amd64` | Both `owdeb_full_kmod` and `owdeb_exp_tcp_full_kmod` passed strict 3600s per-direction gates. A follow-up five-cycle load/traffic/unload test also passed UDP, experimental TCP, and mixed UDP plus experimental TCP without reboot, pstore, residue, or ping loss. |
-| Debian userspace defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | UDP/TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext plus secure experimental TCP all have current-build 3600s per-direction evidence. |
+| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The virtio route-GSO guard keeps unsupported outer GSO on the direct-build path. |
+| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.95+deb13-cloud-amd64` | Both `owdeb_full_kmod` and `owdeb_tix_tcp_full_kmod` passed strict 3600s per-direction gates. A follow-up five-cycle load/traffic/unload test also passed UDP, TIX-TCP, and mixed UDP plus TIX-TCP without reboot, pstore, residue, or ping loss. |
+| Debian userspace defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | UDP/TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext plus secure TIX-TCP all have current-build 3600s per-direction evidence. |
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | Policy remains `datapath=tc_xdp`, but this virtio configuration reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
-| OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+| OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-07-14
 
@@ -50,12 +50,12 @@ the faster direction or an aggregate:
 | Gate family | Transport | Encryption | Policy datapath / crypto | Minimum received throughput |
 | --- | --- | --- | --- | ---: |
 | `secure_kudp` | `kernel_udp` | secure | `tc_xdp` / kernel | 1.514629 Gbps |
-| `secure_exp_tcp_kernel` | `experimental_tcp` | secure | `kernel_module` / kernel | 4.713177 Gbps |
-| `route_gso` | `experimental_tcp` | plaintext | `kernel_module` / userspace | 3.909955 Gbps |
+| `secure_tix_tcp_kernel` | `tix_tcp` | secure | `kernel_module` / kernel | 4.713177 Gbps |
+| `route_gso` | `tix_tcp` | plaintext | `kernel_module` / userspace | 3.909955 Gbps |
 | `full_kmod` | `udp` | plaintext | `kernel_module` / userspace | 4.800517 Gbps |
-| `exp_tcp_full_kmod` | `experimental_tcp` | plaintext | `kernel_module` / userspace | 8.523300 Gbps |
+| `tix_tcp_full_kmod` | `tix_tcp` | plaintext | `kernel_module` / userspace | 8.523300 Gbps |
 | `owdeb_full_kmod` | `udp` | plaintext | `kernel_module` / userspace | 4.433236 Gbps |
-| `owdeb_exp_tcp_full_kmod` | `experimental_tcp` | plaintext | `kernel_module` / userspace | 7.306922 Gbps |
+| `owdeb_tix_tcp_full_kmod` | `tix_tcp` | plaintext | `kernel_module` / userspace | 7.306922 Gbps |
 | `tc_direct` | `kernel_udp` | plaintext | `tc_xdp` / userspace | 3.352749 Gbps |
 | `userspace_tc` | `gre` | plaintext | `tc_xdp` / userspace | 11.183758 Gbps |
 | `userspace_tc` | `gre` | secure | `tc_xdp` / userspace | 1.141784 Gbps |
@@ -63,7 +63,7 @@ the faster direction or an aggregate:
 | `userspace_tc` | `ipip` | secure | `tc_xdp` / userspace | 1.163834 Gbps |
 | `userspace_tc` | `vxlan` | plaintext | `tc_xdp` / userspace | 5.536894 Gbps |
 | `userspace_tc` | `vxlan` | secure | `tc_xdp` / userspace | 0.967441 Gbps |
-| `userspace` | `experimental_tcp` | secure | userspace / userspace | 0.610963 Gbps |
+| `userspace` | `tix_tcp` | secure | userspace / userspace | 0.610963 Gbps |
 | `userspace` | `http_connect` | plaintext | userspace / userspace | 1.216835 Gbps |
 | `userspace` | `http_connect` | secure | userspace / userspace | 0.807209 Gbps |
 | `userspace` | `quic` | plaintext | userspace / userspace | 1.623015 Gbps |
@@ -86,8 +86,8 @@ reboot, or peer-direction loss.
 
 The follow-up result
 `/root/trustix-pve-work/results/0ceffe6-owdeb-transition-20260714T034634Z`
-then ran five cycles of 30s-per-direction UDP full-kmod, experimental TCP
-full-kmod, and simultaneous UDP plus experimental TCP. All 15 cases passed a
+then ran five cycles of 30s-per-direction UDP full-kmod, TIX-TCP
+full-kmod, and simultaneous UDP plus TIX-TCP. All 15 cases passed a
 second verifier with matching strong build/binary identity, stable boot IDs,
 clean pstore/kernel findings, and zero session dial/heartbeat errors. The
 lowest received throughput was 1.662642 Gbps. Continuous underlay ping received
@@ -111,7 +111,7 @@ a pure TrustIX TC-direct tunnel path.
 
 ## 2026-07-09
 
-<a id="2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production"></a>
+<a id="2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-tix_tcp-production"></a>
 
 ### Zaozhuang PVE 73620db remaining userspace production gate
 
@@ -120,7 +120,7 @@ production refresh for the non-UDP userspace defaults on disposable VM IDs
 203 and 204. VM100 and all 1xx guests were not modified. Evidence artifacts
 are preserved on the PVE host at:
 
-`/root/trustix-pve-work/results/current-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production-20260709-115031`
+`/root/trustix-pve-work/results/current-73620db-userspace-tcp-quic-websocket-http_connect-tix_tcp-production-20260709-115031`
 
 Both guests ran Debian 13 kernel `6.12.94+deb13-cloud-amd64` with 4 vCPU and
 virtio underlay interfaces on `eth1`. The TrustIX binary was
@@ -141,7 +141,7 @@ at least 3600 seconds:
 | WebSocket plaintext userspace | 1.268097 Gbps | 1.268155 Gbps | 1 Gbps, 3600s |
 | HTTP CONNECT secure userspace | 0.891241 Gbps | 0.891298 Gbps | 0.75 Gbps, 3600s |
 | HTTP CONNECT plaintext userspace | 1.368409 Gbps | 1.368467 Gbps | 1 Gbps, 3600s |
-| Experimental TCP secure userspace | 0.565595 Gbps | 0.565609 Gbps | 0.5 Gbps, 3600s |
+| TIX-TCP secure userspace | 0.565595 Gbps | 0.565609 Gbps | 0.5 Gbps, 3600s |
 
 Every case used `iperf_mode=forward` with `iperf_directions=both`. The gate
 used `trustix-cross-host-production-gate-manifest-v1`, production gate SHA256
@@ -235,7 +235,7 @@ full-kmod families:
 | Case | Sessions | OpenWrt to Debian | Debian to OpenWrt | Gate |
 | --- | ---: | ---: | ---: | ---: |
 | `owdeb_full_kmod` UDP plaintext full-kmod | P8 | 3.554661 Gbps received, 3.554714 Gbps sent | 4.898228 Gbps received, 4.898301 Gbps sent | 3 Gbps, 3600s |
-| `owdeb_exp_tcp_full_kmod` experimental TCP plaintext full-kmod | P16 | 7.329137 Gbps received, 7.329261 Gbps sent | 8.141763 Gbps received, 8.141837 Gbps sent | 4 Gbps, 3600s |
+| `owdeb_tix_tcp_full_kmod` TIX-TCP plaintext full-kmod | P16 | 7.329137 Gbps received, 7.329261 Gbps sent | 8.141763 Gbps received, 8.141837 Gbps sent | 4 Gbps, 3600s |
 
 The gate used `trustix-cross-host-production-gate-manifest-v1`, production gate
 SHA256 `1371160cca3cceb50617f1cae8704b1755b858bcf08ca530f32b7d46245b19d3`,
@@ -288,12 +288,12 @@ the same guests. Both runs returned runner `pass`, cleaned remote workdirs, and
 had clean pstore artifacts with no TrustIX panic/oops/watchdog findings in
 kernel logs.
 
-<a id="2026-07-07-zaozhuang-pve-1dfaf51-secure-exp-tcp-kernel-production"></a>
+<a id="2026-07-07-zaozhuang-pve-1dfaf51-secure-tix-tcp-kernel-production"></a>
 
-### Zaozhuang PVE 1dfaf51 secure experimental TCP kernel production gate
+### Zaozhuang PVE 1dfaf51 secure TIX-TCP kernel production gate
 
 PVE host `120.220.44.72:8006` ran the selected Debian-to-Debian
-`secure_exp_tcp_kernel` production gate on disposable VM IDs 200 and 201 only.
+`secure_tix_tcp_kernel` production gate on disposable VM IDs 200 and 201 only.
 Both guests ran Debian 13 kernel `6.12.94+deb13-cloud-amd64`. VM100 and all
 1xx guests were not modified.
 
@@ -310,8 +310,8 @@ Evidence artifacts are preserved on the PVE host at
 
 | Gate family | Direction | Received | Duration |
 | --- | --- | ---: | ---: |
-| `secure_exp_tcp_kernel` | A to B | 5.485418 Gbps | 3600.025833s |
-| `secure_exp_tcp_kernel` | B to A | 5.405340 Gbps | 3600.025654s |
+| `secure_tix_tcp_kernel` | A to B | 5.485418 Gbps | 3600.025833s |
+| `secure_tix_tcp_kernel` | B to A | 5.405340 Gbps | 3600.025654s |
 
 The generated production evidence row records `min_gbps=5.405340` and
 `min_seconds=3600`. The gate loaded `trustix_crypto` plus
@@ -422,11 +422,11 @@ Evidence artifacts are preserved on the PVE host at
 | Gate family | Minimum received | Duration | Per-direction received |
 | --- | ---: | ---: | --- |
 | `secure_kudp` | 1.577411 Gbps | 3600s | 1.577411 Gbps A-to-B, 1.659666 Gbps B-to-A |
-| `secure_exp_tcp_kernel` | 5.424119 Gbps | 3600s | 5.424119 Gbps A-to-B, 5.561685 Gbps B-to-A |
+| `secure_tix_tcp_kernel` | 5.424119 Gbps | 3600s | 5.424119 Gbps A-to-B, 5.561685 Gbps B-to-A |
 
 Both gates ran `forward + both` with `iperf_parallel=8` and elapsed 7210
 seconds per gate. `secure_kudp` ran from `2026-07-04T23:15:12Z` to
-`2026-07-05T01:15:22Z`; `secure_exp_tcp_kernel` ran from
+`2026-07-05T01:15:22Z`; `secure_tix_tcp_kernel` ran from
 `2026-07-05T01:15:52Z` to `2026-07-05T03:16:02Z`. Both guests kept stable
 boot IDs (`46cf03ff-2df0-4f4a-926f-7112df2a1935` on VM200 and
 `1e81a222-1a70-45fa-a066-dbe53f3f07f6` on VM201), pstore was mounted and
@@ -466,7 +466,7 @@ Evidence artifacts are preserved on the PVE host at
 | Gate family | Transport | Minimum received | Duration |
 | --- | --- | ---: | ---: |
 | `owdeb_full_kmod` | UDP plaintext full kernel module | 3.995213 Gbps | 3600s |
-| `owdeb_exp_tcp_full_kmod` | experimental TCP plaintext full kernel module, P16 | 7.754582 Gbps | 3600s |
+| `owdeb_tix_tcp_full_kmod` | TIX-TCP plaintext full kernel module, P16 | 7.754582 Gbps | 3600s |
 
 Both production runs kept stable boot IDs
 (`8e1d7a83-da3c-4ea0-b289-2d66ae38b372` on OpenWrt and
@@ -476,7 +476,7 @@ Both production runs kept stable boot IDs
 with clean pstore artifacts, no kernel log crash findings, and `tix-lan`
 `tx_queue_len=1000`.
 
-<a id="2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-exp-tcp-full-kmod-production"></a>
+<a id="2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-tix-tcp-full-kmod-production"></a>
 
 ### Zaozhuang PVE 8c2eebc Debian full-kmod production gates
 
@@ -511,13 +511,13 @@ and
 | Gate family | Minimum received | Duration | Notes |
 | --- | ---: | ---: | --- |
 | `full_kmod` | 5.053889 Gbps | 3600s | UDP plaintext full datapath module; 8 warmed sessions |
-| `exp_tcp_full_kmod` | 11.819391 Gbps | 3600s | experimental TCP plaintext full datapath module; P16 session pool, 32 matching sessions |
+| `tix_tcp_full_kmod` | 11.819391 Gbps | 3600s | TIX-TCP plaintext full datapath module; P16 session pool, 32 matching sessions |
 
 Per-direction throughput for `full_kmod` was 5.053889 Gbps A-to-B and
-5.642824 Gbps B-to-A. Per-direction throughput for `exp_tcp_full_kmod` was
+5.642824 Gbps B-to-A. Per-direction throughput for `tix_tcp_full_kmod` was
 11.819391 Gbps A-to-B and 12.286834 Gbps B-to-A. The first combined run's
-experimental TCP verifier failure was a gate-configuration failure only:
-session pool size was 8 while the current `exp_tcp_full_kmod` production gate
+TIX-TCP verifier failure was a gate-configuration failure only:
+session pool size was 8 while the current `tix_tcp_full_kmod` production gate
 requires 16. The dedicated rerun used `TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE=16`
 and passed the final production gate.
 
@@ -592,11 +592,11 @@ the verifier SHA256 was
 | Gate family | Transport | Minimum received | Duration |
 | --- | --- | ---: | ---: |
 | `owdeb_full_kmod` | UDP plaintext full kernel module | 4.130908 Gbps | 3600s |
-| `owdeb_exp_tcp_full_kmod` | experimental TCP plaintext full kernel module, P16 | 7.818210 Gbps | 3600s |
+| `owdeb_tix_tcp_full_kmod` | TIX-TCP plaintext full kernel module, P16 | 7.818210 Gbps | 3600s |
 
 Per-direction throughput for `owdeb_full_kmod` was 4.688/4.688 Gbps
 OpenWrt-to-Debian and 4.130908/4.130908 Gbps Debian-to-OpenWrt. Per-direction
-throughput for `owdeb_exp_tcp_full_kmod` was 10.666/10.666 Gbps
+throughput for `owdeb_tix_tcp_full_kmod` was 10.666/10.666 Gbps
 OpenWrt-to-Debian and 7.818210/7.818210 Gbps Debian-to-OpenWrt.
 
 The OpenWrt node recorded `trustix_datapath.rx_worker_single_coalesce=N`; the
@@ -626,7 +626,7 @@ verifier SHA256 was
 | --- | ---: | ---: | --- |
 | `tc_direct` | 3.196574 Gbps | 3600s | no `trustix_*` modules loaded |
 | `secure_kudp` | 1.602571 Gbps | 3600s | `trustix_crypto` and `trustix_datapath_helpers`; replay/drop ratios below gate budgets |
-| `secure_exp_tcp_kernel` | 4.543153 Gbps | 3600s | direct kfunc seal/open counters active; `kernel_crypto_module_direct_kfunc_errors=0` |
+| `secure_tix_tcp_kernel` | 4.543153 Gbps | 3600s | direct kfunc seal/open counters active; `kernel_crypto_module_direct_kfunc_errors=0` |
 
 All three artifacts passed with stable boot IDs, clean pstore artifacts, no
 kernel log crash findings, and `tix-lan` `tx_queue_len=1000`.
@@ -660,7 +660,7 @@ boot IDs, clean pstore artifacts, no kernel log crash findings, no
 ### Zaozhuang PVE current Debian kmod verifier recheck
 
 The existing 9884a92 Debian-to-Debian 3600s artifacts for full-kmod and
-experimental TCP full-kmod were rechecked with the same netdevfix production
+TIX-TCP full-kmod were rechecked with the same netdevfix production
 gate and verifier hashes listed above. The TrustIX binary was
 `trustix-linux-amd64`, commit
 `9884a92a255740ef13e754b1ad2e8b162d6bbcf9`, build time
@@ -670,7 +670,7 @@ gate and verifier hashes listed above. The TrustIX binary was
 | Gate family | Minimum received | Duration |
 | --- | ---: | ---: |
 | `full_kmod` | 4.464254 Gbps | 3600s |
-| `exp_tcp_full_kmod` | 8.978477 Gbps | 3600s |
+| `tix_tcp_full_kmod` | 8.978477 Gbps | 3600s |
 
 Both rechecks passed with stable boot IDs, clean pstore artifacts, no kernel log
 crash findings, and `tix-lan` `tx_queue_len=1000`. The 9884a92 route-GSO
@@ -724,7 +724,7 @@ promoted. The passing run booted both guests back to
 
 ### Zaozhuang PVE 9884a92 route-GSO multi-queue gate
 
-The same current build ran the Debian 13 to Debian 13 experimental TCP
+The same current build ran the Debian 13 to Debian 13 TIX-TCP
 route-GSO production gate on 4-queue virtio guests. The selected gate passed
 for 3600 seconds per direction with minimum received throughput
 `3.712796 Gbps`. The gate recorded 16 sessions, `trustix_datapath_helpers`
@@ -737,11 +737,11 @@ pstore output, or kernel findings, but failed the production throughput floor.
 That result is retained as a topology diagnostic only; production evidence uses
 the 4-queue run above.
 
-<a id="2026-07-02-zaozhuang-pve-9884a92-debian-exp-tcp-full-kmod-multiqueue-production"></a>
+<a id="2026-07-02-zaozhuang-pve-9884a92-debian-tix-tcp-full-kmod-multiqueue-production"></a>
 
-### Zaozhuang PVE 9884a92 Debian experimental TCP full-kmod multi-queue gate
+### Zaozhuang PVE 9884a92 Debian TIX-TCP full-kmod multi-queue gate
 
-The same current build ran the Debian 13 to Debian 13 experimental TCP
+The same current build ran the Debian 13 to Debian 13 TIX-TCP
 plaintext full kernel module production gate on 4-queue virtio guests. The
 selected gate passed for 3600 seconds per direction with P16 runtime defaults,
 32 sessions, and minimum received throughput `8.978477 Gbps`. The gate recorded
@@ -765,7 +765,7 @@ Both OpenWrt-Debian production gates passed for 3600 seconds per direction:
 | Gate family | Transport | Minimum received |
 | --- | --- | ---: |
 | `owdeb_full_kmod` | UDP plaintext full kernel module | 3.100370 Gbps |
-| `owdeb_exp_tcp_full_kmod` | experimental TCP plaintext full kernel module, P16 | 6.482369 Gbps |
+| `owdeb_tix_tcp_full_kmod` | TIX-TCP plaintext full kernel module, P16 | 6.482369 Gbps |
 
 The production gate used the same tool hashes as the Debian run above. The
 gate summaries recorded stable boot IDs, clean kernel log and pstore artifacts,
@@ -774,9 +774,9 @@ afterward. This run also covers the iperf server PID/listener cleanup fix.
 
 ## 2026-06-30
 
-<a id="2026-06-30-zaozhuang-pve-exp-tcp-full-kmod-31b35f1-3600s-production-gate"></a>
+<a id="2026-06-30-zaozhuang-pve-tix-tcp-full-kmod-31b35f1-3600s-production-gate"></a>
 
-### Zaozhuang PVE 31b35f1 experimental TCP full-kmod 3600s production gate
+### Zaozhuang PVE 31b35f1 TIX-TCP full-kmod 3600s production gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200 and 201
 only. VM100 and all 1xx guests were not modified. Both guests ran Debian 13
@@ -793,12 +793,12 @@ with vermagic `6.12.90+deb13.1-cloud-amd64 SMP preempt mod_unload
 modversions`.
 
 The selected production gate emitted `trustix-cross-host-production-gate-manifest-v1`
-evidence for gate family `exp_tcp_full_kmod`. The production gate script SHA256
+evidence for gate family `tix_tcp_full_kmod`. The production gate script SHA256
 was `6419bd20300ec8abd8abb38d8c5cac076dd6cb7add0d6795b2c5938555c3584c`;
 the verifier SHA256 was
 `bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
 
-The run used `experimental_tcp` plaintext performance profile with
+The run used `tix_tcp` plaintext performance profile with
 `datapath=kernel_module`, `crypto_placement=userspace`,
 `session_pool_size=8`, and `session_pool_strategy=flow`. It ran
 `forward + both` with `iperf_parallel=8` from `2026-06-30T07:26:55Z` to
@@ -812,14 +812,14 @@ Both guests kept stable boot IDs
 `log_findings=[]`, `kernel_log_rejected_artifacts=[]`, and
 `pstore_rejected_artifacts=[]`; `tix-lan` kept `tx_queue_len=1000` on both
 nodes. The gate also verified `capture_forwarder_suppressed=true`,
-`experimental_tcp.provider=kernel_datapath_full_plaintext`,
-`experimental_tcp.fast_path=true`, `active_flows=16`, `rx_worker_inject=Y`,
+`tix_tcp.provider=kernel_datapath_full_plaintext`,
+`tix_tcp.fast_path=true`, `active_flows=16`, `rx_worker_inject=Y`,
 `tx_plaintext=Y`, `unsafe_features=0`, `selftest_failures=0`, and zero
 RX-worker/TX-plaintext error counters required by the production gate.
 
-<a id="pve-ee378f-openwrt24107-debian13-exp-tcp-full-kmod-2026-06-30"></a>
+<a id="pve-ee378f-openwrt24107-debian13-tix-tcp-full-kmod-2026-06-30"></a>
 
-### Zaozhuang PVE ee378f1 OpenWrt-Debian experimental TCP full-kmod 3600s production gate
+### Zaozhuang PVE ee378f1 OpenWrt-Debian TIX-TCP full-kmod 3600s production gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 201 and 200
 only. VM100 and all 1xx guests were not modified. Node A ran OpenWrt 24.10.7
@@ -838,7 +838,7 @@ the Debian `trustix_datapath.ko` SHA256 was
 `59fc351df6ce225f11e96c997a722b7d2b80f31f559d563d8688d17355eaddac`.
 
 The selected production gate emitted `trustix-cross-host-production-gate-manifest-v1`
-evidence for gate family `owdeb_exp_tcp_full_kmod`. The production gate script
+evidence for gate family `owdeb_tix_tcp_full_kmod`. The production gate script
 SHA256 was `6419bd20300ec8abd8abb38d8c5cac076dd6cb7add0d6795b2c5938555c3584c`;
 the verifier SHA256 was
 `bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
@@ -849,7 +849,7 @@ the transport matrix SHA256 was
 the evidence generator SHA256 was
 `5e5cd2ab1b0fe8354542b3e6ea201abf8657b8b81740dccba8050a7be027ae1f`.
 
-The run used `experimental_tcp` plaintext performance profile with
+The run used `tix_tcp` plaintext performance profile with
 `datapath=kernel_module`, `crypto_placement=userspace`,
 `session_pool_size=8`, and `session_pool_strategy=flow`. It ran
 `forward + both` with `iperf_parallel=8` from `2026-06-30T15:10:30Z` to
@@ -883,9 +883,9 @@ loading and exercising the full plaintext datapath did not block normal
 underlay traffic in the tested PVE environment; it is not the promoted
 production evidence row.
 
-<a id="2026-06-30-zaozhuang-pve-openwrt24107-debian13-exp-tcp-full-kmod-bbde20a-3600s-production-gate"></a>
+<a id="2026-06-30-zaozhuang-pve-openwrt24107-debian13-tix-tcp-full-kmod-bbde20a-3600s-production-gate"></a>
 
-### Zaozhuang PVE bbde20a OpenWrt-Debian experimental TCP full-kmod 3600s production gate
+### Zaozhuang PVE bbde20a OpenWrt-Debian TIX-TCP full-kmod 3600s production gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 201 and 202
 only. VM100 and all 1xx guests were not modified. Node A ran OpenWrt 24.10.7
@@ -899,12 +899,12 @@ and binary SHA256
 `57577bf6a9beaae29be2db2d7541d089e5d9fcf2a1faae00de8e441f1175bd37`.
 
 The selected production gate emitted `trustix-cross-host-production-gate-manifest-v1`
-evidence for gate family `owdeb_exp_tcp_full_kmod`. The production gate script
+evidence for gate family `owdeb_tix_tcp_full_kmod`. The production gate script
 SHA256 was `6419bd20300ec8abd8abb38d8c5cac076dd6cb7add0d6795b2c5938555c3584c`;
 the verifier SHA256 was
 `bd01ec1a0cd9463e401e73c570e8e688d6126d5891626367895979aa4d9ec26b`.
 
-The run used `experimental_tcp` plaintext performance profile with
+The run used `tix_tcp` plaintext performance profile with
 `datapath=kernel_module`, `crypto_placement=userspace`,
 `session_pool_size=8`, and `session_pool_strategy=flow`. It ran
 `forward + both` from `2026-06-30T10:51:01Z` to `2026-06-30T12:51:05Z`,
@@ -916,8 +916,8 @@ Both guests kept stable boot IDs. The verifier passed with `errors=[]`,
 `log_findings=[]`, `kernel_log_rejected_artifacts=[]`, and
 `pstore_rejected_artifacts=[]`; `tix-lan` kept `tx_queue_len=1000` on both
 nodes. The gate also verified `capture_forwarder_suppressed=true`,
-`experimental_tcp.provider=kernel_datapath_full_plaintext`,
-`experimental_tcp.fast_path=true`, `active_flows=16`, `rx_worker_inject=Y`,
+`tix_tcp.provider=kernel_datapath_full_plaintext`,
+`tix_tcp.fast_path=true`, `active_flows=16`, `rx_worker_inject=Y`,
 `tx_plaintext=Y`, `unsafe_features=0`, `selftest_failures=0`, and zero
 RX-worker/TX-plaintext error counters required by the production gate. The
 long-run shell log had an EOF diagnostic because the runner script on disk was
@@ -1015,15 +1015,15 @@ items have `sent_required=false`.
 
 <a id="pve-debian13-current-userspace-b-2026-06-28"></a>
 
-### Zaozhuang PVE 8c9fa5f experimental TCP userspace fallback gate
+### Zaozhuang PVE 8c9fa5f TIX-TCP userspace fallback gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 202 and 203
 only. Both guests ran Debian 13 kernel `6.12.90+deb13.1-cloud-amd64` with
 virtio network devices. VM100 and all 1xx guests were not modified.
 
-This run validates the encrypted experimental TCP userspace compatibility path
+This run validates the encrypted TIX-TCP userspace compatibility path
 after the cross-host runner started setting
-`TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK=1` for userspace experimental TCP. The
+`TRUSTIX_TIX_TCP_RAW_FALLBACK=1` for userspace TIX-TCP. The
 release used TrustIX version `trustix-linux-amd64`, commit `8c9fa5fcf2e0`, Go
 `1.25.0`, build time `2026-06-27T20:19:29Z`, and binary SHA256
 `7698a3d8c8e62eb7df3280e42633ea4336e00d1fd408006edb5540af9832a463`.
@@ -1038,7 +1038,7 @@ The gate ran `forward + both` with `iperf_parallel=8` from
 `2026-06-28T06:10:27Z` to `2026-06-28T08:10:30Z` and elapsed 7203 seconds.
 Minimum received throughput was `0.613955 Gbps` for at least `3600.001485s`,
 clearing the selected `0.5 Gbps` production threshold. Both nodes reported 16
-matching experimental TCP sessions, no loaded `trustix_*` kernel modules,
+matching TIX-TCP sessions, no loaded `trustix_*` kernel modules,
 stable boot IDs `bf292e69-ec9e-4173-918e-6279a5716131` and
 `836d6bee-e2e2-473f-a69c-24cc6eddcdbb`, zero session dial or heartbeat
 errors, `errors=[]`, `log_findings=[]`, `kernel_log_rejected_artifacts=[]`,
@@ -1071,13 +1071,13 @@ verifier SHA256 was
 | --- | --- | --- | --- | ---: | ---: |
 | `tc_direct` | kernel UDP plaintext TC-direct | userspace | none | 3.105795 Gbps | 3600.003409s |
 | `secure_kudp` | kernel UDP route-GSO | kernel | `trustix_crypto`, `trustix_datapath_helpers` | 1.592245 Gbps | 3600.001914s |
-| `secure_exp_tcp_kernel` | experimental TCP route-GSO | kernel | `trustix_crypto`, `trustix_datapath_helpers` | 1.633970 Gbps | 3600.017497s |
-| `route_gso` | experimental TCP plaintext route-GSO | userspace | `trustix_datapath_helpers` | 2.734667 Gbps | 3600.009225s |
+| `secure_tix_tcp_kernel` | TIX-TCP route-GSO | kernel | `trustix_crypto`, `trustix_datapath_helpers` | 1.633970 Gbps | 3600.017497s |
+| `route_gso` | TIX-TCP plaintext route-GSO | userspace | `trustix_datapath_helpers` | 2.734667 Gbps | 3600.009225s |
 
 Each gate ran `forward + both` with `iperf_parallel=8` and elapsed 7204
 seconds. TC-direct ran from `2026-06-27T21:06:26Z` to
 `2026-06-27T23:06:30Z`; secure-kUDP ran from `2026-06-27T23:07:04Z` to
-`2026-06-28T01:07:08Z`; secure experimental TCP kernel crypto ran from
+`2026-06-28T01:07:08Z`; secure TIX-TCP kernel crypto ran from
 `2026-06-28T01:07:39Z` to `2026-06-28T03:07:43Z`; route-GSO ran from
 `2026-06-28T03:08:06Z` to `2026-06-28T05:08:10Z`.
 
@@ -1280,8 +1280,8 @@ verifier SHA256 was
 | `tc_direct` | B to A | 3 Gbps | 4.283978 Gbps | 4.284009 Gbps | 3600.006914 | 713810 |
 | `secure_kudp` | A to B | 1.5 Gbps | 1.720749 Gbps | 1.720797 Gbps | 3600.011191 | 80808 |
 | `secure_kudp` | B to A | 1.5 Gbps | 1.727528 Gbps | 1.727579 Gbps | 3600.010725 | 81184 |
-| `secure_exp_tcp_kernel` | A to B | 1.5 Gbps | 1.657549 Gbps | 1.657597 Gbps | 3600.013901 | 67084 |
-| `secure_exp_tcp_kernel` | B to A | 1.5 Gbps | 1.678906 Gbps | 1.678955 Gbps | 3600.009520 | 68257 |
+| `secure_tix_tcp_kernel` | A to B | 1.5 Gbps | 1.657549 Gbps | 1.657597 Gbps | 3600.013901 | 67084 |
+| `secure_tix_tcp_kernel` | B to A | 1.5 Gbps | 1.678906 Gbps | 1.678955 Gbps | 3600.009520 | 68257 |
 | `route_gso` | A to B | 2.5 Gbps | 2.797295 Gbps | 2.797330 Gbps | 3599.996674 | 600501 |
 | `route_gso` | B to A | 2.5 Gbps | 2.863178 Gbps | 2.863211 Gbps | 3600.003954 | 657085 |
 
@@ -1296,7 +1296,7 @@ The full plaintext datapath provider and eight warmed sessions were active for
 `tx_plaintext_payload_fast_copy=Y`, `rx_worker_hot_stats=N`, and
 `tx_queue_len=1000` were captured. Covered RX-worker, GSO xmit, plaintext
 outer-GSO, plaintext xmit, and queue-drop error counters were zero. TC-direct
-loaded no TrustIX kernel modules. The secure-kUDP, secure experimental TCP
+loaded no TrustIX kernel modules. The secure-kUDP, secure TIX-TCP
 kernel crypto, and route-GSO cases loaded only the selected helper/crypto
 kernel paths and reported zero covered route-GSO/helper error counters.
 
@@ -1449,9 +1449,9 @@ replay-seen and total secure-direct drop ratios stayed below `0.00002`:
 | A | 0 | 5918 | 709667600 | 0.000008339 |
 | B | 0 | 6329 | 698447853 | 0.000009062 |
 
-<a id="2026-06-26-zaozhuang-pve-fa207ea-secure-exp-tcp-kernel-3600s-production-gate"></a>
+<a id="2026-06-26-zaozhuang-pve-fa207ea-secure-tix-tcp-kernel-3600s-production-gate"></a>
 
-### Zaozhuang PVE fa207ea secure experimental TCP kernel 3600s production gate
+### Zaozhuang PVE fa207ea secure TIX-TCP kernel 3600s production gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+
 only: VM200 `trustix-fa-a` and VM201 `trustix-fa-b`. VM100 and all 1xx
@@ -1496,9 +1496,9 @@ The sequential `forward + both` run lasted 7203 seconds, from
 run. Kernel log and pstore artifacts were clean on both guests, and both
 `tix-lan` interfaces had `tx_queue_len=1000`.
 
-The selected secure experimental TCP kernel path loaded `trustix_crypto` and
+The selected secure TIX-TCP kernel path loaded `trustix_crypto` and
 `trustix_datapath_helpers`; the full plaintext `trustix_datapath` module was
-not required for this gate. Both peers reported 16 active experimental TCP
+not required for this gate. Both peers reported 16 active TIX-TCP
 flows, kernel crypto enabled, direct route-GSO kfunc selected, secure direct
 seal enabled, and 32 kernel crypto flow-map entries. `trustix_crypto` reported
 SIMD fastpath and IRQ-FPU fastpath enabled. Direct kfunc activity was nonzero
@@ -1557,7 +1557,7 @@ run. Kernel log and pstore artifacts were clean on both guests, and both
 `tix-lan` interfaces had `tx_queue_len=1000`.
 
 The selected route-GSO path loaded `trustix_datapath_helpers`; both peers
-reported the experimental TCP direct route-GSO kfunc requested and selected,
+reported the TIX-TCP direct route-GSO kfunc requested and selected,
 with 8 active sessions. Node A reported `session_dial_errors=1`, within the
 production route-GSO budget of 2, and node B reported `session_dial_errors=0`.
 
@@ -1682,9 +1682,9 @@ no-session, and no-wire error counters were zero. RX-worker GSO xmit segments,
 plaintext outer-GSO segments, and cached destination MAC counters were nonzero
 on both peers.
 
-<a id="2026-06-25-zaozhuang-pve-current-main-dd-secure-exp-tcp-kernel-3600s-production-gate"></a>
+<a id="2026-06-25-zaozhuang-pve-current-main-dd-secure-tix-tcp-kernel-3600s-production-gate"></a>
 
-### Zaozhuang PVE current-main Debian secure experimental TCP kernel crypto 3600s production gate
+### Zaozhuang PVE current-main Debian secure TIX-TCP kernel crypto 3600s production gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
 VM200 `trustix-dd-a` and VM201 `trustix-dd-b` on isolated `vmbr3`. VM100 and
@@ -1730,7 +1730,7 @@ pstore was mounted and empty on both guests, `tix-lan` `tx_queue_len` was
 `1000`, and both peers loaded `trustix_crypto` and
 `trustix_datapath_helpers`.
 
-This gate used `experimental_tcp` secure mode with `datapath=kernel_module`,
+This gate used `tix_tcp` secure mode with `datapath=kernel_module`,
 `crypto_placement=kernel`, 16 active sessions, direct kfunc crypto, and route
 TCP GSO async. Both peers reported `kernel_crypto=true`,
 `effective_crypto=kernel`, `fast_path=true`, `reinject=true`, 32 flow-map
@@ -1791,9 +1791,9 @@ no-session, and no-wire error counters were zero. RX-worker GSO xmit segments,
 plaintext outer-GSO segments, and cached destination MAC counters were nonzero
 on both peers.
 
-<a id="2026-06-25-zaozhuang-pve-secure-exp-tcp-kernel-fpu-fallback-3600s-production-gate"></a>
+<a id="2026-06-25-zaozhuang-pve-secure-tix-tcp-kernel-fpu-fallback-3600s-production-gate"></a>
 
-### Zaozhuang PVE secure experimental TCP kernel FPU fallback 3600s production gate
+### Zaozhuang PVE secure TIX-TCP kernel FPU fallback 3600s production gate
 
 PVE host `120.220.44.72:8006` was used with disposable VM IDs 200+ only:
 VM200 `trustix-dd-a` and VM201 `trustix-dd-b` on isolated `vmbr3`. VM100 and
@@ -1826,7 +1826,7 @@ The sequential `forward + both` run lasted 7204 seconds, from
 `48d6ec49-05a8-4dd7-891c-2bf798234986`, clean kernel journal artifacts, and
 pstore coverage on both nodes.
 
-This gate used `experimental_tcp` secure mode with `datapath=kernel_module`,
+This gate used `tix_tcp` secure mode with `datapath=kernel_module`,
 `crypto_placement=kernel`, 16 active sessions, direct kfunc crypto, and route
 TCP GSO async. Both peers loaded `trustix_crypto` and
 `trustix_datapath_helpers`; `tix-lan` `tx_queue_len` was `1000`.
@@ -1946,21 +1946,21 @@ Runtime checks:
 | Case | Artifact | Duration | Result |
 | --- | --- | ---: | --- |
 | OpenWrt 25.12.4 secure-kUDP route-GSO | `/root/trustix-owrt25124-runtime/results/owdeb-secure-kudp-30-20260624-131448` | startup gate | fail-closed |
-| OpenWrt 25.12.4 experimental TCP route-GSO | `/root/trustix-owrt25124-runtime/results/owdeb-routegso-30-20260624-131436` | startup gate | fail-closed |
+| OpenWrt 25.12.4 TIX-TCP route-GSO | `/root/trustix-owrt25124-runtime/results/owdeb-routegso-30-20260624-131436` | startup gate | fail-closed |
 
 Both cases loaded `trustix_datapath_helpers` on OpenWrt but failed closed before
 traffic. The secure-kUDP case reported:
 `secure kernel_udp route-GSO requires trustix_datapath_helpers full route TCP
 kfunc capability; missing=route_tcp_kfunc,route_tcp_xmit_kfunc`. The
-experimental TCP case reported the same missing `route_tcp_kfunc` and
+TIX-TCP case reported the same missing `route_tcp_kfunc` and
 `route_tcp_xmit_kfunc` runtime capability.
 
 Conclusion: upgrading the official OpenWrt x86_64 image to 25.12.4 does not
-enable TrustIX route-GSO, secure-kUDP route-GSO, or secure experimental TCP
+enable TrustIX route-GSO, secure-kUDP route-GSO, or secure TIX-TCP
 kernel crypto route-GSO. Even with forced full modules built from the matching
 SDK, the official guest did not expose the runtime route-TCP kfunc capability
 required by these paths. No OpenWrt route-GSO, secure-kUDP route-GSO, or secure
-experimental TCP kernel production default was promoted; the selected OpenWrt
+TIX-TCP kernel production default was promoted; the selected OpenWrt
 production kernel path remains UDP plaintext full-kmod.
 
 ## 2026-06-23
@@ -2048,7 +2048,7 @@ pstore sweeps on the userspace-TC VMs were also clean.
 | userspace | WebSocket | plaintext | 1 Gbps | 1.125059 Gbps | 3600 |
 | userspace | HTTP CONNECT | secure | 0.75 Gbps | 0.839874 Gbps | 3600 |
 | userspace | HTTP CONNECT | plaintext | 1 Gbps | 1.237984 Gbps | 3600 |
-| userspace | experimental TCP | secure | 1 Gbps | 1.246138 Gbps | 3600 |
+| userspace | TIX-TCP | secure | 1 Gbps | 1.246138 Gbps | 3600 |
 | userspace-TC | GRE | secure | 1 Gbps | 1.376135 Gbps | 3600 |
 | userspace-TC | GRE | plaintext | 4 Gbps | 5.110725 Gbps | 3600 |
 | userspace-TC | IPIP | secure | 1 Gbps | 1.383353 Gbps | 3600 |
@@ -2280,7 +2280,7 @@ identity, stable before/after boot IDs
 | userspace | WebSocket | plaintext | 1 Gbps | 1.248472 Gbps | 900.089256s |
 | userspace | HTTP CONNECT | secure | 0.75 Gbps | 0.904721 Gbps | 900.156658s |
 | userspace | HTTP CONNECT | plaintext | 1 Gbps | 1.411984 Gbps | 900.066250s |
-| userspace | experimental TCP | secure | 1 Gbps | 1.564874 Gbps | 900.088089s |
+| userspace | TIX-TCP | secure | 1 Gbps | 1.564874 Gbps | 900.088089s |
 | userspace-TC | GRE | secure | 1 Gbps | 1.466421 Gbps | 900.003502s |
 | userspace-TC | GRE | plaintext | 4 Gbps | 4.631023 Gbps | 900.003790s |
 | userspace-TC | IPIP | secure | 1 Gbps | 1.483775 Gbps | 900.005694s |
@@ -2329,7 +2329,7 @@ verifier SHA256 was
 | userspace | WebSocket | plaintext | 1 Gbps | 1.202630 Gbps | 1.202856 Gbps | 900.133695s |
 | userspace | HTTP CONNECT | secure | 0.75 Gbps | 0.897881 Gbps | 0.898088 Gbps | 900.188402s |
 | userspace | HTTP CONNECT | plaintext | 1 Gbps | 1.405207 Gbps | 1.405428 Gbps | 900.071849s |
-| userspace | experimental TCP | secure | 1 Gbps | 1.576181 Gbps | 1.576404 Gbps | 900.066391s |
+| userspace | TIX-TCP | secure | 1 Gbps | 1.576181 Gbps | 1.576404 Gbps | 900.066391s |
 | userspace-TC | GRE | secure | 1 Gbps | 1.384943 Gbps | 1.384952 Gbps | 899.987127s |
 | userspace-TC | GRE | plaintext | 4 Gbps | 5.475852 Gbps | 5.475970 Gbps | 899.995435s |
 | userspace-TC | IPIP | secure | 1 Gbps | 1.374068 Gbps | 1.374109 Gbps | 900.006583s |
@@ -2346,7 +2346,7 @@ manifest rows are now recorded in `scripts/production-transport-evidence.tsv`.
 The production gate was adjusted during this run to match the endpoint/session
 metadata split for TLS-backed transports: endpoint `crypto_placements` is now
 required only for endpoint transports that advertise it (`udp` and
-`experimental_tcp`), and peer endpoint `encryption=...` is no longer required.
+`tix_tcp`), and peer endpoint `encryption=...` is no longer required.
 TCP, QUIC, WebSocket, and HTTP CONNECT continue to prove crypto placement and
 encryption via policy/session stats, including `stats.link_tls=true`.
 
@@ -2446,7 +2446,7 @@ verifier SHA256 was
 | full-kmod | UDP plaintext full datapath module | 3 Gbps | 3.294880 Gbps | 3.295067 Gbps | 900.021685s |
 | TC-direct | plaintext kernel UDP TC direct-only | 3 Gbps | 3.883991 Gbps | 3.884176 Gbps | 900.005046s |
 | secure-kUDP | secure kernel UDP with kernel crypto and route-GSO | 1.5 Gbps | 1.722710 Gbps | 1.722862 Gbps | 899.989966s |
-| route-GSO | experimental TCP plaintext route-GSO | 2.5 Gbps | 2.667106 Gbps | 2.667310 Gbps | 900.011079s |
+| route-GSO | TIX-TCP plaintext route-GSO | 2.5 Gbps | 2.667106 Gbps | 2.667310 Gbps | 900.011079s |
 
 All four cases passed the selected production gate with stable boot IDs
 (`b47e3cbe-676d-4ab1-8f4d-80a76491326b` and
@@ -2494,7 +2494,7 @@ zero `data_path.counters.session_dial_errors`, and zero
 | WebSocket | plaintext | 1 Gbps | 1.248432 Gbps | 1.248699 Gbps | 900.053773s |
 | HTTP CONNECT | secure | 0.75 Gbps | 0.879747 Gbps | 0.879913 Gbps | 900.170533s |
 | HTTP CONNECT | plaintext | 1 Gbps | 1.353923 Gbps | 1.354159 Gbps | 900.133752s |
-| experimental TCP | secure | 1 Gbps | 1.550296 Gbps | 1.550500 Gbps | 900.065191s |
+| TIX-TCP | secure | 1 Gbps | 1.550296 Gbps | 1.550500 Gbps | 900.065191s |
 
 ### Debian userspace-TC current-head production gates
 
@@ -2563,7 +2563,7 @@ Runtime checks:
 | --- | --- | ---: | ---: | --- |
 | OpenWrt 24.10.7 to Debian full plaintext kmod production gate | `/root/trustix-owrt24107-soak-20260621/results/owdeb-fullkmod-900-20260621-021812` | 900s | 3.276205 Gbps | pass |
 | OpenWrt 24.10.7 secure-kUDP route-GSO | `/root/trustix-owrt-runtime-20260621/results/owdeb-secure-kudp-routegso-30-20260621-014916` | startup gate | 0 | fail-closed |
-| OpenWrt 24.10.7 experimental TCP route-GSO | `/root/trustix-owrt-runtime-20260621/results/owdeb-routegso-30-20260621-014848` | startup gate | 0 | fail-closed |
+| OpenWrt 24.10.7 TIX-TCP route-GSO | `/root/trustix-owrt-runtime-20260621/results/owdeb-routegso-30-20260621-014848` | startup gate | 0 | fail-closed |
 
 The full-kmod production gate ran P8 in both directions. It required matching
 binary/build identity, full plaintext provider status, RX worker injection,
@@ -2578,8 +2578,8 @@ signature.
 Both route-GSO cases loaded the OpenWrt helper module but failed closed before
 traffic with missing `route_tcp_kfunc` and `route_tcp_xmit_kfunc`. They remain
 runtime capability failures, so OpenWrt 24.10.7 secure-kUDP route-GSO and
-experimental TCP route-GSO are still not production defaults. Secure
-experimental TCP kernel crypto shares the same route-TCP kfunc prerequisite, so
+TIX-TCP route-GSO are still not production defaults. Secure
+TIX-TCP kernel crypto shares the same route-TCP kfunc prerequisite, so
 it is also fail-closed on this OpenWrt kernel until a dedicated OpenWrt gate can
 actually run traffic.
 
@@ -2935,14 +2935,14 @@ OpenWrt `trustix_datapath_helpers.ko` module loaded but reported no safe helper
 kfunc capability. Secure-kUDP route-GSO failed closed before traffic with
 `missing=route_tcp_kfunc,route_tcp_xmit_kfunc`. Artifact:
 `/tmp/trustix-pve-owrt24-next.S9YJo0/results/owdeb-secure-kudp-tconly-30-20260620-024040`.
-Experimental TCP route-GSO failed closed with the same missing helper
+TIX-TCP route-GSO failed closed with the same missing helper
 capabilities. Artifact:
 `/tmp/trustix-pve-owrt24-next.S9YJo0/results/owdeb-routegso-30-20260620-024147`.
 
 Conclusion: OpenWrt 24.10.2 has a validated full plaintext kmod path, but the
 official x86_64 kernel image used here does not provide the BTF/kfunc runtime
 surface required for TrustIX route-GSO helpers. Do not select OpenWrt 24.10.2
-secure-kUDP route-GSO or experimental TCP route-GSO as production defaults.
+secure-kUDP route-GSO or TIX-TCP route-GSO as production defaults.
 
 ### OpenWrt-Debian route-GSO capability check
 
@@ -2968,7 +2968,7 @@ OpenWrt-to-Debian secure-kUDP route-GSO smoke failed closed before traffic:
 kfunc capability; missing=route_tcp_kfunc,route_tcp_xmit_kfunc`. Artifact:
 `/tmp/trustix-pve-owdeb.kBuFlE/results/owdeb-secure-kudp-30-20260620-000728`.
 
-OpenWrt-to-Debian experimental TCP route-GSO smoke also failed closed before
+OpenWrt-to-Debian TIX-TCP route-GSO smoke also failed closed before
 traffic with the same missing helper capabilities. Artifact:
 `/tmp/trustix-pve-owdeb.kBuFlE/results/dd-routegso-30-20260620-000854`. The
 runner case name remained `dd-routegso`, but the endpoints were manually set to
@@ -3002,7 +3002,7 @@ Selected Debian-to-Debian 900s matrix:
 | --- | --- | ---: | ---: | --- |
 | `dd-fullkmod` | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 900s | 3.566969 Gbps | 3 Gbps |
 | `secure-kudp` | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 900s | 1.744620 Gbps | 1.5 Gbps |
-| `dd-routegso` | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 900s | 2.696084 Gbps | 2.5 Gbps |
+| `dd-routegso` | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 900s | 2.696084 Gbps | 2.5 Gbps |
 
 The selected production gate then passed all three families. It required
 matching binary identity, transport policy metadata, session pool warmup, route
@@ -3031,7 +3031,7 @@ The default profile remains plaintext performance and emits UDP full-kmod with
 explicit secure `performance` profile emits secure kernel-UDP with
 `datapath: tc_xdp`, `crypto_placement: kernel`, `kernel_transport:
 require_kernel`, and only the selected UDP endpoint; it no longer adds an
-unselected secure `experimental_tcp` secondary endpoint.
+unselected secure `tix_tcp` secondary endpoint.
 
 Gate hardening: secure-kUDP production verification now also requires the
 secure route-GSO TC option in datapath status plus nonzero helper route-GSO
@@ -3136,9 +3136,9 @@ The identity-gated verifier required matching `binary-identity.json` checksums
 on both peers. Full-kmod also required
 `kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1` on both
 peers. Route-GSO required
-`tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1`,
-`tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1`, and
-`tc_kernel_udp_tx_direct_experimental_tcp_only=1` on both peers. All three
+`tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc=1`,
+`tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1`, and
+`tc_kernel_udp_tx_direct_tix_tcp_only=1` on both peers. All three
 identity-gated runs passed the 4 Gbps gate and log crash scan.
 
 Change: `scripts/linux-cross-host-soak-verify.py` now records and validates
@@ -3201,7 +3201,7 @@ depending on manual interpretation.
 
 ## 2026-06-08
 
-### Public A/B ACKless TCP route-GSO verifier and stability retest
+### Public A/B TIX-TCP route-GSO verifier and stability retest
 
 Change: fixed route-GSO TC BPF generation so the route-GSO kfunc path no longer leaves verifier-unreachable fallback blocks behind. Follow-up fix redirects positive route-GSO kfunc returns in the route-xmit variant instead of falling through to the adjust-drop path.
 
@@ -3232,7 +3232,7 @@ PVE result file: `build/pve/pve-current-routegso-confirm-20260608-230959.json`, 
 | flowshard/shards8/deqbatch/dyncap/hash-txq profile candidate | 3853.5 | 3612.5 | 3243.5 | no reboot, cross-item active, not better than simple sharded cases |
 | route-xmit kfunc compatibility path | 3339.5 | 3362.3 | 2949.1 | no reboot, `route_tcp_xmit_active`; stable but still not the best throughput path |
 
-PVE conclusion: current source has a repeatable ACKless TCP performance ceiling above 3 Gbps on the isolated PVE path. The simple outer-GSO async stream direct-build variants remain the best candidates; extra flowshard/cross-item tuning did not beat them in this run. Route-xmit kfunc is no longer a low-throughput-only path on PVE, but it still trails outer-GSO direct-build.
+PVE conclusion: current source has a repeatable TIX-TCP performance ceiling above 3 Gbps on the isolated PVE path. The simple outer-GSO async stream direct-build variants remain the best candidates; extra flowshard/cross-item tuning did not beat them in this run. Route-xmit kfunc is no longer a low-throughput-only path on PVE, but it still trails outer-GSO direct-build.
 
 Public A/B result files: `build/perf-matrix-remote-216-82-public-confirm-20260608-232942.json` and `build/perf-matrix-remote-216-82-public-b2a-repeat-20260608-234401.json`.
 
@@ -3250,7 +3250,7 @@ Cleanup: after the PVE and public confirmations, A, B, pveA, and pveB had stable
 
 ## 2026-06-02
 
-### PVE ACKless TCP outer-GSO stability correction
+### PVE TIX-TCP outer-GSO stability correction
 
 The 2026-06-01 PVE outer-GSO numbers below are now historical only. Follow-up PVE stability tests showed that route-TCP outer-GSO is not safe enough to be the default fast path:
 
@@ -3260,7 +3260,7 @@ The 2026-06-01 PVE outer-GSO numbers below are now historical only. Follow-up PV
 | `build/pve/pve-holdskb2-stability-20260602-131400.json` | hold-skb pair-coalesce | p1 stable at 586.48 Mbps, p4 rebooted pveA |
 | `build/pve/pve-directbuild-noouter-p4-20260602-133300.json` | `exp_plaintext_fast_route_gso_async_stream_hw_inline_rx_directbuild_m64_tuned_ackonly` | p4 stable at 3322.42 Mbps, no reboot, `route_tcp_gso_async_stream_outer_gso_batches=0` |
 
-Current stable ACKless TCP baseline is no-outer direct-build:
+Current stable TIX-TCP baseline is no-outer direct-build:
 
 | Alias | Case | p4 Mbps | Notes |
 | --- | --- | ---: | --- |
@@ -3303,7 +3303,7 @@ Cleanup: after the hard-enable PVE runs, both VMs had unchanged boot IDs, `trust
 
 ## 2026-06-01
 
-### Stable PVE ACKless TCP baseline
+### Stable PVE TIX-TCP baseline
 
 PVE VM A `10.10.0.11` and VM B `10.10.0.12`, underlay `enp6s19`, `TRUSTIX_MATRIX_CASES=ackless_fast`, `TCP_TESTS=82clientp1,82clientp4,82clientp8`, `IPERF_SECONDS=5`, UDP disabled.
 
@@ -3333,7 +3333,7 @@ CPU was not saturated in the short rerun. The server side peaked around 31-42% b
 
 Previously tested but not in the `ackless_fast` alias: `m64_outergso_tuned_unordered` reached 4396.34 Mbps, `m64_outergso_tuned_sharded4` reached 4471.98 Mbps, and `m64_outergso_tuned_unbound` reached 4052.31 Mbps in `build/perf-matrix-remote-216-82-20260601-021504.json`. These remain below the best `m64_outergso_tuned_sharded8` result.
 
-### PVE ACKless TCP mframe sweep
+### PVE TIX-TCP mframe sweep
 
 Result file: `build/perf-matrix-remote-216-82-20260601-033508.json`. Cases used `ackless_mframe_sweep`, `TCP_TESTS=82clientp1,82clientp4`, UDP disabled, `IPERF_SECONDS=5`.
 
@@ -3368,13 +3368,13 @@ Result file: `build/perf-matrix-pve-underlay-20260601-0405.json`. The run also e
 | 216->82 | 19729.81 | 18309.48 |
 | 82->216 | 15564.34 | 11677.87 |
 
-This means the current 4-5 Gbps ACKless TCP result is not a VM underlay hard limit. The next likely hotspots are in the route-GSO direct-build path: linear 64 KiB skb allocation/copy, per-frame inner TCP checksum rebuild, and workqueue/queueing overhead.
+This means the current 4-5 Gbps TIX-TCP result is not a VM underlay hard limit. The next likely hotspots are in the route-GSO direct-build path: linear 64 KiB skb allocation/copy, per-frame inner TCP checksum rebuild, and workqueue/queueing overhead.
 
 ### Direct-build checksum-copy merge
 
 Change: `kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c` now uses `skb_copy_and_csum_bits()` for direct-build inner TCP payload copy when `route_tcp_gso_async_stream_direct_build_inner_csum` is enabled, then combines that payload checksum with a header checksum via `csum_block_add()`. This preserves inner checksum semantics while avoiding a second payload scan after copy.
 
-Validation: local `python build\test_run_remote_perf_matrix.py`, `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py`, and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE module build/load passed on both VMs.
+Validation: local `python build\test_run_remote_perf_matrix.py`, `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py`, and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE module build/load passed on both VMs.
 
 Result file: `build/perf-matrix-remote-216-82-20260601-042106.json`, compared with pre-change `build/perf-matrix-remote-216-82-20260601-035547.json`.
 
@@ -3392,7 +3392,7 @@ Change: `kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c` now 
 
 The experimental `route_tcp_gso_async_stream_nonlinear_direct_build` path was also validated on PVE. It keeps the outer L2/IP/TCP header linear and attaches TIXT+inner payload as page frags. It is stable, but not the best default yet.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE module build/load passed on both VMs.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE module build/load passed on both VMs.
 
 Smoke result: `build/perf-matrix-remote-216-82-20260601-051037.json`, `TCP_TESTS=82clientp1`, `IPERF_SECONDS=4`. All cases were ready, module params OK, no reboot. Nonlinear counters were active with low fallback counts.
 
@@ -3404,7 +3404,7 @@ Confirm result: `build/perf-matrix-remote-216-82-20260601-051847.json`, `TCP_TES
 | `m64_outergso_tuned_sharded8` | 4640.66 | 3850.38 | 3537.17 | stable but below sharded4 |
 | `m64_outergso_nonlinear_tx_sharded8` | 4649.77 | 3739.84 | 3435.53 | nonlinear active; p4/p8 lower |
 
-Conclusion: keep the inner-header template optimization. Do not make nonlinear TX the default yet; page allocation/kmap/frag attach overhead appears to outweigh the reduced large-linear-skb copy under p4/p8. The current best ACKless TCP candidate is `m64_outergso_tuned_sharded4`.
+Conclusion: keep the inner-header template optimization. Do not make nonlinear TX the default yet; page allocation/kmap/frag attach overhead appears to outweigh the reduced large-linear-skb copy under p4/p8. The current best TIX-TCP candidate is `m64_outergso_tuned_sharded4`.
 
 Follow-up result after also caching checksum bases in the async work item and embedding `direct_frames` in `struct trustix_tixt_tx_route_gso_async_work`: `build/perf-matrix-remote-216-82-20260601-053853.json`.
 
@@ -3414,13 +3414,13 @@ Follow-up result after also caching checksum bases in the async work item and em
 | `m64_outergso_tuned_sharded8` | 4526.89 | 3893.86 | 3696.84 | stable, no direct/XMIT errors |
 | `m64_outergso_nonlinear_tx_sharded8` | 4720.59 | 3681.84 | 3636.46 | nonlinear active; still below linear for p4/p8 |
 
-Conclusion: keep the checksum-base and embedded-frame changes. They are stable and improve some p8 runs, but still do not move the ceiling materially beyond the current 4-5 Gbps ACKless TCP range.
+Conclusion: keep the checksum-base and embedded-frame changes. They are stable and improve some p8 runs, but still do not move the ceiling materially beyond the current 4-5 Gbps TIX-TCP range.
 
-### ACKless TCP worker reschedule stride
+### TIX-TCP worker reschedule stride
 
 Change: `kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c` now has `route_tcp_gso_async_worker_resched_stride`. Default is `1`, which preserves the previous behavior of calling `cond_resched()` after each async work item. Test harness support was added in `build/run_remote_perf_matrix.py`; `ackless_resched_sweep` covers stride `0/4/8/16/32`.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE module build/load passed on both VMs.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE module build/load passed on both VMs.
 
 First result: `build/perf-matrix-remote-216-82-20260601-055819.json`, `TCP_TESTS=82clientp1,82clientp4,82clientp8`, `IPERF_SECONDS=6`.
 
@@ -3444,7 +3444,7 @@ All cases were ready, had module param validation OK, no reboot, and no route-st
 
 ### Known dangerous or invalid paths
 
-`ackless_rx_danger` / RX coalesced mark-GSO remains gated behind `TRUSTIX_MATRIX_ENABLE_DANGEROUS_RX_GSO=1`. Earlier runs showed near-zero ACKless TCP throughput despite counters, so it should not be treated as an optimization until kernel checksum/GSO metadata is fixed.
+`ackless_rx_danger` / RX coalesced mark-GSO remains gated behind `TRUSTIX_MATRIX_ENABLE_DANGEROUS_RX_GSO=1`. Earlier runs showed near-zero TIX-TCP throughput despite counters, so it should not be treated as an optimization until kernel checksum/GSO metadata is fixed.
 
 `ackless_nocsumi` is not valid performance data yet. The previous run (`build/perf-matrix-remote-216-82-20260601-024410.json`) produced ready-check failures with inconsistent module state and VM reboot evidence. Treat no-inner-checksum direct-build as unsafe until it passes reboot and module validation checks.
 
@@ -3471,11 +3471,11 @@ python scripts/trustix-latency-history-summary.py --last 20
 python scripts/trustix-latency-history-summary.py --transport udp --encryption secure --last 10
 ```
 
-### ACKless TCP async work slab no-zero test
+### TIX-TCP async work slab no-zero test
 
 Change tested: switched the route-GSO async work-item slab allocation from `kmem_cache_zalloc()` to `kmem_cache_alloc()` and explicitly initialized the direct-build inner-header cache fields. The goal was to avoid clearing the large embedded `direct_frames` array on every queued skb.
 
-Validation before deploy: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE build/load passed on both VMs.
+Validation before deploy: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE build/load passed on both VMs.
 
 Result file: `build/perf-matrix-remote-216-82-20260601-063732.json`.
 
@@ -3486,11 +3486,11 @@ Result file: `build/perf-matrix-remote-216-82-20260601-063732.json`.
 
 Conclusion: do not keep the no-zero allocation optimization. It did not beat the best prior `zalloc` runs, and the second case saw B reboot with an unclean journal afterwards. The code and PVE modules were reverted to `kmem_cache_zalloc()` stable behavior. The next higher-value path is cross-work-item route-GSO batching, because current counters show only about 22-23 direct frames per outer-GSO batch while the configured max is 64.
 
-### ACKless TCP cross-item route-GSO batching
+### TIX-TCP cross-item route-GSO batching
 
 Change: added experimental `route_tcp_gso_async_stream_cross_item_batch` support and matrix cases. Follow-up fixes move the cross-item batch state off the worker stack, pre-check the next queued item before allocating a batch object, and reject candidates that would exceed the IPv4 outer GSO payload limit before removing them from the queue. This eliminated cross-item fallback/error churn in the current PVE run.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE build/load passed on both VMs; the new cross-item worker no longer triggers the earlier large stack-frame warning.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE build/load passed on both VMs; the new cross-item worker no longer triggers the earlier large stack-frame warning.
 
 Smoke results:
 
@@ -3524,7 +3524,7 @@ Follow-up micro-optimization: worker drain now passes whether the queue still ha
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | `m64_outergso_tuned_sharded4_crossitem` | 4632.22 | 3843.37 | 3827.44 | 16441 / 40536 / 485466 | 29.53 | no cross-item errors/fallbacks, no reboot |
 
-This is the best current cross-item run and the best recent p8 ACKless TCP result, but it still does not dominate baseline p4. Keep it experimental until another confirmation run shows the p4 loss is gone.
+This is the best current cross-item run and the best recent p8 TIX-TCP result, but it still does not dominate baseline p4. Keep it experimental until another confirmation run shows the p4 loss is gone.
 
 Rejected follow-up: per-worker scratch reuse of the cross-item batch object was tested in `build/perf-matrix-remote-216-82-20260601-080407.json`. It reduced neither latency nor throughput in practice: `sharded4_crossitem` fell to 4517.07 / 3687.82 / 3622.52 Mbps, while cross-item batch percentage dropped to 1.57%. Do not keep that change; the allocation cost is less important than preserving enough queue backlog for adjacent work items to coalesce.
 
@@ -3546,20 +3546,20 @@ Cross-item debug rerun: `build/perf-matrix-remote-216-82-20260601-084732.json`, 
 
 Miss reasons in the diagnostic run were dominated by `skip_first_room=78187`, `skip_first_tail=24785`, `skip_no_next=23455`, `skip_candidate_shape=11329`, `skip_candidate_room=11488`, and `skip_candidate_sequence=1331`; `skip_candidate_template=0`. This confirms the low cross-item hit rate is primarily the IPv4 outer-GSO 64 KiB payload ceiling and short final frame shape, not header-template mismatch. The next useful optimization is partial-item/tail-stitch batching that can split oversized work items on TIXT frame boundaries and combine only the leftover tail with the next queued item.
 
-### ACKless TCP tail-stitch route-GSO batching
+### TIX-TCP tail-stitch route-GSO batching
 
 Change: added experimental `route_tcp_gso_async_stream_cross_item_tail_stitch` support that splits an oversized first work item on TIXT frame boundaries, sends the prefix as one route-GSO packet, and tries to batch the first item's tail with following queue items. A follow-up guard pre-checks the next candidate before allocation/range collection and reuses the first work item's direct frame buffer for the prefix path.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE helper module build/load passed on both VMs; no reboot was detected in the measured runs.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE helper module build/load passed on both VMs; no reboot was detected in the measured runs.
 
 | Result file | p1 Mbps | p4 Mbps | p8 Mbps | Tail batches/items/frames | Prefix frames | Fallbacks | Notes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `build/perf-matrix-remote-216-82-20260601-091636.json` | 4435.71 | 3750.68 | 3435.95 | 23727 / 48345 / 614341 | 1067670 | 17325 | initial full confirm; p1/p8 regressed |
 | `build/perf-matrix-remote-216-82-20260601-092758.json` | 4575.78 | 3984.17 | 3599.29 | 13573 / 28158 / 342805 | 610740 | 18506 | candidate precheck/prefix-buffer reuse; better p4 but still not dominant |
 
-Conclusion: keep tail-stitch behind the experimental knob only. It is stable and can help p4, but the extra prefix send and high no-op attempt count do not beat the best plain cross-item results consistently. The next higher-value path is reducing ACKless TCP retransmits and burst loss, especially on p4/p8, by testing queue ordering, shard count, worker budgets, and TX pacing/backpressure behavior.
+Conclusion: keep tail-stitch behind the experimental knob only. It is stable and can help p4, but the extra prefix send and high no-op attempt count do not beat the best plain cross-item results consistently. The next higher-value path is reducing TIX-TCP retransmits and burst loss, especially on p4/p8, by testing queue ordering, shard count, worker budgets, and TX pacing/backpressure behavior.
 
-### ACKless TCP RX coalesce rejection
+### TIX-TCP RX coalesce rejection
 
 Result file: `build/perf-matrix-remote-216-82-20260601-094346.json`, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=4`.
 
@@ -3570,9 +3570,9 @@ Result file: `build/perf-matrix-remote-216-82-20260601-094346.json`, `TCP_TESTS=
 | `m64_outergso_tuned_sharded4` | 3671.65 | 3470.21 | inline-RX baseline in same run |
 | `m40_outergso_coalesce` | 3642.30 | 3428.70 | stream coalesce neutral/slightly worse |
 
-Conclusion: do not pursue current RX single-coalesce for ACKless TCP route-GSO until its sequence/checksum/GSO metadata path is fixed. The useful baseline remains inline RX with parse-decap kfunc off. A new `ackless_worker_budget_sweep` alias was added to test shard count and worker budget/reschedule pressure around the current `sharded4_ackonly` baseline; `perf-history.jsonl` now records compact CPU, softirq, RSS, and available-memory summaries for each case.
+Conclusion: do not pursue current RX single-coalesce for TIX-TCP route-GSO until its sequence/checksum/GSO metadata path is fixed. The useful baseline remains inline RX with parse-decap kfunc off. A new `ackless_worker_budget_sweep` alias was added to test shard count and worker budget/reschedule pressure around the current `sharded4_ackonly` baseline; `perf-history.jsonl` now records compact CPU, softirq, RSS, and available-memory summaries for each case.
 
-### ACKless TCP worker budget sweep
+### TIX-TCP worker budget sweep
 
 Partial result file: `build/perf-matrix-remote-216-82-20260601-095904.json`, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=4`. The full sweep was stopped after `i32/s1024`; PVE cleanup completed and no reboot was detected.
 
@@ -3624,7 +3624,7 @@ Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\de
 
 Conclusion: keep schedule-delay behind the experimental knob. It is safer than worker self-requeue and can raise cross-item hit rate, but the added latency/backpressure is not a stable throughput win. `scheddepth4_delay1` is the only candidate worth rerunning; do not enable any delay by default.
 
-### ACKless TCP cross-item allocation and dequeue batching
+### TIX-TCP cross-item allocation and dequeue batching
 
 Post-`kmem_cache` baseline: `build/perf-matrix-remote-216-82-20260601-112848.json`, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=5`.
 
@@ -3634,7 +3634,7 @@ Post-`kmem_cache` baseline: `build/perf-matrix-remote-216-82-20260601-112848.jso
 
 Change: added `route_tcp_gso_async_stream_cross_item_dequeue_batch`, an experimental path that removes adjacent cross-item candidates from the shard queue under one spinlock window, then builds/sends the outer-GSO batch outside the lock. Defaults remain off.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE helper module build/load passed on both VMs. Result file: `build/perf-matrix-remote-216-82-20260601-115259.json`.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE helper module build/load passed on both VMs. Result file: `build/perf-matrix-remote-216-82-20260601-115259.json`.
 
 | Case | p4 Mbps | p8 Mbps | Retrans p4/p8 | Cross batches/items/frames | Dequeue batches/items | Worker runs | Notes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -3667,11 +3667,11 @@ One `m64_nocsumi` case was refused by the public-A/B route-GSO safety guard beca
 
 Conclusion: the worker-local dequeue code path is now cleaner but still not useful for throughput. Leave it experimental/default-off. The no-inner-checksum/RX-coalesce experiment is also not a win. Continue with TX-side batching/backpressure or a packet-format change rather than more queue-lock work.
 
-### ACKless TCP hashed TX queue mapping
+### TIX-TCP hashed TX queue mapping
 
 Change: added `route_tcp_gso_async_hash_tx_queue`, a default-off experiment that assigns route-GSO async outer skbs to a hardware TX queue using the inner skb hash. A later follow-up added per-queue counters `route_tcp_gso_async_hash_tx_queue_q0..q7` plus `other` so the matrix can verify distribution.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE A/B helper module build/load passed. Result files: `build/perf-matrix-remote-216-82-20260601-131551.json` for the first inner-hash version and `build/perf-matrix-remote-216-82-20260601-133036.json` for the per-queue counter run.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE A/B helper module build/load passed. Result files: `build/perf-matrix-remote-216-82-20260601-131551.json` for the first inner-hash version and `build/perf-matrix-remote-216-82-20260601-133036.json` for the per-queue counter run.
 
 | Result file | Case | p4 Mbps | p8 Mbps | Hash TXQ distribution | Notes |
 | --- | --- | ---: | ---: | --- | --- |
@@ -3682,13 +3682,13 @@ Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\de
 
 Cleanup/status: no A/B reboot, boot IDs unchanged, `route_tcp_gso_async_hash_tx_queue` restored to `N`, no residual real `iperf3` or `trustixd.current` test process, and both VMs had about 7.6 GiB MemAvailable after cleanup.
 
-Conclusion: keep hashed TX queue mapping experimental/default-off. It confirms multi-queue assignment works, but it does not move the ACKless TCP ceiling; TX queue selection is not the main limiter on this public A/B path. Next work should focus on per-frame direct-build cost, RX LAN reinjection/user-space cost, or a packet-format/larger-frame change.
+Conclusion: keep hashed TX queue mapping experimental/default-off. It confirms multi-queue assignment works, but it does not move the TIX-TCP ceiling; TX queue selection is not the main limiter on this public A/B path. Next work should focus on per-frame direct-build cost, RX LAN reinjection/user-space cost, or a packet-format/larger-frame change.
 
-### ACKless TCP direct-build linear fast-copy
+### TIX-TCP direct-build linear fast-copy
 
 Change: added `route_tcp_gso_async_stream_direct_build_fast_copy`, a default-on experiment that tries to copy route-GSO stream payloads directly from the source skb linear head before falling back to `skb_copy_bits` / `skb_copy_and_csum_bits`. Counters `route_tcp_gso_async_stream_direct_fast_copy_hits` and `_fallbacks` show whether the path is actually usable.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed before deployment. PVE A/B helper module build/load passed. Result file: `build/perf-matrix-remote-216-82-20260601-135253.json`, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=5`.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed before deployment. PVE A/B helper module build/load passed. Result file: `build/perf-matrix-remote-216-82-20260601-135253.json`, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=5`.
 
 | Case | p4 Mbps | p8 Mbps | Retrans p4/p8 | Direct builds/frames | Fast-copy hits/fallbacks | Notes |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
@@ -3699,11 +3699,11 @@ Cleanup/status: no A/B reboot, boot IDs unchanged, `route_tcp_gso_async_stream_d
 
 Conclusion: linear-head fast-copy is not a useful optimization on the current route-GSO path because the payload is not linear in the source skb. Keep it harmless/default-on for now only as instrumentation, but the next optimization should target non-linear fragment copy/checksum cost, per-frame checksum policy, or a larger frame/packet-format change.
 
-### ACKless TCP direct-build frag fast-copy
+### TIX-TCP direct-build frag fast-copy
 
 Change: added `route_tcp_gso_async_stream_direct_build_frag_fast_copy`, a default-on experiment that copies and optionally checksums route-GSO stream payloads directly from skb frags with `kmap_local_page()` and `csum_partial_copy_nocheck()` before falling back to `skb_copy_bits` / `skb_copy_and_csum_bits`.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed before deployment. PVE A/B helper module build/load passed. Result file: `build/perf-matrix-remote-216-82-20260601-141709.json`, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=5`.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed before deployment. PVE A/B helper module build/load passed. Result file: `build/perf-matrix-remote-216-82-20260601-141709.json`, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=5`.
 
 | Case | p4 Mbps | p8 Mbps | Retrans p4/p8 | Direct builds/frames | Frag fast-copy hits/fallbacks | Cross-page rejects | Notes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -3716,7 +3716,7 @@ Conclusion: frag fast-copy is active and gave a small public-A/B lift in this ru
 
 Follow-up: added `route_tcp_gso_async_stream_direct_build_frag_fast_copy_cross_page`, a default-off switch that lets the frag fast-copy path span page boundaries. The default path remains single-page only; cross-page candidates increment `route_tcp_gso_async_stream_direct_frag_fast_copy_cross_page` and fall back unless the explicit cross-page switch is enabled. Matrix diagnostics now include `route_stream_direct_frag_fast_copy_cross_page_hits`.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE A/B helper module build/load passed after the switch was split out. Result files: `build/perf-matrix-remote-216-82-20260601-143610.json` for the temporary cross-page-enabled build, and `build/perf-matrix-remote-216-82-20260601-145452.json` for the stable default-off build.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE A/B helper module build/load passed after the switch was split out. Result files: `build/perf-matrix-remote-216-82-20260601-143610.json` for the temporary cross-page-enabled build, and `build/perf-matrix-remote-216-82-20260601-145452.json` for the stable default-off build.
 
 | Result file | Case | p4 Mbps | p8 Mbps | Retrans p4/p8 | Frag hits/fallbacks | Cross-page hits/rejects | Notes |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
@@ -3727,13 +3727,13 @@ Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\de
 
 Cleanup/status: after the stable default-off run, A/B boot IDs were unchanged, `fragfast=Y`, `crosspage=N`, `fastcopy=Y`, `hash_txq=N`, no real residual test processes were left, and both VMs had about 7.6 GiB MemAvailable.
 
-Conclusion: single-page frag fast-copy is stable and reduces fallback work, but throughput benefit is not stable on the public A/B path. Cross-page fast-copy converts almost all previous cross-page rejects into hits, but it did not produce a clear throughput win in the temporary run and should stay default-off until tested on an isolated high-speed VM path. The next useful ACKless TCP optimization is likely a larger packet-format/nonlinear direct-build change or RX LAN reinjection removal, not more copy micro-optimization.
+Conclusion: single-page frag fast-copy is stable and reduces fallback work, but throughput benefit is not stable on the public A/B path. Cross-page fast-copy converts almost all previous cross-page rejects into hits, but it did not produce a clear throughput win in the temporary run and should stay default-off until tested on an isolated high-speed VM path. The next useful TIX-TCP optimization is likely a larger packet-format/nonlinear direct-build change or RX LAN reinjection removal, not more copy micro-optimization.
 
-### ACKless TCP hot counter guard
+### TIX-TCP hot counter guard
 
 Change: added `route_tcp_gso_async_hot_stats`, default off, to keep the route-GSO async per-frame fast-copy counters out of the hot path during throughput runs. The matrix now sets, validates and restores this helper parameter, and `disable_route_tcp_unsafe()` explicitly restores it to `N`. A follow-up matrix harness change records final boot IDs after restore/cleanup so post-case reboots are not counted as stable passes.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE A/B helper module build/load passed. Result file: `build/perf-matrix-remote-216-82-20260601-161502.json`, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=4`, `RUN_UDP=0`.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE A/B helper module build/load passed. Result file: `build/perf-matrix-remote-216-82-20260601-161502.json`, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=4`, `RUN_UDP=0`.
 
 | Case | p4 Mbps | p8 Mbps | Retrans p4/p8 | Hot stats | Route-GSO counters | Notes |
 | --- | ---: | ---: | ---: | --- | ---: | --- |
@@ -3745,13 +3745,13 @@ Conclusion: removing hot per-frame stats is safe and keeps instrumentation from 
 
 Follow-up harness change: added `TRUSTIX_MATRIX_SKIP_POST_RESTORE=1` / `TRUSTIX_MATRIX_POST_RESTORE=0` for dangerous route-GSO sweeps. This skips only the post-case `restore_default()` daemon restart while keeping process cleanup, test-LAN cleanup, route-GSO parameter reset, and final boot-id detection. Use it when the goal is to distinguish datapath-case stability from delayed restore-phase crashes.
 
-Validation with post-restore skipped: result file `build/perf-matrix-remote-216-82-20260601-163136.json`, same safe route-GSO ACKless TCP case, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=4`, `RUN_UDP=0`, `SKIP_UNDERLAY=1`. Throughput was 4245.54 Mbps at p4 and 3992.05 Mbps at p8. Kernel direct verdict passed; B-side route-GSO counters moved (`stream frames 3,111,185`, `direct frames 3,111,095`, `outer-GSO frames 3,109,977`, `cross-item frames 469,724`). Case boot IDs and final boot IDs were stable, no post-matrix reboot was detected, and memory stayed around 7.4 GiB available. This confirms the new harness separates datapath stability from restore-phase risk.
+Validation with post-restore skipped: result file `build/perf-matrix-remote-216-82-20260601-163136.json`, same safe route-GSO TIX-TCP case, `TCP_TESTS=82clientp4,82clientp8`, `IPERF_SECONDS=4`, `RUN_UDP=0`, `SKIP_UNDERLAY=1`. Throughput was 4245.54 Mbps at p4 and 3992.05 Mbps at p8. Kernel direct verdict passed; B-side route-GSO counters moved (`stream frames 3,111,185`, `direct frames 3,111,095`, `outer-GSO frames 3,109,977`, `cross-item frames 469,724`). Case boot IDs and final boot IDs were stable, no post-matrix reboot was detected, and memory stayed around 7.4 GiB available. This confirms the new harness separates datapath stability from restore-phase risk.
 
-### ACKless TCP cross-item nonlinear TX
+### TIX-TCP cross-item nonlinear TX
 
-Change: cross-item ACKless TCP route-GSO batches can now use the nonlinear direct-build skb constructor instead of always allocating one large linear skb. The previous guard that made cross-item batching and nonlinear direct-build mutually exclusive was removed, and the matrix gained `exp_plaintext_fast_route_gso_async_stream_hw_inline_rx_directbuild_m64_outergso_tuned_sharded4_ackonly_crossitem_budget_i32_s1024_nonlinear`.
+Change: cross-item TIX-TCP route-GSO batches can now use the nonlinear direct-build skb constructor instead of always allocating one large linear skb. The previous guard that made cross-item batching and nonlinear direct-build mutually exclusive was removed, and the matrix gained `exp_plaintext_fast_route_gso_async_stream_hw_inline_rx_directbuild_m64_outergso_tuned_sharded4_ackonly_crossitem_budget_i32_s1024_nonlinear`.
 
-Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/experimentaltcp ./internal/daemon` passed. PVE A/B helper module build/load passed. Result file: `build/perf-matrix-remote-216-82-20260601-171230.json`, `TCP_TESTS=82clientp1,82clientp4,82clientp8`, `IPERF_SECONDS=4`, `RUN_UDP=0`, `SKIP_UNDERLAY=1`, `SKIP_POST_RESTORE=1`.
+Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py` and `go test -count=1 ./internal/dataplane/ebpf ./internal/transport/tixtcp ./internal/daemon` passed. PVE A/B helper module build/load passed. Result file: `build/perf-matrix-remote-216-82-20260601-171230.json`, `TCP_TESTS=82clientp1,82clientp4,82clientp8`, `IPERF_SECONDS=4`, `RUN_UDP=0`, `SKIP_UNDERLAY=1`, `SKIP_POST_RESTORE=1`.
 
 | Case | p1 Mbps | p4 Mbps | p8 Mbps | Key counters | Stability |
 | --- | ---: | ---: | ---: | --- | --- |
@@ -3759,9 +3759,9 @@ Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\de
 
 Conclusion: the new path works and is stable on public/PVE A/B, but it does not move throughput materially versus the linear cross-item and nonlinear non-cross-item runs. Keep it as an available experiment/default-off; the next throughput work should focus on reducing RX/user-space reinjection or the outer TCP/TIXT packet format rather than only changing linear-vs-frag allocation.
 
-### ACKless TCP RX worker coalesced GSO
+### TIX-TCP RX worker coalesced GSO
 
-Change: added experimental RX-worker-side adjacent TCP stream coalescing for ACKless TCP LAN xmit. The first version built direct inner TCPv4 GSO skbs from adjacent same-flow frames; a follow-up added `rx_worker_stream_coalesce_software_segment`, GSO shape guards, `rx_worker_stream_coalesce_partial_csum`, and diagnostic counters for last GSO shape / software segmentation failures.
+Change: added experimental RX-worker-side adjacent TCP stream coalescing for TIX-TCP LAN xmit. The first version built direct inner TCPv4 GSO skbs from adjacent same-flow frames; a follow-up added `rx_worker_stream_coalesce_software_segment`, GSO shape guards, `rx_worker_stream_coalesce_partial_csum`, and diagnostic counters for last GSO shape / software segmentation failures.
 
 Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py`, targeted `go test -count=1 ./internal/daemon -run TestTrustIXDatapathModuleParameters`, and `go test -count=1 ./internal/kernelmodule` passed. Full `go test ./internal/daemon` still has the existing unrelated `TestRegisterInboundReverseOnlyDataSessionDropsMatchingOutboundSession` failure. PVE A/B datapath module build/load passed after adding the l4 checksum prototype.
 
@@ -3774,11 +3774,11 @@ Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\de
 | `build/perf-matrix-remote-216-82-20260601-221017.json` | software segment, full checksum | 438.91 | 878 | coalesce packets 1919, frames 16413, segment skbs 16413 | stable |
 | `build/perf-matrix-remote-216-82-20260601-221017.json` | direct GSO, full checksum | 417.00 | 1662 | coalesce packets 1845, frames 10426, max len 64756 | stable |
 
-Conclusion: CHECKSUM_PARTIAL on the coalesced inner TCP GSO skb was the immediate cause of the catastrophic public-A/B regression. Full TCP checksum makes both direct-GSO and software-segment variants stable again, but throughput only returns to the existing ACKless RX-worker baseline instead of improving it. Keep RX worker coalesced GSO experimental/default-off; if reused, prefer `rx_worker_stream_coalesce_partial_csum=0`. The next useful optimization is unlikely to be this LAN-xmit GSO wrapper alone; focus on removing RX worker LAN reinjection overhead, changing ACKless TCP framing to carry larger validated batches, or moving the receive path into the eventual full kernel module.
+Conclusion: CHECKSUM_PARTIAL on the coalesced inner TCP GSO skb was the immediate cause of the catastrophic public-A/B regression. Full TCP checksum makes both direct-GSO and software-segment variants stable again, but throughput only returns to the existing ACKless RX-worker baseline instead of improving it. Keep RX worker coalesced GSO experimental/default-off; if reused, prefer `rx_worker_stream_coalesce_partial_csum=0`. The next useful optimization is unlikely to be this LAN-xmit GSO wrapper alone; focus on removing RX worker LAN reinjection overhead, changing TIX-TCP framing to carry larger validated batches, or moving the receive path into the eventual full kernel module.
 
-### ACKless TCP RX inline xmit / stolen xmit
+### TIX-TCP RX inline xmit / stolen xmit
 
-Change: added an experimental `rx_worker_inline_xmit` path that validates ACKless TCP stream frames in the netfilter hook and transmits validated inner packets directly, bypassing the RX-worker ring/workqueue. A follow-up added a default-on one-pass copy+checksum helper and a set of stolen-skb xmit variants. CHECKSUM_PARTIAL remains guarded because prior RX-worker partial checksum experiments were unstable.
+Change: added an experimental `rx_worker_inline_xmit` path that validates TIX-TCP stream frames in the netfilter hook and transmits validated inner packets directly, bypassing the RX-worker ring/workqueue. A follow-up added a default-on one-pass copy+checksum helper and a set of stolen-skb xmit variants. CHECKSUM_PARTIAL remains guarded because prior RX-worker partial checksum experiments were unstable.
 
 Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\deploy_gso_opt_remote.py`, `go test -count=1 ./internal/daemon -run TestTrustIXDatapathModuleParameters`, and `go test -count=1 ./internal/kernelmodule` passed before deployment. PVE A/B datapath module build/load passed. Public/PVE A/B smoke used `TCP_TESTS=82clientp1,82clientp4`, `IPERF_SECONDS=4`, `RUN_UDP=0`, `SKIP_UNDERLAY=1`, `SKIP_POST_RESTORE=1`, `ENABLE_TIXT_PLAIN_ACK_ONLY=1`, and `ENABLE_DANGEROUS_RX_WORKER_STREAM_TCP=1`.
 
@@ -3796,7 +3796,7 @@ Validation: local `python -m py_compile build\run_remote_perf_matrix.py build\de
 
 Conclusion: bypassing the worker ring/workqueue helps, but the path is still dominated by per-inner-frame skb construction/checksum/`dev_queue_xmit`. The one-pass copy+checksum helper is stable but not the main limiter. The best stable public/PVE A/B result is inline stolen xmit + MAC cache at about 0.64/0.58 Gbps for p1/p4. CHECKSUM_PARTIAL on this receive-side LAN xmit path remains unsafe; keep it default-off and avoid broad sweeps until the checksum ownership is redesigned.
 
-### ACKless TCP RX inline pair coalesce
+### TIX-TCP RX inline pair coalesce
 
 Change: added `rx_worker_inline_pair_coalesce`, a default-off receive-side experiment for the full kernel datapath. It only runs when `rx_worker_stream_coalesce_partial_csum=0`, so the coalesced inner TCP GSO skb is built with a full TCP checksum rather than CHECKSUM_PARTIAL. The path caches one validated single-frame inline xmit packet per flow/hash slot, then coalesces the next adjacent TCP packet into a 2-frame inner GSO skb and transmits it once. Non-adjacent or timed-out packets are flushed through the existing single-packet inline xmit builder.
 
@@ -3919,7 +3919,7 @@ Validation:
 | Result file | Case | Outcome | Stability |
 | --- | --- | --- | --- |
 | `build/perf-a-local-extreme-20260602-path-gate-smoke.json` | `udp_secure_kernel`, `udp_secure_kernel_skb_seal_direct_open` | path probe rejected both: TC secure seal counters moved, but kernel crypto device batch counters also moved | A later rebooted during/after the run that also included RX-worker netns |
-| `build/perf-a-local-extreme-20260602-path-gate-smoke.json` | `experimental_tcp_plaintext_route_gso_async_stream_directbuild_m64_outergso_rxworker_paircoalesce_ackonly` | readiness failed before path probe | unsafe local netns RX-worker path, do not rerun without explicit netns gate |
+| `build/perf-a-local-extreme-20260602-path-gate-smoke.json` | `tix_tcp_plaintext_route_gso_async_stream_directbuild_m64_outergso_rxworker_paircoalesce_ackonly` | readiness failed before path probe | unsafe local netns RX-worker path, do not rerun without explicit netns gate |
 | `build/perf-a-local-extreme-20260602-secure-path-gate-boot.json` | `udp_secure_kernel` | path probe rejected device fallback and skipped full iperf | boot ID stable; cleanup left no processes, netns, or TrustIX modules |
 | `build/perf-a-local-extreme-20260602-secure-offload-off-smoke.json` | `udp_secure_kernel` | disabled local veth offloads; path probe passed TC secure-direct with no device fallback; p1 was about 1.94/1.89 Gbps | boot ID stable; cleanup left no processes, netns, or TrustIX modules |
 | `build/perf-a-local-extreme-20260602-secure-offload-off-mtu8500.json` | `udp_secure_kernel` | LAN MTU 8500 regressed to MTU fallback/device path and was skipped | boot ID stable; cleanup left no processes, netns, or TrustIX modules |
@@ -4011,7 +4011,7 @@ Cleanup: after the checksum-trust stolen probe, A/B had unchanged boot IDs, no T
 
 ### Full-datapath ACKless hold-skb 4-frame append smoke
 
-Change: extended the hold-skb inline pair path so an already held skb can append more adjacent ACKless TCP frames up to `rx_worker_inline_coalesce_max_frames`. Added the default-off matrix alias `ackless_holdskb4_trustcsum_acktrust`, which uses the same trusted data checksum and ACK-only trust settings as the current best hold-skb path but sets `rx_worker_inline_coalesce_max_frames=4`.
+Change: extended the hold-skb inline pair path so an already held skb can append more adjacent TIX-TCP frames up to `rx_worker_inline_coalesce_max_frames`. Added the default-off matrix alias `ackless_holdskb4_trustcsum_acktrust`, which uses the same trusted data checksum and ACK-only trust settings as the current best hold-skb path but sets `rx_worker_inline_coalesce_max_frames=4`.
 
 Validation: before deployment, local `python -m py_compile build\run_remote_perf_matrix.py build\test_run_remote_perf_matrix.py build\deploy_gso_opt_remote.py`, `python -m unittest build.test_run_remote_perf_matrix`, `go test -count=1 ./internal/daemon -run TestTrustIXDatapathModuleParameters`, and `go test -count=1 ./internal/kernelmodule` passed. A/B module builds passed after removing an unused wrapper warning. Public A/B smoke used `TCP_TESTS=82clientp1`, `IPERF_SECONDS=4`, `RUN_UDP=0`, `SKIP_UNDERLAY=1`, `SKIP_POST_RESTORE=1`, `TRUSTIX_MATRIX_ENABLE_DANGEROUS_RX_WORKER_STREAM_TCP=1`, and `TRUSTIX_MATRIX_ENABLE_TIXT_PLAIN_ACK_ONLY=1`.
 
@@ -4139,7 +4139,7 @@ Change: reran the explicit outer-GSO hard-enable path after the startup ordering
 | same | sharded4 hard-enable | `82clientp4`, 6s | 3662.54 | 3819 | client `trustixd` ~8.8% CPU; server softirq max 22.4%, iperf max 74% | boot IDs stable |
 | same | sharded4 hard-enable | `82clientp8`, 6s | 3287.79 | 3318 | client `trustixd` ~8.7% CPU; server softirq max 21.5%, iperf max 79.4% | boot IDs stable |
 
-Conclusion: hard-enable no longer reproduces startup/module-load instability under the hardened harness, but this window did not reproduce the earlier 3.98-4.27 Gbps best results. It still slightly beats no-outer sharded4 at p4, while sharded4 significantly reduces retransmits. CPU is not saturated, so the next optimization should focus on ACKless TCP burst shape, queue pacing/backpressure, or qdisc/virtio queue behavior rather than more per-frame copy/kfunc micro-optimizations.
+Conclusion: hard-enable no longer reproduces startup/module-load instability under the hardened harness, but this window did not reproduce the earlier 3.98-4.27 Gbps best results. It still slightly beats no-outer sharded4 at p4, while sharded4 significantly reduces retransmits. CPU is not saturated, so the next optimization should focus on TIX-TCP burst shape, queue pacing/backpressure, or qdisc/virtio queue behavior rather than more per-frame copy/kfunc micro-optimizations.
 
 Cleanup: after the hard-enable retest, pveA/pveB boot IDs were unchanged, available memory was about 7463 MiB and 7490 MiB, and explicit cleanup left no TrustIX/iperf processes, no test netns/veth, and no TrustIX modules loaded.
 
@@ -4195,9 +4195,9 @@ PVE host note: the Proxmox host itself is Debian 12 / kernel `6.8.12-17-pve`, bu
 
 Boundary: generic Linux support means "can build against a matching kernel build directory/header tree" via `make -C kernel/trustix_datapath KDIR=/path/to/kernel/build ARCH=...`, not "one `.ko` works across distros." Linux kernel modules are tied to exact kernel ABI/vermagic and must be built per target kernel. Runtime load/function smoke is still required per kernel before enabling full plaintext datapath in production.
 
-### Public A/B ACKless TCP outer-GSO validation
+### Public A/B TIX-TCP outer-GSO validation
 
-Validation: deployed the current crypto/datapath/helper modules to public lab hosts A and B, then ran A/B public-path ACKless TCP tests with `ENABLE_ROUTE_OUTER_GSO_HARD=1`, `PUBLIC_DISABLE_ROUTE_TCP_UNSAFE_OVERRIDES=0`, `ENABLE_TIXT_PLAIN_ACK_ONLY=1`, `RELOAD_REQUIRED_MODULES_PER_CASE=1`, and `ens18` as the underlay interface. No reboot was detected in any run; boot IDs stayed stable on both hosts.
+Validation: deployed the current crypto/datapath/helper modules to public lab hosts A and B, then ran A/B public-path TIX-TCP tests with `ENABLE_ROUTE_OUTER_GSO_HARD=1`, `PUBLIC_DISABLE_ROUTE_TCP_UNSAFE_OVERRIDES=0`, `ENABLE_TIXT_PLAIN_ACK_ONLY=1`, `RELOAD_REQUIRED_MODULES_PER_CASE=1`, and `ens18` as the underlay interface. No reboot was detected in any run; boot IDs stayed stable on both hosts.
 
 | Result file | Case | Test | Mbps | Retrans | Key counters / resources | Stability |
 | --- | --- | --- | ---: | ---: | --- | --- |
@@ -4213,13 +4213,13 @@ Validation: deployed the current crypto/datapath/helper modules to public lab ho
 
 Public underlay baseline from `build/perf-matrix-public-ab-ackless-noouter-20260603-185107.json`: TCP `82client->216server` was 4502.95 Mbps at p1 and 4237.75 Mbps at p4; reverse direction was 2245.24 Mbps at p1 and 2463.52 Mbps at p4. UDP 800M was 714.00 Mbps from A to B and 561.04 Mbps from B to A.
 
-Conclusion: real public A/B is not capped at the old 0.5 Gbps ACKless result. Safe direct-build/no-outer ACKless TCP remains poor at about 0.53-0.54 Gbps. Enabling outer-GSO hard-enable raises the best public ACKless TCP result to about 2.33 Gbps short-window and 2.26 Gbps over 10 seconds, with zero outer-GSO errors and no reboot. This is still well below the 4.2-4.5 Gbps available in the same direction on plain underlay TCP. Cross-item batching did not beat sharded8, and hash-txq did not work on this path because TX queue setting fell back every time. The remaining gap is more likely burst shape/backpressure/congestion behavior on the public path than raw per-frame copy cost.
+Conclusion: real public A/B is not capped at the old 0.5 Gbps ACKless result. Safe direct-build/no-outer TIX-TCP remains poor at about 0.53-0.54 Gbps. Enabling outer-GSO hard-enable raises the best public TIX-TCP result to about 2.33 Gbps short-window and 2.26 Gbps over 10 seconds, with zero outer-GSO errors and no reboot. This is still well below the 4.2-4.5 Gbps available in the same direction on plain underlay TCP. Cross-item batching did not beat sharded8, and hash-txq did not work on this path because TX queue setting fell back every time. The remaining gap is more likely burst shape/backpressure/congestion behavior on the public path than raw per-frame copy cost.
 
 Cleanup: after testing, A/B had no TrustIX or iperf user processes, no loaded `trustix_*` modules, no TrustIX test netns, and no XDP attached to `ens18`. Available memory after cleanup was about 1,739,152 KiB on A and 767,512 KiB on B.
 
-### Public A/B ACKless TCP retake after peak window
+### Public A/B TIX-TCP retake after peak window
 
-Validation: on 2026-06-09 afternoon, retested public A/B because the previous low result was likely affected by evening peak. A/B were clean before the run, current `trustixd.current` and rebuilt modules were deployed, and the ACKless TCP route-GSO/outer-GSO cases were run with `ENABLE_TIXT_PLAIN_ACK_ONLY=1`, `ENABLE_TIXT_PLAIN_SKIP_SEQUENCE=1`, `ENABLE_ROUTE_OUTER_GSO_HARD=1`, hot stats enabled, and `ens18` as the underlay. Result files: `build/public-underlay-retake-20260609-140709.json` and `build/perf-matrix-remote-216-82-public-retake-20260609-141604.json`.
+Validation: on 2026-06-09 afternoon, retested public A/B because the previous low result was likely affected by evening peak. A/B were clean before the run, current `trustixd.current` and rebuilt modules were deployed, and the TIX-TCP route-GSO/outer-GSO cases were run with `ENABLE_TIXT_PLAIN_ACK_ONLY=1`, `ENABLE_TIXT_PLAIN_SKIP_SEQUENCE=1`, `ENABLE_ROUTE_OUTER_GSO_HARD=1`, hot stats enabled, and `ens18` as the underlay. Result files: `build/public-underlay-retake-20260609-140709.json` and `build/perf-matrix-remote-216-82-public-retake-20260609-141604.json`.
 
 Public underlay baseline in the same window:
 
@@ -4228,7 +4228,7 @@ Public underlay baseline in the same window:
 | A `203.0.113.10` -> B `203.0.113.20` | 1217.03 | 1082.70 | 1533.52 | direct ping avg 1.29 ms |
 | B -> A | 3099.24 | 3702.00 | 3745.80 | direct ping avg 0.76 ms |
 
-ACKless TCP plaintext route-GSO/outer-GSO results:
+TIX-TCP plaintext route-GSO/outer-GSO results:
 
 | Case | Direction | p1 Mbps | p4 Mbps | p8 Mbps | Resource/stability notes |
 | --- | --- | ---: | ---: | ---: | --- |
@@ -4237,13 +4237,13 @@ ACKless TCP plaintext route-GSO/outer-GSO results:
 | ordered outer-GSO hard-enable | A -> B | 544.75 | 1481.37 | 1169.74 | max `trustixd` CPU 10.1%, max RSS 70.3 MiB, min available 596 MiB, boot IDs stable |
 | ordered outer-GSO hard-enable | B -> A | 2436.37 | 2502.28 | 2203.38 | outer-GSO frames A 2,402,709 / B 5,307,052, no reboot |
 
-Conclusion: the late low public result was not representative. In this retake, A->B underlay recovered to about 1.5 Gbps and ACKless TCP reached 1.48 Gbps on the best ordered p4 run, effectively near the current public-path ceiling in that direction. B->A underlay recovered to about 3.7 Gbps and ACKless TCP reached 2.60 Gbps, about 69% of p4 underlay. CPU is still not saturated by `trustixd`; the remaining B->A gap is more likely congestion/burst pacing, qdisc/softirq behavior, or route-GSO queue shaping than a simple userspace CPU bottleneck.
+Conclusion: the late low public result was not representative. In this retake, A->B underlay recovered to about 1.5 Gbps and TIX-TCP reached 1.48 Gbps on the best ordered p4 run, effectively near the current public-path ceiling in that direction. B->A underlay recovered to about 3.7 Gbps and TIX-TCP reached 2.60 Gbps, about 69% of p4 underlay. CPU is still not saturated by `trustixd`; the remaining B->A gap is more likely congestion/burst pacing, qdisc/softirq behavior, or route-GSO queue shaping than a simple userspace CPU bottleneck.
 
 Cleanup: after the retake, A/B had no TrustIX or iperf processes, no TrustIX netns/veth, no loaded `trustix_*` modules, and no XDP attached to `ens18`. Boot IDs stayed unchanged. Available memory after cleanup was about 725,940 KiB on A and 784,112 KiB on B.
 
-### ACKless TCP public profile retune
+### TIX-TCP public profile retune
 
-Change: the ACKless TCP performance route-GSO default was retuned from the previous sharded8/hash-TX-queue profile to the more balanced public-path profile:
+Change: the TIX-TCP performance route-GSO default was retuned from the previous sharded8/hash-TX-queue profile to the more balanced public-path profile:
 
 `flowshard + shards6 + worker dequeue batch + min queue depth 8 + 500 usec schedule delay + cross-item dynamic cap low 12/high 24/q4 + emit budget 8 + resched stride 16`
 
@@ -4268,7 +4268,7 @@ Key public results:
 
 Sweep highlights: the old sharded8 profile retested at about 1137 Mbps A->B p4 and 2345 Mbps B->A p4. Ordered outer-GSO retested at about 1360 Mbps A->B p4 and 2583 Mbps B->A p4. The selected shards6/emit8 pacing profile reached about 1552 Mbps A->B p4 and 2683 Mbps B->A p4 in the same sweep, with much lower A->B retransmits than ordered. A hash-TX-queue variant did not prove useful; its counters showed fallback instead of queue assignment.
 
-Conclusion: this does not make public ACKless TCP reach the PVE ceiling, but it is a better default than sharded8/hash-txq for the real A/B path. The current public limit still looks more like burst pacing/congestion and softirq/qdisc behavior than userspace CPU saturation.
+Conclusion: this does not make public TIX-TCP reach the PVE ceiling, but it is a better default than sharded8/hash-txq for the real A/B path. The current public limit still looks more like burst pacing/congestion and softirq/qdisc behavior than userspace CPU saturation.
 
 Cleanup: A/B were cleaned after validation. Final status showed no TrustIX or iperf processes, no TrustIX netns/veth, no loaded `trustix_*` modules, and no XDP attached to `ens18`. Boot IDs stayed unchanged; available memory after cleanup was about 721,592 KiB on A and 733,468 KiB on B.
 
@@ -4425,16 +4425,16 @@ general crash-risk gate is enabled.
 
 Validation: on 2026-06-10, extended the PVE A/B retest to mixed endpoint
 sets and longer concurrent traffic. The harness enabled multiple transport
-candidates in one policy (`udp`, `tcp`, and `experimental_tcp`) and, for the
+candidates in one policy (`udp`, `tcp`, and `tix_tcp`) and, for the
 longest runs, drove TCP and UDP traffic at the same time.
 
 Isolation results:
 
 | Result file | Module/config shape | Traffic | Duration | Result |
 | --- | --- | --- | --- | --- |
-| `build/pve/pve-multitransport-guarded-600s-20260610.json` | mixed `tcp+experimental_tcp`, experimental TCP fast path disabled by policy guard | TCP | 600s | reboot reproduced; not caused by experimental_tcp fast path |
+| `build/pve/pve-multitransport-guarded-600s-20260610.json` | mixed `tcp+tix_tcp`, TIX-TCP fast path disabled by policy guard | TCP | 600s | reboot reproduced; not caused by tix_tcp fast path |
 | `build/pve/pve-multitransport-modules-disabled-tcp-only-600s-20260610.json` | all TrustIX modules disabled | TCP | 600s | no reboot |
-| `build/pve/pve-multitransport-modules-disabled-triple-tcpudp-1800s-20260610.json` | all TrustIX modules disabled; `udp,tcp,experimental_tcp` candidates | TCP+UDP | 1800s | no reboot; TCP/UDP quality degraded under contention |
+| `build/pve/pve-multitransport-modules-disabled-triple-tcpudp-1800s-20260610.json` | all TrustIX modules disabled; `udp,tcp,tix_tcp` candidates | TCP+UDP | 1800s | no reboot; TCP/UDP quality degraded under contention |
 | `build/pve/pve-multitransport-helpers-only-tcp-300s-20260610.json` | only `trustix_datapath_helpers` loaded | TCP | 300s | no reboot |
 | `build/pve/pve-multitransport-datapath-only-tcp-300s-20260610.json` | only `trustix_datapath` loaded; daemon attached default RX_STAGE hook | TCP | 300s | reboot reproduced |
 | `build/pve/pve-multitransport-datapath-only-rxstage-disabled-tcp-600s-20260610.json` | only `trustix_datapath` loaded; `kernel_modules.datapath.rx_stage: disabled` | TCP | 600s | no reboot |
@@ -4495,11 +4495,11 @@ kernel-log crash findings.
 | `websocket` / `plaintext` / `stable` / `userspace` | 1.0 Gbps | 1.176969 Gbps |
 | `http_connect` / `secure` / `stable` / `userspace` | 0.75 Gbps | 0.874190 Gbps |
 | `http_connect` / `plaintext` / `stable` / `userspace` | 1.0 Gbps | 1.349766 Gbps |
-| `experimental_tcp` / `secure` / `stable` / `userspace` | 1.0 Gbps | 1.495637 Gbps |
+| `tix_tcp` / `secure` / `stable` / `userspace` | 1.0 Gbps | 1.495637 Gbps |
 
-The earlier 60s smoke run also included `experimental_tcp` plaintext userspace,
+The earlier 60s smoke run also included `tix_tcp` plaintext userspace,
 but that row is intentionally not promoted: it reported a near-zero reverse
 throughput sample around `0.000209 Gbps` and
-`session_heartbeat_timeouts=13`. Keep plaintext experimental TCP on the
+`session_heartbeat_timeouts=13`. Keep plaintext TIX-TCP on the
 separate route-GSO production gate unless a fresh strict long run proves the
 plain userspace mode.

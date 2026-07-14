@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 // Kernel crypto provider. The syscall programs create/release bpf_crypto_ctx
 // objects; the XDP programs execute AEAD frame seal/open against provider-owned
-// ctx slots for the experimental_tcp kernel crypto packet path.
+// ctx slots for the tix_tcp kernel crypto packet path.
 #define SEC(NAME) __attribute__((section(NAME), used))
 #define __ksym __attribute__((section(".ksyms")))
 #define __always_inline inline __attribute__((always_inline))

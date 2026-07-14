@@ -24,7 +24,7 @@ kfunc_fastpath_wipe="${TRUSTIX_KERNEL_FASTPATH_WIPE:-}"
 load_only="${TRUSTIX_KERNEL_LOAD_ONLY:-0}"
 loaded_by_script=0
 loaded_variant=""
-roundtrip_tests="${TRUSTIX_KERNEL_ROUNDTRIP_TESTS:-TestKernelCryptoProviderObjectSyntheticContextLifecycle|TestKernelCryptoProviderFrameSealOpenAndReplay|TestKernelCryptoProviderFrameSealOpenAES128|TestKernelCryptoProviderFrameSealOpenVariableSizes|TestExperimentalTCPKernelCryptoXDPOpensFrameAndRejectsReplay|TestExperimentalTCPKernelCryptoXDPDirectOpenObjectOpensFrame}"
+roundtrip_tests="${TRUSTIX_KERNEL_ROUNDTRIP_TESTS:-TestKernelCryptoProviderObjectSyntheticContextLifecycle|TestKernelCryptoProviderFrameSealOpenAndReplay|TestKernelCryptoProviderFrameSealOpenAES128|TestKernelCryptoProviderFrameSealOpenVariableSizes|TestTIXTCPKernelCryptoXDPOpensFrameAndRejectsReplay|TestTIXTCPKernelCryptoXDPDirectOpenObjectOpensFrame}"
 
 if [[ -z "$test_bin" && -x "${repo_root}/bin/ebpf.test" ]]; then
   test_bin="${repo_root}/bin/ebpf.test"

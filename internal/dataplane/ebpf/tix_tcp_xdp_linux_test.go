@@ -17,13 +17,13 @@ import (
 	cebpf "github.com/cilium/ebpf"
 
 	"trustix.local/trustix/internal/dataplane"
-	"trustix.local/trustix/internal/transport/experimentaltcp"
 	"trustix.local/trustix/internal/transport/kerneludp"
+	"trustix.local/trustix/internal/transport/tixtcp"
 )
 
-func TestExperimentalTCPKernelCryptoXDPObjectLoad(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPObjectLoad(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp kernel crypto XDP object load requires root")
+		t.Skip("tix_tcp kernel crypto XDP object load requires root")
 	}
 	manager := NewManager()
 	if err := manager.Load(context.Background()); err != nil {
@@ -34,23 +34,23 @@ func TestExperimentalTCPKernelCryptoXDPObjectLoad(t *testing.T) {
 		t.Skipf("kernel crypto provider is not ready: %s", manager.kernelCryptoUnavailableReasonLocked())
 	}
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
 		for cause := err; cause != nil; cause = errors.Unwrap(cause) {
 			if _, ok := cause.(fmt.Formatter); ok {
-				t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", cause)
+				t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", cause)
 			}
 		}
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 }
 
-func TestExperimentalTCPKernelCryptoXDPOpensFrameAndRejectsReplay(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPOpensFrameAndRejectsReplay(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp kernel crypto XDP program run requires root")
+		t.Skip("tix_tcp kernel crypto XDP program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	manager := NewManager()
 	if err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("load manager: %v", err)
@@ -69,32 +69,32 @@ func TestExperimentalTCPKernelCryptoXDPOpensFrameAndRejectsReplay(t *testing.T) 
 	spec := validKernelCryptoSpec(flowID)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install kernel crypto contexts: %v", err)
 	}
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %+v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %+v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen | experimentalTCPConfigHotPathStats
+	config := tixTCPConfigKernelUDPXDPOpen | tixTCPConfigHotPathStats
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable XDP TIXT kernel open: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 
 	plaintext := []byte("trustix attached xdp kernel open")
-	sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
+	sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
 	if err != nil {
 		t.Fatalf("seal frame: %v", err)
 	}
-	packet := mustExperimentalTCPXDPEthernetFrame(t, experimentaltcp.Frame{
-		Flags:    experimentaltcp.FlagEncrypted,
+	packet := mustTIXTCPXDPEthernetFrame(t, tixtcp.Frame{
+		Flags:    tixtcp.FlagEncrypted,
 		FlowID:   flowID,
 		Epoch:    spec.Epoch,
 		Sequence: sequence,
@@ -109,16 +109,16 @@ func TestExperimentalTCPKernelCryptoXDPOpensFrameAndRejectsReplay(t *testing.T) 
 	if ret == 0 {
 		t.Fatalf("XDP open return = %d, want redirect fallback/drop", ret)
 	}
-	openedPacket, err := experimentaltcp.ParseTCPShapedIPv4(first.DataOut[14:])
+	openedPacket, err := tixtcp.ParseTCPShapedIPv4(first.DataOut[14:])
 	if err != nil {
 		got, want := tcpChecksumForTest(first.DataOut[14:])
 		t.Fatalf("parse opened TCP-shaped packet: %v (tcp checksum got=%#04x want=%#04x)", err, got, want)
 	}
-	openedFrame, err := experimentaltcp.ParseFrame(openedPacket.Payload)
+	openedFrame, err := tixtcp.ParseFrame(openedPacket.Payload)
 	if err != nil {
 		t.Fatalf("parse opened TIXT frame: %v", err)
 	}
-	if openedFrame.Flags&experimentaltcp.FlagEncrypted != 0 || openedFrame.Flags&experimentaltcp.FlagKernelOpened == 0 {
+	if openedFrame.Flags&tixtcp.FlagEncrypted != 0 || openedFrame.Flags&tixtcp.FlagKernelOpened == 0 {
 		t.Fatalf("opened frame flags = %#x, want kernel-opened plaintext", openedFrame.Flags)
 	}
 	if !bytes.Equal(openedFrame.Payload, plaintext) {
@@ -139,11 +139,11 @@ func TestExperimentalTCPKernelCryptoXDPOpensFrameAndRejectsReplay(t *testing.T) 
 	assertXDPStat(t, object, 7, 1)
 }
 
-func TestExperimentalTCPKernelCryptoXDPDirectOpenObjectOpensFrame(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPDirectOpenObjectOpensFrame(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp kernel crypto XDP direct-open program run requires root")
+		t.Skip("tix_tcp kernel crypto XDP direct-open program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	manager := NewManager()
 	if err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("load manager: %v", err)
@@ -161,22 +161,22 @@ func TestExperimentalTCPKernelCryptoXDPDirectOpenObjectOpensFrame(t *testing.T) 
 	spec := validKernelCryptoSpec(flowID)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install kernel crypto contexts: %v", err)
 	}
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_direct_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_direct_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP direct-open object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP direct-open object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen | experimentalTCPConfigHotPathStats
+	config := tixTCPConfigKernelUDPXDPOpen | tixTCPConfigHotPathStats
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable XDP TIXT kernel direct open: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 
@@ -185,8 +185,8 @@ func TestExperimentalTCPKernelCryptoXDPDirectOpenObjectOpensFrame(t *testing.T) 
 	if err != nil {
 		t.Fatalf("seal frame: %v", err)
 	}
-	packet := mustExperimentalTCPXDPEthernetFrame(t, experimentaltcp.Frame{
-		Flags:    experimentaltcp.FlagEncrypted,
+	packet := mustTIXTCPXDPEthernetFrame(t, tixtcp.Frame{
+		Flags:    tixtcp.FlagEncrypted,
 		FlowID:   flowID,
 		Epoch:    spec.Epoch,
 		Sequence: sequence,
@@ -201,16 +201,16 @@ func TestExperimentalTCPKernelCryptoXDPDirectOpenObjectOpensFrame(t *testing.T) 
 	if ret == 0 {
 		t.Fatalf("XDP direct open return = %d, want redirect fallback/drop", ret)
 	}
-	openedPacket, err := experimentaltcp.ParseTCPShapedIPv4(run.DataOut[14:])
+	openedPacket, err := tixtcp.ParseTCPShapedIPv4(run.DataOut[14:])
 	if err != nil {
 		got, want := tcpChecksumForTest(run.DataOut[14:])
 		t.Fatalf("parse direct-opened TCP-shaped packet: %v (tcp checksum got=%#04x want=%#04x)", err, got, want)
 	}
-	openedFrame, err := experimentaltcp.ParseFrame(openedPacket.Payload)
+	openedFrame, err := tixtcp.ParseFrame(openedPacket.Payload)
 	if err != nil {
 		t.Fatalf("parse direct-opened TIXT frame: %v", err)
 	}
-	if openedFrame.Flags&experimentaltcp.FlagEncrypted != 0 || openedFrame.Flags&experimentaltcp.FlagKernelOpened == 0 {
+	if openedFrame.Flags&tixtcp.FlagEncrypted != 0 || openedFrame.Flags&tixtcp.FlagKernelOpened == 0 {
 		t.Fatalf("direct-opened frame flags = %#x, want kernel-opened plaintext", openedFrame.Flags)
 	}
 	if !bytes.Equal(openedFrame.Payload, plaintext) {
@@ -254,9 +254,9 @@ func sealKernelCryptoFrameForTest(key, iv []byte, suiteID uint16, epoch, sequenc
 	return sealed, nil
 }
 
-func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedTIXTByDefault(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPRedirectsEncryptedTIXTByDefault(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp kernel crypto XDP program run requires root")
+		t.Skip("tix_tcp kernel crypto XDP program run requires root")
 	}
 	manager := NewManager()
 	if err := manager.Load(context.Background()); err != nil {
@@ -275,30 +275,30 @@ func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedTIXTByDefault(t *testin
 	spec := validKernelCryptoSpec(flowID)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install kernel crypto contexts: %v", err)
 	}
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %+v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %+v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValue(object.configMap, 1, false); err != nil {
+	if _, err := configureTIXTCPBPFConfigValue(object.configMap, 1, false); err != nil {
 		t.Fatalf("configure XDP kernel open off: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 
 	plaintext := []byte("trustix encrypted tixt redirect")
-	sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
+	sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
 	if err != nil {
 		t.Fatalf("seal frame: %v", err)
 	}
-	packet := mustExperimentalTCPXDPEthernetFrame(t, experimentaltcp.Frame{
-		Flags:    experimentaltcp.FlagEncrypted,
+	packet := mustTIXTCPXDPEthernetFrame(t, tixtcp.Frame{
+		Flags:    tixtcp.FlagEncrypted,
 		FlowID:   flowID,
 		Epoch:    spec.Epoch,
 		Sequence: sequence,
@@ -313,15 +313,15 @@ func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedTIXTByDefault(t *testin
 	if ret == 0 {
 		t.Fatalf("encrypted TIXT redirect return = %d, want redirect fallback/drop", ret)
 	}
-	tcpPacket, err := experimentaltcp.ParseTCPShapedIPv4(run.DataOut[14:])
+	tcpPacket, err := tixtcp.ParseTCPShapedIPv4(run.DataOut[14:])
 	if err != nil {
 		t.Fatalf("parse redirected TCP-shaped packet: %v", err)
 	}
-	frame, err := experimentaltcp.ParseFrame(tcpPacket.Payload)
+	frame, err := tixtcp.ParseFrame(tcpPacket.Payload)
 	if err != nil {
 		t.Fatalf("parse redirected TIXT frame: %v", err)
 	}
-	if frame.Flags&experimentaltcp.FlagEncrypted == 0 || frame.Flags&experimentaltcp.FlagKernelOpened != 0 {
+	if frame.Flags&tixtcp.FlagEncrypted == 0 || frame.Flags&tixtcp.FlagKernelOpened != 0 {
 		t.Fatalf("redirected encrypted frame flags = %#x", frame.Flags)
 	}
 	if !bytes.Equal(frame.Payload, sealed) {
@@ -332,9 +332,9 @@ func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedTIXTByDefault(t *testin
 	assertXDPStat(t, object, 5, 0)
 }
 
-func TestExperimentalTCPKernelCryptoXDPEncryptedTIXTPassesToTCSecureDirect(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPEncryptedTIXTPassesToTCSecureDirect(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp encrypted XDP to TC secure direct handoff requires root")
+		t.Skip("tix_tcp encrypted XDP to TC secure direct handoff requires root")
 	}
 	manager := NewManager()
 	if err := manager.Load(context.Background()); err != nil {
@@ -353,31 +353,31 @@ func TestExperimentalTCPKernelCryptoXDPEncryptedTIXTPassesToTCSecureDirect(t *te
 	spec := validKernelCryptoSpec(flowID)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install kernel crypto contexts: %v", err)
 	}
-	sealer, err := loadExperimentalTCPTXSealObject(manager.kernelCryptoProvider)
+	sealer, err := loadTIXTCPTXSealObject(manager.kernelCryptoProvider)
 	if err != nil {
-		t.Fatalf("load experimental_tcp TX seal XDP object: %-v", err)
+		t.Fatalf("load tix_tcp TX seal XDP object: %-v", err)
 	}
 	defer sealer.Close()
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPTCRXSecureDirect | experimentalTCPConfigKernelUDPXDPRXDirect | experimentalTCPConfigHotPathStats
+	config := tixTCPConfigKernelUDPTCRXSecureDirect | tixTCPConfigKernelUDPXDPRXDirect | tixTCPConfigHotPathStats
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable XDP TIXT TC secure direct handoff: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 
 	inner := ipv4PacketForXDPTCRXDirectTest()
-	packet := sealTCPShapedEthernetWithFlagsForTest(t, sealer, flowID, spec.Epoch, 41, destinationPort, 1260, inner, experimentaltcp.FlagInnerIPv4)
+	packet := sealTCPShapedEthernetWithFlagsForTest(t, sealer, flowID, spec.Epoch, 41, destinationPort, 1260, inner, tixtcp.FlagInnerIPv4)
 	run := &cebpf.RunOptions{Data: append([]byte(nil), packet...), DataOut: make([]byte, len(packet))}
 	ret, err := object.program.Run(run)
 	if err != nil {
@@ -395,9 +395,9 @@ func TestExperimentalTCPKernelCryptoXDPEncryptedTIXTPassesToTCSecureDirect(t *te
 	assertXDPStat(t, object, 14, 1)
 }
 
-func TestExperimentalTCPKernelCryptoXDPDefersNoContextToUserspace(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPDefersNoContextToUserspace(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp kernel crypto XDP program run requires root")
+		t.Skip("tix_tcp kernel crypto XDP program run requires root")
 	}
 	manager := NewManager()
 	if err := manager.Load(context.Background()); err != nil {
@@ -415,25 +415,25 @@ func TestExperimentalTCPKernelCryptoXDPDefersNoContextToUserspace(t *testing.T) 
 		destinationPort = 9445
 		xdpDrop         = 1
 	)
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen
+	config := tixTCPConfigKernelUDPXDPOpen
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable XDP TIXT kernel open: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 
 	securePayload := make([]byte, kernelCryptoSecureHeaderLen+kernelCryptoFrameTagLen)
 	kernelCryptoPutSecureHeader(securePayload[:kernelCryptoSecureHeaderLen], byte(kernelCryptoSuiteIDTrustIXAES256GCMX25519), epoch, sequence)
-	packet := mustExperimentalTCPXDPEthernetFrame(t, experimentaltcp.Frame{
-		Flags:    experimentaltcp.FlagEncrypted,
+	packet := mustTIXTCPXDPEthernetFrame(t, tixtcp.Frame{
+		Flags:    tixtcp.FlagEncrypted,
 		FlowID:   flowID,
 		Epoch:    epoch,
 		Sequence: sequence,
@@ -458,7 +458,7 @@ func TestExperimentalTCPKernelCryptoXDPDefersNoContextToUserspace(t *testing.T) 
 	assertXDPStat(t, object, 10, 1)
 }
 
-func TestExperimentalTCPKernelCryptoXDPRedirectsKernelUDP(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPRedirectsKernelUDP(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP program run requires root")
 	}
@@ -472,18 +472,18 @@ func TestExperimentalTCPKernelCryptoXDPRedirectsKernelUDP(t *testing.T) {
 	}
 
 	const destinationPort = 9443
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen
+	config := tixTCPConfigKernelUDPXDPOpen
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable attached XDP TIXT kernel open: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 
@@ -514,22 +514,22 @@ func TestExperimentalTCPKernelCryptoXDPRedirectsKernelUDP(t *testing.T) {
 	assertXDPStat(t, object, 0, 1)
 }
 
-func TestExperimentalTCPXDPAllowsKernelUDPSourcePort(t *testing.T) {
+func TestTIXTCPXDPAllowsKernelUDPSourcePort(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	const (
 		sourcePort      = 9443
 		destinationPort = 43000
 	)
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_xdp_bpfel.o", experimentalTCPXDPReplacements{})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{})
 	if err != nil {
-		t.Fatalf("load experimental_tcp XDP object: %-v", err)
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(sourcePort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(sourcePort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow source port in XDP map: %v", err)
 	}
 
@@ -553,21 +553,21 @@ func TestExperimentalTCPXDPAllowsKernelUDPSourcePort(t *testing.T) {
 	assertXDPStat(t, object, 1, 0)
 }
 
-func TestExperimentalTCPXDPPassesAllowedTCPControlPacket(t *testing.T) {
+func TestTIXTCPXDPPassesAllowedTCPControlPacket(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp XDP program run requires root")
+		t.Skip("tix_tcp XDP program run requires root")
 	}
 	const destinationPort = 9443
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_xdp_bpfel.o", experimentalTCPXDPReplacements{})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{})
 	if err != nil {
-		t.Fatalf("load experimental_tcp XDP object: %-v", err)
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
-	packet, err := experimentaltcp.MarshalTCPShapedIPv4(experimentaltcp.TCPPacket{
+	packet, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.10"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.20"),
 		SourcePort:      43000,
@@ -591,9 +591,9 @@ func TestExperimentalTCPXDPPassesAllowedTCPControlPacket(t *testing.T) {
 	assertXDPStat(t, object, 1, 0)
 }
 
-func TestExperimentalTCPKernelCryptoXDPPassesAllowedTCPControlPacket(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPPassesAllowedTCPControlPacket(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp kernel crypto XDP program run requires root")
+		t.Skip("tix_tcp kernel crypto XDP program run requires root")
 	}
 	manager := NewManager()
 	if err := manager.Load(context.Background()); err != nil {
@@ -604,16 +604,16 @@ func TestExperimentalTCPKernelCryptoXDPPassesAllowedTCPControlPacket(t *testing.
 		t.Skipf("kernel crypto provider is not ready: %s", manager.kernelCryptoUnavailableReasonLocked())
 	}
 	const destinationPort = 9443
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
-	packet, err := experimentaltcp.MarshalTCPShapedIPv4(experimentaltcp.TCPPacket{
+	packet, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.10"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.20"),
 		SourcePort:      43000,
@@ -637,11 +637,11 @@ func TestExperimentalTCPKernelCryptoXDPPassesAllowedTCPControlPacket(t *testing.
 	assertXDPStat(t, object, 1, 0)
 }
 
-func TestExperimentalTCPXDPDirectsPlainKernelUDPToLAN(t *testing.T) {
+func TestTIXTCPXDPDirectsPlainKernelUDPToLAN(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP RX direct program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	const destinationPort = 9443
 	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_rx_neigh_xdp_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 4096})
 	defer neighMap.Close()
@@ -650,20 +650,20 @@ func TestExperimentalTCPXDPDirectsPlainKernelUDPToLAN(t *testing.T) {
 	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_rx_config_xdp_test", Type: cebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 1})
 	defer configMap.Close()
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_xdp_bpfel.o", experimentalTCPXDPReplacements{
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{
 		kernelUDPRXNeighMap:  neighMap,
 		kernelUDPRXDevMap:    devMap,
 		kernelUDPRXConfigMap: configMap,
 	})
 	if err != nil {
-		t.Fatalf("load experimental_tcp XDP object: %-v", err)
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
+	if _, err := configureTIXTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, tixTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP UDP RX direct: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	neighborKey := binary.LittleEndian.Uint32([]byte{10, 0, 1, 2})
@@ -744,11 +744,11 @@ func TestExperimentalTCPXDPDirectsPlainKernelUDPToLAN(t *testing.T) {
 	assertXDPStat(t, object, 23, 0)
 }
 
-func TestExperimentalTCPXDPDirectsPlainKernelUDPWithFixedL2(t *testing.T) {
+func TestTIXTCPXDPDirectsPlainKernelUDPWithFixedL2(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP RX direct fixed L2 program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_FIXED_L2", "1")
 	const destinationPort = 9452
 	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_rx_neigh_xdp_fixed_l2_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 4096})
@@ -758,20 +758,20 @@ func TestExperimentalTCPXDPDirectsPlainKernelUDPWithFixedL2(t *testing.T) {
 	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_rx_config_xdp_fixed_l2_test", Type: cebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 1})
 	defer configMap.Close()
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_xdp_bpfel.o", experimentalTCPXDPReplacements{
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{
 		kernelUDPRXNeighMap:  neighMap,
 		kernelUDPRXDevMap:    devMap,
 		kernelUDPRXConfigMap: configMap,
 	})
 	if err != nil {
-		t.Fatalf("load experimental_tcp XDP object: %-v", err)
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
+	if _, err := configureTIXTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, tixTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP UDP RX fixed L2 direct: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	devKey := uint32(0)
@@ -825,11 +825,11 @@ func TestExperimentalTCPXDPDirectsPlainKernelUDPWithFixedL2(t *testing.T) {
 	assertXDPStat(t, object, 30, 0)
 }
 
-func TestExperimentalTCPXDPDoesNotDirectPlainKernelUDPWithoutInnerIPv4Flag(t *testing.T) {
+func TestTIXTCPXDPDoesNotDirectPlainKernelUDPWithoutInnerIPv4Flag(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP RX direct program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	const destinationPort = 9448
 	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_rx_neigh_xdp_noflag_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 4096})
 	defer neighMap.Close()
@@ -838,20 +838,20 @@ func TestExperimentalTCPXDPDoesNotDirectPlainKernelUDPWithoutInnerIPv4Flag(t *te
 	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_rx_config_xdp_noflag_test", Type: cebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 1})
 	defer configMap.Close()
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_xdp_bpfel.o", experimentalTCPXDPReplacements{
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{
 		kernelUDPRXNeighMap:  neighMap,
 		kernelUDPRXDevMap:    devMap,
 		kernelUDPRXConfigMap: configMap,
 	})
 	if err != nil {
-		t.Fatalf("load experimental_tcp XDP object: %-v", err)
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
+	if _, err := configureTIXTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, tixTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP UDP RX direct: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	inner := ipv4PacketForXDPTCRXDirectTest()
@@ -886,11 +886,11 @@ func TestExperimentalTCPXDPDoesNotDirectPlainKernelUDPWithoutInnerIPv4Flag(t *te
 	assertXDPStat(t, object, 18, 0)
 }
 
-func TestExperimentalTCPXDPDirectIfindexModeCountsRedirect(t *testing.T) {
+func TestTIXTCPXDPDirectIfindexModeCountsRedirect(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP RX direct ifindex program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX", "1")
 	const destinationPort = 9451
 	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_rx_neigh_xdp_ifindex_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 4096})
@@ -900,20 +900,20 @@ func TestExperimentalTCPXDPDirectIfindexModeCountsRedirect(t *testing.T) {
 	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_rx_config_xdp_ifindex_test", Type: cebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 1})
 	defer configMap.Close()
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_xdp_bpfel.o", experimentalTCPXDPReplacements{
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{
 		kernelUDPRXNeighMap:  neighMap,
 		kernelUDPRXDevMap:    devMap,
 		kernelUDPRXConfigMap: configMap,
 	})
 	if err != nil {
-		t.Fatalf("load experimental_tcp XDP object: %-v", err)
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
+	if _, err := configureTIXTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, tixTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP UDP RX direct ifindex: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	neighborKey := binary.LittleEndian.Uint32([]byte{10, 0, 1, 2})
@@ -955,11 +955,11 @@ func TestExperimentalTCPXDPDirectIfindexModeCountsRedirect(t *testing.T) {
 	assertXDPStat(t, object, 29, 0)
 }
 
-func TestExperimentalTCPXDPDirectsPlainTIXTToLAN(t *testing.T) {
+func TestTIXTCPXDPDirectsPlainTIXTToLAN(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp XDP RX direct program run requires root")
+		t.Skip("tix_tcp XDP RX direct program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	const destinationPort = 9449
 	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tixt_rx_neigh_xdp_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 4096})
 	defer neighMap.Close()
@@ -968,20 +968,20 @@ func TestExperimentalTCPXDPDirectsPlainTIXTToLAN(t *testing.T) {
 	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tixt_rx_config_xdp_test", Type: cebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 1})
 	defer configMap.Close()
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_xdp_bpfel.o", experimentalTCPXDPReplacements{
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{
 		kernelUDPRXNeighMap:  neighMap,
 		kernelUDPRXDevMap:    devMap,
 		kernelUDPRXConfigMap: configMap,
 	})
 	if err != nil {
-		t.Fatalf("load experimental_tcp XDP object: %-v", err)
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
+	if _, err := configureTIXTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, tixTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP TIXT RX direct: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	neighborKey := binary.LittleEndian.Uint32([]byte{10, 0, 1, 2})
@@ -1010,8 +1010,8 @@ func TestExperimentalTCPXDPDirectsPlainTIXTToLAN(t *testing.T) {
 	}
 
 	inner := ipv4PacketForXDPTCRXDirectTest()
-	packet := mustExperimentalTCPXDPEthernetFrame(t, experimentaltcp.Frame{
-		Flags:    experimentaltcp.FlagInnerIPv4,
+	packet := mustTIXTCPXDPEthernetFrame(t, tixtcp.Frame{
+		Flags:    tixtcp.FlagInnerIPv4,
 		FlowID:   994,
 		Sequence: 5,
 		Payload:  inner,
@@ -1038,33 +1038,33 @@ func TestExperimentalTCPXDPDirectsPlainTIXTToLAN(t *testing.T) {
 	assertXDPStat(t, object, 22, 1)
 }
 
-func TestExperimentalTCPXDPPassesPlainTIXTStreamToTCRXDirect(t *testing.T) {
+func TestTIXTCPXDPPassesPlainTIXTStreamToTCRXDirect(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp XDP stream TC handoff requires root")
+		t.Skip("tix_tcp XDP stream TC handoff requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	const (
 		destinationPort = 9459
 		xdpPass         = 2
 	)
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_xdp_bpfel.o", experimentalTCPXDPReplacements{})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{})
 	if err != nil {
-		t.Fatalf("load experimental_tcp XDP object: %-v", err)
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueFor(object.configMap, 1, true, true, false); err != nil {
+	if _, err := configureTIXTCPBPFConfigValueFor(object.configMap, 1, true, true, false); err != nil {
 		t.Fatalf("enable XDP and TC RX direct: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	first := ipv4PacketForXDPTCRXDirectTest()
 	second := append([]byte(nil), first...)
 	copy(second[16:20], []byte{10, 0, 1, 3})
-	packet := mustExperimentalTCPXDPStreamEthernetFrame(t, []experimentaltcp.Frame{
-		{Flags: experimentaltcp.FlagInnerIPv4, FlowID: 996, Sequence: 1, Payload: first},
-		{Flags: experimentaltcp.FlagInnerIPv4, FlowID: 996, Sequence: 2, Payload: second},
+	packet := mustTIXTCPXDPStreamEthernetFrame(t, []tixtcp.Frame{
+		{Flags: tixtcp.FlagInnerIPv4, FlowID: 996, Sequence: 1, Payload: first},
+		{Flags: tixtcp.FlagInnerIPv4, FlowID: 996, Sequence: 2, Payload: second},
 	}, destinationPort)
 	run := &cebpf.RunOptions{Data: append([]byte(nil), packet...), DataOut: make([]byte, len(packet))}
 	ret, err := object.program.Run(run)
@@ -1084,11 +1084,11 @@ func TestExperimentalTCPXDPPassesPlainTIXTStreamToTCRXDirect(t *testing.T) {
 	assertXDPStat(t, object, 18, 0)
 }
 
-func TestExperimentalTCPXDPDoesNotDirectPlainTIXTWithoutInnerIPv4Flag(t *testing.T) {
+func TestTIXTCPXDPDoesNotDirectPlainTIXTWithoutInnerIPv4Flag(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp XDP RX direct program run requires root")
+		t.Skip("tix_tcp XDP RX direct program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	const destinationPort = 9450
 	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tixt_rx_neigh_xdp_noflag_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 4096})
 	defer neighMap.Close()
@@ -1097,24 +1097,24 @@ func TestExperimentalTCPXDPDoesNotDirectPlainTIXTWithoutInnerIPv4Flag(t *testing
 	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tixt_rx_config_xdp_noflag_test", Type: cebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 1})
 	defer configMap.Close()
 
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_xdp_bpfel.o", experimentalTCPXDPReplacements{
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{
 		kernelUDPRXNeighMap:  neighMap,
 		kernelUDPRXDevMap:    devMap,
 		kernelUDPRXConfigMap: configMap,
 	})
 	if err != nil {
-		t.Fatalf("load experimental_tcp XDP object: %-v", err)
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, experimentalTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
+	if _, err := configureTIXTCPBPFConfigValueForOptions(object.configMap, 1, true, true, false, tixTCPBPFConfigOptions{XDPRXTrustInnerChecksum: true}); err != nil {
 		t.Fatalf("enable XDP TIXT RX direct: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	inner := ipv4PacketForXDPTCRXDirectTest()
-	packet := mustExperimentalTCPXDPEthernetFrame(t, experimentaltcp.Frame{
+	packet := mustTIXTCPXDPEthernetFrame(t, tixtcp.Frame{
 		FlowID:   995,
 		Sequence: 6,
 		Payload:  inner,
@@ -1130,11 +1130,11 @@ func TestExperimentalTCPXDPDoesNotDirectPlainTIXTWithoutInnerIPv4Flag(t *testing
 	if len(run.DataOut) != len(packet) {
 		t.Fatalf("XDP TIXT no-flag data out len = %d, want unchanged %d", len(run.DataOut), len(packet))
 	}
-	tcpPacket, err := experimentaltcp.ParseTCPShapedIPv4(run.DataOut[14:])
+	tcpPacket, err := tixtcp.ParseTCPShapedIPv4(run.DataOut[14:])
 	if err != nil {
 		t.Fatalf("parse redirected TCP-shaped packet: %v", err)
 	}
-	frame, err := experimentaltcp.ParseFrame(tcpPacket.Payload)
+	frame, err := tixtcp.ParseFrame(tcpPacket.Payload)
 	if err != nil {
 		t.Fatalf("parse redirected TIXT frame: %v", err)
 	}
@@ -1145,7 +1145,7 @@ func TestExperimentalTCPXDPDoesNotDirectPlainTIXTWithoutInnerIPv4Flag(t *testing
 	assertXDPStat(t, object, 18, 0)
 }
 
-func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedKernelUDPByDefault(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPRedirectsEncryptedKernelUDPByDefault(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP program run requires root")
 	}
@@ -1159,16 +1159,16 @@ func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedKernelUDPByDefault(t *t
 	}
 
 	const destinationPort = 9443
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValue(object.configMap, 1, false); err != nil {
+	if _, err := configureTIXTCPBPFConfigValue(object.configMap, 1, false); err != nil {
 		t.Fatalf("configure XDP UDP open off: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	packet := mustKernelUDPXDPEthernetFrame(t, kerneludp.Frame{
@@ -1200,7 +1200,7 @@ func TestExperimentalTCPKernelCryptoXDPRedirectsEncryptedKernelUDPByDefault(t *t
 	assertXDPStat(t, object, 4, 0)
 }
 
-func TestExperimentalTCPKernelCryptoXDPEncryptedKernelUDPPassesToTCSecureDirect(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPEncryptedKernelUDPPassesToTCSecureDirect(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp encrypted XDP to TC secure direct handoff requires root")
 	}
@@ -1217,18 +1217,18 @@ func TestExperimentalTCPKernelCryptoXDPEncryptedKernelUDPPassesToTCSecureDirect(
 		destinationPort = 9448
 		xdpPass         = 2
 	)
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPTCRXSecureDirect | experimentalTCPConfigKernelUDPXDPRXDirect | experimentalTCPConfigHotPathStats
+	config := tixTCPConfigKernelUDPTCRXSecureDirect | tixTCPConfigKernelUDPXDPRXDirect | tixTCPConfigHotPathStats
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable XDP UDP TC secure direct handoff: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	packet := mustKernelUDPXDPEthernetFrame(t, kerneludp.Frame{
@@ -1261,7 +1261,7 @@ func TestExperimentalTCPKernelCryptoXDPEncryptedKernelUDPPassesToTCSecureDirect(
 	assertXDPStat(t, object, 14, 1)
 }
 
-func TestExperimentalTCPKernelCryptoXDPOpensKernelUDP(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPOpensKernelUDP(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP kernel-open program run requires root")
 	}
@@ -1298,18 +1298,18 @@ func TestExperimentalTCPKernelCryptoXDPOpensKernelUDP(t *testing.T) {
 	if err := manager.InstallKernelUDPCrypto(context.Background(), []dataplane.KernelUDPCryptoSpec{udpSpec}); err != nil {
 		t.Fatalf("install kernel_udp crypto contexts: %v", err)
 	}
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen
+	config := tixTCPConfigKernelUDPXDPOpen
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable XDP UDP kernel open: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	suiteID, err := kernelCryptoSuiteID(spec.Suite)
@@ -1360,7 +1360,7 @@ func TestExperimentalTCPKernelCryptoXDPOpensKernelUDP(t *testing.T) {
 	assertXDPStat(t, object, 5, 1)
 }
 
-func TestExperimentalTCPKernelCryptoXDPPlainKernelUDPDoesNotPassToTCRXDirectWithoutConfig(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPPlainKernelUDPDoesNotPassToTCRXDirectWithoutConfig(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP plaintext TC direct handoff requires root")
 	}
@@ -1374,16 +1374,16 @@ func TestExperimentalTCPKernelCryptoXDPPlainKernelUDPDoesNotPassToTCRXDirectWith
 	}
 
 	const destinationPort = 9452
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
-	if _, err := configureExperimentalTCPBPFConfigValueFor(object.configMap, 1, false, false, false); err != nil {
+	if _, err := configureTIXTCPBPFConfigValueFor(object.configMap, 1, false, false, false); err != nil {
 		t.Fatalf("disable TC RX direct: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	inner := ipv4PacketForXDPTCRXDirectTest()
@@ -1419,7 +1419,7 @@ func TestExperimentalTCPKernelCryptoXDPPlainKernelUDPDoesNotPassToTCRXDirectWith
 	assertXDPStat(t, object, 14, 0)
 }
 
-func TestExperimentalTCPKernelCryptoXDPOpensKernelUDPAndPassesToTCRXDirect(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPOpensKernelUDPAndPassesToTCRXDirect(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP kernel-open TC direct handoff requires root")
 	}
@@ -1457,18 +1457,18 @@ func TestExperimentalTCPKernelCryptoXDPOpensKernelUDPAndPassesToTCRXDirect(t *te
 	if err := manager.InstallKernelUDPCrypto(context.Background(), []dataplane.KernelUDPCryptoSpec{udpSpec}); err != nil {
 		t.Fatalf("install kernel_udp crypto contexts: %v", err)
 	}
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen | experimentalTCPConfigKernelUDPXDPPassOpened
+	config := tixTCPConfigKernelUDPXDPOpen | tixTCPConfigKernelUDPXDPPassOpened
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable XDP UDP kernel open TC direct handoff: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	suiteID, err := kernelCryptoSuiteID(spec.Suite)
@@ -1524,7 +1524,7 @@ func TestExperimentalTCPKernelCryptoXDPOpensKernelUDPAndPassesToTCRXDirect(t *te
 	assertXDPStat(t, object, 14, 1)
 }
 
-func TestExperimentalTCPKernelCryptoXDPEncryptedKernelUDPSecureXDPDirectOptIn(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPEncryptedKernelUDPSecureXDPDirectOptIn(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp encrypted XDP secure direct opt-in requires root")
 	}
@@ -1567,27 +1567,27 @@ func TestExperimentalTCPKernelCryptoXDPEncryptedKernelUDPSecureXDPDirectOptIn(t 
 	defer devMap.Close()
 	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tixu_secure_xdp_rx_config_test", Type: cebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 1})
 	defer configMap.Close()
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{
 		kernelCryptoProvider: manager.kernelCryptoProvider,
 		kernelUDPRXNeighMap:  neighMap,
 		kernelUDPRXDevMap:    devMap,
 		kernelUDPRXConfigMap: configMap,
 	})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen |
-		experimentalTCPConfigKernelUDPTCRXSecureDirect |
-		experimentalTCPConfigKernelUDPXDPRXDirect |
-		experimentalTCPConfigKernelUDPXDPRXSecureDirect |
-		experimentalTCPConfigHotPathStats
+	config := tixTCPConfigKernelUDPXDPOpen |
+		tixTCPConfigKernelUDPTCRXSecureDirect |
+		tixTCPConfigKernelUDPXDPRXDirect |
+		tixTCPConfigKernelUDPXDPRXSecureDirect |
+		tixTCPConfigHotPathStats
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable encrypted TIXU secure XDP RX direct: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	neighborKey := binary.LittleEndian.Uint32([]byte{10, 0, 1, 2})
@@ -1661,7 +1661,7 @@ func TestExperimentalTCPKernelCryptoXDPEncryptedKernelUDPSecureXDPDirectOptIn(t 
 	assertXDPStat(t, object, 22, 1)
 }
 
-func TestExperimentalTCPKernelCryptoXDPEncryptedKernelUDPSecureXDPDirectsControlPackets(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPEncryptedKernelUDPSecureXDPDirectsControlPackets(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp encrypted XDP secure direct control packet opt-in requires root")
 	}
@@ -1704,27 +1704,27 @@ func TestExperimentalTCPKernelCryptoXDPEncryptedKernelUDPSecureXDPDirectsControl
 	defer devMap.Close()
 	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tixu_secure_xdp_rx_control_config_test", Type: cebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 1})
 	defer configMap.Close()
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{
 		kernelCryptoProvider: manager.kernelCryptoProvider,
 		kernelUDPRXNeighMap:  neighMap,
 		kernelUDPRXDevMap:    devMap,
 		kernelUDPRXConfigMap: configMap,
 	})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen |
-		experimentalTCPConfigKernelUDPTCRXSecureDirect |
-		experimentalTCPConfigKernelUDPXDPRXDirect |
-		experimentalTCPConfigKernelUDPXDPRXSecureDirect |
-		experimentalTCPConfigHotPathStats
+	config := tixTCPConfigKernelUDPXDPOpen |
+		tixTCPConfigKernelUDPTCRXSecureDirect |
+		tixTCPConfigKernelUDPXDPRXDirect |
+		tixTCPConfigKernelUDPXDPRXSecureDirect |
+		tixTCPConfigHotPathStats
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable encrypted TIXU secure XDP RX direct control: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	neighborKey := binary.LittleEndian.Uint32([]byte{10, 0, 1, 2})
@@ -1795,7 +1795,7 @@ func TestExperimentalTCPKernelCryptoXDPEncryptedKernelUDPSecureXDPDirectsControl
 	assertXDPStat(t, object, 21, 1)
 }
 
-func TestExperimentalTCPKernelCryptoXDPOpensKernelUDPControlWithoutTCRXDirect(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPOpensKernelUDPControlWithoutTCRXDirect(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel_udp XDP kernel-open control redirect requires root")
 	}
@@ -1832,18 +1832,18 @@ func TestExperimentalTCPKernelCryptoXDPOpensKernelUDPControlWithoutTCRXDirect(t 
 	if err := manager.InstallKernelUDPCrypto(context.Background(), []dataplane.KernelUDPCryptoSpec{udpSpec}); err != nil {
 		t.Fatalf("install kernel_udp crypto contexts: %v", err)
 	}
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen | experimentalTCPConfigKernelUDPXDPPassOpened
+	config := tixTCPConfigKernelUDPXDPOpen | tixTCPConfigKernelUDPXDPPassOpened
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable XDP UDP kernel open TC direct handoff: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	suiteID, err := kernelCryptoSuiteID(spec.Suite)
@@ -1895,9 +1895,9 @@ func TestExperimentalTCPKernelCryptoXDPOpensKernelUDPControlWithoutTCRXDirect(t 
 	assertXDPStat(t, object, 14, 0)
 }
 
-func TestExperimentalTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
+func TestTIXTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp kernel crypto TX seal XDP program run requires root")
+		t.Skip("tix_tcp kernel crypto TX seal XDP program run requires root")
 	}
 	manager := NewManager()
 	if err := manager.Load(context.Background()); err != nil {
@@ -1916,17 +1916,17 @@ func TestExperimentalTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
 	spec := validKernelCryptoSpec(flowID)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install kernel crypto contexts: %v", err)
 	}
-	sealer, err := loadExperimentalTCPTXSealObject(manager.kernelCryptoProvider)
+	sealer, err := loadTIXTCPTXSealObject(manager.kernelCryptoProvider)
 	if err != nil {
-		t.Fatalf("load experimental_tcp TX seal XDP object: %-v", err)
+		t.Fatalf("load tix_tcp TX seal XDP object: %-v", err)
 	}
 	defer sealer.Close()
 
 	plaintext := []byte("trustix tx packet seal")
-	frameWire, err := experimentaltcp.Frame{
+	frameWire, err := tixtcp.Frame{
 		FlowID:   flowID,
 		Epoch:    spec.Epoch,
 		Sequence: sequence,
@@ -1935,7 +1935,7 @@ func TestExperimentalTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal plaintext TIXT frame: %v", err)
 	}
-	packet, err := experimentaltcp.MarshalTCPShapedIPv4(experimentaltcp.TCPPacket{
+	packet, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.10"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.20"),
 		SourcePort:      43000,
@@ -1957,18 +1957,18 @@ func TestExperimentalTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
 	if bytes.Contains(sealedPacket, plaintext) {
 		t.Fatalf("sealed packet still contains plaintext")
 	}
-	tcpPacket, err := experimentaltcp.ParseTCPShapedIPv4(sealedPacket)
+	tcpPacket, err := tixtcp.ParseTCPShapedIPv4(sealedPacket)
 	if err != nil {
 		t.Fatalf("parse sealed TCP-shaped packet: %v", err)
 	}
-	sealedFrame, err := experimentaltcp.ParseFrame(tcpPacket.Payload)
+	sealedFrame, err := tixtcp.ParseFrame(tcpPacket.Payload)
 	if err != nil {
 		t.Fatalf("parse sealed TIXT frame: %v", err)
 	}
-	if sealedFrame.Flags&experimentaltcp.FlagEncrypted == 0 || sealedFrame.Flags&experimentaltcp.FlagKernelOpened != 0 {
+	if sealedFrame.Flags&tixtcp.FlagEncrypted == 0 || sealedFrame.Flags&tixtcp.FlagKernelOpened != 0 {
 		t.Fatalf("sealed frame flags = %#x, want encrypted only", sealedFrame.Flags)
 	}
-	opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, sealedFrame.Payload)
+	opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, sealedFrame.Payload)
 	if err != nil {
 		t.Fatalf("open sealed frame: %v", err)
 	}
@@ -1976,7 +1976,7 @@ func TestExperimentalTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
 		t.Fatalf("opened payload = %q, want %q", opened, plaintext)
 	}
 	plaintextInPlace := []byte("trustix tx packet seal in-place")
-	frameWireInPlace, err := experimentaltcp.Frame{
+	frameWireInPlace, err := tixtcp.Frame{
 		FlowID:   flowID,
 		Epoch:    spec.Epoch,
 		Sequence: sequence + 1,
@@ -1985,7 +1985,7 @@ func TestExperimentalTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal in-place plaintext TIXT frame: %v", err)
 	}
-	packetInPlace, err := experimentaltcp.MarshalTCPShapedIPv4(experimentaltcp.TCPPacket{
+	packetInPlace, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.10"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.20"),
 		SourcePort:      43000,
@@ -1997,7 +1997,7 @@ func TestExperimentalTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal in-place plaintext TCP-shaped packet: %v", err)
 	}
-	ethernetInPlace := make([]byte, 14+len(packetInPlace)+experimentalTCPKernelCryptoOverhead)
+	ethernetInPlace := make([]byte, 14+len(packetInPlace)+tixTCPKernelCryptoOverhead)
 	copy(ethernetInPlace[0:6], []byte{0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x01})
 	copy(ethernetInPlace[6:12], []byte{0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x02})
 	ethernetInPlace[12] = 0x08
@@ -2007,22 +2007,22 @@ func TestExperimentalTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal TCP-shaped packet in-place: %v", err)
 	}
-	if sealedLen != 14+len(packetInPlace)+experimentalTCPKernelCryptoOverhead {
-		t.Fatalf("in-place sealed length = %d, want %d", sealedLen, 14+len(packetInPlace)+experimentalTCPKernelCryptoOverhead)
+	if sealedLen != 14+len(packetInPlace)+tixTCPKernelCryptoOverhead {
+		t.Fatalf("in-place sealed length = %d, want %d", sealedLen, 14+len(packetInPlace)+tixTCPKernelCryptoOverhead)
 	}
 	sealedInPlace := ethernetInPlace[14:sealedLen]
 	if bytes.Contains(sealedInPlace, plaintextInPlace) {
 		t.Fatalf("in-place sealed packet still contains plaintext")
 	}
-	tcpPacketInPlace, err := experimentaltcp.ParseTCPShapedIPv4(sealedInPlace)
+	tcpPacketInPlace, err := tixtcp.ParseTCPShapedIPv4(sealedInPlace)
 	if err != nil {
 		t.Fatalf("parse in-place sealed TCP-shaped packet: %v", err)
 	}
-	sealedFrameInPlace, err := experimentaltcp.ParseFrame(tcpPacketInPlace.Payload)
+	sealedFrameInPlace, err := tixtcp.ParseFrame(tcpPacketInPlace.Payload)
 	if err != nil {
 		t.Fatalf("parse in-place sealed TIXT frame: %v", err)
 	}
-	openedInPlace, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence+1, sealedFrameInPlace.Payload)
+	openedInPlace, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence+1, sealedFrameInPlace.Payload)
 	if err != nil {
 		t.Fatalf("open in-place sealed frame: %v", err)
 	}
@@ -2035,9 +2035,9 @@ func TestExperimentalTCPKernelCryptoTXSealXDPSealsPacket(t *testing.T) {
 	assertTXSealStat(t, sealer, 6, 1)
 }
 
-func TestExperimentalTCPKernelCryptoTXSealOutputOpensInAttachedXDP(t *testing.T) {
+func TestTIXTCPKernelCryptoTXSealOutputOpensInAttachedXDP(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp kernel crypto TX/RX XDP program run requires root")
+		t.Skip("tix_tcp kernel crypto TX/RX XDP program run requires root")
 	}
 	t.Setenv("TRUSTIX_KERNEL_UDP_XDP_OPEN", "1")
 	manager := NewManager()
@@ -2057,21 +2057,21 @@ func TestExperimentalTCPKernelCryptoTXSealOutputOpensInAttachedXDP(t *testing.T)
 	spec := validKernelCryptoSpec(flowID)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install kernel crypto contexts: %v", err)
 	}
-	sealer, err := loadExperimentalTCPTXSealObject(manager.kernelCryptoProvider)
+	sealer, err := loadTIXTCPTXSealObject(manager.kernelCryptoProvider)
 	if err != nil {
-		t.Fatalf("load experimental_tcp TX seal XDP object: %-v", err)
+		t.Fatalf("load tix_tcp TX seal XDP object: %-v", err)
 	}
 	defer sealer.Close()
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: manager.kernelCryptoProvider})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 
@@ -2079,15 +2079,15 @@ func TestExperimentalTCPKernelCryptoTXSealOutputOpensInAttachedXDP(t *testing.T)
 		plaintext := bytes.Repeat([]byte{byte(0x41 + idx)}, payloadLen)
 		providerSequence := uint64(20 + idx*2)
 		sealedFrame := sealTCPShapedEthernetForTest(t, sealer, flowID, spec.Epoch, providerSequence, destinationPort, uint32(1234+idx*2), plaintext)
-		sealedPacket, err := experimentaltcp.ParseTCPShapedIPv4(sealedFrame[14:])
+		sealedPacket, err := tixtcp.ParseTCPShapedIPv4(sealedFrame[14:])
 		if err != nil {
 			t.Fatalf("parse provider-check sealed packet len=%d: %v", payloadLen, err)
 		}
-		sealedTIXTFrame, err := experimentaltcp.ParseFrame(sealedPacket.Payload)
+		sealedTIXTFrame, err := tixtcp.ParseFrame(sealedPacket.Payload)
 		if err != nil {
 			t.Fatalf("parse provider-check sealed TIXT frame len=%d: %v", payloadLen, err)
 		}
-		openedByProvider, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, providerSequence, sealedTIXTFrame.Payload)
+		openedByProvider, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, providerSequence, sealedTIXTFrame.Payload)
 		if err != nil {
 			t.Fatalf("provider open of TX-sealed frame len=%d: %v", payloadLen, err)
 		}
@@ -2103,19 +2103,19 @@ func TestExperimentalTCPKernelCryptoTXSealOutputOpensInAttachedXDP(t *testing.T)
 			t.Fatalf("run attached XDP open len=%d: %v", payloadLen, err)
 		}
 		if ret == 0 {
-			recvState := kernelCryptoCtxStateSnapshotForTest(t, manager.kernelCryptoProvider, kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv))
+			recvState := kernelCryptoCtxStateSnapshotForTest(t, manager.kernelCryptoProvider, kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv))
 			t.Fatalf("attached XDP open len=%d returned %d, want redirect fallback/drop; recv_last_sequence=%d stats=%v", payloadLen, ret, recvState.LastSequence, xdpStatsForTest(t, object))
 		}
-		openedPacket, err := experimentaltcp.ParseTCPShapedIPv4(run.DataOut[14:])
+		openedPacket, err := tixtcp.ParseTCPShapedIPv4(run.DataOut[14:])
 		if err != nil {
 			got, want := tcpChecksumForTest(run.DataOut[14:])
 			t.Fatalf("parse opened TCP-shaped packet len=%d: %v (tcp checksum got=%#04x want=%#04x)", payloadLen, err, got, want)
 		}
-		openedFrame, err := experimentaltcp.ParseFrame(openedPacket.Payload)
+		openedFrame, err := tixtcp.ParseFrame(openedPacket.Payload)
 		if err != nil {
 			t.Fatalf("parse opened TIXT frame len=%d: %v", payloadLen, err)
 		}
-		if openedFrame.Flags&experimentaltcp.FlagEncrypted != 0 || openedFrame.Flags&experimentaltcp.FlagKernelOpened == 0 {
+		if openedFrame.Flags&tixtcp.FlagEncrypted != 0 || openedFrame.Flags&tixtcp.FlagKernelOpened == 0 {
 			t.Fatalf("opened frame len=%d flags = %#x, want kernel-opened plaintext", payloadLen, openedFrame.Flags)
 		}
 		if !bytes.Equal(openedFrame.Payload, plaintext) {
@@ -2124,11 +2124,11 @@ func TestExperimentalTCPKernelCryptoTXSealOutputOpensInAttachedXDP(t *testing.T)
 	}
 }
 
-func TestExperimentalTCPKernelCryptoXDPDirectsOpenedTIXTToLAN(t *testing.T) {
+func TestTIXTCPKernelCryptoXDPDirectsOpenedTIXTToLAN(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("experimental_tcp kernel crypto XDP RX direct program run requires root")
+		t.Skip("tix_tcp kernel crypto XDP RX direct program run requires root")
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
 	manager := NewManager()
 	if err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("load manager: %v", err)
@@ -2145,12 +2145,12 @@ func TestExperimentalTCPKernelCryptoXDPDirectsOpenedTIXTToLAN(t *testing.T) {
 	spec := validKernelCryptoSpec(flowID)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install kernel crypto contexts: %v", err)
 	}
-	sealer, err := loadExperimentalTCPTXSealObject(manager.kernelCryptoProvider)
+	sealer, err := loadTIXTCPTXSealObject(manager.kernelCryptoProvider)
 	if err != nil {
-		t.Fatalf("load experimental_tcp TX seal XDP object: %-v", err)
+		t.Fatalf("load tix_tcp TX seal XDP object: %-v", err)
 	}
 	defer sealer.Close()
 	neighMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tixt_kernel_crypto_rx_neigh_xdp_test", Type: cebpf.Hash, KeySize: 4, ValueSize: 20, MaxEntries: 4096})
@@ -2159,26 +2159,26 @@ func TestExperimentalTCPKernelCryptoXDPDirectsOpenedTIXTToLAN(t *testing.T) {
 	defer devMap.Close()
 	configMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_tixt_kernel_crypto_rx_config_xdp_test", Type: cebpf.Array, KeySize: 4, ValueSize: 20, MaxEntries: 1})
 	defer configMap.Close()
-	object, err := loadExperimentalTCPXDPObjectFile(1, "bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o", experimentalTCPXDPReplacements{
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{
 		kernelCryptoProvider: manager.kernelCryptoProvider,
 		kernelUDPRXNeighMap:  neighMap,
 		kernelUDPRXDevMap:    devMap,
 		kernelUDPRXConfigMap: configMap,
 	})
 	if err != nil {
-		t.Fatalf("load experimental_tcp kernel crypto XDP object: %-v", err)
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
 	}
 	defer object.Close()
 	key := uint32(0)
-	config := experimentalTCPConfigKernelUDPXDPOpen |
-		experimentalTCPConfigKernelUDPXDPRXDirect |
-		experimentalTCPConfigKernelUDPXDPRXSecureDirect |
-		experimentalTCPConfigHotPathStats
+	config := tixTCPConfigKernelUDPXDPOpen |
+		tixTCPConfigKernelUDPXDPRXDirect |
+		tixTCPConfigKernelUDPXDPRXSecureDirect |
+		tixTCPConfigHotPathStats
 	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
 		t.Fatalf("enable encrypted TIXT XDP RX direct: %v", err)
 	}
 	value := uint8(1)
-	if err := object.portMap.Update(experimentalTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), value, cebpf.UpdateAny); err != nil {
 		t.Fatalf("allow destination port in XDP map: %v", err)
 	}
 	neighborKey := binary.LittleEndian.Uint32([]byte{10, 0, 1, 2})
@@ -2207,7 +2207,7 @@ func TestExperimentalTCPKernelCryptoXDPDirectsOpenedTIXTToLAN(t *testing.T) {
 	}
 
 	inner := ipv4PacketForXDPTCRXDirectTest()
-	ethernet := sealTCPShapedEthernetWithFlagsForTest(t, sealer, flowID, spec.Epoch, 31, destinationPort, 1250, inner, experimentaltcp.FlagInnerIPv4)
+	ethernet := sealTCPShapedEthernetWithFlagsForTest(t, sealer, flowID, spec.Epoch, 31, destinationPort, 1250, inner, tixtcp.FlagInnerIPv4)
 	run := &cebpf.RunOptions{Data: append([]byte(nil), ethernet...), DataOut: make([]byte, len(ethernet))}
 	ret, err := object.program.Run(run)
 	if err != nil {
@@ -2233,13 +2233,13 @@ func TestExperimentalTCPKernelCryptoXDPDirectsOpenedTIXTToLAN(t *testing.T) {
 	assertXDPStat(t, object, 22, 1)
 }
 
-func sealTCPShapedEthernetForTest(t *testing.T, sealer *experimentalTCPTXSealObject, flowID uint64, epoch uint64, sequence uint64, destinationPort uint16, tcpSequence uint32, plaintext []byte) []byte {
+func sealTCPShapedEthernetForTest(t *testing.T, sealer *tixTCPTXSealObject, flowID uint64, epoch uint64, sequence uint64, destinationPort uint16, tcpSequence uint32, plaintext []byte) []byte {
 	return sealTCPShapedEthernetWithFlagsForTest(t, sealer, flowID, epoch, sequence, destinationPort, tcpSequence, plaintext, 0)
 }
 
-func sealTCPShapedEthernetWithFlagsForTest(t *testing.T, sealer *experimentalTCPTXSealObject, flowID uint64, epoch uint64, sequence uint64, destinationPort uint16, tcpSequence uint32, plaintext []byte, flags uint8) []byte {
+func sealTCPShapedEthernetWithFlagsForTest(t *testing.T, sealer *tixTCPTXSealObject, flowID uint64, epoch uint64, sequence uint64, destinationPort uint16, tcpSequence uint32, plaintext []byte, flags uint8) []byte {
 	t.Helper()
-	frameWire, err := experimentaltcp.Frame{
+	frameWire, err := tixtcp.Frame{
 		FlowID:   flowID,
 		Epoch:    epoch,
 		Sequence: sequence,
@@ -2249,7 +2249,7 @@ func sealTCPShapedEthernetWithFlagsForTest(t *testing.T, sealer *experimentalTCP
 	if err != nil {
 		t.Fatalf("marshal plaintext TIXT frame len=%d: %v", len(plaintext), err)
 	}
-	packet, err := experimentaltcp.MarshalTCPShapedIPv4(experimentaltcp.TCPPacket{
+	packet, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.10"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.20"),
 		SourcePort:      43000,
@@ -2261,7 +2261,7 @@ func sealTCPShapedEthernetWithFlagsForTest(t *testing.T, sealer *experimentalTCP
 	if err != nil {
 		t.Fatalf("marshal plaintext TCP-shaped packet len=%d: %v", len(plaintext), err)
 	}
-	ethernet := make([]byte, 14+len(packet)+experimentalTCPKernelCryptoOverhead)
+	ethernet := make([]byte, 14+len(packet)+tixTCPKernelCryptoOverhead)
 	copy(ethernet[0:6], []byte{0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x01})
 	copy(ethernet[6:12], []byte{0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x02})
 	ethernet[12] = 0x08
@@ -2305,7 +2305,7 @@ func kernelCryptoCtxStateSnapshotForTest(t *testing.T, provider *kernelCryptoPro
 	return state
 }
 
-func xdpStatsForTest(t *testing.T, object *experimentalTCPXDPObject) map[uint32]uint64 {
+func xdpStatsForTest(t *testing.T, object *tixTCPXDPObject) map[uint32]uint64 {
 	t.Helper()
 	stats := make(map[uint32]uint64)
 	for key := uint32(0); key <= 50; key++ {
@@ -2318,13 +2318,13 @@ func xdpStatsForTest(t *testing.T, object *experimentalTCPXDPObject) map[uint32]
 	return stats
 }
 
-func mustExperimentalTCPXDPEthernetFrame(t *testing.T, frame experimentaltcp.Frame, destinationPort uint16) []byte {
+func mustTIXTCPXDPEthernetFrame(t *testing.T, frame tixtcp.Frame, destinationPort uint16) []byte {
 	t.Helper()
 	payload, err := frame.MarshalBinary()
 	if err != nil {
 		t.Fatalf("marshal TIXT frame: %v", err)
 	}
-	ipPacket, err := experimentaltcp.MarshalTCPShapedIPv4(experimentaltcp.TCPPacket{
+	ipPacket, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.10"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.20"),
 		SourcePort:      43000,
@@ -2345,7 +2345,7 @@ func mustExperimentalTCPXDPEthernetFrame(t *testing.T, frame experimentaltcp.Fra
 	return ethernet
 }
 
-func mustExperimentalTCPXDPStreamEthernetFrame(t *testing.T, frames []experimentaltcp.Frame, destinationPort uint16) []byte {
+func mustTIXTCPXDPStreamEthernetFrame(t *testing.T, frames []tixtcp.Frame, destinationPort uint16) []byte {
 	t.Helper()
 	var payload []byte
 	for i, frame := range frames {
@@ -2355,7 +2355,7 @@ func mustExperimentalTCPXDPStreamEthernetFrame(t *testing.T, frames []experiment
 		}
 		payload = append(payload, wire...)
 	}
-	ipPacket, err := experimentaltcp.MarshalTCPShapedIPv4(experimentaltcp.TCPPacket{
+	ipPacket, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
 		SourceIP:        netip.MustParseAddr("192.0.2.10"),
 		DestinationIP:   netip.MustParseAddr("198.51.100.20"),
 		SourcePort:      43000,
@@ -2446,7 +2446,7 @@ func ethernetIPv4PacketForXDPTCRXDirectTest(ipv4 []byte) []byte {
 	return ethernet
 }
 
-func assertXDPStat(t *testing.T, object *experimentalTCPXDPObject, key uint32, want uint64) {
+func assertXDPStat(t *testing.T, object *tixTCPXDPObject, key uint32, want uint64) {
 	t.Helper()
 	got, err := bpfCounterValue(object.xdpStatsMap, key)
 	if err != nil {
@@ -2457,7 +2457,7 @@ func assertXDPStat(t *testing.T, object *experimentalTCPXDPObject, key uint32, w
 	}
 }
 
-func assertTXSealStat(t *testing.T, object *experimentalTCPTXSealObject, key uint32, want uint64) {
+func assertTXSealStat(t *testing.T, object *tixTCPTXSealObject, key uint32, want uint64) {
 	t.Helper()
 	got, err := bpfCounterValue(object.statsMap, key)
 	if err != nil {

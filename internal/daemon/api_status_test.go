@@ -10,14 +10,14 @@ import (
 	"trustix.local/trustix/internal/transport"
 )
 
-func TestPublicDataPathStatusUsesTIXTCPNameAndKeepsLegacyStatusKey(t *testing.T) {
-	experimental := &dataplane.ExperimentalTCPStatus{Available: true}
+func TestPublicDataPathStatusUsesTIXTCPName(t *testing.T) {
+	tixTCP := &dataplane.TIXTCPStatus{Available: true}
 	status := dataPathStatus{
-		Listeners:       []dataPathListenerStatus{{Endpoint: "local", Transport: "experimental_tcp"}},
-		Sessions:        []dataPathSessionStatus{{Peer: "ix-b", Transport: "experimental-tcp"}},
-		EndpointStats:   []dataPathEndpointStats{{Peer: "ix-b", Transport: "ackless_tcp"}},
-		KernelTransport: &dataplane.KernelTransportStatus{Protocols: []dataplane.KernelTransportProtocol{{Protocol: "experimental_tcp"}}},
-		ExperimentalTCP: experimental,
+		Listeners:       []dataPathListenerStatus{{Endpoint: "local", Transport: "tix_tcp"}},
+		Sessions:        []dataPathSessionStatus{{Peer: "ix-b", Transport: "tix-tcp"}},
+		EndpointStats:   []dataPathEndpointStats{{Peer: "ix-b", Transport: "tix_tcp"}},
+		KernelTransport: &dataplane.KernelTransportStatus{Protocols: []dataplane.KernelTransportProtocol{{Protocol: "tix_tcp"}}},
+		TIXTCP:          tixTCP,
 	}
 
 	public := publicDataPathStatus(status)
@@ -27,16 +27,16 @@ func TestPublicDataPathStatusUsesTIXTCPNameAndKeepsLegacyStatusKey(t *testing.T)
 		public.KernelTransport.Protocols[0].Protocol != "tix_tcp" {
 		t.Fatalf("public data path = %#v", public)
 	}
-	if public.TIXTCP != experimental || public.ExperimentalTCP != experimental {
-		t.Fatalf("TIX-TCP status aliases = %#v/%#v", public.TIXTCP, public.ExperimentalTCP)
+	if public.TIXTCP != tixTCP {
+		t.Fatalf("TIX-TCP status = %#v", public.TIXTCP)
 	}
-	if status.Listeners[0].Transport != "experimental_tcp" || status.KernelTransport.Protocols[0].Protocol != "experimental_tcp" {
+	if status.Listeners[0].Transport != "tix_tcp" || status.KernelTransport.Protocols[0].Protocol != "tix_tcp" {
 		t.Fatalf("public conversion mutated runtime status = %#v", status)
 	}
 }
 
-func TestTransportNamesPublishesAndDeduplicatesTIXTCP(t *testing.T) {
-	got := transportNames([]transport.Protocol{transport.ProtocolUDP, transport.ProtocolExperimentalTCP, transport.ProtocolTIXTCP})
+func TestTransportNamesPublishesTIXTCP(t *testing.T) {
+	got := transportNames([]transport.Protocol{transport.ProtocolUDP, transport.ProtocolTIXTCP})
 	if len(got) != 2 || got[0] != "tix_tcp" || got[1] != "udp" {
 		t.Fatalf("transport names = %#v", got)
 	}

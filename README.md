@@ -20,11 +20,9 @@ Start here: [TrustIX Bootstrap Command Generator](https://unicode01.github.io/Tr
 - Linux dataplane automation for managed LAN interfaces, routes, TC/eBPF capture, AF_XDP paths, and kernel module capability reporting.
 - Fallback paths for systems without the full kernel module capability set.
 
-TIX-TCP uses `tix_tcp` in new configuration and management API output. Existing
-`experimental_tcp`, `experimental-tcp`, and `ackless_tcp` configuration values
-remain accepted as compatibility aliases. Low-level runtime statistics,
-environment variables, and historical production evidence retain the
-`experimental_tcp` name during the rolling migration.
+TIX-TCP uses `tix_tcp` as its configuration, API, runtime, statistics, and
+kernel/BPF protocol identity. Older protocol names are rejected rather than
+silently normalized.
 
 ## Repository Layout
 

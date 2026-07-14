@@ -42,7 +42,7 @@ func TestLinksEndpointReportsPeerSessions(t *testing.T) {
 				Available: true,
 				Provider:  "test",
 				Protocols: []dataplane.KernelTransportProtocol{{
-					Protocol:  string(transport.ProtocolExperimentalTCP),
+					Protocol:  string(transport.ProtocolTIXTCP),
 					Available: true,
 				}},
 			},
@@ -137,7 +137,7 @@ func TestLinksEndpointIgnoresDisabledEndpointLastError(t *testing.T) {
 				Available: true,
 				Provider:  "test",
 				Protocols: []dataplane.KernelTransportProtocol{{
-					Protocol:  string(transport.ProtocolExperimentalTCP),
+					Protocol:  string(transport.ProtocolTIXTCP),
 					Available: true,
 				}},
 			},
@@ -158,7 +158,7 @@ func TestLinksEndpointIgnoresDisabledEndpointLastError(t *testing.T) {
 				Domain: "lab.local",
 				Endpoints: []config.EndpointConfig{
 					{Name: "ep-b", Mode: config.EndpointModeActive, Address: "192.0.2.2:7443", Transport: "quic", Enabled: true},
-					{Name: "ackless-b", Mode: config.EndpointModeActive, Address: "192.0.2.2:7143", Transport: "experimental_tcp", Enabled: false},
+					{Name: "tix-tcp-b", Mode: config.EndpointModeActive, Address: "192.0.2.2:7143", Transport: "tix_tcp", Enabled: false},
 				},
 			}},
 		},
@@ -166,7 +166,7 @@ func TestLinksEndpointIgnoresDisabledEndpointLastError(t *testing.T) {
 	runtime := &dataSessionRuntime{key: key, session: session}
 	runtime.lastUp.Store(now.UnixNano())
 	daemon.dataSessionState[key] = runtime
-	daemon.recordEndpointDown("ix-b", daemon.desired.Peers[0].Endpoints[1], fmt.Errorf("experimental_tcp TC/XDP reinject is unavailable"))
+	daemon.recordEndpointDown("ix-b", daemon.desired.Peers[0].Endpoints[1], fmt.Errorf("tix_tcp TC/XDP reinject is unavailable"))
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/links?peer=ix-b", nil)
 	recorder := httptest.NewRecorder()
@@ -189,8 +189,8 @@ func TestLinksEndpointIgnoresUnselectedKernelIncompatibleEndpoint(t *testing.T) 
 	session := &recordingSession{}
 	key := dataSessionKey{
 		Peer:       "ix-b",
-		Endpoint:   "ackless-b",
-		Transport:  transport.ProtocolExperimentalTCP,
+		Endpoint:   "tix-tcp-b",
+		Transport:  transport.ProtocolTIXTCP,
 		Address:    "192.0.2.2:7143",
 		Encryption: "plaintext",
 	}
@@ -202,7 +202,7 @@ func TestLinksEndpointIgnoresUnselectedKernelIncompatibleEndpoint(t *testing.T) 
 				Available: true,
 				Provider:  "test",
 				Protocols: []dataplane.KernelTransportProtocol{{
-					Protocol:  string(transport.ProtocolExperimentalTCP),
+					Protocol:  string(transport.ProtocolTIXTCP),
 					Available: true,
 				}},
 			},
@@ -224,14 +224,14 @@ func TestLinksEndpointIgnoresUnselectedKernelIncompatibleEndpoint(t *testing.T) 
 				ID:     "ix-b",
 				Domain: "lab.local",
 				Endpoints: []config.EndpointConfig{
-					{Name: "ackless-b", Mode: config.EndpointModeActive, Address: "192.0.2.2:7143", Transport: "experimental_tcp", Enabled: true},
+					{Name: "tix-tcp-b", Mode: config.EndpointModeActive, Address: "192.0.2.2:7143", Transport: "tix_tcp", Enabled: true},
 					{Name: "tcp-b", Mode: config.EndpointModeActive, Address: "192.0.2.2:7043", Transport: "tcp", Enabled: true},
 				},
 			}},
 			Routes: []config.RouteConfig{{
 				Prefix:   "10.0.2.0/24",
 				NextHop:  "ix-b",
-				Endpoint: "ackless-b",
+				Endpoint: "tix-tcp-b",
 				Metric:   100,
 			}},
 		},

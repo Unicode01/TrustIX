@@ -140,7 +140,7 @@ func loadKernelUDPRXSecureDirectObjectVariant(provider *kernelCryptoProviderObje
 		"trustix_kudp_rx_secure_destination_mac1":     uint16FromMACSuffix(destinationMAC),
 		"trustix_kudp_rx_secure_redirect_peer":        boolAsUint32(options.RedirectPeer),
 		"trustix_kudp_rx_secure_broadcast":            boolAsUint32(options.Broadcast),
-		"trustix_kudp_rx_secure_hot_stats":            boolAsUint32(experimentalTCPHotPathStats()),
+		"trustix_kudp_rx_secure_hot_stats":            boolAsUint32(tixTCPHotPathStats()),
 		"trustix_kudp_rx_secure_direct_open_kfunc":    boolAsUint32(kernelUDPRXSecureDirectKfuncOpenEnabled()),
 		"trustix_kudp_rx_secure_skb_open_kfunc":       boolAsUint32(skbOpenKfunc),
 		"trustix_kudp_rx_secure_decap_l2_kfunc":       boolAsUint32(decapL2Kfunc),
@@ -157,7 +157,7 @@ func loadKernelUDPRXSecureDirectObjectVariant(provider *kernelCryptoProviderObje
 	}
 	for _, name := range []string{
 		"ix_stats_map",
-		"ix_exp_tcp_port",
+		"ix_tix_tcp_port",
 		"ix_kudp_rx_neigh",
 		"trustix_kernel_crypto_flow_index_map",
 		"trustix_kernel_crypto_ctx_slots",
@@ -175,7 +175,7 @@ func loadKernelUDPRXSecureDirectObjectVariant(provider *kernelCryptoProviderObje
 	coll, err := newBPFCollectionWithOptions(spec, cebpf.CollectionOptions{
 		MapReplacements: map[string]*cebpf.Map{
 			"ix_stats_map":                         statsMap,
-			"ix_exp_tcp_port":                      portMap,
+			"ix_tix_tcp_port":                      portMap,
 			"ix_kudp_rx_neigh":                     neighMap,
 			"trustix_kernel_crypto_flow_index_map": provider.flowIndexMap,
 			"trustix_kernel_crypto_ctx_slots":      provider.contextSlots,

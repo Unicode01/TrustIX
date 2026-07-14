@@ -148,7 +148,7 @@ func (daemon *Daemon) endpointSecurityCompatible(endpoint config.EndpointConfig)
 
 func transportSupportsCryptoPlacement(rawTransport string) bool {
 	switch transport.Protocol(strings.ToLower(strings.TrimSpace(rawTransport))) {
-	case transport.ProtocolExperimentalTCP, transport.ProtocolUDP:
+	case transport.ProtocolTIXTCP, transport.ProtocolUDP:
 		return true
 	default:
 		return false

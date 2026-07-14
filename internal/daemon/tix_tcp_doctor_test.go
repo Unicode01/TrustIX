@@ -7,9 +7,9 @@ import (
 	"trustix.local/trustix/internal/dataplane"
 )
 
-func TestExperimentalTCPDoctorReportsKernelCryptoRequestAsDegraded(t *testing.T) {
+func TestTIXTCPDoctorReportsKernelCryptoRequestAsDegraded(t *testing.T) {
 	status := dataPathStatus{
-		ExperimentalTCP: &dataplane.ExperimentalTCPStatus{
+		TIXTCP: &dataplane.TIXTCPStatus{
 			Available:          true,
 			Provider:           "af_xdp",
 			FastPath:           true,
@@ -30,10 +30,10 @@ func TestExperimentalTCPDoctorReportsKernelCryptoRequestAsDegraded(t *testing.T)
 		},
 	}
 
-	if got := experimentalTCPDoctorStatus(status); got != "degraded" {
+	if got := tixTCPDoctorStatus(status); got != "degraded" {
 		t.Fatalf("doctor status = %q, want degraded", got)
 	}
-	detail := experimentalTCPDoctorDetail(status)
+	detail := tixTCPDoctorDetail(status)
 	for _, want := range []string{"provider=af_xdp", "requested_crypto=kernel", "kernel_btf=true", "crypto_kfuncs=false", "bpf_crypto_encrypt"} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("doctor detail %q does not contain %q", detail, want)
@@ -41,9 +41,9 @@ func TestExperimentalTCPDoctorReportsKernelCryptoRequestAsDegraded(t *testing.T)
 	}
 }
 
-func TestExperimentalTCPDoctorReportsAFXDPSUserspaceAsOK(t *testing.T) {
+func TestTIXTCPDoctorReportsAFXDPSUserspaceAsOK(t *testing.T) {
 	status := dataPathStatus{
-		ExperimentalTCP: &dataplane.ExperimentalTCPStatus{
+		TIXTCP: &dataplane.TIXTCPStatus{
 			Available:       true,
 			Provider:        "af_xdp",
 			FastPath:        true,
@@ -62,7 +62,7 @@ func TestExperimentalTCPDoctorReportsAFXDPSUserspaceAsOK(t *testing.T) {
 		},
 	}
 
-	if got := experimentalTCPDoctorStatus(status); got != "ok" {
+	if got := tixTCPDoctorStatus(status); got != "ok" {
 		t.Fatalf("doctor status = %q, want ok", got)
 	}
 }
@@ -87,7 +87,7 @@ func TestKernelTransportDoctorReportsAvailableAsOK(t *testing.T) {
 			Available: true,
 			Provider:  "af_xdp",
 			Protocols: []dataplane.KernelTransportProtocol{{
-				Protocol:  "experimental_tcp",
+				Protocol:  "tix_tcp",
 				Available: true,
 				Placement: "hybrid",
 			}},
@@ -97,7 +97,7 @@ func TestKernelTransportDoctorReportsAvailableAsOK(t *testing.T) {
 		t.Fatalf("kernel transport doctor status = %q, want ok", got)
 	}
 	detail := kernelTransportDoctorDetail(status)
-	for _, want := range []string{"mode=prefer_kernel", "provider=af_xdp", "experimental_tcp=hybrid/true"} {
+	for _, want := range []string{"mode=prefer_kernel", "provider=af_xdp", "tix_tcp=hybrid/true"} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("doctor detail %q does not contain %q", detail, want)
 		}

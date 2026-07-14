@@ -96,7 +96,7 @@ default_cases() {
 validate_case() {
   local transport="$1" encryption="$2" profile="$3" datapath="$4" placement="$5"
   case "$transport" in
-    udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|kernel_udp|experimental_tcp) ;;
+    udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|kernel_udp|tix_tcp) ;;
     *) die "unsupported transport in production case: $transport" ;;
   esac
   case "$encryption" in
@@ -134,7 +134,7 @@ case_should_skip() {
     log "skip ${transport}/${encryption}/${profile}/${datapath}/${placement}: full datapath module is unavailable"
     return 0
   fi
-  if [[ "$placement" == "kernel" && "$transport" != "kernel_udp" && "$transport" != "experimental_tcp" ]]; then
+  if [[ "$placement" == "kernel" && "$transport" != "kernel_udp" && "$transport" != "tix_tcp" ]]; then
     log "skip ${transport}/${encryption}/${placement}: transport has no kernel crypto placement"
     return 0
   fi
@@ -173,7 +173,7 @@ case_is_full_datapath() {
 
 case_is_route_gso() {
   local transport="$1" encryption="$2" profile="$3" datapath="$4" placement="$5"
-  [[ "$transport" == "experimental_tcp" &&
+  [[ "$transport" == "tix_tcp" &&
     "$encryption" == "plaintext" &&
     "$profile" == "performance" &&
     "$datapath" == "kernel_module" &&

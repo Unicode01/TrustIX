@@ -95,34 +95,34 @@ cpu_profile_dir="${TRUSTIX_E2E_CPU_PROFILE_DIR:-}"
 burst_timeout="${TRUSTIX_E2E_BURST_TIMEOUT:-10}"
 tcp_connect_timeout="${TRUSTIX_E2E_TCP_CONNECT_TIMEOUT:-5}"
 crash_restart="${TRUSTIX_E2E_CRASH_RESTART:-1}"
-experimental_tcp_skip_checksum="${TRUSTIX_E2E_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM:-${TRUSTIX_E2E_EXPERIMENTAL_TCP_SKIP_CHECKSUM:-${TRUSTIX_EXPERIMENTAL_TCP_SKIP_CHECKSUM:-${TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM:-0}}}}"
-experimental_tcp_skip_outer_checksum="${TRUSTIX_E2E_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM:-${TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM:-$experimental_tcp_skip_checksum}}"
-experimental_tcp_tc_tx_direct="${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT:-}}"
-experimental_tcp_tc_tx_direct_only="${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY:-}}"
-experimental_tcp_route_gso_sync="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_SYNC:-0}}}"
-experimental_tcp_route_gso_sync_stream="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_SYNC_STREAM:-0}}}"
-experimental_tcp_route_gso_sync_stream_outer_gso="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_OUTER_GSO:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_OUTER_GSO:-1}}"
-experimental_tcp_route_gso_sync_stream_max_frames="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES:-8}}"
-experimental_tcp_route_gso_async="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC:-0}}}"
-experimental_tcp_route_gso_async_crash_risk_ack="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_CRASH_RISK_ACK:-${TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_TCP_GSO_ASYNC_CRASH_RISK_ACK:-0}}}"
-experimental_tcp_route_gso_async_dev_xmit="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_DEV_XMIT:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_DEV_XMIT:-${experimental_tcp_route_gso_async}}}"
-experimental_tcp_route_xmit_worker="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC:-0}}"
-experimental_tcp_route_xmit_worker_crash_risk_ack="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER_CRASH_RISK_ACK:-${TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_TCP_XMIT_CRASH_RISK_ACK:-0}}}"
-experimental_tcp_route_xmit_worker_steal="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER_STEAL:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL:-0}}"
-experimental_tcp_route_xmit_worker_steal_crash_risk_ack="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER_STEAL_CRASH_RISK_ACK:-${TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT_STEAL:-0}}"
-experimental_tcp_route_gso_async_limit="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT:-256}}"
-experimental_tcp_route_gso_async_worker_item_budget="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET:-64}}"
-experimental_tcp_route_gso_async_worker_segment_budget="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET:-2048}}"
-experimental_tcp_route_gso_async_max_segments_per_item="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM:-64}}"
-experimental_tcp_route_gso_async_stream="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM:-0}}"
-experimental_tcp_route_gso_async_stream_direct_build="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD:-0}}"
-experimental_tcp_route_gso_async_stream_outer_gso="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO:-0}}"
-experimental_tcp_route_gso_async_stream_max_frames="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES:-${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES:-8}}"
-experimental_tcp_route_gso_trust_partial_inner_checksum="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_TRUST_PARTIAL_INNER_CHECKSUM:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM:-0}}"
-experimental_tcp_route_header_kfunc="${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_HEADER_KFUNC:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC:-0}}"
-experimental_tcp_plain_skip_sequence="${TRUSTIX_E2E_EXPERIMENTAL_TCP_PLAIN_SKIP_SEQUENCE:-${TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE:-${TRUSTIX_TIXT_TX_PLAIN_SKIP_SEQUENCE:-0}}}"
-experimental_tcp_plain_ack_only="${TRUSTIX_E2E_EXPERIMENTAL_TCP_PLAIN_ACK_ONLY:-${TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY:-${TRUSTIX_TIXT_TX_PLAIN_ACK_ONLY:-0}}}"
-experimental_tcp_auto_umem_jumbo="${TRUSTIX_E2E_EXPERIMENTAL_TCP_AUTO_UMEM_JUMBO:-${TRUSTIX_EXPERIMENTAL_TCP_AUTO_UMEM_JUMBO:-0}}"
+tix_tcp_skip_checksum="${TRUSTIX_E2E_TIX_TCP_SKIP_TCP_CHECKSUM:-${TRUSTIX_E2E_TIX_TCP_SKIP_CHECKSUM:-${TRUSTIX_TIX_TCP_SKIP_CHECKSUM:-${TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM:-0}}}}"
+tix_tcp_skip_outer_checksum="${TRUSTIX_E2E_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM:-${TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM:-$tix_tcp_skip_checksum}}"
+tix_tcp_tc_tx_direct="${TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT:-${TRUSTIX_TIX_TCP_TC_TX_DIRECT:-}}"
+tix_tcp_tc_tx_direct_only="${TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT_ONLY:-${TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY:-}}"
+tix_tcp_route_gso_sync="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_SYNC:-${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC:-${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_SYNC:-0}}}"
+tix_tcp_route_gso_sync_stream="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_SYNC_STREAM:-${TRUSTIX_TIX_TCP_ROUTE_GSO_SYNC_STREAM:-${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_SYNC_STREAM:-0}}}"
+tix_tcp_route_gso_sync_stream_outer_gso="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_SYNC_STREAM_OUTER_GSO:-${TRUSTIX_TIX_TCP_ROUTE_GSO_SYNC_STREAM_OUTER_GSO:-1}}"
+tix_tcp_route_gso_sync_stream_max_frames="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES:-${TRUSTIX_TIX_TCP_ROUTE_GSO_SYNC_STREAM_MAX_FRAMES:-8}}"
+tix_tcp_route_gso_async="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC:-${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC:-${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC:-0}}}"
+tix_tcp_route_gso_async_crash_risk_ack="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_CRASH_RISK_ACK:-${TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC:-${TRUSTIX_TIX_TCP_ROUTE_TCP_GSO_ASYNC_CRASH_RISK_ACK:-0}}}"
+tix_tcp_route_gso_async_dev_xmit="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_DEV_XMIT:-${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_DEV_XMIT:-${tix_tcp_route_gso_async}}}"
+tix_tcp_route_xmit_worker="${TRUSTIX_E2E_TIX_TCP_ROUTE_XMIT_WORKER:-${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC:-0}}"
+tix_tcp_route_xmit_worker_crash_risk_ack="${TRUSTIX_E2E_TIX_TCP_ROUTE_XMIT_WORKER_CRASH_RISK_ACK:-${TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT:-${TRUSTIX_TIX_TCP_ROUTE_TCP_XMIT_CRASH_RISK_ACK:-0}}}"
+tix_tcp_route_xmit_worker_steal="${TRUSTIX_E2E_TIX_TCP_ROUTE_XMIT_WORKER_STEAL:-${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL:-0}}"
+tix_tcp_route_xmit_worker_steal_crash_risk_ack="${TRUSTIX_E2E_TIX_TCP_ROUTE_XMIT_WORKER_STEAL_CRASH_RISK_ACK:-${TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_XMIT_STEAL:-0}}"
+tix_tcp_route_gso_async_limit="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_LIMIT:-${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_LIMIT:-256}}"
+tix_tcp_route_gso_async_worker_item_budget="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET:-${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET:-64}}"
+tix_tcp_route_gso_async_worker_segment_budget="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET:-${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET:-2048}}"
+tix_tcp_route_gso_async_max_segments_per_item="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM:-${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM:-64}}"
+tix_tcp_route_gso_async_stream="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM:-${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM:-0}}"
+tix_tcp_route_gso_async_stream_direct_build="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD:-${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD:-0}}"
+tix_tcp_route_gso_async_stream_outer_gso="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO:-${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO:-0}}"
+tix_tcp_route_gso_async_stream_max_frames="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES:-${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES:-8}}"
+tix_tcp_route_gso_trust_partial_inner_checksum="${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_TRUST_PARTIAL_INNER_CHECKSUM:-${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM:-0}}"
+tix_tcp_route_header_kfunc="${TRUSTIX_E2E_TIX_TCP_ROUTE_HEADER_KFUNC:-${TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC:-0}}"
+tix_tcp_plain_skip_sequence="${TRUSTIX_E2E_TIX_TCP_PLAIN_SKIP_SEQUENCE:-${TRUSTIX_TIX_TCP_TX_PLAIN_SKIP_SEQUENCE:-${TRUSTIX_TIXT_TX_PLAIN_SKIP_SEQUENCE:-0}}}"
+tix_tcp_plain_ack_only="${TRUSTIX_E2E_TIX_TCP_PLAIN_ACK_ONLY:-${TRUSTIX_TIX_TCP_TX_PLAIN_ACK_ONLY:-${TRUSTIX_TIXT_TX_PLAIN_ACK_ONLY:-0}}}"
+tix_tcp_auto_umem_jumbo="${TRUSTIX_E2E_TIX_TCP_AUTO_UMEM_JUMBO:-${TRUSTIX_TIX_TCP_AUTO_UMEM_JUMBO:-0}}"
 kernel_udp_xdp_open="${TRUSTIX_E2E_KERNEL_UDP_XDP_OPEN:-${TRUSTIX_KERNEL_UDP_XDP_OPEN:-0}}"
 kernel_udp_xdp_pass_opened="${TRUSTIX_E2E_KERNEL_UDP_XDP_PASS_OPENED:-${TRUSTIX_KERNEL_UDP_XDP_PASS_OPENED:-0}}"
 kernel_udp_xdp_rx_direct="${TRUSTIX_E2E_KERNEL_UDP_XDP_RX_DIRECT:-${TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT:-0}}"
@@ -174,8 +174,8 @@ udp_a_port="${TRUSTIX_E2E_UDP_A_PORT:-}"
 udp_b_port="${TRUSTIX_E2E_UDP_B_PORT:-}"
 tcp_a_port="${TRUSTIX_E2E_TCP_A_PORT:-}"
 tcp_b_port="${TRUSTIX_E2E_TCP_B_PORT:-}"
-exp_tcp_a_port="${TRUSTIX_E2E_EXP_TCP_A_PORT:-}"
-exp_tcp_b_port="${TRUSTIX_E2E_EXP_TCP_B_PORT:-}"
+tix_tcp_a_port="${TRUSTIX_E2E_TIX_TCP_A_PORT:-}"
+tix_tcp_b_port="${TRUSTIX_E2E_TIX_TCP_B_PORT:-}"
 
 api_a=""
 api_b=""
@@ -186,8 +186,8 @@ udp_a=""
 udp_b=""
 tcp_a=""
 tcp_b=""
-exp_tcp_a=""
-exp_tcp_b=""
+tix_tcp_a=""
+tix_tcp_b=""
 iptunnel_a=""
 iptunnel_b=""
 allocated_ports=""
@@ -270,7 +270,7 @@ kernel_provider_loadable() {
 }
 
 is_af_xdp_transport() {
-  [[ "$transport" == "experimental_tcp" || "$transport" == "kernel_udp" ]]
+  [[ "$transport" == "tix_tcp" || "$transport" == "kernel_udp" ]]
 }
 
 kernel_udp_secure_direct_enabled() {
@@ -279,43 +279,43 @@ kernel_udp_secure_direct_enabled() {
     truthy "${TRUSTIX_E2E_KERNEL_UDP_TC_TX_SECURE_DIRECT:-0}"
 }
 
-experimental_tcp_direct_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] &&
-    truthy "$experimental_tcp_tc_tx_direct" &&
-    (truthy "$experimental_tcp_skip_checksum" || experimental_tcp_route_tcp_kfunc_enabled || experimental_tcp_secure_direct_enabled)
+tix_tcp_direct_enabled() {
+  [[ "$transport" == "tix_tcp" ]] &&
+    truthy "$tix_tcp_tc_tx_direct" &&
+    (truthy "$tix_tcp_skip_checksum" || tix_tcp_route_tcp_kfunc_enabled || tix_tcp_secure_direct_enabled)
 }
 
-experimental_tcp_route_gso_async_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] &&
-    truthy "$experimental_tcp_route_gso_async"
+tix_tcp_route_gso_async_enabled() {
+  [[ "$transport" == "tix_tcp" ]] &&
+    truthy "$tix_tcp_route_gso_async"
 }
 
-experimental_tcp_route_gso_sync_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] &&
-    truthy "$experimental_tcp_route_gso_sync"
+tix_tcp_route_gso_sync_enabled() {
+  [[ "$transport" == "tix_tcp" ]] &&
+    truthy "$tix_tcp_route_gso_sync"
 }
 
-experimental_tcp_route_xmit_worker_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] &&
-    truthy "$experimental_tcp_route_xmit_worker"
+tix_tcp_route_xmit_worker_enabled() {
+  [[ "$transport" == "tix_tcp" ]] &&
+    truthy "$tix_tcp_route_xmit_worker"
 }
 
-experimental_tcp_route_tcp_kfunc_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] &&
-    (experimental_tcp_route_gso_sync_enabled || experimental_tcp_route_gso_async_enabled || experimental_tcp_route_xmit_worker_enabled)
+tix_tcp_route_tcp_kfunc_enabled() {
+  [[ "$transport" == "tix_tcp" ]] &&
+    (tix_tcp_route_gso_sync_enabled || tix_tcp_route_gso_async_enabled || tix_tcp_route_xmit_worker_enabled)
 }
 
-experimental_tcp_route_tcp_kfunc_value() {
-  experimental_tcp_route_tcp_kfunc_enabled && printf '1' || printf '0'
+tix_tcp_route_tcp_kfunc_value() {
+  tix_tcp_route_tcp_kfunc_enabled && printf '1' || printf '0'
 }
 
-experimental_tcp_route_header_kfunc_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] &&
-    (truthy "$experimental_tcp_route_header_kfunc" || experimental_tcp_route_tcp_kfunc_enabled)
+tix_tcp_route_header_kfunc_enabled() {
+  [[ "$transport" == "tix_tcp" ]] &&
+    (truthy "$tix_tcp_route_header_kfunc" || tix_tcp_route_tcp_kfunc_enabled)
 }
 
-experimental_tcp_secure_direct_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] &&
+tix_tcp_secure_direct_enabled() {
+  [[ "$transport" == "tix_tcp" ]] &&
     [[ "$crypto_placement" == "kernel" || "$crypto_placement" == "auto" ]] &&
     truthy "${TRUSTIX_E2E_KERNEL_UDP_TC_TX_SECURE_DIRECT:-0}"
 }
@@ -327,8 +327,8 @@ kernel_plaintext_direct_fastpath_enabled() {
     kernel_udp)
       return 0
       ;;
-    experimental_tcp)
-      truthy "$experimental_tcp_tc_tx_direct" && truthy "$experimental_tcp_tc_tx_direct_only"
+    tix_tcp)
+      truthy "$tix_tcp_tc_tx_direct" && truthy "$tix_tcp_tc_tx_direct_only"
       ;;
     *)
       return 1
@@ -336,20 +336,20 @@ kernel_plaintext_direct_fastpath_enabled() {
   esac
 }
 
-experimental_tcp_direct_active_gso_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] || return 1
+tix_tcp_direct_active_gso_enabled() {
+  [[ "$transport" == "tix_tcp" ]] || return 1
   truthy "${TRUSTIX_E2E_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO:-${TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO:-0}}" || return 1
-  truthy "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE:-${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_SAFE_ACTIVE_GSO:-0}}"
+  truthy "${TRUSTIX_TIX_TCP_TC_TX_DIRECT_ACTIVE_GSO_SAFE:-${TRUSTIX_TIX_TCP_TC_TX_DIRECT_SAFE_ACTIVE_GSO:-0}}"
 }
 
-experimental_tcp_plaintext_linear_direct_only_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] || return 1
+tix_tcp_plaintext_linear_direct_only_enabled() {
+  [[ "$transport" == "tix_tcp" ]] || return 1
   is_plaintext_encryption "$(effective_transport_encryption)" || return 1
   [[ "$crypto_placement" == "auto" || "$crypto_placement" == "userspace" ]] || return 1
-  truthy "$experimental_tcp_tc_tx_direct" || return 1
-  truthy "$(experimental_tcp_kernel_udp_direct_only_value)" || return 1
-  experimental_tcp_route_tcp_kfunc_enabled && return 1
-  experimental_tcp_direct_active_gso_enabled && return 1
+  truthy "$tix_tcp_tc_tx_direct" || return 1
+  truthy "$(tix_tcp_kernel_udp_direct_only_value)" || return 1
+  tix_tcp_route_tcp_kfunc_enabled && return 1
+  tix_tcp_direct_active_gso_enabled && return 1
   return 0
 }
 
@@ -364,10 +364,10 @@ native_tunnel_plaintext_route_offload_enabled() {
 
 effective_disable_veth_offloads() {
   if [[ "$disable_veth_offloads" == "auto" ]]; then
-    experimental_tcp_plaintext_linear_direct_only_enabled && return 0
-    experimental_tcp_route_tcp_kfunc_enabled && return 1
+    tix_tcp_plaintext_linear_direct_only_enabled && return 0
+    tix_tcp_route_tcp_kfunc_enabled && return 1
     kernel_plaintext_direct_fastpath_enabled && return 1
-    kernel_udp_secure_direct_enabled || experimental_tcp_direct_enabled ||
+    kernel_udp_secure_direct_enabled || tix_tcp_direct_enabled ||
       ([[ "$transport" == "kernel_udp" ]] && is_plaintext_encryption "$(effective_transport_encryption)")
     return
   fi
@@ -429,42 +429,42 @@ datapath_extra_module_params() {
     esac
     params="${params:+${params} }${assignment}"
   }
-  if experimental_tcp_route_header_kfunc_enabled; then
-    add_param "tixt_tx_plain_skip_sequence=${experimental_tcp_plain_skip_sequence}"
-    add_param "tixt_tx_plain_ack_only=${experimental_tcp_plain_ack_only}"
+  if tix_tcp_route_header_kfunc_enabled; then
+    add_param "tixt_tx_plain_skip_sequence=${tix_tcp_plain_skip_sequence}"
+    add_param "tixt_tx_plain_ack_only=${tix_tcp_plain_ack_only}"
   fi
-  if experimental_tcp_route_gso_sync_enabled || truthy "$experimental_tcp_route_gso_sync_stream"; then
+  if tix_tcp_route_gso_sync_enabled || truthy "$tix_tcp_route_gso_sync_stream"; then
     add_param "route_tcp_gso=1"
   fi
-  if experimental_tcp_route_gso_async_enabled; then
+  if tix_tcp_route_gso_async_enabled; then
     add_param "route_tcp_gso=1"
     add_param "route_tcp_gso_async=1"
-    add_param "route_tcp_gso_async_dev_xmit=${experimental_tcp_route_gso_async_dev_xmit}"
-    add_param "route_tcp_gso_async_limit=${experimental_tcp_route_gso_async_limit}"
-    add_param "route_tcp_gso_async_worker_item_budget=${experimental_tcp_route_gso_async_worker_item_budget}"
-    add_param "route_tcp_gso_async_worker_segment_budget=${experimental_tcp_route_gso_async_worker_segment_budget}"
-    add_param "route_tcp_gso_async_max_segments_per_item=${experimental_tcp_route_gso_async_max_segments_per_item}"
-    if truthy "$experimental_tcp_route_gso_async_stream"; then
+    add_param "route_tcp_gso_async_dev_xmit=${tix_tcp_route_gso_async_dev_xmit}"
+    add_param "route_tcp_gso_async_limit=${tix_tcp_route_gso_async_limit}"
+    add_param "route_tcp_gso_async_worker_item_budget=${tix_tcp_route_gso_async_worker_item_budget}"
+    add_param "route_tcp_gso_async_worker_segment_budget=${tix_tcp_route_gso_async_worker_segment_budget}"
+    add_param "route_tcp_gso_async_max_segments_per_item=${tix_tcp_route_gso_async_max_segments_per_item}"
+    if truthy "$tix_tcp_route_gso_async_stream"; then
       add_param "route_tcp_gso_async_stream=1"
-      add_param "route_tcp_gso_async_stream_max_frames=${experimental_tcp_route_gso_async_stream_max_frames}"
+      add_param "route_tcp_gso_async_stream_max_frames=${tix_tcp_route_gso_async_stream_max_frames}"
     fi
-    if truthy "$experimental_tcp_route_gso_async_stream_direct_build"; then
+    if truthy "$tix_tcp_route_gso_async_stream_direct_build"; then
       add_param "route_tcp_gso_async_stream_direct_build=1"
     fi
-    if truthy "$experimental_tcp_route_gso_async_stream_outer_gso"; then
+    if truthy "$tix_tcp_route_gso_async_stream_outer_gso"; then
       add_param "route_tcp_gso_async_stream_outer_gso=1"
       add_param "route_tcp_gso_async_stream_outer_gso_hard_enable=1"
     fi
   fi
-  if truthy "$experimental_tcp_route_gso_sync_stream"; then
+  if truthy "$tix_tcp_route_gso_sync_stream"; then
     add_param "route_tcp_gso_sync_stream=1"
-    add_param "route_tcp_gso_sync_stream_outer_gso=${experimental_tcp_route_gso_sync_stream_outer_gso}"
-    add_param "route_tcp_gso_sync_stream_max_frames=${experimental_tcp_route_gso_sync_stream_max_frames}"
+    add_param "route_tcp_gso_sync_stream_outer_gso=${tix_tcp_route_gso_sync_stream_outer_gso}"
+    add_param "route_tcp_gso_sync_stream_max_frames=${tix_tcp_route_gso_sync_stream_max_frames}"
   fi
-  if experimental_tcp_route_xmit_worker_enabled; then
+  if tix_tcp_route_xmit_worker_enabled; then
     add_param "route_tcp_xmit_worker=1"
   fi
-  if experimental_tcp_profile_route_gso_default_enabled; then
+  if tix_tcp_profile_route_gso_default_enabled; then
     add_param "route_tcp_gso_async_prefer=1"
     add_param "route_tcp_gso_async_bytes_limit=33554432"
     add_param "route_tcp_gso_async_worker_emit_budget=0"
@@ -499,8 +499,8 @@ datapath_module_needed() {
     1|true|yes|on|enabled|required) return 0 ;;
     0|false|no|off|disabled) return 1 ;;
   esac
-  experimental_tcp_route_header_kfunc_enabled && return 0
-  if [[ "$transport" == "kernel_udp" ]] || experimental_tcp_direct_enabled || kernel_plaintext_direct_fastpath_enabled; then
+  tix_tcp_route_header_kfunc_enabled && return 0
+  if [[ "$transport" == "kernel_udp" ]] || tix_tcp_direct_enabled || kernel_plaintext_direct_fastpath_enabled; then
     return 0
   fi
   return 1
@@ -552,31 +552,31 @@ append_module_param_if_missing() {
   fi
 }
 
-experimental_tcp_effective_skip_outer_checksum() {
-  if experimental_tcp_route_tcp_kfunc_enabled; then
+tix_tcp_effective_skip_outer_checksum() {
+  if tix_tcp_route_tcp_kfunc_enabled; then
     printf '0\n'
     return
   fi
-  printf '%s\n' "$experimental_tcp_skip_outer_checksum"
+  printf '%s\n' "$tix_tcp_skip_outer_checksum"
 }
 
-experimental_tcp_route_gso_pre_outer_inner_checksum() {
-  if experimental_tcp_route_tcp_kfunc_enabled; then
+tix_tcp_route_gso_pre_outer_inner_checksum() {
+  if tix_tcp_route_tcp_kfunc_enabled; then
     printf '0\n'
     return
   fi
-  printf '%s\n' "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM:-}"
+  printf '%s\n' "${TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM:-}"
 }
 
-experimental_tcp_route_gso_outer_partial_checksum() {
-  if experimental_tcp_route_tcp_kfunc_enabled; then
+tix_tcp_route_gso_outer_partial_checksum() {
+  if tix_tcp_route_tcp_kfunc_enabled; then
     printf '1\n'
     return
   fi
-  printf '%s\n' "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM:-0}"
+  printf '%s\n' "${TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM:-0}"
 }
 
-experimental_tcp_kernel_udp_direct_only_value() {
+tix_tcp_kernel_udp_direct_only_value() {
   if [[ -n "${TRUSTIX_E2E_KERNEL_UDP_TC_TX_DIRECT_ONLY+x}" ]]; then
     printf '%s\n' "$TRUSTIX_E2E_KERNEL_UDP_TC_TX_DIRECT_ONLY"
     return
@@ -585,9 +585,9 @@ experimental_tcp_kernel_udp_direct_only_value() {
     printf '%s\n' "$TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY"
     return
   fi
-  if [[ "$transport" == "experimental_tcp" ]] &&
+  if [[ "$transport" == "tix_tcp" ]] &&
     is_plaintext_encryption "$(effective_transport_encryption)" &&
-    truthy "$experimental_tcp_tc_tx_direct_only"; then
+    truthy "$tix_tcp_tc_tx_direct_only"; then
     printf '1\n'
     return
   fi
@@ -600,7 +600,7 @@ kernel_udp_tc_tx_secure_direct_fix_inner_checksums_effective() {
     printf '%s\n' "$kernel_udp_tc_tx_secure_direct_fix_inner_checksums"
     return
   fi
-  if (kernel_udp_secure_direct_enabled || experimental_tcp_secure_direct_enabled) &&
+  if (kernel_udp_secure_direct_enabled || tix_tcp_secure_direct_enabled) &&
       falsey "$kernel_udp_tc_tx_secure_direct_trust_inner_checksums"; then
     printf '1\n'
     return
@@ -653,8 +653,8 @@ transport_datapath_is_userspace() {
   esac
 }
 
-experimental_tcp_profile_route_gso_default_enabled() {
-  [[ "$transport" == "experimental_tcp" ]] || return 1
+tix_tcp_profile_route_gso_default_enabled() {
+  [[ "$transport" == "tix_tcp" ]] || return 1
   transport_profile_is_performance || return 1
   transport_datapath_is_userspace && return 1
   is_plaintext_encryption "$(effective_transport_encryption)" || return 1
@@ -663,55 +663,55 @@ experimental_tcp_profile_route_gso_default_enabled() {
 }
 
 apply_transport_profile_fastpath_defaults() {
-  experimental_tcp_profile_route_gso_default_enabled || return 0
+  tix_tcp_profile_route_gso_default_enabled || return 0
 
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT+x}" ]]; then
-    experimental_tcp_tc_tx_direct=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT+x}" && -z "${TRUSTIX_TIX_TCP_TC_TX_DIRECT+x}" ]]; then
+    tix_tcp_tc_tx_direct=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY+x}" ]]; then
-    experimental_tcp_tc_tx_direct_only=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT_ONLY+x}" && -z "${TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY+x}" ]]; then
+    tix_tcp_tc_tx_direct_only=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_SYNC+x}" ]]; then
-    experimental_tcp_route_gso_sync=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_SYNC+x}" && -z "${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC+x}" && -z "${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_SYNC+x}" ]]; then
+    tix_tcp_route_gso_sync=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC+x}" ]]; then
-    experimental_tcp_route_gso_async=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC+x}" && -z "${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC+x}" && -z "${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC+x}" ]]; then
+    tix_tcp_route_gso_async=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_DEV_XMIT+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_DEV_XMIT+x}" ]]; then
-    experimental_tcp_route_gso_async_dev_xmit=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_DEV_XMIT+x}" && -z "${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_DEV_XMIT+x}" ]]; then
+    tix_tcp_route_gso_async_dev_xmit=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC+x}" ]]; then
-    experimental_tcp_route_xmit_worker=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_XMIT_WORKER+x}" && -z "${TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC+x}" ]]; then
+    tix_tcp_route_xmit_worker=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_PLAIN_SKIP_SEQUENCE+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE+x}" && -z "${TRUSTIX_TIXT_TX_PLAIN_SKIP_SEQUENCE+x}" ]]; then
-    experimental_tcp_plain_skip_sequence=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_PLAIN_SKIP_SEQUENCE+x}" && -z "${TRUSTIX_TIX_TCP_TX_PLAIN_SKIP_SEQUENCE+x}" && -z "${TRUSTIX_TIXT_TX_PLAIN_SKIP_SEQUENCE+x}" ]]; then
+    tix_tcp_plain_skip_sequence=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_PLAIN_ACK_ONLY+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY+x}" && -z "${TRUSTIX_TIXT_TX_PLAIN_ACK_ONLY+x}" ]]; then
-    experimental_tcp_plain_ack_only=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_PLAIN_ACK_ONLY+x}" && -z "${TRUSTIX_TIX_TCP_TX_PLAIN_ACK_ONLY+x}" && -z "${TRUSTIX_TIXT_TX_PLAIN_ACK_ONLY+x}" ]]; then
+    tix_tcp_plain_ack_only=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT+x}" ]]; then
-    experimental_tcp_route_gso_async_limit=2048
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_LIMIT+x}" && -z "${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_LIMIT+x}" ]]; then
+    tix_tcp_route_gso_async_limit=2048
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET+x}" ]]; then
-    experimental_tcp_route_gso_async_worker_item_budget=64
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET+x}" && -z "${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET+x}" ]]; then
+    tix_tcp_route_gso_async_worker_item_budget=64
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET+x}" ]]; then
-    experimental_tcp_route_gso_async_worker_segment_budget=2048
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET+x}" && -z "${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET+x}" ]]; then
+    tix_tcp_route_gso_async_worker_segment_budget=2048
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM+x}" ]]; then
-    experimental_tcp_route_gso_async_max_segments_per_item=128
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM+x}" && -z "${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM+x}" ]]; then
+    tix_tcp_route_gso_async_max_segments_per_item=128
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM+x}" ]]; then
-    experimental_tcp_route_gso_async_stream=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM+x}" && -z "${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM+x}" ]]; then
+    tix_tcp_route_gso_async_stream=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD+x}" ]]; then
-    experimental_tcp_route_gso_async_stream_direct_build=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD+x}" && -z "${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD+x}" ]]; then
+    tix_tcp_route_gso_async_stream_direct_build=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO+x}" ]]; then
-    experimental_tcp_route_gso_async_stream_outer_gso=1
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO+x}" && -z "${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO+x}" ]]; then
+    tix_tcp_route_gso_async_stream_outer_gso=1
   fi
-  if [[ -z "${TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES+x}" && -z "${TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES+x}" ]]; then
-    experimental_tcp_route_gso_async_stream_max_frames=64
+  if [[ -z "${TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES+x}" && -z "${TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES+x}" ]]; then
+    tix_tcp_route_gso_async_stream_max_frames=64
   fi
   if [[ -z "${TRUSTIX_E2E_DATAPATH_MODULE+x}" ]]; then
     datapath_module=1
@@ -802,10 +802,10 @@ allocate_ports() {
   remember_port "$tcp_a_port"
   tcp_b_port="$(choose_port TRUSTIX_E2E_TCP_B_PORT 17022)"
   remember_port "$tcp_b_port"
-  exp_tcp_a_port="$(choose_port TRUSTIX_E2E_EXP_TCP_A_PORT 17041)"
-  remember_port "$exp_tcp_a_port"
-  exp_tcp_b_port="$(choose_port TRUSTIX_E2E_EXP_TCP_B_PORT 17042)"
-  remember_port "$exp_tcp_b_port"
+  tix_tcp_a_port="$(choose_port TRUSTIX_E2E_TIX_TCP_A_PORT 17041)"
+  remember_port "$tix_tcp_a_port"
+  tix_tcp_b_port="$(choose_port TRUSTIX_E2E_TIX_TCP_B_PORT 17042)"
+  remember_port "$tix_tcp_b_port"
 }
 
 configure_addresses() {
@@ -817,8 +817,8 @@ configure_addresses() {
   udp_b="127.0.0.1:${udp_b_port}"
   tcp_a="127.0.0.1:${tcp_a_port}"
   tcp_b="127.0.0.1:${tcp_b_port}"
-  exp_tcp_a="127.0.0.1:${exp_tcp_a_port}"
-  exp_tcp_b="127.0.0.1:${exp_tcp_b_port}"
+  tix_tcp_a="127.0.0.1:${tix_tcp_a_port}"
+  tix_tcp_b="127.0.0.1:${tix_tcp_b_port}"
   if is_af_xdp_transport; then
     router_netns=1
   fi
@@ -835,8 +835,8 @@ configure_addresses() {
     udp_b="${underlay_ip_b}:${udp_b_port}"
     tcp_a="${underlay_ip_a}:${tcp_a_port}"
     tcp_b="${underlay_ip_b}:${tcp_b_port}"
-    exp_tcp_a="${underlay_ip_a}:${exp_tcp_a_port}"
-    exp_tcp_b="${underlay_ip_b}:${exp_tcp_b_port}"
+    tix_tcp_a="${underlay_ip_a}:${tix_tcp_a_port}"
+    tix_tcp_b="${underlay_ip_b}:${tix_tcp_b_port}"
   fi
   iptunnel_a="local=${underlay_ip_a},remote=${underlay_ip_b},local_carrier=10.255.30.1/30,remote_carrier=10.255.30.2,port=${iptunnel_port},mtu=${iptunnel_mtu}"
   iptunnel_b="local=${underlay_ip_b},remote=${underlay_ip_a},local_carrier=10.255.30.2/30,remote_carrier=10.255.30.1,port=${iptunnel_port},mtu=${iptunnel_mtu}"
@@ -1175,8 +1175,8 @@ generate_config() {
   local remote_udp="$8"
   local local_tcp="$9"
   local remote_tcp="${10}"
-  local local_exp_tcp="${11}"
-  local remote_exp_tcp="${12}"
+  local local_tix_tcp="${11}"
+  local remote_tix_tcp="${12}"
   local local_tunnel="${13}"
   local remote_tunnel="${14}"
   local local_control="${15}"
@@ -1216,13 +1216,13 @@ generate_config() {
     transport_candidate="$local_link_tls_name"
     local_address="$local_tcp"
     remote_address="$remote_tcp"
-  elif [[ "$transport" == "experimental_tcp" ]]; then
+  elif [[ "$transport" == "tix_tcp" ]]; then
     route_endpoint="$remote_exp_name"
     transport_candidate="$local_exp_name"
-    local_address="$local_exp_tcp"
-    remote_address="$remote_exp_tcp"
+    local_address="$local_tix_tcp"
+    remote_address="$remote_tix_tcp"
     if [[ -z "$local_underlay_iface" ]]; then
-      die "experimental_tcp requires a local underlay iface for ${node}"
+      die "tix_tcp requires a local underlay iface for ${node}"
     fi
     underlay_yaml="  underlay_iface: ${local_underlay_iface}"
   elif is_kernel_udp_transport; then
@@ -1379,11 +1379,11 @@ EOF
     enabled: true
 EOF
       ;;
-    experimental_tcp)
+    tix_tcp)
       cat >>"$config_path" <<EOF
   - name: ${local_exp_name}
     mode: passive
-    listen: ${local_exp_tcp}
+    listen: ${local_tix_tcp}
 EOF
       if [[ -n "$local_address" ]]; then
         cat >>"$config_path" <<EOF
@@ -1391,7 +1391,7 @@ EOF
 EOF
       fi
       cat >>"$config_path" <<EOF
-    transport: experimental_tcp
+    transport: tix_tcp
 EOF
       append_endpoint_encryption_security "    " "$endpoint_encryption"
       cat >>"$config_path" <<EOF
@@ -1500,7 +1500,7 @@ EOF
         enabled: true
 EOF
       ;;
-    experimental_tcp)
+    tix_tcp)
       cat >>"$config_path" <<EOF
       - name: ${remote_exp_name}
 EOF
@@ -1514,7 +1514,7 @@ EOF
 EOF
       fi
       cat >>"$config_path" <<EOF
-        transport: experimental_tcp
+        transport: tix_tcp
 EOF
       append_endpoint_encryption_security "        " "$endpoint_encryption"
       cat >>"$config_path" <<EOF
@@ -1568,7 +1568,7 @@ EOF
 EOF
   fi
 
-  if is_af_xdp_transport || is_iptunnel_transport || experimental_tcp_direct_enabled || kernel_plaintext_direct_fastpath_enabled; then
+  if is_af_xdp_transport || is_iptunnel_transport || tix_tcp_direct_enabled || kernel_plaintext_direct_fastpath_enabled; then
     cat >>"$config_path" <<EOF
   kernel_transport:
     mode: require_kernel
@@ -1648,7 +1648,7 @@ start_daemon() {
   mkdir -p "$data_dir"
   log "starting ${node}"
   if is_af_xdp_transport; then
-    run_in_netns "$ns" env "TRUSTIX_CPU_PROFILE_DIR=${node_profile_dir}" "TRUSTIX_TC_HOT_STATS=${hot_stats}" "TRUSTIX_NATIVE_TUNNEL_ROUTE_OFFLOAD=${TRUSTIX_NATIVE_TUNNEL_ROUTE_OFFLOAD:-1}" "TRUSTIX_NATIVE_TUNNEL_AUTO_TCP_MSS_CLAMP=${TRUSTIX_NATIVE_TUNNEL_AUTO_TCP_MSS_CLAMP:-0}" "TRUSTIX_KERNEL_DATAPATH_RX_WORKER=$(full_datapath_rx_worker_value)" "TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER=$(full_datapath_rx_worker_value)" "TRUSTIX_AF_XDP_QUEUES=${af_xdp_queues}" "TRUSTIX_XDP_MODE=${xdp_mode}" "TRUSTIX_AF_XDP_BIND_MODE=${af_xdp_bind_mode}" "TRUSTIX_AF_XDP_NEED_WAKEUP=${af_xdp_need_wakeup}" "TRUSTIX_AF_XDP_TX_BACKPRESSURE_WAIT=${af_xdp_tx_backpressure_wait}" "TRUSTIX_AF_XDP_TX_KICK_BATCH=${af_xdp_tx_kick_batch}" "TRUSTIX_AF_XDP_TX_FLUSH_INTERVAL=${af_xdp_tx_flush_interval}" "TRUSTIX_AF_XDP_TX_SOFT_KICK_BACKOFF=${af_xdp_tx_soft_kick_backoff}" "TRUSTIX_AF_XDP_TX_DEFER_FLUSH=${af_xdp_tx_defer_flush}" "TRUSTIX_AF_XDP_TX_DEFER_FLUSH_DELAY=${af_xdp_tx_defer_flush_delay}" "TRUSTIX_AF_XDP_TX_COALESCE_COPY_MODE=${af_xdp_tx_coalesce_copy_mode}" "TRUSTIX_AF_XDP_RX_BURST=${af_xdp_rx_burst}" "TRUSTIX_AF_XDP_RING_ENTRIES=${af_xdp_ring_entries}" "TRUSTIX_AF_XDP_UMEM_FRAMES=${af_xdp_umem_frames}" "TRUSTIX_AF_XDP_UMEM_FRAME_SIZE=${af_xdp_umem_frame_size}" "TRUSTIX_AF_XDP_AUTO_UMEM_JUMBO=${experimental_tcp_auto_umem_jumbo}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=${experimental_tcp_tc_tx_direct}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=${experimental_tcp_tc_tx_direct_only}" "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=$(experimental_tcp_kernel_udp_direct_only_value)" "TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM=${experimental_tcp_skip_checksum}" "TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM=$(experimental_tcp_effective_skip_outer_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC=$(experimental_tcp_route_header_kfunc_enabled && printf 1 || printf 0)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=$(experimental_tcp_route_tcp_kfunc_value)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=${experimental_tcp_route_gso_async}" "TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=${experimental_tcp_route_xmit_worker}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL=${experimental_tcp_route_xmit_worker_steal}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM=$(experimental_tcp_route_gso_pre_outer_inner_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM=$(experimental_tcp_route_gso_outer_partial_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM=${experimental_tcp_route_gso_trust_partial_inner_checksum}" "TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE=${experimental_tcp_plain_skip_sequence}" "TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY=${experimental_tcp_plain_ack_only}" "TRUSTIX_KERNEL_UDP_SESSION_BUFFER=${kernel_udp_session_buffer}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=${TRUSTIX_E2E_KERNEL_UDP_TC_TX_SECURE_DIRECT:-0}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=${kernel_udp_tc_tx_secure_direct_trust_inner_checksums}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_FIX_INNER_CHECKSUMS=$(kernel_udp_tc_tx_secure_direct_fix_inner_checksums_effective)" "TRUSTIX_TRUST_CAPTURED_CHECKSUMS=${TRUSTIX_E2E_TRUST_CAPTURED_CHECKSUMS:-${TRUSTIX_TRUST_CAPTURED_CHECKSUMS:-0}}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL=${kernel_udp_tc_tx_secure_direct_kfunc_seal}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC=${kernel_udp_tc_tx_secure_direct_skb_seal_kfunc}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_OUTER_TCP_CHECKSUM_KFUNC=${kernel_udp_tc_tx_secure_direct_outer_tcp_checksum_kfunc}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_OUTER_TCP_PARTIAL_CHECKSUM_KFUNC=${kernel_udp_tc_tx_secure_direct_outer_tcp_partial_checksum_kfunc}" "TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT=${kernel_udp_tc_rx_secure_direct}" "TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN=${kernel_udp_tc_rx_secure_direct_kfunc_open}" "TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC=${kernel_udp_tc_rx_secure_direct_skb_open_kfunc}" "TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_NO_CSUM_RESET=${kernel_udp_tc_adj_room_no_csum_reset}" "TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO=${kernel_udp_tc_adj_room_tunnel_gso}" "TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_ENCAP_L2_LEN=${kernel_udp_tc_adj_room_encap_l2_len}" "TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO=${kernel_udp_tc_direct_active_gso}" "TRUSTIX_KERNEL_UDP_SEAL_BEFORE_FRAGMENT=${TRUSTIX_E2E_KERNEL_UDP_SEAL_BEFORE_FRAGMENT:-1}" "TRUSTIX_KERNEL_UDP_XDP_OPEN=${kernel_udp_xdp_open}" "TRUSTIX_KERNEL_UDP_XDP_PASS_OPENED=${kernel_udp_xdp_pass_opened}" "TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=${kernel_udp_xdp_rx_direct}" "TRUSTIX_KERNEL_UDP_XDP_RX_SECURE_DIRECT=${kernel_udp_xdp_rx_secure_direct}" "TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX=${kernel_udp_xdp_rx_direct_ifindex}" "TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_MODE=${kernel_udp_xdp_rx_direct_mode}" "TRUSTIX_CAPTURE_FORWARDER_WORKERS=${capture_forwarder_workers}" "TRUSTIX_CAPTURE_FORWARDER_BUFFER=${capture_forwarder_buffer}" "TRUSTIX_CAPTURE_FORWARDER_BATCH=${capture_forwarder_batch}" "TRUSTIX_CAPTURE_FORWARDER_BATCH_DELAY=${capture_forwarder_batch_delay}" "TRUSTIX_DATA_SESSION_ENCRYPTED_TIXB=${data_session_encrypted_tixb}" "TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED=${data_session_rx_gso_coalesce_userspace_encrypted}" "$bin_dir/trustixd" \
+    run_in_netns "$ns" env "TRUSTIX_CPU_PROFILE_DIR=${node_profile_dir}" "TRUSTIX_TC_HOT_STATS=${hot_stats}" "TRUSTIX_NATIVE_TUNNEL_ROUTE_OFFLOAD=${TRUSTIX_NATIVE_TUNNEL_ROUTE_OFFLOAD:-1}" "TRUSTIX_NATIVE_TUNNEL_AUTO_TCP_MSS_CLAMP=${TRUSTIX_NATIVE_TUNNEL_AUTO_TCP_MSS_CLAMP:-0}" "TRUSTIX_KERNEL_DATAPATH_RX_WORKER=$(full_datapath_rx_worker_value)" "TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER=$(full_datapath_rx_worker_value)" "TRUSTIX_AF_XDP_QUEUES=${af_xdp_queues}" "TRUSTIX_XDP_MODE=${xdp_mode}" "TRUSTIX_AF_XDP_BIND_MODE=${af_xdp_bind_mode}" "TRUSTIX_AF_XDP_NEED_WAKEUP=${af_xdp_need_wakeup}" "TRUSTIX_AF_XDP_TX_BACKPRESSURE_WAIT=${af_xdp_tx_backpressure_wait}" "TRUSTIX_AF_XDP_TX_KICK_BATCH=${af_xdp_tx_kick_batch}" "TRUSTIX_AF_XDP_TX_FLUSH_INTERVAL=${af_xdp_tx_flush_interval}" "TRUSTIX_AF_XDP_TX_SOFT_KICK_BACKOFF=${af_xdp_tx_soft_kick_backoff}" "TRUSTIX_AF_XDP_TX_DEFER_FLUSH=${af_xdp_tx_defer_flush}" "TRUSTIX_AF_XDP_TX_DEFER_FLUSH_DELAY=${af_xdp_tx_defer_flush_delay}" "TRUSTIX_AF_XDP_TX_COALESCE_COPY_MODE=${af_xdp_tx_coalesce_copy_mode}" "TRUSTIX_AF_XDP_RX_BURST=${af_xdp_rx_burst}" "TRUSTIX_AF_XDP_RING_ENTRIES=${af_xdp_ring_entries}" "TRUSTIX_AF_XDP_UMEM_FRAMES=${af_xdp_umem_frames}" "TRUSTIX_AF_XDP_UMEM_FRAME_SIZE=${af_xdp_umem_frame_size}" "TRUSTIX_AF_XDP_AUTO_UMEM_JUMBO=${tix_tcp_auto_umem_jumbo}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT=${tix_tcp_tc_tx_direct}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=${tix_tcp_tc_tx_direct_only}" "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=$(tix_tcp_kernel_udp_direct_only_value)" "TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM=${tix_tcp_skip_checksum}" "TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM=$(tix_tcp_effective_skip_outer_checksum)" "TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC=$(tix_tcp_route_header_kfunc_enabled && printf 1 || printf 0)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=$(tix_tcp_route_tcp_kfunc_value)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=${tix_tcp_route_gso_async}" "TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=${tix_tcp_route_xmit_worker}" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL=${tix_tcp_route_xmit_worker_steal}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM=$(tix_tcp_route_gso_pre_outer_inner_checksum)" "TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM=$(tix_tcp_route_gso_outer_partial_checksum)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM=${tix_tcp_route_gso_trust_partial_inner_checksum}" "TRUSTIX_TIX_TCP_TX_PLAIN_SKIP_SEQUENCE=${tix_tcp_plain_skip_sequence}" "TRUSTIX_TIX_TCP_TX_PLAIN_ACK_ONLY=${tix_tcp_plain_ack_only}" "TRUSTIX_KERNEL_UDP_SESSION_BUFFER=${kernel_udp_session_buffer}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=${TRUSTIX_E2E_KERNEL_UDP_TC_TX_SECURE_DIRECT:-0}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=${kernel_udp_tc_tx_secure_direct_trust_inner_checksums}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_FIX_INNER_CHECKSUMS=$(kernel_udp_tc_tx_secure_direct_fix_inner_checksums_effective)" "TRUSTIX_TRUST_CAPTURED_CHECKSUMS=${TRUSTIX_E2E_TRUST_CAPTURED_CHECKSUMS:-${TRUSTIX_TRUST_CAPTURED_CHECKSUMS:-0}}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL=${kernel_udp_tc_tx_secure_direct_kfunc_seal}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC=${kernel_udp_tc_tx_secure_direct_skb_seal_kfunc}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_OUTER_TCP_CHECKSUM_KFUNC=${kernel_udp_tc_tx_secure_direct_outer_tcp_checksum_kfunc}" "TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_OUTER_TCP_PARTIAL_CHECKSUM_KFUNC=${kernel_udp_tc_tx_secure_direct_outer_tcp_partial_checksum_kfunc}" "TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT=${kernel_udp_tc_rx_secure_direct}" "TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN=${kernel_udp_tc_rx_secure_direct_kfunc_open}" "TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC=${kernel_udp_tc_rx_secure_direct_skb_open_kfunc}" "TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_NO_CSUM_RESET=${kernel_udp_tc_adj_room_no_csum_reset}" "TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_TUNNEL_GSO=${kernel_udp_tc_adj_room_tunnel_gso}" "TRUSTIX_KERNEL_UDP_TC_ADJ_ROOM_ENCAP_L2_LEN=${kernel_udp_tc_adj_room_encap_l2_len}" "TRUSTIX_KERNEL_UDP_TC_DIRECT_ACTIVE_GSO=${kernel_udp_tc_direct_active_gso}" "TRUSTIX_KERNEL_UDP_SEAL_BEFORE_FRAGMENT=${TRUSTIX_E2E_KERNEL_UDP_SEAL_BEFORE_FRAGMENT:-1}" "TRUSTIX_KERNEL_UDP_XDP_OPEN=${kernel_udp_xdp_open}" "TRUSTIX_KERNEL_UDP_XDP_PASS_OPENED=${kernel_udp_xdp_pass_opened}" "TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=${kernel_udp_xdp_rx_direct}" "TRUSTIX_KERNEL_UDP_XDP_RX_SECURE_DIRECT=${kernel_udp_xdp_rx_secure_direct}" "TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_IFINDEX=${kernel_udp_xdp_rx_direct_ifindex}" "TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_MODE=${kernel_udp_xdp_rx_direct_mode}" "TRUSTIX_CAPTURE_FORWARDER_WORKERS=${capture_forwarder_workers}" "TRUSTIX_CAPTURE_FORWARDER_BUFFER=${capture_forwarder_buffer}" "TRUSTIX_CAPTURE_FORWARDER_BATCH=${capture_forwarder_batch}" "TRUSTIX_CAPTURE_FORWARDER_BATCH_DELAY=${capture_forwarder_batch_delay}" "TRUSTIX_DATA_SESSION_ENCRYPTED_TIXB=${data_session_encrypted_tixb}" "TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED=${data_session_rx_gso_coalesce_userspace_encrypted}" "$bin_dir/trustixd" \
       -config "$config_path" \
       -data-dir "$data_dir" \
       -api "$api_addr" \
@@ -1845,7 +1845,7 @@ assert_data_dir_lock_rejects_duplicate() {
   log "validating ${node} data-dir lock"
   set +e
   if is_af_xdp_transport; then
-    run_in_netns "$ns" env "TRUSTIX_AF_XDP_QUEUES=${af_xdp_queues}" "TRUSTIX_XDP_MODE=${xdp_mode}" "TRUSTIX_AF_XDP_BIND_MODE=${af_xdp_bind_mode}" "TRUSTIX_AF_XDP_NEED_WAKEUP=${af_xdp_need_wakeup}" "TRUSTIX_AF_XDP_TX_BACKPRESSURE_WAIT=${af_xdp_tx_backpressure_wait}" "TRUSTIX_AF_XDP_TX_KICK_BATCH=${af_xdp_tx_kick_batch}" "TRUSTIX_AF_XDP_TX_FLUSH_INTERVAL=${af_xdp_tx_flush_interval}" "TRUSTIX_AF_XDP_RX_BURST=${af_xdp_rx_burst}" "TRUSTIX_AF_XDP_RING_ENTRIES=${af_xdp_ring_entries}" "TRUSTIX_AF_XDP_UMEM_FRAMES=${af_xdp_umem_frames}" "TRUSTIX_AF_XDP_UMEM_FRAME_SIZE=${af_xdp_umem_frame_size}" "TRUSTIX_AF_XDP_AUTO_UMEM_JUMBO=${experimental_tcp_auto_umem_jumbo}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=${experimental_tcp_tc_tx_direct}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=${experimental_tcp_tc_tx_direct_only}" "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=$(experimental_tcp_kernel_udp_direct_only_value)" "TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM=${experimental_tcp_skip_checksum}" "TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM=$(experimental_tcp_effective_skip_outer_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC=$(experimental_tcp_route_header_kfunc_enabled && printf 1 || printf 0)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=$(experimental_tcp_route_tcp_kfunc_value)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=${experimental_tcp_route_gso_async}" "TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=${experimental_tcp_route_xmit_worker}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL=${experimental_tcp_route_xmit_worker_steal}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM=$(experimental_tcp_route_gso_pre_outer_inner_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM=$(experimental_tcp_route_gso_outer_partial_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM=${experimental_tcp_route_gso_trust_partial_inner_checksum}" "TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE=${experimental_tcp_plain_skip_sequence}" "TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY=${experimental_tcp_plain_ack_only}" "TRUSTIX_KERNEL_UDP_SESSION_BUFFER=${kernel_udp_session_buffer}" "TRUSTIX_CAPTURE_FORWARDER_WORKERS=${capture_forwarder_workers}" "TRUSTIX_CAPTURE_FORWARDER_BUFFER=${capture_forwarder_buffer}" timeout 5s "$bin_dir/trustixd" \
+    run_in_netns "$ns" env "TRUSTIX_AF_XDP_QUEUES=${af_xdp_queues}" "TRUSTIX_XDP_MODE=${xdp_mode}" "TRUSTIX_AF_XDP_BIND_MODE=${af_xdp_bind_mode}" "TRUSTIX_AF_XDP_NEED_WAKEUP=${af_xdp_need_wakeup}" "TRUSTIX_AF_XDP_TX_BACKPRESSURE_WAIT=${af_xdp_tx_backpressure_wait}" "TRUSTIX_AF_XDP_TX_KICK_BATCH=${af_xdp_tx_kick_batch}" "TRUSTIX_AF_XDP_TX_FLUSH_INTERVAL=${af_xdp_tx_flush_interval}" "TRUSTIX_AF_XDP_RX_BURST=${af_xdp_rx_burst}" "TRUSTIX_AF_XDP_RING_ENTRIES=${af_xdp_ring_entries}" "TRUSTIX_AF_XDP_UMEM_FRAMES=${af_xdp_umem_frames}" "TRUSTIX_AF_XDP_UMEM_FRAME_SIZE=${af_xdp_umem_frame_size}" "TRUSTIX_AF_XDP_AUTO_UMEM_JUMBO=${tix_tcp_auto_umem_jumbo}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT=${tix_tcp_tc_tx_direct}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=${tix_tcp_tc_tx_direct_only}" "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=$(tix_tcp_kernel_udp_direct_only_value)" "TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM=${tix_tcp_skip_checksum}" "TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM=$(tix_tcp_effective_skip_outer_checksum)" "TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC=$(tix_tcp_route_header_kfunc_enabled && printf 1 || printf 0)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=$(tix_tcp_route_tcp_kfunc_value)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=${tix_tcp_route_gso_async}" "TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=${tix_tcp_route_xmit_worker}" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL=${tix_tcp_route_xmit_worker_steal}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM=$(tix_tcp_route_gso_pre_outer_inner_checksum)" "TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM=$(tix_tcp_route_gso_outer_partial_checksum)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM=${tix_tcp_route_gso_trust_partial_inner_checksum}" "TRUSTIX_TIX_TCP_TX_PLAIN_SKIP_SEQUENCE=${tix_tcp_plain_skip_sequence}" "TRUSTIX_TIX_TCP_TX_PLAIN_ACK_ONLY=${tix_tcp_plain_ack_only}" "TRUSTIX_KERNEL_UDP_SESSION_BUFFER=${kernel_udp_session_buffer}" "TRUSTIX_CAPTURE_FORWARDER_WORKERS=${capture_forwarder_workers}" "TRUSTIX_CAPTURE_FORWARDER_BUFFER=${capture_forwarder_buffer}" timeout 5s "$bin_dir/trustixd" \
       -config "$config_path" \
       -data-dir "$data_dir" \
       -api "$api_addr" \
@@ -1872,8 +1872,8 @@ assert_data_dir_lock_rejects_duplicate() {
   fi
 }
 
-assert_experimental_tcp_kernel_crypto_rejects() {
-  if [[ "$transport" != "experimental_tcp" ]]; then
+assert_tix_tcp_kernel_crypto_rejects() {
+  if [[ "$transport" != "tix_tcp" ]]; then
     return 0
   fi
   if is_plaintext_encryption "$(effective_transport_encryption)"; then
@@ -1897,9 +1897,9 @@ assert_experimental_tcp_kernel_crypto_rejects() {
 
   sed 's/crypto_placement: userspace/crypto_placement: kernel/' "$config_path" >"$kernel_config"
   mkdir -p "$data_dir"
-  log "validating ${node} rejects unavailable experimental_tcp kernel crypto"
+  log "validating ${node} rejects unavailable tix_tcp kernel crypto"
   set +e
-  run_in_netns "$ns" env "TRUSTIX_AF_XDP_QUEUES=${af_xdp_queues}" "TRUSTIX_XDP_MODE=${xdp_mode}" "TRUSTIX_AF_XDP_BIND_MODE=${af_xdp_bind_mode}" "TRUSTIX_AF_XDP_NEED_WAKEUP=${af_xdp_need_wakeup}" "TRUSTIX_AF_XDP_TX_BACKPRESSURE_WAIT=${af_xdp_tx_backpressure_wait}" "TRUSTIX_AF_XDP_TX_KICK_BATCH=${af_xdp_tx_kick_batch}" "TRUSTIX_AF_XDP_TX_FLUSH_INTERVAL=${af_xdp_tx_flush_interval}" "TRUSTIX_AF_XDP_RX_BURST=${af_xdp_rx_burst}" "TRUSTIX_AF_XDP_RING_ENTRIES=${af_xdp_ring_entries}" "TRUSTIX_AF_XDP_UMEM_FRAMES=${af_xdp_umem_frames}" "TRUSTIX_AF_XDP_UMEM_FRAME_SIZE=${af_xdp_umem_frame_size}" "TRUSTIX_AF_XDP_AUTO_UMEM_JUMBO=${experimental_tcp_auto_umem_jumbo}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=${experimental_tcp_tc_tx_direct}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=${experimental_tcp_tc_tx_direct_only}" "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=$(experimental_tcp_kernel_udp_direct_only_value)" "TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM=${experimental_tcp_skip_checksum}" "TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM=$(experimental_tcp_effective_skip_outer_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC=$(experimental_tcp_route_header_kfunc_enabled && printf 1 || printf 0)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=$(experimental_tcp_route_tcp_kfunc_value)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=${experimental_tcp_route_gso_async}" "TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=${experimental_tcp_route_xmit_worker}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL=${experimental_tcp_route_xmit_worker_steal}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM=$(experimental_tcp_route_gso_pre_outer_inner_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM=$(experimental_tcp_route_gso_outer_partial_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM=${experimental_tcp_route_gso_trust_partial_inner_checksum}" "TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE=${experimental_tcp_plain_skip_sequence}" "TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY=${experimental_tcp_plain_ack_only}" "TRUSTIX_KERNEL_UDP_SESSION_BUFFER=${kernel_udp_session_buffer}" "TRUSTIX_CAPTURE_FORWARDER_WORKERS=${capture_forwarder_workers}" "TRUSTIX_CAPTURE_FORWARDER_BUFFER=${capture_forwarder_buffer}" timeout 8s "$bin_dir/trustixd" \
+  run_in_netns "$ns" env "TRUSTIX_AF_XDP_QUEUES=${af_xdp_queues}" "TRUSTIX_XDP_MODE=${xdp_mode}" "TRUSTIX_AF_XDP_BIND_MODE=${af_xdp_bind_mode}" "TRUSTIX_AF_XDP_NEED_WAKEUP=${af_xdp_need_wakeup}" "TRUSTIX_AF_XDP_TX_BACKPRESSURE_WAIT=${af_xdp_tx_backpressure_wait}" "TRUSTIX_AF_XDP_TX_KICK_BATCH=${af_xdp_tx_kick_batch}" "TRUSTIX_AF_XDP_TX_FLUSH_INTERVAL=${af_xdp_tx_flush_interval}" "TRUSTIX_AF_XDP_RX_BURST=${af_xdp_rx_burst}" "TRUSTIX_AF_XDP_RING_ENTRIES=${af_xdp_ring_entries}" "TRUSTIX_AF_XDP_UMEM_FRAMES=${af_xdp_umem_frames}" "TRUSTIX_AF_XDP_UMEM_FRAME_SIZE=${af_xdp_umem_frame_size}" "TRUSTIX_AF_XDP_AUTO_UMEM_JUMBO=${tix_tcp_auto_umem_jumbo}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT=${tix_tcp_tc_tx_direct}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=${tix_tcp_tc_tx_direct_only}" "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=$(tix_tcp_kernel_udp_direct_only_value)" "TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM=${tix_tcp_skip_checksum}" "TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM=$(tix_tcp_effective_skip_outer_checksum)" "TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC=$(tix_tcp_route_header_kfunc_enabled && printf 1 || printf 0)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=$(tix_tcp_route_tcp_kfunc_value)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=${tix_tcp_route_gso_async}" "TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=${tix_tcp_route_xmit_worker}" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL=${tix_tcp_route_xmit_worker_steal}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM=$(tix_tcp_route_gso_pre_outer_inner_checksum)" "TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM=$(tix_tcp_route_gso_outer_partial_checksum)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM=${tix_tcp_route_gso_trust_partial_inner_checksum}" "TRUSTIX_TIX_TCP_TX_PLAIN_SKIP_SEQUENCE=${tix_tcp_plain_skip_sequence}" "TRUSTIX_TIX_TCP_TX_PLAIN_ACK_ONLY=${tix_tcp_plain_ack_only}" "TRUSTIX_KERNEL_UDP_SESSION_BUFFER=${kernel_udp_session_buffer}" "TRUSTIX_CAPTURE_FORWARDER_WORKERS=${capture_forwarder_workers}" "TRUSTIX_CAPTURE_FORWARDER_BUFFER=${capture_forwarder_buffer}" timeout 8s "$bin_dir/trustixd" \
     -config "$kernel_config" \
     -data-dir "$data_dir" \
     -api "$api_addr" \
@@ -1948,7 +1948,7 @@ run_dataplane_cleanup() {
 
   log "cleaning ${node} dataplane"
   if is_af_xdp_transport; then
-    run_in_netns "$ns" env "TRUSTIX_AF_XDP_QUEUES=${af_xdp_queues}" "TRUSTIX_XDP_MODE=${xdp_mode}" "TRUSTIX_AF_XDP_BIND_MODE=${af_xdp_bind_mode}" "TRUSTIX_AF_XDP_NEED_WAKEUP=${af_xdp_need_wakeup}" "TRUSTIX_AF_XDP_TX_BACKPRESSURE_WAIT=${af_xdp_tx_backpressure_wait}" "TRUSTIX_AF_XDP_TX_KICK_BATCH=${af_xdp_tx_kick_batch}" "TRUSTIX_AF_XDP_TX_FLUSH_INTERVAL=${af_xdp_tx_flush_interval}" "TRUSTIX_AF_XDP_RX_BURST=${af_xdp_rx_burst}" "TRUSTIX_AF_XDP_RING_ENTRIES=${af_xdp_ring_entries}" "TRUSTIX_AF_XDP_UMEM_FRAMES=${af_xdp_umem_frames}" "TRUSTIX_AF_XDP_UMEM_FRAME_SIZE=${af_xdp_umem_frame_size}" "TRUSTIX_AF_XDP_AUTO_UMEM_JUMBO=${experimental_tcp_auto_umem_jumbo}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=${experimental_tcp_tc_tx_direct}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=${experimental_tcp_tc_tx_direct_only}" "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=$(experimental_tcp_kernel_udp_direct_only_value)" "TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM=${experimental_tcp_skip_checksum}" "TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM=$(experimental_tcp_effective_skip_outer_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC=$(experimental_tcp_route_header_kfunc_enabled && printf 1 || printf 0)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=$(experimental_tcp_route_tcp_kfunc_value)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=${experimental_tcp_route_gso_async}" "TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=${experimental_tcp_route_xmit_worker}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL=${experimental_tcp_route_xmit_worker_steal}" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM=$(experimental_tcp_route_gso_pre_outer_inner_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM=$(experimental_tcp_route_gso_outer_partial_checksum)" "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM=${experimental_tcp_route_gso_trust_partial_inner_checksum}" "TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_SKIP_SEQUENCE=${experimental_tcp_plain_skip_sequence}" "TRUSTIX_EXPERIMENTAL_TCP_TX_PLAIN_ACK_ONLY=${experimental_tcp_plain_ack_only}" "TRUSTIX_KERNEL_UDP_SESSION_BUFFER=${kernel_udp_session_buffer}" "TRUSTIX_CAPTURE_FORWARDER_WORKERS=${capture_forwarder_workers}" "TRUSTIX_CAPTURE_FORWARDER_BUFFER=${capture_forwarder_buffer}" "$bin_dir/trustixd" \
+    run_in_netns "$ns" env "TRUSTIX_AF_XDP_QUEUES=${af_xdp_queues}" "TRUSTIX_XDP_MODE=${xdp_mode}" "TRUSTIX_AF_XDP_BIND_MODE=${af_xdp_bind_mode}" "TRUSTIX_AF_XDP_NEED_WAKEUP=${af_xdp_need_wakeup}" "TRUSTIX_AF_XDP_TX_BACKPRESSURE_WAIT=${af_xdp_tx_backpressure_wait}" "TRUSTIX_AF_XDP_TX_KICK_BATCH=${af_xdp_tx_kick_batch}" "TRUSTIX_AF_XDP_TX_FLUSH_INTERVAL=${af_xdp_tx_flush_interval}" "TRUSTIX_AF_XDP_RX_BURST=${af_xdp_rx_burst}" "TRUSTIX_AF_XDP_RING_ENTRIES=${af_xdp_ring_entries}" "TRUSTIX_AF_XDP_UMEM_FRAMES=${af_xdp_umem_frames}" "TRUSTIX_AF_XDP_UMEM_FRAME_SIZE=${af_xdp_umem_frame_size}" "TRUSTIX_AF_XDP_AUTO_UMEM_JUMBO=${tix_tcp_auto_umem_jumbo}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT=${tix_tcp_tc_tx_direct}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=${tix_tcp_tc_tx_direct_only}" "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=$(tix_tcp_kernel_udp_direct_only_value)" "TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM=${tix_tcp_skip_checksum}" "TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM=$(tix_tcp_effective_skip_outer_checksum)" "TRUSTIX_TIX_TCP_TC_TX_PUSH_ROUTE_TCP_HEADER_KFUNC=$(tix_tcp_route_header_kfunc_enabled && printf 1 || printf 0)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=$(tix_tcp_route_tcp_kfunc_value)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=${tix_tcp_route_gso_async}" "TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=${tix_tcp_route_xmit_worker}" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_STEAL=${tix_tcp_route_xmit_worker_steal}" "TRUSTIX_TIX_TCP_TC_TX_DIRECT_PRE_OUTER_INNER_CHECKSUM=$(tix_tcp_route_gso_pre_outer_inner_checksum)" "TRUSTIX_TIX_TCP_TC_TX_OUTER_TCP_HEADER_KFUNC_PARTIAL_CSUM=$(tix_tcp_route_gso_outer_partial_checksum)" "TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_TRUST_PARTIAL_INNER_CHECKSUM=${tix_tcp_route_gso_trust_partial_inner_checksum}" "TRUSTIX_TIX_TCP_TX_PLAIN_SKIP_SEQUENCE=${tix_tcp_plain_skip_sequence}" "TRUSTIX_TIX_TCP_TX_PLAIN_ACK_ONLY=${tix_tcp_plain_ack_only}" "TRUSTIX_KERNEL_UDP_SESSION_BUFFER=${kernel_udp_session_buffer}" "TRUSTIX_CAPTURE_FORWARDER_WORKERS=${capture_forwarder_workers}" "TRUSTIX_CAPTURE_FORWARDER_BUFFER=${capture_forwarder_buffer}" "$bin_dir/trustixd" \
       -config "$config_path" \
       -data-dir "$data_dir" \
       -api "$api_addr" \
@@ -2122,7 +2122,7 @@ import json
 import sys
 
 a_file, b_file, transport = sys.argv[1:4]
-if transport not in {"udp", "kernel_udp", "gre", "ipip", "vxlan", "experimental_tcp"}:
+if transport not in {"udp", "kernel_udp", "gre", "ipip", "vxlan", "tix_tcp"}:
     raise SystemExit(0)
 
 def counters(path):
@@ -2821,8 +2821,8 @@ assert_xdp_kernel_crypto_open_health() {
     budget=64
   fi
 
-  if [[ "$transport" == "experimental_tcp" && "$serious" == "0" && "$open_errors" -le "$replay_drops" && "$replay_drops" -le "$budget" ]]; then
-    log "${node} experimental_tcp XDP kernel crypto saw ${replay_drops} replay drops within budget ${budget}; treating as duplicate-carrier noise"
+  if [[ "$transport" == "tix_tcp" && "$serious" == "0" && "$open_errors" -le "$replay_drops" && "$replay_drops" -le "$budget" ]]; then
+    log "${node} tix_tcp XDP kernel crypto saw ${replay_drops} replay drops within budget ${budget}; treating as duplicate-carrier noise"
     return 0
   fi
 
@@ -2859,8 +2859,8 @@ assert_datapath_module_param_positive() {
   fi
 }
 
-assert_experimental_tcp_route_xmit_worker_hit() {
-  experimental_tcp_route_xmit_worker_enabled || return 0
+assert_tix_tcp_route_xmit_worker_hit() {
+  tix_tcp_route_xmit_worker_enabled || return 0
   assert_datapath_module_param_positive "route_tcp_xmit_worker_enqueued"
   assert_datapath_module_param_positive "route_tcp_xmit_worker_xmit_ok"
 }
@@ -2910,7 +2910,7 @@ def bpf_counter(payload, key):
 
 datapath = load_json(datapath_path)
 bpf = load_json(bpf_path)
-selected = datapath.get("experimental_tcp") if transport == "experimental_tcp" else datapath.get("kernel_udp")
+selected = datapath.get("tix_tcp") if transport == "tix_tcp" else datapath.get("kernel_udp")
 if not isinstance(selected, dict):
     selected = datapath
 provider_stats = selected.get("provider_stats") if isinstance(selected, dict) else None
@@ -2922,9 +2922,9 @@ device_tx = datapath_counter(provider_stats, "kernel_crypto_device_seal_successe
 frame_tx = datapath_counter(provider_stats, "kernel_crypto_frame_seal_successes")
 frame_rx = datapath_counter(provider_stats, "kernel_crypto_frame_open_successes")
 xdp_open = datapath_counter(provider_stats, "xdp_kernel_crypto_open_successes")
-experimental_tx = bpf_counter(bpf, "experimental_tcp_tx_frames")
+experimental_tx = bpf_counter(bpf, "tix_tcp_tx_frames")
 if expect_tc_direct == "1" and tc_direct > 0:
-    if transport == "experimental_tcp" and xdp_open <= 0:
+    if transport == "tix_tcp" and xdp_open <= 0:
         fail("TC secure-direct TX succeeded but XDP kernel open did not")
     sys.exit(0)
 if af_xdp_tx > 0:
@@ -2932,11 +2932,11 @@ if af_xdp_tx > 0:
         fail("AF_XDP TX kernel_crypto sealed packets but XDP kernel open did not")
     sys.exit(0)
 if device_tx > 0 and frame_tx > 0:
-    if transport == "experimental_tcp":
+    if transport == "tix_tcp":
         if xdp_open <= 0:
             fail("kernel device crypto sealed packets but XDP kernel open did not")
         if experimental_tx <= 0:
-            fail("kernel device crypto sealed packets but experimental_tcp TX frames stayed zero")
+            fail("kernel device crypto sealed packets but tix_tcp TX frames stayed zero")
     elif frame_rx <= 0:
         fail("kernel device crypto sealed packets but kernel frame open stayed zero")
     sys.exit(0)
@@ -2959,8 +2959,8 @@ assert_nat_reverse_status() {
     tcp)
       reverse_endpoint="hk-tcp"
       ;;
-    experimental_tcp)
-      reverse_endpoint="hk-experimental-tcp"
+    tix_tcp)
+      reverse_endpoint="hk-tix-tcp"
       ;;
     kernel_udp)
       reverse_transport="udp"
@@ -3312,8 +3312,8 @@ maybe_prepare_kernel_module() {
   if [[ "$kernel_module" != "1" ]]; then
     return 0
   fi
-  if [[ "$transport" != "experimental_tcp" && "$transport" != "kernel_udp" ]]; then
-    die "TRUSTIX_E2E_KERNEL_MODULE=1 requires TRUSTIX_E2E_TRANSPORT=experimental_tcp or kernel_udp"
+  if [[ "$transport" != "tix_tcp" && "$transport" != "kernel_udp" ]]; then
+    die "TRUSTIX_E2E_KERNEL_MODULE=1 requires TRUSTIX_E2E_TRANSPORT=tix_tcp or kernel_udp"
   fi
   [[ -f "$kernel_script" ]] || die "TrustIX kernel module smoke script not found: $kernel_script"
 
@@ -3334,8 +3334,8 @@ maybe_prepare_kernel_module() {
       TRUSTIX_KERNEL_EXPERIMENTAL_VAES_KFUNC="$vaes_kfunc" \
       TRUSTIX_KERNEL_ALLOW_UNSUPPORTED_KERNEL="${TRUSTIX_E2E_KERNEL_ALLOW_UNSUPPORTED_KERNEL:-1}" \
       TRUSTIX_KERNEL_EXTRA_MODULE_PARAMS="$extra_module_params" \
-      TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM=0 \
-      TRUSTIX_EXPERIMENTAL_TCP_SKIP_CHECKSUM=0 \
+      TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM=0 \
+      TRUSTIX_TIX_TCP_SKIP_CHECKSUM=0 \
       bash "$kernel_script"
     return 0
   fi
@@ -3347,8 +3347,8 @@ maybe_prepare_kernel_module() {
     TRUSTIX_KERNEL_EXPERIMENTAL_VAES_KFUNC="$vaes_kfunc" \
     TRUSTIX_KERNEL_ALLOW_UNSUPPORTED_KERNEL="${TRUSTIX_E2E_KERNEL_ALLOW_UNSUPPORTED_KERNEL:-1}" \
     TRUSTIX_KERNEL_EXTRA_MODULE_PARAMS="$extra_module_params" \
-    TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM=0 \
-    TRUSTIX_EXPERIMENTAL_TCP_SKIP_CHECKSUM=0 \
+    TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM=0 \
+    TRUSTIX_TIX_TCP_SKIP_CHECKSUM=0 \
     bash "$kernel_script"
 }
 
@@ -3387,13 +3387,13 @@ maybe_prepare_full_datapath_module() {
     bash "$full_datapath_script"
 }
 
-run_experimental_tcp_negative_probes() {
-  if [[ "$transport" != "experimental_tcp" ]]; then
+run_tix_tcp_negative_probes() {
+  if [[ "$transport" != "tix_tcp" ]]; then
     return 0
   fi
   need_cmd perl
-  log "injecting experimental_tcp unauthorized-port and bad-checksum probes"
-  run_in_netns "$ns_ix_a" perl - "$underlay_ip_a" "$underlay_ip_b" "$exp_tcp_b_port" <<'PL'
+  log "injecting tix_tcp unauthorized-port and bad-checksum probes"
+  run_in_netns "$ns_ix_a" perl - "$underlay_ip_a" "$underlay_ip_b" "$tix_tcp_b_port" <<'PL'
 use strict;
 use warnings;
 use Socket qw(AF_INET SOCK_RAW IPPROTO_RAW IPPROTO_TCP IPPROTO_IP sockaddr_in inet_aton);
@@ -3460,13 +3460,13 @@ validate_observability() {
   log "validating dataplane counters and capture output"
   local expected_crypto="userspace"
   local expect_tc_secure_direct=0
-  assert_experimental_tcp_route_xmit_worker_hit
+  assert_tix_tcp_route_xmit_worker_hit
   if [[ "$crypto_placement" == "kernel" ]]; then
     expected_crypto="kernel"
   elif [[ "$crypto_placement" == "auto" ]] && kernel_provider_expected; then
     expected_crypto="kernel"
   fi
-  if [[ "$expected_crypto" == "kernel" ]] && truthy "${TRUSTIX_E2E_KERNEL_UDP_TC_TX_SECURE_DIRECT:-0}" && [[ "$transport" == "experimental_tcp" || "$transport" == "kernel_udp" ]]; then
+  if [[ "$expected_crypto" == "kernel" ]] && truthy "${TRUSTIX_E2E_KERNEL_UDP_TC_TX_SECURE_DIRECT:-0}" && [[ "$transport" == "tix_tcp" || "$transport" == "kernel_udp" ]]; then
     expect_tc_secure_direct=1
   fi
   if native_tunnel_plaintext_route_offload_enabled; then
@@ -3538,15 +3538,15 @@ validate_observability() {
   fi
   route_table_covers_management_vip "$workdir/ix-a-routes.json" "10.0.1.1" "ix-b" || die "ix-a routes do not cover ix-b management VIP"
   route_table_covers_management_vip "$workdir/ix-b-routes.json" "10.0.0.1" "ix-a" || die "ix-b routes do not cover ix-a management VIP"
-  if [[ "$transport" == "experimental_tcp" ]]; then
+  if [[ "$transport" == "tix_tcp" ]]; then
     for node in ix-a ix-b; do
-      grep -q '"provider": "af_xdp"' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp provider is not af_xdp"
-      grep -q '"fast_path": true' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp fast_path is not true"
-      grep -q '"reinject": true' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp reinject is not true"
+      grep -q '"provider": "af_xdp"' "$workdir/${node}-datapath.json" || die "${node} tix_tcp provider is not af_xdp"
+      grep -q '"fast_path": true' "$workdir/${node}-datapath.json" || die "${node} tix_tcp fast_path is not true"
+      grep -q '"reinject": true' "$workdir/${node}-datapath.json" || die "${node} tix_tcp reinject is not true"
       grep -q '"raw_socket_fallback": false' "$workdir/${node}-datapath.json" || die "${node} raw socket fallback is enabled"
-      grep -q '"xdp_attach_mode":' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp status has no xdp_attach_mode"
-      grep -q '"af_xdp_bind_mode":' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp status has no af_xdp_bind_mode"
-      grep -q '"zerocopy_enabled":' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp status has no zerocopy_enabled"
+      grep -q '"xdp_attach_mode":' "$workdir/${node}-datapath.json" || die "${node} tix_tcp status has no xdp_attach_mode"
+      grep -q '"af_xdp_bind_mode":' "$workdir/${node}-datapath.json" || die "${node} tix_tcp status has no af_xdp_bind_mode"
+      grep -q '"zerocopy_enabled":' "$workdir/${node}-datapath.json" || die "${node} tix_tcp status has no zerocopy_enabled"
       assert_datapath_any_counter_positive "$workdir/${node}-datapath.json" "xdp_attach_native" "xdp_attach_skb"
       assert_datapath_any_counter_positive "$workdir/${node}-datapath.json" "af_xdp_bind_zerocopy" "af_xdp_bind_copy"
       if [[ "$expected_crypto" == "kernel" ]]; then
@@ -3629,35 +3629,35 @@ validate_observability() {
           assert_datapath_counter_positive "$workdir/${node}-datapath.json" "tx_umem_direct_build_frames"
         fi
       fi
-      grep -q '"name": "experimental_tcp"' "$workdir/${node}-doctor.json" || die "${node} doctor has no experimental_tcp check"
+      grep -q '"name": "tix_tcp"' "$workdir/${node}-doctor.json" || die "${node} doctor has no tix_tcp check"
       grep -q 'selftest_attempted=' "$workdir/${node}-doctor.json" || die "${node} doctor has no kernel crypto selftest state"
       grep -q 'crypto_map_key_size=16' "$workdir/${node}-doctor.json" || die "${node} doctor has no kernel crypto map schema detail"
-      assert_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_allowed_ports"
+      assert_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_allowed_ports"
       assert_datapath_counter_positive "$workdir/${node}-datapath.json" "umem_bytes_total"
       if ! kernel_plaintext_direct_fastpath_enabled; then
         assert_datapath_counter_positive "$workdir/${node}-datapath.json" "rx_frames"
       fi
       if [[ "$node" == "ix-b" ]]; then
-        assert_hot_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_xdp_unauthorized_drops"
-        if [[ "$experimental_tcp_skip_checksum" == "1" ]]; then
+        assert_hot_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_xdp_unauthorized_drops"
+        if [[ "$tix_tcp_skip_checksum" == "1" ]]; then
           assert_datapath_counter_positive "$workdir/${node}-datapath.json" "skip_tcp_checksum"
           if [[ "$expected_crypto" == "kernel" ]]; then
-            assert_hot_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_xdp_kernel_crypto_tcp_checksum_skipped"
+            assert_hot_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_xdp_kernel_crypto_tcp_checksum_skipped"
           fi
         else
-          assert_hot_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_rx_checksum_errors"
+          assert_hot_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_rx_checksum_errors"
           grep -q '"CHECKSUM_ERROR":' "$workdir/${node}-datapath.json" || die "${node} datapath has no CHECKSUM_ERROR drop reason"
         fi
       fi
       if [[ "$expect_tc_secure_direct" == "1" ]]; then
-        assert_datapath_or_hot_bpf_counter_positive "$workdir/${node}-datapath.json" "tx_umem_direct_build_frames" "$workdir/${node}-bpf.json" "tc_kernel_udp_tx_secure_direct_packets" "experimental_tcp_tx_frames"
+        assert_datapath_or_hot_bpf_counter_positive "$workdir/${node}-datapath.json" "tx_umem_direct_build_frames" "$workdir/${node}-bpf.json" "tc_kernel_udp_tx_secure_direct_packets" "tix_tcp_tx_frames"
       elif kernel_plaintext_direct_fastpath_enabled; then
-        assert_datapath_or_hot_bpf_counter_positive "$workdir/${node}-datapath.json" "tx_umem_direct_build_frames" "$workdir/${node}-bpf.json" "tc_kernel_udp_tx_direct_packets" "experimental_tcp_tx_frames"
+        assert_datapath_or_hot_bpf_counter_positive "$workdir/${node}-datapath.json" "tx_umem_direct_build_frames" "$workdir/${node}-bpf.json" "tc_kernel_udp_tx_direct_packets" "tix_tcp_tx_frames"
       else
         assert_datapath_counter_positive "$workdir/${node}-datapath.json" "tx_umem_direct_build_frames"
       fi
       if kernel_plaintext_direct_fastpath_enabled; then
-        assert_datapath_or_hot_bpf_counter_positive "$workdir/${node}-datapath.json" "rx_frames" "$workdir/${node}-bpf.json" "tc_kernel_udp_rx_direct_packets" "experimental_tcp_rx_frames"
+        assert_datapath_or_hot_bpf_counter_positive "$workdir/${node}-datapath.json" "rx_frames" "$workdir/${node}-bpf.json" "tc_kernel_udp_rx_direct_packets" "tix_tcp_rx_frames"
       else
         assert_datapath_counter_positive "$workdir/${node}-datapath.json" "rx_frames"
         assert_datapath_counter_positive "$workdir/${node}-datapath.json" "rx_umem_direct_frames"
@@ -3804,18 +3804,18 @@ fi
 if is_af_xdp_transport; then
   log "af_xdp tuning: queues=${af_xdp_queues} need_wakeup=${af_xdp_need_wakeup} tx_backpressure=${af_xdp_tx_backpressure_wait} tx_kick_batch=${af_xdp_tx_kick_batch} tx_flush_interval=${af_xdp_tx_flush_interval} tx_soft_kick_backoff=${af_xdp_tx_soft_kick_backoff} tx_defer_flush=${af_xdp_tx_defer_flush}/${af_xdp_tx_defer_flush_delay} tx_coalesce_copy=${af_xdp_tx_coalesce_copy_mode} rx_burst=${af_xdp_rx_burst} ring=${af_xdp_ring_entries} umem=${af_xdp_umem_frames}x${af_xdp_umem_frame_size} encrypted_tixb=${data_session_encrypted_tixb} rx_gso_userspace_encrypted=${data_session_rx_gso_coalesce_userspace_encrypted}"
 fi
-if experimental_tcp_route_gso_async_enabled; then
-  log "experimental_tcp route-GSO async tuning: limit=${experimental_tcp_route_gso_async_limit} stream=${experimental_tcp_route_gso_async_stream}/${experimental_tcp_route_gso_async_stream_direct_build}/${experimental_tcp_route_gso_async_stream_outer_gso}/${experimental_tcp_route_gso_async_stream_max_frames} trust_partial_inner_checksum=${experimental_tcp_route_gso_trust_partial_inner_checksum} plain_skip_sequence=${experimental_tcp_plain_skip_sequence} plain_ack_only=${experimental_tcp_plain_ack_only}"
+if tix_tcp_route_gso_async_enabled; then
+  log "tix_tcp route-GSO async tuning: limit=${tix_tcp_route_gso_async_limit} stream=${tix_tcp_route_gso_async_stream}/${tix_tcp_route_gso_async_stream_direct_build}/${tix_tcp_route_gso_async_stream_outer_gso}/${tix_tcp_route_gso_async_stream_max_frames} trust_partial_inner_checksum=${tix_tcp_route_gso_trust_partial_inner_checksum} plain_skip_sequence=${tix_tcp_plain_skip_sequence} plain_ack_only=${tix_tcp_plain_ack_only}"
 fi
-if experimental_tcp_route_gso_sync_enabled; then
-  log "experimental_tcp route-GSO sync tuning: trust_partial_inner_checksum=${experimental_tcp_route_gso_trust_partial_inner_checksum} plain_skip_sequence=${experimental_tcp_plain_skip_sequence} plain_ack_only=${experimental_tcp_plain_ack_only}"
+if tix_tcp_route_gso_sync_enabled; then
+  log "tix_tcp route-GSO sync tuning: trust_partial_inner_checksum=${tix_tcp_route_gso_trust_partial_inner_checksum} plain_skip_sequence=${tix_tcp_plain_skip_sequence} plain_ack_only=${tix_tcp_plain_ack_only}"
 fi
 if kernel_udp_secure_direct_enabled; then
   log "kernel_udp secure-direct tuning: disable_veth_offloads=${disable_veth_offloads} effective=$(effective_disable_veth_offloads && printf 1 || printf 0) vaes_kfunc=${kernel_experimental_vaes_kfunc} effective=$(effective_kernel_experimental_vaes_kfunc && printf 1 || printf 0) kfunc_seal=${kernel_udp_tc_tx_secure_direct_kfunc_seal} skb_seal=${kernel_udp_tc_tx_secure_direct_skb_seal_kfunc} outer_tcp_checksum_kfunc=${kernel_udp_tc_tx_secure_direct_outer_tcp_checksum_kfunc} outer_tcp_partial_checksum_kfunc=${kernel_udp_tc_tx_secure_direct_outer_tcp_partial_checksum_kfunc} kfunc_open=${kernel_udp_tc_rx_secure_direct_kfunc_open} skb_open=${kernel_udp_tc_rx_secure_direct_skb_open_kfunc} trust_inner_checksums=${kernel_udp_tc_tx_secure_direct_trust_inner_checksums} fix_inner_checksums=$(kernel_udp_tc_tx_secure_direct_fix_inner_checksums_effective)"
 fi
   case "$transport" in
-    udp|tcp|quic|websocket|http_connect|experimental_tcp|kernel_udp|gre|ipip|vxlan) ;;
-    *) die "TRUSTIX_E2E_TRANSPORT must be udp, tcp, quic, websocket, http_connect, experimental_tcp, kernel_udp, gre, ipip, or vxlan" ;;
+    udp|tcp|quic|websocket|http_connect|tix_tcp|kernel_udp|gre|ipip|vxlan) ;;
+    *) die "TRUSTIX_E2E_TRANSPORT must be udp, tcp, quic, websocket, http_connect, tix_tcp, kernel_udp, gre, ipip, or vxlan" ;;
   esac
   case "$lan_mode" in
     routed|nat) ;;
@@ -3842,8 +3842,8 @@ fi
   esac
   if [[ "$nat_reverse" == "1" ]]; then
     case "$transport" in
-      udp|tcp|kernel_udp|experimental_tcp) ;;
-      *) die "TRUSTIX_E2E_NAT_REVERSE=1 supports TRUSTIX_E2E_TRANSPORT=udp, tcp, kernel_udp, or experimental_tcp" ;;
+      udp|tcp|kernel_udp|tix_tcp) ;;
+      *) die "TRUSTIX_E2E_NAT_REVERSE=1 supports TRUSTIX_E2E_TRANSPORT=udp, tcp, kernel_udp, or tix_tcp" ;;
     esac
   fi
   if [[ "$nat_reverse" == "1" && "$session_pool_size" != "0" && "$session_pool_size" != "1" ]]; then
@@ -4007,42 +4007,42 @@ fi
   [[ "$af_xdp_umem_frames" =~ ^[1-9][0-9]*$ ]] || die "TRUSTIX_E2E_AF_XDP_UMEM_FRAMES must be a positive integer"
   if [[ "$af_xdp_umem_frame_size" == "auto" ]]; then
     af_xdp_umem_frame_size=2048
-    if [[ "$transport" == "experimental_tcp" ]] && truthy "$experimental_tcp_auto_umem_jumbo"; then
+    if [[ "$transport" == "tix_tcp" ]] && truthy "$tix_tcp_auto_umem_jumbo"; then
       af_xdp_umem_frame_size=4096
     fi
   fi
   [[ "$af_xdp_umem_frame_size" =~ ^[1-9][0-9]*$ ]] || die "TRUSTIX_E2E_AF_XDP_UMEM_FRAME_SIZE must be auto or a positive integer"
-  case "$experimental_tcp_tc_tx_direct" in
+  case "$tix_tcp_tc_tx_direct" in
     ""|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT must be empty or 0/1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT must be empty or 0/1" ;;
   esac
-  case "$experimental_tcp_tc_tx_direct_only" in
+  case "$tix_tcp_tc_tx_direct_only" in
     ""|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY must be empty or 0/1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT_ONLY must be empty or 0/1" ;;
   esac
-  case "$experimental_tcp_route_gso_sync" in
+  case "$tix_tcp_route_gso_sync" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_SYNC must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_SYNC must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_route_gso_async" in
+  case "$tix_tcp_route_gso_async" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_route_gso_async_crash_risk_ack" in
+  case "$tix_tcp_route_gso_async_crash_risk_ack" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_CRASH_RISK_ACK must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_CRASH_RISK_ACK must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_route_gso_async_dev_xmit" in
+  case "$tix_tcp_route_gso_async_dev_xmit" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_DEV_XMIT must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_DEV_XMIT must be 0 or 1" ;;
   esac
-  if experimental_tcp_route_gso_async_enabled && ! truthy "$experimental_tcp_route_gso_async_dev_xmit"; then
-    die "route-GSO async requires TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_DEV_XMIT=1 for the validated clone-worker profile"
+  if tix_tcp_route_gso_async_enabled && ! truthy "$tix_tcp_route_gso_async_dev_xmit"; then
+    die "route-GSO async requires TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_DEV_XMIT=1 for the validated clone-worker profile"
   fi
   for pair in \
-    "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM:$experimental_tcp_route_gso_async_stream" \
-    "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD:$experimental_tcp_route_gso_async_stream_direct_build" \
-    "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO:$experimental_tcp_route_gso_async_stream_outer_gso"; do
+    "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM:$tix_tcp_route_gso_async_stream" \
+    "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_DIRECT_BUILD:$tix_tcp_route_gso_async_stream_direct_build" \
+    "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_OUTER_GSO:$tix_tcp_route_gso_async_stream_outer_gso"; do
     name="${pair%%:*}"
     value="${pair#*:}"
     case "$value" in
@@ -4050,54 +4050,54 @@ fi
       *) die "${name} must be 0 or 1" ;;
     esac
   done
-  case "$experimental_tcp_route_xmit_worker" in
+  case "$tix_tcp_route_xmit_worker" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_XMIT_WORKER must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_route_xmit_worker_crash_risk_ack" in
+  case "$tix_tcp_route_xmit_worker_crash_risk_ack" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER_CRASH_RISK_ACK must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_XMIT_WORKER_CRASH_RISK_ACK must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_route_xmit_worker_steal" in
+  case "$tix_tcp_route_xmit_worker_steal" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER_STEAL must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_XMIT_WORKER_STEAL must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_route_xmit_worker_steal_crash_risk_ack" in
+  case "$tix_tcp_route_xmit_worker_steal_crash_risk_ack" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_XMIT_WORKER_STEAL_CRASH_RISK_ACK must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_XMIT_WORKER_STEAL_CRASH_RISK_ACK must be 0 or 1" ;;
   esac
-  [[ "$experimental_tcp_route_gso_async_limit" =~ ^[1-9][0-9]*$ ]] || die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_LIMIT must be a positive integer"
-  [[ "$experimental_tcp_route_gso_async_worker_item_budget" =~ ^[0-9]+$ ]] || die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET must be a non-negative integer"
-  [[ "$experimental_tcp_route_gso_async_worker_segment_budget" =~ ^[0-9]+$ ]] || die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET must be a non-negative integer"
-  [[ "$experimental_tcp_route_gso_async_max_segments_per_item" =~ ^[0-9]+$ ]] || die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM must be a non-negative integer"
-  [[ "$experimental_tcp_route_gso_async_stream_max_frames" =~ ^[0-9]+$ ]] || die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES must be a non-negative integer"
-  case "$experimental_tcp_route_gso_trust_partial_inner_checksum" in
+  [[ "$tix_tcp_route_gso_async_limit" =~ ^[1-9][0-9]*$ ]] || die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_LIMIT must be a positive integer"
+  [[ "$tix_tcp_route_gso_async_worker_item_budget" =~ ^[0-9]+$ ]] || die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_ITEM_BUDGET must be a non-negative integer"
+  [[ "$tix_tcp_route_gso_async_worker_segment_budget" =~ ^[0-9]+$ ]] || die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_WORKER_SEGMENT_BUDGET must be a non-negative integer"
+  [[ "$tix_tcp_route_gso_async_max_segments_per_item" =~ ^[0-9]+$ ]] || die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_MAX_SEGMENTS_PER_ITEM must be a non-negative integer"
+  [[ "$tix_tcp_route_gso_async_stream_max_frames" =~ ^[0-9]+$ ]] || die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_ASYNC_STREAM_MAX_FRAMES must be a non-negative integer"
+  case "$tix_tcp_route_gso_trust_partial_inner_checksum" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_GSO_TRUST_PARTIAL_INNER_CHECKSUM must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_GSO_TRUST_PARTIAL_INNER_CHECKSUM must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_route_header_kfunc" in
+  case "$tix_tcp_route_header_kfunc" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_ROUTE_HEADER_KFUNC must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_ROUTE_HEADER_KFUNC must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_plain_skip_sequence" in
+  case "$tix_tcp_plain_skip_sequence" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_PLAIN_SKIP_SEQUENCE must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_PLAIN_SKIP_SEQUENCE must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_plain_ack_only" in
+  case "$tix_tcp_plain_ack_only" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_PLAIN_ACK_ONLY must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_PLAIN_ACK_ONLY must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_auto_umem_jumbo" in
+  case "$tix_tcp_auto_umem_jumbo" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_AUTO_UMEM_JUMBO must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_AUTO_UMEM_JUMBO must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_skip_checksum" in
+  case "$tix_tcp_skip_checksum" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM must be 0 or 1" ;;
+    *) die "TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM must be 0 or 1" ;;
   esac
-  case "$experimental_tcp_skip_outer_checksum" in
+  case "$tix_tcp_skip_outer_checksum" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
-    *) die "TRUSTIX_E2E_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM must be 0 or 1" ;;
+    *) die "TRUSTIX_E2E_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM must be 0 or 1" ;;
   esac
   case "$kernel_udp_xdp_open" in
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
@@ -4136,7 +4136,7 @@ fi
     auto|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
     *) die "TRUSTIX_E2E_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED must be auto or 0/1" ;;
   esac
-  if [[ "$transport" == "experimental_tcp" && "$crypto_placement" == "kernel" && "$kernel_module" != "1" ]] && ! kernel_provider_loadable; then
+  if [[ "$transport" == "tix_tcp" && "$crypto_placement" == "kernel" && "$kernel_module" != "1" ]] && ! kernel_provider_loadable; then
     die "TRUSTIX_E2E_CRYPTO_PLACEMENT=kernel requires TRUSTIX_E2E_KERNEL_MODULE=1"
   fi
 
@@ -4149,8 +4149,8 @@ fi
 
   local config_a
   local config_b
-  config_a="$(generate_config ix-a ix-b 10.0.0.0/24 10.0.0.1/24 10.0.1.0/24 "$lan_a" "$udp_a" "$udp_b" "$tcp_a" "$tcp_b" "$exp_tcp_a" "$exp_tcp_b" "$iptunnel_a" "$iptunnel_b" "$peer_api_a" "$peer_api_b" "$api_a" hk-udp sh-udp hk-experimental-tcp sh-experimental-tcp "$underlay_a")"
-  config_b="$(generate_config ix-b ix-a 10.0.1.0/24 10.0.1.1/24 10.0.0.0/24 "$lan_b" "$udp_b" "$udp_a" "$tcp_b" "$tcp_a" "$exp_tcp_b" "$exp_tcp_a" "$iptunnel_b" "$iptunnel_a" "$peer_api_b" "$peer_api_a" "$api_b" sh-udp hk-udp sh-experimental-tcp hk-experimental-tcp "$underlay_b")"
+  config_a="$(generate_config ix-a ix-b 10.0.0.0/24 10.0.0.1/24 10.0.1.0/24 "$lan_a" "$udp_a" "$udp_b" "$tcp_a" "$tcp_b" "$tix_tcp_a" "$tix_tcp_b" "$iptunnel_a" "$iptunnel_b" "$peer_api_a" "$peer_api_b" "$api_a" hk-udp sh-udp hk-tix-tcp sh-tix-tcp "$underlay_a")"
+  config_b="$(generate_config ix-b ix-a 10.0.1.0/24 10.0.1.1/24 10.0.0.0/24 "$lan_b" "$udp_b" "$udp_a" "$tcp_b" "$tcp_a" "$tix_tcp_b" "$tix_tcp_a" "$iptunnel_b" "$iptunnel_a" "$peer_api_b" "$peer_api_a" "$api_b" sh-udp hk-udp sh-tix-tcp hk-tix-tcp "$underlay_b")"
 
   local daemon_ns_a=""
   local daemon_ns_b=""
@@ -4160,7 +4160,7 @@ fi
   fi
 
   if ! perf_fast_enabled; then
-    assert_experimental_tcp_kernel_crypto_rejects ix-a "$config_a" "$workdir/state-kernel-reject" "${api_a#http://}" "$peer_api_a" "$daemon_ns_a"
+    assert_tix_tcp_kernel_crypto_rejects ix-a "$config_a" "$workdir/state-kernel-reject" "${api_a#http://}" "$peer_api_a" "$daemon_ns_a"
   fi
   pid_a="$(start_daemon ix-a "$config_a" "$workdir/state-a" "${api_a#http://}" "$peer_api_a" "$daemon_ns_a")"
   wait_for_api ix-a "$api_a" "$pid_a" "$daemon_ns_a"
@@ -4206,7 +4206,7 @@ fi
   run_iperf3_probes
   if ! perf_fast_enabled; then
     run_optional_tcp_probe
-    run_experimental_tcp_negative_probes
+    run_tix_tcp_negative_probes
   fi
 
   collect_api ix-a "$api_a" "$daemon_ns_a"

@@ -37,14 +37,14 @@ type AttachSpec struct {
 	KernelUDPSecureRouteGSO                  bool            `json:"kernel_udp_secure_route_gso,omitempty"`
 	KernelUDPTXSecureDirectKfuncSeal         bool            `json:"kernel_udp_tx_secure_direct_kfunc_seal,omitempty"`
 	KernelUDPTXSecureDirectSKBSealKfunc      bool            `json:"kernel_udp_tx_secure_direct_skb_seal_kfunc,omitempty"`
-	ExperimentalTCPTXDirect                  bool            `json:"experimental_tcp_tx_direct,omitempty"`
-	ExperimentalTCPRouteGSOSync              bool            `json:"experimental_tcp_route_gso_sync,omitempty"`
-	ExperimentalTCPRouteGSOAsync             bool            `json:"experimental_tcp_route_gso_async,omitempty"`
-	ExperimentalTCPRouteXmitWorker           bool            `json:"experimental_tcp_route_xmit_worker,omitempty"`
-	ExperimentalTCPPlainSkipSequence         bool            `json:"experimental_tcp_plain_skip_sequence,omitempty"`
-	ExperimentalTCPPlainACKOnly              bool            `json:"experimental_tcp_plain_ack_only,omitempty"`
-	ExperimentalTCPFastPathDisabled          bool            `json:"experimental_tcp_fast_path_disabled,omitempty"`
-	ExperimentalTCPFastPathDisabledReason    string          `json:"experimental_tcp_fast_path_disabled_reason,omitempty"`
+	TIXTCPTXDirect                           bool            `json:"tix_tcp_tx_direct,omitempty"`
+	TIXTCPRouteGSOSync                       bool            `json:"tix_tcp_route_gso_sync,omitempty"`
+	TIXTCPRouteGSOAsync                      bool            `json:"tix_tcp_route_gso_async,omitempty"`
+	TIXTCPRouteXmitWorker                    bool            `json:"tix_tcp_route_xmit_worker,omitempty"`
+	TIXTCPPlainSkipSequence                  bool            `json:"tix_tcp_plain_skip_sequence,omitempty"`
+	TIXTCPPlainACKOnly                       bool            `json:"tix_tcp_plain_ack_only,omitempty"`
+	TIXTCPFastPathDisabled                   bool            `json:"tix_tcp_fast_path_disabled,omitempty"`
+	TIXTCPFastPathDisabledReason             string          `json:"tix_tcp_fast_path_disabled_reason,omitempty"`
 	KernelDatapathFullPlaintext              bool            `json:"kernel_datapath_full_plaintext,omitempty"`
 	KernelDatapathSuppressLegacyRXWorker     bool            `json:"kernel_datapath_suppress_legacy_rx_worker,omitempty"`
 	PinPath                                  string          `json:"pin_path"`
@@ -250,7 +250,7 @@ type KernelUDPTXFlowSnapshot struct {
 	Secure               bool   `json:"secure,omitempty"`
 	TrustInnerChecksum   bool   `json:"trust_inner_checksum,omitempty"`
 	HotStats             bool   `json:"hot_stats,omitempty"`
-	ExperimentalTCP      bool   `json:"experimental_tcp,omitempty"`
+	TIXTCP               bool   `json:"tix_tcp,omitempty"`
 	SkipOuterTCPChecksum bool   `json:"skip_outer_tcp_checksum,omitempty"`
 	IPv4ChecksumUDPBase  uint16 `json:"ipv4_checksum_udp_base,omitempty"`
 	IPv4ChecksumTCPBase  uint16 `json:"ipv4_checksum_tcp_base,omitempty"`

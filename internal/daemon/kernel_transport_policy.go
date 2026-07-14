@@ -33,19 +33,19 @@ func effectiveKernelTransportModeForDesired(desired config.Desired) dataplane.Ke
 	if mode == dataplane.KernelTransportModeDisabled {
 		return mode
 	}
-	if experimentalTCPRouteGSOAsyncForDesired(desired) {
+	if tixTCPRouteGSOAsyncForDesired(desired) {
 		return dataplane.KernelTransportModeRequireKernel
 	}
 	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlyUserspaceUDP(desired) {
 		return dataplane.KernelTransportModeDisabled
 	}
-	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlyUserspaceExperimentalTCP(desired) {
+	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlyUserspaceTIXTCP(desired) {
 		return dataplane.KernelTransportModeDisabled
 	}
 	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesSecureUserspaceKernelUDP(desired) {
 		return dataplane.KernelTransportModeDisabled
 	}
-	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlySecureUserspaceExperimentalTCP(desired) {
+	if !explicit && mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesOnlySecureUserspaceTIXTCP(desired) {
 		return dataplane.KernelTransportModeDisabled
 	}
 	return mode
@@ -62,15 +62,15 @@ func desiredTransportPolicyUsesOnlyUserspaceUDP(desired config.Desired) bool {
 	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolUDP) {
 		return false
 	}
-	if desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+	if desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP) {
 		return false
 	}
 	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolUDP))
 	return profile.Datapath == config.TransportDatapathUserspace
 }
 
-func desiredTransportPolicyUsesOnlyUserspaceExperimentalTCP(desired config.Desired) bool {
-	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+func desiredTransportPolicyUsesOnlyUserspaceTIXTCP(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP) {
 		return false
 	}
 	if desiredTransportPolicyUsesAnyProtocol(desired,
@@ -81,7 +81,7 @@ func desiredTransportPolicyUsesOnlyUserspaceExperimentalTCP(desired config.Desir
 	) {
 		return false
 	}
-	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolTIXTCP))
 	return profile.Datapath == config.TransportDatapathUserspace
 }
 
@@ -89,7 +89,7 @@ func desiredTransportPolicyUsesSecureUserspaceKernelUDP(desired config.Desired) 
 	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolUDP) {
 		return false
 	}
-	if desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+	if desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP) {
 		return false
 	}
 	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolUDP))
@@ -106,11 +106,11 @@ func desiredTransportPolicyUsesSecureUserspaceKernelUDP(desired config.Desired) 
 	return placement == string(dataplane.CryptoPlacementUserspace)
 }
 
-func desiredTransportPolicyUsesSecureUserspaceExperimentalTCP(desired config.Desired) bool {
-	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+func desiredTransportPolicyUsesSecureUserspaceTIXTCP(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP) {
 		return false
 	}
-	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolTIXTCP))
 	if profile.Datapath == config.TransportDatapathUserspace {
 		return false
 	}
@@ -124,8 +124,8 @@ func desiredTransportPolicyUsesSecureUserspaceExperimentalTCP(desired config.Des
 	return placement == string(dataplane.CryptoPlacementUserspace)
 }
 
-func desiredTransportPolicyUsesOnlySecureUserspaceExperimentalTCP(desired config.Desired) bool {
-	if !desiredTransportPolicyUsesSecureUserspaceExperimentalTCP(desired) {
+func desiredTransportPolicyUsesOnlySecureUserspaceTIXTCP(desired config.Desired) bool {
+	if !desiredTransportPolicyUsesSecureUserspaceTIXTCP(desired) {
 		return false
 	}
 	return !desiredTransportPolicyUsesAnyProtocol(desired,

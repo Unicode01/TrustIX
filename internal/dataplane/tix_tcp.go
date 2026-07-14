@@ -15,14 +15,14 @@ const (
 	CryptoPlacementKernel    CryptoPlacement = "kernel"
 )
 
-type ExperimentalTCPDirection string
+type TIXTCPDirection string
 
 const (
-	ExperimentalTCPOutbound ExperimentalTCPDirection = "outbound"
-	ExperimentalTCPInbound  ExperimentalTCPDirection = "inbound"
+	TIXTCPOutbound TIXTCPDirection = "outbound"
+	TIXTCPInbound  TIXTCPDirection = "inbound"
 )
 
-type ExperimentalTCPStatus struct {
+type TIXTCPStatus struct {
 	Available          bool                     `json:"available"`
 	Provider           string                   `json:"provider,omitempty"`
 	FastPath           bool                     `json:"fast_path"`
@@ -44,7 +44,7 @@ type ExperimentalTCPStatus struct {
 	FastPathQueues     int                      `json:"fast_path_queues,omitempty"`
 	ProviderStats      map[string]uint64        `json:"provider_stats,omitempty"`
 	Telemetry          []TransportPathTelemetry `json:"telemetry,omitempty"`
-	Flows              []ExperimentalTCPFlow    `json:"flows,omitempty"`
+	Flows              []TIXTCPFlow             `json:"flows,omitempty"`
 	ActiveFlows        int                      `json:"active_flows"`
 	SubmittedFrames    uint64                   `json:"submitted_frames"`
 	ReceivedFrames     uint64                   `json:"received_frames"`
@@ -100,7 +100,7 @@ type KernelCryptoMapSchema struct {
 	SupportedFormats   []string          `json:"supported_formats,omitempty"`
 }
 
-type ExperimentalTCPFlow struct {
+type TIXTCPFlow struct {
 	ID              uint64          `json:"id"`
 	Peer            core.IXID       `json:"peer"`
 	Endpoint        core.EndpointID `json:"endpoint"`
@@ -116,7 +116,7 @@ type ExperimentalTCPFlow struct {
 	ExpiresAt       time.Time       `json:"expires_at,omitempty"`
 }
 
-type ExperimentalTCPCryptoSpec struct {
+type TIXTCPCryptoSpec struct {
 	FlowID       uint64    `json:"flow_id"`
 	Suite        string    `json:"suite"`
 	WireFormat   string    `json:"wire_format"`
@@ -130,15 +130,15 @@ type ExperimentalTCPCryptoSpec struct {
 	InstalledAt  time.Time `json:"installed_at,omitempty"`
 }
 
-type ExperimentalTCPFrame struct {
-	FlowID        uint64                   `json:"flow_id"`
-	Direction     ExperimentalTCPDirection `json:"direction"`
-	Peer          core.IXID                `json:"peer"`
-	Endpoint      core.EndpointID          `json:"endpoint"`
-	Epoch         uint64                   `json:"epoch"`
-	Sequence      uint64                   `json:"sequence"`
-	FragmentIndex uint16                   `json:"fragment_index,omitempty"`
-	FragmentCount uint16                   `json:"fragment_count,omitempty"`
+type TIXTCPFrame struct {
+	FlowID        uint64          `json:"flow_id"`
+	Direction     TIXTCPDirection `json:"direction"`
+	Peer          core.IXID       `json:"peer"`
+	Endpoint      core.EndpointID `json:"endpoint"`
+	Epoch         uint64          `json:"epoch"`
+	Sequence      uint64          `json:"sequence"`
+	FragmentIndex uint16          `json:"fragment_index,omitempty"`
+	FragmentCount uint16          `json:"fragment_count,omitempty"`
 	// FragmentPayloadSize is an internal TX hint used when a kernel-crypto
 	// packet should be sealed once and fragmented after encryption.
 	FragmentPayloadSize int             `json:"-"`
@@ -152,51 +152,51 @@ type ExperimentalTCPFrame struct {
 	Release func() `json:"-"`
 }
 
-type ExperimentalTCPSubscription interface {
-	Events() <-chan ExperimentalTCPFrame
+type TIXTCPSubscription interface {
+	Events() <-chan TIXTCPFrame
 	Close() error
 }
 
-type ExperimentalTCPBatchSubscription interface {
-	ExperimentalTCPSubscription
-	BatchEvents() <-chan []ExperimentalTCPFrame
+type TIXTCPBatchSubscription interface {
+	TIXTCPSubscription
+	BatchEvents() <-chan []TIXTCPFrame
 }
 
-type ExperimentalTCPProvider interface {
-	ExperimentalTCPStatus(ctx context.Context) (ExperimentalTCPStatus, error)
-	InstallExperimentalTCPFlows(ctx context.Context, flows []ExperimentalTCPFlow) error
-	SubmitExperimentalTCPFrame(ctx context.Context, frame ExperimentalTCPFrame) error
-	SubscribeExperimentalTCP(ctx context.Context, buffer int) (ExperimentalTCPSubscription, error)
+type TIXTCPProvider interface {
+	TIXTCPStatus(ctx context.Context) (TIXTCPStatus, error)
+	InstallTIXTCPFlows(ctx context.Context, flows []TIXTCPFlow) error
+	SubmitTIXTCPFrame(ctx context.Context, frame TIXTCPFrame) error
+	SubscribeTIXTCP(ctx context.Context, buffer int) (TIXTCPSubscription, error)
 }
 
-type ExperimentalTCPBatchProvider interface {
-	SubmitExperimentalTCPFrames(ctx context.Context, frames []ExperimentalTCPFrame) error
+type TIXTCPBatchProvider interface {
+	SubmitTIXTCPFrames(ctx context.Context, frames []TIXTCPFrame) error
 }
 
-type ExperimentalTCPFlowSubscriber interface {
-	SubscribeExperimentalTCPFlow(ctx context.Context, flowID uint64, buffer int) (ExperimentalTCPSubscription, error)
+type TIXTCPFlowSubscriber interface {
+	SubscribeTIXTCPFlow(ctx context.Context, flowID uint64, buffer int) (TIXTCPSubscription, error)
 }
 
-type ExperimentalTCPPayloadSizer interface {
-	ExperimentalTCPPayloadMax(ctx context.Context, placement CryptoPlacement, encrypted bool) (int, error)
+type TIXTCPPayloadSizer interface {
+	TIXTCPPayloadMax(ctx context.Context, placement CryptoPlacement, encrypted bool) (int, error)
 }
 
-type ExperimentalTCPSealBeforeFragmentSizer interface {
-	ExperimentalTCPSealBeforeFragmentMax(ctx context.Context, placement CryptoPlacement) (int, error)
+type TIXTCPSealBeforeFragmentSizer interface {
+	TIXTCPSealBeforeFragmentMax(ctx context.Context, placement CryptoPlacement) (int, error)
 }
 
-type ExperimentalTCPCryptoInstaller interface {
-	InstallExperimentalTCPCrypto(ctx context.Context, specs []ExperimentalTCPCryptoSpec) error
+type TIXTCPCryptoInstaller interface {
+	InstallTIXTCPCrypto(ctx context.Context, specs []TIXTCPCryptoSpec) error
 }
 
-type ExperimentalTCPFlowDeleter interface {
-	DeleteExperimentalTCPFlows(ctx context.Context, flowIDs []uint64) error
+type TIXTCPFlowDeleter interface {
+	DeleteTIXTCPFlows(ctx context.Context, flowIDs []uint64) error
 }
 
-type ExperimentalTCPFlowLookup interface {
-	ExperimentalTCPFlow(ctx context.Context, flowID uint64) (ExperimentalTCPFlow, bool, error)
+type TIXTCPFlowLookup interface {
+	TIXTCPFlow(ctx context.Context, flowID uint64) (TIXTCPFlow, bool, error)
 }
 
-type ExperimentalTCPFlowAnnotator interface {
-	SetExperimentalTCPFlowPeer(ctx context.Context, flowID uint64, peer core.IXID, endpoint core.EndpointID) error
+type TIXTCPFlowAnnotator interface {
+	SetTIXTCPFlowPeer(ctx context.Context, flowID uint64, peer core.IXID, endpoint core.EndpointID) error
 }

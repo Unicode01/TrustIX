@@ -269,8 +269,7 @@ type dataPathStatus struct {
 	EndpointState                    []rstate.EndpointState              `json:"endpoint_state,omitempty"`
 	DropReasons                      map[observability.DropReason]uint64 `json:"drop_reasons,omitempty"`
 	NAT                              *natStatus                          `json:"nat,omitempty"`
-	TIXTCP                           *dataplane.ExperimentalTCPStatus    `json:"tix_tcp,omitempty"`
-	ExperimentalTCP                  *dataplane.ExperimentalTCPStatus    `json:"experimental_tcp,omitempty"`
+	TIXTCP                           *dataplane.TIXTCPStatus             `json:"tix_tcp,omitempty"`
 }
 
 type dataPathListenerStatus struct {
@@ -764,7 +763,7 @@ func (daemon *Daemon) dataListenerErrorCanDegrade(endpoint config.EndpointConfig
 		return false
 	}
 	switch transport.Protocol(endpoint.Transport) {
-	case transport.ProtocolExperimentalTCP:
+	case transport.ProtocolTIXTCP:
 	default:
 		return false
 	}
@@ -832,7 +831,7 @@ func (daemon *Daemon) startCaptureForwarder(ctx context.Context) error {
 }
 
 func (daemon *Daemon) captureForwarderSuppressed() bool {
-	return daemon.kernelUDPTCOnlyProviderRequested() && !daemon.transportPolicyUsesExperimentalTCP() ||
+	return daemon.kernelUDPTCOnlyProviderRequested() && !daemon.transportPolicyUsesTIXTCP() ||
 		daemon.transportPolicyUsesNativePlaintextKernelTunnelRouteOffload() ||
 		kernelDatapathFullPlaintextEnabledForDesired(daemon.desired)
 }
@@ -1217,7 +1216,7 @@ func (daemon *Daemon) warmKernelDirectRouteSessionsResult(ctx context.Context) (
 		return false, nil
 	}
 	if _, hasUDP := daemon.dataplane.(dataplane.KernelUDPProvider); !hasUDP {
-		if _, hasExperimentalTCP := daemon.dataplane.(dataplane.ExperimentalTCPProvider); !hasExperimentalTCP {
+		if _, hasTIXTCP := daemon.dataplane.(dataplane.TIXTCPProvider); !hasTIXTCP {
 			return false, nil
 		}
 	}
@@ -1269,7 +1268,7 @@ func (daemon *Daemon) kernelUDPPlaintextDirectOnlyEnabled() bool {
 }
 
 func (daemon *Daemon) kernelUDPDirectOnlyEnabled() bool {
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) ||
+	if tixTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) ||
 		kernelUDPPlaintextPerformanceDirectOnlyForDesired(daemon.desired) {
 		return true
 	}
@@ -1319,8 +1318,8 @@ func (daemon *Daemon) kernelDirectWarmupEndpoint(endpoint config.EndpointConfig)
 	case transport.ProtocolUDP:
 		_, ok := daemon.dataplane.(dataplane.KernelUDPProvider)
 		return ok
-	case transport.ProtocolExperimentalTCP:
-		_, ok := daemon.dataplane.(dataplane.ExperimentalTCPProvider)
+	case transport.ProtocolTIXTCP:
+		_, ok := daemon.dataplane.(dataplane.TIXTCPProvider)
 		return ok
 	default:
 		return false
@@ -1332,7 +1331,7 @@ func (daemon *Daemon) kernelDirectWarmupControlOnlyEndpoint(endpoint config.Endp
 		return false
 	}
 	return transport.Protocol(endpoint.Transport) == transport.ProtocolUDP ||
-		transport.Protocol(endpoint.Transport) == transport.ProtocolExperimentalTCP && !experimentalTCPTXDirectRequestedForPolicy()
+		transport.Protocol(endpoint.Transport) == transport.ProtocolTIXTCP && !tixTCPTXDirectRequestedForPolicy()
 }
 
 func (daemon *Daemon) kernelDirectOnlyEndpointEncryption(encryption string) bool {
@@ -1680,8 +1679,8 @@ func dataSessionBoolEnv(name string) (bool, bool) {
 	}
 }
 
-func dataSessionExperimentalTCPBatchAggregationEnabled() (bool, bool) {
-	return dataSessionBoolEnv("TRUSTIX_DATA_SESSION_EXPERIMENTAL_TCP_TIXB")
+func dataSessionTIXTCPBatchAggregationEnabled() (bool, bool) {
+	return dataSessionBoolEnv("TRUSTIX_DATA_SESSION_TIX_TCP_TIXB")
 }
 
 func dataSessionPlaintextBatchAggregationPreference() (bool, bool) {
@@ -4309,13 +4308,13 @@ func (daemon *Daemon) preferReverseSessionForAddressedEndpoint(endpoint config.E
 		return false
 	}
 	switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
-	case transport.ProtocolExperimentalTCP:
+	case transport.ProtocolTIXTCP:
 		if parseSecureTransportEncryption(encryption) == securetransport.EncryptionPlaintext &&
 			(kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) ||
-				experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired)) {
+				tixTCPPerformanceRouteGSOAsyncForDesired(daemon.desired)) {
 			return false
 		}
-		if envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_SECURE_PREFER_REVERSE_SESSION") {
+		if envTruthyAny("TRUSTIX_TIX_TCP_SECURE_PREFER_REVERSE_SESSION") {
 			return true
 		}
 		return parseSecureTransportEncryption(encryption) == securetransport.EncryptionPlaintext
@@ -4455,7 +4454,7 @@ func (daemon *Daemon) startDataSessionRuntimeLockedWithOptions(key dataSessionKe
 	}
 	runtimeCtx, cancel := context.WithCancel(context.Background())
 	controlOnly := controlOnlyWarmup || daemon.dataSessionControlOnly(key, endpoint)
-	if controlOnly && key.Transport == transport.ProtocolExperimentalTCP && experimentalTCPCompatStreamSession(session) {
+	if controlOnly && key.Transport == transport.ProtocolTIXTCP && tixTCPCompatStreamSession(session) {
 		controlOnly = false
 	}
 	if controlOnlyWarmup && controlOnly && key.Transport == transport.ProtocolUDP {
@@ -4526,25 +4525,25 @@ func retainKernelFlowOnClose(session transport.Session) {
 	retainer.RetainKernelFlowOnClose()
 }
 
-func experimentalTCPCompatStreamSession(session transport.Session) bool {
+func tixTCPCompatStreamSession(session transport.Session) bool {
 	if session == nil {
 		return false
 	}
 	stats := session.Stats()
-	return stats.Extra != nil && stats.Extra["experimental_tcp_compat_stream"] != 0
+	return stats.Extra != nil && stats.Extra["tix_tcp_compat_stream"] != 0
 }
 
 func (daemon *Daemon) dataSessionControlOnly(key dataSessionKey, endpoint config.EndpointConfig) bool {
 	if !daemon.kernelUDPTCOnlyProviderRequested() {
 		return false
 	}
-	if key.Transport == transport.ProtocolExperimentalTCP && experimentalTCPCompatStreamEnabledForPolicy() {
+	if key.Transport == transport.ProtocolTIXTCP && tixTCPCompatStreamEnabledForPolicy() {
 		return false
 	}
-	if key.Transport == transport.ProtocolExperimentalTCP && (!kernelUDPTXDirectExperimentalTCPOnlyRequestedForPolicy() || experimentalTCPTXDirectRequestedForPolicy()) {
+	if key.Transport == transport.ProtocolTIXTCP && (!kernelUDPTXDirectTIXTCPOnlyRequestedForPolicy() || tixTCPTXDirectRequestedForPolicy()) {
 		return false
 	}
-	if key.Transport != transport.ProtocolUDP && key.Transport != transport.ProtocolExperimentalTCP {
+	if key.Transport != transport.ProtocolUDP && key.Transport != transport.ProtocolTIXTCP {
 		return false
 	}
 	encryption := key.Encryption
@@ -4871,13 +4870,13 @@ func dataSessionBatchAggregationPreferred(runtime *dataSessionRuntime, stats tra
 	if enabled, explicit := dataSessionPlaintextBatchAggregationPreference(); explicit {
 		return enabled
 	}
-	return dataSessionExperimentalTCPBatchAggregationDefault(runtime)
+	return dataSessionTIXTCPBatchAggregationDefault(runtime)
 }
 
 func dataSessionEncryptedBatchAggregationDefault(runtime *dataSessionRuntime) bool {
 	switch dataSessionRuntimeTransport(runtime) {
-	case transport.ProtocolExperimentalTCP:
-		return dataSessionExperimentalTCPBatchAggregationDefault(runtime)
+	case transport.ProtocolTIXTCP:
+		return dataSessionTIXTCPBatchAggregationDefault(runtime)
 	case transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
 		return true
 	default:
@@ -4885,11 +4884,11 @@ func dataSessionEncryptedBatchAggregationDefault(runtime *dataSessionRuntime) bo
 	}
 }
 
-func dataSessionExperimentalTCPBatchAggregationDefault(runtime *dataSessionRuntime) bool {
-	if enabled, explicit := dataSessionExperimentalTCPBatchAggregationEnabled(); explicit {
+func dataSessionTIXTCPBatchAggregationDefault(runtime *dataSessionRuntime) bool {
+	if enabled, explicit := dataSessionTIXTCPBatchAggregationEnabled(); explicit {
 		return enabled
 	}
-	return dataSessionRuntimeTransport(runtime) == transport.ProtocolExperimentalTCP
+	return dataSessionRuntimeTransport(runtime) == transport.ProtocolTIXTCP
 }
 
 func dataSessionRuntimeTransport(runtime *dataSessionRuntime) transport.Protocol {
@@ -6554,7 +6553,7 @@ func (daemon *Daemon) dropOutboundDataSessionsForInboundLocked(peer core.IXID, e
 			continue
 		}
 		daemon.clearForwardCacheForSession(key)
-		if protocol == transport.ProtocolExperimentalTCP {
+		if protocol == transport.ProtocolTIXTCP {
 			retainKernelFlowOnClose(session)
 		}
 		dropped = append(dropped, droppedDataSession{
@@ -6780,7 +6779,7 @@ func (daemon *Daemon) dataPathStatusWithStats(dataplaneStats dataplane.Stats, da
 	daemon.dataMu.Unlock()
 	captureForwarderSuppressed := daemon.captureForwarderSuppressed()
 	captureForwarderSuppressedReason := daemon.captureForwarderSuppressedReason()
-	var experimentalTCP *dataplane.ExperimentalTCPStatus
+	var tixTCP *dataplane.TIXTCPStatus
 	var kernelTransport *dataplane.KernelTransportStatus
 	if provider, ok := daemon.dataplane.(dataplane.KernelTransportProvider); ok {
 		status, err := provider.KernelTransportStatus(context.Background())
@@ -6789,11 +6788,11 @@ func (daemon *Daemon) dataPathStatusWithStats(dataplaneStats dataplane.Stats, da
 			kernelTransport = &status
 		}
 	}
-	if provider, ok := daemon.dataplane.(dataplane.ExperimentalTCPProvider); ok {
-		status, err := provider.ExperimentalTCPStatus(context.Background())
+	if provider, ok := daemon.dataplane.(dataplane.TIXTCPProvider); ok {
+		status, err := provider.TIXTCPStatus(context.Background())
 		if err == nil {
-			daemon.annotateExperimentalTCPStatus(&status)
-			experimentalTCP = &status
+			daemon.annotateTIXTCPStatus(&status)
+			tixTCP = &status
 		}
 	}
 	var kernelUDP *dataplane.KernelUDPStatus
@@ -6831,7 +6830,7 @@ func (daemon *Daemon) dataPathStatusWithStats(dataplaneStats dataplane.Stats, da
 		CaptureForwarderSuppressedReason: captureForwarderSuppressedReason,
 		Warnings:                         append([]string(nil), dataplaneStats.Warnings...),
 		Counters:                         counters,
-		KernelOffload:                    daemon.dataPathKernelOffloadStatus(dataplaneStats, dataplaneStatsOK, experimentalTCP, kernelTransport, kernelUDP),
+		KernelOffload:                    daemon.dataPathKernelOffloadStatus(dataplaneStats, dataplaneStatsOK, tixTCP, kernelTransport, kernelUDP),
 		KernelRXStage:                    daemon.kernelDatapathRXStageStatus(),
 		KernelTransport:                  kernelTransport,
 		KernelUDP:                        kernelUDP,
@@ -6842,7 +6841,7 @@ func (daemon *Daemon) dataPathStatusWithStats(dataplaneStats dataplane.Stats, da
 		EndpointState:                    daemon.endpointStateSnapshot(),
 		DropReasons:                      dropReasons,
 		NAT:                              daemon.natStatus(),
-		ExperimentalTCP:                  experimentalTCP,
+		TIXTCP:                           tixTCP,
 	}
 }
 
@@ -7272,7 +7271,7 @@ func (daemon *Daemon) endpointTransportPreferenceRank(endpoint config.EndpointCo
 		return 0
 	case transport.ProtocolVXLAN:
 		return 1
-	case transport.ProtocolExperimentalTCP:
+	case transport.ProtocolTIXTCP:
 		return 2
 	case transport.ProtocolUDP:
 		return 3

@@ -1,4 +1,4 @@
-package experimentaltcp
+package tixtcp
 
 import (
 	"encoding/binary"
@@ -13,7 +13,7 @@ const (
 	tcpFlagPSHACK = 0x18
 )
 
-var ErrChecksum = errors.New("experimental_tcp checksum error")
+var ErrChecksum = errors.New("tix_tcp checksum error")
 
 type TCPPacket struct {
 	SourceIP        netip.Addr
@@ -39,11 +39,11 @@ func MarshalTCPShapedIPv4(packet TCPPacket) ([]byte, error) {
 
 func TCPShapedIPv4WireLen(payloadLen int) (int, error) {
 	if payloadLen < 0 {
-		return 0, fmt.Errorf("experimental_tcp payload size %d is invalid", payloadLen)
+		return 0, fmt.Errorf("tix_tcp payload size %d is invalid", payloadLen)
 	}
 	totalLen := ipv4HeaderLen + tcpHeaderLen + payloadLen
 	if totalLen > 0xffff {
-		return 0, fmt.Errorf("experimental_tcp packet size %d exceeds IPv4 limit", totalLen)
+		return 0, fmt.Errorf("tix_tcp packet size %d exceeds IPv4 limit", totalLen)
 	}
 	return totalLen, nil
 }
@@ -86,17 +86,17 @@ func marshalTCPShapedIPv4FrameInto(packet TCPPacket, frame Frame, wire []byte, s
 
 func prepareTCPShapedIPv4(packet TCPPacket, payloadLen int, wire []byte) ([]byte, [4]byte, [4]byte, int, error) {
 	if !packet.SourceIP.Is4() || !packet.DestinationIP.Is4() {
-		return nil, [4]byte{}, [4]byte{}, 0, fmt.Errorf("experimental_tcp only supports IPv4 underlay packets")
+		return nil, [4]byte{}, [4]byte{}, 0, fmt.Errorf("tix_tcp only supports IPv4 underlay packets")
 	}
 	if packet.SourcePort == 0 || packet.DestinationPort == 0 {
-		return nil, [4]byte{}, [4]byte{}, 0, fmt.Errorf("experimental_tcp source and destination ports are required")
+		return nil, [4]byte{}, [4]byte{}, 0, fmt.Errorf("tix_tcp source and destination ports are required")
 	}
 	totalLen, err := TCPShapedIPv4WireLen(payloadLen)
 	if err != nil {
 		return nil, [4]byte{}, [4]byte{}, 0, err
 	}
 	if len(wire) < totalLen {
-		return nil, [4]byte{}, [4]byte{}, 0, fmt.Errorf("experimental_tcp packet buffer size %d is smaller than wire length %d", len(wire), totalLen)
+		return nil, [4]byte{}, [4]byte{}, 0, fmt.Errorf("tix_tcp packet buffer size %d is smaller than wire length %d", len(wire), totalLen)
 	}
 	wire = wire[:totalLen]
 	wire[0] = 0x45
@@ -140,21 +140,21 @@ func ParseTCPShapedIPv4NoCopySkipTCPChecksum(wire []byte) (TCPPacket, error) {
 
 func parseTCPShapedIPv4(wire []byte, copyPayload bool, skipTCPChecksum bool) (TCPPacket, error) {
 	if len(wire) < ipv4HeaderLen+tcpHeaderLen {
-		return TCPPacket{}, fmt.Errorf("experimental_tcp packet too short: %d", len(wire))
+		return TCPPacket{}, fmt.Errorf("tix_tcp packet too short: %d", len(wire))
 	}
 	if wire[0]>>4 != 4 {
-		return TCPPacket{}, fmt.Errorf("experimental_tcp packet is not IPv4")
+		return TCPPacket{}, fmt.Errorf("tix_tcp packet is not IPv4")
 	}
 	ihl := int(wire[0]&0x0f) * 4
 	if ihl < ipv4HeaderLen || len(wire) < ihl+tcpHeaderLen {
-		return TCPPacket{}, fmt.Errorf("experimental_tcp invalid IPv4 header length %d", ihl)
+		return TCPPacket{}, fmt.Errorf("tix_tcp invalid IPv4 header length %d", ihl)
 	}
 	if wire[9] != 6 {
-		return TCPPacket{}, fmt.Errorf("experimental_tcp IPv4 protocol %d is not TCP", wire[9])
+		return TCPPacket{}, fmt.Errorf("tix_tcp IPv4 protocol %d is not TCP", wire[9])
 	}
 	totalLen := int(binary.BigEndian.Uint16(wire[2:4]))
 	if totalLen < ihl+tcpHeaderLen || totalLen > len(wire) {
-		return TCPPacket{}, fmt.Errorf("experimental_tcp invalid IPv4 total length %d", totalLen)
+		return TCPPacket{}, fmt.Errorf("tix_tcp invalid IPv4 total length %d", totalLen)
 	}
 	if checksum(wire[:ihl]) != 0 {
 		return TCPPacket{}, fmt.Errorf("%w: invalid IPv4 header checksum", ErrChecksum)
@@ -162,7 +162,7 @@ func parseTCPShapedIPv4(wire []byte, copyPayload bool, skipTCPChecksum bool) (TC
 	tcp := wire[ihl:totalLen]
 	dataOffset := int(tcp[12]>>4) * 4
 	if dataOffset < tcpHeaderLen || len(tcp) < dataOffset {
-		return TCPPacket{}, fmt.Errorf("experimental_tcp invalid TCP data offset %d", dataOffset)
+		return TCPPacket{}, fmt.Errorf("tix_tcp invalid TCP data offset %d", dataOffset)
 	}
 	src := netip.AddrFrom4([4]byte{wire[12], wire[13], wire[14], wire[15]})
 	dst := netip.AddrFrom4([4]byte{wire[16], wire[17], wire[18], wire[19]})

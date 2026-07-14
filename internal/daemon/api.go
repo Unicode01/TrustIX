@@ -101,8 +101,7 @@ type kernelCapabilitiesResponse struct {
 	RXStage         kernelDatapathRXStageStatus      `json:"rx_stage,omitempty"`
 	KernelTransport *dataplane.KernelTransportStatus `json:"kernel_transport,omitempty"`
 	KernelUDP       *dataplane.KernelUDPStatus       `json:"kernel_udp,omitempty"`
-	TIXTCP          *dataplane.ExperimentalTCPStatus `json:"tix_tcp,omitempty"`
-	ExperimentalTCP *dataplane.ExperimentalTCPStatus `json:"experimental_tcp,omitempty"`
+	TIXTCP          *dataplane.TIXTCPStatus          `json:"tix_tcp,omitempty"`
 	DataPathMode    string                           `json:"datapath_mode,omitempty"`
 	Capabilities    []string                         `json:"capabilities,omitempty"`
 }
@@ -540,7 +539,6 @@ type routeProbeDatapathHints struct {
 	KernelTransportMode        string `json:"kernel_transport_mode,omitempty"`
 	KernelTransportReady       bool   `json:"kernel_transport_ready,omitempty"`
 	TIXTCPReady                bool   `json:"tix_tcp_ready,omitempty"`
-	ExperimentalTCPReady       bool   `json:"experimental_tcp_ready,omitempty"`
 	ActiveSessions             int    `json:"active_sessions"`
 }
 
@@ -1034,9 +1032,8 @@ func (daemon *Daemon) routeProbeDatapathHints() routeProbeDatapathHints {
 		hints.KernelTransportReady = status.KernelTransport.Available
 		hints.KernelTransportMode = string(status.KernelTransport.Mode)
 	}
-	if status.ExperimentalTCP != nil {
-		hints.TIXTCPReady = status.ExperimentalTCP.Available && status.ExperimentalTCP.FastPath
-		hints.ExperimentalTCPReady = hints.TIXTCPReady
+	if status.TIXTCP != nil {
+		hints.TIXTCPReady = status.TIXTCP.Available && status.TIXTCP.FastPath
 	}
 	return hints
 }
@@ -1046,7 +1043,7 @@ func (daemon *Daemon) routeProbeEndpoints(endpoints []config.EndpointConfig) []r
 	for _, endpoint := range endpoints {
 		out = append(out, routeProbeEndpoint{
 			Name:          string(endpoint.Name),
-			Transport:     config.PublicTransportName(endpoint.Transport),
+			Transport:     config.CanonicalTransportName(endpoint.Transport),
 			Priority:      endpoint.Priority,
 			PriorityScore: daemon.endpointPriorityScore("", endpoint),
 			Preference:    daemon.endpointTransportPreferenceRank(endpoint),
@@ -1116,7 +1113,7 @@ func (daemon *Daemon) endpointProbeFromRequest(r *http.Request) (endpointProbeRe
 	response := endpointProbeResponse{
 		Peer:      string(peer.ID),
 		Endpoint:  string(endpoint.Name),
-		Transport: config.PublicTransportName(endpoint.Transport),
+		Transport: config.CanonicalTransportName(endpoint.Transport),
 		Address:   endpoint.Address,
 		CheckedAt: time.Now().UTC(),
 	}
@@ -1385,7 +1382,6 @@ func (daemon *Daemon) handleKernelCapabilities(w http.ResponseWriter, r *http.Re
 		KernelTransport: dataPath.KernelTransport,
 		KernelUDP:       dataPath.KernelUDP,
 		TIXTCP:          dataPath.TIXTCP,
-		ExperimentalTCP: dataPath.ExperimentalTCP,
 		DataPathMode:    dataPath.KernelOffload.DataplaneMode,
 		Capabilities:    append([]string(nil), dataPath.KernelOffload.Capabilities...),
 	})
@@ -1430,11 +1426,11 @@ func (daemon *Daemon) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		{Name: "data_path", Status: dataPathDoctorStatus(view.DataPath), Detail: dataPathDoctorDetail(view.DataPath)},
 		{Name: "kernel_transport", Status: kernelTransportDoctorStatus(view.DataPath), Detail: kernelTransportDoctorDetail(view.DataPath)},
 	}
-	if daemon.experimentalTCPDoctorEnabled(view.DataPath) {
+	if daemon.tixTCPDoctorEnabled(view.DataPath) {
 		checks = append(checks, doctorCheck{
 			Name:   "tix_tcp",
-			Status: experimentalTCPDoctorStatus(view.DataPath),
-			Detail: experimentalTCPDoctorDetail(view.DataPath),
+			Status: tixTCPDoctorStatus(view.DataPath),
+			Detail: tixTCPDoctorDetail(view.DataPath),
 		})
 	}
 	if daemon.kernelUDPDoctorEnabled(view.DataPath) {
@@ -1761,7 +1757,7 @@ func transportNames(protocols []transport.Protocol) []string {
 	seen := make(map[string]struct{}, len(protocols))
 	names := make([]string, 0, len(protocols))
 	for _, protocol := range protocols {
-		name := string(transport.PublicProtocol(protocol))
+		name := string(transport.NormalizeProtocol(protocol))
 		if _, ok := seen[name]; ok {
 			continue
 		}
@@ -1775,7 +1771,7 @@ func transportNames(protocols []transport.Protocol) []string {
 func publicEndpointMetadata(endpoints []dataplane.EndpointMetadata) []dataplane.EndpointMetadata {
 	out := append([]dataplane.EndpointMetadata(nil), endpoints...)
 	for i := range out {
-		out[i].Transport = config.PublicTransportName(out[i].Transport)
+		out[i].Transport = config.CanonicalTransportName(out[i].Transport)
 	}
 	return out
 }
@@ -1783,27 +1779,21 @@ func publicEndpointMetadata(endpoints []dataplane.EndpointMetadata) []dataplane.
 func publicDataPathStatus(status dataPathStatus) dataPathStatus {
 	status.Listeners = append([]dataPathListenerStatus(nil), status.Listeners...)
 	for i := range status.Listeners {
-		status.Listeners[i].Transport = config.PublicTransportName(status.Listeners[i].Transport)
+		status.Listeners[i].Transport = config.CanonicalTransportName(status.Listeners[i].Transport)
 	}
 	status.Sessions = publicDataPathSessions(status.Sessions)
 	status.EndpointStats = append([]dataPathEndpointStats(nil), status.EndpointStats...)
 	for i := range status.EndpointStats {
-		status.EndpointStats[i].Transport = config.PublicTransportName(status.EndpointStats[i].Transport)
+		status.EndpointStats[i].Transport = config.CanonicalTransportName(status.EndpointStats[i].Transport)
 	}
 	status.KernelTransport = publicKernelTransportStatus(status.KernelTransport)
-	if status.TIXTCP == nil {
-		status.TIXTCP = status.ExperimentalTCP
-	}
-	if status.ExperimentalTCP == nil {
-		status.ExperimentalTCP = status.TIXTCP
-	}
 	return status
 }
 
 func publicDataPathSessions(sessions []dataPathSessionStatus) []dataPathSessionStatus {
 	out := append([]dataPathSessionStatus(nil), sessions...)
 	for i := range out {
-		out[i].Transport = config.PublicTransportName(out[i].Transport)
+		out[i].Transport = config.CanonicalTransportName(out[i].Transport)
 	}
 	return out
 }
@@ -1815,7 +1805,7 @@ func publicKernelTransportStatus(status *dataplane.KernelTransportStatus) *datap
 	out := *status
 	out.Protocols = append([]dataplane.KernelTransportProtocol(nil), status.Protocols...)
 	for i := range out.Protocols {
-		out.Protocols[i].Protocol = config.PublicTransportName(out.Protocols[i].Protocol)
+		out.Protocols[i].Protocol = config.CanonicalTransportName(out.Protocols[i].Protocol)
 	}
 	return &out
 }
@@ -1992,18 +1982,18 @@ func kernelTransportRequiresKernel(status dataPathStatus) bool {
 	return status.KernelTransport != nil && status.KernelTransport.Mode == dataplane.KernelTransportModeRequireKernel
 }
 
-func (daemon *Daemon) experimentalTCPDoctorEnabled(status dataPathStatus) bool {
-	if status.ExperimentalTCP != nil && status.ExperimentalTCP.Available {
+func (daemon *Daemon) tixTCPDoctorEnabled(status dataPathStatus) bool {
+	if status.TIXTCP != nil && status.TIXTCP.Available {
 		return true
 	}
 	for _, endpoint := range daemon.desired.Endpoints {
-		if endpoint.Transport == string(transport.ProtocolExperimentalTCP) && endpoint.Enabled {
+		if endpoint.Transport == string(transport.ProtocolTIXTCP) && endpoint.Enabled {
 			return true
 		}
 	}
 	for _, peer := range daemon.desired.Peers {
 		for _, endpoint := range peer.Endpoints {
-			if endpoint.Transport == string(transport.ProtocolExperimentalTCP) {
+			if endpoint.Transport == string(transport.ProtocolTIXTCP) {
 				return true
 			}
 		}
@@ -2011,8 +2001,8 @@ func (daemon *Daemon) experimentalTCPDoctorEnabled(status dataPathStatus) bool {
 	return false
 }
 
-func experimentalTCPDoctorStatus(status dataPathStatus) string {
-	exp := status.ExperimentalTCP
+func tixTCPDoctorStatus(status dataPathStatus) string {
+	exp := status.TIXTCP
 	if exp == nil {
 		return "warn"
 	}
@@ -2031,8 +2021,8 @@ func experimentalTCPDoctorStatus(status dataPathStatus) string {
 	return "ok"
 }
 
-func experimentalTCPDoctorDetail(status dataPathStatus) string {
-	exp := status.ExperimentalTCP
+func tixTCPDoctorDetail(status dataPathStatus) string {
+	exp := status.TIXTCP
 	if exp == nil {
 		return "TIX-TCP status is unavailable"
 	}

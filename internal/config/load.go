@@ -104,36 +104,14 @@ func Normalize(cfg Desired) Desired {
 	return cfg
 }
 
-// PublicDesired returns a copy using canonical operator-facing transport
-// names. Runtime normalization keeps the legacy identity for rolling upgrades.
-func PublicDesired(cfg Desired) Desired {
-	cfg.Endpoints = publicEndpoints(cfg.Endpoints)
-	cfg.Peers = append([]PeerConfig(nil), cfg.Peers...)
-	for i := range cfg.Peers {
-		cfg.Peers[i].Endpoints = publicEndpoints(cfg.Peers[i].Endpoints)
-	}
-	cfg.TransportPolicy.Profiles = append([]TransportProfileConfig(nil), cfg.TransportPolicy.Profiles...)
-	for i := range cfg.TransportPolicy.Profiles {
-		cfg.TransportPolicy.Profiles[i].Transport = PublicTransportName(cfg.TransportPolicy.Profiles[i].Transport)
-	}
-	return cfg
-}
-
-func publicEndpoints(endpoints []EndpointConfig) []EndpointConfig {
-	out := append([]EndpointConfig(nil), endpoints...)
-	for i := range out {
-		out[i].Transport = PublicTransportName(out[i].Transport)
-	}
-	return out
-}
-
-// PublicTransportName canonicalizes transport names exposed to operators.
-func PublicTransportName(value string) string {
-	return string(transport.PublicProtocol(transport.Protocol(value)))
+// CanonicalTransportName normalizes a transport identifier for config,
+// runtime, and API use.
+func CanonicalTransportName(value string) string {
+	return string(transport.NormalizeProtocol(transport.Protocol(value)))
 }
 
 func normalizeTransportName(value string) string {
-	return string(transport.RuntimeProtocol(transport.Protocol(value)))
+	return CanonicalTransportName(value)
 }
 
 func normalizeControlAPIPublish(mode string) string {

@@ -500,7 +500,7 @@ type Session interface {
 - HTTP CONNECT：适合代理环境和企业网络。
 - TIX-TCP：用户显式启用的 TrustIX TCP-shaped 高性能数据通道，配置名为 `tix_tcp`。
 
-旧配置名 `experimental_tcp`、`experimental-tcp` 和 `ackless_tcp` 仍可读取，但新配置和管理 API 统一输出 `tix_tcp`。
+配置、管理 API 和运行时统一使用 `tix_tcp`；旧协议名不再读取。
 
 用户配置示例：
 

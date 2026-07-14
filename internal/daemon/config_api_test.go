@@ -22,12 +22,12 @@ import (
 
 func TestConfigDesiredUsesPublicTIXTCPName(t *testing.T) {
 	daemon := &Daemon{desired: config.Desired{
-		Endpoints: []config.EndpointConfig{{Name: "ix-a-tix-tcp", Transport: "experimental_tcp"}},
+		Endpoints: []config.EndpointConfig{{Name: "ix-a-tix-tcp", Transport: "tix_tcp"}},
 		Peers: []config.PeerConfig{{
 			ID:        "ix-b",
-			Endpoints: []config.EndpointConfig{{Name: "ix-b-tix-tcp", Transport: "experimental_tcp"}},
+			Endpoints: []config.EndpointConfig{{Name: "ix-b-tix-tcp", Transport: "tix_tcp"}},
 		}},
-		TransportPolicy: config.TransportPolicyConfig{Profiles: []config.TransportProfileConfig{{Transport: "experimental_tcp"}}},
+		TransportPolicy: config.TransportPolicyConfig{Profiles: []config.TransportProfileConfig{{Transport: "tix_tcp"}}},
 	}}
 	recorder := httptest.NewRecorder()
 	daemon.handleConfigDesired(recorder, httptest.NewRequest(http.MethodGet, "/v1/config/desired", nil))
@@ -44,7 +44,7 @@ func TestConfigDesiredUsesPublicTIXTCPName(t *testing.T) {
 		got.TransportPolicy.Profiles[0].Transport != "tix_tcp" {
 		t.Fatalf("public desired transports = %#v", got)
 	}
-	if daemon.desired.Endpoints[0].Transport != "experimental_tcp" {
+	if daemon.desired.Endpoints[0].Transport != "tix_tcp" {
 		t.Fatalf("desired response mutated runtime transport: %q", daemon.desired.Endpoints[0].Transport)
 	}
 }
@@ -218,7 +218,7 @@ func TestDataPathListenersNeedRestartIgnoresRouteOnlyChanges(t *testing.T) {
 		Mode:      config.EndpointModePassive,
 		Listen:    "127.0.0.1:7001",
 		Address:   "127.0.0.1:7001",
-		Transport: "experimental_tcp",
+		Transport: "tix_tcp",
 		Enabled:   true,
 	}}
 	newDesired := oldDesired
@@ -323,9 +323,9 @@ func TestConfigApplyRouteEndpointChangeRestartsPeerSessions(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	initial := configApplyDesired(pkiSet, "10.0.1.0/24")
 	initial.Peers[0].Endpoints = append(initial.Peers[0].Endpoints, config.EndpointConfig{
-		Name:      core.EndpointID("b-experimental-tcp"),
+		Name:      core.EndpointID("b-tix-tcp"),
 		Address:   "127.0.0.1:7142",
-		Transport: "experimental_tcp",
+		Transport: "tix_tcp",
 		Enabled:   true,
 	})
 	daemon := newConfigApplyTestDaemon(t, initial)
@@ -342,12 +342,12 @@ func TestConfigApplyRouteEndpointChangeRestartsPeerSessions(t *testing.T) {
 
 	next := configApplyDesired(pkiSet, "10.0.1.0/24")
 	next.Peers[0].Endpoints = append(next.Peers[0].Endpoints, config.EndpointConfig{
-		Name:      core.EndpointID("b-experimental-tcp"),
+		Name:      core.EndpointID("b-tix-tcp"),
 		Address:   "127.0.0.1:7142",
-		Transport: "experimental_tcp",
+		Transport: "tix_tcp",
 		Enabled:   true,
 	})
-	next.Routes[0].Endpoint = core.EndpointID("b-experimental-tcp")
+	next.Routes[0].Endpoint = core.EndpointID("b-tix-tcp")
 	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
 		t.Fatalf("apply route endpoint change changed=%t err=%v", changed, err)
 	}
@@ -414,9 +414,9 @@ func TestConfigApplyRouteEndpointChangeWarmsNewKernelDirectSession(t *testing.T)
 	pkiSet := buildMembershipPKI(t)
 	initial := configApplyDesired(pkiSet, "10.0.1.0/24")
 	initial.Peers[0].Endpoints = append(initial.Peers[0].Endpoints, config.EndpointConfig{
-		Name:      core.EndpointID("b-experimental-tcp"),
+		Name:      core.EndpointID("b-tix-tcp"),
 		Address:   "127.0.0.1:7142",
-		Transport: string(transport.ProtocolExperimentalTCP),
+		Transport: string(transport.ProtocolTIXTCP),
 		Enabled:   true,
 	})
 	initial.TransportPolicy = config.TransportPolicyConfig{
@@ -431,9 +431,9 @@ func TestConfigApplyRouteEndpointChangeWarmsNewKernelDirectSession(t *testing.T)
 	if err := registry.Register(&recordingDialTransport{name: transport.ProtocolUDP}); err != nil {
 		t.Fatalf("register udp transport: %v", err)
 	}
-	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	expTransport := &recordingDialTransport{name: transport.ProtocolTIXTCP}
 	if err := registry.Register(expTransport); err != nil {
-		t.Fatalf("register experimental_tcp transport: %v", err)
+		t.Fatalf("register tix_tcp transport: %v", err)
 	}
 	daemon.transports = registry
 	daemon.dataplane = &captureCountingManager{}
@@ -450,7 +450,7 @@ func TestConfigApplyRouteEndpointChangeWarmsNewKernelDirectSession(t *testing.T)
 
 	next := initial
 	next.Routes = append([]config.RouteConfig(nil), initial.Routes...)
-	next.Routes[0].Endpoint = core.EndpointID("b-experimental-tcp")
+	next.Routes[0].Endpoint = core.EndpointID("b-tix-tcp")
 	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
 		t.Fatalf("apply route endpoint change changed=%t err=%v", changed, err)
 	}
@@ -465,7 +465,7 @@ func TestConfigApplyRouteEndpointChangeWarmsNewKernelDirectSession(t *testing.T)
 			_, oldExists := daemon.dataSessions[oldKey]
 			newExists := false
 			for key := range daemon.dataSessions {
-				if key.Peer == "ix-b" && key.Endpoint == "b-experimental-tcp" && key.Transport == transport.ProtocolExperimentalTCP {
+				if key.Peer == "ix-b" && key.Endpoint == "b-tix-tcp" && key.Transport == transport.ProtocolTIXTCP {
 					newExists = true
 				}
 			}
@@ -474,10 +474,10 @@ func TestConfigApplyRouteEndpointChangeWarmsNewKernelDirectSession(t *testing.T)
 				t.Fatal("old udp session still exists after endpoint hot-swap")
 			}
 			if !newExists {
-				t.Fatal("new experimental_tcp session was dialed but not registered")
+				t.Fatal("new tix_tcp session was dialed but not registered")
 			}
 			for _, runtime := range daemon.dataSessionState {
-				if runtime.key.Peer == "ix-b" && runtime.key.Endpoint == "b-experimental-tcp" && !runtime.controlOnly {
+				if runtime.key.Peer == "ix-b" && runtime.key.Endpoint == "b-tix-tcp" && !runtime.controlOnly {
 					t.Fatal("route warmup session should be control-only until traffic uses it")
 				}
 			}
@@ -485,19 +485,19 @@ func TestConfigApplyRouteEndpointChangeWarmsNewKernelDirectSession(t *testing.T)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("route endpoint hot-swap did not warm the new experimental_tcp session")
+	t.Fatal("route endpoint hot-swap did not warm the new tix_tcp session")
 }
 
 func TestConfigApplyRouteEndpointChangeReconcilesStaleOutboundSession(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
 	desired.Peers[0].Endpoints = append(desired.Peers[0].Endpoints, config.EndpointConfig{
-		Name:      core.EndpointID("b-experimental-tcp"),
+		Name:      core.EndpointID("b-tix-tcp"),
 		Address:   "127.0.0.1:7142",
-		Transport: string(transport.ProtocolExperimentalTCP),
+		Transport: string(transport.ProtocolTIXTCP),
 		Enabled:   true,
 	})
-	desired.Routes[0].Endpoint = core.EndpointID("b-experimental-tcp")
+	desired.Routes[0].Endpoint = core.EndpointID("b-tix-tcp")
 	daemon := newConfigApplyTestDaemon(t, desired)
 
 	stale := &recordingSession{}
@@ -511,8 +511,8 @@ func TestConfigApplyRouteEndpointChangeReconcilesStaleOutboundSession(t *testing
 	current := &recordingSession{}
 	currentKey := dataSessionKey{
 		Peer:       "ix-b",
-		Endpoint:   "b-experimental-tcp",
-		Transport:  transport.ProtocolExperimentalTCP,
+		Endpoint:   "b-tix-tcp",
+		Transport:  transport.ProtocolTIXTCP,
 		Address:    "127.0.0.1:7142",
 		Encryption: "secure",
 	}
@@ -746,7 +746,7 @@ func TestDataPathSessionsNeedRestartWhenTransportProfilePolicyChanges(t *testing
 			Profile:  "performance",
 			Datapath: "kernel_module",
 			Profiles: []config.TransportProfileConfig{{
-				Transport: "experimental_tcp",
+				Transport: "tix_tcp",
 				Profile:   "performance",
 				Advanced: config.TransportAdvancedConfig{
 					GSO:       "enabled",
@@ -760,7 +760,7 @@ func TestDataPathSessionsNeedRestartWhenTransportProfilePolicyChanges(t *testing
 	}
 }
 
-func TestDataplaneAttachSpecNeedsReloadWhenSecureExperimentalTCPRouteGSOChanges(t *testing.T) {
+func TestDataplaneAttachSpecNeedsReloadWhenSecureTIXTCPRouteGSOChanges(t *testing.T) {
 	oldDesired := config.Desired{
 		LAN: config.LANConfig{
 			Iface: "br-lan",
@@ -774,7 +774,7 @@ func TestDataplaneAttachSpecNeedsReloadWhenSecureExperimentalTCPRouteGSOChanges(
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "experimental-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
@@ -783,19 +783,19 @@ func TestDataplaneAttachSpecNeedsReloadWhenSecureExperimentalTCPRouteGSOChanges(
 
 	oldSpec := dataplaneAttachSpec(t.TempDir(), oldDesired)
 	newSpec := dataplaneAttachSpec(t.TempDir(), newDesired)
-	if oldSpec.ExperimentalTCPRouteGSOAsync || oldSpec.KernelUDPTXSecureDirect {
-		t.Fatalf("old TC-XDP secure experimental_tcp unexpectedly selected route-GSO: %#v", oldSpec)
+	if oldSpec.TIXTCPRouteGSOAsync || oldSpec.KernelUDPTXSecureDirect {
+		t.Fatalf("old TC-XDP secure tix_tcp unexpectedly selected route-GSO: %#v", oldSpec)
 	}
-	if !newSpec.ExperimentalTCPRouteGSOAsync || !newSpec.ExperimentalTCPTXDirect ||
+	if !newSpec.TIXTCPRouteGSOAsync || !newSpec.TIXTCPTXDirect ||
 		!newSpec.KernelUDPTXSecureDirect || !newSpec.KernelUDPRXSecureDirect {
-		t.Fatalf("new kernel-module secure experimental_tcp did not select route-GSO/direct path: %#v", newSpec)
+		t.Fatalf("new kernel-module secure tix_tcp did not select route-GSO/direct path: %#v", newSpec)
 	}
 	if !dataplaneAttachSpecNeedsReload(oldDesired, newDesired) {
-		t.Fatal("secure experimental_tcp route-GSO attach-spec change should reload dataplane")
+		t.Fatal("secure tix_tcp route-GSO attach-spec change should reload dataplane")
 	}
 }
 
-func TestDataplaneAttachSpecNeedsReloadWhenExperimentalTCPFastPathDisabledChanges(t *testing.T) {
+func TestDataplaneAttachSpecNeedsReloadWhenTIXTCPFastPathDisabledChanges(t *testing.T) {
 	oldDesired := config.Desired{
 		LAN: config.LANConfig{
 			Iface: "br-lan",
@@ -808,7 +808,7 @@ func TestDataplaneAttachSpecNeedsReloadWhenExperimentalTCPFastPathDisabledChange
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "experimental-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
@@ -822,17 +822,17 @@ func TestDataplaneAttachSpecNeedsReloadWhenExperimentalTCPFastPathDisabledChange
 
 	oldSpec := dataplaneAttachSpec(t.TempDir(), oldDesired)
 	newSpec := dataplaneAttachSpec(t.TempDir(), newDesired)
-	if oldSpec.ExperimentalTCPFastPathDisabled || oldSpec.KernelUDPTXDirectOnly {
-		t.Fatalf("old standalone experimental_tcp should keep fast path attach surface neutral: %#v", oldSpec)
+	if oldSpec.TIXTCPFastPathDisabled || oldSpec.KernelUDPTXDirectOnly {
+		t.Fatalf("old standalone tix_tcp should keep fast path attach surface neutral: %#v", oldSpec)
 	}
-	if !newSpec.ExperimentalTCPFastPathDisabled || newSpec.ExperimentalTCPFastPathDisabledReason == "" {
-		t.Fatalf("new mixed TCP/experimental_tcp config should disable experimental_tcp fast path: %#v", newSpec)
+	if !newSpec.TIXTCPFastPathDisabled || newSpec.TIXTCPFastPathDisabledReason == "" {
+		t.Fatalf("new mixed TCP/tix_tcp config should disable tix_tcp fast path: %#v", newSpec)
 	}
 	if newSpec.KernelUDPTXDirectOnly {
-		t.Fatalf("mixed TCP/experimental_tcp should not rely on UDP direct-only reload signal: %#v", newSpec)
+		t.Fatalf("mixed TCP/tix_tcp should not rely on UDP direct-only reload signal: %#v", newSpec)
 	}
 	if !dataplaneAttachSpecNeedsReload(oldDesired, newDesired) {
-		t.Fatal("experimental_tcp fast-path disabled attach-spec change should reload dataplane")
+		t.Fatal("tix_tcp fast-path disabled attach-spec change should reload dataplane")
 	}
 }
 

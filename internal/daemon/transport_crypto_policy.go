@@ -71,13 +71,13 @@ func transportPlacementCode(placement dataplane.CryptoPlacement) uint32 {
 	}
 }
 
-func (daemon *Daemon) annotateExperimentalTCPStatus(status *dataplane.ExperimentalTCPStatus) {
+func (daemon *Daemon) annotateTIXTCPStatus(status *dataplane.TIXTCPStatus) {
 	if status == nil {
 		return
 	}
 	requested := daemon.transportCryptoPlacement()
 	status.RequestedCrypto = requested
-	effective, err := effectiveCryptoPlacement("experimental_tcp", requested, cryptoPlacementStatus{
+	effective, err := effectiveCryptoPlacement("tix_tcp", requested, cryptoPlacementStatus{
 		UserspaceCrypto:    status.UserspaceCrypto,
 		KernelCrypto:       status.KernelCrypto,
 		KernelCryptoReason: status.KernelCryptoReason,
@@ -105,9 +105,9 @@ func (daemon *Daemon) annotateKernelUDPStatus(status *dataplane.KernelUDPStatus)
 	}
 }
 
-func (daemon *Daemon) experimentalTCPCryptoPlacementAvailable(status dataplane.ExperimentalTCPStatus) error {
+func (daemon *Daemon) tixTCPCryptoPlacementAvailable(status dataplane.TIXTCPStatus) error {
 	requested := daemon.transportCryptoPlacement()
-	_, err := effectiveCryptoPlacement("experimental_tcp", requested, cryptoPlacementStatus{
+	_, err := effectiveCryptoPlacement("tix_tcp", requested, cryptoPlacementStatus{
 		UserspaceCrypto:    status.UserspaceCrypto,
 		KernelCrypto:       status.KernelCrypto,
 		KernelCryptoReason: status.KernelCryptoReason,
@@ -166,12 +166,12 @@ func effectiveCryptoPlacement(component string, requested dataplane.CryptoPlacem
 	}
 }
 
-func (daemon *Daemon) experimentalTCPCryptoPlacement() dataplane.CryptoPlacement {
+func (daemon *Daemon) tixTCPCryptoPlacement() dataplane.CryptoPlacement {
 	return daemon.transportCryptoPlacement()
 }
 
-func effectiveExperimentalTCPCryptoPlacement(requested dataplane.CryptoPlacement, status dataplane.ExperimentalTCPStatus) (dataplane.CryptoPlacement, error) {
-	return effectiveCryptoPlacement("experimental_tcp", requested, cryptoPlacementStatus{
+func effectiveTIXTCPCryptoPlacement(requested dataplane.CryptoPlacement, status dataplane.TIXTCPStatus) (dataplane.CryptoPlacement, error) {
+	return effectiveCryptoPlacement("tix_tcp", requested, cryptoPlacementStatus{
 		UserspaceCrypto:    status.UserspaceCrypto,
 		KernelCrypto:       status.KernelCrypto,
 		KernelCryptoReason: status.KernelCryptoReason,

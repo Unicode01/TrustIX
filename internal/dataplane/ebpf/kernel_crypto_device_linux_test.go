@@ -90,7 +90,7 @@ func TestNewKernelCryptoDeviceFlowCopiesFlags(t *testing.T) {
 	const flowID = 42
 	entries := []kernelCryptoFlowEntry{
 		{
-			Key: kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend),
+			Key: kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionSend),
 			Value: kernelCryptoFlowValue{
 				Flags:  kernelCryptoFlowFlagHotStats,
 				KeyLen: kernelCryptoAES256KeyLen,
@@ -99,7 +99,7 @@ func TestNewKernelCryptoDeviceFlowCopiesFlags(t *testing.T) {
 			},
 		},
 		{
-			Key: kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv),
+			Key: kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv),
 			Value: kernelCryptoFlowValue{
 				Flags:  kernelCryptoFlowFlagNoReplay,
 				KeyLen: kernelCryptoAES256KeyLen,
@@ -108,7 +108,7 @@ func TestNewKernelCryptoDeviceFlowCopiesFlags(t *testing.T) {
 			},
 		},
 	}
-	flow, ok := newKernelCryptoDeviceFlow(entries, kernelCryptoNamespaceExperimentalTCP, flowID)
+	flow, ok := newKernelCryptoDeviceFlow(entries, kernelCryptoNamespaceTIXTCP, flowID)
 	if !ok {
 		t.Fatalf("flow was not built")
 	}

@@ -34,7 +34,7 @@ const kernelUDPSecureDirectDefaultUnderlayMTU = 1500
 const userspaceUDPOuterOverhead = 20 + 8
 const dataSessionBatchSinglePacketOverhead = dataSessionBatchHeaderLen + dataSessionBatchItemHeaderLen
 const kernelUDPOuterOverhead = 20 + 8 + 32
-const experimentalTCPOuterOverhead = 20 + 20 + 40
+const tixTCPOuterOverhead = 20 + 20 + 40
 const kernelTunnelCarrierOverhead = 16
 const trustIXSecureDataOverhead = 24 + 16
 const kernelUDPSecureDirectOuterOverhead = kernelUDPOuterOverhead + trustIXSecureDataOverhead
@@ -385,7 +385,7 @@ func (daemon *Daemon) autoTransportTCPMSSClamp(explicitAuto bool) int {
 	if daemon == nil {
 		return 0
 	}
-	if mss := daemon.autoExperimentalTCPTCPMSSClamp(explicitAuto); mss > 0 {
+	if mss := daemon.autoTIXTCPTCPMSSClamp(explicitAuto); mss > 0 {
 		return mss
 	}
 	if mss := daemon.autoKernelTunnelTCPMSSClamp(explicitAuto); mss > 0 {
@@ -397,29 +397,29 @@ func (daemon *Daemon) autoTransportTCPMSSClamp(explicitAuto bool) int {
 	return daemon.autoKernelUDPSecureDirectTCPMSSClamp(explicitAuto)
 }
 
-func (daemon *Daemon) autoExperimentalTCPTCPMSSClamp(explicitAuto bool) int {
+func (daemon *Daemon) autoTIXTCPTCPMSSClamp(explicitAuto bool) int {
 	if daemon == nil {
 		return 0
 	}
 	if !explicitAuto &&
-		!experimentalTCPAutoTCPMSSClampRequestedForPolicy() &&
+		!tixTCPAutoTCPMSSClampRequestedForPolicy() &&
 		!kernelUDPTXSecureDirectRequestedForPolicy() &&
-		!daemon.transportPolicySendsPlainExperimentalTCPData() &&
-		!daemon.transportPolicySendsSecureExperimentalTCPData() {
+		!daemon.transportPolicySendsPlainTIXTCPData() &&
+		!daemon.transportPolicySendsSecureTIXTCPData() {
 		return 0
 	}
-	if !daemon.transportPolicyUsesExperimentalTCP() {
+	if !daemon.transportPolicyUsesTIXTCP() {
 		return 0
 	}
 	mtu := daemon.desired.TransportPolicy.MTU
 	if mtu <= 0 {
 		mtu = kernelUDPSecureDirectDefaultUnderlayMTU
 	}
-	return autoExperimentalTCPTCPMSSClampForMTU(mtu, daemon.transportPolicySendsSecureData())
+	return autoTIXTCPTCPMSSClampForMTU(mtu, daemon.transportPolicySendsSecureData())
 }
 
-func (daemon *Daemon) transportPolicySendsPlainExperimentalTCPData() bool {
-	if daemon == nil || !daemon.transportPolicyUsesExperimentalTCP() || daemon.transportPolicySendsSecureData() {
+func (daemon *Daemon) transportPolicySendsPlainTIXTCPData() bool {
+	if daemon == nil || !daemon.transportPolicyUsesTIXTCP() || daemon.transportPolicySendsSecureData() {
 		return false
 	}
 	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
@@ -428,8 +428,8 @@ func (daemon *Daemon) transportPolicySendsPlainExperimentalTCPData() bool {
 	return true
 }
 
-func (daemon *Daemon) transportPolicySendsSecureExperimentalTCPData() bool {
-	if daemon == nil || !daemon.transportPolicyUsesExperimentalTCP() || !daemon.transportPolicySendsSecureData() {
+func (daemon *Daemon) transportPolicySendsSecureTIXTCPData() bool {
+	if daemon == nil || !daemon.transportPolicyUsesTIXTCP() || !daemon.transportPolicySendsSecureData() {
 		return false
 	}
 	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
@@ -694,8 +694,8 @@ func autoKernelTunnelTCPMSSClampForMTU(mtu int, secureData bool) int {
 	return mss
 }
 
-func autoExperimentalTCPTCPMSSClampForMTU(mtu int, secureData bool) int {
-	overhead := experimentalTCPOuterOverhead
+func autoTIXTCPTCPMSSClampForMTU(mtu int, secureData bool) int {
+	overhead := tixTCPOuterOverhead
 	if secureData {
 		overhead += trustIXSecureDataOverhead
 	}
@@ -827,7 +827,7 @@ func (daemon *Daemon) kernelUDPActiveGSOEnabledForPolicy() bool {
 	}
 	return daemon.kernelUDPTunnelGSOEnabledForPolicy() &&
 		daemon.kernelUDPDirectOnlyProgramEnabledForPolicy() &&
-		!kernelUDPTXDirectExperimentalTCPOnlyRequestedForPolicy()
+		!kernelUDPTXDirectTIXTCPOnlyRequestedForPolicy()
 }
 
 func (daemon *Daemon) kernelUDPTunnelGSOEnabledForPolicy() bool {
@@ -838,7 +838,7 @@ func (daemon *Daemon) kernelUDPTunnelGSOEnabledForPolicy() bool {
 		return false
 	}
 	return daemon.kernelUDPDirectOnlyProgramEnabledForPolicy() &&
-		!kernelUDPTXDirectExperimentalTCPOnlyRequestedForPolicy()
+		!kernelUDPTXDirectTIXTCPOnlyRequestedForPolicy()
 }
 
 func (daemon *Daemon) kernelUDPDirectOnlyProgramEnabledForPolicy() bool {
@@ -853,15 +853,15 @@ func (daemon *Daemon) kernelUDPDirectOnlyProgramEnabledForPolicy() bool {
 	}
 }
 
-func kernelUDPTXDirectExperimentalTCPOnlyRequestedForPolicy() bool {
+func kernelUDPTXDirectTIXTCPOnlyRequestedForPolicy() bool {
 	return envTruthyAny(
-		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY",
+		"TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY",
 	)
 }
 
-func experimentalTCPCompatStreamEnabledForPolicy() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM"))) {
+func tixTCPCompatStreamEnabledForPolicy() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_COMPAT_STREAM"))) {
 	case "1", "true", "yes", "on", "enabled":
 		return true
 	default:
@@ -869,14 +869,14 @@ func experimentalTCPCompatStreamEnabledForPolicy() bool {
 	}
 }
 
-func experimentalTCPTXDirectRequestedForPolicy() bool {
+func tixTCPTXDirectRequestedForPolicy() bool {
 	return envTruthyAny(
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY",
-		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY",
+		"TRUSTIX_TIX_TCP_TC_TX_DIRECT",
+		"TRUSTIX_REMOTE_TIX_TCP_TC_TX_DIRECT",
+		"TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT",
+		"TRUSTIX_IPERF3_CRYPTO_BENCH_TIX_TCP_TC_TX_DIRECT",
+		"TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY",
+		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY",
 	)
 }
 
@@ -894,18 +894,18 @@ func (daemon *Daemon) transportPolicyUsesUserspaceUDP() bool {
 	return daemon.transportPolicyUsesAnyProtocol(transport.ProtocolUDP)
 }
 
-func (daemon *Daemon) transportPolicyUsesExperimentalTCP() bool {
+func (daemon *Daemon) transportPolicyUsesTIXTCP() bool {
 	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
 		return false
 	}
-	return daemon.transportPolicyUsesAnyProtocol(transport.ProtocolExperimentalTCP)
+	return daemon.transportPolicyUsesAnyProtocol(transport.ProtocolTIXTCP)
 }
 
 func (daemon *Daemon) transportPolicyUsesKernelDirect() bool {
 	if daemon.kernelTransportMode() == dataplane.KernelTransportModeDisabled {
 		return false
 	}
-	return daemon.transportPolicyUsesAnyProtocol(transport.ProtocolUDP, transport.ProtocolExperimentalTCP)
+	return daemon.transportPolicyUsesAnyProtocol(transport.ProtocolUDP, transport.ProtocolTIXTCP)
 }
 
 func (daemon *Daemon) transportPolicyUsesKernelPlaintextDirect() bool {
@@ -1010,8 +1010,8 @@ func nativeTunnelAutoTCPMSSClampRequestedForPolicy() bool {
 	}
 }
 
-func experimentalTCPAutoTCPMSSClampRequestedForPolicy() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_EXPERIMENTAL_TCP_AUTO_TCP_MSS_CLAMP"))) {
+func tixTCPAutoTCPMSSClampRequestedForPolicy() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_TIX_TCP_AUTO_TCP_MSS_CLAMP"))) {
 	case "1", "true", "yes", "on", "enabled":
 		return true
 	default:

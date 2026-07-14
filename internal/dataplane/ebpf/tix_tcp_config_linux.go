@@ -10,78 +10,78 @@ import (
 	cebpf "github.com/cilium/ebpf"
 )
 
-const experimentalTCPConfigSkipTCPChecksum uint32 = 1 << 0
-const experimentalTCPConfigKernelUDPTCRXDirect uint32 = 1 << 1
-const experimentalTCPConfigKernelUDPXDPOpen uint32 = 1 << 2
-const experimentalTCPConfigKernelUDPXDPPassOpened uint32 = 1 << 3
-const experimentalTCPConfigHotPathStats uint32 = 1 << 4
-const experimentalTCPConfigKernelUDPXDPRXDirect uint32 = 1 << 5
-const experimentalTCPConfigKernelUDPXDPRXDirectIfindex uint32 = 1 << 6
-const experimentalTCPConfigKernelUDPTCRXSecureDirect uint32 = 1 << 7
-const experimentalTCPConfigKernelUDPXDPRXSecureDirect uint32 = 1 << 8
-const experimentalTCPConfigKernelUDPXDPRXDirectFixedL2 uint32 = 1 << 9
-const experimentalTCPConfigXDPFallbackPass uint32 = 1 << 10
-const experimentalTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum uint32 = 1 << 11
-const experimentalTCPConfigQueueCountShift = 16
+const tixTCPConfigSkipTCPChecksum uint32 = 1 << 0
+const tixTCPConfigKernelUDPTCRXDirect uint32 = 1 << 1
+const tixTCPConfigKernelUDPXDPOpen uint32 = 1 << 2
+const tixTCPConfigKernelUDPXDPPassOpened uint32 = 1 << 3
+const tixTCPConfigHotPathStats uint32 = 1 << 4
+const tixTCPConfigKernelUDPXDPRXDirect uint32 = 1 << 5
+const tixTCPConfigKernelUDPXDPRXDirectIfindex uint32 = 1 << 6
+const tixTCPConfigKernelUDPTCRXSecureDirect uint32 = 1 << 7
+const tixTCPConfigKernelUDPXDPRXSecureDirect uint32 = 1 << 8
+const tixTCPConfigKernelUDPXDPRXDirectFixedL2 uint32 = 1 << 9
+const tixTCPConfigXDPFallbackPass uint32 = 1 << 10
+const tixTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum uint32 = 1 << 11
+const tixTCPConfigQueueCountShift = 16
 
-func experimentalTCPBPFConfigValue(queueCount int, kernelUDPTCRXDirect bool) uint32 {
-	return experimentalTCPBPFConfigValueFor(queueCount, kernelUDPTCRXDirect, false, false)
+func tixTCPBPFConfigValue(queueCount int, kernelUDPTCRXDirect bool) uint32 {
+	return tixTCPBPFConfigValueFor(queueCount, kernelUDPTCRXDirect, false, false)
 }
 
-func experimentalTCPBPFConfigValueFor(queueCount int, kernelUDPTCRXDirect bool, kernelUDPXDPRXDirect bool, kernelUDPTCRXSecureDirect bool) uint32 {
-	return experimentalTCPBPFConfigValueForOptions(queueCount, kernelUDPTCRXDirect, kernelUDPXDPRXDirect, kernelUDPTCRXSecureDirect, experimentalTCPBPFConfigOptions{})
+func tixTCPBPFConfigValueFor(queueCount int, kernelUDPTCRXDirect bool, kernelUDPXDPRXDirect bool, kernelUDPTCRXSecureDirect bool) uint32 {
+	return tixTCPBPFConfigValueForOptions(queueCount, kernelUDPTCRXDirect, kernelUDPXDPRXDirect, kernelUDPTCRXSecureDirect, tixTCPBPFConfigOptions{})
 }
 
-type experimentalTCPBPFConfigOptions struct {
+type tixTCPBPFConfigOptions struct {
 	ForcePassOpened         bool
 	XDPRXSecureDirect       bool
 	XDPFallbackPass         bool
 	XDPRXTrustInnerChecksum bool
 }
 
-func experimentalTCPBPFConfigValueForOptions(queueCount int, kernelUDPTCRXDirect bool, kernelUDPXDPRXDirect bool, kernelUDPTCRXSecureDirect bool, options experimentalTCPBPFConfigOptions) uint32 {
+func tixTCPBPFConfigValueForOptions(queueCount int, kernelUDPTCRXDirect bool, kernelUDPXDPRXDirect bool, kernelUDPTCRXSecureDirect bool, options tixTCPBPFConfigOptions) uint32 {
 	var config uint32
-	if experimentalTCPSkipTCPChecksum() {
-		config |= experimentalTCPConfigSkipTCPChecksum
+	if tixTCPSkipTCPChecksum() {
+		config |= tixTCPConfigSkipTCPChecksum
 	}
-	if experimentalTCPHotPathStats() {
-		config |= experimentalTCPConfigHotPathStats
+	if tixTCPHotPathStats() {
+		config |= tixTCPConfigHotPathStats
 	}
 	if kernelUDPTCRXDirect {
-		config |= experimentalTCPConfigKernelUDPTCRXDirect
+		config |= tixTCPConfigKernelUDPTCRXDirect
 	}
 	if kernelUDPTCRXSecureDirect {
-		config |= experimentalTCPConfigKernelUDPTCRXSecureDirect
+		config |= tixTCPConfigKernelUDPTCRXSecureDirect
 	}
 	if kernelUDPXDPRXDirect {
-		config |= experimentalTCPConfigKernelUDPXDPRXDirect
+		config |= tixTCPConfigKernelUDPXDPRXDirect
 		if kernelUDPXDPRXDirectIfindexEnabled() {
-			config |= experimentalTCPConfigKernelUDPXDPRXDirectIfindex
+			config |= tixTCPConfigKernelUDPXDPRXDirectIfindex
 		}
 		if kernelUDPXDPRXDirectFixedL2Enabled() {
-			config |= experimentalTCPConfigKernelUDPXDPRXDirectFixedL2
+			config |= tixTCPConfigKernelUDPXDPRXDirectFixedL2
 		}
 		if kernelUDPTCRXSecureDirect && options.XDPRXSecureDirect {
-			config |= experimentalTCPConfigKernelUDPXDPRXSecureDirect
+			config |= tixTCPConfigKernelUDPXDPRXSecureDirect
 		}
 		if kernelUDPXDPRXDirectTrustInnerChecksumEnabled() || options.XDPRXTrustInnerChecksum {
-			config |= experimentalTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum
+			config |= tixTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum
 		}
 	}
 	if kernelUDPXDPOpen() {
-		config |= experimentalTCPConfigKernelUDPXDPOpen
+		config |= tixTCPConfigKernelUDPXDPOpen
 		if kernelUDPTCRXDirect && (options.ForcePassOpened || kernelUDPXDPPassOpened()) {
-			config |= experimentalTCPConfigKernelUDPXDPPassOpened
+			config |= tixTCPConfigKernelUDPXDPPassOpened
 		}
 	}
 	if options.XDPFallbackPass {
-		config |= experimentalTCPConfigXDPFallbackPass
+		config |= tixTCPConfigXDPFallbackPass
 	}
 	if queueCount > 0 {
 		if queueCount > 0xffff {
 			queueCount = 0xffff
 		}
-		config |= uint32(queueCount) << experimentalTCPConfigQueueCountShift
+		config |= uint32(queueCount) << tixTCPConfigQueueCountShift
 	}
 	return config
 }
@@ -93,10 +93,10 @@ func kernelUDPXDPOpen() bool {
 	)
 }
 
-func experimentalTCPXDPDirectOpenKfuncEnabled() bool {
+func tixTCPXDPDirectOpenKfuncEnabled() bool {
 	return envTruthy(
-		"TRUSTIX_EXPERIMENTAL_TCP_XDP_DIRECT_OPEN_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_XDP_KFUNC_OPEN",
+		"TRUSTIX_TIX_TCP_XDP_DIRECT_OPEN_KFUNC",
+		"TRUSTIX_TIX_TCP_XDP_KFUNC_OPEN",
 	)
 }
 
@@ -181,35 +181,35 @@ func kernelDatapathRXWorkerCrashRiskAllowed() bool {
 	)
 }
 
-func configureExperimentalTCPBPFConfig(m *cebpf.Map, queueCount int) (uint32, error) {
-	return configureExperimentalTCPBPFConfigValue(m, queueCount, false)
+func configureTIXTCPBPFConfig(m *cebpf.Map, queueCount int) (uint32, error) {
+	return configureTIXTCPBPFConfigValue(m, queueCount, false)
 }
 
-func configureExperimentalTCPBPFConfigValue(m *cebpf.Map, queueCount int, kernelUDPTCRXDirect bool) (uint32, error) {
-	return configureExperimentalTCPBPFConfigValueFor(m, queueCount, kernelUDPTCRXDirect, false, false)
+func configureTIXTCPBPFConfigValue(m *cebpf.Map, queueCount int, kernelUDPTCRXDirect bool) (uint32, error) {
+	return configureTIXTCPBPFConfigValueFor(m, queueCount, kernelUDPTCRXDirect, false, false)
 }
 
-func configureExperimentalTCPBPFConfigValueFor(m *cebpf.Map, queueCount int, kernelUDPTCRXDirect bool, kernelUDPXDPRXDirect bool, kernelUDPTCRXSecureDirect bool) (uint32, error) {
-	return configureExperimentalTCPBPFConfigValueForOptions(m, queueCount, kernelUDPTCRXDirect, kernelUDPXDPRXDirect, kernelUDPTCRXSecureDirect, experimentalTCPBPFConfigOptions{})
+func configureTIXTCPBPFConfigValueFor(m *cebpf.Map, queueCount int, kernelUDPTCRXDirect bool, kernelUDPXDPRXDirect bool, kernelUDPTCRXSecureDirect bool) (uint32, error) {
+	return configureTIXTCPBPFConfigValueForOptions(m, queueCount, kernelUDPTCRXDirect, kernelUDPXDPRXDirect, kernelUDPTCRXSecureDirect, tixTCPBPFConfigOptions{})
 }
 
-func configureExperimentalTCPBPFConfigValueForOptions(m *cebpf.Map, queueCount int, kernelUDPTCRXDirect bool, kernelUDPXDPRXDirect bool, kernelUDPTCRXSecureDirect bool, options experimentalTCPBPFConfigOptions) (uint32, error) {
-	config := experimentalTCPBPFConfigValueForOptions(queueCount, kernelUDPTCRXDirect, kernelUDPXDPRXDirect, kernelUDPTCRXSecureDirect, options)
+func configureTIXTCPBPFConfigValueForOptions(m *cebpf.Map, queueCount int, kernelUDPTCRXDirect bool, kernelUDPXDPRXDirect bool, kernelUDPTCRXSecureDirect bool, options tixTCPBPFConfigOptions) (uint32, error) {
+	config := tixTCPBPFConfigValueForOptions(queueCount, kernelUDPTCRXDirect, kernelUDPXDPRXDirect, kernelUDPTCRXSecureDirect, options)
 	if m == nil {
 		return config, nil
 	}
 	key := uint32(0)
 	if err := m.Update(key, config, cebpf.UpdateAny); err != nil {
-		return 0, fmt.Errorf("configure experimental_tcp BPF config: %w", err)
+		return 0, fmt.Errorf("configure tix_tcp BPF config: %w", err)
 	}
 	return config, nil
 }
 
-func experimentalTCPSkipTCPChecksum() bool {
+func tixTCPSkipTCPChecksum() bool {
 	return envTruthy(
-		"TRUSTIX_EXPERIMENTAL_TCP_SKIP_TCP_CHECKSUM",
-		"TRUSTIX_EXPERIMENTAL_TCP_SKIP_OUTER_TCP_CHECKSUM",
-		"TRUSTIX_EXPERIMENTAL_TCP_SKIP_CHECKSUM",
+		"TRUSTIX_TIX_TCP_SKIP_TCP_CHECKSUM",
+		"TRUSTIX_TIX_TCP_SKIP_OUTER_TCP_CHECKSUM",
+		"TRUSTIX_TIX_TCP_SKIP_CHECKSUM",
 	)
 }
 
@@ -220,9 +220,9 @@ func kernelUDPSkipUDPChecksum() bool {
 	)
 }
 
-func experimentalTCPHotPathStats() bool {
+func tixTCPHotPathStats() bool {
 	return envTruthy(
-		"TRUSTIX_EXPERIMENTAL_TCP_HOT_STATS",
+		"TRUSTIX_TIX_TCP_HOT_STATS",
 		"TRUSTIX_XDP_HOT_STATS",
 		"TRUSTIX_KERNEL_UDP_XDP_HOT_STATS",
 		"TRUSTIX_KERNEL_UDP_TC_HOT_STATS",

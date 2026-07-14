@@ -207,12 +207,12 @@ func productionGateFamilyClass(gateFamily string) string {
 	switch gateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod":
 		return "full_kmod"
-	case "exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
-		return "exp_tcp_full_kmod"
+	case "tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
+		return "tix_tcp_full_kmod"
 	case "secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp":
 		return "secure_kudp"
-	case "secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel":
-		return "secure_exp_tcp_kernel"
+	case "secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel":
+		return "secure_tix_tcp_kernel"
 	case "route_gso", "dd_route_gso", "owdeb_route_gso":
 		return "route_gso"
 	default:
@@ -240,7 +240,7 @@ func assertProductionGateFamilySemantics(t *testing.T, label, transport, encrypt
 
 	switch productionGateFamilyClass(gateFamily) {
 	case "userspace":
-		requireTransport("udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp")
+		requireTransport("udp", "tcp", "quic", "websocket", "http_connect", "tix_tcp")
 		require("datapath", datapath, "userspace")
 		require("crypto_placement", placement, "userspace")
 	case "userspace_tc":
@@ -257,8 +257,8 @@ func assertProductionGateFamilySemantics(t *testing.T, label, transport, encrypt
 		require("encryption", encryption, "plaintext")
 		require("datapath", datapath, "kernel_module")
 		require("crypto_placement", placement, "userspace")
-	case "exp_tcp_full_kmod":
-		require("transport", transport, "experimental_tcp")
+	case "tix_tcp_full_kmod":
+		require("transport", transport, "tix_tcp")
 		require("encryption", encryption, "plaintext")
 		require("datapath", datapath, "kernel_module")
 		require("crypto_placement", placement, "userspace")
@@ -267,13 +267,13 @@ func assertProductionGateFamilySemantics(t *testing.T, label, transport, encrypt
 		require("encryption", encryption, "secure")
 		require("datapath", datapath, "tc_xdp")
 		require("crypto_placement", placement, "kernel")
-	case "secure_exp_tcp_kernel":
-		require("transport", transport, "experimental_tcp")
+	case "secure_tix_tcp_kernel":
+		require("transport", transport, "tix_tcp")
 		require("encryption", encryption, "secure")
 		require("datapath", datapath, "kernel_module")
 		require("crypto_placement", placement, "kernel")
 	case "route_gso":
-		require("transport", transport, "experimental_tcp")
+		require("transport", transport, "tix_tcp")
 		require("encryption", encryption, "plaintext")
 		require("datapath", datapath, "kernel_module")
 		require("crypto_placement", placement, "userspace")
@@ -604,7 +604,7 @@ func loadDocumentAnchors(t *testing.T, path string) map[string]bool {
 	return anchors
 }
 
-func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *testing.T) {
+func TestProductionMatrixDefaultsAvoidUnsafeTIXTCPSecureFastPath(t *testing.T) {
 	for _, name := range []string{"linux-production-transport-matrix.sh"} {
 		t.Run(name, func(t *testing.T) {
 			payload, err := os.ReadFile(filepath.Join(".", name))
@@ -612,8 +612,8 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				t.Fatalf("read %s: %v", name, err)
 			}
 			text := string(payload)
-			if strings.Contains(text, "experimental_tcp:secure:stable:kernel_module:userspace") {
-				t.Fatalf("%s production defaults still select unsafe secure userspace-crypto experimental_tcp kernel fast path", name)
+			if strings.Contains(text, "tix_tcp:secure:stable:kernel_module:userspace") {
+				t.Fatalf("%s production defaults still select unsafe secure userspace-crypto tix_tcp kernel fast path", name)
 			}
 			defaults := readProductionTransportDefaults(t)
 			for _, wantCase := range []string{
@@ -637,13 +637,13 @@ func TestProductionMatrixDefaultsAvoidUnsafeExperimentalTCPSecureFastPath(t *tes
 				"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc:4:3600",
 				"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
 				"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
-				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod:4:3600",
-				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_exp_tcp_full_kmod:4:3600",
-				"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
-				"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
-				"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
-				"experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel:1.5:3600",
-				"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+				"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:tix_tcp_full_kmod:4:3600",
+				"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_tix_tcp_full_kmod:4:3600",
+				"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
+				"tix_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
+				"tix_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
+				"tix_tcp:secure:performance:kernel_module:kernel:cross_host:secure_tix_tcp_kernel:1.5:3600",
+				"tix_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
 			} {
 				if !strings.Contains(defaults, wantCase) {
 					t.Fatalf("production defaults missing %q", wantCase)
@@ -664,26 +664,26 @@ func TestCrossHostProductionDefaultsCoverTransportEncryptionPairsWithCurrentEvid
 	rows := loadProductionTransportDefaults(t)
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	expected := map[string]bool{
-		"udp:secure":                 false,
-		"udp:plaintext":              false,
-		"tcp:secure":                 false,
-		"tcp:plaintext":              false,
-		"quic:secure":                false,
-		"quic:plaintext":             false,
-		"websocket:secure":           false,
-		"websocket:plaintext":        false,
-		"http_connect:secure":        false,
-		"http_connect:plaintext":     false,
-		"gre:secure":                 false,
-		"gre:plaintext":              false,
-		"ipip:secure":                false,
-		"ipip:plaintext":             false,
-		"vxlan:secure":               false,
-		"vxlan:plaintext":            false,
-		"kernel_udp:secure":          false,
-		"kernel_udp:plaintext":       false,
-		"experimental_tcp:secure":    false,
-		"experimental_tcp:plaintext": false,
+		"udp:secure":             false,
+		"udp:plaintext":          false,
+		"tcp:secure":             false,
+		"tcp:plaintext":          false,
+		"quic:secure":            false,
+		"quic:plaintext":         false,
+		"websocket:secure":       false,
+		"websocket:plaintext":    false,
+		"http_connect:secure":    false,
+		"http_connect:plaintext": false,
+		"gre:secure":             false,
+		"gre:plaintext":          false,
+		"ipip:secure":            false,
+		"ipip:plaintext":         false,
+		"vxlan:secure":           false,
+		"vxlan:plaintext":        false,
+		"kernel_udp:secure":      false,
+		"kernel_udp:plaintext":   false,
+		"tix_tcp:secure":         false,
+		"tix_tcp:plaintext":      false,
 	}
 	for _, row := range rows {
 		if row.ValidationScope != "cross_host" {
@@ -768,25 +768,25 @@ func TestProductionTransportMatrixSingleHostScopeCannotSelectCrossHostOnlyGates(
 	crossHostOnlyGate := map[string]bool{
 		"full_kmod":               true,
 		"owdeb_full_kmod":         true,
-		"exp_tcp_full_kmod":       true,
-		"owdeb_exp_tcp_full_kmod": true,
+		"tix_tcp_full_kmod":       true,
+		"owdeb_tix_tcp_full_kmod": true,
 		"secure_kudp":             true,
-		"secure_exp_tcp_kernel":   true,
+		"secure_tix_tcp_kernel":   true,
 		"route_gso":               true,
 	}
 	forbiddenFastPathKey := map[string]bool{
-		"udp:plaintext:performance:kernel_module:userspace":              true,
-		"kernel_udp:secure:performance:tc_xdp:kernel":                    true,
-		"experimental_tcp:plaintext:performance:kernel_module:userspace": true,
-		"experimental_tcp:secure:performance:kernel_module:kernel":       true,
-		"experimental_tcp:secure:performance:kernel_module:userspace":    true,
-		"experimental_tcp:plaintext:performance:tc_xdp:userspace":        true,
-		"experimental_tcp:secure:performance:tc_xdp:kernel":              true,
-		"experimental_tcp:secure:performance:tc_xdp:userspace":           true,
-		"kernel_udp:plaintext:performance:kernel_module:userspace":       true,
-		"kernel_udp:plaintext:performance:kernel_module:kernel":          true,
-		"kernel_udp:secure:performance:kernel_module:kernel":             true,
-		"kernel_udp:secure:performance:kernel_module:userspace":          true,
+		"udp:plaintext:performance:kernel_module:userspace":        true,
+		"kernel_udp:secure:performance:tc_xdp:kernel":              true,
+		"tix_tcp:plaintext:performance:kernel_module:userspace":    true,
+		"tix_tcp:secure:performance:kernel_module:kernel":          true,
+		"tix_tcp:secure:performance:kernel_module:userspace":       true,
+		"tix_tcp:plaintext:performance:tc_xdp:userspace":           true,
+		"tix_tcp:secure:performance:tc_xdp:kernel":                 true,
+		"tix_tcp:secure:performance:tc_xdp:userspace":              true,
+		"kernel_udp:plaintext:performance:kernel_module:userspace": true,
+		"kernel_udp:plaintext:performance:kernel_module:kernel":    true,
+		"kernel_udp:secure:performance:kernel_module:kernel":       true,
+		"kernel_udp:secure:performance:kernel_module:userspace":    true,
 	}
 	selected := map[string]productionTransportDefault{}
 	for _, row := range rows {
@@ -1647,9 +1647,9 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testi
 			name: "route_gso_wrong_runner",
 			matrixRow: map[string]any{
 				"status":           "pass",
-				"case":             "experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso",
+				"case":             "tix_tcp-plaintext-performance-kernel_module-userspace-route_gso",
 				"runner_case":      "userspace-tcp-plaintext",
-				"transport":        "experimental_tcp",
+				"transport":        "tix_tcp",
 				"encryption":       "plaintext",
 				"profile":          "performance",
 				"datapath":         "kernel_module",
@@ -1666,45 +1666,45 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testi
 			},
 		},
 		{
-			name: "exp_tcp_full_kmod_wrong_transport",
+			name: "tix_tcp_full_kmod_wrong_transport",
 			matrixRow: map[string]any{
 				"status":           "pass",
 				"case":             "udp-plaintext-performance-kernel_module-userspace",
-				"runner_case":      "experimental-tcp-full-kmod",
+				"runner_case":      "tix-tcp-full-kmod",
 				"transport":        "udp",
 				"encryption":       "plaintext",
 				"profile":          "performance",
 				"datapath":         "kernel_module",
 				"crypto_placement": "userspace",
 				"validation_scope": "cross_host",
-				"gate_family":      "exp_tcp_full_kmod",
+				"gate_family":      "tix_tcp_full_kmod",
 				"min_gbps":         4,
 				"min_seconds":      3600,
 			},
 			want: []string{
-				"gate_family=exp_tcp_full_kmod",
-				"requires transport='experimental_tcp'",
+				"gate_family=tix_tcp_full_kmod",
+				"requires transport='tix_tcp'",
 				"got 'udp'",
 			},
 		},
 		{
-			name: "secure_exp_tcp_kernel_wrong_datapath",
+			name: "secure_tix_tcp_kernel_wrong_datapath",
 			matrixRow: map[string]any{
 				"status":           "pass",
-				"case":             "experimental_tcp-secure-performance-tc_xdp-kernel",
-				"runner_case":      "secure-exp-tcp-kernel",
-				"transport":        "experimental_tcp",
+				"case":             "tix_tcp-secure-performance-tc_xdp-kernel",
+				"runner_case":      "secure-tix-tcp-kernel",
+				"transport":        "tix_tcp",
 				"encryption":       "secure",
 				"profile":          "performance",
 				"datapath":         "tc_xdp",
 				"crypto_placement": "kernel",
 				"validation_scope": "cross_host",
-				"gate_family":      "secure_exp_tcp_kernel",
+				"gate_family":      "secure_tix_tcp_kernel",
 				"min_gbps":         1.5,
 				"min_seconds":      3600,
 			},
 			want: []string{
-				"gate_family=secure_exp_tcp_kernel",
+				"gate_family=secure_tix_tcp_kernel",
 				"requires datapath='kernel_module'",
 				"got 'tc_xdp'",
 			},
@@ -1713,9 +1713,9 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testi
 			name: "owdeb_route_gso_missing_case_suffix",
 			matrixRow: map[string]any{
 				"status":           "pass",
-				"case":             "experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso",
+				"case":             "tix_tcp-plaintext-performance-kernel_module-userspace-route_gso",
 				"runner_case":      "owdeb-routegso",
-				"transport":        "experimental_tcp",
+				"transport":        "tix_tcp",
 				"encryption":       "plaintext",
 				"profile":          "performance",
 				"datapath":         "kernel_module",
@@ -1727,8 +1727,8 @@ func TestProductionEvidenceFromGateSummaryRejectsMatrixSemanticMismatch(t *testi
 			},
 			want: []string{
 				"gate_family=owdeb_route_gso",
-				"requires case='experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso-owdeb'",
-				"got 'experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso'",
+				"requires case='tix_tcp-plaintext-performance-kernel_module-userspace-route_gso-owdeb'",
+				"got 'tix_tcp-plaintext-performance-kernel_module-userspace-route_gso'",
 			},
 		},
 	}
@@ -2494,10 +2494,10 @@ func TestSelectedCrossHostProductionDefaultsHaveCurrentEvidence(t *testing.T) {
 		"tc_direct",
 		"full_kmod",
 		"owdeb_full_kmod",
-		"exp_tcp_full_kmod",
-		"owdeb_exp_tcp_full_kmod",
+		"tix_tcp_full_kmod",
+		"owdeb_tix_tcp_full_kmod",
 		"secure_kudp",
-		"secure_exp_tcp_kernel",
+		"secure_tix_tcp_kernel",
 		"route_gso",
 	} {
 		if checkedByFamily[family] == 0 {
@@ -2898,14 +2898,14 @@ func TestProductionTransportAuditScriptRejectsGateFamilySemanticMismatch(t *test
 		{
 			name: "default_secure_kudp_wrong_transport",
 			defaults: []string{
-				"experimental_tcp\tsecure\tperformance\ttc_xdp\tkernel\tcross_host\tsecure_kudp\t1.5\t3600\tsecure kernel TCP must not reuse secure-kUDP gate",
+				"tix_tcp\tsecure\tperformance\ttc_xdp\tkernel\tcross_host\tsecure_kudp\t1.5\t3600\tsecure kernel TCP must not reuse secure-kUDP gate",
 			},
-			want: "production defaults:2: gate_family=secure_kudp requires transport=kernel_udp; got transport=experimental_tcp",
+			want: "production defaults:2: gate_family=secure_kudp requires transport=kernel_udp; got transport=tix_tcp",
 		},
 		{
 			name: "evidence_route_gso_wrong_transport",
 			defaults: []string{
-				"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t3600\tselected route-GSO gate",
+				"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t3600\tselected route-GSO gate",
 			},
 			evidence: []string{
 				strings.Join([]string{
@@ -2928,7 +2928,7 @@ func TestProductionTransportAuditScriptRejectsGateFamilySemanticMismatch(t *test
 					"route-GSO evidence with wrong transport",
 				}, "\t"),
 			},
-			want: "production evidence:2: gate_family=route_gso requires transport=experimental_tcp; got transport=udp",
+			want: "production evidence:2: gate_family=route_gso requires transport=tix_tcp; got transport=udp",
 		},
 	}
 
@@ -3418,7 +3418,7 @@ func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 	current := filepath.Join(workdir, "current.tsv")
 	defaultPayload := strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
-		"experimental_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_exp_tcp_kernel\t1.5\t3600\trequire runtime tree freshness",
+		"tix_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_tix_tcp_kernel\t1.5\t3600\trequire runtime tree freshness",
 		"",
 	}, "\n")
 	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
@@ -3430,7 +3430,7 @@ func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 	}
 	currentPayload := strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version",
-		"experimental_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_exp_tcp_kernel\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("a", 64) + "\t" + strings.Repeat("b", 64) + "\tdocs/trustix-performance-log.md#stale-runtime-tree\tstale runtime tree\t" + strings.Repeat("c", 64) + "\ttrustix-current\t" + staleRuntimeParent + "\t2026-06-25T00:00:00Z\tgo1.25.0",
+		"tix_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_tix_tcp_kernel\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("a", 64) + "\t" + strings.Repeat("b", 64) + "\tdocs/trustix-performance-log.md#stale-runtime-tree\tstale runtime tree\t" + strings.Repeat("c", 64) + "\ttrustix-current\t" + staleRuntimeParent + "\t2026-06-25T00:00:00Z\tgo1.25.0",
 		"",
 	}, "\n")
 	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
@@ -3481,29 +3481,29 @@ spec.loader.exec_module(module)
 cases = [
     ({"gate_family": "full_kmod"}, "internal/webui/assets/app.js", False),
     ({"gate_family": "userspace"}, r"internal\webui\assets\app.css", False),
-    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/ix_provision_resource.go", False),
-    ({"gate_family": "exp_tcp_full_kmod"}, r"internal\daemon\ix_provision_resource.go", False),
-    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/datapath.go", True),
-    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/kernel_datapath_state_linux.go", True),
+    ({"gate_family": "tix_tcp_full_kmod"}, "internal/daemon/ix_provision_resource.go", False),
+    ({"gate_family": "tix_tcp_full_kmod"}, r"internal\daemon\ix_provision_resource.go", False),
+    ({"gate_family": "tix_tcp_full_kmod"}, "internal/daemon/datapath.go", True),
+    ({"gate_family": "tix_tcp_full_kmod"}, "internal/daemon/kernel_datapath_state_linux.go", True),
     ({"gate_family": "secure_kudp"}, "internal/daemon/kernel_datapath_state_linux.go", False),
     ({"gate_family": "userspace_tc"}, "internal/daemon/kernel_datapath_state_linux.go", False),
-    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/kernel_modules.go", True),
-    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/transports_status.go", True),
-    ({"gate_family": "exp_tcp_full_kmod"}, "internal/transport/experimentaltcp/runtime.go", True),
-    ({"gate_family": "exp_tcp_full_kmod"}, "internal/kernelmodule/aead_ioctl_linux.go", True),
+    ({"gate_family": "tix_tcp_full_kmod"}, "internal/daemon/kernel_modules.go", True),
+    ({"gate_family": "tix_tcp_full_kmod"}, "internal/daemon/transports_status.go", True),
+    ({"gate_family": "tix_tcp_full_kmod"}, "internal/transport/tixtcp/runtime.go", True),
+    ({"gate_family": "tix_tcp_full_kmod"}, "internal/kernelmodule/aead_ioctl_linux.go", True),
     ({"gate_family": "full_kmod"}, "internal/kernelmodule/aead_ioctl_linux.go", True),
     ({"gate_family": "full_kmod"}, "kernel/trustix_datapath/trustix_datapath.c", True),
-    ({"gate_family": "exp_tcp_full_kmod"}, "kernel/trustix_datapath/trustix_datapath.c", True),
+    ({"gate_family": "tix_tcp_full_kmod"}, "kernel/trustix_datapath/trustix_datapath.c", True),
     ({"gate_family": "route_gso"}, "kernel/trustix_datapath/trustix_datapath.c", False),
     ({"gate_family": "full_kmod"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", False),
-    ({"gate_family": "exp_tcp_full_kmod"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", False),
+    ({"gate_family": "tix_tcp_full_kmod"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", False),
     ({"gate_family": "route_gso"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", True),
     ({"gate_family": "secure_kudp"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", True),
-    ({"gate_family": "secure_exp_tcp_kernel"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", True),
+    ({"gate_family": "secure_tix_tcp_kernel"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", True),
     ({"gate_family": "full_kmod"}, "kernel/trustix_crypto/trustix_crypto.c", False),
     ({"gate_family": "route_gso"}, "kernel/trustix_crypto/trustix_crypto.c", False),
     ({"gate_family": "secure_kudp"}, "kernel/trustix_crypto/trustix_crypto.c", True),
-    ({"gate_family": "secure_exp_tcp_kernel"}, "kernel/trustix_crypto/trustix_crypto.c", True),
+    ({"gate_family": "secure_tix_tcp_kernel"}, "kernel/trustix_crypto/trustix_crypto.c", True),
     ({"gate_family": "full_kmod"}, "internal/dataplane/ebpf/manager_linux.go", False),
     ({"gate_family": "userspace_tc"}, "internal/dataplane/ebpf/manager_linux.go", False),
     ({"gate_family": "userspace_tc"}, "internal/kernelmodule/aead_ioctl_linux.go", False),
@@ -3514,12 +3514,12 @@ cases = [
     ({"gate_family": "tc_direct"}, "internal/daemon/kernel_udp_direct_policy.go", True),
     ({"gate_family": "full_kmod"}, "internal/daemon/kernel_udp_direct_policy.go", False),
     ({"gate_family": "route_gso"}, "internal/kernelmodule/aead_ioctl_linux.go", True),
-    ({"gate_family": "exp_tcp_full_kmod"}, "internal/daemon/kernel_modules_test.go", False),
+    ({"gate_family": "tix_tcp_full_kmod"}, "internal/daemon/kernel_modules_test.go", False),
     ({"gate_family": "userspace"}, "internal/daemon/datapath.go", False),
     ({"gate_family": "userspace"}, "internal/dataplane/ebpf/manager_linux.go", False),
     ({"gate_family": "userspace"}, "internal/kernelmodule/aead_ioctl_linux.go", False),
-    ({"gate_family": "userspace", "transport": "tcp"}, "internal/transport/experimentaltcp/runtime.go", False),
-    ({"gate_family": "userspace", "transport": "experimental_tcp"}, "internal/transport/experimentaltcp/runtime.go", True),
+    ({"gate_family": "userspace", "transport": "tcp"}, "internal/transport/tixtcp/runtime.go", False),
+    ({"gate_family": "userspace", "transport": "tix_tcp"}, "internal/transport/tixtcp/runtime.go", True),
     ({"gate_family": "userspace", "transport": "quic"}, "internal/transport/quic/quic.go", True),
     ({"gate_family": "userspace", "transport": "udp"}, "internal/transport/quic/quic.go", False),
     ({"gate_family": "userspace_tc", "transport": "gre"}, "internal/transport/quic/quic.go", False),
@@ -3542,7 +3542,7 @@ for row, path, want in cases:
 	}
 }
 
-func TestProductionTransportAuditScriptPublicProtocolAliasExemption(t *testing.T) {
+func TestProductionTransportAuditScriptProtocolNamingOnlyExemption(t *testing.T) {
 	python := requirePython3(t)
 	code := `
 import importlib.util
@@ -3557,55 +3557,32 @@ if spec.loader is None:
     sys.exit(1)
 spec.loader.exec_module(module)
 
-alias_commit = "f0173d53b71513dbd9b781ad65e7e2744654cc8c"
-probe = {"commit": alias_commit}
+rename_commit = "f0173d53b71513dbd9b781ad65e7e2744654cc8c"
+probe = {"commit": rename_commit}
 module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
 parent = "parent-does-not-matter-for-probed-history"
-paths = [
-    "configs/lab-a.yaml",
-    "configs/lab-b.yaml",
+if not module.current_runtime_path_change_irrelevant(
+    {"gate_family": "secure_tix_tcp_kernel", "transport": "tix_tcp"},
+    parent,
     "internal/config/load.go",
-    "internal/config/schema.go",
-    "internal/daemon/api.go",
-    "internal/daemon/config_api.go",
-    "internal/daemon/config_export.go",
-    "internal/daemon/datapath.go",
-    "internal/daemon/link_diagnostics.go",
-    "internal/daemon/transports_status.go",
-    "internal/transport/types.go",
-]
-for path in paths:
-    if not module.current_runtime_path_change_irrelevant(
-        {"gate_family": "secure_exp_tcp_kernel", "transport": "experimental_tcp"},
-        parent,
-        path,
-    ):
-        print(f"public protocol alias change not exempt for {path}", file=sys.stderr)
-        sys.exit(1)
+):
+    print("protocol naming-only change was not exempt", file=sys.stderr)
+    sys.exit(1)
 
 probe["commit"] = "1111111111111111111111111111111111111111"
 if module.current_runtime_path_change_irrelevant(
-    {"gate_family": "secure_exp_tcp_kernel", "transport": "experimental_tcp"},
+    {"gate_family": "secure_tix_tcp_kernel", "transport": "tix_tcp"},
     parent,
     "internal/config/load.go",
 ):
-    print("public protocol alias exemption covered an unrelated commit", file=sys.stderr)
-    sys.exit(1)
-
-probe["commit"] = alias_commit
-if module.current_runtime_path_change_irrelevant(
-    {"gate_family": "secure_exp_tcp_kernel", "transport": "experimental_tcp"},
-    parent,
-    "internal/daemon/flows.go",
-):
-    print("public protocol alias exemption covered an unrelated path", file=sys.stderr)
+    print("protocol naming-only exemption covered an unrelated commit", file=sys.stderr)
     sys.exit(1)
 `
 	cmd := exec.Command(python, "-c", code)
 	cmd.Dir = "."
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("public protocol alias exemption regression failed: %v\n%s", err, output)
+		t.Fatalf("protocol naming-only exemption regression failed: %v\n%s", err, output)
 	}
 }
 
@@ -3720,14 +3697,14 @@ parent = "parent-does-not-matter-for-probed-history"
 path = "internal/daemon/datapath.go"
 for row in [
     {"gate_family": "full_kmod", "transport": "udp"},
-    {"gate_family": "userspace", "transport": "experimental_tcp"},
+    {"gate_family": "userspace", "transport": "tix_tcp"},
 ]:
     if not module.current_runtime_path_change_irrelevant(row, parent, path):
         print(f"session warmup observability change not exempt for {row}", file=sys.stderr)
         sys.exit(1)
 
 probe["commit"] = "1dfaf51caac8bc03177de4ec428e23659db69173"
-row = {"gate_family": "userspace", "transport": "experimental_tcp"}
+row = {"gate_family": "userspace", "transport": "tix_tcp"}
 if module.current_runtime_path_change_irrelevant(row, parent, path):
     print("exemption incorrectly covered unrelated datapath.go commits", file=sys.stderr)
     sys.exit(1)
@@ -3761,7 +3738,7 @@ parent = "parent-does-not-matter-for-probed-history"
 path = "internal/daemon/datapath.go"
 for row in [
     {"gate_family": "full_kmod", "transport": "udp"},
-    {"gate_family": "userspace", "transport": "experimental_tcp"},
+    {"gate_family": "userspace", "transport": "tix_tcp"},
 ]:
     if not module.current_runtime_path_change_irrelevant(row, parent, path):
         print(f"session pool lifecycle change not exempt for {row}", file=sys.stderr)
@@ -3804,14 +3781,14 @@ path = "internal/daemon/datapath.go"
 cases = [
     ({"gate_family": "secure_kudp", "transport": "kernel_udp", "encryption": "secure"}, False),
     ({"gate_family": "owdeb_secure_kudp", "transport": "kernel_udp", "encryption": "secure"}, False),
-    ({"gate_family": "userspace", "transport": "experimental_tcp", "encryption": "plaintext"}, False),
-    ({"gate_family": "userspace_tc", "transport": "experimental_tcp", "encryption": "plaintext"}, False),
-    ({"gate_family": "tc_direct", "transport": "experimental_tcp", "encryption": "plaintext"}, False),
-    ({"gate_family": "route_gso", "transport": "experimental_tcp", "encryption": "plaintext"}, True),
-    ({"gate_family": "exp_tcp_full_kmod", "transport": "experimental_tcp", "encryption": "plaintext"}, True),
-    ({"gate_family": "full_kmod", "transport": "experimental_tcp", "encryption": "plaintext"}, True),
-    ({"gate_family": "secure_exp_tcp_kernel", "transport": "experimental_tcp", "encryption": "secure"}, True),
-    ({"gate_family": "userspace", "transport": "experimental_tcp", "encryption": "secure"}, True),
+    ({"gate_family": "userspace", "transport": "tix_tcp", "encryption": "plaintext"}, False),
+    ({"gate_family": "userspace_tc", "transport": "tix_tcp", "encryption": "plaintext"}, False),
+    ({"gate_family": "tc_direct", "transport": "tix_tcp", "encryption": "plaintext"}, False),
+    ({"gate_family": "route_gso", "transport": "tix_tcp", "encryption": "plaintext"}, True),
+    ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp", "encryption": "plaintext"}, True),
+    ({"gate_family": "full_kmod", "transport": "tix_tcp", "encryption": "plaintext"}, True),
+    ({"gate_family": "secure_tix_tcp_kernel", "transport": "tix_tcp", "encryption": "secure"}, True),
+    ({"gate_family": "userspace", "transport": "tix_tcp", "encryption": "secure"}, True),
     ({"gate_family": "userspace", "transport": "udp", "encryption": "plaintext"}, True),
 ]
 for row, want in cases:
@@ -3822,7 +3799,7 @@ for row, want in cases:
 
 probe["commit"] = "1111111111111111111111111111111111111111"
 if module.current_runtime_path_change_irrelevant(
-    {"gate_family": "route_gso", "transport": "experimental_tcp", "encryption": "plaintext"},
+    {"gate_family": "route_gso", "transport": "tix_tcp", "encryption": "plaintext"},
     parent,
     path,
 ):
@@ -3857,15 +3834,15 @@ module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commi
 parent = "parent-does-not-matter-for-probed-history"
 path = "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c"
 cases = [
-    ({"gate_family": "route_gso", "transport": "experimental_tcp"}, False),
-    ({"gate_family": "dd_route_gso", "transport": "experimental_tcp"}, False),
-    ({"gate_family": "secure_exp_tcp_kernel", "transport": "experimental_tcp"}, False),
-    ({"gate_family": "owdeb_secure_exp_tcp_kernel", "transport": "experimental_tcp"}, False),
+    ({"gate_family": "route_gso", "transport": "tix_tcp"}, False),
+    ({"gate_family": "dd_route_gso", "transport": "tix_tcp"}, False),
+    ({"gate_family": "secure_tix_tcp_kernel", "transport": "tix_tcp"}, False),
+    ({"gate_family": "owdeb_secure_tix_tcp_kernel", "transport": "tix_tcp"}, False),
     ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, True),
     ({"gate_family": "owdeb_secure_kudp", "transport": "kernel_udp"}, True),
     ({"gate_family": "full_kmod", "transport": "udp"}, True),
-    ({"gate_family": "exp_tcp_full_kmod", "transport": "experimental_tcp"}, True),
-    ({"gate_family": "userspace", "transport": "experimental_tcp"}, True),
+    ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp"}, True),
+    ({"gate_family": "userspace", "transport": "tix_tcp"}, True),
 ]
 for row, want in cases:
     got = module.current_runtime_path_change_irrelevant(row, parent, path)
@@ -3959,9 +3936,9 @@ cases = [
     ({"gate_family": "tc_direct", "transport": "kernel_udp", "encryption": "plaintext"}, False),
     ({"gate_family": "userspace_tc", "transport": "udp", "encryption": "plaintext"}, False),
     ({"gate_family": "userspace", "transport": "udp", "encryption": "plaintext"}, True),
-    ({"gate_family": "exp_tcp_full_kmod", "transport": "experimental_tcp", "encryption": "plaintext"}, True),
+    ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp", "encryption": "plaintext"}, True),
     ({"gate_family": "secure_kudp", "transport": "kernel_udp", "encryption": "secure"}, True),
-    ({"gate_family": "route_gso", "transport": "experimental_tcp", "encryption": "plaintext"}, True),
+    ({"gate_family": "route_gso", "transport": "tix_tcp", "encryption": "plaintext"}, True),
 ]
 for row, want in cases:
     got = module.current_runtime_path_change_irrelevant(row, parent, path)
@@ -4202,10 +4179,10 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":               finalProductionArtifact,
 		"full_kmod":               finalProductionArtifact,
-		"exp_tcp_full_kmod":       finalProductionArtifact,
-		"owdeb_exp_tcp_full_kmod": finalProductionArtifact,
+		"tix_tcp_full_kmod":       finalProductionArtifact,
+		"owdeb_tix_tcp_full_kmod": finalProductionArtifact,
 		"secure_kudp":             finalProductionArtifact,
-		"secure_exp_tcp_kernel":   finalProductionArtifact,
+		"secure_tix_tcp_kernel":   finalProductionArtifact,
 		"route_gso":               finalProductionArtifact,
 		"owdeb_full_kmod":         finalProductionArtifact,
 		"userspace":               finalProductionArtifact,
@@ -4315,13 +4292,13 @@ func TestOpenWrtRouteGSOFamiliesHaveFailClosedRuntimeEvidence(t *testing.T) {
 	want := map[string]bool{
 		"owdeb_secure_kudp:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                           false,
 		"owdeb_route_gso:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                             false,
-		"owdeb_secure_exp_tcp_kernel:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                 false,
+		"owdeb_secure_tix_tcp_kernel:openwrt24.10.2-debian13:6.6.93_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24102-full-kmod-production-gate":                 false,
 		"owdeb_secure_kudp:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                           false,
 		"owdeb_route_gso:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                             false,
-		"owdeb_secure_exp_tcp_kernel:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                 false,
+		"owdeb_secure_tix_tcp_kernel:openwrt24.10.7-debian13:6.6.141_to_6.12.90+deb13.1-cloud-amd64:docs/trustix-performance-log.md#openwrt-24107-runtime-capability-check":                 false,
 		"owdeb_secure_kudp:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check":           false,
 		"owdeb_route_gso:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check":             false,
-		"owdeb_secure_exp_tcp_kernel:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check": false,
+		"owdeb_secure_tix_tcp_kernel:openwrt25.12.4-debian13:6.12.87_to_6.12.94+deb13-amd64:docs/trustix-performance-log.md#2026-06-24-zaozhuang-pve-openwrt-25124-route-gso-runtime-check": false,
 	}
 	for _, evidence := range loadProductionTransportEvidence(t) {
 		if evidence.Result != "fail_closed" || evidence.MinGbps != "0" || evidence.MinSeconds != "30" {
@@ -4352,7 +4329,7 @@ func TestOpenWrtRouteGSOFamiliesRequirePassingCurrentGateBeforeDefault(t *testin
 	openWrtRouteGSOFamilies := map[string]bool{
 		"owdeb_secure_kudp":           true,
 		"owdeb_route_gso":             true,
-		"owdeb_secure_exp_tcp_kernel": true,
+		"owdeb_secure_tix_tcp_kernel": true,
 	}
 	passingEvidence := map[string][]productionTransportEvidence{}
 	for _, evidence := range loadProductionTransportEvidence(t) {
@@ -4403,7 +4380,7 @@ func TestOpenWrtRouteGSOFamiliesRequirePassingCurrentGateBeforeDefault(t *testin
 	}
 }
 
-func TestOpenWrtSecureExperimentalTCPKernelFailClosedRowsInheritRouteTCPGate(t *testing.T) {
+func TestOpenWrtSecureTIXTCPKernelFailClosedRowsInheritRouteTCPGate(t *testing.T) {
 	rows := loadProductionTransportEvidence(t)
 	routeTCPFailures := map[string]bool{}
 	keyFor := func(evidence productionTransportEvidence) string {
@@ -4424,22 +4401,22 @@ func TestOpenWrtSecureExperimentalTCPKernelFailClosedRowsInheritRouteTCPGate(t *
 	}
 	var seen int
 	for _, evidence := range rows {
-		if evidence.GateFamily != "owdeb_secure_exp_tcp_kernel" {
+		if evidence.GateFamily != "owdeb_secure_tix_tcp_kernel" {
 			continue
 		}
 		seen++
 		if evidence.Result != "fail_closed" || evidence.MinGbps != "0" || evidence.MinSeconds != "30" {
-			t.Fatalf("OpenWrt secure experimental TCP kernel evidence must be fail-closed prerequisite evidence, got %+v", evidence)
+			t.Fatalf("OpenWrt secure TIX-TCP kernel evidence must be fail-closed prerequisite evidence, got %+v", evidence)
 		}
 		if !strings.Contains(evidence.Note, "route-TCP kfunc") {
-			t.Fatalf("OpenWrt secure experimental TCP kernel evidence must name the missing route-TCP prerequisite: %+v", evidence)
+			t.Fatalf("OpenWrt secure TIX-TCP kernel evidence must name the missing route-TCP prerequisite: %+v", evidence)
 		}
 		if !routeTCPFailures[keyFor(evidence)] {
-			t.Fatalf("OpenWrt secure experimental TCP kernel fail-closed row is not tied to route-GSO route-TCP capability evidence: %+v", evidence)
+			t.Fatalf("OpenWrt secure TIX-TCP kernel fail-closed row is not tied to route-GSO route-TCP capability evidence: %+v", evidence)
 		}
 	}
 	if seen == 0 {
-		t.Fatal("missing OpenWrt secure experimental TCP kernel fail-closed boundary rows")
+		t.Fatal("missing OpenWrt secure TIX-TCP kernel fail-closed boundary rows")
 	}
 }
 
@@ -4570,7 +4547,7 @@ func TestCurrentDebianRouteGSOEvidenceCoversProductionGate(t *testing.T) {
 	t.Fatalf("missing current Debian route-GSO production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
 }
 
-func TestCurrentDebianSecureExpTCPKernelEvidenceCoversProductionGate(t *testing.T) {
+func TestCurrentDebianSecureTIXTCPKernelEvidenceCoversProductionGate(t *testing.T) {
 	const (
 		wantOSMatrix     = "debian13-debian13"
 		wantKernelMatrix = "6.12.94+deb13-cloud-amd64_to_6.12.94+deb13-cloud-amd64"
@@ -4579,7 +4556,7 @@ func TestCurrentDebianSecureExpTCPKernelEvidenceCoversProductionGate(t *testing.
 		minSeconds       = 3600
 	)
 	for _, evidence := range loadProductionTransportEvidence(t) {
-		if evidence.GateFamily != "secure_exp_tcp_kernel" ||
+		if evidence.GateFamily != "secure_tix_tcp_kernel" ||
 			evidence.OSMatrix != wantOSMatrix ||
 			evidence.KernelMatrix != wantKernelMatrix ||
 			evidence.Artifact != wantArtifact {
@@ -4587,18 +4564,18 @@ func TestCurrentDebianSecureExpTCPKernelEvidenceCoversProductionGate(t *testing.
 		}
 		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
 		if err != nil {
-			t.Fatalf("invalid Debian secure experimental TCP kernel evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+			t.Fatalf("invalid Debian secure TIX-TCP kernel evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
 		}
 		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
 		if err != nil {
-			t.Fatalf("invalid Debian secure experimental TCP kernel evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+			t.Fatalf("invalid Debian secure TIX-TCP kernel evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
 		}
 		if evidence.Result == "pass" && evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
 			return
 		}
-		t.Fatalf("current Debian secure experimental TCP kernel evidence is below production gate: %+v", evidence)
+		t.Fatalf("current Debian secure TIX-TCP kernel evidence is below production gate: %+v", evidence)
 	}
-	t.Fatalf("missing current Debian secure experimental TCP kernel production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
+	t.Fatalf("missing current Debian secure TIX-TCP kernel production evidence for %s / %s", wantOSMatrix, wantKernelMatrix)
 }
 
 func TestCurrentDebianUserspaceEvidenceCoversProductionGates(t *testing.T) {
@@ -4719,7 +4696,7 @@ func TestCurrentDebianUserspaceTCEvidenceCoversProductionGates(t *testing.T) {
 	}
 }
 
-func TestProductionDefaultsDoNotPromotePlainExperimentalTCPUserspaceWithoutStrictEvidence(t *testing.T) {
+func TestProductionDefaultsDoNotPromotePlainTIXTCPUserspaceWithoutStrictEvidence(t *testing.T) {
 	const (
 		minGbps    = 1.0
 		minSeconds = 3600
@@ -4727,7 +4704,7 @@ func TestProductionDefaultsDoNotPromotePlainExperimentalTCPUserspaceWithoutStric
 
 	hasStrictEvidence := false
 	for _, evidence := range loadProductionTransportEvidence(t) {
-		if evidence.Transport != "experimental_tcp" ||
+		if evidence.Transport != "tix_tcp" ||
 			evidence.Encryption != "plaintext" ||
 			evidence.Profile != "stable" ||
 			evidence.Datapath != "userspace" ||
@@ -4740,11 +4717,11 @@ func TestProductionDefaultsDoNotPromotePlainExperimentalTCPUserspaceWithoutStric
 		}
 		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
 		if err != nil {
-			t.Fatalf("invalid plaintext experimental_tcp userspace evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+			t.Fatalf("invalid plaintext tix_tcp userspace evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
 		}
 		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
 		if err != nil {
-			t.Fatalf("invalid plaintext experimental_tcp userspace evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+			t.Fatalf("invalid plaintext tix_tcp userspace evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
 		}
 		if evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
 			hasStrictEvidence = true
@@ -4754,7 +4731,7 @@ func TestProductionDefaultsDoNotPromotePlainExperimentalTCPUserspaceWithoutStric
 
 	var sawBaseline, sawRouteGSO bool
 	for _, row := range loadProductionTransportDefaults(t) {
-		if row.Transport != "experimental_tcp" || row.Encryption != "plaintext" {
+		if row.Transport != "tix_tcp" || row.Encryption != "plaintext" {
 			continue
 		}
 		if row.Profile == "stable" &&
@@ -4781,18 +4758,18 @@ func TestProductionDefaultsDoNotPromotePlainExperimentalTCPUserspaceWithoutStric
 			row.ValidationScope == "cross_host" &&
 			row.GateFamily == "userspace" &&
 			!hasStrictEvidence {
-			t.Fatalf("plaintext experimental_tcp userspace cross-host default requires fresh strict 3600s manifest evidence: %+v", row)
+			t.Fatalf("plaintext tix_tcp userspace cross-host default requires fresh strict 3600s manifest evidence: %+v", row)
 		}
 	}
 	if !sawBaseline {
-		t.Fatal("plaintext experimental_tcp userspace single-host baseline default disappeared")
+		t.Fatal("plaintext tix_tcp userspace single-host baseline default disappeared")
 	}
 	if !sawRouteGSO {
-		t.Fatal("plaintext experimental_tcp cross-host production default should stay on the selected route-GSO gate")
+		t.Fatal("plaintext tix_tcp cross-host production default should stay on the selected route-GSO gate")
 	}
 }
 
-func TestProductionDefaultsDoNotReuseSecureKUDPForSecureExperimentalTCPKernelCrypto(t *testing.T) {
+func TestProductionDefaultsDoNotReuseSecureKUDPForSecureTIXTCPKernelCrypto(t *testing.T) {
 	const (
 		minGbps    = 1.5
 		minSeconds = 3600
@@ -4803,7 +4780,7 @@ func TestProductionDefaultsDoNotReuseSecureKUDPForSecureExperimentalTCPKernelCry
 		if evidence.GateFamily == "secure_kudp" && evidence.Transport != "kernel_udp" {
 			t.Fatalf("secure_kudp evidence must describe kernel_udp, not another secure kernel crypto transport: %+v", evidence)
 		}
-		if evidence.Transport != "experimental_tcp" ||
+		if evidence.Transport != "tix_tcp" ||
 			evidence.Encryption != "secure" ||
 			evidence.Profile != "performance" ||
 			evidence.CryptoPlacement != "kernel" ||
@@ -4819,11 +4796,11 @@ func TestProductionDefaultsDoNotReuseSecureKUDPForSecureExperimentalTCPKernelCry
 		}
 		evidenceGbps, err := strconv.ParseFloat(evidence.MinGbps, 64)
 		if err != nil {
-			t.Fatalf("invalid secure experimental_tcp kernel evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
+			t.Fatalf("invalid secure tix_tcp kernel evidence min_gbps %q in %+v", evidence.MinGbps, evidence)
 		}
 		evidenceSeconds, err := strconv.Atoi(evidence.MinSeconds)
 		if err != nil {
-			t.Fatalf("invalid secure experimental_tcp kernel evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
+			t.Fatalf("invalid secure tix_tcp kernel evidence min_seconds %q in %+v", evidence.MinSeconds, evidence)
 		}
 		if evidenceGbps >= minGbps && evidenceSeconds >= minSeconds {
 			hasStrictDedicatedEvidence = true
@@ -4836,7 +4813,7 @@ func TestProductionDefaultsDoNotReuseSecureKUDPForSecureExperimentalTCPKernelCry
 		if row.GateFamily == "secure_kudp" && row.Transport != "kernel_udp" {
 			t.Fatalf("secure_kudp production default must stay scoped to kernel_udp: %+v", row)
 		}
-		if row.Transport != "experimental_tcp" || row.Encryption != "secure" {
+		if row.Transport != "tix_tcp" || row.Encryption != "secure" {
 			continue
 		}
 		if row.Profile == "stable" &&
@@ -4852,11 +4829,11 @@ func TestProductionDefaultsDoNotReuseSecureKUDPForSecureExperimentalTCPKernelCry
 			row.CryptoPlacement == "kernel" &&
 			row.ValidationScope == "cross_host" &&
 			!hasStrictDedicatedEvidence {
-			t.Fatalf("secure experimental_tcp kernel-crypto production default requires dedicated strict 3600s manifest evidence: %+v", row)
+			t.Fatalf("secure tix_tcp kernel-crypto production default requires dedicated strict 3600s manifest evidence: %+v", row)
 		}
 	}
 	if !sawSecureUserspace {
-		t.Fatal("secure experimental_tcp userspace cross-host production default disappeared")
+		t.Fatal("secure tix_tcp userspace cross-host production default disappeared")
 	}
 }
 
@@ -4900,13 +4877,13 @@ func TestProductionTransportDefaultsCoverProtocolsAndValidationScopes(t *testing
 		"kernel_udp:plaintext:performance:tc_xdp:userspace:single_host:tc_direct:0:30",
 		"kernel_udp:plaintext:performance:tc_xdp:userspace:cross_host:tc_direct:3:3600",
 		"kernel_udp:secure:performance:tc_xdp:kernel:cross_host:secure_kudp:1.5:3600",
-		"experimental_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
-		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
-		"experimental_tcp:secure:performance:kernel_module:kernel:cross_host:secure_exp_tcp_kernel:1.5:3600",
-		"experimental_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
-		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod:4:3600",
-		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_exp_tcp_full_kmod:4:3600",
-		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
+		"tix_tcp:secure:stable:userspace:userspace:single_host:userspace:0:30",
+		"tix_tcp:secure:stable:userspace:userspace:cross_host:userspace:0.5:3600",
+		"tix_tcp:secure:performance:kernel_module:kernel:cross_host:secure_tix_tcp_kernel:1.5:3600",
+		"tix_tcp:plaintext:stable:userspace:userspace:single_host:userspace:0:30",
+		"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:tix_tcp_full_kmod:4:3600",
+		"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:owdeb_tix_tcp_full_kmod:4:3600",
+		"tix_tcp:plaintext:performance:kernel_module:userspace:cross_host:route_gso:2.5:3600",
 	} {
 		if !strings.Contains(defaults, wantCase) {
 			t.Fatalf("production defaults missing %q", wantCase)
@@ -4919,24 +4896,24 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 	knownTransport := map[string]bool{
 		"udp": true, "tcp": true, "quic": true, "websocket": true,
 		"http_connect": true, "gre": true, "ipip": true, "vxlan": true,
-		"kernel_udp": true, "experimental_tcp": true,
+		"kernel_udp": true, "tix_tcp": true,
 	}
 	knownGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"exp_tcp_full_kmod": true, "owdeb_exp_tcp_full_kmod": true,
-		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
+		"tix_tcp_full_kmod": true, "owdeb_tix_tcp_full_kmod": true,
+		"secure_kudp": true, "secure_tix_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostGate := map[string]bool{
 		"userspace": true, "userspace_tc": true, "tc_direct": true,
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"exp_tcp_full_kmod": true, "owdeb_exp_tcp_full_kmod": true,
-		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
+		"tix_tcp_full_kmod": true, "owdeb_tix_tcp_full_kmod": true,
+		"secure_kudp": true, "secure_tix_tcp_kernel": true, "route_gso": true,
 	}
 	crossHostOnlyGate := map[string]bool{
 		"full_kmod": true, "owdeb_full_kmod": true,
-		"exp_tcp_full_kmod": true, "owdeb_exp_tcp_full_kmod": true,
-		"secure_kudp": true, "secure_exp_tcp_kernel": true, "route_gso": true,
+		"tix_tcp_full_kmod": true, "owdeb_tix_tcp_full_kmod": true,
+		"secure_kudp": true, "secure_tix_tcp_kernel": true, "route_gso": true,
 	}
 	seen := map[string]bool{}
 	baseline := map[string]bool{}
@@ -5018,7 +4995,7 @@ func TestProductionTransportDefaultsAreStructuredAndGateScoped(t *testing.T) {
 			baseline[row.Transport+":"+row.Encryption] = true
 		}
 	}
-	for _, transport := range []string{"udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp"} {
+	for _, transport := range []string{"udp", "tcp", "quic", "websocket", "http_connect", "tix_tcp"} {
 		for _, encryption := range []string{"secure", "plaintext"} {
 			key := transport + ":" + encryption
 			if !baseline[key] {
@@ -5060,7 +5037,7 @@ func TestCrossHostProductionDefaultsCoverTransportEncryptionModes(t *testing.T) 
 		"ipip",
 		"vxlan",
 		"kernel_udp",
-		"experimental_tcp",
+		"tix_tcp",
 	} {
 		for _, encryption := range []string{"secure", "plaintext"} {
 			if len(coverage[transport][encryption]) == 0 {
@@ -5088,10 +5065,10 @@ func TestE2ESmokeDefaultsAvoidUnsafeDirectKfuncCrypto(t *testing.T) {
 		"route_tcp_gso_async_txq_stopped_backoff_sleep_usecs=50",
 		"route_tcp_gso_async_worker_min_queue_depth=0",
 		"route_tcp_gso_async_worker_schedule_delay_usecs=0",
-		"experimental_tcp_route_gso_async_worker_item_budget=64",
-		"experimental_tcp_route_gso_async_worker_segment_budget=2048",
-		"route_tcp_gso_async_worker_item_budget=${experimental_tcp_route_gso_async_worker_item_budget}",
-		"route_tcp_gso_async_worker_segment_budget=${experimental_tcp_route_gso_async_worker_segment_budget}",
+		"tix_tcp_route_gso_async_worker_item_budget=64",
+		"tix_tcp_route_gso_async_worker_segment_budget=2048",
+		"route_tcp_gso_async_worker_item_budget=${tix_tcp_route_gso_async_worker_item_budget}",
+		"route_tcp_gso_async_worker_segment_budget=${tix_tcp_route_gso_async_worker_segment_budget}",
 		"tixt_rx_coalesce_segment_gso=0",
 		"tixt_rx_backlog_worker_budget=2048",
 		"tixt_rx_backlog_worker_queue_limit=65536",
@@ -5137,9 +5114,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS:-${gate_min_gbps:-0.75}",
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS:-${gate_min_gbps:-0}",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-4}",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-4}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_GBPS:-${gate_min_gbps:-1.5}",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_GBPS:-${gate_min_gbps:-1.5}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}",
 		"max_decimal()",
 		"min_decimal()",
@@ -5150,7 +5127,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"tc_direct_min_gbps=\"$(max_decimal \"$tc_direct_min_gbps\" \"3\")\"",
 		"full_kmod_min_gbps=\"$(max_decimal \"$full_kmod_min_gbps\" \"3\")\"",
 		"secure_kudp_min_gbps=\"$(max_decimal \"$secure_kudp_min_gbps\" \"1.5\")\"",
-		"secure_exp_tcp_kernel_min_gbps=\"$(max_decimal \"$secure_exp_tcp_kernel_min_gbps\" \"1.5\")\"",
+		"secure_tix_tcp_kernel_min_gbps=\"$(max_decimal \"$secure_tix_tcp_kernel_min_gbps\" \"1.5\")\"",
 		"route_gso_min_gbps=\"$(max_decimal \"$route_gso_min_gbps\" \"2.5\")\"",
 		"TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-3600",
 		"min_seconds=\"$(max_decimal \"$min_seconds\" \"3600\")\"",
@@ -5162,19 +5139,19 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_GATE_MIN_HOST_CPUS:-4",
 		"TRUSTIX_CROSS_HOST_GATE_FORBID_HOST_NET_DRIVER:-e1000 e1000e rtl8139 8139cp 8139too pcnet32 ne2k_pci",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_POOL_SIZE:-16",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_SESSIONS:-16",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_SESSION_ERROR_BUDGET:-0",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_POOL_SIZE:-16",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_SESSIONS:-16",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_SESSION_ERROR_BUDGET:-0",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET:-64",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET:-0.00002",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_DROP_RATIO_BUDGET:-0.00002",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_SESSIONS:-8",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_CRYPTO_FLOWS:-1",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_SESSION_ERROR_BUDGET:-2",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_DIRECT_ERROR_BUDGET:-0",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_REPLAY_RATIO_BUDGET:-0.00002",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS:-8",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS:-1",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET:-2",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET:-0",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET:-0.00002",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2",
 		"TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS:-1",
@@ -5186,24 +5163,24 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS",
 		"TRUSTIX_CROSS_HOST_DD_FULL_KMOD",
 		"TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD",
-		"TRUSTIX_CROSS_HOST_DD_EXP_TCP_FULL_KMOD",
-		"TRUSTIX_CROSS_HOST_OWDEB_EXP_TCP_FULL_KMOD",
+		"TRUSTIX_CROSS_HOST_DD_TIX_TCP_FULL_KMOD",
+		"TRUSTIX_CROSS_HOST_OWDEB_TIX_TCP_FULL_KMOD",
 		"TRUSTIX_CROSS_HOST_DD_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP",
 		"TRUSTIX_CROSS_HOST_DD_ROUTE_GSO",
 		"TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS",
 		"validate_number TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS \"$userspace_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS \"$userspace_tc_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS \"$tc_direct_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS \"$full_kmod_min_gbps\"",
-		"validate_number TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_GBPS \"$exp_tcp_full_kmod_min_gbps\"",
+		"validate_number TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_GBPS \"$tix_tcp_full_kmod_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS \"$secure_kudp_min_gbps\"",
-		"validate_number TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_GBPS \"$secure_exp_tcp_kernel_min_gbps\"",
+		"validate_number TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_GBPS \"$secure_tix_tcp_kernel_min_gbps\"",
 		"validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS \"$route_gso_min_gbps\"",
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_GATE_MIN_HOST_CPUS \"$min_host_cpus\"",
 		"min_host_cpus=\"$(max_integer \"$min_host_cpus\" \"4\")\"",
@@ -5213,28 +5190,28 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET \"$secure_kudp_direct_error_budget\"",
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET \"$secure_kudp_replay_seen_ratio_budget\"",
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_DROP_RATIO_BUDGET \"$secure_kudp_drop_ratio_budget\"",
-		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_SESSIONS \"$secure_exp_tcp_kernel_min_sessions\"",
-		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_CRYPTO_FLOWS \"$secure_exp_tcp_kernel_min_crypto_flows\"",
-		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_SESSION_ERROR_BUDGET \"$secure_exp_tcp_kernel_session_error_budget\"",
-		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_DIRECT_ERROR_BUDGET \"$secure_exp_tcp_kernel_direct_error_budget\"",
-		"validate_number TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_REPLAY_RATIO_BUDGET \"$secure_exp_tcp_kernel_replay_ratio_budget\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS \"$secure_tix_tcp_kernel_min_sessions\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS \"$secure_tix_tcp_kernel_min_crypto_flows\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET \"$secure_tix_tcp_kernel_session_error_budget\"",
+		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET \"$secure_tix_tcp_kernel_direct_error_budget\"",
+		"validate_number TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET \"$secure_tix_tcp_kernel_replay_ratio_budget\"",
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS \"$route_gso_min_sessions\"",
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET \"$route_gso_session_error_budget\"",
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS \"$compat_min_sessions\"",
 		"full_kmod_min_sessions=\"$(max_integer \"$full_kmod_min_sessions\" \"8\")\"",
-		"exp_tcp_full_kmod_min_pool_size=\"$(max_integer \"$exp_tcp_full_kmod_min_pool_size\" \"16\")\"",
-		"exp_tcp_full_kmod_min_sessions=\"$(max_integer \"$exp_tcp_full_kmod_min_sessions\" \"16\")\"",
-		"exp_tcp_full_kmod_session_error_budget=\"$(min_integer \"$exp_tcp_full_kmod_session_error_budget\" \"0\")\"",
+		"tix_tcp_full_kmod_min_pool_size=\"$(max_integer \"$tix_tcp_full_kmod_min_pool_size\" \"16\")\"",
+		"tix_tcp_full_kmod_min_sessions=\"$(max_integer \"$tix_tcp_full_kmod_min_sessions\" \"16\")\"",
+		"tix_tcp_full_kmod_session_error_budget=\"$(min_integer \"$tix_tcp_full_kmod_session_error_budget\" \"0\")\"",
 		"secure_kudp_min_sessions=\"$(max_integer \"$secure_kudp_min_sessions\" \"8\")\"",
 		"secure_kudp_min_crypto_flows=\"$(max_integer \"$secure_kudp_min_crypto_flows\" \"1\")\"",
 		"secure_kudp_direct_error_budget=\"$(min_integer \"$secure_kudp_direct_error_budget\" \"64\")\"",
 		"secure_kudp_replay_seen_ratio_budget=\"$(min_decimal \"$secure_kudp_replay_seen_ratio_budget\" \"0.00002\")\"",
 		"secure_kudp_drop_ratio_budget=\"$(min_decimal \"$secure_kudp_drop_ratio_budget\" \"0.00002\")\"",
-		"secure_exp_tcp_kernel_min_sessions=\"$(max_integer \"$secure_exp_tcp_kernel_min_sessions\" \"8\")\"",
-		"secure_exp_tcp_kernel_min_crypto_flows=\"$(max_integer \"$secure_exp_tcp_kernel_min_crypto_flows\" \"1\")\"",
-		"secure_exp_tcp_kernel_session_error_budget=\"$(min_integer \"$secure_exp_tcp_kernel_session_error_budget\" \"2\")\"",
-		"secure_exp_tcp_kernel_direct_error_budget=\"$(min_integer \"$secure_exp_tcp_kernel_direct_error_budget\" \"0\")\"",
-		"secure_exp_tcp_kernel_replay_ratio_budget=\"$(min_decimal \"$secure_exp_tcp_kernel_replay_ratio_budget\" \"0.00002\")\"",
+		"secure_tix_tcp_kernel_min_sessions=\"$(max_integer \"$secure_tix_tcp_kernel_min_sessions\" \"8\")\"",
+		"secure_tix_tcp_kernel_min_crypto_flows=\"$(max_integer \"$secure_tix_tcp_kernel_min_crypto_flows\" \"1\")\"",
+		"secure_tix_tcp_kernel_session_error_budget=\"$(min_integer \"$secure_tix_tcp_kernel_session_error_budget\" \"2\")\"",
+		"secure_tix_tcp_kernel_direct_error_budget=\"$(min_integer \"$secure_tix_tcp_kernel_direct_error_budget\" \"0\")\"",
+		"secure_tix_tcp_kernel_replay_ratio_budget=\"$(min_decimal \"$secure_tix_tcp_kernel_replay_ratio_budget\" \"0.00002\")\"",
 		"route_gso_min_sessions=\"$(max_integer \"$route_gso_min_sessions\" \"8\")\"",
 		"route_gso_session_error_budget=\"$(min_integer \"$route_gso_session_error_budget\" \"2\")\"",
 		"compat_min_sessions=\"$(max_integer \"$compat_min_sessions\" \"1\")\"",
@@ -5242,14 +5219,14 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS \"$userspace_tc_case_min_gbps_raw\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS \"$tc_direct_case_min_gbps_raw\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS \"$full_kmod_case_min_gbps_raw\"",
-		"validate_case_min_map TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS \"$exp_tcp_full_kmod_case_min_gbps_raw\"",
+		"validate_case_min_map TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS \"$tix_tcp_full_kmod_case_min_gbps_raw\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS \"$secure_kudp_case_min_gbps_raw\"",
-		"validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS \"$secure_exp_tcp_kernel_case_min_gbps_raw\"",
+		"validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS \"$secure_tix_tcp_kernel_case_min_gbps_raw\"",
 		"validate_case_min_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS \"$route_gso_case_min_gbps_raw\"",
 		"validate_case_seconds_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS \"$full_kmod_case_min_seconds_raw\"",
-		"validate_case_seconds_map TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_SECONDS \"$exp_tcp_full_kmod_case_min_seconds_raw\"",
+		"validate_case_seconds_map TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS \"$tix_tcp_full_kmod_case_min_seconds_raw\"",
 		"validate_case_seconds_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS \"$secure_kudp_case_min_seconds_raw\"",
-		"validate_case_seconds_map TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS \"$secure_exp_tcp_kernel_case_min_seconds_raw\"",
+		"validate_case_seconds_map TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS \"$secure_tix_tcp_kernel_case_min_seconds_raw\"",
 		"validate_case_seconds_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS \"$route_gso_case_min_seconds_raw\"",
 		"case_min_gbps()",
 		"case_min_seconds()",
@@ -5267,9 +5244,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASE_MIN_GBPS",
 		"TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_GBPS",
 		"TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_GBPS",
-		"TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS",
+		"TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS",
 		"TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_GBPS",
-		"TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS",
+		"TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS",
 		"TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_GBPS",
 		"production_gate",
 		"verifier",
@@ -5334,7 +5311,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-transport-policy-stat datapath=tc_xdp",
 		"--require-transport-policy-min session_pool_size=\"${full_kmod_min_sessions}\"",
 		"--require-transport-policy-min session_pool_size=\"${secure_kudp_min_sessions}\"",
-		"--require-transport-policy-min session_pool_size=\"${secure_exp_tcp_kernel_min_sessions}\"",
+		"--require-transport-policy-min session_pool_size=\"${secure_tix_tcp_kernel_min_sessions}\"",
 		"--require-transport-policy-min session_pool_size=\"${route_gso_min_sessions}\"",
 		"--require-transport-policy-stat session_pool_strategy=flow",
 		"--require-transport-policy-stat session_pool_warmup=true",
@@ -5343,11 +5320,11 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-status-max data_path.counters.session_dial_errors=\"${route_gso_session_error_budget}\"",
 		"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
 		"--require-datapath-stat kernel_udp.provider_stats.kernel_datapath_full_plaintext_provider=1",
-		"run_gate_case_list exp-tcp-full-kmod \"$exp_tcp_full_kmod_min_gbps\"",
-		"--require-datapath-stat experimental_tcp.provider=kernel_datapath_full_plaintext",
-		"--require-datapath-stat experimental_tcp.fast_path=true",
+		"run_gate_case_list tix-tcp-full-kmod \"$tix_tcp_full_kmod_min_gbps\"",
+		"--require-datapath-stat tix_tcp.provider=kernel_datapath_full_plaintext",
+		"--require-datapath-stat tix_tcp.fast_path=true",
 		"--require-datapath-stat capture_forwarder_suppressed=true",
-		"--require-transport-session-stat \"stats.extra.experimental_tcp_full_plaintext_kernel_datapath=1\"",
+		"--require-transport-session-stat \"stats.extra.tix_tcp_full_plaintext_kernel_datapath=1\"",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_packets=1",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_gso_segments=1",
 		"--require-module-param-any-min trustix_datapath.rx_worker_injected=1",
@@ -5369,14 +5346,14 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_enabled=1",
 		"--require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_seal_errors=0",
 		"--require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_open_errors=0",
-		"--require-datapath-min experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_seal_calls=1",
-		"--require-datapath-min experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=1",
-		"--require-datapath-max experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors=\"${secure_exp_tcp_kernel_direct_error_budget}\"",
-		"--require-datapath-min experimental_tcp.provider_stats.kernel_crypto_flow_map_entries=\"${secure_exp_tcp_kernel_min_crypto_flows}\"",
-		"--require-datapath-min experimental_tcp.provider_stats.kernel_crypto_flow_map_updates=\"${secure_exp_tcp_kernel_min_crypto_flows}\"",
-		"--require-datapath-ratio-max experimental_tcp.provider_stats.kernel_crypto_frame_replay_drops/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_exp_tcp_kernel_replay_ratio_budget}\"",
-		"--require-datapath-ratio-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_drops/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_exp_tcp_kernel_replay_ratio_budget}\"",
-		"--require-datapath-ratio-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_exp_tcp_kernel_replay_ratio_budget}\"",
+		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_seal_calls=1",
+		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=1",
+		"--require-datapath-max tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors=\"${secure_tix_tcp_kernel_direct_error_budget}\"",
+		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_entries=\"${secure_tix_tcp_kernel_min_crypto_flows}\"",
+		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_updates=\"${secure_tix_tcp_kernel_min_crypto_flows}\"",
+		"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_crypto_frame_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
+		"--require-datapath-ratio-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
+		"--require-datapath-ratio-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
 		"--require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_encrypt_errors=0",
 		"--require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors=\"${secure_kudp_direct_error_budget}\"",
 		"--require-datapath-min kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts=1",
@@ -5445,9 +5422,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-max trustix_datapath.tx_plaintext_xmit_errors=0",
 		"--require-module-param-max trustix_datapath.tx_plaintext_queue_drops=0",
 		"--require-lsmod-module trustix_datapath",
-		"--require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1",
-		"--require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1",
-		"--require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1",
+		"--require-datapath-stat kernel_udp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc=1",
+		"--require-datapath-stat kernel_udp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1",
+		"--require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_tix_tcp_only=1",
 		"--require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=0",
 		"--require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_backoff_retries=1",
 		"--require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_backoff_sleep_usecs=50",
@@ -5483,12 +5460,12 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		t.Fatalf("linux-cross-host-production-gate.sh must not allow disabling binary identity checks")
 	}
 	for _, unwanted := range []string{
-		"TRUSTIX_CROSS_HOST_DD_FULL_KMOD_EXPERIMENTAL_TCP",
-		"dd-fullkmod-experimental-tcp",
+		"TRUSTIX_CROSS_HOST_DD_FULL_KMOD_TIX_TCP",
+		"dd-fullkmod-tix-tcp",
 		"tx_kernel_crypto_packet_seal_errors",
 	} {
 		if strings.Contains(text, unwanted) {
-			t.Fatalf("linux-cross-host-production-gate.sh still promotes diagnostic full-kmod experimental_tcp case %q", unwanted)
+			t.Fatalf("linux-cross-host-production-gate.sh still promotes diagnostic full-kmod tix_tcp case %q", unwanted)
 		}
 	}
 }
@@ -5554,16 +5531,16 @@ func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
 			},
 		},
 		{
-			name:   "exp-tcp-full-kmod",
-			marker: `if [[ "$exp_tcp_full_kmod_case_count" -gt 0 ]]; then`,
+			name:   "tix-tcp-full-kmod",
+			marker: `if [[ "$tix_tcp_full_kmod_case_count" -gt 0 ]]; then`,
 			want: []string{
-				"run_gate_case_list exp-tcp-full-kmod \"$exp_tcp_full_kmod_min_gbps\"",
+				"run_gate_case_list tix-tcp-full-kmod \"$tix_tcp_full_kmod_min_gbps\"",
 				"--require-transport-policy-stat encryption=plaintext",
 				"--require-transport-policy-stat profile=performance",
 				"--require-transport-policy-stat datapath=kernel_module",
 				"--require-transport-policy-stat crypto_placement=userspace",
 				"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
-				"--require-datapath-stat experimental_tcp.provider=kernel_datapath_full_plaintext",
+				"--require-datapath-stat tix_tcp.provider=kernel_datapath_full_plaintext",
 			},
 		},
 		{
@@ -5579,18 +5556,18 @@ func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
 			},
 		},
 		{
-			name:   "secure-exp-tcp-kernel",
-			marker: `if [[ "$secure_exp_tcp_kernel_case_count" -gt 0 ]]; then`,
+			name:   "secure-tix-tcp-kernel",
+			marker: `if [[ "$secure_tix_tcp_kernel_case_count" -gt 0 ]]; then`,
 			want: []string{
-				"run_gate_case_list secure-exp-tcp-kernel \"$secure_exp_tcp_kernel_min_gbps\"",
+				"run_gate_case_list secure-tix-tcp-kernel \"$secure_tix_tcp_kernel_min_gbps\"",
 				"--require-transport-policy-stat encryption=secure",
 				"--require-transport-policy-stat profile=performance",
 				"--require-transport-policy-stat datapath=kernel_module",
 				"--require-transport-policy-stat crypto_placement=kernel",
-				"--require-status-max data_path.counters.session_dial_errors=\"${secure_exp_tcp_kernel_session_error_budget}\"",
-				"--require-datapath-min experimental_tcp.provider_stats.kernel_crypto_flow_map_entries=\"${secure_exp_tcp_kernel_min_crypto_flows}\"",
-				"--require-datapath-max experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors=\"${secure_exp_tcp_kernel_direct_error_budget}\"",
-				"--require-datapath-ratio-max experimental_tcp.provider_stats.kernel_crypto_frame_replay_drops/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_exp_tcp_kernel_replay_ratio_budget}\"",
+				"--require-status-max data_path.counters.session_dial_errors=\"${secure_tix_tcp_kernel_session_error_budget}\"",
+				"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_entries=\"${secure_tix_tcp_kernel_min_crypto_flows}\"",
+				"--require-datapath-max tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors=\"${secure_tix_tcp_kernel_direct_error_budget}\"",
+				"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_crypto_frame_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
 				"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
 			},
 		},
@@ -5665,9 +5642,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	userspaceTCDir := slashPath(filepath.Join(workdir, "userspace-tc"))
 	tcDirectDir := slashPath(filepath.Join(workdir, "tc-direct"))
 	fullKmodDir := slashPath(filepath.Join(workdir, "full-kmod"))
-	expTCPFullKmodDir := slashPath(filepath.Join(workdir, "exp-tcp-full-kmod"))
+	tixTCPFullKmodDir := slashPath(filepath.Join(workdir, "tix-tcp-full-kmod"))
 	secureKUDPDir := slashPath(filepath.Join(workdir, "secure-kudp"))
-	secureExpTCPKernelDir := slashPath(filepath.Join(workdir, "secure-exp-tcp-kernel"))
+	secureTIXTCPKernelDir := slashPath(filepath.Join(workdir, "secure-tix-tcp-kernel"))
 	routeGSODir := slashPath(filepath.Join(workdir, "route-gso"))
 	cmd := exec.Command(bash, "linux-cross-host-production-gate.sh")
 	cmd.Dir = "."
@@ -5686,11 +5663,11 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET=999",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET=999999",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_DROP_RATIO_BUDGET=999999",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_SESSIONS=0",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_CRYPTO_FLOWS=0",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_SESSION_ERROR_BUDGET=999",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_DIRECT_ERROR_BUDGET=999",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_REPLAY_RATIO_BUDGET=999999",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS=0",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS=0",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET=999",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET=999",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET=999999",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS=0",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET=999",
 		"TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS=0",
@@ -5710,18 +5687,18 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=full="+fullKmodDir,
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS=full=0",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS=full=3600",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_GBPS=0",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASES=expfull="+expTCPFullKmodDir,
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS=expfull=0",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_SECONDS=expfull=3600",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_GBPS=0",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=expfull="+tixTCPFullKmodDir,
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS=expfull=0",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS=expfull=3600",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=secure="+secureKUDPDir,
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=secure=0",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS=secure=3600",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_GBPS=0",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASES=secure-exp="+secureExpTCPKernelDir,
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS=secure-exp=0",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS=secure-exp=3600",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_GBPS=0",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-exp="+secureTIXTCPKernelDir,
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS=secure-exp=0",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS=secure-exp=3600",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS=0",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=route="+routeGSODir,
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=route=0",
@@ -5770,21 +5747,21 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"min_iperf_intervals":                        "600",
 		"min_interval_gbps_ratio":                    "0.25",
 		"full_kmod_min_sessions":                     "8",
-		"exp_tcp_full_kmod_min_gbps":                 "4",
-		"exp_tcp_full_kmod_min_pool_size":            "16",
-		"exp_tcp_full_kmod_min_sessions":             "16",
-		"exp_tcp_full_kmod_session_error_budget":     "0",
+		"tix_tcp_full_kmod_min_gbps":                 "4",
+		"tix_tcp_full_kmod_min_pool_size":            "16",
+		"tix_tcp_full_kmod_min_sessions":             "16",
+		"tix_tcp_full_kmod_session_error_budget":     "0",
 		"secure_kudp_min_sessions":                   "8",
 		"secure_kudp_min_crypto_flows":               "1",
 		"secure_kudp_direct_error_budget":            "64",
 		"secure_kudp_replay_seen_ratio_budget":       "0.00002",
 		"secure_kudp_drop_ratio_budget":              "0.00002",
-		"secure_exp_tcp_kernel_min_gbps":             "1.5",
-		"secure_exp_tcp_kernel_min_sessions":         "8",
-		"secure_exp_tcp_kernel_min_crypto_flows":     "1",
-		"secure_exp_tcp_kernel_session_error_budget": "2",
-		"secure_exp_tcp_kernel_direct_error_budget":  "0",
-		"secure_exp_tcp_kernel_replay_ratio_budget":  "0.00002",
+		"secure_tix_tcp_kernel_min_gbps":             "1.5",
+		"secure_tix_tcp_kernel_min_sessions":         "8",
+		"secure_tix_tcp_kernel_min_crypto_flows":     "1",
+		"secure_tix_tcp_kernel_session_error_budget": "2",
+		"secure_tix_tcp_kernel_direct_error_budget":  "0",
+		"secure_tix_tcp_kernel_replay_ratio_budget":  "0.00002",
 		"route_gso_min_sessions":                     "8",
 		"route_gso_session_error_budget":             "2",
 		"compat_min_sessions":                        "1",
@@ -5798,9 +5775,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"userspace_tc":          userspaceTCName + "=" + userspaceTCDir,
 		"tc_direct":             "tc=" + tcDirectDir,
 		"full_kmod":             "full=" + fullKmodDir,
-		"exp_tcp_full_kmod":     "expfull=" + expTCPFullKmodDir,
+		"tix_tcp_full_kmod":     "expfull=" + tixTCPFullKmodDir,
 		"secure_kudp":           "secure=" + secureKUDPDir,
-		"secure_exp_tcp_kernel": "secure-exp=" + secureExpTCPKernelDir,
+		"secure_tix_tcp_kernel": "secure-exp=" + secureTIXTCPKernelDir,
 		"route_gso":             "route=" + routeGSODir,
 	} {
 		if !strings.Contains(manifest.Cases[key], wantSubstring) {
@@ -5812,9 +5789,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"userspace_tc":          userspaceTCName + "=0",
 		"tc_direct":             "tc=0",
 		"full_kmod":             "full=0",
-		"exp_tcp_full_kmod":     "expfull=0",
+		"tix_tcp_full_kmod":     "expfull=0",
 		"secure_kudp":           "secure=0",
-		"secure_exp_tcp_kernel": "secure-exp=0",
+		"secure_tix_tcp_kernel": "secure-exp=0",
 		"route_gso":             "route=0",
 	} {
 		if !strings.Contains(manifest.CaseMinGbps[key], wantSubstring) {
@@ -5826,9 +5803,9 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"userspace_tc":          userspaceTCName + "=900",
 		"tc_direct":             "tc=3600",
 		"full_kmod":             "full=3600",
-		"exp_tcp_full_kmod":     "expfull=3600",
+		"tix_tcp_full_kmod":     "expfull=3600",
 		"secure_kudp":           "secure=3600",
-		"secure_exp_tcp_kernel": "secure-exp=3600",
+		"secure_tix_tcp_kernel": "secure-exp=3600",
 		"route_gso":             "route=3600",
 	} {
 		if !strings.Contains(manifest.CaseMinSeconds[key], wantSubstring) {
@@ -6199,22 +6176,22 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("full", "--require-module-param-min", "trustix_datapath.session_records=8")
 	requireArgPair("full", "--require-lsmod-module", "trustix_datapath")
 	requireArgPair("expfull", "--require-transport-policy-min", "session_pool_size=16")
-	requireEndpointArgs("expfull", "experimental_tcp", "performance", "kernel_module", "plaintext")
+	requireEndpointArgs("expfull", "tix_tcp", "performance", "kernel_module", "plaintext")
 	requireArgPair("expfull", "--require-transport-sessions-min", "16")
-	requireArgPair("expfull", "--require-transport-session-stat", "transport=experimental_tcp")
-	requireArg("expfull", "--require-transport-session-endpoint-suffix=-experimental-tcp")
+	requireArgPair("expfull", "--require-transport-session-stat", "transport=tix_tcp")
+	requireArg("expfull", "--require-transport-session-endpoint-suffix=-tix-tcp")
 	requireArgPair("expfull", "--require-transport-session-stat", "stats.encryption=plaintext")
-	requireArgPair("expfull", "--require-transport-session-stat", "stats.extra.experimental_tcp_full_plaintext_kernel_datapath=1")
+	requireArgPair("expfull", "--require-transport-session-stat", "stats.extra.tix_tcp_full_plaintext_kernel_datapath=1")
 	requireArgPair("expfull", "--require-transport-session-any-min", "stats.packets_sent=1")
 	requireArgPair("expfull", "--require-status-min", "data_path.active_sessions=16")
 	requireArgPair("expfull", "--require-status-max", "data_path.counters.session_dial_errors=0")
 	requireArgPair("expfull", "--require-status-max", "data_path.counters.session_resets_sent=0")
 	requireArgPair("expfull", "--require-status-max", "data_path.counters.session_resets_received=0")
 	requireArgPair("expfull", "--require-status-max", "data_path.counters.stale_sessions_dropped=0")
-	requireArgPair("expfull", "--require-datapath-stat", "experimental_tcp.provider=kernel_datapath_full_plaintext")
-	requireArgPair("expfull", "--require-datapath-stat", "experimental_tcp.fast_path=true")
+	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.provider=kernel_datapath_full_plaintext")
+	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.fast_path=true")
 	requireArgPair("expfull", "--require-datapath-stat", "capture_forwarder_suppressed=true")
-	requireArgPair("expfull", "--require-datapath-min", "experimental_tcp.active_flows=16")
+	requireArgPair("expfull", "--require-datapath-min", "tix_tcp.active_flows=16")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_packets=1")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_gso_segments=1")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.rx_worker_injected=1")
@@ -6243,36 +6220,36 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("secure", "--require-lsmod-module", "trustix_crypto")
 	requireArgPair("secure", "--require-lsmod-module", "trustix_datapath_helpers")
 	requireArgPair("secure-exp", "--require-transport-policy-min", "session_pool_size=8")
-	requireEndpointArgs("secure-exp", "experimental_tcp", "performance", "kernel_module", "secure")
+	requireEndpointArgs("secure-exp", "tix_tcp", "performance", "kernel_module", "secure")
 	requireSecureEndpointPlacement("secure-exp", "kernel")
 	requireArgPair("secure-exp", "--require-transport-sessions-min", "8")
-	requireArgPair("secure-exp", "--require-transport-session-stat", "transport=experimental_tcp")
-	requireArg("secure-exp", "--require-transport-session-endpoint-suffix=-experimental-tcp")
+	requireArgPair("secure-exp", "--require-transport-session-stat", "transport=tix_tcp")
+	requireArg("secure-exp", "--require-transport-session-endpoint-suffix=-tix-tcp")
 	requireArgPair("secure-exp", "--require-transport-session-stat", "stats.encryption=secure")
 	requireArgPair("secure-exp", "--require-transport-session-stat", "stats.crypto_placement=kernel")
 	requireArgPair("secure-exp", "--require-status-min", "data_path.active_sessions=8")
 	requireArgPair("secure-exp", "--require-status-max", "data_path.counters.session_dial_errors=2")
-	requireArgPair("secure-exp", "--require-datapath-stat", "experimental_tcp.fast_path=true")
-	requireArgPair("secure-exp", "--require-datapath-stat", "experimental_tcp.kernel_crypto=true")
-	requireArgPair("secure-exp", "--require-datapath-stat", "experimental_tcp.requested_crypto=kernel")
-	requireArgPair("secure-exp", "--require-datapath-stat", "experimental_tcp.effective_crypto=kernel")
-	requireArgPair("secure-exp", "--require-datapath-min", "experimental_tcp.provider_stats.kernel_crypto_flow_map_entries=1")
-	requireArgPair("secure-exp", "--require-datapath-min", "experimental_tcp.provider_stats.kernel_crypto_flow_map_updates=1")
-	requireArgPair("secure-exp", "--require-datapath-min", "experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_seal_calls=1")
-	requireArgPair("secure-exp", "--require-datapath-min", "experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=1")
-	requireArgPair("secure-exp", "--require-datapath-max", "experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors=0")
-	requireArgPair("secure-exp", "--require-datapath-ratio-max", "experimental_tcp.provider_stats.kernel_crypto_frame_replay_drops/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=0.00002")
-	requireArgPair("secure-exp", "--require-datapath-ratio-max", "experimental_tcp.provider_stats.xdp_kernel_crypto_replay_drops/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=0.00002")
-	requireArgPair("secure-exp", "--require-datapath-ratio-max", "experimental_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=0.00002")
+	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.fast_path=true")
+	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.kernel_crypto=true")
+	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.requested_crypto=kernel")
+	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.effective_crypto=kernel")
+	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_flow_map_entries=1")
+	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_flow_map_updates=1")
+	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_seal_calls=1")
+	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=1")
+	requireArgPair("secure-exp", "--require-datapath-max", "tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors=0")
+	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.kernel_crypto_frame_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=0.00002")
+	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.xdp_kernel_crypto_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=0.00002")
+	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=0.00002")
 	requireArgPair("secure-exp", "--require-module-param-max", "trustix_crypto.direct_kfunc_errors=0")
 	requireRouteTCPHelperArgs("secure-exp")
 	requireArgPair("secure-exp", "--require-lsmod-module", "trustix_crypto")
 	requireArgPair("secure-exp", "--require-lsmod-module", "trustix_datapath_helpers")
 	requireArgPair("route", "--require-transport-policy-min", "session_pool_size=8")
-	requireEndpointArgs("route", "experimental_tcp", "performance", "kernel_module", "plaintext")
+	requireEndpointArgs("route", "tix_tcp", "performance", "kernel_module", "plaintext")
 	requireArgPair("route", "--require-transport-sessions-min", "8")
-	requireArgPair("route", "--require-transport-session-stat", "transport=experimental_tcp")
-	requireArg("route", "--require-transport-session-endpoint-suffix=-experimental-tcp")
+	requireArgPair("route", "--require-transport-session-stat", "transport=tix_tcp")
+	requireArg("route", "--require-transport-session-endpoint-suffix=-tix-tcp")
 	requireArgPair("route", "--require-transport-session-stat", "stats.encryption=plaintext")
 	requireArgPair("route", "--require-status-min", "data_path.active_sessions=8")
 	requireArgPair("route", "--require-status-max", "data_path.counters.session_dial_errors=2")
@@ -6294,8 +6271,8 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t1.5\t30\tselected UDP userspace gate",
 		"tcp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t0.75\t30\tselected TCP userspace gate",
 		"gre\tplaintext\tperformance\ttc_xdp\tuserspace\tcross_host\tuserspace_tc\t4\t30\tselected GRE userspace-TC gate",
-		"experimental_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_exp_tcp_kernel\t1.5\t3600\tselected secure experimental TCP kernel gate",
-		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t3600\tselected route-GSO gate",
+		"tix_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_tix_tcp_kernel\t1.5\t3600\tselected secure TIX-TCP kernel gate",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t3600\tselected route-GSO gate",
 		"",
 	}, "\n")), 0o644); err != nil {
 		t.Fatalf("write defaults: %v", err)
@@ -6323,8 +6300,8 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"  printf 'USERSPACE_CASE_MIN_SECONDS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_SECONDS\"",
 		"  printf 'USERSPACE_TC_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS\"",
 		"  printf 'USERSPACE_TC_CASE_MIN_SECONDS=%s\\n' \"$TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_SECONDS\"",
-		"  printf 'SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS\"",
-		"  printf 'SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS=%s\\n' \"$TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS\"",
+		"  printf 'SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS\"",
+		"  printf 'SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS=%s\\n' \"$TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS\"",
 		"  printf 'ROUTE_GSO_CASE_MIN_GBPS=%s\\n' \"$TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS\"",
 		"  printf 'ROUTE_GSO_CASE_MIN_SECONDS=%s\\n' \"$TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS\"",
 		"} > \"$TRUSTIX_CAPTURE\"",
@@ -6369,10 +6346,10 @@ func TestCrossHostTransportMatrixPassesSelectedGatePerCaseMinGbps(t *testing.T) 
 		"tcp-secure-stable-userspace-userspace-userspace=30",
 		"gre-plaintext-performance-tc_xdp-userspace-userspace_tc=4",
 		"gre-plaintext-performance-tc_xdp-userspace-userspace_tc=30",
-		"experimental_tcp-secure-performance-kernel_module-kernel-secure_exp_tcp_kernel=1.5",
-		"experimental_tcp-secure-performance-kernel_module-kernel-secure_exp_tcp_kernel=3600",
-		"experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso=2.5",
-		"experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso=3600",
+		"tix_tcp-secure-performance-kernel_module-kernel-secure_tix_tcp_kernel=1.5",
+		"tix_tcp-secure-performance-kernel_module-kernel-secure_tix_tcp_kernel=3600",
+		"tix_tcp-plaintext-performance-kernel_module-userspace-route_gso=2.5",
+		"tix_tcp-plaintext-performance-kernel_module-userspace-route_gso=3600",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("selected gate capture missing %q:\n%s", want, text)
@@ -6541,11 +6518,11 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"local base=\"${token}-${encryption}-${profile}-${datapath}-${placement}-${gate_class}\"",
 		"full_kmod|dd_full_kmod) printf 'dd-fullkmod\\n'",
 		"owdeb_full_kmod) printf 'owdeb-fullkmod\\n'",
-		"exp_tcp_full_kmod|dd_exp_tcp_full_kmod) printf 'experimental-tcp-full-kmod\\n'",
-		"owdeb_exp_tcp_full_kmod) printf 'owdeb-experimental-tcp-full-kmod\\n'",
+		"tix_tcp_full_kmod|dd_tix_tcp_full_kmod) printf 'tix-tcp-full-kmod\\n'",
+		"owdeb_tix_tcp_full_kmod) printf 'owdeb-tix-tcp-full-kmod\\n'",
 		"secure_kudp|dd_secure_kudp) printf 'secure-kudp\\n'",
 		"owdeb_secure_kudp) printf 'owdeb-secure-kudp\\n'",
-		"secure_exp_tcp_kernel|dd_secure_exp_tcp_kernel|owdeb_secure_exp_tcp_kernel) printf 'secure-exp-tcp-kernel\\n'",
+		"secure_tix_tcp_kernel|dd_secure_tix_tcp_kernel|owdeb_secure_tix_tcp_kernel) printf 'secure-tix-tcp-kernel\\n'",
 		"route_gso|dd_route_gso) printf 'dd-routegso\\n'",
 		"owdeb_route_gso) printf 'owdeb-routegso\\n'",
 		"owdeb_*) printf '%s-owdeb\\n' \"$base\"",
@@ -6556,19 +6533,19 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"append_case_token userspace_tc_case_min_gbps",
 		"append_case_token tc_direct_case_min_gbps",
 		"append_case_token full_kmod_case_min_gbps",
-		"append_case_token exp_tcp_full_kmod_case_min_gbps",
+		"append_case_token tix_tcp_full_kmod_case_min_gbps",
 		"append_case_token secure_kudp_case_min_gbps",
-		"append_case_token secure_exp_tcp_kernel_case_min_gbps",
+		"append_case_token secure_tix_tcp_kernel_case_min_gbps",
 		"append_case_token route_gso_case_min_gbps",
 		"append_case_token full_kmod_case_min_seconds",
-		"append_case_token exp_tcp_full_kmod_case_min_seconds",
+		"append_case_token tix_tcp_full_kmod_case_min_seconds",
 		"append_case_token secure_kudp_case_min_seconds",
-		"append_case_token secure_exp_tcp_kernel_case_min_seconds",
+		"append_case_token secure_tix_tcp_kernel_case_min_seconds",
 		"append_case_token route_gso_case_min_seconds",
 		"full_kmod|dd_full_kmod|owdeb_full_kmod) printf 'full_kmod\\n'",
-		"exp_tcp_full_kmod|dd_exp_tcp_full_kmod|owdeb_exp_tcp_full_kmod) printf 'exp_tcp_full_kmod\\n'",
+		"tix_tcp_full_kmod|dd_tix_tcp_full_kmod|owdeb_tix_tcp_full_kmod) printf 'tix_tcp_full_kmod\\n'",
 		"secure_kudp|dd_secure_kudp|owdeb_secure_kudp) printf 'secure_kudp\\n'",
-		"secure_exp_tcp_kernel|dd_secure_exp_tcp_kernel|owdeb_secure_exp_tcp_kernel) printf 'secure_exp_tcp_kernel\\n'",
+		"secure_tix_tcp_kernel|dd_secure_tix_tcp_kernel|owdeb_secure_tix_tcp_kernel) printf 'secure_tix_tcp_kernel\\n'",
 		"route_gso|dd_route_gso|owdeb_route_gso) printf 'route_gso\\n'",
 		"TRUSTIX_CROSS_HOST_CASE=\"$runner_case\"",
 		"TRUSTIX_CROSS_HOST_TRANSPORT=\"$token\"",
@@ -6597,15 +6574,15 @@ func TestCrossHostTransportMatrixWrapsProductionDefaults(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASES=${full_kmod_cases}",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS=${full_kmod_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS=${full_kmod_case_min_seconds}",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASES=${exp_tcp_full_kmod_cases}",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS=${exp_tcp_full_kmod_case_min_gbps}",
-		"TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_SECONDS=${exp_tcp_full_kmod_case_min_seconds}",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=${tix_tcp_full_kmod_cases}",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS=${tix_tcp_full_kmod_case_min_gbps}",
+		"TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS=${tix_tcp_full_kmod_case_min_seconds}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES=${secure_kudp_cases}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS=${secure_kudp_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS=${secure_kudp_case_min_seconds}",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASES=${secure_exp_tcp_kernel_cases}",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS=${secure_exp_tcp_kernel_case_min_gbps}",
-		"TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS=${secure_exp_tcp_kernel_case_min_seconds}",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=${secure_tix_tcp_kernel_cases}",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS=${secure_tix_tcp_kernel_case_min_gbps}",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS=${secure_tix_tcp_kernel_case_min_seconds}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES=${route_gso_cases}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS=${route_gso_case_min_gbps}",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS=${route_gso_case_min_seconds}",
@@ -6631,7 +6608,7 @@ func TestCrossHostTransportMatrixUsesRouteGSODialErrorBudget(t *testing.T) {
 	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
 		"udp\tsecure\tstable\tuserspace\tuserspace\tcross_host\tuserspace\t0.5\t30\tselected UDP userspace gate",
-		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t30\tselected route-GSO gate",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t30\tselected route-GSO gate",
 		"",
 	}, "\n")), 0o644); err != nil {
 		t.Fatalf("write defaults: %v", err)
@@ -6702,8 +6679,8 @@ func TestCrossHostTransportMatrixUsesRouteGSODialErrorBudget(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]string{
-		"udp-secure-stable-userspace-userspace-userspace":                          "data_path.counters.session_dial_errors=0",
-		"experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso": "data_path.counters.session_dial_errors=2",
+		"udp-secure-stable-userspace-userspace-userspace":                 "data_path.counters.session_dial_errors=0",
+		"tix_tcp-plaintext-performance-kernel_module-userspace-route_gso": "data_path.counters.session_dial_errors=2",
 	} {
 		if gotByCase[name] != want {
 			t.Fatalf("case %s dial-error gate got %q want %q\ncapture:\n%s", name, gotByCase[name], want, payload)
@@ -6758,18 +6735,18 @@ func TestCrossHostTransportMatrixRejectsGateFamilySemanticMismatch(t *testing.T)
 	}{
 		{
 			name: "secure_kudp_wrong_transport",
-			row:  "experimental_tcp\tsecure\tperformance\ttc_xdp\tkernel\tcross_host\tsecure_kudp\t1.5\t3600\tsecure kernel TCP must not reuse secure-kUDP gate",
-			want: "gate_family=secure_kudp requires transport=kernel_udp; got transport=experimental_tcp",
+			row:  "tix_tcp\tsecure\tperformance\ttc_xdp\tkernel\tcross_host\tsecure_kudp\t1.5\t3600\tsecure kernel TCP must not reuse secure-kUDP gate",
+			want: "gate_family=secure_kudp requires transport=kernel_udp; got transport=tix_tcp",
 		},
 		{
 			name: "route_gso_wrong_transport",
 			row:  "udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t3600\tUDP full-kmod must not reuse route-GSO gate",
-			want: "gate_family=route_gso requires transport=experimental_tcp; got transport=udp",
+			want: "gate_family=route_gso requires transport=tix_tcp; got transport=udp",
 		},
 		{
-			name: "secure_exp_tcp_kernel_wrong_datapath",
-			row:  "experimental_tcp\tsecure\tperformance\ttc_xdp\tkernel\tcross_host\tsecure_exp_tcp_kernel\t1.5\t3600\tsecure experimental TCP kernel crypto must use kernel-module datapath",
-			want: "gate_family=secure_exp_tcp_kernel requires datapath=kernel_module; got datapath=tc_xdp",
+			name: "secure_tix_tcp_kernel_wrong_datapath",
+			row:  "tix_tcp\tsecure\tperformance\ttc_xdp\tkernel\tcross_host\tsecure_tix_tcp_kernel\t1.5\t3600\tsecure TIX-TCP kernel crypto must use kernel-module datapath",
+			want: "gate_family=secure_tix_tcp_kernel requires datapath=kernel_module; got datapath=tc_xdp",
 		},
 		{
 			name: "full_kmod_wrong_crypto",
@@ -6777,9 +6754,9 @@ func TestCrossHostTransportMatrixRejectsGateFamilySemanticMismatch(t *testing.T)
 			want: "gate_family=full_kmod requires encryption=plaintext; got encryption=secure",
 		},
 		{
-			name: "exp_tcp_full_kmod_wrong_transport",
-			row:  "udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\t3\t3600\texperimental TCP full-kmod must not reuse UDP full-kmod gate",
-			want: "gate_family=exp_tcp_full_kmod requires transport=experimental_tcp; got transport=udp",
+			name: "tix_tcp_full_kmod_wrong_transport",
+			row:  "udp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\ttix_tcp_full_kmod\t3\t3600\tTIX-TCP full-kmod must not reuse UDP full-kmod gate",
+			want: "gate_family=tix_tcp_full_kmod requires transport=tix_tcp; got transport=udp",
 		},
 	}
 
@@ -7039,16 +7016,16 @@ func productionDefaultRunnerCase(row productionTransportDefault) string {
 		return "dd-fullkmod"
 	case "owdeb_full_kmod":
 		return "owdeb-fullkmod"
-	case "exp_tcp_full_kmod", "dd_exp_tcp_full_kmod":
-		return "experimental-tcp-full-kmod"
-	case "owdeb_exp_tcp_full_kmod":
-		return "owdeb-experimental-tcp-full-kmod"
+	case "tix_tcp_full_kmod", "dd_tix_tcp_full_kmod":
+		return "tix-tcp-full-kmod"
+	case "owdeb_tix_tcp_full_kmod":
+		return "owdeb-tix-tcp-full-kmod"
 	case "secure_kudp", "dd_secure_kudp":
 		return "secure-kudp"
 	case "owdeb_secure_kudp":
 		return "owdeb-secure-kudp"
-	case "secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel":
-		return "secure-exp-tcp-kernel"
+	case "secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel":
+		return "secure-tix-tcp-kernel"
 	case "route_gso", "dd_route_gso":
 		return "dd-routegso"
 	case "owdeb_route_gso":
@@ -7079,9 +7056,9 @@ func productionDefaultNeedsKernelTransport(row productionTransportDefault) bool 
 	}
 	switch row.GateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
-		"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod",
+		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod",
 		"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
-		"secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel",
+		"secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel",
 		"route_gso", "dd_route_gso", "owdeb_route_gso",
 		"tc_direct":
 		return true
@@ -7093,7 +7070,7 @@ func productionDefaultNeedsKernelTransport(row productionTransportDefault) bool 
 func productionDefaultCapabilityProfile(row productionTransportDefault) string {
 	switch row.GateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
-		"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
+		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
 		return "full_plaintext"
 	case "userspace", "userspace_tc", "tc_direct":
 		return "disabled"
@@ -7106,14 +7083,14 @@ func productionDefaultModuleSnippets(row productionTransportDefault) []string {
 	base := []string{"capability_profile: " + productionDefaultCapabilityProfile(row)}
 	switch row.GateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
-		"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
+		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
 		return append(base,
 			"trustix_crypto:\n    mode: disabled",
 			"trustix_datapath:\n    mode: required",
 			"trustix_datapath_helpers:\n    mode: disabled",
 		)
 	case "secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
-		"secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel":
+		"secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel":
 		return append(base,
 			"trustix_crypto:\n    mode: required",
 			"trustix_datapath:\n    mode: disabled",
@@ -7305,8 +7282,8 @@ func TestCrossHostTransportMatrixDryRunIncludesOpenWrtDebianFullKmod(t *testing.
 		if row.RunnerCase == "owdeb-secure-kudp" || row.GateFamily == "owdeb_secure_kudp" {
 			t.Fatalf("OpenWrt-Debian secure-kudp was promoted without a passing OpenWrt route-GSO/kfunc gate:\n%s", payload)
 		}
-		if row.GateFamily == "owdeb_secure_exp_tcp_kernel" {
-			t.Fatalf("OpenWrt-Debian secure experimental TCP kernel path was promoted without a passing OpenWrt route-GSO/kfunc gate:\n%s", payload)
+		if row.GateFamily == "owdeb_secure_tix_tcp_kernel" {
+			t.Fatalf("OpenWrt-Debian secure TIX-TCP kernel path was promoted without a passing OpenWrt route-GSO/kfunc gate:\n%s", payload)
 		}
 		if strings.Contains(row.Case, "route-gso") && strings.HasSuffix(row.Case, "-owdeb") {
 			t.Fatalf("OpenWrt-Debian route-GSO was promoted without a passing OpenWrt route-GSO/kfunc gate:\n%s", payload)
@@ -7330,7 +7307,7 @@ func TestCrossHostTransportMatrixCanRepresentOpenWrtRouteGSOWhenExplicitlyValida
 	summary := filepath.Join(workdir, "summary.jsonl")
 	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
-		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\towdeb_route_gso\t2.5\t900\texplicit OpenWrt-Debian route-GSO validation input",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\towdeb_route_gso\t2.5\t900\texplicit OpenWrt-Debian route-GSO validation input",
 		"",
 	}, "\n")), 0o644); err != nil {
 		t.Fatalf("write defaults: %v", err)
@@ -7368,12 +7345,12 @@ func TestCrossHostTransportMatrixCanRepresentOpenWrtRouteGSOWhenExplicitlyValida
 	}
 	if row.RunnerCase != "owdeb-routegso" ||
 		row.GateFamily != "owdeb_route_gso" ||
-		row.Case != "experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso-owdeb" {
+		row.Case != "tix_tcp-plaintext-performance-kernel_module-userspace-route_gso-owdeb" {
 		t.Fatalf("unexpected owdeb route-GSO dry-run row: %+v\n%s", row, payload)
 	}
 }
 
-func TestCrossHostTransportMatrixDisambiguatesExperimentalTCPFullKmodAndRouteGSO(t *testing.T) {
+func TestCrossHostTransportMatrixDisambiguatesTIXTCPFullKmodAndRouteGSO(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash not available")
@@ -7386,8 +7363,8 @@ func TestCrossHostTransportMatrixDisambiguatesExperimentalTCPFullKmodAndRouteGSO
 	summary := filepath.Join(workdir, "summary.jsonl")
 	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
-		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\t4\t30\texplicit experimental TCP full-kmod validation input",
-		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t30\texplicit route-GSO validation input",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\ttix_tcp_full_kmod\t4\t30\texplicit TIX-TCP full-kmod validation input",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\troute_gso\t2.5\t30\texplicit route-GSO validation input",
 		"",
 	}, "\n")), 0o644); err != nil {
 		t.Fatalf("write defaults: %v", err)
@@ -7405,7 +7382,7 @@ func TestCrossHostTransportMatrixDisambiguatesExperimentalTCPFullKmodAndRouteGSO
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("dry-run explicit experimental TCP matrix failed: %v\n%s", err, output)
+		t.Fatalf("dry-run explicit TIX-TCP matrix failed: %v\n%s", err, output)
 	}
 	payload, err := os.ReadFile(summary)
 	if err != nil {
@@ -7422,20 +7399,20 @@ func TestCrossHostTransportMatrixDisambiguatesExperimentalTCPFullKmodAndRouteGSO
 		}
 		got[row.GateFamily] = row
 	}
-	expFull := got["exp_tcp_full_kmod"]
+	expFull := got["tix_tcp_full_kmod"]
 	routeGSO := got["route_gso"]
-	if expFull.Case != "experimental_tcp-plaintext-performance-kernel_module-userspace-exp_tcp_full_kmod" {
-		t.Fatalf("unexpected exp_tcp_full_kmod case name: %+v\n%s", expFull, payload)
+	if expFull.Case != "tix_tcp-plaintext-performance-kernel_module-userspace-tix_tcp_full_kmod" {
+		t.Fatalf("unexpected tix_tcp_full_kmod case name: %+v\n%s", expFull, payload)
 	}
-	if routeGSO.Case != "experimental_tcp-plaintext-performance-kernel_module-userspace-route_gso" {
+	if routeGSO.Case != "tix_tcp-plaintext-performance-kernel_module-userspace-route_gso" {
 		t.Fatalf("unexpected route_gso case name: %+v\n%s", routeGSO, payload)
 	}
 	if expFull.Case == routeGSO.Case {
-		t.Fatalf("exp_tcp_full_kmod and route_gso share a case directory:\n%s", payload)
+		t.Fatalf("tix_tcp_full_kmod and route_gso share a case directory:\n%s", payload)
 	}
 }
 
-func TestCrossHostTransportMatrixCanRepresentExperimentalTCPFullKmodWhenExplicitlyValidated(t *testing.T) {
+func TestCrossHostTransportMatrixCanRepresentTIXTCPFullKmodWhenExplicitlyValidated(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash not available")
@@ -7448,8 +7425,8 @@ func TestCrossHostTransportMatrixCanRepresentExperimentalTCPFullKmodWhenExplicit
 	summary := filepath.Join(workdir, "summary.jsonl")
 	if err := os.WriteFile(defaults, []byte(strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
-		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\texp_tcp_full_kmod\t3\t900\texplicit experimental TCP full-kmod validation input",
-		"experimental_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\towdeb_exp_tcp_full_kmod\t3\t900\texplicit OpenWrt-Debian experimental TCP full-kmod validation input",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\ttix_tcp_full_kmod\t3\t900\texplicit TIX-TCP full-kmod validation input",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\towdeb_tix_tcp_full_kmod\t3\t900\texplicit OpenWrt-Debian TIX-TCP full-kmod validation input",
 		"",
 	}, "\n")), 0o644); err != nil {
 		t.Fatalf("write defaults: %v", err)
@@ -7467,7 +7444,7 @@ func TestCrossHostTransportMatrixCanRepresentExperimentalTCPFullKmodWhenExplicit
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("dry-run explicit experimental TCP full-kmod matrix failed: %v\n%s", err, output)
+		t.Fatalf("dry-run explicit TIX-TCP full-kmod matrix failed: %v\n%s", err, output)
 	}
 	payload, err := os.ReadFile(summary)
 	if err != nil {
@@ -7485,19 +7462,19 @@ func TestCrossHostTransportMatrixCanRepresentExperimentalTCPFullKmodWhenExplicit
 		got[row.GateFamily] = row
 	}
 	tests := map[string]string{
-		"exp_tcp_full_kmod":       "experimental-tcp-full-kmod",
-		"owdeb_exp_tcp_full_kmod": "owdeb-experimental-tcp-full-kmod",
+		"tix_tcp_full_kmod":       "tix-tcp-full-kmod",
+		"owdeb_tix_tcp_full_kmod": "owdeb-tix-tcp-full-kmod",
 	}
 	wantCases := map[string]string{
-		"exp_tcp_full_kmod":       "experimental_tcp-plaintext-performance-kernel_module-userspace-exp_tcp_full_kmod",
-		"owdeb_exp_tcp_full_kmod": "experimental_tcp-plaintext-performance-kernel_module-userspace-exp_tcp_full_kmod-owdeb",
+		"tix_tcp_full_kmod":       "tix_tcp-plaintext-performance-kernel_module-userspace-tix_tcp_full_kmod",
+		"owdeb_tix_tcp_full_kmod": "tix_tcp-plaintext-performance-kernel_module-userspace-tix_tcp_full_kmod-owdeb",
 	}
 	for family, runner := range tests {
 		row, ok := got[family]
 		if !ok {
 			t.Fatalf("summary missing %s:\n%s", family, payload)
 		}
-		if row.Transport != "experimental_tcp" ||
+		if row.Transport != "tix_tcp" ||
 			row.RunnerCase != runner ||
 			row.Datapath != "kernel_module" ||
 			row.CryptoPlacement != "userspace" {
@@ -7513,7 +7490,7 @@ func TestProductionDefaultsDoNotPromoteOpenWrtRouteGSOWithoutRuntimeEvidence(t *
 	rows := loadProductionTransportDefaults(t)
 	for _, row := range rows {
 		switch row.GateFamily {
-		case "owdeb_secure_kudp", "owdeb_secure_exp_tcp_kernel", "owdeb_route_gso":
+		case "owdeb_secure_kudp", "owdeb_secure_tix_tcp_kernel", "owdeb_route_gso":
 			t.Fatalf("production defaults include %s before OpenWrt route-GSO/kfunc runtime validation: %+v", row.GateFamily, row)
 		}
 	}
@@ -7600,7 +7577,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS:-both",
 		"TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS:-0",
 		"TRUSTIX_CROSS_HOST_MIXED_UDP_MIN_GBPS:-$mixed_min_gbps",
-		"TRUSTIX_CROSS_HOST_MIXED_EXPERIMENTAL_TCP_MIN_GBPS:-$mixed_min_gbps",
+		"TRUSTIX_CROSS_HOST_MIXED_TIX_TCP_MIN_GBPS:-$mixed_min_gbps",
 		"daemon_ready_sleep=\"${TRUSTIX_CROSS_HOST_READY_SLEEP:-1}\"",
 		"iperf_parallel=\"${TRUSTIX_CROSS_HOST_IPERF_PARALLEL:-8}\"",
 		"iptunnel_iperf_parallel=\"${TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL:-4}\"",
@@ -7628,7 +7605,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1",
 		"case \"$iperf_mode\" in bidir|forward|reverse)",
 		"apply_case_runtime_defaults",
-		"experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod)",
+		"tix-tcp-full-kmod|tix_tcp_full_kmod|tix-tcp-full-kmod|tix_tcp_full_kmod|dd-tix-tcp-full-kmod|dd_tix_tcp_full_kmod|owdeb-tix-tcp-full-kmod|owdeb_tix_tcp_full_kmod)",
 		"iperf_parallel=16",
 		"truthy \"$dry_run_config\"",
 		"acquire_pair_lock || die \"another soak runner owns this VM pair\"",
@@ -7651,12 +7628,12 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"configured underlay interface ${underlay_a_if} does not match route to peer",
 		"using route interface",
 		"dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod",
-		"experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod",
+		"tix-tcp-full-kmod|tix_tcp_full_kmod|tix-tcp-full-kmod|tix_tcp_full_kmod|dd-tix-tcp-full-kmod|dd_tix_tcp_full_kmod|owdeb-tix-tcp-full-kmod|owdeb_tix_tcp_full_kmod",
 		"dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel",
-		"dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso",
+		"dd-routegso|owdeb-routegso|route-gso|tix-tcp-route-gso|tix_tcp_route_gso",
 		"ow-tc-direct|tc-direct) printf 'udp\\n'",
-		"experimental-tcp-tc-direct|experimental_tcp_tc_direct) printf 'experimental_tcp\\n'",
-		"ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct",
+		"tix-tcp-tc-direct|tix_tcp_tc_direct) printf 'tix_tcp\\n'",
+		"ow-tc-direct|tc-direct|tix-tcp-tc-direct|tix_tcp_tc_direct",
 		"userspace-*-secure|userspace-*-plaintext|crosshost-userspace-*-secure|crosshost-userspace-*-plaintext",
 		"tc-*-secure|tc-*-plaintext|crosshost-tc-*-secure|crosshost-tc-*-plaintext",
 		"supported_case_transport",
@@ -7673,7 +7650,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"case_uses_tc_direct_fast_path",
 		"case_tc_requested_but_falls_back_to_userspace",
 		"has no safe TC direct fast path with this configuration; using userspace datapath",
-		"route_gso|secure_exp_tcp_kernel)",
+		"route_gso|secure_tix_tcp_kernel)",
 		"secure_kudp|tc_direct) printf 'tc_xdp\\n'",
 		"tc_direct) printf 'tc_xdp\\n'",
 		"capability_profile: full_plaintext",
@@ -7728,12 +7705,12 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"net_driver[%s]=%s",
 		"collect_host_state a",
 		"collect_host_state b",
-		"TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK=1",
-		"case_has_endpoint_transport experimental_tcp",
-		"rx_worker_experimental_tcp=1",
-		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=%s",
-		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1",
-		"require explicit exp_tcp_full_kmod gate evidence before treating this mix as production",
+		"TRUSTIX_TIX_TCP_RAW_FALLBACK=1",
+		"case_has_endpoint_transport tix_tcp",
+		"rx_worker_tix_tcp=1",
+		"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_TIX_TCP=%s",
+		"TRUSTIX_TIX_TCP_ALLOW_MIXED_TCP_FAST_PATH=1",
+		"require explicit tix_tcp_full_kmod gate evidence before treating this mix as production",
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER_EXPERIMENTS=1",
 		"TRUSTIX_KERNEL_DATAPATH_ALLOW_UNSAFE_RX_WORKER_EXPERIMENTS=1",
 		"TRUSTIX_CROSS_HOST_OPENWRT_RX_SINGLE_COALESCE",
@@ -7760,9 +7737,9 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUMS=1",
 		"TRUSTIX_CROSS_HOST_SECURE_KUDP_ROUTE_GSO:-0",
 		"printf 'TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC=%s\\n' \"$route_gso\"",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1",
-		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1",
+		"TRUSTIX_TIX_TCP_ROUTE_GSO=0",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0",
 		"plaintext_tc_direct_daemon_env",
 		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT=1",
 		"TRUSTIX_KERNEL_UDP_TC_ONLY=1",
@@ -7807,7 +7784,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"collect_transport_snapshot",
 		"run_iperf_client_with_snapshot",
 		"run_connectivity_checks",
-		"route_gso|secure_kudp|secure_exp_tcp_kernel)",
+		"route_gso|secure_kudp|secure_tix_tcp_kernel)",
 		"run_tcp_health_checks",
 		"run_tcp_health_direction",
 		"proc_tcp_listening /proc/net/tcp",
@@ -7938,18 +7915,18 @@ func TestCrossHostSoakRunnerDryRunPinsPlaintextTCDirectTransport(t *testing.T) {
 				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1",
 			},
 			forbid: []string{
-				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1",
-				"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1",
+				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY=1",
+				"TRUSTIX_TIX_TCP_TC_TX_DIRECT=1",
 			},
 		},
 		{
-			name:      "experimental-tcp",
-			caseName:  "experimental-tcp-tc-direct",
-			transport: "experimental_tcp",
+			name:      "tix-tcp",
+			caseName:  "tix-tcp-tc-direct",
+			transport: "tix_tcp",
 			want: []string{
-				"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1",
-				"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1",
-				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1",
+				"TRUSTIX_TIX_TCP_TC_TX_DIRECT=1",
+				"TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=1",
+				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY=1",
 			},
 			forbid: []string{
 				"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1",

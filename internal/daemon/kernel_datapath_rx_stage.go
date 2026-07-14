@@ -128,7 +128,7 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 		daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
 			Enabled:        true,
 			Mode:           mode,
-			InactiveReason: "RX_WORKER is disabled for experimental_tcp TC direct; use TC/XDP RX direct or TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=1",
+			InactiveReason: "RX_WORKER is disabled for tix_tcp TC direct; use TC/XDP RX direct or TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_TIX_TCP=1",
 		})
 		return nil
 	}
@@ -644,15 +644,15 @@ func kernelDatapathRXWorkerSupportedForSpec(spec dataplane.AttachSpec) bool {
 }
 
 func kernelDatapathRXWorkerSupportedForSpecForDesired(desired config.Desired, spec dataplane.AttachSpec) bool {
-	if !spec.ExperimentalTCPTXDirect {
+	if !spec.TIXTCPTXDirect {
 		return true
 	}
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
-	if runtime.RXWorkerAllowExperimentalTCP &&
+	if runtime.RXWorkerAllowTIXTCP &&
 		(kernelDatapathFullPlaintextEnabledForDesired(desired) || kernelDatapathRXWorkerCrashRiskAllowed()) {
 		return true
 	}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP"))) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_TIX_TCP"))) {
 	case "1", "true", "yes", "on", "enabled", "force", "unsafe":
 		return true
 	default:

@@ -21,13 +21,13 @@ Use this checklist before cutting a Linux release tarball.
 - `TRUSTIX_E2E_NAT_REVERSE=1 sudo -E bash scripts/linux-e2e-smoke.sh`
 - `TRUSTIX_E2E_NAT_REVERSE=1 TRUSTIX_E2E_TRANSPORT=tcp sudo -E bash scripts/linux-e2e-smoke.sh`
 - `TRUSTIX_E2E_NAT_REVERSE=1 TRUSTIX_E2E_TRANSPORT=kernel_udp sudo -E bash scripts/linux-e2e-smoke.sh`
-- `TRUSTIX_E2E_NAT_REVERSE=1 TRUSTIX_E2E_TRANSPORT=experimental_tcp sudo -E bash scripts/linux-e2e-smoke.sh`
+- `TRUSTIX_E2E_NAT_REVERSE=1 TRUSTIX_E2E_TRANSPORT=tix_tcp sudo -E bash scripts/linux-e2e-smoke.sh`
 - `TRUSTIX_E2E_TRANSPORT=tcp sudo -E bash scripts/linux-e2e-smoke.sh`
 - `TRUSTIX_E2E_TRANSPORT=kernel_udp sudo -E bash scripts/linux-e2e-smoke.sh`
 - `TRUSTIX_E2E_TRANSPORT=gre sudo -E bash scripts/linux-e2e-smoke.sh`
 - `TRUSTIX_E2E_TRANSPORT=ipip sudo -E bash scripts/linux-e2e-smoke.sh`
-- `TRUSTIX_E2E_TRANSPORT=experimental_tcp sudo -E bash scripts/linux-e2e-smoke.sh`
-- With kernel crypto provider ready: `TRUSTIX_E2E_TRANSPORT=experimental_tcp TRUSTIX_E2E_CRYPTO_PLACEMENT=kernel sudo -E bash scripts/linux-e2e-smoke.sh`
+- `TRUSTIX_E2E_TRANSPORT=tix_tcp sudo -E bash scripts/linux-e2e-smoke.sh`
+- With kernel crypto provider ready: `TRUSTIX_E2E_TRANSPORT=tix_tcp TRUSTIX_E2E_CRYPTO_PLACEMENT=kernel sudo -E bash scripts/linux-e2e-smoke.sh`
 - Device certificate access: `sudo -E bash scripts/linux-device-access-smoke.sh`
 - Kernel module ABI gates: `sudo -E TRUSTIX_KERNEL_KEEP_LOADED=0 bash scripts/linux-kernel-module-smoke.sh`, `sudo -E TRUSTIX_FULL_DATAPATH_KEEP_LOADED=0 bash scripts/linux-full-datapath-module-smoke.sh`, and `sudo -E TRUSTIX_DATAPATH_KEEP_LOADED=0 bash scripts/linux-datapath-module-smoke.sh`
 

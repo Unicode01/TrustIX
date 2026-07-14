@@ -264,7 +264,7 @@ func (daemon *Daemon) linkDiagnosticEndpoints(peer config.PeerConfig, sessions [
 		usable := endpoint.Enabled && kernelCompatible && securityCompatible && profileCompatible && (!reverseOnly || activeReverse > 0)
 		out = append(out, linkDiagnosticEndpoint{
 			Name:               string(endpoint.Name),
-			Transport:          config.PublicTransportName(endpoint.Transport),
+			Transport:          config.CanonicalTransportName(endpoint.Transport),
 			Mode:               string(endpoint.Mode),
 			Address:            endpoint.Address,
 			Enabled:            endpoint.Enabled,
@@ -350,8 +350,8 @@ func linkEndpointStatsMap(stats []dataPathEndpointStats) map[endpointStateKey]da
 func linkTelemetryTraffic(dataPath dataPathStatus) (map[core.IXID]linkDiagnosticTraffic, map[endpointStateKey]linkDiagnosticTraffic) {
 	byPeer := make(map[core.IXID]linkDiagnosticTraffic)
 	byEndpoint := make(map[endpointStateKey]linkDiagnosticTraffic)
-	if dataPath.ExperimentalTCP != nil {
-		addLinkTelemetryTraffic(byPeer, byEndpoint, dataPath.ExperimentalTCP.Telemetry)
+	if dataPath.TIXTCP != nil {
+		addLinkTelemetryTraffic(byPeer, byEndpoint, dataPath.TIXTCP.Telemetry)
 	}
 	if dataPath.KernelUDP != nil {
 		addLinkTelemetryTraffic(byPeer, byEndpoint, dataPath.KernelUDP.Telemetry)

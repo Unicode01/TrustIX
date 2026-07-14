@@ -14,8 +14,7 @@ type transportMatrixStatus struct {
 	LocalEndpoints  []transportMatrixEndpoint        `json:"local_endpoints"`
 	PeerEndpoints   []transportMatrixPeerEndpoint    `json:"peer_endpoints"`
 	KernelTransport *dataplane.KernelTransportStatus `json:"kernel_transport,omitempty"`
-	TIXTCP          *dataplane.ExperimentalTCPStatus `json:"tix_tcp,omitempty"`
-	ExperimentalTCP *dataplane.ExperimentalTCPStatus `json:"experimental_tcp,omitempty"`
+	TIXTCP          *dataplane.TIXTCPStatus          `json:"tix_tcp,omitempty"`
 	KernelUDP       *dataplane.KernelUDPStatus       `json:"kernel_udp,omitempty"`
 	TransportTLS    transportTLSStatus               `json:"transport_tls"`
 	Sessions        []dataPathSessionStatus          `json:"sessions"`
@@ -92,10 +91,10 @@ func (daemon *Daemon) transportMatrixStatus() transportMatrixStatus {
 			kernelTransport = publicKernelTransportStatus(&status)
 		}
 	}
-	var experimentalTCP *dataplane.ExperimentalTCPStatus
-	if dataPath.ExperimentalTCP != nil {
-		status := *dataPath.ExperimentalTCP
-		experimentalTCP = &status
+	var tixTCP *dataplane.TIXTCPStatus
+	if dataPath.TIXTCP != nil {
+		status := *dataPath.TIXTCP
+		tixTCP = &status
 	}
 	var kernelUDP *dataplane.KernelUDPStatus
 	if dataPath.KernelUDP != nil {
@@ -108,8 +107,7 @@ func (daemon *Daemon) transportMatrixStatus() transportMatrixStatus {
 		LocalEndpoints:  daemon.transportMatrixLocalEndpoints(),
 		PeerEndpoints:   daemon.transportMatrixPeerEndpoints(),
 		KernelTransport: kernelTransport,
-		TIXTCP:          experimentalTCP,
-		ExperimentalTCP: experimentalTCP,
+		TIXTCP:          tixTCP,
 		KernelUDP:       kernelUDP,
 		TransportTLS:    daemon.transportTLSStatus(dataPath),
 		Sessions:        dataPath.Sessions,
@@ -146,7 +144,7 @@ func (daemon *Daemon) transportMatrixLocalEndpoints() []transportMatrixEndpoint 
 		profileCompatible := daemon.endpointTransportProfileCompatible(endpoint)
 		out = append(out, transportMatrixEndpoint{
 			Name:               string(endpoint.Name),
-			Transport:          config.PublicTransportName(endpoint.Transport),
+			Transport:          config.CanonicalTransportName(endpoint.Transport),
 			Priority:           endpoint.Priority,
 			Preference:         daemon.endpointTransportPreferenceRank(endpoint),
 			Listen:             endpoint.Listen,
@@ -186,7 +184,7 @@ func (daemon *Daemon) transportMatrixPeerEndpoints() []transportMatrixPeerEndpoi
 			out = append(out, transportMatrixPeerEndpoint{
 				Peer:               string(peer.ID),
 				Name:               string(endpoint.Name),
-				Transport:          config.PublicTransportName(endpoint.Transport),
+				Transport:          config.CanonicalTransportName(endpoint.Transport),
 				Priority:           endpoint.Priority,
 				Preference:         daemon.endpointTransportPreferenceRank(endpoint),
 				Address:            endpoint.Address,

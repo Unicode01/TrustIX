@@ -61,15 +61,15 @@ OpenWrt 24.10.7 x86_64 has since passed an SDK module build and fresh 3600s
 OpenWrt-to-Debian full-kmod production gates, most recently on 2026-07-08
 against Debian `6.12.94+deb13-cloud-amd64` at commit
 `6d3a219f86ec`. That run covers both UDP
-plaintext full-kmod and experimental TCP plaintext full-kmod with full-kmod
+plaintext full-kmod and TIX-TCP plaintext full-kmod with full-kmod
 modules loaded on both nodes and clean pstore/kernel log artifacts. Earlier
 2026-07-05, 2026-07-03, 2026-06-27, and 2026-06-25 gates remain historical evidence.
-OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and secure experimental TCP
+OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and secure TIX-TCP
 kernel crypto all failed closed at the runtime capability gate because the
 tested image did not expose usable route-TCP kfunc capability. OpenWrt 25.12.4
 x86_64 SDK modules also built in forced full mode, but the official runtime
 image used APK package feeds, did not expose `/sys/kernel/btf/vmlinux`, and
-route-GSO, secure-kUDP route-GSO, plus secure experimental TCP kernel crypto
+route-GSO, secure-kUDP route-GSO, plus secure TIX-TCP kernel crypto
 failed closed with missing `route_tcp_kfunc` and `route_tcp_xmit_kfunc`.
 
 Generic Linux Kbuild on Ubuntu 22.04.5:
@@ -120,13 +120,13 @@ current production evidence boundary:
 | --- | --- | ---: | ---: | --- |
 | Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 5.053889 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | OpenWrt-Debian full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.554661 Gbps | 3 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.94+deb13-cloud-amd64`, 2026-07-08 |
-| Experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 11.819391 Gbps | 4 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
-| OpenWrt-Debian experimental TCP full-kmod plaintext | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.329137 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.94+deb13-cloud-amd64`, 2026-07-08 |
+| TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 11.819391 Gbps | 4 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
+| OpenWrt-Debian TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.329137 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.94+deb13-cloud-amd64`, 2026-07-08 |
 | Userspace-TC tunnels | GRE/IPIP/VXLAN / secure or plaintext / `tc_xdp` / `userspace` | 1.424523 Gbps secure, 6.366737 Gbps plaintext | 1 Gbps secure, 4 Gbps plaintext | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.196574 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 | Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.577411 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
-| Plaintext experimental TCP route-GSO | `experimental_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.081862 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64` to `6.12.95+deb13-cloud-amd64`, 2026-07-07 post-reboot |
-| Secure experimental TCP kernel crypto | `experimental_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 5.405340 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-07 |
+| Plaintext TIX-TCP route-GSO | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.081862 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64` to `6.12.95+deb13-cloud-amd64`, 2026-07-07 post-reboot |
+| Secure TIX-TCP kernel crypto | `tix_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 5.405340 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-07 |
 
 A 2026-06-21 current-head Debian-to-Debian full-kmod recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
@@ -204,20 +204,20 @@ and kernel log scans, and clean route-GSO helper error counters.
 
 A 2026-07-05 current-head Debian-to-Debian full plaintext kernel-module
 recheck on `6.12.94+deb13-cloud-amd64` superseded the earlier Debian
-full-kmod and experimental TCP full-kmod boundaries. It used commit
+full-kmod and TIX-TCP full-kmod boundaries. It used commit
 `8c2eebccbcf031f0133c8dbf192d826526c5187c`; the PVE host was
 `6.17.9-1-pve`, so each guest rebuilt and loaded matching
 `trustix_crypto.ko`, `trustix_datapath.ko`, and
 `trustix_datapath_helpers.ko` for the target Debian kernel. The UDP
 `full_kmod` gate reached minimum received throughput of 5.053889 Gbps against
-the 3 Gbps gate, and the P16 `exp_tcp_full_kmod` gate reached minimum received
+the 3 Gbps gate, and the P16 `tix_tcp_full_kmod` gate reached minimum received
 throughput of 11.819391 Gbps against the 4 Gbps gate. Both 3600s-per-direction
 gates kept stable boot IDs, clean pstore and kernel log scans, `tix-lan`
 `tx_queue_len=1000`, and zero covered module/datapath error counters.
 
 A 2026-07-05 current-head Debian-to-Debian secure kernel recheck on
 `6.12.94+deb13-cloud-amd64` superseded the earlier secure-kUDP and secure
-experimental TCP kernel crypto boundaries. It used commit
+TIX-TCP kernel crypto boundaries. It used commit
 `8c2eebccbcf031f0133c8dbf192d826526c5187c`. The `secure_kudp` gate reached
 minimum received throughput of 1.577411 Gbps against the 1.5 Gbps gate, with
 per-direction throughput of 1.577411 Gbps A-to-B and 1.659666 Gbps B-to-A.
@@ -227,12 +227,12 @@ nonzero, boot IDs stayed stable, and pstore plus kernel log scans were clean.
 The current gate separately requires zero `replay_old` drops and bounds
 `replay_seen/open` plus total secure-direct drop ratios at `<= 0.00002`.
 
-The 2026-07-07 secure experimental TCP kernel crypto recheck is the current
-promoted `secure_exp_tcp_kernel` production-default identity on
+The 2026-07-07 secure TIX-TCP kernel crypto recheck is the current
+promoted `secure_tix_tcp_kernel` production-default identity on
 `6.12.94+deb13-cloud-amd64`. It used commit
 `1dfaf51caac8bc03177de4ec428e23659db69173`; minimum received throughput was
 5.405340 Gbps against the 1.5 Gbps gate, with per-direction throughput of
-5.485418 Gbps A-to-B and 5.405340 Gbps B-to-A. `experimental_tcp` used
+5.485418 Gbps A-to-B and 5.405340 Gbps B-to-A. `tix_tcp` used
 `datapath=kernel_module` and
 `crypto_placement=kernel` with direct kfunc crypto plus route TCP GSO async,
 both peers loaded `trustix_crypto` and `trustix_datapath_helpers`,
@@ -240,7 +240,7 @@ direct-kfunc seal/open and route-GSO async xmit counters were nonzero, and
 direct-kfunc, frame, replay, context, route-GSO async stream, and route-GSO
 async xmit errors were zero. The production verifier reported stable boot IDs,
 clean pstore coverage, and no kernel log crash findings. This is a dedicated
-`secure_exp_tcp_kernel` production default and must not reuse secure-kUDP
+`secure_tix_tcp_kernel` production default and must not reuse secure-kUDP
 evidence. Earlier 2026-06-26 `fa207ea` gates and the 2026-06-24 to
 2026-06-25 direct-kfunc FPU-unavailable diagnostic build remain historical
 coverage, not the current production-default identity.
@@ -265,7 +265,7 @@ for secure TCP, 1.032665 Gbps for plaintext TCP, 0.954547 Gbps for secure
 QUIC, 1.249522 Gbps for plaintext QUIC, 0.592369 Gbps for secure WebSocket,
 1.125059 Gbps for plaintext WebSocket, 0.839874 Gbps for secure HTTP CONNECT,
 1.237984 Gbps for plaintext HTTP CONNECT, and 1.246138 Gbps for secure
-experimental TCP. The verifier reported no log findings, no errors, stable
+TIX-TCP. The verifier reported no log findings, no errors, stable
 boot IDs, clean pstore coverage, and zero session dial or heartbeat failures.
 
 A 2026-06-24 current-head Debian-to-Debian userspace-TC tunnel recheck on
@@ -297,15 +297,15 @@ panic, Oops, BUG, call trace, page fault, watchdog, lockup, hung-task, or
 `tx_queue_len` signature.
 
 The same OpenWrt 24.10.2 guest was then checked for the route-TCP kfunc paths
-used by secure-kUDP route-GSO and experimental TCP route-GSO. OpenWrt had no
+used by secure-kUDP route-GSO and TIX-TCP route-GSO. OpenWrt had no
 `/sys/kernel/btf/vmlinux`, while the paired Debian guest exposed kernel and
 module BTF. The SDK-built `trustix_datapath_helpers.ko` loaded on OpenWrt, but
 runtime capability detection reported no safe route-TCP kfunc features. Both
-OpenWrt-to-Debian secure-kUDP route-GSO and experimental TCP route-GSO failed
+OpenWrt-to-Debian secure-kUDP route-GSO and TIX-TCP route-GSO failed
 closed before traffic with missing `route_tcp_kfunc` and
 `route_tcp_xmit_kfunc`. Do not promote OpenWrt 24.10.2 secure-kUDP route-GSO or
 OpenWrt route-GSO defaults until an OpenWrt kernel with usable BTF/kfunc support
-passes the runtime route-TCP gate. Secure experimental TCP kernel crypto shares
+passes the runtime route-TCP gate. Secure TIX-TCP kernel crypto shares
 the same route-TCP prerequisite, so it remains fail-closed on OpenWrt 24.10.2
 as well. The selected OpenWrt 24.10.2 production kernel path remains UDP
 plaintext full-kmod.
@@ -329,7 +329,7 @@ panic, Oops, BUG, call trace, page fault, watchdog, lockup, hung-task,
 `tx_queue_len`, or TrustIX datapath crash signature. The same guest still had
 no `/sys/kernel/btf/vmlinux`, and both secure-kUDP route-GSO and experimental
 TCP route-GSO failed closed before traffic with missing `route_tcp_kfunc` and
-`route_tcp_xmit_kfunc`; secure experimental TCP kernel crypto is blocked by the
+`route_tcp_xmit_kfunc`; secure TIX-TCP kernel crypto is blocked by the
 same route-TCP prerequisite. The selected OpenWrt production kernel path
 therefore remains UDP plaintext full-kmod with exact-version runtime evidence.
 
@@ -344,9 +344,9 @@ for `trustix_crypto.ko`,
 `f7b9d3a00f9f90e44863bba514b8563a14312c0bc16990d34daddb08e490ed3c` for
 `trustix_datapath.ko`, and
 `d9990877dfdc431023d7c26b89924a47e070f537c5b0e94e76ed9bf263e28abe` for
-`trustix_datapath_helpers.ko`. Both secure-kUDP route-GSO and experimental TCP
+`trustix_datapath_helpers.ko`. Both secure-kUDP route-GSO and TIX-TCP
 route-GSO failed closed before traffic with missing `route_tcp_kfunc` and
-`route_tcp_xmit_kfunc`; secure experimental TCP kernel crypto is blocked by the
+`route_tcp_xmit_kfunc`; secure TIX-TCP kernel crypto is blocked by the
 same route-TCP prerequisite, so upgrading to the official 25.12.4 image does
 not change the OpenWrt production default selection.
 
@@ -358,7 +358,7 @@ OpenWrt kernel `6.6.141` with Debian 13 `6.12.94+deb13-amd64` and passed the
 pstore and kernel log scans were clean, and covered datapath error counters
 were zero. A concurrent direct underlay probe while full-kmod was loaded reached
 3.752 Gbps from OpenWrt to Debian. OpenWrt route-GSO, secure-kUDP route-GSO,
-and secure experimental TCP kernel crypto remain unselected because the tested
+and secure TIX-TCP kernel crypto remain unselected because the tested
 OpenWrt kernel still lacks usable route-TCP kfunc capability.
 
 A 2026-06-24 current-head OpenWrt 24.10.7-to-Debian full-kmod recheck paired
@@ -398,7 +398,7 @@ OpenWrt kernel `6.6.141` with Debian 13
 `6.12.94+deb13-cloud-amd64` and passed the same 3600s-per-direction production
 gate. It used commit `8c2eebccbcf031f0133c8dbf192d826526c5187c`; minimum
 received throughput was 3.995213 Gbps for UDP full-kmod and 7.754582 Gbps for
-experimental TCP full-kmod against the 3 Gbps and 4 Gbps gates. Before/after
+TIX-TCP full-kmod against the 3 Gbps and 4 Gbps gates. Before/after
 boot IDs stayed stable, pstore and kernel log scans were clean, `tix-lan` kept
 `tx_queue_len=1000`, and both nodes loaded full-kmod fast-path modules. This
 was superseded by the 2026-07-08 6d3a219 gate below.
@@ -408,7 +408,7 @@ OpenWrt kernel `6.6.141` with Debian 13
 `6.12.94+deb13-cloud-amd64` and passed the same 3600s-per-direction production
 gate on the Zaozhuang PVE host. It used commit `6d3a219f86ec`; minimum
 received throughput was 3.554661 Gbps for UDP full-kmod and 7.329137 Gbps for
-experimental TCP full-kmod against the 3 Gbps and 4 Gbps gates. Both guests had
+TIX-TCP full-kmod against the 3 Gbps and 4 Gbps gates. Both guests had
 4 vCPU for the promoted gate, before/after boot IDs stayed stable, pstore and
 kernel log scans were clean, `tix-lan` kept `tx_queue_len=1000`, both nodes
 loaded full-kmod fast-path modules, and covered module error counters stayed
@@ -435,7 +435,7 @@ Older performance-log runs also covered a wider OpenWrt compile matrix, but the
 table above is the current-source default matrix. Runtime full-kmod coverage now
 includes OpenWrt 23.05.5, 24.10.2, and 24.10.7 x86_64 with matching SDK-built
 modules. OpenWrt 24.10.7 also has route-GSO fail-closed coverage, but no
-OpenWrt route-GSO, secure-kUDP route-GSO, or secure experimental TCP kernel
+OpenWrt route-GSO, secure-kUDP route-GSO, or secure TIX-TCP kernel
 production default is selected until a tested OpenWrt kernel exposes usable
 route-TCP kfunc capability.
 
@@ -455,10 +455,10 @@ Follow-up PVE OpenWrt-to-Debian route-GSO probes on 2026-06-20 used OpenWrt
 crypto, full plaintext datapath, and basic datapath helpers. The helper module
 loaded and passed selftests, but it did not provide
 `route_tcp_kfunc`/`route_tcp_xmit_kfunc`. Both secure-kUDP route-GSO and
-experimental TCP route-GSO failed closed before traffic with the expected
+TIX-TCP route-GSO failed closed before traffic with the expected
 missing-capability diagnostic. Do not select OpenWrt 23.05.5, 24.10.2, or
 24.10.7 route-GSO or secure-kUDP route-GSO as production defaults. Secure
-experimental TCP kernel crypto shares the same route-TCP prerequisite. The later
+TIX-TCP kernel crypto shares the same route-TCP prerequisite. The later
 OpenWrt 25.12.4 official x86_64 image also failed closed for the same
 capability boundary. Use the validated UDP plaintext full-kmod path until a
 newer OpenWrt kernel/helper combination passes the runtime route-TCP kfunc

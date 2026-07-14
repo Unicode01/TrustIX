@@ -166,17 +166,17 @@ func TestKernelDatapathSessionWireRecordEncodesIPv4Underlay(t *testing.T) {
 	}
 }
 
-func TestKernelDatapathSessionWireRecordKeepsExperimentalTCPEpoch(t *testing.T) {
+func TestKernelDatapathSessionWireRecordKeepsTIXTCPEpoch(t *testing.T) {
 	key := dataSessionKey{
 		Peer:       "ix-b",
-		Endpoint:   "wan-exp-tcp",
-		Transport:  transport.ProtocolExperimentalTCP,
+		Endpoint:   "wan-tix-tcp",
+		Transport:  transport.ProtocolTIXTCP,
 		Address:    "198.51.100.2:17041",
 		Encryption: "secure",
 	}
 	session := kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
 		FlowID:        0x1020304050607080,
-		Protocol:      transport.ProtocolExperimentalTCP,
+		Protocol:      transport.ProtocolTIXTCP,
 		LocalAddress:  "192.0.2.1:51820",
 		RemoteAddress: "198.51.100.2:17041",
 		Epoch:         11,
@@ -186,15 +186,15 @@ func TestKernelDatapathSessionWireRecordKeepsExperimentalTCPEpoch(t *testing.T) 
 		t.Fatal("session wire record was not encoded")
 	}
 	if record.Value[4] != 2 || record.Value[6] != 11 {
-		t.Fatalf("unexpected experimental_tcp wire record: %#v", record)
+		t.Fatalf("unexpected tix_tcp wire record: %#v", record)
 	}
 }
 
 func TestKernelDatapathSessionStateKeySeparatesReverseDirection(t *testing.T) {
 	outbound := dataSessionKey{
 		Peer:       "ix-b",
-		Endpoint:   "wan-exp-tcp",
-		Transport:  transport.ProtocolExperimentalTCP,
+		Endpoint:   "wan-tix-tcp",
+		Transport:  transport.ProtocolTIXTCP,
 		Address:    "198.51.100.2:17041",
 		Encryption: "plaintext",
 		PoolIndex:  3,
@@ -209,14 +209,14 @@ func TestKernelDatapathSessionStateKeySeparatesReverseDirection(t *testing.T) {
 func TestKernelDatapathSessionStateRecordsKeepFlowWithoutWireTuple(t *testing.T) {
 	key := dataSessionKey{
 		Peer:       "ix-b",
-		Endpoint:   "wan-exp-tcp",
-		Transport:  transport.ProtocolExperimentalTCP,
+		Endpoint:   "wan-tix-tcp",
+		Transport:  transport.ProtocolTIXTCP,
 		Address:    reverseSessionAddress,
 		Encryption: "plaintext",
 	}
 	records := (*Daemon)(nil).kernelDatapathSessionStateRecords(key, nil, kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
 		FlowID:   0x1020304050607080,
-		Protocol: transport.ProtocolExperimentalTCP,
+		Protocol: transport.ProtocolTIXTCP,
 	}})
 	if len(records) != 1 ||
 		records[0].Kind != kernelmodule.TrustIXDatapathStateKindSession ||
@@ -528,26 +528,26 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsCoverActivePoolIndexes(t 
 func TestKernelDatapathStateRecordsSeparateSyntheticFallbackFromIncompleteNegotiatedSession(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX", "1")
 	localEndpoint := config.EndpointConfig{
-		Name:      "wan-exp-tcp",
+		Name:      "wan-tix-tcp",
 		Mode:      config.EndpointModePassive,
 		Listen:    "192.0.2.1:17041",
 		Address:   "192.0.2.1:17041",
-		Transport: string(transport.ProtocolExperimentalTCP),
+		Transport: string(transport.ProtocolTIXTCP),
 		Security:  config.EndpointSecurityConfig{Encryption: "plaintext"},
 		Enabled:   true,
 	}
 	remoteEndpoint := config.EndpointConfig{
-		Name:      "wan-exp-tcp",
+		Name:      "wan-tix-tcp",
 		Mode:      config.EndpointModePassive,
 		Address:   "198.51.100.2:17042",
-		Transport: string(transport.ProtocolExperimentalTCP),
+		Transport: string(transport.ProtocolTIXTCP),
 		Security:  config.EndpointSecurityConfig{Encryption: "plaintext"},
 		Enabled:   true,
 	}
 	outboundKey := dataSessionKey{
 		Peer:       "ix-b",
 		Endpoint:   remoteEndpoint.Name,
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Address:    remoteEndpoint.Address,
 		Encryption: "plaintext",
 	}
@@ -567,13 +567,13 @@ func TestKernelDatapathStateRecordsSeparateSyntheticFallbackFromIncompleteNegoti
 		dataSessions: map[dataSessionKey]transport.Session{
 			outboundKey: kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
 				FlowID:   7,
-				Protocol: transport.ProtocolExperimentalTCP,
+				Protocol: transport.ProtocolTIXTCP,
 				Peer:     "ix-b",
 				Endpoint: remoteEndpoint.Name,
 			}},
 			reverseKey: kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
 				FlowID:   9,
-				Protocol: transport.ProtocolExperimentalTCP,
+				Protocol: transport.ProtocolTIXTCP,
 				Peer:     "ix-b",
 				Endpoint: remoteEndpoint.Name,
 			}},
@@ -712,7 +712,7 @@ func TestKernelDatapathFlowRecordEncodesIPv4Tuple(t *testing.T) {
 			Protocol:        6,
 		},
 		NextHop:   "ix-b",
-		Endpoint:  "wan-exp-tcp",
+		Endpoint:  "wan-tix-tcp",
 		PoolIndex: 3,
 		LastSeen:  time.Unix(0, 1000).UTC(),
 		ExpiresAt: time.Unix(0, 2000).UTC(),

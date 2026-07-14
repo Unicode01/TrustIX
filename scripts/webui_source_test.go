@@ -47,10 +47,10 @@ func TestWebUIIXProvisionDefaultsMatchBackendProductionProfiles(t *testing.T) {
 		`return { transportProfile: "performance", datapath: "auto", encryption: "secure", cryptoPlacement: "auto", kernelTransport: "auto" };`,
 		`return { transportProfile: "performance", datapath: "kernel_module", encryption: "plaintext", cryptoPlacement: "auto", kernelTransport: "auto" };`,
 		`crypto_placement: "auto",`,
-		`plaintextPerformanceEndpoint("local-experimental_tcp",`,
-		`plaintextPerformanceEndpoint(` + "`${id}-experimental_tcp`" + `, { mode: "active", address: "" })`,
-		`{ transport: "experimental_tcp", profile: "performance", datapath: "auto", advanced: {} }`,
-		`plaintextPerformanceEndpoint(` + "`${selectedPeer.id || \"peer\"}-experimental_tcp-${endpoints.length + 1}`" + `, { mode: "active", address: "" })`,
+		`plaintextPerformanceEndpoint("local-tix_tcp",`,
+		`plaintextPerformanceEndpoint(` + "`${id}-tix_tcp`" + `, { mode: "active", address: "" })`,
+		`{ transport: "tix_tcp", profile: "performance", datapath: "auto", advanced: {} }`,
+		`plaintextPerformanceEndpoint(` + "`${selectedPeer.id || \"peer\"}-tix_tcp-${endpoints.length + 1}`" + `, { mode: "active", address: "" })`,
 	}
 	for _, bad := range forbidden {
 		if strings.Contains(source, bad) {
@@ -59,7 +59,7 @@ func TestWebUIIXProvisionDefaultsMatchBackendProductionProfiles(t *testing.T) {
 	}
 }
 
-func TestWebUITIXTCPPublicNamingKeepsLegacyReadCompatibility(t *testing.T) {
+func TestWebUIUsesOnlyTIXTCPNaming(t *testing.T) {
 	utilsPayload, err := os.ReadFile("../webui/src/utils.ts")
 	if err != nil {
 		t.Fatalf("read webui utils: %v", err)
@@ -67,17 +67,15 @@ func TestWebUITIXTCPPublicNamingKeepsLegacyReadCompatibility(t *testing.T) {
 	utils := string(utilsPayload)
 	for _, want := range []string{
 		`return ["udp", "kernel_udp", "tix_tcp",`,
-		`case "experimental_tcp":`,
-		`case "ackless_tcp":`,
-		`return "tix_tcp";`,
+		`return value;`,
 		`return value === "tix_tcp" ? "TIX-TCP" : value;`,
 	} {
 		if !strings.Contains(utils, want) {
 			t.Fatalf("webui TIX-TCP normalization missing fragment %q", want)
 		}
 	}
-	if strings.Contains(utils, `return ["udp", "kernel_udp", "experimental_tcp",`) {
-		t.Fatal("webui transport options still expose experimental_tcp")
+	if strings.Contains(utils, "experimental"+"_tcp") || strings.Contains(utils, "ackless"+"_tcp") {
+		t.Fatal("webui transport normalization still accepts a legacy TIX-TCP name")
 	}
 
 	componentsPayload, err := os.ReadFile("../webui/src/components.tsx")
@@ -86,7 +84,7 @@ func TestWebUITIXTCPPublicNamingKeepsLegacyReadCompatibility(t *testing.T) {
 	}
 	components := string(componentsPayload)
 	for _, want := range []string{
-		`dataPath.tix_tcp || dataPath.experimental_tcp`,
+		`tixTCPStatusRow(t, lang, dataPath.tix_tcp)`,
 		`name: "TIX-TCP"`,
 		`return "tix_tcp";`,
 		`return ` + "`${name.slice(0, -4)}-tix-tcp`" + `;`,

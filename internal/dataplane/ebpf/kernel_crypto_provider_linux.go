@@ -17,7 +17,7 @@ import (
 	"trustix.local/trustix/internal/kernelmodule"
 )
 
-const kernelCryptoFlowMapName = "ix_exp_tcp_kernel_crypto_flows"
+const kernelCryptoFlowMapName = "ix_tix_tcp_kernel_crypto_flows"
 const kernelCryptoProviderMaxReason = 768
 
 const (
@@ -133,13 +133,13 @@ type kernelCryptoProviderInstallEntry struct {
 
 func (manager *Manager) initKernelCryptoProviderMapLocked() {
 	if manager.kernelCryptoFlowMap != nil {
-		manager.addCapabilityLocked("experimental-tcp-kernel-crypto-flow-map")
+		manager.addCapabilityLocked("tix-tcp-kernel-crypto-flow-map")
 		if manager.kernelCryptoProvider != nil {
 			if manager.kernelCryptoProvider.installProgram != nil {
-				manager.addCapabilityLocked("experimental-tcp-kernel-crypto-ctx-provider")
+				manager.addCapabilityLocked("tix-tcp-kernel-crypto-ctx-provider")
 			}
 			if manager.kernelCryptoProvider.directSlotMap != nil {
-				manager.addCapabilityLocked("experimental-tcp-kernel-crypto-direct-slot-provider")
+				manager.addCapabilityLocked("tix-tcp-kernel-crypto-direct-slot-provider")
 			}
 		}
 		return
@@ -160,22 +160,22 @@ func (manager *Manager) initKernelCryptoProviderMapLocked() {
 	})
 	if err != nil {
 		manager.kernelCryptoFlowMapCreateErrors++
-		manager.warnings = append(manager.warnings, "experimental_tcp kernel crypto flow map unavailable: "+err.Error())
+		manager.warnings = append(manager.warnings, "tix_tcp kernel crypto flow map unavailable: "+err.Error())
 		return
 	}
 	manager.kernelCryptoFlowMap = flowMap
 	manager.kernelCryptoFlowMapEntries = make(map[kernelCryptoFlowKey]struct{})
-	manager.addCapabilityLocked("experimental-tcp-kernel-crypto-flow-map")
+	manager.addCapabilityLocked("tix-tcp-kernel-crypto-flow-map")
 	var provider *kernelCryptoProviderObject
 	if bpfCryptoProviderReady {
 		provider, err = loadKernelCryptoProviderObject()
 		if err != nil {
 			manager.kernelCryptoProviderLoadErrors++
-			manager.warnings = append(manager.warnings, "experimental_tcp kernel crypto ctx provider unavailable: "+summarizeKernelCryptoProviderError(err))
+			manager.warnings = append(manager.warnings, "tix_tcp kernel crypto ctx provider unavailable: "+summarizeKernelCryptoProviderError(err))
 		} else {
 			manager.kernelCryptoProvider = provider
-			manager.addCapabilityLocked("experimental-tcp-kernel-crypto-ctx-provider")
-			manager.addCapabilityLocked("experimental-tcp-kernel-crypto-direct-slot-provider")
+			manager.addCapabilityLocked("tix-tcp-kernel-crypto-ctx-provider")
+			manager.addCapabilityLocked("tix-tcp-kernel-crypto-direct-slot-provider")
 			manager.probeKernelCryptoAEADCreateLocked()
 			return
 		}
@@ -186,16 +186,16 @@ func (manager *Manager) initKernelCryptoProviderMapLocked() {
 	provider, err = loadKernelCryptoDirectSlotProviderMaps()
 	if err != nil {
 		manager.kernelCryptoProviderLoadErrors++
-		manager.warnings = append(manager.warnings, "experimental_tcp kernel crypto direct-slot provider unavailable: "+err.Error())
+		manager.warnings = append(manager.warnings, "tix_tcp kernel crypto direct-slot provider unavailable: "+err.Error())
 		return
 	}
 	manager.kernelCryptoProvider = provider
-	manager.addCapabilityLocked("experimental-tcp-kernel-crypto-direct-slot-provider")
+	manager.addCapabilityLocked("tix-tcp-kernel-crypto-direct-slot-provider")
 }
 
 func (manager *Manager) closeKernelCryptoProviderMapLocked() error {
-	for flowID := range manager.expTCPKernelCryptoDevices {
-		manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceExperimentalTCP, flowID)
+	for flowID := range manager.tixTCPKernelCryptoDevices {
+		manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceTIXTCP, flowID)
 	}
 	for flowID := range manager.kernelCryptoDevices {
 		manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceKernelUDP, flowID)
@@ -218,7 +218,7 @@ func (manager *Manager) closeKernelCryptoProviderMapLocked() error {
 	manager.kernelCryptoFlowMap = nil
 	manager.kernelCryptoFlowMapEntries = nil
 	if err != nil {
-		err = fmt.Errorf("close experimental_tcp kernel crypto flow map: %w", err)
+		err = fmt.Errorf("close tix_tcp kernel crypto flow map: %w", err)
 	}
 	return errors.Join(closeErr, err)
 }
@@ -228,11 +228,11 @@ func (manager *Manager) stageKernelCryptoEntriesLocked(entries []kernelCryptoFlo
 		return nil
 	}
 	if manager.kernelCryptoFlowMap == nil {
-		return fmt.Errorf("experimental_tcp kernel crypto flow map is not loaded")
+		return fmt.Errorf("tix_tcp kernel crypto flow map is not loaded")
 	}
 	for _, entry := range entries {
 		if err := manager.kernelCryptoFlowMap.Update(entry.Key, entry.Value, cebpf.UpdateAny); err != nil {
-			return fmt.Errorf("update experimental_tcp kernel crypto flow %d direction %d: %w", entry.Key.FlowID, entry.Key.Direction, err)
+			return fmt.Errorf("update tix_tcp kernel crypto flow %d direction %d: %w", entry.Key.FlowID, entry.Key.Direction, err)
 		}
 		manager.kernelCryptoFlowMapEntries[entry.Key] = struct{}{}
 		manager.kernelCryptoFlowMapUpdates++
@@ -241,7 +241,7 @@ func (manager *Manager) stageKernelCryptoEntriesLocked(entries []kernelCryptoFlo
 }
 
 func (manager *Manager) deleteKernelCryptoFlowLocked(flowID uint64) {
-	manager.deleteKernelCryptoFlowNamespaceLocked(kernelCryptoNamespaceExperimentalTCP, flowID)
+	manager.deleteKernelCryptoFlowNamespaceLocked(kernelCryptoNamespaceTIXTCP, flowID)
 }
 
 func (manager *Manager) deleteKernelUDPCryptoFlowLocked(flowID uint64) {
@@ -258,7 +258,7 @@ func (manager *Manager) deleteKernelCryptoFlowNamespaceLocked(namespace uint8, f
 	}
 	if manager.kernelCryptoProvider != nil {
 		if err := manager.kernelCryptoProvider.DeleteKeys(keys); err != nil {
-			manager.warnings = append(manager.warnings, "delete experimental_tcp kernel crypto ctx flow: "+summarizeKernelCryptoProviderError(err))
+			manager.warnings = append(manager.warnings, "delete tix_tcp kernel crypto ctx flow: "+summarizeKernelCryptoProviderError(err))
 		}
 	}
 	for _, key := range keys {
@@ -471,8 +471,8 @@ func (manager *Manager) kernelUDPDeviceCryptoReasonLocked() string {
 	return "TrustIX AEAD kernel module device " + kernelmodule.TrustIXAEADDevicePath + " is unavailable"
 }
 
-func (manager *Manager) experimentalTCPDeviceCryptoReasonLocked() string {
-	if manager.kernelCryptoDeviceAvailableLocked(kernelCryptoNamespaceExperimentalTCP) {
+func (manager *Manager) tixTCPDeviceCryptoReasonLocked() string {
+	if manager.kernelCryptoDeviceAvailableLocked(kernelCryptoNamespaceTIXTCP) {
 		return ""
 	}
 	return "TrustIX AEAD kernel module device " + kernelmodule.TrustIXAEADDevicePath + " is unavailable"
@@ -543,16 +543,16 @@ func (manager *Manager) kernelUDPCryptoFallbackStatusLocked() dataplane.CryptoFa
 	return dataplane.CryptoFallbackStatus{Selected: dataplane.FirstReadyCryptoFallbackStep(steps), Chain: steps}
 }
 
-func (manager *Manager) experimentalTCPKernelCryptoReadyLocked() bool {
-	return manager.kernelCryptoProductionReadyLocked() || manager.kernelCryptoDeviceAvailableLocked(kernelCryptoNamespaceExperimentalTCP)
+func (manager *Manager) tixTCPKernelCryptoReadyLocked() bool {
+	return manager.kernelCryptoProductionReadyLocked() || manager.kernelCryptoDeviceAvailableLocked(kernelCryptoNamespaceTIXTCP)
 }
 
-func (manager *Manager) experimentalTCPKernelCryptoUnavailableReasonLocked() string {
+func (manager *Manager) tixTCPKernelCryptoUnavailableReasonLocked() string {
 	reasons := make([]string, 0, 2)
 	if !manager.kernelCryptoProductionReadyLocked() {
 		reasons = append(reasons, "BPF crypto provider: "+manager.kernelCryptoUnavailableReasonLocked())
 	}
-	if reason := manager.experimentalTCPDeviceCryptoReasonLocked(); reason != "" {
+	if reason := manager.tixTCPDeviceCryptoReasonLocked(); reason != "" {
 		reasons = append(reasons, "AEAD device: "+reason)
 	}
 	if len(reasons) == 0 {
@@ -561,13 +561,13 @@ func (manager *Manager) experimentalTCPKernelCryptoUnavailableReasonLocked() str
 	return strings.Join(reasons, "; ")
 }
 
-func (manager *Manager) experimentalTCPCryptoFallbackStatusLocked() dataplane.CryptoFallbackStatus {
+func (manager *Manager) tixTCPCryptoFallbackStatusLocked() dataplane.CryptoFallbackStatus {
 	fullModuleStatus := kernelmodule.ProbeTrustIXDatapathStatus()
 	helpersModuleStatus := kernelmodule.ProbeTrustIXDatapathHelpersStatus()
 	fullDatapathReady := fullModuleStatus.FullDatapathReady() && trustIXFullDatapathDriverReady()
 	gsoReady := helpersModuleStatus.GSOSKBReady() && trustIXGSOSKBDriverReady()
 	bpfReady := manager.kernelCryptoProductionReadyLocked()
-	deviceReady := manager.kernelCryptoDeviceAvailableLocked(kernelCryptoNamespaceExperimentalTCP)
+	deviceReady := manager.kernelCryptoDeviceAvailableLocked(kernelCryptoNamespaceTIXTCP)
 	steps := []dataplane.CryptoFallbackStep{
 		{
 			Name:      dataplane.CryptoFallbackFullKernelModuleDatapath,
@@ -595,7 +595,7 @@ func (manager *Manager) experimentalTCPCryptoFallbackStatusLocked() dataplane.Cr
 			Ready:     deviceReady,
 			Placement: "kernel",
 			Layer:     dataplane.CryptoFallbackLayerDevice,
-			Reason:    readinessReason(deviceReady, manager.experimentalTCPDeviceCryptoReasonLocked()),
+			Reason:    readinessReason(deviceReady, manager.tixTCPDeviceCryptoReasonLocked()),
 		},
 		{
 			Name:      dataplane.CryptoFallbackUserspaceAEAD,
@@ -734,11 +734,11 @@ func (manager *Manager) kernelCryptoDeviceMapForNamespaceLocked(namespace uint8,
 			manager.kernelCryptoDevices = make(map[uint64]*kernelCryptoDevice)
 		}
 		return manager.kernelCryptoDevices
-	case kernelCryptoNamespaceExperimentalTCP:
-		if manager.expTCPKernelCryptoDevices == nil && create {
-			manager.expTCPKernelCryptoDevices = make(map[uint64]*kernelCryptoDevice)
+	case kernelCryptoNamespaceTIXTCP:
+		if manager.tixTCPKernelCryptoDevices == nil && create {
+			manager.tixTCPKernelCryptoDevices = make(map[uint64]*kernelCryptoDevice)
 		}
-		return manager.expTCPKernelCryptoDevices
+		return manager.tixTCPKernelCryptoDevices
 	default:
 		return nil
 	}
@@ -774,8 +774,8 @@ func (manager *Manager) kernelCryptoProviderHasFlowLocked(namespace uint8, flowI
 
 func kernelCryptoNamespaceName(namespace uint8) string {
 	switch namespace {
-	case kernelCryptoNamespaceExperimentalTCP:
-		return "experimental_tcp"
+	case kernelCryptoNamespaceTIXTCP:
+		return "tix_tcp"
 	case kernelCryptoNamespaceKernelUDP:
 		return "kernel_udp"
 	default:
@@ -788,7 +788,7 @@ func (manager *Manager) prepareKernelCryptoProviderInstallEntriesLocked(entries 
 		return nil, nil
 	}
 	if len(entries) > int(kernelCryptoMaxEntries) {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto ctx entries %d exceeds capacity %d", len(entries), kernelCryptoMaxEntries)
+		return nil, fmt.Errorf("tix_tcp kernel crypto ctx entries %d exceeds capacity %d", len(entries), kernelCryptoMaxEntries)
 	}
 	if manager.kernelCryptoCtxSlots == nil {
 		manager.kernelCryptoCtxSlots = make(map[kernelCryptoFlowKey]uint32, len(entries))
@@ -827,7 +827,7 @@ func (manager *Manager) nextKernelCryptoProviderSlotLocked(used map[uint32]struc
 			return slot, nil
 		}
 	}
-	return 0, fmt.Errorf("experimental_tcp kernel crypto ctx slots are exhausted")
+	return 0, fmt.Errorf("tix_tcp kernel crypto ctx slots are exhausted")
 }
 
 func (manager *Manager) rollbackKernelCryptoProviderInstallLocked(entries []kernelCryptoFlowEntry) {
@@ -962,7 +962,7 @@ func loadKernelCryptoDirectSlotProviderMaps() (*kernelCryptoProviderObject, erro
 
 func (provider *kernelCryptoProviderObject) Install(entries []kernelCryptoFlowEntry) error {
 	if provider == nil {
-		return fmt.Errorf("experimental_tcp kernel crypto ctx provider is not loaded")
+		return fmt.Errorf("tix_tcp kernel crypto ctx provider is not loaded")
 	}
 	prepared := make([]kernelCryptoProviderInstallEntry, 0, len(entries))
 	for i, entry := range entries {
@@ -973,14 +973,14 @@ func (provider *kernelCryptoProviderObject) Install(entries []kernelCryptoFlowEn
 
 func (provider *kernelCryptoProviderObject) InstallAt(entries []kernelCryptoProviderInstallEntry) error {
 	if provider == nil {
-		return fmt.Errorf("experimental_tcp kernel crypto ctx provider is not loaded")
+		return fmt.Errorf("tix_tcp kernel crypto ctx provider is not loaded")
 	}
 	if len(entries) > int(kernelCryptoMaxEntries) {
-		return fmt.Errorf("experimental_tcp kernel crypto ctx slot count %d exceeds capacity %d", len(entries), kernelCryptoMaxEntries)
+		return fmt.Errorf("tix_tcp kernel crypto ctx slot count %d exceeds capacity %d", len(entries), kernelCryptoMaxEntries)
 	}
 	for _, install := range entries {
 		if install.Slot >= kernelCryptoMaxEntries {
-			return fmt.Errorf("experimental_tcp kernel crypto ctx slot %d exceeds capacity %d", install.Slot, kernelCryptoMaxEntries)
+			return fmt.Errorf("tix_tcp kernel crypto ctx slot %d exceeds capacity %d", install.Slot, kernelCryptoMaxEntries)
 		}
 		if err := provider.clearDirectSlot(install.Slot); err != nil {
 			return err
@@ -997,7 +997,7 @@ func (provider *kernelCryptoProviderObject) InstallAt(entries []kernelCryptoProv
 
 func (provider *kernelCryptoProviderObject) RoundTrip(key kernelCryptoFlowKey) error {
 	if provider == nil || provider.roundTripMap == nil || provider.roundTripProg == nil {
-		return fmt.Errorf("experimental_tcp kernel crypto ctx provider roundtrip program is not loaded")
+		return fmt.Errorf("tix_tcp kernel crypto ctx provider roundtrip program is not loaded")
 	}
 	var scratch kernelCryptoRoundTripScratch
 	scratch.Key = key
@@ -1009,28 +1009,28 @@ func (provider *kernelCryptoProviderObject) RoundTrip(key kernelCryptoFlowKey) e
 	}
 	slot := uint32(0)
 	if err := provider.roundTripMap.Update(slot, scratch, cebpf.UpdateAny); err != nil {
-		return fmt.Errorf("stage experimental_tcp kernel crypto roundtrip scratch: %w", err)
+		return fmt.Errorf("stage tix_tcp kernel crypto roundtrip scratch: %w", err)
 	}
 	ret, err := provider.roundTripProg.Run(&cebpf.RunOptions{Data: make([]byte, 64)})
 	if err != nil {
-		return fmt.Errorf("run experimental_tcp kernel crypto roundtrip: %w", err)
+		return fmt.Errorf("run tix_tcp kernel crypto roundtrip: %w", err)
 	}
 	if ret == 0 {
-		return fmt.Errorf("experimental_tcp kernel crypto roundtrip returned XDP_ABORTED")
+		return fmt.Errorf("tix_tcp kernel crypto roundtrip returned XDP_ABORTED")
 	}
 	if err := provider.roundTripMap.Lookup(slot, &scratch); err != nil {
-		return fmt.Errorf("read experimental_tcp kernel crypto roundtrip scratch: %w", err)
+		return fmt.Errorf("read tix_tcp kernel crypto roundtrip scratch: %w", err)
 	}
 	if scratch.Result != 0 {
-		return fmt.Errorf("experimental_tcp kernel crypto roundtrip result %d", scratch.Result)
+		return fmt.Errorf("tix_tcp kernel crypto roundtrip result %d", scratch.Result)
 	}
 	for i := 0; i < kernelCryptoRoundTripPlainLen; i++ {
 		if scratch.Out[i] != scratch.Plain[i] {
-			return fmt.Errorf("experimental_tcp kernel crypto roundtrip plaintext mismatch at byte %d", i)
+			return fmt.Errorf("tix_tcp kernel crypto roundtrip plaintext mismatch at byte %d", i)
 		}
 	}
 	if bytes.Equal(scratch.Cipher[:kernelCryptoRoundTripPlainLen], scratch.Plain[:kernelCryptoRoundTripPlainLen]) {
-		return fmt.Errorf("experimental_tcp kernel crypto roundtrip ciphertext did not change")
+		return fmt.Errorf("tix_tcp kernel crypto roundtrip ciphertext did not change")
 	}
 	_ = provider.roundTripMap.Update(slot, kernelCryptoRoundTripScratch{}, cebpf.UpdateAny)
 	return nil
@@ -1038,16 +1038,16 @@ func (provider *kernelCryptoProviderObject) RoundTrip(key kernelCryptoFlowKey) e
 
 func (provider *kernelCryptoProviderObject) SealFrame(key kernelCryptoFlowKey, suiteID uint16, epoch uint64, sequence uint64, plaintext []byte) ([]byte, error) {
 	if provider == nil || provider.frameMap == nil || provider.frameSealProg == nil {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame seal program is not loaded")
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame seal program is not loaded")
 	}
 	if suiteID == 0 || suiteID > 255 {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame suite id %d is invalid", suiteID)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame suite id %d is invalid", suiteID)
 	}
 	if len(plaintext) > kernelCryptoFrameMaxPlain {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame plaintext size %d exceeds max %d", len(plaintext), kernelCryptoFrameMaxPlain)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame plaintext size %d exceeds max %d", len(plaintext), kernelCryptoFrameMaxPlain)
 	}
 	if sequence == 0 {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame sequence is required")
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame sequence is required")
 	}
 	var scratch kernelCryptoFrameScratch
 	scratch.Key = key
@@ -1056,7 +1056,7 @@ func (provider *kernelCryptoProviderObject) SealFrame(key kernelCryptoFlowKey, s
 	scratch.InLen = uint32(len(plaintext))
 	copy(scratch.In[:], plaintext)
 	if err := provider.frameMap.Update(uint32(0), scratch, cebpf.UpdateAny); err != nil {
-		return nil, fmt.Errorf("stage experimental_tcp kernel crypto frame seal: %w", err)
+		return nil, fmt.Errorf("stage tix_tcp kernel crypto frame seal: %w", err)
 	}
 	if err := provider.runFrameProgram(provider.frameSealProg); err != nil {
 		provider.clearFrameSlot()
@@ -1064,15 +1064,15 @@ func (provider *kernelCryptoProviderObject) SealFrame(key kernelCryptoFlowKey, s
 	}
 	if err := provider.frameMap.Lookup(uint32(0), &scratch); err != nil {
 		provider.clearFrameSlot()
-		return nil, fmt.Errorf("read experimental_tcp kernel crypto frame seal: %w", err)
+		return nil, fmt.Errorf("read tix_tcp kernel crypto frame seal: %w", err)
 	}
 	if scratch.Result != 0 {
 		provider.clearFrameSlot()
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame seal returned %d", scratch.Result)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame seal returned %d", scratch.Result)
 	}
 	if scratch.OutLen == 0 || scratch.OutLen > kernelCryptoFrameMaxWire {
 		provider.clearFrameSlot()
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame seal output length %d is invalid", scratch.OutLen)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame seal output length %d is invalid", scratch.OutLen)
 	}
 	payload := make([]byte, kernelCryptoSecureHeaderLen+int(scratch.OutLen))
 	kernelCryptoPutSecureHeader(payload[:kernelCryptoSecureHeaderLen], byte(suiteID), epoch, sequence)
@@ -1083,17 +1083,17 @@ func (provider *kernelCryptoProviderObject) SealFrame(key kernelCryptoFlowKey, s
 
 func (provider *kernelCryptoProviderObject) OpenFrame(key kernelCryptoFlowKey, suiteID uint16, epoch uint64, sequence uint64, payload []byte) ([]byte, error) {
 	if provider == nil || provider.frameMap == nil || provider.frameOpenProg == nil {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame open program is not loaded")
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame open program is not loaded")
 	}
 	if suiteID == 0 || suiteID > 255 {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame suite id %d is invalid", suiteID)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame suite id %d is invalid", suiteID)
 	}
 	ciphertext, err := kernelCryptoParseSecureFrame(payload, byte(suiteID), epoch, sequence)
 	if err != nil {
 		return nil, err
 	}
 	if len(ciphertext) > kernelCryptoFrameMaxWire {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame ciphertext size %d exceeds max %d", len(ciphertext), kernelCryptoFrameMaxWire)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame ciphertext size %d exceeds max %d", len(ciphertext), kernelCryptoFrameMaxWire)
 	}
 	var scratch kernelCryptoFrameScratch
 	scratch.Key = key
@@ -1102,7 +1102,7 @@ func (provider *kernelCryptoProviderObject) OpenFrame(key kernelCryptoFlowKey, s
 	scratch.InLen = uint32(len(ciphertext))
 	copy(scratch.In[:], ciphertext)
 	if err := provider.frameMap.Update(uint32(0), scratch, cebpf.UpdateAny); err != nil {
-		return nil, fmt.Errorf("stage experimental_tcp kernel crypto frame open: %w", err)
+		return nil, fmt.Errorf("stage tix_tcp kernel crypto frame open: %w", err)
 	}
 	if err := provider.runFrameProgram(provider.frameOpenProg); err != nil {
 		provider.clearFrameSlot()
@@ -1110,15 +1110,15 @@ func (provider *kernelCryptoProviderObject) OpenFrame(key kernelCryptoFlowKey, s
 	}
 	if err := provider.frameMap.Lookup(uint32(0), &scratch); err != nil {
 		provider.clearFrameSlot()
-		return nil, fmt.Errorf("read experimental_tcp kernel crypto frame open: %w", err)
+		return nil, fmt.Errorf("read tix_tcp kernel crypto frame open: %w", err)
 	}
 	if scratch.Result != 0 {
 		provider.clearFrameSlot()
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame open returned %d", scratch.Result)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame open returned %d", scratch.Result)
 	}
 	if scratch.OutLen > kernelCryptoFrameMaxPlain {
 		provider.clearFrameSlot()
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame open output length %d is invalid", scratch.OutLen)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame open output length %d is invalid", scratch.OutLen)
 	}
 	plaintext := make([]byte, int(scratch.OutLen))
 	copy(plaintext, scratch.Out[:scratch.OutLen])
@@ -1131,8 +1131,8 @@ func (provider *kernelCryptoProviderObject) DeleteFlow(flowID uint64) error {
 		return nil
 	}
 	return provider.DeleteKeys([]kernelCryptoFlowKey{
-		kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend),
-		kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv),
+		kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionSend),
+		kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv),
 	})
 }
 
@@ -1283,23 +1283,23 @@ func (provider *kernelCryptoProviderObject) Close() error {
 
 func (provider *kernelCryptoProviderObject) runCommand(program *cebpf.Program, cmd *kernelCryptoCommand) error {
 	if provider.commandMap == nil || program == nil {
-		return fmt.Errorf("experimental_tcp kernel crypto ctx provider is incomplete")
+		return fmt.Errorf("tix_tcp kernel crypto ctx provider is incomplete")
 	}
 	slot := uint32(0)
 	if err := provider.commandMap.Update(slot, *cmd, cebpf.UpdateAny); err != nil {
-		return fmt.Errorf("stage experimental_tcp kernel crypto command: %w", err)
+		return fmt.Errorf("stage tix_tcp kernel crypto command: %w", err)
 	}
 	defer provider.clearCommandSlot(slot)
 	ret, err := program.Run(&cebpf.RunOptions{Context: uint64(0)})
 	if err != nil {
-		return fmt.Errorf("run experimental_tcp kernel crypto command: %w", err)
+		return fmt.Errorf("run tix_tcp kernel crypto command: %w", err)
 	}
 	var out kernelCryptoCommand
 	if lookupErr := provider.commandMap.Lookup(slot, &out); lookupErr == nil && out.Result != 0 {
-		return fmt.Errorf("experimental_tcp kernel crypto command returned %d", out.Result)
+		return fmt.Errorf("tix_tcp kernel crypto command returned %d", out.Result)
 	}
 	if ret != 0 {
-		return fmt.Errorf("experimental_tcp kernel crypto command returned %d", int32(ret))
+		return fmt.Errorf("tix_tcp kernel crypto command returned %d", int32(ret))
 	}
 	return nil
 }
@@ -1313,14 +1313,14 @@ func (provider *kernelCryptoProviderObject) clearCommandSlot(slot uint32) {
 
 func (provider *kernelCryptoProviderObject) runFrameProgram(program *cebpf.Program) error {
 	if program == nil {
-		return fmt.Errorf("experimental_tcp kernel crypto frame program is incomplete")
+		return fmt.Errorf("tix_tcp kernel crypto frame program is incomplete")
 	}
 	ret, err := program.Run(&cebpf.RunOptions{Data: make([]byte, 64)})
 	if err != nil {
-		return fmt.Errorf("run experimental_tcp kernel crypto frame program: %w", err)
+		return fmt.Errorf("run tix_tcp kernel crypto frame program: %w", err)
 	}
 	if ret == 0 {
-		return fmt.Errorf("experimental_tcp kernel crypto frame program returned XDP_ABORTED")
+		return fmt.Errorf("tix_tcp kernel crypto frame program returned XDP_ABORTED")
 	}
 	return nil
 }
@@ -1350,19 +1350,19 @@ func kernelCryptoPutSecureHeader(header []byte, suite byte, epoch uint64, sequen
 
 func kernelCryptoParseSecureFrame(payload []byte, suite byte, epoch uint64, sequence uint64) ([]byte, error) {
 	if len(payload) < kernelCryptoSecureHeaderLen+kernelCryptoFrameTagLen {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame too short: %d", len(payload))
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame too short: %d", len(payload))
 	}
 	header := payload[:kernelCryptoSecureHeaderLen]
 	if !bytes.Equal(header[0:4], kernelCryptoSecureMagic[:]) || header[4] != kernelCryptoSecureVersion || header[5] != suite {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame secure header is invalid")
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame secure header is invalid")
 	}
 	headerEpoch := binary.BigEndian.Uint64(header[8:16])
 	if headerEpoch != epoch {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame epoch %d != outer epoch %d", headerEpoch, epoch)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame epoch %d != outer epoch %d", headerEpoch, epoch)
 	}
 	headerSequence := binary.BigEndian.Uint64(header[16:24])
 	if headerSequence != sequence {
-		return nil, fmt.Errorf("experimental_tcp kernel crypto frame sequence %d != outer sequence %d", headerSequence, sequence)
+		return nil, fmt.Errorf("tix_tcp kernel crypto frame sequence %d != outer sequence %d", headerSequence, sequence)
 	}
 	return payload[kernelCryptoSecureHeaderLen:], nil
 }
@@ -1408,7 +1408,7 @@ func (manager *Manager) probeKernelCryptoAEADCreateLocked() {
 	zeroKernelCryptoEntries(entries)
 	if err != nil {
 		manager.kernelCryptoAEADCreateErrors++
-		manager.warnings = append(manager.warnings, "experimental_tcp kernel AEAD-GCM ctx create unavailable: "+summarizeKernelCryptoProviderError(err))
+		manager.warnings = append(manager.warnings, "tix_tcp kernel AEAD-GCM ctx create unavailable: "+summarizeKernelCryptoProviderError(err))
 		return
 	}
 	manager.kernelCryptoAEADCreateSuccesses++
@@ -1416,7 +1416,7 @@ func (manager *Manager) probeKernelCryptoAEADCreateLocked() {
 	manager.kernelCryptoAEADRoundTripAttempts++
 	if err := manager.kernelCryptoProvider.RoundTrip(probeKey); err != nil {
 		manager.kernelCryptoAEADRoundTripErrors++
-		manager.warnings = append(manager.warnings, "experimental_tcp kernel AEAD-GCM roundtrip unavailable: "+summarizeKernelCryptoProviderError(err))
+		manager.warnings = append(manager.warnings, "tix_tcp kernel AEAD-GCM roundtrip unavailable: "+summarizeKernelCryptoProviderError(err))
 		return
 	}
 	manager.kernelCryptoAEADRoundTripSuccesses++
@@ -1424,8 +1424,8 @@ func (manager *Manager) probeKernelCryptoAEADCreateLocked() {
 
 const kernelCryptoSyntheticProbeFlowID uint64 = ^uint64(0) - 0x7158
 
-func kernelCryptoSyntheticProbeSpec() dataplane.ExperimentalTCPCryptoSpec {
-	return dataplane.ExperimentalTCPCryptoSpec{
+func kernelCryptoSyntheticProbeSpec() dataplane.TIXTCPCryptoSpec {
+	return dataplane.TIXTCPCryptoSpec{
 		FlowID:       kernelCryptoSyntheticProbeFlowID,
 		Suite:        kernelCryptoSuiteAES256GCMX25519,
 		WireFormat:   kernelCryptoWireFormatTrustIXSecureDataV1,

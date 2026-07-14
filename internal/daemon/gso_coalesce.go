@@ -124,7 +124,7 @@ func dataSessionTXGSOCoalesceDefaultForRuntime(runtime *dataSessionRuntime, stat
 		stats.Datagram &&
 		stats.NativeBatching &&
 		stats.MaxPacketSize >= dataSessionTXGSOCoalesceLargeDatagramMin &&
-		dataSessionRuntimeTransport(runtime) == transport.ProtocolExperimentalTCP {
+		dataSessionRuntimeTransport(runtime) == transport.ProtocolTIXTCP {
 		return true
 	}
 	return dataSessionTXGSOCoalesceDefaultForStats(stats)
@@ -136,7 +136,7 @@ func dataSessionTXGSOCoalesceMultiFlowDefaultForRuntime(runtime *dataSessionRunt
 		stats.Datagram &&
 		stats.NativeBatching &&
 		stats.MaxPacketSize >= dataSessionTXGSOCoalesceLargeDatagramMin &&
-		dataSessionRuntimeTransport(runtime) == transport.ProtocolExperimentalTCP
+		dataSessionRuntimeTransport(runtime) == transport.ProtocolTIXTCP
 }
 
 func dataSessionTXGSOCoalescePreference() (bool, bool) {
@@ -226,7 +226,7 @@ func dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(runtime *dataSe
 		return enabled
 	}
 	switch dataSessionRuntimeTransport(runtime) {
-	case transport.ProtocolExperimentalTCP, transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
+	case transport.ProtocolTIXTCP, transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
 		return true
 	default:
 		return false

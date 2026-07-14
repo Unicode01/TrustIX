@@ -100,7 +100,7 @@ validate_list() {
   for item in "$@"; do
     item="$(printf '%s' "$item" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
     case "$item" in
-      udp|tcp|quic|websocket|http_connect|experimental_tcp) ;;
+      udp|tcp|quic|websocket|http_connect|tix_tcp) ;;
       *) die "unsupported userspace transport for this refresh: $item" ;;
     esac
   done
@@ -239,7 +239,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --all-userspace)
-      transports="udp,tcp,quic,websocket,http_connect,experimental_tcp"
+      transports="udp,tcp,quic,websocket,http_connect,tix_tcp"
       shift
       ;;
     --foreground)

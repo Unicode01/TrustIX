@@ -1289,24 +1289,24 @@ func TestCrossHostSoakVerifyChecksTransportPolicyAndSessions(t *testing.T) {
 		"--require-transport-policy-stat",
 		"session_pool_warmup=true",
 		"--require-transport-local-endpoint-stat",
-		"transport=experimental_tcp",
+		"transport=tix_tcp",
 		"--require-transport-local-endpoint-stat",
 		"usable=true",
 		"--require-transport-peer-endpoint-stat",
-		"transport=experimental_tcp",
+		"transport=tix_tcp",
 		"--require-transport-peer-endpoint-stat",
 		"usable=true",
 		"--require-transport-sessions-min",
 		"8",
 		"--require-transport-session-stat",
-		"transport=experimental_tcp",
+		"transport=tix_tcp",
 		"--require-transport-session-stat",
 		"stats.encryption=plaintext",
 		"--require-transport-session-any-min",
 		"stats.bytes_sent=1",
 		"--require-transport-session-any-min",
 		"stats.bytes_received=1",
-		"--require-transport-session-endpoint-suffix=-experimental-tcp",
+		"--require-transport-session-endpoint-suffix=-tix-tcp",
 		dir,
 	)
 	cmd.Dir = "."
@@ -1337,7 +1337,7 @@ func TestCrossHostSoakVerifyRejectsWrongTransportEndpoint(t *testing.T) {
 		"--min-seconds",
 		"120",
 		"--require-transport-local-endpoint-stat",
-		"transport=experimental_tcp",
+		"transport=tix_tcp",
 		dir,
 	)
 	cmd.Dir = "."
@@ -1414,8 +1414,8 @@ func TestCrossHostSoakVerifyRejectsWrongTransportSessionEndpoint(t *testing.T) {
 		"--require-transport-sessions-min",
 		"8",
 		"--require-transport-session-stat",
-		"transport=experimental_tcp",
-		"--require-transport-session-endpoint-suffix=-experimental-tcp",
+		"transport=tix_tcp",
+		"--require-transport-session-endpoint-suffix=-tix-tcp",
 		dir,
 	)
 	cmd.Dir = "."
@@ -1438,7 +1438,7 @@ func TestCrossHostSoakVerifyRejectsWrongTransportSessionStats(t *testing.T) {
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
 	writeResultMarker(t, dir)
 	for _, node := range []string{"a", "b"} {
-		writeTransportsJSONWithSession(t, filepath.Join(dir, "collect", node, "transports.json"), 8, "flow", true, 8, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"))
+		writeTransportsJSONWithSession(t, filepath.Join(dir, "collect", node, "transports.json"), 8, "flow", true, 8, "tix_tcp", peerEndpointForNode(node, "-tix-tcp"))
 	}
 
 	cmd := exec.Command(
@@ -1451,10 +1451,10 @@ func TestCrossHostSoakVerifyRejectsWrongTransportSessionStats(t *testing.T) {
 		"--require-transport-sessions-min",
 		"8",
 		"--require-transport-session-stat",
-		"transport=experimental_tcp",
+		"transport=tix_tcp",
 		"--require-transport-session-stat",
 		"stats.encryption=secure",
-		"--require-transport-session-endpoint-suffix=-experimental-tcp",
+		"--require-transport-session-endpoint-suffix=-tix-tcp",
 		dir,
 	)
 	cmd.Dir = "."
@@ -1477,7 +1477,7 @@ func TestCrossHostSoakVerifyRejectsIdleMatchingTransportSessions(t *testing.T) {
 	writeIperfJSON(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 5.1e9, 5.0e9, 120.2)
 	writeResultMarker(t, dir)
 	for _, node := range []string{"a", "b"} {
-		writeTransportsJSONWithSessionStats(t, filepath.Join(dir, "collect", node, "transports.json"), 8, "flow", true, 8, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"), map[string]any{
+		writeTransportsJSONWithSessionStats(t, filepath.Join(dir, "collect", node, "transports.json"), 8, "flow", true, 8, "tix_tcp", peerEndpointForNode(node, "-tix-tcp"), map[string]any{
 			"encryption":       "plaintext",
 			"bytes_sent":       0,
 			"bytes_received":   0,
@@ -1496,12 +1496,12 @@ func TestCrossHostSoakVerifyRejectsIdleMatchingTransportSessions(t *testing.T) {
 		"--require-transport-sessions-min",
 		"8",
 		"--require-transport-session-stat",
-		"transport=experimental_tcp",
+		"transport=tix_tcp",
 		"--require-transport-session-stat",
 		"stats.encryption=plaintext",
 		"--require-transport-session-any-min",
 		"stats.bytes_sent=1",
-		"--require-transport-session-endpoint-suffix=-experimental-tcp",
+		"--require-transport-session-endpoint-suffix=-tix-tcp",
 		dir,
 	)
 	cmd.Dir = "."
@@ -1752,14 +1752,14 @@ func TestCrossHostSoakVerifyAcceptsActiveTransportSessionSnapshot(t *testing.T) 
 		"--require-transport-sessions-min",
 		"8",
 		"--require-transport-session-stat",
-		"transport=experimental_tcp",
+		"transport=tix_tcp",
 		"--require-transport-session-stat",
 		"stats.encryption=plaintext",
 		"--require-transport-session-any-min",
 		"stats.bytes_sent=1",
 		"--require-transport-session-any-min",
 		"stats.bytes_received=1",
-		"--require-transport-session-endpoint-suffix=-experimental-tcp",
+		"--require-transport-session-endpoint-suffix=-tix-tcp",
 		dir,
 	)
 	cmd.Dir = "."
@@ -2078,42 +2078,42 @@ func TestCrossHostProductionGateRejectsFullKmodUnsafeModuleState(t *testing.T) {
 	}
 }
 
-func TestCrossHostProductionGateAcceptsExpTCPFullKmodArtifacts(t *testing.T) {
+func TestCrossHostProductionGateAcceptsTIXTCPFullKmodArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeExpTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
 
-	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASES=exp-tcp-full-kmod="+filepath.ToSlash(dir))
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=tix-tcp-full-kmod="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("production gate rejected experimental TCP full-kmod artifacts:\n%s", output)
+		t.Fatalf("production gate rejected TIX-TCP full-kmod artifacts:\n%s", output)
 	}
 }
 
-func TestCrossHostProductionGateRejectsExpTCPFullKmodWithoutProvider(t *testing.T) {
+func TestCrossHostProductionGateRejectsTIXTCPFullKmodWithoutProvider(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeExpTCPFullKmodProductionGateArtifacts(t, dir, false, true)
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, false, true)
 
-	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASES=exp-tcp-full-kmod="+filepath.ToSlash(dir))
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=tix-tcp-full-kmod="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("production gate unexpectedly accepted experimental TCP full-kmod artifacts without provider:\n%s", output)
+		t.Fatalf("production gate unexpectedly accepted TIX-TCP full-kmod artifacts without provider:\n%s", output)
 	}
 	if !strings.Contains(string(output), "kernel_datapath_full_plaintext") {
 		t.Fatalf("production gate did not report missing full plaintext provider:\n%s", output)
 	}
 }
 
-func TestCrossHostProductionGateRejectsExpTCPFullKmodWithoutPlaintextTraffic(t *testing.T) {
+func TestCrossHostProductionGateRejectsTIXTCPFullKmodWithoutPlaintextTraffic(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeExpTCPFullKmodProductionGateArtifacts(t, dir, true, false)
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, false)
 
-	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASES=exp-tcp-full-kmod="+filepath.ToSlash(dir))
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=tix-tcp-full-kmod="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("production gate unexpectedly accepted experimental TCP full-kmod artifacts without plaintext module traffic:\n%s", output)
+		t.Fatalf("production gate unexpectedly accepted TIX-TCP full-kmod artifacts without plaintext module traffic:\n%s", output)
 	}
 	if !strings.Contains(string(output), "tx_plaintext_packets") {
 		t.Fatalf("production gate did not report missing plaintext module traffic:\n%s", output)
@@ -2162,45 +2162,45 @@ func TestCrossHostProductionGateRejectsSecureKUDPWithoutRouteHelperXmit(t *testi
 	}
 }
 
-func TestCrossHostProductionGateAcceptsSecureExpTCPKernelArtifacts(t *testing.T) {
+func TestCrossHostProductionGateAcceptsSecureTIXTCPKernelArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeSecureExpTCPKernelProductionGateArtifacts(t, dir, true, true)
+	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, true, true)
 
-	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASES=secure-exp-tcp-kernel="+filepath.ToSlash(dir))
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-tix-tcp-kernel="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("production gate rejected secure experimental TCP kernel artifacts:\n%s", output)
+		t.Fatalf("production gate rejected secure TIX-TCP kernel artifacts:\n%s", output)
 	}
 }
 
-func TestCrossHostProductionGateRejectsSecureExpTCPKernelWithoutRouteGSO(t *testing.T) {
+func TestCrossHostProductionGateRejectsSecureTIXTCPKernelWithoutRouteGSO(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeSecureExpTCPKernelProductionGateArtifacts(t, dir, false, true)
+	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, false, true)
 
-	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASES=secure-exp-tcp-kernel="+filepath.ToSlash(dir))
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-tix-tcp-kernel="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("production gate unexpectedly accepted secure experimental TCP kernel artifacts without route-GSO:\n%s", output)
+		t.Fatalf("production gate unexpectedly accepted secure TIX-TCP kernel artifacts without route-GSO:\n%s", output)
 	}
-	if !strings.Contains(string(output), "tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc") {
-		t.Fatalf("production gate did not report missing secure experimental TCP route-GSO stat:\n%s", output)
+	if !strings.Contains(string(output), "tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc") {
+		t.Fatalf("production gate did not report missing secure TIX-TCP route-GSO stat:\n%s", output)
 	}
 }
 
-func TestCrossHostProductionGateRejectsSecureExpTCPKernelWithoutDirectKfuncCrypto(t *testing.T) {
+func TestCrossHostProductionGateRejectsSecureTIXTCPKernelWithoutDirectKfuncCrypto(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeSecureExpTCPKernelProductionGateArtifacts(t, dir, true, false)
+	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, true, false)
 
-	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASES=secure-exp-tcp-kernel="+filepath.ToSlash(dir))
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-tix-tcp-kernel="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("production gate unexpectedly accepted secure experimental TCP kernel artifacts without direct kfunc crypto:\n%s", output)
+		t.Fatalf("production gate unexpectedly accepted secure TIX-TCP kernel artifacts without direct kfunc crypto:\n%s", output)
 	}
 	if !strings.Contains(string(output), "kernel_crypto_module_direct_kfunc_seal_calls") {
-		t.Fatalf("production gate did not report missing secure experimental TCP direct kfunc counter:\n%s", output)
+		t.Fatalf("production gate did not report missing secure TIX-TCP direct kfunc counter:\n%s", output)
 	}
 }
 
@@ -2226,7 +2226,7 @@ func TestCrossHostProductionGateRejectsRouteGSOWithoutTCFlag(t *testing.T) {
 	if err == nil {
 		t.Fatalf("production gate unexpectedly accepted route-GSO artifacts without TC route-GSO flag:\n%s", output)
 	}
-	if !strings.Contains(string(output), "tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc") {
+	if !strings.Contains(string(output), "tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc") {
 		t.Fatalf("production gate did not report missing route-GSO datapath stat:\n%s", output)
 	}
 }
@@ -2706,7 +2706,7 @@ func writeDatapathJSONWithReplayStats(t *testing.T, path string, replaySeen, rep
 
 func writeTransportsJSON(t *testing.T, path string, poolSize int, strategy string, warmup bool, sessions int) {
 	t.Helper()
-	writeTransportsJSONWithSession(t, path, poolSize, strategy, warmup, sessions, "experimental_tcp", "b-experimental-tcp")
+	writeTransportsJSONWithSession(t, path, poolSize, strategy, warmup, sessions, "tix_tcp", "b-tix-tcp")
 }
 
 func writeTransportsJSONWithSession(t *testing.T, path string, poolSize int, strategy string, warmup bool, sessions int, sessionTransport string, endpoint string) {
@@ -2923,7 +2923,7 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 	writeModuleParameters(t, path, map[string]map[string]string{"trustix_datapath": params})
 }
 
-func writeExpTCPFullKmodProductionGateArtifacts(t *testing.T, dir string, provider bool, plaintextTraffic bool) {
+func writeTIXTCPFullKmodProductionGateArtifacts(t *testing.T, dir string, provider bool, plaintextTraffic bool) {
 	t.Helper()
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 7.2e9, 7.1e9, 3600.2, 3600, 0.8)
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 7.2e9, 7.1e9, 3600.2, 3600, 0.8)
@@ -2945,15 +2945,15 @@ func writeExpTCPFullKmodProductionGateArtifacts(t *testing.T, dir string, provid
 	})
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
-		writeExpTCPFullKmodStatusJSON(t, filepath.Join(base, "status.json"))
-		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "exp-tcp-full-kmod-sha")
-		writeExpTCPFullKmodDatapathJSON(t, filepath.Join(base, "datapath.json"), provider)
-		writeExpTCPFullKmodTransportsJSON(t, filepath.Join(base, "transports.json"), node)
-		writeFullKmodModuleParametersWithOverrides(t, filepath.Join(base, "module-parameters.txt"), true, expTCPFullKmodModuleOverrides(plaintextTraffic))
+		writeTIXTCPFullKmodStatusJSON(t, filepath.Join(base, "status.json"))
+		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "tix-tcp-full-kmod-sha")
+		writeTIXTCPFullKmodDatapathJSON(t, filepath.Join(base, "datapath.json"), provider)
+		writeTIXTCPFullKmodTransportsJSON(t, filepath.Join(base, "transports.json"), node)
+		writeFullKmodModuleParametersWithOverrides(t, filepath.Join(base, "module-parameters.txt"), true, tixTCPFullKmodModuleOverrides(plaintextTraffic))
 	}
 }
 
-func expTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
+func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 	traffic := "0"
 	if plaintextTraffic {
 		traffic = "128"
@@ -2967,10 +2967,10 @@ func expTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 	}
 }
 
-func writeExpTCPFullKmodStatusJSON(t *testing.T, path string) {
+func writeTIXTCPFullKmodStatusJSON(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("make experimental TCP full-kmod status dir: %v", err)
+		t.Fatalf("make TIX-TCP full-kmod status dir: %v", err)
 	}
 	payload := map[string]any{
 		"build": map[string]any{
@@ -2994,17 +2994,17 @@ func writeExpTCPFullKmodStatusJSON(t *testing.T, path string) {
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		t.Fatalf("marshal experimental TCP full-kmod status json: %v", err)
+		t.Fatalf("marshal TIX-TCP full-kmod status json: %v", err)
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write experimental TCP full-kmod status json: %v", err)
+		t.Fatalf("write TIX-TCP full-kmod status json: %v", err)
 	}
 }
 
-func writeExpTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextProvider bool) {
+func writeTIXTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextProvider bool) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("make experimental TCP full-kmod datapath dir: %v", err)
+		t.Fatalf("make TIX-TCP full-kmod datapath dir: %v", err)
 	}
 	provider := "af_xdp"
 	if fullPlaintextProvider {
@@ -3019,7 +3019,7 @@ func writeExpTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 		"kernel_rx_stage": map[string]any{
 			"rx_worker_injected": 128,
 		},
-		"experimental_tcp": map[string]any{
+		"tix_tcp": map[string]any{
 			"provider":                     provider,
 			"fast_path":                    true,
 			"capture_forwarder_suppressed": true,
@@ -3028,23 +3028,23 @@ func writeExpTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		t.Fatalf("marshal experimental TCP full-kmod datapath json: %v", err)
+		t.Fatalf("marshal TIX-TCP full-kmod datapath json: %v", err)
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write experimental TCP full-kmod datapath json: %v", err)
+		t.Fatalf("write TIX-TCP full-kmod datapath json: %v", err)
 	}
 }
 
-func writeExpTCPFullKmodTransportsJSON(t *testing.T, path string, node string) {
+func writeTIXTCPFullKmodTransportsJSON(t *testing.T, path string, node string) {
 	t.Helper()
-	writeTransportsJSONWithSessionStats(t, path, 16, "flow", true, 16, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"), map[string]any{
+	writeTransportsJSONWithSessionStats(t, path, 16, "flow", true, 16, "tix_tcp", peerEndpointForNode(node, "-tix-tcp"), map[string]any{
 		"encryption":       "plaintext",
 		"bytes_sent":       0,
 		"bytes_received":   0,
 		"packets_sent":     8,
 		"packets_received": 0,
 		"extra": map[string]any{
-			"experimental_tcp_full_plaintext_kernel_datapath": 1,
+			"tix_tcp_full_plaintext_kernel_datapath": 1,
 		},
 	})
 }
@@ -3233,7 +3233,7 @@ func writeSecureKUDPModuleParameters(t *testing.T, path string, routeHelperXmit 
 	})
 }
 
-func writeSecureExpTCPKernelProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, directKfuncCrypto bool) {
+func writeSecureTIXTCPKernelProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, directKfuncCrypto bool) {
 	t.Helper()
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 3600.2, 3600, 0.8)
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 3600.2, 3600, 0.8)
@@ -3256,17 +3256,17 @@ func writeSecureExpTCPKernelProductionGateArtifacts(t *testing.T, dir string, ro
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
-		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "secure-exp-tcp-kernel-sha")
-		writeSecureExpTCPKernelDatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO, directKfuncCrypto)
-		writeSecureExpTCPKernelTransportsJSON(t, filepath.Join(base, "transports.json"), node)
-		writeSecureExpTCPKernelModuleParameters(t, filepath.Join(base, "module-parameters.txt"), routeGSO, directKfuncCrypto)
+		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "secure-tix-tcp-kernel-sha")
+		writeSecureTIXTCPKernelDatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO, directKfuncCrypto)
+		writeSecureTIXTCPKernelTransportsJSON(t, filepath.Join(base, "transports.json"), node)
+		writeSecureTIXTCPKernelModuleParameters(t, filepath.Join(base, "module-parameters.txt"), routeGSO, directKfuncCrypto)
 	}
 }
 
-func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO bool, directKfuncCrypto bool) {
+func writeSecureTIXTCPKernelDatapathJSON(t *testing.T, path string, routeGSO bool, directKfuncCrypto bool) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("make secure experimental TCP datapath dir: %v", err)
+		t.Fatalf("make secure TIX-TCP datapath dir: %v", err)
 	}
 	routeGSOValue := 0
 	if routeGSO {
@@ -3279,7 +3279,7 @@ func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO boo
 		directOpenCalls = 16
 	}
 	payload := map[string]any{
-		"experimental_tcp": map[string]any{
+		"tix_tcp": map[string]any{
 			"fast_path":        true,
 			"reinject":         true,
 			"kernel_crypto":    true,
@@ -3287,67 +3287,67 @@ func writeSecureExpTCPKernelDatapathJSON(t *testing.T, path string, routeGSO boo
 			"effective_crypto": "kernel",
 			"active_flows":     1,
 			"provider_stats": map[string]any{
-				"kernel_crypto_flow_map_ready":                                      1,
-				"kernel_crypto_flow_map_entries":                                    1,
-				"kernel_crypto_flow_map_updates":                                    1,
-				"kernel_crypto_direct_slot_provider_ready":                          1,
-				"kernel_crypto_direct_kfunc_fastpath_ready":                         1,
-				"kernel_crypto_tc_direct_ready":                                     1,
-				"kernel_crypto_rx_attached":                                         0,
-				"kernel_crypto_tx_packet":                                           0,
-				"kernel_crypto_module_direct_kfunc_seal_calls":                      directSealCalls,
-				"kernel_crypto_module_direct_kfunc_open_calls":                      directOpenCalls,
-				"kernel_crypto_module_direct_kfunc_errors":                          0,
-				"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc":           routeGSOValue,
-				"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested": 1,
-				"tc_kernel_udp_tx_secure_direct_attached":                           1,
-				"tc_kernel_udp_tx_secure_direct_trust_inner_checksums":              1,
-				"tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled":                 1,
-				"tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc":                routeGSOValue,
-				"kernel_crypto_frame_seal_successes":                                0,
-				"kernel_crypto_frame_open_successes":                                0,
-				"xdp_kernel_crypto_open_attempts":                                   0,
-				"xdp_kernel_crypto_open_successes":                                  0,
-				"tx_kernel_crypto_packet_seal_successes":                            0,
-				"kernel_crypto_provider_unavailable_errors":                         0,
-				"kernel_crypto_flow_rejects":                                        0,
-				"kernel_crypto_frame_rejects":                                       0,
-				"kernel_crypto_frame_seal_errors":                                   0,
-				"kernel_crypto_frame_open_errors":                                   0,
-				"kernel_crypto_frame_replay_drops":                                  0,
-				"xdp_kernel_crypto_open_errors":                                     0,
-				"xdp_kernel_crypto_replay_drops":                                    0,
-				"xdp_kernel_crypto_no_context_drops":                                0,
-				"xdp_kernel_crypto_header_errors":                                   0,
-				"xdp_kernel_crypto_payload_len_errors":                              0,
-				"xdp_kernel_crypto_secure_header_errors":                            0,
-				"xdp_kernel_crypto_frame_header_errors":                             0,
-				"xdp_kernel_crypto_epoch_sequence_mismatches":                       0,
-				"xdp_kernel_crypto_cipher_len_errors":                               0,
-				"xdp_kernel_crypto_cipher_load_errors":                              0,
-				"xdp_kernel_crypto_context_misses":                                  0,
-				"xdp_kernel_crypto_state_misses":                                    0,
-				"xdp_kernel_crypto_zero_plain_errors":                               0,
-				"xdp_kernel_crypto_context_unavailable":                             0,
-				"xdp_kernel_crypto_epoch_mismatches":                                0,
-				"xdp_kernel_crypto_suite_mismatches":                                0,
-				"xdp_kernel_crypto_dynptr_errors":                                   0,
-				"xdp_kernel_crypto_decrypt_errors":                                  0,
-				"xdp_kernel_crypto_replay_commit_errors":                            0,
-				"xdp_kernel_crypto_store_errors":                                    0,
+				"kernel_crypto_flow_map_ready":                             1,
+				"kernel_crypto_flow_map_entries":                           1,
+				"kernel_crypto_flow_map_updates":                           1,
+				"kernel_crypto_direct_slot_provider_ready":                 1,
+				"kernel_crypto_direct_kfunc_fastpath_ready":                1,
+				"kernel_crypto_tc_direct_ready":                            1,
+				"kernel_crypto_rx_attached":                                0,
+				"kernel_crypto_tx_packet":                                  0,
+				"kernel_crypto_module_direct_kfunc_seal_calls":             directSealCalls,
+				"kernel_crypto_module_direct_kfunc_open_calls":             directOpenCalls,
+				"kernel_crypto_module_direct_kfunc_errors":                 0,
+				"tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc":           routeGSOValue,
+				"tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested": 1,
+				"tc_kernel_udp_tx_secure_direct_attached":                  1,
+				"tc_kernel_udp_tx_secure_direct_trust_inner_checksums":     1,
+				"tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled":        1,
+				"tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc":       routeGSOValue,
+				"kernel_crypto_frame_seal_successes":                       0,
+				"kernel_crypto_frame_open_successes":                       0,
+				"xdp_kernel_crypto_open_attempts":                          0,
+				"xdp_kernel_crypto_open_successes":                         0,
+				"tx_kernel_crypto_packet_seal_successes":                   0,
+				"kernel_crypto_provider_unavailable_errors":                0,
+				"kernel_crypto_flow_rejects":                               0,
+				"kernel_crypto_frame_rejects":                              0,
+				"kernel_crypto_frame_seal_errors":                          0,
+				"kernel_crypto_frame_open_errors":                          0,
+				"kernel_crypto_frame_replay_drops":                         0,
+				"xdp_kernel_crypto_open_errors":                            0,
+				"xdp_kernel_crypto_replay_drops":                           0,
+				"xdp_kernel_crypto_no_context_drops":                       0,
+				"xdp_kernel_crypto_header_errors":                          0,
+				"xdp_kernel_crypto_payload_len_errors":                     0,
+				"xdp_kernel_crypto_secure_header_errors":                   0,
+				"xdp_kernel_crypto_frame_header_errors":                    0,
+				"xdp_kernel_crypto_epoch_sequence_mismatches":              0,
+				"xdp_kernel_crypto_cipher_len_errors":                      0,
+				"xdp_kernel_crypto_cipher_load_errors":                     0,
+				"xdp_kernel_crypto_context_misses":                         0,
+				"xdp_kernel_crypto_state_misses":                           0,
+				"xdp_kernel_crypto_zero_plain_errors":                      0,
+				"xdp_kernel_crypto_context_unavailable":                    0,
+				"xdp_kernel_crypto_epoch_mismatches":                       0,
+				"xdp_kernel_crypto_suite_mismatches":                       0,
+				"xdp_kernel_crypto_dynptr_errors":                          0,
+				"xdp_kernel_crypto_decrypt_errors":                         0,
+				"xdp_kernel_crypto_replay_commit_errors":                   0,
+				"xdp_kernel_crypto_store_errors":                           0,
 			},
 		},
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		t.Fatalf("marshal secure experimental TCP datapath json: %v", err)
+		t.Fatalf("marshal secure TIX-TCP datapath json: %v", err)
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write secure experimental TCP datapath json: %v", err)
+		t.Fatalf("write secure TIX-TCP datapath json: %v", err)
 	}
 }
 
-func writeSecureExpTCPKernelModuleParameters(t *testing.T, path string, routeHelperXmit bool, directKfuncCrypto bool) {
+func writeSecureTIXTCPKernelModuleParameters(t *testing.T, path string, routeHelperXmit bool, directKfuncCrypto bool) {
 	t.Helper()
 	xmitPackets := "0"
 	if routeHelperXmit {
@@ -3375,17 +3375,17 @@ func writeSecureExpTCPKernelModuleParameters(t *testing.T, path string, routeHel
 	})
 }
 
-func writeSecureExpTCPKernelTransportsJSON(t *testing.T, path string, node string) {
+func writeSecureTIXTCPKernelTransportsJSON(t *testing.T, path string, node string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("make secure experimental TCP transports dir: %v", err)
+		t.Fatalf("make secure TIX-TCP transports dir: %v", err)
 	}
 	sessionRows := make([]any, 0, 8)
 	for i := 0; i < 8; i++ {
 		sessionRows = append(sessionRows, map[string]any{
 			"peer":       "ix-b",
-			"endpoint":   peerEndpointForNode(node, "-experimental-tcp"),
-			"transport":  "experimental_tcp",
+			"endpoint":   peerEndpointForNode(node, "-tix-tcp"),
+			"transport":  "tix_tcp",
 			"pool_index": i,
 			"stats": map[string]any{
 				"encryption":        "secure",
@@ -3412,8 +3412,8 @@ func writeSecureExpTCPKernelTransportsJSON(t *testing.T, path string, node strin
 		},
 		"local_endpoints": []any{
 			map[string]any{
-				"name":                localEndpointForTransportPath(path, "experimental_tcp"),
-				"transport":           "experimental_tcp",
+				"name":                localEndpointForTransportPath(path, "tix_tcp"),
+				"transport":           "tix_tcp",
 				"enabled":             true,
 				"usable":              true,
 				"profile":             "performance",
@@ -3427,8 +3427,8 @@ func writeSecureExpTCPKernelTransportsJSON(t *testing.T, path string, node strin
 		},
 		"peer_endpoints": []any{
 			map[string]any{
-				"name":                peerEndpointForNode(node, "-experimental-tcp"),
-				"transport":           "experimental_tcp",
+				"name":                peerEndpointForNode(node, "-tix-tcp"),
+				"transport":           "tix_tcp",
 				"usable":              true,
 				"profile":             "performance",
 				"datapath":            "kernel_module",
@@ -3443,10 +3443,10 @@ func writeSecureExpTCPKernelTransportsJSON(t *testing.T, path string, node strin
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		t.Fatalf("marshal secure experimental TCP transports json: %v", err)
+		t.Fatalf("marshal secure TIX-TCP transports json: %v", err)
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write secure experimental TCP transports json: %v", err)
+		t.Fatalf("write secure TIX-TCP transports json: %v", err)
 	}
 }
 
@@ -3475,7 +3475,7 @@ func writeRouteGSOProductionGateArtifacts(t *testing.T, dir string, routeGSO boo
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
 		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "route-gso-sha")
 		writeRouteGSODatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO)
-		writeTransportsJSONWithSession(t, filepath.Join(base, "transports.json"), 8, "flow", true, 8, "experimental_tcp", peerEndpointForNode(node, "-experimental-tcp"))
+		writeTransportsJSONWithSession(t, filepath.Join(base, "transports.json"), 8, "flow", true, 8, "tix_tcp", peerEndpointForNode(node, "-tix-tcp"))
 		writeRouteGSOModuleParameters(t, filepath.Join(base, "module-parameters.txt"))
 	}
 }
@@ -3492,9 +3492,9 @@ func writeRouteGSODatapathJSON(t *testing.T, path string, routeGSO bool) {
 	payload := map[string]any{
 		"kernel_udp": map[string]any{
 			"provider_stats": map[string]any{
-				"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc":           routeGSOValue,
-				"tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested": 1,
-				"tc_kernel_udp_tx_direct_experimental_tcp_only":                     1,
+				"tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc":           routeGSOValue,
+				"tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested": 1,
+				"tc_kernel_udp_tx_direct_tix_tcp_only":                     1,
 			},
 		},
 	}

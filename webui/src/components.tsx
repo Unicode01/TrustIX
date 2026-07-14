@@ -8,7 +8,7 @@ import type {
   DoctorCheck,
   EndpointGrant,
   EndpointGrantIssueRequest,
-  ExperimentalTCPStatus,
+  TIXTCPStatus,
   EndpointConfig,
   KernelModuleStatus,
   KernelModuleConfig,
@@ -401,7 +401,7 @@ function firstRunDatapathSummary(t: Translate, lang: string, status: StatusPaylo
   const runtimeRows = [
     dataPath.kernel_transport ? kernelTransportStatusRow(t, dataPath.kernel_transport) : null,
     kernelUDPStatusRow(t, lang, dataPath.kernel_udp),
-    experimentalTCPStatusRow(t, lang, dataPath.tix_tcp || dataPath.experimental_tcp),
+    tixTCPStatusRow(t, lang, dataPath.tix_tcp),
     kernelRXStageStatusRow(t, lang, dataPath.kernel_rx_stage),
   ].filter((row): row is KernelCapabilityRow => Boolean(row));
   const loadedModuleRows = arrayValue(status.kernel_modules)
@@ -459,13 +459,13 @@ function KernelCapabilitiesPanel(props: { t: Translate; lang: string; status?: S
   const rxStage = capabilities.rx_stage || dataPath.kernel_rx_stage;
   const kernelTransport = capabilities.kernel_transport || dataPath.kernel_transport;
   const kernelUDP = capabilities.kernel_udp || dataPath.kernel_udp;
-  const experimentalTCP = capabilities.tix_tcp || capabilities.experimental_tcp || dataPath.tix_tcp || dataPath.experimental_tcp;
+  const tixTCP = capabilities.tix_tcp || dataPath.tix_tcp;
   const kernelRows = [
     ...modules.map((module) => kernelModuleCapabilityRow(props.t, module)),
     ...kernelTransportCapabilityRows(props.t, kernelTransport),
     kernelTransportStatusRow(props.t, kernelTransport),
     kernelUDPStatusRow(props.t, props.lang, kernelUDP),
-    experimentalTCPStatusRow(props.t, props.lang, experimentalTCP),
+    tixTCPStatusRow(props.t, props.lang, tixTCP),
     kernelRXStageStatusRow(props.t, props.lang, rxStage),
   ].filter((row): row is KernelCapabilityRow => Boolean(row));
   const offloadRows = placements.slice(0, 12);
@@ -487,7 +487,7 @@ function KernelCapabilitiesPanel(props: { t: Translate; lang: string; status?: S
         <SummaryItem label={props.t("dataplane", "Dataplane")} value={summary} />
         <SummaryItem label={props.t("kernel_modules", "Kernel modules")} value={formatNumber(modules.length, props.lang)} />
         <SummaryItem label={props.t("offload_paths", "Offload paths")} value={formatNumber(placements.length, props.lang)} />
-        <SummaryItem label={props.t("active_flows", "Active flows")} value={formatNumber((kernelUDP?.active_flows || 0) + (experimentalTCP?.active_flows || 0), props.lang)} />
+        <SummaryItem label={props.t("active_flows", "Active flows")} value={formatNumber((kernelUDP?.active_flows || 0) + (tixTCP?.active_flows || 0), props.lang)} />
       </div>
       <div className="kernel-capability-grid">
         <div className="kernel-capability-list">
@@ -610,7 +610,7 @@ function kernelUDPStatusRow(t: Translate, lang: string, status: KernelUDPStatus 
   };
 }
 
-function experimentalTCPStatusRow(t: Translate, lang: string, status: ExperimentalTCPStatus | undefined): KernelCapabilityRow | null {
+function tixTCPStatusRow(t: Translate, lang: string, status: TIXTCPStatus | undefined): KernelCapabilityRow | null {
   if (!status) {
     return null;
   }
@@ -3495,7 +3495,7 @@ function ConfigKernelCapabilityEditor(props: { t: Translate; lang: string; desir
         <CheckField label={props.t("rx_worker", "RX worker")} help={props.t("help_kernel_rx_worker", "Enable the experimental trustix_datapath RX worker path. Use only after validating the target kernel under real traffic.")} checked={Boolean(datapath.rx_worker)} onChange={(value) => updateDatapath({ rx_worker: value })} />
         <CheckField label={props.t("full_plaintext", "Full plaintext")} help={props.t("help_kernel_full_plaintext", "Experimental: for plaintext transports, let trustix_datapath own both RX and TX hooks when the module supports full_datapath.")} checked={Boolean(datapath.full_plaintext)} onChange={(value) => updateDatapath({ full_plaintext: value, tx_plaintext: value || datapath.tx_plaintext })} />
         <CheckField label={props.t("tx_plaintext", "TX plaintext")} help={props.t("help_kernel_tx_plaintext", "Experimental kernel plaintext TX hook without secure userspace reinjection. Use only with plaintext transport policy after target-kernel validation.")} checked={Boolean(datapath.tx_plaintext)} onChange={(value) => updateDatapath({ tx_plaintext: value })} />
-        <CheckField label={props.t("allow_ackless_tcp_rx_worker", "Allow TIX-TCP RX worker")} help={props.t("help_kernel_rx_worker_allow_experimental_tcp", "Allow RX worker with TIX-TCP TC direct. This is needed for full-kernel TIX-TCP and should be validated on the target kernel.")} checked={Boolean(datapath.rx_worker_allow_experimental_tcp)} onChange={(value) => updateDatapath({ rx_worker_allow_experimental_tcp: value })} />
+        <CheckField label={props.t("allow_tix_tcp_rx_worker", "Allow TIX-TCP RX worker")} help={props.t("help_kernel_rx_worker_allow_tix_tcp", "Allow RX worker with TIX-TCP TC direct. This is needed for full-kernel TIX-TCP and should be validated on the target kernel.")} checked={Boolean(datapath.rx_worker_allow_tix_tcp)} onChange={(value) => updateDatapath({ rx_worker_allow_tix_tcp: value })} />
         <CheckField label={props.t("rx_worker_hot_stats", "RX worker hot stats")} help={props.t("help_kernel_rx_worker_hot_stats", "Keep per-packet hot-path counters enabled. Disable for lower CPU overhead during throughput tests.")} checked={datapath.rx_worker_hot_stats !== false} onChange={(value) => updateDatapath({ rx_worker_hot_stats: value })} />
       </div>
     </div>

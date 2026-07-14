@@ -166,12 +166,12 @@ type KernelModulesConfig struct {
 }
 
 type KernelDatapathRuntimeConfig struct {
-	RXStage                      string `json:"rx_stage,omitempty" yaml:"rx_stage,omitempty"`
-	RXWorker                     bool   `json:"rx_worker,omitempty" yaml:"rx_worker,omitempty"`
-	TXPlaintext                  bool   `json:"tx_plaintext,omitempty" yaml:"tx_plaintext,omitempty"`
-	FullPlaintext                bool   `json:"full_plaintext,omitempty" yaml:"full_plaintext,omitempty"`
-	RXWorkerAllowExperimentalTCP bool   `json:"rx_worker_allow_experimental_tcp,omitempty" yaml:"rx_worker_allow_experimental_tcp,omitempty"`
-	RXWorkerHotStats             *bool  `json:"rx_worker_hot_stats,omitempty" yaml:"rx_worker_hot_stats,omitempty"`
+	RXStage             string `json:"rx_stage,omitempty" yaml:"rx_stage,omitempty"`
+	RXWorker            bool   `json:"rx_worker,omitempty" yaml:"rx_worker,omitempty"`
+	TXPlaintext         bool   `json:"tx_plaintext,omitempty" yaml:"tx_plaintext,omitempty"`
+	FullPlaintext       bool   `json:"full_plaintext,omitempty" yaml:"full_plaintext,omitempty"`
+	RXWorkerAllowTIXTCP bool   `json:"rx_worker_allow_tix_tcp,omitempty" yaml:"rx_worker_allow_tix_tcp,omitempty"`
+	RXWorkerHotStats    *bool  `json:"rx_worker_hot_stats,omitempty" yaml:"rx_worker_hot_stats,omitempty"`
 }
 
 const (
@@ -1111,7 +1111,7 @@ func EffectiveKernelDatapathRuntime(modules KernelModulesConfig) KernelDatapathR
 		runtime.RXWorker = true
 		runtime.TXPlaintext = true
 		runtime.FullPlaintext = true
-		runtime.RXWorkerAllowExperimentalTCP = true
+		runtime.RXWorkerAllowTIXTCP = true
 	}
 	if runtime.FullPlaintext {
 		runtime.RXStage = KernelDatapathRXStageWorker
@@ -2159,7 +2159,7 @@ func validatePrefixConflicts(cfg Desired) error {
 
 func supportedTransport(name string) bool {
 	switch normalizeTransportName(name) {
-	case "udp", "quic", "tcp", "websocket", "http_connect", "experimental_tcp", "gre", "ipip", "vxlan":
+	case "udp", "quic", "tcp", "websocket", "http_connect", "tix_tcp", "gre", "ipip", "vxlan":
 		return true
 	default:
 		return false

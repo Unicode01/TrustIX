@@ -69,7 +69,7 @@ func TestTrustIXBootstrapIXDirectDefaultsMatchProductionProfile(t *testing.T) {
 		`go run ./cmd/trustix-ca "$@") >&2`,
 		`"$trustix_ca_cmd" "$@" >&2`,
 		`"capability_profile":"%s"`,
-		`"datapath":{"rx_stage":"worker","rx_worker":true,"tx_plaintext":true,"full_plaintext":true,"rx_worker_allow_experimental_tcp":true}`,
+		`"datapath":{"rx_stage":"worker","rx_worker":true,"tx_plaintext":true,"full_plaintext":true,"rx_worker_allow_tix_tcp":true}`,
 		`--env TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1`,
 		`"session_pool":{"warmup":true}`,
 		`printf '"encryption":"%s",' "$(json_escape "$encryption")"`,
@@ -172,7 +172,7 @@ func TestTrustIXBootstrapIXGeneratesProductionPlaintextDefaults(t *testing.T) {
 				RXWorker                  bool   `json:"rx_worker"`
 				TXPlaintext               bool   `json:"tx_plaintext"`
 				FullPlaintext             bool   `json:"full_plaintext"`
-				RXWorkerAllowExperimental bool   `json:"rx_worker_allow_experimental_tcp"`
+				RXWorkerAllowExperimental bool   `json:"rx_worker_allow_tix_tcp"`
 			} `json:"datapath"`
 		} `json:"kernel_modules"`
 		Endpoints []struct {
@@ -256,7 +256,7 @@ type bootstrapProfileGeneratedConfig struct {
 			RXWorker                  bool   `json:"rx_worker"`
 			TXPlaintext               bool   `json:"tx_plaintext"`
 			FullPlaintext             bool   `json:"full_plaintext"`
-			RXWorkerAllowExperimental bool   `json:"rx_worker_allow_experimental_tcp"`
+			RXWorkerAllowExperimental bool   `json:"rx_worker_allow_tix_tcp"`
 		} `json:"datapath"`
 	} `json:"kernel_modules"`
 	Endpoints []struct {
@@ -357,10 +357,10 @@ func TestTrustIXBootstrapIXGeneratesPinnedProfileDefaults(t *testing.T) {
 			}
 		})
 	}
-	t.Run("legacy transport alias", func(t *testing.T) {
-		cfg := runBootstrapProfileConfig(t, bash, workDir, certDir, "stable", "experimental_tcp")
+	t.Run("TIX-TCP transport", func(t *testing.T) {
+		cfg := runBootstrapProfileConfig(t, bash, workDir, certDir, "stable", "tix_tcp")
 		if len(cfg.Endpoints) != 1 || cfg.Endpoints[0].Transport != "tix_tcp" || !strings.HasSuffix(cfg.Endpoints[0].Name, "-tix-tcp") {
-			t.Fatalf("legacy transport alias generated endpoints = %#v", cfg.Endpoints)
+			t.Fatalf("TIX-TCP transport generated endpoints = %#v", cfg.Endpoints)
 		}
 	})
 }

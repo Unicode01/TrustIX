@@ -1,4 +1,4 @@
-package experimentaltcp
+package tixtcp
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ import (
 	"trustix.local/trustix/internal/transport/stream"
 )
 
-func TestSecureTransportOverExperimentalTCPProvider(t *testing.T) {
+func TestSecureTransportOverTIXTCPProvider(t *testing.T) {
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
 	clientTransport := securetransport.New(New(providerA), securetransport.Options{})
 	serverTransport := securetransport.New(New(providerB), securetransport.Options{})
@@ -34,7 +34,7 @@ func TestSecureTransportOverExperimentalTCPProvider(t *testing.T) {
 
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "ix-b-underlay:443",
 		Enabled:   true,
 	}, nil)
@@ -60,7 +60,7 @@ func TestSecureTransportOverExperimentalTCPProvider(t *testing.T) {
 		Endpoints: []transport.Endpoint{
 			{
 				Name:      core.EndpointID("server"),
-				Transport: transport.ProtocolExperimentalTCP,
+				Transport: transport.ProtocolTIXTCP,
 				Address:   "ix-b-underlay:443",
 			},
 		},
@@ -80,36 +80,36 @@ func TestSecureTransportOverExperimentalTCPProvider(t *testing.T) {
 	}
 	defer server.Close()
 
-	if err := client.SendPacket([]byte("hello-over-exp-tcp")); err != nil {
+	if err := client.SendPacket([]byte("hello-over-tix-tcp")); err != nil {
 		t.Fatalf("client send: %v", err)
 	}
 	got, err := server.RecvPacket()
 	if err != nil {
 		t.Fatalf("server recv: %v", err)
 	}
-	if string(got) != "hello-over-exp-tcp" {
+	if string(got) != "hello-over-tix-tcp" {
 		t.Fatalf("server received %q", got)
 	}
 
-	if err := server.SendPacket([]byte("reply-over-exp-tcp")); err != nil {
+	if err := server.SendPacket([]byte("reply-over-tix-tcp")); err != nil {
 		t.Fatalf("server send: %v", err)
 	}
 	reply, err := client.RecvPacket()
 	if err != nil {
 		t.Fatalf("client recv: %v", err)
 	}
-	if string(reply) != "reply-over-exp-tcp" {
+	if string(reply) != "reply-over-tix-tcp" {
 		t.Fatalf("client received %q", reply)
 	}
 	if !client.Stats().Encrypted || !server.Stats().Encrypted {
-		t.Fatal("secure wrapper did not report encrypted experimental_tcp sessions")
+		t.Fatal("secure wrapper did not report encrypted tix_tcp sessions")
 	}
 	if providerA.submitted.Load() == 0 || providerB.submitted.Load() == 0 {
 		t.Fatalf("providers did not submit frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
 	}
 }
 
-func TestExperimentalTCPDialContextCancelDoesNotCloseSession(t *testing.T) {
+func TestTIXTCPDialContextCancelDoesNotCloseSession(t *testing.T) {
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
 	clientTransport := New(providerA)
 	serverTransport := New(providerB)
@@ -119,7 +119,7 @@ func TestExperimentalTCPDialContextCancelDoesNotCloseSession(t *testing.T) {
 
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "ix-b-underlay:443",
 		Enabled:   true,
 	}, nil)
@@ -142,7 +142,7 @@ func TestExperimentalTCPDialContextCancelDoesNotCloseSession(t *testing.T) {
 		DomainID: core.DomainID("lab.local"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   "ix-b-underlay:443",
 		}},
 	}, nil)
@@ -177,13 +177,13 @@ func TestExperimentalTCPDialContextCancelDoesNotCloseSession(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPCompatPrimerDoesNotPolluteAcklessFlowTuple(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestTIXTCPCompatPrimerDoesNotPolluteTIXTCPFlowTuple(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	provider := &fakeProvider{
 		local:   "ix-a",
-		subs:    make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
-		flows:   make(map[uint64]dataplane.ExperimentalTCPFlow),
+		subs:    make(map[chan dataplane.TIXTCPFrame]struct{}),
+		flows:   make(map[uint64]dataplane.TIXTCPFlow),
 		cryptos: make(map[uint64]fakeCrypto),
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -205,7 +205,7 @@ func TestExperimentalTCPCompatPrimerDoesNotPolluteAcklessFlowTuple(t *testing.T)
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   ln.Addr().String(),
 		}},
 	}, nil)
@@ -226,13 +226,13 @@ func TestExperimentalTCPCompatPrimerDoesNotPolluteAcklessFlowTuple(t *testing.T)
 		provider.mu.Unlock()
 		t.Fatalf("installed flows = %d, want 1", len(provider.flows))
 	}
-	var flow dataplane.ExperimentalTCPFlow
+	var flow dataplane.TIXTCPFlow
 	for _, item := range provider.flows {
 		flow = item
 	}
 	provider.mu.Unlock()
 	if flow.LocalAddress != "" {
-		t.Fatalf("flow local address = %q, want empty so ACKless data path derives its own source tuple", flow.LocalAddress)
+		t.Fatalf("flow local address = %q, want empty so TIX-TCP data path derives its own source tuple", flow.LocalAddress)
 	}
 	if flow.RemoteAddress != ln.Addr().String() {
 		t.Fatalf("flow remote address = %q, want endpoint address %q", flow.RemoteAddress, ln.Addr().String())
@@ -242,20 +242,20 @@ func TestExperimentalTCPCompatPrimerDoesNotPolluteAcklessFlowTuple(t *testing.T)
 	}
 }
 
-func TestExperimentalTCPCompatPrimerListenerInstallsControlFlow(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestTIXTCPCompatPrimerListenerInstallsControlFlow(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	provider := &fakeProvider{
 		local:   "ix-b",
-		subs:    make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
-		flows:   make(map[uint64]dataplane.ExperimentalTCPFlow),
+		subs:    make(map[chan dataplane.TIXTCPFrame]struct{}),
+		flows:   make(map[uint64]dataplane.TIXTCPFlow),
 		cryptos: make(map[uint64]fakeCrypto),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ln, err := New(provider).Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "127.0.0.1:0",
 		Enabled:   true,
 	}, nil)
@@ -274,7 +274,7 @@ func TestExperimentalTCPCompatPrimerListenerInstallsControlFlow(t *testing.T) {
 	control := stream.NewSession(conn)
 	defer control.Close()
 	const flowID = 0x1020304050607080
-	if err := control.SendPacket(encodeExperimentalTCPCompatControlInit(flowID)); err != nil {
+	if err := control.SendPacket(encodeTIXTCPCompatControlInit(flowID)); err != nil {
 		t.Fatalf("send compat control init: %v", err)
 	}
 	var accepted transport.Session
@@ -293,7 +293,7 @@ func TestExperimentalTCPCompatPrimerListenerInstallsControlFlow(t *testing.T) {
 	clientAddr := conn.LocalAddr().(*net.TCPAddr)
 	serverAddr := conn.RemoteAddr().(*net.TCPAddr)
 	wantSourcePort := uint16(serverAddr.Port)
-	wantDestinationPort := experimentalTCPCompatDerivedSourcePort(flowID)
+	wantDestinationPort := tixTCPCompatDerivedSourcePort(flowID)
 	wantLocal := net.JoinHostPort(serverAddr.IP.String(), strconv.Itoa(serverAddr.Port))
 	wantRemote := net.JoinHostPort(clientAddr.IP.String(), strconv.Itoa(int(wantDestinationPort)))
 	if flow.LocalAddress != wantLocal || flow.RemoteAddress != wantRemote {
@@ -304,14 +304,14 @@ func TestExperimentalTCPCompatPrimerListenerInstallsControlFlow(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPCompatControlDecodesOldInitWithoutSourcePort(t *testing.T) {
+func TestTIXTCPCompatControlDecodesOldInitWithoutSourcePort(t *testing.T) {
 	const flowID = 0x1020304050607082
-	payload := make([]byte, experimentalTCPCompatControlInitOldLen)
-	copy(payload[0:4], experimentalTCPCompatControlMagic[:])
-	payload[4] = experimentalTCPCompatControlVersion
-	payload[5] = experimentalTCPCompatControlInitType
+	payload := make([]byte, tixTCPCompatControlInitOldLen)
+	copy(payload[0:4], tixTCPCompatControlMagic[:])
+	payload[4] = tixTCPCompatControlVersion
+	payload[5] = tixTCPCompatControlInitType
 	binary.BigEndian.PutUint64(payload[6:14], flowID)
-	init, ok := decodeExperimentalTCPCompatControlInit(payload)
+	init, ok := decodeTIXTCPCompatControlInit(payload)
 	if !ok {
 		t.Fatal("old compat control init did not decode")
 	}
@@ -320,20 +320,20 @@ func TestExperimentalTCPCompatControlDecodesOldInitWithoutSourcePort(t *testing.
 	}
 }
 
-func TestExperimentalTCPCompatControlCloseClosesAcceptedSession(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestTIXTCPCompatControlCloseClosesAcceptedSession(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	provider := &fakeProvider{
 		local:   "ix-b",
-		subs:    make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
-		flows:   make(map[uint64]dataplane.ExperimentalTCPFlow),
+		subs:    make(map[chan dataplane.TIXTCPFrame]struct{}),
+		flows:   make(map[uint64]dataplane.TIXTCPFlow),
 		cryptos: make(map[uint64]fakeCrypto),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ln, err := New(provider).Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "127.0.0.1:0",
 		Enabled:   true,
 	}, nil)
@@ -348,7 +348,7 @@ func TestExperimentalTCPCompatControlCloseClosesAcceptedSession(t *testing.T) {
 	}
 	control := stream.NewSession(conn)
 	const flowID = 0x1020304050607081
-	if err := control.SendPacket(encodeExperimentalTCPCompatControlInit(flowID)); err != nil {
+	if err := control.SendPacket(encodeTIXTCPCompatControlInit(flowID)); err != nil {
 		t.Fatalf("send compat control init: %v", err)
 	}
 	var accepted transport.Session
@@ -380,18 +380,18 @@ func TestExperimentalTCPCompatControlCloseClosesAcceptedSession(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPCompatPrimerRegistersSessionBeforeAcceptDelivery(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestTIXTCPCompatPrimerRegistersSessionBeforeAcceptDelivery(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	provider := &fakeProvider{
 		local:   "ix-b",
-		subs:    make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
-		flows:   make(map[uint64]dataplane.ExperimentalTCPFlow),
+		subs:    make(map[chan dataplane.TIXTCPFrame]struct{}),
+		flows:   make(map[uint64]dataplane.TIXTCPFlow),
 		cryptos: make(map[uint64]fakeCrypto),
 	}
 	ln, err := New(provider).Listen(context.Background(), transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "127.0.0.1:0",
 		Enabled:   true,
 	}, nil)
@@ -408,7 +408,7 @@ func TestExperimentalTCPCompatPrimerRegistersSessionBeforeAcceptDelivery(t *test
 	control := stream.NewSession(conn)
 	defer control.Close()
 	const flowID = 0x1234567812345678
-	if err := control.SendPacket(encodeExperimentalTCPCompatControlInit(flowID)); err != nil {
+	if err := control.SendPacket(encodeTIXTCPCompatControlInit(flowID)); err != nil {
 		t.Fatalf("send compat control init: %v", err)
 	}
 
@@ -431,9 +431,9 @@ func TestExperimentalTCPCompatPrimerRegistersSessionBeforeAcceptDelivery(t *test
 		t.Fatalf("compat session registered=%t queued=%d, want registered and one accept", sess != nil, queuedBefore)
 	}
 
-	expListener.dispatch(dataplane.ExperimentalTCPFrame{
+	expListener.dispatch(dataplane.TIXTCPFrame{
 		FlowID:    flowID,
-		Direction: dataplane.ExperimentalTCPInbound,
+		Direction: dataplane.TIXTCPInbound,
 		Endpoint:  core.EndpointID("server"),
 		Payload:   []byte("data-after-primer"),
 	})
@@ -449,18 +449,18 @@ func TestExperimentalTCPCompatPrimerRegistersSessionBeforeAcceptDelivery(t *test
 	}
 }
 
-func TestExperimentalTCPCompatPrimerDropsUnknownFlowFrames(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestTIXTCPCompatPrimerDropsUnknownFlowFrames(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	provider := &fakeProvider{
 		local:   "ix-b",
-		subs:    make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
-		flows:   make(map[uint64]dataplane.ExperimentalTCPFlow),
+		subs:    make(map[chan dataplane.TIXTCPFrame]struct{}),
+		flows:   make(map[uint64]dataplane.TIXTCPFlow),
 		cryptos: make(map[uint64]fakeCrypto),
 	}
 	ln, err := New(provider).Listen(context.Background(), transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "127.0.0.1:0",
 		Enabled:   true,
 	}, nil)
@@ -473,9 +473,9 @@ func TestExperimentalTCPCompatPrimerDropsUnknownFlowFrames(t *testing.T) {
 		t.Fatal("compat primer listener did not require primer-established flows")
 	}
 
-	expListener.dispatch(dataplane.ExperimentalTCPFrame{
+	expListener.dispatch(dataplane.TIXTCPFrame{
 		FlowID:    0xfeedface,
-		Direction: dataplane.ExperimentalTCPInbound,
+		Direction: dataplane.TIXTCPInbound,
 		Endpoint:  core.EndpointID("server"),
 		Payload:   []byte("stale-data-before-primer"),
 	})
@@ -490,18 +490,18 @@ func TestExperimentalTCPCompatPrimerDropsUnknownFlowFrames(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPCompatPrimerDropsUnknownFlowBatchFrames(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestTIXTCPCompatPrimerDropsUnknownFlowBatchFrames(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	provider := &fakeProvider{
 		local:   "ix-b",
-		subs:    make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
-		flows:   make(map[uint64]dataplane.ExperimentalTCPFlow),
+		subs:    make(map[chan dataplane.TIXTCPFrame]struct{}),
+		flows:   make(map[uint64]dataplane.TIXTCPFlow),
 		cryptos: make(map[uint64]fakeCrypto),
 	}
 	ln, err := New(provider).Listen(context.Background(), transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "127.0.0.1:0",
 		Enabled:   true,
 	}, nil)
@@ -511,16 +511,16 @@ func TestExperimentalTCPCompatPrimerDropsUnknownFlowBatchFrames(t *testing.T) {
 	defer ln.Close()
 	expListener := ln.(*listener)
 
-	expListener.dispatchBatch([]dataplane.ExperimentalTCPFrame{
+	expListener.dispatchBatch([]dataplane.TIXTCPFrame{
 		{
 			FlowID:    0x1111,
-			Direction: dataplane.ExperimentalTCPInbound,
+			Direction: dataplane.TIXTCPInbound,
 			Endpoint:  core.EndpointID("server"),
 			Payload:   []byte("stale-batch-1"),
 		},
 		{
 			FlowID:    0x2222,
-			Direction: dataplane.ExperimentalTCPInbound,
+			Direction: dataplane.TIXTCPInbound,
 			Endpoint:  core.EndpointID("server"),
 			Payload:   []byte("stale-batch-2"),
 		},
@@ -536,9 +536,9 @@ func TestExperimentalTCPCompatPrimerDropsUnknownFlowBatchFrames(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPCompatStreamFallbackRoundTrips(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "1")
+func TestTIXTCPCompatStreamFallbackRoundTrips(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "1")
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
 	clientTransport := New(providerA)
 	serverTransport := New(providerB)
@@ -547,7 +547,7 @@ func TestExperimentalTCPCompatStreamFallbackRoundTrips(t *testing.T) {
 	defer cancel()
 	ln, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "127.0.0.1:0",
 		Enabled:   true,
 	}, nil)
@@ -568,7 +568,7 @@ func TestExperimentalTCPCompatStreamFallbackRoundTrips(t *testing.T) {
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   expListener.compatListener.Addr().String(),
 		}},
 	}, nil)
@@ -612,14 +612,14 @@ func TestExperimentalTCPCompatStreamFallbackRoundTrips(t *testing.T) {
 	if providerA.submitted.Load() != 0 || providerB.submitted.Load() != 0 {
 		t.Fatalf("compat stream should not submit AF_XDP frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
 	}
-	if client.Stats().Extra["experimental_tcp_compat_stream"] != 1 {
+	if client.Stats().Extra["tix_tcp_compat_stream"] != 1 {
 		t.Fatalf("client stats missing compat stream marker: %#v", client.Stats())
 	}
 }
 
-func TestExperimentalTCPCompatStreamFallbackRoundTripsWithoutProvider(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "1")
+func TestTIXTCPCompatStreamFallbackRoundTripsWithoutProvider(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "1")
 	clientTransport := New(nil)
 	serverTransport := New(nil)
 
@@ -627,7 +627,7 @@ func TestExperimentalTCPCompatStreamFallbackRoundTripsWithoutProvider(t *testing
 	defer cancel()
 	ln, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "127.0.0.1:0",
 		Enabled:   true,
 	}, nil)
@@ -648,7 +648,7 @@ func TestExperimentalTCPCompatStreamFallbackRoundTripsWithoutProvider(t *testing
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   expListener.compatListener.Addr().String(),
 		}},
 	})
@@ -660,7 +660,7 @@ func TestExperimentalTCPCompatStreamFallbackRoundTripsWithoutProvider(t *testing
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   expListener.compatListener.Addr().String(),
 		}},
 	}, nil)
@@ -693,11 +693,11 @@ func TestExperimentalTCPCompatStreamFallbackRoundTripsWithoutProvider(t *testing
 	}
 }
 
-func TestExperimentalTCPCompatStreamKeptForKernelUDPDirectOnly(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "1")
+func TestTIXTCPCompatStreamKeptForKernelUDPDirectOnly(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")
-	client, server, providerA, providerB, cleanup := dialExperimentalTCPCompatStreamTestPair(t)
+	client, server, providerA, providerB, cleanup := dialTIXTCPCompatStreamTestPair(t)
 	defer cleanup()
 	defer client.Close()
 	defer server.Close()
@@ -718,26 +718,26 @@ func TestExperimentalTCPCompatStreamKeptForKernelUDPDirectOnly(t *testing.T) {
 		t.Fatalf("server got %q", got)
 	}
 	if providerA.submitted.Load() != 0 || providerB.submitted.Load() != 0 {
-		t.Fatalf("kernel_udp direct-only must not suppress experimental_tcp compat stream: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
+		t.Fatalf("kernel_udp direct-only must not suppress tix_tcp compat stream: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
 	}
-	if client.Stats().Extra["experimental_tcp_compat_stream"] != 1 {
+	if client.Stats().Extra["tix_tcp_compat_stream"] != 1 {
 		t.Fatalf("client stats missing compat stream marker: %#v", client.Stats())
 	}
 }
 
-func TestExperimentalTCPCompatStreamDisabledForExperimentalTCPDirectOnly(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "1")
-	client, server, providerA, _, cleanup := dialExperimentalTCPCompatStreamTestPair(t)
+func TestTIXTCPCompatStreamDisabledForTIXTCPDirectOnly(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "1")
+	client, server, providerA, _, cleanup := dialTIXTCPCompatStreamTestPair(t)
 	defer cleanup()
 	defer client.Close()
 	defer server.Close()
 	if _, ok := client.(*compatStreamSession); ok {
-		t.Fatalf("client session type = %T, want ACKless direct session", client)
+		t.Fatalf("client session type = %T, want TIX-TCP direct session", client)
 	}
 	if _, ok := server.(*compatStreamSession); ok {
-		t.Fatalf("server session type = %T, want ACKless direct session", server)
+		t.Fatalf("server session type = %T, want TIX-TCP direct session", server)
 	}
 	if err := client.SendPacket([]byte("direct-only")); err != nil {
 		t.Fatalf("client send: %v", err)
@@ -750,14 +750,14 @@ func TestExperimentalTCPCompatStreamDisabledForExperimentalTCPDirectOnly(t *test
 		t.Fatalf("server got %q", got)
 	}
 	if providerA.submitted.Load() == 0 {
-		t.Fatal("experimental_tcp direct-only compat stream suppression did not submit provider frames")
+		t.Fatal("tix_tcp direct-only compat stream suppression did not submit provider frames")
 	}
-	if client.Stats().Extra["experimental_tcp_compat_stream"] != 0 {
+	if client.Stats().Extra["tix_tcp_compat_stream"] != 0 {
 		t.Fatalf("client stats unexpectedly marked compat stream: %#v", client.Stats())
 	}
 }
 
-func dialExperimentalTCPCompatStreamTestPair(t *testing.T) (transport.Session, transport.Session, *fakeProvider, *fakeProvider, func()) {
+func dialTIXTCPCompatStreamTestPair(t *testing.T) (transport.Session, transport.Session, *fakeProvider, *fakeProvider, func()) {
 	t.Helper()
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
 	clientTransport := New(providerA)
@@ -766,7 +766,7 @@ func dialExperimentalTCPCompatStreamTestPair(t *testing.T) (transport.Session, t
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	ln, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "127.0.0.1:0",
 		Enabled:   true,
 	}, nil)
@@ -787,7 +787,7 @@ func dialExperimentalTCPCompatStreamTestPair(t *testing.T) (transport.Session, t
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   expListener.compatListener.Addr().String(),
 		}},
 	}, nil)
@@ -812,11 +812,11 @@ func dialExperimentalTCPCompatStreamTestPair(t *testing.T) (transport.Session, t
 	return client, server, providerA, providerB, cleanup
 }
 
-func TestExperimentalTCPCompatControlCarriesSecureHandshakeOnly(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
-	providerA := &fakeProvider{local: "ix-a", subs: make(map[chan dataplane.ExperimentalTCPFrame]struct{}), flows: make(map[uint64]dataplane.ExperimentalTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
-	providerB := &fakeProvider{local: "ix-b", subs: make(map[chan dataplane.ExperimentalTCPFrame]struct{}), flows: make(map[uint64]dataplane.ExperimentalTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
+func TestTIXTCPCompatControlCarriesSecureHandshakeOnly(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
+	providerA := &fakeProvider{local: "ix-a", subs: make(map[chan dataplane.TIXTCPFrame]struct{}), flows: make(map[uint64]dataplane.TIXTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
+	providerB := &fakeProvider{local: "ix-b", subs: make(map[chan dataplane.TIXTCPFrame]struct{}), flows: make(map[uint64]dataplane.TIXTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
 	providerA.remote = providerB
 	providerB.remote = providerA
 	clientTransport := securetransport.New(New(providerA), securetransport.Options{})
@@ -824,10 +824,10 @@ func TestExperimentalTCPCompatControlCarriesSecureHandshakeOnly(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listenAddr := tixTCPLocalTCPAddr(t)
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    listenAddr,
 		Enabled:   true,
 	}, nil)
@@ -850,7 +850,7 @@ func TestExperimentalTCPCompatControlCarriesSecureHandshakeOnly(t *testing.T) {
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   listenAddr,
 		}},
 	}, nil)
@@ -869,9 +869,9 @@ func TestExperimentalTCPCompatControlCarriesSecureHandshakeOnly(t *testing.T) {
 	defer server.Close()
 
 	if got := providerA.submitted.Load(); got != 0 {
-		t.Fatalf("secure handshake submitted ACKless frames = %d, want 0", got)
+		t.Fatalf("secure handshake submitted TIX-TCP frames = %d, want 0", got)
 	}
-	payload := []byte("after-handshake-uses-ackless")
+	payload := []byte("after-handshake-uses-tix-tcp")
 	if err := client.SendPacket(payload); err != nil {
 		t.Fatalf("client send: %v", err)
 	}
@@ -883,7 +883,7 @@ func TestExperimentalTCPCompatControlCarriesSecureHandshakeOnly(t *testing.T) {
 		t.Fatalf("server got %q", got)
 	}
 	if providerA.submitted.Load() == 0 {
-		t.Fatal("data packets did not use experimental_tcp provider")
+		t.Fatal("data packets did not use tix_tcp provider")
 	}
 	frames := providerA.submittedFrames()
 	if len(frames) == 0 {
@@ -893,12 +893,12 @@ func TestExperimentalTCPCompatControlCarriesSecureHandshakeOnly(t *testing.T) {
 	_, reverseInstalled := providerB.flows[frames[0].FlowID]
 	providerB.mu.Unlock()
 	if !reverseInstalled {
-		t.Fatal("server did not install reverse experimental_tcp flow from compat control")
+		t.Fatal("server did not install reverse tix_tcp flow from compat control")
 	}
 }
 
-func TestExperimentalTCPCompatControlHandshakeHasReceivePriority(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_HANDSHAKE_PRIORITY_DELAY", "100ms")
+func TestTIXTCPCompatControlHandshakeHasReceivePriority(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_HANDSHAKE_PRIORITY_DELAY", "100ms")
 	session := newSession(nil, nil, 1, core.IXID("ix-a"), core.EndpointID("server"), dataplane.CryptoPlacementUserspace)
 	session.enableCompatPriority()
 	defer session.Close()
@@ -926,11 +926,11 @@ func TestExperimentalTCPCompatControlHandshakeHasReceivePriority(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPPlaintextStillUsesCompatControlHandshake(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
-	providerA := &fakeProvider{local: "ix-a", subs: make(map[chan dataplane.ExperimentalTCPFrame]struct{}), flows: make(map[uint64]dataplane.ExperimentalTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
-	providerB := &fakeProvider{local: "ix-b", subs: make(map[chan dataplane.ExperimentalTCPFrame]struct{}), flows: make(map[uint64]dataplane.ExperimentalTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
+func TestTIXTCPPlaintextStillUsesCompatControlHandshake(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
+	providerA := &fakeProvider{local: "ix-a", subs: make(map[chan dataplane.TIXTCPFrame]struct{}), flows: make(map[uint64]dataplane.TIXTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
+	providerB := &fakeProvider{local: "ix-b", subs: make(map[chan dataplane.TIXTCPFrame]struct{}), flows: make(map[uint64]dataplane.TIXTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
 	providerA.remote = providerB
 	providerB.remote = providerA
 	options := securetransport.Options{
@@ -943,10 +943,10 @@ func TestExperimentalTCPPlaintextStillUsesCompatControlHandshake(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listenAddr := tixTCPLocalTCPAddr(t)
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:       core.EndpointID("server"),
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Listen:     listenAddr,
 		Encryption: securetransport.EncryptionPlaintext,
 		Enabled:    true,
@@ -970,7 +970,7 @@ func TestExperimentalTCPPlaintextStillUsesCompatControlHandshake(t *testing.T) {
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:       core.EndpointID("server"),
-			Transport:  transport.ProtocolExperimentalTCP,
+			Transport:  transport.ProtocolTIXTCP,
 			Address:    listenAddr,
 			Encryption: securetransport.EncryptionPlaintext,
 		}},
@@ -990,12 +990,12 @@ func TestExperimentalTCPPlaintextStillUsesCompatControlHandshake(t *testing.T) {
 	defer server.Close()
 
 	if providerA.submitted.Load() != 0 || providerB.submitted.Load() != 0 {
-		t.Fatalf("plaintext handshake used ACKless frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
+		t.Fatalf("plaintext handshake used TIX-TCP frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
 	}
 	if stats := client.Stats(); stats.Encrypted || stats.Encryption != securetransport.EncryptionPlaintext {
 		t.Fatalf("client stats = %+v, want plaintext without data encryption", stats)
 	}
-	payload := []byte("plaintext-over-ackless")
+	payload := []byte("plaintext-over-tix-tcp")
 	if err := client.SendPacket(payload); err != nil {
 		t.Fatalf("client send: %v", err)
 	}
@@ -1007,18 +1007,18 @@ func TestExperimentalTCPPlaintextStillUsesCompatControlHandshake(t *testing.T) {
 		t.Fatalf("server got %q", got)
 	}
 	if providerA.submitted.Load() == 0 {
-		t.Fatal("plaintext data packets did not use experimental_tcp provider")
+		t.Fatal("plaintext data packets did not use tix_tcp provider")
 	}
 }
 
-func TestExperimentalTCPFullPlaintextKernelDatapathRequiresCompatPrimer(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "0")
+func TestTIXTCPFullPlaintextKernelDatapathRequiresCompatPrimer(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "0")
 	provider := &fakeProvider{
 		local:          "ix-a",
-		subs:           make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
-		flows:          make(map[uint64]dataplane.ExperimentalTCPFlow),
+		subs:           make(map[chan dataplane.TIXTCPFrame]struct{}),
+		flows:          make(map[uint64]dataplane.TIXTCPFlow),
 		cryptos:        make(map[uint64]fakeCrypto),
-		statusProvider: experimentalTCPProviderFullPlaintextKernel,
+		statusProvider: tixTCPProviderFullPlaintextKernel,
 	}
 	clientTransport := New(provider)
 
@@ -1028,7 +1028,7 @@ func TestExperimentalTCPFullPlaintextKernelDatapathRequiresCompatPrimer(t *testi
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:       core.EndpointID("server"),
-			Transport:  transport.ProtocolExperimentalTCP,
+			Transport:  transport.ProtocolTIXTCP,
 			Address:    "127.0.0.1:9",
 			Encryption: securetransport.EncryptionPlaintext,
 		}},
@@ -1038,12 +1038,12 @@ func TestExperimentalTCPFullPlaintextKernelDatapathRequiresCompatPrimer(t *testi
 	}
 }
 
-func TestExperimentalTCPFullPlaintextKernelDatapathHandshakeUsesCompatControl(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestTIXTCPFullPlaintextKernelDatapathHandshakeUsesCompatControl(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
-	providerA.statusProvider = experimentalTCPProviderFullPlaintextKernel
-	providerB.statusProvider = experimentalTCPProviderFullPlaintextKernel
+	providerA.statusProvider = tixTCPProviderFullPlaintextKernel
+	providerB.statusProvider = tixTCPProviderFullPlaintextKernel
 	options := securetransport.Options{
 		Encryption: func() string {
 			return securetransport.EncryptionPlaintext
@@ -1054,10 +1054,10 @@ func TestExperimentalTCPFullPlaintextKernelDatapathHandshakeUsesCompatControl(t 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listenAddr := tixTCPLocalTCPAddr(t)
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:       core.EndpointID("server"),
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Listen:     listenAddr,
 		Encryption: securetransport.EncryptionPlaintext,
 		Enabled:    true,
@@ -1081,7 +1081,7 @@ func TestExperimentalTCPFullPlaintextKernelDatapathHandshakeUsesCompatControl(t 
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:       core.EndpointID("server"),
-			Transport:  transport.ProtocolExperimentalTCP,
+			Transport:  transport.ProtocolTIXTCP,
 			Address:    listenAddr,
 			Encryption: securetransport.EncryptionPlaintext,
 		}},
@@ -1108,21 +1108,21 @@ func TestExperimentalTCPFullPlaintextKernelDatapathHandshakeUsesCompatControl(t 
 	}
 }
 
-func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlCarriesControlFrames(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestTIXTCPFullPlaintextKernelDatapathCompatControlCarriesControlFrames(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
-	providerA.statusProvider = experimentalTCPProviderFullPlaintextKernel
-	providerB.statusProvider = experimentalTCPProviderFullPlaintextKernel
+	providerA.statusProvider = tixTCPProviderFullPlaintextKernel
+	providerB.statusProvider = tixTCPProviderFullPlaintextKernel
 	clientTransport := New(providerA)
 	serverTransport := New(providerB)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listenAddr := tixTCPLocalTCPAddr(t)
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:       core.EndpointID("server"),
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Listen:     listenAddr,
 		Encryption: securetransport.EncryptionPlaintext,
 		Enabled:    true,
@@ -1146,7 +1146,7 @@ func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlCarriesControlFr
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:       core.EndpointID("server"),
-			Transport:  transport.ProtocolExperimentalTCP,
+			Transport:  transport.ProtocolTIXTCP,
 			Address:    listenAddr,
 			Encryption: securetransport.EncryptionPlaintext,
 		}},
@@ -1166,8 +1166,8 @@ func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlCarriesControlFr
 	defer server.Close()
 
 	control := make([]byte, 16)
-	copy(control[0:4], experimentalTCPCompatControlMagic[:])
-	control[4] = experimentalTCPCompatControlVersion
+	copy(control[0:4], tixTCPCompatControlMagic[:])
+	control[4] = tixTCPCompatControlVersion
 	control[5] = 2
 	binary.BigEndian.PutUint64(control[8:16], 0x1020304050607080)
 	if err := client.SendPacket(control); err != nil {
@@ -1188,21 +1188,21 @@ func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlCarriesControlFr
 	}
 }
 
-func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlWakesBlockedReceive(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestTIXTCPFullPlaintextKernelDatapathCompatControlWakesBlockedReceive(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
-	providerA.statusProvider = experimentalTCPProviderFullPlaintextKernel
-	providerB.statusProvider = experimentalTCPProviderFullPlaintextKernel
+	providerA.statusProvider = tixTCPProviderFullPlaintextKernel
+	providerB.statusProvider = tixTCPProviderFullPlaintextKernel
 	clientTransport := New(providerA)
 	serverTransport := New(providerB)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listenAddr := tixTCPLocalTCPAddr(t)
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:       core.EndpointID("server"),
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Listen:     listenAddr,
 		Encryption: securetransport.EncryptionPlaintext,
 		Enabled:    true,
@@ -1226,7 +1226,7 @@ func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlWakesBlockedRece
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:       core.EndpointID("server"),
-			Transport:  transport.ProtocolExperimentalTCP,
+			Transport:  transport.ProtocolTIXTCP,
 			Address:    listenAddr,
 			Encryption: securetransport.EncryptionPlaintext,
 		}},
@@ -1258,8 +1258,8 @@ func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlWakesBlockedRece
 	time.Sleep(100 * time.Millisecond)
 
 	control := make([]byte, 16)
-	copy(control[0:4], experimentalTCPCompatControlMagic[:])
-	control[4] = experimentalTCPCompatControlVersion
+	copy(control[0:4], tixTCPCompatControlMagic[:])
+	control[4] = tixTCPCompatControlVersion
 	control[5] = 2
 	binary.BigEndian.PutUint64(control[8:16], 0x1020304050607080)
 	if err := client.SendPacket(control); err != nil {
@@ -1277,9 +1277,9 @@ func TestExperimentalTCPFullPlaintextKernelDatapathCompatControlWakesBlockedRece
 	}
 }
 
-func TestExperimentalTCPCompatStreamPlaintextUsesSecureHandshake(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "1")
+func TestTIXTCPCompatStreamPlaintextUsesSecureHandshake(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "1")
 	root, err := pki.NewRoot("compat-stream-plaintext-root", 1)
 	if err != nil {
 		t.Fatalf("root: %v", err)
@@ -1298,17 +1298,17 @@ func TestExperimentalTCPCompatStreamPlaintextUsesSecureHandshake(t *testing.T) {
 			return securetransport.EncryptionPlaintext
 		},
 	}
-	tlsA := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForExperimentalTCPTest(ixA)}}
-	tlsB := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForExperimentalTCPTest(ixB)}}
+	tlsA := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForTIXTCPTest(ixA)}}
+	tlsB := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForTIXTCPTest(ixB)}}
 	clientTransport := securetransport.New(New(providerA), options)
 	serverTransport := securetransport.New(New(providerB), options)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listenAddr := tixTCPLocalTCPAddr(t)
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:       core.EndpointID("server"),
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Listen:     listenAddr,
 		Encryption: securetransport.EncryptionPlaintext,
 		Enabled:    true,
@@ -1333,7 +1333,7 @@ func TestExperimentalTCPCompatStreamPlaintextUsesSecureHandshake(t *testing.T) {
 		DomainID: core.DomainID("lab.local"),
 		Endpoints: []transport.Endpoint{{
 			Name:       core.EndpointID("server"),
-			Transport:  transport.ProtocolExperimentalTCP,
+			Transport:  transport.ProtocolTIXTCP,
 			Address:    listenAddr,
 			Encryption: securetransport.EncryptionPlaintext,
 		}},
@@ -1352,12 +1352,12 @@ func TestExperimentalTCPCompatStreamPlaintextUsesSecureHandshake(t *testing.T) {
 	}
 	defer server.Close()
 	if providerA.submitted.Load() != 0 || providerB.submitted.Load() != 0 {
-		t.Fatalf("compat stream plaintext handshake used ACKless frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
+		t.Fatalf("compat stream plaintext handshake used TIX-TCP frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
 	}
 	if peer, domain, ok := server.(transport.PeerIdentitySession).PeerIdentity(); !ok || peer != "ix-a" || domain != "lab.local" {
 		t.Fatalf("server peer identity = %q/%q ok=%t, want ix-a/lab.local", peer, domain, ok)
 	}
-	if stats := client.Stats(); stats.Encrypted || stats.Encryption != securetransport.EncryptionPlaintext || stats.Extra["experimental_tcp_compat_stream"] != 1 {
+	if stats := client.Stats(); stats.Encrypted || stats.Encryption != securetransport.EncryptionPlaintext || stats.Extra["tix_tcp_compat_stream"] != 1 {
 		t.Fatalf("client stats = %+v, want plaintext compat stream", stats)
 	}
 	payload := []byte("plaintext-over-compat-stream")
@@ -1372,13 +1372,13 @@ func TestExperimentalTCPCompatStreamPlaintextUsesSecureHandshake(t *testing.T) {
 		t.Fatalf("server got %q", got)
 	}
 	if providerA.submitted.Load() != 0 || providerB.submitted.Load() != 0 {
-		t.Fatalf("compat stream plaintext data used ACKless frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
+		t.Fatalf("compat stream plaintext data used TIX-TCP frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
 	}
 }
 
-func TestExperimentalTCPCompatStreamPlaintextWorksWithoutProvider(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "1")
+func TestTIXTCPCompatStreamPlaintextWorksWithoutProvider(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "1")
 	root, err := pki.NewRoot("compat-stream-no-provider-root", 1)
 	if err != nil {
 		t.Fatalf("root: %v", err)
@@ -1396,17 +1396,17 @@ func TestExperimentalTCPCompatStreamPlaintextWorksWithoutProvider(t *testing.T) 
 			return securetransport.EncryptionPlaintext
 		},
 	}
-	tlsA := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForExperimentalTCPTest(ixA)}}
-	tlsB := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForExperimentalTCPTest(ixB)}}
+	tlsA := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForTIXTCPTest(ixA)}}
+	tlsB := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForTIXTCPTest(ixB)}}
 	clientTransport := securetransport.New(New(nil), options)
 	serverTransport := securetransport.New(New(nil), options)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listenAddr := tixTCPLocalTCPAddr(t)
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:       core.EndpointID("server"),
-		Transport:  transport.ProtocolExperimentalTCP,
+		Transport:  transport.ProtocolTIXTCP,
 		Listen:     listenAddr,
 		Encryption: securetransport.EncryptionPlaintext,
 		Enabled:    true,
@@ -1431,7 +1431,7 @@ func TestExperimentalTCPCompatStreamPlaintextWorksWithoutProvider(t *testing.T) 
 		DomainID: core.DomainID("lab.local"),
 		Endpoints: []transport.Endpoint{{
 			Name:       core.EndpointID("server"),
-			Transport:  transport.ProtocolExperimentalTCP,
+			Transport:  transport.ProtocolTIXTCP,
 			Address:    listenAddr,
 			Encryption: securetransport.EncryptionPlaintext,
 		}},
@@ -1449,7 +1449,7 @@ func TestExperimentalTCPCompatStreamPlaintextWorksWithoutProvider(t *testing.T) 
 		t.Fatal(ctx.Err())
 	}
 	defer server.Close()
-	if stats := client.Stats(); stats.Encrypted || stats.Encryption != securetransport.EncryptionPlaintext || stats.Extra["experimental_tcp_compat_stream"] != 1 {
+	if stats := client.Stats(); stats.Encrypted || stats.Encryption != securetransport.EncryptionPlaintext || stats.Extra["tix_tcp_compat_stream"] != 1 {
 		t.Fatalf("client stats = %+v, want plaintext compat stream", stats)
 	}
 	payload := []byte("plaintext-over-compat-stream-no-provider")
@@ -1465,9 +1465,9 @@ func TestExperimentalTCPCompatStreamPlaintextWorksWithoutProvider(t *testing.T) 
 	}
 }
 
-func TestSecureTransportLargeHandshakeOverExperimentalTCPCompatControl(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM", "0")
+func TestSecureTransportLargeHandshakeOverTIXTCPCompatControl(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
 	root, err := pki.NewRoot("large-handshake-root", 1)
 	if err != nil {
 		t.Fatalf("root: %v", err)
@@ -1483,17 +1483,17 @@ func TestSecureTransportLargeHandshakeOverExperimentalTCPCompatControl(t *testin
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
 	providerA.payloadMax = 576
 	providerB.payloadMax = 576
-	tlsA := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForExperimentalTCPTest(ixA)}}
-	tlsB := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForExperimentalTCPTest(ixB)}}
+	tlsA := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForTIXTCPTest(ixA)}}
+	tlsB := &tls.Config{Certificates: []tls.Certificate{tlsCertificateForTIXTCPTest(ixB)}}
 	clientTransport := securetransport.New(New(providerA), securetransport.Options{})
 	serverTransport := securetransport.New(New(providerB), securetransport.Options{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	listenAddr := experimentalTCPLocalTCPAddr(t)
+	listenAddr := tixTCPLocalTCPAddr(t)
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    listenAddr,
 		Enabled:   true,
 	}, tlsB)
@@ -1516,7 +1516,7 @@ func TestSecureTransportLargeHandshakeOverExperimentalTCPCompatControl(t *testin
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   listenAddr,
 		}},
 	}, tlsA)
@@ -1534,7 +1534,7 @@ func TestSecureTransportLargeHandshakeOverExperimentalTCPCompatControl(t *testin
 	}
 	defer server.Close()
 	if providerA.submitted.Load() != 0 || providerB.submitted.Load() != 0 {
-		t.Fatalf("large secure handshake used ACKless frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
+		t.Fatalf("large secure handshake used TIX-TCP frames: a=%d b=%d", providerA.submitted.Load(), providerB.submitted.Load())
 	}
 	if err := client.SendPacket([]byte("large-handshake-data")); err != nil {
 		t.Fatalf("client send: %v", err)
@@ -1548,7 +1548,7 @@ func TestSecureTransportLargeHandshakeOverExperimentalTCPCompatControl(t *testin
 	}
 }
 
-func TestExperimentalTCPFragmentsLargePacket(t *testing.T) {
+func TestTIXTCPFragmentsLargePacket(t *testing.T) {
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
 	clientTransport := New(providerA)
 	serverTransport := New(providerB)
@@ -1558,7 +1558,7 @@ func TestExperimentalTCPFragmentsLargePacket(t *testing.T) {
 
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "ix-b-underlay:443",
 		Enabled:   true,
 	}, nil)
@@ -1580,7 +1580,7 @@ func TestExperimentalTCPFragmentsLargePacket(t *testing.T) {
 		DomainID: core.DomainID("lab.local"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   "ix-b-underlay:443",
 		}},
 	}, nil)
@@ -1589,7 +1589,7 @@ func TestExperimentalTCPFragmentsLargePacket(t *testing.T) {
 	}
 	defer client.Close()
 
-	payload := bytes.Repeat([]byte("x"), experimentalTCPFragmentPayloadSize*2+321)
+	payload := bytes.Repeat([]byte("x"), tixTCPFragmentPayloadSize*2+321)
 	if err := client.SendPacket(payload); err != nil {
 		t.Fatalf("client send large payload: %v", err)
 	}
@@ -1615,42 +1615,42 @@ func TestExperimentalTCPFragmentsLargePacket(t *testing.T) {
 	if stats := client.Stats(); stats.PacketsSent != 1 || stats.BytesSent != uint64(len(payload)) {
 		t.Fatalf("client stats = %+v", stats)
 	}
-	if stats := client.Stats(); stats.Extra[experimentalTCPStatFragmentedPacketsSent] != 1 || stats.Extra[experimentalTCPStatFragmentsSent] != wantFragments {
+	if stats := client.Stats(); stats.Extra[tixTCPStatFragmentedPacketsSent] != 1 || stats.Extra[tixTCPStatFragmentsSent] != wantFragments {
 		t.Fatalf("client fragment stats = %+v, want 1 packet/%d fragments", stats.Extra, wantFragments)
 	}
-	if stats := server.Stats(); stats.Extra[experimentalTCPStatFragmentedPacketsReceived] != 1 || stats.Extra[experimentalTCPStatFragmentsReassembled] != wantFragments {
+	if stats := server.Stats(); stats.Extra[tixTCPStatFragmentedPacketsReceived] != 1 || stats.Extra[tixTCPStatFragmentsReassembled] != wantFragments {
 		t.Fatalf("server fragment stats = %+v, want 1 packet/%d fragments", stats.Extra, wantFragments)
 	}
 }
 
-func TestExperimentalTCPSessionBufferFromEnv(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SESSION_BUFFER", "")
-	if got := experimentalTCPSessionBuffer(); got != experimentalTCPSessionBufferDefault {
-		t.Fatalf("session buffer default = %d, want %d", got, experimentalTCPSessionBufferDefault)
+func TestTIXTCPSessionBufferFromEnv(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SESSION_BUFFER", "")
+	if got := tixTCPSessionBuffer(); got != tixTCPSessionBufferDefault {
+		t.Fatalf("session buffer default = %d, want %d", got, tixTCPSessionBufferDefault)
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SESSION_BUFFER", "2048")
-	if got := experimentalTCPSessionBuffer(); got != 2048 {
+	t.Setenv("TRUSTIX_TIX_TCP_SESSION_BUFFER", "2048")
+	if got := tixTCPSessionBuffer(); got != 2048 {
 		t.Fatalf("session buffer = %d, want 2048", got)
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SESSION_BUFFER", "999999")
-	if got := experimentalTCPSessionBuffer(); got != experimentalTCPSessionBufferMax {
-		t.Fatalf("session buffer clamp = %d, want %d", got, experimentalTCPSessionBufferMax)
+	t.Setenv("TRUSTIX_TIX_TCP_SESSION_BUFFER", "999999")
+	if got := tixTCPSessionBuffer(); got != tixTCPSessionBufferMax {
+		t.Fatalf("session buffer clamp = %d, want %d", got, tixTCPSessionBufferMax)
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SESSION_BUFFER", "bad")
-	if got := experimentalTCPSessionBuffer(); got != experimentalTCPSessionBufferDefault {
-		t.Fatalf("invalid session buffer = %d, want %d", got, experimentalTCPSessionBufferDefault)
+	t.Setenv("TRUSTIX_TIX_TCP_SESSION_BUFFER", "bad")
+	if got := tixTCPSessionBuffer(); got != tixTCPSessionBufferDefault {
+		t.Fatalf("invalid session buffer = %d, want %d", got, tixTCPSessionBufferDefault)
 	}
 }
 
-func TestExperimentalTCPReassemblyPrunesOldestWhenFull(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_REASSEMBLY_MAX_ASSEMBLIES", "2")
+func TestTIXTCPReassemblyPrunesOldestWhenFull(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_REASSEMBLY_MAX_ASSEMBLIES", "2")
 	session := newSession(nil, nil, 1001, "ix-b", "server", dataplane.CryptoPlacementUserspace)
 	defer session.closeInput()
 
 	for _, seq := range []uint64{10, 20, 30} {
-		if _, _, ok := session.handleFrameOne(dataplane.ExperimentalTCPFrame{
+		if _, _, ok := session.handleFrameOne(dataplane.TIXTCPFrame{
 			FlowID:        1001,
-			Direction:     dataplane.ExperimentalTCPInbound,
+			Direction:     dataplane.TIXTCPInbound,
 			Sequence:      seq,
 			FragmentIndex: 0,
 			FragmentCount: 2,
@@ -1661,39 +1661,39 @@ func TestExperimentalTCPReassemblyPrunesOldestWhenFull(t *testing.T) {
 	}
 
 	stats := session.Stats()
-	if got := stats.Extra[experimentalTCPStatFragmentAssembliesCurrent]; got != 2 {
+	if got := stats.Extra[tixTCPStatFragmentAssembliesCurrent]; got != 2 {
 		t.Fatalf("current assemblies = %d, want 2", got)
 	}
-	if got := stats.Extra[experimentalTCPStatFragmentExpiredAssemblies]; got != 1 {
+	if got := stats.Extra[tixTCPStatFragmentExpiredAssemblies]; got != 1 {
 		t.Fatalf("expired assemblies = %d, want 1", got)
 	}
-	if got := stats.Extra[experimentalTCPStatFragmentExpiredFragments]; got != 1 {
+	if got := stats.Extra[tixTCPStatFragmentExpiredFragments]; got != 1 {
 		t.Fatalf("expired fragments = %d, want 1", got)
 	}
 }
 
-func TestExperimentalTCPConfiguredFragmentPayloadAllowsJumboUserspace(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "8000")
-	if got := experimentalTCPFragmentPayloadSizeForPlacement(dataplane.CryptoPlacementUserspace, false); got != 8000 {
+func TestTIXTCPConfiguredFragmentPayloadAllowsJumboUserspace(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "8000")
+	if got := tixTCPFragmentPayloadSizeForPlacement(dataplane.CryptoPlacementUserspace, false); got != 8000 {
 		t.Fatalf("userspace fragment payload = %d, want 8000", got)
 	}
-	if got := experimentalTCPFragmentPayloadSizeForPlacement(dataplane.CryptoPlacementKernel, true); got != experimentalTCPKernelFragmentPayloadMax {
-		t.Fatalf("kernel fragment payload = %d, want %d", got, experimentalTCPKernelFragmentPayloadMax)
+	if got := tixTCPFragmentPayloadSizeForPlacement(dataplane.CryptoPlacementKernel, true); got != tixTCPKernelFragmentPayloadMax {
+		t.Fatalf("kernel fragment payload = %d, want %d", got, tixTCPKernelFragmentPayloadMax)
 	}
 }
 
-func TestExperimentalTCPAutoFragmentPayloadUsesPlacementMax(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "auto")
-	if got := experimentalTCPFragmentPayloadSizeForPlacement(dataplane.CryptoPlacementUserspace, false); got != experimentalTCPFragmentPayloadMax {
-		t.Fatalf("userspace auto fragment payload = %d, want %d", got, experimentalTCPFragmentPayloadMax)
+func TestTIXTCPAutoFragmentPayloadUsesPlacementMax(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "auto")
+	if got := tixTCPFragmentPayloadSizeForPlacement(dataplane.CryptoPlacementUserspace, false); got != tixTCPFragmentPayloadMax {
+		t.Fatalf("userspace auto fragment payload = %d, want %d", got, tixTCPFragmentPayloadMax)
 	}
-	if got := experimentalTCPFragmentPayloadSizeForPlacement(dataplane.CryptoPlacementKernel, true); got != experimentalTCPKernelFragmentPayloadMax {
-		t.Fatalf("kernel auto fragment payload = %d, want %d", got, experimentalTCPKernelFragmentPayloadMax)
+	if got := tixTCPFragmentPayloadSizeForPlacement(dataplane.CryptoPlacementKernel, true); got != tixTCPKernelFragmentPayloadMax {
+		t.Fatalf("kernel auto fragment payload = %d, want %d", got, tixTCPKernelFragmentPayloadMax)
 	}
 }
 
-func TestExperimentalTCPFragmentPayloadClampsToProviderMax(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "8000")
+func TestTIXTCPFragmentPayloadClampsToProviderMax(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "8000")
 	provider := &fakeProvider{payloadMax: 3900}
 	session := newSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementUserspace)
 
@@ -1702,8 +1702,8 @@ func TestExperimentalTCPFragmentPayloadClampsToProviderMax(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPAutoFragmentPayloadRaisesDefaultToProviderMax(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_AUTO_FRAGMENT_PAYLOAD", "1")
+func TestTIXTCPAutoFragmentPayloadRaisesDefaultToProviderMax(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_AUTO_FRAGMENT_PAYLOAD", "1")
 	provider := &fakeProvider{payloadMax: 3900}
 	session := newSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementUserspace)
 
@@ -1712,19 +1712,19 @@ func TestExperimentalTCPAutoFragmentPayloadRaisesDefaultToProviderMax(t *testing
 	}
 }
 
-func TestExperimentalTCPAutoFragmentPayloadPreservesExplicitSetting(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_AUTO_FRAGMENT_PAYLOAD", "1")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "legacy")
+func TestTIXTCPAutoFragmentPayloadPreservesExplicitSetting(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_AUTO_FRAGMENT_PAYLOAD", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "legacy")
 	provider := &fakeProvider{payloadMax: 3900}
 	session := newSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementUserspace)
 
-	if got := session.fragmentPayloadSize(); got != experimentalTCPUserspaceCryptoPayloadHint {
-		t.Fatalf("fragment payload = %d, want explicit legacy %d", got, experimentalTCPUserspaceCryptoPayloadHint)
+	if got := session.fragmentPayloadSize(); got != tixTCPUserspaceCryptoPayloadHint {
+		t.Fatalf("fragment payload = %d, want explicit legacy %d", got, tixTCPUserspaceCryptoPayloadHint)
 	}
 }
 
-func TestExperimentalTCPStatsAdvertisesDatagramMaxPacketSize(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "8000")
+func TestTIXTCPStatsAdvertisesDatagramMaxPacketSize(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "8000")
 	provider := &fakeProvider{payloadMax: 3900}
 	session := newSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementUserspace)
 
@@ -1740,9 +1740,9 @@ func TestExperimentalTCPStatsAdvertisesDatagramMaxPacketSize(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPStatsHonorsConfiguredMaxPacketSize(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "8000")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_MAX_PACKET_SIZE", "1200")
+func TestTIXTCPStatsHonorsConfiguredMaxPacketSize(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "8000")
+	t.Setenv("TRUSTIX_TIX_TCP_MAX_PACKET_SIZE", "1200")
 	provider := &fakeProvider{payloadMax: 3900}
 	session := newSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementUserspace)
 
@@ -1752,10 +1752,10 @@ func TestExperimentalTCPStatsHonorsConfiguredMaxPacketSize(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPSendPacketsMarksOnlyValidInnerIPv4(t *testing.T) {
+func TestTIXTCPSendPacketsMarksOnlyValidInnerIPv4(t *testing.T) {
 	provider := &fakeProvider{}
 	session := newSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementUserspace)
-	valid := ipv4PacketForExperimentalTCPTest(96)
+	valid := ipv4PacketForTIXTCPTest(96)
 	badTotalLen := append([]byte(nil), valid...)
 	binary.BigEndian.PutUint16(badTotalLen[2:4], uint16(len(badTotalLen)-1))
 	nonIPv4 := append([]byte(nil), valid...)
@@ -1779,10 +1779,10 @@ func TestExperimentalTCPSendPacketsMarksOnlyValidInnerIPv4(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPSendPacketsDoesNotMarkFragmentsInnerIPv4(t *testing.T) {
+func TestTIXTCPSendPacketsDoesNotMarkFragmentsInnerIPv4(t *testing.T) {
 	provider := &fakeProvider{payloadMax: 64}
 	session := newSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementUserspace)
-	packet := ipv4PacketForExperimentalTCPTest(256)
+	packet := ipv4PacketForTIXTCPTest(256)
 
 	if err := session.SendPackets([][]byte{packet}); err != nil {
 		t.Fatalf("send fragmented packet: %v", err)
@@ -1798,13 +1798,13 @@ func TestExperimentalTCPSendPacketsDoesNotMarkFragmentsInnerIPv4(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPSendPacketsLeavesTIXBWrappedWhenExpansionDisabled(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_EXPAND_TIXB", "0")
+func TestTIXTCPSendPacketsLeavesTIXBWrappedWhenExpansionDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_EXPAND_TIXB", "0")
 	provider := &fakeProvider{}
 	session := newSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementUserspace)
-	packetA := ipv4PacketForExperimentalTCPTest(96)
-	packetB := ipv4PacketForExperimentalTCPTest(128)
-	batch := experimentalTCPTestTIXB(packetA, packetB)
+	packetA := ipv4PacketForTIXTCPTest(96)
+	packetB := ipv4PacketForTIXTCPTest(128)
+	batch := tixTCPTestTIXB(packetA, packetB)
 
 	if err := session.SendPackets([][]byte{batch}); err != nil {
 		t.Fatalf("send TIXB packet: %v", err)
@@ -1819,18 +1819,18 @@ func TestExperimentalTCPSendPacketsLeavesTIXBWrappedWhenExpansionDisabled(t *tes
 	if frames[0].InnerIPv4 {
 		t.Fatalf("wrapped TIXB frame was marked inner_ipv4")
 	}
-	if stats := session.Stats(); stats.Extra[experimentalTCPStatTIXBExpandedPackets] != 0 || stats.Extra[experimentalTCPStatTIXBExpandedItems] != 0 {
+	if stats := session.Stats(); stats.Extra[tixTCPStatTIXBExpandedPackets] != 0 || stats.Extra[tixTCPStatTIXBExpandedItems] != 0 {
 		t.Fatalf("TIXB expansion stats = %+v, want zero", stats.Extra)
 	}
 }
 
-func TestExperimentalTCPSendPacketsExpandsTIXBWhenEnabled(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_EXPAND_TIXB", "1")
+func TestTIXTCPSendPacketsExpandsTIXBWhenEnabled(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_EXPAND_TIXB", "1")
 	provider := &fakeProvider{}
 	session := newSession(provider, nil, 1, "ix-a", "ep", dataplane.CryptoPlacementUserspace)
-	packetA := ipv4PacketForExperimentalTCPTest(96)
-	packetB := ipv4PacketForExperimentalTCPTest(128)
-	batch := experimentalTCPTestTIXB(packetA, packetB)
+	packetA := ipv4PacketForTIXTCPTest(96)
+	packetB := ipv4PacketForTIXTCPTest(128)
+	batch := tixTCPTestTIXB(packetA, packetB)
 
 	if err := session.SendPackets([][]byte{batch}); err != nil {
 		t.Fatalf("send TIXB packet: %v", err)
@@ -1855,13 +1855,13 @@ func TestExperimentalTCPSendPacketsExpandsTIXBWhenEnabled(t *testing.T) {
 	if stats.PacketsSent != 2 || stats.BytesSent != uint64(len(packetA)+len(packetB)) {
 		t.Fatalf("stats = %+v, want expanded packet accounting", stats)
 	}
-	if stats.Extra[experimentalTCPStatTIXBExpandedPackets] != 1 || stats.Extra[experimentalTCPStatTIXBExpandedItems] != 2 {
+	if stats.Extra[tixTCPStatTIXBExpandedPackets] != 1 || stats.Extra[tixTCPStatTIXBExpandedItems] != 2 {
 		t.Fatalf("TIXB expansion stats = %+v, want one packet/two items", stats.Extra)
 	}
 }
 
-func TestExperimentalTCPKernelCryptoSealBeforeFragmentEmitsLogicalFrame(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "1000")
+func TestTIXTCPKernelCryptoSealBeforeFragmentEmitsLogicalFrame(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "1000")
 	provider := &fakeProvider{
 		kernelCrypto:  true,
 		payloadMax:    1000,
@@ -1869,10 +1869,10 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentEmitsLogicalFrame(t *testi
 		cryptos:       make(map[uint64]fakeCrypto),
 	}
 	session := newSession(provider, nil, 7, "ix-a", "ep", dataplane.CryptoPlacementKernel)
-	if err := session.EnableCryptoOffload(experimentalTCPTestCryptoOffloadSpec()); err != nil {
+	if err := session.EnableCryptoOffload(tixTCPTestCryptoOffloadSpec()); err != nil {
 		t.Fatalf("enable crypto offload: %v", err)
 	}
-	packet := ipv4PacketForExperimentalTCPTest(2500)
+	packet := ipv4PacketForTIXTCPTest(2500)
 
 	if err := session.SendPackets([][]byte{packet}); err != nil {
 		t.Fatalf("send packets: %v", err)
@@ -1891,15 +1891,15 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentEmitsLogicalFrame(t *testi
 	if frame.CryptoPlacement != dataplane.CryptoPlacementKernel {
 		t.Fatalf("crypto placement = %q, want kernel", frame.CryptoPlacement)
 	}
-	wantFragments := uint64(fragmentCountForSize(len(packet)+experimentalTCPSecureFrameOverhead, 1000))
+	wantFragments := uint64(fragmentCountForSize(len(packet)+tixTCPSecureFrameOverhead, 1000))
 	stats := session.Stats()
-	if stats.Extra[experimentalTCPStatFragmentedPacketsSent] != 1 || stats.Extra[experimentalTCPStatFragmentsSent] != wantFragments {
+	if stats.Extra[tixTCPStatFragmentedPacketsSent] != 1 || stats.Extra[tixTCPStatFragmentsSent] != wantFragments {
 		t.Fatalf("fragment stats = %+v, want one logical packet and %d wire fragments", stats.Extra, wantFragments)
 	}
 }
 
-func TestExperimentalTCPKernelCryptoSealBeforeFragmentUsesConfiguredPayloadByDefault(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "1380")
+func TestTIXTCPKernelCryptoSealBeforeFragmentUsesConfiguredPayloadByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "1380")
 	provider := &fakeProvider{
 		kernelCrypto:  true,
 		payloadMax:    1420,
@@ -1907,10 +1907,10 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentUsesConfiguredPayloadByDef
 		cryptos:       make(map[uint64]fakeCrypto),
 	}
 	session := newSession(provider, nil, 7, "ix-a", "ep", dataplane.CryptoPlacementKernel)
-	if err := session.EnableCryptoOffload(experimentalTCPTestCryptoOffloadSpec()); err != nil {
+	if err := session.EnableCryptoOffload(tixTCPTestCryptoOffloadSpec()); err != nil {
 		t.Fatalf("enable crypto offload: %v", err)
 	}
-	packet := ipv4PacketForExperimentalTCPTest(2500)
+	packet := ipv4PacketForTIXTCPTest(2500)
 
 	if err := session.SendPackets([][]byte{packet}); err != nil {
 		t.Fatalf("send packets: %v", err)
@@ -1924,9 +1924,9 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentUsesConfiguredPayloadByDef
 	}
 }
 
-func TestExperimentalTCPKernelCryptoSealBeforeFragmentWirePayloadMaxCanBeEnabled(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "1380")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_SEAL_BEFORE_FRAGMENT_WIRE_MAX", "1")
+func TestTIXTCPKernelCryptoSealBeforeFragmentWirePayloadMaxCanBeEnabled(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "1380")
+	t.Setenv("TRUSTIX_TIX_TCP_KERNEL_SEAL_BEFORE_FRAGMENT_WIRE_MAX", "1")
 	provider := &fakeProvider{
 		kernelCrypto:  true,
 		payloadMax:    1420,
@@ -1934,10 +1934,10 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentWirePayloadMaxCanBeEnabled
 		cryptos:       make(map[uint64]fakeCrypto),
 	}
 	session := newSession(provider, nil, 7, "ix-a", "ep", dataplane.CryptoPlacementKernel)
-	if err := session.EnableCryptoOffload(experimentalTCPTestCryptoOffloadSpec()); err != nil {
+	if err := session.EnableCryptoOffload(tixTCPTestCryptoOffloadSpec()); err != nil {
 		t.Fatalf("enable crypto offload: %v", err)
 	}
-	packet := ipv4PacketForExperimentalTCPTest(2500)
+	packet := ipv4PacketForTIXTCPTest(2500)
 
 	if err := session.SendPackets([][]byte{packet}); err != nil {
 		t.Fatalf("send packets: %v", err)
@@ -1951,8 +1951,8 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentWirePayloadMaxCanBeEnabled
 	}
 }
 
-func TestExperimentalTCPKernelCryptoSealBeforeFragmentAllowsDeviceSizedLogicalFrame(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "auto")
+func TestTIXTCPKernelCryptoSealBeforeFragmentAllowsDeviceSizedLogicalFrame(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "auto")
 	provider := &fakeProvider{
 		kernelCrypto:  true,
 		payloadMax:    1460,
@@ -1960,7 +1960,7 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentAllowsDeviceSizedLogicalFr
 		cryptos:       make(map[uint64]fakeCrypto),
 	}
 	session := newSession(provider, nil, 7, "ix-a", "ep", dataplane.CryptoPlacementKernel)
-	if err := session.EnableCryptoOffload(experimentalTCPTestCryptoOffloadSpec()); err != nil {
+	if err := session.EnableCryptoOffload(tixTCPTestCryptoOffloadSpec()); err != nil {
 		t.Fatalf("enable crypto offload: %v", err)
 	}
 	packet := bytes.Repeat([]byte{0x7a}, 128*1024)
@@ -1978,16 +1978,16 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentAllowsDeviceSizedLogicalFr
 	if frames[0].FragmentCount != 0 || frames[0].FragmentIndex != 0 {
 		t.Fatalf("logical frame fragment header = index %d count %d, want zero", frames[0].FragmentIndex, frames[0].FragmentCount)
 	}
-	wantFragments := uint64(fragmentCountForSize(len(packet)+experimentalTCPSecureFrameOverhead, 1460))
+	wantFragments := uint64(fragmentCountForSize(len(packet)+tixTCPSecureFrameOverhead, 1460))
 	stats := session.Stats()
-	if stats.Extra[experimentalTCPStatFragmentedPacketsSent] != 1 || stats.Extra[experimentalTCPStatFragmentsSent] != wantFragments {
+	if stats.Extra[tixTCPStatFragmentedPacketsSent] != 1 || stats.Extra[tixTCPStatFragmentsSent] != wantFragments {
 		t.Fatalf("fragment stats = %+v, want one logical packet and %d wire fragments", stats.Extra, wantFragments)
 	}
 }
 
-func TestExperimentalTCPKernelCryptoSealBeforeFragmentCanBeDisabled(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_FRAGMENT_PAYLOAD_SIZE", "1000")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_KERNEL_SEAL_BEFORE_FRAGMENT", "0")
+func TestTIXTCPKernelCryptoSealBeforeFragmentCanBeDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_FRAGMENT_PAYLOAD_SIZE", "1000")
+	t.Setenv("TRUSTIX_TIX_TCP_KERNEL_SEAL_BEFORE_FRAGMENT", "0")
 	provider := &fakeProvider{
 		kernelCrypto:  true,
 		payloadMax:    1000,
@@ -1995,10 +1995,10 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentCanBeDisabled(t *testing.T
 		cryptos:       make(map[uint64]fakeCrypto),
 	}
 	session := newSession(provider, nil, 7, "ix-a", "ep", dataplane.CryptoPlacementKernel)
-	if err := session.EnableCryptoOffload(experimentalTCPTestCryptoOffloadSpec()); err != nil {
+	if err := session.EnableCryptoOffload(tixTCPTestCryptoOffloadSpec()); err != nil {
 		t.Fatalf("enable crypto offload: %v", err)
 	}
-	packet := ipv4PacketForExperimentalTCPTest(2500)
+	packet := ipv4PacketForTIXTCPTest(2500)
 
 	if err := session.SendPackets([][]byte{packet}); err != nil {
 		t.Fatalf("send packets: %v", err)
@@ -2017,18 +2017,18 @@ func TestExperimentalTCPKernelCryptoSealBeforeFragmentCanBeDisabled(t *testing.T
 	}
 }
 
-func TestExperimentalTCPReassemblesOutOfOrderFragments(t *testing.T) {
+func TestTIXTCPReassemblesOutOfOrderFragments(t *testing.T) {
 	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
-	payload := bytes.Repeat([]byte("a"), experimentalTCPFragmentPayloadSize*2+17)
+	payload := bytes.Repeat([]byte("a"), tixTCPFragmentPayloadSize*2+17)
 	parts := [][]byte{
-		payload[:experimentalTCPFragmentPayloadSize],
-		payload[experimentalTCPFragmentPayloadSize : experimentalTCPFragmentPayloadSize*2],
-		payload[experimentalTCPFragmentPayloadSize*2:],
+		payload[:tixTCPFragmentPayloadSize],
+		payload[tixTCPFragmentPayloadSize : tixTCPFragmentPayloadSize*2],
+		payload[tixTCPFragmentPayloadSize*2:],
 	}
 	for _, index := range []int{2, 0, 1} {
-		session.handleFrame(dataplane.ExperimentalTCPFrame{
+		session.handleFrame(dataplane.TIXTCPFrame{
 			FlowID:        42,
-			Direction:     dataplane.ExperimentalTCPInbound,
+			Direction:     dataplane.TIXTCPInbound,
 			Sequence:      100 + uint64(index),
 			FragmentIndex: uint16(index),
 			FragmentCount: 3,
@@ -2043,20 +2043,20 @@ func TestExperimentalTCPReassemblesOutOfOrderFragments(t *testing.T) {
 		t.Fatalf("reassembled payload mismatch len=%d want=%d", len(got), len(payload))
 	}
 	stats := session.Stats()
-	if stats.Extra[experimentalTCPStatFragmentsReceived] != 3 || stats.Extra[experimentalTCPStatFragmentsReassembled] != 3 || stats.Extra[experimentalTCPStatFragmentedPacketsReceived] != 1 {
+	if stats.Extra[tixTCPStatFragmentsReceived] != 3 || stats.Extra[tixTCPStatFragmentsReassembled] != 3 || stats.Extra[tixTCPStatFragmentedPacketsReceived] != 1 {
 		t.Fatalf("fragment stats = %+v, want received/reassembled packet counters", stats.Extra)
 	}
-	if stats.Extra[experimentalTCPStatFragmentAssembliesCurrent] != 0 {
-		t.Fatalf("current assemblies = %d, want 0", stats.Extra[experimentalTCPStatFragmentAssembliesCurrent])
+	if stats.Extra[tixTCPStatFragmentAssembliesCurrent] != 0 {
+		t.Fatalf("current assemblies = %d, want 0", stats.Extra[tixTCPStatFragmentAssembliesCurrent])
 	}
 }
 
-func TestExperimentalTCPRecvPacketsDrainsNativeBatch(t *testing.T) {
+func TestTIXTCPRecvPacketsDrainsNativeBatch(t *testing.T) {
 	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
-	session.handleFrames([]dataplane.ExperimentalTCPFrame{
-		{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 1, Payload: []byte("one")},
-		{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 2, Payload: []byte("two")},
-		{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 3, Payload: []byte("three")},
+	session.handleFrames([]dataplane.TIXTCPFrame{
+		{FlowID: 42, Direction: dataplane.TIXTCPInbound, Sequence: 1, Payload: []byte("one")},
+		{FlowID: 42, Direction: dataplane.TIXTCPInbound, Sequence: 2, Payload: []byte("two")},
+		{FlowID: 42, Direction: dataplane.TIXTCPInbound, Sequence: 3, Payload: []byte("three")},
 	})
 
 	packets, err := session.RecvPackets(2)
@@ -2085,46 +2085,46 @@ func TestExperimentalTCPRecvPacketsDrainsNativeBatch(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPRecvCoalesceDelayEnv(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_COALESCE_DELAY", "")
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_BATCH_DELAY", "")
-	if got := experimentalTCPRecvCoalesceDelay(); got != 0 {
+func TestTIXTCPRecvCoalesceDelayEnv(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_COALESCE_DELAY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_BATCH_DELAY", "")
+	if got := tixTCPRecvCoalesceDelay(); got != 0 {
 		t.Fatalf("default recv coalesce delay = %s, want 0", got)
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_COALESCE_DELAY", "25us")
-	if got := experimentalTCPRecvCoalesceDelay(); got != 25*time.Microsecond {
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_COALESCE_DELAY", "25us")
+	if got := tixTCPRecvCoalesceDelay(); got != 25*time.Microsecond {
 		t.Fatalf("duration recv coalesce delay = %s, want 25us", got)
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_COALESCE_DELAY", "50")
-	if got := experimentalTCPRecvCoalesceDelay(); got != 50*time.Microsecond {
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_COALESCE_DELAY", "50")
+	if got := tixTCPRecvCoalesceDelay(); got != 50*time.Microsecond {
 		t.Fatalf("numeric recv coalesce delay = %s, want 50us", got)
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_COALESCE_DELAY", "10ms")
-	if got := experimentalTCPRecvCoalesceDelay(); got != experimentalTCPRecvCoalesceDelayMax {
-		t.Fatalf("capped recv coalesce delay = %s, want %s", got, experimentalTCPRecvCoalesceDelayMax)
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_COALESCE_DELAY", "10ms")
+	if got := tixTCPRecvCoalesceDelay(); got != tixTCPRecvCoalesceDelayMax {
+		t.Fatalf("capped recv coalesce delay = %s, want %s", got, tixTCPRecvCoalesceDelayMax)
 	}
 }
 
-func TestExperimentalTCPRecvDrainBatchLimitEnv(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_DRAIN_BATCHES", "")
-	if got := experimentalTCPRecvDrainBatchLimit(); got != experimentalTCPRecvDrainDefault {
-		t.Fatalf("default recv drain batches = %d, want %d", got, experimentalTCPRecvDrainDefault)
+func TestTIXTCPRecvDrainBatchLimitEnv(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_DRAIN_BATCHES", "")
+	if got := tixTCPRecvDrainBatchLimit(); got != tixTCPRecvDrainDefault {
+		t.Fatalf("default recv drain batches = %d, want %d", got, tixTCPRecvDrainDefault)
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_DRAIN_BATCHES", "0")
-	if got := experimentalTCPRecvDrainBatchLimit(); got != 0 {
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_DRAIN_BATCHES", "0")
+	if got := tixTCPRecvDrainBatchLimit(); got != 0 {
 		t.Fatalf("disabled recv drain batches = %d, want 0", got)
 	}
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_DRAIN_BATCHES", "512")
-	if got := experimentalTCPRecvDrainBatchLimit(); got != experimentalTCPRecvDrainMax {
-		t.Fatalf("capped recv drain batches = %d, want %d", got, experimentalTCPRecvDrainMax)
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_DRAIN_BATCHES", "512")
+	if got := tixTCPRecvDrainBatchLimit(); got != tixTCPRecvDrainMax {
+		t.Fatalf("capped recv drain batches = %d, want %d", got, tixTCPRecvDrainMax)
 	}
 }
 
-func TestExperimentalTCPRecvPacketsDrainsQueuedBatchesWithoutDelay(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_DRAIN_BATCHES", "4")
+func TestTIXTCPRecvPacketsDrainsQueuedBatchesWithoutDelay(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_DRAIN_BATCHES", "4")
 	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
-	session.handleFrame(dataplane.ExperimentalTCPFrame{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 1, Payload: []byte("one")})
-	session.handleFrame(dataplane.ExperimentalTCPFrame{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 2, Payload: []byte("two")})
+	session.handleFrame(dataplane.TIXTCPFrame{FlowID: 42, Direction: dataplane.TIXTCPInbound, Sequence: 1, Payload: []byte("one")})
+	session.handleFrame(dataplane.TIXTCPFrame{FlowID: 42, Direction: dataplane.TIXTCPInbound, Sequence: 2, Payload: []byte("two")})
 
 	packets, err := session.RecvPackets(8)
 	if err != nil {
@@ -2138,21 +2138,21 @@ func TestExperimentalTCPRecvPacketsDrainsQueuedBatchesWithoutDelay(t *testing.T)
 	}
 }
 
-func TestExperimentalTCPRecvPacketsCoalesceDelayWaitsForNextBatch(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_RECV_COALESCE_DELAY", "10ms")
+func TestTIXTCPRecvPacketsCoalesceDelayWaitsForNextBatch(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_RECV_COALESCE_DELAY", "10ms")
 	coalesceReady := make(chan struct{}, 1)
-	experimentalTCPRecvCoalesceWaitHook = func() {
+	tixTCPRecvCoalesceWaitHook = func() {
 		select {
 		case coalesceReady <- struct{}{}:
 		default:
 		}
 	}
 	t.Cleanup(func() {
-		experimentalTCPRecvCoalesceWaitHook = nil
+		tixTCPRecvCoalesceWaitHook = nil
 	})
 
 	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
-	session.handleFrame(dataplane.ExperimentalTCPFrame{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 1, Payload: []byte("one")})
+	session.handleFrame(dataplane.TIXTCPFrame{FlowID: 42, Direction: dataplane.TIXTCPInbound, Sequence: 1, Payload: []byte("one")})
 
 	result := make(chan [][]byte, 1)
 	errCh := make(chan error, 1)
@@ -2175,7 +2175,7 @@ func TestExperimentalTCPRecvPacketsCoalesceDelayWaitsForNextBatch(t *testing.T) 
 		t.Fatal("RecvPackets did not enter coalesce wait")
 	}
 
-	session.handleFrame(dataplane.ExperimentalTCPFrame{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 2, Payload: []byte("two")})
+	session.handleFrame(dataplane.TIXTCPFrame{FlowID: 42, Direction: dataplane.TIXTCPInbound, Sequence: 2, Payload: []byte("two")})
 
 	select {
 	case err := <-errCh:
@@ -2192,12 +2192,12 @@ func TestExperimentalTCPRecvPacketsCoalesceDelayWaitsForNextBatch(t *testing.T) 
 	}
 }
 
-func TestExperimentalTCPRecvPacketsWithRelease(t *testing.T) {
+func TestTIXTCPRecvPacketsWithRelease(t *testing.T) {
 	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
 	var releases atomic.Uint64
-	session.handleFrames([]dataplane.ExperimentalTCPFrame{
-		{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 1, Payload: []byte("one"), Release: func() { releases.Add(1) }},
-		{FlowID: 42, Direction: dataplane.ExperimentalTCPInbound, Sequence: 2, Payload: []byte("two"), Release: func() { releases.Add(1) }},
+	session.handleFrames([]dataplane.TIXTCPFrame{
+		{FlowID: 42, Direction: dataplane.TIXTCPInbound, Sequence: 1, Payload: []byte("one"), Release: func() { releases.Add(1) }},
+		{FlowID: 42, Direction: dataplane.TIXTCPInbound, Sequence: 2, Payload: []byte("two"), Release: func() { releases.Add(1) }},
 	})
 
 	packets, release, err := session.RecvPacketsWithRelease(8)
@@ -2219,7 +2219,7 @@ func TestExperimentalTCPRecvPacketsWithRelease(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPListenerDispatchBatchReleasesSkippedFrames(t *testing.T) {
+func TestTIXTCPListenerDispatchBatchReleasesSkippedFrames(t *testing.T) {
 	listener := &listener{
 		provider: &fakeProvider{},
 		endpoint: transport.Endpoint{
@@ -2231,23 +2231,23 @@ func TestExperimentalTCPListenerDispatchBatchReleasesSkippedFrames(t *testing.T)
 		placement: dataplane.CryptoPlacementUserspace,
 	}
 	var releases atomic.Uint64
-	listener.dispatchBatch([]dataplane.ExperimentalTCPFrame{
+	listener.dispatchBatch([]dataplane.TIXTCPFrame{
 		{
 			FlowID:    1,
-			Direction: dataplane.ExperimentalTCPOutbound,
+			Direction: dataplane.TIXTCPOutbound,
 			Payload:   []byte("wrong-direction"),
 			Release:   func() { releases.Add(1) },
 		},
 		{
 			FlowID:    2,
-			Direction: dataplane.ExperimentalTCPInbound,
+			Direction: dataplane.TIXTCPInbound,
 			Endpoint:  "other",
 			Payload:   []byte("wrong-endpoint"),
 			Release:   func() { releases.Add(1) },
 		},
 		{
 			FlowID:    3,
-			Direction: dataplane.ExperimentalTCPInbound,
+			Direction: dataplane.TIXTCPInbound,
 			Payload:   []byte("accept-full"),
 			Release:   func() { releases.Add(1) },
 		},
@@ -2258,7 +2258,7 @@ func TestExperimentalTCPListenerDispatchBatchReleasesSkippedFrames(t *testing.T)
 	}
 }
 
-func TestExperimentalTCPListenerDispatchAllowsAnnotatedExistingFlow(t *testing.T) {
+func TestTIXTCPListenerDispatchAllowsAnnotatedExistingFlow(t *testing.T) {
 	listener := &listener{
 		provider: &fakeProvider{},
 		endpoint: transport.Endpoint{
@@ -2269,18 +2269,18 @@ func TestExperimentalTCPListenerDispatchAllowsAnnotatedExistingFlow(t *testing.T
 		sessions:  make(map[uint64]*session),
 		placement: dataplane.CryptoPlacementUserspace,
 	}
-	listener.dispatch(dataplane.ExperimentalTCPFrame{
+	listener.dispatch(dataplane.TIXTCPFrame{
 		FlowID:    9,
-		Direction: dataplane.ExperimentalTCPInbound,
+		Direction: dataplane.TIXTCPInbound,
 		Endpoint:  "server",
 		Payload:   []byte("first"),
 	})
 	accepted := (<-listener.acceptCh).(*session)
 
 	var released atomic.Uint64
-	listener.dispatch(dataplane.ExperimentalTCPFrame{
+	listener.dispatch(dataplane.TIXTCPFrame{
 		FlowID:    9,
-		Direction: dataplane.ExperimentalTCPInbound,
+		Direction: dataplane.TIXTCPInbound,
 		Endpoint:  "peer-endpoint",
 		Payload:   []byte("annotated"),
 		Release:   func() { released.Add(1) },
@@ -2302,7 +2302,7 @@ func TestExperimentalTCPListenerDispatchAllowsAnnotatedExistingFlow(t *testing.T
 	}
 }
 
-func TestExperimentalTCPListenerDispatchBatchAllowsAnnotatedExistingFlow(t *testing.T) {
+func TestTIXTCPListenerDispatchBatchAllowsAnnotatedExistingFlow(t *testing.T) {
 	listener := &listener{
 		provider: &fakeProvider{},
 		endpoint: transport.Endpoint{
@@ -2317,17 +2317,17 @@ func TestExperimentalTCPListenerDispatchBatchAllowsAnnotatedExistingFlow(t *test
 	listener.sessions[10] = existing
 
 	var released atomic.Uint64
-	listener.dispatchBatch([]dataplane.ExperimentalTCPFrame{
+	listener.dispatchBatch([]dataplane.TIXTCPFrame{
 		{
 			FlowID:    10,
-			Direction: dataplane.ExperimentalTCPInbound,
+			Direction: dataplane.TIXTCPInbound,
 			Endpoint:  "peer-endpoint",
 			Payload:   []byte("existing"),
 			Release:   func() { released.Add(1) },
 		},
 		{
 			FlowID:    11,
-			Direction: dataplane.ExperimentalTCPInbound,
+			Direction: dataplane.TIXTCPInbound,
 			Endpoint:  "peer-endpoint",
 			Payload:   []byte("new-wrong-endpoint"),
 			Release:   func() { released.Add(1) },
@@ -2353,13 +2353,13 @@ func TestExperimentalTCPListenerDispatchBatchAllowsAnnotatedExistingFlow(t *test
 	}
 }
 
-func TestExperimentalTCPSessionCloseReleasesQueuedBorrowedPackets(t *testing.T) {
+func TestTIXTCPSessionCloseReleasesQueuedBorrowedPackets(t *testing.T) {
 	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
 	var releases atomic.Uint64
-	session.handleFrames([]dataplane.ExperimentalTCPFrame{
+	session.handleFrames([]dataplane.TIXTCPFrame{
 		{
 			FlowID:    42,
-			Direction: dataplane.ExperimentalTCPInbound,
+			Direction: dataplane.TIXTCPInbound,
 			Sequence:  1,
 			Payload:   []byte("queued"),
 			Release:   func() { releases.Add(1) },
@@ -2373,86 +2373,86 @@ func TestExperimentalTCPSessionCloseReleasesQueuedBorrowedPackets(t *testing.T) 
 	}
 }
 
-func TestExperimentalTCPFragmentStatsTrackRejectsDuplicatesAndExpiry(t *testing.T) {
+func TestTIXTCPFragmentStatsTrackRejectsDuplicatesAndExpiry(t *testing.T) {
 	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
-	session.handleFrame(dataplane.ExperimentalTCPFrame{
+	session.handleFrame(dataplane.TIXTCPFrame{
 		FlowID:        42,
-		Direction:     dataplane.ExperimentalTCPInbound,
+		Direction:     dataplane.TIXTCPInbound,
 		Sequence:      0,
 		FragmentIndex: 1,
 		FragmentCount: 3,
 		Payload:       []byte("bad-sequence"),
 	})
-	if got := session.Stats().Extra[experimentalTCPStatFragmentRejects]; got != 1 {
+	if got := session.Stats().Extra[tixTCPStatFragmentRejects]; got != 1 {
 		t.Fatalf("fragment rejects = %d, want 1", got)
 	}
 
-	session.handleFrame(dataplane.ExperimentalTCPFrame{
+	session.handleFrame(dataplane.TIXTCPFrame{
 		FlowID:        42,
-		Direction:     dataplane.ExperimentalTCPInbound,
+		Direction:     dataplane.TIXTCPInbound,
 		Sequence:      100,
 		FragmentIndex: 0,
 		FragmentCount: 2,
 		Payload:       []byte("first-"),
 	})
-	session.handleFrame(dataplane.ExperimentalTCPFrame{
+	session.handleFrame(dataplane.TIXTCPFrame{
 		FlowID:        42,
-		Direction:     dataplane.ExperimentalTCPInbound,
+		Direction:     dataplane.TIXTCPInbound,
 		Sequence:      100,
 		FragmentIndex: 0,
 		FragmentCount: 2,
 		Payload:       []byte("first-again"),
 	})
 	stats := session.Stats()
-	if stats.Extra[experimentalTCPStatFragmentDuplicates] != 1 {
-		t.Fatalf("fragment duplicates = %d, want 1", stats.Extra[experimentalTCPStatFragmentDuplicates])
+	if stats.Extra[tixTCPStatFragmentDuplicates] != 1 {
+		t.Fatalf("fragment duplicates = %d, want 1", stats.Extra[tixTCPStatFragmentDuplicates])
 	}
-	if stats.Extra[experimentalTCPStatFragmentAssembliesCurrent] != 1 {
-		t.Fatalf("current assemblies = %d, want 1", stats.Extra[experimentalTCPStatFragmentAssembliesCurrent])
+	if stats.Extra[tixTCPStatFragmentAssembliesCurrent] != 1 {
+		t.Fatalf("current assemblies = %d, want 1", stats.Extra[tixTCPStatFragmentAssembliesCurrent])
 	}
 
-	session.handleFrame(dataplane.ExperimentalTCPFrame{
+	session.handleFrame(dataplane.TIXTCPFrame{
 		FlowID:        42,
-		Direction:     dataplane.ExperimentalTCPInbound,
+		Direction:     dataplane.TIXTCPInbound,
 		Sequence:      101,
 		FragmentIndex: 1,
 		FragmentCount: 4,
 		Payload:       []byte("mismatch"),
 	})
 	stats = session.Stats()
-	if stats.Extra[experimentalTCPStatFragmentMismatches] != 1 || stats.Extra[experimentalTCPStatFragmentRejects] != 2 {
+	if stats.Extra[tixTCPStatFragmentMismatches] != 1 || stats.Extra[tixTCPStatFragmentRejects] != 2 {
 		t.Fatalf("mismatch/reject stats = %+v, want mismatch=1 rejects=2", stats.Extra)
 	}
-	if stats.Extra[experimentalTCPStatFragmentAssembliesCurrent] != 0 {
-		t.Fatalf("current assemblies after mismatch = %d, want 0", stats.Extra[experimentalTCPStatFragmentAssembliesCurrent])
+	if stats.Extra[tixTCPStatFragmentAssembliesCurrent] != 0 {
+		t.Fatalf("current assemblies after mismatch = %d, want 0", stats.Extra[tixTCPStatFragmentAssembliesCurrent])
 	}
 
-	session.handleFrame(dataplane.ExperimentalTCPFrame{
+	session.handleFrame(dataplane.TIXTCPFrame{
 		FlowID:        42,
-		Direction:     dataplane.ExperimentalTCPInbound,
+		Direction:     dataplane.TIXTCPInbound,
 		Sequence:      300,
 		FragmentIndex: 0,
 		FragmentCount: 2,
 		Payload:       []byte("stale"),
 	})
 	session.recvMu.Lock()
-	session.reassembly[300].createdAt = time.Now().Add(-experimentalTCPReassemblyTTL - time.Second)
+	session.reassembly[300].createdAt = time.Now().Add(-tixTCPReassemblyTTL - time.Second)
 	session.recvMu.Unlock()
-	session.handleFrame(dataplane.ExperimentalTCPFrame{
+	session.handleFrame(dataplane.TIXTCPFrame{
 		FlowID:        42,
-		Direction:     dataplane.ExperimentalTCPInbound,
+		Direction:     dataplane.TIXTCPInbound,
 		Sequence:      400,
 		FragmentIndex: 0,
 		FragmentCount: 2,
 		Payload:       []byte("fresh"),
 	})
 	stats = session.Stats()
-	if stats.Extra[experimentalTCPStatFragmentExpiredAssemblies] != 1 || stats.Extra[experimentalTCPStatFragmentExpiredFragments] != 1 {
+	if stats.Extra[tixTCPStatFragmentExpiredAssemblies] != 1 || stats.Extra[tixTCPStatFragmentExpiredFragments] != 1 {
 		t.Fatalf("expiry stats = %+v, want one stale assembly/fragment", stats.Extra)
 	}
 }
 
-func TestExperimentalTCPUsesConfiguredCryptoPlacement(t *testing.T) {
+func TestTIXTCPUsesConfiguredCryptoPlacement(t *testing.T) {
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	transportImpl := New(providerA, Options{
 		CryptoPlacement: func() dataplane.CryptoPlacement {
@@ -2469,7 +2469,7 @@ func TestExperimentalTCPUsesConfiguredCryptoPlacement(t *testing.T) {
 		Endpoints: []transport.Endpoint{
 			{
 				Name:      core.EndpointID("server"),
-				Transport: transport.ProtocolExperimentalTCP,
+				Transport: transport.ProtocolTIXTCP,
 				Address:   "ix-b-underlay:443",
 			},
 		},
@@ -2494,7 +2494,7 @@ func TestExperimentalTCPUsesConfiguredCryptoPlacement(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPDefaultAutoUsesKernelCryptoWhenAvailable(t *testing.T) {
+func TestTIXTCPDefaultAutoUsesKernelCryptoWhenAvailable(t *testing.T) {
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	providerA.kernelCrypto = true
 	transportImpl := New(providerA)
@@ -2507,7 +2507,7 @@ func TestExperimentalTCPDefaultAutoUsesKernelCryptoWhenAvailable(t *testing.T) {
 		DomainID: core.DomainID("lab.local"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   "ix-b-underlay:443",
 		}},
 	}, nil)
@@ -2528,8 +2528,8 @@ func TestExperimentalTCPDefaultAutoUsesKernelCryptoWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPAutoPrefersKernelCryptoWhenBothPlacementsAvailable(t *testing.T) {
-	placement, err := selectCryptoPlacement(dataplane.CryptoPlacementAuto, dataplane.ExperimentalTCPStatus{
+func TestTIXTCPAutoPrefersKernelCryptoWhenBothPlacementsAvailable(t *testing.T) {
+	placement, err := selectCryptoPlacement(dataplane.CryptoPlacementAuto, dataplane.TIXTCPStatus{
 		UserspaceCrypto: true,
 		KernelCrypto:    true,
 		PreferredCrypto: dataplane.CryptoPlacementUserspace,
@@ -2542,7 +2542,7 @@ func TestExperimentalTCPAutoPrefersKernelCryptoWhenBothPlacementsAvailable(t *te
 	}
 }
 
-func TestExperimentalTCPPlaintextAutoKeepsKernelTransportWithoutCryptoPlacement(t *testing.T) {
+func TestTIXTCPPlaintextAutoKeepsKernelTransportWithoutCryptoPlacement(t *testing.T) {
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	providerA.kernelCrypto = true
 	transportImpl := New(providerA, Options{
@@ -2562,7 +2562,7 @@ func TestExperimentalTCPPlaintextAutoKeepsKernelTransportWithoutCryptoPlacement(
 		DomainID: core.DomainID("lab.local"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   "ix-b-underlay:443",
 		}},
 	}, nil)
@@ -2583,7 +2583,7 @@ func TestExperimentalTCPPlaintextAutoKeepsKernelTransportWithoutCryptoPlacement(
 	}
 }
 
-func TestExperimentalTCPCloseDeletesInstalledFlow(t *testing.T) {
+func TestTIXTCPCloseDeletesInstalledFlow(t *testing.T) {
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	transportImpl := New(providerA)
 
@@ -2596,7 +2596,7 @@ func TestExperimentalTCPCloseDeletesInstalledFlow(t *testing.T) {
 		Endpoints: []transport.Endpoint{
 			{
 				Name:      core.EndpointID("server"),
-				Transport: transport.ProtocolExperimentalTCP,
+				Transport: transport.ProtocolTIXTCP,
 				Address:   "ix-b-underlay:443",
 			},
 		},
@@ -2620,8 +2620,8 @@ func TestExperimentalTCPCloseDeletesInstalledFlow(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPDialCarriesLocalBindSourceIP(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_COMPAT_TCP_PRIMER", "0")
+func TestTIXTCPDialCarriesLocalBindSourceIP(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "0")
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	transportImpl := New(providerA)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2632,7 +2632,7 @@ func TestExperimentalTCPDialCarriesLocalBindSourceIP(t *testing.T) {
 		DomainID: core.DomainID("lab.local"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   "198.51.100.2:7142",
 			LocalBind: transport.LocalBind{SourceIP: "192.0.2.10"},
 		}},
@@ -2653,10 +2653,10 @@ func TestExperimentalTCPDialCarriesLocalBindSourceIP(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPCloseCanRetainInstalledFlow(t *testing.T) {
+func TestTIXTCPCloseCanRetainInstalledFlow(t *testing.T) {
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	session := newSession(providerA, nil, 123, "ix-b", "server", dataplane.CryptoPlacementUserspace)
-	providerA.flows[123] = dataplane.ExperimentalTCPFlow{
+	providerA.flows[123] = dataplane.TIXTCPFlow{
 		ID:            123,
 		Peer:          "ix-b",
 		Endpoint:      "server",
@@ -2665,7 +2665,7 @@ func TestExperimentalTCPCloseCanRetainInstalledFlow(t *testing.T) {
 
 	retainer, ok := any(session).(transport.KernelFlowRetentionSession)
 	if !ok {
-		t.Fatal("experimental_tcp session does not implement KernelFlowRetentionSession")
+		t.Fatal("tix_tcp session does not implement KernelFlowRetentionSession")
 	}
 	retainer.RetainKernelFlowOnClose()
 	if err := session.Close(); err != nil {
@@ -2675,18 +2675,18 @@ func TestExperimentalTCPCloseCanRetainInstalledFlow(t *testing.T) {
 	providerA.mu.Lock()
 	defer providerA.mu.Unlock()
 	if _, ok := providerA.flows[123]; !ok {
-		t.Fatal("retained experimental_tcp flow was deleted on close")
+		t.Fatal("retained tix_tcp flow was deleted on close")
 	}
 }
 
-func TestExperimentalTCPSessionEnqueueAfterCloseDoesNotPanic(t *testing.T) {
+func TestTIXTCPSessionEnqueueAfterCloseDoesNotPanic(t *testing.T) {
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	session := newSession(providerA, nil, 123, "ix-b", "server", dataplane.CryptoPlacementUserspace)
 	session.closeInput()
 	session.enqueue([]byte("late-frame"))
 }
 
-func TestExperimentalTCPRejectsUnavailableKernelCrypto(t *testing.T) {
+func TestTIXTCPRejectsUnavailableKernelCrypto(t *testing.T) {
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	transportImpl := New(providerA, Options{
 		CryptoPlacement: func() dataplane.CryptoPlacement {
@@ -2703,7 +2703,7 @@ func TestExperimentalTCPRejectsUnavailableKernelCrypto(t *testing.T) {
 		Endpoints: []transport.Endpoint{
 			{
 				Name:      core.EndpointID("server"),
-				Transport: transport.ProtocolExperimentalTCP,
+				Transport: transport.ProtocolTIXTCP,
 				Address:   "ix-b-underlay:443",
 			},
 		},
@@ -2713,7 +2713,7 @@ func TestExperimentalTCPRejectsUnavailableKernelCrypto(t *testing.T) {
 	}
 }
 
-func TestSecureTransportKernelCryptoOffloadOverExperimentalTCPProvider(t *testing.T) {
+func TestSecureTransportKernelCryptoOffloadOverTIXTCPProvider(t *testing.T) {
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
 	providerA.kernelCrypto = true
 	providerB.kernelCrypto = true
@@ -2730,7 +2730,7 @@ func TestSecureTransportKernelCryptoOffloadOverExperimentalTCPProvider(t *testin
 
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "ix-b-underlay:443",
 		Enabled:   true,
 	}, nil)
@@ -2756,7 +2756,7 @@ func TestSecureTransportKernelCryptoOffloadOverExperimentalTCPProvider(t *testin
 		Endpoints: []transport.Endpoint{
 			{
 				Name:      core.EndpointID("server"),
-				Transport: transport.ProtocolExperimentalTCP,
+				Transport: transport.ProtocolTIXTCP,
 				Address:   "ix-b-underlay:443",
 			},
 		},
@@ -2798,7 +2798,7 @@ func TestSecureTransportKernelCryptoOffloadOverExperimentalTCPProvider(t *testin
 	}
 }
 
-func TestSecureTransportKernelCryptoOffloadAES128OverExperimentalTCPProvider(t *testing.T) {
+func TestSecureTransportKernelCryptoOffloadAES128OverTIXTCPProvider(t *testing.T) {
 	providerA, providerB := newProviderPair("ix-a", "ix-b")
 	providerA.kernelCrypto = true
 	providerB.kernelCrypto = true
@@ -2820,7 +2820,7 @@ func TestSecureTransportKernelCryptoOffloadAES128OverExperimentalTCPProvider(t *
 
 	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("server"),
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 		Listen:    "ix-b-underlay:443",
 		Enabled:   true,
 	}, nil)
@@ -2842,7 +2842,7 @@ func TestSecureTransportKernelCryptoOffloadAES128OverExperimentalTCPProvider(t *
 		DomainID: core.DomainID("lab.local"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 			Address:   "ix-b-underlay:443",
 		}},
 	}, nil)
@@ -2879,7 +2879,7 @@ func TestSecureTransportKernelCryptoOffloadAES128OverExperimentalTCPProvider(t *
 	}
 }
 
-func TestExperimentalTCPOffloadClearsDataplaneSpec(t *testing.T) {
+func TestTIXTCPOffloadClearsDataplaneSpec(t *testing.T) {
 	provider := &capturingCryptoInstallerProvider{}
 	session := newSession(provider, nil, 42, core.IXID("ix-b"), core.EndpointID("server"), dataplane.CryptoPlacementKernel)
 	spec := transport.CryptoOffloadSpec{
@@ -2903,8 +2903,8 @@ func TestExperimentalTCPOffloadClearsDataplaneSpec(t *testing.T) {
 		t.Fatalf("captured specs = %d, want 1", len(provider.specs))
 	}
 	captured := provider.specs[0]
-	if captured.ReplayWindow != experimentalTCPKernelCryptoReplayWindow {
-		t.Fatalf("replay window = %d, want %d", captured.ReplayWindow, experimentalTCPKernelCryptoReplayWindow)
+	if captured.ReplayWindow != tixTCPKernelCryptoReplayWindow {
+		t.Fatalf("replay window = %d, want %d", captured.ReplayWindow, tixTCPKernelCryptoReplayWindow)
 	}
 	requireZeroedBytes(t, "send key", captured.SendKey)
 	requireZeroedBytes(t, "send iv", captured.SendIV)
@@ -2915,30 +2915,30 @@ func TestExperimentalTCPOffloadClearsDataplaneSpec(t *testing.T) {
 	}
 }
 
-func TestExperimentalTCPSessionSetPeerEndpointAnnotatesFlow(t *testing.T) {
+func TestTIXTCPSessionSetPeerEndpointAnnotatesFlow(t *testing.T) {
 	providerA, _ := newProviderPair("ix-a", "ix-b")
 	flowID := uint64(99)
-	providerA.flows[flowID] = dataplane.ExperimentalTCPFlow{
+	providerA.flows[flowID] = dataplane.TIXTCPFlow{
 		ID:       flowID,
 		Peer:     core.IXID("ix-a"),
-		Endpoint: core.EndpointID("ix-b-experimental_tcp"),
+		Endpoint: core.EndpointID("ix-b-tix_tcp"),
 	}
-	session := newSession(providerA, nil, flowID, core.IXID("ix-a"), core.EndpointID("ix-b-experimental_tcp"), dataplane.CryptoPlacementUserspace)
+	session := newSession(providerA, nil, flowID, core.IXID("ix-a"), core.EndpointID("ix-b-tix_tcp"), dataplane.CryptoPlacementUserspace)
 
-	session.SetPeerEndpoint(core.IXID("ix-a"), core.EndpointID("ix-a-experimental_tcp"))
+	session.SetPeerEndpoint(core.IXID("ix-a"), core.EndpointID("ix-a-tix_tcp"))
 
 	providerA.mu.Lock()
 	flow := providerA.flows[flowID]
 	providerA.mu.Unlock()
-	if flow.Peer != "ix-a" || flow.Endpoint != "ix-a-experimental_tcp" {
-		t.Fatalf("annotated flow identity = peer:%q endpoint:%q, want ix-a/ix-a-experimental_tcp", flow.Peer, flow.Endpoint)
+	if flow.Peer != "ix-a" || flow.Endpoint != "ix-a-tix_tcp" {
+		t.Fatalf("annotated flow identity = peer:%q endpoint:%q, want ix-a/ix-a-tix_tcp", flow.Peer, flow.Endpoint)
 	}
 }
 
-func TestExperimentalTCPUnavailableErrorsIncludeFastPathFallback(t *testing.T) {
+func TestTIXTCPUnavailableErrorsIncludeFastPathFallback(t *testing.T) {
 	provider := &fakeProvider{
-		subs:             make(map[chan dataplane.ExperimentalTCPFrame]struct{}),
-		flows:            make(map[uint64]dataplane.ExperimentalTCPFlow),
+		subs:             make(map[chan dataplane.TIXTCPFrame]struct{}),
+		flows:            make(map[uint64]dataplane.TIXTCPFlow),
 		cryptos:          make(map[uint64]fakeCrypto),
 		availableSet:     true,
 		available:        false,
@@ -2952,13 +2952,13 @@ func TestExperimentalTCPUnavailableErrorsIncludeFastPathFallback(t *testing.T) {
 		Endpoints: []transport.Endpoint{{
 			Name:      "exp",
 			Address:   "198.18.0.2:13000",
-			Transport: transport.ProtocolExperimentalTCP,
+			Transport: transport.ProtocolTIXTCP,
 		}},
 	}
 	endpoint := transport.Endpoint{
 		Name:      "exp",
 		Listen:    "127.0.0.1:0",
-		Transport: transport.ProtocolExperimentalTCP,
+		Transport: transport.ProtocolTIXTCP,
 	}
 
 	probe := transportImpl.Probe(context.Background(), peer)
@@ -2977,8 +2977,8 @@ type fakeProvider struct {
 	local            core.IXID
 	remote           *fakeProvider
 	mu               sync.Mutex
-	subs             map[chan dataplane.ExperimentalTCPFrame]struct{}
-	flows            map[uint64]dataplane.ExperimentalTCPFlow
+	subs             map[chan dataplane.TIXTCPFrame]struct{}
+	flows            map[uint64]dataplane.TIXTCPFlow
 	cryptos          map[uint64]fakeCrypto
 	kernelCrypto     bool
 	statusProvider   string
@@ -2990,20 +2990,20 @@ type fakeProvider struct {
 	payloadMax       int
 	sealBeforeMax    int
 	lastWire         []byte
-	frames           []dataplane.ExperimentalTCPFrame
+	frames           []dataplane.TIXTCPFrame
 	submitted        atomic.Uint64
 	received         atomic.Uint64
 }
 
 type capturingCryptoInstallerProvider struct {
-	specs []dataplane.ExperimentalTCPCryptoSpec
+	specs []dataplane.TIXTCPCryptoSpec
 }
 
-func (provider *capturingCryptoInstallerProvider) ExperimentalTCPStatus(ctx context.Context) (dataplane.ExperimentalTCPStatus, error) {
+func (provider *capturingCryptoInstallerProvider) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatus, error) {
 	if err := ctx.Err(); err != nil {
-		return dataplane.ExperimentalTCPStatus{}, err
+		return dataplane.TIXTCPStatus{}, err
 	}
-	return dataplane.ExperimentalTCPStatus{
+	return dataplane.TIXTCPStatus{
 		Available:       true,
 		UserspaceCrypto: true,
 		KernelCrypto:    true,
@@ -3012,22 +3012,22 @@ func (provider *capturingCryptoInstallerProvider) ExperimentalTCPStatus(ctx cont
 	}, nil
 }
 
-func (provider *capturingCryptoInstallerProvider) InstallExperimentalTCPFlows(ctx context.Context, flows []dataplane.ExperimentalTCPFlow) error {
+func (provider *capturingCryptoInstallerProvider) InstallTIXTCPFlows(ctx context.Context, flows []dataplane.TIXTCPFlow) error {
 	return ctx.Err()
 }
 
-func (provider *capturingCryptoInstallerProvider) SubmitExperimentalTCPFrame(ctx context.Context, frame dataplane.ExperimentalTCPFrame) error {
+func (provider *capturingCryptoInstallerProvider) SubmitTIXTCPFrame(ctx context.Context, frame dataplane.TIXTCPFrame) error {
 	return ctx.Err()
 }
 
-func (provider *capturingCryptoInstallerProvider) SubscribeExperimentalTCP(ctx context.Context, buffer int) (dataplane.ExperimentalTCPSubscription, error) {
+func (provider *capturingCryptoInstallerProvider) SubscribeTIXTCP(ctx context.Context, buffer int) (dataplane.TIXTCPSubscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return nil, fmt.Errorf("capturing provider does not support subscriptions")
 }
 
-func (provider *capturingCryptoInstallerProvider) InstallExperimentalTCPCrypto(ctx context.Context, specs []dataplane.ExperimentalTCPCryptoSpec) error {
+func (provider *capturingCryptoInstallerProvider) InstallTIXTCPCrypto(ctx context.Context, specs []dataplane.TIXTCPCryptoSpec) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -3044,7 +3044,7 @@ func requireZeroedBytes(t *testing.T, name string, payload []byte) {
 	}
 }
 
-func experimentalTCPTestCryptoOffloadSpec() transport.CryptoOffloadSpec {
+func tixTCPTestCryptoOffloadSpec() transport.CryptoOffloadSpec {
 	return transport.CryptoOffloadSpec{
 		Suite:      securetransport.SuiteAES256GCMX25519,
 		WireFormat: transport.CryptoWireFormatTrustIXSecureDataV1,
@@ -3073,16 +3073,16 @@ func eventually(t *testing.T, ctx context.Context, check func() bool) {
 }
 
 func newProviderPair(a, b core.IXID) (*fakeProvider, *fakeProvider) {
-	providerA := &fakeProvider{local: a, subs: make(map[chan dataplane.ExperimentalTCPFrame]struct{}), flows: make(map[uint64]dataplane.ExperimentalTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
-	providerB := &fakeProvider{local: b, subs: make(map[chan dataplane.ExperimentalTCPFrame]struct{}), flows: make(map[uint64]dataplane.ExperimentalTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
+	providerA := &fakeProvider{local: a, subs: make(map[chan dataplane.TIXTCPFrame]struct{}), flows: make(map[uint64]dataplane.TIXTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
+	providerB := &fakeProvider{local: b, subs: make(map[chan dataplane.TIXTCPFrame]struct{}), flows: make(map[uint64]dataplane.TIXTCPFlow), cryptos: make(map[uint64]fakeCrypto)}
 	providerA.remote = providerB
 	providerB.remote = providerA
 	return providerA, providerB
 }
 
-func (provider *fakeProvider) ExperimentalTCPStatus(ctx context.Context) (dataplane.ExperimentalTCPStatus, error) {
+func (provider *fakeProvider) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatus, error) {
 	if err := ctx.Err(); err != nil {
-		return dataplane.ExperimentalTCPStatus{}, err
+		return dataplane.TIXTCPStatus{}, err
 	}
 	provider.mu.Lock()
 	activeFlows := len(provider.flows)
@@ -3095,7 +3095,7 @@ func (provider *fakeProvider) ExperimentalTCPStatus(ctx context.Context) (datapl
 	if provider.reinjectSet {
 		reinject = provider.reinject
 	}
-	return dataplane.ExperimentalTCPStatus{
+	return dataplane.TIXTCPStatus{
 		Available:        available,
 		Provider:         provider.statusProvider,
 		UserspaceCrypto:  true,
@@ -3124,24 +3124,24 @@ func (provider *fakeProvider) supportedCrypto() []dataplane.CryptoPlacement {
 	return []dataplane.CryptoPlacement{dataplane.CryptoPlacementUserspace}
 }
 
-func (provider *fakeProvider) ExperimentalTCPPayloadMax(ctx context.Context, placement dataplane.CryptoPlacement, encrypted bool) (int, error) {
+func (provider *fakeProvider) TIXTCPPayloadMax(ctx context.Context, placement dataplane.CryptoPlacement, encrypted bool) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	return provider.payloadMax, nil
 }
 
-func (provider *fakeProvider) ExperimentalTCPSealBeforeFragmentMax(ctx context.Context, placement dataplane.CryptoPlacement) (int, error) {
+func (provider *fakeProvider) TIXTCPSealBeforeFragmentMax(ctx context.Context, placement dataplane.CryptoPlacement) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	if provider.sealBeforeMax > 0 {
 		return provider.sealBeforeMax, nil
 	}
-	return experimentalTCPKernelSealBeforeMax, nil
+	return tixTCPKernelSealBeforeMax, nil
 }
 
-func (provider *fakeProvider) InstallExperimentalTCPFlows(ctx context.Context, flows []dataplane.ExperimentalTCPFlow) error {
+func (provider *fakeProvider) InstallTIXTCPFlows(ctx context.Context, flows []dataplane.TIXTCPFlow) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -3156,7 +3156,7 @@ func (provider *fakeProvider) InstallExperimentalTCPFlows(ctx context.Context, f
 	return nil
 }
 
-func (provider *fakeProvider) DeleteExperimentalTCPFlows(ctx context.Context, flowIDs []uint64) error {
+func (provider *fakeProvider) DeleteTIXTCPFlows(ctx context.Context, flowIDs []uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -3169,7 +3169,7 @@ func (provider *fakeProvider) DeleteExperimentalTCPFlows(ctx context.Context, fl
 	return nil
 }
 
-func (provider *fakeProvider) SetExperimentalTCPFlowPeer(ctx context.Context, flowID uint64, peer core.IXID, endpoint core.EndpointID) error {
+func (provider *fakeProvider) SetTIXTCPFlowPeer(ctx context.Context, flowID uint64, peer core.IXID, endpoint core.EndpointID) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -3186,7 +3186,7 @@ func (provider *fakeProvider) SetExperimentalTCPFlowPeer(ctx context.Context, fl
 	return nil
 }
 
-func (provider *fakeProvider) InstallExperimentalTCPCrypto(ctx context.Context, specs []dataplane.ExperimentalTCPCryptoSpec) error {
+func (provider *fakeProvider) InstallTIXTCPCrypto(ctx context.Context, specs []dataplane.TIXTCPCryptoSpec) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -3205,7 +3205,7 @@ func (provider *fakeProvider) InstallExperimentalTCPCrypto(ctx context.Context, 
 	return nil
 }
 
-func (provider *fakeProvider) SubmitExperimentalTCPFrame(ctx context.Context, frame dataplane.ExperimentalTCPFrame) error {
+func (provider *fakeProvider) SubmitTIXTCPFrame(ctx context.Context, frame dataplane.TIXTCPFrame) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -3236,39 +3236,39 @@ func (provider *fakeProvider) SubmitExperimentalTCPFrame(ctx context.Context, fr
 		return nil
 	}
 	inbound := outbound
-	inbound.Direction = dataplane.ExperimentalTCPInbound
+	inbound.Direction = dataplane.TIXTCPInbound
 	inbound.Peer = provider.local
 	provider.remote.deliver(inbound)
 	return nil
 }
 
-func (provider *fakeProvider) SubmitExperimentalTCPFrames(ctx context.Context, frames []dataplane.ExperimentalTCPFrame) error {
+func (provider *fakeProvider) SubmitTIXTCPFrames(ctx context.Context, frames []dataplane.TIXTCPFrame) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	for _, frame := range frames {
-		if err := provider.SubmitExperimentalTCPFrame(ctx, frame); err != nil {
+		if err := provider.SubmitTIXTCPFrame(ctx, frame); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (provider *fakeProvider) SubscribeExperimentalTCP(ctx context.Context, buffer int) (dataplane.ExperimentalTCPSubscription, error) {
+func (provider *fakeProvider) SubscribeTIXTCP(ctx context.Context, buffer int) (dataplane.TIXTCPSubscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if buffer <= 0 {
 		buffer = 16
 	}
-	events := make(chan dataplane.ExperimentalTCPFrame, buffer)
+	events := make(chan dataplane.TIXTCPFrame, buffer)
 	provider.mu.Lock()
 	provider.subs[events] = struct{}{}
 	provider.mu.Unlock()
 	return &fakeSubscription{provider: provider, events: events}, nil
 }
 
-func (provider *fakeProvider) deliver(frame dataplane.ExperimentalTCPFrame) {
+func (provider *fakeProvider) deliver(frame dataplane.TIXTCPFrame) {
 	provider.received.Add(1)
 	provider.mu.Lock()
 	if frame.Encrypted && frame.CryptoPlacement == dataplane.CryptoPlacementKernel {
@@ -3300,10 +3300,10 @@ func (provider *fakeProvider) lastWirePayload() []byte {
 	return append([]byte(nil), provider.lastWire...)
 }
 
-func (provider *fakeProvider) submittedFrames() []dataplane.ExperimentalTCPFrame {
+func (provider *fakeProvider) submittedFrames() []dataplane.TIXTCPFrame {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	return append([]dataplane.ExperimentalTCPFrame(nil), provider.frames...)
+	return append([]dataplane.TIXTCPFrame(nil), provider.frames...)
 }
 
 type fakeCrypto struct {
@@ -3315,7 +3315,7 @@ type fakeCrypto struct {
 	recvAEAD cipher.AEAD
 }
 
-func newFakeCrypto(spec dataplane.ExperimentalTCPCryptoSpec) (fakeCrypto, error) {
+func newFakeCrypto(spec dataplane.TIXTCPCryptoSpec) (fakeCrypto, error) {
 	sendAEAD, err := fakeAEAD(spec.SendKey)
 	if err != nil {
 		return fakeCrypto{}, err
@@ -3393,7 +3393,7 @@ func fakeNonce(prefix []byte, seq uint64) []byte {
 	return nonce
 }
 
-func tlsCertificateForExperimentalTCPTest(bundle pki.Bundle) tls.Certificate {
+func tlsCertificateForTIXTCPTest(bundle pki.Bundle) tls.Certificate {
 	return tls.Certificate{
 		Certificate: [][]byte{bundle.Cert.Raw},
 		PrivateKey:  bundle.Key,
@@ -3401,7 +3401,7 @@ func tlsCertificateForExperimentalTCPTest(bundle pki.Bundle) tls.Certificate {
 	}
 }
 
-func experimentalTCPLocalTCPAddr(t *testing.T) string {
+func tixTCPLocalTCPAddr(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -3414,7 +3414,7 @@ func experimentalTCPLocalTCPAddr(t *testing.T) string {
 	return addr
 }
 
-func ipv4PacketForExperimentalTCPTest(length int) []byte {
+func ipv4PacketForTIXTCPTest(length int) []byte {
 	if length < 20 {
 		length = 20
 	}
@@ -3428,8 +3428,8 @@ func ipv4PacketForExperimentalTCPTest(length int) []byte {
 	return packet
 }
 
-func experimentalTCPTestTIXB(packets ...[]byte) []byte {
-	batch := []byte{'T', 'I', 'X', 'B', experimentalTCPTIXBVersion, 0, byte(len(packets) >> 8), byte(len(packets))}
+func tixTCPTestTIXB(packets ...[]byte) []byte {
+	batch := []byte{'T', 'I', 'X', 'B', tixTCPTIXBVersion, 0, byte(len(packets) >> 8), byte(len(packets))}
 	for _, packet := range packets {
 		batch = binary.BigEndian.AppendUint16(batch, uint16(len(packet)))
 		batch = append(batch, packet...)
@@ -3439,11 +3439,11 @@ func experimentalTCPTestTIXB(packets ...[]byte) []byte {
 
 type fakeSubscription struct {
 	provider *fakeProvider
-	events   chan dataplane.ExperimentalTCPFrame
+	events   chan dataplane.TIXTCPFrame
 	once     sync.Once
 }
 
-func (subscription *fakeSubscription) Events() <-chan dataplane.ExperimentalTCPFrame {
+func (subscription *fakeSubscription) Events() <-chan dataplane.TIXTCPFrame {
 	return subscription.events
 }
 

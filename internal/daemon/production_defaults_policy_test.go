@@ -20,7 +20,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 		row := row
 		seenGate[row.GateFamily] = true
 		t.Run(strings.ReplaceAll(productionDefaultRuntimeKey(row), ":", "_"), func(t *testing.T) {
-			if row.GateFamily == "owdeb_full_kmod" || row.GateFamily == "owdeb_exp_tcp_full_kmod" {
+			if row.GateFamily == "owdeb_full_kmod" || row.GateFamily == "owdeb_tix_tcp_full_kmod" {
 				t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
 				t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
 			}
@@ -32,7 +32,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 			switch row.GateFamily {
 			case "userspace", "userspace_tc":
 				assertProductionDefaultNoKernelFastPath(t, row, spec)
-			case "full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
+			case "full_kmod", "owdeb_full_kmod", "tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
 				if !spec.KernelDatapathFullPlaintext {
 					t.Fatalf("%s should select full-kmod plaintext ownership: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
@@ -40,9 +40,9 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 					spec.KernelUDPTXSecureDirect || spec.KernelUDPRXSecureDirect ||
 					spec.KernelUDPSecureDirectTrustInnerChecksums || spec.KernelUDPSecureRouteGSO ||
 					spec.KernelUDPTXSecureDirectKfuncSeal || spec.KernelUDPTXSecureDirectSKBSealKfunc ||
-					spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync ||
-					spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker ||
-					spec.ExperimentalTCPPlainSkipSequence || spec.ExperimentalTCPPlainACKOnly ||
+					spec.TIXTCPTXDirect || spec.TIXTCPRouteGSOAsync ||
+					spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker ||
+					spec.TIXTCPPlainSkipSequence || spec.TIXTCPPlainACKOnly ||
 					spec.KernelDatapathSuppressLegacyRXWorker {
 					t.Fatalf("%s should not mix TC/direct/route-GSO paths with full-kmod plaintext: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
@@ -56,9 +56,9 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 				if spec.KernelUDPTXSecureDirect || spec.KernelUDPRXSecureDirect ||
 					spec.KernelUDPSecureDirectTrustInnerChecksums || spec.KernelUDPSecureRouteGSO ||
 					spec.KernelUDPTXSecureDirectKfuncSeal || spec.KernelUDPTXSecureDirectSKBSealKfunc ||
-					spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync ||
-					spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker ||
-					spec.ExperimentalTCPPlainSkipSequence || spec.ExperimentalTCPPlainACKOnly ||
+					spec.TIXTCPTXDirect || spec.TIXTCPRouteGSOAsync ||
+					spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker ||
+					spec.TIXTCPPlainSkipSequence || spec.TIXTCPPlainACKOnly ||
 					spec.KernelDatapathFullPlaintext {
 					t.Fatalf("%s should not enable secure/full-kmod/experimental route-GSO paths: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
@@ -68,33 +68,33 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 				}
 				if spec.KernelUDPTXDirectOnly || spec.KernelUDPTCOnlyProvider ||
 					spec.KernelUDPTXSecureDirectKfuncSeal || spec.KernelUDPTXSecureDirectSKBSealKfunc ||
-					spec.ExperimentalTCPTXDirect || spec.ExperimentalTCPRouteGSOAsync ||
-					spec.ExperimentalTCPRouteGSOSync || spec.ExperimentalTCPRouteXmitWorker ||
-					spec.ExperimentalTCPPlainSkipSequence || spec.ExperimentalTCPPlainACKOnly ||
+					spec.TIXTCPTXDirect || spec.TIXTCPRouteGSOAsync ||
+					spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker ||
+					spec.TIXTCPPlainSkipSequence || spec.TIXTCPPlainACKOnly ||
 					spec.KernelDatapathFullPlaintext || spec.KernelDatapathSuppressLegacyRXWorker {
 					t.Fatalf("%s should not enable plaintext/full-kmod/experimental route-GSO: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
-			case "secure_exp_tcp_kernel":
-				if !spec.ExperimentalTCPTXDirect || !spec.ExperimentalTCPRouteGSOAsync ||
-					!spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker ||
+			case "secure_tix_tcp_kernel":
+				if !spec.TIXTCPTXDirect || !spec.TIXTCPRouteGSOAsync ||
+					!spec.TIXTCPRouteGSOSync || !spec.TIXTCPRouteXmitWorker ||
 					!spec.KernelUDPTXSecureDirect || !spec.KernelUDPRXSecureDirect ||
 					!spec.KernelUDPSecureDirectTrustInnerChecksums ||
 					!spec.KernelUDPTXDirectOnly || !spec.KernelUDPTCOnlyProvider {
-					t.Fatalf("%s should select secure experimental_tcp kernel route-GSO path: spec=%#v", productionDefaultRuntimeKey(row), spec)
+					t.Fatalf("%s should select secure tix_tcp kernel route-GSO path: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
 				if spec.KernelUDPTXSecureDirectKfuncSeal || spec.KernelUDPTXSecureDirectSKBSealKfunc ||
 					spec.KernelDatapathFullPlaintext || spec.KernelDatapathSuppressLegacyRXWorker ||
-					spec.KernelUDPSecureRouteGSO || spec.ExperimentalTCPPlainSkipSequence ||
-					spec.ExperimentalTCPPlainACKOnly {
+					spec.KernelUDPSecureRouteGSO || spec.TIXTCPPlainSkipSequence ||
+					spec.TIXTCPPlainACKOnly {
 					t.Fatalf("%s should not enable plaintext/full-kmod/kernel_udp route-GSO shortcuts: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
 			case "route_gso":
-				if !spec.ExperimentalTCPTXDirect || !spec.KernelUDPTXDirectOnly || !spec.KernelUDPTCOnlyProvider ||
-					!spec.ExperimentalTCPRouteGSOAsync ||
-					!spec.ExperimentalTCPRouteGSOSync || !spec.ExperimentalTCPRouteXmitWorker ||
-					!spec.ExperimentalTCPPlainSkipSequence || !spec.ExperimentalTCPPlainACKOnly ||
+				if !spec.TIXTCPTXDirect || !spec.KernelUDPTXDirectOnly || !spec.KernelUDPTCOnlyProvider ||
+					!spec.TIXTCPRouteGSOAsync ||
+					!spec.TIXTCPRouteGSOSync || !spec.TIXTCPRouteXmitWorker ||
+					!spec.TIXTCPPlainSkipSequence || !spec.TIXTCPPlainACKOnly ||
 					!spec.KernelDatapathSuppressLegacyRXWorker {
-					t.Fatalf("%s should select plaintext experimental_tcp route-GSO path: spec=%#v", productionDefaultRuntimeKey(row), spec)
+					t.Fatalf("%s should select plaintext tix_tcp route-GSO path: spec=%#v", productionDefaultRuntimeKey(row), spec)
 				}
 				if spec.KernelUDPTXSecureDirect || spec.KernelUDPRXSecureDirect || spec.KernelUDPSecureDirectTrustInnerChecksums ||
 					spec.KernelUDPSecureRouteGSO || spec.KernelUDPTXSecureDirectKfuncSeal ||
@@ -106,7 +106,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 			}
 		})
 	}
-	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod", "tc_direct", "secure_kudp", "secure_exp_tcp_kernel", "route_gso"} {
+	for _, gate := range []string{"userspace", "userspace_tc", "full_kmod", "owdeb_full_kmod", "tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod", "tc_direct", "secure_kudp", "secure_tix_tcp_kernel", "route_gso"} {
 		if !seenGate[gate] {
 			t.Fatalf("production defaults missing cross-host runtime gate %q", gate)
 		}
@@ -116,7 +116,7 @@ func TestCrossHostProductionDefaultsMapToRuntimeAttachSpec(t *testing.T) {
 func TestOpenWrtProductionFullKmodDefaultRequiresDedicatedRuntimeGate(t *testing.T) {
 	rows := readProductionTransportDefaultRowsForProvisionTest(t)
 	found := map[string]bool{}
-	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_exp_tcp_full_kmod"} {
+	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_tix_tcp_full_kmod"} {
 		gateFamily := gateFamily
 		t.Run(gateFamily, func(t *testing.T) {
 			for _, row := range rows {
@@ -137,7 +137,7 @@ func TestOpenWrtProductionFullKmodDefaultRequiresDedicatedRuntimeGate(t *testing
 			}
 		})
 	}
-	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_exp_tcp_full_kmod"} {
+	for _, gateFamily := range []string{"owdeb_full_kmod", "owdeb_tix_tcp_full_kmod"} {
 		if !found[gateFamily] {
 			t.Fatalf("production defaults missing OpenWrt-Debian full-kmod row for %s", gateFamily)
 		}
@@ -147,7 +147,7 @@ func TestOpenWrtProductionFullKmodDefaultRequiresDedicatedRuntimeGate(t *testing
 func TestEmptyTransportPolicyRuntimeAttachSpecUsesProductionCompatibilityDefaults(t *testing.T) {
 	for _, protocol := range []transport.Protocol{
 		transport.ProtocolUDP,
-		transport.ProtocolExperimentalTCP,
+		transport.ProtocolTIXTCP,
 	} {
 		protocol := protocol
 		t.Run(string(protocol), func(t *testing.T) {
@@ -199,14 +199,14 @@ func desiredForProductionDefaultRuntimeTest(row productionTransportDefaultRowFor
 	}
 	switch row.GateFamily {
 	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod",
-		"exp_tcp_full_kmod", "dd_exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod":
+		"tix_tcp_full_kmod", "dd_tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod":
 		desired.KernelModules.CapabilityProfile = config.KernelCapabilityProfileFullPlaintext
 		desired.KernelModules.Datapath = config.KernelDatapathRuntimeConfig{
-			RXStage:                      config.KernelDatapathRXStageWorker,
-			RXWorker:                     true,
-			TXPlaintext:                  true,
-			FullPlaintext:                true,
-			RXWorkerAllowExperimentalTCP: true,
+			RXStage:             config.KernelDatapathRXStageWorker,
+			RXWorker:            true,
+			TXPlaintext:         true,
+			FullPlaintext:       true,
+			RXWorkerAllowTIXTCP: true,
 		}
 	}
 	return desired
@@ -225,9 +225,9 @@ func productionDefaultRuntimeKernelTransportMode(row productionTransportDefaultR
 		return dataplane.KernelTransportModeRequireKernel
 	}
 	switch row.GateFamily {
-	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod", "exp_tcp_full_kmod", "owdeb_exp_tcp_full_kmod",
+	case "full_kmod", "dd_full_kmod", "owdeb_full_kmod", "tix_tcp_full_kmod", "owdeb_tix_tcp_full_kmod",
 		"secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
-		"secure_exp_tcp_kernel", "dd_secure_exp_tcp_kernel", "owdeb_secure_exp_tcp_kernel",
+		"secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel",
 		"route_gso", "dd_route_gso", "owdeb_route_gso",
 		"tc_direct":
 		return dataplane.KernelTransportModeRequireKernel
@@ -263,12 +263,12 @@ type productionDefaultNoKernelFastPathFields struct {
 	KernelUDPSecureRouteGSO              bool
 	KernelUDPTXSecureDirectKfuncSeal     bool
 	KernelUDPTXSecureDirectSKBSealKfunc  bool
-	ExperimentalTCPTXDirect              bool
-	ExperimentalTCPRouteGSOAsync         bool
-	ExperimentalTCPRouteGSOSync          bool
-	ExperimentalTCPRouteXmitWorker       bool
-	ExperimentalTCPPlainSkipSequence     bool
-	ExperimentalTCPPlainACKOnly          bool
+	TIXTCPTXDirect                       bool
+	TIXTCPRouteGSOAsync                  bool
+	TIXTCPRouteGSOSync                   bool
+	TIXTCPRouteXmitWorker                bool
+	TIXTCPPlainSkipSequence              bool
+	TIXTCPPlainACKOnly                   bool
 	KernelDatapathFullPlaintext          bool
 	KernelDatapathSuppressLegacyRXWorker bool
 }
@@ -283,12 +283,12 @@ func productionDefaultNoKernelFastPathFieldsFromSpec(spec dataplane.AttachSpec) 
 		KernelUDPSecureRouteGSO:              spec.KernelUDPSecureRouteGSO,
 		KernelUDPTXSecureDirectKfuncSeal:     spec.KernelUDPTXSecureDirectKfuncSeal,
 		KernelUDPTXSecureDirectSKBSealKfunc:  spec.KernelUDPTXSecureDirectSKBSealKfunc,
-		ExperimentalTCPTXDirect:              spec.ExperimentalTCPTXDirect,
-		ExperimentalTCPRouteGSOAsync:         spec.ExperimentalTCPRouteGSOAsync,
-		ExperimentalTCPRouteGSOSync:          spec.ExperimentalTCPRouteGSOSync,
-		ExperimentalTCPRouteXmitWorker:       spec.ExperimentalTCPRouteXmitWorker,
-		ExperimentalTCPPlainSkipSequence:     spec.ExperimentalTCPPlainSkipSequence,
-		ExperimentalTCPPlainACKOnly:          spec.ExperimentalTCPPlainACKOnly,
+		TIXTCPTXDirect:                       spec.TIXTCPTXDirect,
+		TIXTCPRouteGSOAsync:                  spec.TIXTCPRouteGSOAsync,
+		TIXTCPRouteGSOSync:                   spec.TIXTCPRouteGSOSync,
+		TIXTCPRouteXmitWorker:                spec.TIXTCPRouteXmitWorker,
+		TIXTCPPlainSkipSequence:              spec.TIXTCPPlainSkipSequence,
+		TIXTCPPlainACKOnly:                   spec.TIXTCPPlainACKOnly,
 		KernelDatapathFullPlaintext:          spec.KernelDatapathFullPlaintext,
 		KernelDatapathSuppressLegacyRXWorker: spec.KernelDatapathSuppressLegacyRXWorker,
 	}
@@ -303,12 +303,12 @@ func (fields productionDefaultNoKernelFastPathFields) anyKernelFastPath() bool {
 		fields.KernelUDPSecureRouteGSO ||
 		fields.KernelUDPTXSecureDirectKfuncSeal ||
 		fields.KernelUDPTXSecureDirectSKBSealKfunc ||
-		fields.ExperimentalTCPTXDirect ||
-		fields.ExperimentalTCPRouteGSOAsync ||
-		fields.ExperimentalTCPRouteGSOSync ||
-		fields.ExperimentalTCPRouteXmitWorker ||
-		fields.ExperimentalTCPPlainSkipSequence ||
-		fields.ExperimentalTCPPlainACKOnly ||
+		fields.TIXTCPTXDirect ||
+		fields.TIXTCPRouteGSOAsync ||
+		fields.TIXTCPRouteGSOSync ||
+		fields.TIXTCPRouteXmitWorker ||
+		fields.TIXTCPPlainSkipSequence ||
+		fields.TIXTCPPlainACKOnly ||
 		fields.KernelDatapathFullPlaintext ||
 		fields.KernelDatapathSuppressLegacyRXWorker
 }

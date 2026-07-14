@@ -88,8 +88,8 @@ func TestThreeIXMatrixSmokePinsFastPathTransportPolicy(t *testing.T) {
 		`transport_datapath="${TRUSTIX_3IX_E2E_TRANSPORT_DATAPATH:-}"`,
 		`transport_encryption="${TRUSTIX_3IX_E2E_TRANSPORT_ENCRYPTION:-${TRUSTIX_3IX_E2E_ENCRYPTION:-secure}}"`,
 		"transport_policy_profile()",
-		"experimental_tcp|kernel_udp|gre|ipip|vxlan) printf 'performance\\n'",
-		"experimental_tcp|kernel_udp|gre|ipip|vxlan) printf 'tc_xdp\\n'",
+		"tix_tcp|kernel_udp|gre|ipip|vxlan) printf 'performance\\n'",
+		"tix_tcp|kernel_udp|gre|ipip|vxlan) printf 'tc_xdp\\n'",
 		"profile: $(transport_policy_profile)",
 		"datapath: $(transport_policy_datapath)",
 		"encryption: $(transport_policy_encryption)",
@@ -218,7 +218,7 @@ func TestLinuxE2ERequiresKernelTransportForAFXDPTransports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read linux-e2e-smoke.sh: %v", err)
 	}
-	want := "if is_af_xdp_transport || is_iptunnel_transport || experimental_tcp_direct_enabled || kernel_plaintext_direct_fastpath_enabled; then"
+	want := "if is_af_xdp_transport || is_iptunnel_transport || tix_tcp_direct_enabled || kernel_plaintext_direct_fastpath_enabled; then"
 	if !strings.Contains(string(payload), want) {
 		t.Fatalf("linux-e2e-smoke.sh must require kernel transport for AF_XDP transports with %q", want)
 	}

@@ -47,24 +47,24 @@ func TestEffectiveKernelTransportModeDisablesEmptyPolicyForUserspaceUDP(t *testi
 	}
 }
 
-func TestEffectiveKernelTransportModeDisablesEmptyPolicyForUserspaceExperimentalTCP(t *testing.T) {
+func TestEffectiveKernelTransportModeDisablesEmptyPolicyForUserspaceTIXTCP(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Candidates: []core.EndpointID{"exp-a"},
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
 
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeDisabled {
-		t.Fatalf("kernel transport mode = %q, want disabled for empty userspace experimental_tcp policy", got)
+		t.Fatalf("kernel transport mode = %q, want disabled for empty userspace tix_tcp policy", got)
 	}
 }
 
-func TestEffectiveKernelTransportModePreservesExplicitAutoForUserspaceExperimentalTCP(t *testing.T) {
+func TestEffectiveKernelTransportModePreservesExplicitAutoForUserspaceTIXTCP(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeAuto)},
@@ -72,13 +72,13 @@ func TestEffectiveKernelTransportModePreservesExplicitAutoForUserspaceExperiment
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
 
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
-		t.Fatalf("kernel transport mode = %q, want explicit auto for userspace experimental_tcp policy", got)
+		t.Fatalf("kernel transport mode = %q, want explicit auto for userspace tix_tcp policy", got)
 	}
 }
 
@@ -187,7 +187,7 @@ func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoUDP(t *testin
 	}
 }
 
-func TestEffectiveKernelTransportModeDisablesAutoForSecureUserspaceExperimentalTCP(t *testing.T) {
+func TestEffectiveKernelTransportModeDisablesAutoForSecureUserspaceTIXTCP(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -198,20 +198,20 @@ func TestEffectiveKernelTransportModeDisablesAutoForSecureUserspaceExperimentalT
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
 
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeDisabled {
-		t.Fatalf("kernel transport mode = %q, want disabled for secure userspace-crypto experimental_tcp", got)
+		t.Fatalf("kernel transport mode = %q, want disabled for secure userspace-crypto tix_tcp", got)
 	}
-	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason == "" {
-		t.Fatal("experimental_tcp fast path disabled reason is empty")
+	if reason := tixTCPFastPathDisabledReasonForDesired(desired); reason == "" {
+		t.Fatal("tix_tcp fast path disabled reason is empty")
 	}
 }
 
-func TestEffectiveKernelTransportModeKeepsAutoForMixedUDPAndSecureUserspaceExperimentalTCP(t *testing.T) {
+func TestEffectiveKernelTransportModeKeepsAutoForMixedUDPAndSecureUserspaceTIXTCP(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -228,7 +228,7 @@ func TestEffectiveKernelTransportModeKeepsAutoForMixedUDPAndSecureUserspaceExper
 					CryptoPlacement: string(dataplane.CryptoPlacementUserspace),
 				},
 				{
-					Transport:       string(transport.ProtocolExperimentalTCP),
+					Transport:       string(transport.ProtocolTIXTCP),
 					Profile:         config.TransportProfilePerformance,
 					Datapath:        config.TransportDatapathTCXDP,
 					Encryption:      securetransport.EncryptionSecure,
@@ -244,7 +244,7 @@ func TestEffectiveKernelTransportModeKeepsAutoForMixedUDPAndSecureUserspaceExper
 			},
 			{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			},
 		},
@@ -253,12 +253,12 @@ func TestEffectiveKernelTransportModeKeepsAutoForMixedUDPAndSecureUserspaceExper
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
 		t.Fatalf("kernel transport mode = %q, want auto so UDP/full-kmod remains available", got)
 	}
-	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason == "" {
-		t.Fatal("mixed policy should still disable only the unsafe experimental_tcp fast path")
+	if reason := tixTCPFastPathDisabledReasonForDesired(desired); reason == "" {
+		t.Fatal("mixed policy should still disable only the unsafe tix_tcp fast path")
 	}
 }
 
-func TestEffectiveKernelTransportModeKeepsExplicitRequireForSecureUserspaceExperimentalTCP(t *testing.T) {
+func TestEffectiveKernelTransportModeKeepsExplicitRequireForSecureUserspaceTIXTCP(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -270,7 +270,7 @@ func TestEffectiveKernelTransportModeKeepsExplicitRequireForSecureUserspaceExper
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
@@ -278,12 +278,12 @@ func TestEffectiveKernelTransportModeKeepsExplicitRequireForSecureUserspaceExper
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeRequireKernel {
 		t.Fatalf("kernel transport mode = %q, want explicit require_kernel", got)
 	}
-	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
-		t.Fatalf("explicit require_kernel unexpectedly disabled experimental_tcp fast path: %q", reason)
+	if reason := tixTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("explicit require_kernel unexpectedly disabled tix_tcp fast path: %q", reason)
 	}
 }
 
-func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoExperimentalTCP(t *testing.T) {
+func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoTIXTCP(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -294,23 +294,23 @@ func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoExperimentalT
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
 
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
-		t.Fatalf("kernel transport mode = %q, want auto for secure kernel-crypto experimental_tcp", got)
+		t.Fatalf("kernel transport mode = %q, want auto for secure kernel-crypto tix_tcp", got)
 	}
-	if experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
-		t.Fatal("TC-XDP secure kernel-crypto experimental_tcp should not select route-GSO")
+	if tixTCPSecureRouteGSOAsyncForDesired(desired) {
+		t.Fatal("TC-XDP secure kernel-crypto tix_tcp should not select route-GSO")
 	}
-	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
-		t.Fatalf("kernel crypto experimental_tcp unexpectedly disabled fast path: %q", reason)
+	if reason := tixTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("kernel crypto tix_tcp unexpectedly disabled fast path: %q", reason)
 	}
 }
 
-func TestEffectiveKernelTransportModeRequiresKernelForSecureKernelModuleExperimentalTCPRouteGSO(t *testing.T) {
+func TestEffectiveKernelTransportModeRequiresKernelForSecureKernelModuleTIXTCPRouteGSO(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -321,23 +321,23 @@ func TestEffectiveKernelTransportModeRequiresKernelForSecureKernelModuleExperime
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
 
-	if !experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
-		t.Fatal("kernel-module secure experimental_tcp should select secure route-GSO")
+	if !tixTCPSecureRouteGSOAsyncForDesired(desired) {
+		t.Fatal("kernel-module secure tix_tcp should select secure route-GSO")
 	}
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeRequireKernel {
-		t.Fatalf("kernel transport mode = %q, want require_kernel for secure experimental_tcp route-GSO", got)
+		t.Fatalf("kernel transport mode = %q, want require_kernel for secure tix_tcp route-GSO", got)
 	}
-	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
-		t.Fatalf("kernel-module secure experimental_tcp unexpectedly disabled fast path: %q", reason)
+	if reason := tixTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("kernel-module secure tix_tcp unexpectedly disabled fast path: %q", reason)
 	}
 }
 
-func TestEffectiveKernelTransportModeKeepsAutoForTCXDPPlaintextPerformanceExperimentalTCP(t *testing.T) {
+func TestEffectiveKernelTransportModeKeepsAutoForTCXDPPlaintextPerformanceTIXTCP(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:    config.TransportProfilePerformance,
@@ -347,21 +347,21 @@ func TestEffectiveKernelTransportModeKeepsAutoForTCXDPPlaintextPerformanceExperi
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
 
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeAuto {
-		t.Fatalf("kernel transport mode = %q, want auto for TC-XDP plaintext experimental_tcp without route-GSO opt-in", got)
+		t.Fatalf("kernel transport mode = %q, want auto for TC-XDP plaintext tix_tcp without route-GSO opt-in", got)
 	}
-	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
-		t.Fatalf("plaintext performance experimental_tcp unexpectedly disabled fast path: %q", reason)
+	if reason := tixTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("plaintext performance tix_tcp unexpectedly disabled fast path: %q", reason)
 	}
 }
 
-func TestEffectiveKernelTransportModeRequiresKernelForExplicitPlaintextExperimentalTCPRouteGSO(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO", "1")
+func TestEffectiveKernelTransportModeRequiresKernelForExplicitPlaintextTIXTCPRouteGSO(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_ROUTE_GSO", "1")
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:    config.TransportProfilePerformance,
@@ -371,15 +371,15 @@ func TestEffectiveKernelTransportModeRequiresKernelForExplicitPlaintextExperimen
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
 
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeRequireKernel {
-		t.Fatalf("kernel transport mode = %q, want require_kernel for explicit plaintext experimental_tcp route-GSO", got)
+		t.Fatalf("kernel transport mode = %q, want require_kernel for explicit plaintext tix_tcp route-GSO", got)
 	}
-	if reason := experimentalTCPFastPathDisabledReasonForDesired(desired); reason != "" {
-		t.Fatalf("explicit plaintext experimental_tcp route-GSO unexpectedly disabled fast path: %q", reason)
+	if reason := tixTCPFastPathDisabledReasonForDesired(desired); reason != "" {
+		t.Fatalf("explicit plaintext tix_tcp route-GSO unexpectedly disabled fast path: %q", reason)
 	}
 }

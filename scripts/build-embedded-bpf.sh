@@ -45,9 +45,9 @@ select_clang() {
 
 emit_specs() {
   cat <<'EOF'
-experimental_tcp_xdp_bpfel.o|kernel/bpf/dataplane/experimental_tcp_xdp.c|-DTRUSTIX_EXPERIMENTAL_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM=1
-experimental_tcp_kernel_crypto_xdp_bpfel.o|kernel/bpf/dataplane/experimental_tcp_kernel_crypto_xdp.c|
-experimental_tcp_kernel_crypto_tx_xdp_bpfel.o|kernel/bpf/dataplane/experimental_tcp_kernel_crypto_tx_xdp.c|
+tix_tcp_xdp_bpfel.o|kernel/bpf/dataplane/tix_tcp_xdp.c|-DTRUSTIX_TIX_TCP_XDP_RX_DIRECT_FIX_CONTROL_CHECKSUM=1
+tix_tcp_kernel_crypto_xdp_bpfel.o|kernel/bpf/dataplane/tix_tcp_kernel_crypto_xdp.c|
+tix_tcp_kernel_crypto_tx_xdp_bpfel.o|kernel/bpf/dataplane/tix_tcp_kernel_crypto_tx_xdp.c|
 kernel_udp_xdp_bpfel.o|kernel/bpf/dataplane/kernel_udp_xdp.c|
 kernel_udp_tx_kernel_crypto_tc_bpfel.o|kernel/bpf/dataplane/kernel_udp_tx_kernel_crypto_tc.c|
 kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o|kernel/bpf/dataplane/kernel_udp_tx_kernel_crypto_tc.c|-DTRUSTIX_KUDP_SECURE_ROUTE_GSO_KFUNC=1
@@ -57,7 +57,7 @@ kernel_udp_rx_kernel_crypto_tc_skbopen_decap_l2_bpfel.o|kernel/bpf/dataplane/ker
 skb_kfunc_tc_bpfel.o|kernel/bpf/dataplane/skb_kfunc_tc.c|
 kernel_crypto_provider_bpfel.o|kernel/bpf/dataplane/kernel_crypto_provider.c|
 kernel_crypto_selftest_bpfel.o|kernel/bpf/dataplane/kernel_crypto_selftest.c|
-experimental_tcp_kernel_crypto_xdp_direct_bpfel.o|kernel/bpf/dataplane/experimental_tcp_kernel_crypto_xdp.c|-DTRUSTIX_EXP_TCP_DIRECT_OPEN=1
+tix_tcp_kernel_crypto_xdp_direct_bpfel.o|kernel/bpf/dataplane/tix_tcp_kernel_crypto_xdp.c|-DTRUSTIX_TIX_TCP_DIRECT_OPEN=1
 EOF
 }
 

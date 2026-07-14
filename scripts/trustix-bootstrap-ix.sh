@@ -274,8 +274,7 @@ Environment:
 
 Endpoint SPEC fields are comma-separated or semicolon-separated:
   name=ix-new-udp,transport=udp,mode=passive,listen=0.0.0.0:7000,address=ddns.example:7000
-  TIX-TCP uses transport=tix_tcp. Legacy experimental_tcp, experimental-tcp,
-  and ackless_tcp inputs are accepted and written as tix_tcp.
+  TIX-TCP uses transport=tix_tcp.
   Optional local bind fields: source_ip=192.0.2.10,bind_iface=wan2
 Use semicolons when a value itself contains commas, for example GRE/IPIP/VXLAN
 endpoint address strings.
@@ -365,8 +364,15 @@ normalize_transport_name() {
   value="$(lower_ascii "${1:-}")"
   value="${value//-/_}"
   case "$value" in
-    tix_tcp|experimental_tcp|ackless_tcp|ackless) printf 'tix_tcp' ;;
+    tix_tcp) printf 'tix_tcp' ;;
     *) printf '%s' "$value" ;;
+  esac
+}
+
+validate_endpoint_transport() {
+  case "$1" in
+    udp|quic|tcp|websocket|http_connect|tix_tcp|gre|ipip|vxlan) ;;
+    *) die "unsupported endpoint transport: $1" ;;
   esac
 }
 
@@ -876,6 +882,7 @@ done
 
 if [[ ${#endpoint_specs[@]} -eq 0 ]]; then
   endpoint_transport="$(normalize_transport_name "$endpoint_transport")"
+  validate_endpoint_transport "$endpoint_transport"
   if [[ -z "$endpoint_name" ]]; then
     endpoint_name="${ix_id}-$(transport_endpoint_name_suffix "$endpoint_transport")"
   fi
@@ -937,6 +944,7 @@ write_endpoint_object() {
   local name transport mode listen address source_ip bind_iface priority link_tls encryption profile datapath crypto first_bind
   name="$(field_value "$spec" name "")"
   transport="$(normalize_transport_name "$(field_value "$spec" transport "udp")")"
+  validate_endpoint_transport "$transport"
   mode="$(field_value "$spec" mode "passive")"
   listen="$(field_value "$spec" listen "")"
   address="$(field_value "$spec" address "")"
@@ -1033,7 +1041,7 @@ done
   helpers_module_path="$(kernel_module_path_for_config trustix_datapath_helpers "$helpers_module_mode")"
   printf '  "kernel_modules":{"capability_profile":"%s",' "$(json_escape "$profile_kernel_capability")"
   if [[ "$profile" == "plaintext_performance" ]]; then
-    printf '"datapath":{"rx_stage":"worker","rx_worker":true,"tx_plaintext":true,"full_plaintext":true,"rx_worker_allow_experimental_tcp":true},'
+    printf '"datapath":{"rx_stage":"worker","rx_worker":true,"tx_plaintext":true,"full_plaintext":true,"rx_worker_allow_tix_tcp":true},'
   fi
   printf '"trustix_crypto":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false},"trustix_datapath_helpers":{"mode":"%s","path":"%s","reload_on_upgrade":"auto","unload_on_exit":false}},\n' \
     "$(json_escape "$crypto_module_mode")" "$(json_escape "$crypto_module_path")" \
@@ -1104,7 +1112,7 @@ if [[ "$do_deploy" == "1" && ( -n "$target" || "$local_install" == "1" ) ]]; the
     deploy_args+=(--env TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH=1)
   fi
   if [[ "$service_manager" == "openwrt" || ( "$service_manager" == "auto" && -f /etc/openwrt_release ) ]]; then
-    deploy_args+=(--env TRUSTIX_EXPERIMENTAL_TCP_COMPAT_STREAM=1)
+    deploy_args+=(--env TRUSTIX_TIX_TCP_COMPAT_STREAM=1)
   fi
   if [[ -n "$target" ]]; then
     deploy_args=(--target "$target" "${deploy_args[@]}")

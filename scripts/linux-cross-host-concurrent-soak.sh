@@ -7,7 +7,7 @@ runner="${TRUSTIX_CROSS_HOST_CONCURRENT_RUNNER:-${repo_root}/scripts/linux-cross
 verifier="${TRUSTIX_CROSS_HOST_CONCURRENT_VERIFIER:-${repo_root}/scripts/linux-cross-host-soak-verify.py}"
 workdir="${TRUSTIX_CROSS_HOST_CONCURRENT_WORKDIR:-$(mktemp -d /tmp/trustix-cross-host-concurrent.XXXXXX)}"
 workdir="$(mkdir -p "$workdir" && cd "$workdir" && pwd -P)"
-cases_raw="${TRUSTIX_CROSS_HOST_CONCURRENT_CASES:-userspace-udp-secure userspace-tcp-secure userspace-experimental-tcp-secure}"
+cases_raw="${TRUSTIX_CROSS_HOST_CONCURRENT_CASES:-userspace-udp-secure userspace-tcp-secure userspace-tix-tcp-secure}"
 seconds="${TRUSTIX_CROSS_HOST_CONCURRENT_SECONDS:-600}"
 timeout_slop="${TRUSTIX_CROSS_HOST_CONCURRENT_TIMEOUT_SLOP:-120}"
 min_gbps="${TRUSTIX_CROSS_HOST_CONCURRENT_MIN_GBPS:-0}"
@@ -110,7 +110,7 @@ case_transport_token() {
   raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
   case "$raw" in
     httpconnect) raw="http_connect" ;;
-    experimentaltcp) raw="experimental_tcp" ;;
+    tixtcp) raw="tix_tcp" ;;
   esac
   printf '%s\n' "$raw"
 }

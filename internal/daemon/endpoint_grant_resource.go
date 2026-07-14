@@ -785,8 +785,7 @@ func endpointGrantTransportMatches(left string, right string) bool {
 	if left == right {
 		return true
 	}
-	return (left == "kernel_udp" && right == "udp") || (left == "udp" && right == "kernel_udp") ||
-		(left == "ackless_tcp" && right == "experimental_tcp") || (left == "experimental_tcp" && right == "ackless_tcp")
+	return (left == "kernel_udp" && right == "udp") || (left == "udp" && right == "kernel_udp")
 }
 
 func validEndpointGrantID(grantID string) bool {

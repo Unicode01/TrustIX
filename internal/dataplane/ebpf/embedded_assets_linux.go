@@ -13,33 +13,33 @@ func EmbeddedAssets() []EmbeddedAsset {
 		read func() ([]byte, error)
 	}{
 		{
-			name: "experimental_tcp_xdp_bpfel.o",
+			name: "tix_tcp_xdp_bpfel.o",
 			read: func() ([]byte, error) {
-				return experimentalTCPXDPFS.ReadFile("bpf/experimental_tcp_xdp_bpfel.o")
+				return tixTCPXDPFS.ReadFile("bpf/tix_tcp_xdp_bpfel.o")
 			},
 		},
 		{
-			name: "experimental_tcp_kernel_crypto_xdp_bpfel.o",
+			name: "tix_tcp_kernel_crypto_xdp_bpfel.o",
 			read: func() ([]byte, error) {
-				return experimentalTCPXDPFS.ReadFile("bpf/experimental_tcp_kernel_crypto_xdp_bpfel.o")
+				return tixTCPXDPFS.ReadFile("bpf/tix_tcp_kernel_crypto_xdp_bpfel.o")
 			},
 		},
 		{
-			name: "experimental_tcp_kernel_crypto_xdp_direct_bpfel.o",
+			name: "tix_tcp_kernel_crypto_xdp_direct_bpfel.o",
 			read: func() ([]byte, error) {
-				return experimentalTCPXDPFS.ReadFile("bpf/experimental_tcp_kernel_crypto_xdp_direct_bpfel.o")
+				return tixTCPXDPFS.ReadFile("bpf/tix_tcp_kernel_crypto_xdp_direct_bpfel.o")
 			},
 		},
 		{
 			name: "kernel_udp_xdp_bpfel.o",
 			read: func() ([]byte, error) {
-				return experimentalTCPXDPFS.ReadFile("bpf/kernel_udp_xdp_bpfel.o")
+				return tixTCPXDPFS.ReadFile("bpf/kernel_udp_xdp_bpfel.o")
 			},
 		},
 		{
-			name: "experimental_tcp_kernel_crypto_tx_xdp_bpfel.o",
+			name: "tix_tcp_kernel_crypto_tx_xdp_bpfel.o",
 			read: func() ([]byte, error) {
-				return experimentalTCPTXSealFS.ReadFile("bpf/experimental_tcp_kernel_crypto_tx_xdp_bpfel.o")
+				return tixTCPTXSealFS.ReadFile("bpf/tix_tcp_kernel_crypto_tx_xdp_bpfel.o")
 			},
 		},
 		{

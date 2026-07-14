@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 // TC ingress secure RX direct path for encrypted kernel_udp TIXU and
-// experimental_tcp TIXT frames.
+// tix_tcp TIXT frames.
 // Eligible packets are opened with the provider-owned AEAD context, rewritten
 // to Ethernet + inner IPv4, and redirected to the LAN. Unsupported packets use
 // TC_ACT_UNSPEC so unrelated TC filters on the same hook can still run.
@@ -72,10 +72,10 @@ const volatile __u32 trustix_kudp_rx_secure_recompute_inner_csum = 0;
 #define TRUSTIX_KERNEL_UDP_FLAG_ENCRYPTED 1
 #define TRUSTIX_KERNEL_UDP_FLAG_CRYPTO_FRAGMENT 4
 #define TRUSTIX_KERNEL_UDP_FLAG_INNER_IPV4 8
-#define TRUSTIX_EXP_TCP_HEADER_LEN 40
-#define TRUSTIX_EXP_TCP_FLAG_ENCRYPTED 1
-#define TRUSTIX_EXP_TCP_FLAG_CRYPTO_FRAGMENT 4
-#define TRUSTIX_EXP_TCP_FLAG_INNER_IPV4 8
+#define TRUSTIX_TIX_TCP_HEADER_LEN 40
+#define TRUSTIX_TIX_TCP_FLAG_ENCRYPTED 1
+#define TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT 4
+#define TRUSTIX_TIX_TCP_FLAG_INNER_IPV4 8
 #define TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES 4096
 #define TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS 1024
 #define TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX ((TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS - 1) * 64)
@@ -83,7 +83,7 @@ const volatile __u32 trustix_kudp_rx_secure_recompute_inner_csum = 0;
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_PADDED 4096
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN 16
 #define TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN 24
-#define TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP 0
+#define TRUSTIX_KERNEL_CRYPTO_NAMESPACE_TIX_TCP 0
 #define TRUSTIX_KERNEL_CRYPTO_NAMESPACE_KERNEL_UDP 1
 #define TRUSTIX_KERNEL_CRYPTO_DIRECTION_RECV 2
 #define TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_HOT_STATS 1
@@ -95,10 +95,10 @@ const volatile __u32 trustix_kudp_rx_secure_recompute_inner_csum = 0;
 #define TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN (14 + 20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
 #define TRUSTIX_KUDP_SECURE_CIPHER_OFFSET TRUSTIX_KUDP_SECURE_PACKET_HEADER_LEN
 #define TRUSTIX_KUDP_SECURE_DECAP_LEN (20 + 8 + TRUSTIX_KERNEL_UDP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
-#define TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD (20 + 20 + TRUSTIX_EXP_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
-#define TRUSTIX_EXP_TCP_SECURE_PACKET_HEADER_LEN (14 + 20 + 20 + TRUSTIX_EXP_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
-#define TRUSTIX_EXP_TCP_SECURE_CIPHER_OFFSET TRUSTIX_EXP_TCP_SECURE_PACKET_HEADER_LEN
-#define TRUSTIX_EXP_TCP_SECURE_DECAP_LEN (20 + 20 + TRUSTIX_EXP_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
+#define TRUSTIX_TIX_TCP_SECURE_OUTER_OVERHEAD (20 + 20 + TRUSTIX_TIX_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
+#define TRUSTIX_TIX_TCP_SECURE_PACKET_HEADER_LEN (14 + 20 + 20 + TRUSTIX_TIX_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
+#define TRUSTIX_TIX_TCP_SECURE_CIPHER_OFFSET TRUSTIX_TIX_TCP_SECURE_PACKET_HEADER_LEN
+#define TRUSTIX_TIX_TCP_SECURE_DECAP_LEN (20 + 20 + TRUSTIX_TIX_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN)
 
 #define TRUSTIX_KUDP_RX_SECURE_STAT_ATTEMPTS 87
 #define TRUSTIX_KUDP_RX_SECURE_STAT_CANDIDATES 88
@@ -267,7 +267,7 @@ struct {
     __uint(max_entries, 4096);
     __type(key, __u32);
     __type(value, __u8);
-} ix_exp_tcp_port SEC(".maps");
+} ix_tix_tcp_port SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -618,7 +618,7 @@ out_unlock:
     return replay_error ? -114 : 0;
 }
 
-static __always_inline int trustix_exp_tcp_unfragmented(__u8 *frame)
+static __always_inline int trustix_tix_tcp_unfragmented(__u8 *frame)
 {
     return frame[36] == 0 && frame[37] == 0 &&
            frame[38] == 0 && frame[39] == 0;
@@ -1019,16 +1019,16 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
     __u32 payload_len;
     __u32 cipher_len;
     __u32 outer_total_len;
-    __u32 outer_overhead = TRUSTIX_EXP_TCP_SECURE_OUTER_OVERHEAD;
-    __u32 cipher_offset = TRUSTIX_EXP_TCP_SECURE_CIPHER_OFFSET;
-    __u32 decap_len = TRUSTIX_EXP_TCP_SECURE_DECAP_LEN;
+    __u32 outer_overhead = TRUSTIX_TIX_TCP_SECURE_OUTER_OVERHEAD;
+    __u32 cipher_offset = TRUSTIX_TIX_TCP_SECURE_CIPHER_OFFSET;
+    __u32 decap_len = TRUSTIX_TIX_TCP_SECURE_DECAP_LEN;
     __u32 inner_len;
     __u32 neigh_key;
     __u64 flow_id;
     __u64 epoch;
     __u64 sequence;
     __u32 scratch_key = 0;
-    __u32 namespace = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_EXPERIMENTAL_TCP;
+    __u32 namespace = TRUSTIX_KERNEL_CRYPTO_NAMESPACE_TIX_TCP;
     int plain_len;
     struct trustix_kudp_rx_secure_scratch *scratch;
     struct trustix_kudp_rx_neigh_value *neigh;
@@ -1107,26 +1107,26 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
         if (l4[12] != 0x50)
             goto fallback;
         frame = l4 + 20;
-        frame_end = frame + TRUSTIX_EXP_TCP_HEADER_LEN;
+        frame_end = frame + TRUSTIX_TIX_TCP_HEADER_LEN;
         barrier_var(frame_end);
         if (frame_end > data_end)
             goto fallback;
         if (frame[0] != 'T' || frame[1] != 'I' || frame[2] != 'X' || frame[3] != 'T')
             goto fallback;
-        if (frame[4] != 1 || frame[6] != 0 || frame[7] != TRUSTIX_EXP_TCP_HEADER_LEN)
+        if (frame[4] != 1 || frame[6] != 0 || frame[7] != TRUSTIX_TIX_TCP_HEADER_LEN)
             goto header_error;
-        if (!(frame[5] & TRUSTIX_EXP_TCP_FLAG_ENCRYPTED) ||
-            !(frame[5] & TRUSTIX_EXP_TCP_FLAG_INNER_IPV4) ||
-            (frame[5] & TRUSTIX_EXP_TCP_FLAG_CRYPTO_FRAGMENT) ||
-            !trustix_exp_tcp_unfragmented(frame))
+        if (!(frame[5] & TRUSTIX_TIX_TCP_FLAG_ENCRYPTED) ||
+            !(frame[5] & TRUSTIX_TIX_TCP_FLAG_INNER_IPV4) ||
+            (frame[5] & TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT) ||
+            !trustix_tix_tcp_unfragmented(frame))
             goto fallback;
 
         payload_len = trustix_read_be32(frame + 32);
-        if (outer_total_len < 20 + 20 + TRUSTIX_EXP_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
+        if (outer_total_len < 20 + 20 + TRUSTIX_TIX_TCP_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN + TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
             goto fallback;
-        if (20 + 20 + TRUSTIX_EXP_TCP_HEADER_LEN + payload_len != outer_total_len)
+        if (20 + 20 + TRUSTIX_TIX_TCP_HEADER_LEN + payload_len != outer_total_len)
             goto fallback;
-        secure = frame + TRUSTIX_EXP_TCP_HEADER_LEN;
+        secure = frame + TRUSTIX_TIX_TCP_HEADER_LEN;
         flow_id = trustix_read_be64(frame + 8);
         epoch = trustix_read_be64(frame + 16);
         sequence = trustix_read_be64(frame + 24);
@@ -1198,7 +1198,7 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
     }
 
     port_key = ((__u32)l4[2]) | ((__u32)l4[3] << 8);
-    if (!bpf_map_lookup_elem(&ix_exp_tcp_port, &port_key)) {
+    if (!bpf_map_lookup_elem(&ix_tix_tcp_port, &port_key)) {
         trustix_kudp_rx_secure_count_path(TRUSTIX_KUDP_RX_SECURE_STAT_FALLBACK_PORT_MISS);
         goto fallback;
     }

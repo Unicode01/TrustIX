@@ -272,7 +272,7 @@ func TestKernelDatapathFullPlaintextOverridesStageCompatibilityFlag(t *testing.T
 	}
 }
 
-func TestKernelDatapathFullPlaintextProfileAllowsExperimentalTCPAndAttachesTXHook(t *testing.T) {
+func TestKernelDatapathFullPlaintextProfileAllowsTIXTCPAndAttachesTXHook(t *testing.T) {
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
@@ -296,9 +296,9 @@ func TestKernelDatapathFullPlaintextProfileAllowsExperimentalTCPAndAttachesTXHoo
 		State:  "loaded",
 	})
 	spec := dataplane.AttachSpec{
-		UnderlayIface:           "eth0",
-		LANIface:                "br-lan",
-		ExperimentalTCPTXDirect: true,
+		UnderlayIface:  "eth0",
+		LANIface:       "br-lan",
+		TIXTCPTXDirect: true,
 	}
 	if err := daemon.startKernelDatapathRXStage(context.Background(), spec); err != nil {
 		t.Fatalf("start full plaintext profile: %v", err)
@@ -325,7 +325,7 @@ func assertFullPlaintextTXHookStatus(t *testing.T, status kernelDatapathRXStageS
 	}
 }
 
-func TestKernelDatapathRXWorkerSkipsExperimentalTCPTXDirectByDefault(t *testing.T) {
+func TestKernelDatapathRXWorkerSkipsTIXTCPTXDirectByDefault(t *testing.T) {
 	opened := false
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
@@ -346,20 +346,20 @@ func TestKernelDatapathRXWorkerSkipsExperimentalTCPTXDirectByDefault(t *testing.
 		State:  "loaded",
 	})
 	spec := dataplane.AttachSpec{
-		UnderlayIface:           "eth0",
-		LANIface:                "br-lan",
-		ExperimentalTCPTXDirect: true,
+		UnderlayIface:  "eth0",
+		LANIface:       "br-lan",
+		TIXTCPTXDirect: true,
 	}
 	if err := daemon.startKernelDatapathRXStage(context.Background(), spec); err != nil {
 		t.Fatalf("start RX worker: %v", err)
 	}
 	if opened {
-		t.Fatal("driver should not open when RX worker is disabled for experimental TCP")
+		t.Fatal("driver should not open when RX worker is disabled for TIX-TCP")
 	}
 	status := daemon.kernelDatapathRXStageStatus()
 	if status.Active || !status.Enabled || status.Mode != kernelDatapathRXModeWorker ||
-		!strings.Contains(status.InactiveReason, "experimental_tcp TC direct") {
-		t.Fatalf("status = %#v, want inactive worker with experimental TCP reason", status)
+		!strings.Contains(status.InactiveReason, "tix_tcp TC direct") {
+		t.Fatalf("status = %#v, want inactive worker with TIX-TCP reason", status)
 	}
 }
 
@@ -384,7 +384,7 @@ func TestKernelDatapathRXWorkerEnvKeptForFullPlaintext(t *testing.T) {
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-a",
-			Transport: "experimental_tcp",
+			Transport: "tix_tcp",
 			Enabled:   true,
 		}},
 	}
@@ -417,12 +417,12 @@ func TestKernelDatapathRXWorkerEnvKeptForFullPlaintext(t *testing.T) {
 	}
 }
 
-func TestKernelDatapathRXWorkerAllowsExperimentalTCPTXDirectWithOverride(t *testing.T) {
+func TestKernelDatapathRXWorkerAllowsTIXTCPTXDirectWithOverride(t *testing.T) {
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
-	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_TIX_TCP", "1")
 	driver := &fakeKernelRXStageDriver{}
 	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
 		return driver, nil
@@ -438,9 +438,9 @@ func TestKernelDatapathRXWorkerAllowsExperimentalTCPTXDirectWithOverride(t *test
 		State:  "loaded",
 	})
 	spec := dataplane.AttachSpec{
-		UnderlayIface:           "eth0",
-		LANIface:                "br-lan",
-		ExperimentalTCPTXDirect: true,
+		UnderlayIface:  "eth0",
+		LANIface:       "br-lan",
+		TIXTCPTXDirect: true,
 	}
 	if err := daemon.startKernelDatapathRXStage(context.Background(), spec); err != nil {
 		t.Fatalf("start RX worker: %v", err)

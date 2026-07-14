@@ -696,7 +696,7 @@ func TestPrepareCaptureForwardWireBatchCoalescesContiguousTCPSegments(t *testing
 	}
 }
 
-func TestPrepareCaptureForwardWireBatchMultiFlowCoalescesExperimentalTCPUserspaceSecure(t *testing.T) {
+func TestPrepareCaptureForwardWireBatchMultiFlowCoalescesTIXTCPUserspaceSecure(t *testing.T) {
 	daemon := &Daemon{}
 	session := &recordingNativeBatchSession{stats: transport.TransportStats{
 		NativeBatching:      true,
@@ -706,7 +706,7 @@ func TestPrepareCaptureForwardWireBatchMultiFlowCoalescesExperimentalTCPUserspac
 		CryptoPlacement:     string(dataplane.CryptoPlacementUserspace),
 		MaxPacketSize:       65535,
 	}}
-	runtime := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolExperimentalTCP}, session: session}
+	runtime := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolTIXTCP}, session: session}
 	var scratch captureForwardScratch
 	scratch.begin(4, daemon)
 	flowA1 := tcpPayloadIPv4PacketWithSeqAndPorts(1, 12345, 18200, []byte("aa"))
@@ -1200,7 +1200,7 @@ func TestRuntimeDataplaneSnapshotCarriesKernelTransportDisabled(t *testing.T) {
 	}
 }
 
-func TestRuntimeDataplaneSnapshotFullPlaintextExperimentalTCPKeepsKernelTransportAuto(t *testing.T) {
+func TestRuntimeDataplaneSnapshotFullPlaintextTIXTCPKeepsKernelTransportAuto(t *testing.T) {
 	daemon := &Daemon{
 		desired: config.Desired{
 			KernelModules: config.KernelModulesConfig{
@@ -1214,7 +1214,7 @@ func TestRuntimeDataplaneSnapshotFullPlaintextExperimentalTCPKeepsKernelTranspor
 			},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 		},
@@ -1225,12 +1225,12 @@ func TestRuntimeDataplaneSnapshotFullPlaintextExperimentalTCPKeepsKernelTranspor
 	if snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeAuto {
 		t.Fatalf("packet policy kernel transport mode = %q, want auto for full-kmod plaintext", snapshot.PacketPolicy.KernelTransportMode)
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) {
-		t.Fatal("full plaintext experimental_tcp should not migrate to route-GSO")
+	if tixTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) {
+		t.Fatal("full plaintext tix_tcp should not migrate to route-GSO")
 	}
 }
 
-func TestRuntimeDataplaneSnapshotDisabledKernelTransportDoesNotMigrateLegacyFullPlaintextExperimentalTCP(t *testing.T) {
+func TestRuntimeDataplaneSnapshotDisabledKernelTransportDoesNotMigrateLegacyFullPlaintextTIXTCP(t *testing.T) {
 	daemon := &Daemon{
 		desired: config.Desired{
 			KernelModules: config.KernelModulesConfig{
@@ -1245,7 +1245,7 @@ func TestRuntimeDataplaneSnapshotDisabledKernelTransportDoesNotMigrateLegacyFull
 			},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 		},
@@ -1256,12 +1256,12 @@ func TestRuntimeDataplaneSnapshotDisabledKernelTransportDoesNotMigrateLegacyFull
 	if snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeDisabled {
 		t.Fatalf("packet policy kernel transport mode = %q, want disabled", snapshot.PacketPolicy.KernelTransportMode)
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) {
-		t.Fatal("disabled kernel_transport must not migrate legacy full plaintext experimental_tcp to route-GSO")
+	if tixTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) {
+		t.Fatal("disabled kernel_transport must not migrate legacy full plaintext tix_tcp to route-GSO")
 	}
 }
 
-func TestRuntimeDataplaneSnapshotDisablesAutoForSecureUserspaceExperimentalTCP(t *testing.T) {
+func TestRuntimeDataplaneSnapshotDisablesAutoForSecureUserspaceTIXTCP(t *testing.T) {
 	daemon := &Daemon{
 		desired: config.Desired{
 			TransportPolicy: config.TransportPolicyConfig{
@@ -1273,7 +1273,7 @@ func TestRuntimeDataplaneSnapshotDisablesAutoForSecureUserspaceExperimentalTCP(t
 			},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 		},
@@ -1282,10 +1282,10 @@ func TestRuntimeDataplaneSnapshotDisablesAutoForSecureUserspaceExperimentalTCP(t
 
 	snapshot := daemon.runtimeDataplaneSnapshot()
 	if snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeDisabled {
-		t.Fatalf("packet policy kernel transport mode = %q, want disabled for secure userspace-crypto experimental_tcp", snapshot.PacketPolicy.KernelTransportMode)
+		t.Fatalf("packet policy kernel transport mode = %q, want disabled for secure userspace-crypto tix_tcp", snapshot.PacketPolicy.KernelTransportMode)
 	}
-	if daemon.transportPolicyUsesExperimentalTCP() {
-		t.Fatal("secure userspace-crypto experimental_tcp auto policy should not enable kernel direct helpers")
+	if daemon.transportPolicyUsesTIXTCP() {
+		t.Fatal("secure userspace-crypto tix_tcp auto policy should not enable kernel direct helpers")
 	}
 }
 
@@ -1387,7 +1387,7 @@ func TestRuntimeDataplaneSnapshotAutoMSSForSecureKernelUDPTransport(t *testing.T
 	}
 }
 
-func TestRuntimeDataplaneSnapshotAutoMSSForExperimentalTCPSecureDirect(t *testing.T) {
+func TestRuntimeDataplaneSnapshotAutoMSSForTIXTCPSecureDirect(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT", "1")
 	daemon := &Daemon{
 		desired: config.Desired{
@@ -1400,7 +1400,7 @@ func TestRuntimeDataplaneSnapshotAutoMSSForExperimentalTCPSecureDirect(t *testin
 			},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 		},
@@ -1413,7 +1413,7 @@ func TestRuntimeDataplaneSnapshotAutoMSSForExperimentalTCPSecureDirect(t *testin
 	}
 }
 
-func TestRuntimeDataplaneSnapshotAutoMSSForExperimentalTCPSecureKernelTransport(t *testing.T) {
+func TestRuntimeDataplaneSnapshotAutoMSSForTIXTCPSecureKernelTransport(t *testing.T) {
 	daemon := &Daemon{
 		desired: config.Desired{
 			TransportPolicy: config.TransportPolicyConfig{
@@ -1425,7 +1425,7 @@ func TestRuntimeDataplaneSnapshotAutoMSSForExperimentalTCPSecureKernelTransport(
 			},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 		},
@@ -1537,7 +1537,7 @@ func TestRuntimeDataplaneSnapshotAutoMSSForKernelUDPPlaintextCanDisableSafeCap(t
 	}
 }
 
-func TestRuntimeDataplaneSnapshotExplicitAutoMSSForExperimentalTCP(t *testing.T) {
+func TestRuntimeDataplaneSnapshotExplicitAutoMSSForTIXTCP(t *testing.T) {
 	t.Setenv("TRUSTIX_TCP_MSS_CLAMP", "auto")
 	daemon := &Daemon{
 		desired: config.Desired{
@@ -1549,7 +1549,7 @@ func TestRuntimeDataplaneSnapshotExplicitAutoMSSForExperimentalTCP(t *testing.T)
 			},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 		},
@@ -1562,8 +1562,8 @@ func TestRuntimeDataplaneSnapshotExplicitAutoMSSForExperimentalTCP(t *testing.T)
 	}
 }
 
-func TestRuntimeDataplaneSnapshotEnvAutoMSSForExperimentalTCPPlaintext(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_AUTO_TCP_MSS_CLAMP", "1")
+func TestRuntimeDataplaneSnapshotEnvAutoMSSForTIXTCPPlaintext(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_AUTO_TCP_MSS_CLAMP", "1")
 	daemon := &Daemon{
 		desired: config.Desired{
 			TransportPolicy: config.TransportPolicyConfig{
@@ -1574,7 +1574,7 @@ func TestRuntimeDataplaneSnapshotEnvAutoMSSForExperimentalTCPPlaintext(t *testin
 			},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 		},
@@ -1587,7 +1587,7 @@ func TestRuntimeDataplaneSnapshotEnvAutoMSSForExperimentalTCPPlaintext(t *testin
 	}
 }
 
-func TestRuntimeDataplaneSnapshotAutoMSSForPlainExperimentalTCP(t *testing.T) {
+func TestRuntimeDataplaneSnapshotAutoMSSForPlainTIXTCP(t *testing.T) {
 	daemon := &Daemon{
 		desired: config.Desired{
 			TransportPolicy: config.TransportPolicyConfig{
@@ -1598,7 +1598,7 @@ func TestRuntimeDataplaneSnapshotAutoMSSForPlainExperimentalTCP(t *testing.T) {
 			},
 			Endpoints: []config.EndpointConfig{{
 				Name:      "exp-a",
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 		},
@@ -1775,7 +1775,7 @@ func TestDataPathKernelOffloadStatusReportsPacketPolicyAndUserspaceBoundaries(t 
 		Available: true,
 		Provider:  "af_xdp",
 		Protocols: []dataplane.KernelTransportProtocol{{
-			Protocol:          string(transport.ProtocolExperimentalTCP),
+			Protocol:          string(transport.ProtocolTIXTCP),
 			Available:         true,
 			Placement:         "kernel",
 			Provider:          "af_xdp",
@@ -1788,7 +1788,7 @@ func TestDataPathKernelOffloadStatusReportsPacketPolicyAndUserspaceBoundaries(t 
 			UserspaceFallback: true,
 		}},
 	}
-	status := daemon.dataPathKernelOffloadStatus(dataplane.Stats{Mode: "linux", Capabilities: []string{"tc-clsact"}}, true, &dataplane.ExperimentalTCPStatus{
+	status := daemon.dataPathKernelOffloadStatus(dataplane.Stats{Mode: "linux", Capabilities: []string{"tc-clsact"}}, true, &dataplane.TIXTCPStatus{
 		Available:       true,
 		Provider:        "af_xdp",
 		FastPath:        true,
@@ -1822,8 +1822,8 @@ func TestDataPathKernelOffloadStatusReportsPacketPolicyAndUserspaceBoundaries(t 
 	if !hasKernelPlacement(status.Placements, "packet_policy", "kernel") {
 		t.Fatalf("placements missing kernel packet policy: %#v", status.Placements)
 	}
-	if !hasKernelPlacement(status.Placements, "experimental_tcp", "kernel") {
-		t.Fatalf("placements missing kernel experimental_tcp: %#v", status.Placements)
+	if !hasKernelPlacement(status.Placements, "tix_tcp", "kernel") {
+		t.Fatalf("placements missing kernel tix_tcp: %#v", status.Placements)
 	}
 	if !hasKernelPlacement(status.Placements, "transport_plane", "hybrid") {
 		t.Fatalf("placements missing hybrid transport plane: %#v", status.Placements)
@@ -1870,14 +1870,14 @@ func TestRequireKernelTransportRejectsUserspaceUDP(t *testing.T) {
 	}
 }
 
-func TestRequireKernelTransportAllowsAvailableExperimentalTCP(t *testing.T) {
+func TestRequireKernelTransportAllowsAvailableTIXTCP(t *testing.T) {
 	manager := &kernelTransportDataplane{
 		NoopManager: dataplane.NewNoopManager(),
 		status: dataplane.KernelTransportStatus{
 			Available: true,
 			Provider:  "test",
 			Protocols: []dataplane.KernelTransportProtocol{{
-				Protocol:  string(transport.ProtocolExperimentalTCP),
+				Protocol:  string(transport.ProtocolTIXTCP),
 				Available: true,
 				Placement: "hybrid",
 				Provider:  "test",
@@ -1897,7 +1897,7 @@ func TestRequireKernelTransportAllowsAvailableExperimentalTCP(t *testing.T) {
 		Domain: core.DomainID("lab.local"),
 		Endpoints: []config.EndpointConfig{{
 			Name:      core.EndpointID("exp"),
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Address:   "203.0.113.10:9000",
 		}},
 	}
@@ -1907,7 +1907,7 @@ func TestRequireKernelTransportAllowsAvailableExperimentalTCP(t *testing.T) {
 		t.Fatalf("candidate endpoints: %v", err)
 	}
 	if len(endpoints) != 1 || endpoints[0].Name != "exp" {
-		t.Fatalf("endpoints = %#v, want experimental_tcp", endpoints)
+		t.Fatalf("endpoints = %#v, want tix_tcp", endpoints)
 	}
 }
 
@@ -2868,7 +2868,7 @@ func TestCandidatePeerEndpointsPrefersNativeTunnelForPlaintext(t *testing.T) {
 				Provider:  "test",
 				Protocols: []dataplane.KernelTransportProtocol{
 					{Protocol: string(transport.ProtocolUDP), Available: true, Placement: "hybrid"},
-					{Protocol: string(transport.ProtocolExperimentalTCP), Available: true, Placement: "hybrid"},
+					{Protocol: string(transport.ProtocolTIXTCP), Available: true, Placement: "hybrid"},
 					{Protocol: string(transport.ProtocolGRE), Available: true, CapabilityReady: true, Placement: "kernel"},
 					{Protocol: string(transport.ProtocolIPIP), Available: true, CapabilityReady: true, Placement: "kernel"},
 					{Protocol: string(transport.ProtocolVXLAN), Available: true, CapabilityReady: true, Placement: "kernel"},
@@ -2881,7 +2881,7 @@ func TestCandidatePeerEndpointsPrefersNativeTunnelForPlaintext(t *testing.T) {
 		Domain: core.DomainID("lab.local"),
 		Endpoints: []config.EndpointConfig{
 			{Name: core.EndpointID("udp"), Address: "192.0.2.1:7001", Transport: "udp"},
-			{Name: core.EndpointID("exp"), Address: "192.0.2.1:7002", Transport: "experimental_tcp"},
+			{Name: core.EndpointID("exp"), Address: "192.0.2.1:7002", Transport: "tix_tcp"},
 			{Name: core.EndpointID("vxlan"), Address: "local=198.18.0.1,remote=198.18.0.2,local_carrier=10.255.31.1/30,remote_carrier=10.255.31.2,mtu=1450", Transport: "vxlan"},
 			{Name: core.EndpointID("gre"), Address: "local=198.18.0.1,remote=198.18.0.2,local_carrier=10.255.30.1/30,remote_carrier=10.255.30.2,mtu=1476", Transport: "gre"},
 			{Name: core.EndpointID("ipip"), Address: "local=198.18.0.1,remote=198.18.0.2,local_carrier=10.255.32.1/30,remote_carrier=10.255.32.2,mtu=1480", Transport: "ipip"},
@@ -2908,7 +2908,7 @@ func TestCandidatePeerEndpointsPrefersHighestEndpointPriorityScore(t *testing.T)
 			Domain: config.DomainConfig{ID: core.DomainID("lab.local")},
 			Endpoints: []config.EndpointConfig{
 				{Name: core.EndpointID("local-udp"), Transport: "udp", Priority: 20, Enabled: true},
-				{Name: core.EndpointID("local-tcp"), Transport: "experimental_tcp", Priority: 70, Enabled: true},
+				{Name: core.EndpointID("local-tcp"), Transport: "tix_tcp", Priority: 70, Enabled: true},
 			},
 		},
 	}
@@ -2917,7 +2917,7 @@ func TestCandidatePeerEndpointsPrefersHighestEndpointPriorityScore(t *testing.T)
 		Domain: core.DomainID("lab.local"),
 		Endpoints: []config.EndpointConfig{
 			{Name: core.EndpointID("udp"), Address: "192.0.2.1:7001", Transport: "udp", Priority: 80},
-			{Name: core.EndpointID("exp"), Address: "192.0.2.1:7002", Transport: "experimental_tcp", Priority: 40},
+			{Name: core.EndpointID("exp"), Address: "192.0.2.1:7002", Transport: "tix_tcp", Priority: 40},
 		},
 	}
 
@@ -4959,8 +4959,8 @@ func TestSendPacketByDecisionUsesReverseChannel(t *testing.T) {
 	}
 }
 
-func TestReverseChannelWorksForNoAddressTCPAndExperimentalTCP(t *testing.T) {
-	for _, protocol := range []transport.Protocol{transport.ProtocolTCP, transport.ProtocolExperimentalTCP} {
+func TestReverseChannelWorksForNoAddressTCPAndTIXTCP(t *testing.T) {
+	for _, protocol := range []transport.Protocol{transport.ProtocolTCP, transport.ProtocolTIXTCP} {
 		t.Run(string(protocol), func(t *testing.T) {
 			peer := config.PeerConfig{
 				ID:     core.IXID("ix-b"),
@@ -5193,7 +5193,7 @@ func TestSendDataSessionPacketsAggregatesPlaintextDatagramWhenEnabled(t *testing
 	}
 }
 
-func TestSendDataSessionPacketsAggregatesPlaintextExperimentalTCPByDefault(t *testing.T) {
+func TestSendDataSessionPacketsAggregatesPlaintextTIXTCPByDefault(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_BYTES", "4096")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_DELAY", "0")
@@ -5203,25 +5203,25 @@ func TestSendDataSessionPacketsAggregatesPlaintextExperimentalTCPByDefault(t *te
 		MaxPacketSize:  4096,
 	}}
 	runtime := &dataSessionRuntime{
-		key:     dataSessionKey{Transport: transport.ProtocolExperimentalTCP},
+		key:     dataSessionKey{Transport: transport.ProtocolTIXTCP},
 		session: session,
 	}
 	daemon := &Daemon{}
 	packetA := tcpIPv4Packet()
-	packetB := udpIPv4Packet([]byte("experimental-tcp-plaintext-default"))
+	packetB := udpIPv4Packet([]byte("tix-tcp-plaintext-default"))
 
 	if err := daemon.sendDataSessionPackets(runtime, session, [][]byte{packetA, packetB}); err != nil {
 		t.Fatalf("send packet batch: %v", err)
 	}
 	if len(session.batches) != 0 {
-		t.Fatalf("native batches = %d, want experimental_tcp TIXB aggregation", len(session.batches))
+		t.Fatalf("native batches = %d, want tix_tcp TIXB aggregation", len(session.batches))
 	}
 	if len(session.sent) != 1 {
 		t.Fatalf("single sends = %d, want one TIXB packet", len(session.sent))
 	}
 	packets, ok := decodeDataSessionBatch(session.sent[0])
 	if !ok || len(packets) != 2 {
-		t.Fatalf("sent packet did not decode as experimental_tcp plaintext TIXB batch: ok=%v len=%d", ok, len(packets))
+		t.Fatalf("sent packet did not decode as tix_tcp plaintext TIXB batch: ok=%v len=%d", ok, len(packets))
 	}
 }
 
@@ -5236,7 +5236,7 @@ func TestDataSessionBatchConfigUsesTransportAdvanced(t *testing.T) {
 					MaxFrames:  8,
 				},
 				Profiles: []config.TransportProfileConfig{{
-					Transport: string(transport.ProtocolExperimentalTCP),
+					Transport: string(transport.ProtocolTIXTCP),
 					Advanced: config.TransportAdvancedConfig{
 						BatchBytes: 32768,
 						FlushDelay: "0",
@@ -5251,29 +5251,29 @@ func TestDataSessionBatchConfigUsesTransportAdvanced(t *testing.T) {
 	if !udp.enabled || udp.maxBytes != 8192 || udp.delay != time.Millisecond || udp.maxPackets != 8 {
 		t.Fatalf("udp batching = %#v, want global advanced settings", udp)
 	}
-	experimentalTCP := daemon.dataSessionBatchConfigForEndpoint(config.EndpointConfig{Transport: string(transport.ProtocolExperimentalTCP)})
-	if !experimentalTCP.enabled || experimentalTCP.maxBytes != 32768 || experimentalTCP.delay != 0 || experimentalTCP.maxPackets != 64 {
-		t.Fatalf("experimental_tcp batching = %#v, want profile advanced settings", experimentalTCP)
+	tixTCP := daemon.dataSessionBatchConfigForEndpoint(config.EndpointConfig{Transport: string(transport.ProtocolTIXTCP)})
+	if !tixTCP.enabled || tixTCP.maxBytes != 32768 || tixTCP.delay != 0 || tixTCP.maxPackets != 64 {
+		t.Fatalf("tix_tcp batching = %#v, want profile advanced settings", tixTCP)
 	}
 }
 
-func TestSendDataSessionPacketsCanDisableExperimentalTCPAggregation(t *testing.T) {
+func TestSendDataSessionPacketsCanDisableTIXTCPAggregation(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_BYTES", "4096")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_DELAY", "0")
-	t.Setenv("TRUSTIX_DATA_SESSION_EXPERIMENTAL_TCP_TIXB", "0")
+	t.Setenv("TRUSTIX_DATA_SESSION_TIX_TCP_TIXB", "0")
 	session := &recordingNativeBatchSession{stats: transport.TransportStats{
 		NativeBatching: true,
 		Datagram:       true,
 		MaxPacketSize:  4096,
 	}}
 	runtime := &dataSessionRuntime{
-		key:     dataSessionKey{Transport: transport.ProtocolExperimentalTCP},
+		key:     dataSessionKey{Transport: transport.ProtocolTIXTCP},
 		session: session,
 	}
 	daemon := &Daemon{}
 	packetA := tcpIPv4Packet()
-	packetB := udpIPv4Packet([]byte("experimental-tcp-native-override"))
+	packetB := udpIPv4Packet([]byte("tix-tcp-native-override"))
 
 	if err := daemon.sendDataSessionPackets(runtime, session, [][]byte{packetA, packetB}); err != nil {
 		t.Fatalf("send packet batch: %v", err)
@@ -5285,7 +5285,7 @@ func TestSendDataSessionPacketsCanDisableExperimentalTCPAggregation(t *testing.T
 		t.Fatalf("native batches = %#v, want one two-packet batch", session.batches)
 	}
 	if _, ok := decodeDataSessionBatch(session.batches[0][0]); ok {
-		t.Fatal("disabled experimental_tcp aggregation should not wrap packets in TIXB")
+		t.Fatal("disabled tix_tcp aggregation should not wrap packets in TIXB")
 	}
 }
 
@@ -5320,7 +5320,7 @@ func TestSendDataSessionPacketsUsesNativeBatchingForKernelCryptoEncryptedSession
 	}
 }
 
-func TestSendDataSessionPacketsUsesNativeBatchingForExperimentalTCPKernelCryptoByDefault(t *testing.T) {
+func TestSendDataSessionPacketsUsesNativeBatchingForTIXTCPKernelCryptoByDefault(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_BYTES", "4096")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_DELAY", "0")
@@ -5332,12 +5332,12 @@ func TestSendDataSessionPacketsUsesNativeBatchingForExperimentalTCPKernelCryptoB
 		MaxPacketSize:   4096,
 	}}
 	runtime := &dataSessionRuntime{
-		key:     dataSessionKey{Transport: transport.ProtocolExperimentalTCP},
+		key:     dataSessionKey{Transport: transport.ProtocolTIXTCP},
 		session: session,
 	}
 	daemon := &Daemon{}
 	packetA := tcpIPv4Packet()
-	packetB := udpIPv4Packet([]byte("experimental-tcp-kernel-crypto-native"))
+	packetB := udpIPv4Packet([]byte("tix-tcp-kernel-crypto-native"))
 
 	if err := daemon.sendDataSessionPackets(runtime, session, [][]byte{packetA, packetB}); err != nil {
 		t.Fatalf("send packet batch: %v", err)
@@ -5349,7 +5349,7 @@ func TestSendDataSessionPacketsUsesNativeBatchingForExperimentalTCPKernelCryptoB
 		t.Fatalf("native batches = %#v, want one two-packet kernel crypto batch", session.batches)
 	}
 	if _, ok := decodeDataSessionBatch(session.batches[0][0]); ok {
-		t.Fatal("experimental_tcp kernel crypto native batch should not wrap packets in TIXB by default")
+		t.Fatal("tix_tcp kernel crypto native batch should not wrap packets in TIXB by default")
 	}
 }
 
@@ -5417,7 +5417,7 @@ func TestSendDataSessionPacketsAggregatesUserspaceEncryptedNativeTunnelByDefault
 	}
 }
 
-func TestSendDataSessionPacketsAggregatesUserspaceEncryptedExperimentalTCPByDefault(t *testing.T) {
+func TestSendDataSessionPacketsAggregatesUserspaceEncryptedTIXTCPByDefault(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH", "1")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_BYTES", "4096")
 	t.Setenv("TRUSTIX_DATA_SESSION_BATCH_DELAY", "0")
@@ -5429,25 +5429,25 @@ func TestSendDataSessionPacketsAggregatesUserspaceEncryptedExperimentalTCPByDefa
 		MaxPacketSize:   4096,
 	}}
 	runtime := &dataSessionRuntime{
-		key:     dataSessionKey{Transport: transport.ProtocolExperimentalTCP},
+		key:     dataSessionKey{Transport: transport.ProtocolTIXTCP},
 		session: session,
 	}
 	daemon := &Daemon{}
 	packetA := tcpIPv4Packet()
-	packetB := udpIPv4Packet([]byte("experimental-tcp-userspace-encrypted-default"))
+	packetB := udpIPv4Packet([]byte("tix-tcp-userspace-encrypted-default"))
 
 	if err := daemon.sendDataSessionPackets(runtime, session, [][]byte{packetA, packetB}); err != nil {
 		t.Fatalf("send packet batch: %v", err)
 	}
 	if len(session.batches) != 0 {
-		t.Fatalf("native batches = %d, want experimental_tcp userspace encrypted TIXB aggregation", len(session.batches))
+		t.Fatalf("native batches = %d, want tix_tcp userspace encrypted TIXB aggregation", len(session.batches))
 	}
 	if len(session.sent) != 1 {
 		t.Fatalf("single sends = %d, want one TIXB packet", len(session.sent))
 	}
 	packets, ok := decodeDataSessionBatch(session.sent[0])
 	if !ok || len(packets) != 2 {
-		t.Fatalf("sent packet did not decode as experimental_tcp encrypted TIXB batch: ok=%v len=%d", ok, len(packets))
+		t.Fatalf("sent packet did not decode as tix_tcp encrypted TIXB batch: ok=%v len=%d", ok, len(packets))
 	}
 }
 
@@ -5504,7 +5504,7 @@ func TestDataSessionBatchMaxBytesAllowsPlaintextFragmentingDatagramLogicalBatche
 	}
 }
 
-func TestDataSessionGSOCoalesceDefaultsForExperimentalTCPUserspaceSecure(t *testing.T) {
+func TestDataSessionGSOCoalesceDefaultsForTIXTCPUserspaceSecure(t *testing.T) {
 	stats := transport.TransportStats{
 		NativeBatching:      true,
 		Encrypted:           true,
@@ -5513,15 +5513,15 @@ func TestDataSessionGSOCoalesceDefaultsForExperimentalTCPUserspaceSecure(t *test
 		FragmentingDatagram: true,
 		MaxPacketSize:       65535,
 	}
-	experimentalTCP := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolExperimentalTCP}}
-	if !dataSessionTXGSOCoalesceDefaultForRuntime(experimentalTCP, stats) {
-		t.Fatal("experimental_tcp userspace secure should default TX GSO coalescing on")
+	tixTCP := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolTIXTCP}}
+	if !dataSessionTXGSOCoalesceDefaultForRuntime(tixTCP, stats) {
+		t.Fatal("tix_tcp userspace secure should default TX GSO coalescing on")
 	}
-	if !dataSessionTXGSOCoalesceMultiFlowDefaultForRuntime(experimentalTCP, stats) {
-		t.Fatal("experimental_tcp userspace secure should default TX GSO multi-flow coalescing on")
+	if !dataSessionTXGSOCoalesceMultiFlowDefaultForRuntime(tixTCP, stats) {
+		t.Fatal("tix_tcp userspace secure should default TX GSO multi-flow coalescing on")
 	}
-	if !dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(experimentalTCP) {
-		t.Fatal("experimental_tcp userspace secure should default RX GSO coalescing on")
+	if !dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(tixTCP) {
+		t.Fatal("tix_tcp userspace secure should default RX GSO coalescing on")
 	}
 	udp := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolUDP}}
 	if dataSessionTXGSOCoalesceDefaultForRuntime(udp, stats) {
@@ -6997,11 +6997,11 @@ func TestRegisterInboundPublicEndpointKeepsOutboundSession(t *testing.T) {
 	}
 }
 
-func TestAddressedExperimentalTCPReverseSessionSatisfiesSessionPoolIndex(t *testing.T) {
+func TestAddressedTIXTCPReverseSessionSatisfiesSessionPoolIndex(t *testing.T) {
 	peer := testPeer()
 	endpoint := peer.Endpoints[0]
-	endpoint.Name = core.EndpointID("b-experimental-tcp")
-	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Name = core.EndpointID("b-tix-tcp")
+	endpoint.Transport = string(transport.ProtocolTIXTCP)
 	endpoint.Address = "198.51.100.2:7142"
 	endpoint.Security.Encryption = securetransport.EncryptionPlaintext
 	peer.Endpoints[0] = endpoint
@@ -7009,10 +7009,10 @@ func TestAddressedExperimentalTCPReverseSessionSatisfiesSessionPoolIndex(t *test
 	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionPlaintext)
 	reverseKey.PoolIndex = 2
 	reverse := &recordingSession{}
-	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	expTransport := &recordingDialTransport{name: transport.ProtocolTIXTCP}
 	registry := transport.NewRegistry()
 	if err := registry.Register(expTransport); err != nil {
-		t.Fatalf("register experimental_tcp transport: %v", err)
+		t.Fatalf("register tix_tcp transport: %v", err)
 	}
 	daemon := &Daemon{
 		desired: config.Desired{
@@ -7040,16 +7040,16 @@ func TestAddressedExperimentalTCPReverseSessionSatisfiesSessionPoolIndex(t *test
 	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
 	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
 	if err != nil {
-		t.Fatalf("session for addressed experimental_tcp reverse pool index: %v", err)
+		t.Fatalf("session for addressed tix_tcp reverse pool index: %v", err)
 	}
 	if session != reverse {
-		t.Fatal("addressed experimental_tcp did not reuse reverse session for matching pool index")
+		t.Fatal("addressed tix_tcp did not reuse reverse session for matching pool index")
 	}
 	if key != reverseKey {
 		t.Fatalf("session key = %#v, want reverse key %#v", key, reverseKey)
 	}
 	if expTransport.dialCount() != 0 {
-		t.Fatalf("experimental_tcp dial count = %d, want 0", expTransport.dialCount())
+		t.Fatalf("tix_tcp dial count = %d, want 0", expTransport.dialCount())
 	}
 	missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4)
 	if reflect.DeepEqual(missing, []int{0, 1, 3}) {
@@ -7130,11 +7130,11 @@ func TestAddressedSecureKernelUDPWarmupDialsMissingReversePoolIndex(t *testing.T
 	}
 }
 
-func TestFullPlaintextExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t *testing.T) {
+func TestFullPlaintextTIXTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t *testing.T) {
 	peer := testPeer()
 	endpoint := peer.Endpoints[0]
-	endpoint.Name = core.EndpointID("b-experimental-tcp")
-	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Name = core.EndpointID("b-tix-tcp")
+	endpoint.Transport = string(transport.ProtocolTIXTCP)
 	endpoint.Address = "198.51.100.2:7142"
 	endpoint.Security.Encryption = securetransport.EncryptionPlaintext
 	peer.Endpoints[0] = endpoint
@@ -7142,10 +7142,10 @@ func TestFullPlaintextExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolInd
 	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionPlaintext)
 	reverseKey.PoolIndex = 2
 	reverse := &recordingSession{}
-	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	expTransport := &recordingDialTransport{name: transport.ProtocolTIXTCP}
 	registry := transport.NewRegistry()
 	if err := registry.Register(expTransport); err != nil {
-		t.Fatalf("register experimental_tcp transport: %v", err)
+		t.Fatalf("register tix_tcp transport: %v", err)
 	}
 	daemon := &Daemon{
 		desired: config.Desired{
@@ -7181,27 +7181,27 @@ func TestFullPlaintextExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolInd
 	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
 	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
 	if err != nil {
-		t.Fatalf("session for full plaintext addressed experimental_tcp pool index: %v", err)
+		t.Fatalf("session for full plaintext addressed tix_tcp pool index: %v", err)
 	}
 	if session == reverse {
-		t.Fatal("full plaintext addressed experimental_tcp reused reverse session for outbound pool index")
+		t.Fatal("full plaintext addressed tix_tcp reused reverse session for outbound pool index")
 	}
 	if key.Address != endpoint.Address {
 		t.Fatalf("session key address = %q, want direct address %q", key.Address, endpoint.Address)
 	}
 	if expTransport.dialCount() != 1 {
-		t.Fatalf("experimental_tcp dial count = %d, want 1", expTransport.dialCount())
+		t.Fatalf("tix_tcp dial count = %d, want 1", expTransport.dialCount())
 	}
 	if missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4); !reflect.DeepEqual(missing, []int{0, 1, 3}) {
 		t.Fatalf("full plaintext missing pool indexes after outbound dial = %v, want [0 1 3]", missing)
 	}
 }
 
-func TestRouteGSOExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t *testing.T) {
+func TestRouteGSOTIXTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t *testing.T) {
 	peer := testPeer()
 	endpoint := peer.Endpoints[0]
-	endpoint.Name = core.EndpointID("b-experimental-tcp")
-	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Name = core.EndpointID("b-tix-tcp")
+	endpoint.Transport = string(transport.ProtocolTIXTCP)
 	endpoint.Address = "198.51.100.2:7142"
 	endpoint.Security.Encryption = securetransport.EncryptionPlaintext
 	peer.Endpoints[0] = endpoint
@@ -7209,10 +7209,10 @@ func TestRouteGSOExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t 
 	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionPlaintext)
 	reverseKey.PoolIndex = 2
 	reverse := &recordingSession{}
-	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	expTransport := &recordingDialTransport{name: transport.ProtocolTIXTCP}
 	registry := transport.NewRegistry()
 	if err := registry.Register(expTransport); err != nil {
-		t.Fatalf("register experimental_tcp transport: %v", err)
+		t.Fatalf("register tix_tcp transport: %v", err)
 	}
 	daemon := &Daemon{
 		desired: config.Desired{
@@ -7220,15 +7220,15 @@ func TestRouteGSOExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t 
 			Domain: config.DomainConfig{ID: peer.Domain},
 			Peers:  []config.PeerConfig{peer},
 			Endpoints: []config.EndpointConfig{{
-				Name:      core.EndpointID("a-experimental-tcp"),
-				Transport: string(transport.ProtocolExperimentalTCP),
+				Name:      core.EndpointID("a-tix-tcp"),
+				Transport: string(transport.ProtocolTIXTCP),
 				Enabled:   true,
 			}},
 			TransportPolicy: config.TransportPolicyConfig{
 				Profile:    config.TransportProfilePerformance,
 				Datapath:   config.TransportDatapathKernelModule,
 				Encryption: securetransport.EncryptionPlaintext,
-				Candidates: []core.EndpointID{"a-experimental-tcp"},
+				Candidates: []core.EndpointID{"a-tix-tcp"},
 				SessionPool: config.SessionPoolPolicyConfig{
 					Size: 4,
 				},
@@ -7244,7 +7244,7 @@ func TestRouteGSOExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t 
 	}
 	defer daemon.closeDataSessions()
 
-	if !experimentalTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) {
+	if !tixTCPPerformanceRouteGSOAsyncForDesired(daemon.desired) {
 		t.Fatal("test setup did not select route-GSO")
 	}
 	if missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4); !reflect.DeepEqual(missing, []int{0, 1, 2, 3}) {
@@ -7255,27 +7255,27 @@ func TestRouteGSOExperimentalTCPReverseSessionDoesNotSatisfyOutboundPoolIndex(t 
 	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
 	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
 	if err != nil {
-		t.Fatalf("session for route-GSO addressed experimental_tcp pool index: %v", err)
+		t.Fatalf("session for route-GSO addressed tix_tcp pool index: %v", err)
 	}
 	if session == reverse {
-		t.Fatal("route-GSO addressed experimental_tcp reused reverse session for outbound pool index")
+		t.Fatal("route-GSO addressed tix_tcp reused reverse session for outbound pool index")
 	}
 	if key.Address != endpoint.Address {
 		t.Fatalf("session key address = %q, want direct address %q", key.Address, endpoint.Address)
 	}
 	if expTransport.dialCount() != 1 {
-		t.Fatalf("experimental_tcp dial count = %d, want 1", expTransport.dialCount())
+		t.Fatalf("tix_tcp dial count = %d, want 1", expTransport.dialCount())
 	}
 	if missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionPlaintext, 4); !reflect.DeepEqual(missing, []int{0, 1, 3}) {
 		t.Fatalf("route-GSO missing pool indexes after outbound dial = %v, want [0 1 3]", missing)
 	}
 }
 
-func TestAddressedSecureExperimentalTCPPrefersDirectSessionOverReversePoolIndex(t *testing.T) {
+func TestAddressedSecureTIXTCPPrefersDirectSessionOverReversePoolIndex(t *testing.T) {
 	peer := testPeer()
 	endpoint := peer.Endpoints[0]
-	endpoint.Name = core.EndpointID("b-experimental-tcp")
-	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Name = core.EndpointID("b-tix-tcp")
+	endpoint.Transport = string(transport.ProtocolTIXTCP)
 	endpoint.Address = "198.51.100.2:7142"
 	endpoint.Security.Encryption = securetransport.EncryptionSecure
 	peer.Endpoints[0] = endpoint
@@ -7283,10 +7283,10 @@ func TestAddressedSecureExperimentalTCPPrefersDirectSessionOverReversePoolIndex(
 	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionSecure)
 	reverseKey.PoolIndex = 2
 	reverse := &recordingSession{}
-	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	expTransport := &recordingDialTransport{name: transport.ProtocolTIXTCP}
 	registry := transport.NewRegistry()
 	if err := registry.Register(expTransport); err != nil {
-		t.Fatalf("register experimental_tcp transport: %v", err)
+		t.Fatalf("register tix_tcp transport: %v", err)
 	}
 	daemon := &Daemon{
 		desired: config.Desired{
@@ -7314,10 +7314,10 @@ func TestAddressedSecureExperimentalTCPPrefersDirectSessionOverReversePoolIndex(
 	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
 	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
 	if err != nil {
-		t.Fatalf("session for addressed secure experimental_tcp pool index: %v", err)
+		t.Fatalf("session for addressed secure tix_tcp pool index: %v", err)
 	}
 	if session == reverse {
-		t.Fatal("addressed secure experimental_tcp reused reverse session by default")
+		t.Fatal("addressed secure tix_tcp reused reverse session by default")
 	}
 	if key.Address != endpoint.Address {
 		t.Fatalf("session key address = %q, want direct address %q", key.Address, endpoint.Address)
@@ -7326,7 +7326,7 @@ func TestAddressedSecureExperimentalTCPPrefersDirectSessionOverReversePoolIndex(
 		t.Fatalf("session key encryption = %q, want secure", key.Encryption)
 	}
 	if expTransport.dialCount() != 1 {
-		t.Fatalf("experimental_tcp dial count = %d, want 1", expTransport.dialCount())
+		t.Fatalf("tix_tcp dial count = %d, want 1", expTransport.dialCount())
 	}
 	missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionSecure, 4)
 	if reflect.DeepEqual(missing, []int{0, 1, 3}) {
@@ -7335,12 +7335,12 @@ func TestAddressedSecureExperimentalTCPPrefersDirectSessionOverReversePoolIndex(
 	t.Fatalf("missing pool indexes = %v, want [0 1 3]", missing)
 }
 
-func TestAddressedSecureExperimentalTCPReverseSessionOptInSatisfiesSessionPoolIndex(t *testing.T) {
-	t.Setenv("TRUSTIX_EXPERIMENTAL_TCP_SECURE_PREFER_REVERSE_SESSION", "1")
+func TestAddressedSecureTIXTCPReverseSessionOptInSatisfiesSessionPoolIndex(t *testing.T) {
+	t.Setenv("TRUSTIX_TIX_TCP_SECURE_PREFER_REVERSE_SESSION", "1")
 	peer := testPeer()
 	endpoint := peer.Endpoints[0]
-	endpoint.Name = core.EndpointID("b-experimental-tcp")
-	endpoint.Transport = string(transport.ProtocolExperimentalTCP)
+	endpoint.Name = core.EndpointID("b-tix-tcp")
+	endpoint.Transport = string(transport.ProtocolTIXTCP)
 	endpoint.Address = "198.51.100.2:7142"
 	endpoint.Security.Encryption = securetransport.EncryptionSecure
 	peer.Endpoints[0] = endpoint
@@ -7348,10 +7348,10 @@ func TestAddressedSecureExperimentalTCPReverseSessionOptInSatisfiesSessionPoolIn
 	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionSecure)
 	reverseKey.PoolIndex = 2
 	reverse := &recordingSession{}
-	expTransport := &recordingDialTransport{name: transport.ProtocolExperimentalTCP}
+	expTransport := &recordingDialTransport{name: transport.ProtocolTIXTCP}
 	registry := transport.NewRegistry()
 	if err := registry.Register(expTransport); err != nil {
-		t.Fatalf("register experimental_tcp transport: %v", err)
+		t.Fatalf("register tix_tcp transport: %v", err)
 	}
 	daemon := &Daemon{
 		desired: config.Desired{
@@ -7379,16 +7379,16 @@ func TestAddressedSecureExperimentalTCPReverseSessionOptInSatisfiesSessionPoolIn
 	transportEndpoint.Encryption = daemon.endpointDialEncryption(endpoint)
 	session, key, err := daemon.sessionForEndpointPoolIndex(context.Background(), daemon.currentDataSessionEpoch(), peer, endpoint, transportEndpoint, 2)
 	if err != nil {
-		t.Fatalf("session for addressed secure experimental_tcp reverse pool index: %v", err)
+		t.Fatalf("session for addressed secure tix_tcp reverse pool index: %v", err)
 	}
 	if session != reverse {
-		t.Fatal("addressed secure experimental_tcp did not reuse reverse session when opted in")
+		t.Fatal("addressed secure tix_tcp did not reuse reverse session when opted in")
 	}
 	if key != reverseKey {
 		t.Fatalf("session key = %#v, want reverse key %#v", key, reverseKey)
 	}
 	if expTransport.dialCount() != 0 {
-		t.Fatalf("experimental_tcp dial count = %d, want 0", expTransport.dialCount())
+		t.Fatalf("tix_tcp dial count = %d, want 0", expTransport.dialCount())
 	}
 	missing := daemon.missingSessionPoolIndexes(peer.ID, endpoint, securetransport.EncryptionSecure, 4)
 	if reflect.DeepEqual(missing, []int{0, 1, 3}) {
@@ -7915,10 +7915,10 @@ func TestRegisterInboundFullPlaintextKernelUDPKeepsReverseSessionWhenHeartbeatEn
 	}
 }
 
-func TestRegisterInboundExperimentalTCPSessionKeepsDialableOutboundSession(t *testing.T) {
+func TestRegisterInboundTIXTCPSessionKeepsDialableOutboundSession(t *testing.T) {
 	peer := testPeer()
-	peer.Endpoints[0].Name = core.EndpointID("b-experimental-tcp")
-	peer.Endpoints[0].Transport = string(transport.ProtocolExperimentalTCP)
+	peer.Endpoints[0].Name = core.EndpointID("b-tix-tcp")
+	peer.Endpoints[0].Transport = string(transport.ProtocolTIXTCP)
 	peer.Endpoints[0].Address = "198.51.100.2:7142"
 	endpoint := peer.Endpoints[0]
 	outboundKey := dataSessionKey{
@@ -7955,23 +7955,23 @@ func TestRegisterInboundExperimentalTCPSessionKeepsDialableOutboundSession(t *te
 		Transport: transport.Protocol(endpoint.Transport),
 	}, inbound)
 	if err != nil {
-		t.Fatalf("register inbound experimental_tcp session: %v", err)
+		t.Fatalf("register inbound tix_tcp session: %v", err)
 	}
 	if runtime == nil {
-		t.Fatal("register inbound experimental_tcp session returned nil runtime")
+		t.Fatal("register inbound tix_tcp session returned nil runtime")
 	}
 	if got := daemon.dataSessions[outboundKey]; got != outboundSession {
-		t.Fatalf("outbound experimental_tcp session = %#v, want existing outbound", got)
+		t.Fatalf("outbound tix_tcp session = %#v, want existing outbound", got)
 	}
 	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionSecure)
 	if got := daemon.dataSessions[reverseKey]; got != inbound {
-		t.Fatalf("reverse experimental_tcp session = %#v, want inbound", got)
+		t.Fatalf("reverse tix_tcp session = %#v, want inbound", got)
 	}
 	if outboundCanceled {
-		t.Fatal("dialable outbound experimental_tcp runtime cancel was called")
+		t.Fatal("dialable outbound tix_tcp runtime cancel was called")
 	}
 	if outboundSession.closed.Load() {
-		t.Fatal("dialable outbound experimental_tcp session was closed")
+		t.Fatal("dialable outbound tix_tcp session was closed")
 	}
 }
 

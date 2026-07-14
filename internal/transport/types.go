@@ -1,5 +1,5 @@
 // Package transport defines the pluggable data-channel contract. UDP, QUIC,
-// TCP, WebSocket, HTTP CONNECT, experimental TCP, and kernel tunnel
+// TCP, WebSocket, HTTP CONNECT, TIX-TCP, and kernel tunnel
 // implementations register behind this boundary.
 package transport
 
@@ -25,33 +25,15 @@ const (
 	ProtocolWebSocket   Protocol = "websocket"
 	ProtocolHTTPConnect Protocol = "http_connect"
 	ProtocolTIXTCP      Protocol = "tix_tcp"
-	// ProtocolExperimentalTCP is the legacy runtime identity retained during
-	// the TIX-TCP rolling migration.
-	ProtocolExperimentalTCP Protocol = "experimental_tcp"
-	ProtocolGRE             Protocol = "gre"
-	ProtocolIPIP            Protocol = "ipip"
-	ProtocolVXLAN           Protocol = "vxlan"
+	ProtocolGRE         Protocol = "gre"
+	ProtocolIPIP        Protocol = "ipip"
+	ProtocolVXLAN       Protocol = "vxlan"
 )
 
-// RuntimeProtocol maps public and legacy TIX-TCP names to the established
-// runtime identity so upgraded nodes remain wire-compatible with older peers.
-func RuntimeProtocol(protocol Protocol) Protocol {
-	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(string(protocol)), "-", "_"))
-	switch normalized {
-	case string(ProtocolTIXTCP), string(ProtocolExperimentalTCP), "ackless_tcp", "ackless":
-		return ProtocolExperimentalTCP
-	default:
-		return Protocol(normalized)
-	}
-}
-
-// PublicProtocol returns the canonical operator-facing protocol name.
-func PublicProtocol(protocol Protocol) Protocol {
-	runtimeProtocol := RuntimeProtocol(protocol)
-	if runtimeProtocol == ProtocolExperimentalTCP {
-		return ProtocolTIXTCP
-	}
-	return runtimeProtocol
+// NormalizeProtocol returns the canonical protocol identifier. Unsupported
+// legacy names remain unsupported and are rejected by config validation.
+func NormalizeProtocol(protocol Protocol) Protocol {
+	return Protocol(strings.ToLower(strings.ReplaceAll(strings.TrimSpace(string(protocol)), "-", "_")))
 }
 
 type EndpointMode string
@@ -250,7 +232,7 @@ func (registry *Registry) Register(transport Transport) error {
 	if transport == nil {
 		return fmt.Errorf("transport is nil")
 	}
-	name := RuntimeProtocol(transport.Name())
+	name := NormalizeProtocol(transport.Name())
 	if name == "" {
 		return fmt.Errorf("transport name is required")
 	}
@@ -267,7 +249,7 @@ func (registry *Registry) Register(transport Transport) error {
 func (registry *Registry) Get(protocol Protocol) (Transport, bool) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
-	transport, ok := registry.transports[RuntimeProtocol(protocol)]
+	transport, ok := registry.transports[NormalizeProtocol(protocol)]
 	return transport, ok
 }
 

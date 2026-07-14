@@ -14,12 +14,12 @@ func (manager *Manager) refreshKernelCryptoProbeLocked() {
 	probe := probeKernelCryptoCapability()
 	manager.kernelCryptoProbe = probe
 	manager.kernelCryptoProbeValid = true
-	manager.capabilities = append(manager.capabilities, "experimental-tcp-kernel-crypto-probe")
+	manager.capabilities = append(manager.capabilities, "tix-tcp-kernel-crypto-probe")
 	if probe.CapabilityReady {
-		manager.capabilities = append(manager.capabilities, "experimental-tcp-kernel-crypto-capable")
+		manager.capabilities = append(manager.capabilities, "tix-tcp-kernel-crypto-capable")
 	}
 	if probe.SelfTest != nil && probe.SelfTest.Passed {
-		manager.capabilities = append(manager.capabilities, "experimental-tcp-kernel-crypto-verifier-ok")
+		manager.capabilities = append(manager.capabilities, "tix-tcp-kernel-crypto-verifier-ok")
 	}
 	if probe.AESNI {
 		manager.capabilities = append(manager.capabilities, "aes-ni")
@@ -28,10 +28,10 @@ func (manager *Manager) refreshKernelCryptoProbeLocked() {
 		manager.capabilities = append(manager.capabilities, "aes-gcm-software-fallback")
 	}
 	if !probe.CapabilityReady && probe.Reason != "" {
-		manager.warnings = append(manager.warnings, "experimental_tcp kernel crypto capability unavailable: "+probe.Reason)
+		manager.warnings = append(manager.warnings, "tix_tcp kernel crypto capability unavailable: "+probe.Reason)
 	}
 	if probe.SelfTest != nil && probe.SelfTest.Attempted && !probe.SelfTest.Passed && probe.SelfTest.Reason != "" {
-		manager.warnings = append(manager.warnings, "experimental_tcp kernel crypto verifier selftest failed: "+probe.SelfTest.Reason)
+		manager.warnings = append(manager.warnings, "tix_tcp kernel crypto verifier selftest failed: "+probe.SelfTest.Reason)
 	}
 }
 

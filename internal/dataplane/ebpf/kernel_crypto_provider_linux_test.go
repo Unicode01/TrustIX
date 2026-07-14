@@ -99,7 +99,7 @@ func TestKernelCryptoManagerInstallsRealContextWhenProviderAvailable(t *testing.
 
 	const flowID = 9102
 	spec := validKernelCryptoSpec(flowID)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install real kernel crypto contexts: %v", err)
 	}
 	stats := manager.kernelCryptoProviderStatsLocked()
@@ -117,7 +117,7 @@ func TestKernelCryptoManagerInstallsRealContextWhenProviderAvailable(t *testing.
 		}
 	}
 
-	if err := manager.DeleteExperimentalTCPFlows(context.Background(), []uint64{flowID}); err != nil {
+	if err := manager.DeleteTIXTCPFlows(context.Background(), []uint64{flowID}); err != nil {
 		t.Fatalf("delete kernel crypto flow: %v", err)
 	}
 	stats = manager.kernelCryptoProviderStatsLocked()
@@ -150,34 +150,34 @@ func TestKernelCryptoProviderFrameSealOpenAndReplay(t *testing.T) {
 	spec := validKernelCryptoSpec(flowID)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install frame crypto contexts: %v", err)
 	}
 	plaintext := []byte("trustix kernel frame crypto")
-	sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 1, plaintext)
+	sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 1, plaintext)
 	if err != nil {
 		t.Fatalf("seal frame: %v", err)
 	}
 	if string(sealed) == string(plaintext) {
 		t.Fatalf("sealed frame did not change plaintext")
 	}
-	opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 1, sealed)
+	opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 1, sealed)
 	if err != nil {
 		t.Fatalf("open frame: %v", err)
 	}
 	if string(opened) != string(plaintext) {
 		t.Fatalf("opened plaintext = %q, want %q", opened, plaintext)
 	}
-	if _, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 1, sealed); err == nil || !isKernelCryptoReplayError(err) {
+	if _, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 1, sealed); err == nil || !isKernelCryptoReplayError(err) {
 		t.Fatalf("replay open error = %v, want replay", err)
 	}
-	if _, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 1, plaintext); err == nil || !isKernelCryptoReplayError(err) {
+	if _, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 1, plaintext); err == nil || !isKernelCryptoReplayError(err) {
 		t.Fatalf("duplicate seal error = %v, want replay/sequence reuse", err)
 	}
 
 	seal := func(sequence uint64, plaintext []byte) []byte {
 		t.Helper()
-		sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
+		sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
 		if err != nil {
 			t.Fatalf("seal frame sequence %d: %v", sequence, err)
 		}
@@ -185,7 +185,7 @@ func TestKernelCryptoProviderFrameSealOpenAndReplay(t *testing.T) {
 	}
 	open := func(sequence uint64, sealed []byte, want []byte) {
 		t.Helper()
-		opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, sealed)
+		opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, sealed)
 		if err != nil {
 			t.Fatalf("open frame sequence %d: %v", sequence, err)
 		}
@@ -203,7 +203,7 @@ func TestKernelCryptoProviderFrameSealOpenAndReplay(t *testing.T) {
 	open(10, sealed10, plain10)
 	open(12, sealed12, plain12)
 	open(11, sealed11, plain11)
-	if _, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 11, sealed11); err == nil || !isKernelCryptoReplayError(err) {
+	if _, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 11, sealed11); err == nil || !isKernelCryptoReplayError(err) {
 		t.Fatalf("out-of-order replay open error = %v, want replay", err)
 	}
 
@@ -211,7 +211,7 @@ func TestKernelCryptoProviderFrameSealOpenAndReplay(t *testing.T) {
 	sealed13 := seal(13, plain13)
 	tampered13 := append([]byte(nil), sealed13...)
 	tampered13[len(tampered13)-1] ^= 0x01
-	if _, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 13, tampered13); err == nil || isKernelCryptoReplayError(err) {
+	if _, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 13, tampered13); err == nil || isKernelCryptoReplayError(err) {
 		t.Fatalf("tampered open error = %v, want non-replay decrypt failure", err)
 	}
 	open(13, sealed13, plain13)
@@ -221,7 +221,7 @@ func TestKernelCryptoProviderFrameSealOpenAndReplay(t *testing.T) {
 	sealed25 := seal(25, plain25)
 	sealed90 := seal(90, plain90)
 	open(90, sealed90, plain90)
-	if _, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 25, sealed25); err == nil || !isKernelCryptoReplayError(err) {
+	if _, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, 25, sealed25); err == nil || !isKernelCryptoReplayError(err) {
 		t.Fatalf("too-old replay open error = %v, want replay", err)
 	}
 }
@@ -245,19 +245,19 @@ func TestKernelCryptoProviderFrameSealOpenAES128(t *testing.T) {
 	spec.SendKey = bytesOf(0x51, kernelCryptoAES128KeyLen)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install AES-128 kernel crypto contexts: %v", err)
 	}
 
 	plaintext := []byte("aes128 provider frame")
-	sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES128GCMX25519, spec.Epoch, 1, plaintext)
+	sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES128GCMX25519, spec.Epoch, 1, plaintext)
 	if err != nil {
 		t.Fatalf("seal AES-128 frame: %v", err)
 	}
 	if len(sealed) < kernelCryptoSecureHeaderLen || sealed[5] != byte(kernelCryptoSuiteIDTrustIXAES128GCMX25519) {
 		t.Fatalf("sealed AES-128 header = %x", sealed[:min(len(sealed), kernelCryptoSecureHeaderLen)])
 	}
-	opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES128GCMX25519, spec.Epoch, 1, sealed)
+	opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES128GCMX25519, spec.Epoch, 1, sealed)
 	if err != nil {
 		t.Fatalf("open AES-128 frame: %v", err)
 	}
@@ -283,18 +283,18 @@ func TestKernelCryptoProviderFrameSealOpenVariableSizes(t *testing.T) {
 	spec := validKernelCryptoSpec(flowID)
 	spec.RecvKey = append([]byte(nil), spec.SendKey...)
 	spec.RecvIV = append([]byte(nil), spec.SendIV...)
-	if err := manager.InstallExperimentalTCPCrypto(context.Background(), []dataplane.ExperimentalTCPCryptoSpec{spec}); err != nil {
+	if err := manager.InstallTIXTCPCrypto(context.Background(), []dataplane.TIXTCPCryptoSpec{spec}); err != nil {
 		t.Fatalf("install variable-size frame crypto contexts: %v", err)
 	}
 	lengths := []int{1, 15, 16, 17, 31, 32, 33, 127, 128, 129, 1200, 1340, 1360, kernelCryptoFrameMaxPlain}
 	for i, length := range lengths {
 		plaintext := bytesOf(byte(0x30+i), length)
 		sequence := uint64(i + 1)
-		sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
+		sealed, err := manager.kernelCryptoProvider.SealFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionSend), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, plaintext)
 		if err != nil {
 			t.Fatalf("seal %d-byte frame: %v", length, err)
 		}
-		opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceExperimentalTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, sealed)
+		opened, err := manager.kernelCryptoProvider.OpenFrame(kernelCryptoFlowKeyFor(kernelCryptoNamespaceTIXTCP, flowID, kernelCryptoDirectionRecv), kernelCryptoSuiteIDTrustIXAES256GCMX25519, spec.Epoch, sequence, sealed)
 		if err != nil {
 			t.Fatalf("open %d-byte frame: %v", length, err)
 		}

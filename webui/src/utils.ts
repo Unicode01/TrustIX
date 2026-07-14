@@ -221,15 +221,7 @@ export function transportOptions(): string[] {
 
 export function normalizeTransportName(raw: string | undefined): string {
   const value = String(raw || "").trim().toLowerCase().replaceAll("-", "_");
-  switch (value) {
-    case "experimental_tcp":
-    case "ackless_tcp":
-    case "ackless":
-    case "tix_tcp":
-      return "tix_tcp";
-    default:
-      return value;
-  }
+  return value;
 }
 
 export function transportLabel(raw: string | undefined): string {

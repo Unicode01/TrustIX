@@ -130,7 +130,7 @@ func TestEncodeKernelCryptoSpec(t *testing.T) {
 	recvIV := bytesOf(0x44, kernelCryptoAESGCMIVLen)
 	installed := time.Unix(10, 20).UTC()
 
-	entries, err := encodeKernelCryptoSpec(dataplane.ExperimentalTCPCryptoSpec{
+	entries, err := encodeKernelCryptoSpec(dataplane.TIXTCPCryptoSpec{
 		FlowID:       42,
 		Suite:        kernelCryptoSuiteAES256GCMX25519,
 		WireFormat:   kernelCryptoWireFormatTrustIXSecureDataV1,
@@ -171,7 +171,7 @@ func TestEncodeKernelCryptoSpec(t *testing.T) {
 func TestEncodeKernelCryptoSpecSupportsAES128(t *testing.T) {
 	sendKey := bytesOf(0x11, kernelCryptoAES128KeyLen)
 	recvKey := bytesOf(0x22, kernelCryptoAES128KeyLen)
-	entries, err := encodeKernelCryptoSpec(dataplane.ExperimentalTCPCryptoSpec{
+	entries, err := encodeKernelCryptoSpec(dataplane.TIXTCPCryptoSpec{
 		FlowID:     43,
 		Suite:      kernelCryptoSuiteAES128GCMX25519,
 		WireFormat: kernelCryptoWireFormatTrustIXSecureDataV1,
@@ -211,7 +211,7 @@ func TestEncodeKernelUDPCryptoSpecUsesSeparateNamespace(t *testing.T) {
 }
 
 func TestEncodeKernelCryptoSpecRejectsChaChaKernelOffload(t *testing.T) {
-	_, err := encodeKernelCryptoSpec(dataplane.ExperimentalTCPCryptoSpec{
+	_, err := encodeKernelCryptoSpec(dataplane.TIXTCPCryptoSpec{
 		FlowID:     42,
 		Suite:      kernelCryptoSuiteChaCha20Poly1305X25519,
 		WireFormat: kernelCryptoWireFormatTrustIXSecureDataV1,
@@ -231,7 +231,7 @@ func TestZeroKernelCryptoEntriesClearsKeyMaterial(t *testing.T) {
 	sendIV := bytesOf(0x33, kernelCryptoAESGCMIVLen)
 	recvIV := bytesOf(0x44, kernelCryptoAESGCMIVLen)
 
-	entries, err := encodeKernelCryptoSpec(dataplane.ExperimentalTCPCryptoSpec{
+	entries, err := encodeKernelCryptoSpec(dataplane.TIXTCPCryptoSpec{
 		FlowID:     42,
 		Suite:      kernelCryptoSuiteAES256GCMX25519,
 		WireFormat: kernelCryptoWireFormatTrustIXSecureDataV1,
@@ -253,7 +253,7 @@ func TestZeroKernelCryptoEntriesClearsKeyMaterial(t *testing.T) {
 }
 
 func TestEncodeKernelCryptoSpecRejectsInvalidKeyLength(t *testing.T) {
-	_, err := encodeKernelCryptoSpec(dataplane.ExperimentalTCPCryptoSpec{
+	_, err := encodeKernelCryptoSpec(dataplane.TIXTCPCryptoSpec{
 		FlowID:     42,
 		Suite:      kernelCryptoSuiteAES256GCMX25519,
 		WireFormat: kernelCryptoWireFormatTrustIXSecureDataV1,
@@ -268,7 +268,7 @@ func TestEncodeKernelCryptoSpecRejectsInvalidKeyLength(t *testing.T) {
 }
 
 func TestEncodeKernelCryptoSpecsRejectsMapOverflow(t *testing.T) {
-	specs := make([]dataplane.ExperimentalTCPCryptoSpec, int(kernelCryptoMaxEntries)/2+1)
+	specs := make([]dataplane.TIXTCPCryptoSpec, int(kernelCryptoMaxEntries)/2+1)
 	_, err := encodeKernelCryptoSpecs(specs)
 	if err == nil || !strings.Contains(err.Error(), "exceeds map capacity") {
 		t.Fatalf("error = %v, want map capacity", err)

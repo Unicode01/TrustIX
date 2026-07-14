@@ -9,9 +9,9 @@ userspace_min_gbps="${TRUSTIX_CROSS_HOST_USERSPACE_MIN_GBPS:-${gate_min_gbps:-0.
 userspace_tc_min_gbps="${TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS:-${gate_min_gbps:-0.75}}"
 tc_direct_min_gbps="${TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS:-${gate_min_gbps:-0}}"
 full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-3}}"
-exp_tcp_full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-4}}"
+tix_tcp_full_kmod_min_gbps="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_GBPS:-${gate_min_gbps:-4}}"
 secure_kudp_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS:-${gate_min_gbps:-1.5}}"
-secure_exp_tcp_kernel_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_GBPS:-${gate_min_gbps:-1.5}}"
+secure_tix_tcp_kernel_min_gbps="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_GBPS:-${gate_min_gbps:-1.5}}"
 route_gso_min_gbps="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS:-${gate_min_gbps:-2.5}}"
 min_seconds="${TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS:-3600}"
 seconds_slop="${TRUSTIX_CROSS_HOST_GATE_SECONDS_SLOP:-1}"
@@ -20,19 +20,19 @@ min_interval_gbps_ratio="${TRUSTIX_CROSS_HOST_GATE_MIN_INTERVAL_GBPS_RATIO:-0.25
 min_host_cpus="${TRUSTIX_CROSS_HOST_GATE_MIN_HOST_CPUS:-4}"
 forbidden_host_net_drivers="${TRUSTIX_CROSS_HOST_GATE_FORBID_HOST_NET_DRIVER:-e1000 e1000e rtl8139 8139cp 8139too pcnet32 ne2k_pci}"
 full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS:-8}"
-exp_tcp_full_kmod_min_pool_size="${TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_POOL_SIZE:-16}"
-exp_tcp_full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_SESSIONS:-16}"
-exp_tcp_full_kmod_session_error_budget="${TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_SESSION_ERROR_BUDGET:-0}"
+tix_tcp_full_kmod_min_pool_size="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_POOL_SIZE:-16}"
+tix_tcp_full_kmod_min_sessions="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_SESSIONS:-16}"
+tix_tcp_full_kmod_session_error_budget="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_SESSION_ERROR_BUDGET:-0}"
 secure_kudp_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS:-8}"
 secure_kudp_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS:-1}"
 secure_kudp_direct_error_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET:-64}"
 secure_kudp_replay_seen_ratio_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET:-0.00002}"
 secure_kudp_drop_ratio_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_DROP_RATIO_BUDGET:-0.00002}"
-secure_exp_tcp_kernel_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_SESSIONS:-8}"
-secure_exp_tcp_kernel_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_CRYPTO_FLOWS:-1}"
-secure_exp_tcp_kernel_session_error_budget="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_SESSION_ERROR_BUDGET:-2}"
-secure_exp_tcp_kernel_direct_error_budget="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_DIRECT_ERROR_BUDGET:-0}"
-secure_exp_tcp_kernel_replay_ratio_budget="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_REPLAY_RATIO_BUDGET:-0.00002}"
+secure_tix_tcp_kernel_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS:-8}"
+secure_tix_tcp_kernel_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS:-1}"
+secure_tix_tcp_kernel_session_error_budget="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET:-2}"
+secure_tix_tcp_kernel_direct_error_budget="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET:-0}"
+secure_tix_tcp_kernel_replay_ratio_budget="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET:-0.00002}"
 route_gso_min_sessions="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS:-8}"
 route_gso_session_error_budget="${TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2}"
 compat_min_sessions="${TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS:-1}"
@@ -48,26 +48,26 @@ userspace_tc_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_SE
 tc_direct_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_SECONDS:-}"
 dd_full_kmod="${TRUSTIX_CROSS_HOST_DD_FULL_KMOD:-}"
 owdeb_full_kmod="${TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD:-}"
-dd_exp_tcp_full_kmod="${TRUSTIX_CROSS_HOST_DD_EXP_TCP_FULL_KMOD:-}"
-owdeb_exp_tcp_full_kmod="${TRUSTIX_CROSS_HOST_OWDEB_EXP_TCP_FULL_KMOD:-}"
+dd_tix_tcp_full_kmod="${TRUSTIX_CROSS_HOST_DD_TIX_TCP_FULL_KMOD:-}"
+owdeb_tix_tcp_full_kmod="${TRUSTIX_CROSS_HOST_OWDEB_TIX_TCP_FULL_KMOD:-}"
 dd_secure_kudp="${TRUSTIX_CROSS_HOST_DD_SECURE_KUDP:-}"
 owdeb_secure_kudp="${TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP:-}"
 dd_route_gso="${TRUSTIX_CROSS_HOST_DD_ROUTE_GSO:-}"
 owdeb_route_gso="${TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO:-}"
 full_kmod_cases_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASES:-}"
-exp_tcp_full_kmod_cases_raw="${TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASES:-}"
+tix_tcp_full_kmod_cases_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES:-}"
 secure_kudp_cases_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASES:-}"
-secure_exp_tcp_kernel_cases_raw="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASES:-}"
+secure_tix_tcp_kernel_cases_raw="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES:-}"
 route_gso_cases_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASES:-}"
 full_kmod_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS:-}"
-exp_tcp_full_kmod_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS:-}"
+tix_tcp_full_kmod_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS:-}"
 secure_kudp_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS:-}"
-secure_exp_tcp_kernel_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS:-}"
+secure_tix_tcp_kernel_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS:-}"
 route_gso_case_min_gbps_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS:-}"
 full_kmod_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS:-}"
-exp_tcp_full_kmod_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_SECONDS:-}"
+tix_tcp_full_kmod_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS:-}"
 secure_kudp_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS:-}"
-secure_exp_tcp_kernel_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS:-}"
+secure_tix_tcp_kernel_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS:-}"
 route_gso_case_min_seconds_raw="${TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS:-}"
 
 log() {
@@ -252,7 +252,7 @@ case_policy_stat_args() {
     *) die "${family} case ${case_name} has unsupported gate class ${gate_class}" ;;
   esac
   case "$transport" in
-    udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|experimental_tcp) ;;
+    udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|tix_tcp) ;;
     *) die "${family} case ${case_name} has unsupported transport ${transport}" ;;
   esac
   case "$encryption" in secure|plaintext) ;; *) die "${family} case ${case_name} has unsupported encryption ${encryption}" ;; esac
@@ -292,7 +292,7 @@ transport_endpoint_supports_crypto_placement() {
   transport="$1"
   session_transport="$(session_transport_for_matrix_transport "$transport")"
   case "$session_transport" in
-    udp|experimental_tcp) return 0 ;;
+    udp|tix_tcp) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -339,16 +339,16 @@ case_session_args() {
       placement="userspace"
       require_session_traffic=0
       ;;
-    exp-tcp-full-kmod)
-      transport="experimental_tcp"
+    tix-tcp-full-kmod)
+      transport="tix_tcp"
       encryption="plaintext"
       profile="performance"
       datapath="kernel_module"
       placement="userspace"
       require_session_traffic=0
       ;;
-    secure-exp-tcp-kernel)
-      transport="experimental_tcp"
+    secure-tix-tcp-kernel)
+      transport="tix_tcp"
       encryption="secure"
       profile="performance"
       datapath="kernel_module"
@@ -356,7 +356,7 @@ case_session_args() {
       require_session_traffic=0
       ;;
     route-gso)
-      transport="experimental_tcp"
+      transport="tix_tcp"
       encryption="plaintext"
       profile="performance"
       datapath="kernel_module"
@@ -401,9 +401,9 @@ case_session_args() {
       --require-transport-session-stat "stats.receive_encrypted=true" \
       --require-transport-session-stat "stats.crypto_placement=${placement}"
   fi
-  if [[ "$family" == "exp-tcp-full-kmod" ]]; then
+  if [[ "$family" == "tix-tcp-full-kmod" ]]; then
     printf '%s\n' \
-      --require-transport-session-stat "stats.extra.experimental_tcp_full_plaintext_kernel_datapath=1" \
+      --require-transport-session-stat "stats.extra.tix_tcp_full_plaintext_kernel_datapath=1" \
       --require-transport-session-any-min "stats.packets_sent=1"
   fi
   case "$(session_transport_for_matrix_transport "$transport")" in
@@ -441,11 +441,11 @@ route_tcp_helper_capability_args() {
 case_module_param_args() {
   local family="$1" case_token="$2"
   case "$family" in
-    secure-kudp|secure-exp-tcp-kernel|route-gso)
+    secure-kudp|secure-tix-tcp-kernel|route-gso)
       route_tcp_helper_capability_args
       return 0
       ;;
-    full-kmod|exp-tcp-full-kmod) ;;
+    full-kmod|tix-tcp-full-kmod) ;;
     *) return 0 ;;
   esac
   if case_is_openwrt_debian "$case_token"; then
@@ -466,24 +466,24 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_USERSPACE_TC_MIN_GBPS="$userspace_tc_min_gbps" \
   TRUSTIX_GATE_MANIFEST_TC_DIRECT_MIN_GBPS="$tc_direct_min_gbps" \
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_GBPS="$full_kmod_min_gbps" \
-  TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_MIN_GBPS="$exp_tcp_full_kmod_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_GBPS="$tix_tcp_full_kmod_min_gbps" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_GBPS="$secure_kudp_min_gbps" \
-  TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_MIN_GBPS="$secure_exp_tcp_kernel_min_gbps" \
+  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_GBPS="$secure_tix_tcp_kernel_min_gbps" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_GBPS="$route_gso_min_gbps" \
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_SESSIONS="$full_kmod_min_sessions" \
-  TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_MIN_POOL_SIZE="$exp_tcp_full_kmod_min_pool_size" \
-  TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_MIN_SESSIONS="$exp_tcp_full_kmod_min_sessions" \
-  TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_SESSION_ERROR_BUDGET="$exp_tcp_full_kmod_session_error_budget" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_POOL_SIZE="$tix_tcp_full_kmod_min_pool_size" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_SESSIONS="$tix_tcp_full_kmod_min_sessions" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_SESSION_ERROR_BUDGET="$tix_tcp_full_kmod_session_error_budget" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_SESSIONS="$secure_kudp_min_sessions" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_CRYPTO_FLOWS="$secure_kudp_min_crypto_flows" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DIRECT_ERROR_BUDGET="$secure_kudp_direct_error_budget" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET="$secure_kudp_replay_seen_ratio_budget" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DROP_RATIO_BUDGET="$secure_kudp_drop_ratio_budget" \
-  TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_MIN_SESSIONS="$secure_exp_tcp_kernel_min_sessions" \
-  TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_MIN_CRYPTO_FLOWS="$secure_exp_tcp_kernel_min_crypto_flows" \
-  TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_SESSION_ERROR_BUDGET="$secure_exp_tcp_kernel_session_error_budget" \
-  TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_DIRECT_ERROR_BUDGET="$secure_exp_tcp_kernel_direct_error_budget" \
-  TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_REPLAY_RATIO_BUDGET="$secure_exp_tcp_kernel_replay_ratio_budget" \
+  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS="$secure_tix_tcp_kernel_min_sessions" \
+  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS="$secure_tix_tcp_kernel_min_crypto_flows" \
+  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET="$secure_tix_tcp_kernel_session_error_budget" \
+  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET="$secure_tix_tcp_kernel_direct_error_budget" \
+  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET="$secure_tix_tcp_kernel_replay_ratio_budget" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_SESSIONS="$route_gso_min_sessions" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_SESSION_ERROR_BUDGET="$route_gso_session_error_budget" \
   TRUSTIX_GATE_MANIFEST_COMPAT_MIN_SESSIONS="$compat_min_sessions" \
@@ -491,25 +491,25 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASES="$userspace_tc_cases" \
   TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASES="$tc_direct_cases" \
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASES="$full_kmod_cases" \
-  TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_CASES="$exp_tcp_full_kmod_cases" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASES="$tix_tcp_full_kmod_cases" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASES="$secure_kudp_cases" \
-  TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_CASES="$secure_exp_tcp_kernel_cases" \
+  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASES="$secure_tix_tcp_kernel_cases" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASES="$route_gso_cases" \
   TRUSTIX_GATE_MANIFEST_USERSPACE_CASE_MIN_GBPS="$userspace_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASE_MIN_GBPS="$userspace_tc_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_GBPS="$tc_direct_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_GBPS="$full_kmod_case_min_gbps_raw" \
-  TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS="$exp_tcp_full_kmod_case_min_gbps_raw" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS="$tix_tcp_full_kmod_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_GBPS="$secure_kudp_case_min_gbps_raw" \
-  TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS="$secure_exp_tcp_kernel_case_min_gbps_raw" \
+  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS="$secure_tix_tcp_kernel_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_GBPS="$route_gso_case_min_gbps_raw" \
   TRUSTIX_GATE_MANIFEST_USERSPACE_CASE_MIN_SECONDS="$userspace_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASE_MIN_SECONDS="$userspace_tc_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_SECONDS="$tc_direct_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_SECONDS="$full_kmod_case_min_seconds_raw" \
-  TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_CASE_MIN_SECONDS="$exp_tcp_full_kmod_case_min_seconds_raw" \
+  TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS="$tix_tcp_full_kmod_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_SECONDS="$secure_kudp_case_min_seconds_raw" \
-  TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS="$secure_exp_tcp_kernel_case_min_seconds_raw" \
+  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS="$secure_tix_tcp_kernel_case_min_seconds_raw" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_SECONDS="$route_gso_case_min_seconds_raw" \
   python3 - "$summary_dir/production-gate-manifest.json" "${BASH_SOURCE[0]}" "$verifier" <<'PY'
 import hashlib
@@ -544,24 +544,24 @@ manifest = {
         "userspace_tc_min_gbps": env["TRUSTIX_GATE_MANIFEST_USERSPACE_TC_MIN_GBPS"],
         "tc_direct_min_gbps": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_MIN_GBPS"],
         "full_kmod_min_gbps": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_GBPS"],
-        "exp_tcp_full_kmod_min_gbps": env["TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_MIN_GBPS"],
+        "tix_tcp_full_kmod_min_gbps": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_GBPS"],
         "secure_kudp_min_gbps": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_GBPS"],
-        "secure_exp_tcp_kernel_min_gbps": env["TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_MIN_GBPS"],
+        "secure_tix_tcp_kernel_min_gbps": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_GBPS"],
         "route_gso_min_gbps": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_GBPS"],
         "full_kmod_min_sessions": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_MIN_SESSIONS"],
-        "exp_tcp_full_kmod_min_pool_size": env["TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_MIN_POOL_SIZE"],
-        "exp_tcp_full_kmod_min_sessions": env["TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_MIN_SESSIONS"],
-        "exp_tcp_full_kmod_session_error_budget": env["TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_SESSION_ERROR_BUDGET"],
+        "tix_tcp_full_kmod_min_pool_size": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_POOL_SIZE"],
+        "tix_tcp_full_kmod_min_sessions": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_MIN_SESSIONS"],
+        "tix_tcp_full_kmod_session_error_budget": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_SESSION_ERROR_BUDGET"],
         "secure_kudp_min_sessions": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_SESSIONS"],
         "secure_kudp_min_crypto_flows": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_MIN_CRYPTO_FLOWS"],
         "secure_kudp_direct_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DIRECT_ERROR_BUDGET"],
         "secure_kudp_replay_seen_ratio_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET"],
         "secure_kudp_drop_ratio_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_DROP_RATIO_BUDGET"],
-        "secure_exp_tcp_kernel_min_sessions": env["TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_MIN_SESSIONS"],
-        "secure_exp_tcp_kernel_min_crypto_flows": env["TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_MIN_CRYPTO_FLOWS"],
-        "secure_exp_tcp_kernel_session_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_SESSION_ERROR_BUDGET"],
-        "secure_exp_tcp_kernel_direct_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_DIRECT_ERROR_BUDGET"],
-        "secure_exp_tcp_kernel_replay_ratio_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_REPLAY_RATIO_BUDGET"],
+        "secure_tix_tcp_kernel_min_sessions": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS"],
+        "secure_tix_tcp_kernel_min_crypto_flows": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS"],
+        "secure_tix_tcp_kernel_session_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET"],
+        "secure_tix_tcp_kernel_direct_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET"],
+        "secure_tix_tcp_kernel_replay_ratio_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET"],
         "route_gso_min_sessions": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_SESSIONS"],
         "route_gso_session_error_budget": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_SESSION_ERROR_BUDGET"],
         "compat_min_sessions": env["TRUSTIX_GATE_MANIFEST_COMPAT_MIN_SESSIONS"],
@@ -571,9 +571,9 @@ manifest = {
         "userspace_tc": env["TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASES"],
         "tc_direct": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASES"],
         "full_kmod": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASES"],
-        "exp_tcp_full_kmod": env["TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_CASES"],
+        "tix_tcp_full_kmod": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASES"],
         "secure_kudp": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASES"],
-        "secure_exp_tcp_kernel": env["TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_CASES"],
+        "secure_tix_tcp_kernel": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASES"],
         "route_gso": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASES"],
     },
     "case_min_gbps": {
@@ -581,9 +581,9 @@ manifest = {
         "userspace_tc": env["TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASE_MIN_GBPS"],
         "tc_direct": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_GBPS"],
         "full_kmod": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_GBPS"],
-        "exp_tcp_full_kmod": env["TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS"],
+        "tix_tcp_full_kmod": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS"],
         "secure_kudp": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_GBPS"],
-        "secure_exp_tcp_kernel": env["TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS"],
+        "secure_tix_tcp_kernel": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS"],
         "route_gso": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_GBPS"],
     },
     "case_min_seconds": {
@@ -591,9 +591,9 @@ manifest = {
         "userspace_tc": env["TRUSTIX_GATE_MANIFEST_USERSPACE_TC_CASE_MIN_SECONDS"],
         "tc_direct": env["TRUSTIX_GATE_MANIFEST_TC_DIRECT_CASE_MIN_SECONDS"],
         "full_kmod": env["TRUSTIX_GATE_MANIFEST_FULL_KMOD_CASE_MIN_SECONDS"],
-        "exp_tcp_full_kmod": env["TRUSTIX_GATE_MANIFEST_EXP_TCP_FULL_KMOD_CASE_MIN_SECONDS"],
+        "tix_tcp_full_kmod": env["TRUSTIX_GATE_MANIFEST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS"],
         "secure_kudp": env["TRUSTIX_GATE_MANIFEST_SECURE_KUDP_CASE_MIN_SECONDS"],
-        "secure_exp_tcp_kernel": env["TRUSTIX_GATE_MANIFEST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS"],
+        "secure_tix_tcp_kernel": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS"],
         "route_gso": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_CASE_MIN_SECONDS"],
     },
 }
@@ -657,17 +657,17 @@ main() {
   validate_number TRUSTIX_CROSS_HOST_USERSPACE_TC_MIN_GBPS "$userspace_tc_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_TC_DIRECT_MIN_GBPS "$tc_direct_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_GBPS "$full_kmod_min_gbps"
-  validate_number TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_GBPS "$exp_tcp_full_kmod_min_gbps"
+  validate_number TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_GBPS "$tix_tcp_full_kmod_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_GBPS "$secure_kudp_min_gbps"
-  validate_number TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_GBPS "$secure_exp_tcp_kernel_min_gbps"
+  validate_number TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_GBPS "$secure_tix_tcp_kernel_min_gbps"
   validate_number TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_GBPS "$route_gso_min_gbps"
   userspace_min_gbps="$(max_decimal "$userspace_min_gbps" "0.5")"
   userspace_tc_min_gbps="$(max_decimal "$userspace_tc_min_gbps" "0.75")"
   tc_direct_min_gbps="$(max_decimal "$tc_direct_min_gbps" "3")"
   full_kmod_min_gbps="$(max_decimal "$full_kmod_min_gbps" "3")"
-  exp_tcp_full_kmod_min_gbps="$(max_decimal "$exp_tcp_full_kmod_min_gbps" "4")"
+  tix_tcp_full_kmod_min_gbps="$(max_decimal "$tix_tcp_full_kmod_min_gbps" "4")"
   secure_kudp_min_gbps="$(max_decimal "$secure_kudp_min_gbps" "1.5")"
-  secure_exp_tcp_kernel_min_gbps="$(max_decimal "$secure_exp_tcp_kernel_min_gbps" "1.5")"
+  secure_tix_tcp_kernel_min_gbps="$(max_decimal "$secure_tix_tcp_kernel_min_gbps" "1.5")"
   route_gso_min_gbps="$(max_decimal "$route_gso_min_gbps" "2.5")"
   validate_number TRUSTIX_CROSS_HOST_GATE_MIN_SECONDS "$min_seconds"
   min_seconds="$(max_decimal "$min_seconds" "3600")"
@@ -680,36 +680,36 @@ main() {
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_GATE_MIN_HOST_CPUS "$min_host_cpus"
   min_host_cpus="$(max_integer "$min_host_cpus" "4")"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_FULL_KMOD_MIN_SESSIONS "$full_kmod_min_sessions"
-  validate_nonnegative_integer TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_POOL_SIZE "$exp_tcp_full_kmod_min_pool_size"
-  validate_nonnegative_integer TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_MIN_SESSIONS "$exp_tcp_full_kmod_min_sessions"
-  validate_nonnegative_integer TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_SESSION_ERROR_BUDGET "$exp_tcp_full_kmod_session_error_budget"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_POOL_SIZE "$tix_tcp_full_kmod_min_pool_size"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_MIN_SESSIONS "$tix_tcp_full_kmod_min_sessions"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_SESSION_ERROR_BUDGET "$tix_tcp_full_kmod_session_error_budget"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_SESSIONS "$secure_kudp_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_MIN_CRYPTO_FLOWS "$secure_kudp_min_crypto_flows"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_KUDP_DIRECT_ERROR_BUDGET "$secure_kudp_direct_error_budget"
   validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_REPLAY_SEEN_RATIO_BUDGET "$secure_kudp_replay_seen_ratio_budget"
   validate_number TRUSTIX_CROSS_HOST_SECURE_KUDP_DROP_RATIO_BUDGET "$secure_kudp_drop_ratio_budget"
-  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_SESSIONS "$secure_exp_tcp_kernel_min_sessions"
-  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_MIN_CRYPTO_FLOWS "$secure_exp_tcp_kernel_min_crypto_flows"
-  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_SESSION_ERROR_BUDGET "$secure_exp_tcp_kernel_session_error_budget"
-  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_DIRECT_ERROR_BUDGET "$secure_exp_tcp_kernel_direct_error_budget"
-  validate_number TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_REPLAY_RATIO_BUDGET "$secure_exp_tcp_kernel_replay_ratio_budget"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS "$secure_tix_tcp_kernel_min_sessions"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS "$secure_tix_tcp_kernel_min_crypto_flows"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET "$secure_tix_tcp_kernel_session_error_budget"
+  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET "$secure_tix_tcp_kernel_direct_error_budget"
+  validate_number TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET "$secure_tix_tcp_kernel_replay_ratio_budget"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS "$route_gso_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_COMPAT_MIN_SESSIONS "$compat_min_sessions"
   full_kmod_min_sessions="$(max_integer "$full_kmod_min_sessions" "8")"
-  exp_tcp_full_kmod_min_pool_size="$(max_integer "$exp_tcp_full_kmod_min_pool_size" "16")"
-  exp_tcp_full_kmod_min_sessions="$(max_integer "$exp_tcp_full_kmod_min_sessions" "16")"
-  exp_tcp_full_kmod_session_error_budget="$(min_integer "$exp_tcp_full_kmod_session_error_budget" "0")"
+  tix_tcp_full_kmod_min_pool_size="$(max_integer "$tix_tcp_full_kmod_min_pool_size" "16")"
+  tix_tcp_full_kmod_min_sessions="$(max_integer "$tix_tcp_full_kmod_min_sessions" "16")"
+  tix_tcp_full_kmod_session_error_budget="$(min_integer "$tix_tcp_full_kmod_session_error_budget" "0")"
   secure_kudp_min_sessions="$(max_integer "$secure_kudp_min_sessions" "8")"
   secure_kudp_min_crypto_flows="$(max_integer "$secure_kudp_min_crypto_flows" "1")"
   secure_kudp_direct_error_budget="$(min_integer "$secure_kudp_direct_error_budget" "64")"
   secure_kudp_replay_seen_ratio_budget="$(min_decimal "$secure_kudp_replay_seen_ratio_budget" "0.00002")"
   secure_kudp_drop_ratio_budget="$(min_decimal "$secure_kudp_drop_ratio_budget" "0.00002")"
-  secure_exp_tcp_kernel_min_sessions="$(max_integer "$secure_exp_tcp_kernel_min_sessions" "8")"
-  secure_exp_tcp_kernel_min_crypto_flows="$(max_integer "$secure_exp_tcp_kernel_min_crypto_flows" "1")"
-  secure_exp_tcp_kernel_session_error_budget="$(min_integer "$secure_exp_tcp_kernel_session_error_budget" "2")"
-  secure_exp_tcp_kernel_direct_error_budget="$(min_integer "$secure_exp_tcp_kernel_direct_error_budget" "0")"
-  secure_exp_tcp_kernel_replay_ratio_budget="$(min_decimal "$secure_exp_tcp_kernel_replay_ratio_budget" "0.00002")"
+  secure_tix_tcp_kernel_min_sessions="$(max_integer "$secure_tix_tcp_kernel_min_sessions" "8")"
+  secure_tix_tcp_kernel_min_crypto_flows="$(max_integer "$secure_tix_tcp_kernel_min_crypto_flows" "1")"
+  secure_tix_tcp_kernel_session_error_budget="$(min_integer "$secure_tix_tcp_kernel_session_error_budget" "2")"
+  secure_tix_tcp_kernel_direct_error_budget="$(min_integer "$secure_tix_tcp_kernel_direct_error_budget" "0")"
+  secure_tix_tcp_kernel_replay_ratio_budget="$(min_decimal "$secure_tix_tcp_kernel_replay_ratio_budget" "0.00002")"
   route_gso_min_sessions="$(max_integer "$route_gso_min_sessions" "8")"
   route_gso_session_error_budget="$(min_integer "$route_gso_session_error_budget" "2")"
   compat_min_sessions="$(max_integer "$compat_min_sessions" "1")"
@@ -717,34 +717,34 @@ main() {
   validate_case_min_map TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS "$userspace_tc_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS "$tc_direct_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS "$full_kmod_case_min_gbps_raw"
-  validate_case_min_map TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS "$exp_tcp_full_kmod_case_min_gbps_raw"
+  validate_case_min_map TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS "$tix_tcp_full_kmod_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS "$secure_kudp_case_min_gbps_raw"
-  validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS "$secure_exp_tcp_kernel_case_min_gbps_raw"
+  validate_case_min_map TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS "$secure_tix_tcp_kernel_case_min_gbps_raw"
   validate_case_min_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS "$route_gso_case_min_gbps_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_SECONDS "$userspace_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_SECONDS "$userspace_tc_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_SECONDS "$tc_direct_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS "$full_kmod_case_min_seconds_raw"
-  validate_case_seconds_map TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_SECONDS "$exp_tcp_full_kmod_case_min_seconds_raw"
+  validate_case_seconds_map TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS "$tix_tcp_full_kmod_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS "$secure_kudp_case_min_seconds_raw"
-  validate_case_seconds_map TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS "$secure_exp_tcp_kernel_case_min_seconds_raw"
+  validate_case_seconds_map TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS "$secure_tix_tcp_kernel_case_min_seconds_raw"
   validate_case_seconds_map TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS "$route_gso_case_min_seconds_raw"
 
   local userspace_cases=""
   local userspace_tc_cases=""
   local tc_direct_cases=""
   local full_kmod_cases=""
-  local exp_tcp_full_kmod_cases=""
+  local tix_tcp_full_kmod_cases=""
   local secure_kudp_cases=""
-  local secure_exp_tcp_kernel_cases=""
+  local secure_tix_tcp_kernel_cases=""
   local route_gso_cases=""
   local userspace_case_count=0
   local userspace_tc_case_count=0
   local tc_direct_case_count=0
   local full_kmod_case_count=0
-  local exp_tcp_full_kmod_case_count=0
+  local tix_tcp_full_kmod_case_count=0
   local secure_kudp_case_count=0
-  local secure_exp_tcp_kernel_case_count=0
+  local secure_tix_tcp_kernel_case_count=0
   local route_gso_case_count=0
   local token
   for token in $userspace_cases_raw; do
@@ -775,18 +775,18 @@ main() {
     append_case_token full_kmod_cases "$token"
     full_kmod_case_count=$((full_kmod_case_count + 1))
   done
-  if [[ -n "$dd_exp_tcp_full_kmod" ]]; then
-    append_case_token exp_tcp_full_kmod_cases "dd-exp-tcp-fullkmod=${dd_exp_tcp_full_kmod}"
-    exp_tcp_full_kmod_case_count=$((exp_tcp_full_kmod_case_count + 1))
+  if [[ -n "$dd_tix_tcp_full_kmod" ]]; then
+    append_case_token tix_tcp_full_kmod_cases "dd-tix-tcp-fullkmod=${dd_tix_tcp_full_kmod}"
+    tix_tcp_full_kmod_case_count=$((tix_tcp_full_kmod_case_count + 1))
   fi
-  if [[ -n "$owdeb_exp_tcp_full_kmod" ]]; then
-    append_case_token exp_tcp_full_kmod_cases "owdeb-exp-tcp-fullkmod=${owdeb_exp_tcp_full_kmod}"
-    exp_tcp_full_kmod_case_count=$((exp_tcp_full_kmod_case_count + 1))
+  if [[ -n "$owdeb_tix_tcp_full_kmod" ]]; then
+    append_case_token tix_tcp_full_kmod_cases "owdeb-tix-tcp-fullkmod=${owdeb_tix_tcp_full_kmod}"
+    tix_tcp_full_kmod_case_count=$((tix_tcp_full_kmod_case_count + 1))
   fi
-  for token in $exp_tcp_full_kmod_cases_raw; do
+  for token in $tix_tcp_full_kmod_cases_raw; do
     validate_case_token "$token"
-    append_case_token exp_tcp_full_kmod_cases "$token"
-    exp_tcp_full_kmod_case_count=$((exp_tcp_full_kmod_case_count + 1))
+    append_case_token tix_tcp_full_kmod_cases "$token"
+    tix_tcp_full_kmod_case_count=$((tix_tcp_full_kmod_case_count + 1))
   done
   if [[ -n "$dd_secure_kudp" ]]; then
     append_case_token secure_kudp_cases "dd-secure-kudp=${dd_secure_kudp}"
@@ -801,10 +801,10 @@ main() {
     append_case_token secure_kudp_cases "$token"
     secure_kudp_case_count=$((secure_kudp_case_count + 1))
   done
-  for token in $secure_exp_tcp_kernel_cases_raw; do
+  for token in $secure_tix_tcp_kernel_cases_raw; do
     validate_case_token "$token"
-    append_case_token secure_exp_tcp_kernel_cases "$token"
-    secure_exp_tcp_kernel_case_count=$((secure_exp_tcp_kernel_case_count + 1))
+    append_case_token secure_tix_tcp_kernel_cases "$token"
+    secure_tix_tcp_kernel_case_count=$((secure_tix_tcp_kernel_case_count + 1))
   done
   if [[ -n "$dd_route_gso" ]]; then
     append_case_token route_gso_cases "dd-routegso=${dd_route_gso}"
@@ -823,21 +823,21 @@ main() {
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_GBPS "$userspace_tc_case_min_gbps_raw" "$userspace_tc_cases"
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_GBPS "$tc_direct_case_min_gbps_raw" "$tc_direct_cases"
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_GBPS "$full_kmod_case_min_gbps_raw" "$full_kmod_cases"
-  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_GBPS "$exp_tcp_full_kmod_case_min_gbps_raw" "$exp_tcp_full_kmod_cases"
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_GBPS "$tix_tcp_full_kmod_case_min_gbps_raw" "$tix_tcp_full_kmod_cases"
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_GBPS "$secure_kudp_case_min_gbps_raw" "$secure_kudp_cases"
-  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_GBPS "$secure_exp_tcp_kernel_case_min_gbps_raw" "$secure_exp_tcp_kernel_cases"
+  validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_GBPS "$secure_tix_tcp_kernel_case_min_gbps_raw" "$secure_tix_tcp_kernel_cases"
   validate_case_min_map_matches_cases TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_GBPS "$route_gso_case_min_gbps_raw" "$route_gso_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_USERSPACE_CASE_MIN_SECONDS "$userspace_case_min_seconds_raw" "$userspace_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_USERSPACE_TC_CASE_MIN_SECONDS "$userspace_tc_case_min_seconds_raw" "$userspace_tc_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_TC_DIRECT_CASE_MIN_SECONDS "$tc_direct_case_min_seconds_raw" "$tc_direct_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_FULL_KMOD_CASE_MIN_SECONDS "$full_kmod_case_min_seconds_raw" "$full_kmod_cases"
-  validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_EXP_TCP_FULL_KMOD_CASE_MIN_SECONDS "$exp_tcp_full_kmod_case_min_seconds_raw" "$exp_tcp_full_kmod_cases"
+  validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASE_MIN_SECONDS "$tix_tcp_full_kmod_case_min_seconds_raw" "$tix_tcp_full_kmod_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_KUDP_CASE_MIN_SECONDS "$secure_kudp_case_min_seconds_raw" "$secure_kudp_cases"
-  validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASE_MIN_SECONDS "$secure_exp_tcp_kernel_case_min_seconds_raw" "$secure_exp_tcp_kernel_cases"
+  validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASE_MIN_SECONDS "$secure_tix_tcp_kernel_case_min_seconds_raw" "$secure_tix_tcp_kernel_cases"
   validate_case_seconds_map_matches_cases TRUSTIX_CROSS_HOST_ROUTE_GSO_CASE_MIN_SECONDS "$route_gso_case_min_seconds_raw" "$route_gso_cases"
 
-  if [[ "$userspace_case_count" -eq 0 && "$userspace_tc_case_count" -eq 0 && "$tc_direct_case_count" -eq 0 && "$full_kmod_case_count" -eq 0 && "$exp_tcp_full_kmod_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$secure_exp_tcp_kernel_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
-    die "set TRUSTIX_CROSS_HOST_USERSPACE_CASES/TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES/TRUSTIX_CROSS_HOST_TC_DIRECT_CASES/TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_EXP_TCP_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_EXP_TCP_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_SECURE_EXP_TCP_KERNEL_CASES/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO/TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO or *_CASES"
+  if [[ "$userspace_case_count" -eq 0 && "$userspace_tc_case_count" -eq 0 && "$tc_direct_case_count" -eq 0 && "$full_kmod_case_count" -eq 0 && "$tix_tcp_full_kmod_case_count" -eq 0 && "$secure_kudp_case_count" -eq 0 && "$secure_tix_tcp_kernel_case_count" -eq 0 && "$route_gso_case_count" -eq 0 ]]; then
+    die "set TRUSTIX_CROSS_HOST_USERSPACE_CASES/TRUSTIX_CROSS_HOST_USERSPACE_TC_CASES/TRUSTIX_CROSS_HOST_TC_DIRECT_CASES/TRUSTIX_CROSS_HOST_DD_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_TIX_TCP_FULL_KMOD/TRUSTIX_CROSS_HOST_OWDEB_TIX_TCP_FULL_KMOD/TRUSTIX_CROSS_HOST_DD_SECURE_KUDP/TRUSTIX_CROSS_HOST_OWDEB_SECURE_KUDP/TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES/TRUSTIX_CROSS_HOST_DD_ROUTE_GSO/TRUSTIX_CROSS_HOST_OWDEB_ROUTE_GSO or *_CASES"
   fi
 
   write_gate_manifest
@@ -927,28 +927,28 @@ main() {
       --require-lsmod-module trustix_datapath
   fi
 
-  if [[ "$exp_tcp_full_kmod_case_count" -gt 0 ]]; then
-    run_gate_case_list exp-tcp-full-kmod "$exp_tcp_full_kmod_min_gbps" "$exp_tcp_full_kmod_cases" "$exp_tcp_full_kmod_case_min_gbps_raw" "$exp_tcp_full_kmod_case_min_seconds_raw" \
+  if [[ "$tix_tcp_full_kmod_case_count" -gt 0 ]]; then
+    run_gate_case_list tix-tcp-full-kmod "$tix_tcp_full_kmod_min_gbps" "$tix_tcp_full_kmod_cases" "$tix_tcp_full_kmod_case_min_gbps_raw" "$tix_tcp_full_kmod_case_min_seconds_raw" \
       --require-transport-policy-stat encryption=plaintext \
       --require-transport-policy-stat profile=performance \
       --require-transport-policy-stat datapath=kernel_module \
       --require-transport-policy-stat crypto_placement=userspace \
-      --require-transport-policy-min session_pool_size="${exp_tcp_full_kmod_min_pool_size}" \
+      --require-transport-policy-min session_pool_size="${tix_tcp_full_kmod_min_pool_size}" \
       --require-transport-policy-stat session_pool_strategy=flow \
       --require-transport-policy-stat session_pool_warmup=true \
-      --require-transport-sessions-min "${exp_tcp_full_kmod_min_sessions}" \
-      --require-status-min data_path.active_sessions="${exp_tcp_full_kmod_min_sessions}" \
-      --require-status-max data_path.counters.session_dial_errors="${exp_tcp_full_kmod_session_error_budget}" \
+      --require-transport-sessions-min "${tix_tcp_full_kmod_min_sessions}" \
+      --require-status-min data_path.active_sessions="${tix_tcp_full_kmod_min_sessions}" \
+      --require-status-max data_path.counters.session_dial_errors="${tix_tcp_full_kmod_session_error_budget}" \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
       --require-status-max data_path.counters.session_resets_sent=0 \
       --require-status-max data_path.counters.session_resets_received=0 \
       --require-status-max data_path.counters.stale_sessions_dropped=0 \
       --require-datapath-stat capture_forwarder_suppressed=true \
-      --require-datapath-stat experimental_tcp.provider=kernel_datapath_full_plaintext \
-      --require-datapath-stat experimental_tcp.fast_path=true \
-      --require-datapath-min experimental_tcp.active_flows="${exp_tcp_full_kmod_min_sessions}" \
+      --require-datapath-stat tix_tcp.provider=kernel_datapath_full_plaintext \
+      --require-datapath-stat tix_tcp.fast_path=true \
+      --require-datapath-min tix_tcp.active_flows="${tix_tcp_full_kmod_min_sessions}" \
       --require-datapath-min kernel_rx_stage.rx_worker_injected=1 \
-      --require-datapath-min counters.session_dials="${exp_tcp_full_kmod_min_pool_size}" \
+      --require-datapath-min counters.session_dials="${tix_tcp_full_kmod_min_pool_size}" \
       --require-datapath-max counters.session_dial_errors=0 \
       --require-module-param-min trustix_datapath.enable_features=128 \
       --require-module-param-min trustix_datapath.features=128 \
@@ -961,8 +961,8 @@ main() {
       --require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0 \
       --require-module-param-min trustix_datapath.tx_plaintext_hash_tx_queue=1 \
       --require-module-param-max trustix_datapath.tx_plaintext_stream_coalesce=0 \
-      --require-module-param-min trustix_datapath.session_records="${exp_tcp_full_kmod_min_pool_size}" \
-      --require-module-param-min trustix_datapath.session_wire_records="${exp_tcp_full_kmod_min_pool_size}" \
+      --require-module-param-min trustix_datapath.session_records="${tix_tcp_full_kmod_min_pool_size}" \
+      --require-module-param-min trustix_datapath.session_wire_records="${tix_tcp_full_kmod_min_pool_size}" \
       --require-module-param-any-min trustix_datapath.tx_plaintext_packets=1 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_gso_segments=1 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_hash_tx_queue_sets=1 \
@@ -1062,74 +1062,74 @@ main() {
       --require-lsmod-module trustix_datapath_helpers
   fi
 
-  if [[ "$secure_exp_tcp_kernel_case_count" -gt 0 ]]; then
-    run_gate_case_list secure-exp-tcp-kernel "$secure_exp_tcp_kernel_min_gbps" "$secure_exp_tcp_kernel_cases" "$secure_exp_tcp_kernel_case_min_gbps_raw" "$secure_exp_tcp_kernel_case_min_seconds_raw" \
+  if [[ "$secure_tix_tcp_kernel_case_count" -gt 0 ]]; then
+    run_gate_case_list secure-tix-tcp-kernel "$secure_tix_tcp_kernel_min_gbps" "$secure_tix_tcp_kernel_cases" "$secure_tix_tcp_kernel_case_min_gbps_raw" "$secure_tix_tcp_kernel_case_min_seconds_raw" \
       --require-transport-policy-stat encryption=secure \
       --require-transport-policy-stat profile=performance \
       --require-transport-policy-stat datapath=kernel_module \
       --require-transport-policy-stat crypto_placement=kernel \
-      --require-transport-policy-min session_pool_size="${secure_exp_tcp_kernel_min_sessions}" \
+      --require-transport-policy-min session_pool_size="${secure_tix_tcp_kernel_min_sessions}" \
       --require-transport-policy-stat session_pool_strategy=flow \
       --require-transport-policy-stat session_pool_warmup=true \
-      --require-transport-sessions-min "${secure_exp_tcp_kernel_min_sessions}" \
-      --require-status-min data_path.active_sessions="${secure_exp_tcp_kernel_min_sessions}" \
-      --require-status-max data_path.counters.session_dial_errors="${secure_exp_tcp_kernel_session_error_budget}" \
+      --require-transport-sessions-min "${secure_tix_tcp_kernel_min_sessions}" \
+      --require-status-min data_path.active_sessions="${secure_tix_tcp_kernel_min_sessions}" \
+      --require-status-max data_path.counters.session_dial_errors="${secure_tix_tcp_kernel_session_error_budget}" \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
-      --require-datapath-stat experimental_tcp.fast_path=true \
-      --require-datapath-stat experimental_tcp.reinject=true \
-      --require-datapath-stat experimental_tcp.kernel_crypto=true \
-      --require-datapath-stat experimental_tcp.requested_crypto=kernel \
-      --require-datapath-stat experimental_tcp.effective_crypto=kernel \
-      --require-datapath-min experimental_tcp.active_flows=1 \
-      --require-datapath-stat experimental_tcp.provider_stats.kernel_crypto_flow_map_ready=1 \
-      --require-datapath-min experimental_tcp.provider_stats.kernel_crypto_flow_map_entries="${secure_exp_tcp_kernel_min_crypto_flows}" \
-      --require-datapath-min experimental_tcp.provider_stats.kernel_crypto_flow_map_updates="${secure_exp_tcp_kernel_min_crypto_flows}" \
-      --require-datapath-stat experimental_tcp.provider_stats.kernel_crypto_direct_slot_provider_ready=1 \
-      --require-datapath-stat experimental_tcp.provider_stats.kernel_crypto_direct_kfunc_fastpath_ready=1 \
-      --require-datapath-stat experimental_tcp.provider_stats.kernel_crypto_tc_direct_ready=1 \
-      --require-datapath-stat experimental_tcp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1 \
-      --require-datapath-stat experimental_tcp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
-      --require-datapath-stat experimental_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_attached=1 \
-      --require-datapath-stat experimental_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_trust_inner_checksums=1 \
-      --require-datapath-stat experimental_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled=1 \
-      --require-datapath-stat experimental_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc=1 \
-      --require-datapath-min experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_seal_calls=1 \
-      --require-datapath-min experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=1 \
-      --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors="${secure_exp_tcp_kernel_direct_error_budget}" \
-      --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_provider_unavailable_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_flow_rejects=0 \
-      --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_rejects=0 \
-      --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_seal_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_open_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.kernel_crypto_frame_replay_drops=0 \
-      --require-datapath-ratio-max experimental_tcp.provider_stats.kernel_crypto_frame_replay_drops/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_exp_tcp_kernel_replay_ratio_budget}" \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_open_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_drops=0 \
-      --require-datapath-ratio-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_drops/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_exp_tcp_kernel_replay_ratio_budget}" \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_no_context_drops=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_header_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_payload_len_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_secure_header_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_frame_header_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_epoch_sequence_mismatches=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_cipher_len_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_cipher_load_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_context_misses=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_state_misses=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_zero_plain_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_context_unavailable=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_epoch_mismatches=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_suite_mismatches=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_dynptr_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_decrypt_errors=0 \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors=0 \
-      --require-datapath-ratio-max experimental_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/experimental_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_exp_tcp_kernel_replay_ratio_budget}" \
-      --require-datapath-max experimental_tcp.provider_stats.xdp_kernel_crypto_store_errors=0 \
+      --require-datapath-stat tix_tcp.fast_path=true \
+      --require-datapath-stat tix_tcp.reinject=true \
+      --require-datapath-stat tix_tcp.kernel_crypto=true \
+      --require-datapath-stat tix_tcp.requested_crypto=kernel \
+      --require-datapath-stat tix_tcp.effective_crypto=kernel \
+      --require-datapath-min tix_tcp.active_flows=1 \
+      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_flow_map_ready=1 \
+      --require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_entries="${secure_tix_tcp_kernel_min_crypto_flows}" \
+      --require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_updates="${secure_tix_tcp_kernel_min_crypto_flows}" \
+      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_direct_slot_provider_ready=1 \
+      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_direct_kfunc_fastpath_ready=1 \
+      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_tc_direct_ready=1 \
+      --require-datapath-stat tix_tcp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc=1 \
+      --require-datapath-stat tix_tcp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
+      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_attached=1 \
+      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_trust_inner_checksums=1 \
+      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled=1 \
+      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc=1 \
+      --require-datapath-min tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_seal_calls=1 \
+      --require-datapath-min tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=1 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors="${secure_tix_tcp_kernel_direct_error_budget}" \
+      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_provider_unavailable_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_flow_rejects=0 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_frame_rejects=0 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_frame_seal_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_frame_open_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_frame_replay_drops=0 \
+      --require-datapath-ratio-max tix_tcp.provider_stats.kernel_crypto_frame_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_tix_tcp_kernel_replay_ratio_budget}" \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_open_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_drops=0 \
+      --require-datapath-ratio-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_tix_tcp_kernel_replay_ratio_budget}" \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_no_context_drops=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_header_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_payload_len_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_secure_header_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_frame_header_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_epoch_sequence_mismatches=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_cipher_len_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_cipher_load_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_context_misses=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_state_misses=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_zero_plain_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_context_unavailable=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_epoch_mismatches=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_suite_mismatches=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_dynptr_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_decrypt_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors=0 \
+      --require-datapath-ratio-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_tix_tcp_kernel_replay_ratio_budget}" \
+      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_store_errors=0 \
       --require-module-param-min trustix_crypto.kfunc_simd_fastpath=1 \
       --require-module-param-min trustix_crypto.kfunc_simd_irq_fpu_fastpath=1 \
       --require-module-param-any-min trustix_crypto.direct_kfunc_seal_calls=1 \
       --require-module-param-any-min trustix_crypto.direct_kfunc_open_calls=1 \
-      --require-module-param-max trustix_crypto.direct_kfunc_errors="${secure_exp_tcp_kernel_direct_error_budget}" \
+      --require-module-param-max trustix_crypto.direct_kfunc_errors="${secure_tix_tcp_kernel_direct_error_budget}" \
       --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_secure_seal_batch=1 \
       --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_builds=1 \
       --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_frames=1 \
@@ -1171,9 +1171,9 @@ main() {
       --require-status-min data_path.active_sessions="${route_gso_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors="${route_gso_session_error_budget}" \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
-      --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc=1 \
-      --require-datapath-stat kernel_udp.provider_stats.tc_experimental_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
-      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_experimental_tcp_only=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
+      --require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_tx_direct_tix_tcp_only=1 \
       --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_hash_tx_queue=0 \
       --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_backoff_retries=1 \
       --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_backoff_sleep_usecs=50 \

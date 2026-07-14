@@ -51,17 +51,17 @@ func kernelUDPSecureFullDirectForDesired(desired config.Desired) bool {
 	return placement != string(dataplane.CryptoPlacementUserspace)
 }
 
-func experimentalTCPSecureKernelCryptoDirectForDesired(desired config.Desired) bool {
+func tixTCPSecureKernelCryptoDirectForDesired(desired config.Desired) bool {
 	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
 		return false
 	}
-	if experimentalTCPFastPathDisabledForDesired(desired) {
+	if tixTCPFastPathDisabledForDesired(desired) {
 		return false
 	}
-	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP) {
 		return false
 	}
-	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolTIXTCP))
 	if profile.Profile != config.TransportProfilePerformance {
 		return false
 	}
@@ -100,7 +100,7 @@ func kernelUDPTXDirectOnlyReasonForDesired(desired config.Desired) string {
 
 func kernelUDPTXDirectOnlyFailClosedForDesired(desired config.Desired) bool {
 	return kernelUDPTXDirectOnlyForDesired(desired) &&
-		!desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) &&
+		!desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP) &&
 		envTruthyAny(
 			"TRUSTIX_KERNEL_UDP_TC_ONLY",
 			"TRUSTIX_KERNEL_UDP_TC_DIRECT_ONLY_PROVIDER",
@@ -119,7 +119,7 @@ func kernelUDPTXDirectOnlyFailClosedReasonForDesired(desired config.Desired) str
 }
 
 func kernelUDPTXDirectOnlyAttachForDesired(desired config.Desired) bool {
-	if experimentalTCPRouteGSOAsyncForDesired(desired) {
+	if tixTCPRouteGSOAsyncForDesired(desired) {
 		return true
 	}
 	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
@@ -135,15 +135,15 @@ func kernelUDPTXDirectOnlyAttachForDesired(desired config.Desired) bool {
 }
 
 func kernelUDPTXDirectOnlyAttachReasonForDesired(desired config.Desired) string {
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
-		return "transport_policy.experimental_tcp=performance route_gso_async_outer_gso=enabled encryption=plaintext"
+	if tixTCPPerformanceRouteGSOAsyncForDesired(desired) {
+		return "transport_policy.tix_tcp=performance route_gso_async_outer_gso=enabled encryption=plaintext"
 	}
-	if experimentalTCPSecureRouteGSOAsyncForDesired(desired) {
+	if tixTCPSecureRouteGSOAsyncForDesired(desired) {
 		placement := effectiveTransportCryptoPlacementConfig(desired.TransportPolicy)
 		if placement == "" {
 			placement = string(dataplane.CryptoPlacementKernel)
 		}
-		return "transport_policy.experimental_tcp=performance route_gso_async=enabled encryption=secure transport_policy.crypto_placement=" + placement
+		return "transport_policy.tix_tcp=performance route_gso_async=enabled encryption=secure transport_policy.crypto_placement=" + placement
 	}
 	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
 		return "transport_policy.udp=performance tc_direct=enabled encryption=plaintext"
@@ -158,7 +158,7 @@ func kernelUDPTXDirectOnlyAttachReasonForDesired(desired config.Desired) string 
 }
 
 func kernelUDPTCOnlyProviderForDesired(desired config.Desired) bool {
-	return experimentalTCPRouteGSOAsyncForDesired(desired) ||
+	return tixTCPRouteGSOAsyncForDesired(desired) ||
 		kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) ||
 		kernelUDPTXDirectOnlyFailClosedForDesired(desired)
 }
@@ -167,7 +167,7 @@ func kernelUDPTCOnlyProviderReasonForDesired(desired config.Desired) string {
 	if !kernelUDPTCOnlyProviderForDesired(desired) {
 		return ""
 	}
-	if experimentalTCPRouteGSOAsyncForDesired(desired) {
+	if tixTCPRouteGSOAsyncForDesired(desired) {
 		return kernelUDPTXDirectOnlyAttachReasonForDesired(desired) + " kernel_udp_tc_only_provider=route_gso"
 	}
 	if kernelUDPPlaintextPerformanceDirectOnlyForDesired(desired) {
@@ -263,7 +263,7 @@ func desiredTransportPolicyAllowsKernelCryptoDirectOnly(desired config.Desired) 
 
 func desiredTransportPolicyAllowsSecureDirectOnly(desired config.Desired) bool {
 	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolUDP) &&
-		desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+		desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP) {
 		return true
 	}
 	return kernelUDPSecureDirectOnlyEnvEnabled()
@@ -288,7 +288,7 @@ func desiredTransportPolicyUsesOnlyDirectKernelTransports(desired config.Desired
 		}
 		seen = true
 		switch transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) {
-		case transport.ProtocolUDP, transport.ProtocolExperimentalTCP:
+		case transport.ProtocolUDP, transport.ProtocolTIXTCP:
 			return true
 		default:
 			return false
@@ -317,40 +317,40 @@ func desiredTransportPolicyUsesOnlyDirectKernelTransports(desired config.Desired
 	return seen
 }
 
-func experimentalTCPTXDirectForDesired(desired config.Desired) bool {
-	if experimentalTCPFastPathDisabledForDesired(desired) {
+func tixTCPTXDirectForDesired(desired config.Desired) bool {
+	if tixTCPFastPathDisabledForDesired(desired) {
 		return false
 	}
-	if experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) {
+	if tixTCPPerformanceRouteGSOAsyncForDesired(desired) {
 		return true
 	}
-	if !envTruthyAny("TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_REMOTE_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_E2E_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_IPERF3_CRYPTO_BENCH_EXPERIMENTAL_TCP_TC_TX_DIRECT", "TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY", "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY") {
+	if !envTruthyAny("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "TRUSTIX_REMOTE_TIX_TCP_TC_TX_DIRECT", "TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT", "TRUSTIX_IPERF3_CRYPTO_BENCH_TIX_TCP_TC_TX_DIRECT", "TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY") {
 		return false
 	}
-	return desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP)
+	return desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP)
 }
 
-func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) bool {
+func tixTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) bool {
 	if normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode) == dataplane.KernelTransportModeDisabled {
 		return false
 	}
-	if experimentalTCPFastPathDisabledForDesired(desired) {
+	if tixTCPFastPathDisabledForDesired(desired) {
 		return false
 	}
-	if experimentalTCPRouteGSOExplicitlyDisabledByEnv() {
+	if tixTCPRouteGSOExplicitlyDisabledByEnv() {
 		return false
 	}
-	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP) {
 		return false
 	}
-	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolExperimentalTCP))
+	profile := config.EffectiveTransportProfile(desired.TransportPolicy, string(transport.ProtocolTIXTCP))
 	if profile.Datapath == config.TransportDatapathUserspace {
 		return false
 	}
 	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext {
 		return false
 	}
-	if experimentalTCPRouteGSOExplicitlyEnabledByEnv() {
+	if tixTCPRouteGSOExplicitlyEnabledByEnv() {
 		return true
 	}
 	if profile.Datapath != config.TransportDatapathKernelModule {
@@ -362,16 +362,16 @@ func experimentalTCPPerformanceRouteGSOAsyncForDesired(desired config.Desired) b
 	return profile.Profile == config.TransportProfilePerformance
 }
 
-func experimentalTCPRouteGSOAsyncForDesired(desired config.Desired) bool {
-	return experimentalTCPPerformanceRouteGSOAsyncForDesired(desired) ||
-		experimentalTCPSecureRouteGSOAsyncForDesired(desired)
+func tixTCPRouteGSOAsyncForDesired(desired config.Desired) bool {
+	return tixTCPPerformanceRouteGSOAsyncForDesired(desired) ||
+		tixTCPSecureRouteGSOAsyncForDesired(desired)
 }
 
-func experimentalTCPSecureRouteGSOAsyncForDesired(desired config.Desired) bool {
-	if experimentalTCPRouteGSOExplicitlyDisabledByEnv() {
+func tixTCPSecureRouteGSOAsyncForDesired(desired config.Desired) bool {
+	if tixTCPRouteGSOExplicitlyDisabledByEnv() {
 		return false
 	}
-	return experimentalTCPSecureKernelCryptoDirectForDesired(desired)
+	return tixTCPSecureKernelCryptoDirectForDesired(desired)
 }
 
 func kernelUDPSecureRouteGSOForDesired(desired config.Desired) bool {
@@ -382,12 +382,12 @@ func kernelUDPSecureRouteGSOForDesired(desired config.Desired) bool {
 }
 
 func secureKernelRouteGSOForDesired(desired config.Desired) bool {
-	return experimentalTCPSecureRouteGSOAsyncForDesired(desired) ||
+	return tixTCPSecureRouteGSOAsyncForDesired(desired) ||
 		kernelUDPSecureRouteGSOForDesired(desired)
 }
 
 func routeGSOHelpersForDesired(desired config.Desired) bool {
-	return experimentalTCPRouteGSOAsyncForDesired(desired) ||
+	return tixTCPRouteGSOAsyncForDesired(desired) ||
 		kernelUDPSecureRouteGSOForDesired(desired)
 }
 
@@ -456,21 +456,21 @@ func kernelDatapathFullPlaintextPolicySelectedForDesired(desired config.Desired)
 	return seen
 }
 
-func experimentalTCPRouteGSOExplicitlyEnabledByEnv() bool {
+func tixTCPRouteGSOExplicitlyEnabledByEnv() bool {
 	return envTruthyAny(
-		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO",
-		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
+		"TRUSTIX_TIX_TCP_ROUTE_GSO",
+		"TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
 	)
 }
 
-func experimentalTCPRouteGSOExplicitlyDisabledByEnv() bool {
+func tixTCPRouteGSOExplicitlyDisabledByEnv() bool {
 	for _, name := range []string{
-		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO",
-		"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
-		"TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
+		"TRUSTIX_TIX_TCP_ROUTE_GSO",
+		"TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC",
+		"TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC",
 	} {
 		if envFalsey(name) {
 			return true
@@ -492,33 +492,33 @@ func kernelUDPSecureRouteGSOExplicitlyDisabledByEnv() bool {
 	return false
 }
 
-func experimentalTCPFastPathDisabledForDesired(desired config.Desired) bool {
-	return experimentalTCPFastPathDisabledReasonForDesired(desired) != ""
+func tixTCPFastPathDisabledForDesired(desired config.Desired) bool {
+	return tixTCPFastPathDisabledReasonForDesired(desired) != ""
 }
 
-func experimentalTCPFastPathDisabledReasonForDesired(desired config.Desired) string {
+func tixTCPFastPathDisabledReasonForDesired(desired config.Desired) string {
 	mode := normalizeKernelTransportMode(desired.TransportPolicy.KernelTransport.Mode)
 	if mode == dataplane.KernelTransportModeDisabled {
 		return ""
 	}
-	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesSecureUserspaceExperimentalTCP(desired) {
-		return "experimental_tcp secure userspace-crypto AF_XDP fast path is disabled by auto policy; use kernel crypto/full-kernel plaintext or enable an explicit fallback after validation"
+	if mode == dataplane.KernelTransportModeAuto && desiredTransportPolicyUsesSecureUserspaceTIXTCP(desired) {
+		return "tix_tcp secure userspace-crypto AF_XDP fast path is disabled by auto policy; use kernel crypto/full-kernel plaintext or enable an explicit fallback after validation"
 	}
-	if experimentalTCPMixedTCPFastPathAllowedForPolicy() {
+	if tixTCPMixedTCPFastPathAllowedForPolicy() {
 		return ""
 	}
-	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolExperimentalTCP) {
+	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTIXTCP) {
 		return ""
 	}
 	if !desiredTransportPolicyUsesAnyProtocol(desired, transport.ProtocolTCP) {
 		return ""
 	}
-	return "tcp+experimental_tcp concurrent kernel transport is disabled by default after PVE mixed-load reboot reproduction; set TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1 only for isolated validation"
+	return "tcp+tix_tcp concurrent kernel transport is disabled by default after PVE mixed-load reboot reproduction; set TRUSTIX_TIX_TCP_ALLOW_MIXED_TCP_FAST_PATH=1 only for isolated validation"
 }
 
-func experimentalTCPMixedTCPFastPathAllowedForPolicy() bool {
+func tixTCPMixedTCPFastPathAllowedForPolicy() bool {
 	return envTruthyAny(
-		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH",
-		"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP",
+		"TRUSTIX_TIX_TCP_ALLOW_MIXED_TCP_FAST_PATH",
+		"TRUSTIX_TIX_TCP_ALLOW_MIXED_TCP",
 	)
 }

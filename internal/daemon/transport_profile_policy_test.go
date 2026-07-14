@@ -17,7 +17,7 @@ func TestEndpointTransportProfileCompatibleDerivesEmptyPerformanceFeatures(t *te
 	}{
 		{name: "udp tc xdp", transport: string(transport.ProtocolUDP), datapath: config.TransportDatapathTCXDP},
 		{name: "udp kernel module", transport: string(transport.ProtocolUDP), datapath: config.TransportDatapathKernelModule},
-		{name: "experimental tcp kernel module", transport: string(transport.ProtocolExperimentalTCP), datapath: config.TransportDatapathKernelModule},
+		{name: "experimental tcp kernel module", transport: string(transport.ProtocolTIXTCP), datapath: config.TransportDatapathKernelModule},
 	}
 
 	for _, test := range tests {
@@ -113,20 +113,20 @@ func TestTransportProfileFeaturesAdvertiseSecureKernelUDPDirect(t *testing.T) {
 	}
 }
 
-func TestTransportProfileFeaturesAdvertiseSafeExperimentalTCPPerformance(t *testing.T) {
-	features := transportProfileFeatures(string(transport.ProtocolExperimentalTCP), config.EndpointProfileConfig{
+func TestTransportProfileFeaturesAdvertiseSafeTIXTCPPerformance(t *testing.T) {
+	features := transportProfileFeatures(string(transport.ProtocolTIXTCP), config.EndpointProfileConfig{
 		Profile:    config.TransportProfilePerformance,
 		Datapath:   config.TransportDatapathTCXDP,
 		Encryption: "plaintext",
 	})
-	for _, feature := range []string{"tixt_v1", "ackless_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "plaintext_ack_only"} {
+	for _, feature := range []string{"tixt_v1", "tix_tcp", "tixb_batching", "tc_xdp", "af_xdp", "tc_tx_direct", "plaintext_ack_only"} {
 		if !stringListContains(features, feature) {
-			t.Fatalf("performance experimental_tcp features = %#v, want %q", features, feature)
+			t.Fatalf("performance tix_tcp features = %#v, want %q", features, feature)
 		}
 	}
 	for _, feature := range []string{"route_gso_async", "route_gso_async_outer_gso", "route_xmit_worker", "route_gso_sync", "tixt_large_frame_rx", "outer_gso_rx", "gso_batch_rx"} {
 		if stringListContains(features, feature) {
-			t.Fatalf("performance experimental_tcp features = %#v, must not advertise opt-in/unselected feature %q", features, feature)
+			t.Fatalf("performance tix_tcp features = %#v, must not advertise opt-in/unselected feature %q", features, feature)
 		}
 	}
 }
@@ -167,13 +167,13 @@ func TestTransportProfileMetadataForDesiredAdvertisesFullKmodRuntimeGate(t *test
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-full",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
 
 	profile := endpointTransportProfileMetadataForDesired(desired.Endpoints[0], desired)
-	for _, feature := range []string{"full_kmod", "exp_tcp_full_kmod", "kernel_datapath_full_plaintext", "rx_worker", "tx_plaintext"} {
+	for _, feature := range []string{"full_kmod", "tix_tcp_full_kmod", "kernel_datapath_full_plaintext", "rx_worker", "tx_plaintext"} {
 		if !stringListContains(profile.Features, feature) {
 			t.Fatalf("full-kmod metadata features = %#v, missing %q", profile.Features, feature)
 		}
@@ -195,7 +195,7 @@ func TestTransportProfileMetadataForDesiredAdvertisesPlaintextRouteGSORuntimeGat
 		},
 		Endpoints: []config.EndpointConfig{{
 			Name:      "exp-route",
-			Transport: string(transport.ProtocolExperimentalTCP),
+			Transport: string(transport.ProtocolTIXTCP),
 			Enabled:   true,
 		}},
 	}
@@ -206,7 +206,7 @@ func TestTransportProfileMetadataForDesiredAdvertisesPlaintextRouteGSORuntimeGat
 			t.Fatalf("route-GSO metadata features = %#v, missing %q", profile.Features, feature)
 		}
 	}
-	for _, feature := range []string{"full_kmod", "exp_tcp_full_kmod", "kernel_datapath_full_plaintext"} {
+	for _, feature := range []string{"full_kmod", "tix_tcp_full_kmod", "kernel_datapath_full_plaintext"} {
 		if stringListContains(profile.Features, feature) {
 			t.Fatalf("route-GSO metadata features = %#v, should not advertise %q", profile.Features, feature)
 		}
@@ -227,14 +227,14 @@ func TestTransportProfileMetadataForDesiredAdvertisesSecureKernelRuntimeGates(t 
 			datapath:  config.TransportDatapathTCXDP,
 			want:      []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_kudp"},
 			mustAbsent: []string{
-				"secure_exp_tcp_kernel",
+				"secure_tix_tcp_kernel",
 			},
 		},
 		{
 			name:      "secure experimental tcp",
-			transport: transport.ProtocolExperimentalTCP,
+			transport: transport.ProtocolTIXTCP,
 			datapath:  config.TransportDatapathKernelModule,
-			want:      []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_exp_tcp_kernel"},
+			want:      []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_tix_tcp_kernel"},
 			mustAbsent: []string{
 				"secure_kudp",
 			},

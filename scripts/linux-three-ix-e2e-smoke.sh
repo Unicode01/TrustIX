@@ -6,7 +6,7 @@ workdir="${TRUSTIX_3IX_E2E_WORKDIR:-$(mktemp -d /tmp/trustix-3ix-e2e.XXXXXX)}"
 keep="${TRUSTIX_3IX_E2E_KEEP:-0}"
 bin_dir="${TRUSTIX_3IX_E2E_BIN_DIR:-$workdir/bin}"
 dataplane="${TRUSTIX_3IX_E2E_DATAPLANE:-linux}"
-transport="${TRUSTIX_3IX_E2E_TRANSPORT:-experimental_tcp}"
+transport="${TRUSTIX_3IX_E2E_TRANSPORT:-tix_tcp}"
 transport_profile="${TRUSTIX_3IX_E2E_TRANSPORT_PROFILE:-}"
 transport_datapath="${TRUSTIX_3IX_E2E_TRANSPORT_DATAPATH:-}"
 transport_encryption="${TRUSTIX_3IX_E2E_TRANSPORT_ENCRYPTION:-${TRUSTIX_3IX_E2E_ENCRYPTION:-secure}}"
@@ -70,7 +70,7 @@ underlay_cidr_c="${TRUSTIX_3IX_E2E_UNDERLAY_CIDR_C:-${underlay_ip_c}/24}"
 
 api_port="${TRUSTIX_3IX_E2E_API_PORT:-}"
 peer_api_port="${TRUSTIX_3IX_E2E_PEER_API_PORT:-}"
-transport_port="${TRUSTIX_3IX_E2E_TRANSPORT_PORT:-${TRUSTIX_3IX_E2E_EXP_TCP_PORT:-}}"
+transport_port="${TRUSTIX_3IX_E2E_TRANSPORT_PORT:-${TRUSTIX_3IX_E2E_TIX_TCP_PORT:-}}"
 api_url=""
 allocated_ports=""
 
@@ -127,7 +127,7 @@ transport_policy_profile() {
     return 0
   fi
   case "$transport" in
-    experimental_tcp|kernel_udp|gre|ipip|vxlan) printf 'performance\n' ;;
+    tix_tcp|kernel_udp|gre|ipip|vxlan) printf 'performance\n' ;;
     *) printf 'stable\n' ;;
   esac
 }
@@ -138,7 +138,7 @@ transport_policy_datapath() {
     return 0
   fi
   case "$transport" in
-    experimental_tcp|kernel_udp|gre|ipip|vxlan) printf 'tc_xdp\n' ;;
+    tix_tcp|kernel_udp|gre|ipip|vxlan) printf 'tc_xdp\n' ;;
     *) printf 'userspace\n' ;;
   esac
 }
@@ -1032,8 +1032,8 @@ assert_data_dir_lock_rejects_duplicate() {
   fi
 }
 
-assert_experimental_tcp_kernel_crypto_rejects() {
-  if [[ "$transport" != "experimental_tcp" ]]; then
+assert_tix_tcp_kernel_crypto_rejects() {
+  if [[ "$transport" != "tix_tcp" ]]; then
     return 0
   fi
   if [[ "$crypto_placement" == "kernel" || "$kernel_module" == "1" ]]; then
@@ -1672,14 +1672,14 @@ validate_observability() {
     grep -q '"route_stats":' "$workdir/${node}-datapath.json" || die "${node} datapath has no route_stats"
     grep -q '"endpoint_stats":' "$workdir/${node}-datapath.json" || die "${node} datapath has no endpoint_stats"
 
-    if [[ "$transport" == "experimental_tcp" ]]; then
-      grep -q '"provider": "af_xdp"' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp provider is not af_xdp"
-      grep -q '"fast_path": true' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp fast_path is not true"
-      grep -q '"reinject": true' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp reinject is not true"
+    if [[ "$transport" == "tix_tcp" ]]; then
+      grep -q '"provider": "af_xdp"' "$workdir/${node}-datapath.json" || die "${node} tix_tcp provider is not af_xdp"
+      grep -q '"fast_path": true' "$workdir/${node}-datapath.json" || die "${node} tix_tcp fast_path is not true"
+      grep -q '"reinject": true' "$workdir/${node}-datapath.json" || die "${node} tix_tcp reinject is not true"
       grep -q '"raw_socket_fallback": false' "$workdir/${node}-datapath.json" || die "${node} raw socket fallback is enabled"
-      grep -q '"xdp_attach_mode":' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp status has no xdp_attach_mode"
-      grep -q '"af_xdp_bind_mode":' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp status has no af_xdp_bind_mode"
-      grep -q '"zerocopy_enabled":' "$workdir/${node}-datapath.json" || die "${node} experimental_tcp status has no zerocopy_enabled"
+      grep -q '"xdp_attach_mode":' "$workdir/${node}-datapath.json" || die "${node} tix_tcp status has no xdp_attach_mode"
+      grep -q '"af_xdp_bind_mode":' "$workdir/${node}-datapath.json" || die "${node} tix_tcp status has no af_xdp_bind_mode"
+      grep -q '"zerocopy_enabled":' "$workdir/${node}-datapath.json" || die "${node} tix_tcp status has no zerocopy_enabled"
       assert_datapath_any_counter_positive "$workdir/${node}-datapath.json" "xdp_attach_native" "xdp_attach_skb"
       assert_datapath_any_counter_positive "$workdir/${node}-datapath.json" "af_xdp_bind_zerocopy" "af_xdp_bind_copy"
       if kernel_provider_expected; then
@@ -1734,15 +1734,15 @@ validate_observability() {
         assert_datapath_counter_zero "$workdir/${node}-datapath.json" "tx_kernel_crypto_packet_seal_successes"
         assert_datapath_counter_positive "$workdir/${node}-datapath.json" "tx_umem_direct_build_frames"
       fi
-      grep -q '"name": "experimental_tcp"' "$workdir/${node}-doctor.json" || die "${node} doctor has no experimental_tcp check"
+      grep -q '"name": "tix_tcp"' "$workdir/${node}-doctor.json" || die "${node} doctor has no tix_tcp check"
       grep -q 'selftest_attempted=' "$workdir/${node}-doctor.json" || die "${node} doctor has no kernel crypto selftest state"
       grep -q 'crypto_map_key_size=16' "$workdir/${node}-doctor.json" || die "${node} doctor has no kernel crypto map schema detail"
-      assert_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_allowed_ports"
-      assert_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_umem_bytes_total"
-      assert_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_xdp_redirected"
-      assert_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_tx_frames"
-      assert_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_rx_frames"
-      assert_counter_positive "$workdir/${node}-bpf.json" "experimental_tcp_rx_umem_direct_frames"
+      assert_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_allowed_ports"
+      assert_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_umem_bytes_total"
+      assert_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_xdp_redirected"
+      assert_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_tx_frames"
+      assert_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_rx_frames"
+      assert_counter_positive "$workdir/${node}-bpf.json" "tix_tcp_rx_umem_direct_frames"
     elif [[ "$transport" == "kernel_udp" ]]; then
       assert_kernel_udp_status "$node"
       assert_datapath_any_counter_positive "$workdir/${node}-datapath.json" "xdp_attach_native" "xdp_attach_skb"
@@ -1765,8 +1765,8 @@ validate_settings() {
     *) die "TRUSTIX_3IX_E2E_DATAPLANE currently supports linux only" ;;
   esac
   case "$transport" in
-    udp|kernel_udp|tcp|quic|websocket|http_connect|experimental_tcp|gre|ipip|vxlan) ;;
-    *) die "TRUSTIX_3IX_E2E_TRANSPORT must be one of udp, kernel_udp, tcp, quic, websocket, http_connect, experimental_tcp, gre, ipip, or vxlan" ;;
+    udp|kernel_udp|tcp|quic|websocket|http_connect|tix_tcp|gre|ipip|vxlan) ;;
+    *) die "TRUSTIX_3IX_E2E_TRANSPORT must be one of udp, kernel_udp, tcp, quic, websocket, http_connect, tix_tcp, gre, ipip, or vxlan" ;;
   esac
   case "$(transport_policy_profile)" in
     stable|performance|latency) ;;
@@ -1818,8 +1818,8 @@ validate_settings() {
   if [[ "$crypto_placement" == "kernel" && "$kernel_module" != "1" ]] && ! kernel_provider_expected; then
     die "TRUSTIX_3IX_E2E_CRYPTO_PLACEMENT=kernel requires TRUSTIX_3IX_E2E_KERNEL_MODULE=1 or a loaded trustix_crypto module"
   fi
-  if [[ "$kernel_module" == "1" && "$transport" != "experimental_tcp" ]]; then
-    die "TRUSTIX_3IX_E2E_KERNEL_MODULE=1 currently requires TRUSTIX_3IX_E2E_TRANSPORT=experimental_tcp"
+  if [[ "$kernel_module" == "1" && "$transport" != "tix_tcp" ]]; then
+    die "TRUSTIX_3IX_E2E_KERNEL_MODULE=1 currently requires TRUSTIX_3IX_E2E_TRANSPORT=tix_tcp"
   fi
   [[ "$transport_port" =~ ^[0-9]*$ ]] || die "TRUSTIX_3IX_E2E_TRANSPORT_PORT must be numeric when set"
 }
@@ -1850,7 +1850,7 @@ main() {
   generate_certs
   setup_topology
   write_configs "10.0.1.0/24" "10.99.0.0/16"
-  assert_experimental_tcp_kernel_crypto_rejects
+  assert_tix_tcp_kernel_crypto_rejects
 
   pid_a="$(start_daemon ix-a "$workdir/a.yaml" "$workdir/state-a" "$ns_ix_a" "$underlay_ip_a")"
   wait_for_api ix-a "$pid_a" "$ns_ix_a"

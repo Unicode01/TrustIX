@@ -136,8 +136,8 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_CONCURRENT_WORKDIR="+workdir,
 		"TRUSTIX_CROSS_HOST_CONCURRENT_RUNNER="+runner,
 		"TRUSTIX_CROSS_HOST_CONCURRENT_VERIFIER="+verifier,
-		"TRUSTIX_CROSS_HOST_CONCURRENT_CASES=userspace-udp-secure tc-gre-plaintext userspace-experimental-tcp-secure userspace-mixed-secure",
-		"TRUSTIX_CROSS_HOST_CONCURRENT_ENDPOINT_TRANSPORTS=udp,tcp,quic,websocket,http_connect,experimental_tcp",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_CASES=userspace-udp-secure tc-gre-plaintext userspace-tix-tcp-secure userspace-mixed-secure",
+		"TRUSTIX_CROSS_HOST_CONCURRENT_ENDPOINT_TRANSPORTS=udp,tcp,quic,websocket,http_connect,tix_tcp",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_A=root@192.0.2.10",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_B=root@192.0.2.11",
 		"TRUSTIX_CROSS_HOST_CONCURRENT_SSH_OPTS=-i /tmp/test-key -o BatchMode=yes",
@@ -165,7 +165,7 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 	for _, want := range []string{
 		`"case":"userspace-udp-secure"`,
 		`"case":"tc-gre-plaintext"`,
-		`"case":"userspace-experimental-tcp-secure"`,
+		`"case":"userspace-tix-tcp-secure"`,
 		`"case":"userspace-mixed-secure"`,
 		`"status":"dry_run"`,
 	} {
@@ -243,7 +243,7 @@ func TestCrossHostConcurrentSoakDryRunGeneratesIsolatedCases(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_TRANSPORT=mixed",
 		"TRUSTIX_CROSS_HOST_PROFILE=stable",
 		"TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH=userspace",
-		"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp\\,tcp\\,quic\\,websocket\\,http_connect\\,experimental_tcp",
+		"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp\\,tcp\\,quic\\,websocket\\,http_connect\\,tix_tcp",
 	} {
 		if !strings.Contains(string(envMixed), want) {
 			t.Fatalf("mixed case env missing %q:\n%s", want, envMixed)
@@ -259,7 +259,7 @@ func TestCrossHostRunnerMultiEndpointDryRunConfig(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
 		"TRUSTIX_CROSS_HOST_CASE=userspace-mixed-secure",
-		"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp,tcp,quic,websocket,http_connect,experimental_tcp",
+		"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp,tcp,quic,websocket,http_connect,tix_tcp",
 		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=192.0.2.10",
 		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=192.0.2.11",
 		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
@@ -275,7 +275,7 @@ func TestCrossHostRunnerMultiEndpointDryRunConfig(t *testing.T) {
 			t.Fatalf("read %s: %v", name, err)
 		}
 		config := string(payload)
-		for _, transport := range []string{"udp", "tcp", "quic", "websocket", "http_connect", "experimental_tcp"} {
+		for _, transport := range []string{"udp", "tcp", "quic", "websocket", "http_connect", "tix_tcp"} {
 			if got := strings.Count(config, "transport: "+transport+"\n"); got != 2 {
 				t.Fatalf("%s transport %s count = %d, want local+peer; config:\n%s", name, transport, got, config)
 			}
@@ -317,8 +317,8 @@ func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
 			},
 			envWant: []string{
 				"TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT=1",
-				"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=1",
-				"TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1",
+				"TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_TIX_TCP=1",
+				"TRUSTIX_TIX_TCP_ALLOW_MIXED_TCP_FAST_PATH=1",
 			},
 		},
 		{
@@ -331,7 +331,7 @@ func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
 				"trustix_datapath_helpers:\n    mode: required",
 			},
 			envWant: []string{
-				"TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=1",
+				"TRUSTIX_TIX_TCP_ROUTE_GSO=1",
 				"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=1",
 				"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=1",
 			},
@@ -344,7 +344,7 @@ func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
 			cmd.Env = append(os.Environ(),
 				"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
 				"TRUSTIX_CROSS_HOST_CASE="+tc.name,
-				"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp,experimental_tcp",
+				"TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS=udp,tix_tcp",
 				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=192.0.2.10",
 				"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=192.0.2.11",
 				"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
@@ -359,7 +359,7 @@ func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
 				t.Fatalf("read config-a.yaml: %v", err)
 			}
 			config := string(configRaw)
-			for _, transport := range []string{"udp", "experimental_tcp"} {
+			for _, transport := range []string{"udp", "tix_tcp"} {
 				if got := strings.Count(config, "transport: "+transport+"\n"); got != 2 {
 					t.Fatalf("transport %s count = %d, want local+peer; config:\n%s", transport, got, config)
 				}
@@ -369,7 +369,7 @@ func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
 				"crypto_placement: " + tc.crypto,
 				"kernel_transport:\n    mode: require_kernel",
 				"  - prefix: 10.64.1.0/25\n    next_hop: ix-b\n    endpoint: b-udp",
-				"  - prefix: 10.64.1.128/25\n    next_hop: ix-b\n    endpoint: b-experimental-tcp",
+				"  - prefix: 10.64.1.128/25\n    next_hop: ix-b\n    endpoint: b-tix-tcp",
 			}, tc.configWant...) {
 				if !strings.Contains(config, want) {
 					t.Fatalf("config missing %q:\n%s", want, config)
@@ -394,11 +394,11 @@ func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
 				"udp.a_host=10.64.0.2",
 				"udp.b_host=10.64.1.2",
 				"udp.iperf_port=25201",
-				"experimental_tcp.a_prefix=10.64.0.128/25",
-				"experimental_tcp.b_prefix=10.64.1.128/25",
-				"experimental_tcp.a_host=10.64.0.130",
-				"experimental_tcp.b_host=10.64.1.130",
-				"experimental_tcp.iperf_port=25203",
+				"tix_tcp.a_prefix=10.64.0.128/25",
+				"tix_tcp.b_prefix=10.64.1.128/25",
+				"tix_tcp.a_host=10.64.0.130",
+				"tix_tcp.b_host=10.64.1.130",
+				"tix_tcp.iperf_port=25203",
 			} {
 				if !strings.Contains(string(contractRaw), want+"\n") {
 					t.Fatalf("pinned mixed route contract missing %q:\n%s", want, contractRaw)

@@ -27,7 +27,7 @@ func TestConfigExportArchiveOmitsPrivateKeysByDefault(t *testing.T) {
 		Name:      "ix-a-tix-tcp",
 		Mode:      config.EndpointModePassive,
 		Listen:    "127.0.0.1:7443",
-		Transport: "experimental_tcp",
+		Transport: "tix_tcp",
 		Enabled:   true,
 	})
 	daemon := newConfigApplyTestDaemon(t, desired)
@@ -49,9 +49,10 @@ func TestConfigExportArchiveOmitsPrivateKeysByDefault(t *testing.T) {
 	if _, ok := entries["desired.json"]; !ok {
 		t.Fatal("archive missing desired.json")
 	}
+	legacyTransport := []byte(`"transport": "experimental` + `_tcp"`)
 	if !bytes.Contains(entries["desired.json"], []byte(`"transport": "tix_tcp"`)) ||
-		bytes.Contains(entries["desired.json"], []byte(`"transport": "experimental_tcp"`)) {
-		t.Fatalf("exported desired config did not use public TIX-TCP name:\n%s", entries["desired.json"])
+		bytes.Contains(entries["desired.json"], legacyTransport) {
+		t.Fatalf("exported desired config did not use the canonical TIX-TCP name:\n%s", entries["desired.json"])
 	}
 	if len(entries["config.log"]) == 0 {
 		t.Fatal("archive missing config.log payload")

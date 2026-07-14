@@ -106,7 +106,7 @@ func (daemon *Daemon) probePeerEndpoints(ctx context.Context) bool {
 func endpointSupportsPassiveProbe(protocol transport.Protocol) bool {
 	switch protocol {
 	case transport.ProtocolQUIC,
-		transport.ProtocolExperimentalTCP,
+		transport.ProtocolTIXTCP,
 		transport.ProtocolUDP,
 		transport.ProtocolGRE,
 		transport.ProtocolIPIP,

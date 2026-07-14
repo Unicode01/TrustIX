@@ -75,7 +75,7 @@ iperf_mode="${TRUSTIX_CROSS_HOST_IPERF_MODE:-forward}"
 iperf_directions="${TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS:-both}"
 mixed_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS:-0}"
 mixed_udp_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_UDP_MIN_GBPS:-$mixed_min_gbps}"
-mixed_experimental_tcp_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_EXPERIMENTAL_TCP_MIN_GBPS:-$mixed_min_gbps}"
+mixed_tix_tcp_min_gbps="${TRUSTIX_CROSS_HOST_MIXED_TIX_TCP_MIN_GBPS:-$mixed_min_gbps}"
 transport_snapshot_delay="${TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY:-5}"
 session_pool_size_explicit="${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE+x}"
 session_pool_size="${TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE:-$iperf_parallel}"
@@ -111,8 +111,8 @@ host_a_ip="${host_a_addr%/*}"
 host_b_ip="${host_b_addr%/*}"
 mixed_udp_lan_a_cidr="${TRUSTIX_CROSS_HOST_MIXED_UDP_LAN_A_CIDR:-}"
 mixed_udp_lan_b_cidr="${TRUSTIX_CROSS_HOST_MIXED_UDP_LAN_B_CIDR:-}"
-mixed_experimental_tcp_lan_a_cidr="${TRUSTIX_CROSS_HOST_MIXED_EXPERIMENTAL_TCP_LAN_A_CIDR:-}"
-mixed_experimental_tcp_lan_b_cidr="${TRUSTIX_CROSS_HOST_MIXED_EXPERIMENTAL_TCP_LAN_B_CIDR:-}"
+mixed_tix_tcp_lan_a_cidr="${TRUSTIX_CROSS_HOST_MIXED_TIX_TCP_LAN_A_CIDR:-}"
+mixed_tix_tcp_lan_b_cidr="${TRUSTIX_CROSS_HOST_MIXED_TIX_TCP_LAN_B_CIDR:-}"
 mixed_host_a_addr="${TRUSTIX_CROSS_HOST_MIXED_HOST_A_ADDR:-}"
 mixed_host_b_addr="${TRUSTIX_CROSS_HOST_MIXED_HOST_B_ADDR:-}"
 mixed_host_a_ip=""
@@ -405,7 +405,7 @@ normalize_case_transport_token() {
   value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
   case "$value" in
     httpconnect) value="http_connect" ;;
-    experimentaltcp) value="experimental_tcp" ;;
+    tixtcp) value="tix_tcp" ;;
   esac
   printf '%s\n' "$value"
 }
@@ -417,7 +417,7 @@ parse_endpoint_transports() {
     [[ -n "$item" ]] || continue
     normalized="$(normalize_case_transport_token "$item")"
     case "$normalized" in
-      udp|tcp|quic|websocket|http_connect|experimental_tcp) ;;
+      udp|tcp|quic|websocket|http_connect|tix_tcp) ;;
       *) die "unsupported TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS item ${item}" ;;
     esac
     for raw in "${endpoint_transports[@]}"; do
@@ -457,8 +457,8 @@ mixed_ipv4_24_default() {
   c=$((10#$c))
   case "$kind" in
     udp_prefix) printf '%s.%s.%s.0/25\n' "$a" "$b" "$c" ;;
-    experimental_tcp_prefix) printf '%s.%s.%s.128/25\n' "$a" "$b" "$c" ;;
-    experimental_tcp_host) printf '%s.%s.%s.130/24\n' "$a" "$b" "$c" ;;
+    tix_tcp_prefix) printf '%s.%s.%s.128/25\n' "$a" "$b" "$c" ;;
+    tix_tcp_host) printf '%s.%s.%s.130/24\n' "$a" "$b" "$c" ;;
     *) die "unknown pinned mixed IPv4 default kind: ${kind}" ;;
   esac
 }
@@ -475,17 +475,17 @@ resolve_pinned_mixed_lan() {
   if [[ -z "$mixed_udp_lan_b_cidr" ]]; then
     mixed_udp_lan_b_cidr="$(mixed_ipv4_24_default "$lan_b_cidr" udp_prefix)"
   fi
-  if [[ -z "$mixed_experimental_tcp_lan_a_cidr" ]]; then
-    mixed_experimental_tcp_lan_a_cidr="$(mixed_ipv4_24_default "$lan_a_cidr" experimental_tcp_prefix)"
+  if [[ -z "$mixed_tix_tcp_lan_a_cidr" ]]; then
+    mixed_tix_tcp_lan_a_cidr="$(mixed_ipv4_24_default "$lan_a_cidr" tix_tcp_prefix)"
   fi
-  if [[ -z "$mixed_experimental_tcp_lan_b_cidr" ]]; then
-    mixed_experimental_tcp_lan_b_cidr="$(mixed_ipv4_24_default "$lan_b_cidr" experimental_tcp_prefix)"
+  if [[ -z "$mixed_tix_tcp_lan_b_cidr" ]]; then
+    mixed_tix_tcp_lan_b_cidr="$(mixed_ipv4_24_default "$lan_b_cidr" tix_tcp_prefix)"
   fi
   if [[ -z "$mixed_host_a_addr" ]]; then
-    mixed_host_a_addr="$(mixed_ipv4_24_default "$lan_a_cidr" experimental_tcp_host)"
+    mixed_host_a_addr="$(mixed_ipv4_24_default "$lan_a_cidr" tix_tcp_host)"
   fi
   if [[ -z "$mixed_host_b_addr" ]]; then
-    mixed_host_b_addr="$(mixed_ipv4_24_default "$lan_b_cidr" experimental_tcp_host)"
+    mixed_host_b_addr="$(mixed_ipv4_24_default "$lan_b_cidr" tix_tcp_host)"
   fi
   mixed_host_a_ip="${mixed_host_a_addr%/*}"
   mixed_host_b_ip="${mixed_host_b_addr%/*}"
@@ -499,11 +499,11 @@ udp.b_prefix=${mixed_udp_lan_b_cidr}
 udp.a_host=${host_a_ip}
 udp.b_host=${host_b_ip}
 udp.iperf_port=${iperf_port}
-experimental_tcp.a_prefix=${mixed_experimental_tcp_lan_a_cidr}
-experimental_tcp.b_prefix=${mixed_experimental_tcp_lan_b_cidr}
-experimental_tcp.a_host=${mixed_host_a_ip}
-experimental_tcp.b_host=${mixed_host_b_ip}
-experimental_tcp.iperf_port=${mixed_iperf_port}
+tix_tcp.a_prefix=${mixed_tix_tcp_lan_a_cidr}
+tix_tcp.b_prefix=${mixed_tix_tcp_lan_b_cidr}
+tix_tcp.a_host=${mixed_host_a_ip}
+tix_tcp.b_host=${mixed_host_b_ip}
+tix_tcp.iperf_port=${mixed_iperf_port}
 EOF
 }
 
@@ -545,7 +545,7 @@ generic_case_transport() {
 
 supported_case_transport() {
   case "$(normalize_case_transport_token "$1")" in
-    udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|experimental_tcp) return 0 ;;
+    udp|tcp|quic|websocket|http_connect|gre|ipip|vxlan|tix_tcp) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -574,16 +574,16 @@ validate_case() {
   fi
   case "$case_name" in
     dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod) ;;
-    experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod) ;;
+    tix-tcp-full-kmod|tix_tcp_full_kmod|tix-tcp-full-kmod|tix_tcp_full_kmod|dd-tix-tcp-full-kmod|dd_tix_tcp_full_kmod|owdeb-tix-tcp-full-kmod|owdeb_tix_tcp_full_kmod) ;;
     mixed-plaintext-full-kmod|mixed_plaintext_full_kmod|mixed-secure-kernel|mixed_secure_kernel)
-      [[ "${#endpoint_transports[@]}" -eq 2 ]] || die "${case_name} requires exactly udp,experimental_tcp endpoints"
+      [[ "${#endpoint_transports[@]}" -eq 2 ]] || die "${case_name} requires exactly udp,tix_tcp endpoints"
       case_has_endpoint_transport udp || die "${case_name} requires a UDP endpoint"
-      case_has_endpoint_transport experimental_tcp || die "${case_name} requires an experimental_tcp endpoint"
+      case_has_endpoint_transport tix_tcp || die "${case_name} requires a tix_tcp endpoint"
       ;;
     dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) ;;
-    secure-exp-tcp-kernel|secure_exp_tcp_kernel|experimental-tcp-secure-kernel|experimental_tcp_secure_kernel|secure-experimental-tcp-kernel|secure_experimental_tcp_kernel) ;;
-    dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) ;;
-    ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct) ;;
+    secure-tix-tcp-kernel|secure_tix_tcp_kernel|tix-tcp-secure-kernel|tix_tcp_secure_kernel|secure-tix-tcp-kernel|secure_tix_tcp_kernel) ;;
+    dd-routegso|owdeb-routegso|route-gso|tix-tcp-route-gso|tix_tcp_route_gso) ;;
+    ow-tc-direct|tc-direct|tix-tcp-tc-direct|tix_tcp_tc_direct) ;;
     *) die "unsupported TRUSTIX_CROSS_HOST_CASE=${case_name}" ;;
   esac
 }
@@ -600,10 +600,10 @@ case_transport() {
   case "$case_name" in
     mixed-plaintext-full-kmod|mixed_plaintext_full_kmod|mixed-secure-kernel|mixed_secure_kernel) printf 'mixed\n' ;;
     dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'udp\n' ;;
-    experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod) printf 'experimental_tcp\n' ;;
+    tix-tcp-full-kmod|tix_tcp_full_kmod|tix-tcp-full-kmod|tix_tcp_full_kmod|dd-tix-tcp-full-kmod|dd_tix_tcp_full_kmod|owdeb-tix-tcp-full-kmod|owdeb_tix_tcp_full_kmod) printf 'tix_tcp\n' ;;
     ow-tc-direct|tc-direct) printf 'udp\n' ;;
-    experimental-tcp-tc-direct|experimental_tcp_tc_direct) printf 'experimental_tcp\n' ;;
-    *) printf 'experimental_tcp\n' ;;
+    tix-tcp-tc-direct|tix_tcp_tc_direct) printf 'tix_tcp\n' ;;
+    *) printf 'tix_tcp\n' ;;
   esac
 }
 
@@ -613,12 +613,12 @@ case_fast_path() {
     return
   fi
   case "$case_name" in
-    dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod|mixed-plaintext-full-kmod|mixed_plaintext_full_kmod) printf 'full_kmod\n' ;;
-    mixed-secure-kernel|mixed_secure_kernel) printf 'secure_exp_tcp_kernel\n' ;;
+    dd-fullkmod|owdeb-fullkmod|full-kmod|udp-plaintext-full-kmod|udp_plaintext_full_kmod|tix-tcp-full-kmod|tix_tcp_full_kmod|tix-tcp-full-kmod|tix_tcp_full_kmod|dd-tix-tcp-full-kmod|dd_tix_tcp_full_kmod|owdeb-tix-tcp-full-kmod|owdeb_tix_tcp_full_kmod|mixed-plaintext-full-kmod|mixed_plaintext_full_kmod) printf 'full_kmod\n' ;;
+    mixed-secure-kernel|mixed_secure_kernel) printf 'secure_tix_tcp_kernel\n' ;;
     dd-secure-kudp|owdeb-secure-kudp|secure-kudp|kernel-udp-secure-kernel|kernel_udp_secure_kernel|udp-secure-kernel|udp_secure_kernel) printf 'secure_kudp\n' ;;
-    secure-exp-tcp-kernel|secure_exp_tcp_kernel|experimental-tcp-secure-kernel|experimental_tcp_secure_kernel|secure-experimental-tcp-kernel|secure_experimental_tcp_kernel) printf 'secure_exp_tcp_kernel\n' ;;
-    dd-routegso|owdeb-routegso|route-gso|experimental-tcp-route-gso|experimental_tcp_route_gso) printf 'route_gso\n' ;;
-    ow-tc-direct|tc-direct|experimental-tcp-tc-direct|experimental_tcp_tc_direct) printf 'tc_direct\n' ;;
+    secure-tix-tcp-kernel|secure_tix_tcp_kernel|tix-tcp-secure-kernel|tix_tcp_secure_kernel|secure-tix-tcp-kernel|secure_tix_tcp_kernel) printf 'secure_tix_tcp_kernel\n' ;;
+    dd-routegso|owdeb-routegso|route-gso|tix-tcp-route-gso|tix_tcp_route_gso) printf 'route_gso\n' ;;
+    ow-tc-direct|tc-direct|tix-tcp-tc-direct|tix_tcp_tc_direct) printf 'tc_direct\n' ;;
     *) die "unsupported TRUSTIX_CROSS_HOST_CASE=${case_name}" ;;
   esac
 }
@@ -633,7 +633,7 @@ case_encryption() {
     return
   fi
   case "$(case_fast_path)" in
-    secure_kudp|secure_exp_tcp_kernel) printf 'secure\n' ;;
+    secure_kudp|secure_tix_tcp_kernel) printf 'secure\n' ;;
     *) printf 'plaintext\n' ;;
   esac
 }
@@ -721,7 +721,7 @@ case_transport_datapath() {
       fi
       ;;
     secure_kudp|tc_direct) printf 'tc_xdp\n' ;;
-    secure_exp_tcp_kernel) printf 'kernel_module\n' ;;
+    secure_tix_tcp_kernel) printf 'kernel_module\n' ;;
     *) printf 'kernel_module\n' ;;
   esac
 }
@@ -746,7 +746,7 @@ case_kernel_transport_mode() {
 
 case_uses_secure_kudp_fast_path() {
   case "$(case_fast_path)" in
-    secure_kudp|secure_exp_tcp_kernel) return 0 ;;
+    secure_kudp|secure_tix_tcp_kernel) return 0 ;;
     userspace_tc)
       [[ "$(case_endpoint_transport)" == "udp" && "$(case_encryption)" == "secure" ]] &&
         truthy "${TRUSTIX_CROSS_HOST_SECURE_KUDP_KERNEL_CRYPTO:-0}"
@@ -763,7 +763,7 @@ case_uses_tc_direct_fast_path() {
         return 0
       fi
       case "$(case_endpoint_transport):$(case_encryption)" in
-        udp:plaintext|experimental_tcp:plaintext) return 0 ;;
+        udp:plaintext|tix_tcp:plaintext) return 0 ;;
         *) return 1 ;;
       esac
       ;;
@@ -777,7 +777,7 @@ case_tc_requested_but_falls_back_to_userspace() {
 
 apply_case_runtime_defaults() {
   case "$case_name" in
-    experimental-tcp-full-kmod|experimental_tcp_full_kmod|exp-tcp-full-kmod|exp_tcp_full_kmod|dd-experimental-tcp-full-kmod|dd_experimental_tcp_full_kmod|owdeb-experimental-tcp-full-kmod|owdeb_experimental_tcp_full_kmod)
+    tix-tcp-full-kmod|tix_tcp_full_kmod|tix-tcp-full-kmod|tix_tcp_full_kmod|dd-tix-tcp-full-kmod|dd_tix_tcp_full_kmod|owdeb-tix-tcp-full-kmod|owdeb_tix_tcp_full_kmod)
       if [[ -z "$iperf_parallel_explicit" ]]; then
         iperf_parallel=16
       fi
@@ -796,7 +796,7 @@ apply_case_runtime_defaults() {
 
 case_secure_kudp_route_gso() {
   case "$(case_fast_path)" in
-    secure_kudp|secure_exp_tcp_kernel) return 0 ;;
+    secure_kudp|secure_tix_tcp_kernel) return 0 ;;
   esac
   truthy "${TRUSTIX_CROSS_HOST_SECURE_KUDP_ROUTE_GSO:-0}"
 }
@@ -838,7 +838,7 @@ case_endpoint_name_for_transport() {
   local transport="$2"
   case "$transport" in
     udp) node_value "$node" a-udp b-udp ;;
-    experimental_tcp) node_value "$node" a-experimental-tcp b-experimental-tcp ;;
+    tix_tcp) node_value "$node" a-tix-tcp b-tix-tcp ;;
     *) node_value "$node" "a-${transport//_/-}" "b-${transport//_/-}" ;;
   esac
 }
@@ -1117,12 +1117,12 @@ check_local_inputs() {
   case "$iperf_mode" in bidir|forward|reverse) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_MODE must be bidir, forward, or reverse" ;; esac
   case "$iperf_directions" in both|a2b|b2a|a-to-b|b-to-a) ;; *) die "TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS must be both, a2b, or b2a" ;; esac
   nonnegative_decimal "$mixed_udp_min_gbps" || die "TRUSTIX_CROSS_HOST_MIXED_UDP_MIN_GBPS/TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS must be a non-negative number"
-  nonnegative_decimal "$mixed_experimental_tcp_min_gbps" || die "TRUSTIX_CROSS_HOST_MIXED_EXPERIMENTAL_TCP_MIN_GBPS/TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS must be a non-negative number"
+  nonnegative_decimal "$mixed_tix_tcp_min_gbps" || die "TRUSTIX_CROSS_HOST_MIXED_TIX_TCP_MIN_GBPS/TRUSTIX_CROSS_HOST_MIXED_MIN_GBPS must be a non-negative number"
   if case_uses_pinned_mixed_routes && [[ "$iperf_mode" != "forward" ]]; then
     die "pinned mixed routes require TRUSTIX_CROSS_HOST_IPERF_MODE=forward so each carrier uses its matching source and destination prefix"
   fi
   if case_uses_pinned_mixed_routes &&
-    { ! decimal_is_zero "$mixed_udp_min_gbps" || ! decimal_is_zero "$mixed_experimental_tcp_min_gbps"; }; then
+    { ! decimal_is_zero "$mixed_udp_min_gbps" || ! decimal_is_zero "$mixed_tix_tcp_min_gbps"; }; then
     need_cmd python3
   fi
   if [[ -n "$endpoint_transport_override" ]]; then
@@ -1329,7 +1329,7 @@ write_multi_endpoint_config() {
   local local_ix peer_ix local_lan remote_lan local_gateway local_lan_if local_underlay_if
   local local_peer_api remote_peer_api remote_dir_node encryption crypto_placement local_underlay remote_underlay
   local index transport local_endpoint remote_endpoint local_port remote_port kernel_mode
-  local remote_udp_lan remote_experimental_tcp_lan remote_udp_endpoint remote_experimental_tcp_endpoint
+  local remote_udp_lan remote_tix_tcp_lan remote_udp_endpoint remote_tix_tcp_endpoint
   local_ix="$(node_value "$node" "$ix_a" "$ix_b")"
   peer_ix="$(node_value "$node" "$ix_b" "$ix_a")"
   local_lan="$(node_value "$node" "$lan_a_cidr" "$lan_b_cidr")"
@@ -1425,13 +1425,13 @@ EOF
 EOF
   if case_uses_pinned_mixed_routes; then
     remote_udp_lan="$(node_value "$node" "$mixed_udp_lan_b_cidr" "$mixed_udp_lan_a_cidr")"
-    remote_experimental_tcp_lan="$(node_value "$node" "$mixed_experimental_tcp_lan_b_cidr" "$mixed_experimental_tcp_lan_a_cidr")"
+    remote_tix_tcp_lan="$(node_value "$node" "$mixed_tix_tcp_lan_b_cidr" "$mixed_tix_tcp_lan_a_cidr")"
     if [[ "$node" == "a" ]]; then
       remote_udp_endpoint="$(case_endpoint_name_for_transport b udp)"
-      remote_experimental_tcp_endpoint="$(case_endpoint_name_for_transport b experimental_tcp)"
+      remote_tix_tcp_endpoint="$(case_endpoint_name_for_transport b tix_tcp)"
     else
       remote_udp_endpoint="$(case_endpoint_name_for_transport a udp)"
-      remote_experimental_tcp_endpoint="$(case_endpoint_name_for_transport a experimental_tcp)"
+      remote_tix_tcp_endpoint="$(case_endpoint_name_for_transport a tix_tcp)"
     fi
     cat >>"$config_path" <<EOF
 routes:
@@ -1440,9 +1440,9 @@ routes:
     endpoint: ${remote_udp_endpoint}
     policy: default-routed
     metric: 100
-  - prefix: ${remote_experimental_tcp_lan}
+  - prefix: ${remote_tix_tcp_lan}
     next_hop: ${peer_ix}
-    endpoint: ${remote_experimental_tcp_endpoint}
+    endpoint: ${remote_tix_tcp_endpoint}
     policy: default-routed
     metric: 100
 
@@ -1696,21 +1696,21 @@ TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC=0
 TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC=0
 TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=1
 TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_FIX_INNER_CHECKSUMS=0
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
+TRUSTIX_TIX_TCP_ROUTE_GSO=0
+TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC=0
 EOF
   printf 'TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC=%s\n' "$route_gso"
   printf 'TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=%s\n' "$route_gso"
 }
 
-secure_exp_tcp_kernel_daemon_env() {
+secure_tix_tcp_kernel_daemon_env() {
   cat <<'EOF'
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=1
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=1
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1
-TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
+TRUSTIX_TIX_TCP_ROUTE_GSO=1
+TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC=1
+TRUSTIX_TIX_TCP_TC_TX_DIRECT=1
+TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1
+TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
 TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=1
 TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT=1
 TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=1
@@ -1746,35 +1746,35 @@ TRUSTIX_KERNEL_UDP_TC_TX_DIRECT=1
 TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
 TRUSTIX_KERNEL_UDP_TC_ONLY=1
 TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=0
+TRUSTIX_TIX_TCP_ROUTE_GSO=0
+TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC=0
+TRUSTIX_TIX_TCP_TC_TX_DIRECT=0
 EOF
       ;;
-    experimental_tcp)
+    tix_tcp)
       cat <<'EOF'
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO=0
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_TIX_TCP_ROUTE_GSO=0
+TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC=0
+TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_KFUNC=0
+TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=0
+TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_XMIT_KFUNC=0
+TRUSTIX_TIX_TCP_TC_TX_DIRECT=1
+TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=1
 TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1
-TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY=1
+TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
 EOF
       ;;
     *)
-      die "plaintext TC-direct requires udp or experimental_tcp endpoint transport"
+      die "plaintext TC-direct requires udp or tix_tcp endpoint transport"
       ;;
   esac
 }
 
 daemon_env() {
   common_daemon_env
-  if [[ "$(case_fast_path)" == "secure_exp_tcp_kernel" ]]; then
-    secure_exp_tcp_kernel_daemon_env
+  if [[ "$(case_fast_path)" == "secure_tix_tcp_kernel" ]]; then
+    secure_tix_tcp_kernel_daemon_env
     return
   fi
   if case_uses_secure_kudp_fast_path; then
@@ -1783,16 +1783,16 @@ daemon_env() {
   fi
   case "$(case_fast_path)" in
     userspace)
-      if case_has_endpoint_transport experimental_tcp; then
+      if case_has_endpoint_transport tix_tcp; then
         cat <<'EOF'
-TRUSTIX_EXPERIMENTAL_TCP_RAW_FALLBACK=1
+TRUSTIX_TIX_TCP_RAW_FALLBACK=1
 EOF
       fi
       ;;
     full_kmod)
-      local rx_worker_experimental_tcp=0
-      if case_has_endpoint_transport experimental_tcp; then
-        rx_worker_experimental_tcp=1
+      local rx_worker_tix_tcp=0
+      if case_has_endpoint_transport tix_tcp; then
+        rx_worker_tix_tcp=1
       fi
       cat <<'EOF'
 TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT=1
@@ -1809,19 +1809,19 @@ EOF
       if [[ -n "${TRUSTIX_CROSS_HOST_OPENWRT_RX_SINGLE_COALESCE:-}" ]]; then
         printf 'TRUSTIX_KERNEL_DATAPATH_OPENWRT_RX_SINGLE_COALESCE=%s\n' "$TRUSTIX_CROSS_HOST_OPENWRT_RX_SINGLE_COALESCE"
       fi
-      printf 'TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_EXPERIMENTAL_TCP=%s\n' "$rx_worker_experimental_tcp"
-      if [[ "$rx_worker_experimental_tcp" == "1" ]]; then
-        printf 'TRUSTIX_EXPERIMENTAL_TCP_ALLOW_MIXED_TCP_FAST_PATH=1\n'
+      printf 'TRUSTIX_KERNEL_DATAPATH_RX_WORKER_ALLOW_TIX_TCP=%s\n' "$rx_worker_tix_tcp"
+      if [[ "$rx_worker_tix_tcp" == "1" ]]; then
+        printf 'TRUSTIX_TIX_TCP_ALLOW_MIXED_TCP_FAST_PATH=1\n'
       fi
       ;;
     route_gso)
       cat <<'EOF'
-TRUSTIX_EXPERIMENTAL_TCP_ROUTE_GSO_ASYNC=1
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT=1
-TRUSTIX_EXPERIMENTAL_TCP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_EXPERIMENTAL_TCP_ONLY=1
-TRUSTIX_EXPERIMENTAL_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
+TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC=1
+TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1
+TRUSTIX_TIX_TCP_TC_TX_DIRECT=1
+TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=1
+TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY=1
+TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
 EOF
       ;;
     tc_direct)
@@ -1832,7 +1832,7 @@ EOF
         udp:plaintext)
           plaintext_tc_direct_daemon_env
           ;;
-        experimental_tcp:plaintext)
+        tix_tcp:plaintext)
           plaintext_tc_direct_daemon_env
           ;;
       esac
@@ -2227,7 +2227,7 @@ exit 1
 case_endpoint_needs_tcp_listener() {
   local transport="${1:-$(case_endpoint_transport)}"
   case "$transport" in
-    tcp|websocket|http_connect|experimental_tcp) return 0 ;;
+    tcp|websocket|http_connect|tix_tcp) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -2344,9 +2344,9 @@ run_tcp_health_checks() {
 
 run_pinned_mixed_health_checks() {
   run_tcp_health_direction a b "$host_b_ip" "a-to-b-udp"
-  run_tcp_health_direction a b "$mixed_host_b_ip" "a-to-b-experimental-tcp"
+  run_tcp_health_direction a b "$mixed_host_b_ip" "a-to-b-tix-tcp"
   run_tcp_health_direction b a "$host_a_ip" "b-to-a-udp"
-  run_tcp_health_direction b a "$mixed_host_a_ip" "b-to-a-experimental-tcp"
+  run_tcp_health_direction b a "$mixed_host_a_ip" "b-to-a-tix-tcp"
 }
 
 run_pinned_mixed_ping_checks() {
@@ -2387,7 +2387,7 @@ run_connectivity_checks() {
     return
   fi
   case "$(case_fast_path)" in
-    route_gso|secure_kudp|secure_exp_tcp_kernel)
+    route_gso|secure_kudp|secure_tix_tcp_kernel)
       run_tcp_health_checks
       return
       ;;
@@ -2678,23 +2678,23 @@ run_pinned_mixed_iperf_direction() {
   local client="$1"
   local server="$2"
   local pair_label="$3"
-  local suffix udp_dst experimental_tcp_dst udp_src experimental_tcp_src
-  local udp_out experimental_tcp_out udp_pid experimental_tcp_pid udp_rc=0 experimental_tcp_rc=0
+  local suffix udp_dst tix_tcp_dst udp_src tix_tcp_src
+  local udp_out tix_tcp_out udp_pid tix_tcp_pid udp_rc=0 tix_tcp_rc=0
   suffix="$(iperf_artifact_suffix)"
   udp_dst="$(node_value "$server" "$host_a_ip" "$host_b_ip")"
-  experimental_tcp_dst="$(node_value "$server" "$mixed_host_a_ip" "$mixed_host_b_ip")"
+  tix_tcp_dst="$(node_value "$server" "$mixed_host_a_ip" "$mixed_host_b_ip")"
   udp_src="$(node_value "$client" "$host_a_ip" "$host_b_ip")"
-  experimental_tcp_src="$(node_value "$client" "$mixed_host_a_ip" "$mixed_host_b_ip")"
+  tix_tcp_src="$(node_value "$client" "$mixed_host_a_ip" "$mixed_host_b_ip")"
   udp_out="iperf3-${pair_label}-udp-${suffix}.json"
-  experimental_tcp_out="iperf3-${pair_label}-experimental-tcp-${suffix}.json"
+  tix_tcp_out="iperf3-${pair_label}-tix-tcp-${suffix}.json"
 
   start_iperf_server "$server" "$iperf_port" udp "$udp_dst"
-  start_iperf_server "$server" "$mixed_iperf_port" experimental-tcp "$experimental_tcp_dst"
+  start_iperf_server "$server" "$mixed_iperf_port" tix-tcp "$tix_tcp_dst"
   sleep 1
   run_iperf_client "$client" "$udp_dst" "$udp_out" "$iperf_port" "$udp_src" &
   udp_pid=$!
-  run_iperf_client "$client" "$experimental_tcp_dst" "$experimental_tcp_out" "$mixed_iperf_port" "$experimental_tcp_src" &
-  experimental_tcp_pid=$!
+  run_iperf_client "$client" "$tix_tcp_dst" "$tix_tcp_out" "$mixed_iperf_port" "$tix_tcp_src" &
+  tix_tcp_pid=$!
   if [[ "$transport_snapshot_delay" -gt 0 ]]; then
     sleep "$transport_snapshot_delay"
   fi
@@ -2704,20 +2704,20 @@ run_pinned_mixed_iperf_direction() {
   else
     udp_rc=$?
   fi
-  if wait "$experimental_tcp_pid"; then
+  if wait "$tix_tcp_pid"; then
     :
   else
-    experimental_tcp_rc=$?
+    tix_tcp_rc=$?
   fi
   wait_iperf_server_exit "$server" "$iperf_port" udp
-  wait_iperf_server_exit "$server" "$mixed_iperf_port" experimental-tcp
+  wait_iperf_server_exit "$server" "$mixed_iperf_port" tix-tcp
   if [[ "$udp_rc" -eq 0 ]] && ! assert_iperf_min_gbps "$client" "$udp_out" "${pair_label}-udp-${suffix}" "$mixed_udp_min_gbps"; then
     udp_rc=1
   fi
-  if [[ "$experimental_tcp_rc" -eq 0 ]] && ! assert_iperf_min_gbps "$client" "$experimental_tcp_out" "${pair_label}-experimental-tcp-${suffix}" "$mixed_experimental_tcp_min_gbps"; then
-    experimental_tcp_rc=1
+  if [[ "$tix_tcp_rc" -eq 0 ]] && ! assert_iperf_min_gbps "$client" "$tix_tcp_out" "${pair_label}-tix-tcp-${suffix}" "$mixed_tix_tcp_min_gbps"; then
+    tix_tcp_rc=1
   fi
-  if [[ "$udp_rc" -ne 0 || "$experimental_tcp_rc" -ne 0 ]]; then
+  if [[ "$udp_rc" -ne 0 || "$tix_tcp_rc" -ne 0 ]]; then
     collect_failure_snapshot "${pair_label}-mixed-${suffix}"
     return 1
   fi
@@ -2725,18 +2725,18 @@ run_pinned_mixed_iperf_direction() {
 
 assert_pinned_mixed_sessions_node() {
   local node="$1"
-  local dir api_port trustixctl peer_node udp_endpoint experimental_tcp_endpoint
+  local dir api_port trustixctl peer_node udp_endpoint tix_tcp_endpoint
   dir="$(remote_dir "$node")"
   api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
   trustixctl="$(node_bin "$node" trustixctl)"
   peer_node="$(node_value "$node" b a)"
   udp_endpoint="$(case_endpoint_name_for_transport "$peer_node" udp)"
-  experimental_tcp_endpoint="$(case_endpoint_name_for_transport "$peer_node" experimental_tcp)"
+  tix_tcp_endpoint="$(case_endpoint_name_for_transport "$peer_node" tix_tcp)"
   run_node "$node" "set -Eeuo pipefail
 out=$(remote_quote "${dir}/pinned-mixed-session-assert.json")
 $(remote_quote "$trustixctl") -api http://127.0.0.1:${api_port} transports >\"\$out\"
 grep -Eq '\"endpoint\"[[:space:]]*:[[:space:]]*\"${udp_endpoint}\"' \"\$out\"
-grep -Eq '\"endpoint\"[[:space:]]*:[[:space:]]*\"${experimental_tcp_endpoint}\"' \"\$out\"
+grep -Eq '\"endpoint\"[[:space:]]*:[[:space:]]*\"${tix_tcp_endpoint}\"' \"\$out\"
 "
 }
 
@@ -2890,7 +2890,7 @@ main() {
   resolve_pinned_mixed_lan
   apply_case_runtime_defaults
   case "$(case_fast_path)" in
-    route_gso|secure_exp_tcp_kernel)
+    route_gso|secure_tix_tcp_kernel)
       if [[ -z "${TRUSTIX_CROSS_HOST_SESSION_POOL_HEARTBEAT_MODE+x}" ]]; then
         session_pool_heartbeat_mode=disabled
       fi
@@ -2924,8 +2924,8 @@ main() {
   if case_tc_requested_but_falls_back_to_userspace; then
     log "WARNING: ${case_name} has no safe TC direct fast path with this configuration; using userspace datapath"
   fi
-  if [[ "$(case_transport)" == "udp" && "$(case_endpoint_transport)" == "experimental_tcp" ]]; then
-    log "full-kmod transport override selected with experimental_tcp endpoint; require explicit exp_tcp_full_kmod gate evidence before treating this mix as production"
+  if [[ "$(case_transport)" == "udp" && "$(case_endpoint_transport)" == "tix_tcp" ]]; then
+    log "full-kmod transport override selected with tix_tcp endpoint; require explicit tix_tcp_full_kmod gate evidence before treating this mix as production"
   fi
   check_node_prereqs a
   check_node_prereqs b

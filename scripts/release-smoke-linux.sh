@@ -31,7 +31,7 @@ nat_reverse_smoke="${TRUSTIX_RELEASE_SMOKE_NAT_REVERSE:-auto}"
 control_smoke="${TRUSTIX_RELEASE_SMOKE_CONTROL:-0}"
 three_ix_smoke="${TRUSTIX_RELEASE_SMOKE_3IX:-0}"
 three_ix_kernel_udp_smoke="${TRUSTIX_RELEASE_SMOKE_3IX_KERNEL_UDP:-0}"
-exp_tcp_bench_smoke="${TRUSTIX_RELEASE_SMOKE_EXP_TCP_BENCH:-0}"
+tix_tcp_bench_smoke="${TRUSTIX_RELEASE_SMOKE_TIX_TCP_BENCH:-0}"
 iptunnel_smoke="${TRUSTIX_RELEASE_SMOKE_IPTUNNEL:-auto}"
 device_access_smoke="${TRUSTIX_RELEASE_SMOKE_DEVICE_ACCESS:-auto}"
 allocated_ports=""
@@ -234,9 +234,9 @@ main() {
     1|true|yes|on|0|false|no|off) ;;
     *) die "TRUSTIX_RELEASE_SMOKE_3IX_KERNEL_UDP must be 1 or 0" ;;
   esac
-  case "$exp_tcp_bench_smoke" in
+  case "$tix_tcp_bench_smoke" in
     1|true|yes|on|0|false|no|off) ;;
-    *) die "TRUSTIX_RELEASE_SMOKE_EXP_TCP_BENCH must be 1 or 0" ;;
+    *) die "TRUSTIX_RELEASE_SMOKE_TIX_TCP_BENCH must be 1 or 0" ;;
   esac
   case "$iptunnel_smoke" in
     auto|1|true|yes|on|0|false|no|off) ;;
@@ -396,10 +396,10 @@ if missing_build:
 assets = build.get("assets") or {}
 ebpf = assets.get("ebpf") or {}
 required_ebpf = [
-    "experimental_tcp_xdp_bpfel.o",
-    "experimental_tcp_kernel_crypto_xdp_bpfel.o",
-    "experimental_tcp_kernel_crypto_xdp_direct_bpfel.o",
-    "experimental_tcp_kernel_crypto_tx_xdp_bpfel.o",
+    "tix_tcp_xdp_bpfel.o",
+    "tix_tcp_kernel_crypto_xdp_bpfel.o",
+    "tix_tcp_kernel_crypto_xdp_direct_bpfel.o",
+    "tix_tcp_kernel_crypto_tx_xdp_bpfel.o",
     "kernel_udp_xdp_bpfel.o",
     "kernel_udp_tx_kernel_crypto_tc_bpfel.o",
     "kernel_udp_tx_kernel_crypto_tc_routegso_bpfel.o",
@@ -531,7 +531,7 @@ PY
   run_optional_control_release_smoke "$bin_dir"
   run_optional_3ix_release_smoke "$bin_dir"
   run_optional_3ix_kernel_udp_release_smoke "$bin_dir"
-  run_optional_exp_tcp_bench_release_smoke "$bin_dir"
+  run_optional_tix_tcp_bench_release_smoke "$bin_dir"
 
   log "ok: status, doctor, config verify, config backup retention, cleanup dry-run, build metadata, embedded eBPF metadata, embedded .ko metadata"
 }
@@ -595,7 +595,7 @@ run_nat_reverse_release_smoke() {
   [[ "$(id -u)" == "0" ]] || die "release NAT/no-public reverse smoke requires root because linux-e2e-smoke creates netns and TC/eBPF state"
   [[ -x "$smoke_script" || -f "$smoke_script" ]] || die "release package is missing scripts/linux-e2e-smoke.sh"
   local protocol
-  for protocol in udp tcp kernel_udp experimental_tcp; do
+  for protocol in udp tcp kernel_udp tix_tcp; do
     log "run release NAT/no-public reverse ${protocol} data-session smoke"
     env \
       TRUSTIX_E2E_BIN_DIR="$bin_dir" \
@@ -721,7 +721,7 @@ run_3ix_release_smoke() {
   local smoke_script="${workdir}/extract/scripts/linux-three-ix-e2e-smoke.sh"
   [[ "$(id -u)" == "0" ]] || die "TRUSTIX_RELEASE_SMOKE_3IX=1 requires root because linux-three-ix-e2e-smoke creates netns and TC/eBPF state"
   [[ -f "$smoke_script" ]] || die "release package is missing scripts/linux-three-ix-e2e-smoke.sh"
-  log "run release 3-IX experimental_tcp smoke"
+  log "run release 3-IX tix_tcp smoke"
   env \
     TRUSTIX_3IX_E2E_BIN_DIR="$bin_dir" \
     TRUSTIX_3IX_E2E_WORKDIR="${workdir}/three-ix-e2e" \
@@ -753,27 +753,27 @@ run_3ix_kernel_udp_release_smoke() {
     bash "$smoke_script"
 }
 
-run_optional_exp_tcp_bench_release_smoke() {
+run_optional_tix_tcp_bench_release_smoke() {
   local bin_dir="$1"
-  case "$exp_tcp_bench_smoke" in
+  case "$tix_tcp_bench_smoke" in
     1|true|yes|on)
       stop_daemon
-      run_exp_tcp_bench_release_smoke "$bin_dir"
+      run_tix_tcp_bench_release_smoke "$bin_dir"
       ;;
     0|false|no|off)
       ;;
   esac
 }
 
-run_exp_tcp_bench_release_smoke() {
+run_tix_tcp_bench_release_smoke() {
   local bin_dir="$1"
-  local bench_script="${workdir}/extract/scripts/linux-experimental-tcp-bench.sh"
-  [[ "$(id -u)" == "0" ]] || die "TRUSTIX_RELEASE_SMOKE_EXP_TCP_BENCH=1 requires root because linux-experimental-tcp-bench creates netns and TC/eBPF state"
-  [[ -f "$bench_script" ]] || die "release package is missing scripts/linux-experimental-tcp-bench.sh"
-  log "run release experimental_tcp benchmark smoke"
+  local bench_script="${workdir}/extract/scripts/linux-tix-tcp-bench.sh"
+  [[ "$(id -u)" == "0" ]] || die "TRUSTIX_RELEASE_SMOKE_TIX_TCP_BENCH=1 requires root because linux-tix-tcp-bench creates netns and TC/eBPF state"
+  [[ -f "$bench_script" ]] || die "release package is missing scripts/linux-tix-tcp-bench.sh"
+  log "run release tix_tcp benchmark smoke"
   env \
-    TRUSTIX_EXP_TCP_BENCH_BIN_DIR="$bin_dir" \
-    TRUSTIX_EXP_TCP_BENCH_WORKDIR="${workdir}/experimental-tcp-bench" \
+    TRUSTIX_TIX_TCP_BENCH_BIN_DIR="$bin_dir" \
+    TRUSTIX_TIX_TCP_BENCH_WORKDIR="${workdir}/tix-tcp-bench" \
     bash "$bench_script"
 }
 

@@ -49,7 +49,7 @@ func (daemon *Daemon) handleConfigDesired(w http.ResponseWriter, r *http.Request
 	daemon.configMu.RLock()
 	desired := daemon.desired
 	daemon.configMu.RUnlock()
-	writeJSON(w, http.StatusOK, config.PublicDesired(desired))
+	writeJSON(w, http.StatusOK, desired)
 }
 
 func (daemon *Daemon) handleConfigValidate(w http.ResponseWriter, r *http.Request) {

@@ -135,7 +135,7 @@
 	 TRUSTIX_DATAPATH_SESSION_FLAG_SEND_ENCRYPTED | \
 	 TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_ENCRYPTED)
 #define TRUSTIX_DATAPATH_TRANSPORT_UDP 1U
-#define TRUSTIX_DATAPATH_TRANSPORT_EXPERIMENTAL_TCP 2U
+#define TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP 2U
 #define TRUSTIX_DATAPATH_OUTER_PARSE_FLAG_REVERSE BIT(0)
 #define TRUSTIX_DATAPATH_HOOK_FLAG_RX_PREVIEW BIT(0)
 #define TRUSTIX_DATAPATH_HOOK_FLAG_RX_STAGE BIT(1)
@@ -1042,7 +1042,7 @@ module_param_named(tx_plaintext_hash_tx_queue_partition_transport,
 		   trustix_datapath_tx_plaintext_hash_tx_queue_partition_transport,
 		   bool, 0644);
 MODULE_PARM_DESC(tx_plaintext_hash_tx_queue_partition_transport,
-		 "Reserve even plaintext TX queues for UDP by restricting experimental TCP to odd queues when both transports are active");
+		 "Reserve even plaintext TX queues for UDP by restricting TIX-TCP to odd queues when both transports are active");
 
 static bool trustix_datapath_tx_plaintext_skip_inner_tcp_checksum;
 module_param_named(tx_plaintext_skip_inner_tcp_checksum,
@@ -2413,7 +2413,7 @@ module_param_named(tx_plaintext_hash_tx_queue_partition_tcp_sets,
 		   trustix_datapath_tx_plaintext_hash_tx_queue_partition_tcp_sets,
 		   ullong, 0444);
 MODULE_PARM_DESC(tx_plaintext_hash_tx_queue_partition_tcp_sets,
-		 "TrustIX plaintext experimental TCP TX outer skbs assigned to the TCP queue partition");
+		 "TrustIX plaintext TIX-TCP TX outer skbs assigned to the TCP queue partition");
 
 static unsigned long long trustix_datapath_tx_plaintext_hash_tx_queue_partition_fallbacks;
 module_param_named(tx_plaintext_hash_tx_queue_partition_fallbacks,
@@ -4806,7 +4806,7 @@ trustix_datapath_session_wire_tuple_cache_insert_locked(
 	case TRUSTIX_DATAPATH_TRANSPORT_UDP:
 		protocol = IPPROTO_UDP;
 		break;
-	case TRUSTIX_DATAPATH_TRANSPORT_EXPERIMENTAL_TCP:
+	case TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP:
 		protocol = IPPROTO_TCP;
 		break;
 	default:
@@ -5440,7 +5440,7 @@ trustix_datapath_session_wire_for_tuple_locked(__u64 flow_id,
 		transport = TRUSTIX_DATAPATH_TRANSPORT_UDP;
 		break;
 	case IPPROTO_TCP:
-		transport = TRUSTIX_DATAPATH_TRANSPORT_EXPERIMENTAL_TCP;
+		transport = TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP;
 		break;
 	default:
 		return NULL;
@@ -5502,7 +5502,7 @@ trustix_datapath_session_wire_for_tuple_any_flow_locked(
 		transport = TRUSTIX_DATAPATH_TRANSPORT_UDP;
 		break;
 	case IPPROTO_TCP:
-		transport = TRUSTIX_DATAPATH_TRANSPORT_EXPERIMENTAL_TCP;
+		transport = TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP;
 		break;
 	default:
 		return NULL;
@@ -5809,7 +5809,7 @@ trustix_datapath_outer_build_locked(struct trustix_datapath_ioc_outer_build *req
 		outer_protocol = IPPROTO_UDP;
 		outer_header_len = 20 + 8;
 		break;
-	case TRUSTIX_DATAPATH_TRANSPORT_EXPERIMENTAL_TCP:
+	case TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP:
 		outer_protocol = IPPROTO_TCP;
 		outer_header_len = 20 + 20;
 		break;
@@ -6161,7 +6161,7 @@ trustix_datapath_tx_plan_locked(struct trustix_datapath_ioc_classify *classify,
 	case TRUSTIX_DATAPATH_TRANSPORT_UDP:
 		plan->outer_protocol = IPPROTO_UDP;
 		break;
-	case TRUSTIX_DATAPATH_TRANSPORT_EXPERIMENTAL_TCP:
+	case TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP:
 		plan->outer_protocol = IPPROTO_TCP;
 		break;
 	default:
@@ -8893,7 +8893,7 @@ trustix_datapath_plaintext_session_for_frame_locked(
 		transport = TRUSTIX_DATAPATH_TRANSPORT_UDP;
 		break;
 	case IPPROTO_TCP:
-		transport = TRUSTIX_DATAPATH_TRANSPORT_EXPERIMENTAL_TCP;
+		transport = TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP;
 		break;
 	default:
 		return -EPROTONOSUPPORT;
@@ -9270,7 +9270,7 @@ trustix_datapath_rx_worker_can_steal_skb(
 	/*
 	 * Do not take ownership of the hook skb in the first-release datapath.
 	 * The old stolen-skb variants could race the netfilter caller and reboot
-	 * test nodes under ACKless TCP load. Keep the knobs writable for profile
+	 * test nodes under TIX-TCP load. Keep the knobs writable for profile
 	 * compatibility, but route traffic through the validated copy/worker path.
 	 */
 	(void)skb;
