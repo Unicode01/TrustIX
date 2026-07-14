@@ -129,6 +129,7 @@ type Daemon struct {
 	apiServers           []apiServerRuntime
 	dnsMu                sync.Mutex
 	dnsServer            *dnsServerRuntime
+	apiRateLimits        *apiRateLimiters
 }
 
 type Option func(*Daemon)
@@ -194,6 +195,7 @@ func New(cfg Config, options ...Option) (*Daemon, error) {
 		flows:                make(map[routing.FlowKey]routing.FlowBinding),
 		nat:                  newNATTable(),
 		endpointState:        make(map[endpointStateKey]rstate.EndpointState),
+		apiRateLimits:        newAPIRateLimitersFromEnv(),
 	}
 	for _, option := range options {
 		option(daemon)
@@ -667,7 +669,7 @@ func (daemon *Daemon) managementAPIProbeURL(listen string) (string, error) {
 		}
 	}
 	scheme := daemon.managementAPIScheme(listen)
-	return scheme + "://" + net.JoinHostPort(addr, port) + "/", nil
+	return scheme + "://" + net.JoinHostPort(addr, port) + "/healthz", nil
 }
 
 func (daemon *Daemon) runCtxDone() <-chan struct{} {

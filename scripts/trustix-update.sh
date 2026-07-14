@@ -46,6 +46,7 @@ Install/restart:
   --no-restart              install only; do not restart service instances
   --prefix DIR              install prefix (default: /usr/local, OpenWrt: /opt/trustix)
   --bindir DIR              binary dir (default: PREFIX/bin)
+  --libexecdir DIR          helper script dir (default: PREFIX/libexec/trustix)
   --unitdir DIR             systemd unit dir (default: /etc/systemd/system)
   --initdir DIR             OpenWrt init dir (default: /etc/init.d)
   --sysconfdir DIR          config dir for OpenWrt instance detection (default: /etc/trustix)
@@ -218,6 +219,9 @@ apply_target_defaults() {
   if [[ -z "$bindir" ]]; then
     bindir="${prefix}/bin"
   fi
+  if [[ -z "$libexecdir" ]]; then
+    libexecdir="${prefix}/libexec/trustix"
+  fi
   if [[ -z "$unitdir" ]]; then
     unitdir="/etc/systemd/system"
   fi
@@ -322,6 +326,7 @@ restart=1
 service_manager="${TRUSTIX_UPDATE_SERVICE_MANAGER:-auto}"
 prefix="${TRUSTIX_UPDATE_PREFIX:-}"
 bindir="${TRUSTIX_UPDATE_BINDIR:-}"
+libexecdir="${TRUSTIX_UPDATE_LIBEXECDIR:-}"
 unitdir="${TRUSTIX_UPDATE_UNITDIR:-}"
 initdir="${TRUSTIX_UPDATE_INITDIR:-}"
 sysconfdir="${TRUSTIX_UPDATE_SYSCONFDIR:-}"
@@ -362,6 +367,7 @@ while [[ $# -gt 0 ]]; do
     --no-restart) restart=0; shift ;;
     --prefix) [[ $# -ge 2 ]] || die "--prefix requires a value"; prefix="$2"; shift 2 ;;
     --bindir) [[ $# -ge 2 ]] || die "--bindir requires a value"; bindir="$2"; shift 2 ;;
+    --libexecdir) [[ $# -ge 2 ]] || die "--libexecdir requires a value"; libexecdir="$2"; shift 2 ;;
     --unitdir) [[ $# -ge 2 ]] || die "--unitdir requires a value"; unitdir="$2"; shift 2 ;;
     --initdir) [[ $# -ge 2 ]] || die "--initdir requires a value"; initdir="$2"; shift 2 ;;
     --sysconfdir) [[ $# -ge 2 ]] || die "--sysconfdir requires a value"; sysconfdir="$2"; shift 2 ;;
@@ -517,10 +523,22 @@ install_package() {
       install_binary "${package_dir}/bin/${name}"
     fi
   done
+  if [[ -f "${package_dir}/scripts/trustix-backup.sh" ]]; then
+    log "install encrypted backup helper"
+    install_regular_file "${package_dir}/scripts/trustix-backup.sh" "${libexecdir}/trustix-backup.sh" 0755
+  fi
   if [[ -f "${package_dir}/packaging/systemd/trustixd@.service" ]]; then
     if [[ "$service_manager" == "systemd" ]]; then
       log "install systemd unit"
       install_regular_file "${package_dir}/packaging/systemd/trustixd@.service" "${unitdir}/trustixd@.service" 0644
+    fi
+  fi
+  if [[ "$service_manager" == "systemd" ]]; then
+    if [[ -f "${package_dir}/packaging/systemd/trustix-backup@.service" ]]; then
+      install_regular_file "${package_dir}/packaging/systemd/trustix-backup@.service" "${unitdir}/trustix-backup@.service" 0644
+    fi
+    if [[ -f "${package_dir}/packaging/systemd/trustix-backup@.timer" ]]; then
+      install_regular_file "${package_dir}/packaging/systemd/trustix-backup@.timer" "${unitdir}/trustix-backup@.timer" 0644
     fi
   fi
   if [[ "$service_manager" == "openwrt" ]]; then
@@ -737,10 +755,19 @@ prepare_transaction_snapshot() {
       snapshot_transaction_file "${bindir}/${name}" 0755
     fi
   done
+  if [[ -f "${package_dir}/scripts/trustix-backup.sh" ]]; then
+    snapshot_transaction_file "${libexecdir}/trustix-backup.sh" 0755
+  fi
   case "$service_manager" in
     systemd)
       if [[ -f "${package_dir}/packaging/systemd/trustixd@.service" ]]; then
         snapshot_transaction_file "${unitdir}/trustixd@.service" 0644
+      fi
+      if [[ -f "${package_dir}/packaging/systemd/trustix-backup@.service" ]]; then
+        snapshot_transaction_file "${unitdir}/trustix-backup@.service" 0644
+      fi
+      if [[ -f "${package_dir}/packaging/systemd/trustix-backup@.timer" ]]; then
+        snapshot_transaction_file "${unitdir}/trustix-backup@.timer" 0644
       fi
       ;;
     openwrt)
@@ -799,6 +826,68 @@ listener_probe() {
   return 1
 }
 
+api_probe_base_urls() {
+  local address="$1"
+  local host port url_host
+  if [[ "$address" == \[*\]:* ]]; then
+    host="${address#\[}"
+    host="${host%%\]*}"
+    port="${address##*]:}"
+  else
+    host="${address%:*}"
+    port="${address##*:}"
+  fi
+  [[ -n "$port" && "$port" != "$address" ]] || return 1
+  case "$host" in
+    ""|0.0.0.0) host="127.0.0.1" ;;
+    ::) host="::1" ;;
+  esac
+  if [[ "$host" == *:* ]]; then
+    url_host="[${host}]"
+  else
+    url_host="$host"
+  fi
+  case "$host" in
+    127.*|::1|localhost)
+      printf 'http://%s:%s\nhttps://%s:%s\n' "$url_host" "$port" "$url_host" "$port"
+      ;;
+    *)
+      printf 'https://%s:%s\nhttp://%s:%s\n' "$url_host" "$port" "$url_host" "$port"
+      ;;
+  esac
+}
+
+probe_readiness_url() {
+  local base_url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -kfsS --connect-timeout 1 --max-time 2 "${base_url}/readyz" >/dev/null 2>&1 && return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget --no-check-certificate -q -T 2 -O /dev/null "${base_url}/readyz" >/dev/null 2>&1 && return 0
+  fi
+  if [[ -x "${bindir}/trustixctl" ]]; then
+    "${bindir}/trustixctl" -api "$base_url" -api-tls-insecure-skip-verify ready >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+api_readiness_probe() {
+  local address="$1"
+  local base_url
+  if [[ -n "${loaded_readiness_url:-}" ]]; then
+    probe_readiness_url "$loaded_readiness_url"
+    return
+  fi
+  while IFS= read -r base_url; do
+    [[ -n "$base_url" ]] || continue
+    if probe_readiness_url "$base_url"; then
+      loaded_readiness_url="$base_url"
+      return 0
+    fi
+  done < <(api_probe_base_urls "$address")
+  return 1
+}
+
 process_matches_instance_config() {
   local config_path="$1"
   local expected_binary="${bindir}/trustixd"
@@ -840,37 +929,45 @@ process_matches_instance_config() {
 
 wait_instance_api() (
   local instance="$1"
+  local health_mode="${2:-required}"
   local i
+  local loaded_readiness_url=""
   load_instance_settings "$instance"
   for i in {1..15}; do
     if process_matches_instance_config "$loaded_config" && listener_probe "$loaded_api_addr"; then
-      return 0
+      if [[ "$health_mode" == "legacy" ]] || api_readiness_probe "$loaded_api_addr"; then
+        return 0
+      fi
     fi
     sleep 1
   done
-  log "ERROR: installed daemon process or management API is not healthy for instance ${instance}: ${loaded_api_addr}"
+  log "ERROR: installed daemon process or management API readiness is not healthy for instance ${instance}: ${loaded_api_addr}"
   return 1
 )
 
 wait_openwrt_instance_healthy() (
   local instance="$1"
+  local health_mode="${2:-required}"
   local i
+  local loaded_readiness_url=""
   load_instance_settings "$instance"
   for i in {1..15}; do
     if process_matches_instance_config "$loaded_config" && listener_probe "$loaded_api_addr"; then
-      break
+      if [[ "$health_mode" == "legacy" ]] || api_readiness_probe "$loaded_api_addr"; then
+        break
+      fi
     fi
     sleep 1
   done
-  if ! process_matches_instance_config "$loaded_config" || ! listener_probe "$loaded_api_addr"; then
-    log "ERROR: OpenWrt instance did not start or listen: ${instance} api=${loaded_api_addr}"
+  if ! process_matches_instance_config "$loaded_config" || ! listener_probe "$loaded_api_addr" || { [[ "$health_mode" != "legacy" ]] && ! api_readiness_probe "$loaded_api_addr"; }; then
+    log "ERROR: OpenWrt instance did not start or become ready: ${instance} api=${loaded_api_addr}"
     run_root "${initdir}/trustix" status "$instance" >&2 || true
     command -v logread >/dev/null 2>&1 && logread | grep -i 'trustix' | tail -n 80 >&2 || true
     return 1
   fi
   for i in {1..5}; do
     sleep 1
-    if ! process_matches_instance_config "$loaded_config" || ! listener_probe "$loaded_api_addr"; then
+    if ! process_matches_instance_config "$loaded_config" || ! listener_probe "$loaded_api_addr" || { [[ "$health_mode" != "legacy" ]] && ! api_readiness_probe "$loaded_api_addr"; }; then
       log "ERROR: OpenWrt instance did not remain healthy: ${instance} api=${loaded_api_addr}"
       return 1
     fi
@@ -944,7 +1041,7 @@ rollback_transaction() {
             continue
           }
           wait_systemd_unit_active "trustixd@${instance}.service" || failed=1
-          wait_instance_api "$instance" || failed=1
+          wait_instance_api "$instance" legacy || failed=1
           ;;
         openwrt)
           log "rollback restart trustix:${instance}"
@@ -952,7 +1049,7 @@ rollback_transaction() {
             failed=1
             continue
           }
-          wait_openwrt_instance_healthy "$instance" || failed=1
+          wait_openwrt_instance_healthy "$instance" legacy || failed=1
           ;;
       esac
     done

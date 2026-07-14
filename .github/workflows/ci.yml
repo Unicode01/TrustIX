@@ -64,6 +64,10 @@ jobs:
         run: |
           bash scripts/trustix-update-smoke.sh
 
+      - name: Encrypted Backup Recovery Smoke
+        run: |
+          bash scripts/trustix-backup-smoke.sh
+
       - name: Production Transport Evidence Audit
         run: |
           python3 scripts/production-transport-audit.py \

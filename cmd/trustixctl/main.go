@@ -21,11 +21,15 @@ import (
 	"time"
 
 	"trustix.local/trustix/internal/adminauth"
+	"trustix.local/trustix/internal/backupcrypto"
 	"trustix.local/trustix/internal/buildinfo"
 	"trustix.local/trustix/internal/pki"
 )
 
 var commandPaths = map[string]string{
+	"health":              "/healthz",
+	"ready":               "/readyz",
+	"metrics":             "/metrics",
 	"status":              "/v1/status",
 	"peers":               "/v1/peers",
 	"members":             "/v1/control/members",
@@ -240,6 +244,30 @@ func boolEnv(name string) bool {
 
 func handleConfigCommand(client apiClient, args []string) (bool, error) {
 	switch args[0] {
+	case "backup-keygen":
+		flags := flag.NewFlagSet("config backup-keygen", flag.ContinueOnError)
+		var publicPath string
+		var identityPath string
+		flags.StringVar(&publicPath, "public", "", "backup recipient public key output")
+		flags.StringVar(&identityPath, "identity", "", "offline backup identity output")
+		if err := flags.Parse(args[1:]); err != nil {
+			return true, err
+		}
+		if flags.NArg() != 0 || strings.TrimSpace(publicPath) == "" || strings.TrimSpace(identityPath) == "" {
+			return true, fmt.Errorf("usage: trustixctl config backup-keygen -public backup.pub -identity backup.key")
+		}
+		if err := backupcrypto.WriteKeyPair(publicPath, identityPath); err != nil {
+			return true, err
+		}
+		result, err := json.MarshalIndent(struct {
+			Public   string `json:"public"`
+			Identity string `json:"identity"`
+		}{Public: filepath.Clean(publicPath), Identity: filepath.Clean(identityPath)}, "", "  ")
+		if err != nil {
+			return true, err
+		}
+		fmt.Println(string(result))
+		return true, nil
 	case "export":
 		flags := flag.NewFlagSet("config export", flag.ContinueOnError)
 		var out string
@@ -259,24 +287,56 @@ func handleConfigCommand(client apiClient, args []string) (bool, error) {
 		flags := flag.NewFlagSet("config backup", flag.ContinueOnError)
 		var out string
 		var includePrivateKeys bool
+		var recipientPath string
 		flags.StringVar(&out, "out", "", "output archive path; defaults to server filename")
 		flags.BoolVar(&includePrivateKeys, "include-private-keys", false, "include configured private key files in the backup archive")
+		flags.StringVar(&recipientPath, "recipient", strings.TrimSpace(os.Getenv("TRUSTIX_BACKUP_RECIPIENT")), "backup recipient public key; encrypts before writing")
 		if err := flags.Parse(args[1:]); err != nil {
 			return true, err
 		}
 		if flags.NArg() != 0 || !includePrivateKeys {
-			return true, fmt.Errorf("usage: trustixctl config backup -include-private-keys [-out file]")
+			return true, fmt.Errorf("usage: trustixctl config backup -include-private-keys [-recipient backup.pub] [-out file]")
 		}
 		body, err := json.Marshal(configExportCLIRequest{IncludePrivateKeys: true})
 		if err != nil {
 			return true, err
 		}
-		return true, client.postAndSave("/v1/config/export", body, "application/json", out)
-	case "restore":
-		if len(args) != 2 {
-			return true, fmt.Errorf("usage: trustixctl config restore <archive.tar.gz>")
+		if strings.TrimSpace(recipientPath) != "" {
+			return true, client.postAndSaveEncryptedBackup("/v1/config/export", body, recipientPath, out)
 		}
-		return true, client.postFileAndPrint("/v1/config/restore-archive", args[1], "application/gzip")
+		return true, client.postAndSave("/v1/config/export", body, "application/json", out)
+	case "verify-backup":
+		flags := flag.NewFlagSet("config verify-backup", flag.ContinueOnError)
+		var identityPath string
+		flags.StringVar(&identityPath, "identity", strings.TrimSpace(os.Getenv("TRUSTIX_BACKUP_IDENTITY")), "offline backup identity for encrypted archives")
+		if err := flags.Parse(args[1:]); err != nil {
+			return true, err
+		}
+		if flags.NArg() != 1 {
+			return true, fmt.Errorf("usage: trustixctl config verify-backup [-identity backup.key] <archive>")
+		}
+		payload, err := readBackupArchive(flags.Arg(0), identityPath)
+		if err != nil {
+			return true, err
+		}
+		defer wipeBytes(payload)
+		return true, client.postAndPrint("/v1/config/validate-archive", payload, "application/gzip")
+	case "restore":
+		flags := flag.NewFlagSet("config restore", flag.ContinueOnError)
+		var identityPath string
+		flags.StringVar(&identityPath, "identity", strings.TrimSpace(os.Getenv("TRUSTIX_BACKUP_IDENTITY")), "offline backup identity for encrypted archives")
+		if err := flags.Parse(args[1:]); err != nil {
+			return true, err
+		}
+		if flags.NArg() != 1 {
+			return true, fmt.Errorf("usage: trustixctl config restore [-identity backup.key] <archive>")
+		}
+		payload, err := readBackupArchive(flags.Arg(0), identityPath)
+		if err != nil {
+			return true, err
+		}
+		defer wipeBytes(payload)
+		return true, client.postAndPrint("/v1/config/restore-archive", payload, "application/gzip")
 	case "validate":
 		if len(args) != 2 {
 			return true, fmt.Errorf("usage: trustixctl config validate <file>")
@@ -1028,6 +1088,190 @@ func (client apiClient) postAndSave(path string, body []byte, contentType, outPa
 	return nil
 }
 
+const maxConfigBackupArchiveBytes = int64(64 << 20)
+
+func (client apiClient) postAndSaveEncryptedBackup(path string, body []byte, recipientPath, outPath string) error {
+	archive, serverFilename, err := client.postAndRead(path, body, "application/json", maxConfigBackupArchiveBytes)
+	if err != nil {
+		return err
+	}
+	recipient, err := backupcrypto.ReadPublicKeyFile(recipientPath)
+	if err != nil {
+		return err
+	}
+	encrypted, err := backupcrypto.Seal(archive, recipient)
+	for i := range archive {
+		archive[i] = 0
+	}
+	if err != nil {
+		return err
+	}
+	if outPath == "" {
+		base := strings.TrimSuffix(serverFilename, ".tar.gz")
+		if base == "" {
+			base = "trustix-config-backup"
+		}
+		outPath = base + ".tixbak"
+	}
+	return savePayload(outPath, encrypted, 0o600)
+}
+
+func (client apiClient) postAndRead(path string, body []byte, contentType string, limit int64) ([]byte, string, error) {
+	path = client.managementPath(path)
+	requestURL, err := buildURL(client.baseURL, path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	httpClient, err := client.httpClient(60 * time.Second)
+	if err != nil {
+		return nil, "", err
+	}
+	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, "", fmt.Errorf("POST %s: %w", requestURL, err)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if err := client.signRequest(req, body); err != nil {
+		return nil, "", err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("POST %s: %w", requestURL, err)
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("read POST %s response: %w", requestURL, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("POST %s returned %s: %s", requestURL, resp.Status, strings.TrimSpace(string(payload)))
+	}
+	if int64(len(payload)) > limit {
+		return nil, "", fmt.Errorf("POST %s response exceeds %d bytes", requestURL, limit)
+	}
+	filename := contentDispositionFilename(resp.Header.Get("Content-Disposition"))
+	return payload, filename, nil
+}
+
+func readBackupArchive(path, identityPath string) ([]byte, error) {
+	payload, err := readFileLimited(path, maxConfigBackupArchiveBytes+1<<20)
+	if err != nil {
+		return nil, err
+	}
+	if !backupcrypto.IsEncrypted(payload) {
+		if int64(len(payload)) > maxConfigBackupArchiveBytes {
+			return nil, fmt.Errorf("backup archive exceeds %d bytes", maxConfigBackupArchiveBytes)
+		}
+		return payload, nil
+	}
+	if strings.TrimSpace(identityPath) == "" {
+		return nil, fmt.Errorf("encrypted backup requires -identity or TRUSTIX_BACKUP_IDENTITY")
+	}
+	identity, err := backupcrypto.ReadIdentityFile(identityPath)
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := backupcrypto.Open(payload, identity)
+	for i := range payload {
+		payload[i] = 0
+	}
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(plaintext)) > maxConfigBackupArchiveBytes {
+		for i := range plaintext {
+			plaintext[i] = 0
+		}
+		return nil, fmt.Errorf("decrypted backup archive exceeds %d bytes", maxConfigBackupArchiveBytes)
+	}
+	return plaintext, nil
+}
+
+func wipeBytes(payload []byte) {
+	for i := range payload {
+		payload[i] = 0
+	}
+}
+
+func readFileLimited(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open backup %q: %w", path, err)
+	}
+	defer file.Close()
+	if info, err := file.Stat(); err != nil {
+		return nil, fmt.Errorf("stat backup %q: %w", path, err)
+	} else if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("backup %q is not a regular file", path)
+	} else if info.Size() > limit {
+		return nil, fmt.Errorf("backup %q exceeds %d bytes", path, limit)
+	}
+	payload, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read backup %q: %w", path, err)
+	}
+	if int64(len(payload)) > limit {
+		return nil, fmt.Errorf("backup %q exceeds %d bytes", path, limit)
+	}
+	return payload, nil
+}
+
+func savePayload(outPath string, payload []byte, mode os.FileMode) error {
+	if outPath == "-" {
+		_, err := os.Stdout.Write(payload)
+		return err
+	}
+	outPath = filepath.Clean(outPath)
+	dir := filepath.Dir(outPath)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(outPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp output in %q: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	hasher := sha256.New()
+	written, writeErr := io.Copy(io.MultiWriter(tmp, hasher), bytes.NewReader(payload))
+	if writeErr == nil {
+		writeErr = tmp.Chmod(mode)
+	}
+	if writeErr == nil {
+		writeErr = tmp.Sync()
+	}
+	closeErr := tmp.Close()
+	if writeErr != nil {
+		return fmt.Errorf("write output %q: %w", outPath, writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close temp output %q: %w", tmpName, closeErr)
+	}
+	if _, err := os.Stat(outPath); err == nil {
+		return fmt.Errorf("output file %q already exists", outPath)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat output file %q: %w", outPath, err)
+	}
+	if err := os.Rename(tmpName, outPath); err != nil {
+		return fmt.Errorf("save output %q: %w", outPath, err)
+	}
+	result, err := json.MarshalIndent(struct {
+		Saved     string `json:"saved"`
+		Bytes     int64  `json:"bytes"`
+		SHA256    string `json:"sha256"`
+		Encrypted bool   `json:"encrypted"`
+	}{
+		Saved:     outPath,
+		Bytes:     written,
+		SHA256:    hex.EncodeToString(hasher.Sum(nil)),
+		Encrypted: backupcrypto.IsEncrypted(payload),
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("format save result: %w", err)
+	}
+	fmt.Println(string(result))
+	return nil
+}
+
 func (client apiClient) deleteAndPrint(path string) error {
 	path = client.managementPath(path)
 	requestURL, err := buildURL(client.baseURL, path, nil)
@@ -1194,5 +1438,5 @@ func printResponse(method, requestURL string, resp *http.Response) error {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: trustixctl [-api http://127.0.0.1:8787] [-api-tls-ca root.pem] [-api-tls-server-name name] [-api-tls-insecure-skip-verify] [-target-ix ix-b] [-admin-cert certs/admin-1.crt -admin-key certs/admin-1.key ...] <version|status|peers|members|members delete <ix_id>|routes|route probe <dst> [-src ip] [-proto n] [-sport n] [-dport n]|trace <dst> [-max-hops n] [-src ip] [-proto n] [-sport n] [-dport n]|route-policy|flows|links|device-access [list]|device-access show <device|peer|address|fingerprint>|device-access revoke <device> [-ix ix_id]|device-access revoke -fingerprint sha256|endpoints|trust show|trust policy|trust admins|trust apply-policy <json-file>|trust roots [add <cert>|remove <fingerprint_or_cert>]|trust revoke <cert_or_fingerprint>|trust unrevoke <fingerprint>|admissions [list]|admissions pending [ix_id]|admissions show <ix_id>|admissions approve -ix <ix_id> -ix-cert <cert_or_fingerprint> [-prefix cidr ...] [-route-auth cert_or_fingerprint ...] [-control-api url] [-effective-at rfc3339]|admissions approve-pending <ix_id> [-prefix cidr ...] [-route-auth cert_or_fingerprint ...] [-control-api url] [-effective-at rfc3339]|admissions revoke <ix_id>|config desired|config peers|config head|config log [from [to]]|config event <seq>|config snapshot|config export [-out file]|config backup -include-private-keys [-out file]|config restore <archive.tar.gz>|config validate <file>|config apply <file>|config rollback [seq]|config rejoin <control_api> [ix_id]|capture [-limit n] [-hook hook] [-peer ix_id] [-src ip] [-dst ip]|stats|datapath|transports|bpf maps|doctor>")
+	fmt.Fprintln(os.Stderr, "usage: trustixctl [-api http://127.0.0.1:8787] [-api-tls-ca root.pem] [-api-tls-server-name name] [-api-tls-insecure-skip-verify] [-target-ix ix-b] [-admin-cert certs/admin-1.crt -admin-key certs/admin-1.key ...] <version|health|ready|metrics|status|peers|members|members delete <ix_id>|routes|route probe <dst> [-src ip] [-proto n] [-sport n] [-dport n]|trace <dst> [-max-hops n] [-src ip] [-proto n] [-sport n] [-dport n]|route-policy|flows|links|device-access [list]|device-access show <device|peer|address|fingerprint>|device-access revoke <device> [-ix ix_id]|device-access revoke -fingerprint sha256|endpoints|trust show|trust policy|trust admins|trust apply-policy <json-file>|trust roots [add <cert>|remove <fingerprint_or_cert>]|trust revoke <cert_or_fingerprint>|trust unrevoke <fingerprint>|admissions [list]|admissions pending [ix_id]|admissions show <ix_id>|admissions approve -ix <ix_id> -ix-cert <cert_or_fingerprint> [-prefix cidr ...] [-route-auth cert_or_fingerprint ...] [-control-api url] [-effective-at rfc3339]|admissions approve-pending <ix_id> [-prefix cidr ...] [-route-auth cert_or_fingerprint ...] [-control-api url] [-effective-at rfc3339]|admissions revoke <ix_id>|config desired|config peers|config head|config log [from [to]]|config event <seq>|config snapshot|config export [-out file]|config backup-keygen -public backup.pub -identity backup.key|config backup -include-private-keys [-recipient backup.pub] [-out file]|config verify-backup [-identity backup.key] <archive>|config restore [-identity backup.key] <archive>|config validate <file>|config apply <file>|config rollback [seq]|config rejoin <control_api> [ix_id]|capture [-limit n] [-hook hook] [-peer ix_id] [-src ip] [-dst ip]|stats|datapath|transports|bpf maps|doctor>")
 }

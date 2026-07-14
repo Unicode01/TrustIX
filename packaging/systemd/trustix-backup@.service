@@ -1,0 +1,17 @@
+[Unit]
+Description=TrustIX encrypted configuration backup (%i)
+Documentation=file:/usr/share/doc/trustix/first-run.md
+After=network-online.target trustixd@%i.service
+Wants=network-online.target
+ConditionPathExists=/etc/trustix/%i.backup.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/trustix/%i.backup.env
+ExecStart=/usr/local/libexec/trustix/trustix-backup.sh backup --instance %i
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/backups/trustix

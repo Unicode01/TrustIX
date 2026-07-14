@@ -106,6 +106,65 @@ func TestConfigRestoreArchiveRestoresRuntimeAndConfigLog(t *testing.T) {
 	}
 }
 
+func TestConfigValidateArchiveVerifiesRecoveryWithoutMutation(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	initial := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, initial)
+	daemon.cfg.ConfigPath = writeConfigExportSourceFile(t, initial)
+	daemon.logPath = "memory"
+	exported, err := daemon.exportConfigArchive(configExportRequest{IncludePrivateKeys: true})
+	if err != nil {
+		t.Fatalf("export backup archive: %v", err)
+	}
+
+	next := configApplyDesired(pkiSet, "10.0.2.0/24")
+	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
+		t.Fatalf("apply next changed=%t err=%v", changed, err)
+	}
+	headBefore, err := daemon.store.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := daemon.validateConfigArchive(exported.payload)
+	if err != nil {
+		t.Fatalf("validate config archive: %v", err)
+	}
+	if !response.Valid || !response.Restorable || !response.RecoveryComplete || !response.PrivateKeysIncluded || response.PrivateKeyFiles == 0 {
+		t.Fatalf("validation response = %#v", response)
+	}
+	if response.Head != exported.manifest.ConfigHead {
+		t.Fatalf("validated head = %#v, want %#v", response.Head, exported.manifest.ConfigHead)
+	}
+	headAfter, err := daemon.store.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headAfter != headBefore {
+		t.Fatalf("validation mutated config log head: before=%#v after=%#v", headBefore, headAfter)
+	}
+	assertRuntimeRoute(t, daemon, "10.0.2.0/24")
+	assertNoRuntimeRoute(t, daemon, "10.0.1.0/24")
+}
+
+func TestConfigValidateArchiveReportsIncompleteRecoveryWithoutPrivateKeys(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, desired)
+	daemon.cfg.ConfigPath = writeConfigExportSourceFile(t, desired)
+	exported, err := daemon.exportConfigArchive(configExportRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := daemon.validateConfigArchive(exported.payload)
+	if err != nil {
+		t.Fatalf("validate config archive: %v", err)
+	}
+	if !response.Valid || !response.Restorable || response.RecoveryComplete || response.PrivateKeysIncluded || response.PrivateKeyFiles != 0 {
+		t.Fatalf("validation response = %#v", response)
+	}
+}
+
 func TestConfigRestoreArchiveRejectsUnauthorizedTargetPath(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
@@ -144,6 +203,45 @@ func TestConfigRestoreArchiveRejectsTrailingJSONEntryContent(t *testing.T) {
 
 	if _, err := parseConfigRestoreArchive(tampered); err == nil || !strings.Contains(err.Error(), "trailing JSON") {
 		t.Fatalf("parse trailing JSON archive err = %v, want trailing JSON", err)
+	}
+}
+
+func TestConfigRestoreArchiveRejectsUnreferencedFile(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, desired)
+	daemon.cfg.ConfigPath = writeConfigExportSourceFile(t, desired)
+	exported, err := daemon.exportConfigArchive(configExportRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := readConfigExportArchive(t, exported.payload)
+	entries["unreferenced-private.key"] = []byte("PRIVATE KEY")
+	tampered := writeTestRestoreArchive(t, entries)
+	if _, err := parseConfigRestoreArchive(tampered); err == nil || !strings.Contains(err.Error(), "unreferenced file") {
+		t.Fatalf("parse unreferenced file error = %v", err)
+	}
+}
+
+func TestConfigRestoreArchiveRejectsDesiredOutsideSignedSnapshot(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, desired)
+	daemon.cfg.ConfigPath = writeConfigExportSourceFile(t, desired)
+	exported, err := daemon.exportConfigArchive(configExportRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := readConfigExportArchive(t, exported.payload)
+	var desiredEntry config.Desired
+	if err := json.Unmarshal(entries["desired.json"], &desiredEntry); err != nil {
+		t.Fatal(err)
+	}
+	desiredEntry.Routes = nil
+	entries["desired.json"] = mustJSON(t, desiredEntry)
+	tampered := writeTestRestoreArchive(t, entries)
+	if _, err := parseConfigRestoreArchive(tampered); err == nil || !strings.Contains(err.Error(), "does not match latest desired") {
+		t.Fatalf("parse mismatched desired error = %v", err)
 	}
 }
 
@@ -226,6 +324,42 @@ func TestConfigRestoreArchiveAPIRequiresAdminProofWhenEnabled(t *testing.T) {
 	daemon.handler().ServeHTTP(signedRecorder, signed)
 	if signedRecorder.Code != http.StatusOK {
 		t.Fatalf("signed restore status = %d, want %d; body=%s", signedRecorder.Code, http.StatusOK, signedRecorder.Body.String())
+	}
+}
+
+func TestConfigValidateArchiveAPIRequiresAdminProofWhenEnabled(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, desired)
+	daemon.cfg.APIAdminAuth = true
+	daemon.cfg.ConfigPath = writeConfigExportSourceFile(t, desired)
+	exported, err := daemon.exportConfigArchive(configExportRequest{IncludePrivateKeys: true})
+	if err != nil {
+		t.Fatalf("export archive: %v", err)
+	}
+
+	unsigned := httptest.NewRequest(http.MethodPost, "/v1/config/validate-archive", bytes.NewReader(exported.payload))
+	unsigned.Header.Set("Content-Type", "application/gzip")
+	unsignedRecorder := httptest.NewRecorder()
+	daemon.handler().ServeHTTP(unsignedRecorder, unsigned)
+	if unsignedRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unsigned validate status = %d, want %d; body=%s", unsignedRecorder.Code, http.StatusUnauthorized, unsignedRecorder.Body.String())
+	}
+
+	signed := httptest.NewRequest(http.MethodPost, "/v1/config/validate-archive", bytes.NewReader(exported.payload))
+	signed.Header.Set("Content-Type", "application/gzip")
+	signAdminTestRequest(t, signed, exported.payload, pkiSet.adminCert, pkiSet.adminKey)
+	signedRecorder := httptest.NewRecorder()
+	daemon.handler().ServeHTTP(signedRecorder, signed)
+	if signedRecorder.Code != http.StatusOK {
+		t.Fatalf("signed validate status = %d, want %d; body=%s", signedRecorder.Code, http.StatusOK, signedRecorder.Body.String())
+	}
+	var response configValidateArchiveResponse
+	if err := json.Unmarshal(signedRecorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode validation response: %v", err)
+	}
+	if !response.Valid || !response.RecoveryComplete {
+		t.Fatalf("validation response = %#v", response)
 	}
 }
 

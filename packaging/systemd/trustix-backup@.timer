@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily TrustIX encrypted configuration backup (%i)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+Unit=trustix-backup@%i.service
+
+[Install]
+WantedBy=timers.target

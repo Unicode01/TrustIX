@@ -24,6 +24,9 @@ unitdir="${TRUSTIX_INSTALL_SYSTEMD_DIR:-/etc/systemd/system}"
 state_root="${TRUSTIX_INSTALL_STATE_ROOT:-/var/lib/trustix}"
 docdir="${TRUSTIX_INSTALL_DOCDIR:-/usr/share/doc/trustix}"
 unit_src="${TRUSTIX_INSTALL_UNIT:-${repo_root}/packaging/systemd/trustixd@.service}"
+backup_unit_src="${TRUSTIX_INSTALL_BACKUP_UNIT:-${repo_root}/packaging/systemd/trustix-backup@.service}"
+backup_timer_src="${TRUSTIX_INSTALL_BACKUP_TIMER:-${repo_root}/packaging/systemd/trustix-backup@.timer}"
+backup_script_src="${TRUSTIX_INSTALL_BACKUP_SCRIPT:-${repo_root}/scripts/trustix-backup.sh}"
 
 log() {
   printf '[trustix-install] %s\n' "$*" >&2
@@ -63,10 +66,18 @@ main() {
   install -D -m 0755 "${bin_src}/trustixd" "${bindir}/trustixd"
   install -D -m 0755 "${bin_src}/trustixctl" "${bindir}/trustixctl"
   install -D -m 0755 "${bin_src}/trustix-ca" "${bindir}/trustix-ca"
+  if [[ -f "$backup_script_src" ]]; then
+    install -D -m 0755 "$backup_script_src" "${prefix}/libexec/trustix/trustix-backup.sh"
+  fi
 
   log "install systemd unit to ${unitdir}"
   install -D -m 0644 "$unit_src" "${unitdir}/trustixd@.service"
-  mkdir -p "$sysconfdir" "$state_root" "$docdir"
+  if [[ -f "$backup_unit_src" && -f "$backup_timer_src" ]]; then
+    install -D -m 0644 "$backup_unit_src" "${unitdir}/trustix-backup@.service"
+    install -D -m 0644 "$backup_timer_src" "${unitdir}/trustix-backup@.timer"
+  fi
+  mkdir -p "$sysconfdir" "$state_root" "$docdir" /var/backups/trustix
+  chmod 0700 /var/backups/trustix
   if [[ -d "${repo_root}/docs" ]]; then
     cp -R "${repo_root}/docs/." "$docdir/"
   fi
@@ -86,6 +97,7 @@ EOF
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
     log "installed. create ${sysconfdir}/<name>.yaml and optional ${sysconfdir}/<name>.env, then run: systemctl enable --now trustixd@<name>"
+    log "encrypted backup timer is available after creating ${sysconfdir}/<name>.backup.env: systemctl enable --now trustix-backup@<name>.timer"
   else
     log "installed, but systemctl was not found; reload systemd manually if needed"
   fi

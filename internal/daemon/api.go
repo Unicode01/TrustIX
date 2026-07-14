@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -155,8 +156,11 @@ func (daemon *Daemon) hostAPIHandler() http.Handler {
 
 func (daemon *Daemon) managementHandler(auth managementAuthOptions) http.Handler {
 	api := daemon.managementAuthMiddleware(daemon.managementMux(), auth)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setHTTPResponseSecurityHeaders(w)
+		if daemon.serveOperationalEndpoint(w, r) {
+			return
+		}
 		if daemon.serveIXProvisionIfRequest(w, r) {
 			return
 		}
@@ -165,6 +169,7 @@ func (daemon *Daemon) managementHandler(auth managementAuthOptions) http.Handler
 		}
 		api.ServeHTTP(w, r)
 	})
+	return daemon.apiProtectionMiddleware(apiSurfaceManagement, handler)
 }
 
 func (daemon *Daemon) managementMux() http.Handler {
@@ -198,6 +203,7 @@ func (daemon *Daemon) managementMux() http.Handler {
 	mux.HandleFunc("GET /v1/config/snapshot", daemon.handleConfigSnapshot)
 	mux.HandleFunc("POST /v1/config/rejoin", daemon.handleConfigRejoin)
 	mux.HandleFunc("POST /v1/config/export", daemon.handleConfigExport)
+	mux.HandleFunc("POST /v1/config/validate-archive", daemon.handleConfigValidateArchive)
 	mux.HandleFunc("POST /v1/config/restore-archive", daemon.handleConfigRestoreArchive)
 	mux.HandleFunc("POST /v1/config/restore-backup", daemon.handleConfigRestoreBackup)
 	mux.HandleFunc("GET /v1/trust", daemon.handleTrustShow)
@@ -246,10 +252,11 @@ func (daemon *Daemon) peerHandler() http.Handler {
 	mux.HandleFunc("GET /v1/control/route/trace", daemon.handleControlRouteTrace)
 	mux.HandleFunc("POST /v1/control/config/events", daemon.handleControlConfigEventsPost)
 	mux.HandleFunc("/v1/control/management", daemon.handleControlManagementProxy)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setHTTPResponseSecurityHeaders(w)
 		mux.ServeHTTP(w, r)
 	})
+	return daemon.apiProtectionMiddleware(apiSurfacePeer, handler)
 }
 
 func (daemon *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -1603,8 +1610,13 @@ func httpETagMatches(header, etag string) bool {
 }
 
 func (daemon *Daemon) handleControlAdvertisementPost(w http.ResponseWriter, r *http.Request) {
+	payload, err := readLimitedBody(r.Body, maxConfigEventsBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	var advertisement advertisementResponse
-	if err := json.NewDecoder(r.Body).Decode(&advertisement); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&advertisement); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

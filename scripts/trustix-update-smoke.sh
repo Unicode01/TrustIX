@@ -43,6 +43,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -95,14 +96,26 @@ func main() {
 		os.Exit(1)
 	}
 	defer listener.Close()
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close()
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if version == "old" && os.Getenv("TRUSTIX_FAKE_OLD_LEGACY") == "1" {
+			http.NotFound(w, r)
+			return
 		}
+		if r.URL.Path != "/readyz" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if version == "new" && os.Getenv("TRUSTIX_FAKE_NOT_READY_NEW") == "1" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"not_ready","ready":false}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ready","ready":true}`))
+	})}
+	defer server.Close()
+	go func() {
+		_ = server.Serve(listener)
 	}()
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
@@ -290,6 +303,8 @@ setup_scenario() {
   local config_transport="$3"
   local fail_new="$4"
   local port="$5"
+  local not_ready_new="${6:-0}"
+  local old_legacy="${7:-0}"
   local root="${workdir}/${name}"
   scenario_roots+=("$root")
   mkdir -p "${root}/bin" "${root}/etc/trustix" "${root}/etc/init.d" "${root}/etc/systemd" "${root}/fake-bin" "${root}/run" "${root}/state"
@@ -316,6 +331,8 @@ TRUSTIX_PEER_API_ADDR=127.0.0.1:$((port + 1000))
 TRUSTIX_DATAPLANE=noop
 TRUSTIX_EXTRA_ARGS=
 TRUSTIX_FAKE_FAIL_NEW=${fail_new}
+TRUSTIX_FAKE_NOT_READY_NEW=${not_ready_new}
+TRUSTIX_FAKE_OLD_LEGACY=${old_legacy}
 EOF
   write_fake_systemctl "${root}/fake-bin/systemctl"
   printf '#!/usr/bin/env bash\nexit 0\n' >"${root}/fake-bin/journalctl"
@@ -421,6 +438,20 @@ grep -q 'FIXTURE_VERSION=old' "${root}/etc/init.d/trustix" || die "OpenWrt init 
 [[ ! -e "${root}/bin/trustixctl" ]] || die "new OpenWrt binary was not removed during rollback"
 [[ ! -e "${root}/backup" ]] || die "--no-backup unexpectedly kept a persistent backup"
 grep -q 'rollback complete' "${root}/update.err" || die "OpenWrt rollback did not complete"
+"${root}/etc/init.d/trustix" stop ix-test
+
+log "semantic readiness failure rolls back to a legacy daemon without /readyz"
+setup_scenario systemd-not-ready systemd tix_tcp 0 "$((base_port + 5))" 1 1
+root="$scenario_root"
+if run_update "$root" systemd >"${root}/update.out" 2>"${root}/update.err"; then
+  die "not-ready systemd candidate unexpectedly succeeded"
+fi
+assert_version "$root" old
+assert_running "$root"
+grep -q 'FIXTURE_VERSION=old' "${root}/etc/systemd/trustixd@.service" || die "legacy systemd unit was not rolled back"
+[[ ! -e "${root}/bin/trustixctl" ]] || die "not-ready candidate binary was not removed during rollback"
+grep -q 'readiness is not healthy' "${root}/update.err" || die "candidate readiness failure was not reported"
+grep -q 'rollback complete' "${root}/update.err" || die "legacy rollback after readiness failure did not complete"
 "${root}/etc/init.d/trustix" stop ix-test
 
 log "all transactional update scenarios passed"

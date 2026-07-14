@@ -41,8 +41,10 @@ Use this checklist before cutting a Linux release tarball.
 ## Release Package
 
 - Transactional updater smoke: `bash scripts/trustix-update-smoke.sh`
+- Encrypted backup/recovery smoke: `bash scripts/trustix-backup-smoke.sh`; confirm wrong identities and modified ciphertext fail, retention is bounded, and `validate-archive` leaves runtime/config head unchanged.
 - Verify an old configuration rejected by the candidate leaves binaries and services untouched.
 - Verify a candidate startup failure restores the previous binaries, systemd/OpenWrt service definition, and listening management API.
+- Verify a candidate that keeps its process and listener alive but returns HTTP 503 from `/readyz` is rolled back. The rollback probe must still accept a legacy daemon that predates `/readyz` when its process and listener recover.
 - On disposable hosts, upgrade with TrustIX kernel modules already loaded and confirm the old version is restored if the new service fails health checks.
 - Coordinate a two-node breaking upgrade and confirm traffic recovers after both configurations and binaries are migrated.
 - Build on target kernel or with matching `KDIR`: `sudo -E bash scripts/build-release-linux.sh`

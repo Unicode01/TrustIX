@@ -78,7 +78,7 @@ func (daemon *Daemon) managementAuthMiddleware(next http.Handler, options manage
 }
 
 func managementAuthBodyLimit(r *http.Request) int64 {
-	if r.Method == http.MethodPost && r.URL.Path == "/v1/config/restore-archive" {
+	if r.Method == http.MethodPost && (r.URL.Path == "/v1/config/restore-archive" || r.URL.Path == "/v1/config/validate-archive") {
 		return maxConfigRestoreArchiveBytes
 	}
 	return maxConfigEventsBytes

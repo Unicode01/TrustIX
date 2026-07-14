@@ -908,6 +908,11 @@ install_from_package() {
       die "missing binary: ${package_dir}/bin/${name}"
     fi
   done
+  if [[ -f "${package_dir}/scripts/trustix-backup.sh" ]]; then
+    install_file "${package_dir}/scripts/trustix-backup.sh" "${prefix}/libexec/trustix/trustix-backup.sh" 0755
+  elif [[ -f "${repo_root}/scripts/trustix-backup.sh" ]]; then
+    install_file "${repo_root}/scripts/trustix-backup.sh" "${prefix}/libexec/trustix/trustix-backup.sh" 0755
+  fi
   case "$service_manager" in
     systemd)
       if [[ -f "${package_dir}/packaging/systemd/trustixd@.service" ]]; then
@@ -918,6 +923,14 @@ install_from_package() {
         die "missing trustixd@.service"
       fi
       install_file "$unit_src" "${unitdir}/trustixd@.service" 0644
+      if [[ -f "${package_dir}/packaging/systemd/trustix-backup@.service" ]]; then
+        install_file "${package_dir}/packaging/systemd/trustix-backup@.service" "${unitdir}/trustix-backup@.service" 0644
+      fi
+      if [[ -f "${package_dir}/packaging/systemd/trustix-backup@.timer" ]]; then
+        install_file "${package_dir}/packaging/systemd/trustix-backup@.timer" "${unitdir}/trustix-backup@.timer" 0644
+      fi
+      run_root mkdir -p /var/backups/trustix
+      run_root chmod 0700 /var/backups/trustix
       ;;
     openwrt)
       if [[ -f "${package_dir}/packaging/openwrt/trustix.init" ]]; then

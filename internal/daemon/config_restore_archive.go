@@ -41,6 +41,18 @@ type configRestoreArchiveResponse struct {
 	CreatedConfigLogCopy string                           `json:"created_config_log_backup,omitempty"`
 }
 
+type configValidateArchiveResponse struct {
+	Valid               bool         `json:"valid"`
+	Restorable          bool         `json:"restorable"`
+	DomainID            string       `json:"domain_id"`
+	IXID                string       `json:"ix_id"`
+	Head                headResponse `json:"head"`
+	Files               int          `json:"files"`
+	PrivateKeysIncluded bool         `json:"private_keys_included"`
+	PrivateKeyFiles     int          `json:"private_key_files"`
+	RecoveryComplete    bool         `json:"recovery_complete"`
+}
+
 type configRestoreArchiveFileStatus struct {
 	SourcePath  string   `json:"source_path"`
 	ArchivePath string   `json:"archive_path"`
@@ -66,6 +78,27 @@ type configRestoreFileChange struct {
 	targetPath string
 	backupPath string
 	created    bool
+}
+
+type validatedConfigRestoreArchiveFile struct {
+	manifest    configExportFileManifest
+	archivePath string
+	payload     []byte
+}
+
+func (daemon *Daemon) handleConfigValidateArchive(w http.ResponseWriter, r *http.Request) {
+	payload, err := readLimitedBody(r.Body, maxConfigRestoreArchiveBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	response, err := daemon.validateConfigArchive(payload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	setSensitiveResponseHeaders(w)
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (daemon *Daemon) handleConfigRestoreArchive(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +156,49 @@ func (daemon *Daemon) restoreConfigArchive(ctx context.Context, payload []byte) 
 		FilesSkipped:         skipped,
 		PrivateKeysRestored:  privateKeys,
 		CreatedConfigLogCopy: createdBackup,
+	}, nil
+}
+
+func (daemon *Daemon) validateConfigArchive(payload []byte) (configValidateArchiveResponse, error) {
+	archive, err := parseConfigRestoreArchive(payload)
+	if err != nil {
+		return configValidateArchiveResponse{}, err
+	}
+	if err := daemon.validateConfigRestoreArchiveMetadata(archive); err != nil {
+		return configValidateArchiveResponse{}, err
+	}
+
+	var restoredDesired config.Desired
+	var ok bool
+	daemon.configMu.Lock()
+	_, err = daemon.verifyConfigSnapshotLocked(archive.Snapshot)
+	if err == nil {
+		var desiredErr error
+		restoredDesired, ok, desiredErr = daemon.latestLocalDesiredFromEvents(archive.Snapshot.Events)
+		if desiredErr != nil {
+			err = desiredErr
+		} else if !ok {
+			err = fmt.Errorf("restore archive has no desired event for local IX %q", daemon.desired.IX.ID)
+		}
+	}
+	daemon.configMu.Unlock()
+	if err != nil {
+		return configValidateArchiveResponse{}, err
+	}
+	files, privateKeyFiles, err := daemon.validateConfigRestoreArchiveFiles(archive, restoredDesired)
+	if err != nil {
+		return configValidateArchiveResponse{}, err
+	}
+	return configValidateArchiveResponse{
+		Valid:               true,
+		Restorable:          true,
+		DomainID:            archive.Manifest.DomainID,
+		IXID:                archive.Manifest.IXID,
+		Head:                archive.Manifest.ConfigHead,
+		Files:               len(files),
+		PrivateKeysIncluded: archive.Manifest.PrivateKeysIncluded,
+		PrivateKeyFiles:     privateKeyFiles,
+		RecoveryComplete:    archive.Manifest.PrivateKeysIncluded && archive.Manifest.PrivateKeysOmitted == 0 && privateKeyFiles > 0,
 	}, nil
 }
 
@@ -198,6 +274,14 @@ func parseConfigRestoreArchive(payload []byte) (parsedConfigRestoreArchive, erro
 	if err := decodeStrictJSONEntry(entries, "config-snapshot.json", &snapshot); err != nil {
 		return parsedConfigRestoreArchive{}, err
 	}
+	var desired config.Desired
+	if err := decodeStrictJSONEntry(entries, "desired.json", &desired); err != nil {
+		return parsedConfigRestoreArchive{}, err
+	}
+	desired = config.Normalize(desired)
+	if string(desired.Domain.ID) != manifest.DomainID || string(desired.IX.ID) != manifest.IXID {
+		return parsedConfigRestoreArchive{}, fmt.Errorf("restore archive desired identity is domain=%q ix=%q, want domain=%q ix=%q", desired.Domain.ID, desired.IX.ID, manifest.DomainID, manifest.IXID)
+	}
 	logEvents, err := decodeConfigLogEventsEntry(entries["config.log"])
 	if err != nil {
 		return parsedConfigRestoreArchive{}, err
@@ -215,12 +299,62 @@ func parseConfigRestoreArchive(payload []byte) (parsedConfigRestoreArchive, erro
 				logHead.Seq, logHead.Hash, snapshot.Head.Seq, snapshot.Head.Hash)
 		}
 	}
+	if err := validateRestoreArchiveEntrySet(entries, manifest); err != nil {
+		return parsedConfigRestoreArchive{}, err
+	}
+	if err := validateRestoreArchiveDesiredEntry(desired, snapshot.Events, manifest.IXID); err != nil {
+		return parsedConfigRestoreArchive{}, err
+	}
 	return parsedConfigRestoreArchive{
 		Manifest:        manifest,
 		Snapshot:        snapshot,
 		ConfigLogEvents: logEvents,
 		Entries:         entries,
 	}, nil
+}
+
+func validateRestoreArchiveEntrySet(entries map[string][]byte, manifest configExportManifest) error {
+	allowed := map[string]struct{}{
+		"manifest.json":        {},
+		"desired.json":         {},
+		"config-snapshot.json": {},
+		"config.log":           {},
+	}
+	for _, file := range manifest.Files {
+		archivePath, err := normalizeRestoreArchivePath(file.ArchivePath)
+		if err != nil {
+			return err
+		}
+		if _, exists := allowed[archivePath]; exists {
+			return fmt.Errorf("restore archive manifest has duplicate or reserved archive path %q", archivePath)
+		}
+		allowed[archivePath] = struct{}{}
+	}
+	for name := range entries {
+		if _, ok := allowed[name]; !ok {
+			return fmt.Errorf("restore archive contains unreferenced file %q", name)
+		}
+	}
+	return nil
+}
+
+func validateRestoreArchiveDesiredEntry(desired config.Desired, events []configlog.Event, ixID string) error {
+	resource := "/ix/" + ixID + "/desired"
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if string(event.Resource) != resource && string(event.Resource) != "/desired" {
+			continue
+		}
+		var eventDesired config.Desired
+		if err := json.Unmarshal(event.Payload, &eventDesired); err != nil {
+			return fmt.Errorf("decode restore archive desired event seq %d: %w", event.Seq, err)
+		}
+		if !desiredConfigsEqual(desired, config.Normalize(eventDesired)) {
+			return fmt.Errorf("restore archive desired.json does not match latest desired event seq %d", event.Seq)
+		}
+		return nil
+	}
+	return fmt.Errorf("restore archive has no desired event for IX %q", ixID)
 }
 
 func normalizeRestoreArchivePath(raw string) (string, error) {
@@ -330,50 +464,17 @@ func (daemon *Daemon) latestLocalDesiredFromEventsWithoutRuntimeValidation(event
 }
 
 func (daemon *Daemon) restoreConfigArchiveFiles(archive parsedConfigRestoreArchive, restoredDesired config.Desired) ([]configRestoreArchiveFileStatus, []configRestoreFileChange, int, int, error) {
-	daemon.configMu.RLock()
-	currentDesired := daemon.desired
-	configPath := daemon.cfg.ConfigPath
-	daemon.configMu.RUnlock()
-
-	currentCandidates := configRestoreCandidateMap(configExportFileCandidates(currentDesired, configPath))
-	restoredCandidates := configRestoreCandidateMap(configExportFileCandidates(restoredDesired, configPath))
-	statuses := make([]configRestoreArchiveFileStatus, 0, len(archive.Manifest.Files))
-	changes := make([]configRestoreFileChange, 0, len(archive.Manifest.Files))
+	files, _, err := daemon.validateConfigRestoreArchiveFiles(archive, restoredDesired)
+	if err != nil {
+		return nil, nil, 0, 0, err
+	}
+	statuses := make([]configRestoreArchiveFileStatus, 0, len(files))
+	changes := make([]configRestoreFileChange, 0, len(files))
 	skipped := 0
 	privateKeys := 0
-	for _, file := range archive.Manifest.Files {
-		archivePath, err := normalizeRestoreArchivePath(file.ArchivePath)
-		if err != nil {
-			return nil, changes, skipped, privateKeys, err
-		}
-		payload, ok := archive.Entries[archivePath]
-		if !ok {
-			return nil, changes, skipped, privateKeys, fmt.Errorf("restore archive manifest references missing file %q", archivePath)
-		}
-		if err := verifyRestoreArchiveFilePayload(file, payload); err != nil {
-			return nil, changes, skipped, privateKeys, err
-		}
-		if file.PrivateKey && !archive.Manifest.PrivateKeysIncluded {
-			return nil, changes, skipped, privateKeys, fmt.Errorf("restore archive file %q is a private key but manifest private_keys_included=false", archivePath)
-		}
-		if !file.PrivateKey && containsPrivateKeyPEM(payload) {
-			return nil, changes, skipped, privateKeys, fmt.Errorf("restore archive file %q contains private key material but is not marked private_key", archivePath)
-		}
-
-		targetKey := configExportPathKey(file.SourcePath)
-		current, currentOK := currentCandidates[targetKey]
-		restored, restoredOK := restoredCandidates[targetKey]
-		if !currentOK || !restoredOK {
-			return nil, changes, skipped, privateKeys, fmt.Errorf("restore archive file %q target %q is not allowed by current and restored config", archivePath, file.SourcePath)
-		}
-		if !restoreArchiveRolesAllowed(file.Roles, current) || !restoreArchiveRolesAllowed(file.Roles, restored) {
-			return nil, changes, skipped, privateKeys, fmt.Errorf("restore archive file %q roles %v are not allowed for target %q", archivePath, file.Roles, file.SourcePath)
-		}
-		if file.PrivateKey != current.PrivateKey || file.PrivateKey != restored.PrivateKey {
-			return nil, changes, skipped, privateKeys, fmt.Errorf("restore archive file %q private_key=%t does not match configured target role", archivePath, file.PrivateKey)
-		}
-
-		backupPath, changed, err := writeConfigRestoreFile(file.SourcePath, payload, file.PrivateKey)
+	for _, validated := range files {
+		file := validated.manifest
+		backupPath, changed, err := writeConfigRestoreFile(file.SourcePath, validated.payload, file.PrivateKey)
 		if err != nil {
 			return nil, changes, skipped, privateKeys, err
 		}
@@ -388,7 +489,7 @@ func (daemon *Daemon) restoreConfigArchiveFiles(archive parsedConfigRestoreArchi
 		})
 		statuses = append(statuses, configRestoreArchiveFileStatus{
 			SourcePath:  file.SourcePath,
-			ArchivePath: archivePath,
+			ArchivePath: validated.archivePath,
 			Roles:       append([]string(nil), file.Roles...),
 			BackupPath:  backupPath,
 			PrivateKey:  file.PrivateKey,
@@ -398,6 +499,59 @@ func (daemon *Daemon) restoreConfigArchiveFiles(archive parsedConfigRestoreArchi
 		}
 	}
 	return statuses, changes, skipped, privateKeys, nil
+}
+
+func (daemon *Daemon) validateConfigRestoreArchiveFiles(archive parsedConfigRestoreArchive, restoredDesired config.Desired) ([]validatedConfigRestoreArchiveFile, int, error) {
+	daemon.configMu.RLock()
+	currentDesired := daemon.desired
+	configPath := daemon.cfg.ConfigPath
+	daemon.configMu.RUnlock()
+
+	currentCandidates := configRestoreCandidateMap(configExportFileCandidates(currentDesired, configPath))
+	restoredCandidates := configRestoreCandidateMap(configExportFileCandidates(restoredDesired, configPath))
+	validated := make([]validatedConfigRestoreArchiveFile, 0, len(archive.Manifest.Files))
+	privateKeyFiles := 0
+	for _, file := range archive.Manifest.Files {
+		archivePath, err := normalizeRestoreArchivePath(file.ArchivePath)
+		if err != nil {
+			return nil, privateKeyFiles, err
+		}
+		payload, ok := archive.Entries[archivePath]
+		if !ok {
+			return nil, privateKeyFiles, fmt.Errorf("restore archive manifest references missing file %q", archivePath)
+		}
+		if err := verifyRestoreArchiveFilePayload(file, payload); err != nil {
+			return nil, privateKeyFiles, err
+		}
+		if file.PrivateKey && !archive.Manifest.PrivateKeysIncluded {
+			return nil, privateKeyFiles, fmt.Errorf("restore archive file %q is a private key but manifest private_keys_included=false", archivePath)
+		}
+		if !file.PrivateKey && containsPrivateKeyPEM(payload) {
+			return nil, privateKeyFiles, fmt.Errorf("restore archive file %q contains private key material but is not marked private_key", archivePath)
+		}
+
+		targetKey := configExportPathKey(file.SourcePath)
+		current, currentOK := currentCandidates[targetKey]
+		restored, restoredOK := restoredCandidates[targetKey]
+		if !currentOK || !restoredOK {
+			return nil, privateKeyFiles, fmt.Errorf("restore archive file %q target %q is not allowed by current and restored config", archivePath, file.SourcePath)
+		}
+		if !restoreArchiveRolesAllowed(file.Roles, current) || !restoreArchiveRolesAllowed(file.Roles, restored) {
+			return nil, privateKeyFiles, fmt.Errorf("restore archive file %q roles %v are not allowed for target %q", archivePath, file.Roles, file.SourcePath)
+		}
+		if file.PrivateKey != current.PrivateKey || file.PrivateKey != restored.PrivateKey {
+			return nil, privateKeyFiles, fmt.Errorf("restore archive file %q private_key=%t does not match configured target role", archivePath, file.PrivateKey)
+		}
+		if file.PrivateKey {
+			privateKeyFiles++
+		}
+		validated = append(validated, validatedConfigRestoreArchiveFile{
+			manifest:    file,
+			archivePath: archivePath,
+			payload:     payload,
+		})
+	}
+	return validated, privateKeyFiles, nil
 }
 
 func verifyRestoreArchiveFilePayload(file configExportFileManifest, payload []byte) error {
