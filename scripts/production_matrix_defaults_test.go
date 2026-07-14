@@ -3557,17 +3557,22 @@ if spec.loader is None:
     sys.exit(1)
 spec.loader.exec_module(module)
 
-rename_commit = "f0173d53b71513dbd9b781ad65e7e2744654cc8c"
-probe = {"commit": rename_commit}
+rename_commits = [
+    "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    "a8ec4cb0f79cc75d8b6c21ae9ab452c1464413c6",
+]
+probe = {"commit": ""}
 module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
 parent = "parent-does-not-matter-for-probed-history"
-if not module.current_runtime_path_change_irrelevant(
-    {"gate_family": "secure_tix_tcp_kernel", "transport": "tix_tcp"},
-    parent,
-    "internal/config/load.go",
-):
-    print("protocol naming-only change was not exempt", file=sys.stderr)
-    sys.exit(1)
+for rename_commit in rename_commits:
+    probe["commit"] = rename_commit
+    if not module.current_runtime_path_change_irrelevant(
+        {"gate_family": "secure_tix_tcp_kernel", "transport": "tix_tcp"},
+        parent,
+        "internal/config/load.go",
+    ):
+        print(f"protocol naming-only change {rename_commit} was not exempt", file=sys.stderr)
+        sys.exit(1)
 
 probe["commit"] = "1111111111111111111111111111111111111111"
 if module.current_runtime_path_change_irrelevant(

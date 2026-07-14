@@ -183,6 +183,10 @@ PROTOCOL_NAMING_ONLY_COMMITS = {
     # Public-name preparation changed labels only; it did not alter packets,
     # crypto, datapath selection, or kernel execution.
     "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    # Completes the hard TIX-TCP identity rename across config, API, runtime,
+    # scripts, kernel/BPF symbols, and generated ELF metadata. Packet layout,
+    # crypto operations, gate thresholds, and fast-path behavior are unchanged.
+    "a8ec4cb0f79cc75d8b6c21ae9ab452c1464413c6",
 }
 OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
     # 9235159 only changes the OpenWrt rx_worker_single_coalesce default behind
