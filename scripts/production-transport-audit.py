@@ -179,6 +179,18 @@ CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS = {
     # Provision output changes do not alter already-soaked datapath/runtime behavior.
     "internal/daemon/ix_provision_resource.go",
 }
+OFFLINE_CONFIG_CHECK_ONLY_COMMITS_BY_PATH = {
+    # 6da6a68 adds the explicit -check-config branch and its offline validator.
+    # Normal daemon startup, packet processing, crypto, and datapath selection do
+    # not call this branch, so existing steady-state transport evidence remains
+    # valid for these two files.
+    "cmd/trustixd/main.go": {
+        "6da6a68184f7929b74cce788740a1337f700f422",
+    },
+    "internal/daemon/config_check.go": {
+        "6da6a68184f7929b74cce788740a1337f700f422",
+    },
+}
 PROTOCOL_NAMING_ONLY_COMMITS = {
     # Public-name preparation changed labels only; it did not alter packets,
     # crypto, datapath selection, or kernel execution.
@@ -1173,6 +1185,9 @@ def current_runtime_path_change_irrelevant(
     transport = row.get("transport", "")
     allowed_change_commits: set[str] = set()
     allowed_change_commits.update(PROTOCOL_NAMING_ONLY_COMMITS)
+    allowed_commits = OFFLINE_CONFIG_CHECK_ONLY_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits:
+        allowed_change_commits.update(allowed_commits)
     allowed_commits = RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class in LOW_LEVEL_RUNTIME_GATE_CLASSES:
         allowed_change_commits.update(allowed_commits)
