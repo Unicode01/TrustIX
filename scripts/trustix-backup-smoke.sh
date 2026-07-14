@@ -128,9 +128,24 @@ EOF
 chmod 0755 "$workdir/fake-bin/crontab"
 
 log "install and remove idempotent OpenWrt cron schedule"
+if [[ "${EUID:-$(id -u)}" != "0" ]]; then
+  if PATH="$workdir/fake-bin:$PATH" \
+    TRUSTIX_BACKUP_SCHEDULER=cron \
+    TRUSTIX_FAKE_CRONTAB="$workdir/crontab" \
+    bash "$backup_script" install-schedule \
+      --instance ix-test \
+      --instance-env "$workdir/etc/ix-test.env" \
+      --backup-env "$workdir/etc/ix-test.backup.env" \
+      >"$workdir/nonroot.out" 2>"$workdir/nonroot.err"; then
+    die "cron schedule management allowed non-root without the test override"
+  fi
+  grep -q 'must run as root' "$workdir/nonroot.err" || \
+    die "cron schedule management did not report the root requirement"
+fi
 for _ in 1 2; do
   PATH="$workdir/fake-bin:$PATH" \
     TRUSTIX_BACKUP_SCHEDULER=cron \
+    TRUSTIX_BACKUP_TEST_ALLOW_NONROOT_SCHEDULE=1 \
     TRUSTIX_FAKE_CRONTAB="$workdir/crontab" \
     bash "$backup_script" install-schedule \
       --instance ix-test \
@@ -140,6 +155,7 @@ done
 [[ "$(grep -c '# trustix-backup:ix-test' "$workdir/crontab")" == "1" ]] || die "cron schedule was duplicated"
 PATH="$workdir/fake-bin:$PATH" \
   TRUSTIX_BACKUP_SCHEDULER=cron \
+  TRUSTIX_BACKUP_TEST_ALLOW_NONROOT_SCHEDULE=1 \
   TRUSTIX_FAKE_CRONTAB="$workdir/crontab" \
   bash "$backup_script" remove-schedule \
     --instance ix-test \

@@ -219,7 +219,10 @@ manage_schedule() {
   [[ "$scheduler" != "systemd" ]] || die "systemd is not available"
 
   command -v crontab >/dev/null 2>&1 || die "neither systemd nor crontab is available"
-  [[ "${EUID:-$(id -u)}" == "0" ]] || die "OpenWrt schedule management must run as root"
+  if [[ "${EUID:-$(id -u)}" != "0" ]]; then
+    [[ "${TRUSTIX_BACKUP_TEST_ALLOW_NONROOT_SCHEDULE:-0}" == "1" ]] || \
+      die "OpenWrt schedule management must run as root"
+  fi
   local marker="# trustix-backup:${instance}"
   local script_path current filtered job
   script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
