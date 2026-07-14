@@ -128,7 +128,7 @@ function App() {
   const api = useMemo(() => new APIClient(normalizeBase(bootstrap.api_base), () => proofRef.current), []);
   const t: Translate = useCallback((key, fallback) => dict[key] || english[key] || fallback || key, [dict, english]);
   const locked = requiresAdminProof(bootstrap) && (!unlocked || adminRestorePending);
-  const dirty = Boolean(configText && baselineText && configText !== baselineText);
+  const dirty = Boolean(baselineText && configText !== baselineText);
   const topology = useMemo(() => buildTopology(desired, links), [desired, links]);
   const documentTitleIX = status?.ix_id || desired?.ix?.id || "";
   const dismissToast = useCallback((id: number) => {
@@ -166,6 +166,18 @@ function App() {
   }, [documentTitleIX]);
 
   useEffect(() => {
+    if (!dirty) {
+      return;
+    }
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [dirty]);
+
+  useEffect(() => {
     let cancelled = false;
     async function restore() {
       const saved = readStoredAdminProof();
@@ -197,12 +209,6 @@ function App() {
       cancelled = true;
     };
   }, [t]);
-
-  useEffect(() => {
-    if (!locked) {
-      void refreshAll({ silent: true });
-    }
-  }, [locked]);
 
   const refreshAll = useCallback(async (options: RefreshOptions = {}) => {
     if (requiresAdminProof(bootstrap) && !proofRef.current.ready && !unlocked) {
@@ -305,6 +311,19 @@ function App() {
       setLoading(false);
     }
   }, [api, pushToast, t]);
+
+  const reloadConfig = useCallback(async () => {
+    if (dirty && !window.confirm(t("discard_unsaved_changes_confirm", "Discard unsaved config changes and reload from the daemon?"))) {
+      return;
+    }
+    await refreshAll();
+  }, [dirty, refreshAll, t]);
+
+  useEffect(() => {
+    if (!locked) {
+      void (dirty ? refreshRuntime({ silent: true }) : refreshAll({ silent: true }));
+    }
+  }, [locked]);
 
   const loadCapture = useCallback(async () => {
     setLoading(true);
@@ -530,7 +549,7 @@ function App() {
       setIssuedIXProvision(response || null);
       setConfigMessage(`${t("provision_token_issued", "Provision token issued")}: ${request.ix_id}`);
       pushToast("success", t("provision_token_issued", "Provision token issued"), response.expires_at || request.ix_id);
-      await refreshAll({ silent: true });
+      await refreshRuntime({ silent: true });
     } catch (error) {
       const message = errorMessage(error);
       setConfigMessage(message);
@@ -538,7 +557,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [api, pushToast, refreshAll, t]);
+  }, [api, pushToast, refreshRuntime, t]);
 
   const issueEndpointGrant = useCallback(async (request: EndpointGrantIssueRequest) => {
     if (!request.subject_ix?.trim() || !request.endpoint?.trim()) {
@@ -552,7 +571,7 @@ function App() {
       const response = await api.postJSON<EndpointGrantMutationResponse>("/endpoint-grants/issue", JSON.stringify(request));
       setConfigMessage(`${t("endpoint_grant_issued", "Endpoint grant issued")}: ${response.grant?.grant_id || request.subject_ix}`);
       pushToast("success", t("endpoint_grant_issued", "Endpoint grant issued"), compactListForMessage([request.subject_ix, request.endpoint], " / "));
-      await refreshAll({ silent: true });
+      await refreshRuntime({ silent: true });
     } catch (error) {
       const message = errorMessage(error);
       setConfigMessage(message);
@@ -560,7 +579,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [api, pushToast, refreshAll, t]);
+  }, [api, pushToast, refreshRuntime, t]);
 
   const revokeEndpointGrant = useCallback(async (grant: EndpointGrant) => {
     if (!grant.grant_id) {
@@ -571,7 +590,7 @@ function App() {
       await api.postJSON<EndpointGrantMutationResponse>("/endpoint-grants/revoke", JSON.stringify({ grant_id: grant.grant_id }));
       setConfigMessage(`${t("endpoint_grant_revoked", "Endpoint grant revoked")}: ${grant.grant_id}`);
       pushToast("success", t("endpoint_grant_revoked", "Endpoint grant revoked"), grant.grant_id);
-      await refreshAll({ silent: true });
+      await refreshRuntime({ silent: true });
     } catch (error) {
       const message = errorMessage(error);
       setConfigMessage(message);
@@ -579,7 +598,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [api, pushToast, refreshAll, t]);
+  }, [api, pushToast, refreshRuntime, t]);
 
   const addPeer = useCallback(() => {
     const cfg = normalizeDesiredConfig(desired || {});
@@ -790,7 +809,7 @@ function App() {
           message={configMessage}
           onDesired={updateDesired}
           onText={updateConfigText}
-          onReload={refreshAll}
+          onReload={reloadConfig}
           onValidate={validateConfig}
           onApply={applyConfig}
           onCopy={copyConfig}
@@ -815,7 +834,7 @@ function App() {
         adminProofReady={adminProof.ready}
         adminProofStatus={adminProof.message}
         adminProofSelected={selectedFiles}
-        onRefresh={() => void refreshAll()}
+        onRefresh={() => void (dirty ? refreshRuntime() : refreshAll())}
         onTheme={() => {
           const next = themeSetting === "dark" ? "light" : "dark";
           setThemeSetting(next);

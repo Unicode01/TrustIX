@@ -3637,7 +3637,11 @@ function ConfigManagementEditor(props: { t: Translate; desired: DesiredConfig; o
   const tls = management.tls || {};
   const webUI = management.web_ui || {};
   const updateManagement = (patch: NonNullable<DesiredConfig["management"]>) => props.onDesired({ ...props.desired, management: { ...management, ...patch } });
-  const updateHostAPI = (patch: NonNullable<NonNullable<DesiredConfig["management"]>["host_api"]>) => updateManagement({ host_api: { ...hostAPI, ...patch } });
+  const updateHostAPI = (patch: NonNullable<NonNullable<DesiredConfig["management"]>["host_api"]>) => {
+    const nextHostAPI = { ...hostAPI, ...patch };
+    delete nextHostAPI.require_read_auth;
+    updateManagement({ host_api: nextHostAPI });
+  };
   const updateTLS = (patch: NonNullable<NonNullable<DesiredConfig["management"]>["tls"]>) => updateManagement({ tls: { ...tls, ...patch } });
   const updateWebUI = (patch: NonNullable<NonNullable<DesiredConfig["management"]>["web_ui"]>) => updateManagement({ web_ui: { ...webUI, ...patch } });
   return (
@@ -3645,22 +3649,48 @@ function ConfigManagementEditor(props: { t: Translate; desired: DesiredConfig; o
       <div className="config-section-head"><h3>{props.t("management", "Management")}</h3></div>
       <div className="form-grid">
         <CheckField label={props.t("web_ui_enabled", "WebUI enabled")} help={props.t("help_management_web_ui_enabled", "Expose the embedded WebUI on the same listener as the API.")} checked={Boolean(webUI.enabled)} onChange={(value) => updateWebUI({ enabled: value })} />
-        <Field label={props.t("custom_dir", "Custom dir")} help={props.t("help_management_web_ui_custom_dir", "Optional directory served instead of the embedded WebUI assets.")} value={webUI.custom_dir || ""} onChange={(value) => updateWebUI({ custom_dir: value })} />
         <SelectField label={props.t("management_tls_mode", "TLS mode")} help={props.t("help_management_tls_mode", "Controls HTTPS for the API and WebUI: auto uses TLS when credentials are available, required refuses plaintext, disabled allows HTTP.")} value={tls.mode || ""} options={["", "auto", "required", "disabled"]} onChange={(value) => updateTLS({ mode: value })} />
         <SelectField label={props.t("management_tls_identity", "TLS identity")} help={props.t("help_management_tls_identity", "Choose whether management TLS uses the IX certificate or a custom certificate/key pair.")} value={tls.identity || ""} options={["", "ix_cert", "custom_cert"]} onChange={(value) => updateTLS({ identity: value })} />
-        <Field label={props.t("management_cert", "Management cert")} help={props.t("help_management_tls_cert", "Custom management TLS certificate path when TLS identity is custom_cert.")} value={tls.cert || ""} onChange={(value) => updateTLS({ cert: value })} />
-        <Field label={props.t("management_key", "Management key")} help={props.t("help_management_tls_key", "Private key path for the custom management TLS certificate.")} value={tls.key || ""} onChange={(value) => updateTLS({ key: value })} />
+        {tls.identity === "custom_cert" && (
+          <>
+            <Field label={props.t("management_cert", "Management cert")} help={props.t("help_management_tls_cert", "Custom management TLS certificate path when TLS identity is custom_cert.")} value={tls.cert || ""} onChange={(value) => updateTLS({ cert: value })} />
+            <Field label={props.t("management_key", "Management key")} help={props.t("help_management_tls_key", "Private key path for the custom management TLS certificate.")} value={tls.key || ""} onChange={(value) => updateTLS({ key: value })} />
+          </>
+        )}
       </div>
+      {webUI.enabled && (
+        <details className="config-advanced-fields config-wide">
+          <summary>{props.t("custom_web_ui_assets", "Custom WebUI assets")}</summary>
+          <div className="config-advanced-grid">
+            <Field label={props.t("custom_dir", "Custom dir")} help={props.t("help_management_web_ui_custom_dir", "Optional directory served instead of the embedded WebUI assets.")} value={webUI.custom_dir || ""} onChange={(value) => updateWebUI({ custom_dir: value })} />
+            {webUI.custom_dir && <div className="field-hint warn config-wide">{props.t("custom_web_ui_assets_warning", "Custom same-origin assets can access browser-held Admin proof material. Use only trusted files.")}</div>}
+          </div>
+        </details>
+      )}
       <div className="config-card config-wide">
         <div className="config-section-head config-wide">
           <h3>{props.t("host_api", "Host API")}</h3>
           <span className="readonly-note">{props.t("host_api_note", "Optional API listener for LAN or localhost clients.")}</span>
         </div>
         <CheckField label={props.t("host_api_enabled", "Host API enabled")} help={props.t("help_management_host_api_enabled", "Enable the local host API used by LAN/localhost clients.")} checked={Boolean(hostAPI.enabled)} onChange={(value) => updateHostAPI({ enabled: value })} />
-        <Field label={props.t("host_api_listen", "Host API listen")} help={props.t("help_management_host_api_listen", "Listen address for the host API, for example 127.0.0.1:8787 or 0.0.0.0:8787.")} placeholder="127.0.0.1:8787" value={hostAPI.listen || ""} onChange={(value) => updateHostAPI({ listen: value })} />
-        <CheckField label={props.t("require_read_auth", "Require read auth")} help={props.t("help_management_host_api_require_read_auth", "Require Admin proof even for read-only API calls.")} checked={Boolean(hostAPI.require_read_auth)} onChange={(value) => updateHostAPI({ require_read_auth: value })} />
-        <CheckField label={props.t("allow_unauthenticated_reads", "Allow unauthenticated reads")} help={props.t("help_management_host_api_allow_unauthenticated_reads", "Allow read-only host API calls without Admin proof. Use only on trusted local networks.")} checked={Boolean(hostAPI.allow_unauthenticated_reads)} onChange={(value) => updateHostAPI({ allow_unauthenticated_reads: value })} />
-        <CheckField label={props.t("allow_unauthenticated_writes", "Allow unauthenticated writes")} help={props.t("help_management_host_api_allow_unauthenticated_writes", "Dangerous: allow config-changing host API calls without Admin proof. Keep disabled unless the listener is fully isolated.")} checked={Boolean(hostAPI.allow_unauthenticated_writes)} onChange={(value) => updateHostAPI({ allow_unauthenticated_writes: value })} />
+        {hostAPI.enabled && (
+          <>
+            <Field label={props.t("host_api_listen", "Host API listen")} help={props.t("help_management_host_api_listen", "Leave empty to use the first LAN gateway and primary API port, or enter an explicit host:port.")} placeholder={props.t("auto", "Auto")} value={hostAPI.listen || ""} onChange={(value) => updateHostAPI({ listen: value })} />
+            <SelectField
+              label={props.t("host_api_read_policy", "Read access")}
+              help={props.t("help_management_host_api_read_policy", "Admin proof is the secure default. Anonymous read-only access is intended only for trusted local networks.")}
+              value={hostAPI.allow_unauthenticated_reads ? "anonymous" : "admin"}
+              options={["admin", "anonymous"]}
+              optionLabels={{
+                admin: props.t("admin_proof_required", "Admin proof required"),
+                anonymous: props.t("unauthenticated_read_only", "Unauthenticated read-only"),
+              }}
+              onChange={(value) => updateHostAPI({ allow_unauthenticated_reads: value === "anonymous" })}
+            />
+            <CheckField label={props.t("allow_unauthenticated_writes", "Allow unauthenticated writes")} help={props.t("help_management_host_api_allow_unauthenticated_writes", "Dangerous: allow config-changing host API calls without Admin proof. Keep disabled unless the listener is fully isolated.")} checked={Boolean(hostAPI.allow_unauthenticated_writes)} onChange={(value) => updateHostAPI({ allow_unauthenticated_writes: value })} />
+            {hostAPI.allow_unauthenticated_writes && <div className="field-hint warn config-wide">{props.t("host_api_unauthenticated_writes_warning", "This listener can change TrustIX configuration without Admin proof.")}</div>}
+          </>
+        )}
       </div>
     </section>
   );
@@ -3751,7 +3781,7 @@ function ConfigBootstrapEditor(props: { t: Translate; desired: DesiredConfig; on
       </div>
       <div className="config-card-list config-wide">
         {peers.length ? peers.map((peer, index) => (
-          <div className="config-card" key={`${peer.control_api || "bootstrap"}-${index}`}>
+          <div className="config-card" key={index}>
             <Field label={props.t("ix_id", "IX ID")} help={props.t("help_bootstrap_peer_id", "Optional IX ID expected from this bootstrap control API.")} value={peer.id || ""} onChange={(value) => updatePeer(index, { ...peer, id: value })} />
             <Field label={props.t("domain_id", "Domain ID")} help={props.t("help_bootstrap_peer_domain", "Optional domain ID expected from this bootstrap peer. Leave aligned with this IX domain.")} value={peer.domain || ""} onChange={(value) => updatePeer(index, { ...peer, domain: value })} />
             <Field label={props.t("control_api", "Control API")} help={props.t("help_bootstrap_peer_control_api", "Control API URL used during startup to push this IX advertisement and fetch members.")} placeholder="https://ix-a.example:9443" value={peer.control_api || ""} onChange={(value) => updatePeer(index, { ...peer, control_api: value })} />
@@ -3901,7 +3931,7 @@ function TransportProfileOverrides(props: { t: Translate; profiles: TransportPro
         <Button variant="ghost" onClick={addProfile}><Plus size={15} />{props.t("add_profile", "Add profile")}</Button>
       </div>
       {props.profiles.length ? props.profiles.map((profile, index) => (
-        <div className="config-card" key={`${profile.transport}-${index}`}>
+        <div className="config-card" key={index}>
           <SelectField label={props.t("transport", "Transport")} help={props.t("help_transport_override_transport", "Transport this override applies to, for example experimental_tcp or udp.")} value={profile.transport || ""} options={transportOptions()} onChange={(value) => updateProfile(index, { ...profile, transport: value })} />
           <SelectField label={props.t("profile", "Profile")} help={props.t("help_transport_override_profile", "Profile advertised and preferred for this transport override.")} value={profile.profile || ""} options={transportProfileOptions()} onChange={(value) => updateProfile(index, { ...profile, profile: value })} />
           <SelectField label={props.t("datapath", "Datapath")} help={props.t("help_transport_override_datapath", "Datapath preferred for this transport override.")} value={profile.datapath || ""} options={transportDatapathOptions()} onChange={(value) => updateProfile(index, { ...profile, datapath: value })} />

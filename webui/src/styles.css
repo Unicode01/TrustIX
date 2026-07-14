@@ -2288,6 +2288,31 @@ button {
   font-weight: 650;
 }
 
+.config-advanced-fields {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+}
+
+.config-advanced-fields summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.config-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+  gap: 10px;
+  align-items: end;
+  min-width: 0;
+}
+
 .endpoint-advanced-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
@@ -2677,6 +2702,27 @@ tbody tr:last-child td {
   .admin-toolbar .pill {
     justify-self: start;
     grid-column: 1 / -1;
+  }
+
+  .concept-bubble {
+    position: fixed;
+    inset: auto 12px 12px;
+    width: auto;
+    max-width: none;
+  }
+
+  .concept-bubble::before {
+    display: none;
+  }
+
+  .config-card > .config-section-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .config-card > .config-section-head .readonly-note {
+    text-align: left;
   }
 
   .mini-file-button,
