@@ -23,18 +23,91 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| Debian `full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current-head gate with production gate script, cross-host runner, transport matrix, and evidence generator SHA256 pinned. The modules were rebuilt inside each VM against the exact target kernel; earlier Debian full-kmod gates remain historical coverage. |
-| Debian `tc_direct` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.90+deb13.1-cloud-amd64` at commit `a88aec3dd688a73aa3cd54342ca4b8fb8d71d424` | TC-direct still runs with no TrustIX kernel modules loaded. Production default tests require `trustix-cross-host-production-gate-manifest-v1` evidence for this family. |
-| Debian `secure_kudp` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Current secure-kUDP uses `trustix_crypto` plus `trustix_datapath_helpers`, keeps replay/drop gates, and passed with clean pstore/kernel log artifacts. |
-| Debian `route_gso` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` to `6.12.95+deb13-cloud-amd64` at commit `1dfaf51caac8bc03177de4ec428e23659db69173` | Current route-GSO gate passed after rebooting the disposable guests, with stable boot IDs, clean kernel log/pstore artifacts, and route-GSO helper error counters clean. Pre-reboot same-commit and `add2971` reruns were also degraded, so the promoted artifact is the post-reboot run. |
-| Debian `exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` | Selected plaintext experimental TCP full-kmod uses the dedicated full-kmod gate family, current-tool hashes, and the P16 runtime default; it must not reuse UDP full-kmod or route-GSO evidence. |
-| Debian UDP userspace defaults | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `3528328a8935` | Current-head UDP secure/plaintext userspace evidence uses the current production gate, verifier, cross-host runner, transport matrix, and evidence generator SHA256 values. Plaintext UDP keeps TX GSO coalescing enabled for throughput while plaintext RX GSO coalescing remains disabled by default for stability. |
-| Other Debian userspace defaults | manifest-backed 3600s per-direction PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `73620db99383` for TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext userspace plus secure experimental TCP userspace | Current-head evidence uses the production gate, verifier, cross-host runner, transport matrix, and evidence generator SHA256 values. Every case proved `iperf_mode=forward`, `iperf_directions=both`, stable boot IDs, clean kernel log/pstore artifacts, and no loaded TrustIX kernel modules. Secure experimental TCP used the raw-socket fallback compatibility path when TC/XDP reinject was unavailable. |
-| Debian userspace-TC defaults | manifest-backed 3600s forward PVE gates on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `8c2eebccbcf031f0133c8dbf192d826526c5187c` for GRE/IPIP/VXLAN secure and plaintext userspace-TC tunnels | Current-head userspace-TC evidence uses `datapath=tc_xdp`, `crypto_placement=userspace`, current production gate, runner, transport matrix, and evidence generator SHA256 values. Both nodes kept stable boot IDs and clean kernel/pstore artifacts. |
-| Secure experimental TCP kernel crypto | manifest-backed 3600s per-direction PVE gate on Debian 13 `6.12.94+deb13-cloud-amd64` at commit `1dfaf51caac8bc03177de4ec428e23659db69173` | This is a dedicated `secure_exp_tcp_kernel` production default; it must not reuse `secure_kudp` evidence. Current direct kfunc and route-TCP GSO helper error gates passed cleanly. |
-| OpenWrt-Debian `owdeb_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `6d3a219f86ec` | Current-head OpenWrt-Debian UDP plaintext full-kmod evidence uses current production gate, verifier, runner, transport matrix, and evidence generator SHA256 values. Both nodes loaded the full-kmod fast path, boot IDs stayed stable, pstore/kernel logs were clean, and module error counters stayed zero. |
-| OpenWrt-Debian `owdeb_exp_tcp_full_kmod` | manifest-backed 3600s per-direction PVE gate on OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.94+deb13-cloud-amd64` at commit `6d3a219f86ec` | Current-head OpenWrt-Debian experimental TCP plaintext full-kmod evidence uses the dedicated full-kmod gate family and the P16 runtime default. It must not reuse Debian `exp_tcp_full_kmod`, UDP `owdeb_full_kmod`, or route-GSO evidence. |
+| All 25 selected cross-host defaults | manifest-backed 3600s per-direction PVE gates at commit `0ceffe6f3d2396a363c6062474474c4d03ec09fe` | Every current evidence key now uses one binary and one pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases passed both directions with stable boot IDs and clean pstore/kernel-log findings. |
+| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | Covers `secure_kudp`, `secure_exp_tcp_kernel`, `route_gso`, `full_kmod`, `exp_tcp_full_kmod`, and `tc_direct`. The virtio route-GSO guard keeps unsupported outer GSO on the direct-build path. |
+| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.95+deb13-cloud-amd64` | Both `owdeb_full_kmod` and `owdeb_exp_tcp_full_kmod` passed strict 3600s per-direction gates. A follow-up five-cycle load/traffic/unload test also passed UDP, experimental TCP, and mixed UDP plus experimental TCP without reboot, pstore, residue, or ping loss. |
+| Debian userspace defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | UDP/TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext plus secure experimental TCP all have current-build 3600s per-direction evidence. |
+| GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | Policy remains `datapath=tc_xdp`, but this virtio configuration reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure experimental TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-07-14
+
+<a id="2026-07-12-zaozhuang-pve-0ceffe6-final-production"></a>
+
+### Zaozhuang PVE 0ceffe6 final selected production refresh
+
+Validation used the disposable VM202/203/204 guests on the Zaozhuang PVE host;
+VM100 and all 1xx guests were untouched. The candidate was built from
+`0ceffe6f3d2396a363c6062474474c4d03ec09fe` with Go 1.25.12 at
+`2026-07-12T00:33:30Z`. The deployed `trustix-linux-amd64` binary SHA256 was
+`5bd87114c9383c35ced8ca9ce7df184d48c450aa74be23049986136c29805738`.
+
+The run covered all 25 selected cross-host production keys. Each case ran
+`iperf_mode=forward` in both directions for 3600 seconds per direction. The
+throughput below is the lower received result across the two directions, not
+the faster direction or an aggregate:
+
+| Gate family | Transport | Encryption | Policy datapath / crypto | Minimum received throughput |
+| --- | --- | --- | --- | ---: |
+| `secure_kudp` | `kernel_udp` | secure | `tc_xdp` / kernel | 1.514629 Gbps |
+| `secure_exp_tcp_kernel` | `experimental_tcp` | secure | `kernel_module` / kernel | 4.713177 Gbps |
+| `route_gso` | `experimental_tcp` | plaintext | `kernel_module` / userspace | 3.909955 Gbps |
+| `full_kmod` | `udp` | plaintext | `kernel_module` / userspace | 4.800517 Gbps |
+| `exp_tcp_full_kmod` | `experimental_tcp` | plaintext | `kernel_module` / userspace | 8.523300 Gbps |
+| `owdeb_full_kmod` | `udp` | plaintext | `kernel_module` / userspace | 4.433236 Gbps |
+| `owdeb_exp_tcp_full_kmod` | `experimental_tcp` | plaintext | `kernel_module` / userspace | 7.306922 Gbps |
+| `tc_direct` | `kernel_udp` | plaintext | `tc_xdp` / userspace | 3.352749 Gbps |
+| `userspace_tc` | `gre` | plaintext | `tc_xdp` / userspace | 11.183758 Gbps |
+| `userspace_tc` | `gre` | secure | `tc_xdp` / userspace | 1.141784 Gbps |
+| `userspace_tc` | `ipip` | plaintext | `tc_xdp` / userspace | 11.568367 Gbps |
+| `userspace_tc` | `ipip` | secure | `tc_xdp` / userspace | 1.163834 Gbps |
+| `userspace_tc` | `vxlan` | plaintext | `tc_xdp` / userspace | 5.536894 Gbps |
+| `userspace_tc` | `vxlan` | secure | `tc_xdp` / userspace | 0.967441 Gbps |
+| `userspace` | `experimental_tcp` | secure | userspace / userspace | 0.610963 Gbps |
+| `userspace` | `http_connect` | plaintext | userspace / userspace | 1.216835 Gbps |
+| `userspace` | `http_connect` | secure | userspace / userspace | 0.807209 Gbps |
+| `userspace` | `quic` | plaintext | userspace / userspace | 1.623015 Gbps |
+| `userspace` | `quic` | secure | userspace / userspace | 1.579270 Gbps |
+| `userspace` | `tcp` | plaintext | userspace / userspace | 1.195683 Gbps |
+| `userspace` | `tcp` | secure | userspace / userspace | 0.795393 Gbps |
+| `userspace` | `udp` | plaintext | userspace / userspace | 1.748335 Gbps |
+| `userspace` | `udp` | secure | userspace / userspace | 1.634158 Gbps |
+| `userspace` | `websocket` | plaintext | userspace / userspace | 1.073089 Gbps |
+| `userspace` | `websocket` | secure | userspace / userspace | 0.745283 Gbps |
+
+All eight matrix groups returned `rc=0` and passed their post-run residue
+audits. Every verifier report had `errors=[]`; before/after boot IDs matched,
+pstore was empty, current-window kernel logs had no panic/Oops/BUG/lockup
+finding, `tix-lan` kept `tx_queue_len=1000`, and the guests were clean after
+each group. Seven group-wide ping monitors had zero loss. The OpenWrt-Debian
+3600s group lost two isolated OpenWrt-origin ICMP samples while experimental
+TCP was already under load; there was no sequence regression, burst outage,
+reboot, or peer-direction loss.
+
+The follow-up result
+`/root/trustix-pve-work/results/0ceffe6-owdeb-transition-20260714T034634Z`
+then ran five cycles of 30s-per-direction UDP full-kmod, experimental TCP
+full-kmod, and simultaneous UDP plus experimental TCP. All 15 cases passed a
+second verifier with matching strong build/binary identity, stable boot IDs,
+clean pstore/kernel findings, and zero session dial/heartbeat errors. The
+lowest received throughput was 1.662642 Gbps. Continuous underlay ping received
+1371 and 1355 sequential replies with zero loss, duplicate, or regression, and
+the final module/process/netns/link residue audit was clean.
+
+The production evidence toolchain was pinned to these SHA256 values:
+
+| Tool | SHA256 |
+| --- | --- |
+| production gate | `dd8f99453b1d385e6d07cd775614573f1f05cea1927fa79a9eb70bcb4e7753cf` |
+| verifier | `8b67f33404150fea43019d060daab1b11d1dba1b910cbea4af509d4c9abffa9c` |
+| cross-host runner | `3b1359247f1850aab93ab88d50293796ca157a57860cbd0a2f9c5f3fb60fe99c` |
+| transport matrix | `dbb478869377c98e4a6727309c413418dea46a49cc9191dc49d50c111ac743db` |
+| evidence generator | `524a170235903217e3415b3ab2dbdc07aacd8918ae1f196c56e31215c1e26894` |
+
+GRE, IPIP, and VXLAN all emitted the runner warning that no safe TC-direct
+fast path exists for this configuration and used the userspace datapath. Linux
+still handled the tunnel, but these six compatibility rows are not evidence of
+a pure TrustIX TC-direct tunnel path.
 
 ## 2026-07-09
 

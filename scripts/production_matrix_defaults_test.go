@@ -4129,38 +4129,20 @@ func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
+	const finalProductionArtifact = "docs/trustix-performance-log.md#2026-07-12-zaozhuang-pve-0ceffe6-final-production"
 	manifestRequiredArtifacts := map[string]string{
-		"tc_direct":               "docs/trustix-performance-log.md#2026-07-03-zaozhuang-pve-netdevfix-kernel-fast-regate",
-		"full_kmod":               "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-exp-tcp-full-kmod-production",
-		"exp_tcp_full_kmod":       "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-exp-tcp-full-kmod-production",
-		"owdeb_exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-08-zaozhuang-pve-6d3a219-openwrt24107-debian13-full-kmod-production",
-		"secure_kudp":             "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-secure-kernel-production",
-		"secure_exp_tcp_kernel":   "docs/trustix-performance-log.md#2026-07-07-zaozhuang-pve-1dfaf51-secure-exp-tcp-kernel-production",
-		"route_gso":               "docs/trustix-performance-log.md#2026-07-07-zaozhuang-pve-1dfaf51-route-gso-postreboot-production",
-		"owdeb_full_kmod":         "docs/trustix-performance-log.md#2026-07-08-zaozhuang-pve-6d3a219-openwrt24107-debian13-full-kmod-production",
-		"userspace":               "docs/trustix-performance-log.md#2026-06-23-zaozhuang-pve-userspace-userspace-tc-3600s-production-gates",
-		"userspace_tc":            "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
+		"tc_direct":               finalProductionArtifact,
+		"full_kmod":               finalProductionArtifact,
+		"exp_tcp_full_kmod":       finalProductionArtifact,
+		"owdeb_exp_tcp_full_kmod": finalProductionArtifact,
+		"secure_kudp":             finalProductionArtifact,
+		"secure_exp_tcp_kernel":   finalProductionArtifact,
+		"route_gso":               finalProductionArtifact,
+		"owdeb_full_kmod":         finalProductionArtifact,
+		"userspace":               finalProductionArtifact,
+		"userspace_tc":            finalProductionArtifact,
 	}
-	manifestRequiredArtifactByDefault := map[string]string{
-		"udp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-3528328-userspace-udp-production",
-		"udp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-3528328-userspace-udp-production",
-		"tcp:secure:stable:userspace:userspace:cross_host:userspace":                                  "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
-		"tcp:plaintext:stable:userspace:userspace:cross_host:userspace":                               "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
-		"quic:secure:stable:userspace:userspace:cross_host:userspace":                                 "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
-		"quic:plaintext:stable:userspace:userspace:cross_host:userspace":                              "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
-		"websocket:secure:stable:userspace:userspace:cross_host:userspace":                            "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
-		"websocket:plaintext:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
-		"http_connect:secure:stable:userspace:userspace:cross_host:userspace":                         "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
-		"http_connect:plaintext:stable:userspace:userspace:cross_host:userspace":                      "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
-		"gre:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                  "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
-		"gre:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                          "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
-		"ipip:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                 "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
-		"ipip:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                         "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
-		"vxlan:secure:stable:tc_xdp:userspace:cross_host:userspace_tc":                                "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
-		"vxlan:plaintext:performance:tc_xdp:userspace:cross_host:userspace_tc":                        "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-userspace-tc-production",
-		"experimental_tcp:secure:stable:userspace:userspace:cross_host:userspace":                     "docs/trustix-performance-log.md#2026-07-09-zaozhuang-pve-73620db-userspace-tcp-quic-websocket-http_connect-experimental_tcp-production",
-		"experimental_tcp:plaintext:performance:kernel_module:userspace:cross_host:exp_tcp_full_kmod": "docs/trustix-performance-log.md#2026-07-05-zaozhuang-pve-8c2eebc-debian-full-kmod-exp-tcp-full-kmod-production",
-	}
+	manifestRequiredArtifactByDefault := map[string]string{}
 	legacyPendingFamilies := map[string]bool{}
 	seen := map[string]bool{}
 	for _, row := range loadProductionTransportDefaults(t) {
