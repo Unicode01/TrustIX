@@ -191,6 +191,37 @@ OFFLINE_CONFIG_CHECK_ONLY_COMMITS_BY_PATH = {
         "6da6a68184f7929b74cce788740a1337f700f422",
     },
 }
+MANAGEMENT_AND_RECOVERY_ONLY_COMMITS_BY_PATH = {
+    # 167ec78 adds management HTTP liveness/readiness/metrics, bounded API
+    # request handling, encrypted config backup, and archive validation. It
+    # does not change packet formats, route/endpoint selection, transport I/O,
+    # dataplane snapshots, TC/eBPF programs, or kernel-module execution, so
+    # existing steady-state transport evidence remains applicable.
+    "cmd/trustixctl/main.go": {
+        "167ec78b47968f79d671306f9e2551c9e65055a9",
+    },
+    "internal/backupcrypto/backupcrypto.go": {
+        "167ec78b47968f79d671306f9e2551c9e65055a9",
+    },
+    "internal/daemon/admin_auth.go": {
+        "167ec78b47968f79d671306f9e2551c9e65055a9",
+    },
+    "internal/daemon/api.go": {
+        "167ec78b47968f79d671306f9e2551c9e65055a9",
+    },
+    "internal/daemon/api_limits.go": {
+        "167ec78b47968f79d671306f9e2551c9e65055a9",
+    },
+    "internal/daemon/config_restore_archive.go": {
+        "167ec78b47968f79d671306f9e2551c9e65055a9",
+    },
+    "internal/daemon/daemon.go": {
+        "167ec78b47968f79d671306f9e2551c9e65055a9",
+    },
+    "internal/daemon/operational.go": {
+        "167ec78b47968f79d671306f9e2551c9e65055a9",
+    },
+}
 PROTOCOL_NAMING_ONLY_COMMITS = {
     # Public-name preparation changed labels only; it did not alter packets,
     # crypto, datapath selection, or kernel execution.
@@ -1186,6 +1217,9 @@ def current_runtime_path_change_irrelevant(
     allowed_change_commits: set[str] = set()
     allowed_change_commits.update(PROTOCOL_NAMING_ONLY_COMMITS)
     allowed_commits = OFFLINE_CONFIG_CHECK_ONLY_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits:
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = MANAGEMENT_AND_RECOVERY_ONLY_COMMITS_BY_PATH.get(normalized)
     if allowed_commits:
         allowed_change_commits.update(allowed_commits)
     allowed_commits = RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH.get(normalized)
