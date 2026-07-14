@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
-import { Archive, ArrowLeft, Check, Circle, Copy, Download, KeyRound, Languages, Move, Network, Plus, RefreshCw, Route, Save, ShieldCheck, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
+import { Archive, ArrowLeft, Check, Circle, Copy, Download, Ellipsis, KeyRound, Languages, Move, Network, Plus, RefreshCw, Route, Save, ShieldCheck, Trash2, Upload, ZoomIn, ZoomOut } from "lucide-react";
 import type {
   BootstrapPeerConfig,
   DeviceAccessIssueResponse,
@@ -2862,20 +2862,41 @@ export function ConfigView(props: {
   onRestore: (file: File | null) => void;
 }) {
   const restoreInputRef = useRef<HTMLInputElement>(null);
+  const moreActionsRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const closeMenu = (event: globalThis.PointerEvent) => {
+      if (moreActionsRef.current?.open && !moreActionsRef.current.contains(event.target as Node)) {
+        moreActionsRef.current.open = false;
+      }
+    };
+    document.addEventListener("pointerdown", closeMenu);
+    return () => document.removeEventListener("pointerdown", closeMenu);
+  }, []);
+  const runMoreAction = (action: () => void) => {
+    if (moreActionsRef.current) {
+      moreActionsRef.current.open = false;
+    }
+    action();
+  };
   return (
     <main className="views">
       <section className="panel">
         <div className="panel-head">
           <h2>{props.t("config", "Config")}</h2>
-          <div className="inline-controls">
+          <div className="inline-controls config-toolbar">
             <Pill state={props.dirty ? "warn" : "ok"}>{props.dirty ? props.t("unsaved_changes", "Unsaved changes") : props.t("saved", "Saved")}</Pill>
             <Button variant="ghost" onClick={props.onReload}><RefreshCw size={15} />{props.t("reload", "Reload")}</Button>
             <Button variant="ghost" onClick={props.onValidate}><Check size={15} />{props.t("validate", "Validate")}</Button>
             <Button onClick={props.onApply}><Save size={15} />{props.t("apply", "Apply")}</Button>
-            <Button variant="ghost" onClick={props.onCopy}><Copy size={15} />{props.t("copy", "Copy")}</Button>
-            <Button variant="ghost" onClick={props.onExport} title={props.t("help_config_export", "Download desired config, config log, and public certificate material without private keys.")}><Download size={15} />{props.t("export", "Export")}</Button>
-            <Button variant="ghost" onClick={props.onBackup} title={props.t("help_config_backup", "Download a full backup archive including configured private keys.")}><Archive size={15} />{props.t("full_backup", "Full backup")}</Button>
-            <Button variant="ghost" onClick={() => restoreInputRef.current?.click()} title={props.t("help_config_restore", "Restore config log and configured certificate/key files from a TrustIX backup archive.")}><Upload size={15} />{props.t("restore_backup", "Restore")}</Button>
+            <details className="config-actions-menu" ref={moreActionsRef}>
+              <summary className="icon-button" title={props.t("more_actions", "More actions")} aria-label={props.t("more_actions", "More actions")}><Ellipsis size={17} /></summary>
+              <div className="config-actions-popover">
+                <button type="button" onClick={() => runMoreAction(props.onCopy)}><Copy size={15} /><span>{props.t("copy", "Copy")}</span></button>
+                <button type="button" onClick={() => runMoreAction(props.onExport)} title={props.t("help_config_export", "Download desired config, config log, and public certificate material without private keys.")}><Download size={15} /><span>{props.t("export", "Export")}</span></button>
+                <button type="button" onClick={() => runMoreAction(props.onBackup)} title={props.t("help_config_backup", "Download a full backup archive including configured private keys.")}><Archive size={15} /><span>{props.t("full_backup", "Full backup")}</span></button>
+                <button type="button" onClick={() => runMoreAction(() => restoreInputRef.current?.click())} title={props.t("help_config_restore", "Restore config log and configured certificate/key files from a TrustIX backup archive.")}><Upload size={15} /><span>{props.t("restore_backup", "Restore")}</span></button>
+              </div>
+            </details>
             <input
               ref={restoreInputRef}
               type="file"
@@ -2990,12 +3011,16 @@ function VisualConfig(props: { t: Translate; lang: string; desired: DesiredConfi
   return (
     <div className="config-visual">
       <ConfigSummaryStrip t={props.t} lang={props.lang} desired={cfg} transports={props.transports} links={props.links} runtimeRoutes={runtimeRoutes} />
-      <ConfigConceptStrip t={props.t} />
       <nav className="config-task-nav" aria-label={props.t("config_sections", "Config sections")}>
         {sections.map((section) => (
-          <button key={section} type="button" className={`config-task-tab ${activeSection === section ? "is-active" : ""}`} onClick={() => setActiveSection(section)}>
+          <button
+            key={section}
+            type="button"
+            className={`config-task-tab ${activeSection === section ? "is-active" : ""}`}
+            title={configSectionValue(props.t, cfg, props.transports, props.links, runtimeRoutes, section)}
+            onClick={() => setActiveSection(section)}
+          >
             <span>{configSectionLabel(props.t, section)}</span>
-            <strong>{configSectionValue(props.t, cfg, props.transports, props.links, runtimeRoutes, section)}</strong>
           </button>
         ))}
       </nav>
@@ -3373,48 +3398,6 @@ function ConfigSummaryStrip(props: { t: Translate; lang: string; desired: Desire
   );
 }
 
-function ConfigConceptStrip(props: { t: Translate }) {
-  const concepts = [
-    {
-      key: "endpoint",
-      label: props.t("concept_endpoint", "Endpoint"),
-      detail: props.t("concept_endpoint_help", "Reachable data-session address and transport, such as udp or experimental_tcp."),
-    },
-    {
-      key: "lan-prefix",
-      label: props.t("concept_lan_prefix", "LAN prefix"),
-      detail: props.t("concept_lan_prefix_help", "CIDR network owned or hosted by this IX and advertised into the domain."),
-    },
-    {
-      key: "route",
-      label: props.t("concept_route", "Route"),
-      detail: props.t("concept_route_help", "Normally learned from advertisements; static routes are for pinning or override."),
-    },
-    {
-      key: "transport-profile",
-      label: props.t("concept_transport_profile", "Transport profile"),
-      detail: props.t("concept_transport_profile_help", "Intent such as stable, performance, or latency; datapath is the implementation."),
-    },
-  ];
-  return (
-    <div className="concept-strip" aria-label={props.t("config_concepts", "Config concepts")}>
-      {concepts.map((concept) => (
-        <button
-          type="button"
-          className="concept-item"
-          key={concept.key}
-          aria-describedby={`config-concept-${concept.key}`}
-          title={concept.detail}
-        >
-          <span className="concept-label">{concept.label}</span>
-          <span className="concept-mark" aria-hidden="true">?</span>
-          <span className="concept-bubble" id={`config-concept-${concept.key}`} role="tooltip">{concept.detail}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function configSectionLabel(t: Translate, section: ConfigSectionID): string {
   switch (section) {
     case "basic":
@@ -3615,18 +3598,31 @@ function CandidateEndpointPicker(props: { t: Translate; endpoints: EndpointConfi
   );
 }
 
+type AdvancedConfigSectionID = "management" | "kernel" | "trust" | "bootstrap" | "fabric";
+
 function AdvancedConfigEditor(props: { t: Translate; desired: DesiredConfig; onDesired: (desired: DesiredConfig) => void }) {
+  const [activeSection, setActiveSection] = useState<AdvancedConfigSectionID>("management");
+  const sections: Array<{ id: AdvancedConfigSectionID; label: string }> = [
+    { id: "management", label: props.t("management", "Management") },
+    { id: "kernel", label: props.t("kernel_modules", "Kernel modules") },
+    { id: "trust", label: props.t("trust", "Trust") },
+    { id: "bootstrap", label: props.t("bootstrap", "Bootstrap") },
+    { id: "fabric", label: props.t("control_fabric", "Control fabric") },
+  ];
   return (
     <>
-      <ConfigManagementEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
-      <ConfigKernelModulesEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
-      <ConfigTrustEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
-      <ConfigBootstrapEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
-      <ConfigControlFabricEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />
-      <section className="config-section">
-        <div className="config-section-head"><h3>{props.t("advanced_config", "Advanced config")}</h3></div>
-        <AdvancedConfigSummary t={props.t} desired={props.desired} />
-      </section>
+      <nav className="config-subnav" aria-label={props.t("advanced_config", "Advanced config")}>
+        {sections.map((section) => (
+          <button key={section.id} type="button" className={activeSection === section.id ? "is-active" : ""} title={section.label} onClick={() => setActiveSection(section.id)}>
+            {section.label}
+          </button>
+        ))}
+      </nav>
+      {activeSection === "management" && <ConfigManagementEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />}
+      {activeSection === "kernel" && <ConfigKernelModulesEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />}
+      {activeSection === "trust" && <ConfigTrustEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />}
+      {activeSection === "bootstrap" && <ConfigBootstrapEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />}
+      {activeSection === "fabric" && <ConfigControlFabricEditor t={props.t} desired={props.desired} onDesired={props.onDesired} />}
     </>
   );
 }
@@ -3867,52 +3863,28 @@ function splitPEMBlocks(value: string): string[] {
   return splitLines(value);
 }
 
-function AdvancedConfigSummary(props: { t: Translate; desired: DesiredConfig }) {
-  const cfg = props.desired;
-  const management = cfg.management || {};
-  const dns = cfg.dns || {};
-  const kernelModules = cfg.kernel_modules || {};
-  const fabric = cfg.control_fabric || {};
-  const trustRoots = arrayValue(cfg.domain?.trust_roots);
-  const routeAuth = arrayValue(cfg.ix?.route_authorizations);
-  return (
-    <div className="advanced-config-summary">
-      <StatusRow label={props.t("management", "Management")} value={compactAdvancedObject(management)} />
-      <StatusRow label={props.t("dns", "DNS")} value={compactAdvancedObject(dns)} />
-      <StatusRow label={props.t("kernel_modules", "Kernel modules")} value={compactAdvancedObject(kernelModules)} />
-      <StatusRow label={props.t("control_fabric", "Control fabric")} value={compactList([
-        fabric.profile,
-        fabric.dynamic_control_fanout != null ? `${props.t("dynamic_control_fanout", "Dynamic fanout")} ${fabric.dynamic_control_fanout}` : "",
-        fabric.member_page_size != null ? `${props.t("member_page_size", "Member page")} ${fabric.member_page_size}` : "",
-        fabric.member_import_limit != null ? `${props.t("member_import_limit", "Import limit")} ${fabric.member_import_limit}` : "",
-      ], "-")} />
-      <StatusRow label={props.t("trust_roots", "Trust roots")} value={trustRoots.join(" · ") || "-"} />
-      <StatusRow label={props.t("route_authorizations", "Route authorizations")} value={routeAuth.join(" · ") || "-"} />
-      <StatusRow label={props.t("advanced_json", "Advanced JSON")} value={props.t("advanced_json_available", "Raw JSON editor is below the visual config.")} />
-    </div>
-  );
-}
-
 function TransportAdvancedFields(props: { t: Translate; value: TransportAdvancedConfig; onChange: (value: TransportAdvancedConfig) => void; framed?: boolean }) {
   const advanced = props.value || {};
   const update = (patch: Partial<TransportAdvancedConfig>) => props.onChange({ ...advanced, ...patch });
   return (
-    <div className={`${props.framed ? "config-card " : "transport-advanced-fields "}config-wide`}>
-      <div className="config-section-head config-wide">
-        <h3>{props.t("transport_advanced", "Transport advanced")}</h3>
-        <span className="readonly-note">{props.t("transport_advanced_note", "Optional performance gates for batching, GSO/GRO, and large frames.")}</span>
+    <details className={`${props.framed ? "config-advanced-fields" : "inline-advanced-fields"} config-wide`}>
+      <summary>
+        <span>{props.t("transport_advanced", "Transport advanced")}</span>
+        <small>{props.t("transport_advanced_note", "Optional performance gates for batching, GSO/GRO, and large frames.")}</small>
+      </summary>
+      <div className="config-advanced-grid">
+        <SelectField label={props.t("large_frames", "Large frames")} help={props.t("help_transport_large_frames", "Allow larger internal frames when both endpoints and the selected datapath support them.")} value={advanced.large_frames || ""} options={transportToggleOptions()} onChange={(value) => update({ large_frames: value })} />
+        <SelectField label={props.t("gso", "GSO")} help={props.t("help_transport_gso", "Enable transmit segmentation offload in supported kernel datapaths.")} value={advanced.gso || ""} options={transportToggleOptions()} onChange={(value) => update({ gso: value })} />
+        <SelectField label={props.t("gro", "GRO")} help={props.t("help_transport_gro", "Enable receive coalescing in supported kernel datapaths.")} value={advanced.gro || ""} options={transportToggleOptions()} onChange={(value) => update({ gro: value })} />
+        <Field label={props.t("shards", "Shards")} help={props.t("help_transport_shards", "Number of worker shards for transports that support parallel session processing.")} type="number" value={numberFieldValue(advanced.shards)} onChange={(value) => update({ shards: numberOrUndefined(value) })} />
+        <Field label={props.t("max_frames", "Max frames")} help={props.t("help_transport_max_frames", "Maximum frames included in one batch before an immediate flush.")} type="number" value={numberFieldValue(advanced.max_frames)} onChange={(value) => update({ max_frames: numberOrUndefined(value) })} />
+        <Field label={props.t("batch_bytes", "Batch bytes")} help={props.t("help_transport_batch_bytes", "Maximum bytes included in one transport batch before an immediate flush.")} type="number" value={numberFieldValue(advanced.batch_bytes)} onChange={(value) => update({ batch_bytes: numberOrUndefined(value) })} />
+        <Field label={props.t("flush_delay", "Flush delay")} help={props.t("help_transport_flush_delay", "Maximum time to hold a partial batch before sending it.")} placeholder="100us" value={advanced.flush_delay || ""} onChange={(value) => update({ flush_delay: value })} />
+        <CheckField label={props.t("allow_unsafe", "Allow unsafe")} help={props.t("help_transport_allow_unsafe", "Allow experimental fast paths marked unsafe for production until explicitly validated.")} checked={Boolean(advanced.allow_unsafe)} onChange={(value) => update({ allow_unsafe: value })} />
+        <CheckField label={props.t("allow_outer_gso_unsafe", "Allow outer GSO")} help={props.t("help_transport_allow_outer_gso_unsafe", "Allow outer-packet GSO paths that may depend on NIC/kernel behavior.")} checked={Boolean(advanced.allow_outer_gso_unsafe)} onChange={(value) => update({ allow_outer_gso_unsafe: value })} />
+        <CheckField label={props.t("allow_checksum_skip", "Allow checksum skip")} help={props.t("help_transport_allow_checksum_skip", "Allow checksum shortcuts only after validating the path preserves packet correctness.")} checked={Boolean(advanced.allow_checksum_skip)} onChange={(value) => update({ allow_checksum_skip: value })} />
       </div>
-      <SelectField label={props.t("large_frames", "Large frames")} help={props.t("help_transport_large_frames", "Allow larger internal frames when both endpoints and the selected datapath support them.")} value={advanced.large_frames || ""} options={transportToggleOptions()} onChange={(value) => update({ large_frames: value })} />
-      <SelectField label={props.t("gso", "GSO")} help={props.t("help_transport_gso", "Enable transmit segmentation offload in supported kernel datapaths.")} value={advanced.gso || ""} options={transportToggleOptions()} onChange={(value) => update({ gso: value })} />
-      <SelectField label={props.t("gro", "GRO")} help={props.t("help_transport_gro", "Enable receive coalescing in supported kernel datapaths.")} value={advanced.gro || ""} options={transportToggleOptions()} onChange={(value) => update({ gro: value })} />
-      <Field label={props.t("shards", "Shards")} help={props.t("help_transport_shards", "Number of worker shards for transports that support parallel session processing.")} type="number" value={numberFieldValue(advanced.shards)} onChange={(value) => update({ shards: numberOrUndefined(value) })} />
-      <Field label={props.t("max_frames", "Max frames")} help={props.t("help_transport_max_frames", "Maximum frames included in one batch before an immediate flush.")} type="number" value={numberFieldValue(advanced.max_frames)} onChange={(value) => update({ max_frames: numberOrUndefined(value) })} />
-      <Field label={props.t("batch_bytes", "Batch bytes")} help={props.t("help_transport_batch_bytes", "Maximum bytes included in one transport batch before an immediate flush.")} type="number" value={numberFieldValue(advanced.batch_bytes)} onChange={(value) => update({ batch_bytes: numberOrUndefined(value) })} />
-      <Field label={props.t("flush_delay", "Flush delay")} help={props.t("help_transport_flush_delay", "Maximum time to hold a partial batch before sending it.")} placeholder="100us" value={advanced.flush_delay || ""} onChange={(value) => update({ flush_delay: value })} />
-      <CheckField label={props.t("allow_unsafe", "Allow unsafe")} help={props.t("help_transport_allow_unsafe", "Allow experimental fast paths marked unsafe for production until explicitly validated.")} checked={Boolean(advanced.allow_unsafe)} onChange={(value) => update({ allow_unsafe: value })} />
-      <CheckField label={props.t("allow_outer_gso_unsafe", "Allow outer GSO")} help={props.t("help_transport_allow_outer_gso_unsafe", "Allow outer-packet GSO paths that may depend on NIC/kernel behavior.")} checked={Boolean(advanced.allow_outer_gso_unsafe)} onChange={(value) => update({ allow_outer_gso_unsafe: value })} />
-      <CheckField label={props.t("allow_checksum_skip", "Allow checksum skip")} help={props.t("help_transport_allow_checksum_skip", "Allow checksum shortcuts only after validating the path preserves packet correctness.")} checked={Boolean(advanced.allow_checksum_skip)} onChange={(value) => update({ allow_checksum_skip: value })} />
-    </div>
+    </details>
   );
 }
 
@@ -5040,22 +5012,6 @@ function compactDNSStatus(status: StatusPayload["dns"], t: Translate): string {
   const mode = arrayValue(status.upstreams).length ? t("dns_forwarding", "Forwarding") : t("dns_split_only", "Split-only");
   const dnsmasq = status.dnsmasq?.enabled ? compactList([t("openwrt_dnsmasq", "OpenWrt dnsmasq"), status.dnsmasq.applied ? t("applied", "Applied") : t("pending", "Pending"), status.dnsmasq.error], " ") : "";
   return compactList([runtime, status.listen, status.domain, mode, dnsmasq, status.error], " · ");
-}
-
-function compactAdvancedObject(value: Record<string, unknown> | undefined): string {
-  const entries = Object.entries(value || {}).filter(([, item]) => item != null && item !== "");
-  if (!entries.length) {
-    return "-";
-  }
-  return entries.slice(0, 6).map(([key, item]) => {
-    if (Array.isArray(item)) {
-      return `${key}(${item.length})`;
-    }
-    if (typeof item === "object") {
-      return key;
-    }
-    return `${key}: ${String(item)}`;
-  }).join(" · ");
 }
 
 function compactTransportList(transports: string[]): string {

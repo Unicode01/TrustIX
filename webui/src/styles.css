@@ -406,7 +406,7 @@ button {
   color: var(--muted);
   font-size: 12px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 
 .metric-value,
@@ -641,7 +641,7 @@ button {
   color: var(--muted);
   font-size: 12px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 
 .status-row .value {
@@ -1691,154 +1691,132 @@ button {
 
 .config-summary-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
-.concept-strip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+.config-summary-strip .summary-item {
+  padding-top: 8px;
 }
 
-.concept-item {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  min-height: 28px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--bg-elevated);
-  color: var(--muted);
-  cursor: help;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.2;
-  text-align: left;
+.config-summary-strip .summary-label {
+  text-transform: none;
 }
 
-.concept-item:hover,
-.concept-item:focus-visible {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--text);
-  outline: none;
-}
-
-.concept-label {
-  min-width: 0;
+.config-summary-strip .summary-value {
+  margin-top: 4px;
   overflow: hidden;
+  font-size: 13px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.concept-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 15px;
-  height: 15px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
+.config-actions-menu {
+  position: relative;
 }
 
-.concept-bubble {
+.config-actions-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.config-actions-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.config-actions-popover {
   position: absolute;
-  left: 0;
-  top: calc(100% + 7px);
-  z-index: 20;
-  width: max-content;
-  max-width: min(320px, calc(100vw - 32px));
-  padding: 8px 10px;
+  z-index: 40;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(220px, calc(100vw - 32px));
+  display: grid;
+  gap: 3px;
+  padding: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg);
+  background: var(--bg-elevated);
   box-shadow: var(--shadow);
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-2px);
-  transition: opacity 0.12s ease, transform 0.12s ease;
 }
 
-.concept-bubble::before {
-  content: "";
-  position: absolute;
-  left: 14px;
-  top: -5px;
-  width: 8px;
-  height: 8px;
-  border-left: 1px solid var(--border);
-  border-top: 1px solid var(--border);
-  background: var(--bg);
-  transform: rotate(45deg);
-}
-
-.concept-item:hover .concept-bubble,
-.concept-item:focus-visible .concept-bubble {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.config-task-nav {
+.config-actions-popover button {
+  min-height: 34px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-soft);
-}
-
-.config-task-tab {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  min-height: 58px;
-  padding: 8px 10px;
-  border: 1px solid transparent;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  padding: 0 9px;
+  border: 0;
   border-radius: calc(var(--radius) - 2px);
   background: transparent;
   color: var(--text);
   text-align: left;
 }
 
-.config-task-tab:hover,
-.config-task-tab.is-active {
-  border-color: var(--accent);
+.config-actions-popover button:hover {
   background: var(--accent-soft);
+  color: var(--accent);
 }
 
-.config-task-tab span,
-.config-task-tab strong {
+.config-actions-popover button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.config-task-nav,
+.config-subnav {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
 }
 
-.config-task-tab span {
+.config-task-tab,
+.config-subnav button {
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 3px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
   color: var(--muted);
+  text-align: center;
   font-size: 12px;
   font-weight: 650;
 }
 
-.config-task-tab strong {
-  font-size: 13px;
-  font-weight: 650;
+.config-subnav {
+  gap: 12px;
+}
+
+.config-subnav button {
+  min-height: 34px;
+  padding-inline: 2px;
+  font-size: 11px;
+}
+
+.config-task-tab:hover,
+.config-task-tab.is-active,
+.config-subnav button:hover,
+.config-subnav button.is-active {
+  border-bottom-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.config-subnav button.is-active {
+  background: transparent;
+}
+
+.config-task-tab span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .config-section {
@@ -2298,11 +2276,29 @@ button {
   background: var(--bg-soft);
 }
 
-.config-advanced-fields summary {
+.inline-advanced-fields {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.config-advanced-fields > summary,
+.inline-advanced-fields > summary {
+  display: grid;
+  gap: 2px;
   cursor: pointer;
   color: var(--muted);
   font-size: 12px;
   font-weight: 650;
+}
+
+.config-advanced-fields > summary small,
+.inline-advanced-fields > summary small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .config-advanced-grid {
@@ -2437,14 +2433,6 @@ button {
   min-width: 0;
 }
 
-.transport-advanced-fields {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-  align-items: end;
-  min-width: 0;
-}
-
 .candidate-picker {
   display: grid;
   gap: 10px;
@@ -2511,11 +2499,6 @@ button {
   text-align: right;
 }
 
-.advanced-config-summary {
-  display: grid;
-  gap: 8px;
-}
-
 .empty-row {
   min-height: 40px;
   display: grid;
@@ -2566,7 +2549,7 @@ th {
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   line-height: 1.15;
   white-space: normal;
   word-break: keep-all;
@@ -2654,7 +2637,6 @@ tbody tr:last-child td {
     grid-template-columns: repeat(2, minmax(180px, 1fr));
   }
 
-  .config-task-nav,
   .peer-endpoint-split {
     grid-template-columns: 1fr;
   }
@@ -2688,6 +2670,27 @@ tbody tr:last-child td {
     width: 100%;
   }
 
+  .config-toolbar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) 36px;
+    gap: 8px;
+  }
+
+  .config-toolbar > .pill {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .config-toolbar > .button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 6px;
+  }
+
+  .config-toolbar > .config-actions-menu {
+    justify-self: end;
+  }
+
   .toolbar {
     justify-content: flex-start;
     overflow-x: visible;
@@ -2702,17 +2705,6 @@ tbody tr:last-child td {
   .admin-toolbar .pill {
     justify-self: start;
     grid-column: 1 / -1;
-  }
-
-  .concept-bubble {
-    position: fixed;
-    inset: auto 12px 12px;
-    width: auto;
-    max-width: none;
-  }
-
-  .concept-bubble::before {
-    display: none;
   }
 
   .config-card > .config-section-head {
@@ -2742,14 +2734,42 @@ tbody tr:last-child td {
     padding: 0 10px;
   }
 
+  .config-task-nav,
+  .config-subnav {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+  }
+
+  .config-task-tab,
+  .config-subnav button {
+    width: 100%;
+    min-height: 44px;
+    padding-inline: 2px;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .config-task-tab span {
+    text-overflow: clip;
+    white-space: normal;
+  }
+
   .status-grid,
   .summary-grid,
   .transport-strip,
   .active-transport-strip,
   .first-run-grid,
-  .kernel-summary-strip,
-  .config-summary-strip {
+  .kernel-summary-strip {
     grid-template-columns: 1fr;
+  }
+
+  .config-summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .config-summary-strip .summary-item:last-child {
+    grid-column: 1 / -1;
   }
 
   .status-row,
@@ -2787,7 +2807,6 @@ tbody tr:last-child td {
   .readonly-endpoint-main,
   .readonly-route-row,
   .config-section > .form-grid,
-  .config-task-nav,
   .candidate-row,
   .peer-endpoint-row,
   .route-inline-row,
