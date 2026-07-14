@@ -246,7 +246,7 @@ manage_schedule() {
     die "could not install updated crontab"
   fi
   rm -f "$current" "$filtered"
-  if [[ -x /etc/init.d/cron ]]; then
+  if [[ -f /etc/openwrt_release && -x /etc/init.d/cron ]]; then
     /etc/init.d/cron restart >/dev/null
   fi
   if [[ "$action" == "install" ]]; then
