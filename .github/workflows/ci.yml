@@ -60,6 +60,10 @@ jobs:
           go test "${pkgs[@]}" -count=1
           go test ./internal/dataplane/ebpf -run '^$' -count=1
 
+      - name: Transactional Update Smoke
+        run: |
+          bash scripts/trustix-update-smoke.sh
+
       - name: Production Transport Evidence Audit
         run: |
           python3 scripts/production-transport-audit.py \

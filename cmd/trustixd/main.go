@@ -27,12 +27,33 @@ func main() {
 	flag.StringVar(&cfg.DataplaneMode, "dataplane", cfg.DataplaneMode, "dataplane mode: noop, linux, or auto")
 	flag.BoolVar(&cfg.APIAdminAuth, "api-admin-auth", cfg.APIAdminAuth, "require Admin certificate signatures for management API write requests")
 	showVersion := flag.Bool("version", false, "print build version and embedded asset metadata")
+	checkConfig := flag.Bool("check-config", false, "validate configuration and runtime inputs without starting")
 	cleanupDataplane := flag.Bool("cleanup-dataplane", false, "clean TrustIX-managed dataplane state from config/data-dir and exit")
 	cleanupDataplaneDryRun := flag.Bool("cleanup-dataplane-dry-run", false, "print TrustIX-managed dataplane cleanup plan as JSON and exit")
 	repairDataplane := flag.Bool("repair-dataplane", false, "clean stale TrustIX-managed dataplane state before starting")
 	flag.Parse()
 	if *showVersion {
 		buildinfo.WriteText(os.Stdout, buildassets.BuildInfo())
+		return
+	}
+	if *checkConfig {
+		if *cleanupDataplane || *cleanupDataplaneDryRun || *repairDataplane {
+			fmt.Fprintln(os.Stderr, "trustixd: -check-config cannot be combined with dataplane cleanup or repair")
+			os.Exit(2)
+		}
+		checked, err := daemon.CheckConfig(cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "trustixd: config check failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("trustixd config valid: config=%q domain=%q ix=%q dataplane=%q api=%q peer-api=%q\n",
+			checked.ConfigPath,
+			checked.DomainID,
+			checked.IXID,
+			checked.DataplaneMode,
+			checked.APIAddr,
+			checked.PeerAPIAddr,
+		)
 		return
 	}
 

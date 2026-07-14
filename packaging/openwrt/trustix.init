@@ -138,9 +138,9 @@ start_service() {
 stop_service() {
 	local requested="${1:-}"
 	if [ -n "$requested" ]; then
-		procd_kill "$NAME" "$requested" 2>/dev/null || true
+		procd_kill "$NAME" "$requested" >/dev/null 2>&1 || true
 	else
-		procd_kill "$NAME" 2>/dev/null || true
+		procd_kill "$NAME" >/dev/null 2>&1 || true
 	fi
 	sleep 1
 	trustix_for_each_instance trustix_cleanup_dataplane "$requested"

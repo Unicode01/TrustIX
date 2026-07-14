@@ -23,7 +23,8 @@ usage() {
 usage: scripts/trustix-update.sh [options]
 
 Updates an existing TrustIX systemd/OpenWrt installation without rewriting config,
-certificates, or data directories.
+certificates, or data directories. Every discovered instance is checked with the
+candidate trustixd before files are replaced. Failed restarts are rolled back.
 
 Package input:
   --release-url URL         download a TrustIX release tarball
@@ -50,7 +51,7 @@ Install/restart:
   --sysconfdir DIR          config dir for OpenWrt instance detection (default: /etc/trustix)
   --docdir DIR              docs dir (default: /usr/share/doc/trustix)
   --backup-dir DIR          backup dir (default: /var/backups/trustix/update-TIMESTAMP)
-  --no-backup               do not copy old binaries/unit before replacing
+  --no-backup               do not keep a persistent backup (temporary rollback snapshot remains enabled)
   --no-sudo                 run install commands without sudo
   --json                    print machine-readable summary
   -h, --help                show this help
@@ -163,15 +164,17 @@ wait_systemd_unit_active() {
         break
       fi
     done
-    if [[ "$state" == "active" && ( -z "$baseline_restarts" || -z "$restarts" || "$restarts" == "$baseline_restarts" ) && "${exec_status:-0}" == "0" ]]; then
-      return 0
+    if [[ "$state" == "active" && "${exec_status:-0}" == "0" ]]; then
+      if [[ -z "$baseline_restarts" || -z "$restarts" || "$restarts" == "$baseline_restarts" ]]; then
+        return 0
+      fi
     fi
   fi
   run_root systemctl show "$unit" --property=ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,NRestarts >&2 || true
   run_root systemctl --no-pager --full status "$unit" >&2 || true
   run_root journalctl -u "$unit" --no-pager -n 80 >&2 || true
-  run_root systemctl stop "$unit" >/dev/null 2>&1 || true
-  die "systemd unit did not stay active: ${unit} (state=${state:-unknown}, result=${result:-unknown}, exec_status=${exec_status:-unknown}, restarts=${restarts:-unknown}, baseline_restarts=${baseline_restarts:-unknown})"
+  log "ERROR: systemd unit did not stay active: ${unit} (state=${state:-unknown}, result=${result:-unknown}, exec_status=${exec_status:-unknown}, restarts=${restarts:-unknown}, baseline_restarts=${baseline_restarts:-unknown})"
+  return 1
 }
 
 copy_file_with_mode() {
@@ -308,6 +311,7 @@ repo_ref="${TRUSTIX_UPDATE_REF:-main}"
 release_url="${TRUSTIX_UPDATE_RELEASE_URL:-}"
 tarball="${TRUSTIX_UPDATE_TARBALL:-}"
 work_dir="${TRUSTIX_UPDATE_WORKDIR:-}"
+work_dir_owned=0
 goarch="$(normalize_goarch "${GOARCH:-$(host_goarch)}")"
 kdir="${KDIR:-}"
 build_bpf="${TRUSTIX_UPDATE_BUILD_BPF:-1}"
@@ -326,6 +330,20 @@ backup_dir="${TRUSTIX_UPDATE_BACKUP_DIR:-}"
 backup=1
 sudo_cmd="${TRUSTIX_UPDATE_SUDO:-sudo}"
 json=0
+configured_instances=()
+preflight_instances=()
+restarted_instances=()
+declare -A configured_instance_seen=()
+declare -A preflight_instance_seen=()
+transaction_started=0
+transaction_committed=0
+transaction_rolling_back=0
+rollback_failed=0
+services_touched=0
+transaction_paths=()
+transaction_modes=()
+transaction_existed=()
+transaction_snapshots=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -372,6 +390,7 @@ fi
 apply_target_defaults
 if [[ -z "$work_dir" ]]; then
   work_dir="$(mktemp -d /tmp/trustix-update.XXXXXX)"
+  work_dir_owned=1
 else
   mkdir -p "$work_dir"
 fi
@@ -461,18 +480,19 @@ backup_path() {
 
 backup_file_if_present() {
   local path="$1"
+  local mode="$2"
   [[ "$backup" == "1" ]] || return 0
   [[ -e "$path" ]] || return 0
   local dst
   dst="$(backup_path "$path")"
-  copy_file_with_mode "$path" "$dst" 0644
+  copy_file_with_mode "$path" "$dst" "$mode"
 }
 
 install_binary() {
   local src="$1"
   local dst="${bindir}/$(basename "$src")"
   local tmp="${dst}.trustix-update.$$"
-  backup_file_if_present "$dst"
+  backup_file_if_present "$dst" 0755
   run_root mkdir -p "$bindir"
   copy_file_with_mode "$src" "$tmp" 0755
   run_root mv -f "$tmp" "$dst"
@@ -483,7 +503,7 @@ install_regular_file() {
   local dst="$2"
   local mode="$3"
   local tmp="${dst}.trustix-update.$$"
-  backup_file_if_present "$dst"
+  backup_file_if_present "$dst" "$mode"
   copy_file_with_mode "$src" "$tmp" "$mode"
   run_root mv -f "$tmp" "$dst"
 }
@@ -511,47 +531,360 @@ install_package() {
       die "package is missing packaging/openwrt/trustix.init"
     fi
   fi
-  if [[ -d "${package_dir}/docs" ]]; then
-    run_root mkdir -p "$docdir"
-    if command -v rsync >/dev/null 2>&1; then
-      run_root rsync -a --delete "${package_dir}/docs/" "${docdir}/"
-    else
-      run_root cp -R "${package_dir}/docs/." "$docdir/"
-    fi
+}
+
+install_docs() {
+  local package_dir="$1"
+  [[ -d "${package_dir}/docs" ]] || return 0
+  run_root mkdir -p "$docdir"
+  if command -v rsync >/dev/null 2>&1; then
+    run_root rsync -a --delete "${package_dir}/docs/" "${docdir}/"
+  else
+    run_root cp -R "${package_dir}/docs/." "$docdir/"
   fi
 }
 
-detect_instances() {
-  [[ ${#instances[@]} -eq 0 ]] || return 0
-  if [[ "$service_manager" == "openwrt" ]]; then
-    local env_file name
-    for env_file in "${sysconfdir}"/*.env; do
-      [[ -f "$env_file" ]] || continue
-      name="$(basename "$env_file")"
-      name="${name%.env}"
-      [[ -n "$name" ]] && instances+=("$name")
-    done
-    return 0
+add_configured_instance() {
+  local name="$1"
+  [[ -n "$name" ]] || return 0
+  if [[ -z "${configured_instance_seen[$name]+x}" ]]; then
+    configured_instance_seen["$name"]=1
+    configured_instances+=("$name")
   fi
-  command -v systemctl >/dev/null 2>&1 || return 0
-  local units unit name
-  units="$(systemctl list-units --full --all --plain --no-legend 'trustixd@*.service' 2>/dev/null || true)"
+}
+
+add_preflight_instance() {
+  local name="$1"
+  [[ -n "$name" ]] || return 0
+  if [[ -z "${preflight_instance_seen[$name]+x}" ]]; then
+    preflight_instance_seen["$name"]=1
+    preflight_instances+=("$name")
+  fi
+}
+
+discover_instances() {
+  local env_file name units unit
+  for env_file in "${sysconfdir}"/*.env; do
+    [[ -f "$env_file" ]] || continue
+    name="$(basename "$env_file")"
+    add_configured_instance "${name%.env}"
+  done
+  if [[ "$service_manager" == "systemd" ]] && command -v systemctl >/dev/null 2>&1; then
+    units="$(systemctl list-units --full --all --plain --no-legend 'trustixd@*.service' 2>/dev/null || true)"
+    units+=$'\n'
+    units+="$(systemctl list-unit-files --full --no-legend 'trustixd@*.service' 2>/dev/null || true)"
+  else
+    units=""
+  fi
   while IFS= read -r unit; do
     [[ -n "$unit" ]] || continue
     unit="${unit%% *}"
     [[ "$unit" == trustixd@*.service ]] || continue
     name="${unit#trustixd@}"
     name="${name%.service}"
-    [[ -n "$name" ]] && instances+=("$name")
+    add_configured_instance "$name"
   done <<<"$units"
+
+  if [[ ${#instances[@]} -eq 0 ]]; then
+    instances=("${configured_instances[@]}")
+  fi
+  for name in "${configured_instances[@]}"; do
+    add_preflight_instance "$name"
+  done
+  for name in "${instances[@]}"; do
+    add_preflight_instance "$name"
+  done
 }
+
+loaded_config=""
+loaded_data_dir=""
+loaded_api_addr=""
+loaded_peer_api_addr=""
+loaded_dataplane=""
+loaded_extra_args_text=""
+loaded_extra_args=()
+
+apply_extra_arg_overrides() {
+  local i arg
+  for ((i = 0; i < ${#loaded_extra_args[@]}; i++)); do
+    arg="${loaded_extra_args[$i]}"
+    case "$arg" in
+      -config|-data-dir|-api|-peer-api|-dataplane)
+        ((i + 1 < ${#loaded_extra_args[@]})) || {
+          log "ERROR: ${arg} in TRUSTIX_EXTRA_ARGS requires a value"
+          return 1
+        }
+        case "$arg" in
+          -config) loaded_config="${loaded_extra_args[$((i + 1))]}" ;;
+          -data-dir) loaded_data_dir="${loaded_extra_args[$((i + 1))]}" ;;
+          -api) loaded_api_addr="${loaded_extra_args[$((i + 1))]}" ;;
+          -peer-api) loaded_peer_api_addr="${loaded_extra_args[$((i + 1))]}" ;;
+          -dataplane) loaded_dataplane="${loaded_extra_args[$((i + 1))]}" ;;
+        esac
+        ((i += 1))
+        ;;
+      -config=*) loaded_config="${arg#*=}" ;;
+      -data-dir=*) loaded_data_dir="${arg#*=}" ;;
+      -api=*) loaded_api_addr="${arg#*=}" ;;
+      -peer-api=*) loaded_peer_api_addr="${arg#*=}" ;;
+      -dataplane=*) loaded_dataplane="${arg#*=}" ;;
+      -version|--version|-version=*|--version=*|-check-config|--check-config|-check-config=*|--check-config=*|-cleanup-dataplane|--cleanup-dataplane|-cleanup-dataplane=*|--cleanup-dataplane=*|-cleanup-dataplane-dry-run|--cleanup-dataplane-dry-run|-cleanup-dataplane-dry-run=*|--cleanup-dataplane-dry-run=*|-repair-dataplane|--repair-dataplane|-repair-dataplane=*|--repair-dataplane=*)
+        log "ERROR: operational flag ${arg} is not valid in TRUSTIX_EXTRA_ARGS"
+        return 1
+        ;;
+    esac
+  done
+}
+
+load_instance_settings() {
+  local instance="$1"
+  local env_file="${sysconfdir}/${instance}.env"
+  local TRUSTIX_CONFIG="${sysconfdir}/${instance}.yaml"
+  local TRUSTIX_DATA_DIR
+  local TRUSTIX_API_ADDR="127.0.0.1:8787"
+  local TRUSTIX_PEER_API_ADDR="0.0.0.0:9443"
+  local TRUSTIX_DATAPLANE="auto"
+  local TRUSTIX_EXTRA_ARGS=""
+  if [[ "$service_manager" == "openwrt" ]]; then
+    TRUSTIX_DATA_DIR="${sysconfdir}/state/${instance}"
+  else
+    TRUSTIX_DATA_DIR="/var/lib/trustix/${instance}"
+  fi
+  if [[ -f "$env_file" ]]; then
+    set +u
+    # shellcheck disable=SC1090
+    . "$env_file"
+    set -u
+  fi
+  loaded_config="$TRUSTIX_CONFIG"
+  loaded_data_dir="$TRUSTIX_DATA_DIR"
+  loaded_api_addr="$TRUSTIX_API_ADDR"
+  loaded_peer_api_addr="$TRUSTIX_PEER_API_ADDR"
+  loaded_dataplane="$TRUSTIX_DATAPLANE"
+  loaded_extra_args_text="$TRUSTIX_EXTRA_ARGS"
+  loaded_extra_args=()
+  if [[ -n "$loaded_extra_args_text" ]]; then
+    read -r -a loaded_extra_args <<<"$loaded_extra_args_text"
+  fi
+  apply_extra_arg_overrides
+}
+
+check_instance_config() (
+  set -Eeuo pipefail
+  set -a
+  load_instance_settings "$1"
+  set +a
+  local candidate="$2"
+  [[ -f "$loaded_config" ]] || {
+    log "ERROR: instance $1 config not found: ${loaded_config}"
+    return 1
+  }
+  log "preflight instance=$1 config=${loaded_config}"
+  "$candidate" \
+    -config "$loaded_config" \
+    -data-dir "$loaded_data_dir" \
+    -api "$loaded_api_addr" \
+    -peer-api "$loaded_peer_api_addr" \
+    -dataplane "$loaded_dataplane" \
+    -check-config \
+    "${loaded_extra_args[@]}"
+)
+
+preflight_candidate() {
+  local candidate="$1"
+  local instance
+  [[ -x "$candidate" ]] || {
+    log "ERROR: candidate trustixd is not executable: ${candidate}"
+    return 1
+  }
+  "$candidate" -version >/dev/null
+  for instance in "${preflight_instances[@]}"; do
+    if ! check_instance_config "$instance" "$candidate"; then
+      log "ERROR: candidate configuration preflight failed for instance ${instance}; installation was not modified"
+      return 1
+    fi
+  done
+}
+
+transaction_snapshot_path() {
+  local index="$1"
+  printf '%s/transaction/files/%s\n' "$work_dir" "$index"
+}
+
+snapshot_transaction_file() {
+  local path="$1"
+  local mode="$2"
+  local index="${#transaction_paths[@]}"
+  local snapshot
+  snapshot="$(transaction_snapshot_path "$index")"
+  transaction_paths+=("$path")
+  transaction_modes+=("$mode")
+  transaction_snapshots+=("$snapshot")
+  if [[ -e "$path" ]]; then
+    transaction_existed+=(1)
+    copy_file_with_mode "$path" "$snapshot" 0600
+  else
+    transaction_existed+=(0)
+  fi
+}
+
+prepare_transaction_snapshot() {
+  local package_dir="$1"
+  local name
+  run_root mkdir -p "${work_dir}/transaction/files"
+  for name in trustixd trustixctl trustix-ca trustix-device trustix-iptunnel-smoke; do
+    if [[ -f "${package_dir}/bin/${name}" ]]; then
+      snapshot_transaction_file "${bindir}/${name}" 0755
+    fi
+  done
+  case "$service_manager" in
+    systemd)
+      if [[ -f "${package_dir}/packaging/systemd/trustixd@.service" ]]; then
+        snapshot_transaction_file "${unitdir}/trustixd@.service" 0644
+      fi
+      ;;
+    openwrt)
+      snapshot_transaction_file "${initdir}/trustix" 0755
+      ;;
+  esac
+}
+
+restore_transaction_files() {
+  local i path mode snapshot failed=0
+  for ((i = ${#transaction_paths[@]} - 1; i >= 0; i--)); do
+    path="${transaction_paths[$i]}"
+    mode="${transaction_modes[$i]}"
+    snapshot="${transaction_snapshots[$i]}"
+    run_root rm -f "${path}.trustix-update.$$" >/dev/null 2>&1 || true
+    if [[ "${transaction_existed[$i]}" == "1" ]]; then
+      local tmp="${path}.trustix-rollback.$$"
+      if copy_file_with_mode "$snapshot" "$tmp" "$mode" && run_root mv -f "$tmp" "$path"; then
+        :
+      else
+        log "ERROR: could not restore ${path}"
+        failed=1
+      fi
+    elif ! run_root rm -f "$path"; then
+      log "ERROR: could not remove newly installed ${path}"
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
+listener_probe() {
+  local address="$1"
+  local host port port_number port_hex table
+  if [[ "$address" == \[*\]:* ]]; then
+    host="${address#\[}"
+    host="${host%%\]*}"
+    port="${address##*]:}"
+  else
+    host="${address%:*}"
+    port="${address##*:}"
+  fi
+  [[ -n "$port" && "$port" != "$address" && "$port" =~ ^[0-9]+$ ]] || return 1
+  port_number=$((10#$port))
+  ((port_number >= 1 && port_number <= 65535)) || return 1
+  printf -v port_hex '%04X' "$port_number"
+  for table in /proc/net/tcp /proc/net/tcp6; do
+    [[ -r "$table" ]] || continue
+    if awk -v suffix=":${port_hex}" '
+      NR > 1 && toupper($4) == "0A" && toupper($2) ~ suffix "$" { found = 1 }
+      END { exit found ? 0 : 1 }
+    ' "$table"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+process_matches_instance_config() {
+  local config_path="$1"
+  local expected_binary="${bindir}/trustixd"
+  local proc first arg expect_config config_matches
+  [[ -x "$expected_binary" ]] || return 1
+  for proc in /proc/[0-9]*; do
+    [[ -r "${proc}/cmdline" ]] || continue
+    first=""
+    expect_config=0
+    config_matches=0
+    while IFS= read -r -d '' arg; do
+      if [[ -z "$first" ]]; then
+        first="$arg"
+        [[ "${first##*/}" == "trustixd" ]] || break
+      fi
+      if [[ "$expect_config" == "1" ]]; then
+        if [[ "$arg" == "$config_path" ]]; then
+          config_matches=1
+          break
+        fi
+        expect_config=0
+      fi
+      case "$arg" in
+        -config) expect_config=1 ;;
+        -config=*)
+          if [[ "${arg#*=}" == "$config_path" ]]; then
+            config_matches=1
+            break
+          fi
+          ;;
+      esac
+    done <"${proc}/cmdline"
+    if [[ "$config_matches" == "1" && -e "${proc}/exe" && "${proc}/exe" -ef "$expected_binary" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+wait_instance_api() (
+  local instance="$1"
+  local i
+  load_instance_settings "$instance"
+  for i in {1..15}; do
+    if process_matches_instance_config "$loaded_config" && listener_probe "$loaded_api_addr"; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "ERROR: installed daemon process or management API is not healthy for instance ${instance}: ${loaded_api_addr}"
+  return 1
+)
+
+wait_openwrt_instance_healthy() (
+  local instance="$1"
+  local i
+  load_instance_settings "$instance"
+  for i in {1..15}; do
+    if process_matches_instance_config "$loaded_config" && listener_probe "$loaded_api_addr"; then
+      break
+    fi
+    sleep 1
+  done
+  if ! process_matches_instance_config "$loaded_config" || ! listener_probe "$loaded_api_addr"; then
+    log "ERROR: OpenWrt instance did not start or listen: ${instance} api=${loaded_api_addr}"
+    run_root "${initdir}/trustix" status "$instance" >&2 || true
+    command -v logread >/dev/null 2>&1 && logread | grep -i 'trustix' | tail -n 80 >&2 || true
+    return 1
+  fi
+  for i in {1..5}; do
+    sleep 1
+    if ! process_matches_instance_config "$loaded_config" || ! listener_probe "$loaded_api_addr"; then
+      log "ERROR: OpenWrt instance did not remain healthy: ${instance} api=${loaded_api_addr}"
+      return 1
+    fi
+  done
+)
 
 restart_instances() {
   [[ "$restart" == "1" ]] || return 0
-  detect_instances
   case "$service_manager" in
     systemd)
-      command -v systemctl >/dev/null 2>&1 || die "systemctl not found; rerun with --no-restart"
+      command -v systemctl >/dev/null 2>&1 || {
+        log "ERROR: systemctl not found; rerun with --no-restart"
+        return 1
+      }
       run_root systemctl daemon-reload
       if [[ ${#instances[@]} -eq 0 ]]; then
         log "no trustixd@*.service instance detected; installed binaries only"
@@ -559,31 +892,120 @@ restart_instances() {
       fi
       local instance
       for instance in "${instances[@]}"; do
+        services_touched=1
         log "restart trustixd@${instance}.service"
-        run_root systemctl restart "trustixd@${instance}.service"
-        wait_systemd_unit_active "trustixd@${instance}.service"
+        if ! run_root systemctl restart "trustixd@${instance}.service"; then
+          run_root systemctl --no-pager --full status "trustixd@${instance}.service" >&2 || true
+          return 1
+        fi
+        wait_systemd_unit_active "trustixd@${instance}.service" || return 1
+        wait_instance_api "$instance" || return 1
+        restarted_instances+=("$instance")
       done
       ;;
     openwrt)
-      [[ -x "${initdir}/trustix" ]] || die "OpenWrt init script not found: ${initdir}/trustix"
+      [[ -x "${initdir}/trustix" ]] || {
+        log "ERROR: OpenWrt init script not found: ${initdir}/trustix"
+        return 1
+      }
       if [[ ${#instances[@]} -eq 0 ]]; then
         log "no ${sysconfdir}/*.env instance detected; installed binaries only"
         return 0
       fi
       local instance
       for instance in "${instances[@]}"; do
+        services_touched=1
         log "restart trustix:${instance}"
-        run_root "${initdir}/trustix" restart "$instance"
+        run_root "${initdir}/trustix" restart "$instance" || return 1
+        wait_openwrt_instance_healthy "$instance" || return 1
+        restarted_instances+=("$instance")
       done
       ;;
   esac
 }
 
+rollback_transaction() {
+  [[ "$transaction_started" == "1" && "$transaction_committed" != "1" ]] || return 0
+  [[ "$transaction_rolling_back" != "1" ]] || return 1
+  transaction_rolling_back=1
+  local failed=0 instance
+  log "update failed; restoring previous TrustIX installation"
+  restore_transaction_files || failed=1
+  if [[ "$service_manager" == "systemd" ]]; then
+    run_root systemctl daemon-reload || failed=1
+  fi
+  if [[ "$services_touched" == "1" ]]; then
+    for instance in "${instances[@]}"; do
+      case "$service_manager" in
+        systemd)
+          log "rollback restart trustixd@${instance}.service"
+          run_root systemctl restart "trustixd@${instance}.service" || {
+            failed=1
+            continue
+          }
+          wait_systemd_unit_active "trustixd@${instance}.service" || failed=1
+          wait_instance_api "$instance" || failed=1
+          ;;
+        openwrt)
+          log "rollback restart trustix:${instance}"
+          run_root "${initdir}/trustix" restart "$instance" || {
+            failed=1
+            continue
+          }
+          wait_openwrt_instance_healthy "$instance" || failed=1
+          ;;
+      esac
+    done
+  fi
+  if [[ "$failed" == "0" ]]; then
+    log "rollback complete; previous version is running"
+  else
+    log "ERROR: rollback was incomplete; transaction snapshot kept at ${work_dir}/transaction"
+    if [[ "$backup" == "1" ]]; then
+      log "persistent backup: ${backup_dir}"
+    fi
+  fi
+  return "$failed"
+}
+
+cleanup_update_workdir() {
+  [[ "$work_dir_owned" == "1" ]] || return 0
+  case "$work_dir" in
+    /tmp/trustix-update.*) run_root rm -rf -- "$work_dir" ;;
+    *) log "ERROR: refusing to remove unexpected update work dir: ${work_dir}"; return 1 ;;
+  esac
+}
+
+update_exit_trap() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  if [[ "$transaction_started" == "1" && "$transaction_committed" != "1" ]]; then
+    rollback_transaction || rollback_failed=1
+    [[ "$rc" != "0" ]] || rc=1
+  fi
+  if [[ "$rollback_failed" == "1" ]]; then
+    log "preserving update work dir for manual recovery: ${work_dir}"
+  else
+    cleanup_update_workdir || true
+  fi
+  exit "$rc"
+}
+
 package_dir=""
+trap update_exit_trap EXIT
 prepare_tarball
 package_dir="$(extract_package)"
+discover_instances
+preflight_candidate "${package_dir}/bin/trustixd"
+prepare_transaction_snapshot "$package_dir"
+transaction_started=1
 install_package "$package_dir"
 restart_instances
+transaction_committed=1
+if ! install_docs "$package_dir"; then
+  log "WARNING: runtime update succeeded but documentation installation failed"
+fi
 
 if [[ "$json" == "1" ]]; then
   printf '{'
@@ -596,9 +1018,17 @@ if [[ "$json" == "1" ]]; then
     printf '"unit":"%s",' "$(json_escape "${unitdir}/trustixd@.service")"
   fi
   printf '"backup_dir":"%s",' "$(json_escape "$backup_dir")"
+  printf '"preflighted":['
+  first=1
+  for instance in "${preflight_instances[@]}"; do
+    if [[ "$first" == "0" ]]; then printf ','; fi
+    first=0
+    printf '"%s"' "$(json_escape "$instance")"
+  done
+  printf '],'
   printf '"restarted":['
   first=1
-  for instance in "${instances[@]}"; do
+  for instance in "${restarted_instances[@]}"; do
     if [[ "$first" == "0" ]]; then printf ','; fi
     first=0
     if [[ "$service_manager" == "openwrt" ]]; then
