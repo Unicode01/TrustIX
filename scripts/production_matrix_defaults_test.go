@@ -3542,6 +3542,73 @@ for row, path, want in cases:
 	}
 }
 
+func TestProductionTransportAuditScriptPublicProtocolAliasExemption(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+alias_commit = "f0173d53b71513dbd9b781ad65e7e2744654cc8c"
+probe = {"commit": alias_commit}
+module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
+parent = "parent-does-not-matter-for-probed-history"
+paths = [
+    "configs/lab-a.yaml",
+    "configs/lab-b.yaml",
+    "internal/config/load.go",
+    "internal/config/schema.go",
+    "internal/daemon/api.go",
+    "internal/daemon/config_api.go",
+    "internal/daemon/config_export.go",
+    "internal/daemon/datapath.go",
+    "internal/daemon/link_diagnostics.go",
+    "internal/daemon/transports_status.go",
+    "internal/transport/types.go",
+]
+for path in paths:
+    if not module.current_runtime_path_change_irrelevant(
+        {"gate_family": "secure_exp_tcp_kernel", "transport": "experimental_tcp"},
+        parent,
+        path,
+    ):
+        print(f"public protocol alias change not exempt for {path}", file=sys.stderr)
+        sys.exit(1)
+
+probe["commit"] = "1111111111111111111111111111111111111111"
+if module.current_runtime_path_change_irrelevant(
+    {"gate_family": "secure_exp_tcp_kernel", "transport": "experimental_tcp"},
+    parent,
+    "internal/config/load.go",
+):
+    print("public protocol alias exemption covered an unrelated commit", file=sys.stderr)
+    sys.exit(1)
+
+probe["commit"] = alias_commit
+if module.current_runtime_path_change_irrelevant(
+    {"gate_family": "secure_exp_tcp_kernel", "transport": "experimental_tcp"},
+    parent,
+    "internal/daemon/flows.go",
+):
+    print("public protocol alias exemption covered an unrelated path", file=sys.stderr)
+    sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("public protocol alias exemption regression failed: %v\n%s", err, output)
+	}
+}
+
 func TestProductionTransportAuditScriptVXLANCarrierFragmentScope(t *testing.T) {
 	python := requirePython3(t)
 	code := `

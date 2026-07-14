@@ -179,6 +179,44 @@ CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS = {
     # Provision output changes do not alter already-soaked datapath/runtime behavior.
     "internal/daemon/ix_provision_resource.go",
 }
+PUBLIC_PROTOCOL_ALIAS_COMMITS_BY_PATH = {
+    # f0173d5 migrates the operator-facing experimental_tcp name to tix_tcp.
+    # Runtime normalization still resolves every alias to the unchanged legacy
+    # transport identity, wire protocol, datapath, kernel ABI, and statistics.
+    "configs/lab-a.yaml": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "configs/lab-b.yaml": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "internal/config/load.go": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "internal/config/schema.go": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "internal/daemon/api.go": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "internal/daemon/config_api.go": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "internal/daemon/config_export.go": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "internal/daemon/datapath.go": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "internal/daemon/link_diagnostics.go": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "internal/daemon/transports_status.go": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+    "internal/transport/types.go": {
+        "f0173d53b71513dbd9b781ad65e7e2744654cc8c",
+    },
+}
 OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
     # 9235159 only changes the OpenWrt rx_worker_single_coalesce default behind
     # runtimeLooksLikeOpenWrt(). It does not invalidate non-OpenWrt current
@@ -1105,6 +1143,9 @@ def current_runtime_path_change_irrelevant(
     gate_class = gate_family_class(row["gate_family"])
     transport = row.get("transport", "")
     allowed_change_commits: set[str] = set()
+    allowed_commits = PUBLIC_PROTOCOL_ALIAS_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits:
+        allowed_change_commits.update(allowed_commits)
     allowed_commits = RUNTIME_GATE_ADVERTISEMENT_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class in LOW_LEVEL_RUNTIME_GATE_CLASSES:
         allowed_change_commits.update(allowed_commits)
