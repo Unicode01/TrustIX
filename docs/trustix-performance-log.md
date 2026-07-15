@@ -30,6 +30,62 @@ Current production-default evidence boundary:
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | Policy remains `datapath=tc_xdp`, but this virtio configuration reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
+## 2026-07-15
+
+<a id="2026-07-15-zaozhuang-pve-full-kmod-ha-soak"></a>
+
+### Zaozhuang PVE full-kmod active-standby HA gate
+
+The fenced active-standby full-kmod gate used disposable VM200 through VM203;
+VM100 and all 1xx guests were untouched. The candidate
+`trustix_datapath.ko` had SHA256
+`b9157cc21430601fa693c9fb3ae1fb73034fe7ef2a15bdceb8621715a878d75b`,
+srcversion `5E5AF38085790EBCCBB0F89`, and source SHA256
+`63d18e567096b31f859d1fcde966f9b16b3ef42db62e32ac41646208cdccbea7`.
+Its module selftest bitmap was `1023` with zero failures.
+
+The first HA traffic run exposed a 21.217-second black hole after takeover.
+The datapath's bounded plaintext direct-xmit destination-MAC cache retained the
+fenced master's MAC until its 30-second TTL expired, even though VRRP had moved
+the VIP and emitted gratuitous ARP. The fix registers an IPv4
+`NETEVENT_NEIGH_UPDATE` notifier and invalidates cached entries for the
+affected interface. It preserves the hot-path cache and exposes
+`tx_plaintext_direct_xmit_dst_mac_cache_invalidations` for runtime gates.
+
+The final verifier accepted a continuous 3600.417-second run with
+`errors=[]`. It alternated three complete active-host stops and three fenced
+VRRP partitions while 5 Hz gateway ping, bidirectional TCP, bidirectional UDP,
+module sampling, and PVE-state sampling remained active. Results were:
+
+| Signal | Final result |
+| --- | ---: |
+| Failovers | 6, three `host_stop` and three `vrrp_partition` |
+| Maximum readiness recovery | 7.744 seconds |
+| Maximum ping outage | 4.282 seconds |
+| TCP forward | 392/392, minimum 1.154 Gbps, average 2.810 Gbps |
+| TCP reverse | 392/392, minimum 1.842 Gbps, average 3.813 Gbps |
+| UDP forward | 392/392, minimum 196.256 Mbps |
+| UDP reverse | 392/392, minimum 185.854 Mbps |
+| Full-kmod packet delta | 173,766,777 |
+| Destination-MAC cache invalidations | 55 |
+| Neighbour misses / stale wires | 0 / 0 |
+| Kernel / pstore artifacts | 14 / 10, all empty |
+
+Remote and client boot IDs stayed stable, PVE never sampled both HA guests
+stopped, and worker stderr contained only two expected termination markers.
+This closes the post-takeover stale-MAC failure for the tested fenced
+active-standby topology; it is not evidence for unfenced active-active use.
+
+The same current datapath source was then rebuilt on a disposable Debian 13
+builder with the official OpenWrt 24.10.7 x86/64 SDK. The SDK selected kernel
+`6.6.141`; `crypto=full`, `datapath=full`, and `helpers=full` all compiled and
+packaged successfully. The resulting `trustix_datapath.ko` SHA256 was
+`97336dabe83bd9bccc33ae7df66cd0b361e1445dbece7113d42056a1434f4c77`
+and the kmod package SHA256 was
+`2aeb170bb1e860c0d0f0260be41205f6910bb363a387c05f36efdd0eb344fbd5`.
+This is compile compatibility evidence for the HA cache fix; runtime support
+remains bounded by the separately recorded OpenWrt-Debian production gates.
+
 ## 2026-07-14
 
 <a id="2026-07-12-zaozhuang-pve-0ceffe6-final-production"></a>

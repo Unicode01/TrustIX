@@ -146,6 +146,20 @@ Use `trustix-ha.sh status --instance <name>`, `/readyz`, Prometheus
 `trustix_ready`, keepalived state, and the fencing system's audit log as the
 minimum alerting surface.
 
+For a disposable PVE topology that uses full plaintext kernel datapaths, run
+`scripts/pve-ha-full-kmod-soak.sh` and gate its evidence with
+`scripts/pve-ha-full-kmod-soak-verify.py`. The runner refuses VM IDs below 200,
+requires a pinned module SHA256 and srcversion, serializes runs with a
+non-inherited host lock, and tags every remote load process for bounded cleanup.
+The default one-hour matrix alternates three complete active-VM stops with
+three fenced VRRP partitions while 5 Hz ping, bidirectional TCP, and
+bidirectional UDP remain active. The verifier requires continuous traffic,
+module-counter, and PVE-state coverage; both failure kinds; bounded readiness
+and ping outages; destination-MAC cache invalidation after each takeover;
+stable remote/client boot IDs; matching module selftests and identity; and
+empty kernel-fault and pstore artifacts. This is a destructive lab gate, not a
+script to run against production VM IDs.
+
 ## Validation record
 
 On 2026-07-15, the candidate helper was validated on two disposable Debian 13
@@ -177,3 +191,26 @@ The verified matrix covered:
 This run used `dataplane=noop` to isolate HA ownership and failure semantics. It
 does not replace the separately recorded kernel-dataplane performance and soak
 evidence.
+
+The full plaintext kernel datapath was then exercised in the same fenced
+active-standby topology. An initial run measured a 21.217-second traffic black
+hole after takeover: the datapath's destination-MAC cache still held the
+fenced master's MAC until its 30-second TTL expired. The candidate fix
+subscribes to IPv4 neighbour updates and invalidates the bounded cache for the
+affected interface when VRRP/GARP changes the neighbour entry.
+
+The fixed module had SHA256
+`b9157cc21430601fa693c9fb3ae1fb73034fe7ef2a15bdceb8621715a878d75b`,
+srcversion `5E5AF38085790EBCCBB0F89`, and passed all module selftests. The final
+3600.417-second verifier run alternated three complete host stops with three
+fenced VRRP partitions. All 392 forward and 392 reverse TCP samples and all
+392 forward and 392 reverse UDP samples passed. Maximum readiness recovery
+was 7.744 seconds and maximum 5 Hz ping outage was 4.282 seconds. The module
+processed 173,766,777 packets, recorded 55 destination-MAC cache
+invalidations, and recorded zero neighbour misses or stale wires. Remote and
+client boot IDs remained stable; all 14 kernel-fault artifacts and all 10
+pstore artifacts were empty. The structured verifier returned `errors=[]`.
+
+This validates full-kmod HA only with the documented external fencing and
+state-sync contract. It does not permit two daemons with the same IX identity
+to run concurrently and does not turn VRRP into a consensus protocol.

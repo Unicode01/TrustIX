@@ -199,8 +199,29 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 	}
 	selftest := daemonTestSourceFunctionBody(t, source, "trustix_datapath_selftest_tx_plaintext_mac_cache")
 	if !strings.Contains(selftest, "for (i = 0; i < 16; i++)") ||
-		!strings.Contains(selftest, "plan.outer_protocol = (i & 1) ? IPPROTO_TCP : IPPROTO_UDP") {
+		!strings.Contains(selftest, "plan.outer_protocol = (i & 1) ? IPPROTO_TCP : IPPROTO_UDP") ||
+		!strings.Contains(selftest, "trustix_datapath_tx_plaintext_mac_cache_invalidate(cache, 10) != 1") {
 		t.Fatalf("TX plaintext MAC cache selftest does not retain mixed session-pool tuples")
+	}
+	for _, want := range []string{
+		"#include <net/netevent.h>",
+		"register_netevent_notifier(&trustix_datapath_netevent_notifier)",
+		"unregister_netevent_notifier(&trustix_datapath_netevent_notifier)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("TX plaintext MAC cache neighbour invalidation missing %q", want)
+		}
+	}
+	netevent := daemonTestSourceFunctionBody(t, source, "trustix_datapath_netevent")
+	for _, want := range []string{
+		"NETEVENT_NEIGH_UPDATE",
+		"neigh->tbl != &arp_tbl",
+		"neigh->dev->ifindex",
+		"trustix_datapath_tx_plaintext_dst_mac_cache_invalidate_ifindex",
+	} {
+		if !strings.Contains(netevent, want) {
+			t.Fatalf("TX plaintext MAC cache neighbour callback missing %q", want)
+		}
 	}
 }
 

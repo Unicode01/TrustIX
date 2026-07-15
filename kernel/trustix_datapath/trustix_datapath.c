@@ -45,6 +45,7 @@
 #include <net/gso.h>
 #endif
 #include <net/ip.h>
+#include <net/netevent.h>
 #include <net/net_namespace.h>
 #include <net/neighbour.h>
 #include <net/route.h>
@@ -2386,6 +2387,13 @@ module_param_named(tx_plaintext_direct_xmit_dst_mac_cache_misses,
 		   ullong, 0444);
 MODULE_PARM_DESC(tx_plaintext_direct_xmit_dst_mac_cache_misses,
 		 "TrustIX plaintext TX direct xmit destination MAC cache misses");
+
+static unsigned long long trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_invalidations;
+module_param_named(tx_plaintext_direct_xmit_dst_mac_cache_invalidations,
+		   trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_invalidations,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_direct_xmit_dst_mac_cache_invalidations,
+		 "TrustIX plaintext TX destination MAC cache entries invalidated after IPv4 neighbour updates");
 
 static unsigned long long trustix_datapath_tx_plaintext_hash_tx_queue_sets;
 module_param_named(tx_plaintext_hash_tx_queue_sets,
@@ -6474,16 +6482,57 @@ static void trustix_datapath_tx_plaintext_dst_mac_cache_store(
 		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, flags);
 }
 
+static unsigned int trustix_datapath_tx_plaintext_mac_cache_invalidate(
+	struct trustix_datapath_tx_plaintext_mac_cache *cache, int ifindex)
+{
+	unsigned int i;
+	unsigned int invalidated = 0;
+
+	if (!cache)
+		return 0;
+	if (ifindex <= 0) {
+		for (i = 0; i < ARRAY_SIZE(cache->entries); i++)
+			invalidated += cache->entries[i].valid;
+		memset(cache, 0, sizeof(*cache));
+		return invalidated;
+	}
+	for (i = 0; i < ARRAY_SIZE(cache->entries); i++) {
+		struct trustix_datapath_tx_plaintext_mac_cache_entry *entry =
+			&cache->entries[i];
+
+		if (!entry->valid || entry->ifindex != ifindex)
+			continue;
+		entry->valid = false;
+		invalidated++;
+	}
+	return invalidated;
+}
+
 static void trustix_datapath_tx_plaintext_dst_mac_cache_invalidate(void)
 {
 	unsigned long flags;
 
 	write_seqlock_irqsave(
 		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, flags);
-	memset(&trustix_datapath_tx_plaintext_seq_mac_cache, 0,
-	       sizeof(trustix_datapath_tx_plaintext_seq_mac_cache));
+	trustix_datapath_tx_plaintext_mac_cache_invalidate(
+		&trustix_datapath_tx_plaintext_seq_mac_cache, 0);
 	write_sequnlock_irqrestore(
 		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, flags);
+}
+
+static unsigned int
+trustix_datapath_tx_plaintext_dst_mac_cache_invalidate_ifindex(int ifindex)
+{
+	unsigned long flags;
+	unsigned int invalidated;
+
+	write_seqlock_irqsave(
+		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, flags);
+	invalidated = trustix_datapath_tx_plaintext_mac_cache_invalidate(
+		&trustix_datapath_tx_plaintext_seq_mac_cache, ifindex);
+	write_sequnlock_irqrestore(
+		&trustix_datapath_tx_plaintext_seq_mac_cache_lock, flags);
+	return invalidated;
 }
 
 static int
@@ -15321,6 +15370,7 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_direct_xmit_neigh_misses = 0;
 	trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_hits = 0;
 	trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_misses = 0;
+	trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_invalidations = 0;
 	trustix_datapath_tx_plaintext_hash_tx_queue_sets = 0;
 	trustix_datapath_tx_plaintext_hash_tx_queue_fallbacks = 0;
 	trustix_datapath_tx_plaintext_hash_tx_queue_q0 = 0;
@@ -15654,6 +15704,27 @@ static int trustix_datapath_netdev_event(struct notifier_block *nb,
 
 static struct notifier_block trustix_datapath_netdev_notifier = {
 	.notifier_call = trustix_datapath_netdev_event,
+};
+
+static int trustix_datapath_netevent(struct notifier_block *nb,
+				     unsigned long event, void *ptr)
+{
+	struct neighbour *neigh = ptr;
+	unsigned int invalidated;
+
+	if (event != NETEVENT_NEIGH_UPDATE || !neigh || !neigh->dev ||
+	    neigh->tbl != &arp_tbl)
+		return NOTIFY_DONE;
+	invalidated =
+		trustix_datapath_tx_plaintext_dst_mac_cache_invalidate_ifindex(
+			neigh->dev->ifindex);
+	trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_invalidations +=
+		invalidated;
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block trustix_datapath_netevent_notifier = {
+	.notifier_call = trustix_datapath_netevent,
 };
 
 static int
@@ -16826,6 +16897,38 @@ static int trustix_datapath_selftest_tx_plaintext_mac_cache(void)
 	if (!expired || trustix_datapath_tx_plaintext_mac_cache_lookup(
 				cache, dev, &plan, addr))
 		ret = -EINVAL;
+	if (ret)
+		goto out;
+	trustix_datapath_tx_plaintext_mac_cache_store(cache, dev, &plan, mac);
+	if (trustix_datapath_tx_plaintext_mac_cache_invalidate(
+		    cache, dev->ifindex) != 16) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (trustix_datapath_tx_plaintext_mac_cache_lookup(
+		    cache, dev, &plan, addr))
+		ret = -EINVAL;
+	if (ret)
+		goto out;
+	dev->ifindex = 10;
+	trustix_datapath_tx_plaintext_mac_cache_store(cache, dev, &plan, mac);
+	dev->ifindex = 11;
+	trustix_datapath_tx_plaintext_mac_cache_store(cache, dev, &plan, mac);
+	if (trustix_datapath_tx_plaintext_mac_cache_invalidate(cache, 10) != 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	dev->ifindex = 10;
+	if (trustix_datapath_tx_plaintext_mac_cache_lookup(
+		    cache, dev, &plan, addr)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	dev->ifindex = 11;
+	if (!trustix_datapath_tx_plaintext_mac_cache_lookup(
+		    cache, dev, &plan, addr) ||
+	    !ether_addr_equal(addr, mac))
+		ret = -EINVAL;
 out:
 	kfree(dev);
 	kfree(cache);
@@ -17735,6 +17838,13 @@ static int __init trustix_datapath_init(void)
 		trustix_datapath_free_state();
 		goto free_pcpu_mac_cache;
 	}
+	ret = register_netevent_notifier(&trustix_datapath_netevent_notifier);
+	if (ret) {
+		unregister_netdevice_notifier(&trustix_datapath_netdev_notifier);
+		misc_deregister(&trustix_datapath_miscdev);
+		trustix_datapath_free_state();
+		goto free_pcpu_mac_cache;
+	}
 	return ret;
 
 free_pcpu_mac_cache:
@@ -17744,6 +17854,7 @@ free_pcpu_mac_cache:
 
 static void __exit trustix_datapath_exit(void)
 {
+	unregister_netevent_notifier(&trustix_datapath_netevent_notifier);
 	unregister_netdevice_notifier(&trustix_datapath_netdev_notifier);
 	trustix_datapath_hook_detach_all();
 	synchronize_net();

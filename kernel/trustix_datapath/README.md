@@ -59,6 +59,12 @@ parameters and ignores the old environment variables. Current production
 `RX_WORKER` ownership is limited to the copied `netif_rx` reinjection path; any
 path that could own or transmit borrowed skbs is unavailable until it has a
 separate crash-free implementation and validation matrix.
+The plaintext direct-xmit destination-MAC cache is bounded to 64 entries with
+a 30-second TTL. It also subscribes to IPv4 neighbour updates and invalidates
+entries for the affected interface, so a VRRP gratuitous ARP cannot leave
+full-kmod traffic pinned to the fenced master's MAC until TTL expiry. The
+`tx_plaintext_direct_xmit_dst_mac_cache_invalidations` module parameter exposes
+that invalidation count for HA and datapath gates.
 The module reports `full_datapath` only when the packet ownership path is
 explicitly enabled and self-tested: load with `enable_features=128`, keep all
 first-release datapath selftests passing, and set `rx_worker_inject=1` and

@@ -43,6 +43,7 @@ Use this checklist before cutting a Linux release tarball.
 - Transactional updater smoke: `bash scripts/trustix-update-smoke.sh`
 - Encrypted backup/recovery smoke: `bash scripts/trustix-backup-smoke.sh`; confirm wrong identities and modified ciphertext fail, retention is bounded, and `validate-archive` leaves runtime/config head unchanged.
 - Active-standby lifecycle smoke: `bash scripts/trustix-ha-smoke.sh`. On disposable dual nodes, additionally validate real keepalived election, gateway/data/control VIP movement, readiness-triggered takeover, no automatic failback, state synchronization, and the actual fencing provider under partition.
+- Before promoting full plaintext kernel datapaths on an HA gateway, run the one-hour `scripts/pve-ha-full-kmod-soak.sh` matrix on disposable VM IDs 200 or greater and require `scripts/pve-ha-full-kmod-soak-verify.py` to pass without lowered readiness, ping, traffic, module, PVE-state, kernel-log, or pstore thresholds.
 - Uninstall lifecycle smoke: `bash scripts/trustix-uninstall-smoke.sh`; confirm sidecar env files are not discovered as IX instances, HA uninstall requires `--ha-offline`, backup schedules are disabled, and shared helpers/units are removed.
 - Verify an old configuration rejected by the candidate leaves binaries and services untouched.
 - Verify a candidate startup failure restores the previous binaries, systemd/OpenWrt service definition, and listening management API.

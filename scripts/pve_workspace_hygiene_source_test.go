@@ -42,6 +42,79 @@ func TestPVEPromoteRunEvidenceScriptSyntax(t *testing.T) {
 	}
 }
 
+func TestPVEHAFullKmodSoakScriptSyntax(t *testing.T) {
+	bash := requireGNUBash4(t)
+	cmd := exec.Command(bash, "-n", "pve-ha-full-kmod-soak.sh")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n pve-ha-full-kmod-soak.sh: %v\n%s", err, out)
+	}
+}
+
+func TestPVEHAFullKmodSoakScriptKeepsProductionVMsAndHostStateOutOfScope(t *testing.T) {
+	payload, err := os.ReadFile("pve-ha-full-kmod-soak.sh")
+	if err != nil {
+		t.Fatalf("read pve-ha-full-kmod-soak.sh: %v", err)
+	}
+	script := string(payload)
+	for _, want := range []string{
+		`(( value >= 200 ))`,
+		`TRUSTIX_HA_SOAK_ALLOWED_ROOT:-/root/trustix-pve-work`,
+		`case "$output" in`,
+		`"$allowed_root"/*)`,
+		`StrictHostKeyChecking=yes`,
+		`TRUSTIX_HA_SOAK_MODULE_SHA256`,
+		`TRUSTIX_HA_SOAK_MODULE_SRCVERSION`,
+		`TRUSTIX_HA_SOAK_RUN_ID`,
+		`TRUSTIX_HA_SOAK_TRAFFIC_PAUSE`,
+		`TRUSTIX_HA_SOAK_SERVER_SETTLE_SECONDS`,
+		`flock -n -o -E 75`,
+		`TRUSTIX_HA_SOAK_LOCKED_INTERNAL`,
+		`collect_tagged_pids`,
+		`cleanup_stale_remote_load`,
+		`cleanup_remote_load || die "failed to clean remote load processes"`,
+		`TRUSTIX_HA_SOAK_ROLE='server-${port}'`,
+		`rmdir "$root" 2>/dev/null || true`,
+		`rcu.*stall`,
+		`NETDEV WATCHDOG`,
+		`workqueue lockup`,
+		`2>"$stderr_file"`,
+		`remote-module.stderr.log`,
+		`qm stop "$active" --timeout 10`,
+		`iptables -I OUTPUT 1 -p 112`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("pve-ha-full-kmod-soak.sh missing safety boundary %q", want)
+		}
+	}
+	for _, bad := range []string{
+		`120.220.44.72`,
+		`5c15d166-661c-4a9d-8244-bfe45a36d136`,
+		`ZakoUnRikaLou1145`,
+		`qm stop 1`,
+		`qm destroy 1`,
+		`/etc/network/interfaces`,
+		`exec 9>`,
+	} {
+		if strings.Contains(script, bad) {
+			t.Fatalf("pve-ha-full-kmod-soak.sh contains forbidden host-specific fragment %q", bad)
+		}
+	}
+}
+
+func TestPVEHAFullKmodSoakScriptInitializesDependentLocalsSeparately(t *testing.T) {
+	payload, err := os.ReadFile("pve-ha-full-kmod-soak.sh")
+	if err != nil {
+		t.Fatalf("read pve-ha-full-kmod-soak.sh: %v", err)
+	}
+	script := string(payload)
+	if strings.Contains(script, `timeout="$2" deadline=$((SECONDS + timeout))`) {
+		t.Fatal("pve-ha-full-kmod-soak.sh references timeout in the same local declaration under set -u")
+	}
+	if got := strings.Count(script, `local deadline=$((SECONDS + timeout))`); got != 3 {
+		t.Fatalf("dependent timeout deadline declarations = %d, want 3", got)
+	}
+}
+
 func TestCrossHostConcurrentSoakScriptSyntax(t *testing.T) {
 	bash := requireGNUBash4(t)
 	cmd := exec.Command(bash, "-n", "linux-cross-host-concurrent-soak.sh")
