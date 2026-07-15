@@ -3495,6 +3495,8 @@ cases = [
     ({"gate_family": "full_kmod"}, "kernel/trustix_datapath/trustix_datapath.c", True),
     ({"gate_family": "tix_tcp_full_kmod"}, "kernel/trustix_datapath/trustix_datapath.c", True),
     ({"gate_family": "route_gso"}, "kernel/trustix_datapath/trustix_datapath.c", False),
+    ({"gate_family": "full_kmod"}, "kernel/trustix_datapath/README.md", False),
+    ({"gate_family": "userspace"}, r"kernel\trustix_datapath\README.md", False),
     ({"gate_family": "full_kmod"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", False),
     ({"gate_family": "tix_tcp_full_kmod"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", False),
     ({"gate_family": "route_gso"}, "kernel/trustix_datapath_helpers/trustix_datapath_helpers_kfuncs.c", True),
@@ -3588,6 +3590,56 @@ if module.current_runtime_path_change_irrelevant(
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("protocol naming-only exemption regression failed: %v\n%s", err, output)
+	}
+}
+
+func TestProductionTransportAuditScriptFullKmodHACacheInvalidationExemption(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+commit = "c73aee04997bad42655deafa9b1e15a3557548fd"
+parent = subprocess.check_output(["git", "rev-parse", commit + "^"], text=True).strip()
+path = "kernel/trustix_datapath/trustix_datapath.c"
+cases = [
+    ({"gate_family": "full_kmod", "transport": "udp"}, True),
+    ({"gate_family": "owdeb_full_kmod", "transport": "udp"}, True),
+    ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp"}, True),
+    ({"gate_family": "owdeb_tix_tcp_full_kmod", "transport": "tix_tcp"}, True),
+    ({"gate_family": "route_gso", "transport": "tix_tcp"}, False),
+    ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, False),
+]
+for row, want in cases:
+    got = module.current_runtime_path_change_irrelevant(row, parent, path)
+    if got != want:
+        print(f"HA neighbour invalidation scope mismatch for row={row}: got {got}, want {want}", file=sys.stderr)
+        sys.exit(1)
+
+module.path_changed_only_by = lambda resolved, normalized, allowed: (
+    "1111111111111111111111111111111111111111" in allowed
+)
+if module.current_runtime_path_change_irrelevant(
+    {"gate_family": "full_kmod", "transport": "udp"}, parent, path
+):
+    print("HA neighbour invalidation exemption covered an unrelated commit", file=sys.stderr)
+    sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("full-kmod HA neighbour invalidation exemption regression failed: %v\n%s", err, output)
 	}
 }
 

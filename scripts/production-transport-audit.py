@@ -251,6 +251,17 @@ ROUTE_GSO_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
         "add2971946b4948fbdd49d973aa94581b2e87a50",
     },
 }
+FULL_KMOD_HA_NEIGH_INVALIDATION_COMMITS_BY_PATH = {
+    # c73aee0 adds an IPv4 neighbour notifier that invalidates the bounded
+    # plaintext destination-MAC cache after VRRP/GARP takeover. It does not
+    # change steady-state lookup, packet construction, RX injection, or xmit
+    # behavior. The new cold path passed a separate 3600s mixed-traffic HA
+    # gate with six fenced failovers, so the existing per-direction throughput
+    # evidence remains applicable to full-kmod families.
+    "kernel/trustix_datapath/trustix_datapath.c": {
+        "c73aee04997bad42655deafa9b1e15a3557548fd",
+    },
+}
 TIX_TCP_ROUTE_GSO_DEVICE_GUARD_COMMITS_BY_PATH = {
     # 5af52d4 keeps route-TCP outer GSO enabled as a capability but blocks its
     # unstable virtio_net offload shape unless explicitly opted in. This only
@@ -1144,6 +1155,8 @@ def current_runtime_path_relevant(row: dict[str, str], path: str) -> bool:
     normalized = path.replace("\\", "/")
     if normalized.endswith("_test.go"):
         return False
+    if normalized.endswith(".md"):
+        return False
     if normalized.startswith("internal/webui/assets/"):
         return False
     if normalized in CURRENT_RUNTIME_TREE_PROVISION_ONLY_PATHS:
@@ -1227,6 +1240,9 @@ def current_runtime_path_change_irrelevant(
         allowed_change_commits.update(allowed_commits)
     allowed_commits = ROUTE_GSO_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and gate_class != "route_gso":
+        allowed_change_commits.update(allowed_commits)
+    allowed_commits = FULL_KMOD_HA_NEIGH_INVALIDATION_COMMITS_BY_PATH.get(normalized)
+    if allowed_commits and gate_class in FULL_DATAPATH_MODULE_GATE_CLASSES:
         allowed_change_commits.update(allowed_commits)
     allowed_commits = TIX_TCP_ROUTE_GSO_DEVICE_GUARD_COMMITS_BY_PATH.get(normalized)
     if (
