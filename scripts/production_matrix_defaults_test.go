@@ -3608,8 +3608,11 @@ if spec.loader is None:
     sys.exit(1)
 spec.loader.exec_module(module)
 
-hardening_commit = "2f673d2454ff941ddcd6620199273b486484b3f0"
-probe = {"commit": hardening_commit}
+hardening_commits = [
+    "2f673d2454ff941ddcd6620199273b486484b3f0",
+    "e29e20ad6a1062416eb93b0f091f9318babfc316",
+]
+probe = {"commit": ""}
 module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
 parent = "parent-does-not-matter-for-probed-history"
 cases = [
@@ -3618,10 +3621,12 @@ cases = [
     ({"gate_family": "full_kmod", "transport": "udp"}, "internal/daemon/datapath.go"),
     ({"gate_family": "userspace_tc", "transport": "gre"}, "internal/transport/iptunnel/manager.go"),
 ]
-for row, path in cases:
-    if not module.current_runtime_path_change_irrelevant(row, parent, path):
-        print(f"error-handling-only change was not exempt for {row=} {path=}", file=sys.stderr)
-        sys.exit(1)
+for hardening_commit in hardening_commits:
+    probe["commit"] = hardening_commit
+    for row, path in cases:
+        if not module.current_runtime_path_change_irrelevant(row, parent, path):
+            print(f"error-handling-only change {hardening_commit} was not exempt for {row=} {path=}", file=sys.stderr)
+            sys.exit(1)
 
 probe["commit"] = "1111111111111111111111111111111111111111"
 if module.current_runtime_path_change_irrelevant(

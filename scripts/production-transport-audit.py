@@ -240,6 +240,13 @@ ERROR_HANDLING_ONLY_COMMITS = {
     # remain a conservative lower bound. The restored fold is used only while
     # constructing a rejected-flow TCP reset.
     "2f673d2454ff941ddcd6620199273b486484b3f0",
+    # e29e20a completes error propagation for background transport work,
+    # dataplane setup/rollback, socket and map cleanup, HTTP responses, and
+    # deploy/bootstrap transactions. Successful packet formats, transport
+    # selection, crypto operations, BPF instructions, and kernel execution are
+    # unchanged. The UDP fallback receive timeout only bounds idle teardown and
+    # does not change active receive or transmit processing.
+    "e29e20ad6a1062416eb93b0f091f9318babfc316",
 }
 OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
     # 9235159 only changes the OpenWrt rx_worker_single_coalesce default behind
