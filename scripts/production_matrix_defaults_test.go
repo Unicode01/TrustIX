@@ -3593,6 +3593,53 @@ if module.current_runtime_path_change_irrelevant(
 	}
 }
 
+func TestProductionTransportAuditScriptErrorHandlingOnlyExemption(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+hardening_commit = "2f673d2454ff941ddcd6620199273b486484b3f0"
+probe = {"commit": hardening_commit}
+module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
+parent = "parent-does-not-matter-for-probed-history"
+cases = [
+    ({"gate_family": "userspace", "transport": "udp"}, "internal/transport/udp/udp.go"),
+    ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, "internal/dataplane/ebpf/manager_linux.go"),
+    ({"gate_family": "full_kmod", "transport": "udp"}, "internal/daemon/datapath.go"),
+    ({"gate_family": "userspace_tc", "transport": "gre"}, "internal/transport/iptunnel/manager.go"),
+]
+for row, path in cases:
+    if not module.current_runtime_path_change_irrelevant(row, parent, path):
+        print(f"error-handling-only change was not exempt for {row=} {path=}", file=sys.stderr)
+        sys.exit(1)
+
+probe["commit"] = "1111111111111111111111111111111111111111"
+if module.current_runtime_path_change_irrelevant(
+    {"gate_family": "secure_kudp", "transport": "kernel_udp"},
+    parent,
+    "internal/dataplane/ebpf/manager_linux.go",
+):
+    print("error-handling-only exemption covered an unrelated commit", file=sys.stderr)
+    sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("error-handling-only exemption regression failed: %v\n%s", err, output)
+	}
+}
+
 func TestProductionTransportAuditScriptFullKmodHACacheInvalidationExemption(t *testing.T) {
 	python := requirePython3(t)
 	code := `

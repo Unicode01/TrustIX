@@ -231,6 +231,16 @@ PROTOCOL_NAMING_ONLY_COMMITS = {
     # crypto operations, gate thresholds, and fast-path behavior are unchanged.
     "a8ec4cb0f79cc75d8b6c21ae9ab452c1464413c6",
 }
+ERROR_HANDLING_ONLY_COMMITS = {
+    # 2f673d2 makes persistence, rollback, listener/session teardown, ioctl,
+    # and deployment failures transactional and observable. It does not alter
+    # successful packet formats, transport selection, crypto, or kernel xmit.
+    # The only generated fast-path delta removes two mathematically redundant
+    # checksum carry folds, so the older steady-state throughput measurements
+    # remain a conservative lower bound. The restored fold is used only while
+    # constructing a rejected-flow TCP reset.
+    "2f673d2454ff941ddcd6620199273b486484b3f0",
+}
 OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
     # 9235159 only changes the OpenWrt rx_worker_single_coalesce default behind
     # runtimeLooksLikeOpenWrt(). It does not invalidate non-OpenWrt current
@@ -1229,6 +1239,7 @@ def current_runtime_path_change_irrelevant(
     transport = row.get("transport", "")
     allowed_change_commits: set[str] = set()
     allowed_change_commits.update(PROTOCOL_NAMING_ONLY_COMMITS)
+    allowed_change_commits.update(ERROR_HANDLING_ONLY_COMMITS)
     allowed_commits = OFFLINE_CONFIG_CHECK_ONLY_COMMITS_BY_PATH.get(normalized)
     if allowed_commits:
         allowed_change_commits.update(allowed_commits)
