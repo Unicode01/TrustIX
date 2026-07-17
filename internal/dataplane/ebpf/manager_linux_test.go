@@ -2528,10 +2528,9 @@ func TestCleanupQuarantinesSemanticRouteCorruptionAndContinues(t *testing.T) {
 		Spec: dataplane.AttachSpec{PinPath: pinPath, LANIface: "trustix-missing-lan0"},
 		ManagedCaptureRoutes: []persistedManagedCaptureRoute{
 			{Prefix: "not-a-prefix", Iface: "trustix-missing-lan0"},
-			{Prefix: "10.91.0.0/24", Iface: "trustix-missing-lan0", Gateway: "not-an-ip"},
 		},
 		NativeTunnelRoutes: []persistedNativeTunnelRoute{
-			{Protocol: "gre", Tunnel: "trustix-missing-gre0", Prefix: "10.92.0.0/24", Gateway: "not-an-ip"},
+			{Protocol: "gre", Tunnel: "trustix-missing-gre0", Prefix: "also-not-a-prefix"},
 		},
 	}
 	payload, err := json.Marshal(state)
@@ -2555,6 +2554,36 @@ func TestCleanupQuarantinesSemanticRouteCorruptionAndContinues(t *testing.T) {
 	}
 	if len(matches) != 1 {
 		t.Fatalf("semantic corruption backups = %v, want exactly one", matches)
+	}
+}
+
+func TestPersistedRouteStateMapsPreserveValidRowsAndReportInvalidRows(t *testing.T) {
+	managed, managedErr := managedCaptureRouteStateMap([]persistedManagedCaptureRoute{
+		{Prefix: "not-a-prefix", Iface: "ignored"},
+		{Prefix: "10.91.0.0/24", Iface: "lan0", Gateway: "not-an-ip"},
+	})
+	if managedErr == nil {
+		t.Fatal("managed capture route restore did not report invalid persisted values")
+	}
+	managedRoute, ok := managed["10.91.0.0/24"]
+	if !ok || managedRoute.Prefix != netip.MustParsePrefix("10.91.0.0/24") || managedRoute.Gateway.IsValid() {
+		t.Fatalf("managed capture route partial restore = %#v", managed)
+	}
+
+	native, nativeErr := nativeTunnelRouteStateMap([]persistedNativeTunnelRoute{
+		{Protocol: "gre", Prefix: "also-not-a-prefix"},
+		{Protocol: "gre", Tunnel: "tix-gre0", Prefix: "10.92.0.0/24", Gateway: "not-an-ip"},
+	})
+	if nativeErr == nil {
+		t.Fatal("native tunnel route restore did not report invalid persisted values")
+	}
+	if len(native) != 1 {
+		t.Fatalf("native tunnel route partial restore = %#v", native)
+	}
+	for _, nativeRoute := range native {
+		if nativeRoute.Prefix != netip.MustParsePrefix("10.92.0.0/24") || nativeRoute.Gateway.IsValid() {
+			t.Fatalf("native tunnel route partial restore = %#v", nativeRoute)
+		}
 	}
 }
 
