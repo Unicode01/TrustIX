@@ -47,7 +47,9 @@ func (daemon *Daemon) endpointHealthPoller(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if daemon.probePeerEndpoints(ctx) {
-				_ = daemon.applyRuntimeDataplaneSnapshot(ctx)
+				if err := daemon.applyRuntimeDataplaneSnapshot(ctx); err != nil {
+					daemon.requestRuntimeReconcile("endpoint health change", err)
+				}
 			}
 		}
 	}

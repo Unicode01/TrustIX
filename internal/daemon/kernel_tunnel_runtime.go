@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -315,11 +316,22 @@ func (daemon *Daemon) syncKernelTunnelListeners(ctx context.Context) error {
 	daemon.dataListeners = kept
 	daemon.dataMu.Unlock()
 
+	var closeErrs []error
+	failedClosing := make([]dataListenerRuntime, 0)
 	for _, runtime := range closing {
 		if runtime.Cancel != nil {
 			runtime.Cancel()
 		}
-		_ = runtime.Listener.Close()
+		if err := runtime.Listener.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("close kernel tunnel listener %q: %w", runtime.Endpoint.Name, err))
+			failedClosing = append(failedClosing, runtime)
+		}
+	}
+	if len(failedClosing) > 0 {
+		daemon.dataMu.Lock()
+		daemon.dataListeners = append(daemon.dataListeners, failedClosing...)
+		daemon.dataMu.Unlock()
+		return errors.Join(closeErrs...)
 	}
 
 	keys := make([]string, 0, len(desired))

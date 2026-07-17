@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -104,7 +105,10 @@ func main() {
 		os.Exit(2)
 	}
 	if len(args) == 1 && args[0] == "version" {
-		buildinfo.WriteText(os.Stdout, buildinfo.Snapshot())
+		if err := buildinfo.WriteText(os.Stdout, buildinfo.Snapshot()); err != nil {
+			fmt.Fprintf(os.Stderr, "trustixctl: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -946,7 +950,6 @@ func (client apiClient) getAndPrintPath(path string, query url.Values) error {
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", requestURL, err)
 	}
-	defer resp.Body.Close()
 	return printResponse("GET", requestURL, resp)
 }
 
@@ -997,11 +1000,10 @@ func (client apiClient) postAndPrint(path string, body []byte, contentType strin
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", requestURL, err)
 	}
-	defer resp.Body.Close()
 	return printResponse("POST", requestURL, resp)
 }
 
-func (client apiClient) postAndSave(path string, body []byte, contentType, outPath string) error {
+func (client apiClient) postAndSave(path string, body []byte, contentType, outPath string) (resultErr error) {
 	path = client.managementPath(path)
 	requestURL, err := buildURL(client.baseURL, path, nil)
 	if err != nil {
@@ -1025,7 +1027,7 @@ func (client apiClient) postAndSave(path string, body []byte, contentType, outPa
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", requestURL, err)
 	}
-	defer resp.Body.Close()
+	defer closeAndJoin(resp.Body, "close POST response body", &resultErr)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		responseBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
@@ -1053,15 +1055,20 @@ func (client apiClient) postAndSave(path string, body []byte, contentType, outPa
 		return fmt.Errorf("create temp output in %q: %w", dir, err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer removeAndJoin(tmpName, "remove temporary archive", &resultErr)
 	hasher := sha256.New()
 	written, copyErr := io.Copy(io.MultiWriter(tmp, hasher), resp.Body)
-	closeErr := tmp.Close()
-	if copyErr != nil {
-		return fmt.Errorf("write archive %q: %w", outPath, copyErr)
+	var syncErr error
+	if copyErr == nil {
+		syncErr = tmp.Sync()
 	}
-	if closeErr != nil {
-		return fmt.Errorf("close temp archive %q: %w", tmpName, closeErr)
+	closeErr := tmp.Close()
+	if copyErr != nil || syncErr != nil || closeErr != nil {
+		return errors.Join(
+			wrapError("write archive "+outPath, copyErr),
+			wrapError("sync temp archive "+tmpName, syncErr),
+			wrapError("close temp archive "+tmpName, closeErr),
+		)
 	}
 	if _, err := os.Stat(outPath); err == nil {
 		return fmt.Errorf("output file %q already exists", outPath)
@@ -1116,7 +1123,7 @@ func (client apiClient) postAndSaveEncryptedBackup(path string, body []byte, rec
 	return savePayload(outPath, encrypted, 0o600)
 }
 
-func (client apiClient) postAndRead(path string, body []byte, contentType string, limit int64) ([]byte, string, error) {
+func (client apiClient) postAndRead(path string, body []byte, contentType string, limit int64) (payload []byte, filename string, resultErr error) {
 	path = client.managementPath(path)
 	requestURL, err := buildURL(client.baseURL, path, nil)
 	if err != nil {
@@ -1140,8 +1147,8 @@ func (client apiClient) postAndRead(path string, body []byte, contentType string
 	if err != nil {
 		return nil, "", fmt.Errorf("POST %s: %w", requestURL, err)
 	}
-	defer resp.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	defer closeAndJoin(resp.Body, "close POST response body", &resultErr)
+	payload, err = io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, "", fmt.Errorf("read POST %s response: %w", requestURL, err)
 	}
@@ -1151,7 +1158,7 @@ func (client apiClient) postAndRead(path string, body []byte, contentType string
 	if int64(len(payload)) > limit {
 		return nil, "", fmt.Errorf("POST %s response exceeds %d bytes", requestURL, limit)
 	}
-	filename := contentDispositionFilename(resp.Header.Get("Content-Disposition"))
+	filename = contentDispositionFilename(resp.Header.Get("Content-Disposition"))
 	return payload, filename, nil
 }
 
@@ -1195,12 +1202,12 @@ func wipeBytes(payload []byte) {
 	}
 }
 
-func readFileLimited(path string, limit int64) ([]byte, error) {
+func readFileLimited(path string, limit int64) (payload []byte, resultErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open backup %q: %w", path, err)
 	}
-	defer file.Close()
+	defer closeAndJoin(file, "close backup "+path, &resultErr)
 	if info, err := file.Stat(); err != nil {
 		return nil, fmt.Errorf("stat backup %q: %w", path, err)
 	} else if !info.Mode().IsRegular() {
@@ -1208,7 +1215,7 @@ func readFileLimited(path string, limit int64) ([]byte, error) {
 	} else if info.Size() > limit {
 		return nil, fmt.Errorf("backup %q exceeds %d bytes", path, limit)
 	}
-	payload, err := io.ReadAll(io.LimitReader(file, limit+1))
+	payload, err = io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("read backup %q: %w", path, err)
 	}
@@ -1218,7 +1225,7 @@ func readFileLimited(path string, limit int64) ([]byte, error) {
 	return payload, nil
 }
 
-func savePayload(outPath string, payload []byte, mode os.FileMode) error {
+func savePayload(outPath string, payload []byte, mode os.FileMode) (resultErr error) {
 	if outPath == "-" {
 		_, err := os.Stdout.Write(payload)
 		return err
@@ -1230,7 +1237,7 @@ func savePayload(outPath string, payload []byte, mode os.FileMode) error {
 		return fmt.Errorf("create temp output in %q: %w", dir, err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer removeAndJoin(tmpName, "remove temporary output", &resultErr)
 	hasher := sha256.New()
 	written, writeErr := io.Copy(io.MultiWriter(tmp, hasher), bytes.NewReader(payload))
 	if writeErr == nil {
@@ -1240,11 +1247,11 @@ func savePayload(outPath string, payload []byte, mode os.FileMode) error {
 		writeErr = tmp.Sync()
 	}
 	closeErr := tmp.Close()
-	if writeErr != nil {
-		return fmt.Errorf("write output %q: %w", outPath, writeErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close temp output %q: %w", tmpName, closeErr)
+	if writeErr != nil || closeErr != nil {
+		return errors.Join(
+			wrapError("write output "+outPath, writeErr),
+			wrapError("close temp output "+tmpName, closeErr),
+		)
 	}
 	if _, err := os.Stat(outPath); err == nil {
 		return fmt.Errorf("output file %q already exists", outPath)
@@ -1253,6 +1260,9 @@ func savePayload(outPath string, payload []byte, mode os.FileMode) error {
 	}
 	if err := os.Rename(tmpName, outPath); err != nil {
 		return fmt.Errorf("save output %q: %w", outPath, err)
+	}
+	if err := syncOutputDirectory(dir); err != nil {
+		return fmt.Errorf("sync output directory %q: %w", dir, err)
 	}
 	result, err := json.MarshalIndent(struct {
 		Saved     string `json:"saved"`
@@ -1268,8 +1278,8 @@ func savePayload(outPath string, payload []byte, mode os.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("format save result: %w", err)
 	}
-	fmt.Println(string(result))
-	return nil
+	_, err = fmt.Fprintln(os.Stdout, string(result))
+	return err
 }
 
 func (client apiClient) deleteAndPrint(path string) error {
@@ -1293,7 +1303,6 @@ func (client apiClient) deleteAndPrint(path string) error {
 	if err != nil {
 		return fmt.Errorf("DELETE %s: %w", requestURL, err)
 	}
-	defer resp.Body.Close()
 	return printResponse("DELETE", requestURL, resp)
 }
 
@@ -1415,7 +1424,8 @@ func buildURL(apiBase, path string, query url.Values) (string, error) {
 	return requestURL.String(), nil
 }
 
-func printResponse(method, requestURL string, resp *http.Response) error {
+func printResponse(method, requestURL string, resp *http.Response) (resultErr error) {
+	defer closeAndJoin(resp.Body, "close "+method+" response body", &resultErr)
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
@@ -1435,6 +1445,31 @@ func printResponse(method, requestURL string, resp *http.Response) error {
 	}
 	fmt.Println(string(encoded))
 	return nil
+}
+
+func closeAndJoin(closer io.Closer, operation string, resultErr *error) {
+	if closer == nil || resultErr == nil {
+		return
+	}
+	if err := closer.Close(); err != nil {
+		*resultErr = errors.Join(*resultErr, fmt.Errorf("%s: %w", operation, err))
+	}
+}
+
+func removeAndJoin(path, operation string, resultErr *error) {
+	if path == "" || resultErr == nil {
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		*resultErr = errors.Join(*resultErr, fmt.Errorf("%s %q: %w", operation, path, err))
+	}
+}
+
+func wrapError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func printUsage() {

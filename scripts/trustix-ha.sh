@@ -161,7 +161,7 @@ ensure_state_dir() {
   [[ ! -L "$state_dir" ]] || die "HA state directory must not be a symlink: $state_dir"
   mkdir -p "$state_dir"
   [[ -d "$state_dir" && ! -L "$state_dir" ]] || die "could not create HA state directory: $state_dir"
-  chmod 0700 "$state_dir" 2>/dev/null || true
+  chmod 0700 "$state_dir" || die "could not secure HA state directory: $state_dir"
 }
 
 write_record() {
@@ -172,9 +172,10 @@ write_record() {
   [[ ! -L "$path" ]] || die "refusing symlink HA state file: $path"
   now="$(date +%s)"
   tmp="${path}.tmp.$$"
-  printf '%s %s\n' "$state" "$now" >"$tmp"
-  chmod 0600 "$tmp"
-  mv -f "$tmp" "$path"
+	if ! printf '%s %s\n' "$state" "$now" >"$tmp" || ! chmod 0600 "$tmp" || ! mv -f "$tmp" "$path"; then
+		rm -f "$tmp" || log "ERROR: failed to remove temporary HA state file $tmp"
+		return 1
+	fi
 }
 
 write_state() {
@@ -379,10 +380,13 @@ release_notify_lock() {
   if [[ -f "$lock_pid_file" && ! -L "$lock_pid_file" ]]; then
     read -r owner _ <"$lock_pid_file" || true
   fi
-  if [[ "$owner" == "$$" ]]; then
-    rm -f "$lock_pid_file"
-    rmdir "$lock_dir" 2>/dev/null || true
-  fi
+	if [[ "$owner" == "$$" ]]; then
+		rm -f "$lock_pid_file" || return 1
+		rmdir "$lock_dir" || return 1
+	else
+		log "ERROR: refusing to release notification lock owned by ${owner:-unknown}"
+		return 1
+	fi
   notify_lock_held=0
 }
 
@@ -390,10 +394,13 @@ acquire_notify_lock() {
   local deadline=$((SECONDS + lock_timeout))
   local owner=""
   ensure_state_dir
-  while ((SECONDS < deadline)); do
-    if mkdir "$lock_dir" 2>/dev/null; then
-      printf '%s %s\n' "$$" "$(date +%s)" >"$lock_pid_file"
-      chmod 0600 "$lock_pid_file"
+	while ((SECONDS < deadline)); do
+		if mkdir "$lock_dir" 2>/dev/null; then
+			if ! printf '%s %s\n' "$$" "$(date +%s)" >"$lock_pid_file" || ! chmod 0600 "$lock_pid_file"; then
+				rm -f "$lock_pid_file"
+				rmdir "$lock_dir" 2>/dev/null || true
+				return 1
+			fi
       notify_lock_held=1
       return 0
     fi
@@ -411,6 +418,17 @@ acquire_notify_lock() {
     sleep 1
   done
   return 1
+}
+
+notify_exit_trap() {
+	local rc=$?
+	trap - EXIT
+	set +e
+	if ! release_notify_lock; then
+		log "ERROR: failed to release HA notification lock for $instance"
+		[[ "$rc" != "0" ]] || rc=1
+	fi
+	exit "$rc"
 }
 
 complete_cancelled_promotion() {
@@ -473,12 +491,15 @@ run_notify() {
   write_request "$state"
   if ! acquire_notify_lock; then
     if [[ "$state" != "MASTER" ]]; then
-      service_stop_verified >/dev/null 2>&1 || true
+			if ! service_stop_verified >/dev/null 2>&1; then
+				write_state FAULT
+				die "timed out waiting for another HA notification for $instance; trustixd could not be confirmed stopped"
+			fi
       write_state FAULT
     fi
     die "timed out waiting for another HA notification for $instance"
   fi
-  trap release_notify_lock EXIT
+	trap notify_exit_trap EXIT
 
   case "$state" in
     MASTER)

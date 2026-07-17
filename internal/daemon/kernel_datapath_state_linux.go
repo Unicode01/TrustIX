@@ -5,6 +5,8 @@ package daemon
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"hash/fnv"
 	"net"
 	"net/netip"
@@ -54,19 +56,39 @@ type kernelDatapathSessionSnapshot struct {
 	session transport.Session
 }
 
-func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot dataplane.Snapshot) {
-	if ctx.Err() != nil {
-		return
+var (
+	kernelDatapathStateStatsQuery = kernelmodule.DatapathStateStatsQuery
+	kernelDatapathApplyStateBatch = kernelmodule.DatapathApplyStateBatch
+)
+
+func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot dataplane.Snapshot) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if !daemon.kernelDatapathAvailable() {
-		return
+		return nil
 	}
-	stats, err := kernelmodule.DatapathStateStatsQuery(kernelmodule.TrustIXDatapathDevicePath)
-	if err != nil || stats.MaxRoutes == 0 || stats.MaxSessions == 0 || stats.MaxFlows == 0 {
-		return
+	stats, err := kernelDatapathStateStatsQuery(kernelmodule.TrustIXDatapathDevicePath)
+	if err != nil {
+		return fmt.Errorf("query kernel datapath state capacity: %w", err)
+	}
+	if stats.MaxRoutes == 0 || stats.MaxSessions == 0 || stats.MaxFlows == 0 {
+		return fmt.Errorf(
+			"kernel datapath reported invalid state capacity routes=%d sessions=%d flows=%d",
+			stats.MaxRoutes,
+			stats.MaxSessions,
+			stats.MaxFlows,
+		)
 	}
 	records := daemon.kernelDatapathStateRecords(ctx, snapshot)
-	daemon.applyKernelDatapathStateRecords(ctx, records)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := daemon.applyKernelDatapathStateRecords(ctx, records); err != nil {
+		return err
+	}
+	daemon.clearBackgroundError("kernel_datapath_state_sync")
+	return nil
 }
 
 func (daemon *Daemon) kernelDatapathStateRecords(ctx context.Context, snapshot dataplane.Snapshot) []kernelmodule.DatapathStateRecord {
@@ -113,7 +135,10 @@ func (daemon *Daemon) runKernelDatapathStateSync(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			daemon.syncKernelDatapathState(ctx, daemon.runtimeDataplaneSnapshot())
+			if err := daemon.syncKernelDatapathState(ctx, daemon.runtimeDataplaneSnapshot()); err != nil {
+				daemon.recordBackgroundError("kernel_datapath_state_sync", err)
+				daemon.requestRuntimeReconcile("kernel datapath state sync", err)
+			}
 		}
 	}
 }
@@ -127,7 +152,10 @@ func (daemon *Daemon) syncKernelDatapathSessionUpsert(key dataSessionKey, runtim
 		return
 	}
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(context.Background())...)
-	daemon.applyKernelDatapathStateRecords(context.Background(), records)
+	if err := daemon.applyKernelDatapathStateRecords(context.Background(), records); err != nil {
+		daemon.recordBackgroundError("kernel_datapath_state_sync", fmt.Errorf("upsert kernel datapath session: %w", err))
+		daemon.requestRuntimeReconcile("kernel datapath session upsert", err)
+	}
 }
 
 func (daemon *Daemon) syncKernelDatapathSessionDelete(key dataSessionKey) {
@@ -146,7 +174,10 @@ func (daemon *Daemon) syncKernelDatapathSessionDelete(key dataSessionKey) {
 	}
 	records := []kernelmodule.DatapathStateRecord{record, wireRecord}
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(context.Background())...)
-	daemon.applyKernelDatapathStateRecords(context.Background(), records)
+	if err := daemon.applyKernelDatapathStateRecords(context.Background(), records); err != nil {
+		daemon.recordBackgroundError("kernel_datapath_state_sync", fmt.Errorf("delete kernel datapath session: %w", err))
+		daemon.requestRuntimeReconcile("kernel datapath session delete", err)
+	}
 }
 
 func (daemon *Daemon) syncKernelDatapathFlowUpsert(binding routing.FlowBinding) {
@@ -157,7 +188,10 @@ func (daemon *Daemon) syncKernelDatapathFlowUpsert(binding routing.FlowBinding) 
 	if !ok {
 		return
 	}
-	daemon.applyKernelDatapathStateRecords(context.Background(), []kernelmodule.DatapathStateRecord{record})
+	if err := daemon.applyKernelDatapathStateRecords(context.Background(), []kernelmodule.DatapathStateRecord{record}); err != nil {
+		daemon.recordBackgroundError("kernel_datapath_state_sync", fmt.Errorf("upsert kernel datapath flow: %w", err))
+		daemon.requestRuntimeReconcile("kernel datapath flow upsert", err)
+	}
 }
 
 func (daemon *Daemon) syncKernelDatapathFlowDelete(key routing.FlowKey) {
@@ -168,32 +202,43 @@ func (daemon *Daemon) syncKernelDatapathFlowDelete(key routing.FlowKey) {
 	if !ok {
 		return
 	}
-	daemon.applyKernelDatapathStateRecords(context.Background(), []kernelmodule.DatapathStateRecord{record})
+	if err := daemon.applyKernelDatapathStateRecords(context.Background(), []kernelmodule.DatapathStateRecord{record}); err != nil {
+		daemon.recordBackgroundError("kernel_datapath_state_sync", fmt.Errorf("delete kernel datapath flow: %w", err))
+		daemon.requestRuntimeReconcile("kernel datapath flow delete", err)
+	}
 }
 
 func (daemon *Daemon) kernelDatapathAvailable() bool {
 	return daemon != nil && daemon.kernelDatapath != nil && daemon.kernelDatapath.Snapshot().Loaded
 }
 
-func (daemon *Daemon) applyKernelDatapathStateRecords(ctx context.Context, records []kernelmodule.DatapathStateRecord) {
+func (daemon *Daemon) applyKernelDatapathStateRecords(ctx context.Context, records []kernelmodule.DatapathStateRecord) error {
+	total := len(records)
 	for len(records) > 0 {
-		if ctx.Err() != nil {
-			return
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		limit := len(records)
 		if limit > kernelmodule.TrustIXDatapathStateBatchMax {
 			limit = kernelmodule.TrustIXDatapathStateBatchMax
 		}
-		applied, _, err := kernelmodule.DatapathApplyStateBatch(kernelmodule.TrustIXDatapathDevicePath, records[:limit])
+		applied, _, err := kernelDatapathApplyStateBatch(kernelmodule.TrustIXDatapathDevicePath, records[:limit])
+		if applied > uint32(limit) {
+			return fmt.Errorf("apply kernel datapath state returned invalid applied count %d for batch of %d", applied, limit)
+		}
 		if err != nil {
 			if applied == 0 {
-				return
+				return fmt.Errorf("apply kernel datapath state after %d of %d records: %w", total-len(records), total, err)
 			}
 			records = records[int(applied):]
 			continue
 		}
+		if applied != uint32(limit) {
+			return fmt.Errorf("apply kernel datapath state applied %d of %d records without an error", applied, limit)
+		}
 		records = records[limit:]
 	}
+	return nil
 }
 
 func (daemon *Daemon) kernelDatapathSessionSnapshot() []kernelDatapathSessionSnapshot {
@@ -536,7 +581,7 @@ func kernelDatapathParseIPv4Addr(raw string) (uint32, bool) {
 	return binary.BigEndian.Uint32(ip[:]), true
 }
 
-func kernelDatapathRouteSourceIPv4(ctx context.Context, remoteIP uint32, remotePort uint16) (uint32, error) {
+func kernelDatapathRouteSourceIPv4(ctx context.Context, remoteIP uint32, remotePort uint16) (source uint32, resultErr error) {
 	var raw [4]byte
 	binary.BigEndian.PutUint32(raw[:], remoteIP)
 	addr := netip.AddrFrom4(raw)
@@ -545,7 +590,11 @@ func kernelDatapathRouteSourceIPv4(ctx context.Context, remoteIP uint32, remoteP
 	if err != nil {
 		return 0, err
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close kernel datapath route probe: %w", err))
+		}
+	}()
 	udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
 	if !ok || udpAddr.IP == nil {
 		return 0, net.InvalidAddrError("local UDP address is unavailable")

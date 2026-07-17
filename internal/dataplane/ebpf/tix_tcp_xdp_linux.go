@@ -5,6 +5,7 @@ package ebpf
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"fmt"
 	"runtime/debug"
 
@@ -149,17 +150,14 @@ func loadTIXTCPXDPObjectFile(queueCount int, objectPath string, replacements tix
 	}
 	config, err := configureTIXTCPBPFConfig(xdpObject.configMap, queueCount)
 	if err != nil {
-		xdpObject.Close()
-		return nil, err
+		return nil, errors.Join(err, xdpObject.Close())
 	}
 	xdpObject.skipTCPChecksum = config&tixTCPConfigSkipTCPChecksum != 0
 	if xdpObject.xskMap == nil || xdpObject.portMap == nil || xdpObject.xdpStatsMap == nil || xdpObject.program == nil {
-		xdpObject.Close()
-		return nil, fmt.Errorf("embedded tix_tcp XDP object is incomplete")
+		return nil, errors.Join(fmt.Errorf("embedded tix_tcp XDP object is incomplete"), xdpObject.Close())
 	}
 	if xdpObject.configMap == nil {
-		xdpObject.Close()
-		return nil, fmt.Errorf("embedded tix_tcp XDP object is missing config map")
+		return nil, errors.Join(fmt.Errorf("embedded tix_tcp XDP object is missing config map"), xdpObject.Close())
 	}
 	return xdpObject, nil
 }

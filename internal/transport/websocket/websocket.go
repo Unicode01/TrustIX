@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -63,7 +64,9 @@ func (transportImpl *Transport) Probe(ctx context.Context, peer transport.Peer) 
 		if err != nil {
 			return transport.ProbeResult{Healthy: false, Error: err.Error(), CheckedAt: time.Now()}
 		}
-		_ = conn.Close()
+		if err := conn.Close(); err != nil {
+			return transport.ProbeResult{Healthy: false, Error: fmt.Sprintf("close WebSocket probe connection: %v", err), CheckedAt: time.Now()}
+		}
 		return transport.ProbeResult{Healthy: true, RTT: time.Since(start), CheckedAt: time.Now()}
 	}
 	return transport.ProbeResult{Healthy: false, Error: "no websocket endpoint", CheckedAt: time.Now()}
@@ -80,31 +83,42 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		}
 		key, err := websocketKey()
 		if err != nil {
-			_ = conn.Close()
-			return nil, err
+			return nil, errors.Join(err, websocketCleanupError("close WebSocket connection", conn.Close()))
 		}
 		if err := writeUpgradeRequest(conn, endpoint.Address, key); err != nil {
-			_ = conn.Close()
-			return nil, err
+			return nil, errors.Join(err, websocketCleanupError("close WebSocket connection", conn.Close()))
 		}
 		reader := bufio.NewReaderSize(conn, readBufferSize)
 		response, err := http.ReadResponse(reader, nil)
 		if err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("read WebSocket upgrade response: %w", err)
+			return nil, errors.Join(
+				fmt.Errorf("read WebSocket upgrade response: %w", err),
+				websocketCleanupError("close WebSocket connection", conn.Close()),
+			)
 		}
-		_ = response.Body.Close()
+		if err := response.Body.Close(); err != nil {
+			return nil, errors.Join(
+				fmt.Errorf("close WebSocket upgrade response body: %w", err),
+				websocketCleanupError("close WebSocket connection", conn.Close()),
+			)
+		}
 		if response.StatusCode != http.StatusSwitchingProtocols {
-			_ = conn.Close()
-			return nil, fmt.Errorf("WebSocket upgrade returned %s", response.Status)
+			return nil, errors.Join(
+				fmt.Errorf("WebSocket upgrade returned %s", response.Status),
+				websocketCleanupError("close WebSocket connection", conn.Close()),
+			)
 		}
 		if !headerContains(response.Header, "Upgrade", "websocket") || !headerContains(response.Header, "Connection", "upgrade") {
-			_ = conn.Close()
-			return nil, fmt.Errorf("WebSocket upgrade response is missing upgrade headers")
+			return nil, errors.Join(
+				fmt.Errorf("WebSocket upgrade response is missing upgrade headers"),
+				websocketCleanupError("close WebSocket connection", conn.Close()),
+			)
 		}
 		if response.Header.Get("Sec-WebSocket-Accept") != websocketAccept(key) {
-			_ = conn.Close()
-			return nil, fmt.Errorf("WebSocket upgrade response has invalid accept key")
+			return nil, errors.Join(
+				fmt.Errorf("WebSocket upgrade response has invalid accept key"),
+				websocketCleanupError("close WebSocket connection", conn.Close()),
+			)
 		}
 		return newSession(conn, reader, true, false), nil
 	}
@@ -132,15 +146,18 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	if err != nil {
 		return nil, err
 	}
+	listener := &listener{ln: ln}
 	go func() {
 		<-ctx.Done()
-		_ = ln.Close()
+		_ = listener.Close()
 	}()
-	return &listener{ln: ln}, nil
+	return listener, nil
 }
 
 type listener struct {
-	ln net.Listener
+	ln        net.Listener
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (listener *listener) Accept(ctx context.Context) (transport.Session, error) {
@@ -162,15 +179,17 @@ func (listener *listener) Accept(ctx context.Context) (transport.Session, error)
 		}
 		session, err := acceptWebSocket(accepted.conn)
 		if err != nil {
-			_ = accepted.conn.Close()
-			return nil, err
+			return nil, errors.Join(err, websocketCleanupError("close rejected WebSocket connection", accepted.conn.Close()))
 		}
 		return session, nil
 	}
 }
 
 func (listener *listener) Close() error {
-	return listener.ln.Close()
+	listener.closeOnce.Do(func() {
+		listener.closeErr = listener.ln.Close()
+	})
+	return listener.closeErr
 }
 
 type session struct {
@@ -179,6 +198,8 @@ type session struct {
 	maskWrites      bool
 	expectMasked    bool
 	writeMu         sync.Mutex
+	closeOnce       sync.Once
+	closeErr        error
 	sendFrameArena  []byte
 	sendBatchArena  []byte
 	recvBatch       [][]byte
@@ -295,8 +316,11 @@ func (session *session) recvPacketBlocking() ([]byte, error) {
 			return payload, nil
 		case opPing:
 			session.writeMu.Lock()
-			_ = session.writeFrame(opPong, payload)
+			err := session.writeFrame(opPong, payload)
 			session.writeMu.Unlock()
+			if err != nil {
+				return nil, fmt.Errorf("write WebSocket pong: %w", err)
+			}
 		case opPong:
 			continue
 		case opClose:
@@ -327,8 +351,11 @@ func (session *session) tryRecvBufferedPacket() ([]byte, bool, error) {
 			return payload, true, nil
 		case opPing:
 			session.writeMu.Lock()
-			_ = session.writeFrame(opPong, payload)
+			err := session.writeFrame(opPong, payload)
 			session.writeMu.Unlock()
+			if err != nil {
+				return nil, false, fmt.Errorf("write WebSocket pong: %w", err)
+			}
 		case opPong:
 			continue
 		case opClose:
@@ -340,7 +367,10 @@ func (session *session) tryRecvBufferedPacket() ([]byte, bool, error) {
 }
 
 func (session *session) Close() error {
-	return session.conn.Close()
+	session.closeOnce.Do(func() {
+		session.closeErr = session.conn.Close()
+	})
+	return session.closeErr
 }
 
 func (session *session) Stats() transport.TransportStats {
@@ -580,15 +610,23 @@ func acceptWebSocket(conn net.Conn) (transport.Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read WebSocket upgrade request: %w", err)
 	}
-	_ = request.Body.Close()
+	if err := request.Body.Close(); err != nil {
+		return nil, fmt.Errorf("close WebSocket upgrade request body: %w", err)
+	}
 	if request.Method != http.MethodGet || request.URL.Path != websocketPath {
-		_, _ = fmt.Fprintf(conn, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
-		return nil, fmt.Errorf("invalid WebSocket request %s %s", request.Method, request.URL.Path)
+		_, writeErr := fmt.Fprintf(conn, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+		return nil, errors.Join(
+			fmt.Errorf("invalid WebSocket request %s %s", request.Method, request.URL.Path),
+			websocketCleanupError("write WebSocket request rejection", writeErr),
+		)
 	}
 	key := request.Header.Get("Sec-WebSocket-Key")
 	if !headerContains(request.Header, "Upgrade", "websocket") || !headerContains(request.Header, "Connection", "upgrade") || key == "" {
-		_, _ = fmt.Fprintf(conn, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-		return nil, fmt.Errorf("invalid WebSocket upgrade headers")
+		_, writeErr := fmt.Fprintf(conn, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+		return nil, errors.Join(
+			fmt.Errorf("invalid WebSocket upgrade headers"),
+			websocketCleanupError("write WebSocket header rejection", writeErr),
+		)
 	}
 	_, err = fmt.Fprintf(conn,
 		"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n",
@@ -598,6 +636,13 @@ func acceptWebSocket(conn net.Conn) (transport.Session, error) {
 		return nil, err
 	}
 	return newSession(conn, reader, false, true), nil
+}
+
+func websocketCleanupError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func dialConn(ctx context.Context, endpoint transport.Endpoint, tlsConf *tls.Config) (net.Conn, error) {

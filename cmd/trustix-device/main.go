@@ -40,7 +40,10 @@ func (list *stringList) Set(value string) error {
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
-		buildinfo.WriteText(os.Stdout, buildinfo.Snapshot())
+		if err := buildinfo.WriteText(os.Stdout, buildinfo.Snapshot()); err != nil {
+			fmt.Fprintf(os.Stderr, "trustix-device: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 	var roots stringList

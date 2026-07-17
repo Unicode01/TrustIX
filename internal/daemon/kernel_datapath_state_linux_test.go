@@ -18,6 +18,66 @@ import (
 	"trustix.local/trustix/internal/transport"
 )
 
+func TestApplyKernelDatapathStateRecordsReturnsZeroProgressError(t *testing.T) {
+	wantErr := errors.New("injected kernel state apply failure")
+	original := kernelDatapathApplyStateBatch
+	kernelDatapathApplyStateBatch = func(string, []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		return 0, nil, wantErr
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	err := (&Daemon{}).applyKernelDatapathStateRecords(context.Background(), []kernelmodule.DatapathStateRecord{{Kind: 1}})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("apply state error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestApplyKernelDatapathStateRecordsRetriesPartialProgress(t *testing.T) {
+	wantErr := errors.New("injected partial kernel state apply failure")
+	original := kernelDatapathApplyStateBatch
+	calls := 0
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		calls++
+		switch calls {
+		case 1:
+			if len(records) != 3 {
+				t.Fatalf("first batch size = %d, want 3", len(records))
+			}
+			return 1, records[:1], wantErr
+		case 2:
+			if len(records) != 2 {
+				t.Fatalf("retry batch size = %d, want 2", len(records))
+			}
+			return 2, records, nil
+		default:
+			t.Fatalf("unexpected apply call %d", calls)
+			return 0, nil, nil
+		}
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	records := []kernelmodule.DatapathStateRecord{{Kind: 1}, {Kind: 2}, {Kind: 3}}
+	if err := (&Daemon{}).applyKernelDatapathStateRecords(context.Background(), records); err != nil {
+		t.Fatalf("apply state after partial progress: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("apply calls = %d, want 2", calls)
+	}
+}
+
+func TestApplyKernelDatapathStateRecordsRejectsShortSuccess(t *testing.T) {
+	original := kernelDatapathApplyStateBatch
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		return uint32(len(records) - 1), records[:len(records)-1], nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	err := (&Daemon{}).applyKernelDatapathStateRecords(context.Background(), []kernelmodule.DatapathStateRecord{{Kind: 1}, {Kind: 2}})
+	if err == nil {
+		t.Fatal("short successful kernel state apply returned nil error")
+	}
+}
+
 func TestKernelDatapathRouteRecordEncodesIPv4Prefix(t *testing.T) {
 	route := routing.Route{
 		Prefix:   core.Prefix("10.82.0.0/24"),

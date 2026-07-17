@@ -110,6 +110,20 @@ unitdir=""
 initdir=""
 state_root=""
 installed_config_path=""
+backup_root="${TRUSTIX_BACKUP_ROOT:-/var/backups/trustix}"
+deploy_transaction_started=0
+deploy_transaction_committed=0
+deploy_transaction_dir=""
+deploy_transaction_paths=()
+deploy_transaction_backups=()
+deploy_transaction_existed=()
+deploy_temp_paths=()
+deploy_service_was_active=0
+deploy_service_was_enabled=0
+deploy_rollback_failed=0
+deploy_remote_stage=""
+deploy_remote_target=""
+deploy_remote_ssh_cmd=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -382,9 +396,9 @@ install_openwrt_firewall_rules() {
 
   run_root uci commit firewall
   if [[ -x "${initdir}/firewall" ]]; then
-    run_root "${initdir}/firewall" reload >/dev/null 2>&1 || true
+    run_root "${initdir}/firewall" reload
   else
-    run_root /etc/init.d/firewall reload >/dev/null 2>&1 || true
+    run_root /etc/init.d/firewall reload
   fi
 }
 
@@ -394,13 +408,164 @@ install_file() {
   local mode="$3"
   local dir="${dst%/*}"
   [[ "$dir" != "$dst" ]] && run_root mkdir -p "$dir"
+	if [[ "$deploy_transaction_started" == "1" ]]; then
+		snapshot_deploy_file "$dst"
+	fi
+	local tmp="${dst}.trustix-deploy.$$"
+	run_root rm -f "$tmp"
   if command -v install >/dev/null 2>&1; then
-    run_root install -m "$mode" "$src" "$dst"
+		if ! run_root install -m "$mode" "$src" "$tmp"; then
+			run_root rm -f "$tmp" >/dev/null 2>&1 || true
+			return 1
+		fi
   else
-    run_root cp "$src" "$dst"
-    run_root chmod "$mode" "$dst"
+		if ! run_root cp "$src" "$tmp" || ! run_root chmod "$mode" "$tmp"; then
+			run_root rm -f "$tmp" >/dev/null 2>&1 || true
+			return 1
+		fi
   fi
+	if ! run_root mv -f "$tmp" "$dst"; then
+		run_root rm -f "$tmp" >/dev/null 2>&1 || true
+		return 1
+	fi
 }
+
+snapshot_deploy_file() {
+	local path="$1" i backup
+	for ((i = 0; i < ${#deploy_transaction_paths[@]}; i++)); do
+		[[ "${deploy_transaction_paths[$i]}" == "$path" ]] && return 0
+	done
+	if run_root test -L "$path"; then
+		die "refusing to replace symlink during deploy: $path"
+	fi
+	deploy_transaction_paths+=("$path")
+	backup="${deploy_transaction_dir}/file.${#deploy_transaction_paths[@]}"
+	deploy_transaction_backups+=("$backup")
+	if run_root test -e "$path"; then
+		run_root test -f "$path" || die "refusing to replace non-regular deploy target: $path"
+		run_root cp -p "$path" "$backup"
+		deploy_transaction_existed+=(1)
+	else
+		deploy_transaction_existed+=(0)
+	fi
+}
+
+begin_deploy_transaction() {
+	deploy_transaction_dir="$(mktemp -d)"
+	deploy_temp_paths+=("$deploy_transaction_dir")
+	case "$service_manager" in
+		systemd)
+			if command -v systemctl >/dev/null 2>&1; then
+				run_root systemctl is-active --quiet "trustixd@${instance}.service" && deploy_service_was_active=1 || true
+				run_root systemctl is-enabled --quiet "trustixd@${instance}.service" && deploy_service_was_enabled=1 || true
+			fi
+			;;
+		openwrt)
+			if [[ -x "${initdir}/trustix" ]] && run_root "${initdir}/trustix" status "$instance" >/dev/null 2>&1; then
+				deploy_service_was_active=1
+			fi
+			;;
+	esac
+	deploy_transaction_started=1
+}
+
+rollback_deploy_transaction() {
+	[[ "$deploy_transaction_started" == "1" && "$deploy_transaction_committed" != "1" ]] || return 0
+	local i path backup failed=0 tmp
+	log "deploy failed; restoring previous installation"
+	for ((i = ${#deploy_transaction_paths[@]} - 1; i >= 0; i--)); do
+		path="${deploy_transaction_paths[$i]}"
+		backup="${deploy_transaction_backups[$i]}"
+		tmp="${path}.trustix-rollback.$$"
+		run_root rm -f "$tmp" >/dev/null 2>&1 || true
+		if [[ "${deploy_transaction_existed[$i]}" == "1" ]]; then
+			if run_root cp -p "$backup" "$tmp" && run_root mv -f "$tmp" "$path"; then
+				:
+			else
+				log "ERROR: failed to restore deploy target $path"
+				failed=1
+			fi
+		elif ! run_root rm -f "$path"; then
+			log "ERROR: failed to remove new deploy target $path"
+			failed=1
+		fi
+	done
+	case "$service_manager" in
+		systemd)
+			if command -v systemctl >/dev/null 2>&1; then
+				run_root systemctl daemon-reload || failed=1
+				if [[ "$deploy_service_was_enabled" == "1" ]]; then
+					run_root systemctl enable "trustixd@${instance}.service" || failed=1
+				else
+					run_root systemctl disable "trustixd@${instance}.service" || failed=1
+				fi
+				if [[ "$deploy_service_was_active" == "1" ]]; then
+					run_root systemctl restart "trustixd@${instance}.service" || failed=1
+				else
+					run_root systemctl stop "trustixd@${instance}.service" || failed=1
+				fi
+			fi
+			;;
+		openwrt)
+			if run_root test -f /etc/config/firewall; then
+				if [[ -x "${initdir}/firewall" ]]; then
+					run_root "${initdir}/firewall" reload || failed=1
+				elif [[ -x /etc/init.d/firewall ]]; then
+					run_root /etc/init.d/firewall reload || failed=1
+				fi
+			fi
+			if [[ -x "${initdir}/trustix" ]]; then
+				if [[ "$deploy_service_was_active" == "1" ]]; then
+					run_root "${initdir}/trustix" restart "$instance" || failed=1
+				else
+					run_root "${initdir}/trustix" stop "$instance" || failed=1
+				fi
+			fi
+			;;
+	esac
+	return "$failed"
+}
+
+cleanup_deploy_temp_paths() {
+	local path
+	for path in "${deploy_temp_paths[@]}"; do
+		[[ -n "$path" ]] || continue
+		case "$path" in
+			/tmp/*|/var/tmp/*) run_root rm -rf -- "$path" ;;
+			*) log "ERROR: refusing to remove unexpected deploy temp path: $path"; return 1 ;;
+		esac
+	done
+}
+
+cleanup_remote_deploy_stage() {
+	[[ -n "$deploy_remote_stage" && -n "$deploy_remote_target" ]] || return 0
+	if ! "${deploy_remote_ssh_cmd[@]}" "$deploy_remote_target" "rm -rf $(shell_quote "$deploy_remote_stage")"; then
+		log "ERROR: failed to remove remote staging directory ${deploy_remote_target}:${deploy_remote_stage}"
+		return 1
+	fi
+	deploy_remote_stage=""
+	deploy_remote_target=""
+	deploy_remote_ssh_cmd=()
+}
+
+deploy_exit_trap() {
+	local rc=$?
+	trap - EXIT
+	set +e
+	if [[ "$deploy_transaction_started" == "1" && "$deploy_transaction_committed" != "1" ]]; then
+		rollback_deploy_transaction || deploy_rollback_failed=1
+		[[ "$rc" != "0" ]] || rc=1
+	fi
+	if [[ "$deploy_rollback_failed" == "1" ]]; then
+		log "ERROR: deploy rollback incomplete; transaction snapshot kept at ${deploy_transaction_dir}"
+	else
+		cleanup_deploy_temp_paths || rc=1
+	fi
+	cleanup_remote_deploy_stage || rc=1
+	exit "$rc"
+}
+
+trap deploy_exit_trap EXIT
 
 detect_service_manager() {
   if [[ "$service_manager" != "auto" ]]; then
@@ -478,12 +643,15 @@ remote_deploy() {
   fi
 
   local stage
-  stage="$("${ssh_cmd[@]}" "$target" 'mktemp -d /tmp/trustix-deploy.XXXXXX')"
-  [[ -n "$stage" ]] || die "failed to create remote staging dir"
+	stage="$("${ssh_cmd[@]}" "$target" 'mktemp -d /tmp/trustix-deploy.XXXXXX')"
+	[[ -n "$stage" ]] || die "failed to create remote staging dir"
+	deploy_remote_stage="$stage"
+	deploy_remote_target="$target"
+	deploy_remote_ssh_cmd=("${ssh_cmd[@]}")
   log "remote stage: ${target}:${stage}"
 
   "${scp_cmd[@]}" "$0" "${target}:${stage}/trustix-deploy.sh"
-  if [[ -n "$tarball" ]]; then
+	if [[ -n "$tarball" ]]; then
     "${scp_cmd[@]}" "$tarball" "${target}:${stage}/package.tar.gz"
   fi
   if [[ -n "$bin_dir" ]]; then
@@ -508,12 +676,7 @@ remote_deploy() {
     "${scp_cmd[@]}" -r "$cert_dir" "${target}:${stage}/certs"
   fi
 
-  if [[ "$remote_manager" == "openwrt" ]]; then
-    remote_deploy_openwrt "$stage"
-    return
-  fi
-
-  "${ssh_cmd[@]}" "$target" 'command -v bash >/dev/null 2>&1 || { echo "bash is required on remote target" >&2; exit 127; }'
+	"${ssh_cmd[@]}" "$target" 'command -v bash >/dev/null 2>&1 || { echo "bash is required on remote target" >&2; exit 127; }'
 
   local remote_args=()
   if [[ -n "$tarball" ]]; then
@@ -559,343 +722,12 @@ remote_deploy() {
   for arg in "${remote_args[@]}"; do
     command+=" $(shell_quote "$arg")"
   done
-  "${ssh_cmd[@]}" "$target" "$command"
-}
-
-remote_deploy_openwrt() {
-  local stage="$1"
-  local input_kind="bin"
-  local input_path="${stage}/bin"
-  local joined_extra="" first=1 arg
-  local joined_env="" env_item
-  if [[ -n "$tarball" ]]; then
-    input_kind="tarball"
-    input_path="${stage}/package.tar.gz"
-  fi
-  for arg in "${extra_args[@]}"; do
-    if [[ "$first" == "0" ]]; then
-      joined_extra+=" "
-    fi
-    first=0
-    joined_extra+="$arg"
-  done
-  first=1
-  for env_item in "${runtime_env[@]}"; do
-    if [[ "$first" == "0" ]]; then
-      joined_env+=$'\n'
-    fi
-    first=0
-    joined_env+="$env_item"
-  done
-  local remote_script
-  remote_script="$(cat <<'EOS'
-set -eu
-stage="$1"
-input_kind="$2"
-input_path="$3"
-instance="$4"
-prefix="$5"
-sysconfdir="$6"
-state_root="$7"
-initdir="$8"
-target_cert_dir="$9"
-shift 9
-config_src="$1"
-cert_src="$2"
-api_addr="$3"
-peer_api_addr="$4"
-dataplane="$5"
-enable_service="$6"
-start_service="$7"
-json="$8"
-extra_args="$9"
-shift 9
-runtime_env="${1:-}"
-shift || true
-openwrt_firewall_rules="${1:-auto}"
-
-[ -n "$prefix" ] || prefix=/opt/trustix
-[ -n "$sysconfdir" ] || sysconfdir=/etc/trustix
-[ -n "$state_root" ] || state_root="${sysconfdir}/state"
-[ -n "$initdir" ] || initdir=/etc/init.d
-[ -n "$target_cert_dir" ] || target_cert_dir="${sysconfdir}/certs"
-
-if [ -f "$sysconfdir/$instance.ha.env" ] && { [ "$enable_service" = 1 ] || [ "$start_service" = 1 ]; }; then
-  echo "instance $instance is managed by active-standby HA; rerun with --no-enable --no-start" >&2
-  exit 1
-fi
-
-install_openwrt_dataplane_runtime_deps() {
-  [ -f /etc/openwrt_release ] || return 0
-  command -v opkg >/dev/null 2>&1 || return 0
-  case "${TRUSTIX_DEPLOY_INSTALL_DEPS:-${TRUSTIX_BOOTSTRAP_INSTALL_DEPS:-auto}}" in
-    0|false|no|off|disabled) return 0 ;;
-  esac
-  printf '[trustix-deploy] install OpenWrt dataplane runtime packages\n' >&2
-  opkg update
-  opkg install \
-    ca-bundle ca-certificates \
-    kmod-sched-core kmod-sched kmod-sched-bpf \
-    ip-full tc-bpf
-}
-
-install_openwrt_dataplane_runtime_deps
-
-lower_ascii() {
-  printf '%s' "$1" | tr 'A-Z' 'a-z'
-}
-
-openwrt_firewall_rules_enabled() {
-  case "$(lower_ascii "$openwrt_firewall_rules")" in
-    0|false|no|off|disabled) return 1 ;;
-    *) return 0 ;;
-  esac
-}
-
-sanitize_openwrt_firewall_rule_part() {
-  value="$(printf '%s' "$1" | sed 's/[^A-Za-z0-9_.-]/-/g; s/^-*//; s/-*$//')"
-  [ -n "$value" ] || value=ix
-  printf '%s' "$value"
-}
-
-address_port() {
-  value="$1"
-  value="${value%%/*}"
-  value="${value##*,}"
-  value="${value##*=}"
-  value="${value%\"}"
-  value="${value#\"}"
-  value="${value%\'}"
-  value="${value#\'}"
-  value="${value%]}"
-  value="${value##*:}"
-  case "$value" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  [ "$value" -ge 1 ] && [ "$value" -le 65535 ] || return 1
-  printf '%s\n' "$value"
-}
-
-addr_is_loopback_only() {
-  value="$1"
-  host="${value%:*}"
-  host="${host#[}"
-  host="${host%]}"
-  case "$host" in
-    ''|127.*|localhost|::1) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-config_listen_ports() {
-  [ -n "${installed_config:-}" ] && [ -f "$installed_config" ] || return 0
-  sed -n \
-    -e 's/.*"listen"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-    -e 's/^[[:space:]]*listen:[[:space:]]*["'\'']\{0,1\}\([^"'\'']*\).*/\1/p' \
-    "$installed_config" |
-    while IFS= read -r listen; do
-      printf '%s\n' "$listen" | tr ',' '\n' | while IFS= read -r part; do
-        part="$(printf '%s' "$part" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-        case "$part" in
-          port=*|vxlan_port=*) address_port "$part" || true ;;
-          *:*) address_port "$part" || true ;;
-        esac
-      done
-    done | sort -n -u
-}
-
-config_has_transport() {
-  name="$1"
-  [ -n "${installed_config:-}" ] && [ -f "$installed_config" ] || return 1
-  grep -Eq "\"transport\"[[:space:]]*:[[:space:]]*\"${name}\"|^[[:space:]]*transport:[[:space:]]*[\"']?${name}([\"']?([[:space:]]|#|$))" "$installed_config"
-}
-
-openwrt_firewall_rule_exists() {
-  name="$1"
-  uci -q show firewall 2>/dev/null | grep -F ".name='${name}'" >/dev/null 2>&1
-}
-
-openwrt_add_firewall_rule() {
-  name="$1"
-  proto="$2"
-  port="${3:-}"
-  openwrt_firewall_rule_exists "$name" && return 0
-  section="$(uci add firewall rule)"
-  [ -n "$section" ] || return 1
-  uci set "firewall.${section}.name=${name}"
-  uci set "firewall.${section}.src=*"
-  uci set "firewall.${section}.proto=${proto}"
-  if [ -n "$port" ]; then
-    uci set "firewall.${section}.dest_port=${port}"
-  fi
-  uci set "firewall.${section}.target=ACCEPT"
-  uci set "firewall.${section}.family=ipv4"
-}
-
-install_openwrt_firewall_rules() {
-  [ -f /etc/openwrt_release ] || return 0
-  openwrt_firewall_rules_enabled || return 0
-  command -v uci >/dev/null 2>&1 || return 0
-  { [ -x "$initdir/firewall" ] || [ -x /etc/init.d/firewall ]; } || return 0
-
-  safe_instance="$(sanitize_openwrt_firewall_rule_part "$instance")"
-  rule_prefix="trustix-${safe_instance}"
-
-  if port="$(address_port "$peer_api_addr" 2>/dev/null)"; then
-    openwrt_add_firewall_rule "${rule_prefix}-peer-api-${port}" tcp "$port"
-  fi
-  if ! addr_is_loopback_only "$api_addr"; then
-    if port="$(address_port "$api_addr" 2>/dev/null)"; then
-      openwrt_add_firewall_rule "${rule_prefix}-api-${port}" tcp "$port"
-    fi
-  fi
-  config_listen_ports | while IFS= read -r port; do
-    [ -n "$port" ] || continue
-    openwrt_add_firewall_rule "${rule_prefix}-endpoint-udp-${port}" udp "$port"
-    openwrt_add_firewall_rule "${rule_prefix}-endpoint-tcp-${port}" tcp "$port"
-  done
-  if config_has_transport gre; then
-    openwrt_add_firewall_rule "${rule_prefix}-gre" gre
-  fi
-  if config_has_transport ipip; then
-    openwrt_add_firewall_rule "${rule_prefix}-ipip" 4
-  fi
-
-  uci commit firewall
-  if [ -x "$initdir/firewall" ]; then
-    "$initdir/firewall" reload >/dev/null 2>&1 || true
-  else
-    /etc/init.d/firewall reload >/dev/null 2>&1 || true
-  fi
-}
-
-package_dir="$stage/package"
-if [ "$input_kind" = tarball ]; then
-  rm -rf "$package_dir"
-  mkdir -p "$package_dir"
-  tar -xzf "$input_path" -C "$package_dir"
-else
-  package_dir="$stage"
-fi
-
-copy_mode() {
-  src="$1"
-  dst="$2"
-  mode="$3"
-  dir="${dst%/*}"
-  [ "$dir" = "$dst" ] || mkdir -p "$dir"
-  cp "$src" "$dst"
-  chmod "$mode" "$dst"
-}
-
-for name in trustixd trustixctl trustix-ca trustix-device; do
-  if [ -f "$package_dir/bin/$name" ]; then
-    copy_mode "$package_dir/bin/$name" "$prefix/bin/$name" 0755
-  elif [ "$name" != trustix-device ]; then
-    echo "missing binary: $package_dir/bin/$name" >&2
-    exit 1
-  fi
-done
-
-if [ -f "$package_dir/packaging/openwrt/trustix.init" ]; then
-  copy_mode "$package_dir/packaging/openwrt/trustix.init" "$initdir/trustix" 0755
-elif [ -f "$stage/packaging/openwrt/trustix.init" ]; then
-  copy_mode "$stage/packaging/openwrt/trustix.init" "$initdir/trustix" 0755
-else
-  echo "missing OpenWrt init script" >&2
-  exit 1
-fi
-
-mkdir -p "$sysconfdir" "$state_root"
-installed_config="${sysconfdir}/${instance}.yaml"
-if [ -n "$config_src" ]; then
-  case "$config_src" in
-    *.json) installed_config="${sysconfdir}/${instance}.json" ;;
-    *.yaml|*.yml) installed_config="${sysconfdir}/${instance}.yaml" ;;
-  esac
-  copy_mode "$config_src" "$installed_config" 0644
-fi
-
-if [ -n "$cert_src" ] && [ -d "$cert_src" ]; then
-  mkdir -p "$target_cert_dir"
-  find "$cert_src" -type f | while IFS= read -r file; do
-    rel="${file#$cert_src/}"
-    mode=0644
-    case "$file" in
-      *.key|*.p12|*.pfx) mode=0600 ;;
-    esac
-    copy_mode "$file" "$target_cert_dir/$rel" "$mode"
-  done
-fi
-
-env_tmp="$stage/${instance}.env.tmp"
-{
-  printf 'TRUSTIX_CONFIG=%s\n' "$installed_config"
-  printf 'TRUSTIX_BIN=%s/bin/trustixd\n' "$prefix"
-  printf 'TRUSTIX_DATA_DIR=%s/%s\n' "$state_root" "$instance"
-  printf 'TRUSTIX_API_ADDR=%s\n' "$api_addr"
-  printf 'TRUSTIX_PEER_API_ADDR=%s\n' "$peer_api_addr"
-  printf 'TRUSTIX_DATAPLANE=%s\n' "$dataplane"
-  printf 'TRUSTIX_EXTRA_ARGS="%s"\n' "$extra_args"
-  if openwrt_firewall_rules_enabled; then
-    printf 'TRUSTIX_OPENWRT_FIREWALL_RULES=1\n'
-  fi
-  printf '%s\n' "$runtime_env" | while IFS= read -r item; do
-    [ -n "$item" ] || continue
-    key="${item%%=*}"
-    value="${item#*=}"
-    case "$key" in
-      TRUSTIX_[A-Za-z0-9_]*)
-        esc_value="$(printf '%s' "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-        printf '%s="%s"\n' "$key" "$esc_value"
-        ;;
-    esac
-  done
-} >"$env_tmp"
-copy_mode "$env_tmp" "$sysconfdir/$instance.env" 0644
-rm -f "$env_tmp"
-
-install_openwrt_firewall_rules
-
-if [ "$enable_service" = 1 ]; then
-  "$initdir/trustix" enable
-fi
-if [ "$start_service" = 1 ]; then
-  "$initdir/trustix" stop "$instance" >/dev/null 2>&1 || true
-  "$initdir/trustix" start "$instance"
-  if command -v pgrep >/dev/null 2>&1; then
-    started=0
-    i=0
-    while [ "$i" -lt 10 ]; do
-      if pgrep -f "trustixd.*${instance}" >/dev/null 2>&1; then
-        started=1
-        break
-      fi
-      i=$((i + 1))
-      sleep 1
-    done
-    if [ "$started" != 1 ]; then
-      echo "OpenWrt instance did not show a trustixd process quickly: $instance" >&2
-      "$initdir/trustix" status "$instance" >&2 || true
-      command -v logread >/dev/null 2>&1 && logread | grep -i 'trustix' | tail -n 80 >&2 || true
-      exit 1
-    fi
-  fi
-fi
-
-if [ "$json" = 1 ]; then
-  esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-  printf '{"instance":"%s","service_manager":"openwrt","config":"%s","cert_dir":"%s","service":"%s trustix:%s","started":%s}\n' \
-    "$(esc "$instance")" "$(esc "$installed_config")" "$(esc "$target_cert_dir")" "$(esc "$initdir/trustix")" "$(esc "$instance")" "$start_service"
-else
-  printf '[trustix-deploy] deployed instance: %s (openwrt)\n' "$instance" >&2
-fi
-EOS
-)"
-  local config_remote="" cert_remote=""
-  [[ -n "$config_path" ]] && config_remote="${stage}/config"
-  [[ -n "$cert_dir" ]] && cert_remote="${stage}/certs"
-  "${ssh_cmd[@]}" "$target" "sh -s -- $(shell_quote "$stage") $(shell_quote "$input_kind") $(shell_quote "$input_path") $(shell_quote "$instance") $(shell_quote "$prefix") $(shell_quote "$sysconfdir") $(shell_quote "$state_root") $(shell_quote "$initdir") $(shell_quote "$target_cert_dir") $(shell_quote "$config_remote") $(shell_quote "$cert_remote") $(shell_quote "$api_addr") $(shell_quote "$peer_api_addr") $(shell_quote "$dataplane") $(shell_quote "$enable_service") $(shell_quote "$start_service") $(shell_quote "$json") $(shell_quote "$joined_extra") $(shell_quote "$joined_env") $(shell_quote "$openwrt_firewall_rules")" <<<"$remote_script"
+	local remote_status=0
+	"${ssh_cmd[@]}" "$target" "$command" || remote_status=$?
+	if ! cleanup_remote_deploy_stage; then
+		[[ "$remote_status" != "0" ]] || remote_status=1
+	fi
+	return "$remote_status"
 }
 
 install_from_package() {
@@ -939,8 +771,8 @@ install_from_package() {
       if [[ -f "${package_dir}/packaging/systemd/trustix-backup@.timer" ]]; then
         install_file "${package_dir}/packaging/systemd/trustix-backup@.timer" "${unitdir}/trustix-backup@.timer" 0644
       fi
-      run_root mkdir -p /var/backups/trustix
-      run_root chmod 0700 /var/backups/trustix
+		run_root mkdir -p "$backup_root"
+		run_root chmod 0700 "$backup_root"
       ;;
     openwrt)
       if [[ -f "${package_dir}/packaging/openwrt/trustix.init" ]]; then
@@ -970,7 +802,12 @@ install_config() {
 
   if [[ -n "$cert_dir" ]]; then
     run_root mkdir -p "$target_cert_dir"
-    local file rel mode
+		local file rel mode cert_list
+		cert_list="$(mktemp /tmp/trustix-deploy-certs.XXXXXX)"
+		deploy_temp_paths+=("$cert_list")
+		if ! find "$cert_dir" -type f -print0 >"$cert_list"; then
+			return 1
+		fi
     while IFS= read -r -d '' file; do
       rel="${file#${cert_dir}/}"
       mode=0644
@@ -978,11 +815,12 @@ install_config() {
         *.key|*.p12|*.pfx) mode=0600 ;;
       esac
       install_file "$file" "${target_cert_dir}/${rel}" "$mode"
-    done < <(find "$cert_dir" -type f -print0)
+		done <"$cert_list"
   fi
 
-  local env_tmp
-  env_tmp="$(mktemp)"
+	local env_tmp
+	env_tmp="$(mktemp)"
+	deploy_temp_paths+=("$env_tmp")
   {
     printf 'TRUSTIX_CONFIG=%s\n' "$installed_config"
     printf 'TRUSTIX_BIN=%s/bin/trustixd\n' "$prefix"
@@ -1031,22 +869,28 @@ local_deploy() {
   if [[ -n "$tarball" ]]; then
     [[ -f "$tarball" ]] || die "tarball not found: $tarball"
     need_cmd tar
-    stage="$(mktemp -d)"
-    tar -xzf "$tarball" -C "$stage"
+		stage="$(mktemp -d)"
+		deploy_temp_paths+=("$stage")
+		tar -xzf "$tarball" -C "$stage"
     package_dir="$stage"
   else
     [[ -d "$bin_dir" ]] || die "bin dir not found: $bin_dir"
-    package_dir="$(mktemp -d)"
+		package_dir="$(mktemp -d)"
+		deploy_temp_paths+=("$package_dir")
     mkdir -p "${package_dir}/bin"
     cp -a "${bin_dir}/." "${package_dir}/bin/"
     if [[ -d "${repo_root}/packaging" ]]; then
       cp -R "${repo_root}/packaging" "${package_dir}/packaging"
     fi
-  fi
+	fi
 
-  install_from_package "$package_dir"
-  install_config
-  install_openwrt_firewall_rules
+	begin_deploy_transaction
+	install_from_package "$package_dir"
+	install_config
+	if [[ "$service_manager" == "openwrt" ]] && run_root test -f /etc/config/firewall; then
+		snapshot_deploy_file /etc/config/firewall
+	fi
+	install_openwrt_firewall_rules
   case "$service_manager" in
     systemd)
       if command -v systemctl >/dev/null 2>&1 && { [[ "$enable_service" == "1" ]] || [[ "$start_service" == "1" ]]; }; then
@@ -1070,14 +914,19 @@ local_deploy() {
         run_root "${initdir}/trustix" enable
       fi
       if [[ "$start_service" == "1" ]]; then
-        run_root "${initdir}/trustix" stop "$instance" >/dev/null 2>&1 || true
+				if [[ "$deploy_service_was_active" == "1" ]]; then
+					run_root "${initdir}/trustix" stop "$instance"
+				else
+					run_root "${initdir}/trustix" stop "$instance" >/dev/null 2>&1 || true
+				fi
         run_root "${initdir}/trustix" start "$instance"
         wait_openwrt_instance_started "$instance" || die "OpenWrt instance did not start: ${instance}"
       fi
       ;;
-  esac
+	esac
+	deploy_transaction_committed=1
 
-  if [[ "$json" == "1" ]]; then
+	if [[ "$json" == "1" ]]; then
     printf '{'
     printf '"instance":"%s",' "$(json_escape "$instance")"
     printf '"service_manager":"%s",' "$(json_escape "$service_manager")"
@@ -1094,9 +943,6 @@ local_deploy() {
     log "deployed instance: $instance (${service_manager})"
   fi
 
-  if [[ -n "$stage" ]]; then
-    rm -rf "$stage"
-  fi
 }
 
 if [[ -n "$target" && -z "${TRUSTIX_DEPLOY_REMOTE_CHILD:-}" ]]; then

@@ -550,7 +550,7 @@ func (manager *Manager) resolveModuleSource(module config.KernelModuleConfig) mo
 		return moduleSource{
 			label:   embedded.label,
 			payload: payload,
-			sha256: cachedEmbeddedModuleSHA256(embedded.label, payload),
+			sha256:  cachedEmbeddedModuleSHA256(embedded.label, payload),
 		}
 	}
 	return moduleSource{label: path, path: path}
@@ -629,12 +629,16 @@ func loadParametersWithBuildSHA(source moduleSource, parameters string) string {
 	return setModuleParameter(parameters, moduleBuildSHAParam, sourceSHA)
 }
 
-func loadModuleFile(path, parameters string) error {
+func loadModuleFile(path, parameters string) (resultErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close kernel module %q: %w", path, err))
+		}
+	}()
 	if err := unix.FinitModule(int(file.Fd()), parameters, 0); err == nil {
 		return nil
 	} else if errors.Is(err, unix.EEXIST) {

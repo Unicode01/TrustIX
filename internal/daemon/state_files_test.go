@@ -92,6 +92,20 @@ func TestStateFilesDoctorReportsRuntimeState(t *testing.T) {
 	if err := daemon.persistPendingMembers(); err != nil {
 		t.Fatalf("persist pending: %v", err)
 	}
+	if err := os.WriteFile(daemon.configSignerCachePath(), mustJSON(t, persistedConfigSigners{
+		Version: 1,
+		Signers: []configSignerCertificate{{SignerID: "ix:ix-a", Certificate: []byte("certificate")}},
+	}), 0o600); err != nil {
+		t.Fatalf("write signer cache fixture: %v", err)
+	}
+	if err := os.WriteFile(daemon.ixProvisionTokenStorePath(), mustJSON(t, ixProvisionTokenStore{Tokens: []ixProvisionTokenRecord{{
+		Token:     "token",
+		IXID:      "ix-b",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}}}), 0o600); err != nil {
+		t.Fatalf("write provision token fixture: %v", err)
+	}
 
 	status := daemon.stateFilesStatus()
 	members := stateFileByName(t, status, "members")
@@ -105,6 +119,12 @@ func TestStateFilesDoctorReportsRuntimeState(t *testing.T) {
 	configLog := stateFileByName(t, status, "config_log")
 	if configLog.Records != 1 || !strings.Contains(configLog.Detail, "head_seq=1") {
 		t.Fatalf("config log status = %#v, want head_seq=1", configLog)
+	}
+	if signers := stateFileByName(t, status, "config_signers"); signers.Records != 1 {
+		t.Fatalf("config signer status = %#v, want records=1", signers)
+	}
+	if tokens := stateFileByName(t, status, "provision_tokens"); tokens.Records != 1 || tokens.EarliestExpiry.IsZero() {
+		t.Fatalf("provision token status = %#v, want one token with expiry", tokens)
 	}
 	check := daemon.stateFilesDoctorCheck()
 	if check.Name != "state_files" || check.Status != "warn" || !strings.Contains(check.Detail, "pending_members") {

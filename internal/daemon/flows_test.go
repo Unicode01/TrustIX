@@ -8363,6 +8363,7 @@ type deviceIdentitySession struct {
 	recordingSession
 	identity transport.PeerIdentity
 	recv     chan struct{}
+	closeErr error
 }
 
 func (session *deviceIdentitySession) RecvPacket() ([]byte, error) {
@@ -8374,7 +8375,7 @@ func (session *deviceIdentitySession) RecvPacket() ([]byte, error) {
 }
 
 func (session *deviceIdentitySession) Close() error {
-	session.recordingSession.Close()
+	_ = session.recordingSession.Close()
 	if session.recv != nil {
 		select {
 		case <-session.recv:
@@ -8382,7 +8383,7 @@ func (session *deviceIdentitySession) Close() error {
 			close(session.recv)
 		}
 	}
-	return nil
+	return session.closeErr
 }
 
 func (session *deviceIdentitySession) PeerIdentity() (core.IXID, core.DomainID, bool) {
@@ -8395,9 +8396,10 @@ func (session *deviceIdentitySession) PeerIdentityDetail() (transport.PeerIdenti
 
 type blockingIdentitySession struct {
 	recordingSession
-	peer   core.IXID
-	domain core.DomainID
-	recv   chan struct{}
+	peer     core.IXID
+	domain   core.DomainID
+	recv     chan struct{}
+	closeErr error
 }
 
 func (session *blockingIdentitySession) RecvPacket() ([]byte, error) {
@@ -8409,7 +8411,7 @@ func (session *blockingIdentitySession) RecvPacket() ([]byte, error) {
 }
 
 func (session *blockingIdentitySession) Close() error {
-	session.recordingSession.Close()
+	_ = session.recordingSession.Close()
 	if session.recv == nil {
 		session.recv = make(chan struct{})
 	}
@@ -8418,7 +8420,7 @@ func (session *blockingIdentitySession) Close() error {
 	default:
 		close(session.recv)
 	}
-	return nil
+	return session.closeErr
 }
 
 func (session *blockingIdentitySession) PeerIdentity() (core.IXID, core.DomainID, bool) {
@@ -8894,11 +8896,13 @@ func tcpMSSOptionValue(t *testing.T, tcp []byte) uint16 {
 		t.Fatalf("tcp header len = %d exceeds packet %d", tcpHeaderLen, len(tcp))
 	}
 	options := tcp[20:tcpHeaderLen]
+
+optionsLoop:
 	for i := 0; i < len(options); {
 		kind := options[i]
 		switch kind {
 		case 0:
-			break
+			break optionsLoop
 		case 1:
 			i++
 			continue

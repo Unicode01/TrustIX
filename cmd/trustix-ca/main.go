@@ -22,7 +22,10 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "version":
-		buildinfo.WriteText(os.Stdout, buildinfo.Snapshot())
+		if err := buildinfo.WriteText(os.Stdout, buildinfo.Snapshot()); err != nil {
+			fmt.Fprintf(os.Stderr, "trustix-ca: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	case "quickstart":
 		err = quickstart(os.Args[2:])

@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -30,30 +31,33 @@ func acquireDataDirLock(dataDir string) (heldDataDirLock, error) {
 		return nil, fmt.Errorf("open data dir lock %q: %w", path, err)
 	}
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		_ = file.Close()
+		closeErr := file.Close()
 		if err == unix.EWOULDBLOCK || err == unix.EAGAIN {
 			owner := readLockOwnerPID(path)
 			if owner != "" {
-				return nil, fmt.Errorf("data dir %q is already locked by trustixd pid %s", dataDir, owner)
+				return nil, errors.Join(
+					fmt.Errorf("data dir %q is already locked by trustixd pid %s", dataDir, owner),
+					wrapOperationError("close data dir lock after contention", closeErr),
+				)
 			}
-			return nil, fmt.Errorf("data dir %q is already locked by another trustixd process", dataDir)
+			return nil, errors.Join(
+				fmt.Errorf("data dir %q is already locked by another trustixd process", dataDir),
+				wrapOperationError("close data dir lock after contention", closeErr),
+			)
 		}
-		return nil, fmt.Errorf("lock data dir %q: %w", dataDir, err)
+		return nil, errors.Join(
+			fmt.Errorf("lock data dir %q: %w", dataDir, err),
+			wrapOperationError("close data dir lock after lock failure", closeErr),
+		)
 	}
 	if err := file.Truncate(0); err != nil {
-		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
-		_ = file.Close()
-		return nil, fmt.Errorf("truncate data dir lock %q: %w", path, err)
+		return nil, errors.Join(fmt.Errorf("truncate data dir lock %q: %w", path, err), releaseFailedDataDirLock(file))
 	}
 	if _, err := file.Seek(0, 0); err != nil {
-		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
-		_ = file.Close()
-		return nil, fmt.Errorf("seek data dir lock %q: %w", path, err)
+		return nil, errors.Join(fmt.Errorf("seek data dir lock %q: %w", path, err), releaseFailedDataDirLock(file))
 	}
 	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
-		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
-		_ = file.Close()
-		return nil, fmt.Errorf("write data dir lock %q: %w", path, err)
+		return nil, errors.Join(fmt.Errorf("write data dir lock %q: %w", path, err), releaseFailedDataDirLock(file))
 	}
 	return &flockDataDirLock{file: file, path: path}, nil
 }
@@ -62,18 +66,22 @@ func (lock *flockDataDirLock) Close() error {
 	if lock == nil || lock.file == nil {
 		return nil
 	}
-	var errs []error
-	if err := unix.Flock(int(lock.file.Fd()), unix.LOCK_UN); err != nil {
-		errs = append(errs, err)
-	}
-	if err := lock.file.Close(); err != nil {
-		errs = append(errs, err)
-	}
+	err := releaseFailedDataDirLock(lock.file)
 	lock.file = nil
-	if len(errs) > 0 {
-		return fmt.Errorf("release data dir lock %q: %w", lock.path, errs[0])
+	if err != nil {
+		return fmt.Errorf("release data dir lock %q: %w", lock.path, err)
 	}
 	return nil
+}
+
+func releaseFailedDataDirLock(file *os.File) error {
+	if file == nil {
+		return nil
+	}
+	return errors.Join(
+		wrapOperationError("unlock data dir lock", unix.Flock(int(file.Fd()), unix.LOCK_UN)),
+		wrapOperationError("close data dir lock", file.Close()),
+	)
 }
 
 func (lock *flockDataDirLock) Path() string {

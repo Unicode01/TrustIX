@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -405,7 +406,7 @@ func (daemon *Daemon) applyAdmissionConfigLocked(ctx context.Context, admission 
 	admission.DomainID = daemon.desired.Domain.ID
 	adminProofs := adminProofsFromContext(ctx)
 	if err := daemon.verifyAdminProofPolicy(adminProofs, daemon.desired.Trust); err != nil {
-		return false, err
+		return false, newConfigMutationRequestError(err)
 	}
 	head, err := daemon.store.Head()
 	if err != nil {
@@ -416,18 +417,28 @@ func (daemon *Daemon) applyAdmissionConfigLocked(ctx context.Context, admission 
 		admission.EffectiveAt = time.Now().UTC()
 	}
 	if err := validateAdmissionPayload(admission, daemon.desired.Domain.ID); err != nil {
-		return false, err
+		return false, newConfigMutationRequestError(err)
 	}
 	event, plannedHead, changed, err := daemon.admissionEventIfChangedAtHead(admission, adminProofs, head)
 	if err != nil || !changed {
 		return changed, err
 	}
+	var commitErr error
 	if err := daemon.store.Append(*event); err != nil {
-		return false, fmt.Errorf("append admission event: %w", err)
+		if configlog.CommitSucceeded(err) {
+			commitErr = err
+		} else {
+			return false, fmt.Errorf("append admission event: %w", err)
+		}
 	}
 	daemon.head = plannedHead
 	if err := daemon.afterAdmissionStateChangedLocked(ctx); err != nil {
-		return true, err
+		daemon.requestRuntimeReconcile("admission mutation", err)
+		return true, newCommittedConfigMutationError("admission mutation", err)
+	}
+	if commitErr != nil {
+		daemon.requestRuntimeReconcile("admission mutation durability", commitErr)
+		return true, newCommittedConfigMutationError("admission mutation", commitErr)
 	}
 	return true, nil
 }
@@ -435,27 +446,28 @@ func (daemon *Daemon) applyAdmissionConfigLocked(ctx context.Context, admission 
 func (daemon *Daemon) afterAdmissionStateChangedLocked(ctx context.Context) error {
 	membersChanged := daemon.pruneUnadmittedMembersLocked()
 	admittedPending := daemon.admitPendingMembers()
+	var sessionCloseErr error
 	if membersChanged {
 		if err := daemon.persistMembers(); err != nil {
 			return err
 		}
-		daemon.closeUntrustedDataSessions()
+		sessionCloseErr = errors.Join(sessionCloseErr, daemon.closeUntrustedDataSessions())
 	}
 	if len(admittedPending) > 0 {
-		daemon.closeDataSessionsForPeers(admittedPending)
+		sessionCloseErr = errors.Join(sessionCloseErr, daemon.closeDataSessionsForPeers(admittedPending))
 		daemon.clearFlowsForPeers(admittedPending)
 	}
 	if err := daemon.persistPendingMembers(); err != nil {
-		return err
+		return errors.Join(sessionCloseErr, err)
 	}
 	runtimeChanged := membersChanged || len(admittedPending) > 0
 	if err := daemon.applyRuntimeDataplaneSnapshot(ctx); err != nil {
-		return err
+		return errors.Join(sessionCloseErr, err)
 	}
 	if runtimeChanged {
 		daemon.scheduleRuntimeRouteWarmup(ctx)
 	}
-	return daemon.refreshLocalAdvertisement()
+	return errors.Join(sessionCloseErr, daemon.refreshLocalAdvertisement())
 }
 
 func (daemon *Daemon) admissionEventIfChangedAtHead(admission admissionPayload, adminProofs []configlog.AdminProof, head configlog.Head) (*configlog.Event, configlog.Head, bool, error) {
@@ -773,7 +785,11 @@ func (daemon *Daemon) updatePendingMemberRejectReason(ixID core.IXID, reason err
 	}
 	daemon.membershipMu.Unlock()
 	if ok {
-		_ = daemon.persistPendingMembers()
+		if err := daemon.persistPendingMembers(); err != nil {
+			daemon.recordBackgroundError("pending_members_persist", err)
+		} else {
+			daemon.clearBackgroundError("pending_members_persist")
+		}
 	}
 }
 

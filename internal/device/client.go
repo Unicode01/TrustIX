@@ -117,7 +117,7 @@ func NewClient(cfg Config) (*Client, error) {
 	return &Client{cfg: cfg}, nil
 }
 
-func (client *Client) Run(ctx context.Context) error {
+func (client *Client) Run(ctx context.Context) (resultErr error) {
 	tlsConf, err := client.clientTLSConfig()
 	if err != nil {
 		return err
@@ -137,14 +137,22 @@ func (client *Client) Run(ctx context.Context) error {
 		return fmt.Errorf("dial device access endpoint: %w", err)
 	}
 	client.session = session
-	defer session.Close()
+	defer func() {
+		if err := session.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close device access session: %w", err))
+		}
+	}()
 
 	iface, err := client.cfg.OpenInterface(client.cfg.Interface)
 	if err != nil {
 		return err
 	}
 	client.iface = iface
-	defer iface.Close()
+	defer func() {
+		if err := iface.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close device interface: %w", err))
+		}
+	}()
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -321,14 +329,22 @@ func (client *Client) handleSessionPackets(ctx context.Context, iface Interface,
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if client.handleControl(iface, packet) {
+		handled, err := client.handleControl(iface, packet)
+		if err != nil {
+			return err
+		}
+		if handled {
 			continue
 		}
 		if decoded, ok := DecodeBatchInto(packet, (*scratch)[:0]); ok {
 			*scratch = decoded
 			atomic.AddUint64(&client.stats.BatchesReceived, 1)
 			for _, item := range decoded {
-				if client.handleControl(iface, item) {
+				handled, err := client.handleControl(iface, item)
+				if err != nil {
+					return err
+				}
+				if handled {
 					continue
 				}
 				if err := client.writeDataPacket(iface, item); err != nil {
@@ -344,19 +360,21 @@ func (client *Client) handleSessionPackets(ctx context.Context, iface Interface,
 	return nil
 }
 
-func (client *Client) handleControl(iface Interface, packet []byte) bool {
+func (client *Client) handleControl(iface Interface, packet []byte) (bool, error) {
 	kind, nonce, ok := DecodeControl(packet)
 	if !ok {
-		return false
+		return false, nil
 	}
 	atomic.AddUint64(&client.stats.ControlFrames, 1)
 	switch kind {
 	case DataSessionControlPing:
-		_ = client.session.SendPacket(EncodeControl(DataSessionControlPong, nonce))
+		if err := client.session.SendPacket(EncodeControl(DataSessionControlPong, nonce)); err != nil {
+			return true, fmt.Errorf("send control pong: %w", err)
+		}
 	case DataSessionControlDeviceLease:
 		lease, ok := DecodeLease(packet)
 		if !ok {
-			return true
+			return true, fmt.Errorf("decode device lease control frame")
 		}
 		client.leaseMu.Lock()
 		client.lastLease = lease
@@ -364,7 +382,7 @@ func (client *Client) handleControl(iface Interface, packet []byte) bool {
 		routes := mergeLeaseAndBootstrapRoutes(lease.Routes, client.cfg.Interface.Routes)
 		if err := iface.Configure(lease, routes); err != nil {
 			client.cfg.Logf("configure %s lease %s failed: %v", iface.Name(), lease.Prefix, err)
-			return true
+			return true, fmt.Errorf("configure %s lease %s: %w", iface.Name(), lease.Prefix, err)
 		}
 		if lease.ExpiresAt.IsZero() {
 			client.cfg.Logf("device lease: %s on %s", lease.Prefix, iface.Name())
@@ -372,7 +390,7 @@ func (client *Client) handleControl(iface Interface, packet []byte) bool {
 			client.cfg.Logf("device lease: %s on %s expires %s", lease.Prefix, iface.Name(), lease.ExpiresAt.Format(time.RFC3339))
 		}
 	}
-	return true
+	return true, nil
 }
 
 func mergeLeaseAndBootstrapRoutes(leaseRoutes, bootstrapRoutes []netip.Prefix) []netip.Prefix {

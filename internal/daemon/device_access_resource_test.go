@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -117,6 +118,65 @@ func TestTrustRevokeDropsDeviceAccessSession(t *testing.T) {
 	}
 	if len(daemon.deviceLeases) != 0 {
 		t.Fatalf("device leases after trust revoke = %#v, want none", daemon.deviceLeases)
+	}
+}
+
+func TestDropRevokedDeviceAccessSessionsReturnsCloseError(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	daemon := newConfigApplyTestDaemon(t, deviceAccessDesiredForResourceTest(pkiSet))
+	closeErr := errors.New("injected session close failure")
+	session := &deviceIdentitySession{
+		identity: transport.PeerIdentity{
+			Role:            string(pki.RoleDevice),
+			Peer:            "ix-a",
+			Domain:          "lab.local",
+			Device:          "laptop-close-error",
+			CertFingerprint: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		},
+		recv:     make(chan struct{}),
+		closeErr: closeErr,
+	}
+	registerResourceTestDeviceSession(t, daemon, session)
+	daemon.desired.Trust.RevokedCertFingerprints = []string{session.identity.CertFingerprint}
+
+	dropped, err := daemon.dropRevokedDeviceAccessSessions()
+	if dropped != 1 {
+		t.Fatalf("dropped sessions = %d, want 1", dropped)
+	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("drop revoked sessions error = %v, want %v", err, closeErr)
+	}
+	if !session.closed.Load() {
+		t.Fatal("revoked device session close was not attempted")
+	}
+}
+
+func TestDropDeviceAccessSessionsByFingerprintReturnsCloseError(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	daemon := newConfigApplyTestDaemon(t, deviceAccessDesiredForResourceTest(pkiSet))
+	closeErr := errors.New("injected direct close failure")
+	session := &deviceIdentitySession{
+		identity: transport.PeerIdentity{
+			Role:            string(pki.RoleDevice),
+			Peer:            "ix-a",
+			Domain:          "lab.local",
+			Device:          "laptop-direct-close-error",
+			CertFingerprint: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+		},
+		recv:     make(chan struct{}),
+		closeErr: closeErr,
+	}
+	registerResourceTestDeviceSession(t, daemon, session)
+
+	dropped, err := daemon.dropDeviceAccessSessionsByFingerprint(session.identity.CertFingerprint)
+	if dropped != 1 {
+		t.Fatalf("dropped sessions = %d, want 1", dropped)
+	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("drop sessions error = %v, want %v", err, closeErr)
+	}
+	if !session.closed.Load() {
+		t.Fatal("device session close was not attempted")
 	}
 }
 
@@ -251,6 +311,26 @@ func TestDeviceAccessIssueRequiresAdminProofAndReturnsBundle(t *testing.T) {
 	}
 	if response.ClientConfigJSON == "" {
 		t.Fatal("client config json is empty")
+	}
+}
+
+func TestDeviceAccessIssueIssuerReadFailureReturnsServerError(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := deviceAccessDesiredWithIssuerForResourceTest(t, pkiSet)
+	desired.Endpoints[0].Address = "203.0.113.10:7000"
+	daemon := newConfigApplyTestDaemon(t, desired)
+	daemon.cfg.APIAdminAuth = true
+	daemon.desired.IX.KeyPath = filepath.Join(t.TempDir(), "missing.key")
+	body := mustJSON(t, deviceAccessIssueRequest{Device: "laptop-2", Endpoint: "access-udp", TTL: "1h"})
+	request := httptest.NewRequest(http.MethodPost, "/v1/device-access/issue", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	signAdminTestRequest(t, request, body, pkiSet.adminCert, pkiSet.adminKey)
+	recorder := httptest.NewRecorder()
+
+	daemon.handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
 	}
 }
 

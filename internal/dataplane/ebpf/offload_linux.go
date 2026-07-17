@@ -4,6 +4,7 @@ package ebpf
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -642,7 +643,7 @@ func namedNetNSPaths() ([]namedNetNSPath, error) {
 	return paths, nil
 }
 
-func withNetNS(path string, fn func() error) error {
+func withNetNS(path string, fn func() error) (resultErr error) {
 	if path == "" {
 		return fn()
 	}
@@ -653,19 +654,29 @@ func withNetNS(path string, fn func() error) error {
 	if err != nil {
 		return err
 	}
-	defer original.Close()
+	defer func() {
+		if err := original.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close original network namespace: %w", err))
+		}
+	}()
 
 	target, err := netns.GetFromPath(path)
 	if err != nil {
 		return err
 	}
-	defer target.Close()
+	defer func() {
+		if err := target.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close target network namespace %q: %w", path, err))
+		}
+	}()
 
 	if err := netns.Set(target); err != nil {
 		return err
 	}
 	defer func() {
-		_ = netns.Set(original)
+		if err := netns.Set(original); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("restore original network namespace: %w", err))
+		}
 	}()
 	return fn()
 }
@@ -853,12 +864,16 @@ func setEthtoolFeature(iface string, count int, index int, active bool) error {
 	return ioctlEthtool(iface, unsafe.Pointer(&buf[0]))
 }
 
-func ioctlEthtool(iface string, data unsafe.Pointer) error {
+func ioctlEthtool(iface string, data unsafe.Pointer) (resultErr error) {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer func() {
+		if err := unix.Close(fd); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close ethtool socket for %q: %w", iface, err))
+		}
+	}()
 
 	var ifreq ethtoolIFReq
 	copy(ifreq.Name[:unix.IFNAMSIZ-1], iface)

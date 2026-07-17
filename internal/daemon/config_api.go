@@ -21,7 +21,10 @@ import (
 	"trustix.local/trustix/internal/routing"
 )
 
-const maxDesiredConfigBytes = 4 << 20
+const (
+	maxDesiredConfigBytes        = 4 << 20
+	desiredRuntimeRestoreTimeout = 30 * time.Second
+)
 
 type configValidateResponse struct {
 	Valid     bool   `json:"valid"`
@@ -360,13 +363,13 @@ func (daemon *Daemon) applyDesiredConfigLocked(ctx context.Context, desired conf
 		return false, fmt.Errorf("config log store is not initialized")
 	}
 	if err := daemon.validateDesiredForRuntime(desired); err != nil {
-		return false, err
+		return false, newConfigMutationRequestError(err)
 	}
 	adminProofs := adminProofsFromContext(ctx)
 	trustChanged := !trustConfigsEqual(daemon.desired.Trust, desired.Trust)
 	if trustChanged {
 		if err := daemon.verifyAdminProofPolicy(adminProofs, daemon.desired.Trust); err != nil {
-			return false, err
+			return false, newConfigMutationRequestError(err)
 		}
 	}
 	head, err := daemon.store.Head()
@@ -443,28 +446,38 @@ func (daemon *Daemon) applyDesiredConfigLocked(ctx context.Context, desired conf
 	if err := daemon.switchDesiredRuntime(ctx, desired, head); err != nil {
 		return false, err
 	}
-	for _, event := range eventsToAppend {
-		if err := daemon.store.Append(event); err != nil {
+	var commitErr error
+	if err := daemon.store.AppendBatch(eventsToAppend); err != nil {
+		if configlog.CommitSucceeded(err) {
+			commitErr = err
+		} else {
 			restoreErr := daemon.switchDesiredRuntime(ctx, oldDesired, oldHead)
 			if restoreErr != nil {
-				return false, fmt.Errorf("append desired config event: %w; restore previous runtime: %v", err, restoreErr)
+				return false, fmt.Errorf("append desired config events: %w; restore previous runtime: %v", err, restoreErr)
 			}
-			return false, fmt.Errorf("append desired config event: %w", err)
+			return false, fmt.Errorf("append desired config events: %w", err)
 		}
 	}
 	head, err = daemon.store.Head()
 	if err != nil {
-		return desiredChanged || trustChanged || baselineChanged, err
+		daemon.requestRuntimeReconcile("config apply", err)
+		return desiredChanged || trustChanged || baselineChanged, newCommittedConfigMutationError("config apply", err)
 	}
 	daemon.head = head
 	runtimeTrustChanged, err := daemon.enforceRuntimeTrustState()
 	if err != nil {
-		return desiredChanged || trustChanged || baselineChanged, err
+		daemon.requestRuntimeReconcile("config apply", err)
+		return desiredChanged || trustChanged || baselineChanged, newCommittedConfigMutationError("config apply", err)
 	}
 	if runtimeTrustChanged {
 		if err := daemon.applyRuntimeDataplaneSnapshot(ctx); err != nil {
-			return desiredChanged || trustChanged || baselineChanged, err
+			daemon.requestRuntimeReconcile("config apply", err)
+			return desiredChanged || trustChanged || baselineChanged, newCommittedConfigMutationError("config apply", err)
 		}
+	}
+	if commitErr != nil {
+		daemon.requestRuntimeReconcile("config apply durability", commitErr)
+		return desiredChanged || trustChanged || baselineChanged, newCommittedConfigMutationError("config apply", commitErr)
 	}
 	return desiredChanged || trustChanged || baselineChanged, nil
 }
@@ -474,16 +487,23 @@ func (daemon *Daemon) ensureLocalDesiredBaselineLocked(adminProofs []configlog.A
 	if err != nil || exists {
 		return false, err
 	}
-	event, _, changed, err := daemon.desiredEventIfChanged(daemon.desired, adminProofs)
+	event, plannedHead, changed, err := daemon.desiredEventIfChanged(daemon.desired, adminProofs)
 	if err != nil || !changed {
 		return false, err
 	}
 	if err := daemon.store.Append(*event); err != nil {
+		if configlog.CommitSucceeded(err) {
+			daemon.head = plannedHead
+			daemon.requestRuntimeReconcile("desired baseline durability", err)
+			return true, newCommittedConfigMutationError("desired baseline", err)
+		}
 		return false, fmt.Errorf("append baseline desired config event: %w", err)
 	}
 	head, err := daemon.store.Head()
 	if err != nil {
-		return true, err
+		daemon.head = plannedHead
+		daemon.requestRuntimeReconcile("desired baseline", err)
+		return true, newCommittedConfigMutationError("desired baseline", err)
 	}
 	daemon.head = head
 	return true, nil
@@ -604,8 +624,12 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 
 	preDetachedDataplane := false
 	if kernelModuleDataplaneChange {
-		daemon.closeDataPath()
-		daemon.closeCaptureForwarder()
+		if err := daemon.closeDataPath(); err != nil {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
+		if err := daemon.closeCaptureForwarder(); err != nil {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
 		if err := daemon.dataplane.Detach(ctx); err != nil {
 			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
 		}
@@ -624,12 +648,18 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 
 	if restartListeners {
 		if !preDetachedDataplane {
-			daemon.closeDataPath()
+			if err := daemon.closeDataPath(); err != nil {
+				return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+			}
 		}
 	} else if restartAllSessions {
-		daemon.closeDataSessions()
+		if err := daemon.closeDataSessions(); err != nil {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
 	} else if len(restartPeers) > 0 {
-		daemon.closeDataSessionsForPeers(restartPeers)
+		if err := daemon.closeDataSessionsForPeers(restartPeers); err != nil {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
 		daemon.clearFlowsForPeers(restartPeers)
 	}
 	daemon.setRuntimeDesired(desired, head)
@@ -650,8 +680,12 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 		}
 	}
 	if reloadDataplane {
-		daemon.stopKernelDatapathRXStage()
-		daemon.closeCaptureForwarder()
+		if err := daemon.stopKernelDatapathRXStage(); err != nil {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
+		if err := daemon.closeCaptureForwarder(); err != nil {
+			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+		}
 		if !preDetachedDataplane {
 			if err := daemon.dataplane.Detach(ctx); err != nil {
 				return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
@@ -760,11 +794,28 @@ func passiveListenerEndpoints(endpoints []config.EndpointConfig) []config.Endpoi
 }
 
 func (daemon *Daemon) restoreDesiredRuntime(ctx context.Context, desired config.Desired, head configlog.Head, domain core.DomainID, ix core.IXID, flows map[routing.FlowKey]routing.FlowBinding, cause error) error {
-	daemon.closeDataPath()
-	daemon.closeCaptureForwarder()
+	restoreErr := daemon.restoreDesiredRuntimeState(ctx, desired, head, domain, ix, flows)
+	if restoreErr != nil {
+		return fmt.Errorf("%w; restore previous runtime: %v", cause, restoreErr)
+	}
+	return cause
+}
+
+func (daemon *Daemon) restoreDesiredRuntimeState(ctx context.Context, desired config.Desired, head configlog.Head, domain core.DomainID, ix core.IXID, flows map[routing.FlowKey]routing.FlowBinding) error {
+	ctx, cancel := desiredRuntimeRestoreContext(ctx)
+	defer cancel()
+
+	closeDataPathErr := daemon.closeDataPath()
+	closeCaptureErr := daemon.closeCaptureForwarder()
 	daemon.restoreFlows(flows)
 
 	var restoreErrs []error
+	if closeDataPathErr != nil {
+		restoreErrs = append(restoreErrs, closeDataPathErr)
+	}
+	if closeCaptureErr != nil {
+		restoreErrs = append(restoreErrs, closeCaptureErr)
+	}
 	daemon.setRuntimeDesired(desired, head)
 	daemon.cfg.DomainID = domain
 	daemon.cfg.IXID = ix
@@ -802,9 +853,18 @@ func (daemon *Daemon) restoreDesiredRuntime(ctx context.Context, desired config.
 		restoreErrs = append(restoreErrs, err)
 	}
 	if len(restoreErrs) > 0 {
-		return fmt.Errorf("%w; restore previous runtime: %v", cause, errors.Join(restoreErrs...))
+		restoreErr := errors.Join(restoreErrs...)
+		daemon.requestRuntimeReconcile("restore desired runtime state", restoreErr)
+		return restoreErr
 	}
-	return cause
+	return nil
+}
+
+func desiredRuntimeRestoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), desiredRuntimeRestoreTimeout)
 }
 
 func (daemon *Daemon) setRuntimeDesired(desired config.Desired, head configlog.Head) {

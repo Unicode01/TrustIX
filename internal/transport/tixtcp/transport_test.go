@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -23,6 +24,35 @@ import (
 	securetransport "trustix.local/trustix/internal/transport/secure"
 	"trustix.local/trustix/internal/transport/stream"
 )
+
+func TestListenerClosePersistsSubscriptionError(t *testing.T) {
+	wantErr := errors.New("injected subscription close failure")
+	listener := &listener{
+		subscription: &closeErrorTIXTCPSubscription{events: make(chan dataplane.TIXTCPFrame), err: wantErr},
+		done:         make(chan struct{}),
+		sessions:     make(map[uint64]*session),
+	}
+
+	if err := listener.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("first close error = %v, want %v", err, wantErr)
+	}
+	if err := listener.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("second close error = %v, want persisted %v", err, wantErr)
+	}
+}
+
+type closeErrorTIXTCPSubscription struct {
+	events chan dataplane.TIXTCPFrame
+	err    error
+}
+
+func (subscription *closeErrorTIXTCPSubscription) Events() <-chan dataplane.TIXTCPFrame {
+	return subscription.events
+}
+
+func (subscription *closeErrorTIXTCPSubscription) Close() error {
+	return subscription.err
+}
 
 func TestSecureTransportOverTIXTCPProvider(t *testing.T) {
 	providerA, providerB := newProviderPair("ix-a", "ix-b")

@@ -5,10 +5,12 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"trustix.local/trustix/internal/transport"
@@ -42,7 +44,9 @@ func (transportImpl *Transport) Probe(ctx context.Context, peer transport.Peer) 
 		if err != nil {
 			return transport.ProbeResult{Healthy: false, Error: err.Error(), CheckedAt: time.Now()}
 		}
-		_ = conn.Close()
+		if err := conn.Close(); err != nil {
+			return transport.ProbeResult{Healthy: false, Error: fmt.Sprintf("close HTTP CONNECT probe connection: %v", err), CheckedAt: time.Now()}
+		}
 		return transport.ProbeResult{Healthy: true, RTT: time.Since(start), CheckedAt: time.Now()}
 	}
 	return transport.ProbeResult{Healthy: false, Error: "no http_connect endpoint", CheckedAt: time.Now()}
@@ -58,19 +62,27 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			return nil, err
 		}
 		if err := writeConnectRequest(conn, endpoint.Address); err != nil {
-			_ = conn.Close()
-			return nil, err
+			return nil, errors.Join(err, httpConnectCleanupError("close HTTP CONNECT connection", conn.Close()))
 		}
 		reader := bufio.NewReader(conn)
 		response, err := http.ReadResponse(reader, nil)
 		if err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("read HTTP CONNECT response: %w", err)
+			return nil, errors.Join(
+				fmt.Errorf("read HTTP CONNECT response: %w", err),
+				httpConnectCleanupError("close HTTP CONNECT connection", conn.Close()),
+			)
 		}
-		_ = response.Body.Close()
+		if err := response.Body.Close(); err != nil {
+			return nil, errors.Join(
+				fmt.Errorf("close HTTP CONNECT response body: %w", err),
+				httpConnectCleanupError("close HTTP CONNECT connection", conn.Close()),
+			)
+		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			_ = conn.Close()
-			return nil, fmt.Errorf("HTTP CONNECT returned %s", response.Status)
+			return nil, errors.Join(
+				fmt.Errorf("HTTP CONNECT returned %s", response.Status),
+				httpConnectCleanupError("close HTTP CONNECT connection", conn.Close()),
+			)
 		}
 		return stream.NewSession(&bufferedConn{Conn: conn, reader: reader}), nil
 	}
@@ -98,15 +110,18 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	if err != nil {
 		return nil, err
 	}
+	listener := &listener{ln: ln}
 	go func() {
 		<-ctx.Done()
-		_ = ln.Close()
+		_ = listener.Close()
 	}()
-	return &listener{ln: ln}, nil
+	return listener, nil
 }
 
 type listener struct {
-	ln net.Listener
+	ln        net.Listener
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (listener *listener) Accept(ctx context.Context) (transport.Session, error) {
@@ -128,15 +143,17 @@ func (listener *listener) Accept(ctx context.Context) (transport.Session, error)
 		}
 		session, err := acceptTunnel(accepted.conn)
 		if err != nil {
-			_ = accepted.conn.Close()
-			return nil, err
+			return nil, errors.Join(err, httpConnectCleanupError("close rejected HTTP CONNECT connection", accepted.conn.Close()))
 		}
 		return session, nil
 	}
 }
 
 func (listener *listener) Close() error {
-	return listener.ln.Close()
+	listener.closeOnce.Do(func() {
+		listener.closeErr = listener.ln.Close()
+	})
+	return listener.closeErr
 }
 
 func acceptTunnel(conn net.Conn) (transport.Session, error) {
@@ -145,19 +162,34 @@ func acceptTunnel(conn net.Conn) (transport.Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read HTTP CONNECT request: %w", err)
 	}
-	_ = request.Body.Close()
+	if err := request.Body.Close(); err != nil {
+		return nil, fmt.Errorf("close HTTP CONNECT request body: %w", err)
+	}
 	if request.Method != http.MethodConnect {
-		_, _ = fmt.Fprintf(conn, "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
-		return nil, fmt.Errorf("HTTP CONNECT expected method CONNECT, got %s", request.Method)
+		_, writeErr := fmt.Fprintf(conn, "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+		return nil, errors.Join(
+			fmt.Errorf("HTTP CONNECT expected method CONNECT, got %s", request.Method),
+			httpConnectCleanupError("write HTTP CONNECT method rejection", writeErr),
+		)
 	}
 	if strings.TrimSpace(request.Host) == "" {
-		_, _ = fmt.Fprintf(conn, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-		return nil, fmt.Errorf("HTTP CONNECT Host is required")
+		_, writeErr := fmt.Fprintf(conn, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+		return nil, errors.Join(
+			fmt.Errorf("HTTP CONNECT Host is required"),
+			httpConnectCleanupError("write HTTP CONNECT host rejection", writeErr),
+		)
 	}
 	if _, err := fmt.Fprintf(conn, "HTTP/1.1 200 Connection Established\r\nContent-Length: 0\r\n\r\n"); err != nil {
 		return nil, err
 	}
 	return stream.NewSession(&bufferedConn{Conn: conn, reader: reader}), nil
+}
+
+func httpConnectCleanupError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func dialConn(ctx context.Context, endpoint transport.Endpoint, tlsConf *tls.Config) (net.Conn, error) {

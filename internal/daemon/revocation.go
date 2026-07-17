@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 
 	"trustix.local/trustix/internal/config"
@@ -88,7 +89,9 @@ func (daemon *Daemon) enforceRuntimeTrustState() (bool, error) {
 		}
 	}
 	if membersChanged || signersChanged {
-		daemon.closeUntrustedDataSessions()
+		if err := daemon.closeUntrustedDataSessions(); err != nil {
+			return true, err
+		}
 	}
 	return membersChanged || pendingChanged || signersChanged, nil
 }
@@ -200,7 +203,7 @@ func (daemon *Daemon) trustRevocationDoctorCheck() doctorCheck {
 	return doctorCheck{Name: "trust_revocation", Status: "ok", Detail: fmt.Sprintf("%d revoked certificate fingerprints active", count)}
 }
 
-func (daemon *Daemon) closeUntrustedDataSessions() {
+func (daemon *Daemon) closeUntrustedDataSessions() error {
 	allowedPeers := make(map[core.IXID]struct{})
 	for _, peer := range daemon.desired.Peers {
 		allowedPeers[peer.ID] = struct{}{}
@@ -221,7 +224,11 @@ func (daemon *Daemon) closeUntrustedDataSessions() {
 		delete(daemon.dataSessions, key)
 	}
 	daemon.dataMu.Unlock()
+	var closeErrs []error
 	for _, session := range sessions {
-		_ = session.Close()
+		if err := session.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("close untrusted data session: %w", err))
+		}
 	}
+	return errors.Join(closeErrs...)
 }

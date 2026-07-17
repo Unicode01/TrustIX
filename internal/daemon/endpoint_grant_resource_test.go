@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,7 +149,10 @@ func TestEndpointGrantExpiryDropsExistingInboundSession(t *testing.T) {
 		t.Fatalf("inbound session with endpoint grant rejected: %v", err)
 	}
 
-	dropped := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(issue.Grant.ExpiresAt.Add(time.Nanosecond))
+	dropped, err := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(issue.Grant.ExpiresAt.Add(time.Nanosecond))
+	if err != nil {
+		t.Fatalf("drop expired endpoint grant session: %v", err)
+	}
 	if dropped != 1 {
 		t.Fatalf("expired grant dropped %d sessions, want 1", dropped)
 	}
@@ -189,18 +193,132 @@ func TestEndpointGrantCleanupFailsClosedWhenGrantLogUnreadable(t *testing.T) {
 		endpoint: config.EndpointConfig{Name: "access-udp", Transport: "udp"},
 	}
 
-	dropped := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicy()
+	dropped, err := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicy()
 	if dropped != 1 {
 		t.Fatalf("grant cleanup with unreadable log dropped %d sessions, want 1", dropped)
+	}
+	if err == nil || !strings.Contains(err.Error(), "failing endpoint grant store range") {
+		t.Fatalf("grant cleanup error = %v, want store range error", err)
 	}
 	if !session.closed.Load() {
 		t.Fatal("grant cleanup with unreadable log did not close require_grant session")
 	}
 }
 
+func TestEndpointGrantCleanupReturnsSessionCloseError(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	desired.Endpoints = []config.EndpointConfig{{
+		Name:       "access-udp",
+		Mode:       config.EndpointModePassive,
+		Transport:  "udp",
+		Enabled:    true,
+		EnabledSet: true,
+		Access:     config.EndpointAccessConfig{Mode: "require_grant"},
+	}}
+	daemon := newConfigApplyTestDaemon(t, desired)
+	prepareEndpointGrantSessionTestDaemon(daemon)
+	closeErr := errors.New("injected endpoint grant close failure")
+	session := &blockingIdentitySession{
+		peer:     "ix-b",
+		domain:   "lab.local",
+		recv:     make(chan struct{}),
+		closeErr: closeErr,
+	}
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "access-udp",
+		Transport:  transport.ProtocolUDP,
+		Address:    reverseSessionAddress,
+		Encryption: "secure",
+	}
+	daemon.dataSessions[key] = session
+	daemon.dataSessionState[key] = &dataSessionRuntime{
+		key:      key,
+		session:  session,
+		endpoint: desired.Endpoints[0],
+	}
+
+	dropped, err := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicy()
+	if dropped != 1 {
+		t.Fatalf("dropped sessions = %d, want 1", dropped)
+	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("grant cleanup error = %v, want %v", err, closeErr)
+	}
+	if !session.closed.Load() {
+		t.Fatal("endpoint grant session close was not attempted")
+	}
+}
+
+func TestEndpointGrantCleanupKeepsSessionWithAnotherActiveGrant(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	desired.Endpoints = []config.EndpointConfig{{
+		Name:       "access-udp",
+		Mode:       config.EndpointModePassive,
+		Transport:  "udp",
+		Enabled:    true,
+		EnabledSet: true,
+		Access:     config.EndpointAccessConfig{Mode: "require_grant"},
+	}}
+	daemon := newConfigApplyTestDaemon(t, desired)
+	prepareEndpointGrantSessionTestDaemon(daemon)
+	session := &blockingIdentitySession{peer: "ix-b", domain: "lab.local", recv: make(chan struct{})}
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "access-udp",
+		Transport:  transport.ProtocolUDP,
+		Address:    reverseSessionAddress,
+		Encryption: "secure",
+	}
+	daemon.dataSessions[key] = session
+	daemon.dataSessionState[key] = &dataSessionRuntime{
+		key:      key,
+		session:  session,
+		endpoint: desired.Endpoints[0],
+	}
+	now := time.Now().UTC()
+	grants := []endpointGrantPayload{
+		{
+			IssuerIX:    desired.IX.ID,
+			SubjectIX:   "ix-b",
+			Endpoint:    "access-udp",
+			Transport:   "udp",
+			State:       endpointGrantStateRevoked,
+			Permissions: []string{endpointGrantPermissionDataSession},
+		},
+		{
+			IssuerIX:    desired.IX.ID,
+			SubjectIX:   "ix-b",
+			Endpoint:    "access-udp",
+			Transport:   "udp",
+			State:       endpointGrantStateActive,
+			Permissions: []string{endpointGrantPermissionDataSession},
+			ExpiresAt:   now.Add(time.Hour),
+		},
+	}
+	localEndpoints := map[core.EndpointID]config.EndpointConfig{"access-udp": desired.Endpoints[0]}
+
+	dropped, err := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicySnapshot(now, grants, localEndpoints, nil)
+	if err != nil {
+		t.Fatalf("grant cleanup: %v", err)
+	}
+	if dropped != 0 {
+		t.Fatalf("dropped sessions = %d, want 0", dropped)
+	}
+	if session.closed.Load() {
+		t.Fatal("session with another active grant was closed")
+	}
+}
+
 type failingEndpointGrantStore struct{}
 
 func (failingEndpointGrantStore) Append(configlog.Event) error {
+	return errors.New("failing endpoint grant store is read-only")
+}
+
+func (failingEndpointGrantStore) AppendBatch([]configlog.Event) error {
 	return errors.New("failing endpoint grant store is read-only")
 }
 

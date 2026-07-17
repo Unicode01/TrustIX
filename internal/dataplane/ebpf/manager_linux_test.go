@@ -386,6 +386,17 @@ func TestKernelUDPTXFlowValueABI(t *testing.T) {
 	}
 }
 
+func TestAppendTCPChecksumIncludesChecksumFold(t *testing.T) {
+	fold := appendChecksumFold(nil)
+	instructions := appendTCPChecksum(nil, "checksum_error")
+	if len(instructions) <= len(fold) {
+		t.Fatalf("TCP checksum instructions = %d, want checksum setup plus %d fold instructions", len(instructions), len(fold))
+	}
+	if suffix := instructions[len(instructions)-len(fold):]; !reflect.DeepEqual(suffix, fold) {
+		t.Fatalf("TCP checksum instructions do not end with checksum fold\n got: %#v\nwant: %#v", suffix, fold)
+	}
+}
+
 func TestKernelUDPTXBPFMapSnapshotIncludesRoutesFlowsAndInlineSlots(t *testing.T) {
 	routeMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_kudp_tx_route_snapshot_test", Type: cebpf.LPMTrie, KeySize: 8, ValueSize: kernelUDPTXRouteValueSize, MaxEntries: 16, Flags: 1})
 	defer routeMap.Close()
@@ -554,7 +565,7 @@ func TestKernelUDPTelemetrySnapshotIncludesKernelCryptoTraffic(t *testing.T) {
 
 func TestKernelUDPProviderStatsIncludeLANReinjectCounters(t *testing.T) {
 	oldStats := lanPacketStats
-	lanPacketStats = lanPacketInjectorStats{}
+	lanPacketStats = &lanPacketInjectorStats{}
 	t.Cleanup(func() {
 		lanPacketStats = oldStats
 	})
@@ -11212,9 +11223,10 @@ func TestKernelUDPTCOnlyPendingAllowsInitialPlaintextFlowInstall(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "0")
 	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "0")
 	manager := NewManager()
+	underlay := testHardwareUnderlayInterface(t)
 	manager.spec = dataplane.AttachSpec{
 		LANIface:              "lan0",
-		UnderlayIface:         "eth0",
+		UnderlayIface:         underlay,
 		KernelUDPTXDirectOnly: true,
 	}
 	manager.attached = true
@@ -11257,6 +11269,22 @@ func TestKernelUDPTCOnlyPendingAllowsInitialPlaintextFlowInstall(t *testing.T) {
 	if manager.kernelUDPTXDirectSync.FlowsScanned == 0 {
 		t.Fatalf("pending TC-only flow install did not sync TX direct state: %+v", manager.kernelUDPTXDirectSync)
 	}
+}
+
+func testHardwareUnderlayInterface(t *testing.T) string {
+	t.Helper()
+	links, err := netlink.LinkList()
+	if err != nil {
+		t.Skipf("list underlay interfaces: %v", err)
+	}
+	for _, link := range links {
+		attrs := link.Attrs()
+		if attrs != nil && attrs.Name != "" && attrs.Index > 0 && len(attrs.HardwareAddr) == 6 {
+			return attrs.Name
+		}
+	}
+	t.Skip("no hardware-addressed underlay interface is available")
+	return ""
 }
 
 func TestSnapshotReconcileDropsStaleKernelTransportFlows(t *testing.T) {

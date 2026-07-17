@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -86,15 +87,26 @@ func (daemon *Daemon) applyOpenWRTDNSMasq(ctx context.Context) error {
 		return err
 	}
 	statePath := daemon.openWRTDNSMasqStatePath()
-	state, _ := readOpenWRTDNSMasqState(statePath)
+	state, err := readOpenWRTDNSMasqState(statePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read openwrt dnsmasq state: %w", err)
+	}
 	if state.Server != "" && state.Server != server {
-		_ = openWRTDNSMasqDelServer(ctx, openWRTDNSMasqCommands, state.Section, state.Server)
+		if err := openWRTDNSMasqDelServer(ctx, openWRTDNSMasqCommands, state.Section, state.Server); err != nil {
+			return err
+		}
 	}
 	if state.RebindDomain != "" && state.RebindDomain != rebindDomain {
-		_ = openWRTDNSMasqDelRebindDomain(ctx, openWRTDNSMasqCommands, state.Section, state.RebindDomain)
+		if err := openWRTDNSMasqDelRebindDomain(ctx, openWRTDNSMasqCommands, state.Section, state.RebindDomain); err != nil {
+			return err
+		}
 	}
-	_ = openWRTDNSMasqDelServer(ctx, openWRTDNSMasqCommands, openWRTDNSMasqUCISection, server)
-	_ = openWRTDNSMasqDelRebindDomain(ctx, openWRTDNSMasqCommands, openWRTDNSMasqUCISection, rebindDomain)
+	if err := openWRTDNSMasqDelServer(ctx, openWRTDNSMasqCommands, openWRTDNSMasqUCISection, server); err != nil {
+		return err
+	}
+	if err := openWRTDNSMasqDelRebindDomain(ctx, openWRTDNSMasqCommands, openWRTDNSMasqUCISection, rebindDomain); err != nil {
+		return err
+	}
 	if err := openWRTDNSMasqAddServer(ctx, openWRTDNSMasqCommands, openWRTDNSMasqUCISection, server); err != nil {
 		return err
 	}
@@ -117,21 +129,31 @@ func (daemon *Daemon) applyOpenWRTDNSMasq(ctx context.Context) error {
 func (daemon *Daemon) cleanupOpenWRTDNSMasq(ctx context.Context) error {
 	statePath := daemon.openWRTDNSMasqStatePath()
 	state, err := readOpenWRTDNSMasqState(statePath)
-	if err != nil || state.Server == "" && state.RebindDomain == "" {
+	if errors.Is(err, os.ErrNotExist) || err == nil && state.Server == "" && state.RebindDomain == "" {
 		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read openwrt dnsmasq state: %w", err)
 	}
 	if err := openWRTDNSMasqAvailable(openWRTDNSMasqCommands); err != nil {
-		return nil
+		return err
 	}
-	_ = openWRTDNSMasqDelServer(ctx, openWRTDNSMasqCommands, state.Section, state.Server)
-	_ = openWRTDNSMasqDelRebindDomain(ctx, openWRTDNSMasqCommands, state.Section, state.RebindDomain)
+	if err := openWRTDNSMasqDelServer(ctx, openWRTDNSMasqCommands, state.Section, state.Server); err != nil {
+		return err
+	}
+	if err := openWRTDNSMasqDelRebindDomain(ctx, openWRTDNSMasqCommands, state.Section, state.RebindDomain); err != nil {
+		return err
+	}
 	if err := openWRTDNSMasqCommit(ctx, openWRTDNSMasqCommands); err != nil {
 		return err
 	}
 	if err := openWRTDNSMasqReload(ctx, openWRTDNSMasqCommands); err != nil {
 		return err
 	}
-	return os.Remove(statePath)
+	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return syncStateDirectory(filepath.Dir(statePath))
 }
 
 func (daemon *Daemon) dnsMasqStatus() dnsMasqStatus {
@@ -234,6 +256,9 @@ func openWRTDNSMasqDelServer(ctx context.Context, runner openWRTCommandRunner, s
 	}
 	_, err := runner.Run(ctx, "uci", "-q", "del_list", section+".server="+server)
 	if err != nil {
+		if openWRTUCIDeleteValueMissing(err) {
+			return nil
+		}
 		return fmt.Errorf("remove openwrt dnsmasq server %q: %w", server, err)
 	}
 	return nil
@@ -255,9 +280,17 @@ func openWRTDNSMasqDelRebindDomain(ctx context.Context, runner openWRTCommandRun
 	}
 	_, err := runner.Run(ctx, "uci", "-q", "del_list", section+".rebind_domain="+domain)
 	if err != nil {
+		if openWRTUCIDeleteValueMissing(err) {
+			return nil
+		}
 		return fmt.Errorf("remove openwrt dnsmasq rebind domain %q: %w", domain, err)
 	}
 	return nil
+}
+
+func openWRTUCIDeleteValueMissing(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
 }
 
 func openWRTDNSMasqAddRebindDomain(ctx context.Context, runner openWRTCommandRunner, section string, domain string) error {
@@ -288,7 +321,7 @@ func openWRTDNSMasqReload(ctx context.Context, runner openWRTCommandRunner) erro
 	reloadErr := fmt.Errorf("reload openwrt dnsmasq: %w%s", err, commandOutputSuffix(out))
 	out, restartErr := runner.Run(ctx, openWRTDNSMasqInitScript, "restart")
 	if restartErr != nil {
-		return fmt.Errorf("%w; restart openwrt dnsmasq: %v%s", reloadErr, restartErr, commandOutputSuffix(out))
+		return errors.Join(reloadErr, fmt.Errorf("restart openwrt dnsmasq: %w%s", restartErr, commandOutputSuffix(out)))
 	}
 	return nil
 }
@@ -329,7 +362,7 @@ func writeOpenWRTDNSMasqState(path string, state openWRTDNSMasqState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(payload, '\n'), 0o600)
+	return writeStateFileAtomic(path, append(payload, '\n'), 0o600)
 }
 
 func dnsMasqIntegrationEnabled(desired config.Desired) bool {

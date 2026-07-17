@@ -114,6 +114,32 @@ TRUSTIX_BACKUP_DIR=$workdir/backups
 TRUSTIX_BACKUP_KEEP=2
 EOF
 
+cat >"$workdir/bin/failing-trustixctl" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+out=""
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "-out" ]]; then
+    out="$2"
+    break
+  fi
+  shift
+done
+[[ -n "$out" ]] || exit 2
+printf 'partial backup\n' >"$out"
+exit 42
+EOF
+chmod 0755 "$workdir/bin/failing-trustixctl"
+cat >"$workdir/etc/ix-fail.env" <<EOF
+TRUSTIX_BACKUP_CTL=$workdir/bin/failing-trustixctl
+TRUSTIX_BACKUP_API=$api
+EOF
+cat >"$workdir/etc/ix-fail.backup.env" <<EOF
+TRUSTIX_BACKUP_RECIPIENT=$workdir/backup.pub
+TRUSTIX_BACKUP_DIR=$workdir/failed-backups
+TRUSTIX_BACKUP_KEEP=2
+EOF
+
 cat >"$workdir/fake-bin/crontab" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -166,6 +192,20 @@ if grep -q '# trustix-backup:ix-test' "$workdir/crontab"; then
 fi
 
 log "create and rotate encrypted backups"
+if bash "$backup_script" backup \
+  --instance ix-fail \
+  --instance-env "$workdir/etc/ix-fail.env" \
+  --backup-env "$workdir/etc/ix-fail.backup.env" \
+  >"$workdir/failed-backup.out" 2>"$workdir/failed-backup.err"; then
+  die "backup succeeded despite injected trustixctl failure"
+fi
+if compgen -G "$workdir/failed-backups/*.tixbak" >/dev/null; then
+  die "failed backup left a partial archive"
+fi
+[[ ! -e "$workdir/failed-backups/.ix-fail.backup.lock" ]] || die "failed backup left its lock"
+
+mkdir -p "$workdir/backups/.ix-test.backup.lock"
+printf '99999999 1\n' >"$workdir/backups/.ix-test.backup.lock/owner"
 for _ in 1 2 3; do
   bash "$backup_script" backup \
     --instance ix-test \

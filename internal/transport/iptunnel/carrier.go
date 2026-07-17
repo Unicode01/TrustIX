@@ -168,6 +168,7 @@ type carrier struct {
 	closeFunc              func() error
 	conn                   *net.UDPConn
 	closeOnce              sync.Once
+	closeErr               error
 	recvMu                 sync.Mutex
 	sendSeq                atomic.Uint64
 	bytesSent              atomic.Uint64
@@ -208,6 +209,7 @@ type packetListener struct {
 	acceptCh  chan transport.Session
 	done      chan struct{}
 	closeOnce sync.Once
+	closeErr  error
 	mu        sync.Mutex
 	sessions  map[string]*carrierServerSession
 }
@@ -1087,8 +1089,10 @@ func dialUDPOnCarrier(ctx context.Context, local netip.Addr, remote netip.Addr, 
 	}
 	udpConn, ok := conn.(*net.UDPConn)
 	if !ok {
-		_ = conn.Close()
-		return nil, fmt.Errorf("dial tunnel carrier returned %T", conn)
+		return nil, errors.Join(
+			fmt.Errorf("dial tunnel carrier returned %T", conn),
+			wrapManagerError("close unexpected tunnel carrier connection", conn.Close()),
+		)
 	}
 	return udpConn, nil
 }
@@ -1395,21 +1399,24 @@ func (session *carrier) recordReceivedPackets(packets uint64, bytes uint64) {
 }
 
 func (session *carrier) Close() error {
-	var err error
 	session.closeOnce.Do(func() {
+		var errs []error
 		if session.conn != nil {
-			err = session.conn.Close()
+			if err := session.conn.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close tunnel carrier connection: %w", err))
+			}
 		}
 		if session.closeFunc != nil {
-			if closeErr := session.closeFunc(); err == nil {
-				err = closeErr
+			if err := session.closeFunc(); err != nil {
+				errs = append(errs, fmt.Errorf("release kernel tunnel: %w", err))
 			}
 		}
 		session.recvMu.Lock()
 		session.reassembler.releaseAll()
 		session.recvMu.Unlock()
+		session.closeErr = errors.Join(errs...)
 	})
-	return err
+	return session.closeErr
 }
 
 func (session *carrier) Stats() transport.TransportStats {
@@ -1514,15 +1521,15 @@ func (listener *packetListener) Accept(ctx context.Context) (transport.Session, 
 }
 
 func (listener *packetListener) Close() error {
-	var err error
 	listener.closeOnce.Do(func() {
 		close(listener.done)
+		var errs []error
 		for _, conn := range listener.conns {
 			if conn == nil {
 				continue
 			}
-			if closeErr := conn.Close(); err == nil {
-				err = closeErr
+			if err := conn.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close tunnel listener connection: %w", err))
 			}
 		}
 		listener.mu.Lock()
@@ -1531,8 +1538,9 @@ func (listener *packetListener) Close() error {
 			delete(listener.sessions, key)
 		}
 		listener.mu.Unlock()
+		listener.closeErr = errors.Join(errs...)
 	})
-	return err
+	return listener.closeErr
 }
 
 func (listener *packetListener) readLoop(conn *net.UDPConn) {

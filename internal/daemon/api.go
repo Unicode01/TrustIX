@@ -28,33 +28,35 @@ import (
 )
 
 type statusResponse struct {
-	DomainID       string                `json:"domain_id"`
-	IXID           string                `json:"ix_id"`
-	ConfigPath     string                `json:"config_path"`
-	ConfigLogPath  string                `json:"config_log_path"`
-	DataDir        string                `json:"data_dir"`
-	APIAddr        string                `json:"api_addr"`
-	APIAdminAuth   bool                  `json:"api_admin_auth"`
-	PeerAPIAddr    string                `json:"peer_api_addr"`
-	StartedAt      time.Time             `json:"started_at"`
-	Build          buildinfo.Info        `json:"build"`
-	Management     managementAPIStatus   `json:"management"`
-	DNS            dnsStatus             `json:"dns"`
-	LAN            lanStatus             `json:"lan"`
-	LANs           []lanStatus           `json:"lans,omitempty"`
-	ConfigHead     headResponse          `json:"config_head"`
-	Counts         statusCounts          `json:"counts"`
-	DomainIX       domainIXStatus        `json:"domain_ix"`
-	DomainPrefixes domainPrefixStatus    `json:"domain_prefixes"`
-	Transports     []string              `json:"transports"`
-	Dataplane      string                `json:"dataplane"`
-	DataplaneEpoch uint64                `json:"dataplane_epoch"`
-	KernelModules  []kernelmodule.Status `json:"kernel_modules,omitempty"`
-	Runtime        runtimeResourceStatus `json:"runtime"`
-	StateFiles     stateFilesStatus      `json:"state_files"`
-	TransportTLS   transportTLSStatus    `json:"transport_tls"`
-	DataPath       dataPathStatus        `json:"data_path"`
-	ConfigSync     []configSyncPeerState `json:"config_sync,omitempty"`
+	DomainID         string                  `json:"domain_id"`
+	IXID             string                  `json:"ix_id"`
+	ConfigPath       string                  `json:"config_path"`
+	ConfigLogPath    string                  `json:"config_log_path"`
+	DataDir          string                  `json:"data_dir"`
+	APIAddr          string                  `json:"api_addr"`
+	APIAdminAuth     bool                    `json:"api_admin_auth"`
+	PeerAPIAddr      string                  `json:"peer_api_addr"`
+	StartedAt        time.Time               `json:"started_at"`
+	Build            buildinfo.Info          `json:"build"`
+	Management       managementAPIStatus     `json:"management"`
+	DNS              dnsStatus               `json:"dns"`
+	LAN              lanStatus               `json:"lan"`
+	LANs             []lanStatus             `json:"lans,omitempty"`
+	ConfigHead       headResponse            `json:"config_head"`
+	Counts           statusCounts            `json:"counts"`
+	DomainIX         domainIXStatus          `json:"domain_ix"`
+	DomainPrefixes   domainPrefixStatus      `json:"domain_prefixes"`
+	Transports       []string                `json:"transports"`
+	Dataplane        string                  `json:"dataplane"`
+	DataplaneEpoch   uint64                  `json:"dataplane_epoch"`
+	KernelModules    []kernelmodule.Status   `json:"kernel_modules,omitempty"`
+	Runtime          runtimeResourceStatus   `json:"runtime"`
+	StateFiles       stateFilesStatus        `json:"state_files"`
+	TransportTLS     transportTLSStatus      `json:"transport_tls"`
+	DataPath         dataPathStatus          `json:"data_path"`
+	ConfigSync       []configSyncPeerState   `json:"config_sync,omitempty"`
+	Reconcile        runtimeReconcileStatus  `json:"reconcile"`
+	BackgroundErrors []backgroundErrorStatus `json:"background_errors,omitempty"`
 }
 
 type statusCounts struct {
@@ -295,17 +297,19 @@ func (daemon *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 			Routes:         len(view.Routes),
 			Policies:       len(daemon.desired.Policies),
 		},
-		DomainIX:       daemon.domainIXStatus(time.Now().UTC(), view.DataPath),
-		DomainPrefixes: domainPrefixStatusForRoutes(daemon.desired.IX.ID, view.Routes, daemon.runtimeRoutePolicyDecisions()),
-		Transports:     transportNames(daemon.transports.Names()),
-		Dataplane:      fmt.Sprintf("%T", daemon.dataplane),
-		DataplaneEpoch: view.DataplaneStats.Epoch,
-		KernelModules:  daemon.kernelModuleStatuses(),
-		Runtime:        view.Runtime,
-		StateFiles:     daemon.stateFilesStatus(),
-		TransportTLS:   daemon.transportTLSStatus(view.DataPath),
-		DataPath:       publicDataPathStatus(view.DataPath),
-		ConfigSync:     daemon.configSyncSnapshot(),
+		DomainIX:         daemon.domainIXStatus(time.Now().UTC(), view.DataPath),
+		DomainPrefixes:   domainPrefixStatusForRoutes(daemon.desired.IX.ID, view.Routes, daemon.runtimeRoutePolicyDecisions()),
+		Transports:       transportNames(daemon.transports.Names()),
+		Dataplane:        fmt.Sprintf("%T", daemon.dataplane),
+		DataplaneEpoch:   view.DataplaneStats.Epoch,
+		KernelModules:    daemon.kernelModuleStatuses(),
+		Runtime:          view.Runtime,
+		StateFiles:       daemon.stateFilesStatus(),
+		TransportTLS:     daemon.transportTLSStatus(view.DataPath),
+		DataPath:         publicDataPathStatus(view.DataPath),
+		ConfigSync:       daemon.configSyncSnapshot(),
+		Reconcile:        daemon.runtimeReconcileStatus(),
+		BackgroundErrors: daemon.backgroundErrorSnapshot(),
 	})
 }
 
@@ -1416,6 +1420,8 @@ func (daemon *Daemon) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		{Name: "config", Status: "ok", Detail: "desired config loaded and validated"},
 		{Name: "config_log", Status: "ok", Detail: fmt.Sprintf("head seq=%d path=%s", daemon.head.Seq, daemon.logPath)},
 		{Name: "config_sync", Status: configSyncDoctorStatus(configSyncStates), Detail: configSyncDoctorDetail(configSyncStates)},
+		daemon.runtimeReconcileDoctorCheck(),
+		daemon.backgroundErrorsDoctorCheck(),
 		daemon.apiSecurityDoctorCheck(),
 		daemon.managementHostAPIDoctorCheck(),
 		daemon.managementTLSDoctorCheck(),
@@ -1631,11 +1637,12 @@ func (daemon *Daemon) handleControlAdvertisementPost(w http.ResponseWriter, r *h
 			}{Accepted: false, Pending: true, Changed: false, Error: err.Error()})
 			return
 		}
-		writeError(w, http.StatusBadRequest, err)
+		writeConfigMutationError(w, err)
 		return
 	}
 	if changed {
 		if err := daemon.applyRuntimeDataplaneSnapshot(r.Context()); err != nil {
+			daemon.requestRuntimeReconcile("membership advertisement", err)
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -1662,13 +1669,12 @@ func (daemon *Daemon) handleControlMemberDelete(w http.ResponseWriter, r *http.R
 	delete(daemon.members, ixID)
 	daemon.membershipMu.Unlock()
 	if existed {
-		daemon.closeDataSessionsForPeers(map[core.IXID]struct{}{ixID: {}})
+		closeErr := daemon.closeDataSessionsForPeers(map[core.IXID]struct{}{ixID: {}})
 		daemon.clearFlowsForPeers(map[core.IXID]struct{}{ixID: {}})
-		if err := daemon.persistMembers(); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if err := daemon.applyRuntimeDataplaneSnapshot(r.Context()); err != nil {
+		persistErr := daemon.persistMembers()
+		dataplaneErr := daemon.applyRuntimeDataplaneSnapshot(r.Context())
+		if err := errors.Join(closeErr, persistErr, dataplaneErr); err != nil {
+			daemon.requestRuntimeReconcile("member deletion", err)
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}

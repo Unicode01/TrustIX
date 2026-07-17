@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"runtime"
@@ -20,6 +21,35 @@ import (
 	"trustix.local/trustix/internal/transport"
 	securetransport "trustix.local/trustix/internal/transport/secure"
 )
+
+func TestKernelListenerClosePersistsSubscriptionError(t *testing.T) {
+	wantErr := errors.New("injected kernel udp subscription close failure")
+	listener := &kernelListener{
+		subscription: &closeErrorKernelUDPSubscription{events: make(chan dataplane.KernelUDPFrame), err: wantErr},
+		done:         make(chan struct{}),
+		sessions:     make(map[uint64]*kernelSession),
+	}
+
+	if err := listener.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("first close error = %v, want %v", err, wantErr)
+	}
+	if err := listener.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("second close error = %v, want persisted %v", err, wantErr)
+	}
+}
+
+type closeErrorKernelUDPSubscription struct {
+	events chan dataplane.KernelUDPFrame
+	err    error
+}
+
+func (subscription *closeErrorKernelUDPSubscription) Events() <-chan dataplane.KernelUDPFrame {
+	return subscription.events
+}
+
+func (subscription *closeErrorKernelUDPSubscription) Close() error {
+	return subscription.err
+}
 
 func TestTransportSendReceive(t *testing.T) {
 	addr := freeUDPAddr(t)
@@ -359,6 +389,29 @@ func TestKernelSessionStatsAdvertisesDatagramDefaultMaxPacketSize(t *testing.T) 
 	}
 	if got, want := stats.Extra[kernelUDPStatFragmentPayloadSize], uint64(1200); got != want {
 		t.Fatalf("%s = %d, want %d", kernelUDPStatFragmentPayloadSize, got, want)
+	}
+}
+
+func TestKernelDialReturnsSubscriptionAndFlowCleanupErrors(t *testing.T) {
+	base, _ := newKernelUDPProviderPair()
+	subscribeErr := errors.New("injected subscribe failure")
+	deleteErr := errors.New("injected flow delete failure")
+	provider := &setupFailureKernelUDPProvider{
+		fakeKernelUDPProvider: base,
+		subscribeErr:          subscribeErr,
+		deleteErr:             deleteErr,
+	}
+	transportImpl := NewWithKernelProvider(provider)
+	_, err := transportImpl.Dial(context.Background(), transport.Peer{
+		ID: "ix-b",
+		Endpoints: []transport.Endpoint{{
+			Name:      "kernel-udp",
+			Transport: transport.ProtocolUDP,
+			Address:   "198.51.100.2:17041",
+		}},
+	}, nil)
+	if !errors.Is(err, subscribeErr) || !errors.Is(err, deleteErr) {
+		t.Fatalf("dial error = %v, want subscription and flow cleanup errors", err)
 	}
 }
 
@@ -2310,6 +2363,20 @@ type fakeKernelUDPProvider struct {
 	received           uint64
 	subscribeCalls     int
 	flowSubscribeCalls int
+}
+
+type setupFailureKernelUDPProvider struct {
+	*fakeKernelUDPProvider
+	subscribeErr error
+	deleteErr    error
+}
+
+func (provider *setupFailureKernelUDPProvider) SubscribeKernelUDPFlow(context.Context, uint64, int) (dataplane.KernelUDPSubscription, error) {
+	return nil, provider.subscribeErr
+}
+
+func (provider *setupFailureKernelUDPProvider) DeleteKernelUDPFlows(context.Context, []uint64) error {
+	return provider.deleteErr
 }
 
 func newKernelUDPProviderPair() (*fakeKernelUDPProvider, *fakeKernelUDPProvider) {

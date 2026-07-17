@@ -38,7 +38,30 @@ type stateFileStatus struct {
 	WorldReadableOrWritable bool      `json:"world_readable_or_writable,omitempty"`
 }
 
-func writeStateFileAtomic(path string, payload []byte, mode os.FileMode) error {
+type stateFileCommitError struct {
+	Err error
+}
+
+func (err *stateFileCommitError) Error() string {
+	if err == nil || err.Err == nil {
+		return "state file committed with an unknown durability error"
+	}
+	return err.Err.Error()
+}
+
+func (err *stateFileCommitError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
+func stateFileCommitSucceeded(err error) bool {
+	var committed *stateFileCommitError
+	return errors.As(err, &committed)
+}
+
+func writeStateFileAtomic(path string, payload []byte, mode os.FileMode) (resultErr error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -49,26 +72,40 @@ func writeStateFileAtomic(path string, payload []byte, mode os.FileMode) error {
 	}
 	tmp := file.Name()
 	cleanup := true
+	closed := false
 	defer func() {
+		if !closed {
+			if err := file.Close(); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("close temporary state file %q: %w", tmp, err))
+			}
+		}
 		if cleanup {
-			_ = os.Remove(tmp)
+			if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+				resultErr = errors.Join(resultErr, fmt.Errorf("remove temporary state file %q: %w", tmp, err))
+			}
 		}
 	}()
 	if _, err := file.Write(payload); err != nil {
-		_ = file.Close()
 		return err
 	}
 	if err := file.Chmod(mode); err != nil {
-		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
 		return err
 	}
 	if err := file.Close(); err != nil {
+		closed = true
 		return err
 	}
+	closed = true
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
 	cleanup = false
+	if err := syncStateDirectory(dir); err != nil {
+		return &stateFileCommitError{Err: fmt.Errorf("sync state directory %q: %w", dir, err)}
+	}
 	return nil
 }
 
@@ -77,6 +114,8 @@ func (daemon *Daemon) stateFilesStatus() stateFilesStatus {
 		daemon.configLogFileStatus(),
 		daemon.membersFileStatus(),
 		daemon.pendingMembersFileStatus(),
+		daemon.configSignerCacheFileStatus(),
+		daemon.provisionTokenFileStatus(),
 		daemon.ipTunnelStateFileStatus(),
 	}
 	return stateFilesStatus{Files: files}
@@ -227,6 +266,54 @@ func (daemon *Daemon) pendingMembersFileStatus() stateFileStatus {
 	return status
 }
 
+func (daemon *Daemon) configSignerCacheFileStatus() stateFileStatus {
+	status := inspectStateFile("config_signers", daemon.configSignerCachePath())
+	if !status.Exists || status.Status == "degraded" {
+		return status
+	}
+	var state persistedConfigSigners
+	if err := decodeJSONFile(status.Path, &state); err != nil {
+		status.Status = "warn"
+		status.Detail = err.Error()
+		return status
+	}
+	status.Records = len(state.Signers)
+	return status
+}
+
+func (daemon *Daemon) provisionTokenFileStatus() stateFileStatus {
+	status := inspectStateFile("provision_tokens", daemon.ixProvisionTokenStorePath())
+	if !status.Exists || status.Status == "degraded" {
+		return status
+	}
+	var state ixProvisionTokenStore
+	if err := decodeJSONFile(status.Path, &state); err != nil {
+		status.Status = "warn"
+		status.Detail = err.Error()
+		return status
+	}
+	status.Records = len(state.Tokens)
+	now := time.Now().UTC()
+	for _, record := range state.Tokens {
+		if !record.ExpiresAt.After(now) {
+			status.ExpiredRecords++
+		}
+		if !record.ExpiresAt.IsZero() {
+			if status.EarliestExpiry.IsZero() || record.ExpiresAt.Before(status.EarliestExpiry) {
+				status.EarliestExpiry = record.ExpiresAt
+			}
+			if status.LatestExpiry.IsZero() || record.ExpiresAt.After(status.LatestExpiry) {
+				status.LatestExpiry = record.ExpiresAt
+			}
+		}
+	}
+	if status.ExpiredRecords > 0 && status.Status == "ok" {
+		status.Status = "warn"
+		status.Detail = "contains expired provision token record(s)"
+	}
+	return status
+}
+
 func (daemon *Daemon) ipTunnelStateFileStatus() stateFileStatus {
 	path := filepath.Join(daemon.cfg.DataDir, "iptunnel", "state.json")
 	status := inspectStateFile("iptunnel", path)
@@ -331,6 +418,9 @@ func quarantineBadStateFile(path string, cause error) (string, error) {
 	}
 	if err := os.Rename(path, target); err != nil {
 		return "", fmt.Errorf("quarantine bad state file %q after %v: %w", path, cause, err)
+	}
+	if err := syncStateDirectory(filepath.Dir(path)); err != nil {
+		return target, fmt.Errorf("quarantine bad state file %q after %v committed but directory sync failed: %w", path, cause, err)
 	}
 	return target, nil
 }

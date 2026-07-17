@@ -656,25 +656,27 @@ func (scratch *dataReceiveScratch) prepareRXGSOCoalesceConfig(disabled bool) {
 func (daemon *Daemon) startDataPath(ctx context.Context) (<-chan error, error) {
 	errc := make(chan error, 1)
 	if err := daemon.startTransportListeners(ctx); err != nil {
-		daemon.closeDataPath()
-		return nil, err
+		return nil, errors.Join(err, daemon.closeDataPath())
 	}
 	if err := daemon.startKernelDatapathRXStage(ctx, dataplaneAttachSpec(daemon.cfg.DataDir, daemon.desired)); err != nil {
-		daemon.closeDataPath()
-		return nil, err
+		return nil, errors.Join(err, daemon.closeDataPath())
 	}
-	go daemon.runKernelDatapathStateSync(ctx)
 	if !daemon.captureForwarderSuppressed() {
 		if err := daemon.startCaptureForwarder(ctx); err != nil {
-			daemon.closeDataPath()
-			daemon.closeCaptureForwarder()
-			return nil, err
+			closeErr := daemon.closeDataPath()
+			closeCaptureErr := daemon.closeCaptureForwarder()
+			return nil, errors.Join(err, closeErr, closeCaptureErr)
 		}
 	}
 	daemon.dataMu.Lock()
 	daemon.dataPathStarted = true
 	daemon.dataMu.Unlock()
-	daemon.syncKernelDatapathState(ctx, daemon.runtimeDataplaneSnapshot())
+	if err := daemon.syncKernelDatapathState(ctx, daemon.runtimeDataplaneSnapshot()); err != nil {
+		closeErr := daemon.closeDataPath()
+		closeCaptureErr := daemon.closeCaptureForwarder()
+		return nil, errors.Join(fmt.Errorf("sync initial kernel datapath state: %w", err), closeErr, closeCaptureErr)
+	}
+	go daemon.runKernelDatapathStateSync(ctx)
 	daemon.scheduleRuntimeRouteWarmup(ctx)
 	return errc, nil
 }
@@ -820,8 +822,10 @@ func (daemon *Daemon) startCaptureForwarder(ctx context.Context) error {
 	if daemon.captureSub != nil {
 		daemon.dataMu.Unlock()
 		cancel()
-		_ = subscription.Close()
-		return fmt.Errorf("dataplane capture forwarder is already running")
+		return errors.Join(
+			fmt.Errorf("dataplane capture forwarder is already running"),
+			wrapOperationError("close duplicate capture subscription", subscription.Close()),
+		)
 	}
 	daemon.captureCancel = cancel
 	daemon.captureSub = subscription
@@ -1186,12 +1190,20 @@ func (daemon *Daemon) warmKernelUDPRouteSessions(ctx context.Context) error {
 func (daemon *Daemon) runKernelDirectRouteWarmup(ctx context.Context) {
 	deadline := time.Now().Add(kernelUDPPlaintextWarmupTimeout())
 	retryDelay := kernelUDPPlaintextWarmupRetryDelay()
+	var lastErr error
 	for {
 		warmed, err := daemon.warmKernelDirectRouteSessionsResult(ctx)
-		if warmed || err == nil && !time.Now().Before(deadline) {
+		if err != nil {
+			lastErr = err
+		}
+		if warmed {
+			daemon.clearBackgroundError("kernel_route_warmup")
 			return
 		}
 		if !time.Now().Before(deadline) {
+			if lastErr != nil {
+				daemon.recordBackgroundError("kernel_route_warmup", lastErr)
+			}
 			return
 		}
 		timer := time.NewTimer(retryDelay)
@@ -1207,8 +1219,8 @@ func (daemon *Daemon) runKernelDirectRouteWarmup(ctx context.Context) {
 }
 
 func (daemon *Daemon) warmKernelDirectRouteSessions(ctx context.Context) error {
-	_, _ = daemon.warmKernelDirectRouteSessionsResult(ctx)
-	return nil
+	_, err := daemon.warmKernelDirectRouteSessionsResult(ctx)
+	return err
 }
 
 func (daemon *Daemon) warmKernelDirectRouteSessionsResult(ctx context.Context) (bool, error) {
@@ -1724,7 +1736,10 @@ func (daemon *Daemon) acceptDataPathSessions(ctx context.Context, endpoint trans
 		}
 		daemon.recordDataSessionTLSObservation(session)
 		if _, err := daemon.registerInboundDataSession(ctx, endpoint, session); err != nil {
-			_ = session.Close()
+			closeErr := daemon.observeDataSessionCleanupError("close rejected inbound data session", session.Close())
+			err = errors.Join(err, closeErr)
+			daemon.dataStats.listenerAcceptErrors.Add(1)
+			daemon.dataStats.setLastListenerAcceptError(fmt.Errorf("register inbound endpoint %q transport %q: %w", endpoint.Name, endpoint.Transport, err))
 		}
 
 		select {
@@ -1826,7 +1841,9 @@ func (daemon *Daemon) registerInboundDataSession(ctx context.Context, listenerEn
 	existingRuntime := daemon.dataSessionState[key]
 	if existing != nil && existingRuntime != nil && daemon.shouldKeepExistingKernelUDPReverseSessionLocked(key, session) {
 		daemon.dataMu.Unlock()
-		_ = session.Close()
+		if err := daemon.observeDataSessionCleanupError("close redundant inbound data session", session.Close()); err != nil {
+			return nil, err
+		}
 		return existingRuntime, nil
 	}
 	if existingRuntime != nil && existingRuntime.cancel != nil {
@@ -1844,7 +1861,7 @@ func (daemon *Daemon) registerInboundDataSession(ctx context.Context, listenerEn
 	daemon.dataMu.Unlock()
 	if existing != nil {
 		daemon.dataStats.staleSessionsDropped.Add(1)
-		_ = existing.Close()
+		daemon.recordDataSessionCleanupError("close replaced inbound data session", existing.Close())
 	}
 	daemon.syncKernelDatapathSessionUpsert(key, runtime, session)
 	daemon.closeDroppedDataSessions(dropped)
@@ -1910,16 +1927,24 @@ func (daemon *Daemon) registerInboundDeviceSession(ctx context.Context, listener
 	daemon.syncKernelDatapathSessionUpsert(key, runtime, session)
 	if existing != nil && existing != session {
 		daemon.dataStats.staleSessionsDropped.Add(1)
-		_ = existing.Close()
+		daemon.recordDataSessionCleanupError("close replaced device data session", existing.Close())
 	}
 	clientRoutes := daemon.deviceAccessClientRoutesForLease(lease)
-	_ = daemon.sendDataSessionWirePacket(runtime, session, encodeDataSessionDeviceLease(lease.Address, uint32(lease.Prefix.Bits()), lease.ExpiresAt, clientRoutes))
+	if err := daemon.sendDataSessionWirePacket(runtime, session, encodeDataSessionDeviceLease(lease.Address, uint32(lease.Prefix.Bits()), lease.ExpiresAt, clientRoutes)); err != nil {
+		daemon.dropRuntimeSession(runtime)
+		daemon.recordEndpointDownIfNoActiveSession(peer.ID, endpoint, err)
+		return nil, fmt.Errorf("send device access lease: %w", err)
+	}
 	if err := daemon.applyRuntimeDataplaneSnapshot(ctx); err != nil {
-		return runtime, err
+		daemon.requestRuntimeReconcile("device access session registration", err)
+		daemon.dropRuntimeSession(runtime)
+		return nil, err
 	}
 	if daemon.localAdvertisementConfigured() {
 		if err := daemon.refreshLocalAdvertisement(); err != nil {
-			return runtime, err
+			daemon.requestRuntimeReconcile("device access session advertisement", err)
+			daemon.dropRuntimeSession(runtime)
+			return nil, err
 		}
 	}
 	daemon.recordEndpointUp(peer.ID, endpoint, 0)
@@ -2184,10 +2209,7 @@ func (daemon *Daemon) deviceAccessExpiryReaper(ctx context.Context) {
 			if dropped == 0 {
 				continue
 			}
-			_ = daemon.applyRuntimeDataplaneSnapshot(ctx)
-			if daemon.localAdvertisementConfigured() {
-				_ = daemon.refreshLocalAdvertisement()
-			}
+			_ = daemon.reconcileRuntimeAfterSessionRemoval(ctx, "device access lease expiry", true)
 		}
 	}
 }
@@ -2313,10 +2335,19 @@ func (daemon *Daemon) refreshDeviceAccessClientRoutes() {
 	}
 	daemon.dataMu.Unlock()
 	daemon.closeDroppedDataSessions(expiredSessions)
+	var sendErrors []error
 	for _, item := range updates {
 		routes := daemon.deviceAccessClientRoutesForLease(item.lease)
 		frame := encodeDataSessionDeviceLease(item.lease.Address, uint32(item.lease.Prefix.Bits()), item.lease.ExpiresAt, routes)
-		_ = daemon.sendDataSessionWirePacket(item.runtime, item.session, frame)
+		if err := daemon.sendDataSessionWirePacket(item.runtime, item.session, frame); err != nil {
+			sendErrors = append(sendErrors, fmt.Errorf("device %s: %w", item.lease.Key.Device, err))
+			daemon.dropRuntimeSession(item.runtime)
+		}
+	}
+	if err := errors.Join(sendErrors...); err != nil {
+		daemon.recordBackgroundError("device_access_lease_refresh", err)
+	} else {
+		daemon.clearBackgroundError("device_access_lease_refresh")
 	}
 }
 
@@ -2491,7 +2522,9 @@ func (work captureBatchWork) finish() {
 
 func (daemon *Daemon) forwardCapturedPackets(ctx context.Context, subscription dataplane.CaptureSubscription) {
 	defer func() {
-		_ = subscription.Close()
+		if err := subscription.Close(); err != nil {
+			daemon.recordBackgroundError("capture_subscription_close", err)
+		}
 		daemon.finishCaptureForwarder(subscription)
 	}()
 	if batchSubscription, ok := subscription.(dataplane.CaptureBatchSubscription); ok {
@@ -3069,7 +3102,7 @@ func (daemon *Daemon) forwardCapturedPacketsOneByOne(ctx context.Context, eventC
 	}
 }
 
-func (daemon *Daemon) closeCaptureForwarder() {
+func (daemon *Daemon) closeCaptureForwarder() error {
 	daemon.dataMu.Lock()
 	cancel := daemon.captureCancel
 	subscription := daemon.captureSub
@@ -3081,8 +3114,11 @@ func (daemon *Daemon) closeCaptureForwarder() {
 		cancel()
 	}
 	if subscription != nil {
-		_ = subscription.Close()
+		if err := subscription.Close(); err != nil {
+			return fmt.Errorf("close capture subscription: %w", err)
+		}
 	}
+	return nil
 }
 
 func (daemon *Daemon) finishCaptureForwarder(subscription dataplane.CaptureSubscription) {
@@ -4004,13 +4040,14 @@ func (daemon *Daemon) sessionForEndpointWithOptions(ctx context.Context, peer co
 		return nil, key, nil, fmt.Errorf("dial peer %q endpoint %q: %w", peer.ID, endpoint.Name, err)
 	}
 	if !daemon.dataSessionEpochActive(epoch) {
-		_ = session.Close()
-		return nil, key, nil, errDataSessionEpochChanged
+		closeErr := daemon.observeDataSessionCleanupError("close stale dialed data session", session.Close())
+		return nil, key, nil, errors.Join(errDataSessionEpochChanged, closeErr)
 	}
 	if err := requireEndpointLinkTLS(peer.ID, cfgEndpoint, session); err != nil {
-		_ = session.Close()
+		closeErr := daemon.observeDataSessionCleanupError("close rejected dialed data session", session.Close())
+		resultErr := errors.Join(err, closeErr)
 		daemon.dataStats.sessionDialErrors.Add(1)
-		daemon.dataStats.setLastSessionDialError(err)
+		daemon.dataStats.setLastSessionDialError(resultErr)
 		daemon.recordEndpointDownIfNoActiveSession(peer.ID, cfgEndpoint, err)
 		if fallback, reverseKey, runtime := daemon.reverseSessionForEndpoint(peer.ID, cfgEndpoint, endpoint.Encryption, poolIndex); fallback != nil {
 			if options.RequireEpoch && !daemon.dataSessionEpochActive(epoch) {
@@ -4018,19 +4055,19 @@ func (daemon *Daemon) sessionForEndpointWithOptions(ctx context.Context, peer co
 			}
 			return fallback, reverseKey, runtime, nil
 		}
-		return nil, key, nil, err
+		return nil, key, nil, resultErr
 	}
 
 	daemon.dataMu.Lock()
 	if daemon.dataSessionEpoch != epoch {
 		daemon.dataMu.Unlock()
-		_ = session.Close()
-		return nil, key, nil, errDataSessionEpochChanged
+		closeErr := daemon.observeDataSessionCleanupError("close stale dialed data session", session.Close())
+		return nil, key, nil, errors.Join(errDataSessionEpochChanged, closeErr)
 	}
 	if existing := daemon.dataSessions[key]; existing != nil {
 		runtime := daemon.dataSessionState[key]
 		daemon.dataMu.Unlock()
-		_ = session.Close()
+		daemon.recordDataSessionCleanupError("close redundant dialed data session", session.Close())
 		return existing, key, runtime, nil
 	}
 	daemon.dataSessions[key] = session
@@ -4144,13 +4181,14 @@ func (daemon *Daemon) sessionForEndpointPoolIndexWithOptions(ctx context.Context
 		return nil, key, fmt.Errorf("dial peer %q endpoint %q pool %d: %w", peer.ID, endpoint.Name, poolIndex, err)
 	}
 	if !daemon.dataSessionEpochActive(epoch) {
-		_ = session.Close()
-		return nil, key, errDataSessionEpochChanged
+		closeErr := daemon.observeDataSessionCleanupError("close stale pooled data session", session.Close())
+		return nil, key, errors.Join(errDataSessionEpochChanged, closeErr)
 	}
 	if err := requireEndpointLinkTLS(peer.ID, cfgEndpoint, session); err != nil {
-		_ = session.Close()
+		closeErr := daemon.observeDataSessionCleanupError("close rejected pooled data session", session.Close())
+		resultErr := errors.Join(err, closeErr)
 		daemon.dataStats.sessionDialErrors.Add(1)
-		daemon.dataStats.setLastSessionDialError(err)
+		daemon.dataStats.setLastSessionDialError(resultErr)
 		daemon.recordEndpointDownIfNoActiveSession(peer.ID, cfgEndpoint, err)
 		if fallback, reverseKey, _ := daemon.reverseSessionForEndpoint(peer.ID, cfgEndpoint, endpoint.Encryption, poolIndex); fallback != nil {
 			if options.RequireEpoch && !daemon.dataSessionEpochActive(epoch) {
@@ -4158,18 +4196,18 @@ func (daemon *Daemon) sessionForEndpointPoolIndexWithOptions(ctx context.Context
 			}
 			return fallback, reverseKey, nil
 		}
-		return nil, key, err
+		return nil, key, resultErr
 	}
 
 	daemon.dataMu.Lock()
 	if daemon.dataSessionEpoch != epoch {
 		daemon.dataMu.Unlock()
-		_ = session.Close()
-		return nil, key, errDataSessionEpochChanged
+		closeErr := daemon.observeDataSessionCleanupError("close stale pooled data session", session.Close())
+		return nil, key, errors.Join(errDataSessionEpochChanged, closeErr)
 	}
 	if existing := daemon.dataSessions[key]; existing != nil {
 		daemon.dataMu.Unlock()
-		_ = session.Close()
+		daemon.recordDataSessionCleanupError("close redundant pooled data session", session.Close())
 		return existing, key, nil
 	}
 	daemon.dataSessions[key] = session
@@ -4684,9 +4722,7 @@ func (daemon *Daemon) splitDataSessionPacketsForMTU(runtime *dataSessionRuntime,
 		}
 		if out == nil {
 			out = make([][]byte, 0, len(packets)+len(segments))
-			for _, prior := range packets[:i] {
-				out = append(out, prior)
-			}
+			out = append(out, packets[:i]...)
 		}
 		out = append(out, segments...)
 		splitFrames += uint64(len(segments))
@@ -5747,7 +5783,11 @@ func (daemon *Daemon) recordDataSessionTLSObservation(session transport.Session)
 }
 
 func (daemon *Daemon) receiveDataPathSession(ctx context.Context, runtime *dataSessionRuntime, session transport.Session) {
-	defer session.Close()
+	defer func() {
+		if err := session.Close(); err != nil {
+			daemon.recordBackgroundError("data_session_receive_close", err)
+		}
+	}()
 	injector, _ := daemon.dataplane.(dataplane.PacketInjector)
 	batchInjector, _ := daemon.dataplane.(dataplane.PacketBatchInjector)
 	receiver, hasBatchReceiver := session.(transport.PacketBatchReceiver)
@@ -6352,14 +6392,11 @@ func (daemon *Daemon) dropSession(key dataSessionKey) {
 		runtime.cancel()
 	}
 	if session != nil {
-		_ = session.Close()
+		daemon.recordDataSessionCleanupError("close dropped data session", session.Close())
 	}
 	daemon.syncKernelDatapathSessionDelete(key)
 	if leaseChanged {
-		_ = daemon.applyRuntimeDataplaneSnapshot(context.Background())
-		if daemon.localAdvertisementConfigured() {
-			_ = daemon.refreshLocalAdvertisement()
-		}
+		_ = daemon.reconcileRuntimeAfterSessionRemoval(context.Background(), "device access session removal", true)
 	}
 }
 
@@ -6389,14 +6426,11 @@ func (daemon *Daemon) dropRuntimeSession(runtime *dataSessionRuntime) {
 	}
 	if session != nil {
 		daemon.dataStats.staleSessionsDropped.Add(1)
-		_ = session.Close()
+		daemon.recordDataSessionCleanupError("close dropped runtime data session", session.Close())
 	}
 	daemon.syncKernelDatapathSessionDelete(runtime.key)
 	if leaseChanged {
-		_ = daemon.applyRuntimeDataplaneSnapshot(context.Background())
-		if daemon.localAdvertisementConfigured() {
-			_ = daemon.refreshLocalAdvertisement()
-		}
+		_ = daemon.reconcileRuntimeAfterSessionRemoval(context.Background(), "device access runtime removal", true)
 	}
 	daemon.refillSessionPoolAfterRuntimeDrop(runtime)
 }
@@ -6438,15 +6472,19 @@ func (daemon *Daemon) dropSessionsForPeerTransport(peer core.IXID, protocol tran
 		daemon.sessionPoolFlow = nil
 	}
 	daemon.dataMu.Unlock()
+	var closeErrs []error
 	for _, item := range dropped {
 		if item.runtime != nil && item.runtime.cancel != nil {
 			item.runtime.cancel()
 		}
 		if item.session != nil {
 			daemon.dataStats.staleSessionsDropped.Add(1)
-			_ = item.session.Close()
+			if err := item.session.Close(); err != nil {
+				closeErrs = append(closeErrs, err)
+			}
 		}
 	}
+	daemon.recordDataSessionCleanupError("close peer transport data sessions", errors.Join(closeErrs...))
 	return len(dropped)
 }
 
@@ -6496,15 +6534,19 @@ func (daemon *Daemon) reconcileRouteSelectedOutboundSessions() int {
 	}
 	daemon.dataMu.Unlock()
 
+	var closeErrs []error
 	for _, item := range dropped {
 		if item.runtime != nil && item.runtime.cancel != nil {
 			item.runtime.cancel()
 		}
 		if item.session != nil {
 			daemon.dataStats.staleSessionsDropped.Add(1)
-			_ = item.session.Close()
+			if err := item.session.Close(); err != nil {
+				closeErrs = append(closeErrs, err)
+			}
 		}
 	}
+	daemon.recordDataSessionCleanupError("close route-reconciled data sessions", errors.Join(closeErrs...))
 	return len(dropped)
 }
 
@@ -6573,15 +6615,19 @@ func (daemon *Daemon) dropOutboundDataSessionsForInboundLocked(peer core.IXID, e
 }
 
 func (daemon *Daemon) closeDroppedDataSessions(dropped []droppedDataSession) {
+	var closeErrs []error
 	for _, item := range dropped {
 		if item.runtime != nil && item.runtime.cancel != nil {
 			item.runtime.cancel()
 		}
 		if item.session != nil {
 			daemon.dataStats.staleSessionsDropped.Add(1)
-			_ = item.session.Close()
+			if err := item.session.Close(); err != nil {
+				closeErrs = append(closeErrs, err)
+			}
 		}
 	}
+	daemon.recordDataSessionCleanupError("close stale data sessions", errors.Join(closeErrs...))
 }
 
 func (daemon *Daemon) deleteSessionPoolCursorLocked(key dataSessionKey) {
@@ -6608,9 +6654,9 @@ func (daemon *Daemon) deleteSessionFlowBindingsLocked(key dataSessionKey) {
 	}
 }
 
-func (daemon *Daemon) closeDataPath() {
+func (daemon *Daemon) closeDataPath() error {
 	daemon.clearForwardCache()
-	daemon.stopKernelDatapathRXStage()
+	errList := []error{daemon.stopKernelDatapathRXStage()}
 	daemon.dataMu.Lock()
 	daemon.dataPathStarted = false
 	listeners := append([]dataListenerRuntime(nil), daemon.dataListeners...)
@@ -6634,19 +6680,24 @@ func (daemon *Daemon) closeDataPath() {
 		if runtime.Cancel != nil {
 			runtime.Cancel()
 		}
-		_ = runtime.Listener.Close()
+		if err := runtime.Listener.Close(); err != nil {
+			errList = append(errList, fmt.Errorf("close data listener %q: %w", runtime.Endpoint.Name, err))
+		}
 	}
 	for _, session := range sessions {
-		_ = session.Close()
+		if err := session.Close(); err != nil {
+			errList = append(errList, fmt.Errorf("close data session: %w", err))
+		}
 	}
 	for _, runtime := range runtimes {
 		if runtime != nil && runtime.cancel != nil {
 			runtime.cancel()
 		}
 	}
+	return errors.Join(errList...)
 }
 
-func (daemon *Daemon) closeDataSessions() {
+func (daemon *Daemon) closeDataSessions() error {
 	daemon.clearForwardCache()
 	daemon.dataMu.Lock()
 	sessions := make([]transport.Session, 0, len(daemon.dataSessions))
@@ -6664,19 +6715,23 @@ func (daemon *Daemon) closeDataSessions() {
 	daemon.dataSessionEpoch++
 	daemon.dataMu.Unlock()
 
+	var closeErrs []error
 	for _, session := range sessions {
-		_ = session.Close()
+		if err := session.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("close data session: %w", err))
+		}
 	}
 	for _, runtime := range runtimes {
 		if runtime != nil && runtime.cancel != nil {
 			runtime.cancel()
 		}
 	}
+	return errors.Join(closeErrs...)
 }
 
-func (daemon *Daemon) closeDataSessionsForPeers(peers map[core.IXID]struct{}) {
+func (daemon *Daemon) closeDataSessionsForPeers(peers map[core.IXID]struct{}) error {
 	if len(peers) == 0 {
-		return
+		return nil
 	}
 	daemon.dataMu.Lock()
 	sessions := make([]transport.Session, 0)
@@ -6710,14 +6765,18 @@ func (daemon *Daemon) closeDataSessionsForPeers(peers map[core.IXID]struct{}) {
 	daemon.dataSessionEpoch++
 	daemon.dataMu.Unlock()
 
+	var closeErrs []error
 	for _, session := range sessions {
-		_ = session.Close()
+		if err := session.Close(); err != nil {
+			closeErrs = append(closeErrs, fmt.Errorf("close peer data session: %w", err))
+		}
 	}
 	for _, runtime := range runtimes {
 		if runtime != nil && runtime.cancel != nil {
 			runtime.cancel()
 		}
 	}
+	return errors.Join(closeErrs...)
 }
 
 func (daemon *Daemon) dataPathStatus() dataPathStatus {

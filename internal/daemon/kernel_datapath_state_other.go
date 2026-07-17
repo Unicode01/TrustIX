@@ -10,7 +10,8 @@ import (
 	"trustix.local/trustix/internal/transport"
 )
 
-func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot dataplane.Snapshot) {
+func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot dataplane.Snapshot) error {
+	return ctx.Err()
 }
 
 func (daemon *Daemon) runKernelDatapathStateSync(ctx context.Context) {

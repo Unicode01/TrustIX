@@ -124,6 +124,13 @@ type Daemon struct {
 	nat                  *natTable
 	endpointMu           sync.Mutex
 	endpointState        map[endpointStateKey]rstate.EndpointState
+	reconcileAttemptMu   sync.Mutex
+	reconcileMu          sync.Mutex
+	reconcileWake        chan struct{}
+	reconcileState       runtimeReconcileStatus
+	reconcileGeneration  uint64
+	backgroundMu         sync.Mutex
+	backgroundErrors     map[string]backgroundErrorStatus
 	apiMu                sync.Mutex
 	apiErr               chan error
 	apiServers           []apiServerRuntime
@@ -195,6 +202,8 @@ func New(cfg Config, options ...Option) (*Daemon, error) {
 		flows:                make(map[routing.FlowKey]routing.FlowBinding),
 		nat:                  newNATTable(),
 		endpointState:        make(map[endpointStateKey]rstate.EndpointState),
+		reconcileWake:        make(chan struct{}, 1),
+		backgroundErrors:     make(map[string]backgroundErrorStatus),
 		apiRateLimits:        newAPIRateLimitersFromEnv(),
 	}
 	for _, option := range options {
@@ -276,7 +285,7 @@ func selectDataplane(mode string) dataplane.Manager {
 	}
 }
 
-func (daemon *Daemon) Run(ctx context.Context) error {
+func (daemon *Daemon) Run(ctx context.Context) (resultErr error) {
 	daemon.runCtx = ctx
 	daemon.startedAt = time.Now().UTC()
 	lock, err := acquireDataDirLock(daemon.cfg.DataDir)
@@ -284,10 +293,12 @@ func (daemon *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	daemon.dataDirLock = lock
+	defer func() {
+		resultErr = errors.Join(resultErr, daemon.releaseDataDirLock())
+	}()
 	if err := daemon.loadAndApply(ctx); err != nil {
 		detachErr := daemon.dataplane.Detach(context.Background())
 		moduleErr := daemon.closeKernelModules(context.Background())
-		daemon.releaseDataDirLock()
 		return errors.Join(err, detachErr, moduleErr)
 	}
 
@@ -295,10 +306,8 @@ func (daemon *Daemon) Run(ctx context.Context) error {
 	if err != nil {
 		detachErr := daemon.dataplane.Detach(context.Background())
 		moduleErr := daemon.closeKernelModules(context.Background())
-		daemon.releaseDataDirLock()
 		return errors.Join(err, detachErr, moduleErr)
 	}
-	defer daemon.releaseDataDirLock()
 	var peerServer *http.Server
 	cleanup := func() error {
 		return daemon.shutdownRuntime(peerServer, true)
@@ -322,6 +331,7 @@ func (daemon *Daemon) Run(ctx context.Context) error {
 	go daemon.endpointGrantExpiryReaper(ctx)
 	go daemon.deviceAccessExpiryReaper(ctx)
 	go daemon.apiServerWatchdog(ctx)
+	go daemon.runtimeReconcileWorker(ctx)
 
 	select {
 	case <-ctx.Done():
@@ -346,12 +356,17 @@ func (daemon *Daemon) Run(ctx context.Context) error {
 
 func (daemon *Daemon) shutdownRuntime(peerServer *http.Server, detach bool) error {
 	daemon.closeControlClients()
-	daemon.stopKernelDatapathRXStage()
-	daemon.closeCaptureForwarder()
-	daemon.closeDataPath()
+	closeCaptureErr := daemon.closeCaptureForwarder()
+	closeDataPathErr := daemon.closeDataPath()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var errs []error
+	if closeCaptureErr != nil {
+		errs = append(errs, closeCaptureErr)
+	}
+	if closeDataPathErr != nil {
+		errs = append(errs, closeDataPathErr)
+	}
 	if err := daemon.closeAPIServers(shutdownCtx); err != nil {
 		errs = append(errs, err)
 	}
@@ -384,12 +399,13 @@ func (daemon *Daemon) shutdownRuntime(peerServer *http.Server, detach bool) erro
 	return errors.Join(errs...)
 }
 
-func (daemon *Daemon) releaseDataDirLock() {
+func (daemon *Daemon) releaseDataDirLock() error {
 	if daemon.dataDirLock == nil {
-		return
+		return nil
 	}
-	_ = daemon.dataDirLock.Close()
+	err := daemon.dataDirLock.Close()
 	daemon.dataDirLock = nil
+	return err
 }
 
 func (daemon *Daemon) startAPIServers() (<-chan error, error) {
@@ -407,8 +423,8 @@ func (daemon *Daemon) startAPIServers() (<-chan error, error) {
 		servers := daemon.takeAPIServersLocked("")
 		daemon.apiErr = nil
 		daemon.apiMu.Unlock()
-		_ = shutdownAPIServerRuntimes(context.Background(), servers)
-		return nil, startErr
+		shutdownErr := shutdownAPIServerRuntimes(context.Background(), servers)
+		return nil, errors.Join(startErr, shutdownErr)
 	}
 	daemon.apiMu.Unlock()
 	return errc, nil
@@ -498,8 +514,10 @@ func (daemon *Daemon) startAPIServerLocked(name string, listen string, handler h
 	if tlsEnabled {
 		tlsConf, err := daemon.managementServerTLSConfig()
 		if err != nil {
-			_ = listener.Close()
-			return fmt.Errorf("configure %s api TLS %q: %w", name, listen, err)
+			return errors.Join(
+				fmt.Errorf("configure %s api TLS %q: %w", name, listen, err),
+				wrapOperationError("close API listener after TLS configuration failure", listener.Close()),
+			)
 		}
 		listener = tls.NewListener(listener, tlsConf)
 	}
@@ -606,7 +624,11 @@ func (daemon *Daemon) apiServerWatchdog(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			_ = daemon.ensureHostAPIServerReachable(ctx)
+			if err := daemon.ensureHostAPIServerReachable(ctx); err != nil {
+				daemon.recordBackgroundError("host_management_api_watchdog", err)
+			} else {
+				daemon.clearBackgroundError("host_management_api_watchdog")
+			}
 		case <-ctx.Done():
 			return
 		}
@@ -649,7 +671,11 @@ func (daemon *Daemon) managementAPIReachable(ctx context.Context, listen string)
 	if err != nil {
 		return false
 	}
-	_ = resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		daemon.recordBackgroundError("management_api_probe_close", err)
+		return true
+	}
+	daemon.clearBackgroundError("management_api_probe_close")
 	return true
 }
 
@@ -855,7 +881,9 @@ func (daemon *Daemon) attachDataplane(ctx context.Context, desired config.Desire
 	if err := daemon.dataplane.ApplySnapshot(ctx, snapshot); err != nil {
 		return fmt.Errorf("apply initial dataplane snapshot: %w", err)
 	}
-	daemon.syncKernelDatapathState(ctx, snapshot)
+	if err := daemon.syncKernelDatapathState(ctx, snapshot); err != nil {
+		return fmt.Errorf("sync initial kernel datapath state: %w", err)
+	}
 	return nil
 }
 

@@ -56,6 +56,7 @@ type Head struct {
 
 type Store interface {
 	Append(event Event) error
+	AppendBatch(events []Event) error
 	ReplaceAll(events []Event) error
 	Head() (Head, error)
 	Range(fromSeq, toSeq uint64) ([]Event, error)

@@ -89,6 +89,120 @@ func TestConfigApplyUpdatesRoutesAndConfigHead(t *testing.T) {
 	}
 }
 
+func TestConfigApplyBatchFailureLeavesLogAndRuntimeUnchanged(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	initial := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, initial)
+	baseStore := daemon.store
+	failing := &failingAppendBatchStore{Store: baseStore}
+	daemon.store = failing
+	beforeHead := daemon.head
+
+	next := configApplyDesired(pkiSet, "10.0.2.0/24")
+	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err == nil || changed {
+		t.Fatalf("apply with failing batch changed=%t err=%v", changed, err)
+	}
+	if failing.calls != 1 {
+		t.Fatalf("AppendBatch calls = %d, want 1", failing.calls)
+	}
+	storeHead, err := baseStore.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storeHead != beforeHead || daemon.head != beforeHead {
+		t.Fatalf("head changed after failed batch: store=%+v runtime=%+v before=%+v", storeHead, daemon.head, beforeHead)
+	}
+	if !desiredConfigsEqual(daemon.desired, initial) {
+		t.Fatal("runtime desired changed after failed batch")
+	}
+	assertRuntimeRoute(t, daemon, "10.0.1.0/24")
+	assertNoRuntimeRoute(t, daemon, "10.0.2.0/24")
+}
+
+func TestDesiredRuntimeRestoreContextSurvivesRequestCancellation(t *testing.T) {
+	type contextKey struct{}
+	key := contextKey{}
+	requestCtx, requestCancel := context.WithCancel(context.WithValue(context.Background(), key, "request-value"))
+	requestCancel()
+
+	restoreCtx, restoreCancel := desiredRuntimeRestoreContext(requestCtx)
+	defer restoreCancel()
+	if err := restoreCtx.Err(); err != nil {
+		t.Fatalf("restore context inherited request cancellation: %v", err)
+	}
+	if got := restoreCtx.Value(key); got != "request-value" {
+		t.Fatalf("restore context value = %v, want request-value", got)
+	}
+	deadline, ok := restoreCtx.Deadline()
+	if !ok {
+		t.Fatal("restore context has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > desiredRuntimeRestoreTimeout {
+		t.Fatalf("restore context deadline remaining = %s", remaining)
+	}
+}
+
+func TestDesiredRuntimeRestoreFailureRequestsReconcile(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, desired)
+	daemon.dataplane = &failingDetachDataplane{Manager: daemon.dataplane}
+
+	err := daemon.restoreDesiredRuntimeState(
+		context.Background(),
+		desired,
+		daemon.head,
+		daemon.cfg.DomainID,
+		daemon.cfg.IXID,
+		daemon.snapshotFlows(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "injected detach failure") {
+		t.Fatalf("restore error = %v, want injected detach failure", err)
+	}
+	status := daemon.runtimeReconcileStatus()
+	if !status.Pending || status.Reason != "restore desired runtime state" {
+		t.Fatalf("reconcile status = %+v", status)
+	}
+}
+
+type failingDetachDataplane struct {
+	dataplane.Manager
+}
+
+func (manager *failingDetachDataplane) Detach(context.Context) error {
+	return fmt.Errorf("injected detach failure")
+}
+
+func TestConfigApplyPersistenceFailureReturnsServerError(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	initial := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, initial)
+	daemon.store = &failingAppendBatchStore{Store: daemon.store}
+	next := configApplyDesired(pkiSet, "10.0.2.0/24")
+	body, err := json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/config/apply", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	daemon.handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
+	}
+}
+
+type failingAppendBatchStore struct {
+	configlog.Store
+	calls int
+}
+
+func (store *failingAppendBatchStore) AppendBatch([]configlog.Event) error {
+	store.calls++
+	return fmt.Errorf("injected batch persistence failure")
+}
+
 func TestConfigRollbackRestoresPreviousDesired(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	initial := configApplyDesired(pkiSet, "10.0.1.0/24")

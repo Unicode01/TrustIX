@@ -93,12 +93,14 @@ func SnapshotWithAssets(assets Assets) Info {
 	return info
 }
 
-func WriteText(w io.Writer, info Info) {
-	_, _ = fmt.Fprintf(w, "version=%s\n", info.Version)
-	_, _ = fmt.Fprintf(w, "commit=%s\n", info.Commit)
-	_, _ = fmt.Fprintf(w, "built_at=%s\n", info.BuiltAt)
-	_, _ = fmt.Fprintf(w, "go_version=%s\n", info.GoVersion)
-	_, _ = fmt.Fprintf(w, "platform=%s/%s\n", info.GOOS, info.GOARCH)
+func WriteText(w io.Writer, info Info) error {
+	lines := []string{
+		fmt.Sprintf("version=%s\n", info.Version),
+		fmt.Sprintf("commit=%s\n", info.Commit),
+		fmt.Sprintf("built_at=%s\n", info.BuiltAt),
+		fmt.Sprintf("go_version=%s\n", info.GoVersion),
+		fmt.Sprintf("platform=%s/%s\n", info.GOOS, info.GOARCH),
+	}
 	if len(info.Assets.EmbeddedKOs) > 0 {
 		names := make([]string, 0, len(info.Assets.EmbeddedKOs))
 		for name := range info.Assets.EmbeddedKOs {
@@ -106,30 +108,40 @@ func WriteText(w io.Writer, info Info) {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			writeAssetText(w, "asset.embedded_kos."+name, info.Assets.EmbeddedKOs[name])
+			lines = appendAssetText(lines, "asset.embedded_kos."+name, info.Assets.EmbeddedKOs[name])
 		}
 	}
-	if len(info.Assets.EBPF) == 0 {
-		return
+	if len(info.Assets.EBPF) > 0 {
+		names := make([]string, 0, len(info.Assets.EBPF))
+		for name := range info.Assets.EBPF {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			lines = appendAssetText(lines, "asset.ebpf."+name, info.Assets.EBPF[name])
+		}
 	}
-	names := make([]string, 0, len(info.Assets.EBPF))
-	for name := range info.Assets.EBPF {
-		names = append(names, name)
+	payload := strings.Join(lines, "")
+	written, err := io.WriteString(w, payload)
+	if err != nil {
+		return fmt.Errorf("write build information: %w", err)
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		writeAssetText(w, "asset.ebpf."+name, info.Assets.EBPF[name])
+	if written != len(payload) {
+		return fmt.Errorf("write build information: %w", io.ErrShortWrite)
 	}
+	return nil
 }
 
-func writeAssetText(w io.Writer, prefix string, asset AssetInfo) {
-	_, _ = fmt.Fprintf(w, "%s.present=%t\n", prefix, asset.Present)
-	_, _ = fmt.Fprintf(w, "%s.embedded=%t\n", prefix, asset.Embedded)
+func appendAssetText(lines []string, prefix string, asset AssetInfo) []string {
+	lines = append(lines,
+		fmt.Sprintf("%s.present=%t\n", prefix, asset.Present),
+		fmt.Sprintf("%s.embedded=%t\n", prefix, asset.Embedded),
+	)
 	if asset.Size > 0 {
-		_, _ = fmt.Fprintf(w, "%s.size=%d\n", prefix, asset.Size)
+		lines = append(lines, fmt.Sprintf("%s.size=%d\n", prefix, asset.Size))
 	}
 	if asset.SHA256 != "" {
-		_, _ = fmt.Fprintf(w, "%s.sha256=%s\n", prefix, asset.SHA256)
+		lines = append(lines, fmt.Sprintf("%s.sha256=%s\n", prefix, asset.SHA256))
 	}
-	_, _ = fmt.Fprintf(w, "%s.elf=%t\n", prefix, asset.ELF)
+	return append(lines, fmt.Sprintf("%s.elf=%t\n", prefix, asset.ELF))
 }

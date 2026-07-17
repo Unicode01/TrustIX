@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -294,31 +295,35 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			CreatedAt:       time.Now().UTC(),
 		}
 		if err := transportImpl.provider.InstallTIXTCPFlows(ctx, []dataplane.TIXTCPFlow{flow}); err != nil {
+			var closeErr error
 			if primerConn != nil {
-				_ = primerConn.Close()
+				closeErr = tixTCPCleanupError("close compat primer", primerConn.Close())
 			}
-			return nil, err
+			return nil, errors.Join(err, closeErr)
 		}
 		var compatControl *stream.Session
 		if primerConn != nil {
 			compatControl = stream.NewSession(primerConn)
 			if err := compatControl.SendPacket(encodeTIXTCPCompatControlInit(flowID)); err != nil {
-				_ = compatControl.Close()
+				closeErr := tixTCPCleanupError("close compat control", compatControl.Close())
+				var deleteErr error
 				if deleter, ok := transportImpl.provider.(dataplane.TIXTCPFlowDeleter); ok {
-					_ = deleter.DeleteTIXTCPFlows(context.Background(), []uint64{flowID})
+					deleteErr = tixTCPCleanupError("delete tix_tcp flow", deleter.DeleteTIXTCPFlows(context.Background(), []uint64{flowID}))
 				}
-				return nil, fmt.Errorf("send tix_tcp compat control init: %w", err)
+				return nil, errors.Join(fmt.Errorf("send tix_tcp compat control init: %w", err), closeErr, deleteErr)
 			}
 		}
 		subscription, err := transportImpl.subscribeFlow(ctx, flowID)
 		if err != nil {
+			var closeErr error
 			if compatControl != nil {
-				_ = compatControl.Close()
+				closeErr = tixTCPCleanupError("close compat control", compatControl.Close())
 			}
+			var deleteErr error
 			if deleter, ok := transportImpl.provider.(dataplane.TIXTCPFlowDeleter); ok {
-				_ = deleter.DeleteTIXTCPFlows(context.Background(), []uint64{flowID})
+				deleteErr = tixTCPCleanupError("delete tix_tcp flow", deleter.DeleteTIXTCPFlows(context.Background(), []uint64{flowID}))
 			}
-			return nil, err
+			return nil, errors.Join(err, closeErr, deleteErr)
 		}
 		session := newSession(transportImpl.provider, subscription, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address)
 		session.compatControl = compatControl
@@ -384,15 +389,16 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 		fullPlaintextKernelDatapath: fullPlaintextKernel,
 	}
 	if compatListener, err := listenTIXTCPCompatPrimer(ep.Listen); err != nil {
-		_ = subscription.Close()
-		return nil, err
+		return nil, errors.Join(err, tixTCPCleanupError("close tix_tcp subscription", subscription.Close()))
 	} else {
 		listener.compatListener = compatListener
 		listener.primerFlowRequired = compatListener != nil
 	}
 	if fullPlaintextKernel && listener.compatListener == nil {
-		_ = subscription.Close()
-		return nil, fmt.Errorf("tix_tcp full plaintext kernel datapath requires compat TCP control listener for endpoint %q", ep.Name)
+		return nil, errors.Join(
+			fmt.Errorf("tix_tcp full plaintext kernel datapath requires compat TCP control listener for endpoint %q", ep.Name),
+			tixTCPCleanupError("close tix_tcp subscription", subscription.Close()),
+		)
 	}
 	go listener.readSubscription(ctx)
 	go listener.acceptCompatPrimers()
@@ -433,6 +439,7 @@ type listener struct {
 	compatAcceptCh              chan transport.Session
 	done                        chan struct{}
 	closeOnce                   sync.Once
+	closeErr                    error
 	mu                          sync.Mutex
 	sessions                    map[uint64]*session
 	placement                   dataplane.CryptoPlacement
@@ -577,14 +584,18 @@ func (listener *listener) Accept(ctx context.Context) (transport.Session, error)
 }
 
 func (listener *listener) Close() error {
-	var err error
 	listener.closeOnce.Do(func() {
 		close(listener.done)
+		var errs []error
 		if listener.subscription != nil {
-			err = listener.subscription.Close()
+			if err := listener.subscription.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close tix_tcp subscription: %w", err))
+			}
 		}
 		if listener.compatListener != nil {
-			_ = listener.compatListener.Close()
+			if err := listener.compatListener.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close tix_tcp compat listener: %w", err))
+			}
 		}
 		listener.mu.Lock()
 		for flowID, session := range listener.sessions {
@@ -592,8 +603,16 @@ func (listener *listener) Close() error {
 			delete(listener.sessions, flowID)
 		}
 		listener.mu.Unlock()
+		listener.closeErr = errors.Join(errs...)
 	})
-	return err
+	return listener.closeErr
+}
+
+func tixTCPCleanupError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (listener *listener) closeOnContext(ctx context.Context) {
@@ -848,6 +867,7 @@ type session struct {
 	in                          chan tixTCPPacketBatch
 	recvPending                 tixTCPPacketBatch
 	closeOnce                   sync.Once
+	closeErr                    error
 	closeInputOnce              sync.Once
 	sendMu                      sync.Mutex
 	recvMu                      sync.Mutex
@@ -1963,18 +1983,26 @@ func clearBytes(payload []byte) {
 
 func (session *session) Close() error {
 	session.closeOnce.Do(func() {
+		var errs []error
 		if deleter, ok := session.provider.(dataplane.TIXTCPFlowDeleter); ok && !session.keepFlowOnClose {
-			_ = deleter.DeleteTIXTCPFlows(context.Background(), []uint64{session.flowID})
+			if err := deleter.DeleteTIXTCPFlows(context.Background(), []uint64{session.flowID}); err != nil {
+				errs = append(errs, fmt.Errorf("delete tix_tcp flow %d: %w", session.flowID, err))
+			}
 		}
 		session.closeInput()
 		if session.subscription != nil {
-			_ = session.subscription.Close()
+			if err := session.subscription.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close tix_tcp subscription: %w", err))
+			}
 		}
 		if session.compatControl != nil {
-			_ = session.compatControl.Close()
+			if err := session.compatControl.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close tix_tcp compatibility control: %w", err))
+			}
 		}
+		session.closeErr = errors.Join(errs...)
 	})
-	return nil
+	return session.closeErr
 }
 
 func (session *session) RetainKernelFlowOnClose() {
@@ -2234,13 +2262,14 @@ func acceptTIXTCPCompatControl(conn net.Conn) (*stream.Session, tixTCPCompatCont
 	control := stream.NewSession(conn)
 	initPacket, err := control.RecvPacket()
 	if err != nil {
-		_ = control.Close()
-		return nil, tixTCPCompatControlInit{}, err
+		return nil, tixTCPCompatControlInit{}, errors.Join(err, tixTCPCleanupError("close failed tix_tcp compat control", control.Close()))
 	}
 	init, ok := decodeTIXTCPCompatControlInit(initPacket)
 	if !ok {
-		_ = control.Close()
-		return nil, tixTCPCompatControlInit{}, fmt.Errorf("invalid tix_tcp compat control init")
+		return nil, tixTCPCompatControlInit{}, errors.Join(
+			fmt.Errorf("invalid tix_tcp compat control init"),
+			tixTCPCleanupError("close invalid tix_tcp compat control", control.Close()),
+		)
 	}
 	return control, init, nil
 }

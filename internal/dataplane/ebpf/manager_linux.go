@@ -6355,7 +6355,7 @@ func (manager *Manager) Detach(ctx context.Context) error {
 	return manager.detachLocked(ctx, nil)
 }
 
-func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) error {
+func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) (resultErr error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -6366,6 +6366,13 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 		spec.PinPath = "/sys/fs/bpf/trustix"
 	}
 	spec = normalizeAttachSpec(spec)
+	var staleSocketErr error
+	if err := manager.closeKernelUDPUDPFallbackSocketsLocked(); err != nil {
+		staleSocketErr = fmt.Errorf("close stale kernel_udp fallback sockets: %w", err)
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, staleSocketErr)
+	}()
 	manager.spec = spec
 	manager.snapshot = dataplane.Snapshot{}
 	manager.attached = false
@@ -6389,7 +6396,6 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 	manager.kernelUDPFlows = make(map[uint64]dataplane.KernelUDPFlow)
 	manager.kernelUDPTXTemplates = make(map[uint64]kernelUDPTXTemplate)
 	manager.kernelUDPFlowSubs = make(map[uint64]map[chan []dataplane.KernelUDPFrame]struct{})
-	manager.closeKernelUDPUDPFallbackSocketsLocked()
 	manager.kernelUDPUDPFallbackSockets = make(map[uint16]*kernelUDPUDPFallbackSocket)
 	manager.tixTCPCryptoFragments = make(map[tixTCPCryptoFragmentKey]*tixTCPCryptoFragmentAssembly)
 	manager.kernelUDPCryptoFragments = make(map[kernelUDPCryptoFragmentKey]*kernelUDPCryptoFragmentAssembly)
@@ -10833,12 +10839,16 @@ func parseTIXTCPPort(portText string) (uint16, error) {
 	return uint16(port), nil
 }
 
-func routeSourceIPv4(remoteIP netip.Addr) (netip.Addr, error) {
+func routeSourceIPv4(remoteIP netip.Addr) (source netip.Addr, resultErr error) {
 	conn, err := net.Dial("udp4", net.JoinHostPort(remoteIP.String(), "9"))
 	if err != nil {
 		return netip.Addr{}, fmt.Errorf("discover source address for %s: %w", remoteIP, err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close source address probe for %s: %w", remoteIP, err))
+		}
+	}()
 	udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
 	if !ok || udpAddr.IP == nil {
 		return netip.Addr{}, fmt.Errorf("discover source address for %s returned %T", remoteIP, conn.LocalAddr())
@@ -11235,12 +11245,16 @@ func (manager *Manager) closeRawIPv4TXSocketLocked() error {
 	return nil
 }
 
-func sendRawIPv4OnDevice(packet []byte, dst [4]byte, ifname string) error {
+func sendRawIPv4OnDevice(packet []byte, dst [4]byte, ifname string) (resultErr error) {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.IPPROTO_RAW)
 	if err != nil {
 		return fmt.Errorf("open tix_tcp raw sender socket: %w", err)
 	}
-	defer unix.Close(fd)
+	defer func() {
+		if err := unix.Close(fd); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close tix_tcp raw sender socket: %w", err))
+		}
+	}()
 	if strings.TrimSpace(ifname) != "" {
 		if err := unix.SetsockoptString(fd, unix.SOL_SOCKET, unix.SO_BINDTODEVICE, ifname); err != nil {
 			return fmt.Errorf("bind tix_tcp raw sender to %q: %w", ifname, err)
@@ -15351,13 +15365,28 @@ func (manager *Manager) detachTCPrograms(link netlink.Link) error {
 	return nil
 }
 
+func wrapEBPFCleanupError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
 func loadIngressFastPathProgram(name string, statsMap *cebpf.Map, packetPolicyMap *cebpf.Map, routeMap *cebpf.Map, kernelUDPTXRouteMap *cebpf.Map, kernelUDPTXFlowMap *cebpf.Map, natConfigMap *cebpf.Map, natSourceMap *cebpf.Map, natRouteMap *cebpf.Map, natExcludeMap *cebpf.Map, captureMap *cebpf.Map, txDirectOptions ...kernelUDPTXDirectProgramOptions) (*cebpf.Program, error) {
 	captureScratchMap, err := newCaptureScratchBPFMap()
 	if err != nil {
 		return nil, err
 	}
-	defer captureScratchMap.Close()
-	return loadIngressFastPathProgramWithCaptureScratch(name, statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, captureScratchMap, txDirectOptions...)
+	program, loadErr := loadIngressFastPathProgramWithCaptureScratch(name, statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, captureScratchMap, txDirectOptions...)
+	closeErr := captureScratchMap.Close()
+	if loadErr != nil || closeErr != nil {
+		var programCloseErr error
+		if program != nil {
+			programCloseErr = program.Close()
+		}
+		return nil, errors.Join(loadErr, wrapEBPFCleanupError("close ingress capture scratch map", closeErr), wrapEBPFCleanupError("close ingress program after setup failure", programCloseErr))
+	}
+	return program, nil
 }
 
 func loadIngressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Map, packetPolicyMap *cebpf.Map, routeMap *cebpf.Map, kernelUDPTXRouteMap *cebpf.Map, kernelUDPTXFlowMap *cebpf.Map, natConfigMap *cebpf.Map, natSourceMap *cebpf.Map, natRouteMap *cebpf.Map, natExcludeMap *cebpf.Map, captureMap *cebpf.Map, captureScratchMap *cebpf.Map, txDirectOptions ...kernelUDPTXDirectProgramOptions) (*cebpf.Program, error) {
@@ -19348,7 +19377,7 @@ func appendStackChecksum(instructions asm.Instructions, base int16, length int, 
 }
 
 func appendTCPChecksum(instructions asm.Instructions, errorLabel string) asm.Instructions {
-	return append(instructions,
+	instructions = append(instructions,
 		asm.Mov.Imm(asm.R1, 0),
 		asm.Mov.Imm(asm.R2, 0),
 		asm.Mov.Reg(asm.R3, asm.RFP),
@@ -19905,7 +19934,8 @@ func appendStoreNativeHalfFromR0(instructions asm.Instructions, offset int16) as
 }
 
 func appendChecksumFold(instructions asm.Instructions) asm.Instructions {
-	for i := 0; i < 4; i++ {
+	// A 32-bit one's-complement sum needs at most two carry folds.
+	for i := 0; i < 2; i++ {
 		instructions = append(instructions,
 			asm.Mov.Reg(asm.R1, asm.R0),
 			asm.And.Imm(asm.R1, 0xffff),
@@ -20116,8 +20146,16 @@ func loadEgressFastPathProgram(name string, statsMap *cebpf.Map, packetPolicyMap
 	if err != nil {
 		return nil, err
 	}
-	defer captureScratchMap.Close()
-	return loadEgressFastPathProgramWithCaptureScratch(name, statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, natBindingMap, captureMap, captureScratchMap, txDirectOptions...)
+	program, loadErr := loadEgressFastPathProgramWithCaptureScratch(name, statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, natBindingMap, captureMap, captureScratchMap, txDirectOptions...)
+	closeErr := captureScratchMap.Close()
+	if loadErr != nil || closeErr != nil {
+		var programCloseErr error
+		if program != nil {
+			programCloseErr = program.Close()
+		}
+		return nil, errors.Join(loadErr, wrapEBPFCleanupError("close egress capture scratch map", closeErr), wrapEBPFCleanupError("close egress program after setup failure", programCloseErr))
+	}
+	return program, nil
 }
 
 func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Map, packetPolicyMap *cebpf.Map, routeMap *cebpf.Map, kernelUDPTXRouteMap *cebpf.Map, kernelUDPTXFlowMap *cebpf.Map, natConfigMap *cebpf.Map, natSourceMap *cebpf.Map, natRouteMap *cebpf.Map, natExcludeMap *cebpf.Map, natBindingMap *cebpf.Map, captureMap *cebpf.Map, captureScratchMap *cebpf.Map, txDirectOptions ...kernelUDPTXDirectProgramOptions) (*cebpf.Program, error) {

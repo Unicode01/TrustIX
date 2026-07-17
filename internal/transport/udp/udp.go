@@ -192,7 +192,9 @@ func (transportImpl *Transport) Probe(ctx context.Context, peer transport.Peer) 
 		if err != nil {
 			return transport.ProbeResult{Healthy: false, Error: err.Error(), CheckedAt: time.Now()}
 		}
-		_ = conn.Close()
+		if err := conn.Close(); err != nil {
+			return transport.ProbeResult{Healthy: false, Error: fmt.Sprintf("close udp probe connection: %v", err), CheckedAt: time.Now()}
+		}
 		return transport.ProbeResult{Healthy: true, RTT: time.Since(start), CheckedAt: time.Now()}
 	}
 	return transport.ProbeResult{Healthy: false, Error: "no udp endpoint", CheckedAt: time.Now()}
@@ -219,8 +221,10 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		}
 		udpConn, ok := conn.(*net.UDPConn)
 		if !ok {
-			_ = conn.Close()
-			return nil, fmt.Errorf("dial udp returned %T", conn)
+			return nil, errors.Join(
+				fmt.Errorf("dial udp returned %T", conn),
+				udpCleanupError("close unexpected udp connection", conn.Close()),
+			)
 		}
 		configureUDPConn(udpConn)
 		return &session{conn: udpConn}, nil
@@ -433,10 +437,7 @@ func (transportImpl *Transport) dialKernelUDPFlow(ctx context.Context, peer tran
 		if kernelUDPStatusNeedsControlSubscription(status, effectiveEncryption, placement) {
 			subscription, err := transportImpl.subscribeKernelFlow(ctx, flowID)
 			if err != nil {
-				if deleter, ok := transportImpl.kernel.(dataplane.KernelUDPFlowDeleter); ok {
-					_ = deleter.DeleteKernelUDPFlows(context.Background(), []uint64{flowID})
-				}
-				return nil, true, err
+				return nil, true, errors.Join(err, transportImpl.deleteKernelUDPFlowAfterSetupFailure(flowID))
 			}
 			session := newKernelSession(transportImpl.kernel, subscription, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address)
 			go session.readSubscription(context.Background())
@@ -445,23 +446,31 @@ func (transportImpl *Transport) dialKernelUDPFlow(ctx context.Context, peer tran
 		return newKernelSession(transportImpl.kernel, nil, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address), true, nil
 	}
 	if status.DirectOnly || status.TCOnly {
-		if deleter, ok := transportImpl.kernel.(dataplane.KernelUDPFlowDeleter); ok {
-			_ = deleter.DeleteKernelUDPFlows(context.Background(), []uint64{flowID})
-		}
-		return nil, true, kernelUDPDirectOnlyUnsupportedError(status, effectiveEncryption, placement)
+		return nil, true, errors.Join(
+			kernelUDPDirectOnlyUnsupportedError(status, effectiveEncryption, placement),
+			transportImpl.deleteKernelUDPFlowAfterSetupFailure(flowID),
+		)
 	}
 	subscription, err := transportImpl.subscribeKernelFlow(ctx, flowID)
 	if err != nil {
-		if deleter, ok := transportImpl.kernel.(dataplane.KernelUDPFlowDeleter); ok {
-			_ = deleter.DeleteKernelUDPFlows(context.Background(), []uint64{flowID})
-		}
-		return nil, true, err
+		return nil, true, errors.Join(err, transportImpl.deleteKernelUDPFlowAfterSetupFailure(flowID))
 	}
 	session := newKernelSession(transportImpl.kernel, subscription, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address)
 	// Dial callers often use a short-lived context just for setup. Keep the
 	// receive pump tied to Session.Close instead of that setup deadline.
 	go session.readSubscription(context.Background())
 	return session, true, nil
+}
+
+func (transportImpl *Transport) deleteKernelUDPFlowAfterSetupFailure(flowID uint64) error {
+	deleter, ok := transportImpl.kernel.(dataplane.KernelUDPFlowDeleter)
+	if !ok {
+		return nil
+	}
+	return udpCleanupError(
+		fmt.Sprintf("delete kernel_udp flow %d after setup failure", flowID),
+		deleter.DeleteKernelUDPFlows(context.Background(), []uint64{flowID}),
+	)
 }
 
 func (transportImpl *Transport) subscribeKernelFlow(ctx context.Context, flowID uint64) (dataplane.KernelUDPSubscription, error) {
@@ -723,6 +732,7 @@ type listener struct {
 	acceptCh  chan transport.Session
 	done      chan struct{}
 	closeOnce sync.Once
+	closeErr  error
 	mu        sync.Mutex
 	sessions  map[string]*serverSession
 }
@@ -742,10 +752,9 @@ func (listener *listener) Accept(ctx context.Context) (transport.Session, error)
 }
 
 func (listener *listener) Close() error {
-	var err error
 	listener.closeOnce.Do(func() {
 		close(listener.done)
-		err = listener.conn.Close()
+		listener.closeErr = listener.conn.Close()
 		listener.mu.Lock()
 		for key, session := range listener.sessions {
 			session.closeInput()
@@ -753,7 +762,7 @@ func (listener *listener) Close() error {
 		}
 		listener.mu.Unlock()
 	})
-	return err
+	return listener.closeErr
 }
 
 func (listener *listener) readLoop() {
@@ -764,7 +773,7 @@ func (listener *listener) readLoop() {
 				release()
 			}
 			if udpReadErrorClosed(err) {
-				listener.Close()
+				_ = listener.Close()
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -1457,6 +1466,7 @@ type kernelListener struct {
 	acceptCh                 chan transport.Session
 	done                     chan struct{}
 	closeOnce                sync.Once
+	closeErr                 error
 	mu                       sync.Mutex
 	sessions                 map[uint64]*kernelSession
 	placement                dataplane.CryptoPlacement
@@ -1478,11 +1488,10 @@ func (listener *kernelListener) Accept(ctx context.Context) (transport.Session, 
 }
 
 func (listener *kernelListener) Close() error {
-	var err error
 	listener.closeOnce.Do(func() {
 		close(listener.done)
 		if listener.subscription != nil {
-			err = listener.subscription.Close()
+			listener.closeErr = listener.subscription.Close()
 		}
 		listener.mu.Lock()
 		for flowID, session := range listener.sessions {
@@ -1491,7 +1500,14 @@ func (listener *kernelListener) Close() error {
 		}
 		listener.mu.Unlock()
 	})
-	return err
+	return listener.closeErr
+}
+
+func udpCleanupError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (listener *kernelListener) readSubscription(ctx context.Context) {
@@ -1681,6 +1697,7 @@ type kernelSession struct {
 	inputMu                   sync.RWMutex
 	recvPending               kernelUDPPacketBatch
 	closeOnce                 sync.Once
+	closeErr                  error
 	closeInputOnce            sync.Once
 	closed                    chan struct{}
 	sendSeq                   atomic.Uint64
@@ -2338,8 +2355,11 @@ func (session *kernelSession) recordReceivedPackets(packets [][]byte) {
 
 func (session *kernelSession) Close() error {
 	session.closeOnce.Do(func() {
+		var errs []error
 		if deleter, ok := session.provider.(dataplane.KernelUDPFlowDeleter); ok && !session.keepFlowOnClose {
-			_ = deleter.DeleteKernelUDPFlows(context.Background(), []uint64{session.flowID})
+			if err := deleter.DeleteKernelUDPFlows(context.Background(), []uint64{session.flowID}); err != nil {
+				errs = append(errs, fmt.Errorf("delete kernel UDP flow %d: %w", session.flowID, err))
+			}
 		}
 		if session.listener != nil {
 			session.listener.mu.Lock()
@@ -2350,10 +2370,13 @@ func (session *kernelSession) Close() error {
 		}
 		session.closeInput()
 		if session.subscription != nil {
-			_ = session.subscription.Close()
+			if err := session.subscription.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close kernel UDP subscription: %w", err))
+			}
 		}
+		session.closeErr = errors.Join(errs...)
 	})
-	return nil
+	return session.closeErr
 }
 
 func (session *kernelSession) RetainKernelFlowOnClose() {

@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -345,11 +346,11 @@ func (daemon *Daemon) applyTrustConfig(ctx context.Context, trust config.TrustCo
 func (daemon *Daemon) applyTrustConfigLocked(ctx context.Context, trust config.TrustConfig) (bool, error) {
 	trust = config.NormalizeTrust(trust)
 	if err := trust.Validate(); err != nil {
-		return false, err
+		return false, newConfigMutationRequestError(err)
 	}
 	adminProofs := adminProofsFromContext(ctx)
 	if err := daemon.verifyAdminProofPolicy(adminProofs, daemon.desired.Trust); err != nil {
-		return false, err
+		return false, newConfigMutationRequestError(err)
 	}
 	if trustConfigsEqual(daemon.desired.Trust, trust) {
 		return false, nil
@@ -362,13 +363,23 @@ func (daemon *Daemon) applyTrustConfigLocked(ctx context.Context, trust config.T
 	if err != nil || !changed {
 		return changed, err
 	}
+	var commitErr error
 	if err := daemon.store.Append(*event); err != nil {
-		return false, fmt.Errorf("append domain trust event: %w", err)
+		if configlog.CommitSucceeded(err) {
+			commitErr = err
+		} else {
+			return false, fmt.Errorf("append domain trust event: %w", err)
+		}
 	}
 	daemon.head = plannedHead
 	daemon.desired.Trust = trust
 	if err := daemon.afterTrustStateChangedLocked(ctx); err != nil {
-		return true, err
+		daemon.requestRuntimeReconcile("domain trust mutation", err)
+		return true, newCommittedConfigMutationError("domain trust mutation", err)
+	}
+	if commitErr != nil {
+		daemon.requestRuntimeReconcile("domain trust mutation durability", commitErr)
+		return true, newCommittedConfigMutationError("domain trust mutation", commitErr)
 	}
 	return true, nil
 }
@@ -377,11 +388,10 @@ func (daemon *Daemon) afterTrustStateChangedLocked(ctx context.Context) error {
 	if _, err := daemon.enforceRuntimeTrustState(); err != nil {
 		return err
 	}
-	daemon.dropRevokedDeviceAccessSessions()
-	if err := daemon.applyRuntimeDataplaneSnapshot(ctx); err != nil {
-		return err
-	}
-	return daemon.refreshLocalAdvertisement()
+	_, sessionCloseErr := daemon.dropRevokedDeviceAccessSessions()
+	dataplaneErr := daemon.applyRuntimeDataplaneSnapshot(ctx)
+	advertisementErr := daemon.refreshLocalAdvertisement()
+	return errors.Join(sessionCloseErr, dataplaneErr, advertisementErr)
 }
 
 func (daemon *Daemon) domainTrustEventIfChangedAtHead(trust config.TrustConfig, adminProofs []configlog.AdminProof, head configlog.Head) (*configlog.Event, configlog.Head, bool, error) {

@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"trustix.local/trustix/internal/transport"
@@ -37,7 +38,9 @@ func (transportImpl *Transport) Probe(ctx context.Context, peer transport.Peer) 
 		if err != nil {
 			return transport.ProbeResult{Healthy: false, Error: err.Error(), CheckedAt: time.Now()}
 		}
-		_ = conn.Close()
+		if err := conn.Close(); err != nil {
+			return transport.ProbeResult{Healthy: false, Error: fmt.Sprintf("close tcp probe connection: %v", err), CheckedAt: time.Now()}
+		}
 		return transport.ProbeResult{Healthy: true, RTT: time.Since(start), CheckedAt: time.Now()}
 	}
 	return transport.ProbeResult{Healthy: false, Error: "no tcp endpoint", CheckedAt: time.Now()}
@@ -88,15 +91,18 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	if err != nil {
 		return nil, err
 	}
+	listener := &listener{ln: ln}
 	go func() {
 		<-ctx.Done()
-		_ = ln.Close()
+		_ = listener.Close()
 	}()
-	return &listener{ln: ln}, nil
+	return listener, nil
 }
 
 type listener struct {
-	ln net.Listener
+	ln        net.Listener
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (listener *listener) Accept(ctx context.Context) (transport.Session, error) {
@@ -121,5 +127,8 @@ func (listener *listener) Accept(ctx context.Context) (transport.Session, error)
 }
 
 func (listener *listener) Close() error {
-	return listener.ln.Close()
+	listener.closeOnce.Do(func() {
+		listener.closeErr = listener.ln.Close()
+	})
+	return listener.closeErr
 }

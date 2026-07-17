@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -87,7 +88,11 @@ func (daemon *Daemon) handleConfigExport(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", response.filename))
 	w.Header().Set("X-TrustIX-Export-Manifest", response.manifestSummaryHeader())
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(response.payload)
+	if _, err := w.Write(response.payload); err != nil {
+		daemon.recordBackgroundError("config_export_delivery", err)
+	} else {
+		daemon.clearBackgroundError("config_export_delivery")
+	}
 }
 
 func (response configExportResponse) manifestSummaryHeader() string {
@@ -143,13 +148,17 @@ func (daemon *Daemon) exportConfigArchive(request configExportRequest) (configEx
 	gzipWriter.ModTime = createdAt
 	tarWriter := tar.NewWriter(gzipWriter)
 	if err := writeConfigExportTar(tarWriter, createdAt, desired, snapshot, files, &manifest); err != nil {
-		_ = tarWriter.Close()
-		_ = gzipWriter.Close()
-		return configExportResponse{}, err
+		return configExportResponse{}, errors.Join(
+			err,
+			wrapOperationError("close config export tar after write failure", tarWriter.Close()),
+			wrapOperationError("close config export gzip after write failure", gzipWriter.Close()),
+		)
 	}
 	if err := tarWriter.Close(); err != nil {
-		_ = gzipWriter.Close()
-		return configExportResponse{}, fmt.Errorf("close config export tar: %w", err)
+		return configExportResponse{}, errors.Join(
+			fmt.Errorf("close config export tar: %w", err),
+			wrapOperationError("close config export gzip after tar close failure", gzipWriter.Close()),
+		)
 	}
 	if err := gzipWriter.Close(); err != nil {
 		return configExportResponse{}, fmt.Errorf("close config export gzip: %w", err)

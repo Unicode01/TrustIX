@@ -12,12 +12,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"trustix.local/trustix/internal/config"
+	"trustix.local/trustix/internal/dataplane"
 )
 
 func TestConfigExportArchiveOmitsPrivateKeysByDefault(t *testing.T) {
@@ -104,6 +106,71 @@ func TestConfigRestoreArchiveRestoresRuntimeAndConfigLog(t *testing.T) {
 	if head.Seq != exported.manifest.ConfigHead.Seq || head.Hash != exported.manifest.ConfigHead.Hash {
 		t.Fatalf("store head after restore = %#v, want %#v", head, exported.manifest.ConfigHead)
 	}
+}
+
+func TestConfigRestoreArchiveRollsBackLogAndRuntimeAfterPostCommitFailure(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	initial := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, initial)
+	daemon.cfg.ConfigPath = writeConfigExportSourceFile(t, initial)
+	daemon.logPath = "memory"
+	exported, err := daemon.exportConfigArchive(configExportRequest{IncludePrivateKeys: true})
+	if err != nil {
+		t.Fatalf("export backup archive: %v", err)
+	}
+
+	next := configApplyDesired(pkiSet, "10.0.2.0/24")
+	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
+		t.Fatalf("apply next changed=%t err=%v", changed, err)
+	}
+	beforeHead := daemon.head
+	daemon.dataplane = &failNthSnapshotManager{inner: dataplane.NewNoopManager(), failAt: 2}
+
+	if _, err := daemon.restoreConfigArchive(context.Background(), exported.payload); err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("restore post-commit failure err = %v, want rolled-back error", err)
+	}
+	storeHead, err := daemon.store.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storeHead != beforeHead || daemon.head != beforeHead {
+		t.Fatalf("restore failure changed head: store=%+v runtime=%+v before=%+v", storeHead, daemon.head, beforeHead)
+	}
+	if !desiredConfigsEqual(daemon.desired, next) {
+		t.Fatal("restore failure did not restore previous desired config")
+	}
+	assertRuntimeRoute(t, daemon, "10.0.2.0/24")
+	assertNoRuntimeRoute(t, daemon, "10.0.1.0/24")
+}
+
+type failNthSnapshotManager struct {
+	inner  dataplane.Manager
+	calls  int
+	failAt int
+}
+
+func (manager *failNthSnapshotManager) Load(ctx context.Context) error {
+	return manager.inner.Load(ctx)
+}
+
+func (manager *failNthSnapshotManager) Attach(ctx context.Context, spec dataplane.AttachSpec) error {
+	return manager.inner.Attach(ctx, spec)
+}
+
+func (manager *failNthSnapshotManager) ApplySnapshot(ctx context.Context, snapshot dataplane.Snapshot) error {
+	manager.calls++
+	if manager.calls == manager.failAt {
+		return fmt.Errorf("injected snapshot failure")
+	}
+	return manager.inner.ApplySnapshot(ctx, snapshot)
+}
+
+func (manager *failNthSnapshotManager) Stats(ctx context.Context) (dataplane.Stats, error) {
+	return manager.inner.Stats(ctx)
+}
+
+func (manager *failNthSnapshotManager) Detach(ctx context.Context) error {
+	return manager.inner.Detach(ctx)
 }
 
 func TestConfigValidateArchiveVerifiesRecoveryWithoutMutation(t *testing.T) {
@@ -295,6 +362,99 @@ func TestConfigRestoreArchiveRejectsSymlinkTarget(t *testing.T) {
 
 	if _, err := daemon.restoreConfigArchive(context.Background(), exported.payload); err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("restore symlink target err = %v, want not a regular file", err)
+	}
+}
+
+func TestConfigRestoreArchiveFilesRollBackEarlierWrites(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	daemon := newConfigApplyTestDaemon(t, desired)
+	configPath := writeConfigExportSourceFile(t, desired)
+	daemon.cfg.ConfigPath = configPath
+	originalConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	certPath := desired.IX.CertPath
+	if err := os.Remove(certPath); err != nil {
+		t.Fatalf("remove certificate fixture: %v", err)
+	}
+	if err := os.Mkdir(certPath, 0o700); err != nil {
+		t.Fatalf("replace certificate fixture with directory: %v", err)
+	}
+	configPayload := []byte(`{"changed":true}`)
+	certPayload := []byte("replacement certificate")
+	archive := parsedConfigRestoreArchive{
+		Manifest: configExportManifest{Files: []configExportFileManifest{
+			{
+				Roles:       []string{"config.source"},
+				SourcePath:  configPath,
+				ArchivePath: "files/config.json",
+				SizeBytes:   int64(len(configPayload)),
+				SHA256:      sha256Bytes(configPayload),
+			},
+			{
+				Roles:       []string{"ix.certificate"},
+				SourcePath:  certPath,
+				ArchivePath: "files/ix.crt",
+				SizeBytes:   int64(len(certPayload)),
+				SHA256:      sha256Bytes(certPayload),
+			},
+		}},
+		Entries: map[string][]byte{
+			"files/config.json": configPayload,
+			"files/ix.crt":      certPayload,
+		},
+	}
+
+	if _, changes, _, _, err := daemon.restoreConfigArchiveFiles(archive, desired); err == nil {
+		t.Fatal("restore files succeeded with a directory certificate target")
+	} else if len(changes) != 0 {
+		t.Fatalf("restore returned unrolled changes: %#v", changes)
+	}
+	restoredConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(restoredConfig, originalConfig) {
+		t.Fatalf("config file was not rolled back\n got: %s\nwant: %s", restoredConfig, originalConfig)
+	}
+}
+
+func TestConfigRestoreFileModeChangeIsRolledBack(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix permission bits")
+	}
+	target := filepath.Join(t.TempDir(), "certificate.pem")
+	payload := []byte("same certificate")
+	if err := os.WriteFile(target, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	backup, changed, err := writeConfigRestoreFile(target, payload, false)
+	if err != nil {
+		t.Fatalf("restore mode-only file change: %v", err)
+	}
+	if !changed || backup == "" {
+		t.Fatalf("mode-only restore changed=%t backup=%q, want transactional change", changed, backup)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("restored mode = %o, want 0644", info.Mode().Perm())
+	}
+	if err := rollbackConfigRestoreFiles([]configRestoreFileChange{{targetPath: target, backupPath: backup}}); err != nil {
+		t.Fatalf("rollback mode-only file change: %v", err)
+	}
+	info, err = os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("rolled-back mode = %o, want 0600", info.Mode().Perm())
 	}
 }
 

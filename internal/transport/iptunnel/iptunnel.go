@@ -6,6 +6,7 @@ package iptunnel
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -78,8 +79,10 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			}
 			conn, err := dialUDPOnCarrier(ctx, cfg.LocalCarrier.Addr(), cfg.RemoteCarrier, cfg.CarrierPort)
 			if err != nil {
-				_ = transportImpl.closeTunnelFunc(name)()
-				return nil, fmt.Errorf("dial %s kernel tunnel carrier %s:%d: %w", transportImpl.protocol, cfg.RemoteCarrier, cfg.CarrierPort, err)
+				return nil, errors.Join(
+					fmt.Errorf("dial %s kernel tunnel carrier %s:%d: %w", transportImpl.protocol, cfg.RemoteCarrier, cfg.CarrierPort, err),
+					wrapManagerError("release kernel tunnel after carrier dial failure", transportImpl.closeTunnelFunc(name)()),
+				)
 			}
 			return &carrier{cfg: cfg, closeFunc: transportImpl.closeTunnelFunc(name), conn: conn}, nil
 		}
@@ -109,8 +112,10 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	}
 	conns, err := listenUDPOnCarrierConns(ctx, cfg.LocalCarrier.Addr(), cfg.CarrierPort, carrierListenWorkers())
 	if err != nil {
-		_ = transportImpl.closeTunnelFunc(name)()
-		return nil, fmt.Errorf("listen %s kernel tunnel carrier %s:%d: %w", transportImpl.protocol, cfg.LocalCarrier.Addr(), cfg.CarrierPort, err)
+		return nil, errors.Join(
+			fmt.Errorf("listen %s kernel tunnel carrier %s:%d: %w", transportImpl.protocol, cfg.LocalCarrier.Addr(), cfg.CarrierPort, err),
+			wrapManagerError("release kernel tunnel after carrier listen failure", transportImpl.closeTunnelFunc(name)()),
+		)
 	}
 	listener := newPacketListener(ctx, cfg, conns)
 	return &tunnelListener{Listener: listener, tunnelName: name, closeFunc: transportImpl.closeTunnelFunc(name)}, nil
@@ -124,9 +129,16 @@ func (transportImpl *Transport) acquireTunnel(ctx context.Context, endpoint stri
 		Config:   NormalizeParsedKernelTunnelConfig(transportImpl.protocol, cfg),
 	}
 	record.Name = DeterministicTunnelName(record.Protocol, record.Config)
-	return transportImpl.manager.Acquire(ctx, record, func() (string, error) {
+	name, err := transportImpl.manager.Acquire(ctx, record, func() (string, error) {
 		return createKernelTunnel(transportImpl.protocol, record.Name, cfg)
 	})
+	if err != nil && name != "" {
+		return "", errors.Join(
+			err,
+			wrapManagerError("rollback kernel tunnel acquisition after state durability failure", transportImpl.manager.Release(context.Background(), name)),
+		)
+	}
+	return name, err
 }
 
 func (transportImpl *Transport) closeTunnelFunc(name string) func() error {
@@ -143,19 +155,25 @@ type tunnelListener struct {
 	tunnelName string
 	closeFunc  func() error
 	once       sync.Once
+	closeErr   error
 }
 
 func (listener *tunnelListener) Close() error {
-	var err error
 	listener.once.Do(func() {
-		err = listener.Listener.Close()
+		var errs []error
+		if err := listener.Listener.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close tunnel listener: %w", err))
+		}
 		if listener.closeFunc != nil {
-			if closeErr := listener.closeFunc(); err == nil {
-				err = closeErr
+			if err := listener.closeFunc(); err != nil {
+				errs = append(errs, fmt.Errorf("release kernel tunnel: %w", err))
 			}
 		} else {
-			_ = deleteKernelTunnel(listener.tunnelName)
+			if err := deleteKernelTunnel(listener.tunnelName); err != nil {
+				errs = append(errs, fmt.Errorf("delete kernel tunnel %q: %w", listener.tunnelName, err))
+			}
 		}
+		listener.closeErr = errors.Join(errs...)
 	})
-	return err
+	return listener.closeErr
 }

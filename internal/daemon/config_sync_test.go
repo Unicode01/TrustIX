@@ -3,6 +3,8 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"net/http"
@@ -19,6 +21,72 @@ import (
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/pki"
 )
+
+func TestControlConfigEventsPeerSignerErrorClassification(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	loadCertificate := func(path string) *x509.Certificate {
+		t.Helper()
+		cert, _, err := pki.LoadCertificate(path)
+		if err != nil {
+			t.Fatalf("load certificate %q: %v", path, err)
+		}
+		return cert
+	}
+
+	t.Run("invalid certificate is a request error", func(t *testing.T) {
+		daemon := newConfigApplyTestDaemon(t, configApplyDesired(pkiSet, "10.0.1.0/24"))
+		request := httptest.NewRequest(http.MethodPost, "/v1/control/config/events", strings.NewReader("[]"))
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{loadCertificate(pkiSet.adminCert)}}
+		recorder := httptest.NewRecorder()
+
+		daemon.handleControlConfigEventsPost(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+		}
+	})
+
+	t.Run("signer cache persistence failure is a server error", func(t *testing.T) {
+		daemon := newConfigApplyTestDaemon(t, configApplyDesired(pkiSet, "10.0.1.0/24"))
+		blocked := filepath.Join(t.TempDir(), "blocked")
+		if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		daemon.cfg.DataDir = filepath.Join(blocked, "data")
+		request := httptest.NewRequest(http.MethodPost, "/v1/control/config/events", strings.NewReader("[]"))
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{loadCertificate(pkiSet.ixCerts["ix-b"])}}
+		recorder := httptest.NewRecorder()
+
+		daemon.handleControlConfigEventsPost(recorder, request)
+
+		if recorder.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
+		}
+		if _, exists := daemon.configSignerCertificate(signerIDForIX("ix-b")); exists {
+			t.Fatal("failed signer cache persistence mutated the in-memory signer cache")
+		}
+	})
+}
+
+func TestControlConfigEventsPersistenceFailureReturnsServerError(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	daemon := newConfigApplyTestDaemon(t, configApplyDesired(pkiSet, "10.0.1.0/24"))
+	event, _, changed, err := daemon.desiredEventIfChanged(configApplyDesired(pkiSet, "10.0.2.0/24"), nil)
+	if err != nil || !changed {
+		t.Fatalf("build config event changed=%t err=%v", changed, err)
+	}
+	body := mustJSON(t, []configlog.Event{*event})
+	daemon.store = &failingAppendBatchStore{Store: daemon.store}
+	request := httptest.NewRequest(http.MethodPost, "/v1/control/config/events", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	daemon.handleControlConfigEventsPost(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
+	}
+}
 
 func TestConfigSyncPullsMissingSignedEvents(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
@@ -254,6 +322,71 @@ func TestConfigRejoinReplacesForkAndPreservesLocalDesired(t *testing.T) {
 	}
 }
 
+func TestConfigRejoinContinuesAfterCommittedDurabilityError(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	source := newConfigSyncTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-c", "127.0.0.1:7003", "", "10.0.2.0/24"), true)
+	target := newConfigSyncTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "", "10.0.0.0/24"), true)
+	snapshot, err := source.localConfigSnapshot()
+	if err != nil {
+		t.Fatalf("build source snapshot: %v", err)
+	}
+	target.store = &committedReplaceAllStore{Store: target.store}
+
+	preserved, err := target.replaceConfigLogWithVerifiedSnapshot(context.Background(), snapshot, true)
+	var committed *committedConfigMutationError
+	if !errors.As(err, &committed) {
+		t.Fatalf("rejoin error = %v, want committed mutation error", err)
+	}
+	if !preserved {
+		t.Fatal("rejoin did not preserve local desired after committed durability error")
+	}
+	if target.head.Seq != 3 {
+		t.Fatalf("target head seq = %d, want 3", target.head.Seq)
+	}
+	status := target.runtimeReconcileStatus()
+	if !status.Pending || status.Reason != "config rejoin durability" {
+		t.Fatalf("reconcile status = %#v", status)
+	}
+}
+
+func TestConfigRejoinRollsBackAfterPostCommitFailure(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	source := newConfigSyncTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-c", "127.0.0.1:7003", "", "10.0.2.0/24"), true)
+	target := newConfigSyncTestDaemon(t, desiredForMembershipTest(pkiSet, "ix-a", "127.0.0.1:7001", "", "10.0.0.0/24"), true)
+	snapshot, err := source.localConfigSnapshot()
+	if err != nil {
+		t.Fatalf("build source snapshot: %v", err)
+	}
+	beforeHead := target.head
+	beforeDesired := target.desired
+	target.dataplane = &failNthSnapshotManager{inner: dataplane.NewNoopManager(), failAt: 1}
+
+	if _, err := target.replaceConfigLogWithVerifiedSnapshot(context.Background(), snapshot, true); err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("rejoin error = %v, want rolled-back error", err)
+	}
+	storeHead, err := target.store.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storeHead != beforeHead || target.head != beforeHead {
+		t.Fatalf("head changed after rollback: store=%+v runtime=%+v want=%+v", storeHead, target.head, beforeHead)
+	}
+	if !desiredConfigsEqual(target.desired, beforeDesired) {
+		t.Fatal("runtime desired changed after rejoin rollback")
+	}
+}
+
+type committedReplaceAllStore struct {
+	configlog.Store
+}
+
+func (store *committedReplaceAllStore) ReplaceAll(events []configlog.Event) error {
+	if err := store.Store.ReplaceAll(events); err != nil {
+		return err
+	}
+	return &configlog.CommitError{Err: errors.New("injected directory sync failure")}
+}
+
 func TestConfigVerifyAndRestoreBackup(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := desiredForMembershipTest(pkiSet, "ix-a", freeConfigSyncUDPAddr(t), "", "10.0.0.0/24")
@@ -306,6 +439,11 @@ func TestConfigVerifyAndRestoreBackup(t *testing.T) {
 	if err := daemon.store.ReplaceAll([]configlog.Event{genesis, *event}); err != nil {
 		t.Fatalf("replace all: %v", err)
 	}
+	currentHead, err := daemon.store.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.setRuntimeDesired(next, currentHead)
 	backups, err := filepath.Glob(logPath + ".backup.*")
 	if err != nil {
 		t.Fatal(err)

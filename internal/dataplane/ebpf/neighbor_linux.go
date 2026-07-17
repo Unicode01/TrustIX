@@ -36,7 +36,7 @@ const lanGSORawMixedBatchDefaultLimit = 256
 const lanGSOScatterDefaultMaxIPv4Len = 32768
 const lanGSOScatterDefaultMaxSegments = 32
 
-var lanPacketStats lanPacketInjectorStats
+var lanPacketStats = &lanPacketInjectorStats{}
 
 type lanPacketInjectorStats struct {
 	gsoAttempts              atomic.Uint64

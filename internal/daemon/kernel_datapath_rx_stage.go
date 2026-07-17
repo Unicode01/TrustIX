@@ -115,7 +115,9 @@ type kernelDatapathRXStageStatus struct {
 var kernelDatapathRXStageOpenDriver = openKernelDatapathRXStageDriver
 
 func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec dataplane.AttachSpec) error {
-	daemon.stopKernelDatapathRXStage()
+	if err := daemon.stopKernelDatapathRXStage(); err != nil {
+		return fmt.Errorf("stop previous kernel datapath RX stage: %w", err)
+	}
 	mode := kernelDatapathRXModeForDesired(daemon.desired)
 	if mode == "" {
 		daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
@@ -160,24 +162,30 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 	if mode == kernelDatapathRXModeWorker {
 		targetIfname = kernelDatapathRXStageTargetIface(spec, ifname)
 		if targetIfname == "" {
-			_ = driver.Close()
+			closeErr := driver.Close()
 			daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
 				Enabled:        true,
 				Mode:           mode,
-				InactiveReason: "RX_WORKER requires a configured LAN target interface",
+				InactiveReason: errors.Join(errors.New("RX_WORKER requires a configured LAN target interface"), wrapOperationError("close kernel datapath RX driver", closeErr)).Error(),
 			})
+			if closeErr != nil {
+				return fmt.Errorf("close kernel datapath RX driver: %w", closeErr)
+			}
 			return nil
 		}
 		flags = kernelDatapathRXWorkerHookFlags()
 	}
 	hook, err := attachKernelDatapathRXHook(driver, ifname, targetIfname, flags)
 	if err != nil {
-		_ = driver.Close()
+		cleanupErr := driver.Close()
 		daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
 			Enabled:        true,
 			Mode:           mode,
-			InactiveReason: err.Error(),
+			InactiveReason: errors.Join(err, wrapOperationError("close kernel datapath RX driver", cleanupErr)).Error(),
 		})
+		if cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("close kernel datapath RX driver: %w", cleanupErr))
+		}
 		return nil
 	}
 	txHook := kernelDatapathRXStageHookStatus{}
@@ -188,13 +196,15 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 			kernelDatapathTXPlaintextHookFlags(),
 		)
 		if txErr != nil {
-			_ = driver.DetachFor(ifname)
-			_ = driver.Close()
+			cleanupErr := cleanupKernelDatapathRXDriver(driver, ifname, targetIfname)
 			daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
 				Enabled:        true,
 				Mode:           mode,
-				InactiveReason: txErr.Error(),
+				InactiveReason: errors.Join(txErr, cleanupErr).Error(),
 			})
+			if cleanupErr != nil {
+				return errors.Join(txErr, cleanupErr)
+			}
 			return nil
 		}
 		if txHook.Attached {
@@ -206,16 +216,19 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 	}
 	stage, err := driver.Clear()
 	if err != nil {
-		_ = driver.DetachFor(ifname)
+		cleanupIfnames := []string{ifname}
 		if kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
-			_ = driver.DetachFor(targetIfname)
+			cleanupIfnames = append(cleanupIfnames, targetIfname)
 		}
-		_ = driver.Close()
+		cleanupErr := cleanupKernelDatapathRXDriver(driver, cleanupIfnames...)
 		daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
 			Enabled:        true,
 			Mode:           mode,
-			InactiveReason: err.Error(),
+			InactiveReason: errors.Join(err, cleanupErr).Error(),
 		})
+		if cleanupErr != nil {
+			return errors.Join(err, cleanupErr)
+		}
 		return nil
 	}
 	var pollerCtx context.Context
@@ -263,6 +276,7 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 	daemon.kernelRXStage.driver = driver
 	daemon.kernelRXStage.status = status
 	daemon.kernelRXStage.mu.Unlock()
+	daemon.clearBackgroundError("kernel_datapath_rx_stage_cleanup")
 	if mode == kernelDatapathRXModeStage {
 		go daemon.runKernelDatapathRXStagePoller(pollerCtx, done, driver, status.BatchSize, kernelDatapathRXStageIdleDelay(), kernelDatapathRXStageErrorDelay())
 	}
@@ -303,7 +317,7 @@ func kernelDatapathRXHookMatches(hook kernelDatapathRXStageHookStatus, ifname, t
 	return strings.TrimSpace(hook.TargetIfName) == strings.TrimSpace(targetIfname)
 }
 
-func (daemon *Daemon) stopKernelDatapathRXStage() {
+func (daemon *Daemon) stopKernelDatapathRXStage() error {
 	daemon.kernelRXStage.mu.Lock()
 	cancel := daemon.kernelRXStage.cancel
 	done := daemon.kernelRXStage.done
@@ -324,11 +338,51 @@ func (daemon *Daemon) stopKernelDatapathRXStage() {
 	if done != nil {
 		<-done
 	}
-	if driver != nil {
-		_ = driver.Detach()
-		_, _ = driver.Clear()
-		_ = driver.Close()
+	if driver == nil {
+		return nil
 	}
+	detachErr := driver.Detach()
+	if errors.Is(detachErr, syscall.ENOENT) {
+		detachErr = nil
+	}
+	_, clearErr := driver.Clear()
+	closeErr := driver.Close()
+	err := errors.Join(
+		wrapOperationError("detach kernel datapath RX hooks", detachErr),
+		wrapOperationError("clear kernel datapath RX stage", clearErr),
+		wrapOperationError("close kernel datapath RX driver", closeErr),
+	)
+	if err != nil {
+		daemon.recordBackgroundError("kernel_datapath_rx_stage_cleanup", err)
+		return err
+	}
+	daemon.clearBackgroundError("kernel_datapath_rx_stage_cleanup")
+	return nil
+}
+
+func cleanupKernelDatapathRXDriver(driver kernelDatapathRXStageDriver, ifnames ...string) error {
+	if driver == nil {
+		return nil
+	}
+	errList := make([]error, 0, len(ifnames)+1)
+	seen := make(map[string]struct{}, len(ifnames))
+	for _, ifname := range ifnames {
+		ifname = strings.TrimSpace(ifname)
+		if ifname == "" {
+			continue
+		}
+		if _, ok := seen[ifname]; ok {
+			continue
+		}
+		seen[ifname] = struct{}{}
+		if err := driver.DetachFor(ifname); err != nil && !errors.Is(err, syscall.ENOENT) {
+			errList = append(errList, fmt.Errorf("detach kernel datapath RX hook from %s: %w", ifname, err))
+		}
+	}
+	if err := driver.Close(); err != nil {
+		errList = append(errList, fmt.Errorf("close kernel datapath RX driver: %w", err))
+	}
+	return errors.Join(errList...)
 }
 
 func (daemon *Daemon) setKernelDatapathRXStageInactive(status kernelDatapathRXStageStatus) {

@@ -662,7 +662,7 @@ func detachTrustIXTIXTCPXDP(link netlink.Link) (bool, error) {
 	return true, detachTIXTCPXDP(link, attachFlags)
 }
 
-func trustIXTIXTCPXDPAttach(link netlink.Link) (bool, int, error) {
+func trustIXTIXTCPXDPAttach(link netlink.Link) (trustix bool, attachFlags int, resultErr error) {
 	if link == nil || link.Attrs() == nil || link.Attrs().Xdp == nil || !link.Attrs().Xdp.Attached || link.Attrs().Xdp.ProgId == 0 {
 		return false, 0, nil
 	}
@@ -670,7 +670,11 @@ func trustIXTIXTCPXDPAttach(link netlink.Link) (bool, int, error) {
 	if err != nil {
 		return false, 0, err
 	}
-	defer program.Close()
+	defer func() {
+		if err := program.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close tix_tcp XDP program handle: %w", err))
+		}
+	}()
 	info, err := program.Info()
 	if err != nil {
 		return false, 0, err

@@ -600,9 +600,6 @@ func (daemon *Daemon) verifyAdvertisementBase(advertisement advertisementRespons
 		if strings.TrimSpace(endpoint.Transport) == "" {
 			return nil, fmt.Errorf("advertisement %q endpoint %q transport is empty", advertisement.IXID, endpoint.ID)
 		}
-		if _, ok := daemon.transports.Get(transport.Protocol(endpoint.Transport)); !ok {
-			continue
-		}
 	}
 	return cert, nil
 }
@@ -800,7 +797,7 @@ func (daemon *Daemon) mergeAdvertisementFromControlTarget(advertisement advertis
 func (daemon *Daemon) mergeAdvertisementWithOptions(advertisement advertisementResponse, source string, options mergeAdvertisementOptions) (bool, error) {
 	cert, err := daemon.verifyAdvertisementBase(advertisement)
 	if err != nil {
-		return false, err
+		return false, newConfigMutationRequestError(err)
 	}
 	if err := daemon.verifyAdmissionForAdvertisement(advertisement, cert); err != nil {
 		daemon.recordPendingMember(advertisement, source, err)
@@ -816,6 +813,9 @@ func (daemon *Daemon) mergeAdvertisementWithOptions(advertisement advertisementR
 		via = ""
 	}
 	if _, err := daemon.registerConfigSignerCertificate(cert, true); err != nil {
+		if stateFileCommitSucceeded(err) {
+			daemon.requestRuntimeReconcile("membership signer cache durability", err)
+		}
 		return false, err
 	}
 
@@ -855,11 +855,13 @@ func (daemon *Daemon) mergeAdvertisementWithOptions(advertisement advertisementR
 		daemon.membershipMu.Unlock()
 		if recordChanged {
 			if err := daemon.persistMembers(); err != nil {
+				daemon.requestRuntimeReconcile("membership persistence", err)
 				return false, err
 			}
 		}
 		if pendingChanged {
 			if err := daemon.persistPendingMembers(); err != nil {
+				daemon.requestRuntimeReconcile("pending membership persistence", err)
 				return false, err
 			}
 		}
@@ -878,16 +880,22 @@ func (daemon *Daemon) mergeAdvertisementWithOptions(advertisement advertisementR
 	}
 	daemon.membershipMu.Unlock()
 	if err := daemon.persistMembers(); err != nil {
+		daemon.requestRuntimeReconcile("membership persistence", err)
 		return false, err
 	}
 	if pendingChanged {
 		if err := daemon.persistPendingMembers(); err != nil {
+			daemon.requestRuntimeReconcile("pending membership persistence", err)
 			return false, err
 		}
 	}
 	if sessionSurfaceChanged {
-		daemon.closeDataSessionsForPeers(map[core.IXID]struct{}{ixID: {}})
+		closeErr := daemon.closeDataSessionsForPeers(map[core.IXID]struct{}{ixID: {}})
 		daemon.clearFlowsForPeers(map[core.IXID]struct{}{ixID: {}})
+		if closeErr != nil {
+			daemon.requestRuntimeReconcile("membership session replacement", closeErr)
+			return true, closeErr
+		}
 	}
 	return true, nil
 }
@@ -927,7 +935,12 @@ func (daemon *Daemon) recordPendingMember(advertisement advertisementResponse, s
 	}
 	daemon.pendingMembers[ixID] = record
 	daemon.membershipMu.Unlock()
-	_ = daemon.persistPendingMembers()
+	if err := daemon.persistPendingMembers(); err != nil {
+		daemon.recordBackgroundError("pending_members_persist", err)
+		daemon.requestRuntimeReconcile("pending member persistence", err)
+	} else {
+		daemon.clearBackgroundError("pending_members_persist")
+	}
 }
 
 func (daemon *Daemon) deletePendingMember(ixID core.IXID) {
@@ -938,7 +951,12 @@ func (daemon *Daemon) deletePendingMember(ixID core.IXID) {
 	}
 	daemon.membershipMu.Unlock()
 	if existed {
-		_ = daemon.persistPendingMembers()
+		if err := daemon.persistPendingMembers(); err != nil {
+			daemon.recordBackgroundError("pending_members_persist", err)
+			daemon.requestRuntimeReconcile("pending member deletion persistence", err)
+		} else {
+			daemon.clearBackgroundError("pending_members_persist")
+		}
 	}
 }
 
@@ -2707,7 +2725,9 @@ func (daemon *Daemon) applyRuntimeDataplaneSnapshot(ctx context.Context) error {
 	if err := daemon.dataplane.ApplySnapshot(ctx, snapshot); err != nil {
 		return err
 	}
-	daemon.syncKernelDatapathState(ctx, snapshot)
+	if err := daemon.syncKernelDatapathState(ctx, snapshot); err != nil {
+		return fmt.Errorf("sync kernel datapath state: %w", err)
+	}
 	if err := daemon.syncKernelTunnelListeners(daemon.listenerContext(ctx)); err != nil {
 		return err
 	}
@@ -2952,10 +2972,20 @@ func (daemon *Daemon) pruneExpiredMembers() bool {
 	}
 	daemon.membershipMu.Unlock()
 	if changed {
-		_ = daemon.persistMembers()
+		if err := daemon.persistMembers(); err != nil {
+			daemon.recordBackgroundError("members_persist", err)
+			daemon.requestRuntimeReconcile("expired member persistence", err)
+		} else {
+			daemon.clearBackgroundError("members_persist")
+		}
 	}
 	if len(expiredDynamicOnly) > 0 {
-		daemon.closeDataSessionsForPeers(expiredDynamicOnly)
+		if err := daemon.closeDataSessionsForPeers(expiredDynamicOnly); err != nil {
+			daemon.recordBackgroundError("expired_member_session_close", err)
+			daemon.requestRuntimeReconcile("expired member session cleanup", err)
+		} else {
+			daemon.clearBackgroundError("expired_member_session_close")
+		}
 		daemon.clearFlowsForPeers(expiredDynamicOnly)
 	}
 	if daemon.pruneExpiredPendingMembers() {
@@ -2976,7 +3006,12 @@ func (daemon *Daemon) pruneExpiredPendingMembers() bool {
 	}
 	daemon.membershipMu.Unlock()
 	if changed {
-		_ = daemon.persistPendingMembers()
+		if err := daemon.persistPendingMembers(); err != nil {
+			daemon.recordBackgroundError("pending_members_persist", err)
+			daemon.requestRuntimeReconcile("expired pending member persistence", err)
+		} else {
+			daemon.clearBackgroundError("pending_members_persist")
+		}
 	}
 	return changed
 }

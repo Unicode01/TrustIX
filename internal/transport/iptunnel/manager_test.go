@@ -2,8 +2,10 @@ package iptunnel
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -190,5 +192,71 @@ func TestManagerCleanupClearsState(t *testing.T) {
 	}
 	if string(payload) != "{\n  \"tunnels\": null\n}\n" {
 		t.Fatalf("state file after cleanup = %q, want empty tunnel state", payload)
+	}
+}
+
+func TestManagerCleanupRetainsTunnelWhenDeleteFails(t *testing.T) {
+	originalDelete := managerDeleteKernelTunnel
+	t.Cleanup(func() { managerDeleteKernelTunnel = originalDelete })
+	managerDeleteKernelTunnel = func(name string) error {
+		return fmt.Errorf("injected delete failure for %s", name)
+	}
+	manager := NewManager(t.TempDir())
+	ctx := context.Background()
+	record := TunnelRecord{Name: "tixipstale", Protocol: "ipip", Config: "stale", RefCount: 1}
+	if err := manager.Record(ctx, record); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+
+	if _, err := manager.Cleanup(ctx); err == nil || !strings.Contains(err.Error(), "injected delete failure") {
+		t.Fatalf("cleanup error = %v, want delete failure", err)
+	}
+	records, err := manager.Plan(ctx)
+	if err != nil {
+		t.Fatalf("plan after failed cleanup: %v", err)
+	}
+	if len(records) != 1 || records[0].Name != record.Name {
+		t.Fatalf("records after failed cleanup = %#v, want retained %q", records, record.Name)
+	}
+}
+
+func TestTransportAcquireRollsBackCommittedDurabilityFailure(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	transportImpl := NewGRE()
+	transportImpl.manager = manager
+	cfg, err := parseTunnelConfig("local=198.18.0.1,remote=198.18.0.2,local_carrier=10.255.0.1/30,remote_carrier=10.255.0.2,port=47819,mtu=1400")
+	if err != nil {
+		t.Fatalf("parse tunnel config: %v", err)
+	}
+	cfg.Protocol = transportImpl.protocol
+	record := TunnelRecord{
+		Protocol: string(transportImpl.protocol),
+		Endpoint: "peer-gre",
+		Role:     "dial",
+		Config:   NormalizeParsedKernelTunnelConfig(transportImpl.protocol, cfg),
+	}
+	record.Name = DeterministicTunnelName(record.Protocol, record.Config)
+	if err := manager.Record(context.Background(), record); err != nil {
+		t.Fatalf("record existing tunnel: %v", err)
+	}
+
+	originalExists := managerKernelTunnelExists
+	originalSync := syncTunnelStateDirectoryFunc
+	t.Cleanup(func() {
+		managerKernelTunnelExists = originalExists
+		syncTunnelStateDirectoryFunc = originalSync
+	})
+	managerKernelTunnelExists = func(name string) bool { return name == record.Name }
+	syncTunnelStateDirectoryFunc = func(string) error { return fmt.Errorf("injected directory sync failure") }
+
+	if name, err := transportImpl.acquireTunnel(context.Background(), record.Endpoint, record.Role, cfg); err == nil || name != "" {
+		t.Fatalf("acquire name=%q err=%v, want compensated durability failure", name, err)
+	}
+	records, err := manager.Plan(context.Background())
+	if err != nil {
+		t.Fatalf("plan tunnel state: %v", err)
+	}
+	if len(records) != 1 || records[0].RefCount != 1 {
+		t.Fatalf("records after compensated acquire = %#v, want original refcount 1", records)
 	}
 }

@@ -300,14 +300,12 @@ func (secureTransport *Transport) Dial(ctx context.Context, peer transport.Peer,
 	if secureTransport.options.ClientAuthTLS != nil {
 		authTLSConf, err = secureTransport.options.ClientAuthTLS(peer)
 		if err != nil {
-			_ = session.Close()
-			return nil, err
+			return nil, errors.Join(err, wrapCloseError("close data session after client auth config failure", session.Close()))
 		}
 	}
 	secureSession, err := clientWithContext(ctx, session, authTLSConf, options)
 	if err != nil {
-		_ = session.Close()
-		return nil, err
+		return nil, errors.Join(err, wrapCloseError("close data session after client handshake failure", session.Close()))
 	}
 	return secureSession, nil
 }
@@ -321,8 +319,7 @@ func (secureTransport *Transport) Listen(ctx context.Context, ep transport.Endpo
 	if secureTransport.options.ServerAuthTLS != nil {
 		authTLSConf, err = secureTransport.options.ServerAuthTLS()
 		if err != nil {
-			_ = listener.Close()
-			return nil, err
+			return nil, errors.Join(err, wrapCloseError("close data listener after server auth config failure", listener.Close()))
 		}
 	}
 	return &Listener{inner: listener, tlsConf: authTLSConf, options: secureTransport.optionsForEndpoint(ep)}, nil
@@ -375,8 +372,7 @@ func (listener *Listener) Accept(ctx context.Context) (transport.Session, error)
 	}
 	secureSession, err := serverWithContext(ctx, session, listener.tlsConf, listener.options)
 	if err != nil {
-		_ = session.Close()
-		return nil, err
+		return nil, errors.Join(err, wrapCloseError("close data session after server handshake failure", session.Close()))
 	}
 	return secureSession, nil
 }
@@ -458,8 +454,7 @@ func serverWithContext(ctx context.Context, inner transport.Session, tlsConf *tl
 
 func handshakeWithContext(ctx context.Context, inner transport.Session, run func() (*Session, error)) (*Session, error) {
 	if err := ctx.Err(); err != nil {
-		_ = inner.Close()
-		return nil, err
+		return nil, errors.Join(err, wrapCloseError("close data session before handshake", inner.Close()))
 	}
 	done := make(chan handshakeResult, 1)
 	go func() {
@@ -470,9 +465,15 @@ func handshakeWithContext(ctx context.Context, inner transport.Session, run func
 	case result := <-done:
 		return result.session, result.err
 	case <-ctx.Done():
-		_ = inner.Close()
-		return nil, ctx.Err()
+		return nil, errors.Join(ctx.Err(), wrapCloseError("close data session after handshake cancellation", inner.Close()))
 	}
+}
+
+func wrapCloseError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 type Session struct {
@@ -800,13 +801,11 @@ func (session *Session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 	if receiver, ok := session.inner.(transport.PacketBatchReceiver); ok {
 		return session.recvPacketsFromBatchReceiver(max, receiver)
 	}
-	for {
-		packet, err := session.RecvPacket()
-		if err != nil {
-			return nil, nil, err
-		}
-		return [][]byte{packet}, nil, nil
+	packet, err := session.RecvPacket()
+	if err != nil {
+		return nil, nil, err
 	}
+	return [][]byte{packet}, nil, nil
 }
 
 func (session *Session) recvPacketsFromBatchReceiver(max int, receiver transport.PacketBatchReceiver) ([][]byte, func(), error) {

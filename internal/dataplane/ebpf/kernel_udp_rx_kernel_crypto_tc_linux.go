@@ -197,8 +197,10 @@ func loadKernelUDPRXSecureDirectObjectVariant(provider *kernelCryptoProviderObje
 		decapL2Kfunc: decapL2Kfunc,
 	}
 	if objectHandle.program == nil {
-		objectHandle.Close()
-		return nil, fmt.Errorf("embedded kernel_udp secure TC RX direct object is incomplete")
+		return nil, errors.Join(
+			fmt.Errorf("embedded kernel_udp secure TC RX direct object is incomplete"),
+			objectHandle.Close(),
+		)
 	}
 	return objectHandle, nil
 }

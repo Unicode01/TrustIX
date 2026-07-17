@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/pem"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -93,6 +94,35 @@ func TestClientRunHandlesLeaseControlBatchAndInterfacePacket(t *testing.T) {
 	stats := client.Snapshot()
 	if stats.ControlFrames < 2 || stats.BatchesReceived != 1 || stats.PacketsToInterface != 2 || stats.PacketsFromInterface != 1 {
 		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestHandleSessionPacketsReturnsPongSendError(t *testing.T) {
+	wantErr := errors.New("injected pong send failure")
+	session := newFakeSession()
+	session.sendErr = wantErr
+	client := &Client{session: session}
+	iface := newFakeInterface("trustix-test0", 1400)
+	var scratch [][]byte
+
+	err := client.handleSessionPackets(context.Background(), iface, [][]byte{EncodeControl(DataSessionControlPing, 99)}, &scratch)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("handle ping error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestHandleSessionPacketsReturnsLeaseConfigureError(t *testing.T) {
+	wantErr := errors.New("injected interface configure failure")
+	session := newFakeSession()
+	client := &Client{session: session, cfg: Config{Logf: func(string, ...any) {}}}
+	iface := newFakeInterface("trustix-test0", 1400)
+	iface.configureErr = wantErr
+	var scratch [][]byte
+	frame := leaseControlFrame(netip.MustParseAddr("10.0.0.240"), 32, time.Now().UTC().Add(time.Hour))
+
+	err := client.handleSessionPackets(context.Background(), iface, [][]byte{frame}, &scratch)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("handle lease error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -241,14 +271,15 @@ func TestClientRejectsDeviceCertificateWithoutIssuerChain(t *testing.T) {
 }
 
 type fakeInterface struct {
-	name        string
-	mtu         int
-	readPackets chan []byte
-	closed      chan struct{}
-	mu          sync.Mutex
-	lease       Lease
-	routes      []netip.Prefix
-	written     [][]byte
+	name         string
+	mtu          int
+	readPackets  chan []byte
+	closed       chan struct{}
+	mu           sync.Mutex
+	lease        Lease
+	routes       []netip.Prefix
+	written      [][]byte
+	configureErr error
 }
 
 func newFakeInterface(name string, mtu int) *fakeInterface {
@@ -285,7 +316,7 @@ func (iface *fakeInterface) Configure(lease Lease, routes []netip.Prefix) error 
 	defer iface.mu.Unlock()
 	iface.lease = lease
 	iface.routes = append([]netip.Prefix(nil), routes...)
-	return nil
+	return iface.configureErr
 }
 
 func (iface *fakeInterface) Close() error {
@@ -316,10 +347,11 @@ func (iface *fakeInterface) writtenSnapshot() [][]byte {
 }
 
 type fakeSession struct {
-	recv   chan []byte
-	closed chan struct{}
-	mu     sync.Mutex
-	sent   [][]byte
+	recv    chan []byte
+	closed  chan struct{}
+	mu      sync.Mutex
+	sent    [][]byte
+	sendErr error
 }
 
 func newFakeSession() *fakeSession {
@@ -333,7 +365,7 @@ func (session *fakeSession) SendPacket(packet []byte) error {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	session.sent = append(session.sent, append([]byte(nil), packet...))
-	return nil
+	return session.sendErr
 }
 
 func (session *fakeSession) RecvPacket() ([]byte, error) {

@@ -33,7 +33,10 @@ func main() {
 	repairDataplane := flag.Bool("repair-dataplane", false, "clean stale TrustIX-managed dataplane state before starting")
 	flag.Parse()
 	if *showVersion {
-		buildinfo.WriteText(os.Stdout, buildassets.BuildInfo())
+		if err := buildinfo.WriteText(os.Stdout, buildassets.BuildInfo()); err != nil {
+			fmt.Fprintf(os.Stderr, "trustixd: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if *checkConfig {
@@ -120,13 +123,17 @@ func startCPUProfileFromEnv() func() {
 		return func() {}
 	}
 	if err := pprof.StartCPUProfile(file); err != nil {
-		_ = file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close cpu profile %q: %w", path, closeErr))
+		}
 		fmt.Fprintf(os.Stderr, "trustixd: start cpu profile %q: %v\n", path, err)
 		return func() {}
 	}
 	fmt.Fprintf(os.Stderr, "trustixd cpu profile: %s\n", path)
 	return func() {
 		pprof.StopCPUProfile()
-		_ = file.Close()
+		if err := file.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "trustixd: close cpu profile %q: %v\n", path, err)
+		}
 	}
 }

@@ -289,15 +289,66 @@ fi
 [[ -f "$recipient" ]] || die "backup recipient not found: $recipient"
 umask 077
 mkdir -p "$backup_dir"
-chmod 0700 "$backup_dir" 2>/dev/null || true
+chmod 0700 "$backup_dir" || die "could not secure backup directory: $backup_dir"
 lock_dir="${backup_dir}/.${instance}.backup.lock"
-if ! mkdir "$lock_dir" 2>/dev/null; then
-  die "another backup is running for instance $instance"
+lock_pid_file="${lock_dir}/owner"
+archive=""
+backup_archive_complete=0
+acquire_backup_lock() {
+	local owner="" attempt
+	for attempt in 1 2; do
+		if mkdir "$lock_dir" 2>/dev/null; then
+			if ! printf '%s %s\n' "$$" "$(date +%s)" >"$lock_pid_file" || ! chmod 0600 "$lock_pid_file"; then
+				rm -f "$lock_pid_file"
+				rmdir "$lock_dir" 2>/dev/null || true
+				return 1
+			fi
+			return 0
+		fi
+		[[ -d "$lock_dir" && ! -L "$lock_dir" ]] || die "backup lock is not a safe directory: $lock_dir"
+		if [[ -f "$lock_pid_file" && ! -L "$lock_pid_file" ]]; then
+			read -r owner _ <"$lock_pid_file" || owner=""
+		fi
+		if [[ "$owner" =~ ^[1-9][0-9]*$ ]] && kill -0 "$owner" >/dev/null 2>&1; then
+			return 1
+		fi
+		rm -f "$lock_pid_file" || return 1
+		rmdir "$lock_dir" || return 1
+	done
+	return 1
+}
+if ! acquire_backup_lock; then
+	die "another backup is running for instance $instance or its lock could not be recovered"
 fi
 cleanup() {
-  rmdir "$lock_dir" 2>/dev/null || true
+	local owner=""
+	if [[ -f "$lock_pid_file" && ! -L "$lock_pid_file" ]]; then
+		read -r owner _ <"$lock_pid_file" || owner=""
+	fi
+	if [[ "$owner" != "$$" ]]; then
+		log "ERROR: refusing to release backup lock owned by ${owner:-unknown}"
+		return 1
+	fi
+	rm -f "$lock_pid_file" || return 1
+	rmdir "$lock_dir"
 }
-trap cleanup EXIT
+backup_exit_trap() {
+	local rc=$?
+	trap - EXIT
+	set +e
+	if [[ "$backup_archive_complete" != "1" && -n "$archive" && -e "$archive" ]]; then
+		if ! rm -f -- "$archive"; then
+			log "ERROR: failed to remove incomplete backup archive: $archive"
+			[[ "$rc" != "0" ]] || rc=1
+		fi
+	fi
+	if ! cleanup; then
+		log "ERROR: failed to release backup lock: $lock_dir"
+		[[ "$rc" != "0" ]] || rc=1
+	fi
+	exit "$rc"
+}
+trap backup_exit_trap EXIT
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 archive="${backup_dir}/trustix-${instance}-${stamp}.tixbak"
@@ -308,6 +359,7 @@ $ctl "${ctl_args[@]}" config backup -include-private-keys -recipient "$recipient
 if [[ "$verify_after" == "1" ]]; then
   verify_archive "$archive"
 fi
+backup_archive_complete=1
 
 if ((keep > 0)); then
   shopt -s nullglob

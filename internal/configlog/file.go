@@ -41,45 +41,43 @@ func NewFileStore(path string) (*FileStore, error) {
 }
 
 func (store *FileStore) Append(event Event) error {
+	return store.AppendBatch([]Event{event})
+}
+
+func (store *FileStore) AppendBatch(events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	if err := store.memory.Append(event); err != nil {
+	next := &MemoryStore{events: store.memory.snapshot()}
+	if err := next.AppendBatch(events); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(store.path), 0o755); err != nil {
-		return fmt.Errorf("create config log directory: %w", err)
-	}
-	file, err := os.OpenFile(store.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	payload, err := encodeEvents(next.snapshot())
 	if err != nil {
-		return fmt.Errorf("open config log %q: %w", store.path, err)
+		return err
 	}
-	defer file.Close()
-
-	encoded, err := json.Marshal(event)
+	committed, err := writeFileAtomic(store.path, payload, 0o600)
+	if committed {
+		store.memory = next
+	}
 	if err != nil {
-		return fmt.Errorf("encode config event: %w", err)
-	}
-	if _, err := file.Write(append(encoded, '\n')); err != nil {
-		return fmt.Errorf("append config event: %w", err)
+		return fmt.Errorf("commit config log %q: %w", store.path, err)
 	}
 	return nil
 }
 
 func (store *FileStore) ReplaceAll(events []Event) error {
 	next := NewMemoryStore()
-	for _, event := range events {
-		if err := next.Append(event); err != nil {
-			return err
-		}
+	if err := next.AppendBatch(events); err != nil {
+		return err
 	}
 
-	var payload bytes.Buffer
-	encoder := json.NewEncoder(&payload)
-	for _, event := range events {
-		if err := encoder.Encode(event); err != nil {
-			return fmt.Errorf("encode config event: %w", err)
-		}
+	payload, err := encodeEvents(events)
+	if err != nil {
+		return err
 	}
 
 	store.mu.Lock()
@@ -91,23 +89,84 @@ func (store *FileStore) ReplaceAll(events []Event) error {
 	if _, err := BackupFile(store.path); err != nil {
 		return err
 	}
-	tmp := store.path + ".tmp"
-	if err := os.WriteFile(tmp, payload.Bytes(), 0o600); err != nil {
-		return fmt.Errorf("write replacement config log %q: %w", tmp, err)
+	committed, err := writeFileAtomic(store.path, payload, 0o600)
+	if committed {
+		store.memory = next
 	}
-	if err := os.Rename(tmp, store.path); err != nil {
-		_ = os.Remove(tmp)
+	if err != nil {
 		return fmt.Errorf("replace config log %q: %w", store.path, err)
 	}
-	store.memory = next
 	return nil
 }
 
+func encodeEvents(events []Event) ([]byte, error) {
+	var payload bytes.Buffer
+	encoder := json.NewEncoder(&payload)
+	for _, event := range events {
+		if err := encoder.Encode(event); err != nil {
+			return nil, fmt.Errorf("encode config event: %w", err)
+		}
+	}
+	return payload.Bytes(), nil
+}
+
+func writeFileAtomic(path string, payload []byte, mode os.FileMode) (committed bool, resultErr error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, fmt.Errorf("create directory %q: %w", dir, err)
+	}
+	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return false, fmt.Errorf("create temporary file for %q: %w", path, err)
+	}
+	tmp := file.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			if err := file.Close(); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("close temporary file %q: %w", tmp, err))
+			}
+		}
+		if tmp != "" {
+			if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+				resultErr = errors.Join(resultErr, fmt.Errorf("remove temporary file %q: %w", tmp, err))
+			}
+		}
+	}()
+	if _, err := file.Write(payload); err != nil {
+		return false, fmt.Errorf("write temporary file %q: %w", tmp, err)
+	}
+	if err := file.Chmod(mode); err != nil {
+		return false, fmt.Errorf("chmod temporary file %q: %w", tmp, err)
+	}
+	if err := file.Sync(); err != nil {
+		return false, fmt.Errorf("sync temporary file %q: %w", tmp, err)
+	}
+	if err := file.Close(); err != nil {
+		closed = true
+		return false, fmt.Errorf("close temporary file %q: %w", tmp, err)
+	}
+	closed = true
+	if err := os.Rename(tmp, path); err != nil {
+		return false, fmt.Errorf("rename temporary file %q to %q: %w", tmp, path, err)
+	}
+	tmp = ""
+	committed = true
+	if err := syncDirectory(dir); err != nil {
+		return true, &CommitError{Err: fmt.Errorf("sync directory %q: %w", dir, err)}
+	}
+	return true, nil
+}
+
 func (store *FileStore) Head() (Head, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	return store.memory.Head()
 }
 
 func (store *FileStore) Range(fromSeq, toSeq uint64) ([]Event, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	return store.memory.Range(fromSeq, toSeq)
 }
 
@@ -146,7 +205,11 @@ func BackupFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read config log for backup %q: %w", path, err)
 	}
-	if err := os.WriteFile(backup, payload, 0o600); err != nil {
+	committed, err := writeFileAtomic(backup, payload, 0o600)
+	if err != nil {
+		if committed {
+			return backup, fmt.Errorf("commit config log backup %q: %v", backup, err)
+		}
 		return "", fmt.Errorf("write config log backup %q: %w", backup, err)
 	}
 	if err := pruneBackups(path, BackupKeepFromEnv(), backup); err != nil {
@@ -221,7 +284,7 @@ func BackupFiles(path string) ([]string, error) {
 	return matches, nil
 }
 
-func (store *FileStore) load() error {
+func (store *FileStore) load() (resultErr error) {
 	file, err := os.Open(store.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -229,7 +292,11 @@ func (store *FileStore) load() error {
 	if err != nil {
 		return fmt.Errorf("open config log %q: %w", store.path, err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close config log %q: %w", store.path, err))
+		}
+	}()
 
 	decoder := json.NewDecoder(file)
 	for {

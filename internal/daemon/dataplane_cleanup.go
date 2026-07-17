@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -11,7 +12,7 @@ import (
 	iptunneltransport "trustix.local/trustix/internal/transport/iptunnel"
 )
 
-func CleanupDataplane(ctx context.Context, cfg Config) error {
+func CleanupDataplane(ctx context.Context, cfg Config) (resultErr error) {
 	desired, err := config.LoadFile(cfg.ConfigPath)
 	if err != nil {
 		return err
@@ -21,7 +22,11 @@ func CleanupDataplane(ctx context.Context, cfg Config) error {
 		return err
 	}
 	if lock != nil {
-		defer lock.Close()
+		defer func() {
+			if err := lock.Close(); err != nil {
+				resultErr = errors.Join(resultErr, err)
+			}
+		}()
 	}
 
 	manager := selectDataplane(cfg.DataplaneMode)
@@ -49,7 +54,7 @@ func CleanupDataplane(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-func PlanCleanupDataplane(ctx context.Context, cfg Config) (dataplane.CleanupPlan, error) {
+func PlanCleanupDataplane(ctx context.Context, cfg Config) (plan dataplane.CleanupPlan, resultErr error) {
 	desired, err := config.LoadFile(cfg.ConfigPath)
 	if err != nil {
 		return dataplane.CleanupPlan{}, err
@@ -59,7 +64,11 @@ func PlanCleanupDataplane(ctx context.Context, cfg Config) (dataplane.CleanupPla
 		return dataplane.CleanupPlan{}, err
 	}
 	if lock != nil {
-		defer lock.Close()
+		defer func() {
+			if err := lock.Close(); err != nil {
+				resultErr = errors.Join(resultErr, err)
+			}
+		}()
 	}
 
 	manager := selectDataplane(cfg.DataplaneMode)

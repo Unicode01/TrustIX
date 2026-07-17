@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,8 @@ import (
 
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/configlog"
+	"trustix.local/trustix/internal/core"
+	"trustix.local/trustix/internal/routing"
 )
 
 const (
@@ -80,6 +83,20 @@ type configRestoreFileChange struct {
 	created    bool
 }
 
+type configSnapshotRestoreResult struct {
+	head          configlog.Head
+	createdBackup string
+	committed     bool
+}
+
+type configRestoreMutableState struct {
+	members        map[core.IXID]memberRecord
+	pendingMembers map[core.IXID]pendingMemberRecord
+	signerCerts    map[core.SignerID]*x509.Certificate
+	localAd        advertisementResponse
+	runtimeEpoch   uint64
+}
+
 type validatedConfigRestoreArchiveFile struct {
 	manifest    configExportFileManifest
 	archivePath string
@@ -107,15 +124,24 @@ func (daemon *Daemon) handleConfigRestoreArchive(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if _, err := daemon.validateConfigArchive(payload); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	response, err := daemon.restoreConfigArchive(r.Context(), payload)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		var committed *committedConfigMutationError
+		if errors.As(err, &committed) {
+			writeConfigMutationError(w, err)
+		} else {
+			writeError(w, http.StatusInternalServerError, err)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (daemon *Daemon) restoreConfigArchive(ctx context.Context, payload []byte) (configRestoreArchiveResponse, error) {
+func (daemon *Daemon) restoreConfigArchive(ctx context.Context, payload []byte) (response configRestoreArchiveResponse, resultErr error) {
 	archive, err := parseConfigRestoreArchive(payload)
 	if err != nil {
 		return configRestoreArchiveResponse{}, err
@@ -133,16 +159,24 @@ func (daemon *Daemon) restoreConfigArchive(ctx context.Context, payload []byte) 
 
 	fileStatuses, changes, skipped, privateKeys, err := daemon.restoreConfigArchiveFiles(archive, restoredDesired)
 	if err != nil {
+		if rollbackErr := rollbackConfigRestoreFiles(changes); rollbackErr != nil {
+			return configRestoreArchiveResponse{}, errors.Join(err, fmt.Errorf("rollback partially restored files: %w", rollbackErr))
+		}
 		return configRestoreArchiveResponse{}, err
 	}
 	commitFiles := false
 	defer func() {
 		if !commitFiles {
-			_ = rollbackConfigRestoreFiles(changes)
+			if err := rollbackConfigRestoreFiles(changes); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("rollback restored files: %w", err))
+			}
 		}
 	}()
 
-	head, createdBackup, err := daemon.restoreConfigSnapshotFromArchive(ctx, archive.Snapshot)
+	result, err := daemon.restoreConfigSnapshotFromArchive(ctx, archive.Snapshot)
+	if result.committed {
+		commitFiles = true
+	}
 	if err != nil {
 		return configRestoreArchiveResponse{}, err
 	}
@@ -151,11 +185,11 @@ func (daemon *Daemon) restoreConfigArchive(ctx context.Context, payload []byte) 
 		Restored:             true,
 		DomainID:             archive.Manifest.DomainID,
 		IXID:                 archive.Manifest.IXID,
-		Head:                 headResponse{Seq: head.Seq, Hash: head.Hash},
+		Head:                 headResponse{Seq: result.head.Seq, Hash: result.head.Hash},
 		FilesRestored:        fileStatuses,
 		FilesSkipped:         skipped,
 		PrivateKeysRestored:  privateKeys,
-		CreatedConfigLogCopy: createdBackup,
+		CreatedConfigLogCopy: result.createdBackup,
 	}, nil
 }
 
@@ -202,7 +236,7 @@ func (daemon *Daemon) validateConfigArchive(payload []byte) (configValidateArchi
 	}, nil
 }
 
-func parseConfigRestoreArchive(payload []byte) (parsedConfigRestoreArchive, error) {
+func parseConfigRestoreArchive(payload []byte) (archive parsedConfigRestoreArchive, resultErr error) {
 	if len(bytes.TrimSpace(payload)) == 0 {
 		return parsedConfigRestoreArchive{}, fmt.Errorf("restore archive body is required")
 	}
@@ -210,7 +244,11 @@ func parseConfigRestoreArchive(payload []byte) (parsedConfigRestoreArchive, erro
 	if err != nil {
 		return parsedConfigRestoreArchive{}, fmt.Errorf("open restore archive gzip: %w", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close restore archive gzip: %w", err))
+		}
+	}()
 
 	tarReader := tar.NewReader(gzipReader)
 	entries := make(map[string][]byte)
@@ -235,7 +273,7 @@ func parseConfigRestoreArchive(payload []byte) (parsedConfigRestoreArchive, erro
 			}
 			continue
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		if !header.FileInfo().Mode().IsRegular() {
 			return parsedConfigRestoreArchive{}, fmt.Errorf("restore archive entry %q is not a regular file", header.Name)
 		}
 		fileCount++
@@ -410,10 +448,8 @@ func decodeConfigLogEventsEntry(payload []byte) ([]configlog.Event, error) {
 
 func configLogHeadForEvents(events []configlog.Event) (configlog.Head, error) {
 	store := configlog.NewMemoryStore()
-	for _, event := range events {
-		if err := store.Append(event); err != nil {
-			return configlog.Head{}, err
-		}
+	if err := store.AppendBatch(events); err != nil {
+		return configlog.Head{}, err
 	}
 	return store.Head()
 }
@@ -475,18 +511,24 @@ func (daemon *Daemon) restoreConfigArchiveFiles(archive parsedConfigRestoreArchi
 	for _, validated := range files {
 		file := validated.manifest
 		backupPath, changed, err := writeConfigRestoreFile(file.SourcePath, validated.payload, file.PrivateKey)
+		if changed {
+			changes = append(changes, configRestoreFileChange{
+				targetPath: file.SourcePath,
+				backupPath: backupPath,
+				created:    backupPath == "",
+			})
+		}
 		if err != nil {
-			return nil, changes, skipped, privateKeys, err
+			rollbackErr := rollbackConfigRestoreFiles(changes)
+			if rollbackErr != nil {
+				return nil, nil, skipped, privateKeys, errors.Join(err, fmt.Errorf("rollback partially restored files: %w", rollbackErr))
+			}
+			return nil, nil, skipped, privateKeys, err
 		}
 		if !changed {
 			skipped++
 			continue
 		}
-		changes = append(changes, configRestoreFileChange{
-			targetPath: file.SourcePath,
-			backupPath: backupPath,
-			created:    backupPath == "",
-		})
 		statuses = append(statuses, configRestoreArchiveFileStatus{
 			SourcePath:  file.SourcePath,
 			ArchivePath: validated.archivePath,
@@ -610,7 +652,7 @@ func containsPrivateKeyPEM(payload []byte) bool {
 		bytes.Contains(payload, []byte("RSA PRIVATE KEY"))
 }
 
-func writeConfigRestoreFile(targetPath string, payload []byte, privateKey bool) (string, bool, error) {
+func writeConfigRestoreFile(targetPath string, payload []byte, privateKey bool) (backupResult string, changedResult bool, resultErr error) {
 	targetPath = strings.TrimSpace(targetPath)
 	if targetPath == "" {
 		return "", false, fmt.Errorf("restore target path is required")
@@ -620,11 +662,13 @@ func writeConfigRestoreFile(targetPath string, payload []byte, privateKey bool) 
 		mode = 0o600
 	}
 	exists := false
+	var existingMode os.FileMode
 	if info, err := os.Lstat(targetPath); err == nil {
 		if !info.Mode().IsRegular() {
 			return "", false, fmt.Errorf("restore target %q is not a regular file", targetPath)
 		}
 		exists = true
+		existingMode = info.Mode().Perm()
 	} else if err != nil && !os.IsNotExist(err) {
 		return "", false, fmt.Errorf("stat restore target %q: %w", targetPath, err)
 	}
@@ -633,8 +677,7 @@ func writeConfigRestoreFile(targetPath string, payload []byte, privateKey bool) 
 		if err != nil {
 			return "", false, fmt.Errorf("read existing restore target %q: %w", targetPath, err)
 		}
-		if bytes.Equal(current, payload) {
-			_ = os.Chmod(targetPath, mode)
+		if bytes.Equal(current, payload) && restoreFileModeEqual(existingMode, mode) {
 			return "", false, nil
 		}
 	}
@@ -650,36 +693,69 @@ func writeConfigRestoreFile(targetPath string, payload []byte, privateKey bool) 
 		return "", false, fmt.Errorf("create temp restore file for %q: %w", targetPath, err)
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	tmpClosed := false
+	defer func() {
+		if !tmpClosed {
+			if err := tmp.Close(); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("close temp restore file %q: %w", tmpPath, err))
+			}
+		}
+		if tmpPath != "" {
+			if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+				resultErr = errors.Join(resultErr, fmt.Errorf("remove temp restore file %q: %w", tmpPath, err))
+			}
+		}
+	}()
 	if _, err := tmp.Write(payload); err != nil {
-		_ = tmp.Close()
 		return "", false, fmt.Errorf("write temp restore file %q: %w", tmpPath, err)
 	}
 	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
 		return "", false, fmt.Errorf("chmod temp restore file %q: %w", tmpPath, err)
 	}
+	if err := tmp.Sync(); err != nil {
+		return "", false, fmt.Errorf("sync temp restore file %q: %w", tmpPath, err)
+	}
 	if err := tmp.Close(); err != nil {
+		tmpClosed = true
 		return "", false, fmt.Errorf("close temp restore file %q: %w", tmpPath, err)
 	}
+	tmpClosed = true
 
 	backupPath := ""
 	if exists {
-		backupPath = uniqueRestoreBackupPath(targetPath)
+		backupPath, err = uniqueRestoreBackupPath(targetPath)
+		if err != nil {
+			return "", false, err
+		}
 		if err := os.Rename(targetPath, backupPath); err != nil {
 			return "", false, fmt.Errorf("backup restore target %q: %w", targetPath, err)
 		}
 	}
 	if err := os.Rename(tmpPath, targetPath); err != nil {
 		if backupPath != "" {
-			_ = os.Rename(backupPath, targetPath)
+			if restoreErr := os.Rename(backupPath, targetPath); restoreErr != nil {
+				return backupPath, true, errors.Join(
+					fmt.Errorf("install restore target %q: %w", targetPath, err),
+					fmt.Errorf("restore backup %q to %q: %w", backupPath, targetPath, restoreErr),
+				)
+			}
+			if syncErr := syncStateDirectory(dir); syncErr != nil {
+				return "", false, errors.Join(
+					fmt.Errorf("install restore target %q: %w", targetPath, err),
+					fmt.Errorf("sync restored backup directory %q: %w", dir, syncErr),
+				)
+			}
 		}
 		return "", false, fmt.Errorf("install restore target %q: %w", targetPath, err)
+	}
+	tmpPath = ""
+	if err := syncStateDirectory(dir); err != nil {
+		return backupPath, true, &stateFileCommitError{Err: fmt.Errorf("sync restore target directory %q: %w", dir, err)}
 	}
 	return backupPath, true, nil
 }
 
-func uniqueRestoreBackupPath(targetPath string) string {
+func uniqueRestoreBackupPath(targetPath string) (string, error) {
 	base := targetPath + ".restore-backup." + time.Now().UTC().Format("20060102T150405.000000000Z")
 	for index := 0; ; index++ {
 		candidate := base
@@ -687,7 +763,9 @@ func uniqueRestoreBackupPath(targetPath string) string {
 			candidate = fmt.Sprintf("%s.%d", base, index)
 		}
 		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			return candidate
+			return candidate, nil
+		} else if err != nil {
+			return "", fmt.Errorf("stat restore backup candidate %q: %w", candidate, err)
 		}
 	}
 }
@@ -698,37 +776,48 @@ func rollbackConfigRestoreFiles(changes []configRestoreFileChange) error {
 		change := changes[i]
 		if change.created {
 			if err := os.Remove(change.targetPath); err != nil && !os.IsNotExist(err) {
-				errs = append(errs, err)
+				errs = append(errs, fmt.Errorf("remove created restore target %q: %w", change.targetPath, err))
+				continue
+			}
+			if err := syncStateDirectory(filepath.Dir(change.targetPath)); err != nil {
+				errs = append(errs, fmt.Errorf("sync restore target directory for %q: %w", change.targetPath, err))
 			}
 			continue
 		}
 		if change.backupPath == "" {
 			continue
 		}
-		_ = os.Remove(change.targetPath)
+		if err := os.Remove(change.targetPath); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove restored target %q: %w", change.targetPath, err))
+			continue
+		}
 		if err := os.Rename(change.backupPath, change.targetPath); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("restore backup %q to %q: %w", change.backupPath, change.targetPath, err))
+			continue
+		}
+		if err := syncStateDirectory(filepath.Dir(change.targetPath)); err != nil {
+			errs = append(errs, fmt.Errorf("sync restore target directory for %q: %w", change.targetPath, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func (daemon *Daemon) restoreConfigSnapshotFromArchive(ctx context.Context, snapshot configSnapshotEnvelope) (configlog.Head, string, error) {
+func (daemon *Daemon) restoreConfigSnapshotFromArchive(ctx context.Context, snapshot configSnapshotEnvelope) (configSnapshotRestoreResult, error) {
 	daemon.configMu.Lock()
 	defer daemon.configMu.Unlock()
 	if daemon.store == nil {
-		return configlog.Head{}, "", fmt.Errorf("config log store is not initialized")
+		return configSnapshotRestoreResult{}, fmt.Errorf("config log store is not initialized")
 	}
 	usedSigners, err := daemon.verifyConfigSnapshotLocked(snapshot)
 	if err != nil {
-		return configlog.Head{}, "", err
+		return configSnapshotRestoreResult{}, err
 	}
 	restoredDesired, ok, err := daemon.latestLocalDesiredFromEvents(snapshot.Events)
 	if err != nil {
-		return configlog.Head{}, "", err
+		return configSnapshotRestoreResult{}, err
 	}
 	if !ok {
-		return configlog.Head{}, "", fmt.Errorf("restore archive has no desired event for local IX %q", daemon.desired.IX.ID)
+		return configSnapshotRestoreResult{}, fmt.Errorf("restore archive has no desired event for local IX %q", daemon.desired.IX.ID)
 	}
 
 	oldDesired := daemon.desired
@@ -736,32 +825,155 @@ func (daemon *Daemon) restoreConfigSnapshotFromArchive(ctx context.Context, snap
 	oldDomain := daemon.cfg.DomainID
 	oldIX := daemon.cfg.IXID
 	oldFlows := daemon.snapshotFlows()
+	oldState := daemon.snapshotConfigRestoreMutableState()
+	storeHead, err := daemon.store.Head()
+	if err != nil {
+		return configSnapshotRestoreResult{}, fmt.Errorf("read config log before restore: %w", err)
+	}
+	if storeHead != oldHead {
+		return configSnapshotRestoreResult{}, fmt.Errorf("config log head changed before restore: runtime=%+v store=%+v", oldHead, storeHead)
+	}
+	oldEvents, err := configLogEventsThroughHead(daemon.store, storeHead)
+	if err != nil {
+		return configSnapshotRestoreResult{}, fmt.Errorf("snapshot current config log before restore: %w", err)
+	}
 	archiveHead := configlog.Head{Seq: snapshot.Head.Seq, Hash: snapshot.Head.Hash}
 	if err := daemon.switchDesiredRuntime(ctx, restoredDesired, archiveHead); err != nil {
-		return configlog.Head{}, "", err
+		return configSnapshotRestoreResult{}, err
 	}
+	var commitErr error
 	if err := daemon.store.ReplaceAll(snapshot.Events); err != nil {
-		restoreErr := daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
-		if restoreErr != nil {
-			return configlog.Head{}, "", fmt.Errorf("replace config log from restore archive: %w; restore previous runtime: %v", err, restoreErr)
+		if configlog.CommitSucceeded(err) {
+			commitErr = err
+		} else {
+			restoreErr := daemon.restoreDesiredRuntimeState(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows)
+			if restoreErr != nil {
+				return configSnapshotRestoreResult{}, errors.Join(
+					fmt.Errorf("replace config log from restore archive: %w", err),
+					fmt.Errorf("restore previous runtime: %w", restoreErr),
+				)
+			}
+			return configSnapshotRestoreResult{}, fmt.Errorf("replace config log from restore archive: %w", err)
 		}
-		return configlog.Head{}, "", fmt.Errorf("replace config log from restore archive: %w", err)
+	}
+	result := configSnapshotRestoreResult{
+		head:          archiveHead,
+		createdBackup: latestConfigLogBackupPath(daemon.logPath),
+		committed:     true,
 	}
 	head, err := daemon.store.Head()
 	if err != nil {
-		return configlog.Head{}, "", err
+		return daemon.rollbackFailedConfigSnapshotRestore(ctx, "config restore", result, fmt.Errorf("read restored config log head: %w", err), oldEvents, oldDesired, oldHead, oldDomain, oldIX, oldFlows, oldState)
 	}
+	result.head = head
 	if _, err := daemon.applyLatestDomainTrustFromLogLocked(ctx); err != nil {
-		return configlog.Head{}, "", err
+		return daemon.rollbackFailedConfigSnapshotRestore(ctx, "config restore", result, err, oldEvents, oldDesired, oldHead, oldDomain, oldIX, oldFlows, oldState)
 	}
 	if err := daemon.afterAdmissionStateChangedLocked(ctx); err != nil {
-		return configlog.Head{}, "", err
+		return daemon.rollbackFailedConfigSnapshotRestore(ctx, "config restore", result, err, oldEvents, oldDesired, oldHead, oldDomain, oldIX, oldFlows, oldState)
 	}
 	if err := daemon.refreshLocalAdvertisement(); err != nil {
-		return configlog.Head{}, "", err
+		return daemon.rollbackFailedConfigSnapshotRestore(ctx, "config restore", result, err, oldEvents, oldDesired, oldHead, oldDomain, oldIX, oldFlows, oldState)
 	}
 	if err := daemon.commitConfigSignerCertificates(usedSigners, true); err != nil {
-		return configlog.Head{}, "", err
+		return daemon.rollbackFailedConfigSnapshotRestore(ctx, "config restore", result, err, oldEvents, oldDesired, oldHead, oldDomain, oldIX, oldFlows, oldState)
 	}
-	return head, latestConfigLogBackupPath(daemon.logPath), nil
+	if commitErr != nil {
+		daemon.requestRuntimeReconcile("config restore durability", commitErr)
+		return result, newCommittedConfigMutationError("config restore", commitErr)
+	}
+	return result, nil
+}
+
+func configLogEventsThroughHead(store configlog.Store, head configlog.Head) ([]configlog.Event, error) {
+	if head.Seq == 0 {
+		return nil, nil
+	}
+	return store.Range(1, head.Seq)
+}
+
+func (daemon *Daemon) snapshotConfigRestoreMutableState() configRestoreMutableState {
+	state := configRestoreMutableState{}
+	daemon.membershipMu.RLock()
+	state.members = make(map[core.IXID]memberRecord, len(daemon.members))
+	for id, record := range daemon.members {
+		state.members[id] = record
+	}
+	state.pendingMembers = make(map[core.IXID]pendingMemberRecord, len(daemon.pendingMembers))
+	for id, record := range daemon.pendingMembers {
+		state.pendingMembers[id] = record
+	}
+	state.localAd = daemon.localAd
+	state.runtimeEpoch = daemon.runtimeEpoch
+	daemon.membershipMu.RUnlock()
+
+	daemon.signerMu.RLock()
+	state.signerCerts = make(map[core.SignerID]*x509.Certificate, len(daemon.signerCerts))
+	for id, certificate := range daemon.signerCerts {
+		state.signerCerts[id] = certificate
+	}
+	daemon.signerMu.RUnlock()
+	return state
+}
+
+func (daemon *Daemon) restoreConfigRestoreMutableState(state configRestoreMutableState) error {
+	daemon.membershipMu.Lock()
+	daemon.members = state.members
+	daemon.pendingMembers = state.pendingMembers
+	daemon.localAd = state.localAd
+	daemon.runtimeEpoch = state.runtimeEpoch
+	daemon.membershipMu.Unlock()
+
+	daemon.signerMu.Lock()
+	daemon.signerCerts = state.signerCerts
+	daemon.signerMu.Unlock()
+
+	return errors.Join(
+		wrapRestoreError("persist previous members", daemon.persistMembers()),
+		wrapRestoreError("persist previous pending members", daemon.persistPendingMembers()),
+		wrapRestoreError("persist previous config signer cache", daemon.persistConfigSignerCache()),
+	)
+}
+
+func wrapRestoreError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func (daemon *Daemon) rollbackFailedConfigSnapshotRestore(
+	ctx context.Context,
+	operation string,
+	result configSnapshotRestoreResult,
+	cause error,
+	oldEvents []configlog.Event,
+	oldDesired config.Desired,
+	oldHead configlog.Head,
+	oldDomain core.DomainID,
+	oldIX core.IXID,
+	oldFlows map[routing.FlowKey]routing.FlowBinding,
+	oldState configRestoreMutableState,
+) (configSnapshotRestoreResult, error) {
+	replaceErr := daemon.store.ReplaceAll(oldEvents)
+	if replaceErr != nil && !configlog.CommitSucceeded(replaceErr) {
+		err := errors.Join(
+			cause,
+			fmt.Errorf("rollback previous config log: %w", replaceErr),
+		)
+		daemon.requestRuntimeReconcile(operation+" rollback", err)
+		return result, newCommittedConfigMutationError(operation, err)
+	}
+	stateErr := daemon.restoreConfigRestoreMutableState(oldState)
+	runtimeErr := daemon.restoreDesiredRuntimeState(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows)
+	rollbackErr := errors.Join(
+		wrapRestoreError("rollback previous config log durability", replaceErr),
+		stateErr,
+		wrapRestoreError("restore previous runtime", runtimeErr),
+	)
+	if rollbackErr != nil {
+		daemon.requestRuntimeReconcile(operation+" rollback", rollbackErr)
+		return configSnapshotRestoreResult{}, errors.Join(cause, fmt.Errorf("restore rollback incomplete: %w", rollbackErr))
+	}
+	return configSnapshotRestoreResult{}, fmt.Errorf("restore failed and was rolled back: %w", cause)
 }

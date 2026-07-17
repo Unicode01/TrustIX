@@ -144,8 +144,10 @@ func loadKernelUDPTXSecureDirectObject(provider *kernelCryptoProviderObject, sta
 		program:    coll.Programs["trustix_kudp_tx_secure"],
 	}
 	if objectHandle.program == nil {
-		objectHandle.Close()
-		return nil, fmt.Errorf("embedded kernel_udp secure TC TX direct object is incomplete")
+		return nil, errors.Join(
+			fmt.Errorf("embedded kernel_udp secure TC TX direct object is incomplete"),
+			objectHandle.Close(),
+		)
 	}
 	return objectHandle, nil
 }

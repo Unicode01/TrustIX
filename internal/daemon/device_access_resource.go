@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -182,7 +183,7 @@ func (daemon *Daemon) handleDeviceAccessShow(w http.ResponseWriter, r *http.Requ
 func (daemon *Daemon) handleDeviceAccessIssue(w http.ResponseWriter, r *http.Request) {
 	adminProofs := adminProofsFromContext(r.Context())
 	if err := daemon.verifyAdminProofPolicy(adminProofs, daemon.desired.Trust); err != nil {
-		writeConfigMutationError(w, err)
+		writeConfigMutationError(w, newConfigMutationRequestError(err))
 		return
 	}
 	payload, err := readLimitedBody(r.Body, 64<<10)
@@ -199,7 +200,7 @@ func (daemon *Daemon) handleDeviceAccessIssue(w http.ResponseWriter, r *http.Req
 	}
 	response, err := daemon.issueDeviceAccessCertificate(request)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeConfigMutationError(w, err)
 		return
 	}
 	setSensitiveResponseHeaders(w)
@@ -209,14 +210,14 @@ func (daemon *Daemon) handleDeviceAccessIssue(w http.ResponseWriter, r *http.Req
 func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequest) (deviceAccessIssueResponse, error) {
 	deviceID := core.DeviceID(strings.TrimSpace(string(request.Device)))
 	if err := deviceID.Validate(); err != nil {
-		return deviceAccessIssueResponse{}, err
+		return deviceAccessIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	daemon.configMu.RLock()
 	desired := daemon.desired
 	daemon.configMu.RUnlock()
 	lan, err := deviceAccessLANForRequest(desired, request.LANID)
 	if err != nil {
-		return deviceAccessIssueResponse{}, err
+		return deviceAccessIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	ixBundle, err := pki.LoadBundle(desired.IX.CertPath, desired.IX.KeyPath)
 	if err != nil {
@@ -237,23 +238,23 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 	}
 	ipAddresses, err := parseDeviceAccessIssueIPs(request.IPAddresses)
 	if err != nil {
-		return deviceAccessIssueResponse{}, err
+		return deviceAccessIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	advertisePrefixes, err := normalizeDeviceAccessIssuePrefixes(request.AdvertisePrefixes, "advertise_prefixes")
 	if err != nil {
-		return deviceAccessIssueResponse{}, err
+		return deviceAccessIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	if err := daemon.validateDeviceAccessIssueAdvertisePrefixes(desired, lan, advertisePrefixes); err != nil {
-		return deviceAccessIssueResponse{}, err
+		return deviceAccessIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	notAfter := time.Now().UTC().AddDate(1, 0, 0)
 	if ttl := strings.TrimSpace(request.TTL); ttl != "" {
 		duration, err := time.ParseDuration(ttl)
 		if err != nil {
-			return deviceAccessIssueResponse{}, fmt.Errorf("ttl: %w", err)
+			return deviceAccessIssueResponse{}, newConfigMutationRequestError(fmt.Errorf("ttl: %w", err))
 		}
 		if duration <= 0 {
-			return deviceAccessIssueResponse{}, fmt.Errorf("ttl must be positive")
+			return deviceAccessIssueResponse{}, newConfigMutationRequestError(fmt.Errorf("ttl must be positive"))
 		}
 		notAfter = time.Now().UTC().Add(duration)
 	}
@@ -275,7 +276,7 @@ func (daemon *Daemon) issueDeviceAccessCertificate(request deviceAccessIssueRequ
 	certPEM := string(append(append([]byte(nil), bundle.CertPEM...), ixBundle.CertPEM...))
 	clientConfig, err := daemon.deviceAccessClientConfigForIssueRequest(desired, lan, request, bundle)
 	if err != nil {
-		return deviceAccessIssueResponse{}, err
+		return deviceAccessIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	trustRootsPEM, err := deviceAccessTrustRootsPEM(desired)
 	if err != nil {
@@ -663,21 +664,26 @@ func (daemon *Daemon) handleDeviceAccessRevoke(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	dropped := daemon.dropDeviceAccessSessionsByFingerprint(fingerprint)
+	dropped, closeErr := daemon.dropDeviceAccessSessionsByFingerprint(fingerprint)
 	if changed && dropped == 0 {
 		dropped = droppable
 	}
+	var dataplaneErr, advertisementErr error
 	if dropped > 0 {
-		if err := daemon.applyRuntimeDataplaneSnapshot(ctx); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
+		dataplaneErr = daemon.applyRuntimeDataplaneSnapshot(ctx)
 		if daemon.localAdvertisementConfigured() {
-			if err := daemon.refreshLocalAdvertisement(); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
+			advertisementErr = daemon.refreshLocalAdvertisement()
 		}
+	}
+	runtimeErr := errors.Join(
+		wrapReconcileError("close device access session", closeErr),
+		wrapReconcileError("apply dataplane snapshot", dataplaneErr),
+		wrapReconcileError("refresh local advertisement", advertisementErr),
+	)
+	if runtimeErr != nil {
+		daemon.requestRuntimeReconcile("device access revoke", runtimeErr)
+		writeError(w, http.StatusInternalServerError, runtimeErr)
+		return
 	}
 	daemon.configMu.RLock()
 	head := daemon.head
@@ -858,10 +864,10 @@ func (daemon *Daemon) deviceAccessRevokedSnapshot() []deviceAccessRevokedDevice 
 	return out
 }
 
-func (daemon *Daemon) dropDeviceAccessSessionsByFingerprint(fingerprint string) int {
+func (daemon *Daemon) dropDeviceAccessSessionsByFingerprint(fingerprint string) (int, error) {
 	fingerprint, err := pki.NormalizeCertificateFingerprintSHA256(fingerprint)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	type dropped struct {
 		session transport.Session
@@ -890,16 +896,19 @@ func (daemon *Daemon) dropDeviceAccessSessionsByFingerprint(fingerprint string) 
 		daemon.sessionPoolFlow = nil
 	}
 	daemon.dataMu.Unlock()
+	var closeErrs []error
 	for _, item := range droppedSessions {
 		if item.runtime != nil && item.runtime.cancel != nil {
 			item.runtime.cancel()
 		}
 		if item.session != nil {
 			daemon.dataStats.staleSessionsDropped.Add(1)
-			_ = item.session.Close()
+			if err := item.session.Close(); err != nil {
+				closeErrs = append(closeErrs, fmt.Errorf("close device access session: %w", err))
+			}
 		}
 	}
-	return len(droppedSessions)
+	return len(droppedSessions), errors.Join(closeErrs...)
 }
 
 func (daemon *Daemon) countDeviceAccessSessionsByFingerprint(fingerprint string) int {
@@ -918,10 +927,10 @@ func (daemon *Daemon) countDeviceAccessSessionsByFingerprint(fingerprint string)
 	return count
 }
 
-func (daemon *Daemon) dropRevokedDeviceAccessSessions() int {
+func (daemon *Daemon) dropRevokedDeviceAccessSessions() (int, error) {
 	revoked := revokedCertificateFingerprints(daemon.desired)
 	if len(revoked) == 0 {
-		return 0
+		return 0, nil
 	}
 	type dropped struct {
 		session transport.Session
@@ -956,16 +965,19 @@ func (daemon *Daemon) dropRevokedDeviceAccessSessions() int {
 		daemon.sessionPoolFlow = nil
 	}
 	daemon.dataMu.Unlock()
+	var closeErrs []error
 	for _, item := range droppedSessions {
 		if item.runtime != nil && item.runtime.cancel != nil {
 			item.runtime.cancel()
 		}
 		if item.session != nil {
 			daemon.dataStats.staleSessionsDropped.Add(1)
-			_ = item.session.Close()
+			if err := item.session.Close(); err != nil {
+				closeErrs = append(closeErrs, fmt.Errorf("close revoked device access session: %w", err))
+			}
 		}
 	}
-	return len(droppedSessions)
+	return len(droppedSessions), errors.Join(closeErrs...)
 }
 
 func deviceAccessSessionFingerprint(session transport.Session) string {

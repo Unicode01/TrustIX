@@ -79,6 +79,57 @@ func TestKernelDatapathRXStagePollerInjectsStagedPackets(t *testing.T) {
 	}
 }
 
+func TestKernelDatapathRXStageStopSurfacesAllCleanupErrors(t *testing.T) {
+	driver := &fakeKernelRXStageDriver{
+		detachErr: errors.New("detach failed"),
+		clearErr:  errors.New("clear failed"),
+		closeErr:  errors.New("close failed"),
+	}
+	daemon := &Daemon{backgroundErrors: make(map[string]backgroundErrorStatus)}
+	daemon.kernelRXStage.driver = driver
+	daemon.kernelRXStage.status.Active = true
+
+	err := daemon.stopKernelDatapathRXStage()
+	if err == nil || !strings.Contains(err.Error(), "detach failed") || !strings.Contains(err.Error(), "clear failed") || !strings.Contains(err.Error(), "close failed") {
+		t.Fatalf("stop error = %v, want all cleanup failures", err)
+	}
+	statuses := daemon.backgroundErrorSnapshot()
+	if len(statuses) != 1 || statuses[0].Operation != "kernel_datapath_rx_stage_cleanup" {
+		t.Fatalf("background errors = %#v", statuses)
+	}
+	if err := daemon.stopKernelDatapathRXStage(); err != nil {
+		t.Fatalf("second stop without a driver: %v", err)
+	}
+	if statuses := daemon.backgroundErrorSnapshot(); len(statuses) != 1 {
+		t.Fatalf("second stop cleared unresolved cleanup error: %#v", statuses)
+	}
+}
+
+func TestKernelDatapathRXStageAttachCleanupFailureIsFatal(t *testing.T) {
+	oldOpen := kernelDatapathRXStageOpenDriver
+	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	driver := &fakeKernelRXStageDriver{
+		attachErr: errors.New("attach failed"),
+		closeErr:  errors.New("close failed"),
+	}
+	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
+		return driver, nil
+	}
+	daemon := &Daemon{
+		dataplane:      dataplane.NewNoopManager(),
+		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+		desired: config.Desired{KernelModules: config.KernelModulesConfig{
+			Datapath: config.KernelDatapathRuntimeConfig{RXStage: config.KernelDatapathRXStageStage},
+		}},
+	}
+	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{Name: "trustix_datapath", Loaded: true, State: "loaded"})
+
+	err := daemon.startKernelDatapathRXStage(context.Background(), dataplane.AttachSpec{UnderlayIface: "eth0"})
+	if err == nil || !strings.Contains(err.Error(), "attach failed") || !strings.Contains(err.Error(), "close failed") {
+		t.Fatalf("start error = %v, want attach and cleanup failures", err)
+	}
+}
+
 func TestKernelDatapathRXWorkerAttachesTargetLANWithoutPoller(t *testing.T) {
 	oldOpen := kernelDatapathRXStageOpenDriver
 	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
@@ -659,6 +710,9 @@ type fakeKernelRXStageDriver struct {
 	closes         int
 	attachAttempts int
 	attachErr      error
+	detachErr      error
+	clearErr       error
+	closeErr       error
 	workerInjected uint64
 	hooks          map[string]kernelDatapathRXStageHookStatus
 }
@@ -692,7 +746,7 @@ func (driver *fakeKernelRXStageDriver) Detach() error {
 	driver.detaches++
 	driver.attached = false
 	driver.hooks = nil
-	return nil
+	return driver.detachErr
 }
 
 func (driver *fakeKernelRXStageDriver) DetachFor(ifname string) error {
@@ -719,7 +773,7 @@ func (driver *fakeKernelRXStageDriver) Clear() (kernelDatapathRXStageResult, err
 	driver.mu.Lock()
 	defer driver.mu.Unlock()
 	driver.clears++
-	return driver.statusLocked(), nil
+	return driver.statusLocked(), driver.clearErr
 }
 
 func (driver *fakeKernelRXStageDriver) HookQuery() (kernelDatapathRXStageHookStatus, error) {
@@ -773,7 +827,7 @@ func (driver *fakeKernelRXStageDriver) Close() error {
 	driver.mu.Lock()
 	defer driver.mu.Unlock()
 	driver.closes++
-	return nil
+	return driver.closeErr
 }
 
 func (driver *fakeKernelRXStageDriver) statusLocked() kernelDatapathRXStageResult {

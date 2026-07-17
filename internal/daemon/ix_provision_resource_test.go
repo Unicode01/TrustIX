@@ -3,14 +3,17 @@ package daemon
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"trustix.local/trustix/internal/config"
+	"trustix.local/trustix/internal/configlog"
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/pki"
@@ -27,6 +30,139 @@ type productionTransportDefaultRowForProvisionTest struct {
 	GateFamily      string
 	MinGbps         string
 	MinSeconds      string
+}
+
+func TestIXProvisionTokenPersistenceFailureIsTransactional(t *testing.T) {
+	root := t.TempDir()
+	blocked := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	record := ixProvisionTokenRecord{
+		Token:     "existing-token",
+		IXID:      "ix-b",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+		Script:    "secret bootstrap script",
+	}
+	daemon := &Daemon{
+		cfg:             Config{DataDir: filepath.Join(blocked, "data")},
+		provisionLoaded: true,
+		provisionTokens: map[string]ixProvisionTokenRecord{record.Token: record},
+	}
+
+	newRecord := record
+	newRecord.Token = "new-token"
+	if err := daemon.storeIXProvisionToken(newRecord); err == nil {
+		t.Fatal("store token succeeded with an invalid data directory")
+	}
+	if _, exists := daemon.provisionTokens[newRecord.Token]; exists {
+		t.Fatal("failed token store mutated the in-memory token map")
+	}
+	if _, err := daemon.consumeIXProvisionToken(record.Token); err == nil || errors.Is(err, errIXProvisionTokenUnavailable) {
+		t.Fatalf("consume persistence failure err = %v, want internal persistence error", err)
+	}
+	unchanged := daemon.provisionTokens[record.Token]
+	if !unchanged.UsedAt.IsZero() || unchanged.Script != record.Script {
+		t.Fatalf("failed consume mutated token: %#v", unchanged)
+	}
+
+	daemon.cfg.DataDir = filepath.Join(root, "working-data")
+	delivered, err := daemon.consumeIXProvisionToken(record.Token)
+	if err != nil {
+		t.Fatalf("consume after storage recovery: %v", err)
+	}
+	if delivered.Script != record.Script {
+		t.Fatalf("delivered script = %q, want original script", delivered.Script)
+	}
+	tombstone := daemon.provisionTokens[record.Token]
+	if tombstone.UsedAt.IsZero() || tombstone.Script != "" {
+		t.Fatalf("used token tombstone = %#v, want used timestamp without script", tombstone)
+	}
+
+	restarted := &Daemon{
+		cfg:             Config{DataDir: daemon.cfg.DataDir},
+		provisionTokens: make(map[string]ixProvisionTokenRecord),
+	}
+	if _, err := restarted.consumeIXProvisionToken(record.Token); !errors.Is(err, errIXProvisionTokenUnavailable) {
+		t.Fatalf("restarted daemon consumed used token: %v", err)
+	}
+}
+
+func TestIXProvisionAdmissionFailureRemovesStoredToken(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
+	desired.IX.ControlAPI = "https://ix-a.example.com:9443"
+	daemon := newConfigApplyTestDaemon(t, desired)
+	daemon.cfg.APIAdminAuth = true
+	daemon.store = &failConfigCommitAtStore{Store: daemon.store, failAt: 2}
+	certDir := filepath.Dir(pkiSet.trustRoots[0])
+	body := mustJSON(t, ixProvisionIssueRequest{
+		IXID:                "ix-d",
+		ControlAPI:          "https://ix-d.example.com:9443",
+		Advertise:           []core.Prefix{"10.9.0.0/24"},
+		EndpointTransport:   "tix_tcp",
+		EndpointAddress:     "ix-d.example.com:7000",
+		LANIface:            "trustix-lan0",
+		LANGateway:          "10.9.0.1/24",
+		BootstrapControlAPI: "https://ix-a.example.com:9443",
+		ProvisionURL:        "https://ix-a.example.com:18787",
+		TTL:                 "10m",
+		DomainCACert:        filepath.Join(certDir, "domain-ca.pem"),
+		DomainCAKey:         filepath.Join(certDir, "domain-ca.key"),
+		ConfigCACert:        filepath.Join(certDir, "config-ca.pem"),
+		ConfigCAKey:         filepath.Join(certDir, "config-ca.key"),
+		TrustRoots:          pkiSet.trustRoots,
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/provision/ix", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	signAdminTestRequest(t, request, body, pkiSet.adminCert, pkiSet.adminKey)
+	recorder := httptest.NewRecorder()
+	daemon.handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("provision status = %d, want %d; body=%s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
+	}
+
+	daemon.provisionMu.Lock()
+	remaining := len(daemon.provisionTokens)
+	daemon.provisionMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("provision tokens remaining after admission rollback = %d, want 0", remaining)
+	}
+	payload, readErr := os.ReadFile(daemon.ixProvisionTokenStorePath())
+	if readErr != nil {
+		t.Fatalf("read provision token store: %v", readErr)
+	}
+	var persisted ixProvisionTokenStore
+	if decodeErr := json.Unmarshal(payload, &persisted); decodeErr != nil {
+		t.Fatalf("decode provision token store: %v", decodeErr)
+	}
+	if len(persisted.Tokens) != 0 {
+		t.Fatalf("persisted provision tokens after admission rollback = %d, want 0", len(persisted.Tokens))
+	}
+}
+
+type failConfigCommitAtStore struct {
+	configlog.Store
+	failAt int
+	calls  int
+}
+
+func (store *failConfigCommitAtStore) Append(event configlog.Event) error {
+	store.calls++
+	if store.calls == store.failAt {
+		return errors.New("injected admission persistence failure")
+	}
+	return store.Store.Append(event)
+}
+
+func (store *failConfigCommitAtStore) AppendBatch(events []configlog.Event) error {
+	store.calls++
+	if store.calls == store.failAt {
+		return errors.New("injected admission persistence failure")
+	}
+	return store.Store.AppendBatch(events)
 }
 
 func TestIXProvisionIssueCreatesOneTimeBootstrapAndAdmission(t *testing.T) {

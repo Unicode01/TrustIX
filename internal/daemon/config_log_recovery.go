@@ -115,22 +115,21 @@ func (daemon *Daemon) verifyConfigLogStoreLocked(store configlog.Store, result *
 func (daemon *Daemon) restoreConfigLogBackup(ctx context.Context, backupPath string) (configRestoreBackupResponse, error) {
 	backupPath = strings.TrimSpace(backupPath)
 	if backupPath == "" {
-		return configRestoreBackupResponse{}, fmt.Errorf("backup path is required")
+		return configRestoreBackupResponse{}, newConfigMutationRequestError(fmt.Errorf("backup path is required"))
 	}
 	info, err := os.Stat(backupPath)
 	if err != nil {
-		return configRestoreBackupResponse{}, fmt.Errorf("stat backup %q: %w", backupPath, err)
+		return configRestoreBackupResponse{}, newConfigMutationRequestError(fmt.Errorf("stat backup %q: %w", backupPath, err))
 	}
 	if info.IsDir() {
-		return configRestoreBackupResponse{}, fmt.Errorf("backup %q is a directory", backupPath)
+		return configRestoreBackupResponse{}, newConfigMutationRequestError(fmt.Errorf("backup %q is a directory", backupPath))
 	}
 	store, err := configlog.NewFileStore(backupPath)
 	if err != nil {
-		return configRestoreBackupResponse{}, fmt.Errorf("load backup config log %q: %w", backupPath, err)
+		return configRestoreBackupResponse{}, newConfigMutationRequestError(fmt.Errorf("load backup config log %q: %w", backupPath, err))
 	}
 
 	daemon.configMu.Lock()
-	defer daemon.configMu.Unlock()
 	verify := configLogVerifyResponse{
 		Path:        backupPath,
 		Resources:   make(map[string]int),
@@ -138,61 +137,41 @@ func (daemon *Daemon) restoreConfigLogBackup(ctx context.Context, backupPath str
 		GeneratedAt: time.Now().UTC(),
 	}
 	if err := daemon.verifyConfigLogStoreLocked(store, &verify); err != nil {
+		daemon.configMu.Unlock()
 		verify.Valid = false
 		verify.Error = err.Error()
-		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, err
+		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, newConfigMutationRequestError(err)
 	}
+	domainID := daemon.desired.Domain.ID
+	ixID := daemon.desired.IX.ID
+	daemon.configMu.Unlock()
 	verify.Valid = true
-	events, err := store.Range(1, uint64(verify.Events))
-	if err != nil {
-		return configRestoreBackupResponse{}, err
+	var events []configlog.Event
+	if verify.Events > 0 {
+		events, err = store.Range(1, uint64(verify.Events))
+		if err != nil {
+			return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, newConfigMutationRequestError(err)
+		}
 	}
-	restoredDesired, ok, err := daemon.latestLocalDesiredFromEvents(events)
-	if err != nil {
-		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, err
-	}
-	if !ok {
-		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, fmt.Errorf("backup has no desired event for local IX %q", daemon.desired.IX.ID)
-	}
-
-	oldDesired := daemon.desired
-	oldHead := daemon.head
-	oldDomain := daemon.cfg.DomainID
-	oldIX := daemon.cfg.IXID
-	oldFlows := daemon.snapshotFlows()
 	backupHead, err := store.Head()
 	if err != nil {
-		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, err
+		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, newConfigMutationRequestError(err)
 	}
-	if err := daemon.switchDesiredRuntime(ctx, restoredDesired, backupHead); err != nil {
-		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, err
-	}
-	if err := daemon.store.ReplaceAll(events); err != nil {
-		restoreErr := daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
-		if restoreErr != nil {
-			return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, fmt.Errorf("replace config log from backup: %w; restore previous runtime: %v", err, restoreErr)
-		}
-		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, fmt.Errorf("replace config log from backup: %w", err)
-	}
-	head, err := daemon.store.Head()
+	result, err := daemon.restoreConfigSnapshotFromArchive(ctx, configSnapshotEnvelope{
+		DomainID:    string(domainID),
+		IXID:        string(ixID),
+		Head:        headResponse{Seq: backupHead.Seq, Hash: backupHead.Hash},
+		Events:      events,
+		GeneratedAt: time.Now().UTC(),
+	})
 	if err != nil {
 		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, err
 	}
-	if _, err := daemon.applyLatestDomainTrustFromLogLocked(ctx); err != nil {
-		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, err
-	}
-	if err := daemon.afterAdmissionStateChangedLocked(ctx); err != nil {
-		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, err
-	}
-	if err := daemon.refreshLocalAdvertisement(); err != nil {
-		return configRestoreBackupResponse{Backup: backupPath, Verify: verify}, err
-	}
-	createdBackup := latestConfigLogBackupPath(daemon.logPath)
 	return configRestoreBackupResponse{
 		Restored: true,
 		Backup:   backupPath,
-		Created:  createdBackup,
-		Head:     headResponse{Seq: head.Seq, Hash: head.Hash},
+		Created:  result.createdBackup,
+		Head:     headResponse{Seq: result.head.Seq, Hash: result.head.Hash},
 		Verify:   verify,
 	}, nil
 }

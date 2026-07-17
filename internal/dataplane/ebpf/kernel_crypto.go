@@ -2,6 +2,7 @@ package ebpf
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -378,7 +379,7 @@ func kernelCryptoSuiteIDAndKeyLen(suite string) (uint16, int, error) {
 	case kernelCryptoSuiteAES128GCMX25519:
 		return kernelCryptoSuiteIDTrustIXAES128GCMX25519, kernelCryptoAES128KeyLen, nil
 	case kernelCryptoSuiteChaCha20Poly1305X25519:
-		return 0, 0, fmt.Errorf(kernelCryptoChacha20Poly1305UnsupportedReason)
+		return 0, 0, errors.New(kernelCryptoChacha20Poly1305UnsupportedReason)
 	default:
 		return 0, 0, fmt.Errorf("suite is not in the kernel provider schema")
 	}

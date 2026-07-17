@@ -15,41 +15,50 @@ func NewMemoryStore() *MemoryStore {
 }
 
 func (store *MemoryStore) Append(event Event) error {
-	if err := event.ValidateBasic(); err != nil {
-		return err
+	return store.AppendBatch([]Event{event})
+}
+
+func (store *MemoryStore) AppendBatch(events []Event) error {
+	if len(events) == 0 {
+		return nil
 	}
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	expectedSeq := uint64(len(store.events) + 1)
-	if event.Seq != expectedSeq {
-		return fmt.Errorf("%w: expected seq %d, got %d", ErrConflict, expectedSeq, event.Seq)
-	}
-	if len(store.events) == 0 {
-		if event.PrevHash != "" {
-			return fmt.Errorf("%w: first event must not have prev_hash", ErrConflict)
+	next := append([]Event(nil), store.events...)
+	for _, event := range events {
+		if err := event.ValidateBasic(); err != nil {
+			return err
 		}
-	} else {
-		prevHash, err := store.events[len(store.events)-1].Hash()
+		expectedSeq := uint64(len(next) + 1)
+		if event.Seq != expectedSeq {
+			return fmt.Errorf("%w: expected seq %d, got %d", ErrConflict, expectedSeq, event.Seq)
+		}
+		if len(next) == 0 {
+			if event.PrevHash != "" {
+				return fmt.Errorf("%w: first event must not have prev_hash", ErrConflict)
+			}
+			next = append(next, event)
+			continue
+		}
+		prevHash, err := next[len(next)-1].Hash()
 		if err != nil {
 			return err
 		}
 		if event.PrevHash != prevHash {
 			return fmt.Errorf("%w: prev_hash mismatch", ErrConflict)
 		}
+		next = append(next, event)
 	}
-
-	store.events = append(store.events, event)
+	store.events = next
 	return nil
 }
 
 func (store *MemoryStore) ReplaceAll(events []Event) error {
 	next := NewMemoryStore()
-	for _, event := range events {
-		if err := next.Append(event); err != nil {
-			return err
-		}
+	if err := next.AppendBatch(events); err != nil {
+		return err
 	}
 	next.mu.RLock()
 	copied := append([]Event(nil), next.events...)
@@ -95,4 +104,10 @@ func (store *MemoryStore) Range(fromSeq, toSeq uint64) ([]Event, error) {
 		result = append(result, store.events[seq-1])
 	}
 	return result, nil
+}
+
+func (store *MemoryStore) snapshot() []Event {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return append([]Event(nil), store.events...)
 }

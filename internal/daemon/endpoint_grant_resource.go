@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -171,19 +172,12 @@ func (daemon *Daemon) handleEndpointGrantRevoke(w http.ResponseWriter, r *http.R
 		writeConfigMutationError(w, err)
 		return
 	}
-	dropped := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicy()
-	if dropped > 0 {
-		if err := daemon.applyRuntimeDataplaneSnapshot(r.Context()); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
 	daemon.configMu.RLock()
 	head := daemon.head
 	daemon.configMu.RUnlock()
 	writeJSON(w, http.StatusOK, endpointGrantMutationResponse{
 		Applied: true,
-		Changed: changed || dropped > 0,
+		Changed: changed,
 		Grant:   grant,
 		Head:    headResponse{Seq: head.Seq, Hash: head.Hash},
 	})
@@ -313,7 +307,7 @@ func (daemon *Daemon) applyEndpointGrantConfig(ctx context.Context, grant endpoi
 func (daemon *Daemon) applyEndpointGrantConfigLocked(ctx context.Context, grant endpointGrantPayload) (bool, error) {
 	adminProofs := adminProofsFromContext(ctx)
 	if err := daemon.verifyAdminProofPolicy(adminProofs, daemon.desired.Trust); err != nil {
-		return false, err
+		return false, newConfigMutationRequestError(err)
 	}
 	head, err := daemon.store.Head()
 	if err != nil {
@@ -328,22 +322,34 @@ func (daemon *Daemon) applyEndpointGrantConfigLocked(ctx context.Context, grant 
 		grant.EffectiveAt = time.Now().UTC()
 	}
 	if err := validateEndpointGrantPayload(grant, daemon.desired.Domain.ID); err != nil {
-		return false, err
+		return false, newConfigMutationRequestError(err)
 	}
 	event, plannedHead, changed, err := daemon.endpointGrantEventIfChangedAtHead(grant, adminProofs, head)
 	if err != nil || !changed {
 		return changed, err
 	}
+	var commitErr error
 	if err := daemon.store.Append(*event); err != nil {
-		return false, fmt.Errorf("append endpoint grant event: %w", err)
+		if configlog.CommitSucceeded(err) {
+			commitErr = err
+		} else {
+			return false, fmt.Errorf("append endpoint grant event: %w", err)
+		}
 	}
 	daemon.head = plannedHead
-	daemon.closeEndpointGrantRevokedSessionsLocked(grant)
-	if err := daemon.applyRuntimeDataplaneSnapshot(ctx); err != nil {
-		return true, err
+	var sessionErr error
+	if grant.State == endpointGrantStateRevoked {
+		_, sessionErr = daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicyAtLocked(time.Now().UTC())
 	}
-	if err := daemon.refreshLocalAdvertisement(); err != nil {
-		return true, err
+	runtimeErr := errors.Join(
+		wrapReconcileError("enforce endpoint grants", sessionErr),
+		wrapReconcileError("apply dataplane snapshot", daemon.applyRuntimeDataplaneSnapshot(ctx)),
+		wrapReconcileError("refresh local advertisement", daemon.refreshLocalAdvertisement()),
+		wrapReconcileError("persist endpoint grant", commitErr),
+	)
+	if runtimeErr != nil {
+		daemon.requestRuntimeReconcile("endpoint grant mutation", runtimeErr)
+		return true, newCommittedConfigMutationError("endpoint grant mutation", runtimeErr)
 	}
 	return true, nil
 }
@@ -548,48 +554,6 @@ func (daemon *Daemon) peerHasActiveEndpointGrant(peer core.IXID, endpoint config
 	return false
 }
 
-func (daemon *Daemon) closeEndpointGrantRevokedSessionsLocked(grant endpointGrantPayload) {
-	if grant.State != endpointGrantStateRevoked {
-		return
-	}
-	var sessions []closableSession
-	daemon.dataMu.Lock()
-	if daemon.dataSessions == nil {
-		daemon.dataMu.Unlock()
-		return
-	}
-	for key, session := range daemon.dataSessions {
-		if key.Address != reverseSessionAddress || key.Peer != grant.SubjectIX || key.Endpoint != grant.Endpoint {
-			continue
-		}
-		if grant.Transport != "" && !endpointGrantTransportMatches(string(key.Transport), grant.Transport) {
-			continue
-		}
-		if runtime := daemon.dataSessionState[key]; runtime != nil && runtime.cancel != nil {
-			runtime.cancel()
-		}
-		sessions = append(sessions, closableSession{session: session})
-		delete(daemon.dataSessions, key)
-		delete(daemon.dataSessionState, key)
-		daemon.deleteSessionPoolCursorLocked(key)
-		daemon.deleteSessionFlowBindingsLocked(key)
-	}
-	if len(sessions) > 0 {
-		daemon.dataSessionEpoch++
-	}
-	daemon.dataMu.Unlock()
-	for _, item := range sessions {
-		if item.session != nil {
-			daemon.dataStats.staleSessionsDropped.Add(1)
-			_ = item.session.Close()
-		}
-	}
-}
-
-type closableSession struct {
-	session interface{ Close() error }
-}
-
 func (daemon *Daemon) endpointGrantExpiryReaper(ctx context.Context) {
 	ticker := time.NewTicker(endpointGrantExpiryReaperInterval)
 	defer ticker.Stop()
@@ -598,39 +562,62 @@ func (daemon *Daemon) endpointGrantExpiryReaper(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			dropped := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicy()
-			if dropped == 0 {
+			dropped, dropErr := daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicy()
+			var reconcileErr error
+			if dropped > 0 {
+				reconcileErr = daemon.reconcileRuntimeAfterSessionRemoval(ctx, "endpoint grant expiry", false)
+			}
+			err := errors.Join(
+				wrapReconcileError("enforce endpoint grants", dropErr),
+				wrapReconcileError("reconcile endpoint grant expiry", reconcileErr),
+			)
+			if err == nil {
+				daemon.clearBackgroundError("endpoint_grant_expiry")
 				continue
 			}
-			_ = daemon.applyRuntimeDataplaneSnapshot(ctx)
+			daemon.recordBackgroundError("endpoint_grant_expiry", err)
+			daemon.requestRuntimeReconcile("endpoint grant expiry", err)
 		}
 	}
 }
 
-func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicy() int {
+func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicy() (int, error) {
 	return daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(time.Now().UTC())
 }
 
-func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(now time.Time) int {
-	type dropped struct {
-		session interface{ Close() error }
-		runtime *dataSessionRuntime
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
-	}
+func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(now time.Time) (int, error) {
 	daemon.configMu.RLock()
-	grants, err := daemon.latestEndpointGrantsFromLogLocked()
+	defer daemon.configMu.RUnlock()
+	return daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicyAtLocked(now)
+}
+
+func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicyAtLocked(now time.Time) (int, error) {
+	grants, grantsErr := daemon.latestEndpointGrantsFromLogLocked()
 	localEndpoints := make(map[core.EndpointID]config.EndpointConfig, len(daemon.desired.Endpoints))
 	for _, endpoint := range daemon.desired.Endpoints {
 		if endpoint.Name != "" {
 			localEndpoints[endpoint.Name] = endpoint
 		}
 	}
-	daemon.configMu.RUnlock()
-	if err != nil {
+	return daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicySnapshot(now, grants, localEndpoints, grantsErr)
+}
+
+func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicySnapshot(
+	now time.Time,
+	grants []endpointGrantPayload,
+	localEndpoints map[core.EndpointID]config.EndpointConfig,
+	grantsErr error,
+) (int, error) {
+	type dropped struct {
+		session interface{ Close() error }
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	if grantsErr != nil {
+		// Grant enforcement is fail-closed, but the read failure must remain visible.
 		grants = nil
 	}
 	droppedSessions := make([]dropped, 0)
@@ -647,7 +634,8 @@ func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(now ti
 		if runtime != nil && runtime.cancel != nil {
 			runtime.cancel()
 		}
-		droppedSessions = append(droppedSessions, dropped{session: session, runtime: runtime})
+		daemon.clearForwardCacheForSession(key)
+		droppedSessions = append(droppedSessions, dropped{session: session})
 		delete(daemon.dataSessions, key)
 		delete(daemon.dataSessionState, key)
 		daemon.deleteSessionPoolCursorLocked(key)
@@ -656,14 +644,24 @@ func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicyAt(now ti
 	if len(droppedSessions) > 0 {
 		daemon.dataSessionEpoch++
 	}
+	if len(daemon.dataSessions) == 0 {
+		daemon.sessionPoolRR = nil
+		daemon.sessionPoolFlow = nil
+	}
 	daemon.dataMu.Unlock()
+	var closeErrs []error
 	for _, item := range droppedSessions {
 		if item.session != nil {
 			daemon.dataStats.staleSessionsDropped.Add(1)
-			_ = item.session.Close()
+			if err := item.session.Close(); err != nil {
+				closeErrs = append(closeErrs, fmt.Errorf("close endpoint grant session: %w", err))
+			}
 		}
 	}
-	return len(droppedSessions)
+	return len(droppedSessions), errors.Join(
+		wrapOperationError("read endpoint grants", grantsErr),
+		errors.Join(closeErrs...),
+	)
 }
 
 func runtimeEndpointGrantPolicyConfig(runtime *dataSessionRuntime, key dataSessionKey, localEndpoints map[core.EndpointID]config.EndpointConfig) config.EndpointConfig {

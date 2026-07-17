@@ -31,7 +31,7 @@ func TestPacketSocketGSOErrnoUnwrapsSyscallErrors(t *testing.T) {
 	}
 
 	oldStats := lanPacketStats
-	lanPacketStats = lanPacketInjectorStats{}
+	lanPacketStats = &lanPacketInjectorStats{}
 	t.Cleanup(func() {
 		lanPacketStats = oldStats
 	})
@@ -46,7 +46,7 @@ func TestPacketSocketGSOErrnoUnwrapsSyscallErrors(t *testing.T) {
 
 func TestPacketSocketGSOErrnoRecordsKnownTransientErrors(t *testing.T) {
 	oldStats := lanPacketStats
-	lanPacketStats = lanPacketInjectorStats{}
+	lanPacketStats = &lanPacketInjectorStats{}
 	t.Cleanup(func() {
 		lanPacketStats = oldStats
 	})

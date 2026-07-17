@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"runtime/debug"
@@ -77,8 +78,7 @@ func loadTIXTCPTXSealObject(provider *kernelCryptoProviderObject) (*tixTCPTXSeal
 	}
 	config, err := configureTIXTCPBPFConfig(sealer.configMap, 0)
 	if err != nil {
-		sealer.Close()
-		return nil, err
+		return nil, errors.Join(err, sealer.Close())
 	}
 	sealer.skipTCPChecksum = config&tixTCPConfigSkipTCPChecksum != 0
 	sealer.runOptionsPool = sync.Pool{
@@ -87,8 +87,7 @@ func loadTIXTCPTXSealObject(provider *kernelCryptoProviderObject) (*tixTCPTXSeal
 		},
 	}
 	if sealer.statsMap == nil || sealer.configMap == nil || sealer.program == nil {
-		sealer.Close()
-		return nil, fmt.Errorf("embedded tix_tcp TX seal XDP object is incomplete")
+		return nil, errors.Join(fmt.Errorf("embedded tix_tcp TX seal XDP object is incomplete"), sealer.Close())
 	}
 	return sealer, nil
 }

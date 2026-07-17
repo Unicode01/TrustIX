@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -115,6 +116,8 @@ type ixProvisionTokenStore struct {
 	Tokens []ixProvisionTokenRecord `json:"tokens"`
 }
 
+var errIXProvisionTokenUnavailable = errors.New("IX provision token is unavailable")
+
 type ixProvisionTrustRootFile struct {
 	Name string
 	PEM  string
@@ -153,7 +156,7 @@ type ixProvisionScriptInput struct {
 func (daemon *Daemon) handleIXProvisionIssue(w http.ResponseWriter, r *http.Request) {
 	adminProofs := adminProofsFromContext(r.Context())
 	if err := daemon.verifyAdminProofPolicy(adminProofs, daemon.desired.Trust); err != nil {
-		writeConfigMutationError(w, err)
+		writeConfigMutationError(w, newConfigMutationRequestError(err))
 		return
 	}
 	payload, err := readLimitedBody(r.Body, 96<<10)
@@ -173,7 +176,7 @@ func (daemon *Daemon) handleIXProvisionIssue(w http.ResponseWriter, r *http.Requ
 	}
 	response, err := daemon.issueIXProvisionToken(r.Context(), request)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeConfigMutationError(w, err)
 		return
 	}
 	setSensitiveResponseHeaders(w)
@@ -189,7 +192,11 @@ func (daemon *Daemon) serveIXProvisionIfRequest(w http.ResponseWriter, r *http.R
 		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(ixProvisionBootstrapClientScript()))
+		if _, err := w.Write([]byte(ixProvisionBootstrapClientScript())); err != nil {
+			daemon.recordBackgroundError("ix_provision_bootstrap_client_delivery", err)
+		} else {
+			daemon.clearBackgroundError("ix_provision_bootstrap_client_delivery")
+		}
 		return true
 	}
 	token, ok := ixProvisionTokenFromBootstrapPath(r.URL.Path)
@@ -198,14 +205,22 @@ func (daemon *Daemon) serveIXProvisionIfRequest(w http.ResponseWriter, r *http.R
 	}
 	record, err := daemon.consumeIXProvisionToken(token)
 	if err != nil {
-		writeError(w, http.StatusGone, err)
+		status := http.StatusInternalServerError
+		if errors.Is(err, errIXProvisionTokenUnavailable) {
+			status = http.StatusGone
+		}
+		writeError(w, status, err)
 		return true
 	}
 	setIXProvisionBootstrapSecurityHeaders(w)
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(record.Script))
+	if _, err := w.Write([]byte(record.Script)); err != nil {
+		daemon.recordBackgroundError("ix_provision_token_delivery", err)
+	} else {
+		daemon.clearBackgroundError("ix_provision_token_delivery")
+	}
 	return true
 }
 
@@ -239,22 +254,22 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 
 	normalized, prefixes, err := normalizeIXProvisionIssueRequest(request, desired)
 	if err != nil {
-		return ixProvisionIssueResponse{}, err
+		return ixProvisionIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	domainCA, configCA, err := loadIXProvisionCAs(normalized)
 	if err != nil {
-		return ixProvisionIssueResponse{}, err
+		return ixProvisionIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	if err := validateIXProvisionCA(domainCA.Cert, pki.RoleDomainCA, normalized.Domain, "domain CA"); err != nil {
-		return ixProvisionIssueResponse{}, err
+		return ixProvisionIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	if err := validateIXProvisionCA(configCA.Cert, pki.RoleDomainConfigCA, normalized.Domain, "config CA"); err != nil {
-		return ixProvisionIssueResponse{}, err
+		return ixProvisionIssueResponse{}, newConfigMutationRequestError(err)
 	}
 
 	dnsNames, ipAddresses, err := ixProvisionSANs(normalized)
 	if err != nil {
-		return ixProvisionIssueResponse{}, err
+		return ixProvisionIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	ixBundle, err := pki.Issue(domainCA, pki.IssueRequest{
 		CommonName:  "TrustIX IX " + string(normalized.IXID),
@@ -288,15 +303,15 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 	}
 	trustRoots, err := ixProvisionTrustRootFiles(desired, normalized.TrustRoots)
 	if err != nil {
-		return ixProvisionIssueResponse{}, err
+		return ixProvisionIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	if len(trustRoots) == 0 {
-		return ixProvisionIssueResponse{}, fmt.Errorf("at least one trust root is required")
+		return ixProvisionIssueResponse{}, newConfigMutationRequestError(fmt.Errorf("at least one trust root is required"))
 	}
 
 	targetDesired, err := desiredForIXProvision(normalized, prefixes, trustRoots)
 	if err != nil {
-		return ixProvisionIssueResponse{}, err
+		return ixProvisionIssueResponse{}, newConfigMutationRequestError(err)
 	}
 	configJSON, err := json.MarshalIndent(targetDesired, "", "  ")
 	if err != nil {
@@ -323,7 +338,7 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 		BuildWebUI:     normalized.BuildWebUI,
 	})
 	if err != nil {
-		return ixProvisionIssueResponse{}, err
+		return ixProvisionIssueResponse{}, newConfigMutationRequestError(err)
 	}
 
 	if err := daemon.ensureLocalIXAdmission(ctx, desired); err != nil {
@@ -341,16 +356,6 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 		ControlAPI:            normalized.ControlAPI,
 		EffectiveAt:           time.Now().UTC(),
 	}
-	if changed, err := daemon.applyAdmissionConfig(ctx, admission); err != nil {
-		return ixProvisionIssueResponse{}, err
-	} else if changed {
-		daemon.configMu.RLock()
-		if current, ok, err := daemon.latestAdmissionForIXLocked(normalized.IXID); err == nil && ok {
-			admission = current
-		}
-		daemon.configMu.RUnlock()
-	}
-
 	token, err := newIXProvisionToken()
 	if err != nil {
 		return ixProvisionIssueResponse{}, err
@@ -367,7 +372,35 @@ func (daemon *Daemon) issueIXProvisionToken(ctx context.Context, request ixProvi
 		RouteAuthFingerprints: append([]string(nil), admission.RouteAuthFingerprints...),
 	}
 	if err := daemon.storeIXProvisionToken(record); err != nil {
+		if stateFileCommitSucceeded(err) {
+			if rollbackErr := daemon.deleteIXProvisionToken(token); rollbackErr != nil {
+				return ixProvisionIssueResponse{}, errors.Join(err, fmt.Errorf("rollback provision token after durability failure: %w", rollbackErr))
+			}
+		}
 		return ixProvisionIssueResponse{}, err
+	}
+	changed, admissionErr := daemon.applyAdmissionConfig(ctx, admission)
+	if admissionErr != nil {
+		var committed *committedConfigMutationError
+		if !errors.As(admissionErr, &committed) {
+			if rollbackErr := daemon.deleteIXProvisionToken(token); rollbackErr != nil {
+				return ixProvisionIssueResponse{}, errors.Join(admissionErr, fmt.Errorf("rollback provision token: %w", rollbackErr))
+			}
+			return ixProvisionIssueResponse{}, admissionErr
+		}
+	}
+	if changed {
+		daemon.configMu.RLock()
+		current, ok, latestErr := daemon.latestAdmissionForIXLocked(normalized.IXID)
+		if latestErr == nil && ok {
+			admission = current
+		}
+		daemon.configMu.RUnlock()
+		if latestErr != nil {
+			daemon.recordBackgroundError("ix_provision_admission_readback", latestErr)
+		} else {
+			daemon.clearBackgroundError("ix_provision_admission_readback")
+		}
 	}
 	provisionURL := strings.TrimRight(normalized.ProvisionURL, "/")
 	return ixProvisionIssueResponse{
@@ -1877,9 +1910,35 @@ func (daemon *Daemon) storeIXProvisionToken(record ixProvisionTokenRecord) error
 	if err := daemon.loadIXProvisionTokensLocked(); err != nil {
 		return err
 	}
-	daemon.pruneIXProvisionTokensLocked(time.Now().UTC())
-	daemon.provisionTokens[record.Token] = record
-	return daemon.persistIXProvisionTokensLocked()
+	next := cloneIXProvisionTokens(daemon.provisionTokens)
+	pruneIXProvisionTokens(next, time.Now().UTC())
+	next[record.Token] = record
+	if err := daemon.persistIXProvisionTokensLocked(next); err != nil {
+		if stateFileCommitSucceeded(err) {
+			daemon.provisionTokens = next
+		}
+		return err
+	}
+	daemon.provisionTokens = next
+	return nil
+}
+
+func (daemon *Daemon) deleteIXProvisionToken(token string) error {
+	daemon.provisionMu.Lock()
+	defer daemon.provisionMu.Unlock()
+	if err := daemon.loadIXProvisionTokensLocked(); err != nil {
+		return err
+	}
+	next := cloneIXProvisionTokens(daemon.provisionTokens)
+	delete(next, strings.TrimSpace(token))
+	if err := daemon.persistIXProvisionTokensLocked(next); err != nil {
+		if stateFileCommitSucceeded(err) {
+			daemon.provisionTokens = next
+		}
+		return err
+	}
+	daemon.provisionTokens = next
+	return nil
 }
 
 func (daemon *Daemon) consumeIXProvisionToken(token string) (ixProvisionTokenRecord, error) {
@@ -1893,28 +1952,45 @@ func (daemon *Daemon) consumeIXProvisionToken(token string) (ixProvisionTokenRec
 		return ixProvisionTokenRecord{}, err
 	}
 	now := time.Now().UTC()
-	daemon.pruneIXProvisionTokensLocked(now)
-	record, ok := daemon.provisionTokens[token]
+	next := cloneIXProvisionTokens(daemon.provisionTokens)
+	pruneIXProvisionTokens(next, now)
+	record, ok := next[token]
 	if !ok {
-		_ = daemon.persistIXProvisionTokensLocked()
-		return ixProvisionTokenRecord{}, fmt.Errorf("provision token is not found or has expired")
+		if err := daemon.persistIXProvisionTokensLocked(next); err != nil {
+			if stateFileCommitSucceeded(err) {
+				daemon.provisionTokens = next
+			}
+			return ixProvisionTokenRecord{}, err
+		}
+		daemon.provisionTokens = next
+		return ixProvisionTokenRecord{}, fmt.Errorf("%w: provision token is not found or has expired", errIXProvisionTokenUnavailable)
 	}
 	if !record.UsedAt.IsZero() {
-		delete(daemon.provisionTokens, token)
-		_ = daemon.persistIXProvisionTokensLocked()
-		return ixProvisionTokenRecord{}, fmt.Errorf("provision token was already used")
+		return ixProvisionTokenRecord{}, fmt.Errorf("%w: provision token was already used", errIXProvisionTokenUnavailable)
 	}
 	if !record.ExpiresAt.After(now) {
-		delete(daemon.provisionTokens, token)
-		_ = daemon.persistIXProvisionTokensLocked()
-		return ixProvisionTokenRecord{}, fmt.Errorf("provision token has expired")
+		delete(next, token)
+		if err := daemon.persistIXProvisionTokensLocked(next); err != nil {
+			if stateFileCommitSucceeded(err) {
+				daemon.provisionTokens = next
+			}
+			return ixProvisionTokenRecord{}, err
+		}
+		daemon.provisionTokens = next
+		return ixProvisionTokenRecord{}, fmt.Errorf("%w: provision token has expired", errIXProvisionTokenUnavailable)
 	}
+	delivered := record
 	record.UsedAt = now
-	delete(daemon.provisionTokens, token)
-	if err := daemon.persistIXProvisionTokensLocked(); err != nil {
+	record.Script = ""
+	next[token] = record
+	if err := daemon.persistIXProvisionTokensLocked(next); err != nil {
+		if stateFileCommitSucceeded(err) {
+			daemon.provisionTokens = next
+		}
 		return ixProvisionTokenRecord{}, err
 	}
-	return record, nil
+	daemon.provisionTokens = next
+	return delivered, nil
 }
 
 func (daemon *Daemon) loadIXProvisionTokensLocked() error {
@@ -1951,7 +2027,7 @@ func (daemon *Daemon) loadIXProvisionTokensLocked() error {
 	return nil
 }
 
-func (daemon *Daemon) persistIXProvisionTokensLocked() error {
+func (daemon *Daemon) persistIXProvisionTokensLocked(tokens map[string]ixProvisionTokenRecord) error {
 	path := daemon.ixProvisionTokenStorePath()
 	if path == "" {
 		return nil
@@ -1959,9 +2035,9 @@ func (daemon *Daemon) persistIXProvisionTokensLocked() error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create IX provision token dir: %w", err)
 	}
-	records := make([]ixProvisionTokenRecord, 0, len(daemon.provisionTokens))
-	for _, record := range daemon.provisionTokens {
-		if record.UsedAt.IsZero() && record.ExpiresAt.After(time.Now().UTC()) {
+	records := make([]ixProvisionTokenRecord, 0, len(tokens))
+	for _, record := range tokens {
+		if record.ExpiresAt.After(time.Now().UTC()) {
 			records = append(records, record)
 		}
 	}
@@ -1975,21 +2051,24 @@ func (daemon *Daemon) persistIXProvisionTokensLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode IX provision tokens: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
-		return fmt.Errorf("write IX provision token store: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := writeStateFileAtomic(path, payload, 0o600); err != nil {
 		return fmt.Errorf("replace IX provision token store: %w", err)
 	}
 	return nil
 }
 
-func (daemon *Daemon) pruneIXProvisionTokensLocked(now time.Time) {
-	for token, record := range daemon.provisionTokens {
-		if !record.UsedAt.IsZero() || !record.ExpiresAt.After(now) {
-			delete(daemon.provisionTokens, token)
+func cloneIXProvisionTokens(tokens map[string]ixProvisionTokenRecord) map[string]ixProvisionTokenRecord {
+	cloned := make(map[string]ixProvisionTokenRecord, len(tokens))
+	for token, record := range tokens {
+		cloned[token] = record
+	}
+	return cloned
+}
+
+func pruneIXProvisionTokens(tokens map[string]ixProvisionTokenRecord, now time.Time) {
+	for token, record := range tokens {
+		if !record.ExpiresAt.After(now) {
+			delete(tokens, token)
 		}
 	}
 }

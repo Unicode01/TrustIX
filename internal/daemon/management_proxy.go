@@ -35,7 +35,11 @@ func (daemon *Daemon) handleManagementIXProxy(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	_ = r.Body.Close()
+	if err := r.Body.Close(); err != nil {
+		daemon.recordBackgroundError("management_proxy_request_body_close", err)
+	} else {
+		daemon.clearBackgroundError("management_proxy_request_body_close")
+	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	proofs, err := daemon.verifyAdminRequests(r, body)
 	if err != nil {
@@ -76,7 +80,11 @@ func (daemon *Daemon) handleControlManagementProxy(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	_ = r.Body.Close()
+	if err := r.Body.Close(); err != nil {
+		daemon.recordBackgroundError("management_proxy_request_body_close", err)
+	} else {
+		daemon.clearBackgroundError("management_proxy_request_body_close")
+	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	proofs, err := daemon.verifyAdminRequestsForRequestURI(r, body, originalURI)
 	if err != nil {

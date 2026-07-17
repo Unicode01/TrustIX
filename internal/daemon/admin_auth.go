@@ -58,7 +58,11 @@ func (daemon *Daemon) managementAuthMiddleware(next http.Handler, options manage
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		_ = r.Body.Close()
+		if err := r.Body.Close(); err != nil {
+			daemon.recordBackgroundError("management_auth_request_body_close", err)
+		} else {
+			daemon.clearBackgroundError("management_auth_request_body_close")
+		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		proofs, err := daemon.verifyAdminRequests(r, body)
 		if err != nil {

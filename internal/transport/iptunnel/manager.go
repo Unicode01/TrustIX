@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ type tunnelState struct {
 }
 
 var managerKernelTunnelExists = kernelTunnelExists
+var managerDeleteKernelTunnel = deleteKernelTunnel
 
 func NewManager(dataDir string) *Manager {
 	if dataDir == "" {
@@ -96,6 +98,9 @@ func (manager *Manager) Acquire(ctx context.Context, record TunnelRecord, create
 	state.Tunnels = out
 	if acquiredName != "" {
 		if err := manager.writeStateLocked(state); err != nil {
+			if tunnelStateCommitSucceeded(err) {
+				return acquiredName, err
+			}
 			return "", err
 		}
 		return acquiredName, nil
@@ -107,6 +112,9 @@ func (manager *Manager) Acquire(ctx context.Context, record TunnelRecord, create
 		record.RefCount = 1
 		state.Tunnels = append(state.Tunnels, record)
 		if err := manager.writeStateLocked(state); err != nil {
+			if tunnelStateCommitSucceeded(err) {
+				return record.Name, err
+			}
 			return "", err
 		}
 		return record.Name, nil
@@ -117,6 +125,9 @@ func (manager *Manager) Acquire(ctx context.Context, record TunnelRecord, create
 			record.RefCount = 1
 			state.Tunnels = append(state.Tunnels, record)
 			if writeErr := manager.writeStateLocked(state); writeErr != nil {
+				if tunnelStateCommitSucceeded(writeErr) {
+					return record.Name, writeErr
+				}
 				return "", writeErr
 			}
 			return record.Name, nil
@@ -126,15 +137,17 @@ func (manager *Manager) Acquire(ctx context.Context, record TunnelRecord, create
 	record.Name = name
 	state.Tunnels = append(state.Tunnels, record)
 	if err := manager.writeStateLocked(state); err != nil {
-		_ = deleteKernelTunnel(name)
-		return "", err
+		if tunnelStateCommitSucceeded(err) {
+			return name, err
+		}
+		return "", errors.Join(err, wrapManagerError("delete untracked kernel tunnel "+name, managerDeleteKernelTunnel(name)))
 	}
 	return name, nil
 }
 
 func (manager *Manager) Release(ctx context.Context, name string) error {
 	if manager == nil {
-		return deleteKernelTunnel(name)
+		return managerDeleteKernelTunnel(name)
 	}
 	if name == "" {
 		return nil
@@ -169,7 +182,7 @@ func (manager *Manager) Release(ctx context.Context, name string) error {
 	}
 	state.Tunnels = out
 	if deleteName != "" {
-		if err := deleteKernelTunnel(deleteName); err != nil {
+		if err := managerDeleteKernelTunnel(deleteName); err != nil {
 			return err
 		}
 	}
@@ -264,16 +277,29 @@ func (manager *Manager) Cleanup(ctx context.Context) ([]TunnelRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	var remaining []TunnelRecord
+	var cleanupErrs []error
 	for _, record := range state.Tunnels {
 		if err := ctx.Err(); err != nil {
 			return state.Tunnels, err
 		}
-		_ = deleteKernelTunnel(record.Name)
+		if err := managerDeleteKernelTunnel(record.Name); err != nil {
+			remaining = append(remaining, record)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete kernel tunnel %q: %w", record.Name, err))
+		}
 	}
-	if err := manager.writeStateLocked(tunnelState{}); err != nil {
+	writeErr := manager.writeStateLocked(tunnelState{Tunnels: remaining})
+	if err := errors.Join(errors.Join(cleanupErrs...), wrapManagerError("persist remaining kernel tunnels", writeErr)); err != nil {
 		return state.Tunnels, err
 	}
 	return state.Tunnels, nil
+}
+
+func wrapManagerError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (manager *Manager) Plan(ctx context.Context) ([]TunnelRecord, error) {
@@ -319,7 +345,7 @@ func (manager *Manager) writeStateLocked(state tunnelState) error {
 		return fmt.Errorf("encode iptunnel state: %w", err)
 	}
 	payload = append(payload, '\n')
-	if err := os.WriteFile(manager.statePath, payload, 0o600); err != nil {
+	if err := writeTunnelStateAtomic(manager.statePath, payload, 0o600); err != nil {
 		return fmt.Errorf("write iptunnel state %q: %w", manager.statePath, err)
 	}
 	return nil

@@ -156,7 +156,7 @@ func (daemon *Daemon) handleConfigRestoreBackup(w http.ResponseWriter, r *http.R
 	}
 	response, err := daemon.restoreConfigLogBackup(r.Context(), request.Path)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeConfigMutationError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -212,11 +212,7 @@ func (daemon *Daemon) handleConfigRejoin(w http.ResponseWriter, r *http.Request)
 	}
 	result, err := daemon.rejoinConfigLogWithTarget(r.Context(), target, preserveLocalDesired)
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, configlog.ErrConflict) {
-			status = http.StatusConflict
-		}
-		writeError(w, status, err)
+		writeConfigMutationError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -293,17 +289,18 @@ func (daemon *Daemon) handleControlConfigEventsPost(w http.ResponseWriter, r *ht
 	}
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		if _, err := daemon.registerConfigSignerCertificate(r.TLS.PeerCertificates[0], true); err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("register peer signer certificate: %w", err))
+			err = fmt.Errorf("register peer signer certificate: %w", err)
+			if stateFileCommitSucceeded(err) {
+				daemon.requestRuntimeReconcile("peer signer cache durability", err)
+				err = newCommittedConfigMutationError("register peer signer certificate", err)
+			}
+			writeConfigMutationError(w, err)
 			return
 		}
 	}
 	appended, err := daemon.appendVerifiedConfigEvents(r.Context(), envelope.Events, envelope.Signers)
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, configlog.ErrConflict) {
-			status = http.StatusConflict
-		}
-		writeError(w, status, err)
+		writeConfigMutationError(w, err)
 		return
 	}
 	daemon.configMu.RLock()
@@ -464,8 +461,7 @@ func (daemon *Daemon) configMutationSyncTargets(desiredCandidates ...config.Desi
 
 func (daemon *Daemon) newConfigMutationConflictError(operation string, target controlTarget, cause error) error {
 	state, ok := daemon.configSyncState(target)
-	localHead := configlog.Head{}
-	remoteHead := configlog.Head{}
+	var localHead, remoteHead configlog.Head
 	if ok {
 		localHead = configlog.Head{Seq: state.LocalHead.Seq, Hash: state.LocalHead.Hash}
 		remoteHead = configlog.Head{Seq: state.RemoteHead.Seq, Hash: state.RemoteHead.Hash}
@@ -515,7 +511,78 @@ func (err *configMutationConflictError) rejoinHint() string {
 	return hint
 }
 
+type committedConfigMutationError struct {
+	Operation string
+	Err       error
+}
+
+func newCommittedConfigMutationError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &committedConfigMutationError{Operation: operation, Err: err}
+}
+
+func (err *committedConfigMutationError) Error() string {
+	if err == nil {
+		return "config mutation committed but reconciliation failed"
+	}
+	if err.Operation == "" {
+		return fmt.Sprintf("config mutation committed but reconciliation failed: %v", err.Err)
+	}
+	return fmt.Sprintf("config mutation %q committed but reconciliation failed: %v", err.Operation, err.Err)
+}
+
+func (err *committedConfigMutationError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
+type committedConfigMutationResponse struct {
+	Error             string `json:"error"`
+	Operation         string `json:"operation,omitempty"`
+	Committed         bool   `json:"committed"`
+	ReconcileRequired bool   `json:"reconcile_required"`
+}
+
+type configMutationRequestError struct {
+	Err error
+}
+
+func newConfigMutationRequestError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &configMutationRequestError{Err: err}
+}
+
+func (err *configMutationRequestError) Error() string {
+	if err == nil || err.Err == nil {
+		return "invalid config mutation request"
+	}
+	return err.Err.Error()
+}
+
+func (err *configMutationRequestError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
 func writeConfigMutationError(w http.ResponseWriter, err error) {
+	var committed *committedConfigMutationError
+	if errors.As(err, &committed) {
+		writeJSON(w, http.StatusInternalServerError, committedConfigMutationResponse{
+			Error:             committed.Error(),
+			Operation:         committed.Operation,
+			Committed:         true,
+			ReconcileRequired: true,
+		})
+		return
+	}
 	var conflict *configMutationConflictError
 	if errors.As(err, &conflict) {
 		writeJSON(w, http.StatusConflict, configMutationConflictResponse{
@@ -533,7 +600,12 @@ func writeConfigMutationError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
-	writeError(w, http.StatusBadRequest, err)
+	var requestErr *configMutationRequestError
+	if errors.As(err, &requestErr) {
+		writeError(w, http.StatusBadRequest, requestErr)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err)
 }
 
 func (daemon *Daemon) fetchPeerConfigHead(ctx context.Context, client *http.Client, parsed *url.URL) (configlog.Head, core.IXID, error) {
@@ -716,40 +788,87 @@ func (daemon *Daemon) replaceConfigLogWithVerifiedSnapshot(ctx context.Context, 
 	if err != nil {
 		return false, err
 	}
+	oldDesired := daemon.desired
+	oldHead := daemon.head
+	oldDomain := daemon.cfg.DomainID
+	oldIX := daemon.cfg.IXID
+	oldFlows := daemon.snapshotFlows()
+	oldState := daemon.snapshotConfigRestoreMutableState()
+	storeHead, err := daemon.store.Head()
+	if err != nil {
+		return false, fmt.Errorf("read config log before rejoin: %w", err)
+	}
+	if storeHead != oldHead {
+		return false, fmt.Errorf("%w: config log head changed before rejoin: runtime=%+v store=%+v", configlog.ErrConflict, oldHead, storeHead)
+	}
+	oldEvents, err := configLogEventsThroughHead(daemon.store, storeHead)
+	if err != nil {
+		return false, fmt.Errorf("snapshot current config log before rejoin: %w", err)
+	}
+	result := configSnapshotRestoreResult{
+		head:      configlog.Head{Seq: snapshot.Head.Seq, Hash: snapshot.Head.Hash},
+		committed: true,
+	}
+	rollback := func(cause error) (bool, error) {
+		_, rollbackErr := daemon.rollbackFailedConfigSnapshotRestore(
+			ctx,
+			"config rejoin",
+			result,
+			cause,
+			oldEvents,
+			oldDesired,
+			oldHead,
+			oldDomain,
+			oldIX,
+			oldFlows,
+			oldState,
+		)
+		return false, rollbackErr
+	}
+	var commitErr error
 	if err := daemon.store.ReplaceAll(snapshot.Events); err != nil {
-		return false, fmt.Errorf("replace config log from snapshot: %w", err)
+		if configlog.CommitSucceeded(err) {
+			commitErr = err
+		} else {
+			return false, fmt.Errorf("replace config log from snapshot: %w", err)
+		}
 	}
 	head, err := daemon.store.Head()
 	if err != nil {
-		return false, err
+		return rollback(fmt.Errorf("read rejoined config log head: %w", err))
 	}
+	result.head = head
 	daemon.head = head
 	if _, err := daemon.applyLatestDomainTrustFromLogLocked(ctx); err != nil {
-		return false, err
+		return rollback(err)
 	}
 	if err := daemon.afterAdmissionStateChangedLocked(ctx); err != nil {
-		return false, err
+		return rollback(err)
 	}
 	appendedLocalDesired := false
 	if preserveLocalDesired {
 		changed, err := daemon.ensureLocalDesiredBaselineLocked(nil)
 		if err != nil {
-			return false, err
+			var committed *committedConfigMutationError
+			if errors.As(err, &committed) {
+				commitErr = errors.Join(commitErr, err)
+			} else {
+				return rollback(err)
+			}
 		}
 		appendedLocalDesired = changed
-		head, err = daemon.store.Head()
-		if err != nil {
-			return false, err
-		}
-		daemon.head = head
 	}
 	if err := daemon.refreshLocalAdvertisement(); err != nil {
-		return false, err
+		return rollback(err)
 	}
-	if err := daemon.commitConfigSignerCertificates(usedSigners, true); err != nil {
-		return false, err
+	if err := daemon.commitConfigSignerCertificatesAfterLogCommit(usedSigners); err != nil {
+		daemon.requestRuntimeReconcile("config rejoin signer cache", err)
+		return appendedLocalDesired, newCommittedConfigMutationError("config rejoin", err)
 	}
-	_ = ctx.Err()
+	if commitErr != nil {
+		daemon.requestRuntimeReconcile("config rejoin durability", commitErr)
+		return appendedLocalDesired, newCommittedConfigMutationError("config rejoin", commitErr)
+	}
 	return appendedLocalDesired, nil
 }
 
@@ -845,7 +964,7 @@ func (daemon *Daemon) appendVerifiedConfigEvents(ctx context.Context, events []c
 	}
 	stagedSigners, err := daemon.parseConfigSignerCertificates(signers)
 	if err != nil {
-		return 0, err
+		return 0, newConfigMutationRequestError(err)
 	}
 	usedSigners := make(map[core.SignerID]*x509.Certificate)
 	for _, event := range events {
@@ -857,7 +976,7 @@ func (daemon *Daemon) appendVerifiedConfigEvents(ctx context.Context, events []c
 		}
 		cert, err := daemon.verifyConfigEventWithTrustAndSigners(event, trust, stagedSigners)
 		if err != nil {
-			return 0, fmt.Errorf("verify config event seq %d: %w", event.Seq, err)
+			return 0, newConfigMutationRequestError(fmt.Errorf("verify config event seq %d: %w", event.Seq, err))
 		}
 		if cert != nil {
 			usedSigners[event.SignerID] = cert
@@ -865,7 +984,7 @@ func (daemon *Daemon) appendVerifiedConfigEvents(ctx context.Context, events []c
 		if event.Resource == domainTrustResource {
 			trust, err = parseDomainTrustPayload(event.Payload, daemon.desired.Domain.ID)
 			if err != nil {
-				return 0, fmt.Errorf("decode domain trust event seq %d: %w", event.Seq, err)
+				return 0, newConfigMutationRequestError(fmt.Errorf("decode domain trust event seq %d: %w", event.Seq, err))
 			}
 		}
 		expectedSeq++
@@ -875,32 +994,51 @@ func (daemon *Daemon) appendVerifiedConfigEvents(ctx context.Context, events []c
 		}
 	}
 
-	appended := 0
-	for _, event := range events {
-		if err := daemon.store.Append(event); err != nil {
-			return appended, err
+	var commitErr error
+	if err := daemon.store.AppendBatch(events); err != nil {
+		if configlog.CommitSucceeded(err) {
+			commitErr = err
+		} else {
+			return 0, err
 		}
-		appended++
 	}
+	appended := len(events)
 	head, err = daemon.store.Head()
 	if err != nil {
-		return appended, err
+		daemon.requestRuntimeReconcile("config sync", err)
+		return appended, newCommittedConfigMutationError("config sync", err)
 	}
 	daemon.head = head
 	if _, err := daemon.applyLatestDomainTrustFromLogLocked(ctx); err != nil {
-		return appended, err
+		daemon.requestRuntimeReconcile("config sync", err)
+		return appended, newCommittedConfigMutationError("config sync", err)
 	}
 	if err := daemon.afterAdmissionStateChangedLocked(ctx); err != nil {
-		return appended, err
+		daemon.requestRuntimeReconcile("config sync", err)
+		return appended, newCommittedConfigMutationError("config sync", err)
 	}
 	if err := daemon.refreshLocalAdvertisement(); err != nil {
-		return appended, err
+		daemon.requestRuntimeReconcile("config sync", err)
+		return appended, newCommittedConfigMutationError("config sync", err)
 	}
-	if err := daemon.commitConfigSignerCertificates(usedSigners, true); err != nil {
-		return appended, err
+	if err := daemon.commitConfigSignerCertificatesAfterLogCommit(usedSigners); err != nil {
+		daemon.requestRuntimeReconcile("config sync", err)
+		return appended, newCommittedConfigMutationError("config sync", err)
 	}
-	_ = ctx.Err()
+	if commitErr != nil {
+		daemon.requestRuntimeReconcile("config sync durability", commitErr)
+		return appended, newCommittedConfigMutationError("config sync", commitErr)
+	}
 	return appended, nil
+}
+
+func (daemon *Daemon) commitConfigSignerCertificatesAfterLogCommit(signers map[core.SignerID]*x509.Certificate) error {
+	err := daemon.commitConfigSignerCertificates(signers, true)
+	if err == nil {
+		return nil
+	}
+	stageErr := daemon.commitConfigSignerCertificates(signers, false)
+	return errors.Join(err, wrapOperationError("stage config signer cache for persistence retry", stageErr))
 }
 
 func (daemon *Daemon) ensureConfigGenesisEvent(desired config.Desired) error {
@@ -1323,97 +1461,74 @@ func (daemon *Daemon) commitConfigSignerCertificates(signers map[core.SignerID]*
 	if len(signers) == 0 {
 		return nil
 	}
-	changed := false
-	daemon.signerMu.Lock()
-	if daemon.signerCerts == nil {
-		daemon.signerCerts = make(map[core.SignerID]*x509.Certificate)
-	}
+	validated := make(map[core.SignerID]*x509.Certificate, len(signers))
 	for signerID, cert := range signers {
 		if cert == nil {
 			continue
 		}
 		expected, err := daemon.configSignerIDForCertificate(cert)
 		if err != nil {
-			daemon.signerMu.Unlock()
 			return err
 		}
 		if expected != signerID {
-			daemon.signerMu.Unlock()
 			return fmt.Errorf("signer certificate id is %q, used as %q", expected, signerID)
 		}
-		existing := daemon.signerCerts[signerID]
+		validated[signerID] = cert
+	}
+
+	daemon.signerMu.Lock()
+	defer daemon.signerMu.Unlock()
+	next := make(map[core.SignerID]*x509.Certificate, len(daemon.signerCerts)+len(validated))
+	for signerID, cert := range daemon.signerCerts {
+		next[signerID] = cert
+	}
+	changed := false
+	for signerID, cert := range validated {
+		existing := next[signerID]
 		if existing == nil || !bytes.Equal(existing.Raw, cert.Raw) {
-			daemon.signerCerts[signerID] = cert
+			next[signerID] = cert
 			changed = true
 		}
 	}
-	daemon.signerMu.Unlock()
 	if persist && changed {
-		return daemon.persistConfigSignerCache()
-	}
-	return nil
-}
-
-func (daemon *Daemon) registerConfigSignerCertificates(signers []configSignerCertificate, persist bool) error {
-	for _, signer := range signers {
-		if len(signer.Certificate) == 0 {
-			return fmt.Errorf("signer certificate %q is empty", signer.SignerID)
-		}
-		cert, err := x509.ParseCertificate(signer.Certificate)
-		if err != nil {
-			return fmt.Errorf("parse signer certificate %q: %w", signer.SignerID, err)
-		}
-		signerID, err := daemon.registerConfigSignerCertificate(cert, persist)
-		if err != nil {
+		if err := daemon.persistConfigSignerCacheState(next); err != nil {
+			if stateFileCommitSucceeded(err) {
+				daemon.signerCerts = next
+			}
 			return err
 		}
-		if signer.SignerID != "" && signer.SignerID != signerID {
-			return fmt.Errorf("signer certificate id is %q, envelope listed %q", signerID, signer.SignerID)
-		}
 	}
+	daemon.signerCerts = next
 	return nil
 }
 
 func (daemon *Daemon) registerConfigSignerCertificate(cert *x509.Certificate, persist bool) (core.SignerID, error) {
 	if cert == nil {
-		return "", fmt.Errorf("signer certificate is required")
+		return "", newConfigMutationRequestError(fmt.Errorf("signer certificate is required"))
 	}
 	meta := pki.ParseMetadata(cert)
 	if meta.Role != pki.RoleIX {
-		return "", fmt.Errorf("signer certificate role is %q, want %q", meta.Role, pki.RoleIX)
+		return "", newConfigMutationRequestError(fmt.Errorf("signer certificate role is %q, want %q", meta.Role, pki.RoleIX))
 	}
 	if meta.Domain != string(daemon.desired.Domain.ID) {
-		return "", fmt.Errorf("signer certificate domain is %q, want %q", meta.Domain, daemon.desired.Domain.ID)
+		return "", newConfigMutationRequestError(fmt.Errorf("signer certificate domain is %q, want %q", meta.Domain, daemon.desired.Domain.ID))
 	}
 	if err := daemon.verifyCertificateNotRevoked(cert, "signer certificate"); err != nil {
-		return "", err
+		return "", newConfigMutationRequestError(err)
 	}
 	if strings.TrimSpace(meta.IX) == "" {
-		return "", fmt.Errorf("signer certificate ix is required")
+		return "", newConfigMutationRequestError(fmt.Errorf("signer certificate ix is required"))
 	}
 	roots, err := daemon.trustRootCertificates()
 	if err != nil {
 		return "", err
 	}
 	if err := pki.VerifyChain(cert, roots, nil); err != nil {
-		return "", err
+		return "", newConfigMutationRequestError(err)
 	}
 	signerID := signerIDForIX(core.IXID(meta.IX))
-	changed := false
-	daemon.signerMu.Lock()
-	if daemon.signerCerts == nil {
-		daemon.signerCerts = make(map[core.SignerID]*x509.Certificate)
-	}
-	existing := daemon.signerCerts[signerID]
-	if existing == nil || !bytes.Equal(existing.Raw, cert.Raw) {
-		daemon.signerCerts[signerID] = cert
-		changed = true
-	}
-	daemon.signerMu.Unlock()
-	if persist && changed {
-		if err := daemon.persistConfigSignerCache(); err != nil {
-			return "", err
-		}
+	if err := daemon.commitConfigSignerCertificates(map[core.SignerID]*x509.Certificate{signerID: cert}, persist); err != nil {
+		return "", err
 	}
 	return signerID, nil
 }
@@ -1518,26 +1633,30 @@ func (daemon *Daemon) loadConfigSignerCache() error {
 }
 
 func (daemon *Daemon) persistConfigSignerCache() error {
+	daemon.signerMu.Lock()
+	defer daemon.signerMu.Unlock()
+	return daemon.persistConfigSignerCacheState(daemon.signerCerts)
+}
+
+func (daemon *Daemon) persistConfigSignerCacheState(signers map[core.SignerID]*x509.Certificate) error {
 	path := daemon.configSignerCachePath()
 	if path == "" {
 		return nil
 	}
-	daemon.signerMu.RLock()
-	ids := make([]string, 0, len(daemon.signerCerts))
-	for signerID := range daemon.signerCerts {
+	ids := make([]string, 0, len(signers))
+	for signerID := range signers {
 		ids = append(ids, string(signerID))
 	}
 	sort.Strings(ids)
 	state := persistedConfigSigners{Version: 1, Signers: make([]configSignerCertificate, 0, len(ids))}
 	for _, rawID := range ids {
 		signerID := core.SignerID(rawID)
-		cert := daemon.signerCerts[signerID]
+		cert := signers[signerID]
 		if cert == nil {
 			continue
 		}
 		state.Signers = append(state.Signers, configSignerCertificate{SignerID: signerID, Certificate: cert.Raw})
 	}
-	daemon.signerMu.RUnlock()
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config signer cache dir: %w", err)

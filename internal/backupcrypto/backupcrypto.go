@@ -51,7 +51,11 @@ func WriteKeyPair(publicPath, identityPath string) (err error) {
 	}
 	defer func() {
 		if err != nil {
-			_ = os.Remove(identityPath)
+			if removeErr := os.Remove(identityPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("remove backup identity %q after public key failure: %w", identityPath, removeErr))
+			} else if syncErr := syncKeyDirectory(filepath.Dir(identityPath)); syncErr != nil {
+				err = errors.Join(err, fmt.Errorf("sync backup identity directory after cleanup: %w", syncErr))
+			}
 		}
 	}()
 	if err = writeKeyFile(publicPath, MarshalPublicKey(public), 0o644); err != nil {
@@ -171,12 +175,19 @@ func writeKeyFile(path string, payload []byte, mode os.FileMode) (err error) {
 		}
 		return fmt.Errorf("create key output %q: %w", path, err)
 	}
+	closed := false
 	defer func() {
-		if closeErr := file.Close(); err == nil && closeErr != nil {
-			err = fmt.Errorf("close key output %q: %w", path, closeErr)
+		if !closed {
+			if closeErr := file.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close key output %q: %w", path, closeErr))
+			}
 		}
 		if err != nil {
-			_ = os.Remove(path)
+			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("remove failed key output %q: %w", path, removeErr))
+			} else if syncErr := syncKeyDirectory(filepath.Dir(path)); syncErr != nil {
+				err = errors.Join(err, fmt.Errorf("sync key output directory after cleanup: %w", syncErr))
+			}
 		}
 	}()
 	if _, err = file.Write(payload); err != nil {
@@ -184,6 +195,14 @@ func writeKeyFile(path string, payload []byte, mode os.FileMode) (err error) {
 	}
 	if err = file.Sync(); err != nil {
 		return fmt.Errorf("sync key output %q: %w", path, err)
+	}
+	if err = file.Close(); err != nil {
+		closed = true
+		return fmt.Errorf("close key output %q: %w", path, err)
+	}
+	closed = true
+	if err = syncKeyDirectory(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("sync key output directory %q: %w", filepath.Dir(path), err)
 	}
 	return nil
 }

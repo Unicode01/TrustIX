@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -195,8 +196,10 @@ func (daemon *Daemon) startManagementVIPAPIServerLocked(target managementVIPTarg
 	if tlsEnabled {
 		tlsConf, err := daemon.managementServerTLSConfig()
 		if err != nil {
-			_ = listener.Close()
-			return fmt.Errorf("configure management VIP api TLS %q for %s: %w", listen, target.IXID, err)
+			return errors.Join(
+				fmt.Errorf("configure management VIP api TLS %q for %s: %w", listen, target.IXID, err),
+				wrapOperationError("close management VIP listener after TLS configuration failure", listener.Close()),
+			)
 		}
 		listener = tls.NewListener(listener, tlsConf)
 	}
@@ -231,7 +234,11 @@ func (daemon *Daemon) managementVIPProxyHandler(targetIX core.IXID) http.Handler
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		_ = r.Body.Close()
+		if err := r.Body.Close(); err != nil {
+			daemon.recordBackgroundError("management_vip_request_body_close", err)
+		} else {
+			daemon.clearBackgroundError("management_vip_request_body_close")
+		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		if err := daemon.proxyManagementToIX(w, r, targetIX, targetURI, body); err != nil {
 			writeError(w, http.StatusBadGateway, err)

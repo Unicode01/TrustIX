@@ -76,6 +76,15 @@ const (
 	TrustIXDatapathRouteFlagReject      = uint32(4)
 )
 
+func closeIOCTLFile(file *os.File, path string, resultErr *error) {
+	if file == nil || resultErr == nil {
+		return
+	}
+	if err := file.Close(); err != nil {
+		*resultErr = errors.Join(*resultErr, fmt.Errorf("close ioctl device %q: %w", path, err))
+	}
+}
+
 type AEADBatchOp struct {
 	Nonce []byte
 	In    []byte
@@ -756,7 +765,7 @@ func AEADDeviceAvailable(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func ProbeDatapath(path string) (DatapathQuery, error) {
+func ProbeDatapath(path string) (query DatapathQuery, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathHelpersDevicePath
 	}
@@ -764,7 +773,7 @@ func ProbeDatapath(path string) (DatapathQuery, error) {
 	if err != nil {
 		return DatapathQuery{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	req := TrustIXDatapathHelpersIOCQuery{Version: TrustIXDatapathHelpersIOCVersion}
 	if err := ioctl(uintptr(file.Fd()), TrustIXDatapathHelpersIOCQueryCmd(), uintptr(unsafe.Pointer(&req))); err != nil {
 		return DatapathQuery{}, err
@@ -772,7 +781,7 @@ func ProbeDatapath(path string) (DatapathQuery, error) {
 	if req.Result != 0 {
 		return DatapathQuery{}, fmt.Errorf("trustix datapath query returned %d", req.Result)
 	}
-	query := DatapathQuery{
+	query = DatapathQuery{
 		ModuleABIVersion:   req.ModuleABIVersion,
 		DatapathABIVersion: req.DatapathABIVersion,
 		Features:           moduleFeatureMaskToNames(req.Features),
@@ -788,7 +797,7 @@ func ProbeDatapath(path string) (DatapathQuery, error) {
 	return query, nil
 }
 
-func RunDatapathSelftest(path string, requested uint64) (DatapathSelftest, error) {
+func RunDatapathSelftest(path string, requested uint64) (selftest DatapathSelftest, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathHelpersDevicePath
 	}
@@ -796,7 +805,7 @@ func RunDatapathSelftest(path string, requested uint64) (DatapathSelftest, error
 	if err != nil {
 		return DatapathSelftest{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	req := TrustIXDatapathHelpersIOCSelftest{
 		Version:   TrustIXDatapathHelpersIOCVersion,
 		Requested: requested,
@@ -819,7 +828,7 @@ func RunDatapathSelftest(path string, requested uint64) (DatapathSelftest, error
 	}, nil
 }
 
-func DatapathApplyState(path string, record DatapathStateRecord) (DatapathStateRecord, error) {
+func DatapathApplyState(path string, record DatapathStateRecord) (appliedRecord DatapathStateRecord, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -827,7 +836,7 @@ func DatapathApplyState(path string, record DatapathStateRecord) (DatapathStateR
 	if err != nil {
 		return DatapathStateRecord{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	req := TrustIXDatapathIOCState{
 		Version: TrustIXDatapathHelpersIOCVersion,
 		Kind:    record.Kind,
@@ -852,7 +861,7 @@ func DatapathApplyState(path string, record DatapathStateRecord) (DatapathStateR
 	return out, nil
 }
 
-func DatapathApplyStateBatch(path string, records []DatapathStateRecord) (uint32, []DatapathStateRecord, error) {
+func DatapathApplyStateBatch(path string, records []DatapathStateRecord) (applied uint32, output []DatapathStateRecord, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -866,7 +875,7 @@ func DatapathApplyStateBatch(path string, records []DatapathStateRecord) (uint32
 	if err != nil {
 		return 0, nil, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	return datapathApplyStateBatchFD(uintptr(file.Fd()), records)
 }
 
@@ -914,7 +923,7 @@ func datapathApplyStateBatchFD(fd uintptr, records []DatapathStateRecord) (uint3
 	return req.Applied, out, nil
 }
 
-func DatapathStateStatsQuery(path string) (DatapathStateStats, error) {
+func DatapathStateStatsQuery(path string) (stats DatapathStateStats, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -922,7 +931,7 @@ func DatapathStateStatsQuery(path string) (DatapathStateStats, error) {
 	if err != nil {
 		return DatapathStateStats{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	req := TrustIXDatapathIOCStateStats{Version: TrustIXDatapathHelpersIOCVersion}
 	if err := ioctl(uintptr(file.Fd()), TrustIXDatapathIOCStateStatsCmd(), uintptr(unsafe.Pointer(&req))); err != nil {
 		return DatapathStateStats{}, err
@@ -948,7 +957,7 @@ func DatapathStateStatsQuery(path string) (DatapathStateStats, error) {
 	}, nil
 }
 
-func DatapathClassify(path string, request DatapathClassifyRequest) (DatapathClassifyResult, error) {
+func DatapathClassify(path string, request DatapathClassifyRequest) (result DatapathClassifyResult, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -956,7 +965,7 @@ func DatapathClassify(path string, request DatapathClassifyRequest) (DatapathCla
 	if err != nil {
 		return DatapathClassifyResult{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	req := TrustIXDatapathIOCClassify{
 		Version:         TrustIXDatapathHelpersIOCVersion,
 		SourceIPv4:      request.SourceIPv4,
@@ -980,7 +989,7 @@ func DatapathClassify(path string, request DatapathClassifyRequest) (DatapathCla
 	return out, nil
 }
 
-func DatapathPacketClassify(path string, packet []byte) (DatapathPacketClassifyResult, error) {
+func DatapathPacketClassify(path string, packet []byte) (result DatapathPacketClassifyResult, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -994,7 +1003,7 @@ func DatapathPacketClassify(path string, packet []byte) (DatapathPacketClassifyR
 	if err != nil {
 		return DatapathPacketClassifyResult{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	req := TrustIXDatapathIOCPacketClassify{
 		Version:   TrustIXDatapathHelpersIOCVersion,
 		PacketLen: uint32(len(packet)),
@@ -1026,7 +1035,7 @@ func DatapathPacketClassify(path string, packet []byte) (DatapathPacketClassifyR
 	return out, nil
 }
 
-func DatapathPacketStatsQuery(path string) (DatapathPacketStats, error) {
+func DatapathPacketStatsQuery(path string) (stats DatapathPacketStats, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -1034,7 +1043,7 @@ func DatapathPacketStatsQuery(path string) (DatapathPacketStats, error) {
 	if err != nil {
 		return DatapathPacketStats{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	req := TrustIXDatapathIOCPacketStats{Version: TrustIXDatapathHelpersIOCVersion}
 	if err := ioctl(uintptr(file.Fd()), TrustIXDatapathIOCPacketStatsCmd(), uintptr(unsafe.Pointer(&req))); err != nil {
 		return DatapathPacketStats{}, err
@@ -1055,7 +1064,7 @@ func DatapathPacketStatsQuery(path string) (DatapathPacketStats, error) {
 	}, nil
 }
 
-func DatapathHook(path string, request DatapathHookRequest) (DatapathHookStatus, error) {
+func DatapathHook(path string, request DatapathHookRequest) (status DatapathHookStatus, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -1063,7 +1072,7 @@ func DatapathHook(path string, request DatapathHookRequest) (DatapathHookStatus,
 	if err != nil {
 		return DatapathHookStatus{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	return datapathHookFD(uintptr(file.Fd()), request)
 }
 
@@ -1166,7 +1175,7 @@ func (device *DatapathDevice) HookDetach() (DatapathHookStatus, error) {
 	return device.Hook(DatapathHookRequest{Op: TrustIXDatapathHookOpDetach})
 }
 
-func DatapathTIXTEncap(path string, inner []byte, sequence uint64) (DatapathTIXTEncapResult, error) {
+func DatapathTIXTEncap(path string, inner []byte, sequence uint64) (result DatapathTIXTEncapResult, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -1180,7 +1189,7 @@ func DatapathTIXTEncap(path string, inner []byte, sequence uint64) (DatapathTIXT
 	if err != nil {
 		return DatapathTIXTEncapResult{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	wire := make([]byte, 40+len(inner))
 	req := TrustIXDatapathIOCTIXTEncap{
 		Version:  TrustIXDatapathHelpersIOCVersion,
@@ -1222,7 +1231,7 @@ func DatapathTIXTEncap(path string, inner []byte, sequence uint64) (DatapathTIXT
 	}, nil
 }
 
-func DatapathTIXTDecap(path string, wire []byte) (DatapathTIXTDecapResult, error) {
+func DatapathTIXTDecap(path string, wire []byte) (result DatapathTIXTDecapResult, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -1236,7 +1245,7 @@ func DatapathTIXTDecap(path string, wire []byte) (DatapathTIXTDecapResult, error
 	if err != nil {
 		return DatapathTIXTDecapResult{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	inner := make([]byte, TrustIXDatapathPacketMaxLen)
 	req := TrustIXDatapathIOCTIXTDecap{
 		Version: TrustIXDatapathHelpersIOCVersion,
@@ -1279,7 +1288,7 @@ func DatapathTIXTDecap(path string, wire []byte) (DatapathTIXTDecapResult, error
 	}, nil
 }
 
-func DatapathOuterBuild(path string, inner []byte, sequence uint64) (DatapathOuterBuildResult, error) {
+func DatapathOuterBuild(path string, inner []byte, sequence uint64) (result DatapathOuterBuildResult, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -1293,7 +1302,7 @@ func DatapathOuterBuild(path string, inner []byte, sequence uint64) (DatapathOut
 	if err != nil {
 		return DatapathOuterBuildResult{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	outer := make([]byte, 20+20+40+len(inner))
 	req := TrustIXDatapathIOCOuterBuild{
 		Version:  TrustIXDatapathHelpersIOCVersion,
@@ -1347,7 +1356,7 @@ func DatapathOuterBuild(path string, inner []byte, sequence uint64) (DatapathOut
 	}, nil
 }
 
-func DatapathOuterParse(path string, outer []byte) (DatapathOuterParseResult, error) {
+func DatapathOuterParse(path string, outer []byte) (result DatapathOuterParseResult, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -1361,7 +1370,7 @@ func DatapathOuterParse(path string, outer []byte) (DatapathOuterParseResult, er
 	if err != nil {
 		return DatapathOuterParseResult{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	inner := make([]byte, TrustIXDatapathPacketMaxLen)
 	req := TrustIXDatapathIOCOuterParse{
 		Version:  TrustIXDatapathHelpersIOCVersion,
@@ -1377,7 +1386,7 @@ func DatapathOuterParse(path string, outer []byte) (DatapathOuterParseResult, er
 	}
 	runtime.KeepAlive(outer)
 	runtime.KeepAlive(inner)
-	result := DatapathOuterParseResult{
+	result = DatapathOuterParseResult{
 		WrittenLen:    req.WrittenLen,
 		Flags:         req.Flags,
 		FlowID:        req.FlowID,
@@ -1456,7 +1465,7 @@ func (device *DatapathDevice) rxStage(op uint32, out []byte) (DatapathRXStageRes
 	return datapathRXStageFD(uintptr(device.file.Fd()), op, out)
 }
 
-func datapathRXStage(path string, op uint32, out []byte) (DatapathRXStageResult, error) {
+func datapathRXStage(path string, op uint32, out []byte) (result DatapathRXStageResult, resultErr error) {
 	if path == "" {
 		path = TrustIXDatapathDevicePath
 	}
@@ -1464,7 +1473,7 @@ func datapathRXStage(path string, op uint32, out []byte) (DatapathRXStageResult,
 	if err != nil {
 		return DatapathRXStageResult{}, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	return datapathRXStageFD(uintptr(file.Fd()), op, out)
 }
 
@@ -1527,7 +1536,7 @@ func AEADDirectSetKey(path string, slot uint32, key []byte, open bool) error {
 	return err
 }
 
-func AEADDirectSetKeyAlloc(path string, slot uint32, key []byte, open bool) (uint32, error) {
+func AEADDirectSetKeyAlloc(path string, slot uint32, key []byte, open bool) (allocatedSlot uint32, resultErr error) {
 	if err := validateAEADKey(key); err != nil {
 		return 0, err
 	}
@@ -1541,7 +1550,7 @@ func AEADDirectSetKeyAlloc(path string, slot uint32, key []byte, open bool) (uin
 	if err != nil {
 		return 0, err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	var flags uint32
 	if open {
 		flags = trustIXAEADDirectFlagOpen
@@ -1564,7 +1573,7 @@ func AEADDirectSetKeyAlloc(path string, slot uint32, key []byte, open bool) (uin
 	return req.Slot, nil
 }
 
-func AEADDirectClearKey(path string, slot uint32) error {
+func AEADDirectClearKey(path string, slot uint32) (resultErr error) {
 	if slot >= TrustIXAEADDirectMaxSlots {
 		return fmt.Errorf("trustix AEAD direct slot %d exceeds max %d", slot, TrustIXAEADDirectMaxSlots)
 	}
@@ -1575,7 +1584,7 @@ func AEADDirectClearKey(path string, slot uint32) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	req := trustIXAEADIOCDirectKey{
 		Version: trustIXAEADIOCVersion,
 		Slot:    slot,
@@ -2096,7 +2105,7 @@ func (device *AEADDevice) batch(flags uint32, ops []AEADBatchOp) error {
 	return aeadBatchFD(uintptr(device.file.Fd()), flags, nil, ops)
 }
 
-func aeadBatch(path string, flags uint32, key []byte, ops []AEADBatchOp) error {
+func aeadBatch(path string, flags uint32, key []byte, ops []AEADBatchOp) (resultErr error) {
 	if path == "" {
 		path = TrustIXAEADDevicePath
 	}
@@ -2110,7 +2119,7 @@ func aeadBatch(path string, flags uint32, key []byte, ops []AEADBatchOp) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer closeIOCTLFile(file, path, &resultErr)
 	return aeadBatchFD(uintptr(file.Fd()), flags, key, ops)
 }
 

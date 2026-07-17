@@ -260,10 +260,13 @@ remote_uninstall() {
   for arg in "${remote_args[@]}"; do
     command+=" $(shell_quote "$arg")"
   done
-  local remote_status=0
-  "${ssh_cmd[@]}" "$target" "$command" || remote_status=$?
-  "${ssh_cmd[@]}" "$target" "rm -rf $(shell_quote "$stage")" >/dev/null 2>&1 || true
-  return "$remote_status"
+	local remote_status=0
+	"${ssh_cmd[@]}" "$target" "$command" || remote_status=$?
+	if ! "${ssh_cmd[@]}" "$target" "rm -rf $(shell_quote "$stage")"; then
+		log "ERROR: failed to remove remote staging directory ${target}:${stage}"
+		[[ "$remote_status" != "0" ]] || remote_status=1
+	fi
+	return "$remote_status"
 }
 
 detect_service_manager() {
@@ -417,36 +420,87 @@ load_instance_env() {
   fi
 }
 
+systemd_unit_available() {
+	local unit="$1" load_state
+	if ! load_state="$(run_root systemctl show "$unit" --property=LoadState --value)"; then
+		log "ERROR: failed to query systemd unit ${unit}"
+		return 2
+	fi
+	case "$load_state" in
+		loaded|masked) return 0 ;;
+		not-found|'') return 1 ;;
+		*)
+			log "ERROR: unexpected LoadState=${load_state} for ${unit}"
+			return 2
+			;;
+	esac
+}
+
 stop_systemd_instance() {
-  local instance="$1"
-  if command -v systemctl >/dev/null 2>&1; then
-    run_root systemctl stop "trustixd@${instance}.service" >/dev/null 2>&1 || true
-    run_root systemctl disable "trustixd@${instance}.service" >/dev/null 2>&1 || true
-    run_root systemctl reset-failed "trustixd@${instance}.service" >/dev/null 2>&1 || true
-  fi
+	local instance="$1"
+	local unit="trustixd@${instance}.service" available_status
+	if ! command -v systemctl >/dev/null 2>&1; then
+		log "ERROR: systemctl is required to stop systemd instance ${instance}"
+		return 1
+	fi
+	if systemd_unit_available "$unit"; then
+		if ! run_root systemctl stop "$unit"; then
+			log "ERROR: failed to stop ${unit}"
+			return 1
+		fi
+		if ! run_root systemctl disable "$unit"; then
+			log "ERROR: failed to disable ${unit}"
+			return 1
+		fi
+		if ! run_root systemctl reset-failed "$unit"; then
+			log "WARNING: failed to reset failed state for ${unit}"
+		fi
+	else
+		available_status=$?
+		[[ "$available_status" == "1" ]] || return "$available_status"
+		log "systemd unit ${unit} is not installed; stop skipped"
+	fi
 }
 
 stop_openwrt_instance() {
-  local instance="$1"
-  if [[ -x "${initdir}/trustix" ]]; then
-    run_root "${initdir}/trustix" stop "$instance" >/dev/null 2>&1 || true
-  fi
+	local instance="$1"
+	if [[ -x "${initdir}/trustix" ]]; then
+		if ! run_root "${initdir}/trustix" stop "$instance"; then
+			log "ERROR: failed to stop OpenWrt instance ${instance}"
+			return 1
+		fi
+	fi
 }
 
 disable_instance_backup_schedule() {
   local instance="$1"
   case "$service_manager" in
-    systemd)
-      if command -v systemctl >/dev/null 2>&1; then
-        run_root systemctl disable --now "trustix-backup@${instance}.timer" >/dev/null 2>&1 || true
-      fi
+		systemd)
+			if ! command -v systemctl >/dev/null 2>&1; then
+				log "ERROR: systemctl is required to remove backup schedule for ${instance}"
+				return 1
+			fi
+			local timer="trustix-backup@${instance}.timer" available_status
+			if systemd_unit_available "$timer"; then
+				if ! run_root systemctl disable --now "$timer"; then
+					log "ERROR: failed to disable backup timer for ${instance}"
+					return 1
+				fi
+			else
+				available_status=$?
+				[[ "$available_status" == "1" ]] || return "$available_status"
+				log "systemd unit ${timer} is not installed; schedule removal skipped"
+			fi
       ;;
     openwrt)
       if [[ -x "${libexecdir}/trustix-backup.sh" && -f "${sysconfdir}/${instance}.backup.env" ]]; then
-        run_root "${libexecdir}/trustix-backup.sh" remove-schedule \
-          --instance "$instance" \
-          --instance-env "${sysconfdir}/${instance}.env" \
-          --backup-env "${sysconfdir}/${instance}.backup.env" >/dev/null 2>&1 || true
+				if ! run_root "${libexecdir}/trustix-backup.sh" remove-schedule \
+					--instance "$instance" \
+					--instance-env "${sysconfdir}/${instance}.env" \
+					--backup-env "${sysconfdir}/${instance}.backup.env"; then
+					log "ERROR: failed to remove backup schedule for ${instance}"
+					return 1
+				fi
       fi
       ;;
   esac
@@ -458,17 +512,21 @@ cleanup_instance_dataplane() {
   if [[ "$cleanup_dataplane" != "1" ]]; then
     return
   fi
-  if [[ ! -x "${TRUSTIX_BIN:-}" || ! -f "${TRUSTIX_CONFIG:-}" ]]; then
-    return
+	if [[ ! -x "${TRUSTIX_BIN:-}" || ! -f "${TRUSTIX_CONFIG:-}" ]]; then
+		log "ERROR: cannot clean dataplane for ${instance}: binary=${TRUSTIX_BIN:-missing} config=${TRUSTIX_CONFIG:-missing}"
+		return 1
   fi
   log "cleanup dataplane for ${instance}"
-  run_root "$TRUSTIX_BIN" \
-    -config "$TRUSTIX_CONFIG" \
+	if ! run_root "$TRUSTIX_BIN" \
+		-config "$TRUSTIX_CONFIG" \
     -data-dir "$TRUSTIX_DATA_DIR" \
     -api "$TRUSTIX_API_ADDR" \
     -peer-api "$TRUSTIX_PEER_API_ADDR" \
-    -dataplane "$TRUSTIX_DATAPLANE" \
-    -cleanup-dataplane >/dev/null 2>&1 || true
+		-dataplane "$TRUSTIX_DATAPLANE" \
+		-cleanup-dataplane; then
+		log "ERROR: dataplane cleanup failed for ${instance}"
+		return 1
+	fi
 }
 
 path_under() {
@@ -547,17 +605,18 @@ remove_instance_files() {
 remove_shared_service() {
   case "$service_manager" in
     systemd)
+		command -v systemctl >/dev/null 2>&1 || die "systemctl is required to remove systemd service files"
       run_root rm -f \
         "${unitdir}/trustixd@.service" \
         "${unitdir}/trustix-backup@.service" \
         "${unitdir}/trustix-backup@.timer"
-      if command -v systemctl >/dev/null 2>&1; then
-        run_root systemctl daemon-reload >/dev/null 2>&1 || true
+		if command -v systemctl >/dev/null 2>&1; then
+			run_root systemctl daemon-reload
       fi
       ;;
     openwrt)
-      if [[ -x "${initdir}/trustix" ]]; then
-        run_root "${initdir}/trustix" disable >/dev/null 2>&1 || true
+		if [[ -x "${initdir}/trustix" ]]; then
+			run_root "${initdir}/trustix" disable
       fi
       run_root rm -f "${initdir}/trustix"
       ;;
@@ -592,9 +651,14 @@ unload_shared_kernel_modules() {
   if [[ -z "$rmmod_cmd" && -x /sbin/rmmod ]]; then
     rmmod_cmd="/sbin/rmmod"
   fi
-  if [[ -z "$rmmod_cmd" ]]; then
-    log "skip kernel module unload: rmmod not found"
-    return 0
+	if [[ -z "$rmmod_cmd" ]]; then
+		for name in trustix_datapath trustix_datapath_helpers trustix_crypto; do
+			if module_loaded "$name"; then
+				log "ERROR: cannot unload loaded kernel module ${name}: rmmod not found"
+				return 1
+			fi
+		done
+		return 0
   fi
   local name
   for name in trustix_datapath trustix_datapath_helpers trustix_crypto; do
@@ -607,8 +671,11 @@ unload_shared_kernel_modules() {
     else
       failed_modules+=("$name")
       log "kernel module still loaded or in use: ${name}"
-    fi
-  done
+		fi
+	done
+	if ((${#failed_modules[@]} > 0)); then
+		return 1
+	fi
 }
 
 local_uninstall() {

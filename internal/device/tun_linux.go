@@ -3,6 +3,7 @@
 package device
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -39,20 +40,30 @@ func OpenInterface(cfg InterfaceConfig) (Interface, error) {
 	copy(ifr[:unix.IFNAMSIZ], []byte(cfg.Name))
 	*(*uint16)(unsafe.Pointer(&ifr[unix.IFNAMSIZ])) = unix.IFF_TUN | unix.IFF_NO_PI
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&ifr[0]))); errno != 0 {
-		_ = unix.Close(fd)
-		return nil, fmt.Errorf("create tun %q: %w", cfg.Name, errno)
+		return nil, errors.Join(
+			fmt.Errorf("create tun %q: %w", cfg.Name, errno),
+			wrapTUNCleanupError("close tun fd", unix.Close(fd)),
+		)
 	}
 	file := os.NewFile(uintptr(fd), cfg.Name)
 	if file == nil {
-		_ = unix.Close(fd)
-		return nil, fmt.Errorf("create tun file for %q", cfg.Name)
+		return nil, errors.Join(
+			fmt.Errorf("create tun file for %q", cfg.Name),
+			wrapTUNCleanupError("close tun fd", unix.Close(fd)),
+		)
 	}
 	iface := &tunInterface{file: file, name: cfg.Name, mtu: cfg.MTU}
 	if err := iface.configureLink(cfg.MTU); err != nil {
-		_ = file.Close()
-		return nil, err
+		return nil, errors.Join(err, wrapTUNCleanupError("close tun file", file.Close()))
 	}
 	return iface, nil
+}
+
+func wrapTUNCleanupError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (iface *tunInterface) Name() string {

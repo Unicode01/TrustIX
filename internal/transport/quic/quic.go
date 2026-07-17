@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -66,7 +67,9 @@ func (transportImpl *Transport) Probe(ctx context.Context, peer transport.Peer) 
 		if err != nil {
 			return transport.ProbeResult{Healthy: false, Error: err.Error(), CheckedAt: time.Now()}
 		}
-		_ = conn.Close()
+		if err := conn.Close(); err != nil {
+			return transport.ProbeResult{Healthy: false, Error: fmt.Sprintf("close quic probe connection: %v", err), CheckedAt: time.Now()}
+		}
 		return transport.ProbeResult{Healthy: true, RTT: time.Since(start), CheckedAt: time.Now()}
 	}
 	return transport.ProbeResult{Healthy: false, Error: "no quic endpoint", CheckedAt: time.Now()}
@@ -87,18 +90,20 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		}
 		str, err := conn.OpenStreamSync(ctx)
 		if err != nil {
-			_ = conn.CloseWithError(0, "")
+			closeErr := quicCleanupError("close quic connection", conn.CloseWithError(0, ""))
+			var packetCloseErr error
 			if packetConn != nil {
-				_ = packetConn.Close()
+				packetCloseErr = quicCleanupError("close quic packet connection", packetConn.Close())
 			}
-			return nil, err
+			return nil, errors.Join(err, closeErr, packetCloseErr)
 		}
 		if err := writeFull(str, []byte{streamPreface}); err != nil {
-			_ = conn.CloseWithError(0, "")
+			closeErr := quicCleanupError("close quic connection", conn.CloseWithError(0, ""))
+			var packetCloseErr error
 			if packetConn != nil {
-				_ = packetConn.Close()
+				packetCloseErr = quicCleanupError("close quic packet connection", packetConn.Close())
 			}
-			return nil, err
+			return nil, errors.Join(err, closeErr, packetCloseErr)
 		}
 		return newSession(conn, str, packetConn), nil
 	}
@@ -121,9 +126,11 @@ func dialQUIC(ctx context.Context, endpoint transport.Endpoint, tlsConf *tls.Con
 	quicTransport := &quicgo.Transport{Conn: packetConn}
 	conn, err := quicTransport.Dial(ctx, remote, tlsConf, quicConfig())
 	if err != nil {
-		_ = quicTransport.Close()
-		_ = packetConn.Close()
-		return nil, nil, err
+		return nil, nil, errors.Join(
+			err,
+			quicCleanupError("close quic transport", quicTransport.Close()),
+			quicCleanupError("close quic packet connection", packetConn.Close()),
+		)
 	}
 	return conn, packetConn, nil
 }
@@ -165,17 +172,17 @@ func (listener *listener) Accept(ctx context.Context) (transport.Session, error)
 	}
 	str, err := conn.AcceptStream(ctx)
 	if err != nil {
-		_ = conn.CloseWithError(0, "")
-		return nil, err
+		return nil, errors.Join(err, quicCleanupError("close accepted quic connection", conn.CloseWithError(0, "")))
 	}
 	var preface [1]byte
 	if _, err := io.ReadFull(str, preface[:]); err != nil {
-		_ = conn.CloseWithError(0, "")
-		return nil, err
+		return nil, errors.Join(err, quicCleanupError("close accepted quic connection", conn.CloseWithError(0, "")))
 	}
 	if preface[0] != streamPreface {
-		_ = conn.CloseWithError(0, "")
-		return nil, fmt.Errorf("invalid quic stream preface")
+		return nil, errors.Join(
+			fmt.Errorf("invalid quic stream preface"),
+			quicCleanupError("close accepted quic connection", conn.CloseWithError(0, "")),
+		)
 	}
 	return newSession(conn, str, nil), nil
 }
@@ -191,6 +198,7 @@ type session struct {
 	reader          *bufio.Reader
 	writeMu         sync.Mutex
 	closeOnce       sync.Once
+	closeErr        error
 	sendBatchArena  []byte
 	recvBatch       [][]byte
 	recvArena       []byte
@@ -465,22 +473,30 @@ func (session *session) appendBorrowedPayload(size int) ([]byte, error) {
 }
 
 func (session *session) Close() error {
-	var err error
 	session.closeOnce.Do(func() {
-		if closeErr := session.stream.Close(); closeErr != nil {
-			err = closeErr
+		var errs []error
+		if err := session.stream.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close quic stream: %w", err))
 		}
 		session.stream.CancelRead(0)
-		if closeErr := session.conn.CloseWithError(0, ""); err == nil && closeErr != nil {
-			err = closeErr
+		if err := session.conn.CloseWithError(0, ""); err != nil {
+			errs = append(errs, fmt.Errorf("close quic connection: %w", err))
 		}
 		if session.packetConn != nil {
-			if closeErr := session.packetConn.Close(); err == nil && closeErr != nil {
-				err = closeErr
+			if err := session.packetConn.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close quic packet connection: %w", err))
 			}
 		}
+		session.closeErr = errors.Join(errs...)
 	})
-	return err
+	return session.closeErr
+}
+
+func quicCleanupError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (session *session) Stats() transport.TransportStats {

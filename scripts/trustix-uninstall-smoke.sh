@@ -43,7 +43,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 if [[ "$cleanup" == "1" ]]; then
-  printf '%s\n' "$config" >>"${TRUSTIX_FAKE_UNINSTALL_ROOT:?}/cleanup.log"
+	if [[ "${TRUSTIX_FAKE_FAIL_CLEANUP:-0}" == "1" ]]; then
+		echo "injected cleanup failure" >&2
+		exit 42
+	fi
+	printf '%s\n' "$config" >>"${TRUSTIX_FAKE_UNINSTALL_ROOT:?}/cleanup.log"
 fi
 EOF
 chmod 0755 "$root/bin/trustixd"
@@ -63,6 +67,12 @@ cat >"$root/fake-bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '%s\n' "$*" >>"${TRUSTIX_FAKE_UNINSTALL_ROOT:?}/systemctl.log"
+if [[ "${1:-}" == "show" ]]; then
+	case "${2:-}" in
+		trustix-backup@missing.timer) printf 'not-found\n' ;;
+		*) printf 'loaded\n' ;;
+	esac
+fi
 EOF
 chmod 0755 "$root/fake-bin/systemctl"
 
@@ -120,6 +130,15 @@ grep -q 'managed by active-standby HA' "$root/guard.err" || die "HA guard reject
 [[ -f "$root/etc/trustix/ix-a.env" ]] || die "HA guard removed the instance env"
 [[ ! -e "$root/systemctl.log" ]] || die "HA guard touched systemd before rejecting uninstall"
 
+log "dataplane cleanup failure aborts before removing instance files"
+if TRUSTIX_FAKE_FAIL_CLEANUP=1 run_uninstall --ha-offline --purge-config --keep-binaries --keep-service \
+	>"$root/cleanup-failure.out" 2>"$root/cleanup-failure.err"; then
+	die "uninstall succeeded despite dataplane cleanup failure"
+fi
+grep -q 'dataplane cleanup failed' "$root/cleanup-failure.err" || die "cleanup failure was not explained"
+[[ -f "$root/etc/trustix/ix-a.env" ]] || die "cleanup failure removed the instance env"
+[[ -f "$root/etc/trustix/ix-a.yaml" ]] || die "cleanup failure removed the instance config"
+
 log "sidecars are not instances and purge removes their schedules and files"
 run_uninstall --ha-offline --purge-config --keep-binaries --keep-service --json \
   >"$root/purge.out" 2>"$root/purge.err"
@@ -136,6 +155,12 @@ for path in \
 done
 [[ -x "$root/bin/trustixd" ]] || die "selective purge removed shared binaries"
 [[ -f "$root/etc/systemd/trustixd@.service" ]] || die "selective purge removed shared units"
+
+log "missing systemd timer is treated as already removed"
+write_instance missing
+run_uninstall --purge-config --keep-binaries --keep-service \
+	>"$root/missing.out" 2>"$root/missing.err"
+grep -q 'not installed; schedule removal skipped' "$root/missing.err" || die "missing timer was not reported as already removed"
 
 log "shared removal deletes runtime binaries, helpers, units, and instance data"
 : >"$root/systemctl.log"

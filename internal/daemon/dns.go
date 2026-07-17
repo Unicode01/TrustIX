@@ -86,8 +86,10 @@ func (daemon *Daemon) startDNSServerLocked(ctx context.Context) error {
 	tcpListen := dnsTCPListenAddress(cfg.Listen, udpConn.LocalAddr())
 	tcpListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", tcpListen)
 	if err != nil {
-		_ = udpConn.Close()
-		return fmt.Errorf("listen dns tcp %q: %w", tcpListen, err)
+		return errors.Join(
+			fmt.Errorf("listen dns tcp %q: %w", tcpListen, err),
+			wrapOperationError("close DNS UDP listener after TCP listen failure", udpConn.Close()),
+		)
 	}
 	runtime := &dnsServerRuntime{
 		Listen:    cfg.Listen,
@@ -327,7 +329,11 @@ func (handler *trustIXDNSHandler) ServeDNS(writer mdns.ResponseWriter, request *
 	if response == nil {
 		return
 	}
-	_ = writer.WriteMsg(response)
+	if err := writer.WriteMsg(response); err != nil {
+		handler.daemon.recordBackgroundError("dns_response_write", err)
+	} else {
+		handler.daemon.clearBackgroundError("dns_response_write")
+	}
 }
 
 func (handler *trustIXDNSHandler) handleDNSQuery(ctx context.Context, request *mdns.Msg, network string) *mdns.Msg {

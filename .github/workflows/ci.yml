@@ -60,9 +60,19 @@ jobs:
           go test "${pkgs[@]}" -count=1
           go test ./internal/dataplane/ebpf -run '^$' -count=1
 
+      - name: Go Error And Race Checks
+        run: |
+          go vet ./...
+          go run github.com/kisielk/errcheck@v1.9.0 -ignoretests ./...
+          go test -race -count=1 ./internal/configlog ./internal/daemon
+
       - name: Transactional Update Smoke
         run: |
           bash scripts/trustix-update-smoke.sh
+
+      - name: Transactional Deploy Smoke
+        run: |
+          bash scripts/trustix-deploy-smoke.sh
 
       - name: Uninstall Lifecycle Smoke
         run: |

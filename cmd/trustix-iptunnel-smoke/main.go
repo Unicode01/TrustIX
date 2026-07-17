@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -88,7 +89,7 @@ func newTransport(protocol transport.Protocol) (transport.Transport, error) {
 	}
 }
 
-func runListen(ctx context.Context, tr transport.Transport, protocol transport.Protocol, endpoint string, expect string, reply string, readyFile string, start time.Time) error {
+func runListen(ctx context.Context, tr transport.Transport, protocol transport.Protocol, endpoint string, expect string, reply string, readyFile string, start time.Time) (resultErr error) {
 	listener, err := tr.Listen(ctx, transport.Endpoint{
 		Name:      core.EndpointID("iptunnel-smoke"),
 		Mode:      transport.EndpointPassive,
@@ -99,7 +100,11 @@ func runListen(ctx context.Context, tr transport.Transport, protocol transport.P
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() {
+		if err := listener.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close listener: %w", err))
+		}
+	}()
 	if readyFile != "" {
 		if err := os.WriteFile(readyFile, []byte("ready\n"), 0o644); err != nil {
 			return fmt.Errorf("write ready file: %w", err)
@@ -109,7 +114,11 @@ func runListen(ctx context.Context, tr transport.Transport, protocol transport.P
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer func() {
+		if err := session.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close accepted session: %w", err))
+		}
+	}()
 	packet, err := session.RecvPacket()
 	if err != nil {
 		return err
@@ -132,7 +141,7 @@ func runListen(ctx context.Context, tr transport.Transport, protocol transport.P
 	})
 }
 
-func runDial(ctx context.Context, tr transport.Transport, protocol transport.Protocol, endpoint string, message string, expectReply string, start time.Time) error {
+func runDial(ctx context.Context, tr transport.Transport, protocol transport.Protocol, endpoint string, message string, expectReply string, start time.Time) (resultErr error) {
 	session, err := tr.Dial(ctx, transport.Peer{
 		ID:       core.IXID("iptunnel-smoke-peer"),
 		DomainID: core.DomainID("smoke"),
@@ -147,7 +156,11 @@ func runDial(ctx context.Context, tr transport.Transport, protocol transport.Pro
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer func() {
+		if err := session.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close dialed session: %w", err))
+		}
+	}()
 	if err := session.SendPacket([]byte(message)); err != nil {
 		return err
 	}

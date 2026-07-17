@@ -1412,11 +1412,14 @@ func (manager *Manager) probeKernelCryptoAEADCreateLocked() {
 		return
 	}
 	manager.kernelCryptoAEADCreateSuccesses++
-	defer manager.kernelCryptoProvider.DeleteFlow(kernelCryptoSyntheticProbeFlowID)
 	manager.kernelCryptoAEADRoundTripAttempts++
-	if err := manager.kernelCryptoProvider.RoundTrip(probeKey); err != nil {
+	roundTripErr := manager.kernelCryptoProvider.RoundTrip(probeKey)
+	if err := manager.kernelCryptoProvider.DeleteFlow(kernelCryptoSyntheticProbeFlowID); err != nil {
+		manager.warnings = append(manager.warnings, "tix_tcp kernel AEAD-GCM probe cleanup failed: "+summarizeKernelCryptoProviderError(err))
+	}
+	if roundTripErr != nil {
 		manager.kernelCryptoAEADRoundTripErrors++
-		manager.warnings = append(manager.warnings, "tix_tcp kernel AEAD-GCM roundtrip unavailable: "+summarizeKernelCryptoProviderError(err))
+		manager.warnings = append(manager.warnings, "tix_tcp kernel AEAD-GCM roundtrip unavailable: "+summarizeKernelCryptoProviderError(roundTripErr))
 		return
 	}
 	manager.kernelCryptoAEADRoundTripSuccesses++
