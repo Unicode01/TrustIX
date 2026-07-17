@@ -224,10 +224,13 @@ func (manager *Manager) inspectLocked(module config.KernelModuleConfig, mode str
 		UnloadOnExit:    module.UnloadOnExit,
 	}
 	status.SHA256 = moduleSourceSHA256(source)
-	loaded, refCount, usedBy := procModuleStatus(manager.name)
+	loaded, refCount, usedBy, moduleStatusErr := procModuleStatus(manager.name)
 	status.Loaded = loaded
 	status.RefCount = refCount
 	status.UsedBy = usedBy
+	if moduleStatusErr != nil {
+		status.Reason = appendStatusReason(status.Reason, moduleStatusErr.Error())
+	}
 	if loadedSHA, ok := readModuleParamString(manager.name, moduleBuildSHAParam); ok {
 		status.LoadedSHA256 = loadedSHA
 	}
@@ -786,17 +789,23 @@ func normalizeModuleParameterValue(value string) string {
 	}
 }
 
-func procModuleStatus(name string) (bool, int, []string) {
+func procModuleStatus(name string) (bool, int, []string, error) {
 	payload, err := os.ReadFile("/proc/modules")
 	if err != nil {
-		return false, 0, nil
+		return false, 0, nil, fmt.Errorf("read /proc/modules: %w", err)
 	}
 	for _, line := range strings.Split(string(payload), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 3 || fields[0] != name {
 			continue
 		}
-		refCount, _ := strconv.Atoi(fields[2])
+		refCount, parseErr := strconv.Atoi(fields[2])
+		if parseErr != nil {
+			return true, 1, nil, fmt.Errorf("parse /proc/modules refcount %q for %s: %w", fields[2], name, parseErr)
+		}
+		if refCount < 0 {
+			return true, 1, nil, fmt.Errorf("parse /proc/modules refcount %q for %s: value is negative", fields[2], name)
+		}
 		var usedBy []string
 		if len(fields) >= 4 {
 			rawUsedBy := strings.TrimSuffix(fields[3], ",")
@@ -808,9 +817,9 @@ func procModuleStatus(name string) (bool, int, []string) {
 				}
 			}
 		}
-		return true, refCount, usedBy
+		return true, refCount, usedBy, nil
 	}
-	return false, 0, nil
+	return false, 0, nil, nil
 }
 
 func readTrimmed(path string) string {

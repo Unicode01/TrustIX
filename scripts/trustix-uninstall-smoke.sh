@@ -17,6 +17,9 @@ die() {
 
 cleanup() {
   rm -rf "$workdir"
+	case "${remote_stage:-}" in
+		/tmp/trustix-uninstall.smoke.*) rm -rf -- "$remote_stage" ;;
+	esac
 }
 trap cleanup EXIT
 
@@ -161,6 +164,40 @@ write_instance missing
 run_uninstall --purge-config --keep-binaries --keep-service \
 	>"$root/missing.out" 2>"$root/missing.err"
 grep -q 'not installed; schedule removal skipped' "$root/missing.err" || die "missing timer was not reported as already removed"
+
+log "remote upload failure removes staging and preserves failure status"
+remote_bin="$workdir/fake-remote-bin"
+remote_stage="/tmp/trustix-uninstall.smoke.$$"
+mkdir -p "$remote_bin"
+cat >"$remote_bin/ssh" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+command_text="${!#}"
+if [[ "$command_text" == 'mktemp -d /tmp/trustix-uninstall.XXXXXX' ]]; then
+  mkdir -p "${TRUSTIX_FAKE_REMOTE_STAGE:?}"
+  printf '%s\n' "$TRUSTIX_FAKE_REMOTE_STAGE"
+  exit 0
+fi
+if [[ "$command_text" == rm\ -rf* ]]; then
+  bash -c "$command_text"
+  exit 0
+fi
+echo "unexpected fake ssh command: $command_text" >&2
+exit 99
+EOF
+cat >"$remote_bin/scp" <<'EOF'
+#!/usr/bin/env bash
+echo 'injected remote upload failure' >&2
+exit 42
+EOF
+chmod 0755 "$remote_bin/ssh" "$remote_bin/scp"
+if PATH="$remote_bin:$PATH" TRUSTIX_FAKE_REMOTE_STAGE="$remote_stage" \
+  bash "$uninstall_script" --target fake.example --no-sudo \
+  >"$root/remote-failure.out" 2>"$root/remote-failure.err"; then
+  die "remote uninstall succeeded despite upload failure"
+fi
+grep -q 'injected remote upload failure' "$root/remote-failure.err" || die "remote upload failure was not surfaced"
+[[ ! -e "$remote_stage" ]] || die "remote upload failure left staging directory"
 
 log "shared removal deletes runtime binaries, helpers, units, and instance data"
 : >"$root/systemctl.log"

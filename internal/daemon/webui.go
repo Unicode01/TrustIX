@@ -119,7 +119,9 @@ func (daemon *Daemon) serveWebUIIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
-		_, _ = w.Write(payload)
+		if _, err := w.Write(payload); err != nil {
+			reportHTTPResponseWriteError(err)
+		}
 	}
 }
 

@@ -349,23 +349,30 @@ func newTIXTCPFastPathWithOptions(link netlink.Link, provider *kernelCryptoProvi
 			break
 		}
 		fallbackReasons = append(fallbackReasons, fmt.Sprintf("%s/%s AF_XDP bind failed: %v", plan.xdpMode, plan.bindMode, err))
-		_ = detachTIXTCPXDP(link, plan.xdpFlags)
+		if detachErr := detachTIXTCPXDP(link, plan.xdpFlags); detachErr != nil {
+			return nil, errors.Join(
+				fmt.Errorf("attach tix_tcp AF_XDP provider: %s", strings.Join(fallbackReasons, "; ")),
+				fmt.Errorf("detach failed tix_tcp XDP attempt: %w", detachErr),
+				wrapEBPFOperation("close tix_tcp TX seal object after attach failure", closeTIXTCPTXSealObject(txSealObject)),
+				wrapEBPFOperation("close tix_tcp XDP object after attach failure", xdpObject.Close()),
+			)
+		}
 	}
 	if len(sockets) == 0 {
-		if txSealObject != nil {
-			_ = txSealObject.Close()
-		}
-		_ = xdpObject.Close()
-		return nil, fmt.Errorf("attach tix_tcp AF_XDP provider: %s", strings.Join(fallbackReasons, "; "))
+		return nil, errors.Join(
+			fmt.Errorf("attach tix_tcp AF_XDP provider: %s", strings.Join(fallbackReasons, "; ")),
+			wrapEBPFOperation("close tix_tcp TX seal object after attach failure", closeTIXTCPTXSealObject(txSealObject)),
+			wrapEBPFOperation("close tix_tcp XDP object after attach failure", xdpObject.Close()),
+		)
 	}
 	config, err := configureTIXTCPBPFConfig(xdpObject.configMap, len(sockets))
 	if err != nil {
-		closeAFXDPSockets(sockets)
-		if txSealObject != nil {
-			_ = txSealObject.Close()
-		}
-		_ = xdpObject.Close()
-		return nil, err
+		return nil, errors.Join(
+			err,
+			closeAFXDPSockets(sockets),
+			wrapEBPFOperation("close tix_tcp TX seal object after config failure", closeTIXTCPTXSealObject(txSealObject)),
+			wrapEBPFOperation("close tix_tcp XDP object after config failure", xdpObject.Close()),
+		)
 	}
 	xdpObject.skipTCPChecksum = config&tixTCPConfigSkipTCPChecksum != 0
 	loadWarning := xdpObject.fallbackReason
@@ -620,14 +627,20 @@ func newTIXTCPSocketsWithQueueFallbackWithOptions(link netlink.Link, queueCount 
 					}
 					return sockets, len(sockets), queueFallback, nil
 				}
-				closeAFXDPSockets(sockets)
 				fallbackReasons = append(fallbackReasons, reason)
 				break
 			}
 			fd := uint32(socket.fd)
 			if err := xskMap.Update(uint32(queueID), fd, cebpf.UpdateAny); err != nil {
-				_ = socket.Close()
+				closeErr := socket.Close()
 				reason := fmt.Sprintf("umem_frame_size=%d queue=%d publish failed: %v", frameSize, queueID, err)
+				if closeErr != nil {
+					return nil, 0, "", errors.Join(
+						fmt.Errorf("%s", reason),
+						fmt.Errorf("close unpublished AF_XDP socket queue=%d: %w", queueID, closeErr),
+						closeAFXDPSockets(sockets),
+					)
+				}
 				if len(sockets) > 0 {
 					queueFallback := fmt.Sprintf("requested_queues=%d selected_queues=%d requested_umem_frame_size=%d selected_umem_frame_size=%d: publish queue=%d failed: %v", queueCount, len(sockets), requestedFrameSize, frameSize, queueID, err)
 					if frameSize != requestedFrameSize || len(fallbackReasons) > 0 {
@@ -635,7 +648,6 @@ func newTIXTCPSocketsWithQueueFallbackWithOptions(link netlink.Link, queueCount 
 					}
 					return sockets, len(sockets), queueFallback, nil
 				}
-				closeAFXDPSockets(sockets)
 				fallbackReasons = append(fallbackReasons, reason)
 				break
 			}
@@ -1136,12 +1148,23 @@ func tixTCPAFXDPUMEMFramesExplicit() bool {
 	return value != "" && !strings.EqualFold(value, "auto") && !strings.EqualFold(value, "default")
 }
 
-func closeAFXDPSockets(sockets []*afXDPSocket) {
+func closeAFXDPSockets(sockets []*afXDPSocket) error {
+	var errs []error
 	for _, socket := range sockets {
 		if socket != nil {
-			_ = socket.Close()
+			if err := socket.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close AF_XDP socket queue=%d: %w", socket.queueID, err))
+			}
 		}
 	}
+	return errors.Join(errs...)
+}
+
+func closeTIXTCPTXSealObject(object *tixTCPTXSealObject) error {
+	if object == nil {
+		return nil
+	}
+	return object.Close()
 }
 
 func tixTCPRXBurst() int {
@@ -1880,7 +1903,7 @@ func (fastPath *tixTCPFastPath) readLoop(manager *Manager, socket *afXDPSocket) 
 					manager.warnings = append(manager.warnings, "tix_tcp AF_XDP receive stopped: "+err.Error())
 					manager.mu.Unlock()
 				}
-				_ = rxFrames[i].Recycle()
+				socket.backgroundErrors.Record("recycle tix_tcp AF_XDP frame after receive failure", rxFrames[i].Recycle())
 				socket.recycleRXFrames(rxFrames[i+1:])
 				return
 			}
@@ -2044,7 +2067,7 @@ func (fastPath *tixTCPFastPath) decodeTCPFrame(manager *Manager, socket *afXDPSo
 		return afXDPRXRecycleNow, nil
 	}
 	release := func() {
-		_ = rxFrame.Recycle()
+		rxFrame.socket.backgroundErrors.Record("recycle released tix_tcp AF_XDP frame", rxFrame.Recycle())
 	}
 	if len(borrowedIndexes) > 1 {
 		release = kernelUDPRefCountRelease(release, len(borrowedIndexes))
@@ -2259,7 +2282,7 @@ func (fastPath *tixTCPFastPath) decodeUDPFrame(manager *Manager, socket *afXDPSo
 	if recycleMode == afXDPRXRecycleByRelease {
 		rxFrameRef := rxFrame
 		(*batch)[len(*batch)-1].frame.Release = func() {
-			_ = rxFrameRef.Recycle()
+			rxFrameRef.socket.backgroundErrors.Record("recycle released kernel_udp AF_XDP frame", rxFrameRef.Recycle())
 		}
 	}
 	return recycleMode, nil
@@ -2911,8 +2934,10 @@ type afXDPSocket struct {
 	txMultiFrameMaxIPv4Len int
 	txMultiFrameEncrypted  bool
 
-	stats     afXDPSocketStats
-	closeOnce sync.Once
+	stats            afXDPSocketStats
+	backgroundErrors backgroundErrorTracker
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 type afXDPSocketStats struct {
@@ -3050,8 +3075,7 @@ func newAFXDPSocket(link netlink.Link, queueID uint32, bindFlags uint16, config 
 		socket.stats.ringNeedWakeupEnabled.Store(1)
 	}
 	if err := socket.configure(bindFlags); err != nil {
-		_ = socket.Close()
-		return nil, err
+		return nil, errors.Join(err, wrapEBPFOperation("close AF_XDP socket after configure failure", socket.Close()))
 	}
 	return socket, nil
 }
@@ -3152,13 +3176,14 @@ func (socket *afXDPSocket) RecvFrames(frames []afXDPRXFrame, descs []unix.XDPDes
 	for i, desc := range descs {
 		frame, err := socket.rxFrameFromDesc(desc)
 		if err != nil {
+			var cleanupErrs []error
 			for j := range frames {
-				_ = frames[j].Recycle()
+				cleanupErrs = append(cleanupErrs, frames[j].Recycle())
 			}
 			for _, remaining := range descs[i+1:] {
-				_ = socket.recycleRXAddr(remaining.Addr)
+				cleanupErrs = append(cleanupErrs, socket.recycleRXAddr(remaining.Addr))
 			}
-			return frames[:0], err
+			return frames[:0], errors.Join(err, errors.Join(cleanupErrs...))
 		}
 		frames = append(frames, frame)
 	}
@@ -3170,8 +3195,10 @@ func (socket *afXDPSocket) rxFrameFromDesc(desc unix.XDPDesc) (afXDPRXFrame, err
 	end := start + int(desc.Len)
 	if start < 0 || end < start || end > len(socket.umem) {
 		socket.stats.rxInvalid.Add(1)
-		_ = socket.fill.Push(desc.Addr)
-		return afXDPRXFrame{}, fmt.Errorf("AF_XDP rx descriptor out of bounds addr=%d len=%d", desc.Addr, desc.Len)
+		return afXDPRXFrame{}, errors.Join(
+			fmt.Errorf("AF_XDP rx descriptor out of bounds addr=%d len=%d", desc.Addr, desc.Len),
+			wrapEBPFOperation("return invalid AF_XDP rx descriptor to fill ring", socket.fill.Push(desc.Addr)),
+		)
 	}
 	socket.stats.rxFrames.Add(1)
 	socket.stats.rxUMEMDirectFrames.Add(1)
@@ -4904,7 +4931,7 @@ func (socket *afXDPSocket) reclaimCompletionLoop(done <-chan struct{}) {
 	for {
 		select {
 		case <-done:
-			_ = socket.flushTX()
+			socket.backgroundErrors.Record("flush AF_XDP TX during shutdown", socket.flushTX())
 			socket.ReclaimCompletions()
 			return
 		case <-socket.txNotify:
@@ -4918,11 +4945,11 @@ func (socket *afXDPSocket) reclaimCompletionLoop(done <-chan struct{}) {
 				timer.Reset(notifyInterval)
 				continue
 			}
-			_ = socket.flushTX()
+			socket.backgroundErrors.Record("flush notified AF_XDP TX", socket.flushTX())
 			socket.ReclaimCompletions()
 			timer.Reset(activeInterval)
 		case <-timer.C:
-			_ = socket.flushTX()
+			socket.backgroundErrors.Record("flush periodic AF_XDP TX", socket.flushTX())
 			reclaimed := socket.ReclaimCompletions()
 			next := idleInterval
 			if reclaimed > 0 || socket.hasTXWork() {
@@ -5053,7 +5080,7 @@ func (socket *afXDPSocket) acquireTXFrameLocked() (uint64, bool) {
 	deadline := time.Now().Add(socket.txBackpressureWait)
 	for {
 		if socket.txPendingKick > 0 || socket.tx.Pending() > 0 {
-			_ = socket.kickTXLocked()
+			socket.backgroundErrors.Record("kick backpressured AF_XDP TX", socket.kickTXLocked())
 		}
 		if reclaimed := socket.reclaimCompletionsLocked(); reclaimed > 0 {
 			socket.stats.txBackpressureReclaims.Add(uint64(reclaimed))
@@ -5100,17 +5127,17 @@ func (socket *afXDPSocket) txFreeCounts() (int, int) {
 }
 
 func (socket *afXDPSocket) Close() error {
-	var errs []string
 	socket.closeOnce.Do(func() {
+		var errs []error
 		if socket.fd >= 0 {
 			if err := unix.Close(socket.fd); err != nil {
-				errs = append(errs, err.Error())
+				errs = append(errs, fmt.Errorf("close AF_XDP socket: %w", err))
 			}
 			socket.fd = -1
 		}
 		if socket.txSocketGSOFDValid && socket.txSocketGSOFD >= 0 {
 			if err := unix.Close(socket.txSocketGSOFD); err != nil {
-				errs = append(errs, err.Error())
+				errs = append(errs, fmt.Errorf("close AF_XDP raw GSO socket: %w", err))
 			}
 			socket.txSocketGSOFD = -1
 			socket.txSocketGSOFDValid = false
@@ -5118,7 +5145,7 @@ func (socket *afXDPSocket) Close() error {
 		for _, ring := range []*xdpDescRing{&socket.rx, &socket.tx} {
 			if len(ring.mmap) > 0 {
 				if err := unix.Munmap(ring.mmap); err != nil {
-					errs = append(errs, err.Error())
+					errs = append(errs, fmt.Errorf("unmap AF_XDP descriptor ring: %w", err))
 				}
 				ring.mmap = nil
 			}
@@ -5126,22 +5153,20 @@ func (socket *afXDPSocket) Close() error {
 		for _, ring := range []*xdpUint64Ring{&socket.fill, &socket.comp} {
 			if len(ring.mmap) > 0 {
 				if err := unix.Munmap(ring.mmap); err != nil {
-					errs = append(errs, err.Error())
+					errs = append(errs, fmt.Errorf("unmap AF_XDP address ring: %w", err))
 				}
 				ring.mmap = nil
 			}
 		}
 		if len(socket.umem) > 0 {
 			if err := unix.Munmap(socket.umem); err != nil {
-				errs = append(errs, err.Error())
+				errs = append(errs, fmt.Errorf("unmap AF_XDP UMEM: %w", err))
 			}
 			socket.umem = nil
 		}
+		socket.closeErr = errors.Join(errs...)
 	})
-	if len(errs) > 0 {
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	return nil
+	return errors.Join(socket.closeErr, socket.backgroundErrors.Err())
 }
 
 type xdpDescRing struct {

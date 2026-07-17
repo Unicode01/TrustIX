@@ -526,11 +526,14 @@ func Client(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	if err := inner.SendPacket(encodedHello); err != nil {
 		return nil, fmt.Errorf("send TrustIX client hello: %w", err)
 	}
-	stopRetransmit := retransmitHandshake(inner, encodedHello)
-	defer stopRetransmit()
-	rawServerHello, err := recvServerHello(inner)
-	if err != nil {
-		return nil, fmt.Errorf("receive TrustIX server hello: %w", err)
+	retransmitter := retransmitHandshake(inner, encodedHello)
+	rawServerHello, recvErr := recvServerHello(inner)
+	retransmitErr := retransmitter.Stop()
+	if recvErr != nil {
+		return nil, errors.Join(fmt.Errorf("receive TrustIX server hello: %w", recvErr), retransmitErr)
+	}
+	if retransmitErr != nil {
+		return nil, retransmitErr
 	}
 	serverHello, err := parseHello(rawServerHello, helloTypeServer)
 	if err != nil {
@@ -585,8 +588,11 @@ func Server(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	clientHello, err := parseHello(rawClientHello, helloTypeClient)
 	if err != nil {
 		if errors.Is(err, ErrInvalidHandshake) {
-			sendReset(inner)
-			err = errors.Join(err, ErrSessionResetSent)
+			if resetErr := sendReset(inner); resetErr != nil {
+				err = errors.Join(err, resetErr)
+			} else {
+				err = errors.Join(err, ErrSessionResetSent)
+			}
 		}
 		return nil, err
 	}
@@ -887,7 +893,11 @@ func (session *Session) openReceivedPacketBatch(dst [][]byte, wirePackets [][]by
 			if isResetPacket(wire) {
 				return dst, bytesReceived, uint64(len(dst) - startLen), ErrSessionReset
 			}
-			if session.handleDuplicateHandshake(wire) {
+			handled, err := session.handleDuplicateHandshake(wire)
+			if err != nil {
+				return dst, bytesReceived, uint64(len(dst) - startLen), err
+			}
+			if handled {
 				continue
 			}
 			dst = append(dst, wire)
@@ -913,7 +923,11 @@ func (session *Session) openReceivedPacketBatch(dst [][]byte, wirePackets [][]by
 		if isResetPacket(wire) {
 			return dst, bytesReceived, uint64(len(dst) - startLen), ErrSessionReset
 		}
-		if session.handleDuplicateHandshake(wire) {
+		handled, err := session.handleDuplicateHandshake(wire)
+		if err != nil {
+			return dst, bytesReceived, uint64(len(dst) - startLen), err
+		}
+		if handled {
 			continue
 		}
 		if session.cryptoOffloaded && !session.shouldOpenUserspaceEncryptedFallback(wire) {
@@ -980,7 +994,11 @@ func (session *Session) openReceivedPacketNoStats(wire []byte) ([]byte, bool, er
 	if isResetPacket(wire) {
 		return nil, false, ErrSessionReset
 	}
-	if session.handleDuplicateHandshake(wire) {
+	handled, err := session.handleDuplicateHandshake(wire)
+	if err != nil {
+		return nil, false, err
+	}
+	if handled {
 		return nil, false, nil
 	}
 	if !session.recvEncrypted {
@@ -1230,30 +1248,58 @@ func resetPacket() []byte {
 	return payload
 }
 
-func sendReset(session transport.Session) {
-	_ = session.SendPacket(resetPacket())
+func sendReset(session transport.Session) error {
+	if err := session.SendPacket(resetPacket()); err != nil {
+		return fmt.Errorf("send TrustIX secure transport reset: %w", err)
+	}
+	return nil
 }
 
-func retransmitHandshake(session transport.Session, packet []byte) func() {
-	done := make(chan struct{})
-	var once sync.Once
+type handshakeRetransmitter struct {
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
+	mu       sync.Mutex
+	err      error
+}
+
+func retransmitHandshake(session transport.Session, packet []byte) *handshakeRetransmitter {
+	retransmitter := &handshakeRetransmitter{
+		stop: make(chan struct{}),
+		done: make(chan struct{}),
+	}
 	go func() {
+		defer close(retransmitter.done)
 		ticker := time.NewTicker(handshakeRetransmitInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				_ = session.SendPacket(packet)
-			case <-done:
+				if err := session.SendPacket(packet); err != nil {
+					retransmitter.mu.Lock()
+					retransmitter.err = errors.Join(
+						fmt.Errorf("retransmit TrustIX client hello: %w", err),
+						wrapCloseError("close data session after handshake retransmit failure", session.Close()),
+					)
+					retransmitter.mu.Unlock()
+					return
+				}
+			case <-retransmitter.stop:
 				return
 			}
 		}
 	}()
-	return func() {
-		once.Do(func() {
-			close(done)
-		})
-	}
+	return retransmitter
+}
+
+func (retransmitter *handshakeRetransmitter) Stop() error {
+	retransmitter.stopOnce.Do(func() {
+		close(retransmitter.stop)
+	})
+	<-retransmitter.done
+	retransmitter.mu.Lock()
+	defer retransmitter.mu.Unlock()
+	return retransmitter.err
 }
 
 func isResetPacket(packet []byte) bool {
@@ -1263,30 +1309,32 @@ func isResetPacket(packet []byte) bool {
 		packet[5] == helloTypeReset
 }
 
-func (session *Session) handleDuplicateHandshake(packet []byte) bool {
+func (session *Session) handleDuplicateHandshake(packet []byte) (bool, error) {
 	if len(packet) < 6 || !bytes.Equal(packet[0:4], handshakeMagic[:]) || packet[4] != handshakeVersion {
-		return false
+		return false, nil
 	}
 	switch packet[5] {
 	case helloTypeClient:
 		if session.role != serverRole {
-			return false
+			return false, nil
 		}
 		if len(session.clientHelloRaw) > 0 && bytes.Equal(packet, session.clientHelloRaw) {
 			if len(session.serverHelloRaw) > 0 {
-				_ = session.inner.SendPacket(session.serverHelloRaw)
+				if err := session.inner.SendPacket(session.serverHelloRaw); err != nil {
+					return true, fmt.Errorf("resend TrustIX server hello: %w", err)
+				}
 			}
-			return true
+			return true, nil
 		}
 	case helloTypeServer:
 		if session.role != clientRole {
-			return false
+			return false, nil
 		}
 		if len(session.serverHelloRaw) > 0 && bytes.Equal(packet, session.serverHelloRaw) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func parseHello(raw []byte, wantType byte) (hello, error) {

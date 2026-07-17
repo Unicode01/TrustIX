@@ -189,34 +189,67 @@ trustix_prereqs_download_file() {
 }
 
 trustix_prereqs_install_official_go() {
-  local version arch tmp stage install_root install_dir
+  local version arch tmp stage install_root install_dir bin_dir
+  local rollback_root rollback_install rollback_go rollback_gofmt go_link gofmt_link
+  local install_status=0 rollback_status=0 cleanup_status=0
+  local had_install=0 had_go=0 had_gofmt=0
+  local install_attempted=0 go_attempted=0 gofmt_attempted=0
   local -a go_urls=()
   version="$(trustix_prereqs_required_go_version)"
+  if [[ ! "$version" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+    trustix_prereqs_log "invalid Go version: ${version}"
+    return 1
+  fi
   arch="$(trustix_prereqs_go_arch)" || return 1
   install_root="${TRUSTIX_BOOTSTRAP_GO_ROOT:-/usr/local/trustix-go}"
+  bin_dir="${TRUSTIX_BOOTSTRAP_GO_BIN_DIR:-/usr/local/bin}"
+  case "$install_root:$bin_dir" in
+    /*:/*) ;;
+    *) trustix_prereqs_log "Go install and bin directories must be absolute"; return 1 ;;
+  esac
+  install_root="${install_root%/}"
+  bin_dir="${bin_dir%/}"
+  [[ -n "$install_root" && "$install_root" != "/" && -n "$bin_dir" && "$bin_dir" != "/" ]] || {
+    trustix_prereqs_log "refusing unsafe Go install or bin directory"
+    return 1
+  }
   install_dir="${install_root}/go${version}"
   tmp="$(mktemp /tmp/trustix-go.XXXXXX 2>/dev/null || mktemp -t trustix-go.XXXXXX 2>/dev/null || true)"
   if [[ -z "$tmp" ]]; then
     tmp="${TMPDIR:-/tmp}/trustix-go.$$"
-    rm -f "$tmp"
-    : >"$tmp" || return 1
+		rm -f "$tmp" || return 1
+		(umask 077 && set -o noclobber && : >"$tmp") 2>/dev/null || return 1
   fi
+	[[ -f "$tmp" && ! -L "$tmp" ]] || return 1
   stage="$(mktemp -d /tmp/trustix-go.XXXXXX 2>/dev/null || mktemp -d -t trustix-go.XXXXXX 2>/dev/null || true)"
   if [[ -z "$stage" ]]; then
     stage="${TMPDIR:-/tmp}/trustix-go-stage.$$"
-    rm -rf "$stage"
+		rm -rf "$stage" || {
+			rm -f "$tmp"
+			return 1
+		}
     mkdir -p "$stage" || {
       rm -f "$tmp"
       return 1
     }
   fi
+	[[ -d "$stage" && ! -L "$stage" ]] || {
+		rm -f "$tmp"
+		return 1
+	}
 
   trustix_prereqs_log "install Go ${version}"
   if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-    trustix_prereqs_ensure_commands curl || return 1
+    trustix_prereqs_ensure_commands curl || {
+      rm -rf "$tmp" "$stage"
+      return 1
+    }
   fi
   if ! command -v tar >/dev/null 2>&1; then
-    trustix_prereqs_ensure_commands tar gzip || return 1
+    trustix_prereqs_ensure_commands tar gzip || {
+      rm -rf "$tmp" "$stage"
+      return 1
+    }
   fi
   mapfile -t go_urls < <(trustix_prereqs_go_url_candidates "$version" "$arch")
   trustix_prereqs_download_file "$tmp" "${go_urls[@]}" || {
@@ -227,20 +260,96 @@ trustix_prereqs_install_official_go() {
     rm -rf "$tmp" "$stage"
     return 1
   }
-  trustix_prereqs_run_root mkdir -p "$install_root" /usr/local/bin || {
+  trustix_prereqs_run_root mkdir -p "$install_root" "$bin_dir" || {
     rm -rf "$tmp" "$stage"
     return 1
   }
-  trustix_prereqs_run_root rm -rf "$install_dir"
-  trustix_prereqs_run_root mv "${stage}/go" "$install_dir" || {
-    rm -rf "$tmp" "$stage"
+  rollback_root="${install_root}/.trustix-go-rollback.${version}.$$"
+  rollback_install="${rollback_root}/install"
+  rollback_go="${rollback_root}/go"
+  rollback_gofmt="${rollback_root}/gofmt"
+  go_link="${bin_dir}/go"
+  gofmt_link="${bin_dir}/gofmt"
+  trustix_prereqs_run_root rm -rf "$rollback_root" || install_status=$?
+  if [[ "$install_status" == "0" ]]; then
+    trustix_prereqs_run_root mkdir -p "$rollback_root" || install_status=$?
+  fi
+  if [[ "$install_status" == "0" ]] && { trustix_prereqs_run_root test -e "$install_dir" || trustix_prereqs_run_root test -L "$install_dir"; }; then
+    if trustix_prereqs_run_root mv "$install_dir" "$rollback_install"; then
+      had_install=1
+    else
+      install_status=$?
+    fi
+  fi
+  if [[ "$install_status" == "0" ]] && { trustix_prereqs_run_root test -e "$go_link" || trustix_prereqs_run_root test -L "$go_link"; }; then
+    if trustix_prereqs_run_root mv "$go_link" "$rollback_go"; then
+      had_go=1
+    else
+      install_status=$?
+    fi
+  fi
+  if [[ "$install_status" == "0" ]] && { trustix_prereqs_run_root test -e "$gofmt_link" || trustix_prereqs_run_root test -L "$gofmt_link"; }; then
+    if trustix_prereqs_run_root mv "$gofmt_link" "$rollback_gofmt"; then
+      had_gofmt=1
+    else
+      install_status=$?
+    fi
+  fi
+  if [[ "$install_status" == "0" ]]; then
+    install_attempted=1
+    trustix_prereqs_run_root mv "${stage}/go" "$install_dir" || install_status=$?
+  fi
+  if [[ "$install_status" == "0" ]]; then
+    go_attempted=1
+    trustix_prereqs_run_root ln -sf "${install_dir}/bin/go" "$go_link" || install_status=$?
+  fi
+  if [[ "$install_status" == "0" ]]; then
+    gofmt_attempted=1
+    trustix_prereqs_run_root ln -sf "${install_dir}/bin/gofmt" "$gofmt_link" || install_status=$?
+  fi
+  if [[ "$install_status" == "0" && ! -x "$go_link" ]]; then
+    trustix_prereqs_log "Go install link is not executable: ${go_link}"
+    install_status=1
+  fi
+  if [[ "$install_status" == "0" && ! -x "$gofmt_link" ]]; then
+    trustix_prereqs_log "gofmt install link is not executable: ${gofmt_link}"
+    install_status=1
+  fi
+  if [[ "$install_status" != "0" ]]; then
+    if [[ "$install_attempted" == "1" || "$had_install" == "1" ]]; then
+      trustix_prereqs_run_root rm -rf "$install_dir" || rollback_status=1
+    fi
+    if [[ "$had_install" == "1" ]]; then
+      trustix_prereqs_run_root mv "$rollback_install" "$install_dir" || rollback_status=1
+    fi
+    if [[ "$go_attempted" == "1" || "$had_go" == "1" ]]; then
+      trustix_prereqs_run_root rm -f "$go_link" || rollback_status=1
+    fi
+    if [[ "$had_go" == "1" ]]; then
+      trustix_prereqs_run_root mv "$rollback_go" "$go_link" || rollback_status=1
+    fi
+    if [[ "$gofmt_attempted" == "1" || "$had_gofmt" == "1" ]]; then
+      trustix_prereqs_run_root rm -f "$gofmt_link" || rollback_status=1
+    fi
+    if [[ "$had_gofmt" == "1" ]]; then
+      trustix_prereqs_run_root mv "$rollback_gofmt" "$gofmt_link" || rollback_status=1
+    fi
+    trustix_prereqs_run_root rm -rf "$rollback_root" || rollback_status=1
+    rm -rf "$tmp" "$stage" || rollback_status=1
+    if [[ "$rollback_status" != "0" ]]; then
+      trustix_prereqs_log "failed to fully roll back Go ${version} installation"
+    fi
+    return "$install_status"
+  fi
+  trustix_prereqs_run_root rm -rf "$rollback_root" || cleanup_status=1
+  rm -rf "$tmp" "$stage" || cleanup_status=1
+  if [[ "$cleanup_status" != "0" ]]; then
+    trustix_prereqs_log "failed to remove Go install transaction files"
     return 1
-  }
-  trustix_prereqs_run_root ln -sf "${install_dir}/bin/go" /usr/local/bin/go
-  trustix_prereqs_run_root ln -sf "${install_dir}/bin/gofmt" /usr/local/bin/gofmt
-  rm -rf "$tmp" "$stage"
-  export PATH="/usr/local/bin:${PATH}"
+  fi
+  export PATH="${bin_dir}:${PATH}"
   hash -r 2>/dev/null || true
+  return 0
 }
 
 trustix_prereqs_add_unique() {

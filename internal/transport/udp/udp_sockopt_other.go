@@ -4,5 +4,6 @@ package udp
 
 import "net"
 
-func configureUDPConn(conn *net.UDPConn) {
+func configureUDPConn(conn *net.UDPConn) error {
+	return nil
 }

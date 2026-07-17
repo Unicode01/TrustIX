@@ -1585,6 +1585,19 @@ func TestKernelSessionSetPeerEndpointAnnotatesFlow(t *testing.T) {
 	}
 }
 
+func TestKernelSessionCloseReturnsFlowAnnotationFailure(t *testing.T) {
+	wantErr := errors.New("injected kernel UDP flow annotation failure")
+	provider, _ := newKernelUDPProviderPair()
+	provider.annotateErr = wantErr
+	session := newKernelSession(provider, nil, 100, core.IXID("ix-a"), core.EndpointID("ix-b-udp"), dataplane.CryptoPlacementKernel)
+
+	session.SetPeerEndpoint(core.IXID("ix-a"), core.EndpointID("ix-a-udp"))
+
+	if err := session.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("close error = %v, want annotation failure", err)
+	}
+}
+
 func TestSecureTransportKernelCryptoOffloadOverKernelUDPProvider(t *testing.T) {
 	providerA, providerB := newKernelUDPProviderPair()
 	kernelPlacement := Options{CryptoPlacement: func() dataplane.CryptoPlacement {
@@ -2363,6 +2376,7 @@ type fakeKernelUDPProvider struct {
 	received           uint64
 	subscribeCalls     int
 	flowSubscribeCalls int
+	annotateErr        error
 }
 
 type setupFailureKernelUDPProvider struct {
@@ -2505,6 +2519,9 @@ func (provider *fakeKernelUDPProvider) DeleteKernelUDPFlows(ctx context.Context,
 func (provider *fakeKernelUDPProvider) SetKernelUDPFlowPeer(ctx context.Context, flowID uint64, peer core.IXID, endpoint core.EndpointID) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if provider.annotateErr != nil {
+		return provider.annotateErr
 	}
 	provider.mu.Lock()
 	defer provider.mu.Unlock()

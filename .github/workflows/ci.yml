@@ -59,11 +59,14 @@ jobs:
           mapfile -t pkgs < <(go list ./cmd/... ./internal/... ./scripts | grep -v '^trustix.local/trustix/internal/dataplane/ebpf$')
           go test "${pkgs[@]}" -count=1
           go test ./internal/dataplane/ebpf -run '^$' -count=1
+          go test ./internal/dataplane/ebpf \
+            -run '^Test(ErrorCleanupStack|BackgroundTaskTracker|AFXDPSocketClose|KernelUDPUDPFallbackSocketSetClose|CleanupQuarantinesSemantic)' \
+            -count=1
 
       - name: Go Error And Race Checks
         run: |
           go vet ./...
-          go run github.com/kisielk/errcheck@v1.9.0 -ignoretests ./...
+          go run github.com/kisielk/errcheck@v1.9.0 -blank -ignoretests ./...
           go test -race -count=1 ./internal/configlog ./internal/daemon
 
       - name: Transactional Update Smoke

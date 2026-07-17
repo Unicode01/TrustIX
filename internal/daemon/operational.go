@@ -176,7 +176,9 @@ func (daemon *Daemon) handlePrometheusMetrics(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", prometheusContentType)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(output.String()))
+	if _, err := w.Write([]byte(output.String())); err != nil {
+		reportHTTPResponseWriteError(err)
+	}
 }
 
 func writePrometheusMetric(output *strings.Builder, name, help, metricType string, value float64) {

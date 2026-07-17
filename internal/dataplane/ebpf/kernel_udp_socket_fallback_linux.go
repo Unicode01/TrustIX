@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"net/netip"
 	"runtime"
-	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -21,11 +22,51 @@ const (
 	kernelUDPUDPFallbackRecvBufferSize = 64 * 1024
 	kernelUDPUDPFallbackControlSize    = 64
 	kernelUDPUDPFallbackGSOMaxPayload  = 0xffff - 20 - 8
+	kernelUDPUDPFallbackReadTimeout    = time.Second
 )
 
 type kernelUDPUDPFallbackSocket struct {
-	port uint16
-	fd   int
+	port      uint16
+	fd        int
+	ioMu      sync.RWMutex
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (socket *kernelUDPUDPFallbackSocket) Close() error {
+	if socket == nil {
+		return nil
+	}
+	socket.markClosed()
+	socket.closeOnce.Do(func() {
+		socket.ioMu.Lock()
+		defer socket.ioMu.Unlock()
+		if socket.fd >= 0 {
+			socket.closeErr = wrapEBPFOperation(fmt.Sprintf("close kernel_udp UDP socket %d", socket.port), unix.Close(socket.fd))
+			socket.fd = -1
+		}
+	})
+	return socket.closeErr
+}
+
+func (socket *kernelUDPUDPFallbackSocket) markClosed() {
+	if socket != nil {
+		socket.closed.Store(true)
+	}
+}
+
+func closeKernelUDPUDPFallbackSocketSet(sockets []*kernelUDPUDPFallbackSocket) error {
+	for _, socket := range sockets {
+		socket.markClosed()
+	}
+	var errs []error
+	for _, socket := range sockets {
+		if socket != nil {
+			errs = append(errs, socket.Close())
+		}
+	}
+	return errors.Join(errs...)
 }
 
 type kernelUDPUDPFallbackRecvScratch struct {
@@ -98,21 +139,14 @@ func (manager *Manager) syncKernelUDPUDPFallbackSocketsLocked(ports map[uint16]s
 				delete(manager.kernelUDPUDPFallbackSockets, item.port)
 			}
 			manager.kernelUDPUDPFallbackMu.Unlock()
-			for _, item := range opened {
-				_ = unix.Close(item.fd)
-			}
-			for _, item := range closeList {
-				_ = unix.Close(item.fd)
-			}
-			return err
+			cleanupSockets := append(append([]*kernelUDPUDPFallbackSocket(nil), opened...), closeList...)
+			return errors.Join(err, closeKernelUDPUDPFallbackSocketSet(cleanupSockets))
 		}
 		manager.kernelUDPUDPFallbackSockets[port] = socket
 		opened = append(opened, socket)
 	}
 	manager.kernelUDPUDPFallbackMu.Unlock()
-	for _, item := range closeList {
-		_ = unix.Close(item.fd)
-	}
+	closeErr := closeKernelUDPUDPFallbackSocketSet(closeList)
 	if len(opened) > 0 && manager.kernelUDPRawFD >= 0 {
 		if err := unix.Close(manager.kernelUDPRawFD); err != nil {
 			manager.warnings = append(manager.warnings, "close kernel_udp raw UDP socket after UDP socket fallback attach: "+err.Error())
@@ -120,9 +154,12 @@ func (manager *Manager) syncKernelUDPUDPFallbackSocketsLocked(ports map[uint16]s
 		manager.kernelUDPRawFD = -1
 	}
 	for _, socket := range opened {
-		go manager.readKernelUDPUDPFallbackFrames(socket)
+		socket := socket
+		manager.backgroundTasks.Go(fmt.Sprintf("read kernel_udp UDP fallback port %d", socket.port), func() error {
+			return manager.readKernelUDPUDPFallbackFrames(socket)
+		})
 	}
-	return nil
+	return closeErr
 }
 
 func (manager *Manager) closeKernelUDPUDPFallbackSocketsLocked() error {
@@ -130,52 +167,62 @@ func (manager *Manager) closeKernelUDPUDPFallbackSocketsLocked() error {
 	sockets := manager.kernelUDPUDPFallbackSockets
 	manager.kernelUDPUDPFallbackSockets = make(map[uint16]*kernelUDPUDPFallbackSocket)
 	manager.kernelUDPUDPFallbackMu.Unlock()
-	var errs []string
+	closeList := make([]*kernelUDPUDPFallbackSocket, 0, len(sockets))
 	for _, socket := range sockets {
-		if socket == nil || socket.fd < 0 {
-			continue
-		}
-		if err := unix.Close(socket.fd); err != nil {
-			errs = append(errs, fmt.Sprintf("close kernel_udp UDP socket %d: %v", socket.port, err))
-		}
+		closeList = append(closeList, socket)
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	return nil
+	return closeKernelUDPUDPFallbackSocketSet(closeList)
 }
 
-func openKernelUDPUDPFallbackSocket(port uint16) (*kernelUDPUDPFallbackSocket, error) {
+func openKernelUDPUDPFallbackSocket(port uint16) (result *kernelUDPUDPFallbackSocket, resultErr error) {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, unix.IPPROTO_UDP)
 	if err != nil {
 		return nil, fmt.Errorf("open UDP socket for port %d: %w", port, err)
 	}
-	closeOnError := true
 	defer func() {
-		if closeOnError {
-			_ = unix.Close(fd)
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, wrapEBPFOperation(fmt.Sprintf("close failed kernel_udp UDP socket %d", port), unix.Close(fd)))
 		}
 	}()
-	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
+		return nil, fmt.Errorf("enable SO_REUSEADDR for port %d: %w", port, err)
+	}
 	if err := unix.SetsockoptInt(fd, unix.SOL_IP, unix.IP_PKTINFO, 1); err != nil {
 		return nil, fmt.Errorf("enable IP_PKTINFO for port %d: %w", port, err)
 	}
 	if err := unix.SetsockoptInt(fd, unix.SOL_UDP, unix.UDP_GRO, 1); err != nil {
 		// UDP_GRO is an optimization; kernels without it should still use the socket fallback.
+		if !optionalKernelUDPUDPGROError(err) {
+			return nil, fmt.Errorf("enable UDP_GRO for port %d: %w", port, err)
+		}
 	}
 	bufferSize := kernelUDPUDPFallbackSocketBufferSize()
-	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, bufferSize)
-	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, bufferSize)
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, bufferSize); err != nil {
+		return nil, fmt.Errorf("set SO_RCVBUF for port %d: %w", port, err)
+	}
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, bufferSize); err != nil {
+		return nil, fmt.Errorf("set SO_SNDBUF for port %d: %w", port, err)
+	}
+	readTimeout := unix.NsecToTimeval(kernelUDPUDPFallbackReadTimeout.Nanoseconds())
+	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &readTimeout); err != nil {
+		return nil, fmt.Errorf("set receive timeout for port %d: %w", port, err)
+	}
 	if err := unix.Bind(fd, &unix.SockaddrInet4{Port: int(port)}); err != nil {
 		return nil, fmt.Errorf("bind UDP socket port %d: %w", port, err)
 	}
-	closeOnError = false
 	return &kernelUDPUDPFallbackSocket{port: port, fd: fd}, nil
 }
 
-func (manager *Manager) readKernelUDPUDPFallbackFrames(socket *kernelUDPUDPFallbackSocket) {
+func optionalKernelUDPUDPGROError(err error) bool {
+	return errors.Is(err, unix.ENOPROTOOPT) ||
+		errors.Is(err, unix.EOPNOTSUPP) ||
+		errors.Is(err, unix.ENOTSUP) ||
+		errors.Is(err, unix.EINVAL)
+}
+
+func (manager *Manager) readKernelUDPUDPFallbackFrames(socket *kernelUDPUDPFallbackSocket) error {
 	if socket == nil || socket.fd < 0 {
-		return
+		return nil
 	}
 	batchSize := kernelUDPRawFallbackRecvBatchSize()
 	if batchSize < 1 {
@@ -189,10 +236,16 @@ func (manager *Manager) readKernelUDPUDPFallbackFrames(socket *kernelUDPUDPFallb
 	batchHolder, batch := takeReceivedKernelUDPFrameBatch(batchSize)
 	defer putReceivedKernelUDPFrameBatch(batchHolder, batch)
 	for {
-		n, err := recvKernelUDPUDPFallbackBatch(socket.fd, scratch, batchSize)
+		n, err := socket.recvBatch(scratch, batchSize)
 		if err != nil {
 			if n <= 0 {
-				return
+				if socket.closed.Load() {
+					return nil
+				}
+				if kernelUDPUDPFallbackRetryRead(err) {
+					continue
+				}
+				return fmt.Errorf("receive kernel_udp UDP fallback port %d: %w", socket.port, err)
 			}
 		}
 		batch = resetReceivedKernelUDPFrameBatch(batch)
@@ -242,7 +295,31 @@ func (manager *Manager) readKernelUDPUDPFallbackFrames(socket *kernelUDPUDPFallb
 			manager.mu.Unlock()
 			manager.deliverKernelUDPFrames(batch)
 		}
+		if err != nil {
+			if socket.closed.Load() {
+				return nil
+			}
+			return fmt.Errorf("receive kernel_udp UDP fallback port %d after %d frames: %w", socket.port, n, err)
+		}
 	}
+}
+
+func (socket *kernelUDPUDPFallbackSocket) recvBatch(scratch *kernelUDPUDPFallbackRecvScratch, batchSize int) (int, error) {
+	if socket == nil || socket.closed.Load() {
+		return 0, unix.EBADF
+	}
+	socket.ioMu.RLock()
+	defer socket.ioMu.RUnlock()
+	if socket.closed.Load() || socket.fd < 0 {
+		return 0, unix.EBADF
+	}
+	return recvKernelUDPUDPFallbackBatch(socket.fd, scratch, batchSize)
+}
+
+func kernelUDPUDPFallbackRetryRead(err error) bool {
+	return errors.Is(err, unix.EAGAIN) ||
+		errors.Is(err, unix.EWOULDBLOCK) ||
+		errors.Is(err, unix.EINTR)
 }
 
 func recvKernelUDPUDPFallbackBatch(fd int, scratch *kernelUDPUDPFallbackRecvScratch, batchSize int) (int, error) {
@@ -335,7 +412,7 @@ func (manager *Manager) sendKernelUDPUDPPreparedFrames(frames []preparedKernelUD
 		for end < len(frames) && frames[end].sourcePort == port {
 			end++
 		}
-		n, err := manager.sendKernelUDPUDPFallbackSocketBatch(socket.fd, frames[sent:end])
+		n, err := socket.sendBatch(manager, frames[sent:end])
 		if n > 0 {
 			manager.mu.Lock()
 			manager.kernelUDPUDPFallbackTXFrames += uint64(n)
@@ -354,6 +431,18 @@ func (manager *Manager) sendKernelUDPUDPPreparedFrames(frames []preparedKernelUD
 		}
 	}
 	return sent, nil
+}
+
+func (socket *kernelUDPUDPFallbackSocket) sendBatch(manager *Manager, frames []preparedKernelUDPTXFrame) (int, error) {
+	if socket == nil || socket.closed.Load() {
+		return 0, unix.EBADF
+	}
+	socket.ioMu.RLock()
+	defer socket.ioMu.RUnlock()
+	if socket.closed.Load() || socket.fd < 0 {
+		return 0, unix.EBADF
+	}
+	return manager.sendKernelUDPUDPFallbackSocketBatch(socket.fd, frames)
 }
 
 func (manager *Manager) kernelUDPUDPFallbackSocketForPort(port uint16) *kernelUDPUDPFallbackSocket {

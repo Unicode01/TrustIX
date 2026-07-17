@@ -5,6 +5,7 @@ package ebpf
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 
 	"trustix.local/trustix/internal/dataplane"
@@ -75,7 +76,10 @@ func probeKernelCryptoCapability() dataplane.KernelCryptoProbe {
 	if err != nil {
 		procCryptoErr = err.Error()
 	} else {
-		cpuPayload, _ := os.ReadFile("/proc/cpuinfo")
+		cpuPayload, cpuErr := os.ReadFile("/proc/cpuinfo")
+		if cpuErr != nil {
+			log.Printf("trustix ebpf: read /proc/cpuinfo for AES-NI capability: %v", cpuErr)
+		}
 		probe.AESGCM, probe.AESNI, probe.AESGCMSoftware, probe.CryptoAlgorithms = summarizeKernelCryptoAlgorithms(parseProcCrypto(cryptoPayload), cpuPayload)
 		cryptoPayload = nil
 		cpuPayload = nil

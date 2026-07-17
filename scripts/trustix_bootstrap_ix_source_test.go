@@ -78,7 +78,8 @@ func TestTrustIXBootstrapIXDirectDefaultsMatchProductionProfile(t *testing.T) {
 		`trustix_bootstrap_mktemp_file()`,
 		`payload="$(trustix_bootstrap_mktemp_file trustix-provision-payload)"`,
 		`TRUSTIX_BOOTSTRAP_KEEP_WORKDIR`,
-		`rm -rf "$repo_root" || true`,
+		`trustix_bootstrap_temp_path_safe()`,
+		`rm -rf -- "$repo_root" || failed=1`,
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(script, want) {

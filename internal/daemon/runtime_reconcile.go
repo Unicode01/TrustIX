@@ -92,18 +92,24 @@ func (daemon *Daemon) retryPendingRuntimeReconcile(ctx context.Context) {
 	err := daemon.reconcileRuntimeState(ctx)
 	now := time.Now().UTC()
 	daemon.reconcileMu.Lock()
-	defer daemon.reconcileMu.Unlock()
 	if err != nil {
 		if daemon.reconcileGeneration == generation {
 			daemon.reconcileState.LastError = err.Error()
 		}
+		daemon.reconcileMu.Unlock()
 		return
 	}
+	reconciled := false
 	if daemon.reconcileGeneration == generation {
 		daemon.reconcileState.Pending = false
 		daemon.reconcileState.Reason = ""
 		daemon.reconcileState.LastError = ""
 		daemon.reconcileState.LastSuccessAt = now
+		reconciled = true
+	}
+	daemon.reconcileMu.Unlock()
+	if reconciled {
+		daemon.clearBackgroundError("runtime_reconcile_request")
 	}
 }
 
@@ -171,4 +177,12 @@ func (daemon *Daemon) reconcileRuntimeAfterSessionRemoval(ctx context.Context, r
 		daemon.requestRuntimeReconcile(reason, err)
 	}
 	return err
+}
+
+func (daemon *Daemon) reconcileRuntimeAfterSessionRemovalAsync(ctx context.Context, reason string, refreshAdvertisement bool) {
+	if err := daemon.reconcileRuntimeAfterSessionRemoval(ctx, reason, refreshAdvertisement); err != nil {
+		daemon.recordBackgroundError("runtime_reconcile_request", err)
+		return
+	}
+	daemon.clearBackgroundError("runtime_reconcile_request")
 }

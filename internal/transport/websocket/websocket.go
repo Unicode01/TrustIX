@@ -149,7 +149,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	listener := &listener{ln: ln}
 	go func() {
 		<-ctx.Done()
-		_ = listener.Close()
+		transport.ObserveAsyncError("close WebSocket listener after context cancellation", listener.Close())
 	}()
 	return listener, nil
 }

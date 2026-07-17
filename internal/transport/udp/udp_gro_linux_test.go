@@ -40,32 +40,35 @@ func TestUDPGROSegmentSizeFromControlTruncated(t *testing.T) {
 }
 
 func TestUDPAddrFromRawSockaddrAny(t *testing.T) {
-	ipv4 := unix.RawSockaddrInet4{
+	var raw unix.RawSockaddrAny
+	*(*unix.RawSockaddrInet4)(unsafe.Pointer(&raw)) = unix.RawSockaddrInet4{
 		Family: unix.AF_INET,
 		Port:   udpHTONS(7001),
 		Addr:   [4]byte{203, 0, 113, 9},
 	}
-	got := udpAddrFromRawSockaddrAny((*unix.RawSockaddrAny)(unsafe.Pointer(&ipv4)))
+	got := udpAddrFromRawSockaddrAny(&raw)
 	if got == nil || got.Port != 7001 || !got.IP.Equal(net.IPv4(203, 0, 113, 9)) {
 		t.Fatalf("ipv4 addr = %#v", got)
 	}
 
-	ipv6 := unix.RawSockaddrInet6{
+	raw = unix.RawSockaddrAny{}
+	*(*unix.RawSockaddrInet6)(unsafe.Pointer(&raw)) = unix.RawSockaddrInet6{
 		Family: unix.AF_INET6,
 		Port:   udpHTONS(7002),
 		Addr:   [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
 	}
-	got = udpAddrFromRawSockaddrAny((*unix.RawSockaddrAny)(unsafe.Pointer(&ipv6)))
+	got = udpAddrFromRawSockaddrAny(&raw)
 	if got == nil || got.Port != 7002 || !got.IP.Equal(net.ParseIP("2001:db8::1")) {
 		t.Fatalf("ipv6 addr = %#v", got)
 	}
 
-	mapped := unix.RawSockaddrInet6{
+	raw = unix.RawSockaddrAny{}
+	*(*unix.RawSockaddrInet6)(unsafe.Pointer(&raw)) = unix.RawSockaddrInet6{
 		Family: unix.AF_INET6,
 		Port:   udpHTONS(7003),
 		Addr:   [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 198, 51, 100, 7},
 	}
-	got = udpAddrFromRawSockaddrAny((*unix.RawSockaddrAny)(unsafe.Pointer(&mapped)))
+	got = udpAddrFromRawSockaddrAny(&raw)
 	if got == nil || got.Port != 7003 || !got.IP.Equal(net.IPv4(198, 51, 100, 7)) {
 		t.Fatalf("mapped ipv6 addr = %#v", got)
 	}

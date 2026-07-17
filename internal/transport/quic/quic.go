@@ -156,7 +156,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	}
 	go func() {
 		<-ctx.Done()
-		_ = ln.Close()
+		transport.ObserveAsyncError("close QUIC listener after context cancellation", ln.Close())
 	}()
 	return &listener{ln: ln}, nil
 }
@@ -429,7 +429,7 @@ func (session *session) tryReadBufferedBorrowedPacket() ([]byte, bool, error) {
 	return payload, true, nil
 }
 
-func (session *session) peekAvailable(size int) ([]byte, bool, error) {
+func (session *session) peekAvailable(size int) (payload []byte, available bool, err error) {
 	if session.reader.Buffered() >= size {
 		payload, err := session.reader.Peek(size)
 		return payload, err == nil, err
@@ -438,9 +438,13 @@ func (session *session) peekAvailable(size int) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	defer func() {
-		_ = session.stream.SetReadDeadline(time.Time{})
+		if resetErr := session.stream.SetReadDeadline(time.Time{}); resetErr != nil {
+			payload = nil
+			available = false
+			err = errors.Join(err, fmt.Errorf("restore QUIC stream read deadline: %w", resetErr))
+		}
 	}()
-	payload, err := session.reader.Peek(size)
+	payload, err = session.reader.Peek(size)
 	if err == nil {
 		return payload, true, nil
 	}

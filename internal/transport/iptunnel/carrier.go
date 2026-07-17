@@ -170,6 +170,7 @@ type carrier struct {
 	closeOnce              sync.Once
 	closeErr               error
 	recvMu                 sync.Mutex
+	recvErr                error
 	sendSeq                atomic.Uint64
 	bytesSent              atomic.Uint64
 	bytesReceived          atomic.Uint64
@@ -1076,7 +1077,7 @@ func listenUDPOnCarrier(ctx context.Context, addr netip.Addr, port uint16) (*net
 	}
 	go func() {
 		<-ctx.Done()
-		_ = conn.Close()
+		transport.ObserveAsyncError("close tunnel carrier after context cancellation", conn.Close())
 	}()
 	return conn, nil
 }
@@ -1305,9 +1306,17 @@ func (session *carrier) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 	}
 	session.recvMu.Lock()
 	defer session.recvMu.Unlock()
+	if session.recvErr != nil {
+		err := session.recvErr
+		session.recvErr = nil
+		return nil, nil, err
+	}
 	for {
 		received, result, release, err := recvCarrierBatch(session.conn, max, carrierReceiveWireSize())
-		if err != nil {
+		if err != nil && len(received) == 0 {
+			if release != nil {
+				release()
+			}
 			return nil, nil, err
 		}
 		completed := session.completeReceivedPackets(received)
@@ -1317,7 +1326,13 @@ func (session *carrier) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 			if release != nil {
 				release()
 			}
+			if err != nil {
+				return nil, nil, err
+			}
 			continue
+		}
+		if err != nil {
+			session.recvErr = err
 		}
 		packets := make([][]byte, 0, len(completed))
 		reassemblies := make([][]byte, 0, len(completed))
@@ -1412,6 +1427,10 @@ func (session *carrier) Close() error {
 			}
 		}
 		session.recvMu.Lock()
+		if session.recvErr != nil {
+			errs = append(errs, session.recvErr)
+			session.recvErr = nil
+		}
 		session.reassembler.releaseAll()
 		session.recvMu.Unlock()
 		session.closeErr = errors.Join(errs...)
@@ -1495,7 +1514,7 @@ func newPacketListener(ctx context.Context, cfg tunnelConfig, conns []*net.UDPCo
 	}
 	go func() {
 		<-ctx.Done()
-		_ = listener.Close()
+		transport.ObserveAsyncError("close tunnel packet listener after context cancellation", listener.Close())
 	}()
 	for _, conn := range conns {
 		if conn == nil {
@@ -1546,20 +1565,20 @@ func (listener *packetListener) Close() error {
 func (listener *packetListener) readLoop(conn *net.UDPConn) {
 	for {
 		packets, _, release, err := recvCarrierBatchFrom(conn, carrierReadBatch(), carrierReceiveWireSize())
-		if err != nil {
-			if release != nil {
-				release()
-			}
-			if udpReadErrorClosed(err) {
-				_ = listener.Close()
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-			continue
+		if len(packets) > 0 {
+			listener.dispatchPackets(conn, packets)
 		}
-		listener.dispatchPackets(conn, packets)
 		if release != nil {
 			release()
+		}
+		if err != nil {
+			if udpReadErrorClosed(err) {
+				transport.ObserveAsyncError("close tunnel packet listener after receive closure", listener.Close())
+				return
+			}
+			transport.ObserveAsyncError("receive tunnel carrier listener batch", err)
+			time.Sleep(10 * time.Millisecond)
+			continue
 		}
 	}
 }

@@ -92,7 +92,9 @@ func (assets *Assets) Serve(w http.ResponseWriter, name string) error {
 		w.Header().Set("Cache-Control", "no-cache")
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(payload)
+	if _, err := w.Write(payload); err != nil {
+		return fmt.Errorf("write webui asset %q: %w", name, err)
+	}
 	return nil
 }
 

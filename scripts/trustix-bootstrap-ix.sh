@@ -15,9 +15,10 @@ trustix_bootstrap_mktemp_dir() {
   dir="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX" 2>/dev/null || mktemp -d -t "${prefix}.XXXXXX" 2>/dev/null || true)"
   if [[ -z "$dir" ]]; then
     dir="${TMPDIR:-/tmp}/${prefix}.$$"
-    rm -rf "$dir"
-    mkdir -p "$dir" || return 1
+    rm -rf "$dir" || return 1
+    (umask 077 && mkdir "$dir") || return 1
   fi
+  [[ -d "$dir" && ! -L "$dir" ]] || return 1
   printf '%s\n' "$dir"
 }
 
@@ -27,9 +28,10 @@ trustix_bootstrap_mktemp_file() {
   file="$(mktemp "${TMPDIR:-/tmp}/${prefix}.XXXXXX" 2>/dev/null || mktemp -t "${prefix}.XXXXXX" 2>/dev/null || true)"
   if [[ -z "$file" ]]; then
     file="${TMPDIR:-/tmp}/${prefix}.$$"
-    rm -f "$file"
-    : >"$file" || return 1
+    rm -f "$file" || return 1
+    (umask 077 && set -o noclobber && : >"$file") 2>/dev/null || return 1
   fi
+  [[ -f "$file" && ! -L "$file" ]] || return 1
   printf '%s\n' "$file"
 }
 
@@ -47,19 +49,56 @@ bootstrap_repo_root() {
 }
 
 trustix_bootstrap_temp_repo=0
+trustix_bootstrap_archive_path=""
+
+trustix_bootstrap_temp_path_safe() {
+  local path="${1:-}"
+  local prefix="${2:-trustix-bootstrap}"
+  local temp_root="${TMPDIR:-/tmp}"
+  temp_root="${temp_root%/}"
+  case "$path" in
+    "${temp_root}/${prefix}."*|"/tmp/${prefix}."*|"/var/tmp/${prefix}."*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 trustix_bootstrap_cleanup_temp_repo() {
-  if [[ "${trustix_bootstrap_temp_repo:-0}" == "1" && "${repo_root:-}" == /tmp/trustix-bootstrap-src.* ]]; then
+	local failed=0
+	if [[ -n "${trustix_bootstrap_archive_path:-}" ]]; then
+		if trustix_bootstrap_temp_path_safe "$trustix_bootstrap_archive_path" trustix-bootstrap-src; then
+			rm -f -- "$trustix_bootstrap_archive_path" || failed=1
+		else
+			trustix_bootstrap_log "ERROR: refusing to remove unexpected bootstrap archive path: ${trustix_bootstrap_archive_path}"
+			failed=1
+		fi
+		trustix_bootstrap_archive_path=""
+	fi
+	if [[ "${trustix_bootstrap_temp_repo:-0}" == "1" ]]; then
     case "${TRUSTIX_BOOTSTRAP_KEEP_WORKDIR:-0}" in
       1|true|yes|on)
         trustix_bootstrap_log "workdir preserved: ${repo_root}"
         ;;
       *)
-        rm -rf "$repo_root" || true
+				if trustix_bootstrap_temp_path_safe "${repo_root:-}" trustix-bootstrap-src; then
+					rm -rf -- "$repo_root" || failed=1
+				else
+					trustix_bootstrap_log "ERROR: refusing to remove unexpected bootstrap workdir: ${repo_root:-}"
+					failed=1
+				fi
         ;;
     esac
   fi
-  return 0
+	return "$failed"
+}
+
+trustix_bootstrap_exit_trap() {
+	local rc=$?
+	trap - EXIT
+	set +e
+	if ! trustix_bootstrap_cleanup_temp_repo; then
+		[[ "$rc" != "0" ]] || rc=1
+	fi
+	exit "$rc"
 }
 
 trustix_bootstrap_dir_has_entries() {
@@ -148,7 +187,7 @@ if ! repo_root="$(bootstrap_repo_root)"; then
     repo_root="$(trustix_bootstrap_mktemp_dir trustix-bootstrap-src)"
     trustix_bootstrap_temp_repo=1
   fi
-  trap 'trustix_bootstrap_cleanup_temp_repo "$?"' EXIT
+  trap trustix_bootstrap_exit_trap EXIT
   if [[ ! -f "${repo_root}/go.mod" ]]; then
     mkdir -p "$repo_root"
     if trustix_bootstrap_dir_has_entries "$repo_root"; then
@@ -168,10 +207,12 @@ if ! repo_root="$(bootstrap_repo_root)"; then
     if [[ "$cloned" != "1" ]] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; } && command -v tar >/dev/null 2>&1 && [[ "$repo_url" == https://github.com/* ]]; then
       archive_url="${repo_url%.git}/archive/${repo_ref}.tar.gz"
       archive_path="$(trustix_bootstrap_mktemp_file trustix-bootstrap-src)" || exit 1
+			trustix_bootstrap_archive_path="$archive_path"
       mapfile -t archive_urls < <(trustix_bootstrap_github_url_candidates "$archive_url")
       trustix_bootstrap_download_file "$archive_path" "${archive_urls[@]}"
       trustix_bootstrap_extract_archive "$archive_path" "$repo_root"
       rm -f "$archive_path"
+			trustix_bootstrap_archive_path=""
       cloned=1
     fi
     if [[ "$cloned" != "1" ]]; then
@@ -181,7 +222,9 @@ if ! repo_root="$(bootstrap_repo_root)"; then
   fi
   child_status=0
   bash "${repo_root}/scripts/trustix-bootstrap-ix.sh" "$@" || child_status=$?
-  trustix_bootstrap_cleanup_temp_repo "$child_status"
+	if ! trustix_bootstrap_cleanup_temp_repo; then
+		[[ "$child_status" != "0" ]] || child_status=1
+	fi
   trap - EXIT
   exit "$child_status"
 fi

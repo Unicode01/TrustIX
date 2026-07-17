@@ -820,10 +820,21 @@ func (daemon *Daemon) pendingAdmissionSnapshot(ixID core.IXID) (pendingAdmission
 }
 
 func pendingAdmissionResponseFromRecord(record pendingMemberRecord) pendingAdmissionResponse {
-	routeAuthFingerprints, _ := routeAuthFingerprintsFromAdvertisement(record.Advertisement)
+	routeAuthFingerprints, routeAuthErr := routeAuthFingerprintsFromAdvertisement(record.Advertisement)
 	certFingerprint := ""
-	if cert, err := x509.ParseCertificate(record.Advertisement.IXCertificate); err == nil {
+	cert, certErr := x509.ParseCertificate(record.Advertisement.IXCertificate)
+	if certErr == nil {
 		certFingerprint = pki.CertificateFingerprintSHA256(cert)
+	}
+	rejectReason := record.RejectReason
+	for _, err := range []error{routeAuthErr, certErr} {
+		if err == nil {
+			continue
+		}
+		if rejectReason != "" {
+			rejectReason += "; "
+		}
+		rejectReason += err.Error()
 	}
 	expiresAt := record.LastSeen.Add(pendingMemberTTL).UTC()
 	now := time.Now().UTC()
@@ -842,7 +853,7 @@ func pendingAdmissionResponseFromRecord(record pendingMemberRecord) pendingAdmis
 		TTLSeconds:            ttl,
 		Expired:               !expiresAt.After(now),
 		Source:                record.Source,
-		RejectReason:          record.RejectReason,
+		RejectReason:          rejectReason,
 		IXCertFingerprint:     certFingerprint,
 		AllowedPrefixes:       corePrefixesFromAdvertisement(record.Advertisement),
 		RouteAuthFingerprints: routeAuthFingerprints,

@@ -3,6 +3,7 @@
 package iptunnel
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -22,6 +23,8 @@ func createKernelTunnel(protocol transport.Protocol, name string, cfg tunnelConf
 	}
 	if existing, err := netlink.LinkByName(name); err == nil {
 		return "", fmt.Errorf("kernel tunnel %q already exists", existing.Attrs().Name)
+	} else if !kernelTunnelLinkNotFound(err) {
+		return "", fmt.Errorf("inspect requested kernel tunnel name %q: %w", name, err)
 	}
 	attrs := netlink.LinkAttrs{Name: name, MTU: cfg.MTU}
 	if cfg.Queues > 0 {
@@ -30,24 +33,21 @@ func createKernelTunnel(protocol transport.Protocol, name string, cfg tunnelConf
 	}
 	local := net.IP(cfg.LocalUnderlay.AsSlice())
 	remote := net.IP(cfg.RemoteUnderlay.AsSlice())
+	var created netlink.Link
 	switch protocol {
 	case transport.ProtocolGRE:
-		if err := netlink.LinkAdd(&netlink.Gretun{
+		created = &netlink.Gretun{
 			LinkAttrs: attrs,
 			Local:     local,
 			Remote:    remote,
 			PMtuDisc:  1,
-		}); err != nil {
-			return "", fmt.Errorf("create GRE tunnel %q: %w", name, err)
 		}
 	case transport.ProtocolIPIP:
-		if err := netlink.LinkAdd(&netlink.Iptun{
+		created = &netlink.Iptun{
 			LinkAttrs: attrs,
 			Local:     local,
 			Remote:    remote,
 			PMtuDisc:  1,
-		}); err != nil {
-			return "", fmt.Errorf("create IPIP tunnel %q: %w", name, err)
 		}
 	case transport.ProtocolVXLAN:
 		vxlan := &netlink.Vxlan{
@@ -68,24 +68,32 @@ func createKernelTunnel(protocol transport.Protocol, name string, cfg tunnelConf
 			}
 			vxlan.VtepDevIndex = link.Attrs().Index
 		}
-		if err := netlink.LinkAdd(vxlan); err != nil {
-			return "", fmt.Errorf("create VXLAN tunnel %q: %w", name, err)
-		}
+		created = vxlan
 	default:
 		return "", fmt.Errorf("unsupported kernel tunnel protocol %q", protocol)
 	}
+	if err := netlink.LinkAdd(created); err != nil {
+		return "", fmt.Errorf("create %s tunnel %q: %w", protocol, name, err)
+	}
 	link, err := netlink.LinkByName(name)
 	if err != nil {
-		return "", fmt.Errorf("inspect kernel tunnel %q: %w", name, err)
+		return "", errors.Join(
+			fmt.Errorf("inspect kernel tunnel %q: %w", name, err),
+			deleteKernelTunnelLink(created),
+		)
 	}
 	addr := &netlink.Addr{IPNet: netipPrefixToIPNet(cfg.LocalCarrier)}
 	if err := netlink.AddrReplace(link, addr); err != nil {
-		_ = netlink.LinkDel(link)
-		return "", fmt.Errorf("configure carrier address %s on %q: %w", cfg.LocalCarrier, name, err)
+		return "", errors.Join(
+			fmt.Errorf("configure carrier address %s on %q: %w", cfg.LocalCarrier, name, err),
+			deleteKernelTunnelLink(link),
+		)
 	}
 	if err := netlink.LinkSetUp(link); err != nil {
-		_ = netlink.LinkDel(link)
-		return "", fmt.Errorf("set tunnel %q up: %w", name, err)
+		return "", errors.Join(
+			fmt.Errorf("set tunnel %q up: %w", name, err),
+			deleteKernelTunnelLink(link),
+		)
 	}
 	return name, nil
 }
@@ -102,8 +110,10 @@ func randomAvailableTunnelName(protocol transport.Protocol) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("generate %s tunnel name: %w", protocol, err)
 		}
-		if _, err := netlink.LinkByName(name); err != nil {
+		if _, err := netlink.LinkByName(name); kernelTunnelLinkNotFound(err) {
 			return name, nil
+		} else if err != nil {
+			return "", fmt.Errorf("inspect generated %s tunnel name %q: %w", protocol, name, err)
 		}
 		lastErr = fmt.Errorf("kernel tunnel %q already exists", name)
 	}
@@ -116,9 +126,30 @@ func deleteKernelTunnel(name string) error {
 	}
 	link, err := netlink.LinkByName(name)
 	if err != nil {
+		if kernelTunnelLinkNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect kernel tunnel %q for delete: %w", name, err)
+	}
+	return deleteKernelTunnelLink(link)
+}
+
+func deleteKernelTunnelLink(link netlink.Link) error {
+	if link == nil {
 		return nil
 	}
-	return netlink.LinkDel(link)
+	if err := netlink.LinkDel(link); err != nil && !kernelTunnelLinkNotFound(err) {
+		return fmt.Errorf("delete kernel tunnel %q: %w", link.Attrs().Name, err)
+	}
+	return nil
+}
+
+func kernelTunnelLinkNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var notFound netlink.LinkNotFoundError
+	return errors.As(err, &notFound)
 }
 
 func kernelTunnelExists(name string) bool {

@@ -229,6 +229,22 @@ func TestServerInvalidHandshakeSendsReset(t *testing.T) {
 	}
 }
 
+func TestServerInvalidHandshakeReturnsResetSendFailure(t *testing.T) {
+	wantErr := errors.New("injected reset send failure")
+	inner := &handshakeSendFailureSession{
+		recv:    []byte("old encrypted data"),
+		sendErr: wantErr,
+	}
+
+	_, err := Server(inner, nil, Options{Epoch: 1})
+	if !errors.Is(err, ErrInvalidHandshake) || !errors.Is(err, wantErr) {
+		t.Fatalf("server error = %v, want invalid handshake and reset send failure", err)
+	}
+	if errors.Is(err, ErrSessionResetSent) {
+		t.Fatalf("server error = %v, reset was not sent", err)
+	}
+}
+
 func TestSessionRecvResetReturnsSessionReset(t *testing.T) {
 	client, _, clientInner := handshakePair(t)
 	clientInner.inject(resetPacket())
@@ -300,6 +316,52 @@ func TestClientRetransmitsClientHelloUntilServerHello(t *testing.T) {
 	retry := <-retransmittedClientHello
 	if !bytes.Equal(initial, retry) {
 		t.Fatalf("retransmitted client hello changed")
+	}
+}
+
+func TestClientReturnsRetransmitAndCleanupFailures(t *testing.T) {
+	wantSendErr := errors.New("injected retransmit failure")
+	wantCloseErr := errors.New("injected retransmit cleanup failure")
+	inner := &retransmitFailureSession{
+		sendErr:  wantSendErr,
+		closeErr: wantCloseErr,
+		closed:   make(chan struct{}),
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := Client(inner, nil, Options{Epoch: 1})
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, wantSendErr) || !errors.Is(err, wantCloseErr) {
+			t.Fatalf("client error = %v, want retransmit and cleanup failures", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("client did not stop after handshake retransmit failure")
+	}
+}
+
+func TestDuplicateClientHelloReturnsServerHelloResendFailure(t *testing.T) {
+	wantErr := errors.New("injected duplicate hello reply failure")
+	clientHello := resetPacket()
+	clientHello[5] = helloTypeClient
+	serverHello := resetPacket()
+	serverHello[5] = helloTypeServer
+	session := &Session{
+		inner:          &handshakeSendFailureSession{sendErr: wantErr},
+		role:           serverRole,
+		clientHelloRaw: clientHello,
+		serverHelloRaw: serverHello,
+		recvEncrypted:  false,
+		sendEncrypted:  false,
+		encryptionMode: EncryptionPlaintext,
+	}
+
+	_, ok, err := session.openReceivedPacketNoStats(clientHello)
+	if ok || !errors.Is(err, wantErr) {
+		t.Fatalf("duplicate result ok=%t err=%v, want resend failure", ok, err)
 	}
 }
 
@@ -1498,6 +1560,58 @@ type memorySession struct {
 	sent         [][]byte
 	borrowedRecv bool
 	releases     int
+}
+
+type handshakeSendFailureSession struct {
+	recv    []byte
+	sendErr error
+}
+
+func (session *handshakeSendFailureSession) SendPacket([]byte) error {
+	return session.sendErr
+}
+
+func (session *handshakeSendFailureSession) RecvPacket() ([]byte, error) {
+	return append([]byte(nil), session.recv...), nil
+}
+
+func (session *handshakeSendFailureSession) Close() error {
+	return nil
+}
+
+func (session *handshakeSendFailureSession) Stats() transport.TransportStats {
+	return transport.TransportStats{}
+}
+
+type retransmitFailureSession struct {
+	sendCalls atomic.Uint64
+	sendErr   error
+	closeErr  error
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (session *retransmitFailureSession) SendPacket([]byte) error {
+	if session.sendCalls.Add(1) == 1 {
+		return nil
+	}
+	return session.sendErr
+}
+
+func (session *retransmitFailureSession) RecvPacket() ([]byte, error) {
+	<-session.closed
+	return nil, net.ErrClosed
+}
+
+func (session *retransmitFailureSession) Close() error {
+	session.closeOnce.Do(func() {
+		close(session.closed)
+	})
+	return session.closeErr
+}
+
+func (session *retransmitFailureSession) Stats() transport.TransportStats {
+	return transport.TransportStats{}
 }
 
 type offloadMemorySession struct {

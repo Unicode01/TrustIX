@@ -1,6 +1,17 @@
 package udp
 
-import "net"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"time"
+)
+
+type udpBatchReadConn interface {
+	Read([]byte) (int, error)
+	ReadFromUDP([]byte) (int, *net.UDPAddr, error)
+	SetReadDeadline(time.Time) error
+}
 
 type udpReceivedPacket struct {
 	payload []byte
@@ -41,7 +52,7 @@ func appendUDPGROPayloadSegments(dst [][]byte, payload []byte, segmentSize int) 
 	return dst, segments
 }
 
-func readUDPBatchLoop(conn *net.UDPConn, max int, packetSize int) ([][]byte, udpBatchReceiveResult, func(), error) {
+func readUDPBatchLoop(conn udpBatchReadConn, max int, packetSize int) ([][]byte, udpBatchReceiveResult, func(), error) {
 	if max <= 0 {
 		max = 1
 	}
@@ -57,28 +68,30 @@ func readUDPBatchLoop(conn *net.UDPConn, max int, packetSize int) ([][]byte, udp
 	packets = append(packets, buf[:n])
 	result := udpBatchReceiveResult{bytesReceived: uint64(n), loopSyscalls: 1}
 	if max > 1 {
-		if err := conn.SetReadDeadline(nowForUDPReadBatch()); err == nil {
-			for len(packets) < max {
-				buf = make([]byte, packetSize)
-				n, err = conn.Read(buf)
-				if err != nil {
-					if udpReadErrorTimeout(err) {
-						break
-					}
-					_ = conn.SetReadDeadline(zeroUDPReadDeadline())
-					return packets, result, nil, nil
-				}
-				packets = append(packets, buf[:n])
-				result.bytesReceived += uint64(n)
-				result.loopSyscalls++
-			}
-			_ = conn.SetReadDeadline(zeroUDPReadDeadline())
+		if err := conn.SetReadDeadline(nowForUDPReadBatch()); err != nil {
+			return packets, result, nil, fmt.Errorf("set UDP batch drain read deadline: %w", err)
 		}
+		var trailingErr error
+		for len(packets) < max {
+			buf = make([]byte, packetSize)
+			n, err = conn.Read(buf)
+			if err != nil {
+				if !udpReadErrorTimeout(err) {
+					trailingErr = fmt.Errorf("drain UDP receive batch: %w", err)
+				}
+				break
+			}
+			packets = append(packets, buf[:n])
+			result.bytesReceived += uint64(n)
+			result.loopSyscalls++
+		}
+		resetErr := conn.SetReadDeadline(zeroUDPReadDeadline())
+		return packets, result, nil, errors.Join(trailingErr, wrapUDPDeadlineResetError(resetErr))
 	}
 	return packets, result, nil, nil
 }
 
-func readUDPBatchFromLoop(conn *net.UDPConn, max int, packetSize int) ([]udpReceivedPacket, udpBatchReceiveResult, func(), error) {
+func readUDPBatchFromLoop(conn udpBatchReadConn, max int, packetSize int) ([]udpReceivedPacket, udpBatchReceiveResult, func(), error) {
 	if max <= 0 {
 		max = 1
 	}
@@ -94,23 +107,32 @@ func readUDPBatchFromLoop(conn *net.UDPConn, max int, packetSize int) ([]udpRece
 	packets = append(packets, udpReceivedPacket{payload: buf[:n], addr: addr})
 	result := udpBatchReceiveResult{bytesReceived: uint64(n), loopSyscalls: 1}
 	if max > 1 {
-		if err := conn.SetReadDeadline(nowForUDPReadBatch()); err == nil {
-			for len(packets) < max {
-				buf = make([]byte, packetSize)
-				n, addr, err = conn.ReadFromUDP(buf)
-				if err != nil {
-					if udpReadErrorTimeout(err) {
-						break
-					}
-					_ = conn.SetReadDeadline(zeroUDPReadDeadline())
-					return packets, result, nil, nil
-				}
-				packets = append(packets, udpReceivedPacket{payload: buf[:n], addr: addr})
-				result.bytesReceived += uint64(n)
-				result.loopSyscalls++
-			}
-			_ = conn.SetReadDeadline(zeroUDPReadDeadline())
+		if err := conn.SetReadDeadline(nowForUDPReadBatch()); err != nil {
+			return packets, result, nil, fmt.Errorf("set UDP batch drain read deadline: %w", err)
 		}
+		var trailingErr error
+		for len(packets) < max {
+			buf = make([]byte, packetSize)
+			n, addr, err = conn.ReadFromUDP(buf)
+			if err != nil {
+				if !udpReadErrorTimeout(err) {
+					trailingErr = fmt.Errorf("drain UDP receive batch: %w", err)
+				}
+				break
+			}
+			packets = append(packets, udpReceivedPacket{payload: buf[:n], addr: addr})
+			result.bytesReceived += uint64(n)
+			result.loopSyscalls++
+		}
+		resetErr := conn.SetReadDeadline(zeroUDPReadDeadline())
+		return packets, result, nil, errors.Join(trailingErr, wrapUDPDeadlineResetError(resetErr))
 	}
 	return packets, result, nil, nil
+}
+
+func wrapUDPDeadlineResetError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("restore UDP receive deadline: %w", err)
 }

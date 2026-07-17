@@ -528,7 +528,7 @@ func (manager *Manager) resolveIPv4Neighbor(linkIndex int, remoteIP netip.Addr) 
 			return mac, nil
 		}
 	}
-	triggerNeighborProbe(linkIndex, nextHop)
+	probeErr := triggerNeighborProbe(linkIndex, nextHop)
 	time.Sleep(25 * time.Millisecond)
 	manager.seedNeighborCache(linkIndex)
 	if manager.neighborCache != nil {
@@ -537,7 +537,10 @@ func (manager *Manager) resolveIPv4Neighbor(linkIndex int, remoteIP netip.Addr) 
 			return mac, nil
 		}
 	}
-	return nil, fmt.Errorf("%w: %s on ifindex %d", errNeighborUnresolved, nextHop, linkIndex)
+	return nil, errors.Join(
+		fmt.Errorf("%w: %s on ifindex %d", errNeighborUnresolved, nextHop, linkIndex),
+		wrapEBPFOperation("trigger neighbor probe", probeErr),
+	)
 }
 
 func (manager *Manager) resolveIPv4NeighborVia(linkIndex int, remoteIP netip.Addr, nextHop netip.Addr) (net.HardwareAddr, error) {
@@ -590,7 +593,7 @@ func (manager *Manager) resolveIPv4NeighborVia(linkIndex int, remoteIP netip.Add
 			return mac, nil
 		}
 	}
-	triggerNeighborProbe(linkIndex, nextHop)
+	probeErr := triggerNeighborProbe(linkIndex, nextHop)
 	time.Sleep(25 * time.Millisecond)
 	manager.seedNeighborCache(linkIndex)
 	if manager.neighborCache != nil {
@@ -599,7 +602,10 @@ func (manager *Manager) resolveIPv4NeighborVia(linkIndex int, remoteIP netip.Add
 			return mac, nil
 		}
 	}
-	return nil, fmt.Errorf("%w: %s on ifindex %d", errNeighborUnresolved, nextHop, linkIndex)
+	return nil, errors.Join(
+		fmt.Errorf("%w: %s on ifindex %d", errNeighborUnresolved, nextHop, linkIndex),
+		wrapEBPFOperation("trigger neighbor probe", probeErr),
+	)
 }
 
 func (manager *Manager) seedNeighborCache(linkIndex int) {
@@ -609,14 +615,17 @@ func (manager *Manager) seedNeighborCache(linkIndex int) {
 	manager.neighborCache.watchLink(linkIndex)
 }
 
-func triggerNeighborProbe(linkIndex int, addr netip.Addr) {
-	_ = netlink.NeighSet(&netlink.Neigh{
+func triggerNeighborProbe(linkIndex int, addr netip.Addr) error {
+	if err := netlink.NeighSet(&netlink.Neigh{
 		LinkIndex: linkIndex,
 		Family:    netlink.FAMILY_V4,
 		IP:        net.IP(addr.AsSlice()),
 		State:     netlink.NUD_PROBE,
 		Flags:     netlink.NTF_USE,
-	})
+	}); err != nil {
+		return fmt.Errorf("probe IPv4 neighbor %s on ifindex %d: %w", addr, linkIndex, err)
+	}
+	return nil
 }
 
 type lanPacketInjector struct {
@@ -651,8 +660,10 @@ func (manager *Manager) lanPacketInjectorForIface(iface string) (*lanPacketInjec
 		return nil, fmt.Errorf("open LAN packet reinject socket for %q: %w", iface, err)
 	}
 	if err := configureLANPacketSocket(fd); err != nil {
-		_ = unix.Close(fd)
-		return nil, fmt.Errorf("configure LAN packet reinject socket for %q: %w", iface, err)
+		return nil, errors.Join(
+			fmt.Errorf("configure LAN packet reinject socket for %q: %w", iface, err),
+			wrapEBPFOperation("close failed LAN packet reinject socket", unix.Close(fd)),
+		)
 	}
 	injector := &lanPacketInjector{
 		fd:           fd,
@@ -1121,8 +1132,10 @@ func (injector *lanPacketInjector) sendRawGSOBatch(packets [][]byte, dst netip.A
 	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
-			injector.disableRawGSOLocked()
-			return sent, fmt.Errorf("%w: send LAN raw GSO batch to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err)
+			return sent, errors.Join(
+				fmt.Errorf("%w: send LAN raw GSO batch to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
+				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
+			)
 		}
 		return sent, fmt.Errorf("reinject LAN raw GSO IPv4 batch to %s on %q: %w", dst, injector.ifname, err)
 	}
@@ -1199,8 +1212,10 @@ func (injector *lanPacketInjector) sendRawVNetMixedBatch(packets [][]byte, dst n
 		if err != nil {
 			lanPacketStats.recordGSOErrno(err)
 			if isPacketSocketGSOUnsupported(err) {
-				injector.disableRawGSOLocked()
-				return sent, fmt.Errorf("%w: send LAN raw mixed batch to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err)
+				return sent, errors.Join(
+					fmt.Errorf("%w: send LAN raw mixed batch to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
+					wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
+				)
 			}
 			if n > 0 {
 				continue
@@ -1407,8 +1422,10 @@ func (injector *lanPacketInjector) sendRawGSOScatterRun(packets [][]byte, dst ne
 	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
-			injector.disableRawGSOLocked()
-			return 0, fmt.Errorf("%w: send LAN raw GSO scatter to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err)
+			return 0, errors.Join(
+				fmt.Errorf("%w: send LAN raw GSO scatter to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
+				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
+			)
 		}
 		return 0, fmt.Errorf("reinject LAN raw GSO scatter IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
 	}
@@ -1956,8 +1973,10 @@ func (injector *lanPacketInjector) sendRawGSO(packet []byte, dst netip.Addr, dst
 	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
-			injector.disableRawGSOLocked()
-			return fmt.Errorf("%w: send LAN raw GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err)
+			return errors.Join(
+				fmt.Errorf("%w: send LAN raw GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
+				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
+			)
 		}
 		return fmt.Errorf("reinject LAN raw GSO IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
 	}
@@ -1994,8 +2013,10 @@ func (injector *lanPacketInjector) sendCookedGSO(packet []byte, dst netip.Addr, 
 	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
-			injector.disableCookedGSOLocked()
-			return fmt.Errorf("%w: send LAN cooked GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err)
+			return errors.Join(
+				fmt.Errorf("%w: send LAN cooked GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
+				wrapEBPFOperation("close disabled LAN cooked GSO socket", injector.disableCookedGSOLocked()),
+			)
 		}
 		return fmt.Errorf("reinject LAN cooked GSO IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
 	}
@@ -2026,8 +2047,10 @@ func (injector *lanPacketInjector) sendRawGSOContiguous(packet []byte, dst netip
 	}); err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
-			injector.disableRawGSOLocked()
-			return fmt.Errorf("%w: send LAN raw GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err)
+			return errors.Join(
+				fmt.Errorf("%w: send LAN raw GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
+				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
+			)
 		}
 		return fmt.Errorf("reinject LAN raw GSO IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
 	}
@@ -2055,8 +2078,10 @@ func (injector *lanPacketInjector) sendCookedGSOContiguous(packet []byte, dst ne
 	}); err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
-			injector.disableCookedGSOLocked()
-			return fmt.Errorf("%w: send LAN cooked GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err)
+			return errors.Join(
+				fmt.Errorf("%w: send LAN cooked GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
+				wrapEBPFOperation("close disabled LAN cooked GSO socket", injector.disableCookedGSOLocked()),
+			)
 		}
 		return fmt.Errorf("reinject LAN cooked GSO IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
 	}
@@ -2075,9 +2100,11 @@ func (injector *lanPacketInjector) gsoRawSocketLocked() (int, error) {
 		return -1, fmt.Errorf("%w: open LAN raw GSO packet reinject socket for %q: %v", errGSOUnsupported, injector.ifname, err)
 	}
 	if err := configureGSOPacketSocket(fd); err != nil {
-		_ = unix.Close(fd)
 		injector.gsoRawDisabled = true
-		return -1, fmt.Errorf("%w: configure raw GSO packet socket on %q: %v", errGSOUnsupported, injector.ifname, err)
+		return -1, errors.Join(
+			fmt.Errorf("%w: configure raw GSO packet socket on %q: %v", errGSOUnsupported, injector.ifname, err),
+			wrapEBPFOperation("close failed raw GSO packet socket", unix.Close(fd)),
+		)
 	}
 	injector.gsoRawFD = fd
 	return fd, nil
@@ -2095,9 +2122,11 @@ func (injector *lanPacketInjector) gsoCookedSocketLocked() (int, error) {
 		return -1, fmt.Errorf("%w: open LAN GSO packet reinject socket for %q: %v", errGSOUnsupported, injector.ifname, err)
 	}
 	if err := configureGSOPacketSocket(fd); err != nil {
-		_ = unix.Close(fd)
 		injector.gsoDisabled = true
-		return -1, fmt.Errorf("%w: configure cooked GSO packet socket on %q: %v", errGSOUnsupported, injector.ifname, err)
+		return -1, errors.Join(
+			fmt.Errorf("%w: configure cooked GSO packet socket on %q: %v", errGSOUnsupported, injector.ifname, err),
+			wrapEBPFOperation("close failed cooked GSO packet socket", unix.Close(fd)),
+		)
 	}
 	injector.gsoFD = fd
 	return fd, nil
@@ -2119,7 +2148,9 @@ func configureGSOPacketSocket(fd int) error {
 		return fmt.Errorf("enable PACKET_VNET_HDR: %w", err)
 	}
 	if lanReinjectGSOQdiscBypassEnabled() {
-		_ = unix.SetsockoptInt(fd, unix.SOL_PACKET, unix.PACKET_QDISC_BYPASS, 1)
+		if err := unix.SetsockoptInt(fd, unix.SOL_PACKET, unix.PACKET_QDISC_BYPASS, 1); err != nil {
+			return fmt.Errorf("enable PACKET_QDISC_BYPASS: %w", err)
+		}
 	}
 	return nil
 }
@@ -2166,20 +2197,24 @@ func lanReinjectGSOQdiscBypassEnabled() bool {
 	return envTruthy("TRUSTIX_LAN_REINJECT_GSO_QDISC_BYPASS")
 }
 
-func (injector *lanPacketInjector) disableRawGSOLocked() {
+func (injector *lanPacketInjector) disableRawGSOLocked() error {
 	injector.gsoRawDisabled = true
 	if injector.gsoRawFD >= 0 {
-		_ = unix.Close(injector.gsoRawFD)
+		err := unix.Close(injector.gsoRawFD)
 		injector.gsoRawFD = -1
+		return err
 	}
+	return nil
 }
 
-func (injector *lanPacketInjector) disableCookedGSOLocked() {
+func (injector *lanPacketInjector) disableCookedGSOLocked() error {
 	injector.gsoDisabled = true
 	if injector.gsoFD >= 0 {
-		_ = unix.Close(injector.gsoFD)
+		err := unix.Close(injector.gsoFD)
 		injector.gsoFD = -1
+		return err
 	}
+	return nil
 }
 
 func isPacketSocketGSOUnsupported(err error) bool {

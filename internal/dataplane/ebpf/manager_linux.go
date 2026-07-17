@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"os"
@@ -46,6 +47,7 @@ import (
 
 type Manager struct {
 	mu                                          sync.Mutex
+	backgroundTasks                             backgroundTaskTracker
 	captureMu                                   sync.Mutex
 	rawTXMu                                     sync.Mutex
 	kernelUDPUDPFallbackMu                      sync.RWMutex
@@ -98,6 +100,7 @@ type Manager struct {
 	kernelUDPRXDirectDecapL2DevKfunc            bool
 	kernelUDPRXDirectParseDecapL2Kfunc          bool
 	kernelUDPRXDirectTrustInnerChecksum         bool
+	kernelUDPRXNeighborMapErrors                atomic.Uint64
 	kernelUDPXDPRXDirectObject                  *tixTCPXDPObject
 	kernelUDPXDPRXDirectEnabled                 bool
 	kernelUDPXDPRXDirectAttached                bool
@@ -1855,25 +1858,24 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 	createdLANLinks := make(map[string]netlink.Link)
 	initialLANOffloadProtections := cloneLinkOffloadStateMap(manager.lanOffloadProtections)
 	defer func() {
+		var rollbackErrs []error
 		if err != nil && linkOffloadStateMapChanged(manager.lanOffloadProtections, initialLANOffloadProtections) {
 			restoreErr := manager.restoreLANOffloadProtectionLocked(primaryLink)
 			if restoreErr != nil {
 				manager.spec = spec
-				if persistErr := manager.persistStateLocked(); persistErr != nil {
-					err = fmt.Errorf("%w; rollback LAN offload protection: %v; persist rollback state: %v", err, restoreErr, persistErr)
-				} else {
-					err = fmt.Errorf("%w; rollback LAN offload protection: %v", err, restoreErr)
-				}
+				rollbackErrs = append(rollbackErrs, wrapEBPFOperation("rollback LAN offload protection", restoreErr))
+				rollbackErrs = append(rollbackErrs, wrapEBPFOperation("persist LAN offload rollback state", manager.persistStateLocked()))
 			}
 		}
 		if err != nil {
 			for key, link := range createdLANLinks {
 				if link != nil {
-					_ = netlink.LinkDel(link)
+					rollbackErrs = append(rollbackErrs, wrapEBPFOperation("delete rolled-back managed LAN link "+key, netlink.LinkDel(link)))
 				}
 				delete(manager.linkAddedLANs, key)
 			}
 		}
+		err = errors.Join(err, errors.Join(rollbackErrs...))
 	}()
 	if manager.addressAddedLANs == nil {
 		manager.addressAddedLANs = make(map[string]bool)
@@ -2002,11 +2004,7 @@ func (manager *Manager) ApplySnapshot(ctx context.Context, snapshot dataplane.Sn
 		return err
 	}
 	manager.snapshot = snapshot
-	if manager.reconcileKernelTransportFlowsForSnapshotLocked(snapshot) {
-		_ = manager.syncTIXTCPPortsLocked()
-		_ = manager.syncKernelUDPPortsLocked()
-		_ = manager.syncKernelUDPTXDirectLocked()
-	}
+	manager.reconcileKernelTransportFlowsForSnapshotLocked(snapshot)
 	if err := manager.ensureKernelTransportFastPathLocked(ctx); err != nil {
 		return err
 	}
@@ -2576,13 +2574,21 @@ func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatu
 		return dataplane.TIXTCPStatus{}, err
 	}
 	if manager.refreshKernelTransportDNSTemplatesLocked(time.Now().UTC()) {
-		_ = manager.syncTIXTCPPortsLocked()
-		_ = manager.syncKernelUDPPortsLocked()
-		_ = manager.syncKernelUDPTXDirectLocked()
+		if err := errors.Join(
+			wrapEBPFOperation("sync tix_tcp ports after DNS template refresh", manager.syncTIXTCPPortsLocked()),
+			wrapEBPFOperation("sync kernel UDP ports after DNS template refresh", manager.syncKernelUDPPortsLocked()),
+			wrapEBPFOperation("sync kernel UDP direct state after DNS template refresh", manager.syncKernelUDPTXDirectLocked()),
+		); err != nil {
+			return dataplane.TIXTCPStatus{}, err
+		}
 	}
 	if manager.pruneTIXTCPFlowsLocked(time.Now().UTC()) {
-		_ = manager.syncTIXTCPPortsLocked()
-		_ = manager.persistStateLocked()
+		if err := errors.Join(
+			wrapEBPFOperation("sync tix_tcp ports after flow pruning", manager.syncTIXTCPPortsLocked()),
+			wrapEBPFOperation("persist tix_tcp flow pruning", manager.persistStateLocked()),
+		); err != nil {
+			return dataplane.TIXTCPStatus{}, err
+		}
 	}
 	rawFallback := tixTCPRawFallbackEnabled()
 	fastPath := manager.tixTCPProviderFastPathAvailableLocked()
@@ -2832,8 +2838,12 @@ func probeTunnelCapabilityUncached(protocol string) (bool, string) {
 	if err != nil {
 		return false, fmt.Sprintf("Linux %s tunnel netdev capability probe failed: %v", protocol, err)
 	}
-	if link, lookupErr := netlink.LinkByName(name); lookupErr == nil {
-		_ = netlink.LinkDel(link)
+	link, lookupErr := netlink.LinkByName(name)
+	if lookupErr != nil {
+		return false, fmt.Sprintf("Linux %s tunnel netdev was created but cannot be inspected for cleanup: %v", protocol, lookupErr)
+	}
+	if deleteErr := netlink.LinkDel(link); deleteErr != nil {
+		return false, fmt.Sprintf("Linux %s tunnel netdev was created but cleanup failed: %v", protocol, deleteErr)
 	}
 	return true, fmt.Sprintf("Linux %s netdev can carry an inner UDP TrustIX carrier packet; secure handshake and AEAD remain above the carrier unless kernel crypto is selected elsewhere", protocol)
 }
@@ -2971,16 +2981,20 @@ func (manager *Manager) InstallTIXTCPFlows(ctx context.Context, flows []dataplan
 	if err := manager.syncTIXTCPPortsLocked(); err != nil {
 		manager.tixTCPFlows = oldFlows
 		manager.tixTCPTXTemplates = oldTemplates
-		_ = manager.syncTIXTCPPortsLocked()
-		_ = manager.syncKernelUDPTXDirectLocked()
-		return err
+		return errors.Join(
+			err,
+			wrapEBPFOperation("restore tix_tcp ports after flow install failure", manager.syncTIXTCPPortsLocked()),
+			wrapEBPFOperation("restore kernel UDP direct state after tix_tcp flow install failure", manager.syncKernelUDPTXDirectLocked()),
+		)
 	}
 	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
 		manager.tixTCPFlows = oldFlows
 		manager.tixTCPTXTemplates = oldTemplates
-		_ = manager.syncTIXTCPPortsLocked()
-		_ = manager.syncKernelUDPTXDirectLocked()
-		return err
+		return errors.Join(
+			err,
+			wrapEBPFOperation("restore tix_tcp ports after direct-state sync failure", manager.syncTIXTCPPortsLocked()),
+			wrapEBPFOperation("restore kernel UDP direct state after tix_tcp flow install failure", manager.syncKernelUDPTXDirectLocked()),
+		)
 	}
 	return manager.persistStateLocked()
 }
@@ -3226,14 +3240,22 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 		return dataplane.KernelUDPStatus{}, err
 	}
 	if manager.refreshKernelTransportDNSTemplatesLocked(time.Now().UTC()) {
-		_ = manager.syncTIXTCPPortsLocked()
-		_ = manager.syncKernelUDPPortsLocked()
-		_ = manager.syncKernelUDPTXDirectLocked()
+		if err := errors.Join(
+			wrapEBPFOperation("sync tix_tcp ports after DNS template refresh", manager.syncTIXTCPPortsLocked()),
+			wrapEBPFOperation("sync kernel UDP ports after DNS template refresh", manager.syncKernelUDPPortsLocked()),
+			wrapEBPFOperation("sync kernel UDP direct state after DNS template refresh", manager.syncKernelUDPTXDirectLocked()),
+		); err != nil {
+			return dataplane.KernelUDPStatus{}, err
+		}
 	}
 	if manager.pruneKernelUDPFlowsLocked(time.Now().UTC()) {
-		_ = manager.syncKernelUDPPortsLocked()
-		_ = manager.syncKernelUDPTXDirectLocked()
-		_ = manager.persistStateLocked()
+		if err := errors.Join(
+			wrapEBPFOperation("sync kernel UDP ports after flow pruning", manager.syncKernelUDPPortsLocked()),
+			wrapEBPFOperation("sync kernel UDP direct state after flow pruning", manager.syncKernelUDPTXDirectLocked()),
+			wrapEBPFOperation("persist kernel UDP flow pruning", manager.persistStateLocked()),
+		); err != nil {
+			return dataplane.KernelUDPStatus{}, err
+		}
 	}
 	fastPath := manager.tixTCPFastPathAvailableLocked()
 	tcOnly := manager.kernelUDPTCDirectOnlyAvailableLocked()
@@ -4082,16 +4104,20 @@ func (manager *Manager) InstallKernelUDPFlows(ctx context.Context, flows []datap
 	if err := manager.syncKernelUDPPortsLocked(); err != nil {
 		manager.kernelUDPFlows = oldFlows
 		manager.kernelUDPTXTemplates = oldTemplates
-		_ = manager.syncKernelUDPPortsLocked()
-		_ = manager.syncKernelUDPTXDirectLocked()
-		return err
+		return errors.Join(
+			err,
+			wrapEBPFOperation("restore kernel UDP ports after flow install failure", manager.syncKernelUDPPortsLocked()),
+			wrapEBPFOperation("restore kernel UDP direct state after flow install failure", manager.syncKernelUDPTXDirectLocked()),
+		)
 	}
 	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
 		manager.kernelUDPFlows = oldFlows
 		manager.kernelUDPTXTemplates = oldTemplates
-		_ = manager.syncKernelUDPPortsLocked()
-		_ = manager.syncKernelUDPTXDirectLocked()
-		return err
+		return errors.Join(
+			err,
+			wrapEBPFOperation("restore kernel UDP ports after direct-state sync failure", manager.syncKernelUDPPortsLocked()),
+			wrapEBPFOperation("restore kernel UDP direct state after flow install failure", manager.syncKernelUDPTXDirectLocked()),
+		)
 	}
 	return manager.persistStateLocked()
 }
@@ -4349,8 +4375,13 @@ func (manager *Manager) SubmitKernelUDPFrames(ctx context.Context, frames []data
 		return err
 	}
 	if manager.pruneKernelUDPFlowsLocked(time.Now().UTC()) {
-		_ = manager.syncKernelUDPPortsLocked()
-		_ = manager.syncKernelUDPTXDirectLocked()
+		if err := errors.Join(
+			wrapEBPFOperation("sync kernel UDP ports after flow pruning", manager.syncKernelUDPPortsLocked()),
+			wrapEBPFOperation("sync kernel UDP direct state after flow pruning", manager.syncKernelUDPTXDirectLocked()),
+		); err != nil {
+			manager.mu.Unlock()
+			return err
+		}
 	}
 	if !manager.tixTCPFastPathAvailableLocked() {
 		if manager.kernelUDPTCOnlyControlFallbackEnabledLocked() {
@@ -5502,7 +5533,10 @@ func (manager *Manager) SubmitTIXTCPFrame(ctx context.Context, frame dataplane.T
 		return err
 	}
 	if manager.pruneTIXTCPFlowsLocked(time.Now().UTC()) {
-		_ = manager.syncTIXTCPPortsLocked()
+		if err := manager.syncTIXTCPPortsLocked(); err != nil {
+			manager.mu.Unlock()
+			return fmt.Errorf("sync tix_tcp ports after flow pruning: %w", err)
+		}
 	}
 	if manager.tixTCPKernelOwnedTransportAvailableLocked() {
 		reason := manager.tixTCPKernelOwnedTransportReasonLocked()
@@ -5728,7 +5762,10 @@ func (manager *Manager) SubmitTIXTCPFrames(ctx context.Context, frames []datapla
 		return err
 	}
 	if manager.pruneTIXTCPFlowsLocked(time.Now().UTC()) {
-		_ = manager.syncTIXTCPPortsLocked()
+		if err := manager.syncTIXTCPPortsLocked(); err != nil {
+			manager.mu.Unlock()
+			return fmt.Errorf("sync tix_tcp ports after flow pruning: %w", err)
+		}
 	}
 	if manager.tixTCPKernelOwnedTransportAvailableLocked() {
 		reason := manager.tixTCPKernelOwnedTransportReasonLocked()
@@ -6350,14 +6387,17 @@ func (manager *Manager) SubscribeTIXTCPFlow(ctx context.Context, flowID uint64, 
 
 func (manager *Manager) Detach(ctx context.Context) error {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-
-	return manager.detachLocked(ctx, nil)
+	err := manager.detachLocked(ctx, nil)
+	manager.mu.Unlock()
+	return errors.Join(err, manager.backgroundTasks.Wait(ctx))
 }
 
 func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) (resultErr error) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
+	defer func() {
+		manager.mu.Unlock()
+		resultErr = errors.Join(resultErr, manager.backgroundTasks.Wait(ctx))
+	}()
 
 	if err := ctx.Err(); err != nil {
 		return err
@@ -6438,7 +6478,9 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 		}
 		manager.localVIPs = localVIPMap(state.LocalVIPs)
 		manager.restoreSysctls = cloneStringMap(state.RestoreSysctls)
-		manager.managedCaptureRoutes = managedCaptureRouteStateMap(state.ManagedCaptureRoutes)
+		var persistedRouteErr error
+		manager.managedCaptureRoutes, err = managedCaptureRouteStateMap(state.ManagedCaptureRoutes)
+		persistedRouteErr = errors.Join(persistedRouteErr, wrapEBPFOperation("restore persisted managed capture routes", err))
 		manager.deviceAccessProxyARP = deviceAccessProxyARPStateMap(state.DeviceAccessProxyARP)
 		manager.tixTCPFlows = cloneTIXTCPFlows(state.TIXTCPFlows)
 		manager.tixTCPTXTemplates = make(map[uint64]tixTCPTXTemplate)
@@ -6446,7 +6488,15 @@ func (manager *Manager) Cleanup(ctx context.Context, spec dataplane.AttachSpec) 
 		manager.tixTCPOuterTXAcknowledgments = make(map[uint64]uint32)
 		manager.kernelUDPFlows = cloneKernelUDPFlows(state.KernelUDPFlows)
 		manager.kernelUDPTXTemplates = make(map[uint64]kernelUDPTXTemplate)
-		manager.nativeTunnelRoutes = nativeTunnelRouteStateMap(state.NativeTunnelRoutes)
+		manager.nativeTunnelRoutes, err = nativeTunnelRouteStateMap(state.NativeTunnelRoutes)
+		persistedRouteErr = errors.Join(persistedRouteErr, wrapEBPFOperation("restore persisted native tunnel routes", err))
+		if persistedRouteErr != nil {
+			if quarantineErr := quarantinePersistedDataplaneState(spec.PinPath); quarantineErr != nil {
+				return errors.Join(persistedRouteErr, fmt.Errorf("quarantine semantically corrupt dataplane state: %w", quarantineErr))
+			}
+			log.Printf("trustix ebpf: quarantined semantically corrupt dataplane state: %v", persistedRouteErr)
+			corruptState = true
+		}
 		staleXDP = state.TIXTCPXDP
 	} else {
 		manager.linkAddedLANs = make(map[string]bool)
@@ -11220,8 +11270,10 @@ func (manager *Manager) rawIPv4TXSocketLocked() (int, bool, error) {
 		return -1, false, fmt.Errorf("open: %w", err)
 	}
 	if err := unix.SetsockoptInt(fd, unix.IPPROTO_IP, unix.IP_HDRINCL, 1); err != nil {
-		_ = unix.Close(fd)
-		return -1, false, fmt.Errorf("enable IP_HDRINCL: %w", err)
+		return -1, false, errors.Join(
+			fmt.Errorf("enable IP_HDRINCL: %w", err),
+			wrapEBPFOperation("close raw IPv4 TX socket after setup failure", unix.Close(fd)),
+		)
 	}
 	manager.rawIPv4TXFD = fd
 	manager.rawIPv4TXFDOpen = true
@@ -11751,6 +11803,7 @@ func (manager *Manager) addKernelUDPRXDirectCurrentStatsLocked(stats map[string]
 	stats[prefix+"tc_kernel_udp_rx_secure_direct_decap_l2_kfunc"] = boolCounter(manager.kernelUDPRXSecureDirectDecapL2Kfunc)
 	stats[prefix+"tc_kernel_udp_rx_secure_direct_recompute_inner_checksums"] = boolCounter(kernelUDPRXSecureDirectRecomputeInnerChecksumEnabled())
 	stats[prefix+"tc_kernel_udp_rx_direct_attached"] = boolCounter(manager.kernelUDPRXDirectAttached)
+	stats[prefix+"tc_kernel_udp_rx_neighbor_map_errors"] = manager.kernelUDPRXNeighborMapErrors.Load()
 	stats[prefix+"tc_kernel_udp_rx_direct_broadcast"] = boolCounter(manager.kernelUDPRXDirectBroadcast)
 	stats[prefix+"tc_kernel_udp_rx_direct_peer_redirect"] = boolCounter(manager.kernelUDPRXDirectRedirectPeer)
 	stats[prefix+"tc_kernel_udp_rx_direct_redirect_ingress"] = boolCounter(manager.kernelUDPRXDirectRedirectIngress)
@@ -13039,9 +13092,8 @@ func (manager *Manager) ensureKernelTransportPortMapLocked() error {
 		desired[port] = struct{}{}
 	}
 	if err := manager.syncKernelTransportPortMapLocked(portMap, desired, "kernel transport TC RX port BPF map"); err != nil {
-		_ = portMap.Close()
 		manager.kernelTransportPortMap = nil
-		return err
+		return errors.Join(err, wrapEBPFOperation("close kernel transport TC RX port BPF map after sync failure", portMap.Close()))
 	}
 	return nil
 }
@@ -13086,10 +13138,14 @@ func kernelUDPRawFallbackEnabled() bool {
 	return value == "1" || value == "true" || value == "yes"
 }
 
-func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.AttachSpec) error {
+func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.AttachSpec) (resultErr error) {
 	if manager.ingressProg != nil || manager.egressProg != nil {
 		return manager.attachTCFiltersToLink(link, spec)
 	}
+	var cleanup errorCleanupStack
+	defer func() {
+		resultErr = errors.Join(resultErr, cleanup.Run())
+	}()
 	statsMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_stats_map",
 		Type:       cebpf.PerCPUArray,
@@ -13100,6 +13156,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 	if err != nil {
 		return fmt.Errorf("create stats BPF map: %w", err)
 	}
+	cleanup.Add("close stats BPF map", statsMap.Close)
 	routeMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_route_lpm",
 		Type:       cebpf.LPMTrie,
@@ -13109,9 +13166,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		Flags:      unix.BPF_F_NO_PREALLOC,
 	})
 	if err != nil {
-		_ = statsMap.Close()
 		return fmt.Errorf("create route LPM BPF map: %w", err)
 	}
+	cleanup.Add("close route LPM BPF map", routeMap.Close)
 	packetPolicyMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_packet_policy",
 		Type:       cebpf.Array,
@@ -13120,10 +13177,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		MaxEntries: 1,
 	})
 	if err != nil {
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create packet policy BPF map: %w", err)
 	}
+	cleanup.Add("close packet policy BPF map", packetPolicyMap.Close)
 	natConfigMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_nat_config",
 		Type:       cebpf.Array,
@@ -13132,11 +13188,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		MaxEntries: 1,
 	})
 	if err != nil {
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create NAT config BPF map: %w", err)
 	}
+	cleanup.Add("close NAT config BPF map", natConfigMap.Close)
 	natSourceMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_nat_sources",
 		Type:       cebpf.LPMTrie,
@@ -13146,12 +13200,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		Flags:      unix.BPF_F_NO_PREALLOC,
 	})
 	if err != nil {
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create NAT source LPM BPF map: %w", err)
 	}
+	cleanup.Add("close NAT source LPM BPF map", natSourceMap.Close)
 	natRouteMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_nat_routes",
 		Type:       cebpf.LPMTrie,
@@ -13161,13 +13212,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		Flags:      unix.BPF_F_NO_PREALLOC,
 	})
 	if err != nil {
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create NAT route LPM BPF map: %w", err)
 	}
+	cleanup.Add("close NAT route LPM BPF map", natRouteMap.Close)
 	natExcludeMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_nat_exclude",
 		Type:       cebpf.Hash,
@@ -13176,14 +13223,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		MaxEntries: 256,
 	})
 	if err != nil {
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create NAT exclude BPF map: %w", err)
 	}
+	cleanup.Add("close NAT exclude BPF map", natExcludeMap.Close)
 	natBindingMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_nat_bindings",
 		Type:       cebpf.Hash,
@@ -13192,62 +13234,35 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		MaxEntries: natDefaultMaxBindings,
 	})
 	if err != nil {
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create NAT binding BPF map: %w", err)
 	}
+	cleanup.Add("close NAT binding BPF map", natBindingMap.Close)
 	captureMap, captureOutputMode, err := newCaptureEventBPFMap()
 	if err != nil {
-		_ = natBindingMap.Close()
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return err
 	}
+	cleanup.Add("close capture event BPF map", captureMap.Close)
 	captureScratchMap, err := newCaptureScratchBPFMap()
 	if err != nil {
-		_ = captureMap.Close()
-		_ = natBindingMap.Close()
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create capture scratch BPF map: %w", err)
 	}
+	cleanup.Add("close capture scratch BPF map", captureScratchMap.Close)
 	captureReader, captureRingReader, err := newCaptureReader(captureMap)
 	if err != nil {
-		_ = captureScratchMap.Close()
-		_ = captureMap.Close()
-		_ = natBindingMap.Close()
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return err
 	}
-	captureReadersOwned := true
-	defer func() {
-		if captureReadersOwned {
-			closeCaptureReaders(captureReader, captureRingReader)
-		}
-	}()
+	cleanup.Add("close capture readers", func() error {
+		return closeCaptureReaders(captureReader, captureRingReader)
+	})
 
-	underlayLink, _ := netlink.LinkByName(spec.UnderlayIface)
+	var underlayLink netlink.Link
+	if strings.TrimSpace(spec.UnderlayIface) != "" {
+		underlayLink, err = netlink.LinkByName(spec.UnderlayIface)
+		if err != nil {
+			manager.warnings = append(manager.warnings, fmt.Sprintf("inspect underlay iface %q for TC direct options: %v", spec.UnderlayIface, err))
+			underlayLink = nil
+		}
+	}
 	kernelUDPTXRouteMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_kudp_tx_route",
 		Type:       cebpf.LPMTrie,
@@ -13257,18 +13272,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		Flags:      unix.BPF_F_NO_PREALLOC,
 	})
 	if err != nil {
-		closeCaptureReaders(captureReader, captureRingReader)
-		_ = captureMap.Close()
-		_ = natBindingMap.Close()
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create kernel_udp TC TX route map: %w", err)
 	}
+	cleanup.Add("close kernel_udp TC TX route BPF map", kernelUDPTXRouteMap.Close)
 	kernelUDPTXRouteCacheMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_kudp_tx_route_cache",
 		Type:       cebpf.Array,
@@ -13277,19 +13283,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		MaxEntries: 1,
 	})
 	if err != nil {
-		_ = kernelUDPTXRouteMap.Close()
-		closeCaptureReaders(captureReader, captureRingReader)
-		_ = captureMap.Close()
-		_ = natBindingMap.Close()
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create kernel_udp TC TX route cache map: %w", err)
 	}
+	cleanup.Add("close kernel_udp TC TX route cache BPF map", kernelUDPTXRouteCacheMap.Close)
 	kernelUDPTXFlowMap, err := cebpf.NewMap(&cebpf.MapSpec{
 		Name:       "ix_kudp_tx_flow",
 		Type:       cebpf.Hash,
@@ -13298,20 +13294,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		MaxEntries: 4096,
 	})
 	if err != nil {
-		_ = kernelUDPTXRouteCacheMap.Close()
-		_ = kernelUDPTXRouteMap.Close()
-		closeCaptureReaders(captureReader, captureRingReader)
-		_ = captureMap.Close()
-		_ = natBindingMap.Close()
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return fmt.Errorf("create kernel_udp TC TX flow map: %w", err)
 	}
+	cleanup.Add("close kernel_udp TC TX flow BPF map", kernelUDPTXFlowMap.Close)
 
 	txDirectOptions := kernelUDPTXDirectProgramOptions{
 		Enabled:                 kernelUDPTXDirectProgramEnabledForSpec(spec),
@@ -13327,19 +13312,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		txDirectOptions.SKBClearTXOffload = true
 		txDirectOptions.SKBClearKfuncCall, err = loadSKBClearTXOffloadKfuncCall()
 		if err != nil {
-			_ = kernelUDPTXFlowMap.Close()
-			_ = kernelUDPTXRouteCacheMap.Close()
-			_ = kernelUDPTXRouteMap.Close()
-			closeCaptureReaders(captureReader, captureRingReader)
-			_ = captureMap.Close()
-			_ = natBindingMap.Close()
-			_ = natExcludeMap.Close()
-			_ = natRouteMap.Close()
-			_ = natSourceMap.Close()
-			_ = natConfigMap.Close()
-			_ = packetPolicyMap.Close()
-			_ = routeMap.Close()
-			_ = statsMap.Close()
 			return fmt.Errorf("load skb TX offload-clear kfunc metadata: %w", err)
 		}
 	}
@@ -13351,19 +13323,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			txDirectOptions.InnerTCPKfunc = false
 			txDirectOptions.InnerTCPKfuncAuto = false
 			if kernelUDPTXDirectInnerTCPChecksumKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load skb inner TCP checksum kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "kernel_udp TC TX direct inner TCP checksum kfunc disabled: "+err.Error())
@@ -13377,19 +13336,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			txDirectOptions.InnerTCPKfunc = false
 			txDirectOptions.InnerTCPKfuncAuto = false
 			if kernelUDPTXDirectInnerTCPChecksumKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp inner TCP checksum kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct inner TCP checksum kfunc disabled: "+err.Error())
@@ -13399,19 +13345,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		txDirectOptions.StoreHeaderKfunc = true
 		txDirectOptions.StoreHeaderKfuncCall, err = loadSKBKernelUDPTXStoreL2L3L4KfuncCall()
 		if err != nil {
-			_ = kernelUDPTXFlowMap.Close()
-			_ = kernelUDPTXRouteCacheMap.Close()
-			_ = kernelUDPTXRouteMap.Close()
-			closeCaptureReaders(captureReader, captureRingReader)
-			_ = captureMap.Close()
-			_ = natBindingMap.Close()
-			_ = natExcludeMap.Close()
-			_ = natRouteMap.Close()
-			_ = natSourceMap.Close()
-			_ = natConfigMap.Close()
-			_ = packetPolicyMap.Close()
-			_ = routeMap.Close()
-			_ = statsMap.Close()
 			return fmt.Errorf("load skb kernel_udp TX header-store kfunc metadata: %w", err)
 		}
 	}
@@ -13419,19 +13352,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		txDirectOptions.BuildUDPHeaderKfunc = true
 		txDirectOptions.BuildUDPHeaderKfuncCall, err = loadSKBKernelUDPTXBuildUDPHeaderKfuncCall()
 		if err != nil {
-			_ = kernelUDPTXFlowMap.Close()
-			_ = kernelUDPTXRouteCacheMap.Close()
-			_ = kernelUDPTXRouteMap.Close()
-			closeCaptureReaders(captureReader, captureRingReader)
-			_ = captureMap.Close()
-			_ = natBindingMap.Close()
-			_ = natExcludeMap.Close()
-			_ = natRouteMap.Close()
-			_ = natSourceMap.Close()
-			_ = natConfigMap.Close()
-			_ = packetPolicyMap.Close()
-			_ = routeMap.Close()
-			_ = statsMap.Close()
 			return fmt.Errorf("load skb kernel_udp TX UDP header-build kfunc metadata: %w", err)
 		}
 	}
@@ -13439,19 +13359,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		txDirectOptions.FinalizeUDPHeaderKfunc = true
 		txDirectOptions.FinalizeUDPKfuncCall, err = loadSKBKernelUDPTXFinalizeUDPHeaderKfuncCall()
 		if err != nil {
-			_ = kernelUDPTXFlowMap.Close()
-			_ = kernelUDPTXRouteCacheMap.Close()
-			_ = kernelUDPTXRouteMap.Close()
-			closeCaptureReaders(captureReader, captureRingReader)
-			_ = captureMap.Close()
-			_ = natBindingMap.Close()
-			_ = natExcludeMap.Close()
-			_ = natRouteMap.Close()
-			_ = natSourceMap.Close()
-			_ = natConfigMap.Close()
-			_ = packetPolicyMap.Close()
-			_ = routeMap.Close()
-			_ = statsMap.Close()
 			return fmt.Errorf("load skb kernel_udp TX UDP header-finalize kfunc metadata: %w", err)
 		}
 	}
@@ -13459,19 +13366,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		txDirectOptions.PushUDPHeaderKfunc = true
 		txDirectOptions.PushUDPHeaderKfuncCall, err = loadSKBKernelUDPTXPushUDPHeaderKfuncCall()
 		if err != nil {
-			_ = kernelUDPTXFlowMap.Close()
-			_ = kernelUDPTXRouteCacheMap.Close()
-			_ = kernelUDPTXRouteMap.Close()
-			closeCaptureReaders(captureReader, captureRingReader)
-			_ = captureMap.Close()
-			_ = natBindingMap.Close()
-			_ = natExcludeMap.Close()
-			_ = natRouteMap.Close()
-			_ = natSourceMap.Close()
-			_ = natConfigMap.Close()
-			_ = packetPolicyMap.Close()
-			_ = routeMap.Close()
-			_ = statsMap.Close()
 			return fmt.Errorf("load skb kernel_udp TX UDP header-push kfunc metadata: %w", err)
 		}
 	}
@@ -13481,19 +13375,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		if err != nil {
 			txDirectOptions.OuterTCPCsumKfunc = false
 			if tixTCPTXDirectOuterTCPChecksumKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp outer TCP checksum kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct outer TCP checksum kfunc disabled: "+err.Error())
@@ -13505,19 +13386,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		if err != nil {
 			txDirectOptions.OuterTCPKfunc = false
 			if tixTCPTXDirectOuterTCPHeaderKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp outer TCP header kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct outer TCP header kfunc disabled: "+err.Error())
@@ -13529,19 +13397,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		if err != nil {
 			txDirectOptions.TCPPartialCSUMKfunc = false
 			if tixTCPTXDirectTCPPartialCSUMKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp TCP partial checksum kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct TCP partial checksum kfunc disabled: "+err.Error())
@@ -13553,19 +13408,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		if err != nil {
 			txDirectOptions.PushTCPHeaderKfunc = false
 			if tixTCPTXDirectPushTCPHeaderKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp TCP header-push kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct TCP header-push kfunc disabled: "+err.Error())
@@ -13577,19 +13419,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		if err != nil {
 			txDirectOptions.PushFlowTCPHeaderKfunc = false
 			if tixTCPTXDirectPushFlowTCPHeaderKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp flow TCP header-push kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct flow TCP header-push kfunc disabled: "+err.Error())
@@ -13601,19 +13430,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		if err != nil {
 			txDirectOptions.FinalizeFlowTCPHeaderKfunc = false
 			if tixTCPTXDirectFinalizeFlowTCPHeaderKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp flow TCP header-finalize kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct flow TCP header-finalize kfunc disabled: "+err.Error())
@@ -13625,19 +13441,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		if err != nil {
 			txDirectOptions.PushRouteTCPHeaderKfunc = false
 			if tixTCPTXDirectPushRouteTCPHeaderKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp route TCP header-push kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct route TCP header-push kfunc disabled: "+err.Error())
@@ -13649,19 +13452,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		if err != nil {
 			txDirectOptions.RouteTCPGSOKfunc = false
 			if tixTCPTXDirectRouteTCPGSOKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp route TCP GSO kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct route TCP GSO kfunc disabled: "+err.Error())
@@ -13676,19 +13466,6 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		if err != nil {
 			txDirectOptions.RouteTCPXmitKfunc = false
 			if tixTCPTXDirectRouteTCPXmitKfuncRequired() {
-				_ = kernelUDPTXFlowMap.Close()
-				_ = kernelUDPTXRouteCacheMap.Close()
-				_ = kernelUDPTXRouteMap.Close()
-				closeCaptureReaders(captureReader, captureRingReader)
-				_ = captureMap.Close()
-				_ = natBindingMap.Close()
-				_ = natExcludeMap.Close()
-				_ = natRouteMap.Close()
-				_ = natSourceMap.Close()
-				_ = natConfigMap.Close()
-				_ = packetPolicyMap.Close()
-				_ = routeMap.Close()
-				_ = statsMap.Close()
 				return fmt.Errorf("load tix_tcp route TCP xmit kfunc metadata: %w", err)
 			}
 			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct route TCP xmit kfunc disabled: "+err.Error())
@@ -13713,22 +13490,10 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		txDirectOptions,
 	)
 	if err != nil {
-		_ = kernelUDPTXFlowMap.Close()
-		_ = kernelUDPTXRouteCacheMap.Close()
-		_ = kernelUDPTXRouteMap.Close()
-		closeCaptureReaders(captureReader, captureRingReader)
-		_ = captureScratchMap.Close()
-		_ = captureMap.Close()
-		_ = natBindingMap.Close()
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
 		return err
 	}
+	cleanup.Add("close ingress BPF program", ingressProg.Close)
+	cleanup.Add("close egress BPF program", egressProg.Close)
 	if kfuncFallbackWarning != "" {
 		manager.kernelUDPTXDirectKfuncFallbackWarning = kfuncFallbackWarning
 		manager.warnings = append(manager.warnings, kfuncFallbackWarning)
@@ -13742,22 +13507,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 	if kernelUDPTXSecureDirectRequestedForSpec(spec) && manager.kernelCryptoTCDirectReadyLocked() {
 		kernelUDPTXSecureDirect, err = loadKernelUDPTXSecureDirectObject(manager.kernelCryptoProvider, statsMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, kernelUDPTXSecureDirectProgramOptionsForSpec(spec))
 		if err != nil {
-			_ = kernelUDPTXFlowMap.Close()
-			_ = kernelUDPTXRouteCacheMap.Close()
-			_ = kernelUDPTXRouteMap.Close()
-			closeCaptureReaders(captureReader, captureRingReader)
-			_ = captureMap.Close()
-			_ = natBindingMap.Close()
-			_ = natExcludeMap.Close()
-			_ = natRouteMap.Close()
-			_ = natSourceMap.Close()
-			_ = natConfigMap.Close()
-			_ = packetPolicyMap.Close()
-			_ = routeMap.Close()
-			_ = statsMap.Close()
-			_ = ingressProg.Close()
 			return fmt.Errorf("load kernel_udp secure TC TX direct BPF object: %w", err)
 		}
+		cleanup.Add("close kernel_udp secure TC TX direct BPF object", kernelUDPTXSecureDirect.Close)
 	}
 	ingressFilter := bpfFilter(link, netlink.HANDLE_MIN_INGRESS, netlink.MakeHandle(0, 1), "trustix_ingress", ingressProg.FD())
 	egressFilter := bpfFilter(link, netlink.HANDLE_MIN_EGRESS, netlink.MakeHandle(0, 2), "trustix_egress", egressProg.FD())
@@ -13775,104 +13527,32 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 	}
 	if kernelUDPTXSecureDirectFilter != nil {
 		if err := netlink.FilterReplace(kernelUDPTXSecureDirectFilter); err != nil {
-			_ = kernelUDPTXSecureDirect.Close()
-			_ = kernelUDPTXFlowMap.Close()
-			_ = kernelUDPTXRouteCacheMap.Close()
-			_ = kernelUDPTXRouteMap.Close()
-			closeCaptureReaders(captureReader, captureRingReader)
-			_ = captureMap.Close()
-			_ = natBindingMap.Close()
-			_ = natExcludeMap.Close()
-			_ = natRouteMap.Close()
-			_ = natSourceMap.Close()
-			_ = natConfigMap.Close()
-			_ = packetPolicyMap.Close()
-			_ = routeMap.Close()
-			_ = statsMap.Close()
-			_ = ingressProg.Close()
-			_ = egressProg.Close()
 			return fmt.Errorf("attach kernel_udp secure TC TX direct BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 		}
+		cleanup.Add("delete kernel_udp secure TC TX direct BPF filter", func() error {
+			return deleteTCFilterCleanup(kernelUDPTXSecureDirectFilter)
+		})
 	}
 	if kernelUDPTXSecureDirectEgressFilter != nil {
 		if err := netlink.FilterReplace(kernelUDPTXSecureDirectEgressFilter); err != nil {
-			if kernelUDPTXSecureDirectFilter != nil {
-				_ = netlink.FilterDel(kernelUDPTXSecureDirectFilter)
-			}
-			_ = kernelUDPTXSecureDirect.Close()
-			_ = kernelUDPTXFlowMap.Close()
-			_ = kernelUDPTXRouteCacheMap.Close()
-			_ = kernelUDPTXRouteMap.Close()
-			closeCaptureReaders(captureReader, captureRingReader)
-			_ = captureMap.Close()
-			_ = natBindingMap.Close()
-			_ = natExcludeMap.Close()
-			_ = natRouteMap.Close()
-			_ = natSourceMap.Close()
-			_ = natConfigMap.Close()
-			_ = packetPolicyMap.Close()
-			_ = routeMap.Close()
-			_ = statsMap.Close()
-			_ = ingressProg.Close()
-			_ = egressProg.Close()
 			return fmt.Errorf("attach kernel_udp secure TC TX direct egress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 		}
+		cleanup.Add("delete kernel_udp secure TC TX direct egress BPF filter", func() error {
+			return deleteTCFilterCleanup(kernelUDPTXSecureDirectEgressFilter)
+		})
 	}
 	if err := netlink.FilterReplace(ingressFilter); err != nil {
-		if kernelUDPTXSecureDirectEgressFilter != nil {
-			_ = netlink.FilterDel(kernelUDPTXSecureDirectEgressFilter)
-		}
-		if kernelUDPTXSecureDirectFilter != nil {
-			_ = netlink.FilterDel(kernelUDPTXSecureDirectFilter)
-		}
-		if kernelUDPTXSecureDirect != nil {
-			_ = kernelUDPTXSecureDirect.Close()
-		}
-		_ = kernelUDPTXFlowMap.Close()
-		_ = kernelUDPTXRouteCacheMap.Close()
-		_ = kernelUDPTXRouteMap.Close()
-		closeCaptureReaders(captureReader, captureRingReader)
-		_ = captureMap.Close()
-		_ = natBindingMap.Close()
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
-		_ = ingressProg.Close()
-		_ = egressProg.Close()
 		return fmt.Errorf("attach ingress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 	}
+	cleanup.Add("delete ingress BPF filter", func() error {
+		return deleteTCFilterCleanup(ingressFilter)
+	})
 	if err := netlink.FilterReplace(egressFilter); err != nil {
-		_ = netlink.FilterDel(ingressFilter)
-		if kernelUDPTXSecureDirectEgressFilter != nil {
-			_ = netlink.FilterDel(kernelUDPTXSecureDirectEgressFilter)
-		}
-		if kernelUDPTXSecureDirectFilter != nil {
-			_ = netlink.FilterDel(kernelUDPTXSecureDirectFilter)
-		}
-		if kernelUDPTXSecureDirect != nil {
-			_ = kernelUDPTXSecureDirect.Close()
-		}
-		_ = kernelUDPTXFlowMap.Close()
-		_ = kernelUDPTXRouteCacheMap.Close()
-		_ = kernelUDPTXRouteMap.Close()
-		closeCaptureReaders(captureReader, captureRingReader)
-		_ = captureMap.Close()
-		_ = natBindingMap.Close()
-		_ = natExcludeMap.Close()
-		_ = natRouteMap.Close()
-		_ = natSourceMap.Close()
-		_ = natConfigMap.Close()
-		_ = packetPolicyMap.Close()
-		_ = routeMap.Close()
-		_ = statsMap.Close()
-		_ = ingressProg.Close()
-		_ = egressProg.Close()
 		return fmt.Errorf("attach egress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 	}
+	cleanup.Add("delete egress BPF filter", func() error {
+		return deleteTCFilterCleanup(egressFilter)
+	})
 
 	manager.statsMap = statsMap
 	manager.packetPolicyMap = packetPolicyMap
@@ -13918,10 +13598,9 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 		kernelUDPTXSecureDirectEgress: kernelUDPTXSecureDirectEgressFilter,
 	}
 	manager.kernelUDPTXSecureDirectAttached = kernelUDPTXSecureDirectFilter != nil || kernelUDPTXSecureDirectEgressFilter != nil
-	captureReadersOwned = false
+	cleanup.Disarm()
 	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
-		_ = manager.detachTCPrograms(link)
-		return err
+		return errors.Join(err, manager.detachTCPrograms(link))
 	}
 	if captureOutputMode == captureOutputModePerf {
 		go manager.readCaptureEvents(captureReader)
@@ -13953,26 +13632,22 @@ func (manager *Manager) attachKernelUDPRXDirectLocked(lanLink netlink.Link, unde
 		if err != nil {
 			manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct disabled: clone XDP neighbor map: "+err.Error())
 		} else if devMap, err = manager.tixTCPFastPath.xdpObject.rxDevMap.Clone(); err != nil {
+			err = errors.Join(err, closeKernelUDPRXDirectMaps(nil, nil, neighMap))
 			manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct disabled: clone XDP devmap: "+err.Error())
-			_ = neighMap.Close()
 			neighMap = nil
 		} else if configMap, err = manager.tixTCPFastPath.xdpObject.rxConfigMap.Clone(); err != nil {
+			err = errors.Join(err, closeKernelUDPRXDirectMaps(nil, devMap, neighMap))
 			manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct disabled: clone XDP config map: "+err.Error())
-			_ = devMap.Close()
-			_ = neighMap.Close()
 			devMap = nil
 			neighMap = nil
 		}
 	}
 	if !kernelUDPXDPRXDirectEnabled() {
-		if configMap != nil {
-			_ = configMap.Close()
-			configMap = nil
+		if closeErr := closeKernelUDPRXDirectMaps(configMap, devMap, nil); closeErr != nil {
+			manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct map cleanup failed: "+closeErr.Error())
 		}
-		if devMap != nil {
-			_ = devMap.Close()
-			devMap = nil
-		}
+		configMap = nil
+		devMap = nil
 		manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct disabled: devmap redirect to LAN is experimental; set TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=1 to opt in")
 	}
 	if kernelUDPXDPRXDirectEnabled() && devMap == nil {
@@ -13984,13 +13659,10 @@ func (manager *Manager) attachKernelUDPRXDirectLocked(lanLink netlink.Link, unde
 			MaxEntries: 1,
 		})
 		if err != nil {
-			if configMap != nil {
-				_ = configMap.Close()
-			}
-			if neighMap != nil {
-				_ = neighMap.Close()
-			}
-			return fmt.Errorf("create kernel_udp XDP RX direct devmap: %w", err)
+			return errors.Join(
+				fmt.Errorf("create kernel_udp XDP RX direct devmap: %w", err),
+				closeKernelUDPRXDirectMaps(configMap, nil, neighMap),
+			)
 		}
 	}
 	if kernelUDPXDPRXDirectEnabled() && configMap == nil {
@@ -14002,13 +13674,10 @@ func (manager *Manager) attachKernelUDPRXDirectLocked(lanLink netlink.Link, unde
 			MaxEntries: 1,
 		})
 		if err != nil {
-			if devMap != nil {
-				_ = devMap.Close()
-			}
-			if neighMap != nil {
-				_ = neighMap.Close()
-			}
-			return fmt.Errorf("create kernel_udp XDP RX direct config map: %w", err)
+			return errors.Join(
+				fmt.Errorf("create kernel_udp XDP RX direct config map: %w", err),
+				closeKernelUDPRXDirectMaps(nil, devMap, neighMap),
+			)
 		}
 	}
 	if neighMap == nil {
@@ -14020,42 +13689,33 @@ func (manager *Manager) attachKernelUDPRXDirectLocked(lanLink netlink.Link, unde
 			MaxEntries: 4096,
 		})
 		if err != nil {
-			return fmt.Errorf("create kernel_udp TC RX direct neighbor map: %w", err)
+			return errors.Join(
+				fmt.Errorf("create kernel_udp TC RX direct neighbor map: %w", err),
+				closeKernelUDPRXDirectMaps(configMap, devMap, nil),
+			)
 		}
 	}
 	sourceMAC := lanLink.Attrs().HardwareAddr
 	if len(sourceMAC) != 6 {
-		if configMap != nil {
-			_ = configMap.Close()
-		}
-		if devMap != nil {
-			_ = devMap.Close()
-		}
-		_ = neighMap.Close()
-		return fmt.Errorf("kernel_udp RX direct requires LAN hardware address on %q", lanLink.Attrs().Name)
+		return errors.Join(
+			fmt.Errorf("kernel_udp RX direct requires LAN hardware address on %q", lanLink.Attrs().Name),
+			closeKernelUDPRXDirectMaps(configMap, devMap, neighMap),
+		)
 	}
 	options, program, err := manager.loadKernelUDPRXDirectProgramForLink("trustix_kudp_rx", neighMap, lanLink, sourceMAC)
 	if err != nil {
-		if configMap != nil {
-			_ = configMap.Close()
-		}
-		if devMap != nil {
-			_ = devMap.Close()
-		}
-		_ = neighMap.Close()
-		return fmt.Errorf("load kernel_udp underlay RX direct BPF program: %w", err)
+		return errors.Join(
+			fmt.Errorf("load kernel_udp underlay RX direct BPF program: %w", err),
+			closeKernelUDPRXDirectMaps(configMap, devMap, neighMap),
+		)
 	}
 	filter := bpfFilterWithPriority(underlayLink, netlink.HANDLE_MIN_INGRESS, netlink.MakeHandle(0, 3), "trustix_kudp_rx", program.FD(), 2)
 	if err := netlink.FilterReplace(filter); err != nil {
-		_ = program.Close()
-		if configMap != nil {
-			_ = configMap.Close()
-		}
-		if devMap != nil {
-			_ = devMap.Close()
-		}
-		_ = neighMap.Close()
-		return fmt.Errorf("attach kernel_udp underlay RX direct BPF filter on %q: %w", underlayLink.Attrs().Name, annotateTCFilterAttachError(err))
+		return errors.Join(
+			fmt.Errorf("attach kernel_udp underlay RX direct BPF filter on %q: %w", underlayLink.Attrs().Name, annotateTCFilterAttachError(err)),
+			wrapEBPFOperation("close kernel_udp underlay RX direct BPF program", program.Close()),
+			closeKernelUDPRXDirectMaps(configMap, devMap, neighMap),
+		)
 	}
 	manager.underlayIngressProg = program
 	manager.underlayIngressFilter = filter
@@ -14114,8 +13774,10 @@ func (manager *Manager) attachKernelUDPRXSecureDirectLocked(underlayLink netlink
 	}
 	filter := bpfFilterWithPriority(underlayLink, netlink.HANDLE_MIN_INGRESS, netlink.MakeHandle(0, 5), "trustix_kudp_rxk", object.program.FD(), 1)
 	if err := netlink.FilterReplace(filter); err != nil {
-		_ = object.Close()
-		return fmt.Errorf("attach kernel_udp secure underlay RX direct BPF filter on %q: %w", underlayLink.Attrs().Name, annotateTCFilterAttachError(err))
+		return errors.Join(
+			fmt.Errorf("attach kernel_udp secure underlay RX direct BPF filter on %q: %w", underlayLink.Attrs().Name, annotateTCFilterAttachError(err)),
+			wrapEBPFOperation("close kernel_udp secure RX direct object after attach failure", object.Close()),
+		)
 	}
 	manager.kernelUDPRXSecureDirect = object
 	manager.kernelUDPRXSecureDirectFilter = filter
@@ -14558,8 +14220,10 @@ func (manager *Manager) attachStandaloneKernelUDPRXXDPDirectLocked(lanLink netli
 		break
 	}
 	if selectedMode == "" {
-		_ = object.Close()
-		return fmt.Errorf("attach standalone kernel_udp XDP RX direct on %q: %s", underlayLink.Attrs().Name, strings.Join(fallbackReasons, "; "))
+		return errors.Join(
+			fmt.Errorf("attach standalone kernel_udp XDP RX direct on %q: %s", underlayLink.Attrs().Name, strings.Join(fallbackReasons, "; ")),
+			wrapEBPFOperation("close unattached standalone kernel_udp XDP RX direct object", object.Close()),
+		)
 	}
 	manager.kernelUDPXDPRXDirectObject = object
 	manager.kernelUDPXDPRXDirectAttached = true
@@ -14571,13 +14235,11 @@ func (manager *Manager) attachStandaloneKernelUDPRXXDPDirectLocked(lanLink netli
 		manager.warnings = append(manager.warnings, "kernel_udp standalone XDP RX direct mode fallback: "+strings.Join(fallbackReasons, "; "))
 	}
 	if err := manager.syncStandaloneKernelUDPRXXDPDirectConfigLocked(); err != nil {
-		_ = manager.detachStandaloneKernelUDPRXXDPDirectLocked(underlayLink)
-		return err
+		return errors.Join(err, manager.detachStandaloneKernelUDPRXXDPDirectLocked(underlayLink))
 	}
 	desired := manager.desiredKernelTransportPortsLocked()
 	if err := manager.syncKernelTransportPortMapLocked(object.portMap, desired, "kernel transport standalone XDP port BPF map"); err != nil {
-		_ = manager.detachStandaloneKernelUDPRXXDPDirectLocked(underlayLink)
-		return err
+		return errors.Join(err, manager.detachStandaloneKernelUDPRXXDPDirectLocked(underlayLink))
 	}
 	return nil
 }
@@ -15154,7 +14816,9 @@ func (manager *Manager) updateKernelUDPRXDirectNeighbor(neighbor netlink.Neigh, 
 	}
 	key := addr.As4()
 	if deleted || neighbor.State == netlink.NUD_FAILED || neighbor.State == netlink.NUD_INCOMPLETE || len(neighbor.HardwareAddr) != 6 {
-		_ = neighMap.Delete(key)
+		if err := neighMap.Delete(key); err != nil && !errors.Is(err, cebpf.ErrKeyNotExist) {
+			manager.recordKernelUDPRXNeighborMapError("delete", addr, err)
+		}
 		return
 	}
 	value := kernelUDPRXNeighValue{
@@ -15164,7 +14828,17 @@ func (manager *Manager) updateKernelUDPRXDirectNeighbor(neighbor netlink.Neigh, 
 		SourceMAC0:      binary.LittleEndian.Uint32(sourceMAC[0:4]),
 		SourceMAC1:      binary.LittleEndian.Uint16(sourceMAC[4:6]),
 	}
-	_ = neighMap.Update(key, value, cebpf.UpdateAny)
+	if err := neighMap.Update(key, value, cebpf.UpdateAny); err != nil {
+		manager.recordKernelUDPRXNeighborMapError("update", addr, err)
+	}
+}
+
+func (manager *Manager) recordKernelUDPRXNeighborMapError(operation string, addr netip.Addr, err error) {
+	if err == nil {
+		return
+	}
+	manager.kernelUDPRXNeighborMapErrors.Add(1)
+	log.Printf("trustix ebpf: %s kernel_udp RX direct neighbor %s: %v", operation, addr, err)
 }
 
 func (manager *Manager) detachTCPrograms(link netlink.Link) error {
@@ -15757,13 +15431,19 @@ func newCaptureReader(captureMap *cebpf.Map) (*perf.Reader, *ringbuf.Reader, err
 	}
 }
 
-func closeCaptureReaders(perfReader *perf.Reader, ringReader *ringbuf.Reader) {
+func closeCaptureReaders(perfReader *perf.Reader, ringReader *ringbuf.Reader) error {
+	var errs []error
 	if perfReader != nil {
-		_ = perfReader.Close()
+		if err := perfReader.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close perf capture reader: %w", err))
+		}
 	}
 	if ringReader != nil {
-		_ = ringReader.Close()
+		if err := ringReader.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close ring capture reader: %w", err))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func captureOutputIsRingbuf(captureMap *cebpf.Map) bool {
@@ -15823,8 +15503,10 @@ func loadTCFastPathProgramsWithInnerTCPKfuncFallback(
 			egressTXDirectOptions,
 		)
 		if err != nil {
-			_ = ingressProg.Close()
-			return nil, nil, fmt.Errorf("load egress BPF program: %w", err)
+			return nil, nil, errors.Join(
+				fmt.Errorf("load egress BPF program: %w", err),
+				wrapEBPFOperation("close ingress BPF program after egress load failure", ingressProg.Close()),
+			)
 		}
 		return ingressProg, egressProg, nil
 	}
@@ -20653,6 +20335,7 @@ func debugDumpBPFInstructions(name string, instructions asm.Instructions) {
 		return
 	}
 	if err := os.MkdirAll(path, 0o755); err != nil {
+		log.Printf("trustix ebpf: create BPF instruction dump directory %q: %v", path, err)
 		return
 	}
 	var builder strings.Builder
@@ -20666,7 +20349,9 @@ func debugDumpBPFInstructions(name string, instructions asm.Instructions) {
 		}
 		builder.WriteString(fmt.Sprintf("%04d: %v\n", i, ins))
 	}
-	_ = os.WriteFile(filepath.Join(path, name+".insns"), []byte(builder.String()), 0o644)
+	if err := os.WriteFile(filepath.Join(path, name+".insns"), []byte(builder.String()), 0o644); err != nil {
+		log.Printf("trustix ebpf: write BPF instruction dump %q: %v", name, err)
+	}
 }
 
 func bpfFilter(link netlink.Link, parent uint32, handle uint32, name string, fd int) *netlink.BpfFilter {
@@ -20688,7 +20373,7 @@ func bpfFilterWithPriority(link netlink.Link, parent uint32, handle uint32, name
 	}
 }
 
-func (manager *Manager) attachTCFiltersToLink(link netlink.Link, spec dataplane.AttachSpec) error {
+func (manager *Manager) attachTCFiltersToLink(link netlink.Link, spec dataplane.AttachSpec) (resultErr error) {
 	if link == nil || link.Attrs() == nil {
 		return fmt.Errorf("attach TC filters: LAN link is nil")
 	}
@@ -20701,6 +20386,10 @@ func (manager *Manager) attachTCFiltersToLink(link netlink.Link, spec dataplane.
 	if _, exists := manager.lanTCFilters[link.Attrs().Name]; exists {
 		return nil
 	}
+	var cleanup errorCleanupStack
+	defer func() {
+		resultErr = errors.Join(resultErr, cleanup.Run())
+	}()
 	ingressFilter := bpfFilter(link, netlink.HANDLE_MIN_INGRESS, netlink.MakeHandle(0, 1), "trustix_ingress", manager.ingressProg.FD())
 	egressFilter := bpfFilter(link, netlink.HANDLE_MIN_EGRESS, netlink.MakeHandle(0, 2), "trustix_egress", manager.egressProg.FD())
 	state := lanTCFilterState{ingress: ingressFilter, egress: egressFilter}
@@ -20718,34 +20407,30 @@ func (manager *Manager) attachTCFiltersToLink(link netlink.Link, spec dataplane.
 		if err := netlink.FilterReplace(state.kernelUDPTXSecureDirect); err != nil {
 			return fmt.Errorf("attach kernel_udp secure TC TX direct BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 		}
+		cleanup.Add("delete kernel_udp secure TC TX direct BPF filter", func() error {
+			return deleteTCFilterCleanup(state.kernelUDPTXSecureDirect)
+		})
 	}
 	if state.kernelUDPTXSecureDirectEgress != nil {
 		if err := netlink.FilterReplace(state.kernelUDPTXSecureDirectEgress); err != nil {
-			if state.kernelUDPTXSecureDirect != nil {
-				_ = netlink.FilterDel(state.kernelUDPTXSecureDirect)
-			}
 			return fmt.Errorf("attach kernel_udp secure TC TX direct egress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 		}
+		cleanup.Add("delete kernel_udp secure TC TX direct egress BPF filter", func() error {
+			return deleteTCFilterCleanup(state.kernelUDPTXSecureDirectEgress)
+		})
 	}
 	if err := netlink.FilterReplace(ingressFilter); err != nil {
-		if state.kernelUDPTXSecureDirectEgress != nil {
-			_ = netlink.FilterDel(state.kernelUDPTXSecureDirectEgress)
-		}
-		if state.kernelUDPTXSecureDirect != nil {
-			_ = netlink.FilterDel(state.kernelUDPTXSecureDirect)
-		}
 		return fmt.Errorf("attach ingress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 	}
+	cleanup.Add("delete ingress BPF filter", func() error {
+		return deleteTCFilterCleanup(ingressFilter)
+	})
 	if err := netlink.FilterReplace(egressFilter); err != nil {
-		_ = netlink.FilterDel(ingressFilter)
-		if state.kernelUDPTXSecureDirectEgress != nil {
-			_ = netlink.FilterDel(state.kernelUDPTXSecureDirectEgress)
-		}
-		if state.kernelUDPTXSecureDirect != nil {
-			_ = netlink.FilterDel(state.kernelUDPTXSecureDirect)
-		}
 		return fmt.Errorf("attach egress BPF filter on %q: %w", link.Attrs().Name, annotateTCFilterAttachError(err))
 	}
+	cleanup.Add("delete egress BPF filter", func() error {
+		return deleteTCFilterCleanup(egressFilter)
+	})
 	manager.lanTCFilters[link.Attrs().Name] = state
 	if link.Attrs().Name == manager.spec.LANIface || manager.ingressFilter == nil {
 		manager.ingressFilter = ingressFilter
@@ -20756,6 +20441,7 @@ func (manager *Manager) attachTCFiltersToLink(link netlink.Link, spec dataplane.
 	if state.kernelUDPTXSecureDirect != nil || state.kernelUDPTXSecureDirectEgress != nil {
 		manager.kernelUDPTXSecureDirectAttached = true
 	}
+	cleanup.Disarm()
 	return nil
 }
 
@@ -21093,6 +20779,7 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 		counters = append(counters, observability.Counter{Name: name, Value: txDirectStats[name]})
 	}
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_direct_attached", Value: boolCounter(manager.kernelUDPRXDirectAttached)})
+	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_neighbor_map_errors", Value: manager.kernelUDPRXNeighborMapErrors.Load()})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_direct_broadcast", Value: boolCounter(manager.kernelUDPRXDirectBroadcast)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_direct_peer_redirect", Value: boolCounter(manager.kernelUDPRXDirectRedirectPeer)})
 	counters = append(counters, observability.Counter{Name: "tc_kernel_udp_rx_direct_redirect_ingress", Value: boolCounter(manager.kernelUDPRXDirectRedirectIngress)})
@@ -21716,8 +21403,10 @@ func (manager *Manager) ensureNativeTunnelRouteLocked(route nativeTunnelRouteSta
 	}
 	link, err := netlink.LinkByName(name)
 	if err != nil {
-		_ = tunnelManager.Release(context.Background(), name)
-		return fmt.Errorf("inspect native tunnel %q: %w", name, err)
+		return errors.Join(
+			fmt.Errorf("inspect native tunnel %q: %w", name, err),
+			wrapEBPFOperation("release native tunnel after inspection failure", tunnelManager.Release(context.Background(), name)),
+		)
 	}
 	route.Tunnel = name
 	if err := netlink.RouteReplace(&netlink.Route{
@@ -21728,8 +21417,10 @@ func (manager *Manager) ensureNativeTunnelRouteLocked(route nativeTunnelRouteSta
 		MTU:       route.MTU,
 		AdvMSS:    route.AdvMSS,
 	}); err != nil {
-		_ = tunnelManager.Release(context.Background(), name)
-		return fmt.Errorf("install native tunnel route %s via %s dev %s: %w", route.Prefix, route.Gateway, name, err)
+		return errors.Join(
+			fmt.Errorf("install native tunnel route %s via %s dev %s: %w", route.Prefix, route.Gateway, name, err),
+			wrapEBPFOperation("release native tunnel after route install failure", tunnelManager.Release(context.Background(), name)),
+		)
 	}
 	manager.nativeTunnelRoutes[route.Key] = route
 	return nil
@@ -22063,19 +21754,25 @@ func (manager *Manager) nativeTunnelRouteSnapshotLocked() []persistedNativeTunne
 	return out
 }
 
-func nativeTunnelRouteStateMap(items []persistedNativeTunnelRoute) map[string]nativeTunnelRouteState {
+func nativeTunnelRouteStateMap(items []persistedNativeTunnelRoute) (map[string]nativeTunnelRouteState, error) {
 	if len(items) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]nativeTunnelRouteState, len(items))
-	for _, item := range items {
+	var errs []error
+	for index, item := range items {
 		prefix, err := netip.ParsePrefix(item.Prefix)
 		if err != nil {
+			errs = append(errs, fmt.Errorf("entry %d: parse persisted native tunnel prefix %q: %w", index, item.Prefix, err))
 			continue
 		}
 		var gateway netip.Addr
 		if item.Gateway != "" {
-			gateway, _ = netip.ParseAddr(item.Gateway)
+			gateway, err = netip.ParseAddr(item.Gateway)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("entry %d: parse persisted native tunnel gateway %q: %w", index, item.Gateway, err))
+				gateway = netip.Addr{}
+			}
 		}
 		key := item.Key
 		if key == "" {
@@ -22092,7 +21789,7 @@ func nativeTunnelRouteStateMap(items []persistedNativeTunnelRoute) map[string]na
 			Endpoint: core.EndpointID(item.Endpoint),
 		}
 	}
-	return out
+	return out, errors.Join(errs...)
 }
 
 func (manager *Manager) managedCaptureRouteSnapshotLocked() []persistedManagedCaptureRoute {
@@ -22123,14 +21820,16 @@ func (manager *Manager) managedCaptureRouteSnapshotLocked() []persistedManagedCa
 	return out
 }
 
-func managedCaptureRouteStateMap(items []persistedManagedCaptureRoute) map[string]managedCaptureRouteState {
+func managedCaptureRouteStateMap(items []persistedManagedCaptureRoute) (map[string]managedCaptureRouteState, error) {
 	if len(items) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]managedCaptureRouteState, len(items))
-	for _, item := range items {
+	var errs []error
+	for index, item := range items {
 		prefix, err := netip.ParsePrefix(item.Prefix)
 		if err != nil {
+			errs = append(errs, fmt.Errorf("entry %d: parse persisted managed capture prefix %q: %w", index, item.Prefix, err))
 			continue
 		}
 		prefix = prefix.Masked()
@@ -22140,7 +21839,11 @@ func managedCaptureRouteStateMap(items []persistedManagedCaptureRoute) map[strin
 		}
 		var gateway netip.Addr
 		if item.Gateway != "" {
-			gateway, _ = netip.ParseAddr(item.Gateway)
+			gateway, err = netip.ParseAddr(item.Gateway)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("entry %d: parse persisted managed capture gateway %q: %w", index, item.Gateway, err))
+				gateway = netip.Addr{}
+			}
 		}
 		out[key] = managedCaptureRouteState{
 			Key:            key,
@@ -22151,7 +21854,7 @@ func managedCaptureRouteStateMap(items []persistedManagedCaptureRoute) map[strin
 			DestinationMAC: item.DestinationMAC,
 		}
 	}
-	return out
+	return out, errors.Join(errs...)
 }
 
 func (manager *Manager) syncDeviceAccessProxyARPLocked(ctx context.Context, snapshot dataplane.Snapshot) error {
@@ -26105,13 +25808,13 @@ func createManagedLANBridge(iface string) (netlink.Link, bool, error) {
 	}
 	if err := ensureManagedLANTxQueueLen(link); err != nil {
 		if created {
-			_ = netlink.LinkDel(link)
+			return nil, false, errors.Join(err, wrapEBPFOperation("delete managed LAN bridge after tx queue setup failure", netlink.LinkDel(link)))
 		}
 		return nil, false, err
 	}
 	if err := netlink.LinkSetUp(link); err != nil {
 		if created {
-			_ = netlink.LinkDel(link)
+			return nil, false, errors.Join(err, wrapEBPFOperation("delete managed LAN bridge after link setup failure", netlink.LinkDel(link)))
 		}
 		return nil, false, err
 	}

@@ -2965,6 +2965,52 @@ func TestTIXTCPSessionSetPeerEndpointAnnotatesFlow(t *testing.T) {
 	}
 }
 
+func TestTIXTCPSessionCloseReturnsFlowAnnotationFailure(t *testing.T) {
+	wantErr := errors.New("injected tix_tcp flow annotation failure")
+	provider, _ := newProviderPair("ix-a", "ix-b")
+	provider.annotateErr = wantErr
+	session := newSession(provider, nil, 100, core.IXID("ix-a"), core.EndpointID("ix-b-tix_tcp"), dataplane.CryptoPlacementUserspace)
+
+	session.SetPeerEndpoint(core.IXID("ix-a"), core.EndpointID("ix-a-tix_tcp"))
+
+	if err := session.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("close error = %v, want annotation failure", err)
+	}
+}
+
+func TestTuneTIXTCPCompatConnReturnsSocketErrors(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen TCP: %v", err)
+	}
+	defer listener.Close()
+	type dialResult struct {
+		conn net.Conn
+		err  error
+	}
+	dialCh := make(chan dialResult, 1)
+	go func() {
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		dialCh <- dialResult{conn: conn, err: err}
+	}()
+	serverConn, err := listener.Accept()
+	if err != nil {
+		t.Fatalf("accept TCP: %v", err)
+	}
+	dialed := <-dialCh
+	if dialed.err != nil {
+		t.Fatalf("dial TCP: %v", dialed.err)
+	}
+	defer dialed.conn.Close()
+	if err := serverConn.Close(); err != nil {
+		t.Fatalf("close accepted TCP connection: %v", err)
+	}
+
+	if err := tuneTIXTCPCompatConn(serverConn); err == nil {
+		t.Fatal("tuning a closed TCP connection unexpectedly succeeded")
+	}
+}
+
 func TestTIXTCPUnavailableErrorsIncludeFastPathFallback(t *testing.T) {
 	provider := &fakeProvider{
 		subs:             make(map[chan dataplane.TIXTCPFrame]struct{}),
@@ -3023,6 +3069,7 @@ type fakeProvider struct {
 	frames           []dataplane.TIXTCPFrame
 	submitted        atomic.Uint64
 	received         atomic.Uint64
+	annotateErr      error
 }
 
 type capturingCryptoInstallerProvider struct {
@@ -3202,6 +3249,9 @@ func (provider *fakeProvider) DeleteTIXTCPFlows(ctx context.Context, flowIDs []u
 func (provider *fakeProvider) SetTIXTCPFlowPeer(ctx context.Context, flowID uint64, peer core.IXID, endpoint core.EndpointID) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if provider.annotateErr != nil {
+		return provider.annotateErr
 	}
 	provider.mu.Lock()
 	defer provider.mu.Unlock()

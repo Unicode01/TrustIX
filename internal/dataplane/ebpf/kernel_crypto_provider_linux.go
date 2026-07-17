@@ -264,12 +264,18 @@ func (manager *Manager) deleteKernelCryptoFlowNamespaceLocked(namespace uint8, f
 	for _, key := range keys {
 		if slot, ok := manager.kernelCryptoCtxSlots[key]; ok {
 			if manager.kernelCryptoProvider != nil {
-				_ = manager.kernelCryptoProvider.clearDirectSlot(slot)
+				if err := manager.kernelCryptoProvider.clearDirectSlot(slot); err != nil {
+					manager.warnings = append(manager.warnings, "clear deleted kernel crypto direct slot: "+err.Error())
+					manager.backgroundTasks.Record("clear deleted kernel crypto direct slot", err)
+				}
 			}
 		}
 		if manager.kernelCryptoFlowMap != nil {
 			if err := manager.kernelCryptoFlowMap.Delete(key); err == nil {
 				manager.kernelCryptoFlowMapDeletes++
+			} else if !errors.Is(err, cebpf.ErrKeyNotExist) {
+				manager.warnings = append(manager.warnings, "delete kernel crypto flow map entry: "+err.Error())
+				manager.backgroundTasks.Record("delete kernel crypto flow map entry", err)
 			}
 		}
 		delete(manager.kernelCryptoFlowMapEntries, key)
@@ -294,8 +300,8 @@ func (manager *Manager) syncKernelCryptoDirectSlotsLocked(entries []kernelCrypto
 			continue
 		}
 		if err := manager.kernelCryptoProvider.publishDirectSlot(install, directSlot); err != nil {
-			_ = kernelmodule.AEADDirectClearKey("", directSlot)
-			manager.warnings = append(manager.warnings, "publish TrustIX AEAD direct slot: "+err.Error())
+			cleanupErr := kernelmodule.AEADDirectClearKey("", directSlot)
+			manager.warnings = append(manager.warnings, "publish TrustIX AEAD direct slot: "+errors.Join(err, wrapEBPFOperation("clear unpublished TrustIX AEAD direct key", cleanupErr)).Error())
 		}
 	}
 }
@@ -328,14 +334,15 @@ func (manager *Manager) installKernelCryptoDirectOnlyLocked(entries []kernelCryp
 			continue
 		}
 		if err := manager.kernelCryptoProvider.publishDirectSlot(install, directSlot); err != nil {
-			_ = kernelmodule.AEADDirectClearKey("", directSlot)
 			manager.rollbackKernelCryptoProviderInstallLocked(entries)
-			return false, err
+			return false, errors.Join(err, wrapEBPFOperation("clear unpublished TrustIX AEAD direct key", kernelmodule.AEADDirectClearKey("", directSlot)))
 		}
 		if err := manager.kernelCryptoProvider.flowIndexMap.Update(install.Entry.Key, install.Slot, cebpf.UpdateAny); err != nil {
-			_ = kernelmodule.AEADDirectClearKey("", directSlot)
 			manager.rollbackKernelCryptoProviderInstallLocked(entries)
-			return false, fmt.Errorf("update direct-only kernel crypto flow %d direction %d: %w", install.Entry.Key.FlowID, install.Entry.Key.Direction, err)
+			return false, errors.Join(
+				fmt.Errorf("update direct-only kernel crypto flow %d direction %d: %w", install.Entry.Key.FlowID, install.Entry.Key.Direction, err),
+				wrapEBPFOperation("clear unindexed TrustIX AEAD direct key", kernelmodule.AEADDirectClearKey("", directSlot)),
+			)
 		}
 		installed = true
 	}
@@ -688,7 +695,7 @@ func (manager *Manager) installKernelCryptoDevicesLocked(namespace uint8, entrie
 			continue
 		}
 		if old := devices[flowID]; old != nil {
-			closeKernelCryptoDeviceDetached(old)
+			manager.closeKernelCryptoDeviceDetached(old)
 		}
 		devices[flowID] = device
 	}
@@ -713,18 +720,16 @@ func (manager *Manager) deleteKernelCryptoDeviceLocked(namespace uint8, flowID u
 		return
 	}
 	if device := devices[flowID]; device != nil {
-		closeKernelCryptoDeviceDetached(device)
+		manager.closeKernelCryptoDeviceDetached(device)
 	}
 	delete(devices, flowID)
 }
 
-func closeKernelCryptoDeviceDetached(device *kernelCryptoDevice) {
+func (manager *Manager) closeKernelCryptoDeviceDetached(device *kernelCryptoDevice) {
 	if device == nil {
 		return
 	}
-	go func() {
-		_ = device.Close()
-	}()
+	manager.backgroundTasks.Go("close detached kernel crypto device", device.Close)
 }
 
 func (manager *Manager) kernelCryptoDeviceMapForNamespaceLocked(namespace uint8, create bool) map[uint64]*kernelCryptoDevice {
@@ -944,14 +949,18 @@ func loadKernelCryptoDirectSlotProviderMaps() (*kernelCryptoProviderObject, erro
 		MaxEntries: kernelCryptoMaxEntries,
 	})
 	if err != nil {
-		_ = flowIndexMap.Close()
-		return nil, fmt.Errorf("create kernel crypto placeholder ctx slot map: %w", err)
+		return nil, errors.Join(
+			fmt.Errorf("create kernel crypto placeholder ctx slot map: %w", err),
+			wrapEBPFOperation("close kernel crypto direct flow index map", flowIndexMap.Close()),
+		)
 	}
 	directSlotMap, err := cebpf.NewMap(directSlotSpec)
 	if err != nil {
-		_ = contextSlots.Close()
-		_ = flowIndexMap.Close()
-		return nil, fmt.Errorf("create kernel crypto direct slot map: %w", err)
+		return nil, errors.Join(
+			fmt.Errorf("create kernel crypto direct slot map: %w", err),
+			wrapEBPFOperation("close kernel crypto placeholder context slots", contextSlots.Close()),
+			wrapEBPFOperation("close kernel crypto direct flow index map", flowIndexMap.Close()),
+		)
 	}
 	return &kernelCryptoProviderObject{
 		flowIndexMap:  flowIndexMap,
@@ -995,7 +1004,7 @@ func (provider *kernelCryptoProviderObject) InstallAt(entries []kernelCryptoProv
 	return nil
 }
 
-func (provider *kernelCryptoProviderObject) RoundTrip(key kernelCryptoFlowKey) error {
+func (provider *kernelCryptoProviderObject) RoundTrip(key kernelCryptoFlowKey) (resultErr error) {
 	if provider == nil || provider.roundTripMap == nil || provider.roundTripProg == nil {
 		return fmt.Errorf("tix_tcp kernel crypto ctx provider roundtrip program is not loaded")
 	}
@@ -1011,6 +1020,9 @@ func (provider *kernelCryptoProviderObject) RoundTrip(key kernelCryptoFlowKey) e
 	if err := provider.roundTripMap.Update(slot, scratch, cebpf.UpdateAny); err != nil {
 		return fmt.Errorf("stage tix_tcp kernel crypto roundtrip scratch: %w", err)
 	}
+	defer func() {
+		resultErr = errors.Join(resultErr, wrapEBPFOperation("clear tix_tcp kernel crypto roundtrip scratch", provider.roundTripMap.Update(slot, kernelCryptoRoundTripScratch{}, cebpf.UpdateAny)))
+	}()
 	ret, err := provider.roundTripProg.Run(&cebpf.RunOptions{Data: make([]byte, 64)})
 	if err != nil {
 		return fmt.Errorf("run tix_tcp kernel crypto roundtrip: %w", err)
@@ -1032,11 +1044,10 @@ func (provider *kernelCryptoProviderObject) RoundTrip(key kernelCryptoFlowKey) e
 	if bytes.Equal(scratch.Cipher[:kernelCryptoRoundTripPlainLen], scratch.Plain[:kernelCryptoRoundTripPlainLen]) {
 		return fmt.Errorf("tix_tcp kernel crypto roundtrip ciphertext did not change")
 	}
-	_ = provider.roundTripMap.Update(slot, kernelCryptoRoundTripScratch{}, cebpf.UpdateAny)
 	return nil
 }
 
-func (provider *kernelCryptoProviderObject) SealFrame(key kernelCryptoFlowKey, suiteID uint16, epoch uint64, sequence uint64, plaintext []byte) ([]byte, error) {
+func (provider *kernelCryptoProviderObject) SealFrame(key kernelCryptoFlowKey, suiteID uint16, epoch uint64, sequence uint64, plaintext []byte) (payload []byte, resultErr error) {
 	if provider == nil || provider.frameMap == nil || provider.frameSealProg == nil {
 		return nil, fmt.Errorf("tix_tcp kernel crypto frame seal program is not loaded")
 	}
@@ -1058,30 +1069,28 @@ func (provider *kernelCryptoProviderObject) SealFrame(key kernelCryptoFlowKey, s
 	if err := provider.frameMap.Update(uint32(0), scratch, cebpf.UpdateAny); err != nil {
 		return nil, fmt.Errorf("stage tix_tcp kernel crypto frame seal: %w", err)
 	}
+	defer func() {
+		resultErr = errors.Join(resultErr, provider.clearFrameSlot())
+	}()
 	if err := provider.runFrameProgram(provider.frameSealProg); err != nil {
-		provider.clearFrameSlot()
 		return nil, err
 	}
 	if err := provider.frameMap.Lookup(uint32(0), &scratch); err != nil {
-		provider.clearFrameSlot()
 		return nil, fmt.Errorf("read tix_tcp kernel crypto frame seal: %w", err)
 	}
 	if scratch.Result != 0 {
-		provider.clearFrameSlot()
 		return nil, fmt.Errorf("tix_tcp kernel crypto frame seal returned %d", scratch.Result)
 	}
 	if scratch.OutLen == 0 || scratch.OutLen > kernelCryptoFrameMaxWire {
-		provider.clearFrameSlot()
 		return nil, fmt.Errorf("tix_tcp kernel crypto frame seal output length %d is invalid", scratch.OutLen)
 	}
-	payload := make([]byte, kernelCryptoSecureHeaderLen+int(scratch.OutLen))
+	payload = make([]byte, kernelCryptoSecureHeaderLen+int(scratch.OutLen))
 	kernelCryptoPutSecureHeader(payload[:kernelCryptoSecureHeaderLen], byte(suiteID), epoch, sequence)
 	copy(payload[kernelCryptoSecureHeaderLen:], scratch.Out[:scratch.OutLen])
-	provider.clearFrameSlot()
 	return payload, nil
 }
 
-func (provider *kernelCryptoProviderObject) OpenFrame(key kernelCryptoFlowKey, suiteID uint16, epoch uint64, sequence uint64, payload []byte) ([]byte, error) {
+func (provider *kernelCryptoProviderObject) OpenFrame(key kernelCryptoFlowKey, suiteID uint16, epoch uint64, sequence uint64, payload []byte) (plaintext []byte, resultErr error) {
 	if provider == nil || provider.frameMap == nil || provider.frameOpenProg == nil {
 		return nil, fmt.Errorf("tix_tcp kernel crypto frame open program is not loaded")
 	}
@@ -1104,25 +1113,23 @@ func (provider *kernelCryptoProviderObject) OpenFrame(key kernelCryptoFlowKey, s
 	if err := provider.frameMap.Update(uint32(0), scratch, cebpf.UpdateAny); err != nil {
 		return nil, fmt.Errorf("stage tix_tcp kernel crypto frame open: %w", err)
 	}
+	defer func() {
+		resultErr = errors.Join(resultErr, provider.clearFrameSlot())
+	}()
 	if err := provider.runFrameProgram(provider.frameOpenProg); err != nil {
-		provider.clearFrameSlot()
 		return nil, err
 	}
 	if err := provider.frameMap.Lookup(uint32(0), &scratch); err != nil {
-		provider.clearFrameSlot()
 		return nil, fmt.Errorf("read tix_tcp kernel crypto frame open: %w", err)
 	}
 	if scratch.Result != 0 {
-		provider.clearFrameSlot()
 		return nil, fmt.Errorf("tix_tcp kernel crypto frame open returned %d", scratch.Result)
 	}
 	if scratch.OutLen > kernelCryptoFrameMaxPlain {
-		provider.clearFrameSlot()
 		return nil, fmt.Errorf("tix_tcp kernel crypto frame open output length %d is invalid", scratch.OutLen)
 	}
-	plaintext := make([]byte, int(scratch.OutLen))
+	plaintext = make([]byte, int(scratch.OutLen))
 	copy(plaintext, scratch.Out[:scratch.OutLen])
-	provider.clearFrameSlot()
 	return plaintext, nil
 }
 
@@ -1151,6 +1158,8 @@ func (provider *kernelCryptoProviderObject) DeleteKeys(keys []kernelCryptoFlowKe
 				if clearErr := provider.clearDirectSlot(slot); clearErr != nil {
 					err = errors.Join(err, clearErr)
 				}
+			} else if !errors.Is(lookupErr, cebpf.ErrKeyNotExist) {
+				err = errors.Join(err, fmt.Errorf("lookup kernel crypto flow slot: %w", lookupErr))
 			}
 		}
 		if provider.deleteProgram != nil && provider.commandMap != nil {
@@ -1229,9 +1238,14 @@ func (provider *kernelCryptoProviderObject) clearDirectSlot(slot uint32) error {
 		return nil
 	}
 	var existing kernelCryptoDirectSlotValue
-	if err := provider.directSlotMap.LookupWithFlags(slot, &existing, cebpf.LookupLock); err == nil && existing.Enabled != 0 &&
-		existing.SlotID < kernelmodule.TrustIXAEADDirectMaxSlots {
-		_ = kernelmodule.AEADDirectClearKey("", existing.SlotID)
+	lookupErr := provider.directSlotMap.LookupWithFlags(slot, &existing, cebpf.LookupLock)
+	if lookupErr != nil && !errors.Is(lookupErr, cebpf.ErrKeyNotExist) {
+		return fmt.Errorf("lookup direct slot %d before clear: %w", slot, lookupErr)
+	}
+	if lookupErr == nil && existing.Enabled != 0 && existing.SlotID < kernelmodule.TrustIXAEADDirectMaxSlots {
+		if err := kernelmodule.AEADDirectClearKey("", existing.SlotID); err != nil {
+			return fmt.Errorf("clear TrustIX AEAD direct key %d for slot %d: %w", existing.SlotID, slot, err)
+		}
 	}
 	if err := provider.directSlotMap.Update(slot, kernelCryptoDirectSlotValue{}, cebpf.UpdateLock); err != nil {
 		return fmt.Errorf("clear direct slot %d: %w", slot, err)
@@ -1281,7 +1295,7 @@ func (provider *kernelCryptoProviderObject) Close() error {
 	return err
 }
 
-func (provider *kernelCryptoProviderObject) runCommand(program *cebpf.Program, cmd *kernelCryptoCommand) error {
+func (provider *kernelCryptoProviderObject) runCommand(program *cebpf.Program, cmd *kernelCryptoCommand) (resultErr error) {
 	if provider.commandMap == nil || program == nil {
 		return fmt.Errorf("tix_tcp kernel crypto ctx provider is incomplete")
 	}
@@ -1289,13 +1303,17 @@ func (provider *kernelCryptoProviderObject) runCommand(program *cebpf.Program, c
 	if err := provider.commandMap.Update(slot, *cmd, cebpf.UpdateAny); err != nil {
 		return fmt.Errorf("stage tix_tcp kernel crypto command: %w", err)
 	}
-	defer provider.clearCommandSlot(slot)
+	defer func() {
+		resultErr = errors.Join(resultErr, provider.clearCommandSlot(slot))
+	}()
 	ret, err := program.Run(&cebpf.RunOptions{Context: uint64(0)})
 	if err != nil {
 		return fmt.Errorf("run tix_tcp kernel crypto command: %w", err)
 	}
 	var out kernelCryptoCommand
-	if lookupErr := provider.commandMap.Lookup(slot, &out); lookupErr == nil && out.Result != 0 {
+	if lookupErr := provider.commandMap.Lookup(slot, &out); lookupErr != nil {
+		return fmt.Errorf("read tix_tcp kernel crypto command result: %w", lookupErr)
+	} else if out.Result != 0 {
 		return fmt.Errorf("tix_tcp kernel crypto command returned %d", out.Result)
 	}
 	if ret != 0 {
@@ -1304,11 +1322,11 @@ func (provider *kernelCryptoProviderObject) runCommand(program *cebpf.Program, c
 	return nil
 }
 
-func (provider *kernelCryptoProviderObject) clearCommandSlot(slot uint32) {
+func (provider *kernelCryptoProviderObject) clearCommandSlot(slot uint32) error {
 	if provider == nil || provider.commandMap == nil {
-		return
+		return nil
 	}
-	_ = provider.commandMap.Update(slot, kernelCryptoCommand{}, cebpf.UpdateAny)
+	return wrapEBPFOperation("clear tix_tcp kernel crypto command scratch", provider.commandMap.Update(slot, kernelCryptoCommand{}, cebpf.UpdateAny))
 }
 
 func (provider *kernelCryptoProviderObject) runFrameProgram(program *cebpf.Program) error {
@@ -1325,11 +1343,11 @@ func (provider *kernelCryptoProviderObject) runFrameProgram(program *cebpf.Progr
 	return nil
 }
 
-func (provider *kernelCryptoProviderObject) clearFrameSlot() {
+func (provider *kernelCryptoProviderObject) clearFrameSlot() error {
 	if provider == nil || provider.frameMap == nil {
-		return
+		return nil
 	}
-	_ = provider.frameMap.Update(uint32(0), kernelCryptoFrameScratch{}, cebpf.UpdateAny)
+	return wrapEBPFOperation("clear tix_tcp kernel crypto frame scratch", provider.frameMap.Update(uint32(0), kernelCryptoFrameScratch{}, cebpf.UpdateAny))
 }
 
 func zeroKernelCryptoCommand(cmd *kernelCryptoCommand) {

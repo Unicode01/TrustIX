@@ -2522,6 +2522,42 @@ func TestCleanupQuarantinesCorruptPersistedDataplaneState(t *testing.T) {
 	}
 }
 
+func TestCleanupQuarantinesSemanticRouteCorruptionAndContinues(t *testing.T) {
+	pinPath := t.TempDir()
+	state := persistedDataplaneState{
+		Spec: dataplane.AttachSpec{PinPath: pinPath, LANIface: "trustix-missing-lan0"},
+		ManagedCaptureRoutes: []persistedManagedCaptureRoute{
+			{Prefix: "not-a-prefix", Iface: "trustix-missing-lan0"},
+			{Prefix: "10.91.0.0/24", Iface: "trustix-missing-lan0", Gateway: "not-an-ip"},
+		},
+		NativeTunnelRoutes: []persistedNativeTunnelRoute{
+			{Protocol: "gre", Tunnel: "trustix-missing-gre0", Prefix: "10.92.0.0/24", Gateway: "not-an-ip"},
+		},
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal semantically corrupt state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pinPath, "state.json"), payload, 0o600); err != nil {
+		t.Fatalf("write semantically corrupt state: %v", err)
+	}
+
+	manager := NewManager()
+	if err := manager.Cleanup(context.Background(), dataplane.AttachSpec{PinPath: pinPath}); err != nil {
+		t.Fatalf("cleanup with semantically corrupt state: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(pinPath, "state.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state.json stat error = %v, want not exist", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(pinPath, "state.corrupt-*.json"))
+	if err != nil {
+		t.Fatalf("glob semantic corruption quarantine: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("semantic corruption backups = %v, want exactly one", matches)
+	}
+}
+
 func TestDesiredNativeTunnelRoutesRequiresPlaintextKernelTunnel(t *testing.T) {
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{LANIface: "lan0", UnderlayIface: "eth0", DataDir: t.TempDir()}
@@ -2780,7 +2816,10 @@ func TestManagedCaptureRouteStateRoundTrip(t *testing.T) {
 		items[0].DestinationMAC != "02:00:00:00:00:02" {
 		t.Fatalf("managed capture route snapshot = %#v", items)
 	}
-	restored := managedCaptureRouteStateMap(items)
+	restored, err := managedCaptureRouteStateMap(items)
+	if err != nil {
+		t.Fatalf("restore managed capture route: %v", err)
+	}
 	if restored["10.90.0.0/24"] != manager.managedCaptureRoutes["10.90.0.0/24"] {
 		t.Fatalf("managed capture route restore = %#v", restored)
 	}

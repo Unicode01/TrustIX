@@ -146,6 +146,32 @@ ha_offline=0
 script_url="${TRUSTIX_UNINSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/Unicode01/TrustIX/main/scripts/trustix-uninstall.sh}"
 unloaded_modules=()
 failed_modules=()
+remote_uninstall_stage=""
+remote_uninstall_target=""
+remote_uninstall_ssh_cmd=()
+
+cleanup_remote_uninstall_stage() {
+  [[ -n "$remote_uninstall_stage" && -n "$remote_uninstall_target" ]] || return 0
+  if ! "${remote_uninstall_ssh_cmd[@]}" "$remote_uninstall_target" "rm -rf $(shell_quote "$remote_uninstall_stage")"; then
+    log "ERROR: failed to remove remote staging directory ${remote_uninstall_target}:${remote_uninstall_stage}"
+    return 1
+  fi
+  remote_uninstall_stage=""
+  remote_uninstall_target=""
+  remote_uninstall_ssh_cmd=()
+}
+
+uninstall_exit_trap() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  if ! cleanup_remote_uninstall_stage; then
+    [[ "$rc" != "0" ]] || rc=1
+  fi
+  exit "$rc"
+}
+
+trap uninstall_exit_trap EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -216,13 +242,20 @@ remote_uninstall() {
   local stage
   stage="$("${ssh_cmd[@]}" "$target" 'mktemp -d /tmp/trustix-uninstall.XXXXXX')"
   [[ -n "$stage" ]] || die "failed to create remote staging dir"
+	local stage_suffix="${stage#/tmp/trustix-uninstall.}"
+	[[ "$stage" == /tmp/trustix-uninstall.* && -n "$stage_suffix" && "$stage_suffix" != */* ]] || \
+		die "remote returned unsafe uninstall staging dir: $stage"
+  remote_uninstall_stage="$stage"
+  remote_uninstall_target="$target"
+  remote_uninstall_ssh_cmd=("${ssh_cmd[@]}")
+  local remote_status=0
   local self_path
   if self_path="$(script_self_path)"; then
-    "${scp_cmd[@]}" "$self_path" "${target}:${stage}/trustix-uninstall.sh"
+    "${scp_cmd[@]}" "$self_path" "${target}:${stage}/trustix-uninstall.sh" || remote_status=$?
   else
     local fetch_command
     fetch_command="if command -v curl >/dev/null 2>&1; then curl -fsSL $(shell_quote "$script_url") -o $(shell_quote "${stage}/trustix-uninstall.sh"); elif command -v wget >/dev/null 2>&1; then wget -qO $(shell_quote "${stage}/trustix-uninstall.sh") $(shell_quote "$script_url"); else echo 'curl or wget is required to fetch trustix-uninstall.sh' >&2; exit 127; fi"
-    "${ssh_cmd[@]}" "$target" "$fetch_command"
+    "${ssh_cmd[@]}" "$target" "$fetch_command" || remote_status=$?
   fi
 
   local remote_args=()
@@ -260,10 +293,10 @@ remote_uninstall() {
   for arg in "${remote_args[@]}"; do
     command+=" $(shell_quote "$arg")"
   done
-	local remote_status=0
-	"${ssh_cmd[@]}" "$target" "$command" || remote_status=$?
-	if ! "${ssh_cmd[@]}" "$target" "rm -rf $(shell_quote "$stage")"; then
-		log "ERROR: failed to remove remote staging directory ${target}:${stage}"
+	if [[ "$remote_status" == "0" ]]; then
+		"${ssh_cmd[@]}" "$target" "$command" || remote_status=$?
+	fi
+	if ! cleanup_remote_uninstall_stage; then
 		[[ "$remote_status" != "0" ]] || remote_status=1
 	fi
 	return "$remote_status"

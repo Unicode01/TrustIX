@@ -162,8 +162,7 @@ func newKernelCryptoDevice(flow kernelCryptoDeviceFlow) (*kernelCryptoDevice, er
 	}
 	open, err := kernelmodule.OpenAEADDevice("")
 	if err != nil {
-		_ = seal.Close()
-		return nil, err
+		return nil, errors.Join(err, wrapEBPFOperation("close kernel AEAD seal device after open failure", seal.Close()))
 	}
 	device := &kernelCryptoDevice{
 		seal:         seal,
@@ -176,12 +175,10 @@ func newKernelCryptoDevice(flow kernelCryptoDeviceFlow) (*kernelCryptoDevice, er
 		device.recvSeen = make([]uint64, int(device.recvWindow/64))
 	}
 	if err := seal.SetKey(flow.SendKey[:flow.KeyLen]); err != nil {
-		_ = device.Close()
-		return nil, err
+		return nil, errors.Join(err, wrapEBPFOperation("close kernel AEAD device after seal key setup failure", device.Close()))
 	}
 	if err := open.SetKey(flow.RecvKey[:flow.KeyLen]); err != nil {
-		_ = device.Close()
-		return nil, err
+		return nil, errors.Join(err, wrapEBPFOperation("close kernel AEAD device after open key setup failure", device.Close()))
 	}
 	return device, nil
 }
@@ -194,18 +191,26 @@ func (device *kernelCryptoDevice) Close() error {
 	device.openMu.Lock()
 	defer device.openMu.Unlock()
 	defer device.sealMu.Unlock()
-	var err error
+	var errs []error
 	if device.seal != nil {
-		err = device.seal.Close()
+		errs = append(errs, wrapEBPFOperation("close kernel AEAD seal device", device.seal.Close()))
 		device.seal = nil
 	}
 	if device.open != nil {
-		if closeErr := device.open.Close(); err == nil {
-			err = closeErr
-		}
+		errs = append(errs, wrapEBPFOperation("close kernel AEAD open device", device.open.Close()))
 		device.open = nil
 	}
-	return err
+	device.flow = kernelCryptoDeviceFlow{}
+	clear(device.sealPool)
+	clear(device.openPool)
+	clear(device.sealOps)
+	clear(device.openOps)
+	clear(device.sealPoolOps)
+	clear(device.openPoolOps)
+	clear(device.sealNonces)
+	clear(device.openNonces)
+	clear(device.recvSeen)
+	return errors.Join(errs...)
 }
 
 func (device *kernelCryptoDevice) SealBatch(requests []kernelCryptoDeviceSealRequest) ([][]byte, error) {

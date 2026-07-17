@@ -4,6 +4,7 @@ package ebpf
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -282,9 +283,11 @@ func (socket *afXDPSocket) sendPreparedTIXTCPSocketGSOMessageBatchLocked(fd int,
 			runtime.KeepAlive(sendScratch.ethernets)
 			runtime.KeepAlive(packetScratch.arena)
 			if sent == 0 && isPacketSocketGSOUnsupported(err) {
-				socket.disablePreparedTIXTCPSocketGSOLocked()
 				socket.stats.txSocketGSOUnsupported.Add(1)
-				return false, fmt.Errorf("%w: send tix_tcp raw VNET GSO batch on ifindex=%d: %v", errGSOUnsupported, socket.linkIndex, err)
+				return false, errors.Join(
+					fmt.Errorf("%w: send tix_tcp raw VNET GSO batch on ifindex=%d: %v", errGSOUnsupported, socket.linkIndex, err),
+					wrapEBPFOperation("close disabled tix_tcp raw packet GSO socket", socket.disablePreparedTIXTCPSocketGSOLocked()),
+				)
 			}
 			return sent > 0, fmt.Errorf("send tix_tcp raw VNET GSO batch on ifindex=%d: %w", socket.linkIndex, err)
 		}
@@ -316,22 +319,26 @@ func (socket *afXDPSocket) preparedTIXTCPSocketGSORawSocketLocked() (int, error)
 		return -1, fmt.Errorf("%w: open tix_tcp raw packet socket: %v", errGSOUnsupported, err)
 	}
 	if err := configureGSOPacketSocket(fd); err != nil {
-		_ = unix.Close(fd)
 		socket.txSocketGSODisabled = true
-		return -1, fmt.Errorf("%w: configure tix_tcp raw packet GSO socket: %v", errGSOUnsupported, err)
+		return -1, errors.Join(
+			fmt.Errorf("%w: configure tix_tcp raw packet GSO socket: %v", errGSOUnsupported, err),
+			wrapEBPFOperation("close failed tix_tcp raw packet GSO socket", unix.Close(fd)),
+		)
 	}
 	socket.txSocketGSOFD = fd
 	socket.txSocketGSOFDValid = true
 	return fd, nil
 }
 
-func (socket *afXDPSocket) disablePreparedTIXTCPSocketGSOLocked() {
+func (socket *afXDPSocket) disablePreparedTIXTCPSocketGSOLocked() error {
 	socket.txSocketGSODisabled = true
+	var err error
 	if socket.txSocketGSOFDValid && socket.txSocketGSOFD >= 0 {
-		_ = unix.Close(socket.txSocketGSOFD)
+		err = unix.Close(socket.txSocketGSOFD)
 	}
 	socket.txSocketGSOFD = -1
 	socket.txSocketGSOFDValid = false
+	return err
 }
 
 func (socket *afXDPSocket) recordPreparedTIXTCPSocketGSOReject(reason preparedTIXTCPSocketGSORejectReason) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -1491,7 +1492,9 @@ func (daemon *Daemon) handleControlMembers(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(payload)
+	if _, err := w.Write(payload); err != nil {
+		reportHTTPResponseWriteError(err)
+	}
 }
 
 type controlMembersPageOptions struct {
@@ -2090,7 +2093,15 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
-	_ = encoder.Encode(value)
+	if err := encoder.Encode(value); err != nil {
+		reportHTTPResponseWriteError(err)
+	}
+}
+
+func reportHTTPResponseWriteError(err error) {
+	if err != nil {
+		log.Printf("trustixd: write HTTP response: %v", err)
+	}
 }
 
 func setHTTPResponseSecurityHeaders(w http.ResponseWriter) {

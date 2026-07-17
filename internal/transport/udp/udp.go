@@ -226,7 +226,9 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 				udpCleanupError("close unexpected udp connection", conn.Close()),
 			)
 		}
-		configureUDPConn(udpConn)
+		if err := configureUDPConn(udpConn); err != nil {
+			return nil, errors.Join(err, udpCleanupError("close UDP connection after socket setup failure", udpConn.Close()))
+		}
 		return &session{conn: udpConn}, nil
 	}
 	return nil, fmt.Errorf("peer %q has no dialable udp endpoint", peer.ID)
@@ -257,7 +259,9 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	if err != nil {
 		return nil, err
 	}
-	configureUDPConn(conn)
+	if err := configureUDPConn(conn); err != nil {
+		return nil, errors.Join(err, udpCleanupError("close UDP listener after socket setup failure", conn.Close()))
+	}
 	listener := &listener{
 		conn:     conn,
 		acceptCh: make(chan transport.Session, 64),
@@ -266,7 +270,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	}
 	go func() {
 		<-ctx.Done()
-		_ = listener.Close()
+		transport.ObserveAsyncError("close UDP listener after context cancellation", listener.Close())
 	}()
 	for i := 0; i < userspaceUDPReadWorkers(); i++ {
 		go listener.readLoop()
@@ -528,7 +532,7 @@ func (transportImpl *Transport) listenKernel(ctx context.Context, ep transport.E
 			}
 			go func() {
 				<-ctx.Done()
-				_ = listener.Close()
+				transport.ObserveAsyncError("close kernel UDP listener after context cancellation", listener.Close())
 			}()
 			if subscription != nil {
 				go listener.readSubscription(ctx)
@@ -564,7 +568,7 @@ func (transportImpl *Transport) listenKernel(ctx context.Context, ep transport.E
 		}
 		go func() {
 			<-ctx.Done()
-			_ = listener.Close()
+			transport.ObserveAsyncError("close kernel UDP listener after context cancellation", listener.Close())
 		}()
 		if subscription != nil {
 			go listener.readSubscription(ctx)
@@ -768,20 +772,22 @@ func (listener *listener) Close() error {
 func (listener *listener) readLoop() {
 	for {
 		packets, _, release, err := recvUDPBatchFrom(listener.conn, userspaceUDPReadBatch(), userspaceUDPReadPacketSize())
-		if err != nil {
-			if release != nil {
+		if len(packets) > 0 {
+			releaseOwned := listener.dispatchPackets(packets, release)
+			if release != nil && !releaseOwned {
 				release()
 			}
+		} else if release != nil {
+			release()
+		}
+		if err != nil {
 			if udpReadErrorClosed(err) {
-				_ = listener.Close()
+				transport.ObserveAsyncError("close UDP listener after receive closure", listener.Close())
 				return
 			}
+			transport.ObserveAsyncError("receive UDP listener batch", err)
 			time.Sleep(10 * time.Millisecond)
 			continue
-		}
-		releaseOwned := listener.dispatchPackets(packets, release)
-		if release != nil && !releaseOwned {
-			release()
 		}
 	}
 }
@@ -874,6 +880,7 @@ func (listener *listener) sessionForAddr(addr *net.UDPAddr) *serverSession {
 type session struct {
 	conn                  *net.UDPConn
 	recvMu                sync.Mutex
+	recvErr               error
 	bytesSent             atomic.Uint64
 	bytesReceived         atomic.Uint64
 	packetsSent           atomic.Uint64
@@ -957,12 +964,20 @@ func (session *session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 	if len(session.recvPending.packets) > 0 {
 		return session.recvPendingLocked(max)
 	}
+	if session.recvErr != nil {
+		err := session.recvErr
+		session.recvErr = nil
+		return nil, nil, err
+	}
 	packets, result, release, err := recvUDPBatch(session.conn, max, userspaceUDPReadPacketSize())
-	if err != nil {
+	if err != nil && len(packets) == 0 {
 		if release != nil {
 			release()
 		}
 		return nil, nil, err
+	}
+	if err != nil {
+		session.recvErr = err
 	}
 	if len(packets) > max {
 		received := packets
@@ -1026,12 +1041,14 @@ func (session *session) recordReceivedPackets(packets [][]byte) {
 }
 
 func (session *session) Close() error {
-	err := session.conn.Close()
+	closeErr := session.conn.Close()
 	session.recvMu.Lock()
+	recvErr := session.recvErr
+	session.recvErr = nil
 	releaseUDPPacketBatch(session.recvPending)
 	session.recvPending = udpPacketBatch{}
 	session.recvMu.Unlock()
-	return err
+	return errors.Join(closeErr, recvErr)
 }
 
 func (session *session) Stats() transport.TransportStats {
@@ -1513,7 +1530,7 @@ func udpCleanupError(operation string, err error) error {
 func (listener *kernelListener) readSubscription(ctx context.Context) {
 	if listener.subscription == nil {
 		<-ctx.Done()
-		_ = listener.Close()
+		transport.ObserveAsyncError("close kernel UDP listener without subscription", listener.Close())
 		return
 	}
 	if batchSubscription, ok := listener.subscription.(dataplane.KernelUDPBatchSubscription); ok {
@@ -1523,13 +1540,13 @@ func (listener *kernelListener) readSubscription(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = listener.Close()
+			transport.ObserveAsyncError("close kernel UDP listener after context cancellation", listener.Close())
 			return
 		case <-listener.done:
 			return
 		case frame, ok := <-listener.subscription.Events():
 			if !ok {
-				_ = listener.Close()
+				transport.ObserveAsyncError("close kernel UDP listener after subscription closure", listener.Close())
 				return
 			}
 			if frame.Direction != dataplane.KernelTransportInbound {
@@ -1545,13 +1562,13 @@ func (listener *kernelListener) readBatchSubscription(ctx context.Context, subsc
 	for {
 		select {
 		case <-ctx.Done():
-			_ = listener.Close()
+			transport.ObserveAsyncError("close kernel UDP batch listener after context cancellation", listener.Close())
 			return
 		case <-listener.done:
 			return
 		case frames, ok := <-subscription.BatchEvents():
 			if !ok {
-				_ = listener.Close()
+				transport.ObserveAsyncError("close kernel UDP batch listener after subscription closure", listener.Close())
 				return
 			}
 			listener.dispatchBatch(frames)
@@ -1698,6 +1715,7 @@ type kernelSession struct {
 	recvPending               kernelUDPPacketBatch
 	closeOnce                 sync.Once
 	closeErr                  error
+	backgroundErrors          transport.AsyncErrorTracker
 	closeInputOnce            sync.Once
 	closed                    chan struct{}
 	sendSeq                   atomic.Uint64
@@ -2374,6 +2392,9 @@ func (session *kernelSession) Close() error {
 				errs = append(errs, fmt.Errorf("close kernel UDP subscription: %w", err))
 			}
 		}
+		if err := session.backgroundErrors.Err(); err != nil {
+			errs = append(errs, err)
+		}
 		session.closeErr = errors.Join(errs...)
 	})
 	return session.closeErr
@@ -2455,7 +2476,10 @@ func (session *kernelSession) SetPeerIdentity(peer core.IXID, domain core.Domain
 	session.peer = peer
 	session.peerIdentity = transport.PeerIdentity{Peer: peer, Domain: domain}
 	if annotator, ok := session.provider.(dataplane.KernelUDPFlowAnnotator); ok {
-		_ = annotator.SetKernelUDPFlowPeer(context.Background(), session.flowID, peer, session.endpoint)
+		session.backgroundErrors.Record(
+			fmt.Sprintf("annotate kernel UDP flow %d peer identity", session.flowID),
+			annotator.SetKernelUDPFlowPeer(context.Background(), session.flowID, peer, session.endpoint),
+		)
 	}
 }
 
@@ -2486,7 +2510,10 @@ func (session *kernelSession) SetPeerEndpoint(peer core.IXID, endpoint core.Endp
 		session.endpoint = endpoint
 	}
 	if annotator, ok := session.provider.(dataplane.KernelUDPFlowAnnotator); ok {
-		_ = annotator.SetKernelUDPFlowPeer(context.Background(), session.flowID, session.peer, session.endpoint)
+		session.backgroundErrors.Record(
+			fmt.Sprintf("annotate kernel UDP flow %d peer endpoint", session.flowID),
+			annotator.SetKernelUDPFlowPeer(context.Background(), session.flowID, session.peer, session.endpoint),
+		)
 	}
 }
 

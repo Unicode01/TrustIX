@@ -982,11 +982,6 @@ func (daemon *Daemon) warmRouteSessionsForEpoch(ctx context.Context, warmupEpoch
 	return lastErr
 }
 
-func (daemon *Daemon) warmEndpointSessionPool(ctx context.Context, epoch uint64, peer config.PeerConfig, cfgEndpoint config.EndpointConfig, poolSize int) bool {
-	warmed, _ := daemon.warmEndpointSessionPoolResult(ctx, epoch, peer, cfgEndpoint, poolSize)
-	return warmed
-}
-
 func (daemon *Daemon) warmEndpointSessionPoolResult(ctx context.Context, epoch uint64, peer config.PeerConfig, cfgEndpoint config.EndpointConfig, poolSize int) (bool, error) {
 	endpoint := transportEndpointFromConfig(cfgEndpoint)
 	endpoint.Enabled = true
@@ -2209,7 +2204,7 @@ func (daemon *Daemon) deviceAccessExpiryReaper(ctx context.Context) {
 			if dropped == 0 {
 				continue
 			}
-			_ = daemon.reconcileRuntimeAfterSessionRemoval(ctx, "device access lease expiry", true)
+			daemon.reconcileRuntimeAfterSessionRemovalAsync(ctx, "device access lease expiry", true)
 		}
 	}
 }
@@ -3128,7 +3123,11 @@ func (daemon *Daemon) finishCaptureForwarder(subscription dataplane.CaptureSubsc
 		daemon.captureCancel = nil
 	}
 	daemon.dataMu.Unlock()
-	daemon.flushAllDataSessionBatches()
+	if err := daemon.flushAllDataSessionBatches(); err != nil {
+		daemon.recordBackgroundError("capture_forwarder_batch_flush", err)
+	} else {
+		daemon.clearBackgroundError("capture_forwarder_batch_flush")
+	}
 }
 
 func (daemon *Daemon) forwardCaptureEvent(ctx context.Context, event dataplane.CaptureEvent) error {
@@ -4385,15 +4384,20 @@ func reverseDataSessionKeyMatches(key dataSessionKey, peer core.IXID, endpoint c
 func (daemon *Daemon) warmSessionPool(ctx context.Context, epoch uint64, peer config.PeerConfig, cfgEndpoint config.EndpointConfig, endpoint transport.Endpoint, poolSize int, selected int) {
 	deadline := time.Now().Add(dataSessionPoolWarmupDeadline())
 	retryDelay := dataSessionPoolWarmupRetryDelay()
+	operation := fmt.Sprintf("session_pool_warmup:%s:%s", peer.ID, cfgEndpoint.Name)
+	var lastErr error
 	for {
 		missing := daemon.missingSessionPoolIndexes(peer.ID, cfgEndpoint, endpoint.Encryption, poolSize)
 		if len(missing) == 0 || !daemon.dataSessionEpochActive(epoch) {
+			daemon.clearBackgroundError(operation)
 			return
 		}
 		if selected >= 0 && len(missing) == 1 && missing[0] == selected {
+			daemon.clearBackgroundError(operation)
 			return
 		}
 		var wg sync.WaitGroup
+		errCh := make(chan error, len(missing))
 		for _, poolIndex := range missing {
 			if poolIndex == selected {
 				continue
@@ -4402,18 +4406,37 @@ func (daemon *Daemon) warmSessionPool(ctx context.Context, epoch uint64, peer co
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, _, _ = daemon.sessionForEndpointPoolIndexWithOptions(ctx, epoch, peer, cfgEndpoint, endpoint, poolIndex, sessionForEndpointOptions{
+				_, _, err := daemon.sessionForEndpointPoolIndexWithOptions(ctx, epoch, peer, cfgEndpoint, endpoint, poolIndex, sessionForEndpointOptions{
 					AllowDial:                 true,
 					SuppressCanceledDialError: true,
 					SuppressDialErrorStats:    true,
 					RequireEpoch:              true,
 					ExpectedEpoch:             epoch,
 				})
+				if err != nil {
+					errCh <- fmt.Errorf("pool index %d: %w", poolIndex, err)
+				}
 			}()
 		}
 		wg.Wait()
+		close(errCh)
+		var attemptErrs []error
+		for err := range errCh {
+			attemptErrs = append(attemptErrs, err)
+		}
+		if len(attemptErrs) > 0 {
+			lastErr = errors.Join(attemptErrs...)
+		}
 		missing = daemon.missingSessionPoolIndexes(peer.ID, cfgEndpoint, endpoint.Encryption, poolSize)
-		if len(missing) == 0 || time.Now().After(deadline) || !daemon.dataSessionEpochActive(epoch) {
+		if len(missing) == 0 || !daemon.dataSessionEpochActive(epoch) {
+			daemon.clearBackgroundError(operation)
+			return
+		}
+		if time.Now().After(deadline) {
+			if lastErr == nil {
+				lastErr = fmt.Errorf("session pool warmup deadline reached with %d missing slot(s)", len(missing))
+			}
+			daemon.recordBackgroundError(operation, lastErr)
 			return
 		}
 		timer := time.NewTimer(retryDelay)
@@ -5237,7 +5260,7 @@ func (daemon *Daemon) runDataSessionBatchFlusher(ctx context.Context, runtime *d
 	for {
 		select {
 		case <-ctx.Done():
-			_ = daemon.flushDataSessionBatch(runtime)
+			daemon.flushDataSessionBatchAsync(runtime, "context cancellation")
 			return
 		case <-runtime.batchNotify:
 		}
@@ -5247,20 +5270,20 @@ func (daemon *Daemon) runDataSessionBatchFlusher(ctx context.Context, runtime *d
 				break
 			}
 			if wait <= 0 {
-				_ = daemon.flushDataSessionBatch(runtime)
+				daemon.flushDataSessionBatchAsync(runtime, "batch deadline")
 				continue
 			}
 			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				stopTimer(timer)
-				_ = daemon.flushDataSessionBatch(runtime)
+				daemon.flushDataSessionBatchAsync(runtime, "context cancellation")
 				return
 			case <-runtime.batchNotify:
 				stopTimer(timer)
 				continue
 			case <-timer.C:
-				_ = daemon.flushDataSessionBatch(runtime)
+				daemon.flushDataSessionBatchAsync(runtime, "batch timer")
 			}
 		}
 	}
@@ -5301,7 +5324,23 @@ func (runtime *dataSessionRuntime) batchFlushWait(delay time.Duration) (time.Dur
 	return delay - time.Since(runtime.batch.firstSeen), true
 }
 
-func (daemon *Daemon) flushAllDataSessionBatches() {
+func (daemon *Daemon) flushDataSessionBatchAsync(runtime *dataSessionRuntime, reason string) {
+	operation := dataSessionBatchFlushOperation(runtime)
+	if err := daemon.flushDataSessionBatch(runtime); err != nil {
+		daemon.recordBackgroundError(operation, fmt.Errorf("%s: %w", reason, err))
+		return
+	}
+	daemon.clearBackgroundError(operation)
+}
+
+func dataSessionBatchFlushOperation(runtime *dataSessionRuntime) string {
+	if runtime == nil {
+		return "data_session_batch_flush"
+	}
+	return fmt.Sprintf("data_session_batch_flush:%s:%s:%d", runtime.key.Peer, runtime.key.Endpoint, runtime.key.PoolIndex)
+}
+
+func (daemon *Daemon) flushAllDataSessionBatches() error {
 	daemon.dataMu.Lock()
 	runtimes := make([]*dataSessionRuntime, 0, len(daemon.dataSessionState))
 	for _, runtime := range daemon.dataSessionState {
@@ -5310,9 +5349,16 @@ func (daemon *Daemon) flushAllDataSessionBatches() {
 		}
 	}
 	daemon.dataMu.Unlock()
+	var errs []error
 	for _, runtime := range runtimes {
-		_ = daemon.flushDataSessionBatch(runtime)
+		if err := daemon.flushDataSessionBatch(runtime); err != nil {
+			daemon.recordBackgroundError(dataSessionBatchFlushOperation(runtime), err)
+			errs = append(errs, err)
+		} else {
+			daemon.clearBackgroundError(dataSessionBatchFlushOperation(runtime))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func (daemon *Daemon) sendDataSessionWirePacket(runtime *dataSessionRuntime, session transport.Session, packet []byte) error {
@@ -5920,7 +5966,7 @@ func (daemon *Daemon) handleReceivedDataPathBatch(ctx context.Context, packets [
 	daemon.dataStats.packetsReceived.Add(uint64(len(packets)))
 	if batchInjector == nil {
 		for _, packet := range packets {
-			_ = daemon.handleReceivedDataPathPacket(ctx, packet, injector)
+			daemon.handleReceivedDataPathPacketObserved(ctx, packet, injector)
 		}
 		return
 	}
@@ -6003,16 +6049,23 @@ func (daemon *Daemon) handleReceivedDataPathBatch(ctx context.Context, packets [
 		if localLAN.destinationInLAN(dst) {
 			if localLAN.destinationIsGateway(dst) || localLAN.natEnabled {
 				flushLocal()
-				_ = daemon.handleReceivedDataPathPacket(ctx, packet, injector)
+				daemon.handleReceivedDataPathPacketObserved(ctx, packet, injector)
 				continue
 			}
 			localPackets = append(localPackets, packet)
 			continue
 		}
 		flushLocal()
-		_ = daemon.handleReceivedDataPathPacket(ctx, packet, injector)
+		daemon.handleReceivedDataPathPacketObserved(ctx, packet, injector)
 	}
 	flushLocal()
+}
+
+func (daemon *Daemon) handleReceivedDataPathPacketObserved(ctx context.Context, packet []byte, injector dataplane.PacketInjector) {
+	// handleReceivedDataPathPacket records every non-cancellation failure in data-path counters.
+	if err := daemon.handleReceivedDataPathPacket(ctx, packet, injector); err != nil {
+		return
+	}
 }
 
 func (daemon *Daemon) handleReceivedDataPathPacket(ctx context.Context, packet []byte, injector dataplane.PacketInjector) error {
@@ -6396,7 +6449,7 @@ func (daemon *Daemon) dropSession(key dataSessionKey) {
 	}
 	daemon.syncKernelDatapathSessionDelete(key)
 	if leaseChanged {
-		_ = daemon.reconcileRuntimeAfterSessionRemoval(context.Background(), "device access session removal", true)
+		daemon.reconcileRuntimeAfterSessionRemovalAsync(context.Background(), "device access session removal", true)
 	}
 }
 
@@ -6430,7 +6483,7 @@ func (daemon *Daemon) dropRuntimeSession(runtime *dataSessionRuntime) {
 	}
 	daemon.syncKernelDatapathSessionDelete(runtime.key)
 	if leaseChanged {
-		_ = daemon.reconcileRuntimeAfterSessionRemoval(context.Background(), "device access runtime removal", true)
+		daemon.reconcileRuntimeAfterSessionRemovalAsync(context.Background(), "device access runtime removal", true)
 	}
 	daemon.refillSessionPoolAfterRuntimeDrop(runtime)
 }

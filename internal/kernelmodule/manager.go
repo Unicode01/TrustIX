@@ -69,20 +69,23 @@ func NewManager(name string) *Manager {
 }
 
 func ProbeTrustIXCryptoStatus() Status {
-	manager := NewTrustIXCryptoManager()
-	status, _ := manager.Ensure(context.Background(), config.KernelModuleConfig{Mode: ModeDisabled})
-	return status
+	return probeStatus(NewTrustIXCryptoManager())
 }
 
 func ProbeTrustIXDatapathHelpersStatus() Status {
-	manager := NewTrustIXDatapathHelpersManager()
-	status, _ := manager.Ensure(context.Background(), config.KernelModuleConfig{Mode: ModeDisabled})
-	return status
+	return probeStatus(NewTrustIXDatapathHelpersManager())
 }
 
 func ProbeTrustIXDatapathStatus() Status {
-	manager := NewTrustIXDatapathManager()
-	status, _ := manager.Ensure(context.Background(), config.KernelModuleConfig{Mode: ModeDisabled})
+	return probeStatus(NewTrustIXDatapathManager())
+}
+
+func probeStatus(manager *Manager) Status {
+	status, err := manager.Ensure(context.Background(), config.KernelModuleConfig{Mode: ModeDisabled})
+	if err != nil {
+		status.State = "error"
+		status.Reason = err.Error()
+	}
 	return status
 }
 

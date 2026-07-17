@@ -642,9 +642,12 @@ remote_deploy() {
     scp_cmd+=(-O)
   fi
 
-  local stage
+	local stage stage_suffix
 	stage="$("${ssh_cmd[@]}" "$target" 'mktemp -d /tmp/trustix-deploy.XXXXXX')"
 	[[ -n "$stage" ]] || die "failed to create remote staging dir"
+	stage_suffix="${stage#/tmp/trustix-deploy.}"
+	[[ "$stage" == /tmp/trustix-deploy.* && -n "$stage_suffix" && "$stage_suffix" != */* ]] || \
+		die "remote returned unsafe deploy staging dir: $stage"
 	deploy_remote_stage="$stage"
 	deploy_remote_target="$target"
 	deploy_remote_ssh_cmd=("${ssh_cmd[@]}")

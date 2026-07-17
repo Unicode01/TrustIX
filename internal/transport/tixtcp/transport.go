@@ -617,7 +617,7 @@ func tixTCPCleanupError(operation string, err error) error {
 
 func (listener *listener) closeOnContext(ctx context.Context) {
 	<-ctx.Done()
-	_ = listener.Close()
+	transport.ObserveAsyncError("close tix_tcp listener after context cancellation", listener.Close())
 }
 
 func (listener *listener) acceptCompatPrimers() {
@@ -634,29 +634,35 @@ func (listener *listener) acceptCompatPrimers() {
 				return
 			}
 		}
-		tuneTIXTCPCompatConn(conn)
+		if err := tuneTIXTCPCompatConn(conn); err != nil {
+			transport.ObserveAsyncError(
+				"reject tix_tcp compat connection after socket tuning failure",
+				errors.Join(err, tixTCPCleanupError("close untuned tix_tcp compat connection", conn.Close())),
+			)
+			continue
+		}
 		if tixTCPCompatStreamDataEnabled() {
 			select {
 			case <-listener.done:
-				_ = conn.Close()
+				transport.ObserveAsyncError("close rejected tix_tcp compat stream", conn.Close())
 				return
 			case listener.compatAcceptCh <- &compatStreamSession{
 				Session:  stream.NewSession(conn),
 				endpoint: listener.endpoint.Name,
 			}:
 			default:
-				_ = conn.Close()
+				transport.ObserveAsyncError("close overflowed tix_tcp compat stream", conn.Close())
 			}
 			continue
 		}
 		control, init, err := acceptTIXTCPCompatControl(conn)
 		if err != nil {
-			_ = conn.Close()
+			transport.ObserveAsyncError("close failed tix_tcp compat connection", conn.Close())
 			continue
 		}
 		flow := tixTCPCompatInboundFlow(init, conn, listener.endpoint, listener.placement)
 		if err := listener.provider.InstallTIXTCPFlows(context.Background(), []dataplane.TIXTCPFlow{flow}); err != nil {
-			_ = control.Close()
+			transport.ObserveAsyncError("close tix_tcp compat control after flow install failure", control.Close())
 			continue
 		}
 		sess := newSession(listener.provider, nil, init.flowID, "", listener.endpoint.Name, listener.placement, flow.LocalAddress, flow.RemoteAddress)
@@ -666,7 +672,7 @@ func (listener *listener) acceptCompatPrimers() {
 		listener.mu.Lock()
 		if existing := listener.sessions[init.flowID]; existing != nil && !existing.isClosed() {
 			listener.mu.Unlock()
-			_ = control.Close()
+			transport.ObserveAsyncError("close duplicate tix_tcp compat control", control.Close())
 			continue
 		}
 		listener.sessions[init.flowID] = sess
@@ -674,7 +680,7 @@ func (listener *listener) acceptCompatPrimers() {
 		case <-listener.done:
 			delete(listener.sessions, init.flowID)
 			listener.mu.Unlock()
-			_ = control.Close()
+			transport.ObserveAsyncError("close tix_tcp compat control during listener shutdown", control.Close())
 			return
 		case listener.acceptCh <- sess:
 			listener.mu.Unlock()
@@ -683,9 +689,9 @@ func (listener *listener) acceptCompatPrimers() {
 		default:
 			delete(listener.sessions, init.flowID)
 			listener.mu.Unlock()
-			_ = control.Close()
+			transport.ObserveAsyncError("close overflowed tix_tcp compat control", control.Close())
 			if deleter, ok := listener.provider.(dataplane.TIXTCPFlowDeleter); ok {
-				_ = deleter.DeleteTIXTCPFlows(context.Background(), []uint64{init.flowID})
+				transport.ObserveAsyncError("delete overflowed tix_tcp compat flow", deleter.DeleteTIXTCPFlows(context.Background(), []uint64{init.flowID}))
 			}
 		}
 	}
@@ -713,13 +719,13 @@ func (listener *listener) readSubscription(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = listener.Close()
+			transport.ObserveAsyncError("close tix_tcp listener after context cancellation", listener.Close())
 			return
 		case <-listener.done:
 			return
 		case frame, ok := <-listener.subscription.Events():
 			if !ok {
-				_ = listener.Close()
+				transport.ObserveAsyncError("close tix_tcp listener after subscription closure", listener.Close())
 				return
 			}
 			if frame.Direction != dataplane.TIXTCPInbound {
@@ -735,13 +741,13 @@ func (listener *listener) readBatchSubscription(ctx context.Context, subscriptio
 	for {
 		select {
 		case <-ctx.Done():
-			_ = listener.Close()
+			transport.ObserveAsyncError("close tix_tcp batch listener after context cancellation", listener.Close())
 			return
 		case <-listener.done:
 			return
 		case frames, ok := <-subscription.BatchEvents():
 			if !ok {
-				_ = listener.Close()
+				transport.ObserveAsyncError("close tix_tcp batch listener after subscription closure", listener.Close())
 				return
 			}
 			listener.dispatchBatch(frames)
@@ -868,6 +874,7 @@ type session struct {
 	recvPending                 tixTCPPacketBatch
 	closeOnce                   sync.Once
 	closeErr                    error
+	backgroundErrors            transport.AsyncErrorTracker
 	closeInputOnce              sync.Once
 	sendMu                      sync.Mutex
 	recvMu                      sync.Mutex
@@ -1079,7 +1086,7 @@ func (session *session) readCompatControl(ctx context.Context) {
 		}
 		packet, err := session.compatControl.RecvPacket()
 		if err != nil {
-			_ = session.Close()
+			transport.ObserveAsyncError("close tix_tcp session after compat control receive failure", session.Close())
 			return
 		}
 		if !tixTCPCompatControlEligible(packet) {
@@ -1868,7 +1875,10 @@ func (session *session) SetPeerIdentity(peer core.IXID, domain core.DomainID) {
 	session.peer = peer
 	session.peerIdentity = transport.PeerIdentity{Peer: peer, Domain: domain}
 	if annotator, ok := session.provider.(dataplane.TIXTCPFlowAnnotator); ok {
-		_ = annotator.SetTIXTCPFlowPeer(context.Background(), session.flowID, peer, session.endpoint)
+		session.backgroundErrors.Record(
+			fmt.Sprintf("annotate tix_tcp flow %d peer identity", session.flowID),
+			annotator.SetTIXTCPFlowPeer(context.Background(), session.flowID, peer, session.endpoint),
+		)
 	}
 }
 
@@ -1903,7 +1913,10 @@ func (session *session) SetPeerEndpoint(peer core.IXID, endpoint core.EndpointID
 		session.endpoint = endpoint
 	}
 	if annotator, ok := session.provider.(dataplane.TIXTCPFlowAnnotator); ok {
-		_ = annotator.SetTIXTCPFlowPeer(context.Background(), session.flowID, session.peer, session.endpoint)
+		session.backgroundErrors.Record(
+			fmt.Sprintf("annotate tix_tcp flow %d peer endpoint", session.flowID),
+			annotator.SetTIXTCPFlowPeer(context.Background(), session.flowID, session.peer, session.endpoint),
+		)
 	}
 }
 
@@ -1999,6 +2012,9 @@ func (session *session) Close() error {
 			if err := session.compatControl.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("close tix_tcp compatibility control: %w", err))
 			}
+		}
+		if err := session.backgroundErrors.Err(); err != nil {
+			errs = append(errs, err)
 		}
 		session.closeErr = errors.Join(errs...)
 	})
@@ -2097,20 +2113,25 @@ func dialTIXTCPCompatPrimer(ctx context.Context, endpoint transport.Endpoint) (n
 	if err != nil {
 		return nil, fmt.Errorf("tix_tcp compat TCP primer to %s: %w", address, err)
 	}
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tuneTIXTCPCompatConn(tcpConn)
+	if err := tuneTIXTCPCompatConn(conn); err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("tune tix_tcp compat TCP primer to %s: %w", address, err),
+			tixTCPCleanupError("close untuned tix_tcp compat primer", conn.Close()),
+		)
 	}
 	return conn, nil
 }
 
-func tuneTIXTCPCompatConn(conn net.Conn) {
+func tuneTIXTCPCompatConn(conn net.Conn) error {
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok {
-		return
+		return nil
 	}
-	_ = tcpConn.SetKeepAlive(true)
-	_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
-	_ = tcpConn.SetNoDelay(tixTCPCompatNoDelay())
+	return errors.Join(
+		tixTCPCleanupError("enable tix_tcp compat TCP keepalive", tcpConn.SetKeepAlive(true)),
+		tixTCPCleanupError("set tix_tcp compat TCP keepalive period", tcpConn.SetKeepAlivePeriod(30*time.Second)),
+		tixTCPCleanupError("set tix_tcp compat TCP no-delay mode", tcpConn.SetNoDelay(tixTCPCompatNoDelay())),
+	)
 }
 
 func tixTCPCompatNoDelay() bool {

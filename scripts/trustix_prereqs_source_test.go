@@ -145,6 +145,90 @@ trustix_prereqs_prepare_go_module_network
 	}
 }
 
+func TestTrustIXPrereqsOfficialGoInstallPropagatesLinkFailureWithoutErrexit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a native GNU bash")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("GNU bash is unavailable")
+	}
+
+	const probe = `
+set -u
+source ./trustix-prereqs.sh
+root="$(command mktemp -d /tmp/trustix-prereqs-test.XXXXXX)"
+trap 'command rm -rf "$root"' EXIT
+export TRUSTIX_BOOTSTRAP_GO_VERSION=1.25.12
+export TRUSTIX_BOOTSTRAP_GO_ROOT="$root/install"
+export TRUSTIX_BOOTSTRAP_GO_BIN_DIR="$root/bin"
+
+mktemp() {
+  if [[ "${1:-}" == "-d" ]]; then
+    command mkdir -p "$root/stage"
+    printf '%s\n' "$root/stage"
+  else
+    : >"$root/archive"
+    printf '%s\n' "$root/archive"
+  fi
+}
+trustix_prereqs_go_arch() { printf 'amd64\n'; }
+trustix_prereqs_download_file() { : >"$1"; }
+tar() {
+  local stage="" previous=""
+  for arg in "$@"; do
+    if [[ "$previous" == "-C" ]]; then stage="$arg"; fi
+    previous="$arg"
+  done
+  command mkdir -p "$stage/go/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$stage/go/bin/go"
+  printf '#!/bin/sh\nexit 0\n' >"$stage/go/bin/gofmt"
+  command chmod 0755 "$stage/go/bin/go" "$stage/go/bin/gofmt"
+}
+trustix_prereqs_run_root() {
+  if [[ "${1:-}" == "ln" && "${3:-}" == */bin/gofmt ]]; then
+    return 42
+  fi
+  command "$@"
+}
+
+if trustix_prereqs_install_official_go; then
+  echo 'install unexpectedly succeeded' >&2
+  exit 1
+fi
+[[ ! -e "$root/archive" ]]
+[[ ! -e "$root/stage" ]]
+[[ ! -e "$root/install/go1.25.12" ]]
+[[ ! -e "$root/bin/go" ]]
+[[ ! -e "$root/bin/gofmt" ]]
+
+command mkdir -p "$root/install/go1.25.12/bin" "$root/bin"
+printf '#!/bin/sh\necho old-go\n' >"$root/install/go1.25.12/bin/go"
+printf '#!/bin/sh\necho old-gofmt\n' >"$root/install/go1.25.12/bin/gofmt"
+command chmod 0755 "$root/install/go1.25.12/bin/go" "$root/install/go1.25.12/bin/gofmt"
+command ln -s "$root/install/go1.25.12/bin/go" "$root/bin/go"
+command ln -s "$root/install/go1.25.12/bin/gofmt" "$root/bin/gofmt"
+
+if trustix_prereqs_install_official_go; then
+  echo 'replacement install unexpectedly succeeded' >&2
+  exit 1
+fi
+[[ "$("$root/bin/go")" == "old-go" ]]
+[[ "$("$root/bin/gofmt")" == "old-gofmt" ]]
+[[ "$(readlink "$root/bin/go")" == "$root/install/go1.25.12/bin/go" ]]
+[[ "$(readlink "$root/bin/gofmt")" == "$root/install/go1.25.12/bin/gofmt" ]]
+if find "$root/install" -maxdepth 1 -name '.trustix-go-rollback.*' -print | grep -q .; then
+  echo 'replacement rollback directory was not removed' >&2
+  exit 1
+fi
+`
+	cmd := exec.Command(bash, "-c", probe)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("official Go install failure probe failed: %v\n%s", err, output)
+	}
+}
+
 func TestReleaseBuildPreparesGoModuleNetwork(t *testing.T) {
 	payload, err := os.ReadFile("build-release-linux.sh")
 	if err != nil {
