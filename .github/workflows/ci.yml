@@ -60,7 +60,7 @@ jobs:
           go test "${pkgs[@]}" -count=1
           go test ./internal/dataplane/ebpf -run '^$' -count=1
           go test ./internal/dataplane/ebpf \
-            -run '^Test(ErrorCleanupStack|BackgroundTaskTracker|AFXDPSocketClose|KernelUDPUDPFallbackSocketSetClose|CleanupQuarantinesSemantic|PersistedRouteStateMaps)' \
+            -run '^Test(ErrorCleanupStack|BackgroundTaskTracker|AFXDPSocketClose|KernelUDPUDPFallbackSocketSetClose|CleanupQuarantinesSemantic|PersistedRouteStateMaps|WriteDataplaneStateAtomic|AttachRollsBackAfterStatePersistenceFailure|ApplySnapshotRestoresFlowsAfterStatePersistenceFailure|ApplySnapshotRewritesPreviousStateAfterCommittedSyncFailure|TIXTCPStatusRetriesFailedPrunePersistence|SyncPendingKernelTransportStateDoesNotAttachFastPathBeforeManagerAttach|ApplyNATSnapshotRestoresPreviousSnapshotAfterPersistenceFailure)' \
             -count=1
 
       - name: Go Error And Race Checks

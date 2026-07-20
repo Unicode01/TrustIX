@@ -3611,6 +3611,7 @@ spec.loader.exec_module(module)
 hardening_commits = [
     "2f673d2454ff941ddcd6620199273b486484b3f0",
     "e29e20ad6a1062416eb93b0f091f9318babfc316",
+    "699078459c2a6aa379c13c7cd6fd6e727415e369",
 ]
 probe = {"commit": ""}
 module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed

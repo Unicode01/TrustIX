@@ -247,6 +247,13 @@ ERROR_HANDLING_ONLY_COMMITS = {
     # unchanged. The UDP fallback receive timeout only bounds idle teardown and
     # does not change active receive or transmit processing.
     "e29e20ad6a1062416eb93b0f091f9318babfc316",
+    # 6990784 makes dataplane state replacement atomic, completes attach and
+    # snapshot rollback, retries dirty flow cleanup, bounds lifecycle error
+    # records, and makes transport/kernel-provider close idempotent. These are
+    # failure, control-plane, and teardown paths; successful packet formats,
+    # transport selection, crypto operations, BPF instructions, and kernel
+    # execution are unchanged.
+    "699078459c2a6aa379c13c7cd6fd6e727415e369",
 }
 OPENWRT_ONLY_RUNTIME_CHANGE_COMMITS_BY_PATH = {
     # 9235159 only changes the OpenWrt rx_worker_single_coalesce default behind
