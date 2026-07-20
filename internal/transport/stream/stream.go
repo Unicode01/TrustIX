@@ -22,6 +22,8 @@ type Session struct {
 	conn            net.Conn
 	reader          *bufio.Reader
 	writeMu         sync.Mutex
+	closeOnce       sync.Once
+	closeErr        error
 	sendBatchArena  []byte
 	recvBatch       [][]byte
 	recvArena       []byte
@@ -269,7 +271,10 @@ func (session *Session) appendBorrowedPayload(size int) ([]byte, error) {
 }
 
 func (session *Session) Close() error {
-	return session.conn.Close()
+	session.closeOnce.Do(func() {
+		session.closeErr = session.conn.Close()
+	})
+	return session.closeErr
 }
 
 func (session *Session) Stats() transport.TransportStats {

@@ -4384,7 +4384,7 @@ func reverseDataSessionKeyMatches(key dataSessionKey, peer core.IXID, endpoint c
 func (daemon *Daemon) warmSessionPool(ctx context.Context, epoch uint64, peer config.PeerConfig, cfgEndpoint config.EndpointConfig, endpoint transport.Endpoint, poolSize int, selected int) {
 	deadline := time.Now().Add(dataSessionPoolWarmupDeadline())
 	retryDelay := dataSessionPoolWarmupRetryDelay()
-	operation := fmt.Sprintf("session_pool_warmup:%s:%s", peer.ID, cfgEndpoint.Name)
+	operation := sessionPoolWarmupOperation(peer.ID, cfgEndpoint.Name)
 	var lastErr error
 	for {
 		missing := daemon.missingSessionPoolIndexes(peer.ID, cfgEndpoint, endpoint.Encryption, poolSize)
@@ -4443,10 +4443,19 @@ func (daemon *Daemon) warmSessionPool(ctx context.Context, epoch uint64, peer co
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			daemon.clearBackgroundError(operation)
 			return
 		case <-timer.C:
 		}
 	}
+}
+
+func sessionPoolWarmupOperation(peer core.IXID, endpoint core.EndpointID) string {
+	return fmt.Sprintf("session_pool_warmup:%s:%s", peer, endpoint)
+}
+
+func sessionPoolWarmupPeerPrefix(peer core.IXID) string {
+	return fmt.Sprintf("session_pool_warmup:%s:", peer)
 }
 
 func (daemon *Daemon) missingSessionPoolIndexes(peer core.IXID, endpoint config.EndpointConfig, encryption string, poolSize int) []int {
@@ -5830,8 +5839,11 @@ func (daemon *Daemon) recordDataSessionTLSObservation(session transport.Session)
 
 func (daemon *Daemon) receiveDataPathSession(ctx context.Context, runtime *dataSessionRuntime, session transport.Session) {
 	defer func() {
+		operation := dataSessionReceiveCloseOperation(runtime)
 		if err := session.Close(); err != nil {
-			daemon.recordBackgroundError("data_session_receive_close", err)
+			daemon.recordBackgroundError(operation, err)
+		} else {
+			daemon.clearBackgroundError(operation)
 		}
 	}()
 	injector, _ := daemon.dataplane.(dataplane.PacketInjector)
@@ -5877,6 +5889,13 @@ func (daemon *Daemon) receiveDataPathSession(ctx context.Context, runtime *dataS
 		}
 		scratch.release()
 	}
+}
+
+func dataSessionReceiveCloseOperation(runtime *dataSessionRuntime) string {
+	if runtime == nil {
+		return "data_session_receive_close"
+	}
+	return fmt.Sprintf("data_session_receive_close:%s:%s:%d", runtime.key.Peer, runtime.key.Endpoint, runtime.key.PoolIndex)
 }
 
 func (daemon *Daemon) handleReceivedDataPathPackets(ctx context.Context, runtime *dataSessionRuntime, session transport.Session, packets [][]byte, injector dataplane.PacketInjector, batchInjector dataplane.PacketBatchInjector, scratch *dataReceiveScratch) {
@@ -6728,6 +6747,7 @@ func (daemon *Daemon) closeDataPath() error {
 	daemon.sessionPoolFlow = nil
 	daemon.dataSessionEpoch++
 	daemon.dataMu.Unlock()
+	daemon.clearBackgroundErrorsWithPrefix("session_pool_warmup:")
 
 	for _, runtime := range listeners {
 		if runtime.Cancel != nil {
@@ -6767,6 +6787,7 @@ func (daemon *Daemon) closeDataSessions() error {
 	daemon.sessionPoolFlow = nil
 	daemon.dataSessionEpoch++
 	daemon.dataMu.Unlock()
+	daemon.clearBackgroundErrorsWithPrefix("session_pool_warmup:")
 
 	var closeErrs []error
 	for _, session := range sessions {
@@ -6817,6 +6838,9 @@ func (daemon *Daemon) closeDataSessionsForPeers(peers map[core.IXID]struct{}) er
 	}
 	daemon.dataSessionEpoch++
 	daemon.dataMu.Unlock()
+	for peer := range peers {
+		daemon.clearBackgroundErrorsWithPrefix(sessionPoolWarmupPeerPrefix(peer))
+	}
 
 	var closeErrs []error
 	for _, session := range sessions {

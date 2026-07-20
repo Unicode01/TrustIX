@@ -3153,6 +3153,244 @@ func TestAttachExistingLANRejectsMissingGatewayAddress(t *testing.T) {
 	}
 }
 
+func TestAttachRollsBackAfterStatePersistenceFailure(t *testing.T) {
+	iface := loopbackInterfaceName(t)
+	gateway := firstLoopbackPrefix(t)
+	pinPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(pinPath, "state.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager()
+
+	err := manager.Attach(context.Background(), dataplane.AttachSpec{
+		LANIface:      iface,
+		Gateway:       gateway,
+		LANAttachMode: "existing",
+		ManageQdisc:   false,
+		ManageAddress: false,
+		PinPath:       pinPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "persist dataplane state") || !strings.Contains(err.Error(), "rollback failed dataplane attach") {
+		t.Fatalf("Attach error = %v, want persistence failure with rollback result", err)
+	}
+	if manager.attached {
+		t.Fatal("manager remained attached after persistence failure")
+	}
+	if len(manager.addressAddedLANs) != 0 || len(manager.qdiscPreparedLANs) != 0 || len(manager.restoreSysctls) != 0 {
+		t.Fatalf("rollback state retained address=%v qdisc=%v sysctls=%v", manager.addressAddedLANs, manager.qdiscPreparedLANs, manager.restoreSysctls)
+	}
+	assertNoDataplaneStateTempFiles(t, filepath.Join(pinPath, "state.json"))
+}
+
+func TestApplySnapshotRestoresFlowsAfterStatePersistenceFailure(t *testing.T) {
+	pinPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(pinPath, "state.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldSnapshot := dataplane.Snapshot{
+		Epoch:        1,
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeDisabled},
+		Routes: []routing.Route{{
+			Prefix:   "10.0.1.0/24",
+			NextHop:  "ix-b",
+			Endpoint: "udp-b",
+			Kind:     routing.RouteUnicast,
+		}},
+		Peers:     []dataplane.PeerMetadata{{ID: "ix-b", Trusted: true}},
+		Endpoints: []dataplane.EndpointMetadata{{ID: "udp-b", Peer: "ix-b", Transport: "udp", Address: "198.18.0.2:17041", Enabled: true}},
+	}
+	manager := NewManager()
+	manager.spec.PinPath = pinPath
+	manager.snapshot = oldSnapshot
+	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{7: {ID: 7, Peer: "ix-b", Endpoint: "udp-b", RemoteAddress: "198.18.0.2:17041"}}
+	manager.kernelUDPTXDirectSequences = map[uint64]uint64{7: 9}
+	manager.kernelUDPTXTemplates = map[uint64]kernelUDPTXTemplate{7: {}}
+	manager.kernelUDPTelemetry = map[uint64]*dataplane.TransportPathTelemetry{7: {Protocol: "kernel_udp", FlowID: 7}}
+
+	err := manager.ApplySnapshot(context.Background(), dataplane.Snapshot{
+		Epoch:        2,
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeDisabled},
+	})
+	if err == nil || !strings.Contains(err.Error(), "persist dataplane state") {
+		t.Fatalf("ApplySnapshot error = %v, want persistence failure", err)
+	}
+	if !reflect.DeepEqual(manager.snapshot, oldSnapshot) {
+		t.Fatalf("snapshot after rollback = %#v, want %#v", manager.snapshot, oldSnapshot)
+	}
+	if _, ok := manager.kernelUDPFlows[7]; !ok {
+		t.Fatal("flow was irreversibly deleted before snapshot commit")
+	}
+	_, templateExists := manager.kernelUDPTXTemplates[7]
+	if manager.kernelUDPTXDirectSequences[7] != 9 || !templateExists || manager.kernelUDPTelemetry[7] == nil {
+		t.Fatalf("flow auxiliary state was not preserved: sequences=%v templates=%v telemetry=%v", manager.kernelUDPTXDirectSequences, manager.kernelUDPTXTemplates, manager.kernelUDPTelemetry)
+	}
+}
+
+func TestApplySnapshotRewritesPreviousStateAfterCommittedSyncFailure(t *testing.T) {
+	pinPath := t.TempDir()
+	oldSnapshot := dataplane.Snapshot{
+		Epoch:        11,
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeDisabled},
+	}
+	manager := NewManager()
+	manager.spec.PinPath = pinPath
+	manager.snapshot = oldSnapshot
+	manager.kernelUDPFlows = map[uint64]dataplane.KernelUDPFlow{9: {ID: 9, Peer: "ix-b", Endpoint: "udp-b"}}
+
+	wantErr := errors.New("injected first directory sync failure")
+	originalSync := syncDataplaneStateDirectoryFunc
+	syncCalls := 0
+	syncDataplaneStateDirectoryFunc = func(path string) error {
+		syncCalls++
+		if syncCalls == 1 {
+			return wantErr
+		}
+		return originalSync(path)
+	}
+	t.Cleanup(func() { syncDataplaneStateDirectoryFunc = originalSync })
+
+	err := manager.ApplySnapshot(context.Background(), dataplane.Snapshot{
+		Epoch:        12,
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeDisabled},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ApplySnapshot error = %v, want committed sync failure", err)
+	}
+	if syncCalls != 2 {
+		t.Fatalf("state directory sync calls = %d, want initial commit plus rollback commit", syncCalls)
+	}
+	if !reflect.DeepEqual(manager.snapshot, oldSnapshot) {
+		t.Fatalf("snapshot after committed rollback = %#v, want %#v", manager.snapshot, oldSnapshot)
+	}
+	state, found, readErr := readPersistedDataplaneState(pinPath)
+	if readErr != nil || !found {
+		t.Fatalf("read compensated dataplane state found=%t err=%v", found, readErr)
+	}
+	if state.Snapshot.Epoch != oldSnapshot.Epoch {
+		t.Fatalf("persisted snapshot epoch = %d, want %d", state.Snapshot.Epoch, oldSnapshot.Epoch)
+	}
+	if _, ok := state.KernelUDPFlows[9]; !ok {
+		t.Fatal("persisted rollback state lost the previous kernel_udp flow")
+	}
+}
+
+func TestTIXTCPStatusRetriesFailedPrunePersistence(t *testing.T) {
+	pinPath := t.TempDir()
+	statePath := filepath.Join(pinPath, "state.json")
+	if err := os.Mkdir(statePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager()
+	manager.spec.PinPath = pinPath
+	manager.snapshot.PacketPolicy.KernelTransportMode = dataplane.KernelTransportModeDisabled
+	manager.tixTCPFlows = map[uint64]dataplane.TIXTCPFlow{17: {
+		ID:        17,
+		ExpiresAt: time.Now().Add(-time.Minute),
+	}}
+
+	if _, err := manager.TIXTCPStatus(context.Background()); err == nil || !strings.Contains(err.Error(), "persist dataplane state") {
+		t.Fatalf("first status error = %v, want persistence failure", err)
+	}
+	if _, ok := manager.tixTCPFlows[17]; ok {
+		t.Fatal("expired flow survived fail-closed pruning")
+	}
+	if !manager.statePersistenceDirty {
+		t.Fatal("failed prune persistence did not remain dirty")
+	}
+	if err := os.Remove(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.TIXTCPStatus(context.Background()); err != nil {
+		t.Fatalf("second status did not retry persistence: %v", err)
+	}
+	if manager.statePersistenceDirty {
+		t.Fatal("successful persistence did not clear dirty state")
+	}
+	state, found, err := readPersistedDataplaneState(pinPath)
+	if err != nil || !found {
+		t.Fatalf("read retried state found=%t err=%v", found, err)
+	}
+	if _, ok := state.TIXTCPFlows[17]; ok {
+		t.Fatal("retried state persistence retained expired flow")
+	}
+}
+
+func TestSyncPendingKernelTransportStateDoesNotAttachFastPathBeforeManagerAttach(t *testing.T) {
+	manager := NewManager()
+	manager.spec.UnderlayIface = "trustix-missing-underlay0"
+	manager.snapshot = dataplane.Snapshot{
+		PacketPolicy: dataplane.PacketPolicy{KernelTransportMode: dataplane.KernelTransportModeRequireKernel},
+		Endpoints: []dataplane.EndpointMetadata{{
+			ID:        "tixt-a",
+			Peer:      "ix-a",
+			Transport: "tix_tcp",
+			Listen:    "127.0.0.1:17043",
+			Enabled:   true,
+		}},
+	}
+	manager.kernelTransportSyncDirty = true
+
+	if err := manager.syncPendingKernelTransportStateLocked(context.Background()); err != nil {
+		t.Fatalf("sync pending state before attach: %v", err)
+	}
+	if manager.kernelTransportSyncDirty {
+		t.Fatal("successful offline state sync remained dirty")
+	}
+	if manager.tixTCPFastPath != nil {
+		t.Fatal("offline state sync attached a kernel transport fast path")
+	}
+}
+
+func TestApplyNATSnapshotRestoresPreviousSnapshotAfterPersistenceFailure(t *testing.T) {
+	pinPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(pinPath, "state.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previous := &dataplane.NATSnapshot{
+		Enabled:        true,
+		Gateway:        netip.MustParseAddr("10.0.0.1"),
+		SourcePrefixes: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")},
+		RoutePrefixes:  []core.Prefix{"10.1.0.0/24"},
+	}
+	manager := NewManager()
+	manager.spec.PinPath = pinPath
+	manager.snapshot.NAT = cloneNATSnapshot(previous)
+	next := &dataplane.NATSnapshot{
+		Enabled:        true,
+		Gateway:        netip.MustParseAddr("10.0.0.2"),
+		SourcePrefixes: []netip.Prefix{netip.MustParsePrefix("10.2.0.0/24")},
+		RoutePrefixes:  []core.Prefix{"10.3.0.0/24"},
+	}
+
+	err := manager.ApplyNATSnapshot(context.Background(), next)
+	if err == nil || !strings.Contains(err.Error(), "persist dataplane state") {
+		t.Fatalf("ApplyNATSnapshot error = %v, want persistence failure", err)
+	}
+	if !reflect.DeepEqual(manager.snapshot.NAT, previous) {
+		t.Fatalf("NAT snapshot after rollback = %#v, want %#v", manager.snapshot.NAT, previous)
+	}
+}
+
+func firstLoopbackPrefix(t *testing.T) string {
+	t.Helper()
+	iface, err := net.InterfaceByName(loopbackInterfaceName(t))
+	if err != nil {
+		t.Skipf("loopback interface unavailable: %v", err)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		t.Fatalf("list loopback addresses: %v", err)
+	}
+	for _, addr := range addrs {
+		prefix, err := netip.ParsePrefix(addr.String())
+		if err == nil && prefix.Addr().Is4() {
+			return prefix.String()
+		}
+	}
+	t.Fatal("loopback interface has no IPv4 prefix")
+	return ""
+}
+
 func loopbackInterfaceName(t *testing.T) string {
 	t.Helper()
 	iface, err := net.InterfaceByName("lo")

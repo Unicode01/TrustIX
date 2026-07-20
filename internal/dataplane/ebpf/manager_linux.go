@@ -55,6 +55,8 @@ type Manager struct {
 	spec                                        dataplane.AttachSpec
 	snapshot                                    dataplane.Snapshot
 	attached                                    bool
+	kernelTransportSyncDirty                    bool
+	statePersistenceDirty                       bool
 	capabilities                                []string
 	warnings                                    []string
 	restoreSysctls                              map[string]string
@@ -1815,27 +1817,12 @@ func specForLANAttach(spec dataplane.AttachSpec, lan dataplane.LANAttachSpec) da
 	return out
 }
 
-func cloneLinkOffloadStateMap(values map[string]*persistedLinkOffloadState) map[string]*persistedLinkOffloadState {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make(map[string]*persistedLinkOffloadState, len(values))
-	for key, value := range values {
-		out[key] = value
-	}
-	return out
-}
-
-func linkOffloadStateMapChanged(current, previous map[string]*persistedLinkOffloadState) bool {
-	if len(current) != len(previous) {
-		return true
-	}
-	for key, value := range current {
-		if previous[key] != value {
-			return true
-		}
-	}
-	return false
+type attachLinkRollbackState struct {
+	iface          string
+	mtu            int
+	txQueueLen     int
+	restoreMTU     bool
+	restoreTxQueue bool
 }
 
 func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (err error) {
@@ -1844,6 +1831,9 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if manager.attached {
+		return fmt.Errorf("linux dataplane is already attached")
 	}
 	if spec.PinPath == "" {
 		spec.PinPath = "/sys/fs/bpf/trustix"
@@ -1854,28 +1844,33 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 	}
 
 	lans := effectiveLANAttachSpecs(spec)
-	var primaryLink netlink.Link
-	createdLANLinks := make(map[string]netlink.Link)
-	initialLANOffloadProtections := cloneLinkOffloadStateMap(manager.lanOffloadProtections)
+	rollbackNeeded := false
+	createdLANIfaces := make(map[string]bool)
+	rollbackLinks := make(map[string]attachLinkRollbackState)
 	defer func() {
-		var rollbackErrs []error
-		if err != nil && linkOffloadStateMapChanged(manager.lanOffloadProtections, initialLANOffloadProtections) {
-			restoreErr := manager.restoreLANOffloadProtectionLocked(primaryLink)
-			if restoreErr != nil {
-				manager.spec = spec
-				rollbackErrs = append(rollbackErrs, wrapEBPFOperation("rollback LAN offload protection", restoreErr))
-				rollbackErrs = append(rollbackErrs, wrapEBPFOperation("persist LAN offload rollback state", manager.persistStateLocked()))
+		if err == nil || !rollbackNeeded {
+			return
+		}
+		manager.spec = spec
+		manager.attached = false
+		rollbackErr := manager.detachLocked(context.Background(), nil)
+		for iface, state := range rollbackLinks {
+			if createdLANIfaces[iface] {
+				continue
+			}
+			link, lookupErr := netlink.LinkByName(state.iface)
+			if lookupErr != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("inspect LAN iface %q while restoring failed attach: %w", state.iface, lookupErr))
+				continue
+			}
+			if state.restoreMTU && link.Attrs() != nil && link.Attrs().MTU != state.mtu {
+				rollbackErr = errors.Join(rollbackErr, wrapEBPFOperation("restore LAN MTU on "+state.iface, netlink.LinkSetMTU(link, state.mtu)))
+			}
+			if state.restoreTxQueue && link.Attrs() != nil && link.Attrs().TxQLen != state.txQueueLen {
+				rollbackErr = errors.Join(rollbackErr, wrapEBPFOperation("restore LAN tx queue length on "+state.iface, netlink.LinkSetTxQLen(link, state.txQueueLen)))
 			}
 		}
-		if err != nil {
-			for key, link := range createdLANLinks {
-				if link != nil {
-					rollbackErrs = append(rollbackErrs, wrapEBPFOperation("delete rolled-back managed LAN link "+key, netlink.LinkDel(link)))
-				}
-				delete(manager.linkAddedLANs, key)
-			}
-		}
-		err = errors.Join(err, errors.Join(rollbackErrs...))
+		err = errors.Join(err, wrapEBPFOperation("rollback failed dataplane attach", rollbackErr))
 	}()
 	if manager.addressAddedLANs == nil {
 		manager.addressAddedLANs = make(map[string]bool)
@@ -1901,7 +1896,8 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 				}
 				if created {
 					manager.linkAddedLANs[lanKey] = true
-					createdLANLinks[lanKey] = link
+					createdLANIfaces[lan.Iface] = true
+					rollbackNeeded = true
 					manager.warnings = append(manager.warnings, fmt.Sprintf("created managed LAN bridge %q", lan.Iface))
 				}
 			} else {
@@ -1909,12 +1905,17 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 			}
 		}
 		if lan.LANAttachMode == "managed" {
+			if attrs := link.Attrs(); attrs != nil && attrs.TxQLen <= 0 {
+				state := rollbackLinks[lan.Iface]
+				state.iface = lan.Iface
+				state.txQueueLen = attrs.TxQLen
+				state.restoreTxQueue = true
+				rollbackLinks[lan.Iface] = state
+				rollbackNeeded = true
+			}
 			if err := ensureManagedLANTxQueueLen(link); err != nil {
 				return fmt.Errorf("configure managed LAN tx queue length on %q: %w", lan.Iface, err)
 			}
-		}
-		if i == 0 {
-			primaryLink = link
 		}
 		if lan.LANAttachMode == "existing" {
 			if strings.TrimSpace(lan.Gateway) == "" {
@@ -1945,12 +1946,19 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 			if err := netlink.AddrReplace(link, addr); err != nil {
 				return fmt.Errorf("configure LAN gateway %q on %q: %w", lan.Gateway, lan.Iface, err)
 			}
+			rollbackNeeded = true
 			manager.addressAddedLANs[lanKey] = !existed
 			if i == 0 {
 				manager.addressAdded = !existed
 			}
 		}
 		if lan.ManagedMTU > 0 && link.Attrs() != nil && link.Attrs().MTU > lan.ManagedMTU {
+			state := rollbackLinks[lan.Iface]
+			state.iface = lan.Iface
+			state.mtu = link.Attrs().MTU
+			state.restoreMTU = true
+			rollbackLinks[lan.Iface] = state
+			rollbackNeeded = true
 			if err := netlink.LinkSetMTU(link, lan.ManagedMTU); err != nil {
 				return fmt.Errorf("configure LAN MTU %d on %q: %w", lan.ManagedMTU, lan.Iface, err)
 			}
@@ -1958,6 +1966,7 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 		}
 		if lan.ManageQdisc {
 			lanSpec := specForLANAttach(spec, lan)
+			rollbackNeeded = true
 			if err := manager.applyLANOffloadProtectionLocked(link, lanSpec); err != nil {
 				if lanOffloadProtectionRequired() {
 					return err
@@ -1977,16 +1986,19 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 		}
 		if lan.ManageRPFilter {
 			path := filepath.Join("/proc/sys/net/ipv4/conf", lan.Iface, "rp_filter")
+			rollbackNeeded = true
 			if err := manager.writeSysctl(path, "0"); err != nil {
 				return err
 			}
 		}
 	}
 	if lanAttachSpecsManageForwarding(lans) {
+		rollbackNeeded = true
 		if err := manager.writeSysctl("/proc/sys/net/ipv4/ip_forward", "1"); err != nil {
 			return err
 		}
 	}
+	rollbackNeeded = true
 	if err := manager.startNeighborMonitorLocked(spec); err != nil {
 		manager.warnings = append(manager.warnings, "neighbor monitor is unavailable: "+err.Error())
 	}
@@ -2003,11 +2015,26 @@ func (manager *Manager) ApplySnapshot(ctx context.Context, snapshot dataplane.Sn
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	previousSnapshot := manager.snapshot
+	previousTIXTCPFlows := manager.tixTCPFlows
+	previousKernelUDPFlows := manager.kernelUDPFlows
 	manager.snapshot = snapshot
-	manager.reconcileKernelTransportFlowsForSnapshotLocked(snapshot)
-	if err := manager.ensureKernelTransportFastPathLocked(ctx); err != nil {
-		return err
+	reconcile := manager.planKernelTransportFlowReconcileLocked(snapshot)
+	manager.stageKernelTransportFlowReconcileLocked(reconcile)
+	if err := manager.syncSnapshotBaseLocked(ctx, snapshot); err != nil {
+		return manager.rollbackSnapshotLocked(previousSnapshot, previousTIXTCPFlows, previousKernelUDPFlows, err, false)
 	}
+	if err := manager.syncSnapshotKernelTransportLocked(ctx); err != nil {
+		return manager.rollbackSnapshotLocked(previousSnapshot, previousTIXTCPFlows, previousKernelUDPFlows, err, false)
+	}
+	if err := manager.persistStateLocked(); err != nil {
+		return manager.rollbackSnapshotLocked(previousSnapshot, previousTIXTCPFlows, previousKernelUDPFlows, err, dataplaneStateCommitSucceeded(err))
+	}
+	manager.commitKernelTransportFlowReconcileLocked(reconcile)
+	return nil
+}
+
+func (manager *Manager) syncSnapshotBaseLocked(ctx context.Context, snapshot dataplane.Snapshot) error {
 	if err := manager.syncRoutesLocked(snapshot.Routes); err != nil {
 		return err
 	}
@@ -2024,6 +2051,13 @@ func (manager *Manager) ApplySnapshot(ctx context.Context, snapshot dataplane.Sn
 		return err
 	}
 	if err := manager.syncNATLocked(snapshot.NAT); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (manager *Manager) syncSnapshotKernelTransportLocked(ctx context.Context) error {
+	if err := manager.ensureKernelTransportFastPathLocked(ctx); err != nil {
 		return err
 	}
 	if err := manager.syncTIXTCPPortsLocked(); err != nil {
@@ -2044,7 +2078,67 @@ func (manager *Manager) ApplySnapshot(ctx context.Context, snapshot dataplane.Sn
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
 		manager.warnings = append(manager.warnings, "kernel_udp XDP TC RX direct config sync failed: "+err.Error())
 	}
-	return manager.persistStateLocked()
+	return nil
+}
+
+func (manager *Manager) markKernelTransportStateDirtyLocked() {
+	manager.kernelTransportSyncDirty = true
+	manager.statePersistenceDirty = true
+}
+
+func (manager *Manager) syncPendingKernelTransportStateLocked(ctx context.Context) error {
+	if !manager.kernelTransportSyncDirty {
+		return nil
+	}
+	var ensureErr error
+	if manager.attached {
+		ensureErr = manager.ensureKernelTransportFastPathLocked(ctx)
+	}
+	err := errors.Join(
+		wrapEBPFOperation("sync kernel transport fast path", ensureErr),
+		wrapEBPFOperation("sync tix_tcp ports", manager.syncTIXTCPPortsLocked()),
+		wrapEBPFOperation("sync kernel_udp ports", manager.syncKernelUDPPortsLocked()),
+		wrapEBPFOperation("sync kernel_udp TX direct state", manager.syncKernelUDPTXDirectLocked()),
+	)
+	if err == nil {
+		manager.kernelTransportSyncDirty = false
+	}
+	return err
+}
+
+func (manager *Manager) rollbackSnapshotLocked(previous dataplane.Snapshot, tixTCPFlows map[uint64]dataplane.TIXTCPFlow, kernelUDPFlows map[uint64]dataplane.KernelUDPFlow, cause error, persist bool) error {
+	manager.snapshot = previous
+	manager.tixTCPFlows = tixTCPFlows
+	manager.kernelUDPFlows = kernelUDPFlows
+	rollbackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rollbackErr := manager.restoreSnapshotBestEffortLocked(rollbackCtx, previous)
+	if rollbackErr == nil && persist {
+		rollbackErr = manager.persistStateLocked()
+	}
+	return errors.Join(cause, wrapEBPFOperation("restore previous dataplane snapshot", rollbackErr))
+}
+
+func (manager *Manager) restoreSnapshotBestEffortLocked(ctx context.Context, snapshot dataplane.Snapshot) error {
+	var errs []error
+	errs = append(errs, wrapEBPFOperation("restore routes", manager.syncRoutesLocked(snapshot.Routes)))
+	errs = append(errs, wrapEBPFOperation("restore native tunnel routes", manager.syncNativeTunnelRoutesLocked(ctx, snapshot)))
+	errs = append(errs, wrapEBPFOperation("restore managed capture routes", manager.syncManagedCaptureRoutesLocked(ctx, snapshot)))
+	errs = append(errs, wrapEBPFOperation("restore device access proxy ARP", manager.syncDeviceAccessProxyARPLocked(ctx, snapshot)))
+	errs = append(errs, wrapEBPFOperation("restore packet policy", manager.syncPacketPolicyLocked(snapshot.PacketPolicy)))
+	errs = append(errs, wrapEBPFOperation("restore NAT", manager.syncNATLocked(snapshot.NAT)))
+	errs = append(errs, wrapEBPFOperation("restore kernel transport fast path", manager.ensureKernelTransportFastPathLocked(ctx)))
+	errs = append(errs, wrapEBPFOperation("restore tix_tcp ports", manager.syncTIXTCPPortsLocked()))
+	errs = append(errs, wrapEBPFOperation("restore kernel_udp ports", manager.syncKernelUDPPortsLocked()))
+	errs = append(errs, wrapEBPFOperation("restore kernel_udp TX direct state", manager.syncKernelUDPTXDirectLocked()))
+	errs = append(errs, wrapEBPFOperation("restore kernel_udp RX direct program", manager.refreshKernelUDPRXDirectProgramLocked()))
+	if err := manager.ensureKernelUDPRXSecureDirectLocked(); err != nil {
+		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct disabled while restoring snapshot: "+err.Error())
+	}
+	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
+		manager.warnings = append(manager.warnings, "kernel_udp XDP TC RX direct config restore failed: "+err.Error())
+	}
+	return errors.Join(errs...)
 }
 
 func (manager *Manager) ApplyNATSnapshot(ctx context.Context, snapshot *dataplane.NATSnapshot) error {
@@ -2054,15 +2148,43 @@ func (manager *Manager) ApplyNATSnapshot(ctx context.Context, snapshot *dataplan
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	manager.snapshot.NAT = snapshot
-	if err := manager.syncNATLocked(snapshot); err != nil {
+	previous := cloneNATSnapshot(manager.snapshot.NAT)
+	manager.snapshot.NAT = cloneNATSnapshot(snapshot)
+	if err := manager.syncNATLocked(manager.snapshot.NAT); err != nil {
 		manager.natBindingSyncErrors++
-		return err
+		return manager.rollbackNATSnapshotLocked(previous, err, false)
 	}
 	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
-		return err
+		return manager.rollbackNATSnapshotLocked(previous, err, false)
 	}
-	return manager.persistStateLocked()
+	if err := manager.persistStateLocked(); err != nil {
+		return manager.rollbackNATSnapshotLocked(previous, err, dataplaneStateCommitSucceeded(err))
+	}
+	return nil
+}
+
+func (manager *Manager) rollbackNATSnapshotLocked(previous *dataplane.NATSnapshot, cause error, persist bool) error {
+	manager.snapshot.NAT = previous
+	rollbackErr := errors.Join(
+		wrapEBPFOperation("restore NAT maps", manager.syncNATLocked(previous)),
+		wrapEBPFOperation("restore kernel_udp TX direct state", manager.syncKernelUDPTXDirectLocked()),
+	)
+	if rollbackErr == nil && persist {
+		rollbackErr = manager.persistStateLocked()
+	}
+	return errors.Join(cause, wrapEBPFOperation("restore previous dataplane NAT snapshot", rollbackErr))
+}
+
+func cloneNATSnapshot(snapshot *dataplane.NATSnapshot) *dataplane.NATSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	out := *snapshot
+	out.SourcePrefixes = append([]netip.Prefix(nil), snapshot.SourcePrefixes...)
+	out.RoutePrefixes = append([]core.Prefix(nil), snapshot.RoutePrefixes...)
+	out.ExcludedDestinations = append([]netip.Addr(nil), snapshot.ExcludedDestinations...)
+	out.Bindings = append([]dataplane.NATBinding(nil), snapshot.Bindings...)
+	return &out
 }
 
 func (manager *Manager) Stats(ctx context.Context) (dataplane.Stats, error) {
@@ -2574,19 +2696,14 @@ func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatu
 		return dataplane.TIXTCPStatus{}, err
 	}
 	if manager.refreshKernelTransportDNSTemplatesLocked(time.Now().UTC()) {
-		if err := errors.Join(
-			wrapEBPFOperation("sync tix_tcp ports after DNS template refresh", manager.syncTIXTCPPortsLocked()),
-			wrapEBPFOperation("sync kernel UDP ports after DNS template refresh", manager.syncKernelUDPPortsLocked()),
-			wrapEBPFOperation("sync kernel UDP direct state after DNS template refresh", manager.syncKernelUDPTXDirectLocked()),
-		); err != nil {
-			return dataplane.TIXTCPStatus{}, err
-		}
+		manager.kernelTransportSyncDirty = true
 	}
-	if manager.pruneTIXTCPFlowsLocked(time.Now().UTC()) {
-		if err := errors.Join(
-			wrapEBPFOperation("sync tix_tcp ports after flow pruning", manager.syncTIXTCPPortsLocked()),
-			wrapEBPFOperation("persist tix_tcp flow pruning", manager.persistStateLocked()),
-		); err != nil {
+	manager.pruneTIXTCPFlowsLocked(time.Now().UTC())
+	if err := manager.syncPendingKernelTransportStateLocked(ctx); err != nil {
+		return dataplane.TIXTCPStatus{}, err
+	}
+	if manager.statePersistenceDirty {
+		if err := manager.persistStateLocked(); err != nil {
 			return dataplane.TIXTCPStatus{}, err
 		}
 	}
@@ -2946,20 +3063,22 @@ func (manager *Manager) InstallTIXTCPFlows(ctx context.Context, flows []dataplan
 		}
 		return fmt.Errorf("tix_tcp fast path is disabled: %s", reason)
 	}
+	for _, flow := range flows {
+		if flow.CryptoPlacement == dataplane.CryptoPlacementKernel && !manager.tixTCPKernelCryptoReadyLocked() {
+			manager.kernelCryptoFlowRejects++
+			return fmt.Errorf("tix_tcp flow %d requested kernel crypto, but kernel crypto is not available: %s", flow.ID, manager.tixTCPKernelCryptoUnavailableReasonLocked())
+		}
+	}
 	if manager.tixTCPFlows == nil {
 		manager.tixTCPFlows = make(map[uint64]dataplane.TIXTCPFlow, len(flows))
 	}
+	hadPendingSync := manager.kernelTransportSyncDirty
 	manager.pruneTIXTCPFlowsLocked(time.Now().UTC())
 	oldFlows := cloneTIXTCPFlows(manager.tixTCPFlows)
-	oldTemplates := manager.tixTCPTXTemplates
+	oldTemplates := cloneTIXTCPTXTemplates(manager.tixTCPTXTemplates)
+	manager.markKernelTransportStateDirtyLocked()
 	now := time.Now().UTC()
 	for _, flow := range flows {
-		if flow.CryptoPlacement == dataplane.CryptoPlacementKernel {
-			if !manager.tixTCPKernelCryptoReadyLocked() {
-				manager.kernelCryptoFlowRejects++
-				return fmt.Errorf("tix_tcp flow %d requested kernel crypto, but kernel crypto is not available: %s", flow.ID, manager.tixTCPKernelCryptoUnavailableReasonLocked())
-			}
-		}
 		if flow.CryptoPlacement == "" || flow.CryptoPlacement == dataplane.CryptoPlacementAuto {
 			flow.CryptoPlacement = dataplane.CryptoPlacementUserspace
 		}
@@ -2976,11 +3095,13 @@ func (manager *Manager) InstallTIXTCPFlows(ctx context.Context, flows []dataplan
 	if err := manager.ensureKernelTransportFastPathLocked(ctx); err != nil {
 		manager.tixTCPFlows = oldFlows
 		manager.tixTCPTXTemplates = oldTemplates
+		manager.kernelTransportSyncDirty = true
 		return err
 	}
 	if err := manager.syncTIXTCPPortsLocked(); err != nil {
 		manager.tixTCPFlows = oldFlows
 		manager.tixTCPTXTemplates = oldTemplates
+		manager.kernelTransportSyncDirty = true
 		return errors.Join(
 			err,
 			wrapEBPFOperation("restore tix_tcp ports after flow install failure", manager.syncTIXTCPPortsLocked()),
@@ -2990,12 +3111,14 @@ func (manager *Manager) InstallTIXTCPFlows(ctx context.Context, flows []dataplan
 	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
 		manager.tixTCPFlows = oldFlows
 		manager.tixTCPTXTemplates = oldTemplates
+		manager.kernelTransportSyncDirty = true
 		return errors.Join(
 			err,
 			wrapEBPFOperation("restore tix_tcp ports after direct-state sync failure", manager.syncTIXTCPPortsLocked()),
 			wrapEBPFOperation("restore kernel UDP direct state after tix_tcp flow install failure", manager.syncKernelUDPTXDirectLocked()),
 		)
 	}
+	manager.kernelTransportSyncDirty = hadPendingSync
 	return manager.persistStateLocked()
 }
 
@@ -3137,6 +3260,7 @@ func (manager *Manager) DeleteTIXTCPFlows(ctx context.Context, flowIDs []uint64)
 	if len(flowIDs) == 0 {
 		return nil
 	}
+	manager.markKernelTransportStateDirtyLocked()
 	now := time.Now().UTC()
 	for _, flowID := range flowIDs {
 		if flow, ok := manager.tixTCPFlows[flowID]; ok {
@@ -3152,16 +3276,10 @@ func (manager *Manager) DeleteTIXTCPFlows(ctx context.Context, flowIDs []uint64)
 		manager.deleteKernelCryptoFlowLocked(flowID)
 		manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceTIXTCP, flowID)
 	}
-	if err := manager.ensureKernelTransportFastPathLocked(ctx); err != nil {
-		return err
-	}
-	if err := manager.syncTIXTCPPortsLocked(); err != nil {
-		return err
-	}
-	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
-		return err
-	}
-	return manager.persistStateLocked()
+	return errors.Join(
+		manager.syncPendingKernelTransportStateLocked(ctx),
+		manager.persistStateLocked(),
+	)
 }
 
 func (manager *Manager) TIXTCPFlow(ctx context.Context, flowID uint64) (dataplane.TIXTCPFlow, bool, error) {
@@ -3226,10 +3344,11 @@ func (manager *Manager) SetTIXTCPFlowPeer(ctx context.Context, flowID uint64, pe
 	manager.setTIXTCPFlowLocked(flowID, flow, now)
 	manager.invalidateTIXTCPTXTemplateLocked(flowID)
 	manager.updateTIXTCPTelemetryIdentityLocked(flowID, flow)
-	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
-		return err
-	}
-	return nil
+	manager.markKernelTransportStateDirtyLocked()
+	return errors.Join(
+		manager.syncPendingKernelTransportStateLocked(ctx),
+		manager.persistStateLocked(),
+	)
 }
 
 func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUDPStatus, error) {
@@ -3240,20 +3359,14 @@ func (manager *Manager) KernelUDPStatus(ctx context.Context) (dataplane.KernelUD
 		return dataplane.KernelUDPStatus{}, err
 	}
 	if manager.refreshKernelTransportDNSTemplatesLocked(time.Now().UTC()) {
-		if err := errors.Join(
-			wrapEBPFOperation("sync tix_tcp ports after DNS template refresh", manager.syncTIXTCPPortsLocked()),
-			wrapEBPFOperation("sync kernel UDP ports after DNS template refresh", manager.syncKernelUDPPortsLocked()),
-			wrapEBPFOperation("sync kernel UDP direct state after DNS template refresh", manager.syncKernelUDPTXDirectLocked()),
-		); err != nil {
-			return dataplane.KernelUDPStatus{}, err
-		}
+		manager.kernelTransportSyncDirty = true
 	}
-	if manager.pruneKernelUDPFlowsLocked(time.Now().UTC()) {
-		if err := errors.Join(
-			wrapEBPFOperation("sync kernel UDP ports after flow pruning", manager.syncKernelUDPPortsLocked()),
-			wrapEBPFOperation("sync kernel UDP direct state after flow pruning", manager.syncKernelUDPTXDirectLocked()),
-			wrapEBPFOperation("persist kernel UDP flow pruning", manager.persistStateLocked()),
-		); err != nil {
+	manager.pruneKernelUDPFlowsLocked(time.Now().UTC())
+	if err := manager.syncPendingKernelTransportStateLocked(ctx); err != nil {
+		return dataplane.KernelUDPStatus{}, err
+	}
+	if manager.statePersistenceDirty {
+		if err := manager.persistStateLocked(); err != nil {
 			return dataplane.KernelUDPStatus{}, err
 		}
 	}
@@ -3594,10 +3707,19 @@ func (manager *Manager) tixTCPKernelOwnedTransportReasonLocked() string {
 	}
 }
 
-func (manager *Manager) reconcileKernelTransportFlowsForSnapshotLocked(snapshot dataplane.Snapshot) bool {
+type kernelTransportFlowReconcilePlan struct {
+	tixTCP    []uint64
+	kernelUDP []uint64
+}
+
+func (plan kernelTransportFlowReconcilePlan) changed() bool {
+	return len(plan.tixTCP) > 0 || len(plan.kernelUDP) > 0
+}
+
+func (manager *Manager) planKernelTransportFlowReconcileLocked(snapshot dataplane.Snapshot) kernelTransportFlowReconcilePlan {
 	expAllowed := make(map[kernelTransportFlowIdentity]struct{}, len(manager.tixTCPFlows))
 	udpAllowed := make(map[kernelTransportFlowIdentity]struct{}, len(manager.kernelUDPFlows))
-	localIX := manager.snapshotLocalIXLocked()
+	localIX := snapshotLocalIX(snapshot)
 	for _, peer := range snapshot.Peers {
 		if peer.ID == "" {
 			continue
@@ -3638,27 +3760,57 @@ func (manager *Manager) reconcileKernelTransportFlowsForSnapshotLocked(snapshot 
 		}
 	}
 
-	changed := false
+	plan := kernelTransportFlowReconcilePlan{}
 	for flowID, flow := range manager.tixTCPFlows {
 		if !kernelTransportFlowAllowed(expAllowed, flow.Peer, flow.Endpoint) {
-			delete(manager.tixTCPFlows, flowID)
-			delete(manager.tixTCPOuterTXSequences, flowID)
-			delete(manager.tixTCPOuterTXAcknowledgments, flowID)
-			manager.invalidateTIXTCPTXTemplateLocked(flowID)
-			delete(manager.tixTCPTelemetry, flowID)
-			manager.deleteTIXTCPCryptoFragmentsLocked(flowID)
-			manager.deleteKernelCryptoFlowLocked(flowID)
-			manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceTIXTCP, flowID)
-			changed = true
+			plan.tixTCP = append(plan.tixTCP, flowID)
 		}
 	}
 	for flowID, flow := range manager.kernelUDPFlows {
 		if !kernelTransportFlowAllowed(udpAllowed, flow.Peer, flow.Endpoint) {
-			manager.deleteKernelUDPFlowStateLocked(flowID)
-			changed = true
+			plan.kernelUDP = append(plan.kernelUDP, flowID)
 		}
 	}
-	return changed
+	sort.Slice(plan.tixTCP, func(i, j int) bool { return plan.tixTCP[i] < plan.tixTCP[j] })
+	sort.Slice(plan.kernelUDP, func(i, j int) bool { return plan.kernelUDP[i] < plan.kernelUDP[j] })
+	return plan
+}
+
+func (manager *Manager) stageKernelTransportFlowReconcileLocked(plan kernelTransportFlowReconcilePlan) {
+	if len(plan.tixTCP) > 0 {
+		manager.tixTCPFlows = cloneTIXTCPFlows(manager.tixTCPFlows)
+		for _, flowID := range plan.tixTCP {
+			delete(manager.tixTCPFlows, flowID)
+		}
+	}
+	if len(plan.kernelUDP) > 0 {
+		manager.kernelUDPFlows = cloneKernelUDPFlows(manager.kernelUDPFlows)
+		for _, flowID := range plan.kernelUDP {
+			delete(manager.kernelUDPFlows, flowID)
+		}
+	}
+}
+
+func (manager *Manager) commitKernelTransportFlowReconcileLocked(plan kernelTransportFlowReconcilePlan) {
+	for _, flowID := range plan.tixTCP {
+		delete(manager.tixTCPOuterTXSequences, flowID)
+		delete(manager.tixTCPOuterTXAcknowledgments, flowID)
+		manager.invalidateTIXTCPTXTemplateLocked(flowID)
+		delete(manager.tixTCPTelemetry, flowID)
+		manager.deleteTIXTCPCryptoFragmentsLocked(flowID)
+		manager.deleteKernelCryptoFlowLocked(flowID)
+		manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceTIXTCP, flowID)
+	}
+	for _, flowID := range plan.kernelUDP {
+		manager.deleteKernelUDPFlowStateLocked(flowID)
+	}
+}
+
+func (manager *Manager) reconcileKernelTransportFlowsForSnapshotLocked(snapshot dataplane.Snapshot) bool {
+	plan := manager.planKernelTransportFlowReconcileLocked(snapshot)
+	manager.stageKernelTransportFlowReconcileLocked(plan)
+	manager.commitKernelTransportFlowReconcileLocked(plan)
+	return plan.changed()
 }
 
 type kernelTransportFlowIdentity struct {
@@ -4076,9 +4228,11 @@ func (manager *Manager) InstallKernelUDPFlows(ctx context.Context, flows []datap
 	if manager.kernelUDPFlows == nil {
 		manager.kernelUDPFlows = make(map[uint64]dataplane.KernelUDPFlow, len(flows))
 	}
+	hadPendingSync := manager.kernelTransportSyncDirty
 	manager.pruneKernelUDPFlowsLocked(time.Now().UTC())
 	oldFlows := cloneKernelUDPFlows(manager.kernelUDPFlows)
-	oldTemplates := manager.kernelUDPTXTemplates
+	oldTemplates := cloneKernelUDPTXTemplates(manager.kernelUDPTXTemplates)
+	manager.markKernelTransportStateDirtyLocked()
 	now := time.Now().UTC()
 	for _, flow := range flows {
 		flow = refreshInstalledKernelUDPFlowLifetime(flow, now)
@@ -4094,16 +4248,19 @@ func (manager *Manager) InstallKernelUDPFlows(ctx context.Context, flows []datap
 	if err := manager.ensureKernelTransportFastPathLocked(ctx); err != nil {
 		manager.kernelUDPFlows = oldFlows
 		manager.kernelUDPTXTemplates = oldTemplates
+		manager.kernelTransportSyncDirty = true
 		return err
 	}
 	if !manager.tixTCPFastPathAvailableLocked() && !manager.kernelDatapathFullPlaintextTransportAvailableLocked() && !manager.kernelUDPTCDirectOnlyAvailableLocked() && !manager.kernelUDPTCDirectOnlyPendingLocked() && !kernelUDPRawFallbackEnabled() {
 		manager.kernelUDPFlows = oldFlows
 		manager.kernelUDPTXTemplates = oldTemplates
+		manager.kernelTransportSyncDirty = true
 		return fmt.Errorf("UDP AF_XDP kernel transport provider is not available")
 	}
 	if err := manager.syncKernelUDPPortsLocked(); err != nil {
 		manager.kernelUDPFlows = oldFlows
 		manager.kernelUDPTXTemplates = oldTemplates
+		manager.kernelTransportSyncDirty = true
 		return errors.Join(
 			err,
 			wrapEBPFOperation("restore kernel UDP ports after flow install failure", manager.syncKernelUDPPortsLocked()),
@@ -4113,12 +4270,14 @@ func (manager *Manager) InstallKernelUDPFlows(ctx context.Context, flows []datap
 	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
 		manager.kernelUDPFlows = oldFlows
 		manager.kernelUDPTXTemplates = oldTemplates
+		manager.kernelTransportSyncDirty = true
 		return errors.Join(
 			err,
 			wrapEBPFOperation("restore kernel UDP ports after direct-state sync failure", manager.syncKernelUDPPortsLocked()),
 			wrapEBPFOperation("restore kernel UDP direct state after flow install failure", manager.syncKernelUDPTXDirectLocked()),
 		)
 	}
+	manager.kernelTransportSyncDirty = hadPendingSync
 	return manager.persistStateLocked()
 }
 
@@ -4172,19 +4331,14 @@ func (manager *Manager) DeleteKernelUDPFlows(ctx context.Context, flowIDs []uint
 	if len(flowIDs) == 0 {
 		return nil
 	}
+	manager.markKernelTransportStateDirtyLocked()
 	for _, flowID := range flowIDs {
 		manager.deleteKernelUDPFlowStateLocked(flowID)
 	}
-	if err := manager.ensureKernelTransportFastPathLocked(ctx); err != nil {
-		return err
-	}
-	if err := manager.syncKernelUDPPortsLocked(); err != nil {
-		return err
-	}
-	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
-		return err
-	}
-	return manager.persistStateLocked()
+	return errors.Join(
+		manager.syncPendingKernelTransportStateLocked(ctx),
+		manager.persistStateLocked(),
+	)
 }
 
 func (manager *Manager) KernelUDPFlow(ctx context.Context, flowID uint64) (dataplane.KernelUDPFlow, bool, error) {
@@ -4274,10 +4428,11 @@ func (manager *Manager) SetKernelUDPFlowPeer(ctx context.Context, flowID uint64,
 	manager.kernelUDPFlows[flowID] = flow
 	manager.invalidateKernelUDPTXTemplateLocked(flowID)
 	manager.updateKernelUDPTelemetryIdentityLocked(flowID, flow)
-	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
-		return err
-	}
-	return nil
+	manager.markKernelTransportStateDirtyLocked()
+	return errors.Join(
+		manager.syncPendingKernelTransportStateLocked(ctx),
+		manager.persistStateLocked(),
+	)
 }
 
 func (manager *Manager) InstallKernelUDPCrypto(ctx context.Context, specs []dataplane.KernelUDPCryptoSpec) error {
@@ -4355,7 +4510,8 @@ func (manager *Manager) InstallKernelUDPCrypto(ctx context.Context, specs []data
 		manager.invalidateKernelUDPTXTemplateLocked(spec.FlowID)
 		manager.updateKernelUDPTelemetryIdentityLocked(spec.FlowID, flow)
 	}
-	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
+	manager.kernelTransportSyncDirty = true
+	if err := manager.syncPendingKernelTransportStateLocked(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -4375,10 +4531,7 @@ func (manager *Manager) SubmitKernelUDPFrames(ctx context.Context, frames []data
 		return err
 	}
 	if manager.pruneKernelUDPFlowsLocked(time.Now().UTC()) {
-		if err := errors.Join(
-			wrapEBPFOperation("sync kernel UDP ports after flow pruning", manager.syncKernelUDPPortsLocked()),
-			wrapEBPFOperation("sync kernel UDP direct state after flow pruning", manager.syncKernelUDPTXDirectLocked()),
-		); err != nil {
+		if err := manager.syncPendingKernelTransportStateLocked(ctx); err != nil {
 			manager.mu.Unlock()
 			return err
 		}
@@ -5513,7 +5666,8 @@ func (manager *Manager) InstallTIXTCPCrypto(ctx context.Context, specs []datapla
 		manager.tixTCPFlows[spec.FlowID] = flow
 		manager.invalidateTIXTCPTXTemplateLocked(spec.FlowID)
 	}
-	if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
+	manager.kernelTransportSyncDirty = true
+	if err := manager.syncPendingKernelTransportStateLocked(ctx); err != nil {
 		return err
 	}
 	if err := manager.ensureKernelUDPRXSecureDirectLocked(); err != nil {
@@ -5533,9 +5687,9 @@ func (manager *Manager) SubmitTIXTCPFrame(ctx context.Context, frame dataplane.T
 		return err
 	}
 	if manager.pruneTIXTCPFlowsLocked(time.Now().UTC()) {
-		if err := manager.syncTIXTCPPortsLocked(); err != nil {
+		if err := manager.syncPendingKernelTransportStateLocked(ctx); err != nil {
 			manager.mu.Unlock()
-			return fmt.Errorf("sync tix_tcp ports after flow pruning: %w", err)
+			return err
 		}
 	}
 	if manager.tixTCPKernelOwnedTransportAvailableLocked() {
@@ -12408,6 +12562,28 @@ func cloneKernelUDPFlows(flows map[uint64]dataplane.KernelUDPFlow) map[uint64]da
 	return out
 }
 
+func cloneTIXTCPTXTemplates(templates map[uint64]tixTCPTXTemplate) map[uint64]tixTCPTXTemplate {
+	if len(templates) == 0 {
+		return nil
+	}
+	out := make(map[uint64]tixTCPTXTemplate, len(templates))
+	for flowID, template := range templates {
+		out[flowID] = template
+	}
+	return out
+}
+
+func cloneKernelUDPTXTemplates(templates map[uint64]kernelUDPTXTemplate) map[uint64]kernelUDPTXTemplate {
+	if len(templates) == 0 {
+		return nil
+	}
+	out := make(map[uint64]kernelUDPTXTemplate, len(templates))
+	for flowID, template := range templates {
+		out[flowID] = template
+	}
+	return out
+}
+
 func refreshTIXTCPFlowLifetime(flow dataplane.TIXTCPFlow, now time.Time) dataplane.TIXTCPFlow {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -12498,6 +12674,9 @@ func (manager *Manager) pruneTIXTCPFlowsLocked(now time.Time) bool {
 			changed = true
 		}
 	}
+	if changed {
+		manager.markKernelTransportStateDirtyLocked()
+	}
 	return changed
 }
 
@@ -12517,6 +12696,9 @@ func (manager *Manager) pruneKernelUDPFlowsLocked(now time.Time) bool {
 			manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceKernelUDP, flowID)
 			changed = true
 		}
+	}
+	if changed {
+		manager.markKernelTransportStateDirtyLocked()
 	}
 	return changed
 }
@@ -12956,12 +13138,16 @@ func (manager *Manager) desiredKernelUDPPortsLocked() map[uint16]struct{} {
 }
 
 func (manager *Manager) snapshotLocalIXLocked() core.IXID {
-	remote := make(map[core.IXID]struct{}, len(manager.snapshot.Peers))
-	for _, peer := range manager.snapshot.Peers {
+	return snapshotLocalIX(manager.snapshot)
+}
+
+func snapshotLocalIX(snapshot dataplane.Snapshot) core.IXID {
+	remote := make(map[core.IXID]struct{}, len(snapshot.Peers))
+	for _, peer := range snapshot.Peers {
 		remote[peer.ID] = struct{}{}
 	}
 	var local core.IXID
-	for _, endpoint := range manager.snapshot.Endpoints {
+	for _, endpoint := range snapshot.Endpoints {
 		if endpoint.Peer == "" {
 			continue
 		}
@@ -25847,6 +26033,7 @@ func (manager *Manager) writeSysctl(path, value string) error {
 
 func (manager *Manager) persistStateLocked() error {
 	if manager.spec.PinPath == "" {
+		manager.statePersistenceDirty = false
 		return nil
 	}
 	state := persistedDataplaneState{
@@ -25885,10 +26072,16 @@ func (manager *Manager) persistStateLocked() error {
 	}
 	payload, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
+		manager.statePersistenceDirty = true
 		return err
 	}
 	path := filepath.Join(manager.spec.PinPath, "state.json")
-	return os.WriteFile(path, payload, 0o600)
+	if err := writeDataplaneStateAtomic(path, payload, 0o600); err != nil {
+		manager.statePersistenceDirty = true
+		return fmt.Errorf("persist dataplane state %q: %w", path, err)
+	}
+	manager.statePersistenceDirty = false
+	return nil
 }
 
 func (manager *Manager) persistedLANAttachSnapshotLocked() []persistedLANAttachState {

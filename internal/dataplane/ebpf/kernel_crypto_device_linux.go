@@ -62,6 +62,8 @@ type kernelCryptoDevice struct {
 	recvSeen     []uint64
 	recvWindow   uint32
 	poolMinBatch int
+	closed       bool
+	closeErr     error
 }
 
 type kernelCryptoDeviceSealRequest struct {
@@ -191,6 +193,10 @@ func (device *kernelCryptoDevice) Close() error {
 	device.openMu.Lock()
 	defer device.openMu.Unlock()
 	defer device.sealMu.Unlock()
+	if device.closed {
+		return device.closeErr
+	}
+	device.closed = true
 	var errs []error
 	if device.seal != nil {
 		errs = append(errs, wrapEBPFOperation("close kernel AEAD seal device", device.seal.Close()))
@@ -210,7 +216,8 @@ func (device *kernelCryptoDevice) Close() error {
 	clear(device.sealNonces)
 	clear(device.openNonces)
 	clear(device.recvSeen)
-	return errors.Join(errs...)
+	device.closeErr = errors.Join(errs...)
+	return device.closeErr
 }
 
 func (device *kernelCryptoDevice) SealBatch(requests []kernelCryptoDeviceSealRequest) ([][]byte, error) {

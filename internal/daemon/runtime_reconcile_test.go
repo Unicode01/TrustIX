@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,6 +113,37 @@ func TestBackgroundErrorsAreObservableAndClearable(t *testing.T) {
 	daemon.clearBackgroundError("watchdog")
 	if statuses := daemon.backgroundErrorSnapshot(); len(statuses) != 0 {
 		t.Fatalf("cleared background errors = %#v", statuses)
+	}
+}
+
+func TestBackgroundErrorsCanBeClearedByLifecyclePrefix(t *testing.T) {
+	daemon := &Daemon{backgroundErrors: make(map[string]backgroundErrorStatus)}
+	daemon.recordBackgroundError("session_pool_warmup:ix-a:udp-a", context.DeadlineExceeded)
+	daemon.recordBackgroundError("session_pool_warmup:ix-b:udp-b", context.DeadlineExceeded)
+	daemon.recordBackgroundError("watchdog", context.DeadlineExceeded)
+
+	daemon.clearBackgroundErrorsWithPrefix("session_pool_warmup:ix-a:")
+	statuses := daemon.backgroundErrorSnapshot()
+	if len(statuses) != 2 || statuses[0].Operation != "session_pool_warmup:ix-b:udp-b" || statuses[1].Operation != "watchdog" {
+		t.Fatalf("background errors after prefix clear = %#v", statuses)
+	}
+}
+
+func TestBackgroundErrorsAreBounded(t *testing.T) {
+	daemon := &Daemon{backgroundErrors: map[string]backgroundErrorStatus{
+		"oldest": {Operation: "oldest"},
+	}}
+	for i := 0; i < backgroundErrorStatusLimit; i++ {
+		daemon.recordBackgroundError(fmt.Sprintf("operation-%04d", i), context.DeadlineExceeded)
+	}
+	statuses := daemon.backgroundErrorSnapshot()
+	if len(statuses) != backgroundErrorStatusLimit {
+		t.Fatalf("background error count = %d, want %d", len(statuses), backgroundErrorStatusLimit)
+	}
+	for _, status := range statuses {
+		if status.Operation == "oldest" {
+			t.Fatal("oldest background error was not evicted at the size limit")
+		}
 	}
 }
 

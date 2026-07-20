@@ -496,6 +496,8 @@ type Session struct {
 	peerIdentity     transport.PeerIdentity
 	sendSeq          atomic.Uint64
 	sendMu           sync.Mutex
+	closeOnce        sync.Once
+	closeErr         error
 	sendHeader       [dataHeaderLen]byte
 	sendNonce        [12]byte
 	sendWire         []byte
@@ -1061,7 +1063,10 @@ func (session *Session) recordPacketsReceived(bytesReceived uint64, packetsRecei
 }
 
 func (session *Session) Close() error {
-	return session.inner.Close()
+	session.closeOnce.Do(func() {
+		session.closeErr = session.inner.Close()
+	})
+	return session.closeErr
 }
 
 func (session *Session) RetainKernelFlowOnClose() {

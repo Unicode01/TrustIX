@@ -77,6 +77,51 @@ func TestSessionEncryptsWireAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestSessionCloseIsConcurrentAndErrorPreserving(t *testing.T) {
+	wantErr := errors.New("injected secure inner close failure")
+	inner := &idempotentCloseTestSession{err: wantErr}
+	session := &Session{inner: inner}
+
+	const callers = 16
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- session.Close()
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("close error = %v, want %v", err, wantErr)
+		}
+	}
+	if calls := inner.calls.Load(); calls != 1 {
+		t.Fatalf("inner close calls = %d, want 1", calls)
+	}
+}
+
+type idempotentCloseTestSession struct {
+	err   error
+	calls atomic.Int32
+}
+
+func (session *idempotentCloseTestSession) SendPacket([]byte) error { return nil }
+
+func (session *idempotentCloseTestSession) RecvPacket() ([]byte, error) { return nil, nil }
+
+func (session *idempotentCloseTestSession) Close() error {
+	session.calls.Add(1)
+	return session.err
+}
+
+func (session *idempotentCloseTestSession) Stats() transport.TransportStats {
+	return transport.TransportStats{}
+}
+
 func TestSessionSendPacketsEncryptsWireAndRoundTrips(t *testing.T) {
 	client, server, clientInner := handshakePair(t)
 	packets := [][]byte{

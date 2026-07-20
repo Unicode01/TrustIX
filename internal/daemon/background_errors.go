@@ -14,6 +14,8 @@ type backgroundErrorStatus struct {
 	LastAt    time.Time `json:"last_at"`
 }
 
+const backgroundErrorStatusLimit = 1024
+
 func (daemon *Daemon) recordBackgroundError(operation string, err error) {
 	if daemon == nil || err == nil {
 		return
@@ -26,12 +28,40 @@ func (daemon *Daemon) recordBackgroundError(operation string, err error) {
 	if daemon.backgroundErrors == nil {
 		daemon.backgroundErrors = make(map[string]backgroundErrorStatus)
 	}
+	if _, exists := daemon.backgroundErrors[operation]; !exists && len(daemon.backgroundErrors) >= backgroundErrorStatusLimit {
+		oldestOperation := ""
+		var oldestAt time.Time
+		for candidate, status := range daemon.backgroundErrors {
+			if oldestOperation == "" || status.LastAt.Before(oldestAt) {
+				oldestOperation = candidate
+				oldestAt = status.LastAt
+			}
+		}
+		delete(daemon.backgroundErrors, oldestOperation)
+	}
 	status := daemon.backgroundErrors[operation]
 	status.Operation = operation
 	status.Error = err.Error()
 	status.Count++
 	status.LastAt = time.Now().UTC()
 	daemon.backgroundErrors[operation] = status
+	daemon.backgroundMu.Unlock()
+}
+
+func (daemon *Daemon) clearBackgroundErrorsWithPrefix(prefix string) {
+	if daemon == nil {
+		return
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return
+	}
+	daemon.backgroundMu.Lock()
+	for operation := range daemon.backgroundErrors {
+		if strings.HasPrefix(operation, prefix) {
+			delete(daemon.backgroundErrors, operation)
+		}
+	}
 	daemon.backgroundMu.Unlock()
 }
 

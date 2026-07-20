@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strings"
+	"sync"
 
 	cebpf "github.com/cilium/ebpf"
 
@@ -101,6 +102,8 @@ type kernelCryptoProviderObject struct {
 	roundTripProg  *cebpf.Program
 	frameSealProg  *cebpf.Program
 	frameOpenProg  *cebpf.Program
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 const (
@@ -1257,42 +1260,43 @@ func (provider *kernelCryptoProviderObject) Close() error {
 	if provider == nil {
 		return nil
 	}
-	var err error
-	if provider.collection != nil {
-		provider.collection.Close()
-	} else {
-		if provider.commandMap != nil {
-			err = errors.Join(err, provider.commandMap.Close())
+	provider.closeOnce.Do(func() {
+		if provider.collection != nil {
+			provider.collection.Close()
+		} else {
+			if provider.commandMap != nil {
+				provider.closeErr = errors.Join(provider.closeErr, provider.commandMap.Close())
+			}
+			if provider.flowIndexMap != nil {
+				provider.closeErr = errors.Join(provider.closeErr, provider.flowIndexMap.Close())
+			}
+			if provider.contextSlots != nil {
+				provider.closeErr = errors.Join(provider.closeErr, provider.contextSlots.Close())
+			}
+			if provider.directSlotMap != nil {
+				provider.closeErr = errors.Join(provider.closeErr, provider.directSlotMap.Close())
+			}
+			if provider.roundTripMap != nil {
+				provider.closeErr = errors.Join(provider.closeErr, provider.roundTripMap.Close())
+			}
+			if provider.frameMap != nil {
+				provider.closeErr = errors.Join(provider.closeErr, provider.frameMap.Close())
+			}
 		}
-		if provider.flowIndexMap != nil {
-			err = errors.Join(err, provider.flowIndexMap.Close())
-		}
-		if provider.contextSlots != nil {
-			err = errors.Join(err, provider.contextSlots.Close())
-		}
-		if provider.directSlotMap != nil {
-			err = errors.Join(err, provider.directSlotMap.Close())
-		}
-		if provider.roundTripMap != nil {
-			err = errors.Join(err, provider.roundTripMap.Close())
-		}
-		if provider.frameMap != nil {
-			err = errors.Join(err, provider.frameMap.Close())
-		}
-	}
-	provider.collection = nil
-	provider.commandMap = nil
-	provider.flowIndexMap = nil
-	provider.contextSlots = nil
-	provider.directSlotMap = nil
-	provider.roundTripMap = nil
-	provider.frameMap = nil
-	provider.installProgram = nil
-	provider.deleteProgram = nil
-	provider.roundTripProg = nil
-	provider.frameSealProg = nil
-	provider.frameOpenProg = nil
-	return err
+		provider.collection = nil
+		provider.commandMap = nil
+		provider.flowIndexMap = nil
+		provider.contextSlots = nil
+		provider.directSlotMap = nil
+		provider.roundTripMap = nil
+		provider.frameMap = nil
+		provider.installProgram = nil
+		provider.deleteProgram = nil
+		provider.roundTripProg = nil
+		provider.frameSealProg = nil
+		provider.frameOpenProg = nil
+	})
+	return provider.closeErr
 }
 
 func (provider *kernelCryptoProviderObject) runCommand(program *cebpf.Program, cmd *kernelCryptoCommand) (resultErr error) {

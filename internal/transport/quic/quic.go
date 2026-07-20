@@ -154,15 +154,18 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 	if err != nil {
 		return nil, err
 	}
+	listener := &listener{ln: ln}
 	go func() {
 		<-ctx.Done()
-		transport.ObserveAsyncError("close QUIC listener after context cancellation", ln.Close())
+		transport.ObserveAsyncError("close QUIC listener after context cancellation", listener.Close())
 	}()
-	return &listener{ln: ln}, nil
+	return listener, nil
 }
 
 type listener struct {
-	ln *quicgo.Listener
+	ln        *quicgo.Listener
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (listener *listener) Accept(ctx context.Context) (transport.Session, error) {
@@ -188,7 +191,10 @@ func (listener *listener) Accept(ctx context.Context) (transport.Session, error)
 }
 
 func (listener *listener) Close() error {
-	return listener.ln.Close()
+	listener.closeOnce.Do(func() {
+		listener.closeErr = listener.ln.Close()
+	})
+	return listener.closeErr
 }
 
 type session struct {
