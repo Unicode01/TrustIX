@@ -55,7 +55,8 @@ func TestKernelDatapathRXStagePollerInjectsStagedPackets(t *testing.T) {
 	waitForCondition(t, time.Second, func() bool {
 		driver.mu.Lock()
 		defer driver.mu.Unlock()
-		return driver.pops >= 2 && len(injector.batchPackets) > 0
+		_, batches := injector.snapshot()
+		return driver.pops >= 2 && len(batches) > 0
 	})
 	daemon.stopKernelDatapathRXStage()
 	if !driver.attachSeen || driver.attached || driver.ifname != "eth0" || driver.targetIfname != "" {
@@ -64,8 +65,9 @@ func TestKernelDatapathRXStagePollerInjectsStagedPackets(t *testing.T) {
 	if driver.detaches != 1 || driver.clears < 2 || driver.closes != 1 {
 		t.Fatalf("cleanup detaches=%d clears=%d closes=%d, want 1 >=2 1", driver.detaches, driver.clears, driver.closes)
 	}
-	if len(injector.batchPackets) == 0 || len(injector.batchPackets[0]) != 2 {
-		t.Fatalf("injected batches = %#v, want one 2-packet batch", injector.batchPackets)
+	_, batches := injector.snapshot()
+	if len(batches) == 0 || len(batches[0]) != 2 {
+		t.Fatalf("injected batches = %#v, want one 2-packet batch", batches)
 	}
 	status := daemon.kernelDatapathRXStageStatus()
 	if status.Active {

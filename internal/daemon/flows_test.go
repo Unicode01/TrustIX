@@ -8104,6 +8104,7 @@ func testPeer() config.PeerConfig {
 }
 
 type recordingInjector struct {
+	mu           sync.Mutex
 	packets      [][]byte
 	batchPackets [][][]byte
 }
@@ -8112,6 +8113,8 @@ func (injector *recordingInjector) InjectPacket(ctx context.Context, packet []by
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	injector.mu.Lock()
+	defer injector.mu.Unlock()
 	injector.packets = append(injector.packets, append([]byte(nil), packet...))
 	return nil
 }
@@ -8124,8 +8127,28 @@ func (injector *recordingInjector) InjectPackets(ctx context.Context, packets []
 	for _, packet := range packets {
 		cloned = append(cloned, append([]byte(nil), packet...))
 	}
+	injector.mu.Lock()
+	defer injector.mu.Unlock()
 	injector.batchPackets = append(injector.batchPackets, cloned)
 	return nil
+}
+
+func (injector *recordingInjector) snapshot() ([][]byte, [][][]byte) {
+	injector.mu.Lock()
+	defer injector.mu.Unlock()
+	packets := make([][]byte, 0, len(injector.packets))
+	for _, packet := range injector.packets {
+		packets = append(packets, append([]byte(nil), packet...))
+	}
+	batches := make([][][]byte, 0, len(injector.batchPackets))
+	for _, batch := range injector.batchPackets {
+		cloned := make([][]byte, 0, len(batch))
+		for _, packet := range batch {
+			cloned = append(cloned, append([]byte(nil), packet...))
+		}
+		batches = append(batches, cloned)
+	}
+	return packets, batches
 }
 
 type recordingGSOChecksumOffloadInjector struct {
