@@ -463,7 +463,7 @@ func (daemon *Daemon) applyDesiredConfigLocked(ctx context.Context, desired conf
 		daemon.requestRuntimeReconcile("config apply", err)
 		return desiredChanged || trustChanged || baselineChanged, newCommittedConfigMutationError("config apply", err)
 	}
-	daemon.head = head
+	daemon.setConfigHead(head)
 	runtimeTrustChanged, err := daemon.enforceRuntimeTrustState()
 	if err != nil {
 		daemon.requestRuntimeReconcile("config apply", err)
@@ -493,7 +493,7 @@ func (daemon *Daemon) ensureLocalDesiredBaselineLocked(adminProofs []configlog.A
 	}
 	if err := daemon.store.Append(*event); err != nil {
 		if configlog.CommitSucceeded(err) {
-			daemon.head = plannedHead
+			daemon.setConfigHead(plannedHead)
 			daemon.requestRuntimeReconcile("desired baseline durability", err)
 			return true, newCommittedConfigMutationError("desired baseline", err)
 		}
@@ -501,11 +501,11 @@ func (daemon *Daemon) ensureLocalDesiredBaselineLocked(adminProofs []configlog.A
 	}
 	head, err := daemon.store.Head()
 	if err != nil {
-		daemon.head = plannedHead
+		daemon.setConfigHead(plannedHead)
 		daemon.requestRuntimeReconcile("desired baseline", err)
 		return true, newCommittedConfigMutationError("desired baseline", err)
 	}
-	daemon.head = head
+	daemon.setConfigHead(head)
 	return true, nil
 }
 
@@ -869,7 +869,7 @@ func desiredRuntimeRestoreContext(ctx context.Context) (context.Context, context
 
 func (daemon *Daemon) setRuntimeDesired(desired config.Desired, head configlog.Head) {
 	daemon.desired = desired
-	daemon.head = head
+	daemon.setConfigHead(head)
 	daemon.cfg.DomainID = desired.Domain.ID
 	daemon.cfg.IXID = desired.IX.ID
 	daemon.resetControlClients()
@@ -879,6 +879,11 @@ func (daemon *Daemon) setRuntimeDesired(desired config.Desired, head configlog.H
 	daemon.setSecureTransportKeySource(desired.TransportPolicy.CryptoKeySource)
 	daemon.setSecureTransportEncryption(desired.TransportPolicy.Encryption)
 	daemon.setSecureTransportCryptoSuites(desired)
+}
+
+func (daemon *Daemon) setConfigHead(head configlog.Head) {
+	daemon.head = head
+	daemon.configHeadSeq.Store(head.Seq)
 }
 
 func (daemon *Daemon) listenerContext(fallback context.Context) context.Context {

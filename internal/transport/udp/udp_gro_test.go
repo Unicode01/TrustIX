@@ -43,17 +43,12 @@ func TestSessionRecvPacketsWithReleaseKeepsPendingBorrowedPackets(t *testing.T) 
 
 	if len(packets) > max {
 		received := packets
-		if release != nil {
-			copied := make([][]byte, max)
-			for i, packet := range packets[:max] {
-				copied[i] = append([]byte(nil), packet...)
-			}
-			packets = copied
+		copied := make([][]byte, max)
+		for i, packet := range packets[:max] {
+			copied[i] = append([]byte(nil), packet...)
 		}
+		packets = copied
 		session.recvPending = udpPacketBatch{packets: received[max:], release: release}
-		if release == nil {
-			packets = received[:max]
-		}
 		release = nil
 	}
 

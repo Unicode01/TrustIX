@@ -11258,7 +11258,7 @@ func TestKernelUDPTXDirectKernelUDPOnlyEnv(t *testing.T) {
 	}
 }
 
-func TestKernelUDPTXDirectKernelUDPOnlyDisabledForTCOnlyProvider(t *testing.T) {
+func TestKernelUDPTXDirectKernelUDPOnlyDefaultsForTCOnlyProvider(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_ONLY", "1")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_DIRECT_ONLY_PROVIDER", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "")
@@ -11269,8 +11269,33 @@ func TestKernelUDPTXDirectKernelUDPOnlyDisabledForTCOnlyProvider(t *testing.T) {
 	t.Setenv("TRUSTIX_REMOTE_TIX_TCP_TC_TX_DIRECT", "")
 	t.Setenv("TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT", "")
 	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_TIX_TCP_TC_TX_DIRECT", "")
-	if kernelUDPTXDirectKernelUDPOnlyEnabled() {
-		t.Fatal("TC-only provider defaulted to kernel_udp-only and omitted tix_tcp TX direct")
+	if !kernelUDPTXDirectKernelUDPOnlyEnabled() {
+		t.Fatal("TC-only provider did not specialize for kernel_udp when tix_tcp direct is disabled")
+	}
+}
+
+func TestKernelUDPTXDirectKernelUDPOnlyFollowsAttachSpec(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_ONLY", "")
+	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_TIX_TCP_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY", "")
+	t.Setenv("TRUSTIX_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_REMOTE_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_E2E_TIX_TCP_TC_TX_DIRECT", "")
+	t.Setenv("TRUSTIX_IPERF3_CRYPTO_BENCH_TIX_TCP_TC_TX_DIRECT", "")
+
+	udpSpec := dataplane.AttachSpec{
+		KernelUDPTXDirectOnly:   true,
+		KernelUDPTCOnlyProvider: true,
+	}
+	if !kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(udpSpec) {
+		t.Fatal("TC-only attach spec without tix_tcp did not select kernel_udp-only specialization")
+	}
+
+	tixTCPSpec := udpSpec
+	tixTCPSpec.TIXTCPTXDirect = true
+	if kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(tixTCPSpec) {
+		t.Fatal("tix_tcp attach spec incorrectly selected kernel_udp-only specialization")
 	}
 }
 
@@ -12847,10 +12872,12 @@ func TestIngressFastPathProgramLoadsWithKernelUDPTXDirectOnly(t *testing.T) {
 	defer captureMap.Close()
 
 	program, err := loadIngressFastPathProgram("trustix_ingress_direct_only_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true})
-	if err != nil {
-		t.Fatalf("load ingress fast path direct-only program: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "requires a protocol specialization") {
+		if program != nil {
+			program.Close()
+		}
+		t.Fatalf("load unspecialized ingress direct-only program error = %v", err)
 	}
-	defer program.Close()
 }
 
 func TestIngressFastPathProgramLoadsWithKernelUDPOnlyDirectRouteCacheAndInnerChecksum(t *testing.T) {
@@ -14677,7 +14704,7 @@ func TestIngressDirectOnlyDropsCaptureRoute(t *testing.T) {
 	defer natExcludeMap.Close()
 	defer captureMap.Close()
 
-	program, err := loadIngressFastPathProgram("trustix_ingress_direct_only_capture_drop_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true})
+	program, err := loadIngressFastPathProgram("trustix_ingress_direct_only_capture_drop_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, KernelUDPOnly: true, DirectOnly: true})
 	if err != nil {
 		t.Fatalf("load ingress fast path direct-only capture drop program: %v", err)
 	}
@@ -14705,7 +14732,7 @@ func TestEgressDirectOnlyDropsCaptureRoute(t *testing.T) {
 	natBindingMap := newTestBPFMap(t, &cebpf.MapSpec{Name: "ix_nat_bindings_egress_direct_only_capture_drop_test", Type: cebpf.Hash, KeySize: 20, ValueSize: 16, MaxEntries: 16})
 	defer natBindingMap.Close()
 
-	program, err := loadEgressFastPathProgram("trustix_egress_direct_only_capture_drop_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, natBindingMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true})
+	program, err := loadEgressFastPathProgram("trustix_egress_direct_only_capture_drop_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, natBindingMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, KernelUDPOnly: true, DirectOnly: true})
 	if err != nil {
 		t.Fatalf("load egress fast path direct-only capture drop program: %v", err)
 	}
@@ -14790,10 +14817,12 @@ func TestEgressFastPathProgramLoadsWithKernelUDPTXDirectOnly(t *testing.T) {
 	defer natBindingMap.Close()
 
 	program, err := loadEgressFastPathProgram("trustix_egress_direct_only_test", statsMap, packetPolicyMap, routeMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, natConfigMap, natSourceMap, natRouteMap, natExcludeMap, natBindingMap, captureMap, kernelUDPTXDirectProgramOptions{Enabled: true, DirectOnly: true})
-	if err != nil {
-		t.Fatalf("load egress fast path direct-only program: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "requires a protocol specialization") {
+		if program != nil {
+			program.Close()
+		}
+		t.Fatalf("load unspecialized egress direct-only program error = %v", err)
 	}
-	defer program.Close()
 }
 
 func TestEgressFastPathProgramLoadsWithTIXTCPDirectOnly(t *testing.T) {
@@ -16643,7 +16672,7 @@ func TestReassembleKernelUDPCryptoFragmentsCoalescesFullRun(t *testing.T) {
 	if !got[0].frame.InnerIPv4 {
 		t.Fatalf("full-run reassembly lost inner IPv4 marker")
 	}
-	if manager.kernelUDPCryptoFragments != nil && len(manager.kernelUDPCryptoFragments) != 0 {
+	if len(manager.kernelUDPCryptoFragments) != 0 {
 		t.Fatalf("full-run reassembly used manager fragment map: %d", len(manager.kernelUDPCryptoFragments))
 	}
 }

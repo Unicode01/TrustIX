@@ -19,7 +19,7 @@ func readCarrierBatchLoop(conn carrierBatchReadConn, max int, packetSize int) ([
 	}
 	packetSize = carrierReadBufferSize(packetSize)
 	packets := make([]carrierReceivedPacket, 0, max)
-	buffers := make([][]byte, 0, max)
+	buffers := make([]*carrierBuffer, 0, max)
 	release := func() {
 		for _, buffer := range buffers {
 			putCarrierReadBuffer(buffer)
@@ -27,21 +27,21 @@ func readCarrierBatchLoop(conn carrierBatchReadConn, max int, packetSize int) ([
 	}
 	result := carrierBatchReceiveResult{}
 	for len(packets) == 0 {
-		buf := takeCarrierReadBuffer(packetSize)
-		n, err := conn.Read(buf)
+		buffer := takeCarrierReadBuffer(packetSize)
+		n, err := conn.Read(buffer.data)
 		if err != nil {
-			putCarrierReadBuffer(buf)
+			putCarrierReadBuffer(buffer)
 			return nil, result, nil, err
 		}
-		packet, err := decodeCarrierFrameView(buf[:n])
+		packet, err := decodeCarrierFrameView(buffer.data[:n])
 		if err != nil {
-			putCarrierReadBuffer(buf)
+			putCarrierReadBuffer(buffer)
 			continue
 		}
-		packet.buffer = buf
+		packet.buffer = buffer
 		packet.wireLen = n
 		packets = append(packets, packet)
-		buffers = append(buffers, buf)
+		buffers = append(buffers, buffer)
 		result.bytesReceived += uint64(n)
 		result.loopSyscalls++
 	}
@@ -51,24 +51,24 @@ func readCarrierBatchLoop(conn carrierBatchReadConn, max int, packetSize int) ([
 		}
 		var trailingErr error
 		for len(packets) < max {
-			buf := takeCarrierReadBuffer(packetSize)
-			n, err := conn.Read(buf)
+			buffer := takeCarrierReadBuffer(packetSize)
+			n, err := conn.Read(buffer.data)
 			if err != nil {
-				putCarrierReadBuffer(buf)
+				putCarrierReadBuffer(buffer)
 				if !udpReadErrorTimeout(err) {
 					trailingErr = fmt.Errorf("drain tunnel carrier receive batch: %w", err)
 				}
 				break
 			}
-			packet, err := decodeCarrierFrameView(buf[:n])
+			packet, err := decodeCarrierFrameView(buffer.data[:n])
 			if err != nil {
-				putCarrierReadBuffer(buf)
+				putCarrierReadBuffer(buffer)
 				continue
 			}
-			packet.buffer = buf
+			packet.buffer = buffer
 			packet.wireLen = n
 			packets = append(packets, packet)
-			buffers = append(buffers, buf)
+			buffers = append(buffers, buffer)
 			result.bytesReceived += uint64(n)
 			result.loopSyscalls++
 		}
@@ -86,19 +86,19 @@ func readCarrierBatchFromLoop(conn carrierBatchReadConn, max int, packetSize int
 	packets := make([]carrierReceivedPacket, 0, max)
 	result := carrierBatchReceiveResult{}
 	for len(packets) == 0 {
-		buf := takeCarrierReadBuffer(packetSize)
-		n, addr, err := conn.ReadFromUDP(buf)
+		buffer := takeCarrierReadBuffer(packetSize)
+		n, addr, err := conn.ReadFromUDP(buffer.data)
 		if err != nil {
-			putCarrierReadBuffer(buf)
+			putCarrierReadBuffer(buffer)
 			return nil, result, nil, err
 		}
-		packet, err := decodeCarrierFrameView(buf[:n])
+		packet, err := decodeCarrierFrameView(buffer.data[:n])
 		if err != nil {
-			putCarrierReadBuffer(buf)
+			putCarrierReadBuffer(buffer)
 			continue
 		}
 		packet.wireLen = n
-		packet.buffer = buf
+		packet.buffer = buffer
 		packet.addr = addr
 		packets = append(packets, packet)
 		result.bytesReceived += uint64(n)
@@ -110,22 +110,22 @@ func readCarrierBatchFromLoop(conn carrierBatchReadConn, max int, packetSize int
 		}
 		var trailingErr error
 		for len(packets) < max {
-			buf := takeCarrierReadBuffer(packetSize)
-			n, addr, err := conn.ReadFromUDP(buf)
+			buffer := takeCarrierReadBuffer(packetSize)
+			n, addr, err := conn.ReadFromUDP(buffer.data)
 			if err != nil {
-				putCarrierReadBuffer(buf)
+				putCarrierReadBuffer(buffer)
 				if !udpReadErrorTimeout(err) {
 					trailingErr = fmt.Errorf("drain tunnel carrier receive batch: %w", err)
 				}
 				break
 			}
-			packet, err := decodeCarrierFrameView(buf[:n])
+			packet, err := decodeCarrierFrameView(buffer.data[:n])
 			if err != nil {
-				putCarrierReadBuffer(buf)
+				putCarrierReadBuffer(buffer)
 				continue
 			}
 			packet.wireLen = n
-			packet.buffer = buf
+			packet.buffer = buffer
 			packet.addr = addr
 			packets = append(packets, packet)
 			result.bytesReceived += uint64(n)

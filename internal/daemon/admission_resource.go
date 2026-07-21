@@ -431,7 +431,7 @@ func (daemon *Daemon) applyAdmissionConfigLocked(ctx context.Context, admission 
 			return false, fmt.Errorf("append admission event: %w", err)
 		}
 	}
-	daemon.head = plannedHead
+	daemon.setConfigHead(plannedHead)
 	if err := daemon.afterAdmissionStateChangedLocked(ctx); err != nil {
 		daemon.requestRuntimeReconcile("admission mutation", err)
 		return true, newCommittedConfigMutationError("admission mutation", err)

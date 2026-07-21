@@ -336,7 +336,7 @@ func (daemon *Daemon) applyEndpointGrantConfigLocked(ctx context.Context, grant 
 			return false, fmt.Errorf("append endpoint grant event: %w", err)
 		}
 	}
-	daemon.head = plannedHead
+	daemon.setConfigHead(plannedHead)
 	var sessionErr error
 	if grant.State == endpointGrantStateRevoked {
 		_, sessionErr = daemon.dropDataSessionsUnauthorizedByEndpointGrantPolicyAtLocked(time.Now().UTC())

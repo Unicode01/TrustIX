@@ -3097,3 +3097,23 @@ func testIPv4Packet(payload []byte) []byte {
 	binary.BigEndian.PutUint16(packet[10:12], ipv4Checksum20(packet[:20]))
 	return packet
 }
+
+func TestKernelUDPOpenPlainBufferPoolAvoidsSliceBoxingAllocation(t *testing.T) {
+	payloadLen := kernelCryptoSecureHeaderLen + kernelCryptoFrameTagLen + 1500
+	buffer, release := kernelUDPOpenPlainBuffer(true, payloadLen)
+	if len(buffer) != 1500 || release == nil {
+		t.Fatalf("warm buffer len=%d release=%v", len(buffer), release != nil)
+	}
+	release()
+
+	allocations := testing.AllocsPerRun(1000, func() {
+		buffer, release := kernelUDPOpenPlainBuffer(true, payloadLen)
+		if len(buffer) != 1500 || release == nil {
+			t.Fatal("pooled open buffer is unavailable")
+		}
+		release()
+	})
+	if allocations > 2 {
+		t.Fatalf("open buffer allocations = %v, want at most idempotence state and returned closure", allocations)
+	}
+}

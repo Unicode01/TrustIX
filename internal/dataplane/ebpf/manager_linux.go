@@ -112,6 +112,14 @@ type Manager struct {
 	kernelUDPXDPRXSecureDirectVethFallback      bool
 	kernelUDPXDPRXDirectVethFallback            bool
 	statsMap                                    *cebpf.Map
+	statsBatchUnsupported                       bool
+	statsBatchPossibleCPUs                      int
+	statsBatchKeys                              []uint32
+	statsBatchValues                            []uint64
+	statsBatchTotals                            []uint64
+	statsBatchMap                               *cebpf.Map
+	statsBatchAt                                time.Time
+	statsLookupValues                           []uint64
 	packetPolicyMap                             *cebpf.Map
 	routeMap                                    *cebpf.Map
 	kernelUDPTXRouteMap                         *cebpf.Map
@@ -1679,13 +1687,13 @@ func (manager *Manager) Load(ctx context.Context) error {
 	}
 	manager.refreshKernelCryptoProbeLocked()
 	if err := rlimit.RemoveMemlock(); err != nil {
-		manager.warnings = append(manager.warnings, "could not raise memlock rlimit: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "could not raise memlock rlimit: "+err.Error())
 	}
 	manager.initKernelCryptoProviderMapLocked()
 	if _, err := os.Stat("/sys/fs/bpf"); err == nil {
 		manager.capabilities = append(manager.capabilities, "bpffs")
 	} else {
-		manager.warnings = append(manager.warnings, "/sys/fs/bpf is not available; pinned BPF maps will need an alternate path")
+		manager.warnings = appendManagerWarning(manager.warnings, "/sys/fs/bpf is not available; pinned BPF maps will need an alternate path")
 	}
 	return nil
 }
@@ -1898,7 +1906,7 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 					manager.linkAddedLANs[lanKey] = true
 					createdLANIfaces[lan.Iface] = true
 					rollbackNeeded = true
-					manager.warnings = append(manager.warnings, fmt.Sprintf("created managed LAN bridge %q", lan.Iface))
+					manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("created managed LAN bridge %q", lan.Iface))
 				}
 			} else {
 				return fmt.Errorf("inspect LAN iface %q: %w", lan.Iface, err)
@@ -1962,7 +1970,7 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 			if err := netlink.LinkSetMTU(link, lan.ManagedMTU); err != nil {
 				return fmt.Errorf("configure LAN MTU %d on %q: %w", lan.ManagedMTU, lan.Iface, err)
 			}
-			manager.warnings = append(manager.warnings, fmt.Sprintf("set LAN MTU on %q to %d for native tunnel route offload", lan.Iface, lan.ManagedMTU))
+			manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("set LAN MTU on %q to %d for native tunnel route offload", lan.Iface, lan.ManagedMTU))
 		}
 		if lan.ManageQdisc {
 			lanSpec := specForLANAttach(spec, lan)
@@ -1971,7 +1979,7 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 				if lanOffloadProtectionRequired() {
 					return err
 				}
-				manager.warnings = append(manager.warnings, err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, err.Error())
 			}
 			if err := replaceClsact(link); err != nil {
 				return fmt.Errorf("prepare clsact qdisc on %q: %w", lan.Iface, err)
@@ -2000,7 +2008,7 @@ func (manager *Manager) Attach(ctx context.Context, spec dataplane.AttachSpec) (
 	}
 	rollbackNeeded = true
 	if err := manager.startNeighborMonitorLocked(spec); err != nil {
-		manager.warnings = append(manager.warnings, "neighbor monitor is unavailable: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "neighbor monitor is unavailable: "+err.Error())
 	}
 
 	manager.spec = spec
@@ -2073,10 +2081,10 @@ func (manager *Manager) syncSnapshotKernelTransportLocked(ctx context.Context) e
 		return err
 	}
 	if err := manager.ensureKernelUDPRXSecureDirectLocked(); err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct disabled: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp secure TC RX direct disabled: "+err.Error())
 	}
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp XDP TC RX direct config sync failed: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP TC RX direct config sync failed: "+err.Error())
 	}
 	return nil
 }
@@ -2133,10 +2141,10 @@ func (manager *Manager) restoreSnapshotBestEffortLocked(ctx context.Context, sna
 	errs = append(errs, wrapEBPFOperation("restore kernel_udp TX direct state", manager.syncKernelUDPTXDirectLocked()))
 	errs = append(errs, wrapEBPFOperation("restore kernel_udp RX direct program", manager.refreshKernelUDPRXDirectProgramLocked()))
 	if err := manager.ensureKernelUDPRXSecureDirectLocked(); err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct disabled while restoring snapshot: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp secure TC RX direct disabled while restoring snapshot: "+err.Error())
 	}
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp XDP TC RX direct config restore failed: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP TC RX direct config restore failed: "+err.Error())
 	}
 	return errors.Join(errs...)
 }
@@ -3464,19 +3472,19 @@ func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context)
 			}
 			if err := manager.ensureKernelUDPRXDirectLocked(); err != nil {
 				if manager.kernelUDPTCDirectOnlyPendingLocked() {
-					manager.warnings = append(manager.warnings, "kernel_udp TC-only RX direct pending: "+err.Error())
+					manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC-only RX direct pending: "+err.Error())
 					return nil
 				}
 				if kernelUDPTCOnlyProviderRequestedForSpec(manager.spec) {
 					return fmt.Errorf("attach kernel_udp TC-only RX direct provider: %w", err)
 				}
-				manager.warnings = append(manager.warnings, "kernel_udp TC RX direct disabled: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX direct disabled: "+err.Error())
 			}
 			return nil
 		}
 		if err := manager.attachTIXTCPFastPathLocked(ctx, manager.spec); err != nil {
 			if manager.snapshotCanFallbackToKernelUDPTCOnlyLocked() {
-				manager.warnings = append(manager.warnings, "tix_tcp AF_XDP fast path unavailable; falling back to kernel_udp TC-only provider: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp AF_XDP fast path unavailable; falling back to kernel_udp TC-only provider: "+err.Error())
 				if detachErr := manager.detachTIXTCPFastPathLocked(); detachErr != nil {
 					return detachErr
 				}
@@ -3486,28 +3494,28 @@ func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context)
 				return nil
 			}
 			if tixTCPRawFallbackEnabled() && manager.snapshotHasLocalTIXTCPEndpointLocked() {
-				manager.warnings = append(manager.warnings, "tix_tcp AF_XDP fast path unavailable; using raw socket fallback: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp AF_XDP fast path unavailable; using raw socket fallback: "+err.Error())
 				if detachErr := manager.detachTIXTCPFastPathLocked(); detachErr != nil {
 					return detachErr
 				}
 				return nil
 			}
 			if manager.snapshotCanFallbackToFullPlaintextKernelDatapathLocked() {
-				manager.warnings = append(manager.warnings, "kernel transport AF_XDP fast path unavailable; using full plaintext kernel datapath provider: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "kernel transport AF_XDP fast path unavailable; using full plaintext kernel datapath provider: "+err.Error())
 				if detachErr := manager.detachTIXTCPFastPathLocked(); detachErr != nil {
 					return detachErr
 				}
 				return nil
 			}
 			if kernelUDPRawFallbackEnabled() && manager.snapshotHasLocalKernelUDPEndpointLocked() {
-				manager.warnings = append(manager.warnings, "kernel_udp AF_XDP fast path unavailable; using raw UDP fallback: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp AF_XDP fast path unavailable; using raw UDP fallback: "+err.Error())
 				if detachErr := manager.detachTIXTCPFastPathLocked(); detachErr != nil {
 					return detachErr
 				}
 				return nil
 			}
 			if manager.snapshot.PacketPolicy.KernelTransportMode != dataplane.KernelTransportModeRequireKernel {
-				manager.warnings = append(manager.warnings, "kernel transport fast path unavailable; continuing without AF_XDP provider: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "kernel transport fast path unavailable; continuing without AF_XDP provider: "+err.Error())
 				if detachErr := manager.detachTIXTCPFastPathLocked(); detachErr != nil {
 					return detachErr
 				}
@@ -3517,11 +3525,11 @@ func (manager *Manager) ensureKernelTransportFastPathLocked(ctx context.Context)
 		}
 		if kernelDatapathRXWorkerOwnsStackRXForSpec(manager.spec) {
 			if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
-				manager.warnings = append(manager.warnings, "kernel datapath RX worker XDP pass config failed: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "kernel datapath RX worker XDP pass config failed: "+err.Error())
 			}
 		}
 		if err := manager.ensureKernelUDPRXDirectLocked(); err != nil {
-			manager.warnings = append(manager.warnings, "kernel_udp TC RX direct disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX direct disabled: "+err.Error())
 		}
 		return nil
 	}
@@ -5428,9 +5436,7 @@ func splitPreparedTIXTCPFrames(frames []preparedTIXTCPTXFrame) ([]preparedTIXTCP
 		}
 		if out == nil {
 			out = make([]preparedTIXTCPTXFrame, 0, len(frames)+count-1)
-			for _, previous := range frames[:frameIndex] {
-				out = append(out, previous)
-			}
+			out = append(out, frames[:frameIndex]...)
 		}
 		for index, start := 0, 0; start < len(payload); index, start = index+1, start+fragmentPayload {
 			end := min(start+fragmentPayload, len(payload))
@@ -5502,9 +5508,7 @@ func splitPreparedKernelUDPFrames(frames []preparedKernelUDPTXFrame) ([]prepared
 		}
 		if out == nil {
 			out = make([]preparedKernelUDPTXFrame, 0, len(frames)+count-1)
-			for _, previous := range frames[:frameIndex] {
-				out = append(out, previous)
-			}
+			out = append(out, frames[:frameIndex]...)
 		}
 		for index, start := 0, 0; start < len(payload); index, start = index+1, start+fragmentPayload {
 			end := min(start+fragmentPayload, len(payload))
@@ -5671,10 +5675,10 @@ func (manager *Manager) InstallTIXTCPCrypto(ctx context.Context, specs []datapla
 		return err
 	}
 	if err := manager.ensureKernelUDPRXSecureDirectLocked(); err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct disabled: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp secure TC RX direct disabled: "+err.Error())
 	}
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp XDP TC RX direct config sync failed: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP TC RX direct config sync failed: "+err.Error())
 	}
 	return nil
 }
@@ -7310,7 +7314,7 @@ func (manager *Manager) startKernelUDPRawReceiverLocked() error {
 			return nil
 		}
 		manager.kernelUDPUDPFallbackBindErrors++
-		manager.warnings = append(manager.warnings, "kernel_udp UDP socket fallback unavailable; using raw UDP socket fallback: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp UDP socket fallback unavailable; using raw UDP socket fallback: "+err.Error())
 		if !kernelUDPRawFallbackEnabled() {
 			return fmt.Errorf("kernel_udp UDP socket control fallback unavailable and raw UDP fallback is disabled: %w", err)
 		}
@@ -8479,7 +8483,7 @@ func (manager *Manager) deliverTIXTCPFrames(frames []receivedTIXTCPFrame) {
 	if txDirectSyncNeeded {
 		if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
 			manager.recordDropLocked(observability.DropEndpointDown)
-			manager.warnings = append(manager.warnings, "kernel_udp TC TX direct sync after tix_tcp RX flow update failed: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC TX direct sync after tix_tcp RX flow update failed: "+err.Error())
 			releaseTIXTCPFramePayloads(delivered)
 			putDeliveredTIXTCPFrameBatch(deliveredHolder, delivered)
 			return
@@ -8810,9 +8814,7 @@ func (manager *Manager) reassembleTIXTCPCryptoFragments(frames []receivedTIXTCPF
 		}
 		if out == nil {
 			out = make([]receivedTIXTCPFrame, 0, len(frames))
-			for _, previous := range frames[:frameIndex] {
-				out = append(out, previous)
-			}
+			out = append(out, frames[:frameIndex]...)
 		}
 		if completed, consumed, ok := reassembleTIXTCPCryptoFragmentRun(frames[frameIndex:]); ok {
 			out = append(out, completed)
@@ -9116,9 +9118,7 @@ func (manager *Manager) reassembleKernelUDPCryptoFragments(frames []receivedKern
 		}
 		if out == nil {
 			out = make([]receivedKernelUDPFrame, 0, len(frames))
-			for _, previous := range frames[:frameIndex] {
-				out = append(out, previous)
-			}
+			out = append(out, frames[:frameIndex]...)
 		}
 		if completed, consumed, ok := reassembleKernelUDPCryptoFragmentRun(frames[frameIndex:]); ok {
 			out = append(out, completed)
@@ -9841,7 +9841,7 @@ func (manager *Manager) deliverKernelUDPFrames(frames []receivedKernelUDPFrame) 
 	if txDirectSyncNeeded {
 		if err := manager.syncKernelUDPTXDirectLocked(); err != nil {
 			manager.recordDropLocked(observability.DropEndpointDown)
-			manager.warnings = append(manager.warnings, "kernel_udp TC TX direct sync after kernel_udp RX flow update failed: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC TX direct sync after kernel_udp RX flow update failed: "+err.Error())
 			releaseKernelUDPFramePayloads(delivered)
 			putDeliveredKernelUDPFrameBatch(deliveredHolder, delivered)
 			return
@@ -12987,7 +12987,7 @@ func (manager *Manager) desiredTIXTCPPortsLocked() map[uint16]struct{} {
 		}
 		port, err := tixTCPAddressPort(address)
 		if err != nil {
-			manager.warnings = append(manager.warnings, "skip tix_tcp endpoint port sync for "+address+": "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "skip tix_tcp endpoint port sync for "+address+": "+err.Error())
 			continue
 		}
 		desired[port] = struct{}{}
@@ -13079,7 +13079,7 @@ func (manager *Manager) syncKernelUDPPortsLocked() error {
 	if kernelUDPAFXDPIdleFallbackEnabled() && !kernelUDPAFXDPIdleFallbackUnderlayPacketEnabled() && kernelUDPUDPFallbackEnabled() {
 		if err := manager.syncKernelUDPUDPFallbackSocketsLocked(desired); err != nil {
 			manager.kernelUDPUDPFallbackBindErrors++
-			manager.warnings = append(manager.warnings, "kernel_udp UDP socket idle fallback unavailable: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp UDP socket idle fallback unavailable: "+err.Error())
 		}
 	}
 	if kernelUDPRawFallbackEnabled() && len(desired) > 0 {
@@ -13109,7 +13109,7 @@ func (manager *Manager) desiredKernelUDPPortsLocked() map[uint16]struct{} {
 		}
 		port, err := tixTCPAddressPort(address)
 		if err != nil {
-			manager.warnings = append(manager.warnings, "skip UDP kernel endpoint port sync for "+address+": "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "skip UDP kernel endpoint port sync for "+address+": "+err.Error())
 			continue
 		}
 		desired[port] = struct{}{}
@@ -13445,7 +13445,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 	if strings.TrimSpace(spec.UnderlayIface) != "" {
 		underlayLink, err = netlink.LinkByName(spec.UnderlayIface)
 		if err != nil {
-			manager.warnings = append(manager.warnings, fmt.Sprintf("inspect underlay iface %q for TC direct options: %v", spec.UnderlayIface, err))
+			manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("inspect underlay iface %q for TC direct options: %v", spec.UnderlayIface, err))
 			underlayLink = nil
 		}
 	}
@@ -13511,7 +13511,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if kernelUDPTXDirectInnerTCPChecksumKfuncRequired() {
 				return fmt.Errorf("load skb inner TCP checksum kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "kernel_udp TC TX direct inner TCP checksum kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC TX direct inner TCP checksum kfunc disabled: "+err.Error())
 		}
 	}
 	if tixTCPTXDirectEnabledForSpec(spec) && kernelUDPTXDirectInnerTCPChecksumKfuncEnabled() && !txDirectOptions.InnerTCPKfuncCall.IsKfuncCall() {
@@ -13524,7 +13524,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if kernelUDPTXDirectInnerTCPChecksumKfuncRequired() {
 				return fmt.Errorf("load tix_tcp inner TCP checksum kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct inner TCP checksum kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct inner TCP checksum kfunc disabled: "+err.Error())
 		}
 	}
 	if kernelUDPTXDirectStoreHeaderKfuncEnabled() {
@@ -13563,7 +13563,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if tixTCPTXDirectOuterTCPChecksumKfuncRequired() {
 				return fmt.Errorf("load tix_tcp outer TCP checksum kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct outer TCP checksum kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct outer TCP checksum kfunc disabled: "+err.Error())
 		}
 	}
 	if tixTCPTXDirectEnabledForSpec(spec) && tixTCPTXDirectOuterTCPHeaderKfuncRequested() && !tixTCPSkipOuterTCPChecksum() {
@@ -13574,7 +13574,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if tixTCPTXDirectOuterTCPHeaderKfuncRequired() {
 				return fmt.Errorf("load tix_tcp outer TCP header kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct outer TCP header kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct outer TCP header kfunc disabled: "+err.Error())
 		}
 	}
 	if tixTCPTXDirectEnabledForSpec(spec) && tixTCPTXDirectTCPPartialCSUMKfuncRequested() && !tixTCPSkipOuterTCPChecksum() {
@@ -13585,7 +13585,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if tixTCPTXDirectTCPPartialCSUMKfuncRequired() {
 				return fmt.Errorf("load tix_tcp TCP partial checksum kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct TCP partial checksum kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct TCP partial checksum kfunc disabled: "+err.Error())
 		}
 	}
 	if tixTCPTXDirectEnabledForSpec(spec) && tixTCPTXDirectPushTCPHeaderKfuncRequested() && !tixTCPSkipOuterTCPChecksum() {
@@ -13596,7 +13596,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if tixTCPTXDirectPushTCPHeaderKfuncRequired() {
 				return fmt.Errorf("load tix_tcp TCP header-push kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct TCP header-push kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct TCP header-push kfunc disabled: "+err.Error())
 		}
 	}
 	if tixTCPTXDirectEnabledForSpec(spec) && tixTCPTXDirectPushFlowTCPHeaderKfuncRequested() && !tixTCPSkipOuterTCPChecksum() {
@@ -13607,7 +13607,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if tixTCPTXDirectPushFlowTCPHeaderKfuncRequired() {
 				return fmt.Errorf("load tix_tcp flow TCP header-push kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct flow TCP header-push kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct flow TCP header-push kfunc disabled: "+err.Error())
 		}
 	}
 	if tixTCPTXDirectEnabledForSpec(spec) && tixTCPTXDirectFinalizeFlowTCPHeaderKfuncRequested() && !tixTCPSkipOuterTCPChecksum() {
@@ -13618,7 +13618,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if tixTCPTXDirectFinalizeFlowTCPHeaderKfuncRequired() {
 				return fmt.Errorf("load tix_tcp flow TCP header-finalize kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct flow TCP header-finalize kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct flow TCP header-finalize kfunc disabled: "+err.Error())
 		}
 	}
 	if tixTCPTXDirectEnabledForSpec(spec) && tixTCPTXDirectPushRouteTCPHeaderKfuncRequestedForSpec(spec) && !tixTCPSkipOuterTCPChecksum() {
@@ -13629,7 +13629,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if tixTCPTXDirectPushRouteTCPHeaderKfuncRequired() {
 				return fmt.Errorf("load tix_tcp route TCP header-push kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct route TCP header-push kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct route TCP header-push kfunc disabled: "+err.Error())
 		}
 	}
 	if tixTCPTXDirectEnabledForSpec(spec) && tixTCPTXDirectRouteTCPGSOKfuncRequestedForSpec(spec) && !tixTCPSkipOuterTCPChecksum() {
@@ -13640,7 +13640,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if tixTCPTXDirectRouteTCPGSOKfuncRequired() {
 				return fmt.Errorf("load tix_tcp route TCP GSO kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct route TCP GSO kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct route TCP GSO kfunc disabled: "+err.Error())
 		}
 	}
 	if txDirectOptions.RouteTCPGSOKfunc {
@@ -13654,7 +13654,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 			if tixTCPTXDirectRouteTCPXmitKfuncRequired() {
 				return fmt.Errorf("load tix_tcp route TCP xmit kfunc metadata: %w", err)
 			}
-			manager.warnings = append(manager.warnings, "tix_tcp TC TX direct route TCP xmit kfunc disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp TC TX direct route TCP xmit kfunc disabled: "+err.Error())
 		}
 	}
 	if kernelUDPTXDirectRouteCacheEnabled(txDirectOptions) {
@@ -13682,13 +13682,13 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 	cleanup.Add("close egress BPF program", egressProg.Close)
 	if kfuncFallbackWarning != "" {
 		manager.kernelUDPTXDirectKfuncFallbackWarning = kfuncFallbackWarning
-		manager.warnings = append(manager.warnings, kfuncFallbackWarning)
+		manager.warnings = appendManagerWarning(manager.warnings, kfuncFallbackWarning)
 	} else {
 		manager.kernelUDPTXDirectKfuncFallbackWarning = ""
 	}
 	var kernelUDPTXSecureDirect *kernelUDPTXSecureDirectObject
 	if kernelUDPTXSecureDirectRequestedForSpec(spec) && !manager.kernelCryptoTCDirectReadyLocked() {
-		manager.warnings = append(manager.warnings, "kernel_udp secure TC TX direct unavailable: "+manager.kernelCryptoTCDirectUnavailableReasonLocked())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp secure TC TX direct unavailable: "+manager.kernelCryptoTCDirectUnavailableReasonLocked())
 	}
 	if kernelUDPTXSecureDirectRequestedForSpec(spec) && manager.kernelCryptoTCDirectReadyLocked() {
 		kernelUDPTXSecureDirect, err = loadKernelUDPTXSecureDirectObject(manager.kernelCryptoProvider, statsMap, kernelUDPTXRouteMap, kernelUDPTXFlowMap, kernelUDPTXSecureDirectProgramOptionsForSpec(spec))
@@ -13741,6 +13741,7 @@ func (manager *Manager) attachTCPrograms(link netlink.Link, spec dataplane.Attac
 	})
 
 	manager.statsMap = statsMap
+	manager.resetStatsCounterCacheLocked()
 	manager.packetPolicyMap = packetPolicyMap
 	manager.routeMap = routeMap
 	manager.kernelUDPTXRouteMap = kernelUDPTXRouteMap
@@ -13816,25 +13817,25 @@ func (manager *Manager) attachKernelUDPRXDirectLocked(lanLink netlink.Link, unde
 		manager.tixTCPFastPath.xdpObject.rxDevMap != nil && manager.tixTCPFastPath.xdpObject.rxConfigMap != nil {
 		neighMap, err = manager.tixTCPFastPath.xdpObject.rxNeighMap.Clone()
 		if err != nil {
-			manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct disabled: clone XDP neighbor map: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP RX direct disabled: clone XDP neighbor map: "+err.Error())
 		} else if devMap, err = manager.tixTCPFastPath.xdpObject.rxDevMap.Clone(); err != nil {
 			err = errors.Join(err, closeKernelUDPRXDirectMaps(nil, nil, neighMap))
-			manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct disabled: clone XDP devmap: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP RX direct disabled: clone XDP devmap: "+err.Error())
 			neighMap = nil
 		} else if configMap, err = manager.tixTCPFastPath.xdpObject.rxConfigMap.Clone(); err != nil {
 			err = errors.Join(err, closeKernelUDPRXDirectMaps(nil, devMap, neighMap))
-			manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct disabled: clone XDP config map: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP RX direct disabled: clone XDP config map: "+err.Error())
 			devMap = nil
 			neighMap = nil
 		}
 	}
 	if !kernelUDPXDPRXDirectEnabled() {
 		if closeErr := closeKernelUDPRXDirectMaps(configMap, devMap, nil); closeErr != nil {
-			manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct map cleanup failed: "+closeErr.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP RX direct map cleanup failed: "+closeErr.Error())
 		}
 		configMap = nil
 		devMap = nil
-		manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct disabled: devmap redirect to LAN is experimental; set TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=1 to opt in")
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP RX direct disabled: devmap redirect to LAN is experimental; set TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=1 to opt in")
 	}
 	if kernelUDPXDPRXDirectEnabled() && devMap == nil {
 		devMap, err = cebpf.NewMap(&cebpf.MapSpec{
@@ -13923,13 +13924,13 @@ func (manager *Manager) attachKernelUDPRXDirectLocked(lanLink netlink.Link, unde
 	manager.configureKernelUDPRXDirectNeighborMap(lanLink)
 	manager.kernelUDPRXDirectAttached = true
 	if err := manager.attachKernelUDPRXSecureDirectLocked(underlayLink, neighMap, lanLink, sourceMAC, options); err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct disabled: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp secure TC RX direct disabled: "+err.Error())
 	}
 	if err := manager.syncKernelUDPRXDirectConfigLocked(); err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp XDP TC RX direct config sync failed: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP TC RX direct config sync failed: "+err.Error())
 	}
 	if err := manager.attachKernelUDPRXXDPDirectLocked(lanLink, underlayLink); err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct disabled: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP RX direct disabled: "+err.Error())
 	}
 	return nil
 }
@@ -13971,13 +13972,13 @@ func (manager *Manager) attachKernelUDPRXSecureDirectLocked(underlayLink netlink
 	manager.kernelUDPRXSecureDirectSKBOpenKfunc = object.skbOpenKfunc
 	manager.kernelUDPRXSecureDirectDecapL2Kfunc = object.decapL2Kfunc
 	if kernelUDPRXSecureDirectSKBOpenKfuncEnabled() && !object.skbOpenKfunc {
-		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct fell back without skb-open kfunc")
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp secure TC RX direct fell back without skb-open kfunc")
 	}
 	if kernelUDPRXSecureDirectDecapL2KfuncEnabled() && !object.decapL2Kfunc {
-		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct fell back without decap-l2 kfunc")
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp secure TC RX direct fell back without decap-l2 kfunc")
 	}
 	for _, variantErr := range object.variantErrors {
-		manager.warnings = append(manager.warnings, "kernel_udp secure TC RX direct variant load failed: "+variantErr)
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp secure TC RX direct variant load failed: "+variantErr)
 	}
 	return nil
 }
@@ -14041,7 +14042,7 @@ func (manager *Manager) loadKernelUDPRXDirectProgramForLink(name string, neighMa
 	} else if options.Broadcast && options.RedirectIngress && len(sourceMAC) == 6 {
 		copy(options.BroadcastDestination[:], sourceMAC)
 	} else if warning != "" {
-		manager.warnings = append(manager.warnings, warning)
+		manager.warnings = appendManagerWarning(manager.warnings, warning)
 	}
 	if options.RedirectPeer || options.Broadcast {
 		loadedOptions, program, err := manager.loadKernelUDPRXDirectProgramWithOptionalKfuncFallback(name, neighMap, ifindex, sourceMAC, options)
@@ -14049,16 +14050,16 @@ func (manager *Manager) loadKernelUDPRXDirectProgramForLink(name string, neighMa
 			return loadedOptions, program, nil
 		}
 		if options.RedirectPeer {
-			manager.warnings = append(manager.warnings, "kernel_udp TC RX veth peer redirect disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX veth peer redirect disabled: "+err.Error())
 			fallback := options
 			fallback.RedirectPeer = false
 			loadedFallback, program, fallbackErr := manager.loadKernelUDPRXDirectProgramWithOptionalKfuncFallback(name, neighMap, ifindex, sourceMAC, fallback)
 			if fallbackErr == nil {
 				return loadedFallback, program, nil
 			}
-			manager.warnings = append(manager.warnings, "kernel_udp TC RX broadcast direct disabled: "+fallbackErr.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX broadcast direct disabled: "+fallbackErr.Error())
 		} else {
-			manager.warnings = append(manager.warnings, "kernel_udp TC RX broadcast direct disabled: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX broadcast direct disabled: "+err.Error())
 		}
 	}
 	loadedOptions, program, err := manager.loadKernelUDPRXDirectProgramWithOptionalKfuncFallback(name, neighMap, ifindex, sourceMAC, options)
@@ -14103,7 +14104,7 @@ func (manager *Manager) kernelUDPRXDirectProgramOptionsForLink(lanLink netlink.L
 	}
 	if kernelUDPRXDirectParseDecapL2KfuncEnabledForOptions(options) {
 		if parseDecapLocalDeliverDev && !options.LocalDeliverDev {
-			manager.warnings = append(manager.warnings, "kernel_udp TC RX parse+decap L2 kfunc disabled: tix_tcp stream local-deliver-dev target is unavailable")
+			manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX parse+decap L2 kfunc disabled: tix_tcp stream local-deliver-dev target is unavailable")
 		} else {
 			manager.enableKernelUDPRXDirectParseDecapL2Kfunc(&options, loadSKBKernelUDPRXParseDecapL2KfuncCall)
 		}
@@ -14122,11 +14123,11 @@ func (manager *Manager) enableKernelUDPRXDirectLocalDeliverDevKfunc(options *ker
 	options.LocalIPv4Mask = normalizeKernelUDPRXDirectLocalIPv4Mask(localIPv4Mask)
 	kfuncCall, err := load()
 	if err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp TC RX local-deliver dev kfunc disabled: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX local-deliver dev kfunc disabled: "+err.Error())
 		return
 	}
 	if !kfuncCall.IsKfuncCall() {
-		manager.warnings = append(manager.warnings, "kernel_udp TC RX local-deliver dev kfunc disabled: metadata has no kfunc call")
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX local-deliver dev kfunc disabled: metadata has no kfunc call")
 		return
 	}
 	options.LocalDeliverDev = true
@@ -14141,11 +14142,11 @@ func (manager *Manager) enableKernelUDPRXDirectDecapL2Kfunc(options *kernelUDPRX
 	}
 	kfuncCall, err := load()
 	if err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp TC RX decap L2 kfunc disabled: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX decap L2 kfunc disabled: "+err.Error())
 		return
 	}
 	if !kfuncCall.IsKfuncCall() {
-		manager.warnings = append(manager.warnings, "kernel_udp TC RX decap L2 kfunc disabled: metadata has no kfunc call")
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX decap L2 kfunc disabled: metadata has no kfunc call")
 		return
 	}
 	options.DecapL2Kfunc = true
@@ -14161,11 +14162,11 @@ func (manager *Manager) enableKernelUDPRXDirectParseDecapL2Kfunc(options *kernel
 	}
 	kfuncCall, err := load()
 	if err != nil {
-		manager.warnings = append(manager.warnings, "kernel_udp TC RX parse+decap L2 kfunc disabled: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX parse+decap L2 kfunc disabled: "+err.Error())
 		return
 	}
 	if !kfuncCall.IsKfuncCall() {
-		manager.warnings = append(manager.warnings, "kernel_udp TC RX parse+decap L2 kfunc disabled: metadata has no kfunc call")
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX parse+decap L2 kfunc disabled: metadata has no kfunc call")
 		return
 	}
 	options.ParseDecapL2Kfunc = true
@@ -14194,7 +14195,7 @@ func (manager *Manager) loadKernelUDPRXDirectProgramWithOptionalKfuncFallback(na
 	if fallbackErr != nil {
 		return options, nil, err
 	}
-	manager.warnings = append(manager.warnings, "kernel_udp TC RX decap kfunc disabled after verifier rejection: "+err.Error())
+	manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp TC RX decap kfunc disabled after verifier rejection: "+err.Error())
 	return fallback, program, nil
 }
 
@@ -14337,7 +14338,7 @@ func (manager *Manager) attachKernelUDPRXXDPDirectLocked(lanLink netlink.Link, u
 		manager.tixTCPFastPath != nil && manager.tixTCPFastPath.XDPAttachMode() != tixTCPXDPAttachSKB {
 		manager.kernelUDPXDPRXDirectVethFallback = true
 		manager.kernelUDPXDPRXDirectEnabled = false
-		manager.warnings = append(manager.warnings, "kernel_udp XDP RX direct falls back to XDP open + TC redirect_peer on veth LAN because the active XDP attach mode is not skb; set TRUSTIX_XDP_MODE=skb to use XDP direct or TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_FORCE=1 to force experimental redirect")
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp XDP RX direct falls back to XDP open + TC redirect_peer on veth LAN because the active XDP attach mode is not skb; set TRUSTIX_XDP_MODE=skb to use XDP direct or TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_FORCE=1 to force experimental redirect")
 		if err := manager.tixTCPFastPath.SetKernelUDPRXDirectWithOptions(true, false, manager.kernelUDPRXSecureDirectConfigEnabledLocked(), tixTCPBPFConfigOptions{ForcePassOpened: true}); err != nil {
 			return err
 		}
@@ -14363,7 +14364,7 @@ func (manager *Manager) attachKernelUDPRXXDPDirectLocked(lanLink netlink.Link, u
 	}
 	if secureVethFallback {
 		manager.kernelUDPXDPRXSecureDirectVethFallback = true
-		manager.warnings = append(manager.warnings, "kernel_udp secure XDP RX direct falls back to TC secure RX on veth LAN because XDP cannot reproduce TC redirect_peer/broadcast ingress semantics; set TRUSTIX_KERNEL_UDP_XDP_RX_SECURE_DIRECT_FORCE=1 only for isolated experiments")
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp secure XDP RX direct falls back to TC secure RX on veth LAN because XDP cannot reproduce TC redirect_peer/broadcast ingress semantics; set TRUSTIX_KERNEL_UDP_XDP_RX_SECURE_DIRECT_FORCE=1 only for isolated experiments")
 	}
 	return nil
 }
@@ -14378,7 +14379,7 @@ func (manager *Manager) attachStandaloneKernelUDPRXXDPDirectLocked(lanLink netli
 	if isVethLink(lanLink) && !kernelUDPXDPRXDirectForceEnabled() && !standaloneKernelUDPXDPRXDirectPrefersSKB() {
 		manager.kernelUDPXDPRXDirectVethFallback = true
 		manager.kernelUDPXDPRXDirectEnabled = false
-		manager.warnings = append(manager.warnings, "kernel_udp standalone XDP RX direct falls back to TC redirect_peer on veth LAN because skb XDP was not selected; set TRUSTIX_XDP_MODE=skb to use XDP direct or TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_FORCE=1 to force experimental redirect")
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp standalone XDP RX direct falls back to TC redirect_peer on veth LAN because skb XDP was not selected; set TRUSTIX_XDP_MODE=skb to use XDP direct or TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_FORCE=1 to force experimental redirect")
 		return nil
 	}
 	object, err := loadKernelUDPStandaloneXDPObject(tixTCPXDPReplacements{
@@ -14390,7 +14391,7 @@ func (manager *Manager) attachStandaloneKernelUDPRXXDPDirectLocked(lanLink netli
 		return fmt.Errorf("load standalone kernel_udp XDP RX direct object: %w", err)
 	}
 	if object.fallbackReason != "" {
-		manager.warnings = append(manager.warnings, object.fallbackReason)
+		manager.warnings = appendManagerWarning(manager.warnings, object.fallbackReason)
 	}
 	var fallbackReasons []string
 	var selectedMode string
@@ -14418,7 +14419,7 @@ func (manager *Manager) attachStandaloneKernelUDPRXXDPDirectLocked(lanLink netli
 	manager.kernelUDPXDPRXDirectFallbackPass = true
 	manager.kernelUDPXDPRXDirectEnabled = true
 	if len(fallbackReasons) > 0 {
-		manager.warnings = append(manager.warnings, "kernel_udp standalone XDP RX direct mode fallback: "+strings.Join(fallbackReasons, "; "))
+		manager.warnings = appendManagerWarning(manager.warnings, "kernel_udp standalone XDP RX direct mode fallback: "+strings.Join(fallbackReasons, "; "))
 	}
 	if err := manager.syncStandaloneKernelUDPRXXDPDirectConfigLocked(); err != nil {
 		return errors.Join(err, manager.detachStandaloneKernelUDPRXXDPDirectLocked(underlayLink))
@@ -14494,7 +14495,7 @@ func (manager *Manager) configureKernelUDPRXDirectNeighborMap(lanLink netlink.Li
 	if peerMAC, warning := vethPeerHardwareAddr(lanLink); len(peerMAC) == 6 {
 		copy(destinationMAC[:], peerMAC)
 	} else if warning != "" {
-		manager.warnings = append(manager.warnings, warning)
+		manager.warnings = appendManagerWarning(manager.warnings, warning)
 	}
 	manager.kernelUDPRXNeighMu.Lock()
 	manager.kernelUDPRXDirectLANIfindex = attrs.Index
@@ -14505,7 +14506,7 @@ func (manager *Manager) configureKernelUDPRXDirectNeighborMap(lanLink netlink.Li
 		key := uint32(0)
 		ifindex := uint32(attrs.Index)
 		if err := manager.kernelUDPRXDevMap.Update(key, ifindex, cebpf.UpdateAny); err != nil {
-			manager.warnings = append(manager.warnings, "configure kernel_udp XDP RX direct devmap: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "configure kernel_udp XDP RX direct devmap: "+err.Error())
 		}
 	}
 	if manager.kernelUDPRXConfigMap != nil {
@@ -14524,16 +14525,16 @@ func (manager *Manager) configureKernelUDPRXDirectNeighborMap(lanLink netlink.Li
 			DestinationMAC1: binary.LittleEndian.Uint16(destinationMACForConfig[4:6]),
 		}
 		if err := manager.kernelUDPRXConfigMap.Update(key, config, cebpf.UpdateAny); err != nil {
-			manager.warnings = append(manager.warnings, "configure kernel_udp XDP RX direct config map: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "configure kernel_udp XDP RX direct config map: "+err.Error())
 		}
 	}
 	if err := clearBPFMap[[4]byte, kernelUDPRXNeighValue](manager.kernelUDPRXNeighMap, "kernel_udp RX direct neighbor BPF map"); err != nil {
-		manager.warnings = append(manager.warnings, err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, err.Error())
 	}
 	manager.seedNeighborCache(attrs.Index)
 	neighbors, err := netlink.NeighList(attrs.Index, netlink.FAMILY_V4)
 	if err != nil {
-		manager.warnings = append(manager.warnings, "seed kernel_udp RX direct neighbor map: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "seed kernel_udp RX direct neighbor map: "+err.Error())
 		return
 	}
 	for _, neighbor := range neighbors {
@@ -14933,10 +14934,7 @@ func kernelUDPRXDirectParseDecapL2KfuncEnabledForOptions(options kernelUDPRXDire
 		return false
 	}
 	if options.TIXTCPOnly && options.DirectOnly && options.DestinationPortOnly {
-		if envFalsey("TRUSTIX_TIX_TCP_TC_RX_STREAM_PARSE", "TRUSTIX_TIXT_RX_STREAM_PARSE") {
-			return false
-		}
-		return true
+		return !envFalsey("TRUSTIX_TIX_TCP_TC_RX_STREAM_PARSE", "TRUSTIX_TIXT_RX_STREAM_PARSE")
 	}
 	if kernelUDPRXDirectParseDecapL2KfuncEnabled() {
 		return true
@@ -14958,13 +14956,10 @@ func kernelUDPRXDirectParseDecapL2LocalDeliverDevRequiredForOptions(options kern
 }
 
 func kernelUDPRXDirectParseDecapL2PrefilterEnabled() bool {
-	if envFalsey(
+	return !envFalsey(
 		"TRUSTIX_KERNEL_UDP_TC_RX_DIRECT_PARSE_DECAP_L2_PREFILTER",
 		"TRUSTIX_KERNEL_UDP_TC_RX_PARSE_DECAP_L2_PREFILTER",
-	) {
-		return false
-	}
-	return true
+	)
 }
 
 func kernelUDPRXDirectTrustInnerChecksumEnabledForOptions(options kernelUDPRXDirectProgramOptions) bool {
@@ -15106,6 +15101,7 @@ func (manager *Manager) detachTCPrograms(link netlink.Link) error {
 			errs = append(errs, "close stats BPF map: "+err.Error())
 		}
 		manager.statsMap = nil
+		manager.resetStatsCounterCacheLocked()
 	}
 	if manager.captureReader != nil {
 		if err := manager.captureReader.Close(); err != nil && !errors.Is(err, perf.ErrClosed) {
@@ -15251,6 +15247,9 @@ func loadIngressFastPathProgram(name string, statsMap *cebpf.Map, packetPolicyMa
 
 func loadIngressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Map, packetPolicyMap *cebpf.Map, routeMap *cebpf.Map, kernelUDPTXRouteMap *cebpf.Map, kernelUDPTXFlowMap *cebpf.Map, natConfigMap *cebpf.Map, natSourceMap *cebpf.Map, natRouteMap *cebpf.Map, natExcludeMap *cebpf.Map, captureMap *cebpf.Map, captureScratchMap *cebpf.Map, txDirectOptions ...kernelUDPTXDirectProgramOptions) (*cebpf.Program, error) {
 	txDirectOption := firstKernelUDPTXDirectProgramOptions(txDirectOptions)
+	if err := validateKernelUDPTXDirectProgramOptions(txDirectOption); err != nil {
+		return nil, err
+	}
 	instructions := asm.Instructions{
 		asm.Mov.Reg(asm.R6, asm.R1),
 	}
@@ -15560,6 +15559,13 @@ func firstKernelUDPTXDirectProgramOptions(options []kernelUDPTXDirectProgramOpti
 		return kernelUDPTXDirectProgramOptions{}
 	}
 	return options[0]
+}
+
+func validateKernelUDPTXDirectProgramOptions(options kernelUDPTXDirectProgramOptions) error {
+	if options.Enabled && options.DirectOnly && !options.TIXTCPOnly && !options.KernelUDPOnly {
+		return fmt.Errorf("kernel direct-only TX requires a protocol specialization")
+	}
+	return nil
 }
 
 func newCaptureScratchBPFMap() (*cebpf.Map, error) {
@@ -20028,6 +20034,9 @@ func loadEgressFastPathProgram(name string, statsMap *cebpf.Map, packetPolicyMap
 
 func loadEgressFastPathProgramWithCaptureScratch(name string, statsMap *cebpf.Map, packetPolicyMap *cebpf.Map, routeMap *cebpf.Map, kernelUDPTXRouteMap *cebpf.Map, kernelUDPTXFlowMap *cebpf.Map, natConfigMap *cebpf.Map, natSourceMap *cebpf.Map, natRouteMap *cebpf.Map, natExcludeMap *cebpf.Map, natBindingMap *cebpf.Map, captureMap *cebpf.Map, captureScratchMap *cebpf.Map, txDirectOptions ...kernelUDPTXDirectProgramOptions) (*cebpf.Program, error) {
 	txDirectOption := firstKernelUDPTXDirectProgramOptions(txDirectOptions)
+	if err := validateKernelUDPTXDirectProgramOptions(txDirectOption); err != nil {
+		return nil, err
+	}
 	instructions := asm.Instructions{
 		asm.Mov.Reg(asm.R6, asm.R1),
 	}
@@ -20882,12 +20891,19 @@ func (manager *Manager) readCountersLocked() []observability.Counter {
 		{key: captureStatPerfErrOther, name: "tc_capture_perf_err_other"},
 		{key: captureStatPerfLastErrno, name: "tc_capture_perf_last_errno"},
 	}
+	batchValues, batchOK := manager.statsCounterBatchValuesLocked(time.Now())
 	counters := make([]observability.Counter, 0, len(keys))
 	for _, item := range keys {
-		value, err := bpfCounterValue(manager.statsMap, item.key)
-		if err != nil {
-			manager.warnings = append(manager.warnings, "read BPF counter "+item.name+": "+err.Error())
-			continue
+		var value uint64
+		if batchOK && int(item.key) < len(batchValues) {
+			value = batchValues[item.key]
+		} else {
+			var err error
+			value, err = manager.statsCounterValueFallbackLocked(item.key)
+			if err != nil {
+				manager.warnings = appendManagerWarning(manager.warnings, "read BPF counter "+item.name+": "+err.Error())
+				continue
+			}
 		}
 		counters = append(counters, observability.Counter{Name: item.name, Value: value})
 	}
@@ -21184,33 +21200,14 @@ func (manager *Manager) bpfCounterValueLocked(key uint32) uint64 {
 	if manager.statsMap == nil {
 		return 0
 	}
-	value, err := bpfCounterValue(manager.statsMap, key)
+	if values, ok := manager.statsCounterBatchValuesLocked(time.Now()); ok && int(key) < len(values) {
+		return values[key]
+	}
+	value, err := manager.statsCounterValueFallbackLocked(key)
 	if err != nil {
 		return 0
 	}
 	return value
-}
-
-func bpfCounterValue(m *cebpf.Map, key uint32) (uint64, error) {
-	if m == nil {
-		return 0, fmt.Errorf("BPF counter map is nil")
-	}
-	if m.Type() == cebpf.PerCPUArray || m.Type() == cebpf.PerCPUHash || m.Type() == cebpf.LRUCPUHash {
-		var values []uint64
-		if err := m.Lookup(key, &values); err != nil {
-			return 0, err
-		}
-		var total uint64
-		for _, value := range values {
-			total += value
-		}
-		return total, nil
-	}
-	var value uint64
-	if err := m.Lookup(key, &value); err != nil {
-		return 0, err
-	}
-	return value, nil
 }
 
 func (manager *Manager) recordDrop(reason observability.DropReason) {
@@ -21394,14 +21391,14 @@ func (manager *Manager) syncRoutesLocked(routes []routing.Route) error {
 			return err
 		}
 		if !prefix.Addr().Is4() {
-			manager.warnings = append(manager.warnings, fmt.Sprintf("skip non-IPv4 route %q in TC fast path", route.Prefix))
+			manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("skip non-IPv4 route %q in TC fast path", route.Prefix))
 			continue
 		}
 		masked := prefix.Masked()
 		key := routeKey{PrefixLen: uint32(masked.Bits()), Addr: masked.Addr().As4()}
 		action, ok := routeActionForKind(route.Kind)
 		if !ok {
-			manager.warnings = append(manager.warnings, fmt.Sprintf("skip unsupported route kind %q for %q in TC fast path", route.Kind, route.Prefix))
+			manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("skip unsupported route kind %q for %q in TC fast path", route.Kind, route.Prefix))
 			continue
 		}
 		if manager.routeUsesNativeTunnelLocked(route) {
@@ -21509,7 +21506,7 @@ func (manager *Manager) syncNativeTunnelManagedLANMTULocked() error {
 	if err := netlink.LinkSetMTU(link, managedMTU); err != nil {
 		return fmt.Errorf("configure LAN MTU %d on %q: %w", managedMTU, manager.spec.LANIface, err)
 	}
-	manager.warnings = append(manager.warnings, fmt.Sprintf("set LAN MTU on %q to %d for native tunnel route offload", manager.spec.LANIface, managedMTU))
+	manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("set LAN MTU on %q to %d for native tunnel route offload", manager.spec.LANIface, managedMTU))
 	return nil
 }
 
@@ -21695,7 +21692,7 @@ func (manager *Manager) desiredManagedCaptureRoutesLocked(snapshot dataplane.Sna
 		}
 		prefix = prefix.Masked()
 		if prefix.Bits() == 0 {
-			manager.warnings = append(manager.warnings, "skip managed capture default route in kernel FIB; TC ingress still handles LAN default-route captures")
+			manager.warnings = appendManagerWarning(manager.warnings, "skip managed capture default route in kernel FIB; TC ingress still handles LAN default-route captures")
 			continue
 		}
 		key := managedCaptureRouteKey(prefix)
@@ -21725,7 +21722,7 @@ func (manager *Manager) managedCaptureRouteGatewayLocked() (netip.Addr, string) 
 	if peerMAC, warning := vethPeerHardwareAddr(link); len(peerMAC) == 6 {
 		return gateway, peerMAC.String()
 	} else if warning != "" {
-		manager.warnings = append(manager.warnings, warning)
+		manager.warnings = appendManagerWarning(manager.warnings, warning)
 	}
 	if attrs := link.Attrs(); attrs != nil && len(attrs.HardwareAddr) == 6 {
 		return gateway, attrs.HardwareAddr.String()
@@ -22259,7 +22256,7 @@ func (manager *Manager) syncNATLocked(snapshot *dataplane.NATSnapshot) error {
 		value.Gateway = snapshot.Gateway.As4()
 		for _, prefix := range snapshot.SourcePrefixes {
 			if !prefix.Addr().Is4() {
-				manager.warnings = append(manager.warnings, fmt.Sprintf("skip non-IPv4 NAT source prefix %q", prefix))
+				manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("skip non-IPv4 NAT source prefix %q", prefix))
 				continue
 			}
 			masked := prefix.Masked()
@@ -22275,7 +22272,7 @@ func (manager *Manager) syncNATLocked(snapshot *dataplane.NATSnapshot) error {
 				return err
 			}
 			if !prefix.Addr().Is4() {
-				manager.warnings = append(manager.warnings, fmt.Sprintf("skip non-IPv4 NAT route prefix %q", rawPrefix))
+				manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("skip non-IPv4 NAT route prefix %q", rawPrefix))
 				continue
 			}
 			masked := prefix.Masked()
@@ -22486,7 +22483,7 @@ func (manager *Manager) syncKernelUDPTXDirectLocked() error {
 		return nil
 	}
 	if err := manager.rememberKernelUDPTXDirectSequencesLocked(); err != nil {
-		manager.warnings = append(manager.warnings, err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, err.Error())
 	}
 	if err := clearBPFMap[routeKey, kernelUDPTXRouteValue](manager.kernelUDPTXRouteMap, "kernel_udp TC TX route LPM BPF map"); err != nil {
 		return err
@@ -24949,9 +24946,6 @@ func kernelUDPTXDirectKernelUDPOnlyEnabled() bool {
 	) {
 		return true
 	}
-	if kernelUDPTCOnlyProviderRequested() {
-		return false
-	}
 	return !tixTCPTXDirectEnabled()
 }
 
@@ -24970,9 +24964,6 @@ func kernelUDPTXDirectKernelUDPOnlyEnabledForSpec(spec dataplane.AttachSpec) boo
 		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_UDP_ONLY",
 	) {
 		return true
-	}
-	if kernelUDPTCOnlyProviderRequestedForSpec(spec) {
-		return false
 	}
 	return !tixTCPTXDirectEnabledForSpec(spec)
 }
@@ -25811,7 +25802,7 @@ func (manager *Manager) syncLocalVIPsLocked(vips []dataplane.LocalVIP) error {
 		addr := netlinkIPv4Address(vip.Addr, 32)
 		if err := netlink.AddrReplace(link, addr); err != nil {
 			if local, localErr := ipv4AddressExistsAnywhere(vip.Addr); localErr == nil && local {
-				manager.warnings = append(manager.warnings, fmt.Sprintf("local VIP %s already exists outside %q; leaving existing address in place", vip.Addr, manager.spec.LANIface))
+				manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("local VIP %s already exists outside %q; leaving existing address in place", vip.Addr, manager.spec.LANIface))
 				continue
 			}
 			return fmt.Errorf("configure local VIP %s on %q: %w", vip.Addr, manager.spec.LANIface, err)

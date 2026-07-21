@@ -60,13 +60,14 @@ jobs:
           go test "${pkgs[@]}" -count=1
           go test ./internal/dataplane/ebpf -run '^$' -count=1
           go test ./internal/dataplane/ebpf \
-            -run '^Test(ErrorCleanupStack|BackgroundTaskTracker|AFXDPSocketClose|KernelUDPUDPFallbackSocketSetClose|CleanupQuarantinesSemantic|PersistedRouteStateMaps|WriteDataplaneStateAtomic|AttachRollsBackAfterStatePersistenceFailure|ApplySnapshotRestoresFlowsAfterStatePersistenceFailure|ApplySnapshotRewritesPreviousStateAfterCommittedSyncFailure|TIXTCPStatusRetriesFailedPrunePersistence|SyncPendingKernelTransportStateDoesNotAttachFastPathBeforeManagerAttach|ApplyNATSnapshotRestoresPreviousSnapshotAfterPersistenceFailure)' \
+            -run '^Test(ErrorCleanupStack|BackgroundTaskTracker|AFXDPSocketClose|KernelUDPUDPFallbackSocketSetClose|CleanupQuarantinesSemantic|PersistedRouteStateMaps|WriteDataplaneStateAtomic|AttachRollsBackAfterStatePersistenceFailure|ApplySnapshotRestoresFlowsAfterStatePersistenceFailure|ApplySnapshotRewritesPreviousStateAfterCommittedSyncFailure|TIXTCPStatusRetriesFailedPrunePersistence|SyncPendingKernelTransportStateDoesNotAttachFastPathBeforeManagerAttach|ApplyNATSnapshotRestoresPreviousSnapshotAfterPersistenceFailure|AppendManagerWarning|SumPerCPUCounterBatch|ResizeCounterSlices|KernelUDPOpenPlainBufferPool)' \
             -count=1
 
       - name: Go Error And Race Checks
         run: |
           go vet ./...
           go run github.com/kisielk/errcheck@v1.9.0 -blank -ignoretests ./...
+          go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -checks=all,-ST1000,-U1000 ./...
           go test -race -count=1 ./internal/configlog ./internal/daemon
 
       - name: Transactional Update Smoke

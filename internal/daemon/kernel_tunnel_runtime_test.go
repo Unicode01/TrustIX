@@ -171,20 +171,23 @@ func benchmarkMembershipDaemon(tb testing.TB, peers int) *Daemon {
 	}
 	for i := 0; i < peers; i++ {
 		ixID := core.IXID(fmt.Sprintf("ix-%05d", i))
+		advertisement := advertisementResponse{
+			DomainID:    "lab.local",
+			IXID:        string(ixID),
+			LANPrefixes: []string{fmt.Sprintf("10.%d.%d.0/24", i/256, i%256)},
+			Endpoints: []dataplane.EndpointMetadata{{
+				ID:        core.EndpointID(fmt.Sprintf("%s-udp", ixID)),
+				Peer:      ixID,
+				Transport: "udp",
+				Address:   fmt.Sprintf("192.0.2.%d:17041", 1+(i%250)),
+				Enabled:   true,
+			}},
+		}
 		daemon.members[ixID] = memberRecord{
-			Advertisement: advertisementResponse{
-				DomainID:    "lab.local",
-				IXID:        string(ixID),
-				LANPrefixes: []string{fmt.Sprintf("10.%d.%d.0/24", i/256, i%256)},
-				Endpoints: []dataplane.EndpointMetadata{{
-					ID:        core.EndpointID(fmt.Sprintf("%s-udp", ixID)),
-					Peer:      ixID,
-					Transport: "udp",
-					Address:   fmt.Sprintf("192.0.2.%d:17041", 1+(i%250)),
-					Enabled:   true,
-				}},
-			},
-			Direct: true,
+			Advertisement:       advertisement,
+			Direct:              true,
+			announcements:       advertisementAnnouncements(advertisement),
+			announcementsCached: true,
 		}
 	}
 	return daemon

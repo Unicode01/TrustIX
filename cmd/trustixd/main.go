@@ -7,10 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"runtime/pprof"
 	"syscall"
-	"time"
 
 	"trustix.local/trustix/internal/buildassets"
 	"trustix.local/trustix/internal/buildinfo"
@@ -87,12 +84,13 @@ func main() {
 		}
 	}
 
-	stopCPUProfile := startCPUProfileFromEnv()
-	defer stopCPUProfile()
+	stopProfiles := startProfilesFromEnv()
+	defer stopProfiles()
 
 	d, err := daemon.New(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "trustixd: %v\n", err)
+		stopProfiles()
 		os.Exit(1)
 	}
 
@@ -102,38 +100,7 @@ func main() {
 			return
 		}
 		fmt.Fprintf(os.Stderr, "trustixd: %v\n", err)
+		stopProfiles()
 		os.Exit(1)
-	}
-}
-
-func startCPUProfileFromEnv() func() {
-	dir := os.Getenv("TRUSTIX_CPU_PROFILE_DIR")
-	if dir == "" {
-		return func() {}
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "trustixd: create cpu profile dir %q: %v\n", dir, err)
-		return func() {}
-	}
-	name := fmt.Sprintf("trustixd-%d-%s.pprof", os.Getpid(), time.Now().UTC().Format("20060102T150405Z"))
-	path := filepath.Join(dir, name)
-	file, err := os.Create(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "trustixd: create cpu profile %q: %v\n", path, err)
-		return func() {}
-	}
-	if err := pprof.StartCPUProfile(file); err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close cpu profile %q: %w", path, closeErr))
-		}
-		fmt.Fprintf(os.Stderr, "trustixd: start cpu profile %q: %v\n", path, err)
-		return func() {}
-	}
-	fmt.Fprintf(os.Stderr, "trustixd cpu profile: %s\n", path)
-	return func() {
-		pprof.StopCPUProfile()
-		if err := file.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "trustixd: close cpu profile %q: %v\n", path, err)
-		}
 	}
 }

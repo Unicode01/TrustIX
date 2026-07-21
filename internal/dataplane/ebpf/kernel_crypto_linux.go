@@ -29,10 +29,10 @@ func (manager *Manager) refreshKernelCryptoProbeLocked() {
 		manager.capabilities = append(manager.capabilities, "aes-gcm-software-fallback")
 	}
 	if !probe.CapabilityReady && probe.Reason != "" {
-		manager.warnings = append(manager.warnings, "tix_tcp kernel crypto capability unavailable: "+probe.Reason)
+		manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp kernel crypto capability unavailable: "+probe.Reason)
 	}
 	if probe.SelfTest != nil && probe.SelfTest.Attempted && !probe.SelfTest.Passed && probe.SelfTest.Reason != "" {
-		manager.warnings = append(manager.warnings, "tix_tcp kernel crypto verifier selftest failed: "+probe.SelfTest.Reason)
+		manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp kernel crypto verifier selftest failed: "+probe.SelfTest.Reason)
 	}
 }
 

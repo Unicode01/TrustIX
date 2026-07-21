@@ -24,7 +24,7 @@ type carrierRecvMmsgScratch struct {
 	addrs   []unix.RawSockaddrInet4
 	iovs    []unix.Iovec
 	msgs    []carrierRecvMMsgHdr
-	buffers [][]byte
+	buffers []*carrierBuffer
 	packet  []carrierReceivedPacket
 	from    []carrierReceivedPacket
 }
@@ -35,7 +35,7 @@ var carrierRecvMmsgPool = sync.Pool{
 			addrs:   make([]unix.RawSockaddrInet4, 0, carrierRecvMmsgMaxBatch),
 			iovs:    make([]unix.Iovec, 0, carrierRecvMmsgMaxBatch),
 			msgs:    make([]carrierRecvMMsgHdr, 0, carrierRecvMmsgMaxBatch),
-			buffers: make([][]byte, 0, carrierRecvMmsgMaxBatch),
+			buffers: make([]*carrierBuffer, 0, carrierRecvMmsgMaxBatch),
 			packet:  make([]carrierReceivedPacket, 0, carrierRecvMmsgMaxBatch),
 			from:    make([]carrierReceivedPacket, 0, carrierRecvMmsgMaxBatch),
 		}
@@ -109,7 +109,7 @@ func recvCarrierBatchMmsg(raw syscall.RawConn, scratch *carrierRecvMmsgScratch, 
 	for i := 0; i < n; i++ {
 		size := int(scratch.msgs[i].len)
 		buffer := scratch.buffers[i]
-		packet, err := decodeCarrierFrameView(buffer[:size])
+		packet, err := decodeCarrierFrameView(buffer.data[:size])
 		if err != nil {
 			putCarrierReadBuffer(buffer)
 			scratch.buffers[i] = nil
@@ -137,7 +137,7 @@ func recvCarrierBatchFromMmsg(raw syscall.RawConn, scratch *carrierRecvMmsgScrat
 	for i := 0; i < n; i++ {
 		size := int(scratch.msgs[i].len)
 		buffer := scratch.buffers[i]
-		packet, err := decodeCarrierFrameView(buffer[:size])
+		packet, err := decodeCarrierFrameView(buffer.data[:size])
 		if err != nil {
 			putCarrierReadBuffer(buffer)
 			scratch.buffers[i] = nil
@@ -174,8 +174,8 @@ func recvCarrierMmsgChunk(raw syscall.RawConn, scratch *carrierRecvMmsgScratch, 
 	for i := 0; i < max; i++ {
 		buffer := scratch.buffers[i]
 		msgs[i] = carrierRecvMMsgHdr{}
-		iovs[i].Base = &buffer[0]
-		iovs[i].SetLen(len(buffer))
+		iovs[i].Base = &buffer.data[0]
+		iovs[i].SetLen(len(buffer.data))
 		msgs[i].hdr.Iov = &iovs[i]
 		msgs[i].hdr.Iovlen = 1
 		if from {
@@ -220,7 +220,7 @@ func takeCarrierRecvMmsgScratch(size int, packetSize int) *carrierRecvMmsgScratc
 		scratch.msgs = scratch.msgs[:size]
 	}
 	if cap(scratch.buffers) < size {
-		scratch.buffers = make([][]byte, size)
+		scratch.buffers = make([]*carrierBuffer, size)
 	} else {
 		scratch.buffers = scratch.buffers[:size]
 	}

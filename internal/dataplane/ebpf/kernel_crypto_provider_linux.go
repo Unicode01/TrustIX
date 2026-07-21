@@ -163,7 +163,7 @@ func (manager *Manager) initKernelCryptoProviderMapLocked() {
 	})
 	if err != nil {
 		manager.kernelCryptoFlowMapCreateErrors++
-		manager.warnings = append(manager.warnings, "tix_tcp kernel crypto flow map unavailable: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp kernel crypto flow map unavailable: "+err.Error())
 		return
 	}
 	manager.kernelCryptoFlowMap = flowMap
@@ -174,7 +174,7 @@ func (manager *Manager) initKernelCryptoProviderMapLocked() {
 		provider, err = loadKernelCryptoProviderObject()
 		if err != nil {
 			manager.kernelCryptoProviderLoadErrors++
-			manager.warnings = append(manager.warnings, "tix_tcp kernel crypto ctx provider unavailable: "+summarizeKernelCryptoProviderError(err))
+			manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp kernel crypto ctx provider unavailable: "+summarizeKernelCryptoProviderError(err))
 		} else {
 			manager.kernelCryptoProvider = provider
 			manager.addCapabilityLocked("tix-tcp-kernel-crypto-ctx-provider")
@@ -189,7 +189,7 @@ func (manager *Manager) initKernelCryptoProviderMapLocked() {
 	provider, err = loadKernelCryptoDirectSlotProviderMaps()
 	if err != nil {
 		manager.kernelCryptoProviderLoadErrors++
-		manager.warnings = append(manager.warnings, "tix_tcp kernel crypto direct-slot provider unavailable: "+err.Error())
+		manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp kernel crypto direct-slot provider unavailable: "+err.Error())
 		return
 	}
 	manager.kernelCryptoProvider = provider
@@ -261,14 +261,14 @@ func (manager *Manager) deleteKernelCryptoFlowNamespaceLocked(namespace uint8, f
 	}
 	if manager.kernelCryptoProvider != nil {
 		if err := manager.kernelCryptoProvider.DeleteKeys(keys); err != nil {
-			manager.warnings = append(manager.warnings, "delete tix_tcp kernel crypto ctx flow: "+summarizeKernelCryptoProviderError(err))
+			manager.warnings = appendManagerWarning(manager.warnings, "delete tix_tcp kernel crypto ctx flow: "+summarizeKernelCryptoProviderError(err))
 		}
 	}
 	for _, key := range keys {
 		if slot, ok := manager.kernelCryptoCtxSlots[key]; ok {
 			if manager.kernelCryptoProvider != nil {
 				if err := manager.kernelCryptoProvider.clearDirectSlot(slot); err != nil {
-					manager.warnings = append(manager.warnings, "clear deleted kernel crypto direct slot: "+err.Error())
+					manager.warnings = appendManagerWarning(manager.warnings, "clear deleted kernel crypto direct slot: "+err.Error())
 					manager.backgroundTasks.Record("clear deleted kernel crypto direct slot", err)
 				}
 			}
@@ -277,7 +277,7 @@ func (manager *Manager) deleteKernelCryptoFlowNamespaceLocked(namespace uint8, f
 			if err := manager.kernelCryptoFlowMap.Delete(key); err == nil {
 				manager.kernelCryptoFlowMapDeletes++
 			} else if !errors.Is(err, cebpf.ErrKeyNotExist) {
-				manager.warnings = append(manager.warnings, "delete kernel crypto flow map entry: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "delete kernel crypto flow map entry: "+err.Error())
 				manager.backgroundTasks.Record("delete kernel crypto flow map entry", err)
 			}
 		}
@@ -293,18 +293,18 @@ func (manager *Manager) syncKernelCryptoDirectSlotsLocked(entries []kernelCrypto
 	for _, install := range entries {
 		enabled, directSlot, err := installKernelCryptoDirectSlot(install)
 		if err != nil {
-			manager.warnings = append(manager.warnings, err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, err.Error())
 			continue
 		}
 		if !enabled {
 			if err := manager.kernelCryptoProvider.clearDirectSlot(install.Slot); err != nil {
-				manager.warnings = append(manager.warnings, "clear TrustIX AEAD direct slot: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "clear TrustIX AEAD direct slot: "+err.Error())
 			}
 			continue
 		}
 		if err := manager.kernelCryptoProvider.publishDirectSlot(install, directSlot); err != nil {
 			cleanupErr := kernelmodule.AEADDirectClearKey("", directSlot)
-			manager.warnings = append(manager.warnings, "publish TrustIX AEAD direct slot: "+errors.Join(err, wrapEBPFOperation("clear unpublished TrustIX AEAD direct key", cleanupErr)).Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "publish TrustIX AEAD direct slot: "+errors.Join(err, wrapEBPFOperation("clear unpublished TrustIX AEAD direct key", cleanupErr)).Error())
 		}
 	}
 }
@@ -694,7 +694,7 @@ func (manager *Manager) installKernelCryptoDevicesLocked(namespace uint8, entrie
 		}
 		device, err := newKernelCryptoDevice(flow)
 		if err != nil {
-			manager.warnings = append(manager.warnings, kernelCryptoNamespaceName(namespace)+" AEAD batch device unavailable: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, kernelCryptoNamespaceName(namespace)+" AEAD batch device unavailable: "+err.Error())
 			continue
 		}
 		if old := devices[flowID]; old != nil {
@@ -1408,7 +1408,7 @@ func kernelCryptoSecureFrameMetadata(payload []byte, sequence uint64) (uint16, s
 	case kernelCryptoSuiteIDTrustIXAES128GCMX25519:
 		return suiteID, kernelCryptoSuiteAES128GCMX25519, binary.BigEndian.Uint64(header[8:16]), nil
 	case kernelCryptoSuiteIDTrustIXChaCha20Poly1305:
-		return 0, "", 0, fmt.Errorf(kernelCryptoChacha20Poly1305UnsupportedReason)
+		return 0, "", 0, errors.New(kernelCryptoChacha20Poly1305UnsupportedReason)
 	default:
 		return 0, "", 0, fmt.Errorf("kernel crypto frame suite id %d is not in the kernel provider schema", suiteID)
 	}
@@ -1430,18 +1430,18 @@ func (manager *Manager) probeKernelCryptoAEADCreateLocked() {
 	zeroKernelCryptoEntries(entries)
 	if err != nil {
 		manager.kernelCryptoAEADCreateErrors++
-		manager.warnings = append(manager.warnings, "tix_tcp kernel AEAD-GCM ctx create unavailable: "+summarizeKernelCryptoProviderError(err))
+		manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp kernel AEAD-GCM ctx create unavailable: "+summarizeKernelCryptoProviderError(err))
 		return
 	}
 	manager.kernelCryptoAEADCreateSuccesses++
 	manager.kernelCryptoAEADRoundTripAttempts++
 	roundTripErr := manager.kernelCryptoProvider.RoundTrip(probeKey)
 	if err := manager.kernelCryptoProvider.DeleteFlow(kernelCryptoSyntheticProbeFlowID); err != nil {
-		manager.warnings = append(manager.warnings, "tix_tcp kernel AEAD-GCM probe cleanup failed: "+summarizeKernelCryptoProviderError(err))
+		manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp kernel AEAD-GCM probe cleanup failed: "+summarizeKernelCryptoProviderError(err))
 	}
 	if roundTripErr != nil {
 		manager.kernelCryptoAEADRoundTripErrors++
-		manager.warnings = append(manager.warnings, "tix_tcp kernel AEAD-GCM roundtrip unavailable: "+summarizeKernelCryptoProviderError(roundTripErr))
+		manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp kernel AEAD-GCM roundtrip unavailable: "+summarizeKernelCryptoProviderError(roundTripErr))
 		return
 	}
 	manager.kernelCryptoAEADRoundTripSuccesses++

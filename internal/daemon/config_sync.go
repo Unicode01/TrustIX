@@ -838,7 +838,7 @@ func (daemon *Daemon) replaceConfigLogWithVerifiedSnapshot(ctx context.Context, 
 		return rollback(fmt.Errorf("read rejoined config log head: %w", err))
 	}
 	result.head = head
-	daemon.head = head
+	daemon.setConfigHead(head)
 	if _, err := daemon.applyLatestDomainTrustFromLogLocked(ctx); err != nil {
 		return rollback(err)
 	}
@@ -1008,7 +1008,7 @@ func (daemon *Daemon) appendVerifiedConfigEvents(ctx context.Context, events []c
 		daemon.requestRuntimeReconcile("config sync", err)
 		return appended, newCommittedConfigMutationError("config sync", err)
 	}
-	daemon.head = head
+	daemon.setConfigHead(head)
 	if _, err := daemon.applyLatestDomainTrustFromLogLocked(ctx); err != nil {
 		daemon.requestRuntimeReconcile("config sync", err)
 		return appended, newCommittedConfigMutationError("config sync", err)

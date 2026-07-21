@@ -935,10 +935,13 @@ func TestTIXTCPCompatControlHandshakeHasReceivePriority(t *testing.T) {
 
 	session.enqueue([]byte("dataplane-before-handshake"))
 	hello := []byte{'T', 'I', 'X', 'H', 1, 1, 'h'}
+	started := make(chan struct{})
 	go func() {
+		close(started)
 		time.Sleep(10 * time.Millisecond)
 		session.enqueueCompatPriority(hello)
 	}()
+	<-started
 
 	got, err := session.RecvPacket()
 	if err != nil {

@@ -616,8 +616,8 @@ func TestCarrierServerSessionEnqueueReassemblesFragments(t *testing.T) {
 			t.Fatalf("build wire: %v", err)
 		}
 		buffer := takeCarrierReadBuffer(len(wire))
-		copy(buffer, wire)
-		frame, err := decodeCarrierFrameView(buffer[:len(wire)])
+		copy(buffer.data, wire)
+		frame, err := decodeCarrierFrameView(buffer.data[:len(wire)])
 		if err != nil {
 			t.Fatalf("decode fragment: %v", err)
 		}
@@ -690,5 +690,27 @@ func TestCarrierServerSessionRejectsPacketsAboveMTU(t *testing.T) {
 	}
 	if got := session.Stats().Extra["iptunnel_mtu_drops"]; got != 1 {
 		t.Fatalf("mtu drops = %d, want 1", got)
+	}
+}
+
+func TestCarrierBufferPoolsReuseWithoutAllocations(t *testing.T) {
+	readBuffer := takeCarrierReadBuffer(2048)
+	putCarrierReadBuffer(readBuffer)
+	readAllocs := testing.AllocsPerRun(1000, func() {
+		buffer := takeCarrierReadBuffer(2048)
+		putCarrierReadBuffer(buffer)
+	})
+	if readAllocs != 0 {
+		t.Fatalf("read buffer pool allocations = %v, want 0", readAllocs)
+	}
+
+	reassemblyBuffer := takeCarrierReassemblyBuffer(48 * 1024)
+	putCarrierReassemblyBuffer(reassemblyBuffer)
+	reassemblyAllocs := testing.AllocsPerRun(1000, func() {
+		buffer := takeCarrierReassemblyBuffer(48 * 1024)
+		putCarrierReassemblyBuffer(buffer)
+	})
+	if reassemblyAllocs != 0 {
+		t.Fatalf("reassembly buffer pool allocations = %v, want 0", reassemblyAllocs)
 	}
 }

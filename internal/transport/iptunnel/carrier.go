@@ -50,21 +50,25 @@ type carrierReadBufferPoolBucket struct {
 	pool sync.Pool
 }
 
+type carrierBuffer struct {
+	data []byte
+}
+
 var carrierReadBufferPools = []carrierReadBufferPoolBucket{
-	{size: 2048, pool: sync.Pool{New: func() any { return make([]byte, 2048) }}},
-	{size: 4096, pool: sync.Pool{New: func() any { return make([]byte, 4096) }}},
-	{size: 16 * 1024, pool: sync.Pool{New: func() any { return make([]byte, 16*1024) }}},
-	{size: carrierMaxWire, pool: sync.Pool{New: func() any { return make([]byte, carrierMaxWire) }}},
+	{size: 2048},
+	{size: 4096},
+	{size: 16 * 1024},
+	{size: carrierMaxWire},
 }
 
 var carrierReassemblyBufferPools = []carrierReadBufferPoolBucket{
-	{size: 64 * 1024, pool: sync.Pool{New: func() any { return make([]byte, 64*1024) }}},
-	{size: 128 * 1024, pool: sync.Pool{New: func() any { return make([]byte, 128*1024) }}},
-	{size: 256 * 1024, pool: sync.Pool{New: func() any { return make([]byte, 256*1024) }}},
-	{size: carrierMaxPacket, pool: sync.Pool{New: func() any { return make([]byte, carrierMaxPacket) }}},
+	{size: 64 * 1024},
+	{size: 128 * 1024},
+	{size: 256 * 1024},
+	{size: carrierMaxPacket},
 }
 
-func takeCarrierReadBuffer(sizes ...int) []byte {
+func takeCarrierReadBuffer(sizes ...int) *carrierBuffer {
 	size := carrierMaxWire
 	if len(sizes) > 0 && sizes[0] > 0 {
 		size = carrierReadBufferSize(sizes[0])
@@ -74,32 +78,39 @@ func takeCarrierReadBuffer(sizes ...int) []byte {
 		if bucket.size < size {
 			continue
 		}
-		buf := bucket.pool.Get().([]byte)
-		if cap(buf) < bucket.size {
-			return make([]byte, bucket.size)
+		buffer, _ := bucket.pool.Get().(*carrierBuffer)
+		if buffer == nil {
+			buffer = &carrierBuffer{}
 		}
-		return buf[:bucket.size]
+		if cap(buffer.data) < bucket.size {
+			buffer.data = make([]byte, bucket.size)
+		} else {
+			buffer.data = buffer.data[:bucket.size]
+		}
+		return buffer
 	}
-	return make([]byte, carrierMaxWire)
+	return &carrierBuffer{data: make([]byte, carrierMaxWire)}
 }
 
-func putCarrierReadBuffer(buf []byte) {
-	if cap(buf) <= 0 {
+func putCarrierReadBuffer(buffer *carrierBuffer) {
+	if buffer == nil || cap(buffer.data) <= 0 {
 		return
 	}
 	for i := range carrierReadBufferPools {
 		bucket := &carrierReadBufferPools[i]
-		if cap(buf) == bucket.size {
-			bucket.pool.Put(buf[:bucket.size])
+		if cap(buffer.data) == bucket.size {
+			buffer.data = buffer.data[:bucket.size]
+			bucket.pool.Put(buffer)
 			return
 		}
 	}
-	if cap(buf) >= carrierMaxWire {
-		carrierReadBufferPools[len(carrierReadBufferPools)-1].pool.Put(buf[:carrierMaxWire])
+	if cap(buffer.data) >= carrierMaxWire {
+		buffer.data = buffer.data[:carrierMaxWire]
+		carrierReadBufferPools[len(carrierReadBufferPools)-1].pool.Put(buffer)
 	}
 }
 
-func takeCarrierReassemblyBuffer(size int) []byte {
+func takeCarrierReassemblyBuffer(size int) *carrierBuffer {
 	if size <= 0 {
 		size = 1
 	}
@@ -111,25 +122,31 @@ func takeCarrierReassemblyBuffer(size int) []byte {
 		if bucket.size < size {
 			continue
 		}
-		buf := bucket.pool.Get().([]byte)
-		if cap(buf) < bucket.size {
-			return make([]byte, size, bucket.size)
+		buffer, _ := bucket.pool.Get().(*carrierBuffer)
+		if buffer == nil {
+			buffer = &carrierBuffer{}
 		}
-		return buf[:size]
+		if cap(buffer.data) < bucket.size {
+			buffer.data = make([]byte, size, bucket.size)
+		} else {
+			buffer.data = buffer.data[:size]
+		}
+		return buffer
 	}
-	return make([]byte, size)
+	return &carrierBuffer{data: make([]byte, size)}
 }
 
-func putCarrierReassemblyBuffer(buf []byte) {
-	if cap(buf) <= 0 {
+func putCarrierReassemblyBuffer(buffer *carrierBuffer) {
+	if buffer == nil || cap(buffer.data) <= 0 {
 		return
 	}
 	for i := range carrierReassemblyBufferPools {
 		bucket := &carrierReassemblyBufferPools[i]
-		if cap(buf) != bucket.size {
+		if cap(buffer.data) != bucket.size {
 			continue
 		}
-		bucket.pool.Put(buf[:bucket.size])
+		buffer.data = buffer.data[:bucket.size]
+		bucket.pool.Put(buffer)
 		return
 	}
 }
@@ -261,8 +278,8 @@ type carrierBatchPacket struct {
 type carrierReceivedPacket struct {
 	payload    []byte
 	wireLen    int
-	buffer     []byte
-	reassembly []byte
+	buffer     *carrierBuffer
+	reassembly *carrierBuffer
 	addr       *net.UDPAddr
 	sequence   uint64
 	frameType  byte
@@ -286,7 +303,7 @@ type carrierFragmentAssembly struct {
 	totalLen int
 	received int
 	wireLen  int
-	data     []byte
+	data     *carrierBuffer
 	ranges   []carrierFragmentRange
 }
 
@@ -444,23 +461,6 @@ func normalizeVXLANConfigFields(cfg tunnelConfig) string {
 		fields = append(fields, "udp_checksum=false")
 	}
 	return strings.Join(fields, ",")
-}
-
-func legacyNormalizeVXLANConfig(raw string) string {
-	cfg, err := parseTunnelConfig(raw)
-	if err != nil {
-		return strings.TrimSpace(raw)
-	}
-	return fmt.Sprintf("local=%s,remote=%s,local_carrier=%s,remote_carrier=%s,port=%d,mtu=%d,vni=%d,vxlan_port=%d",
-		cfg.LocalUnderlay,
-		cfg.RemoteUnderlay,
-		cfg.LocalCarrier,
-		cfg.RemoteCarrier,
-		cfg.CarrierPort,
-		effectiveTunnelMTU(cfg.MTU),
-		effectiveVXLANVNI(cfg.VNI),
-		effectiveVXLANPort(cfg.VXLANPort),
-	)
 }
 
 func NormalizeTunnelConfig(raw string) string {
@@ -819,10 +819,6 @@ func carrierMaxFragmentPayloadForMTUWithMode(mtu int, kernelFragment bool) int {
 	return maxPayload
 }
 
-func carrierMaxFragmentPayloadForMTU(mtu int) int {
-	return carrierMaxFragmentPayloadForMTUWithMode(mtu, carrierKernelFragmentEnabled())
-}
-
 func carrierPacketFitsUnfragmentedWithMode(packetLen int, mtu int, kernelFragment bool) bool {
 	if kernelFragment {
 		return packetLen <= carrierMaxUnfragmentedPacket
@@ -831,19 +827,11 @@ func carrierPacketFitsUnfragmentedWithMode(packetLen int, mtu int, kernelFragmen
 		packetLen+carrierHeaderLen <= carrierUDPPayloadSizeForMTU(mtu)
 }
 
-func carrierPacketFitsUnfragmented(packetLen int, mtu int) bool {
-	return carrierPacketFitsUnfragmentedWithMode(packetLen, mtu, carrierKernelFragmentEnabled())
-}
-
 func carrierReadWireSizeForMTUWithMode(mtu int, kernelFragment bool) int {
 	if kernelFragment {
 		return carrierMaxUDPPayload
 	}
 	return carrierUDPPayloadSizeForMTU(mtu)
-}
-
-func carrierReadWireSizeForMTU(mtu int) int {
-	return carrierReadWireSizeForMTUWithMode(mtu, carrierKernelFragmentEnabled())
 }
 
 func carrierReceiveWireSize() int {
@@ -857,10 +845,6 @@ func carrierMaxUnfragmentedPayloadForMTUWithMode(mtu int, kernelFragment bool) i
 		return carrierMaxUnfragmentedPacket
 	}
 	return max(0, carrierUDPPayloadSizeForMTU(mtu)-carrierHeaderLen)
-}
-
-func carrierMaxUnfragmentedPayloadForMTU(mtu int) int {
-	return carrierMaxUnfragmentedPayloadForMTUWithMode(mtu, carrierKernelFragmentEnabled())
 }
 
 func boolUint64(value bool) uint64 {
@@ -882,10 +866,6 @@ func carrierPacketFragmentCountWithMode(packetLen int, mtu int, kernelFragment b
 		return 0, fmt.Errorf("tunnel carrier mtu %d cannot carry fragment header", mtu)
 	}
 	return (packetLen + maxPayload - 1) / maxPayload, nil
-}
-
-func carrierPacketFragmentCount(packetLen int, mtu int) (int, error) {
-	return carrierPacketFragmentCountWithMode(packetLen, mtu, carrierKernelFragmentEnabled())
 }
 
 func buildCarrierFragmentPacketsWithMode(packetScratch []carrierBatchPacket, headerArena []byte, pkt []byte, sequence uint64, mtu int, kernelFragment bool) ([]carrierBatchPacket, []byte, error) {
@@ -972,7 +952,7 @@ func (reassembler *carrierReassembler) accept(packet carrierReceivedPacket) (car
 	delete(reassembler.assemblies, packet.sequence)
 	reassembler.removeOrder(packet.sequence)
 	return carrierReceivedPacket{
-		payload:    assembly.data[:assembly.totalLen],
+		payload:    assembly.data.data[:assembly.totalLen],
 		wireLen:    assembly.wireLen,
 		reassembly: assembly.data,
 		sequence:   packet.sequence,
@@ -994,7 +974,7 @@ func (assembly *carrierFragmentAssembly) add(start int, payload []byte) (int, bo
 		}
 		return 0, false
 	}
-	copy(assembly.data[start:end], payload)
+	copy(assembly.data.data[start:end], payload)
 	assembly.ranges = append(assembly.ranges, carrierFragmentRange{start: start, end: end})
 	sort.Slice(assembly.ranges, func(i, j int) bool {
 		return assembly.ranges[i].start < assembly.ranges[j].start
@@ -1225,10 +1205,6 @@ func carrierPacketBatchNeedsFragmentationWithMode(pkts [][]byte, mtu int, kernel
 	return false
 }
 
-func carrierPacketBatchNeedsFragmentation(pkts [][]byte, mtu int) bool {
-	return carrierPacketBatchNeedsFragmentationWithMode(pkts, mtu, carrierKernelFragmentEnabled())
-}
-
 func (session *carrier) sendPacketsContiguous(pkts [][]byte) error {
 	totalWire := 0
 	for _, pkt := range pkts {
@@ -1335,7 +1311,7 @@ func (session *carrier) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 			session.recvErr = err
 		}
 		packets := make([][]byte, 0, len(completed))
-		reassemblies := make([][]byte, 0, len(completed))
+		reassemblies := make([]*carrierBuffer, 0, len(completed))
 		for _, packet := range completed {
 			packets = append(packets, packet.payload)
 			if packet.reassembly != nil {
@@ -1346,7 +1322,7 @@ func (session *carrier) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 	}
 }
 
-func releaseCarrierReceivedBatch(release func(), reassemblies [][]byte) func() {
+func releaseCarrierReceivedBatch(release func(), reassemblies []*carrierBuffer) func() {
 	if release == nil && len(reassemblies) == 0 {
 		return nil
 	}
@@ -1390,22 +1366,6 @@ func completedWireLen(packets []carrierReceivedPacket) uint64 {
 		total += uint64(packet.wireLen)
 	}
 	return total
-}
-
-func (session *carrier) readCarrierPacket() ([]byte, int, []byte, error) {
-	buf := takeCarrierReadBuffer(carrierReceiveWireSize())
-	n, err := session.conn.Read(buf)
-	if err != nil {
-		putCarrierReadBuffer(buf)
-		return nil, 0, nil, err
-	}
-	payload, _, err := decodeCarrierView(buf[:n])
-	if err != nil {
-		session.decodeErrors.Add(1)
-		putCarrierReadBuffer(buf)
-		return nil, 0, nil, err
-	}
-	return payload, n, buf, nil
 }
 
 func (session *carrier) recordReceivedPackets(packets uint64, bytes uint64) {

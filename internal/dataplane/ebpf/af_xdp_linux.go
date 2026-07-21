@@ -198,7 +198,7 @@ func (manager *Manager) attachTIXTCPFastPathLocked(ctx context.Context, spec dat
 		return nil
 	}
 	if spec.UnderlayIface == "" {
-		manager.warnings = append(manager.warnings, "tix_tcp AF_XDP disabled: lan.underlay_iface is not configured")
+		manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp AF_XDP disabled: lan.underlay_iface is not configured")
 		return nil
 	}
 	link, err := netlink.LinkByName(spec.UnderlayIface)
@@ -230,7 +230,7 @@ func (manager *Manager) attachTIXTCPFastPathLocked(ctx context.Context, spec dat
 		}
 	}
 	if fastPath.loadWarning != "" {
-		manager.warnings = append(manager.warnings, fastPath.loadWarning)
+		manager.warnings = appendManagerWarning(manager.warnings, fastPath.loadWarning)
 	}
 	manager.tixTCPFastPath = fastPath
 	fastPath.start(manager)
@@ -1879,7 +1879,7 @@ func (fastPath *tixTCPFastPath) readLoop(manager *Manager, socket *afXDPSocket) 
 			}
 			if fastPath.Ready() {
 				manager.mu.Lock()
-				manager.warnings = append(manager.warnings, "tix_tcp AF_XDP receive stopped: "+err.Error())
+				manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp AF_XDP receive stopped: "+err.Error())
 				manager.mu.Unlock()
 			}
 			return
@@ -1900,7 +1900,7 @@ func (fastPath *tixTCPFastPath) readLoop(manager *Manager, socket *afXDPSocket) 
 			if err != nil {
 				if fastPath.Ready() {
 					manager.mu.Lock()
-					manager.warnings = append(manager.warnings, "tix_tcp AF_XDP receive stopped: "+err.Error())
+					manager.warnings = appendManagerWarning(manager.warnings, "tix_tcp AF_XDP receive stopped: "+err.Error())
 					manager.mu.Unlock()
 				}
 				socket.backgroundErrors.Record("recycle tix_tcp AF_XDP frame after receive failure", rxFrames[i].Recycle())
@@ -1981,7 +1981,7 @@ func (fastPath *tixTCPFastPath) decodeRXFrame(manager *Manager, socket *afXDPSoc
 					stack = stack[:4096]
 				}
 				manager.mu.Lock()
-				manager.warnings = append(manager.warnings, fmt.Sprintf("tix_tcp AF_XDP RX decode recovered: %v\n%s", recovered, stack))
+				manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("tix_tcp AF_XDP RX decode recovered: %v\n%s", recovered, stack))
 				manager.mu.Unlock()
 			}
 			recycleMode = afXDPRXRecycleNow
@@ -2293,6 +2293,10 @@ type kernelUDPOpenPlainPool struct {
 	pool sync.Pool
 }
 
+type kernelUDPOpenPlainBufferHolder struct {
+	data []byte
+}
+
 var kernelUDPOpenPlainPools = []kernelUDPOpenPlainPool{
 	{size: 1024},
 	{size: 2048},
@@ -2316,23 +2320,24 @@ func kernelUDPOpenPlainBuffer(enabled bool, payloadLen int) ([]byte, func()) {
 		if plainLen > pool.size {
 			continue
 		}
-		var buf []byte
-		if value := pool.pool.Get(); value != nil {
-			buf = value.([]byte)
+		holder, _ := pool.pool.Get().(*kernelUDPOpenPlainBufferHolder)
+		if holder == nil {
+			holder = &kernelUDPOpenPlainBufferHolder{}
 		}
-		if cap(buf) < pool.size {
-			buf = make([]byte, pool.size)
+		if cap(holder.data) < pool.size {
+			holder.data = make([]byte, pool.size)
 		}
-		buf = buf[:plainLen]
+		holder.data = holder.data[:plainLen]
 		released := false
 		release := func() {
 			if released {
 				return
 			}
 			released = true
-			pool.pool.Put(buf[:pool.size])
+			holder.data = holder.data[:pool.size]
+			pool.pool.Put(holder)
 		}
-		return buf, release
+		return holder.data, release
 	}
 	return make([]byte, plainLen), nil
 }

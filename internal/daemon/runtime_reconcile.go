@@ -122,7 +122,7 @@ func (daemon *Daemon) reconcileRuntimeState(ctx context.Context) error {
 	} else if head, err := daemon.store.Head(); err != nil {
 		headErr = err
 	} else {
-		daemon.head = head
+		daemon.setConfigHead(head)
 	}
 	_, trustErr := daemon.applyLatestDomainTrustFromLogLocked(ctx)
 	admissionErr := daemon.afterAdmissionStateChangedLocked(ctx)

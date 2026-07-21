@@ -371,7 +371,7 @@ func (daemon *Daemon) applyTrustConfigLocked(ctx context.Context, trust config.T
 			return false, fmt.Errorf("append domain trust event: %w", err)
 		}
 	}
-	daemon.head = plannedHead
+	daemon.setConfigHead(plannedHead)
 	daemon.desired.Trust = trust
 	if err := daemon.afterTrustStateChangedLocked(ctx); err != nil {
 		daemon.requestRuntimeReconcile("domain trust mutation", err)

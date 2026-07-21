@@ -70,6 +70,7 @@ type Daemon struct {
 	logPath              string
 	dataDirLock          heldDataDirLock
 	head                 configlog.Head
+	configHeadSeq        atomic.Uint64
 	startedAt            time.Time
 	runCtx               context.Context
 	configMu             sync.RWMutex
@@ -834,7 +835,7 @@ func (daemon *Daemon) loadAndApply(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	daemon.head = head
+	daemon.setConfigHead(head)
 	if _, err := daemon.applyLatestDomainTrustFromLogLocked(ctx); err != nil {
 		return err
 	}

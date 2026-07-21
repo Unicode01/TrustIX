@@ -491,7 +491,7 @@ func (manager *Manager) resolveIPv4Neighbor(linkIndex int, remoteIP netip.Addr) 
 			}
 			return peerMAC, nil
 		} else if warning != "" {
-			manager.warnings = append(manager.warnings, warning)
+			manager.warnings = appendManagerWarning(manager.warnings, warning)
 		}
 	}
 	if manager.neighborCache != nil {
@@ -571,7 +571,7 @@ func (manager *Manager) resolveIPv4NeighborVia(linkIndex int, remoteIP netip.Add
 				}
 				return peerMAC, nil
 			} else if warning != "" {
-				manager.warnings = append(manager.warnings, warning)
+				manager.warnings = appendManagerWarning(manager.warnings, warning)
 			}
 		}
 	}

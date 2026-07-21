@@ -444,7 +444,7 @@ func TestLANIPv4TCPGSOScatterRunRespectsConfiguredLimits(t *testing.T) {
 func TestPrepareLANIPv4TCPGSOScatterHeaderLeavesPacketUnchanged(t *testing.T) {
 	packet := lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xaa}, 700), 0x10, 20)
 	original := append([]byte(nil), packet...)
-	_, meta, _, ok := lanIPv4TCPGSOScatterRun([][]byte{
+	_, _, _, ok := lanIPv4TCPGSOScatterRun([][]byte{
 		packet,
 		lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xbb}, 700), 0x10, 20),
 	}, 1500)

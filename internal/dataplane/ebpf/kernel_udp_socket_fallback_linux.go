@@ -149,7 +149,7 @@ func (manager *Manager) syncKernelUDPUDPFallbackSocketsLocked(ports map[uint16]s
 	closeErr := closeKernelUDPUDPFallbackSocketSet(closeList)
 	if len(opened) > 0 && manager.kernelUDPRawFD >= 0 {
 		if err := unix.Close(manager.kernelUDPRawFD); err != nil {
-			manager.warnings = append(manager.warnings, "close kernel_udp raw UDP socket after UDP socket fallback attach: "+err.Error())
+			manager.warnings = appendManagerWarning(manager.warnings, "close kernel_udp raw UDP socket after UDP socket fallback attach: "+err.Error())
 		}
 		manager.kernelUDPRawFD = -1
 	}

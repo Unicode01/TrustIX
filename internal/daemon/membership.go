@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,11 +68,13 @@ type cachedAdvertisementPush struct {
 }
 
 type memberRecord struct {
-	Advertisement advertisementResponse `json:"advertisement"`
-	LastSeen      time.Time             `json:"last_seen"`
-	Source        string                `json:"source,omitempty"`
-	Direct        bool                  `json:"direct"`
-	Via           core.IXID             `json:"via,omitempty"`
+	Advertisement       advertisementResponse `json:"advertisement"`
+	LastSeen            time.Time             `json:"last_seen"`
+	Source              string                `json:"source,omitempty"`
+	Direct              bool                  `json:"direct"`
+	Via                 core.IXID             `json:"via,omitempty"`
+	announcements       []announcedPrefix
+	announcementsCached bool
 }
 
 type pendingMemberRecord struct {
@@ -121,12 +124,11 @@ type persistedPendingMembers struct {
 }
 
 type prefixOwnerIndex struct {
-	v4 prefixOwnerTrieNode
-	v6 prefixOwnerTrieNode
+	nodes []prefixOwnerTrieNode
 }
 
 type prefixOwnerTrieNode struct {
-	child [2]*prefixOwnerTrieNode
+	child [2]uint32
 
 	terminalSet   bool
 	terminalOwner core.IXID
@@ -148,6 +150,13 @@ type runtimeDataplaneProjection struct {
 
 type runtimeProjectionOptions struct {
 	IncludeRouteCandidates bool
+	IncludeRoutePolicy     bool
+	IncludeNAT             bool
+}
+
+type runtimeProjectionMember struct {
+	ID     core.IXID
+	Record memberRecord
 }
 
 type routePolicyStatus struct {
@@ -257,10 +266,12 @@ func (daemon *Daemon) refreshLocalAdvertisement() error {
 	defer daemon.membershipMu.Unlock()
 	daemon.localAd = advertisement
 	daemon.members[daemon.desired.IX.ID] = memberRecord{
-		Advertisement: advertisement,
-		LastSeen:      time.Now().UTC(),
-		Source:        "local",
-		Direct:        true,
+		Advertisement:       advertisement,
+		LastSeen:            time.Now().UTC(),
+		Source:              "local",
+		Direct:              true,
+		announcements:       advertisementAnnouncements(advertisement),
+		announcementsCached: true,
 	}
 	return nil
 }
@@ -338,10 +349,6 @@ func endpointPublishPolicyConfigured(endpoints []config.EndpointConfig) bool {
 	return false
 }
 
-func (daemon *Daemon) advertisedControlAPI() string {
-	return daemon.advertisedControlAPIForDesired(daemon.desired)
-}
-
 func (daemon *Daemon) advertisedControlAPIForDesired(desired config.Desired) string {
 	if strings.EqualFold(strings.TrimSpace(desired.IX.ControlAPIPublish), "disabled") {
 		return ""
@@ -356,10 +363,6 @@ func (daemon *Daemon) advertisedControlAPIForDesired(desired config.Desired) str
 		return daemon.cfg.PeerAPIAddr
 	}
 	return "https://" + daemon.cfg.PeerAPIAddr
-}
-
-func (daemon *Daemon) localManagementAdvertisement() *managementAdvertisement {
-	return daemon.localManagementAdvertisementForDesired(daemon.desired)
 }
 
 func (daemon *Daemon) localManagementAdvertisementForDesired(desired config.Desired) *managementAdvertisement {
@@ -421,10 +424,6 @@ func managementAdvertisementGatewayAddr(desired config.Desired) (netip.Addr, boo
 		return netip.Addr{}, false
 	}
 	return prefix.Addr(), true
-}
-
-func (daemon *Daemon) localAdvertisementEndpoints() []dataplane.EndpointMetadata {
-	return daemon.localAdvertisementEndpointsForTarget(controlTarget{})
 }
 
 func (daemon *Daemon) localAdvertisementEndpointsForTarget(target controlTarget) []dataplane.EndpointMetadata {
@@ -868,11 +867,13 @@ func (daemon *Daemon) mergeAdvertisementWithOptions(advertisement advertisementR
 		return runtimeChanged, nil
 	}
 	daemon.members[ixID] = memberRecord{
-		Advertisement: advertisement,
-		LastSeen:      lastSeen,
-		Source:        recordSource,
-		Direct:        direct,
-		Via:           via,
+		Advertisement:       advertisement,
+		LastSeen:            lastSeen,
+		Source:              recordSource,
+		Direct:              direct,
+		Via:                 via,
+		announcements:       advertisementAnnouncements(advertisement),
+		announcementsCached: true,
 	}
 	if _, ok := daemon.pendingMembers[ixID]; ok {
 		delete(daemon.pendingMembers, ixID)
@@ -977,21 +978,18 @@ func (daemon *Daemon) runtimeSnapshotEpoch() uint64 {
 }
 
 func (daemon *Daemon) runtimeSnapshotEpochLocked() uint64 {
-	return daemon.head.Seq + daemon.runtimeEpoch
+	return daemon.configHeadSeq.Load() + daemon.runtimeEpoch
 }
 
 func (daemon *Daemon) runtimeDataplaneState() ([]routing.Route, []dataplane.PeerMetadata, []dataplane.EndpointMetadata) {
-	daemon.membershipMu.RLock()
-	defer daemon.membershipMu.RUnlock()
-	projection := daemon.runtimeDataplaneProjectionLockedWithOptions(runtimeProjectionOptions{})
+	members, _ := daemon.runtimeProjectionMembers()
+	projection := daemon.runtimeDataplaneProjectionWithOptions(members, runtimeProjectionOptions{})
 	return projection.Routes, projection.Peers, projection.Endpoints
 }
 
 func (daemon *Daemon) runtimeDataplaneSnapshot() dataplane.Snapshot {
-	daemon.membershipMu.RLock()
-	projection := daemon.runtimeDataplaneProjectionLockedWithOptions(runtimeProjectionOptions{})
-	epoch := daemon.runtimeSnapshotEpochLocked()
-	daemon.membershipMu.RUnlock()
+	members, epoch := daemon.runtimeProjectionMembers()
+	projection := daemon.runtimeDataplaneProjectionWithOptions(members, runtimeProjectionOptions{IncludeNAT: true})
 	return dataplane.Snapshot{
 		Epoch:         epoch,
 		Routes:        projection.Routes,
@@ -1018,9 +1016,11 @@ func (daemon *Daemon) dataplanePacketPolicy() dataplane.PacketPolicy {
 }
 
 func (daemon *Daemon) runtimeRoutePolicyStatus() routePolicyStatus {
-	daemon.membershipMu.RLock()
-	projection := daemon.runtimeDataplaneProjectionLocked()
-	daemon.membershipMu.RUnlock()
+	members, _ := daemon.runtimeProjectionMembers()
+	projection := daemon.runtimeDataplaneProjectionWithOptions(members, runtimeProjectionOptions{
+		IncludeRouteCandidates: true,
+		IncludeRoutePolicy:     true,
+	})
 
 	decisions := append(exportRoutePolicyDecisions(daemon.desired), projection.RoutePolicy...)
 	sortRoutePolicyDecisions(decisions)
@@ -1034,9 +1034,8 @@ func (daemon *Daemon) runtimeRoutePolicyStatus() routePolicyStatus {
 }
 
 func (daemon *Daemon) runtimeRoutePolicyDecisions() []routePolicyDecision {
-	daemon.membershipMu.RLock()
-	projection := daemon.runtimeDataplaneProjectionLockedWithOptions(runtimeProjectionOptions{})
-	daemon.membershipMu.RUnlock()
+	members, _ := daemon.runtimeProjectionMembers()
+	projection := daemon.runtimeDataplaneProjectionWithOptions(members, runtimeProjectionOptions{IncludeRoutePolicy: true})
 
 	decisions := append(exportRoutePolicyDecisions(daemon.desired), projection.RoutePolicy...)
 	sortRoutePolicyDecisions(decisions)
@@ -1098,38 +1097,62 @@ func parseNamedPagination(query url.Values, offsetName, limitName string, defaul
 	return offset, limit, nil
 }
 
-func (daemon *Daemon) runtimeDataplaneProjectionLocked() runtimeDataplaneProjection {
-	return daemon.runtimeDataplaneProjectionLockedWithOptions(runtimeProjectionOptions{IncludeRouteCandidates: true})
+func (daemon *Daemon) runtimeProjectionMembers() ([]runtimeProjectionMember, uint64) {
+	daemon.membershipMu.RLock()
+	members := make([]runtimeProjectionMember, 0, len(daemon.members))
+	for ixID, record := range daemon.members {
+		if ixID != daemon.desired.IX.ID {
+			members = append(members, runtimeProjectionMember{ID: ixID, Record: record})
+		}
+	}
+	epoch := daemon.runtimeSnapshotEpochLocked()
+	daemon.membershipMu.RUnlock()
+	sort.Slice(members, func(i, j int) bool {
+		return members[i].ID < members[j].ID
+	})
+	return members, epoch
 }
 
-func (daemon *Daemon) runtimeDataplaneProjectionLockedWithOptions(options runtimeProjectionOptions) runtimeDataplaneProjection {
+func (daemon *Daemon) runtimeDataplaneProjectionWithOptions(members []runtimeProjectionMember, options runtimeProjectionOptions) runtimeDataplaneProjection {
+	totalDynamicEndpoints := 0
+	totalAnnouncements := 0
+	for _, member := range members {
+		totalDynamicEndpoints += len(member.Record.Advertisement.Endpoints)
+		totalAnnouncements += len(member.Record.Advertisement.AnnouncedPrefixes) + len(member.Record.Advertisement.LANPrefixes)
+	}
 	routes := routesFromConfig(daemon.desired)
 	routes = daemon.appendLocalLANRoutes(routes)
 	routes = daemon.appendDeviceAccessRoutes(routes)
+	routes = slices.Grow(routes, totalAnnouncements)
 	var routeCandidates []routeCandidate
 	if options.IncludeRouteCandidates {
 		routeCandidates = daemon.routeCandidatesForRuntimeRoutes(routes)
 	}
-	addRouteCandidate := func(candidate routeCandidate) {
-		if options.IncludeRouteCandidates {
-			routeCandidates = append(routeCandidates, candidate)
-		}
-	}
 	peers := peersFromConfig(daemon.desired)
 	peers = daemon.appendDeviceAccessPeers(peers)
+	peers = slices.Grow(peers, len(members))
 	endpoints := daemon.endpointsFromConfig(daemon.desired)
-	routePolicy := make([]routePolicyDecision, 0, len(daemon.members))
+	endpoints = slices.Grow(endpoints, totalDynamicEndpoints)
+	var routePolicy []routePolicyDecision
+	if options.IncludeRoutePolicy {
+		routePolicy = make([]routePolicyDecision, 0, totalAnnouncements)
+	}
+	addRoutePolicyDecision := func(decision routePolicyDecision) {
+		if options.IncludeRoutePolicy {
+			routePolicy = append(routePolicy, decision)
+		}
+	}
 	importPrefixes := parsedPolicyPrefixes(daemon.desired.RoutePolicy.ImportPrefixes)
 	importTransitRoutes := config.RoutePolicyImportTransitRoutesEnabled(daemon.desired.RoutePolicy)
 	metric := daemon.dynamicRouteMetric()
-	staticPeers := make(map[core.IXID]struct{}, len(daemon.desired.Peers))
+	staticPeers := make(map[core.IXID]config.PeerConfig, len(daemon.desired.Peers))
 	for _, peer := range daemon.desired.Peers {
-		staticPeers[peer.ID] = struct{}{}
+		staticPeers[peer.ID] = peer
 	}
 
 	localAdvertise := config.EffectiveLANAdvertise(daemon.desired)
 	knownPrefixes := make(map[string]knownRoutePrefix, len(routes)+len(localAdvertise))
-	claimedPrefixes := newPrefixOwnerIndex()
+	claimedPrefixes := newPrefixOwnerIndex(len(routes) + len(localAdvertise) + totalAnnouncements)
 	for _, route := range routes {
 		recordKnownRoutePrefix(knownPrefixes, string(route.Prefix), route.Source)
 		if prefix, err := route.Prefix.Parse(); err == nil {
@@ -1155,40 +1178,90 @@ func (daemon *Daemon) runtimeDataplaneProjectionLockedWithOptions(options runtim
 		}
 	}
 
-	ids := make([]string, 0, len(daemon.members))
-	for ixID := range daemon.members {
-		if ixID == daemon.desired.IX.ID {
-			continue
-		}
-		ids = append(ids, string(ixID))
+	endpointUsability := newEndpointTransportUsability(daemon)
+	usableNextHops := make(map[core.IXID]bool, len(staticPeers)+len(members)+1)
+	staticPeerUsable := make(map[core.IXID]bool, len(staticPeers))
+	for ixID := range staticPeers {
+		usableNextHops[ixID] = false
+		staticPeerUsable[ixID] = false
 	}
-	sort.Strings(ids)
-	for _, rawID := range ids {
-		ixID := core.IXID(rawID)
-		record := daemon.members[ixID]
+	for _, member := range members {
+		usableNextHops[member.ID] = false
+	}
+	usableNextHops[daemon.desired.IX.ID] = true
+	for _, endpoint := range endpoints {
+		if endpoint.Peer != "" && endpoint.Enabled && endpointUsability.usable(endpoint) {
+			usableNextHops[endpoint.Peer] = true
+			if _, static := staticPeers[endpoint.Peer]; static {
+				staticPeerUsable[endpoint.Peer] = true
+			}
+		}
+	}
+	for _, member := range members {
+		ixID := member.ID
+		record := member.Record
 		advertisement := record.Advertisement
-		if _, exists := staticPeers[ixID]; !exists {
+		staticPeer, static := staticPeers[ixID]
+		if !static {
 			peers = append(peers, dataplane.PeerMetadata{
 				ID:       ixID,
 				DomainID: core.DomainID(advertisement.DomainID),
 				Trusted:  true,
 			})
-			endpoints = append(endpoints, daemon.localizeAdvertisementEndpoints(advertisement)...)
-		} else {
-			endpoints = append(endpoints, daemon.localizedAdvertisementEndpointsNotConfigured(ixID, advertisement)...)
 		}
+		var configuredEndpoints map[core.EndpointID]struct{}
+		if static {
+			configuredEndpoints = make(map[core.EndpointID]struct{}, len(staticPeer.Endpoints))
+			for _, endpoint := range staticPeer.Endpoints {
+				configuredEndpoints[endpoint.Name] = struct{}{}
+			}
+		}
+		endpointStart := len(endpoints)
+		for _, endpoint := range advertisement.Endpoints {
+			localized, ok := daemon.localizeAdvertisementEndpoint(endpoint)
+			if !ok {
+				continue
+			}
+			if _, configured := configuredEndpoints[localized.ID]; configured {
+				continue
+			}
+			endpoints = append(endpoints, localized)
+		}
+		for _, endpoint := range endpoints[endpointStart:] {
+			if endpoint.Enabled && endpointUsability.usable(endpoint) {
+				usableNextHops[ixID] = true
+				break
+			}
+		}
+	}
+	hasUsableNextHop := func(nextHop core.IXID) bool {
+		if usable, known := usableNextHops[nextHop]; known {
+			return usable
+		}
+		peer, ok := daemon.deviceAccessPeerConfigByID(nextHop)
+		usable := ok && endpointUsability.peerConfigUsable(nextHop, peer)
+		usableNextHops[nextHop] = usable
+		return usable
+	}
+	for _, member := range members {
+		ixID := member.ID
+		record := member.Record
+		advertisement := record.Advertisement
 		managementVIP := managementVIPFromAdvertisement(advertisement)
 		managementVIPPrefix := netip.Prefix{}
 		if managementVIP.IsValid() && managementVIP.Is4() {
 			managementVIPPrefix = netip.PrefixFrom(managementVIP, 32)
 		}
-		announcements := advertisementAnnouncements(advertisement)
-		managementVIPCovered := managementVIPCoveredByAdvertisedPrefix(managementVIPPrefix, announcementPrefixStrings(announcements))
+		announcements := record.announcements
+		if !record.announcementsCached {
+			announcements = advertisementAnnouncements(advertisement)
+		}
+		managementVIPCovered := managementVIPCoveredByAnnouncements(managementVIPPrefix, announcements)
 		for _, announcement := range announcements {
 			rawPrefix := strings.TrimSpace(string(announcement.Prefix))
 			prefix, err := netip.ParsePrefix(rawPrefix)
 			if err != nil {
-				routePolicy = append(routePolicy, routePolicyDecision{
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      announcement.OriginIX,
 					OriginIX:  announcement.OriginIX,
@@ -1198,15 +1271,19 @@ func (daemon *Daemon) runtimeDataplaneProjectionLockedWithOptions(options runtim
 					Reason:    "invalid_prefix",
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(rawPrefix), "", routing.RouteUnicast, metric+announcement.Metric, "reject", "invalid_prefix", "down"))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, core.Prefix(rawPrefix), "", routing.RouteUnicast, metric+announcement.Metric, "reject", "invalid_prefix", "down"))
+				}
 				continue
 			}
 			prefix = prefix.Masked()
+			prefixString := prefix.String()
+			routePrefix := core.Prefix(prefixString)
 			originIX := announcement.OriginIX
 			if originIX == "" {
 				originIX = ixID
 			}
-			nextHop := daemon.routeNextHopForMemberRecord(ixID, record, staticPeers)
+			nextHop := routeNextHopForMemberRecord(ixID, record, staticPeerUsable)
 			if nextHop == "" && announcement.NextHopIX != "" && announcement.NextHopIX != daemon.desired.IX.ID {
 				nextHop = announcement.NextHopIX
 			}
@@ -1216,142 +1293,160 @@ func (daemon *Daemon) runtimeDataplaneProjectionLockedWithOptions(options runtim
 				}
 			}
 			if announcementPathContainsIX(announcement.Path, daemon.desired.IX.ID) {
-				routePolicy = append(routePolicy, routePolicyDecision{
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
-					Prefix:    core.Prefix(prefix.String()),
+					Prefix:    routePrefix,
 					Action:    "reject",
 					Reason:    "path_loop",
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "path_loop", "blocked"))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, routePrefix, nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "path_loop", "blocked"))
+				}
 				continue
 			}
 			isManagementVIP := managementVIPPrefix.IsValid() && prefix == managementVIPPrefix && !managementVIPCovered
 			if isManagementVIP && !daemon.managementHostAPIEnabled() {
-				routePolicy = append(routePolicy, routePolicyDecision{
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
-					Prefix:    core.Prefix(prefix.String()),
+					Prefix:    routePrefix,
 					Action:    "reject",
 					Reason:    "management_host_api_disabled",
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "management_host_api_disabled", "down"))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, routePrefix, nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "management_host_api_disabled", "down"))
+				}
 				continue
 			}
 			if isManagementVIP && strings.TrimSpace(advertisement.ControlAPI) == "" {
-				routePolicy = append(routePolicy, routePolicyDecision{
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
-					Prefix:    core.Prefix(prefix.String()),
+					Prefix:    routePrefix,
 					Action:    "reject",
 					Reason:    "no_control_api",
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "no_control_api", "down"))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, routePrefix, nextHop, routing.RouteLocal, metric+announcement.Metric, "reject", "no_control_api", "down"))
+				}
 				continue
 			}
 			if !isManagementVIP && nextHop == "" {
-				routePolicy = append(routePolicy, routePolicyDecision{
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
-					Prefix:    core.Prefix(prefix.String()),
+					Prefix:    routePrefix,
 					Action:    "reject",
 					Reason:    "no_transit_next_hop",
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_transit_next_hop", "down"))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, routePrefix, nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_transit_next_hop", "down"))
+				}
 				continue
 			}
 			if !isManagementVIP && nextHop != originIX && !importTransitRoutes {
-				routePolicy = append(routePolicy, routePolicyDecision{
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
-					Prefix:    core.Prefix(prefix.String()),
+					Prefix:    routePrefix,
 					Action:    "reject",
 					Reason:    "transit_import_disabled",
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "transit_import_disabled", "blocked"))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, routePrefix, nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "transit_import_disabled", "blocked"))
+				}
 				continue
 			}
-			if !isManagementVIP && !daemon.hasUsableRouteNextHopEndpoint(nextHop) {
-				routePolicy = append(routePolicy, routePolicyDecision{
+			if !isManagementVIP && !hasUsableNextHop(nextHop) {
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
-					Prefix:    core.Prefix(prefix.String()),
+					Prefix:    routePrefix,
 					Action:    "reject",
 					Reason:    "no_usable_endpoint",
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_usable_endpoint", "down"))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, routePrefix, nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "no_usable_endpoint", "down"))
+				}
 				continue
 			}
 			allowed, reason := importPolicyAllows(prefix, importPrefixes)
 			if !allowed {
-				routePolicy = append(routePolicy, routePolicyDecision{
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
-					Prefix:    core.Prefix(prefix.String()),
+					Prefix:    routePrefix,
 					Action:    "reject",
 					Reason:    reason,
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", reason, "blocked"))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, routePrefix, nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", reason, "blocked"))
+				}
 				continue
 			}
-			if known, exists := knownPrefixes[prefix.String()]; exists {
+			if known, exists := knownPrefixes[prefixString]; exists {
 				action, reason, health := duplicateRouteCandidateStatus(known)
-				routePolicy = append(routePolicy, routePolicyDecision{
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
-					Prefix:    core.Prefix(prefix.String()),
+					Prefix:    routePrefix,
 					Action:    action,
 					Reason:    reason,
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, action, reason, health))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, routePrefix, nextHop, routing.RouteUnicast, metric+announcement.Metric, action, reason, health))
+				}
 				continue
 			}
 			if claimedPrefixes.Conflicts(originIX, prefix) {
-				routePolicy = append(routePolicy, routePolicyDecision{
+				addRoutePolicyDecision(routePolicyDecision{
 					Direction: "import",
 					IXID:      originIX,
 					OriginIX:  originIX,
 					NextHopIX: nextHop,
-					Prefix:    core.Prefix(prefix.String()),
+					Prefix:    routePrefix,
 					Action:    "reject",
 					Reason:    "prefix_conflict",
 					Source:    record.Source,
 				})
-				addRouteCandidate(routeCandidateFromAnnouncement(announcement, record, core.Prefix(prefix.String()), nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "prefix_conflict", "blocked"))
+				if options.IncludeRouteCandidates {
+					routeCandidates = append(routeCandidates, routeCandidateFromAnnouncement(announcement, record, routePrefix, nextHop, routing.RouteUnicast, metric+announcement.Metric, "reject", "prefix_conflict", "blocked"))
+				}
 				continue
 			}
-			knownPrefixes[prefix.String()] = knownRoutePrefix{}
+			knownPrefixes[prefixString] = knownRoutePrefix{}
 			claimedPrefixes.Add(originIX, prefix)
-			routePolicy = append(routePolicy, routePolicyDecision{
+			addRoutePolicyDecision(routePolicyDecision{
 				Direction: "import",
 				IXID:      originIX,
 				OriginIX:  originIX,
 				NextHopIX: nextHop,
-				Prefix:    core.Prefix(prefix.String()),
+				Prefix:    routePrefix,
 				Action:    "accept",
 				Reason:    reason,
 				Source:    record.Source,
@@ -1367,7 +1462,7 @@ func (daemon *Daemon) runtimeDataplaneProjectionLockedWithOptions(options runtim
 				nextHop = daemon.desired.IX.ID
 			}
 			route := routing.Route{
-				Prefix:        core.Prefix(prefix.String()),
+				Prefix:        routePrefix,
 				Owner:         originIX,
 				NextHop:       nextHop,
 				Metric:        metric + announcement.Metric,
@@ -1378,17 +1473,23 @@ func (daemon *Daemon) runtimeDataplaneProjectionLockedWithOptions(options runtim
 				Reason:        reason,
 			}
 			routes = append(routes, route)
-			addRouteCandidate(routeCandidateFromAcceptedDynamicRoute(route, announcement, record))
+			if options.IncludeRouteCandidates {
+				routeCandidates = append(routeCandidates, routeCandidateFromAcceptedDynamicRoute(route, announcement, record))
+			}
 		}
 	}
 	if options.IncludeRouteCandidates {
 		markSelectedRouteCandidates(routeCandidates, routes)
 	}
+	var nat *dataplane.NATSnapshot
+	if options.IncludeNAT {
+		nat = daemon.natSnapshotForRoutes(routes)
+	}
 	return runtimeDataplaneProjection{
 		Routes:          routes,
 		Peers:           peers,
 		Endpoints:       endpoints,
-		NAT:             daemon.natSnapshotForRoutes(routes),
+		NAT:             nat,
 		RoutePolicy:     routePolicy,
 		RouteCandidates: routeCandidates,
 	}
@@ -1707,10 +1808,6 @@ func parseUint16(raw string) (uint16, error) {
 	return uint16(value), nil
 }
 
-func (daemon *Daemon) localAdvertisementPrefixStrings() []string {
-	return daemon.localAdvertisementPrefixStringsForDesired(daemon.desired)
-}
-
 func (daemon *Daemon) localAdvertisementPrefixStringsForDesired(desired config.Desired) []string {
 	decisions := exportRoutePolicyDecisions(desired)
 	prefixes := make([]string, 0, len(decisions))
@@ -1810,17 +1907,6 @@ func advertisementAnnouncements(advertisement advertisementResponse) []announced
 	return announcements
 }
 
-func announcementPrefixStrings(announcements []announcedPrefix) []string {
-	prefixes := make([]string, 0, len(announcements))
-	for _, announcement := range announcements {
-		prefix := strings.TrimSpace(string(announcement.Prefix))
-		if prefix != "" {
-			prefixes = append(prefixes, prefix)
-		}
-	}
-	return prefixes
-}
-
 func (daemon *Daemon) appendLocalDeviceAccessAdvertisementPrefixes(prefixes []string, advertisedPrefixes []netip.Prefix, seen map[string]struct{}, desired config.Desired) ([]string, []netip.Prefix) {
 	if daemon == nil {
 		return prefixes, advertisedPrefixes
@@ -1907,12 +1993,12 @@ func localManagementExportAllowed(rawPrefix string, rawAllowed []core.Prefix) bo
 	return allowed
 }
 
-func managementVIPCoveredByAdvertisedPrefix(vip netip.Prefix, rawPrefixes []string) bool {
+func managementVIPCoveredByAnnouncements(vip netip.Prefix, announcements []announcedPrefix) bool {
 	if !vip.IsValid() || vip.Bits() != 32 || !vip.Addr().Is4() {
 		return false
 	}
-	for _, rawPrefix := range rawPrefixes {
-		prefix, err := netip.ParsePrefix(rawPrefix)
+	for _, announcement := range announcements {
+		prefix, err := announcement.Prefix.Parse()
 		if err != nil {
 			continue
 		}
@@ -2080,33 +2166,17 @@ func sortRouteCandidates(candidates []routeCandidate) {
 	})
 }
 
-func (daemon *Daemon) routeNextHopForMemberRecord(ixID core.IXID, record memberRecord, staticPeers map[core.IXID]struct{}) core.IXID {
+func routeNextHopForMemberRecord(ixID core.IXID, record memberRecord, staticPeerUsable map[core.IXID]bool) core.IXID {
 	if record.Direct {
 		return ixID
 	}
-	if _, static := staticPeers[ixID]; static {
-		if daemon.staticPeerHasUsableEndpoint(ixID) {
-			return ixID
-		}
+	if usable, static := staticPeerUsable[ixID]; static && usable {
+		return ixID
 	}
 	if record.Via == "" {
 		return ixID
 	}
 	return record.Via
-}
-
-func (daemon *Daemon) staticPeerHasUsableEndpoint(peerID core.IXID) bool {
-	peer, ok := daemon.staticPeerConfig(peerID)
-	if !ok {
-		return false
-	}
-	for _, endpoint := range peer.Endpoints {
-		metadata := daemon.peerEndpointMetadataForRoute(peerID, endpoint)
-		if metadata.Enabled && daemon.endpointTransportUsable(metadata) {
-			return true
-		}
-	}
-	return false
 }
 
 func announcementPathContainsIX(path []core.IXID, ixID core.IXID) bool {
@@ -2172,19 +2242,6 @@ func (daemon *Daemon) peerEndpointMetadataForRoute(peer core.IXID, endpoint conf
 		Profile:   endpointTransportProfileMetadataFromConfig(endpoint.Profile),
 		Access:    endpointAccessMetadataFromConfig(endpoint.Access),
 	}
-}
-
-func (daemon *Daemon) hasUsableAdvertisedEndpoint(advertisement advertisementResponse) bool {
-	for _, endpoint := range daemon.localizeAdvertisementEndpoints(advertisement) {
-		if !endpoint.Enabled {
-			continue
-		}
-		if !daemon.endpointTransportUsable(endpoint) {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func (daemon *Daemon) localizeAdvertisementEndpoints(advertisement advertisementResponse) []dataplane.EndpointMetadata {
@@ -2553,102 +2610,159 @@ func interfaceAddrPrefix(rawAddr net.Addr) (netip.Prefix, bool) {
 	}
 }
 
-func (daemon *Daemon) endpointTransportUsable(endpoint dataplane.EndpointMetadata) bool {
-	protocol := transport.Protocol(endpoint.Transport)
-	if _, ok := daemon.transports.Get(protocol); !ok {
+type endpointTransportUsability struct {
+	daemon             *Daemon
+	transportAvailable map[transport.Protocol]bool
+	kernelModeLoaded   bool
+	kernelMode         dataplane.KernelTransportMode
+	placementLoaded    bool
+	placement          dataplane.CryptoPlacement
+	udpChecked         bool
+	udpUsable          bool
+	tixTCPChecked      bool
+	tixTCPUsable       bool
+}
+
+func newEndpointTransportUsability(daemon *Daemon) *endpointTransportUsability {
+	return &endpointTransportUsability{
+		daemon:             daemon,
+		transportAvailable: make(map[transport.Protocol]bool, 4),
+	}
+}
+
+func (usability *endpointTransportUsability) usable(endpoint dataplane.EndpointMetadata) bool {
+	if usability == nil || usability.daemon == nil || usability.daemon.transports == nil {
+		return false
+	}
+	protocol := transport.NormalizeProtocol(transport.Protocol(endpoint.Transport))
+	available, checked := usability.transportAvailable[protocol]
+	if !checked {
+		_, available = usability.daemon.transports.Get(protocol)
+		usability.transportAvailable[protocol] = available
+	}
+	if !available {
 		return false
 	}
 	if protocol != transport.ProtocolTIXTCP && protocol != transport.ProtocolUDP {
 		return true
 	}
 	if protocol == transport.ProtocolUDP {
-		if daemon.kernelTransportMode() != dataplane.KernelTransportModeRequireKernel && daemon.transportCryptoPlacement() != dataplane.CryptoPlacementKernel {
+		if usability.effectiveKernelMode() != dataplane.KernelTransportModeRequireKernel && usability.effectiveCryptoPlacement() != dataplane.CryptoPlacementKernel {
 			return true
 		}
-		provider, ok := daemon.dataplane.(dataplane.KernelUDPProvider)
+		if usability.udpChecked {
+			return usability.udpUsable
+		}
+		usability.udpChecked = true
+		provider, ok := usability.daemon.dataplane.(dataplane.KernelUDPProvider)
 		if !ok {
 			return false
 		}
 		status, err := provider.KernelUDPStatus(context.Background())
-		if err != nil {
-			return false
-		}
-		if !status.Available || !status.Reinject {
-			return false
-		}
-		return daemon.kernelUDPCryptoPlacementAvailable(status) == nil
+		usability.udpUsable = err == nil && status.Available && status.Reinject && usability.daemon.kernelUDPCryptoPlacementAvailable(status) == nil
+		return usability.udpUsable
 	}
-	provider, ok := daemon.dataplane.(dataplane.TIXTCPProvider)
+	if usability.tixTCPChecked {
+		return usability.tixTCPUsable
+	}
+	usability.tixTCPChecked = true
+	provider, ok := usability.daemon.dataplane.(dataplane.TIXTCPProvider)
 	if !ok {
 		return false
 	}
 	status, err := provider.TIXTCPStatus(context.Background())
-	if err != nil {
-		return false
-	}
-	if !status.Available || !status.Reinject {
-		return false
-	}
-	return daemon.tixTCPCryptoPlacementAvailable(status) == nil
+	usability.tixTCPUsable = err == nil && status.Available && status.Reinject && usability.daemon.tixTCPCryptoPlacementAvailable(status) == nil
+	return usability.tixTCPUsable
 }
 
-func prefixOverlapsAny(prefix netip.Prefix, candidates []netip.Prefix) bool {
-	for _, candidate := range candidates {
-		if prefix.Overlaps(candidate) {
+func (usability *endpointTransportUsability) effectiveKernelMode() dataplane.KernelTransportMode {
+	if !usability.kernelModeLoaded {
+		usability.kernelMode = usability.daemon.kernelTransportMode()
+		usability.kernelModeLoaded = true
+	}
+	return usability.kernelMode
+}
+
+func (usability *endpointTransportUsability) effectiveCryptoPlacement() dataplane.CryptoPlacement {
+	if !usability.placementLoaded {
+		usability.placement = usability.daemon.transportCryptoPlacement()
+		usability.placementLoaded = true
+	}
+	return usability.placement
+}
+
+func (usability *endpointTransportUsability) peerConfigUsable(peerID core.IXID, peer config.PeerConfig) bool {
+	for _, endpoint := range peer.Endpoints {
+		metadata := usability.daemon.peerEndpointMetadataForRoute(peerID, endpoint)
+		if metadata.Enabled && usability.usable(metadata) {
 			return true
 		}
 	}
 	return false
 }
 
-func newPrefixOwnerIndex() *prefixOwnerIndex {
-	return &prefixOwnerIndex{}
+func (daemon *Daemon) endpointTransportUsable(endpoint dataplane.EndpointMetadata) bool {
+	return newEndpointTransportUsability(daemon).usable(endpoint)
+}
+
+func newPrefixOwnerIndex(prefixCapacity ...int) *prefixOwnerIndex {
+	capacity := 2
+	if len(prefixCapacity) > 0 && prefixCapacity[0] > 0 {
+		capacity += prefixCapacity[0] * 4
+	}
+	return &prefixOwnerIndex{nodes: make([]prefixOwnerTrieNode, 2, capacity)}
 }
 
 func (index *prefixOwnerIndex) Add(owner core.IXID, prefix netip.Prefix) {
-	if index == nil || !prefix.IsValid() {
+	if index == nil || len(index.nodes) < 2 || !prefix.IsValid() {
 		return
 	}
 	prefix = prefix.Masked()
-	node := index.root(prefix)
-	node.recordSubtreeOwner(owner)
+	nodeIndex := index.rootIndex(prefix)
+	index.nodes[nodeIndex].recordSubtreeOwner(owner)
 	for bit := 0; bit < prefix.Bits(); bit++ {
 		childIndex := prefixBit(prefix, bit)
-		if node.child[childIndex] == nil {
-			node.child[childIndex] = &prefixOwnerTrieNode{}
+		child := index.nodes[nodeIndex].child[childIndex]
+		if child == 0 {
+			nextIndex := len(index.nodes)
+			index.nodes = append(index.nodes, prefixOwnerTrieNode{})
+			index.nodes[nodeIndex].child[childIndex] = uint32(nextIndex + 1)
+			nodeIndex = nextIndex
+		} else {
+			nodeIndex = int(child - 1)
 		}
-		node = node.child[childIndex]
-		node.recordSubtreeOwner(owner)
+		index.nodes[nodeIndex].recordSubtreeOwner(owner)
 	}
-	node.recordTerminalOwner(owner)
+	index.nodes[nodeIndex].recordTerminalOwner(owner)
 }
 
 func (index *prefixOwnerIndex) Conflicts(owner core.IXID, prefix netip.Prefix) bool {
-	if index == nil || !prefix.IsValid() {
+	if index == nil || len(index.nodes) < 2 || !prefix.IsValid() {
 		return false
 	}
 	prefix = prefix.Masked()
-	node := index.root(prefix)
-	if node.hasDifferentTerminalOwner(owner) {
+	nodeIndex := index.rootIndex(prefix)
+	if index.nodes[nodeIndex].hasDifferentTerminalOwner(owner) {
 		return true
 	}
 	for bit := 0; bit < prefix.Bits(); bit++ {
-		node = node.child[prefixBit(prefix, bit)]
-		if node == nil {
+		child := index.nodes[nodeIndex].child[prefixBit(prefix, bit)]
+		if child == 0 {
 			return false
 		}
-		if node.hasDifferentTerminalOwner(owner) {
+		nodeIndex = int(child - 1)
+		if index.nodes[nodeIndex].hasDifferentTerminalOwner(owner) {
 			return true
 		}
 	}
-	return node.hasDifferentSubtreeOwner(owner)
+	return index.nodes[nodeIndex].hasDifferentSubtreeOwner(owner)
 }
 
-func (index *prefixOwnerIndex) root(prefix netip.Prefix) *prefixOwnerTrieNode {
+func (index *prefixOwnerIndex) rootIndex(prefix netip.Prefix) int {
 	if prefix.Addr().Is4() {
-		return &index.v4
+		return 0
 	}
-	return &index.v6
+	return 1
 }
 
 func (node *prefixOwnerTrieNode) recordSubtreeOwner(owner core.IXID) {
@@ -2803,6 +2917,8 @@ func (daemon *Daemon) loadPersistedMembers() error {
 			changed = true
 			continue
 		}
+		record.announcements = advertisementAnnouncements(record.Advertisement)
+		record.announcementsCached = true
 		daemon.membershipMu.Lock()
 		daemon.members[ixID] = record
 		daemon.membershipMu.Unlock()
@@ -3151,26 +3267,6 @@ func (daemon *Daemon) mergeStaticPeerWithAdvertisement(peer config.PeerConfig, a
 		seen[endpoint.Name] = struct{}{}
 	}
 	return merged
-}
-
-func (daemon *Daemon) localizedAdvertisementEndpointsNotConfigured(peer core.IXID, advertisement advertisementResponse) []dataplane.EndpointMetadata {
-	static, ok := daemon.staticPeerConfig(peer)
-	if !ok {
-		return daemon.localizeAdvertisementEndpoints(advertisement)
-	}
-	configured := make(map[core.EndpointID]struct{}, len(static.Endpoints))
-	for _, endpoint := range static.Endpoints {
-		configured[endpoint.Name] = struct{}{}
-	}
-	localized := daemon.localizeAdvertisementEndpoints(advertisement)
-	out := make([]dataplane.EndpointMetadata, 0, len(localized))
-	for _, endpoint := range localized {
-		if _, exists := configured[endpoint.ID]; exists {
-			continue
-		}
-		out = append(out, endpoint)
-	}
-	return out
 }
 
 func (daemon *Daemon) controlTargets() []controlTarget {

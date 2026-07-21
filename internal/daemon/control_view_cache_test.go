@@ -40,7 +40,7 @@ func TestControlViewSnapshotRefreshesOnEpochChange(t *testing.T) {
 	}
 
 	first := daemon.controlViewSnapshot()
-	daemon.head.Seq++
+	daemon.configHeadSeq.Add(1)
 	manager.stats.Epoch = 12
 	second := daemon.controlViewSnapshot()
 

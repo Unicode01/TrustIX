@@ -33,18 +33,18 @@ func TestDeleteKernelCryptoDeviceLockedDoesNotBlockManagerLockOnBorrowedDevice(t
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("deleteKernelCryptoDeviceLocked blocked while closing a borrowed kernel crypto device")
 	}
-	if _, ok := manager.kernelCryptoDevices[7]; ok {
-		t.Fatal("kernel crypto device was not detached from manager map")
-	}
-
-	locked := make(chan struct{})
+	locked := make(chan bool, 1)
 	go func() {
 		manager.mu.Lock()
+		_, stillPresent := manager.kernelCryptoDevices[7]
 		manager.mu.Unlock()
-		close(locked)
+		locked <- stillPresent
 	}()
 	select {
-	case <-locked:
+	case stillPresent := <-locked:
+		if stillPresent {
+			t.Fatal("kernel crypto device was not detached from manager map")
+		}
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("manager lock remained blocked after detaching kernel crypto device")
 	}

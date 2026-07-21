@@ -150,7 +150,7 @@ type ethtoolFeature struct {
 func (manager *Manager) applyLANOffloadProtectionLocked(link netlink.Link, spec dataplane.AttachSpec) error {
 	if link == nil || !lanOffloadProtectionApplies(spec) {
 		if kernelUDPTXSecureDirectRequestedForSpec(spec) && strings.EqualFold(spec.LANAttachMode, "existing") && lanOffloadProtectionMode() == "auto" {
-			manager.warnings = append(manager.warnings, "LAN offload protection skipped for existing LAN iface; set TRUSTIX_LAN_OFFLOAD_PROTECTION=force if this existing iface can deliver veth/GSO or CHECKSUM_PARTIAL packets to TC")
+			manager.warnings = appendManagerWarning(manager.warnings, "LAN offload protection skipped for existing LAN iface; set TRUSTIX_LAN_OFFLOAD_PROTECTION=force if this existing iface can deliver veth/GSO or CHECKSUM_PARTIAL packets to TC")
 		}
 		return nil
 	}
@@ -170,7 +170,7 @@ func (manager *Manager) applyLANOffloadProtectionLocked(link netlink.Link, spec 
 	targets := []linkOffloadTarget{{Iface: link.Attrs().Name}}
 	peerTarget, peerWarning := vethPeerOffloadTarget(link)
 	if peerWarning != "" {
-		manager.warnings = append(manager.warnings, peerWarning)
+		manager.warnings = appendManagerWarning(manager.warnings, peerWarning)
 	}
 	if peerTarget != nil {
 		targets = append(targets, *peerTarget)
@@ -208,18 +208,18 @@ func (manager *Manager) applyLANOffloadProtectionLocked(link netlink.Link, spec 
 	}
 	if len(allChanged) > 0 {
 		manager.capabilities = appendCapability(manager.capabilities, "lan-offload-protection")
-		manager.warnings = append(manager.warnings, fmt.Sprintf("LAN offload protection disabled %s for TC/XDP linear-packet safety", strings.Join(allChanged, ",")))
+		manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("LAN offload protection disabled %s for TC/XDP linear-packet safety", strings.Join(allChanged, ",")))
 	}
 	if preserveRouteGSO {
 		manager.capabilities = appendCapability(manager.capabilities, "lan-offload-protection-route-gso")
-		manager.warnings = append(manager.warnings, "LAN offload protection preserved TX checksum/SG/TSO/GSO for kernel UDP active-GSO")
+		manager.warnings = appendManagerWarning(manager.warnings, "LAN offload protection preserved TX checksum/SG/TSO/GSO for kernel UDP active-GSO")
 	}
 	if preserveRouteGSORX {
 		manager.capabilities = appendCapability(manager.capabilities, "lan-offload-protection-route-gso-rx")
-		manager.warnings = append(manager.warnings, "LAN offload protection preserved RX checksum/GRO for explicit kernel UDP active-GSO experiment")
+		manager.warnings = appendManagerWarning(manager.warnings, "LAN offload protection preserved RX checksum/GRO for explicit kernel UDP active-GSO experiment")
 	}
 	if len(allFailures) > 0 {
-		manager.warnings = append(manager.warnings, fmt.Sprintf("LAN offload protection could not disable %s", strings.Join(allFailures, ",")))
+		manager.warnings = appendManagerWarning(manager.warnings, fmt.Sprintf("LAN offload protection could not disable %s", strings.Join(allFailures, ",")))
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("LAN offload protection on %q: %s", link.Attrs().Name, strings.Join(errs, "; "))
