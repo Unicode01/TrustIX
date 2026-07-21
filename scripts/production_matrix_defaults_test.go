@@ -3646,6 +3646,110 @@ if module.current_runtime_path_change_irrelevant(
 	}
 }
 
+func TestProductionTransportAuditScriptRuntimeCompatibleExemptionIsPathCommitAndGateScoped(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+commit = "fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2"
+probe = {"commit": commit}
+module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
+parent = "parent-does-not-matter-for-probed-history"
+cases = [
+    ({"gate_family": "userspace", "transport": "udp"}, "cmd/trustixd/profile.go", True),
+    ({"gate_family": "tc_direct", "transport": "kernel_udp"}, "cmd/trustixd/profile.go", False),
+    ({"gate_family": "full_kmod", "transport": "udp"}, "internal/daemon/membership.go", True),
+    ({"gate_family": "tc_direct", "transport": "kernel_udp"}, "internal/daemon/membership.go", False),
+    ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, "internal/dataplane/ebpf/manager_linux.go", True),
+    ({"gate_family": "tc_direct", "transport": "kernel_udp"}, "internal/dataplane/ebpf/manager_linux.go", False),
+    ({"gate_family": "userspace_tc", "transport": "gre"}, "internal/transport/iptunnel/carrier.go", True),
+    ({"gate_family": "userspace", "transport": "udp"}, "internal/transport/iptunnel/carrier.go", False),
+    ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, "internal/dataplane/ebpf/unlisted.go", False),
+]
+for row, path, want in cases:
+    got = module.current_runtime_path_change_irrelevant(row, parent, path)
+    if got != want:
+        print(f"runtime-compatible exemption scope mismatch for row={row} path={path}: got {got}, want {want}", file=sys.stderr)
+        sys.exit(1)
+
+probe["commit"] = "1111111111111111111111111111111111111111"
+if module.current_runtime_path_change_irrelevant(
+    {"gate_family": "secure_kudp", "transport": "kernel_udp"},
+    parent,
+    "internal/dataplane/ebpf/manager_linux.go",
+):
+    print("runtime-compatible exemption covered an unrelated commit", file=sys.stderr)
+    sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("runtime-compatible exemption regression failed: %v\n%s", err, output)
+	}
+}
+
+func TestProductionTransportAuditScriptCachesReadOnlyGitQueries(t *testing.T) {
+	python := requirePython3(t)
+	code := `
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+script = pathlib.Path("production-transport-audit.py")
+spec = importlib.util.spec_from_file_location("audit", script)
+module = importlib.util.module_from_spec(spec)
+if spec.loader is None:
+    print("missing import loader", file=sys.stderr)
+    sys.exit(1)
+spec.loader.exec_module(module)
+
+calls = []
+def fake_run(command, **kwargs):
+    calls.append((tuple(command), kwargs))
+    return subprocess.CompletedProcess(command, 0, stdout="cached-output\n", stderr="")
+
+module.subprocess.run = fake_run
+module._run_git_cached.cache_clear()
+first = module.run_git(["status", "--short"])
+second = module.run_git(["status", "--short"])
+third = module.run_git(["rev-parse", "HEAD"])
+if first is not second:
+    print("identical git query did not return its cached result", file=sys.stderr)
+    sys.exit(1)
+if third is first:
+    print("distinct git query reused the wrong cached result", file=sys.stderr)
+    sys.exit(1)
+if len(calls) != 2:
+    print(f"subprocess calls = {len(calls)}, want 2", file=sys.stderr)
+    sys.exit(1)
+for command, kwargs in calls:
+    if command[:3] != ("git", "-C", str(module.repo_root())):
+        print(f"unexpected git command prefix: {command}", file=sys.stderr)
+        sys.exit(1)
+    if kwargs.get("check") is not False or kwargs.get("text") is not True:
+        print(f"unexpected subprocess options: {kwargs}", file=sys.stderr)
+        sys.exit(1)
+`
+	cmd := exec.Command(python, "-c", code)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git query cache regression failed: %v\n%s", err, output)
+	}
+}
+
 func TestProductionTransportAuditScriptFullKmodHACacheInvalidationExemption(t *testing.T) {
 	python := requirePython3(t)
 	code := `
@@ -4160,6 +4264,7 @@ func TestProductionTransportAuditScriptRequireCurrentGateTools(t *testing.T) {
 	text := string(output)
 	for _, want := range []string{
 		"current evidence requirements:2",
+		"udp:plaintext:performance:kernel_module:userspace:cross_host:full_kmod",
 		"production_gate_sha256 must match current or compatible",
 		"verifier_sha256 must match current",
 	} {
@@ -4286,8 +4391,9 @@ func TestProductionTransportAuditScriptFailsOnMissingEvidence(t *testing.T) {
 func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	const finalProductionArtifact = "docs/trustix-performance-log.md#2026-07-12-zaozhuang-pve-0ceffe6-final-production"
+	const tcDirectProductionArtifact = "docs/trustix-performance-log.md#2026-07-21-zaozhuang-pve-fe41dc3-tc-direct-production"
 	manifestRequiredArtifacts := map[string]string{
-		"tc_direct":               finalProductionArtifact,
+		"tc_direct":               tcDirectProductionArtifact,
 		"full_kmod":               finalProductionArtifact,
 		"tix_tcp_full_kmod":       finalProductionArtifact,
 		"owdeb_tix_tcp_full_kmod": finalProductionArtifact,

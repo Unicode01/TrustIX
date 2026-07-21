@@ -23,12 +23,74 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| All 25 selected cross-host defaults | manifest-backed 3600s per-direction PVE gates at commit `0ceffe6f3d2396a363c6062474474c4d03ec09fe` | Every current evidence key now uses one binary and one pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases passed both directions with stable boot IDs and clean pstore/kernel-log findings. |
-| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The virtio route-GSO guard keeps unsupported outer GSO on the direct-build path. |
+| All 25 selected cross-host defaults | 24 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
+| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` evidence, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The virtio route-GSO guard keeps unsupported outer GSO on the direct-build path. |
 | OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.95+deb13-cloud-amd64` | Both `owdeb_full_kmod` and `owdeb_tix_tcp_full_kmod` passed strict 3600s per-direction gates. A follow-up five-cycle load/traffic/unload test also passed UDP, TIX-TCP, and mixed UDP plus TIX-TCP without reboot, pstore, residue, or ping loss. |
 | Debian userspace defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | UDP/TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext plus secure TIX-TCP all have current-build 3600s per-direction evidence. |
-| GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | Policy remains `datapath=tc_xdp`, but this virtio configuration reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
+| GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` production evidence, plus current-build short regressions on `6.12.90+deb13.1-cloud-amd64` | Policy remains `datapath=tc_xdp`, but these virtio configurations reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-07-21
+
+<a id="2026-07-21-zaozhuang-pve-fe41dc3-tc-direct-production"></a>
+
+### Zaozhuang PVE fe41dc3 TC-direct production refresh
+
+Validation used disposable Debian 13 VM200 and VM201 on the Zaozhuang PVE
+host. VM100 and every 1xx guest were untouched. Both guests ran
+`6.12.90+deb13.1-cloud-amd64` with eight vCPUs over the isolated `vmbr3`
+underlay. The candidate was built from
+`fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2` with Go 1.25.12 at
+`2026-07-21T06:08:59Z`. Both nodes used the same
+`trustix-linux-amd64-gate` binary, SHA256
+`3ff1e4853958da1e6fd955e40d8c9473a2ff06f811c0e6aabf5da2ad02b5cba9`.
+
+The focused `kernel_udp` plaintext `tc_direct` gate ran eight parallel TCP
+flows in both directions for 3600 seconds per direction. Results were:
+
+| Direction | Received | Sent | Intervals | Receiver duration |
+| --- | ---: | ---: | ---: | ---: |
+| VM200 to VM201 | 3.330722 Gbps | 3.330764 Gbps | 3600 | 3599.987 seconds |
+| VM201 to VM200 | 3.340151 Gbps | 3.340192 Gbps | 3600 | 3599.980 seconds |
+
+The production verifier returned `status=pass` and `errors=[]`. Both dataplane
+snapshots reported `provider=tc_direct`, `fast_path=true`, `direct_only=true`,
+and eight active flows. Total measured runtime was 7210 seconds. Boot IDs were
+stable on both nodes, all four kernel-log artifacts had no rejected findings,
+pstore was empty, `tix-lan` retained `tx_queue_len=1000`, and session dial plus
+heartbeat errors were zero. No TrustIX kernel module was loaded, which is
+expected for this TC eBPF gate.
+
+The runtime hardening benchmark on the Windows development host measured the
+1000-peer dataplane projection at 1.78 to 1.90 ms and the 5000-peer projection
+at 8.98 to 9.72 ms across three five-iteration samples. The strict 25-row
+production evidence audit dropped from 137.4 seconds to 11.6 seconds after
+caching repeated read-only Git, artifact-anchor, and tool-hash queries. The
+new carrier decoder fuzz target completed 4,397,969 executions in 30 seconds
+without a crash or round-trip mismatch.
+
+The same current binary also completed a focused GRE, IPIP, and VXLAN
+compatibility regression. Each result was rechecked with stable boot IDs,
+strong binary identity, two-node host and OS identity, bidirectional iperf
+results, clean pstore and kernel logs, zero session dial or heartbeat errors,
+and a per-interval floor of 25% of the case throughput threshold:
+
+| Transport | Mode | VM200 to VM201 | VM201 to VM200 | Intervals per direction | Lowest interval |
+| --- | --- | ---: | ---: | ---: | ---: |
+| GRE | secure | 1.577589 Gbps | 1.453305 Gbps | 60 | 0.976555 Gbps |
+| GRE | plaintext | 12.686453 Gbps | 12.572181 Gbps | 60 | 1.510916 Gbps |
+| IPIP | secure | 1.426153 Gbps | 1.499824 Gbps | 180 | 1.314454 Gbps |
+| IPIP | plaintext | 12.994060 Gbps | 12.794371 Gbps | 60 | 7.681154 Gbps |
+| VXLAN | secure | 1.333442 Gbps | 1.365828 Gbps | 60 | 1.196385 Gbps |
+| VXLAN | plaintext | 10.608022 Gbps | 11.467236 Gbps | 60 | 4.042514 Gbps |
+
+The first 60-second IPIP secure sample met its aggregate threshold but had an
+end-of-run zero-throughput interval in one direction. It was not accepted as
+the current-build regression result. The replacement 180-second run shown
+above had 180 complete intervals per direction, a 1.314454 Gbps lowest
+interval, stable boot IDs, and no pstore or rejected kernel-log findings.
+These focused runs are regression evidence only; the 3600-second production
+boundary remains the manifest-backed evidence described in the table above.
 
 ## 2026-07-15
 

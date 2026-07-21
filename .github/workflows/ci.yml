@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches:
@@ -13,6 +14,7 @@ jobs:
   test:
     name: Test And Userspace Release
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,6 +43,7 @@ jobs:
           for script in scripts/*.sh; do
             bash -n "$script"
           done
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 
       - name: Embedded BPF Freshness
         run: |
@@ -49,6 +52,7 @@ jobs:
       - name: WebUI Check
         run: |
           npm ci
+          npm audit --audit-level=high
           npm run webui:check
           npm run webui:build
 
@@ -63,12 +67,21 @@ jobs:
             -run '^Test(ErrorCleanupStack|BackgroundTaskTracker|AFXDPSocketClose|KernelUDPUDPFallbackSocketSetClose|CleanupQuarantinesSemantic|PersistedRouteStateMaps|WriteDataplaneStateAtomic|AttachRollsBackAfterStatePersistenceFailure|ApplySnapshotRestoresFlowsAfterStatePersistenceFailure|ApplySnapshotRewritesPreviousStateAfterCommittedSyncFailure|TIXTCPStatusRetriesFailedPrunePersistence|SyncPendingKernelTransportStateDoesNotAttachFastPathBeforeManagerAttach|ApplyNATSnapshotRestoresPreviousSnapshotAfterPersistenceFailure|AppendManagerWarning|SumPerCPUCounterBatch|ResizeCounterSlices|KernelUDPOpenPlainBufferPool)' \
             -count=1
 
+      - name: Go Fuzz Smoke
+        run: |
+          go test ./internal/transport/iptunnel -run '^$' -fuzz '^FuzzParseTunnelConfigRoundTrip$' -fuzztime=5s
+          go test ./internal/transport/iptunnel -run '^$' -fuzz '^FuzzDecodeCarrierFrame$' -fuzztime=5s
+          go test ./internal/transport/kerneludp -run '^$' -fuzz '^FuzzParseFrameRoundTrip$' -fuzztime=5s
+          go test ./internal/transport/tixtcp -run '^$' -fuzz '^FuzzParseFrameStreamRoundTrip$' -fuzztime=5s
+
       - name: Go Error And Race Checks
         run: |
+          go mod tidy -diff
           go vet ./...
           go run github.com/kisielk/errcheck@v1.9.0 -blank -ignoretests ./...
           go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -checks=all,-ST1000,-U1000 ./...
-          go test -race -count=1 ./internal/configlog ./internal/daemon
+          go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+          go test -race -count=1 ./internal/configlog ./internal/daemon ./internal/transport/iptunnel
 
       - name: Transactional Update Smoke
         run: |

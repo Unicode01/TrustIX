@@ -53,8 +53,13 @@ permissions:
   contents: read
 
 jobs:
+  validate:
+    name: Validate Kernel Release Source
+    uses: ./.github/workflows/ci.yml
+
   package:
     name: Build Kernel Package
+    needs: validate
     runs-on: ${{ inputs.runs_on }}
     steps:
       - name: Checkout

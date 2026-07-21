@@ -13,7 +13,17 @@ Use this checklist before cutting a Linux release tarball.
 ## Local Code Checks
 
 - `go test -count=1 ./...`
-- `bash -n scripts/linux-e2e-smoke.sh scripts/linux-device-access-smoke.sh scripts/linux-kernel-module-smoke.sh scripts/linux-full-datapath-module-smoke.sh scripts/linux-datapath-module-smoke.sh scripts/release-smoke-linux.sh scripts/linux-clean-release-smoke.sh scripts/build-release-linux.sh scripts/build-kernel-modules-linux.sh`
+- `go mod tidy -diff`
+- `go vet ./...`
+- `go run github.com/kisielk/errcheck@v1.9.0 -blank -ignoretests ./...`
+- `go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 -checks=all,-ST1000,-U1000 ./...`
+- `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...`
+- `go test -race -count=1 ./internal/configlog ./internal/daemon ./internal/transport/iptunnel`
+- `npm ci && npm audit --audit-level=high && npm run webui:check && npm run webui:build`
+- Run the bounded fuzz targets listed in `.github/workflows/ci.yml`.
+- `for script in scripts/*.sh; do bash -n "$script"; done`
+- `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7`
+- Confirm both tag-based userspace releases and manual kernel releases complete the reusable `CI` workflow before their package jobs start.
 
 ## Source Linux E2E
 

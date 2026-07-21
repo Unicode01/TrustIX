@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import functools
 import hashlib
 import json
 import re
@@ -429,6 +430,92 @@ VXLAN_CARRIER_FRAGMENT_COMMITS_BY_PATH = {
     },
     "internal/transport/iptunnel/iptunnel.go": {
         "c7ea32e25422dea4849b7ae8abe885556eabfa62",
+    },
+}
+RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
+    # fe41dc3 adds opt-in profiling, caches repeated control-plane projection
+    # work, batches read-only BPF statistics, bounds duplicate warnings, and
+    # replaces slice values stored in sync.Pool with typed holders. The
+    # packet formats, BPF instructions, route selection, crypto operations,
+    # and successful transport behavior used by the listed gate classes are
+    # unchanged. The holder changes only remove interface-boxing allocations;
+    # kernel-crypto gates do not enter the userspace open-buffer fallback.
+    #
+    # tc_direct is intentionally absent. It is refreshed by a dedicated
+    # current-build 3600s cross-host gate instead of inheriting this exemption.
+    "cmd/trustixd/main.go": {
+        "fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2": {
+            "userspace",
+            "userspace_tc",
+            "full_kmod",
+            "tix_tcp_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+    },
+    "cmd/trustixd/profile.go": {
+        "fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2": {
+            "userspace",
+            "userspace_tc",
+            "full_kmod",
+            "tix_tcp_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+    },
+    **{
+        path: {
+            "fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2": {
+                "userspace_tc",
+                "full_kmod",
+                "tix_tcp_full_kmod",
+                "secure_kudp",
+                "secure_tix_tcp_kernel",
+                "route_gso",
+            },
+        }
+        for path in (
+            "internal/daemon/admission_resource.go",
+            "internal/daemon/config_api.go",
+            "internal/daemon/config_sync.go",
+            "internal/daemon/daemon.go",
+            "internal/daemon/endpoint_grant_resource.go",
+            "internal/daemon/membership.go",
+            "internal/daemon/runtime_reconcile.go",
+            "internal/daemon/trust_resource.go",
+        )
+    },
+    **{
+        path: {
+            "fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2": {
+                "secure_kudp",
+                "secure_tix_tcp_kernel",
+                "route_gso",
+            },
+        }
+        for path in (
+            "internal/dataplane/ebpf/af_xdp_linux.go",
+            "internal/dataplane/ebpf/kernel_crypto_linux.go",
+            "internal/dataplane/ebpf/kernel_crypto_provider_linux.go",
+            "internal/dataplane/ebpf/kernel_udp_socket_fallback_linux.go",
+            "internal/dataplane/ebpf/manager_linux.go",
+            "internal/dataplane/ebpf/neighbor_linux.go",
+            "internal/dataplane/ebpf/offload_linux.go",
+            "internal/dataplane/ebpf/stats_linux.go",
+            "internal/dataplane/ebpf/warnings_linux.go",
+        )
+    },
+    **{
+        path: {
+            "fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2": {"userspace_tc"},
+        }
+        for path in (
+            "internal/transport/iptunnel/carrier.go",
+            "internal/transport/iptunnel/carrier_recv_loop.go",
+            "internal/transport/iptunnel/carrier_recvmmsg_linux.go",
+        )
     },
 }
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
@@ -939,7 +1026,10 @@ def validate_current_requirement_identity(
         if require_current_gate_tools:
             errors.extend(current_gate_tool_identity_errors(row))
         if errors:
-            raise SystemExit(f"{label}:{row['_source_line']}: " + "; ".join(errors))
+            raise SystemExit(
+                f"{label}:{row['_source_line']} ({row_key(row)}): "
+                + "; ".join(errors)
+            )
 
 
 def compact_evidence(row: dict[str, str], reasons: list[str] | None = None) -> dict[str, Any]:
@@ -1018,12 +1108,13 @@ def path_is_relative_to(child: Path, parent: Path) -> bool:
         return False
 
 
-def markdown_anchors(path: Path) -> set[str]:
+@functools.lru_cache(maxsize=None)
+def markdown_anchors(path: Path) -> frozenset[str]:
     text = path.read_text(encoding="utf-8")
     anchors: set[str] = set()
     for match in re.finditer(r"""<a\s+(?:[^>]*?\s)?(?:id|name)=["']([^"']+)["']""", text):
         anchors.add(match.group(1))
-    return anchors
+    return frozenset(anchors)
 
 
 def artifact_reference_errors(artifact: str) -> list[str]:
@@ -1051,6 +1142,7 @@ def artifact_reference_errors(artifact: str) -> list[str]:
     return []
 
 
+@functools.lru_cache(maxsize=None)
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1142,7 +1234,8 @@ def current_gate_tool_identity_errors(row: dict[str, str]) -> list[str]:
     return errors
 
 
-def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
+@functools.lru_cache(maxsize=None)
+def _run_git_cached(args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(repo_root()), *args],
         check=False,
@@ -1150,6 +1243,10 @@ def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+
+
+def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return _run_git_cached(tuple(args))
 
 
 def build_commit_ancestor_errors(build_commit: str) -> list[str]:
@@ -1319,6 +1416,12 @@ def current_runtime_path_change_irrelevant(
     allowed_commits = VXLAN_CARRIER_FRAGMENT_COMMITS_BY_PATH.get(normalized)
     if allowed_commits and transport != "vxlan":
         allowed_change_commits.update(allowed_commits)
+    compatible_commits = RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS.get(
+        normalized, {}
+    )
+    for commit, gate_classes in compatible_commits.items():
+        if gate_class in gate_classes:
+            allowed_change_commits.add(commit)
     if not allowed_change_commits:
         return False
     return path_changed_only_by(resolved_commit, normalized, allowed_change_commits)

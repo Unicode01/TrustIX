@@ -15,8 +15,13 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    name: Validate Release Source
+    uses: ./.github/workflows/ci.yml
+
   package:
     name: Package ${{ matrix.goarch }}
+    needs: validate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
