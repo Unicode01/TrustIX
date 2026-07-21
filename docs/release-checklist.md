@@ -23,6 +23,7 @@ Use this checklist before cutting a Linux release tarball.
 - Run the bounded fuzz targets listed in `.github/workflows/ci.yml`.
 - `for script in scripts/*.sh; do bash -n "$script"; done`
 - `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7`
+- Keep self-hosted kernel-release runners at Actions Runner `2.327.1` or newer for the Node 24 action runtime.
 - Confirm both tag-based userspace releases and manual kernel releases complete the reusable `CI` workflow before their package jobs start.
 
 ## Source Linux E2E
