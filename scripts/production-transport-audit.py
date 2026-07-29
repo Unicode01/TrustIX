@@ -433,11 +433,44 @@ VXLAN_CARRIER_FRAGMENT_COMMITS_BY_PATH = {
     },
 }
 RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
+    # f6cb649 adds a nonlinear skb builder to the plaintext TIX-TCP full
+    # datapath and fixes the legacy bit-1 interpretation for that path. The
+    # other gate classes either do not load trustix_datapath, do not decode
+    # TIX-TCP, or retain the same bit-1 meaning from their flow crypto
+    # placement. They therefore remain covered by their existing evidence;
+    # plaintext TIX-TCP full-kmod is intentionally absent and must be
+    # refreshed on both Debian-Debian and OpenWrt-Debian.
+    **{
+        path: {
+            "f6cb64954849e67273474a586ab22898a1bd0a77": {
+                "userspace",
+                "userspace_tc",
+                "tc_direct",
+                "full_kmod",
+                "secure_kudp",
+                "secure_tix_tcp_kernel",
+                "route_gso",
+            },
+        }
+        for path in (
+            "internal/daemon/kernel_modules.go",
+            "internal/transport/tixtcp/frame.go",
+        )
+    },
     # f544378 only removes duplicate TIX-TCP RX stream validation and caches
     # successful authorization scalars within one outer skb. Only plaintext
     # TIX-TCP full-kmod consumers enter the changed functions; UDP full-kmod,
     # route-GSO, kernel-crypto, TC, and userspace packet paths are unchanged.
     "kernel/trustix_datapath/trustix_datapath.c": {
+        "f6cb64954849e67273474a586ab22898a1bd0a77": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
         "f544378931bba40d140fabe7ab4b6010921827e4": {
             "userspace",
             "userspace_tc",
@@ -503,6 +536,15 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
     },
     **{
         path: {
+            "f6cb64954849e67273474a586ab22898a1bd0a77": {
+                "userspace",
+                "userspace_tc",
+                "tc_direct",
+                "full_kmod",
+                "secure_kudp",
+                "secure_tix_tcp_kernel",
+                "route_gso",
+            },
             "fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2": {
                 "secure_kudp",
                 "secure_tix_tcp_kernel",
@@ -511,10 +553,21 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
         }
         for path in (
             "internal/dataplane/ebpf/af_xdp_linux.go",
+            "internal/dataplane/ebpf/manager_linux.go",
+        )
+    },
+    **{
+        path: {
+            "fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2": {
+                "secure_kudp",
+                "secure_tix_tcp_kernel",
+                "route_gso",
+            },
+        }
+        for path in (
             "internal/dataplane/ebpf/kernel_crypto_linux.go",
             "internal/dataplane/ebpf/kernel_crypto_provider_linux.go",
             "internal/dataplane/ebpf/kernel_udp_socket_fallback_linux.go",
-            "internal/dataplane/ebpf/manager_linux.go",
             "internal/dataplane/ebpf/neighbor_linux.go",
             "internal/dataplane/ebpf/offload_linux.go",
             "internal/dataplane/ebpf/stats_linux.go",

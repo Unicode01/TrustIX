@@ -23,14 +23,65 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| All 25 selected cross-host defaults | 24 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
-| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` evidence, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The virtio route-GSO guard keeps unsupported outer GSO on the direct-build path. |
-| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13 `6.12.95+deb13-cloud-amd64` | Both `owdeb_full_kmod` and `owdeb_tix_tcp_full_kmod` passed strict 3600s per-direction gates. A follow-up five-cycle load/traffic/unload test also passed UDP, TIX-TCP, and mixed UDP plus TIX-TCP without reboot, pstore, residue, or ping loss. |
+| All 25 selected cross-host defaults | 22 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2`; Debian and OpenWrt-Debian TIX-TCP full-kmod are refreshed at `f6cb64954849e67273474a586ab22898a1bd0a77` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
+| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` evidence, TIX-TCP full-kmod evidence on `6.12.96+deb13-cloud-amd64`, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The virtio route-GSO guard keeps unsupported outer GSO on the direct-build path. |
+| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13; TIX-TCP full-kmod is refreshed against Debian `6.12.96+deb13-cloud-amd64` | Both `owdeb_full_kmod` and `owdeb_tix_tcp_full_kmod` passed strict 3600s per-direction gates. A follow-up five-cycle load/traffic/unload test also passed UDP, TIX-TCP, and mixed UDP plus TIX-TCP without reboot, pstore, residue, or ping loss. |
 | Debian userspace defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | UDP/TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext plus secure TIX-TCP all have current-build 3600s per-direction evidence. |
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` production evidence, plus current-build short regressions on `6.12.90+deb13.1-cloud-amd64` | Policy remains `datapath=tc_xdp`, but these virtio configurations reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-07-29
+
+<a id="2026-07-29-zaozhuang-pve-f6cb649-tix-tcp-full-kmod-production"></a>
+
+### Zaozhuang PVE f6cb649 TIX-TCP full-kmod production refresh
+
+Validation used disposable VM200 through VM203 on isolated `vmbr3`; VM100 and
+all 1xx guests were untouched. The candidate was built from
+`f6cb64954849e67273474a586ab22898a1bd0a77` with Go 1.25.12 at
+`2026-07-29T19:16:32Z`. Every node ran the same `trustix-linux-amd64` binary,
+SHA256 `b510acf60c107a54e71791969fe0bf132edc9d09f2d1bce067cfa19f9d7ea5e2`.
+
+The focused plaintext `tix_tcp` full-kmod gate used 16 warmed sessions and 16
+parallel TCP streams for 3600 seconds in each direction. It covered the
+version-1 bit-1 plaintext checksum-valid interpretation, outer TIX-TCP GSO,
+full-kmod RX injection, and the nonlinear coalesced RX GSO builder where the
+OS policy enables it.
+
+| Pair and direction | Received | Sent | Intervals | Receiver duration |
+| --- | ---: | ---: | ---: | ---: |
+| Debian VM200 to Debian VM201 | 11.130403 Gbps | 11.130490 Gbps | 3600 | 3600.045 seconds |
+| Debian VM201 to Debian VM200 | 10.665302 Gbps | 10.665349 Gbps | 3600 | 3600.041 seconds |
+| OpenWrt VM202 to Debian VM203 | 6.477852 Gbps | 6.477988 Gbps | 3600 | 3600.015 seconds |
+| Debian VM203 to OpenWrt VM202 | 5.978684 Gbps | 5.978723 Gbps | 3600 | 3600.032 seconds |
+
+Both strict production verifiers returned `status=pass` and `errors=[]` at the
+4 Gbps threshold. All four boot IDs remained stable; pstore was empty; kernel
+logs contained no panic, Oops, BUG, call trace, watchdog, lockup, or module
+error. Each endpoint reported 32 active sessions, zero dial errors, zero
+heartbeat timeouts, zero session resets, and `tx_queue_len=1000`.
+
+On Debian, the nonlinear RX builder completed 288,314,813 attempts across the
+two peers with the same number of hits and no error or linear fallback. It was
+kept disabled on the OpenWrt peer by policy while the Debian peer completed
+97,477,414 hits without error. The outer TX GSO path also reported zero errors
+and zero fallbacks. `rx_worker_queue_work_calls=0` on every endpoint confirms
+that production stream coalescing runs from ingress/NAPI rather than through
+the legacy queued RX work item.
+
+The production evidence is pinned to gate SHA256
+`4af886304e8b7c1136afb799821fc54c7beb581875e239d3d431e6096aeb217b`,
+verifier SHA256
+`8b67f33404150fea43019d060daab1b11d1dba1b910cbea4af509d4c9abffa9c`,
+runner SHA256
+`c8d6658da00e4a020408b8316fb0192c71942e0d47707e6ea990155b16e627f9`,
+transport-matrix SHA256
+`641247b65129fe83091ae35c0850161f45cad0176f033dd24d605798cf2204d9`,
+and evidence-generator SHA256
+`3e4d2546394071bdd9a806cecf199697fdbeec38f1a594ccf8cdcb8cb3be96c8`.
+The Debian run accumulated substantial TCP retransmits on the shared virtual
+underlay, so these figures are received-throughput and stability evidence, not
+a lossless-network claim.
 
 <a id="2026-07-29-zaozhuang-pve-full-kmod-rx-batch-validation"></a>
 

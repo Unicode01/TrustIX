@@ -3682,6 +3682,22 @@ for row, path, want in cases:
         print(f"runtime-compatible exemption scope mismatch for row={row} path={path}: got {got}, want {want}", file=sys.stderr)
         sys.exit(1)
 
+probe["commit"] = "f6cb64954849e67273474a586ab22898a1bd0a77"
+cases = [
+    ({"gate_family": "full_kmod", "transport": "udp"}, "internal/daemon/kernel_modules.go", True),
+    ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp"}, "internal/daemon/kernel_modules.go", False),
+    ({"gate_family": "route_gso", "transport": "tix_tcp"}, "internal/dataplane/ebpf/manager_linux.go", True),
+    ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp"}, "internal/dataplane/ebpf/manager_linux.go", False),
+    ({"gate_family": "userspace", "transport": "tix_tcp"}, "internal/transport/tixtcp/frame.go", True),
+    ({"gate_family": "secure_tix_tcp_kernel", "transport": "tix_tcp"}, "kernel/trustix_datapath/trustix_datapath.c", True),
+    ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp"}, "kernel/trustix_datapath/trustix_datapath.c", False),
+]
+for row, path, want in cases:
+    got = module.current_runtime_path_change_irrelevant(row, parent, path)
+    if got != want:
+        print(f"f6cb649 runtime-compatible scope mismatch for row={row} path={path}: got {got}, want {want}", file=sys.stderr)
+        sys.exit(1)
+
 probe["commit"] = "1111111111111111111111111111111111111111"
 if module.current_runtime_path_change_irrelevant(
     {"gate_family": "secure_kudp", "transport": "kernel_udp"},
@@ -4393,11 +4409,12 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	const finalProductionArtifact = "docs/trustix-performance-log.md#2026-07-12-zaozhuang-pve-0ceffe6-final-production"
 	const tcDirectProductionArtifact = "docs/trustix-performance-log.md#2026-07-21-zaozhuang-pve-fe41dc3-tc-direct-production"
+	const tixTCPFullKmodProductionArtifact = "docs/trustix-performance-log.md#2026-07-29-zaozhuang-pve-f6cb649-tix-tcp-full-kmod-production"
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":               tcDirectProductionArtifact,
 		"full_kmod":               finalProductionArtifact,
-		"tix_tcp_full_kmod":       finalProductionArtifact,
-		"owdeb_tix_tcp_full_kmod": finalProductionArtifact,
+		"tix_tcp_full_kmod":       tixTCPFullKmodProductionArtifact,
+		"owdeb_tix_tcp_full_kmod": tixTCPFullKmodProductionArtifact,
 		"secure_kudp":             finalProductionArtifact,
 		"secure_tix_tcp_kernel":   finalProductionArtifact,
 		"route_gso":               finalProductionArtifact,
