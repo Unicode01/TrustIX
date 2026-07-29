@@ -3769,6 +3769,7 @@ spec.loader.exec_module(module)
 commit = "c73aee04997bad42655deafa9b1e15a3557548fd"
 parent = subprocess.check_output(["git", "rev-parse", commit + "^"], text=True).strip()
 path = "kernel/trustix_datapath/trustix_datapath.c"
+module.path_changed_only_by = lambda resolved, normalized, allowed: commit in allowed
 cases = [
     ({"gate_family": "full_kmod", "transport": "udp"}, True),
     ({"gate_family": "owdeb_full_kmod", "transport": "udp"}, True),

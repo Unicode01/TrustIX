@@ -4539,6 +4539,55 @@ func TestTIXTCPRawDecodeFiltersOtherInstanceBeforeChecksum(t *testing.T) {
 	}
 }
 
+func TestTIXTCPRawDecodeFullKmodChecksumFlagUsesUserspaceFlowPlacement(t *testing.T) {
+	manager := NewManager()
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
+		ID:              77,
+		LocalAddress:    "192.0.2.10:18001",
+		RemoteAddress:   "198.51.100.20:43000",
+		SourcePort:      18001,
+		DestinationPort: 43000,
+		CryptoPlacement: dataplane.CryptoPlacementUserspace,
+	}
+	manager.tixTCPRawReceiveFilter.Store(manager.tixTCPRawReceiveFilterLocked())
+	inner := testIPv4Packet([]byte("full-kmod-plaintext"))
+	frameWire, err := (tixtcp.Frame{
+		Flags:    tixtcp.FlagInnerL4ChecksumValid | tixtcp.FlagInnerIPv4,
+		FlowID:   77,
+		Sequence: 1,
+		Payload:  inner,
+	}).MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal tix_tcp frame: %v", err)
+	}
+	wire, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("198.51.100.20"),
+		DestinationIP:   netip.MustParseAddr("192.0.2.10"),
+		SourcePort:      43000,
+		DestinationPort: 18001,
+		Sequence:        100,
+		Acknowledgment:  1,
+		Payload:         frameWire,
+	})
+	if err != nil {
+		t.Fatalf("marshal tix_tcp packet: %v", err)
+	}
+
+	item, ok := manager.decodeTIXTCPRawPacket(wire, tixtcp.ParseTCPShapedIPv4NoCopy)
+	if !ok {
+		t.Fatal("raw decode rejected full-kmod plaintext frame")
+	}
+	if item.frame.Encrypted || item.frame.CryptoPlacement != dataplane.CryptoPlacementUserspace {
+		t.Fatalf("decoded metadata = encrypted:%v placement:%s, want plaintext userspace flow", item.frame.Encrypted, item.frame.CryptoPlacement)
+	}
+	if !item.frame.InnerIPv4 || !bytes.Equal(item.frame.Payload, inner) {
+		t.Fatalf("decoded inner packet = inner:%v payload:%x, want valid IPv4 payload %x", item.frame.InnerIPv4, item.frame.Payload, inner)
+	}
+	if manager.kernelCryptoFrameOpenAttempts != 0 {
+		t.Fatalf("kernel open attempts = %d, want 0", manager.kernelCryptoFrameOpenAttempts)
+	}
+}
+
 func TestTIXTCPRawReceiveFilterIncludesEstablishedLocalFlowPort(t *testing.T) {
 	manager := NewManager()
 	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
@@ -17001,6 +17050,7 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 		"rx_worker_xmit_dst_mac_seq_cache",
 		"rx_worker_queue_skb",
 		"rx_worker_stream_coalesce_gso",
+		"rx_worker_stream_coalesce_nonlinear",
 		"rx_worker_stream_coalesce_software_segment",
 		"rx_worker_stream_coalesce_partial_csum",
 		"rx_worker_tcp",
@@ -17093,6 +17143,62 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	requireSourceContains(t, coalescedBuilderBody, "skb->csum_offset = offsetof(struct tcphdr, check);")
 	requireSourceNotContains(t, coalescedBuilderBody, "skb->ip_summed = CHECKSUM_NONE;")
 	requireSourceNotContains(t, coalescedBuilderBody, "trustix_datapath_rx_worker_stream_coalesce_checksum_fallbacks++")
+	requireSourceContains(t, datapathSource, "static bool trustix_datapath_rx_worker_stream_coalesce_nonlinear;")
+	requireSourceNotContains(t, datapathSource, "static bool trustix_datapath_rx_worker_stream_coalesce_nonlinear = true;")
+	for _, name := range []string{
+		"rx_worker_stream_coalesce_nonlinear_attempts",
+		"rx_worker_stream_coalesce_nonlinear_hits",
+		"rx_worker_stream_coalesce_nonlinear_frags",
+		"rx_worker_stream_coalesce_nonlinear_bytes",
+		"rx_worker_stream_coalesce_nonlinear_fallbacks",
+		"rx_worker_stream_coalesce_nonlinear_errors",
+	} {
+		requireModuleParamPermission(t, datapathSource, name, "0444")
+	}
+	nonlinearCapabilityBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_nonlinear_gso_supported")
+	for _, want := range []string{"NETIF_F_SG", "NETIF_F_TSO", "NETIF_F_HW_CSUM"} {
+		requireSourceContains(t, nonlinearCapabilityBody, want)
+	}
+	nonlinearBuilderBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_build_coalesced_gso_nonlinear")
+	for _, want := range []string{
+		"alloc_page(GFP_ATOMIC)",
+		"kmap_local_page(page)",
+		"skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags",
+		"if (page_addr)\n\t\tkunmap_local(page_addr);",
+		"if (page)\n\t\t__free_page(page);",
+		"kfree_skb(skb);",
+	} {
+		requireSourceContains(t, nonlinearBuilderBody, want)
+	}
+	requireSourceNotContains(t, nonlinearBuilderBody, "skb->destructor")
+	requireSourceContains(t, coalescedBuilderBody, "if (allow_nonlinear &&")
+	requireSourceContains(t, coalescedBuilderBody, "READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_nonlinear)")
+	requireSourceContains(t, coalescedBuilderBody, "this_cpu_inc(")
+	requireSourceContains(t, coalescedBuilderBody, "trustix_datapath_rx_worker_stream_coalesce_nonlinear_fallbacks);")
+	for _, counter := range []string{
+		"attempts",
+		"hits",
+		"frags",
+		"bytes",
+		"fallbacks",
+		"errors",
+	} {
+		requireSourceContains(t, datapathSource,
+			"trustix_datapath_rx_worker_stream_coalesce_nonlinear_"+counter+");")
+	}
+	requireSourceContains(t, datapathSource, "trustix_datapath_percpu_ullong_ro_ops")
+	requireSourceContains(t, datapathSource, "trustix_datapath_reset_percpu_ullong")
+	txCoalesceBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_tx_plaintext_coalesce_xmit_packets")
+	requireSourceContains(t, txCoalesceBody, "target_dev, state, pending, frames, false)")
+	for _, name := range []string{
+		"trustix_datapath_rx_worker_inline_pair_xmit_packets_gso",
+		"trustix_datapath_rx_worker_single_coalesce_xmit_packets",
+		"trustix_datapath_rx_worker_queue_stream_gso_from_pending",
+		"trustix_datapath_rx_worker_try_drain_coalesced",
+	} {
+		body := sourceFunctionBody(t, datapathSource, name)
+		requireSourceContains(t, body, ", true)")
+	}
 	coalescedBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_xmit_coalesced_inner_skb")
 	inlineStart := strings.Index(coalescedBody, "if (inline_context)")
 	prepareStart := strings.Index(coalescedBody, "trustix_datapath_rx_worker_prepare_inner_skb")

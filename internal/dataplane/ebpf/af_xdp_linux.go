@@ -2082,7 +2082,7 @@ func (fastPath *tixTCPFastPath) decodeTCPWireFrame(manager *Manager, socket *afX
 	payload := wireFrame.Payload
 	placement := dataplane.CryptoPlacementUserspace
 	encrypted := wireFrame.Flags&tixtcp.FlagEncrypted != 0
-	kernelOpened := wireFrame.Flags&tixtcp.FlagKernelOpened != 0
+	kernelOpened := manager.tixTCPFrameKernelOpened(wireFrame.FlowID, wireFrame.Flags)
 	cryptoFragment := wireFrame.Flags&tixtcp.FlagCryptoFragment != 0
 	innerIPv4 := wireFrame.Flags&tixtcp.FlagInnerIPv4 != 0
 	openInPlace := encrypted && !kernelOpened && !cryptoFragment && rxFrame != nil && socket != nil && socket.kernelOpenInPlace

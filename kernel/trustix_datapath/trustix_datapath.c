@@ -1,5 +1,6 @@
 #include <linux/fs.h>
 #include <linux/atomic.h>
+#include <linux/cpumask.h>
 #include <linux/etherdevice.h>
 #include <linux/err.h>
 #include <linux/highmem.h>
@@ -12,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/limits.h>
 #include <linux/miscdevice.h>
+#include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/netdevice.h>
 #include <linux/netfilter.h>
@@ -1012,6 +1014,34 @@ static const struct kernel_param_ops trustix_datapath_rx_worker_uint_ops = {
 	.get = param_get_uint,
 };
 
+static int trustix_datapath_param_get_percpu_ullong(
+	char *buffer, const struct kernel_param *kp)
+{
+	unsigned long long total = 0;
+	unsigned long long __percpu *counter;
+	int cpu;
+
+	if (!buffer || !kp || !kp->arg)
+		return -EINVAL;
+	counter = (unsigned long long __percpu *)kp->arg;
+	for_each_possible_cpu(cpu)
+		total += READ_ONCE(*per_cpu_ptr(counter, cpu));
+	return scnprintf(buffer, PAGE_SIZE, "%llu\n", total);
+}
+
+static const struct kernel_param_ops trustix_datapath_percpu_ullong_ro_ops = {
+	.get = trustix_datapath_param_get_percpu_ullong,
+};
+
+static void trustix_datapath_reset_percpu_ullong(
+	unsigned long long __percpu *counter)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		WRITE_ONCE(*per_cpu_ptr(counter, cpu), 0);
+}
+
 static bool trustix_datapath_rx_worker_inject;
 module_param_named(rx_worker_inject, trustix_datapath_rx_worker_inject, bool,
 		   0644);
@@ -1297,6 +1327,13 @@ module_param_cb(rx_worker_stream_coalesce_gso,
 		&trustix_datapath_rx_worker_stream_coalesce_gso, 0644);
 MODULE_PARM_DESC(rx_worker_stream_coalesce_gso,
 		 "Coalesce verified RX worker TCP stream frames into one inner TCPv4 GSO skb before LAN xmit delivery");
+
+static bool trustix_datapath_rx_worker_stream_coalesce_nonlinear;
+module_param_named(rx_worker_stream_coalesce_nonlinear,
+		   trustix_datapath_rx_worker_stream_coalesce_nonlinear, bool,
+		   0644);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_nonlinear,
+		 "Build RX worker coalesced TCPv4 GSO payloads in page frags when the LAN device supports SG, TSO, and hardware checksums");
 
 static bool trustix_datapath_rx_worker_stream_coalesce_software_segment;
 module_param_cb(rx_worker_stream_coalesce_software_segment,
@@ -1732,6 +1769,60 @@ module_param_named(rx_worker_stream_coalesce_errors,
 		   0444);
 MODULE_PARM_DESC(rx_worker_stream_coalesce_errors,
 		 "TrustIX RX worker TCP stream coalesce failures that fell back to per-frame queueing");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_nonlinear_attempts);
+module_param_cb(rx_worker_stream_coalesce_nonlinear_attempts,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_attempts,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_nonlinear_attempts,
+		 "TrustIX RX worker nonlinear coalesced GSO build attempts");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_nonlinear_hits);
+module_param_cb(rx_worker_stream_coalesce_nonlinear_hits,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_hits,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_nonlinear_hits,
+		 "TrustIX RX worker nonlinear coalesced GSO build successes");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_nonlinear_frags);
+module_param_cb(rx_worker_stream_coalesce_nonlinear_frags,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_frags,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_nonlinear_frags,
+		 "Pages attached to successful TrustIX RX worker nonlinear coalesced GSO skbs");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_nonlinear_bytes);
+module_param_cb(rx_worker_stream_coalesce_nonlinear_bytes,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_bytes,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_nonlinear_bytes,
+		 "Payload bytes attached to successful TrustIX RX worker nonlinear coalesced GSO skbs");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_nonlinear_fallbacks);
+module_param_cb(rx_worker_stream_coalesce_nonlinear_fallbacks,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_fallbacks,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_nonlinear_fallbacks,
+		 "TrustIX RX worker nonlinear coalesced GSO attempts that safely used the linear builder");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_nonlinear_errors);
+module_param_cb(rx_worker_stream_coalesce_nonlinear_errors,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_errors,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_nonlinear_errors,
+		 "TrustIX RX worker nonlinear coalesced GSO allocation or validation errors");
 
 static unsigned long long trustix_datapath_rx_worker_stream_coalesce_segment_batches;
 module_param_named(rx_worker_stream_coalesce_segment_batches,
@@ -3923,6 +4014,18 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_stream_coalesce_packets = 0;
 	trustix_datapath_rx_worker_stream_coalesce_frames = 0;
 	trustix_datapath_rx_worker_stream_coalesce_errors = 0;
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_attempts);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_hits);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_frags);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_bytes);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_fallbacks);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_errors);
 	trustix_datapath_rx_worker_stream_coalesce_segment_batches = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_skbs = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_errors = 0;
@@ -4143,12 +4246,197 @@ trustix_datapath_rx_worker_coalesce_accept(
 	return 0;
 }
 
+static int trustix_datapath_rx_worker_coalesced_frame_payload(
+	const struct trustix_datapath_rx_worker_pending_copy *pending,
+	__u32 header_len, const __u8 **payload, __u32 *payload_len)
+{
+	const struct iphdr *frame_iph;
+	const __u8 *frame_packet;
+	__u32 frame_len;
+
+	if (payload)
+		*payload = NULL;
+	if (payload_len)
+		*payload_len = 0;
+	if (!pending || !payload || !payload_len || !header_len)
+		return -EINVAL;
+	frame_packet = pending->packet ?: pending->source_packet;
+	if (!frame_packet || !pending->len || pending->len < header_len)
+		return -EINVAL;
+	frame_iph = (const struct iphdr *)frame_packet;
+	frame_len = ntohs(frame_iph->tot_len);
+	if (frame_len < header_len || frame_len > pending->len)
+		return -EINVAL;
+	*payload = frame_packet + header_len;
+	*payload_len = frame_len - header_len;
+	return 0;
+}
+
+static bool trustix_datapath_rx_worker_nonlinear_gso_supported(
+	const struct net_device *target_dev)
+{
+	netdev_features_t features;
+
+	if (!target_dev)
+		return false;
+	features = READ_ONCE(target_dev->features);
+	return (features & NETIF_F_SG) && (features & NETIF_F_TSO) &&
+	       (features & NETIF_F_HW_CSUM);
+}
+
+static int trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
+	struct net_device *target_dev,
+	const struct trustix_datapath_rx_worker_coalesce_state *state,
+	struct trustix_datapath_rx_worker_pending_copy *pending,
+	unsigned int frames, __u32 header_len, __u32 gso_segs,
+	struct sk_buff **skb_out)
+{
+	struct skb_shared_info *shinfo;
+	struct page *page = NULL;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
+	struct sk_buff *skb = NULL;
+	void *page_addr = NULL;
+	unsigned int expected_frags;
+	unsigned int i;
+	__u8 *dst;
+	__u32 copied_payload = 0;
+	__u32 page_used = 0;
+	int ret = 0;
+
+	if (skb_out)
+		*skb_out = NULL;
+	if (!target_dev || !state || !pending || !frames || !header_len ||
+	    !gso_segs || !skb_out)
+		return -EINVAL;
+	if (!trustix_datapath_rx_worker_nonlinear_gso_supported(target_dev))
+		return -EOPNOTSUPP;
+	expected_frags = DIV_ROUND_UP(state->payload_len, (__u32)PAGE_SIZE);
+	if (!expected_frags || expected_frags > MAX_SKB_FRAGS)
+		return -EMSGSIZE;
+	for (i = 0; i < frames; i++) {
+		const __u8 *frame_payload;
+		__u32 frame_payload_len;
+
+		ret = trustix_datapath_rx_worker_coalesced_frame_payload(
+			&pending[i], header_len, &frame_payload,
+			&frame_payload_len);
+		if (ret)
+			return ret;
+		if (check_add_overflow(copied_payload, frame_payload_len,
+				       &copied_payload) ||
+		    copied_payload > state->payload_len)
+			return -EMSGSIZE;
+	}
+	if (copied_payload != state->payload_len)
+		return -EINVAL;
+
+	skb = netdev_alloc_skb_ip_align(target_dev, ETH_HLEN + header_len);
+	if (!skb)
+		return -ENOMEM;
+	skb_reserve(skb, ETH_HLEN);
+	dst = skb_put(skb, header_len);
+	memcpy(dst, state->header, header_len);
+	copied_payload = 0;
+	for (i = 0; i < frames; i++) {
+		const __u8 *frame_payload;
+		__u32 frame_payload_len;
+
+		ret = trustix_datapath_rx_worker_coalesced_frame_payload(
+			&pending[i], header_len, &frame_payload,
+			&frame_payload_len);
+		if (ret)
+			goto error;
+		while (frame_payload_len) {
+			__u32 copy_len;
+
+			if (!page) {
+				page = alloc_page(GFP_ATOMIC);
+				if (!page) {
+					ret = -ENOMEM;
+					goto error;
+				}
+				page_addr = kmap_local_page(page);
+				page_used = 0;
+			}
+			copy_len = min_t(__u32, frame_payload_len,
+					 PAGE_SIZE - page_used);
+			memcpy((__u8 *)page_addr + page_used, frame_payload,
+			       copy_len);
+			page_used += copy_len;
+			frame_payload += copy_len;
+			frame_payload_len -= copy_len;
+			copied_payload += copy_len;
+			if (page_used == PAGE_SIZE) {
+				kunmap_local(page_addr);
+				page_addr = NULL;
+				skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags,
+						page, 0, page_used, PAGE_SIZE);
+				page = NULL;
+				page_used = 0;
+			}
+		}
+	}
+	if (page) {
+		kunmap_local(page_addr);
+		page_addr = NULL;
+		skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page, 0,
+				page_used, PAGE_SIZE);
+		page = NULL;
+	}
+	if (copied_payload != state->payload_len) {
+		ret = -EINVAL;
+		goto error;
+	}
+	iph = (struct iphdr *)skb->data;
+	tcph = (struct tcphdr *)(skb->data + sizeof(*iph));
+	iph->tot_len = htons((__u16)state->total_len);
+	trustix_datapath_rx_worker_fix_ipv4_header_checksum(iph,
+							   sizeof(*iph));
+	tcph->check = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
+					 state->total_len - sizeof(*iph),
+					 IPPROTO_TCP, 0);
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	skb->csum_start = (unsigned char *)tcph - skb->head;
+	skb->csum_offset = offsetof(struct tcphdr, check);
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, sizeof(*iph));
+	shinfo = skb_shinfo(skb);
+	shinfo->gso_size = state->gso_size;
+	shinfo->gso_segs = gso_segs;
+	shinfo->gso_type = SKB_GSO_TCPV4;
+	skb->mac_len = ETH_HLEN;
+	skb_reset_inner_headers(skb);
+	WRITE_ONCE(trustix_datapath_rx_worker_stream_coalesce_last_len,
+		   skb->len);
+	WRITE_ONCE(trustix_datapath_rx_worker_stream_coalesce_last_gso_size,
+		   shinfo->gso_size);
+	WRITE_ONCE(trustix_datapath_rx_worker_stream_coalesce_last_gso_segs,
+		   shinfo->gso_segs);
+	WRITE_ONCE(trustix_datapath_rx_worker_stream_coalesce_last_gso_type,
+		   shinfo->gso_type);
+	if (skb->len >
+	    READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_max_len))
+		WRITE_ONCE(trustix_datapath_rx_worker_stream_coalesce_max_len,
+			   skb->len);
+	*skb_out = skb;
+	return 0;
+
+error:
+	if (page_addr)
+		kunmap_local(page_addr);
+	if (page)
+		__free_page(page);
+	kfree_skb(skb);
+	return ret ? ret : -EIO;
+}
+
 static struct sk_buff *
 trustix_datapath_rx_worker_build_coalesced_gso_skb(
 	struct net_device *target_dev,
 	const struct trustix_datapath_rx_worker_coalesce_state *state,
 	struct trustix_datapath_rx_worker_pending_copy *pending,
-	unsigned int frames)
+	unsigned int frames, bool allow_nonlinear)
 {
 	struct skb_shared_info *shinfo;
 	struct tcphdr *tcph;
@@ -4160,6 +4448,7 @@ trustix_datapath_rx_worker_build_coalesced_gso_skb(
 	__u32 copied_payload = 0;
 	__u32 payload_offset;
 	__u32 gso_segs;
+	int ret;
 
 	if (!target_dev || !state || !state->active || !pending ||
 	    frames < 2 || !state->gso_size || !state->payload_len ||
@@ -4169,6 +4458,30 @@ trustix_datapath_rx_worker_build_coalesced_gso_skb(
 	if (!gso_segs || gso_segs > U16_MAX)
 		return NULL;
 	header_len = sizeof(struct iphdr) + state->tcp_header_len;
+	if (allow_nonlinear &&
+	    READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_nonlinear)) {
+		this_cpu_inc(
+			trustix_datapath_rx_worker_stream_coalesce_nonlinear_attempts);
+		ret = trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
+			target_dev, state, pending, frames, header_len, gso_segs,
+			&skb);
+		if (!ret) {
+			this_cpu_inc(
+				trustix_datapath_rx_worker_stream_coalesce_nonlinear_hits);
+			this_cpu_add(
+				trustix_datapath_rx_worker_stream_coalesce_nonlinear_frags,
+				skb_shinfo(skb)->nr_frags);
+			this_cpu_add(
+				trustix_datapath_rx_worker_stream_coalesce_nonlinear_bytes,
+				state->payload_len);
+			return skb;
+		}
+		this_cpu_inc(
+			trustix_datapath_rx_worker_stream_coalesce_nonlinear_fallbacks);
+		if (ret != -EOPNOTSUPP)
+			this_cpu_inc(
+				trustix_datapath_rx_worker_stream_coalesce_nonlinear_errors);
+	}
 	skb = netdev_alloc_skb_ip_align(target_dev,
 					ETH_HLEN + state->total_len);
 	if (!skb)
@@ -4178,31 +4491,19 @@ trustix_datapath_rx_worker_build_coalesced_gso_skb(
 	memcpy(dst, state->header, header_len);
 	payload_offset = header_len;
 	for (i = 0; i < frames; i++) {
-		const struct iphdr *frame_iph;
+		const __u8 *frame_payload;
 		__u32 frame_payload_len;
-		const __u8 *frame_packet;
 
-		frame_packet = pending[i].packet ?: pending[i].source_packet;
-		if (!frame_packet || !pending[i].len ||
-		    pending[i].len < header_len) {
+		ret = trustix_datapath_rx_worker_coalesced_frame_payload(
+			&pending[i], header_len, &frame_payload,
+			&frame_payload_len);
+		if (ret || payload_offset + copied_payload + frame_payload_len >
+				   state->total_len) {
 			kfree_skb(skb);
 			return NULL;
 		}
-		frame_iph = (const struct iphdr *)frame_packet;
-		frame_payload_len = ntohs(frame_iph->tot_len);
-		if (frame_payload_len < header_len ||
-		    frame_payload_len > pending[i].len) {
-			kfree_skb(skb);
-			return NULL;
-		}
-		frame_payload_len -= header_len;
-		if (payload_offset + copied_payload + frame_payload_len >
-		    state->total_len) {
-			kfree_skb(skb);
-			return NULL;
-		}
-		memcpy(dst + payload_offset + copied_payload,
-		       frame_packet + header_len, frame_payload_len);
+		memcpy(dst + payload_offset + copied_payload, frame_payload,
+		       frame_payload_len);
 		copied_payload += frame_payload_len;
 	}
 	if (copied_payload != state->payload_len) {
@@ -8532,7 +8833,7 @@ static int trustix_datapath_tx_plaintext_coalesce_xmit_packets(
 		pending[i].len = lens[i];
 	}
 	inner_skb = trustix_datapath_rx_worker_build_coalesced_gso_skb(
-		target_dev, state, pending, frames);
+		target_dev, state, pending, frames, false);
 	if (!inner_skb) {
 		trustix_datapath_tx_plaintext_stream_coalesce_errors++;
 		return trustix_datapath_tx_plaintext_coalesce_xmit_singles(
@@ -11388,7 +11689,7 @@ static int trustix_datapath_rx_worker_inline_pair_xmit_packets_gso(
 		pending[frames].len = extra_len;
 	}
 	skb = trustix_datapath_rx_worker_build_coalesced_gso_skb(
-		target_dev, state, pending, total_frames);
+		target_dev, state, pending, total_frames, true);
 	if (!skb) {
 		ret = -EOPNOTSUPP;
 		goto out_free_pending;
@@ -12916,7 +13217,7 @@ static int trustix_datapath_rx_worker_single_coalesce_xmit_packets(
 		pending[i].len = lens[i];
 	}
 	skb = trustix_datapath_rx_worker_build_coalesced_gso_skb(
-		target_dev, state, pending, frames);
+		target_dev, state, pending, frames, true);
 	if (!skb) {
 		trustix_datapath_rx_worker_single_coalesce_errors++;
 		ret = trustix_datapath_rx_worker_single_coalesce_xmit_singles(
@@ -13350,7 +13651,7 @@ static int trustix_datapath_rx_worker_queue_stream_gso_from_pending(
 		}
 	}
 	inner_skb = trustix_datapath_rx_worker_build_coalesced_gso_skb(
-		target_dev, &coalesce, pending, frames);
+		target_dev, &coalesce, pending, frames, true);
 	if (!inner_skb) {
 		trustix_datapath_rx_worker_stream_direct_gso_fallbacks++;
 		return -EOPNOTSUPP;
@@ -14486,7 +14787,7 @@ static bool trustix_datapath_rx_worker_try_drain_coalesced(
 	}
 
 	coalesced_skb = trustix_datapath_rx_worker_build_coalesced_gso_skb(
-		slots[0].target_dev, &coalesce, pending, frames);
+		slots[0].target_dev, &coalesce, pending, frames, true);
 	if (!coalesced_skb) {
 		trustix_datapath_rx_worker_stream_coalesce_errors++;
 		for (i = 0; i < frames; i++)
@@ -15343,6 +15644,18 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_stream_coalesce_packets = 0;
 	trustix_datapath_rx_worker_stream_coalesce_frames = 0;
 	trustix_datapath_rx_worker_stream_coalesce_errors = 0;
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_attempts);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_hits);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_frags);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_bytes);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_fallbacks);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_errors);
 	trustix_datapath_rx_worker_stream_coalesce_segment_batches = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_skbs = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_errors = 0;

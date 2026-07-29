@@ -17,6 +17,10 @@ const (
 
 	FlagEncrypted    uint8 = 1 << 0
 	FlagKernelOpened uint8 = 1 << 1
+	// FlagInnerL4ChecksumValid is the legacy full-kmod plaintext meaning of
+	// bit 1. Receivers disambiguate it from FlagKernelOpened with the flow's
+	// crypto placement; the alias preserves the version 1 wire contract.
+	FlagInnerL4ChecksumValid uint8 = FlagKernelOpened
 	// FlagCryptoFragment marks encrypted payload fragments that must be
 	// reassembled before kernel/userspace crypto open.
 	FlagCryptoFragment uint8 = 1 << 2

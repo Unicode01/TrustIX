@@ -498,6 +498,52 @@ func TestTIXTCPDecodeKernelOpenedRXFrameNoCopyUnfragmented(t *testing.T) {
 	}
 }
 
+func TestTIXTCPDecodeFullKmodChecksumFlagUsesUserspaceFlowPlacement(t *testing.T) {
+	fastPath := testTIXTCPFastPathWithQueues(1)
+	fastPath.skipTCPChecksum = true
+	manager := NewManager()
+	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
+		ID:              7,
+		CryptoPlacement: dataplane.CryptoPlacementUserspace,
+	}
+	manager.tixTCPRawReceiveFilter.Store(manager.tixTCPRawReceiveFilterLocked())
+	socket := testAFXDPSocketForRXFrame()
+	inner := testIPv4Packet([]byte("full-kmod-plaintext"))
+	rxFrame, _ := testTIXTCPRXFrame(t, socket, tixtcp.Frame{
+		Flags:    tixtcp.FlagInnerL4ChecksumValid | tixtcp.FlagInnerIPv4,
+		FlowID:   7,
+		Sequence: 11,
+		Payload:  inner,
+	})
+	var expBatch []receivedTIXTCPFrame
+	var udpBatch []receivedKernelUDPFrame
+
+	mode, err := fastPath.decodeRXFrame(manager, socket, rxFrame, &expBatch, &udpBatch)
+	if err != nil {
+		t.Fatalf("decodeRXFrame error = %v", err)
+	}
+	if mode != afXDPRXRecycleByRelease {
+		t.Fatalf("recycle mode = %d, want by-release", mode)
+	}
+	if len(expBatch) != 1 {
+		t.Fatalf("tix_tcp batch len = %d, want 1", len(expBatch))
+	}
+	delivered := expBatch[0].frame
+	if delivered.Encrypted || delivered.CryptoPlacement != dataplane.CryptoPlacementUserspace {
+		t.Fatalf("delivered metadata = encrypted:%v placement:%s, want plaintext userspace flow", delivered.Encrypted, delivered.CryptoPlacement)
+	}
+	if !delivered.InnerIPv4 || !bytes.Equal(delivered.Payload, inner) {
+		t.Fatalf("delivered inner packet = inner:%v payload:%x, want valid IPv4 payload %x", delivered.InnerIPv4, delivered.Payload, inner)
+	}
+	if manager.kernelCryptoFrameOpenAttempts != 0 {
+		t.Fatalf("kernel open attempts = %d, want 0", manager.kernelCryptoFrameOpenAttempts)
+	}
+	if delivered.Release == nil {
+		t.Fatal("release is nil for borrowed plaintext RX storage")
+	}
+	delivered.Release()
+}
+
 func TestTIXTCPDecodeRXFrameRejectsMissingSocket(t *testing.T) {
 	fastPath := testTIXTCPFastPathWithQueues(1)
 	manager := NewManager()

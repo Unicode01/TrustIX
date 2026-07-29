@@ -369,7 +369,7 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTXWithCrashRiskGate(
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -394,7 +394,7 @@ func TestTrustIXDatapathModuleParametersOpenWrtDedicatedGateAllowsFullPlaintext(
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=128 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=0 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -413,6 +413,42 @@ func TestTrustIXDatapathModuleParametersOpenWrtDisablesSingleCoalesceByDefault(t
 	if moduleParameterHasAssignment(got, "rx_worker_single_coalesce=1") ||
 		moduleParameterHasAssignment(got, "rx_worker_single_coalesce_max_frames=32") {
 		t.Fatalf("parameters = %q, kept OpenWrt single-coalesce enabled by default", got)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersOpenWrtDisablesNonlinearCoalesceByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
+
+	got := TrustIXDatapathModuleParameters("")
+	if !moduleParameterHasAssignment(got, "rx_worker_stream_coalesce_nonlinear=0") {
+		t.Fatalf("parameters = %q, missing OpenWrt nonlinear coalesce default disable", got)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersOpenWrtNonlinearCoalesceExplicitEnable(t *testing.T) {
+	t.Setenv("TRUSTIX_ASSUME_OPENWRT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_OPENWRT_FULL_DATAPATH", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ENABLE_OPENWRT_RX_STREAM_COALESCE_NONLINEAR", "1")
+
+	got := TrustIXDatapathModuleParameters("")
+	if !moduleParameterHasAssignment(got, "rx_worker_stream_coalesce_nonlinear=1") {
+		t.Fatalf("parameters = %q, missing explicit OpenWrt nonlinear coalesce enable", got)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersNonlinearCoalesceExplicitDisable(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_DISABLE_RX_STREAM_COALESCE_NONLINEAR", "1")
+
+	got := TrustIXDatapathModuleParameters("")
+	if !moduleParameterHasAssignment(got, "rx_worker_stream_coalesce_nonlinear=0") {
+		t.Fatalf("parameters = %q, missing explicit nonlinear coalesce disable", got)
 	}
 }
 
@@ -577,6 +613,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testin
 		"rx_worker_stream_tcp=1",
 		"rx_worker_stream_batch_queue=1",
 		"rx_worker_stream_coalesce_gso=1",
+		"rx_worker_stream_coalesce_nonlinear=1",
 		"rx_worker_stream_coalesce_software_segment=0",
 		"rx_worker_xmit_more=1",
 		"rx_worker_xmit_dst_mac_cache=1",
@@ -635,6 +672,7 @@ func TestTrustIXDatapathModuleParametersForDesiredOpenWrtDedicatedGateAllowsFull
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
 		"rx_worker_single_coalesce=0",
+		"rx_worker_stream_coalesce_nonlinear=0",
 		"tx_plaintext_inline_xmit=1",
 		"rx_worker_budget=1024",
 		"rx_worker_slots=8192",
@@ -670,6 +708,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashR
 		"rx_worker_inline_xmit_copy_csum=1",
 		"rx_worker_tcp=1",
 		"rx_worker_stream_tcp=1",
+		"rx_worker_stream_coalesce_nonlinear=1",
 		"tx_plaintext_inline_xmit=1",
 		"tx_plaintext_payload_fast_copy=1",
 		"tx_plaintext_hash_tx_queue=1",
@@ -1924,6 +1963,7 @@ func TestTrustIXDatapathModuleParametersStripsExperimentalRXWorkerRawParametersW
 		"rx_worker_tcp=1",
 		"rx_worker_stream_tcp=1",
 		"rx_worker_stream_coalesce_gso=1",
+		"rx_worker_stream_coalesce_nonlinear=1",
 		"rx_worker_inline_pair_hold_skb=1",
 		"rx_worker_queue_skb=1",
 		"rx_worker_hot_stats=0",
@@ -1952,6 +1992,7 @@ func TestTrustIXDatapathModuleParametersKeepsExperimentalRXWorkerRawParametersWi
 		"rx_worker_tcp=1",
 		"rx_worker_stream_tcp=1",
 		"rx_worker_stream_coalesce_gso=1",
+		"rx_worker_stream_coalesce_nonlinear=1",
 		"rx_worker_inline_pair_hold_skb=1",
 		"rx_worker_queue_skb=1",
 		"rx_worker_hot_stats=0",
@@ -1959,7 +2000,7 @@ func TestTrustIXDatapathModuleParametersKeepsExperimentalRXWorkerRawParametersWi
 	}, " ")
 
 	got := TrustIXDatapathModuleParameters(raw)
-	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_steal_skb=1 rx_worker_inline_stolen=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_coalesce_gso=1 rx_worker_inline_pair_hold_skb=1 rx_worker_queue_skb=1 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
+	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_steal_skb=1 rx_worker_inline_stolen=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_inline_pair_hold_skb=1 rx_worker_queue_skb=1 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}

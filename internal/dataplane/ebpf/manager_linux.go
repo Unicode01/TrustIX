@@ -7617,7 +7617,7 @@ func (manager *Manager) decodeTIXTCPRawPacket(raw []byte, parseTCP func([]byte) 
 	payload := frame.Payload
 	placement := dataplane.CryptoPlacementUserspace
 	encrypted := frame.Flags&tixtcp.FlagEncrypted != 0
-	kernelOpened := frame.Flags&tixtcp.FlagKernelOpened != 0
+	kernelOpened := manager.tixTCPFrameKernelOpened(frame.FlowID, frame.Flags)
 	cryptoFragment := frame.Flags&tixtcp.FlagCryptoFragment != 0
 	innerIPv4 := frame.Flags&tixtcp.FlagInnerIPv4 != 0
 	if kernelOpened {
@@ -12802,11 +12802,12 @@ type tixTCPRawReceiveFilter struct {
 }
 
 type tixTCPRawReceiveFlow struct {
-	localAddress  netip.Addr
-	remoteAddress netip.Addr
-	localPort     uint16
-	remotePort    uint16
-	complete      bool
+	localAddress    netip.Addr
+	remoteAddress   netip.Addr
+	localPort       uint16
+	remotePort      uint16
+	cryptoPlacement dataplane.CryptoPlacement
+	complete        bool
 }
 
 func (filter *tixTCPRawReceiveFilter) add(address string, fallbackPort uint16) {
@@ -12864,11 +12865,12 @@ func (filter *tixTCPRawReceiveFilter) addFlow(flow dataplane.TIXTCPFlow) {
 		filter.flows = make(map[uint64]tixTCPRawReceiveFlow)
 	}
 	filter.flows[flow.ID] = tixTCPRawReceiveFlow{
-		localAddress:  localAddress,
-		remoteAddress: remoteAddress,
-		localPort:     localPort,
-		remotePort:    remotePort,
-		complete:      localPort != 0 && remotePort != 0,
+		localAddress:    localAddress,
+		remoteAddress:   remoteAddress,
+		localPort:       localPort,
+		remotePort:      remotePort,
+		cryptoPlacement: flow.CryptoPlacement,
+		complete:        localPort != 0 && remotePort != 0,
 	}
 }
 
@@ -12929,6 +12931,13 @@ func (filter *tixTCPRawReceiveFilter) allows(packet tixtcp.TCPPacket, flowID uin
 	return filter.byAddress[packet.DestinationIP.Unmap()].contains(packet.DestinationPort)
 }
 
+func (filter *tixTCPRawReceiveFilter) cryptoPlacement(flowID uint64) dataplane.CryptoPlacement {
+	if filter == nil || flowID == 0 {
+		return ""
+	}
+	return filter.flows[flowID].cryptoPlacement
+}
+
 func (manager *Manager) tixTCPRawReceiveFilterLocked() *tixTCPRawReceiveFilter {
 	filter := &tixTCPRawReceiveFilter{allowUnknownFlows: tixTCPRawUnknownFlowAllowed()}
 	localIX := manager.snapshotLocalIXLocked()
@@ -12951,6 +12960,14 @@ func (manager *Manager) tixTCPRawReceiveFilterLocked() *tixTCPRawReceiveFilter {
 func (manager *Manager) tixTCPRawPacketAllowed(packet tixtcp.TCPPacket, flowID uint64) bool {
 	filter := manager.tixTCPRawReceiveFilter.Load()
 	return filter != nil && filter.allows(packet, flowID)
+}
+
+func (manager *Manager) tixTCPFrameKernelOpened(flowID uint64, flags uint8) bool {
+	if flags&tixtcp.FlagKernelOpened == 0 {
+		return false
+	}
+	filter := manager.tixTCPRawReceiveFilter.Load()
+	return filter == nil || filter.cryptoPlacement(flowID) != dataplane.CryptoPlacementUserspace
 }
 
 func tixTCPRawUnknownFlowAllowed() bool {

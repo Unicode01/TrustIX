@@ -469,6 +469,11 @@ func appendTrustIXDatapathRXWorkerTCPBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "rx_worker_stream_tcp=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_stream_batch_queue=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_stream_coalesce_gso=1")
+	if kernelDatapathRXStreamCoalesceNonlinearDisabled() {
+		params = setModuleParameter(params, "rx_worker_stream_coalesce_nonlinear", "0")
+	} else {
+		params = appendModuleParameterIfMissing(params, "rx_worker_stream_coalesce_nonlinear=1")
+	}
 	params = appendModuleParameterIfMissing(params, "rx_worker_stream_coalesce_software_segment=0")
 	params = appendModuleParameterIfMissing(params, "rx_worker_xmit_more=1")
 	params = appendModuleParameterIfMissing(params, "rx_worker_xmit_dst_mac_cache=1")
@@ -714,6 +719,20 @@ func kernelDatapathOpenWrtRXSingleCoalesceDisabled() bool {
 		return false
 	}
 	return true
+}
+
+func kernelDatapathRXStreamCoalesceNonlinearDisabled() bool {
+	if envTruthyAny("TRUSTIX_KERNEL_DATAPATH_DISABLE_RX_STREAM_COALESCE_NONLINEAR") ||
+		envFalsey("TRUSTIX_KERNEL_DATAPATH_RX_STREAM_COALESCE_NONLINEAR") {
+		return true
+	}
+	if !runtimeLooksLikeOpenWrt() {
+		return false
+	}
+	return !envTruthyAny(
+		"TRUSTIX_KERNEL_DATAPATH_ENABLE_OPENWRT_RX_STREAM_COALESCE_NONLINEAR",
+		"TRUSTIX_KERNEL_DATAPATH_RX_STREAM_COALESCE_NONLINEAR",
+	)
 }
 
 func runtimeLooksLikeOpenWrt() bool {
@@ -1043,6 +1062,7 @@ var trustIXDatapathExperimentalRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_steal_tcp":                        {},
 	"rx_worker_stream_batch_queue":               {},
 	"rx_worker_stream_coalesce_gso":              {},
+	"rx_worker_stream_coalesce_nonlinear":        {},
 	"rx_worker_stream_coalesce_software_segment": {},
 	"rx_worker_xmit_dev_forward":                 {},
 	"rx_worker_xmit_dst_mac_cache":               {},

@@ -433,6 +433,20 @@ VXLAN_CARRIER_FRAGMENT_COMMITS_BY_PATH = {
     },
 }
 RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
+    # f544378 only removes duplicate TIX-TCP RX stream validation and caches
+    # successful authorization scalars within one outer skb. Only plaintext
+    # TIX-TCP full-kmod consumers enter the changed functions; UDP full-kmod,
+    # route-GSO, kernel-crypto, TC, and userspace packet paths are unchanged.
+    "kernel/trustix_datapath/trustix_datapath.c": {
+        "f544378931bba40d140fabe7ab4b6010921827e4": {
+            "userspace",
+            "userspace_tc",
+            "full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+    },
     # fe41dc3 adds opt-in profiling, caches repeated control-plane projection
     # work, batches read-only BPF statistics, bounds duplicate warnings, and
     # replaces slice values stored in sync.Pool with typed holders. The
