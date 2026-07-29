@@ -2686,8 +2686,9 @@ static void trustix_aes_mix_columns(u8 state[16])
 	}
 }
 
-static void trustix_aes_encrypt1_soft(const u8 rk[15][16], int rounds,
-				      const u8 in[16], u8 out[16])
+static __maybe_unused void
+trustix_aes_encrypt1_soft(const u8 rk[15][16], int rounds,
+			  const u8 in[16], u8 out[16])
 {
 	u8 state[16];
 	int round;
@@ -2705,7 +2706,8 @@ static void trustix_aes_encrypt1_soft(const u8 rk[15][16], int rounds,
 	memzero_explicit(state, sizeof(state));
 }
 
-static void trustix_xor16_soft(u8 *dst, const u8 *src, const u8 stream[16])
+static __maybe_unused void
+trustix_xor16_soft(u8 *dst, const u8 *src, const u8 stream[16])
 {
 	unsigned int i;
 
