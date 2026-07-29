@@ -17214,6 +17214,51 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	requireSourceNotContains(t, cryptoSource, "WRITE_ONCE(trustix_kfunc_simd_fastpath, false);")
 }
 
+func TestKernelDatapathRXBatchValidationCacheKeepsAuthorizationKeys(t *testing.T) {
+	datapathSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+	validateBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_stage_validate_batch")
+
+	for _, want := range []string{
+		"cache->header_len == view->frame.header_len",
+		"cache->flow_id == view->frame.flow_id",
+		"cache->epoch == view->frame.epoch",
+		"read_lock_bh(&trustix_datapath_state_lock);",
+		"trustix_datapath_rx_stage_validate_locked(classify, view);",
+		"read_unlock_bh(&trustix_datapath_state_lock);",
+		"cache->reverse = view->reverse;",
+		"cache->session_flow_id = view->session_flow_id;",
+		"cache->session_flags = view->session_flags;",
+	} {
+		requireSourceContains(t, validateBody, want)
+	}
+	validation := strings.Index(validateBody, "trustix_datapath_rx_stage_validate_locked(classify, view);")
+	failed := strings.Index(validateBody, "if (ret)\n\t\treturn ret;")
+	store := strings.Index(validateBody, "cache->valid = true;")
+	if validation < 0 || failed < 0 || store < 0 ||
+		validation >= failed || failed >= store {
+		t.Fatal("RX batch validation cache must store only successful locked authorization results")
+	}
+
+	for _, name := range []string{
+		"trustix_datapath_rx_worker_inline_xmit_stream_copy",
+		"trustix_datapath_rx_worker_push_stream_batch_copy",
+	} {
+		body := sourceFunctionBody(t, datapathSource, name)
+		requireSourceContains(t, body, "struct trustix_datapath_rx_validation_cache validation_cache = {};")
+		requireSourceContains(t, body, "trustix_datapath_rx_stage_validate_batch(")
+	}
+
+	streamBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_push_stream")
+	for _, want := range []string{
+		"consumer_validates_frames =\n\t\t(inline_xmit && worker_xmit) || stream_batch_queue;",
+		"if (!consumer_validates_frames)",
+		"if (inline_xmit && worker_xmit)",
+		"if (stream_batch_queue)",
+	} {
+		requireSourceContains(t, streamBody, want)
+	}
+}
+
 func TestTrustIXCryptoDirectKfuncKeepsSnapshotFallbackForSlotFastpathOptOut(t *testing.T) {
 	cryptoSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_crypto", "trustix_crypto.c"))
 

@@ -582,6 +582,17 @@ struct trustix_datapath_rx_stage_view {
 	__u64 session_flags;
 };
 
+/* Scoped to one outer skb; keep this key aligned with validate_locked. */
+struct trustix_datapath_rx_validation_cache {
+	bool valid;
+	bool reverse;
+	__u8 header_len;
+	__u64 flow_id;
+	__u64 epoch;
+	__u64 session_flow_id;
+	__u64 session_flags;
+};
+
 struct trustix_datapath_tx_plan {
 	__u64 flow_id;
 	__u64 epoch;
@@ -9186,6 +9197,40 @@ trustix_datapath_rx_stage_validate_locked(
 	return 0;
 }
 
+static int trustix_datapath_rx_stage_validate_batch(
+	const struct trustix_datapath_ioc_classify *classify,
+	struct trustix_datapath_rx_stage_view *view,
+	struct trustix_datapath_rx_validation_cache *cache)
+{
+	int ret;
+
+	if (!classify || !view || !cache)
+		return -EINVAL;
+	if (cache->valid && cache->header_len == view->frame.header_len &&
+	    cache->flow_id == view->frame.flow_id &&
+	    cache->epoch == view->frame.epoch) {
+		view->reverse = cache->reverse;
+		view->session_flow_id = cache->session_flow_id;
+		view->session_flags = cache->session_flags;
+		return 0;
+	}
+
+	read_lock_bh(&trustix_datapath_state_lock);
+	ret = trustix_datapath_rx_stage_validate_locked(classify, view);
+	read_unlock_bh(&trustix_datapath_state_lock);
+	if (ret)
+		return ret;
+
+	cache->valid = true;
+	cache->reverse = view->reverse;
+	cache->header_len = view->frame.header_len;
+	cache->flow_id = view->frame.flow_id;
+	cache->epoch = view->frame.epoch;
+	cache->session_flow_id = view->session_flow_id;
+	cache->session_flags = view->session_flags;
+	return 0;
+}
+
 static int
 trustix_datapath_rx_stage_push(const struct trustix_datapath_ioc_classify *outer,
 			       const struct trustix_datapath_rx_stage_view *view)
@@ -13583,6 +13628,7 @@ trustix_datapath_rx_worker_inline_xmit_stream_copy(
 {
 	struct trustix_datapath_rx_worker_pending_copy *pending;
 	struct trustix_datapath_rx_stage_view view = {};
+	struct trustix_datapath_rx_validation_cache validation_cache = {};
 	struct trustix_datapath_ioc_classify inner = {};
 	struct net_device *target_dev = NULL;
 	const __u8 *network;
@@ -13663,9 +13709,8 @@ trustix_datapath_rx_worker_inline_xmit_stream_copy(
 		view.inner_offset = (__u32)(inner_packet - skb->data);
 		view.inner_ip_header_len = inner_ip_header_len;
 		view.inner_l4_header_len = inner_l4_header_len;
-		read_lock_bh(&trustix_datapath_state_lock);
-		ret = trustix_datapath_rx_stage_validate_locked(outer, &view);
-		read_unlock_bh(&trustix_datapath_state_lock);
+		ret = trustix_datapath_rx_stage_validate_batch(
+			outer, &view, &validation_cache);
 		if (ret)
 			goto error;
 		if (!trustix_datapath_rx_worker_payload_fits_target(
@@ -13738,6 +13783,7 @@ trustix_datapath_rx_worker_push_stream_batch_copy(
 {
 	struct trustix_datapath_rx_worker_pending_copy *pending = NULL;
 	struct trustix_datapath_rx_stage_view view = {};
+	struct trustix_datapath_rx_validation_cache validation_cache = {};
 	struct trustix_datapath_ioc_classify inner = {};
 	struct net_device *target_dev = NULL;
 	const __u8 *network;
@@ -13811,9 +13857,8 @@ trustix_datapath_rx_worker_push_stream_batch_copy(
 		view.inner_offset = (__u32)(inner_packet - skb->data);
 		view.inner_ip_header_len = inner_ip_header_len;
 		view.inner_l4_header_len = inner_l4_header_len;
-		read_lock_bh(&trustix_datapath_state_lock);
-		ret = trustix_datapath_rx_stage_validate_locked(outer, &view);
-		read_unlock_bh(&trustix_datapath_state_lock);
+		ret = trustix_datapath_rx_stage_validate_batch(
+			outer, &view, &validation_cache);
 		if (ret)
 			goto error;
 		if (!trustix_datapath_rx_worker_payload_fits_target(
@@ -13908,7 +13953,11 @@ trustix_datapath_rx_worker_push_stream(
 	__u32 remaining;
 	__u16 transport_len;
 	unsigned int frames = 0;
+	bool consumer_validates_frames;
+	bool inline_xmit;
 	bool inline_xmit_needs_batch = false;
+	bool stream_batch_queue;
+	bool worker_xmit;
 	int ret;
 
 	if (queued_frames)
@@ -13950,6 +13999,12 @@ trustix_datapath_rx_worker_push_stream(
 	inline_xmit_needs_batch =
 		trustix_datapath_rx_worker_stream_inline_xmit_needs_batch(
 			skb, total_len);
+	inline_xmit = READ_ONCE(trustix_datapath_rx_worker_inline_xmit);
+	worker_xmit = READ_ONCE(trustix_datapath_rx_worker_xmit);
+	stream_batch_queue =
+		READ_ONCE(trustix_datapath_rx_worker_stream_batch_queue);
+	consumer_validates_frames =
+		(inline_xmit && worker_xmit) || stream_batch_queue;
 	if (!pskb_may_pull(skb, total_len))
 		return -ENODATA;
 
@@ -13967,46 +14022,48 @@ trustix_datapath_rx_worker_push_stream(
 		if (ret)
 			goto error;
 		if (!(view.frame.flags &
-		      TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4)) {
+		      TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4) ||
+		    !view.frame.wire_len ||
+		    view.frame.wire_len > remaining ||
+		    !view.frame.payload_len ||
+		    view.frame.payload_len > TRUSTIX_DATAPATH_PACKET_MAX_LEN) {
 			ret = -EPROTONOSUPPORT;
 			goto error;
 		}
-		if (!view.frame.wire_len ||
-		    view.frame.wire_len > remaining) {
-			ret = -EMSGSIZE;
-			goto error;
-		}
-		inner_packet = cursor + view.frame.header_len;
-		ret = trustix_datapath_parse_ipv4_packet(
-			inner_packet, view.frame.payload_len, &inner,
-			&inner_ip_header_len, &inner_l4_header_len);
-		if (ret)
-			goto error;
-		if (inner_packet < skb->data ||
-		    inner_packet - skb->data > TRUSTIX_DATAPATH_PACKET_MAX_LEN) {
-			ret = -EOVERFLOW;
-			goto error;
-		}
+		if (!consumer_validates_frames) {
+			inner_packet = cursor + view.frame.header_len;
+			ret = trustix_datapath_parse_ipv4_packet(
+				inner_packet, view.frame.payload_len, &inner,
+				&inner_ip_header_len, &inner_l4_header_len);
+			if (ret)
+				goto error;
+			if (inner_packet < skb->data ||
+			    inner_packet - skb->data >
+				    TRUSTIX_DATAPATH_PACKET_MAX_LEN) {
+				ret = -EOVERFLOW;
+				goto error;
+			}
 
-		view.inner = inner;
-		view.inner_packet = inner_packet;
-		view.tixt_len = view.frame.wire_len;
-		view.inner_offset = (__u32)(inner_packet - skb->data);
-		view.inner_ip_header_len = inner_ip_header_len;
-		view.inner_l4_header_len = inner_l4_header_len;
-		read_lock_bh(&trustix_datapath_state_lock);
-		ret = trustix_datapath_rx_stage_validate_locked(outer, &view);
-		read_unlock_bh(&trustix_datapath_state_lock);
-		if (ret)
-			goto error;
+			view.inner = inner;
+			view.inner_packet = inner_packet;
+			view.tixt_len = view.frame.wire_len;
+			view.inner_offset = (__u32)(inner_packet - skb->data);
+			view.inner_ip_header_len = inner_ip_header_len;
+			view.inner_l4_header_len = inner_l4_header_len;
+			read_lock_bh(&trustix_datapath_state_lock);
+			ret = trustix_datapath_rx_stage_validate_locked(outer,
+								 &view);
+			read_unlock_bh(&trustix_datapath_state_lock);
+			if (ret)
+				goto error;
+		}
 		frames++;
 		cursor += view.frame.wire_len;
 		remaining -= view.frame.wire_len;
 	}
 	if (!frames)
 		return -ENODATA;
-	if (READ_ONCE(trustix_datapath_rx_worker_inline_xmit) &&
-	    READ_ONCE(trustix_datapath_rx_worker_xmit)) {
+	if (inline_xmit && worker_xmit) {
 		if (inline_xmit_needs_batch ||
 		    (frames > 1 &&
 		     READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_gso))) {
@@ -14028,7 +14085,7 @@ trustix_datapath_rx_worker_push_stream(
 		}
 		return ret;
 	}
-	if (READ_ONCE(trustix_datapath_rx_worker_stream_batch_queue)) {
+	if (stream_batch_queue) {
 		ret = trustix_datapath_rx_worker_push_stream_batch_copy(
 			skb, outer, total_len, tixt_offset, frames,
 			target_ifindex, queued_frames, false);

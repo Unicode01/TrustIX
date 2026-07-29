@@ -30,6 +30,59 @@ Current production-default evidence boundary:
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` production evidence, plus current-build short regressions on `6.12.90+deb13.1-cloud-amd64` | Policy remains `datapath=tc_xdp`, but these virtio configurations reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
+## 2026-07-29
+
+<a id="2026-07-29-zaozhuang-pve-full-kmod-rx-batch-validation"></a>
+
+### Zaozhuang PVE full-kmod RX batch validation optimization
+
+Validation used disposable Debian 13 VM200 and VM201 on the Zaozhuang PVE
+host. VM100 and every 1xx guest were untouched. Both guests had 8 vCPUs,
+16 GiB RAM, and kernel `6.12.96+deb13-cloud-amd64`. The source baseline was
+`b7a434c23debe95c695aadc20cf022fe154caca7`; tests used plaintext `tix_tcp`,
+the full kernel datapath module, 16 sessions, and 16 iperf streams.
+
+The RX stream entry point previously parsed inner IPv4 and performed the
+locked session/wire authorization pass before dispatching to an inline or
+batch consumer that repeated the same work. The optimized path uses a bounded
+TIXT-header scan when the selected consumer performs full validation. Within
+one outer skb, that consumer also reuses the first successful authorization
+result for matching `header_len + flow_id + epoch`; mixed keys still perform a
+fresh locked lookup. The cache contains copied scalar results and never stores
+state-table pointers.
+
+P16/120-second A-to-B samples, including all comparable iterations:
+
+| Build | Throughput samples | Mean |
+| --- | --- | ---: |
+| baseline | 11.160, 10.749 Gbps | 10.955 Gbps |
+| duplicate pre-validation removed | 11.256, 11.382, 11.871 Gbps | 11.503 Gbps |
+| per-outer-skb validation cache | 12.586, 12.364 Gbps | 12.475 Gbps |
+
+The host was shared and showed measurable scheduling variation, so these are
+A/B engineering samples rather than a new production throughput guarantee.
+The second adjacent pair was 11.871 versus 12.364 Gbps, a 4.15% gain from the
+validation cache alone. Receiver perf confirmed the mechanism: read lock plus
+unlock fell from about 1.49% to 0.17%, session flow lookup from 0.89% to 0.11%,
+and session-wire lookup from 0.24% to 0.05%. Retransmits remained in the same
+range as the baseline and pre-validation-only runs.
+
+A subsequent 180-second per-direction run passed at 12.266 Gbps A-to-B and
+15.030 Gbps B-to-A. Both boot IDs remained stable, kernel and pstore evidence
+contained no panic/Oops/BUG/call trace/watchdog/lockup finding, and the runner
+unloaded all TrustIX modules afterward. Both VMs also passed the prebuilt full
+datapath ioctl smoke with `selftests=1023`, `selftest_failures=0`,
+`features=128`, and `safe_features=128`. Local `go test ./...`, the Linux-only
+cache-key source regression, kernel `6.12.96` module build, and
+`git diff --check` passed.
+
+This short run does not replace or promote the 3600-second production evidence.
+After the lookup optimization, the dominant P16 costs are page clearing and
+payload copies: about 48% combined on TX and 37% combined on RX. Further large
+gains require skb/page allocation work or a batched wire format that avoids
+copying every inner payload; neither requires modifying the Linux kernel
+itself, but both have a larger compatibility and stability surface.
+
 ## 2026-07-21
 
 <a id="2026-07-21-zaozhuang-pve-fe41dc3-tc-direct-production"></a>
