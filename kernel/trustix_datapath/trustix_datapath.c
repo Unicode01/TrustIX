@@ -4,6 +4,7 @@
 #include <linux/cpumask.h>
 #include <linux/etherdevice.h>
 #include <linux/err.h>
+#include <linux/gfp.h>
 #include <linux/highmem.h>
 #include <linux/if_arp.h>
 #include <linux/if_ether.h>
@@ -1366,6 +1367,13 @@ module_param_named(rx_worker_stream_coalesce_nonlinear,
 MODULE_PARM_DESC(rx_worker_stream_coalesce_nonlinear,
 		 "Build RX worker coalesced TCPv4 GSO payloads in page frags when the LAN device supports SG, TSO, and hardware checksums");
 
+static bool trustix_datapath_rx_worker_stream_coalesce_page_frag_cache = true;
+module_param_named(rx_worker_stream_coalesce_page_frag_cache,
+		   trustix_datapath_rx_worker_stream_coalesce_page_frag_cache,
+		   bool, 0644);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_page_frag_cache,
+		 "Allocate nonlinear RX worker GSO payload pages from per-CPU page-frag caches");
+
 static bool trustix_datapath_rx_worker_stream_coalesce_software_segment;
 module_param_cb(rx_worker_stream_coalesce_software_segment,
 		&trustix_datapath_rx_worker_bool_ops,
@@ -1900,6 +1908,45 @@ module_param_cb(rx_worker_stream_coalesce_nonlinear_errors,
 		0444);
 MODULE_PARM_DESC(rx_worker_stream_coalesce_nonlinear_errors,
 		 "TrustIX RX worker nonlinear coalesced GSO allocation or validation errors");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_attempts);
+module_param_cb(rx_worker_stream_coalesce_page_frag_cache_attempts,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_attempts,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_page_frag_cache_attempts,
+		 "TrustIX RX worker nonlinear GSO page-frag cache allocation attempts");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_hits);
+module_param_cb(rx_worker_stream_coalesce_page_frag_cache_hits,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_hits,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_page_frag_cache_hits,
+		 "TrustIX RX worker nonlinear GSO payload pages served by page-frag caches");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_fallbacks);
+module_param_cb(rx_worker_stream_coalesce_page_frag_cache_fallbacks,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_fallbacks,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_page_frag_cache_fallbacks,
+		 "TrustIX RX worker nonlinear GSO payload pages that fell back to alloc_page");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_errors);
+module_param_cb(rx_worker_stream_coalesce_page_frag_cache_errors,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_errors,
+		0444);
+MODULE_PARM_DESC(rx_worker_stream_coalesce_page_frag_cache_errors,
+		 "TrustIX RX worker nonlinear GSO page-frag cache allocation errors before fallback");
+
+static DEFINE_PER_CPU(struct page_frag_cache,
+	trustix_datapath_rx_worker_stream_coalesce_page_frag_caches);
 
 static unsigned long long trustix_datapath_rx_worker_stream_coalesce_segment_batches;
 module_param_named(rx_worker_stream_coalesce_segment_batches,
@@ -4166,6 +4213,14 @@ static int trustix_datapath_alloc_rx_worker(void)
 		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_fallbacks);
 	trustix_datapath_reset_percpu_ullong(
 		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_errors);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_attempts);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_hits);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_fallbacks);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_errors);
 	trustix_datapath_rx_worker_stream_coalesce_segment_batches = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_skbs = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_errors = 0;
@@ -4464,6 +4519,70 @@ static bool trustix_datapath_rx_worker_nonlinear_gso_supported(
 	       (features & NETIF_F_HW_CSUM);
 }
 
+static void *trustix_datapath_rx_worker_alloc_page_frag(
+	struct page **page_out, unsigned int *offset_out)
+{
+	struct page_frag_cache *cache;
+	struct page *page;
+	unsigned int offset;
+	void *addr;
+
+	if (page_out)
+		*page_out = NULL;
+	if (offset_out)
+		*offset_out = 0;
+	if (!page_out || !offset_out)
+		return NULL;
+	local_bh_disable();
+	this_cpu_inc(
+		trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_attempts);
+	cache = this_cpu_ptr(
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_caches);
+	addr = page_frag_alloc(cache, PAGE_SIZE, GFP_ATOMIC);
+	if (unlikely(!addr)) {
+		this_cpu_inc(
+			trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_errors);
+		this_cpu_inc(
+			trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_fallbacks);
+		local_bh_enable();
+		return NULL;
+	}
+	page = virt_to_page(addr);
+	offset = offset_in_page(addr);
+	if (unlikely(!page || offset + PAGE_SIZE > PAGE_SIZE)) {
+		page_frag_free(addr);
+		this_cpu_inc(
+			trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_errors);
+		this_cpu_inc(
+			trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_fallbacks);
+		local_bh_enable();
+		return NULL;
+	}
+	*page_out = page;
+	*offset_out = offset;
+	this_cpu_inc(
+		trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_hits);
+	local_bh_enable();
+	return addr;
+}
+
+static void trustix_datapath_rx_worker_drain_page_frag_caches(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct page_frag_cache *cache = per_cpu_ptr(
+			&trustix_datapath_rx_worker_stream_coalesce_page_frag_caches,
+			cpu);
+
+		if (!cache->va)
+			continue;
+		__page_frag_cache_drain(virt_to_head_page(cache->va),
+					cache->pagecnt_bias);
+		memset(cache, 0, sizeof(*cache));
+	}
+}
+
 static int trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
 	struct net_device *target_dev,
 	const struct trustix_datapath_rx_worker_coalesce_state *state,
@@ -4476,7 +4595,10 @@ static int trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
 	struct tcphdr *tcph;
 	struct iphdr *iph;
 	struct sk_buff *skb = NULL;
+	bool page_from_frag_cache = false;
+	bool page_mapped = false;
 	void *page_addr = NULL;
+	unsigned int page_offset = 0;
 	unsigned int expected_frags;
 	unsigned int i;
 	__u8 *dst;
@@ -4528,12 +4650,25 @@ static int trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
 			__u32 copy_len;
 
 			if (!page) {
-				page = alloc_page(GFP_ATOMIC);
+				if (READ_ONCE(
+				    trustix_datapath_rx_worker_stream_coalesce_page_frag_cache)) {
+					page_addr =
+						trustix_datapath_rx_worker_alloc_page_frag(
+							&page, &page_offset);
+					page_from_frag_cache = page_addr != NULL;
+				}
+				if (!page) {
+					page = alloc_page(GFP_ATOMIC);
+					page_offset = 0;
+				}
 				if (!page) {
 					ret = -ENOMEM;
 					goto error;
 				}
-				page_addr = kmap_local_page(page);
+				if (!page_addr) {
+					page_addr = kmap_local_page(page);
+					page_mapped = true;
+				}
 				page_used = 0;
 			}
 			copy_len = min_t(__u32, frame_payload_len,
@@ -4548,21 +4683,30 @@ static int trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
 			frame_payload_len -= copy_len;
 			copied_payload += copy_len;
 			if (page_used == PAGE_SIZE) {
-				kunmap_local(page_addr);
+				if (page_mapped)
+					kunmap_local(page_addr);
 				page_addr = NULL;
 				skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags,
-						page, 0, page_used, PAGE_SIZE);
+						page, page_offset, page_used,
+						PAGE_SIZE);
 				page = NULL;
+				page_from_frag_cache = false;
+				page_mapped = false;
+				page_offset = 0;
 				page_used = 0;
 			}
 		}
 	}
 	if (page) {
-		kunmap_local(page_addr);
+		if (page_mapped)
+			kunmap_local(page_addr);
 		page_addr = NULL;
-		skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page, 0,
-				page_used, PAGE_SIZE);
+		skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page,
+				page_offset, page_used, PAGE_SIZE);
 		page = NULL;
+		page_from_frag_cache = false;
+		page_mapped = false;
+		page_offset = 0;
 	}
 	if (copied_payload != state->payload_len) {
 		ret = -EINVAL;
@@ -4603,10 +4747,14 @@ static int trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
 	return 0;
 
 error:
-	if (page_addr)
+	if (page_addr && page_mapped)
 		kunmap_local(page_addr);
-	if (page)
-		__free_page(page);
+	if (page) {
+		if (page_from_frag_cache)
+			page_frag_free(page_addr);
+		else
+			__free_page(page);
+	}
 	kfree_skb(skb);
 	return ret ? ret : -EIO;
 }
@@ -16147,6 +16295,14 @@ trustix_datapath_hook_reset_counters_locked(
 		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_fallbacks);
 	trustix_datapath_reset_percpu_ullong(
 		&trustix_datapath_rx_worker_stream_coalesce_nonlinear_errors);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_attempts);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_hits);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_fallbacks);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_coalesce_page_frag_cache_errors);
 	trustix_datapath_rx_worker_stream_coalesce_segment_batches = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_skbs = 0;
 	trustix_datapath_rx_worker_stream_coalesce_segment_errors = 0;
@@ -18791,6 +18947,7 @@ static void __exit trustix_datapath_exit(void)
 	trustix_datapath_destroy_tx_outer_gso_page_pools();
 	misc_deregister(&trustix_datapath_miscdev);
 	trustix_datapath_free_state();
+	trustix_datapath_rx_worker_drain_page_frag_caches();
 	trustix_datapath_free_rx_worker_pcpu_mac_cache();
 }
 

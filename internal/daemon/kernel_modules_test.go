@@ -1962,6 +1962,7 @@ func TestTrustIXDatapathModuleParametersStripsExperimentalRXWorkerRawParametersW
 		"rx_worker_inline_stolen=1",
 		"rx_worker_tcp=1",
 		"rx_worker_stream_tcp=1",
+		"rx_worker_stream_coalesce_page_frag_cache=1",
 		"rx_worker_stream_offset_copy=0",
 		"rx_worker_stream_coalesce_gso=1",
 		"rx_worker_stream_coalesce_nonlinear=1",
@@ -1972,7 +1973,7 @@ func TestTrustIXDatapathModuleParametersStripsExperimentalRXWorkerRawParametersW
 	}, " ")
 
 	got := TrustIXDatapathModuleParameters(raw)
-	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_offset_copy=0 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
+	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_coalesce_page_frag_cache=1 rx_worker_stream_offset_copy=0 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -1992,6 +1993,7 @@ func TestTrustIXDatapathModuleParametersKeepsExperimentalRXWorkerRawParametersWi
 		"rx_worker_inline_stolen=1",
 		"rx_worker_tcp=1",
 		"rx_worker_stream_tcp=1",
+		"rx_worker_stream_coalesce_page_frag_cache=1",
 		"rx_worker_stream_offset_copy=0",
 		"rx_worker_stream_coalesce_gso=1",
 		"rx_worker_stream_coalesce_nonlinear=1",
@@ -2002,7 +2004,7 @@ func TestTrustIXDatapathModuleParametersKeepsExperimentalRXWorkerRawParametersWi
 	}, " ")
 
 	got := TrustIXDatapathModuleParameters(raw)
-	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_steal_skb=1 rx_worker_inline_stolen=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_offset_copy=0 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_inline_pair_hold_skb=1 rx_worker_queue_skb=1 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
+	want := "rx_worker_slots=64 rx_worker_xmit=1 rx_worker_direct_xmit=1 rx_worker_inline_xmit=1 rx_worker_steal_skb=1 rx_worker_inline_stolen=1 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_coalesce_page_frag_cache=1 rx_worker_stream_offset_copy=0 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_inline_pair_hold_skb=1 rx_worker_queue_skb=1 rx_worker_hot_stats=0 enable_features=128 rx_worker_inject=1 tx_plaintext=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}

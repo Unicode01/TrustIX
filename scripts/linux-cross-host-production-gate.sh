@@ -956,6 +956,7 @@ main() {
       --require-module-param-max trustix_datapath.unsafe_features=0 \
       --require-module-param-max trustix_datapath.selftest_failures=0 \
       --require-module-param-min trustix_datapath.rx_worker_inject=1 \
+      --require-module-param-min trustix_datapath.rx_worker_stream_coalesce_page_frag_cache=1 \
       --require-module-param-min trustix_datapath.rx_worker_stream_offset_copy=1 \
       --require-module-param-min trustix_datapath.tx_plaintext=1 \
       --require-module-param-max trustix_datapath.rx_worker_hot_stats=0 \
@@ -971,6 +972,9 @@ main() {
       --require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_page_pool_attempts=1 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_page_pool_hits=1 \
       --require-module-param-max trustix_datapath.tx_plaintext_outer_gso_page_pool_errors=0 \
+      --require-module-param-any-min trustix_datapath.rx_worker_stream_coalesce_page_frag_cache_attempts=1 \
+      --require-module-param-any-min trustix_datapath.rx_worker_stream_coalesce_page_frag_cache_hits=1 \
+      --require-module-param-max trustix_datapath.rx_worker_stream_coalesce_page_frag_cache_errors=0 \
       --require-module-param-any-min trustix_datapath.rx_worker_stream_offset_copy_attempts=1 \
       --require-module-param-any-min trustix_datapath.rx_worker_stream_offset_copy_hits=1 \
       --require-module-param-max trustix_datapath.rx_worker_stream_offset_copy_errors=0 \

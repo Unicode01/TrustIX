@@ -2156,6 +2156,42 @@ func TestCrossHostProductionGateRejectsTIXTCPFullKmodRXOffsetCopyErrors(t *testi
 	}
 }
 
+func TestCrossHostProductionGateRejectsTIXTCPFullKmodWithoutRXPageFragCache(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	overrides := tixTCPFullKmodModuleOverrides(true)
+	overrides["rx_worker_stream_coalesce_page_frag_cache"] = "N"
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, overrides)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=tix-tcp-full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted TIX-TCP full-kmod artifacts without RX page-frag cache:\n%s", output)
+	}
+	if !strings.Contains(string(output), "rx_worker_stream_coalesce_page_frag_cache") {
+		t.Fatalf("production gate did not report disabled RX page-frag cache:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsTIXTCPFullKmodRXPageFragCacheErrors(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	overrides := tixTCPFullKmodModuleOverrides(true)
+	overrides["rx_worker_stream_coalesce_page_frag_cache_errors"] = "1"
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, overrides)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=tix-tcp-full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted TIX-TCP full-kmod artifacts with RX page-frag cache errors:\n%s", output)
+	}
+	if !strings.Contains(string(output), "rx_worker_stream_coalesce_page_frag_cache_errors") {
+		t.Fatalf("production gate did not report RX page-frag cache errors:\n%s", output)
+	}
+}
+
 func TestCrossHostProductionGateAcceptsSecureKUDPRouteGSOArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
@@ -2914,12 +2950,19 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		plaintextSegments = "128"
 	}
 	params := map[string]string{
-		"enable_features":                             "128",
-		"features":                                    "128",
-		"safe_features":                               "128",
-		"unsafe_features":                             "0",
-		"selftest_failures":                           "0",
-		"rx_worker_inject":                            "Y",
+		"enable_features":   "128",
+		"features":          "128",
+		"safe_features":     "128",
+		"unsafe_features":   "0",
+		"selftest_failures": "0",
+		"rx_worker_inject":  "Y",
+
+		"rx_worker_stream_coalesce_page_frag_cache":           "Y",
+		"rx_worker_stream_coalesce_page_frag_cache_attempts":  "0",
+		"rx_worker_stream_coalesce_page_frag_cache_hits":      "0",
+		"rx_worker_stream_coalesce_page_frag_cache_fallbacks": "0",
+		"rx_worker_stream_coalesce_page_frag_cache_errors":    "0",
+
 		"rx_worker_stream_offset_copy":                "Y",
 		"rx_worker_stream_offset_copy_attempts":       "0",
 		"rx_worker_stream_offset_copy_hits":           "0",
@@ -3013,10 +3056,14 @@ func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		"tx_plaintext_gso_segments":                 traffic,
 		"tx_plaintext_outer_gso_page_pool_attempts": traffic,
 		"tx_plaintext_outer_gso_page_pool_hits":     traffic,
-		"rx_worker_stream_offset_copy_attempts":     traffic,
-		"rx_worker_stream_offset_copy_hits":         traffic,
-		"rx_worker_stream_offset_copy_bytes":        traffic,
-		"rx_worker_injected":                        traffic,
+
+		"rx_worker_stream_coalesce_page_frag_cache_attempts": traffic,
+		"rx_worker_stream_coalesce_page_frag_cache_hits":     traffic,
+
+		"rx_worker_stream_offset_copy_attempts": traffic,
+		"rx_worker_stream_offset_copy_hits":     traffic,
+		"rx_worker_stream_offset_copy_bytes":    traffic,
+		"rx_worker_injected":                    traffic,
 	}
 }
 
