@@ -3712,6 +3712,26 @@ for row, path, want in cases:
         print(f"321cd1d runtime-compatible scope mismatch for row={row} path={path}: got {got}, want {want}", file=sys.stderr)
         sys.exit(1)
 
+for commit in (
+    "bcc9e3f7d8e7bfd10c7b193324a06bb093a154eb",
+    "c412a27d7a3e354c9a4c83edb5123a38257ec210",
+):
+    probe["commit"] = commit
+    cases = [
+        ({"gate_family": "full_kmod", "transport": "udp"}, "internal/daemon/kernel_modules.go", True),
+        ({"gate_family": "owdeb_full_kmod", "transport": "udp"}, "kernel/trustix_datapath/trustix_datapath.c", True),
+        ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, "kernel/trustix_datapath/trustix_datapath.c", True),
+        ({"gate_family": "route_gso", "transport": "tix_tcp"}, "kernel/trustix_datapath/trustix_datapath.c", True),
+        ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp"}, "internal/daemon/kernel_modules.go", False),
+        ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp"}, "kernel/trustix_datapath/trustix_datapath.c", False),
+        ({"gate_family": "owdeb_tix_tcp_full_kmod", "transport": "tix_tcp"}, "kernel/trustix_datapath/trustix_datapath.c", False),
+    ]
+    for row, path, want in cases:
+        got = module.current_runtime_path_change_irrelevant(row, parent, path)
+        if got != want:
+            print(f"{commit[:7]} runtime-compatible scope mismatch for row={row} path={path}: got {got}, want {want}", file=sys.stderr)
+            sys.exit(1)
+
 probe["commit"] = "4beb3be1acdb7a54003c6d60bdb7a135e16b9866"
 cases = [
     ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, "kernel/trustix_crypto/trustix_crypto.c", True),
@@ -4435,7 +4455,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	const finalProductionArtifact = "docs/trustix-performance-log.md#2026-07-12-zaozhuang-pve-0ceffe6-final-production"
 	const tcDirectProductionArtifact = "docs/trustix-performance-log.md#2026-07-21-zaozhuang-pve-fe41dc3-tc-direct-production"
-	const tixTCPFullKmodProductionArtifact = "docs/trustix-performance-log.md#2026-07-30-zaozhuang-pve-321cd1d-tix-tcp-page-pool-production"
+	const tixTCPFullKmodProductionArtifact = "docs/trustix-performance-log.md#2026-07-30-zaozhuang-pve-c412a27-tix-tcp-page-frag-cache-production"
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":               tcDirectProductionArtifact,
 		"full_kmod":               finalProductionArtifact,

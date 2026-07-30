@@ -23,14 +23,86 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| All 25 selected cross-host defaults | 22 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2`; Debian and OpenWrt-Debian TIX-TCP full-kmod are refreshed at `321cd1d549a493cd415451e48f6ddcd9ae089f50` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
-| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` evidence, TIX-TCP full-kmod evidence on `6.12.96+deb13-cloud-amd64`, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The TIX-TCP full-kmod path now includes reusable outer-GSO page-pool storage. |
-| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13; TIX-TCP full-kmod is refreshed against Debian `6.12.96+deb13-cloud-amd64` at `321cd1d549a493cd415451e48f6ddcd9ae089f50` | Both `owdeb_full_kmod` and `owdeb_tix_tcp_full_kmod` have strict 3600s per-direction evidence. The current TIX-TCP gate exercised the 6.6-compatible per-CPU page-pool implementation with zero page-pool errors. |
+| All 25 selected cross-host defaults | 22 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2`; Debian and OpenWrt-Debian TIX-TCP full-kmod are refreshed at `c412a27d7a3e354c9a4c83edb5123a38257ec210` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
+| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` evidence, TIX-TCP full-kmod evidence on `6.12.96+deb13-cloud-amd64`, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The TIX-TCP full-kmod path now combines reusable outer-GSO page-pool storage, nonlinear RX offset-copy, and per-CPU RX GSO page-frag caches. |
+| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13; TIX-TCP full-kmod is refreshed against Debian `6.12.96+deb13-cloud-amd64` at `c412a27d7a3e354c9a4c83edb5123a38257ec210` | Both `owdeb_full_kmod` and `owdeb_tix_tcp_full_kmod` have strict 3600s per-direction evidence. The current TIX-TCP gate exercised the RX page-frag cache and the 6.6-compatible per-CPU TX page-pool implementation with zero cache/pool errors. |
 | Debian userspace defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | UDP/TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext plus secure TIX-TCP all have current-build 3600s per-direction evidence. |
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` production evidence, plus current-build short regressions on `6.12.90+deb13.1-cloud-amd64` | Policy remains `datapath=tc_xdp`, but these virtio configurations reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
 ## 2026-07-30
+
+<a id="2026-07-30-zaozhuang-pve-c412a27-tix-tcp-page-frag-cache-production"></a>
+
+### Zaozhuang PVE c412a27 TIX-TCP RX page-frag cache production refresh
+
+Validation used disposable VM200 through VM203 on isolated `vmbr3`; VM100 and
+all 1xx guests were untouched. The candidate was built from
+`c412a27d7a3e354c9a4c83edb5123a38257ec210` with Go 1.25.12 at
+`2026-07-30T08:22:18Z`. Every production-gate node ran the same
+`trustix-linux-amd64` binary, SHA256
+`60fb48d08ae333d2ce262a4c9e6619861b095eb8b43f3f61b4846647955dfc85`.
+The Debian 6.12.96 module SHA256 was
+`b3b977b399e94a1bf788c2af5df3dfdf5cbc7247fe9e43d0daa0bdc4fff0e23a`;
+the OpenWrt 6.6.141 module SHA256 was
+`5160f1c41ae64a472384f186e8b20b70c5312590b15b5e0a5d598d2d35d97fe6`.
+
+The candidate includes two RX-side changes after the outer-GSO TX page-pool
+work. `bcc9e3f` parses nonlinear TIX-TCP outer skbs by offset and copies only
+the accepted inner payload instead of first linearizing the entire outer skb.
+`c412a27` serves the nonlinear coalesced inner GSO payload pages from per-CPU
+page-frag caches. Allocation failures retain the bounded `alloc_page()`
+fallback, and module teardown drains every possible CPU cache after RX workers
+and hooks are stopped.
+
+The formal production gate used 16 warmed sessions and 16 iperf streams for
+3600 seconds in each direction. Both pairs ran concurrently, while each pair
+ran its directions serially:
+
+| Pair and direction | Received | Sent | Intervals | Receiver duration |
+| --- | ---: | ---: | ---: | ---: |
+| Debian VM200 to Debian VM201 | 14.805806 Gbps | 14.805857 Gbps | 3600 | 3600.023 seconds |
+| Debian VM201 to Debian VM200 | 13.555675 Gbps | 13.555755 Gbps | 3600 | 3600.035 seconds |
+| OpenWrt VM202 to Debian VM203 | 5.080420 Gbps | 5.080566 Gbps | 3600 | 3600.032 seconds |
+| Debian VM203 to OpenWrt VM202 | 5.287641 Gbps | 5.287756 Gbps | 3600 | 3600.076 seconds |
+
+Both strict verifiers returned `status=pass` and `errors=[]` against the 4 Gbps
+gate. All four boot IDs stayed stable, pstore was empty, kernel logs had no
+rejected finding, `tix-lan` retained `tx_queue_len=1000`, and module unload was
+clean. Across the four nodes, RX page-frag caches served all 4,560,055,905
+attempts with zero fallback or error. TX page pools served 519,395,638 of
+519,400,046 attempts; 4,408 used the existing bounded fallback and no pool
+error was recorded.
+
+A separate adjacent Debian A/B used two 120-second samples per mode. Disabling
+the RX page-frag cache averaged 14.484899 Gbps. Enabling it averaged
+18.239258 Gbps, a 25.9% increase, with a 19.472638 Gbps peak. This short A/B is
+an engineering comparison, not a deployment-wide throughput guarantee.
+
+OpenWrt virtio steering was tested separately with the same candidate. The
+stock image placed software RPS for every virtio RX queue on one CPU
+(`rps_cpus=04`) and measured 5.764637/4.873256 Gbps. Setting
+`network.globals.packet_steering=0`, which left the multiqueue virtio masks at
+`00`, measured 9.152166/13.180706 Gbps. Setting `packet_steering=2` and masks
+`ff` measured 5.886434/4.962107 Gbps. These are 120-second A/B diagnostics.
+For the tested OpenWrt x86_64 virtio multiqueue topology, disable software RPS
+and let the hardware/virtio queues distribute work. Do not apply this result
+unchanged to single-queue or physical NICs; inspect queue IRQ and RPS placement
+on the target first.
+
+The production evidence is pinned to gate SHA256
+`985c4cb3bbc127409327a5397c5643f7d055c6c7b1ddbbb303ff0ae9d653b2aa`,
+verifier SHA256
+`8b67f33404150fea43019d060daab1b11d1dba1b910cbea4af509d4c9abffa9c`,
+runner SHA256
+`086890c1b9ea5f35cba7ecb3fd2d2f8f655b8a5f33c7c8f03627262708f2bbab`,
+transport-matrix SHA256
+`641247b65129fe83091ae35c0850161f45cad0176f033dd24d605798cf2204d9`,
+and evidence-generator SHA256
+`3e4d2546394071bdd9a806cecf199697fdbeec38f1a594ccf8cdcb8cb3be96c8`.
+The shared virtual underlay accumulated substantial TCP retransmits, so these
+figures are received-throughput and stability evidence, not a lossless-network
+claim.
 
 <a id="2026-07-30-zaozhuang-pve-321cd1d-tix-tcp-page-pool-production"></a>
 

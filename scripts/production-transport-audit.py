@@ -450,9 +450,43 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
     # placement. They therefore remain covered by their existing evidence;
     # plaintext TIX-TCP full-kmod is intentionally absent and must be
     # refreshed on both Debian-Debian and OpenWrt-Debian.
-    **{
-        path: {
-            "f6cb64954849e67273474a586ab22898a1bd0a77": {
+    "internal/daemon/kernel_modules.go": {
+        "f6cb64954849e67273474a586ab22898a1bd0a77": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+        # bcc9e3f and c412a27 only change plaintext TIX-TCP full-kmod RX
+        # construction and its module parameters. Every other family keeps
+        # the same runtime path; the Debian and OpenWrt TIX-TCP full-kmod
+        # families are intentionally absent and require fresh evidence.
+        "bcc9e3f7d8e7bfd10c7b193324a06bb093a154eb": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+        "c412a27d7a3e354c9a4c83edb5123a38257ec210": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+    },
+    "internal/transport/tixtcp/frame.go": {
+        "f6cb64954849e67273474a586ab22898a1bd0a77": {
                 "userspace",
                 "userspace_tc",
                 "tc_direct",
@@ -460,12 +494,7 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
                 "secure_kudp",
                 "secure_tix_tcp_kernel",
                 "route_gso",
-            },
-        }
-        for path in (
-            "internal/daemon/kernel_modules.go",
-            "internal/transport/tixtcp/frame.go",
-        )
+        },
     },
     # f544378 only removes duplicate TIX-TCP RX stream validation and caches
     # successful authorization scalars within one outer skb. Only plaintext
@@ -481,6 +510,26 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
             "userspace_tc",
             "tc_direct",
             "full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+        "bcc9e3f7d8e7bfd10c7b193324a06bb093a154eb": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+        "c412a27d7a3e354c9a4c83edb5123a38257ec210": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
             "secure_kudp",
             "secure_tix_tcp_kernel",
             "route_gso",
@@ -609,6 +658,18 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
     },
 }
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
+    # The previous gate does not require the new TIX-TCP RX page-frag cache
+    # counters. Its predicates remain equivalent for every other family.
+    "232d6a28a49a5d2b0974f68bbd9fd7775e57a1ef385e1e6edb64247bf1b99b27": {
+        "userspace",
+        "userspace_tc",
+        "tc_direct",
+        "full_kmod",
+        "owdeb_full_kmod",
+        "secure_kudp",
+        "secure_tix_tcp_kernel",
+        "route_gso",
+    },
     # The immediately preceding gate did not require the new TIX-TCP
     # full-kmod outer-GSO page-pool counters. All other family predicates are
     # unchanged, so only the two TIX-TCP full-kmod families need fresh runs.
@@ -768,6 +829,21 @@ TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
         },
     },
     "runner_sha256": {
+        # The current runner only exports the OpenWrt nonlinear RX switch
+        # when explicitly requested. Existing artifacts did not request it,
+        # so their topology and workload semantics are unchanged.
+        "c8d6658da00e4a020408b8316fb0192c71942e0d47707e6ea990155b16e627f9": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "tix_tcp_full_kmod",
+            "owdeb_tix_tcp_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
         # Identifier-only TIX-TCP rename; the runner topology, duration, and
         # workload behavior used by these artifacts are unchanged.
         "3b1359247f1850aab93ab88d50293796ca157a57860cbd0a2f9c5f3fb60fe99c": {

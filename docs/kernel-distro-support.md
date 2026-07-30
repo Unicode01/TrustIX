@@ -63,9 +63,11 @@ the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
 OpenWrt 24.10.7 x86_64 has since passed SDK module builds and fresh 3600s
 OpenWrt-to-Debian full-kmod production gates. Its current TIX-TCP gate ran on
 2026-07-30 against Debian `6.12.96+deb13-cloud-amd64` at commit
-`321cd1d549a493cd415451e48f6ddcd9ae089f50`. It covered reusable outer-GSO
+`c412a27d7a3e354c9a4c83edb5123a38257ec210`. It covered nonlinear RX
+offset-copy, per-CPU RX GSO page-frag caches, and reusable outer-GSO TX
 page-pool storage with full-kmod modules loaded on both nodes and clean
-pstore/kernel log artifacts. Earlier 2026-07-29, 2026-07-08, 2026-07-05,
+pstore/kernel log artifacts. Earlier 2026-07-30 page-pool, 2026-07-29,
+2026-07-08, 2026-07-05,
 2026-07-03, 2026-06-27, and 2026-06-25 gates remain historical evidence.
 OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and secure TIX-TCP
 kernel crypto all failed closed at the runtime capability gate because the
@@ -123,13 +125,24 @@ current production evidence boundary:
 | --- | --- | ---: | ---: | --- |
 | Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 5.053889 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | OpenWrt-Debian full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.554661 Gbps | 3 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.94+deb13-cloud-amd64`, 2026-07-08 |
-| TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 10.498864 Gbps | 4 Gbps | 3600s per direction on Debian `6.12.96+deb13-cloud-amd64`, 2026-07-30 |
-| OpenWrt-Debian TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 5.869672 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.96+deb13-cloud-amd64`, 2026-07-30 |
+| TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 13.555675 Gbps | 4 Gbps | 3600s per direction on Debian `6.12.96+deb13-cloud-amd64`, 2026-07-30 |
+| OpenWrt-Debian TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 5.080420 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.96+deb13-cloud-amd64`, 2026-07-30 |
 | Userspace-TC tunnels | GRE/IPIP/VXLAN / secure or plaintext / `tc_xdp` / `userspace` | 1.424523 Gbps secure, 6.366737 Gbps plaintext | 1 Gbps secure, 4 Gbps plaintext | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.196574 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 | Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.577411 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Plaintext TIX-TCP route-GSO | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.081862 Gbps | 2.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64` to `6.12.95+deb13-cloud-amd64`, 2026-07-07 post-reboot |
 | Secure TIX-TCP kernel crypto | `tix_tcp` / `secure` / `performance` / `kernel_module` / `kernel` | 5.405340 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-07 |
+
+For OpenWrt x86_64 guests using a multiqueue `virtio_net` underlay, inspect
+`/sys/class/net/<underlay>/queues/rx-*/rps_cpus` before enabling OpenWrt packet
+steering. On the validated 8-vCPU topology, the image default assigned every
+RX queue to the same software-RPS CPU and limited a 120-second TIX-TCP A/B to
+5.764637/4.873256 Gbps. Setting `network.globals.packet_steering=0` left the
+virtio queues to distribute work and reached 9.152166/13.180706 Gbps; all-CPU
+RPS (`packet_steering=2`) fell back to 5.886434/4.962107 Gbps. Apply this only
+to matching multiqueue virtio deployments, restart networking in a maintenance
+window, and remeasure. Physical and single-queue NICs need their own IRQ/RPS
+profile.
 
 A 2026-06-21 current-head Debian-to-Debian full-kmod recheck on
 `6.12.90+deb13.1-amd64` also passed the 900s production gate. It used commit
