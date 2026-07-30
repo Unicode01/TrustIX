@@ -63,10 +63,11 @@ the current stable patch releases `23.05.6`, `24.10.7`, and `25.12.4`.
 OpenWrt 24.10.7 x86_64 has since passed SDK module builds and fresh 3600s
 OpenWrt-to-Debian full-kmod production gates. Its current TIX-TCP gate ran on
 2026-07-30 against Debian `6.12.96+deb13-cloud-amd64` at commit
-`c412a27d7a3e354c9a4c83edb5123a38257ec210`. It covered nonlinear RX
-offset-copy, per-CPU RX GSO page-frag caches, and reusable outer-GSO TX
-page-pool storage with full-kmod modules loaded on both nodes and clean
-pstore/kernel log artifacts. Earlier 2026-07-30 page-pool, 2026-07-29,
+`544402dd023b7a84de4e4233dc236d1ea489f5ad`. It covered fused TX payload
+copy/checksum, nonlinear RX offset-copy, per-CPU RX GSO page-frag caches, and
+reusable outer-GSO TX page-pool storage with full-kmod modules loaded on both nodes
+and clean pstore/kernel log artifacts. Earlier 2026-07-30 page-pool/cache,
+2026-07-29,
 2026-07-08, 2026-07-05,
 2026-07-03, 2026-06-27, and 2026-06-25 gates remain historical evidence.
 OpenWrt 24.10.7 route-GSO, secure-kUDP route-GSO, and secure TIX-TCP
@@ -125,8 +126,8 @@ current production evidence boundary:
 | --- | --- | ---: | ---: | --- |
 | Full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 5.053889 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | OpenWrt-Debian full-kmod plaintext | `udp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 3.554661 Gbps | 3 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.94+deb13-cloud-amd64`, 2026-07-08 |
-| TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 13.555675 Gbps | 4 Gbps | 3600s per direction on Debian `6.12.96+deb13-cloud-amd64`, 2026-07-30 |
-| OpenWrt-Debian TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 5.080420 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.96+deb13-cloud-amd64`, 2026-07-30 |
+| TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 9.410126 Gbps | 4 Gbps | 3600s per direction on Debian `6.12.96+deb13-cloud-amd64`, 2026-07-30 |
+| OpenWrt-Debian TIX-TCP full-kmod plaintext | `tix_tcp` / `plaintext` / `performance` / `kernel_module` / `userspace` | 7.244139 Gbps | 4 Gbps | 3600s per direction on OpenWrt `6.6.141` to Debian `6.12.96+deb13-cloud-amd64`, 2026-07-30 |
 | Userspace-TC tunnels | GRE/IPIP/VXLAN / secure or plaintext / `tc_xdp` / `userspace` | 1.424523 Gbps secure, 6.366737 Gbps plaintext | 1 Gbps secure, 4 Gbps plaintext | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
 | Plaintext kernel UDP TC-direct | `kernel_udp` / `plaintext` / `performance` / `tc_xdp` / `userspace` | 3.196574 Gbps | 3 Gbps | 3600s per direction on Debian `6.12.90+deb13.1-cloud-amd64`, 2026-07-03 |
 | Secure kernel UDP | `kernel_udp` / `secure` / `performance` / `tc_xdp` / `kernel` | 1.577411 Gbps | 1.5 Gbps | 3600s per direction on Debian `6.12.94+deb13-cloud-amd64`, 2026-07-05 |
@@ -445,6 +446,15 @@ per-CPU `page_pool_create()` instances, with `alloc_skb()` retained as a safe
 fallback. OpenWrt 23.05.6 kernel `5.15.189` additionally passed a 120-second
 preflight and eight load/traffic/unload cycles, but that shorter result is not
 a promoted production row.
+
+Two later same-day refreshes added nonlinear RX offset-copy, per-CPU RX GSO
+page-frag caches, and fused TX payload copy/checksum. The current `544402d`
+gate passed at 10.623425 and 9.410126 Gbps on Debian-Debian, and at 7.244139
+and 9.153305 Gbps on OpenWrt-Debian. All four boot IDs stayed stable, pstore
+and kernel-log checks were clean, and all 12,289,547,158 fused copy/checksum
+attempts completed with zero errors. The preceding `c412a27` cache gate remains
+historical evidence at 14.805806/13.555675 Gbps on Debian-Debian and
+5.080420/5.287641 Gbps on OpenWrt-Debian.
 
 Current OpenWrt SDK compile matrix targets for `kernel/trustix_datapath` from
 the default `scripts/openwrt-full-datapath-kmod-matrix.sh` target list:

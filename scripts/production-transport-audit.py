@@ -460,10 +460,11 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
             "secure_tix_tcp_kernel",
             "route_gso",
         },
-        # bcc9e3f and c412a27 only change plaintext TIX-TCP full-kmod RX
-        # construction and its module parameters. Every other family keeps
-        # the same runtime path; the Debian and OpenWrt TIX-TCP full-kmod
-        # families are intentionally absent and require fresh evidence.
+        # bcc9e3f and c412a27 change plaintext TIX-TCP full-kmod RX
+        # construction; 544402d changes its TX payload copy/checksum path.
+        # Every other family keeps the same runtime path; the Debian and
+        # OpenWrt TIX-TCP full-kmod families are intentionally absent and
+        # require fresh evidence.
         "bcc9e3f7d8e7bfd10c7b193324a06bb093a154eb": {
             "userspace",
             "userspace_tc",
@@ -475,6 +476,16 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
             "route_gso",
         },
         "c412a27d7a3e354c9a4c83edb5123a38257ec210": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+        "544402dd023b7a84de4e4233dc236d1ea489f5ad": {
             "userspace",
             "userspace_tc",
             "tc_direct",
@@ -525,6 +536,16 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
             "route_gso",
         },
         "c412a27d7a3e354c9a4c83edb5123a38257ec210": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+        "544402dd023b7a84de4e4233dc236d1ea489f5ad": {
             "userspace",
             "userspace_tc",
             "tc_direct",

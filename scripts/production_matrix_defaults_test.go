@@ -3716,6 +3716,7 @@ for row, path, want in cases:
 for commit in (
     "bcc9e3f7d8e7bfd10c7b193324a06bb093a154eb",
     "c412a27d7a3e354c9a4c83edb5123a38257ec210",
+    "544402dd023b7a84de4e4233dc236d1ea489f5ad",
 ):
     probe["commit"] = commit
     cases = [
@@ -4456,7 +4457,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	const finalProductionArtifact = "docs/trustix-performance-log.md#2026-07-12-zaozhuang-pve-0ceffe6-final-production"
 	const tcDirectProductionArtifact = "docs/trustix-performance-log.md#2026-07-21-zaozhuang-pve-fe41dc3-tc-direct-production"
-	const tixTCPFullKmodProductionArtifact = "docs/trustix-performance-log.md#2026-07-30-zaozhuang-pve-c412a27-tix-tcp-page-frag-cache-production"
+	const tixTCPFullKmodProductionArtifact = "docs/trustix-performance-log.md#2026-07-30-zaozhuang-pve-544402d-tix-tcp-copy-csum-production"
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":               tcDirectProductionArtifact,
 		"full_kmod":               finalProductionArtifact,
