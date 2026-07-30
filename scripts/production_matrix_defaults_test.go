@@ -3698,6 +3698,20 @@ for row, path, want in cases:
         print(f"f6cb649 runtime-compatible scope mismatch for row={row} path={path}: got {got}, want {want}", file=sys.stderr)
         sys.exit(1)
 
+probe["commit"] = "321cd1d549a493cd415451e48f6ddcd9ae089f50"
+cases = [
+    ({"gate_family": "full_kmod", "transport": "udp"}, "kernel/trustix_datapath/trustix_datapath.c", True),
+    ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, "kernel/trustix_datapath/trustix_datapath.c", True),
+    ({"gate_family": "secure_tix_tcp_kernel", "transport": "tix_tcp"}, "kernel/trustix_datapath/trustix_datapath.c", True),
+    ({"gate_family": "route_gso", "transport": "tix_tcp"}, "kernel/trustix_datapath/trustix_datapath.c", True),
+    ({"gate_family": "tix_tcp_full_kmod", "transport": "tix_tcp"}, "kernel/trustix_datapath/trustix_datapath.c", False),
+]
+for row, path, want in cases:
+    got = module.current_runtime_path_change_irrelevant(row, parent, path)
+    if got != want:
+        print(f"321cd1d runtime-compatible scope mismatch for row={row} path={path}: got {got}, want {want}", file=sys.stderr)
+        sys.exit(1)
+
 probe["commit"] = "4beb3be1acdb7a54003c6d60bdb7a135e16b9866"
 cases = [
     ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, "kernel/trustix_crypto/trustix_crypto.c", True),
@@ -4421,7 +4435,7 @@ func TestCurrentProductionEvidenceManifestPromotionBoundaries(t *testing.T) {
 	requirements := loadCurrentProductionEvidenceRequirements(t)
 	const finalProductionArtifact = "docs/trustix-performance-log.md#2026-07-12-zaozhuang-pve-0ceffe6-final-production"
 	const tcDirectProductionArtifact = "docs/trustix-performance-log.md#2026-07-21-zaozhuang-pve-fe41dc3-tc-direct-production"
-	const tixTCPFullKmodProductionArtifact = "docs/trustix-performance-log.md#2026-07-29-zaozhuang-pve-f6cb649-tix-tcp-full-kmod-production"
+	const tixTCPFullKmodProductionArtifact = "docs/trustix-performance-log.md#2026-07-30-zaozhuang-pve-321cd1d-tix-tcp-page-pool-production"
 	manifestRequiredArtifacts := map[string]string{
 		"tc_direct":               tcDirectProductionArtifact,
 		"full_kmod":               finalProductionArtifact,

@@ -23,12 +23,98 @@ Current production-default evidence boundary:
 
 | Default family | Evidence status | Boundary |
 | --- | --- | --- |
-| All 25 selected cross-host defaults | 22 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2`; Debian and OpenWrt-Debian TIX-TCP full-kmod are refreshed at `f6cb64954849e67273474a586ab22898a1bd0a77` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
-| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` evidence, TIX-TCP full-kmod evidence on `6.12.96+deb13-cloud-amd64`, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The virtio route-GSO guard keeps unsupported outer GSO on the direct-build path. |
-| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13; TIX-TCP full-kmod is refreshed against Debian `6.12.96+deb13-cloud-amd64` | Both `owdeb_full_kmod` and `owdeb_tix_tcp_full_kmod` passed strict 3600s per-direction gates. A follow-up five-cycle load/traffic/unload test also passed UDP, TIX-TCP, and mixed UDP plus TIX-TCP without reboot, pstore, residue, or ping loss. |
+| All 25 selected cross-host defaults | 22 compatibility-scoped rows retain manifest-backed 3600s per-direction evidence from `0ceffe6f3d2396a363c6062474474c4d03ec09fe`; `tc_direct` is refreshed at `fe41dc3a43cfbd5aa9c5500cb3ca15683cd84fd2`; Debian and OpenWrt-Debian TIX-TCP full-kmod are refreshed at `321cd1d549a493cd415451e48f6ddcd9ae089f50` | Every current evidence key uses a pinned gate/verifier/runner/matrix/generator toolchain. All 25 cases have bidirectional 3600s evidence with stable boot IDs and clean pstore/kernel-log findings. |
+| Debian kernel fast paths | Debian 13 `6.12.95+deb13-cloud-amd64` evidence, TIX-TCP full-kmod evidence on `6.12.96+deb13-cloud-amd64`, plus the current `tc_direct` refresh on `6.12.90+deb13.1-cloud-amd64` | Covers `secure_kudp`, `secure_tix_tcp_kernel`, `route_gso`, `full_kmod`, `tix_tcp_full_kmod`, and `tc_direct`. The TIX-TCP full-kmod path now includes reusable outer-GSO page-pool storage. |
+| OpenWrt-Debian full-kmod paths | OpenWrt 24.10.7 `6.6.141` to Debian 13; TIX-TCP full-kmod is refreshed against Debian `6.12.96+deb13-cloud-amd64` at `321cd1d549a493cd415451e48f6ddcd9ae089f50` | Both `owdeb_full_kmod` and `owdeb_tix_tcp_full_kmod` have strict 3600s per-direction evidence. The current TIX-TCP gate exercised the 6.6-compatible per-CPU page-pool implementation with zero page-pool errors. |
 | Debian userspace defaults | Debian 13 `6.12.95+deb13-cloud-amd64` to the same kernel | UDP/TCP/QUIC/WebSocket/HTTP CONNECT secure and plaintext plus secure TIX-TCP all have current-build 3600s per-direction evidence. |
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` production evidence, plus current-build short regressions on `6.12.90+deb13.1-cloud-amd64` | Policy remains `datapath=tc_xdp`, but these virtio configurations reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
+
+## 2026-07-30
+
+<a id="2026-07-30-zaozhuang-pve-321cd1d-tix-tcp-page-pool-production"></a>
+
+### Zaozhuang PVE 321cd1d TIX-TCP page-pool production refresh
+
+Validation used disposable VM200 through VM204 on isolated `vmbr3`; VM100 and
+all 1xx guests were untouched. The candidate was built from
+`321cd1d549a493cd415451e48f6ddcd9ae089f50` with Go 1.25.12 at
+`2026-07-30T01:07:10Z`. Every production-gate node ran the same
+`trustix-linux-amd64` binary, SHA256
+`eabb4079ea5dd6974f4a8d661a66bf6d65d350250e05b8f876459ffb87d8ab45`.
+The Debian 6.12.96 module SHA256 was
+`115eff6baeade8148a61cfc1f3b0eeef33e7f5c20aeeb3539de3a536888ac400`;
+the OpenWrt 6.6.141 module SHA256 was
+`d4a6c30f66d0e42acce0fa826e7fe66a4321914d6b28043da111aa6e59960d97`.
+
+The optimization replaces repeated 64 KiB `alloc_skb()` backing allocation for
+plaintext TIX-TCP outer GSO with reusable order-4 page-pool pages. Linux 6.12+
+uses `page_pool_create_percpu()`; Linux 5.15 and 6.6 use one independent
+`page_pool_create()` pool per possible CPU. Unsupported kernels, incomplete
+pool initialization, exhausted pools, oversized skbs, and `build_skb()`
+failures retain the original `alloc_skb()` fallback. Hook detach and TX flush
+complete before `synchronize_net()` and pool destruction during module unload.
+
+Four adjacent Debian-to-Debian 120-second P16 engineering samples measured:
+
+| Outer-GSO page-pool | Samples | Mean |
+| --- | --- | ---: |
+| disabled | 13.151769, 13.859176 Gbps | 13.505472 Gbps |
+| enabled | 14.244264, 15.147985 Gbps | 14.696125 Gbps |
+
+The enabled mean was 8.82% higher. Sender/receiver profile pairs reduced the
+average `clear_page_erms` share from about 23.93% to 15.03%. These are A/B
+engineering samples on a shared PVE host, not a deployment-wide throughput
+guarantee.
+
+The formal production gate used 16 warmed sessions and 16 iperf streams for
+3600 seconds in each direction. Both pairs ran concurrently, while each pair
+ran its directions serially:
+
+| Pair and direction | Received | Sent | Intervals | Receiver duration |
+| --- | ---: | ---: | ---: | ---: |
+| Debian VM200 to Debian VM201 | 11.474420 Gbps | 11.474530 Gbps | 3600 | 3600.027 seconds |
+| Debian VM201 to Debian VM200 | 10.498864 Gbps | 10.498945 Gbps | 3600 | 3600.022 seconds |
+| OpenWrt VM202 to Debian VM203 | 5.869672 Gbps | 5.869752 Gbps | 3600 | 3599.994 seconds |
+| Debian VM203 to OpenWrt VM202 | 5.909833 Gbps | 5.909893 Gbps | 3600 | 3600.037 seconds |
+
+Both strict production verifiers returned `status=pass` and `errors=[]` at the
+4 Gbps threshold. The 5.6 ms shortfall in one OpenWrt receiver duration is
+inside the gate's recorded 1-second timing tolerance and still contains 3600
+complete intervals. All four boot IDs remained stable, pstore was empty,
+kernel logs had no rejected finding, `tix-lan` retained `tx_queue_len=1000`,
+and every node reported 32 active sessions with zero dial, heartbeat, reset,
+stale-wire, queue-drop, xmit, GSO, or RX-worker errors.
+
+The four nodes recorded 451,903,217 outer-GSO page-pool attempts and
+451,900,636 hits. The remaining 2,581 allocations used the bounded legacy
+fallback; page-pool errors were zero. Five-minute live samples found no boot-ID
+change or monotonic memory/slab growth. After traffic and module unload, all
+four nodes had no TrustIX module loaded, pstore remained empty, available
+memory recovered, and OpenWrt slab returned from its in-test peak to about
+40 MiB.
+
+Compatibility work also built the same source for OpenWrt 23.05.6 kernel
+5.15.189. That target passed a 120-second bidirectional preflight plus eight
+load, 20-second bidirectional traffic, and unload cycles at approximately
+13.8 to 19.96 Gbps without reboot, pstore, module error, or retained memory.
+OpenWrt 6.6.141 separately passed 30 consecutive load/unload cycles. The
+5.15 checks are compatibility and lifecycle evidence, not a promoted 3600s
+production row.
+
+The production evidence is pinned to gate SHA256
+`232d6a28a49a5d2b0974f68bbd9fd7775e57a1ef385e1e6edb64247bf1b99b27`,
+verifier SHA256
+`8b67f33404150fea43019d060daab1b11d1dba1b910cbea4af509d4c9abffa9c`,
+runner SHA256
+`c8d6658da00e4a020408b8316fb0192c71942e0d47707e6ea990155b16e627f9`,
+transport-matrix SHA256
+`641247b65129fe83091ae35c0850161f45cad0176f033dd24d605798cf2204d9`,
+and evidence-generator SHA256
+`3e4d2546394071bdd9a806cecf199697fdbeec38f1a594ccf8cdcb8cb3be96c8`.
+The shared virtual underlay accumulated substantial TCP retransmits, so these
+figures are received-throughput and stability evidence, not a lossless-network
+claim.
 
 ## 2026-07-29
 

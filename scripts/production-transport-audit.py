@@ -472,6 +472,19 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
     # TIX-TCP full-kmod consumers enter the changed functions; UDP full-kmod,
     # route-GSO, kernel-crypto, TC, and userspace packet paths are unchanged.
     "kernel/trustix_datapath/trustix_datapath.c": {
+        # 321cd1d changes allocation only inside the plaintext TIX-TCP outer
+        # TCP GSO builder. UDP full-kmod and the helper-module fast paths do
+        # not call that builder; plaintext TIX-TCP full-kmod is deliberately
+        # absent and must use current-build Debian and OpenWrt evidence.
+        "321cd1d549a493cd415451e48f6ddcd9ae089f50": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
         "f6cb64954849e67273474a586ab22898a1bd0a77": {
             "userspace",
             "userspace_tc",
