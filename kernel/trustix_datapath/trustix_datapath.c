@@ -126,6 +126,7 @@
 #define TRUSTIX_DATAPATH_STATE_MAX_ENTRIES 65536U
 #define TRUSTIX_DATAPATH_STATE_BATCH_MAX 4096U
 #define TRUSTIX_DATAPATH_PACKET_MAX_LEN 65535U
+#define TRUSTIX_DATAPATH_IPV4_L4_PREFIX_MAX 80U
 #define TRUSTIX_DATAPATH_IFNAME_MAX 16U
 
 #define TRUSTIX_DATAPATH_HOOK_OP_ATTACH 1U
@@ -645,7 +646,7 @@ struct trustix_datapath_rx_worker_coalesce_state {
 	__be16 window;
 	__be16 urg_ptr;
 	__u8 tcp_flags;
-	__u8 header[sizeof(struct iphdr) + 60];
+	__u8 header[TRUSTIX_DATAPATH_IPV4_L4_PREFIX_MAX];
 };
 
 struct trustix_datapath_tx_plaintext_coalesce_slot {
@@ -665,7 +666,9 @@ struct trustix_datapath_tx_plaintext_coalesce_slot {
 struct trustix_datapath_rx_worker_pending_copy {
 	__u8 *packet;
 	const __u8 *source_packet;
+	const struct sk_buff *source_skb;
 	struct sk_buff *skb;
+	__u32 source_offset;
 	__u32 len;
 };
 
@@ -1412,6 +1415,12 @@ module_param_cb(rx_worker_stream_batch_queue,
 MODULE_PARM_DESC(rx_worker_stream_batch_queue,
 		 "Batch queue copied frames from multi-frame TCP TIXT payloads");
 
+static bool trustix_datapath_rx_worker_stream_offset_copy = true;
+module_param_named(rx_worker_stream_offset_copy,
+		   trustix_datapath_rx_worker_stream_offset_copy, bool, 0644);
+MODULE_PARM_DESC(rx_worker_stream_offset_copy,
+		 "Parse and copy nonlinear multi-frame TIX streams by skb offset without linearizing the outer skb");
+
 static unsigned long long trustix_datapath_rx_worker_stolen;
 module_param_named(rx_worker_stolen, trustix_datapath_rx_worker_stolen, ullong,
 		   0444);
@@ -1627,6 +1636,46 @@ module_param_named(rx_worker_stream_inline_batch_fallbacks,
 		   ullong, 0444);
 MODULE_PARM_DESC(rx_worker_stream_inline_batch_fallbacks,
 		 "TrustIX RX worker TCP stream packets that used worker batch-copy instead of netfilter-hook inline xmit for unsafe skb shapes");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_offset_copy_attempts);
+module_param_cb(rx_worker_stream_offset_copy_attempts,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_offset_copy_attempts, 0444);
+MODULE_PARM_DESC(rx_worker_stream_offset_copy_attempts,
+		 "Nonlinear TrustIX RX stream packets considered for offset-based parsing and copy");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_offset_copy_hits);
+module_param_cb(rx_worker_stream_offset_copy_hits,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_offset_copy_hits, 0444);
+MODULE_PARM_DESC(rx_worker_stream_offset_copy_hits,
+		 "Nonlinear multi-frame TrustIX RX stream packets parsed without outer skb linearization");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_offset_copy_bytes);
+module_param_cb(rx_worker_stream_offset_copy_bytes,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_offset_copy_bytes, 0444);
+MODULE_PARM_DESC(rx_worker_stream_offset_copy_bytes,
+		 "Outer bytes accepted by TrustIX RX stream offset-based parsing");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_offset_copy_fallbacks);
+module_param_cb(rx_worker_stream_offset_copy_fallbacks,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_offset_copy_fallbacks, 0444);
+MODULE_PARM_DESC(rx_worker_stream_offset_copy_fallbacks,
+		 "Nonlinear TrustIX RX stream packets that retained the linear pull path");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_rx_worker_stream_offset_copy_errors);
+module_param_cb(rx_worker_stream_offset_copy_errors,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_rx_worker_stream_offset_copy_errors, 0444);
+MODULE_PARM_DESC(rx_worker_stream_offset_copy_errors,
+		 "TrustIX RX stream offset header copy or parse failures");
 
 static unsigned long long trustix_datapath_rx_worker_checksum_fixed;
 module_param_named(rx_worker_checksum_fixed,
@@ -4069,6 +4118,16 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_stream_batch_frames = 0;
 	trustix_datapath_rx_worker_stream_batch_errors = 0;
 	trustix_datapath_rx_worker_stream_inline_batch_fallbacks = 0;
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_attempts);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_hits);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_bytes);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_fallbacks);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_errors);
 	trustix_datapath_rx_worker_checksum_fixed = 0;
 	trustix_datapath_rx_worker_checksum_trusted = 0;
 	trustix_datapath_rx_worker_checksum_trust_fallbacks = 0;
@@ -4327,28 +4386,68 @@ trustix_datapath_rx_worker_coalesce_accept(
 	return 0;
 }
 
-static int trustix_datapath_rx_worker_coalesced_frame_payload(
+static int trustix_datapath_rx_worker_pending_copy_bits(
 	const struct trustix_datapath_rx_worker_pending_copy *pending,
-	__u32 header_len, const __u8 **payload, __u32 *payload_len)
+	__u32 offset, void *dst, __u32 len)
 {
-	const struct iphdr *frame_iph;
-	const __u8 *frame_packet;
-	__u32 frame_len;
+	const __u8 *source;
 
-	if (payload)
-		*payload = NULL;
+	if (!pending || !dst || !len || offset > pending->len ||
+	    len > pending->len - offset)
+		return -EINVAL;
+	source = pending->packet ?: pending->source_packet;
+	if (source) {
+		memcpy(dst, source + offset, len);
+		return 0;
+	}
+	if (!pending->source_skb ||
+	    pending->source_offset > pending->source_skb->len ||
+	    pending->len > pending->source_skb->len - pending->source_offset)
+		return -EINVAL;
+	return skb_copy_bits(pending->source_skb,
+			     pending->source_offset + offset, dst, len) ?
+		       -ENODATA : 0;
+}
+
+static int trustix_datapath_rx_worker_coalesce_accept_pending(
+	struct trustix_datapath_rx_worker_coalesce_state *state,
+	const struct trustix_datapath_rx_worker_pending_copy *pending)
+{
+	__u8 header[TRUSTIX_DATAPATH_IPV4_L4_PREFIX_MAX];
+	__u32 copy_len;
+	int ret;
+
+	if (!state || !pending || !pending->len)
+		return -EINVAL;
+	copy_len = min_t(__u32, pending->len, sizeof(header));
+	ret = trustix_datapath_rx_worker_pending_copy_bits(
+		pending, 0, header, copy_len);
+	if (ret)
+		return ret;
+	return trustix_datapath_rx_worker_coalesce_accept(
+		state, header, pending->len);
+}
+
+static int trustix_datapath_rx_worker_coalesced_frame_payload_len(
+	const struct trustix_datapath_rx_worker_pending_copy *pending,
+	__u32 header_len, __u32 *payload_len)
+{
+	struct iphdr frame_iph;
+	__u32 frame_len;
+	int ret;
+
 	if (payload_len)
 		*payload_len = 0;
-	if (!pending || !payload || !payload_len || !header_len)
+	if (!pending || !payload_len || !header_len ||
+	    pending->len < header_len)
 		return -EINVAL;
-	frame_packet = pending->packet ?: pending->source_packet;
-	if (!frame_packet || !pending->len || pending->len < header_len)
-		return -EINVAL;
-	frame_iph = (const struct iphdr *)frame_packet;
-	frame_len = ntohs(frame_iph->tot_len);
+	ret = trustix_datapath_rx_worker_pending_copy_bits(
+		pending, 0, &frame_iph, sizeof(frame_iph));
+	if (ret)
+		return ret;
+	frame_len = ntohs(frame_iph.tot_len);
 	if (frame_len < header_len || frame_len > pending->len)
 		return -EINVAL;
-	*payload = frame_packet + header_len;
 	*payload_len = frame_len - header_len;
 	return 0;
 }
@@ -4396,12 +4495,10 @@ static int trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
 	if (!expected_frags || expected_frags > MAX_SKB_FRAGS)
 		return -EMSGSIZE;
 	for (i = 0; i < frames; i++) {
-		const __u8 *frame_payload;
 		__u32 frame_payload_len;
 
-		ret = trustix_datapath_rx_worker_coalesced_frame_payload(
-			&pending[i], header_len, &frame_payload,
-			&frame_payload_len);
+		ret = trustix_datapath_rx_worker_coalesced_frame_payload_len(
+			&pending[i], header_len, &frame_payload_len);
 		if (ret)
 			return ret;
 		if (check_add_overflow(copied_payload, frame_payload_len,
@@ -4420,12 +4517,11 @@ static int trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
 	memcpy(dst, state->header, header_len);
 	copied_payload = 0;
 	for (i = 0; i < frames; i++) {
-		const __u8 *frame_payload;
+		__u32 frame_payload_offset = 0;
 		__u32 frame_payload_len;
 
-		ret = trustix_datapath_rx_worker_coalesced_frame_payload(
-			&pending[i], header_len, &frame_payload,
-			&frame_payload_len);
+		ret = trustix_datapath_rx_worker_coalesced_frame_payload_len(
+			&pending[i], header_len, &frame_payload_len);
 		if (ret)
 			goto error;
 		while (frame_payload_len) {
@@ -4442,10 +4538,13 @@ static int trustix_datapath_rx_worker_build_coalesced_gso_nonlinear(
 			}
 			copy_len = min_t(__u32, frame_payload_len,
 					 PAGE_SIZE - page_used);
-			memcpy((__u8 *)page_addr + page_used, frame_payload,
-			       copy_len);
+			ret = trustix_datapath_rx_worker_pending_copy_bits(
+				&pending[i], header_len + frame_payload_offset,
+				(__u8 *)page_addr + page_used, copy_len);
+			if (ret)
+				goto error;
 			page_used += copy_len;
-			frame_payload += copy_len;
+			frame_payload_offset += copy_len;
 			frame_payload_len -= copy_len;
 			copied_payload += copy_len;
 			if (page_used == PAGE_SIZE) {
@@ -4572,19 +4671,22 @@ trustix_datapath_rx_worker_build_coalesced_gso_skb(
 	memcpy(dst, state->header, header_len);
 	payload_offset = header_len;
 	for (i = 0; i < frames; i++) {
-		const __u8 *frame_payload;
 		__u32 frame_payload_len;
 
-		ret = trustix_datapath_rx_worker_coalesced_frame_payload(
-			&pending[i], header_len, &frame_payload,
-			&frame_payload_len);
+		ret = trustix_datapath_rx_worker_coalesced_frame_payload_len(
+			&pending[i], header_len, &frame_payload_len);
 		if (ret || payload_offset + copied_payload + frame_payload_len >
 				   state->total_len) {
 			kfree_skb(skb);
 			return NULL;
 		}
-		memcpy(dst + payload_offset + copied_payload, frame_payload,
-		       frame_payload_len);
+		ret = trustix_datapath_rx_worker_pending_copy_bits(
+			&pending[i], header_len, dst + payload_offset + copied_payload,
+			frame_payload_len);
+		if (ret) {
+			kfree_skb(skb);
+			return NULL;
+		}
 		copied_payload += frame_payload_len;
 	}
 	if (copied_payload != state->payload_len) {
@@ -7998,7 +8100,7 @@ static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 	__u32 outer_len;
 	__u32 tcp_len;
 	__u64 outer_sequence;
-	__u8 inner_header[sizeof(struct iphdr) + 60];
+	__u8 inner_header[TRUSTIX_DATAPATH_IPV4_L4_PREFIX_MAX];
 	unsigned int i;
 	int ret;
 
@@ -9578,6 +9680,25 @@ trustix_datapath_outer_parse_skb_locked(struct sk_buff *skb,
 	return 0;
 }
 
+static int trustix_datapath_parse_tixt_skb_header(
+	const struct sk_buff *skb, __u32 offset, __u32 remaining,
+	struct trustix_datapath_tixt_frame *frame)
+{
+	__u8 wire[TRUSTIX_DATAPATH_TIXT_HEADER_LEN];
+	__u32 copy_len;
+
+	if (!skb || !frame)
+		return -EINVAL;
+	if (remaining < TRUSTIX_DATAPATH_MIN_FRAME_HEADER_LEN)
+		return -ENODATA;
+	if (offset > skb->len || remaining > skb->len - offset)
+		return -EMSGSIZE;
+	copy_len = min_t(__u32, remaining, sizeof(wire));
+	if (skb_copy_bits(skb, offset, wire, copy_len))
+		return -ENODATA;
+	return trustix_datapath_parse_tixt_header(wire, remaining, frame);
+}
+
 static int
 trustix_datapath_rx_stage_parse_skb(struct sk_buff *skb,
 				    const struct trustix_datapath_ioc_classify *classify,
@@ -9594,6 +9715,7 @@ trustix_datapath_rx_stage_parse_skb(struct sk_buff *skb,
 	__u32 total_len;
 	__u32 tixt_offset;
 	__u32 tixt_len;
+	int network_offset;
 	__u16 transport_len;
 	int ret;
 
@@ -9604,8 +9726,11 @@ trustix_datapath_rx_stage_parse_skb(struct sk_buff *skb,
 	network = skb_network_header(skb);
 	if (!network)
 		return -EINVAL;
+	network_offset = skb_network_offset(skb);
+	if (network_offset < 0 || (__u32)network_offset > skb->len)
+		return -EOVERFLOW;
 	total_len = trustix_datapath_get_be16(network + 2);
-	if (total_len > skb->len)
+	if (total_len > skb->len - (__u32)network_offset)
 		return -EMSGSIZE;
 	switch (classify->protocol) {
 	case IPPROTO_UDP:
@@ -9632,7 +9757,33 @@ trustix_datapath_rx_stage_parse_skb(struct sk_buff *skb,
 	if (tixt_len < TRUSTIX_DATAPATH_MIN_FRAME_HEADER_LEN ||
 	    tixt_offset > UINT_MAX - tixt_len)
 		return -EMSGSIZE;
-	if (!pskb_may_pull(skb, tixt_offset + tixt_len))
+	if (skb_is_nonlinear(skb)) {
+		this_cpu_inc(
+			trustix_datapath_rx_worker_stream_offset_copy_attempts);
+		if (likely(READ_ONCE(
+			    trustix_datapath_rx_worker_stream_offset_copy))) {
+			ret = trustix_datapath_parse_tixt_skb_header(
+				skb, (__u32)network_offset + tixt_offset,
+				tixt_len, &frame);
+			if (ret || !(frame.flags &
+				     TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4)) {
+				this_cpu_inc(
+					trustix_datapath_rx_worker_stream_offset_copy_errors);
+				return ret ?: -EPROTONOSUPPORT;
+			}
+			if (frame.wire_len != tixt_len) {
+				this_cpu_inc(
+					trustix_datapath_rx_worker_stream_offset_copy_hits);
+				this_cpu_add(
+					trustix_datapath_rx_worker_stream_offset_copy_bytes,
+					total_len);
+				return -EMSGSIZE;
+			}
+		}
+		this_cpu_inc(
+			trustix_datapath_rx_worker_stream_offset_copy_fallbacks);
+	}
+	if (!pskb_may_pull(skb, (__u32)network_offset + tixt_offset + tixt_len))
 		return -ENODATA;
 	network = skb_network_header(skb);
 	tixt = network + tixt_offset;
@@ -12637,8 +12788,36 @@ static void trustix_datapath_rx_worker_free_pending_copies(
 		pending[i].skb = NULL;
 		kfree(pending[i].packet);
 		pending[i].packet = NULL;
+		pending[i].source_packet = NULL;
+		pending[i].source_skb = NULL;
+		pending[i].source_offset = 0;
 		pending[i].len = 0;
 	}
+}
+
+static struct sk_buff *
+trustix_datapath_rx_worker_build_inner_skb_pending(
+	struct net_device *target_dev,
+	const struct trustix_datapath_rx_worker_pending_copy *pending)
+{
+	struct sk_buff *inner_skb;
+	__u8 *dst;
+
+	if (!target_dev || !pending || !pending->len ||
+	    target_dev->type != ARPHRD_ETHER)
+		return NULL;
+	inner_skb = netdev_alloc_skb_ip_align(
+		target_dev, ETH_HLEN + pending->len);
+	if (!inner_skb)
+		return NULL;
+	skb_reserve(inner_skb, ETH_HLEN);
+	dst = skb_put(inner_skb, pending->len);
+	if (trustix_datapath_rx_worker_pending_copy_bits(
+		    pending, 0, dst, pending->len)) {
+		kfree_skb(inner_skb);
+		return NULL;
+	}
+	return inner_skb;
 }
 
 static int trustix_datapath_rx_worker_materialize_pending_copies(
@@ -12653,23 +12832,27 @@ static int trustix_datapath_rx_worker_materialize_pending_copies(
 	for (i = 0; i < frames; i++) {
 		if ((pending[i].packet || pending[i].skb) && pending[i].len)
 			continue;
-		if (!pending[i].source_packet || !pending[i].len)
+		if ((!pending[i].source_packet && !pending[i].source_skb) ||
+		    !pending[i].len)
 			return -EINVAL;
 		if (READ_ONCE(trustix_datapath_rx_worker_queue_skb)) {
 			pending[i].skb =
-				trustix_datapath_rx_worker_build_inner_skb(
-					target_dev, pending[i].source_packet,
-					pending[i].len);
+				trustix_datapath_rx_worker_build_inner_skb_pending(
+					target_dev, &pending[i]);
 			if (!pending[i].skb) {
 				trustix_datapath_rx_worker_queued_skb_fallbacks++;
-				pending[i].packet = kmemdup(
-					pending[i].source_packet, pending[i].len,
-					GFP_ATOMIC);
 			}
-		} else {
-			pending[i].packet = kmemdup(pending[i].source_packet,
-						    pending[i].len,
-						    GFP_ATOMIC);
+		}
+		if (!pending[i].skb) {
+			__u8 *packet = kmalloc(pending[i].len, GFP_ATOMIC);
+
+			if (packet && trustix_datapath_rx_worker_pending_copy_bits(
+					      &pending[i], 0, packet,
+					      pending[i].len)) {
+				kfree(packet);
+				packet = NULL;
+			}
+			pending[i].packet = packet;
 		}
 		if (!pending[i].packet && !pending[i].skb) {
 			trustix_datapath_rx_worker_alloc_errors++;
@@ -12729,6 +12912,9 @@ static int trustix_datapath_rx_worker_enqueue_pending_copies(
 			trustix_datapath_rx_worker_queued_skb++;
 		pending[i].packet = NULL;
 		pending[i].skb = NULL;
+		pending[i].source_packet = NULL;
+		pending[i].source_skb = NULL;
+		pending[i].source_offset = 0;
 		pending[i].len = 0;
 		trustix_datapath_rx_worker_tail =
 			(trustix_datapath_rx_worker_tail + 1) %
@@ -13859,10 +14045,8 @@ static int trustix_datapath_rx_worker_queue_stream_gso_from_pending(
 	if (target_dev->type != ARPHRD_ETHER)
 		return -EPROTONOSUPPORT;
 	for (i = 0; i < frames; i++) {
-		const __u8 *packet = pending[i].source_packet ?: pending[i].packet;
-
-		ret = trustix_datapath_rx_worker_coalesce_accept(
-			&coalesce, packet, pending[i].len);
+		ret = trustix_datapath_rx_worker_coalesce_accept_pending(
+			&coalesce, &pending[i]);
 		if (ret) {
 			trustix_datapath_rx_worker_stream_direct_gso_fallbacks++;
 			return ret;
@@ -14298,21 +14482,26 @@ static int
 trustix_datapath_rx_worker_push_stream_batch_copy(
 	struct sk_buff *skb, const struct trustix_datapath_ioc_classify *outer,
 	__u32 total_len, __u32 tixt_offset, unsigned int expected_frames,
-	int target_ifindex, unsigned int *queued_frames, bool force_queue)
+	int target_ifindex, unsigned int *queued_frames, bool force_queue,
+	bool offset_copy)
 {
 	struct trustix_datapath_rx_worker_pending_copy *pending = NULL;
 	struct trustix_datapath_rx_stage_view view = {};
 	struct trustix_datapath_rx_validation_cache validation_cache = {};
 	struct trustix_datapath_ioc_classify inner = {};
 	struct net_device *target_dev = NULL;
+	__u8 inner_header[sizeof(struct iphdr) + 60];
 	const __u8 *network;
 	const __u8 *cursor;
 	const __u8 *inner_packet;
 	__u8 inner_ip_header_len;
 	__u8 inner_l4_header_len;
+	__u32 cursor_offset = 0;
+	__u32 inner_offset;
 	__u32 remaining;
 	unsigned int frames = 0;
 	unsigned int queued = 0;
+	int network_offset;
 	int ret;
 
 	if (queued_frames)
@@ -14338,16 +14527,37 @@ trustix_datapath_rx_worker_push_stream_batch_copy(
 		goto error;
 	}
 	network = skb_network_header(skb);
-	cursor = network + tixt_offset;
+	if (!network) {
+		ret = -EINVAL;
+		goto error;
+	}
+	network_offset = skb_network_offset(skb);
+	if (network_offset < 0 || (__u32)network_offset > skb->len ||
+	    tixt_offset > skb->len - (__u32)network_offset) {
+		ret = -EOVERFLOW;
+		goto error;
+	}
+	if (offset_copy) {
+		cursor = NULL;
+		cursor_offset = (__u32)network_offset + tixt_offset;
+	} else {
+		cursor = network + tixt_offset;
+	}
 	remaining = total_len - tixt_offset;
 	while (remaining) {
+		__u32 inner_header_len;
+
 		if (frames >= expected_frames) {
 			ret = -E2BIG;
 			goto error;
 		}
 		memset(&view, 0, sizeof(view));
-		ret = trustix_datapath_parse_tixt_header(cursor, remaining,
-							 &view.frame);
+		if (offset_copy)
+			ret = trustix_datapath_parse_tixt_skb_header(
+				skb, cursor_offset, remaining, &view.frame);
+		else
+			ret = trustix_datapath_parse_tixt_header(
+				cursor, remaining, &view.frame);
 		if (ret)
 			goto error;
 		if (!(view.frame.flags &
@@ -14359,21 +14569,40 @@ trustix_datapath_rx_worker_push_stream_batch_copy(
 			ret = -EPROTONOSUPPORT;
 			goto error;
 		}
-		inner_packet = cursor + view.frame.header_len;
+		if (offset_copy) {
+			if (check_add_overflow(cursor_offset,
+				       (__u32)view.frame.header_len,
+				       &inner_offset) ||
+			    inner_offset > skb->len ||
+			    view.frame.payload_len > skb->len - inner_offset) {
+				ret = -EMSGSIZE;
+				goto error;
+			}
+			inner_header_len = min_t(__u32,
+				view.frame.payload_len, sizeof(inner_header));
+			if (skb_copy_bits(skb, inner_offset, inner_header,
+					  inner_header_len)) {
+				ret = -ENODATA;
+				goto error;
+			}
+			inner_packet = inner_header;
+		} else {
+			inner_packet = cursor + view.frame.header_len;
+			inner_offset = (__u32)(inner_packet - skb->data);
+		}
 		ret = trustix_datapath_parse_ipv4_packet(
 			inner_packet, view.frame.payload_len, &inner,
 			&inner_ip_header_len, &inner_l4_header_len);
 		if (ret)
 			goto error;
-		if (inner_packet < skb->data ||
-		    inner_packet - skb->data > TRUSTIX_DATAPATH_PACKET_MAX_LEN) {
+		if (inner_offset > TRUSTIX_DATAPATH_PACKET_MAX_LEN) {
 			ret = -EOVERFLOW;
 			goto error;
 		}
 		view.inner = inner;
 		view.inner_packet = inner_packet;
 		view.tixt_len = view.frame.wire_len;
-		view.inner_offset = (__u32)(inner_packet - skb->data);
+		view.inner_offset = inner_offset;
 		view.inner_ip_header_len = inner_ip_header_len;
 		view.inner_l4_header_len = inner_l4_header_len;
 		ret = trustix_datapath_rx_stage_validate_batch(
@@ -14385,10 +14614,18 @@ trustix_datapath_rx_worker_push_stream_batch_copy(
 			ret = -EOPNOTSUPP;
 			goto error;
 		}
-		pending[frames].source_packet = inner_packet;
+		if (offset_copy) {
+			pending[frames].source_skb = skb;
+			pending[frames].source_offset = inner_offset;
+		} else {
+			pending[frames].source_packet = inner_packet;
+		}
 		pending[frames].len = view.frame.payload_len;
 		frames++;
-		cursor += view.frame.wire_len;
+		if (offset_copy)
+			cursor_offset += view.frame.wire_len;
+		else
+			cursor += view.frame.wire_len;
 		remaining -= view.frame.wire_len;
 	}
 	if (frames != expected_frames) {
@@ -14469,14 +14706,17 @@ trustix_datapath_rx_worker_push_stream(
 	__u8 inner_l4_header_len;
 	__u32 total_len;
 	__u32 tixt_offset;
+	__u32 cursor_offset = 0;
 	__u32 remaining;
 	__u16 transport_len;
 	unsigned int frames = 0;
 	bool consumer_validates_frames;
 	bool inline_xmit;
 	bool inline_xmit_needs_batch = false;
+	bool offset_copy;
 	bool stream_batch_queue;
 	bool worker_xmit;
+	int network_offset;
 	int ret;
 
 	if (queued_frames)
@@ -14492,8 +14732,11 @@ trustix_datapath_rx_worker_push_stream(
 	network = skb_network_header(skb);
 	if (!network)
 		return -EINVAL;
+	network_offset = skb_network_offset(skb);
+	if (network_offset < 0 || (__u32)network_offset > skb->len)
+		return -EOVERFLOW;
 	total_len = trustix_datapath_get_be16(network + 2);
-	if (total_len > skb->len)
+	if (total_len > skb->len - (__u32)network_offset)
 		return -EMSGSIZE;
 	switch (outer->protocol) {
 	case IPPROTO_UDP:
@@ -14524,11 +14767,19 @@ trustix_datapath_rx_worker_push_stream(
 		READ_ONCE(trustix_datapath_rx_worker_stream_batch_queue);
 	consumer_validates_frames =
 		(inline_xmit && worker_xmit) || stream_batch_queue;
-	if (!pskb_may_pull(skb, total_len))
+	offset_copy = consumer_validates_frames && skb_is_nonlinear(skb) &&
+		      READ_ONCE(trustix_datapath_rx_worker_stream_offset_copy);
+	if (!offset_copy &&
+	    !pskb_may_pull(skb, (__u32)network_offset + total_len))
 		return -ENODATA;
 
 	network = skb_network_header(skb);
-	cursor = network + tixt_offset;
+	if (offset_copy) {
+		cursor = NULL;
+		cursor_offset = (__u32)network_offset + tixt_offset;
+	} else {
+		cursor = network + tixt_offset;
+	}
 	remaining = total_len - tixt_offset;
 	while (remaining) {
 		if (frames >= TRUSTIX_DATAPATH_RX_WORKER_STREAM_MAX_FRAMES) {
@@ -14536,8 +14787,12 @@ trustix_datapath_rx_worker_push_stream(
 			goto error;
 		}
 		memset(&view, 0, sizeof(view));
-		ret = trustix_datapath_parse_tixt_header(cursor, remaining,
-							 &view.frame);
+		if (offset_copy)
+			ret = trustix_datapath_parse_tixt_skb_header(
+				skb, cursor_offset, remaining, &view.frame);
+		else
+			ret = trustix_datapath_parse_tixt_header(
+				cursor, remaining, &view.frame);
 		if (ret)
 			goto error;
 		if (!(view.frame.flags &
@@ -14577,7 +14832,10 @@ trustix_datapath_rx_worker_push_stream(
 				goto error;
 		}
 		frames++;
-		cursor += view.frame.wire_len;
+		if (offset_copy)
+			cursor_offset += view.frame.wire_len;
+		else
+			cursor += view.frame.wire_len;
 		remaining -= view.frame.wire_len;
 	}
 	if (!frames)
@@ -14590,7 +14848,8 @@ trustix_datapath_rx_worker_push_stream(
 				trustix_datapath_rx_worker_stream_inline_batch_fallbacks++;
 			ret = trustix_datapath_rx_worker_push_stream_batch_copy(
 				skb, outer, total_len, tixt_offset, frames,
-				target_ifindex, queued_frames, true);
+				target_ifindex, queued_frames, true,
+				offset_copy);
 			if (!ret)
 				trustix_datapath_rx_worker_count_stream_packets(
 					1, frames);
@@ -14607,13 +14866,17 @@ trustix_datapath_rx_worker_push_stream(
 	if (stream_batch_queue) {
 		ret = trustix_datapath_rx_worker_push_stream_batch_copy(
 			skb, outer, total_len, tixt_offset, frames,
-			target_ifindex, queued_frames, false);
+			target_ifindex, queued_frames, false, offset_copy);
 		if (!ret) {
 			trustix_datapath_rx_worker_count_stream_packets(1, frames);
 		}
 		return ret;
 	}
 
+	if (offset_copy) {
+		ret = -EOPNOTSUPP;
+		goto error;
+	}
 	cursor = network + tixt_offset;
 	remaining = total_len - tixt_offset;
 	frames = 0;
@@ -15836,6 +16099,16 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_stream_batch_frames = 0;
 	trustix_datapath_rx_worker_stream_batch_errors = 0;
 	trustix_datapath_rx_worker_stream_inline_batch_fallbacks = 0;
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_attempts);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_hits);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_bytes);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_fallbacks);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_rx_worker_stream_offset_copy_errors);
 	trustix_datapath_rx_worker_checksum_fixed = 0;
 	trustix_datapath_rx_worker_checksum_trusted = 0;
 	trustix_datapath_rx_worker_checksum_trust_fallbacks = 0;
@@ -17740,6 +18013,64 @@ static int trustix_datapath_selftest_tixt_frame(void)
 	return 0;
 }
 
+static int trustix_datapath_selftest_tixt_stream_skb(
+	const __u8 *stream, __u32 len, __u32 second_offset)
+{
+	struct trustix_datapath_rx_worker_pending_copy pending = {};
+	struct trustix_datapath_tixt_frame frame = {};
+	const __u32 linear_len = 17;
+	struct sk_buff *skb;
+	struct page *page;
+	void *page_addr;
+	__u8 copied[16];
+	int ret = 0;
+
+	if (!stream || len <= linear_len || len - linear_len > PAGE_SIZE ||
+	    second_offset >= len)
+		return -EINVAL;
+	skb = alloc_skb(linear_len, GFP_KERNEL);
+	if (!skb)
+		return -ENOMEM;
+	memcpy(skb_put(skb, linear_len), stream, linear_len);
+	page = alloc_page(GFP_KERNEL);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	page_addr = kmap_local_page(page);
+	memcpy(page_addr, stream + linear_len, len - linear_len);
+	kunmap_local(page_addr);
+	skb_add_rx_frag(skb, 0, page, 0, len - linear_len, PAGE_SIZE);
+
+	if (!skb_is_nonlinear(skb) || skb_headlen(skb) != linear_len) {
+		ret = -EINVAL;
+		goto out;
+	}
+	ret = trustix_datapath_parse_tixt_skb_header(skb, 0, len, &frame);
+	if (ret || frame.wire_len != second_offset) {
+		ret = ret ?: -EINVAL;
+		goto out;
+	}
+	ret = trustix_datapath_parse_tixt_skb_header(
+		skb, second_offset, len - second_offset, &frame);
+	if (ret)
+		goto out;
+	pending.source_skb = skb;
+	pending.source_offset = second_offset;
+	pending.len = frame.wire_len;
+	ret = trustix_datapath_rx_worker_pending_copy_bits(
+		&pending, 7, copied, sizeof(copied));
+	if (ret)
+		goto out;
+	if (memcmp(copied, stream + second_offset + 7, sizeof(copied)) ||
+	    skb_headlen(skb) != linear_len)
+		ret = -EINVAL;
+
+out:
+	kfree_skb(skb);
+	return ret;
+}
+
 static int trustix_datapath_selftest_tixt_stream(void)
 {
 	struct trustix_datapath_tixt_frame frame;
@@ -17747,6 +18078,7 @@ static int trustix_datapath_selftest_tixt_stream(void)
 	__u32 cursor = 0;
 	int ret;
 
+	memset(stream, 0, sizeof(stream));
 	trustix_datapath_build_tixt(stream,
 				    TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4,
 				    1, 2, 3, 24, 0, 0);
@@ -17769,7 +18101,8 @@ static int trustix_datapath_selftest_tixt_stream(void)
 	    frame.fragment_count != 2 ||
 	    frame.wire_len != TRUSTIX_DATAPATH_TIXT_HEADER_LEN + 12)
 		return -EINVAL;
-	return 0;
+	return trustix_datapath_selftest_tixt_stream_skb(
+		stream, sizeof(stream), TRUSTIX_DATAPATH_TIXT_HEADER_LEN + 24);
 }
 
 static void trustix_datapath_run_selftests(__u64 requested, __u64 *passed,

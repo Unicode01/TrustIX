@@ -1044,6 +1044,7 @@ var trustIXDatapathBaseRXWorkerModuleParameters = map[string]struct{}{
 	"rx_worker_single_coalesce_max_frames":    {},
 	"rx_worker_single_coalesce_flush_jiffies": {},
 	"rx_worker_slots":                         {},
+	"rx_worker_stream_offset_copy":            {},
 	"rx_worker_stream_tcp":                    {},
 	"rx_worker_tcp":                           {},
 	"rx_worker_xmit":                          {},

@@ -2120,6 +2120,42 @@ func TestCrossHostProductionGateRejectsTIXTCPFullKmodWithoutPlaintextTraffic(t *
 	}
 }
 
+func TestCrossHostProductionGateRejectsTIXTCPFullKmodWithoutRXOffsetCopy(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	overrides := tixTCPFullKmodModuleOverrides(true)
+	overrides["rx_worker_stream_offset_copy"] = "N"
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, overrides)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=tix-tcp-full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted TIX-TCP full-kmod artifacts without RX offset copy:\n%s", output)
+	}
+	if !strings.Contains(string(output), "rx_worker_stream_offset_copy") {
+		t.Fatalf("production gate did not report disabled RX offset copy:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsTIXTCPFullKmodRXOffsetCopyErrors(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	overrides := tixTCPFullKmodModuleOverrides(true)
+	overrides["rx_worker_stream_offset_copy_errors"] = "1"
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, overrides)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=tix-tcp-full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted TIX-TCP full-kmod artifacts with RX offset-copy errors:\n%s", output)
+	}
+	if !strings.Contains(string(output), "rx_worker_stream_offset_copy_errors") {
+		t.Fatalf("production gate did not report RX offset-copy errors:\n%s", output)
+	}
+}
+
 func TestCrossHostProductionGateAcceptsSecureKUDPRouteGSOArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
@@ -2884,6 +2920,12 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		"unsafe_features":                             "0",
 		"selftest_failures":                           "0",
 		"rx_worker_inject":                            "Y",
+		"rx_worker_stream_offset_copy":                "Y",
+		"rx_worker_stream_offset_copy_attempts":       "0",
+		"rx_worker_stream_offset_copy_hits":           "0",
+		"rx_worker_stream_offset_copy_bytes":          "0",
+		"rx_worker_stream_offset_copy_fallbacks":      "0",
+		"rx_worker_stream_offset_copy_errors":         "0",
 		"tx_plaintext":                                "Y",
 		"rx_worker_hot_stats":                         "N",
 		"tx_plaintext_skip_inner_tcp_checksum":        "N",
@@ -2971,6 +3013,9 @@ func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		"tx_plaintext_gso_segments":                 traffic,
 		"tx_plaintext_outer_gso_page_pool_attempts": traffic,
 		"tx_plaintext_outer_gso_page_pool_hits":     traffic,
+		"rx_worker_stream_offset_copy_attempts":     traffic,
+		"rx_worker_stream_offset_copy_hits":         traffic,
+		"rx_worker_stream_offset_copy_bytes":        traffic,
 		"rx_worker_injected":                        traffic,
 	}
 }
