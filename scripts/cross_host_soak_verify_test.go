@@ -2892,6 +2892,12 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		"rx_worker_single_coalesce_max_frames":        "32",
 		"tx_plaintext_hash_tx_queue":                  "Y",
 		"tx_plaintext_stream_coalesce":                "N",
+		"tx_plaintext_outer_gso_page_pool":            "Y",
+		"tx_plaintext_outer_gso_page_pool_available":  "Y",
+		"tx_plaintext_outer_gso_page_pool_attempts":   "0",
+		"tx_plaintext_outer_gso_page_pool_hits":       "0",
+		"tx_plaintext_outer_gso_page_pool_fallbacks":  "0",
+		"tx_plaintext_outer_gso_page_pool_errors":     "0",
 		"tx_plaintext_packets":                        plaintextSegments,
 		"tx_plaintext_gso_segments":                   plaintextSegments,
 		"tx_plaintext_outer_gso_segments":             plaintextSegments,
@@ -2959,11 +2965,13 @@ func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		traffic = "128"
 	}
 	return map[string]string{
-		"session_records":           "16",
-		"session_wire_records":      "16",
-		"tx_plaintext_packets":      traffic,
-		"tx_plaintext_gso_segments": traffic,
-		"rx_worker_injected":        traffic,
+		"session_records":                           "16",
+		"session_wire_records":                      "16",
+		"tx_plaintext_packets":                      traffic,
+		"tx_plaintext_gso_segments":                 traffic,
+		"tx_plaintext_outer_gso_page_pool_attempts": traffic,
+		"tx_plaintext_outer_gso_page_pool_hits":     traffic,
+		"rx_worker_injected":                        traffic,
 	}
 }
 

@@ -433,6 +433,16 @@ VXLAN_CARRIER_FRAGMENT_COMMITS_BY_PATH = {
     },
 }
 RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
+    # 4beb3be only annotates two software AES helpers as potentially unused so
+    # the module builds on legacy kernels whose selected compile-time path does
+    # not reference them. It does not change generated runtime behavior on the
+    # kernels covered by the existing secure transport evidence.
+    "kernel/trustix_crypto/trustix_crypto.c": {
+        "4beb3be1acdb7a54003c6d60bdb7a135e16b9866": {
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+        },
+    },
     # f6cb649 adds a nonlinear skb builder to the plaintext TIX-TCP full
     # datapath and fixes the legacy bit-1 interpretation for that path. The
     # other gate classes either do not load trustix_datapath, do not decode
@@ -586,6 +596,19 @@ RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
     },
 }
 GATE_TOOL_COMPATIBLE_SHA256_BY_FAMILY = {
+    # The immediately preceding gate did not require the new TIX-TCP
+    # full-kmod outer-GSO page-pool counters. All other family predicates are
+    # unchanged, so only the two TIX-TCP full-kmod families need fresh runs.
+    "4af886304e8b7c1136afb799821fc54c7beb581875e239d3d431e6096aeb217b": {
+        "userspace",
+        "userspace_tc",
+        "tc_direct",
+        "full_kmod",
+        "owdeb_full_kmod",
+        "secure_kudp",
+        "secure_tix_tcp_kernel",
+        "route_gso",
+    },
     # The gate used by the current 3600s evidence predates the protocol-wide
     # TIX-TCP identifier rename. Gate predicates and thresholds are unchanged.
     "dd8f99453b1d385e6d07cd775614573f1f05cea1927fa79a9eb70bcb4e7753cf": {

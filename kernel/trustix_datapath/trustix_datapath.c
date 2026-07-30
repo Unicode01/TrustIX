@@ -1,5 +1,6 @@
 #include <linux/fs.h>
 #include <linux/atomic.h>
+#include <linux/bottom_half.h>
 #include <linux/cpumask.h>
 #include <linux/etherdevice.h>
 #include <linux/err.h>
@@ -39,6 +40,17 @@
 #include <linux/workqueue.h>
 #include <net/arp.h>
 #include <net/checksum.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) && \
+	defined(CONFIG_PAGE_POOL)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
+#include <net/page_pool/helpers.h>
+#else
+#include <net/page_pool.h>
+#endif
+#define TRUSTIX_DATAPATH_HAVE_TX_OUTER_GSO_PAGE_POOL 1
+#else
+#define TRUSTIX_DATAPATH_HAVE_TX_OUTER_GSO_PAGE_POOL 0
+#endif
 #if defined(__has_include)
 #if __has_include(<net/gso.h>)
 #include <net/gso.h>
@@ -164,6 +176,8 @@
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS 64U
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_SLOTS 256U
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES 32U
+#define TRUSTIX_DATAPATH_TX_OUTER_GSO_PAGE_POOL_ORDER 4U
+#define TRUSTIX_DATAPATH_TX_OUTER_GSO_PAGE_POOL_SIZE 64U
 #define TRUSTIX_DATAPATH_LOOKUP_CACHE_MIN_SLOTS 1024U
 #define TRUSTIX_DATAPATH_LOOKUP_CACHE_MAX_SLOTS 262144U
 #define TRUSTIX_DATAPATH_SKB_MARK_TX_PLAINTEXT BIT(31)
@@ -1099,6 +1113,20 @@ module_param_named(tx_plaintext_outer_gso_max_frames,
 		   0644);
 MODULE_PARM_DESC(tx_plaintext_outer_gso_max_frames,
 		 "Maximum inner TCP segments carried by one plaintext TX outer GSO skb; 0 keeps the packet-size cap");
+
+static bool trustix_datapath_tx_plaintext_outer_gso_page_pool = true;
+module_param_named(tx_plaintext_outer_gso_page_pool,
+		   trustix_datapath_tx_plaintext_outer_gso_page_pool, bool,
+		   0644);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_page_pool,
+		 "Reuse page-pool-backed linear storage for plaintext TX outer TCP GSO skbs when supported");
+
+static bool trustix_datapath_tx_plaintext_outer_gso_page_pool_available;
+module_param_named(tx_plaintext_outer_gso_page_pool_available,
+		   trustix_datapath_tx_plaintext_outer_gso_page_pool_available,
+		   bool, 0444);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_page_pool_available,
+		 "Whether reusable plaintext TX outer TCP GSO page pools are available on every possible CPU");
 
 static bool trustix_datapath_tx_plaintext_payload_fast_copy = true;
 module_param_named(tx_plaintext_payload_fast_copy,
@@ -2260,6 +2288,59 @@ module_param_named(tx_plaintext_outer_gso_errors,
 		   0444);
 MODULE_PARM_DESC(tx_plaintext_outer_gso_errors,
 		 "TrustIX plaintext TX outer TCP GSO build or xmit failures");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_outer_gso_page_pool_attempts);
+module_param_cb(tx_plaintext_outer_gso_page_pool_attempts,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_outer_gso_page_pool_attempts,
+		0444);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_page_pool_attempts,
+		 "TrustIX plaintext TX outer TCP GSO page-pool allocation attempts");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_outer_gso_page_pool_hits);
+module_param_cb(tx_plaintext_outer_gso_page_pool_hits,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_outer_gso_page_pool_hits,
+		0444);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_page_pool_hits,
+		 "TrustIX plaintext TX outer TCP GSO skbs backed by reusable page-pool pages");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_outer_gso_page_pool_fallbacks);
+module_param_cb(tx_plaintext_outer_gso_page_pool_fallbacks,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_outer_gso_page_pool_fallbacks,
+		0444);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_page_pool_fallbacks,
+		 "TrustIX plaintext TX outer TCP GSO page-pool attempts that safely fell back to alloc_skb");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_outer_gso_page_pool_errors);
+module_param_cb(tx_plaintext_outer_gso_page_pool_errors,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_outer_gso_page_pool_errors,
+		0444);
+MODULE_PARM_DESC(tx_plaintext_outer_gso_page_pool_errors,
+		 "TrustIX plaintext TX outer TCP GSO page-pool allocation or skb build failures");
+
+#if TRUSTIX_DATAPATH_HAVE_TX_OUTER_GSO_PAGE_POOL
+static DEFINE_PER_CPU(struct page_pool *,
+	trustix_datapath_tx_plaintext_outer_gso_page_pools);
+
+static struct page_pool *
+trustix_datapath_create_tx_outer_gso_page_pool(
+	const struct page_pool_params *params, int cpu)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+	return page_pool_create_percpu(params, cpu);
+#else
+	(void)cpu;
+	return page_pool_create(params);
+#endif
+}
+#endif
 
 static unsigned long long trustix_datapath_tx_plaintext_payload_fast_copy_linear_hits;
 module_param_named(tx_plaintext_payload_fast_copy_linear_hits,
@@ -7759,6 +7840,137 @@ static int trustix_datapath_tx_plaintext_copy_payload(
 	return ret;
 }
 
+static void trustix_datapath_destroy_tx_outer_gso_page_pools(void)
+{
+	WRITE_ONCE(
+		trustix_datapath_tx_plaintext_outer_gso_page_pool_available,
+		false);
+#if TRUSTIX_DATAPATH_HAVE_TX_OUTER_GSO_PAGE_POOL
+	{
+		int cpu;
+
+		for_each_possible_cpu(cpu) {
+			struct page_pool *pool = per_cpu(
+				trustix_datapath_tx_plaintext_outer_gso_page_pools,
+				cpu);
+
+			if (!pool)
+				continue;
+			per_cpu(
+				trustix_datapath_tx_plaintext_outer_gso_page_pools,
+				cpu) = NULL;
+			page_pool_destroy(pool);
+		}
+	}
+#endif
+}
+
+static void trustix_datapath_init_tx_outer_gso_page_pools(void)
+{
+	WRITE_ONCE(
+		trustix_datapath_tx_plaintext_outer_gso_page_pool_available,
+		false);
+#if TRUSTIX_DATAPATH_HAVE_TX_OUTER_GSO_PAGE_POOL
+	{
+		struct page_pool_params params = {
+			.order = TRUSTIX_DATAPATH_TX_OUTER_GSO_PAGE_POOL_ORDER,
+			.pool_size = TRUSTIX_DATAPATH_TX_OUTER_GSO_PAGE_POOL_SIZE,
+			.nid = NUMA_NO_NODE,
+		};
+		int cpu;
+
+		for_each_possible_cpu(cpu) {
+			struct page_pool *pool =
+				trustix_datapath_create_tx_outer_gso_page_pool(
+					&params, cpu);
+
+			if (IS_ERR(pool)) {
+				trustix_datapath_destroy_tx_outer_gso_page_pools();
+				return;
+			}
+			per_cpu(
+				trustix_datapath_tx_plaintext_outer_gso_page_pools,
+				cpu) = pool;
+		}
+		WRITE_ONCE(
+			trustix_datapath_tx_plaintext_outer_gso_page_pool_available,
+			true);
+	}
+#endif
+}
+
+#if TRUSTIX_DATAPATH_HAVE_TX_OUTER_GSO_PAGE_POOL
+static struct sk_buff *
+trustix_datapath_tx_alloc_outer_gso_page_pool_skb(unsigned int alloc_len)
+{
+	struct sk_buff *skb = NULL;
+
+	local_bh_disable();
+	this_cpu_inc(
+		trustix_datapath_tx_plaintext_outer_gso_page_pool_attempts);
+	if (READ_ONCE(
+		    trustix_datapath_tx_plaintext_outer_gso_page_pool_available) &&
+	    alloc_len <= SKB_WITH_OVERHEAD(
+				 PAGE_SIZE <<
+				 TRUSTIX_DATAPATH_TX_OUTER_GSO_PAGE_POOL_ORDER)) {
+		struct page_pool *pool = this_cpu_read(
+			trustix_datapath_tx_plaintext_outer_gso_page_pools);
+		struct page *page;
+		void *data;
+
+		if (!pool)
+			goto fallback;
+		page = page_pool_dev_alloc_pages(pool);
+		if (!page) {
+			this_cpu_inc(
+				trustix_datapath_tx_plaintext_outer_gso_page_pool_errors);
+			goto fallback;
+		}
+		data = page_address(page);
+		if (!data) {
+			page_pool_put_full_page(pool, page, false);
+			this_cpu_inc(
+				trustix_datapath_tx_plaintext_outer_gso_page_pool_errors);
+			goto fallback;
+		}
+		skb = build_skb(
+			data,
+			PAGE_SIZE <<
+				TRUSTIX_DATAPATH_TX_OUTER_GSO_PAGE_POOL_ORDER);
+		if (!skb) {
+			page_pool_put_full_page(pool, page, false);
+			this_cpu_inc(
+				trustix_datapath_tx_plaintext_outer_gso_page_pool_errors);
+			goto fallback;
+		}
+		skb_mark_for_recycle(skb);
+		this_cpu_inc(
+			trustix_datapath_tx_plaintext_outer_gso_page_pool_hits);
+		local_bh_enable();
+		return skb;
+	}
+
+fallback:
+	this_cpu_inc(
+		trustix_datapath_tx_plaintext_outer_gso_page_pool_fallbacks);
+	local_bh_enable();
+	return NULL;
+}
+#else
+static struct sk_buff *
+trustix_datapath_tx_alloc_outer_gso_page_pool_skb(unsigned int alloc_len)
+{
+	(void)alloc_len;
+	local_bh_disable();
+	this_cpu_inc(
+		trustix_datapath_tx_plaintext_outer_gso_page_pool_attempts);
+	this_cpu_inc(
+		trustix_datapath_tx_plaintext_outer_gso_page_pool_fallbacks);
+	local_bh_enable();
+	return NULL;
+}
+#endif
+
 static unsigned int
 trustix_datapath_tx_plaintext_outer_gso_max_frames_value(void);
 
@@ -7846,7 +8058,13 @@ static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 	if (ret)
 		return ret;
 
-	skb = alloc_skb(LL_MAX_HEADER + outer_len, GFP_ATOMIC);
+	skb = NULL;
+	if (likely(READ_ONCE(
+		    trustix_datapath_tx_plaintext_outer_gso_page_pool)))
+		skb = trustix_datapath_tx_alloc_outer_gso_page_pool_skb(
+			LL_MAX_HEADER + outer_len);
+	if (!skb)
+		skb = alloc_skb(LL_MAX_HEADER + outer_len, GFP_ATOMIC);
 	if (!skb)
 		return -ENOMEM;
 	skb_reserve(skb, LL_MAX_HEADER);
@@ -15705,6 +15923,14 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_ipv4_fragment_errors = 0;
 	trustix_datapath_tx_plaintext_outer_gso_fallbacks = 0;
 	trustix_datapath_tx_plaintext_outer_gso_errors = 0;
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_outer_gso_page_pool_attempts);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_outer_gso_page_pool_hits);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_outer_gso_page_pool_fallbacks);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_outer_gso_page_pool_errors);
 	trustix_datapath_tx_plaintext_payload_fast_copy_linear_hits = 0;
 	trustix_datapath_tx_plaintext_payload_fast_copy_frag_hits = 0;
 	trustix_datapath_tx_plaintext_payload_fast_copy_fallbacks = 0;
@@ -18215,6 +18441,7 @@ static int __init trustix_datapath_init(void)
 		trustix_datapath_free_state();
 		goto free_pcpu_mac_cache;
 	}
+	trustix_datapath_init_tx_outer_gso_page_pools();
 	return ret;
 
 free_pcpu_mac_cache:
@@ -18228,6 +18455,7 @@ static void __exit trustix_datapath_exit(void)
 	unregister_netdevice_notifier(&trustix_datapath_netdev_notifier);
 	trustix_datapath_hook_detach_all();
 	synchronize_net();
+	trustix_datapath_destroy_tx_outer_gso_page_pools();
 	misc_deregister(&trustix_datapath_miscdev);
 	trustix_datapath_free_state();
 	trustix_datapath_free_rx_worker_pcpu_mac_cache();

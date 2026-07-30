@@ -3411,14 +3411,14 @@ func TestProductionTransportAuditScriptRequireCurrentRejectsUnknownBuildCommit(t
 
 func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 	python := requirePython3(t)
-	staleRuntimeParent := latestRuntimeParentCommit(t, "kernel/trustix_crypto/trustix_crypto.c")
+	staleRuntimeParent := latestRuntimeParentCommit(t, "kernel/trustix_datapath/trustix_datapath.c")
 	workdir := t.TempDir()
 	defaults := filepath.Join(workdir, "defaults.tsv")
 	evidence := filepath.Join(workdir, "evidence.tsv")
 	current := filepath.Join(workdir, "current.tsv")
 	defaultPayload := strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tmin_gbps\tmin_seconds\tnote",
-		"tix_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_tix_tcp_kernel\t1.5\t3600\trequire runtime tree freshness",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\ttix_tcp_full_kmod\t4\t3600\trequire runtime tree freshness",
 		"",
 	}, "\n")
 	if err := os.WriteFile(defaults, []byte(defaultPayload), 0o644); err != nil {
@@ -3430,7 +3430,7 @@ func TestProductionTransportAuditScriptRequireCurrentRuntimeTree(t *testing.T) {
 	}
 	currentPayload := strings.Join([]string{
 		"# transport\tencryption\tprofile\tdatapath\tcrypto_placement\tvalidation_scope\tgate_family\tos_matrix\tkernel_matrix\tgate_manifest_schema\tproduction_gate_sha256\tverifier_sha256\tartifact\tnote\tbinary_sha256\tbuild_version\tbuild_commit\tbuild_built_at\tbuild_go_version",
-		"tix_tcp\tsecure\tperformance\tkernel_module\tkernel\tcross_host\tsecure_tix_tcp_kernel\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("a", 64) + "\t" + strings.Repeat("b", 64) + "\tdocs/trustix-performance-log.md#stale-runtime-tree\tstale runtime tree\t" + strings.Repeat("c", 64) + "\ttrustix-current\t" + staleRuntimeParent + "\t2026-06-25T00:00:00Z\tgo1.25.0",
+		"tix_tcp\tplaintext\tperformance\tkernel_module\tuserspace\tcross_host\ttix_tcp_full_kmod\tdebian13-debian13\t6.12.94_to_6.12.94\t" + productionGateManifestSchema + "\t" + strings.Repeat("a", 64) + "\t" + strings.Repeat("b", 64) + "\tdocs/trustix-performance-log.md#stale-runtime-tree\tstale runtime tree\t" + strings.Repeat("c", 64) + "\ttrustix-current\t" + staleRuntimeParent + "\t2026-06-25T00:00:00Z\tgo1.25.0",
 		"",
 	}, "\n")
 	if err := os.WriteFile(current, []byte(currentPayload), 0o644); err != nil {
@@ -3696,6 +3696,18 @@ for row, path, want in cases:
     got = module.current_runtime_path_change_irrelevant(row, parent, path)
     if got != want:
         print(f"f6cb649 runtime-compatible scope mismatch for row={row} path={path}: got {got}, want {want}", file=sys.stderr)
+        sys.exit(1)
+
+probe["commit"] = "4beb3be1acdb7a54003c6d60bdb7a135e16b9866"
+cases = [
+    ({"gate_family": "secure_kudp", "transport": "kernel_udp"}, "kernel/trustix_crypto/trustix_crypto.c", True),
+    ({"gate_family": "secure_tix_tcp_kernel", "transport": "tix_tcp"}, "kernel/trustix_crypto/trustix_crypto.c", True),
+    ({"gate_family": "full_kmod", "transport": "udp"}, "kernel/trustix_crypto/trustix_crypto.c", False),
+]
+for row, path, want in cases:
+    got = module.current_runtime_path_change_irrelevant(row, parent, path)
+    if got != want:
+        print(f"4beb3be runtime-compatible scope mismatch for row={row} path={path}: got {got}, want {want}", file=sys.stderr)
         sys.exit(1)
 
 probe["commit"] = "1111111111111111111111111111111111111111"
@@ -5635,11 +5647,16 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0",
 		"--require-module-param-min trustix_datapath.tx_plaintext_hash_tx_queue=1",
 		"--require-module-param-max trustix_datapath.tx_plaintext_stream_coalesce=0",
+		"--require-module-param-min trustix_datapath.tx_plaintext_outer_gso_page_pool=1",
+		"--require-module-param-min trustix_datapath.tx_plaintext_outer_gso_page_pool_available=1",
 		"--require-module-param-min trustix_datapath.session_records=\"${full_kmod_min_sessions}\"",
 		"--require-module-param-min trustix_datapath.session_wire_records=\"${full_kmod_min_sessions}\"",
 		"--require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32",
 		"--require-module-param-node-max a.trustix_datapath.rx_worker_single_coalesce=0",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_segments=1",
+		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_page_pool_attempts=1",
+		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_page_pool_hits=1",
+		"--require-module-param-max trustix_datapath.tx_plaintext_outer_gso_page_pool_errors=0",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_direct_xmit_dst_mac_cache_hits=1",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_hash_tx_queue_sets=1",
 		"--require-module-param-max trustix_datapath.tx_plaintext_hash_tx_queue_fallbacks=0",
