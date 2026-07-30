@@ -1139,6 +1139,13 @@ module_param_named(tx_plaintext_payload_fast_copy,
 MODULE_PARM_DESC(tx_plaintext_payload_fast_copy,
 		 "Copy plaintext TX GSO payloads directly from linear skb data or single skb frags before falling back to skb_copy_bits");
 
+static bool trustix_datapath_tx_plaintext_payload_copy_csum = true;
+module_param_named(tx_plaintext_payload_copy_csum,
+		   trustix_datapath_tx_plaintext_payload_copy_csum, bool,
+		   0644);
+MODULE_PARM_DESC(tx_plaintext_payload_copy_csum,
+		 "Calculate inner TCP payload checksums while copying plaintext TX GSO payloads");
+
 static bool trustix_datapath_tx_plaintext_stream_coalesce;
 module_param_named(tx_plaintext_stream_coalesce,
 		   trustix_datapath_tx_plaintext_stream_coalesce, bool,
@@ -2465,6 +2472,42 @@ module_param_named(tx_plaintext_payload_fast_copy_errors,
 		   ullong, 0444);
 MODULE_PARM_DESC(tx_plaintext_payload_fast_copy_errors,
 		 "TrustIX plaintext TX payload copy errors after fast-copy fallback");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_payload_copy_csum_attempts);
+module_param_cb(tx_plaintext_payload_copy_csum_attempts,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_payload_copy_csum_attempts,
+		0444);
+MODULE_PARM_DESC(tx_plaintext_payload_copy_csum_attempts,
+		 "TrustIX plaintext TX payload copy-and-checksum attempts");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_payload_copy_csum_hits);
+module_param_cb(tx_plaintext_payload_copy_csum_hits,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_payload_copy_csum_hits,
+		0444);
+MODULE_PARM_DESC(tx_plaintext_payload_copy_csum_hits,
+		 "TrustIX plaintext TX payloads copied with checksum accumulation");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_payload_copy_csum_fallbacks);
+module_param_cb(tx_plaintext_payload_copy_csum_fallbacks,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_payload_copy_csum_fallbacks,
+		0444);
+MODULE_PARM_DESC(tx_plaintext_payload_copy_csum_fallbacks,
+		 "TrustIX plaintext TX copy-and-checksum attempts served by the generic skb helper");
+
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_payload_copy_csum_errors);
+module_param_cb(tx_plaintext_payload_copy_csum_errors,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_payload_copy_csum_errors,
+		0444);
+MODULE_PARM_DESC(tx_plaintext_payload_copy_csum_errors,
+		 "TrustIX plaintext TX payload copy-and-checksum validation errors");
 
 static unsigned long long trustix_datapath_tx_plaintext_encrypted_skips;
 module_param_named(tx_plaintext_encrypted_skips,
@@ -4300,6 +4343,12 @@ static void trustix_datapath_rx_worker_release_slot(
 static __sum16 trustix_datapath_rx_worker_l4_checksum(struct iphdr *iph,
 						      void *l4, __u32 len,
 						      __u8 protocol);
+static int trustix_datapath_tx_plaintext_copy_payload(
+	struct sk_buff *src, __u32 src_offset, __u8 *dst, __u32 len,
+	bool copy_csum, __wsum *sum_out);
+static __sum16 trustix_datapath_tx_plaintext_tcp_checksum(
+	struct iphdr *iph, struct tcphdr *tcph, __u32 tcp_header_len,
+	__u32 payload_len, bool payload_sum_ready, __wsum payload_sum);
 
 static struct sk_buff *
 trustix_datapath_rx_worker_build_inner_skb(struct net_device *target_dev,
@@ -7497,11 +7546,19 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 	__u32 outer_len;
 	__u32 outer_tcp_len;
 	__u64 sequence;
+	__wsum payload_sum = 0;
+	bool copy_payload_csum;
+	bool fix_inner_tcp_checksum;
 	int ret;
 
 	if (!inner_skb || !plan || !out_skb)
 		return -EINVAL;
 	*out_skb = NULL;
+	fix_inner_tcp_checksum = !READ_ONCE(
+		trustix_datapath_tx_plaintext_skip_inner_tcp_checksum);
+	copy_payload_csum = fix_inner_tcp_checksum && payload_len &&
+		plan->outer_protocol == IPPROTO_TCP && READ_ONCE(
+			trustix_datapath_tx_plaintext_payload_copy_csum);
 	if (check_add_overflow(ip_header_len, tcp_header_len,
 			       &inner_header_len) ||
 	    check_add_overflow(inner_header_len, payload_len, &inner_len))
@@ -7557,8 +7614,8 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 	sequence = (__u64)atomic64_inc_return(&trustix_datapath_tx_sequence);
 	trustix_datapath_build_tixt_header(
 		tixt,
-		trustix_datapath_tx_plaintext_tixt_flags(!READ_ONCE(
-			trustix_datapath_tx_plaintext_skip_inner_tcp_checksum)),
+		trustix_datapath_tx_plaintext_tixt_flags(
+			fix_inner_tcp_checksum),
 		plan->flow_id, plan->epoch, sequence, inner_len, 0, 0);
 	ret = skb_copy_bits(inner_skb, network_offset,
 			    tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
@@ -7566,12 +7623,20 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 	if (ret)
 		goto error;
 	if (payload_len) {
-		ret = skb_copy_bits(inner_skb,
-				    network_offset + inner_header_len +
-					    payload_offset,
-				    tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN +
-					    inner_header_len,
-				    payload_len);
+		if (plan->outer_protocol == IPPROTO_TCP)
+			ret = trustix_datapath_tx_plaintext_copy_payload(
+				inner_skb,
+				network_offset + inner_header_len + payload_offset,
+				tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN +
+					inner_header_len,
+				payload_len, copy_payload_csum, &payload_sum);
+		else
+			ret = skb_copy_bits(
+				inner_skb,
+				network_offset + inner_header_len + payload_offset,
+				tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN +
+					inner_header_len,
+				payload_len);
 		if (ret)
 			goto error;
 	}
@@ -7588,10 +7653,11 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 		seg_tcph->psh = 0;
 	}
 	seg_tcph->check = 0;
-	if (!READ_ONCE(trustix_datapath_tx_plaintext_skip_inner_tcp_checksum))
-		seg_tcph->check = trustix_datapath_rx_worker_l4_checksum(
-			seg_iph, seg_tcph, tcp_header_len + payload_len,
-			IPPROTO_TCP);
+	if (fix_inner_tcp_checksum)
+		seg_tcph->check =
+			trustix_datapath_tx_plaintext_tcp_checksum(
+				seg_iph, seg_tcph, tcp_header_len, payload_len,
+				copy_payload_csum, payload_sum);
 
 	skb_reset_network_header(skb);
 	skb_set_transport_header(skb, 20);
@@ -8022,7 +8088,8 @@ error:
 }
 
 static int trustix_datapath_tx_plaintext_copy_payload(
-	struct sk_buff *src, __u32 src_offset, __u8 *dst, __u32 len)
+	struct sk_buff *src, __u32 src_offset, __u8 *dst, __u32 len,
+	bool copy_csum, __wsum *sum_out)
 {
 	const struct skb_shared_info *shinfo;
 	const skb_frag_t *frag;
@@ -8030,17 +8097,34 @@ static int trustix_datapath_tx_plaintext_copy_payload(
 	__u32 frag_end;
 	__u32 page_offset;
 	__u32 copied;
+	__wsum chunk_sum;
+	__wsum sum = 0;
 	unsigned int i;
 	int ret;
 
-	if (!src || !dst || !len)
+	if (copy_csum)
+		this_cpu_inc(
+			trustix_datapath_tx_plaintext_payload_copy_csum_attempts);
+	if (!src || !dst || !len || (copy_csum && !sum_out) ||
+	    src_offset > src->len || len > src->len - src_offset) {
+		if (copy_csum)
+			this_cpu_inc(
+				trustix_datapath_tx_plaintext_payload_copy_csum_errors);
+		trustix_datapath_tx_plaintext_payload_fast_copy_errors++;
 		return -EINVAL;
+	}
+	if (copy_csum)
+		*sum_out = 0;
 	if (READ_ONCE(trustix_datapath_tx_plaintext_payload_fast_copy)) {
 		if (src_offset <= skb_headlen(src) &&
 		    len <= skb_headlen(src) - src_offset) {
-			memcpy(dst, src->data + src_offset, len);
+			if (copy_csum)
+				sum = csum_partial_copy_nocheck(
+					src->data + src_offset, dst, len);
+			else
+				memcpy(dst, src->data + src_offset, len);
 			trustix_datapath_tx_plaintext_payload_fast_copy_linear_hits++;
-			return 0;
+			goto copied;
 		}
 		if (src_offset >= skb_headlen(src)) {
 			shinfo = skb_shinfo(src);
@@ -8072,22 +8156,64 @@ static int trustix_datapath_tx_plaintext_copy_payload(
 						skb_frag_page(frag) +
 						(page_in_frag >> PAGE_SHIFT));
 
-					memcpy(dst + copied,
-					       (__u8 *)addr + page_in_frag_offset,
-					       copy_len);
+					if (copy_csum) {
+						chunk_sum = csum_partial_copy_nocheck(
+							(__u8 *)addr +
+								page_in_frag_offset,
+							dst + copied, copy_len);
+						sum = csum_block_add(
+							sum, chunk_sum, copied);
+					} else {
+						memcpy(dst + copied,
+						       (__u8 *)addr +
+							       page_in_frag_offset,
+						       copy_len);
+					}
 					kunmap_local(addr);
 					copied += copy_len;
 				}
 				trustix_datapath_tx_plaintext_payload_fast_copy_frag_hits++;
-				return 0;
+				goto copied;
 			}
 		}
 		trustix_datapath_tx_plaintext_payload_fast_copy_fallbacks++;
 	}
+	if (copy_csum) {
+		this_cpu_inc(
+			trustix_datapath_tx_plaintext_payload_copy_csum_fallbacks);
+		sum = skb_copy_and_csum_bits(src, src_offset, dst, len);
+		goto copied;
+	}
 	ret = skb_copy_bits(src, src_offset, dst, len);
-	if (ret)
+	if (ret) {
 		trustix_datapath_tx_plaintext_payload_fast_copy_errors++;
-	return ret;
+		return ret;
+	}
+	return 0;
+
+copied:
+	if (copy_csum) {
+		*sum_out = sum;
+		this_cpu_inc(
+			trustix_datapath_tx_plaintext_payload_copy_csum_hits);
+	}
+	return 0;
+}
+
+static __sum16 trustix_datapath_tx_plaintext_tcp_checksum(
+	struct iphdr *iph, struct tcphdr *tcph, __u32 tcp_header_len,
+	__u32 payload_len, bool payload_sum_ready, __wsum payload_sum)
+{
+	__wsum header_sum;
+	__wsum sum;
+
+	if (!payload_sum_ready)
+		return trustix_datapath_rx_worker_l4_checksum(
+			iph, tcph, tcp_header_len + payload_len, IPPROTO_TCP);
+	header_sum = csum_partial(tcph, tcp_header_len, 0);
+	sum = csum_block_add(header_sum, payload_sum, tcp_header_len);
+	return csum_tcpudp_magic(iph->saddr, iph->daddr,
+				 tcp_header_len + payload_len, IPPROTO_TCP, sum);
 }
 
 static void trustix_datapath_destroy_tx_outer_gso_page_pools(void)
@@ -8250,12 +8376,18 @@ static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 	__u64 outer_sequence;
 	__u8 inner_header[TRUSTIX_DATAPATH_IPV4_L4_PREFIX_MAX];
 	unsigned int i;
+	bool copy_payload_csum;
+	bool fix_inner_tcp_checksum;
 	int ret;
 
 	if (!inner_skb || !plan || !out_skb || !inner_bytes_out)
 		return -EINVAL;
 	*out_skb = NULL;
 	*inner_bytes_out = 0;
+	fix_inner_tcp_checksum = !READ_ONCE(
+		trustix_datapath_tx_plaintext_skip_inner_tcp_checksum);
+	copy_payload_csum = fix_inner_tcp_checksum && READ_ONCE(
+		trustix_datapath_tx_plaintext_payload_copy_csum);
 	if (plan->outer_protocol != IPPROTO_TCP || frame_count < 2 ||
 	    !wire_gso_size)
 		return -EOPNOTSUPP;
@@ -8341,6 +8473,7 @@ static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 		__u8 *tixt = pos;
 		__u32 seg_payload_len;
 		__u32 inner_len;
+		__wsum payload_sum = 0;
 		bool last_segment;
 		__u64 sequence;
 
@@ -8354,8 +8487,8 @@ static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 			&trustix_datapath_tx_sequence);
 		trustix_datapath_build_tixt_header(
 			tixt,
-			trustix_datapath_tx_plaintext_tixt_flags(!READ_ONCE(
-				trustix_datapath_tx_plaintext_skip_inner_tcp_checksum)),
+			trustix_datapath_tx_plaintext_tixt_flags(
+				fix_inner_tcp_checksum),
 			plan->flow_id, plan->epoch, sequence, inner_len, 0,
 			0);
 		memcpy(tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
@@ -8365,7 +8498,7 @@ static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 					   cursor_payload_offset,
 			tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN +
 				inner_header_len,
-			seg_payload_len);
+			seg_payload_len, copy_payload_csum, &payload_sum);
 		if (ret)
 			goto error;
 
@@ -8383,13 +8516,12 @@ static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 			seg_tcph->psh = 0;
 		}
 		seg_tcph->check = 0;
-		if (!READ_ONCE(
-			    trustix_datapath_tx_plaintext_skip_inner_tcp_checksum))
+		if (fix_inner_tcp_checksum)
 			seg_tcph->check =
-				trustix_datapath_rx_worker_l4_checksum(
-					seg_iph, seg_tcph,
-					tcp_header_len + seg_payload_len,
-					IPPROTO_TCP);
+				trustix_datapath_tx_plaintext_tcp_checksum(
+					seg_iph, seg_tcph, tcp_header_len,
+					seg_payload_len, copy_payload_csum,
+					payload_sum);
 
 		pos += TRUSTIX_DATAPATH_TIXT_HEADER_LEN + inner_len;
 		cursor_payload_offset += seg_payload_len;
@@ -8885,7 +9017,7 @@ static int trustix_datapath_tx_plaintext_outer_udp_gso_skb(
 					     payload_offset,
 				tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN +
 					inner_header_len,
-				seg_payload_len);
+				seg_payload_len, false, NULL);
 			if (ret) {
 				kfree_skb(out);
 				goto error;
@@ -16364,6 +16496,14 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_payload_fast_copy_frag_hits = 0;
 	trustix_datapath_tx_plaintext_payload_fast_copy_fallbacks = 0;
 	trustix_datapath_tx_plaintext_payload_fast_copy_errors = 0;
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_payload_copy_csum_attempts);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_payload_copy_csum_hits);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_payload_copy_csum_fallbacks);
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_payload_copy_csum_errors);
 	trustix_datapath_tx_plaintext_encrypted_skips = 0;
 	trustix_datapath_tx_plaintext_route_misses = 0;
 	trustix_datapath_tx_plaintext_no_routes = 0;
@@ -17421,6 +17561,92 @@ out:
 	return ret;
 }
 
+static int trustix_datapath_selftest_tx_plaintext_payload_copy_csum(void)
+{
+	__u8 packet[sizeof(struct iphdr) + 24 + 33] __aligned(4);
+	__u8 copied_payload[33];
+	const __u32 tcp_header_lens[] = { sizeof(struct tcphdr), 24 };
+	const __u32 payload_lens[] = { 32, 33 };
+	struct tcphdr *tcph;
+	struct iphdr *iph;
+	__sum16 expected;
+	__sum16 merged;
+	__wsum chunked_sum;
+	__wsum payload_sum;
+	unsigned int i;
+	unsigned int j;
+
+	for (i = 0; i < ARRAY_SIZE(tcp_header_lens); i++) {
+		for (j = 0; j < ARRAY_SIZE(payload_lens); j++) {
+			__u32 tcp_header_len = tcp_header_lens[i];
+			__u32 payload_len = payload_lens[j];
+			__u8 *payload;
+			unsigned int k;
+			unsigned int split;
+
+			memset(packet, 0, sizeof(packet));
+			iph = (struct iphdr *)packet;
+			tcph = (struct tcphdr *)(packet + sizeof(*iph));
+			payload = (__u8 *)tcph + tcp_header_len;
+			iph->saddr = htonl(0xc0000201U);
+			iph->daddr = htonl(0xc6336402U);
+			tcph->source = htons(12345);
+			tcph->dest = htons(443);
+			tcph->seq = htonl(0x10203040U);
+			tcph->doff = tcp_header_len / 4;
+			tcph->ack = 1;
+			for (k = 0; k < tcp_header_len - sizeof(*tcph); k++)
+				((__u8 *)(tcph + 1))[k] = (__u8)(0xa0U + k);
+			for (k = 0; k < payload_len; k++)
+				payload[k] = (__u8)(k * 17U + 3U);
+
+			tcph->check = 0;
+			expected = trustix_datapath_rx_worker_l4_checksum(
+				iph, tcph, tcp_header_len + payload_len,
+				IPPROTO_TCP);
+			payload_sum = csum_partial(payload, payload_len, 0);
+			merged = trustix_datapath_tx_plaintext_tcp_checksum(
+				iph, tcph, tcp_header_len, payload_len, true,
+				payload_sum);
+			if (merged != expected)
+				return -EINVAL;
+
+			memset(copied_payload, 0, sizeof(copied_payload));
+			payload_sum = csum_partial_copy_nocheck(
+				payload, copied_payload, payload_len);
+			if (memcmp(copied_payload, payload, payload_len) ||
+			    trustix_datapath_tx_plaintext_tcp_checksum(
+				    iph, tcph, tcp_header_len, payload_len, true,
+				    payload_sum) != expected)
+				return -EINVAL;
+
+			for (split = 1; split < payload_len; split++) {
+				memset(copied_payload, 0,
+				       sizeof(copied_payload));
+				chunked_sum = csum_partial_copy_nocheck(
+					payload, copied_payload, split);
+				payload_sum = csum_partial_copy_nocheck(
+					payload + split,
+					copied_payload + split,
+					payload_len - split);
+				chunked_sum = csum_block_add(
+					chunked_sum, payload_sum, split);
+				if (memcmp(copied_payload, payload, payload_len) ||
+				    trustix_datapath_tx_plaintext_tcp_checksum(
+					    iph, tcph, tcp_header_len,
+					    payload_len, true, chunked_sum) !=
+					    expected)
+					return -EINVAL;
+			}
+			if (trustix_datapath_tx_plaintext_tcp_checksum(
+				    iph, tcph, tcp_header_len, payload_len, false,
+				    0) != expected)
+				return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 static int trustix_datapath_selftest_outer_build(void)
 {
 	struct trustix_datapath_state_table saved_routes = trustix_datapath_routes;
@@ -18323,7 +18549,8 @@ static void trustix_datapath_run_selftests(__u64 requested, __u64 *passed,
 			pass |= TRUSTIX_DATAPATH_SELFTEST_SESSION_WIRE;
 	}
 	if (requested & TRUSTIX_DATAPATH_SELFTEST_OUTER_BUILD) {
-		if (trustix_datapath_selftest_outer_build())
+		if (trustix_datapath_selftest_outer_build() ||
+		    trustix_datapath_selftest_tx_plaintext_payload_copy_csum())
 			fail |= TRUSTIX_DATAPATH_SELFTEST_OUTER_BUILD;
 		else
 			pass |= TRUSTIX_DATAPATH_SELFTEST_OUTER_BUILD;

@@ -961,6 +961,7 @@ main() {
       --require-module-param-min trustix_datapath.tx_plaintext=1 \
       --require-module-param-max trustix_datapath.rx_worker_hot_stats=0 \
       --require-module-param-max trustix_datapath.tx_plaintext_skip_inner_tcp_checksum=0 \
+      --require-module-param-min trustix_datapath.tx_plaintext_payload_copy_csum=1 \
       --require-module-param-min trustix_datapath.tx_plaintext_hash_tx_queue=1 \
       --require-module-param-max trustix_datapath.tx_plaintext_stream_coalesce=0 \
       --require-module-param-min trustix_datapath.tx_plaintext_outer_gso_page_pool=1 \
@@ -972,6 +973,9 @@ main() {
       --require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_page_pool_attempts=1 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_page_pool_hits=1 \
       --require-module-param-max trustix_datapath.tx_plaintext_outer_gso_page_pool_errors=0 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_payload_copy_csum_attempts=1 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_payload_copy_csum_hits=1 \
+      --require-module-param-max trustix_datapath.tx_plaintext_payload_copy_csum_errors=0 \
       --require-module-param-any-min trustix_datapath.rx_worker_stream_coalesce_page_frag_cache_attempts=1 \
       --require-module-param-any-min trustix_datapath.rx_worker_stream_coalesce_page_frag_cache_hits=1 \
       --require-module-param-max trustix_datapath.rx_worker_stream_coalesce_page_frag_cache_errors=0 \

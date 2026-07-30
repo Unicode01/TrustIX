@@ -2156,6 +2156,42 @@ func TestCrossHostProductionGateRejectsTIXTCPFullKmodRXOffsetCopyErrors(t *testi
 	}
 }
 
+func TestCrossHostProductionGateRejectsTIXTCPFullKmodWithoutTXPayloadCopyChecksum(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	overrides := tixTCPFullKmodModuleOverrides(true)
+	overrides["tx_plaintext_payload_copy_csum"] = "N"
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, overrides)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=tix-tcp-full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted TIX-TCP full-kmod artifacts without TX payload copy-checksum:\n%s", output)
+	}
+	if !strings.Contains(string(output), "tx_plaintext_payload_copy_csum") {
+		t.Fatalf("production gate did not report disabled TX payload copy-checksum:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsTIXTCPFullKmodTXPayloadCopyChecksumErrors(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeTIXTCPFullKmodProductionGateArtifacts(t, dir, true, true)
+	overrides := tixTCPFullKmodModuleOverrides(true)
+	overrides["tx_plaintext_payload_copy_csum_errors"] = "1"
+	writeFullKmodModuleParametersWithOverrides(t, filepath.Join(dir, "collect", "b", "module-parameters.txt"), true, overrides)
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_TIX_TCP_FULL_KMOD_CASES=tix-tcp-full-kmod="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted TIX-TCP full-kmod artifacts with TX payload copy-checksum errors:\n%s", output)
+	}
+	if !strings.Contains(string(output), "tx_plaintext_payload_copy_csum_errors") {
+		t.Fatalf("production gate did not report TX payload copy-checksum errors:\n%s", output)
+	}
+}
+
 func TestCrossHostProductionGateRejectsTIXTCPFullKmodWithoutRXPageFragCache(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
@@ -2972,6 +3008,11 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		"tx_plaintext":                                "Y",
 		"rx_worker_hot_stats":                         "N",
 		"tx_plaintext_skip_inner_tcp_checksum":        "N",
+		"tx_plaintext_payload_copy_csum":              "Y",
+		"tx_plaintext_payload_copy_csum_attempts":     "0",
+		"tx_plaintext_payload_copy_csum_hits":         "0",
+		"tx_plaintext_payload_copy_csum_fallbacks":    "0",
+		"tx_plaintext_payload_copy_csum_errors":       "0",
 		"session_records":                             "8",
 		"session_wire_records":                        "8",
 		"rx_worker_single_coalesce_max_frames":        "32",
@@ -3056,6 +3097,8 @@ func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		"tx_plaintext_gso_segments":                 traffic,
 		"tx_plaintext_outer_gso_page_pool_attempts": traffic,
 		"tx_plaintext_outer_gso_page_pool_hits":     traffic,
+		"tx_plaintext_payload_copy_csum_attempts":   traffic,
+		"tx_plaintext_payload_copy_csum_hits":       traffic,
 
 		"rx_worker_stream_coalesce_page_frag_cache_attempts": traffic,
 		"rx_worker_stream_coalesce_page_frag_cache_hits":     traffic,

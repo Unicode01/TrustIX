@@ -484,6 +484,7 @@ func appendTrustIXDatapathTXPlaintextBaseParameters(params string) string {
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_inline_xmit=1")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_direct_xmit=1")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_payload_fast_copy=1")
+	params = appendModuleParameterIfMissing(params, "tx_plaintext_payload_copy_csum=1")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_hash_tx_queue=1")
 	params = appendModuleParameterIfMissing(params, "tx_plaintext_stream_coalesce=0")
 	if !kernelDatapathTXPlaintextExperimentsAllowed() {
