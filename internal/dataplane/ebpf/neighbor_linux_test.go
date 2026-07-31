@@ -188,6 +188,176 @@ func TestLANPacketInjectorCanAttemptGSOSkipsOnlyAfterBothPathsDisabled(t *testin
 	}
 }
 
+func TestLANPacketInjectorRawGSOSendLeasesRunConcurrentlyAndBlockClose(t *testing.T) {
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("create test socket pair: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = unix.Close(fds[0])
+		_ = unix.Close(fds[1])
+	})
+	injector := &lanPacketInjector{
+		fd:       fds[0],
+		gsoFD:    -1,
+		gsoRawFD: fds[1],
+		ifname:   "test0",
+	}
+
+	firstFD, err := injector.lockRawGSOSocketForSend(false)
+	if err != nil {
+		t.Fatalf("lock first raw GSO send socket: %v", err)
+	}
+	if firstFD != fds[1] {
+		injector.mu.RUnlock()
+		t.Fatalf("first raw GSO fd = %d, want %d", firstFD, fds[1])
+	}
+
+	secondLocked := make(chan error, 1)
+	releaseSecond := make(chan struct{})
+	go func() {
+		secondFD, lockErr := injector.lockRawGSOSocketForSend(false)
+		if lockErr == nil && secondFD != fds[1] {
+			lockErr = fmt.Errorf("second raw GSO fd = %d, want %d", secondFD, fds[1])
+		}
+		secondLocked <- lockErr
+		if lockErr == nil {
+			<-releaseSecond
+			injector.mu.RUnlock()
+		}
+	}()
+	select {
+	case err := <-secondLocked:
+		if err != nil {
+			injector.mu.RUnlock()
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		injector.mu.RUnlock()
+		t.Fatal("second raw GSO send lease was serialized behind the first")
+	}
+
+	closeStarted := make(chan struct{})
+	closeDone := make(chan error, 1)
+	go func() {
+		close(closeStarted)
+		closeDone <- injector.close()
+	}()
+	<-closeStarted
+	select {
+	case err := <-closeDone:
+		close(releaseSecond)
+		injector.mu.RUnlock()
+		t.Fatalf("injector close completed with active send leases: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseSecond)
+	select {
+	case err := <-closeDone:
+		injector.mu.RUnlock()
+		t.Fatalf("injector close completed while the first send lease was active: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	injector.mu.RUnlock()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close injector after send leases: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("injector close remained blocked after send leases were released")
+	}
+}
+
+func TestSendAllMMsgPartialProgressErrorHandling(t *testing.T) {
+	tests := []struct {
+		name               string
+		stopOnPartialError func(error) bool
+		calls              []struct {
+			sent int
+			err  error
+		}
+		wantSent  int
+		wantErr   error
+		wantCalls int
+	}{
+		{
+			name: "transient partial progress continues",
+			calls: []struct {
+				sent int
+				err  error
+			}{
+				{sent: 2, err: unix.ENOBUFS},
+				{sent: 2},
+			},
+			wantSent:  4,
+			wantCalls: 2,
+		},
+		{
+			name:               "capability error stops after partial progress",
+			stopOnPartialError: isPacketSocketGSOUnsupported,
+			calls: []struct {
+				sent int
+				err  error
+			}{
+				{sent: 2, err: unix.EINVAL},
+			},
+			wantSent:  2,
+			wantErr:   unix.EINVAL,
+			wantCalls: 1,
+		},
+		{
+			name: "zero progress without error fails",
+			calls: []struct {
+				sent int
+				err  error
+			}{
+				{},
+			},
+			wantErr:   unix.EIO,
+			wantCalls: 1,
+		},
+		{
+			name: "zero progress preserves syscall error",
+			calls: []struct {
+				sent int
+				err  error
+			}{
+				{err: unix.EAGAIN},
+			},
+			wantErr:   unix.EAGAIN,
+			wantCalls: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			call := 0
+			sent, err := sendAllMMsgWith(17, make([]mmsghdr, 4), test.stopOnPartialError, func(fd int, msgs []mmsghdr) (int, error) {
+				if fd != 17 {
+					t.Fatalf("send fd = %d, want 17", fd)
+				}
+				if call >= len(test.calls) {
+					t.Fatalf("unexpected send call %d with %d messages remaining", call+1, len(msgs))
+				}
+				result := test.calls[call]
+				call++
+				return result.sent, result.err
+			})
+			if sent != test.wantSent {
+				t.Fatalf("sent = %d, want %d", sent, test.wantSent)
+			}
+			if !errors.Is(err, test.wantErr) || (test.wantErr == nil && err != nil) {
+				t.Fatalf("error = %v, want %v", err, test.wantErr)
+			}
+			if call != test.wantCalls {
+				t.Fatalf("send calls = %d, want %d", call, test.wantCalls)
+			}
+		})
+	}
+}
+
 func TestSegmentLANIPv4TCPPacketSegmentsLargePayload(t *testing.T) {
 	payload := make([]byte, 4096)
 	for i := range payload {

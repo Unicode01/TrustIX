@@ -300,14 +300,27 @@ func sendLANIPv4PacketBatch(fd int, ifindex int, packets [][]byte, dstMAC net.Ha
 		msgs[i].hdr.Iov = &iovs[i]
 		msgs[i].hdr.Iovlen = 1
 	}
+	return sendAllMMsg(fd, msgs, nil)
+}
+
+func sendAllMMsg(fd int, msgs []mmsghdr, stopOnPartialError func(error) bool) (int, error) {
+	return sendAllMMsgWith(fd, msgs, stopOnPartialError, sendmmsg)
+}
+
+func sendAllMMsgWith(
+	fd int,
+	msgs []mmsghdr,
+	stopOnPartialError func(error) bool,
+	send func(int, []mmsghdr) (int, error),
+) (int, error) {
 	var sent int
 	for sent < len(msgs) {
-		n, err := sendmmsg(fd, msgs[sent:])
+		n, err := send(fd, msgs[sent:])
 		if n > 0 {
 			sent += n
 		}
 		if err != nil {
-			if n > 0 {
+			if n > 0 && (stopOnPartialError == nil || !stopOnPartialError(err)) {
 				continue
 			}
 			return sent, err

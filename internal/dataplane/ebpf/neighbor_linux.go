@@ -1112,12 +1112,7 @@ func (injector *lanPacketInjector) sendRawGSOBatch(packets [][]byte, dst netip.A
 		scratch.msgs[i].hdr.Iov = &scratch.iovs[iovBase]
 		scratch.msgs[i].hdr.SetIovlen(3)
 	}
-	injector.mu.Lock()
-	defer injector.mu.Unlock()
-	if injector.fd < 0 {
-		return 0, fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
-	}
-	fd, err := injector.gsoRawSocketLocked()
+	fd, err := injector.lockRawGSOSocketForSend(false)
 	if err != nil {
 		return 0, err
 	}
@@ -1129,12 +1124,13 @@ func (injector *lanPacketInjector) sendRawGSOBatch(packets [][]byte, dst netip.A
 	runtime.KeepAlive(scratch.headers)
 	runtime.KeepAlive(scratch.ethernets)
 	runtime.KeepAlive(packets)
+	injector.mu.RUnlock()
 	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
 			return sent, errors.Join(
 				fmt.Errorf("%w: send LAN raw GSO batch to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
-				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
+				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOForFD(fd)),
 			)
 		}
 		return sent, fmt.Errorf("reinject LAN raw GSO IPv4 batch to %s on %q: %w", dst, injector.ifname, err)
@@ -1191,45 +1187,29 @@ func (injector *lanPacketInjector) sendRawVNetMixedBatch(packets [][]byte, dst n
 	if gsoPackets == 0 {
 		return 0, nil
 	}
-	injector.mu.Lock()
-	defer injector.mu.Unlock()
-	if injector.fd < 0 {
-		return 0, fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
-	}
-	fd, err := injector.gsoRawSocketLocked()
+	fd, err := injector.lockRawGSOSocketForSend(false)
 	if err != nil {
 		return 0, err
 	}
 	lanPacketStats.gsoAttempts.Add(uint64(gsoPackets))
 	lanPacketStats.gsoRawAttempts.Add(uint64(gsoPackets))
 	lanPacketStats.gsoRawMixedAttempts.Add(1)
-	var sent int
-	for sent < len(packets) {
-		n, err := sendmmsg(fd, scratch.msgs[sent:])
-		if n > 0 {
-			sent += n
-		}
-		if err != nil {
-			lanPacketStats.recordGSOErrno(err)
-			if isPacketSocketGSOUnsupported(err) {
-				return sent, errors.Join(
-					fmt.Errorf("%w: send LAN raw mixed batch to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
-					wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
-				)
-			}
-			if n > 0 {
-				continue
-			}
-			return sent, fmt.Errorf("reinject LAN raw mixed batch to %s on %q: %w", dst, injector.ifname, err)
-		}
-		if n <= 0 {
-			return sent, fmt.Errorf("reinject LAN raw mixed batch to %s on %q: %w", dst, injector.ifname, unix.EIO)
-		}
-	}
+	sent, sendErr := sendAllMMsg(fd, scratch.msgs[:len(packets)], isPacketSocketGSOUnsupported)
 	runtime.KeepAlive(scratch.iovs)
 	runtime.KeepAlive(scratch.headers)
 	runtime.KeepAlive(scratch.ethernets)
 	runtime.KeepAlive(packets)
+	injector.mu.RUnlock()
+	if sendErr != nil {
+		lanPacketStats.recordGSOErrno(sendErr)
+		if isPacketSocketGSOUnsupported(sendErr) {
+			return sent, errors.Join(
+				fmt.Errorf("%w: send LAN raw mixed batch to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, sendErr),
+				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOForFD(fd)),
+			)
+		}
+		return sent, fmt.Errorf("reinject LAN raw mixed batch to %s on %q: %w", dst, injector.ifname, sendErr)
+	}
 	lanPacketStats.gsoSuccesses.Add(uint64(gsoPackets))
 	lanPacketStats.gsoRawSuccesses.Add(uint64(gsoPackets))
 	lanPacketStats.gsoRawMixedSuccesses.Add(1)
@@ -1292,57 +1272,31 @@ func (injector *lanPacketInjector) sendRawVNetBatch(packets [][]byte, dst netip.
 		scratch.msgs[i].hdr.Iov = &scratch.iovs[iovBase]
 		scratch.msgs[i].hdr.SetIovlen(3)
 	}
-	injector.mu.Lock()
-	defer injector.mu.Unlock()
-	if injector.fd < 0 {
-		return 0, fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
-	}
-	if injector.rawVNetBatchDisabled {
-		return 0, fmt.Errorf("%w for %q raw VNET batch", errGSOUnsupported, injector.ifname)
-	}
-	fd, err := injector.gsoRawSocketLocked()
+	fd, err := injector.lockRawGSOSocketForSend(true)
 	if err != nil {
 		lanPacketStats.rawVNetBatchUnsupported.Add(1)
 		return 0, err
 	}
 	lanPacketStats.rawVNetBatchAttempts.Add(1)
-	var sent int
-	for sent < len(packets) {
-		n, err := sendmmsg(fd, scratch.msgs[sent:])
-		if n > 0 {
-			sent += n
-		}
-		if err != nil {
-			lanPacketStats.rawVNetBatchErrors.Add(1)
-			lanPacketStats.recordGSOErrno(err)
-			if isPacketSocketGSOUnsupported(err) {
-				injector.rawVNetBatchDisabled = true
-				lanPacketStats.rawVNetBatchUnsupported.Add(1)
-				if sent > 0 {
-					lanPacketStats.rawVNetBatchMessages.Add(uint64(sent))
-				}
-				return sent, fmt.Errorf("%w: send LAN raw VNET batch to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err)
-			}
-			if n > 0 {
-				continue
-			}
-			if sent > 0 {
-				lanPacketStats.rawVNetBatchMessages.Add(uint64(sent))
-			}
-			return sent, fmt.Errorf("reinject LAN raw VNET batch to %s on %q: %w", dst, injector.ifname, err)
-		}
-		if n <= 0 {
-			lanPacketStats.rawVNetBatchErrors.Add(1)
-			if sent > 0 {
-				lanPacketStats.rawVNetBatchMessages.Add(uint64(sent))
-			}
-			return sent, fmt.Errorf("reinject LAN raw VNET batch to %s on %q: %w", dst, injector.ifname, unix.EIO)
-		}
-	}
+	sent, sendErr := sendAllMMsg(fd, scratch.msgs[:len(packets)], isPacketSocketGSOUnsupported)
 	runtime.KeepAlive(scratch.iovs)
 	runtime.KeepAlive(scratch.headers)
 	runtime.KeepAlive(scratch.ethernets)
 	runtime.KeepAlive(packets)
+	injector.mu.RUnlock()
+	if sendErr != nil {
+		lanPacketStats.rawVNetBatchErrors.Add(1)
+		lanPacketStats.recordGSOErrno(sendErr)
+		if sent > 0 {
+			lanPacketStats.rawVNetBatchMessages.Add(uint64(sent))
+		}
+		if isPacketSocketGSOUnsupported(sendErr) {
+			injector.disableRawVNetBatchForFD(fd)
+			lanPacketStats.rawVNetBatchUnsupported.Add(1)
+			return sent, fmt.Errorf("%w: send LAN raw VNET batch to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, sendErr)
+		}
+		return sent, fmt.Errorf("reinject LAN raw VNET batch to %s on %q: %w", dst, injector.ifname, sendErr)
+	}
 	lanPacketStats.rawVNetBatchSuccesses.Add(1)
 	lanPacketStats.rawVNetBatchMessages.Add(uint64(sent))
 	return sent, nil
@@ -1402,12 +1356,7 @@ func (injector *lanPacketInjector) sendRawGSOScatterRun(packets [][]byte, dst ne
 		scratch.iovs[3+i].SetLen(len(payload))
 	}
 	addr := rawSockaddrLinklayer(injector.ifindex, dstMAC)
-	injector.mu.Lock()
-	defer injector.mu.Unlock()
-	if injector.fd < 0 {
-		return 0, fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
-	}
-	fd, err := injector.gsoRawSocketLocked()
+	fd, err := injector.lockRawGSOSocketForSend(false)
 	if err != nil {
 		return 0, err
 	}
@@ -1419,12 +1368,13 @@ func (injector *lanPacketInjector) sendRawGSOScatterRun(packets [][]byte, dst ne
 	runtime.KeepAlive(ethernet)
 	runtime.KeepAlive(ipHeader)
 	runtime.KeepAlive(packets)
+	injector.mu.RUnlock()
 	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
 			return 0, errors.Join(
 				fmt.Errorf("%w: send LAN raw GSO scatter to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
-				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
+				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOForFD(fd)),
 			)
 		}
 		return 0, fmt.Errorf("reinject LAN raw GSO scatter IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
@@ -1956,12 +1906,7 @@ func (injector *lanPacketInjector) sendRawGSO(packet []byte, dst netip.Addr, dst
 	iovs[1].SetLen(len(ethernet))
 	iovs[2].Base = &packet[0]
 	iovs[2].SetLen(len(packet))
-	injector.mu.Lock()
-	defer injector.mu.Unlock()
-	if injector.fd < 0 {
-		return fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
-	}
-	fd, err := injector.gsoRawSocketLocked()
+	fd, err := injector.lockRawGSOSocketForSend(false)
 	if err != nil {
 		return err
 	}
@@ -1970,12 +1915,13 @@ func (injector *lanPacketInjector) sendRawGSO(packet []byte, dst netip.Addr, dst
 	runtime.KeepAlive(virtioHdr)
 	runtime.KeepAlive(ethernet)
 	runtime.KeepAlive(packet)
+	injector.mu.RUnlock()
 	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
 			return errors.Join(
 				fmt.Errorf("%w: send LAN raw GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
-				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
+				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOForFD(fd)),
 			)
 		}
 		return fmt.Errorf("reinject LAN raw GSO IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
@@ -1997,12 +1943,7 @@ func (injector *lanPacketInjector) sendCookedGSO(packet []byte, dst netip.Addr, 
 	iovs[0].SetLen(len(virtioHdr))
 	iovs[1].Base = &packet[0]
 	iovs[1].SetLen(len(packet))
-	injector.mu.Lock()
-	defer injector.mu.Unlock()
-	if injector.fd < 0 {
-		return fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
-	}
-	fd, err := injector.gsoCookedSocketLocked()
+	fd, err := injector.lockCookedGSOSocketForSend()
 	if err != nil {
 		return err
 	}
@@ -2010,12 +1951,13 @@ func (injector *lanPacketInjector) sendCookedGSO(packet []byte, dst netip.Addr, 
 	n, err := sendmsgRaw(fd, &addr, iovs[:])
 	runtime.KeepAlive(virtioHdr)
 	runtime.KeepAlive(packet)
+	injector.mu.RUnlock()
 	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
 			return errors.Join(
 				fmt.Errorf("%w: send LAN cooked GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
-				wrapEBPFOperation("close disabled LAN cooked GSO socket", injector.disableCookedGSOLocked()),
+				wrapEBPFOperation("close disabled LAN cooked GSO socket", injector.disableCookedGSOForFD(fd)),
 			)
 		}
 		return fmt.Errorf("reinject LAN cooked GSO IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
@@ -2029,27 +1971,24 @@ func (injector *lanPacketInjector) sendCookedGSO(packet []byte, dst netip.Addr, 
 func (injector *lanPacketInjector) sendRawGSOContiguous(packet []byte, dst netip.Addr, dstMAC net.HardwareAddr) error {
 	var lladdr [8]byte
 	copy(lladdr[:], dstMAC)
-	injector.mu.Lock()
-	defer injector.mu.Unlock()
-	if injector.fd < 0 {
-		return fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
-	}
-	fd, err := injector.gsoRawSocketLocked()
+	fd, err := injector.lockRawGSOSocketForSend(false)
 	if err != nil {
 		return err
 	}
 	lanPacketStats.gsoRawAttempts.Add(1)
-	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrLinklayer{
+	err = unix.Sendto(fd, packet, 0, &unix.SockaddrLinklayer{
 		Protocol: htons(etherTypeIPv4),
 		Ifindex:  injector.ifindex,
 		Halen:    uint8(len(dstMAC)),
 		Addr:     lladdr,
-	}); err != nil {
+	})
+	injector.mu.RUnlock()
+	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
 			return errors.Join(
 				fmt.Errorf("%w: send LAN raw GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
-				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOLocked()),
+				wrapEBPFOperation("close disabled LAN raw GSO socket", injector.disableRawGSOForFD(fd)),
 			)
 		}
 		return fmt.Errorf("reinject LAN raw GSO IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
@@ -2060,32 +1999,93 @@ func (injector *lanPacketInjector) sendRawGSOContiguous(packet []byte, dst netip
 func (injector *lanPacketInjector) sendCookedGSOContiguous(packet []byte, dst netip.Addr, dstMAC net.HardwareAddr) error {
 	var lladdr [8]byte
 	copy(lladdr[:], dstMAC)
-	injector.mu.Lock()
-	defer injector.mu.Unlock()
-	if injector.fd < 0 {
-		return fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
-	}
-	fd, err := injector.gsoCookedSocketLocked()
+	fd, err := injector.lockCookedGSOSocketForSend()
 	if err != nil {
 		return err
 	}
 	lanPacketStats.gsoCookedAttempts.Add(1)
-	if err := unix.Sendto(fd, packet, 0, &unix.SockaddrLinklayer{
+	err = unix.Sendto(fd, packet, 0, &unix.SockaddrLinklayer{
 		Protocol: htons(etherTypeIPv4),
 		Ifindex:  injector.ifindex,
 		Halen:    uint8(len(dstMAC)),
 		Addr:     lladdr,
-	}); err != nil {
+	})
+	injector.mu.RUnlock()
+	if err != nil {
 		lanPacketStats.recordGSOErrno(err)
 		if isPacketSocketGSOUnsupported(err) {
 			return errors.Join(
 				fmt.Errorf("%w: send LAN cooked GSO packet to %s on %q: %v", errGSOUnsupported, dst, injector.ifname, err),
-				wrapEBPFOperation("close disabled LAN cooked GSO socket", injector.disableCookedGSOLocked()),
+				wrapEBPFOperation("close disabled LAN cooked GSO socket", injector.disableCookedGSOForFD(fd)),
 			)
 		}
 		return fmt.Errorf("reinject LAN cooked GSO IPv4 packet to %s on %q: %w", dst, injector.ifname, err)
 	}
 	return nil
+}
+
+// A successful lock*SocketForSend call keeps mu read-locked until the send completes.
+func (injector *lanPacketInjector) lockRawGSOSocketForSend(requireRawVNetBatch bool) (int, error) {
+	for {
+		injector.mu.RLock()
+		switch {
+		case injector.fd < 0:
+			injector.mu.RUnlock()
+			return -1, fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
+		case requireRawVNetBatch && injector.rawVNetBatchDisabled:
+			injector.mu.RUnlock()
+			return -1, fmt.Errorf("%w for %q raw VNET batch", errGSOUnsupported, injector.ifname)
+		case injector.gsoRawDisabled:
+			injector.mu.RUnlock()
+			return -1, fmt.Errorf("%w for %q raw packet socket", errGSOUnsupported, injector.ifname)
+		case injector.gsoRawFD >= 0:
+			return injector.gsoRawFD, nil
+		}
+		injector.mu.RUnlock()
+
+		injector.mu.Lock()
+		if injector.fd < 0 {
+			injector.mu.Unlock()
+			return -1, fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
+		}
+		if requireRawVNetBatch && injector.rawVNetBatchDisabled {
+			injector.mu.Unlock()
+			return -1, fmt.Errorf("%w for %q raw VNET batch", errGSOUnsupported, injector.ifname)
+		}
+		_, err := injector.gsoRawSocketLocked()
+		injector.mu.Unlock()
+		if err != nil {
+			return -1, err
+		}
+	}
+}
+
+func (injector *lanPacketInjector) lockCookedGSOSocketForSend() (int, error) {
+	for {
+		injector.mu.RLock()
+		switch {
+		case injector.fd < 0:
+			injector.mu.RUnlock()
+			return -1, fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
+		case injector.gsoDisabled:
+			injector.mu.RUnlock()
+			return -1, fmt.Errorf("%w for %q cooked packet socket", errGSOUnsupported, injector.ifname)
+		case injector.gsoFD >= 0:
+			return injector.gsoFD, nil
+		}
+		injector.mu.RUnlock()
+
+		injector.mu.Lock()
+		if injector.fd < 0 {
+			injector.mu.Unlock()
+			return -1, fmt.Errorf("LAN packet reinject socket for %q is closed", injector.ifname)
+		}
+		_, err := injector.gsoCookedSocketLocked()
+		injector.mu.Unlock()
+		if err != nil {
+			return -1, err
+		}
+	}
 }
 
 func (injector *lanPacketInjector) gsoRawSocketLocked() (int, error) {
@@ -2207,6 +2207,23 @@ func (injector *lanPacketInjector) disableRawGSOLocked() error {
 	return nil
 }
 
+func (injector *lanPacketInjector) disableRawGSOForFD(fd int) error {
+	injector.mu.Lock()
+	defer injector.mu.Unlock()
+	if injector.gsoRawFD != fd {
+		return nil
+	}
+	return injector.disableRawGSOLocked()
+}
+
+func (injector *lanPacketInjector) disableRawVNetBatchForFD(fd int) {
+	injector.mu.Lock()
+	defer injector.mu.Unlock()
+	if injector.gsoRawFD == fd && !injector.gsoRawDisabled {
+		injector.rawVNetBatchDisabled = true
+	}
+}
+
 func (injector *lanPacketInjector) disableCookedGSOLocked() error {
 	injector.gsoDisabled = true
 	if injector.gsoFD >= 0 {
@@ -2215,6 +2232,15 @@ func (injector *lanPacketInjector) disableCookedGSOLocked() error {
 		return err
 	}
 	return nil
+}
+
+func (injector *lanPacketInjector) disableCookedGSOForFD(fd int) error {
+	injector.mu.Lock()
+	defer injector.mu.Unlock()
+	if injector.gsoFD != fd {
+		return nil
+	}
+	return injector.disableCookedGSOLocked()
 }
 
 func isPacketSocketGSOUnsupported(err error) bool {
