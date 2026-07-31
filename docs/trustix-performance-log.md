@@ -5017,3 +5017,74 @@ avoid a TrustIX kernel-module change by evaluating per-worker packet-socket
 shards, `PACKET_TX_RING`, or AF_XDP TX. Those paths need isolated A/B and
 compatibility gates; the profile does not justify another replay/crypto
 micro-optimization first.
+
+### 2026-08-01 Zaozhuang PVE secure TCP RX GSO and zero-wait drain
+
+Follow-up validation used disposable Debian 13 VM200 and VM201 on isolated
+`vmbr3`, each with 8 vCPUs and kernel `6.12.90+deb13.1-cloud-amd64`. The
+standard TCP endpoint used secure encryption, userspace crypto, userspace
+datapath, 16 warmed sessions, and 16 iperf streams. No TrustIX kernel module
+was loaded. Candidate binaries were built with Go 1.25.12, `CGO_ENABLED=0`,
+and `-trimpath` from the worktree based on `40dc7df`.
+
+The existing receive-side TCP GSO coalescer was not enabled by default for a
+standard secure TCP endpoint even though TIX-TCP and the Linux tunnel
+transports already used it. Enabling it for TCP removes repeated packet-socket
+reinject work after userspace decryption. A six-run, 60-second interleaved A/B
+with the same final GSO binary measured:
+
+| RX GSO policy | Received samples | Mean |
+| --- | --- | ---: |
+| Explicitly disabled | 2.485, 2.511, 2.516 Gbps | 2.504 Gbps |
+| New TCP default | 3.472, 3.554, 3.479 Gbps | 3.502 Gbps |
+
+The new default improved mean throughput by 39.8%. The environment override
+`TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED=0` remains a tested
+failback. A separate nine-run comparison measured 2.525 Gbps without GSO,
+3.461 Gbps with the linear coalescer, and 3.403 Gbps with scatter-GSO, so the
+linear mode remains the default. Per-worker AF_PACKET socket shards were also
+negative: 1, 4, and 8 shards averaged 2.463, 2.461, and 2.402 Gbps. That
+candidate was removed rather than retaining dormant complexity.
+
+A 120-second profile with the new GSO default sustained 3.454 Gbps. On the
+receiver, `internal/runtime/syscall.Syscall6` was 40.30% flat,
+`gcmAesDec` was 19.65% flat, raw GSO reinjection was 25.63% cumulative, and
+the TCP coalescer was only 2.44% cumulative. The sender profile attributed
+37.54% flat to syscall and 22.09% flat to `gcmAesEnc`. This confirms that the
+coalescer is not the next CPU bottleneck; packet-socket/kernel networking and
+AES-GCM dominate.
+
+Adding a fixed capture-forwarder delay increased batch efficiency but was not
+promoted. In six interleaved 45-second runs, delay `0` averaged 3.439 Gbps and
+`25us` averaged 3.578 Gbps, a 4.04% increase, but the delay is unconditional
+and the candidate also produced more retransmits on the shared PVE underlay.
+Instead, the worker now drains only work already queued on its channel and
+flushes immediately as soon as the queue is empty. It introduces no timer and
+no fixed low-traffic latency.
+
+The zero-wait drain comparison used three 45-second samples per binary:
+
+| Capture worker | Received samples | Mean | Packets per GSO wire |
+| --- | --- | ---: | ---: |
+| Immediate single-work flush | 3.398, 3.477, 3.427 Gbps | 3.434 Gbps | 9.004 |
+| Zero-wait queued-work drain | 3.585, 3.659, 3.596 Gbps | 3.614 Gbps | 9.182 |
+
+The drain improved mean throughput by 5.23%; average coalesced bytes per GSO
+wire increased from 13,090 to 13,347. The final engineering binary SHA256 was
+`85644d90b5c54000149c95b617fef25c768f0d3b0ab27236e0f9f3d05cf150f0`.
+
+The final 300-second concurrent bidirectional soak reached 1.991516 Gbps
+A-to-B and 1.958593 Gbps B-to-A received throughput, about 3.95 Gbps combined.
+The strict verifier returned `status=pass` and `errors=[]`: both boot IDs were
+stable, pstore was empty, kernel logs had no rejected findings, `tix-lan`
+retained `tx_queue_len=1000`, binary/build identity matched, and no
+`trustix_*` module was present. The two nodes completed 5,274,911 and
+5,379,464 raw GSO reinjections with zero GSO, send, receive, inject, session,
+heartbeat, or stale-session errors.
+
+This remains engineering evidence rather than a replacement for the
+repository's 3600-second per-direction production gate. Further standard TCP
+userspace gains do not require a TrustIX kernel module yet, but they need a
+different I/O mechanism such as `PACKET_TX_RING` or AF_XDP TX, or a deliberate
+reduction in the two authenticated-encryption layers. Parameter-only tuning of
+the current coalescer is no longer the highest-value target.

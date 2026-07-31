@@ -2815,7 +2815,7 @@ func (daemon *Daemon) forwardCapturedPacketBatchLoop(ctx context.Context, batchC
 func (daemon *Daemon) forwardCapturedPacketBatchWorkLoop(ctx context.Context, workCh <-chan captureBatchWork) {
 	batchSize := captureForwarderBatchSize()
 	batchDelay := captureForwarderBatchDelay()
-	if batchDelay > 0 && batchSize > 1 {
+	if batchSize > 1 {
 		daemon.forwardCapturedPacketBatchWorkCoalescedLoop(ctx, workCh, batchSize, batchDelay)
 		return
 	}
@@ -2939,6 +2939,12 @@ func (daemon *Daemon) forwardCapturedPacketBatchCoalescedLoop(ctx context.Contex
 }
 
 func (daemon *Daemon) forwardCapturedPacketBatchWorkCoalescedLoop(ctx context.Context, workCh <-chan captureBatchWork, batchSize int, batchDelay time.Duration) {
+	forwardCapturedPacketBatchWorkCoalescedLoop(ctx, workCh, batchSize, batchDelay, daemon.forwardCaptureEventsBatch)
+}
+
+type captureBatchForwardFunc func(context.Context, []dataplane.CaptureEvent, *captureForwardScratch) bool
+
+func forwardCapturedPacketBatchWorkCoalescedLoop(ctx context.Context, workCh <-chan captureBatchWork, batchSize int, batchDelay time.Duration, forward captureBatchForwardFunc) {
 	events := make([]dataplane.CaptureEvent, 0, batchSize)
 	releases := make([]func(), 0, 4)
 	var scratch captureForwardScratch
@@ -2980,11 +2986,30 @@ func (daemon *Daemon) forwardCapturedPacketBatchWorkCoalescedLoop(ctx context.Co
 			return true
 		}
 		stopTimer()
-		ok := daemon.forwardCaptureEventsBatch(ctx, events, &scratch)
+		ok := forward(ctx, events, &scratch)
 		clear(events)
 		events = events[:0]
 		releasePending()
 		return ok
+	}
+	queueWork := func(work captureBatchWork) bool {
+		if len(work.events) == 0 {
+			work.finish()
+			return true
+		}
+		if len(events) == 0 && len(work.events) >= batchSize {
+			defer work.finish()
+			return forward(ctx, work.events, &scratch)
+		}
+		events = append(events, work.events...)
+		if work.release != nil {
+			releases = append(releases, work.release)
+		}
+		if len(events) >= batchSize {
+			return flush()
+		}
+		startTimer()
+		return true
 	}
 	defer func() {
 		stopTimer()
@@ -2993,6 +3018,26 @@ func (daemon *Daemon) forwardCapturedPacketBatchWorkCoalescedLoop(ctx context.Co
 		}
 	}()
 	for {
+		if batchDelay <= 0 && len(events) > 0 {
+			select {
+			case <-ctx.Done():
+				flush()
+				return
+			case work, ok := <-workCh:
+				if !ok {
+					flush()
+					return
+				}
+				if !queueWork(work) {
+					return
+				}
+			default:
+				if !flush() {
+					return
+				}
+			}
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			flush()
@@ -3002,27 +3047,9 @@ func (daemon *Daemon) forwardCapturedPacketBatchWorkCoalescedLoop(ctx context.Co
 				flush()
 				return
 			}
-			if len(work.events) == 0 {
-				work.finish()
-				continue
+			if !queueWork(work) {
+				return
 			}
-			if len(events) == 0 && len(work.events) >= batchSize {
-				if !daemon.forwardCaptureBatchWork(ctx, work, &scratch) {
-					return
-				}
-				continue
-			}
-			events = append(events, work.events...)
-			if work.release != nil {
-				releases = append(releases, work.release)
-			}
-			if len(events) >= batchSize {
-				if !flush() {
-					return
-				}
-				continue
-			}
-			startTimer()
 		case <-timerC:
 			timerC = nil
 			if !flush() {

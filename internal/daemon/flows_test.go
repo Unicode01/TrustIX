@@ -5504,7 +5504,7 @@ func TestDataSessionBatchMaxBytesAllowsPlaintextFragmentingDatagramLogicalBatche
 	}
 }
 
-func TestDataSessionGSOCoalesceDefaultsForTIXTCPUserspaceSecure(t *testing.T) {
+func TestDataSessionGSOCoalesceDefaultsForTCPUserspaceSecure(t *testing.T) {
 	stats := transport.TransportStats{
 		NativeBatching:      true,
 		Encrypted:           true,
@@ -5523,6 +5523,10 @@ func TestDataSessionGSOCoalesceDefaultsForTIXTCPUserspaceSecure(t *testing.T) {
 	if !dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(tixTCP) {
 		t.Fatal("tix_tcp userspace secure should default RX GSO coalescing on")
 	}
+	tcp := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolTCP}}
+	if !dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(tcp) {
+		t.Fatal("tcp userspace secure should default RX GSO coalescing on")
+	}
 	udp := &dataSessionRuntime{key: dataSessionKey{Transport: transport.ProtocolUDP}}
 	if dataSessionTXGSOCoalesceDefaultForRuntime(udp, stats) {
 		t.Fatal("generic userspace secure datagram should not default TX GSO coalescing on")
@@ -5532,6 +5536,10 @@ func TestDataSessionGSOCoalesceDefaultsForTIXTCPUserspaceSecure(t *testing.T) {
 	}
 	if dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(udp) {
 		t.Fatal("generic userspace secure datagram should not default RX GSO coalescing on")
+	}
+	t.Setenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE_USERSPACE_ENCRYPTED", "0")
+	if dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(tcp) {
+		t.Fatal("explicit userspace secure RX GSO disable should override the tcp default")
 	}
 }
 

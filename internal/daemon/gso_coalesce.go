@@ -226,7 +226,7 @@ func dataSessionRXGSOCoalesceUserspaceEncryptedEnabledForRuntime(runtime *dataSe
 		return enabled
 	}
 	switch dataSessionRuntimeTransport(runtime) {
-	case transport.ProtocolTIXTCP, transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
+	case transport.ProtocolTCP, transport.ProtocolTIXTCP, transport.ProtocolGRE, transport.ProtocolIPIP, transport.ProtocolVXLAN:
 		return true
 	default:
 		return false
