@@ -5088,3 +5088,57 @@ userspace gains do not require a TrustIX kernel module yet, but they need a
 different I/O mechanism such as `PACKET_TX_RING` or AF_XDP TX, or a deliberate
 reduction in the two authenticated-encryption layers. Parameter-only tuning of
 the current coalescer is no longer the highest-value target.
+
+### 2026-08-01 Zaozhuang PVE secure TCP in-place stream encryption
+
+Secure TCP previously encrypted a batch into the secure session arena and then
+copied every ciphertext packet into the stream transport's length-prefixed
+write arena. The stream transport now exposes a synchronous batch builder so
+the secure wrapper can seal each packet directly into its final framed write
+buffer. The fallback for transports without that capability is unchanged.
+Builder length and index checks occur before slicing, build failure writes no
+partial batch, and transport/secure statistics advance only after a successful
+write.
+
+Validation used disposable Debian 13 VM200 and VM201 on isolated `vmbr3`, each
+with 8 vCPU, 8 GiB RAM, and kernel `6.12.90+deb13.1-cloud-amd64`. Binaries used
+Go `1.25.12`, CGO disabled, and `-trimpath`. The baseline trustixd SHA256 was
+`b8a3aa31cc7baece0230c1544a6dd8bb23d91c8b06b6782d5e23cf4322bee355`;
+the initial in-place candidate was
+`bba8d3ebfced1508c2201d7ea4c60bdb5fa3367f692eefc7530d54e68d8440a5`.
+
+Six interleaved, unpaced 60-second A-to-B runs used 16 warmed secure TCP
+sessions and 16 iperf streams. Baseline received throughput was
+`3.474926/3.456027/3.442812 Gbps` (mean `3.457922 Gbps`); candidate throughput
+was `3.446927/3.465563/3.471636 Gbps` (mean `3.461375 Gbps`). The `+0.10%`
+difference is neutral rather than a throughput claim.
+
+CPU efficiency was then compared at a fixed aggregate target of `3.2 Gbps`,
+implemented as 16 streams at `200 Mbps` each. Two 90-second profiles per build
+were interleaved candidate-side first/last. Mean sender CPU samples fell from
+`394.66s` to `384.03s`, a `2.7%` reduction for the same traffic rate. Sender
+`runtime.memmove` fell from `27.49s` to `19.54s`, or `28.9%`. Receiver samples
+were effectively unchanged (`453.59s` versus `454.09s`), so combined endpoint
+CPU fell by approximately `1.2%`. AES-GCM encrypt samples were unchanged within
+noise (`117.27s` versus `117.73s`), and syscall samples decreased slightly
+(`101.35s` versus `100.63s`).
+
+The reviewed final binary added malformed-builder checks and moved the constant
+nonce prefix copy outside the packet loop. Its trustixd SHA256 was
+`cead59d8010bdecb26b951116eceeb3f86e538949e343979666cc9d8f90da8d0`.
+At fixed rate it received `3.199774 Gbps`; the sender profile used `380.03s`
+total CPU with `19.62s` in memmove. Unpaced final confirmation received
+`3.449226 Gbps` A-to-B and `3.478853 Gbps` B-to-A, preserving the prior
+saturation range. Both directions passed with stable guest boot IDs, empty
+pstore, and no panic, Oops, BUG, watchdog, or lockup findings.
+
+Windows and Linux application-package tests, transport stream/secure race
+tests, and `go vet ./...` passed. The short A/B runs are optimization evidence,
+not promoted production evidence. Because the generic secure transport source
+changed, the production evidence audit correctly requires fresh 3600-second
+default gates before this commit can become a new production evidence boundary.
+The remaining final-profile hotspots are AES-GCM (`30.12%` sender, `20.45%`
+receiver) and syscall cost (`26.30%` sender, `39.40%` receiver). Further gains
+do not strictly require a custom kernel module: packet-mmap/AF_XDP userspace I/O
+and carefully validated AEAD batching remain options, while moving crypto or
+the full packet path into the kernel is the larger and riskier next tier.
