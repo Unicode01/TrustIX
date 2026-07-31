@@ -39,6 +39,8 @@ import (
 	"trustix.local/trustix/internal/transport/tixtcp"
 )
 
+var managedCaptureRouteVethCounter atomic.Uint32
+
 func skipIfKernelKfuncUnavailable(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
@@ -745,7 +747,7 @@ func TestCaptureReaderDrainTimeoutDefaultAndEnv(t *testing.T) {
 	}
 }
 
-func TestDeliverCaptureEventBatchMarksMutableOnlyForSingleSubscriberNoHistory(t *testing.T) {
+func TestDeliverCaptureEventBatchMarksMutableForSingleSubscriber(t *testing.T) {
 	oldHistory := captureHistoryEnabled
 	captureHistoryEnabled = false
 	t.Cleanup(func() { captureHistoryEnabled = oldHistory })
@@ -780,8 +782,8 @@ func TestDeliverCaptureEventBatchMarksMutableOnlyForSingleSubscriberNoHistory(t 
 		t.Fatal("deliver with history returned false")
 	}
 	delivered = <-sub
-	if delivered[0].PayloadMutable {
-		t.Fatal("history-enabled payload should not be mutable")
+	if !delivered[0].PayloadMutable {
+		t.Fatal("history-enabled single-subscriber payload should be mutable after history is copied")
 	}
 }
 
@@ -822,6 +824,42 @@ func TestDeliverCaptureEventBatchTracksBorrowedLeaseForBatchSubscriber(t *testin
 		t.Fatalf("borrowed batch count after release = %d, want 0", got)
 	}
 	subscription.ReleaseBatch(delivered)
+}
+
+func TestCaptureSubscriptionCloseReleasesQueuedBorrowedLease(t *testing.T) {
+	oldHistory := captureHistoryEnabled
+	captureHistoryEnabled = true
+	t.Cleanup(func() { captureHistoryEnabled = oldHistory })
+
+	manager := &Manager{
+		captureSubs:      make(map[chan []dataplane.CaptureEvent]struct{}),
+		captureSubOwners: make(map[chan []dataplane.CaptureEvent]*captureSubscription),
+	}
+	events := make(chan []dataplane.CaptureEvent, 1)
+	subscription := &captureSubscription{manager: manager, events: events}
+	manager.captureSubs[events] = struct{}{}
+	manager.captureSubOwners[events] = subscription
+	lease := &captureEventBatchLease{
+		events: []dataplane.CaptureEvent{{Payload: []byte{1, 2, 3}}},
+		arena:  []byte{1, 2, 3},
+	}
+
+	consumed, retained := manager.deliverCaptureEventBatchLeaseLocked(lease.events, lease)
+	if !consumed || !retained {
+		t.Fatalf("borrowed delivery consumed/retained = %t/%t, want true/true", consumed, retained)
+	}
+	if got := len(subscription.borrowed); got != 1 {
+		t.Fatalf("borrowed batch count before close = %d, want 1", got)
+	}
+	if err := subscription.Close(); err != nil {
+		t.Fatalf("close subscription: %v", err)
+	}
+	if got := len(subscription.borrowed); got != 0 {
+		t.Fatalf("borrowed batch count after close = %d, want 0", got)
+	}
+	if err := subscription.Close(); err != nil {
+		t.Fatalf("close subscription again: %v", err)
+	}
 }
 
 func TestDeliverCaptureEventBatchDoesNotRetainDroppedBorrowedLease(t *testing.T) {
@@ -918,6 +956,75 @@ func TestDeliverCaptureEventBatchHistoryCopiesBorrowedPayload(t *testing.T) {
 	lease.events[0].Payload[0] = 9
 	if history.Payload[0] != 1 {
 		t.Fatalf("capture history payload mutated through lease: got %d want 1", history.Payload[0])
+	}
+}
+
+func TestDeliverCaptureEventBatchHistoryBorrowsForBatchSubscriber(t *testing.T) {
+	oldHistory := captureHistoryEnabled
+	captureHistoryEnabled = true
+	t.Cleanup(func() { captureHistoryEnabled = oldHistory })
+
+	manager := &Manager{
+		captureSubs:      make(map[chan []dataplane.CaptureEvent]struct{}),
+		captureSubOwners: make(map[chan []dataplane.CaptureEvent]*captureSubscription),
+	}
+	events := make(chan []dataplane.CaptureEvent, 1)
+	subscription := &captureSubscription{manager: manager, events: events}
+	manager.captureSubs[events] = struct{}{}
+	manager.captureSubOwners[events] = subscription
+	lease := &captureEventBatchLease{
+		events: []dataplane.CaptureEvent{{Payload: []byte{1, 2, 3}}},
+		arena:  []byte{1, 2, 3},
+	}
+
+	consumed, retained := manager.deliverCaptureEventBatchLeaseLocked(lease.events, lease)
+	if !consumed || !retained {
+		t.Fatalf("history delivery consumed/retained = %t/%t, want true/true", consumed, retained)
+	}
+	delivered := <-events
+	if !delivered[0].PayloadMutable {
+		t.Fatal("history-enabled borrowed payload should be mutable")
+	}
+	history := manager.captureEvents[0]
+	if len(history.Payload) == 0 || &history.Payload[0] == &delivered[0].Payload[0] {
+		t.Fatal("capture history payload aliases the borrowed delivery")
+	}
+	delivered[0].Payload[0] = 9
+	if history.Payload[0] != 1 {
+		t.Fatalf("capture history payload mutated through delivery: got %d want 1", history.Payload[0])
+	}
+	subscription.ReleaseBatch(delivered)
+	if got := len(subscription.borrowed); got != 0 {
+		t.Fatalf("borrowed batch count after release = %d, want 0", got)
+	}
+}
+
+func TestCaptureHistoryReusesOverwrittenPayloadBuffer(t *testing.T) {
+	oldHistory := captureHistoryEnabled
+	captureHistoryEnabled = true
+	t.Cleanup(func() { captureHistoryEnabled = oldHistory })
+
+	manager := &Manager{}
+	manager.recordCaptureEventLocked(dataplane.CaptureEvent{Payload: []byte{1, 2, 3, 4}})
+	first := manager.captureEvents[0].Payload
+	if len(first) == 0 {
+		t.Fatal("first capture history payload is empty")
+	}
+	for i := 1; i < captureRingLimit; i++ {
+		manager.recordCaptureEventLocked(dataplane.CaptureEvent{Payload: []byte{byte(i)}})
+	}
+	incoming := []byte{5, 6, 7}
+	manager.recordCaptureEventLocked(dataplane.CaptureEvent{Payload: incoming})
+	reused := manager.captureEvents[0].Payload
+	if &reused[0] != &first[0] {
+		t.Fatal("overwritten capture history slot did not reuse its payload buffer")
+	}
+	if !bytes.Equal(reused, incoming) {
+		t.Fatalf("reused capture history payload = %v, want %v", reused, incoming)
+	}
+	incoming[0] = 9
+	if reused[0] != 5 {
+		t.Fatal("capture history payload aliases the incoming packet")
 	}
 }
 
@@ -2792,17 +2899,21 @@ func TestManagedCaptureRouteGatewayUsesSyntheticVethPeer(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root to create veth pair")
 	}
-	suffix := fmt.Sprintf("%d", os.Getpid()%100000)
+	sequence := managedCaptureRouteVethCounter.Add(1)
+	suffix := fmt.Sprintf("%03d%04x", os.Getpid()%1000, sequence&0xffff)
 	hostName := "tixm" + suffix
 	peerName := "tixn" + suffix
+	hostMAC := net.HardwareAddr{0x02, 0x54, 0x49, 0x5a, byte(sequence >> 8), byte(sequence)}
+	peerMAC := net.HardwareAddr{0x02, 0x54, 0x49, 0x5b, byte(sequence >> 8), byte(sequence)}
 	_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}})
 	t.Cleanup(func() {
 		_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}})
 		_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: peerName}})
 	})
 	if err := netlink.LinkAdd(&netlink.Veth{
-		LinkAttrs: netlink.LinkAttrs{Name: hostName},
-		PeerName:  peerName,
+		LinkAttrs:        netlink.LinkAttrs{Name: hostName, HardwareAddr: hostMAC},
+		PeerName:         peerName,
+		PeerHardwareAddr: peerMAC,
 	}); err != nil {
 		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
 			t.Skipf("requires CAP_NET_ADMIN to create veth pair: %v", err)
@@ -2815,12 +2926,14 @@ func TestManagedCaptureRouteGatewayUsesSyntheticVethPeer(t *testing.T) {
 	}
 	manager := NewManager()
 	manager.spec = dataplane.AttachSpec{LANIface: hostName}
-	gateway, destinationMAC := manager.managedCaptureRouteGatewayLocked()
-	if gateway != netip.MustParseAddr(managedCaptureSyntheticGateway) {
-		t.Fatalf("managed capture gateway = %s, want synthetic gateway", gateway)
-	}
-	if destinationMAC != peer.Attrs().HardwareAddr.String() {
-		t.Fatalf("managed capture neighbor MAC = %q, want peer %s", destinationMAC, peer.Attrs().HardwareAddr)
+	for i := 0; i < 16; i++ {
+		gateway, destinationMAC := manager.managedCaptureRouteGatewayLocked()
+		if gateway != netip.MustParseAddr(managedCaptureSyntheticGateway) {
+			t.Fatalf("managed capture gateway = %s, want synthetic gateway", gateway)
+		}
+		if destinationMAC != peer.Attrs().HardwareAddr.String() {
+			t.Fatalf("managed capture neighbor MAC = %q, want peer %s (host %s, warnings %v)", destinationMAC, peer.Attrs().HardwareAddr, hostMAC, manager.warnings)
+		}
 	}
 }
 
@@ -17164,8 +17277,8 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 		"alloc_page(GFP_ATOMIC)",
 		"kmap_local_page(page)",
 		"skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags",
-		"if (page_addr)\n\t\tkunmap_local(page_addr);",
-		"if (page)\n\t\t__free_page(page);",
+		"if (page_addr && page_mapped)\n\t\tkunmap_local(page_addr);",
+		"if (page) {\n\t\tif (page_from_frag_cache)\n\t\t\tpage_frag_free(page_addr);\n\t\telse\n\t\t\t__free_page(page);\n\t}",
 		"kfree_skb(skb);",
 	} {
 		requireSourceContains(t, nonlinearBuilderBody, want)

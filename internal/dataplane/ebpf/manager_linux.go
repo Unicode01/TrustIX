@@ -7078,6 +7078,9 @@ func (subscription *captureSubscription) Close() error {
 		delete(subscription.manager.captureSubOwners, subscription.events)
 		close(subscription.events)
 		subscription.manager.captureMu.Unlock()
+		for batch := range subscription.events {
+			subscription.ReleaseBatch(batch)
+		}
 	})
 	return nil
 }
@@ -25184,7 +25187,7 @@ func (manager *Manager) deliverCaptureEventBatchLeaseLocked(batch []dataplane.Ca
 	if len(manager.captureSubs) == 0 {
 		return false, false
 	}
-	if !captureHistoryEnabled && len(manager.captureSubs) == 1 {
+	if len(manager.captureSubs) == 1 {
 		for i := range batch {
 			batch[i].PayloadMutable = true
 		}
@@ -25400,12 +25403,22 @@ func (manager *Manager) recordCaptureEventLocked(event dataplane.CaptureEvent) {
 		manager.captureEventNext = 0
 		manager.captureEventCount = 0
 	}
+	index := manager.captureEventNext
 	if len(event.Payload) > 0 {
-		event.Payload = append([]byte(nil), event.Payload...)
+		payload := manager.captureEvents[index].Payload
+		if cap(payload) < len(event.Payload) {
+			payload = make([]byte, len(event.Payload))
+		} else {
+			payload = payload[:len(event.Payload)]
+		}
+		copy(payload, event.Payload)
+		event.Payload = payload
+	} else {
+		event.Payload = nil
 	}
 	event.PayloadMutable = false
-	manager.captureEvents[manager.captureEventNext] = event
-	manager.captureEventNext = (manager.captureEventNext + 1) % captureRingLimit
+	manager.captureEvents[index] = event
+	manager.captureEventNext = (index + 1) % captureRingLimit
 	if manager.captureEventCount < captureRingLimit {
 		manager.captureEventCount++
 	}

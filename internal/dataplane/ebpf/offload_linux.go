@@ -552,13 +552,33 @@ func vethPeerIndex(link *netlink.Veth) (int, error) {
 }
 
 func vethPeerHardwareAddr(link netlink.Link) (net.HardwareAddr, string) {
-	target, warning := vethPeerOffloadTarget(link)
+	veth, ok := link.(*netlink.Veth)
+	if !ok {
+		return nil, ""
+	}
+	peerIndex, err := vethPeerIndex(veth)
+	if err != nil {
+		return nil, fmt.Sprintf("LAN veth peer MAC discovery failed for %s: %v", link.Attrs().Name, err)
+	}
+	if peerIndex <= 0 {
+		return nil, fmt.Sprintf("LAN veth peer MAC discovery failed for %s: invalid peer ifindex %d", link.Attrs().Name, peerIndex)
+	}
+	if peer, err := netlink.LinkByIndex(peerIndex); err == nil && peer != nil {
+		if peer.Attrs() == nil || len(peer.Attrs().HardwareAddr) != 6 {
+			return nil, fmt.Sprintf("LAN veth peer MAC discovery failed for %s: peer ifindex %d has no Ethernet hardware address", link.Attrs().Name, peerIndex)
+		}
+		return append(net.HardwareAddr(nil), peer.Attrs().HardwareAddr...), ""
+	}
+	target, err := findNamedNetNSLinkByIndex(peerIndex)
+	if err != nil {
+		return nil, fmt.Sprintf("LAN veth peer MAC discovery failed for %s: %v", link.Attrs().Name, err)
+	}
 	if target == nil {
-		return nil, warning
+		return nil, fmt.Sprintf("LAN veth peer MAC discovery failed for %s: could not locate peer ifindex %d", link.Attrs().Name, peerIndex)
 	}
 	var hw net.HardwareAddr
-	read := func() error {
-		peer, err := netlink.LinkByName(target.Iface)
+	err = withNetNS(target.NetNSPath, func() error {
+		peer, err := netlink.LinkByIndex(peerIndex)
 		if err != nil {
 			return err
 		}
@@ -567,13 +587,7 @@ func vethPeerHardwareAddr(link netlink.Link) (net.HardwareAddr, string) {
 		}
 		hw = append(net.HardwareAddr(nil), peer.Attrs().HardwareAddr...)
 		return nil
-	}
-	var err error
-	if target.NetNSPath == "" {
-		err = read()
-	} else {
-		err = withNetNS(target.NetNSPath, read)
-	}
+	})
 	if err != nil {
 		return nil, fmt.Sprintf("LAN veth peer MAC discovery failed for %s: %v", link.Attrs().Name, err)
 	}

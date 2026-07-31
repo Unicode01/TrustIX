@@ -1148,17 +1148,27 @@ func TestKernelUDPDecodePayloadBorrowEncryptedFrames(t *testing.T) {
 }
 
 func TestAFXDPAcquireTXFrameWaitsForShortBackpressure(t *testing.T) {
+	producer := uint32(0)
+	consumer := uint32(0)
 	socket := &afXDPSocket{
 		txFree:             make([]uint64, 0, 1),
 		txBackpressureWait: 50 * time.Millisecond,
 		txBackpressurePoll: time.Millisecond,
+		comp: xdpUint64Ring{
+			producer: &producer,
+			consumer: &consumer,
+			descs:    make([]uint64, 1),
+			size:     1,
+			mask:     0,
+		},
 	}
 	const addr = 2 * tixTCPDefaultUMEMFrameSize
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		time.Sleep(2 * time.Millisecond)
-		socket.releaseTXFrame(addr)
+		socket.comp.descs[0] = addr
+		atomic.StoreUint32(&producer, 1)
 	}()
 
 	got, ok := socket.acquireTXFrame()
