@@ -4951,3 +4951,69 @@ throughput sample around `0.000209 Gbps` and
 `session_heartbeat_timeouts=13`. Keep plaintext TIX-TCP on the
 separate route-GSO production gate unless a fresh strict long run proves the
 plain userspace mode.
+
+### 2026-07-31 Zaozhuang PVE secure userspace send/replay optimization
+
+Validation used VM200 `trustix-capture-a` and VM201 `trustix-capture-b` on the
+isolated `vmbr3` bridge. Both guests ran Debian 13 kernel
+`6.12.90+deb13.1-cloud-amd64`; all compared binaries were built with Go
+`1.26.5`, CGO enabled, and `-trimpath`. The benchmark was 16-flow secure TCP,
+userspace crypto, userspace dataplane, A-to-B, with 60-second measured runs.
+
+The first change replaced the exclusive LAN packet-injector lock held across
+`sendmmsg`/`sendmsg` with read-locked socket send leases. Socket creation,
+capability disable, and close remain exclusive; close waits for active sends,
+and stale senders cannot disable a replacement fd. A same-toolchain A/B moved
+from `2.013/1.931 Gbps` (mean `1.972 Gbps`, SHA256
+`277602221bca38280d43f8c64cb09a5808545d5ff6b1f9cdaa626d500e4b20ef`)
+to `2.748/2.841 Gbps` (mean `2.795 Gbps`, SHA256
+`0b31cfc75d55f322d0ec6ba3b43ded8fc0fe0d530a649821acf50ea4369f9032`),
+an approximately 41.7% improvement. Receiver CPU increased from about 74% to
+175%, confirming that capture workers were no longer serialized in userspace.
+
+The resulting receiver profile exposed `shiftReplayWindowSeen` at 9.84% flat:
+every in-order encrypted packet shifted all 1,024 words in the default 65,536
+bit replay window. The replay bitmap now uses a circular head. Sequential
+advances clear one bit in O(1), while larger advances clear at most two linear
+bit ranges. Atomic batches copy and commit the head together with the bitmap.
+Randomized differential tests cover aligned and unaligned window sizes,
+wraparound, replay/expiry decisions, batch results, and failed-batch rollback.
+
+Interleaved replay-window A/B results, with the send-lease optimization present
+in both binaries:
+
+| Run | Old shifted bitmap | Circular bitmap |
+| --- | ---: | ---: |
+| Pair 1 | 2.849641 Gbps | 3.101156 Gbps |
+| Pair 2 | 2.850758 Gbps | 3.084419 Gbps |
+| Pair 3 | 2.825791 Gbps | 3.063309 Gbps |
+| Mean | 2.842063 Gbps | 3.082961 Gbps |
+
+The circular bitmap improved end-to-end throughput by 8.48%. Its sequential
+microbenchmark was `20.9-23.7 ns/op` on the Windows build host and
+`41.0-41.4 ns/op` in the Linux guest, with zero allocations; the old shifted
+bitmap measured `1.28-1.37 us/op` on the same Windows host. A 120-second profile
+run sustained 3.060262 Gbps. Replay shifting and the new circular helpers were
+absent from the sampled hot list; receiver AES-GCM decrypt was 9.82% flat, while
+syscall was 60.43% flat and `sendmmsg` was 49.44% cumulative.
+
+During final review, the send loop was also consolidated into a tested
+`sendAllMMsg` helper. A partial-progress transient error continues with the
+remaining messages, a partial capability error stops so the path can be
+disabled, zero progress becomes `EIO`, and a zero-progress syscall error is
+preserved. The final binary SHA256 was
+`086dba6c30b9b4ed448e6820d225824c1d9239afd384825283067b359a4bd997`;
+its 60-second confirmation reached 3.133097 Gbps with 23,016 retransmits.
+
+Verification passed Windows `go test ./...` and `go vet ./...`, Linux
+application-package tests, 20 repeated send-lease/error tests, and Linux race
+tests for both the secure and eBPF packages. All nine replay-series traffic
+runs preserved both guest boot IDs. Pstore was empty, kernel journals had no
+panic/Oops/BUG/lockup findings, raw-VNET batching reported zero errors and zero
+unsupported events, and final cleanup left no TrustIX or iperf processes.
+
+The next userspace limit is packet-socket syscall cost. Further work can still
+avoid a TrustIX kernel-module change by evaluating per-worker packet-socket
+shards, `PACKET_TX_RING`, or AF_XDP TX. Those paths need isolated A/B and
+compatibility gates; the profile does not justify another replay/crypto
+micro-optimization first.
