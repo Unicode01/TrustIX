@@ -100,6 +100,52 @@ func (session *Session) SendPackets(pkts [][]byte) error {
 	return nil
 }
 
+func (session *Session) SendBuiltPackets(packetSizes []int, build func(index int, packet []byte) error) error {
+	if len(packetSizes) == 0 {
+		return nil
+	}
+	if build == nil {
+		return fmt.Errorf("stream packet batch builder is required")
+	}
+	maxInt := int(^uint(0) >> 1)
+	total := 0
+	totalPayload := uint64(0)
+	for _, size := range packetSizes {
+		if size < 0 || size > MaxPacketSize {
+			return fmt.Errorf("packet size %d exceeds max %d", size, MaxPacketSize)
+		}
+		if size > maxInt-total-4 {
+			return fmt.Errorf("stream packet batch is too large")
+		}
+		total += 4 + size
+		totalPayload += uint64(size)
+	}
+	session.writeMu.Lock()
+	defer session.writeMu.Unlock()
+	if cap(session.sendBatchArena) < total {
+		session.sendBatchArena = make([]byte, total)
+	}
+	wire := session.sendBatchArena[:total]
+	offset := 0
+	for index, size := range packetSizes {
+		binary.BigEndian.PutUint32(wire[offset:offset+4], uint32(size))
+		offset += 4
+		packet := wire[offset : offset+size : offset+size]
+		if err := build(index, packet); err != nil {
+			session.sendBatchArena = retainSendBatchArena(wire, total)
+			return fmt.Errorf("build stream packet %d: %w", index, err)
+		}
+		offset += size
+	}
+	if err := writeFull(session.conn, wire); err != nil {
+		return err
+	}
+	session.sendBatchArena = retainSendBatchArena(wire, total)
+	session.bytesSent.Add(totalPayload)
+	session.packetsSent.Add(uint64(len(packetSizes)))
+	return nil
+}
+
 func retainSendBatchArena(arena []byte, used int) []byte {
 	if cap(arena) > sendBatchArenaRetainMax && used < sendBatchArenaRetainMax/2 {
 		return nil

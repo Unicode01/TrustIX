@@ -147,6 +147,14 @@ type PacketBatchSession interface {
 	SendPackets(pkts [][]byte) error
 }
 
+// PacketBatchBuilderSession lets a transport allocate its final packet buffer
+// and have a wrapper fill each packet in place. Build is called synchronously
+// exactly once per index with the requested packet length. The transport sends
+// the batch only after every build call succeeds and does not retain build.
+type PacketBatchBuilderSession interface {
+	SendBuiltPackets(packetSizes []int, build func(index int, packet []byte) error) error
+}
+
 type PacketBatchReceiver interface {
 	RecvPackets(max int) ([][]byte, error)
 }

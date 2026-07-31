@@ -503,6 +503,7 @@ type Session struct {
 	sendWire         []byte
 	sendBatchWire    [][]byte
 	sendBatchArena   []byte
+	sendBatchSizes   []int
 	recvBatchPlain   [][]byte
 	recvBatchSeqs    []uint64
 	recvBatchIndexes []int
@@ -689,15 +690,60 @@ func (session *Session) SendPackets(pkts [][]byte) error {
 		return nil
 	}
 
+	builder, buildInPlace := session.inner.(transport.PacketBatchBuilderSession)
 	totalWire := 0
 	totalPlain := uint64(0)
 	overhead := session.sendAEAD.Overhead()
-	for _, pkt := range pkts {
-		totalWire += dataHeaderLen + len(pkt) + overhead
-		totalPlain += uint64(len(pkt))
-	}
 	session.sendMu.Lock()
 	defer session.sendMu.Unlock()
+	if buildInPlace {
+		if cap(session.sendBatchSizes) < len(pkts) {
+			session.sendBatchSizes = make([]int, len(pkts))
+		} else {
+			session.sendBatchSizes = session.sendBatchSizes[:len(pkts)]
+		}
+	}
+	for index, pkt := range pkts {
+		wireSize := dataHeaderLen + len(pkt) + overhead
+		totalPlain += uint64(len(pkt))
+		if buildInPlace {
+			session.sendBatchSizes[index] = wireSize
+		} else {
+			totalWire += wireSize
+		}
+	}
+	baseSeq := session.sendSeq.Add(uint64(len(pkts))) - uint64(len(pkts)) + 1
+	if buildInPlace {
+		sizes := session.sendBatchSizes
+		copy(session.sendNonce[:4], session.sendIV[:4])
+		err := builder.SendBuiltPackets(sizes, func(index int, dst []byte) error {
+			if index < 0 || index >= len(pkts) {
+				return fmt.Errorf("built packet index %d is outside batch length %d", index, len(pkts))
+			}
+			pkt := pkts[index]
+			expected := dataHeaderLen + len(pkt) + overhead
+			if len(dst) != expected {
+				return fmt.Errorf("built packet %d reserved size %d differs from expected size %d", index, len(dst), expected)
+			}
+			seq := baseSeq + uint64(index)
+			header := session.sendHeader[:]
+			binary.BigEndian.PutUint64(header[16:24], seq)
+			binary.BigEndian.PutUint64(session.sendNonce[4:], seq)
+			copy(dst[:dataHeaderLen], header)
+			sealed := session.sendAEAD.Seal(dst[:dataHeaderLen:dataHeaderLen+len(pkt)+overhead], session.sendNonce[:], pkt, header)
+			if len(sealed) != len(dst) {
+				return fmt.Errorf("sealed packet size %d differs from reserved size %d", len(sealed), len(dst))
+			}
+			return nil
+		})
+		session.sendBatchSizes = sizes[:0]
+		if err != nil {
+			return err
+		}
+		session.bytesSent.Add(totalPlain)
+		session.packetsOut.Add(uint64(len(pkts)))
+		return nil
+	}
 	if cap(session.sendBatchWire) < len(pkts) {
 		session.sendBatchWire = make([][]byte, len(pkts))
 	} else {
@@ -708,7 +754,6 @@ func (session *Session) SendPackets(pkts [][]byte) error {
 		session.sendBatchArena = make([]byte, 0, totalWire)
 	}
 	arena := session.sendBatchArena[:0]
-	baseSeq := session.sendSeq.Add(uint64(len(pkts))) - uint64(len(pkts)) + 1
 	header := session.sendHeader[:]
 	copy(session.sendNonce[:4], session.sendIV[:4])
 	nonce := session.sendNonce[:]

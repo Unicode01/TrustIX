@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -149,6 +150,106 @@ func TestSessionSendPacketsEncryptsWireAndRoundTrips(t *testing.T) {
 				t.Fatalf("wire packet contains plaintext %q: %x", plaintext, wire)
 			}
 		}
+	}
+}
+
+func TestSessionSendPacketsBuildsEncryptedWireInPlace(t *testing.T) {
+	clientMemory, serverInner := newMemorySessionPair()
+	clientInner := &buildingMemorySession{memorySession: clientMemory}
+	serverReady := make(chan *Session, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		session, err := Server(serverInner, nil, Options{Epoch: 9})
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverReady <- session
+	}()
+	client, err := Client(clientInner, nil, Options{Epoch: 9})
+	if err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	server := waitServer(t, serverReady, serverErr)
+	packets := [][]byte{[]byte("built-one"), []byte("built-two"), []byte("built-three")}
+	if err := client.SendPackets(packets); err != nil {
+		t.Fatalf("send encrypted built packet batch: %v", err)
+	}
+	if calls := clientInner.buildCalls.Load(); calls != 1 {
+		t.Fatalf("built packet batch calls = %d, want 1", calls)
+	}
+	for index, want := range packets {
+		got, err := server.RecvPacket()
+		if err != nil {
+			t.Fatalf("server recv built packet %d: %v", index, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("server received built packet %d %q, want %q", index, got, want)
+		}
+	}
+	for _, wire := range clientInner.builtPackets() {
+		for _, plaintext := range packets {
+			if bytes.Contains(wire, plaintext) {
+				t.Fatalf("built wire packet contains plaintext %q: %x", plaintext, wire)
+			}
+		}
+	}
+}
+
+func TestSessionSendPacketsBuiltPacketErrorDoesNotUpdateStats(t *testing.T) {
+	clientMemory, serverInner := newMemorySessionPair()
+	clientInner := &buildingMemorySession{memorySession: clientMemory}
+	serverReady := make(chan *Session, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		session, err := Server(serverInner, nil, Options{Epoch: 10})
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverReady <- session
+	}()
+	client, err := Client(clientInner, nil, Options{Epoch: 10})
+	if err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	_ = waitServer(t, serverReady, serverErr)
+	wantErr := errors.New("injected built packet failure")
+	clientInner.buildErr = wantErr
+	if err := client.SendPackets([][]byte{[]byte("not-sent")}); !errors.Is(err, wantErr) {
+		t.Fatalf("send encrypted built packet error = %v, want %v", err, wantErr)
+	}
+	stats := client.Stats()
+	if stats.PacketsSent != 0 || stats.BytesSent != 0 {
+		t.Fatalf("failed built packet stats = packets:%d bytes:%d", stats.PacketsSent, stats.BytesSent)
+	}
+}
+
+func TestSessionSendPacketsRejectsMalformedBuiltPacketBuffer(t *testing.T) {
+	clientMemory, serverInner := newMemorySessionPair()
+	clientInner := &buildingMemorySession{memorySession: clientMemory, buildSizeDelta: -1}
+	serverReady := make(chan *Session, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		session, err := Server(serverInner, nil, Options{Epoch: 11})
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverReady <- session
+	}()
+	client, err := Client(clientInner, nil, Options{Epoch: 11})
+	if err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	_ = waitServer(t, serverReady, serverErr)
+	err = client.SendPackets([][]byte{[]byte("not-sent")})
+	if err == nil || !strings.Contains(err.Error(), "reserved size") {
+		t.Fatalf("malformed built packet error = %v, want reserved-size error", err)
+	}
+	stats := client.Stats()
+	if stats.PacketsSent != 0 || stats.BytesSent != 0 {
+		t.Fatalf("malformed built packet stats = packets:%d bytes:%d", stats.PacketsSent, stats.BytesSent)
 	}
 }
 
@@ -1726,6 +1827,51 @@ type memorySession struct {
 	sent         [][]byte
 	borrowedRecv bool
 	releases     int
+}
+
+type buildingMemorySession struct {
+	*memorySession
+	buildCalls     atomic.Uint64
+	buildErr       error
+	buildSizeDelta int
+	builtMu        sync.Mutex
+	built          [][]byte
+}
+
+func (session *buildingMemorySession) SendBuiltPackets(packetSizes []int, build func(index int, packet []byte) error) error {
+	session.buildCalls.Add(1)
+	if session.buildErr != nil {
+		return session.buildErr
+	}
+	packets := make([][]byte, len(packetSizes))
+	for index, size := range packetSizes {
+		size += session.buildSizeDelta
+		packets[index] = make([]byte, size)
+		if err := build(index, packets[index]); err != nil {
+			return err
+		}
+	}
+	session.builtMu.Lock()
+	for _, packet := range packets {
+		session.built = append(session.built, append([]byte(nil), packet...))
+	}
+	session.builtMu.Unlock()
+	for _, packet := range packets {
+		if err := session.SendPacket(packet); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (session *buildingMemorySession) builtPackets() [][]byte {
+	session.builtMu.Lock()
+	defer session.builtMu.Unlock()
+	packets := make([][]byte, len(session.built))
+	for index, packet := range session.built {
+		packets[index] = append([]byte(nil), packet...)
+	}
+	return packets
 }
 
 type handshakeSendFailureSession struct {
