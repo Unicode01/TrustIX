@@ -1833,6 +1833,7 @@ func hkdfExpand(prk []byte, info []byte, length int) []byte {
 type replayWindow struct {
 	mu      sync.Mutex
 	highest uint64
+	head    uint64
 	seen    []uint64
 	size    uint64
 }
@@ -1877,7 +1878,11 @@ func (window *replayWindow) ensureLocked() {
 	words := replayWindowWords(size)
 	if len(window.seen) != words {
 		window.seen = make([]uint64, words)
+		window.head = 0
 		return
+	}
+	if window.head >= size {
+		window.head %= size
 	}
 	maskReplayWindowTail(window.seen, size)
 }
@@ -1890,7 +1895,7 @@ func (window *replayWindow) Accept(seq uint64) bool {
 	defer window.mu.Unlock()
 	window.ensureLocked()
 
-	return replayWindowAcceptLocked(&window.highest, window.seen, window.size, seq)
+	return replayWindowAcceptLocked(&window.highest, &window.head, window.seen, window.size, seq)
 }
 
 func (window *replayWindow) AcceptBatch(seqs []uint64) bool {
@@ -1901,13 +1906,15 @@ func (window *replayWindow) AcceptBatch(seqs []uint64) bool {
 	defer window.mu.Unlock()
 	window.ensureLocked()
 	highest := window.highest
+	head := window.head
 	seen := append([]uint64(nil), window.seen...)
 	for _, seq := range seqs {
-		if !replayWindowAcceptLocked(&highest, seen, window.size, seq) {
+		if !replayWindowAcceptLocked(&highest, &head, seen, window.size, seq) {
 			return false
 		}
 	}
 	window.highest = highest
+	window.head = head
 	copy(window.seen, seen)
 	return true
 }
@@ -1926,69 +1933,126 @@ func (window *replayWindow) AcceptBatchResults(seqs []uint64, dst []bool) []bool
 	defer window.mu.Unlock()
 	window.ensureLocked()
 	for i, seq := range seqs {
-		if replayWindowAcceptLocked(&window.highest, window.seen, window.size, seq) {
+		if replayWindowAcceptLocked(&window.highest, &window.head, window.seen, window.size, seq) {
 			dst[i] = true
 		}
 	}
 	return dst
 }
 
-func replayWindowAcceptLocked(highest *uint64, seen []uint64, size uint64, seq uint64) bool {
+func replayWindowAcceptLocked(highest *uint64, head *uint64, seen []uint64, size uint64, seq uint64) bool {
 	if seq == 0 {
 		return false
 	}
 	if seq > *highest {
-		shiftReplayWindowSeen(seen, seq-*highest, size)
+		advanceReplayWindowSeen(seen, head, seq-*highest, size)
 		*highest = seq
-		setReplayWindowBit(seen, 0)
+		setReplayWindowBit(seen, *head, size, 0)
 		return true
 	}
 	delta := *highest - seq
-	if delta >= size || replayWindowBit(seen, delta) {
+	if delta >= size || replayWindowBit(seen, *head, size, delta) {
 		return false
 	}
-	setReplayWindowBit(seen, delta)
+	setReplayWindowBit(seen, *head, size, delta)
 	return true
 }
 
-func shiftReplayWindowSeen(seen []uint64, shift uint64, size uint64) {
-	if shift == 0 {
+func advanceReplayWindowSeen(seen []uint64, head *uint64, shift uint64, size uint64) {
+	if shift == 0 || size == 0 {
 		return
 	}
-	if shift >= size || int(shift/64) >= len(seen) {
+	if shift >= size {
+		clear(seen)
+		*head = 0
+		return
+	}
+	if *head >= size {
+		*head %= size
+	}
+	if shift > *head {
+		*head += size - shift
+	} else {
+		*head -= shift
+	}
+	clearReplayWindowCircularBits(seen, *head, shift, size)
+}
+
+func clearReplayWindowCircularBits(seen []uint64, start uint64, count uint64, size uint64) {
+	if count == 0 || size == 0 {
+		return
+	}
+	if count >= size {
 		clear(seen)
 		return
 	}
-	wordShift := int(shift / 64)
-	bitShift := uint(shift % 64)
-	for i := len(seen) - 1; i >= 0; i-- {
-		src := i - wordShift
-		var value uint64
-		if src >= 0 {
-			value = seen[src] << bitShift
-			if bitShift != 0 && src > 0 {
-				value |= seen[src-1] >> (64 - bitShift)
-			}
-		}
-		seen[i] = value
-	}
-	maskReplayWindowTail(seen, size)
+	start %= size
+	first := min(count, size-start)
+	clearReplayWindowLinearBits(seen, start, first)
+	clearReplayWindowLinearBits(seen, 0, count-first)
 }
 
-func replayWindowBit(seen []uint64, bit uint64) bool {
+func clearReplayWindowLinearBits(seen []uint64, start uint64, count uint64) {
+	if count == 0 {
+		return
+	}
+	end := start + count
+	firstWord := int(start / 64)
+	lastWord := int((end - 1) / 64)
+	startBit := uint(start % 64)
+	if firstWord == lastWord {
+		width := uint(count)
+		mask := ^uint64(0) << startBit
+		if width < 64 {
+			mask &= (uint64(1) << (startBit + width)) - 1
+		}
+		seen[firstWord] &^= mask
+		return
+	}
+	if startBit != 0 {
+		seen[firstWord] &= (uint64(1) << startBit) - 1
+		firstWord++
+	}
+	endWord := int(end / 64)
+	for firstWord < endWord {
+		seen[firstWord] = 0
+		firstWord++
+	}
+	if endBit := uint(end % 64); endBit != 0 {
+		seen[endWord] &^= (uint64(1) << endBit) - 1
+	}
+}
+
+func replayWindowBit(seen []uint64, head uint64, size uint64, delta uint64) bool {
+	if delta >= size {
+		return false
+	}
+	bit := replayWindowPhysicalBit(head, delta, size)
 	word := int(bit / 64)
-	if word < 0 || word >= len(seen) {
+	if word >= len(seen) {
 		return false
 	}
 	return seen[word]&(uint64(1)<<(bit%64)) != 0
 }
 
-func setReplayWindowBit(seen []uint64, bit uint64) {
+func setReplayWindowBit(seen []uint64, head uint64, size uint64, delta uint64) {
+	if delta >= size {
+		return
+	}
+	bit := replayWindowPhysicalBit(head, delta, size)
 	word := int(bit / 64)
-	if word < 0 || word >= len(seen) {
+	if word >= len(seen) {
 		return
 	}
 	seen[word] |= uint64(1) << (bit % 64)
+}
+
+func replayWindowPhysicalBit(head uint64, delta uint64, size uint64) uint64 {
+	bit := head + delta
+	if bit >= size {
+		bit -= size
+	}
+	return bit
 }
 
 func maskReplayWindowTail(seen []uint64, size uint64) {

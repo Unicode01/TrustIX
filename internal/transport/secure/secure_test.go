@@ -8,7 +8,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -976,6 +978,125 @@ func TestReplayWindowAcceptBatchIsAtomic(t *testing.T) {
 	}
 	if !window.Accept(11) {
 		t.Fatal("failed batch advanced replay state")
+	}
+}
+
+func TestReplayWindowAcceptBatchIsAtomicAcrossRingWrap(t *testing.T) {
+	window := newReplayWindow(65)
+	if !window.Accept(100) {
+		t.Fatal("initial sequence was rejected")
+	}
+	batch := make([]uint64, 0, 67)
+	for seq := uint64(101); seq <= 166; seq++ {
+		batch = append(batch, seq)
+	}
+	batch = append(batch, 100)
+	if window.AcceptBatch(batch) {
+		t.Fatal("batch containing an expired sequence was accepted")
+	}
+	if !window.Accept(101) {
+		t.Fatal("failed wrapped batch advanced replay state")
+	}
+}
+
+func TestReplayWindowMatchesReferenceRandomized(t *testing.T) {
+	for _, size := range []uint64{64, 65, 127, 128, 129, 1023, defaultReplayWindowSize} {
+		t.Run(fmt.Sprintf("size-%d", size), func(t *testing.T) {
+			window := newReplayWindow(size)
+			reference := newReplayWindowReference(size)
+			rng := rand.New(rand.NewSource(int64(size)))
+			frontier := uint64(1)
+			for step := 0; step < 30000; step++ {
+				seq := replayWindowTestSequence(rng, &frontier, size)
+				got := window.Accept(seq)
+				want := reference.Accept(seq)
+				if got != want {
+					t.Fatalf("step %d sequence %d: Accept = %v, want %v (highest=%d head=%d)", step, seq, got, want, window.highest, window.head)
+				}
+			}
+		})
+	}
+}
+
+func TestReplayWindowAcceptBatchResultsMatchesReferenceRandomized(t *testing.T) {
+	const size = uint64(129)
+	window := newReplayWindow(size)
+	reference := newReplayWindowReference(size)
+	rng := rand.New(rand.NewSource(20260731))
+	frontier := uint64(1)
+	dst := make([]bool, 0, 16)
+	for step := 0; step < 5000; step++ {
+		seqs := make([]uint64, 1+rng.Intn(16))
+		want := make([]bool, len(seqs))
+		for i := range seqs {
+			seqs[i] = replayWindowTestSequence(rng, &frontier, size)
+			want[i] = reference.Accept(seqs[i])
+		}
+		got := window.AcceptBatchResults(seqs, dst)
+		if !slices.Equal(got, want) {
+			t.Fatalf("step %d sequences %v: AcceptBatchResults = %v, want %v", step, seqs, got, want)
+		}
+		dst = got[:0]
+	}
+}
+
+func BenchmarkReplayWindowAcceptSequential(b *testing.B) {
+	window := newReplayWindow(defaultReplayWindowSize)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !window.Accept(uint64(i) + 1) {
+			b.Fatalf("sequence %d was rejected", i+1)
+		}
+	}
+}
+
+type replayWindowReference struct {
+	highest uint64
+	size    uint64
+	seen    map[uint64]struct{}
+}
+
+func newReplayWindowReference(size uint64) *replayWindowReference {
+	return &replayWindowReference{
+		size: normalizeReplayWindowSize(size),
+		seen: make(map[uint64]struct{}),
+	}
+}
+
+func (reference *replayWindowReference) Accept(seq uint64) bool {
+	if seq == 0 {
+		return false
+	}
+	if seq <= reference.highest && reference.highest-seq >= reference.size {
+		return false
+	}
+	if _, exists := reference.seen[seq]; exists {
+		return false
+	}
+	if seq > reference.highest {
+		reference.highest = seq
+	}
+	reference.seen[seq] = struct{}{}
+	return true
+}
+
+func replayWindowTestSequence(rng *rand.Rand, frontier *uint64, size uint64) uint64 {
+	switch rng.Intn(12) {
+	case 0:
+		return 0
+	case 1:
+		*frontier += size + uint64(rng.Intn(64)) + 1
+		return *frontier
+	case 2, 3, 4:
+		delta := uint64(rng.Intn(int(size*2 + 1)))
+		if delta < *frontier {
+			return *frontier - delta
+		}
+		return 1
+	default:
+		*frontier += uint64(rng.Intn(4)) + 1
+		return *frontier
 	}
 }
 
