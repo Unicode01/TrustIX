@@ -98,6 +98,168 @@ func TestLANReinjectGSOQdiscBypassDefaultDisabled(t *testing.T) {
 	}
 }
 
+func TestLANReinjectRawBoundDefaultEnabled(t *testing.T) {
+	t.Setenv("TRUSTIX_LAN_REINJECT_RAW_BOUND", "")
+	if !lanReinjectRawBoundEnabled() {
+		t.Fatalf("bound raw LAN reinject disabled by default")
+	}
+	t.Setenv("TRUSTIX_LAN_REINJECT_RAW_BOUND", "0")
+	if lanReinjectRawBoundEnabled() {
+		t.Fatalf("bound raw LAN reinject env did not disable")
+	}
+	t.Setenv("TRUSTIX_LAN_REINJECT_RAW_BOUND", "1")
+	if !lanReinjectRawBoundEnabled() {
+		t.Fatalf("bound raw LAN reinject env did not enable")
+	}
+}
+
+func TestSetLANRawPacketAddress(t *testing.T) {
+	dstMAC := net.HardwareAddr{0x02, 0x54, 0x49, 0x58, 0x00, 0x02}
+	var msg mmsghdr
+	var addr unix.RawSockaddrLinklayer
+	staleName := byte(1)
+	msg.hdr.Name = &staleName
+	msg.hdr.Namelen = unix.SizeofSockaddrLinklayer
+	setLANRawPacketAddress(&msg, &addr, 17, dstMAC, true)
+	if msg.hdr.Name != nil || msg.hdr.Namelen != 0 {
+		t.Fatalf("bound message retained a per-message packet address")
+	}
+	setLANRawPacketAddress(&msg, &addr, 17, dstMAC, false)
+	if msg.hdr.Name == nil || msg.hdr.Namelen != unix.SizeofSockaddrLinklayer {
+		t.Fatalf("unbound message packet address is missing")
+	}
+	if addr.Ifindex != 17 || addr.Protocol != htons(etherTypeIPv4) || !bytes.Equal(addr.Addr[:6], dstMAC) {
+		t.Fatalf("unbound message packet address = %+v", addr)
+	}
+}
+
+func TestBoundRawPacketSocketSendsVNetFrameWithoutAddress(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create veth pair and packet sockets")
+	}
+	t.Setenv("TRUSTIX_LAN_REINJECT_GSO_QDISC_BYPASS", "0")
+	t.Setenv("TRUSTIX_LAN_REINJECT_SNDBUF", "")
+	t.Setenv("TRUSTIX_LAN_REINJECT_SOCKET_SNDBUF", "")
+
+	suffix := fmt.Sprintf("%03d%04x", os.Getpid()%1000, testVethNameCounter.Add(1)&0xffff)
+	hostName := "tixh" + suffix
+	peerName := "tixp" + suffix
+	hostMAC := net.HardwareAddr{0x02, 0x54, 0x49, 0x58, byte(testVethNameCounter.Load() >> 8), byte(testVethNameCounter.Load())}
+	peerMAC := net.HardwareAddr{0x02, 0x54, 0x49, 0x59, byte(testVethNameCounter.Load() >> 8), byte(testVethNameCounter.Load())}
+	_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}})
+	t.Cleanup(func() {
+		_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: hostName}})
+		_ = netlink.LinkDel(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: peerName}})
+	})
+	if err := netlink.LinkAdd(&netlink.Veth{
+		LinkAttrs:        netlink.LinkAttrs{Name: hostName, HardwareAddr: hostMAC},
+		PeerName:         peerName,
+		PeerHardwareAddr: peerMAC,
+	}); err != nil {
+		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+			t.Skipf("requires CAP_NET_ADMIN to create veth pair: %v", err)
+		}
+		t.Fatalf("create veth pair: %v", err)
+	}
+	host, err := netlink.LinkByName(hostName)
+	if err != nil {
+		t.Fatalf("inspect host veth: %v", err)
+	}
+	peer, err := netlink.LinkByName(peerName)
+	if err != nil {
+		t.Fatalf("inspect peer veth: %v", err)
+	}
+	if err := netlink.LinkSetUp(host); err != nil {
+		t.Fatalf("bring host veth up: %v", err)
+	}
+	if err := netlink.LinkSetUp(peer); err != nil {
+		t.Fatalf("bring peer veth up: %v", err)
+	}
+
+	receiver, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, int(htons(etherTypeIPv4)))
+	if err != nil {
+		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+			t.Skipf("requires CAP_NET_RAW to open packet socket: %v", err)
+		}
+		t.Fatalf("open receiver packet socket: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Close(receiver) })
+	if err := unix.Bind(receiver, &unix.SockaddrLinklayer{Protocol: htons(etherTypeIPv4), Ifindex: peer.Attrs().Index}); err != nil {
+		t.Fatalf("bind receiver packet socket: %v", err)
+	}
+	timeout := unix.NsecToTimeval((2 * time.Second).Nanoseconds())
+	if err := unix.SetsockoptTimeval(receiver, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &timeout); err != nil {
+		t.Fatalf("set receiver timeout: %v", err)
+	}
+
+	injector := &lanPacketInjector{
+		fd:          -1,
+		gsoFD:       -1,
+		gsoRawFD:    -1,
+		gsoRawBound: true,
+		ifindex:     host.Attrs().Index,
+		ifname:      hostName,
+	}
+	injector.mu.Lock()
+	sender, err := injector.gsoRawSocketLocked()
+	injector.mu.Unlock()
+	if err != nil {
+		if isPacketSocketGSOUnsupported(err) {
+			t.Skipf("PACKET_VNET_HDR is unavailable: %v", err)
+		}
+		t.Fatalf("open bound sender VNET packet socket: %v", err)
+	}
+	t.Cleanup(func() {
+		injector.mu.Lock()
+		err := injector.disableRawGSOLocked()
+		injector.mu.Unlock()
+		if err != nil {
+			t.Errorf("close sender packet socket: %v", err)
+		}
+	})
+	bound, err := unix.Getsockname(sender)
+	if err != nil {
+		t.Fatalf("inspect bound sender packet socket: %v", err)
+	}
+	boundLink, ok := bound.(*unix.SockaddrLinklayer)
+	if !ok || boundLink.Ifindex != host.Attrs().Index || boundLink.Protocol != htons(etherTypeIPv4) {
+		t.Fatalf("bound sender packet address = %#v", bound)
+	}
+
+	frame := make([]byte, ethernetHeaderLen+rejectIPv4HeaderLen)
+	copy(frame[0:6], peerMAC)
+	copy(frame[6:12], hostMAC)
+	binary.BigEndian.PutUint16(frame[12:14], etherTypeIPv4)
+	ip := frame[ethernetHeaderLen:]
+	ip[0] = 0x45
+	binary.BigEndian.PutUint16(ip[2:4], uint16(len(ip)))
+	ip[8] = 64
+	ip[9] = 253
+	copy(ip[12:16], []byte{192, 0, 2, 1})
+	copy(ip[16:20], []byte{192, 0, 2, 2})
+	binary.BigEndian.PutUint16(ip[10:12], captureChecksum(ip))
+	var vnet [virtioNetHdrLen]byte
+	iovs := []unix.Iovec{{Base: &vnet[0]}, {Base: &frame[0]}}
+	iovs[0].SetLen(len(vnet))
+	iovs[1].SetLen(len(frame))
+	written, err := sendmsgRaw(sender, nil, iovs)
+	if err != nil {
+		t.Fatalf("send bound VNET frame without address: %v", err)
+	}
+	if want := len(vnet) + len(frame); written != want {
+		t.Fatalf("bound VNET frame write = %d, want %d", written, want)
+	}
+
+	buffer := make([]byte, 2048)
+	received, _, err := unix.Recvfrom(receiver, buffer, 0)
+	if err != nil {
+		t.Fatalf("receive bound VNET frame on peer: %v", err)
+	}
+	if received < len(frame) || !bytes.Equal(buffer[:len(frame)], frame) {
+		t.Fatalf("received frame len=%d prefix=%x, want len>=%d prefix=%x", received, buffer[:min(received, len(frame))], len(frame), frame)
+	}
+}
+
 func TestLANReinjectSocketSendBufferEnv(t *testing.T) {
 	t.Setenv("TRUSTIX_LAN_REINJECT_SNDBUF", "")
 	t.Setenv("TRUSTIX_LAN_REINJECT_SOCKET_SNDBUF", "")

@@ -5552,3 +5552,56 @@ as io_uring submission of the existing AF_PACKET GSO batches or a complete
 multi-queue AF_XDP reinjection path with software segmentation. A larger
 throughput step is more likely from the separately validated kernel dataplane,
 but a TrustIX kernel-module change is not the only remaining option.
+
+### 2026-08-02 Zaozhuang PVE bound AF_PACKET reinjection
+
+The raw `AF_PACKET` GSO/VNET reinjection socket is now bound once to its LAN
+ifindex and IPv4 protocol. Raw `sendmsg` and `sendmmsg` calls consequently omit
+the repeated per-message `sockaddr_ll`; the complete Ethernet header continues
+to carry the destination MAC. Linux enables the path by default, with
+`TRUSTIX_LAN_REINJECT_RAW_BOUND=0` as the explicit failback.
+
+Validation used the same disposable Debian 13 VM200/VM201 pair, isolated
+`vmbr3`, 8 vCPU and 8 GiB per guest, 16 warmed secure TCP sessions, and 16
+iperf streams. Three interleaved 45-second pairs used the same candidate binary
+and changed only `TRUSTIX_LAN_REINJECT_RAW_BOUND`:
+
+| Pair | Unbound | Bound |
+| --- | ---: | ---: |
+| 1 | 5.134667 Gbps | 5.209698 Gbps |
+| 2 | 5.085561 Gbps | 5.179732 Gbps |
+| 3 | 5.201366 Gbps | 5.175128 Gbps |
+| Mean | 5.140531 Gbps | 5.188186 Gbps |
+
+The 45-second mean gain was `0.93%`; two of three pairs were positive. A
+reverse-order 90-second profile pair received `5.178813 Gbps` bound versus
+`5.106804 Gbps` unbound, a `1.41%` gain. Weighting all four comparisons by
+duration produced `5.184437 Gbps` bound versus `5.127040 Gbps` unbound, or
+`1.12%`. The measured candidate SHA256 was
+`6d5d919af61b0d534f34a38b08981dc9fd5ac23aea988f73d0f261c836feacaa`.
+
+Profiles remained dominated by syscalls (`41.56%` sender and `52.22%`
+receiver), AES-GCM (`15.77%` and `19.90%`), and `runtime.memmove` (`11.36%`
+and `4.76%`). This change removes only a small part of the syscall setup cost,
+so the measured low-single-digit ceiling is consistent with the profile.
+
+A 300-second simultaneous bidirectional soak received `2.574990 Gbps`
+A-to-B and `2.682079 Gbps` B-to-A, or `5.257070 Gbps` combined. Both boot IDs
+were stable, pstore and kernel crash scans were empty, and all covered LAN
+reinjection error and unsupported counters were zero. Both nodes exercised raw
+VNET and mixed raw-GSO batches; one snapshot caught one in-flight attempt ahead
+of its success counter, with no corresponding error.
+
+The reviewed default-on build SHA256 was
+`1e02ee3b54139862a7362722e7a0efe5fd280c7ff86c5dd03a4015cb11537a1f`.
+Its implementation-level tests create a real veth pair, bind the production
+raw VNET socket, send with `msg_name=NULL`, and verify the exact Ethernet/IPv4
+frame on the peer. They passed on Debian and on the deployed OpenWrt 23.05.5
+x86_64 host running kernel `5.15.167`; the OpenWrt boot ID remained stable.
+Linux cross-compilation and vet also passed.
+
+This is a contained userspace optimization, not evidence that parameter tuning
+can deliver another large throughput step. Material additional userspace work
+would require a different packet-I/O architecture that preserves GSO, while
+the larger proven ceiling is the separately validated kernel dataplane. This
+engineering evidence does not replace the 3600-second production gate.

@@ -292,15 +292,24 @@ func sendLANIPv4PacketBatch(fd int, ifindex int, packets [][]byte, dstMAC net.Ha
 	msgs := scratch.msgs
 	for i, packet := range packets {
 		resetSendMMSGNoControl(&msgs[i])
-		addrs[i] = rawSockaddrLinklayer(ifindex, dstMAC)
+		setLANRawPacketAddress(&msgs[i], &addrs[i], ifindex, dstMAC, false)
 		iovs[i].Base = &packet[0]
 		iovs[i].SetLen(len(packet))
-		msgs[i].hdr.Name = (*byte)(unsafe.Pointer(&addrs[i]))
-		msgs[i].hdr.Namelen = unix.SizeofSockaddrLinklayer
 		msgs[i].hdr.Iov = &iovs[i]
 		msgs[i].hdr.Iovlen = 1
 	}
 	return sendAllMMsg(fd, msgs, nil)
+}
+
+func setLANRawPacketAddress(msg *mmsghdr, addr *unix.RawSockaddrLinklayer, ifindex int, dstMAC net.HardwareAddr, bound bool) {
+	if bound {
+		msg.hdr.Name = nil
+		msg.hdr.Namelen = 0
+		return
+	}
+	*addr = rawSockaddrLinklayer(ifindex, dstMAC)
+	msg.hdr.Name = (*byte)(unsafe.Pointer(addr))
+	msg.hdr.Namelen = unix.SizeofSockaddrLinklayer
 }
 
 func sendAllMMsg(fd int, msgs []mmsghdr, stopOnPartialError func(error) bool) (int, error) {
@@ -344,6 +353,8 @@ func rawSockaddrLinklayer(ifindex int, dstMAC net.HardwareAddr) unix.RawSockaddr
 
 func resetSendMMSGNoControl(msg *mmsghdr) {
 	msg.len = 0
+	msg.hdr.Name = nil
+	msg.hdr.Namelen = 0
 	msg.hdr.Control = nil
 	msg.hdr.SetControllen(0)
 	msg.hdr.Flags = 0
@@ -369,13 +380,15 @@ func sendmmsg(fd int, msgs []mmsghdr) (int, error) {
 }
 
 func sendmsgRaw(fd int, addr *unix.RawSockaddrLinklayer, iovs []unix.Iovec) (int, error) {
-	if addr == nil || len(iovs) == 0 {
+	if len(iovs) == 0 {
 		return 0, unix.EINVAL
 	}
 	msg := unix.Msghdr{
-		Name:    (*byte)(unsafe.Pointer(addr)),
-		Namelen: unix.SizeofSockaddrLinklayer,
-		Iov:     &iovs[0],
+		Iov: &iovs[0],
+	}
+	if addr != nil {
+		msg.Name = (*byte)(unsafe.Pointer(addr))
+		msg.Namelen = unix.SizeofSockaddrLinklayer
 	}
 	msg.SetIovlen(len(iovs))
 	n, _, errno := unix.Syscall6(

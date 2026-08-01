@@ -16,7 +16,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -633,6 +632,7 @@ type lanPacketInjector struct {
 	fd                   int
 	gsoFD                int
 	gsoRawFD             int
+	gsoRawBound          bool
 	gsoDisabled          bool
 	gsoRawDisabled       bool
 	rawVNetBatchDisabled bool
@@ -669,6 +669,7 @@ func (manager *Manager) lanPacketInjectorForIface(iface string) (*lanPacketInjec
 		fd:           fd,
 		gsoFD:        -1,
 		gsoRawFD:     -1,
+		gsoRawBound:  lanReinjectRawBoundEnabled(),
 		ifindex:      link.Attrs().Index,
 		ifname:       link.Attrs().Name,
 		mtu:          link.Attrs().MTU,
@@ -1099,7 +1100,7 @@ func (injector *lanPacketInjector) sendRawGSOBatch(packets [][]byte, dst netip.A
 		copy(ethernet[6:12], injector.hardwareAddr)
 		binary.BigEndian.PutUint16(ethernet[12:14], etherTypeIPv4)
 		resetSendMMSGNoControl(&scratch.msgs[i])
-		scratch.addrs[i] = rawSockaddrLinklayer(injector.ifindex, dstMAC)
+		setLANRawPacketAddress(&scratch.msgs[i], &scratch.addrs[i], injector.ifindex, dstMAC, injector.gsoRawBound)
 		iovBase := i * 3
 		scratch.iovs[iovBase].Base = &header[0]
 		scratch.iovs[iovBase].SetLen(len(header))
@@ -1107,8 +1108,6 @@ func (injector *lanPacketInjector) sendRawGSOBatch(packets [][]byte, dst netip.A
 		scratch.iovs[iovBase+1].SetLen(len(ethernet))
 		scratch.iovs[iovBase+2].Base = &packet[0]
 		scratch.iovs[iovBase+2].SetLen(len(packet))
-		scratch.msgs[i].hdr.Name = (*byte)(unsafe.Pointer(&scratch.addrs[i]))
-		scratch.msgs[i].hdr.Namelen = unix.SizeofSockaddrLinklayer
 		scratch.msgs[i].hdr.Iov = &scratch.iovs[iovBase]
 		scratch.msgs[i].hdr.SetIovlen(3)
 	}
@@ -1171,7 +1170,7 @@ func (injector *lanPacketInjector) sendRawVNetMixedBatch(packets [][]byte, dst n
 		copy(ethernet[6:12], injector.hardwareAddr)
 		binary.BigEndian.PutUint16(ethernet[12:14], etherTypeIPv4)
 		resetSendMMSGNoControl(&scratch.msgs[i])
-		scratch.addrs[i] = rawSockaddrLinklayer(injector.ifindex, dstMAC)
+		setLANRawPacketAddress(&scratch.msgs[i], &scratch.addrs[i], injector.ifindex, dstMAC, injector.gsoRawBound)
 		iovBase := i * 3
 		scratch.iovs[iovBase].Base = &header[0]
 		scratch.iovs[iovBase].SetLen(len(header))
@@ -1179,8 +1178,6 @@ func (injector *lanPacketInjector) sendRawVNetMixedBatch(packets [][]byte, dst n
 		scratch.iovs[iovBase+1].SetLen(len(ethernet))
 		scratch.iovs[iovBase+2].Base = &packet[0]
 		scratch.iovs[iovBase+2].SetLen(len(packet))
-		scratch.msgs[i].hdr.Name = (*byte)(unsafe.Pointer(&scratch.addrs[i]))
-		scratch.msgs[i].hdr.Namelen = unix.SizeofSockaddrLinklayer
 		scratch.msgs[i].hdr.Iov = &scratch.iovs[iovBase]
 		scratch.msgs[i].hdr.SetIovlen(3)
 	}
@@ -1259,7 +1256,7 @@ func (injector *lanPacketInjector) sendRawVNetBatch(packets [][]byte, dst netip.
 		copy(ethernet[6:12], injector.hardwareAddr)
 		binary.BigEndian.PutUint16(ethernet[12:14], etherTypeIPv4)
 		resetSendMMSGNoControl(&scratch.msgs[i])
-		scratch.addrs[i] = rawSockaddrLinklayer(injector.ifindex, dstMAC)
+		setLANRawPacketAddress(&scratch.msgs[i], &scratch.addrs[i], injector.ifindex, dstMAC, injector.gsoRawBound)
 		iovBase := i * 3
 		scratch.iovs[iovBase].Base = &header[0]
 		scratch.iovs[iovBase].SetLen(len(header))
@@ -1267,8 +1264,6 @@ func (injector *lanPacketInjector) sendRawVNetBatch(packets [][]byte, dst netip.
 		scratch.iovs[iovBase+1].SetLen(len(ethernet))
 		scratch.iovs[iovBase+2].Base = &packet[0]
 		scratch.iovs[iovBase+2].SetLen(len(packet))
-		scratch.msgs[i].hdr.Name = (*byte)(unsafe.Pointer(&scratch.addrs[i]))
-		scratch.msgs[i].hdr.Namelen = unix.SizeofSockaddrLinklayer
 		scratch.msgs[i].hdr.Iov = &scratch.iovs[iovBase]
 		scratch.msgs[i].hdr.SetIovlen(3)
 	}
@@ -1355,15 +1350,19 @@ func (injector *lanPacketInjector) sendRawGSOScatterRun(packets [][]byte, dst ne
 		scratch.iovs[3+i].Base = &payload[0]
 		scratch.iovs[3+i].SetLen(len(payload))
 	}
-	addr := rawSockaddrLinklayer(injector.ifindex, dstMAC)
 	fd, err := injector.lockRawGSOSocketForSend(false)
 	if err != nil {
 		return 0, err
 	}
+	var addr *unix.RawSockaddrLinklayer
+	if !injector.gsoRawBound {
+		value := rawSockaddrLinklayer(injector.ifindex, dstMAC)
+		addr = &value
+	}
 	lanPacketStats.gsoAttempts.Add(1)
 	lanPacketStats.gsoRawAttempts.Add(1)
 	lanPacketStats.gsoRawScatterAttempts.Add(1)
-	n, err := sendmsgRaw(fd, &addr, scratch.iovs[:iovCount])
+	n, err := sendmsgRaw(fd, addr, scratch.iovs[:iovCount])
 	runtime.KeepAlive(virtioHdr)
 	runtime.KeepAlive(ethernet)
 	runtime.KeepAlive(ipHeader)
@@ -1903,7 +1902,6 @@ func (injector *lanPacketInjector) sendRawGSO(packet []byte, dst netip.Addr, dst
 	copy(ethernet[0:6], dstMAC)
 	copy(ethernet[6:12], injector.hardwareAddr)
 	binary.BigEndian.PutUint16(ethernet[12:14], etherTypeIPv4)
-	addr := rawSockaddrLinklayer(injector.ifindex, dstMAC)
 	var iovs [3]unix.Iovec
 	iovs[0].Base = &virtioHdr[0]
 	iovs[0].SetLen(len(virtioHdr))
@@ -1915,8 +1913,13 @@ func (injector *lanPacketInjector) sendRawGSO(packet []byte, dst netip.Addr, dst
 	if err != nil {
 		return err
 	}
+	var addr *unix.RawSockaddrLinklayer
+	if !injector.gsoRawBound {
+		value := rawSockaddrLinklayer(injector.ifindex, dstMAC)
+		addr = &value
+	}
 	lanPacketStats.gsoRawAttempts.Add(1)
-	n, err := sendmsgRaw(fd, &addr, iovs[:])
+	n, err := sendmsgRaw(fd, addr, iovs[:])
 	runtime.KeepAlive(virtioHdr)
 	runtime.KeepAlive(ethernet)
 	runtime.KeepAlive(packet)
@@ -2111,6 +2114,15 @@ func (injector *lanPacketInjector) gsoRawSocketLocked() (int, error) {
 			wrapEBPFOperation("close failed raw GSO packet socket", unix.Close(fd)),
 		)
 	}
+	if injector.gsoRawBound {
+		if err := unix.Bind(fd, &unix.SockaddrLinklayer{Protocol: htons(etherTypeIPv4), Ifindex: injector.ifindex}); err != nil {
+			injector.gsoRawDisabled = true
+			return -1, errors.Join(
+				fmt.Errorf("%w: bind raw GSO packet socket on %q: %v", errGSOUnsupported, injector.ifname, err),
+				wrapEBPFOperation("close failed bound raw GSO packet socket", unix.Close(fd)),
+			)
+		}
+	}
 	injector.gsoRawFD = fd
 	return fd, nil
 }
@@ -2200,6 +2212,10 @@ func lanReinjectSocketSendBuffer() int {
 
 func lanReinjectGSOQdiscBypassEnabled() bool {
 	return envTruthy("TRUSTIX_LAN_REINJECT_GSO_QDISC_BYPASS")
+}
+
+func lanReinjectRawBoundEnabled() bool {
+	return !envFalsey("TRUSTIX_LAN_REINJECT_RAW_BOUND")
 }
 
 func (injector *lanPacketInjector) disableRawGSOLocked() error {
