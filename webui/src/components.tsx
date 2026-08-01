@@ -5068,6 +5068,7 @@ function captureFlags(event: Record<string, unknown>): string[] {
   return [
     event.nat_translated ? "NAT" : "",
     event.checksum_normalized ? "CSUM" : "",
+    event.history_payload_truncated ? "HIST TRUNC" : "",
     event.gso_segment_length ? `GSO ${event.gso_segment_length}` : "",
     event.packet_length ? `len ${event.packet_length}` : "",
     event.sample_length ? `sample ${event.sample_length}` : "",

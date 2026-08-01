@@ -1008,6 +1008,7 @@ export type CaptureEvent = {
   gso_segment_length?: number;
   packet_length?: number;
   sample_length?: number;
+  history_payload_truncated?: boolean;
 };
 
 export type TopologyState = "up" | "idle" | "degraded" | "down";

@@ -189,24 +189,25 @@ type LANStats struct {
 }
 
 type CaptureEvent struct {
-	CapturedAt         time.Time       `json:"captured_at"`
-	CPU                int             `json:"cpu"`
-	Hook               string          `json:"hook"`
-	PacketLength       uint32          `json:"packet_length"`
-	SampleLength       uint32          `json:"sample_length"`
-	GSOSegmentLength   uint32          `json:"gso_segment_length,omitempty"`
-	SourceIP           string          `json:"source_ip,omitempty"`
-	DestinationIP      string          `json:"destination_ip,omitempty"`
-	NATTranslated      bool            `json:"nat_translated,omitempty"`
-	OriginalSourceIP   string          `json:"original_source_ip,omitempty"`
-	ChecksumNormalized bool            `json:"checksum_normalized,omitempty"`
-	Payload            []byte          `json:"payload,omitempty"`
-	SourceAddr         netip.Addr      `json:"-"`
-	DestinationAddr    netip.Addr      `json:"-"`
-	OriginalSourceAddr netip.Addr      `json:"-"`
-	FlowKey            routing.FlowKey `json:"-"`
-	HasFlow            bool            `json:"-"`
-	PayloadMutable     bool            `json:"-"`
+	CapturedAt              time.Time       `json:"captured_at"`
+	CPU                     int             `json:"cpu"`
+	Hook                    string          `json:"hook"`
+	PacketLength            uint32          `json:"packet_length"`
+	SampleLength            uint32          `json:"sample_length"`
+	GSOSegmentLength        uint32          `json:"gso_segment_length,omitempty"`
+	SourceIP                string          `json:"source_ip,omitempty"`
+	DestinationIP           string          `json:"destination_ip,omitempty"`
+	NATTranslated           bool            `json:"nat_translated,omitempty"`
+	OriginalSourceIP        string          `json:"original_source_ip,omitempty"`
+	ChecksumNormalized      bool            `json:"checksum_normalized,omitempty"`
+	HistoryPayloadTruncated bool            `json:"history_payload_truncated,omitempty"`
+	Payload                 []byte          `json:"payload,omitempty"`
+	SourceAddr              netip.Addr      `json:"-"`
+	DestinationAddr         netip.Addr      `json:"-"`
+	OriginalSourceAddr      netip.Addr      `json:"-"`
+	FlowKey                 routing.FlowKey `json:"-"`
+	HasFlow                 bool            `json:"-"`
+	PayloadMutable          bool            `json:"-"`
 }
 
 type LocalVIP struct {

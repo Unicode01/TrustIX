@@ -786,6 +786,7 @@ const (
 	captureRingbufMaxSize                                             = 32 * 1024 * 1024
 	captureReaderDefaultBatchSize                                     = 256
 	captureReaderDefaultDrainTimeout                                  = 50 * time.Microsecond
+	captureHistoryDefaultPayloadLimit                                 = 2048
 	captureEventBase                                                  = -128
 	captureScratchPtrOffset                                           = captureEventBase - 8
 	captureCopyOffsetOffset                                           = captureEventBase - 16
@@ -1203,6 +1204,7 @@ var tcProgramBTFMetadataFunc = &btf.Func{
 var captureSampleLimit = configuredCaptureSampleLimit()
 var captureNormalizeChecksums = configuredCaptureNormalizeChecksums()
 var captureHistoryEnabled = configuredCaptureHistoryEnabled()
+var captureHistoryPayloadLimit = configuredCaptureHistoryPayloadLimit()
 var captureReaderBatchSize = configuredCaptureReaderBatchSize()
 var captureReaderDrainTimeout = configuredCaptureReaderDrainTimeout()
 var tixTCPAllowedPortHoldDown = configuredTIXTCPAllowedPortHoldDown()
@@ -1284,6 +1286,24 @@ func configuredCaptureHistoryEnabled() bool {
 	default:
 		return true
 	}
+}
+
+func configuredCaptureHistoryPayloadLimit() int {
+	defaultLimit := min(captureHistoryDefaultPayloadLimit, captureSampleLimit)
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_CAPTURE_HISTORY_PAYLOAD_LIMIT")))
+	switch value {
+	case "":
+		return defaultLimit
+	case "full", "all", "unlimited":
+		return captureSampleLimit
+	case "off", "false", "no", "disabled", "none":
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return defaultLimit
+	}
+	return min(parsed, captureSampleLimit)
 }
 
 func configuredCaptureReaderBatchSize() int {
@@ -25496,14 +25516,16 @@ func (manager *Manager) recordCaptureEventLocked(event dataplane.CaptureEvent) {
 		manager.captureEventCount = 0
 	}
 	index := manager.captureEventNext
-	if len(event.Payload) > 0 {
+	payloadLength := min(len(event.Payload), captureHistoryPayloadLimit)
+	event.HistoryPayloadTruncated = payloadLength < len(event.Payload)
+	if payloadLength > 0 {
 		payload := manager.captureEvents[index].Payload
-		if cap(payload) < len(event.Payload) {
-			payload = make([]byte, len(event.Payload))
+		if cap(payload) < payloadLength {
+			payload = make([]byte, payloadLength)
 		} else {
-			payload = payload[:len(event.Payload)]
+			payload = payload[:payloadLength]
 		}
-		copy(payload, event.Payload)
+		copy(payload, event.Payload[:payloadLength])
 		event.Payload = payload
 	} else {
 		event.Payload = nil

@@ -5667,3 +5667,54 @@ larger throughput step now requires a different userspace packet-I/O boundary
 that preserves GSO, or the separately validated kernel dataplane; another
 parameter-only tune is unlikely to provide it. This engineering soak does not
 replace the repository's 3600-second production evidence.
+
+### 2026-08-02 Zaozhuang PVE bounded capture history payload
+
+Capture history previously retained the complete sampled payload for each of
+its 128 entries even though forwarding subscribers need the full payload only
+while processing the live batch. History now retains at most 2,048 payload
+bytes by default and reports `history_payload_truncated` when a larger sample
+was shortened. Live subscribers still receive the complete sampled payload.
+`TRUSTIX_CAPTURE_HISTORY_PAYLOAD_LIMIT=full` restores the previous behavior,
+`off` retains metadata only, and a non-negative integer selects an explicit
+limit capped by the configured capture sample size. The WebUI marks shortened
+history entries as `HIST TRUNC`.
+
+Validation used disposable Debian 13 VM200/VM201 guests on isolated `vmbr3`,
+each with 8 vCPU, 8 GiB RAM, and kernel
+`6.12.90+deb13.1-cloud-amd64`. Raw underlay throughput was `18.9377 Gbps`.
+All cases used the same candidate binary, SHA256
+`ee27ec221b545144f0d75f4346cfa5f173cf97ec36c8c09dd83d369fd65da0a5`,
+16 warmed secure TCP sessions, and 16 iperf streams.
+
+| Mode | Interleaved 45-second samples | Mean |
+| --- | --- | ---: |
+| Complete history payload | 4.995907, 5.055634, 5.177016 Gbps | 5.076186 Gbps |
+| 2,048-byte history payload | 5.115440, 5.038248, 5.097003 Gbps | 5.083564 Gbps |
+
+The `+0.15%` mean difference is neutral. Reverse-order 90-second profile pairs
+also remained within host variance: complete history averaged
+`5.190879 Gbps` and bounded history averaged `5.209039 Gbps`. Sender CPU fell
+`0.15%`, receiver CPU increased `0.34%`, combined raw CPU increased `0.07%`,
+and combined CPU per Gbps fell `0.28%`. History-copy `runtime.memmove` samples
+fell from `5.625s` to `5.110s`, or `9.16%`. With 128 retained entries, the
+worst-case payload footprint falls from about 4 MiB at the tested 32 KiB
+sample limit to 256 KiB, while ordinary MTU-sized history packets remain
+complete.
+
+The reviewed binary, SHA256
+`b9e1d4f188a5b0b3c5de7c743f694511fb4c9608b86fb43b5ed5a2988c7caff6`,
+then passed a 300-second, 16-stream simultaneous `iperf3 --bidir` soak. It
+received `2.713949 Gbps` A-to-B and `2.661997 Gbps` B-to-A, or
+`5.375946 Gbps` combined. Both nodes processed more than 71 million capture
+events without capture truncation, retained stable boot IDs, and had mounted
+empty pstore. Kernel journals and dmesg scans were empty, no TrustIX module was
+loaded, all runner error files were empty, and remote processes, netns, and TC
+state were removed.
+
+Unit tests prove truncation, metadata-only history, independent snapshots,
+environment parsing, and that the live forwarding payload remains complete.
+All PVE runners passed with no nonempty error artifact and no loaded TrustIX
+kernel module. This change is retained for bounded memory and cheaper capture
+API snapshots, not as a throughput claim. The profile remains dominated by
+packet I/O and AES-GCM.

@@ -724,6 +724,42 @@ func TestDefaultCaptureSampleLimitFitsLegacyPerCPUMapValueLimit(t *testing.T) {
 	}
 }
 
+func TestCaptureHistoryPayloadLimitDefaultAndEnv(t *testing.T) {
+	oldSampleLimit := captureSampleLimit
+	captureSampleLimit = 8192
+	t.Cleanup(func() { captureSampleLimit = oldSampleLimit })
+
+	tests := []struct {
+		value string
+		want  int
+	}{
+		{value: "", want: captureHistoryDefaultPayloadLimit},
+		{value: "1024", want: 1024},
+		{value: "99999", want: 8192},
+		{value: "0", want: 0},
+		{value: "off", want: 0},
+		{value: "none", want: 0},
+		{value: "full", want: 8192},
+		{value: "all", want: 8192},
+		{value: "invalid", want: captureHistoryDefaultPayloadLimit},
+		{value: "-1", want: captureHistoryDefaultPayloadLimit},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			t.Setenv("TRUSTIX_CAPTURE_HISTORY_PAYLOAD_LIMIT", test.value)
+			if got := configuredCaptureHistoryPayloadLimit(); got != test.want {
+				t.Fatalf("capture history payload limit for %q = %d, want %d", test.value, got, test.want)
+			}
+		})
+	}
+
+	captureSampleLimit = 1500
+	t.Setenv("TRUSTIX_CAPTURE_HISTORY_PAYLOAD_LIMIT", "")
+	if got := configuredCaptureHistoryPayloadLimit(); got != 1500 {
+		t.Fatalf("capture history payload default above sample limit = %d, want 1500", got)
+	}
+}
+
 func TestCaptureReaderDrainTimeoutDefaultAndEnv(t *testing.T) {
 	t.Setenv("TRUSTIX_CAPTURE_READER_DRAIN_TIMEOUT", "")
 	if got := configuredCaptureReaderDrainTimeout(); got != 50*time.Microsecond {
@@ -961,8 +997,13 @@ func TestDeliverCaptureEventBatchHistoryCopiesBorrowedPayload(t *testing.T) {
 
 func TestDeliverCaptureEventBatchHistoryBorrowsForBatchSubscriber(t *testing.T) {
 	oldHistory := captureHistoryEnabled
+	oldPayloadLimit := captureHistoryPayloadLimit
 	captureHistoryEnabled = true
-	t.Cleanup(func() { captureHistoryEnabled = oldHistory })
+	captureHistoryPayloadLimit = 2
+	t.Cleanup(func() {
+		captureHistoryEnabled = oldHistory
+		captureHistoryPayloadLimit = oldPayloadLimit
+	})
 
 	manager := &Manager{
 		captureSubs:      make(map[chan []dataplane.CaptureEvent]struct{}),
@@ -973,8 +1014,8 @@ func TestDeliverCaptureEventBatchHistoryBorrowsForBatchSubscriber(t *testing.T) 
 	manager.captureSubs[events] = struct{}{}
 	manager.captureSubOwners[events] = subscription
 	lease := &captureEventBatchLease{
-		events: []dataplane.CaptureEvent{{Payload: []byte{1, 2, 3}}},
-		arena:  []byte{1, 2, 3},
+		events: []dataplane.CaptureEvent{{Payload: []byte{1, 2, 3, 4}}},
+		arena:  []byte{1, 2, 3, 4},
 	}
 
 	consumed, retained := manager.deliverCaptureEventBatchLeaseLocked(lease.events, lease)
@@ -985,7 +1026,13 @@ func TestDeliverCaptureEventBatchHistoryBorrowsForBatchSubscriber(t *testing.T) 
 	if !delivered[0].PayloadMutable {
 		t.Fatal("history-enabled borrowed payload should be mutable")
 	}
+	if !bytes.Equal(delivered[0].Payload, []byte{1, 2, 3, 4}) {
+		t.Fatalf("history limit truncated forwarding payload: got %v", delivered[0].Payload)
+	}
 	history := manager.captureEvents[0]
+	if !bytes.Equal(history.Payload, []byte{1, 2}) || !history.HistoryPayloadTruncated {
+		t.Fatalf("limited capture history = %+v, want two-byte payload marked truncated", history)
+	}
 	if len(history.Payload) == 0 || &history.Payload[0] == &delivered[0].Payload[0] {
 		t.Fatal("capture history payload aliases the borrowed delivery")
 	}
@@ -1025,6 +1072,58 @@ func TestCaptureHistoryReusesOverwrittenPayloadBuffer(t *testing.T) {
 	incoming[0] = 9
 	if reused[0] != 5 {
 		t.Fatal("capture history payload aliases the incoming packet")
+	}
+}
+
+func TestCaptureHistoryLimitsPayloadAndReturnsIndependentSnapshot(t *testing.T) {
+	oldHistory := captureHistoryEnabled
+	oldPayloadLimit := captureHistoryPayloadLimit
+	captureHistoryEnabled = true
+	captureHistoryPayloadLimit = 3
+	t.Cleanup(func() {
+		captureHistoryEnabled = oldHistory
+		captureHistoryPayloadLimit = oldPayloadLimit
+	})
+
+	manager := &Manager{}
+	incoming := []byte{1, 2, 3, 4, 5}
+	manager.recordCaptureEventLocked(dataplane.CaptureEvent{
+		PacketLength: 5,
+		SampleLength: 5,
+		Payload:      incoming,
+	})
+	history := manager.captureEvents[0]
+	if !bytes.Equal(history.Payload, []byte{1, 2, 3}) {
+		t.Fatalf("limited capture history payload = %v, want [1 2 3]", history.Payload)
+	}
+	if !history.HistoryPayloadTruncated {
+		t.Fatal("limited capture history payload is not marked truncated")
+	}
+	incoming[0] = 9
+	if history.Payload[0] != 1 {
+		t.Fatal("limited capture history payload aliases the incoming packet")
+	}
+
+	snapshot, err := manager.Capture(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("read limited capture history: %v", err)
+	}
+	if len(snapshot) != 1 || !bytes.Equal(snapshot[0].Payload, history.Payload) {
+		t.Fatalf("limited capture snapshot = %+v, want history payload %v", snapshot, history.Payload)
+	}
+	snapshot[0].Payload[0] = 8
+	if manager.captureEvents[0].Payload[0] != 1 {
+		t.Fatal("capture snapshot payload aliases retained history")
+	}
+
+	manager.recordCaptureEventLocked(dataplane.CaptureEvent{Payload: []byte{6, 7}})
+	if manager.captureEvents[1].HistoryPayloadTruncated {
+		t.Fatal("payload within history limit is marked truncated")
+	}
+	captureHistoryPayloadLimit = 0
+	manager.recordCaptureEventLocked(dataplane.CaptureEvent{Payload: []byte{8}})
+	if manager.captureEvents[2].Payload != nil || !manager.captureEvents[2].HistoryPayloadTruncated {
+		t.Fatalf("metadata-only capture history = %+v, want nil payload marked truncated", manager.captureEvents[2])
 	}
 }
 
