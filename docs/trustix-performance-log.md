@@ -5718,3 +5718,65 @@ All PVE runners passed with no nonempty error artifact and no loaded TrustIX
 kernel module. This change is retained for bounded memory and cheaper capture
 API snapshots, not as a throughput claim. The profile remains dominated by
 packet I/O and AES-GCM.
+
+### 2026-08-02 Zaozhuang PVE rejected TCP MSG_ZEROCOPY
+
+Linux `SO_ZEROCOPY` and `MSG_ZEROCOPY` were evaluated for the contiguous
+secure TCP batch records written after the negotiated TLS data-plane handoff.
+An isolated TCP probe first proved that the Debian 13 guest kernel
+(`6.12.90+deb13.1-cloud-amd64`) supported real zerocopy completions. With a
+1 MiB record and one stream, ordinary `sendmsg` reached `15.6066 Gbps` while
+zerocopy reached `19.8051 Gbps`; client system CPU fell from `2.781s` to
+`0.402s` over three seconds. With 64 KiB records and eight streams, throughput
+rose from `24.2438` to `30.4881 Gbps` and client system CPU fell from `33.334s`
+to `8.731s` over eight seconds. Every submitted ID completed, no completion
+reported `SO_EE_CODE_ZEROCOPY_COPIED`, and sender and receiver byte counts
+matched exactly.
+
+A production-shaped opt-in implementation then retained each Go arena until
+its `MSG_ERRQUEUE` completion, bounded each session to 16 MiB and eight
+in-flight batches, recycled only completed arenas, handled partial writes and
+completion ranges including ID wrap, and fell back to ordinary TCP writes on
+capacity or recoverable kernel errors. Linux tests repeatedly overwrote later
+arenas while the receiver verified every byte, then required completion count
+to equal send-call count and in-flight memory to return to zero. A 10-second
+TrustIX smoke sent 43,339 secure records totaling 5.54 GB through 16 active
+sessions with 43,339 completions, zero copied completions, zero capacity or
+runtime fallbacks, and zero drain errors. The highest observed per-session
+in-flight footprint was about 1.96 MiB across seven batches.
+
+The isolated benefit did not survive the complete secure userspace datapath.
+Three interleaved 45-second comparisons used the same candidate binary and
+changed only the zerocopy switch:
+
+| Pair | Ordinary TCP | MSG_ZEROCOPY |
+| --- | ---: | ---: |
+| 1 | 5.124414 Gbps | 5.063229 Gbps |
+| 2 | 5.223882 Gbps | 5.299889 Gbps |
+| 3 | 5.261170 Gbps | 5.208350 Gbps |
+| Mean | 5.203155 Gbps | 5.190489 Gbps |
+
+The zerocopy mean was `0.24%` lower. Initial profiles showed that TCP syscall
+samples fell, but completion-queue processing and buffer ownership consumed
+the saving: combined CPU per Gbps increased about `0.46%`. The implementation
+was subsequently tightened to reuse its OOB buffer, parse control messages
+without constructing a message slice, stop immediately when all active IDs
+completed, and use one reusable quiescence timer instead of polling during
+continuous sends.
+
+Two reverse-order 90-second profile comparisons of that tightened build were
+still negative overall. Ordinary TCP averaged `5.260062 Gbps`; zerocopy
+averaged `5.205418 Gbps`, or `1.04%` lower. Across both pairs, aggregate CPU
+per Gbps was about `1.5%` higher with zerocopy. One near-identical-throughput
+pair favored zerocopy CPU by about `0.44%`, but the reverse pair favored the
+ordinary writer by about `3.4%`, so the saving was not repeatable. One
+zerocopy profile accounted for 417,440 sends and the same number of
+completions with no copied completion, fallback, disable, or drain error,
+confirming that the negative result was not caused by a broken fallback path.
+
+All TrustIX runs passed topology setup, session warmup, traffic validation,
+state collection, kernel-log checks, and cleanup. The production
+implementation and its configuration surface were removed. `MSG_ZEROCOPY` is
+therefore rejected for the current secure TCP batching architecture: it is a
+strong raw-stream optimization but not a net TrustIX optimization after
+encryption, capture, receive processing, and LAN reinjection are included.
