@@ -5437,3 +5437,55 @@ manual experiments, but the production linear coalescer remains the faster
 LAN reinjection path. Another material userspace attempt now requires a new
 LAN TX boundary such as AF_XDP TX-only; otherwise the next throughput tier is
 the carefully validated kernel dataplane rather than more parameter tuning.
+
+### 2026-08-01 Zaozhuang PVE rejected AF_XDP ACK reinjection
+
+AF_XDP TX was measured before integrating it into the secure TCP path. A real
+bridge/veth sink counted every transmitted frame. On a single queue, AF_XDP
+COPY reached about 5.92-6.58 Gbps with 1,500-byte frames and 0.93-1.00 Mpps
+with 64-byte frames, versus 4.88-4.95 Gbps and 0.56-0.61 Mpps for AF_PACKET.
+An eight-queue bridge with one XSK per queue reached 40.89 Gbps at 1,500 bytes
+and 6.00 Mpps at 64 bytes, versus 21.80 Gbps and 2.95 Mpps for AF_PACKET.
+The receiver frame delta matched the send count in every reported sample.
+
+AF_XDP does not carry the `PACKET_VNET_HDR` TCP GSO metadata used by the
+current large-packet reinjection path. The candidate therefore kept all data,
+GSO, fragmented, and control-flag packets on AF_PACKET and sent only strict
+IPv4 TCP ACK-only batches through one queue-0 XDP COPY socket. It was explicit
+opt-in, used about 4 MiB of UMEM, fell back before descriptor publication, and
+reported initialization, traffic, fallback, and error counters. A smoke run
+proved the path active with about 2,993 batches and 39,500 ACKs; initialization
+succeeded and error, published-error, and fallback counters remained zero.
+
+The comparison used disposable Debian 13 VM200/VM201 guests, kernel
+`6.12.90+deb13.1-cloud-amd64`, eight vCPUs each, secure TCP with TLS
+handshake-only mode, userspace crypto and dataplane, 16 warmed TrustIX
+sessions, and 16 iperf streams. Both builds used Go 1.25.12. The baseline
+SHA256 was
+`319b07c06601d14f778487515970c309f9dec59dd0f337bfd7cd695534ef7263`;
+the candidate SHA256 was
+`1b4691aa38ba0a6a9516b13dbb2e3b54784718ab3f8aa20e8c69f0a1f5f96c73`.
+
+| Pair/order | Baseline received | AF_XDP ACK received |
+| --- | ---: | ---: |
+| B then C | 4.782049 Gbps | 4.717623 Gbps |
+| C then B | 5.135661 Gbps | 4.616127 Gbps |
+| B then C | 5.150392 Gbps | 4.712128 Gbps |
+| Mean | 5.022701 Gbps | 4.681959 Gbps |
+
+The candidate was slower in all three pairs and reduced mean throughput by
+6.78%. Mean retransmits fell from about 48,266 to 28,592, but the changed ACK
+delivery cadence constrained useful throughput. Immediate XSK close/rebind
+stress also exposed transient queue-0 `EBUSY` intervals of roughly 30-50 ms;
+normal service restart would have fallen back safely, but there was no
+performance case for retaining retry or lifecycle complexity.
+
+All six 60-second runs passed the strict verifier with stable boot IDs, empty
+pstore, no kernel crash finding, no runner error, no loaded TrustIX module,
+and `tix-lan` `tx_queue_len=1000`. The entire AF_XDP ACK implementation and
+its tests were removed. AF_XDP remains faster as an isolated frame interface,
+but ACK-only steering is not useful here and replacing GSO data reinjection
+would require a multi-queue segmentation design. The remaining userspace
+options are architectural, such as io_uring packet-socket GSO submission or a
+multi-queue AF_XDP data path; another large gain is more likely to require the
+validated kernel dataplane than another userspace parameter adjustment.
