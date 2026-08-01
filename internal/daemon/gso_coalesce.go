@@ -36,6 +36,9 @@ type tcpGSOCoalesceKey struct {
 
 type tcpGSOCoalesceMeta struct {
 	key           tcpGSOCoalesceKey
+	ipTOS         byte
+	ipFlags       uint16
+	ipTTL         byte
 	ihl           int
 	tcpHeaderLen  int
 	payloadOffset int
@@ -538,6 +541,9 @@ func tcpGSOCoalescerCanAppend(current tcpGSOCoalescer, packet []byte, meta tcpGS
 		return false
 	}
 	if current.meta.key != meta.key ||
+		current.meta.ipTOS != meta.ipTOS ||
+		current.meta.ipFlags != meta.ipFlags ||
+		current.meta.ipTTL != meta.ipTTL ||
 		current.meta.ihl != meta.ihl ||
 		current.meta.tcpHeaderLen != meta.tcpHeaderLen ||
 		current.meta.headerLen != meta.headerLen ||
@@ -621,6 +627,9 @@ func tcpGSOCoalescePacketMeta(packet []byte) (tcpGSOCoalesceMeta, bool) {
 			SourcePort:      binary.BigEndian.Uint16(tcp[0:2]),
 			DestinationPort: binary.BigEndian.Uint16(tcp[2:4]),
 		},
+		ipTOS:         packet[1],
+		ipFlags:       flagsAndFragment,
+		ipTTL:         packet[8],
 		ihl:           ihl,
 		tcpHeaderLen:  tcpHeaderLen,
 		payloadOffset: payloadOffset,

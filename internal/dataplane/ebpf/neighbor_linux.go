@@ -1512,7 +1512,7 @@ func lanIPv4TCPGSOScatterRun(packets [][]byte, mtu int) (int, lanIPv4TCPSegmentM
 		return 0, lanIPv4TCPSegmentMeta{}, 0, false
 	}
 	tcp := first[meta.tcpOffset:meta.payloadOffset]
-	if !lanIPv4TCPGSOScatterFlagsOK(tcp[13]) {
+	if !lanIPv4TCPGSOScatterFlagsOK(tcp[13]) || tcp[13]&0x08 != 0 {
 		return 0, lanIPv4TCPSegmentMeta{}, 0, false
 	}
 	sourcePort := binary.BigEndian.Uint16(tcp[0:2])
@@ -1534,7 +1534,9 @@ func lanIPv4TCPGSOScatterRun(packets [][]byte, mtu int) (int, lanIPv4TCPSegmentM
 			len(packet) <= nextMeta.payloadOffset {
 			break
 		}
-		if !bytes.Equal(first[12:20], packet[12:20]) {
+		if first[1] != packet[1] ||
+			!bytes.Equal(first[6:10], packet[6:10]) ||
+			!bytes.Equal(first[12:20], packet[12:20]) {
 			break
 		}
 		if !bytes.Equal(first[meta.tcpOffset+20:meta.payloadOffset], packet[nextMeta.tcpOffset+20:nextMeta.payloadOffset]) {
@@ -1560,6 +1562,9 @@ func lanIPv4TCPGSOScatterRun(packets [][]byte, mtu int) (int, lanIPv4TCPSegmentM
 		totalLen += payloadLen
 		nextSeq += uint32(payloadLen)
 		run++
+		if nextTCP[13]&0x08 != 0 {
+			break
+		}
 	}
 	if run < 2 {
 		return 0, lanIPv4TCPSegmentMeta{}, 0, false

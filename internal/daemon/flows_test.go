@@ -6477,6 +6477,34 @@ func TestCoalesceDataSessionRXTCPLocalPacketsKeepsDifferentTCPOptionsSeparate(t 
 	}
 }
 
+func TestCoalesceDataSessionRXTCPLocalPacketsKeepsDifferentIPv4SemanticsSeparate(t *testing.T) {
+	t.Setenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE", "1")
+	packetA := tcpPayloadIPv4PacketWithSeq(1, []byte("hello"))
+	packetB := tcpPayloadIPv4PacketWithSeq(6, []byte("world"))
+
+	tests := []struct {
+		name   string
+		mutate func([]byte)
+	}{
+		{name: "TOS and ECN", mutate: func(packet []byte) { packet[1] ^= 0x03 }},
+		{name: "DF flag", mutate: func(packet []byte) { packet[6] ^= 0x40 }},
+		{name: "TTL", mutate: func(packet []byte) { packet[8]-- }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := append([]byte(nil), packetB...)
+			tt.mutate(changed)
+			binary.BigEndian.PutUint16(changed[10:12], 0)
+			binary.BigEndian.PutUint16(changed[10:12], ipv4Checksum(changed[:20]))
+
+			packets, stats := coalesceDataSessionRXTCPLocalPackets([][]byte{packetA, changed})
+			if stats.Batches != 0 || len(packets) != 2 {
+				t.Fatalf("coalesce stats=%+v packets=%d, want semantic mismatch kept separate", stats, len(packets))
+			}
+		})
+	}
+}
+
 func TestReceiveDataPathSessionDrainsRecvPacketBatch(t *testing.T) {
 	t.Setenv("TRUSTIX_DATA_SESSION_RX_GSO_COALESCE", "0")
 	session := &batchRecvSession{

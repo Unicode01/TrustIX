@@ -611,6 +611,48 @@ func TestLANIPv4TCPGSOScatterRunRespectsConfiguredLimits(t *testing.T) {
 	}
 }
 
+func TestLANIPv4TCPGSOScatterRunRequiresMatchingIPv4Semantics(t *testing.T) {
+	packetA := lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xaa}, 700), 0x10, 20)
+	packetB := lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xbb}, 700), 0x10, 20)
+	setLANTCPIPv4SequenceForTest(packetB, binary.BigEndian.Uint32(packetA[24:28])+700)
+
+	tests := []struct {
+		name   string
+		mutate func([]byte)
+	}{
+		{name: "TOS and ECN", mutate: func(packet []byte) { packet[1] ^= 0x03 }},
+		{name: "DF flag", mutate: func(packet []byte) { packet[6] ^= 0x40 }},
+		{name: "TTL", mutate: func(packet []byte) { packet[8]-- }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := append([]byte(nil), packetB...)
+			tt.mutate(changed)
+			if run, _, _, ok := lanIPv4TCPGSOScatterRun([][]byte{packetA, changed}, 1500); ok || run != 0 {
+				t.Fatalf("scatter run ok=%v run=%d, want semantic mismatch rejected", ok, run)
+			}
+		})
+	}
+}
+
+func TestLANIPv4TCPGSOScatterRunStopsAtPushBoundary(t *testing.T) {
+	packetA := lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xaa}, 700), 0x10, 20)
+	packetB := lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xbb}, 700), 0x18, 20)
+	packetC := lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xcc}, 700), 0x10, 20)
+	setLANTCPIPv4SequenceForTest(packetB, binary.BigEndian.Uint32(packetA[24:28])+700)
+	setLANTCPIPv4SequenceForTest(packetC, binary.BigEndian.Uint32(packetB[24:28])+700)
+
+	run, _, _, ok := lanIPv4TCPGSOScatterRun([][]byte{packetA, packetB, packetC}, 1500)
+	if !ok || run != 2 {
+		t.Fatalf("scatter run ok=%v run=%d, want PSH packet included only as final segment", ok, run)
+	}
+
+	packetA[33] = 0x18
+	if run, _, _, ok = lanIPv4TCPGSOScatterRun([][]byte{packetA, packetB}, 1500); ok || run != 0 {
+		t.Fatalf("scatter run from PSH packet ok=%v run=%d, want rejected", ok, run)
+	}
+}
+
 func TestPrepareLANIPv4TCPGSOScatterHeaderLeavesPacketUnchanged(t *testing.T) {
 	packet := lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xaa}, 700), 0x10, 20)
 	original := append([]byte(nil), packet...)

@@ -5401,3 +5401,39 @@ one-way secure TCP range will require changing the packet-I/O boundary or
 moving work into a carefully validated kernel data plane. This 300-second
 engineering soak does not refresh the repository's stale 3600-second
 production evidence.
+
+### 2026-08-01 Zaozhuang PVE rejected LAN GSO scatter retry
+
+The existing opt-in LAN GSO scatter path was hardened before it was retried.
+Both the linear RX coalescer and scatter builder now keep packets with different
+IPv4 TOS/ECN, DF/fragment flags, or TTL values separate. Scatter also stops at
+an intermediate TCP PSH boundary instead of moving that boundary to a later
+segment. Unit coverage for these conditions passed on Windows and on both
+Linux guests.
+
+The retry used disposable Debian 13 VM200/VM201 guests on isolated `vmbr3`,
+each with 8 vCPU, 8 GiB, and kernel `6.12.100+deb13-cloud-amd64`. The secure
+TCP case used the stable profile, userspace datapath and crypto, 16 warmed
+sessions, 16 iperf streams, and TLS handshake-only mode. The candidate binary
+SHA256 was
+`9dbfbc2ae8b3ee9dd2bd5d668582b548ddae3deb2dfcbf3b83eb3ba8ed3ca24d`.
+The baseline explicitly disabled `TRUSTIX_DATA_SESSION_RX_GSO_SCATTER` and
+`TRUSTIX_LAN_REINJECT_GSO_SCATTER`; the candidate enabled both.
+
+An A-B-A 20-second smoke sequence received `4.692339 Gbps` with scatter,
+`5.146740 Gbps` with the linear baseline, and `4.666540 Gbps` with scatter.
+The two scatter samples averaged `4.679440 Gbps`, `9.08%` below the bracketed
+linear result. This was a real path comparison rather than an inactive-switch
+result: the two completed candidate runs reported `392,620/392,620` and
+`391,617/391,617` successful scatter attempts, carrying `6,129,857` and
+`6,115,656` logical messages respectively. All three runner cases passed,
+their boot IDs stayed stable, pstore was empty, and no nonempty error artifact
+or kernel panic/Oops/BUG/watchdog/lockup finding was produced.
+
+Scatter therefore remains explicit opt-in and is not promoted. Its two
+independent negative samples were sufficient to reject the candidate without
+spending time on a profile or long soak. The safety fixes remain useful for
+manual experiments, but the production linear coalescer remains the faster
+LAN reinjection path. Another material userspace attempt now requires a new
+LAN TX boundary such as AF_XDP TX-only; otherwise the next throughput tier is
+the carefully validated kernel dataplane rather than more parameter tuning.
