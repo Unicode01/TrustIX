@@ -12861,6 +12861,208 @@ func TestTIXTCPTXDirectSecureFlowsDoNotRequireSkipChecksum(t *testing.T) {
 	}
 }
 
+func testCaptureRawEvent(payload []byte) []byte {
+	raw := make([]byte, captureEventHeader+len(payload))
+	binary.LittleEndian.PutUint32(raw[0:4], captureMagic)
+	binary.LittleEndian.PutUint32(raw[4:8], 1)
+	binary.LittleEndian.PutUint32(raw[8:12], 1)
+	binary.LittleEndian.PutUint32(raw[12:16], uint32(len(payload)))
+	binary.LittleEndian.PutUint32(raw[16:20], uint32(len(payload)))
+	copy(raw[20:24], []byte{10, 0, 0, 2})
+	copy(raw[24:28], []byte{10, 0, 1, 2})
+	copy(raw[captureEventHeader:], payload)
+	return raw
+}
+
+func commitTestCaptureRingRecord(t *testing.T, lease *captureEventBatchLease, raw []byte) ([]byte, int) {
+	t.Helper()
+	chunkIndex, base, buffer := lease.prepareRingRecordBuffer()
+	buffer = append(buffer, raw...)
+	committed, ok := lease.commitRingRecord(chunkIndex, base, buffer)
+	if !ok {
+		t.Fatal("commit ring record rejected arena-backed data")
+	}
+	return committed, chunkIndex
+}
+
+func TestDecodeCaptureRawEventBorrowedAliasesRecord(t *testing.T) {
+	oldNormalize := captureNormalizeChecksums
+	captureNormalizeChecksums = false
+	t.Cleanup(func() { captureNormalizeChecksums = oldNormalize })
+
+	raw := testCaptureRawEvent([]byte{1, 2, 3, 4})
+	event, ok := decodeCaptureRawEventBorrowedAt(raw, 3, time.Unix(1, 0).UTC())
+	if !ok {
+		t.Fatal("borrowed decoder rejected valid capture event")
+	}
+	if len(event.Payload) == 0 || &event.Payload[0] != &raw[captureEventHeader] {
+		t.Fatal("borrowed payload does not alias the raw capture record")
+	}
+	raw[captureEventHeader] = 9
+	if event.Payload[0] != 9 {
+		t.Fatalf("borrowed payload did not observe raw mutation: got %d want 9", event.Payload[0])
+	}
+}
+
+func TestDecodeCaptureRawEventIntoCopiesRecord(t *testing.T) {
+	oldNormalize := captureNormalizeChecksums
+	captureNormalizeChecksums = false
+	t.Cleanup(func() { captureNormalizeChecksums = oldNormalize })
+
+	raw := testCaptureRawEvent([]byte{1, 2, 3, 4})
+	var arena []byte
+	event, ok := decodeCaptureRawEventIntoAt(raw, 3, &arena, time.Unix(1, 0).UTC())
+	if !ok {
+		t.Fatal("copied decoder rejected valid capture event")
+	}
+	if len(event.Payload) == 0 || &event.Payload[0] == &raw[captureEventHeader] {
+		t.Fatal("copied payload aliases the raw capture record")
+	}
+	raw[captureEventHeader] = 9
+	if event.Payload[0] != 1 {
+		t.Fatalf("copied payload changed through raw mutation: got %d want 1", event.Payload[0])
+	}
+}
+
+func TestCaptureRingArenaPreservesConsecutiveRecords(t *testing.T) {
+	oldNormalize := captureNormalizeChecksums
+	captureNormalizeChecksums = false
+	t.Cleanup(func() { captureNormalizeChecksums = oldNormalize })
+
+	lease := &captureEventBatchLease{}
+	firstRaw, firstChunk := commitTestCaptureRingRecord(t, lease, testCaptureRawEvent([]byte{1, 2, 3}))
+	first, ok := decodeCaptureRawEventBorrowedAt(firstRaw, -1, time.Time{})
+	if !ok {
+		t.Fatal("borrowed decoder rejected first committed record")
+	}
+	secondRaw, secondChunk := commitTestCaptureRingRecord(t, lease, testCaptureRawEvent([]byte{4, 5, 6}))
+	if firstChunk != secondChunk {
+		t.Fatalf("small consecutive records used chunks %d and %d, want the same chunk", firstChunk, secondChunk)
+	}
+	second, ok := decodeCaptureRawEventBorrowedAt(secondRaw, -1, time.Time{})
+	if !ok {
+		t.Fatal("borrowed decoder rejected second committed record")
+	}
+	if !bytes.Equal(first.Payload, []byte{1, 2, 3}) {
+		t.Fatalf("first payload after second commit = %v, want [1 2 3]", first.Payload)
+	}
+	if !bytes.Equal(second.Payload, []byte{4, 5, 6}) {
+		t.Fatalf("second payload = %v, want [4 5 6]", second.Payload)
+	}
+}
+
+func TestCaptureRingArenaRollsOverWithoutCorruptingEarlierRecord(t *testing.T) {
+	oldNormalize := captureNormalizeChecksums
+	captureNormalizeChecksums = false
+	t.Cleanup(func() { captureNormalizeChecksums = oldNormalize })
+
+	maxRecord := captureRingRecordBufferSize()
+	chunkSize := captureRingArenaChunkSize
+	if chunkSize < maxRecord {
+		chunkSize = maxRecord
+	}
+	lease := &captureEventBatchLease{
+		ringArenas: [][]byte{make([]byte, chunkSize-maxRecord, chunkSize)},
+	}
+	firstRaw, firstChunk := commitTestCaptureRingRecord(t, lease, testCaptureRawEvent([]byte{1, 2, 3}))
+	first, ok := decodeCaptureRawEventBorrowedAt(firstRaw, -1, time.Time{})
+	if !ok {
+		t.Fatal("borrowed decoder rejected first rollover record")
+	}
+	_, secondChunk := commitTestCaptureRingRecord(t, lease, testCaptureRawEvent([]byte{4, 5, 6}))
+	if firstChunk != 0 || secondChunk != 1 {
+		t.Fatalf("rollover chunks = %d/%d, want 0/1", firstChunk, secondChunk)
+	}
+	if !bytes.Equal(first.Payload, []byte{1, 2, 3}) {
+		t.Fatalf("first payload after rollover = %v, want [1 2 3]", first.Payload)
+	}
+}
+
+func TestCaptureRingArenaResetRetainsStorage(t *testing.T) {
+	lease := &captureEventBatchLease{
+		arena:          make([]byte, 32, 64),
+		ringArenas:     [][]byte{make([]byte, 16, 128), make([]byte, 24, 256)},
+		ringArenaIndex: 1,
+	}
+	arenaCap := cap(lease.arena)
+	ringCaps := []int{cap(lease.ringArenas[0]), cap(lease.ringArenas[1])}
+
+	lease.resetPayloadStorage()
+
+	if len(lease.arena) != 0 || cap(lease.arena) != arenaCap {
+		t.Fatalf("reset arena len/cap = %d/%d, want 0/%d", len(lease.arena), cap(lease.arena), arenaCap)
+	}
+	if lease.ringArenaIndex != 0 {
+		t.Fatalf("reset ring arena index = %d, want 0", lease.ringArenaIndex)
+	}
+	for index, arena := range lease.ringArenas {
+		if len(arena) != 0 || cap(arena) != ringCaps[index] {
+			t.Fatalf("reset ring arena %d len/cap = %d/%d, want 0/%d", index, len(arena), cap(arena), ringCaps[index])
+		}
+	}
+}
+
+func TestCaptureRingArenaRejectsExternalAndOversizedRecords(t *testing.T) {
+	oldNormalize := captureNormalizeChecksums
+	captureNormalizeChecksums = false
+	t.Cleanup(func() { captureNormalizeChecksums = oldNormalize })
+
+	lease := &captureEventBatchLease{}
+	chunkIndex, base, _ := lease.prepareRingRecordBuffer()
+	external := testCaptureRawEvent([]byte{1, 2, 3})
+	if _, ok := lease.commitRingRecord(chunkIndex, base, external); ok {
+		t.Fatal("commit accepted record that does not alias the prepared arena")
+	}
+	if got := len(lease.ringArenas[chunkIndex]); got != base {
+		t.Fatalf("ring arena length after rejected external record = %d, want %d", got, base)
+	}
+
+	oversized := make([]byte, captureRingRecordBufferSize()+1)
+	copy(oversized, testCaptureRawEvent([]byte{7}))
+	if _, ok := lease.commitRingRecord(chunkIndex, base, oversized); ok {
+		t.Fatal("commit accepted oversized record")
+	}
+	event, ok := decodeCaptureRawEventIntoAt(oversized, -1, &lease.arena, time.Time{})
+	if !ok {
+		t.Fatal("copied fallback rejected oversized capture storage with a valid record")
+	}
+	oversized[captureEventHeader] = 9
+	if event.Payload[0] != 7 {
+		t.Fatalf("fallback payload changed through external record mutation: got %d want 7", event.Payload[0])
+	}
+}
+
+func TestCaptureRingArenaDiscardsInvalidCommittedRecord(t *testing.T) {
+	lease := &captureEventBatchLease{}
+	invalid := testCaptureRawEvent([]byte{1, 2, 3})
+	binary.LittleEndian.PutUint32(invalid[0:4], 0)
+
+	for iteration := range 1024 {
+		chunkIndex, base, buffer := lease.prepareRingRecordBuffer()
+		buffer = append(buffer, invalid...)
+		committed, ok := lease.commitRingRecord(chunkIndex, base, buffer)
+		if !ok {
+			t.Fatalf("commit ring record rejected arena-backed invalid data at iteration %d", iteration)
+		}
+		if _, ok := decodeCaptureRawEventBorrowedAt(committed, -1, time.Time{}); ok {
+			t.Fatalf("borrowed decoder accepted invalid capture magic at iteration %d", iteration)
+		}
+		lease.discardRingRecord(chunkIndex, base, committed)
+		if got := len(lease.ringArenas[chunkIndex]); got != base {
+			t.Fatalf("ring arena length after invalid record discard at iteration %d = %d, want %d", iteration, got, base)
+		}
+	}
+
+	valid, nextChunk := commitTestCaptureRingRecord(t, lease, testCaptureRawEvent([]byte{4, 5, 6}))
+	if nextChunk != 0 {
+		t.Fatalf("valid record after discard used chunk %d, want 0", nextChunk)
+	}
+	event, ok := decodeCaptureRawEventBorrowedAt(valid, -1, time.Time{})
+	if !ok || !bytes.Equal(event.Payload, []byte{4, 5, 6}) {
+		t.Fatalf("valid record after discard decoded as payload %v, ok=%v", event.Payload, ok)
+	}
+}
+
 func TestDecodeCaptureEventPreservesFourKiBTCPPayloadSample(t *testing.T) {
 	const tcpPayloadLen = 4096
 	const ethernetIPv4TCPHeaderLen = 14 + 20 + 20

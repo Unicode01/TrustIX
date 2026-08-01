@@ -7130,9 +7130,13 @@ func (subscription *captureSubscription) ReleaseBatch(batch []dataplane.CaptureE
 }
 
 type captureEventBatchLease struct {
-	events []dataplane.CaptureEvent
-	arena  []byte
+	events         []dataplane.CaptureEvent
+	arena          []byte
+	ringArenas     [][]byte
+	ringArenaIndex int
 }
+
+const captureRingArenaChunkSize = 256 * 1024
 
 var captureEventBatchLeasePool = sync.Pool{
 	New: func() any {
@@ -7150,8 +7154,77 @@ func takeCaptureEventBatchLease() *captureEventBatchLease {
 	} else {
 		lease.events = lease.events[:0]
 	}
-	lease.arena = lease.arena[:0]
+	lease.resetPayloadStorage()
 	return lease
+}
+
+func (lease *captureEventBatchLease) resetPayloadStorage() {
+	if lease == nil {
+		return
+	}
+	lease.arena = lease.arena[:0]
+	for index := range lease.ringArenas {
+		lease.ringArenas[index] = lease.ringArenas[index][:0]
+	}
+	lease.ringArenaIndex = 0
+}
+
+func captureRingRecordBufferSize() int {
+	size := captureEventHeader + captureSampleLimit
+	if size < captureEventHeader {
+		return captureEventHeader
+	}
+	return size
+}
+
+func (lease *captureEventBatchLease) prepareRingRecordBuffer() (chunkIndex int, base int, buffer []byte) {
+	maxRecord := captureRingRecordBufferSize()
+	chunkSize := captureRingArenaChunkSize
+	if chunkSize < maxRecord {
+		chunkSize = maxRecord
+	}
+	for {
+		if lease.ringArenaIndex >= len(lease.ringArenas) {
+			lease.ringArenas = append(lease.ringArenas, make([]byte, 0, chunkSize))
+		}
+		chunkIndex = lease.ringArenaIndex
+		chunk := lease.ringArenas[chunkIndex]
+		if cap(chunk)-len(chunk) >= maxRecord {
+			base = len(chunk)
+			return chunkIndex, base, chunk[base : base : base+maxRecord]
+		}
+		lease.ringArenaIndex++
+	}
+}
+
+func (lease *captureEventBatchLease) commitRingRecord(chunkIndex int, base int, raw []byte) ([]byte, bool) {
+	if lease == nil || chunkIndex < 0 || chunkIndex >= len(lease.ringArenas) || base < 0 {
+		return nil, false
+	}
+	chunk := lease.ringArenas[chunkIndex]
+	if base != len(chunk) || len(raw) > captureRingRecordBufferSize() || len(raw) > cap(chunk)-base {
+		return nil, false
+	}
+	if len(raw) > 0 && &raw[0] != &chunk[base : base+1][0] {
+		return nil, false
+	}
+	chunk = chunk[:base+len(raw)]
+	lease.ringArenas[chunkIndex] = chunk
+	return chunk[base : base+len(raw)], true
+}
+
+func (lease *captureEventBatchLease) discardRingRecord(chunkIndex int, base int, raw []byte) {
+	if lease == nil || chunkIndex < 0 || chunkIndex >= len(lease.ringArenas) || base < 0 {
+		return
+	}
+	chunk := lease.ringArenas[chunkIndex]
+	if base > len(chunk) || len(raw) != len(chunk)-base {
+		return
+	}
+	if len(raw) > 0 && &raw[0] != &chunk[base] {
+		return
+	}
+	lease.ringArenas[chunkIndex] = chunk[:base]
 }
 
 func putCaptureEventBatchLease(lease *captureEventBatchLease) {
@@ -7171,12 +7244,26 @@ func putCaptureEventBatchLease(lease *captureEventBatchLease) {
 	} else {
 		lease.arena = lease.arena[:0]
 	}
+	retained := 0
+	for _, arena := range lease.ringArenas {
+		retained += cap(arena)
+		if retained > captureEventArenaRetainLimit() {
+			lease.ringArenas = nil
+			break
+		}
+	}
+	if lease.ringArenas != nil {
+		for index := range lease.ringArenas {
+			lease.ringArenas[index] = lease.ringArenas[index][:0]
+		}
+	}
+	lease.ringArenaIndex = 0
 	captureEventBatchLeasePool.Put(lease)
 }
 
 func captureEventArenaRetainLimit() int {
 	const maxRetain = 16 * 1024 * 1024
-	limit := captureSampleLimit * captureReaderBatchSize
+	limit := (captureEventHeader + captureSampleLimit) * captureReaderBatchSize
 	if limit <= 0 {
 		return maxRetain
 	}
@@ -25275,11 +25362,7 @@ func (manager *Manager) readCaptureEvents(reader *perf.Reader) {
 		} else {
 			clear(lease.events)
 			lease.events = lease.events[:0]
-			if captureHistoryEnabled {
-				lease.arena = nil
-			} else {
-				lease.arena = lease.arena[:0]
-			}
+			lease.resetPayloadStorage()
 		}
 	}
 	blockingRead := true
@@ -25348,11 +25431,7 @@ func (manager *Manager) readCaptureRingEvents(reader *ringbuf.Reader) {
 		} else {
 			clear(lease.events)
 			lease.events = lease.events[:0]
-			if captureHistoryEnabled {
-				lease.arena = nil
-			} else {
-				lease.arena = lease.arena[:0]
-			}
+			lease.resetPayloadStorage()
 		}
 	}
 	blockingRead := true
@@ -25362,6 +25441,8 @@ func (manager *Manager) readCaptureRingEvents(reader *ringbuf.Reader) {
 		} else {
 			reader.SetDeadline(time.Now().Add(captureReaderDrainTimeout))
 		}
+		chunkIndex, chunkBase, recordBuffer := lease.prepareRingRecordBuffer()
+		record.RawSample = recordBuffer
 		if err := reader.ReadInto(&record); err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) || errors.Is(err, os.ErrClosed) {
 				deliver()
@@ -25378,7 +25459,17 @@ func (manager *Manager) readCaptureRingEvents(reader *ringbuf.Reader) {
 		if captureHistoryEnabled {
 			capturedAt = time.Now().UTC()
 		}
-		event, ok := decodeCaptureRawEventIntoAt(record.RawSample, -1, &lease.arena, capturedAt)
+		raw, committed := lease.commitRingRecord(chunkIndex, chunkBase, record.RawSample)
+		var event dataplane.CaptureEvent
+		var ok bool
+		if committed {
+			event, ok = decodeCaptureRawEventBorrowedAt(raw, -1, capturedAt)
+			if !ok {
+				lease.discardRingRecord(chunkIndex, chunkBase, raw)
+			}
+		} else {
+			event, ok = decodeCaptureRawEventIntoAt(record.RawSample, -1, &lease.arena, capturedAt)
+		}
 		if !ok {
 			continue
 		}
@@ -25439,6 +25530,14 @@ func decodeCaptureEventIntoAt(record perf.Record, arena *[]byte, capturedAt time
 }
 
 func decodeCaptureRawEventIntoAt(raw []byte, cpu int, arena *[]byte, capturedAt time.Time) (dataplane.CaptureEvent, bool) {
+	return decodeCaptureRawEventAt(raw, cpu, arena, capturedAt, false)
+}
+
+func decodeCaptureRawEventBorrowedAt(raw []byte, cpu int, capturedAt time.Time) (dataplane.CaptureEvent, bool) {
+	return decodeCaptureRawEventAt(raw, cpu, nil, capturedAt, true)
+}
+
+func decodeCaptureRawEventAt(raw []byte, cpu int, arena *[]byte, capturedAt time.Time, borrow bool) (dataplane.CaptureEvent, bool) {
 	if len(raw) < captureEventHeader {
 		return dataplane.CaptureEvent{}, false
 	}
@@ -25460,9 +25559,16 @@ func decodeCaptureRawEventIntoAt(raw []byte, cpu int, arena *[]byte, capturedAt 
 	if int(sampleLen) > available {
 		sampleLen = uint32(available)
 	}
-	base := len(*arena)
-	*arena = append(*arena, raw[captureEventHeader:captureEventHeader+int(sampleLen)]...)
-	payload := (*arena)[base : base+int(sampleLen)]
+	rawPayload := raw[captureEventHeader : captureEventHeader+int(sampleLen)]
+	payload := rawPayload
+	if !borrow {
+		if arena == nil {
+			return dataplane.CaptureEvent{}, false
+		}
+		base := len(*arena)
+		*arena = append(*arena, rawPayload...)
+		payload = (*arena)[base : base+int(sampleLen)]
+	}
 	if captureNormalizeChecksums {
 		normalizeCapturePayloadChecksumsInPlace(payload)
 	}

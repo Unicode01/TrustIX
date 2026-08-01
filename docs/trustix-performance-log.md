@@ -5605,3 +5605,65 @@ can deliver another large throughput step. Material additional userspace work
 would require a different packet-I/O architecture that preserves GSO, while
 the larger proven ceiling is the separately validated kernel dataplane. This
 engineering evidence does not replace the 3600-second production gate.
+
+### 2026-08-02 Zaozhuang PVE single-copy ringbuf capture
+
+The eBPF ringbuf capture reader previously copied each record from the mapped
+kernel ring into `ringbuf.Record.RawSample` and then copied its packet payload
+again into the capture batch arena. The reader now gives `ReadInto` storage
+owned by a chunked batch lease and lets decoded events borrow that committed
+record. The required copy out of the kernel ring remains, but the second
+full-packet userspace copy is removed. Perf-buffer fallback, capture history,
+legacy subscribers, and multiple subscribers retain independent-copy
+semantics. Bounds and alias checks fall back to the copied decoder if the
+ringbuf library does not return the prepared storage. Invalid committed
+records release their arena reservation immediately, preventing a mismatched
+producer ABI from growing the lease indefinitely.
+
+Validation used disposable Debian 13 VM200/VM201 guests on isolated `vmbr3`,
+each with 8 vCPU, 8 GiB RAM, and kernel
+`6.12.90+deb13.1-cloud-amd64`. Raw underlay throughput was `17.809 Gbps`.
+Both TrustIX builds used Go 1.25.12 with CGO disabled. The baseline SHA256 was
+`19adb36c28dee8e8c737c4d648cbca0e99044499d00e29989632ac9ff1113613`;
+the candidate SHA256 was
+`aa24e455e2ac24267c0edc3eeaedb4406ef548a523346e62c66b61e6b5c52665`.
+The secure TCP userspace case used 16 warmed sessions and 16 iperf streams.
+
+| Pair | Baseline | Single-copy candidate |
+| --- | ---: | ---: |
+| 1 | 4.548215 Gbps | 4.590857 Gbps |
+| 2 | 4.742227 Gbps | 4.939462 Gbps |
+| 3 | 4.846477 Gbps | 4.877115 Gbps |
+| Mean | 4.712306 Gbps | 4.802478 Gbps |
+
+All three interleaved 45-second pairs favored the candidate, whose mean was
+`1.91%` higher. Subscriber drops remained zero. Four separate 90-second
+fixed-rate profiles held received throughput near `4.3199 Gbps` so CPU cost
+could be compared without throughput skew. Mean sender CPU fell from
+`314.345` to `306.045` seconds (`-2.64%`), receiver CPU fell from `333.220`
+to `332.695` seconds (`-0.16%`), and combined CPU fell `1.36%`. Sender
+`runtime.memmove` CPU fell from `37.175` to `34.530` seconds (`-7.11%`).
+Capture decode cumulative CPU fell from `23.605` to `13.330` seconds
+(`-43.5%`), while `readCaptureRingEvents` cumulative CPU fell from `51.170`
+to `47.625` seconds (`-6.93%`).
+
+The measured candidate's 300-second simultaneous `iperf3 --bidir`
+engineering soak received
+`2.449212 Gbps` A-to-B and `2.596009 Gbps` B-to-A, or `5.045221 Gbps`
+combined. Final review then added the invalid-record reservation rollback,
+which does not alter the valid-record hot path. The reviewed final binary
+SHA256 was
+`eddcc34c2a42c7ef03e4fe997d45b3f643657c2c096042c636f52eaffff7d2b5`.
+A second 300-second bidirectional soak of that binary received
+`2.443914 Gbps` A-to-B and `2.567526 Gbps` B-to-A, or `5.011440 Gbps`
+combined. Both runs retained stable boot IDs. Pstore was mounted and empty;
+kernel crash scans, nonempty runner error artifacts, and residual-process
+checks were empty.
+
+This result confirms that useful userspace work remains and does not require a
+kernel change, but its measured scope is incremental. The remaining profile is
+still dominated by packet-I/O syscalls, encryption, and memory movement. A
+larger throughput step now requires a different userspace packet-I/O boundary
+that preserves GSO, or the separately validated kernel dataplane; another
+parameter-only tune is unlikely to provide it. This engineering soak does not
+replace the repository's 3600-second production evidence.
