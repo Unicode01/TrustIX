@@ -719,6 +719,7 @@ func TestIXProvisionExplicitStableKeepsSecureUDPCompatibility(t *testing.T) {
 		target.TransportPolicy.Profile != config.TransportProfileStable ||
 		target.TransportPolicy.Datapath != config.TransportDatapathUserspace ||
 		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
+		target.TransportPolicy.TLSDataPlane != config.TransportTLSDataPlaneAuto ||
 		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeDisabled) {
 		t.Fatalf("target stable transport policy = %#v", target.TransportPolicy)
 	}

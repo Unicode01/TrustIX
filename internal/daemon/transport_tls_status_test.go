@@ -68,6 +68,7 @@ func TestTransportTLSDoctorAcceptsExporterBackedTLSSession(t *testing.T) {
 					LinkTLS:         true,
 					TLSVersion:      "TLS 1.3",
 					TLSCipherSuite:  "TLS_AES_128_GCM_SHA256",
+					Extra:           map[string]uint64{"tls_handshake_only": 1},
 				},
 			},
 		},
@@ -79,6 +80,14 @@ func TestTransportTLSDoctorAcceptsExporterBackedTLSSession(t *testing.T) {
 	}
 	if status.LinkTLSSessions != 1 || status.TLSExporterKeySessions != 1 {
 		t.Fatalf("TLS session counts = link_tls:%d exporter:%d, want 1/1", status.LinkTLSSessions, status.TLSExporterKeySessions)
+	}
+	if status.TLSDataPlane != config.TransportTLSDataPlaneAuto || status.TLSDataPlaneHandoffSessions != 1 {
+		t.Fatalf("TLS data-plane status = mode:%q active:%d, want auto/1", status.TLSDataPlane, status.TLSDataPlaneHandoffSessions)
+	}
+	for _, want := range []string{"tls_data_plane=auto", "tls_data_plane_handoff_sessions=1"} {
+		if detail := transportTLSDoctorDetail(status); !strings.Contains(detail, want) {
+			t.Fatalf("doctor detail %q does not contain %q", detail, want)
+		}
 	}
 }
 

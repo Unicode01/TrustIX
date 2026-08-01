@@ -10,6 +10,7 @@ case_profile_override="${TRUSTIX_CROSS_HOST_PROFILE:-}"
 case_datapath_override="${TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH:-}"
 case_crypto_placement_override="${TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT:-}"
 case_crypto_suites_override="${TRUSTIX_CROSS_HOST_CRYPTO_SUITES:-}"
+case_tls_data_plane_override="${TRUSTIX_CROSS_HOST_TLS_DATA_PLANE:-}"
 endpoint_transports_raw="${TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS:-}"
 workdir="${TRUSTIX_CROSS_HOST_WORKDIR:-$(mktemp -d /tmp/trustix-cross-host.XXXXXX)}"
 workdir="$(mkdir -p "$workdir" && cd "$workdir" && pwd -P)"
@@ -564,6 +565,7 @@ case_is_generic() {
 
 validate_case() {
   validate_case_crypto_suites
+  validate_case_tls_data_plane
   if case_is_generic; then
     if case_is_multi_endpoint; then
       [[ "$(generic_case_kind)" == "userspace" ]] || die "multi-endpoint soak currently requires a userspace case"
@@ -718,6 +720,11 @@ case_crypto_suites_yaml() {
   done
 }
 
+case_tls_data_plane_yaml() {
+  [[ -n "$case_tls_data_plane_override" ]] || return 0
+  printf '  tls_data_plane: %s\n' "$case_tls_data_plane_override"
+}
+
 validate_case_crypto_suites() {
   local raw suite
   raw="${case_crypto_suites_override//,/ }"
@@ -728,6 +735,13 @@ validate_case_crypto_suites() {
       *) die "TRUSTIX_CROSS_HOST_CRYPTO_SUITES contains unsupported suite: $suite" ;;
     esac
   done
+}
+
+validate_case_tls_data_plane() {
+  case "$case_tls_data_plane_override" in
+    ""|auto|full_tls) ;;
+    *) die "TRUSTIX_CROSS_HOST_TLS_DATA_PLANE must be auto or full_tls" ;;
+  esac
 }
 
 case_transport_datapath() {
@@ -1506,6 +1520,7 @@ EOF
   encryption: ${encryption}
   crypto_placement: ${crypto_placement}
 $(case_crypto_suites_yaml)
+$(case_tls_data_plane_yaml)
   session_pool:
     size: ${session_pool_size}
     strategy: ${session_pool_strategy}
@@ -1659,6 +1674,7 @@ transport_policy:
   encryption: ${encryption}
   crypto_placement: ${crypto_placement}
 $(case_crypto_suites_yaml)
+$(case_tls_data_plane_yaml)
   session_pool:
     size: ${session_pool_size}
     strategy: ${session_pool_strategy}

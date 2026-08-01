@@ -262,28 +262,32 @@ func TestSecureBatchRecordsRequestedDefaultsEnabledWithExplicitFailback(t *testi
 	}
 }
 
-func TestSecureTLSHandshakeOnlyRequestedDefaultsDisabledWithExplicitOptIn(t *testing.T) {
+func TestSecureTLSHandshakeOnlyRequestedDefaultsEnabledWithEmergencyFailback(t *testing.T) {
 	t.Setenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY", "")
-	if secureTLSHandshakeOnlyRequested(Options{}) {
-		t.Fatal("TLS handshake-only mode is enabled by default")
+	if !secureTLSHandshakeOnlyRequested(Options{}) {
+		t.Fatal("TLS handshake-only mode is disabled by default")
 	}
 
-	for _, value := range []string{"1", "true", "yes", "on", "enabled"} {
+	for _, value := range []string{"0", "false", "no", "off", "disabled"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY", value)
-			if !secureTLSHandshakeOnlyRequested(Options{}) {
-				t.Fatalf("TLS handshake-only mode disabled for opt-in value %q", value)
+			if secureTLSHandshakeOnlyRequested(Options{}) {
+				t.Fatalf("TLS handshake-only mode enabled for failback value %q", value)
 			}
 		})
 	}
 
 	t.Setenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY", "0")
-	if !secureTLSHandshakeOnlyRequested(Options{TLSHandshakeOnly: func() bool { return true }}) {
-		t.Fatal("explicit TLS handshake-only option did not override the environment")
+	if secureTLSHandshakeOnlyRequested(Options{TLSHandshakeOnly: func() bool { return true }}) {
+		t.Fatal("environment failback did not override the configured TLS data plane")
 	}
 	t.Setenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY", "1")
+	if !secureTLSHandshakeOnlyRequested(Options{TLSHandshakeOnly: func() bool { return false }}) {
+		t.Fatal("environment force-enable did not override the configured TLS data plane")
+	}
+	t.Setenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY", "")
 	if secureTLSHandshakeOnlyRequested(Options{TLSHandshakeOnly: func() bool { return false }}) {
-		t.Fatal("explicit TLS handshake-only failback did not override the environment")
+		t.Fatal("explicit full-TLS data plane was ignored")
 	}
 }
 

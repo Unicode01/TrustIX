@@ -22,12 +22,26 @@ const (
 	secureEncryptionReceiveEncryptedCode
 )
 
+const (
+	secureTLSDataPlaneAutoCode uint32 = iota
+	secureTLSDataPlaneFullTLSCode
+)
+
 func (daemon *Daemon) setSecureTransportKeySource(raw string) {
 	daemon.secureKeySource.Store(secureKeySourceCode(parseSecureTransportKeySource(raw)))
 }
 
 func (daemon *Daemon) setSecureTransportEncryption(raw string) {
 	daemon.secureEncryption.Store(secureEncryptionCode(parseSecureTransportEncryption(raw)))
+}
+
+func (daemon *Daemon) setSecureTransportTLSDataPlane(policy config.TransportPolicyConfig) {
+	mode := config.EffectiveTransportTLSDataPlane(policy)
+	if mode == config.TransportTLSDataPlaneFullTLS {
+		daemon.secureTLSDataPlane.Store(secureTLSDataPlaneFullTLSCode)
+		return
+	}
+	daemon.secureTLSDataPlane.Store(secureTLSDataPlaneAutoCode)
 }
 
 func (daemon *Daemon) setSecureTransportCryptoSuites(desired config.Desired) {
@@ -56,6 +70,10 @@ func (daemon *Daemon) secureTransportEncryption() string {
 	default:
 		return securetransport.EncryptionSecure
 	}
+}
+
+func (daemon *Daemon) secureTransportTLSHandshakeOnly() bool {
+	return daemon.secureTLSDataPlane.Load() != secureTLSDataPlaneFullTLSCode
 }
 
 func (daemon *Daemon) secureTransportCryptoSuites() []string {

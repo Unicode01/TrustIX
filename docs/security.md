@@ -46,6 +46,12 @@ to enforce. It is a release checklist and operator guide, not a formal proof.
   certificate authentication, AEAD and anti-replay. `plaintext` and directional
   encryption modes are operational compatibility settings, not confidentiality
   modes.
+- `transport_policy.tls_data_plane: auto` may detach an eligible TCP stream
+  after both peers complete TLS certificate authentication, TrustIX hello and
+  the authenticated handoff barrier. Subsequent records remain protected by
+  TrustIX AEAD and replay sequencing, but are no longer TLS records. Use
+  `full_tls` when policy requires TLS records for the entire stream. Unsupported
+  peers and ineligible streams retain the full TLS data plane.
 - `plaintext + security.link_tls: required` is TLS-only data mode. It still
   keeps TrustIX hello authentication and fails closed when the selected session
   does not actually use LinkTLS.

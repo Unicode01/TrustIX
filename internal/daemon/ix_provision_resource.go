@@ -1366,6 +1366,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			Encryption:      profile.Encryption,
 			CryptoKeySource: securetransport.KeySourceAuto,
 			CryptoPlacement: profile.CryptoPlacement,
+			TLSDataPlane:    config.TransportTLSDataPlaneAuto,
 			Profiles:        ixProvisionTransportProfiles(request, profile),
 			KernelTransport: config.KernelTransportPolicyConfig{Mode: ixProvisionKernelTransportMode(request, profile)},
 			SessionPool:     config.SessionPoolPolicyConfig{Warmup: true},

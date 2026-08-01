@@ -286,6 +286,7 @@ func normalizeTransportPolicy(policy *TransportPolicyConfig) {
 	policy.Encryption = strings.ToLower(strings.TrimSpace(policy.Encryption))
 	policy.CryptoKeySource = strings.ToLower(strings.TrimSpace(policy.CryptoKeySource))
 	policy.CryptoPlacement = strings.ToLower(strings.TrimSpace(policy.CryptoPlacement))
+	policy.TLSDataPlane = strings.ToLower(strings.TrimSpace(policy.TLSDataPlane))
 	policy.CryptoSuites = normalizeCryptoSuiteList(policy.CryptoSuites)
 	normalizeTransportAdvanced(&policy.Advanced)
 	for i := range policy.Profiles {
@@ -380,6 +381,9 @@ func applyTransportPolicyProductionDefaults(policy *TransportPolicyConfig) {
 	}
 	if strings.TrimSpace(policy.CryptoPlacement) == "" {
 		policy.CryptoPlacement = "userspace"
+	}
+	if strings.TrimSpace(policy.TLSDataPlane) == "" {
+		policy.TLSDataPlane = TransportTLSDataPlaneAuto
 	}
 	if strings.TrimSpace(policy.KernelTransport.Mode) == "" {
 		policy.KernelTransport.Mode = "disabled"

@@ -27,6 +27,26 @@ func TestEffectiveTransportProfilePreservesExplicitAutoOverrides(t *testing.T) {
 	}
 }
 
+func TestEffectiveTransportTLSDataPlaneDefaultsToNegotiatedAuto(t *testing.T) {
+	if got := EffectiveTransportTLSDataPlane(TransportPolicyConfig{}); got != TransportTLSDataPlaneAuto {
+		t.Fatalf("empty TLS data plane = %q, want %q", got, TransportTLSDataPlaneAuto)
+	}
+	if got := EffectiveTransportTLSDataPlane(TransportPolicyConfig{TLSDataPlane: TransportTLSDataPlaneFullTLS}); got != TransportTLSDataPlaneFullTLS {
+		t.Fatalf("explicit full TLS data plane = %q, want %q", got, TransportTLSDataPlaneFullTLS)
+	}
+}
+
+func TestTransportTLSDataPlaneValidation(t *testing.T) {
+	for _, mode := range []string{"", TransportTLSDataPlaneAuto, TransportTLSDataPlaneFullTLS} {
+		if err := validateTransportPolicy(TransportPolicyConfig{TLSDataPlane: mode}, nil); err != nil {
+			t.Fatalf("validate TLS data plane %q: %v", mode, err)
+		}
+	}
+	if err := validateTransportPolicy(TransportPolicyConfig{TLSDataPlane: "raw"}, nil); err == nil || !strings.Contains(err.Error(), "tls_data_plane") {
+		t.Fatalf("invalid TLS data plane error = %v, want tls_data_plane validation error", err)
+	}
+}
+
 func TestEndpointLocalBindValidation(t *testing.T) {
 	cfg := Desired{
 		Domain: DomainConfig{ID: core.DomainID("lab.local")},

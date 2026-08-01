@@ -84,6 +84,7 @@ endpoints:
 		cfg.TransportPolicy.Encryption != "secure" ||
 		cfg.TransportPolicy.CryptoKeySource != "auto" ||
 		cfg.TransportPolicy.CryptoPlacement != "userspace" ||
+		cfg.TransportPolicy.TLSDataPlane != TransportTLSDataPlaneAuto ||
 		cfg.TransportPolicy.KernelTransport.Mode != "disabled" {
 		t.Fatalf("transport policy defaults = %#v", cfg.TransportPolicy)
 	}
@@ -322,6 +323,7 @@ transport_policy:
   encryption: SEND_ENCRYPTED
   crypto_key_source: TLS_EXPORTER
   crypto_placement: AUTO
+  tls_data_plane: FULL_TLS
   crypto_suites:
     - AES-128-GCM-X25519
     - CHACHA20POLY1305-X25519
@@ -385,6 +387,9 @@ kernel_modules:
 	}
 	if cfg.TransportPolicy.CryptoPlacement != "auto" {
 		t.Fatalf("transport crypto placement = %q, want auto", cfg.TransportPolicy.CryptoPlacement)
+	}
+	if cfg.TransportPolicy.TLSDataPlane != TransportTLSDataPlaneFullTLS {
+		t.Fatalf("TLS data plane = %q, want full_tls", cfg.TransportPolicy.TLSDataPlane)
 	}
 	if cfg.TransportPolicy.KernelTransport.Mode != "require_kernel" {
 		t.Fatalf("kernel transport mode = %q, want require_kernel", cfg.TransportPolicy.KernelTransport.Mode)

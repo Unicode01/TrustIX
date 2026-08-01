@@ -86,6 +86,7 @@ type Daemon struct {
 	cryptoPlacement      atomic.Uint32
 	secureKeySource      atomic.Uint32
 	secureEncryption     atomic.Uint32
+	secureTLSDataPlane   atomic.Uint32
 	secureSuites         atomic.Value
 	configSync           map[string]configSyncPeerState
 	signerMu             sync.RWMutex
@@ -214,11 +215,12 @@ func New(cfg Config, options ...Option) (*Daemon, error) {
 		return nil, fmt.Errorf("unsupported dataplane mode %q", cfg.DataplaneMode)
 	}
 	secureOptions := securetransport.Options{
-		KeySource:     daemon.secureTransportKeySource,
-		Encryption:    daemon.secureTransportEncryption,
-		CryptoSuites:  daemon.secureTransportCryptoSuites,
-		ClientAuthTLS: daemon.secureClientAuthTLSConfig,
-		ServerAuthTLS: daemon.secureServerAuthTLSConfig,
+		KeySource:        daemon.secureTransportKeySource,
+		Encryption:       daemon.secureTransportEncryption,
+		CryptoSuites:     daemon.secureTransportCryptoSuites,
+		TLSHandshakeOnly: daemon.secureTransportTLSHandshakeOnly,
+		ClientAuthTLS:    daemon.secureClientAuthTLSConfig,
+		ServerAuthTLS:    daemon.secureServerAuthTLSConfig,
 	}
 	udpTransport := udptransport.New(udptransport.Options{
 		CryptoPlacement:          daemon.transportCryptoPlacement,
@@ -798,6 +800,7 @@ func (daemon *Daemon) loadAndApply(ctx context.Context) error {
 	daemon.setTransportCryptoPlacement(desired.TransportPolicy)
 	daemon.setSecureTransportKeySource(desired.TransportPolicy.CryptoKeySource)
 	daemon.setSecureTransportEncryption(desired.TransportPolicy.Encryption)
+	daemon.setSecureTransportTLSDataPlane(desired.TransportPolicy)
 	daemon.setSecureTransportCryptoSuites(desired)
 	daemon.cfg.DomainID = desired.Domain.ID
 	daemon.cfg.IXID = desired.IX.ID

@@ -30,6 +30,7 @@ type transportMatrixPolicy struct {
 	Encryption          string   `json:"encryption,omitempty"`
 	CryptoKeySource     string   `json:"crypto_key_source,omitempty"`
 	CryptoSuites        []string `json:"crypto_suites,omitempty"`
+	TLSDataPlane        string   `json:"tls_data_plane"`
 	MTU                 int      `json:"mtu,omitempty"`
 	FragmentPolicy      string   `json:"fragment_policy,omitempty"`
 	SessionPoolSize     int      `json:"session_pool_size,omitempty"`
@@ -126,6 +127,7 @@ func (daemon *Daemon) transportMatrixPolicy() transportMatrixPolicy {
 		Encryption:          policy.Encryption,
 		CryptoKeySource:     policy.CryptoKeySource,
 		CryptoSuites:        effectiveSecureTransportCryptoSuitesForDesired(daemon.desired),
+		TLSDataPlane:        config.EffectiveTransportTLSDataPlane(policy),
 		MTU:                 policy.MTU,
 		FragmentPolicy:      policy.FragmentPolicy,
 		SessionPoolSize:     policy.SessionPool.Size,

@@ -878,6 +878,7 @@ func (daemon *Daemon) setRuntimeDesired(desired config.Desired, head configlog.H
 	daemon.setTransportCryptoPlacement(desired.TransportPolicy)
 	daemon.setSecureTransportKeySource(desired.TransportPolicy.CryptoKeySource)
 	daemon.setSecureTransportEncryption(desired.TransportPolicy.Encryption)
+	daemon.setSecureTransportTLSDataPlane(desired.TransportPolicy)
 	daemon.setSecureTransportCryptoSuites(desired)
 }
 

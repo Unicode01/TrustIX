@@ -333,6 +333,7 @@ export type TransportPolicyConfig = {
   crypto_key_source?: string;
   crypto_suites?: string[];
   crypto_placement?: string;
+  tls_data_plane?: string;
   profiles?: TransportProfileConfig[];
   advanced?: TransportAdvancedConfig;
   session_pool?: {
@@ -532,6 +533,7 @@ export type TransportMatrixPolicy = {
   encryption?: string;
   crypto_key_source?: string;
   crypto_suites?: string[];
+  tls_data_plane?: string;
   mtu?: number;
   fragment_policy?: string;
   session_pool_size?: number;

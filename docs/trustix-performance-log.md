@@ -5489,3 +5489,66 @@ would require a multi-queue segmentation design. The remaining userspace
 options are architectural, such as io_uring packet-socket GSO submission or a
 multi-queue AF_XDP data path; another large gain is more likely to require the
 validated kernel dataplane than another userspace parameter adjustment.
+
+### 2026-08-01 Zaozhuang PVE first-class TLS data-plane policy
+
+The negotiated TLS data-plane handoff now has a first-class
+`transport_policy.tls_data_plane` setting. `auto` is the production default and
+allows eligible new peers to switch from TLS records to the TrustIX encrypted
+data plane after TLS certificate authentication and exporter key derivation.
+`full_tls` retains TLS records for all stream data. The explicit
+`TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY=0/1` incident override takes precedence over
+configuration. Old peers and ineligible sessions continue to use full TLS.
+
+Validation used disposable Debian 13 VM200/VM201 guests on isolated `vmbr3`,
+each with 8 vCPU, 8 GiB RAM, and kernel
+`6.12.90+deb13.1-cloud-amd64`. The worktree binary SHA256 was
+`4ca0a81b94fdcf6f8445c66821b35a1a8244c2c1c5b3ebbdce601741b7582ac5`.
+All cases used secure TCP, userspace crypto and datapath, 16 warmed sessions,
+and 16 iperf streams. A no-environment smoke received `4.675 Gbps` with all
+`32/32` sessions reporting the negotiated handoff. An environment-forced
+full-TLS run received `4.390 Gbps`; a configuration-level `full_tls` run
+received `4.357 Gbps`, and both reported `0/32` handoff sessions.
+
+Mixed-version runs covered both handshake roles. New-A/old-B received
+`4.388 Gbps`, and old-A/new-B received `4.415 Gbps`. The current side reported
+`0/32` handoff sessions in both cases, proving that the new default does not
+force the new wire mode onto an old peer.
+
+Three 45-second interleaved pairs compared only the configured data-plane
+policy:
+
+| Pair | `full_tls` | `auto` |
+| --- | ---: | ---: |
+| 1 | 4.440289 Gbps | 5.158108 Gbps |
+| 2 | 4.430717 Gbps | 5.063308 Gbps |
+| 3 | 4.363109 Gbps | 5.138767 Gbps |
+| Mean | 4.411 Gbps | 5.120 Gbps |
+
+The paired mean improvement was about `16.1%`; every `auto` run reported
+`32/32` handoff sessions. A separate 90-second profile received
+`4.990526 Gbps`. Sender CPU was led by syscall (`41.73%` flat), TrustIX
+AES-GCM encryption (`14.80%`), and `runtime.memmove` (`12.50%`). Receiver CPU
+was led by syscall (`53.15%`), TrustIX AES-GCM decryption (`19.48%`), and
+`runtime.memmove` (`4.81%`). AF_PACKET LAN reinjection through `sendmmsg`
+accounted for `23.65%` cumulative sender CPU and `31.81%` cumulative receiver
+CPU. The profile confirms that the outer TLS record AEAD is gone and that the
+next material ceiling is packet I/O rather than another TLS policy tune.
+
+A final 300-second simultaneous `iperf3 --bidir` engineering soak received
+`2.551397 Gbps` A-to-B and `2.621668 Gbps` B-to-A, or `5.173066 Gbps`
+combined. Both nodes retained their boot IDs, pstore was mounted and empty,
+kernel journals had no matching entries, and all `32/32` sessions on each node
+reported `tls_data_plane=auto`, TLS exporter keys, LinkTLS authentication, and
+the negotiated handoff. This is engineering evidence; the first-class default
+still requires a fresh commit-identified 3600-second production gate before it
+becomes a new production evidence boundary.
+
+The current parameter surface is no longer the main optimization opportunity.
+`PACKET_TX_RING`, ACK-only AF_XDP, LAN GSO scatter, packet-socket shards, and
+fixed/adaptive batching delays have already failed controlled comparisons. A
+further userspace gain requires an architectural packet-I/O experiment, such
+as io_uring submission of the existing AF_PACKET GSO batches or a complete
+multi-queue AF_XDP reinjection path with software segmentation. A larger
+throughput step is more likely from the separately validated kernel dataplane,
+but a TrustIX kernel-module change is not the only remaining option.

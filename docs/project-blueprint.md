@@ -537,6 +537,7 @@ endpoints:
 ```yaml
 transport_policy:
   mode: user_defined
+  tls_data_plane: auto
   candidates:
     - primary-udp
     - fallback-quic
@@ -821,6 +822,7 @@ policies:
 
 transport_policy:
   mode: user_defined
+  tls_data_plane: auto
   candidates:
     - sh-udp
     - sh-quic

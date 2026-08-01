@@ -368,6 +368,7 @@ type TransportPolicyConfig struct {
 	CryptoKeySource string                      `json:"crypto_key_source,omitempty" yaml:"crypto_key_source,omitempty"`
 	CryptoSuites    []string                    `json:"crypto_suites,omitempty" yaml:"crypto_suites,omitempty"`
 	CryptoPlacement string                      `json:"crypto_placement,omitempty" yaml:"crypto_placement,omitempty"`
+	TLSDataPlane    string                      `json:"tls_data_plane,omitempty" yaml:"tls_data_plane,omitempty"`
 	Profiles        []TransportProfileConfig    `json:"profiles,omitempty" yaml:"profiles,omitempty"`
 	Advanced        TransportAdvancedConfig     `json:"advanced,omitempty" yaml:"advanced,omitempty"`
 	SessionPool     SessionPoolPolicyConfig     `json:"session_pool,omitempty" yaml:"session_pool,omitempty"`
@@ -432,7 +433,19 @@ const (
 	TransportDatapathUserspace    = "userspace"
 	TransportDatapathTCXDP        = "tc_xdp"
 	TransportDatapathKernelModule = "kernel_module"
+
+	TransportTLSDataPlaneAuto    = "auto"
+	TransportTLSDataPlaneFullTLS = "full_tls"
 )
+
+func EffectiveTransportTLSDataPlane(policy TransportPolicyConfig) string {
+	switch strings.ToLower(strings.TrimSpace(policy.TLSDataPlane)) {
+	case TransportTLSDataPlaneFullTLS:
+		return TransportTLSDataPlaneFullTLS
+	default:
+		return TransportTLSDataPlaneAuto
+	}
+}
 
 func EffectiveTransportProfile(policy TransportPolicyConfig, rawTransport string) TransportProfileConfig {
 	transportName := normalizeTransportProfileTransport(rawTransport)
@@ -1609,6 +1622,11 @@ func validateTransportPolicy(policy TransportPolicyConfig, endpoints []EndpointC
 	}
 	if err := validateTransportCryptoPlacement("transport_policy", policy.CryptoPlacement); err != nil {
 		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(policy.TLSDataPlane)) {
+	case "", TransportTLSDataPlaneAuto, TransportTLSDataPlaneFullTLS:
+	default:
+		return fmt.Errorf("transport_policy tls_data_plane %q is unsupported", policy.TLSDataPlane)
 	}
 	if err := validateTransportAdvanced("transport_policy advanced", policy.Advanced); err != nil {
 		return err

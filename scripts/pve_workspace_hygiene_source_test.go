@@ -413,6 +413,65 @@ func TestCrossHostRunnerCryptoSuiteOverrideDryRunConfig(t *testing.T) {
 	}
 }
 
+func TestCrossHostRunnerTLSDataPlaneOverrideDryRunConfig(t *testing.T) {
+	bash := requireGNUBash4(t)
+	baseEnv := []string{
+		"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
+		"TRUSTIX_CROSS_HOST_CASE=userspace-tcp-secure",
+		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=192.0.2.10",
+		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=192.0.2.11",
+		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
+		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
+	}
+
+	workdir := filepath.Join(t.TempDir(), "full-tls")
+	cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(), append(baseEnv,
+		"TRUSTIX_CROSS_HOST_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_TLS_DATA_PLANE=full_tls",
+	)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("TLS data-plane dry-run config failed: %v\n%s", err, out)
+	}
+	for _, name := range []string{"config-a.yaml", "config-b.yaml"} {
+		payload, err := os.ReadFile(filepath.Join(workdir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if !strings.Contains(string(payload), "  tls_data_plane: full_tls\n") {
+			t.Fatalf("%s missing TLS data-plane override:\n%s", name, payload)
+		}
+	}
+
+	defaultWorkdir := filepath.Join(t.TempDir(), "default")
+	defaultConfig := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	defaultConfig.Dir = "."
+	defaultConfig.Env = append(os.Environ(), append(baseEnv,
+		"TRUSTIX_CROSS_HOST_WORKDIR="+defaultWorkdir,
+	)...)
+	if out, err := defaultConfig.CombinedOutput(); err != nil {
+		t.Fatalf("default TLS data-plane dry-run config failed: %v\n%s", err, out)
+	}
+	payload, err := os.ReadFile(filepath.Join(defaultWorkdir, "config-a.yaml"))
+	if err != nil {
+		t.Fatalf("read default config: %v", err)
+	}
+	if strings.Contains(string(payload), "tls_data_plane:") {
+		t.Fatalf("default runner config unexpectedly pins TLS data plane:\n%s", payload)
+	}
+
+	invalid := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	invalid.Dir = "."
+	invalid.Env = append(os.Environ(), append(baseEnv,
+		"TRUSTIX_CROSS_HOST_WORKDIR="+filepath.Join(t.TempDir(), "invalid"),
+		"TRUSTIX_CROSS_HOST_TLS_DATA_PLANE=plaintext",
+	)...)
+	if out, err := invalid.CombinedOutput(); err == nil || !strings.Contains(string(out), "must be auto or full_tls") {
+		t.Fatalf("invalid TLS data-plane override error = %v, output:\n%s", err, out)
+	}
+}
+
 func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
 	bash := requireGNUBash4(t)
 	for _, tc := range []struct {

@@ -13,6 +13,7 @@ type transportTLSStatus struct {
 	Encryption                    string   `json:"encryption"`
 	CryptoKeySource               string   `json:"crypto_key_source"`
 	CryptoSuites                  []string `json:"crypto_suites"`
+	TLSDataPlane                  string   `json:"tls_data_plane"`
 	TLSIdentityMode               string   `json:"tls_identity_mode"`
 	WireFormat                    string   `json:"wire_format"`
 	CustomCertificate             bool     `json:"custom_certificate,omitempty"`
@@ -35,6 +36,7 @@ type transportTLSStatus struct {
 	LinkTLSSessionsSeen           uint64   `json:"link_tls_sessions_seen"`
 	TLSExporterKeySessionsSeen    uint64   `json:"tls_exporter_key_sessions_seen"`
 	TLSExporterWithoutLinkTLSSeen uint64   `json:"tls_exporter_without_link_tls_seen"`
+	TLSDataPlaneHandoffSessions   int      `json:"tls_data_plane_handoff_sessions"`
 	LastLinkTLSVersion            string   `json:"last_link_tls_version,omitempty"`
 	LastLinkTLSCipherSuite        string   `json:"last_link_tls_cipher_suite,omitempty"`
 	Warnings                      []string `json:"warnings,omitempty"`
@@ -45,6 +47,7 @@ func (daemon *Daemon) transportTLSStatus(dataPath dataPathStatus) transportTLSSt
 		Encryption:                    parseSecureTransportEncryption(daemon.desired.TransportPolicy.Encryption),
 		CryptoKeySource:               parseSecureTransportKeySource(daemon.desired.TransportPolicy.CryptoKeySource),
 		CryptoSuites:                  effectiveSecureTransportCryptoSuitesForDesired(daemon.desired),
+		TLSDataPlane:                  config.EffectiveTransportTLSDataPlane(daemon.desired.TransportPolicy),
 		TLSIdentityMode:               normalizedTransportTLSIdentityMode(daemon.desired.TransportPolicy.TLSIdentity.Mode),
 		WireFormat:                    transport.CryptoWireFormatTrustIXSecureDataV1,
 		SystemRoots:                   daemon.desired.TransportPolicy.TLSIdentity.SystemRoots,
@@ -94,6 +97,9 @@ func (daemon *Daemon) transportTLSStatus(dataPath dataPathStatus) transportTLSSt
 			if !session.Stats.LinkTLS {
 				status.TLSExporterWithoutLinkTLS++
 			}
+		}
+		if session.Stats.Extra["tls_handshake_only"] == 1 {
+			status.TLSDataPlaneHandoffSessions++
 		}
 	}
 	status.Warnings = transportTLSWarnings(status)
@@ -209,10 +215,11 @@ func transportTLSDoctorStatus(status transportTLSStatus) string {
 }
 
 func transportTLSDoctorDetail(status transportTLSStatus) string {
-	detail := fmt.Sprintf("encryption=%s crypto_key_source=%s crypto_suites=%s tls_identity=%s wire_format=%s endpoints=%d exporter_capable=%d non_exporter=%d required_link_tls_endpoints=%d tls_only_endpoints=%d passive_listeners=%d active_sessions=%d link_tls_sessions=%d required_link_tls_sessions=%d required_link_tls_missing=%d tls_only_sessions=%d tls_only_missing_link_tls=%d tls_exporter_key_sessions=%d link_tls_seen=%d tls_exporter_seen=%d",
+	detail := fmt.Sprintf("encryption=%s crypto_key_source=%s crypto_suites=%s tls_data_plane=%s tls_identity=%s wire_format=%s endpoints=%d exporter_capable=%d non_exporter=%d required_link_tls_endpoints=%d tls_only_endpoints=%d passive_listeners=%d active_sessions=%d link_tls_sessions=%d tls_data_plane_handoff_sessions=%d required_link_tls_sessions=%d required_link_tls_missing=%d tls_only_sessions=%d tls_only_missing_link_tls=%d tls_exporter_key_sessions=%d link_tls_seen=%d tls_exporter_seen=%d",
 		status.Encryption,
 		status.CryptoKeySource,
 		strings.Join(status.CryptoSuites, ","),
+		status.TLSDataPlane,
 		status.TLSIdentityMode,
 		status.WireFormat,
 		status.ConfiguredEndpoints,
@@ -223,6 +230,7 @@ func transportTLSDoctorDetail(status transportTLSStatus) string {
 		status.PassiveListeners,
 		status.ActiveSessions,
 		status.LinkTLSSessions,
+		status.TLSDataPlaneHandoffSessions,
 		status.RequiredLinkTLSSessions,
 		status.RequiredLinkTLSMissing,
 		status.TLSOnlySessions,

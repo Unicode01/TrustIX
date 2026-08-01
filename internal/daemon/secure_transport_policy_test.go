@@ -88,3 +88,15 @@ func TestEffectiveSecureTransportCryptoSuitesUserspaceCryptoKeepsDefault(t *test
 		t.Fatalf("crypto suites = %#v, want %#v", got, want)
 	}
 }
+
+func TestSecureTransportTLSDataPlanePolicy(t *testing.T) {
+	daemon := &Daemon{}
+	daemon.setSecureTransportTLSDataPlane(config.TransportPolicyConfig{})
+	if !daemon.secureTransportTLSHandshakeOnly() {
+		t.Fatal("empty TLS data-plane policy did not enable negotiated handoff")
+	}
+	daemon.setSecureTransportTLSDataPlane(config.TransportPolicyConfig{TLSDataPlane: config.TransportTLSDataPlaneFullTLS})
+	if daemon.secureTransportTLSHandshakeOnly() {
+		t.Fatal("full_tls policy still enabled TLS data-plane handoff")
+	}
+}

@@ -308,15 +308,16 @@ func secureBatchRecordsNegotiated(client hello, server hello) bool {
 }
 
 func secureTLSHandshakeOnlyRequested(options Options) bool {
-	if options.TLSHandshakeOnly != nil {
-		return options.TLSHandshakeOnly()
-	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY"))) {
 	case "1", "true", "yes", "on", "enabled":
 		return true
-	default:
+	case "0", "false", "no", "off", "disabled":
 		return false
 	}
+	if options.TLSHandshakeOnly != nil {
+		return options.TLSHandshakeOnly()
+	}
+	return true
 }
 
 func secureTLSHandshakeOnlyFeature(inner transport.Session, options Options) uint16 {
