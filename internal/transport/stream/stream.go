@@ -21,6 +21,8 @@ const recvArenaBytesPerPacket = 2048
 type Session struct {
 	conn             net.Conn
 	reader           *bufio.Reader
+	kernelQueueDrain bool
+	kernelQueue      atomic.Pointer[streamConnQueue]
 	writeMu          sync.Mutex
 	closeOnce        sync.Once
 	closeErr         error
@@ -33,13 +35,30 @@ type Session struct {
 	bytesReceived    atomic.Uint64
 	packetsSent      atomic.Uint64
 	packetsReceived  atomic.Uint64
+	queueDrainReads  atomic.Uint64
+	queueDrainBytes  atomic.Uint64
 }
 
 func NewSession(conn net.Conn) *Session {
-	return &Session{
-		conn:   conn,
-		reader: bufio.NewReaderSize(conn, readBufferSize),
+	session := &Session{
+		conn:             conn,
+		reader:           bufio.NewReaderSize(conn, readBufferSize),
+		kernelQueueDrain: streamKernelQueueDrainEnabled(),
 	}
+	session.initKernelQueue(conn)
+	return session
+}
+
+func (session *Session) initKernelQueue(conn net.Conn) {
+	session.kernelQueue.Store(nil)
+	if !session.kernelQueueDrain {
+		return
+	}
+	kernelQueue, supported := newStreamConnQueue(conn)
+	if !supported {
+		return
+	}
+	session.kernelQueue.Store(&kernelQueue)
 }
 
 func (session *Session) SendPacket(pkt []byte) error {
@@ -193,6 +212,13 @@ func (session *Session) RecvPacketsWithRelease(max int) ([][]byte, func(), error
 			session.releaseRecvBatch()
 			return nil, nil, err
 		}
+		if !ok && session.kernelQueue.Load() != nil {
+			packet, ok, err = session.tryReadKernelQueuedBorrowedPacket()
+			if err != nil {
+				session.releaseRecvBatch()
+				return nil, nil, err
+			}
+		}
 		if !ok {
 			break
 		}
@@ -306,6 +332,51 @@ func (session *Session) tryReadBufferedBorrowedPacket() ([]byte, bool, error) {
 	return payload, true, nil
 }
 
+func (session *Session) tryReadKernelQueuedBorrowedPacket() ([]byte, bool, error) {
+	kernelQueue := session.kernelQueue.Load()
+	if kernelQueue == nil {
+		return nil, false, nil
+	}
+	queued, supported := kernelQueue.queuedBytes()
+	if !supported || queued <= 0 {
+		return nil, false, nil
+	}
+	buffered := session.reader.Buffered()
+	if buffered+queued < 4 {
+		return nil, false, nil
+	}
+	var header [4]byte
+	readerBytes := min(buffered, len(header))
+	if readerBytes > 0 {
+		peeked, err := session.reader.Peek(readerBytes)
+		if err != nil {
+			return nil, false, err
+		}
+		copy(header[:readerBytes], peeked)
+	}
+	if readerBytes < len(header) {
+		peeked, ok := kernelQueue.peek(header[readerBytes:])
+		if !ok || peeked < len(header)-readerBytes {
+			return nil, false, nil
+		}
+	}
+	size := binary.BigEndian.Uint32(header[:])
+	if size > MaxPacketSize {
+		return nil, false, fmt.Errorf("packet size %d exceeds max %d", size, MaxPacketSize)
+	}
+	needed := 4 + int(size)
+	if buffered+queued < needed || len(session.recvArena)+int(size) > cap(session.recvArena) {
+		return nil, false, nil
+	}
+	payload, err := session.readBorrowedPacket()
+	if err != nil {
+		return nil, false, err
+	}
+	session.queueDrainReads.Add(1)
+	session.queueDrainBytes.Add(uint64(len(payload)))
+	return payload, true, nil
+}
+
 func (session *Session) appendBorrowedPayload(size int) ([]byte, error) {
 	if size < 0 || size > MaxPacketSize {
 		return nil, fmt.Errorf("packet size %d exceeds max %d", size, MaxPacketSize)
@@ -339,6 +410,14 @@ func (session *Session) Stats() transport.TransportStats {
 	}
 	if session.tlsHandshakeOnly.Load() {
 		stats.Extra = map[string]uint64{"tls_handshake_only": 1}
+	}
+	if session.kernelQueue.Load() != nil {
+		if stats.Extra == nil {
+			stats.Extra = make(map[string]uint64)
+		}
+		stats.Extra["stream_kernel_queue_drain"] = 1
+		stats.Extra["stream_kernel_queue_drain_reads"] = session.queueDrainReads.Load()
+		stats.Extra["stream_kernel_queue_drain_bytes"] = session.queueDrainBytes.Load()
 	}
 	return stats
 }
@@ -398,6 +477,7 @@ func (session *Session) DetachTLSDataPlane() error {
 	session.conn = rawConn
 	session.reader.Reset(rawConn)
 	session.tlsHandshakeOnly.Store(true)
+	session.initKernelQueue(rawConn)
 	return nil
 }
 

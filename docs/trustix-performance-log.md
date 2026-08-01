@@ -5290,3 +5290,57 @@ empty pstore, and no kernel panic, Oops, BUG, watchdog, or lockup finding. This
 is engineering-soak evidence; the feature remains opt-in until its security
 semantics have a first-class configuration surface and fresh 3600-second
 production evidence.
+
+### 2026-08-01 Zaozhuang PVE secure TCP kernel-queue drain
+
+The stream receiver previously stopped a receive batch whenever the next
+length-prefixed record was not already complete in the 64 KiB `bufio.Reader`,
+even when the rest of that record was waiting in the Linux TCP receive queue.
+Linux sessions now use `TIOCINQ` plus nonblocking `MSG_PEEK` to prove that a
+complete record is queued and consume it without waiting for new data. There
+is no timer, wire-format change, or speculative blocking read. Unsupported
+connections retain the old path. A `RawConn` is cached once after a direct TCP
+session is created or TLS data-plane handoff exposes the underlying socket;
+the TLS record phase never inspects raw ciphertext as TrustIX framing. Linux
+enables the path by default, with `TRUSTIX_STREAM_KERNEL_QUEUE_DRAIN=0` as the
+explicit failback. Non-Linux builds remain unchanged.
+
+Validation used the same disposable Debian 13 VM200/VM201 pair, isolated
+`vmbr3`, 8 vCPU and 8 GiB per guest. The baseline trustixd SHA256 was
+`a7c6948ffb7a46dd7413a7da49225e151cc53a7c5b4382d2d74871dd14fd0b80`;
+the initial opt-in candidate was
+`48b9fff321c97d0576af1ee4d96e715c2b28524dfa52f959dd5954c2c1772cdd`;
+the final default-on, cached-`RawConn` binary was
+`af1253e36db6723bee27ec240727a1a02a3f0d5ae3cc028ac2637ff29dd2e076`.
+The real Linux loopback suite passed 20 consecutive runs on each VM and proved
+that `SyscallConn` is acquired once per direct session.
+
+Two initial interleaved 45-second samples per side averaged `5.170952 Gbps`
+with the path disabled and `5.280875 Gbps` enabled, a `2.13%` increase. Two
+final 60-second pairs crossed the other way (`5.148251 Gbps` disabled versus
+`5.080853 Gbps` enabled, `-1.31%`), so short-run saturation throughput remains
+inside host/network variance rather than a guaranteed gain. The structural
+result was consistent: receive injection calls fell by roughly 9-17%, packets
+per injection increased, and GSO wires carried more packets.
+
+The final 90-second profile received `5.099215 Gbps` versus `4.974116 Gbps`
+for the baseline. Combined sender and receiver CPU samples fell from `820.36s`
+to `816.48s`; normalized CPU per Gbps fell `2.91%`. Injection calls fell
+`8.84%` and GSO fill increased `3.36%`. The repeated `streamConnRaw` profile
+stack disappeared. The final queue-drain path consumed `8.56s` cumulative on
+the receiver, including `2.27s` in ioctl, while the larger downstream batches
+offset that probe cost.
+
+A final 300-second, 16-stream simultaneous `iperf3 --bidir` soak received
+`2.863179 Gbps` A-to-B and `2.693248 Gbps` B-to-A, `5.556427 Gbps` combined.
+Both nodes exercised the new path (4,915 and 7,964 queue-drain reads), reported
+zero resets and stale sessions, retained their boot IDs, and had empty kernel
+logs. The cross-host runner was also corrected to stop daemons before fetching
+artifacts so CPU profiles are flushed; failure-preserve mode now fetches the
+profiles before retaining remote state.
+
+This is a low-risk userspace CPU/batching optimization, not evidence that the
+remaining ceiling can be removed through parameter tuning. The next material
+userspace I/O experiments are `PACKET_TX_RING` or AF_XDP TX-only; moving packet
+I/O or crypto into a kernel module remains a higher-ceiling, higher-risk tier.
+This engineering soak does not replace the 3600-second production gate.

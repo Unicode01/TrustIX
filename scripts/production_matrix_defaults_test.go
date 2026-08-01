@@ -8076,6 +8076,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"elif dmesg -T >\\\"\\$tmp\\\"",
 		"elif dmesg >\\\"\\$tmp\\\"",
 		"collect_all",
+		"fetch_all",
 		"collect_module_parameters a",
 		"${dir}/module-parameters.txt",
 		"stop_daemon a",
@@ -8380,9 +8381,11 @@ func TestCrossHostSoakRunnerCleanupTrapReturnsCleanly(t *testing.T) {
 	code := fmt.Sprintf(`
 set -Eeuo pipefail
 source %q
-collect_all() { :; }
-stop_daemon() { :; }
-cleanup_node() { :; }
+events=""
+collect_all() { events="${events} collect"; }
+stop_daemon() { events="${events} stop-$1"; }
+fetch_all() { events="${events} fetch"; }
+cleanup_node() { events="${events} cleanup-$1"; }
 workdir=$(mktemp -d)
 pair_lock_dir="$workdir/pair.lock"
 mkdir "$pair_lock_dir"
@@ -8391,6 +8394,20 @@ pair_lock_acquired=1
 keep_local=1
 preserve_on_failure=0
 cleanup_all
+test "$events" = " collect stop-a stop-b fetch cleanup-a cleanup-b"
+test "$pair_lock_acquired" = 0
+test ! -e "$pair_lock_dir"
+
+events=""
+pair_lock_dir="$workdir/preserved-pair.lock"
+mkdir "$pair_lock_dir"
+printf '%%s\n' "$$" >"$pair_lock_dir/owner.pid"
+pair_lock_acquired=1
+preserve_on_failure=1
+cleanup_rc=0
+false || { cleanup_all; cleanup_rc=$?; }
+test "$cleanup_rc" = 1
+test "$events" = " collect stop-a stop-b fetch"
 test "$pair_lock_acquired" = 0
 test ! -e "$pair_lock_dir"
 `, scriptPath)

@@ -2889,6 +2889,9 @@ collect_all() {
   collect_binary_identity b || true
   collect_kernel_logs a || true
   collect_kernel_logs b || true
+}
+
+fetch_all() {
   fetch_from_node a "$remote_a" "$workdir/a"
   fetch_from_node b "$remote_b" "$workdir/b"
 }
@@ -2897,13 +2900,14 @@ cleanup_all() {
   local rc=$?
   set +e
   collect_all
+  stop_daemon a
+  stop_daemon b
+  fetch_all
   if [[ "$rc" != "0" ]] && truthy "$preserve_on_failure"; then
     log "preserving remote state after failure because TRUSTIX_CROSS_HOST_PRESERVE_ON_FAILURE=1"
     release_pair_lock
     return "$rc"
   fi
-  stop_daemon a
-  stop_daemon b
   cleanup_node a
   cleanup_node b
   if [[ "$keep_local" != "1" && -d "$workdir" ]]; then

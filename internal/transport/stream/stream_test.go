@@ -116,6 +116,44 @@ func TestSessionSendBuiltPacketsFramesWithoutIntermediatePacketCopies(t *testing
 	}
 }
 
+func TestStreamKernelQueueDrainUsesPlatformDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_STREAM_KERNEL_QUEUE_DRAIN", "")
+	if got := streamKernelQueueDrainEnabled(); got != streamKernelQueueDrainDefault() {
+		t.Fatalf("kernel queue drain enabled = %v, platform default = %v", got, streamKernelQueueDrainDefault())
+	}
+}
+
+func TestStreamKernelQueueDrainExplicitOverride(t *testing.T) {
+	for _, value := range []string{"1", "true", "YES", "on", "enabled"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("TRUSTIX_STREAM_KERNEL_QUEUE_DRAIN", value)
+			if !streamKernelQueueDrainEnabled() {
+				t.Fatalf("kernel queue drain disabled for %q", value)
+			}
+		})
+	}
+	for _, value := range []string{"0", "false", "NO", "off", "disabled", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("TRUSTIX_STREAM_KERNEL_QUEUE_DRAIN", value)
+			if streamKernelQueueDrainEnabled() {
+				t.Fatalf("kernel queue drain enabled for %q", value)
+			}
+		})
+	}
+}
+
+func TestSessionKernelQueueDrainStaysInactiveForUnsupportedConnection(t *testing.T) {
+	t.Setenv("TRUSTIX_STREAM_KERNEL_QUEUE_DRAIN", "1")
+	local, peer := net.Pipe()
+	t.Cleanup(func() {
+		_ = local.Close()
+		_ = peer.Close()
+	})
+	if session := NewSession(local); session.kernelQueue.Load() != nil {
+		t.Fatal("kernel queue drain active for a connection without syscall.Conn")
+	}
+}
+
 func TestSessionSendBuiltPacketsBuildErrorDoesNotWrite(t *testing.T) {
 	local, peer := net.Pipe()
 	t.Cleanup(func() {
