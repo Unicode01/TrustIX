@@ -99,6 +99,7 @@ type TransportStats struct {
 
 var ErrCryptoOffloadUnavailable = errors.New("transport crypto offload unavailable")
 var ErrTLSExporterUnavailable = errors.New("transport TLS exporter unavailable")
+var ErrTLSDataPlaneHandoffUnavailable = errors.New("transport TLS data-plane handoff unavailable")
 
 const CryptoWireFormatTrustIXSecureDataV1 = "trustix-secure-data-v1"
 
@@ -127,6 +128,14 @@ type TLSState struct {
 type TLSExporterSession interface {
 	ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error)
 	TLSState() TLSState
+}
+
+// TLSDataPlaneHandoffSession exposes a narrowly scoped transition from an
+// authenticated TLS connection to its underlying stream. Callers must finish
+// their own negotiated transition protocol before sending application data.
+type TLSDataPlaneHandoffSession interface {
+	TLSDataPlaneHandoffAvailable() bool
+	DetachTLSDataPlane() error
 }
 
 type Transport interface {

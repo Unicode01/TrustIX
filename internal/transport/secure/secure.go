@@ -62,9 +62,10 @@ const (
 	dataHeaderLen = 24
 	dataFlagBatch = 1 << 0
 
-	helloFeatureBatchRecords uint16 = 1 << 15
-	helloFeatureMask         uint16 = helloFeatureBatchRecords
-	helloSuiteMask           uint16 = ^helloFeatureMask
+	helloFeatureTLSHandshakeOnly uint16 = 1 << 14
+	helloFeatureBatchRecords     uint16 = 1 << 15
+	helloFeatureMask             uint16 = helloFeatureTLSHandshakeOnly | helloFeatureBatchRecords
+	helloSuiteMask               uint16 = ^helloFeatureMask
 
 	secureBatchRecordHeaderLen  = 2
 	secureBatchRecordLengthLen  = 4
@@ -82,6 +83,13 @@ const (
 
 	tlsExporterLabel = "EXPORTER-TrustIX-secure-transport-v1"
 
+	tlsHandoffControlVersion byte = 1
+	tlsHandoffServerReady    byte = 1
+	tlsHandoffClientReady    byte = 2
+	tlsHandoffServerCommit   byte = 3
+	tlsHandoffClientRaw      byte = 4
+	tlsHandoffServerRaw      byte = 5
+
 	defaultReplayWindowSize = 65536
 	minReplayWindowSize     = 64
 	maxReplayWindowSize     = 1 << 20
@@ -97,6 +105,7 @@ var (
 	ErrPeerAuthRequired = errors.New("TrustIX peer authentication is required")
 	ErrSessionReset     = errors.New("TrustIX secure transport session reset")
 	ErrSessionResetSent = errors.New("TrustIX secure transport session reset sent")
+	ErrTLSHandoff       = errors.New("TrustIX TLS data-plane handoff failed")
 )
 
 type cryptoSuite struct {
@@ -240,7 +249,11 @@ func suiteMaskBit(id byte) uint16 {
 	if id == 0 || id > 16 {
 		return 0
 	}
-	return 1 << (id - 1)
+	bit := uint16(1) << (id - 1)
+	if bit&helloSuiteMask == 0 {
+		return 0
+	}
+	return bit
 }
 
 func negotiateSuite(clientMask uint16, serverMask uint16) (cryptoSuite, error) {
@@ -294,15 +307,51 @@ func secureBatchRecordsNegotiated(client hello, server hello) bool {
 	return client.suiteMask&server.suiteMask&helloFeatureBatchRecords != 0
 }
 
+func secureTLSHandshakeOnlyRequested(options Options) bool {
+	if options.TLSHandshakeOnly != nil {
+		return options.TLSHandshakeOnly()
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY"))) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func secureTLSHandshakeOnlyFeature(inner transport.Session, options Options) uint16 {
+	if inner == nil || !secureTLSHandshakeOnlyRequested(options) || !requestedEncryptionPolicy(options).FullyEncrypted() {
+		return 0
+	}
+	handoff, ok := inner.(transport.TLSDataPlaneHandoffSession)
+	if !ok || !handoff.TLSDataPlaneHandoffAvailable() {
+		return 0
+	}
+	exporter, ok := inner.(transport.TLSExporterSession)
+	if !ok || !exporter.TLSState().Enabled {
+		return 0
+	}
+	return helloFeatureTLSHandshakeOnly
+}
+
+func secureTLSHandshakeOnlyNegotiated(client hello, server hello) bool {
+	return client.suiteMask&server.suiteMask&helloFeatureTLSHandshakeOnly != 0
+}
+
+func secureHelloFeatures(inner transport.Session, options Options) uint16 {
+	return secureBatchRecordFeature(inner, options) | secureTLSHandshakeOnlyFeature(inner, options)
+}
+
 type Options struct {
-	Epoch           uint64
-	RequirePeerAuth bool
-	KeySource       func() string
-	Encryption      func() string
-	CryptoSuites    func() []string
-	BatchRecords    func() bool
-	ClientAuthTLS   func(peer transport.Peer) (*tls.Config, error)
-	ServerAuthTLS   func() (*tls.Config, error)
+	Epoch            uint64
+	RequirePeerAuth  bool
+	KeySource        func() string
+	Encryption       func() string
+	CryptoSuites     func() []string
+	BatchRecords     func() bool
+	TLSHandshakeOnly func() bool
+	ClientAuthTLS    func(peer transport.Peer) (*tls.Config, error)
+	ServerAuthTLS    func() (*tls.Config, error)
 }
 
 type EncryptionPolicy struct {
@@ -564,6 +613,7 @@ type Session struct {
 	recvPendingIndex int
 	replay           replayWindow
 	batchRecords     bool
+	tlsHandshakeOnly bool
 	batchRecordsOut  atomic.Uint64
 	batchPacketsOut  atomic.Uint64
 	batchRecordsIn   atomic.Uint64
@@ -577,7 +627,7 @@ type Session struct {
 }
 
 func Client(inner transport.Session, tlsConf *tls.Config, options Options) (*Session, error) {
-	state, clientHello, err := newHandshakeState(helloTypeClient, tlsConf, options, secureBatchRecordFeature(inner, options))
+	state, clientHello, err := newHandshakeState(helloTypeClient, tlsConf, options, secureHelloFeatures(inner, options))
 	if err != nil {
 		return nil, err
 	}
@@ -609,7 +659,16 @@ func Client(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	if err != nil {
 		return nil, err
 	}
-	return newSession(inner, clientRole, state.privateKey, serverHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), encodedHello, rawServerHello)
+	session, err := newSession(inner, clientRole, state.privateKey, serverHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), encodedHello, rawServerHello)
+	if err != nil {
+		return nil, err
+	}
+	if secureTLSHandshakeOnlyNegotiated(clientHello, serverHello) {
+		if err := session.completeTLSDataPlaneHandoff(); err != nil {
+			return nil, err
+		}
+	}
+	return session, nil
 }
 
 func recvServerHello(inner transport.Session) ([]byte, error) {
@@ -662,7 +721,7 @@ func Server(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	if err != nil {
 		return nil, err
 	}
-	state, serverHello, err := newHandshakeState(helloTypeServer, tlsConf, options, secureBatchRecordFeature(inner, options))
+	state, serverHello, err := newHandshakeState(helloTypeServer, tlsConf, options, secureHelloFeatures(inner, options))
 	if err != nil {
 		return nil, err
 	}
@@ -681,7 +740,144 @@ func Server(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	if err := inner.SendPacket(encodedHello); err != nil {
 		return nil, fmt.Errorf("send TrustIX server hello: %w", err)
 	}
-	return newSession(inner, serverRole, state.privateKey, clientHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), rawClientHello, encodedHello)
+	session, err := newSession(inner, serverRole, state.privateKey, clientHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), rawClientHello, encodedHello)
+	if err != nil {
+		return nil, err
+	}
+	if secureTLSHandshakeOnlyNegotiated(clientHello, serverHello) {
+		if err := session.completeTLSDataPlaneHandoff(); err != nil {
+			return nil, err
+		}
+	}
+	return session, nil
+}
+
+func (session *Session) completeTLSDataPlaneHandoff() error {
+	handoff, ok := session.inner.(transport.TLSDataPlaneHandoffSession)
+	if !ok || !handoff.TLSDataPlaneHandoffAvailable() {
+		return fmt.Errorf("%w: %w", ErrTLSHandoff, transport.ErrTLSDataPlaneHandoffUnavailable)
+	}
+
+	var err error
+	switch session.role {
+	case clientRole:
+		err = session.completeClientTLSDataPlaneHandoff(handoff)
+	case serverRole:
+		err = session.completeServerTLSDataPlaneHandoff(handoff)
+	default:
+		err = fmt.Errorf("unknown secure session role %d", session.role)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrTLSHandoff, err)
+	}
+	session.tlsHandshakeOnly = true
+	session.resetTLSHandoffAccounting()
+	return nil
+}
+
+func (session *Session) completeClientTLSDataPlaneHandoff(handoff transport.TLSDataPlaneHandoffSession) error {
+	if err := session.recvTLSHandoffControl(tlsHandoffServerReady); err != nil {
+		return fmt.Errorf("receive server ready: %w", err)
+	}
+	if err := session.sendTLSHandoffControl(tlsHandoffClientReady); err != nil {
+		return fmt.Errorf("send client ready: %w", err)
+	}
+	if err := session.recvTLSHandoffControl(tlsHandoffServerCommit); err != nil {
+		return fmt.Errorf("receive server commit: %w", err)
+	}
+	if err := handoff.DetachTLSDataPlane(); err != nil {
+		return fmt.Errorf("detach client TLS data plane: %w", err)
+	}
+	if err := session.SendPacket(session.tlsHandoffControl(tlsHandoffClientRaw)); err != nil {
+		return fmt.Errorf("send encrypted client confirmation: %w", err)
+	}
+	if err := session.recvEncryptedTLSHandoffControl(tlsHandoffServerRaw); err != nil {
+		return fmt.Errorf("receive encrypted server confirmation: %w", err)
+	}
+	return nil
+}
+
+func (session *Session) completeServerTLSDataPlaneHandoff(handoff transport.TLSDataPlaneHandoffSession) error {
+	if err := session.sendTLSHandoffControl(tlsHandoffServerReady); err != nil {
+		return fmt.Errorf("send server ready: %w", err)
+	}
+	if err := session.recvTLSHandoffControl(tlsHandoffClientReady); err != nil {
+		return fmt.Errorf("receive client ready: %w", err)
+	}
+	if err := session.sendTLSHandoffControl(tlsHandoffServerCommit); err != nil {
+		return fmt.Errorf("send server commit: %w", err)
+	}
+	if err := handoff.DetachTLSDataPlane(); err != nil {
+		return fmt.Errorf("detach server TLS data plane: %w", err)
+	}
+	if err := session.recvEncryptedTLSHandoffControl(tlsHandoffClientRaw); err != nil {
+		return fmt.Errorf("receive encrypted client confirmation: %w", err)
+	}
+	if err := session.SendPacket(session.tlsHandoffControl(tlsHandoffServerRaw)); err != nil {
+		return fmt.Errorf("send encrypted server confirmation: %w", err)
+	}
+	return nil
+}
+
+func (session *Session) sendTLSHandoffControl(stage byte) error {
+	if err := session.inner.SendPacket(session.tlsHandoffControl(stage)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (session *Session) recvTLSHandoffControl(stage byte) error {
+	want := session.tlsHandoffControl(stage)
+	for {
+		packet, err := session.inner.RecvPacket()
+		if err != nil {
+			return err
+		}
+		handled, err := session.handleDuplicateHandshake(packet)
+		if err != nil {
+			return err
+		}
+		if handled {
+			continue
+		}
+		if !bytes.Equal(packet, want) {
+			return fmt.Errorf("%w: unexpected TLS handoff control stage %d", ErrInvalidHandshake, stage)
+		}
+		return nil
+	}
+}
+
+func (session *Session) recvEncryptedTLSHandoffControl(stage byte) error {
+	packet, err := session.RecvPacket()
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(packet, session.tlsHandoffControl(stage)) {
+		return fmt.Errorf("%w: unexpected encrypted TLS handoff control stage %d", ErrInvalidHandshake, stage)
+	}
+	return nil
+}
+
+func (session *Session) tlsHandoffControl(stage byte) []byte {
+	transcript := make([]byte, 0, 64+len(session.clientHelloRaw)+len(session.serverHelloRaw))
+	transcript = append(transcript, "TrustIX TLS data-plane handoff v1\x00"...)
+	transcript = append(transcript, stage)
+	transcript = binary.BigEndian.AppendUint32(transcript, uint32(len(session.clientHelloRaw)))
+	transcript = append(transcript, session.clientHelloRaw...)
+	transcript = binary.BigEndian.AppendUint32(transcript, uint32(len(session.serverHelloRaw)))
+	transcript = append(transcript, session.serverHelloRaw...)
+	digest := sha256.Sum256(transcript)
+	control := make([]byte, 0, 6+len(digest))
+	control = append(control, 'T', 'I', 'X', 'T', tlsHandoffControlVersion, stage)
+	control = append(control, digest[:]...)
+	return control
+}
+
+func (session *Session) resetTLSHandoffAccounting() {
+	session.bytesSent.Store(0)
+	session.bytesRecv.Store(0)
+	session.packetsOut.Store(0)
+	session.packetsIn.Store(0)
 }
 
 func (session *Session) SendPacket(pkt []byte) error {
@@ -1518,6 +1714,12 @@ func (session *Session) SetPeerEndpoint(peer core.IXID, endpoint core.EndpointID
 
 func (session *Session) Stats() transport.TransportStats {
 	stats := session.inner.Stats()
+	if session.tlsHandshakeOnly {
+		if stats.Extra == nil {
+			stats.Extra = make(map[string]uint64)
+		}
+		stats.Extra["tls_handshake_only"] = 1
+	}
 	if session.batchRecords {
 		if stats.Extra == nil {
 			stats.Extra = make(map[string]uint64)

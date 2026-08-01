@@ -1,7 +1,9 @@
 package stream
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -9,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"trustix.local/trustix/internal/transport"
 )
 
 type countingCloseConn struct {
@@ -137,5 +141,41 @@ func TestSessionSendBuiltPacketsBuildErrorDoesNotWrite(t *testing.T) {
 	stats := session.Stats()
 	if stats.PacketsSent != 0 || stats.BytesSent != 0 {
 		t.Fatalf("failed built packet stats = packets:%d bytes:%d", stats.PacketsSent, stats.BytesSent)
+	}
+}
+
+func TestSessionTLSDataPlaneHandoffRejectsBufferedReader(t *testing.T) {
+	local, peer := net.Pipe()
+	t.Cleanup(func() {
+		_ = local.Close()
+		_ = peer.Close()
+	})
+	session := NewSession(tls.Client(local, &tls.Config{InsecureSkipVerify: true}))
+	session.reader = bufio.NewReader(bytes.NewReader([]byte("buffered")))
+	if _, err := session.reader.Peek(1); err != nil {
+		t.Fatalf("prime buffered reader: %v", err)
+	}
+
+	err := session.DetachTLSDataPlane()
+	if !errors.Is(err, transport.ErrTLSDataPlaneHandoffUnavailable) {
+		t.Fatalf("detach with buffered reader error = %v, want ErrTLSDataPlaneHandoffUnavailable", err)
+	}
+	if !session.TLSDataPlaneHandoffAvailable() {
+		t.Fatal("failed TLS handoff changed session availability")
+	}
+}
+
+func TestSessionTLSDataPlaneHandoffRejectsNonTLSConnection(t *testing.T) {
+	local, peer := net.Pipe()
+	t.Cleanup(func() {
+		_ = local.Close()
+		_ = peer.Close()
+	})
+	session := NewSession(local)
+	if session.TLSDataPlaneHandoffAvailable() {
+		t.Fatal("plain stream reports TLS handoff available")
+	}
+	if err := session.DetachTLSDataPlane(); !errors.Is(err, transport.ErrTLSDataPlaneHandoffUnavailable) {
+		t.Fatalf("plain stream TLS handoff error = %v, want ErrTLSDataPlaneHandoffUnavailable", err)
 	}
 }

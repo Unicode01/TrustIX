@@ -262,6 +262,111 @@ func TestSecureBatchRecordsRequestedDefaultsEnabledWithExplicitFailback(t *testi
 	}
 }
 
+func TestSecureTLSHandshakeOnlyRequestedDefaultsDisabledWithExplicitOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY", "")
+	if secureTLSHandshakeOnlyRequested(Options{}) {
+		t.Fatal("TLS handshake-only mode is enabled by default")
+	}
+
+	for _, value := range []string{"1", "true", "yes", "on", "enabled"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY", value)
+			if !secureTLSHandshakeOnlyRequested(Options{}) {
+				t.Fatalf("TLS handshake-only mode disabled for opt-in value %q", value)
+			}
+		})
+	}
+
+	t.Setenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY", "0")
+	if !secureTLSHandshakeOnlyRequested(Options{TLSHandshakeOnly: func() bool { return true }}) {
+		t.Fatal("explicit TLS handshake-only option did not override the environment")
+	}
+	t.Setenv("TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY", "1")
+	if secureTLSHandshakeOnlyRequested(Options{TLSHandshakeOnly: func() bool { return false }}) {
+		t.Fatal("explicit TLS handshake-only failback did not override the environment")
+	}
+}
+
+func TestSecureTLSHandshakeOnlyFeatureRequiresFullyEncryptedDetachableTLS(t *testing.T) {
+	base, _ := newMemorySessionPair()
+	eligible := &handoffMemorySession{memorySession: base}
+	enabled := func() bool { return true }
+
+	if got := secureTLSHandshakeOnlyFeature(eligible, Options{TLSHandshakeOnly: enabled}); got != helloFeatureTLSHandshakeOnly {
+		t.Fatalf("eligible TLS handshake-only feature = 0x%04x, want 0x%04x", got, helloFeatureTLSHandshakeOnly)
+	}
+	for _, mode := range []string{EncryptionPlaintext, EncryptionSendEncrypted, EncryptionReceiveEncrypted} {
+		t.Run(mode, func(t *testing.T) {
+			got := secureTLSHandshakeOnlyFeature(eligible, Options{
+				TLSHandshakeOnly: enabled,
+				Encryption:       func() string { return mode },
+			})
+			if got != 0 {
+				t.Fatalf("TLS handshake-only feature for %q = 0x%04x, want 0", mode, got)
+			}
+		})
+	}
+	if got := secureTLSHandshakeOnlyFeature(base, Options{TLSHandshakeOnly: enabled}); got != 0 {
+		t.Fatalf("non-detachable session feature = 0x%04x, want 0", got)
+	}
+}
+
+func TestTLSHandoffControlRejectsMalformedPacket(t *testing.T) {
+	inner, _ := newMemorySessionPair()
+	inner.inject([]byte("not-a-valid-handoff-control"))
+	session := &Session{
+		inner:          inner,
+		role:           clientRole,
+		clientHelloRaw: []byte("client-hello"),
+		serverHelloRaw: []byte("server-hello"),
+	}
+	if err := session.recvTLSHandoffControl(tlsHandoffServerReady); !errors.Is(err, ErrInvalidHandshake) {
+		t.Fatalf("malformed TLS handoff control error = %v, want ErrInvalidHandshake", err)
+	}
+}
+
+func TestTLSHandshakeOnlyHandoffDrainsRetransmittedClientHello(t *testing.T) {
+	clientBase, serverBase := newMemorySessionPair()
+	clientInner := &handoffMemorySession{memorySession: clientBase}
+	serverInner := &delayedHandoffMemorySession{
+		handoffMemorySession: &handoffMemorySession{memorySession: serverBase},
+		delay:                450 * time.Millisecond,
+	}
+	options := Options{TLSHandshakeOnly: func() bool { return true }}
+	serverReady := make(chan *Session, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		session, err := Server(serverInner, nil, options)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverReady <- session
+	}()
+
+	client, err := Client(clientInner, nil, options)
+	if err != nil {
+		t.Fatalf("client TLS handoff with retransmissions: %v", err)
+	}
+	server := waitServer(t, serverReady, serverErr)
+	if !clientInner.detached.Load() || !serverInner.detached.Load() {
+		t.Fatal("TLS handoff did not detach both retransmission-test sessions")
+	}
+	if sent := clientBase.sentPackets(); len(sent) < 5 {
+		t.Fatalf("client sent %d packets, want handshake retransmissions plus handoff controls", len(sent))
+	}
+	if err := client.SendPacket([]byte("after-retransmissions")); err != nil {
+		t.Fatalf("send after retransmitted handshake handoff: %v", err)
+	}
+	got, err := server.RecvPacket()
+	if err != nil {
+		t.Fatalf("receive after retransmitted handshake handoff: %v", err)
+	}
+	if string(got) != "after-retransmissions" {
+		t.Fatalf("payload after retransmitted handshake handoff = %q", got)
+	}
+}
+
 func TestSessionSecureBatchRecordFallsBackWithoutPeerCapability(t *testing.T) {
 	client, server, clientInner, _ := handshakeBuildingPair(t, true, false)
 	if client.batchRecords || server.batchRecords {
@@ -1628,6 +1733,97 @@ func TestTransportWrapperTCPUsesTLSExporterKeySource(t *testing.T) {
 	}
 }
 
+func TestTransportWrapperTCPTLSHandshakeOnlyRoundTrip(t *testing.T) {
+	clientTLS, serverTLS := testTLSConfigs(t)
+	clientTLS.ClientSessionCache = tls.NewLRUClientSessionCache(1)
+	options := Options{
+		KeySource: func() string {
+			return KeySourceTLSExporter
+		},
+		TLSHandshakeOnly: func() bool {
+			return true
+		},
+	}
+	tr := New(tcptransport.New(), options)
+	clientSession, serverSession := openTransportPairWithTLS(t, tr, tr, transport.ProtocolTCP, freeTCPAddr(t), clientTLS, serverTLS)
+	client := clientSession.(*Session)
+	server := serverSession.(*Session)
+
+	for name, session := range map[string]*Session{"client": client, "server": server} {
+		stats := session.Stats()
+		if stats.Extra["tls_handshake_only"] != 1 {
+			t.Fatalf("%s TLS handshake-only stats = %#v", name, stats.Extra)
+		}
+		if !stats.LinkTLS || stats.TLSVersion != "TLS 1.3" || stats.TLSCipherSuite == "" {
+			t.Fatalf("%s cached TLS state = enabled:%t version:%q suite:%q", name, stats.LinkTLS, stats.TLSVersion, stats.TLSCipherSuite)
+		}
+		if stats.PacketsSent != 0 || stats.PacketsReceived != 0 || stats.BytesSent != 0 || stats.BytesReceived != 0 {
+			t.Fatalf("%s handoff leaked into application stats: %+v", name, stats)
+		}
+	}
+
+	clientExporter := client.inner.(transport.TLSExporterSession)
+	serverExporter := server.inner.(transport.TLSExporterSession)
+	clientMaterial, err := clientExporter.ExportKeyingMaterial("EXPORTER-TrustIX-test-after-handoff", []byte("context"), 48)
+	if err != nil {
+		t.Fatalf("client exporter after TLS handoff: %v", err)
+	}
+	serverMaterial, err := serverExporter.ExportKeyingMaterial("EXPORTER-TrustIX-test-after-handoff", []byte("context"), 48)
+	if err != nil {
+		t.Fatalf("server exporter after TLS handoff: %v", err)
+	}
+	if !bytes.Equal(clientMaterial, serverMaterial) {
+		t.Fatal("TLS exporter material differs after handoff")
+	}
+
+	packets := [][]byte{[]byte("batch-one"), []byte("batch-two"), []byte("batch-three")}
+	if err := client.SendPackets(packets); err != nil {
+		t.Fatalf("send batch after TLS handoff: %v", err)
+	}
+	got, err := server.RecvPackets(64)
+	if err != nil {
+		t.Fatalf("receive batch after TLS handoff: %v", err)
+	}
+	assertPacketBatchEqual(t, got, packets)
+	if err := server.SendPacket([]byte("server-reply")); err != nil {
+		t.Fatalf("send reply after TLS handoff: %v", err)
+	}
+	reply, err := client.RecvPacket()
+	if err != nil {
+		t.Fatalf("receive reply after TLS handoff: %v", err)
+	}
+	if string(reply) != "server-reply" {
+		t.Fatalf("reply after TLS handoff = %q", reply)
+	}
+	if client.Stats().Extra["secure_batch_records_negotiated"] != 1 || server.Stats().Extra["secure_batch_records_negotiated"] != 1 {
+		t.Fatal("secure batch records were not preserved after TLS handoff")
+	}
+}
+
+func TestTransportWrapperTCPTLSHandshakeOnlyFallsBackWhenPeerDisabled(t *testing.T) {
+	clientTLS, serverTLS := testTLSConfigs(t)
+	enabled := New(tcptransport.New(), Options{TLSHandshakeOnly: func() bool { return true }})
+	disabled := New(tcptransport.New(), Options{TLSHandshakeOnly: func() bool { return false }})
+	client, server := openTransportPairWithTLS(t, disabled, enabled, transport.ProtocolTCP, freeTCPAddr(t), clientTLS, serverTLS)
+
+	if client.Stats().Extra["tls_handshake_only"] != 0 || server.Stats().Extra["tls_handshake_only"] != 0 {
+		t.Fatalf("one-sided TLS handshake-only negotiation unexpectedly succeeded: client=%#v server=%#v", client.Stats().Extra, server.Stats().Extra)
+	}
+	if !client.Stats().LinkTLS || !server.Stats().LinkTLS {
+		t.Fatal("fallback did not retain the TLS data plane")
+	}
+	if err := client.SendPacket([]byte("fallback")); err != nil {
+		t.Fatalf("send over full TLS fallback: %v", err)
+	}
+	got, err := server.RecvPacket()
+	if err != nil {
+		t.Fatalf("receive over full TLS fallback: %v", err)
+	}
+	if string(got) != "fallback" {
+		t.Fatalf("full TLS fallback payload = %q", got)
+	}
+}
+
 func TestTransportWrapperTCPUsesSeparateTransportTLSCertificateAndIXAuth(t *testing.T) {
 	clientIXTLS, serverIXTLS := testTLSConfigs(t)
 	linkClientTLS, linkServerTLS := testLinkTLSConfigs(t, "127.0.0.1")
@@ -1949,52 +2145,7 @@ func exerciseTransportWrapper(t *testing.T, tr transport.Transport, protocol tra
 
 func exerciseTransportWrapperWithTLS(t *testing.T, tr transport.Transport, protocol transport.Protocol, addr string, clientTLS *tls.Config, serverTLS *tls.Config) (transport.TransportStats, transport.TransportStats) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	listener, err := tr.Listen(ctx, transport.Endpoint{
-		Name:      core.EndpointID("server"),
-		Transport: protocol,
-		Listen:    addr,
-		Enabled:   true,
-	}, serverTLS)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer listener.Close()
-
-	accepted := make(chan transport.Session, 1)
-	acceptErr := make(chan error, 1)
-	go func() {
-		session, err := listener.Accept(ctx)
-		if err != nil {
-			acceptErr <- err
-			return
-		}
-		accepted <- session
-	}()
-
-	client, err := tr.Dial(ctx, transport.Peer{
-		ID:       core.IXID("ix-b"),
-		DomainID: core.DomainID("lab.local"),
-		Endpoints: []transport.Endpoint{
-			{Name: core.EndpointID("server"), Transport: protocol, Address: addr},
-		},
-	}, clientTLS)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer client.Close()
-
-	var server transport.Session
-	select {
-	case err := <-acceptErr:
-		t.Fatalf("accept: %v", err)
-	case server = <-accepted:
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
-	defer server.Close()
+	client, server := openTransportPairWithTLS(t, tr, tr, protocol, addr, clientTLS, serverTLS)
 
 	if err := client.SendPacket([]byte("hello")); err != nil {
 		t.Fatalf("send hello: %v", err)
@@ -2010,6 +2161,69 @@ func exerciseTransportWrapperWithTLS(t *testing.T, tr transport.Transport, proto
 		t.Fatal("wrapped transport stats did not report encrypted sessions")
 	}
 	return client.Stats(), server.Stats()
+}
+
+func openTransportPairWithTLS(t *testing.T, clientTransport transport.Transport, serverTransport transport.Transport, protocol transport.Protocol, addr string, clientTLS *tls.Config, serverTLS *tls.Config) (transport.Session, transport.Session) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+
+	listener, err := serverTransport.Listen(ctx, transport.Endpoint{
+		Name:      core.EndpointID("server"),
+		Transport: protocol,
+		Listen:    addr,
+		Enabled:   true,
+	}, serverTLS)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("close test listener: %v", err)
+		}
+	})
+
+	accepted := make(chan transport.Session, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		session, err := listener.Accept(ctx)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- session
+	}()
+
+	client, err := clientTransport.Dial(ctx, transport.Peer{
+		ID:       core.IXID("ix-b"),
+		DomainID: core.DomainID("lab.local"),
+		Endpoints: []transport.Endpoint{
+			{Name: core.EndpointID("server"), Transport: protocol, Address: addr},
+		},
+	}, clientTLS)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("close test client: %v", err)
+		}
+	})
+
+	var server transport.Session
+	select {
+	case err := <-acceptErr:
+		t.Fatalf("accept: %v", err)
+	case server = <-accepted:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	t.Cleanup(func() {
+		if err := server.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("close test server: %v", err)
+		}
+	})
+	return client, server
 }
 
 func testTLSConfigs(t *testing.T) (*tls.Config, *tls.Config) {
@@ -2210,6 +2424,43 @@ type memorySession struct {
 	sent         [][]byte
 	borrowedRecv bool
 	releases     int
+}
+
+type handoffMemorySession struct {
+	*memorySession
+	detached atomic.Bool
+}
+
+type delayedHandoffMemorySession struct {
+	*handoffMemorySession
+	delay time.Duration
+	once  sync.Once
+}
+
+func (session *delayedHandoffMemorySession) SendPacket(packet []byte) error {
+	session.once.Do(func() {
+		time.Sleep(session.delay)
+	})
+	return session.handoffMemorySession.SendPacket(packet)
+}
+
+func (session *handoffMemorySession) TLSDataPlaneHandoffAvailable() bool {
+	return !session.detached.Load()
+}
+
+func (session *handoffMemorySession) DetachTLSDataPlane() error {
+	if !session.detached.CompareAndSwap(false, true) {
+		return transport.ErrTLSDataPlaneHandoffUnavailable
+	}
+	return nil
+}
+
+func (session *handoffMemorySession) ExportKeyingMaterial(_ string, _ []byte, length int) ([]byte, error) {
+	return make([]byte, length), nil
+}
+
+func (session *handoffMemorySession) TLSState() transport.TLSState {
+	return transport.TLSState{Enabled: true, Version: "TLS 1.3", CipherSuite: "TLS_AES_128_GCM_SHA256"}
 }
 
 type buildingMemorySession struct {

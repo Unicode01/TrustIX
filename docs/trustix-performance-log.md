@@ -5242,3 +5242,51 @@ The strict runner returned `pass`, both guest boot IDs were stable, pstore was
 empty, and kernel logs contained no panic, Oops, BUG, watchdog, or lockup
 finding. This is optimization and engineering-soak evidence, not a replacement
 for the repository's 3600-second production gate.
+
+### 2026-08-01 Zaozhuang PVE secure TCP TLS data-plane handoff
+
+The secure TCP profile after negotiated batch records still paid for both the
+TrustIX AEAD and the outer TLS record AEAD. An opt-in negotiated capability now
+uses TLS for the authenticated handshake and exporter, completes a three-stage
+TLS barrier, detaches the underlying TCP stream, and confirms the transition in
+both directions with TrustIX AEAD records. Application data remains encrypted
+and replay protected by TrustIX. The capability is offered only for fully
+encrypted, directly detachable TLS streams and requires both peers; old peers,
+one-sided enablement, plaintext or directional encryption, and wrapped stream
+transports retain the full TLS data plane. The switch is
+`TRUSTIX_SECURE_TLS_HANDSHAKE_ONLY=1`; it remains default-off and `0` is the
+explicit failback. Negotiated sessions report `extra.tls_handshake_only=1`.
+
+The test used Debian 13 VMs 200 and 201 with 8 vCPUs and 8 GiB each on isolated
+`vmbr3`. Raw 16-stream TCP received `21.306519 Gbps`, leaving ample underlay
+headroom. The candidate binary SHA256 was
+`a74251c4c05e36f46b853a2fdff8a52009992329bd143073ac461f9638a723c8`.
+Mixed-version 30-second runs exercised both roles. New-A/old-B received
+`4.464647 Gbps`; old-A/new-B received `4.302203 Gbps`. Both passed and omitted
+the handoff metric, proving full-TLS fallback.
+
+Three interleaved 45-second pairs used the same candidate binary and changed
+only the handoff switch:
+
+| Secure TCP mode | Received samples | Mean | Mean retransmits |
+| --- | --- | ---: | ---: |
+| Full TLS data plane | 4.464494, 4.457089, 4.303566 Gbps | 4.408383 Gbps | 35,024 |
+| TLS handshake, TrustIX data plane | 5.025018, 5.039311, 4.992450 Gbps | 5.018926 Gbps | 31,505 |
+
+The handoff improved mean throughput by `13.85%`; paired gains were `12.56%`,
+`13.06%`, and `16.01%`. A 90-second CPU profile received `5.071098 Gbps`.
+Sender CPU was led by syscall (`41.13%` flat), TrustIX AES-GCM encryption
+(`15.41%`), and memmove (`11.11%`). Receiver CPU was syscall (`51.56%`),
+TrustIX AES-GCM decryption (`20.70%`), and memmove (`4.39%`). The outer TLS
+AES-GCM cost was absent, so the next material ceiling is userspace packet I/O,
+not another TLS or batch-size tune.
+
+A final 300-second, 16-stream concurrent bidirectional soak received
+`2.708321 Gbps` A-to-B and `2.775776 Gbps` B-to-A, `5.484097 Gbps` combined.
+The strict verifier passed with 300 intervals per direction, all 32 sessions on
+each node reporting the negotiated handoff and secure batch records, zero
+send/receive/inject/dial/heartbeat/reset/stale-session errors, stable boot IDs,
+empty pstore, and no kernel panic, Oops, BUG, watchdog, or lockup finding. This
+is engineering-soak evidence; the feature remains opt-in until its security
+semantics have a first-class configuration surface and fresh 3600-second
+production evidence.

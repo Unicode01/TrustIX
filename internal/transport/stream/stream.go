@@ -19,18 +19,20 @@ const readBufferSize = 64 * 1024
 const recvArenaBytesPerPacket = 2048
 
 type Session struct {
-	conn            net.Conn
-	reader          *bufio.Reader
-	writeMu         sync.Mutex
-	closeOnce       sync.Once
-	closeErr        error
-	sendBatchArena  []byte
-	recvBatch       [][]byte
-	recvArena       []byte
-	bytesSent       atomic.Uint64
-	bytesReceived   atomic.Uint64
-	packetsSent     atomic.Uint64
-	packetsReceived atomic.Uint64
+	conn             net.Conn
+	reader           *bufio.Reader
+	writeMu          sync.Mutex
+	closeOnce        sync.Once
+	closeErr         error
+	detachedTLSState atomic.Pointer[tls.ConnectionState]
+	tlsHandshakeOnly atomic.Bool
+	sendBatchArena   []byte
+	recvBatch        [][]byte
+	recvArena        []byte
+	bytesSent        atomic.Uint64
+	bytesReceived    atomic.Uint64
+	packetsSent      atomic.Uint64
+	packetsReceived  atomic.Uint64
 }
 
 func NewSession(conn net.Conn) *Session {
@@ -325,7 +327,7 @@ func (session *Session) Close() error {
 
 func (session *Session) Stats() transport.TransportStats {
 	tlsState := session.TLSState()
-	return transport.TransportStats{
+	stats := transport.TransportStats{
 		BytesSent:       session.bytesSent.Load(),
 		BytesReceived:   session.bytesReceived.Load(),
 		PacketsSent:     session.packetsSent.Load(),
@@ -335,10 +337,14 @@ func (session *Session) Stats() transport.TransportStats {
 		TLSCipherSuite:  tlsState.CipherSuite,
 		NativeBatching:  true,
 	}
+	if session.tlsHandshakeOnly.Load() {
+		stats.Extra = map[string]uint64{"tls_handshake_only": 1}
+	}
+	return stats
 }
 
 func (session *Session) ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error) {
-	state, ok := tlsConnectionState(session.conn)
+	state, ok := session.currentTLSConnectionState()
 	if !ok {
 		return nil, transport.ErrTLSExporterUnavailable
 	}
@@ -346,7 +352,7 @@ func (session *Session) ExportKeyingMaterial(label string, context []byte, lengt
 }
 
 func (session *Session) TLSState() transport.TLSState {
-	state, ok := tlsConnectionState(session.conn)
+	state, ok := session.currentTLSConnectionState()
 	if !ok || state.Version == 0 {
 		return transport.TLSState{}
 	}
@@ -355,6 +361,51 @@ func (session *Session) TLSState() transport.TLSState {
 		Version:     tls.VersionName(state.Version),
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
 	}
+}
+
+func (session *Session) TLSDataPlaneHandoffAvailable() bool {
+	if session == nil || session.tlsHandshakeOnly.Load() {
+		return false
+	}
+	_, ok := session.conn.(*tls.Conn)
+	return ok
+}
+
+func (session *Session) DetachTLSDataPlane() error {
+	if session == nil {
+		return transport.ErrTLSDataPlaneHandoffUnavailable
+	}
+	session.writeMu.Lock()
+	defer session.writeMu.Unlock()
+
+	tlsConn, ok := session.conn.(*tls.Conn)
+	if !ok || session.tlsHandshakeOnly.Load() {
+		return transport.ErrTLSDataPlaneHandoffUnavailable
+	}
+	if buffered := session.reader.Buffered(); buffered != 0 {
+		return fmt.Errorf("%w: stream reader has %d buffered bytes", transport.ErrTLSDataPlaneHandoffUnavailable, buffered)
+	}
+	state := tlsConn.ConnectionState()
+	if !state.HandshakeComplete || state.Version == 0 {
+		return fmt.Errorf("%w: TLS handshake is incomplete", transport.ErrTLSDataPlaneHandoffUnavailable)
+	}
+	rawConn := tlsConn.NetConn()
+	if rawConn == nil {
+		return fmt.Errorf("%w: TLS connection has no underlying stream", transport.ErrTLSDataPlaneHandoffUnavailable)
+	}
+
+	session.detachedTLSState.Store(&state)
+	session.conn = rawConn
+	session.reader.Reset(rawConn)
+	session.tlsHandshakeOnly.Store(true)
+	return nil
+}
+
+func (session *Session) currentTLSConnectionState() (*tls.ConnectionState, bool) {
+	if state := session.detachedTLSState.Load(); state != nil {
+		return state, true
+	}
+	return tlsConnectionState(session.conn)
 }
 
 type connectionStateReader interface {
