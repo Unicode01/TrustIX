@@ -64,7 +64,7 @@ jobs:
           go test "${pkgs[@]}" -count=1
           go test ./internal/dataplane/ebpf -run '^$' -count=1
           go test ./internal/dataplane/ebpf \
-            -run '^Test(ErrorCleanupStack|BackgroundTaskTracker|AFXDPSocketClose|KernelUDPUDPFallbackSocketSetClose|CleanupQuarantinesSemantic|PersistedRouteStateMaps|WriteDataplaneStateAtomic|AttachRollsBackAfterStatePersistenceFailure|ApplySnapshotRestoresFlowsAfterStatePersistenceFailure|ApplySnapshotRewritesPreviousStateAfterCommittedSyncFailure|TIXTCPStatusRetriesFailedPrunePersistence|SyncPendingKernelTransportStateDoesNotAttachFastPathBeforeManagerAttach|ApplyNATSnapshotRestoresPreviousSnapshotAfterPersistenceFailure|AppendManagerWarning|SumPerCPUCounterBatch|ResizeCounterSlices|KernelUDPOpenPlainBufferPool)' \
+            -run '^Test(CaptureChecksumAddBytesMatchesReference|ErrorCleanupStack|BackgroundTaskTracker|AFXDPSocketClose|KernelUDPUDPFallbackSocketSetClose|CleanupQuarantinesSemantic|PersistedRouteStateMaps|WriteDataplaneStateAtomic|AttachRollsBackAfterStatePersistenceFailure|ApplySnapshotRestoresFlowsAfterStatePersistenceFailure|ApplySnapshotRewritesPreviousStateAfterCommittedSyncFailure|TIXTCPStatusRetriesFailedPrunePersistence|SyncPendingKernelTransportStateDoesNotAttachFastPathBeforeManagerAttach|ApplyNATSnapshotRestoresPreviousSnapshotAfterPersistenceFailure|AppendManagerWarning|SumPerCPUCounterBatch|ResizeCounterSlices|KernelUDPOpenPlainBufferPool)' \
             -count=1
 
       - name: Go Fuzz Smoke

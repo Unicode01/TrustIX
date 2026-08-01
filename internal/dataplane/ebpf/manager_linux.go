@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/bits"
 	"net"
 	"net/netip"
 	"os"
@@ -25622,41 +25623,39 @@ func captureChecksum(payload []byte) uint16 {
 }
 
 func captureChecksumAddBytes(sum uint32, payload []byte) uint32 {
-	for len(payload) >= 32 {
-		sum += uint32(binary.BigEndian.Uint16(payload[0:2]))
-		sum += uint32(binary.BigEndian.Uint16(payload[2:4]))
-		sum += uint32(binary.BigEndian.Uint16(payload[4:6]))
-		sum += uint32(binary.BigEndian.Uint16(payload[6:8]))
-		sum += uint32(binary.BigEndian.Uint16(payload[8:10]))
-		sum += uint32(binary.BigEndian.Uint16(payload[10:12]))
-		sum += uint32(binary.BigEndian.Uint16(payload[12:14]))
-		sum += uint32(binary.BigEndian.Uint16(payload[14:16]))
-		sum += uint32(binary.BigEndian.Uint16(payload[16:18]))
-		sum += uint32(binary.BigEndian.Uint16(payload[18:20]))
-		sum += uint32(binary.BigEndian.Uint16(payload[20:22]))
-		sum += uint32(binary.BigEndian.Uint16(payload[22:24]))
-		sum += uint32(binary.BigEndian.Uint16(payload[24:26]))
-		sum += uint32(binary.BigEndian.Uint16(payload[26:28]))
-		sum += uint32(binary.BigEndian.Uint16(payload[28:30]))
-		sum += uint32(binary.BigEndian.Uint16(payload[30:32]))
-		payload = payload[32:]
+	if len(payload) == 4 {
+		return sum + uint32(binary.BigEndian.Uint16(payload[:2])) + uint32(binary.BigEndian.Uint16(payload[2:]))
 	}
+	if len(payload) < 8 {
+		for len(payload) > 1 {
+			sum += uint32(binary.BigEndian.Uint16(payload[:2]))
+			payload = payload[2:]
+		}
+		if len(payload) == 1 {
+			sum += uint32(payload[0]) << 8
+		}
+		return sum
+	}
+
+	wide := uint64(sum)
+	// A 64-bit word is congruent to its four 16-bit words modulo 0xffff.
 	for len(payload) >= 8 {
-		value := binary.BigEndian.Uint64(payload[:8])
-		sum += uint32(value >> 48)
-		sum += uint32((value >> 32) & 0xffff)
-		sum += uint32((value >> 16) & 0xffff)
-		sum += uint32(value & 0xffff)
+		var carry uint64
+		wide, carry = bits.Add64(wide, binary.BigEndian.Uint64(payload[:8]), 0)
+		wide, _ = bits.Add64(wide, 0, carry)
 		payload = payload[8:]
 	}
+	wide = (wide & 0xffffffff) + (wide >> 32)
+	wide = (wide & 0xffffffff) + (wide >> 32)
 	for len(payload) > 1 {
-		sum += uint32(binary.BigEndian.Uint16(payload[:2]))
+		wide += uint64(binary.BigEndian.Uint16(payload[:2]))
 		payload = payload[2:]
 	}
 	if len(payload) == 1 {
-		sum += uint32(payload[0]) << 8
+		wide += uint64(payload[0]) << 8
 	}
-	return sum
+	wide = (wide & 0xffffffff) + (wide >> 32)
+	return uint32(wide)
 }
 
 func captureChecksumFold(sum uint32) uint16 {

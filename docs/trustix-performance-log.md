@@ -5344,3 +5344,60 @@ remaining ceiling can be removed through parameter tuning. The next material
 userspace I/O experiments are `PACKET_TX_RING` or AF_XDP TX-only; moving packet
 I/O or crypto into a kernel module remains a higher-ceiling, higher-risk tier.
 This engineering soak does not replace the 3600-second production gate.
+
+### 2026-08-01 Zaozhuang PVE capture checksum and rejected I/O probes
+
+Follow-up experiments used the same disposable Debian 13 VM200/VM201 pair,
+isolated `vmbr3`, 8 vCPU and 8 GiB per guest. `PACKET_TX_RING` transmission was
+rejected after it was `30.27%` slower than the existing `sendmmsg` plus GSO
+path. A borrowed stream receive buffer did not produce a stable throughput
+gain. Fixed and adaptive capture-forward delays also failed to establish a
+repeatable benefit: all three adjacent fixed-25-us comparisons were negative,
+and the adaptive result followed host-load drift. All three experiments were
+fully reverted.
+
+CPU profiles then identified IPv4 checksum normalization as a remaining
+userspace hotspot. `captureChecksumAddBytes` now accumulates 64-bit big-endian
+words with end-around carry, retains a simple path below 8 bytes, and handles
+the common 4-byte IPv4 address input directly. A reference implementation was
+checked against boundaries through 80 bytes, odd lengths, 65,535 bytes of
+`0xff`, zero-filled input, multiple initial sums, and 2,000 deterministic
+random payloads up to 65,535 bytes. Linux amd64 execution and arm64 compilation
+both passed.
+
+On the Xeon E5-2690 v2 host, five-run means were about `4.79 ns` for 4 bytes,
+`5.84 GB/s` for 1,500 bytes, and `6.09 GB/s` for 65,535 bytes. The previous
+implementation measured about `9.22 ns`, `1.74 GB/s`, and `1.75 GB/s`
+respectively, making the isolated checksum operation about `1.9x` faster for
+the IPv4 pseudo-header input and `3.4x` faster for packet-sized input.
+
+Three interleaved 60-second secure TCP pairs used 16 TrustIX sessions and 16
+iperf streams. The baseline samples were `5.861523`, `5.711541`, and
+`6.036709 Gbps`; the candidate samples were `6.187295`, `5.917291`, and
+`5.889228 Gbps`. Their means were `5.869925` and `5.997938 Gbps`, a `2.18%`
+candidate advantage, but one of three paired comparisons was negative. Two
+separate 90-second profile pairs confirmed that end-to-end throughput remains
+within host variance. The final pair was `5.862866 Gbps` baseline versus
+`5.850059 Gbps` candidate (`-0.22%`), while normalized checksum CPU fell
+`17.3%`. Combined process CPU per Gbps differed by only `+0.6%` in that pair.
+An earlier pair showed `+3.59%` throughput and `-3.18%` normalized total CPU,
+so no guaranteed whole-system throughput percentage is claimed.
+
+The final candidate SHA256 was
+`5383000c086822c8e95bf2842f8ae45d189edb298cce4da160e2c8ff0d51ffd4`.
+A 300-second, 16-stream simultaneous `iperf3 --bidir` engineering soak
+received `3.130215 Gbps` A-to-B and `3.134668 Gbps` B-to-A, `6.264883 Gbps`
+combined. Both nodes had 32 negotiated TLS-handoff and secure-batch sessions,
+5,362 and 6,659 kernel-queue-drain reads, stable boot IDs, empty pstore, no
+nonempty runner error artifact, and no kernel panic, Oops, BUG, watchdog, or
+lockup finding.
+
+The checksum change is retained as a contained userspace CPU reduction with no
+protocol or configuration change. Profiles still put roughly 40-51% of CPU in
+syscalls, 17-22% in AES-GCM, and 4-11% in memory movement. Further incremental
+userspace work remains possible, especially AF_XDP TX-only or another proven
+batched packet-I/O interface, but a large step beyond the current 5.8-6.0 Gbps
+one-way secure TCP range will require changing the packet-I/O boundary or
+moving work into a carefully validated kernel data plane. This 300-second
+engineering soak does not refresh the repository's stale 3600-second
+production evidence.
