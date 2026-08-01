@@ -196,6 +196,167 @@ func TestSessionSendPacketsBuildsEncryptedWireInPlace(t *testing.T) {
 	}
 }
 
+func TestSessionSendPacketsNegotiatesSingleSecureBatchRecord(t *testing.T) {
+	client, server, clientInner, _ := handshakeBuildingPair(t, true, true)
+	packets := [][]byte{
+		[]byte("batch-record-one"),
+		[]byte("batch-record-two"),
+		[]byte("batch-record-three"),
+	}
+	if err := client.SendPackets(packets); err != nil {
+		t.Fatalf("send secure batch record: %v", err)
+	}
+	built := clientInner.builtPackets()
+	if len(built) != 1 {
+		t.Fatalf("built secure records = %d, want 1", len(built))
+	}
+	if len(built[0]) < dataHeaderLen || built[0][6]&dataFlagBatch == 0 {
+		t.Fatalf("secure batch record flags = %#x, want batch", built[0][6])
+	}
+	got, release, err := server.RecvPacketsWithRelease(64)
+	if err != nil {
+		t.Fatalf("receive secure batch record: %v", err)
+	}
+	if release == nil {
+		t.Fatal("secure batch record plaintext did not report borrowed storage")
+	}
+	defer release()
+	assertPacketBatchEqual(t, got, packets)
+
+	clientStats := client.Stats()
+	if clientStats.Extra["secure_batch_records_negotiated"] != 1 ||
+		clientStats.Extra["secure_batch_records_out"] != 1 ||
+		clientStats.Extra["secure_batch_record_packets_out"] != uint64(len(packets)) {
+		t.Fatalf("client secure batch stats = %#v", clientStats.Extra)
+	}
+	serverStats := server.Stats()
+	if serverStats.PacketsReceived != uint64(len(packets)) ||
+		serverStats.Extra["secure_batch_records_in"] != 1 ||
+		serverStats.Extra["secure_batch_record_packets_in"] != uint64(len(packets)) {
+		t.Fatalf("server secure batch stats = packets:%d extra:%#v", serverStats.PacketsReceived, serverStats.Extra)
+	}
+}
+
+func TestSecureBatchRecordsRequestedDefaultsEnabledWithExplicitFailback(t *testing.T) {
+	t.Setenv("TRUSTIX_SECURE_BATCH_RECORDS", "")
+	if !secureBatchRecordsRequested(Options{}) {
+		t.Fatal("secure batch records are disabled by default")
+	}
+
+	for _, value := range []string{"0", "false", "no", "off", "disabled"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("TRUSTIX_SECURE_BATCH_RECORDS", value)
+			if secureBatchRecordsRequested(Options{}) {
+				t.Fatalf("secure batch records enabled for failback value %q", value)
+			}
+		})
+	}
+
+	t.Setenv("TRUSTIX_SECURE_BATCH_RECORDS", "0")
+	if !secureBatchRecordsRequested(Options{BatchRecords: func() bool { return true }}) {
+		t.Fatal("explicit batch-record option did not override the environment")
+	}
+	t.Setenv("TRUSTIX_SECURE_BATCH_RECORDS", "1")
+	if secureBatchRecordsRequested(Options{BatchRecords: func() bool { return false }}) {
+		t.Fatal("explicit batch-record failback did not override the environment")
+	}
+}
+
+func TestSessionSecureBatchRecordFallsBackWithoutPeerCapability(t *testing.T) {
+	client, server, clientInner, _ := handshakeBuildingPair(t, true, false)
+	if client.batchRecords || server.batchRecords {
+		t.Fatal("secure batch records negotiated with a peer that disabled the capability")
+	}
+	packets := [][]byte{[]byte("legacy-one"), []byte("legacy-two"), []byte("legacy-three")}
+	if err := client.SendPackets(packets); err != nil {
+		t.Fatalf("send legacy secure records: %v", err)
+	}
+	built := clientInner.builtPackets()
+	if len(built) != len(packets) {
+		t.Fatalf("built legacy secure records = %d, want %d", len(built), len(packets))
+	}
+	for index, wire := range built {
+		if wire[6]&dataFlagBatch != 0 {
+			t.Fatalf("legacy secure record %d unexpectedly has batch flag", index)
+		}
+	}
+	got, err := server.RecvPackets(64)
+	if err != nil {
+		t.Fatalf("receive legacy secure records: %v", err)
+	}
+	assertPacketBatchEqual(t, got, packets)
+}
+
+func TestSessionSecureBatchRecordRecvPacketDrainsPendingPackets(t *testing.T) {
+	client, server, _, _ := handshakeBuildingPair(t, true, true)
+	packets := [][]byte{[]byte("pending-one"), []byte("pending-two"), []byte("pending-three")}
+	if err := client.SendPackets(packets); err != nil {
+		t.Fatalf("send secure batch record: %v", err)
+	}
+	for index, want := range packets {
+		got, err := server.RecvPacket()
+		if err != nil {
+			t.Fatalf("receive pending secure packet %d: %v", index, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("pending secure packet %d = %q, want %q", index, got, want)
+		}
+	}
+	if stats := server.Stats(); stats.PacketsReceived != uint64(len(packets)) {
+		t.Fatalf("pending secure packet stats = %d, want %d", stats.PacketsReceived, len(packets))
+	}
+}
+
+func TestSessionSecureBatchRecordHonorsReceiveMaximum(t *testing.T) {
+	client, server, _, _ := handshakeBuildingPair(t, true, true)
+	packets := [][]byte{[]byte("limit-one"), []byte("limit-two"), []byte("limit-three")}
+	if err := client.SendPackets(packets); err != nil {
+		t.Fatalf("send secure batch record: %v", err)
+	}
+	first, release, err := server.RecvPacketsWithRelease(2)
+	if err != nil {
+		t.Fatalf("receive limited secure batch: %v", err)
+	}
+	if release != nil {
+		release()
+	}
+	assertPacketBatchEqual(t, first, packets[:2])
+	second, release, err := server.RecvPacketsWithRelease(2)
+	if err != nil {
+		t.Fatalf("receive secure batch overflow: %v", err)
+	}
+	if release != nil {
+		release()
+	}
+	assertPacketBatchEqual(t, second, packets[2:])
+}
+
+func TestAppendSecureBatchRecordPacketsRejectsMalformedLengths(t *testing.T) {
+	valid := make([]byte, secureBatchRecordHeaderLen+2*secureBatchRecordLengthLen+3)
+	binary.BigEndian.PutUint16(valid[0:2], 2)
+	binary.BigEndian.PutUint32(valid[2:6], 1)
+	binary.BigEndian.PutUint32(valid[6:10], 2)
+	copy(valid[10:], []byte("abc"))
+	got, bytesReceived, count, err := appendSecureBatchRecordPackets(nil, valid)
+	if err != nil {
+		t.Fatalf("parse valid secure batch record: %v", err)
+	}
+	assertPacketBatchEqual(t, got, [][]byte{[]byte("a"), []byte("bc")})
+	if bytesReceived != 3 || count != 2 {
+		t.Fatalf("valid secure batch accounting = bytes:%d count:%d", bytesReceived, count)
+	}
+
+	malformed := append([]byte(nil), valid...)
+	binary.BigEndian.PutUint32(malformed[6:10], 3)
+	if _, _, _, err := appendSecureBatchRecordPackets(nil, malformed); !errors.Is(err, ErrInvalidPacket) {
+		t.Fatalf("malformed secure batch length error = %v, want ErrInvalidPacket", err)
+	}
+	trailing := append(append([]byte(nil), valid...), 0)
+	if _, _, _, err := appendSecureBatchRecordPackets(nil, trailing); !errors.Is(err, ErrInvalidPacket) {
+		t.Fatalf("secure batch trailing-byte error = %v, want ErrInvalidPacket", err)
+	}
+}
+
 func TestSessionSendPacketsBuiltPacketErrorDoesNotUpdateStats(t *testing.T) {
 	clientMemory, serverInner := newMemorySessionPair()
 	clientInner := &buildingMemorySession{memorySession: clientMemory}
@@ -281,6 +442,57 @@ func TestSessionRecvPacketsDecryptsBatch(t *testing.T) {
 	}
 }
 
+func TestSessionRecvPacketsReturnsOwnedPlaintext(t *testing.T) {
+	client, server, _ := handshakePair(t)
+	firstWant := [][]byte{
+		bytes.Repeat([]byte{0x41}, 1400),
+		bytes.Repeat([]byte{0x42}, 1400),
+	}
+	if err := client.SendPackets(firstWant); err != nil {
+		t.Fatalf("send first encrypted batch: %v", err)
+	}
+	first, err := server.RecvPackets(64)
+	if err != nil {
+		t.Fatalf("receive first encrypted batch: %v", err)
+	}
+	if err := client.SendPackets([][]byte{
+		bytes.Repeat([]byte{0x51}, 1400),
+		bytes.Repeat([]byte{0x52}, 1400),
+	}); err != nil {
+		t.Fatalf("send second encrypted batch: %v", err)
+	}
+	if _, err := server.RecvPackets(64); err != nil {
+		t.Fatalf("receive second encrypted batch: %v", err)
+	}
+	for i := range firstWant {
+		if !bytes.Equal(first[i], firstWant[i]) {
+			t.Fatalf("owned packet %d changed after arena reuse", i)
+		}
+	}
+}
+
+func TestSessionRecvPacketsWithReleaseMarksPlaintextArenaBorrowed(t *testing.T) {
+	client, server, clientInner := handshakePair(t)
+	serverInner := clientInner.peer()
+	if err := client.SendPackets([][]byte{[]byte("arena-backed-plaintext")}); err != nil {
+		t.Fatalf("send encrypted batch: %v", err)
+	}
+	got, release, err := server.RecvPacketsWithRelease(64)
+	if err != nil {
+		t.Fatalf("receive encrypted batch: %v", err)
+	}
+	if len(got) != 1 || !bytes.Equal(got[0], []byte("arena-backed-plaintext")) {
+		t.Fatalf("received packets = %q", got)
+	}
+	if release == nil {
+		t.Fatal("arena-backed plaintext did not return a release function")
+	}
+	release()
+	if serverInner.releaseCount() != 0 {
+		t.Fatalf("owned inner batch release count = %d, want 0", serverInner.releaseCount())
+	}
+}
+
 func TestSessionRecvPacketsWithReleaseUsesInnerBorrowedBatch(t *testing.T) {
 	client, server, clientInner := handshakePair(t)
 	serverInner := clientInner.peer()
@@ -313,6 +525,71 @@ func TestSessionRecvPacketsWithReleaseUsesInnerBorrowedBatch(t *testing.T) {
 	release()
 	if serverInner.releaseCount() != 1 {
 		t.Fatalf("inner release count after release = %d, want 1", serverInner.releaseCount())
+	}
+}
+
+func TestSessionRecvPacketsWithReleaseReusesPlaintextArena(t *testing.T) {
+	client, server, clientInner := handshakePair(t)
+	serverInner := clientInner.peer()
+	serverInner.enableBorrowedRecv()
+	packets := [][]byte{
+		bytes.Repeat([]byte{0x31}, 1400),
+		bytes.Repeat([]byte{0x32}, 1400),
+	}
+
+	if err := client.SendPackets(packets); err != nil {
+		t.Fatalf("send first encrypted batch: %v", err)
+	}
+	got, release, err := server.RecvPacketsWithRelease(64)
+	if err != nil {
+		t.Fatalf("receive first encrypted batch: %v", err)
+	}
+	if release == nil {
+		t.Fatal("first encrypted batch did not return a release function")
+	}
+	if len(got) != len(packets) || len(server.recvBatchArena) == 0 {
+		t.Fatalf("first encrypted batch = %d packets, arena bytes = %d", len(got), len(server.recvBatchArena))
+	}
+	firstArena := &server.recvBatchArena[0]
+	release()
+
+	if err := client.SendPackets(packets); err != nil {
+		t.Fatalf("send second encrypted batch: %v", err)
+	}
+	got, release, err = server.RecvPacketsWithRelease(64)
+	if err != nil {
+		t.Fatalf("receive second encrypted batch: %v", err)
+	}
+	if release == nil {
+		t.Fatal("second encrypted batch did not return a release function")
+	}
+	defer release()
+	if len(got) != len(packets) || len(server.recvBatchArena) == 0 {
+		t.Fatalf("second encrypted batch = %d packets, arena bytes = %d", len(got), len(server.recvBatchArena))
+	}
+	if secondArena := &server.recvBatchArena[0]; secondArena != firstArena {
+		t.Fatal("encrypted batch plaintext arena was not reused")
+	}
+	for i := range packets {
+		if !bytes.Equal(got[i], packets[i]) {
+			t.Fatalf("second received packet %d differs from input", i)
+		}
+	}
+}
+
+func TestSessionRecvBatchArenaRejectsOversizedPreallocation(t *testing.T) {
+	_, server, _ := handshakePair(t)
+	server.recvBatchArena = make([]byte, 1, 1024)
+	overhead := dataHeaderLen + server.recvAEAD.Overhead()
+	wirePackets := [][]byte{
+		make([]byte, overhead+recvBatchArenaRetainMax/2+1),
+		make([]byte, overhead+recvBatchArenaRetainMax/2),
+	}
+	if arena := server.prepareRecvBatchArena(wirePackets); arena != nil {
+		t.Fatalf("oversized receive arena capacity = %d, want nil", cap(arena))
+	}
+	if server.recvBatchArena != nil {
+		t.Fatalf("retained oversized receive arena capacity = %d, want nil", cap(server.recvBatchArena))
 	}
 }
 
@@ -984,6 +1261,40 @@ func TestSessionOpensNoAADKernelDeviceFrame(t *testing.T) {
 	}
 }
 
+func TestSessionBatchOpensNoAADKernelDeviceFrameIntoPlaintextArena(t *testing.T) {
+	_, server, _ := handshakePair(t)
+	if server.recvAEAD == nil || server.recvIV == nil {
+		t.Fatal("server receive crypto is not initialized")
+	}
+	payload := []byte("kernel-device-no-aad-batch")
+	seq := uint64(1)
+	var header [dataHeaderLen]byte
+	copy(header[0:4], dataMagic[:])
+	header[4] = dataVersion
+	header[5] = server.cryptoSuite.ID
+	binary.BigEndian.PutUint64(header[8:16], server.epoch)
+	binary.BigEndian.PutUint64(header[16:24], seq)
+	var nonce [12]byte
+	copy(nonce[:], server.recvIV)
+	binary.BigEndian.PutUint64(nonce[4:], seq)
+	wire := append([]byte(nil), header[:]...)
+	wire = server.recvAEAD.Seal(wire, nonce[:], payload, nil)
+
+	got, bytesReceived, packetsReceived, err := server.openReceivedPacketBatch(nil, [][]byte{wire})
+	if err != nil {
+		t.Fatalf("open no-AAD batch frame: %v", err)
+	}
+	if len(got) != 1 || !bytes.Equal(got[0], payload) {
+		t.Fatalf("opened batch payloads = %q, want %q", got, payload)
+	}
+	if bytesReceived != uint64(len(payload)) || packetsReceived != 1 {
+		t.Fatalf("opened batch stats = %d bytes/%d packets", bytesReceived, packetsReceived)
+	}
+	if len(server.recvBatchArena) != len(payload) {
+		t.Fatalf("receive plaintext arena bytes = %d, want %d", len(server.recvBatchArena), len(payload))
+	}
+}
+
 func TestSessionRejectsReplay(t *testing.T) {
 	client, server, clientInner := handshakePair(t)
 	if err := client.SendPacket([]byte("secret-payload")); err != nil {
@@ -1048,6 +1359,41 @@ func TestSessionRecvPacketsDropsReplayInsideBatch(t *testing.T) {
 	}
 	if len(got) != 2 || string(got[0]) != "two" || string(got[1]) != "three" {
 		t.Fatalf("server batch recv = %q, want [two three]", got)
+	}
+}
+
+func TestSessionRecvPacketsDropsReplayedSecureBatchRecord(t *testing.T) {
+	client, server, clientInner, serverInner := handshakeBuildingPair(t, true, true)
+	first := [][]byte{[]byte("first-one"), []byte("first-two"), []byte("first-three")}
+	if err := client.SendPackets(first); err != nil {
+		t.Fatalf("send first secure batch record: %v", err)
+	}
+	built := clientInner.builtPackets()
+	if len(built) != 1 {
+		t.Fatalf("first secure records = %d, want 1", len(built))
+	}
+	if got, err := server.RecvPackets(64); err != nil {
+		t.Fatalf("receive first secure batch record: %v", err)
+	} else {
+		assertPacketBatchEqual(t, got, first)
+	}
+
+	serverInner.inject(built[0])
+	second := [][]byte{[]byte("second-one"), []byte("second-two")}
+	if err := client.SendPackets(second); err != nil {
+		t.Fatalf("send second secure batch record: %v", err)
+	}
+	got, err := server.RecvPackets(64)
+	if err != nil {
+		t.Fatalf("receive after replayed secure batch record: %v", err)
+	}
+	assertPacketBatchEqual(t, got, second)
+
+	stats := server.Stats()
+	if stats.PacketsReceived != uint64(len(first)+len(second)) ||
+		stats.Extra["secure_batch_records_in"] != 2 ||
+		stats.Extra["secure_batch_record_packets_in"] != uint64(len(first)+len(second)) {
+		t.Fatalf("secure batch replay stats = packets:%d extra:%#v", stats.PacketsReceived, stats.Extra)
 	}
 }
 
@@ -1804,6 +2150,43 @@ func handshakePair(t testing.TB) (*Session, *Session, *memorySession) {
 	}
 	server := waitServer(t, serverReady, serverErr)
 	return client, server, clientInner
+}
+
+func handshakeBuildingPair(t testing.TB, clientBatchRecords bool, serverBatchRecords bool) (*Session, *Session, *buildingMemorySession, *buildingMemorySession) {
+	t.Helper()
+	clientMemory, serverMemory := newMemorySessionPair()
+	clientInner := &buildingMemorySession{memorySession: clientMemory}
+	serverInner := &buildingMemorySession{memorySession: serverMemory}
+	clientOptions := Options{Epoch: 1, BatchRecords: func() bool { return clientBatchRecords }}
+	serverOptions := Options{Epoch: 1, BatchRecords: func() bool { return serverBatchRecords }}
+	serverReady := make(chan *Session, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		session, err := Server(serverInner, nil, serverOptions)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverReady <- session
+	}()
+	client, err := Client(clientInner, nil, clientOptions)
+	if err != nil {
+		t.Fatalf("client building handshake: %v", err)
+	}
+	server := waitServer(t, serverReady, serverErr)
+	return client, server, clientInner, serverInner
+}
+
+func assertPacketBatchEqual(t testing.TB, got [][]byte, want [][]byte) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("packet batch length = %d, want %d", len(got), len(want))
+	}
+	for index := range want {
+		if !bytes.Equal(got[index], want[index]) {
+			t.Fatalf("packet %d = %x, want %x", index, got[index], want[index])
+		}
+	}
 }
 
 func waitServer(t testing.TB, ready <-chan *Session, errs <-chan error) *Session {

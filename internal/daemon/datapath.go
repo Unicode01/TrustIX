@@ -361,6 +361,7 @@ type dataForwardCacheEntry struct {
 	Key            dataSessionKey
 	Runtime        *dataSessionRuntime
 	Policy         config.PolicyConfig
+	NATEnabled     bool
 	NativeBatching bool
 	ExpiresAt      time.Time
 }
@@ -3787,7 +3788,7 @@ func (daemon *Daemon) lookupForwardCacheForPacket(flowKey routing.FlowKey, dst n
 		entry.Runtime == nil ||
 		entry.Decision.Route.Kind != routing.RouteUnicast ||
 		!entry.Decision.Prefix.Contains(dst) ||
-		daemon.natEnabledForRoute(entry.Decision.Route, entry.Policy) {
+		entry.NATEnabled {
 		daemon.forwardCacheMu.RUnlock()
 		return nil, false
 	}
@@ -3800,6 +3801,7 @@ func (daemon *Daemon) storeForwardCache(flowKey routing.FlowKey, entry dataForwa
 	if entry.Session == nil || entry.Runtime == nil {
 		return
 	}
+	entry.NATEnabled = daemon.natEnabledForRoute(entry.Decision.Route, entry.Policy)
 	daemon.forwardCacheMu.Lock()
 	if daemon.forwardCache == nil {
 		daemon.forwardCache = make(map[routing.FlowKey]*dataForwardCacheEntry)

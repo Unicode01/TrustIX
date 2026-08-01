@@ -4854,6 +4854,73 @@ func TestRegisterInboundSecureKernelUDPClearsDirectForwardCache(t *testing.T) {
 	}
 }
 
+func TestStoreForwardCacheCachesNATEligibility(t *testing.T) {
+	flowKey := routing.FlowKey{
+		SourceIP:        netip.MustParseAddr("10.0.1.10"),
+		DestinationIP:   netip.MustParseAddr("10.0.2.20"),
+		SourcePort:      12345,
+		DestinationPort: 443,
+		Protocol:        ipProtocolTCP,
+	}
+	decision := routing.Decision{
+		Prefix: netip.MustParsePrefix("10.0.2.0/24"),
+		Route: routing.Route{
+			Prefix:  "10.0.2.0/24",
+			NextHop: "ix-b",
+			Kind:    routing.RouteUnicast,
+		},
+	}
+	for _, tc := range []struct {
+		name    string
+		desired config.Desired
+		policy  config.PolicyConfig
+		wantNAT bool
+	}{
+		{
+			name: "routed",
+			desired: config.Desired{LAN: config.LANConfig{
+				Iface: "tix-lan",
+				Mode:  config.LANModeRouted,
+			}},
+		},
+		{
+			name: "lan nat",
+			desired: config.Desired{LAN: config.LANConfig{
+				Iface: "tix-lan",
+				Mode:  config.LANModeNAT,
+			}},
+			wantNAT: true,
+		},
+		{
+			name: "policy snat",
+			desired: config.Desired{LAN: config.LANConfig{
+				Iface: "tix-lan",
+				Mode:  config.LANModeRouted,
+			}},
+			policy:  config.PolicyConfig{Rewrite: "snat_gateway"},
+			wantNAT: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon := &Daemon{desired: tc.desired}
+			daemon.storeForwardCache(flowKey, dataForwardCacheEntry{
+				Decision: decision,
+				Session:  &recordingSession{},
+				Runtime:  &dataSessionRuntime{},
+				Policy:   tc.policy,
+			})
+			entry := daemon.forwardCache[flowKey]
+			if entry == nil || entry.NATEnabled != tc.wantNAT {
+				t.Fatalf("cached NAT eligibility = %#v, want %t", entry, tc.wantNAT)
+			}
+			_, found := daemon.lookupForwardCacheForPacket(flowKey, flowKey.DestinationIP)
+			if found == tc.wantNAT {
+				t.Fatalf("forward cache lookup found = %t, want %t", found, !tc.wantNAT)
+			}
+		})
+	}
+}
+
 func TestSessionForEndpointFallsBackToReverseWhenDirectDialFails(t *testing.T) {
 	peer := config.PeerConfig{
 		ID:     core.IXID("ix-b"),

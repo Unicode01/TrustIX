@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -59,9 +60,20 @@ const (
 	suiteChaCha20Poly1305X25519 byte = 3
 
 	dataHeaderLen = 24
+	dataFlagBatch = 1 << 0
+
+	helloFeatureBatchRecords uint16 = 1 << 15
+	helloFeatureMask         uint16 = helloFeatureBatchRecords
+	helloSuiteMask           uint16 = ^helloFeatureMask
+
+	secureBatchRecordHeaderLen  = 2
+	secureBatchRecordLengthLen  = 4
+	secureBatchRecordMaxPackets = 256
+	secureBatchRecordMaxPlain   = 4 * 1024 * 1024
 
 	sendWireRetainMax       = 256 * 1024
 	sendBatchArenaRetainMax = 4 * 1024 * 1024
+	recvBatchArenaRetainMax = 4 * 1024 * 1024
 
 	maxHandshakeCertLen = 64 * 1024
 	maxHandshakeSigLen  = 8 * 1024
@@ -212,10 +224,12 @@ func suiteMaskForSuites(names []string) uint16 {
 }
 
 func normalizedSuiteMask(mask uint16) uint16 {
-	if mask == 0 {
-		return suiteMaskBit(defaultSuite.ID)
+	features := mask & helloFeatureMask
+	suites := mask & helloSuiteMask
+	if suites == 0 {
+		suites = suiteMaskBit(defaultSuite.ID)
 	}
-	return mask
+	return suites | features
 }
 
 func isDefaultSuiteMask(mask uint16) bool {
@@ -230,7 +244,7 @@ func suiteMaskBit(id byte) uint16 {
 }
 
 func negotiateSuite(clientMask uint16, serverMask uint16) (cryptoSuite, error) {
-	intersection := normalizedSuiteMask(clientMask) & normalizedSuiteMask(serverMask)
+	intersection := normalizedSuiteMask(clientMask) & normalizedSuiteMask(serverMask) & helloSuiteMask
 	if intersection == 0 {
 		return cryptoSuite{}, fmt.Errorf("%w: no common crypto suite", ErrInvalidHandshake)
 	}
@@ -246,12 +260,47 @@ func negotiateSuite(clientMask uint16, serverMask uint16) (cryptoSuite, error) {
 	return cryptoSuite{}, fmt.Errorf("%w: unsupported crypto suite mask 0x%04x", ErrInvalidHandshake, intersection)
 }
 
+func secureBatchRecordsRequested(options Options) bool {
+	if options.BatchRecords != nil {
+		return options.BatchRecords()
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TRUSTIX_SECURE_BATCH_RECORDS"))) {
+	case "0", "false", "no", "off", "disabled":
+		return false
+	default:
+		return true
+	}
+}
+
+func secureBatchRecordFeature(inner transport.Session, options Options) uint16 {
+	if inner == nil || !secureBatchRecordsRequested(options) {
+		return 0
+	}
+	if _, ok := inner.(transport.PacketBatchBuilderSession); !ok {
+		return 0
+	}
+	if _, ok := inner.(transport.PacketBatchReceiverWithRelease); !ok {
+		if _, ok := inner.(transport.PacketBatchReceiver); !ok {
+			return 0
+		}
+	}
+	if inner.Stats().Datagram {
+		return 0
+	}
+	return helloFeatureBatchRecords
+}
+
+func secureBatchRecordsNegotiated(client hello, server hello) bool {
+	return client.suiteMask&server.suiteMask&helloFeatureBatchRecords != 0
+}
+
 type Options struct {
 	Epoch           uint64
 	RequirePeerAuth bool
 	KeySource       func() string
 	Encryption      func() string
 	CryptoSuites    func() []string
+	BatchRecords    func() bool
 	ClientAuthTLS   func(peer transport.Peer) (*tls.Config, error)
 	ServerAuthTLS   func() (*tls.Config, error)
 }
@@ -505,10 +554,20 @@ type Session struct {
 	sendBatchArena   []byte
 	sendBatchSizes   []int
 	recvBatchPlain   [][]byte
+	recvBatchArena   []byte
 	recvBatchSeqs    []uint64
 	recvBatchIndexes []int
+	recvBatchCounts  []int
+	recvBatchFlags   []byte
 	recvBatchAccepts []bool
+	recvPending      [][]byte
+	recvPendingIndex int
 	replay           replayWindow
+	batchRecords     bool
+	batchRecordsOut  atomic.Uint64
+	batchPacketsOut  atomic.Uint64
+	batchRecordsIn   atomic.Uint64
+	batchPacketsIn   atomic.Uint64
 	bytesSent        atomic.Uint64
 	bytesRecv        atomic.Uint64
 	packetsOut       atomic.Uint64
@@ -518,7 +577,7 @@ type Session struct {
 }
 
 func Client(inner transport.Session, tlsConf *tls.Config, options Options) (*Session, error) {
-	state, clientHello, err := newHandshakeState(helloTypeClient, tlsConf, options)
+	state, clientHello, err := newHandshakeState(helloTypeClient, tlsConf, options, secureBatchRecordFeature(inner, options))
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +609,7 @@ func Client(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	if err != nil {
 		return nil, err
 	}
-	return newSession(inner, clientRole, state.privateKey, serverHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, encodedHello, rawServerHello)
+	return newSession(inner, clientRole, state.privateKey, serverHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), encodedHello, rawServerHello)
 }
 
 func recvServerHello(inner transport.Session) ([]byte, error) {
@@ -603,7 +662,7 @@ func Server(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	if err != nil {
 		return nil, err
 	}
-	state, serverHello, err := newHandshakeState(helloTypeServer, tlsConf, options)
+	state, serverHello, err := newHandshakeState(helloTypeServer, tlsConf, options, secureBatchRecordFeature(inner, options))
 	if err != nil {
 		return nil, err
 	}
@@ -622,7 +681,7 @@ func Server(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	if err := inner.SendPacket(encodedHello); err != nil {
 		return nil, fmt.Errorf("send TrustIX server hello: %w", err)
 	}
-	return newSession(inner, serverRole, state.privateKey, clientHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, rawClientHello, encodedHello)
+	return newSession(inner, serverRole, state.privateKey, clientHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), rawClientHello, encodedHello)
 }
 
 func (session *Session) SendPacket(pkt []byte) error {
@@ -691,6 +750,11 @@ func (session *Session) SendPackets(pkts [][]byte) error {
 	}
 
 	builder, buildInPlace := session.inner.(transport.PacketBatchBuilderSession)
+	if session.batchRecords && buildInPlace && len(pkts) > 1 {
+		if sent, err := session.sendSecureBatchRecord(builder, pkts); sent {
+			return err
+		}
+	}
 	totalWire := 0
 	totalPlain := uint64(0)
 	overhead := session.sendAEAD.Overhead()
@@ -796,6 +860,76 @@ func retainSendBatchArena(arena []byte, used int) []byte {
 	return arena
 }
 
+func (session *Session) sendSecureBatchRecord(builder transport.PacketBatchBuilderSession, packets [][]byte) (bool, error) {
+	plainSize, totalPlain, ok := secureBatchRecordLayout(packets)
+	if !ok || session.sendAEAD == nil {
+		return false, nil
+	}
+	wireSize := dataHeaderLen + plainSize + session.sendAEAD.Overhead()
+	packetSizes := [1]int{wireSize}
+
+	session.sendMu.Lock()
+	defer session.sendMu.Unlock()
+	seq := session.sendSeq.Add(1)
+	header := session.sendHeader
+	header[6] = dataFlagBatch
+	copy(session.sendNonce[:4], session.sendIV[:4])
+	binary.BigEndian.PutUint64(session.sendNonce[4:], seq)
+	binary.BigEndian.PutUint64(header[16:24], seq)
+
+	err := builder.SendBuiltPackets(packetSizes[:], func(index int, dst []byte) error {
+		if index != 0 {
+			return fmt.Errorf("built secure batch record index %d, want 0", index)
+		}
+		if len(dst) != wireSize {
+			return fmt.Errorf("built secure batch record reserved size %d differs from expected size %d", len(dst), wireSize)
+		}
+		copy(dst[:dataHeaderLen], header[:])
+		plaintext := dst[dataHeaderLen : dataHeaderLen+plainSize]
+		binary.BigEndian.PutUint16(plaintext[:secureBatchRecordHeaderLen], uint16(len(packets)))
+		lengthOffset := secureBatchRecordHeaderLen
+		payloadOffset := secureBatchRecordHeaderLen + len(packets)*secureBatchRecordLengthLen
+		for _, packet := range packets {
+			binary.BigEndian.PutUint32(plaintext[lengthOffset:lengthOffset+secureBatchRecordLengthLen], uint32(len(packet)))
+			lengthOffset += secureBatchRecordLengthLen
+			copy(plaintext[payloadOffset:payloadOffset+len(packet)], packet)
+			payloadOffset += len(packet)
+		}
+		sealed := session.sendAEAD.Seal(dst[:dataHeaderLen], session.sendNonce[:], plaintext, dst[:dataHeaderLen])
+		if len(sealed) != wireSize {
+			return fmt.Errorf("sealed secure batch record size %d differs from reserved size %d", len(sealed), wireSize)
+		}
+		return nil
+	})
+	if err != nil {
+		return true, err
+	}
+	session.bytesSent.Add(totalPlain)
+	session.packetsOut.Add(uint64(len(packets)))
+	session.batchRecordsOut.Add(1)
+	session.batchPacketsOut.Add(uint64(len(packets)))
+	return true, nil
+}
+
+func secureBatchRecordLayout(packets [][]byte) (plainSize int, totalPlain uint64, ok bool) {
+	if len(packets) < 2 || len(packets) > secureBatchRecordMaxPackets {
+		return 0, 0, false
+	}
+	headerSize := secureBatchRecordHeaderLen + len(packets)*secureBatchRecordLengthLen
+	if headerSize > secureBatchRecordMaxPlain {
+		return 0, 0, false
+	}
+	plainSize = headerSize
+	for _, packet := range packets {
+		if len(packet) > secureBatchRecordMaxPlain-plainSize {
+			return 0, 0, false
+		}
+		plainSize += len(packet)
+		totalPlain += uint64(len(packet))
+	}
+	return plainSize, totalPlain, true
+}
+
 func (session *Session) recordPacketsSent(pkts [][]byte) {
 	var bytes uint64
 	var packets uint64
@@ -808,6 +942,9 @@ func (session *Session) recordPacketsSent(pkts [][]byte) {
 }
 
 func (session *Session) RecvPacket() ([]byte, error) {
+	if packet, ok := session.popRecvPendingPacket(); ok {
+		return packet, nil
+	}
 	for {
 		wire, err := session.inner.RecvPacket()
 		if err != nil {
@@ -841,6 +978,9 @@ func (session *Session) RecvPackets(max int) ([][]byte, error) {
 }
 
 func (session *Session) RecvPacketsWithRelease(max int) ([][]byte, func(), error) {
+	if packets := session.takeRecvPending(max); len(packets) > 0 {
+		return packets, nil, nil
+	}
 	if max <= 1 {
 		packet, err := session.RecvPacket()
 		if err != nil {
@@ -880,7 +1020,7 @@ func (session *Session) recvPacketsFromBatchReceiver(max int, receiver transport
 		if len(plaintextPackets) > 0 {
 			session.recvBatchPlain = plaintextPackets
 			session.recordPacketsReceived(bytesReceived, packetsReceived)
-			return plaintextPackets, nil, nil
+			return session.limitReceivedBatch(plaintextPackets, max), session.recvBatchRelease(nil), nil
 		}
 		session.recvBatchPlain = plaintextPackets
 	}
@@ -911,7 +1051,7 @@ func (session *Session) recvPacketsWithRelease(max int, receiver transport.Packe
 		if len(plaintextPackets) > 0 {
 			session.recvBatchPlain = plaintextPackets
 			session.recordPacketsReceived(bytesReceived, packetsReceived)
-			return plaintextPackets, release, nil
+			return session.limitReceivedBatch(plaintextPackets, max), session.recvBatchRelease(release), nil
 		}
 		session.recvBatchPlain = plaintextPackets
 		if release != nil {
@@ -920,12 +1060,70 @@ func (session *Session) recvPacketsWithRelease(max int, receiver transport.Packe
 	}
 }
 
+func (session *Session) popRecvPendingPacket() ([]byte, bool) {
+	if session.recvPendingIndex >= len(session.recvPending) {
+		session.recvPending = nil
+		session.recvPendingIndex = 0
+		return nil, false
+	}
+	packet := session.recvPending[session.recvPendingIndex]
+	session.recvPending[session.recvPendingIndex] = nil
+	session.recvPendingIndex++
+	if session.recvPendingIndex == len(session.recvPending) {
+		session.recvPending = nil
+		session.recvPendingIndex = 0
+	}
+	return packet, true
+}
+
+func (session *Session) takeRecvPending(max int) [][]byte {
+	if session.recvPendingIndex >= len(session.recvPending) {
+		session.recvPending = nil
+		session.recvPendingIndex = 0
+		return nil
+	}
+	if max < 1 {
+		max = 1
+	}
+	end := min(session.recvPendingIndex+max, len(session.recvPending))
+	packets := session.recvPending[session.recvPendingIndex:end]
+	session.recvPendingIndex = end
+	if end == len(session.recvPending) {
+		session.recvPending = nil
+		session.recvPendingIndex = 0
+	}
+	return packets
+}
+
+func (session *Session) limitReceivedBatch(packets [][]byte, max int) [][]byte {
+	if max < 1 || len(packets) <= max {
+		return packets
+	}
+	overflow := packets[max:]
+	session.recvPending = make([][]byte, len(overflow))
+	for index, packet := range overflow {
+		session.recvPending[index] = append([]byte(nil), packet...)
+	}
+	session.recvPendingIndex = 0
+	return packets[:max]
+}
+
+func (session *Session) recvBatchRelease(inner func()) func() {
+	if inner != nil || len(session.recvBatchArena) == 0 {
+		return inner
+	}
+	return releaseSecureRecvBatch
+}
+
+// A non-nil callback marks arena-backed plaintext as borrowed.
+func releaseSecureRecvBatch() {}
+
 func (session *Session) openReceivedPacket(wire []byte) ([]byte, bool, error) {
-	plaintext, ok, err := session.openReceivedPacketNoStats(wire)
+	plaintext, ok, bytesReceived, packetsReceived, err := session.openReceivedRecordNoStats(wire)
 	if err != nil || !ok {
 		return plaintext, ok, err
 	}
-	session.recordPacketsReceived(uint64(len(plaintext)), 1)
+	session.recordPacketsReceived(bytesReceived, packetsReceived)
 	return plaintext, ok, nil
 }
 
@@ -952,6 +1150,7 @@ func (session *Session) openReceivedPacketBatch(dst [][]byte, wirePackets [][]by
 		}
 		return dst, bytesReceived, uint64(len(dst) - startLen), nil
 	}
+	recvArena := session.prepareRecvBatchArena(wirePackets)
 	if cap(session.recvBatchSeqs) < len(wirePackets) {
 		session.recvBatchSeqs = make([]uint64, 0, len(wirePackets))
 	} else {
@@ -962,8 +1161,20 @@ func (session *Session) openReceivedPacketBatch(dst [][]byte, wirePackets [][]by
 	} else {
 		session.recvBatchIndexes = session.recvBatchIndexes[:0]
 	}
+	if cap(session.recvBatchCounts) < len(wirePackets) {
+		session.recvBatchCounts = make([]int, 0, len(wirePackets))
+	} else {
+		session.recvBatchCounts = session.recvBatchCounts[:0]
+	}
+	if cap(session.recvBatchFlags) < len(wirePackets) {
+		session.recvBatchFlags = make([]byte, 0, len(wirePackets))
+	} else {
+		session.recvBatchFlags = session.recvBatchFlags[:0]
+	}
 	seqs := session.recvBatchSeqs
 	seqIndexes := session.recvBatchIndexes
+	seqCounts := session.recvBatchCounts
+	seqFlags := session.recvBatchFlags
 	startLen := len(dst)
 	var bytesReceived uint64
 	for _, wire := range wirePackets {
@@ -982,30 +1193,101 @@ func (session *Session) openReceivedPacketBatch(dst [][]byte, wirePackets [][]by
 			bytesReceived += uint64(len(wire))
 			continue
 		}
-		plaintext, seq, err := session.openEncryptedPacketNoReplay(wire)
+		arenaBase := len(recvArena)
+		plaintextSize := session.encryptedPacketPlaintextSize(wire)
+		var plaintextDst []byte
+		if plaintextSize >= 0 && plaintextSize <= cap(recvArena)-arenaBase {
+			plaintextDst = recvArena[arenaBase : arenaBase : arenaBase+plaintextSize]
+		}
+		plaintext, seq, flags, err := session.openEncryptedPacketNoReplayInto(wire, plaintextDst)
 		if err != nil {
 			return dst, bytesReceived, uint64(len(dst) - startLen), err
 		}
-		dst = append(dst, plaintext)
+		if plaintextDst != nil && len(plaintext) == plaintextSize {
+			recvArena = recvArena[:arenaBase+plaintextSize]
+		}
+		recordStart := len(dst)
+		recordPackets := 1
+		recordBytes := uint64(len(plaintext))
+		if flags&dataFlagBatch != 0 {
+			var appendErr error
+			dst, recordBytes, recordPackets, appendErr = appendSecureBatchRecordPackets(dst, plaintext)
+			if appendErr != nil {
+				return dst, bytesReceived, uint64(len(dst) - startLen), appendErr
+			}
+		} else {
+			dst = append(dst, plaintext)
+		}
 		seqs = append(seqs, seq)
-		seqIndexes = append(seqIndexes, len(dst)-1)
-		bytesReceived += uint64(len(plaintext))
+		seqIndexes = append(seqIndexes, recordStart)
+		seqCounts = append(seqCounts, recordPackets)
+		seqFlags = append(seqFlags, flags)
+		bytesReceived += recordBytes
 	}
 	if len(seqs) == 0 {
 		session.recvBatchSeqs = seqs
 		session.recvBatchIndexes = seqIndexes
+		session.recvBatchCounts = seqCounts
+		session.recvBatchFlags = seqFlags
 		return dst, bytesReceived, uint64(len(dst) - startLen), nil
 	}
 	accepted := session.replay.AcceptBatchResults(seqs, session.recvBatchAccepts[:0])
-	dst, bytesReceived = filterReplayRejectedBatch(dst, startLen, seqIndexes, accepted, bytesReceived)
+	dst, bytesReceived = filterReplayRejectedBatch(dst, startLen, seqIndexes, seqCounts, accepted, bytesReceived)
+	for index, accept := range accepted {
+		if accept && seqFlags[index]&dataFlagBatch != 0 {
+			session.batchRecordsIn.Add(1)
+			session.batchPacketsIn.Add(uint64(seqCounts[index]))
+		}
+	}
 	session.recvBatchSeqs = seqs
 	session.recvBatchIndexes = seqIndexes
+	session.recvBatchCounts = seqCounts
+	session.recvBatchFlags = seqFlags
 	session.recvBatchAccepts = accepted
+	session.recvBatchArena = retainRecvBatchArena(recvArena, len(recvArena))
 	return dst, bytesReceived, uint64(len(dst) - startLen), nil
 }
 
-func filterReplayRejectedBatch(dst [][]byte, startLen int, seqIndexes []int, accepted []bool, bytesReceived uint64) ([][]byte, uint64) {
-	if len(seqIndexes) == 0 || len(seqIndexes) != len(accepted) {
+func (session *Session) prepareRecvBatchArena(wirePackets [][]byte) []byte {
+	total := 0
+	for _, wire := range wirePackets {
+		if session.cryptoOffloaded && !session.shouldOpenUserspaceEncryptedFallback(wire) {
+			continue
+		}
+		plaintextSize := session.encryptedPacketPlaintextSize(wire)
+		if plaintextSize < 0 || plaintextSize > recvBatchArenaRetainMax-total {
+			session.recvBatchArena = nil
+			return nil
+		}
+		total += plaintextSize
+	}
+	if cap(session.recvBatchArena) > recvBatchArenaRetainMax && total < recvBatchArenaRetainMax/2 {
+		session.recvBatchArena = nil
+	}
+	if cap(session.recvBatchArena) < total {
+		session.recvBatchArena = make([]byte, 0, total)
+	} else {
+		session.recvBatchArena = session.recvBatchArena[:0]
+	}
+	return session.recvBatchArena
+}
+
+func (session *Session) encryptedPacketPlaintextSize(wire []byte) int {
+	if session.recvAEAD == nil || len(wire) < dataHeaderLen+session.recvAEAD.Overhead() {
+		return -1
+	}
+	return len(wire) - dataHeaderLen - session.recvAEAD.Overhead()
+}
+
+func retainRecvBatchArena(arena []byte, used int) []byte {
+	if cap(arena) > recvBatchArenaRetainMax && used < recvBatchArenaRetainMax/2 {
+		return nil
+	}
+	return arena
+}
+
+func filterReplayRejectedBatch(dst [][]byte, startLen int, seqIndexes []int, seqCounts []int, accepted []bool, bytesReceived uint64) ([][]byte, uint64) {
+	if len(seqIndexes) == 0 || len(seqIndexes) != len(accepted) || len(seqCounts) != len(accepted) {
 		return dst, bytesReceived
 	}
 	allAccepted := true
@@ -1019,84 +1301,159 @@ func filterReplayRejectedBatch(dst [][]byte, startLen int, seqIndexes []int, acc
 		return dst, bytesReceived
 	}
 	write := startLen
-	seqCursor := 0
-	for read := startLen; read < len(dst); read++ {
-		keep := true
-		if seqCursor < len(seqIndexes) && seqIndexes[seqCursor] == read {
-			keep = accepted[seqCursor]
-			seqCursor++
+	read := startLen
+	for index, recordStart := range seqIndexes {
+		if recordStart < read || recordStart > len(dst) || seqCounts[index] < 0 || seqCounts[index] > len(dst)-recordStart {
+			return dst, bytesReceived
 		}
-		if !keep {
-			bytesReceived -= uint64(len(dst[read]))
+		for read < recordStart {
+			dst[write] = dst[read]
+			write++
+			read++
+		}
+		recordEnd := recordStart + seqCounts[index]
+		if accepted[index] {
+			for read < recordEnd {
+				dst[write] = dst[read]
+				write++
+				read++
+			}
 			continue
 		}
+		for read < recordEnd {
+			bytesReceived -= uint64(len(dst[read]))
+			read++
+		}
+	}
+	for read < len(dst) {
 		dst[write] = dst[read]
 		write++
+		read++
 	}
 	clear(dst[write:])
 	return dst[:write], bytesReceived
 }
 
+func appendSecureBatchRecordPackets(dst [][]byte, plaintext []byte) ([][]byte, uint64, int, error) {
+	if len(plaintext) < secureBatchRecordHeaderLen {
+		return dst, 0, 0, ErrInvalidPacket
+	}
+	count := int(binary.BigEndian.Uint16(plaintext[:secureBatchRecordHeaderLen]))
+	if count < 2 || count > secureBatchRecordMaxPackets {
+		return dst, 0, 0, ErrInvalidPacket
+	}
+	headerSize := secureBatchRecordHeaderLen + count*secureBatchRecordLengthLen
+	if headerSize > len(plaintext) {
+		return dst, 0, 0, ErrInvalidPacket
+	}
+	payloadOffset := headerSize
+	var bytesReceived uint64
+	for index := 0; index < count; index++ {
+		lengthOffset := secureBatchRecordHeaderLen + index*secureBatchRecordLengthLen
+		packetSize := int(binary.BigEndian.Uint32(plaintext[lengthOffset : lengthOffset+secureBatchRecordLengthLen]))
+		if packetSize > len(plaintext)-payloadOffset {
+			return dst, 0, 0, ErrInvalidPacket
+		}
+		payloadOffset += packetSize
+		bytesReceived += uint64(packetSize)
+	}
+	if payloadOffset != len(plaintext) {
+		return dst, 0, 0, ErrInvalidPacket
+	}
+	payloadOffset = headerSize
+	for index := 0; index < count; index++ {
+		lengthOffset := secureBatchRecordHeaderLen + index*secureBatchRecordLengthLen
+		packetSize := int(binary.BigEndian.Uint32(plaintext[lengthOffset : lengthOffset+secureBatchRecordLengthLen]))
+		dst = append(dst, plaintext[payloadOffset:payloadOffset+packetSize])
+		payloadOffset += packetSize
+	}
+	return dst, bytesReceived, count, nil
+}
+
 func (session *Session) openReceivedPacketNoStats(wire []byte) ([]byte, bool, error) {
+	plaintext, ok, _, _, err := session.openReceivedRecordNoStats(wire)
+	return plaintext, ok, err
+}
+
+func (session *Session) openReceivedRecordNoStats(wire []byte) ([]byte, bool, uint64, uint64, error) {
 	if isResetPacket(wire) {
-		return nil, false, ErrSessionReset
+		return nil, false, 0, 0, ErrSessionReset
 	}
 	handled, err := session.handleDuplicateHandshake(wire)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, 0, err
 	}
 	if handled {
-		return nil, false, nil
+		return nil, false, 0, 0, nil
 	}
 	if !session.recvEncrypted {
-		return wire, true, nil
+		return wire, true, uint64(len(wire)), 1, nil
 	}
 	if session.cryptoOffloaded && !session.shouldOpenUserspaceEncryptedFallback(wire) {
-		return wire, true, nil
+		return wire, true, uint64(len(wire)), 1, nil
 	}
-	plaintext, seq, err := session.openEncryptedPacketNoReplay(wire)
+	plaintext, seq, flags, err := session.openEncryptedPacketNoReplay(wire)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, 0, err
 	}
 	if !session.replay.Accept(seq) {
-		return nil, false, ErrReplayDetected
+		return nil, false, 0, 0, ErrReplayDetected
 	}
-	return plaintext, true, nil
+	if flags&dataFlagBatch == 0 {
+		return plaintext, true, uint64(len(plaintext)), 1, nil
+	}
+	packets, bytesReceived, count, err := appendSecureBatchRecordPackets(nil, plaintext)
+	if err != nil {
+		return nil, false, 0, 0, err
+	}
+	session.recvPending = append(session.recvPending[:0], packets[1:]...)
+	session.recvPendingIndex = 0
+	session.batchRecordsIn.Add(1)
+	session.batchPacketsIn.Add(uint64(count))
+	return packets[0], true, bytesReceived, uint64(count), nil
 }
 
 func (session *Session) shouldOpenUserspaceEncryptedFallback(wire []byte) bool {
 	return len(wire) >= len(dataMagic) && bytes.Equal(wire[:len(dataMagic)], dataMagic[:])
 }
 
-func (session *Session) openEncryptedPacketNoReplay(wire []byte) ([]byte, uint64, error) {
+func (session *Session) openEncryptedPacketNoReplay(wire []byte) ([]byte, uint64, byte, error) {
+	return session.openEncryptedPacketNoReplayInto(wire, nil)
+}
+
+func (session *Session) openEncryptedPacketNoReplayInto(wire []byte, dst []byte) ([]byte, uint64, byte, error) {
 	if session.recvAEAD == nil {
-		return nil, 0, ErrInvalidPacket
+		return nil, 0, 0, ErrInvalidPacket
 	}
 	if len(wire) < dataHeaderLen+session.recvAEAD.Overhead() {
-		return nil, 0, ErrInvalidPacket
+		return nil, 0, 0, ErrInvalidPacket
 	}
 	header := wire[:dataHeaderLen]
 	if !bytes.Equal(header[0:4], dataMagic[:]) || header[4] != dataVersion || header[5] != session.cryptoSuite.ID {
-		return nil, 0, ErrInvalidPacket
+		return nil, 0, 0, ErrInvalidPacket
+	}
+	flags := header[6]
+	if flags & ^byte(dataFlagBatch) != 0 || header[7] != 0 || flags&dataFlagBatch != 0 && !session.batchRecords {
+		return nil, 0, 0, ErrInvalidPacket
 	}
 	epoch := binary.BigEndian.Uint64(header[8:16])
 	if epoch != session.epoch {
-		return nil, 0, fmt.Errorf("%w: epoch %d != %d", ErrInvalidPacket, epoch, session.epoch)
+		return nil, 0, 0, fmt.Errorf("%w: epoch %d != %d", ErrInvalidPacket, epoch, session.epoch)
 	}
 	seq := binary.BigEndian.Uint64(header[16:24])
 	var nonce [12]byte
 	copy(nonce[:], session.recvIV)
 	binary.BigEndian.PutUint64(nonce[4:], seq)
 	ciphertext := wire[dataHeaderLen:]
-	plaintext, err := session.recvAEAD.Open(nil, nonce[:], ciphertext, header)
+	plaintext, err := session.recvAEAD.Open(dst, nonce[:], ciphertext, header)
 	if err != nil {
 		compatCiphertext := wire[dataHeaderLen:]
-		plaintext, err = session.recvAEAD.Open(nil, nonce[:], compatCiphertext, nil)
+		plaintext, err = session.recvAEAD.Open(dst[:0], nonce[:], compatCiphertext, nil)
 		if err != nil {
-			return nil, 0, fmt.Errorf("%w: %v", ErrInvalidPacket, err)
+			return nil, 0, 0, fmt.Errorf("%w: %v", ErrInvalidPacket, err)
 		}
 	}
-	return plaintext, seq, nil
+	return plaintext, seq, flags, nil
 }
 
 func (session *Session) recordPacketsReceived(bytesReceived uint64, packetsReceived uint64) {
@@ -1161,6 +1518,16 @@ func (session *Session) SetPeerEndpoint(peer core.IXID, endpoint core.EndpointID
 
 func (session *Session) Stats() transport.TransportStats {
 	stats := session.inner.Stats()
+	if session.batchRecords {
+		if stats.Extra == nil {
+			stats.Extra = make(map[string]uint64)
+		}
+		stats.Extra["secure_batch_records_negotiated"] = 1
+		stats.Extra["secure_batch_records_out"] = session.batchRecordsOut.Load()
+		stats.Extra["secure_batch_record_packets_out"] = session.batchPacketsOut.Load()
+		stats.Extra["secure_batch_records_in"] = session.batchRecordsIn.Load()
+		stats.Extra["secure_batch_record_packets_in"] = session.batchPacketsIn.Load()
+	}
 	stats.BytesSent = session.bytesSent.Load()
 	stats.BytesReceived = session.bytesRecv.Load()
 	stats.PacketsSent = session.packetsOut.Load()
@@ -1212,7 +1579,7 @@ type hello struct {
 	signature   []byte
 }
 
-func newHandshakeState(messageType byte, tlsConf *tls.Config, options Options) (handshakeState, hello, error) {
+func newHandshakeState(messageType byte, tlsConf *tls.Config, options Options, features ...uint16) (handshakeState, hello, error) {
 	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return handshakeState{}, hello{}, fmt.Errorf("generate TrustIX transport key: %w", err)
@@ -1226,9 +1593,13 @@ func newHandshakeState(messageType byte, tlsConf *tls.Config, options Options) (
 	if err != nil {
 		return handshakeState{}, hello{}, err
 	}
+	suiteMask := suiteMaskForOptions(options)
+	if len(features) > 0 {
+		suiteMask |= features[0] & helloFeatureMask
+	}
 	helloMsg := hello{
 		messageType: messageType,
-		suiteMask:   suiteMaskForOptions(options),
+		suiteMask:   suiteMask,
 		random:      randomBytes,
 		publicKey:   privateKey.PublicKey().Bytes(),
 		certDER:     state.certDER,
@@ -1542,7 +1913,7 @@ func appendSuiteMaskForSignature(payload []byte, hello hello) []byte {
 	return binary.BigEndian.AppendUint16(payload, normalizedSuiteMask(hello.suiteMask))
 }
 
-func newSession(inner transport.Session, role role, privateKey *ecdh.PrivateKey, peerPublicBytes []byte, clientRandom []byte, serverRandom []byte, clientPublic []byte, serverPublic []byte, options Options, peerCert *x509.Certificate, suite cryptoSuite, clientHelloRaw []byte, serverHelloRaw []byte) (*Session, error) {
+func newSession(inner transport.Session, role role, privateKey *ecdh.PrivateKey, peerPublicBytes []byte, clientRandom []byte, serverRandom []byte, clientPublic []byte, serverPublic []byte, options Options, peerCert *x509.Certificate, suite cryptoSuite, batchRecords bool, clientHelloRaw []byte, serverHelloRaw []byte) (*Session, error) {
 	peerPublic, err := ecdh.X25519().NewPublicKey(peerPublicBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: parse peer X25519 key: %v", ErrInvalidHandshake, err)
@@ -1562,6 +1933,7 @@ func newSession(inner transport.Session, role role, privateKey *ecdh.PrivateKey,
 		recvEncrypted:   encryption.ReceiveEncrypted,
 		cryptoSuite:     suite,
 		cryptoKeySource: "",
+		batchRecords:    batchRecords,
 		replay:          newReplayWindow(defaultReplayWindowSize),
 		clientHelloRaw:  slices.Clone(clientHelloRaw),
 		serverHelloRaw:  slices.Clone(serverHelloRaw),

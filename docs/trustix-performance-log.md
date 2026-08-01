@@ -5142,3 +5142,103 @@ receiver) and syscall cost (`26.30%` sender, `39.40%` receiver). Further gains
 do not strictly require a custom kernel module: packet-mmap/AF_XDP userspace I/O
 and carefully validated AEAD batching remain options, while moving crypto or
 the full packet path into the kernel is the larger and riskier next tier.
+
+### 2026-08-01 Zaozhuang PVE secure TCP receive arena and residual screens
+
+The next secure receive profile still allocated one plaintext slice per packet
+because batch decryption called `AEAD.Open(nil, ...)`. The secure session now
+pre-sizes and reuses a bounded plaintext arena for the whole receive batch while
+preserving the no-AAD kernel-device compatibility fallback. Arena-backed slices
+are explicitly reported as borrowed even when the wrapped transport owns its
+input buffers, so the non-release batch API continues to return owned data.
+
+Three interleaved 45-second A/B pairs used the same Debian 13 VM200/VM201 lab,
+8 vCPU per guest, 16 warmed secure TCP sessions, and 16 iperf streams:
+
+| Build | Received samples | Mean |
+| --- | --- | ---: |
+| Baseline | 3.151707, 3.204276, 3.236088 Gbps | 3.197357 Gbps |
+| Receive arena | 3.484962, 3.503847, 3.437176 Gbps | 3.475329 Gbps |
+
+The receive arena improved mean throughput by 8.69%; the three paired gains
+were 10.6%, 9.4%, and 6.2%. The measured baseline SHA256 was
+`82ad4b52a56115853c555fe46c31188ea5bac34578adf24b852e61ff8f1c9bc5`
+and the candidate SHA256 was
+`ba1f3a6af4a437384323174a9861508793a0e8a9c353c15d91779500d89d3cce`.
+A two-direction profile run received 3.415158 Gbps A-to-B and 3.414006 Gbps
+B-to-A. Both boot IDs remained stable, pstore was empty, and all send, receive,
+inject, GSO, dial, heartbeat, reset, and stale-session error counters were zero.
+`runtime.makeslicecopy` disappeared from the secure batch receive hot path.
+
+Forward-cache entries now also store route NAT eligibility when inserted. This
+removed repeated `EffectiveLANs` evaluation from every cached packet lookup.
+The change was throughput-neutral in isolation, but
+`lookupForwardCacheForPacket` fell from 4.17% cumulative CPU to 0.80% in the
+profile, so the simpler hot path was retained.
+
+Additional screens did not justify product changes. Enabling
+`PACKET_QDISC_BYPASS` reduced throughput from about 3.29 to 2.11 Gbps. A
+cross-call GSO combiner with 1, 2, 4, and 8 workers reached 1.926, 2.449, 2.806,
+and 3.021 Gbps versus 3.271 Gbps with the combiner off. AES-128 improved only
+1.01% over AES-256, so AES-256 remains first preference. Upper batch limits of
+32, 64, 128, and 256 KiB reached 3.177, 3.158, 3.224, and 3.131 Gbps; standard
+TCP did not use the affected upper batching counters. Eight capture workers
+were also neutral against the automatic 16-worker selection (3.161 versus
+3.165 Gbps). All rejected implementations and defaults were removed.
+
+The remaining dominant costs are AF_PACKET syscalls/reinjection and both the
+TrustIX packet AEAD and TLS record AEAD. There is still userspace headroom, but
+the next material experiment is an I/O architecture change such as
+`PACKET_TX_RING` or AF_XDP TX, not another batch-size or worker-count tune. A
+custom kernel module is therefore not the only next step, although moving
+packet I/O or crypto into the kernel is the larger-ceiling tier. These short A/B
+runs are engineering evidence and do not replace the 3600-second production
+evidence gate.
+
+### 2026-08-01 Zaozhuang PVE negotiated secure batch records
+
+The standard secure TCP path still authenticated each inner packet as a
+separate TrustIX AEAD record before writing the records through TLS. A new
+negotiated stream capability can now encode up to 256 inner packets in one
+authenticated TrustIX record. The record contains a bounded packet-count and
+length table followed by the packet payloads. It is encrypted in place in the
+stream transport's final framed buffer, decrypted once into the reusable
+receive arena, and split into borrowed packet slices without another payload
+copy. Replay acceptance remains record-atomic, receive limits retain owned
+overflow packets, and datagram transports never advertise the capability.
+
+The capability uses a previously unused hello mask bit. New peers enable it by
+default only when both wrapped sessions expose synchronous stream batching;
+an old peer ignores the unknown offer and replies without it, which keeps the
+original per-packet wire format. Real mixed-version runs covered both handshake
+roles with `TRUSTIX_SECURE_BATCH_RECORDS=1`: new-A/old-B received
+`3.488803 Gbps`, and old-A/new-B received `3.379347 Gbps`. Both passed and the
+new endpoint reported no negotiated batch-record metric. The explicit
+failback is `TRUSTIX_SECURE_BATCH_RECORDS=0`.
+
+Three 45-second interleaved pairs used the same candidate binary and changed
+only that failback switch:
+
+| Secure record mode | Received samples | Mean | Mean retransmits |
+| --- | --- | ---: | ---: |
+| Per inner packet | 3.417030, 3.384543, 3.434217 Gbps | 3.411930 Gbps | 23,896 |
+| Negotiated batch | 3.975278, 3.965661, 4.002880 Gbps | 3.981273 Gbps | 29,583 |
+
+Negotiated batching improved mean throughput by 16.69%; all three paired
+comparisons were positive. A separate 90-second profile sustained
+`4.077451 Gbps`. Sender CPU remained concentrated in syscall (`40.43%` flat),
+AES-GCM encryption (`24.40%`), and memmove (`9.07%`); receiver CPU was syscall
+`43.52%`, AES-GCM decryption `32.51%`, and memmove `4.93%`. The extra contiguous
+plaintext copy is therefore measurable, but reducing TrustIX records and AEAD
+operations produced a substantially larger end-to-end gain.
+
+The final default-on binary SHA256 was
+`3864bcdd431f82efc040ab82e1424be8f91c08aa70f9f8c8dfda843aa721129c`.
+A no-environment smoke negotiated the capability on both nodes and received
+`3.993554 Gbps`; the explicit failback omitted all batch metrics and received
+`3.407184 Gbps`. A final 300-second concurrent bidirectional soak received
+`2.124371 Gbps` A-to-B and `2.121526 Gbps` B-to-A, about `4.246 Gbps` combined.
+The strict runner returned `pass`, both guest boot IDs were stable, pstore was
+empty, and kernel logs contained no panic, Oops, BUG, watchdog, or lockup
+finding. This is optimization and engineering-soak evidence, not a replacement
+for the repository's 3600-second production gate.

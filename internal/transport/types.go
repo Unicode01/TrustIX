@@ -159,6 +159,9 @@ type PacketBatchReceiver interface {
 	RecvPackets(max int) ([][]byte, error)
 }
 
+// PacketBatchReceiverWithRelease may return packet slices backed by reusable
+// storage. A non-nil release must be called exactly once after the packets are
+// consumed and before the next receive on the same session.
 type PacketBatchReceiverWithRelease interface {
 	RecvPacketsWithRelease(max int) (packets [][]byte, release func(), err error)
 }

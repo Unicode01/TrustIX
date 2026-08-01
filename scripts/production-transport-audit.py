@@ -433,6 +433,20 @@ VXLAN_CARRIER_FRAGMENT_COMMITS_BY_PATH = {
     },
 }
 RUNTIME_COMPATIBLE_COMMITS_BY_PATH_AND_GATE_CLASS = {
+    # d3648c6 enables receive-side GSO coalescing only for standard secure TCP
+    # sessions. Low-level UDP, TIX-TCP, tunnel, TC, and module gate families do
+    # not select ProtocolTCP and retain their previously measured path.
+    "internal/daemon/gso_coalesce.go": {
+        "d3648c660cf3eb89868575c276670e1b5bbd4931": {
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "tix_tcp_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
+    },
     # 4beb3be only annotates two software AES helpers as potentially unused so
     # the module builds on legacy kernels whose selected compile-time path does
     # not reference them. It does not change generated runtime behavior on the
@@ -850,6 +864,21 @@ TOOLCHAIN_COMPATIBLE_SHA256_BY_FIELD_AND_FAMILY = {
         },
     },
     "runner_sha256": {
+        # The current runner adds only an opt-in crypto-suite override used by
+        # engineering comparisons. Existing runs without that environment
+        # variable generate identical endpoint config and workloads.
+        "086890c1b9ea5f35cba7ecb3fd2d2f8f655b8a5f33c7c8f03627262708f2bbab": {
+            "userspace",
+            "userspace_tc",
+            "tc_direct",
+            "full_kmod",
+            "owdeb_full_kmod",
+            "tix_tcp_full_kmod",
+            "owdeb_tix_tcp_full_kmod",
+            "secure_kudp",
+            "secure_tix_tcp_kernel",
+            "route_gso",
+        },
         # The current runner only exports the OpenWrt nonlinear RX switch
         # when explicitly requested. Existing artifacts did not request it,
         # so their topology and workload semantics are unchanged.

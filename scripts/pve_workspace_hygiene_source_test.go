@@ -371,6 +371,48 @@ func TestCrossHostRunnerMultiEndpointDryRunConfig(t *testing.T) {
 	}
 }
 
+func TestCrossHostRunnerCryptoSuiteOverrideDryRunConfig(t *testing.T) {
+	bash := requireGNUBash4(t)
+	workdir := filepath.Join(t.TempDir(), "crypto-suites")
+	baseEnv := []string{
+		"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
+		"TRUSTIX_CROSS_HOST_CASE=userspace-tcp-secure",
+		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IP=192.0.2.10",
+		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IP=192.0.2.11",
+		"TRUSTIX_CROSS_HOST_A_UNDERLAY_IF=eth0",
+		"TRUSTIX_CROSS_HOST_B_UNDERLAY_IF=eth0",
+	}
+	cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(), append(baseEnv,
+		"TRUSTIX_CROSS_HOST_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_CRYPTO_SUITES=AES-128-GCM-X25519,AES-256-GCM-X25519",
+	)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("crypto-suite dry-run config failed: %v\n%s", err, out)
+	}
+	want := "  crypto_suites:\n    - AES-128-GCM-X25519\n    - AES-256-GCM-X25519\n"
+	for _, name := range []string{"config-a.yaml", "config-b.yaml"} {
+		payload, err := os.ReadFile(filepath.Join(workdir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if !strings.Contains(string(payload), want) {
+			t.Fatalf("%s missing crypto-suite override:\n%s", name, payload)
+		}
+	}
+
+	invalid := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	invalid.Dir = "."
+	invalid.Env = append(os.Environ(), append(baseEnv,
+		"TRUSTIX_CROSS_HOST_WORKDIR="+filepath.Join(t.TempDir(), "invalid-suite"),
+		"TRUSTIX_CROSS_HOST_CRYPTO_SUITES=RC4-X25519",
+	)...)
+	if out, err := invalid.CombinedOutput(); err == nil || !strings.Contains(string(out), "unsupported suite: RC4-X25519") {
+		t.Fatalf("invalid crypto-suite override error = %v, output:\n%s", err, out)
+	}
+}
+
 func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
 	bash := requireGNUBash4(t)
 	for _, tc := range []struct {

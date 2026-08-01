@@ -9,6 +9,7 @@ case_encryption_override="${TRUSTIX_CROSS_HOST_ENCRYPTION:-}"
 case_profile_override="${TRUSTIX_CROSS_HOST_PROFILE:-}"
 case_datapath_override="${TRUSTIX_CROSS_HOST_TRANSPORT_DATAPATH:-}"
 case_crypto_placement_override="${TRUSTIX_CROSS_HOST_CRYPTO_PLACEMENT:-}"
+case_crypto_suites_override="${TRUSTIX_CROSS_HOST_CRYPTO_SUITES:-}"
 endpoint_transports_raw="${TRUSTIX_CROSS_HOST_ENDPOINT_TRANSPORTS:-}"
 workdir="${TRUSTIX_CROSS_HOST_WORKDIR:-$(mktemp -d /tmp/trustix-cross-host.XXXXXX)}"
 workdir="$(mkdir -p "$workdir" && cd "$workdir" && pwd -P)"
@@ -562,6 +563,7 @@ case_is_generic() {
 }
 
 validate_case() {
+  validate_case_crypto_suites
   if case_is_generic; then
     if case_is_multi_endpoint; then
       [[ "$(generic_case_kind)" == "userspace" ]] || die "multi-endpoint soak currently requires a userspace case"
@@ -704,6 +706,28 @@ case_transport_profile() {
       ;;
     *) printf 'performance\n' ;;
   esac
+}
+
+case_crypto_suites_yaml() {
+  local raw suite
+  raw="${case_crypto_suites_override//,/ }"
+  [[ -n "${raw//[[:space:]]/}" ]] || return 0
+  printf '  crypto_suites:\n'
+  for suite in $raw; do
+    printf '    - %s\n' "$suite"
+  done
+}
+
+validate_case_crypto_suites() {
+  local raw suite
+  raw="${case_crypto_suites_override//,/ }"
+  [[ -n "${raw//[[:space:]]/}" ]] || return 0
+  for suite in $raw; do
+    case "$suite" in
+      AES-256-GCM-X25519|AES-128-GCM-X25519|CHACHA20-POLY1305-X25519) ;;
+      *) die "TRUSTIX_CROSS_HOST_CRYPTO_SUITES contains unsupported suite: $suite" ;;
+    esac
+  done
 }
 
 case_transport_datapath() {
@@ -1481,6 +1505,7 @@ EOF
   load_balance: least_conn
   encryption: ${encryption}
   crypto_placement: ${crypto_placement}
+$(case_crypto_suites_yaml)
   session_pool:
     size: ${session_pool_size}
     strategy: ${session_pool_strategy}
@@ -1633,6 +1658,7 @@ transport_policy:
   load_balance: least_conn
   encryption: ${encryption}
   crypto_placement: ${crypto_placement}
+$(case_crypto_suites_yaml)
   session_pool:
     size: ${session_pool_size}
     strategy: ${session_pool_strategy}
