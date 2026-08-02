@@ -5780,3 +5780,62 @@ implementation and its configuration surface were removed. `MSG_ZEROCOPY` is
 therefore rejected for the current secure TCP batching architecture: it is a
 strong raw-stream optimization but not a net TrustIX optimization after
 encryption, capture, receive processing, and LAN reinjection are included.
+
+### 2026-08-02 Zaozhuang PVE pooled capture dispatch groups
+
+The multi-worker capture dispatcher previously discarded every worker group's
+backing slice after each source batch. Workers still held those slices while
+queued, so a single dispatcher-local scratch slice could not be reused safely.
+The dispatcher now leases one pooled bundle containing all worker groups. A
+shared atomic completion retains one reference per recipient plus one for the
+dispatcher, clears every copied `CaptureEvent` before recycling the bundle,
+and releases the original ringbuf batch only after the final recipient. The
+single-worker and single-destination fast paths continue to forward the
+original borrowed batch directly.
+
+Validation used disposable Debian 13 VM200/VM201 guests on isolated `vmbr3`,
+8 vCPU and 8 GiB per guest, 16 warmed secure TCP sessions, and 16 iperf
+streams. Node A ran kernel `6.12.100+deb13-cloud-amd64`; node B ran
+`6.12.57+deb13-cloud-amd64`. Six interleaved 45-second runs used the same
+candidate binary, SHA256
+`ab8924f2b8adb2071e2f61c6091c73992f04b286881a18876da400761485f7e7`,
+and changed only the temporary group-pool switch:
+
+| Pair | Previous dispatcher | Pooled dispatcher |
+| --- | ---: | ---: |
+| 1 | 4.928068 Gbps | 5.248324 Gbps |
+| 2 | 5.333689 Gbps | 5.318262 Gbps |
+| 3 | 5.345102 Gbps | 5.564985 Gbps |
+| Mean | 5.202287 Gbps | 5.377190 Gbps |
+
+The interleaved mean gain was `3.36%`; two of three pairs favored the pooled
+dispatcher. A reverse-order 90-second profile pair then ran the pooled path
+first and received `5.638090 Gbps`, followed by `5.497506 Gbps` for the
+previous dispatcher, a `2.56%` gain. Retransmits were comparable at 80,995
+and 79,424.
+
+The sender's dispatcher cumulative CPU fell from `23.77s` to `10.74s`, or
+about `55%`. Global `runtime.growslice` cumulative CPU fell from `20.29s` to
+`5.20s`, `runtime.mallocgc` from `19.56s` to `6.59s`, and
+`runtime.memclrNoHeapPointers` from `14.48s` to `7.29s`. Sender CPU cost per
+Gbps fell `6.46%`; combined sender and receiver CPU cost per Gbps fell
+`4.45%`. These profiles confirm that the throughput change came from the
+targeted allocation path rather than only run-order variance.
+
+The experiment switch and previous implementation were removed. The reviewed
+default-only binary, SHA256
+`c081e1efe33b7c6821390d9cdbd0b7068b23ac6f0c2d3e50bb04e3363bd0ea8e`,
+passed a final 60-second run at `5.564664 Gbps`. Both nodes retained their boot
+IDs, pstore was mounted and empty, and kernel and daemon error scans were
+empty. Unit and race tests cover delayed recycling, exactly-once source-batch
+release, partial dispatch cancellation, per-worker order, reference clearing,
+and non-aliasing in-flight bundles.
+
+Useful userspace work therefore remained after the earlier packet-I/O
+optimizations. The sender profile is now dominated by syscalls (`42.62%`
+flat), AES-GCM (`18.04%`), and memory movement (`9.79%`). The next userspace
+experiment would need to change capture event representation or packet-I/O
+architecture; another parameter tune is unlikely to produce a material step.
+The separately validated kernel dataplane remains the more likely source of a
+large throughput increase. This engineering evidence does not replace the
+repository's 3600-second production gates.

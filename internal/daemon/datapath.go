@@ -2472,9 +2472,83 @@ type captureBatchWork struct {
 	release func()
 }
 
-type captureBatchDispatchWork struct {
-	index int
-	work  captureBatchWork
+type captureBatchDispatchGroups struct {
+	groups [][]dataplane.CaptureEvent
+}
+
+type captureBatchDispatchGroupPool struct {
+	pool sync.Pool
+}
+
+type captureBatchDispatchCompletion struct {
+	remaining atomic.Int32
+	pool      *captureBatchDispatchGroupPool
+	groups    *captureBatchDispatchGroups
+	releaser  captureBatchReleaser
+	batch     []dataplane.CaptureEvent
+}
+
+var captureBatchDispatchGroupsPool captureBatchDispatchGroupPool
+
+func (pool *captureBatchDispatchGroupPool) take(workers int) *captureBatchDispatchGroups {
+	groups, _ := pool.pool.Get().(*captureBatchDispatchGroups)
+	if groups == nil {
+		groups = &captureBatchDispatchGroups{}
+	}
+	if cap(groups.groups) < workers {
+		groups.groups = make([][]dataplane.CaptureEvent, workers)
+	} else {
+		groups.groups = groups.groups[:workers]
+	}
+	return groups
+}
+
+func (pool *captureBatchDispatchGroupPool) put(groups *captureBatchDispatchGroups) {
+	if groups == nil {
+		return
+	}
+	for index := range groups.groups {
+		clear(groups.groups[index])
+		groups.groups[index] = groups.groups[index][:0]
+	}
+	pool.pool.Put(groups)
+}
+
+func newCaptureBatchDispatchCompletion(
+	pool *captureBatchDispatchGroupPool,
+	groups *captureBatchDispatchGroups,
+	releaser captureBatchReleaser,
+	batch []dataplane.CaptureEvent,
+	recipients int,
+) *captureBatchDispatchCompletion {
+	completion := &captureBatchDispatchCompletion{
+		pool:     pool,
+		groups:   groups,
+		releaser: releaser,
+		batch:    batch,
+	}
+	// Keep one reference for the dispatcher so a fast worker cannot recycle
+	// group storage while the remaining groups are still being queued.
+	completion.remaining.Store(int32(recipients + 1))
+	return completion
+}
+
+func (completion *captureBatchDispatchCompletion) done() {
+	if completion == nil || completion.remaining.Add(-1) != 0 {
+		return
+	}
+	pool := completion.pool
+	groups := completion.groups
+	releaser := completion.releaser
+	batch := completion.batch
+	completion.pool = nil
+	completion.groups = nil
+	completion.releaser = nil
+	completion.batch = nil
+	pool.put(groups)
+	if releaser != nil {
+		releaser(batch)
+	}
 }
 
 func captureBatchReleaserForSubscription(subscription dataplane.CaptureBatchSubscription) captureBatchReleaser {
@@ -2491,22 +2565,6 @@ func captureBatchReleaseForBatch(releaser captureBatchReleaser, batch []dataplan
 	}
 	return func() {
 		releaser(batch)
-	}
-}
-
-func captureBatchRefCountRelease(release func(), recipients int) func() {
-	if release == nil {
-		return nil
-	}
-	if recipients <= 1 {
-		return release
-	}
-	var remaining atomic.Int32
-	remaining.Store(int32(recipients))
-	return func() {
-		if remaining.Add(-1) == 0 {
-			release()
-		}
 	}
 }
 
@@ -2641,13 +2699,21 @@ func (daemon *Daemon) dispatchCapturedPacketBatches(ctx context.Context, batches
 }
 
 func (daemon *Daemon) dispatchCapturedPacketBatchGroups(ctx context.Context, batches <-chan []dataplane.CaptureEvent, queues []chan captureBatchWork, releaser captureBatchReleaser) {
+	daemon.dispatchCapturedPacketBatchGroupsWithPool(ctx, batches, queues, releaser, &captureBatchDispatchGroupsPool)
+}
+
+func (daemon *Daemon) dispatchCapturedPacketBatchGroupsWithPool(
+	ctx context.Context,
+	batches <-chan []dataplane.CaptureEvent,
+	queues []chan captureBatchWork,
+	releaser captureBatchReleaser,
+	pool *captureBatchDispatchGroupPool,
+) {
 	if len(queues) == 0 {
 		return
 	}
 	workers := len(queues)
 	var fallback uint64
-	grouped := make([][]dataplane.CaptureEvent, workers)
-	works := make([]captureBatchDispatchWork, 0, workers)
 	for {
 		select {
 		case <-ctx.Done():
@@ -2656,14 +2722,11 @@ func (daemon *Daemon) dispatchCapturedPacketBatchGroups(ctx context.Context, bat
 			if !ok {
 				return
 			}
-			release := captureBatchReleaseForBatch(releaser, batch)
 			if len(batch) == 0 {
-				if release != nil {
-					release()
-				}
 				continue
 			}
 			if workers == 1 {
+				release := captureBatchReleaseForBatch(releaser, batch)
 				work := captureBatchWork{events: batch, release: release}
 				select {
 				case <-ctx.Done():
@@ -2692,6 +2755,7 @@ func (daemon *Daemon) dispatchCapturedPacketBatchGroups(ctx context.Context, bat
 			}
 			if singleWorker {
 				fallback = nextFallback
+				release := captureBatchReleaseForBatch(releaser, batch)
 				work := captureBatchWork{events: batch, release: release}
 				select {
 				case <-ctx.Done():
@@ -2701,43 +2765,44 @@ func (daemon *Daemon) dispatchCapturedPacketBatchGroups(ctx context.Context, bat
 				}
 				continue
 			}
-			for index := range grouped {
-				grouped[index] = nil
-			}
-			works = works[:0]
+
+			groups := pool.take(workers)
 			nextFallback = fallback
 			for _, event := range batch {
 				index, hasFlow := captureForwarderWorkerIndexWithFlow(event, workers, nextFallback)
 				if !hasFlow {
 					nextFallback++
 				}
-				grouped[index] = append(grouped[index], event)
+				groups.groups[index] = append(groups.groups[index], event)
 			}
-			for index := range grouped {
-				if len(grouped[index]) == 0 {
+			recipients := 0
+			for index := range groups.groups {
+				if len(groups.groups[index]) != 0 {
+					recipients++
+				}
+			}
+			completion := newCaptureBatchDispatchCompletion(pool, groups, releaser, batch, recipients)
+			done := completion.done
+			for index := range groups.groups {
+				if len(groups.groups[index]) == 0 {
 					continue
 				}
-				works = append(works, captureBatchDispatchWork{index: index, work: captureBatchWork{events: grouped[index]}})
-			}
-			done := captureBatchRefCountRelease(release, len(works))
-			for i := range works {
-				works[i].work.release = done
-			}
-			for i, item := range works {
+				work := captureBatchWork{events: groups.groups[index], release: done}
 				select {
 				case <-ctx.Done():
-					item.work.finish()
-					for j := i + 1; j < len(works); j++ {
-						works[j].work.finish()
+					work.finish()
+					for remainingIndex := index + 1; remainingIndex < len(groups.groups); remainingIndex++ {
+						if len(groups.groups[remainingIndex]) != 0 {
+							done()
+						}
 					}
+					completion.done()
 					return
-				case queues[item.index] <- item.work:
+				case queues[index] <- work:
 				}
 			}
 			fallback = nextFallback
-			for index := range grouped {
-				grouped[index] = nil
-			}
+			completion.done()
 		}
 	}
 }
