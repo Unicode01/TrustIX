@@ -5955,3 +5955,96 @@ entries, no loaded TrustIX modules, and no residual daemon, namespace,
 managed link, or ingress filter on either guest. VM200/VM201, `vmbr3`, guest
 test data, the temporary node key, and local build outputs were then removed;
 VM100 and every 1xx guest remained untouched.
+
+### 2026-08-02 Zaozhuang PVE ringbuf dynptr rejection
+
+The TC capture programs were profiled with `bpf_ringbuf_output` accounting for
+about 8% of sender CPU cycles. An opt-in candidate reserved each complete
+ringbuf record through a dynptr and wrote the capture header and packet sample
+directly into that reservation, avoiding the producer-side copy from a stack
+event into the ring. Runtime helper probing failed closed to the established
+`bpf_ringbuf_output` programs. The helper probe, BPF compilation, and Linux
+6.12 ingress and egress verifier loads all passed.
+
+The same candidate binary, SHA256
+`b7f1a487f7eabee45c17f8fb014cb1e59d75425dc1dad88571a22ca89cd62833`,
+was used for three interleaved 45-second comparisons on VM200/VM201. Both
+guests had 8 vCPU and 8 GiB RAM and used the isolated `vmbr3` underlay. Each
+run used 16 warmed secure TCP sessions and 16 iperf streams.
+
+| Pair | `bpf_ringbuf_output` | Dynptr reserve/write |
+| --- | ---: | ---: |
+| 1 | 6.043400 Gbps | 5.801522 Gbps |
+| 2 | 6.442213 Gbps | 6.129273 Gbps |
+| 3 | 6.554344 Gbps | 6.453523 Gbps |
+| Mean | 6.346652 Gbps | 6.128106 Gbps |
+
+All three pairs were negative and the dynptr mean was `3.44%` lower. Avoiding
+the kernel-side copy did not recover the instruction and helper overhead of
+multiple dynptr writes for this record shape. The implementation, runtime
+probe, switch, and tests were removed completely. This path should not be
+restored without a materially different producer layout or new kernel helper
+behavior.
+
+### 2026-08-02 Zaozhuang PVE capture batch timestamps
+
+The secure TCP sender profile attributed `7.96s`, or `1.26%` of sampled CPU,
+to the per-record `time.Now` call in the ringbuf capture reader. The first
+candidate deferred timestamp assignment until capture history delivery and
+assigned one timestamp to the batch while holding `captureMu`. That enlarged
+the critical section and was consistently slower:
+
+| Pair | Per-event timestamp | Timestamp in locked delivery |
+| --- | ---: | ---: |
+| 1 | 5.990605 Gbps | 5.693372 Gbps |
+| 2 | 6.393063 Gbps | 6.027739 Gbps |
+| 3 | 6.382016 Gbps | 5.944819 Gbps |
+| Mean | 6.255228 Gbps | 5.888644 Gbps |
+
+The locked candidate was `5.86%` slower and was not retained. The corrected
+implementation instead obtains one UTC timestamp per reader lease immediately
+after the first valid decode, assigns that cached value outside `captureMu`,
+and resets it whenever the lease is delivered. Disabled capture history still
+avoids the clock call and records zero timestamps. This preserves timestamp
+ordering at the existing reader-batch granularity without extending the lock.
+
+Three more interleaved 45-second comparisons used the same corrected binary,
+SHA256
+`74583468cb2e3215d6cafb53d76b6a3fd3485074e441f7a169b6388de22d487b`,
+and changed only the temporary timestamp switch. The middle pair reversed the
+order:
+
+| Pair | Per-event timestamp | Lock-free batch timestamp |
+| --- | ---: | ---: |
+| 1 | 6.042141 Gbps | 6.128116 Gbps |
+| 2 | 5.684359 Gbps | 6.252062 Gbps |
+| 3 | 5.438218 Gbps | 5.481499 Gbps |
+| Mean | 5.721573 Gbps | 5.953892 Gbps |
+
+All three pairs favored the lock-free batch timestamp, whose mean was `4.06%`
+higher. The experiment switch and per-event path were then removed. The final
+default-only binary, SHA256
+`d6c8e14b300e44c9ca29f2ef4a5368aabb504d0bf97a6e8c5f33cebce70f5782`,
+received `6.239708 Gbps` in a 120-second profile. The capture reader's
+timestamp call fell from `7.96s` to `0.05s`. Total `time.Now` CPU fell from
+`1.41%` to `0.98%`; the remainder is led by the sliding ringbuf drain deadline
+and unrelated operational timestamps.
+
+The final sender profile was led by syscall (`43.14%` flat), AES-GCM encryption
+(`19.42%`), and `runtime.memmove` (`8.86%`). Receiver CPU was led by syscall
+(`51.70%`), AES-GCM decryption (`21.91%`), and `runtime.memmove` (`4.49%`). A
+300-second simultaneous bidirectional soak received `3.224017 Gbps` A-to-B and
+`3.092610 Gbps` B-to-A, or `6.316628 Gbps` combined. Both boot IDs remained
+stable, pstore was mounted and empty, kernel journal and dmesg scans were
+empty, all runner error artifacts were empty, and cleanup left no daemon,
+namespace, managed LAN link, loaded TrustIX module, or ingress filter.
+
+Targeted Windows package tests, vet, TypeScript checking, Linux/amd64
+compilation, and the full Linux eBPF package test passed. Repository-wide Go
+tests passed outside the existing production-evidence audit failures: the
+recorded 3600-second gates predate current runtime/dataplane changes and still
+require a dedicated refresh. This 300-second result is engineering evidence
+and does not replace that production gate. The profile confirms that more
+userspace optimization is possible in small increments, but a large throughput
+step still requires a different packet-I/O boundary that preserves GSO or the
+validated kernel dataplane.

@@ -995,6 +995,37 @@ func TestDeliverCaptureEventBatchHistoryCopiesBorrowedPayload(t *testing.T) {
 	}
 }
 
+func TestCaptureEventTimestamp(t *testing.T) {
+	oldHistory := captureHistoryEnabled
+	t.Cleanup(func() {
+		captureHistoryEnabled = oldHistory
+	})
+
+	var batchTimestamp time.Time
+	captureHistoryEnabled = false
+	if got := captureEventTimestamp(&batchTimestamp); !got.IsZero() || !batchTimestamp.IsZero() {
+		t.Fatalf("disabled history timestamp = %s/%s, want zero values", got, batchTimestamp)
+	}
+
+	captureHistoryEnabled = true
+	before := time.Now().UTC()
+	first := captureEventTimestamp(&batchTimestamp)
+	second := captureEventTimestamp(&batchTimestamp)
+	after := time.Now().UTC()
+	if first.IsZero() || !first.Equal(second) || !first.Equal(batchTimestamp) {
+		t.Fatalf("cached batch timestamps = %s/%s/%s, want one non-zero timestamp", first, second, batchTimestamp)
+	}
+	if first.Before(before) || first.After(after) {
+		t.Fatalf("batch timestamp %s is outside capture interval %s..%s", first, before, after)
+	}
+
+	batchTimestamp = time.Time{}
+	reset := captureEventTimestamp(&batchTimestamp)
+	if reset.IsZero() || !reset.Equal(batchTimestamp) {
+		t.Fatalf("reset batch timestamp = %s/%s, want a new cached timestamp", reset, batchTimestamp)
+	}
+}
+
 func TestDeliverCaptureEventBatchHistoryBorrowsForBatchSubscriber(t *testing.T) {
 	oldHistory := captureHistoryEnabled
 	oldPayloadLimit := captureHistoryPayloadLimit

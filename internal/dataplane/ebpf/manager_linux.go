@@ -25364,14 +25364,26 @@ func cloneCaptureEventBatch(batch []dataplane.CaptureEvent, mutable bool) []data
 	return out
 }
 
+func captureEventTimestamp(batchTimestamp *time.Time) time.Time {
+	if !captureHistoryEnabled {
+		return time.Time{}
+	}
+	if batchTimestamp.IsZero() {
+		*batchTimestamp = time.Now().UTC()
+	}
+	return *batchTimestamp
+}
+
 func (manager *Manager) readCaptureEvents(reader *perf.Reader) {
 	var record perf.Record
+	var batchCapturedAt time.Time
 	lease := takeCaptureEventBatchLease()
 	defer func() {
 		putCaptureEventBatchLease(lease)
 	}()
 	deliver := func() {
 		if len(lease.events) == 0 {
+			batchCapturedAt = time.Time{}
 			return
 		}
 		manager.captureMu.Lock()
@@ -25384,6 +25396,7 @@ func (manager *Manager) readCaptureEvents(reader *perf.Reader) {
 			lease.events = lease.events[:0]
 			lease.resetPayloadStorage()
 		}
+		batchCapturedAt = time.Time{}
 	}
 	blockingRead := true
 	for {
@@ -25412,14 +25425,11 @@ func (manager *Manager) readCaptureEvents(reader *perf.Reader) {
 			blockingRead = true
 			continue
 		}
-		var capturedAt time.Time
-		if captureHistoryEnabled {
-			capturedAt = time.Now().UTC()
-		}
-		event, ok := decodeCaptureEventIntoAt(record, &lease.arena, capturedAt)
+		event, ok := decodeCaptureEventIntoAt(record, &lease.arena, time.Time{})
 		if !ok {
 			continue
 		}
+		event.CapturedAt = captureEventTimestamp(&batchCapturedAt)
 		lease.events = append(lease.events, event)
 		if len(lease.events) >= captureReaderBatchSize {
 			deliver()
@@ -25435,12 +25445,14 @@ func (manager *Manager) readCaptureEvents(reader *perf.Reader) {
 
 func (manager *Manager) readCaptureRingEvents(reader *ringbuf.Reader) {
 	var record ringbuf.Record
+	var batchCapturedAt time.Time
 	lease := takeCaptureEventBatchLease()
 	defer func() {
 		putCaptureEventBatchLease(lease)
 	}()
 	deliver := func() {
 		if len(lease.events) == 0 {
+			batchCapturedAt = time.Time{}
 			return
 		}
 		manager.captureMu.Lock()
@@ -25453,6 +25465,7 @@ func (manager *Manager) readCaptureRingEvents(reader *ringbuf.Reader) {
 			lease.events = lease.events[:0]
 			lease.resetPayloadStorage()
 		}
+		batchCapturedAt = time.Time{}
 	}
 	blockingRead := true
 	for {
@@ -25475,24 +25488,21 @@ func (manager *Manager) readCaptureRingEvents(reader *ringbuf.Reader) {
 			}
 			continue
 		}
-		var capturedAt time.Time
-		if captureHistoryEnabled {
-			capturedAt = time.Now().UTC()
-		}
 		raw, committed := lease.commitRingRecord(chunkIndex, chunkBase, record.RawSample)
 		var event dataplane.CaptureEvent
 		var ok bool
 		if committed {
-			event, ok = decodeCaptureRawEventBorrowedAt(raw, -1, capturedAt)
+			event, ok = decodeCaptureRawEventBorrowedAt(raw, -1, time.Time{})
 			if !ok {
 				lease.discardRingRecord(chunkIndex, chunkBase, raw)
 			}
 		} else {
-			event, ok = decodeCaptureRawEventIntoAt(record.RawSample, -1, &lease.arena, capturedAt)
+			event, ok = decodeCaptureRawEventIntoAt(record.RawSample, -1, &lease.arena, time.Time{})
 		}
 		if !ok {
 			continue
 		}
+		event.CapturedAt = captureEventTimestamp(&batchCapturedAt)
 		lease.events = append(lease.events, event)
 		if len(lease.events) >= captureReaderBatchSize {
 			deliver()
