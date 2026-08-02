@@ -6048,3 +6048,44 @@ and does not replace that production gate. The profile confirms that more
 userspace optimization is possible in small increments, but a large throughput
 step still requires a different packet-I/O boundary that preserves GSO or the
 validated kernel dataplane.
+
+### 2026-08-02 Zaozhuang PVE deferred checksum normalization rejection
+
+A temporary candidate moved captured IPv4/TCP/UDP checksum normalization out
+of the serial ringbuf reader and into the parallel forwarding workers. Three
+interleaved 45-second secure TCP comparisons, with the middle pair run in
+reverse order, did not show a repeatable benefit:
+
+| Pair | Reader normalization | Worker normalization |
+| --- | ---: | ---: |
+| 1 | 5.395708 Gbps | 5.471393 Gbps |
+| 2 | 5.330603 Gbps | 5.166938 Gbps |
+| 3 | 5.237989 Gbps | 5.265253 Gbps |
+| Mean | 5.321433 Gbps | 5.301195 Gbps |
+
+Worker normalization was `0.38%` slower overall. The work moved off the reader
+but remained on the forwarding critical path, and the added worker-side cost
+offset the parallelism. No implementation or experiment switch was retained.
+
+### 2026-08-02 Zaozhuang PVE checksum accumulator rejection
+
+A second candidate changed `captureChecksumAddBytes` to process 32-byte blocks
+through four independent 64-bit accumulators. Reference/random correctness
+tests passed, and microbenchmarks improved from about `261.6 ns` to `146.6 ns`
+for 1500-byte input and from `10.64 us` to `5.78 us` for 64 KiB input. The
+short 4-byte path was unchanged. End-to-end results nevertheless regressed in
+all three interleaved comparisons:
+
+| Pair | Serial accumulator | Four accumulators |
+| --- | ---: | ---: |
+| 1 | 5.172128 Gbps | 5.068517 Gbps |
+| 2 | 5.292349 Gbps | 5.177723 Gbps |
+| 3 | 5.280414 Gbps | 5.091947 Gbps |
+| Mean | 5.248297 Gbps | 5.112729 Gbps |
+
+The candidate was `2.58%` slower overall despite its isolated benchmark gain,
+so it was reverted. The baseline and candidate daemon SHA256 values were
+`40fb8adec608b2e8ce229a57fc938b309fad6e32c20a3a796aff8c3d030a4af5` and
+`42252f958fbd5d7288fe0a76601452a5b8bf2ae26fa51d39c8268b1859ec5a2`.
+Together with the final profiles, these rejections narrow useful userspace
+work to packet-I/O architecture rather than local checksum-loop tuning.
