@@ -5910,3 +5910,48 @@ AES-GCM, and packet memory movement. A larger throughput step likely requires
 a different userspace packet-I/O boundary that preserves GSO or the separately
 validated kernel dataplane. This 300-second engineering soak does not replace
 the repository's 3600-second production evidence.
+
+### 2026-08-02 Zaozhuang PVE pointer capture-event rejection
+
+A follow-up candidate avoided repeated value copies of the approximately
+200-byte `CaptureEvent` along the batch-candidate, MTU, and payload
+normalization chain. The pointer mode index-iterated each contiguous worker
+batch and retained full event copies only for the fallback path. A temporary
+default-on switch kept the committed value path in the same binary for direct
+A/B comparison. Before deployment, pointer/value equivalence tests covered
+candidate selection, GSO MTU decisions, TTL/MSS/checksum normalization, and
+nil handling; the daemon suite, targeted race loops, vet, and Linux/amd64 test
+compilation passed.
+
+Validation used fresh disposable Debian 13 VM200/VM201 guests on isolated
+`vmbr3`, each with 8 vCPU, 8 GiB RAM, and kernel
+`6.12.90+deb13.1-cloud-amd64`. Raw underlay received `16.244140 Gbps`. All
+TrustIX runs used 16 warmed secure TCP sessions and 16 iperf streams. The same
+candidate binary, SHA256
+`15174173057d08f85897072d72bdf324a9f2eaaf85bf25d241642f4b83a95349`,
+changed only `TRUSTIX_CAPTURE_FORWARDER_POINTER_EVENTS`. A 20-second pointer
+smoke passed at `5.778190 Gbps`. Three interleaved 45-second pairs reversed the
+order in the middle pair:
+
+| Pair | Value events | Pointer events |
+| --- | ---: | ---: |
+| 1 | 5.309277 Gbps | 5.301939 Gbps |
+| 2 | 5.716391 Gbps | 5.534789 Gbps |
+| 3 | 5.575619 Gbps | 5.611679 Gbps |
+| Mean | 5.533763 Gbps | 5.482802 Gbps |
+
+Pointer events were `0.92%` slower overall and only one of three pairs favored
+them. Because throughput was negative, no CPU profile or soak was used to
+promote the candidate. The switch, pointer helpers, and experiment-only tests
+were removed completely. This result indicates that passing the remaining
+contiguous event batch by pointer is not a useful optimization after indexed
+dispatch. Further material userspace gains require a packet-I/O boundary
+change, such as preserving larger packets/GSO across capture, while the
+validated kernel dataplane remains the nearer path to a large throughput step.
+
+Every runner invocation passed and retained stable per-node boot IDs. The
+final live audit found mounted and empty pstore, no suspicious kernel journal
+entries, no loaded TrustIX modules, and no residual daemon, namespace,
+managed link, or ingress filter on either guest. VM200/VM201, `vmbr3`, guest
+test data, the temporary node key, and local build outputs were then removed;
+VM100 and every 1xx guest remained untouched.
