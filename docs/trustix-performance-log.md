@@ -30,6 +30,71 @@ Current production-default evidence boundary:
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` production evidence, plus current-build short regressions on `6.12.90+deb13.1-cloud-amd64` | Policy remains `datapath=tc_xdp`, but these virtio configurations reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
+## 2026-08-02
+
+<a id="2026-08-02-zaozhuang-pve-3d5dcbc-tix-tcp-current-ceiling"></a>
+
+### Zaozhuang PVE 3d5dcbc TIX-TCP current ceiling and rejected sequence batching
+
+Disposable Debian 13 VM200 and VM201 were recreated on isolated `vmbr3` with
+8 vCPUs, 8 GiB RAM, virtio-net, and kernel
+`6.12.96+deb13-cloud-amd64`. VM100 and all 1xx guests were untouched. The
+baseline was built from `3d5dcbc` with Go 1.25.12. The daemon SHA256 was
+`05312cd0246f5a1a60ff2b7166e9f05672e0d55a588f4c7ab654a53602d27253`
+and the baseline datapath module SHA256 was
+`dc046213942f989eeff432558d1785768a701cd600dc920859df24e2fa109de0`.
+Raw P16 underlay samples measured 17.2465 and 17.5903 Gbps.
+
+A 180-second P16 plaintext `tix_tcp` full-kmod baseline received
+15.580456 Gbps with 2,019,468 retransmits. Both boot IDs stayed stable,
+pstore was empty, kernel logs were clean, and module unload completed. A
+simultaneous 60-second perf sample recorded no lost samples. The sender's
+largest flat costs were `csum_partial_copy_generic` at 24.20%,
+`clear_page_erms` at 17.26%, and `rep_movs_alternative` at 8.03%. The
+receiver's largest costs were `clear_page_erms` at 17.52%,
+`rep_movs_alternative` at 14.13%, `memcpy_orig` at 9.33%, and
+`skb_copy_bits` at 3.32%.
+
+Call graphs place most sender page clearing under the benchmark TCP sender's
+page-frag refill and most receiver page clearing under virtio RX refill. The
+TrustIX TX outer-GSO page pool hit 10,274,007 of 10,274,118 recorded attempts
+with no pool error. The receiving page-frag cache hit all 91,791,814 recorded
+attempts with no fallback or error. These counters and profiles show that the
+existing page/skb caches are active; the remaining dominant TrustIX-owned
+cost is the required payload copy plus inner TCP checksum pass.
+
+A low-risk candidate replaced one global atomic sequence increment per inner
+frame with one contiguous sequence reservation per outer-GSO batch. The
+candidate module SHA256 was
+`84d858baa60422b25080ec188cbc9f7d881b0600a20f6a97f769714f54f76ec9`.
+Six adjacent P16 60-second A-to-B runs used order `B-C-C-B-B-C`:
+
+| Run | Module | Received | Retransmits | Sender CPU | Receiver CPU |
+| --- | --- | ---: | ---: | ---: | ---: |
+| B1 | baseline | 16.610030 Gbps | 784,116 | 353.61% | 325.19% |
+| C1 | batched sequence | 17.451378 Gbps | 770,787 | 373.62% | 369.19% |
+| C2 | batched sequence | 15.810452 Gbps | 779,269 | 289.66% | 287.01% |
+| B2 | baseline | 16.901424 Gbps | 779,313 | 360.10% | 337.64% |
+| B3 | baseline | 16.376114 Gbps | 792,892 | 335.59% | 309.70% |
+| C3 | batched sequence | 17.276756 Gbps | 796,967 | 369.64% | 340.77% |
+
+The baseline mean was 16.629189 Gbps and the candidate mean was
+16.846195 Gbps, a nominal 1.3% difference. Adjacent comparisons changed sign
+and ranged from about -6.5% to +5.5%, while CPU results moved with the same
+host noise. All six strict artifact checks passed with stable boot IDs, empty
+pstore, clean kernel logs, loaded-module evidence, and `tx_queue_len=1000`.
+The throughput result is not repeatable, so the candidate was rejected and
+the product code was restored.
+
+For plaintext TIX-TCP full-kmod, userspace and module-parameter tuning are no
+longer the path to a material throughput tier. This does not require patching
+the upstream Linux kernel: the next material work belongs in the TrustIX
+datapath module and likely needs either a negotiated batched inner-GSO wire
+format or a carefully bounded nonlinear zero-copy representation. Both alter
+packet ownership or compatibility and require focused fault tests plus a new
+long production soak. Do not re-enable skipped inner checksums or the prior
+unsafe `CHECKSUM_PARTIAL` experiments as a shortcut.
+
 ## 2026-07-30
 
 <a id="2026-07-30-zaozhuang-pve-544402d-tix-tcp-copy-csum-production"></a>
