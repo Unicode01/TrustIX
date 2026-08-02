@@ -6089,3 +6089,53 @@ so it was reverted. The baseline and candidate daemon SHA256 values were
 `42252f958fbd5d7288fe0a76601452a5b8bf2ae26fa51d39c8268b1859ec5a2`.
 Together with the final profiles, these rejections narrow useful userspace
 work to packet-I/O architecture rather than local checksum-loop tuning.
+
+### 2026-08-02 Zaozhuang PVE rejected AF_PACKET io_uring submission
+
+The remaining AF_PACKET reinjection syscall cost was tested with a standalone
+submission-boundary benchmark before adding io_uring ownership and lifecycle
+complexity to the daemon. The benchmark used a bound raw AF_PACKET socket with
+`PACKET_VNET_HDR`, valid TCPv4 GSO metadata, the same three-iovec layout as the
+production VNET/Ethernet/IPv4 path, and no per-message `sockaddr_ll`. It compared
+`sendmmsg`, io_uring `SENDMSG`, contiguous io_uring `SEND`, and SQPOLL with a
+registered fixed file. A contiguous one-iovec `sendmmsg` control separated
+submission-interface cost from buffer-layout cost.
+
+Validation ran in an isolated Debian 13 VM with 8 vCPUs on `vmbr3`, kernel
+`6.12.96+deb13-cloud-amd64`, and a private veth pair. Every completed operation
+was accepted by the peer veth, link error/drop counters remained zero, and the
+kernel journal had no related finding. The following are two-run means with a
+64-message batch; they are local GSO submission rates, not end-to-end TrustIX
+throughput:
+
+| Workers / IPv4 size | 3-iov `sendmmsg` | 3-iov uring `SENDMSG` | 1-iov `sendmmsg` | 1-iov uring `SEND` |
+| --- | ---: | ---: | ---: | ---: |
+| 1 / 32 KiB | 58.976 Gbps | 53.850 Gbps | 58.058 Gbps | 55.566 Gbps |
+| 1 / 65,500 B | 68.680 Gbps | 64.036 Gbps | 69.687 Gbps | 66.721 Gbps |
+| 8 / 32 KiB | 465.476 Gbps | 429.230 Gbps | 460.844 Gbps | 448.965 Gbps |
+| 8 / 65,500 B | 528.580 Gbps | 511.180 Gbps | 555.948 Gbps | 543.152 Gbps |
+
+For the production-equivalent three-iovec layout, io_uring was `3.29-8.69%`
+slower. For the equivalent contiguous layout, io_uring was `2.30-4.29%` slower.
+SQPOLL was also below the corresponding contiguous `sendmmsg` control while
+moving work into polling kernel threads. A second reverse-order matrix used the
+production maximum 256-message batch at 65,500 bytes. io_uring `SENDMSG` was
+`7.10%` slower with one worker and `4.27%` slower with eight; contiguous uring
+`SEND` remained `0.52%` and `4.42%` below contiguous `sendmmsg`, respectively.
+
+A follow-up combined only the 10-byte VNET and 14-byte Ethernet headers so that
+`sendmmsg` used two iovecs without copying the IPv4 payload. Three reverse-order
+64-message comparisons were neutral at 32 KiB (`-0.55%` with one worker and
+`-0.17%` with eight). At 65,500 bytes they measured `+2.10%` and `+0.52%`, but
+individual pairs still changed sign. Two 256-message comparisons measured
+`+1.16%` and `+0.44%`, also with a negative individual pair. That ceiling is too
+small and inconsistent to justify a production-path change or an end-to-end
+promotion run.
+
+No io_uring or prefix-merge implementation is retained. sendmmsg already
+provides one syscall per GSO batch, while io_uring adds one SQE and CQE per
+message; SQPOLL does not remove that per-message work. Material improvement now
+requires changing what crosses the packet-I/O boundary, such as a complete
+multi-queue AF_XDP path with segmentation, or moving the data path into the
+validated kernel implementation. Parameter tuning and another AF_PACKET
+submission wrapper are not expected to move the current end-to-end ceiling.
