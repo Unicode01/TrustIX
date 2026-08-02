@@ -5839,3 +5839,74 @@ architecture; another parameter tune is unlikely to produce a material step.
 The separately validated kernel dataplane remains the more likely source of a
 large throughput increase. This engineering evidence does not replace the
 repository's 3600-second production gates.
+
+### 2026-08-02 Zaozhuang PVE indexed capture dispatch
+
+The multi-worker capture dispatcher previously copied every full
+`CaptureEvent` into a worker group even though the original borrowed ringbuf
+batch remained leased until all groups completed. Split batches now dispatch
+pooled `uint32` indices into that original batch. Workers retain the source
+lease through the existing shared completion, coalesce their indexed events
+in worker order, and release the original batch only after the final recipient.
+The single-worker and single-destination paths still pass the original batch
+directly. The experiment switch and full-event grouping implementation were
+removed after validation.
+
+Validation used disposable Debian 13 VM200/VM201 guests on isolated `vmbr3`,
+each with 8 vCPU, 8 GiB RAM, and kernel
+`6.12.90+deb13.1-cloud-amd64`. Raw underlay throughput was `15.970401 Gbps`.
+All comparisons used 16 warmed secure TCP sessions and 16 iperf streams. The
+same candidate binary, SHA256
+`1fae36462647066d0c19bc26b95d315ea50655a96edeb0976a877cf0865e0957`,
+changed only the temporary indexed-dispatch switch:
+
+| Pair | Full-event groups | Indexed groups |
+| --- | ---: | ---: |
+| 1 | 5.187774 Gbps | 5.011744 Gbps |
+| 2 | 5.291092 Gbps | 5.301376 Gbps |
+| 3 | 5.329424 Gbps | 5.622408 Gbps |
+| Mean | 5.269430 Gbps | 5.311843 Gbps |
+
+The indexed mean was `0.81%` higher and two of three pairs favored it. Two
+reverse-order 90-second profile pairs also favored indexed dispatch by
+`11.28%` and `1.36%`. Dispatcher cumulative CPU fell from `9.73s` to `5.94s`
+in the first pair and from `9.85s` to `5.76s` in the second, reductions of
+about `39%` and `42%`. The first pair reduced sender CPU per Gbps by `8.07%`;
+the second reduced it by about `1.3%`. `runtime.memmove` fell from `48.01s`
+to `43.86s` in the first profile pair.
+
+A follow-up work-view implementation attempted to avoid the remaining worker
+coalescing copy by traversing source batches through their indices. It passed
+unit, race, vet, Linux build, and a 20-second smoke at `5.727057 Gbps`, but
+three interleaved 45-second comparisons were consistently negative:
+
+| Pair | Indexed plus contiguous worker batch | Indexed work views |
+| --- | ---: | ---: |
+| 1 | 6.235285 Gbps | 6.081744 Gbps |
+| 2 | 6.177886 Gbps | 6.106731 Gbps |
+| 3 | 6.352098 Gbps | 6.097347 Gbps |
+| Mean | 6.255090 Gbps | 6.095274 Gbps |
+
+Work views were `2.55%` slower overall, including the reverse-order pair, so
+that implementation and its switch were removed. The result shows that the
+extra indexed traversal and poorer locality cost more than one sequential
+worker-side event copy in this workload.
+
+The reviewed default-only binary, SHA256
+`bd3ce1ac073b6264fc5ab00e93b71b891bde1523ee4c1e4efc7b581d65ce29a4`,
+passed a 60-second forward run at `6.019783 Gbps` and a 300-second simultaneous
+`iperf3 --bidir` soak. The soak received `3.179284 Gbps` A-to-B and
+`3.098918 Gbps` B-to-A, or `6.278202 Gbps` combined. Both nodes retained
+stable boot IDs, pstore was mounted and empty, kernel journals contained no
+entries in the test window, no TrustIX kernel module was loaded, and all
+runner error files were empty. Cleanup left no daemon, namespace, managed LAN
+link, or ingress TC filter on either guest.
+
+Unit and race tests cover indexed coalescing order, delayed recycling,
+exactly-once source-batch release, partial dispatch cancellation, pooled index
+clearing, and non-aliasing in-flight bundles. This is a measured userspace
+improvement, but the remaining profile is still dominated by syscalls,
+AES-GCM, and packet memory movement. A larger throughput step likely requires
+a different userspace packet-I/O boundary that preserves GSO or the separately
+validated kernel dataplane. This 300-second engineering soak does not replace
+the repository's 3600-second production evidence.

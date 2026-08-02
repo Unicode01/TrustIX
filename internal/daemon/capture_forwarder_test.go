@@ -121,16 +121,10 @@ func TestCaptureBatchWorkZeroDelayReleasesPendingWorkWhenForwardStops(t *testing
 func TestCaptureBatchDispatchCompletionWaitsAndClearsBeforeRelease(t *testing.T) {
 	var pool captureBatchDispatchGroupPool
 	groups := pool.take(2)
-	groups.groups[0] = append(groups.groups[0], dataplane.CaptureEvent{
-		Hook:    "old-a",
-		Payload: []byte{1},
-	})
-	groups.groups[1] = append(groups.groups[1], dataplane.CaptureEvent{
-		Hook:    "old-b",
-		Payload: []byte{2},
-	})
-	groupA := groups.groups[0]
-	groupB := groups.groups[1]
+	groups.indexGroups[0] = append(groups.indexGroups[0], 11)
+	groups.indexGroups[1] = append(groups.indexGroups[1], 22)
+	groupA := groups.indexGroups[0]
+	groupB := groups.indexGroups[1]
 	batch := []dataplane.CaptureEvent{{Payload: []byte{9}}}
 	var released atomic.Int32
 	completion := newCaptureBatchDispatchCompletion(
@@ -140,8 +134,8 @@ func TestCaptureBatchDispatchCompletionWaitsAndClearsBeforeRelease(t *testing.T)
 			if len(got) != len(batch) || &got[0] != &batch[0] {
 				t.Errorf("released batch does not reference the original lease")
 			}
-			if groupA[0].Payload != nil || groupA[0].Hook != "" || groupB[0].Payload != nil || groupB[0].Hook != "" {
-				t.Errorf("pooled group references were not cleared before releasing the source batch")
+			if groupA[0] != 0 || groupB[0] != 0 {
+				t.Errorf("pooled group indices were not cleared before releasing the source batch")
 			}
 			released.Add(1)
 		},
@@ -154,7 +148,7 @@ func TestCaptureBatchDispatchCompletionWaitsAndClearsBeforeRelease(t *testing.T)
 	if got := released.Load(); got != 0 {
 		t.Fatalf("release count after first worker = %d, want 0", got)
 	}
-	if groupA[0].Payload == nil || groupB[0].Payload == nil {
+	if groupA[0] == 0 || groupB[0] == 0 {
 		t.Fatal("group storage was cleared before all recipients completed")
 	}
 	completion.done()
@@ -171,9 +165,9 @@ func TestCaptureBatchDispatchCompletionWaitsAndClearsBeforeRelease(t *testing.T)
 	}
 
 	reused := pool.take(2)
-	for index := range reused.groups {
-		if len(reused.groups[index]) != 0 {
-			t.Fatalf("reused group %d length = %d, want 0", index, len(reused.groups[index]))
+	for index := range reused.indexGroups {
+		if len(reused.indexGroups[index]) != 0 {
+			t.Fatalf("reused group %d was not empty", index)
 		}
 	}
 	pool.put(reused)
@@ -205,6 +199,7 @@ func TestDispatchCapturedPacketBatchGroupsPooledCancellationRetainsQueuedWork(t 
 				if len(got) != len(batch) || &got[0] != &batch[0] {
 					t.Errorf("released batch does not reference the original lease")
 				}
+				clear(got)
 				released.Add(1)
 			},
 			&pool,
@@ -226,16 +221,15 @@ func TestDispatchCapturedPacketBatchGroupsPooledCancellationRetainsQueuedWork(t 
 	if got := released.Load(); got != 0 {
 		t.Fatalf("release count while queued work remains = %d, want 0", got)
 	}
-	if len(queued.events) != 1 || len(queued.events[0].Payload) != 1 || queued.events[0].Payload[0] != 1 {
-		t.Fatalf("queued work was recycled before completion: %+v", queued.events)
+	if queued.eventCount() != 1 || queued.event(0).Payload[0] != 1 {
+		t.Fatalf("queued work was recycled before completion: %+v", queued)
 	}
-	queuedEvents := queued.events
 	queued.finish()
 	if got := released.Load(); got != 1 {
 		t.Fatalf("release count after queued work completion = %d, want 1", got)
 	}
-	if queuedEvents[0].Payload != nil || queuedEvents[0].Hook != "" {
-		t.Fatal("queued group references were not cleared on final completion")
+	if batch[0].Payload != nil || batch[1].Payload != nil {
+		t.Fatal("source batch was not released on final completion")
 	}
 }
 
@@ -274,12 +268,12 @@ func TestDispatchCapturedPacketBatchGroupsPreservesWorkerOrderAndFinalRelease(t 
 
 	works := []captureBatchWork{<-queues[0], <-queues[1], <-queues[2]}
 	want := [][]byte{{1, 4}, {2}, {3}}
-	aliases := make([][]dataplane.CaptureEvent, len(works))
+	aliases := make([][]uint32, len(works))
 	for worker := range works {
-		aliases[worker] = works[worker].events
-		got := make([]byte, len(works[worker].events))
-		for index := range works[worker].events {
-			got[index] = works[worker].events[index].Payload[0]
+		aliases[worker] = works[worker].indices
+		got := make([]byte, works[worker].eventCount())
+		for index := range got {
+			got[index] = works[worker].event(index).Payload[0]
 		}
 		if string(got) != string(want[worker]) {
 			t.Fatalf("worker %d payload order = %v, want %v", worker, got, want[worker])
@@ -294,8 +288,8 @@ func TestDispatchCapturedPacketBatchGroupsPreservesWorkerOrderAndFinalRelease(t 
 	}
 	for worker := range aliases {
 		for index := range aliases[worker] {
-			if aliases[worker][index].Payload != nil {
-				t.Fatalf("worker %d event %d retained payload after recycle", worker, index)
+			if aliases[worker][index] != 0 {
+				t.Fatalf("worker %d index %d was not cleared after recycle", worker, index)
 			}
 		}
 	}
@@ -308,12 +302,43 @@ func TestCaptureBatchDispatchGroupPoolDoesNotAliasInFlightBundles(t *testing.T) 
 	if first == second {
 		t.Fatal("pool reused a bundle that was still in flight")
 	}
-	first.groups[0] = append(first.groups[0], dataplane.CaptureEvent{Hook: "first"})
-	second.groups[0] = append(second.groups[0], dataplane.CaptureEvent{Hook: "second"})
-	second.groups[0][0].Hook = "changed"
-	if got := first.groups[0][0].Hook; got != "first" {
-		t.Fatalf("in-flight bundle was aliased: hook = %q, want first", got)
+	first.indexGroups[0] = append(first.indexGroups[0], 1)
+	second.indexGroups[0] = append(second.indexGroups[0], 2)
+	second.indexGroups[0][0] = 3
+	if got := first.indexGroups[0][0]; got != 1 {
+		t.Fatalf("in-flight bundle was aliased: index = %d, want 1", got)
 	}
 	pool.put(first)
 	pool.put(second)
+}
+
+func TestCaptureBatchWorkCoalescesIndexedEventsInOrder(t *testing.T) {
+	workCh := make(chan captureBatchWork, 2)
+	batchA := []dataplane.CaptureEvent{{Payload: []byte{1}}, {Payload: []byte{2}}, {Payload: []byte{3}}}
+	batchB := []dataplane.CaptureEvent{{Payload: []byte{4}}, {Payload: []byte{5}}}
+	var released atomic.Int32
+	workCh <- captureBatchWork{events: batchA, indices: []uint32{0, 2}, release: func() { released.Add(1) }}
+	workCh <- captureBatchWork{events: batchB, indices: []uint32{1}, release: func() { released.Add(1) }}
+	close(workCh)
+
+	var got []byte
+	forwardCapturedPacketBatchWorkCoalescedLoop(
+		context.Background(),
+		workCh,
+		3,
+		0,
+		func(_ context.Context, events []dataplane.CaptureEvent, _ *captureForwardScratch) bool {
+			for index := range events {
+				got = append(got, events[index].Payload[0])
+			}
+			return true
+		},
+	)
+
+	if string(got) != "\x01\x03\x05" {
+		t.Fatalf("forwarded payload order = %v, want [1 3 5]", got)
+	}
+	if released.Load() != 2 {
+		t.Fatalf("release count = %d, want 2", released.Load())
+	}
 }

@@ -2469,11 +2469,12 @@ type captureBatchReleaser func([]dataplane.CaptureEvent)
 
 type captureBatchWork struct {
 	events  []dataplane.CaptureEvent
+	indices []uint32
 	release func()
 }
 
 type captureBatchDispatchGroups struct {
-	groups [][]dataplane.CaptureEvent
+	indexGroups [][]uint32
 }
 
 type captureBatchDispatchGroupPool struct {
@@ -2495,10 +2496,10 @@ func (pool *captureBatchDispatchGroupPool) take(workers int) *captureBatchDispat
 	if groups == nil {
 		groups = &captureBatchDispatchGroups{}
 	}
-	if cap(groups.groups) < workers {
-		groups.groups = make([][]dataplane.CaptureEvent, workers)
+	if cap(groups.indexGroups) < workers {
+		groups.indexGroups = make([][]uint32, workers)
 	} else {
-		groups.groups = groups.groups[:workers]
+		groups.indexGroups = groups.indexGroups[:workers]
 	}
 	return groups
 }
@@ -2507,9 +2508,9 @@ func (pool *captureBatchDispatchGroupPool) put(groups *captureBatchDispatchGroup
 	if groups == nil {
 		return
 	}
-	for index := range groups.groups {
-		clear(groups.groups[index])
-		groups.groups[index] = groups.groups[index][:0]
+	for index := range groups.indexGroups {
+		clear(groups.indexGroups[index])
+		groups.indexGroups[index] = groups.indexGroups[index][:0]
 	}
 	pool.pool.Put(groups)
 }
@@ -2572,6 +2573,30 @@ func (work captureBatchWork) finish() {
 	if work.release != nil {
 		work.release()
 	}
+}
+
+func (work captureBatchWork) eventCount() int {
+	if work.indices != nil {
+		return len(work.indices)
+	}
+	return len(work.events)
+}
+
+func (work captureBatchWork) event(index int) dataplane.CaptureEvent {
+	if work.indices != nil {
+		return work.events[int(work.indices[index])]
+	}
+	return work.events[index]
+}
+
+func (work captureBatchWork) appendEvents(dst []dataplane.CaptureEvent) []dataplane.CaptureEvent {
+	if work.indices == nil {
+		return append(dst, work.events...)
+	}
+	for _, index := range work.indices {
+		dst = append(dst, work.events[int(index)])
+	}
+	return dst
 }
 
 func (daemon *Daemon) forwardCapturedPackets(ctx context.Context, subscription dataplane.CaptureSubscription) {
@@ -2657,7 +2682,7 @@ func (daemon *Daemon) dispatchCapturedPackets(ctx context.Context, events <-chan
 			if !ok {
 				return
 			}
-			index, hasFlow := captureForwarderWorkerIndexWithFlow(event, len(queues), fallback)
+			index, hasFlow := captureForwarderWorkerIndexWithFlow(&event, len(queues), fallback)
 			if !hasFlow {
 				fallback++
 			}
@@ -2683,15 +2708,15 @@ func (daemon *Daemon) dispatchCapturedPacketBatches(ctx context.Context, batches
 			if !ok {
 				return
 			}
-			for _, event := range batch {
-				index, hasFlow := captureForwarderWorkerIndexWithFlow(event, len(queues), fallback)
+			for eventIndex := range batch {
+				index, hasFlow := captureForwarderWorkerIndexWithFlow(&batch[eventIndex], len(queues), fallback)
 				if !hasFlow {
 					fallback++
 				}
 				select {
 				case <-ctx.Done():
 					return
-				case queues[index] <- event:
+				case queues[index] <- batch[eventIndex]:
 				}
 			}
 		}
@@ -2739,8 +2764,8 @@ func (daemon *Daemon) dispatchCapturedPacketBatchGroupsWithPool(
 			firstIndex := -1
 			singleWorker := true
 			nextFallback := fallback
-			for _, event := range batch {
-				index, hasFlow := captureForwarderWorkerIndexWithFlow(event, workers, nextFallback)
+			for eventIndex := range batch {
+				index, hasFlow := captureForwarderWorkerIndexWithFlow(&batch[eventIndex], workers, nextFallback)
 				if !hasFlow {
 					nextFallback++
 				}
@@ -2768,31 +2793,31 @@ func (daemon *Daemon) dispatchCapturedPacketBatchGroupsWithPool(
 
 			groups := pool.take(workers)
 			nextFallback = fallback
-			for _, event := range batch {
-				index, hasFlow := captureForwarderWorkerIndexWithFlow(event, workers, nextFallback)
+			for eventIndex := range batch {
+				index, hasFlow := captureForwarderWorkerIndexWithFlow(&batch[eventIndex], workers, nextFallback)
 				if !hasFlow {
 					nextFallback++
 				}
-				groups.groups[index] = append(groups.groups[index], event)
+				groups.indexGroups[index] = append(groups.indexGroups[index], uint32(eventIndex))
 			}
 			recipients := 0
-			for index := range groups.groups {
-				if len(groups.groups[index]) != 0 {
+			for index := 0; index < workers; index++ {
+				if len(groups.indexGroups[index]) != 0 {
 					recipients++
 				}
 			}
 			completion := newCaptureBatchDispatchCompletion(pool, groups, releaser, batch, recipients)
 			done := completion.done
-			for index := range groups.groups {
-				if len(groups.groups[index]) == 0 {
+			for index := 0; index < workers; index++ {
+				if len(groups.indexGroups[index]) == 0 {
 					continue
 				}
-				work := captureBatchWork{events: groups.groups[index], release: done}
+				work := captureBatchWork{events: batch, indices: groups.indexGroups[index], release: done}
 				select {
 				case <-ctx.Done():
 					work.finish()
-					for remainingIndex := index + 1; remainingIndex < len(groups.groups); remainingIndex++ {
-						if len(groups.groups[remainingIndex]) != 0 {
+					for remainingIndex := index + 1; remainingIndex < workers; remainingIndex++ {
+						if len(groups.indexGroups[remainingIndex]) != 0 {
 							done()
 						}
 					}
@@ -2808,11 +2833,11 @@ func (daemon *Daemon) dispatchCapturedPacketBatchGroupsWithPool(
 }
 
 func captureForwarderWorkerIndex(event dataplane.CaptureEvent, workers int, fallback uint64) int {
-	index, _ := captureForwarderWorkerIndexWithFlow(event, workers, fallback)
+	index, _ := captureForwarderWorkerIndexWithFlow(&event, workers, fallback)
 	return index
 }
 
-func captureForwarderWorkerIndexWithFlow(event dataplane.CaptureEvent, workers int, fallback uint64) (int, bool) {
+func captureForwarderWorkerIndexWithFlow(event *dataplane.CaptureEvent, workers int, fallback uint64) (int, bool) {
 	if workers <= 1 {
 		return 0, true
 	}
@@ -2822,7 +2847,10 @@ func captureForwarderWorkerIndexWithFlow(event dataplane.CaptureEvent, workers i
 	return int(fallback % uint64(workers)), false
 }
 
-func captureEventWorkerFlowKey(event dataplane.CaptureEvent) (routing.FlowKey, bool) {
+func captureEventWorkerFlowKey(event *dataplane.CaptureEvent) (routing.FlowKey, bool) {
+	if event == nil {
+		return routing.FlowKey{}, false
+	}
 	if event.Hook != "lan_ingress_route_hit" || len(event.Payload) == 0 {
 		return routing.FlowKey{}, false
 	}
@@ -2903,6 +2931,12 @@ func (daemon *Daemon) forwardCapturedPacketBatchWorkLoop(ctx context.Context, wo
 
 func (daemon *Daemon) forwardCaptureBatchWork(ctx context.Context, work captureBatchWork, scratch *captureForwardScratch) bool {
 	defer work.finish()
+	if work.indices != nil {
+		events := make([]dataplane.CaptureEvent, 0, len(work.indices))
+		events = work.appendEvents(events)
+		defer clear(events)
+		return daemon.forwardCaptureEventsBatch(ctx, events, scratch)
+	}
 	return daemon.forwardCaptureEventsBatch(ctx, work.events, scratch)
 }
 
@@ -3059,15 +3093,16 @@ func forwardCapturedPacketBatchWorkCoalescedLoop(ctx context.Context, workCh <-c
 		return ok
 	}
 	queueWork := func(work captureBatchWork) bool {
-		if len(work.events) == 0 {
+		workEventCount := work.eventCount()
+		if workEventCount == 0 {
 			work.finish()
 			return true
 		}
-		if len(events) == 0 && len(work.events) >= batchSize {
+		if work.indices == nil && len(events) == 0 && workEventCount >= batchSize {
 			defer work.finish()
 			return forward(ctx, work.events, &scratch)
 		}
-		events = append(events, work.events...)
+		events = work.appendEvents(events)
 		if work.release != nil {
 			releases = append(releases, work.release)
 		}
