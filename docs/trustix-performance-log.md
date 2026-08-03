@@ -30,6 +30,62 @@ Current production-default evidence boundary:
 | GRE/IPIP/VXLAN compatibility defaults | Debian 13 `6.12.95+deb13-cloud-amd64` production evidence, plus current-build short regressions on `6.12.90+deb13.1-cloud-amd64` | Policy remains `datapath=tc_xdp`, but these virtio configurations reported no safe TC-direct tunnel path and explicitly used TrustIX userspace forwarding with the Linux tunnel. These rows must not be described as pure TrustIX TC-direct forwarding. |
 | OpenWrt route-GSO, secure-kUDP route-GSO, and secure TIX-TCP kernel crypto | fail-closed route-TCP capability evidence only | Not production defaults until a tested OpenWrt kernel exposes usable route-TCP kfunc capability and passes a cross-host gate. |
 
+## 2026-08-03
+
+<a id="2026-08-03-zaozhuang-pve-f676b82-rejected-rx-sequential-copy"></a>
+
+### Zaozhuang PVE f676b82 rejected RX sequential copy cursor
+
+The retained `f676b82` TIX-TCP checksum work left the receiver's repeated
+nonlinear `skb_copy_bits()` traversal as the largest controllable profile
+site. A temporary full-datapath candidate used one `skb_seq_read()` cursor to
+walk ordered inner payload ranges from each outer skb and retained the
+existing copy path as a fail-safe fallback. The candidate module SHA256 was
+`760b0956df50d7c8c8b470601a75c85557ea2b40da422b91c3b9c8a49602b773`.
+
+Before traffic, the candidate passed 50 load/selftest/unload cycles on each of
+two Debian 13 `6.12.90+deb13.1-cloud-amd64` guests and one OpenWrt 24.10.7
+`6.6.141` guest. Every cycle reported all 2047 selftests passed and zero
+selftest failures. All three boot IDs remained stable, pstore stayed empty,
+module unload completed, and no new kernel warning was recorded. Matching
+OpenWrt 5.15 and 6.6 SDK builds also passed.
+
+Six P16 60-second Debian-to-Debian runs then used the same daemon and module
+with only the cursor parameter changed, in order `B-C-C-B-B-C`:
+
+| Run | Sequential cursor | Received | Retransmits |
+| --- | --- | ---: | ---: |
+| B1 | off | 13.503467 Gbps | 570,055 |
+| C1 | on | 14.429616 Gbps | 584,713 |
+| C2 | on | 17.027280 Gbps | 719,799 |
+| B2 | off | 14.877601 Gbps | 677,134 |
+| B3 | off | 14.853591 Gbps | 690,107 |
+| C3 | on | 14.609717 Gbps | 649,132 |
+
+The off mean was 14.411553 Gbps and the on mean was 15.355538 Gbps, but one
+17.03 Gbps candidate run lifted that mean. The medians instead measured
+14.853591 Gbps off and 14.609717 Gbps on. Adjacent comparisons changed sign,
+so the throughput result was not repeatable. All six runners passed with zero
+cursor read errors. The receiver used the cursor for about 96-98% of attempted
+batches and safely retained `skb_copy_bits()` for unsupported cross-skb or
+single-frame layouts.
+
+A controlled 90-second perf pair rejected the candidate more clearly. The
+off run received 15.936946 Gbps while the on run received 13.956812 Gbps.
+During equal 25-second system-wide stat windows, off executed 126.34 billion
+instructions and on executed 128.05 billion instructions despite carrying
+less traffic. The cursor reduced samples attributed directly to
+`skb_copy_bits`, but payload `memcpy` remained and new `skb_seq_read` plus
+cursor bookkeeping replaced that cost. It did not remove a data copy.
+
+The cursor, parameter, counters, and tests were removed completely. Further
+material plaintext TIX-TCP gains do not require patching upstream Linux, but
+they do require a TrustIX kernel datapath or wire-format change that removes
+payload ownership work, such as a bounded page-reference RX representation or
+negotiated batched inner-GSO framing. The existing PVE underlay is already
+around 17.4 Gbps, so future throughput promotion also needs a test link with a
+higher raw ceiling; otherwise CPU-per-bit is the useful optimization metric.
+
 ## 2026-08-02
 
 <a id="2026-08-02-zaozhuang-pve-3d5dcbc-tix-tcp-current-ceiling"></a>
