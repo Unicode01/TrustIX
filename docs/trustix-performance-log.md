@@ -32,6 +32,64 @@ Current production-default evidence boundary:
 
 ## 2026-08-03
 
+<a id="2026-08-03-zaozhuang-pve-96b3435-rejected-rx-page-refs"></a>
+
+### Zaozhuang PVE 96b3435 rejected RX page references
+
+The sequential-copy experiment showed that removing traversal overhead without
+removing the payload copy was not useful. A follow-up full-datapath candidate
+therefore built eligible coalesced inner TCP GSO skbs by taking page references
+to payload ranges in the received outer skb. Unsupported layouts retained the
+existing nonlinear copy builder. The candidate daemon SHA256 was
+`47a4834b79929b5076c23e329c9a7335195f9ef619055a9737f90056e0220374`.
+
+The first module revision passed a zero truesize to `skb_add_rx_frag()` and
+triggered the `delta < len` warning in `skb_try_coalesce()` at
+`net/core/skbuff.c:6070`. That revision was rejected before comparative
+testing. The corrected revision accounted each referenced payload byte in
+truesize, preflighted `MAX_SKB_FRAGS`, and conservatively fell back for
+page-pool-owned `pp_recycle` skbs. Its module SHA256 was
+`e81518a5e5ff91ed2e31b1f333edbe46468e4109deb7081e062ed1fe73e042bd`.
+
+Before traffic, the corrected module passed 50 load/selftest/unload cycles on
+each of two Debian 13 `6.12.90+deb13.1-cloud-amd64` guests. Every cycle reported
+all 2047 selftests passed and zero failures. Both boot IDs stayed stable,
+pstore was empty, unload completed, and kernel logs were clean. Kbuild passed
+for the Debian kernel and the OpenWrt 5.15.167 and 6.6.141 SDKs. Both guests
+were then rebooted so the first revision's one-shot warning could not hide a
+recurrence. A post-reboot P16 20-second smoke received 16.336271 Gbps with
+231,682 retransmits and passed the strict artifact verifier.
+
+Six P16 60-second A-to-B runs used the same corrected module and daemon with
+only the page-reference parameter changed, in order `B-C-C-B-B-C`:
+
+| Run | Page references | Received | Retransmits |
+| --- | --- | ---: | ---: |
+| B1 | off | 18.734605 Gbps | 661,468 |
+| C1 | on | 17.330210 Gbps | 721,169 |
+| C2 | on | 15.393493 Gbps | 702,636 |
+| B2 | off | 17.336699 Gbps | 705,724 |
+| B3 | off | 18.578134 Gbps | 734,243 |
+| C3 | on | 17.006388 Gbps | 721,629 |
+
+The off mean was 18.216479 Gbps and the on mean was 16.576697 Gbps, a 9.0%
+candidate regression. The medians were 18.578134 Gbps off and 17.006388 Gbps
+on, and every adjacent comparison favored the existing copy builder. All six
+runs nevertheless passed strict validation with stable boot IDs, empty
+pstore, clean kernel logs, and zero page-reference errors.
+
+Across the three candidate runs, page references handled 4,786,772 of
+11,080,377 attempted batches, but they covered only 26.74 GB of 376.25 GB of
+nonlinear payload, about 7.1%. The frag limit caused 6,058,391 fallbacks. The
+extra fragment ownership and skb work therefore cost more than the small
+amount of copying it removed. The candidate implementation, parameter,
+counters, and tests were removed completely.
+
+Further material plaintext TIX-TCP gains still do not require an upstream
+Linux patch. They do require a larger TrustIX datapath or negotiated wire-format
+change that avoids per-frame payload ownership work, rather than another local
+copy-loop or skb-layout tweak.
+
 <a id="2026-08-03-zaozhuang-pve-f676b82-rejected-rx-sequential-copy"></a>
 
 ### Zaozhuang PVE f676b82 rejected RX sequential copy cursor
