@@ -27,6 +27,11 @@ const (
 	// FlagInnerIPv4 marks payloads that are known dataplane IPv4 packets and
 	// are eligible for kernel RX direct decapsulation after crypto open.
 	FlagInnerIPv4 uint8 = 1 << 3
+	// FlagInnerTCPChecksumPartial marks a plaintext inner IPv4/TCP packet whose
+	// TCP checksum field contains the CHECKSUM_PARTIAL pseudo-header seed.
+	FlagInnerTCPChecksumPartial uint8 = 1 << 4
+	KnownFlags                        = FlagEncrypted | FlagKernelOpened |
+		FlagCryptoFragment | FlagInnerIPv4 | FlagInnerTCPChecksumPartial
 )
 
 type Frame struct {
@@ -64,6 +69,14 @@ func FrameWireLen(payloadLen int) (int, error) {
 func (frame Frame) MarshalBinaryInto(wire []byte) (int, error) {
 	if len(frame.Payload) > MaxPayload {
 		return 0, fmt.Errorf("tix_tcp payload size %d exceeds max %d", len(frame.Payload), MaxPayload)
+	}
+	if err := validateFrameFlags(frame.Flags, frame.FragmentIndex, frame.FragmentCount); err != nil {
+		return 0, err
+	}
+	if frame.Flags&FlagInnerTCPChecksumPartial != 0 {
+		if err := ValidateInnerTCPChecksumPartial(frame.Payload); err != nil {
+			return 0, err
+		}
 	}
 	wireLen := HeaderLen + len(frame.Payload)
 	if len(wire) < wireLen {
@@ -134,6 +147,12 @@ func parseFramePrefix(wire []byte, copyPayload bool) (Frame, int, error) {
 	if headerLen != HeaderLen {
 		return Frame{}, 0, fmt.Errorf("tix_tcp header length %d is unsupported", headerLen)
 	}
+	flags := wire[5]
+	fragmentIndex := binary.BigEndian.Uint16(wire[36:38])
+	fragmentCount := binary.BigEndian.Uint16(wire[38:40])
+	if err := validateFrameFlags(flags, fragmentIndex, fragmentCount); err != nil {
+		return Frame{}, 0, err
+	}
 	payloadLen := int(binary.BigEndian.Uint32(wire[32:36]))
 	if payloadLen > MaxPayload {
 		return Frame{}, 0, fmt.Errorf("tix_tcp payload size %d exceeds max %d", payloadLen, MaxPayload)
@@ -143,16 +162,108 @@ func parseFramePrefix(wire []byte, copyPayload bool) (Frame, int, error) {
 		return Frame{}, 0, fmt.Errorf("tix_tcp length mismatch: header payload=%d wire=%d", payloadLen, len(wire))
 	}
 	payload := wire[HeaderLen:wireLen]
+	if flags&FlagInnerTCPChecksumPartial != 0 {
+		if err := ValidateInnerTCPChecksumPartial(payload); err != nil {
+			return Frame{}, 0, err
+		}
+	}
 	if copyPayload {
 		payload = append([]byte(nil), payload...)
 	}
 	return Frame{
-		Flags:         wire[5],
+		Flags:         flags,
 		FlowID:        binary.BigEndian.Uint64(wire[8:16]),
 		Epoch:         binary.BigEndian.Uint64(wire[16:24]),
 		Sequence:      binary.BigEndian.Uint64(wire[24:32]),
-		FragmentIndex: binary.BigEndian.Uint16(wire[36:38]),
-		FragmentCount: binary.BigEndian.Uint16(wire[38:40]),
+		FragmentIndex: fragmentIndex,
+		FragmentCount: fragmentCount,
 		Payload:       payload,
 	}, wireLen, nil
+}
+
+func validateFrameFlags(flags uint8, fragmentIndex, fragmentCount uint16) error {
+	if unknown := flags &^ KnownFlags; unknown != 0 {
+		return fmt.Errorf("tix_tcp flags %#x contain unsupported bits %#x", flags, unknown)
+	}
+	if fragmentCount == 0 {
+		if fragmentIndex != 0 {
+			return fmt.Errorf("tix_tcp fragment index %d requires a fragment count", fragmentIndex)
+		}
+		if flags&FlagCryptoFragment != 0 {
+			return fmt.Errorf("tix_tcp crypto fragment flag requires a fragment count")
+		}
+	} else if fragmentIndex >= fragmentCount {
+		return fmt.Errorf("tix_tcp fragment index %d is outside count %d", fragmentIndex, fragmentCount)
+	}
+	if flags&FlagInnerTCPChecksumPartial == 0 {
+		return nil
+	}
+	if flags&FlagInnerIPv4 == 0 ||
+		flags&(FlagEncrypted|FlagKernelOpened|FlagCryptoFragment) != 0 ||
+		fragmentIndex != 0 || fragmentCount != 0 {
+		return fmt.Errorf("tix_tcp inner TCP checksum-partial flag has incompatible frame metadata")
+	}
+	return nil
+}
+
+// ValidateInnerTCPChecksumPartial validates a plaintext IPv4/TCP payload and
+// its CHECKSUM_PARTIAL pseudo-header seed without scanning the TCP payload.
+func ValidateInnerTCPChecksumPartial(packet []byte) error {
+	_, _, _, _, err := innerTCPChecksumPartialMeta(packet)
+	return err
+}
+
+// CompleteInnerTCPChecksumPartial replaces a validated pseudo-header seed with
+// the complete TCP checksum for userspace fallback delivery.
+func CompleteInnerTCPChecksumPartial(packet []byte) error {
+	src, dst, ipHeaderLen, totalLen, err := innerTCPChecksumPartialMeta(packet)
+	if err != nil {
+		return err
+	}
+	tcp := packet[ipHeaderLen:totalLen]
+	binary.BigEndian.PutUint16(tcp[16:18], 0)
+	binary.BigEndian.PutUint16(tcp[16:18], tcpChecksum(src, dst, tcp))
+	return nil
+}
+
+func innerTCPChecksumPartialMeta(packet []byte) ([4]byte, [4]byte, int, int, error) {
+	var src [4]byte
+	var dst [4]byte
+	if len(packet) < ipv4HeaderLen+tcpHeaderLen {
+		return src, dst, 0, 0, fmt.Errorf("tix_tcp inner checksum-partial packet is too short: %d", len(packet))
+	}
+	if packet[0]>>4 != 4 {
+		return src, dst, 0, 0, fmt.Errorf("tix_tcp inner checksum-partial packet is not IPv4")
+	}
+	ipHeaderLen := int(packet[0]&0x0f) * 4
+	if ipHeaderLen < ipv4HeaderLen || len(packet) < ipHeaderLen+tcpHeaderLen {
+		return src, dst, 0, 0, fmt.Errorf("tix_tcp inner checksum-partial IPv4 header length %d is invalid", ipHeaderLen)
+	}
+	if packet[9] != 6 || binary.BigEndian.Uint16(packet[6:8])&0x3fff != 0 {
+		return src, dst, 0, 0, fmt.Errorf("tix_tcp inner checksum-partial payload is not unfragmented TCP")
+	}
+	totalLen := int(binary.BigEndian.Uint16(packet[2:4]))
+	if totalLen != len(packet) || totalLen < ipHeaderLen+tcpHeaderLen {
+		return src, dst, 0, 0, fmt.Errorf("tix_tcp inner checksum-partial total length %d does not match payload %d", totalLen, len(packet))
+	}
+	tcp := packet[ipHeaderLen:totalLen]
+	tcpHeaderSize := int(tcp[12]>>4) * 4
+	if tcpHeaderSize < tcpHeaderLen || len(tcp) < tcpHeaderSize {
+		return src, dst, 0, 0, fmt.Errorf("tix_tcp inner checksum-partial TCP header length %d is invalid", tcpHeaderSize)
+	}
+	copy(src[:], packet[12:16])
+	copy(dst[:], packet[16:20])
+	seed := tcpPseudoHeaderSeed(src, dst, len(tcp))
+	if got := binary.BigEndian.Uint16(tcp[16:18]); got != seed {
+		return src, dst, 0, 0, fmt.Errorf("%w: tix_tcp inner TCP checksum-partial seed %#x does not match %#x", ErrChecksum, got, seed)
+	}
+	return src, dst, ipHeaderLen, totalLen, nil
+}
+
+func tcpPseudoHeaderSeed(src, dst [4]byte, tcpLen int) uint16 {
+	sum := checksumAddBytes(0, src[:])
+	sum = checksumAddBytes(sum, dst[:])
+	sum += 6
+	sum += uint32(tcpLen)
+	return ^checksumFold(sum)
 }

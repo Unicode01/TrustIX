@@ -120,7 +120,7 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 	key := dataSessionKey{
 		Peer:       "ix-b",
 		Endpoint:   "wan-udp",
-		Transport:  transport.ProtocolUDP,
+		Transport:  transport.ProtocolTIXTCP,
 		Address:    "198.51.100.2:9000",
 		Encryption: "secure",
 		PoolIndex:  2,
@@ -134,22 +134,25 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 	runtime.lastRX.Store(100)
 	runtime.lastTX.Store(200)
 	session := kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
-		FlowID:              0x1020304050607080,
-		Protocol:            transport.ProtocolUDP,
-		Peer:                "ix-b",
-		Endpoint:            "wan-udp",
-		LocalAddress:        "192.0.2.1:51820",
-		RemoteAddress:       "198.51.100.2:17041",
-		Epoch:               7,
-		CryptoSuite:         "AES-128-GCM-X25519",
-		CryptoPlacement:     "kernel",
-		Encrypted:           true,
-		SendEncrypted:       true,
-		ReceiveEncrypted:    true,
-		NativeBatching:      true,
-		Datagram:            true,
-		FragmentingDatagram: true,
-		MaxPacketSize:       64000,
+		FlowID:                            0x1020304050607080,
+		Protocol:                          transport.ProtocolTIXTCP,
+		Peer:                              "ix-b",
+		Endpoint:                          "wan-udp",
+		LocalAddress:                      "192.0.2.1:51820",
+		RemoteAddress:                     "198.51.100.2:17041",
+		Epoch:                             7,
+		CryptoSuite:                       "AES-128-GCM-X25519",
+		CryptoPlacement:                   "kernel",
+		Encrypted:                         true,
+		SendEncrypted:                     true,
+		ReceiveEncrypted:                  true,
+		NativeBatching:                    true,
+		Datagram:                          true,
+		FragmentingDatagram:               true,
+		MaxPacketSize:                     64000,
+		InnerTCPChecksumPartialLocal:      true,
+		InnerTCPChecksumPartialPeer:       true,
+		InnerTCPChecksumPartialNegotiated: true,
 	}}
 	record, ok := kernelDatapathSessionRecord(key, runtime, session)
 	if !ok {
@@ -159,7 +162,7 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 		record.Op != kernelmodule.TrustIXDatapathStateOpUpsert ||
 		record.Key != kernelDatapathSessionStateKey(key) ||
 		record.Value[0] != 0x1020304050607080 ||
-		record.Value[1] != 1 ||
+		record.Value[1] != uint64(kernelDatapathTransportCode(transport.ProtocolTIXTCP)) ||
 		record.Value[2] != 7 ||
 		record.Value[3] == 0 ||
 		record.Value[4] != 1 ||
@@ -178,10 +181,97 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 		kernelDatapathSessionFlagNativeBatching,
 		kernelDatapathSessionFlagDatagram,
 		kernelDatapathSessionFlagFragmentingDatagram,
+		kernelDatapathSessionFlagSendInnerTCPChecksumPartial,
+		kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial,
 	} {
 		if record.Flags&flag == 0 {
 			t.Fatalf("session record missing flag %#x: %#v", flag, record)
 		}
+	}
+}
+
+func TestKernelDatapathSessionChecksumPartialFlagsAreDirectional(t *testing.T) {
+	key := dataSessionKey{Transport: transport.ProtocolTIXTCP}
+	info := transport.KernelDatapathSessionInfo{
+		Protocol:                          transport.ProtocolTIXTCP,
+		InnerTCPChecksumPartialLocal:      true,
+		InnerTCPChecksumPartialPeer:       false,
+		InnerTCPChecksumPartialNegotiated: false,
+	}
+	flags := kernelDatapathSessionFlags(key, nil, info)
+	if flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial == 0 ||
+		flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial != 0 {
+		t.Fatalf("local-only flags = %#x, want receive-only checksum partial", flags)
+	}
+	info.InnerTCPChecksumPartialPeer = true
+	info.InnerTCPChecksumPartialNegotiated = true
+	flags = kernelDatapathSessionFlags(key, nil, info)
+	if flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial == 0 ||
+		flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial == 0 {
+		t.Fatalf("negotiated flags = %#x, want send+receive checksum partial", flags)
+	}
+	info.Protocol = transport.ProtocolUDP
+	key.Transport = transport.ProtocolUDP
+	if flags = kernelDatapathSessionFlags(key, nil, info); flags&(kernelDatapathSessionFlagSendInnerTCPChecksumPartial|kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial) != 0 {
+		t.Fatalf("UDP flags = %#x, checksum partial capability is TIX TCP-only", flags)
+	}
+}
+
+func TestKernelDatapathSyntheticChecksumPartialReceiveIsReadyBeforePeerNegotiation(t *testing.T) {
+	manager := kernelmodule.NewTrustIXDatapathManager()
+	manager.SetStatusForTest(kernelmodule.Status{
+		Loaded:   true,
+		Features: []string{kernelmodule.FeatureFullDatapath, kernelmodule.FeatureInnerTCPChecksumPartial},
+	})
+	daemon := &Daemon{
+		kernelDatapath:   manager,
+		dataSessions:     map[dataSessionKey]transport.Session{},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{},
+	}
+	peer := config.PeerConfig{ID: "ix-b"}
+	endpoint := config.EndpointConfig{
+		Name:      "wan-tix-tcp",
+		Address:   "198.51.100.2:17042",
+		Transport: string(transport.ProtocolTIXTCP),
+	}
+	send, receive := daemon.kernelDatapathFullPlaintextEndpointInnerTCPChecksumPartial(peer, endpoint, 0)
+	if send || !receive {
+		t.Fatalf("pre-negotiation synthetic capability = send:%t receive:%t, want false/true", send, receive)
+	}
+
+	key := dataSessionKey{
+		Peer:       peer.ID,
+		Endpoint:   endpoint.Name,
+		Transport:  transport.ProtocolTIXTCP,
+		Address:    endpoint.Address,
+		Encryption: "plaintext",
+	}
+	daemon.dataSessions[key] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:                            7,
+		Protocol:                          transport.ProtocolTIXTCP,
+		Peer:                              peer.ID,
+		Endpoint:                          endpoint.Name,
+		InnerTCPChecksumPartialLocal:      true,
+		InnerTCPChecksumPartialPeer:       false,
+		InnerTCPChecksumPartialNegotiated: false,
+	}}
+	send, receive = daemon.kernelDatapathFullPlaintextEndpointInnerTCPChecksumPartial(peer, endpoint, 0)
+	if send || !receive {
+		t.Fatalf("one-sided synthetic capability = send:%t receive:%t, want false/true", send, receive)
+	}
+
+	daemon.dataSessions[key] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:                            7,
+		Protocol:                          transport.ProtocolTIXTCP,
+		Peer:                              peer.ID,
+		Endpoint:                          endpoint.Name,
+		InnerTCPChecksumPartialLocal:      true,
+		InnerTCPChecksumPartialPeer:       true,
+		InnerTCPChecksumPartialNegotiated: true,
+	}}
+	send, receive = daemon.kernelDatapathFullPlaintextEndpointInnerTCPChecksumPartial(peer, endpoint, 0)
+	if !send || !receive {
+		t.Fatalf("negotiated synthetic capability = send:%t receive:%t, want true/true", send, receive)
 	}
 }
 
@@ -417,7 +507,7 @@ func TestKernelDatapathKernelUDPFlowRecordsSkipHalfReadyFlow(t *testing.T) {
 	}
 }
 
-func TestKernelDatapathFullPlaintextRouteSessionRecordsIgnoreExistingSessionKey(t *testing.T) {
+func TestKernelDatapathFullPlaintextRouteSessionRecordsInheritNegotiatedCapabilities(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FORCE_FULL_PLAINTEXT_TX", "1")
 	daemon := &Daemon{
 		desired: config.Desired{
@@ -429,11 +519,11 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsIgnoreExistingSessionKey(
 				Encryption: "plaintext",
 			},
 			Endpoints: []config.EndpointConfig{{
-				Name:      "wan-udp",
+				Name:      "wan-tix-tcp",
 				Mode:      config.EndpointModePassive,
 				Listen:    "192.0.2.1:17041",
 				Address:   "192.0.2.1:17041",
-				Transport: string(transport.ProtocolUDP),
+				Transport: string(transport.ProtocolTIXTCP),
 				Security: config.EndpointSecurityConfig{
 					Encryption: "plaintext",
 				},
@@ -442,10 +532,10 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsIgnoreExistingSessionKey(
 			Peers: []config.PeerConfig{{
 				ID: "ix-b",
 				Endpoints: []config.EndpointConfig{{
-					Name:      "wan-udp",
+					Name:      "wan-tix-tcp",
 					Mode:      config.EndpointModePassive,
 					Address:   "198.51.100.2:17042",
-					Transport: string(transport.ProtocolUDP),
+					Transport: string(transport.ProtocolTIXTCP),
 					Security: config.EndpointSecurityConfig{
 						Encryption: "plaintext",
 					},
@@ -458,22 +548,26 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsIgnoreExistingSessionKey(
 	}
 	existingKey := dataSessionKey{
 		Peer:       "ix-b",
-		Endpoint:   "wan-udp",
-		Transport:  transport.ProtocolUDP,
+		Endpoint:   "wan-tix-tcp",
+		Transport:  transport.ProtocolTIXTCP,
 		Address:    "198.51.100.2:17042",
 		Encryption: "plaintext",
 	}
 	daemon.dataSessions[existingKey] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
-		FlowID:   7,
-		Peer:     "ix-b",
-		Endpoint: "wan-udp",
+		FlowID:                            7,
+		Protocol:                          transport.ProtocolTIXTCP,
+		Peer:                              "ix-b",
+		Endpoint:                          "wan-tix-tcp",
+		InnerTCPChecksumPartialLocal:      true,
+		InnerTCPChecksumPartialPeer:       true,
+		InnerTCPChecksumPartialNegotiated: true,
 	}}
 	daemon.dataSessionState[existingKey] = &dataSessionRuntime{key: existingKey}
 
 	records := daemon.kernelDatapathFullPlaintextRouteSessionRecords(context.Background(), []routing.Route{{
 		Prefix:   core.Prefix("10.202.12.0/24"),
 		NextHop:  "ix-b",
-		Endpoint: "wan-udp",
+		Endpoint: "wan-tix-tcp",
 		Kind:     routing.RouteUnicast,
 	}})
 	if len(records) != 2 {
@@ -489,6 +583,10 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsIgnoreExistingSessionKey(
 	}
 	if records[1].Value[0] != records[0].Value[0] || records[1].Value[0] == 0 {
 		t.Fatalf("wire record does not match synthetic flow id: session=%#v wire=%#v", records[0], records[1])
+	}
+	if records[0].Flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial == 0 ||
+		records[0].Flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial == 0 {
+		t.Fatalf("synthetic session did not inherit negotiated checksum capability: %#v", records[0])
 	}
 }
 

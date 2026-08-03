@@ -2741,6 +2741,12 @@ func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatu
 	tcOnlyRouteGSO := manager.tixTCPRouteGSOTCOnlyProviderAvailableLocked()
 	tcOnlyRouteGSOUnavailable := manager.tixTCPRouteGSOTCOnlyUnavailableReasonLocked()
 	fullPlaintext := manager.kernelDatapathFullPlaintextTransportAvailableLocked()
+	innerTCPChecksumPartial := false
+	if fullPlaintext {
+		if query, err := kernelmodule.ProbeDatapath(kernelmodule.TrustIXDatapathDevicePath); err == nil {
+			innerTCPChecksumPartial = query.SafeActiveFeature(kernelmodule.FeatureInnerTCPChecksumPartial)
+		}
+	}
 	provider := "none"
 	switch {
 	case fullPlaintext:
@@ -2810,30 +2816,31 @@ func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatu
 		notes = append(notes, "AF_XDP mode fallback: "+fastPathFallback)
 	}
 	return dataplane.TIXTCPStatus{
-		Available:          manager.attached && (fullPlaintext || fastPath || tcOnlyRouteGSO || rawFallback),
-		Provider:           provider,
-		FastPath:           fullPlaintext || fastPath || tcOnlyRouteGSO,
-		UserspaceCrypto:    userspaceCrypto,
-		KernelCrypto:       kernelCryptoReady,
-		KernelCryptoReason: kernelCryptoReason,
-		KernelCryptoProbe:  &kernelCryptoProbe,
-		CryptoFallback:     manager.tixTCPCryptoFallbackStatusLocked(),
-		Reinject:           manager.attached && (fullPlaintext || fastPath || tcOnlyRouteGSO || rawFallback),
-		RawSocketFallback:  rawFallback,
-		XDPAttachMode:      xdpAttachMode,
-		AFXDPBindMode:      afXDPBindMode,
-		ZeroCopyEnabled:    zeroCopyEnabled,
-		FastPathFallback:   fastPathFallback,
-		PreferredCrypto:    preferredCrypto,
-		SupportedCrypto:    supportedCrypto,
-		FastPathQueues:     manager.tixTCPFastPathQueuesLocked(),
-		ProviderStats:      manager.tixTCPProviderStatsLocked(),
-		Telemetry:          manager.tixTCPTelemetrySnapshotLocked(),
-		Flows:              manager.tixTCPFlowSnapshotLocked(),
-		ActiveFlows:        len(manager.tixTCPFlows),
-		SubmittedFrames:    manager.tixTCPSubmitted,
-		ReceivedFrames:     manager.tixTCPReceived,
-		Notes:              notes,
+		Available:               manager.attached && (fullPlaintext || fastPath || tcOnlyRouteGSO || rawFallback),
+		Provider:                provider,
+		FastPath:                fullPlaintext || fastPath || tcOnlyRouteGSO,
+		InnerTCPChecksumPartial: innerTCPChecksumPartial,
+		UserspaceCrypto:         userspaceCrypto,
+		KernelCrypto:            kernelCryptoReady,
+		KernelCryptoReason:      kernelCryptoReason,
+		KernelCryptoProbe:       &kernelCryptoProbe,
+		CryptoFallback:          manager.tixTCPCryptoFallbackStatusLocked(),
+		Reinject:                manager.attached && (fullPlaintext || fastPath || tcOnlyRouteGSO || rawFallback),
+		RawSocketFallback:       rawFallback,
+		XDPAttachMode:           xdpAttachMode,
+		AFXDPBindMode:           afXDPBindMode,
+		ZeroCopyEnabled:         zeroCopyEnabled,
+		FastPathFallback:        fastPathFallback,
+		PreferredCrypto:         preferredCrypto,
+		SupportedCrypto:         supportedCrypto,
+		FastPathQueues:          manager.tixTCPFastPathQueuesLocked(),
+		ProviderStats:           manager.tixTCPProviderStatsLocked(),
+		Telemetry:               manager.tixTCPTelemetrySnapshotLocked(),
+		Flows:                   manager.tixTCPFlowSnapshotLocked(),
+		ActiveFlows:             len(manager.tixTCPFlows),
+		SubmittedFrames:         manager.tixTCPSubmitted,
+		ReceivedFrames:          manager.tixTCPReceived,
+		Notes:                   notes,
 	}, nil
 }
 
@@ -7722,7 +7729,11 @@ func (manager *Manager) decodeTIXTCPRawPacket(raw []byte, parseTCP func([]byte) 
 	}
 	frame, err := tixtcp.ParseFrameNoCopy(packet.Payload)
 	if err != nil {
-		manager.recordDrop(observability.DropInvalidOverlayHeader)
+		if errors.Is(err, tixtcp.ErrChecksum) {
+			manager.recordDrop(observability.DropChecksumError)
+		} else {
+			manager.recordDrop(observability.DropInvalidOverlayHeader)
+		}
 		return receivedTIXTCPFrame{}, false
 	}
 	payload := frame.Payload
@@ -7745,6 +7756,16 @@ func (manager *Manager) decodeTIXTCPRawPacket(raw []byte, parseTCP func([]byte) 
 	} else {
 		payload = append([]byte(nil), payload...)
 		innerIPv4 = innerIPv4 && kernelUDPInnerIPv4Eligible(payload)
+	}
+	if frame.Flags&tixtcp.FlagInnerTCPChecksumPartial != 0 {
+		if err := tixtcp.CompleteInnerTCPChecksumPartial(payload); err != nil {
+			if errors.Is(err, tixtcp.ErrChecksum) {
+				manager.recordDrop(observability.DropChecksumError)
+			} else {
+				manager.recordDrop(observability.DropInvalidOverlayHeader)
+			}
+			return receivedTIXTCPFrame{}, false
+		}
 	}
 	openPlain, openRelease := kernelUDPOpenPlainBuffer(encrypted && !kernelOpened && !cryptoFragment, len(payload))
 	return receivedTIXTCPFrame{
@@ -12620,6 +12641,7 @@ func addKernelCryptoModuleFeatureStats(stats map[string]uint64, prefix string, g
 		kernelmodule.FeatureFullDatapath,
 		kernelmodule.FeatureRouteTCPKfunc,
 		kernelmodule.FeatureRouteTCPXmit,
+		kernelmodule.FeatureInnerTCPChecksumPartial,
 	} {
 		stats[prefix+"_"+group+"_"+feature] = boolCounter(featureListContains(features, feature))
 	}

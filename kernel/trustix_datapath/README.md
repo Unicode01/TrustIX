@@ -66,17 +66,24 @@ full-kmod traffic pinned to the fenced master's MAC until TTL expiry. The
 `tx_plaintext_direct_xmit_dst_mac_cache_invalidations` module parameter exposes
 that invalidation count for HA and datapath gates.
 The module reports `full_datapath` only when the packet ownership path is
-explicitly enabled and self-tested: load with `enable_features=128`, keep all
-first-release datapath selftests passing, and set `rx_worker_inject=1` and
-`tx_plaintext=1`.
+explicitly enabled and self-tested. The current full-plaintext profile loads
+with `enable_features=1152` (`full_datapath=128` plus negotiated inner TCP
+`CHECKSUM_PARTIAL=1024`), keeps all datapath selftests passing, and sets
+`rx_worker_inject=1` and `tx_plaintext=1`. The checksum feature is used only
+after both TIX-TCP peers advertise support; mixed-version sessions retain full
+inner TCP checksums.
 Without those conditions it stays loaded as a control-plane state/hook module
 and marks the requested feature unsafe.
+The module creates one order-4 page pool per possible CPU for reusable
+plaintext TX GSO skb storage. RX coalescing retains the nonlinear page-frag
+builder because linear page-pool storage reduced multi-queue throughput in
+cross-host testing.
 
 Build and inspect:
 
 ```sh
 make -C kernel/trustix_datapath
-sudo insmod kernel/trustix_datapath/trustix_datapath.ko enable_features=128 rx_worker_inject=1 tx_plaintext=1
+sudo insmod kernel/trustix_datapath/trustix_datapath.ko enable_features=1152 rx_worker_inject=1 tx_plaintext=1
 cat /sys/module/trustix_datapath/parameters/abi_version
 cat /sys/module/trustix_datapath/parameters/features
 cat /sys/module/trustix_datapath/parameters/selftests

@@ -288,7 +288,7 @@ verify_module_file() {
 verify_loaded_module() {
   local vmid="$1"
   gssh "$vmid" \
-    "test \"\$(cat /sys/module/trustix_datapath/srcversion)\" = '$expected_module_srcversion' && test \"\$(cat /sys/module/trustix_datapath/parameters/selftest_failures)\" = 0 && test \"\$(cat /sys/module/trustix_datapath/parameters/selftests)\" = 1023"
+    "test \"\$(cat /sys/module/trustix_datapath/srcversion)\" = '$expected_module_srcversion' && test \"\$(cat /sys/module/trustix_datapath/parameters/selftest_failures)\" = 0 && test \"\$(cat /sys/module/trustix_datapath/parameters/selftests)\" = 2047"
 }
 
 capture_previous_kernel() {

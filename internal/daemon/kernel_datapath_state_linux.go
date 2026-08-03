@@ -24,18 +24,20 @@ import (
 )
 
 const (
-	kernelDatapathSessionFlagReverse             = uint32(1 << 0)
-	kernelDatapathSessionFlagControlOnly         = uint32(1 << 1)
-	kernelDatapathSessionFlagKernelFlow          = uint32(1 << 2)
-	kernelDatapathSessionFlagEncrypted           = uint32(1 << 3)
-	kernelDatapathSessionFlagSendEncrypted       = uint32(1 << 4)
-	kernelDatapathSessionFlagReceiveEncrypted    = uint32(1 << 5)
-	kernelDatapathSessionFlagCryptoKernel        = uint32(1 << 6)
-	kernelDatapathSessionFlagCryptoUserspace     = uint32(1 << 7)
-	kernelDatapathSessionFlagNativeBatching      = uint32(1 << 8)
-	kernelDatapathSessionFlagDatagram            = uint32(1 << 9)
-	kernelDatapathSessionFlagFragmentingDatagram = uint32(1 << 10)
-	kernelDatapathSessionFlagSyntheticFallback   = uint32(1 << 11)
+	kernelDatapathSessionFlagReverse                        = uint32(1 << 0)
+	kernelDatapathSessionFlagControlOnly                    = uint32(1 << 1)
+	kernelDatapathSessionFlagKernelFlow                     = uint32(1 << 2)
+	kernelDatapathSessionFlagEncrypted                      = uint32(1 << 3)
+	kernelDatapathSessionFlagSendEncrypted                  = uint32(1 << 4)
+	kernelDatapathSessionFlagReceiveEncrypted               = uint32(1 << 5)
+	kernelDatapathSessionFlagCryptoKernel                   = uint32(1 << 6)
+	kernelDatapathSessionFlagCryptoUserspace                = uint32(1 << 7)
+	kernelDatapathSessionFlagNativeBatching                 = uint32(1 << 8)
+	kernelDatapathSessionFlagDatagram                       = uint32(1 << 9)
+	kernelDatapathSessionFlagFragmentingDatagram            = uint32(1 << 10)
+	kernelDatapathSessionFlagSyntheticFallback              = uint32(1 << 11)
+	kernelDatapathSessionFlagSendInnerTCPChecksumPartial    = uint32(1 << 12)
+	kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial = uint32(1 << 13)
 
 	kernelDatapathFlowFlagIPv4 = uint32(1 << 0)
 
@@ -144,6 +146,28 @@ func (daemon *Daemon) runKernelDatapathStateSync(ctx context.Context) {
 }
 
 func (daemon *Daemon) syncKernelDatapathSessionUpsert(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) {
+	if notifier, ok := session.(transport.KernelDatapathSessionStateChangeHookSetter); ok {
+		notifier.SetKernelDatapathSessionStateChangeHook(func() {
+			daemon.syncKernelDatapathSessionStateChange(key, runtime, session)
+		})
+	}
+	daemon.syncKernelDatapathSessionRecords(key, runtime, session)
+}
+
+func (daemon *Daemon) syncKernelDatapathSessionStateChange(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) {
+	if daemon == nil || session == nil {
+		return
+	}
+	daemon.dataMu.Lock()
+	current := daemon.dataSessions[key] == session && daemon.dataSessionState[key] == runtime
+	daemon.dataMu.Unlock()
+	if !current {
+		return
+	}
+	daemon.syncKernelDatapathSessionRecords(key, runtime, session)
+}
+
+func (daemon *Daemon) syncKernelDatapathSessionRecords(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) {
 	if !daemon.kernelDatapathAvailable() {
 		return
 	}
@@ -151,6 +175,9 @@ func (daemon *Daemon) syncKernelDatapathSessionUpsert(key dataSessionKey, runtim
 	if len(records) == 0 {
 		return
 	}
+	records = append(records, daemon.kernelDatapathFullPlaintextRouteSessionRecords(
+		context.Background(), daemon.runtimeDataplaneSnapshot().Routes,
+	)...)
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(context.Background())...)
 	if err := daemon.applyKernelDatapathStateRecords(context.Background(), records); err != nil {
 		daemon.recordBackgroundError("kernel_datapath_state_sync", fmt.Errorf("upsert kernel datapath session: %w", err))
@@ -439,6 +466,15 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Con
 	flags := kernelDatapathSessionFlagKernelFlow |
 		kernelDatapathSessionFlagCryptoUserspace |
 		kernelDatapathSessionFlagSyntheticFallback
+	if key.Transport == transport.ProtocolTIXTCP {
+		sendPartial, receivePartial := daemon.kernelDatapathFullPlaintextEndpointInnerTCPChecksumPartial(peer, endpoint, poolIndex)
+		if sendPartial {
+			flags |= kernelDatapathSessionFlagSendInnerTCPChecksumPartial
+		}
+		if receivePartial {
+			flags |= kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial
+		}
+	}
 	if key.Transport == transport.ProtocolUDP {
 		flags |= kernelDatapathSessionFlagDatagram |
 			kernelDatapathSessionFlagNativeBatching |
@@ -478,6 +514,40 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Con
 		},
 	}
 	return session, wire, true
+}
+
+func (daemon *Daemon) kernelDatapathFullPlaintextEndpointInnerTCPChecksumPartial(peer config.PeerConfig, endpoint config.EndpointConfig, poolIndex int) (send, receive bool) {
+	if daemon == nil || transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) != transport.ProtocolTIXTCP {
+		return false, false
+	}
+	receive = daemon.kernelDatapathInnerTCPChecksumPartialReady()
+	address := strings.TrimSpace(endpoint.Address)
+	for _, item := range daemon.kernelDatapathSessionSnapshot() {
+		key := item.key
+		if key.Peer != peer.ID ||
+			key.Endpoint != endpoint.Name ||
+			key.Transport != transport.ProtocolTIXTCP ||
+			(strings.TrimSpace(key.Address) != address && key.Address != reverseSessionAddress) ||
+			parseSecureTransportEncryption(key.Encryption) != securetransport.EncryptionPlaintext ||
+			key.PoolIndex != poolIndex {
+			continue
+		}
+		info, ok := kernelDatapathSessionInfo(item.session)
+		if !ok {
+			continue
+		}
+		receive = receive || info.InnerTCPChecksumPartialLocal
+		send = send || info.InnerTCPChecksumPartialNegotiated
+	}
+	return send, receive
+}
+
+func (daemon *Daemon) kernelDatapathInnerTCPChecksumPartialReady() bool {
+	if daemon == nil || daemon.kernelDatapath == nil {
+		return false
+	}
+	status := daemon.kernelDatapath.Snapshot()
+	return status.Loaded && status.HasFeature(kernelmodule.FeatureInnerTCPChecksumPartial)
 }
 
 func kernelDatapathFullPlaintextFlowID(protocol transport.Protocol, localIP uint32, localPort uint16, remoteIP uint32, remotePort uint16) uint64 {
@@ -945,6 +1015,14 @@ func kernelDatapathSessionFlags(key dataSessionKey, runtime *dataSessionRuntime,
 	}
 	if info.FragmentingDatagram {
 		flags |= kernelDatapathSessionFlagFragmentingDatagram
+	}
+	if key.Transport == transport.ProtocolTIXTCP || info.Protocol == transport.ProtocolTIXTCP {
+		if info.InnerTCPChecksumPartialNegotiated {
+			flags |= kernelDatapathSessionFlagSendInnerTCPChecksumPartial
+		}
+		if info.InnerTCPChecksumPartialLocal {
+			flags |= kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial
+		}
 	}
 	return flags
 }

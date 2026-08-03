@@ -399,11 +399,11 @@ func writePVEHAFullKmodEvidence(t *testing.T, dir string, staleMACBlackhole bool
 func pveHAFullKmodModuleSnapshot(moduleSHA256 string) string {
 	parameters := map[string]string{
 		"build_sha256":      moduleSHA256,
-		"enable_features":   "128",
-		"features":          "128",
+		"enable_features":   "1152",
+		"features":          "1152",
 		"rx_worker_inject":  "Y",
 		"selftest_failures": "0",
-		"selftests":         "1023",
+		"selftests":         "2047",
 		"tx_plaintext":      "Y",
 	}
 	names := []string{

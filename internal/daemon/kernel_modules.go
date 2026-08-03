@@ -418,7 +418,10 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		rxWorker = false
 	}
 	if rxWorker || fullPlaintext {
-		params = appendModuleParameterIfMissing(params, "enable_features=128")
+		params = addModuleParameterMask(params, "enable_features", 1<<7)
+		if fullPlaintext {
+			params = addModuleParameterMask(params, "enable_features", 1<<10)
+		}
 		params = appendModuleParameterIfMissing(params, "rx_worker_inject=1")
 		if fullPlaintext {
 			params = appendModuleParameterIfMissing(params, "tx_plaintext=1")
@@ -986,6 +989,25 @@ func setModuleParameter(params, key, value string) string {
 		kept = append(kept, assignment)
 	}
 	return strings.Join(kept, " ")
+}
+
+func addModuleParameterMask(params, key string, mask uint64) string {
+	key = strings.TrimSpace(key)
+	if key == "" || mask == 0 {
+		return params
+	}
+	value := mask
+	for _, field := range strings.Fields(params) {
+		candidate, raw, ok := strings.Cut(field, "=")
+		if !ok || strings.TrimSpace(candidate) != key {
+			continue
+		}
+		if parsed, err := strconv.ParseUint(strings.TrimSpace(raw), 0, 64); err == nil {
+			value |= parsed
+		}
+		break
+	}
+	return setModuleParameter(params, key, strconv.FormatUint(value, 10))
 }
 
 func setModuleParameterIfPresent(params, key, value string) string {

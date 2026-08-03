@@ -2,6 +2,8 @@ package tixtcp
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"testing"
 )
 
@@ -142,4 +144,87 @@ func TestParseFrameRejectsBadMagic(t *testing.T) {
 	if _, err := ParseFrame(wire); err == nil {
 		t.Fatal("expected bad magic error")
 	}
+}
+
+func TestInnerTCPChecksumPartialRoundTripAndComplete(t *testing.T) {
+	inner := testInnerTCPChecksumPartialPacket([]byte("checksum-partial"))
+	wire, err := (Frame{
+		Flags:    FlagInnerIPv4 | FlagInnerTCPChecksumPartial,
+		FlowID:   7,
+		Sequence: 11,
+		Payload:  inner,
+	}).MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal checksum-partial frame: %v", err)
+	}
+	frame, err := ParseFrame(wire)
+	if err != nil {
+		t.Fatalf("parse checksum-partial frame: %v", err)
+	}
+	if err := CompleteInnerTCPChecksumPartial(frame.Payload); err != nil {
+		t.Fatalf("complete checksum-partial payload: %v", err)
+	}
+	tcp := frame.Payload[ipv4HeaderLen:]
+	src := [4]byte{192, 0, 2, 1}
+	dst := [4]byte{198, 51, 100, 2}
+	got := binary.BigEndian.Uint16(tcp[16:18])
+	binary.BigEndian.PutUint16(tcp[16:18], 0)
+	want := tcpChecksum(src, dst, tcp)
+	if got != want {
+		t.Fatalf("completed TCP checksum = %#x, want %#x", got, want)
+	}
+}
+
+func TestFrameRejectsInvalidInnerTCPChecksumPartialMetadata(t *testing.T) {
+	inner := testInnerTCPChecksumPartialPacket([]byte("metadata"))
+	tests := []Frame{
+		{Flags: FlagInnerTCPChecksumPartial, Payload: inner},
+		{Flags: FlagInnerIPv4 | FlagInnerTCPChecksumPartial | FlagEncrypted, Payload: inner},
+		{Flags: FlagInnerIPv4 | FlagInnerTCPChecksumPartial | FlagKernelOpened, Payload: inner},
+		{Flags: FlagInnerIPv4 | FlagInnerTCPChecksumPartial | FlagCryptoFragment, FragmentCount: 2, Payload: inner},
+		{Flags: FlagInnerIPv4 | FlagInnerTCPChecksumPartial, FragmentCount: 2, Payload: inner},
+		{Flags: 1 << 7, Payload: inner},
+	}
+	for _, frame := range tests {
+		if _, err := frame.MarshalBinary(); err == nil {
+			t.Fatalf("MarshalBinary accepted invalid frame %#v", frame)
+		}
+	}
+}
+
+func TestParseFrameRejectsInvalidInnerTCPChecksumPartialSeed(t *testing.T) {
+	inner := testInnerTCPChecksumPartialPacket([]byte("bad-seed"))
+	wire, err := (Frame{
+		Flags:   FlagInnerIPv4 | FlagInnerTCPChecksumPartial,
+		Payload: inner,
+	}).MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal checksum-partial frame: %v", err)
+	}
+	wire[HeaderLen+ipv4HeaderLen+16] ^= 1
+	if _, err := ParseFrameNoCopy(wire); !errors.Is(err, ErrChecksum) {
+		t.Fatalf("ParseFrameNoCopy error = %v, want ErrChecksum", err)
+	}
+}
+
+func testInnerTCPChecksumPartialPacket(payload []byte) []byte {
+	packet := make([]byte, ipv4HeaderLen+tcpHeaderLen+len(payload))
+	packet[0] = 0x45
+	binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
+	packet[8] = 64
+	packet[9] = 6
+	copy(packet[12:16], []byte{192, 0, 2, 1})
+	copy(packet[16:20], []byte{198, 51, 100, 2})
+	binary.BigEndian.PutUint16(packet[10:12], checksum(packet[:ipv4HeaderLen]))
+	tcp := packet[ipv4HeaderLen:]
+	binary.BigEndian.PutUint16(tcp[0:2], 12345)
+	binary.BigEndian.PutUint16(tcp[2:4], 443)
+	binary.BigEndian.PutUint32(tcp[4:8], 0x10203040)
+	tcp[12] = 5 << 4
+	tcp[13] = tcpFlagPSHACK
+	binary.BigEndian.PutUint16(tcp[14:16], 0xffff)
+	copy(tcp[tcpHeaderLen:], payload)
+	binary.BigEndian.PutUint16(tcp[16:18], tcpPseudoHeaderSeed(
+		[4]byte{192, 0, 2, 1}, [4]byte{198, 51, 100, 2}, len(tcp)))
+	return packet
 }

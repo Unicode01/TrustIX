@@ -373,16 +373,17 @@ func loadedModuleUpgradeReason(source moduleSource, status Status, state string)
 }
 
 const (
-	trustIXKernelFeatureCryptoAEADBit    = 1 << 0
-	trustIXKernelFeatureDeviceAEADBit    = 1 << 1
-	trustIXKernelFeatureKfuncTCBit       = 1 << 2
-	trustIXKernelFeatureKfuncXDPBit      = 1 << 3
-	trustIXKernelFeatureDirectAESNIBit   = 1 << 4
-	trustIXKernelFeatureDirectVAESBit    = 1 << 5
-	trustIXKernelFeatureGSOSKBBit        = 1 << 6
-	trustIXKernelFeatureFullDatapathBit  = 1 << 7
-	trustIXKernelFeatureRouteTCPKfuncBit = 1 << 8
-	trustIXKernelFeatureRouteTCPXmitBit  = 1 << 9
+	trustIXKernelFeatureCryptoAEADBit              = 1 << 0
+	trustIXKernelFeatureDeviceAEADBit              = 1 << 1
+	trustIXKernelFeatureKfuncTCBit                 = 1 << 2
+	trustIXKernelFeatureKfuncXDPBit                = 1 << 3
+	trustIXKernelFeatureDirectAESNIBit             = 1 << 4
+	trustIXKernelFeatureDirectVAESBit              = 1 << 5
+	trustIXKernelFeatureGSOSKBBit                  = 1 << 6
+	trustIXKernelFeatureFullDatapathBit            = 1 << 7
+	trustIXKernelFeatureRouteTCPKfuncBit           = 1 << 8
+	trustIXKernelFeatureRouteTCPXmitBit            = 1 << 9
+	trustIXKernelFeatureInnerTCPChecksumPartialBit = 1 << 10
 )
 
 func inspectModuleABIVersion(name string, loaded bool) int {
@@ -515,6 +516,9 @@ func moduleFeatureMaskToNames(mask uint64) []string {
 	}
 	if mask&trustIXKernelFeatureRouteTCPXmitBit != 0 {
 		features = append(features, FeatureRouteTCPXmit)
+	}
+	if mask&trustIXKernelFeatureInnerTCPChecksumPartialBit != 0 {
+		features = append(features, FeatureInnerTCPChecksumPartial)
 	}
 	return normalizeCapabilityFeatures(features)
 }

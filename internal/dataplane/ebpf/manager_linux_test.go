@@ -4831,6 +4831,59 @@ func TestTIXTCPRawDecodeFullKmodChecksumFlagUsesUserspaceFlowPlacement(t *testin
 	}
 }
 
+func TestTIXTCPRawDecodeCompletesInnerTCPChecksumPartial(t *testing.T) {
+	manager := NewManager()
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
+		ID:              77,
+		LocalAddress:    "192.0.2.10:18001",
+		RemoteAddress:   "198.51.100.20:43000",
+		SourcePort:      18001,
+		DestinationPort: 43000,
+		CryptoPlacement: dataplane.CryptoPlacementUserspace,
+	}
+	manager.tixTCPRawReceiveFilter.Store(manager.tixTCPRawReceiveFilterLocked())
+	inner := testInnerIPv4TCPChecksumPartialPacket(t, []byte("raw-partial"))
+	partialSeed := binary.BigEndian.Uint16(inner[20+16 : 20+18])
+	frameWire, err := (tixtcp.Frame{
+		Flags:    tixtcp.FlagInnerIPv4 | tixtcp.FlagInnerTCPChecksumPartial,
+		FlowID:   77,
+		Sequence: 1,
+		Payload:  inner,
+	}).MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal tix_tcp checksum-partial frame: %v", err)
+	}
+	wire, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("198.51.100.20"),
+		DestinationIP:   netip.MustParseAddr("192.0.2.10"),
+		SourcePort:      43000,
+		DestinationPort: 18001,
+		Sequence:        100,
+		Acknowledgment:  1,
+		Payload:         frameWire,
+	})
+	if err != nil {
+		t.Fatalf("marshal outer tix_tcp packet: %v", err)
+	}
+
+	item, ok := manager.decodeTIXTCPRawPacket(wire, tixtcp.ParseTCPShapedIPv4NoCopy)
+	if !ok {
+		t.Fatal("raw decode rejected checksum-partial frame")
+	}
+	if got := binary.BigEndian.Uint16(item.frame.Payload[20+16 : 20+18]); got == partialSeed {
+		t.Fatalf("decoded TCP checksum still contains partial seed %#x", got)
+	}
+	if _, err := tixtcp.ParseTCPShapedIPv4NoCopy(item.frame.Payload); err != nil {
+		t.Fatalf("raw-decoded inner TCP packet has invalid completed checksum: %v", err)
+	}
+	if !item.frame.InnerIPv4 || item.frame.Encrypted || item.frame.CryptoPlacement != dataplane.CryptoPlacementUserspace {
+		t.Fatalf("decoded metadata = inner:%v encrypted:%v placement:%s", item.frame.InnerIPv4, item.frame.Encrypted, item.frame.CryptoPlacement)
+	}
+	if got := binary.BigEndian.Uint16(inner[20+16 : 20+18]); got != partialSeed {
+		t.Fatalf("raw decode mutated source frame payload checksum to %#x, want seed %#x", got, partialSeed)
+	}
+}
+
 func TestTIXTCPRawReceiveFilterIncludesEstablishedLocalFlowPort(t *testing.T) {
 	manager := NewManager()
 	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
@@ -17456,6 +17509,72 @@ func TestRemotePerfMatrixAppliesSysfsAfterModuleReload(t *testing.T) {
 	}
 	requireSourceContains(t, source, "def wait_required_modules_loaded(")
 	requireSourceContains(t, source, `"required_modules_after_ready": required_modules_after_ready`)
+}
+
+func TestFullDatapathPartialChecksumHandoffSafety(t *testing.T) {
+	datapathSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+
+	virtualBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_partial_csum_requires_software")
+	for _, want := range []string{"IFF_EBRIDGE", "dev->rtnl_link_ops", "link_ops->kind"} {
+		requireSourceContains(t, virtualBody, want)
+	}
+	supportedBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_partial_csum_supported")
+	requireSourceContains(t, supportedBody, "!skb_is_gso(skb)")
+	requireSourceContains(t, supportedBody, "trustix_datapath_rx_worker_partial_csum_requires_software(dev)")
+	finishBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_finish_partial_checksum")
+	requireSourceContains(t, finishBody, "skb_checksum_help(skb)")
+	normalizeIdx := strings.Index(finishBody, "trustix_datapath_rx_worker_normalize_inner_tcp_partial_checksum(")
+	supportedIdx := strings.Index(finishBody, "trustix_datapath_rx_worker_partial_csum_supported(")
+	if normalizeIdx < 0 || supportedIdx < 0 || normalizeIdx > supportedIdx {
+		t.Fatal("RX worker must normalize partial-checksum metadata before testing device offload support")
+	}
+	normalizeBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_normalize_inner_tcp_partial_checksum")
+	for _, want := range []string{
+		"csum_start > U16_MAX",
+		"skb->csum_start = csum_start;",
+		"skb->csum_offset = offsetof(struct tcphdr, check);",
+		"trustix_datapath_rx_worker_partial_checksum_metadata_repairs++",
+	} {
+		requireSourceContains(t, normalizeBody, want)
+	}
+
+	for _, tc := range []struct {
+		function string
+		reset    string
+		start    string
+	}{
+		{
+			function: "trustix_datapath_rx_worker_build_xmit_inner_skb_copy_csum",
+			reset:    "inner_skb->csum = 0;",
+			start:    "inner_skb->csum_start = (unsigned char *)tcph - inner_skb->head;",
+		},
+		{
+			function: "trustix_datapath_rx_worker_build_direct_gso_skb",
+			reset:    "skb->csum = 0;",
+			start:    "skb->csum_start = (unsigned char *)tcph - skb->head;",
+		},
+	} {
+		body := sourceFunctionBody(t, datapathSource, tc.function)
+		resetIdx := strings.Index(body, tc.reset)
+		startIdx := strings.Index(body, tc.start)
+		if resetIdx < 0 || startIdx < 0 || resetIdx > startIdx {
+			t.Fatalf("%s must clear the skb checksum union before setting CHECKSUM_PARTIAL offsets", tc.function)
+		}
+	}
+
+	deliverBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_deliver_inner_skb_more")
+	if strings.Count(deliverBody, "trustix_datapath_rx_worker_finish_partial_checksum(") != 2 {
+		t.Fatal("RX worker must finish partial checksums for both xmit and protocol-stack handoff")
+	}
+	selftestBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_selftest_inner_tcp_checksum_partial")
+	for _, want := range []string{
+		"test_dev->features = NETIF_F_HW_CSUM;",
+		"test_dev->rtnl_link_ops = &virtual_link_ops;",
+		"test_dev->priv_flags = IFF_EBRIDGE;",
+		"tcph->check != full_checksum",
+	} {
+		requireSourceContains(t, selftestBody, want)
+	}
 }
 
 func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {

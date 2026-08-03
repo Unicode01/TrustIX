@@ -1447,6 +1447,9 @@ func (daemon *Daemon) handleDoctor(w http.ResponseWriter, r *http.Request) {
 			Detail: tixTCPDoctorDetail(view.DataPath),
 		})
 	}
+	if check, ok := daemon.openWrtRPSDoctorCheck(); ok {
+		checks = append(checks, check)
+	}
 	if daemon.kernelUDPDoctorEnabled(view.DataPath) {
 		checks = append(checks, doctorCheck{
 			Name:   "kernel_udp",

@@ -53,6 +53,14 @@ func TestModuleFeatureMaskIncludesRouteTCPKfunc(t *testing.T) {
 	}
 }
 
+func TestModuleFeatureMaskIncludesInnerTCPChecksumPartial(t *testing.T) {
+	features := moduleFeatureMaskToNames(trustIXKernelFeatureFullDatapathBit | trustIXKernelFeatureInnerTCPChecksumPartialBit)
+	status := completeCapabilityStatus(Status{Name: "trustix_datapath", Loaded: true, Features: features})
+	if !status.HasFeature(FeatureInnerTCPChecksumPartial) {
+		t.Fatalf("features = %#v, missing %q", status.Features, FeatureInnerTCPChecksumPartial)
+	}
+}
+
 func TestModuleFeatureMaskCannotPromoteCryptoModuleToDatapathTier(t *testing.T) {
 	features := moduleFeatureMaskToNames(trustIXKernelFeatureCryptoAEADBit | trustIXKernelFeatureGSOSKBBit | trustIXKernelFeatureFullDatapathBit)
 	status := completeCapabilityStatus(Status{Name: "trustix_crypto", Loaded: true, Features: features})

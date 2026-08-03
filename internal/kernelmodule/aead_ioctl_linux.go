@@ -34,20 +34,21 @@ const (
 	TrustIXAEADDirectAnySlot         = ^uint32(0)
 	trustIXAEADDirectFlagOpen        = uint32(1)
 
-	TrustIXDatapathHelpersFlagTIXTSelftestOK = uint32(1 << 0)
-	TrustIXDatapathHelpersFlagFeaturesActive = uint32(1 << 1)
-	TrustIXDatapathHelpersSelftestTIXTFrame  = uint64(1 << 0)
-	TrustIXDatapathHelpersSelftestTIXTStream = uint64(1 << 1)
-	TrustIXDatapathSelftestStateTable        = uint64(1 << 2)
-	TrustIXDatapathSelftestClassify          = uint64(1 << 3)
-	TrustIXDatapathSelftestPacketClassify    = uint64(1 << 4)
-	TrustIXDatapathSelftestTIXTEncap         = uint64(1 << 5)
-	TrustIXDatapathSelftestTIXTDecap         = uint64(1 << 6)
-	TrustIXDatapathSelftestSessionWire       = uint64(1 << 7)
-	TrustIXDatapathSelftestOuterBuild        = uint64(1 << 8)
-	TrustIXDatapathSelftestOuterParse        = uint64(1 << 9)
-	TrustIXDatapathHelpersSelftestAll        = TrustIXDatapathHelpersSelftestTIXTFrame | TrustIXDatapathHelpersSelftestTIXTStream
-	TrustIXDatapathSelftestAll               = TrustIXDatapathHelpersSelftestAll | TrustIXDatapathSelftestStateTable | TrustIXDatapathSelftestClassify | TrustIXDatapathSelftestPacketClassify | TrustIXDatapathSelftestTIXTEncap | TrustIXDatapathSelftestTIXTDecap | TrustIXDatapathSelftestSessionWire | TrustIXDatapathSelftestOuterBuild | TrustIXDatapathSelftestOuterParse
+	TrustIXDatapathHelpersFlagTIXTSelftestOK       = uint32(1 << 0)
+	TrustIXDatapathHelpersFlagFeaturesActive       = uint32(1 << 1)
+	TrustIXDatapathHelpersSelftestTIXTFrame        = uint64(1 << 0)
+	TrustIXDatapathHelpersSelftestTIXTStream       = uint64(1 << 1)
+	TrustIXDatapathSelftestStateTable              = uint64(1 << 2)
+	TrustIXDatapathSelftestClassify                = uint64(1 << 3)
+	TrustIXDatapathSelftestPacketClassify          = uint64(1 << 4)
+	TrustIXDatapathSelftestTIXTEncap               = uint64(1 << 5)
+	TrustIXDatapathSelftestTIXTDecap               = uint64(1 << 6)
+	TrustIXDatapathSelftestSessionWire             = uint64(1 << 7)
+	TrustIXDatapathSelftestOuterBuild              = uint64(1 << 8)
+	TrustIXDatapathSelftestOuterParse              = uint64(1 << 9)
+	TrustIXDatapathSelftestInnerTCPChecksumPartial = uint64(1 << 10)
+	TrustIXDatapathHelpersSelftestAll              = TrustIXDatapathHelpersSelftestTIXTFrame | TrustIXDatapathHelpersSelftestTIXTStream
+	TrustIXDatapathSelftestAll                     = TrustIXDatapathHelpersSelftestAll | TrustIXDatapathSelftestStateTable | TrustIXDatapathSelftestClassify | TrustIXDatapathSelftestPacketClassify | TrustIXDatapathSelftestTIXTEncap | TrustIXDatapathSelftestTIXTDecap | TrustIXDatapathSelftestSessionWire | TrustIXDatapathSelftestOuterBuild | TrustIXDatapathSelftestOuterParse | TrustIXDatapathSelftestInnerTCPChecksumPartial
 
 	TrustIXDatapathStateKindRoute       = uint32(1)
 	TrustIXDatapathStateKindSession     = uint32(2)

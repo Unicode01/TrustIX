@@ -210,28 +210,35 @@ type KernelFlowRetentionSession interface {
 }
 
 type KernelDatapathSessionInfo struct {
-	FlowID              uint64
-	Protocol            Protocol
-	Peer                core.IXID
-	Endpoint            core.EndpointID
-	LocalAddress        string
-	RemoteAddress       string
-	SourcePort          uint16
-	DestinationPort     uint16
-	Epoch               uint64
-	CryptoSuite         string
-	CryptoPlacement     string
-	Encrypted           bool
-	SendEncrypted       bool
-	ReceiveEncrypted    bool
-	NativeBatching      bool
-	Datagram            bool
-	FragmentingDatagram bool
-	MaxPacketSize       uint64
+	FlowID                            uint64
+	Protocol                          Protocol
+	Peer                              core.IXID
+	Endpoint                          core.EndpointID
+	LocalAddress                      string
+	RemoteAddress                     string
+	SourcePort                        uint16
+	DestinationPort                   uint16
+	Epoch                             uint64
+	CryptoSuite                       string
+	CryptoPlacement                   string
+	Encrypted                         bool
+	SendEncrypted                     bool
+	ReceiveEncrypted                  bool
+	NativeBatching                    bool
+	Datagram                          bool
+	FragmentingDatagram               bool
+	MaxPacketSize                     uint64
+	InnerTCPChecksumPartialLocal      bool
+	InnerTCPChecksumPartialPeer       bool
+	InnerTCPChecksumPartialNegotiated bool
 }
 
 type KernelDatapathSession interface {
 	KernelDatapathSessionInfo() (KernelDatapathSessionInfo, bool)
+}
+
+type KernelDatapathSessionStateChangeHookSetter interface {
+	SetKernelDatapathSessionStateChangeHook(func())
 }
 
 type Listener interface {

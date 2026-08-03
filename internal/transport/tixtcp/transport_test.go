@@ -350,6 +350,126 @@ func TestTIXTCPCompatControlDecodesOldInitWithoutSourcePort(t *testing.T) {
 	}
 }
 
+func TestTIXTCPCompatControlCapabilitiesRoundTrip(t *testing.T) {
+	payload := encodeTIXTCPCompatControlCapabilities(tixTCPCapabilityInnerTCPChecksumPartial | 1<<63)
+	capabilities, ok := decodeTIXTCPCompatControlCapabilities(payload)
+	if !ok {
+		t.Fatal("capability control frame did not decode")
+	}
+	if capabilities != tixTCPCapabilityInnerTCPChecksumPartial {
+		t.Fatalf("capabilities = %#x, want %#x", capabilities, tixTCPCapabilityInnerTCPChecksumPartial)
+	}
+	if tixTCPCompatControlEligible(payload) {
+		t.Fatal("internal capability frame must not be delivered to the secure/control payload layer")
+	}
+}
+
+func TestTIXTCPCompatControlCapabilitiesNegotiateBothWays(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := newSession(nil, nil, 1, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	server := newSession(nil, nil, 1, "ix-a", "server", dataplane.CryptoPlacementUserspace)
+	client.compatControl = stream.NewSession(clientConn)
+	server.compatControl = stream.NewSession(serverConn)
+	client.localCapabilities = tixTCPCapabilityInnerTCPChecksumPartial
+	server.localCapabilities = tixTCPCapabilityInnerTCPChecksumPartial
+	go client.readCompatControl(context.Background())
+	go server.readCompatControl(context.Background())
+	defer client.Close()
+	defer server.Close()
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- client.sendCompatCapabilities() }()
+	go func() { errCh <- server.sendCompatCapabilities() }()
+	for range 2 {
+		if err := <-errCh; err != nil {
+			t.Fatalf("send capabilities: %v", err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	eventually(t, ctx, func() bool {
+		clientInfo, clientOK := client.KernelDatapathSessionInfo()
+		serverInfo, serverOK := server.KernelDatapathSessionInfo()
+		return clientOK && serverOK &&
+			clientInfo.InnerTCPChecksumPartialLocal && clientInfo.InnerTCPChecksumPartialPeer && clientInfo.InnerTCPChecksumPartialNegotiated &&
+			serverInfo.InnerTCPChecksumPartialLocal && serverInfo.InnerTCPChecksumPartialPeer && serverInfo.InnerTCPChecksumPartialNegotiated
+	})
+	for name, stats := range map[string]transport.TransportStats{"client": client.Stats(), "server": server.Stats()} {
+		for _, key := range []string{
+			tixTCPStatInnerTCPChecksumPartialLocal,
+			tixTCPStatInnerTCPChecksumPartialPeer,
+			tixTCPStatInnerTCPChecksumPartialNegotiated,
+		} {
+			if stats.Extra[key] != 1 {
+				t.Fatalf("%s %s = %d, want 1; stats=%+v", name, key, stats.Extra[key], stats)
+			}
+		}
+	}
+}
+
+func TestTIXTCPCompatControlCapabilitiesRequireBothPeers(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := newSession(nil, nil, 1, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	server := newSession(nil, nil, 1, "ix-a", "server", dataplane.CryptoPlacementUserspace)
+	client.compatControl = stream.NewSession(clientConn)
+	server.compatControl = stream.NewSession(serverConn)
+	client.localCapabilities = tixTCPCapabilityInnerTCPChecksumPartial
+	go client.readCompatControl(context.Background())
+	go server.readCompatControl(context.Background())
+	defer client.Close()
+	defer server.Close()
+
+	if err := client.sendCompatCapabilities(); err != nil {
+		t.Fatalf("send client capabilities: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	eventually(t, ctx, func() bool {
+		return server.peerCapabilities.Load() == tixTCPCapabilityInnerTCPChecksumPartial
+	})
+	clientInfo, _ := client.KernelDatapathSessionInfo()
+	serverInfo, _ := server.KernelDatapathSessionInfo()
+	if !clientInfo.InnerTCPChecksumPartialLocal || clientInfo.InnerTCPChecksumPartialPeer || clientInfo.InnerTCPChecksumPartialNegotiated ||
+		serverInfo.InnerTCPChecksumPartialLocal || !serverInfo.InnerTCPChecksumPartialPeer || serverInfo.InnerTCPChecksumPartialNegotiated {
+		t.Fatalf("one-sided capability unexpectedly negotiated: client=%+v server=%+v", clientInfo, serverInfo)
+	}
+	clientStats := client.Stats().Extra
+	serverStats := server.Stats().Extra
+	if clientStats[tixTCPStatInnerTCPChecksumPartialLocal] != 1 ||
+		clientStats[tixTCPStatInnerTCPChecksumPartialPeer] != 0 ||
+		clientStats[tixTCPStatInnerTCPChecksumPartialNegotiated] != 0 ||
+		serverStats[tixTCPStatInnerTCPChecksumPartialLocal] != 0 ||
+		serverStats[tixTCPStatInnerTCPChecksumPartialPeer] != 1 ||
+		serverStats[tixTCPStatInnerTCPChecksumPartialNegotiated] != 0 {
+		t.Fatalf("one-sided capability telemetry is inconsistent: client=%v server=%v", clientStats, serverStats)
+	}
+}
+
+func TestTIXTCPPeerCapabilityChangeNotifiesKernelDatapathState(t *testing.T) {
+	session := newSession(nil, nil, 1, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	var notifications atomic.Int32
+	session.SetKernelDatapathSessionStateChangeHook(func() {
+		notifications.Add(1)
+	})
+
+	session.setPeerCapabilities(tixTCPCapabilityInnerTCPChecksumPartial | 1<<63)
+	session.setPeerCapabilities(tixTCPCapabilityInnerTCPChecksumPartial)
+	if got := notifications.Load(); got != 1 {
+		t.Fatalf("capability notifications = %d, want 1 for one effective change", got)
+	}
+	session.setPeerCapabilities(0)
+	if got := notifications.Load(); got != 2 {
+		t.Fatalf("capability notifications = %d, want 2 after capability removal", got)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("close session: %v", err)
+	}
+	session.setPeerCapabilities(tixTCPCapabilityInnerTCPChecksumPartial)
+	if got := notifications.Load(); got != 2 {
+		t.Fatalf("closed session emitted capability notification: %d", got)
+	}
+}
+
 func TestTIXTCPCompatControlCloseClosesAcceptedSession(t *testing.T) {
 	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
 	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")

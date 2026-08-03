@@ -544,6 +544,48 @@ func TestTIXTCPDecodeFullKmodChecksumFlagUsesUserspaceFlowPlacement(t *testing.T
 	delivered.Release()
 }
 
+func TestTIXTCPDecodeChecksumPartialRXFrameCompletesInnerTCPChecksum(t *testing.T) {
+	fastPath := testTIXTCPFastPathWithQueues(1)
+	fastPath.skipTCPChecksum = true
+	manager := NewManager()
+	socket := testAFXDPSocketForRXFrame()
+	inner := testInnerIPv4TCPChecksumPartialPacket(t, []byte("af-xdp-partial"))
+	partialSeed := binary.BigEndian.Uint16(inner[20+16 : 20+18])
+	rxFrame, _ := testTIXTCPRXFrame(t, socket, tixtcp.Frame{
+		Flags:    tixtcp.FlagInnerIPv4 | tixtcp.FlagInnerTCPChecksumPartial,
+		FlowID:   7,
+		Sequence: 11,
+		Payload:  inner,
+	})
+	var expBatch []receivedTIXTCPFrame
+	var udpBatch []receivedKernelUDPFrame
+
+	mode, err := fastPath.decodeRXFrame(manager, socket, rxFrame, &expBatch, &udpBatch)
+	if err != nil {
+		t.Fatalf("decodeRXFrame error = %v", err)
+	}
+	if mode != afXDPRXRecycleByRelease {
+		t.Fatalf("recycle mode = %d, want by-release", mode)
+	}
+	if len(udpBatch) != 0 || len(expBatch) != 1 {
+		t.Fatalf("decoded batch sizes = tix_tcp:%d udp:%d, want 1/0", len(expBatch), len(udpBatch))
+	}
+	delivered := expBatch[0].frame
+	if got := binary.BigEndian.Uint16(delivered.Payload[20+16 : 20+18]); got == partialSeed {
+		t.Fatalf("delivered TCP checksum still contains partial seed %#x", got)
+	}
+	if _, err := tixtcp.ParseTCPShapedIPv4NoCopy(delivered.Payload); err != nil {
+		t.Fatalf("delivered inner TCP packet has invalid completed checksum: %v", err)
+	}
+	if !delivered.InnerIPv4 || delivered.Release == nil {
+		t.Fatalf("delivered metadata = inner:%v release:%v, want borrowed inner IPv4", delivered.InnerIPv4, delivered.Release != nil)
+	}
+	delivered.Release()
+	if rxFrame.recycled == nil || !rxFrame.recycled.Load() {
+		t.Fatal("release did not recycle checksum-partial RX frame")
+	}
+}
+
 func TestTIXTCPDecodeRXFrameRejectsMissingSocket(t *testing.T) {
 	fastPath := testTIXTCPFastPathWithQueues(1)
 	manager := NewManager()
@@ -2741,6 +2783,28 @@ func testInnerIPv4TCPPacket(sourcePort, destinationPort uint16) []byte {
 	packet[32] = 0x50
 	packet[33] = 0x18
 	binary.BigEndian.PutUint16(packet[10:12], ipv4Checksum20(packet[:20]))
+	return packet
+}
+
+func testInnerIPv4TCPChecksumPartialPacket(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	packet, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("10.0.0.1"),
+		DestinationIP:   netip.MustParseAddr("10.0.0.2"),
+		SourcePort:      11000,
+		DestinationPort: 5201,
+		Sequence:        123,
+		Acknowledgment:  456,
+		Payload:         payload,
+	})
+	if err != nil {
+		t.Fatalf("marshal inner TCP packet: %v", err)
+	}
+	tcp := packet[20:]
+	binary.BigEndian.PutUint16(tcp[16:18], tcpPseudoHeaderPartialChecksum(packet, len(tcp)))
+	if err := tixtcp.ValidateInnerTCPChecksumPartial(packet); err != nil {
+		t.Fatalf("prepare inner TCP checksum-partial packet: %v", err)
+	}
 	return packet
 }
 

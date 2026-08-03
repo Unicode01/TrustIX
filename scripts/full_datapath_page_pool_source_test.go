@@ -22,6 +22,7 @@ func TestFullDatapathOuterGSOPagePoolCompatibilityAndFallback(t *testing.T) {
 		"page_pool_create(params)",
 		"page_pool_dev_alloc_pages(pool)",
 		"skb_mark_for_recycle(skb)",
+		"trustix_datapath_alloc_tx_outer_gso_page_pool_skb_locked",
 		"if (likely(READ_ONCE(\n\t\t    trustix_datapath_tx_plaintext_outer_gso_page_pool)))",
 		"skb = alloc_skb(LL_MAX_HEADER + outer_len, GFP_ATOMIC)",
 		"trustix_datapath_tx_plaintext_outer_gso_page_pool_errors",

@@ -196,6 +196,9 @@ func TestTrustIXFullDatapathRXWorkerWithTCClsactDoesNotPanic(t *testing.T) {
 	if !trustIXFullDatapathRXWorkerInjectEnabled() {
 		t.Skip("trustix_datapath rx_worker_inject is disabled; load module with rx_worker_inject=1")
 	}
+	if !trustIXFullDatapathRXWorkerXmitEnabled() {
+		t.Skip("trustix_datapath rx_worker_xmit is disabled; load module with rx_worker_xmit=1")
+	}
 	installFullDatapathOuterTestState(t)
 	if _, err := DatapathHookDetach(TrustIXDatapathDevicePath); err != nil && err != syscall.ENOENT {
 		t.Fatalf("detach before RX worker TC ingress: %v", err)

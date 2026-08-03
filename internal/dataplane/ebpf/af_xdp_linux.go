@@ -2040,7 +2040,11 @@ func (fastPath *tixTCPFastPath) decodeTCPFrame(manager *Manager, socket *afXDPSo
 	wireFrames, err := tixtcp.ParseFrameStreamNoCopyInto(tcpPacket.Payload, wireFrameScratch[:0])
 	if err != nil {
 		socket.stats.rxParseErrors.Add(1)
-		manager.recordDrop(observability.DropInvalidOverlayHeader)
+		if errors.Is(err, tixtcp.ErrChecksum) {
+			manager.recordDrop(observability.DropChecksumError)
+		} else {
+			manager.recordDrop(observability.DropInvalidOverlayHeader)
+		}
 		return afXDPRXRecycleNow, nil
 	}
 	if len(wireFrames) == 0 {
@@ -2126,6 +2130,17 @@ func (fastPath *tixTCPFastPath) decodeTCPWireFrame(manager *Manager, socket *afX
 	} else {
 		payload = append([]byte(nil), payload...)
 		innerIPv4 = innerIPv4 && kernelUDPInnerIPv4Eligible(payload)
+	}
+	if wireFrame.Flags&tixtcp.FlagInnerTCPChecksumPartial != 0 {
+		if err := tixtcp.CompleteInnerTCPChecksumPartial(payload); err != nil {
+			socket.stats.rxParseErrors.Add(1)
+			if errors.Is(err, tixtcp.ErrChecksum) {
+				manager.recordDrop(observability.DropChecksumError)
+			} else {
+				manager.recordDrop(observability.DropInvalidOverlayHeader)
+			}
+			return false, nil
+		}
 	}
 	openPlain, openRelease := kernelUDPOpenPlainBuffer(encrypted && !kernelOpened && !cryptoFragment && !openInPlace, len(payload))
 	*batch = append(*batch, receivedTIXTCPFrame{

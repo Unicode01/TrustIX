@@ -3921,7 +3921,6 @@ func TestProductionTransportAuditScriptD479UserspaceUDPDefaultOnlyExemptions(t *
 	code := `
 import importlib.util
 import pathlib
-import subprocess
 import sys
 
 script = pathlib.Path("production-transport-audit.py")
@@ -3933,7 +3932,9 @@ if spec.loader is None:
 spec.loader.exec_module(module)
 
 commit = "d4796543b2640792bc28e1edc93f10def92ec47d"
-parent = subprocess.check_output(["git", "rev-parse", commit + "^"], text=True).strip()
+probe = {"commit": commit}
+module.path_changed_only_by = lambda resolved, normalized, allowed: probe["commit"] in allowed
+parent = "parent-does-not-matter-for-probed-history"
 cases = [
     ({"gate_family": "full_kmod", "transport": "udp"}, "internal/daemon/gso_coalesce.go", True),
     ({"gate_family": "userspace_tc", "transport": "gre"}, "internal/daemon/gso_coalesce.go", True),
@@ -3946,6 +3947,15 @@ for row, path, want in cases:
     if got != want:
         print(f"{path} row={row}: got {got}, want {want}", file=sys.stderr)
         sys.exit(1)
+
+probe["commit"] = "1111111111111111111111111111111111111111"
+if module.current_runtime_path_change_irrelevant(
+    {"gate_family": "full_kmod", "transport": "udp"},
+    parent,
+    "internal/daemon/gso_coalesce.go",
+):
+    print("userspace UDP default exemption covered an unrelated commit", file=sys.stderr)
+    sys.exit(1)
 `
 	cmd := exec.Command(python, "-c", code)
 	cmd.Dir = "."
@@ -5672,9 +5682,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-datapath-min kernel_rx_stage.rx_worker_injected=1",
 		"--require-datapath-min counters.session_dials=\"${full_kmod_min_sessions}\"",
 		"--require-datapath-max counters.session_dial_errors=0",
-		"--require-module-param-min trustix_datapath.enable_features=128",
-		"--require-module-param-min trustix_datapath.features=128",
-		"--require-module-param-min trustix_datapath.safe_features=128",
+		"--require-module-param-min trustix_datapath.enable_features=1152",
+		"--require-module-param-min trustix_datapath.features=1152",
+		"--require-module-param-min trustix_datapath.safe_features=1152",
 		"--require-module-param-max trustix_datapath.unsafe_features=0",
 		"--require-module-param-max trustix_datapath.selftest_failures=0",
 		"--require-module-param-min trustix_datapath.rx_worker_inject=1",
@@ -5696,8 +5706,6 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_page_pool_attempts=1",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_page_pool_hits=1",
 		"--require-module-param-max trustix_datapath.tx_plaintext_outer_gso_page_pool_errors=0",
-		"--require-module-param-any-min trustix_datapath.tx_plaintext_payload_copy_csum_attempts=1",
-		"--require-module-param-any-min trustix_datapath.tx_plaintext_payload_copy_csum_hits=1",
 		"--require-module-param-max trustix_datapath.tx_plaintext_payload_copy_csum_errors=0",
 		"--require-module-param-any-min trustix_datapath.rx_worker_stream_coalesce_page_frag_cache_attempts=1",
 		"--require-module-param-any-min trustix_datapath.rx_worker_stream_coalesce_page_frag_cache_hits=1",
@@ -5746,6 +5754,14 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 	}
 	if strings.Contains(text, "--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_frames=1") {
 		t.Fatal("linux-cross-host-production-gate.sh must not require outer-GSO on guarded devices")
+	}
+	for _, incompatibleRequirement := range []string{
+		"--require-module-param-any-min trustix_datapath.tx_plaintext_payload_copy_csum_attempts=1",
+		"--require-module-param-any-min trustix_datapath.tx_plaintext_payload_copy_csum_hits=1",
+	} {
+		if strings.Contains(text, incompatibleRequirement) {
+			t.Fatalf("linux-cross-host-production-gate.sh must not require bypassed full-checksum path %q", incompatibleRequirement)
+		}
 	}
 	for _, requirement := range []string{
 		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_builds=1",
@@ -6466,8 +6482,8 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArg("full", "--require-transport-session-endpoint-suffix=-udp")
 	requireArgPair("full", "--require-transport-session-stat", "stats.encryption=plaintext")
 	requireArgPair("full", "--require-datapath-min", "counters.session_dials=8")
-	requireArgPair("full", "--require-module-param-min", "trustix_datapath.features=128")
-	requireArgPair("full", "--require-module-param-min", "trustix_datapath.safe_features=128")
+	requireArgPair("full", "--require-module-param-min", "trustix_datapath.features=1152")
+	requireArgPair("full", "--require-module-param-min", "trustix_datapath.safe_features=1152")
 	requireArgPair("full", "--require-module-param-max", "trustix_datapath.unsafe_features=0")
 	requireArgPair("full", "--require-module-param-max", "trustix_datapath.selftest_failures=0")
 	requireArgPair("full", "--require-module-param-min", "trustix_datapath.rx_worker_inject=1")
@@ -6489,10 +6505,17 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("expfull", "--require-status-max", "data_path.counters.stale_sessions_dropped=0")
 	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.provider=kernel_datapath_full_plaintext")
 	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.fast_path=true")
+	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.inner_tcp_checksum_partial=true")
 	requireArgPair("expfull", "--require-datapath-stat", "capture_forwarder_suppressed=true")
 	requireArgPair("expfull", "--require-datapath-min", "tix_tcp.active_flows=16")
+	requireArgPair("expfull", "--require-module-param-min", "trustix_datapath.enable_features=1152")
+	requireArgPair("expfull", "--require-module-param-min", "trustix_datapath.features=1152")
+	requireArgPair("expfull", "--require-module-param-min", "trustix_datapath.safe_features=1152")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_packets=1")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_gso_segments=1")
+	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_inner_tcp_checksum_partial=1")
+	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.rx_worker_inner_tcp_checksum_partial=1")
+	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.rx_worker_inner_tcp_checksum_partial_errors=0")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.rx_worker_injected=1")
 	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.tx_plaintext_gso_errors=0")
 	requireArgPair("expfull", "--require-lsmod-module", "trustix_datapath")
