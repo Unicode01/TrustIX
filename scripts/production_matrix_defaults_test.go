@@ -2619,16 +2619,48 @@ func TestProductionTransportAuditReportsCurrentRefreshGaps(t *testing.T) {
 		t.Fatalf("decode audit refresh JSON: %v\n%s", err, output)
 	}
 	legacyAllowlist := loadAuditCurrentToolchainLegacyRequirementKeys(t)
+	allowedRefreshFamilies := map[string]bool{
+		"userspace":               true,
+		"userspace_tc":            true,
+		"tc_direct":               true,
+		"full_kmod":               true,
+		"owdeb_full_kmod":         true,
+		"tix_tcp_full_kmod":       true,
+		"owdeb_tix_tcp_full_kmod": true,
+		"secure_kudp":             true,
+		"secure_tix_tcp_kernel":   true,
+		"route_gso":               true,
+	}
+	allowedRefreshReasonPrefixes := []string{
+		"current evidence build_commit does not cover runtime/dataplane tree changes",
+		"production_gate_sha256 must match current or compatible ",
+		"verifier_sha256 must match current or compatible ",
+		"runner_sha256 must match current or compatible ",
+		"transport_matrix_sha256 must match current or compatible ",
+		"evidence_generator_sha256 must match current or compatible ",
+	}
 	refreshNeeded := map[string]bool{}
 	for _, row := range rows {
 		legacyKey := row.Key + "|" + row.CurrentRequirement.Artifact
 		if row.CurrentRefresh.Status == "refresh_needed" {
 			refreshNeeded[legacyKey] = true
-			if row.Default.GateFamily != "userspace" {
-				t.Fatalf("low-level production default current evidence is stale: key=%s gate_family=%s reasons=%v\n%s", row.Key, row.Default.GateFamily, row.CurrentRefresh.Reasons, output)
+			if !allowedRefreshFamilies[row.Default.GateFamily] {
+				t.Fatalf("unexpected production gate family requires refresh: key=%s gate_family=%s reasons=%v\n%s", row.Key, row.Default.GateFamily, row.CurrentRefresh.Reasons, output)
 			}
 			if len(row.CurrentRefresh.Reasons) == 0 {
 				t.Fatalf("refresh-needed row lacks reasons: %+v\n%s", row, output)
+			}
+			for _, reason := range row.CurrentRefresh.Reasons {
+				allowed := false
+				for _, prefix := range allowedRefreshReasonPrefixes {
+					if strings.HasPrefix(reason, prefix) {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					t.Fatalf("unexpected production refresh reason: key=%s gate_family=%s reason=%q\n%s", row.Key, row.Default.GateFamily, reason, output)
+				}
 			}
 			continue
 		}

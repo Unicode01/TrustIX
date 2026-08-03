@@ -1252,7 +1252,7 @@ def validate_current_requirement_identity(
         # exactly which production families need new evidence.
         if require_current_runtime_tree and not report_refresh_gaps:
             errors.extend(current_runtime_tree_errors(row))
-        if require_current_gate_tools:
+        if require_current_gate_tools and not report_refresh_gaps:
             errors.extend(current_gate_tool_identity_errors(row))
         if errors:
             raise SystemExit(
@@ -1701,6 +1701,7 @@ def current_refresh_gap_reasons(row: dict[str, str]) -> list[str]:
     for field in TOOLCHAIN_SHA256_FIELDS:
         if not row[field].strip():
             reasons.append(f"{field} is empty; refresh with generated current-tool evidence")
+    reasons.extend(current_gate_tool_identity_errors(row))
     reasons.extend(
         current_runtime_tree_errors(
             row,

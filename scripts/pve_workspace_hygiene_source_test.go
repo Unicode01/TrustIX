@@ -877,12 +877,28 @@ func TestPVEPromoteRunEvidenceScriptIsScopedAndDryRunByDefault(t *testing.T) {
 	}
 }
 
+func setFakeNoRefreshGapPython(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	binDir := t.TempDir()
+	python := filepath.Join(binDir, "python3")
+	if err := os.WriteFile(python, []byte("#!/bin/sh\nexit 2\n"), 0o755); err != nil {
+		t.Fatalf("write fake python3: %v", err)
+	}
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "PATH=") {
+			env = append(env, entry)
+		}
+	}
+	env = append(env, "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = env
+}
+
 func TestPVECurrentUserspaceRefreshRejectsNextRefreshGapWhenCurrent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("pve-current-userspace-refresh.sh dry-run expects Linux-style paths")
 	}
 	bash := requireGNUBash4(t)
-	requirePython3(t)
 	root := t.TempDir()
 	workspace := filepath.Join(root, "trustix-pve-work")
 	runRoot := filepath.Join(workspace, "results", "next-refresh-gap-dry-run")
@@ -896,6 +912,7 @@ func TestPVECurrentUserspaceRefreshRejectsNextRefreshGapWhenCurrent(t *testing.T
 		"--dry-run",
 		"--skip-hygiene-check",
 	)
+	setFakeNoRefreshGapPython(t, cmd)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("next-refresh-gap unexpectedly succeeded with no gaps:\n%s", out)
@@ -941,7 +958,6 @@ func TestPVECurrentUserspaceRefreshRejectsRefreshGapsWhenCurrent(t *testing.T) {
 		t.Skip("pve-current-userspace-refresh.sh dry-run expects Linux-style paths")
 	}
 	bash := requireGNUBash4(t)
-	requirePython3(t)
 	root := t.TempDir()
 	workspace := filepath.Join(root, "trustix-pve-work")
 	runRoot := filepath.Join(workspace, "results", "refresh-gaps-dry-run")
@@ -955,6 +971,7 @@ func TestPVECurrentUserspaceRefreshRejectsRefreshGapsWhenCurrent(t *testing.T) {
 		"--dry-run",
 		"--skip-hygiene-check",
 	)
+	setFakeNoRefreshGapPython(t, cmd)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("refresh-gap unexpectedly succeeded with no gaps:\n%s", out)
