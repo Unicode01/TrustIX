@@ -2,7 +2,10 @@
 
 package kernelmodule
 
-import "embed"
+import (
+	"embed"
+	"sync"
+)
 
 //go:embed assets/trustix_crypto.ko assets/trustix_datapath.ko assets/trustix_datapath_helpers.ko
 var embeddedModuleFS embed.FS
@@ -11,28 +14,41 @@ const embeddedTrustIXCryptoPath = "embedded://trustix_crypto.ko"
 const embeddedTrustIXDatapathPath = "embedded://trustix_datapath.ko"
 const embeddedTrustIXDatapathHelpersPath = "embedded://trustix_datapath_helpers.ko"
 
-func embeddedTrustIXCrypto() []byte {
-	payload, err := embeddedModuleFS.ReadFile("assets/trustix_crypto.ko")
-	if err != nil {
-		return nil
+type embeddedModulePayload struct {
+	once    sync.Once
+	path    string
+	payload []byte
+}
+
+var (
+	embeddedTrustIXCryptoPayload = embeddedModulePayload{
+		path: "assets/trustix_crypto.ko",
 	}
-	return payload
+	embeddedTrustIXDatapathPayload = embeddedModulePayload{
+		path: "assets/trustix_datapath.ko",
+	}
+	embeddedTrustIXDatapathHelpersPayload = embeddedModulePayload{
+		path: "assets/trustix_datapath_helpers.ko",
+	}
+)
+
+func (asset *embeddedModulePayload) read() []byte {
+	asset.once.Do(func() {
+		asset.payload, _ = embeddedModuleFS.ReadFile(asset.path)
+	})
+	return asset.payload
+}
+
+func embeddedTrustIXCrypto() []byte {
+	return embeddedTrustIXCryptoPayload.read()
 }
 
 func embeddedTrustIXDatapathHelpers() []byte {
-	payload, err := embeddedModuleFS.ReadFile("assets/trustix_datapath_helpers.ko")
-	if err != nil {
-		return nil
-	}
-	return payload
+	return embeddedTrustIXDatapathHelpersPayload.read()
 }
 
 func embeddedTrustIXDatapath() []byte {
-	payload, err := embeddedModuleFS.ReadFile("assets/trustix_datapath.ko")
-	if err != nil {
-		return nil
-	}
-	return payload
+	return embeddedTrustIXDatapathPayload.read()
 }
 
 func embeddedModuleForName(name string) embeddedModuleAsset {
