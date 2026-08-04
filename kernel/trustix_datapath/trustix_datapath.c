@@ -35,6 +35,7 @@
 #include <linux/string.h>
 #include <linux/tcp.h>
 #include <linux/types.h>
+#include <linux/u64_stats_sync.h>
 #include <linux/uaccess.h>
 #include <linux/udp.h>
 #include <linux/version.h>
@@ -3195,17 +3196,19 @@ static struct workqueue_struct *trustix_datapath_tx_plaintext_wq;
 static DECLARE_WORK(trustix_datapath_tx_plaintext_work,
 		    trustix_datapath_tx_plaintext_run);
 
-struct trustix_datapath_hook_entry {
-	struct nf_hook_ops ops;
-	bool in_use;
-	bool registered;
-	struct net *net;
-	struct net_device *target_dev;
-	__u32 flags;
-	int ifindex;
-	int target_ifindex;
-	char ifname[TRUSTIX_DATAPATH_IFNAME_MAX];
-	char target_ifname[TRUSTIX_DATAPATH_IFNAME_MAX];
+struct trustix_datapath_packet_hot_counters {
+	__u64 packets;
+	__u64 bytes;
+	__u64 parse_errors;
+	__u64 route_misses;
+	__u64 session_misses;
+	__u64 unicast_routes;
+	__u64 local_routes;
+	__u64 blackhole_routes;
+	__u64 reject_routes;
+};
+
+struct trustix_datapath_hook_hot_counters {
 	__u64 seen;
 	__u64 classified;
 	__u64 parse_errors;
@@ -3225,8 +3228,157 @@ struct trustix_datapath_hook_entry {
 	__u64 rx_worker_errors;
 };
 
+struct trustix_datapath_hook_entry {
+	struct nf_hook_ops ops;
+	bool in_use;
+	bool registered;
+	struct net *net;
+	struct net_device *target_dev;
+	__u32 flags;
+	int ifindex;
+	int target_ifindex;
+	unsigned int stats_index;
+	char ifname[TRUSTIX_DATAPATH_IFNAME_MAX];
+	char target_ifname[TRUSTIX_DATAPATH_IFNAME_MAX];
+	__u64 seen;
+	__u64 classified;
+	__u64 parse_errors;
+	__u64 route_misses;
+	__u64 session_misses;
+	__u64 pass;
+	__u64 drop;
+	__u64 outer_seen;
+	__u64 outer_parsed;
+	__u64 outer_parse_errors;
+	__u64 outer_session_misses;
+	__u64 rx_preview;
+	__u64 rx_preview_errors;
+	__u64 rx_stage;
+	__u64 rx_stage_errors;
+	__u64 rx_worker;
+	__u64 rx_worker_errors;
+	struct trustix_datapath_hook_hot_counters hot_base;
+};
+
 static struct trustix_datapath_hook_entry
 	trustix_datapath_hooks[TRUSTIX_DATAPATH_HOOK_MAX];
+
+struct trustix_datapath_pcpu_hot_stats {
+	struct u64_stats_sync syncp;
+	struct trustix_datapath_packet_hot_counters packet;
+	struct trustix_datapath_hook_hot_counters
+		hooks[TRUSTIX_DATAPATH_HOOK_MAX];
+};
+
+static DEFINE_PER_CPU(struct trustix_datapath_pcpu_hot_stats,
+			      trustix_datapath_pcpu_hot_stats);
+
+static void trustix_datapath_init_pcpu_hot_stats(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		u64_stats_init(&per_cpu(trustix_datapath_pcpu_hot_stats,
+					    cpu).syncp);
+}
+
+static void
+trustix_datapath_read_packet_hot_counters(
+	struct trustix_datapath_packet_hot_counters *out)
+{
+	int cpu;
+
+	if (!out)
+		return;
+	memset(out, 0, sizeof(*out));
+	for_each_possible_cpu(cpu) {
+		const struct trustix_datapath_pcpu_hot_stats *stats =
+			per_cpu_ptr(&trustix_datapath_pcpu_hot_stats, cpu);
+		struct trustix_datapath_packet_hot_counters snapshot;
+		unsigned int start;
+
+		do {
+			start = u64_stats_fetch_begin(&stats->syncp);
+			snapshot = stats->packet;
+		} while (u64_stats_fetch_retry(&stats->syncp, start));
+		out->packets += snapshot.packets;
+		out->bytes += snapshot.bytes;
+		out->parse_errors += snapshot.parse_errors;
+		out->route_misses += snapshot.route_misses;
+		out->session_misses += snapshot.session_misses;
+		out->unicast_routes += snapshot.unicast_routes;
+		out->local_routes += snapshot.local_routes;
+		out->blackhole_routes += snapshot.blackhole_routes;
+		out->reject_routes += snapshot.reject_routes;
+	}
+}
+
+static void
+trustix_datapath_read_hook_hot_counters(
+	unsigned int index, struct trustix_datapath_hook_hot_counters *out)
+{
+	int cpu;
+
+	if (!out)
+		return;
+	memset(out, 0, sizeof(*out));
+	if (index >= TRUSTIX_DATAPATH_HOOK_MAX)
+		return;
+	for_each_possible_cpu(cpu) {
+		const struct trustix_datapath_pcpu_hot_stats *stats =
+			per_cpu_ptr(&trustix_datapath_pcpu_hot_stats, cpu);
+		struct trustix_datapath_hook_hot_counters snapshot;
+		unsigned int start;
+
+		do {
+			start = u64_stats_fetch_begin(&stats->syncp);
+			snapshot = stats->hooks[index];
+		} while (u64_stats_fetch_retry(&stats->syncp, start));
+		out->seen += snapshot.seen;
+		out->classified += snapshot.classified;
+		out->parse_errors += snapshot.parse_errors;
+		out->route_misses += snapshot.route_misses;
+		out->session_misses += snapshot.session_misses;
+		out->pass += snapshot.pass;
+		out->drop += snapshot.drop;
+		out->outer_seen += snapshot.outer_seen;
+		out->outer_parsed += snapshot.outer_parsed;
+		out->outer_parse_errors += snapshot.outer_parse_errors;
+		out->outer_session_misses += snapshot.outer_session_misses;
+		out->rx_preview += snapshot.rx_preview;
+		out->rx_preview_errors += snapshot.rx_preview_errors;
+		out->rx_stage += snapshot.rx_stage;
+		out->rx_stage_errors += snapshot.rx_stage_errors;
+		out->rx_worker += snapshot.rx_worker;
+		out->rx_worker_errors += snapshot.rx_worker_errors;
+	}
+}
+
+static void
+trustix_datapath_subtract_hook_hot_counters(
+	struct trustix_datapath_hook_hot_counters *counters,
+	const struct trustix_datapath_hook_hot_counters *base)
+{
+	if (!counters || !base)
+		return;
+	counters->seen -= base->seen;
+	counters->classified -= base->classified;
+	counters->parse_errors -= base->parse_errors;
+	counters->route_misses -= base->route_misses;
+	counters->session_misses -= base->session_misses;
+	counters->pass -= base->pass;
+	counters->drop -= base->drop;
+	counters->outer_seen -= base->outer_seen;
+	counters->outer_parsed -= base->outer_parsed;
+	counters->outer_parse_errors -= base->outer_parse_errors;
+	counters->outer_session_misses -= base->outer_session_misses;
+	counters->rx_preview -= base->rx_preview;
+	counters->rx_preview_errors -= base->rx_preview_errors;
+	counters->rx_stage -= base->rx_stage;
+	counters->rx_stage_errors -= base->rx_stage_errors;
+	counters->rx_worker -= base->rx_worker;
+	counters->rx_worker_errors -= base->rx_worker_errors;
+}
 
 static __u32 trustix_datapath_clamp_tx_plaintext_slots(unsigned int slots)
 {
@@ -17491,6 +17643,134 @@ trustix_datapath_hook_packet_matches_ifindex(
 	return false;
 }
 
+static __always_inline bool
+trustix_datapath_account_parse_error_hot(
+	const struct trustix_datapath_hook_entry *hook)
+{
+	struct trustix_datapath_pcpu_hot_stats *stats;
+	struct trustix_datapath_hook_hot_counters *hook_stats;
+	unsigned int index;
+
+	if (!hook)
+		return false;
+	index = READ_ONCE(hook->stats_index);
+	if (unlikely(index >= TRUSTIX_DATAPATH_HOOK_MAX))
+		return false;
+	local_bh_disable();
+	stats = this_cpu_ptr(&trustix_datapath_pcpu_hot_stats);
+	hook_stats = &stats->hooks[index];
+	u64_stats_update_begin(&stats->syncp);
+	hook_stats->seen++;
+	hook_stats->parse_errors++;
+	hook_stats->pass++;
+	stats->packet.parse_errors++;
+	u64_stats_update_end(&stats->syncp);
+	local_bh_enable();
+	return true;
+}
+
+static __always_inline bool
+trustix_datapath_account_tx_plaintext_hot(
+	const struct trustix_datapath_hook_entry *hook, __u32 packet_len,
+	const struct trustix_datapath_ioc_classify *classify)
+{
+	struct trustix_datapath_pcpu_hot_stats *stats;
+	struct trustix_datapath_hook_hot_counters *hook_stats;
+	unsigned int index;
+
+	if (!hook || !classify)
+		return false;
+	index = READ_ONCE(hook->stats_index);
+	if (unlikely(index >= TRUSTIX_DATAPATH_HOOK_MAX))
+		return false;
+	local_bh_disable();
+	stats = this_cpu_ptr(&trustix_datapath_pcpu_hot_stats);
+	hook_stats = &stats->hooks[index];
+	u64_stats_update_begin(&stats->syncp);
+	hook_stats->seen++;
+	hook_stats->classified++;
+	hook_stats->drop++;
+	switch (classify->route_flags) {
+	case TRUSTIX_DATAPATH_ROUTE_FLAG_UNICAST:
+		stats->packet.unicast_routes++;
+		break;
+	case TRUSTIX_DATAPATH_ROUTE_FLAG_LOCAL:
+		stats->packet.local_routes++;
+		break;
+	case TRUSTIX_DATAPATH_ROUTE_FLAG_BLACKHOLE:
+		stats->packet.blackhole_routes++;
+		break;
+	case TRUSTIX_DATAPATH_ROUTE_FLAG_REJECT:
+		stats->packet.reject_routes++;
+		break;
+	default:
+		break;
+	}
+	stats->packet.packets++;
+	stats->packet.bytes += packet_len;
+	u64_stats_update_end(&stats->syncp);
+	local_bh_enable();
+	return true;
+}
+
+static __always_inline bool
+trustix_datapath_account_rx_worker_hot(
+	const struct trustix_datapath_hook_entry *hook, bool outer_candidate,
+	int outer_ret, int worker_ret, bool rx_preview, bool rx_stage,
+	bool rx_worker, unsigned int worker_stream_frames)
+{
+	struct trustix_datapath_pcpu_hot_stats *stats;
+	struct trustix_datapath_hook_hot_counters *hook_stats;
+	unsigned int index;
+
+	if (!hook)
+		return false;
+	index = READ_ONCE(hook->stats_index);
+	if (unlikely(index >= TRUSTIX_DATAPATH_HOOK_MAX))
+		return false;
+	local_bh_disable();
+	stats = this_cpu_ptr(&trustix_datapath_pcpu_hot_stats);
+	hook_stats = &stats->hooks[index];
+	u64_stats_update_begin(&stats->syncp);
+	hook_stats->seen++;
+	if (outer_candidate) {
+		hook_stats->outer_seen++;
+		if (!outer_ret)
+			hook_stats->outer_parsed++;
+		else if (outer_ret == -EHOSTUNREACH || outer_ret == -ENOKEY ||
+			 outer_ret == -ESTALE)
+			hook_stats->outer_session_misses++;
+		else if (outer_ret != -EPROTONOSUPPORT)
+			hook_stats->outer_parse_errors++;
+		if (rx_preview) {
+			if (!outer_ret)
+				hook_stats->rx_preview++;
+			else if (outer_ret != -EPROTONOSUPPORT)
+				hook_stats->rx_preview_errors++;
+		}
+		if (rx_stage) {
+			if (!outer_ret)
+				hook_stats->rx_stage++;
+			else if (outer_ret != -EPROTONOSUPPORT)
+				hook_stats->rx_stage_errors++;
+		}
+		if (rx_worker) {
+			if (!outer_ret && !worker_ret)
+				hook_stats->rx_worker++;
+			else if (outer_ret != -EPROTONOSUPPORT ||
+				 worker_ret != -EPROTONOSUPPORT)
+				hook_stats->rx_worker_errors++;
+		}
+	}
+	hook_stats->classified++;
+	hook_stats->drop++;
+	if (worker_stream_frames > 1)
+		hook_stats->rx_worker += worker_stream_frames - 1;
+	u64_stats_update_end(&stats->syncp);
+	local_bh_enable();
+	return true;
+}
+
 static unsigned int
 trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 			 const struct nf_hook_state *state)
@@ -17540,6 +17820,8 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 	ret = trustix_datapath_parse_skb_ipv4(skb, &classify, &ip_header_len,
 					      &l4_header_len);
 	if (ret) {
+		if (likely(trustix_datapath_account_parse_error_hot(hook)))
+			return NF_ACCEPT;
 		write_lock_bh(&trustix_datapath_state_lock);
 		hook->seen++;
 		hook->parse_errors++;
@@ -17552,6 +17834,9 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 		tx_ret = trustix_datapath_tx_plaintext_skb(
 			skb, &classify, target_ifindex, target_dev_hint);
 		if (!tx_ret) {
+			if (likely(trustix_datapath_account_tx_plaintext_hot(
+				    hook, skb->len, &classify)))
+				return NF_DROP;
 			write_lock_bh(&trustix_datapath_state_lock);
 			hook->seen++;
 			hook->classified++;
@@ -17659,6 +17944,12 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 			worker_queued = true;
 	}
 
+	if (worker_queued &&
+	    likely(trustix_datapath_account_rx_worker_hot(
+		    hook, outer_candidate, outer_ret, worker_ret, rx_preview,
+		    rx_stage, rx_worker, worker_stream_frames)))
+		goto hook_accounted;
+
 	write_lock_bh(&trustix_datapath_state_lock);
 	hook->seen++;
 	if (outer_candidate) {
@@ -17726,6 +18017,8 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 		hook->pass++;
 	}
 	write_unlock_bh(&trustix_datapath_state_lock);
+
+hook_accounted:
 	if (worker_defer_stolen) {
 		bool inline_attempted = false;
 
@@ -17824,6 +18117,7 @@ trustix_datapath_fill_hook_locked(
 	struct trustix_datapath_ioc_hook *hook,
 	const struct trustix_datapath_hook_entry *entry)
 {
+	struct trustix_datapath_hook_hot_counters hot = {};
 	__u32 op = hook->op;
 	__u32 requested_flags = hook->flags;
 
@@ -17841,23 +18135,29 @@ trustix_datapath_fill_hook_locked(
 	memcpy(hook->ifname, entry->ifname, sizeof(hook->ifname) - 1);
 	memcpy(hook->target_ifname, entry->target_ifname,
 	       sizeof(hook->target_ifname) - 1);
-	hook->seen = entry->seen;
-	hook->classified = entry->classified;
-	hook->parse_errors = entry->parse_errors;
-	hook->route_misses = entry->route_misses;
-	hook->session_misses = entry->session_misses;
-	hook->pass = entry->pass;
-	hook->drop = entry->drop;
-	hook->outer_seen = entry->outer_seen;
-	hook->outer_parsed = entry->outer_parsed;
-	hook->outer_parse_errors = entry->outer_parse_errors;
-	hook->outer_session_misses = entry->outer_session_misses;
-	hook->rx_preview = entry->rx_preview;
-	hook->rx_preview_errors = entry->rx_preview_errors;
-	hook->rx_stage = entry->rx_stage;
-	hook->rx_stage_errors = entry->rx_stage_errors;
-	hook->rx_worker = entry->rx_worker;
-	hook->rx_worker_errors = entry->rx_worker_errors;
+	trustix_datapath_read_hook_hot_counters(entry->stats_index, &hot);
+	trustix_datapath_subtract_hook_hot_counters(&hot, &entry->hot_base);
+	hook->seen = entry->seen + hot.seen;
+	hook->classified = entry->classified + hot.classified;
+	hook->parse_errors = entry->parse_errors + hot.parse_errors;
+	hook->route_misses = entry->route_misses + hot.route_misses;
+	hook->session_misses = entry->session_misses + hot.session_misses;
+	hook->pass = entry->pass + hot.pass;
+	hook->drop = entry->drop + hot.drop;
+	hook->outer_seen = entry->outer_seen + hot.outer_seen;
+	hook->outer_parsed = entry->outer_parsed + hot.outer_parsed;
+	hook->outer_parse_errors =
+		entry->outer_parse_errors + hot.outer_parse_errors;
+	hook->outer_session_misses =
+		entry->outer_session_misses + hot.outer_session_misses;
+	hook->rx_preview = entry->rx_preview + hot.rx_preview;
+	hook->rx_preview_errors =
+		entry->rx_preview_errors + hot.rx_preview_errors;
+	hook->rx_stage = entry->rx_stage + hot.rx_stage;
+	hook->rx_stage_errors = entry->rx_stage_errors + hot.rx_stage_errors;
+	hook->rx_worker = entry->rx_worker + hot.rx_worker;
+	hook->rx_worker_errors =
+		entry->rx_worker_errors + hot.rx_worker_errors;
 	hook->rx_worker_injected = trustix_datapath_rx_worker_injected;
 	hook->rx_worker_dropped = trustix_datapath_rx_worker_dropped +
 				  trustix_datapath_rx_worker_overwritten +
@@ -17869,6 +18169,8 @@ trustix_datapath_hook_reset_counters_locked(
 	struct trustix_datapath_hook_entry *entry)
 {
 	if (entry) {
+		trustix_datapath_read_hook_hot_counters(entry->stats_index,
+						&entry->hot_base);
 		entry->seen = 0;
 		entry->classified = 0;
 		entry->parse_errors = 0;
@@ -18225,6 +18527,7 @@ trustix_datapath_hook_attach(struct trustix_datapath_ioc_hook *hook)
 	}
 	memset(entry, 0, sizeof(*entry));
 	entry->in_use = true;
+	entry->stats_index = entry - trustix_datapath_hooks;
 	entry->net = hook_net;
 	entry->target_dev = target_dev;
 	entry->ifindex = dev->ifindex;
@@ -20954,6 +21257,7 @@ static long trustix_datapath_ioctl(struct file *file, unsigned int cmd,
 	struct trustix_datapath_ioc_classify classify;
 	struct trustix_datapath_ioc_packet_classify packet_classify;
 	struct trustix_datapath_ioc_packet_stats packet_stats;
+	struct trustix_datapath_packet_hot_counters packet_hot;
 	struct trustix_datapath_ioc_hook hook;
 	struct trustix_datapath_ioc_tixt_encap encap;
 	struct trustix_datapath_ioc_tixt_decap decap;
@@ -21196,21 +21500,32 @@ static long trustix_datapath_ioctl(struct file *file, unsigned int cmd,
 		read_lock_bh(&trustix_datapath_state_lock);
 		memset(&packet_stats, 0, sizeof(packet_stats));
 		packet_stats.version = TRUSTIX_DATAPATH_IOC_VERSION;
-		packet_stats.packets = trustix_datapath_packets_seen;
-		packet_stats.bytes = trustix_datapath_bytes_seen;
+		trustix_datapath_read_packet_hot_counters(&packet_hot);
+		packet_stats.packets =
+			trustix_datapath_packets_seen + packet_hot.packets;
+		packet_stats.bytes =
+			trustix_datapath_bytes_seen + packet_hot.bytes;
 		packet_stats.parse_errors =
-			trustix_datapath_packet_parse_errors;
+			trustix_datapath_packet_parse_errors +
+			packet_hot.parse_errors;
 		packet_stats.route_misses =
-			trustix_datapath_packet_route_misses;
+			trustix_datapath_packet_route_misses +
+			packet_hot.route_misses;
 		packet_stats.session_misses =
-			trustix_datapath_packet_session_misses;
+			trustix_datapath_packet_session_misses +
+			packet_hot.session_misses;
 		packet_stats.unicast_routes =
-			trustix_datapath_packet_unicast_routes;
-		packet_stats.local_routes = trustix_datapath_packet_local_routes;
+			trustix_datapath_packet_unicast_routes +
+			packet_hot.unicast_routes;
+		packet_stats.local_routes =
+			trustix_datapath_packet_local_routes +
+			packet_hot.local_routes;
 		packet_stats.blackhole_routes =
-			trustix_datapath_packet_blackhole_routes;
+			trustix_datapath_packet_blackhole_routes +
+			packet_hot.blackhole_routes;
 		packet_stats.reject_routes =
-			trustix_datapath_packet_reject_routes;
+			trustix_datapath_packet_reject_routes +
+			packet_hot.reject_routes;
 		read_unlock_bh(&trustix_datapath_state_lock);
 		mutex_unlock(&trustix_datapath_selftest_mutex);
 		if (copy_to_user((void __user *)arg, &packet_stats,
@@ -21461,6 +21776,7 @@ static int __init trustix_datapath_init(void)
 	__u64 failed = 0;
 	int ret;
 
+	trustix_datapath_init_pcpu_hot_stats();
 	ret = trustix_datapath_alloc_rx_worker_pcpu_mac_cache();
 	if (ret)
 		return ret;
