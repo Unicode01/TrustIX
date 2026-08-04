@@ -351,7 +351,7 @@ func TestTIXTCPCompatControlDecodesOldInitWithoutSourcePort(t *testing.T) {
 }
 
 func TestTIXTCPCompatControlCapabilitiesRoundTrip(t *testing.T) {
-	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
 	payload := encodeTIXTCPCompatControlCapabilities(want | 1<<63)
 	capabilities, ok := decodeTIXTCPCompatControlCapabilities(payload)
 	if !ok {
@@ -371,8 +371,9 @@ func TestTIXTCPCompatControlCapabilitiesNegotiateBothWays(t *testing.T) {
 	server := newSession(nil, nil, 1, "ix-a", "server", dataplane.CryptoPlacementUserspace)
 	client.compatControl = stream.NewSession(clientConn)
 	server.compatControl = stream.NewSession(serverConn)
-	client.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO)
-	server.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO)
+	allCapabilities := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
+	client.localCapabilities.Store(allCapabilities)
+	server.localCapabilities.Store(allCapabilities)
 	go client.readCompatControl(context.Background())
 	go server.readCompatControl(context.Background())
 	defer client.Close()
@@ -395,7 +396,9 @@ func TestTIXTCPCompatControlCapabilitiesNegotiateBothWays(t *testing.T) {
 			clientInfo.InnerTCPChecksumPartialLocal && clientInfo.InnerTCPChecksumPartialPeer && clientInfo.InnerTCPChecksumPartialNegotiated &&
 			serverInfo.InnerTCPChecksumPartialLocal && serverInfo.InnerTCPChecksumPartialPeer && serverInfo.InnerTCPChecksumPartialNegotiated &&
 			clientInfo.InnerGSOLocal && clientInfo.InnerGSOPeer && clientInfo.InnerGSONegotiated &&
-			serverInfo.InnerGSOLocal && serverInfo.InnerGSOPeer && serverInfo.InnerGSONegotiated
+			serverInfo.InnerGSOLocal && serverInfo.InnerGSOPeer && serverInfo.InnerGSONegotiated &&
+			clientInfo.TIXTCPPortShardingLocal && clientInfo.TIXTCPPortShardingPeer && clientInfo.TIXTCPPortShardingNegotiated &&
+			serverInfo.TIXTCPPortShardingLocal && serverInfo.TIXTCPPortShardingPeer && serverInfo.TIXTCPPortShardingNegotiated
 	})
 	for name, stats := range map[string]transport.TransportStats{"client": client.Stats(), "server": server.Stats()} {
 		for _, key := range []string{
@@ -405,6 +408,9 @@ func TestTIXTCPCompatControlCapabilitiesNegotiateBothWays(t *testing.T) {
 			tixTCPStatInnerGSOLocal,
 			tixTCPStatInnerGSOPeer,
 			tixTCPStatInnerGSONegotiated,
+			tixTCPStatPortShardingLocal,
+			tixTCPStatPortShardingPeer,
+			tixTCPStatPortShardingNegotiated,
 		} {
 			if stats.Extra[key] != 1 {
 				t.Fatalf("%s %s = %d, want 1; stats=%+v", name, key, stats.Extra[key], stats)
@@ -419,7 +425,8 @@ func TestTIXTCPCompatControlCapabilitiesRequireBothPeers(t *testing.T) {
 	server := newSession(nil, nil, 1, "ix-a", "server", dataplane.CryptoPlacementUserspace)
 	client.compatControl = stream.NewSession(clientConn)
 	server.compatControl = stream.NewSession(serverConn)
-	client.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO)
+	allCapabilities := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
+	client.localCapabilities.Store(allCapabilities)
 	go client.readCompatControl(context.Background())
 	go server.readCompatControl(context.Background())
 	defer client.Close()
@@ -431,14 +438,16 @@ func TestTIXTCPCompatControlCapabilitiesRequireBothPeers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	eventually(t, ctx, func() bool {
-		return server.peerCapabilities.Load() == tixTCPCapabilityInnerTCPChecksumPartial|tixTCPCapabilityInnerGSO
+		return server.peerCapabilities.Load() == allCapabilities
 	})
 	clientInfo, _ := client.KernelDatapathSessionInfo()
 	serverInfo, _ := server.KernelDatapathSessionInfo()
 	if !clientInfo.InnerTCPChecksumPartialLocal || clientInfo.InnerTCPChecksumPartialPeer || clientInfo.InnerTCPChecksumPartialNegotiated ||
 		serverInfo.InnerTCPChecksumPartialLocal || !serverInfo.InnerTCPChecksumPartialPeer || serverInfo.InnerTCPChecksumPartialNegotiated ||
 		!clientInfo.InnerGSOLocal || clientInfo.InnerGSOPeer || clientInfo.InnerGSONegotiated ||
-		serverInfo.InnerGSOLocal || !serverInfo.InnerGSOPeer || serverInfo.InnerGSONegotiated {
+		serverInfo.InnerGSOLocal || !serverInfo.InnerGSOPeer || serverInfo.InnerGSONegotiated ||
+		!clientInfo.TIXTCPPortShardingLocal || clientInfo.TIXTCPPortShardingPeer || clientInfo.TIXTCPPortShardingNegotiated ||
+		serverInfo.TIXTCPPortShardingLocal || !serverInfo.TIXTCPPortShardingPeer || serverInfo.TIXTCPPortShardingNegotiated {
 		t.Fatalf("one-sided capability unexpectedly negotiated: client=%+v server=%+v", clientInfo, serverInfo)
 	}
 	clientStats := client.Stats().Extra
@@ -454,7 +463,13 @@ func TestTIXTCPCompatControlCapabilitiesRequireBothPeers(t *testing.T) {
 		clientStats[tixTCPStatInnerGSONegotiated] != 0 ||
 		serverStats[tixTCPStatInnerGSOLocal] != 0 ||
 		serverStats[tixTCPStatInnerGSOPeer] != 1 ||
-		serverStats[tixTCPStatInnerGSONegotiated] != 0 {
+		serverStats[tixTCPStatInnerGSONegotiated] != 0 ||
+		clientStats[tixTCPStatPortShardingLocal] != 1 ||
+		clientStats[tixTCPStatPortShardingPeer] != 0 ||
+		clientStats[tixTCPStatPortShardingNegotiated] != 0 ||
+		serverStats[tixTCPStatPortShardingLocal] != 0 ||
+		serverStats[tixTCPStatPortShardingPeer] != 1 ||
+		serverStats[tixTCPStatPortShardingNegotiated] != 0 {
 		t.Fatalf("one-sided capability telemetry is inconsistent: client=%v server=%v", clientStats, serverStats)
 	}
 }
@@ -464,14 +479,15 @@ func TestTIXTCPLocalCapabilitiesGateInnerGSO(t *testing.T) {
 		Provider:                tixTCPProviderFullPlaintextKernel,
 		InnerTCPChecksumPartial: true,
 		InnerGSO:                true,
+		PortSharding:            true,
 	}
-	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
 	if got := tixTCPLocalCapabilities(full); got != want {
 		t.Fatalf("full capabilities = %#x, want %#x", got, want)
 	}
 	full.InnerTCPChecksumPartial = false
-	if got := tixTCPLocalCapabilities(full); got != 0 {
-		t.Fatalf("inner GSO without checksum-partial support advertised %#x", got)
+	if got := tixTCPLocalCapabilities(full); got != tixTCPCapabilityPortSharding {
+		t.Fatalf("inner GSO without checksum-partial support advertised %#x, want independent port sharding only", got)
 	}
 	full.InnerTCPChecksumPartial = true
 	full.Provider = "af_xdp"
@@ -487,9 +503,10 @@ func TestTIXTCPProviderLocalCapabilitiesUsesLightweightProbe(t *testing.T) {
 			FullPlaintextKernel:     true,
 			InnerTCPChecksumPartial: true,
 			InnerGSO:                true,
+			PortSharding:            true,
 		},
 	}
-	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
 	got, err := tixTCPProviderLocalCapabilities(context.Background(), provider)
 	if err != nil {
 		t.Fatalf("lightweight capability probe: %v", err)
@@ -511,18 +528,19 @@ func TestTIXTCPListenerCurrentLocalCapabilitiesRefreshesProviderState(t *testing
 	provider := &fakeProvider{statusProvider: tixTCPProviderFullPlaintextKernel}
 	provider.innerTCPChecksumPartial.Store(true)
 	provider.innerGSO.Store(true)
+	provider.portSharding.Store(true)
 	listener := &listener{
 		provider:                    provider,
 		fullPlaintextKernelDatapath: true,
 	}
-	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
 	if got := listener.currentLocalCapabilities(); got != want {
 		t.Fatalf("initial listener capabilities = %#x, want %#x", got, want)
 	}
 
 	provider.innerGSO.Store(false)
-	if got := listener.currentLocalCapabilities(); got != tixTCPCapabilityInnerTCPChecksumPartial {
-		t.Fatalf("listener capabilities after GRO withdrawal = %#x, want checksum-partial only", got)
+	if got := listener.currentLocalCapabilities(); got != tixTCPCapabilityInnerTCPChecksumPartial|tixTCPCapabilityPortSharding {
+		t.Fatalf("listener capabilities after GRO withdrawal = %#x, want checksum-partial and port sharding", got)
 	}
 	provider.statusProvider = "af_xdp"
 	if got := listener.currentLocalCapabilities(); got != 0 {
@@ -3479,6 +3497,7 @@ type fakeProvider struct {
 	annotateErr             error
 	innerTCPChecksumPartial atomic.Bool
 	innerGSO                atomic.Bool
+	portSharding            atomic.Bool
 }
 
 type fakeCapabilityProvider struct {
@@ -3613,6 +3632,7 @@ func (provider *fakeProvider) TIXTCPStatus(ctx context.Context) (dataplane.TIXTC
 		ReceivedFrames:          provider.received.Load(),
 		InnerTCPChecksumPartial: provider.innerTCPChecksumPartial.Load(),
 		InnerGSO:                provider.innerGSO.Load(),
+		PortSharding:            provider.portSharding.Load(),
 	}, nil
 }
 

@@ -85,10 +85,12 @@
 #define TRUSTIX_DATAPATH_FEATURE_FULL_DATAPATH BIT_ULL(7)
 #define TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL BIT_ULL(10)
 #define TRUSTIX_DATAPATH_FEATURE_INNER_GSO BIT_ULL(11)
+#define TRUSTIX_DATAPATH_FEATURE_TIX_TCP_PORT_SHARDING BIT_ULL(12)
 #define TRUSTIX_DATAPATH_KNOWN_FEATURES \
 	(TRUSTIX_DATAPATH_FEATURE_FULL_DATAPATH | \
 	 TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL | \
-	 TRUSTIX_DATAPATH_FEATURE_INNER_GSO)
+	 TRUSTIX_DATAPATH_FEATURE_INNER_GSO | \
+	 TRUSTIX_DATAPATH_FEATURE_TIX_TCP_PORT_SHARDING)
 
 #define TRUSTIX_DATAPATH_FLAG_TIXT_SELFTEST_OK BIT(0)
 #define TRUSTIX_DATAPATH_FLAG_FEATURES_ACTIVE BIT(1)
@@ -139,6 +141,7 @@
 #define TRUSTIX_DATAPATH_PACKET_MAX_LEN 65535U
 #define TRUSTIX_DATAPATH_IPV4_L4_PREFIX_MAX 80U
 #define TRUSTIX_DATAPATH_IFNAME_MAX 16U
+#define TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS 16U
 
 #define TRUSTIX_DATAPATH_HOOK_OP_ATTACH 1U
 #define TRUSTIX_DATAPATH_HOOK_OP_DETACH 2U
@@ -161,6 +164,8 @@
 #define TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_TCP_CHECKSUM_PARTIAL BIT(13)
 #define TRUSTIX_DATAPATH_SESSION_FLAG_SEND_INNER_GSO BIT(14)
 #define TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO BIT(15)
+#define TRUSTIX_DATAPATH_SESSION_FLAG_SEND_TIX_TCP_PORT_SHARDING BIT(16)
+#define TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_TIX_TCP_PORT_SHARDING BIT(17)
 #define TRUSTIX_DATAPATH_SESSION_FLAGS_ENCRYPTED \
 	(TRUSTIX_DATAPATH_SESSION_FLAG_ENCRYPTED | \
 	 TRUSTIX_DATAPATH_SESSION_FLAG_SEND_ENCRYPTED | \
@@ -195,7 +200,8 @@
 #define TRUSTIX_DATAPATH_TX_OUTER_GSO_PAGE_POOL_ORDER 4U
 #define TRUSTIX_DATAPATH_TX_OUTER_GSO_PAGE_POOL_SIZE 64U
 #define TRUSTIX_DATAPATH_LOOKUP_CACHE_MIN_SLOTS 1024U
-#define TRUSTIX_DATAPATH_LOOKUP_CACHE_MAX_SLOTS 262144U
+#define TRUSTIX_DATAPATH_LOOKUP_CACHE_MAX_SLOTS 65536U
+#define TRUSTIX_DATAPATH_WIRE_TUPLE_CACHE_MAX_SLOTS 2621440U
 #define TRUSTIX_DATAPATH_SKB_MARK_TX_PLAINTEXT BIT(31)
 #define TRUSTIX_DATAPATH_SKB_MARK_RX_WORKER BIT(30)
 #define TRUSTIX_DATAPATH_HOOK_MAX 16U
@@ -558,12 +564,14 @@ struct trustix_datapath_session_route_cache_entry {
 struct trustix_datapath_session_wire_tuple_cache_entry {
 	bool used;
 	bool reverse;
+	__u8 shard;
 	__u8 protocol;
 	__u16 src_port;
 	__u16 dst_port;
 	__u32 src_ipv4;
 	__u32 dst_ipv4;
 	__u64 flow_id;
+	struct trustix_datapath_state_slot *session;
 	struct trustix_datapath_state_slot *slot;
 };
 
@@ -634,11 +642,14 @@ struct trustix_datapath_tx_plan {
 	__u64 flow_id;
 	__u64 epoch;
 	__u64 session_flags;
+	__u32 inner_flow_hash;
+	__u32 outer_tcp_sequence_flow_slot;
 	__u32 local_ipv4;
 	__u32 remote_ipv4;
 	__u16 local_port;
 	__u16 remote_port;
 	__u8 outer_protocol;
+	__u8 outer_tcp_port_shard;
 	__u32 max_packet_size;
 };
 
@@ -754,6 +765,8 @@ static int trustix_datapath_rx_worker_enqueue_pending_skb(
 	bool skb_l2_ready, unsigned int *queued_frames);
 static bool trustix_datapath_ipv4_prefix_match(__u32 addr, __u32 prefix,
 					       __u32 bits);
+static struct trustix_datapath_state_slot *
+trustix_datapath_session_for_flow_id_locked(__u64 flow_id);
 static int trustix_datapath_rx_worker_queue_l2_skb_from_hook(
 	struct sk_buff *source_skb, struct net_device *target_dev,
 	struct sk_buff **inner_skb, __u32 len, unsigned int frames,
@@ -2470,6 +2483,14 @@ module_param_named(tx_plaintext_inner_gso_errors,
 MODULE_PARM_DESC(tx_plaintext_inner_gso_errors,
 		 "Plaintext TX inner-GSO allocation, packet, or queue errors");
 
+static unsigned long long
+	trustix_datapath_tx_plaintext_inner_gso_metadata_scrubs;
+module_param_named(tx_plaintext_inner_gso_metadata_scrubs,
+		   trustix_datapath_tx_plaintext_inner_gso_metadata_scrubs,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_inner_gso_metadata_scrubs,
+		 "Plaintext TX inner-GSO clones scrubbed before outer transmission");
+
 static unsigned long long trustix_datapath_tx_plaintext_gso_skips;
 module_param_named(tx_plaintext_gso_skips,
 		   trustix_datapath_tx_plaintext_gso_skips, ullong, 0444);
@@ -2868,6 +2889,70 @@ module_param_named(tx_plaintext_hash_tx_queue_sets,
 MODULE_PARM_DESC(tx_plaintext_hash_tx_queue_sets,
 		 "TrustIX plaintext TX outer skbs assigned to a target device TX queue");
 
+static unsigned long long
+	trustix_datapath_tx_plaintext_inner_flow_hash_sets;
+module_param_named(tx_plaintext_inner_flow_hash_sets,
+		   trustix_datapath_tx_plaintext_inner_flow_hash_sets, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_inner_flow_hash_sets,
+		 "TrustIX plaintext outer skbs assigned an inner-flow TX hash");
+
+static unsigned long long
+	trustix_datapath_tx_plaintext_outer_tuple_hash_sets;
+module_param_named(tx_plaintext_outer_tuple_hash_sets,
+		   trustix_datapath_tx_plaintext_outer_tuple_hash_sets,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_outer_tuple_hash_sets,
+		 "TrustIX plaintext outer skbs assigned an outer-tuple TX hash");
+
+static unsigned long long
+	trustix_datapath_tx_plaintext_xps_sender_cpu_sets;
+module_param_named(tx_plaintext_xps_sender_cpu_sets,
+		   trustix_datapath_tx_plaintext_xps_sender_cpu_sets, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_xps_sender_cpu_sets,
+		 "TrustIX plaintext outer skbs assigned a stable XPS sender CPU");
+
+static unsigned long long
+	trustix_datapath_tx_plaintext_xps_sender_cpu_fallbacks;
+module_param_named(tx_plaintext_xps_sender_cpu_fallbacks,
+		   trustix_datapath_tx_plaintext_xps_sender_cpu_fallbacks,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_xps_sender_cpu_fallbacks,
+		 "TrustIX plaintext outer skbs without an available XPS sender CPU");
+
+static unsigned long long
+	trustix_datapath_tx_plaintext_tix_tcp_port_shard_sets;
+module_param_named(tx_plaintext_tix_tcp_port_shard_sets,
+		   trustix_datapath_tx_plaintext_tix_tcp_port_shard_sets,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_tix_tcp_port_shard_sets,
+		 "TrustIX plaintext TIX-TCP packets assigned a negotiated outer source-port shard");
+
+static unsigned long long
+	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits;
+module_param_named(tx_plaintext_tix_tcp_shard_sequence_hits,
+		   trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_tix_tcp_shard_sequence_hits,
+		 "TrustIX plaintext TIX-TCP packets assigned a per-flow shard sequence");
+
+static unsigned long long
+	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_fallbacks;
+module_param_named(tx_plaintext_tix_tcp_shard_sequence_fallbacks,
+		   trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_fallbacks,
+		   ullong, 0444);
+MODULE_PARM_DESC(tx_plaintext_tix_tcp_shard_sequence_fallbacks,
+		 "TrustIX plaintext TIX-TCP packets using the global outer sequence fallback");
+
+static unsigned long long
+	trustix_datapath_rx_tix_tcp_port_shard_matches;
+module_param_named(rx_tix_tcp_port_shard_matches,
+		   trustix_datapath_rx_tix_tcp_port_shard_matches, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_tix_tcp_port_shard_matches,
+		 "TrustIX TIX-TCP receive tuples accepted on negotiated source-port shards");
+
 static unsigned long long trustix_datapath_tx_plaintext_hash_tx_queue_fallbacks;
 module_param_named(tx_plaintext_hash_tx_queue_fallbacks,
 		   trustix_datapath_tx_plaintext_hash_tx_queue_fallbacks,
@@ -3092,6 +3177,8 @@ MODULE_PARM_DESC(tx_plaintext_mark_skips,
 
 static atomic64_t trustix_datapath_tx_sequence = ATOMIC64_INIT(0);
 static atomic64_t trustix_datapath_outer_tcp_sequence = ATOMIC64_INIT(1);
+static atomic64_t *trustix_datapath_outer_tcp_shard_sequences;
+static __u32 trustix_datapath_outer_tcp_sequence_flow_slots;
 
 static DEFINE_SPINLOCK(trustix_datapath_tx_plaintext_lock);
 static struct trustix_datapath_tx_plaintext_slot
@@ -4141,6 +4228,16 @@ static __u32 trustix_datapath_clamp_lookup_cache_slots(unsigned int requested)
 	return requested;
 }
 
+static __u32
+trustix_datapath_clamp_wire_tuple_cache_slots(unsigned int requested)
+{
+	if (requested < TRUSTIX_DATAPATH_LOOKUP_CACHE_MIN_SLOTS)
+		return TRUSTIX_DATAPATH_LOOKUP_CACHE_MIN_SLOTS;
+	if (requested > TRUSTIX_DATAPATH_WIRE_TUPLE_CACHE_MAX_SLOTS)
+		return TRUSTIX_DATAPATH_WIRE_TUPLE_CACHE_MAX_SLOTS;
+	return requested;
+}
+
 static int trustix_datapath_alloc_lookup_caches(void)
 {
 	__u32 sessions = trustix_datapath_clamp_capacity(
@@ -4154,7 +4251,9 @@ static int trustix_datapath_alloc_lookup_caches(void)
 	__u32 flow_capacity =
 		trustix_datapath_clamp_lookup_cache_slots(sessions * 2U);
 	__u32 wire_capacity =
-		trustix_datapath_clamp_lookup_cache_slots(sessions * 4U);
+		trustix_datapath_clamp_wire_tuple_cache_slots(sessions * 40U);
+	__u32 sequence_capacity =
+		sessions * TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS;
 
 	trustix_datapath_route_dst_cache =
 		vzalloc(array_size(route_capacity,
@@ -4183,8 +4282,18 @@ static int trustix_datapath_alloc_lookup_caches(void)
 		goto free_session_flow_cache;
 	}
 	trustix_datapath_session_wire_tuple_cache_capacity = wire_capacity;
+	trustix_datapath_outer_tcp_shard_sequences =
+		vzalloc(array_size(sequence_capacity,
+				   sizeof(*trustix_datapath_outer_tcp_shard_sequences)));
+	if (!trustix_datapath_outer_tcp_shard_sequences)
+		goto free_wire_cache;
+	trustix_datapath_outer_tcp_sequence_flow_slots = sessions;
 	return 0;
 
+free_wire_cache:
+	vfree(trustix_datapath_session_wire_tuple_cache);
+	trustix_datapath_session_wire_tuple_cache = NULL;
+	trustix_datapath_session_wire_tuple_cache_capacity = 0;
 free_session_flow_cache:
 	vfree(trustix_datapath_session_flow_cache);
 	trustix_datapath_session_flow_cache = NULL;
@@ -5307,6 +5416,9 @@ static void trustix_datapath_free_state(void)
 	trustix_datapath_publish_state_counts_locked();
 	write_unlock_bh(&trustix_datapath_state_lock);
 	trustix_datapath_free_tx_plaintext();
+	vfree(trustix_datapath_outer_tcp_shard_sequences);
+	trustix_datapath_outer_tcp_shard_sequences = NULL;
+	trustix_datapath_outer_tcp_sequence_flow_slots = 0;
 	trustix_datapath_free_rx_worker();
 	trustix_datapath_free_rx_stage();
 }
@@ -5331,11 +5443,112 @@ static __u32 trustix_datapath_key_hash(const __u64 key[4])
 	return (__u32)(hash ^ (hash >> 32));
 }
 
+static __always_inline __u32
+trustix_datapath_rx_worker_mix_hash(__u32 hash)
+{
+	hash ^= hash >> 16;
+	hash *= 0x7feb352dU;
+	hash ^= hash >> 15;
+	hash *= 0x846ca68bU;
+	hash ^= hash >> 16;
+	return hash ?: 1;
+}
+
 static __u32 trustix_datapath_session_flow_cache_hash(__u64 flow_id)
 {
 	__u64 key[4] = { flow_id, flow_id >> 32, 0, 0 };
 
 	return trustix_datapath_key_hash(key);
+}
+
+static __always_inline bool
+trustix_datapath_tix_tcp_port_sharding_feature_active(void)
+{
+	return READ_ONCE(trustix_datapath_features) &
+	       TRUSTIX_DATAPATH_FEATURE_TIX_TCP_PORT_SHARDING;
+}
+
+static __always_inline bool
+trustix_datapath_tx_plan_tix_tcp_port_sharding_active(
+	const struct trustix_datapath_tx_plan *plan)
+{
+	return plan && plan->outer_protocol == IPPROTO_TCP &&
+	       (plan->session_flags &
+		TRUSTIX_DATAPATH_SESSION_FLAG_SEND_TIX_TCP_PORT_SHARDING) &&
+	       plan->outer_tcp_port_shard <
+		       TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS &&
+	       trustix_datapath_tix_tcp_port_sharding_feature_active();
+}
+
+static bool trustix_datapath_session_slot_index_locked(
+	const struct trustix_datapath_state_slot *session, __u32 *index_out)
+{
+	const struct trustix_datapath_state_slot *slots =
+		trustix_datapath_sessions.slots;
+	__u32 capacity = trustix_datapath_sessions.capacity;
+
+	if (index_out)
+		*index_out = U32_MAX;
+	if (!session || !index_out || !slots || !capacity || session < slots ||
+	    session >= slots + capacity)
+		return false;
+	*index_out = (__u32)(session - slots);
+	return true;
+}
+
+static __always_inline __u16
+trustix_datapath_tix_tcp_port_for_shard(__u16 base_port, __u8 shard)
+{
+	shard &= TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS - 1U;
+	if (base_port <= U16_MAX -
+			 TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS + 1U)
+		return base_port + shard;
+	return base_port - shard;
+}
+
+static __always_inline __u8
+trustix_datapath_tix_tcp_port_shard_for_hash(__u32 hash)
+{
+	return (__u8)(trustix_datapath_rx_worker_mix_hash(hash) &
+		      (TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS - 1U));
+}
+
+static bool trustix_datapath_tix_tcp_port_shard_match(
+	__u16 base_port, __u16 candidate_port, __u8 *shard_out)
+{
+	unsigned int shard;
+
+	if (shard_out)
+		*shard_out = 0;
+	if (!base_port || !candidate_port)
+		return false;
+	for (shard = 0; shard < TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS;
+	     shard++) {
+		if (trustix_datapath_tix_tcp_port_for_shard(
+			    base_port, (__u8)shard) != candidate_port)
+			continue;
+		if (shard_out)
+			*shard_out = (__u8)shard;
+		return true;
+	}
+	return false;
+}
+
+static __always_inline __u32
+trustix_datapath_inner_flow_hash(
+	const struct trustix_datapath_ioc_classify *classify)
+{
+	__u64 key[4];
+	__u32 hash;
+
+	if (!classify)
+		return 0;
+	key[0] = classify->src_ipv4;
+	key[1] = classify->dst_ipv4;
+	key[2] = ((__u64)classify->src_port << 16) | classify->dst_port;
+	key[3] = classify->protocol;
+	hash = trustix_datapath_key_hash(key);
+	return hash ?: 1;
 }
 
 static __u32 trustix_datapath_route_dst_cache_hash(__u32 dst_ipv4)
@@ -5597,11 +5810,26 @@ trustix_datapath_session_flow_cache_lookup_locked(__u64 flow_id)
 	return NULL;
 }
 
+static bool trustix_datapath_tix_tcp_port_sharding_allowed(
+	const struct trustix_datapath_state_slot *session, bool reverse)
+{
+	__u32 required_flag;
+
+	if (!session || !session->used ||
+	    !trustix_datapath_tix_tcp_port_sharding_feature_active())
+		return false;
+	required_flag = reverse ?
+		TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_TIX_TCP_PORT_SHARDING :
+		TRUSTIX_DATAPATH_SESSION_FLAG_SEND_TIX_TCP_PORT_SHARDING;
+	return session->flags & required_flag;
+}
+
 static void
 trustix_datapath_wire_tuple_cache_insert_one_locked(
-	struct trustix_datapath_state_slot *slot, __u64 flow_id,
+	struct trustix_datapath_state_slot *slot,
+	struct trustix_datapath_state_slot *session, __u64 flow_id,
 	__u32 src_ipv4, __u32 dst_ipv4, __u16 src_port, __u16 dst_port,
-	__u8 protocol, bool reverse)
+	__u8 protocol, bool reverse, __u8 shard)
 {
 	__u32 start;
 	__u32 i;
@@ -5627,12 +5855,14 @@ trustix_datapath_wire_tuple_cache_insert_one_locked(
 			continue;
 		entry->used = true;
 		entry->reverse = reverse;
+		entry->shard = shard;
 		entry->protocol = protocol;
 		entry->src_port = src_port;
 		entry->dst_port = dst_port;
 		entry->src_ipv4 = src_ipv4;
 		entry->dst_ipv4 = dst_ipv4;
 		entry->flow_id = flow_id;
+		entry->session = session;
 		entry->slot = slot;
 		return;
 	}
@@ -5648,6 +5878,8 @@ trustix_datapath_session_wire_tuple_cache_insert_locked(
 	__u16 local_port;
 	__u16 remote_port;
 	__u8 protocol;
+	struct trustix_datapath_state_slot *session;
+	unsigned int shard;
 
 	if (!slot || !slot->used)
 		return;
@@ -5669,19 +5901,48 @@ trustix_datapath_session_wire_tuple_cache_insert_locked(
 	default:
 		return;
 	}
+	session = trustix_datapath_session_for_flow_id_locked(flow_id);
 	trustix_datapath_wire_tuple_cache_insert_one_locked(
-		slot, flow_id, local_ipv4, remote_ipv4, local_port,
-		remote_port, protocol, false);
+		slot, session, flow_id, local_ipv4, remote_ipv4, local_port,
+		remote_port, protocol, false, 0);
 	trustix_datapath_wire_tuple_cache_insert_one_locked(
-		slot, flow_id, remote_ipv4, local_ipv4, remote_port,
-		local_port, protocol, true);
+		slot, session, flow_id, remote_ipv4, local_ipv4, remote_port,
+		local_port, protocol, true, 0);
+	if (protocol == IPPROTO_TCP && session) {
+		if (trustix_datapath_tix_tcp_port_sharding_allowed(
+			    session, false)) {
+			for (shard = 1;
+			     shard < TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS;
+			     shard++)
+				trustix_datapath_wire_tuple_cache_insert_one_locked(
+					slot, session, flow_id, local_ipv4,
+					remote_ipv4,
+					trustix_datapath_tix_tcp_port_for_shard(
+						local_port, (__u8)shard),
+					remote_port, protocol, false,
+					(__u8)shard);
+		}
+		if (trustix_datapath_tix_tcp_port_sharding_allowed(
+			    session, true)) {
+			for (shard = 1;
+			     shard < TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS;
+			     shard++)
+				trustix_datapath_wire_tuple_cache_insert_one_locked(
+					slot, session, flow_id, remote_ipv4,
+					local_ipv4,
+					trustix_datapath_tix_tcp_port_for_shard(
+						remote_port, (__u8)shard),
+					local_port, protocol, true,
+					(__u8)shard);
+		}
+	}
 	if (protocol == IPPROTO_UDP) {
 		trustix_datapath_wire_tuple_cache_insert_one_locked(
-			slot, 0, local_ipv4, remote_ipv4, local_port,
-			remote_port, protocol, false);
+			slot, session, 0, local_ipv4, remote_ipv4, local_port,
+			remote_port, protocol, false, 0);
 		trustix_datapath_wire_tuple_cache_insert_one_locked(
-			slot, 0, remote_ipv4, local_ipv4, remote_port,
-			local_port, protocol, true);
+			slot, session, 0, remote_ipv4, local_ipv4, remote_port,
+			local_port, protocol, true, 0);
 	}
 }
 
@@ -5719,6 +5980,21 @@ trustix_datapath_session_wire_tuple_cache_lookup_locked(
 		slot = entry->slot;
 		if (!slot || !slot->used)
 			return NULL;
+		if (entry->protocol == IPPROTO_TCP && entry->session) {
+			struct trustix_datapath_state_slot *session = entry->session;
+
+			if (entry->shard &&
+			    (!session->used ||
+			     session->value[0] != entry->flow_id ||
+			     !trustix_datapath_tix_tcp_port_sharding_allowed(
+				     session, entry->reverse)))
+				return NULL;
+			if (session->used &&
+			    session->value[0] == entry->flow_id &&
+			    trustix_datapath_tix_tcp_port_sharding_allowed(
+				    session, entry->reverse))
+				trustix_datapath_rx_tix_tcp_port_shard_matches++;
+		}
 		if (reverse)
 			*reverse = entry->reverse;
 		return slot;
@@ -5912,21 +6188,32 @@ trustix_datapath_state_apply_to_table(struct trustix_datapath_state_table *table
 	}
 }
 
-static int
-trustix_datapath_state_apply_locked(struct trustix_datapath_ioc_state *state)
+static bool trustix_datapath_state_kind_affects_lookup_caches(__u32 kind)
+{
+	return kind == TRUSTIX_DATAPATH_STATE_KIND_ROUTE ||
+	       kind == TRUSTIX_DATAPATH_STATE_KIND_SESSION ||
+	       kind == TRUSTIX_DATAPATH_STATE_KIND_FLOW ||
+	       kind == TRUSTIX_DATAPATH_STATE_KIND_SESSION_WIRE;
+}
+
+static int trustix_datapath_state_apply_locked_maybe_rebuild(
+	struct trustix_datapath_ioc_state *state, bool rebuild)
 {
 	struct trustix_datapath_state_table *table;
 	int ret;
 
 	table = trustix_datapath_table_for_kind(state->kind);
 	ret = trustix_datapath_state_apply_to_table(table, state, true);
-	if (!ret &&
-	    (state->kind == TRUSTIX_DATAPATH_STATE_KIND_ROUTE ||
-	     state->kind == TRUSTIX_DATAPATH_STATE_KIND_SESSION ||
-	     state->kind == TRUSTIX_DATAPATH_STATE_KIND_FLOW ||
-	     state->kind == TRUSTIX_DATAPATH_STATE_KIND_SESSION_WIRE))
+	if (!ret && rebuild &&
+	    trustix_datapath_state_kind_affects_lookup_caches(state->kind))
 		trustix_datapath_rebuild_lookup_caches_locked();
 	return ret;
+}
+
+static int
+trustix_datapath_state_apply_locked(struct trustix_datapath_ioc_state *state)
+{
+	return trustix_datapath_state_apply_locked_maybe_rebuild(state, true);
 }
 
 static bool trustix_datapath_ipv4_prefix_match(__u32 addr, __u32 prefix,
@@ -6271,6 +6558,65 @@ trustix_datapath_session_for_route_with_wire_locked(
 	return best;
 }
 
+static bool trustix_datapath_session_wire_tuple_matches_locked(
+	const struct trustix_datapath_state_slot *wire,
+	const struct trustix_datapath_state_slot *session, __u32 src_ipv4,
+	__u32 dst_ipv4, __u16 src_port, __u16 dst_port, bool *reverse,
+	__u8 *shard_out)
+{
+	__u32 local_ipv4;
+	__u32 remote_ipv4;
+	__u16 local_port;
+	__u16 remote_port;
+	__u8 shard = 0;
+
+	if (reverse)
+		*reverse = false;
+	if (shard_out)
+		*shard_out = 0;
+	if (!wire || !wire->used || !session || !session->used ||
+	    wire->value[0] != session->value[0])
+		return false;
+	local_ipv4 = (__u32)wire->value[1];
+	remote_ipv4 = (__u32)wire->value[2];
+	local_port = (__u16)(wire->value[3] >> 16);
+	remote_port = (__u16)wire->value[3];
+
+	if (local_ipv4 == src_ipv4 && remote_ipv4 == dst_ipv4 &&
+	    remote_port == dst_port) {
+		if (local_port == src_port)
+			return true;
+		if ((__u32)wire->value[4] !=
+			    TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP ||
+		    !trustix_datapath_tix_tcp_port_sharding_allowed(
+			    session, false) ||
+		    !trustix_datapath_tix_tcp_port_shard_match(
+			    local_port, src_port, &shard) || !shard)
+			return false;
+		if (shard_out)
+			*shard_out = shard;
+		return true;
+	}
+	if (remote_ipv4 == src_ipv4 && local_ipv4 == dst_ipv4 &&
+	    local_port == dst_port) {
+		if (remote_port != src_port) {
+			if ((__u32)wire->value[4] !=
+				    TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP ||
+			    !trustix_datapath_tix_tcp_port_sharding_allowed(
+				    session, true) ||
+			    !trustix_datapath_tix_tcp_port_shard_match(
+				    remote_port, src_port, &shard) || !shard)
+				return false;
+		}
+		if (reverse)
+			*reverse = true;
+		if (shard_out)
+			*shard_out = shard;
+		return true;
+	}
+	return false;
+}
+
 static struct trustix_datapath_state_slot *
 trustix_datapath_session_wire_for_tuple_locked(__u64 flow_id,
 					       __u32 src_ipv4, __u32 dst_ipv4,
@@ -6279,10 +6625,13 @@ trustix_datapath_session_wire_for_tuple_locked(__u64 flow_id,
 					       bool *reverse)
 {
 	struct trustix_datapath_state_slot *cached;
+	struct trustix_datapath_state_slot *session;
+	struct trustix_datapath_state_slot *wire;
 	struct trustix_datapath_state_slot *slots;
 	__u32 transport;
 	__u32 capacity;
 	__u32 i;
+	__u8 shard = 0;
 
 	if (reverse)
 		*reverse = false;
@@ -6307,29 +6656,31 @@ trustix_datapath_session_wire_for_tuple_locked(__u64 flow_id,
 		reverse);
 	if (cached)
 		return cached;
+	session = trustix_datapath_session_for_flow_id_locked(flow_id);
+	wire = trustix_datapath_wire_for_session_locked(session);
+	if (wire && (__u32)wire->value[4] == transport &&
+	    trustix_datapath_session_wire_tuple_matches_locked(
+		    wire, session, src_ipv4, dst_ipv4, src_port, dst_port,
+		    reverse, &shard)) {
+		if (shard)
+			trustix_datapath_rx_tix_tcp_port_shard_matches++;
+		return wire;
+	}
 	for (i = 0; i < capacity; i++) {
 		struct trustix_datapath_state_slot *slot = &slots[i];
-		__u32 local_ipv4;
-		__u32 remote_ipv4;
-		__u16 local_port;
-		__u16 remote_port;
 
 		if (!slot->used)
 			continue;
 		if (slot->value[0] != flow_id ||
 		    (__u32)slot->value[4] != transport)
 			continue;
-		local_ipv4 = (__u32)slot->value[1];
-		remote_ipv4 = (__u32)slot->value[2];
-		local_port = (__u16)(slot->value[3] >> 16);
-		remote_port = (__u16)slot->value[3];
-		if (local_ipv4 == src_ipv4 && remote_ipv4 == dst_ipv4 &&
-		    local_port == src_port && remote_port == dst_port)
-			return slot;
-		if (local_ipv4 == dst_ipv4 && remote_ipv4 == src_ipv4 &&
-		    local_port == dst_port && remote_port == src_port) {
-			if (reverse)
-				*reverse = true;
+		session = trustix_datapath_session_for_flow_id_locked(
+			slot->value[0]);
+		if (trustix_datapath_session_wire_tuple_matches_locked(
+			    slot, session, src_ipv4, dst_ipv4, src_port,
+			    dst_port, reverse, &shard)) {
+			if (shard)
+				trustix_datapath_rx_tix_tcp_port_shard_matches++;
 			return slot;
 		}
 	}
@@ -6621,6 +6972,8 @@ trustix_datapath_outer_build_locked(struct trustix_datapath_ioc_outer_build *req
 	__u32 tixt_len;
 	__u32 outer_header_len;
 	__u32 written_len;
+	__u32 inner_flow_hash;
+	__u8 outer_tcp_port_shard;
 	__u8 *tixt;
 	int ret;
 
@@ -6669,6 +7022,15 @@ trustix_datapath_outer_build_locked(struct trustix_datapath_ioc_outer_build *req
 	case TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP:
 		outer_protocol = IPPROTO_TCP;
 		outer_header_len = 20 + 20;
+		inner_flow_hash = trustix_datapath_inner_flow_hash(&classify);
+		if (trustix_datapath_tix_tcp_port_sharding_allowed(
+			    session, false)) {
+			outer_tcp_port_shard =
+				trustix_datapath_tix_tcp_port_shard_for_hash(
+					inner_flow_hash);
+			local_port = trustix_datapath_tix_tcp_port_for_shard(
+				local_port, outer_tcp_port_shard);
+		}
 		break;
 	default:
 		return -EPROTONOSUPPORT;
@@ -6990,6 +7352,8 @@ trustix_datapath_tx_plan_locked(struct trustix_datapath_ioc_classify *classify,
 	if (!classify || !plan)
 		return -EINVAL;
 	memset(plan, 0, sizeof(*plan));
+	plan->outer_tcp_sequence_flow_slot = U32_MAX;
+	plan->inner_flow_hash = trustix_datapath_inner_flow_hash(classify);
 
 	route = trustix_datapath_route_lookup_locked(classify->dst_ipv4);
 	if (!route)
@@ -7036,6 +7400,18 @@ trustix_datapath_tx_plan_locked(struct trustix_datapath_ioc_classify *classify,
 	if (!plan->local_ipv4 || !plan->remote_ipv4 || !plan->local_port ||
 	    !plan->remote_port)
 		return -EINVAL;
+	if (plan->outer_protocol == IPPROTO_TCP &&
+	    trustix_datapath_tix_tcp_port_sharding_allowed(session, false)) {
+		if (!trustix_datapath_session_slot_index_locked(
+			    session, &plan->outer_tcp_sequence_flow_slot))
+			return -ESTALE;
+		plan->outer_tcp_port_shard =
+			trustix_datapath_tix_tcp_port_shard_for_hash(
+				plan->inner_flow_hash);
+		plan->local_port = trustix_datapath_tix_tcp_port_for_shard(
+			plan->local_port, plan->outer_tcp_port_shard);
+		trustix_datapath_tx_plaintext_tix_tcp_port_shard_sets++;
+	}
 	return 0;
 }
 
@@ -7224,12 +7600,34 @@ trustix_datapath_tx_plaintext_fix_inner_l4_checksum(__u8 *packet, __u32 len)
 	}
 }
 
-static __u32 trustix_datapath_tx_outer_tcp_next_seq(__u32 payload_len)
+static __u32 trustix_datapath_tx_outer_tcp_next_seq(
+	const struct trustix_datapath_tx_plan *plan, __u32 payload_len)
 {
+	atomic64_t *sequence = &trustix_datapath_outer_tcp_sequence;
+	atomic64_t *shard_sequences;
 	__u64 end;
 	__u32 step = payload_len ?: 1;
+	__u32 flow_slots;
+	__u32 sequence_slot;
 
-	end = atomic64_add_return(step, &trustix_datapath_outer_tcp_sequence);
+	shard_sequences = READ_ONCE(
+		trustix_datapath_outer_tcp_shard_sequences);
+	flow_slots = READ_ONCE(
+		trustix_datapath_outer_tcp_sequence_flow_slots);
+	if (trustix_datapath_tx_plan_tix_tcp_port_sharding_active(plan) &&
+	    shard_sequences && flow_slots &&
+	    plan->outer_tcp_sequence_flow_slot < flow_slots) {
+		sequence_slot =
+			plan->outer_tcp_sequence_flow_slot *
+				TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS +
+			plan->outer_tcp_port_shard;
+		sequence = &shard_sequences[sequence_slot];
+		trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits++;
+	} else {
+		trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_fallbacks++;
+	}
+
+	end = atomic64_add_return(step, sequence);
 	return (__u32)(end - step);
 }
 
@@ -7501,7 +7899,7 @@ trustix_datapath_tx_build_outer_skb(struct sk_buff *inner_skb,
 		trustix_datapath_put_be16(packet + 22, plan->remote_port);
 		trustix_datapath_put_be32(
 			packet + 24,
-			trustix_datapath_tx_outer_tcp_next_seq(tixt_len));
+			trustix_datapath_tx_outer_tcp_next_seq(plan, tixt_len));
 		packet[32] = 0x50;
 		packet[33] = 0x18;
 		trustix_datapath_put_be16(packet + 34, 65535);
@@ -7836,7 +8234,7 @@ static int trustix_datapath_tx_build_outer_tcp_segment_skb(
 		trustix_datapath_put_be16(packet + 22, plan->remote_port);
 		trustix_datapath_put_be32(
 			packet + 24,
-			trustix_datapath_tx_outer_tcp_next_seq(tixt_len));
+			trustix_datapath_tx_outer_tcp_next_seq(plan, tixt_len));
 		packet[32] = 0x50;
 		packet[33] = 0x18;
 		trustix_datapath_put_be16(packet + 34, 65535);
@@ -8731,6 +9129,9 @@ static int trustix_datapath_tx_build_inner_gso_skb(
 	skb = skb_clone(inner_skb, GFP_ATOMIC);
 	if (!skb)
 		return -ENOMEM;
+	/* The outer packet must not retain the inner socket or routing state. */
+	skb_scrub_packet(skb, true);
+	trustix_datapath_tx_plaintext_inner_gso_metadata_scrubs++;
 	ret = skb_cow_head(skb, LL_MAX_HEADER + sizeof(struct iphdr) +
 					 sizeof(struct tcphdr) +
 					 TRUSTIX_DATAPATH_TIXT_HEADER_LEN);
@@ -8768,7 +9169,8 @@ static int trustix_datapath_tx_build_inner_gso_skb(
 	trustix_datapath_put_be16(packet + 20, plan->local_port);
 	trustix_datapath_put_be16(packet + 22, plan->remote_port);
 	trustix_datapath_put_be32(
-		packet + 24, trustix_datapath_tx_outer_tcp_next_seq(tixt_len));
+		packet + 24,
+		trustix_datapath_tx_outer_tcp_next_seq(plan, tixt_len));
 	packet[32] = 0x50;
 	packet[33] = 0x18;
 	trustix_datapath_put_be16(packet + 34, 65535);
@@ -8957,7 +9359,7 @@ static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 	packet[33] = 0x18;
 	trustix_datapath_put_be16(packet + 34, 65535);
 	outer_sequence = trustix_datapath_tx_outer_tcp_next_seq(
-		stream_payload_len);
+		plan, stream_payload_len);
 	trustix_datapath_put_be32(packet + 24, (__u32)outer_sequence);
 
 	pos = packet + outer_header_len;
@@ -9712,11 +10114,15 @@ static bool trustix_datapath_tx_plaintext_plan_equal(
 	return left->flow_id == right->flow_id &&
 	       left->epoch == right->epoch &&
 	       left->session_flags == right->session_flags &&
+	       left->inner_flow_hash == right->inner_flow_hash &&
+	       left->outer_tcp_sequence_flow_slot ==
+		       right->outer_tcp_sequence_flow_slot &&
 	       left->local_ipv4 == right->local_ipv4 &&
 	       left->remote_ipv4 == right->remote_ipv4 &&
 	       left->local_port == right->local_port &&
 	       left->remote_port == right->remote_port &&
 	       left->outer_protocol == right->outer_protocol &&
+	       left->outer_tcp_port_shard == right->outer_tcp_port_shard &&
 	       left->max_packet_size == right->max_packet_size;
 }
 
@@ -11618,17 +12024,6 @@ trustix_datapath_tx_plaintext_count_hash_tx_queue(__u16 queue)
 	}
 }
 
-static __always_inline __u32
-trustix_datapath_rx_worker_mix_hash(__u32 hash)
-{
-	hash ^= hash >> 16;
-	hash *= 0x7feb352dU;
-	hash ^= hash >> 15;
-	hash *= 0x846ca68bU;
-	hash ^= hash >> 16;
-	return hash ?: 1;
-}
-
 static __always_inline __u16
 trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
 	__u32 hash, unsigned int txq_count, __u8 outer_protocol,
@@ -11837,44 +12232,115 @@ static bool trustix_datapath_tx_plaintext_hash_outer_inner_ipv4(
 		head_len, hash_out);
 }
 
+static __always_inline __u32
+trustix_datapath_tx_plaintext_hash_outer_tuple(
+	const struct trustix_datapath_tx_plan *plan)
+{
+	__u32 hash;
+
+	if (!plan)
+		return 0;
+	hash = plan->local_ipv4 ^
+	       (plan->remote_ipv4 << 7) ^
+	       (plan->remote_ipv4 >> 9) ^
+	       ((__u32)plan->local_port << 16) ^
+	       (__u32)plan->remote_port ^
+	       ((__u32)plan->outer_protocol << 24);
+	return hash ?: 1;
+}
+
+static bool
+trustix_datapath_tx_plaintext_cpu_for_queue(__u16 queue,
+					    unsigned int *cpu_out)
+{
+	unsigned int online_cpus;
+	unsigned int cpu;
+
+	if (!cpu_out)
+		return false;
+	online_cpus = num_online_cpus();
+	if (!online_cpus)
+		return false;
+	cpu = cpumask_nth(queue % online_cpus, cpu_online_mask);
+	if (cpu >= nr_cpu_ids)
+		return false;
+	*cpu_out = cpu;
+	return true;
+}
+
+static __always_inline void
+trustix_datapath_tx_plaintext_set_xps_sender_cpu(struct sk_buff *skb,
+						 __u16 queue)
+{
+#ifdef CONFIG_XPS
+	unsigned int cpu;
+
+	if (!skb ||
+	    !trustix_datapath_tx_plaintext_cpu_for_queue(queue, &cpu)) {
+		trustix_datapath_tx_plaintext_xps_sender_cpu_fallbacks++;
+		return;
+	}
+	/* sender_cpu is encoded as cpu + 1; zero means unset. */
+	skb->sender_cpu = cpu + 1;
+	trustix_datapath_tx_plaintext_xps_sender_cpu_sets++;
+#else
+	(void)skb;
+	(void)queue;
+#endif
+}
+
 static void
 trustix_datapath_tx_plaintext_set_hash_tx_queue(struct sk_buff *skb,
 						const struct net_device *dev,
 						const struct trustix_datapath_tx_plan *plan)
 {
 	bool partition_transport;
+	bool hash_tx_queue;
 	unsigned int txq_count;
 	__u8 outer_protocol;
 	__u32 hash;
+	__u32 mixed;
 	__u16 queue;
 
-	if (!READ_ONCE(trustix_datapath_tx_plaintext_hash_tx_queue))
-		return;
 	if (!skb || !dev)
 		goto fallback;
+	outer_protocol = plan ? plan->outer_protocol : 0;
+	hash_tx_queue = READ_ONCE(
+		trustix_datapath_tx_plaintext_hash_tx_queue);
+	if (!hash_tx_queue) {
+		skb_set_queue_mapping(skb, 0);
+		return;
+	}
 	txq_count = READ_ONCE(dev->real_num_tx_queues);
 	if (txq_count <= 1)
 		return;
-	outer_protocol = plan ? plan->outer_protocol : 0;
-	if (!trustix_datapath_tx_plaintext_hash_outer_inner_ipv4(skb, &hash)) {
+	/* One outer TCP tuple must stay on one TX queue to preserve sequence order. */
+	if (trustix_datapath_tx_plan_tix_tcp_port_sharding_active(plan)) {
+		hash = trustix_datapath_tx_plaintext_hash_outer_tuple(plan);
+		trustix_datapath_tx_plaintext_outer_tuple_hash_sets++;
+	} else {
+		hash = plan ? plan->inner_flow_hash : 0;
+		if (hash)
+			trustix_datapath_tx_plaintext_inner_flow_hash_sets++;
+	}
+	if (!hash &&
+	    !trustix_datapath_tx_plaintext_hash_outer_inner_ipv4(skb, &hash)) {
 		if (plan) {
-			hash = plan->local_ipv4 ^
-			       (plan->remote_ipv4 << 7) ^
-			       (plan->remote_ipv4 >> 9) ^
-			       ((__u32)plan->local_port << 16) ^
-			       (__u32)plan->remote_port ^
-			       ((__u32)plan->outer_protocol << 24) ^
+			hash = trustix_datapath_tx_plaintext_hash_outer_tuple(plan) ^
 			       (__u32)plan->flow_id ^
 			       ((__u32)(plan->flow_id >> 32) << 3);
 		} else {
 			goto fallback;
 		}
 	}
+	mixed = trustix_datapath_rx_worker_mix_hash(hash);
+	skb_set_hash(skb, mixed, PKT_HASH_TYPE_L4);
 	partition_transport = READ_ONCE(
 		trustix_datapath_tx_plaintext_hash_tx_queue_partition_transport);
 	queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
 		hash, txq_count, outer_protocol, partition_transport);
 	skb_set_queue_mapping(skb, queue);
+	trustix_datapath_tx_plaintext_set_xps_sender_cpu(skb, queue);
 	trustix_datapath_tx_plaintext_count_hash_tx_queue(queue);
 	if (partition_transport) {
 		switch (outer_protocol) {
@@ -17592,6 +18058,7 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_inner_gso_segments = 0;
 	trustix_datapath_tx_plaintext_inner_gso_fallbacks = 0;
 	trustix_datapath_tx_plaintext_inner_gso_errors = 0;
+	trustix_datapath_tx_plaintext_inner_gso_metadata_scrubs = 0;
 	trustix_datapath_tx_plaintext_gso_skips = 0;
 	trustix_datapath_tx_plaintext_gso_segments = 0;
 	trustix_datapath_tx_plaintext_gso_errors = 0;
@@ -17655,6 +18122,14 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_misses = 0;
 	trustix_datapath_tx_plaintext_direct_xmit_dst_mac_cache_invalidations = 0;
 	trustix_datapath_tx_plaintext_hash_tx_queue_sets = 0;
+	trustix_datapath_tx_plaintext_inner_flow_hash_sets = 0;
+	trustix_datapath_tx_plaintext_outer_tuple_hash_sets = 0;
+	trustix_datapath_tx_plaintext_xps_sender_cpu_sets = 0;
+	trustix_datapath_tx_plaintext_xps_sender_cpu_fallbacks = 0;
+	trustix_datapath_tx_plaintext_tix_tcp_port_shard_sets = 0;
+	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits = 0;
+	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_fallbacks = 0;
+	trustix_datapath_rx_tix_tcp_port_shard_matches = 0;
 	trustix_datapath_tx_plaintext_hash_tx_queue_fallbacks = 0;
 	trustix_datapath_tx_plaintext_hash_tx_queue_q0 = 0;
 	trustix_datapath_tx_plaintext_hash_tx_queue_q1 = 0;
@@ -18633,11 +19108,99 @@ restore:
 	return ret;
 }
 
+static int trustix_datapath_selftest_tix_tcp_shard_sequences(void)
+{
+	struct trustix_datapath_tx_plan plan = {};
+	atomic64_t *sequences = READ_ONCE(
+		trustix_datapath_outer_tcp_shard_sequences);
+	__u64 saved_features = READ_ONCE(trustix_datapath_features);
+	__u64 saved_hits =
+		trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits;
+	__u64 saved_fallbacks =
+		trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_fallbacks;
+	__s64 saved_first;
+	__s64 saved_second;
+	__u32 first_index = 3;
+	__u32 second_index = TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS + 3;
+	int ret = 0;
+
+	if (!sequences ||
+	    READ_ONCE(trustix_datapath_outer_tcp_sequence_flow_slots) < 2)
+		return -EINVAL;
+	saved_first = atomic64_read(&sequences[first_index]);
+	saved_second = atomic64_read(&sequences[second_index]);
+	atomic64_set(&sequences[first_index], 1000);
+	atomic64_set(&sequences[second_index], 2000);
+	WRITE_ONCE(trustix_datapath_features,
+		   saved_features |
+			   TRUSTIX_DATAPATH_FEATURE_TIX_TCP_PORT_SHARDING);
+	plan.outer_protocol = IPPROTO_TCP;
+	plan.session_flags =
+		TRUSTIX_DATAPATH_SESSION_FLAG_SEND_TIX_TCP_PORT_SHARDING;
+	plan.outer_tcp_port_shard = 3;
+	plan.outer_tcp_sequence_flow_slot = 0;
+	if (trustix_datapath_tx_outer_tcp_next_seq(&plan, 100) != 1000 ||
+	    trustix_datapath_tx_outer_tcp_next_seq(&plan, 50) != 1100) {
+		ret = -EINVAL;
+		goto restore;
+	}
+	plan.outer_tcp_sequence_flow_slot = 1;
+	if (trustix_datapath_tx_outer_tcp_next_seq(&plan, 75) != 2000)
+		ret = -EINVAL;
+
+restore:
+	atomic64_set(&sequences[first_index], saved_first);
+	atomic64_set(&sequences[second_index], saved_second);
+	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits = saved_hits;
+	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_fallbacks =
+		saved_fallbacks;
+	WRITE_ONCE(trustix_datapath_features, saved_features);
+	return ret;
+}
+
 static int trustix_datapath_selftest_session_wire(void)
 {
+	static const __u16 parallel_tcp_ports[] = {
+		48500, 48502, 48510, 48518,
+	};
 	struct trustix_datapath_state_table table = {};
+	struct trustix_datapath_ioc_classify classify = {
+		.src_ipv4 = 0x0a00400aU,
+		.dst_ipv4 = 0x0a01400aU,
+		.dst_port = 15201,
+		.protocol = IPPROTO_TCP,
+	};
 	struct trustix_datapath_ioc_state state = {};
+	struct trustix_datapath_state_slot session = {};
+	struct trustix_datapath_state_slot wire = {};
+	__u64 saved_features = READ_ONCE(trustix_datapath_features);
+	__u16 shard_mask = 0;
+	bool reverse = false;
+	__u8 shard = 0;
+	unsigned int i;
 	int ret;
+
+	ret = trustix_datapath_selftest_tix_tcp_shard_sequences();
+	if (ret)
+		return ret;
+
+	if (trustix_datapath_tix_tcp_port_for_shard(20000, 0) != 20000 ||
+	    trustix_datapath_tix_tcp_port_for_shard(20000, 15) != 20015 ||
+	    trustix_datapath_tix_tcp_port_for_shard(65535, 0) != 65535 ||
+	    trustix_datapath_tix_tcp_port_for_shard(65535, 15) != 65520 ||
+	    !trustix_datapath_tix_tcp_port_shard_match(20000, 20007,
+						 &shard) ||
+	    shard != 7 ||
+	    trustix_datapath_tix_tcp_port_shard_match(20000, 19999, NULL))
+		return -EINVAL;
+	for (i = 0; i < ARRAY_SIZE(parallel_tcp_ports); i++) {
+		classify.src_port = parallel_tcp_ports[i];
+		shard = trustix_datapath_tix_tcp_port_shard_for_hash(
+			trustix_datapath_inner_flow_hash(&classify));
+		shard_mask |= BIT(shard);
+	}
+	if (hweight16(shard_mask) != ARRAY_SIZE(parallel_tcp_ports))
+		return -EINVAL;
 
 	ret = trustix_datapath_alloc_table(&table, 2);
 	if (ret)
@@ -18678,6 +19241,41 @@ static int trustix_datapath_selftest_session_wire(void)
 	    state.value[4] != 1 || state.value[5] != 64000 ||
 	    state.value[6] != 9 || state.value[7] != 2)
 		ret = -EINVAL;
+	if (ret)
+		goto delete_record;
+
+	session.used = true;
+	session.flags = TRUSTIX_DATAPATH_SESSION_FLAG_KERNEL_FLOW |
+			TRUSTIX_DATAPATH_SESSION_FLAG_SEND_TIX_TCP_PORT_SHARDING |
+			TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_TIX_TCP_PORT_SHARDING;
+	session.value[0] = 0x9988776655443322ULL;
+	wire.used = true;
+	wire.value[0] = session.value[0];
+	wire.value[1] = 0xc0000201ULL;
+	wire.value[2] = 0xc6336402ULL;
+	wire.value[3] = (20000ULL << 16) | 30000ULL;
+	wire.value[4] = TRUSTIX_DATAPATH_TRANSPORT_TIX_TCP;
+	WRITE_ONCE(trustix_datapath_features,
+		   saved_features |
+			   TRUSTIX_DATAPATH_FEATURE_TIX_TCP_PORT_SHARDING);
+	if (!trustix_datapath_session_wire_tuple_matches_locked(
+		    &wire, &session, 0xc0000201U, 0xc6336402U, 20003,
+		    30000, &reverse, &shard) || reverse || shard != 3 ||
+	    !trustix_datapath_session_wire_tuple_matches_locked(
+		    &wire, &session, 0xc6336402U, 0xc0000201U, 30005,
+		    20000, &reverse, &shard) || !reverse || shard != 5) {
+		ret = -EINVAL;
+		goto restore_features;
+	}
+	session.flags &=
+		~TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_TIX_TCP_PORT_SHARDING;
+	if (trustix_datapath_session_wire_tuple_matches_locked(
+		    &wire, &session, 0xc6336402U, 0xc0000201U, 30005,
+		    20000, &reverse, &shard))
+		ret = -EINVAL;
+
+restore_features:
+	WRITE_ONCE(trustix_datapath_features, saved_features);
 
 delete_record:
 	state.op = TRUSTIX_DATAPATH_STATE_OP_DELETE;
@@ -19314,6 +19912,7 @@ out:
 
 static int trustix_datapath_selftest_tx_plaintext_hash_tx_queue(void)
 {
+	unsigned int cpu;
 	unsigned int i;
 	__u16 queue;
 	__u16 seen_partitioned_tcp = 0;
@@ -19342,7 +19941,6 @@ static int trustix_datapath_selftest_tx_plaintext_hash_tx_queue(void)
 	if (seen_partitioned_udp != 0x0f || seen_partitioned_tcp != 0x0a ||
 	    seen_unpartitioned != 0x0f)
 		return -EINVAL;
-
 	for (i = 0; i < 128; i++) {
 		queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
 			i, 2, IPPROTO_UDP, true);
@@ -19359,6 +19957,10 @@ static int trustix_datapath_selftest_tx_plaintext_hash_tx_queue(void)
 			    i, 3, IPPROTO_TCP, true) != 1)
 			return -EINVAL;
 	}
+
+	if (!trustix_datapath_tx_plaintext_cpu_for_queue(0, &cpu) ||
+	    cpu >= nr_cpu_ids || !cpu_online(cpu))
+		return -EINVAL;
 	return 0;
 }
 
@@ -20301,6 +20903,22 @@ trustix_datapath_update_features_from_selftests(__u64 passed, __u64 failed)
 	    (passed & TRUSTIX_DATAPATH_SELFTEST_INNER_GSO) &&
 	    !(failed & TRUSTIX_DATAPATH_SELFTEST_INNER_GSO))
 		active_features |= TRUSTIX_DATAPATH_FEATURE_INNER_GSO;
+	if ((requested_features &
+	     TRUSTIX_DATAPATH_FEATURE_TIX_TCP_PORT_SHARDING) &&
+	    (active_features & TRUSTIX_DATAPATH_FEATURE_FULL_DATAPATH) &&
+	    (passed & (TRUSTIX_DATAPATH_SELFTEST_SESSION_WIRE |
+		       TRUSTIX_DATAPATH_SELFTEST_OUTER_BUILD |
+		       TRUSTIX_DATAPATH_SELFTEST_OUTER_PARSE)) ==
+		    (TRUSTIX_DATAPATH_SELFTEST_SESSION_WIRE |
+		     TRUSTIX_DATAPATH_SELFTEST_OUTER_BUILD |
+		     TRUSTIX_DATAPATH_SELFTEST_OUTER_PARSE) &&
+	    !(failed & (TRUSTIX_DATAPATH_SELFTEST_SESSION_WIRE |
+			TRUSTIX_DATAPATH_SELFTEST_OUTER_BUILD |
+			TRUSTIX_DATAPATH_SELFTEST_OUTER_PARSE)) &&
+	    READ_ONCE(trustix_datapath_outer_tcp_shard_sequences) &&
+	    READ_ONCE(trustix_datapath_outer_tcp_sequence_flow_slots))
+		active_features |=
+			TRUSTIX_DATAPATH_FEATURE_TIX_TCP_PORT_SHARDING;
 	if (active_features)
 		flags |= TRUSTIX_DATAPATH_FLAG_FEATURES_ACTIVE;
 	WRITE_ONCE(trustix_datapath_selftests, passed);
@@ -20359,6 +20977,7 @@ static long trustix_datapath_ioctl(struct file *file, unsigned int cmd,
 	__u64 failed;
 	size_t records_size;
 	__u32 i;
+	bool rebuild_lookup_caches;
 	int ret;
 
 	switch (cmd) {
@@ -20487,6 +21106,7 @@ static long trustix_datapath_ioctl(struct file *file, unsigned int cmd,
 		}
 		ret = 0;
 		batch.applied = 0;
+		rebuild_lookup_caches = false;
 		mutex_lock(&trustix_datapath_selftest_mutex);
 		write_lock_bh(&trustix_datapath_state_lock);
 		for (i = 0; i < batch.count; i++) {
@@ -20497,13 +21117,20 @@ static long trustix_datapath_ioctl(struct file *file, unsigned int cmd,
 				records[i] = state;
 				break;
 			}
-			ret = trustix_datapath_state_apply_locked(&state);
+			ret = trustix_datapath_state_apply_locked_maybe_rebuild(
+				&state, false);
 			state.result = ret;
 			records[i] = state;
 			if (ret)
 				break;
+			if (state.op != TRUSTIX_DATAPATH_STATE_OP_GET &&
+			    trustix_datapath_state_kind_affects_lookup_caches(
+				    state.kind))
+				rebuild_lookup_caches = true;
 			batch.applied++;
 		}
+		if (rebuild_lookup_caches)
+			trustix_datapath_rebuild_lookup_caches_locked();
 		write_unlock_bh(&trustix_datapath_state_lock);
 		mutex_unlock(&trustix_datapath_selftest_mutex);
 		if (records &&

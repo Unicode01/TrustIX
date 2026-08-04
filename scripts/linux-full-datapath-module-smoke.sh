@@ -9,7 +9,7 @@ module_arch="${TRUSTIX_FULL_DATAPATH_ARCH:-${ARCH:-}}"
 module_cross_compile="${TRUSTIX_FULL_DATAPATH_CROSS_COMPILE:-${CROSS_COMPILE:-}}"
 kernelmodule_test_bin="${TRUSTIX_FULL_DATAPATH_KERNELMODULE_TEST_BIN:-${TRUSTIX_KERNEL_KERNELMODULE_TEST_BIN:-}}"
 keep_loaded="${TRUSTIX_FULL_DATAPATH_KEEP_LOADED:-1}"
-enable_features="${TRUSTIX_FULL_DATAPATH_ENABLE_FEATURES:-3200}"
+enable_features="${TRUSTIX_FULL_DATAPATH_ENABLE_FEATURES:-7296}"
 extra_module_params="${TRUSTIX_FULL_DATAPATH_EXTRA_PARAMS:-}"
 expect_active="${TRUSTIX_FULL_DATAPATH_EXPECT_ACTIVE:-1}"
 ioctl_selftest="${TRUSTIX_FULL_DATAPATH_IOCTL_SELFTEST:-1}"
@@ -114,6 +114,12 @@ has_inner_gso_bit() {
   local value="$1"
   [[ "$value" =~ ^[0-9]+$ ]] || return 1
   [[ "$(( (value / 2048) % 2 ))" -eq 1 ]]
+}
+
+has_tix_tcp_port_sharding_bit() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  [[ "$(( (value / 4096) % 2 ))" -eq 1 ]]
 }
 
 has_feature_active_flag() {
@@ -230,6 +236,14 @@ verify_sysfs() {
       fi
       if has_inner_gso_bit "$unsafe"; then
         die "inner-GSO feature is still marked unsafe: features=${features} safe=${safe} unsafe=${unsafe}"
+      fi
+    fi
+    if has_tix_tcp_port_sharding_bit "$enable_features"; then
+      if ! has_tix_tcp_port_sharding_bit "$features" || ! has_tix_tcp_port_sharding_bit "$safe"; then
+        die "TIX-TCP port-sharding feature did not become safe and active: features=${features} safe=${safe} unsafe=${unsafe}"
+      fi
+      if has_tix_tcp_port_sharding_bit "$unsafe"; then
+        die "TIX-TCP port-sharding feature is still marked unsafe: features=${features} safe=${safe} unsafe=${unsafe}"
       fi
     fi
     if ! has_feature_active_flag "$flags"; then

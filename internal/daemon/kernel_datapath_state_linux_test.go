@@ -156,6 +156,9 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 		InnerGSOLocal:                     true,
 		InnerGSOPeer:                      true,
 		InnerGSONegotiated:                true,
+		TIXTCPPortShardingLocal:           true,
+		TIXTCPPortShardingPeer:            true,
+		TIXTCPPortShardingNegotiated:      true,
 	}}
 	record, ok := kernelDatapathSessionRecord(key, runtime, session)
 	if !ok {
@@ -188,6 +191,8 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 		kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial,
 		kernelDatapathSessionFlagSendInnerGSO,
 		kernelDatapathSessionFlagReceiveInnerGSO,
+		kernelDatapathSessionFlagSendTIXTCPPortSharding,
+		kernelDatapathSessionFlagReceiveTIXTCPPortSharding,
 	} {
 		if record.Flags&flag == 0 {
 			t.Fatalf("session record missing flag %#x: %#v", flag, record)
@@ -205,28 +210,37 @@ func TestKernelDatapathSessionChecksumPartialFlagsAreDirectional(t *testing.T) {
 		InnerGSOLocal:                     true,
 		InnerGSOPeer:                      false,
 		InnerGSONegotiated:                false,
+		TIXTCPPortShardingLocal:           true,
+		TIXTCPPortShardingPeer:            false,
+		TIXTCPPortShardingNegotiated:      false,
 	}
 	flags := kernelDatapathSessionFlags(key, nil, info)
 	if flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial == 0 ||
 		flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial != 0 ||
 		flags&kernelDatapathSessionFlagReceiveInnerGSO == 0 ||
-		flags&kernelDatapathSessionFlagSendInnerGSO != 0 {
+		flags&kernelDatapathSessionFlagSendInnerGSO != 0 ||
+		flags&kernelDatapathSessionFlagReceiveTIXTCPPortSharding == 0 ||
+		flags&kernelDatapathSessionFlagSendTIXTCPPortSharding != 0 {
 		t.Fatalf("local-only flags = %#x, want receive-only inner optimizations", flags)
 	}
 	info.InnerTCPChecksumPartialPeer = true
 	info.InnerTCPChecksumPartialNegotiated = true
 	info.InnerGSOPeer = true
 	info.InnerGSONegotiated = true
+	info.TIXTCPPortShardingPeer = true
+	info.TIXTCPPortShardingNegotiated = true
 	flags = kernelDatapathSessionFlags(key, nil, info)
 	if flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial == 0 ||
 		flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial == 0 ||
 		flags&kernelDatapathSessionFlagReceiveInnerGSO == 0 ||
-		flags&kernelDatapathSessionFlagSendInnerGSO == 0 {
+		flags&kernelDatapathSessionFlagSendInnerGSO == 0 ||
+		flags&kernelDatapathSessionFlagReceiveTIXTCPPortSharding == 0 ||
+		flags&kernelDatapathSessionFlagSendTIXTCPPortSharding == 0 {
 		t.Fatalf("negotiated flags = %#x, want send+receive inner optimizations", flags)
 	}
 	info.Protocol = transport.ProtocolUDP
 	key.Transport = transport.ProtocolUDP
-	if flags = kernelDatapathSessionFlags(key, nil, info); flags&(kernelDatapathSessionFlagSendInnerTCPChecksumPartial|kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial|kernelDatapathSessionFlagSendInnerGSO|kernelDatapathSessionFlagReceiveInnerGSO) != 0 {
+	if flags = kernelDatapathSessionFlags(key, nil, info); flags&(kernelDatapathSessionFlagSendInnerTCPChecksumPartial|kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial|kernelDatapathSessionFlagSendInnerGSO|kernelDatapathSessionFlagReceiveInnerGSO|kernelDatapathSessionFlagSendTIXTCPPortSharding|kernelDatapathSessionFlagReceiveTIXTCPPortSharding) != 0 {
 		t.Fatalf("UDP flags = %#x, inner optimization capabilities are TIX TCP-only", flags)
 	}
 }
@@ -285,6 +299,9 @@ func TestKernelDatapathSyntheticChecksumPartialReceiveIsReadyBeforePeerNegotiati
 		InnerGSOLocal:                     true,
 		InnerGSOPeer:                      true,
 		InnerGSONegotiated:                true,
+		TIXTCPPortShardingLocal:           true,
+		TIXTCPPortShardingPeer:            true,
+		TIXTCPPortShardingNegotiated:      true,
 	}}
 	send, receive = daemon.kernelDatapathFullPlaintextEndpointInnerTCPChecksumPartial(peer, endpoint, 0)
 	if !send || !receive {
@@ -347,6 +364,64 @@ func TestKernelDatapathSyntheticInnerGSOIsDirectional(t *testing.T) {
 	send, receive = daemon.kernelDatapathFullPlaintextEndpointInnerGSO(peer, endpoint, 0)
 	if !send || !receive {
 		t.Fatalf("negotiated inner GSO = send:%t receive:%t, want true/true", send, receive)
+	}
+}
+
+func TestKernelDatapathSyntheticPortShardingIsDirectional(t *testing.T) {
+	manager := kernelmodule.NewTrustIXDatapathManager()
+	manager.SetStatusForTest(kernelmodule.Status{
+		Loaded:   true,
+		Features: []string{kernelmodule.FeatureFullDatapath, kernelmodule.FeatureTIXTCPPortSharding},
+	})
+	daemon := &Daemon{
+		kernelDatapath:   manager,
+		dataSessions:     map[dataSessionKey]transport.Session{},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{},
+	}
+	peer := config.PeerConfig{ID: "ix-b"}
+	endpoint := config.EndpointConfig{
+		Name:      "wan-tix-tcp",
+		Address:   "198.51.100.2:17042",
+		Transport: string(transport.ProtocolTIXTCP),
+	}
+	send, receive := daemon.kernelDatapathFullPlaintextEndpointPortSharding(peer, endpoint, 0)
+	if send || !receive {
+		t.Fatalf("pre-negotiation port sharding = send:%t receive:%t, want false/true", send, receive)
+	}
+
+	key := dataSessionKey{
+		Peer:       peer.ID,
+		Endpoint:   endpoint.Name,
+		Transport:  transport.ProtocolTIXTCP,
+		Address:    endpoint.Address,
+		Encryption: "plaintext",
+	}
+	daemon.dataSessions[key] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:                       7,
+		Protocol:                     transport.ProtocolTIXTCP,
+		Peer:                         peer.ID,
+		Endpoint:                     endpoint.Name,
+		TIXTCPPortShardingLocal:      true,
+		TIXTCPPortShardingPeer:       false,
+		TIXTCPPortShardingNegotiated: false,
+	}}
+	send, receive = daemon.kernelDatapathFullPlaintextEndpointPortSharding(peer, endpoint, 0)
+	if send || !receive {
+		t.Fatalf("one-sided port sharding = send:%t receive:%t, want false/true", send, receive)
+	}
+
+	daemon.dataSessions[key] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:                       7,
+		Protocol:                     transport.ProtocolTIXTCP,
+		Peer:                         peer.ID,
+		Endpoint:                     endpoint.Name,
+		TIXTCPPortShardingLocal:      true,
+		TIXTCPPortShardingPeer:       true,
+		TIXTCPPortShardingNegotiated: true,
+	}}
+	send, receive = daemon.kernelDatapathFullPlaintextEndpointPortSharding(peer, endpoint, 0)
+	if !send || !receive {
+		t.Fatalf("negotiated port sharding = send:%t receive:%t, want true/true", send, receive)
 	}
 }
 
@@ -639,6 +714,9 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsInheritNegotiatedCapabili
 		InnerGSOLocal:                     true,
 		InnerGSOPeer:                      true,
 		InnerGSONegotiated:                true,
+		TIXTCPPortShardingLocal:           true,
+		TIXTCPPortShardingPeer:            true,
+		TIXTCPPortShardingNegotiated:      true,
 	}}
 	daemon.dataSessionState[existingKey] = &dataSessionRuntime{key: existingKey}
 
@@ -665,7 +743,9 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsInheritNegotiatedCapabili
 	if records[0].Flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial == 0 ||
 		records[0].Flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial == 0 ||
 		records[0].Flags&kernelDatapathSessionFlagReceiveInnerGSO == 0 ||
-		records[0].Flags&kernelDatapathSessionFlagSendInnerGSO == 0 {
+		records[0].Flags&kernelDatapathSessionFlagSendInnerGSO == 0 ||
+		records[0].Flags&kernelDatapathSessionFlagReceiveTIXTCPPortSharding == 0 ||
+		records[0].Flags&kernelDatapathSessionFlagSendTIXTCPPortSharding == 0 {
 		t.Fatalf("synthetic session did not inherit negotiated inner capabilities: %#v", records[0])
 	}
 }

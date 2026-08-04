@@ -1550,6 +1550,7 @@ type tixTCPCapabilityProbeResult struct {
 	underlayIface           string
 	innerTCPChecksumPartial bool
 	innerGSO                bool
+	portSharding            bool
 	reason                  string
 	err                     error
 	expiresAt               time.Time
@@ -2751,30 +2752,31 @@ func (manager *Manager) tixTCPCapabilitiesLocked() (dataplane.TIXTCPCapabilities
 		manager.tixTCPCapabilityProbeValid = false
 		return capabilities, "", nil
 	}
-	partial, innerGSO, reason, err := manager.tixTCPCapabilityProbeCachedLocked(
+	partial, innerGSO, portSharding, reason, err := manager.tixTCPCapabilityProbeCachedLocked(
 		time.Now(), strings.TrimSpace(manager.spec.UnderlayIface),
 		manager.tixTCPCapabilityProbeUncachedLocked,
 	)
 	capabilities.InnerTCPChecksumPartial = partial
 	capabilities.InnerGSO = innerGSO
+	capabilities.PortSharding = portSharding
 	return capabilities, reason, err
 }
 
 func (manager *Manager) tixTCPCapabilityProbeCachedLocked(
 	now time.Time,
 	underlayIface string,
-	probe func() (bool, bool, string, error),
-) (bool, bool, string, error) {
+	probe func() (bool, bool, bool, string, error),
+) (bool, bool, bool, string, error) {
 	if manager.tixTCPCapabilityProbeValid &&
 		manager.tixTCPCapabilityProbe.underlayIface == underlayIface &&
 		now.Before(manager.tixTCPCapabilityProbe.expiresAt) {
 		manager.tixTCPCapabilityProbeCacheHits++
 		cached := manager.tixTCPCapabilityProbe
-		return cached.innerTCPChecksumPartial, cached.innerGSO, cached.reason, cached.err
+		return cached.innerTCPChecksumPartial, cached.innerGSO, cached.portSharding, cached.reason, cached.err
 	}
 
 	manager.tixTCPCapabilityProbeAttempts++
-	partial, innerGSO, reason, err := probe()
+	partial, innerGSO, portSharding, reason, err := probe()
 	if err != nil {
 		manager.tixTCPCapabilityProbeErrors++
 	}
@@ -2782,28 +2784,30 @@ func (manager *Manager) tixTCPCapabilityProbeCachedLocked(
 		underlayIface:           underlayIface,
 		innerTCPChecksumPartial: partial,
 		innerGSO:                innerGSO,
+		portSharding:            portSharding,
 		reason:                  reason,
 		err:                     err,
 		expiresAt:               now.Add(tixTCPCapabilityProbeTTL),
 	}
 	manager.tixTCPCapabilityProbeValid = true
-	return partial, innerGSO, reason, err
+	return partial, innerGSO, portSharding, reason, err
 }
 
-func (manager *Manager) tixTCPCapabilityProbeUncachedLocked() (bool, bool, string, error) {
+func (manager *Manager) tixTCPCapabilityProbeUncachedLocked() (bool, bool, bool, string, error) {
 	query, err := kernelmodule.ProbeDatapath(kernelmodule.TrustIXDatapathDevicePath)
 	if err != nil {
-		return false, false, "probe kernel datapath inner GSO capability: " + err.Error(), err
+		return false, false, false, "probe kernel datapath inner GSO capability: " + err.Error(), err
 	}
 	partial := query.SafeActiveFeature(kernelmodule.FeatureInnerTCPChecksumPartial)
+	portSharding := query.SafeActiveFeature(kernelmodule.FeatureTIXTCPPortSharding)
 	if !partial {
-		return false, false, "kernel datapath inner TCP checksum-partial feature is inactive", nil
+		return false, false, portSharding, "kernel datapath inner TCP checksum-partial feature is inactive", nil
 	}
 	if !query.SafeActiveFeature(kernelmodule.FeatureInnerGSO) {
-		return true, false, "kernel datapath inner GSO feature is inactive", nil
+		return true, false, portSharding, "kernel datapath inner GSO feature is inactive", nil
 	}
 	innerGSO, errReason := manager.tixTCPInnerGSOReceiveReadyLocked()
-	return true, innerGSO, errReason, nil
+	return true, innerGSO, portSharding, errReason, nil
 }
 
 func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatus, error) {
@@ -2912,6 +2916,7 @@ func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatu
 		InnerTCPChecksumPartial: capabilities.InnerTCPChecksumPartial,
 		InnerGSO:                capabilities.InnerGSO,
 		InnerGSOReason:          innerGSOReason,
+		PortSharding:            capabilities.PortSharding,
 		UserspaceCrypto:         userspaceCrypto,
 		KernelCrypto:            kernelCryptoReady,
 		KernelCryptoReason:      kernelCryptoReason,

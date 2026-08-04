@@ -72,6 +72,9 @@ const (
 	tixTCPStatInnerGSOLocal                     = "tix_tcp_inner_gso_local"
 	tixTCPStatInnerGSOPeer                      = "tix_tcp_inner_gso_peer"
 	tixTCPStatInnerGSONegotiated                = "tix_tcp_inner_gso_negotiated"
+	tixTCPStatPortShardingLocal                 = "tix_tcp_port_sharding_local"
+	tixTCPStatPortShardingPeer                  = "tix_tcp_port_sharding_peer"
+	tixTCPStatPortShardingNegotiated            = "tix_tcp_port_sharding_negotiated"
 )
 
 const (
@@ -92,7 +95,8 @@ const (
 	tixTCPCompatCapabilityRefreshInterval   = 2 * time.Second
 	tixTCPCapabilityInnerTCPChecksumPartial = uint64(1 << 0)
 	tixTCPCapabilityInnerGSO                = uint64(1 << 1)
-	tixTCPKnownCapabilities                 = tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	tixTCPCapabilityPortSharding            = uint64(1 << 2)
+	tixTCPKnownCapabilities                 = tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
 )
 
 var errTIXTCPCapabilityAdvertisement = errors.New("tix_tcp capability advertisement failed")
@@ -1941,6 +1945,7 @@ func (session *session) KernelDatapathSessionInfo() (transport.KernelDatapathSes
 	stats := session.Stats()
 	localPartial, peerPartial, negotiatedPartial := session.innerTCPChecksumPartialCapabilities()
 	localGSO, peerGSO, negotiatedGSO := session.innerGSOCapabilities()
+	localPortSharding, peerPortSharding, negotiatedPortSharding := session.portShardingCapabilities()
 	info := transport.KernelDatapathSessionInfo{
 		FlowID:                            session.flowID,
 		Protocol:                          transport.ProtocolTIXTCP,
@@ -1964,6 +1969,9 @@ func (session *session) KernelDatapathSessionInfo() (transport.KernelDatapathSes
 		InnerGSOLocal:                     localGSO,
 		InnerGSOPeer:                      peerGSO,
 		InnerGSONegotiated:                negotiatedGSO,
+		TIXTCPPortShardingLocal:           localPortSharding,
+		TIXTCPPortShardingPeer:            peerPortSharding,
+		TIXTCPPortShardingNegotiated:      negotiatedPortSharding,
 	}
 	return info, true
 }
@@ -1983,6 +1991,15 @@ func (session *session) innerGSOCapabilities() (local, peer, negotiated bool) {
 	}
 	local = session.localCapabilities.Load()&tixTCPCapabilityInnerGSO != 0
 	peer = session.peerCapabilities.Load()&tixTCPCapabilityInnerGSO != 0
+	return local, peer, local && peer
+}
+
+func (session *session) portShardingCapabilities() (local, peer, negotiated bool) {
+	if session == nil {
+		return false, false, false
+	}
+	local = session.localCapabilities.Load()&tixTCPCapabilityPortSharding != 0
+	peer = session.peerCapabilities.Load()&tixTCPCapabilityPortSharding != 0
 	return local, peer, local && peer
 }
 
@@ -2464,6 +2481,7 @@ func tixTCPLocalCapabilities(status dataplane.TIXTCPStatus) uint64 {
 		FullPlaintextKernel:     tixTCPFullPlaintextKernelDatapathStatus(status),
 		InnerTCPChecksumPartial: status.InnerTCPChecksumPartial,
 		InnerGSO:                status.InnerGSO,
+		PortSharding:            status.PortSharding,
 	})
 }
 
@@ -2492,6 +2510,9 @@ func tixTCPLocalCapabilityBits(capabilities dataplane.TIXTCPCapabilities) uint64
 	}
 	if capabilities.InnerGSO && capabilities.InnerTCPChecksumPartial {
 		bits |= tixTCPCapabilityInnerGSO
+	}
+	if capabilities.PortSharding {
+		bits |= tixTCPCapabilityPortSharding
 	}
 	return bits
 }
@@ -2935,6 +2956,7 @@ func (session *session) Stats() transport.TransportStats {
 func (session *session) fragmentStats() map[string]uint64 {
 	localPartial, peerPartial, negotiatedPartial := session.innerTCPChecksumPartialCapabilities()
 	localGSO, peerGSO, negotiatedGSO := session.innerGSOCapabilities()
+	localPortSharding, peerPortSharding, negotiatedPortSharding := session.portShardingCapabilities()
 	extra := map[string]uint64{
 		tixTCPStatFragmentedPacketsSent:             session.fragmentedPacketsSent.Load(),
 		tixTCPStatFragmentsSent:                     session.fragmentsSent.Load(),
@@ -2955,6 +2977,9 @@ func (session *session) fragmentStats() map[string]uint64 {
 		tixTCPStatInnerGSOLocal:                     tixTCPBoolUint64(localGSO),
 		tixTCPStatInnerGSOPeer:                      tixTCPBoolUint64(peerGSO),
 		tixTCPStatInnerGSONegotiated:                tixTCPBoolUint64(negotiatedGSO),
+		tixTCPStatPortShardingLocal:                 tixTCPBoolUint64(localPortSharding),
+		tixTCPStatPortShardingPeer:                  tixTCPBoolUint64(peerPortSharding),
+		tixTCPStatPortShardingNegotiated:            tixTCPBoolUint64(negotiatedPortSharding),
 	}
 	if session.fullPlaintextKernelDatapath {
 		extra[tixTCPStatFullPlaintextKernel] = 1

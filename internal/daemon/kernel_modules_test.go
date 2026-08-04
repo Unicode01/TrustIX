@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,6 +222,14 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 		t.Fatal("single-queue devices must skip TX queue hashing without recording per-packet fallbacks")
 	}
 	for _, want := range []string{
+		"skb_set_queue_mapping(skb, 0)",
+		"skb_set_hash(skb,",
+		"PKT_HASH_TYPE_L4",
+		"trustix_datapath_tx_plaintext_inner_flow_hash_sets++",
+		"trustix_datapath_tx_plaintext_hash_outer_tuple(plan)",
+		"trustix_datapath_tx_plaintext_outer_tuple_hash_sets++",
+		"trustix_datapath_tx_plaintext_hash_outer_inner_ipv4(skb, &hash)",
+		"trustix_datapath_tx_plaintext_set_xps_sender_cpu(skb, queue)",
 		"trustix_datapath_tx_plaintext_hash_tx_queue_for_transport",
 		"trustix_datapath_tx_plaintext_hash_tx_queue_partition_udp_sets",
 		"trustix_datapath_tx_plaintext_hash_tx_queue_partition_tcp_sets",
@@ -228,6 +237,41 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 	} {
 		if !strings.Contains(queue, want) {
 			t.Fatalf("plaintext TX queue selection missing transport partition behavior %q", want)
+		}
+	}
+	innerGSO := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_build_inner_gso_skb")
+	for _, want := range []string{
+		"skb_scrub_packet(skb, true)",
+		"trustix_datapath_tx_plaintext_inner_gso_metadata_scrubs++",
+	} {
+		if !strings.Contains(innerGSO, want) {
+			t.Fatalf("negotiated inner-GSO skb metadata sanitization missing %q", want)
+		}
+	}
+	if !strings.Contains(queue, "trustix_datapath_tx_plan_tix_tcp_port_sharding_active(plan)") {
+		t.Fatal("negotiated TIX-TCP port shards must select queues from the outer tuple")
+	}
+	sequence := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_outer_tcp_next_seq")
+	for _, want := range []string{
+		"plan->outer_tcp_sequence_flow_slot < flow_slots",
+		"plan->outer_tcp_sequence_flow_slot *",
+		"sequence = &shard_sequences[sequence_slot]",
+	} {
+		if !strings.Contains(sequence, want) {
+			t.Fatalf("TIX-TCP shard sequence selection missing exact session slot behavior %q", want)
+		}
+	}
+	if strings.Contains(sequence, "trustix_datapath_session_flow_cache_hash") {
+		t.Fatal("TIX-TCP shard sequence slots must not alias sessions through a flow hash")
+	}
+	xps := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_plaintext_set_xps_sender_cpu")
+	for _, want := range []string{
+		"#ifdef CONFIG_XPS",
+		"skb->sender_cpu = cpu + 1",
+		"trustix_datapath_tx_plaintext_xps_sender_cpu_sets++",
+	} {
+		if !strings.Contains(xps, want) {
+			t.Fatalf("plaintext XPS sender CPU selection missing %q", want)
 		}
 	}
 	partition := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_plaintext_hash_tx_queue_for_transport")
@@ -244,6 +288,16 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 		!strings.Contains(selftest, "plan.outer_protocol = (i & 1) ? IPPROTO_TCP : IPPROTO_UDP") ||
 		!strings.Contains(selftest, "trustix_datapath_tx_plaintext_mac_cache_invalidate(cache, 10) != 1") {
 		t.Fatalf("TX plaintext MAC cache selftest does not retain mixed session-pool tuples")
+	}
+	queueSelftest := daemonTestSourceFunctionBody(t, source, "trustix_datapath_selftest_tx_plaintext_hash_tx_queue")
+	for _, want := range []string{
+		"trustix_datapath_tx_plaintext_cpu_for_queue(0, &cpu)",
+		"cpu >= nr_cpu_ids",
+		"!cpu_online(cpu)",
+	} {
+		if !strings.Contains(queueSelftest, want) {
+			t.Fatalf("TX queue selftest missing XPS CPU invariant %q", want)
+		}
 	}
 	for _, want := range []string{
 		"#include <net/netevent.h>",
@@ -264,6 +318,25 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 		if !strings.Contains(netevent, want) {
 			t.Fatalf("TX plaintext MAC cache neighbour callback missing %q", want)
 		}
+	}
+}
+
+func TestTrustIXDatapathStateBatchRebuildsLookupCachesOnce(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+	if err != nil {
+		t.Fatalf("read trustix_datapath source: %v", err)
+	}
+	ioctlBody := daemonTestSourceFunctionBody(t, string(body), "trustix_datapath_ioctl")
+	for _, want := range []string{
+		"trustix_datapath_state_apply_locked_maybe_rebuild(\n\t\t\t\t&state, false)",
+		"if (rebuild_lookup_caches)\n\t\t\ttrustix_datapath_rebuild_lookup_caches_locked()",
+	} {
+		if !strings.Contains(ioctlBody, want) {
+			t.Fatalf("state batch lookup-cache rebuild behavior missing %q", want)
+		}
+	}
+	if got := strings.Count(ioctlBody, "trustix_datapath_rebuild_lookup_caches_locked();"); got != 1 {
+		t.Fatalf("state batch ioctl contains %d lookup-cache rebuild calls, want one after the batch", got)
 	}
 }
 
@@ -412,7 +485,7 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTXWithCrashRiskGate(
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=3200 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=7296 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -424,7 +497,7 @@ func TestTrustIXDatapathModuleParametersInnerGSOEnabledByDefault(t *testing.T) {
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "")
 
 	got := TrustIXDatapathModuleParameters("")
-	if !moduleParameterHasAssignment(got, "enable_features=3200") {
+	if !moduleParameterHasAssignment(got, "enable_features=7296") {
 		t.Fatalf("parameters = %q, missing default inner-GSO feature", got)
 	}
 }
@@ -435,7 +508,7 @@ func TestTrustIXDatapathModuleParametersInnerGSOCanBeDisabled(t *testing.T) {
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "0")
 
 	got := TrustIXDatapathModuleParameters("enable_features=3200")
-	if !moduleParameterHasAssignment(got, "enable_features=1152") {
+	if !moduleParameterHasAssignment(got, "enable_features=5248") {
 		t.Fatalf("parameters = %q, did not disable inner-GSO feature", got)
 	}
 }
@@ -445,8 +518,29 @@ func TestTrustIXDatapathModuleParametersPreservesExplicitInnerGSOFeature(t *test
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("enable_features=3200")
-	if !moduleParameterHasAssignment(got, "enable_features=3200") {
+	if !moduleParameterHasAssignment(got, "enable_features=7296") {
 		t.Fatalf("parameters = %q, did not preserve explicitly configured inner-GSO feature", got)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersPortShardingEnabledByDefault(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+
+	got := TrustIXDatapathModuleParameters("enable_features=3200")
+	if !moduleParameterHasAssignment(got, "enable_features=7296") {
+		t.Fatalf("parameters = %q, missing default TIX-TCP port-sharding feature", got)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersPortShardingCanBeDisabled(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_TIX_TCP_PORT_SHARDING", "0")
+
+	got := TrustIXDatapathModuleParameters("enable_features=7296")
+	if !moduleParameterHasAssignment(got, "enable_features=3200") {
+		t.Fatalf("parameters = %q, did not disable TIX-TCP port-sharding feature", got)
 	}
 }
 
@@ -478,7 +572,7 @@ func TestTrustIXDatapathModuleParametersOpenWrtDedicatedGateAllowsFullPlaintext(
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=3200 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=0 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=7296 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=0 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -696,7 +790,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testin
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"enable_features=3200",
+		"enable_features=7296",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
@@ -764,7 +858,7 @@ func TestTrustIXDatapathModuleParametersForDesiredOpenWrtDedicatedGateAllowsFull
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"enable_features=3200",
+		"enable_features=7296",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
@@ -797,7 +891,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashR
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"enable_features=3200",
+		"enable_features=7296",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
@@ -897,6 +991,43 @@ func TestRestoreKernelDatapathFullPlaintextSysctls(t *testing.T) {
 	}
 	if len(daemon.kernelSysctlRestore) != 0 {
 		t.Fatalf("restore map = %#v, want empty", daemon.kernelSysctlRestore)
+	}
+}
+
+func TestKernelModuleEnsureErrorRestoresFullPlaintextTuning(t *testing.T) {
+	dir := t.TempDir()
+	sysctlPath := filepath.Join(dir, "sysctl")
+	rpsPath := filepath.Join(dir, "rps_cpus")
+	for path, value := range map[string]string{
+		sysctlPath: "65536\n",
+		rpsPath:    "0\n",
+	} {
+		if err := os.WriteFile(path, []byte(value), 0o644); err != nil {
+			t.Fatalf("write tuning fixture %q: %v", path, err)
+		}
+	}
+	daemon := &Daemon{
+		kernelSysctlRestore: map[string]string{sysctlPath: "1000"},
+		kernelRPSRestore:    map[string]string{rpsPath: "04"},
+	}
+	wantErr := errors.New("module load failed")
+	if err := daemon.kernelModuleEnsureError(wantErr); !errors.Is(err, wantErr) {
+		t.Fatalf("ensure error = %v, want wrapped module error", err)
+	}
+	for path, want := range map[string]string{
+		sysctlPath: "1000",
+		rpsPath:    "04",
+	} {
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read restored tuning fixture %q: %v", path, err)
+		}
+		if got := strings.TrimSpace(string(payload)); got != want {
+			t.Fatalf("restored tuning %q = %q, want %q", path, got, want)
+		}
+	}
+	if len(daemon.kernelSysctlRestore) != 0 || len(daemon.kernelRPSRestore) != 0 {
+		t.Fatalf("restore maps were not cleared: sysctl=%v rps=%v", daemon.kernelSysctlRestore, daemon.kernelRPSRestore)
 	}
 }
 

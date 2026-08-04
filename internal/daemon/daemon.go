@@ -63,6 +63,7 @@ type Daemon struct {
 	kernelDatapath       *kernelmodule.Manager
 	kernelHelpers        *kernelmodule.Manager
 	kernelSysctlRestore  map[string]string
+	kernelRPSRestore     map[string]string
 	routes               *routing.Table
 	transports           *transport.Registry
 	desired              config.Desired

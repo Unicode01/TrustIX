@@ -5996,15 +5996,15 @@ func TestTIXTCPCapabilityProbeCacheSharesProbeWithinTTL(t *testing.T) {
 	manager := NewManager()
 	now := time.Unix(1_700_000_000, 0)
 	calls := 0
-	probe := func() (bool, bool, string, error) {
+	probe := func() (bool, bool, bool, string, error) {
 		calls++
-		return true, true, "", nil
+		return true, true, true, "", nil
 	}
 
 	for i := 0; i < 2; i++ {
-		partial, innerGSO, reason, err := manager.tixTCPCapabilityProbeCachedLocked(now, "eth0", probe)
-		if err != nil || !partial || !innerGSO || reason != "" {
-			t.Fatalf("cached capability probe = partial:%t inner_gso:%t reason:%q err:%v", partial, innerGSO, reason, err)
+		partial, innerGSO, portSharding, reason, err := manager.tixTCPCapabilityProbeCachedLocked(now, "eth0", probe)
+		if err != nil || !partial || !innerGSO || !portSharding || reason != "" {
+			t.Fatalf("cached capability probe = partial:%t inner_gso:%t port_sharding:%t reason:%q err:%v", partial, innerGSO, portSharding, reason, err)
 		}
 	}
 	if calls != 1 {
@@ -6027,13 +6027,13 @@ func TestTIXTCPCapabilityProbeCacheSharesFailureWithinTTL(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	wantErr := errors.New("injected capability probe failure")
 	calls := 0
-	probe := func() (bool, bool, string, error) {
+	probe := func() (bool, bool, bool, string, error) {
 		calls++
-		return false, false, "probe failed", wantErr
+		return false, false, false, "probe failed", wantErr
 	}
 
 	for i := 0; i < 2; i++ {
-		_, _, reason, err := manager.tixTCPCapabilityProbeCachedLocked(now, "eth0", probe)
+		_, _, _, reason, err := manager.tixTCPCapabilityProbeCachedLocked(now, "eth0", probe)
 		if !errors.Is(err, wantErr) || reason != "probe failed" {
 			t.Fatalf("cached capability failure = reason:%q err:%v", reason, err)
 		}

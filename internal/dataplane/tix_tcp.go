@@ -29,6 +29,7 @@ type TIXTCPStatus struct {
 	InnerTCPChecksumPartial bool                     `json:"inner_tcp_checksum_partial"`
 	InnerGSO                bool                     `json:"inner_gso"`
 	InnerGSOReason          string                   `json:"inner_gso_reason,omitempty"`
+	PortSharding            bool                     `json:"port_sharding"`
 	UserspaceCrypto         bool                     `json:"userspace_crypto"`
 	KernelCrypto            bool                     `json:"kernel_crypto"`
 	KernelCryptoReason      string                   `json:"kernel_crypto_reason,omitempty"`
@@ -60,6 +61,7 @@ type TIXTCPCapabilities struct {
 	FullPlaintextKernel     bool
 	InnerTCPChecksumPartial bool
 	InnerGSO                bool
+	PortSharding            bool
 }
 
 type CryptoFallbackStatus struct {

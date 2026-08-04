@@ -67,11 +67,12 @@ full-kmod traffic pinned to the fenced master's MAC until TTL expiry. The
 that invalidation count for HA and datapath gates.
 The module reports `full_datapath` only when the packet ownership path is
 explicitly enabled and self-tested. The current full-plaintext profile loads
-with `enable_features=1152` (`full_datapath=128` plus negotiated inner TCP
-`CHECKSUM_PARTIAL=1024`), keeps all datapath selftests passing, and sets
-`rx_worker_inject=1` and `tx_plaintext=1`. The checksum feature is used only
-after both TIX-TCP peers advertise support; mixed-version sessions retain full
-inner TCP checksums.
+with `enable_features=7296` (`full_datapath=128`, negotiated inner TCP
+`CHECKSUM_PARTIAL=1024`, inner GSO `2048`, and TIX-TCP port sharding `4096`),
+keeps all datapath selftests passing, and sets `rx_worker_inject=1` and
+`tx_plaintext=1`. Negotiated port sharding maps inner flows onto 16 outer source
+ports with independent sequence domains. Mixed-version sessions retain the
+base outer port, full inner TCP checksums, and the original segmentation path.
 Without those conditions it stays loaded as a control-plane state/hook module
 and marks the requested feature unsafe.
 The module creates one order-4 page pool per possible CPU for reusable
@@ -83,7 +84,7 @@ Build and inspect:
 
 ```sh
 make -C kernel/trustix_datapath
-sudo insmod kernel/trustix_datapath/trustix_datapath.ko enable_features=1152 rx_worker_inject=1 tx_plaintext=1
+sudo insmod kernel/trustix_datapath/trustix_datapath.ko enable_features=7296 rx_worker_inject=1 tx_plaintext=1
 cat /sys/module/trustix_datapath/parameters/abi_version
 cat /sys/module/trustix_datapath/parameters/features
 cat /sys/module/trustix_datapath/parameters/selftests

@@ -2986,9 +2986,9 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		plaintextSegments = "128"
 	}
 	params := map[string]string{
-		"enable_features":                      "1152",
-		"features":                             "1152",
-		"safe_features":                        "1152",
+		"enable_features":                      "5248",
+		"features":                             "5248",
+		"safe_features":                        "5248",
 		"unsafe_features":                      "0",
 		"selftest_failures":                    "0",
 		"rx_worker_inject":                     "Y",
@@ -3106,24 +3106,30 @@ func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		traffic = "128"
 	}
 	return map[string]string{
-		"enable_features":                         "3200",
-		"features":                                "3200",
-		"safe_features":                           "3200",
-		"session_records":                         "16",
-		"session_wire_records":                    "16",
-		"tx_plaintext_packets":                    traffic,
-		"tx_plaintext_gso_segments":               traffic,
-		"tx_plaintext_outer_gso_segments":         "0",
-		"tx_plaintext_inner_tcp_checksum_partial": traffic,
-		"tx_plaintext_inner_gso_attempts":         traffic,
-		"tx_plaintext_inner_gso_packets":          traffic,
-		"tx_plaintext_inner_gso_segments":         traffic,
+		"enable_features":                               "7296",
+		"features":                                      "7296",
+		"safe_features":                                 "7296",
+		"session_records":                               "16",
+		"session_wire_records":                          "16",
+		"tx_plaintext_packets":                          traffic,
+		"tx_plaintext_gso_segments":                     traffic,
+		"tx_plaintext_outer_gso_segments":               "0",
+		"tx_plaintext_inner_tcp_checksum_partial":       traffic,
+		"tx_plaintext_inner_gso_attempts":               traffic,
+		"tx_plaintext_inner_gso_packets":                traffic,
+		"tx_plaintext_inner_gso_segments":               traffic,
+		"tx_plaintext_tix_tcp_port_shard_sets":          traffic,
+		"tx_plaintext_tix_tcp_shard_sequence_hits":      traffic,
+		"tx_plaintext_tix_tcp_shard_sequence_fallbacks": "0",
+		"tx_plaintext_outer_tuple_hash_sets":            traffic,
+		"tx_plaintext_inner_flow_hash_sets":             "0",
 
 		"rx_worker_inner_tcp_checksum_partial": traffic,
 		"rx_worker_inner_gso_candidates":       traffic,
 		"rx_worker_inner_gso_packets":          traffic,
 		"rx_worker_inner_gso_segments":         traffic,
 		"rx_worker_injected":                   traffic,
+		"rx_tix_tcp_port_shard_matches":        traffic,
 	}
 }
 
@@ -3186,6 +3192,7 @@ func writeTIXTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 			"active_flows":                 16,
 			"inner_tcp_checksum_partial":   true,
 			"inner_gso":                    true,
+			"port_sharding":                true,
 		},
 	}
 	data, err := json.Marshal(payload)
@@ -3210,6 +3217,9 @@ func writeTIXTCPFullKmodTransportsJSON(t *testing.T, path string, node string) {
 			"tix_tcp_inner_gso_local":                1,
 			"tix_tcp_inner_gso_peer":                 1,
 			"tix_tcp_inner_gso_negotiated":           1,
+			"tix_tcp_port_sharding_local":            1,
+			"tix_tcp_port_sharding_peer":             1,
+			"tix_tcp_port_sharding_negotiated":       1,
 		},
 	})
 }

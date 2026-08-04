@@ -234,6 +234,9 @@ type KernelDatapathSessionInfo struct {
 	InnerGSOLocal                     bool
 	InnerGSOPeer                      bool
 	InnerGSONegotiated                bool
+	TIXTCPPortShardingLocal           bool
+	TIXTCPPortShardingPeer            bool
+	TIXTCPPortShardingNegotiated      bool
 }
 
 type KernelDatapathSession interface {

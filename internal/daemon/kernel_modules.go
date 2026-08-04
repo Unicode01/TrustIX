@@ -30,7 +30,7 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 		return nil, err
 	}
 	if kernelModulesAllDisabled(modules) {
-		if err := daemon.restoreKernelDatapathFullPlaintextSysctls(); err != nil {
+		if err := daemon.restoreKernelDatapathFullPlaintextTuning(); err != nil {
 			return nil, err
 		}
 		helpersStatus, helpersErr := daemon.kernelHelpers.Ensure(ctx, modules.TrustIXDatapathHelpers)
@@ -47,30 +47,37 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	if err := daemon.reconcileKernelDatapathFullPlaintextSysctls(desired); err != nil {
 		return nil, err
 	}
+	if err := daemon.reconcileOpenWrtFullPlaintextRPS(desired); err != nil {
+		return nil, daemon.kernelModuleEnsureError(err)
+	}
 	cryptoModule := modules.TrustIXCrypto
 	cryptoModule.Parameters = TrustIXCryptoModuleParametersForDesired(cryptoModule.Parameters, desired)
 	cryptoStatus, err := daemon.kernelCrypto.Ensure(ctx, cryptoModule)
 	if err != nil {
-		return []kernelmodule.Status{cryptoStatus}, err
+		return []kernelmodule.Status{cryptoStatus}, daemon.kernelModuleEnsureError(err)
 	}
 	datapathModule := modules.TrustIXDatapath
 	datapathModule.Parameters = TrustIXDatapathModuleParametersForDesired(datapathModule.Parameters, desired)
 	datapathStatus, err := daemon.kernelDatapath.Ensure(ctx, datapathModule)
 	statuses := []kernelmodule.Status{cryptoStatus, datapathStatus}
 	if err != nil {
-		return statuses, err
+		return statuses, daemon.kernelModuleEnsureError(err)
 	}
 	helpersModule := modules.TrustIXDatapathHelpers
 	helpersModule.Parameters = TrustIXDatapathHelpersModuleParametersForDesired(helpersModule.Parameters, desired)
 	helpersStatus, err := daemon.kernelHelpers.Ensure(ctx, helpersModule)
 	statuses = append(statuses, helpersStatus)
 	if err != nil {
-		return statuses, err
+		return statuses, daemon.kernelModuleEnsureError(err)
 	}
 	if err := validateRouteGSOHelpersStatus(desired, helpersStatus); err != nil {
-		return statuses, err
+		return statuses, daemon.kernelModuleEnsureError(err)
 	}
 	return statuses, nil
+}
+
+func (daemon *Daemon) kernelModuleEnsureError(err error) error {
+	return errors.Join(err, daemon.restoreKernelDatapathFullPlaintextTuning())
 }
 
 func validateTIXTCPRouteGSOHelpersStatus(desired config.Desired, status kernelmodule.Status) error {
@@ -426,6 +433,11 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 			} else {
 				params = addModuleParameterMask(params, "enable_features", 1<<11)
 			}
+			if envFalsey("TRUSTIX_TIX_TCP_PORT_SHARDING") {
+				params = removeModuleParameterMask(params, "enable_features", 1<<12)
+			} else {
+				params = addModuleParameterMask(params, "enable_features", 1<<12)
+			}
 		}
 		params = appendModuleParameterIfMissing(params, "rx_worker_inject=1")
 		if fullPlaintext {
@@ -537,6 +549,16 @@ func (daemon *Daemon) reconcileKernelDatapathFullPlaintextSysctls(desired config
 		return daemon.restoreKernelDatapathFullPlaintextSysctls()
 	}
 	return daemon.applyKernelDatapathFullPlaintextSysctls()
+}
+
+func (daemon *Daemon) restoreKernelDatapathFullPlaintextTuning() error {
+	if daemon == nil {
+		return nil
+	}
+	return errors.Join(
+		daemon.restoreKernelDatapathFullPlaintextSysctls(),
+		daemon.restoreOpenWrtFullPlaintextRPS(),
+	)
 }
 
 func kernelDatapathFullPlaintextSoftnetTuningEnabledForDesired(desired config.Desired) bool {
@@ -774,9 +796,7 @@ func (daemon *Daemon) closeKernelModules(ctx context.Context) error {
 			firstErr = err
 		}
 	}
-	if err := daemon.restoreKernelDatapathFullPlaintextSysctls(); err != nil && firstErr == nil {
-		firstErr = err
-	}
+	firstErr = errors.Join(firstErr, daemon.restoreKernelDatapathFullPlaintextTuning())
 	return firstErr
 }
 

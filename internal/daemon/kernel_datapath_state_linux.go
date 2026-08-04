@@ -40,6 +40,8 @@ const (
 	kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial = uint32(1 << 13)
 	kernelDatapathSessionFlagSendInnerGSO                   = uint32(1 << 14)
 	kernelDatapathSessionFlagReceiveInnerGSO                = uint32(1 << 15)
+	kernelDatapathSessionFlagSendTIXTCPPortSharding         = uint32(1 << 16)
+	kernelDatapathSessionFlagReceiveTIXTCPPortSharding      = uint32(1 << 17)
 
 	kernelDatapathFlowFlagIPv4 = uint32(1 << 0)
 
@@ -483,6 +485,13 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Con
 		if receiveGSO {
 			flags |= kernelDatapathSessionFlagReceiveInnerGSO
 		}
+		sendPortSharding, receivePortSharding := daemon.kernelDatapathFullPlaintextEndpointPortSharding(peer, endpoint, poolIndex)
+		if sendPortSharding {
+			flags |= kernelDatapathSessionFlagSendTIXTCPPortSharding
+		}
+		if receivePortSharding {
+			flags |= kernelDatapathSessionFlagReceiveTIXTCPPortSharding
+		}
 	}
 	if key.Transport == transport.ProtocolUDP {
 		flags |= kernelDatapathSessionFlagDatagram |
@@ -579,6 +588,37 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointInnerGSO(peer config.Pe
 		send = send || info.InnerGSONegotiated
 	}
 	return send, receive
+}
+
+func (daemon *Daemon) kernelDatapathFullPlaintextEndpointPortSharding(peer config.PeerConfig, endpoint config.EndpointConfig, poolIndex int) (send, receive bool) {
+	if daemon == nil || transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) != transport.ProtocolTIXTCP {
+		return false, false
+	}
+	receive = daemon.kernelDatapathTIXTCPPortShardingReady()
+	address := strings.TrimSpace(endpoint.Address)
+	for _, item := range daemon.kernelDatapathSessionSnapshot() {
+		key := item.key
+		if key.Peer != peer.ID || key.Endpoint != endpoint.Name || key.Transport != transport.ProtocolTIXTCP ||
+			(strings.TrimSpace(key.Address) != address && key.Address != reverseSessionAddress) ||
+			parseSecureTransportEncryption(key.Encryption) != securetransport.EncryptionPlaintext || key.PoolIndex != poolIndex {
+			continue
+		}
+		info, ok := kernelDatapathSessionInfo(item.session)
+		if !ok {
+			continue
+		}
+		receive = receive || info.TIXTCPPortShardingLocal
+		send = send || info.TIXTCPPortShardingNegotiated
+	}
+	return send, receive
+}
+
+func (daemon *Daemon) kernelDatapathTIXTCPPortShardingReady() bool {
+	if daemon == nil || daemon.kernelDatapath == nil {
+		return false
+	}
+	status := daemon.kernelDatapath.Snapshot()
+	return status.Loaded && status.HasFeature(kernelmodule.FeatureTIXTCPPortSharding)
 }
 
 func kernelDatapathFullPlaintextFlowID(protocol transport.Protocol, localIP uint32, localPort uint16, remoteIP uint32, remotePort uint16) uint64 {
@@ -1059,6 +1099,12 @@ func kernelDatapathSessionFlags(key dataSessionKey, runtime *dataSessionRuntime,
 		}
 		if info.InnerGSOLocal {
 			flags |= kernelDatapathSessionFlagReceiveInnerGSO
+		}
+		if info.TIXTCPPortShardingNegotiated {
+			flags |= kernelDatapathSessionFlagSendTIXTCPPortSharding
+		}
+		if info.TIXTCPPortShardingLocal {
+			flags |= kernelDatapathSessionFlagReceiveTIXTCPPortSharding
 		}
 	}
 	return flags
