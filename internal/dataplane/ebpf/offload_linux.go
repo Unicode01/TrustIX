@@ -810,6 +810,34 @@ func ethtoolFeatures(iface string) ([]ethtoolFeature, error) {
 	return features, nil
 }
 
+func (manager *Manager) tixTCPInnerGSOReceiveReadyLocked() (bool, string) {
+	iface := strings.TrimSpace(manager.spec.UnderlayIface)
+	if iface == "" {
+		return false, "underlay interface is not configured"
+	}
+	features, err := ethtoolFeatures(iface)
+	if err != nil {
+		return false, fmt.Sprintf("inspect GRO features on underlay interface %q: %v", iface, err)
+	}
+	if tixTCPInnerGSOReceiveReady(features) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("underlay interface %q has GRO and GRO-HW disabled", iface)
+}
+
+func tixTCPInnerGSOReceiveReady(features []ethtoolFeature) bool {
+	for _, feature := range features {
+		if !feature.Active {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(feature.Name)) {
+		case "rx-gro", "generic-receive-offload", "rx-gro-hw":
+			return true
+		}
+	}
+	return false
+}
+
 func ethtoolFeatureCount(iface string) (int, error) {
 	info := ethtoolSSetInfo{
 		Cmd:  ethtoolGSSetInfo,

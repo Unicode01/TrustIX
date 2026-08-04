@@ -2994,6 +2994,12 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		"rx_worker_inject":                     "Y",
 		"rx_worker_inner_tcp_checksum_partial": "0",
 		"rx_worker_inner_tcp_checksum_partial_errors": "0",
+		"rx_worker_inner_gso_candidates":              "0",
+		"rx_worker_inner_gso_packets":                 "0",
+		"rx_worker_inner_gso_segments":                "0",
+		"rx_worker_inner_gso_partial_frames":          "0",
+		"rx_worker_inner_gso_malformed":               "0",
+		"rx_worker_inner_gso_errors":                  "0",
 
 		"rx_worker_stream_coalesce_page_frag_cache":           "Y",
 		"rx_worker_stream_coalesce_page_frag_cache_attempts":  "0",
@@ -3012,6 +3018,11 @@ func writeFullKmodModuleParametersWithOverrides(t *testing.T, path string, plain
 		"tx_plaintext_skip_inner_tcp_checksum":              "N",
 		"tx_plaintext_inner_tcp_checksum_partial":           "0",
 		"tx_plaintext_inner_tcp_checksum_partial_fallbacks": "0",
+		"tx_plaintext_inner_gso_attempts":                   "0",
+		"tx_plaintext_inner_gso_packets":                    "0",
+		"tx_plaintext_inner_gso_segments":                   "0",
+		"tx_plaintext_inner_gso_fallbacks":                  "0",
+		"tx_plaintext_inner_gso_errors":                     "0",
 		"tx_plaintext_payload_copy_csum":                    "Y",
 		"tx_plaintext_payload_copy_csum_attempts":           "0",
 		"tx_plaintext_payload_copy_csum_hits":               "0",
@@ -3095,24 +3106,24 @@ func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		traffic = "128"
 	}
 	return map[string]string{
-		"session_records":                           "16",
-		"session_wire_records":                      "16",
-		"tx_plaintext_packets":                      traffic,
-		"tx_plaintext_gso_segments":                 traffic,
-		"tx_plaintext_outer_gso_page_pool_attempts": traffic,
-		"tx_plaintext_outer_gso_page_pool_hits":     traffic,
-		"tx_plaintext_payload_copy_csum_attempts":   traffic,
-		"tx_plaintext_payload_copy_csum_hits":       traffic,
-		"tx_plaintext_inner_tcp_checksum_partial":   traffic,
+		"enable_features":                         "3200",
+		"features":                                "3200",
+		"safe_features":                           "3200",
+		"session_records":                         "16",
+		"session_wire_records":                    "16",
+		"tx_plaintext_packets":                    traffic,
+		"tx_plaintext_gso_segments":               traffic,
+		"tx_plaintext_outer_gso_segments":         "0",
+		"tx_plaintext_inner_tcp_checksum_partial": traffic,
+		"tx_plaintext_inner_gso_attempts":         traffic,
+		"tx_plaintext_inner_gso_packets":          traffic,
+		"tx_plaintext_inner_gso_segments":         traffic,
 
-		"rx_worker_stream_coalesce_page_frag_cache_attempts": traffic,
-		"rx_worker_stream_coalesce_page_frag_cache_hits":     traffic,
-
-		"rx_worker_stream_offset_copy_attempts": traffic,
-		"rx_worker_stream_offset_copy_hits":     traffic,
-		"rx_worker_stream_offset_copy_bytes":    traffic,
-		"rx_worker_inner_tcp_checksum_partial":  traffic,
-		"rx_worker_injected":                    traffic,
+		"rx_worker_inner_tcp_checksum_partial": traffic,
+		"rx_worker_inner_gso_candidates":       traffic,
+		"rx_worker_inner_gso_packets":          traffic,
+		"rx_worker_inner_gso_segments":         traffic,
+		"rx_worker_injected":                   traffic,
 	}
 }
 
@@ -3174,6 +3185,7 @@ func writeTIXTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 			"capture_forwarder_suppressed": true,
 			"active_flows":                 16,
 			"inner_tcp_checksum_partial":   true,
+			"inner_gso":                    true,
 		},
 	}
 	data, err := json.Marshal(payload)
@@ -3195,6 +3207,9 @@ func writeTIXTCPFullKmodTransportsJSON(t *testing.T, path string, node string) {
 		"packets_received": 0,
 		"extra": map[string]any{
 			"tix_tcp_full_plaintext_kernel_datapath": 1,
+			"tix_tcp_inner_gso_local":                1,
+			"tix_tcp_inner_gso_peer":                 1,
+			"tix_tcp_inner_gso_negotiated":           1,
 		},
 	})
 }

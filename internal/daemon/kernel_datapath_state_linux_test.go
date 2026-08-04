@@ -153,6 +153,9 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 		InnerTCPChecksumPartialLocal:      true,
 		InnerTCPChecksumPartialPeer:       true,
 		InnerTCPChecksumPartialNegotiated: true,
+		InnerGSOLocal:                     true,
+		InnerGSOPeer:                      true,
+		InnerGSONegotiated:                true,
 	}}
 	record, ok := kernelDatapathSessionRecord(key, runtime, session)
 	if !ok {
@@ -183,6 +186,8 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 		kernelDatapathSessionFlagFragmentingDatagram,
 		kernelDatapathSessionFlagSendInnerTCPChecksumPartial,
 		kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial,
+		kernelDatapathSessionFlagSendInnerGSO,
+		kernelDatapathSessionFlagReceiveInnerGSO,
 	} {
 		if record.Flags&flag == 0 {
 			t.Fatalf("session record missing flag %#x: %#v", flag, record)
@@ -197,23 +202,32 @@ func TestKernelDatapathSessionChecksumPartialFlagsAreDirectional(t *testing.T) {
 		InnerTCPChecksumPartialLocal:      true,
 		InnerTCPChecksumPartialPeer:       false,
 		InnerTCPChecksumPartialNegotiated: false,
+		InnerGSOLocal:                     true,
+		InnerGSOPeer:                      false,
+		InnerGSONegotiated:                false,
 	}
 	flags := kernelDatapathSessionFlags(key, nil, info)
 	if flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial == 0 ||
-		flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial != 0 {
-		t.Fatalf("local-only flags = %#x, want receive-only checksum partial", flags)
+		flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial != 0 ||
+		flags&kernelDatapathSessionFlagReceiveInnerGSO == 0 ||
+		flags&kernelDatapathSessionFlagSendInnerGSO != 0 {
+		t.Fatalf("local-only flags = %#x, want receive-only inner optimizations", flags)
 	}
 	info.InnerTCPChecksumPartialPeer = true
 	info.InnerTCPChecksumPartialNegotiated = true
+	info.InnerGSOPeer = true
+	info.InnerGSONegotiated = true
 	flags = kernelDatapathSessionFlags(key, nil, info)
 	if flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial == 0 ||
-		flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial == 0 {
-		t.Fatalf("negotiated flags = %#x, want send+receive checksum partial", flags)
+		flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial == 0 ||
+		flags&kernelDatapathSessionFlagReceiveInnerGSO == 0 ||
+		flags&kernelDatapathSessionFlagSendInnerGSO == 0 {
+		t.Fatalf("negotiated flags = %#x, want send+receive inner optimizations", flags)
 	}
 	info.Protocol = transport.ProtocolUDP
 	key.Transport = transport.ProtocolUDP
-	if flags = kernelDatapathSessionFlags(key, nil, info); flags&(kernelDatapathSessionFlagSendInnerTCPChecksumPartial|kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial) != 0 {
-		t.Fatalf("UDP flags = %#x, checksum partial capability is TIX TCP-only", flags)
+	if flags = kernelDatapathSessionFlags(key, nil, info); flags&(kernelDatapathSessionFlagSendInnerTCPChecksumPartial|kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial|kernelDatapathSessionFlagSendInnerGSO|kernelDatapathSessionFlagReceiveInnerGSO) != 0 {
+		t.Fatalf("UDP flags = %#x, inner optimization capabilities are TIX TCP-only", flags)
 	}
 }
 
@@ -268,10 +282,71 @@ func TestKernelDatapathSyntheticChecksumPartialReceiveIsReadyBeforePeerNegotiati
 		InnerTCPChecksumPartialLocal:      true,
 		InnerTCPChecksumPartialPeer:       true,
 		InnerTCPChecksumPartialNegotiated: true,
+		InnerGSOLocal:                     true,
+		InnerGSOPeer:                      true,
+		InnerGSONegotiated:                true,
 	}}
 	send, receive = daemon.kernelDatapathFullPlaintextEndpointInnerTCPChecksumPartial(peer, endpoint, 0)
 	if !send || !receive {
 		t.Fatalf("negotiated synthetic capability = send:%t receive:%t, want true/true", send, receive)
+	}
+}
+
+func TestKernelDatapathSyntheticInnerGSOIsDirectional(t *testing.T) {
+	manager := kernelmodule.NewTrustIXDatapathManager()
+	manager.SetStatusForTest(kernelmodule.Status{
+		Loaded:   true,
+		Features: []string{kernelmodule.FeatureFullDatapath, kernelmodule.FeatureInnerTCPChecksumPartial, kernelmodule.FeatureInnerGSO},
+	})
+	daemon := &Daemon{
+		kernelDatapath:   manager,
+		dataSessions:     map[dataSessionKey]transport.Session{},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{},
+	}
+	peer := config.PeerConfig{ID: "ix-b"}
+	endpoint := config.EndpointConfig{
+		Name:      "wan-tix-tcp",
+		Address:   "198.51.100.2:17042",
+		Transport: string(transport.ProtocolTIXTCP),
+	}
+	send, receive := daemon.kernelDatapathFullPlaintextEndpointInnerGSO(peer, endpoint, 0)
+	if send || receive {
+		t.Fatalf("pre-negotiation inner GSO = send:%t receive:%t, want false/false", send, receive)
+	}
+
+	key := dataSessionKey{
+		Peer:       peer.ID,
+		Endpoint:   endpoint.Name,
+		Transport:  transport.ProtocolTIXTCP,
+		Address:    endpoint.Address,
+		Encryption: "plaintext",
+	}
+	daemon.dataSessions[key] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:             7,
+		Protocol:           transport.ProtocolTIXTCP,
+		Peer:               peer.ID,
+		Endpoint:           endpoint.Name,
+		InnerGSOLocal:      true,
+		InnerGSOPeer:       false,
+		InnerGSONegotiated: false,
+	}}
+	send, receive = daemon.kernelDatapathFullPlaintextEndpointInnerGSO(peer, endpoint, 0)
+	if send || !receive {
+		t.Fatalf("one-sided inner GSO = send:%t receive:%t, want false/true", send, receive)
+	}
+
+	daemon.dataSessions[key] = kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:             7,
+		Protocol:           transport.ProtocolTIXTCP,
+		Peer:               peer.ID,
+		Endpoint:           endpoint.Name,
+		InnerGSOLocal:      true,
+		InnerGSOPeer:       true,
+		InnerGSONegotiated: true,
+	}}
+	send, receive = daemon.kernelDatapathFullPlaintextEndpointInnerGSO(peer, endpoint, 0)
+	if !send || !receive {
+		t.Fatalf("negotiated inner GSO = send:%t receive:%t, want true/true", send, receive)
 	}
 }
 
@@ -561,6 +636,9 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsInheritNegotiatedCapabili
 		InnerTCPChecksumPartialLocal:      true,
 		InnerTCPChecksumPartialPeer:       true,
 		InnerTCPChecksumPartialNegotiated: true,
+		InnerGSOLocal:                     true,
+		InnerGSOPeer:                      true,
+		InnerGSONegotiated:                true,
 	}}
 	daemon.dataSessionState[existingKey] = &dataSessionRuntime{key: existingKey}
 
@@ -585,8 +663,10 @@ func TestKernelDatapathFullPlaintextRouteSessionRecordsInheritNegotiatedCapabili
 		t.Fatalf("wire record does not match synthetic flow id: session=%#v wire=%#v", records[0], records[1])
 	}
 	if records[0].Flags&kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial == 0 ||
-		records[0].Flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial == 0 {
-		t.Fatalf("synthetic session did not inherit negotiated checksum capability: %#v", records[0])
+		records[0].Flags&kernelDatapathSessionFlagSendInnerTCPChecksumPartial == 0 ||
+		records[0].Flags&kernelDatapathSessionFlagReceiveInnerGSO == 0 ||
+		records[0].Flags&kernelDatapathSessionFlagSendInnerGSO == 0 {
+		t.Fatalf("synthetic session did not inherit negotiated inner capabilities: %#v", records[0])
 	}
 }
 

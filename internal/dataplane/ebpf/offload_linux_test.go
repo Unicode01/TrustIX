@@ -34,6 +34,28 @@ func TestLANOffloadProtectionAppliesByMode(t *testing.T) {
 	}
 }
 
+func TestTIXTCPInnerGSOReceiveReadyRequiresActiveGRO(t *testing.T) {
+	tests := []struct {
+		name     string
+		features []ethtoolFeature
+		want     bool
+	}{
+		{name: "none"},
+		{name: "software disabled", features: []ethtoolFeature{{Name: "rx-gro", Available: true}}},
+		{name: "software", features: []ethtoolFeature{{Name: "rx-gro", Available: true, Active: true}}, want: true},
+		{name: "display alias", features: []ethtoolFeature{{Name: "generic-receive-offload", Active: true}}, want: true},
+		{name: "hardware", features: []ethtoolFeature{{Name: "rx-gro-hw", Active: true}}, want: true},
+		{name: "unrelated", features: []ethtoolFeature{{Name: "tx-gso", Active: true}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := tixTCPInnerGSOReceiveReady(test.features); got != test.want {
+				t.Fatalf("tixTCPInnerGSOReceiveReady() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLANOffloadProtectionDoesNotPreserveRouteGSOForDisabledTIXTCP(t *testing.T) {
 	t.Setenv("TRUSTIX_LAN_OFFLOAD_PROTECTION", "")
 	t.Setenv("TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY", "1")

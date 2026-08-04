@@ -47,8 +47,9 @@ const (
 	TrustIXDatapathSelftestOuterBuild              = uint64(1 << 8)
 	TrustIXDatapathSelftestOuterParse              = uint64(1 << 9)
 	TrustIXDatapathSelftestInnerTCPChecksumPartial = uint64(1 << 10)
+	TrustIXDatapathSelftestInnerGSO                = uint64(1 << 11)
 	TrustIXDatapathHelpersSelftestAll              = TrustIXDatapathHelpersSelftestTIXTFrame | TrustIXDatapathHelpersSelftestTIXTStream
-	TrustIXDatapathSelftestAll                     = TrustIXDatapathHelpersSelftestAll | TrustIXDatapathSelftestStateTable | TrustIXDatapathSelftestClassify | TrustIXDatapathSelftestPacketClassify | TrustIXDatapathSelftestTIXTEncap | TrustIXDatapathSelftestTIXTDecap | TrustIXDatapathSelftestSessionWire | TrustIXDatapathSelftestOuterBuild | TrustIXDatapathSelftestOuterParse | TrustIXDatapathSelftestInnerTCPChecksumPartial
+	TrustIXDatapathSelftestAll                     = TrustIXDatapathHelpersSelftestAll | TrustIXDatapathSelftestStateTable | TrustIXDatapathSelftestClassify | TrustIXDatapathSelftestPacketClassify | TrustIXDatapathSelftestTIXTEncap | TrustIXDatapathSelftestTIXTDecap | TrustIXDatapathSelftestSessionWire | TrustIXDatapathSelftestOuterBuild | TrustIXDatapathSelftestOuterParse | TrustIXDatapathSelftestInnerTCPChecksumPartial | TrustIXDatapathSelftestInnerGSO
 
 	TrustIXDatapathStateKindRoute       = uint32(1)
 	TrustIXDatapathStateKindSession     = uint32(2)

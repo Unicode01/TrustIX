@@ -351,13 +351,14 @@ func TestTIXTCPCompatControlDecodesOldInitWithoutSourcePort(t *testing.T) {
 }
 
 func TestTIXTCPCompatControlCapabilitiesRoundTrip(t *testing.T) {
-	payload := encodeTIXTCPCompatControlCapabilities(tixTCPCapabilityInnerTCPChecksumPartial | 1<<63)
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	payload := encodeTIXTCPCompatControlCapabilities(want | 1<<63)
 	capabilities, ok := decodeTIXTCPCompatControlCapabilities(payload)
 	if !ok {
 		t.Fatal("capability control frame did not decode")
 	}
-	if capabilities != tixTCPCapabilityInnerTCPChecksumPartial {
-		t.Fatalf("capabilities = %#x, want %#x", capabilities, tixTCPCapabilityInnerTCPChecksumPartial)
+	if capabilities != want {
+		t.Fatalf("capabilities = %#x, want %#x", capabilities, want)
 	}
 	if tixTCPCompatControlEligible(payload) {
 		t.Fatal("internal capability frame must not be delivered to the secure/control payload layer")
@@ -370,8 +371,8 @@ func TestTIXTCPCompatControlCapabilitiesNegotiateBothWays(t *testing.T) {
 	server := newSession(nil, nil, 1, "ix-a", "server", dataplane.CryptoPlacementUserspace)
 	client.compatControl = stream.NewSession(clientConn)
 	server.compatControl = stream.NewSession(serverConn)
-	client.localCapabilities = tixTCPCapabilityInnerTCPChecksumPartial
-	server.localCapabilities = tixTCPCapabilityInnerTCPChecksumPartial
+	client.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO)
+	server.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO)
 	go client.readCompatControl(context.Background())
 	go server.readCompatControl(context.Background())
 	defer client.Close()
@@ -392,13 +393,18 @@ func TestTIXTCPCompatControlCapabilitiesNegotiateBothWays(t *testing.T) {
 		serverInfo, serverOK := server.KernelDatapathSessionInfo()
 		return clientOK && serverOK &&
 			clientInfo.InnerTCPChecksumPartialLocal && clientInfo.InnerTCPChecksumPartialPeer && clientInfo.InnerTCPChecksumPartialNegotiated &&
-			serverInfo.InnerTCPChecksumPartialLocal && serverInfo.InnerTCPChecksumPartialPeer && serverInfo.InnerTCPChecksumPartialNegotiated
+			serverInfo.InnerTCPChecksumPartialLocal && serverInfo.InnerTCPChecksumPartialPeer && serverInfo.InnerTCPChecksumPartialNegotiated &&
+			clientInfo.InnerGSOLocal && clientInfo.InnerGSOPeer && clientInfo.InnerGSONegotiated &&
+			serverInfo.InnerGSOLocal && serverInfo.InnerGSOPeer && serverInfo.InnerGSONegotiated
 	})
 	for name, stats := range map[string]transport.TransportStats{"client": client.Stats(), "server": server.Stats()} {
 		for _, key := range []string{
 			tixTCPStatInnerTCPChecksumPartialLocal,
 			tixTCPStatInnerTCPChecksumPartialPeer,
 			tixTCPStatInnerTCPChecksumPartialNegotiated,
+			tixTCPStatInnerGSOLocal,
+			tixTCPStatInnerGSOPeer,
+			tixTCPStatInnerGSONegotiated,
 		} {
 			if stats.Extra[key] != 1 {
 				t.Fatalf("%s %s = %d, want 1; stats=%+v", name, key, stats.Extra[key], stats)
@@ -413,7 +419,7 @@ func TestTIXTCPCompatControlCapabilitiesRequireBothPeers(t *testing.T) {
 	server := newSession(nil, nil, 1, "ix-a", "server", dataplane.CryptoPlacementUserspace)
 	client.compatControl = stream.NewSession(clientConn)
 	server.compatControl = stream.NewSession(serverConn)
-	client.localCapabilities = tixTCPCapabilityInnerTCPChecksumPartial
+	client.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO)
 	go client.readCompatControl(context.Background())
 	go server.readCompatControl(context.Background())
 	defer client.Close()
@@ -425,12 +431,14 @@ func TestTIXTCPCompatControlCapabilitiesRequireBothPeers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	eventually(t, ctx, func() bool {
-		return server.peerCapabilities.Load() == tixTCPCapabilityInnerTCPChecksumPartial
+		return server.peerCapabilities.Load() == tixTCPCapabilityInnerTCPChecksumPartial|tixTCPCapabilityInnerGSO
 	})
 	clientInfo, _ := client.KernelDatapathSessionInfo()
 	serverInfo, _ := server.KernelDatapathSessionInfo()
 	if !clientInfo.InnerTCPChecksumPartialLocal || clientInfo.InnerTCPChecksumPartialPeer || clientInfo.InnerTCPChecksumPartialNegotiated ||
-		serverInfo.InnerTCPChecksumPartialLocal || !serverInfo.InnerTCPChecksumPartialPeer || serverInfo.InnerTCPChecksumPartialNegotiated {
+		serverInfo.InnerTCPChecksumPartialLocal || !serverInfo.InnerTCPChecksumPartialPeer || serverInfo.InnerTCPChecksumPartialNegotiated ||
+		!clientInfo.InnerGSOLocal || clientInfo.InnerGSOPeer || clientInfo.InnerGSONegotiated ||
+		serverInfo.InnerGSOLocal || !serverInfo.InnerGSOPeer || serverInfo.InnerGSONegotiated {
 		t.Fatalf("one-sided capability unexpectedly negotiated: client=%+v server=%+v", clientInfo, serverInfo)
 	}
 	clientStats := client.Stats().Extra
@@ -440,8 +448,90 @@ func TestTIXTCPCompatControlCapabilitiesRequireBothPeers(t *testing.T) {
 		clientStats[tixTCPStatInnerTCPChecksumPartialNegotiated] != 0 ||
 		serverStats[tixTCPStatInnerTCPChecksumPartialLocal] != 0 ||
 		serverStats[tixTCPStatInnerTCPChecksumPartialPeer] != 1 ||
-		serverStats[tixTCPStatInnerTCPChecksumPartialNegotiated] != 0 {
+		serverStats[tixTCPStatInnerTCPChecksumPartialNegotiated] != 0 ||
+		clientStats[tixTCPStatInnerGSOLocal] != 1 ||
+		clientStats[tixTCPStatInnerGSOPeer] != 0 ||
+		clientStats[tixTCPStatInnerGSONegotiated] != 0 ||
+		serverStats[tixTCPStatInnerGSOLocal] != 0 ||
+		serverStats[tixTCPStatInnerGSOPeer] != 1 ||
+		serverStats[tixTCPStatInnerGSONegotiated] != 0 {
 		t.Fatalf("one-sided capability telemetry is inconsistent: client=%v server=%v", clientStats, serverStats)
+	}
+}
+
+func TestTIXTCPLocalCapabilitiesGateInnerGSO(t *testing.T) {
+	full := dataplane.TIXTCPStatus{
+		Provider:                tixTCPProviderFullPlaintextKernel,
+		InnerTCPChecksumPartial: true,
+		InnerGSO:                true,
+	}
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	if got := tixTCPLocalCapabilities(full); got != want {
+		t.Fatalf("full capabilities = %#x, want %#x", got, want)
+	}
+	full.InnerTCPChecksumPartial = false
+	if got := tixTCPLocalCapabilities(full); got != 0 {
+		t.Fatalf("inner GSO without checksum-partial support advertised %#x", got)
+	}
+	full.InnerTCPChecksumPartial = true
+	full.Provider = "af_xdp"
+	if got := tixTCPLocalCapabilities(full); got != 0 {
+		t.Fatalf("non-full-kernel provider advertised capabilities %#x", got)
+	}
+}
+
+func TestTIXTCPProviderLocalCapabilitiesUsesLightweightProbe(t *testing.T) {
+	provider := &fakeCapabilityProvider{
+		fakeProvider: &fakeProvider{},
+		capabilities: dataplane.TIXTCPCapabilities{
+			FullPlaintextKernel:     true,
+			InnerTCPChecksumPartial: true,
+			InnerGSO:                true,
+		},
+	}
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	got, err := tixTCPProviderLocalCapabilities(context.Background(), provider)
+	if err != nil {
+		t.Fatalf("lightweight capability probe: %v", err)
+	}
+	if got != want {
+		t.Fatalf("lightweight capability bits = %#x, want %#x", got, want)
+	}
+	if calls := provider.calls.Load(); calls != 1 {
+		t.Fatalf("lightweight capability probe calls = %d, want 1", calls)
+	}
+
+	provider.err = errors.New("injected capability probe failure")
+	if got, err := tixTCPProviderLocalCapabilities(context.Background(), provider); err == nil || got != 0 {
+		t.Fatalf("failed lightweight probe = %#x, %v, want 0 and error", got, err)
+	}
+}
+
+func TestTIXTCPListenerCurrentLocalCapabilitiesRefreshesProviderState(t *testing.T) {
+	provider := &fakeProvider{statusProvider: tixTCPProviderFullPlaintextKernel}
+	provider.innerTCPChecksumPartial.Store(true)
+	provider.innerGSO.Store(true)
+	listener := &listener{
+		provider:                    provider,
+		fullPlaintextKernelDatapath: true,
+	}
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	if got := listener.currentLocalCapabilities(); got != want {
+		t.Fatalf("initial listener capabilities = %#x, want %#x", got, want)
+	}
+
+	provider.innerGSO.Store(false)
+	if got := listener.currentLocalCapabilities(); got != tixTCPCapabilityInnerTCPChecksumPartial {
+		t.Fatalf("listener capabilities after GRO withdrawal = %#x, want checksum-partial only", got)
+	}
+	provider.statusProvider = "af_xdp"
+	if got := listener.currentLocalCapabilities(); got != 0 {
+		t.Fatalf("listener capabilities after provider change = %#x, want 0", got)
+	}
+	listener.fullPlaintextKernelDatapath = false
+	provider.statusProvider = tixTCPProviderFullPlaintextKernel
+	if got := listener.currentLocalCapabilities(); got != 0 {
+		t.Fatalf("non-full-kernel listener capabilities = %#x, want 0", got)
 	}
 }
 
@@ -467,6 +557,177 @@ func TestTIXTCPPeerCapabilityChangeNotifiesKernelDatapathState(t *testing.T) {
 	session.setPeerCapabilities(tixTCPCapabilityInnerTCPChecksumPartial)
 	if got := notifications.Load(); got != 2 {
 		t.Fatalf("closed session emitted capability notification: %d", got)
+	}
+}
+
+func TestTIXTCPLocalCapabilityRefreshWithdrawsAndRestoresPeerInnerGSO(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	provider := &fakeProvider{statusProvider: tixTCPProviderFullPlaintextKernel}
+	provider.innerTCPChecksumPartial.Store(true)
+	provider.innerGSO.Store(true)
+	client := newSession(provider, nil, 1, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	server := newSession(nil, nil, 1, "ix-a", "server", dataplane.CryptoPlacementUserspace)
+	client.compatControl = stream.NewSession(clientConn)
+	server.compatControl = stream.NewSession(serverConn)
+	client.fullPlaintextKernelDatapath = true
+	client.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO)
+	go server.readCompatControl(context.Background())
+	defer client.Close()
+	defer server.Close()
+
+	var notifications atomic.Int32
+	client.SetKernelDatapathSessionStateChangeHook(func() {
+		notifications.Add(1)
+	})
+	if err := client.sendCompatCapabilities(); err != nil {
+		t.Fatalf("send initial capabilities: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	eventually(t, ctx, func() bool {
+		return server.peerCapabilities.Load() == tixTCPCapabilityInnerTCPChecksumPartial|tixTCPCapabilityInnerGSO
+	})
+
+	provider.innerGSO.Store(false)
+	if err := client.refreshLocalCapabilities(context.Background()); err != nil {
+		t.Fatalf("withdraw inner GSO: %v", err)
+	}
+	eventually(t, ctx, func() bool {
+		return server.peerCapabilities.Load() == tixTCPCapabilityInnerTCPChecksumPartial
+	})
+	if got := client.localCapabilities.Load(); got != tixTCPCapabilityInnerTCPChecksumPartial {
+		t.Fatalf("local capabilities after GRO withdrawal = %#x", got)
+	}
+
+	provider.statusProvider = "af_xdp"
+	if err := client.refreshLocalCapabilities(context.Background()); err != nil {
+		t.Fatalf("withdraw all kernel capabilities: %v", err)
+	}
+	eventually(t, ctx, func() bool { return server.peerCapabilities.Load() == 0 })
+
+	provider.statusProvider = tixTCPProviderFullPlaintextKernel
+	provider.innerGSO.Store(true)
+	if err := client.refreshLocalCapabilities(context.Background()); err != nil {
+		t.Fatalf("restore inner GSO: %v", err)
+	}
+	eventually(t, ctx, func() bool {
+		return server.peerCapabilities.Load() == tixTCPCapabilityInnerTCPChecksumPartial|tixTCPCapabilityInnerGSO
+	})
+	if got := notifications.Load(); got != 3 {
+		t.Fatalf("local kernel datapath notifications = %d, want 3", got)
+	}
+}
+
+func TestTIXTCPLocalCapabilityRefreshUpdatesLocalBeforeAdvertisement(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	provider := &fakeProvider{statusProvider: tixTCPProviderFullPlaintextKernel}
+	provider.innerTCPChecksumPartial.Store(true)
+	provider.innerGSO.Store(true)
+	client := newSession(provider, nil, 1, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	client.compatControl = stream.NewSession(clientConn)
+	client.fullPlaintextKernelDatapath = true
+	client.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial)
+	server := stream.NewSession(serverConn)
+	defer client.Close()
+	defer server.Close()
+
+	notified := make(chan struct{}, 1)
+	client.SetKernelDatapathSessionStateChangeHook(func() {
+		notified <- struct{}{}
+	})
+	refreshDone := make(chan error, 1)
+	go func() {
+		refreshDone <- client.refreshLocalCapabilities(context.Background())
+	}()
+
+	select {
+	case <-notified:
+	case <-time.After(time.Second):
+		t.Fatal("local capability update was not notified before advertisement")
+	}
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
+	if got := client.localCapabilities.Load(); got != want {
+		t.Fatalf("local capabilities while advertisement is blocked = %#x, want %#x", got, want)
+	}
+	select {
+	case err := <-refreshDone:
+		t.Fatalf("capability refresh completed before peer read advertisement: %v", err)
+	default:
+	}
+
+	packet, err := server.RecvPacket()
+	if err != nil {
+		t.Fatalf("receive capability advertisement: %v", err)
+	}
+	capabilities, ok := decodeTIXTCPCompatControlCapabilities(packet)
+	if !ok || capabilities != want {
+		t.Fatalf("capability advertisement = %#x, %v, want %#x, true", capabilities, ok, want)
+	}
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("refresh local capabilities: %v", err)
+	}
+}
+
+func TestTIXTCPLocalCapabilityRefreshFailsClosedBeforeSendError(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	provider := &fakeProvider{statusProvider: tixTCPProviderFullPlaintextKernel}
+	provider.innerTCPChecksumPartial.Store(true)
+	client := newSession(provider, nil, 1, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	client.compatControl = stream.NewSession(clientConn)
+	client.fullPlaintextKernelDatapath = true
+	client.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO)
+	defer client.Close()
+	if err := serverConn.Close(); err != nil {
+		t.Fatalf("close peer control connection: %v", err)
+	}
+
+	var notifications atomic.Int32
+	client.SetKernelDatapathSessionStateChangeHook(func() {
+		notifications.Add(1)
+	})
+	err := client.refreshLocalCapabilities(context.Background())
+	if err == nil {
+		t.Fatal("capability refresh unexpectedly accepted a failed advertisement")
+	}
+	if !errors.Is(err, errTIXTCPCapabilityAdvertisement) {
+		t.Fatalf("capability refresh error = %v, want advertisement failure", err)
+	}
+	if got := client.localCapabilities.Load(); got != tixTCPCapabilityInnerTCPChecksumPartial {
+		t.Fatalf("local capabilities after send failure = %#x, want checksum-partial only", got)
+	}
+	if got := notifications.Load(); got != 1 {
+		t.Fatalf("local capability notifications after send failure = %d, want 1", got)
+	}
+}
+
+func TestTIXTCPLocalCapabilityMonitorClosesAfterAdvertisementFailure(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	provider := &fakeProvider{
+		statusProvider: tixTCPProviderFullPlaintextKernel,
+		flows: map[uint64]dataplane.TIXTCPFlow{
+			1: {ID: 1},
+		},
+	}
+	provider.innerTCPChecksumPartial.Store(true)
+	client := newSession(provider, nil, 1, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	client.compatControl = stream.NewSession(clientConn)
+	client.fullPlaintextKernelDatapath = true
+	client.localCapabilities.Store(tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO)
+	if err := serverConn.Close(); err != nil {
+		t.Fatalf("close peer control connection: %v", err)
+	}
+
+	go client.monitorLocalCapabilities(context.Background())
+	select {
+	case <-client.closed:
+	case <-time.After(time.Second):
+		t.Fatal("capability monitor kept a session with stale peer capabilities open")
+	}
+	provider.mu.Lock()
+	_, flowExists := provider.flows[1]
+	provider.mu.Unlock()
+	if flowExists {
+		t.Fatal("capability monitor did not remove the failed session's kernel flow")
 	}
 }
 
@@ -2526,6 +2787,29 @@ func TestTIXTCPSessionCloseReleasesQueuedBorrowedPackets(t *testing.T) {
 	}
 }
 
+func TestTIXTCPSessionRejectsInnerGSOFromUserspaceProvider(t *testing.T) {
+	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
+	var releases atomic.Uint64
+	if _, _, ok := session.handleFrameOne(dataplane.TIXTCPFrame{
+		FlowID:        42,
+		Direction:     dataplane.TIXTCPInbound,
+		Sequence:      1,
+		FragmentIndex: 1000,
+		FragmentCount: 3,
+		Payload:       []byte("must-stay-in-kernel"),
+		InnerGSO:      true,
+		Release:       func() { releases.Add(1) },
+	}); ok {
+		t.Fatal("inner GSO frame escaped into ordinary userspace delivery")
+	}
+	if got := releases.Load(); got != 1 {
+		t.Fatalf("inner GSO release count = %d, want 1", got)
+	}
+	if got := session.Stats().Extra[tixTCPStatFragmentRejects]; got != 1 {
+		t.Fatalf("inner GSO fragment rejects = %d, want 1", got)
+	}
+}
+
 func TestTIXTCPFragmentStatsTrackRejectsDuplicatesAndExpiry(t *testing.T) {
 	session := newSession(nil, nil, 42, "ix-b", "server", dataplane.CryptoPlacementUserspace)
 	session.handleFrame(dataplane.TIXTCPFrame{
@@ -3173,26 +3457,46 @@ func TestTIXTCPUnavailableErrorsIncludeFastPathFallback(t *testing.T) {
 }
 
 type fakeProvider struct {
-	local            core.IXID
-	remote           *fakeProvider
-	mu               sync.Mutex
-	subs             map[chan dataplane.TIXTCPFrame]struct{}
-	flows            map[uint64]dataplane.TIXTCPFlow
-	cryptos          map[uint64]fakeCrypto
-	kernelCrypto     bool
-	statusProvider   string
-	availableSet     bool
-	available        bool
-	reinjectSet      bool
-	reinject         bool
-	fastPathFallback string
-	payloadMax       int
-	sealBeforeMax    int
-	lastWire         []byte
-	frames           []dataplane.TIXTCPFrame
-	submitted        atomic.Uint64
-	received         atomic.Uint64
-	annotateErr      error
+	local                   core.IXID
+	remote                  *fakeProvider
+	mu                      sync.Mutex
+	subs                    map[chan dataplane.TIXTCPFrame]struct{}
+	flows                   map[uint64]dataplane.TIXTCPFlow
+	cryptos                 map[uint64]fakeCrypto
+	kernelCrypto            bool
+	statusProvider          string
+	availableSet            bool
+	available               bool
+	reinjectSet             bool
+	reinject                bool
+	fastPathFallback        string
+	payloadMax              int
+	sealBeforeMax           int
+	lastWire                []byte
+	frames                  []dataplane.TIXTCPFrame
+	submitted               atomic.Uint64
+	received                atomic.Uint64
+	annotateErr             error
+	innerTCPChecksumPartial atomic.Bool
+	innerGSO                atomic.Bool
+}
+
+type fakeCapabilityProvider struct {
+	*fakeProvider
+	capabilities dataplane.TIXTCPCapabilities
+	err          error
+	calls        atomic.Uint64
+}
+
+func (provider *fakeCapabilityProvider) TIXTCPCapabilities(ctx context.Context) (dataplane.TIXTCPCapabilities, error) {
+	provider.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return dataplane.TIXTCPCapabilities{}, err
+	}
+	if provider.err != nil {
+		return dataplane.TIXTCPCapabilities{}, provider.err
+	}
+	return provider.capabilities, nil
 }
 
 type capturingCryptoInstallerProvider struct {
@@ -3296,17 +3600,19 @@ func (provider *fakeProvider) TIXTCPStatus(ctx context.Context) (dataplane.TIXTC
 		reinject = provider.reinject
 	}
 	return dataplane.TIXTCPStatus{
-		Available:        available,
-		Provider:         provider.statusProvider,
-		UserspaceCrypto:  true,
-		KernelCrypto:     provider.kernelCrypto,
-		Reinject:         reinject,
-		FastPathFallback: provider.fastPathFallback,
-		PreferredCrypto:  provider.preferredCrypto(),
-		SupportedCrypto:  provider.supportedCrypto(),
-		ActiveFlows:      activeFlows,
-		SubmittedFrames:  provider.submitted.Load(),
-		ReceivedFrames:   provider.received.Load(),
+		Available:               available,
+		Provider:                provider.statusProvider,
+		UserspaceCrypto:         true,
+		KernelCrypto:            provider.kernelCrypto,
+		Reinject:                reinject,
+		FastPathFallback:        provider.fastPathFallback,
+		PreferredCrypto:         provider.preferredCrypto(),
+		SupportedCrypto:         provider.supportedCrypto(),
+		ActiveFlows:             activeFlows,
+		SubmittedFrames:         provider.submitted.Load(),
+		ReceivedFrames:          provider.received.Load(),
+		InnerTCPChecksumPartial: provider.innerTCPChecksumPartial.Load(),
+		InnerGSO:                provider.innerGSO.Load(),
 	}, nil
 }
 

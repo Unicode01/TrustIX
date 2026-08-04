@@ -231,6 +231,9 @@ type KernelDatapathSessionInfo struct {
 	InnerTCPChecksumPartialLocal      bool
 	InnerTCPChecksumPartialPeer       bool
 	InnerTCPChecksumPartialNegotiated bool
+	InnerGSOLocal                     bool
+	InnerGSOPeer                      bool
+	InnerGSONegotiated                bool
 }
 
 type KernelDatapathSession interface {

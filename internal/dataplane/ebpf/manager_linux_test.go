@@ -34,6 +34,7 @@ import (
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/kernelmodule"
+	"trustix.local/trustix/internal/observability"
 	"trustix.local/trustix/internal/routing"
 	"trustix.local/trustix/internal/transport/kerneludp"
 	"trustix.local/trustix/internal/transport/tixtcp"
@@ -4884,6 +4885,48 @@ func TestTIXTCPRawDecodeCompletesInnerTCPChecksumPartial(t *testing.T) {
 	}
 }
 
+func TestTIXTCPRawDecodeRejectsInnerGSOFallback(t *testing.T) {
+	manager := NewManager()
+	manager.tixTCPFlows[77] = dataplane.TIXTCPFlow{
+		ID:              77,
+		LocalAddress:    "192.0.2.10:18001",
+		RemoteAddress:   "198.51.100.20:43000",
+		SourcePort:      18001,
+		DestinationPort: 43000,
+	}
+	manager.tixTCPRawReceiveFilter.Store(manager.tixTCPRawReceiveFilterLocked())
+	inner := testInnerIPv4TCPChecksumPartialPacket(t, bytes.Repeat([]byte{0x5a}, 2500))
+	frameWire, err := (tixtcp.Frame{
+		Flags:         tixtcp.FlagInnerIPv4 | tixtcp.FlagInnerTCPChecksumPartial | tixtcp.FlagInnerGSO,
+		FlowID:        77,
+		Sequence:      1,
+		FragmentIndex: 1000,
+		FragmentCount: 3,
+		Payload:       inner,
+	}).MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal inner GSO frame: %v", err)
+	}
+	wire, err := tixtcp.MarshalTCPShapedIPv4(tixtcp.TCPPacket{
+		SourceIP:        netip.MustParseAddr("198.51.100.20"),
+		DestinationIP:   netip.MustParseAddr("192.0.2.10"),
+		SourcePort:      43000,
+		DestinationPort: 18001,
+		Sequence:        100,
+		Acknowledgment:  1,
+		Payload:         frameWire,
+	})
+	if err != nil {
+		t.Fatalf("marshal outer inner GSO packet: %v", err)
+	}
+	if _, ok := manager.decodeTIXTCPRawPacket(wire, tixtcp.ParseTCPShapedIPv4NoCopy); ok {
+		t.Fatal("raw userspace fallback accepted an inner GSO frame")
+	}
+	if got := manager.dropReasons[observability.DropInvalidOverlayHeader]; got != 1 {
+		t.Fatalf("invalid overlay drops = %d, want 1", got)
+	}
+}
+
 func TestTIXTCPRawReceiveFilterIncludesEstablishedLocalFlowPort(t *testing.T) {
 	manager := NewManager()
 	manager.tixTCPFlows[7] = dataplane.TIXTCPFlow{
@@ -5946,6 +5989,57 @@ func TestTIXTCPStatusReportsFullPlaintextKernelDatapathProvider(t *testing.T) {
 	protocol := kernelTransportProtocolTIXTCP(status)
 	if !protocol.Available || protocol.Placement != "kernel" || protocol.UserspaceFallback {
 		t.Fatalf("full plaintext tix_tcp protocol = %+v, want kernel placement without userspace fallback", protocol)
+	}
+}
+
+func TestTIXTCPCapabilityProbeCacheSharesProbeWithinTTL(t *testing.T) {
+	manager := NewManager()
+	now := time.Unix(1_700_000_000, 0)
+	calls := 0
+	probe := func() (bool, bool, string, error) {
+		calls++
+		return true, true, "", nil
+	}
+
+	for i := 0; i < 2; i++ {
+		partial, innerGSO, reason, err := manager.tixTCPCapabilityProbeCachedLocked(now, "eth0", probe)
+		if err != nil || !partial || !innerGSO || reason != "" {
+			t.Fatalf("cached capability probe = partial:%t inner_gso:%t reason:%q err:%v", partial, innerGSO, reason, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("capability probes within TTL = %d, want 1", calls)
+	}
+
+	manager.tixTCPCapabilityProbeCachedLocked(now.Add(tixTCPCapabilityProbeTTL), "eth0", probe)
+	manager.tixTCPCapabilityProbeCachedLocked(now.Add(tixTCPCapabilityProbeTTL), "eth1", probe)
+	if calls != 3 {
+		t.Fatalf("capability probes after expiry and iface change = %d, want 3", calls)
+	}
+	if manager.tixTCPCapabilityProbeAttempts != 3 || manager.tixTCPCapabilityProbeCacheHits != 1 {
+		t.Fatalf("capability probe counters = attempts:%d hits:%d, want 3/1",
+			manager.tixTCPCapabilityProbeAttempts, manager.tixTCPCapabilityProbeCacheHits)
+	}
+}
+
+func TestTIXTCPCapabilityProbeCacheSharesFailureWithinTTL(t *testing.T) {
+	manager := NewManager()
+	now := time.Unix(1_700_000_000, 0)
+	wantErr := errors.New("injected capability probe failure")
+	calls := 0
+	probe := func() (bool, bool, string, error) {
+		calls++
+		return false, false, "probe failed", wantErr
+	}
+
+	for i := 0; i < 2; i++ {
+		_, _, reason, err := manager.tixTCPCapabilityProbeCachedLocked(now, "eth0", probe)
+		if !errors.Is(err, wantErr) || reason != "probe failed" {
+			t.Fatalf("cached capability failure = reason:%q err:%v", reason, err)
+		}
+	}
+	if calls != 1 || manager.tixTCPCapabilityProbeErrors != 1 {
+		t.Fatalf("failed capability probes = calls:%d errors:%d, want 1/1", calls, manager.tixTCPCapabilityProbeErrors)
 	}
 }
 
@@ -17577,6 +17671,20 @@ func TestFullDatapathPartialChecksumHandoffSafety(t *testing.T) {
 	}
 }
 
+func TestFullDatapathHookTargetNetdevReleaseWaitsForReaders(t *testing.T) {
+	datapathSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+	body := sourceFunctionBody(t, datapathSource, "trustix_datapath_hook_release_netdev")
+
+	syncIndex := strings.Index(body, "if (target_dev_count)\n\t\tsynchronize_net();")
+	putIndex := strings.Index(body, "dev_put(target_devs[i]);")
+	if syncIndex < 0 || putIndex < 0 || syncIndex >= putIndex {
+		t.Fatal("target netdev release must wait for in-flight netfilter readers before dev_put")
+	}
+	if strings.Contains(body, "entry->in_use = false;") {
+		t.Fatal("netdev release exposed a hook slot for reuse before nf_unregister_net_hook completed")
+	}
+}
+
 func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	datapathSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
 	helpersMainSource := readSourceFile(t, filepath.Join("..", "..", "..", "kernel", "trustix_datapath_helpers", "trustix_datapath_helpers_main.c"))
@@ -17688,6 +17796,40 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_dev_ready(dev)")
 	requireSourceContains(t, datapathSource, "if (skb_is_gso(skb))")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_xmit_inner_gso_segments(")
+	innerGSOTXBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_tx_build_inner_gso_skb")
+	metadataSnapshot := strings.Index(innerGSOTXBody, "source_gso_segs = skb_shinfo(inner_skb)->gso_segs")
+	txMayPull := strings.Index(innerGSOTXBody, "pskb_may_pull(inner_skb,")
+	if metadataSnapshot < 0 || txMayPull < 0 || metadataSnapshot >= txMayPull {
+		t.Fatal("inner GSO TX must snapshot shared-info metadata before pskb_may_pull can relocate the skb head")
+	}
+	requireSourceNotContains(t, innerGSOTXBody, "inner_shinfo")
+	for _, name := range []string{
+		"trustix_datapath_tx_plaintext_outer_tcp_gso_skb",
+		"trustix_datapath_tx_plaintext_outer_udp_gso_skb",
+	} {
+		body := sourceFunctionBody(t, datapathSource, name)
+		metadataSnapshot = strings.Index(body, "gso_size = skb_shinfo(skb)->gso_size")
+		txMayPull = strings.Index(body, "pskb_may_pull(skb,")
+		if metadataSnapshot < 0 || txMayPull < 0 || metadataSnapshot >= txMayPull {
+			t.Fatalf("%s must snapshot shared-info metadata before pskb_may_pull can relocate the skb head", name)
+		}
+	}
+	innerGSOBuilderBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_build_inner_gso_skb")
+	mayPullStart := strings.Index(innerGSOBuilderBody, "pskb_may_pull(skb, pull_len)")
+	pullStart := strings.Index(innerGSOBuilderBody, "skb_pull(skb, inner_offset)")
+	if mayPullStart < 0 || pullStart < 0 || mayPullStart >= pullStart {
+		t.Fatal("inner GSO clone must linearize the complete pull range before skb_pull")
+	}
+	requireSourceContains(t, innerGSOBuilderBody, "check_add_overflow(inner_offset,")
+	headerPullStart := strings.Index(innerGSOBuilderBody, "pskb_may_pull(skb, ip_header_len + tcp_header_len)")
+	if headerPullStart < 0 || headerPullStart <= pullStart {
+		t.Fatal("inner GSO clone must linearize the complete IPv4/TCP header after skb_pull")
+	}
+	innerGSOSanitizeBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_sanitize_inner_gso_skb")
+	requireSourceContains(t, innerGSOSanitizeBody, "pskb_may_pull(skb, ETH_HLEN + ip_header_len + tcp_header_len)")
+	innerGSOSelftestBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_selftest_inner_gso")
+	requireSourceContains(t, innerGSOSelftestBody, "const __u32 tcp_header_len = 60;")
+	requireSourceContains(t, innerGSOSelftestBody, "skb_headlen(split_outer_skb) >= inner_offset")
 	innerGSOXmitBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_xmit_inner_gso")
 	requireSourceContains(t, innerGSOXmitBody, "READ_ONCE(trustix_datapath_rx_worker_stream_coalesce_software_segment)")
 	requireSourceContains(t, innerGSOXmitBody, "trustix_datapath_rx_worker_gso_xmit_fallbacks++;")
@@ -17698,6 +17840,7 @@ func TestFirstReleasePanicRiskModuleParametersFailClosed(t *testing.T) {
 		softwareSegmentStart >= supportedStart || supportedStart >= segmentsStart {
 		t.Fatal("rx_worker_stream_coalesce_software_segment must gate direct inner GSO xmit before segment fallback")
 	}
+	requireSourceContains(t, datapathSource, "if (seg_tcph->psh &&\n\t\t    payload_offset + seg_payload_len < payload_len)\n\t\t\tseg_tcph->psh = 0;")
 	requireSourceContains(t, datapathSource, "current safe implementation falls back to copy/worker")
 	requireSourceContains(t, datapathSource, "trustix_datapath_rx_worker_steal_fallbacks++;\n\treturn false;")
 	coalescedBuilderBody := sourceFunctionBody(t, datapathSource, "trustix_datapath_rx_worker_build_coalesced_gso_skb")

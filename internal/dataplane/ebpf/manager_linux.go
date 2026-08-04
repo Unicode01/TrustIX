@@ -191,6 +191,11 @@ type Manager struct {
 	tixTCPSubDrops                              uint64
 	tixTCPRXDuplicateDrops                      uint64
 	tixTCPRXReorderedBatches                    uint64
+	tixTCPCapabilityProbe                       tixTCPCapabilityProbeResult
+	tixTCPCapabilityProbeValid                  bool
+	tixTCPCapabilityProbeAttempts               uint64
+	tixTCPCapabilityProbeCacheHits              uint64
+	tixTCPCapabilityProbeErrors                 uint64
 	kernelTransportAllowed                      map[uint16]struct{}
 	tixTCPFastPath                              *tixTCPFastPath
 	tixTCPRawFD                                 int
@@ -1186,6 +1191,7 @@ const (
 	kernelTransportDNSCacheTTLMin                                     = time.Second
 	kernelCryptoOpenRetryAttempts                                     = 20
 	kernelCryptoOpenRetryDelay                                        = 10 * time.Millisecond
+	tixTCPCapabilityProbeTTL                                          = time.Second
 	tunnelCapabilityCacheTTL                                          = 30 * time.Second
 )
 
@@ -1538,6 +1544,15 @@ type tunnelCapabilityProbeResult struct {
 	ready     bool
 	reason    string
 	expiresAt time.Time
+}
+
+type tixTCPCapabilityProbeResult struct {
+	underlayIface           string
+	innerTCPChecksumPartial bool
+	innerGSO                bool
+	reason                  string
+	err                     error
+	expiresAt               time.Time
 }
 
 type persistedDataplaneState struct {
@@ -2717,6 +2732,80 @@ func (manager *Manager) SyncLocalVIPs(ctx context.Context, vips []dataplane.Loca
 	return manager.syncLocalVIPsLocked(vips)
 }
 
+func (manager *Manager) TIXTCPCapabilities(ctx context.Context) (dataplane.TIXTCPCapabilities, error) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return dataplane.TIXTCPCapabilities{}, err
+	}
+	capabilities, _, err := manager.tixTCPCapabilitiesLocked()
+	return capabilities, err
+}
+
+func (manager *Manager) tixTCPCapabilitiesLocked() (dataplane.TIXTCPCapabilities, string, error) {
+	capabilities := dataplane.TIXTCPCapabilities{
+		FullPlaintextKernel: manager.kernelDatapathFullPlaintextTransportAvailableLocked(),
+	}
+	if !capabilities.FullPlaintextKernel {
+		manager.tixTCPCapabilityProbeValid = false
+		return capabilities, "", nil
+	}
+	partial, innerGSO, reason, err := manager.tixTCPCapabilityProbeCachedLocked(
+		time.Now(), strings.TrimSpace(manager.spec.UnderlayIface),
+		manager.tixTCPCapabilityProbeUncachedLocked,
+	)
+	capabilities.InnerTCPChecksumPartial = partial
+	capabilities.InnerGSO = innerGSO
+	return capabilities, reason, err
+}
+
+func (manager *Manager) tixTCPCapabilityProbeCachedLocked(
+	now time.Time,
+	underlayIface string,
+	probe func() (bool, bool, string, error),
+) (bool, bool, string, error) {
+	if manager.tixTCPCapabilityProbeValid &&
+		manager.tixTCPCapabilityProbe.underlayIface == underlayIface &&
+		now.Before(manager.tixTCPCapabilityProbe.expiresAt) {
+		manager.tixTCPCapabilityProbeCacheHits++
+		cached := manager.tixTCPCapabilityProbe
+		return cached.innerTCPChecksumPartial, cached.innerGSO, cached.reason, cached.err
+	}
+
+	manager.tixTCPCapabilityProbeAttempts++
+	partial, innerGSO, reason, err := probe()
+	if err != nil {
+		manager.tixTCPCapabilityProbeErrors++
+	}
+	manager.tixTCPCapabilityProbe = tixTCPCapabilityProbeResult{
+		underlayIface:           underlayIface,
+		innerTCPChecksumPartial: partial,
+		innerGSO:                innerGSO,
+		reason:                  reason,
+		err:                     err,
+		expiresAt:               now.Add(tixTCPCapabilityProbeTTL),
+	}
+	manager.tixTCPCapabilityProbeValid = true
+	return partial, innerGSO, reason, err
+}
+
+func (manager *Manager) tixTCPCapabilityProbeUncachedLocked() (bool, bool, string, error) {
+	query, err := kernelmodule.ProbeDatapath(kernelmodule.TrustIXDatapathDevicePath)
+	if err != nil {
+		return false, false, "probe kernel datapath inner GSO capability: " + err.Error(), err
+	}
+	partial := query.SafeActiveFeature(kernelmodule.FeatureInnerTCPChecksumPartial)
+	if !partial {
+		return false, false, "kernel datapath inner TCP checksum-partial feature is inactive", nil
+	}
+	if !query.SafeActiveFeature(kernelmodule.FeatureInnerGSO) {
+		return true, false, "kernel datapath inner GSO feature is inactive", nil
+	}
+	innerGSO, errReason := manager.tixTCPInnerGSOReceiveReadyLocked()
+	return true, innerGSO, errReason, nil
+}
+
 func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatus, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -2740,13 +2829,11 @@ func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatu
 	fastPath := manager.tixTCPProviderFastPathAvailableLocked()
 	tcOnlyRouteGSO := manager.tixTCPRouteGSOTCOnlyProviderAvailableLocked()
 	tcOnlyRouteGSOUnavailable := manager.tixTCPRouteGSOTCOnlyUnavailableReasonLocked()
-	fullPlaintext := manager.kernelDatapathFullPlaintextTransportAvailableLocked()
-	innerTCPChecksumPartial := false
-	if fullPlaintext {
-		if query, err := kernelmodule.ProbeDatapath(kernelmodule.TrustIXDatapathDevicePath); err == nil {
-			innerTCPChecksumPartial = query.SafeActiveFeature(kernelmodule.FeatureInnerTCPChecksumPartial)
-		}
+	capabilities, innerGSOReason, capabilityErr := manager.tixTCPCapabilitiesLocked()
+	if capabilityErr != nil && innerGSOReason == "" {
+		innerGSOReason = capabilityErr.Error()
 	}
+	fullPlaintext := capabilities.FullPlaintextKernel
 	provider := "none"
 	switch {
 	case fullPlaintext:
@@ -2793,6 +2880,9 @@ func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatu
 	}
 	if fullPlaintext {
 		notes = append(notes, "full plaintext kernel datapath owns tix_tcp LAN TX and underlay RX without AF_XDP")
+		if innerGSOReason != "" {
+			notes = append(notes, "inner GSO unavailable: "+innerGSOReason)
+		}
 	}
 	if tcOnlyRouteGSO {
 		if tcOnlySecureDirect {
@@ -2819,7 +2909,9 @@ func (manager *Manager) TIXTCPStatus(ctx context.Context) (dataplane.TIXTCPStatu
 		Available:               manager.attached && (fullPlaintext || fastPath || tcOnlyRouteGSO || rawFallback),
 		Provider:                provider,
 		FastPath:                fullPlaintext || fastPath || tcOnlyRouteGSO,
-		InnerTCPChecksumPartial: innerTCPChecksumPartial,
+		InnerTCPChecksumPartial: capabilities.InnerTCPChecksumPartial,
+		InnerGSO:                capabilities.InnerGSO,
+		InnerGSOReason:          innerGSOReason,
 		UserspaceCrypto:         userspaceCrypto,
 		KernelCrypto:            kernelCryptoReady,
 		KernelCryptoReason:      kernelCryptoReason,
@@ -7736,6 +7828,10 @@ func (manager *Manager) decodeTIXTCPRawPacket(raw []byte, parseTCP func([]byte) 
 		}
 		return receivedTIXTCPFrame{}, false
 	}
+	if frame.Flags&tixtcp.FlagInnerGSO != 0 {
+		manager.recordDrop(observability.DropInvalidOverlayHeader)
+		return receivedTIXTCPFrame{}, false
+	}
 	payload := frame.Payload
 	placement := dataplane.CryptoPlacementUserspace
 	encrypted := frame.Flags&tixtcp.FlagEncrypted != 0
@@ -11654,6 +11750,9 @@ func (manager *Manager) tixTCPFastPathModeLocked() (string, string, bool, string
 func (manager *Manager) tixTCPProviderStatsLocked() map[string]uint64 {
 	stats := manager.kernelCryptoProviderStatsLocked()
 	stats["subscriber_drops"] = manager.tixTCPSubDrops
+	stats["capability_probe_attempts"] = manager.tixTCPCapabilityProbeAttempts
+	stats["capability_probe_cache_hits"] = manager.tixTCPCapabilityProbeCacheHits
+	stats["capability_probe_errors"] = manager.tixTCPCapabilityProbeErrors
 	manager.addKernelUDPTXDirectCurrentStatsLocked(stats, "")
 	addLANPacketInjectorProviderStats(stats)
 	manager.addTransportTelemetryStatsLocked(stats, manager.tixTCPTelemetry)

@@ -175,6 +175,46 @@ func TestInnerTCPChecksumPartialRoundTripAndComplete(t *testing.T) {
 	}
 }
 
+func TestInnerTCPGSORoundTrip(t *testing.T) {
+	inner := testInnerTCPChecksumPartialPacket(bytes.Repeat([]byte{0x5a}, 2500))
+	want := Frame{
+		Flags:         FlagInnerIPv4 | FlagInnerTCPChecksumPartial | FlagInnerGSO,
+		FlowID:        11,
+		Epoch:         12,
+		Sequence:      13,
+		FragmentIndex: 1000,
+		FragmentCount: 3,
+		Payload:       inner,
+	}
+	wire, err := want.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal inner GSO frame: %v", err)
+	}
+	got, err := ParseFrame(wire)
+	if err != nil {
+		t.Fatalf("parse inner GSO frame: %v", err)
+	}
+	if got.Flags != want.Flags || got.FragmentIndex != want.FragmentIndex || got.FragmentCount != want.FragmentCount || !bytes.Equal(got.Payload, want.Payload) {
+		t.Fatalf("inner GSO round trip = %+v", got)
+	}
+}
+
+func TestFrameRejectsInvalidInnerGSOMetadata(t *testing.T) {
+	inner := testInnerTCPChecksumPartialPacket(bytes.Repeat([]byte{0x31}, 2500))
+	tests := []Frame{
+		{Flags: FlagInnerGSO | FlagInnerIPv4 | FlagInnerTCPChecksumPartial, FragmentIndex: 0, FragmentCount: 3, Payload: inner},
+		{Flags: FlagInnerGSO | FlagInnerIPv4 | FlagInnerTCPChecksumPartial, FragmentIndex: 1000, FragmentCount: 1, Payload: inner},
+		{Flags: FlagInnerGSO | FlagInnerIPv4, FragmentIndex: 1000, FragmentCount: 3, Payload: inner},
+		{Flags: FlagInnerGSO | FlagInnerIPv4 | FlagInnerTCPChecksumPartial | FlagEncrypted, FragmentIndex: 1000, FragmentCount: 3, Payload: inner},
+		{Flags: FlagInnerGSO | FlagInnerIPv4 | FlagInnerTCPChecksumPartial, FragmentIndex: 1300, FragmentCount: 3, Payload: inner},
+	}
+	for i, frame := range tests {
+		if _, err := frame.MarshalBinary(); err == nil {
+			t.Fatalf("case %d accepted invalid inner GSO frame", i)
+		}
+	}
+}
+
 func TestFrameRejectsInvalidInnerTCPChecksumPartialMetadata(t *testing.T) {
 	inner := testInnerTCPChecksumPartialPacket([]byte("metadata"))
 	tests := []Frame{

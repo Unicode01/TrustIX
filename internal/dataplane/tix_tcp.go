@@ -27,6 +27,8 @@ type TIXTCPStatus struct {
 	Provider                string                   `json:"provider,omitempty"`
 	FastPath                bool                     `json:"fast_path"`
 	InnerTCPChecksumPartial bool                     `json:"inner_tcp_checksum_partial"`
+	InnerGSO                bool                     `json:"inner_gso"`
+	InnerGSOReason          string                   `json:"inner_gso_reason,omitempty"`
 	UserspaceCrypto         bool                     `json:"userspace_crypto"`
 	KernelCrypto            bool                     `json:"kernel_crypto"`
 	KernelCryptoReason      string                   `json:"kernel_crypto_reason,omitempty"`
@@ -50,6 +52,14 @@ type TIXTCPStatus struct {
 	SubmittedFrames         uint64                   `json:"submitted_frames"`
 	ReceivedFrames          uint64                   `json:"received_frames"`
 	Notes                   []string                 `json:"notes,omitempty"`
+}
+
+// TIXTCPCapabilities is the lightweight subset needed to keep negotiated
+// transport capabilities synchronized while a session is active.
+type TIXTCPCapabilities struct {
+	FullPlaintextKernel     bool
+	InnerTCPChecksumPartial bool
+	InnerGSO                bool
 }
 
 type CryptoFallbackStatus struct {
@@ -146,6 +156,7 @@ type TIXTCPFrame struct {
 	Payload             []byte          `json:"payload"`
 	Encrypted           bool            `json:"encrypted"`
 	InnerIPv4           bool            `json:"inner_ipv4,omitempty"`
+	InnerGSO            bool            `json:"inner_gso,omitempty"`
 	CryptoSuite         string          `json:"crypto_suite,omitempty"`
 	CryptoPlacement     CryptoPlacement `json:"crypto_placement"`
 	// Release returns borrowed packet storage after the receiver has injected or
@@ -168,6 +179,10 @@ type TIXTCPProvider interface {
 	InstallTIXTCPFlows(ctx context.Context, flows []TIXTCPFlow) error
 	SubmitTIXTCPFrame(ctx context.Context, frame TIXTCPFrame) error
 	SubscribeTIXTCP(ctx context.Context, buffer int) (TIXTCPSubscription, error)
+}
+
+type TIXTCPCapabilityProvider interface {
+	TIXTCPCapabilities(ctx context.Context) (TIXTCPCapabilities, error)
 }
 
 type TIXTCPBatchProvider interface {

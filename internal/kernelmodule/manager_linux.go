@@ -384,6 +384,7 @@ const (
 	trustIXKernelFeatureRouteTCPKfuncBit           = 1 << 8
 	trustIXKernelFeatureRouteTCPXmitBit            = 1 << 9
 	trustIXKernelFeatureInnerTCPChecksumPartialBit = 1 << 10
+	trustIXKernelFeatureInnerGSOBit                = 1 << 11
 )
 
 func inspectModuleABIVersion(name string, loaded bool) int {
@@ -519,6 +520,9 @@ func moduleFeatureMaskToNames(mask uint64) []string {
 	}
 	if mask&trustIXKernelFeatureInnerTCPChecksumPartialBit != 0 {
 		features = append(features, FeatureInnerTCPChecksumPartial)
+	}
+	if mask&trustIXKernelFeatureInnerGSOBit != 0 {
+		features = append(features, FeatureInnerGSO)
 	}
 	return normalizeCapabilityFeatures(features)
 }

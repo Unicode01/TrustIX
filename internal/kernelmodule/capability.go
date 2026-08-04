@@ -14,6 +14,7 @@ const (
 	FeatureRouteTCPKfunc           = "route_tcp_kfunc"
 	FeatureRouteTCPXmit            = "route_tcp_xmit_kfunc"
 	FeatureInnerTCPChecksumPartial = "inner_tcp_checksum_partial"
+	FeatureInnerGSO                = "inner_gso"
 
 	CapabilityTierUnavailable  = "unavailable"
 	CapabilityTierCryptoOnly   = "crypto_only"

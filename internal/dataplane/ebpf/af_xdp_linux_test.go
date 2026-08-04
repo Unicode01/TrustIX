@@ -586,6 +586,35 @@ func TestTIXTCPDecodeChecksumPartialRXFrameCompletesInnerTCPChecksum(t *testing.
 	}
 }
 
+func TestTIXTCPDecodeRXFrameRejectsInnerGSOFallback(t *testing.T) {
+	fastPath := testTIXTCPFastPathWithQueues(1)
+	fastPath.skipTCPChecksum = true
+	manager := NewManager()
+	socket := testAFXDPSocketForRXFrame()
+	inner := testInnerIPv4TCPChecksumPartialPacket(t, bytes.Repeat([]byte{0x31}, 2500))
+	rxFrame, _ := testTIXTCPRXFrame(t, socket, tixtcp.Frame{
+		Flags:         tixtcp.FlagInnerIPv4 | tixtcp.FlagInnerTCPChecksumPartial | tixtcp.FlagInnerGSO,
+		FlowID:        7,
+		Sequence:      11,
+		FragmentIndex: 1000,
+		FragmentCount: 3,
+		Payload:       inner,
+	})
+	var expBatch []receivedTIXTCPFrame
+	var udpBatch []receivedKernelUDPFrame
+
+	mode, err := fastPath.decodeRXFrame(manager, socket, rxFrame, &expBatch, &udpBatch)
+	if err != nil {
+		t.Fatalf("decodeRXFrame error = %v", err)
+	}
+	if mode != afXDPRXRecycleNow || len(expBatch) != 0 || len(udpBatch) != 0 {
+		t.Fatalf("inner GSO fallback result = mode:%d tix_tcp:%d udp:%d", mode, len(expBatch), len(udpBatch))
+	}
+	if got := socket.stats.rxParseErrors.Load(); got != 1 {
+		t.Fatalf("inner GSO parse errors = %d, want 1", got)
+	}
+}
+
 func TestTIXTCPDecodeRXFrameRejectsMissingSocket(t *testing.T) {
 	fastPath := testTIXTCPFastPathWithQueues(1)
 	manager := NewManager()

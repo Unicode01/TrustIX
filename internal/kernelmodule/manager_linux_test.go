@@ -53,11 +53,14 @@ func TestModuleFeatureMaskIncludesRouteTCPKfunc(t *testing.T) {
 	}
 }
 
-func TestModuleFeatureMaskIncludesInnerTCPChecksumPartial(t *testing.T) {
-	features := moduleFeatureMaskToNames(trustIXKernelFeatureFullDatapathBit | trustIXKernelFeatureInnerTCPChecksumPartialBit)
+func TestModuleFeatureMaskIncludesInnerTCPOptimizations(t *testing.T) {
+	features := moduleFeatureMaskToNames(trustIXKernelFeatureFullDatapathBit | trustIXKernelFeatureInnerTCPChecksumPartialBit | trustIXKernelFeatureInnerGSOBit)
 	status := completeCapabilityStatus(Status{Name: "trustix_datapath", Loaded: true, Features: features})
 	if !status.HasFeature(FeatureInnerTCPChecksumPartial) {
 		t.Fatalf("features = %#v, missing %q", status.Features, FeatureInnerTCPChecksumPartial)
+	}
+	if !status.HasFeature(FeatureInnerGSO) {
+		t.Fatalf("features = %#v, missing %q", status.Features, FeatureInnerGSO)
 	}
 }
 

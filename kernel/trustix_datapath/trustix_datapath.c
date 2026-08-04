@@ -84,9 +84,11 @@
 
 #define TRUSTIX_DATAPATH_FEATURE_FULL_DATAPATH BIT_ULL(7)
 #define TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL BIT_ULL(10)
+#define TRUSTIX_DATAPATH_FEATURE_INNER_GSO BIT_ULL(11)
 #define TRUSTIX_DATAPATH_KNOWN_FEATURES \
 	(TRUSTIX_DATAPATH_FEATURE_FULL_DATAPATH | \
-	 TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL)
+	 TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL | \
+	 TRUSTIX_DATAPATH_FEATURE_INNER_GSO)
 
 #define TRUSTIX_DATAPATH_FLAG_TIXT_SELFTEST_OK BIT(0)
 #define TRUSTIX_DATAPATH_FLAG_FEATURES_ACTIVE BIT(1)
@@ -102,6 +104,7 @@
 #define TRUSTIX_DATAPATH_SELFTEST_OUTER_BUILD BIT_ULL(8)
 #define TRUSTIX_DATAPATH_SELFTEST_OUTER_PARSE BIT_ULL(9)
 #define TRUSTIX_DATAPATH_SELFTEST_INNER_TCP_CHECKSUM_PARTIAL BIT_ULL(10)
+#define TRUSTIX_DATAPATH_SELFTEST_INNER_GSO BIT_ULL(11)
 #define TRUSTIX_DATAPATH_SELFTEST_FULL_DATAPATH \
 	(TRUSTIX_DATAPATH_SELFTEST_TIXT_FRAME | \
 	 TRUSTIX_DATAPATH_SELFTEST_TIXT_STREAM | \
@@ -115,7 +118,8 @@
 	 TRUSTIX_DATAPATH_SELFTEST_OUTER_PARSE)
 #define TRUSTIX_DATAPATH_SELFTEST_ALL \
 	(TRUSTIX_DATAPATH_SELFTEST_FULL_DATAPATH | \
-	 TRUSTIX_DATAPATH_SELFTEST_INNER_TCP_CHECKSUM_PARTIAL)
+	 TRUSTIX_DATAPATH_SELFTEST_INNER_TCP_CHECKSUM_PARTIAL | \
+	 TRUSTIX_DATAPATH_SELFTEST_INNER_GSO)
 
 #define TRUSTIX_DATAPATH_STATE_KIND_ROUTE 1U
 #define TRUSTIX_DATAPATH_STATE_KIND_SESSION 2U
@@ -155,6 +159,8 @@
 #define TRUSTIX_DATAPATH_SESSION_FLAG_SYNTHETIC_FALLBACK BIT(11)
 #define TRUSTIX_DATAPATH_SESSION_FLAG_SEND_INNER_TCP_CHECKSUM_PARTIAL BIT(12)
 #define TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_TCP_CHECKSUM_PARTIAL BIT(13)
+#define TRUSTIX_DATAPATH_SESSION_FLAG_SEND_INNER_GSO BIT(14)
+#define TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO BIT(15)
 #define TRUSTIX_DATAPATH_SESSION_FLAGS_ENCRYPTED \
 	(TRUSTIX_DATAPATH_SESSION_FLAG_ENCRYPTED | \
 	 TRUSTIX_DATAPATH_SESSION_FLAG_SEND_ENCRYPTED | \
@@ -206,6 +212,7 @@
 #define TRUSTIX_DATAPATH_TIXT_FLAG_CRYPTO_FRAGMENT BIT(2)
 #define TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4 BIT(3)
 #define TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL BIT(4)
+#define TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO BIT(5)
 #define TRUSTIX_DATAPATH_TIXT_FLAG_INNER_L4_CHECKSUM_VALID \
 	TRUSTIX_DATAPATH_TIXT_FLAG_KERNEL_OPENED
 #define TRUSTIX_DATAPATH_TIXT_KNOWN_FLAGS \
@@ -213,7 +220,8 @@
 	 TRUSTIX_DATAPATH_TIXT_FLAG_KERNEL_OPENED | \
 	 TRUSTIX_DATAPATH_TIXT_FLAG_CRYPTO_FRAGMENT | \
 	 TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4 | \
-	 TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL)
+	 TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL | \
+	 TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO)
 
 struct trustix_datapath_ioc_query {
 	__u32 version;
@@ -1759,6 +1767,47 @@ module_param_named(rx_worker_inner_tcp_checksum_partial_errors,
 MODULE_PARM_DESC(rx_worker_inner_tcp_checksum_partial_errors,
 		 "Rejected TrustIX RX inner TCP CHECKSUM_PARTIAL frames");
 
+static unsigned long long trustix_datapath_rx_worker_inner_gso_candidates;
+module_param_named(rx_worker_inner_gso_candidates,
+		   trustix_datapath_rx_worker_inner_gso_candidates, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_candidates,
+		 "TrustIX RX packets carrying the negotiated inner-GSO flag");
+
+static unsigned long long trustix_datapath_rx_worker_inner_gso_packets;
+module_param_named(rx_worker_inner_gso_packets,
+		   trustix_datapath_rx_worker_inner_gso_packets, ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_packets,
+		 "Complete TrustIX RX inner-GSO packets restored and queued");
+
+static unsigned long long trustix_datapath_rx_worker_inner_gso_segments;
+module_param_named(rx_worker_inner_gso_segments,
+		   trustix_datapath_rx_worker_inner_gso_segments, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_segments,
+		 "Inner TCP segments represented by restored TrustIX RX inner-GSO packets");
+
+static unsigned long long
+	trustix_datapath_rx_worker_inner_gso_partial_frames;
+module_param_named(rx_worker_inner_gso_partial_frames,
+		   trustix_datapath_rx_worker_inner_gso_partial_frames,
+		   ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_partial_frames,
+		 "TrustIX RX inner-GSO frames not completely reconstructed by GRO");
+
+static unsigned long long trustix_datapath_rx_worker_inner_gso_malformed;
+module_param_named(rx_worker_inner_gso_malformed,
+		   trustix_datapath_rx_worker_inner_gso_malformed, ullong,
+		   0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_malformed,
+		 "TrustIX RX inner-GSO frames rejected for invalid wire or packet metadata");
+
+static unsigned long long trustix_datapath_rx_worker_inner_gso_errors;
+module_param_named(rx_worker_inner_gso_errors,
+		   trustix_datapath_rx_worker_inner_gso_errors, ullong, 0444);
+MODULE_PARM_DESC(rx_worker_inner_gso_errors,
+		 "TrustIX RX inner-GSO allocation, target, preparation, or queue errors");
+
 static unsigned long long
 	trustix_datapath_rx_worker_partial_checksum_software_fallbacks;
 module_param_named(rx_worker_partial_checksum_software_fallbacks,
@@ -2385,6 +2434,41 @@ module_param_named(tx_plaintext_inner_tcp_checksum_partial_fallbacks,
 		   ullong, 0444);
 MODULE_PARM_DESC(tx_plaintext_inner_tcp_checksum_partial_fallbacks,
 		 "Negotiated plaintext TX frames that required a full-checksum fallback");
+
+static unsigned long long trustix_datapath_tx_plaintext_inner_gso_attempts;
+module_param_named(tx_plaintext_inner_gso_attempts,
+		   trustix_datapath_tx_plaintext_inner_gso_attempts, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_inner_gso_attempts,
+		 "Negotiated plaintext TX GSO packets considered for inner-GSO preservation");
+
+static unsigned long long trustix_datapath_tx_plaintext_inner_gso_packets;
+module_param_named(tx_plaintext_inner_gso_packets,
+		   trustix_datapath_tx_plaintext_inner_gso_packets, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_inner_gso_packets,
+		 "Plaintext TX GSO packets emitted with inner-GSO metadata");
+
+static unsigned long long trustix_datapath_tx_plaintext_inner_gso_segments;
+module_param_named(tx_plaintext_inner_gso_segments,
+		   trustix_datapath_tx_plaintext_inner_gso_segments, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_inner_gso_segments,
+		 "Inner TCP segments preserved by plaintext TX inner-GSO packets");
+
+static unsigned long long trustix_datapath_tx_plaintext_inner_gso_fallbacks;
+module_param_named(tx_plaintext_inner_gso_fallbacks,
+		   trustix_datapath_tx_plaintext_inner_gso_fallbacks, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_inner_gso_fallbacks,
+		 "Negotiated plaintext TX inner-GSO attempts that used the existing segmentation path");
+
+static unsigned long long trustix_datapath_tx_plaintext_inner_gso_errors;
+module_param_named(tx_plaintext_inner_gso_errors,
+		   trustix_datapath_tx_plaintext_inner_gso_errors, ullong,
+		   0444);
+MODULE_PARM_DESC(tx_plaintext_inner_gso_errors,
+		 "Plaintext TX inner-GSO allocation, packet, or queue errors");
 
 static unsigned long long trustix_datapath_tx_plaintext_gso_skips;
 module_param_named(tx_plaintext_gso_skips,
@@ -4286,6 +4370,12 @@ static int trustix_datapath_alloc_rx_worker(void)
 	trustix_datapath_rx_worker_checksum_errors = 0;
 	trustix_datapath_rx_worker_inner_tcp_checksum_partial = 0;
 	trustix_datapath_rx_worker_inner_tcp_checksum_partial_errors = 0;
+	trustix_datapath_rx_worker_inner_gso_candidates = 0;
+	trustix_datapath_rx_worker_inner_gso_packets = 0;
+	trustix_datapath_rx_worker_inner_gso_segments = 0;
+	trustix_datapath_rx_worker_inner_gso_partial_frames = 0;
+	trustix_datapath_rx_worker_inner_gso_malformed = 0;
+	trustix_datapath_rx_worker_inner_gso_errors = 0;
 	trustix_datapath_rx_worker_partial_checksum_software_fallbacks = 0;
 	trustix_datapath_rx_worker_partial_checksum_metadata_repairs = 0;
 	trustix_datapath_rx_worker_dst_mac_hits = 0;
@@ -8508,6 +8598,248 @@ trustix_datapath_tx_alloc_outer_gso_page_pool_skb(unsigned int alloc_len)
 static unsigned int
 trustix_datapath_tx_plaintext_outer_gso_max_frames_value(void);
 
+static __always_inline bool
+trustix_datapath_tx_plaintext_inner_gso_enabled(
+	const struct trustix_datapath_tx_plan *plan)
+{
+	__u64 required_features =
+		TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL |
+		TRUSTIX_DATAPATH_FEATURE_INNER_GSO;
+	__u32 required_flags =
+		TRUSTIX_DATAPATH_SESSION_FLAG_SEND_INNER_TCP_CHECKSUM_PARTIAL |
+		TRUSTIX_DATAPATH_SESSION_FLAG_SEND_INNER_GSO;
+
+	if (!plan || plan->outer_protocol != IPPROTO_TCP ||
+	    (plan->session_flags & TRUSTIX_DATAPATH_SESSION_FLAGS_ENCRYPTED) ||
+	    (plan->session_flags & required_flags) != required_flags)
+		return false;
+	return (READ_ONCE(trustix_datapath_features) & required_features) ==
+	       required_features;
+}
+
+static int trustix_datapath_tx_build_inner_gso_skb(
+	struct sk_buff *inner_skb, const struct trustix_datapath_tx_plan *plan,
+	struct net_device *target_dev, struct sk_buff **out_skb,
+	unsigned int *inner_gso_segs)
+{
+	struct skb_shared_info *outer_shinfo;
+	struct sk_buff *skb;
+	struct tcphdr *inner_tcph;
+	struct tcphdr *outer_tcph;
+	struct iphdr *inner_iph;
+	struct iphdr *outer_iph;
+	__u32 network_offset;
+	__u32 ip_header_len;
+	__u32 tcp_header_len;
+	__u32 total_len;
+	__u32 tcp_len;
+	__u32 payload_len;
+	__u32 gso_size;
+	__u32 gso_segs;
+	__u32 source_gso_segs;
+	__u32 source_gso_type;
+	__u32 tixt_len;
+	__u32 outer_len;
+	__u32 outer_tcp_len;
+	__u32 packet_limit;
+	__u32 outer_gso_size;
+	__u32 outer_gso_segs;
+	__u64 sequence;
+	__u8 *packet;
+	__u8 *tixt;
+	int ret;
+
+	if (out_skb)
+		*out_skb = NULL;
+	if (inner_gso_segs)
+		*inner_gso_segs = 0;
+	if (!inner_skb || !plan || !target_dev || !out_skb ||
+	    !inner_gso_segs ||
+	    !trustix_datapath_tx_plaintext_inner_gso_enabled(plan))
+		return -EOPNOTSUPP;
+	if (!skb_is_gso(inner_skb) ||
+	    !trustix_datapath_dev_supports_tcpv4_gso(target_dev))
+		return -EOPNOTSUPP;
+	source_gso_type = skb_shinfo(inner_skb)->gso_type;
+	gso_size = skb_shinfo(inner_skb)->gso_size;
+	source_gso_segs = skb_shinfo(inner_skb)->gso_segs;
+	if ((source_gso_type & SKB_GSO_TCPV4) != SKB_GSO_TCPV4 ||
+	    (source_gso_type & SKB_GSO_TCP_ECN))
+		return -EOPNOTSUPP;
+
+	network_offset = skb_network_offset(inner_skb);
+	if (network_offset > TRUSTIX_DATAPATH_PACKET_MAX_LEN ||
+	    !pskb_may_pull(inner_skb, network_offset + sizeof(*inner_iph)))
+		return -ENODATA;
+	inner_iph = (struct iphdr *)skb_network_header(inner_skb);
+	if (!inner_iph || inner_iph->version != 4 || inner_iph->ihl < 5 ||
+	    inner_iph->protocol != IPPROTO_TCP ||
+	    (inner_iph->frag_off & htons(0x3fff)))
+		return -EPROTONOSUPPORT;
+	ip_header_len = inner_iph->ihl * 4;
+	if (ip_header_len < sizeof(*inner_iph) ||
+	    !pskb_may_pull(inner_skb, network_offset + ip_header_len +
+					  sizeof(*inner_tcph)))
+		return -ENODATA;
+	inner_iph = (struct iphdr *)skb_network_header(inner_skb);
+	inner_tcph = (struct tcphdr *)((__u8 *)inner_iph + ip_header_len);
+	tcp_header_len = inner_tcph->doff * 4;
+	total_len = ntohs(inner_iph->tot_len);
+	if (tcp_header_len < sizeof(*inner_tcph) || tcp_header_len > 60 ||
+	    total_len < ip_header_len + tcp_header_len ||
+	    total_len > inner_skb->len - network_offset ||
+	    total_len > TRUSTIX_DATAPATH_TIXT_MAX_PAYLOAD ||
+	    !pskb_may_pull(inner_skb, network_offset + ip_header_len +
+					  tcp_header_len))
+		return -EINVAL;
+	inner_iph = (struct iphdr *)skb_network_header(inner_skb);
+	inner_tcph = (struct tcphdr *)((__u8 *)inner_iph + ip_header_len);
+	if (!trustix_datapath_rx_worker_tcp_flags_supported(inner_tcph))
+		return -EINVAL;
+	tcp_len = total_len - ip_header_len;
+	payload_len = tcp_len - tcp_header_len;
+	if (!payload_len || !gso_size || gso_size > payload_len ||
+	    gso_size > U16_MAX)
+		return -EINVAL;
+	gso_segs = DIV_ROUND_UP(payload_len, gso_size);
+	if (gso_segs < 2 || gso_segs > U16_MAX ||
+	    (source_gso_segs && source_gso_segs != gso_segs))
+		return -EINVAL;
+	if (check_add_overflow((__u32)TRUSTIX_DATAPATH_TIXT_HEADER_LEN,
+			       total_len, &tixt_len) ||
+	    check_add_overflow((__u32)(sizeof(struct iphdr) +
+					 sizeof(struct tcphdr)),
+			       tixt_len, &outer_len) ||
+	    outer_len > U16_MAX)
+		return -EMSGSIZE;
+	if (target_dev->gso_max_size && outer_len > target_dev->gso_max_size)
+		return -EMSGSIZE;
+
+	packet_limit = plan->max_packet_size;
+	if (!packet_limit)
+		packet_limit = READ_ONCE(target_dev->mtu);
+	if (packet_limit <= sizeof(struct iphdr) + sizeof(struct tcphdr))
+		return -EMSGSIZE;
+	outer_gso_size = packet_limit - sizeof(struct iphdr) -
+			 sizeof(struct tcphdr);
+	outer_gso_segs = DIV_ROUND_UP(tixt_len, outer_gso_size);
+	if (outer_gso_segs < 2 || outer_gso_segs > U16_MAX ||
+	    (target_dev->gso_max_segs &&
+	     outer_gso_segs > target_dev->gso_max_segs))
+		return -EMSGSIZE;
+
+	skb = skb_clone(inner_skb, GFP_ATOMIC);
+	if (!skb)
+		return -ENOMEM;
+	ret = skb_cow_head(skb, LL_MAX_HEADER + sizeof(struct iphdr) +
+					 sizeof(struct tcphdr) +
+					 TRUSTIX_DATAPATH_TIXT_HEADER_LEN);
+	if (ret)
+		goto error;
+	if (network_offset && !skb_pull(skb, network_offset)) {
+		ret = -ENODATA;
+		goto error;
+	}
+	ret = pskb_trim(skb, total_len);
+	if (ret)
+		goto error;
+	packet = skb_push(skb, sizeof(struct iphdr) + sizeof(struct tcphdr) +
+				       TRUSTIX_DATAPATH_TIXT_HEADER_LEN);
+	memset(packet, 0, sizeof(struct iphdr) + sizeof(struct tcphdr));
+	tixt = packet + sizeof(struct iphdr) + sizeof(struct tcphdr);
+	sequence = (__u64)atomic64_inc_return(&trustix_datapath_tx_sequence);
+	trustix_datapath_build_tixt_header(
+		tixt, TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4 |
+			      TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL |
+			      TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO,
+		plan->flow_id, plan->epoch, sequence, total_len, (__u16)gso_size,
+		(__u16)gso_segs);
+
+	inner_iph = (struct iphdr *)(tixt + TRUSTIX_DATAPATH_TIXT_HEADER_LEN);
+	inner_tcph = (struct tcphdr *)((__u8 *)inner_iph + ip_header_len);
+	trustix_datapath_rx_worker_fix_ipv4_header_checksum(inner_iph,
+						   ip_header_len);
+	inner_tcph->check = ~csum_tcpudp_magic(
+		inner_iph->saddr, inner_iph->daddr, tcp_len, IPPROTO_TCP, 0);
+
+	trustix_datapath_build_outer_ipv4(packet, outer_len, IPPROTO_TCP,
+					  plan->local_ipv4,
+					  plan->remote_ipv4);
+	trustix_datapath_put_be16(packet + 20, plan->local_port);
+	trustix_datapath_put_be16(packet + 22, plan->remote_port);
+	trustix_datapath_put_be32(
+		packet + 24, trustix_datapath_tx_outer_tcp_next_seq(tixt_len));
+	packet[32] = 0x50;
+	packet[33] = 0x18;
+	trustix_datapath_put_be16(packet + 34, 65535);
+
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, sizeof(struct iphdr));
+	skb->protocol = htons(ETH_P_IP);
+	skb->pkt_type = PACKET_OUTGOING;
+	skb->encapsulation = 0;
+	skb->csum = 0;
+	skb->csum_level = 0;
+	outer_iph = ip_hdr(skb);
+	outer_tcph = tcp_hdr(skb);
+	outer_tcp_len = outer_len - sizeof(*outer_iph);
+	outer_tcph->check = ~csum_tcpudp_magic(
+		outer_iph->saddr, outer_iph->daddr, outer_tcp_len,
+		IPPROTO_TCP, 0);
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	skb->csum_start = skb_transport_header(skb) - skb->head;
+	skb->csum_offset = offsetof(struct tcphdr, check);
+	outer_shinfo = skb_shinfo(skb);
+	outer_shinfo->gso_size = outer_gso_size;
+	outer_shinfo->gso_segs = outer_gso_segs;
+	outer_shinfo->gso_type = SKB_GSO_TCPV4;
+	*out_skb = skb;
+	*inner_gso_segs = gso_segs;
+	return 0;
+
+error:
+	kfree_skb(skb);
+	return ret;
+}
+
+static int trustix_datapath_tx_plaintext_inner_gso_skb(
+	struct sk_buff *skb, const struct trustix_datapath_tx_plan *plan,
+	struct net_device *target_dev)
+{
+	struct sk_buff *out = NULL;
+	struct sk_buff *batch[1];
+	__u32 inner_lens[1];
+	unsigned int inner_gso_segs = 0;
+	int ret;
+
+	if (!trustix_datapath_tx_plaintext_inner_gso_enabled(plan))
+		return -EOPNOTSUPP;
+	trustix_datapath_tx_plaintext_inner_gso_attempts++;
+	ret = trustix_datapath_tx_build_inner_gso_skb(
+		skb, plan, target_dev, &out, &inner_gso_segs);
+	if (ret) {
+		trustix_datapath_tx_plaintext_inner_gso_fallbacks++;
+		if (ret != -EOPNOTSUPP && ret != -EMSGSIZE && ret != -EINVAL)
+			trustix_datapath_tx_plaintext_inner_gso_errors++;
+		return ret;
+	}
+	batch[0] = out;
+	inner_lens[0] = ntohs(ip_hdr(skb)->tot_len);
+	ret = trustix_datapath_tx_plaintext_enqueue_many(
+		batch, inner_lens, ARRAY_SIZE(batch), target_dev, plan);
+	if (ret) {
+		kfree_skb(batch[0]);
+		trustix_datapath_tx_plaintext_inner_gso_fallbacks++;
+		trustix_datapath_tx_plaintext_inner_gso_errors++;
+		return ret;
+	}
+	trustix_datapath_tx_plaintext_inner_gso_packets++;
+	trustix_datapath_tx_plaintext_inner_gso_segments += inner_gso_segs;
+	trustix_datapath_tx_plaintext_gso_segments += inner_gso_segs;
+	trustix_datapath_tx_plaintext_inner_tcp_checksum_partial++;
+	return 0;
+}
+
 static int trustix_datapath_tx_build_outer_tcp_gso_skb(
 	struct sk_buff *inner_skb, const struct trustix_datapath_tx_plan *plan,
 	__u32 network_offset, __u32 ip_header_len, __u32 tcp_header_len,
@@ -8737,7 +9069,6 @@ static int trustix_datapath_tx_plaintext_outer_tcp_gso_skb(
 {
 	struct sk_buff *batches[TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS] = {};
 	__u32 inner_lens[TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS] = {};
-	struct skb_shared_info *shinfo;
 	const struct tcphdr *tcph;
 	const struct iphdr *iph;
 	__u32 network_offset;
@@ -8769,8 +9100,8 @@ static int trustix_datapath_tx_plaintext_outer_tcp_gso_skb(
 		return -EOPNOTSUPP;
 	if (!skb_is_gso(skb))
 		return -EINVAL;
-	shinfo = skb_shinfo(skb);
-	if ((shinfo->gso_type & SKB_GSO_TCPV4) != SKB_GSO_TCPV4)
+	gso_size = skb_shinfo(skb)->gso_size;
+	if ((skb_shinfo(skb)->gso_type & SKB_GSO_TCPV4) != SKB_GSO_TCPV4)
 		return -EPROTONOSUPPORT;
 	network_offset = skb_network_offset(skb);
 	if (network_offset > TRUSTIX_DATAPATH_PACKET_MAX_LEN ||
@@ -8802,7 +9133,6 @@ static int trustix_datapath_tx_plaintext_outer_tcp_gso_skb(
 	payload_len = tcp_len - tcp_header_len;
 	if (!payload_len)
 		return -EINVAL;
-	gso_size = shinfo->gso_size;
 	if (!gso_size || gso_size > payload_len)
 		return -EINVAL;
 	ret = trustix_datapath_tx_plaintext_gso_payload_size(
@@ -8985,8 +9315,8 @@ static int trustix_datapath_tx_plaintext_outer_udp_gso_skb(
 			trustix_datapath_tx_plaintext_skip_inner_tcp_checksum);
 	if (!skb_is_gso(skb))
 		return -EINVAL;
-	shinfo = skb_shinfo(skb);
-	if ((shinfo->gso_type & SKB_GSO_TCPV4) != SKB_GSO_TCPV4)
+	gso_size = skb_shinfo(skb)->gso_size;
+	if ((skb_shinfo(skb)->gso_type & SKB_GSO_TCPV4) != SKB_GSO_TCPV4)
 		return -EPROTONOSUPPORT;
 	network_offset = skb_network_offset(skb);
 	if (network_offset > TRUSTIX_DATAPATH_PACKET_MAX_LEN ||
@@ -9018,7 +9348,6 @@ static int trustix_datapath_tx_plaintext_outer_udp_gso_skb(
 	payload_len = tcp_len - tcp_header_len;
 	if (!payload_len)
 		return -EINVAL;
-	gso_size = shinfo->gso_size;
 	if (!gso_size || gso_size > payload_len)
 		return -EINVAL;
 	ret = trustix_datapath_tx_plaintext_gso_payload_size(
@@ -9297,6 +9626,12 @@ static int trustix_datapath_tx_plaintext_gso_skb(
 {
 	int ret;
 
+	if (plan && plan->outer_protocol == IPPROTO_TCP) {
+		ret = trustix_datapath_tx_plaintext_inner_gso_skb(
+			skb, plan, target_dev);
+		if (!ret)
+			return 0;
+	}
 	if (plan && plan->outer_protocol == IPPROTO_UDP)
 		ret = trustix_datapath_tx_plaintext_outer_udp_gso_skb(
 			skb, plan, target_dev);
@@ -10296,7 +10631,11 @@ trustix_datapath_rx_validate_inner_tcp_checksum_partial(
 	__u32 tcp_header_len;
 	__u32 total_len;
 	__u32 tcp_len;
+	__u32 tcp_payload_len;
+	__u32 gso_size;
+	__u32 gso_segs;
 	__u8 incompatible_flags;
+	bool inner_gso;
 
 	if (!view || !(view->frame.flags &
 		       TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL))
@@ -10304,10 +10643,15 @@ trustix_datapath_rx_validate_inner_tcp_checksum_partial(
 	incompatible_flags = TRUSTIX_DATAPATH_TIXT_FLAG_ENCRYPTED |
 			     TRUSTIX_DATAPATH_TIXT_FLAG_KERNEL_OPENED |
 			     TRUSTIX_DATAPATH_TIXT_FLAG_CRYPTO_FRAGMENT;
+	inner_gso = view->frame.flags &
+		    TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO;
 	if (view->frame.header_len != TRUSTIX_DATAPATH_TIXT_HEADER_LEN ||
 	    !(view->frame.flags & TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4) ||
 	    (view->frame.flags & incompatible_flags) ||
-	    view->frame.fragment_index || view->frame.fragment_count ||
+	    (!inner_gso && (view->frame.fragment_index ||
+			    view->frame.fragment_count)) ||
+	    (inner_gso && (!view->frame.fragment_index ||
+			   view->frame.fragment_count < 2)) ||
 	    (view->session_flags & TRUSTIX_DATAPATH_SESSION_FLAGS_ENCRYPTED) ||
 	    !(view->session_flags &
 	      TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_TCP_CHECKSUM_PARTIAL) ||
@@ -10315,6 +10659,12 @@ trustix_datapath_rx_validate_inner_tcp_checksum_partial(
 	      TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL) ||
 	    view->inner.protocol != IPPROTO_TCP || !view->inner_packet ||
 	    view->frame.payload_len < sizeof(*iph) + sizeof(*tcph))
+		goto malformed;
+	if (inner_gso &&
+	    (!(view->session_flags &
+	       TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO) ||
+	     !(READ_ONCE(trustix_datapath_features) &
+	       TRUSTIX_DATAPATH_FEATURE_INNER_GSO)))
 		goto malformed;
 
 	iph = (const struct iphdr *)view->inner_packet;
@@ -10336,6 +10686,14 @@ trustix_datapath_rx_validate_inner_tcp_checksum_partial(
 	    total_len < ip_header_len + tcp_header_len)
 		goto malformed;
 	tcp_len = total_len - ip_header_len;
+	tcp_payload_len = tcp_len - tcp_header_len;
+	if (inner_gso) {
+		gso_size = view->frame.fragment_index;
+		gso_segs = view->frame.fragment_count;
+		if (!tcp_payload_len || gso_size > tcp_payload_len ||
+		    DIV_ROUND_UP(tcp_payload_len, gso_size) != gso_segs)
+			goto malformed;
+	}
 	expected = ~csum_tcpudp_magic(iph->saddr, iph->daddr, tcp_len,
 				       IPPROTO_TCP, 0);
 	if (tcph->check != expected)
@@ -10556,6 +10914,254 @@ trustix_datapath_rx_worker_target_dev_hint(struct sk_buff *skb,
 	}
 	return trustix_datapath_rx_worker_target_dev(skb, target_dev,
 						    target_ifindex);
+}
+
+static int trustix_datapath_rx_worker_build_inner_gso_skb(
+	struct sk_buff *source_skb, __u32 inner_offset,
+	const struct trustix_datapath_tixt_frame *frame,
+	struct net_device *target_dev, struct sk_buff **inner_skb_out)
+{
+	struct skb_shared_info *shinfo;
+	struct sk_buff *skb;
+	const struct tcphdr *tcph;
+	const struct iphdr *iph;
+	__u32 ip_header_len;
+	__u32 tcp_header_len;
+	__u32 total_len;
+	__u32 tcp_payload_len;
+	__u32 expected_segs;
+	__u32 pull_len;
+	int ret;
+
+	if (inner_skb_out)
+		*inner_skb_out = NULL;
+	if (!source_skb || !frame || !target_dev || !inner_skb_out ||
+	    !(frame->flags & TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO) ||
+	    !frame->payload_len || !frame->fragment_index ||
+	    frame->fragment_count < 2 || inner_offset > source_skb->len ||
+	    frame->payload_len > source_skb->len - inner_offset)
+		return -EINVAL;
+
+	skb = skb_clone(source_skb, GFP_ATOMIC);
+	if (!skb)
+		return -ENOMEM;
+	ret = skb_cow_head(skb, ETH_HLEN);
+	if (ret)
+		goto error;
+	if (check_add_overflow(inner_offset,
+			       (__u32)(sizeof(*iph) + sizeof(*tcph)),
+			       &pull_len) ||
+	    pull_len > skb->len || !pskb_may_pull(skb, pull_len)) {
+		ret = -ENODATA;
+		goto error;
+	}
+	if (inner_offset && !skb_pull(skb, inner_offset)) {
+		ret = -ENODATA;
+		goto error;
+	}
+	ret = pskb_trim(skb, frame->payload_len);
+	if (ret)
+		goto error;
+	if (!pskb_may_pull(skb, sizeof(*iph))) {
+		ret = -ENODATA;
+		goto error;
+	}
+	iph = (const struct iphdr *)skb->data;
+	if (iph->version != 4 || iph->ihl < 5 ||
+	    iph->protocol != IPPROTO_TCP ||
+	    (iph->frag_off & htons(0x3fff))) {
+		ret = -EPROTONOSUPPORT;
+		goto error;
+	}
+	ip_header_len = iph->ihl * 4;
+	if (ip_header_len < sizeof(*iph) ||
+	    !pskb_may_pull(skb, ip_header_len + sizeof(*tcph))) {
+		ret = -ENODATA;
+		goto error;
+	}
+	iph = (const struct iphdr *)skb->data;
+	tcph = (const struct tcphdr *)(skb->data + ip_header_len);
+	tcp_header_len = tcph->doff * 4;
+	total_len = ntohs(iph->tot_len);
+	if (tcp_header_len < sizeof(*tcph) || tcp_header_len > 60 ||
+	    total_len != frame->payload_len ||
+	    total_len < ip_header_len + tcp_header_len) {
+		ret = -EINVAL;
+		goto error;
+	}
+	if (!pskb_may_pull(skb, ip_header_len + tcp_header_len)) {
+		ret = -ENODATA;
+		goto error;
+	}
+	tcp_payload_len = total_len - ip_header_len - tcp_header_len;
+	expected_segs = DIV_ROUND_UP(tcp_payload_len,
+				     (__u32)frame->fragment_index);
+	if (!tcp_payload_len || expected_segs != frame->fragment_count) {
+		ret = -EINVAL;
+		goto error;
+	}
+
+	skb_orphan(skb);
+	skb->protocol = htons(ETH_P_IP);
+	skb->pkt_type = PACKET_OUTGOING;
+	skb->encapsulation = 0;
+	skb->csum = 0;
+	skb->csum_level = 0;
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, ip_header_len);
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	skb->csum_start = skb_transport_header(skb) - skb->head;
+	skb->csum_offset = offsetof(struct tcphdr, check);
+	shinfo = skb_shinfo(skb);
+	shinfo->gso_size = frame->fragment_index;
+	shinfo->gso_segs = frame->fragment_count;
+	shinfo->gso_type = SKB_GSO_TCPV4;
+	*inner_skb_out = skb;
+	return 0;
+
+error:
+	kfree_skb(skb);
+	return ret;
+}
+
+static int trustix_datapath_rx_worker_try_inner_gso(
+	struct sk_buff *skb, const struct trustix_datapath_ioc_classify *outer,
+	__u8 ip_header_len, __u8 l4_header_len, int target_ifindex,
+	struct net_device *target_dev_hint, bool *candidate,
+	unsigned int *queued_frames)
+{
+	struct trustix_datapath_rx_validation_cache validation_cache = {};
+	struct trustix_datapath_rx_stage_view view = {};
+	struct trustix_datapath_ioc_classify inner = {};
+	struct net_device *target_dev = NULL;
+	struct sk_buff *inner_skb = NULL;
+	__u8 inner_header[sizeof(struct iphdr) + 60];
+	__u8 inner_ip_header_len = 0;
+	__u8 inner_l4_header_len = 0;
+	__u32 network_offset;
+	__u32 total_len;
+	__u32 tixt_offset;
+	__u32 tixt_len;
+	__u32 inner_offset;
+	__u32 copy_len;
+	int ret;
+
+	if (candidate)
+		*candidate = false;
+	if (queued_frames)
+		*queued_frames = 0;
+	if (!skb || !outer || !candidate || !queued_frames ||
+	    outer->protocol != IPPROTO_TCP || ip_header_len != 20 ||
+	    l4_header_len != 20)
+		return -EOPNOTSUPP;
+	network_offset = skb_network_offset(skb);
+	if (network_offset > skb->len ||
+	    skb->len - network_offset < ip_header_len + l4_header_len)
+		return -EMSGSIZE;
+	total_len = ntohs(ip_hdr(skb)->tot_len);
+	tixt_offset = network_offset + ip_header_len + l4_header_len;
+	if (total_len < ip_header_len + l4_header_len ||
+	    total_len > skb->len - network_offset)
+		return -EMSGSIZE;
+	tixt_len = total_len - ip_header_len - l4_header_len;
+	ret = trustix_datapath_parse_tixt_skb_header(
+		skb, tixt_offset, tixt_len, &view.frame);
+	if (ret)
+		return ret;
+	if (!(view.frame.flags & TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO))
+		return -EOPNOTSUPP;
+	*candidate = true;
+	trustix_datapath_rx_worker_inner_gso_candidates++;
+	if (view.frame.wire_len > tixt_len) {
+		trustix_datapath_rx_worker_inner_gso_partial_frames++;
+		return -EMSGSIZE;
+	}
+	if (view.frame.wire_len < tixt_len ||
+	    view.frame.payload_len > TRUSTIX_DATAPATH_PACKET_MAX_LEN) {
+		trustix_datapath_rx_worker_inner_gso_malformed++;
+		return -EMSGSIZE;
+	}
+	if (check_add_overflow(tixt_offset, (__u32)view.frame.header_len,
+			       &inner_offset) ||
+	    inner_offset > skb->len ||
+	    view.frame.payload_len > skb->len - inner_offset) {
+		trustix_datapath_rx_worker_inner_gso_malformed++;
+		return -EMSGSIZE;
+	}
+	copy_len = min_t(__u32, view.frame.payload_len,
+			 sizeof(inner_header));
+	if (skb_copy_bits(skb, inner_offset, inner_header, copy_len)) {
+		trustix_datapath_rx_worker_inner_gso_errors++;
+		return -ENODATA;
+	}
+	ret = trustix_datapath_parse_ipv4_packet(
+		inner_header, view.frame.payload_len, &inner,
+		&inner_ip_header_len, &inner_l4_header_len);
+	if (ret) {
+		trustix_datapath_rx_worker_inner_gso_malformed++;
+		return ret;
+	}
+	view.inner = inner;
+	view.inner_packet = inner_header;
+	view.tixt_len = view.frame.wire_len;
+	view.inner_offset = inner_offset;
+	view.inner_ip_header_len = inner_ip_header_len;
+	view.inner_l4_header_len = inner_l4_header_len;
+	ret = trustix_datapath_rx_stage_validate_batch(
+		outer, &view, &validation_cache);
+	if (ret) {
+		if (ret == -EBADMSG || ret == -EINVAL ||
+		    ret == -EPROTONOSUPPORT || ret == -EMSGSIZE)
+			trustix_datapath_rx_worker_inner_gso_malformed++;
+		else
+			trustix_datapath_rx_worker_inner_gso_errors++;
+		return ret;
+	}
+	ret = trustix_datapath_rx_worker_target_dev_hint(
+		skb, &target_dev, target_ifindex, target_dev_hint);
+	if (ret) {
+		trustix_datapath_rx_worker_inner_gso_errors++;
+		return ret;
+	}
+	if (!trustix_datapath_rx_worker_dev_ready(target_dev)) {
+		trustix_datapath_rx_worker_inner_gso_errors++;
+		ret = -ENETDOWN;
+		goto out;
+	}
+	ret = trustix_datapath_rx_worker_build_inner_gso_skb(
+		skb, inner_offset, &view.frame, target_dev, &inner_skb);
+	if (ret) {
+		if (ret == -EINVAL || ret == -EPROTONOSUPPORT ||
+		    ret == -EMSGSIZE)
+			trustix_datapath_rx_worker_inner_gso_malformed++;
+		else
+			trustix_datapath_rx_worker_inner_gso_errors++;
+		goto out;
+	}
+	ret = trustix_datapath_rx_worker_prepare_l2_gso_skb(inner_skb,
+						       target_dev);
+	if (ret) {
+		trustix_datapath_rx_worker_inner_gso_errors++;
+		goto out;
+	}
+	ret = trustix_datapath_rx_worker_queue_l2_skb_from_hook(
+		skb, target_dev, &inner_skb, inner_skb->len,
+		view.frame.fragment_count, queued_frames);
+	if (ret) {
+		trustix_datapath_rx_worker_inner_gso_errors++;
+	} else if (!*queued_frames) {
+		trustix_datapath_rx_worker_inner_gso_errors++;
+		ret = -EIO;
+	} else {
+		trustix_datapath_rx_worker_inner_gso_packets++;
+		trustix_datapath_rx_worker_inner_gso_segments +=
+			view.frame.fragment_count;
+	}
+	out:
+	kfree_skb(inner_skb);
+	if (target_dev)
+		dev_put(target_dev);
+	return ret;
 }
 
 static bool
@@ -12145,6 +12751,12 @@ static int trustix_datapath_rx_worker_sanitize_inner_gso_skb(
 	    total_len > skb->len - ETH_HLEN ||
 	    skb->len < ETH_HLEN + total_len)
 		return -EINVAL;
+	if (!pskb_may_pull(skb, ETH_HLEN + ip_header_len + tcp_header_len) ||
+	    skb_headlen(skb) <
+		    ETH_HLEN + ip_header_len + tcp_header_len)
+		return -ENODATA;
+	iph = (struct iphdr *)skb_network_header(skb);
+	tcph = (struct tcphdr *)((__u8 *)iph + ip_header_len);
 	tcp_len = total_len - ip_header_len;
 	payload_len = tcp_len - tcp_header_len;
 	if (!payload_len)
@@ -12390,6 +13002,9 @@ static int trustix_datapath_rx_worker_xmit_inner_gso_segments(
 		trustix_datapath_rx_worker_fix_ipv4_header_checksum(
 			seg_iph, ip_header_len);
 		seg_tcph->seq = htonl(seq + payload_offset);
+		if (seg_tcph->psh &&
+		    payload_offset + seg_payload_len < payload_len)
+			seg_tcph->psh = 0;
 		seg_tcph->check = 0;
 		seg_tcph->check = trustix_datapath_rx_worker_l4_checksum(
 			seg_iph, seg_tcph, tcp_header_len + seg_payload_len,
@@ -15613,6 +16228,11 @@ trustix_datapath_rx_worker_push_stream(
 							 &view.frame);
 		if (ret)
 			goto error;
+		if (!view.frame.wire_len || view.frame.wire_len > remaining ||
+		    !view.frame.payload_len) {
+			ret = -EMSGSIZE;
+			goto error;
+		}
 		inner_packet = cursor + view.frame.header_len;
 		ret = trustix_datapath_parse_ipv4_packet(
 			inner_packet, view.frame.payload_len, &inner,
@@ -16427,6 +17047,7 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 	bool rx_worker = false;
 	bool worker_queued = false;
 	bool worker_defer_stolen = false;
+	bool worker_inner_gso_candidate = false;
 	bool worker_inline_stolen = false;
 	bool worker_stream_queued = false;
 	struct net_device *worker_defer_target_dev = NULL;
@@ -16494,7 +17115,23 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 							    &classify,
 							    ip_header_len,
 							    l4_header_len);
-		if (!outer_ret && (rx_preview || rx_stage || rx_worker)) {
+		if (!outer_ret && rx_worker) {
+			worker_ret = trustix_datapath_rx_worker_try_inner_gso(
+				skb, &classify, ip_header_len, l4_header_len,
+				target_ifindex, target_dev_hint,
+				&worker_inner_gso_candidate,
+				&worker_stream_frames);
+			if (worker_inner_gso_candidate) {
+				if (!worker_ret) {
+					outer_ret = 0;
+					worker_stream_queued = true;
+				} else {
+					outer_ret = worker_ret;
+				}
+			}
+		}
+		if (!worker_inner_gso_candidate && !outer_ret &&
+		    (rx_preview || rx_stage || rx_worker)) {
 			outer_ret = trustix_datapath_rx_prepare_skb(
 				skb, &classify, ip_header_len, l4_header_len,
 				&rx_view);
@@ -16550,7 +17187,8 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 							    ip_header_len,
 							    l4_header_len);
 		}
-		worker_queued = rx_worker && rx_prepared && !worker_ret;
+		worker_queued = worker_inner_gso_candidate ||
+				(rx_worker && rx_prepared && !worker_ret);
 		if (worker_stream_queued)
 			worker_queued = true;
 	}
@@ -16860,6 +17498,12 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_rx_worker_checksum_errors = 0;
 	trustix_datapath_rx_worker_inner_tcp_checksum_partial = 0;
 	trustix_datapath_rx_worker_inner_tcp_checksum_partial_errors = 0;
+	trustix_datapath_rx_worker_inner_gso_candidates = 0;
+	trustix_datapath_rx_worker_inner_gso_packets = 0;
+	trustix_datapath_rx_worker_inner_gso_segments = 0;
+	trustix_datapath_rx_worker_inner_gso_partial_frames = 0;
+	trustix_datapath_rx_worker_inner_gso_malformed = 0;
+	trustix_datapath_rx_worker_inner_gso_errors = 0;
 	trustix_datapath_rx_worker_partial_checksum_software_fallbacks = 0;
 	trustix_datapath_rx_worker_partial_checksum_metadata_repairs = 0;
 	trustix_datapath_rx_worker_dst_mac_hits = 0;
@@ -16943,6 +17587,11 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_bytes = 0;
 	trustix_datapath_tx_plaintext_inner_tcp_checksum_partial = 0;
 	trustix_datapath_tx_plaintext_inner_tcp_checksum_partial_fallbacks = 0;
+	trustix_datapath_tx_plaintext_inner_gso_attempts = 0;
+	trustix_datapath_tx_plaintext_inner_gso_packets = 0;
+	trustix_datapath_tx_plaintext_inner_gso_segments = 0;
+	trustix_datapath_tx_plaintext_inner_gso_fallbacks = 0;
+	trustix_datapath_tx_plaintext_inner_gso_errors = 0;
 	trustix_datapath_tx_plaintext_gso_skips = 0;
 	trustix_datapath_tx_plaintext_gso_segments = 0;
 	trustix_datapath_tx_plaintext_gso_errors = 0;
@@ -17291,7 +17940,7 @@ static void trustix_datapath_hook_release_netdev(struct net_device *dev)
 			count++;
 		}
 		entry->registered = false;
-		entry->in_use = false;
+		/* Keep the slot reserved until nf_unregister_net_hook returns. */
 		if (clear_count < ARRAY_SIZE(clear))
 			clear[clear_count++] = entry;
 	}
@@ -17312,6 +17961,14 @@ static void trustix_datapath_hook_release_netdev(struct net_device *dev)
 
 	for (i = 0; i < put_net_count; i++)
 		put_net(put_nets[i]);
+	/*
+	 * A hook callback can have copied target_dev immediately before the
+	 * notifier cleared the entry. Source-device matches are synchronized by
+	 * nf_unregister_net_hook(), but a target-only unregister leaves the hook
+	 * installed. Wait for those readers before dropping the saved device ref.
+	 */
+	if (target_dev_count)
+		synchronize_net();
 	for (i = 0; i < target_dev_count; i++)
 		dev_put(target_devs[i]);
 }
@@ -18785,8 +19442,6 @@ trustix_datapath_parse_tixt_header(const __u8 *wire, __u32 len,
 	if (payload_len > UINT_MAX - header_len)
 		return -EMSGSIZE;
 	wire_len = header_len + payload_len;
-	if (wire_len > len)
-		return -EMSGSIZE;
 
 	if (magic == TRUSTIX_DATAPATH_TIXT_MAGIC) {
 		fragment_index = trustix_datapath_get_be16(wire + 36);
@@ -18795,18 +19450,31 @@ trustix_datapath_parse_tixt_header(const __u8 *wire, __u32 len,
 		fragment_index = trustix_datapath_get_be16(wire + 28);
 		fragment_count = trustix_datapath_get_be16(wire + 30);
 	}
-	if (fragment_count == 0) {
-		if (fragment_index != 0)
+	if (flags & TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO) {
+		if (magic != TRUSTIX_DATAPATH_TIXT_MAGIC ||
+		    (flags & (TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4 |
+			      TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL)) !=
+			    (TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4 |
+			     TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL) ||
+		    (flags & (TRUSTIX_DATAPATH_TIXT_FLAG_ENCRYPTED |
+			      TRUSTIX_DATAPATH_TIXT_FLAG_KERNEL_OPENED |
+			      TRUSTIX_DATAPATH_TIXT_FLAG_CRYPTO_FRAGMENT)) ||
+		    !fragment_index || fragment_count < 2)
 			return -EBADMSG;
-		if (flags & TRUSTIX_DATAPATH_TIXT_FLAG_CRYPTO_FRAGMENT)
+	} else {
+		if (fragment_count == 0) {
+			if (fragment_index != 0)
+				return -EBADMSG;
+			if (flags & TRUSTIX_DATAPATH_TIXT_FLAG_CRYPTO_FRAGMENT)
+				return -EBADMSG;
+		} else if (fragment_index >= fragment_count) {
 			return -EBADMSG;
-	} else if (fragment_index >= fragment_count) {
-		return -EBADMSG;
+		}
+		if ((flags &
+		     TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL) &&
+		    (fragment_index || fragment_count))
+			return -EBADMSG;
 	}
-	if ((flags &
-	     TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL) &&
-	    (fragment_index || fragment_count))
-		return -EBADMSG;
 
 	frame->flags = flags;
 	frame->header_len = (__u8)header_len;
@@ -19209,6 +19877,288 @@ out:
 	return ret;
 }
 
+static int trustix_datapath_selftest_inner_gso(void)
+{
+	const __u32 payload_len = 3000;
+	const __u32 tcp_header_len = 60;
+	const __u32 inner_len = sizeof(struct iphdr) +
+				tcp_header_len + payload_len;
+	const __u32 inner_offset = sizeof(struct iphdr) +
+				   sizeof(struct tcphdr) +
+				   TRUSTIX_DATAPATH_TIXT_HEADER_LEN;
+	struct trustix_datapath_rx_stage_view view = {};
+	struct trustix_datapath_ioc_classify outer = {};
+	struct trustix_datapath_tixt_frame frame = {};
+	struct trustix_datapath_tx_plan plan = {};
+	struct net_device *test_dev = NULL;
+	struct sk_buff *inner_skb = NULL;
+	struct sk_buff *outer_skb = NULL;
+	struct sk_buff *partial_outer_skb = NULL;
+	struct sk_buff *restored_skb = NULL;
+	struct sk_buff *split_outer_skb = NULL;
+	struct skb_shared_info *shinfo;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
+	struct iphdr *outer_iph;
+	struct page *page = NULL;
+	struct page *split_page = NULL;
+	void *page_addr;
+	__u8 wire[TRUSTIX_DATAPATH_TIXT_HEADER_LEN];
+	__u8 header[sizeof(struct iphdr) + 60];
+	__u8 sample[32];
+	__u64 saved_features = READ_ONCE(trustix_datapath_features);
+	__u64 saved_partial_frames =
+		trustix_datapath_rx_worker_inner_tcp_checksum_partial;
+	__u64 saved_partial_errors =
+		trustix_datapath_rx_worker_inner_tcp_checksum_partial_errors;
+	__u64 saved_inner_gso_candidates =
+		trustix_datapath_rx_worker_inner_gso_candidates;
+	__u64 saved_inner_gso_partial_frames =
+		trustix_datapath_rx_worker_inner_gso_partial_frames;
+	unsigned int gso_segs = 0;
+	unsigned int queued_frames = 0;
+	unsigned int i;
+	__u32 split_head_len = inner_offset - 16;
+	__u32 split_frag_len;
+	bool candidate = false;
+	int ret = 0;
+
+	test_dev = kzalloc(sizeof(*test_dev), GFP_KERNEL);
+	if (!test_dev)
+		return -ENOMEM;
+	test_dev->type = ARPHRD_ETHER;
+	test_dev->mtu = 1500;
+	test_dev->features = NETIF_F_TSO | NETIF_F_HW_CSUM;
+
+	inner_skb = alloc_skb(LL_MAX_HEADER + sizeof(struct iphdr) +
+				      tcp_header_len, GFP_KERNEL);
+	if (!inner_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	skb_reserve(inner_skb, LL_MAX_HEADER);
+	iph = (struct iphdr *)skb_put(inner_skb, sizeof(*iph));
+	tcph = (struct tcphdr *)skb_put(inner_skb, tcp_header_len);
+	memset(iph, 0, sizeof(*iph) + tcp_header_len);
+	iph->version = 4;
+	iph->ihl = sizeof(*iph) / 4;
+	iph->tot_len = htons((__u16)inner_len);
+	iph->ttl = 64;
+	iph->protocol = IPPROTO_TCP;
+	iph->saddr = htonl(0xc0000201U);
+	iph->daddr = htonl(0xc6336402U);
+	tcph->source = htons(12345);
+	tcph->dest = htons(443);
+	tcph->seq = htonl(0x10203040U);
+	tcph->doff = tcp_header_len / 4;
+	tcph->ack = 1;
+	tcph->check = ~csum_tcpudp_magic(
+		iph->saddr, iph->daddr, inner_len - sizeof(*iph),
+		IPPROTO_TCP, 0);
+	trustix_datapath_rx_worker_fix_ipv4_header_checksum(iph,
+						   sizeof(*iph));
+	page = alloc_page(GFP_KERNEL);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	page_addr = kmap_local_page(page);
+	for (i = 0; i < payload_len; i++)
+		((__u8 *)page_addr)[i] = (__u8)(i * 17U + 3U);
+	kunmap_local(page_addr);
+	skb_add_rx_frag(inner_skb, 0, page, 0, payload_len, PAGE_SIZE);
+	page = NULL;
+	skb_reset_network_header(inner_skb);
+	skb_set_transport_header(inner_skb, sizeof(*iph));
+	inner_skb->protocol = htons(ETH_P_IP);
+	inner_skb->ip_summed = CHECKSUM_PARTIAL;
+	inner_skb->csum_start = skb_transport_header(inner_skb) -
+				inner_skb->head;
+	inner_skb->csum_offset = offsetof(struct tcphdr, check);
+	shinfo = skb_shinfo(inner_skb);
+	shinfo->gso_size = 1000;
+	shinfo->gso_segs = 3;
+	shinfo->gso_type = SKB_GSO_TCPV4;
+
+	plan.flow_id = 7;
+	plan.epoch = 11;
+	plan.session_flags =
+		TRUSTIX_DATAPATH_SESSION_FLAG_SEND_INNER_TCP_CHECKSUM_PARTIAL |
+		TRUSTIX_DATAPATH_SESSION_FLAG_SEND_INNER_GSO;
+	plan.local_ipv4 = 0xc000020aU;
+	plan.remote_ipv4 = 0xc633640aU;
+	plan.local_port = 20000;
+	plan.remote_port = 30000;
+	plan.outer_protocol = IPPROTO_TCP;
+	plan.max_packet_size = 1500;
+	WRITE_ONCE(trustix_datapath_features,
+		   saved_features |
+			   TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL |
+			   TRUSTIX_DATAPATH_FEATURE_INNER_GSO);
+	ret = trustix_datapath_tx_build_inner_gso_skb(
+		inner_skb, &plan, test_dev, &outer_skb, &gso_segs);
+	if (ret)
+		goto out;
+	if (gso_segs != 3 || !skb_is_gso(outer_skb) ||
+	    !skb_is_nonlinear(outer_skb) ||
+	    skb_shinfo(outer_skb)->gso_size != 1460 ||
+	    skb_shinfo(outer_skb)->gso_segs != 3 ||
+	    outer_skb->len != inner_offset + inner_len) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (skb_copy_bits(outer_skb, sizeof(struct iphdr) +
+				       sizeof(struct tcphdr),
+			  wire, sizeof(wire))) {
+		ret = -ENODATA;
+		goto out;
+	}
+	ret = trustix_datapath_parse_tixt_header(
+		wire, TRUSTIX_DATAPATH_TIXT_HEADER_LEN + inner_len, &frame);
+	if (ret || frame.flags !=
+			   (TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4 |
+			    TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL |
+			    TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO) ||
+	    frame.payload_len != inner_len || frame.fragment_index != 1000 ||
+	    frame.fragment_count != 3) {
+		ret = ret ?: -EINVAL;
+		goto out;
+	}
+	partial_outer_skb = skb_clone(outer_skb, GFP_KERNEL);
+	if (!partial_outer_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ret = skb_linearize(partial_outer_skb);
+	if (ret)
+		goto out;
+	ret = pskb_trim(partial_outer_skb, 1500);
+	if (ret)
+		goto out;
+	outer_iph = ip_hdr(partial_outer_skb);
+	outer_iph->tot_len = htons((__u16)partial_outer_skb->len);
+	trustix_datapath_rx_worker_fix_ipv4_header_checksum(
+		outer_iph, sizeof(*outer_iph));
+	outer.protocol = IPPROTO_TCP;
+	ret = trustix_datapath_rx_worker_try_inner_gso(
+		partial_outer_skb, &outer, sizeof(struct iphdr),
+		sizeof(struct tcphdr), 0, NULL, &candidate, &queued_frames);
+	if (ret != -EMSGSIZE || !candidate || queued_frames ||
+	    trustix_datapath_rx_worker_inner_gso_candidates !=
+		    saved_inner_gso_candidates + 1 ||
+	    trustix_datapath_rx_worker_inner_gso_partial_frames !=
+		    saved_inner_gso_partial_frames + 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+	ret = 0;
+	if (skb_copy_bits(outer_skb, inner_offset, header, sizeof(header))) {
+		ret = -ENODATA;
+		goto out;
+	}
+	view.frame = frame;
+	view.inner.protocol = IPPROTO_TCP;
+	view.inner_packet = header;
+	view.session_flags =
+		TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_TCP_CHECKSUM_PARTIAL |
+		TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_INNER_GSO;
+	ret = trustix_datapath_rx_validate_inner_tcp_checksum_partial(&view);
+	if (ret)
+		goto out;
+	if (outer_skb->len <= split_head_len ||
+	    outer_skb->len - split_head_len > PAGE_SIZE) {
+		ret = -EINVAL;
+		goto out;
+	}
+	split_outer_skb = alloc_skb(split_head_len, GFP_KERNEL);
+	if (!split_outer_skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	if (skb_copy_bits(outer_skb, 0, skb_put(split_outer_skb,
+						 split_head_len),
+			  split_head_len)) {
+		ret = -ENODATA;
+		goto out;
+	}
+	split_frag_len = outer_skb->len - split_head_len;
+	split_page = alloc_page(GFP_KERNEL);
+	if (!split_page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	page_addr = kmap_local_page(split_page);
+	ret = skb_copy_bits(outer_skb, split_head_len, page_addr,
+			    split_frag_len);
+	kunmap_local(page_addr);
+	if (ret)
+		goto out;
+	skb_add_rx_frag(split_outer_skb, 0, split_page, 0, split_frag_len,
+			PAGE_SIZE);
+	split_page = NULL;
+	if (!skb_is_nonlinear(split_outer_skb) ||
+	    skb_headlen(split_outer_skb) >= inner_offset) {
+		ret = -EINVAL;
+		goto out;
+	}
+	ret = trustix_datapath_rx_worker_build_inner_gso_skb(
+		split_outer_skb, inner_offset, &frame, test_dev, &restored_skb);
+	if (ret)
+		goto out;
+	if (restored_skb->len != inner_len ||
+	    !skb_is_nonlinear(restored_skb) ||
+	    skb_shinfo(restored_skb)->gso_size != 1000 ||
+	    skb_shinfo(restored_skb)->gso_segs != 3 ||
+	    skb_shinfo(restored_skb)->gso_type != SKB_GSO_TCPV4 ||
+	    skb_copy_bits(restored_skb, sizeof(struct iphdr) +
+					 tcp_header_len,
+			  sample, sizeof(sample))) {
+		ret = -EINVAL;
+		goto out;
+	}
+	for (i = 0; i < sizeof(sample); i++) {
+		if (sample[i] != (__u8)(i * 17U + 3U)) {
+			ret = -EINVAL;
+			goto out;
+		}
+	}
+	view.frame.fragment_count = 2;
+	if (trustix_datapath_rx_validate_inner_tcp_checksum_partial(&view) !=
+	    -EBADMSG) {
+		ret = -EINVAL;
+		goto out;
+	}
+	trustix_datapath_build_tixt_header(
+		wire, TRUSTIX_DATAPATH_TIXT_FLAG_INNER_IPV4 |
+			      TRUSTIX_DATAPATH_TIXT_FLAG_INNER_GSO,
+		1, 2, 3, inner_len, 1000, 3);
+	if (!trustix_datapath_parse_tixt_header(
+		    wire, TRUSTIX_DATAPATH_TIXT_HEADER_LEN, &frame))
+		ret = -EINVAL;
+
+out:
+	if (page)
+		__free_page(page);
+	if (split_page)
+		__free_page(split_page);
+	kfree_skb(restored_skb);
+	kfree_skb(split_outer_skb);
+	kfree_skb(partial_outer_skb);
+	kfree_skb(outer_skb);
+	kfree_skb(inner_skb);
+	kfree(test_dev);
+	WRITE_ONCE(trustix_datapath_features, saved_features);
+	trustix_datapath_rx_worker_inner_tcp_checksum_partial =
+		saved_partial_frames;
+	trustix_datapath_rx_worker_inner_tcp_checksum_partial_errors =
+		saved_partial_errors;
+	trustix_datapath_rx_worker_inner_gso_candidates =
+		saved_inner_gso_candidates;
+	trustix_datapath_rx_worker_inner_gso_partial_frames =
+		saved_inner_gso_partial_frames;
+	return ret;
+}
+
 static void trustix_datapath_run_selftests(__u64 requested, __u64 *passed,
 					   __u64 *failed)
 {
@@ -19292,6 +20242,12 @@ static void trustix_datapath_run_selftests(__u64 requested, __u64 *passed,
 			pass |=
 				TRUSTIX_DATAPATH_SELFTEST_INNER_TCP_CHECKSUM_PARTIAL;
 	}
+	if (requested & TRUSTIX_DATAPATH_SELFTEST_INNER_GSO) {
+		if (trustix_datapath_selftest_inner_gso())
+			fail |= TRUSTIX_DATAPATH_SELFTEST_INNER_GSO;
+		else
+			pass |= TRUSTIX_DATAPATH_SELFTEST_INNER_GSO;
+	}
 
 	if (passed)
 		*passed = pass;
@@ -19336,6 +20292,15 @@ trustix_datapath_update_features_from_selftests(__u64 passed, __u64 failed)
 	      TRUSTIX_DATAPATH_SELFTEST_INNER_TCP_CHECKSUM_PARTIAL))
 		active_features |=
 			TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL;
+	if ((requested_features & TRUSTIX_DATAPATH_FEATURE_INNER_GSO) &&
+	    (active_features &
+	     (TRUSTIX_DATAPATH_FEATURE_FULL_DATAPATH |
+	      TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL)) ==
+		    (TRUSTIX_DATAPATH_FEATURE_FULL_DATAPATH |
+		     TRUSTIX_DATAPATH_FEATURE_INNER_TCP_CHECKSUM_PARTIAL) &&
+	    (passed & TRUSTIX_DATAPATH_SELFTEST_INNER_GSO) &&
+	    !(failed & TRUSTIX_DATAPATH_SELFTEST_INNER_GSO))
+		active_features |= TRUSTIX_DATAPATH_FEATURE_INNER_GSO;
 	if (active_features)
 		flags |= TRUSTIX_DATAPATH_FLAG_FEATURES_ACTIVE;
 	WRITE_ONCE(trustix_datapath_selftests, passed);

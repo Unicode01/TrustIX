@@ -69,6 +69,9 @@ const (
 	tixTCPStatInnerTCPChecksumPartialLocal      = "tix_tcp_inner_tcp_checksum_partial_local"
 	tixTCPStatInnerTCPChecksumPartialPeer       = "tix_tcp_inner_tcp_checksum_partial_peer"
 	tixTCPStatInnerTCPChecksumPartialNegotiated = "tix_tcp_inner_tcp_checksum_partial_negotiated"
+	tixTCPStatInnerGSOLocal                     = "tix_tcp_inner_gso_local"
+	tixTCPStatInnerGSOPeer                      = "tix_tcp_inner_gso_peer"
+	tixTCPStatInnerGSONegotiated                = "tix_tcp_inner_gso_negotiated"
 )
 
 const (
@@ -86,9 +89,13 @@ const (
 	tixTCPCompatControlInitOldLen           = 14
 	tixTCPCompatControlCapabilitiesType     = 4
 	tixTCPCompatControlCapabilitiesLen      = 14
+	tixTCPCompatCapabilityRefreshInterval   = 2 * time.Second
 	tixTCPCapabilityInnerTCPChecksumPartial = uint64(1 << 0)
-	tixTCPKnownCapabilities                 = tixTCPCapabilityInnerTCPChecksumPartial
+	tixTCPCapabilityInnerGSO                = uint64(1 << 1)
+	tixTCPKnownCapabilities                 = tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO
 )
+
+var errTIXTCPCapabilityAdvertisement = errors.New("tix_tcp capability advertisement failed")
 
 var (
 	tixTCPCompatControlMagic = [4]byte{'T', 'I', 'X', 'C'}
@@ -340,12 +347,13 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 		session := newSession(transportImpl.provider, subscription, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address)
 		session.compatControl = compatControl
 		session.fullPlaintextKernelDatapath = fullPlaintextKernel
-		session.localCapabilities = localCapabilities
+		session.localCapabilities.Store(localCapabilities)
 		session.enableCompatPriority()
 		// Dial contexts are commonly canceled after setup; the session receive
 		// pump must live until Session.Close closes the subscription/input.
 		go session.readSubscription(context.Background())
 		go session.readCompatControl(context.Background())
+		go session.monitorLocalCapabilities(context.Background())
 		return session, nil
 	}
 	return nil, fmt.Errorf("peer %q has no dialable tix_tcp endpoint", peer.ID)
@@ -400,7 +408,6 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 		sessions:                    make(map[uint64]*session),
 		placement:                   placement,
 		fullPlaintextKernelDatapath: fullPlaintextKernel,
-		localCapabilities:           tixTCPLocalCapabilities(status),
 	}
 	if compatListener, err := listenTIXTCPCompatPrimer(ep.Listen); err != nil {
 		return nil, errors.Join(err, tixTCPCleanupError("close tix_tcp subscription", subscription.Close()))
@@ -460,7 +467,6 @@ type listener struct {
 	compatListener              net.Listener
 	primerFlowRequired          bool
 	fullPlaintextKernelDatapath bool
-	localCapabilities           uint64
 }
 
 func (transportImpl *Transport) requestedCryptoPlacement() dataplane.CryptoPlacement {
@@ -683,7 +689,7 @@ func (listener *listener) acceptCompatPrimers() {
 		sess := newSession(listener.provider, nil, init.flowID, "", listener.endpoint.Name, listener.placement, flow.LocalAddress, flow.RemoteAddress)
 		sess.compatControl = control
 		sess.fullPlaintextKernelDatapath = listener.fullPlaintextKernelDatapath
-		sess.localCapabilities = listener.localCapabilities
+		sess.localCapabilities.Store(listener.currentLocalCapabilities())
 		sess.enableCompatPriority()
 		if err := sess.sendCompatCapabilities(); err != nil {
 			transport.ObserveAsyncError("close tix_tcp compat control after capability send failure", control.Close())
@@ -709,6 +715,7 @@ func (listener *listener) acceptCompatPrimers() {
 			listener.mu.Unlock()
 			listener.forgetSessionWhenClosed(init.flowID, sess)
 			go sess.readCompatControl(context.Background())
+			go sess.monitorLocalCapabilities(context.Background())
 		default:
 			delete(listener.sessions, init.flowID)
 			listener.mu.Unlock()
@@ -718,6 +725,17 @@ func (listener *listener) acceptCompatPrimers() {
 			}
 		}
 	}
+}
+
+func (listener *listener) currentLocalCapabilities() uint64 {
+	if listener == nil || listener.provider == nil || !listener.fullPlaintextKernelDatapath {
+		return 0
+	}
+	capabilities, err := tixTCPProviderLocalCapabilities(context.Background(), listener.provider)
+	if err != nil {
+		return 0
+	}
+	return capabilities
 }
 
 func (listener *listener) forgetSessionWhenClosed(flowID uint64, sess *session) {
@@ -925,8 +943,9 @@ type session struct {
 	cryptoSuite                 string
 	cryptoOffloaded             bool
 	fullPlaintextKernelDatapath bool
-	localCapabilities           uint64
+	localCapabilities           atomic.Uint64
 	peerCapabilities            atomic.Uint64
+	capabilityRefreshFailed     atomic.Bool
 	kernelDatapathStateHookMu   sync.Mutex
 	kernelDatapathStateHook     func()
 	compatControl               *stream.Session
@@ -1072,13 +1091,86 @@ func (session *session) enableCompatPriority() {
 }
 
 func (session *session) sendCompatCapabilities() error {
-	if session == nil || session.compatControl == nil || session.localCapabilities == 0 {
+	if session == nil || session.compatControl == nil {
 		return nil
 	}
-	if err := session.compatControl.SendPacket(encodeTIXTCPCompatControlCapabilities(session.localCapabilities)); err != nil {
+	capabilities := session.localCapabilities.Load() & tixTCPKnownCapabilities
+	if capabilities == 0 {
+		return nil
+	}
+	return session.sendCompatCapabilitiesValue(capabilities)
+}
+
+func (session *session) sendCompatCapabilitiesValue(capabilities uint64) error {
+	if session == nil || session.compatControl == nil {
+		return nil
+	}
+	capabilities &= tixTCPKnownCapabilities
+	session.sendMu.Lock()
+	defer session.sendMu.Unlock()
+	if err := session.compatControl.SendPacket(encodeTIXTCPCompatControlCapabilities(capabilities)); err != nil {
 		return fmt.Errorf("send tix_tcp compat capabilities: %w", err)
 	}
 	return nil
+}
+
+func (session *session) refreshLocalCapabilities(ctx context.Context) error {
+	if session == nil || session.provider == nil || session.compatControl == nil ||
+		!session.fullPlaintextKernelDatapath {
+		return nil
+	}
+	capabilities, statusErr := tixTCPProviderLocalCapabilities(ctx, session.provider)
+	if capabilities == session.localCapabilities.Load() {
+		if statusErr != nil {
+			return fmt.Errorf("refresh tix_tcp local capabilities: %w", statusErr)
+		}
+		return nil
+	}
+	if session.localCapabilities.Swap(capabilities) != capabilities {
+		session.notifyKernelDatapathStateChange()
+	}
+	if err := session.sendCompatCapabilitiesValue(capabilities); err != nil {
+		return fmt.Errorf("%w: %w", errTIXTCPCapabilityAdvertisement, err)
+	}
+	if statusErr != nil {
+		return fmt.Errorf("refresh tix_tcp local capabilities: %w", statusErr)
+	}
+	return nil
+}
+
+func (session *session) monitorLocalCapabilities(ctx context.Context) {
+	if session == nil || session.provider == nil || session.compatControl == nil ||
+		!session.fullPlaintextKernelDatapath {
+		return
+	}
+	ticker := time.NewTicker(tixTCPCompatCapabilityRefreshInterval)
+	defer ticker.Stop()
+	refresh := func() {
+		if err := session.refreshLocalCapabilities(ctx); err != nil {
+			if session.capabilityRefreshFailed.CompareAndSwap(false, true) {
+				session.backgroundErrors.Record("refresh tix_tcp local capabilities", err)
+			}
+			if errors.Is(err, errTIXTCPCapabilityAdvertisement) {
+				transport.ObserveAsyncError(
+					"close tix_tcp session after capability advertisement failure",
+					session.Close(),
+				)
+			}
+			return
+		}
+		session.capabilityRefreshFailed.Store(false)
+	}
+	refresh()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-session.closed:
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
 }
 
 func (session *session) readSubscription(ctx context.Context) {
@@ -1183,6 +1275,8 @@ func (session *session) readBatchSubscription(ctx context.Context, subscription 
 
 func (session *session) SendPacket(pkt []byte) error {
 	if session.compatControl != nil && tixTCPCompatControlEligible(pkt) {
+		session.sendMu.Lock()
+		defer session.sendMu.Unlock()
 		if err := session.compatControl.SendPacket(pkt); err != nil {
 			return err
 		}
@@ -1846,6 +1940,7 @@ func (session *session) KernelDatapathSessionInfo() (transport.KernelDatapathSes
 	}
 	stats := session.Stats()
 	localPartial, peerPartial, negotiatedPartial := session.innerTCPChecksumPartialCapabilities()
+	localGSO, peerGSO, negotiatedGSO := session.innerGSOCapabilities()
 	info := transport.KernelDatapathSessionInfo{
 		FlowID:                            session.flowID,
 		Protocol:                          transport.ProtocolTIXTCP,
@@ -1866,6 +1961,9 @@ func (session *session) KernelDatapathSessionInfo() (transport.KernelDatapathSes
 		InnerTCPChecksumPartialLocal:      localPartial,
 		InnerTCPChecksumPartialPeer:       peerPartial,
 		InnerTCPChecksumPartialNegotiated: negotiatedPartial,
+		InnerGSOLocal:                     localGSO,
+		InnerGSOPeer:                      peerGSO,
+		InnerGSONegotiated:                negotiatedGSO,
 	}
 	return info, true
 }
@@ -1874,8 +1972,17 @@ func (session *session) innerTCPChecksumPartialCapabilities() (local, peer, nego
 	if session == nil {
 		return false, false, false
 	}
-	local = session.localCapabilities&tixTCPCapabilityInnerTCPChecksumPartial != 0
+	local = session.localCapabilities.Load()&tixTCPCapabilityInnerTCPChecksumPartial != 0
 	peer = session.peerCapabilities.Load()&tixTCPCapabilityInnerTCPChecksumPartial != 0
+	return local, peer, local && peer
+}
+
+func (session *session) innerGSOCapabilities() (local, peer, negotiated bool) {
+	if session == nil {
+		return false, false, false
+	}
+	local = session.localCapabilities.Load()&tixTCPCapabilityInnerGSO != 0
+	peer = session.peerCapabilities.Load()&tixTCPCapabilityInnerGSO != 0
 	return local, peer, local && peer
 }
 
@@ -1894,6 +2001,13 @@ func (session *session) setPeerCapabilities(capabilities uint64) {
 	}
 	capabilities &= tixTCPKnownCapabilities
 	if session.peerCapabilities.Swap(capabilities) == capabilities {
+		return
+	}
+	session.notifyKernelDatapathStateChange()
+}
+
+func (session *session) notifyKernelDatapathStateChange() {
+	if session == nil {
 		return
 	}
 	session.kernelDatapathStateHookMu.Lock()
@@ -2346,10 +2460,40 @@ func encodeTIXTCPCompatControlInit(flowID uint64) []byte {
 }
 
 func tixTCPLocalCapabilities(status dataplane.TIXTCPStatus) uint64 {
-	if !tixTCPFullPlaintextKernelDatapathStatus(status) || !status.InnerTCPChecksumPartial {
+	return tixTCPLocalCapabilityBits(dataplane.TIXTCPCapabilities{
+		FullPlaintextKernel:     tixTCPFullPlaintextKernelDatapathStatus(status),
+		InnerTCPChecksumPartial: status.InnerTCPChecksumPartial,
+		InnerGSO:                status.InnerGSO,
+	})
+}
+
+func tixTCPProviderLocalCapabilities(ctx context.Context, provider dataplane.TIXTCPProvider) (uint64, error) {
+	if capabilityProvider, ok := provider.(dataplane.TIXTCPCapabilityProvider); ok {
+		capabilities, err := capabilityProvider.TIXTCPCapabilities(ctx)
+		if err != nil {
+			return 0, err
+		}
+		return tixTCPLocalCapabilityBits(capabilities), nil
+	}
+	status, err := provider.TIXTCPStatus(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return tixTCPLocalCapabilities(status), nil
+}
+
+func tixTCPLocalCapabilityBits(capabilities dataplane.TIXTCPCapabilities) uint64 {
+	if !capabilities.FullPlaintextKernel {
 		return 0
 	}
-	return tixTCPCapabilityInnerTCPChecksumPartial
+	var bits uint64
+	if capabilities.InnerTCPChecksumPartial {
+		bits |= tixTCPCapabilityInnerTCPChecksumPartial
+	}
+	if capabilities.InnerGSO && capabilities.InnerTCPChecksumPartial {
+		bits |= tixTCPCapabilityInnerGSO
+	}
+	return bits
 }
 
 func encodeTIXTCPCompatControlCapabilities(capabilities uint64) []byte {
@@ -2565,6 +2709,11 @@ func (session *session) handleFrames(frames []dataplane.TIXTCPFrame) {
 }
 
 func (session *session) handleFrameOne(frame dataplane.TIXTCPFrame) ([]byte, func(), bool) {
+	if frame.InnerGSO {
+		session.fragmentRejects.Add(1)
+		releaseTIXTCPFrame(frame)
+		return nil, nil, false
+	}
 	if frame.FragmentCount == 0 {
 		if frame.FragmentIndex != 0 {
 			session.fragmentRejects.Add(1)
@@ -2785,6 +2934,7 @@ func (session *session) Stats() transport.TransportStats {
 
 func (session *session) fragmentStats() map[string]uint64 {
 	localPartial, peerPartial, negotiatedPartial := session.innerTCPChecksumPartialCapabilities()
+	localGSO, peerGSO, negotiatedGSO := session.innerGSOCapabilities()
 	extra := map[string]uint64{
 		tixTCPStatFragmentedPacketsSent:             session.fragmentedPacketsSent.Load(),
 		tixTCPStatFragmentsSent:                     session.fragmentsSent.Load(),
@@ -2802,6 +2952,9 @@ func (session *session) fragmentStats() map[string]uint64 {
 		tixTCPStatInnerTCPChecksumPartialLocal:      tixTCPBoolUint64(localPartial),
 		tixTCPStatInnerTCPChecksumPartialPeer:       tixTCPBoolUint64(peerPartial),
 		tixTCPStatInnerTCPChecksumPartialNegotiated: tixTCPBoolUint64(negotiatedPartial),
+		tixTCPStatInnerGSOLocal:                     tixTCPBoolUint64(localGSO),
+		tixTCPStatInnerGSOPeer:                      tixTCPBoolUint64(peerGSO),
+		tixTCPStatInnerGSONegotiated:                tixTCPBoolUint64(negotiatedGSO),
 	}
 	if session.fullPlaintextKernelDatapath {
 		extra[tixTCPStatFullPlaintextKernel] = 1

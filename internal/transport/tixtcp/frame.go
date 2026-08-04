@@ -30,8 +30,12 @@ const (
 	// FlagInnerTCPChecksumPartial marks a plaintext inner IPv4/TCP packet whose
 	// TCP checksum field contains the CHECKSUM_PARTIAL pseudo-header seed.
 	FlagInnerTCPChecksumPartial uint8 = 1 << 4
-	KnownFlags                        = FlagEncrypted | FlagKernelOpened |
-		FlagCryptoFragment | FlagInnerIPv4 | FlagInnerTCPChecksumPartial
+	// FlagInnerGSO marks one plaintext inner IPv4/TCP GSO packet. For this flag,
+	// FragmentIndex carries gso_size and FragmentCount carries gso_segs.
+	FlagInnerGSO uint8 = 1 << 5
+	KnownFlags         = FlagEncrypted | FlagKernelOpened |
+		FlagCryptoFragment | FlagInnerIPv4 | FlagInnerTCPChecksumPartial |
+		FlagInnerGSO
 )
 
 type Frame struct {
@@ -73,7 +77,11 @@ func (frame Frame) MarshalBinaryInto(wire []byte) (int, error) {
 	if err := validateFrameFlags(frame.Flags, frame.FragmentIndex, frame.FragmentCount); err != nil {
 		return 0, err
 	}
-	if frame.Flags&FlagInnerTCPChecksumPartial != 0 {
+	if frame.Flags&FlagInnerGSO != 0 {
+		if err := ValidateInnerTCPGSO(frame.Payload, frame.FragmentIndex, frame.FragmentCount); err != nil {
+			return 0, err
+		}
+	} else if frame.Flags&FlagInnerTCPChecksumPartial != 0 {
 		if err := ValidateInnerTCPChecksumPartial(frame.Payload); err != nil {
 			return 0, err
 		}
@@ -162,7 +170,11 @@ func parseFramePrefix(wire []byte, copyPayload bool) (Frame, int, error) {
 		return Frame{}, 0, fmt.Errorf("tix_tcp length mismatch: header payload=%d wire=%d", payloadLen, len(wire))
 	}
 	payload := wire[HeaderLen:wireLen]
-	if flags&FlagInnerTCPChecksumPartial != 0 {
+	if flags&FlagInnerGSO != 0 {
+		if err := ValidateInnerTCPGSO(payload, fragmentIndex, fragmentCount); err != nil {
+			return Frame{}, 0, err
+		}
+	} else if flags&FlagInnerTCPChecksumPartial != 0 {
 		if err := ValidateInnerTCPChecksumPartial(payload); err != nil {
 			return Frame{}, 0, err
 		}
@@ -185,6 +197,16 @@ func validateFrameFlags(flags uint8, fragmentIndex, fragmentCount uint16) error 
 	if unknown := flags &^ KnownFlags; unknown != 0 {
 		return fmt.Errorf("tix_tcp flags %#x contain unsupported bits %#x", flags, unknown)
 	}
+	if flags&FlagInnerGSO != 0 {
+		if flags&(FlagInnerIPv4|FlagInnerTCPChecksumPartial) != FlagInnerIPv4|FlagInnerTCPChecksumPartial ||
+			flags&(FlagEncrypted|FlagKernelOpened|FlagCryptoFragment) != 0 {
+			return fmt.Errorf("tix_tcp inner GSO flag has incompatible frame flags %#x", flags)
+		}
+		if fragmentIndex == 0 || fragmentCount < 2 {
+			return fmt.Errorf("tix_tcp inner GSO metadata size=%d segments=%d is invalid", fragmentIndex, fragmentCount)
+		}
+		return nil
+	}
 	if fragmentCount == 0 {
 		if fragmentIndex != 0 {
 			return fmt.Errorf("tix_tcp fragment index %d requires a fragment count", fragmentIndex)
@@ -202,6 +224,29 @@ func validateFrameFlags(flags uint8, fragmentIndex, fragmentCount uint16) error 
 		flags&(FlagEncrypted|FlagKernelOpened|FlagCryptoFragment) != 0 ||
 		fragmentIndex != 0 || fragmentCount != 0 {
 		return fmt.Errorf("tix_tcp inner TCP checksum-partial flag has incompatible frame metadata")
+	}
+	return nil
+}
+
+// ValidateInnerTCPGSO validates a plaintext IPv4/TCP GSO payload and the
+// gso_size/gso_segs values carried in the TIXT fragment fields.
+func ValidateInnerTCPGSO(packet []byte, gsoSize, gsoSegs uint16) error {
+	_, _, ipHeaderLen, totalLen, err := innerTCPChecksumPartialMeta(packet)
+	if err != nil {
+		return err
+	}
+	if gsoSize == 0 || gsoSegs < 2 {
+		return fmt.Errorf("tix_tcp inner GSO metadata size=%d segments=%d is invalid", gsoSize, gsoSegs)
+	}
+	tcp := packet[ipHeaderLen:totalLen]
+	tcpHeaderLen := int(tcp[12]>>4) * 4
+	payloadLen := len(tcp) - tcpHeaderLen
+	if payloadLen <= 0 {
+		return fmt.Errorf("tix_tcp inner GSO packet has no TCP payload")
+	}
+	wantSegs := (payloadLen + int(gsoSize) - 1) / int(gsoSize)
+	if wantSegs < 2 || wantSegs != int(gsoSegs) {
+		return fmt.Errorf("tix_tcp inner GSO metadata size=%d segments=%d does not cover payload %d (want %d segments)", gsoSize, gsoSegs, payloadLen, wantSegs)
 	}
 	return nil
 }

@@ -2083,6 +2083,11 @@ func (fastPath *tixTCPFastPath) decodeTCPFrame(manager *Manager, socket *afXDPSo
 }
 
 func (fastPath *tixTCPFastPath) decodeTCPWireFrame(manager *Manager, socket *afXDPSocket, rxFrame *afXDPRXFrame, tcpPacket tixtcp.TCPPacket, wireFrame tixtcp.Frame, batch *[]receivedTIXTCPFrame) (bool, error) {
+	if wireFrame.Flags&tixtcp.FlagInnerGSO != 0 {
+		socket.stats.rxParseErrors.Add(1)
+		manager.recordDrop(observability.DropInvalidOverlayHeader)
+		return false, nil
+	}
 	payload := wireFrame.Payload
 	placement := dataplane.CryptoPlacementUserspace
 	encrypted := wireFrame.Flags&tixtcp.FlagEncrypted != 0

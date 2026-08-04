@@ -38,6 +38,8 @@ const (
 	kernelDatapathSessionFlagSyntheticFallback              = uint32(1 << 11)
 	kernelDatapathSessionFlagSendInnerTCPChecksumPartial    = uint32(1 << 12)
 	kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial = uint32(1 << 13)
+	kernelDatapathSessionFlagSendInnerGSO                   = uint32(1 << 14)
+	kernelDatapathSessionFlagReceiveInnerGSO                = uint32(1 << 15)
 
 	kernelDatapathFlowFlagIPv4 = uint32(1 << 0)
 
@@ -474,6 +476,13 @@ func (daemon *Daemon) kernelDatapathFullPlaintextEndpointRecords(ctx context.Con
 		if receivePartial {
 			flags |= kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial
 		}
+		sendGSO, receiveGSO := daemon.kernelDatapathFullPlaintextEndpointInnerGSO(peer, endpoint, poolIndex)
+		if sendGSO {
+			flags |= kernelDatapathSessionFlagSendInnerGSO
+		}
+		if receiveGSO {
+			flags |= kernelDatapathSessionFlagReceiveInnerGSO
+		}
 	}
 	if key.Transport == transport.ProtocolUDP {
 		flags |= kernelDatapathSessionFlagDatagram |
@@ -548,6 +557,28 @@ func (daemon *Daemon) kernelDatapathInnerTCPChecksumPartialReady() bool {
 	}
 	status := daemon.kernelDatapath.Snapshot()
 	return status.Loaded && status.HasFeature(kernelmodule.FeatureInnerTCPChecksumPartial)
+}
+
+func (daemon *Daemon) kernelDatapathFullPlaintextEndpointInnerGSO(peer config.PeerConfig, endpoint config.EndpointConfig, poolIndex int) (send, receive bool) {
+	if daemon == nil || transport.Protocol(strings.ToLower(strings.TrimSpace(endpoint.Transport))) != transport.ProtocolTIXTCP {
+		return false, false
+	}
+	address := strings.TrimSpace(endpoint.Address)
+	for _, item := range daemon.kernelDatapathSessionSnapshot() {
+		key := item.key
+		if key.Peer != peer.ID || key.Endpoint != endpoint.Name || key.Transport != transport.ProtocolTIXTCP ||
+			(strings.TrimSpace(key.Address) != address && key.Address != reverseSessionAddress) ||
+			parseSecureTransportEncryption(key.Encryption) != securetransport.EncryptionPlaintext || key.PoolIndex != poolIndex {
+			continue
+		}
+		info, ok := kernelDatapathSessionInfo(item.session)
+		if !ok {
+			continue
+		}
+		receive = receive || info.InnerGSOLocal
+		send = send || info.InnerGSONegotiated
+	}
+	return send, receive
 }
 
 func kernelDatapathFullPlaintextFlowID(protocol transport.Protocol, localIP uint32, localPort uint16, remoteIP uint32, remotePort uint16) uint64 {
@@ -1022,6 +1053,12 @@ func kernelDatapathSessionFlags(key dataSessionKey, runtime *dataSessionRuntime,
 		}
 		if info.InnerTCPChecksumPartialLocal {
 			flags |= kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial
+		}
+		if info.InnerGSONegotiated {
+			flags |= kernelDatapathSessionFlagSendInnerGSO
+		}
+		if info.InnerGSOLocal {
+			flags |= kernelDatapathSessionFlagReceiveInnerGSO
 		}
 	}
 	return flags

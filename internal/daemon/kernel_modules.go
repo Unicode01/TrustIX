@@ -421,6 +421,11 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		params = addModuleParameterMask(params, "enable_features", 1<<7)
 		if fullPlaintext {
 			params = addModuleParameterMask(params, "enable_features", 1<<10)
+			if envFalsey("TRUSTIX_TIX_TCP_INNER_GSO") {
+				params = removeModuleParameterMask(params, "enable_features", 1<<11)
+			} else {
+				params = addModuleParameterMask(params, "enable_features", 1<<11)
+			}
 		}
 		params = appendModuleParameterIfMissing(params, "rx_worker_inject=1")
 		if fullPlaintext {
@@ -1008,6 +1013,25 @@ func addModuleParameterMask(params, key string, mask uint64) string {
 		break
 	}
 	return setModuleParameter(params, key, strconv.FormatUint(value, 10))
+}
+
+func removeModuleParameterMask(params, key string, mask uint64) string {
+	key = strings.TrimSpace(key)
+	if key == "" || mask == 0 {
+		return params
+	}
+	for _, field := range strings.Fields(params) {
+		candidate, raw, ok := strings.Cut(field, "=")
+		if !ok || strings.TrimSpace(candidate) != key {
+			continue
+		}
+		parsed, err := strconv.ParseUint(strings.TrimSpace(raw), 0, 64)
+		if err != nil {
+			return params
+		}
+		return setModuleParameter(params, key, strconv.FormatUint(parsed&^mask, 10))
+	}
+	return params
 }
 
 func setModuleParameterIfPresent(params, key, value string) string {
