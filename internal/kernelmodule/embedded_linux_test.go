@@ -23,3 +23,13 @@ func TestEmbeddedModulePayloadsAreCached(t *testing.T) {
 		})
 	}
 }
+
+func TestEmbeddedModulePayloadMissingAssetReturnsNil(t *testing.T) {
+	asset := embeddedModulePayload{path: "assets/missing.ko"}
+	if payload := asset.read(); payload != nil {
+		t.Fatalf("missing embedded payload length = %d, want nil", len(payload))
+	}
+	if payload := asset.read(); payload != nil {
+		t.Fatalf("cached missing embedded payload length = %d, want nil", len(payload))
+	}
+}

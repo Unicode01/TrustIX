@@ -34,7 +34,11 @@ var (
 
 func (asset *embeddedModulePayload) read() []byte {
 	asset.once.Do(func() {
-		asset.payload, _ = embeddedModuleFS.ReadFile(asset.path)
+		payload, err := embeddedModuleFS.ReadFile(asset.path)
+		if err != nil {
+			return
+		}
+		asset.payload = payload
 	})
 	return asset.payload
 }
