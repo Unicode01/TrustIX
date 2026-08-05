@@ -19,9 +19,32 @@ jobs:
     name: Validate Release Source
     uses: ./.github/workflows/ci.yml
 
+  production-evidence:
+    name: Require Current Production Evidence
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Audit Production Transport Evidence
+        run: |
+          python3 scripts/production-transport-audit.py \
+            --scope cross_host \
+            --require-manifest \
+            --require-current \
+            --require-artifact-reference \
+            --require-current-build-ancestor \
+            --require-current-gate-tools \
+            --require-current-runtime-tree \
+            --fail-on-missing
+
   package:
     name: Package ${{ matrix.goarch }}
-    needs: validate
+    needs:
+      - validate
+      - production-evidence
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

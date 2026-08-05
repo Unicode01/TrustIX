@@ -117,7 +117,9 @@ jobs:
             --require-current-build-ancestor \
             --require-current-gate-tools \
             --require-current-runtime-tree \
-            --fail-on-missing
+            --fail-on-missing \
+            --report-refresh-gaps \
+            --json
 
       - name: Security Smoke
         run: |

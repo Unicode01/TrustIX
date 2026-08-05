@@ -2686,6 +2686,7 @@ func TestProductionTransportAuditScriptCoversCrossHostDefaults(t *testing.T) {
 		"--require-current-gate-tools",
 		"--require-current-runtime-tree",
 		"--fail-on-missing",
+		"--report-refresh-gaps",
 		"--json",
 	)
 	cmd.Dir = "."
@@ -2812,6 +2813,7 @@ func TestProductionTransportAuditScriptDefaultsResolveFromRepoRoot(t *testing.T)
 		"--require-current-gate-tools",
 		"--require-current-runtime-tree",
 		"--fail-on-missing",
+		"--report-refresh-gaps",
 		"--json",
 	)
 	cmd.Dir = ".."
@@ -2853,10 +2855,42 @@ func TestCIWorkflowRunsCurrentProductionTransportAudit(t *testing.T) {
 		"--require-current-gate-tools",
 		"--require-current-runtime-tree",
 		"--fail-on-missing",
+		"--report-refresh-gaps",
+		"--json",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("ci workflow production audit step missing %q", want)
 		}
+	}
+}
+
+func TestReleaseWorkflowRequiresCurrentProductionTransportEvidence(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"production-evidence:",
+		"Require Current Production Evidence",
+		"fetch-depth: 0",
+		"python3 scripts/production-transport-audit.py",
+		"--scope cross_host",
+		"--require-manifest",
+		"--require-current",
+		"--require-artifact-reference",
+		"--require-current-build-ancestor",
+		"--require-current-gate-tools",
+		"--require-current-runtime-tree",
+		"--fail-on-missing",
+		"- production-evidence",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("release workflow production audit step missing %q", want)
+		}
+	}
+	if strings.Contains(text, "--report-refresh-gaps") {
+		t.Fatal("release workflow must keep the production evidence audit strict")
 	}
 }
 
