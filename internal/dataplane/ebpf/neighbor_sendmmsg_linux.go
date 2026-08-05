@@ -3,12 +3,15 @@
 package ebpf
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
+
+const lanGSOHeaderScratchStride = 60 + 60
 
 type mmsghdr struct {
 	hdr unix.Msghdr
@@ -61,7 +64,7 @@ var lanGSOSendMMSGPool = sync.Pool{
 			addrs:     make([]unix.RawSockaddrLinklayer, 0, 256),
 			headers:   make([]byte, 0, 256*virtioNetHdrLen),
 			ethernets: make([]byte, 0, 256*ethernetHeaderLen),
-			ipHeaders: make([]byte, 0, 256*(rejectIPv4HeaderLen+rejectTCPHeaderLen)),
+			ipHeaders: make([]byte, 0, 256*lanGSOHeaderScratchStride),
 			iovs:      make([]unix.Iovec, 0, 256*3),
 			msgs:      make([]mmsghdr, 0, 256),
 		}
@@ -147,7 +150,7 @@ func takeLANGSOSendMMSGScratch(size int) *lanGSOSendMMSGScratch {
 	} else {
 		scratch.ethernets = scratch.ethernets[:ethernetBytes]
 	}
-	ipHeaderBytes := size * (rejectIPv4HeaderLen + rejectTCPHeaderLen)
+	ipHeaderBytes := size * lanGSOHeaderScratchStride
 	if cap(scratch.ipHeaders) < ipHeaderBytes {
 		scratch.ipHeaders = make([]byte, ipHeaderBytes)
 	} else {
@@ -194,7 +197,7 @@ func (scratch *lanGSOSendMMSGScratch) ethernetHeader(index int) []byte {
 }
 
 func (scratch *lanGSOSendMMSGScratch) ipHeader(index int, size int) []byte {
-	base := index * (rejectIPv4HeaderLen + rejectTCPHeaderLen)
+	base := index * lanGSOHeaderScratchStride
 	return scratch.ipHeaders[base : base+size]
 }
 
@@ -325,6 +328,10 @@ func sendAllMMsgWith(
 	var sent int
 	for sent < len(msgs) {
 		n, err := send(fd, msgs[sent:])
+		remaining := len(msgs) - sent
+		if n < 0 || n > remaining {
+			return sent, fmt.Errorf("sendmmsg returned invalid message count %d for %d remaining messages: %w", n, remaining, unix.EIO)
+		}
 		if n > 0 {
 			sent += n
 		}
@@ -374,7 +381,7 @@ func sendmmsg(fd int, msgs []mmsghdr) (int, error) {
 		0,
 	)
 	if errno != 0 {
-		return int(n), errno
+		return 0, errno
 	}
 	return int(n), nil
 }

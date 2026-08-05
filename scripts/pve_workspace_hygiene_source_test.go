@@ -87,9 +87,9 @@ func TestPVEHAFullKmodSoakScriptKeepsProductionVMsAndHostStateOutOfScope(t *test
 		}
 	}
 	for _, bad := range []string{
-		`120.220.44.72`,
-		`5c15d166-661c-4a9d-8244-bfe45a36d136`,
-		`ZakoUnRikaLou1145`,
+		`PVEAPIToken=`,
+		`root@pam!`,
+		`password=`,
 		`qm stop 1`,
 		`qm destroy 1`,
 		`/etc/network/interfaces`,

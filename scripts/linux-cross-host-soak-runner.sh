@@ -66,6 +66,7 @@ peer_b_port="${TRUSTIX_CROSS_HOST_PEER_B_PORT:-19444}"
 data_a_port="${TRUSTIX_CROSS_HOST_DATA_A_PORT:-}"
 data_b_port="${TRUSTIX_CROSS_HOST_DATA_B_PORT:-}"
 iperf_port="${TRUSTIX_CROSS_HOST_IPERF_PORT:-25201}"
+iperf_client_port="${TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT:-0}"
 mixed_iperf_port="${TRUSTIX_CROSS_HOST_MIXED_IPERF_PORT:-}"
 health_port="${TRUSTIX_CROSS_HOST_HEALTH_PORT:-}"
 iperf_seconds="${TRUSTIX_CROSS_HOST_IPERF_SECONDS:-3600}"
@@ -264,7 +265,7 @@ write_run_timing_end() {
   elapsed=$((end_epoch - soak_start_epoch))
   tmp="${workdir}/run-timing.json.tmp"
   cat >"$tmp" <<EOF
-{"case":"$(json_escape "$case_name")","transport":"$(json_escape "$(case_transport)")","encryption":"$(json_escape "$(case_encryption)")","profile":"$(json_escape "$(case_transport_profile)")","datapath":"$(json_escape "$(case_transport_datapath)")","crypto_placement":"$(json_escape "$(case_crypto_placement)")","iperf_mode":"$(json_escape "$iperf_mode")","iperf_directions":"$(json_escape "$iperf_directions")","iperf_parallel":${iperf_parallel},"iperf_seconds_requested":${iperf_seconds},"start_epoch":${soak_start_epoch},"end_epoch":${end_epoch},"elapsed_seconds":${elapsed},"start_time":"${soak_start_iso}","end_time":"${end_iso}"}
+{"case":"$(json_escape "$case_name")","transport":"$(json_escape "$(case_transport)")","encryption":"$(json_escape "$(case_encryption)")","profile":"$(json_escape "$(case_transport_profile)")","datapath":"$(json_escape "$(case_transport_datapath)")","crypto_placement":"$(json_escape "$(case_crypto_placement)")","iperf_mode":"$(json_escape "$iperf_mode")","iperf_directions":"$(json_escape "$iperf_directions")","iperf_parallel":${iperf_parallel},"iperf_client_port":${iperf_client_port},"iperf_seconds_requested":${iperf_seconds},"start_epoch":${soak_start_epoch},"end_epoch":${end_epoch},"elapsed_seconds":${elapsed},"start_time":"${soak_start_iso}","end_time":"${end_iso}"}
 EOF
   mv "$tmp" "${workdir}/run-timing.json"
 }
@@ -1108,6 +1109,7 @@ check_local_inputs() {
   case "$iperf_parallel" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PARALLEL must be an integer" ;; esac
   case "$iptunnel_iperf_parallel" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be an integer" ;; esac
   case "$iperf_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_PORT must be an integer" ;; esac
+  case "$iperf_client_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT must be an integer" ;; esac
   if [[ -z "$mixed_iperf_port" ]]; then
     mixed_iperf_port=$((iperf_port + 2))
   fi
@@ -1136,6 +1138,10 @@ check_local_inputs() {
   case "$vxlan_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_VXLAN_PORT must be an integer" ;; esac
   [[ "$iperf_parallel" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_IPERF_PARALLEL must be >= 1"
   [[ "$iptunnel_iperf_parallel" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1"
+  [[ "$iperf_client_port" -ge 0 && "$iperf_client_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT must be 0 or in 1..65535"
+  if [[ "$iperf_client_port" -gt 0 ]]; then
+    [[ $((iperf_client_port + iperf_parallel - 1)) -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT plus parallel streams exceeds 65535"
+  fi
   [[ "$transport_snapshot_delay" -ge 0 ]] || die "TRUSTIX_CROSS_HOST_TRANSPORT_SNAPSHOT_DELAY must be >= 0"
   [[ "$session_pool_size" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_SESSION_POOL_SIZE must be >= 1"
   if [[ "$capture_forwarder_workers" != "auto" ]]; then
@@ -2512,7 +2518,7 @@ run_iperf_client() {
   local out_name="$3"
   local port="${4:-$iperf_port}"
   local source_ip="${5:-}"
-  local dir host_ns mode_args bind_args
+  local dir host_ns mode_args bind_args client_port_args
   dir="$(remote_dir "$node")"
   host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
   case "$iperf_mode" in
@@ -2524,15 +2530,19 @@ run_iperf_client() {
   if [[ -n "$source_ip" ]]; then
     bind_args="-B $(remote_quote "$source_ip")"
   fi
+  client_port_args=""
+  if [[ "$iperf_client_port" -gt 0 ]]; then
+    client_port_args="--cport ${iperf_client_port}"
+  fi
   run_node "$node" "set -Eeuo pipefail
 ip_cmd=\$(command -v ip)
 out=$(remote_quote "${dir}/${out_name}")
 err=$(remote_quote "${dir}/${out_name%.json}.err")
 rc=0
 if command -v timeout >/dev/null 2>&1; then
-  timeout ${iperf_timeout}s \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 ${bind_args} -c $(remote_quote "$dst_ip") -p ${port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
+  timeout ${iperf_timeout}s \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 ${bind_args} ${client_port_args} -c $(remote_quote "$dst_ip") -p ${port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
 else
-  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 ${bind_args} -c $(remote_quote "$dst_ip") -p ${port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
+  \"\$ip_cmd\" netns exec $(remote_quote "$host_ns") iperf3 ${bind_args} ${client_port_args} -c $(remote_quote "$dst_ip") -p ${port} -t ${iperf_seconds} -P ${iperf_parallel} ${mode_args} -J >\"\$out\" 2>\"\$err\" || rc=\$?
 fi
 if [ \"\$rc\" -eq 0 ]; then
   json_error_pattern='\"error\"'

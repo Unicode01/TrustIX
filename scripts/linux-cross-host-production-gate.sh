@@ -1001,6 +1001,7 @@ main() {
       --require-module-param-any-min trustix_datapath.tx_plaintext_outer_tuple_hash_sets=1 \
       --require-module-param-max trustix_datapath.tx_plaintext_inner_flow_hash_sets=0 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_tix_tcp_port_shard_sets=1 \
+      --require-module-param-any-min trustix_datapath.tx_plaintext_tix_tcp_shard_tx_queue_sets=1 \
       --require-module-param-any-min trustix_datapath.tx_plaintext_tix_tcp_shard_sequence_hits=1 \
       --require-module-param-max trustix_datapath.tx_plaintext_tix_tcp_shard_sequence_fallbacks=0 \
       --require-module-param-any-min trustix_datapath.rx_tix_tcp_port_shard_matches=1 \

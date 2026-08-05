@@ -2930,6 +2930,15 @@ module_param_named(tx_plaintext_tix_tcp_port_shard_sets,
 MODULE_PARM_DESC(tx_plaintext_tix_tcp_port_shard_sets,
 		 "TrustIX plaintext TIX-TCP packets assigned a negotiated outer source-port shard");
 
+static DEFINE_PER_CPU(unsigned long long,
+	trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue_sets);
+module_param_cb(tx_plaintext_tix_tcp_shard_tx_queue_sets,
+		&trustix_datapath_percpu_ullong_ro_ops,
+		&trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue_sets,
+		0444);
+MODULE_PARM_DESC(tx_plaintext_tix_tcp_shard_tx_queue_sets,
+		 "TrustIX plaintext TIX-TCP outer skbs assigned to a TX queue directly from the negotiated port shard");
+
 static unsigned long long
 	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits;
 module_param_named(tx_plaintext_tix_tcp_shard_sequence_hits,
@@ -12201,6 +12210,21 @@ trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
 	}
 }
 
+static __always_inline __u16
+trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue(
+	__u8 shard, unsigned int txq_count, bool partition_transport)
+{
+	unsigned int subset_count;
+
+	if (!txq_count)
+		return 0;
+	if (!partition_transport || txq_count <= 1)
+		return (__u16)(shard % txq_count);
+
+	subset_count = txq_count / 2;
+	return (__u16)((shard % subset_count) * 2 + 1);
+}
+
 static bool trustix_datapath_rx_worker_hash_ipv4_at_offset(
 	struct sk_buff *skb, unsigned int offset, unsigned int head_len,
 	__u32 *hash_out)
@@ -12448,6 +12472,7 @@ trustix_datapath_tx_plaintext_set_hash_tx_queue(struct sk_buff *skb,
 {
 	bool partition_transport;
 	bool hash_tx_queue;
+	bool tix_tcp_port_sharding;
 	unsigned int txq_count;
 	__u8 outer_protocol;
 	__u32 hash;
@@ -12467,7 +12492,9 @@ trustix_datapath_tx_plaintext_set_hash_tx_queue(struct sk_buff *skb,
 	if (txq_count <= 1)
 		return;
 	/* One outer TCP tuple must stay on one TX queue to preserve sequence order. */
-	if (trustix_datapath_tx_plan_tix_tcp_port_sharding_active(plan)) {
+	tix_tcp_port_sharding =
+		trustix_datapath_tx_plan_tix_tcp_port_sharding_active(plan);
+	if (tix_tcp_port_sharding) {
 		hash = trustix_datapath_tx_plaintext_hash_outer_tuple(plan);
 		trustix_datapath_tx_plaintext_outer_tuple_hash_sets++;
 	} else {
@@ -12489,8 +12516,16 @@ trustix_datapath_tx_plaintext_set_hash_tx_queue(struct sk_buff *skb,
 	skb_set_hash(skb, mixed, PKT_HASH_TYPE_L4);
 	partition_transport = READ_ONCE(
 		trustix_datapath_tx_plaintext_hash_tx_queue_partition_transport);
-	queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
-		hash, txq_count, outer_protocol, partition_transport);
+	if (tix_tcp_port_sharding) {
+		queue = trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue(
+			plan->outer_tcp_port_shard, txq_count,
+			partition_transport);
+		this_cpu_inc(
+			trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue_sets);
+	} else {
+		queue = trustix_datapath_tx_plaintext_hash_tx_queue_for_transport(
+			hash, txq_count, outer_protocol, partition_transport);
+	}
 	skb_set_queue_mapping(skb, queue);
 	trustix_datapath_tx_plaintext_set_xps_sender_cpu(skb, queue);
 	trustix_datapath_tx_plaintext_count_hash_tx_queue(queue);
@@ -18429,6 +18464,8 @@ trustix_datapath_hook_reset_counters_locked(
 	trustix_datapath_tx_plaintext_xps_sender_cpu_sets = 0;
 	trustix_datapath_tx_plaintext_xps_sender_cpu_fallbacks = 0;
 	trustix_datapath_tx_plaintext_tix_tcp_port_shard_sets = 0;
+	trustix_datapath_reset_percpu_ullong(
+		&trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue_sets);
 	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_hits = 0;
 	trustix_datapath_tx_plaintext_tix_tcp_shard_sequence_fallbacks = 0;
 	trustix_datapath_rx_tix_tcp_port_shard_matches = 0;
@@ -20260,6 +20297,21 @@ static int trustix_datapath_selftest_tx_plaintext_hash_tx_queue(void)
 			    i, 3, IPPROTO_TCP, true) != 1)
 			return -EINVAL;
 	}
+	for (i = 0; i < TRUSTIX_DATAPATH_TIX_TCP_PORT_SHARDS; i++) {
+		queue = trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue(
+			(__u8)i, 8, false);
+		if (queue != i % 8)
+			return -EINVAL;
+		queue = trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue(
+			(__u8)i, 8, true);
+		if (queue != (i % 4) * 2 + 1)
+			return -EINVAL;
+	}
+	if (trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue(
+		    7, 0, false) != 0 ||
+	    trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue(
+		    7, 1, false) != 0)
+		return -EINVAL;
 
 	if (!trustix_datapath_tx_plaintext_cpu_for_queue(0, &cpu) ||
 	    cpu >= nr_cpu_ids || !cpu_online(cpu))

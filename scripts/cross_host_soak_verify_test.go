@@ -3119,6 +3119,7 @@ func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		"tx_plaintext_inner_gso_packets":                traffic,
 		"tx_plaintext_inner_gso_segments":               traffic,
 		"tx_plaintext_tix_tcp_port_shard_sets":          traffic,
+		"tx_plaintext_tix_tcp_shard_tx_queue_sets":      traffic,
 		"tx_plaintext_tix_tcp_shard_sequence_hits":      traffic,
 		"tx_plaintext_tix_tcp_shard_sequence_fallbacks": "0",
 		"tx_plaintext_outer_tuple_hash_sets":            traffic,

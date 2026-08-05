@@ -491,6 +491,28 @@ func TestSendAllMMsgPartialProgressErrorHandling(t *testing.T) {
 			wantErr:   unix.EAGAIN,
 			wantCalls: 1,
 		},
+		{
+			name: "negative progress is rejected",
+			calls: []struct {
+				sent int
+				err  error
+			}{
+				{sent: -1},
+			},
+			wantErr:   unix.EIO,
+			wantCalls: 1,
+		},
+		{
+			name: "excess progress is rejected",
+			calls: []struct {
+				sent int
+				err  error
+			}{
+				{sent: 5},
+			},
+			wantErr:   unix.EIO,
+			wantCalls: 1,
+		},
 	}
 
 	for _, test := range tests {
@@ -812,6 +834,24 @@ func TestLANIPv4TCPGSOScatterRunStopsAtPushBoundary(t *testing.T) {
 	packetA[33] = 0x18
 	if run, _, _, ok = lanIPv4TCPGSOScatterRun([][]byte{packetA, packetB}, 1500); ok || run != 0 {
 		t.Fatalf("scatter run from PSH packet ok=%v run=%d, want rejected", ok, run)
+	}
+}
+
+func TestLANGSOScatterScratchSupportsMaximumTCPHeader(t *testing.T) {
+	packetA := lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xaa}, 700), 0x10, 60)
+	packetB := lanTCPIPv4PacketForTest(bytes.Repeat([]byte{0xbb}, 700), 0x18, 60)
+	setLANTCPIPv4SequenceForTest(packetB, binary.BigEndian.Uint32(packetA[24:28])+700)
+	run, meta, _, ok := lanIPv4TCPGSOScatterRun([][]byte{packetA, packetB}, 1500)
+	if !ok || run != 2 || meta.payloadOffset != 80 {
+		t.Fatalf("TCP-options scatter run ok=%v run=%d payloadOffset=%d, want true/2/80", ok, run, meta.payloadOffset)
+	}
+
+	scratch := takeLANGSOSendMMSGScratch(2)
+	defer putLANGSOSendMMSGScratch(scratch)
+	first := scratch.ipHeader(0, meta.payloadOffset)
+	second := scratch.ipHeader(1, meta.payloadOffset)
+	if len(first) != 80 || len(second) != 80 || &first[0] == &second[0] {
+		t.Fatalf("GSO header scratch slices have lengths %d/%d or overlap", len(first), len(second))
 	}
 }
 

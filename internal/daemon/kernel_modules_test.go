@@ -231,6 +231,8 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 		"trustix_datapath_tx_plaintext_hash_outer_inner_ipv4(skb, &hash)",
 		"trustix_datapath_tx_plaintext_set_xps_sender_cpu(skb, queue)",
 		"trustix_datapath_tx_plaintext_hash_tx_queue_for_transport",
+		"trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue",
+		"this_cpu_inc(\n\t\t\ttrustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue_sets)",
 		"trustix_datapath_tx_plaintext_hash_tx_queue_partition_udp_sets",
 		"trustix_datapath_tx_plaintext_hash_tx_queue_partition_tcp_sets",
 		"trustix_datapath_tx_plaintext_hash_tx_queue_partition_fallbacks",
@@ -249,7 +251,7 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 		}
 	}
 	if !strings.Contains(queue, "trustix_datapath_tx_plan_tix_tcp_port_sharding_active(plan)") {
-		t.Fatal("negotiated TIX-TCP port shards must select queues from the outer tuple")
+		t.Fatal("negotiated TIX-TCP port shards must select stable queues")
 	}
 	sequence := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_outer_tcp_next_seq")
 	for _, want := range []string{
@@ -283,6 +285,15 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 			t.Fatalf("plaintext TX queue partition missing mapping %q", want)
 		}
 	}
+	shardQueue := daemonTestSourceFunctionBody(t, source, "trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue")
+	for _, want := range []string{
+		"shard % txq_count",
+		"(shard % subset_count) * 2 + 1",
+	} {
+		if !strings.Contains(shardQueue, want) {
+			t.Fatalf("TIX-TCP shard TX queue mapping missing %q", want)
+		}
+	}
 	selftest := daemonTestSourceFunctionBody(t, source, "trustix_datapath_selftest_tx_plaintext_mac_cache")
 	if !strings.Contains(selftest, "for (i = 0; i < 16; i++)") ||
 		!strings.Contains(selftest, "plan.outer_protocol = (i & 1) ? IPPROTO_TCP : IPPROTO_UDP") ||
@@ -291,6 +302,7 @@ func TestTrustIXDatapathTXPlaintextMACCacheKeepsSessionPoolTuples(t *testing.T) 
 	}
 	queueSelftest := daemonTestSourceFunctionBody(t, source, "trustix_datapath_selftest_tx_plaintext_hash_tx_queue")
 	for _, want := range []string{
+		"trustix_datapath_tx_plaintext_tix_tcp_shard_tx_queue(",
 		"trustix_datapath_tx_plaintext_cpu_for_queue(0, &cpu)",
 		"cpu >= nr_cpu_ids",
 		"!cpu_online(cpu)",

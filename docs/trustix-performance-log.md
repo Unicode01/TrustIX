@@ -6318,3 +6318,70 @@ requires changing what crosses the packet-I/O boundary, such as a complete
 multi-queue AF_XDP path with segmentation, or moving the data path into the
 validated kernel implementation. Parameter tuning and another AF_PACKET
 submission wrapper are not expected to move the current end-to-end ceiling.
+
+### 2026-08-05 Zaozhuang PVE full-kmod scaling and stable shard queues
+
+The TIX-TCP full-kmod path was extended with negotiated inner GSO, port-shard
+flow scaling, cached embedded module payloads, and lock-free hot-path counter
+updates. A Debian 13 to Debian 13 production gate used four iperf streams and
+16 warmed sessions per direction on two 8-vCPU guests. Both 3600-second
+directions passed: A-to-B received `28.144659 Gbps` and B-to-A received
+`28.201538 Gbps`. The two boot IDs remained stable, pstore and kernel-log
+checks were clean, there were no session or datapath errors, and the verifier
+reported `status=pass`.
+
+A follow-up fixed a queue-placement sensitivity in negotiated TIX-TCP port
+sharding. The old outer-tuple hash could map otherwise balanced shards onto an
+unfavorable TX queue. Mapping the negotiated shard directly to a stable queue
+changed a reproduced worst-case 60-second run from `16.175009 Gbps` to
+`33.460608 Gbps`. A normal placement changed from `33.430121 Gbps` to
+`32.930077 Gbps`, so this is a worst-case consistency fix rather than a claim
+of higher peak throughput. A four-stream simultaneous bidirectional smoke
+received `17.248205 Gbps` and sent `17.252120 Gbps`, or `34.500325 Gbps`
+combined. Queue assignment counters advanced on both nodes; sequence
+fallbacks, queue drops, and transmit errors remained zero.
+
+The same stable-shard candidate passed both 60-second directions between
+Debian 13 and OpenWrt 24.10.7 at `31.021439 Gbps` and `25.718095 Gbps`.
+The earlier 3600-second Debian/OpenWrt run also completed both directions and
+retained stable boot IDs with clean pstore and kernel logs, but its production
+summary is not recorded as a pass: the verifier rejected an intentional
+`rx_worker_single_coalesce=Y` node override against an old `<= 0` requirement.
+That evidence must be refreshed with the corrected gate before it can be used
+as a formal production pass.
+
+### 2026-08-05 userspace scatter batching rejection and sendmmsg hardening
+
+The remaining secure TCP userspace profile was dominated by syscalls and
+AES-GCM. AES-256 measured `6.205588 Gbps`; AES-128 measured
+`6.273101 Gbps`, only `1.1%` faster, so the cipher default was not weakened.
+Sender samples attributed `42.56%` to syscalls and `21.02%` to AES-GCM;
+receiver samples attributed `52.14%` and `23.81%`, respectively.
+
+A candidate combined adjacent scatter-GSO wire records into one `sendmmsg`
+call. It reduced the measured message syscalls by about 75%, batching
+approximately 4.1 to 4.3 wires per call, but two 120-second pairs only moved
+the mean from `5.263029 Gbps` to `5.318285 Gbps`, a `1.05%` increase. The
+normal linear path measured `6.230359 Gbps`, about `17.1%` faster than the
+batched scatter mean. The batch implementation, controls, and counters were
+therefore removed.
+
+Review of that experiment found two independent correctness issues worth
+retaining. Per-message IPv4/TCP header scratch now reserves the full 60-byte
+IPv4 plus 60-byte TCP maximum, preventing adjacent scratch regions from
+overlapping when TCP options are present. The `sendmmsg` loop now rejects
+negative or excess progress with `EIO`, and the raw syscall wrapper converts
+an error return to zero progress instead of exposing the syscall `-1` value.
+Targeted tests passed on two Debian guests and one OpenWrt guest, including the
+maximum TCP header, PSH boundary, unchanged input packet, partial progress,
+and invalid progress cases.
+
+The final safety-only default binary had SHA256
+`7fdfacfc2133769ad21e8edf9390b1a482efd04d26318320de89e75e35e2af72`
+and passed a 60-second linear smoke at `6.124979 Gbps`. Both boot IDs remained
+stable, pstore was mounted and empty, kernel journals were empty, runner error
+files were empty, and no TrustIX module remained loaded. More userspace work
+can still recover low-single-digit percentages, but the tested local tuning
+space no longer supports a credible large gain. A material step above the
+roughly 6.2 Gbps secure userspace ceiling requires either the validated
+full-kmod path or a new multi-queue packet-I/O architecture that preserves GSO.

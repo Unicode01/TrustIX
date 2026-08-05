@@ -5758,6 +5758,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_tuple_hash_sets=1",
 		"--require-module-param-max trustix_datapath.tx_plaintext_inner_flow_hash_sets=0",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_tix_tcp_port_shard_sets=1",
+		"--require-module-param-any-min trustix_datapath.tx_plaintext_tix_tcp_shard_tx_queue_sets=1",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_tix_tcp_shard_sequence_hits=1",
 		"--require-module-param-max trustix_datapath.tx_plaintext_tix_tcp_shard_sequence_fallbacks=0",
 		"--require-module-param-any-min trustix_datapath.rx_tix_tcp_port_shard_matches=1",
@@ -7964,6 +7965,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"default_data_port",
 		"node_value \"$node\" 13000 13001",
 		"TRUSTIX_CROSS_HOST_IPERF_SECONDS:-3600",
+		"iperf_client_port=\"${TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT:-0}\"",
 		"preserve_on_failure=\"${TRUSTIX_CROSS_HOST_PRESERVE_ON_FAILURE:-0}\"",
 		"iperf_parallel_explicit=\"${TRUSTIX_CROSS_HOST_IPERF_PARALLEL+x}\"",
 		"health_port=\"${TRUSTIX_CROSS_HOST_HEALTH_PORT:-}\"",
@@ -7997,6 +7999,9 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_IPERF_DIRECTIONS must be both, a2b, or b2a",
 		"TRUSTIX_CROSS_HOST_HEALTH_PORT must differ from TRUSTIX_CROSS_HOST_IPERF_PORT",
 		"TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1",
+		"TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT must be an integer",
+		"TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT must be 0 or in 1..65535",
+		"TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT plus parallel streams exceeds 65535",
 		"case \"$iperf_mode\" in bidir|forward|reverse)",
 		"apply_case_runtime_defaults",
 		"tix-tcp-full-kmod|tix_tcp_full_kmod|tix-tcp-full-kmod|tix_tcp_full_kmod|dd-tix-tcp-full-kmod|dd_tix_tcp_full_kmod|owdeb-tix-tcp-full-kmod|owdeb_tix_tcp_full_kmod)",
@@ -8194,6 +8199,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"nohup \\\"\\$ip_cmd\\\" netns exec",
 		"setsid \\\"\\$ip_cmd\\\" netns exec",
 		"timeout ${iperf_timeout}s \\\"\\$ip_cmd\\\" netns exec",
+		"client_port_args=\"--cport ${iperf_client_port}\"",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("linux-cross-host-soak-runner.sh missing %q", want)
