@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"trustix.local/trustix/internal/config"
+	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/dataplane"
 	"trustix.local/trustix/internal/kernelmodule"
+	"trustix.local/trustix/internal/transport"
+	securetransport "trustix.local/trustix/internal/transport/secure"
 )
 
 func TestKernelDatapathRXStagePollerInjectsStagedPackets(t *testing.T) {
@@ -365,6 +368,60 @@ func TestKernelDatapathFullPlaintextProfileAllowsTIXTCPAndAttachesTXHook(t *test
 	defer driver.mu.Unlock()
 	if driver.attachAttempts != 2 || driver.ifname != "br-lan" || driver.targetIfname != "eth0" || driver.flags != kernelDatapathTXPlaintextHookFlags() {
 		t.Fatalf("driver attach attempts=%d ifname=%q target=%q flags=%#x", driver.attachAttempts, driver.ifname, driver.targetIfname, driver.flags)
+	}
+}
+
+func TestKernelDatapathSecureTIXTCPAttachesDedicatedRXAndTXHooks(t *testing.T) {
+	oldOpen := kernelDatapathRXStageOpenDriver
+	t.Cleanup(func() { kernelDatapathRXStageOpenDriver = oldOpen })
+	driver := &fakeKernelRXStageDriver{}
+	kernelDatapathRXStageOpenDriver = func() (kernelDatapathRXStageDriver, error) {
+		return driver, nil
+	}
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"tix-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "tix-a",
+			Transport: string(transport.ProtocolTIXTCP),
+			Enabled:   true,
+		}},
+	}
+	daemon := &Daemon{
+		dataplane:      dataplane.NewNoopManager(),
+		kernelDatapath: kernelmodule.NewTrustIXDatapathManager(),
+		desired:        desired,
+	}
+	daemon.kernelDatapath.SetStatusForTest(kernelmodule.Status{
+		Name:   "trustix_datapath",
+		Mode:   kernelmodule.ModeAuto,
+		Loaded: true,
+		State:  "loaded",
+	})
+	spec := dataplane.AttachSpec{
+		UnderlayIface:              "eth0",
+		LANIface:                   "br-lan",
+		KernelDatapathSecureTIXTCP: true,
+	}
+	if err := daemon.startKernelDatapathRXStage(context.Background(), spec); err != nil {
+		t.Fatalf("start secure tix_tcp full-kmod: %v", err)
+	}
+	status := daemon.kernelDatapathRXStageStatus()
+	if !status.Active || status.Flags != kernelDatapathRXSecureTIXTCPHookFlags() ||
+		status.IfName != "eth0" || status.TargetIfName != "br-lan" {
+		t.Fatalf("secure RX hook status = %#v", status)
+	}
+	if status.TXPlaintextAttached || status.TXPlaintextFlags != 0 {
+		t.Fatalf("secure TX hook was reported as plaintext: %#v", status)
+	}
+	if !status.TXSecureTIXTCPAttached || status.TXSecureTIXTCPFlags != kernelDatapathTXSecureTIXTCPHookFlags() ||
+		status.TXPlaintextIfName != "br-lan" || status.TXPlaintextTargetIfName != "eth0" {
+		t.Fatalf("secure TX hook status = %#v", status)
 	}
 }
 

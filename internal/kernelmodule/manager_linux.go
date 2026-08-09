@@ -139,6 +139,7 @@ func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelMo
 			status.State = "error"
 			status.Path = source.label
 			status.Reason = fmt.Sprintf("load module %q: %v", source.label, err)
+			status.Reason = appendStatusReason(status.Reason, manager.pendingReloadReason)
 			manager.status = status
 			if mode == ModeRequired {
 				return status, fmt.Errorf("%s is required but could not be loaded: %w", manager.name, err)
@@ -151,8 +152,14 @@ func (manager *Manager) ensureLocked(ctx context.Context, module config.KernelMo
 		status.State = "loaded_by_trustix"
 		loadedAt := time.Now().UTC()
 		status.LoadedAt = &loadedAt
-		status.UpgradeState = "loaded"
-		status.Reason = "module loaded by trustixd"
+		if manager.pendingReloadReason != "" {
+			status.UpgradeState = "reloaded"
+			status.Reason = appendStatusReason("module reloaded by trustixd", manager.pendingReloadReason)
+			manager.pendingReloadReason = ""
+		} else {
+			status.UpgradeState = "loaded"
+			status.Reason = "module loaded by trustixd"
+		}
 		manager.status = status
 		return status, nil
 	default:
@@ -196,6 +203,58 @@ func (manager *Manager) closeLocked(ctx context.Context) error {
 	manager.status.State = "unloaded"
 	manager.status.Reason = "module unloaded by trustixd"
 	return nil
+}
+
+func (manager *Manager) assessReloadLocked(module config.KernelModuleConfig) (Status, ReloadAssessment) {
+	mode := normalizeMode(module.Mode)
+	status := manager.inspectLocked(module, mode)
+	if mode == ModeDisabled || !status.Loaded {
+		return status, ReloadAssessment{}
+	}
+
+	source := manager.resolveModuleSource(module)
+	assessment := ReloadAssessment{
+		Upgrade: loadedModuleUpgradeReloadRequired(module, source, status),
+	}
+	parameters := loadParametersWithBuildSHA(source, module.Parameters)
+	assessment.ParameterMismatches = loadedModuleLoadTimeParameterMismatches(manager.name, source, parameters)
+	parameterReload := len(assessment.ParameterMismatches) > 0 && moduleSourceReloadAvailable(source)
+	assessment.Required = assessment.Upgrade || parameterReload
+	if assessment.Upgrade {
+		assessment.Reason = loadedModuleUpgradeReason(source, status, loadedModuleUpgradeState(source, status))
+	}
+	if len(assessment.ParameterMismatches) > 0 {
+		assessment.Reason = appendStatusReason(assessment.Reason,
+			"loaded module has different load-time parameters: "+strings.Join(assessment.ParameterMismatches, ", "))
+	}
+	return status, assessment
+}
+
+func (manager *Manager) unloadForCoordinatedReloadLocked(ctx context.Context, module config.KernelModuleConfig, reason string) (Status, error) {
+	mode := normalizeMode(module.Mode)
+	status := manager.inspectLocked(module, mode)
+	if err := ctx.Err(); err != nil {
+		return status, err
+	}
+	if !status.Loaded {
+		return status, nil
+	}
+	if mode == ModeDisabled {
+		return status, fmt.Errorf("refusing coordinated reload of loaded %s while its lifecycle mode is disabled", manager.name)
+	}
+	if err := manager.unloadLocked(ctx, module, mode, strings.TrimSpace(reason)); err != nil {
+		status = manager.inspectLocked(module, mode)
+		status.State = "error"
+		status.Reason = err.Error()
+		manager.status = status
+		return status, err
+	}
+	manager.pendingReloadReason = strings.TrimSpace(reason)
+	status = manager.inspectLocked(module, mode)
+	status.State = "unloaded_for_reload"
+	status.Reason = strings.TrimSpace(reason)
+	manager.status = status
+	return status, nil
 }
 
 func (manager *Manager) unloadLocked(ctx context.Context, module config.KernelModuleConfig, mode string, reason string) error {
@@ -261,21 +320,9 @@ func (manager *Manager) reloadLoadedModuleForUpgradeLocked(ctx context.Context, 
 	if err := ctx.Err(); err != nil {
 		return false, status.UpgradeState, "", err
 	}
-	policy := effectiveReloadOnUpgrade(module.ReloadOnUpgrade)
 	upgradeState := loadedModuleUpgradeState(source, status)
 	upgradeReason := loadedModuleUpgradeReason(source, status, upgradeState)
-	switch policy {
-	case reloadOnUpgradeNever:
-		return false, upgradeState, upgradeReason, nil
-	}
-	if source.unavailable() || moduleSourceSHA256(source) == "" {
-		return false, upgradeState, upgradeReason, nil
-	}
-	if policy != reloadOnUpgradeAlways && !moduleSourceSupportsBuildSHA(source) {
-		return false, upgradeState, upgradeReason, nil
-	}
-	shouldReload := policy == reloadOnUpgradeAlways || upgradeState == "missing_loaded_fingerprint" || upgradeState == "mismatch"
-	if !shouldReload {
+	if !loadedModuleUpgradeReloadRequired(module, source, status) {
 		return false, upgradeState, upgradeReason, nil
 	}
 	if status.RefCount > 0 {
@@ -292,6 +339,21 @@ func (manager *Manager) reloadLoadedModuleForUpgradeLocked(ctx context.Context, 
 	return true, "reloaded", upgradeReason, nil
 }
 
+func loadedModuleUpgradeReloadRequired(module config.KernelModuleConfig, source moduleSource, status Status) bool {
+	policy := effectiveReloadOnUpgrade(module.ReloadOnUpgrade)
+	if policy == reloadOnUpgradeNever || !status.Loaded || !moduleSourceReloadAvailable(source) {
+		return false
+	}
+	if policy == reloadOnUpgradeAlways {
+		return true
+	}
+	if !moduleSourceSupportsBuildSHA(source) {
+		return false
+	}
+	upgradeState := loadedModuleUpgradeState(source, status)
+	return upgradeState == "missing_loaded_fingerprint" || upgradeState == "mismatch"
+}
+
 func (manager *Manager) reloadLoadedModuleForParameterChangeLocked(ctx context.Context, module config.KernelModuleConfig, source moduleSource, status Status) (bool, string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return false, "", "", err
@@ -302,7 +364,7 @@ func (manager *Manager) reloadLoadedModuleForParameterChangeLocked(ctx context.C
 		return false, "", "", nil
 	}
 	reason := "loaded module has different load-time parameters: " + strings.Join(mismatches, ", ")
-	if source.unavailable() || moduleSourceSHA256(source) == "" {
+	if !moduleSourceReloadAvailable(source) {
 		return false, "parameter_mismatch", reason, nil
 	}
 	if status.RefCount > 0 {
@@ -319,8 +381,12 @@ func (manager *Manager) reloadLoadedModuleForParameterChangeLocked(ctx context.C
 	return true, "reloaded_parameters", reason, nil
 }
 
+func moduleSourceReloadAvailable(source moduleSource) bool {
+	return !source.unavailable() && moduleSourceSHA256(source) != ""
+}
+
 func effectiveReloadOnUpgrade(raw string) string {
-	switch config.NormalizeKernelModuleReloadOnUpgrade(raw) {
+	switch normalizedReloadOnUpgrade(raw) {
 	case reloadOnUpgradeNever:
 		return reloadOnUpgradeNever
 	case reloadOnUpgradeAlways:
@@ -373,19 +439,21 @@ func loadedModuleUpgradeReason(source moduleSource, status Status, state string)
 }
 
 const (
-	trustIXKernelFeatureCryptoAEADBit              = 1 << 0
-	trustIXKernelFeatureDeviceAEADBit              = 1 << 1
-	trustIXKernelFeatureKfuncTCBit                 = 1 << 2
-	trustIXKernelFeatureKfuncXDPBit                = 1 << 3
-	trustIXKernelFeatureDirectAESNIBit             = 1 << 4
-	trustIXKernelFeatureDirectVAESBit              = 1 << 5
-	trustIXKernelFeatureGSOSKBBit                  = 1 << 6
-	trustIXKernelFeatureFullDatapathBit            = 1 << 7
-	trustIXKernelFeatureRouteTCPKfuncBit           = 1 << 8
-	trustIXKernelFeatureRouteTCPXmitBit            = 1 << 9
-	trustIXKernelFeatureInnerTCPChecksumPartialBit = 1 << 10
-	trustIXKernelFeatureInnerGSOBit                = 1 << 11
-	trustIXKernelFeatureTIXTCPPortShardingBit      = 1 << 12
+	trustIXKernelFeatureCryptoAEADBit                    = 1 << 0
+	trustIXKernelFeatureDeviceAEADBit                    = 1 << 1
+	trustIXKernelFeatureKfuncTCBit                       = 1 << 2
+	trustIXKernelFeatureKfuncXDPBit                      = 1 << 3
+	trustIXKernelFeatureDirectAESNIBit                   = 1 << 4
+	trustIXKernelFeatureDirectVAESBit                    = 1 << 5
+	trustIXKernelFeatureGSOSKBBit                        = 1 << 6
+	trustIXKernelFeatureFullDatapathBit                  = 1 << 7
+	trustIXKernelFeatureRouteTCPKfuncBit                 = 1 << 8
+	trustIXKernelFeatureRouteTCPXmitBit                  = 1 << 9
+	trustIXKernelFeatureInnerTCPChecksumPartialBit       = 1 << 10
+	trustIXKernelFeatureInnerGSOBit                      = 1 << 11
+	trustIXKernelFeatureTIXTCPPortShardingBit            = 1 << 12
+	trustIXKernelFeatureSecureTIXTCPFullDatapathBit      = 1 << 13
+	trustIXKernelFeatureSecureInnerTCPChecksumPartialBit = 1 << 14
 )
 
 func inspectModuleABIVersion(name string, loaded bool) int {
@@ -527,6 +595,12 @@ func moduleFeatureMaskToNames(mask uint64) []string {
 	}
 	if mask&trustIXKernelFeatureTIXTCPPortShardingBit != 0 {
 		features = append(features, FeatureTIXTCPPortSharding)
+	}
+	if mask&trustIXKernelFeatureSecureTIXTCPFullDatapathBit != 0 {
+		features = append(features, FeatureSecureTIXTCPFullDatapath)
+	}
+	if mask&trustIXKernelFeatureSecureInnerTCPChecksumPartialBit != 0 {
+		features = append(features, FeatureSecureInnerTCPChecksumPartial)
 	}
 	return normalizeCapabilityFeatures(features)
 }

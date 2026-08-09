@@ -230,6 +230,37 @@ func TestStartDataPathSuppressesCaptureForwarderForFullPlaintextDatapath(t *test
 	}
 }
 
+func TestCaptureForwarderSuppressedForSecureTIXTCPFullKernelDatapath(t *testing.T) {
+	manager := &captureCountingManager{}
+	daemon := &Daemon{dataplane: manager, desired: config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"tix-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "tix-a",
+			Transport: string(transport.ProtocolTIXTCP),
+			Enabled:   true,
+		}},
+	}}
+
+	if !daemon.captureForwarderSuppressed() {
+		t.Fatal("capture forwarder should be suppressed when secure full-kmod owns tix_tcp packets")
+	}
+	if reason := daemon.captureForwarderSuppressedReason(); !strings.Contains(reason, "full secure tix_tcp") {
+		t.Fatalf("suppression reason = %q, want secure full-kmod ownership", reason)
+	}
+	if err := daemon.startCaptureForwarderIfNeeded(context.Background()); err != nil {
+		t.Fatalf("start conditionally suppressed capture forwarder: %v", err)
+	}
+	if manager.subscription != nil {
+		t.Fatal("full secure tix_tcp path subscribed to unsupported userspace capture")
+	}
+}
+
 func TestStartDataPathFullPlaintextWarmsKernelUDPRouteWithAutoKernelTransport(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_UDP_PLAINTEXT_WARMUP_RETRY_DELAY", "1ms")
 	t.Setenv("TRUSTIX_KERNEL_UDP_PLAINTEXT_WARMUP_TIMEOUT", "1s")

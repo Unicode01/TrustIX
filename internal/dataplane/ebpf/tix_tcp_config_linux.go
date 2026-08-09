@@ -24,6 +24,11 @@ const tixTCPConfigXDPFallbackPass uint32 = 1 << 10
 const tixTCPConfigKernelUDPXDPRXDirectTrustInnerChecksum uint32 = 1 << 11
 const tixTCPConfigQueueCountShift = 16
 
+const (
+	tixTCPPortFlagXDPOwned uint8 = 1 << iota
+	tixTCPPortFlagFullKernelTIXTCPPass
+)
+
 func tixTCPBPFConfigValue(queueCount int, kernelUDPTCRXDirect bool) uint32 {
 	return tixTCPBPFConfigValueFor(queueCount, kernelUDPTCRXDirect, false, false)
 }

@@ -76,6 +76,10 @@ func (daemon *Daemon) secureTransportTLSHandshakeOnly() bool {
 	return daemon.secureTLSDataPlane.Load() != secureTLSDataPlaneFullTLSCode
 }
 
+func (daemon *Daemon) secureTransportSessionGeneration() transport.SessionGeneration {
+	return daemon.sessionGeneration
+}
+
 func (daemon *Daemon) secureTransportCryptoSuites() []string {
 	value := daemon.secureSuites.Load()
 	if value == nil {

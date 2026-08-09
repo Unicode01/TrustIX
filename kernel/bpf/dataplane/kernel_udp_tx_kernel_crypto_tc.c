@@ -26,11 +26,13 @@ struct bpf_spin_lock {
 
 #define BPF_MAP_TYPE_HASH 1
 #define BPF_MAP_TYPE_ARRAY 2
+#define BPF_MAP_TYPE_LRU_HASH 9
 #define BPF_MAP_TYPE_LPM_TRIE 11
 #define BPF_MAP_TYPE_PERCPU_ARRAY 6
 
 #define BPF_F_NO_PREALLOC 1
 #define BPF_ANY 0
+#define BPF_NOEXIST 1
 #define BPF_ADJ_ROOM_MAC 1
 #define BPF_F_RECOMPUTE_CSUM 1
 #define BPF_F_INVALIDATE_HASH 2
@@ -47,6 +49,8 @@ const volatile __u32 trustix_kudp_tx_secure_inner_tcp_csum_kfunc = 0;
 const volatile __u32 trustix_kudp_tx_secure_outer_tcp_csum_kfunc = 0;
 const volatile __u32 trustix_kudp_tx_secure_outer_tcp_partial_csum_kfunc = 0;
 const volatile __u32 trustix_kudp_tx_secure_route_gso_kfunc = 0;
+const volatile __u32 trustix_kudp_tx_strong_flow_hash = 1;
+const volatile __u32 trustix_kudp_tx_flow_affinity = 1;
 
 #ifndef TRUSTIX_KUDP_SECURE_BPF_CRYPTO
 #define TRUSTIX_KUDP_SECURE_BPF_CRYPTO 0
@@ -97,6 +101,7 @@ const volatile __u32 trustix_kudp_tx_secure_route_gso_kfunc = 0;
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN 16
 #define TRUSTIX_KERNEL_CRYPTO_SECURE_HEADER_LEN 24
 #define TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES 4096
+#define TRUSTIX_KUDP_TX_FLOW_AFFINITY_MAX_ENTRIES 65536
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_MAX 4095
 #define TRUSTIX_KERNEL_CRYPTO_FRAME_PADDED 4096
 #define TRUSTIX_KERNEL_CRYPTO_PLAIN_MAX (TRUSTIX_KERNEL_CRYPTO_FRAME_MAX - TRUSTIX_KERNEL_CRYPTO_FRAME_TAG_LEN)
@@ -117,6 +122,7 @@ const volatile __u32 trustix_kudp_tx_secure_route_gso_kfunc = 0;
 #define TRUSTIX_KUDP_TX_FLOW_FLAG_SKIP_OUTER_TCP_CHECKSUM 16
 #define TRUSTIX_KERNEL_CRYPTO_FLOW_FLAG_HOT_STATS 1
 #define TRUSTIX_KUDP_TX_ROUTE_FLAG_BYPASS 4
+#define TRUSTIX_KUDP_TX_ROUTE_FLAG_FULL_KERNEL_TIX_TCP 8
 #define TRUSTIX_KUDP_TX_CIPHER_BUFFER_SPLIT 0
 #define TRUSTIX_KUDP_TX_CIPHER_BUFFER_PLAIN 1
 
@@ -251,6 +257,21 @@ struct trustix_kernel_crypto_flow_key {
     __u8 reserved[7];
 };
 
+struct trustix_kudp_tx_inner_flow_key {
+    __u64 route_id;
+    __u32 source_ip;
+    __u32 destination_ip;
+    __u16 source_port;
+    __u16 destination_port;
+    __u8 protocol;
+    __u8 reserved[3];
+};
+
+struct trustix_kudp_tx_affinity_counter {
+    struct bpf_spin_lock lock;
+    __u32 next;
+};
+
 struct trustix_kernel_crypto_ctx_value {
     struct bpf_crypto_ctx __kptr *ctx;
     __u16 suite;
@@ -350,6 +371,20 @@ struct {
 } ix_kudp_tx_flow SEC(".maps");
 
 struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, TRUSTIX_KUDP_TX_FLOW_AFFINITY_MAX_ENTRIES);
+    __type(key, struct trustix_kudp_tx_inner_flow_key);
+    __type(value, __u32);
+} ix_kudp_tx_affinity SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct trustix_kudp_tx_affinity_counter);
+} ix_kudp_tx_affinity_next SEC(".maps");
+
+struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES);
     __type(key, struct trustix_kernel_crypto_flow_key);
@@ -378,6 +413,9 @@ struct {
 } ix_kudp_tx_secure_scratch SEC(".maps");
 
 static void *(*bpf_map_lookup_elem)(const void *map, const void *key) = (void *)1;
+static long (*bpf_map_update_elem)(const void *map, const void *key, const void *value, __u64 flags) = (void *)2;
+static long (*bpf_spin_lock)(struct bpf_spin_lock *lock) = (void *)93;
+static long (*bpf_spin_unlock)(struct bpf_spin_lock *lock) = (void *)94;
 static long (*bpf_skb_store_bytes)(struct __sk_buff *skb, __u32 offset, const void *from, __u32 len, __u64 flags) = (void *)9;
 static long (*bpf_skb_load_bytes)(const struct __sk_buff *skb, __u32 offset, void *to, __u32 len) = (void *)26;
 static long (*bpf_csum_diff)(const void *from, __u32 from_size, const void *to, __u32 to_size, __u32 seed) = (void *)28;
@@ -497,11 +535,81 @@ static __always_inline __u8 *trustix_tx_cipher_ptr(struct trustix_kudp_tx_scratc
     return scratch->io.split.cipher;
 }
 
+static __always_inline __u32 trustix_kudp_mix_flow_hash(__u32 hash)
+{
+    hash ^= hash >> 16;
+    hash *= 0x7feb352dU;
+    hash ^= hash >> 15;
+    hash *= 0x846ca68bU;
+    hash ^= hash >> 16;
+    return hash;
+}
+
+static __always_inline int trustix_kudp_flow_affinity_index(
+    struct trustix_kudp_tx_route_value *route,
+    __u8 *data,
+    __u8 *data_end,
+    __u32 *index)
+{
+    struct trustix_kudp_tx_inner_flow_key key = {};
+    struct trustix_kudp_tx_affinity_counter *counter;
+    __u64 route_id;
+    __u32 counter_key = 0;
+    __u32 *cached;
+    __u32 candidate;
+    __u32 ihl;
+    __u8 *l4;
+
+    if (!trustix_kudp_tx_flow_affinity || !route || !index)
+        return 0;
+    ihl = (__u32)(data[14] & 0x0f) << 2;
+    if (ihl < 20)
+        return 0;
+    l4 = data + 14 + ihl;
+    if (l4 + 4 > data_end)
+        return 0;
+    key.source_ip = ((__u32)data[26] << 24) | ((__u32)data[27] << 16) |
+                    ((__u32)data[28] << 8) | data[29];
+    key.destination_ip = ((__u32)data[30] << 24) | ((__u32)data[31] << 16) |
+                         ((__u32)data[32] << 8) | data[33];
+    key.source_port = ((__u16)l4[0] << 8) | l4[1];
+    key.destination_port = ((__u16)l4[2] << 8) | l4[3];
+    key.protocol = data[23];
+
+    route_id = route->flow_id;
+    if (!route_id)
+        route_id = route->flow_id_1;
+    key.route_id = route_id;
+
+    cached = bpf_map_lookup_elem(&ix_kudp_tx_affinity, &key);
+    if (cached) {
+        *index = *cached & route->flow_mask;
+        return 1;
+    }
+
+    counter = bpf_map_lookup_elem(&ix_kudp_tx_affinity_next, &counter_key);
+    if (!counter)
+        return 0;
+    bpf_spin_lock(&counter->lock);
+    candidate = counter->next++;
+    bpf_spin_unlock(&counter->lock);
+    if (bpf_map_update_elem(&ix_kudp_tx_affinity, &key, &candidate,
+                            BPF_NOEXIST)) {
+        cached = bpf_map_lookup_elem(&ix_kudp_tx_affinity, &key);
+        if (!cached)
+            return 0;
+        candidate = *cached;
+    }
+    *index = candidate & route->flow_mask;
+    return 1;
+}
+
 static __always_inline __u64 trustix_kudp_select_route_flow(struct trustix_kudp_tx_route_value *route,
                                                             __u8 *data,
                                                             __u8 *data_end)
 {
     __u32 hash;
+    __u32 index;
     __u32 next;
     __u32 ihl;
     __u8 *l4;
@@ -510,20 +618,28 @@ static __always_inline __u64 trustix_kudp_select_route_flow(struct trustix_kudp_
         return 0;
     if (route->flow_mask == 0)
         return route->flow_id;
-    hash = ((__u32)data[26] << 24) | ((__u32)data[27] << 16) |
-           ((__u32)data[28] << 8) | data[29];
-    hash ^= ((__u32)data[30] << 24) | ((__u32)data[31] << 16) |
-            ((__u32)data[32] << 8) | data[33];
-    hash ^= ((__u32)data[23]) << 16;
-    ihl = (__u32)(data[14] & 0x0f) << 2;
-    l4 = data + 14 + ihl;
-    if (l4 + 4 <= data_end)
-        hash ^= ((__u32)l4[0] << 24) | ((__u32)l4[1] << 16) |
-                ((__u32)l4[2] << 8) | l4[3];
-    next = hash >> 16;
-    hash ^= next;
-    next = hash >> 8;
-    hash ^= next;
+    if (trustix_kudp_flow_affinity_index(route, data, data_end, &index))
+        hash = index;
+    else {
+        hash = ((__u32)data[26] << 24) | ((__u32)data[27] << 16) |
+               ((__u32)data[28] << 8) | data[29];
+        hash ^= ((__u32)data[30] << 24) | ((__u32)data[31] << 16) |
+                ((__u32)data[32] << 8) | data[33];
+        hash ^= ((__u32)data[23]) << 16;
+        ihl = (__u32)(data[14] & 0x0f) << 2;
+        l4 = data + 14 + ihl;
+        if (l4 + 4 <= data_end)
+            hash ^= ((__u32)l4[0] << 24) | ((__u32)l4[1] << 16) |
+                    ((__u32)l4[2] << 8) | l4[3];
+        if (trustix_kudp_tx_strong_flow_hash) {
+            hash = trustix_kudp_mix_flow_hash(hash);
+        } else {
+            next = hash >> 16;
+            hash ^= next;
+            next = hash >> 8;
+            hash ^= next;
+        }
+    }
     switch (hash & route->flow_mask) {
     case 0:
         return route->flow_id_1;
@@ -1523,6 +1639,8 @@ int trustix_kudp_tx_secure(struct __sk_buff *skb)
     if (!route)
         goto route_miss;
     if (route->flags & TRUSTIX_KUDP_TX_ROUTE_FLAG_BYPASS)
+        return TC_ACT_UNSPEC;
+    if (route->flags & TRUSTIX_KUDP_TX_ROUTE_FLAG_FULL_KERNEL_TIX_TCP)
         return TC_ACT_UNSPEC;
     flow_id = trustix_kudp_select_route_flow(route, data, data_end);
     if (flow_id == 0)

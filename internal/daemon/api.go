@@ -1878,7 +1878,7 @@ func dataPathDoctorDetail(status dataPathStatus) string {
 			reverseSessions++
 		}
 	}
-	return fmt.Sprintf("listeners=%d sessions=%d reverse_sessions=%d capture_forwarder_active=%t capture_forwarder_suppressed=%t sent=%d received=%d injected=%d resets_sent=%d resets_received=%d stale_sessions_dropped=%d",
+	return fmt.Sprintf("listeners=%d sessions=%d reverse_sessions=%d capture_forwarder_active=%t capture_forwarder_suppressed=%t sent=%d received=%d injected=%d resets_sent=%d resets_received=%d generation_changes=%d stale_sessions_dropped=%d",
 		len(status.Listeners),
 		status.ActiveSessions,
 		reverseSessions,
@@ -1889,6 +1889,7 @@ func dataPathDoctorDetail(status dataPathStatus) string {
 		status.Counters.PacketsInjected,
 		status.Counters.SessionResetsSent,
 		status.Counters.SessionResetsReceived,
+		status.Counters.SessionGenerationChanges,
 		status.Counters.StaleSessionsDropped,
 	)
 }

@@ -33,6 +33,9 @@ func effectiveKernelTransportModeForDesired(desired config.Desired) dataplane.Ke
 	if mode == dataplane.KernelTransportModeDisabled {
 		return mode
 	}
+	if kernelDatapathSecureTIXTCPForDesired(desired) {
+		return dataplane.KernelTransportModeRequireKernel
+	}
 	if tixTCPRouteGSOAsyncForDesired(desired) {
 		return dataplane.KernelTransportModeRequireKernel
 	}

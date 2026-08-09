@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/configlog"
@@ -171,6 +172,96 @@ func TestRuntimeReconcileOldAttemptDoesNotOverwriteNewRequest(t *testing.T) {
 	if !status.Pending || status.Reason != "new request" || status.LastError != "new request error" {
 		t.Fatalf("reconcile status after overlapping request = %#v", status)
 	}
+}
+
+func TestApplyRuntimeDataplaneSnapshotSerializesConcurrentApplies(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	daemon := newConfigApplyTestDaemon(t, configApplyDesired(pkiSet, "10.0.1.0/24"))
+	manager := &concurrentSnapshotProbeManager{
+		Manager:       daemon.dataplane,
+		firstStarted:  make(chan struct{}),
+		secondStarted: make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+	}
+	daemon.dataplane = manager
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- daemon.applyRuntimeDataplaneSnapshot(context.Background())
+	}()
+	select {
+	case <-manager.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first runtime snapshot did not reach the dataplane")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- daemon.applyRuntimeDataplaneSnapshot(context.Background())
+	}()
+	select {
+	case <-manager.secondStarted:
+		t.Fatal("second runtime snapshot entered the dataplane before the first completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(manager.releaseFirst)
+
+	for index, done := range []<-chan error{firstDone, secondDone} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("runtime snapshot %d: %v", index+1, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("runtime snapshot %d did not complete", index+1)
+		}
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.maxActive != 1 || manager.calls != 2 {
+		t.Fatalf("concurrent snapshot manager active=%d calls=%d, want active=1 calls=2", manager.maxActive, manager.calls)
+	}
+}
+
+type concurrentSnapshotProbeManager struct {
+	dataplane.Manager
+	mu            sync.Mutex
+	calls         int
+	active        int
+	maxActive     int
+	firstStarted  chan struct{}
+	secondStarted chan struct{}
+	releaseFirst  chan struct{}
+}
+
+func (manager *concurrentSnapshotProbeManager) ApplySnapshot(ctx context.Context, snapshot dataplane.Snapshot) error {
+	manager.mu.Lock()
+	call := manager.calls
+	manager.calls++
+	manager.active++
+	if manager.active > manager.maxActive {
+		manager.maxActive = manager.active
+	}
+	if call == 0 {
+		close(manager.firstStarted)
+	} else if call == 1 {
+		close(manager.secondStarted)
+	}
+	manager.mu.Unlock()
+	defer func() {
+		manager.mu.Lock()
+		manager.active--
+		manager.mu.Unlock()
+	}()
+
+	if call == 0 {
+		select {
+		case <-manager.releaseFirst:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return manager.Manager.ApplySnapshot(ctx, snapshot)
 }
 
 type blockingSnapshotManager struct {

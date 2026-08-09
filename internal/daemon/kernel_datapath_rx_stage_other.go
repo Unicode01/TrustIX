@@ -16,13 +16,21 @@ func openKernelDatapathRXStageDriver() (kernelDatapathRXStageDriver, error) {
 }
 
 func kernelDatapathRXStageHookFlags() uint32 {
-	return 0
+	return 1<<0 | 1<<1
 }
 
 func kernelDatapathRXWorkerHookFlags() uint32 {
-	return 0
+	return 1<<0 | 1<<2
+}
+
+func kernelDatapathRXSecureTIXTCPHookFlags() uint32 {
+	return kernelDatapathRXWorkerHookFlags() | 1<<5
 }
 
 func kernelDatapathTXPlaintextHookFlags() uint32 {
-	return 0
+	return 1 << 3
+}
+
+func kernelDatapathTXSecureTIXTCPHookFlags() uint32 {
+	return 1 << 4
 }

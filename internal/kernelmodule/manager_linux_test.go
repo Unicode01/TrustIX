@@ -2,7 +2,12 @@
 
 package kernelmodule
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"trustix.local/trustix/internal/config"
+)
 
 func TestLoadParametersWithBuildSHAOverridesUserValue(t *testing.T) {
 	source := moduleSource{label: "test.ko", payload: []byte("\x7fELF...parm=build_sha256:TrustIX build fingerprint")}
@@ -39,6 +44,71 @@ func TestLoadedModuleUpgradeState(t *testing.T) {
 	}
 }
 
+func TestLoadedModuleUpgradeReloadRequiredHonorsPolicyAndFingerprint(t *testing.T) {
+	supported := moduleSource{label: "test.ko", payload: []byte("\x7fELF...parm=build_sha256:TrustIX build fingerprint")}
+	unsupported := moduleSource{label: "legacy.ko", payload: []byte("\x7fELF...legacy module")}
+	currentSHA := moduleSourceSHA256(supported)
+	for name, tc := range map[string]struct {
+		module config.KernelModuleConfig
+		source moduleSource
+		status Status
+		want   bool
+	}{
+		"auto mismatch": {
+			module: config.KernelModuleConfig{ReloadOnUpgrade: "auto"},
+			source: supported,
+			status: Status{Loaded: true, LoadedSHA256: "old"},
+			want:   true,
+		},
+		"auto current": {
+			module: config.KernelModuleConfig{ReloadOnUpgrade: "auto"},
+			source: supported,
+			status: Status{Loaded: true, LoadedSHA256: currentSHA},
+		},
+		"never mismatch": {
+			module: config.KernelModuleConfig{ReloadOnUpgrade: "never"},
+			source: supported,
+			status: Status{Loaded: true, LoadedSHA256: "old"},
+		},
+		"always current": {
+			module: config.KernelModuleConfig{ReloadOnUpgrade: "always"},
+			source: supported,
+			status: Status{Loaded: true, LoadedSHA256: currentSHA},
+			want:   true,
+		},
+		"auto legacy target": {
+			module: config.KernelModuleConfig{ReloadOnUpgrade: "auto"},
+			source: unsupported,
+			status: Status{Loaded: true},
+		},
+		"always not loaded": {
+			module: config.KernelModuleConfig{ReloadOnUpgrade: "always"},
+			source: supported,
+			status: Status{},
+		},
+	} {
+		if got := loadedModuleUpgradeReloadRequired(tc.module, tc.source, tc.status); got != tc.want {
+			t.Fatalf("%s: reload required = %t, want %t", name, got, tc.want)
+		}
+	}
+}
+
+func TestModuleSourceReloadAvailableRequiresUsablePayload(t *testing.T) {
+	for name, tc := range map[string]struct {
+		source moduleSource
+		want   bool
+	}{
+		"embedded payload": {source: moduleSource{payload: []byte("module")}, want: true},
+		"resolved path":    {source: moduleSource{path: "module.ko", sha256: "known"}, want: true},
+		"empty source":     {source: moduleSource{}},
+		"source error":     {source: moduleSource{err: errors.New("missing module")}},
+	} {
+		if got := moduleSourceReloadAvailable(tc.source); got != tc.want {
+			t.Fatalf("%s: reload available = %t, want %t", name, got, tc.want)
+		}
+	}
+}
+
 func TestModuleFeatureMaskIncludesRouteTCPKfunc(t *testing.T) {
 	features := moduleFeatureMaskToNames(trustIXKernelFeatureCryptoAEADBit | trustIXKernelFeatureGSOSKBBit | trustIXKernelFeatureRouteTCPKfuncBit | trustIXKernelFeatureRouteTCPXmitBit)
 	status := completeCapabilityStatus(Status{Name: "trustix_datapath_helpers", Loaded: true, Features: features})
@@ -54,7 +124,7 @@ func TestModuleFeatureMaskIncludesRouteTCPKfunc(t *testing.T) {
 }
 
 func TestModuleFeatureMaskIncludesInnerTCPOptimizations(t *testing.T) {
-	features := moduleFeatureMaskToNames(trustIXKernelFeatureFullDatapathBit | trustIXKernelFeatureInnerTCPChecksumPartialBit | trustIXKernelFeatureInnerGSOBit | trustIXKernelFeatureTIXTCPPortShardingBit)
+	features := moduleFeatureMaskToNames(trustIXKernelFeatureFullDatapathBit | trustIXKernelFeatureInnerTCPChecksumPartialBit | trustIXKernelFeatureInnerGSOBit | trustIXKernelFeatureTIXTCPPortShardingBit | trustIXKernelFeatureSecureTIXTCPFullDatapathBit | trustIXKernelFeatureSecureInnerTCPChecksumPartialBit)
 	status := completeCapabilityStatus(Status{Name: "trustix_datapath", Loaded: true, Features: features})
 	if !status.HasFeature(FeatureInnerTCPChecksumPartial) {
 		t.Fatalf("features = %#v, missing %q", status.Features, FeatureInnerTCPChecksumPartial)
@@ -64,6 +134,12 @@ func TestModuleFeatureMaskIncludesInnerTCPOptimizations(t *testing.T) {
 	}
 	if !status.HasFeature(FeatureTIXTCPPortSharding) {
 		t.Fatalf("features = %#v, missing %q", status.Features, FeatureTIXTCPPortSharding)
+	}
+	if !status.HasFeature(FeatureSecureTIXTCPFullDatapath) {
+		t.Fatalf("features = %#v, missing %q", status.Features, FeatureSecureTIXTCPFullDatapath)
+	}
+	if !status.HasFeature(FeatureSecureInnerTCPChecksumPartial) {
+		t.Fatalf("features = %#v, missing %q", status.Features, FeatureSecureInnerTCPChecksumPartial)
 	}
 }
 

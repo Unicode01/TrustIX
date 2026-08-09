@@ -57,89 +57,94 @@ type Config struct {
 }
 
 type Daemon struct {
-	cfg                  Config
-	dataplane            dataplane.Manager
-	kernelCrypto         *kernelmodule.Manager
-	kernelDatapath       *kernelmodule.Manager
-	kernelHelpers        *kernelmodule.Manager
-	kernelSysctlRestore  map[string]string
-	kernelRPSRestore     map[string]string
-	routes               *routing.Table
-	transports           *transport.Registry
-	desired              config.Desired
-	store                configlog.Store
-	logPath              string
-	dataDirLock          heldDataDirLock
-	head                 configlog.Head
-	configHeadSeq        atomic.Uint64
-	startedAt            time.Time
-	runCtx               context.Context
-	configMu             sync.RWMutex
-	configSyncMu         sync.RWMutex
-	controlClientMu      sync.Mutex
-	controlViewMu        sync.Mutex
-	controlClients       map[string]*cachedControlClient
-	controlMembers       map[string]cachedControlMembers
-	controlMemberCursors map[string]string
-	controlAdPush        map[string]cachedAdvertisementPush
-	controlTargetCursor  atomic.Uint64
-	controlView          controlViewSnapshot
-	cryptoPlacement      atomic.Uint32
-	secureKeySource      atomic.Uint32
-	secureEncryption     atomic.Uint32
-	secureTLSDataPlane   atomic.Uint32
-	secureSuites         atomic.Value
-	configSync           map[string]configSyncPeerState
-	signerMu             sync.RWMutex
-	signerCerts          map[core.SignerID]*x509.Certificate
-	peerMu               sync.RWMutex
-	peerState            map[core.IXID]peerRuntime
-	membershipMu         sync.RWMutex
-	membershipDiskMu     sync.Mutex
-	members              map[core.IXID]memberRecord
-	pendingMembers       map[core.IXID]pendingMemberRecord
-	provisionMu          sync.Mutex
-	provisionLoaded      bool
-	provisionTokens      map[string]ixProvisionTokenRecord
-	localAd              advertisementResponse
-	runtimeEpoch         uint64
-	dataMu               sync.Mutex
-	dataStats            dataPathStats
-	dataMetrics          dataPathMetrics
-	dataSessions         map[dataSessionKey]transport.Session
-	dataSessionState     map[dataSessionKey]*dataSessionRuntime
-	dataSessionDials     map[dataSessionKey]chan struct{}
-	deviceLeases         map[deviceLeaseKey]deviceAccessLease
-	sessionPoolRR        map[dataSessionPoolKey]uint64
-	sessionPoolFlow      map[dataSessionFlowPoolKey]int
-	dataSessionEpoch     uint64
-	routeWarmupEpoch     atomic.Uint64
-	forwardCacheMu       sync.RWMutex
-	forwardCache         map[routing.FlowKey]*dataForwardCacheEntry
-	dataPathStarted      bool
-	dataListeners        []dataListenerRuntime
-	captureCancel        context.CancelFunc
-	captureSub           dataplane.CaptureSubscription
-	kernelRXStage        kernelDatapathRXStageRuntime
-	localLAN             atomic.Value
-	flowMu               sync.RWMutex
-	flows                map[routing.FlowKey]routing.FlowBinding
-	nat                  *natTable
-	endpointMu           sync.Mutex
-	endpointState        map[endpointStateKey]rstate.EndpointState
-	reconcileAttemptMu   sync.Mutex
-	reconcileMu          sync.Mutex
-	reconcileWake        chan struct{}
-	reconcileState       runtimeReconcileStatus
-	reconcileGeneration  uint64
-	backgroundMu         sync.Mutex
-	backgroundErrors     map[string]backgroundErrorStatus
-	apiMu                sync.Mutex
-	apiErr               chan error
-	apiServers           []apiServerRuntime
-	dnsMu                sync.Mutex
-	dnsServer            *dnsServerRuntime
-	apiRateLimits        *apiRateLimiters
+	cfg                            Config
+	dataplane                      dataplane.Manager
+	kernelCrypto                   *kernelmodule.Manager
+	kernelDatapath                 *kernelmodule.Manager
+	kernelHelpers                  *kernelmodule.Manager
+	kernelDatapathStateMu          sync.Mutex
+	kernelDatapathStateInitialized bool
+	kernelSysctlRestore            map[string]string
+	kernelRPSRestore               map[string]string
+	routes                         *routing.Table
+	transports                     *transport.Registry
+	desired                        config.Desired
+	store                          configlog.Store
+	logPath                        string
+	dataDirLock                    heldDataDirLock
+	head                           configlog.Head
+	configHeadSeq                  atomic.Uint64
+	startedAt                      time.Time
+	runCtx                         context.Context
+	configMu                       sync.RWMutex
+	configSyncMu                   sync.RWMutex
+	controlClientMu                sync.Mutex
+	controlViewMu                  sync.Mutex
+	controlClients                 map[string]*cachedControlClient
+	controlMembers                 map[string]cachedControlMembers
+	controlMemberCursors           map[string]string
+	controlAdPush                  map[string]cachedAdvertisementPush
+	controlTargetCursor            atomic.Uint64
+	controlView                    controlViewSnapshot
+	cryptoPlacement                atomic.Uint32
+	secureKeySource                atomic.Uint32
+	secureEncryption               atomic.Uint32
+	secureTLSDataPlane             atomic.Uint32
+	secureSuites                   atomic.Value
+	sessionGeneration              transport.SessionGeneration
+	configSync                     map[string]configSyncPeerState
+	signerMu                       sync.RWMutex
+	signerCerts                    map[core.SignerID]*x509.Certificate
+	peerMu                         sync.RWMutex
+	peerState                      map[core.IXID]peerRuntime
+	membershipMu                   sync.RWMutex
+	membershipDiskMu               sync.Mutex
+	members                        map[core.IXID]memberRecord
+	pendingMembers                 map[core.IXID]pendingMemberRecord
+	provisionMu                    sync.Mutex
+	provisionLoaded                bool
+	provisionTokens                map[string]ixProvisionTokenRecord
+	localAd                        advertisementResponse
+	runtimeEpoch                   uint64
+	dataMu                         sync.Mutex
+	dataStats                      dataPathStats
+	dataMetrics                    dataPathMetrics
+	dataSessions                   map[dataSessionKey]transport.Session
+	dataSessionState               map[dataSessionKey]*dataSessionRuntime
+	dataSessionDials               map[dataSessionKey]chan struct{}
+	peerSessionGeneration          map[core.IXID]peerDataSessionGeneration
+	deviceLeases                   map[deviceLeaseKey]deviceAccessLease
+	sessionPoolRR                  map[dataSessionPoolKey]uint64
+	sessionPoolFlow                map[dataSessionFlowPoolKey]int
+	dataSessionEpoch               uint64
+	routeWarmupEpoch               atomic.Uint64
+	forwardCacheMu                 sync.RWMutex
+	forwardCache                   map[routing.FlowKey]*dataForwardCacheEntry
+	dataPathStarted                bool
+	dataListeners                  []dataListenerRuntime
+	captureCancel                  context.CancelFunc
+	captureSub                     dataplane.CaptureSubscription
+	kernelRXStage                  kernelDatapathRXStageRuntime
+	localLAN                       atomic.Value
+	flowMu                         sync.RWMutex
+	flows                          map[routing.FlowKey]routing.FlowBinding
+	nat                            *natTable
+	endpointMu                     sync.Mutex
+	endpointState                  map[endpointStateKey]rstate.EndpointState
+	reconcileAttemptMu             sync.Mutex
+	runtimeDataplaneMu             sync.Mutex
+	reconcileMu                    sync.Mutex
+	reconcileWake                  chan struct{}
+	reconcileState                 runtimeReconcileStatus
+	reconcileGeneration            uint64
+	backgroundMu                   sync.Mutex
+	backgroundErrors               map[string]backgroundErrorStatus
+	apiMu                          sync.Mutex
+	apiErr                         chan error
+	apiServers                     []apiServerRuntime
+	dnsMu                          sync.Mutex
+	dnsServer                      *dnsServerRuntime
+	apiRateLimits                  *apiRateLimiters
 }
 
 type Option func(*Daemon)
@@ -182,46 +187,51 @@ func WithDataplane(manager dataplane.Manager) Option {
 
 func New(cfg Config, options ...Option) (*Daemon, error) {
 	daemon := &Daemon{
-		cfg:                  cfg,
-		dataplane:            selectDataplane(cfg.DataplaneMode),
-		kernelCrypto:         kernelmodule.NewTrustIXCryptoManager(),
-		kernelDatapath:       kernelmodule.NewTrustIXDatapathManager(),
-		kernelHelpers:        kernelmodule.NewTrustIXDatapathHelpersManager(),
-		routes:               routing.NewTable(),
-		transports:           transport.NewRegistry(),
-		configSync:           make(map[string]configSyncPeerState),
-		controlClients:       make(map[string]*cachedControlClient),
-		controlMembers:       make(map[string]cachedControlMembers),
-		controlMemberCursors: make(map[string]string),
-		signerCerts:          make(map[core.SignerID]*x509.Certificate),
-		peerState:            make(map[core.IXID]peerRuntime),
-		members:              make(map[core.IXID]memberRecord),
-		pendingMembers:       make(map[core.IXID]pendingMemberRecord),
-		provisionTokens:      make(map[string]ixProvisionTokenRecord),
-		dataSessions:         make(map[dataSessionKey]transport.Session),
-		dataSessionState:     make(map[dataSessionKey]*dataSessionRuntime),
-		dataSessionDials:     make(map[dataSessionKey]chan struct{}),
-		deviceLeases:         make(map[deviceLeaseKey]deviceAccessLease),
-		flows:                make(map[routing.FlowKey]routing.FlowBinding),
-		nat:                  newNATTable(),
-		endpointState:        make(map[endpointStateKey]rstate.EndpointState),
-		reconcileWake:        make(chan struct{}, 1),
-		backgroundErrors:     make(map[string]backgroundErrorStatus),
-		apiRateLimits:        newAPIRateLimitersFromEnv(),
+		cfg:                   cfg,
+		dataplane:             selectDataplane(cfg.DataplaneMode),
+		kernelCrypto:          kernelmodule.NewTrustIXCryptoManager(),
+		kernelDatapath:        kernelmodule.NewTrustIXDatapathManager(),
+		kernelHelpers:         kernelmodule.NewTrustIXDatapathHelpersManager(),
+		routes:                routing.NewTable(),
+		transports:            transport.NewRegistry(),
+		configSync:            make(map[string]configSyncPeerState),
+		controlClients:        make(map[string]*cachedControlClient),
+		controlMembers:        make(map[string]cachedControlMembers),
+		controlMemberCursors:  make(map[string]string),
+		signerCerts:           make(map[core.SignerID]*x509.Certificate),
+		peerState:             make(map[core.IXID]peerRuntime),
+		members:               make(map[core.IXID]memberRecord),
+		pendingMembers:        make(map[core.IXID]pendingMemberRecord),
+		provisionTokens:       make(map[string]ixProvisionTokenRecord),
+		dataSessions:          make(map[dataSessionKey]transport.Session),
+		dataSessionState:      make(map[dataSessionKey]*dataSessionRuntime),
+		dataSessionDials:      make(map[dataSessionKey]chan struct{}),
+		peerSessionGeneration: make(map[core.IXID]peerDataSessionGeneration),
+		deviceLeases:          make(map[deviceLeaseKey]deviceAccessLease),
+		flows:                 make(map[routing.FlowKey]routing.FlowBinding),
+		nat:                   newNATTable(),
+		endpointState:         make(map[endpointStateKey]rstate.EndpointState),
+		reconcileWake:         make(chan struct{}, 1),
+		backgroundErrors:      make(map[string]backgroundErrorStatus),
+		apiRateLimits:         newAPIRateLimitersFromEnv(),
 	}
 	for _, option := range options {
 		option(daemon)
+	}
+	if _, err := rand.Read(daemon.sessionGeneration[:]); err != nil {
+		return nil, fmt.Errorf("generate secure transport session generation: %w", err)
 	}
 	if daemon.dataplane == nil {
 		return nil, fmt.Errorf("unsupported dataplane mode %q", cfg.DataplaneMode)
 	}
 	secureOptions := securetransport.Options{
-		KeySource:        daemon.secureTransportKeySource,
-		Encryption:       daemon.secureTransportEncryption,
-		CryptoSuites:     daemon.secureTransportCryptoSuites,
-		TLSHandshakeOnly: daemon.secureTransportTLSHandshakeOnly,
-		ClientAuthTLS:    daemon.secureClientAuthTLSConfig,
-		ServerAuthTLS:    daemon.secureServerAuthTLSConfig,
+		KeySource:         daemon.secureTransportKeySource,
+		Encryption:        daemon.secureTransportEncryption,
+		CryptoSuites:      daemon.secureTransportCryptoSuites,
+		TLSHandshakeOnly:  daemon.secureTransportTLSHandshakeOnly,
+		SessionGeneration: daemon.secureTransportSessionGeneration,
+		ClientAuthTLS:     daemon.secureClientAuthTLSConfig,
+		ServerAuthTLS:     daemon.secureServerAuthTLSConfig,
 	}
 	udpTransport := udptransport.New(udptransport.Options{
 		CryptoPlacement:          daemon.transportCryptoPlacement,
@@ -895,8 +905,9 @@ func (daemon *Daemon) attachDataplane(ctx context.Context, desired config.Desire
 func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.AttachSpec {
 	lan := config.PrimaryLAN(desired)
 	lanSpec := dataplaneLANAttachSpec(lan, desired)
-	tixTCPSecureDirect := tixTCPSecureKernelCryptoDirectForDesired(desired)
-	secureFullDirect := kernelUDPSecureFullDirectForDesired(desired) || tixTCPSecureDirect
+	tixTCPSecureFullKernel := kernelDatapathSecureTIXTCPForDesired(desired)
+	tixTCPSecureRouteGSO := tixTCPSecureRouteGSOAsyncForDesired(desired)
+	secureFullDirect := kernelUDPSecureFullDirectForDesired(desired) || tixTCPSecureRouteGSO
 	kernelUDPSecureRouteGSO := kernelUDPSecureRouteGSOForDesired(desired)
 	tixTCPRouteGSOAsync := tixTCPRouteGSOAsyncForDesired(desired)
 	tixTCPPlainRouteGSOAsync := tixTCPPerformanceRouteGSOAsyncForDesired(desired)
@@ -919,7 +930,7 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		KernelUDPRXSecureDirect:                  secureFullDirect,
 		KernelUDPSecureDirectTrustInnerChecksums: secureFullDirect,
 		KernelUDPSecureRouteGSO:                  kernelUDPSecureRouteGSO,
-		TIXTCPTXDirect:                           tixTCPTXDirectForDesired(desired) || tixTCPSecureDirect,
+		TIXTCPTXDirect:                           tixTCPTXDirectForDesired(desired) || tixTCPSecureRouteGSO,
 		TIXTCPRouteGSOSync:                       tixTCPRouteGSOAsync,
 		TIXTCPRouteGSOAsync:                      tixTCPRouteGSOAsync,
 		TIXTCPRouteXmitWorker:                    tixTCPRouteGSOAsync,
@@ -928,6 +939,7 @@ func dataplaneAttachSpec(dataDir string, desired config.Desired) dataplane.Attac
 		TIXTCPFastPathDisabled:                   tixTCPFastPathDisabledReason != "",
 		TIXTCPFastPathDisabledReason:             tixTCPFastPathDisabledReason,
 		KernelDatapathFullPlaintext:              kernelDatapathFullPlaintextEnabledForDesired(desired),
+		KernelDatapathSecureTIXTCP:               tixTCPSecureFullKernel,
 		KernelDatapathSuppressLegacyRXWorker:     kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired),
 		PinPath:                                  filepath.Join(dataDir, "bpf"),
 		DataDir:                                  dataDir,
@@ -956,9 +968,12 @@ func dataplaneLANAttachSpec(lan config.LANConfig, desired config.Desired) datapl
 	if attachMode == config.LANAttachModeExisting {
 		manageAddress = false
 	}
+	secureTIXTCPFullKernel := kernelDatapathSecureTIXTCPForDesired(desired)
+	secureUDPDirect := kernelUDPSecureFullDirectForDesired(desired)
 	manageQdisc := lan.Iface != "" &&
 		!nativePlaintextKernelTunnelRouteOffloadForDesired(desired) &&
-		!kernelDatapathFullPlaintextEnabledForDesired(desired)
+		!kernelDatapathFullPlaintextEnabledForDesired(desired) &&
+		(!secureTIXTCPFullKernel || secureUDPDirect)
 	managedMTU := 0
 	if !manageQdisc && manageAddress && nativeTunnelManagedLANMTUEnabled() {
 		managedMTU = nativePlaintextKernelTunnelMTUForDesired(desired)

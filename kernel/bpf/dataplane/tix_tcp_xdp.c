@@ -76,6 +76,9 @@ typedef unsigned long long __u64;
 #define TRUSTIX_TIX_TCP_FLAG_KERNEL_OPENED 2
 #define TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT 4
 #define TRUSTIX_TIX_TCP_FLAG_INNER_IPV4 8
+#define TRUSTIX_TIX_TCP_FLAG_INNER_TCP_CHECKSUM_PARTIAL 16
+#define TRUSTIX_TIX_TCP_PORT_FLAG_XDP_OWNED 1
+#define TRUSTIX_TIX_TCP_PORT_FLAG_FULL_KERNEL_TIX_TCP_PASS 2
 #define TRUSTIX_XDP_DIRECT_FALLBACK -1
 
 struct trustix_xdp_l4_csum_header {
@@ -217,13 +220,20 @@ static __always_inline __u32 trustix_tix_tcp_redirect_queue_config(struct xdp_md
     return 0;
 }
 
-static __always_inline int trustix_tix_tcp_port_allowed(__u8 *l4)
+static __always_inline __u8 trustix_tix_tcp_port_flags(__u8 *l4)
 {
     __u32 dst_key = ((__u32)l4[2]) | ((__u32)l4[3] << 8);
     __u32 src_key = ((__u32)l4[0]) | ((__u32)l4[1] << 8);
+    __u8 flags = 0;
+    __u8 *value;
 
-    return bpf_map_lookup_elem(&ix_tix_tcp_port, &dst_key) ||
-           bpf_map_lookup_elem(&ix_tix_tcp_port, &src_key);
+    value = bpf_map_lookup_elem(&ix_tix_tcp_port, &dst_key);
+    if (value)
+        flags |= *value;
+    value = bpf_map_lookup_elem(&ix_tix_tcp_port, &src_key);
+    if (value)
+        flags |= *value;
+    return flags;
 }
 
 static __always_inline int trustix_kernel_udp_unfragmented(__u8 *frame)
@@ -826,6 +836,7 @@ int trustix_tix_tcp(struct xdp_md *ctx)
     __u32 frame_payload_len;
     __u32 frame_end_offset;
     __u32 packet_len;
+    __u8 port_flags;
     int direct_action;
 
     if (data + 14 > data_end)
@@ -863,11 +874,15 @@ tcp:
     if (config_value & TRUSTIX_TIX_TCP_CONFIG_SKIP_TCP_CHECKSUM)
         trustix_tix_tcp_count_hot_config(TRUSTIX_TIX_TCP_STATS_TCP_CHECKSUM_SKIPPED,
                                          config_value);
-    if (!trustix_tix_tcp_port_allowed(data + 34))
+    port_flags = trustix_tix_tcp_port_flags(data + 34);
+    if (port_flags & TRUSTIX_TIX_TCP_PORT_FLAG_FULL_KERNEL_TIX_TCP_PASS)
+        goto pass;
+    if (!(port_flags & TRUSTIX_TIX_TCP_PORT_FLAG_XDP_OWNED))
         goto drop;
     if (data + 94 <= data_end &&
         (data[59] & TRUSTIX_TIX_TCP_FLAG_ENCRYPTED) &&
         (data[59] & TRUSTIX_TIX_TCP_FLAG_INNER_IPV4) &&
+        !(data[59] & TRUSTIX_TIX_TCP_FLAG_INNER_TCP_CHECKSUM_PARTIAL) &&
         !(data[59] & TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT) &&
         trustix_tix_tcp_unfragmented(data + 54) &&
         (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_TC_RX_SECURE_DIRECT)) {
@@ -934,11 +949,13 @@ udp:
     config = bpf_map_lookup_elem(&ix_tix_tcp_config, &config_key);
     if (config)
         config_value = *config;
-    if (!trustix_tix_tcp_port_allowed(data + 34))
+    port_flags = trustix_tix_tcp_port_flags(data + 34);
+    if (!(port_flags & TRUSTIX_TIX_TCP_PORT_FLAG_XDP_OWNED))
         goto drop;
     if (data + 74 <= data_end &&
         (data[47] & TRUSTIX_TIX_TCP_FLAG_ENCRYPTED) &&
         (data[47] & TRUSTIX_TIX_TCP_FLAG_INNER_IPV4) &&
+        !(data[47] & TRUSTIX_TIX_TCP_FLAG_INNER_TCP_CHECKSUM_PARTIAL) &&
         !(data[47] & TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT) &&
         trustix_kernel_udp_unfragmented(data + 42) &&
         (config_value & TRUSTIX_TIX_TCP_CONFIG_KERNEL_UDP_TC_RX_SECURE_DIRECT)) {

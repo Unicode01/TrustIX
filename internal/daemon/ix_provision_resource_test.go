@@ -456,6 +456,43 @@ func TestIXProvisionFastPathDefaultsMatchProductionMatrix(t *testing.T) {
 	})
 }
 
+func TestIXProvisionPerformanceSessionPoolUsesValidatedDefaults(t *testing.T) {
+	tests := []struct {
+		name      string
+		profile   string
+		transport string
+		wantSize  int
+	}{
+		{name: "plaintext udp full kmod", profile: "plaintext_performance", transport: "udp", wantSize: 8},
+		{name: "plaintext tix tcp full kmod", profile: "plaintext_performance", transport: "tix_tcp", wantSize: 8},
+		{name: "secure kernel udp", profile: "performance", transport: "udp", wantSize: 8},
+		{name: "secure kernel tix tcp", profile: "performance", transport: "tix_tcp", wantSize: 8},
+		{name: "stable compatibility", profile: "stable", transport: "udp", wantSize: 0},
+		{name: "native tunnel compatibility", profile: "plaintext_performance", transport: "ipip", wantSize: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profile, err := ixProvisionDefaultsForProfile(tc.profile)
+			if err != nil {
+				t.Fatalf("profile defaults: %v", err)
+			}
+			request := ixProvisionIssueRequest{EndpointTransport: tc.transport}
+			profile = ixProvisionEffectiveProfileForRequest(request, profile)
+			pool := ixProvisionSessionPool(request, profile)
+			if pool.Size != tc.wantSize || !pool.Warmup {
+				t.Fatalf("session pool = %#v, want size=%d warmup=true", pool, tc.wantSize)
+			}
+			wantStrategy := ""
+			if tc.wantSize > 1 {
+				wantStrategy = "flow"
+			}
+			if pool.Strategy != wantStrategy {
+				t.Fatalf("session pool strategy = %q, want %q", pool.Strategy, wantStrategy)
+			}
+		})
+	}
+}
+
 func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 	pkiSet := buildMembershipPKI(t)
 	desired := configApplyDesired(pkiSet, "10.0.1.0/24")
@@ -493,6 +530,9 @@ func TestIXProvisionMinimalRequestDerivesUsableDefaults(t *testing.T) {
 		target.TransportPolicy.CryptoPlacement != string(dataplane.CryptoPlacementUserspace) ||
 		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
 		t.Fatalf("target transport policy = %#v", target.TransportPolicy)
+	}
+	if pool := target.TransportPolicy.SessionPool; pool.Size != 8 || pool.Strategy != "flow" || !pool.Warmup {
+		t.Fatalf("target session pool = %#v, want validated UDP full-kmod P8 flow warmup", pool)
 	}
 	if len(target.Endpoints) != 1 ||
 		target.Endpoints[0].Name != "ix-e-udp" ||
@@ -617,6 +657,9 @@ func TestIXProvisionPerformanceProfileUsesSecureKernelUDPDefaults(t *testing.T) 
 		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
 		t.Fatalf("secure performance transport policy = %#v", target.TransportPolicy)
 	}
+	if pool := target.TransportPolicy.SessionPool; pool.Size != 8 || pool.Strategy != "flow" || !pool.Warmup {
+		t.Fatalf("secure kernel UDP session pool = %#v, want validated P8 flow warmup", pool)
+	}
 	if len(target.Endpoints) != 1 ||
 		target.Endpoints[0].Transport != "udp" ||
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionSecure ||
@@ -657,7 +700,7 @@ func TestIXProvisionPerformanceProfileExplicitTIXTCPUsesSecureKernelDefault(t *t
 		t.Fatalf("normalize provision request: %v", err)
 	}
 	if request.BuildKO != "1" {
-		t.Fatalf("secure tix_tcp build_ko = %q, want 1 for crypto/helpers modules", request.BuildKO)
+		t.Fatalf("secure tix_tcp build_ko = %q, want 1 for crypto/datapath modules", request.BuildKO)
 	}
 	target, err := desiredForIXProvision(request, prefixes, []ixProvisionTrustRootFile{{Name: "root.pem", PEM: "unused"}})
 	if err != nil {
@@ -670,6 +713,9 @@ func TestIXProvisionPerformanceProfileExplicitTIXTCPUsesSecureKernelDefault(t *t
 		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeRequireKernel) {
 		t.Fatalf("secure tix_tcp transport policy = %#v", target.TransportPolicy)
 	}
+	if pool := target.TransportPolicy.SessionPool; pool.Size != 8 || pool.Strategy != "flow" || !pool.Warmup {
+		t.Fatalf("secure kernel tix_tcp session pool = %#v, want validated P8 flow warmup", pool)
+	}
 	if len(target.Endpoints) != 1 ||
 		target.Endpoints[0].Transport != "tix_tcp" ||
 		target.Endpoints[0].Security.Encryption != securetransport.EncryptionSecure ||
@@ -679,19 +725,19 @@ func TestIXProvisionPerformanceProfileExplicitTIXTCPUsesSecureKernelDefault(t *t
 		target.Endpoints[0].Profile.CryptoPlacement != string(dataplane.CryptoPlacementKernel) {
 		t.Fatalf("secure tix_tcp endpoint = %#v", target.Endpoints)
 	}
-	if !tixTCPSecureRouteGSOAsyncForDesired(target) {
-		t.Fatalf("secure tix_tcp profile did not select secure route-GSO")
+	if !kernelDatapathSecureTIXTCPForDesired(target) {
+		t.Fatalf("secure tix_tcp profile did not select full secure kernel datapath")
 	}
-	if kernelUDPSecureRouteGSOForDesired(target) || kernelDatapathFullPlaintextEnabledForDesired(target) {
-		t.Fatalf("secure tix_tcp profile should not enable kernel_udp route-GSO or full plaintext: policy=%#v modules=%#v", target.TransportPolicy, target.KernelModules)
+	if tixTCPSecureRouteGSOAsyncForDesired(target) || kernelUDPSecureRouteGSOForDesired(target) || kernelDatapathFullPlaintextEnabledForDesired(target) {
+		t.Fatalf("secure tix_tcp full-kmod profile should not enable route-GSO or full plaintext: policy=%#v modules=%#v", target.TransportPolicy, target.KernelModules)
 	}
 	if target.KernelModules.CapabilityProfile != config.KernelCapabilityProfilePerformance {
 		t.Fatalf("secure tix_tcp kernel capability profile = %q, want performance", target.KernelModules.CapabilityProfile)
 	}
 	if target.KernelModules.TrustIXCrypto.Mode != "required" ||
-		target.KernelModules.TrustIXDatapath.Mode != "disabled" ||
-		target.KernelModules.TrustIXDatapathHelpers.Mode != "required" {
-		t.Fatalf("secure tix_tcp kernel module modes = %#v, want crypto/helpers required only", target.KernelModules)
+		target.KernelModules.TrustIXDatapath.Mode != "required" ||
+		target.KernelModules.TrustIXDatapathHelpers.Mode != "disabled" {
+		t.Fatalf("secure tix_tcp kernel module modes = %#v, want crypto/datapath required only", target.KernelModules)
 	}
 }
 
@@ -722,6 +768,9 @@ func TestIXProvisionExplicitStableKeepsSecureUDPCompatibility(t *testing.T) {
 		target.TransportPolicy.TLSDataPlane != config.TransportTLSDataPlaneAuto ||
 		target.TransportPolicy.KernelTransport.Mode != string(dataplane.KernelTransportModeDisabled) {
 		t.Fatalf("target stable transport policy = %#v", target.TransportPolicy)
+	}
+	if pool := target.TransportPolicy.SessionPool; pool.Size != 0 || pool.Strategy != "" || !pool.Warmup {
+		t.Fatalf("stable session pool = %#v, want compatibility single-session warmup policy", pool)
 	}
 	if len(target.Endpoints) != 2 ||
 		target.Endpoints[0].Transport != "udp" ||

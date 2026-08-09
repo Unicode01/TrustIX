@@ -153,6 +153,7 @@ func (daemon *Daemon) handlePrometheusMetrics(w http.ResponseWriter) {
 	writePrometheusMetric(&output, "trustix_data_send_errors_total", "Data packet send errors.", "counter", float64(view.DataPath.Counters.SendErrors))
 	writePrometheusMetric(&output, "trustix_data_receive_errors_total", "Data packet receive errors.", "counter", float64(view.DataPath.Counters.ReceiveErrors))
 	writePrometheusMetric(&output, "trustix_data_inject_errors_total", "LAN packet injection errors.", "counter", float64(view.DataPath.Counters.InjectErrors))
+	writePrometheusMetric(&output, "trustix_data_session_generation_changes_total", "Authenticated peer process generation changes.", "counter", float64(view.DataPath.Counters.SessionGenerationChanges))
 
 	output.WriteString("# HELP trustix_http_rate_limited_total HTTP requests rejected by the per-client rate limiter.\n")
 	output.WriteString("# TYPE trustix_http_rate_limited_total counter\n")

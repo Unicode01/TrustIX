@@ -33,8 +33,16 @@ func kernelDatapathRXWorkerHookFlags() uint32 {
 	return kernelmodule.TrustIXDatapathHookFlagRXPreview | kernelmodule.TrustIXDatapathHookFlagRXWorker
 }
 
+func kernelDatapathRXSecureTIXTCPHookFlags() uint32 {
+	return kernelDatapathRXWorkerHookFlags() | kernelmodule.TrustIXDatapathHookFlagRXSecureTIXTCPOnly
+}
+
 func kernelDatapathTXPlaintextHookFlags() uint32 {
 	return kernelmodule.TrustIXDatapathHookFlagTXPlaintext
+}
+
+func kernelDatapathTXSecureTIXTCPHookFlags() uint32 {
+	return kernelmodule.TrustIXDatapathHookFlagTXSecureTIXTCP
 }
 
 func (driver *kernelDatapathRXStageModuleDriver) Attach(ifname, targetIfname string, flags uint32) (kernelDatapathRXStageHookStatus, error) {

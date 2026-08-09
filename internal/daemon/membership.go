@@ -2818,6 +2818,9 @@ func routeOwner(route routing.Route) core.IXID {
 }
 
 func (daemon *Daemon) applyRuntimeDataplaneSnapshot(ctx context.Context) error {
+	daemon.runtimeDataplaneMu.Lock()
+	defer daemon.runtimeDataplaneMu.Unlock()
+
 	snapshot := daemon.runtimeDataplaneSnapshot()
 	if err := validateRuntimeKernelTunnelConflicts(snapshot); err != nil {
 		return err

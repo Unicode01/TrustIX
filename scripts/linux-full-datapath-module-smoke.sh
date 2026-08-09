@@ -122,6 +122,12 @@ has_tix_tcp_port_sharding_bit() {
   [[ "$(( (value / 4096) % 2 ))" -eq 1 ]]
 }
 
+has_secure_tix_tcp_bit() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  [[ "$(( (value / 8192) % 2 ))" -eq 1 ]]
+}
+
 has_feature_active_flag() {
   local value="$1"
   [[ "$value" =~ ^[0-9]+$ ]] || return 1
@@ -200,7 +206,7 @@ verify_sysfs() {
   failures="$(read_module_param selftest_failures || true)"
   flags="$(read_module_param flags || true)"
   [[ "$abi" == "1" ]] || die "unexpected abi_version=${abi:-missing}"
-  [[ "$selftests" == "4095" ]] || die "expected selftests=4095, got ${selftests:-missing}"
+  [[ "$selftests" == "16383" ]] || die "expected selftests=16383, got ${selftests:-missing}"
   [[ "$failures" == "0" ]] || die "expected selftest_failures=0, got ${failures:-missing}"
   [[ "$features" =~ ^[0-9]+$ ]] || die "unexpected features=${features:-missing}"
   [[ "$safe" =~ ^[0-9]+$ ]] || die "unexpected safe_features=${safe:-missing}"
@@ -244,6 +250,14 @@ verify_sysfs() {
       fi
       if has_tix_tcp_port_sharding_bit "$unsafe"; then
         die "TIX-TCP port-sharding feature is still marked unsafe: features=${features} safe=${safe} unsafe=${unsafe}"
+      fi
+    fi
+    if has_secure_tix_tcp_bit "$enable_features"; then
+      if ! has_secure_tix_tcp_bit "$features" || ! has_secure_tix_tcp_bit "$safe"; then
+        die "secure TIX-TCP feature did not become safe and active: features=${features} safe=${safe} unsafe=${unsafe}"
+      fi
+      if has_secure_tix_tcp_bit "$unsafe"; then
+        die "secure TIX-TCP feature is still marked unsafe: features=${features} safe=${safe} unsafe=${unsafe}"
       fi
     fi
     if ! has_feature_active_flag "$flags"; then

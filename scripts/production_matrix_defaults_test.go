@@ -5508,7 +5508,6 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS:-1",
 		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET:-2",
-		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET:-0",
 		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET:-0.00002",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS:-8",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2",
@@ -5551,7 +5550,6 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS \"$secure_tix_tcp_kernel_min_sessions\"",
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS \"$secure_tix_tcp_kernel_min_crypto_flows\"",
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET \"$secure_tix_tcp_kernel_session_error_budget\"",
-		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET \"$secure_tix_tcp_kernel_direct_error_budget\"",
 		"validate_number TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET \"$secure_tix_tcp_kernel_replay_ratio_budget\"",
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS \"$route_gso_min_sessions\"",
 		"validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET \"$route_gso_session_error_budget\"",
@@ -5568,7 +5566,6 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"secure_tix_tcp_kernel_min_sessions=\"$(max_integer \"$secure_tix_tcp_kernel_min_sessions\" \"8\")\"",
 		"secure_tix_tcp_kernel_min_crypto_flows=\"$(max_integer \"$secure_tix_tcp_kernel_min_crypto_flows\" \"1\")\"",
 		"secure_tix_tcp_kernel_session_error_budget=\"$(min_integer \"$secure_tix_tcp_kernel_session_error_budget\" \"2\")\"",
-		"secure_tix_tcp_kernel_direct_error_budget=\"$(min_integer \"$secure_tix_tcp_kernel_direct_error_budget\" \"0\")\"",
 		"secure_tix_tcp_kernel_replay_ratio_budget=\"$(min_decimal \"$secure_tix_tcp_kernel_replay_ratio_budget\" \"0.00002\")\"",
 		"route_gso_min_sessions=\"$(max_integer \"$route_gso_min_sessions\" \"8\")\"",
 		"route_gso_session_error_budget=\"$(min_integer \"$route_gso_session_error_budget\" \"2\")\"",
@@ -5593,6 +5590,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"session_endpoint_suffix_for_matrix_transport()",
 		"case_session_args()",
 		"case_module_param_args()",
+		"secure-kudp|route-gso)",
 		"case_is_openwrt_debian()",
 		"route_tcp_helper_capability_args()",
 		"write_gate_manifest()",
@@ -5704,14 +5702,9 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-datapath-stat kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_enabled=1",
 		"--require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_seal_errors=0",
 		"--require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_open_errors=0",
-		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_seal_calls=1",
-		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=1",
-		"--require-datapath-max tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors=\"${secure_tix_tcp_kernel_direct_error_budget}\"",
-		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_entries=\"${secure_tix_tcp_kernel_min_crypto_flows}\"",
-		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_updates=\"${secure_tix_tcp_kernel_min_crypto_flows}\"",
-		"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_crypto_frame_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
-		"--require-datapath-ratio-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
-		"--require-datapath-ratio-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
+		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_datapath_flows=\"${secure_tix_tcp_kernel_min_crypto_flows}\"",
+		"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_errors/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
+		"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_stale/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
 		"--require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_encrypt_errors=0",
 		"--require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors=\"${secure_kudp_direct_error_budget}\"",
 		"--require-datapath-min kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts=1",
@@ -5848,8 +5841,8 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_builds=1",
 		"--require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_frames=1",
 	} {
-		if got := strings.Count(text, requirement); got != 2 {
-			t.Fatalf("linux-cross-host-production-gate.sh should require %q for plaintext and secure route-GSO, got %d occurrences", requirement, got)
+		if got := strings.Count(text, requirement); got != 1 {
+			t.Fatalf("linux-cross-host-production-gate.sh should require %q only for the route-GSO gate, got %d occurrences", requirement, got)
 		}
 	}
 	if strings.Contains(text, "TRUSTIX_CROSS_HOST_GATE_REQUIRE_BINARY_IDENTITY") {
@@ -5961,9 +5954,10 @@ func TestCrossHostProductionGateFastPathBlocksPinTransportPolicy(t *testing.T) {
 				"--require-transport-policy-stat datapath=kernel_module",
 				"--require-transport-policy-stat crypto_placement=kernel",
 				"--require-status-max data_path.counters.session_dial_errors=\"${secure_tix_tcp_kernel_session_error_budget}\"",
-				"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_entries=\"${secure_tix_tcp_kernel_min_crypto_flows}\"",
-				"--require-datapath-max tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors=\"${secure_tix_tcp_kernel_direct_error_budget}\"",
-				"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_crypto_frame_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
+				"--require-datapath-max tix_tcp.provider_stats.xdp_unauthorized_drops=0",
+				"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_datapath_flows=\"${secure_tix_tcp_kernel_min_crypto_flows}\"",
+				"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_errors/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
+				"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_stale/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
 				"--require-status-max data_path.counters.session_heartbeat_timeouts=0",
 			},
 		},
@@ -6062,7 +6056,6 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS=0",
 		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS=0",
 		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET=999",
-		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET=999",
 		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET=999999",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS=0",
 		"TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET=999",
@@ -6156,7 +6149,6 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 		"secure_tix_tcp_kernel_min_sessions":         "8",
 		"secure_tix_tcp_kernel_min_crypto_flows":     "1",
 		"secure_tix_tcp_kernel_session_error_budget": "2",
-		"secure_tix_tcp_kernel_direct_error_budget":  "0",
 		"secure_tix_tcp_kernel_replay_ratio_budget":  "0.00002",
 		"route_gso_min_sessions":                     "8",
 		"route_gso_session_error_budget":             "2",
@@ -6661,18 +6653,15 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.kernel_crypto=true")
 	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.requested_crypto=kernel")
 	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.effective_crypto=kernel")
-	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_flow_map_entries=1")
-	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_flow_map_updates=1")
-	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_seal_calls=1")
-	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=1")
-	requireArgPair("secure-exp", "--require-datapath-max", "tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors=0")
-	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.kernel_crypto_frame_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=0.00002")
-	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.xdp_kernel_crypto_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=0.00002")
-	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=0.00002")
-	requireArgPair("secure-exp", "--require-module-param-max", "trustix_crypto.direct_kfunc_errors=0")
-	requireRouteTCPHelperArgs("secure-exp")
+	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.provider=kernel_datapath_full_secure")
+	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.userspace_crypto=false")
+	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_datapath_flows=1")
+	requireArgPair("secure-exp", "--require-datapath-max", "tix_tcp.provider_stats.kernel_crypto_datapath_retired_slots=0")
+	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.kernel_datapath_module_secure_rx_errors/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=0.00002")
+	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.kernel_datapath_module_secure_rx_stale/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=0.00002")
 	requireArgPair("secure-exp", "--require-lsmod-module", "trustix_crypto")
-	requireArgPair("secure-exp", "--require-lsmod-module", "trustix_datapath_helpers")
+	requireArgPair("secure-exp", "--require-lsmod-module", "trustix_datapath")
+	requireArgPair("secure-exp", "--forbid-lsmod-module", "trustix_datapath_helpers")
 	requireArgPair("route", "--require-transport-policy-min", "session_pool_size=8")
 	requireEndpointArgs("route", "tix_tcp", "performance", "kernel_module", "plaintext")
 	requireArgPair("route", "--require-transport-sessions-min", "8")
@@ -7517,12 +7506,17 @@ func productionDefaultModuleSnippets(row productionTransportDefault) []string {
 			"trustix_datapath:\n    mode: required",
 			"trustix_datapath_helpers:\n    mode: disabled",
 		)
-	case "secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp",
-		"secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel":
+	case "secure_kudp", "dd_secure_kudp", "owdeb_secure_kudp":
 		return append(base,
 			"trustix_crypto:\n    mode: required",
 			"trustix_datapath:\n    mode: disabled",
 			"trustix_datapath_helpers:\n    mode: required",
+		)
+	case "secure_tix_tcp_kernel", "dd_secure_tix_tcp_kernel", "owdeb_secure_tix_tcp_kernel":
+		return append(base,
+			"trustix_crypto:\n    mode: required",
+			"trustix_datapath:\n    mode: required",
+			"trustix_datapath_helpers:\n    mode: disabled",
 		)
 	case "route_gso", "dd_route_gso", "owdeb_route_gso":
 		return append(base,
@@ -8182,6 +8176,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_KERNEL_UDP_ONLY=1",
 		"TRUSTIX_KERNEL_UDP_TC_TX_DIRECT_ONLY=1",
 		"unload_on_exit: true",
+		"reload_on_upgrade: auto",
 		"-cleanup-dataplane",
 		"rmmod trustix_datapath",
 		"rmmod trustix_datapath_helpers",
@@ -8215,6 +8210,13 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"collect_module_parameters a",
 		"${dir}/module-parameters.txt",
 		"stop_daemon a",
+		"daemon_alive()",
+		"reason=unexpected-exit",
+		"reason=forced-kill",
+		"reason=fatal-runtime-log",
+		"trustixd-shutdown.txt",
+		"SIGSEGV|segmentation violation|unexpected fault address|fatal error:",
+		"rm -f \"$workdir/${case_name}.result\"",
 		"collect_one status status",
 		"collect_one datapath datapath",
 		"collect_one transports transports",
@@ -8227,6 +8229,8 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"proc_tcp_listening /proc/net/tcp",
 		"proc_tcp_listening /proc/net/tcp6",
 		"listener wait failed for tcp port",
+		`[ -r \"\$proc/cmdline\" ] || continue`,
+		`tr '\000' ' ' 2>/dev/null <\"\$proc/cmdline\"`,
 		"collect_one bpf bpf maps",
 		"${dir}/binary-identity.json",
 		"ip_cmd=\\$(command -v ip)",
@@ -8253,6 +8257,7 @@ func TestCrossHostSoakRunnerCoversKernelFastPathsAndCleanup(t *testing.T) {
 		"setsid ip netns exec",
 		"\"$dest\" bash -s <<<\"$script\"",
 		"sh -c \"$iperf_cmd\"",
+		"reload_on_upgrade: always",
 	} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("linux-cross-host-soak-runner.sh contains non-portable %q", unwanted)
@@ -8413,6 +8418,43 @@ func TestCrossHostSoakRunnerDryRunPinsPlaintextTCDirectTransport(t *testing.T) {
 	}
 }
 
+func TestCrossHostSoakRunnerDryRunPinsProfilingAndSecureTIXTCPChecksumExperiment(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if err := exec.Command(bash, "-c", "x=(); x+=(a); [[ ${x[0]} == a ]]").Run(); err != nil {
+		t.Skipf("bash array syntax not available from %s", bash)
+	}
+
+	workdir := filepath.Join(t.TempDir(), "secure-tix-tcp-profile")
+	cmd := exec.Command(bash, "linux-cross-host-soak-runner.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG=1",
+		"TRUSTIX_CROSS_HOST_CASE=secure-tix-tcp-kernel",
+		"TRUSTIX_CROSS_HOST_WORKDIR="+workdir,
+		"TRUSTIX_CROSS_HOST_CPU_PROFILE_DIR=profiles",
+		"TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_INNER_CHECKSUM_PARTIAL=0",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("dry-run config failed: %v\n%s", err, output)
+	}
+	payload, err := os.ReadFile(filepath.Join(workdir, "daemon-env.txt"))
+	if err != nil {
+		t.Fatalf("read dry-run daemon environment: %v", err)
+	}
+	text := string(payload)
+	for _, want := range []string{
+		"TRUSTIX_CPU_PROFILE_DIR=profiles",
+		"TRUSTIX_TIX_TCP_SECURE_INNER_CHECKSUM_PARTIAL=0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run daemon environment missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestCrossHostSoakRunnerRejectsConcurrentVMPairUse(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -8544,6 +8586,25 @@ cleanup_rc=0
 false || { cleanup_all; cleanup_rc=$?; }
 test "$cleanup_rc" = 1
 test "$events" = " collect stop-a stop-b fetch"
+test "$pair_lock_acquired" = 0
+test ! -e "$pair_lock_dir"
+
+events=""
+stop_daemon() {
+  events="${events} stop-$1"
+  [ "$1" = a ] || return 139
+}
+pair_lock_dir="$workdir/failed-stop-pair.lock"
+mkdir "$pair_lock_dir"
+printf '%%s\n' "$$" >"$pair_lock_dir/owner.pid"
+pair_lock_acquired=1
+preserve_on_failure=0
+printf 'pass\n' >"$workdir/${case_name}.result"
+cleanup_rc=0
+cleanup_all || cleanup_rc=$?
+test "$cleanup_rc" = 139
+test "$events" = " collect stop-a stop-b fetch cleanup-a cleanup-b"
+test ! -e "$workdir/${case_name}.result"
 test "$pair_lock_acquired" = 0
 test ! -e "$pair_lock_dir"
 `, scriptPath)

@@ -95,6 +95,7 @@ type tixTCPFastPathOptions struct {
 	limitQueues            int
 	virtioNetSafety        bool
 	directOnlyControlPlane bool
+	initialPortFlags       map[uint16]uint8
 }
 
 type afXDPSocketConfig struct {
@@ -233,6 +234,7 @@ func (manager *Manager) attachTIXTCPFastPathLocked(ctx context.Context, spec dat
 		manager.warnings = appendManagerWarning(manager.warnings, fastPath.loadWarning)
 	}
 	manager.tixTCPFastPath = fastPath
+	manager.kernelTransportXDPPortFlags = clonePortFlags(options.initialPortFlags)
 	fastPath.start(manager)
 	return nil
 }
@@ -240,6 +242,7 @@ func (manager *Manager) attachTIXTCPFastPathLocked(ctx context.Context, spec dat
 func (manager *Manager) tixTCPFastPathOptionsForSpec(spec dataplane.AttachSpec, underlayLink netlink.Link) tixTCPFastPathOptions {
 	options := tixTCPFastPathOptions{
 		directOnlyControlPlane: kernelUDPTXDirectOnlyEnabled(spec),
+		initialPortFlags:       manager.desiredInitialKernelTransportXDPPortFlagsLocked(),
 	}
 	if tixTCPVirtioNetSafetyRequired(underlayLink) {
 		options.preferSKBXDPMode = true
@@ -321,6 +324,12 @@ func newTIXTCPFastPathWithOptions(link netlink.Link, provider *kernelCryptoProvi
 	})
 	if err != nil {
 		return nil, err
+	}
+	if err := initializeTIXTCPPortMap(xdpObject.portMap, options.initialPortFlags); err != nil {
+		return nil, errors.Join(
+			err,
+			wrapEBPFOperation("close tix_tcp XDP object after initial port sync failure", xdpObject.Close()),
+		)
 	}
 	xskMap := xdpObject.xskMap
 	portMap := xdpObject.portMap
@@ -459,6 +468,24 @@ func newTIXTCPFastPathWithOptions(link netlink.Link, provider *kernelCryptoProvi
 	}
 	fastPath.ready.Store(true)
 	return fastPath, nil
+}
+
+func initializeTIXTCPPortMap(portMap *cebpf.Map, flags map[uint16]uint8) error {
+	if len(flags) == 0 {
+		return nil
+	}
+	if portMap == nil {
+		return fmt.Errorf("initialize tix_tcp XDP port map: map is unavailable")
+	}
+	for port, value := range flags {
+		if value == 0 {
+			continue
+		}
+		if err := portMap.Update(tixTCPPortMapKey(port), value, cebpf.UpdateAny); err != nil {
+			return fmt.Errorf("initialize tix_tcp XDP port %d flags %#x: %w", port, value, err)
+		}
+	}
+	return nil
 }
 
 func (fastPath *tixTCPFastPath) SetKernelUDPTCRXDirect(enabled bool) error {
@@ -1400,12 +1427,18 @@ func (fastPath *tixTCPFastPath) ModeFallbackReason() string {
 }
 
 func (fastPath *tixTCPFastPath) AllowDestinationPort(port uint16) error {
+	return fastPath.SetDestinationPortFlags(port, tixTCPPortFlagXDPOwned)
+}
+
+func (fastPath *tixTCPFastPath) SetDestinationPortFlags(port uint16, flags uint8) error {
 	if fastPath == nil || fastPath.portMap == nil {
 		return nil
 	}
+	if flags == 0 {
+		return fastPath.DeleteAllowedDestinationPort(port)
+	}
 	key := tixTCPPortMapKey(port)
-	value := uint8(1)
-	return fastPath.portMap.Update(key, value, cebpf.UpdateAny)
+	return fastPath.portMap.Update(key, flags, cebpf.UpdateAny)
 }
 
 func (fastPath *tixTCPFastPath) DeleteAllowedDestinationPort(port uint16) error {
@@ -2094,6 +2127,7 @@ func (fastPath *tixTCPFastPath) decodeTCPWireFrame(manager *Manager, socket *afX
 	kernelOpened := manager.tixTCPFrameKernelOpened(wireFrame.FlowID, wireFrame.Flags)
 	cryptoFragment := wireFrame.Flags&tixtcp.FlagCryptoFragment != 0
 	innerIPv4 := wireFrame.Flags&tixtcp.FlagInnerIPv4 != 0
+	innerTCPChecksumPartial := wireFrame.Flags&tixtcp.FlagInnerTCPChecksumPartial != 0
 	openInPlace := encrypted && !kernelOpened && !cryptoFragment && rxFrame != nil && socket != nil && socket.kernelOpenInPlace
 	borrowedRX := false
 	if kernelOpened {
@@ -2136,7 +2170,7 @@ func (fastPath *tixTCPFastPath) decodeTCPWireFrame(manager *Manager, socket *afX
 		payload = append([]byte(nil), payload...)
 		innerIPv4 = innerIPv4 && kernelUDPInnerIPv4Eligible(payload)
 	}
-	if wireFrame.Flags&tixtcp.FlagInnerTCPChecksumPartial != 0 {
+	if innerTCPChecksumPartial && !encrypted {
 		if err := tixtcp.CompleteInnerTCPChecksumPartial(payload); err != nil {
 			socket.stats.rxParseErrors.Add(1)
 			if errors.Is(err, tixtcp.ErrChecksum) {
@@ -2146,20 +2180,22 @@ func (fastPath *tixTCPFastPath) decodeTCPWireFrame(manager *Manager, socket *afX
 			}
 			return false, nil
 		}
+		innerTCPChecksumPartial = false
 	}
 	openPlain, openRelease := kernelUDPOpenPlainBuffer(encrypted && !kernelOpened && !cryptoFragment && !openInPlace, len(payload))
 	*batch = append(*batch, receivedTIXTCPFrame{
 		frame: dataplane.TIXTCPFrame{
-			FlowID:          wireFrame.FlowID,
-			Direction:       dataplane.TIXTCPInbound,
-			Epoch:           wireFrame.Epoch,
-			Sequence:        wireFrame.Sequence,
-			FragmentIndex:   wireFrame.FragmentIndex,
-			FragmentCount:   wireFrame.FragmentCount,
-			Payload:         payload,
-			Encrypted:       encrypted || kernelOpened,
-			InnerIPv4:       innerIPv4,
-			CryptoPlacement: placement,
+			FlowID:                  wireFrame.FlowID,
+			Direction:               dataplane.TIXTCPInbound,
+			Epoch:                   wireFrame.Epoch,
+			Sequence:                wireFrame.Sequence,
+			FragmentIndex:           wireFrame.FragmentIndex,
+			FragmentCount:           wireFrame.FragmentCount,
+			Payload:                 payload,
+			Encrypted:               encrypted || kernelOpened,
+			InnerIPv4:               innerIPv4,
+			InnerTCPChecksumPartial: innerTCPChecksumPartial,
+			CryptoPlacement:         placement,
 		},
 		kernelOpenPlain:         openPlain,
 		kernelOpenPlainRelease:  openRelease,

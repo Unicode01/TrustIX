@@ -231,12 +231,15 @@ func TestTransportProfileMetadataForDesiredAdvertisesSecureKernelRuntimeGates(t 
 			},
 		},
 		{
-			name:      "secure experimental tcp",
+			name:      "secure tix_tcp full-kmod",
 			transport: transport.ProtocolTIXTCP,
 			datapath:  config.TransportDatapathKernelModule,
-			want:      []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_tix_tcp_kernel"},
+			want: []string{
+				"tix_tcp_secure_full_kmod", "full_kmod", "kernel_datapath_full_secure",
+				"kernel_crypto", "direct_aesni", "rx_worker", "tx_secure_tix_tcp",
+			},
 			mustAbsent: []string{
-				"secure_kudp",
+				"secure_kudp", "route_gso", "route_tcp_kfunc", "secure_tix_tcp_kernel",
 			},
 		},
 	} {

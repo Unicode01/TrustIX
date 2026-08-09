@@ -617,8 +617,9 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 	restartPrimaryAPI := managementPrimaryAPINeedsRestart(oldDesired, desired, daemon.cfg.APIAddr)
 	restartDNS := dnsResolverNeedsRestart(oldDesired, desired)
 	syncDNSMasq := restartDNS || dnsMasqIntegrationNeedsRestart(oldDesired, desired)
-	kernelModuleDataplaneChange := !reflect.DeepEqual(oldDesired.KernelModules, desired.KernelModules) &&
-		kernelModulesMayAffectDataplane(oldDesired, desired)
+	clearAllFlows := dataPathFlowBindingsNeedReset(oldDesired, desired)
+	reconcileSessionPool := sessionPoolSelectionPolicyChanged(oldDesired.TransportPolicy.SessionPool, desired.TransportPolicy.SessionPool)
+	kernelModuleDataplaneChange := kernelModuleRuntimeConfigChanged(oldDesired, desired)
 	reloadDataplane := dataplaneAttachSpecNeedsReload(oldDesired, desired) ||
 		kernelModuleDataplaneChange
 
@@ -639,11 +640,19 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 		restartPeers = nil
 	}
 
-	if _, err := daemon.ensureKernelModules(ctx, desired); err != nil {
-		if preDetachedDataplane {
-			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+	if kernelModuleDataplaneChange {
+		if _, err := daemon.ensureKernelModules(ctx, desired); err != nil {
+			if preDetachedDataplane {
+				return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
+			}
+			return err
 		}
-		return err
+	} else {
+		modules := effectiveKernelModuleConfigsForDesired(desired)
+		if err := daemon.reconcileKernelModuleRuntimeTuning(desired, modules); err != nil {
+			return err
+		}
+		daemon.updateKernelModuleLifecycle(desired)
 	}
 
 	if restartListeners {
@@ -663,7 +672,12 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 		daemon.clearFlowsForPeers(restartPeers)
 	}
 	daemon.setRuntimeDesired(desired, head)
-	daemon.clearFlows()
+	if reconcileSessionPool && !restartListeners && !restartAllSessions && len(restartPeers) == 0 {
+		daemon.advanceDataSessionPoolEpoch(oldDesired.TransportPolicy.SessionPool, desired.TransportPolicy.SessionPool)
+	}
+	if clearAllFlows {
+		daemon.clearFlows()
+	}
 	if restartHostAPI {
 		if err := daemon.restartHostAPIServers(ctx); err != nil {
 			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
@@ -697,7 +711,7 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 		if err := daemon.startKernelDatapathRXStage(daemon.listenerContext(ctx), dataplaneAttachSpec(daemon.cfg.DataDir, desired)); err != nil {
 			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
 		}
-		if err := daemon.startCaptureForwarder(daemon.listenerContext(ctx)); err != nil {
+		if err := daemon.startCaptureForwarderIfNeeded(daemon.listenerContext(ctx)); err != nil {
 			return daemon.restoreDesiredRuntime(ctx, oldDesired, oldHead, oldDomain, oldIX, oldFlows, err)
 		}
 	}
@@ -723,6 +737,22 @@ func (daemon *Daemon) switchDesiredRuntime(ctx context.Context, desired config.D
 		daemon.restartAPIServersSoon()
 	}
 	return nil
+}
+
+func dataPathFlowBindingsNeedReset(oldDesired, newDesired config.Desired) bool {
+	oldDesired.TransportPolicy.SessionPool.Size = 0
+	oldDesired.TransportPolicy.SessionPool.Strategy = normalizedSessionPoolStrategy(oldDesired.TransportPolicy.SessionPool)
+	oldDesired.TransportPolicy.SessionPool.Warmup = false
+	newDesired.TransportPolicy.SessionPool.Size = 0
+	newDesired.TransportPolicy.SessionPool.Strategy = normalizedSessionPoolStrategy(newDesired.TransportPolicy.SessionPool)
+	newDesired.TransportPolicy.SessionPool.Warmup = false
+	return !reflect.DeepEqual(oldDesired, newDesired)
+}
+
+func sessionPoolSelectionPolicyChanged(oldPolicy, newPolicy config.SessionPoolPolicyConfig) bool {
+	return effectiveSessionPoolSize(oldPolicy) != effectiveSessionPoolSize(newPolicy) ||
+		normalizedSessionPoolStrategy(oldPolicy) != normalizedSessionPoolStrategy(newPolicy) ||
+		oldPolicy.Warmup != newPolicy.Warmup
 }
 
 func dataPathListenersNeedRestart(oldDesired, newDesired config.Desired) bool {
@@ -819,10 +849,10 @@ func (daemon *Daemon) restoreDesiredRuntimeState(ctx context.Context, desired co
 	daemon.setRuntimeDesired(desired, head)
 	daemon.cfg.DomainID = domain
 	daemon.cfg.IXID = ix
-	if _, err := daemon.ensureKernelModules(ctx, desired); err != nil {
+	if err := daemon.dataplane.Detach(ctx); err != nil {
 		restoreErrs = append(restoreErrs, err)
 	}
-	if err := daemon.dataplane.Detach(ctx); err != nil {
+	if _, err := daemon.ensureKernelModules(ctx, desired); err != nil {
 		restoreErrs = append(restoreErrs, err)
 	}
 	if err := daemon.loadAttachDataplane(ctx, desired); err != nil {
@@ -831,7 +861,7 @@ func (daemon *Daemon) restoreDesiredRuntimeState(ctx context.Context, desired co
 	if err := daemon.startKernelDatapathRXStage(daemon.listenerContext(ctx), dataplaneAttachSpec(daemon.cfg.DataDir, desired)); err != nil {
 		restoreErrs = append(restoreErrs, err)
 	}
-	if err := daemon.startCaptureForwarder(daemon.listenerContext(ctx)); err != nil {
+	if err := daemon.startCaptureForwarderIfNeeded(daemon.listenerContext(ctx)); err != nil {
 		restoreErrs = append(restoreErrs, err)
 	}
 	if err := daemon.startTransportListeners(daemon.listenerContext(ctx)); err != nil {

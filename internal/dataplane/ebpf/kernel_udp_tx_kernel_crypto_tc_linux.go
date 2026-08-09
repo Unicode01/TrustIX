@@ -26,6 +26,8 @@ type kernelUDPTXSecureDirectProgramOptions struct {
 	KfuncSeal                bool
 	SKBSealKfunc             bool
 	SecureRouteTCPGSOKfunc   bool
+	StrongFlowHash           bool
+	FlowAffinity             bool
 	FixInnerChecksums        bool
 	InnerTCPChecksumKfunc    bool
 	OuterTCPChecksumKfunc    bool
@@ -84,6 +86,16 @@ func loadKernelUDPTXSecureDirectObject(provider *kernelCryptoProviderObject, sta
 			return nil, fmt.Errorf("configure kernel_udp secure TC TX route TCP GSO kfunc: %w", err)
 		}
 	}
+	if variable := spec.Variables["trustix_kudp_tx_strong_flow_hash"]; variable != nil {
+		if err := variable.Set(boolAsUint32(options.StrongFlowHash)); err != nil {
+			return nil, fmt.Errorf("configure kernel_udp secure TC TX strong flow hash: %w", err)
+		}
+	}
+	if variable := spec.Variables["trustix_kudp_tx_flow_affinity"]; variable != nil {
+		if err := variable.Set(boolAsUint32(options.FlowAffinity)); err != nil {
+			return nil, fmt.Errorf("configure kernel_udp secure TC TX flow affinity: %w", err)
+		}
+	}
 	if variable := spec.Variables["trustix_kudp_tx_fix_inner_checksums"]; variable != nil {
 		if err := variable.Set(boolAsUint32(options.FixInnerChecksums)); err != nil {
 			return nil, fmt.Errorf("configure kernel_udp secure TC TX direct inner checksum normalization: %w", err)
@@ -108,6 +120,8 @@ func loadKernelUDPTXSecureDirectObject(provider *kernelCryptoProviderObject, sta
 		"ix_stats_map",
 		"ix_kudp_tx_route",
 		"ix_kudp_tx_flow",
+		"ix_kudp_tx_affinity",
+		"ix_kudp_tx_affinity_next",
 		"trustix_kernel_crypto_flow_index_map",
 		"trustix_kernel_crypto_ctx_slots",
 		"trustix_kernel_crypto_direct_slots",

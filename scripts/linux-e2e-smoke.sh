@@ -36,6 +36,7 @@ af_xdp_ring_entries="${TRUSTIX_E2E_AF_XDP_RING_ENTRIES:-4096}"
 af_xdp_umem_frames="${TRUSTIX_E2E_AF_XDP_UMEM_FRAMES:-8192}"
 af_xdp_umem_frame_size="${TRUSTIX_E2E_AF_XDP_UMEM_FRAME_SIZE:-2048}"
 hot_stats="${TRUSTIX_E2E_HOT_STATS:-1}"
+observability_settle_seconds="${TRUSTIX_E2E_OBSERVABILITY_SETTLE_SECONDS:-1}"
 kernel_udp_session_buffer="${TRUSTIX_E2E_KERNEL_UDP_SESSION_BUFFER:-512}"
 capture_forwarder_workers="${TRUSTIX_E2E_CAPTURE_FORWARDER_WORKERS:-4}"
 capture_forwarder_buffer="${TRUSTIX_E2E_CAPTURE_FORWARDER_BUFFER:-262144}"
@@ -247,6 +248,12 @@ kernel_cpu_vaes_capable() {
 
 hot_stats_enabled() {
   truthy "$hot_stats"
+}
+
+settle_observability_stats() {
+  hot_stats_enabled || return 0
+  [[ "$observability_settle_seconds" == "0" ]] && return 0
+  sleep "$observability_settle_seconds"
 }
 
 capture_history_enabled() {
@@ -3948,6 +3955,7 @@ fi
     0|1|true|false|yes|no|on|off|enabled|disabled) ;;
     *) die "TRUSTIX_E2E_HOT_STATS must be truthy or falsey" ;;
   esac
+  [[ "$observability_settle_seconds" =~ $non_negative_number_re ]] || die "TRUSTIX_E2E_OBSERVABILITY_SETTLE_SECONDS must be a non-negative number"
   case "$af_xdp_need_wakeup" in
     auto|0|1|true|false|yes|no|on|off|enabled|disabled) ;;
     *) die "TRUSTIX_E2E_AF_XDP_NEED_WAKEUP must be auto, 0, or 1" ;;
@@ -4209,6 +4217,7 @@ fi
     run_tix_tcp_negative_probes
   fi
 
+  settle_observability_stats
   collect_api ix-a "$api_a" "$daemon_ns_a"
   collect_api ix-b "$api_b" "$daemon_ns_b"
   if ! perf_fast_enabled; then

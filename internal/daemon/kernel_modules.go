@@ -25,14 +25,14 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	if daemon.kernelHelpers == nil {
 		daemon.kernelHelpers = kernelmodule.NewTrustIXDatapathHelpersManager()
 	}
-	modules := effectiveKernelModulesForDesired(desired)
+	modules := effectiveKernelModuleConfigsForDesired(desired)
 	if err := validateOpenWrtKernelModuleSources(modules); err != nil {
 		return nil, err
 	}
+	if err := daemon.reconcileKernelModuleRuntimeTuning(desired, modules); err != nil {
+		return nil, err
+	}
 	if kernelModulesAllDisabled(modules) {
-		if err := daemon.restoreKernelDatapathFullPlaintextTuning(); err != nil {
-			return nil, err
-		}
 		helpersStatus, helpersErr := daemon.kernelHelpers.Ensure(ctx, modules.TrustIXDatapathHelpers)
 		datapathStatus, datapathErr := daemon.kernelDatapath.Ensure(ctx, modules.TrustIXDatapath)
 		cryptoStatus, cryptoErr := daemon.kernelCrypto.Ensure(ctx, modules.TrustIXCrypto)
@@ -44,27 +44,24 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 		}
 		return statuses, nil
 	}
-	if err := daemon.reconcileKernelDatapathFullPlaintextSysctls(desired); err != nil {
-		return nil, err
-	}
-	if err := daemon.reconcileOpenWrtFullPlaintextRPS(desired); err != nil {
-		return nil, daemon.kernelModuleEnsureError(err)
+	if err := daemon.prepareKernelModuleCoordinatedReload(ctx, modules); err != nil {
+		return daemon.kernelModuleStatuses(), daemon.kernelModuleEnsureError(err)
 	}
 	cryptoModule := modules.TrustIXCrypto
-	cryptoModule.Parameters = TrustIXCryptoModuleParametersForDesired(cryptoModule.Parameters, desired)
 	cryptoStatus, err := daemon.kernelCrypto.Ensure(ctx, cryptoModule)
 	if err != nil {
 		return []kernelmodule.Status{cryptoStatus}, daemon.kernelModuleEnsureError(err)
 	}
 	datapathModule := modules.TrustIXDatapath
-	datapathModule.Parameters = TrustIXDatapathModuleParametersForDesired(datapathModule.Parameters, desired)
 	datapathStatus, err := daemon.kernelDatapath.Ensure(ctx, datapathModule)
 	statuses := []kernelmodule.Status{cryptoStatus, datapathStatus}
 	if err != nil {
 		return statuses, daemon.kernelModuleEnsureError(err)
 	}
+	if err := validateSecureTIXTCPFullDatapathStatus(desired, cryptoStatus, datapathStatus); err != nil {
+		return statuses, daemon.kernelModuleEnsureError(err)
+	}
 	helpersModule := modules.TrustIXDatapathHelpers
-	helpersModule.Parameters = TrustIXDatapathHelpersModuleParametersForDesired(helpersModule.Parameters, desired)
 	helpersStatus, err := daemon.kernelHelpers.Ensure(ctx, helpersModule)
 	statuses = append(statuses, helpersStatus)
 	if err != nil {
@@ -76,12 +73,110 @@ func (daemon *Daemon) ensureKernelModules(ctx context.Context, desired config.De
 	return statuses, nil
 }
 
+func (daemon *Daemon) prepareKernelModuleCoordinatedReload(ctx context.Context, modules config.KernelModulesConfig) error {
+	cryptoStatus, cryptoReload := daemon.kernelCrypto.AssessReload(modules.TrustIXCrypto)
+	if !cryptoReload.Required {
+		return nil
+	}
+	reason := strings.TrimSpace(cryptoReload.Reason)
+	if reason == "" {
+		reason = "trustix_crypto requires replacement"
+	}
+	reason = "coordinated TrustIX module reload: " + reason
+
+	dependencies := []struct {
+		manager *kernelmodule.Manager
+		module  config.KernelModuleConfig
+		name    string
+		loaded  bool
+	}{
+		{manager: daemon.kernelHelpers, module: modules.TrustIXDatapathHelpers, name: "trustix_datapath_helpers"},
+		{manager: daemon.kernelDatapath, module: modules.TrustIXDatapath, name: "trustix_datapath"},
+	}
+	for index := range dependencies {
+		dependency := &dependencies[index]
+		status, assessment := dependency.manager.AssessReload(dependency.module)
+		if !status.Loaded {
+			continue
+		}
+		dependency.loaded = true
+		if status.RefCount > 0 {
+			return fmt.Errorf("cannot reload trustix_crypto while %s is still in use: ref_count=%d; quiesce every TrustIX instance using the module",
+				dependency.name, status.RefCount)
+		}
+		if !kernelModuleAllowsCoordinatedDependencyReload(dependency.module, assessment) {
+			return fmt.Errorf("cannot reload trustix_crypto while %s is loaded: lifecycle mode=%q reload_on_upgrade=%q does not permit a coordinated dependency reload",
+				dependency.name, dependency.module.Mode, dependency.module.ReloadOnUpgrade)
+		}
+	}
+	for _, dependency := range dependencies {
+		if !dependency.loaded {
+			continue
+		}
+		if _, err := dependency.manager.UnloadForCoordinatedReload(ctx, dependency.module, reason); err != nil {
+			return fmt.Errorf("prepare trustix_crypto reload: unload %s: %w", dependency.name, err)
+		}
+	}
+	if err := closeAEADDirectOwnerFiles(); err != nil {
+		return fmt.Errorf("prepare trustix_crypto reload: %w", err)
+	}
+	if _, err := daemon.kernelCrypto.UnloadForCoordinatedReload(ctx, modules.TrustIXCrypto, reason); err != nil {
+		return fmt.Errorf("prepare trustix_crypto reload: unload trustix_crypto ref_count=%d: %w", cryptoStatus.RefCount, err)
+	}
+	return nil
+}
+
+func kernelModuleAllowsCoordinatedDependencyReload(module config.KernelModuleConfig, assessment kernelmodule.ReloadAssessment) bool {
+	if !kernelmoduleModeActive(module.Mode) {
+		return false
+	}
+	if config.NormalizeKernelModuleReloadOnUpgrade(module.ReloadOnUpgrade) != "never" {
+		return true
+	}
+	return len(assessment.ParameterMismatches) > 0
+}
+
+func (daemon *Daemon) reconcileKernelModuleRuntimeTuning(desired config.Desired, modules config.KernelModulesConfig) error {
+	if kernelModulesAllDisabled(modules) {
+		return daemon.restoreKernelDatapathFullPlaintextTuning()
+	}
+	if err := daemon.reconcileKernelDatapathFullPlaintextSysctls(desired); err != nil {
+		return err
+	}
+	if err := daemon.reconcileOpenWrtFullPlaintextRPS(desired); err != nil {
+		return daemon.kernelModuleEnsureError(err)
+	}
+	return nil
+}
+
 func (daemon *Daemon) kernelModuleEnsureError(err error) error {
 	return errors.Join(err, daemon.restoreKernelDatapathFullPlaintextTuning())
 }
 
 func validateTIXTCPRouteGSOHelpersStatus(desired config.Desired, status kernelmodule.Status) error {
 	return validateRouteGSOHelpersStatus(desired, status)
+}
+
+func validateSecureTIXTCPFullDatapathStatus(desired config.Desired, cryptoStatus, datapathStatus kernelmodule.Status) error {
+	if !kernelDatapathSecureTIXTCPForDesired(desired) {
+		return nil
+	}
+	var missing []string
+	if !kernelModuleStatusHasFeature(cryptoStatus, kernelmodule.FeatureDirectAESNI) {
+		missing = append(missing, "trustix_crypto:"+kernelmodule.FeatureDirectAESNI)
+	}
+	if !kernelModuleStatusHasFeature(datapathStatus, kernelmodule.FeatureSecureTIXTCPFullDatapath) {
+		missing = append(missing, "trustix_datapath:"+kernelmodule.FeatureSecureTIXTCPFullDatapath)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("secure tix_tcp full kernel datapath is required but capability validation failed: missing=%s crypto_state=%s crypto_features=%s datapath_state=%s datapath_features=%s",
+		strings.Join(missing, ","),
+		cryptoStatus.State,
+		strings.Join(cryptoStatus.Features, ","),
+		datapathStatus.State,
+		strings.Join(datapathStatus.Features, ","))
 }
 
 func validateRouteGSOHelpersStatus(desired config.Desired, status kernelmodule.Status) error {
@@ -232,6 +327,10 @@ func effectiveKernelModulesForDesired(desired config.Desired) config.KernelModul
 			modules.TrustIXDatapathHelpers.Mode = kernelmodule.ModeAuto
 		}
 	}
+	if kernelDatapathSecureTIXTCPForDesired(desired) {
+		modules.TrustIXCrypto.Mode = kernelmodule.ModeRequired
+		modules.TrustIXDatapath.Mode = kernelmodule.ModeRequired
+	}
 	if routeGSOHelpersForDesired(desired) {
 		modules.TrustIXDatapathHelpers.Mode = kernelmodule.ModeRequired
 		if strings.TrimSpace(modules.TrustIXDatapathHelpers.Path) == "" {
@@ -240,6 +339,67 @@ func effectiveKernelModulesForDesired(desired config.Desired) config.KernelModul
 	}
 	modules = disableOpenWrtAutoEmbeddedKernelModules(modules)
 	return modules
+}
+
+func effectiveKernelModuleConfigsForDesired(desired config.Desired) config.KernelModulesConfig {
+	modules := effectiveKernelModulesForDesired(desired)
+	if kernelModulesAllDisabled(modules) {
+		return modules
+	}
+	modules.TrustIXCrypto.Parameters = TrustIXCryptoModuleParametersForDesired(modules.TrustIXCrypto.Parameters, desired)
+	modules.TrustIXDatapath.Parameters = TrustIXDatapathModuleParametersForDesired(modules.TrustIXDatapath.Parameters, desired)
+	modules.TrustIXDatapathHelpers.Parameters = TrustIXDatapathHelpersModuleParametersForDesired(modules.TrustIXDatapathHelpers.Parameters, desired)
+	return modules
+}
+
+type kernelModuleLoadConfig struct {
+	Mode       string
+	Path       string
+	Parameters string
+}
+
+type kernelModuleRuntimeConfig struct {
+	Crypto   kernelModuleLoadConfig
+	Datapath kernelModuleLoadConfig
+	Helpers  kernelModuleLoadConfig
+}
+
+func kernelModuleRuntimeConfigForDesired(desired config.Desired) kernelModuleRuntimeConfig {
+	modules := effectiveKernelModuleConfigsForDesired(desired)
+	return kernelModuleRuntimeConfig{
+		Crypto:   canonicalKernelModuleLoadConfig(modules.TrustIXCrypto),
+		Datapath: canonicalKernelModuleLoadConfig(modules.TrustIXDatapath),
+		Helpers:  canonicalKernelModuleLoadConfig(modules.TrustIXDatapathHelpers),
+	}
+}
+
+func canonicalKernelModuleLoadConfig(module config.KernelModuleConfig) kernelModuleLoadConfig {
+	mode := strings.ToLower(strings.TrimSpace(module.Mode))
+	if !kernelmoduleModeActive(mode) {
+		return kernelModuleLoadConfig{Mode: kernelmodule.ModeDisabled}
+	}
+	return kernelModuleLoadConfig{
+		Mode:       mode,
+		Path:       strings.TrimSpace(module.Path),
+		Parameters: strings.Join(strings.Fields(module.Parameters), " "),
+	}
+}
+
+func kernelModuleRuntimeConfigChanged(oldDesired, newDesired config.Desired) bool {
+	return kernelModuleRuntimeConfigForDesired(oldDesired) != kernelModuleRuntimeConfigForDesired(newDesired)
+}
+
+func (daemon *Daemon) updateKernelModuleLifecycle(desired config.Desired) {
+	modules := effectiveKernelModulesForDesired(desired)
+	if daemon.kernelCrypto != nil {
+		daemon.kernelCrypto.UpdateLifecycle(modules.TrustIXCrypto)
+	}
+	if daemon.kernelDatapath != nil {
+		daemon.kernelDatapath.UpdateLifecycle(modules.TrustIXDatapath)
+	}
+	if daemon.kernelHelpers != nil {
+		daemon.kernelHelpers.UpdateLifecycle(modules.TrustIXDatapathHelpers)
+	}
 }
 
 func disableOpenWrtAutoEmbeddedKernelModules(modules config.KernelModulesConfig) config.KernelModulesConfig {
@@ -347,11 +507,21 @@ func TrustIXCryptoModuleParameters(raw string) string {
 
 func TrustIXCryptoModuleParametersForDesired(raw string, desired config.Desired) string {
 	tixTCPSecureDirect := tixTCPSecureKernelCryptoDirectForDesired(desired)
+	secureTIXTCPFullDatapath := kernelDatapathSecureTIXTCPForDesired(desired)
 	performanceSecureDirect := kernelUDPSecureFullDirectForDesired(desired) || tixTCPSecureDirect
 	explicitSIMDFastpath := envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH")
 	explicitSIMDIRQFPUFastpath := envTruthyAny("TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH")
 	explicitKfuncFastpathStats := envTruthyAny("TRUSTIX_KERNEL_CRYPTO_KFUNC_FASTPATH_STATS")
 	params := filterModuleParameters(raw, trustIXCryptoPanicRiskModuleParameters)
+	if secureTIXTCPFullDatapath {
+		params = setModuleParameter(params, "datapath_simd_fastpath", "1")
+		params = setModuleParameter(params, "datapath_simd_irq_fpu_fastpath", "1")
+		if envFalsey("TRUSTIX_KERNEL_CRYPTO_DATAPATH_VAES") {
+			params = setModuleParameter(params, "datapath_vaes", "0")
+		} else {
+			params = setModuleParameter(params, "datapath_vaes", "1")
+		}
+	}
 	if explicitSIMDFastpath {
 		params = appendModuleParameterIfMissing(params, "kfunc_simd_fastpath=1")
 		if performanceSecureDirect {
@@ -393,12 +563,14 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		raw,
 		trustIXDatapathPanicRiskModuleParameters,
 		trustIXDatapathAllowedRXWorkerModuleParameters(),
+		trustIXDatapathExperimentalRXWorkerModuleParameters,
 		"rx_worker_",
 	)
 	runtime := config.EffectiveKernelDatapathRuntime(desired.KernelModules)
 	profile := config.NormalizeKernelCapabilityProfile(desired.KernelModules.CapabilityProfile)
-	fullPlaintextConfigured := runtime.FullPlaintext || runtime.TXPlaintext || kernelDatapathFullPlaintextPolicySelectedForDesired(desired)
-	fullPlaintextConfigAllowed := fullPlaintextConfigured && kernelDatapathOpenWrtCrashRiskAllowed()
+	secureTIXTCPFullDatapath := kernelDatapathSecureTIXTCPForDesired(desired)
+	fullPlaintextConfigured := runtime.FullPlaintext || runtime.TXPlaintext || kernelDatapathFullPlaintextPolicySelectedForDesired(desired) || secureTIXTCPFullDatapath
+	fullPlaintextConfigAllowed := secureTIXTCPFullDatapath || fullPlaintextConfigured && kernelDatapathOpenWrtCrashRiskAllowed()
 	suppressFullPlaintext := kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired)
 	rxWorkerAllowed := !suppressFullPlaintext && (fullPlaintextConfigAllowed || kernelDatapathRXWorkerCrashRiskAllowed())
 	fullPlaintextAllowed := !suppressFullPlaintext && (fullPlaintextConfigAllowed || kernelDatapathFullPlaintextCrashRiskAllowed())
@@ -437,6 +609,14 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 				params = removeModuleParameterMask(params, "enable_features", 1<<12)
 			} else {
 				params = addModuleParameterMask(params, "enable_features", 1<<12)
+			}
+			if secureTIXTCPFullDatapath {
+				params = addModuleParameterMask(params, "enable_features", 1<<13)
+				if envFalsey("TRUSTIX_TIX_TCP_SECURE_INNER_CHECKSUM_PARTIAL") {
+					params = removeModuleParameterMask(params, "enable_features", 1<<14)
+				} else {
+					params = addModuleParameterMask(params, "enable_features", 1<<14)
+				}
 			}
 		}
 		params = appendModuleParameterIfMissing(params, "rx_worker_inject=1")
@@ -779,25 +959,27 @@ func runtimeLooksLikeOpenWrt() bool {
 	return false
 }
 
+var closeAEADDirectOwnerFiles = kernelmodule.CloseAEADDirectOwnerFiles
+
 func (daemon *Daemon) closeKernelModules(ctx context.Context) error {
-	var firstErr error
-	if daemon.kernelDatapath != nil {
-		if err := daemon.kernelDatapath.Close(ctx); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
+	var resultErr error
 	if daemon.kernelHelpers != nil {
-		if err := daemon.kernelHelpers.Close(ctx); err != nil && firstErr == nil {
-			firstErr = err
+		if err := daemon.kernelHelpers.Close(ctx); err != nil {
+			resultErr = errors.Join(resultErr, err)
 		}
 	}
+	if daemon.kernelDatapath != nil {
+		if err := daemon.kernelDatapath.Close(ctx); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}
+	resultErr = errors.Join(resultErr, closeAEADDirectOwnerFiles())
 	if daemon.kernelCrypto != nil {
-		if err := daemon.kernelCrypto.Close(ctx); err != nil && firstErr == nil {
-			firstErr = err
+		if err := daemon.kernelCrypto.Close(ctx); err != nil {
+			resultErr = errors.Join(resultErr, err)
 		}
 	}
-	firstErr = errors.Join(firstErr, daemon.restoreKernelDatapathFullPlaintextTuning())
-	return firstErr
+	return errors.Join(resultErr, daemon.restoreKernelDatapathFullPlaintextTuning())
 }
 
 func (daemon *Daemon) kernelModuleStatuses() []kernelmodule.Status {
@@ -818,10 +1000,6 @@ func (daemon *Daemon) kernelModuleStatuses() []kernelmodule.Status {
 		statuses = append(statuses, disabledKernelModuleStatus("trustix_datapath_helpers"))
 	}
 	return statuses
-}
-
-func kernelModulesMayAffectDataplane(oldDesired, newDesired config.Desired) bool {
-	return true
 }
 
 func disabledKernelModuleStatus(name string) kernelmodule.Status {
@@ -849,6 +1027,7 @@ func TrustIXDatapathHelpersModuleParameters(raw string) string {
 		raw,
 		trustIXDatapathHelpersPanicRiskModuleParameters,
 		trustIXDatapathHelpersSafeAsyncModuleParameters,
+		nil,
 		"route_tcp_gso_async_",
 		"tixt_rx_stream_",
 		"tixt_rx_single_coalesce_",
@@ -884,7 +1063,11 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_force_software_outer_csum=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_unbound_worker=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_sharded_queue=1")
-		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_queue_shards=8")
+		queueShards := 8
+		if secureKernelRouteGSOForDesired(desired) {
+			queueShards = trustIXSecureRouteGSOQueueShards(runtime.NumCPU())
+		}
+		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_queue_shards="+strconv.Itoa(queueShards))
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_flow_shard_queue=1")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_hash_tx_queue=0")
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_txq_stopped_backoff_retries=1")
@@ -918,6 +1101,21 @@ func TrustIXDatapathHelpersModuleParametersForDesired(raw string, desired config
 		params = appendModuleParameterIfMissing(params, "route_tcp_gso_async_secure_seal_batch=1")
 	}
 	return params
+}
+
+func trustIXSecureRouteGSOQueueShards(cpuCount int) int {
+	if cpuCount <= 1 {
+		return 1
+	}
+	reserved := 1
+	if cpuCount > 4 {
+		reserved = 2
+	}
+	shards := cpuCount - reserved
+	if shards > 5 {
+		return 5
+	}
+	return shards
 }
 
 func appendTrustIXDatapathHelpersTIXTParameters(params string) string {
@@ -1245,17 +1443,17 @@ var trustIXDatapathHelpersSafeAsyncModuleParameters = map[string]struct{}{
 }
 
 func filterModuleParameters(params string, deny map[string]struct{}, denyPrefixes ...string) string {
-	return filterModuleParametersWithAllowlist(params, deny, nil, denyPrefixes...)
+	return filterModuleParametersWithAllowlist(params, deny, nil, nil, denyPrefixes...)
 }
 
-func filterModuleParametersWithAllowlist(params string, deny map[string]struct{}, allow map[string]struct{}, denyPrefixes ...string) string {
+func filterModuleParametersWithAllowlist(params string, deny map[string]struct{}, allow map[string]struct{}, safeOptOut map[string]struct{}, denyPrefixes ...string) string {
 	fields := strings.Fields(strings.TrimSpace(params))
 	if len(fields) == 0 || (len(deny) == 0 && len(denyPrefixes) == 0) {
 		return strings.Join(fields, " ")
 	}
 	kept := fields[:0]
 	for _, field := range fields {
-		key, _, _ := strings.Cut(field, "=")
+		key, value, _ := strings.Cut(field, "=")
 		key = strings.TrimSpace(key)
 		if _, blocked := deny[key]; blocked {
 			continue
@@ -1264,7 +1462,8 @@ func filterModuleParametersWithAllowlist(params string, deny map[string]struct{}
 		for _, prefix := range denyPrefixes {
 			if strings.HasPrefix(key, prefix) {
 				if _, allowed := allow[key]; !allowed {
-					blocked = true
+					_, optOutAllowed := safeOptOut[key]
+					blocked = !optOutAllowed || !moduleParameterValueFalsey(value)
 				}
 				break
 			}

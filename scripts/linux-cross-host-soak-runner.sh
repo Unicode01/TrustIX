@@ -20,6 +20,9 @@ unload_modules="${TRUSTIX_CROSS_HOST_UNLOAD_MODULES:-1}"
 preserve_on_failure="${TRUSTIX_CROSS_HOST_PRESERVE_ON_FAILURE:-0}"
 dry_run_config="${TRUSTIX_CROSS_HOST_DRY_RUN_CONFIG:-0}"
 pair_lock_hold_seconds="${TRUSTIX_CROSS_HOST_PAIR_LOCK_HOLD_SECONDS:-0}"
+cleanup_timeout="${TRUSTIX_CROSS_HOST_CLEANUP_TIMEOUT:-20}"
+daemon_supervisor="${TRUSTIX_CROSS_HOST_DAEMON_SUPERVISOR:-process}"
+daemon_restart_sec="${TRUSTIX_CROSS_HOST_DAEMON_RESTART_SEC:-1}"
 
 node_a="${TRUSTIX_CROSS_HOST_A:-local}"
 node_b="${TRUSTIX_CROSS_HOST_B:-}"
@@ -54,6 +57,12 @@ secure_kudp_crypto_path_b="${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PATH_B:-$secu
 secure_kudp_helpers_path="${TRUSTIX_CROSS_HOST_SECURE_KUDP_HELPERS_PATH:-}"
 secure_kudp_helpers_path_a="${TRUSTIX_CROSS_HOST_SECURE_KUDP_HELPERS_PATH_A:-$secure_kudp_helpers_path}"
 secure_kudp_helpers_path_b="${TRUSTIX_CROSS_HOST_SECURE_KUDP_HELPERS_PATH_B:-$secure_kudp_helpers_path}"
+secure_tix_tcp_crypto_path="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_CRYPTO_PATH:-embedded}"
+secure_tix_tcp_crypto_path_a="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_CRYPTO_PATH_A:-$secure_tix_tcp_crypto_path}"
+secure_tix_tcp_crypto_path_b="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_CRYPTO_PATH_B:-$secure_tix_tcp_crypto_path}"
+secure_tix_tcp_datapath_path="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_DATAPATH_PATH:-embedded}"
+secure_tix_tcp_datapath_path_a="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_DATAPATH_PATH_A:-$secure_tix_tcp_datapath_path}"
+secure_tix_tcp_datapath_path_b="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_DATAPATH_PATH_B:-$secure_tix_tcp_datapath_path}"
 
 domain_id="${TRUSTIX_CROSS_HOST_DOMAIN:-lab.local}"
 ix_a="${TRUSTIX_CROSS_HOST_IX_A:-ix-a}"
@@ -91,6 +100,8 @@ capture_forwarder_workers="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_WORKERS:-auto}
 capture_forwarder_buffer="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BUFFER:-65536}"
 capture_forwarder_batch="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH:-1024}"
 capture_forwarder_batch_delay="${TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH_DELAY:-0}"
+cpu_profile_dir="${TRUSTIX_CROSS_HOST_CPU_PROFILE_DIR:-}"
+secure_tix_tcp_inner_checksum_partial="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_INNER_CHECKSUM_PARTIAL:-}"
 iptunnel_port="${TRUSTIX_CROSS_HOST_IPTUNNEL_PORT:-47829}"
 iptunnel_mtu="${TRUSTIX_CROSS_HOST_IPTUNNEL_MTU:-1400}"
 iptunnel_a_carrier="${TRUSTIX_CROSS_HOST_IPTUNNEL_A_CARRIER:-10.255.10.1/30}"
@@ -383,6 +394,14 @@ remote_dir() {
   node_value "$1" "$remote_a" "$remote_b"
 }
 
+daemon_unit_name() {
+  local node="$1"
+  local dir checksum
+  dir="$(remote_dir "$node")"
+  checksum="$(printf '%s' "$dir" | cksum | awk '{print $1}')"
+  printf 'trustix-cross-host-%s-%s.service\n' "$node" "$checksum"
+}
+
 node_bin() {
   local node="$1"
   local name="$2"
@@ -438,6 +457,13 @@ case_is_multi_endpoint() {
 case_uses_pinned_mixed_routes() {
   case "$case_name" in
     mixed-plaintext-full-kmod|mixed_plaintext_full_kmod|mixed-secure-kernel|mixed_secure_kernel) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+case_is_mixed_secure_kernel() {
+  case "$case_name" in
+    mixed-secure-kernel|mixed_secure_kernel) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -653,6 +679,7 @@ case_crypto_placement() {
     return
   fi
   case "$(case_fast_path)" in
+    secure_tix_tcp_kernel) printf 'kernel\n' ;;
     *) printf 'userspace\n' ;;
   esac
 }
@@ -784,8 +811,11 @@ case_kernel_transport_mode() {
 }
 
 case_uses_secure_kudp_fast_path() {
+  if case_is_mixed_secure_kernel; then
+    return 0
+  fi
   case "$(case_fast_path)" in
-    secure_kudp|secure_tix_tcp_kernel) return 0 ;;
+    secure_kudp) return 0 ;;
     userspace_tc)
       [[ "$(case_endpoint_transport)" == "udp" && "$(case_encryption)" == "secure" ]] &&
         truthy "${TRUSTIX_CROSS_HOST_SECURE_KUDP_KERNEL_CRYPTO:-0}"
@@ -834,8 +864,11 @@ apply_case_runtime_defaults() {
 }
 
 case_secure_kudp_route_gso() {
+  if case_is_mixed_secure_kernel; then
+    return 0
+  fi
   case "$(case_fast_path)" in
-    secure_kudp|secure_tix_tcp_kernel) return 0 ;;
+    secure_kudp) return 0 ;;
   esac
   truthy "${TRUSTIX_CROSS_HOST_SECURE_KUDP_ROUTE_GSO:-0}"
 }
@@ -947,7 +980,7 @@ kernel_modules:
   capability_profile: performance
   trustix_crypto:
     mode: required
-    reload_on_upgrade: always
+    reload_on_upgrade: auto
     unload_on_exit: true
 EOF
   printf '    path: %s\n' "$(yaml_single_quote "$path")"
@@ -962,7 +995,7 @@ EOF
   if case_secure_kudp_route_gso && [[ -n "$helper_path" ]]; then
     cat <<'EOF'
     mode: required
-    reload_on_upgrade: always
+    reload_on_upgrade: auto
     unload_on_exit: true
 EOF
     printf '    path: %s\n' "$(yaml_single_quote "$helper_path")"
@@ -976,8 +1009,101 @@ EOF
   fi
 }
 
+secure_tix_tcp_module_yaml() {
+  local node="${1:-a}"
+  local crypto_params="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_CRYPTO_PARAMETERS:-}"
+  local datapath_params="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_DATAPATH_PARAMETERS:-}"
+  local crypto_path
+  local datapath_path
+  crypto_path="$(node_value "$node" "$secure_tix_tcp_crypto_path_a" "$secure_tix_tcp_crypto_path_b")"
+  datapath_path="$(node_value "$node" "$secure_tix_tcp_datapath_path_a" "$secure_tix_tcp_datapath_path_b")"
+  cat <<'EOF'
+kernel_modules:
+  capability_profile: performance
+  trustix_crypto:
+    mode: required
+    reload_on_upgrade: auto
+    unload_on_exit: true
+EOF
+  printf '    path: %s\n' "$(yaml_single_quote "$crypto_path")"
+  if [[ -n "$crypto_params" ]]; then
+    printf '    parameters: %s\n' "$(yaml_single_quote "$crypto_params")"
+  fi
+  cat <<'EOF'
+  trustix_datapath:
+    mode: required
+    reload_on_upgrade: auto
+    unload_on_exit: true
+EOF
+  printf '    path: %s\n' "$(yaml_single_quote "$datapath_path")"
+  if [[ -n "$datapath_params" ]]; then
+    printf '    parameters: %s\n' "$(yaml_single_quote "$datapath_params")"
+  fi
+  cat <<'EOF'
+  trustix_datapath_helpers:
+    mode: disabled
+EOF
+}
+
+mixed_secure_kernel_module_yaml() {
+  local node="${1:-a}"
+  local crypto_params="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_CRYPTO_PARAMETERS:-${TRUSTIX_CROSS_HOST_SECURE_KUDP_CRYPTO_PARAMETERS:-}}"
+  local datapath_params="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_DATAPATH_PARAMETERS:-}"
+  local helper_params="${TRUSTIX_CROSS_HOST_SECURE_KUDP_HELPER_PARAMETERS:-}"
+  local crypto_path
+  local datapath_path
+  local helper_path
+  crypto_path="$(node_value "$node" "$secure_tix_tcp_crypto_path_a" "$secure_tix_tcp_crypto_path_b")"
+  datapath_path="$(node_value "$node" "$secure_tix_tcp_datapath_path_a" "$secure_tix_tcp_datapath_path_b")"
+  helper_path="$(node_value "$node" "$secure_kudp_helpers_path_a" "$secure_kudp_helpers_path_b")"
+  if [[ -z "$helper_path" ]]; then
+    helper_path="$(infer_helpers_path_from_module_path "$crypto_path")"
+  fi
+  [[ -n "$helper_path" ]] || die "mixed secure kernel mode requires a trustix_datapath_helpers module path"
+  cat <<'EOF'
+kernel_modules:
+  capability_profile: performance
+  trustix_crypto:
+    mode: required
+    reload_on_upgrade: auto
+    unload_on_exit: true
+EOF
+  printf '    path: %s\n' "$(yaml_single_quote "$crypto_path")"
+  if [[ -n "$crypto_params" ]]; then
+    printf '    parameters: %s\n' "$(yaml_single_quote "$crypto_params")"
+  fi
+  cat <<'EOF'
+  trustix_datapath:
+    mode: required
+    reload_on_upgrade: auto
+    unload_on_exit: true
+EOF
+  printf '    path: %s\n' "$(yaml_single_quote "$datapath_path")"
+  if [[ -n "$datapath_params" ]]; then
+    printf '    parameters: %s\n' "$(yaml_single_quote "$datapath_params")"
+  fi
+  cat <<'EOF'
+  trustix_datapath_helpers:
+    mode: required
+    reload_on_upgrade: auto
+    unload_on_exit: true
+EOF
+  printf '    path: %s\n' "$(yaml_single_quote "$helper_path")"
+  if [[ -n "$helper_params" ]]; then
+    printf '    parameters: %s\n' "$(yaml_single_quote "$helper_params")"
+  fi
+}
+
 case_module_yaml() {
   local node="${1:-a}"
+  if case_is_mixed_secure_kernel; then
+    mixed_secure_kernel_module_yaml "$node"
+    return
+  fi
+  if [[ "$(case_fast_path)" == "secure_tix_tcp_kernel" ]]; then
+    secure_tix_tcp_module_yaml "$node"
+    return
+  fi
   if case_uses_secure_kudp_fast_path; then
     secure_kudp_module_yaml "$node"
     return
@@ -999,7 +1125,7 @@ kernel_modules:
     mode: disabled
   trustix_datapath:
     mode: required
-    reload_on_upgrade: always
+    reload_on_upgrade: auto
     unload_on_exit: true
 EOF
       printf '    path: %s\n' "$(yaml_single_quote "$path")"
@@ -1024,7 +1150,7 @@ kernel_modules:
     mode: disabled
   trustix_datapath_helpers:
     mode: required
-    reload_on_upgrade: always
+    reload_on_upgrade: auto
     unload_on_exit: true
 EOF
       printf '    path: %s\n' "$(yaml_single_quote "$path")"
@@ -1071,7 +1197,7 @@ kernel_modules:
   capability_profile: performance
   trustix_crypto:
     mode: required
-    reload_on_upgrade: always
+    reload_on_upgrade: auto
     unload_on_exit: true
 EOF
       printf '    path: %s\n' "$(yaml_single_quote "$path")"
@@ -1086,7 +1212,7 @@ EOF
       if [[ -n "$helper_path" ]]; then
         cat <<'EOF'
     mode: required
-    reload_on_upgrade: always
+    reload_on_upgrade: auto
     unload_on_exit: true
 EOF
         printf '    path: %s\n' "$(yaml_single_quote "$helper_path")"
@@ -1132,10 +1258,20 @@ check_local_inputs() {
   case "$capture_forwarder_workers" in auto) ;; *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_WORKERS must be auto or a positive integer" ;; esac
   case "$capture_forwarder_buffer" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BUFFER must be a positive integer" ;; esac
   case "$capture_forwarder_batch" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_CAPTURE_FORWARDER_BATCH must be a positive integer" ;; esac
+  if [[ -n "$cpu_profile_dir" && ! "$cpu_profile_dir" =~ ^[A-Za-z0-9_./:-]+$ ]]; then
+    die "TRUSTIX_CROSS_HOST_CPU_PROFILE_DIR must be a shell-safe path without whitespace"
+  fi
+  case "$secure_tix_tcp_inner_checksum_partial" in
+    ""|true|false|1|0|yes|no|on|off|enabled|disabled) ;;
+    *) die "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_INNER_CHECKSUM_PARTIAL must be boolean" ;;
+  esac
   case "$iptunnel_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_PORT must be an integer" ;; esac
   case "$iptunnel_mtu" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_IPTUNNEL_MTU must be an integer" ;; esac
   case "$vxlan_vni" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_VXLAN_VNI must be an integer" ;; esac
   case "$vxlan_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_VXLAN_PORT must be an integer" ;; esac
+  case "$cleanup_timeout" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_CLEANUP_TIMEOUT must be an integer" ;; esac
+  case "$daemon_supervisor" in process|systemd) ;; *) die "TRUSTIX_CROSS_HOST_DAEMON_SUPERVISOR must be process or systemd" ;; esac
+  case "$daemon_restart_sec" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DAEMON_RESTART_SEC must be an integer" ;; esac
   [[ "$iperf_parallel" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_IPERF_PARALLEL must be >= 1"
   [[ "$iptunnel_iperf_parallel" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_IPERF_PARALLEL must be >= 1"
   [[ "$iperf_client_port" -ge 0 && "$iperf_client_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPERF_CLIENT_PORT must be 0 or in 1..65535"
@@ -1154,6 +1290,8 @@ check_local_inputs() {
   [[ "$iptunnel_mtu" -ge 17 && "$iptunnel_mtu" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_IPTUNNEL_MTU must be in 17..65535"
   [[ "$vxlan_vni" -ge 1 && "$vxlan_vni" -le 16777215 ]] || die "TRUSTIX_CROSS_HOST_VXLAN_VNI must be in 1..16777215"
   [[ "$vxlan_port" -ge 1 && "$vxlan_port" -le 65535 ]] || die "TRUSTIX_CROSS_HOST_VXLAN_PORT must be in 1..65535"
+  [[ "$cleanup_timeout" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_CLEANUP_TIMEOUT must be >= 1"
+  [[ "$daemon_restart_sec" -ge 1 ]] || die "TRUSTIX_CROSS_HOST_DAEMON_RESTART_SEC must be >= 1"
   resolve_data_ports
   case "$data_a_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_A_PORT must be an integer" ;; esac
   case "$data_b_port" in *[!0-9]*|"") die "TRUSTIX_CROSS_HOST_DATA_B_PORT must be an integer" ;; esac
@@ -1193,7 +1331,11 @@ check_node_prereqs() {
   trustixctl="$(node_bin "$node" trustixctl)"
   run_node "$node" "set -Eeuo pipefail
 missing=0
-for cmd in ip iperf3 curl; do
+required_commands='ip iperf3 curl'
+if [ $(remote_quote "$daemon_supervisor") = systemd ]; then
+  required_commands=\"\${required_commands} systemctl systemd-run\"
+fi
+for cmd in \$required_commands; do
   if ! command -v \"\$cmd\" >/dev/null 2>&1; then
     printf '%s\n' \"missing required command on node ${node}: \$cmd\" >&2
     missing=1
@@ -1280,7 +1422,7 @@ resolve_underlay() {
 
 prepare_node_topology() {
   local node="$1"
-  local dir lan_if host_if host_ns host_addr secondary_host_addr host_gw trustixd api_port peer_port env_exports
+  local dir lan_if host_if host_ns host_addr secondary_host_addr host_gw trustixd api_port peer_port env_exports unit
   dir="$(remote_dir "$node")"
   lan_if="$(node_value "$node" "$lan_if_a" "$lan_if_b")"
   host_if="$(node_value "$node" "$host_if_a" "$host_if_b")"
@@ -1295,11 +1437,16 @@ prepare_node_topology() {
   api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
   peer_port="$(node_value "$node" "$peer_a_port" "$peer_b_port")"
   env_exports="$(daemon_env_exports)"
+  unit="$(daemon_unit_name "$node")"
   run_node "$node" "set -Eeuo pipefail
 ip_cmd=\$(command -v ip)
 dir=$(remote_quote "$dir")
 secondary_host_addr=$(remote_quote "$secondary_host_addr")
 target_data=\"\${dir}/data\"
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl stop $(remote_quote "$unit") >/dev/null 2>&1 || true
+  systemctl reset-failed $(remote_quote "$unit") >/dev/null 2>&1 || true
+fi
 if [ -f \"\${dir}/trustixd.pid\" ]; then
   old_pid=\$(cat \"\${dir}/trustixd.pid\" 2>/dev/null || true)
   if [ -n \"\$old_pid\" ]; then
@@ -1310,7 +1457,8 @@ for proc in /proc/[0-9]*; do
   [ -d \"\$proc\" ] || continue
   pid=\"\${proc##*/}\"
   [ \"\$pid\" = \"\$\$\" ] && continue
-  cmdline=\$(tr '\000' ' ' <\"\$proc/cmdline\" 2>/dev/null || true)
+  [ -r \"\$proc/cmdline\" ] || continue
+  cmdline=\$(tr '\000' ' ' 2>/dev/null <\"\$proc/cmdline\" || true)
   case \" \$cmdline \" in
     *\" -data-dir \$target_data \"*|*\" -data-dir=\$target_data \"*)
       kill \"\$pid\" >/dev/null 2>&1 || true
@@ -1753,29 +1901,41 @@ EOF
 
 secure_tix_tcp_kernel_daemon_env() {
   cat <<'EOF'
-TRUSTIX_TIX_TCP_ROUTE_GSO=1
-TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC=1
-TRUSTIX_TIX_TCP_TC_TX_DIRECT=1
-TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=1
-TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=1
+TRUSTIX_TIX_TCP_ROUTE_GSO=0
+TRUSTIX_TIX_TCP_ROUTE_GSO_ASYNC=0
+TRUSTIX_TIX_TCP_TC_TX_DIRECT=0
+TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=0
+TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=0
 TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=1
-TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT=1
-TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=1
-TRUSTIX_KERNEL_UDP_XDP_RX_SECURE_DIRECT=1
-TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUMS=1
-TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH=1
-TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=0
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT=0
+TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT=0
+TRUSTIX_KERNEL_UDP_XDP_RX_SECURE_DIRECT=0
+TRUSTIX_KERNEL_UDP_XDP_RX_DIRECT_TRUST_INNER_CHECKSUMS=0
+TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_KFUNC_FASTPATH=0
+TRUSTIX_KERNEL_CRYPTO_ALLOW_SIMD_IRQ_FPU_KFUNC_FASTPATH=0
 TRUSTIX_KERNEL_CRYPTO_KFUNC_FASTPATH_STATS=1
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL=1
-TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN=1
+TRUSTIX_KERNEL_CRYPTO_DATAPATH_VAES=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_KFUNC_SEAL=0
+TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_KFUNC_OPEN=0
 TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_SKB_SEAL_KFUNC=0
 TRUSTIX_KERNEL_UDP_TC_RX_SECURE_DIRECT_SKB_OPEN_KFUNC=0
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_TRUST_INNER_CHECKSUMS=0
 TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT_FIX_INNER_CHECKSUMS=0
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_TCP_GSO_KFUNC=1
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC=1
-TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=1
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_TCP_GSO_KFUNC=0
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO_KFUNC=0
+TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=0
+EOF
+}
+
+mixed_secure_kernel_daemon_env() {
+  secure_kudp_daemon_env
+  cat <<'EOF'
+TRUSTIX_TIX_TCP_TC_TX_DIRECT=0
+TRUSTIX_TIX_TCP_TC_TX_DIRECT_ONLY=0
+TRUSTIX_TIX_TCP_TC_TX_ROUTE_TCP_GSO_ASYNC_KFUNC=0
+TRUSTIX_TIX_TCP_ALLOW_CRASH_RISK_ROUTE_TCP_GSO_ASYNC=0
+TRUSTIX_KERNEL_CRYPTO_DATAPATH_VAES=1
 EOF
 }
 
@@ -1784,6 +1944,12 @@ common_daemon_env() {
   printf 'TRUSTIX_CAPTURE_FORWARDER_BUFFER=%s\n' "$capture_forwarder_buffer"
   printf 'TRUSTIX_CAPTURE_FORWARDER_BATCH=%s\n' "$capture_forwarder_batch"
   printf 'TRUSTIX_CAPTURE_FORWARDER_BATCH_DELAY=%s\n' "$capture_forwarder_batch_delay"
+  if [[ -n "$cpu_profile_dir" ]]; then
+    printf 'TRUSTIX_CPU_PROFILE_DIR=%s\n' "$cpu_profile_dir"
+  fi
+  if [[ -n "$secure_tix_tcp_inner_checksum_partial" ]]; then
+    printf 'TRUSTIX_TIX_TCP_SECURE_INNER_CHECKSUM_PARTIAL=%s\n' "$secure_tix_tcp_inner_checksum_partial"
+  fi
 }
 
 plaintext_tc_direct_daemon_env() {
@@ -1821,6 +1987,10 @@ EOF
 
 daemon_env() {
   common_daemon_env
+  if case_is_mixed_secure_kernel; then
+    mixed_secure_kernel_daemon_env
+    return
+  fi
   if [[ "$(case_fast_path)" == "secure_tix_tcp_kernel" ]]; then
     secure_tix_tcp_kernel_daemon_env
     return
@@ -1909,16 +2079,45 @@ daemon_env_exports() {
 
 start_daemon() {
   local node="$1"
-  local dir api_port peer_port trustixd env_exports
+  local dir api_port peer_port trustixd env_exports unit
   dir="$(remote_dir "$node")"
   api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
   peer_port="$(node_value "$node" "$peer_a_port" "$peer_b_port")"
   trustixd="$(node_bin "$node" trustixd)"
   env_exports="$(daemon_env_exports)"
+  unit="$(daemon_unit_name "$node")"
 run_node "$node" "set -Eeuo pipefail
 cd $(remote_quote "$dir")
-rm -f trustixd.pid logs/trustixd.log
-if command -v nohup >/dev/null 2>&1; then
+rm -f trustixd.pid trustixd.unit logs/trustixd.log
+if [ $(remote_quote "$daemon_supervisor") = systemd ]; then
+  systemctl stop $(remote_quote "$unit") >/dev/null 2>&1 || true
+  systemctl reset-failed $(remote_quote "$unit") >/dev/null 2>&1 || true
+  systemd-run --quiet --collect \
+    --unit $(remote_quote "$unit") \
+    --property=Restart=always \
+    --property=RestartSec=${daemon_restart_sec}s \
+    --property=$(remote_quote "StandardOutput=append:${dir}/logs/trustixd.log") \
+    --property=$(remote_quote "StandardError=append:${dir}/logs/trustixd.log") \
+    env ${env_exports} $(remote_quote "$trustixd") \
+      -config $(remote_quote "${dir}/config.yaml") \
+      -data-dir $(remote_quote "${dir}/data") \
+      -api 127.0.0.1:${api_port} \
+      -peer-api 0.0.0.0:${peer_port} \
+      -dataplane $(remote_quote "$dataplane_mode")
+  printf '%s\n' $(remote_quote "$unit") >trustixd.unit
+  pid=0
+  for _ in \$(seq 1 40); do
+    pid=\$(systemctl show --property=MainPID --value $(remote_quote "$unit") 2>/dev/null || true)
+    case \"\$pid\" in ''|0|*[!0-9]*) sleep 0.25 ;; *) break ;; esac
+  done
+  case \"\$pid\" in
+    ''|0|*[!0-9]*)
+      systemctl --no-pager --full status $(remote_quote "$unit") >&2 || true
+      exit 1
+      ;;
+  esac
+  printf '%s\n' \"\$pid\" >trustixd.pid
+elif command -v nohup >/dev/null 2>&1; then
   nohup env ${env_exports} $(remote_quote "$trustixd") \\
     -config $(remote_quote "${dir}/config.yaml") \\
     -data-dir $(remote_quote "${dir}/data") \\
@@ -1943,22 +2142,36 @@ else
     -dataplane $(remote_quote "$dataplane_mode") \\
     >$(remote_quote "${dir}/logs/trustixd.log") 2>&1 </dev/null &
 fi
-echo \$! >$(remote_quote "${dir}/trustixd.pid")
+if [ $(remote_quote "$daemon_supervisor") != systemd ]; then
+  echo \$! >$(remote_quote "${dir}/trustixd.pid")
+fi
 "
 }
 
 wait_for_api() {
   local node="$1"
-  local dir api_port
+  local dir api_port unit
   dir="$(remote_dir "$node")"
   api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
+  unit="$(daemon_unit_name "$node")"
   run_node "$node" "set -Eeuo pipefail
 pid=\$(cat $(remote_quote "${dir}/trustixd.pid"))
 for _ in \$(seq 1 ${daemon_ready_attempts}); do
   if curl -fsS http://127.0.0.1:${api_port}/v1/status >/dev/null 2>&1; then
+    if [ $(remote_quote "$daemon_supervisor") = systemd ]; then
+      pid=\$(systemctl show --property=MainPID --value $(remote_quote "$unit") 2>/dev/null || true)
+      case \"\$pid\" in ''|0|*[!0-9]*) ;; *) printf '%s\n' \"\$pid\" >$(remote_quote "${dir}/trustixd.pid") ;; esac
+    fi
     exit 0
   fi
-  if ! kill -0 \"\$pid\" >/dev/null 2>&1; then
+  if [ $(remote_quote "$daemon_supervisor") = systemd ]; then
+    if ! systemctl is-active --quiet $(remote_quote "$unit"); then
+      systemctl --no-pager --full status $(remote_quote "$unit") >&2 || true
+      exit 1
+    fi
+    pid=\$(systemctl show --property=MainPID --value $(remote_quote "$unit") 2>/dev/null || true)
+    case \"\$pid\" in ''|0|*[!0-9]*) ;; *) printf '%s\n' \"\$pid\" >$(remote_quote "${dir}/trustixd.pid") ;; esac
+  elif ! kill -0 \"\$pid\" >/dev/null 2>&1; then
     sed -n '1,240p' $(remote_quote "${dir}/logs/trustixd.log") >&2 || true
     exit 1
   fi
@@ -2855,24 +3068,87 @@ run_iperf_bidirectional_artifacts() {
 
 stop_daemon() {
   local node="$1"
-  local dir
+  local dir unit
   dir="$(remote_dir "$node")"
+  unit="$(daemon_unit_name "$node")"
   run_node "$node" "set +e
-if [ -s $(remote_quote "${dir}/trustixd.pid") ]; then
-  pid=\$(cat $(remote_quote "${dir}/trustixd.pid"))
-  kill \"\$pid\" >/dev/null 2>&1 || true
+pid_file=$(remote_quote "${dir}/trustixd.pid")
+log_file=$(remote_quote "${dir}/logs/trustixd.log")
+shutdown_file=$(remote_quote "${dir}/logs/trustixd-shutdown.txt")
+status=0
+reason=clean
+pid=
+daemon_alive() {
+  [ -n \"\$pid\" ] || return 1
+  kill -0 \"\$pid\" >/dev/null 2>&1 || return 1
+  state=\$(awk '{print \$3}' \"/proc/\${pid}/stat\" 2>/dev/null || true)
+  [ \"\$state\" != Z ]
+}
+if [ $(remote_quote "$daemon_supervisor") = systemd ]; then
+  active_state=\$(systemctl show --property=ActiveState --value $(remote_quote "$unit") 2>/dev/null || true)
+  pid=\$(systemctl show --property=MainPID --value $(remote_quote "$unit") 2>/dev/null || true)
+  case \"\$pid\" in 0|*[!0-9]*) pid= ;; esac
+  if [ \"\$active_state\" != active ]; then
+    status=1
+    reason=unexpected-exit
+  fi
+  systemctl stop $(remote_quote "$unit") >/dev/null 2>&1 || {
+    status=1
+    reason=term-failed
+  }
   for _ in \$(seq 1 40); do
-    kill -0 \"\$pid\" >/dev/null 2>&1 || break
+    systemctl is-active --quiet $(remote_quote "$unit") || break
     sleep 1
   done
-  kill -KILL \"\$pid\" >/dev/null 2>&1 || true
+  if systemctl is-active --quiet $(remote_quote "$unit"); then
+    systemctl kill --kill-who=all --signal=KILL $(remote_quote "$unit") >/dev/null 2>&1 || true
+    status=124
+    reason=forced-kill
+  fi
+  systemctl reset-failed $(remote_quote "$unit") >/dev/null 2>&1 || true
+elif [ ! -s \"\$pid_file\" ]; then
+  status=1
+  reason=missing-pid
+else
+  pid=\$(cat \"\$pid_file\" 2>/dev/null || true)
+  case \"\$pid\" in
+    *[!0-9]*|'') status=1; reason=invalid-pid ;;
+  esac
 fi
+if [ $(remote_quote "$daemon_supervisor") != systemd ] && [ \"\$status\" -eq 0 ]; then
+  if ! daemon_alive; then
+    status=1
+    reason=unexpected-exit
+  else
+    kill \"\$pid\" >/dev/null 2>&1 || {
+      status=1
+      reason=term-failed
+    }
+  fi
+fi
+if [ $(remote_quote "$daemon_supervisor") != systemd ] && [ \"\$status\" -eq 0 ]; then
+  for _ in \$(seq 1 40); do
+    daemon_alive || break
+    sleep 1
+  done
+  if daemon_alive; then
+    kill -KILL \"\$pid\" >/dev/null 2>&1 || true
+    status=124
+    reason=forced-kill
+  fi
+fi
+if [ -f \"\$log_file\" ] && grep -Eiq 'SIGSEGV|segmentation violation|unexpected fault address|fatal error:|runtime: unexpected return pc|^panic:' \"\$log_file\"; then
+  status=139
+  reason=fatal-runtime-log
+fi
+printf 'status=%s reason=%s pid=%s\n' \"\$status\" \"\$reason\" \"\$pid\" >\"\$shutdown_file\"
+exit \"\$status\"
 "
 }
 
 cleanup_node() {
   local node="$1"
-  local dir lan_if host_ns trustixd api_port peer_port env_exports
+  local dir lan_if host_ns trustixd api_port peer_port env_exports unit
   dir="$(remote_dir "$node")"
   lan_if="$(node_value "$node" "$lan_if_a" "$lan_if_b")"
   host_ns="$(node_value "$node" "$host_ns_a" "$host_ns_b")"
@@ -2880,23 +3156,58 @@ cleanup_node() {
   api_port="$(node_value "$node" "$api_a_port" "$api_b_port")"
   peer_port="$(node_value "$node" "$peer_a_port" "$peer_b_port")"
   env_exports="$(daemon_env_exports)"
+  unit="$(daemon_unit_name "$node")"
   run_node "$node" "set +e
 ip_cmd=\$(command -v ip)
+cleanup_timeout=$(remote_quote "$cleanup_timeout")
+cleanup_timed_out=0
+mkdir -p $(remote_quote "${dir}/logs")
+cleanup_step() {
+  label=\$1
+  shift
+  \"\$@\" &
+  child=\$!
+  deadline=\$((SECONDS + cleanup_timeout))
+  while kill -0 \"\$child\" >/dev/null 2>&1; do
+    state=\$(awk '{print \$3}' \"/proc/\${child}/stat\" 2>/dev/null || true)
+    [ \"\$state\" = Z ] && break
+    if [ \"\$SECONDS\" -ge \"\$deadline\" ]; then
+      printf '%s label=%s pid=%s command=%s\\n' \"\$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"\$label\" \"\$child\" \"\$*\" >>$(remote_quote "${dir}/logs/cleanup-timeouts.log")
+      kill -TERM \"\$child\" >/dev/null 2>&1 || true
+      sleep 1
+      kill -KILL \"\$child\" >/dev/null 2>&1 || true
+      disown \"\$child\" >/dev/null 2>&1 || true
+      cleanup_timed_out=1
+      return 124
+    fi
+    sleep 1
+  done
+  wait \"\$child\"
+}
+if command -v systemctl >/dev/null 2>&1; then
+  cleanup_step systemd-stop systemctl stop $(remote_quote "$unit") >/dev/null 2>&1 || true
+  systemctl reset-failed $(remote_quote "$unit") >/dev/null 2>&1 || true
+fi
 if [ -x $(remote_quote "$trustixd") ] && [ -f $(remote_quote "${dir}/config.yaml") ]; then
-  env ${env_exports} $(remote_quote "$trustixd") -config $(remote_quote "${dir}/config.yaml") -data-dir $(remote_quote "${dir}/data") -api 127.0.0.1:${api_port} -peer-api 0.0.0.0:${peer_port} -dataplane $(remote_quote "$dataplane_mode") -cleanup-dataplane >>$(remote_quote "${dir}/logs/cleanup.log") 2>&1
+  cleanup_step trustixd-cleanup env ${env_exports} $(remote_quote "$trustixd") -config $(remote_quote "${dir}/config.yaml") -data-dir $(remote_quote "${dir}/data") -api 127.0.0.1:${api_port} -peer-api 0.0.0.0:${peer_port} -dataplane $(remote_quote "$dataplane_mode") -cleanup-dataplane >>$(remote_quote "${dir}/logs/cleanup.log") 2>&1 || true
 fi
 for pid in \$(\"\$ip_cmd\" netns pids $(remote_quote "$host_ns") 2>/dev/null || true); do kill \"\$pid\" >/dev/null 2>&1 || true; done
-if [ $(remote_quote "$unload_modules") = '1' ]; then
-  rmmod trustix_datapath >/dev/null 2>&1 || true
-  rmmod trustix_datapath_helpers >/dev/null 2>&1 || true
-  rmmod trustix_crypto >/dev/null 2>&1 || true
+if [ \"\$cleanup_timed_out\" -eq 0 ] && [ $(remote_quote "$unload_modules") = '1' ]; then
+  cleanup_step rmmod-trustix-datapath rmmod trustix_datapath >/dev/null 2>&1 || true
+  [ \"\$cleanup_timed_out\" -ne 0 ] || cleanup_step rmmod-trustix-datapath-helpers rmmod trustix_datapath_helpers >/dev/null 2>&1 || true
+  [ \"\$cleanup_timed_out\" -ne 0 ] || cleanup_step rmmod-trustix-crypto rmmod trustix_crypto >/dev/null 2>&1 || true
 fi
-\"\$ip_cmd\" netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
-\"\$ip_cmd\" link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
-if [ $(remote_quote "$keep_remote") != '1' ]; then
+if [ \"\$cleanup_timed_out\" -eq 0 ]; then
+  cleanup_step netns-del \"\$ip_cmd\" netns del $(remote_quote "$host_ns") >/dev/null 2>&1 || true
+fi
+if [ \"\$cleanup_timed_out\" -eq 0 ]; then
+  cleanup_step link-del \"\$ip_cmd\" link del $(remote_quote "$lan_if") >/dev/null 2>&1 || true
+fi
+if [ \"\$cleanup_timed_out\" -eq 0 ] && [ $(remote_quote "$keep_remote") != '1' ]; then
   rm -rf $(remote_quote "$dir")
   rm -f $(remote_quote "${dir}.kernel-log-start-uptime")
 fi
+[ \"\$cleanup_timed_out\" -eq 0 ]
 "
 }
 
@@ -2923,19 +3234,36 @@ fetch_all() {
 }
 
 cleanup_all() {
-  local rc=$?
+  local rc=$? cleanup_rc=0 node_cleanup_rc stop_rc
   set +e
   collect_all
-  stop_daemon a
-  stop_daemon b
+  stop_daemon a || {
+    stop_rc=$?
+    [[ "$rc" != "0" ]] || rc=$stop_rc
+  }
+  stop_daemon b || {
+    stop_rc=$?
+    [[ "$rc" != "0" ]] || rc=$stop_rc
+  }
   fetch_all
+  if [[ "$rc" != "0" && -n "${workdir:-}" && -d "$workdir" ]]; then
+    rm -f "$workdir/${case_name}.result"
+  fi
   if [[ "$rc" != "0" ]] && truthy "$preserve_on_failure"; then
     log "preserving remote state after failure because TRUSTIX_CROSS_HOST_PRESERVE_ON_FAILURE=1"
     release_pair_lock
     return "$rc"
   fi
-  cleanup_node a
-  cleanup_node b
+  cleanup_node a || cleanup_rc=$?
+  cleanup_node b || {
+    node_cleanup_rc=$?
+    [[ "$cleanup_rc" != "0" ]] || cleanup_rc=$node_cleanup_rc
+  }
+  if [[ "$cleanup_rc" != "0" ]]; then
+    log "cleanup timed out with status ${cleanup_rc}; preserving and fetching remote diagnostics"
+    fetch_all
+    [[ "$rc" != "0" ]] || rc=$cleanup_rc
+  fi
   if [[ "$keep_local" != "1" && -d "$workdir" ]]; then
     rm -rf "$workdir"
   fi

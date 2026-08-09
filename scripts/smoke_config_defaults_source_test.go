@@ -146,6 +146,30 @@ func TestModuleSmokesDiscoverPackagedTestsAndDisableStatefulGoTestCache(t *testi
 	}
 }
 
+func TestKernelModuleSmokeSelectsCryptoTestsForLoadedFastPath(t *testing.T) {
+	payload, err := os.ReadFile("linux-kernel-module-smoke.sh")
+	if err != nil {
+		t.Fatalf("read linux-kernel-module-smoke.sh: %v", err)
+	}
+	source := string(payload)
+	for _, want := range []string{
+		`provider_roundtrip_tests="TestKernelCryptoProviderObjectSyntheticContextLifecycle|TestKernelCryptoProviderFrameSealOpenAndReplay|TestKernelCryptoProviderFrameSealOpenAES128|TestKernelCryptoProviderFrameSealOpenVariableSizes|TestTIXTCPKernelCryptoXDPOpensFrameAndRejectsReplay"`,
+		`direct_roundtrip_tests="TestKernelUDPTCSecureDirectObjectsLoadWithKernelDirectKfunc|TestTIXTCPKernelCryptoXDPDirectOpenObjectOpensFrame"`,
+		`roundtrip_tests="${TRUSTIX_KERNEL_ROUNDTRIP_TESTS:-}"`,
+		`select_roundtrip_tests()`,
+		`elif simd_kfunc_fastpath_requested; then`,
+		`roundtrip_mode="direct-slot"`,
+		`roundtrip_tests="$direct_roundtrip_tests"`,
+		`roundtrip_mode="context-provider"`,
+		`roundtrip_tests="$provider_roundtrip_tests"`,
+		"require_linux_root\n  select_roundtrip_tests\n  build_and_load_module",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("linux-kernel-module-smoke.sh missing mode-aware crypto test selection %q", want)
+		}
+	}
+}
+
 func TestReleaseSmokeUnloadsOnlyModulesItIntroduced(t *testing.T) {
 	payload, err := os.ReadFile("release-smoke-linux.sh")
 	if err != nil {
@@ -221,5 +245,23 @@ func TestLinuxE2ERequiresKernelTransportForAFXDPTransports(t *testing.T) {
 	want := "if is_af_xdp_transport || is_iptunnel_transport || tix_tcp_direct_enabled || kernel_plaintext_direct_fastpath_enabled; then"
 	if !strings.Contains(string(payload), want) {
 		t.Fatalf("linux-e2e-smoke.sh must require kernel transport for AF_XDP transports with %q", want)
+	}
+}
+
+func TestLinuxE2ESettlesHotStatsBeforeCollection(t *testing.T) {
+	payload, err := os.ReadFile("linux-e2e-smoke.sh")
+	if err != nil {
+		t.Fatalf("read linux-e2e-smoke.sh: %v", err)
+	}
+	source := string(payload)
+	for _, want := range []string{
+		`observability_settle_seconds="${TRUSTIX_E2E_OBSERVABILITY_SETTLE_SECONDS:-1}"`,
+		`settle_observability_stats()`,
+		`sleep "$observability_settle_seconds"`,
+		"settle_observability_stats\n  collect_api ix-a",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("linux-e2e-smoke.sh missing hot-stat cache settle guard %q", want)
+		}
 	}
 }

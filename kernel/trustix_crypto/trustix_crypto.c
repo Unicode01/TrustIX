@@ -13,6 +13,7 @@
 #define TRUSTIX_DEVICE_ONLY 0
 #endif
 
+#include <linux/bitmap.h>
 #include <linux/completion.h>
 #include <linux/cpumask.h>
 #include <linux/crypto.h>
@@ -120,6 +121,7 @@ trustix_bpf_ctx_skb(struct __sk_buff *ctx)
 #endif
 
 static bool trustix_kfunc_simd_irq_fpu_fastpath;
+static bool trustix_datapath_simd_irq_fpu_fastpath;
 
 #if TRUSTIX_X86_SIMD
 #include <asm/cpufeature.h>
@@ -128,6 +130,8 @@ static bool trustix_kfunc_simd_irq_fpu_fastpath;
 
 #define TRUSTIX_AEAD_NAME "aead"
 #define TRUSTIX_GCM_AES "gcm(aes)"
+#define TRUSTIX_GENERIC_GCM_AES \
+	"gcm_base(ctr(aes-generic),ghash-generic)"
 #define TRUSTIX_INTERNAL_GCM_AES "__gcm(aes)"
 #define TRUSTIX_X86_GCM_AESNI_AVX "__generic-gcm-aesni-avx"
 #define TRUSTIX_X86_GCM_AESNI "__generic-gcm-aesni"
@@ -144,8 +148,9 @@ static bool trustix_kfunc_simd_irq_fpu_fastpath;
 #define TRUSTIX_AEAD_IOC_DIRECT_ANY_SLOT 0xffffffffU
 #define TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT TRUSTIX_AEAD_IOC_FLAG_DECRYPT
 #define TRUSTIX_AEAD_IOC_DIRECT_FLAG_AESNI BIT(1)
+#define TRUSTIX_AEAD_IOC_DIRECT_FLAG_OWNER BIT(2)
 #define TRUSTIX_AEAD_IOC_DIRECT_FLAG_READY BIT(31)
-#define TRUSTIX_AEAD_MODULE_ABI_VERSION 4
+#define TRUSTIX_AEAD_MODULE_ABI_VERSION 5
 #define TRUSTIX_AEAD_FEATURE_CRYPTO_AEAD BIT_ULL(0)
 #define TRUSTIX_AEAD_FEATURE_DEVICE_AEAD BIT_ULL(1)
 #define TRUSTIX_AEAD_FEATURE_KFUNC_TC BIT_ULL(2)
@@ -155,9 +160,9 @@ static bool trustix_kfunc_simd_irq_fpu_fastpath;
 #define TRUSTIX_SKB_CB_RX_NEXT_HOP 0
 
 #if TRUSTIX_X86_SIMD
-static bool trustix_aead_fpu_begin(void)
+static bool trustix_aead_fpu_begin_allowed(bool allow_non_task)
 {
-	if (!in_task() && !READ_ONCE(trustix_kfunc_simd_irq_fpu_fastpath))
+	if (!in_task() && !allow_non_task)
 		return false;
 	if (!irq_fpu_usable())
 		return false;
@@ -168,6 +173,18 @@ static bool trustix_aead_fpu_begin(void)
 	}
 	kernel_fpu_begin();
 	return true;
+}
+
+static bool trustix_aead_fpu_begin(void)
+{
+	return trustix_aead_fpu_begin_allowed(
+		READ_ONCE(trustix_kfunc_simd_irq_fpu_fastpath));
+}
+
+static bool trustix_aead_datapath_fpu_begin(void)
+{
+	return trustix_aead_fpu_begin_allowed(
+		READ_ONCE(trustix_datapath_simd_irq_fpu_fastpath));
 }
 
 static void trustix_aead_fpu_end(void)
@@ -277,9 +294,41 @@ struct trustix_aead_direct_batch_op {
 	u8 nonce[12];
 };
 
+struct trustix_aead_direct_open_replay_op {
+	const u8 *src;
+	u8 *dst;
+	u32 cipher_len;
+	u8 nonce[12];
+	u64 sequence;
+};
+
+#define TRUSTIX_AEAD_DIRECT_REPLAY_MAX 65536U
+#define TRUSTIX_AEAD_DIRECT_REPLAY_WORDS \
+	(TRUSTIX_AEAD_DIRECT_REPLAY_MAX / 64U)
+#define TRUSTIX_AEAD_DIRECT_REPLAY_BATCH_MAX 64U
+#define TRUSTIX_AEAD_DIRECT_TX_KERNEL_BASE BIT_ULL(63)
+
 int trustix_kernel_direct_seal_batch(u32 slot_id,
 				     const struct trustix_aead_direct_batch_op *ops,
 				     u32 count);
+int trustix_kernel_direct_seal_batch_generation(
+	u32 slot_id, u64 generation,
+	const struct trustix_aead_direct_batch_op *ops, u32 count);
+int trustix_kernel_direct_reserve_sequences(u32 slot_id, u64 floor,
+					    u32 count, u64 *first,
+					    u64 *generation);
+int trustix_kernel_direct_slot_generation(u32 slot_id, bool decrypt,
+					  u64 *generation);
+int trustix_kernel_direct_open_replay(u32 slot_id, u64 generation,
+				      const u8 *src, u8 *dst, u32 cipher_len,
+				      const u8 *nonce, u64 sequence,
+				      u64 replay_floor, u32 replay_window);
+int trustix_kernel_direct_open_replay_batch(
+	u32 slot_id, u64 generation,
+	const struct trustix_aead_direct_open_replay_op *ops, u32 count,
+	u64 replay_floor, u32 replay_window);
+bool trustix_kernel_direct_datapath_ready(void);
+int trustix_kernel_direct_datapath_selftest(void);
 
 #endif
 
@@ -366,7 +415,7 @@ MODULE_PARM_DESC(experimental_aesni_kfunc,
 static bool trustix_aesni_agg_ghash = true;
 module_param_named(aesni_agg_ghash, trustix_aesni_agg_ghash, bool, 0644);
 MODULE_PARM_DESC(aesni_agg_ghash,
-		 "Use 4-block aggregated GHASH in the AES-NI one-packet BPF path; set to 0 for the older serial GHASH loop");
+		 "Use aggregated GHASH in the AES-NI fast path; set to 0 for the older serial GHASH loop");
 
 static bool trustix_kfunc_fastpath_stats;
 module_param_named(kfunc_fastpath_stats, trustix_kfunc_fastpath_stats, bool, 0644);
@@ -388,6 +437,22 @@ module_param_named(kfunc_simd_irq_fpu_fastpath,
 MODULE_PARM_DESC(kfunc_simd_irq_fpu_fastpath,
 		 "Allow TrustIX one-packet BPF crypto callbacks to enter explicit SIMD/FPU outside task context when irq_fpu_usable permits it; off by default and intended only for controlled TC/XDP soak validation");
 
+static bool trustix_datapath_simd_fastpath;
+module_param_named(datapath_simd_fastpath,
+		   trustix_datapath_simd_fastpath, bool, 0644);
+MODULE_PARM_DESC(datapath_simd_fastpath,
+		 "Allow the TrustIX full kernel datapath to use direct AES-GCM SIMD/FPU fast paths; independent from TC/XDP kfunc SIMD policy");
+
+module_param_named(datapath_simd_irq_fpu_fastpath,
+		   trustix_datapath_simd_irq_fpu_fastpath, bool, 0644);
+MODULE_PARM_DESC(datapath_simd_irq_fpu_fastpath,
+		 "Allow the TrustIX full kernel datapath to enter SIMD/FPU outside task context when irq_fpu_usable permits it");
+
+static bool trustix_datapath_vaes = true;
+module_param_named(datapath_vaes, trustix_datapath_vaes, bool, 0644);
+MODULE_PARM_DESC(datapath_vaes,
+		 "Use VAES/VPCLMUL for full kernel datapath AES-GCM batches when runtime CPU support is available");
+
 static bool trustix_kfunc_direct_slot_fastpath = true;
 module_param_named(kfunc_direct_slot_fastpath,
 		   trustix_kfunc_direct_slot_fastpath, bool, 0644);
@@ -402,7 +467,7 @@ MODULE_PARM_DESC(vaes_fused_ghash,
 static bool trustix_vaes_agg_ghash = true;
 module_param_named(vaes_agg_ghash, trustix_vaes_agg_ghash, bool, 0644);
 MODULE_PARM_DESC(vaes_agg_ghash,
-		 "Use 4-block aggregated GHASH in the VAES prepared-batch path; set to 0 for the older split GHASH loop");
+		 "Use aggregated GHASH in the VAES prepared-batch path; set to 0 for the older split GHASH loop");
 
 
 static inline void trustix_aead_wipe_fastpath(void *ptr, size_t len)
@@ -643,6 +708,9 @@ static void trustix_direct_kfunc_record_error(
 {
 	if (!trustix_kfunc_fastpath_stats)
 		return;
+	/* Generation-aware callers account retired slots as stale state. */
+	if (ret == -ESTALE)
+		return;
 
 	this_cpu_inc(trustix_direct_kfunc_errors);
 	switch (site) {
@@ -708,21 +776,35 @@ struct trustix_aead_tfm {
 	u8 vaes_rk[15][16] __aligned(16);
 	u8 vaes_shash[16] __aligned(16);
 	u8 vaes_shash4[4][16] __aligned(16);
+	u8 vaes_shash8[8][16] __aligned(16);
 	int vaes_rounds;
 	bool vaes_ready;
 #endif
 };
 
+struct trustix_aead_file;
+
 struct trustix_aead_direct_slot {
 	struct rcu_head rcu;
+	struct trustix_aead_file *owner;
 	u32 slot;
 	u32 flags;
 	u32 key_len;
+	u64 generation;
+	atomic64_t tx_sequence;
+	spinlock_t replay_lock;
+	u64 replay_floor;
+	u64 replay_last_sequence;
+	u64 *replay_seen;
+	u64 *replay_blocks;
+	u32 replay_window;
+	bool replay_initialized;
 #if TRUSTIX_X86_SIMD
 	u8 rk[15][16] __aligned(16);
 	u8 h[16] __aligned(16);
 	u8 shash[16] __aligned(16);
 	u8 shash4[4][16] __aligned(16);
+	u8 shash8[8][16] __aligned(16);
 	int rounds;
 	bool aesni_ready;
 	bool vaes_ready;
@@ -731,10 +813,12 @@ struct trustix_aead_direct_slot {
 
 #if TRUSTIX_X86_SIMD
 struct trustix_aead_direct_snapshot {
+	u64 generation;
 	u8 rk[15][16] __aligned(16);
 	u8 h[16] __aligned(16);
 	u8 shash[16] __aligned(16);
 	u8 shash4[4][16] __aligned(16);
+	u8 shash8[8][16] __aligned(16);
 	int rounds;
 	bool aesni_ready;
 	bool vaes_ready;
@@ -750,6 +834,7 @@ struct trustix_aead_ioc_scratch {
 
 struct trustix_aead_file {
 	struct mutex lock;
+	DECLARE_BITMAP(direct_slots, TRUSTIX_AEAD_IOC_DIRECT_MAX_SLOTS);
 	void *ctx;
 	struct trustix_aead_ioc_scratch scratch;
 	void *pool;
@@ -769,6 +854,16 @@ struct trustix_aead_file {
 
 static DEFINE_MUTEX(trustix_direct_slots_lock);
 static struct trustix_aead_direct_slot __rcu *trustix_direct_slots[TRUSTIX_AEAD_IOC_DIRECT_MAX_SLOTS];
+static atomic64_t trustix_direct_slot_generation = ATOMIC64_INIT(0);
+static unsigned int trustix_direct_slots_active;
+module_param_named(direct_slots_active, trustix_direct_slots_active, uint, 0444);
+MODULE_PARM_DESC(direct_slots_active,
+		 "Currently allocated TrustIX direct AEAD slots");
+static unsigned long trustix_direct_owner_release_slots;
+module_param_named(direct_owner_release_slots,
+		   trustix_direct_owner_release_slots, ulong, 0444);
+MODULE_PARM_DESC(direct_owner_release_slots,
+		 "TrustIX direct AEAD slots reclaimed when their owner fd closed");
 
 struct trustix_aead_wait {
 	struct completion completion;
@@ -829,6 +924,39 @@ static void trustix_aead_direct_free_rcu(struct rcu_head *rcu)
 	struct trustix_aead_direct_slot *slot;
 
 	slot = container_of(rcu, struct trustix_aead_direct_slot, rcu);
+	if (slot->replay_seen) {
+		memzero_explicit(slot->replay_seen,
+				 sizeof(*slot->replay_seen) *
+					 TRUSTIX_AEAD_DIRECT_REPLAY_WORDS);
+		kfree(slot->replay_seen);
+	}
+	if (slot->replay_blocks) {
+		memzero_explicit(slot->replay_blocks,
+				 sizeof(*slot->replay_blocks) *
+					 TRUSTIX_AEAD_DIRECT_REPLAY_WORDS);
+		kfree(slot->replay_blocks);
+	}
+	memzero_explicit(slot, sizeof(*slot));
+	kfree(slot);
+}
+
+static void
+trustix_aead_direct_free_unpublished(struct trustix_aead_direct_slot *slot)
+{
+	if (!slot)
+		return;
+	if (slot->replay_seen) {
+		memzero_explicit(slot->replay_seen,
+				 sizeof(*slot->replay_seen) *
+					 TRUSTIX_AEAD_DIRECT_REPLAY_WORDS);
+		kfree(slot->replay_seen);
+	}
+	if (slot->replay_blocks) {
+		memzero_explicit(slot->replay_blocks,
+				 sizeof(*slot->replay_blocks) *
+					 TRUSTIX_AEAD_DIRECT_REPLAY_WORDS);
+		kfree(slot->replay_blocks);
+	}
 	memzero_explicit(slot, sizeof(*slot));
 	kfree(slot);
 }
@@ -862,7 +990,14 @@ static int trustix_aead_aesni_seal_one(const u8 rk[15][16], int rounds,
 static int trustix_aead_aesni_seal4_prepared(const u8 rk[15][16], int rounds,
 					     const u8 shash[16],
 					     const u8 shash4[4][16],
+					     const u8 shash8[8][16],
 					     struct trustix_aead_prepared_op *ops);
+static int trustix_aead_aesni_open4_prepared(const u8 rk[15][16], int rounds,
+					     const u8 shash[16],
+					     const u8 shash4[4][16],
+					     const u8 shash8[8][16],
+					     struct trustix_aead_prepared_op *ops,
+					     u8 *failed_mask);
 static int trustix_aead_aesni_open_one(const u8 rk[15][16], int rounds,
 				       const u8 shash[16],
 				       const u8 shash4[4][16],
@@ -949,11 +1084,12 @@ static struct crypto_aead *trustix_alloc_kernel(const char *algo)
 
 	/*
 	 * BPF program contexts cannot wait for async completion, and explicit
-	 * x86 SIMD/FPU use is not safe on every TC/XDP call path. Prefer the
-	 * internal synchronous AES-GCM implementation for BPF crypto contexts.
+	 * x86 SIMD/FPU use is not safe on every TC/XDP call path. Pin AES-GCM to
+	 * the public scalar implementation; internal algorithms are intentionally
+	 * hidden from normal crypto_alloc_aead() callers.
 	 */
 	if (!strcmp(algo, TRUSTIX_GCM_AES))
-		return crypto_alloc_aead(TRUSTIX_INTERNAL_GCM_AES, 0,
+		return crypto_alloc_aead(TRUSTIX_GENERIC_GCM_AES, 0,
 					 CRYPTO_ALG_ASYNC);
 
 	tfm = crypto_alloc_aead(algo, 0, CRYPTO_ALG_ASYNC);
@@ -1092,6 +1228,7 @@ static void trustix_aead_free_tfm(void *tfm)
 	memzero_explicit(ctx->vaes_rk, sizeof(ctx->vaes_rk));
 	memzero_explicit(ctx->vaes_shash, sizeof(ctx->vaes_shash));
 	memzero_explicit(ctx->vaes_shash4, sizeof(ctx->vaes_shash4));
+	memzero_explicit(ctx->vaes_shash8, sizeof(ctx->vaes_shash8));
 #endif
 	kfree(ctx);
 }
@@ -1099,7 +1236,7 @@ static void trustix_aead_free_tfm(void *tfm)
 #if TRUSTIX_ENABLE_BPF_CRYPTO
 static int trustix_aead_has_algo(const char *algo)
 {
-	struct crypto_aead *tfm = trustix_alloc_sync_aead(algo);
+	struct crypto_aead *tfm = trustix_alloc_kernel(algo);
 
 	if (IS_ERR(tfm))
 		return 0;
@@ -3208,6 +3345,25 @@ static void trustix_ghash_prepare_shash4(const u8 h[16], u8 shash4[4][16])
 	memzero_explicit(block, sizeof(block));
 }
 
+static void trustix_ghash_prepare_shash8(const u8 h[16], u8 shash8[8][16])
+{
+	struct trustix_u128_be h_power[8];
+	struct trustix_u128_be h_be;
+	u8 block[16];
+	int i;
+
+	trustix_load_u128_be(&h_be, h);
+	h_power[0] = h_be;
+	for (i = 1; i < 8; i++)
+		trustix_gf128_mul(&h_power[i], h_power[i - 1], h_be);
+	for (i = 0; i < 8; i++) {
+		trustix_store_u128_be(block, h_power[7 - i]);
+		trustix_ghash_prepare_shash(block, shash8[i]);
+	}
+
+	memzero_explicit(block, sizeof(block));
+}
+
 static TRUSTIX_VAES_ASM_TARGET void
 trustix_ghash_block_clmul_asm(u8 y[16], const u8 shash[16],
 			      const u8 block[16])
@@ -3481,6 +3637,46 @@ trustix_ghash4_blocks_clmul_asm(u8 y0[16], u8 y1[16], u8 y2[16], u8 y3[16],
 	TRUSTIX_GHASH_AGG4_MUL_ACCUM \
 	TRUSTIX_GHASH_AGG4_REDUCE_STORE(y)
 
+#define TRUSTIX_GHASH_AGG8_STREAM(y, ptr) \
+	"pxor %%xmm0, %%xmm0\n\t" \
+	"pxor %%xmm2, %%xmm2\n\t" \
+	"movdqu 0(%[" y "]), %%xmm6\n\t" \
+	"pshufb %%xmm5, %%xmm6\n\t" \
+	"movdqu 0(%[" ptr "]), %%xmm7\n\t" \
+	"pshufb %%xmm5, %%xmm7\n\t" \
+	"pxor %%xmm7, %%xmm6\n\t" \
+	"movdqu 0(%[shash8]), %%xmm1\n\t" \
+	TRUSTIX_GHASH_AGG4_MUL_ACCUM \
+	"movdqu 16(%[" ptr "]), %%xmm6\n\t" \
+	"pshufb %%xmm5, %%xmm6\n\t" \
+	"movdqu 16(%[shash8]), %%xmm1\n\t" \
+	TRUSTIX_GHASH_AGG4_MUL_ACCUM \
+	"movdqu 32(%[" ptr "]), %%xmm6\n\t" \
+	"pshufb %%xmm5, %%xmm6\n\t" \
+	"movdqu 32(%[shash8]), %%xmm1\n\t" \
+	TRUSTIX_GHASH_AGG4_MUL_ACCUM \
+	"movdqu 48(%[" ptr "]), %%xmm6\n\t" \
+	"pshufb %%xmm5, %%xmm6\n\t" \
+	"movdqu 48(%[shash8]), %%xmm1\n\t" \
+	TRUSTIX_GHASH_AGG4_MUL_ACCUM \
+	"movdqu 64(%[" ptr "]), %%xmm6\n\t" \
+	"pshufb %%xmm5, %%xmm6\n\t" \
+	"movdqu 64(%[shash8]), %%xmm1\n\t" \
+	TRUSTIX_GHASH_AGG4_MUL_ACCUM \
+	"movdqu 80(%[" ptr "]), %%xmm6\n\t" \
+	"pshufb %%xmm5, %%xmm6\n\t" \
+	"movdqu 80(%[shash8]), %%xmm1\n\t" \
+	TRUSTIX_GHASH_AGG4_MUL_ACCUM \
+	"movdqu 96(%[" ptr "]), %%xmm6\n\t" \
+	"pshufb %%xmm5, %%xmm6\n\t" \
+	"movdqu 96(%[shash8]), %%xmm1\n\t" \
+	TRUSTIX_GHASH_AGG4_MUL_ACCUM \
+	"movdqu 112(%[" ptr "]), %%xmm6\n\t" \
+	"pshufb %%xmm5, %%xmm6\n\t" \
+	"movdqu 112(%[shash8]), %%xmm1\n\t" \
+	TRUSTIX_GHASH_AGG4_MUL_ACCUM \
+	TRUSTIX_GHASH_AGG4_REDUCE_STORE(y)
+
 static TRUSTIX_VAES_ASM_TARGET void
 trustix_ghash_agg4_blocks_clmul_asm(u8 y[16], const u8 shash4[4][16],
 				    const u8 *blocks, unsigned int groups)
@@ -3541,6 +3737,44 @@ trustix_ghash4_agg4_blocks_clmul_asm(u8 y0[16], u8 y1[16], u8 y2[16],
 		  "xmm6", "xmm7", "cc", "memory");
 }
 
+static TRUSTIX_VAES_ASM_TARGET void
+trustix_ghash4_agg8_blocks_clmul_asm(u8 y0[16], u8 y1[16], u8 y2[16],
+				     u8 y3[16], const u8 shash8[8][16],
+				     const u8 *blocks0, const u8 *blocks1,
+				     const u8 *blocks2, const u8 *blocks3,
+				     unsigned int groups)
+{
+	const u8 *p0 = blocks0;
+	const u8 *p1 = blocks1;
+	const u8 *p2 = blocks2;
+	const u8 *p3 = blocks3;
+
+	asm volatile(
+		"movdqa 0(%[bswap]), %%xmm5\n\t"
+		"testl %[groups], %[groups]\n\t"
+		"jz 2f\n\t"
+		"1:\n\t"
+		TRUSTIX_GHASH_AGG8_STREAM("y0", "p0")
+		TRUSTIX_GHASH_AGG8_STREAM("y1", "p1")
+		TRUSTIX_GHASH_AGG8_STREAM("y2", "p2")
+		TRUSTIX_GHASH_AGG8_STREAM("y3", "p3")
+		"addq $128, %[p0]\n\t"
+		"addq $128, %[p1]\n\t"
+		"addq $128, %[p2]\n\t"
+		"addq $128, %[p3]\n\t"
+		"decl %[groups]\n\t"
+		"jnz 1b\n\t"
+		"2:\n\t"
+		: [p0] "+r" (p0), [p1] "+r" (p1), [p2] "+r" (p2),
+		  [p3] "+r" (p3), [groups] "+r" (groups)
+		: [y0] "r" (y0), [y1] "r" (y1), [y2] "r" (y2),
+		  [y3] "r" (y3), [shash8] "r" (shash8),
+		  [bswap] "r" (trustix_clmul_bswap)
+		: "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5",
+		  "xmm6", "xmm7", "cc", "memory");
+}
+
+#undef TRUSTIX_GHASH_AGG8_STREAM
 #undef TRUSTIX_GHASH_AGG4_STREAM
 #undef TRUSTIX_GHASH_AGG4_REDUCE_STORE
 #undef TRUSTIX_GHASH_AGG4_MUL_ACCUM
@@ -4635,6 +4869,7 @@ trustix_aead_aesni_open_one(const u8 rk[15][16], int rounds,
 static int trustix_aead_aesni_seal4_prepared(const u8 rk[15][16], int rounds,
 					     const u8 shash[16],
 					     const u8 shash4[4][16],
+					     const u8 shash8[8][16],
 					     struct trustix_aead_prepared_op *ops)
 {
 	u8 y0[16] = {};
@@ -4693,10 +4928,10 @@ static int trustix_aead_aesni_seal4_prepared(const u8 rk[15][16], int rounds,
 					    ops[3].src + off,
 					    ops[3].dst + off);
 		if (trustix_aesni_agg_ghash) {
-			trustix_ghash4_agg4_blocks_clmul_asm(
-				y0, y1, y2, y3, shash4,
+			trustix_ghash4_agg8_blocks_clmul_asm(
+				y0, y1, y2, y3, shash8,
 				ops[0].dst + off, ops[1].dst + off,
-				ops[2].dst + off, ops[3].dst + off, 2);
+				ops[2].dst + off, ops[3].dst + off, 1);
 		} else {
 			trustix_ghash4_blocks_clmul_asm(
 				y0, y1, y2, y3, shash,
@@ -4831,10 +5066,12 @@ static int trustix_aead_aesni_seal4_prepared(const u8 rk[15][16], int rounds,
 	return 0;
 }
 
-static int trustix_aead_vaes_open4_prepared(const u8 rk[15][16], int rounds,
-					    const u8 shash[16],
-					    const u8 shash4[4][16],
-					    struct trustix_aead_prepared_op *ops)
+static int trustix_aead_x86_open4_prepared(const u8 rk[15][16], int rounds,
+					   const u8 shash[16],
+					   const u8 shash4[4][16],
+					   const u8 shash8[8][16],
+					   struct trustix_aead_prepared_op *ops,
+					   bool use_vaes, u8 *failed_mask)
 {
 	u8 y0[16] = {};
 	u8 y1[16] = {};
@@ -4856,8 +5093,13 @@ static int trustix_aead_vaes_open4_prepared(const u8 rk[15][16], int rounds,
 	unsigned int cipher_len;
 	unsigned int off = 0;
 	u32 ctr = 2;
+	bool aggregate_ghash = use_vaes ? READ_ONCE(trustix_vaes_agg_ghash) :
+					       READ_ONCE(trustix_aesni_agg_ghash);
+	u8 failed = 0;
 	int ret = 0;
 
+	if (failed_mask)
+		*failed_mask = 0;
 	if (!ops || ops[0].in_len < TRUSTIX_AEAD_IOC_TAG_LEN)
 		return -EINVAL;
 	cipher_len = ops[0].in_len - TRUSTIX_AEAD_IOC_TAG_LEN;
@@ -4881,11 +5123,11 @@ static int trustix_aead_vaes_open4_prepared(const u8 rk[15][16], int rounds,
 	trustix_aes_encrypt1_asm(rk, rounds, tmp0, tag_mask3);
 
 	while (cipher_len - off >= 128) {
-		if (trustix_vaes_agg_ghash) {
-			trustix_ghash4_agg4_blocks_clmul_asm(
-				y0, y1, y2, y3, shash4,
+		if (aggregate_ghash) {
+			trustix_ghash4_agg8_blocks_clmul_asm(
+				y0, y1, y2, y3, shash8,
 				ops[0].src + off, ops[1].src + off,
-				ops[2].src + off, ops[3].src + off, 2);
+				ops[2].src + off, ops[3].src + off, 1);
 		} else {
 			trustix_ghash4_blocks_clmul_asm(
 				y0, y1, y2, y3, shash,
@@ -4897,24 +5139,43 @@ static int trustix_aead_vaes_open4_prepared(const u8 rk[15][16], int rounds,
 		trustix_ctr8_blocks(tmp1, ops[1].nonce, ctr);
 		trustix_ctr8_blocks(tmp2, ops[2].nonce, ctr);
 		trustix_ctr8_blocks(tmp3, ops[3].nonce, ctr);
-		trustix_aes_xor4x4_vaes_asm(
-			rk, rounds, tmp0, tmp1, tmp2, tmp3,
-			ops[0].src + off, ops[1].src + off,
-			ops[2].src + off, ops[3].src + off,
-			ops[0].dst + off, ops[1].dst + off,
-			ops[2].dst + off, ops[3].dst + off);
-		trustix_aes_xor4x4_vaes_asm(
-			rk, rounds, tmp0 + 64, tmp1 + 64, tmp2 + 64,
-			tmp3 + 64, ops[0].src + off + 64,
-			ops[1].src + off + 64, ops[2].src + off + 64,
-			ops[3].src + off + 64, ops[0].dst + off + 64,
-			ops[1].dst + off + 64, ops[2].dst + off + 64,
-			ops[3].dst + off + 64);
+		if (use_vaes) {
+			trustix_aes_xor4x4_vaes_asm(
+				rk, rounds, tmp0, tmp1, tmp2, tmp3,
+				ops[0].src + off, ops[1].src + off,
+				ops[2].src + off, ops[3].src + off,
+				ops[0].dst + off, ops[1].dst + off,
+				ops[2].dst + off, ops[3].dst + off);
+			trustix_aes_xor4x4_vaes_asm(
+				rk, rounds, tmp0 + 64, tmp1 + 64,
+				tmp2 + 64, tmp3 + 64,
+				ops[0].src + off + 64,
+				ops[1].src + off + 64,
+				ops[2].src + off + 64,
+				ops[3].src + off + 64,
+				ops[0].dst + off + 64,
+				ops[1].dst + off + 64,
+				ops[2].dst + off + 64,
+				ops[3].dst + off + 64);
+		} else {
+			trustix_aes_xor8_aesni_asm(
+				rk, rounds, tmp0, ops[0].src + off,
+				ops[0].dst + off);
+			trustix_aes_xor8_aesni_asm(
+				rk, rounds, tmp1, ops[1].src + off,
+				ops[1].dst + off);
+			trustix_aes_xor8_aesni_asm(
+				rk, rounds, tmp2, ops[2].src + off,
+				ops[2].dst + off);
+			trustix_aes_xor8_aesni_asm(
+				rk, rounds, tmp3, ops[3].src + off,
+				ops[3].dst + off);
+		}
 
 		off += 128;
 		ctr = 2 + off / 16;
 	}
-	while (cipher_len - off >= 32) {
+	while (use_vaes && cipher_len - off >= 32) {
 		trustix_ghash4_blocks_clmul_asm(y0, y1, y2, y3, shash,
 						 ops[0].src + off,
 						 ops[1].src + off,
@@ -4942,6 +5203,39 @@ static int trustix_aead_vaes_open4_prepared(const u8 rk[15][16], int rounds,
 					   ops[3].dst + off);
 
 		off += 32;
+		ctr = 2 + off / 16;
+	}
+	while (!use_vaes && cipher_len - off >= 64) {
+		if (aggregate_ghash) {
+			trustix_ghash4_agg4_blocks_clmul_asm(
+				y0, y1, y2, y3, shash4,
+				ops[0].src + off, ops[1].src + off,
+				ops[2].src + off, ops[3].src + off, 1);
+		} else {
+			trustix_ghash4_blocks_clmul_asm(
+				y0, y1, y2, y3, shash,
+				ops[0].src + off, ops[1].src + off,
+				ops[2].src + off, ops[3].src + off, 4);
+		}
+
+		trustix_ctr4_blocks(tmp0, ops[0].nonce, ctr);
+		trustix_aes_xor4_aesni_asm(rk, rounds, tmp0,
+					    ops[0].src + off,
+					    ops[0].dst + off);
+		trustix_ctr4_blocks(tmp0, ops[1].nonce, ctr);
+		trustix_aes_xor4_aesni_asm(rk, rounds, tmp0,
+					    ops[1].src + off,
+					    ops[1].dst + off);
+		trustix_ctr4_blocks(tmp0, ops[2].nonce, ctr);
+		trustix_aes_xor4_aesni_asm(rk, rounds, tmp0,
+					    ops[2].src + off,
+					    ops[2].dst + off);
+		trustix_ctr4_blocks(tmp0, ops[3].nonce, ctr);
+		trustix_aes_xor4_aesni_asm(rk, rounds, tmp0,
+					    ops[3].src + off,
+					    ops[3].dst + off);
+
+		off += 64;
 		ctr = 2 + off / 16;
 	}
 	while (cipher_len - off >= 16) {
@@ -5026,23 +5320,29 @@ static int trustix_aead_vaes_open4_prepared(const u8 rk[15][16], int rounds,
 	if (trustix_consttime_memneq(expected0, ops[0].src + cipher_len,
 				     TRUSTIX_AEAD_IOC_TAG_LEN)) {
 		memzero_explicit(ops[0].dst, ops[0].out_len);
+		failed |= BIT(0);
 		ret = -EBADMSG;
 	}
 	if (trustix_consttime_memneq(expected1, ops[1].src + cipher_len,
 				     TRUSTIX_AEAD_IOC_TAG_LEN)) {
 		memzero_explicit(ops[1].dst, ops[1].out_len);
+		failed |= BIT(1);
 		ret = -EBADMSG;
 	}
 	if (trustix_consttime_memneq(expected2, ops[2].src + cipher_len,
 				     TRUSTIX_AEAD_IOC_TAG_LEN)) {
 		memzero_explicit(ops[2].dst, ops[2].out_len);
+		failed |= BIT(2);
 		ret = -EBADMSG;
 	}
 	if (trustix_consttime_memneq(expected3, ops[3].src + cipher_len,
 				     TRUSTIX_AEAD_IOC_TAG_LEN)) {
 		memzero_explicit(ops[3].dst, ops[3].out_len);
+		failed |= BIT(3);
 		ret = -EBADMSG;
 	}
+	if (failed_mask)
+		*failed_mask = failed;
 
 	trustix_aead_wipe_fastpath(tmp0, sizeof(tmp0));
 	trustix_aead_wipe_fastpath(tmp1, sizeof(tmp1));
@@ -5060,9 +5360,32 @@ static int trustix_aead_vaes_open4_prepared(const u8 rk[15][16], int rounds,
 	return ret;
 }
 
+static int trustix_aead_aesni_open4_prepared(const u8 rk[15][16], int rounds,
+					     const u8 shash[16],
+					     const u8 shash4[4][16],
+					     const u8 shash8[8][16],
+					     struct trustix_aead_prepared_op *ops,
+					     u8 *failed_mask)
+{
+	return trustix_aead_x86_open4_prepared(rk, rounds, shash, shash4, shash8,
+					       ops, false, failed_mask);
+}
+
+static int trustix_aead_vaes_open4_prepared(const u8 rk[15][16], int rounds,
+					    const u8 shash[16],
+					    const u8 shash4[4][16],
+					    const u8 shash8[8][16],
+					    struct trustix_aead_prepared_op *ops,
+					    u8 *failed_mask)
+{
+	return trustix_aead_x86_open4_prepared(rk, rounds, shash, shash4, shash8,
+					       ops, true, failed_mask);
+}
+
 static int trustix_aead_vaes_seal4_prepared(const u8 rk[15][16], int rounds,
 					    const u8 shash[16],
 					    const u8 shash4[4][16],
+					    const u8 shash8[8][16],
 					    struct trustix_aead_prepared_op *ops)
 {
 	u8 y0[16] = {};
@@ -5160,10 +5483,10 @@ static int trustix_aead_vaes_seal4_prepared(const u8 rk[15][16], int rounds,
 				ops[3].dst + off + 64);
 
 			if (trustix_vaes_agg_ghash) {
-				trustix_ghash4_agg4_blocks_clmul_asm(
-					y0, y1, y2, y3, shash4,
+				trustix_ghash4_agg8_blocks_clmul_asm(
+					y0, y1, y2, y3, shash8,
 					ops[0].dst + off, ops[1].dst + off,
-					ops[2].dst + off, ops[3].dst + off, 2);
+					ops[2].dst + off, ops[3].dst + off, 1);
 			} else {
 				trustix_ghash4_blocks_clmul_asm(
 					y0, y1, y2, y3, shash,
@@ -5323,6 +5646,7 @@ static int trustix_aead_vaes_prepare_ctx(struct trustix_aead_tfm *ctx)
 	trustix_aead_fpu_end();
 	trustix_ghash_prepare_shash(h_bytes, ctx->vaes_shash);
 	trustix_ghash_prepare_shash4(h_bytes, ctx->vaes_shash4);
+	trustix_ghash_prepare_shash8(h_bytes, ctx->vaes_shash8);
 	ctx->vaes_ready = true;
 	memzero_explicit(h_bytes, sizeof(h_bytes));
 	return 0;
@@ -5351,6 +5675,7 @@ static int trustix_aead_direct_prepare(struct trustix_aead_direct_slot *slot,
 	memcpy(slot->h, h_bytes, sizeof(slot->h));
 	trustix_ghash_prepare_shash(h_bytes, slot->shash);
 	trustix_ghash_prepare_shash4(h_bytes, slot->shash4);
+	trustix_ghash_prepare_shash8(h_bytes, slot->shash8);
 	slot->key_len = key_len;
 	slot->aesni_ready = true;
 	slot->vaes_ready = trustix_vaes_available;
@@ -5382,6 +5707,7 @@ static int trustix_aead_vaes_seal_prepared_slice(struct trustix_aead_tfm *ctx,
 							      ctx->vaes_rounds,
 							      ctx->vaes_shash,
 							      ctx->vaes_shash4,
+							      ctx->vaes_shash8,
 							      &ops[i]);
 			if (!ret) {
 				trustix_aead_prepared_set_result(&ops[i], 0);
@@ -5425,8 +5751,10 @@ static int trustix_aead_vaes_open_prepared_slice(struct trustix_aead_tfm *ctx,
 						__u32 *successes)
 {
 	__u32 i;
+	__u32 j;
 	__u32 end = start + count;
 	__u32 ok = 0;
+	u8 failed_mask = 0;
 	int first_err = 0;
 	int ret;
 
@@ -5437,17 +5765,34 @@ static int trustix_aead_vaes_open_prepared_slice(struct trustix_aead_tfm *ctx,
 		return -EOPNOTSUPP;
 	for (i = start; i < end;) {
 		if (i + 4 <= end) {
+			failed_mask = 0;
 			ret = trustix_aead_vaes_open4_prepared(ctx->vaes_rk,
 							      ctx->vaes_rounds,
 							      ctx->vaes_shash,
 							      ctx->vaes_shash4,
-							      &ops[i]);
+							      ctx->vaes_shash8,
+							      &ops[i],
+							      &failed_mask);
 			if (!ret) {
 				trustix_aead_prepared_set_result(&ops[i], 0);
 				trustix_aead_prepared_set_result(&ops[i + 1], 0);
 				trustix_aead_prepared_set_result(&ops[i + 2], 0);
 				trustix_aead_prepared_set_result(&ops[i + 3], 0);
 				ok += 4;
+				i += 4;
+				continue;
+			}
+			if (ret == -EBADMSG && failed_mask) {
+				for (j = 0; j < 4; j++) {
+					int op_ret = failed_mask & BIT(j) ? ret : 0;
+
+					trustix_aead_prepared_set_result(&ops[i + j],
+								     op_ret);
+					if (!op_ret)
+						ok++;
+				}
+				if (!first_err)
+					first_err = ret;
 				i += 4;
 				continue;
 			}
@@ -5500,8 +5845,10 @@ static int trustix_aead_aesni_prepared_slice(struct trustix_aead_tfm *ctx,
 {
 	bool decrypt = flags & TRUSTIX_AEAD_IOC_FLAG_DECRYPT;
 	__u32 i;
+	__u32 j;
 	__u32 end = start + count;
 	__u32 ok = 0;
+	u8 failed_mask = 0;
 	int first_err = 0;
 	int ret;
 
@@ -5511,16 +5858,39 @@ static int trustix_aead_aesni_prepared_slice(struct trustix_aead_tfm *ctx,
 	if (!trustix_aead_fpu_begin())
 		return -EOPNOTSUPP;
 	for (i = start; i < end;) {
-		if (!decrypt && i + 4 <= end) {
-			ret = trustix_aead_aesni_seal4_prepared(
-				ctx->vaes_rk, ctx->vaes_rounds,
-				ctx->vaes_shash, ctx->vaes_shash4, &ops[i]);
+		if (i + 4 <= end) {
+			failed_mask = 0;
+			ret = decrypt ?
+				trustix_aead_aesni_open4_prepared(
+					ctx->vaes_rk, ctx->vaes_rounds,
+					ctx->vaes_shash, ctx->vaes_shash4,
+					ctx->vaes_shash8,
+					&ops[i], &failed_mask) :
+				trustix_aead_aesni_seal4_prepared(
+					ctx->vaes_rk, ctx->vaes_rounds,
+					ctx->vaes_shash, ctx->vaes_shash4,
+					ctx->vaes_shash8,
+					&ops[i]);
 			if (!ret) {
 				trustix_aead_prepared_set_result(&ops[i], 0);
 				trustix_aead_prepared_set_result(&ops[i + 1], 0);
 				trustix_aead_prepared_set_result(&ops[i + 2], 0);
 				trustix_aead_prepared_set_result(&ops[i + 3], 0);
 				ok += 4;
+				i += 4;
+				continue;
+			}
+			if (ret == -EBADMSG && failed_mask) {
+				for (j = 0; j < 4; j++) {
+					int op_ret = failed_mask & BIT(j) ? ret : 0;
+
+					trustix_aead_prepared_set_result(&ops[i + j],
+								     op_ret);
+					if (!op_ret)
+						ok++;
+				}
+				if (!first_err)
+					first_err = ret;
 				i += 4;
 				continue;
 			}
@@ -5599,7 +5969,8 @@ static int trustix_aead_direct_find_free_locked(u32 *slot_id)
 	return -ENOSPC;
 }
 
-static int trustix_aead_direct_set_key(u32 *slot_id, const u8 *key,
+static int trustix_aead_direct_set_key(struct trustix_aead_file *owner,
+				       u32 *slot_id, const u8 *key,
 				       unsigned int key_len, u32 flags)
 {
 #if TRUSTIX_X86_SIMD
@@ -5613,7 +5984,10 @@ static int trustix_aead_direct_set_key(u32 *slot_id, const u8 *key,
 	if (*slot_id != TRUSTIX_AEAD_IOC_DIRECT_ANY_SLOT &&
 	    *slot_id >= TRUSTIX_AEAD_IOC_DIRECT_MAX_SLOTS)
 		return -EINVAL;
-	if (flags & ~(TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT))
+	if (flags & ~(TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT |
+		      TRUSTIX_AEAD_IOC_DIRECT_FLAG_OWNER))
+		return -EINVAL;
+	if ((flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_OWNER) && !owner)
 		return -EINVAL;
 	if (!key || (key_len != 16 && key_len != 32))
 		return -EINVAL;
@@ -5621,11 +5995,30 @@ static int trustix_aead_direct_set_key(u32 *slot_id, const u8 *key,
 	slot = kzalloc(sizeof(*slot), GFP_KERNEL);
 	if (!slot)
 		return -ENOMEM;
-	slot->flags = flags;
+	slot->owner = (flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_OWNER) ? owner : NULL;
+	slot->flags = flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT;
+	slot->generation = (__u64)atomic64_inc_return(
+		&trustix_direct_slot_generation);
+	if (!slot->generation)
+		slot->generation = (__u64)atomic64_inc_return(
+			&trustix_direct_slot_generation);
+	atomic64_set(&slot->tx_sequence, 0);
+	spin_lock_init(&slot->replay_lock);
+	if (flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT) {
+		slot->replay_seen = kcalloc(
+			TRUSTIX_AEAD_DIRECT_REPLAY_WORDS,
+			sizeof(*slot->replay_seen), GFP_KERNEL);
+		slot->replay_blocks = kcalloc(
+			TRUSTIX_AEAD_DIRECT_REPLAY_WORDS,
+			sizeof(*slot->replay_blocks), GFP_KERNEL);
+		if (!slot->replay_seen || !slot->replay_blocks) {
+			trustix_aead_direct_free_unpublished(slot);
+			return -ENOMEM;
+		}
+	}
 	ret = trustix_aead_direct_prepare(slot, key, key_len);
 	if (ret) {
-		memzero_explicit(slot, sizeof(*slot));
-		kfree(slot);
+		trustix_aead_direct_free_unpublished(slot);
 		return ret;
 	}
 
@@ -5635,8 +6028,7 @@ static int trustix_aead_direct_set_key(u32 *slot_id, const u8 *key,
 		ret = trustix_aead_direct_find_free_locked(&actual_slot);
 		if (ret) {
 			mutex_unlock(&trustix_direct_slots_lock);
-			memzero_explicit(slot, sizeof(*slot));
-			kfree(slot);
+			trustix_aead_direct_free_unpublished(slot);
 			return ret;
 		}
 	}
@@ -5644,7 +6036,13 @@ static int trustix_aead_direct_set_key(u32 *slot_id, const u8 *key,
 	old = rcu_dereference_protected(
 		trustix_direct_slots[actual_slot],
 		lockdep_is_held(&trustix_direct_slots_lock));
+	if (old && old->owner)
+		__clear_bit(actual_slot, old->owner->direct_slots);
+	if (slot->owner)
+		__set_bit(actual_slot, slot->owner->direct_slots);
 	rcu_assign_pointer(trustix_direct_slots[actual_slot], slot);
+	if (!old)
+		trustix_direct_slots_active++;
 	mutex_unlock(&trustix_direct_slots_lock);
 	*slot_id = actual_slot;
 	if (old)
@@ -5665,7 +6063,11 @@ static int trustix_aead_direct_clear_key(u32 slot_id)
 	old = rcu_dereference_protected(
 		trustix_direct_slots[slot_id],
 		lockdep_is_held(&trustix_direct_slots_lock));
+	if (old && old->owner)
+		__clear_bit(slot_id, old->owner->direct_slots);
 	RCU_INIT_POINTER(trustix_direct_slots[slot_id], NULL);
+	if (old && trustix_direct_slots_active)
+		trustix_direct_slots_active--;
 	mutex_unlock(&trustix_direct_slots_lock);
 	if (old)
 		call_rcu(&old->rcu, trustix_aead_direct_free_rcu);
@@ -5685,11 +6087,41 @@ static void trustix_aead_direct_clear_all(void)
 			lockdep_is_held(&trustix_direct_slots_lock));
 		if (!old)
 			continue;
+		if (old->owner)
+			__clear_bit(i, old->owner->direct_slots);
 		RCU_INIT_POINTER(trustix_direct_slots[i], NULL);
 		call_rcu(&old->rcu, trustix_aead_direct_free_rcu);
 	}
+	trustix_direct_slots_active = 0;
 	mutex_unlock(&trustix_direct_slots_lock);
-	synchronize_rcu();
+	rcu_barrier();
+}
+
+static void
+trustix_aead_direct_clear_owned(struct trustix_aead_file *owner)
+{
+	unsigned long slot_id;
+
+	if (!owner)
+		return;
+	mutex_lock(&trustix_direct_slots_lock);
+	for_each_set_bit(slot_id, owner->direct_slots,
+			 TRUSTIX_AEAD_IOC_DIRECT_MAX_SLOTS) {
+		struct trustix_aead_direct_slot *old;
+
+		old = rcu_dereference_protected(
+			trustix_direct_slots[slot_id],
+			lockdep_is_held(&trustix_direct_slots_lock));
+		if (old && old->owner == owner) {
+			RCU_INIT_POINTER(trustix_direct_slots[slot_id], NULL);
+			if (trustix_direct_slots_active)
+				trustix_direct_slots_active--;
+			trustix_direct_owner_release_slots++;
+			call_rcu(&old->rcu, trustix_aead_direct_free_rcu);
+		}
+		__clear_bit(slot_id, owner->direct_slots);
+	}
+	mutex_unlock(&trustix_direct_slots_lock);
 }
 
 static int trustix_aead_vaes_try_prepared_batch(struct trustix_aead_tfm *ctx,
@@ -6352,9 +6784,11 @@ out_pool_prepared_batch:
 	return ret;
 }
 
-static long trustix_aead_ioc_direct_set_key(unsigned long arg)
+static long trustix_aead_ioc_direct_set_key(struct file *file,
+					    unsigned long arg)
 {
 	struct trustix_aead_ioc_direct_key req;
+	struct trustix_aead_file *state = file ? file->private_data : NULL;
 	u8 key[TRUSTIX_AEAD_IOC_KEY_MAX];
 	int ret;
 
@@ -6365,7 +6799,10 @@ static long trustix_aead_ioc_direct_set_key(unsigned long arg)
 	if (req.slot != TRUSTIX_AEAD_IOC_DIRECT_ANY_SLOT &&
 	    req.slot >= TRUSTIX_AEAD_IOC_DIRECT_MAX_SLOTS)
 		return -EINVAL;
-	if (req.flags & ~(TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT))
+	if (req.flags & ~(TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT |
+			  TRUSTIX_AEAD_IOC_DIRECT_FLAG_OWNER))
+		return -EINVAL;
+	if ((req.flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_OWNER) && !state)
 		return -EINVAL;
 	if (req.key_len != 16 && req.key_len != 32)
 		return -EINVAL;
@@ -6374,7 +6811,8 @@ static long trustix_aead_ioc_direct_set_key(unsigned long arg)
 	if (copy_from_user(key, (const void __user *)(unsigned long)req.key_ptr,
 			   req.key_len))
 		return -EFAULT;
-	ret = trustix_aead_direct_set_key(&req.slot, key, req.key_len, req.flags);
+	ret = trustix_aead_direct_set_key(state, &req.slot, key, req.key_len,
+					 req.flags);
 	memzero_explicit(key, sizeof(key));
 	req.result = ret;
 	if (copy_to_user((void __user *)arg, &req, sizeof(req)))
@@ -6516,7 +6954,7 @@ static long trustix_aead_ioctl(struct file *file, unsigned int cmd,
 	case TRUSTIX_AEAD_IOC_POOL_PREPARE_RUN_BATCH:
 		return trustix_aead_ioc_pool_prepare_run_batch(file, arg);
 	case TRUSTIX_AEAD_IOC_DIRECT_SET_KEY:
-		return trustix_aead_ioc_direct_set_key(arg);
+		return trustix_aead_ioc_direct_set_key(file, arg);
 	case TRUSTIX_AEAD_IOC_DIRECT_CLEAR_KEY:
 		return trustix_aead_ioc_direct_clear_key(arg);
 	default:
@@ -6542,6 +6980,7 @@ static int trustix_aead_release(struct inode *inode, struct file *file)
 
 	if (!state)
 		return 0;
+	trustix_aead_direct_clear_owned(state);
 	trustix_aead_free_tfm(state->ctx);
 	trustix_aead_ioc_scratch_free(&state->scratch);
 	trustix_aead_async_pool_free(state);
@@ -6699,11 +7138,14 @@ trustix_aead_direct_snapshot_slot(struct trustix_aead_direct_snapshot *snapshot,
 		    decrypt)) {
 		ret = -EOPNOTSUPP;
 	} else {
+		snapshot->generation = slot->generation;
 		memcpy(snapshot->rk, slot->rk, sizeof(snapshot->rk));
 		memcpy(snapshot->h, slot->h, sizeof(snapshot->h));
 		memcpy(snapshot->shash, slot->shash, sizeof(snapshot->shash));
 		memcpy(snapshot->shash4, slot->shash4,
 		       sizeof(snapshot->shash4));
+		memcpy(snapshot->shash8, slot->shash8,
+		       sizeof(snapshot->shash8));
 		snapshot->rounds = slot->rounds;
 		snapshot->aesni_ready = slot->aesni_ready;
 		snapshot->vaes_ready = slot->vaes_ready;
@@ -6901,10 +7343,25 @@ trustix_aead_prepare_direct_seal_batch_op(
 	op->pool_result = NULL;
 }
 
+static void
+trustix_aead_prepare_direct_open_batch_op(
+	struct trustix_aead_prepared_op *op,
+	const struct trustix_aead_direct_open_replay_op *batch)
+{
+	op->nonce = (u8 *)batch->nonce;
+	op->src = (u8 *)batch->src;
+	op->dst = batch->dst;
+	op->in_len = batch->cipher_len;
+	op->out_len = batch->cipher_len - TRUSTIX_AEAD_IOC_TAG_LEN;
+	op->pool_out_len = NULL;
+	op->pool_result = NULL;
+}
+
 static int trustix_aead_direct_crypt_one_nofpu(
 					 struct trustix_aead_direct_snapshot *slot,
 					 struct trustix_aead_prepared_op *op,
-					 bool decrypt, bool *used_vaes)
+					 bool decrypt, bool datapath,
+					 bool *used_vaes)
 {
 	int ret;
 
@@ -6914,9 +7371,9 @@ static int trustix_aead_direct_crypt_one_nofpu(
 		return -EINVAL;
 	if (!slot->aesni_ready)
 		return -EOPNOTSUPP;
-	if (!trustix_kfunc_simd_fastpath)
-		return -EOPNOTSUPP;
-	if (trustix_experimental_vaes_kfunc && slot->vaes_ready) {
+	if ((datapath ? READ_ONCE(trustix_datapath_vaes) :
+			READ_ONCE(trustix_experimental_vaes_kfunc)) &&
+	    slot->vaes_ready) {
 		ret = decrypt ?
 			trustix_aead_vaes_open_one(slot->rk, slot->rounds,
 						   slot->shash, slot->shash4,
@@ -6943,7 +7400,7 @@ static int trustix_aead_direct_crypt_one_nofpu(
 static int trustix_aead_direct_seal4_nofpu(
 				struct trustix_aead_direct_snapshot *slot,
 				const struct trustix_aead_direct_batch_op *ops,
-				bool *used_vaes)
+				bool datapath, bool *used_vaes)
 {
 	struct trustix_aead_prepared_op prepared[4];
 	u32 i;
@@ -6954,8 +7411,6 @@ static int trustix_aead_direct_seal4_nofpu(
 	if (!slot || !ops)
 		return -EINVAL;
 	if (!slot->aesni_ready)
-		return -EOPNOTSUPP;
-	if (!trustix_kfunc_simd_fastpath)
 		return -EOPNOTSUPP;
 	if (!ops[0].plain_len ||
 	    ops[1].plain_len != ops[0].plain_len ||
@@ -6968,9 +7423,12 @@ static int trustix_aead_direct_seal4_nofpu(
 							  &ops[i]);
 	}
 
-	if (trustix_experimental_vaes_kfunc && slot->vaes_ready) {
+	if ((datapath ? READ_ONCE(trustix_datapath_vaes) :
+			READ_ONCE(trustix_experimental_vaes_kfunc)) &&
+	    slot->vaes_ready) {
 		ret = trustix_aead_vaes_seal4_prepared(
 			slot->rk, slot->rounds, slot->shash, slot->shash4,
+			slot->shash8,
 			prepared);
 		if (!ret) {
 			if (used_vaes)
@@ -6982,7 +7440,41 @@ static int trustix_aead_direct_seal4_nofpu(
 	}
 
 	return trustix_aead_aesni_seal4_prepared(
-		slot->rk, slot->rounds, slot->shash, slot->shash4, prepared);
+		slot->rk, slot->rounds, slot->shash, slot->shash4,
+		slot->shash8, prepared);
+}
+
+static int trustix_aead_direct_open4_nofpu(
+	struct trustix_aead_direct_slot *slot,
+	struct trustix_aead_prepared_op *prepared, bool *used_vaes)
+{
+	int ret;
+
+	if (used_vaes)
+		*used_vaes = false;
+	if (!slot || !prepared)
+		return -EINVAL;
+	if (!slot->aesni_ready ||
+	    !(slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT))
+		return -EOPNOTSUPP;
+
+	if (READ_ONCE(trustix_datapath_vaes) && slot->vaes_ready) {
+		ret = trustix_aead_vaes_open4_prepared(
+			slot->rk, slot->rounds, slot->shash, slot->shash4,
+			slot->shash8,
+			prepared, NULL);
+		if (!ret) {
+			if (used_vaes)
+				*used_vaes = true;
+			return 0;
+		}
+		if (ret != -EOPNOTSUPP)
+			return ret;
+	}
+
+	return trustix_aead_aesni_open4_prepared(
+		slot->rk, slot->rounds, slot->shash, slot->shash4,
+		slot->shash8, prepared, NULL);
 }
 
 static int trustix_aead_direct_crypt_one(
@@ -6999,7 +7491,7 @@ static int trustix_aead_direct_crypt_one(
 		trustix_direct_kfunc_record_fpu_unavailable();
 		return trustix_aead_direct_crypt_one_soft(slot, op, decrypt);
 	}
-	ret = trustix_aead_direct_crypt_one_nofpu(slot, op, decrypt,
+	ret = trustix_aead_direct_crypt_one_nofpu(slot, op, decrypt, false,
 						 &used_vaes);
 	trustix_aead_fpu_end();
 	if (!ret && trustix_kfunc_fastpath_stats) {
@@ -7011,38 +7503,38 @@ static int trustix_aead_direct_crypt_one(
 	return ret;
 }
 
-static int trustix_aead_direct_crypt_one_slot_rcu(
-					 u32 slot_id,
-					 struct trustix_aead_prepared_op *op,
-					 bool decrypt)
+static int trustix_aead_direct_crypt_one_rcu_slot(
+	struct trustix_aead_direct_slot *slot,
+	struct trustix_aead_prepared_op *op, bool decrypt, bool datapath)
 {
-	struct trustix_aead_direct_slot *slot;
 	bool used_vaes = false;
+	bool simd_enabled;
 	int ret;
 
-	if (!op)
+	if (!slot || !op)
 		return -EINVAL;
 	if (!trustix_kfunc_direct_slot_fastpath)
 		return -EOPNOTSUPP;
-
-	rcu_read_lock();
-	slot = trustix_aead_direct_lookup_rcu(slot_id);
-	if (!slot) {
-		ret = -ENOENT;
-	} else if (!slot->aesni_ready ||
+	simd_enabled = datapath ?
+		READ_ONCE(trustix_datapath_simd_fastpath) :
+		READ_ONCE(trustix_kfunc_simd_fastpath);
+	if (!slot->aesni_ready ||
 		   (!!(slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT) !=
 		    decrypt)) {
 		ret = -EOPNOTSUPP;
-	} else if (!trustix_kfunc_simd_fastpath) {
+	} else if (!simd_enabled) {
 		ret = -EOPNOTSUPP;
 	} else {
-		if (!trustix_aead_fpu_begin()) {
+		if (!(datapath ? trustix_aead_datapath_fpu_begin() :
+				 trustix_aead_fpu_begin())) {
 			trustix_direct_kfunc_record_fpu_unavailable();
 			ret = trustix_aead_direct_crypt_one_soft_fields(
 				slot->rk, slot->rounds, slot->h, op, decrypt);
-			goto out_unlock;
+			return ret;
 		}
-		if (trustix_experimental_vaes_kfunc && slot->vaes_ready) {
+		if ((datapath ? READ_ONCE(trustix_datapath_vaes) :
+				READ_ONCE(trustix_experimental_vaes_kfunc)) &&
+		    slot->vaes_ready) {
 			ret = decrypt ?
 				trustix_aead_vaes_open_one(slot->rk,
 							   slot->rounds,
@@ -7079,15 +7571,134 @@ static int trustix_aead_direct_crypt_one_slot_rcu(
 				this_cpu_inc(trustix_direct_kfunc_aesni_calls);
 		}
 	}
-out_unlock:
+	return ret;
+}
+
+static void trustix_aead_direct_record_open_calls(u32 count)
+{
+	u32 i;
+
+	if (!trustix_kfunc_fastpath_stats)
+		return;
+	for (i = 0; i < count; i++)
+		this_cpu_inc(trustix_direct_kfunc_open_calls);
+}
+
+static void trustix_aead_direct_record_simd_calls(bool used_vaes, u32 count)
+{
+	u32 i;
+
+	if (!trustix_kfunc_fastpath_stats)
+		return;
+	for (i = 0; i < count; i++) {
+		if (used_vaes)
+			this_cpu_inc(trustix_direct_kfunc_vaes_calls);
+		else
+			this_cpu_inc(trustix_direct_kfunc_aesni_calls);
+	}
+}
+
+static int trustix_aead_direct_open_batch_rcu_slot(
+	struct trustix_aead_direct_slot *slot,
+	const struct trustix_aead_direct_open_replay_op *ops, u32 count)
+{
+	struct trustix_aead_prepared_op prepared[4] = {};
+	bool used_vaes;
+	u32 i = 0;
+	u32 j;
+	int ret = 0;
+
+	if (!slot || !ops || !count)
+		return -EINVAL;
+	if (!trustix_kfunc_direct_slot_fastpath ||
+	    !READ_ONCE(trustix_datapath_simd_fastpath) ||
+	    !slot->aesni_ready ||
+	    !(slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT))
+		return -EOPNOTSUPP;
+
+	if (!trustix_aead_datapath_fpu_begin()) {
+		for (i = 0; i < count; i++) {
+			trustix_aead_direct_record_open_calls(1);
+			trustix_direct_kfunc_record_fpu_unavailable();
+			trustix_aead_prepare_direct_open_batch_op(
+				&prepared[0], &ops[i]);
+			ret = trustix_aead_direct_crypt_one_soft_fields(
+				slot->rk, slot->rounds, slot->h, &prepared[0], true);
+			if (ret)
+				break;
+		}
+		return ret;
+	}
+
+	while (i < count) {
+		if (i + ARRAY_SIZE(prepared) <= count) {
+			for (j = 0; j < ARRAY_SIZE(prepared); j++)
+				trustix_aead_prepare_direct_open_batch_op(
+					&prepared[j], &ops[i + j]);
+			ret = trustix_aead_direct_open4_nofpu(
+				slot, prepared, &used_vaes);
+			if (ret != -EOPNOTSUPP) {
+				trustix_aead_direct_record_open_calls(
+					ARRAY_SIZE(prepared));
+				if (!ret)
+					trustix_aead_direct_record_simd_calls(
+						used_vaes,
+						ARRAY_SIZE(prepared));
+				if (ret)
+					break;
+				i += ARRAY_SIZE(prepared);
+				continue;
+			}
+		}
+
+		trustix_aead_prepare_direct_open_batch_op(&prepared[0], &ops[i]);
+		trustix_aead_direct_record_open_calls(1);
+		used_vaes = false;
+		if (READ_ONCE(trustix_datapath_vaes) && slot->vaes_ready) {
+			ret = trustix_aead_vaes_open_one(
+				slot->rk, slot->rounds, slot->shash,
+				slot->shash4, &prepared[0]);
+			if (!ret)
+				used_vaes = true;
+		} else {
+			ret = -EOPNOTSUPP;
+		}
+		if (ret == -EOPNOTSUPP)
+			ret = trustix_aead_aesni_open_one(
+				slot->rk, slot->rounds, slot->shash,
+				slot->shash4, &prepared[0]);
+		if (ret)
+			break;
+		trustix_aead_direct_record_simd_calls(used_vaes, 1);
+		i++;
+	}
+	trustix_aead_fpu_end();
+	return ret;
+}
+
+static int trustix_aead_direct_crypt_one_slot_rcu(
+					 u32 slot_id,
+					 struct trustix_aead_prepared_op *op,
+					 bool decrypt)
+{
+	struct trustix_aead_direct_slot *slot;
+	int ret;
+
+	if (!op)
+		return -EINVAL;
+	rcu_read_lock();
+	slot = trustix_aead_direct_lookup_rcu(slot_id);
+	ret = slot ? trustix_aead_direct_crypt_one_rcu_slot(slot, op, decrypt,
+							 false) :
+		     -ENOENT;
 	rcu_read_unlock();
 	return ret;
 }
 #endif
 
-int trustix_kernel_direct_seal_batch(u32 slot_id,
-				     const struct trustix_aead_direct_batch_op *ops,
-				     u32 count)
+static int trustix_kernel_direct_seal_batch_checked(
+	u32 slot_id, u64 generation, bool datapath,
+	const struct trustix_aead_direct_batch_op *ops, u32 count)
 {
 #if TRUSTIX_X86_SIMD
 	struct trustix_aead_direct_snapshot snapshot;
@@ -7105,9 +7716,17 @@ int trustix_kernel_direct_seal_batch(u32 slot_id,
 			return -EINVAL;
 	}
 	ret = trustix_aead_direct_snapshot_slot(&snapshot, slot_id, false);
-	if (ret)
+	if (ret) {
+		if (ret == -ENOENT && generation)
+			ret = -ESTALE;
 		goto out_error;
-	if (!trustix_kfunc_simd_fastpath) {
+	}
+	if (generation && snapshot.generation != generation) {
+		ret = -ESTALE;
+		goto out_wipe;
+	}
+	if (!(datapath ? READ_ONCE(trustix_datapath_simd_fastpath) :
+			 READ_ONCE(trustix_kfunc_simd_fastpath))) {
 		ret = -EOPNOTSUPP;
 		goto out_wipe;
 	}
@@ -7115,7 +7734,8 @@ int trustix_kernel_direct_seal_batch(u32 slot_id,
 		bool used_vaes = false;
 
 		if (i + 4 <= count) {
-			if (!trustix_aead_fpu_begin()) {
+			if (!(datapath ? trustix_aead_datapath_fpu_begin() :
+					 trustix_aead_fpu_begin())) {
 				for (j = 0; j < 4; j++) {
 					trustix_direct_kfunc_record_fpu_unavailable();
 					trustix_aead_prepare_direct_seal_batch_op(
@@ -7134,7 +7754,7 @@ int trustix_kernel_direct_seal_batch(u32 slot_id,
 				continue;
 			}
 			ret = trustix_aead_direct_seal4_nofpu(
-				&snapshot, &ops[i], &used_vaes);
+				&snapshot, &ops[i], datapath, &used_vaes);
 			trustix_aead_fpu_end();
 			if (!ret) {
 				if (trustix_kfunc_fastpath_stats) {
@@ -7159,7 +7779,8 @@ int trustix_kernel_direct_seal_batch(u32 slot_id,
 		trustix_aead_prepare_direct_seal_batch_op(&op, &ops[i]);
 		if (trustix_kfunc_fastpath_stats)
 			this_cpu_inc(trustix_direct_kfunc_seal_calls);
-		if (!trustix_aead_fpu_begin()) {
+		if (!(datapath ? trustix_aead_datapath_fpu_begin() :
+				 trustix_aead_fpu_begin())) {
 			trustix_direct_kfunc_record_fpu_unavailable();
 			ret = trustix_aead_direct_crypt_one_soft(&snapshot, &op,
 								 false);
@@ -7169,7 +7790,7 @@ int trustix_kernel_direct_seal_batch(u32 slot_id,
 			continue;
 		}
 		ret = trustix_aead_direct_crypt_one_nofpu(&snapshot, &op, false,
-							 &used_vaes);
+							 datapath, &used_vaes);
 		trustix_aead_fpu_end();
 		if (ret)
 			break;
@@ -7193,7 +7814,515 @@ out_error:
 	return -EOPNOTSUPP;
 #endif
 }
+
+int trustix_kernel_direct_seal_batch(u32 slot_id,
+				     const struct trustix_aead_direct_batch_op *ops,
+				     u32 count)
+{
+	return trustix_kernel_direct_seal_batch_checked(slot_id, 0, false,
+							ops, count);
+}
 EXPORT_SYMBOL_GPL(trustix_kernel_direct_seal_batch);
+
+int trustix_kernel_direct_seal_batch_generation(
+	u32 slot_id, u64 generation,
+	const struct trustix_aead_direct_batch_op *ops, u32 count)
+{
+	if (!generation)
+		return -EINVAL;
+	return trustix_kernel_direct_seal_batch_checked(
+		slot_id, generation, true, ops, count);
+}
+EXPORT_SYMBOL_GPL(trustix_kernel_direct_seal_batch_generation);
+
+bool trustix_kernel_direct_datapath_ready(void)
+{
+#if TRUSTIX_X86_SIMD
+	return READ_ONCE(trustix_aesni_available) &&
+	       READ_ONCE(trustix_kfunc_direct_slot_fastpath) &&
+	       READ_ONCE(trustix_datapath_simd_fastpath);
+#else
+	return false;
+#endif
+}
+EXPORT_SYMBOL_GPL(trustix_kernel_direct_datapath_ready);
+
+int trustix_kernel_direct_reserve_sequences(u32 slot_id, u64 floor,
+					    u32 count, u64 *first,
+					    u64 *generation)
+{
+#if TRUSTIX_X86_SIMD
+	struct trustix_aead_direct_slot *slot;
+	u64 current_seq;
+	u64 base;
+	u64 next;
+	int ret = 0;
+
+	if (!first || !generation || !count || count > 128)
+		return -EINVAL;
+	*first = 0;
+	*generation = 0;
+	if (!trustix_kernel_direct_datapath_ready())
+		return -EOPNOTSUPP;
+	if (floor < TRUSTIX_AEAD_DIRECT_TX_KERNEL_BASE)
+		floor = TRUSTIX_AEAD_DIRECT_TX_KERNEL_BASE;
+
+	rcu_read_lock();
+	slot = trustix_aead_direct_lookup_rcu(slot_id);
+	if (!slot) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	if (!slot->aesni_ready ||
+	    (slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT)) {
+		ret = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+	for (;;) {
+		current_seq = (u64)atomic64_read(&slot->tx_sequence);
+		base = current_seq < floor ? floor : current_seq;
+		if (base > U64_MAX - count) {
+			ret = -EOVERFLOW;
+			goto out_unlock;
+		}
+		next = base + count;
+		if ((u64)atomic64_cmpxchg(&slot->tx_sequence,
+					   (s64)current_seq, (s64)next) ==
+		    current_seq)
+			break;
+		cpu_relax();
+	}
+	*first = base + 1;
+	*generation = slot->generation;
+
+out_unlock:
+	rcu_read_unlock();
+	return ret;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+EXPORT_SYMBOL_GPL(trustix_kernel_direct_reserve_sequences);
+
+int trustix_kernel_direct_slot_generation(u32 slot_id, bool decrypt,
+					  u64 *generation)
+{
+#if TRUSTIX_X86_SIMD
+	struct trustix_aead_direct_slot *slot;
+	int ret = 0;
+
+	if (!generation)
+		return -EINVAL;
+	*generation = 0;
+	if (!trustix_kernel_direct_datapath_ready())
+		return -EOPNOTSUPP;
+
+	rcu_read_lock();
+	slot = trustix_aead_direct_lookup_rcu(slot_id);
+	if (!slot) {
+		ret = -ENOENT;
+	} else if (!slot->aesni_ready ||
+		   (!!(slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT) !=
+		    decrypt)) {
+		ret = -EOPNOTSUPP;
+	} else {
+		*generation = slot->generation;
+	}
+	rcu_read_unlock();
+	return ret;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+EXPORT_SYMBOL_GPL(trustix_kernel_direct_slot_generation);
+
+#if TRUSTIX_X86_SIMD
+static __always_inline u32
+trustix_aead_direct_replay_window(u32 replay_window)
+{
+	if (!replay_window || replay_window > TRUSTIX_AEAD_DIRECT_REPLAY_MAX)
+		return TRUSTIX_AEAD_DIRECT_REPLAY_MAX;
+	return replay_window;
+}
+
+static __always_inline bool
+trustix_aead_direct_replay_seen(const struct trustix_aead_direct_slot *slot,
+				 u64 sequence)
+{
+	u64 block = sequence >> 6;
+	u32 index = (u32)block & (TRUSTIX_AEAD_DIRECT_REPLAY_WORDS - 1);
+	u64 mask = BIT_ULL((u32)sequence & 63U);
+
+	return slot->replay_blocks[index] == block &&
+	       (slot->replay_seen[index] & mask);
+}
+
+static __always_inline void
+trustix_aead_direct_replay_mark(struct trustix_aead_direct_slot *slot,
+				 u64 sequence)
+{
+	u64 block = sequence >> 6;
+	u32 index = (u32)block & (TRUSTIX_AEAD_DIRECT_REPLAY_WORDS - 1);
+	u64 mask = BIT_ULL((u32)sequence & 63U);
+
+	if (slot->replay_blocks[index] != block) {
+		slot->replay_blocks[index] = block;
+		slot->replay_seen[index] = 0;
+	}
+	slot->replay_seen[index] |= mask;
+}
+
+static int trustix_aead_direct_replay_commit_batch(
+	struct trustix_aead_direct_slot *slot,
+	const struct trustix_aead_direct_open_replay_op *ops, u32 count,
+	u64 replay_floor, u32 replay_window)
+{
+	unsigned long irqflags;
+	u64 last_sequence;
+	u64 delta;
+	u32 i;
+	u32 j;
+	int ret = 0;
+
+	if (!slot || !ops || !count ||
+	    count > TRUSTIX_AEAD_DIRECT_REPLAY_BATCH_MAX ||
+	    !(slot->flags & TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT) ||
+	    !slot->replay_seen || !slot->replay_blocks)
+		return -EINVAL;
+	replay_window = trustix_aead_direct_replay_window(replay_window);
+	spin_lock_irqsave(&slot->replay_lock, irqflags);
+	if (slot->replay_initialized) {
+		if (slot->replay_floor > replay_floor)
+			replay_floor = slot->replay_floor;
+		if (slot->replay_window &&
+		    slot->replay_window < replay_window)
+			replay_window = slot->replay_window;
+		last_sequence = slot->replay_last_sequence;
+	} else {
+		last_sequence = replay_floor;
+	}
+	if (replay_floor > last_sequence)
+		last_sequence = replay_floor;
+
+	/* Validate the whole authenticated batch before changing replay state. */
+	for (i = 0; i < count; i++) {
+		u64 sequence = ops[i].sequence;
+
+		if (!sequence || sequence <= replay_floor) {
+			ret = -ESTALE;
+			goto out_unlock;
+		}
+		for (j = 0; j < i; j++) {
+			if (ops[j].sequence == sequence) {
+				ret = -ESTALE;
+				goto out_unlock;
+			}
+		}
+		if (sequence > last_sequence) {
+			last_sequence = sequence;
+			continue;
+		}
+		delta = last_sequence - sequence;
+		if (delta >= replay_window ||
+		    delta >= TRUSTIX_AEAD_DIRECT_REPLAY_MAX ||
+		    trustix_aead_direct_replay_seen(slot, sequence)) {
+			ret = -ESTALE;
+			goto out_unlock;
+		}
+	}
+
+	slot->replay_floor = replay_floor;
+	slot->replay_last_sequence = last_sequence;
+	slot->replay_window = replay_window;
+	slot->replay_initialized = true;
+	for (i = 0; i < count; i++)
+		trustix_aead_direct_replay_mark(slot, ops[i].sequence);
+
+out_unlock:
+	spin_unlock_irqrestore(&slot->replay_lock, irqflags);
+	return ret;
+}
+#endif
+
+static int trustix_kernel_direct_open_replay_batch_checked(
+	u32 slot_id, u64 generation,
+	const struct trustix_aead_direct_open_replay_op *ops, u32 count,
+	u64 replay_floor, u32 replay_window, bool record_error)
+{
+#if TRUSTIX_X86_SIMD
+	struct trustix_aead_direct_slot *slot;
+	u32 i;
+	int ret;
+
+	if (!generation || !ops || !count ||
+	    count > TRUSTIX_AEAD_DIRECT_REPLAY_BATCH_MAX)
+		return -EINVAL;
+	if (!trustix_kernel_direct_datapath_ready())
+		return -EOPNOTSUPP;
+	for (i = 0; i < count; i++) {
+		if (!ops[i].src || !ops[i].dst || !ops[i].sequence ||
+		    ops[i].cipher_len < TRUSTIX_AEAD_IOC_TAG_LEN ||
+		    ops[i].cipher_len > TRUSTIX_AEAD_IOC_INPUT_MAX)
+			return -EINVAL;
+	}
+
+	rcu_read_lock();
+	slot = trustix_aead_direct_lookup_rcu(slot_id);
+	if (!slot)
+		ret = -ESTALE;
+	else if (slot->generation != generation)
+		ret = -ESTALE;
+	else {
+		ret = trustix_aead_direct_open_batch_rcu_slot(slot, ops, count);
+		if (!ret)
+			ret = trustix_aead_direct_replay_commit_batch(
+				slot, ops, count, replay_floor, replay_window);
+	}
+	rcu_read_unlock();
+	if (ret) {
+		for (i = 0; i < count; i++)
+			memzero_explicit(ops[i].dst, ops[i].cipher_len -
+					 TRUSTIX_AEAD_IOC_TAG_LEN);
+		if (record_error)
+			trustix_direct_kfunc_record_error(
+				ret, TRUSTIX_DIRECT_KFUNC_ERROR_OPEN);
+	}
+	return ret;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+
+int trustix_kernel_direct_open_replay_batch(
+	u32 slot_id, u64 generation,
+	const struct trustix_aead_direct_open_replay_op *ops, u32 count,
+	u64 replay_floor, u32 replay_window)
+{
+	return trustix_kernel_direct_open_replay_batch_checked(
+		slot_id, generation, ops, count, replay_floor, replay_window,
+		true);
+}
+EXPORT_SYMBOL_GPL(trustix_kernel_direct_open_replay_batch);
+
+static int trustix_kernel_direct_open_replay_checked(
+	u32 slot_id, u64 generation, const u8 *src, u8 *dst, u32 cipher_len,
+	const u8 *nonce, u64 sequence, u64 replay_floor, u32 replay_window,
+	bool record_error)
+{
+	struct trustix_aead_direct_open_replay_op op = {
+		.src = src,
+		.dst = dst,
+		.cipher_len = cipher_len,
+		.sequence = sequence,
+	};
+
+	if (!nonce)
+		return -EINVAL;
+	memcpy(op.nonce, nonce, sizeof(op.nonce));
+	return trustix_kernel_direct_open_replay_batch_checked(
+		slot_id, generation, &op, 1, replay_floor, replay_window,
+		record_error);
+}
+
+int trustix_kernel_direct_open_replay(u32 slot_id, u64 generation,
+				      const u8 *src, u8 *dst, u32 cipher_len,
+				      const u8 *nonce, u64 sequence,
+				      u64 replay_floor, u32 replay_window)
+{
+	return trustix_kernel_direct_open_replay_checked(
+		slot_id, generation, src, dst, cipher_len, nonce, sequence,
+		replay_floor, replay_window, true);
+}
+EXPORT_SYMBOL_GPL(trustix_kernel_direct_open_replay);
+
+int trustix_kernel_direct_datapath_selftest(void)
+{
+#if TRUSTIX_X86_SIMD
+	struct trustix_aead_direct_batch_op seal = {};
+	struct trustix_aead_direct_batch_op batch_seal[4] = {};
+	struct trustix_aead_direct_open_replay_op batch_open[4] = {};
+	u8 key[32];
+	u8 plain[128];
+	u8 cipher[sizeof(plain) + TRUSTIX_AEAD_IOC_TAG_LEN];
+	u8 opened[sizeof(plain)];
+	u8 nonce[TRUSTIX_AEAD_IOC_NONCE_LEN];
+	u8 batch_cipher[4][sizeof(plain) + TRUSTIX_AEAD_IOC_TAG_LEN];
+	u8 batch_opened[4][sizeof(plain)];
+	u32 seal_slot = TRUSTIX_AEAD_IOC_DIRECT_ANY_SLOT;
+	u32 open_slot = TRUSTIX_AEAD_IOC_DIRECT_ANY_SLOT;
+	u64 seal_generation = 0;
+	u64 open_generation = 0;
+	u64 first_sequence = 0;
+	u64 second_sequence = 0;
+	u64 batch_first_sequence = 0;
+	u64 replay_floor = 0;
+	u32 i;
+	int cleanup_ret;
+	int ret;
+
+	if (!trustix_kernel_direct_datapath_ready())
+		return -EOPNOTSUPP;
+	for (i = 0; i < ARRAY_SIZE(key); i++)
+		key[i] = (u8)(0x31U + i);
+	for (i = 0; i < ARRAY_SIZE(plain); i++)
+		plain[i] = (u8)(0xa5U ^ i);
+
+	ret = trustix_aead_direct_set_key(NULL, &seal_slot, key, sizeof(key), 0);
+	if (ret)
+		goto out_wipe;
+	ret = trustix_aead_direct_set_key(
+		NULL, &open_slot, key, sizeof(key),
+		TRUSTIX_AEAD_IOC_DIRECT_FLAG_DECRYPT);
+	if (ret)
+		goto out_clear_seal;
+	ret = trustix_kernel_direct_slot_generation(
+		open_slot, true, &open_generation);
+	if (ret)
+		goto out_clear;
+	ret = trustix_kernel_direct_reserve_sequences(
+		seal_slot, TRUSTIX_AEAD_DIRECT_TX_KERNEL_BASE, 1,
+		&first_sequence, &seal_generation);
+	if (ret)
+		goto out_clear;
+	replay_floor = first_sequence - 1;
+	memset(nonce, 0x5a, sizeof(nonce));
+	put_unaligned_be64(first_sequence, nonce + 4);
+	seal.src = plain;
+	seal.dst = cipher;
+	seal.plain_len = sizeof(plain);
+	memcpy(seal.nonce, nonce, sizeof(seal.nonce));
+	ret = trustix_kernel_direct_seal_batch_generation(
+		seal_slot, seal_generation, &seal, 1);
+	if (ret)
+		goto out_clear;
+	ret = trustix_kernel_direct_open_replay_checked(
+		open_slot, open_generation + 1, cipher, opened,
+		sizeof(cipher), nonce, first_sequence, replay_floor, 128, false);
+	if (ret != -ESTALE) {
+		ret = ret ?: -EUCLEAN;
+		goto out_clear;
+	}
+	ret = trustix_kernel_direct_open_replay_checked(
+		open_slot, open_generation, cipher, opened, sizeof(cipher), nonce,
+		first_sequence, replay_floor, 128, false);
+	if (ret || memcmp(opened, plain, sizeof(plain))) {
+		ret = ret ?: -EUCLEAN;
+		goto out_clear;
+	}
+	ret = trustix_kernel_direct_open_replay_checked(
+		open_slot, open_generation, cipher, opened, sizeof(cipher), nonce,
+		first_sequence, replay_floor, 128, false);
+	if (ret != -ESTALE) {
+		ret = ret ?: -EUCLEAN;
+		goto out_clear;
+	}
+
+	ret = trustix_kernel_direct_reserve_sequences(
+		seal_slot, first_sequence, 1, &second_sequence,
+		&seal_generation);
+	if (ret)
+		goto out_clear;
+	memset(nonce, 0xc3, sizeof(nonce));
+	put_unaligned_be64(second_sequence, nonce + 4);
+	memcpy(seal.nonce, nonce, sizeof(seal.nonce));
+	ret = trustix_kernel_direct_seal_batch_generation(
+		seal_slot, seal_generation, &seal, 1);
+	if (ret)
+		goto out_clear;
+	cipher[0] ^= 0x80;
+	ret = trustix_kernel_direct_open_replay_checked(
+		open_slot, open_generation, cipher, opened, sizeof(cipher), nonce,
+		second_sequence, replay_floor, 128, false);
+	cipher[0] ^= 0x80;
+	if (ret != -EBADMSG) {
+		ret = ret ?: -EUCLEAN;
+		goto out_clear;
+	}
+	ret = trustix_kernel_direct_open_replay_checked(
+		open_slot, open_generation, cipher, opened, sizeof(cipher), nonce,
+		second_sequence, replay_floor, 128, false);
+	if (ret || memcmp(opened, plain, sizeof(plain)))
+		ret = ret ?: -EUCLEAN;
+	if (ret)
+		goto out_clear;
+
+	ret = trustix_kernel_direct_reserve_sequences(
+		seal_slot, second_sequence, ARRAY_SIZE(batch_seal),
+		&batch_first_sequence, &seal_generation);
+	if (ret)
+		goto out_clear;
+	for (i = 0; i < ARRAY_SIZE(batch_seal); i++) {
+		batch_seal[i].src = plain;
+		batch_seal[i].dst = batch_cipher[i];
+		batch_seal[i].plain_len = sizeof(plain);
+		memset(batch_seal[i].nonce, 0x70 + i,
+		       sizeof(batch_seal[i].nonce));
+		put_unaligned_be64(batch_first_sequence + i,
+				   batch_seal[i].nonce + 4);
+		batch_open[i].src = batch_cipher[i];
+		batch_open[i].dst = batch_opened[i];
+		batch_open[i].cipher_len = sizeof(batch_cipher[i]);
+		batch_open[i].sequence = batch_first_sequence + i;
+		memcpy(batch_open[i].nonce, batch_seal[i].nonce,
+		       sizeof(batch_open[i].nonce));
+	}
+	ret = trustix_kernel_direct_seal_batch_generation(
+		seal_slot, seal_generation, batch_seal, ARRAY_SIZE(batch_seal));
+	if (ret)
+		goto out_clear;
+	batch_cipher[1][0] ^= 0x40;
+	ret = trustix_kernel_direct_open_replay_batch_checked(
+		open_slot, open_generation, batch_open, ARRAY_SIZE(batch_open),
+		replay_floor, 128, false);
+	batch_cipher[1][0] ^= 0x40;
+	if (ret != -EBADMSG) {
+		ret = ret ?: -EUCLEAN;
+		goto out_clear;
+	}
+	ret = trustix_kernel_direct_open_replay_batch_checked(
+		open_slot, open_generation, batch_open, ARRAY_SIZE(batch_open),
+		replay_floor, 128, false);
+	if (ret)
+		goto out_clear;
+	for (i = 0; i < ARRAY_SIZE(batch_opened); i++) {
+		if (!memcmp(batch_opened[i], plain, sizeof(plain)))
+			continue;
+		ret = -EUCLEAN;
+		goto out_clear;
+	}
+	ret = trustix_kernel_direct_open_replay_batch_checked(
+		open_slot, open_generation, batch_open, ARRAY_SIZE(batch_open),
+		replay_floor, 128, false);
+	if (ret != -ESTALE)
+		ret = ret ?: -EUCLEAN;
+	else
+		ret = 0;
+
+out_clear:
+	cleanup_ret = trustix_aead_direct_clear_key(open_slot);
+	if (!ret && cleanup_ret)
+		ret = cleanup_ret;
+out_clear_seal:
+	cleanup_ret = trustix_aead_direct_clear_key(seal_slot);
+	if (!ret && cleanup_ret)
+		ret = cleanup_ret;
+out_wipe:
+	memzero_explicit(key, sizeof(key));
+	memzero_explicit(plain, sizeof(plain));
+	memzero_explicit(cipher, sizeof(cipher));
+	memzero_explicit(opened, sizeof(opened));
+	memzero_explicit(nonce, sizeof(nonce));
+	memzero_explicit(batch_cipher, sizeof(batch_cipher));
+	memzero_explicit(batch_opened, sizeof(batch_opened));
+	memzero_explicit(&seal, sizeof(seal));
+	memzero_explicit(batch_seal, sizeof(batch_seal));
+	memzero_explicit(batch_open, sizeof(batch_open));
+	return ret;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+EXPORT_SYMBOL_GPL(trustix_kernel_direct_datapath_selftest);
 
 __bpf_kfunc_start_defs();
 
@@ -7441,6 +8570,7 @@ static int __init trustix_crypto_init(void)
 	if (!trustix_vaes_available) {
 		trustix_experimental_vaes = false;
 		trustix_experimental_vaes_kfunc = false;
+		trustix_datapath_vaes = false;
 	}
 	ret = misc_register(&trustix_aead_miscdev);
 	if (ret)
@@ -7457,23 +8587,15 @@ static int __init trustix_crypto_init(void)
 	if (!trustix_vaes_available) {
 		trustix_experimental_vaes = false;
 		trustix_experimental_vaes_kfunc = false;
-	}
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS,
-					&trustix_aead_tc_kfunc_set);
-	if (ret)
-		return ret;
-	trustix_feature_mask = TRUSTIX_AEAD_FEATURE_KFUNC_TC;
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP,
-					&trustix_aead_xdp_kfunc_set);
-	if (!ret) {
-		trustix_direct_xdp_available = true;
-		trustix_feature_mask |= TRUSTIX_AEAD_FEATURE_KFUNC_XDP;
+		trustix_datapath_vaes = false;
 	}
 #if TRUSTIX_ENABLE_BPF_CRYPTO
 	ret = bpf_crypto_register_type(&trustix_crypto);
 	if (ret)
 		return ret;
-	trustix_feature_mask |= TRUSTIX_AEAD_FEATURE_CRYPTO_AEAD;
+	trustix_feature_mask = TRUSTIX_AEAD_FEATURE_CRYPTO_AEAD;
+#else
+	trustix_feature_mask = 0;
 #endif
 	ret = misc_register(&trustix_aead_miscdev);
 	if (ret) {
@@ -7483,6 +8605,23 @@ static int __init trustix_crypto_init(void)
 		return ret;
 	}
 	trustix_feature_mask |= TRUSTIX_AEAD_FEATURE_DEVICE_AEAD;
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS,
+					&trustix_aead_tc_kfunc_set);
+	if (ret) {
+		misc_deregister(&trustix_aead_miscdev);
+#if TRUSTIX_ENABLE_BPF_CRYPTO
+		bpf_crypto_unregister_type(&trustix_crypto);
+#endif
+		return ret;
+	}
+	trustix_feature_mask |= TRUSTIX_AEAD_FEATURE_KFUNC_TC;
+	/* No failing initialization step may follow a kfunc registration. */
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP,
+					&trustix_aead_xdp_kfunc_set);
+	if (!ret) {
+		trustix_direct_xdp_available = true;
+		trustix_feature_mask |= TRUSTIX_AEAD_FEATURE_KFUNC_XDP;
+	}
 	if (trustix_aesni_available)
 		trustix_feature_mask |= TRUSTIX_AEAD_FEATURE_DIRECT_AESNI;
 	if (trustix_vaes_available)

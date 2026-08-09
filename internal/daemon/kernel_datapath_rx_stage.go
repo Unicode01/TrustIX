@@ -88,6 +88,8 @@ type kernelDatapathRXStageStatus struct {
 	TXPlaintextTargetIfName  string    `json:"tx_plaintext_target_ifname,omitempty"`
 	TXPlaintextTargetIfIndex int32     `json:"tx_plaintext_target_ifindex,omitempty"`
 	TXPlaintextFlags         uint32    `json:"tx_plaintext_flags,omitempty"`
+	TXSecureTIXTCPAttached   bool      `json:"tx_secure_tix_tcp_attached,omitempty"`
+	TXSecureTIXTCPFlags      uint32    `json:"tx_secure_tix_tcp_flags,omitempty"`
 	QueueLen                 uint32    `json:"queue_len,omitempty"`
 	Capacity                 uint32    `json:"capacity,omitempty"`
 	Staged                   uint64    `json:"staged,omitempty"`
@@ -115,16 +117,21 @@ type kernelDatapathRXStageStatus struct {
 var kernelDatapathRXStageOpenDriver = openKernelDatapathRXStageDriver
 
 func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec dataplane.AttachSpec) error {
+	required := spec.KernelDatapathSecureTIXTCP
 	if err := daemon.stopKernelDatapathRXStage(); err != nil {
 		return fmt.Errorf("stop previous kernel datapath RX stage: %w", err)
 	}
 	mode := kernelDatapathRXModeForDesired(daemon.desired)
 	if mode == "" {
+		err := error(nil)
+		if required {
+			err = errors.New("secure tix_tcp full kernel datapath requires the RX worker")
+		}
 		daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
 			Enabled:        false,
-			DisabledReason: kernelDatapathRXDisabledReasonForDesired(daemon.desired),
+			DisabledReason: errors.Join(errors.New(kernelDatapathRXDisabledReasonForDesired(daemon.desired)), err).Error(),
 		})
-		return nil
+		return err
 	}
 	if mode == kernelDatapathRXModeWorker && !kernelDatapathRXWorkerSupportedForSpecForDesired(daemon.desired, spec) {
 		daemon.setKernelDatapathRXStageInactive(kernelDatapathRXStageStatus{
@@ -139,6 +146,9 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 			Enabled:        true,
 			InactiveReason: "trustix_datapath module is not loaded",
 		})
+		if required {
+			return errors.New("secure tix_tcp full kernel datapath requires a loaded trustix_datapath module")
+		}
 		return nil
 	}
 	ifname := kernelDatapathRXStageUnderlayIface(spec)
@@ -147,6 +157,9 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 			Enabled:        true,
 			InactiveReason: "no underlay interface is configured",
 		})
+		if required {
+			return errors.New("secure tix_tcp full kernel datapath requires an underlay interface")
+		}
 		return nil
 	}
 	driver, err := kernelDatapathRXStageOpenDriver()
@@ -155,6 +168,9 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 			Enabled:        true,
 			InactiveReason: err.Error(),
 		})
+		if required {
+			return fmt.Errorf("open secure tix_tcp kernel datapath driver: %w", err)
+		}
 		return nil
 	}
 	targetIfname := ""
@@ -171,9 +187,16 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 			if closeErr != nil {
 				return fmt.Errorf("close kernel datapath RX driver: %w", closeErr)
 			}
+			if required {
+				return errors.New("secure tix_tcp full kernel datapath requires a LAN target interface")
+			}
 			return nil
 		}
-		flags = kernelDatapathRXWorkerHookFlags()
+		if spec.KernelDatapathSecureTIXTCP {
+			flags = kernelDatapathRXSecureTIXTCPHookFlags()
+		} else {
+			flags = kernelDatapathRXWorkerHookFlags()
+		}
 	}
 	hook, err := attachKernelDatapathRXHook(driver, ifname, targetIfname, flags)
 	if err != nil {
@@ -186,14 +209,26 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 		if cleanupErr != nil {
 			return errors.Join(err, fmt.Errorf("close kernel datapath RX driver: %w", cleanupErr))
 		}
+		if required {
+			return fmt.Errorf("attach secure tix_tcp kernel RX hook: %w", err)
+		}
 		return nil
 	}
 	txHook := kernelDatapathRXStageHookStatus{}
-	if kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
+	fullPlaintext := kernelDatapathFullPlaintextEnabledForDesired(daemon.desired)
+	attachTX := fullPlaintext || spec.KernelDatapathSecureTIXTCP
+	txFlags := uint32(0)
+	if fullPlaintext {
+		txFlags |= kernelDatapathTXPlaintextHookFlags()
+	}
+	if spec.KernelDatapathSecureTIXTCP {
+		txFlags |= kernelDatapathTXSecureTIXTCPHookFlags()
+	}
+	if attachTX {
 		var txErr error
 		txHook, txErr = attachKernelDatapathRXHook(
 			driver, targetIfname, ifname,
-			kernelDatapathTXPlaintextHookFlags(),
+			txFlags,
 		)
 		if txErr != nil {
 			cleanupErr := cleanupKernelDatapathRXDriver(driver, ifname, targetIfname)
@@ -204,6 +239,9 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 			})
 			if cleanupErr != nil {
 				return errors.Join(txErr, cleanupErr)
+			}
+			if required {
+				return fmt.Errorf("attach secure tix_tcp kernel TX hook: %w", txErr)
 			}
 			return nil
 		}
@@ -217,7 +255,7 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 	stage, err := driver.Clear()
 	if err != nil {
 		cleanupIfnames := []string{ifname}
-		if kernelDatapathFullPlaintextEnabledForDesired(daemon.desired) {
+		if attachTX {
 			cleanupIfnames = append(cleanupIfnames, targetIfname)
 		}
 		cleanupErr := cleanupKernelDatapathRXDriver(driver, cleanupIfnames...)
@@ -228,6 +266,9 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 		})
 		if cleanupErr != nil {
 			return errors.Join(err, cleanupErr)
+		}
+		if required {
+			return fmt.Errorf("clear secure tix_tcp kernel RX stage: %w", err)
 		}
 		return nil
 	}
@@ -248,12 +289,14 @@ func (daemon *Daemon) startKernelDatapathRXStage(ctx context.Context, spec datap
 		TargetIfName:             hook.TargetIfName,
 		TargetIfIndex:            hook.TargetIfIndex,
 		Flags:                    hook.Flags,
-		TXPlaintextAttached:      txHook.Attached,
+		TXPlaintextAttached:      txHook.Attached && fullPlaintext,
 		TXPlaintextIfName:        txHook.IfName,
 		TXPlaintextIfIndex:       txHook.IfIndex,
 		TXPlaintextTargetIfName:  txHook.TargetIfName,
 		TXPlaintextTargetIfIndex: txHook.TargetIfIndex,
-		TXPlaintextFlags:         txHook.Flags,
+		TXPlaintextFlags:         txHook.Flags & kernelDatapathTXPlaintextHookFlags(),
+		TXSecureTIXTCPAttached:   txHook.Attached && spec.KernelDatapathSecureTIXTCP,
+		TXSecureTIXTCPFlags:      txHook.Flags & kernelDatapathTXSecureTIXTCPHookFlags(),
 		QueueLen:                 stage.QueueLen,
 		Capacity:                 stage.Capacity,
 		Staged:                   stage.Staged,
@@ -329,6 +372,7 @@ func (daemon *Daemon) stopKernelDatapathRXStage() error {
 		daemon.kernelRXStage.status.Active = false
 		daemon.kernelRXStage.status.Attached = false
 		daemon.kernelRXStage.status.TXPlaintextAttached = false
+		daemon.kernelRXStage.status.TXSecureTIXTCPAttached = false
 		daemon.kernelRXStage.status.InactiveReason = "stopped"
 	}
 	daemon.kernelRXStage.mu.Unlock()
@@ -438,14 +482,19 @@ func (daemon *Daemon) kernelDatapathRXStageStatus() kernelDatapathRXStageStatus 
 		}
 		if status.TXPlaintextIfName != "" {
 			if txHook, txErr := driver.HookQueryFor(status.TXPlaintextIfName); txErr == nil {
-				status.TXPlaintextAttached = txHook.Attached
-				status.TXPlaintextFlags = txHook.Flags
+				status.TXPlaintextAttached = txHook.Attached && txHook.Flags&kernelDatapathTXPlaintextHookFlags() != 0
+				status.TXPlaintextFlags = txHook.Flags & kernelDatapathTXPlaintextHookFlags()
+				status.TXSecureTIXTCPAttached = txHook.Attached && txHook.Flags&kernelDatapathTXSecureTIXTCPHookFlags() != 0
+				status.TXSecureTIXTCPFlags = txHook.Flags & kernelDatapathTXSecureTIXTCPHookFlags()
 				status.TXPlaintextIfName = txHook.IfName
 				status.TXPlaintextIfIndex = txHook.IfIndex
 				status.TXPlaintextTargetIfName = txHook.TargetIfName
 				status.TXPlaintextTargetIfIndex = txHook.TargetIfIndex
 			} else {
 				status.TXPlaintextAttached = false
+				status.TXPlaintextFlags = 0
+				status.TXSecureTIXTCPAttached = false
+				status.TXSecureTIXTCPFlags = 0
 			}
 		}
 	}
@@ -582,6 +631,9 @@ func kernelDatapathRXMode() string {
 }
 
 func kernelDatapathRXModeForDesired(desired config.Desired) string {
+	if kernelDatapathSecureTIXTCPForDesired(desired) {
+		return kernelDatapathRXModeWorker
+	}
 	suppressFullPlaintext := kernelDatapathRouteGSOSuppressesLegacyFullPlaintextForDesired(desired)
 	if mode, ok := kernelDatapathRXStageModeFromEnv(); ok {
 		if mode == "" {
@@ -698,6 +750,9 @@ func kernelDatapathRXWorkerSupportedForSpec(spec dataplane.AttachSpec) bool {
 }
 
 func kernelDatapathRXWorkerSupportedForSpecForDesired(desired config.Desired, spec dataplane.AttachSpec) bool {
+	if spec.KernelDatapathSecureTIXTCP {
+		return true
+	}
 	if !spec.TIXTCPTXDirect {
 		return true
 	}

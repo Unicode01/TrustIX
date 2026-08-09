@@ -18,19 +18,20 @@ type dataSessionDesiredSurface struct {
 }
 
 type dataSessionTransportPolicySurface struct {
-	Mode            string
-	Candidates      []core.EndpointID
-	Profile         string
-	Datapath        string
-	Encryption      string
-	CryptoKeySource string
-	CryptoSuites    []string
-	CryptoPlacement string
-	Profiles        []config.TransportProfileConfig
-	Advanced        config.TransportAdvancedConfig
-	SessionPool     config.SessionPoolPolicyConfig
-	TLSIdentity     config.TransportTLSIdentityConfig
-	KernelTransport config.KernelTransportPolicyConfig
+	Mode             string
+	Candidates       []core.EndpointID
+	Profile          string
+	Datapath         string
+	Encryption       string
+	CryptoKeySource  string
+	CryptoSuites     []string
+	CryptoPlacement  string
+	Profiles         []config.TransportProfileConfig
+	Advanced         config.TransportAdvancedConfig
+	SessionStrategy  string
+	SessionHeartbeat config.SessionPoolHeartbeatConfig
+	TLSIdentity      config.TransportTLSIdentityConfig
+	KernelTransport  config.KernelTransportPolicyConfig
 }
 
 type dataSessionPeerSurface struct {
@@ -184,19 +185,20 @@ func localEndpointSelectionSurface(endpoints []config.EndpointConfig) []dataSess
 func dataSessionTransportPolicySurfaceForDesired(desired config.Desired) dataSessionTransportPolicySurface {
 	policy := desired.TransportPolicy
 	return dataSessionTransportPolicySurface{
-		Mode:            strings.TrimSpace(policy.Mode),
-		Candidates:      append([]core.EndpointID(nil), policy.Candidates...),
-		Profile:         strings.TrimSpace(policy.Profile),
-		Datapath:        strings.TrimSpace(policy.Datapath),
-		Encryption:      strings.TrimSpace(policy.Encryption),
-		CryptoKeySource: strings.TrimSpace(policy.CryptoKeySource),
-		CryptoSuites:    effectiveSecureTransportCryptoSuitesForDesired(desired),
-		CryptoPlacement: effectiveTransportCryptoPlacementConfig(policy),
-		Profiles:        append([]config.TransportProfileConfig(nil), policy.Profiles...),
-		Advanced:        policy.Advanced,
-		SessionPool:     policy.SessionPool,
-		TLSIdentity:     policy.TLSIdentity,
-		KernelTransport: policy.KernelTransport,
+		Mode:             strings.TrimSpace(policy.Mode),
+		Candidates:       append([]core.EndpointID(nil), policy.Candidates...),
+		Profile:          strings.TrimSpace(policy.Profile),
+		Datapath:         strings.TrimSpace(policy.Datapath),
+		Encryption:       strings.TrimSpace(policy.Encryption),
+		CryptoKeySource:  strings.TrimSpace(policy.CryptoKeySource),
+		CryptoSuites:     effectiveSecureTransportCryptoSuitesForDesired(desired),
+		CryptoPlacement:  effectiveTransportCryptoPlacementConfig(policy),
+		Profiles:         append([]config.TransportProfileConfig(nil), policy.Profiles...),
+		Advanced:         policy.Advanced,
+		SessionStrategy:  normalizedSessionPoolStrategy(policy.SessionPool),
+		SessionHeartbeat: policy.SessionPool.Heartbeat,
+		TLSIdentity:      policy.TLSIdentity,
+		KernelTransport:  policy.KernelTransport,
 	}
 }
 

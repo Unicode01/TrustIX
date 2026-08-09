@@ -8,16 +8,103 @@ import (
 	"crypto/cipher"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
+
+func TestCloseAEADDirectOwnerFilesClosesAndForgetsFiles(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "trustix-direct-owner-")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	aeadDirectOwnerFiles.Lock()
+	saved := aeadDirectOwnerFiles.files
+	aeadDirectOwnerFiles.files = map[string]*os.File{file.Name(): file}
+	aeadDirectOwnerFiles.Unlock()
+	t.Cleanup(func() {
+		_ = CloseAEADDirectOwnerFiles()
+		aeadDirectOwnerFiles.Lock()
+		aeadDirectOwnerFiles.files = saved
+		aeadDirectOwnerFiles.Unlock()
+	})
+
+	if err := CloseAEADDirectOwnerFiles(); err != nil {
+		t.Fatalf("close direct owner files: %v", err)
+	}
+	if _, err := file.Write([]byte("closed")); err == nil {
+		t.Fatal("direct owner file remained writable after close")
+	}
+	aeadDirectOwnerFiles.Lock()
+	remaining := len(aeadDirectOwnerFiles.files)
+	aeadDirectOwnerFiles.Unlock()
+	if remaining != 0 {
+		t.Fatalf("direct owner files retained %d entries", remaining)
+	}
+
+	reopened, err := openAEADDirectOwnerFile(file.Name())
+	if err != nil {
+		t.Fatalf("reopen direct owner file: %v", err)
+	}
+	if reopened == file {
+		t.Fatal("reopen returned the closed owner file")
+	}
+}
+
+func TestAEADDeviceConcurrentCloseIsIdempotent(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "trustix-aead-close-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := unix.Mmap(-1, 0, unix.Getpagesize(),
+		unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANON)
+	if err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	for i := range pool {
+		pool[i] = byte(i%251 + 1)
+	}
+	device := &AEADDevice{file: file, pool: pool}
+
+	const closers = 32
+	start := make(chan struct{})
+	errs := make(chan error, closers)
+	var wait sync.WaitGroup
+	wait.Add(closers)
+	for range closers {
+		go func() {
+			defer wait.Done()
+			<-start
+			errs <- device.Close()
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent close: %v", err)
+		}
+	}
+	if device.file != nil || device.pool != nil {
+		t.Fatalf("closed AEAD device retained resources: file=%v pool_len=%d", device.file, len(device.pool))
+	}
+	if err := device.Close(); err != nil {
+		t.Fatalf("repeated close: %v", err)
+	}
+}
 
 func TestTrustIXDatapathHelpersDeviceQueryAndSelftest(t *testing.T) {
 	if os.Geteuid() != 0 {
@@ -1002,6 +1089,83 @@ func TestTrustIXAEADDeviceBatchSealOpen(t *testing.T) {
 	}
 }
 
+func TestTrustIXAEADDirectSlotsReleasedOnOwnerProcessExit(t *testing.T) {
+	const helperEnv = "TRUSTIX_AEAD_DIRECT_OWNER_EXIT_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		slot, err := AEADDirectSetKeyAlloc("", TrustIXAEADDirectAnySlot, bytesOf(0x6a, 32), false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		fmt.Fprintln(os.Stdout, slot)
+		os.Exit(0)
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("trustix_crypto direct-slot owner test requires root")
+	}
+	if !AEADDeviceAvailable("") {
+		t.Skip("trustix_crypto device is not available; load trustix_crypto.ko")
+	}
+
+	activePath := "/sys/module/trustix_crypto/parameters/direct_slots_active"
+	releasedPath := "/sys/module/trustix_crypto/parameters/direct_owner_release_slots"
+	activeBefore, err := readUint64File(activePath)
+	if err != nil {
+		t.Fatalf("read direct slot count: %v", err)
+	}
+	releasedBefore, err := readUint64File(releasedPath)
+	if err != nil {
+		t.Fatalf("read owner release count: %v", err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTrustIXAEADDirectSlotsReleasedOnOwnerProcessExit$")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run direct-slot owner helper: %v: %s", err, output)
+	}
+	childSlot64, err := strconv.ParseUint(strings.TrimSpace(string(output)), 10, 32)
+	if err != nil {
+		t.Fatalf("parse helper slot %q: %v", output, err)
+	}
+	childSlot := uint32(childSlot64)
+	t.Cleanup(func() { _ = AEADDirectClearKey("", childSlot) })
+
+	activeAfterExit, err := readUint64File(activePath)
+	if err != nil {
+		t.Fatalf("read direct slot count after helper exit: %v", err)
+	}
+	if activeAfterExit != activeBefore {
+		t.Fatalf("direct slots after owner exit = %d, want baseline %d", activeAfterExit, activeBefore)
+	}
+	releasedAfterExit, err := readUint64File(releasedPath)
+	if err != nil {
+		t.Fatalf("read owner release count after helper exit: %v", err)
+	}
+	if releasedAfterExit <= releasedBefore {
+		t.Fatalf("owner release slots = %d, want > %d", releasedAfterExit, releasedBefore)
+	}
+
+	parentSlot, err := AEADDirectSetKeyAlloc("", TrustIXAEADDirectAnySlot, bytesOf(0x6b, 32), false)
+	if err != nil {
+		t.Fatalf("allocate direct slot after helper exit: %v", err)
+	}
+	t.Cleanup(func() { _ = AEADDirectClearKey("", parentSlot) })
+	if parentSlot != childSlot {
+		t.Fatalf("slot after owner exit = %d, want reclaimed slot %d", parentSlot, childSlot)
+	}
+	if err := AEADDirectClearKey("", parentSlot); err != nil {
+		t.Fatalf("clear reclaimed direct slot: %v", err)
+	}
+	activeAfterClear, err := readUint64File(activePath)
+	if err != nil {
+		t.Fatalf("read direct slot count after clear: %v", err)
+	}
+	if activeAfterClear != activeBefore {
+		t.Fatalf("direct slots after explicit clear = %d, want baseline %d", activeAfterClear, activeBefore)
+	}
+}
+
 func TestTrustIXAEADDeviceSessionBatchSealOpen(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("trustix_crypto device test requires root")
@@ -1192,6 +1356,46 @@ func TestTrustIXAEADDeviceKernelPreparedPoolBatchSealOpen(t *testing.T) {
 		plainOutOff := openBase + i*len(plain)
 		if !bytes.Equal(pool[plainOutOff:plainOutOff+len(plain)], plain) {
 			t.Fatalf("prepared kernel opened[%d] mismatch", i)
+		}
+	}
+
+	tampered := 1
+	tamperedCipherOff := outBase + tampered*(len(plain)+trustIXAEADIOCTagLen)
+	pool[tamperedCipherOff] ^= 0x80
+	for i := 0; i < batchSize; i++ {
+		plainOutOff := openBase + i*len(plain)
+		copy(pool[plainOutOff:plainOutOff+len(plain)], bytesOf(0x5a, len(plain)))
+	}
+	err = device.OpenKernelPreparedPoolBatch(0, batchSize)
+	pool[tamperedCipherOff] ^= 0x80
+	if err == nil {
+		t.Fatal("kernel prepared open accepted a tampered ciphertext")
+	}
+	if !errors.Is(err, syscall.EBADMSG) {
+		t.Fatalf("kernel prepared partial failure = %v, want EBADMSG", err)
+	}
+	results, ok := AEADPoolBatchResults(err)
+	if !ok {
+		t.Fatalf("kernel prepared partial failure did not return per-op results: %v", err)
+	}
+	for i, result := range results {
+		want := int32(0)
+		if i == tampered {
+			want = -int32(syscall.EBADMSG)
+		}
+		if result != want {
+			t.Fatalf("kernel prepared partial result[%d] = %d, want %d", i, result, want)
+		}
+		plainOutOff := openBase + i*len(plain)
+		got := pool[plainOutOff : plainOutOff+len(plain)]
+		if i == tampered {
+			if !bytes.Equal(got, make([]byte, len(plain))) {
+				t.Fatal("tampered prepared kernel output was not cleared")
+			}
+			continue
+		}
+		if !bytes.Equal(got, plain) {
+			t.Fatalf("valid prepared kernel output[%d] was lost after peer failure", i)
 		}
 	}
 }

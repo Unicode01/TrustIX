@@ -27,8 +27,9 @@ const (
 	// FlagInnerIPv4 marks payloads that are known dataplane IPv4 packets and
 	// are eligible for kernel RX direct decapsulation after crypto open.
 	FlagInnerIPv4 uint8 = 1 << 3
-	// FlagInnerTCPChecksumPartial marks a plaintext inner IPv4/TCP packet whose
-	// TCP checksum field contains the CHECKSUM_PARTIAL pseudo-header seed.
+	// FlagInnerTCPChecksumPartial marks an inner IPv4/TCP packet whose TCP
+	// checksum field contains the CHECKSUM_PARTIAL pseudo-header seed. When the
+	// frame is encrypted, receivers validate the seed after authenticated open.
 	FlagInnerTCPChecksumPartial uint8 = 1 << 4
 	// FlagInnerGSO marks one plaintext inner IPv4/TCP GSO packet. For this flag,
 	// FragmentIndex carries gso_size and FragmentCount carries gso_segs.
@@ -81,7 +82,7 @@ func (frame Frame) MarshalBinaryInto(wire []byte) (int, error) {
 		if err := ValidateInnerTCPGSO(frame.Payload, frame.FragmentIndex, frame.FragmentCount); err != nil {
 			return 0, err
 		}
-	} else if frame.Flags&FlagInnerTCPChecksumPartial != 0 {
+	} else if frame.Flags&FlagInnerTCPChecksumPartial != 0 && frame.Flags&FlagEncrypted == 0 {
 		if err := ValidateInnerTCPChecksumPartial(frame.Payload); err != nil {
 			return 0, err
 		}
@@ -174,7 +175,7 @@ func parseFramePrefix(wire []byte, copyPayload bool) (Frame, int, error) {
 		if err := ValidateInnerTCPGSO(payload, fragmentIndex, fragmentCount); err != nil {
 			return Frame{}, 0, err
 		}
-	} else if flags&FlagInnerTCPChecksumPartial != 0 {
+	} else if flags&FlagInnerTCPChecksumPartial != 0 && flags&FlagEncrypted == 0 {
 		if err := ValidateInnerTCPChecksumPartial(payload); err != nil {
 			return Frame{}, 0, err
 		}
@@ -221,7 +222,8 @@ func validateFrameFlags(flags uint8, fragmentIndex, fragmentCount uint16) error 
 		return nil
 	}
 	if flags&FlagInnerIPv4 == 0 ||
-		flags&(FlagEncrypted|FlagKernelOpened|FlagCryptoFragment) != 0 ||
+		flags&FlagCryptoFragment != 0 ||
+		flags&(FlagEncrypted|FlagKernelOpened) == FlagEncrypted|FlagKernelOpened ||
 		fragmentIndex != 0 || fragmentCount != 0 {
 		return fmt.Errorf("tix_tcp inner TCP checksum-partial flag has incompatible frame metadata")
 	}
@@ -231,7 +233,10 @@ func validateFrameFlags(flags uint8, fragmentIndex, fragmentCount uint16) error 
 // ValidateInnerTCPGSO validates a plaintext IPv4/TCP GSO payload and the
 // gso_size/gso_segs values carried in the TIXT fragment fields.
 func ValidateInnerTCPGSO(packet []byte, gsoSize, gsoSegs uint16) error {
-	_, _, ipHeaderLen, totalLen, err := innerTCPChecksumPartialMeta(packet)
+	if err := ValidateInnerTCPChecksumPartial(packet); err != nil {
+		return err
+	}
+	_, _, ipHeaderLen, totalLen, err := innerTCPMeta(packet)
 	if err != nil {
 		return err
 	}
@@ -254,14 +259,40 @@ func ValidateInnerTCPGSO(packet []byte, gsoSize, gsoSegs uint16) error {
 // ValidateInnerTCPChecksumPartial validates a plaintext IPv4/TCP payload and
 // its CHECKSUM_PARTIAL pseudo-header seed without scanning the TCP payload.
 func ValidateInnerTCPChecksumPartial(packet []byte) error {
-	_, _, _, _, err := innerTCPChecksumPartialMeta(packet)
-	return err
+	src, dst, ipHeaderLen, totalLen, err := innerTCPMeta(packet)
+	if err != nil {
+		return err
+	}
+	tcp := packet[ipHeaderLen:totalLen]
+	seed := tcpPseudoHeaderSeed(src, dst, len(tcp))
+	if got := binary.BigEndian.Uint16(tcp[16:18]); got != seed {
+		return fmt.Errorf("%w: tix_tcp inner TCP checksum-partial seed %#x does not match %#x", ErrChecksum, got, seed)
+	}
+	return nil
+}
+
+// ValidateInnerTCPChecksum validates a complete plaintext IPv4/TCP checksum.
+func ValidateInnerTCPChecksum(packet []byte) error {
+	src, dst, ipHeaderLen, totalLen, err := innerTCPMeta(packet)
+	if err != nil {
+		return err
+	}
+	tcp := packet[ipHeaderLen:totalLen]
+	got := binary.BigEndian.Uint16(tcp[16:18])
+	want := tcpChecksum(src, dst, tcp)
+	if got != want {
+		return fmt.Errorf("%w: tix_tcp inner TCP checksum %#x does not match %#x", ErrChecksum, got, want)
+	}
+	return nil
 }
 
 // CompleteInnerTCPChecksumPartial replaces a validated pseudo-header seed with
 // the complete TCP checksum for userspace fallback delivery.
 func CompleteInnerTCPChecksumPartial(packet []byte) error {
-	src, dst, ipHeaderLen, totalLen, err := innerTCPChecksumPartialMeta(packet)
+	if err := ValidateInnerTCPChecksumPartial(packet); err != nil {
+		return err
+	}
+	src, dst, ipHeaderLen, totalLen, err := innerTCPMeta(packet)
 	if err != nil {
 		return err
 	}
@@ -271,7 +302,7 @@ func CompleteInnerTCPChecksumPartial(packet []byte) error {
 	return nil
 }
 
-func innerTCPChecksumPartialMeta(packet []byte) ([4]byte, [4]byte, int, int, error) {
+func innerTCPMeta(packet []byte) ([4]byte, [4]byte, int, int, error) {
 	var src [4]byte
 	var dst [4]byte
 	if len(packet) < ipv4HeaderLen+tcpHeaderLen {
@@ -298,10 +329,6 @@ func innerTCPChecksumPartialMeta(packet []byte) ([4]byte, [4]byte, int, int, err
 	}
 	copy(src[:], packet[12:16])
 	copy(dst[:], packet[16:20])
-	seed := tcpPseudoHeaderSeed(src, dst, len(tcp))
-	if got := binary.BigEndian.Uint16(tcp[16:18]); got != seed {
-		return src, dst, 0, 0, fmt.Errorf("%w: tix_tcp inner TCP checksum-partial seed %#x does not match %#x", ErrChecksum, got, seed)
-	}
 	return src, dst, ipHeaderLen, totalLen, nil
 }
 

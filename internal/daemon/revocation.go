@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"fmt"
 
 	"trustix.local/trustix/internal/config"
 	"trustix.local/trustix/internal/core"
 	"trustix.local/trustix/internal/pki"
-	"trustix.local/trustix/internal/transport"
 )
 
 func loadTLSCertificateChecked(desired config.Desired, certPath, keyPath, label string) (tls.Certificate, error) {
@@ -215,20 +213,26 @@ func (daemon *Daemon) closeUntrustedDataSessions() error {
 	daemon.membershipMu.RUnlock()
 
 	daemon.dataMu.Lock()
-	var sessions []transport.Session
+	dropped := make([]droppedDataSession, 0)
 	for key, session := range daemon.dataSessions {
 		if _, ok := allowedPeers[key.Peer]; ok {
 			continue
 		}
-		sessions = append(sessions, session)
+		daemon.clearForwardCacheForSession(key)
+		dropped = append(dropped, droppedDataSession{key: key, session: session, runtime: daemon.dataSessionState[key]})
 		delete(daemon.dataSessions, key)
+		delete(daemon.dataSessionState, key)
+		daemon.deleteDeviceAccessLeaseForSessionLocked(key)
+		daemon.deleteSessionPoolCursorLocked(key)
+		daemon.deleteSessionFlowBindingsLocked(key)
+	}
+	if len(dropped) > 0 {
+		daemon.dataSessionEpoch++
+	}
+	if len(daemon.dataSessions) == 0 {
+		daemon.sessionPoolRR = nil
+		daemon.sessionPoolFlow = nil
 	}
 	daemon.dataMu.Unlock()
-	var closeErrs []error
-	for _, session := range sessions {
-		if err := session.Close(); err != nil {
-			closeErrs = append(closeErrs, fmt.Errorf("close untrusted data session: %w", err))
-		}
-	}
-	return errors.Join(closeErrs...)
+	return wrapOperationError("close untrusted data sessions", daemon.finalizeDroppedDataSessions(dropped))
 }

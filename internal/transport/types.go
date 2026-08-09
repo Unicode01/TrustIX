@@ -179,6 +179,16 @@ type PeerIdentitySession interface {
 	PeerIdentity() (core.IXID, core.DomainID, bool)
 }
 
+const SessionGenerationSize = 16
+
+type SessionGeneration [SessionGenerationSize]byte
+
+// PeerSessionGenerationSession exposes the authenticated process generation
+// carried by a secure transport handshake.
+type PeerSessionGenerationSession interface {
+	PeerSessionGeneration() (SessionGeneration, bool)
+}
+
 type PeerIdentityAnnotator interface {
 	SetPeerIdentity(peer core.IXID, domain core.DomainID)
 }
@@ -210,33 +220,36 @@ type KernelFlowRetentionSession interface {
 }
 
 type KernelDatapathSessionInfo struct {
-	FlowID                            uint64
-	Protocol                          Protocol
-	Peer                              core.IXID
-	Endpoint                          core.EndpointID
-	LocalAddress                      string
-	RemoteAddress                     string
-	SourcePort                        uint16
-	DestinationPort                   uint16
-	Epoch                             uint64
-	CryptoSuite                       string
-	CryptoPlacement                   string
-	Encrypted                         bool
-	SendEncrypted                     bool
-	ReceiveEncrypted                  bool
-	NativeBatching                    bool
-	Datagram                          bool
-	FragmentingDatagram               bool
-	MaxPacketSize                     uint64
-	InnerTCPChecksumPartialLocal      bool
-	InnerTCPChecksumPartialPeer       bool
-	InnerTCPChecksumPartialNegotiated bool
-	InnerGSOLocal                     bool
-	InnerGSOPeer                      bool
-	InnerGSONegotiated                bool
-	TIXTCPPortShardingLocal           bool
-	TIXTCPPortShardingPeer            bool
-	TIXTCPPortShardingNegotiated      bool
+	FlowID                                  uint64
+	Protocol                                Protocol
+	Peer                                    core.IXID
+	Endpoint                                core.EndpointID
+	LocalAddress                            string
+	RemoteAddress                           string
+	SourcePort                              uint16
+	DestinationPort                         uint16
+	Epoch                                   uint64
+	CryptoSuite                             string
+	CryptoPlacement                         string
+	Encrypted                               bool
+	SendEncrypted                           bool
+	ReceiveEncrypted                        bool
+	NativeBatching                          bool
+	Datagram                                bool
+	FragmentingDatagram                     bool
+	MaxPacketSize                           uint64
+	InnerTCPChecksumPartialLocal            bool
+	InnerTCPChecksumPartialPeer             bool
+	InnerTCPChecksumPartialNegotiated       bool
+	SecureInnerTCPChecksumPartialLocal      bool
+	SecureInnerTCPChecksumPartialPeer       bool
+	SecureInnerTCPChecksumPartialNegotiated bool
+	InnerGSOLocal                           bool
+	InnerGSOPeer                            bool
+	InnerGSONegotiated                      bool
+	TIXTCPPortShardingLocal                 bool
+	TIXTCPPortShardingPeer                  bool
+	TIXTCPPortShardingNegotiated            bool
 }
 
 type KernelDatapathSession interface {

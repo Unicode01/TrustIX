@@ -857,7 +857,7 @@ func TestDataplaneAttachSpecRecordsForcedTIXTCPSecureDirectOnly(t *testing.T) {
 	}
 }
 
-func TestDataplaneAttachSpecEnablesPerformanceSecureTIXTCPDirect(t *testing.T) {
+func TestDataplaneAttachSpecEnablesPerformanceSecureTIXTCPFullKmod(t *testing.T) {
 	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
 		LAN: config.LANConfig{
 			Iface: "br-lan",
@@ -876,29 +876,73 @@ func TestDataplaneAttachSpecEnablesPerformanceSecureTIXTCPDirect(t *testing.T) {
 		}},
 	})
 
-	if !spec.KernelUDPTXDirectOnly || !spec.KernelUDPTCOnlyProvider {
-		t.Fatalf("performance secure tix_tcp route-GSO should use TC-only provider, spec=%#v", spec)
+	if !spec.KernelDatapathSecureTIXTCP {
+		t.Fatalf("performance secure tix_tcp should use full secure kernel datapath, spec=%#v", spec)
 	}
-	if spec.KernelUDPTXDirectOnlyReason == "" || spec.KernelUDPTCOnlyProviderReason == "" {
-		t.Fatalf("performance secure tix_tcp route-GSO should record direct-only reasons, spec=%#v", spec)
+	if spec.ManageQdisc || len(spec.LANs) != 1 || spec.LANs[0].ManageQdisc {
+		t.Fatalf("performance secure tix_tcp full-kmod must leave LAN TC ownership untouched, spec=%#v", spec)
 	}
-	if !spec.TIXTCPTXDirect {
-		t.Fatalf("performance secure tix_tcp should enable TC direct flow-map sync, spec=%#v", spec)
+	if spec.KernelUDPTXDirectOnly || spec.KernelUDPTCOnlyProvider ||
+		spec.KernelUDPTXDirectOnlyReason != "" || spec.KernelUDPTCOnlyProviderReason != "" {
+		t.Fatalf("performance secure tix_tcp full-kmod should not use TC-only provider, spec=%#v", spec)
 	}
-	if !spec.TIXTCPRouteGSOAsync || !spec.TIXTCPRouteGSOSync || !spec.TIXTCPRouteXmitWorker {
-		t.Fatalf("performance secure tix_tcp should enable secure route-GSO, spec=%#v", spec)
+	if spec.TIXTCPTXDirect {
+		t.Fatalf("performance secure tix_tcp full-kmod should not enable TC direct flow-map sync, spec=%#v", spec)
+	}
+	if spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker {
+		t.Fatalf("performance secure tix_tcp full-kmod should not enable route-GSO, spec=%#v", spec)
 	}
 	if spec.TIXTCPPlainSkipSequence || spec.TIXTCPPlainACKOnly {
 		t.Fatalf("performance secure tix_tcp must not enable plaintext route-GSO sequence shortcuts, spec=%#v", spec)
 	}
-	if !spec.KernelUDPTXSecureDirect || !spec.KernelUDPRXSecureDirect {
-		t.Fatalf("performance secure tix_tcp should enable TX/RX secure direct, spec=%#v", spec)
+	if spec.KernelUDPTXSecureDirect || spec.KernelUDPRXSecureDirect {
+		t.Fatalf("performance secure tix_tcp full-kmod should not enable TC TX/RX secure direct, spec=%#v", spec)
 	}
-	if !spec.KernelUDPSecureDirectTrustInnerChecksums {
-		t.Fatalf("performance secure tix_tcp should enable secure direct checksum trust, spec=%#v", spec)
+	if spec.KernelUDPSecureDirectTrustInnerChecksums {
+		t.Fatalf("performance secure tix_tcp full-kmod should not enable TC checksum trust, spec=%#v", spec)
 	}
 	if spec.KernelUDPSecureRouteGSO {
 		t.Fatalf("performance secure tix_tcp should not mark kernel_udp route-GSO, spec=%#v", spec)
+	}
+}
+
+func TestDataplaneAttachSpecEnablesMixedSecureKernelDatapaths(t *testing.T) {
+	spec := dataplaneAttachSpec(t.TempDir(), config.Desired{
+		LAN: config.LANConfig{
+			Iface: "br-lan",
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"udp-a", "tix-tcp-a"},
+		},
+		Endpoints: []config.EndpointConfig{
+			{
+				Name:      "udp-a",
+				Transport: string(transport.ProtocolUDP),
+				Enabled:   true,
+			},
+			{
+				Name:      "tix-tcp-a",
+				Transport: string(transport.ProtocolTIXTCP),
+				Enabled:   true,
+			},
+		},
+	})
+
+	if !spec.KernelDatapathSecureTIXTCP {
+		t.Fatalf("mixed secure policy should keep tix_tcp on the full kernel datapath, spec=%#v", spec)
+	}
+	if !spec.KernelUDPTXSecureDirect || !spec.KernelUDPRXSecureDirect {
+		t.Fatalf("mixed secure policy should keep UDP on TC/XDP secure direct, spec=%#v", spec)
+	}
+	if !spec.ManageQdisc || len(spec.LANs) != 1 || !spec.LANs[0].ManageQdisc {
+		t.Fatalf("mixed secure policy must prepare LAN TC for UDP alongside full-kmod tix_tcp, spec=%#v", spec)
+	}
+	if spec.TIXTCPTXDirect || spec.TIXTCPRouteGSOAsync || spec.TIXTCPRouteGSOSync || spec.TIXTCPRouteXmitWorker {
+		t.Fatalf("mixed secure policy must not attach legacy TIX-TCP TC/route-GSO paths, spec=%#v", spec)
 	}
 }
 

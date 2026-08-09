@@ -174,6 +174,9 @@ func transportProfileRuntimeFeatures(rawTransport string, desired config.Desired
 		if kernelDatapathFullPlaintextPolicySelectedForDesired(desired) {
 			return []string{"tix_tcp_full_kmod", "full_kmod", "kernel_datapath_full_plaintext", "rx_worker", "tx_plaintext"}
 		}
+		if kernelDatapathSecureTIXTCPForDesired(desired) {
+			return []string{"tix_tcp_secure_full_kmod", "full_kmod", "kernel_datapath_full_secure", "kernel_crypto", "direct_aesni", "rx_worker", "tx_secure_tix_tcp"}
+		}
 		if tixTCPSecureRouteGSOAsyncForDesired(desired) {
 			return []string{"kernel_crypto", "route_gso", "route_tcp_kfunc", "secure_tix_tcp_kernel"}
 		}

@@ -31,7 +31,6 @@ secure_kudp_drop_ratio_budget="${TRUSTIX_CROSS_HOST_SECURE_KUDP_DROP_RATIO_BUDGE
 secure_tix_tcp_kernel_min_sessions="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS:-8}"
 secure_tix_tcp_kernel_min_crypto_flows="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS:-1}"
 secure_tix_tcp_kernel_session_error_budget="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET:-2}"
-secure_tix_tcp_kernel_direct_error_budget="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET:-0}"
 secure_tix_tcp_kernel_replay_ratio_budget="${TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET:-0.00002}"
 route_gso_min_sessions="${TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS:-8}"
 route_gso_session_error_budget="${TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET:-2}"
@@ -441,7 +440,7 @@ route_tcp_helper_capability_args() {
 case_module_param_args() {
   local family="$1" case_token="$2"
   case "$family" in
-    secure-kudp|secure-tix-tcp-kernel|route-gso)
+    secure-kudp|route-gso)
       route_tcp_helper_capability_args
       return 0
       ;;
@@ -482,7 +481,6 @@ write_gate_manifest() {
   TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS="$secure_tix_tcp_kernel_min_sessions" \
   TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS="$secure_tix_tcp_kernel_min_crypto_flows" \
   TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET="$secure_tix_tcp_kernel_session_error_budget" \
-  TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET="$secure_tix_tcp_kernel_direct_error_budget" \
   TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET="$secure_tix_tcp_kernel_replay_ratio_budget" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_SESSIONS="$route_gso_min_sessions" \
   TRUSTIX_GATE_MANIFEST_ROUTE_GSO_SESSION_ERROR_BUDGET="$route_gso_session_error_budget" \
@@ -560,7 +558,6 @@ manifest = {
         "secure_tix_tcp_kernel_min_sessions": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS"],
         "secure_tix_tcp_kernel_min_crypto_flows": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS"],
         "secure_tix_tcp_kernel_session_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET"],
-        "secure_tix_tcp_kernel_direct_error_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET"],
         "secure_tix_tcp_kernel_replay_ratio_budget": env["TRUSTIX_GATE_MANIFEST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET"],
         "route_gso_min_sessions": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_MIN_SESSIONS"],
         "route_gso_session_error_budget": env["TRUSTIX_GATE_MANIFEST_ROUTE_GSO_SESSION_ERROR_BUDGET"],
@@ -691,7 +688,6 @@ main() {
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_SESSIONS "$secure_tix_tcp_kernel_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_MIN_CRYPTO_FLOWS "$secure_tix_tcp_kernel_min_crypto_flows"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_SESSION_ERROR_BUDGET "$secure_tix_tcp_kernel_session_error_budget"
-  validate_nonnegative_integer TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_DIRECT_ERROR_BUDGET "$secure_tix_tcp_kernel_direct_error_budget"
   validate_number TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_REPLAY_RATIO_BUDGET "$secure_tix_tcp_kernel_replay_ratio_budget"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_MIN_SESSIONS "$route_gso_min_sessions"
   validate_nonnegative_integer TRUSTIX_CROSS_HOST_ROUTE_GSO_SESSION_ERROR_BUDGET "$route_gso_session_error_budget"
@@ -708,7 +704,6 @@ main() {
   secure_tix_tcp_kernel_min_sessions="$(max_integer "$secure_tix_tcp_kernel_min_sessions" "8")"
   secure_tix_tcp_kernel_min_crypto_flows="$(max_integer "$secure_tix_tcp_kernel_min_crypto_flows" "1")"
   secure_tix_tcp_kernel_session_error_budget="$(min_integer "$secure_tix_tcp_kernel_session_error_budget" "2")"
-  secure_tix_tcp_kernel_direct_error_budget="$(min_integer "$secure_tix_tcp_kernel_direct_error_budget" "0")"
   secure_tix_tcp_kernel_replay_ratio_budget="$(min_decimal "$secure_tix_tcp_kernel_replay_ratio_budget" "0.00002")"
   route_gso_min_sessions="$(max_integer "$route_gso_min_sessions" "8")"
   route_gso_session_error_budget="$(min_integer "$route_gso_session_error_budget" "2")"
@@ -1114,87 +1109,54 @@ main() {
       --require-status-min data_path.active_sessions="${secure_tix_tcp_kernel_min_sessions}" \
       --require-status-max data_path.counters.session_dial_errors="${secure_tix_tcp_kernel_session_error_budget}" \
       --require-status-max data_path.counters.session_heartbeat_timeouts=0 \
+      --require-datapath-stat tix_tcp.provider=kernel_datapath_full_secure \
       --require-datapath-stat tix_tcp.fast_path=true \
       --require-datapath-stat tix_tcp.reinject=true \
+      --require-datapath-stat tix_tcp.userspace_crypto=false \
       --require-datapath-stat tix_tcp.kernel_crypto=true \
       --require-datapath-stat tix_tcp.requested_crypto=kernel \
       --require-datapath-stat tix_tcp.effective_crypto=kernel \
       --require-datapath-min tix_tcp.active_flows=1 \
-      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_flow_map_ready=1 \
-      --require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_entries="${secure_tix_tcp_kernel_min_crypto_flows}" \
-      --require-datapath-min tix_tcp.provider_stats.kernel_crypto_flow_map_updates="${secure_tix_tcp_kernel_min_crypto_flows}" \
-      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_direct_slot_provider_ready=1 \
-      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_direct_kfunc_fastpath_ready=1 \
-      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_tc_direct_ready=1 \
-      --require-datapath-stat tix_tcp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc=1 \
-      --require-datapath-stat tix_tcp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=1 \
-      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_attached=1 \
-      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_trust_inner_checksums=1 \
-      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled=1 \
-      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc=1 \
-      --require-datapath-min tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_seal_calls=1 \
-      --require-datapath-min tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls=1 \
-      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_errors="${secure_tix_tcp_kernel_direct_error_budget}" \
+      --require-datapath-max tix_tcp.provider_stats.xdp_unauthorized_drops=0 \
+      --require-datapath-min tix_tcp.provider_stats.kernel_crypto_datapath_flows="${secure_tix_tcp_kernel_min_crypto_flows}" \
+      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_datapath_retired_slots=0 \
+      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_module_full_datapath_features_secure_tix_tcp_full_datapath=1 \
+      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_module_full_datapath_safe_features_secure_tix_tcp_full_datapath=1 \
+      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_module_datapath_simd_fastpath=1 \
+      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_module_datapath_simd_irq_fpu_fastpath=1 \
+      --require-datapath-stat tix_tcp.provider_stats.kernel_crypto_module_aesni_available=1 \
       --require-datapath-max tix_tcp.provider_stats.kernel_crypto_provider_unavailable_errors=0 \
       --require-datapath-max tix_tcp.provider_stats.kernel_crypto_flow_rejects=0 \
       --require-datapath-max tix_tcp.provider_stats.kernel_crypto_frame_rejects=0 \
-      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_frame_seal_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_frame_open_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.kernel_crypto_frame_replay_drops=0 \
-      --require-datapath-ratio-max tix_tcp.provider_stats.kernel_crypto_frame_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_tix_tcp_kernel_replay_ratio_budget}" \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_open_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_drops=0 \
-      --require-datapath-ratio-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_drops/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_tix_tcp_kernel_replay_ratio_budget}" \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_no_context_drops=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_header_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_payload_len_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_secure_header_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_frame_header_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_epoch_sequence_mismatches=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_cipher_len_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_cipher_load_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_context_misses=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_state_misses=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_zero_plain_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_context_unavailable=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_epoch_mismatches=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_suite_mismatches=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_dynptr_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_decrypt_errors=0 \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors=0 \
-      --require-datapath-ratio-max tix_tcp.provider_stats.xdp_kernel_crypto_replay_commit_errors/tix_tcp.provider_stats.kernel_crypto_module_direct_kfunc_open_calls="${secure_tix_tcp_kernel_replay_ratio_budget}" \
-      --require-datapath-max tix_tcp.provider_stats.xdp_kernel_crypto_store_errors=0 \
-      --require-module-param-min trustix_crypto.kfunc_simd_fastpath=1 \
-      --require-module-param-min trustix_crypto.kfunc_simd_irq_fpu_fastpath=1 \
-      --require-module-param-any-min trustix_crypto.direct_kfunc_seal_calls=1 \
-      --require-module-param-any-min trustix_crypto.direct_kfunc_open_calls=1 \
-      --require-module-param-max trustix_crypto.direct_kfunc_errors="${secure_tix_tcp_kernel_direct_error_budget}" \
-      --require-module-param-min trustix_datapath_helpers.route_tcp_gso_async_secure_seal_batch=1 \
-      --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_builds=1 \
-      --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_stream_direct_frames=1 \
-      --require-module-param-any-min trustix_datapath_helpers.route_tcp_gso_async_xmit_packets=1 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_flow_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_plan_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_mtu_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_queue_full=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_queue_bytes_full=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_alloc_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_clone_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_segment_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_prepare_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_txq_stopped_drops=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_xmit_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_xmit_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_direct_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_blocked=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_virtio_blocked=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_outer_gso_verify_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_errors=0 \
-      --require-module-param-max trustix_datapath_helpers.route_tcp_gso_async_stream_cross_item_tail_stitch_errors=0 \
+      --require-datapath-min tix_tcp.provider_stats.kernel_datapath_module_secure_tx_packets=1 \
+      --require-datapath-min tix_tcp.provider_stats.kernel_datapath_module_secure_tx_frames=1 \
+      --require-datapath-min tix_tcp.provider_stats.kernel_datapath_module_secure_tx_batches=1 \
+      --require-datapath-min tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=1 \
+      --require-datapath-min tix_tcp.provider_stats.kernel_datapath_module_secure_rx_frames=1 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_datapath_module_state_clears=64 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_datapath_module_state_table_full=0 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_datapath_module_secure_tx_errors=0 \
+      --require-datapath-max tix_tcp.provider_stats.kernel_datapath_module_secure_tx_stale=0 \
+      --require-datapath-ratio-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_errors/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets="${secure_tix_tcp_kernel_replay_ratio_budget}" \
+      --require-datapath-ratio-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_stale/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets="${secure_tix_tcp_kernel_replay_ratio_budget}" \
+      --require-datapath-stat tix_tcp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc=0 \
+      --require-datapath-stat tix_tcp.provider_stats.tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested=0 \
+      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_tx_secure_direct_attached=0 \
+      --require-datapath-stat tix_tcp.provider_stats.tc_kernel_udp_rx_secure_direct_attached=0 \
+      --require-module-param-min trustix_crypto.datapath_simd_fastpath=1 \
+      --require-module-param-min trustix_crypto.datapath_simd_irq_fpu_fastpath=1 \
+      --require-module-param-min trustix_crypto.aesni_available=1 \
+      --require-module-param-min trustix_datapath.secure_tx_packets=1 \
+      --require-module-param-min trustix_datapath.secure_tx_frames=1 \
+      --require-module-param-min trustix_datapath.secure_tx_batches=1 \
+      --require-module-param-min trustix_datapath.secure_rx_packets=1 \
+      --require-module-param-min trustix_datapath.secure_rx_frames=1 \
+      --require-module-param-max trustix_datapath.secure_tx_errors=0 \
+      --require-module-param-max trustix_datapath.secure_tx_stale=0 \
+      --require-module-param-max trustix_datapath.selftest_failures=0 \
       --require-lsmod-module trustix_crypto \
-      --require-lsmod-module trustix_datapath_helpers
+      --require-lsmod-module trustix_datapath \
+      --forbid-lsmod-module trustix_datapath_helpers
   fi
 
   if [[ "$route_gso_case_count" -gt 0 ]]; then

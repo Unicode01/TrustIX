@@ -869,11 +869,7 @@ func (daemon *Daemon) dropDeviceAccessSessionsByFingerprint(fingerprint string) 
 	if err != nil {
 		return 0, err
 	}
-	type dropped struct {
-		session transport.Session
-		runtime *dataSessionRuntime
-	}
-	droppedSessions := make([]dropped, 0)
+	droppedSessions := make([]droppedDataSession, 0)
 	daemon.clearForwardCache()
 	daemon.dataMu.Lock()
 	for leaseKey, lease := range daemon.deviceLeases {
@@ -881,7 +877,11 @@ func (daemon *Daemon) dropDeviceAccessSessionsByFingerprint(fingerprint string) 
 		if deviceAccessSessionFingerprint(session) != fingerprint {
 			continue
 		}
-		droppedSessions = append(droppedSessions, dropped{session: session, runtime: daemon.dataSessionState[lease.SessionKey]})
+		droppedSessions = append(droppedSessions, droppedDataSession{
+			key:     lease.SessionKey,
+			session: session,
+			runtime: daemon.dataSessionState[lease.SessionKey],
+		})
 		delete(daemon.dataSessions, lease.SessionKey)
 		delete(daemon.dataSessionState, lease.SessionKey)
 		delete(daemon.deviceLeases, leaseKey)
@@ -896,19 +896,7 @@ func (daemon *Daemon) dropDeviceAccessSessionsByFingerprint(fingerprint string) 
 		daemon.sessionPoolFlow = nil
 	}
 	daemon.dataMu.Unlock()
-	var closeErrs []error
-	for _, item := range droppedSessions {
-		if item.runtime != nil && item.runtime.cancel != nil {
-			item.runtime.cancel()
-		}
-		if item.session != nil {
-			daemon.dataStats.staleSessionsDropped.Add(1)
-			if err := item.session.Close(); err != nil {
-				closeErrs = append(closeErrs, fmt.Errorf("close device access session: %w", err))
-			}
-		}
-	}
-	return len(droppedSessions), errors.Join(closeErrs...)
+	return len(droppedSessions), wrapOperationError("close device access sessions", daemon.closeDroppedDataSessionsResult(droppedSessions))
 }
 
 func (daemon *Daemon) countDeviceAccessSessionsByFingerprint(fingerprint string) int {
@@ -932,11 +920,7 @@ func (daemon *Daemon) dropRevokedDeviceAccessSessions() (int, error) {
 	if len(revoked) == 0 {
 		return 0, nil
 	}
-	type dropped struct {
-		session transport.Session
-		runtime *dataSessionRuntime
-	}
-	droppedSessions := make([]dropped, 0)
+	droppedSessions := make([]droppedDataSession, 0)
 	daemon.clearForwardCache()
 	daemon.dataMu.Lock()
 	for leaseKey, lease := range daemon.deviceLeases {
@@ -947,7 +931,8 @@ func (daemon *Daemon) dropRevokedDeviceAccessSessions() (int, error) {
 		if _, ok := revoked[fingerprint]; !ok {
 			continue
 		}
-		droppedSessions = append(droppedSessions, dropped{
+		droppedSessions = append(droppedSessions, droppedDataSession{
+			key:     lease.SessionKey,
 			session: daemon.dataSessions[lease.SessionKey],
 			runtime: daemon.dataSessionState[lease.SessionKey],
 		})
@@ -965,19 +950,7 @@ func (daemon *Daemon) dropRevokedDeviceAccessSessions() (int, error) {
 		daemon.sessionPoolFlow = nil
 	}
 	daemon.dataMu.Unlock()
-	var closeErrs []error
-	for _, item := range droppedSessions {
-		if item.runtime != nil && item.runtime.cancel != nil {
-			item.runtime.cancel()
-		}
-		if item.session != nil {
-			daemon.dataStats.staleSessionsDropped.Add(1)
-			if err := item.session.Close(); err != nil {
-				closeErrs = append(closeErrs, fmt.Errorf("close revoked device access session: %w", err))
-			}
-		}
-	}
-	return len(droppedSessions), errors.Join(closeErrs...)
+	return len(droppedSessions), wrapOperationError("close revoked device access sessions", daemon.closeDroppedDataSessionsResult(droppedSessions))
 }
 
 func deviceAccessSessionFingerprint(session transport.Session) string {

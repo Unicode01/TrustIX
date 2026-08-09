@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -403,6 +406,70 @@ func TestDataPathSessionsNeedRestartIgnoresRouteOnlyChanges(t *testing.T) {
 	}}
 	if !dataPathSessionsNeedRestart(oldWithLocal, localPriorityChanged) {
 		t.Fatal("local endpoint priority change should restart data sessions")
+	}
+
+	poolChanged := oldDesired
+	poolChanged.TransportPolicy.SessionPool = config.SessionPoolPolicyConfig{
+		Size:     8,
+		Strategy: "flow",
+		Warmup:   true,
+	}
+	if dataPathSessionsNeedRestart(oldDesired, poolChanged) {
+		t.Fatal("session pool size and warmup changes should preserve data sessions")
+	}
+	strategyChanged := poolChanged
+	strategyChanged.TransportPolicy.SessionPool.Strategy = "packet"
+	if !dataPathSessionsNeedRestart(poolChanged, strategyChanged) {
+		t.Fatal("session pool strategy changes should restart data sessions")
+	}
+
+	heartbeatChanged := poolChanged
+	heartbeatChanged.TransportPolicy.SessionPool.Heartbeat = config.SessionPoolHeartbeatConfig{
+		Mode:     "enabled",
+		Interval: "5s",
+		Timeout:  "2s",
+	}
+	if !dataPathSessionsNeedRestart(poolChanged, heartbeatChanged) {
+		t.Fatal("session heartbeat changes should restart data sessions")
+	}
+}
+
+func TestDataPathFlowBindingsNeedResetIgnoresPoolSelectionPolicy(t *testing.T) {
+	oldDesired := config.Desired{}
+	newDesired := oldDesired
+	newDesired.TransportPolicy.SessionPool = config.SessionPoolPolicyConfig{
+		Size:     16,
+		Strategy: "flow",
+		Warmup:   true,
+	}
+	if dataPathFlowBindingsNeedReset(oldDesired, newDesired) {
+		t.Fatal("session pool size and warmup policy should preserve active flow bindings")
+	}
+
+	newDesired.TransportPolicy.SessionPool.Strategy = "packet"
+	if !dataPathFlowBindingsNeedReset(oldDesired, newDesired) {
+		t.Fatal("session pool strategy changes should reset active flow bindings")
+	}
+	newDesired.TransportPolicy.SessionPool.Strategy = "flow"
+
+	newDesired.TransportPolicy.SessionPool.Heartbeat.Mode = "enabled"
+	if !dataPathFlowBindingsNeedReset(oldDesired, newDesired) {
+		t.Fatal("session heartbeat policy should reset flow bindings with its session restart")
+	}
+}
+
+func TestSessionPoolSelectionPolicyChangedUsesEffectiveDefaults(t *testing.T) {
+	if sessionPoolSelectionPolicyChanged(config.SessionPoolPolicyConfig{}, config.SessionPoolPolicyConfig{Size: 1, Strategy: "flow"}) {
+		t.Fatal("equivalent effective pool defaults should not advance the pool generation")
+	}
+	if !sessionPoolSelectionPolicyChanged(config.SessionPoolPolicyConfig{}, config.SessionPoolPolicyConfig{Size: 2}) {
+		t.Fatal("effective pool size change was not detected")
+	}
+	if !sessionPoolSelectionPolicyChanged(config.SessionPoolPolicyConfig{}, config.SessionPoolPolicyConfig{Strategy: "packet"}) {
+		t.Fatal("effective pool strategy change was not detected")
+	}
+	if !sessionPoolSelectionPolicyChanged(config.SessionPoolPolicyConfig{}, config.SessionPoolPolicyConfig{Warmup: true}) {
+		t.Fatal("pool warmup change was not detected")
 	}
 }
 
@@ -874,7 +941,7 @@ func TestDataPathSessionsNeedRestartWhenTransportProfilePolicyChanges(t *testing
 	}
 }
 
-func TestDataplaneAttachSpecNeedsReloadWhenSecureTIXTCPRouteGSOChanges(t *testing.T) {
+func TestDataplaneAttachSpecNeedsReloadWhenSecureTIXTCPFullKmodChanges(t *testing.T) {
 	oldDesired := config.Desired{
 		LAN: config.LANConfig{
 			Iface: "br-lan",
@@ -897,15 +964,19 @@ func TestDataplaneAttachSpecNeedsReloadWhenSecureTIXTCPRouteGSOChanges(t *testin
 
 	oldSpec := dataplaneAttachSpec(t.TempDir(), oldDesired)
 	newSpec := dataplaneAttachSpec(t.TempDir(), newDesired)
-	if oldSpec.TIXTCPRouteGSOAsync || oldSpec.KernelUDPTXSecureDirect {
-		t.Fatalf("old TC-XDP secure tix_tcp unexpectedly selected route-GSO: %#v", oldSpec)
+	if oldSpec.KernelDatapathSecureTIXTCP || oldSpec.TIXTCPRouteGSOAsync || oldSpec.KernelUDPTXSecureDirect {
+		t.Fatalf("old TC-XDP secure tix_tcp unexpectedly selected full-kmod or route-GSO: %#v", oldSpec)
 	}
-	if !newSpec.TIXTCPRouteGSOAsync || !newSpec.TIXTCPTXDirect ||
-		!newSpec.KernelUDPTXSecureDirect || !newSpec.KernelUDPRXSecureDirect {
-		t.Fatalf("new kernel-module secure tix_tcp did not select route-GSO/direct path: %#v", newSpec)
+	if !newSpec.KernelDatapathSecureTIXTCP {
+		t.Fatalf("new kernel-module secure tix_tcp did not select full secure kernel datapath: %#v", newSpec)
+	}
+	if newSpec.TIXTCPRouteGSOAsync || newSpec.TIXTCPTXDirect ||
+		newSpec.KernelUDPTXSecureDirect || newSpec.KernelUDPRXSecureDirect ||
+		newSpec.KernelUDPTCOnlyProvider || newSpec.KernelUDPTXDirectOnly {
+		t.Fatalf("new full secure kernel datapath mixed legacy TC/route-GSO ownership: %#v", newSpec)
 	}
 	if !dataplaneAttachSpecNeedsReload(oldDesired, newDesired) {
-		t.Fatal("secure tix_tcp route-GSO attach-spec change should reload dataplane")
+		t.Fatal("secure tix_tcp full-kmod attach-spec change should reload dataplane")
 	}
 }
 
@@ -971,6 +1042,113 @@ func TestConfigApplyKernelModuleChangeDetachesDataplaneBeforeEnsure(t *testing.T
 	}
 	if got := manager.attachCount.Load(); got == 0 {
 		t.Fatalf("kernel module dataplane change did not reattach dataplane")
+	}
+}
+
+func TestConfigApplySessionPoolChangePreservesSessionsFlowsAndModules(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	initial := configApplyDesired(pkiSet, "10.0.1.0/24")
+	initial.KernelModules.TrustIXCrypto = config.KernelModuleConfig{
+		Mode:            "required",
+		Path:            filepath.Join(t.TempDir(), "missing-trustix-crypto.ko"),
+		ReloadOnUpgrade: "always",
+	}
+	daemon := newConfigApplyTestDaemon(t, initial)
+	manager := &captureCountingManager{}
+	daemon.dataplane = manager
+	session := &recordingSession{}
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "b-udp",
+		Transport:  transport.ProtocolUDP,
+		Address:    "127.0.0.1:7002",
+		Encryption: "plaintext",
+		PoolIndex:  3,
+	}
+	daemon.dataSessions[key] = session
+	daemon.dataSessionState[key] = &dataSessionRuntime{key: key, session: session}
+	daemon.dataSessionEpoch = 7
+	flowKey := routing.FlowKey{
+		SourceIP:        netip.MustParseAddr("10.0.0.2"),
+		DestinationIP:   netip.MustParseAddr("10.0.1.2"),
+		SourcePort:      12345,
+		DestinationPort: 5201,
+		Protocol:        6,
+	}
+	flow := routing.FlowBinding{
+		Key:       flowKey,
+		NextHop:   key.Peer,
+		Endpoint:  key.Endpoint,
+		PoolIndex: key.PoolIndex,
+		LastSeen:  time.Now().UTC(),
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}
+	daemon.flows[flowKey] = flow
+
+	next := initial
+	next.TransportPolicy.SessionPool = config.SessionPoolPolicyConfig{Size: 2, Warmup: false}
+	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
+		t.Fatalf("apply session pool change changed=%t err=%v", changed, err)
+	}
+	if session.closed.Load() {
+		t.Fatal("session pool change closed an existing data session")
+	}
+	if daemon.dataSessions[key] != session {
+		t.Fatal("session pool change removed an existing data session")
+	}
+	if got, ok := daemon.flows[flowKey]; !ok || got != flow {
+		t.Fatalf("session pool change did not preserve active flow: got=%+v ok=%t want=%+v", got, ok, flow)
+	}
+	if daemon.dataSessionEpoch != 8 {
+		t.Fatalf("session pool generation = %d, want 8", daemon.dataSessionEpoch)
+	}
+	if got := manager.detachCount.Load(); got != 0 {
+		t.Fatalf("session pool change detached dataplane %d times", got)
+	}
+	if got := manager.attachCount.Load(); got != 0 {
+		t.Fatalf("session pool change reattached dataplane %d times", got)
+	}
+}
+
+func TestConfigApplyKernelModuleLifecycleChangeDoesNotReloadDataplane(t *testing.T) {
+	pkiSet := buildMembershipPKI(t)
+	initial := configApplyDesired(pkiSet, "10.0.1.0/24")
+	initial.KernelModules.TrustIXCrypto = config.KernelModuleConfig{
+		Mode:            "required",
+		Path:            filepath.Join(t.TempDir(), "missing-trustix-crypto.ko"),
+		ReloadOnUpgrade: "auto",
+	}
+	daemon := newConfigApplyTestDaemon(t, initial)
+	manager := &captureCountingManager{}
+	daemon.dataplane = manager
+
+	next := initial
+	next.KernelModules.TrustIXCrypto.ReloadOnUpgrade = "always"
+	next.KernelModules.TrustIXCrypto.UnloadOnExit = true
+	if changed, err := daemon.applyDesiredConfig(context.Background(), next); err != nil || !changed {
+		t.Fatalf("apply lifecycle change changed=%t err=%v", changed, err)
+	}
+	if got := manager.detachCount.Load(); got != 0 {
+		t.Fatalf("lifecycle-only change detached dataplane %d times", got)
+	}
+	if got := manager.attachCount.Load(); got != 0 {
+		t.Fatalf("lifecycle-only change reattached dataplane %d times", got)
+	}
+}
+
+func TestDesiredRuntimeRestoreDetachesBeforeEnsuringModules(t *testing.T) {
+	payload, err := os.ReadFile("config_api.go")
+	if err != nil {
+		t.Fatalf("read config API source: %v", err)
+	}
+	body := daemonTestSourceFunctionBody(t, string(payload), "func (daemon *Daemon) restoreDesiredRuntimeState")
+	detach := strings.Index(body, "daemon.dataplane.Detach(ctx)")
+	ensure := strings.Index(body, "daemon.ensureKernelModules(ctx, desired)")
+	if detach < 0 || ensure < 0 || detach >= ensure {
+		t.Fatalf("restore must detach dataplane before ensuring modules:\n%s", body)
+	}
+	if !strings.Contains(body, "startCaptureForwarderIfNeeded") || strings.Contains(body, "daemon.startCaptureForwarder(") {
+		t.Fatalf("restore bypasses capture suppression:\n%s", body)
 	}
 }
 

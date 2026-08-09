@@ -891,6 +891,40 @@ func TestTIXTCPDecodeEncryptedRXFrameCopiesByDefault(t *testing.T) {
 	frame.kernelOpenPlainRelease()
 }
 
+func TestTIXTCPDecodeEncryptedRXFrameDefersInnerTCPChecksumPartial(t *testing.T) {
+	fastPath := testTIXTCPFastPathWithQueues(1)
+	fastPath.skipTCPChecksum = true
+	manager := NewManager()
+	socket := testAFXDPSocketForRXFrame()
+	sequence := uint64(11)
+	payload := bytesOf(0x5a, kernelCryptoSecureHeaderLen+48+kernelCryptoFrameTagLen)
+	kernelCryptoPutSecureHeader(payload[:kernelCryptoSecureHeaderLen], byte(kernelCryptoSuiteIDTrustIXAES256GCMX25519), 9, sequence)
+	rxFrame, _ := testTIXTCPRXFrame(t, socket, tixtcp.Frame{
+		Flags:    tixtcp.FlagEncrypted | tixtcp.FlagInnerIPv4 | tixtcp.FlagInnerTCPChecksumPartial,
+		FlowID:   7,
+		Epoch:    9,
+		Sequence: sequence,
+		Payload:  payload,
+	})
+	var expBatch []receivedTIXTCPFrame
+	var udpBatch []receivedKernelUDPFrame
+
+	mode, err := fastPath.decodeRXFrame(manager, socket, rxFrame, &expBatch, &udpBatch)
+	if err != nil {
+		t.Fatalf("decodeRXFrame error = %v", err)
+	}
+	if mode != afXDPRXRecycleNow || len(expBatch) != 1 || len(udpBatch) != 0 {
+		t.Fatalf("encrypted partial decode = mode:%d tix_tcp:%d udp:%d", mode, len(expBatch), len(udpBatch))
+	}
+	frame := expBatch[0]
+	if !frame.encryptedKernelPayload || !frame.frame.InnerTCPChecksumPartial || !bytes.Equal(frame.frame.Payload, payload) {
+		t.Fatalf("encrypted partial metadata = encrypted:%t partial:%t payload:%x", frame.encryptedKernelPayload, frame.frame.InnerTCPChecksumPartial, frame.frame.Payload)
+	}
+	if frame.kernelOpenPlainRelease != nil {
+		frame.kernelOpenPlainRelease()
+	}
+}
+
 func TestTIXTCPDecodeEncryptedCryptoFragmentCopiesByDefault(t *testing.T) {
 	fastPath := testTIXTCPFastPathWithQueues(1)
 	fastPath.skipTCPChecksum = true

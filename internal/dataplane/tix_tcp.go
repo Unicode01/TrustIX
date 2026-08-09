@@ -23,45 +23,48 @@ const (
 )
 
 type TIXTCPStatus struct {
-	Available               bool                     `json:"available"`
-	Provider                string                   `json:"provider,omitempty"`
-	FastPath                bool                     `json:"fast_path"`
-	InnerTCPChecksumPartial bool                     `json:"inner_tcp_checksum_partial"`
-	InnerGSO                bool                     `json:"inner_gso"`
-	InnerGSOReason          string                   `json:"inner_gso_reason,omitempty"`
-	PortSharding            bool                     `json:"port_sharding"`
-	UserspaceCrypto         bool                     `json:"userspace_crypto"`
-	KernelCrypto            bool                     `json:"kernel_crypto"`
-	KernelCryptoReason      string                   `json:"kernel_crypto_reason,omitempty"`
-	KernelCryptoProbe       *KernelCryptoProbe       `json:"kernel_crypto_probe,omitempty"`
-	CryptoFallback          CryptoFallbackStatus     `json:"crypto_fallback,omitempty"`
-	Reinject                bool                     `json:"reinject"`
-	RawSocketFallback       bool                     `json:"raw_socket_fallback"`
-	XDPAttachMode           string                   `json:"xdp_attach_mode,omitempty"`
-	AFXDPBindMode           string                   `json:"af_xdp_bind_mode,omitempty"`
-	ZeroCopyEnabled         bool                     `json:"zerocopy_enabled"`
-	FastPathFallback        string                   `json:"fast_path_fallback_reason,omitempty"`
-	RequestedCrypto         CryptoPlacement          `json:"requested_crypto,omitempty"`
-	EffectiveCrypto         CryptoPlacement          `json:"effective_crypto,omitempty"`
-	PreferredCrypto         CryptoPlacement          `json:"preferred_crypto"`
-	SupportedCrypto         []CryptoPlacement        `json:"supported_crypto"`
-	FastPathQueues          int                      `json:"fast_path_queues,omitempty"`
-	ProviderStats           map[string]uint64        `json:"provider_stats,omitempty"`
-	Telemetry               []TransportPathTelemetry `json:"telemetry,omitempty"`
-	Flows                   []TIXTCPFlow             `json:"flows,omitempty"`
-	ActiveFlows             int                      `json:"active_flows"`
-	SubmittedFrames         uint64                   `json:"submitted_frames"`
-	ReceivedFrames          uint64                   `json:"received_frames"`
-	Notes                   []string                 `json:"notes,omitempty"`
+	Available                     bool                     `json:"available"`
+	Provider                      string                   `json:"provider,omitempty"`
+	FastPath                      bool                     `json:"fast_path"`
+	InnerTCPChecksumPartial       bool                     `json:"inner_tcp_checksum_partial"`
+	SecureInnerTCPChecksumPartial bool                     `json:"secure_inner_tcp_checksum_partial"`
+	InnerGSO                      bool                     `json:"inner_gso"`
+	InnerGSOReason                string                   `json:"inner_gso_reason,omitempty"`
+	PortSharding                  bool                     `json:"port_sharding"`
+	UserspaceCrypto               bool                     `json:"userspace_crypto"`
+	KernelCrypto                  bool                     `json:"kernel_crypto"`
+	KernelCryptoReason            string                   `json:"kernel_crypto_reason,omitempty"`
+	KernelCryptoProbe             *KernelCryptoProbe       `json:"kernel_crypto_probe,omitempty"`
+	CryptoFallback                CryptoFallbackStatus     `json:"crypto_fallback,omitempty"`
+	Reinject                      bool                     `json:"reinject"`
+	RawSocketFallback             bool                     `json:"raw_socket_fallback"`
+	XDPAttachMode                 string                   `json:"xdp_attach_mode,omitempty"`
+	AFXDPBindMode                 string                   `json:"af_xdp_bind_mode,omitempty"`
+	ZeroCopyEnabled               bool                     `json:"zerocopy_enabled"`
+	FastPathFallback              string                   `json:"fast_path_fallback_reason,omitempty"`
+	RequestedCrypto               CryptoPlacement          `json:"requested_crypto,omitempty"`
+	EffectiveCrypto               CryptoPlacement          `json:"effective_crypto,omitempty"`
+	PreferredCrypto               CryptoPlacement          `json:"preferred_crypto"`
+	SupportedCrypto               []CryptoPlacement        `json:"supported_crypto"`
+	FastPathQueues                int                      `json:"fast_path_queues,omitempty"`
+	ProviderStats                 map[string]uint64        `json:"provider_stats,omitempty"`
+	Telemetry                     []TransportPathTelemetry `json:"telemetry,omitempty"`
+	Flows                         []TIXTCPFlow             `json:"flows,omitempty"`
+	ActiveFlows                   int                      `json:"active_flows"`
+	SubmittedFrames               uint64                   `json:"submitted_frames"`
+	ReceivedFrames                uint64                   `json:"received_frames"`
+	Notes                         []string                 `json:"notes,omitempty"`
 }
 
 // TIXTCPCapabilities is the lightweight subset needed to keep negotiated
 // transport capabilities synchronized while a session is active.
 type TIXTCPCapabilities struct {
-	FullPlaintextKernel     bool
-	InnerTCPChecksumPartial bool
-	InnerGSO                bool
-	PortSharding            bool
+	FullPlaintextKernel           bool
+	FullSecureKernel              bool
+	InnerTCPChecksumPartial       bool
+	SecureInnerTCPChecksumPartial bool
+	InnerGSO                      bool
+	PortSharding                  bool
 }
 
 type CryptoFallbackStatus struct {
@@ -143,6 +146,25 @@ type TIXTCPCryptoSpec struct {
 	InstalledAt  time.Time `json:"installed_at,omitempty"`
 }
 
+// KernelCryptoDirectState exposes only the metadata needed to route packets
+// through an already-installed kernel key slot. Key material remains owned by
+// the crypto provider.
+type KernelCryptoDirectState struct {
+	SlotID       uint32
+	Suite        uint16
+	WireFormat   uint16
+	Epoch        uint64
+	IV           [12]byte
+	ReplayWindow uint32
+	LastSequence uint64
+}
+
+type TIXTCPCryptoState struct {
+	FlowID  uint64
+	Send    KernelCryptoDirectState
+	Receive KernelCryptoDirectState
+}
+
 type TIXTCPFrame struct {
 	FlowID        uint64          `json:"flow_id"`
 	Direction     TIXTCPDirection `json:"direction"`
@@ -154,13 +176,14 @@ type TIXTCPFrame struct {
 	FragmentCount uint16          `json:"fragment_count,omitempty"`
 	// FragmentPayloadSize is an internal TX hint used when a kernel-crypto
 	// packet should be sealed once and fragmented after encryption.
-	FragmentPayloadSize int             `json:"-"`
-	Payload             []byte          `json:"payload"`
-	Encrypted           bool            `json:"encrypted"`
-	InnerIPv4           bool            `json:"inner_ipv4,omitempty"`
-	InnerGSO            bool            `json:"inner_gso,omitempty"`
-	CryptoSuite         string          `json:"crypto_suite,omitempty"`
-	CryptoPlacement     CryptoPlacement `json:"crypto_placement"`
+	FragmentPayloadSize     int             `json:"-"`
+	Payload                 []byte          `json:"payload"`
+	Encrypted               bool            `json:"encrypted"`
+	InnerIPv4               bool            `json:"inner_ipv4,omitempty"`
+	InnerTCPChecksumPartial bool            `json:"inner_tcp_checksum_partial,omitempty"`
+	InnerGSO                bool            `json:"inner_gso,omitempty"`
+	CryptoSuite             string          `json:"crypto_suite,omitempty"`
+	CryptoPlacement         CryptoPlacement `json:"crypto_placement"`
 	// Release returns borrowed packet storage after the receiver has injected or
 	// copied Payload. It is intentionally omitted from API serialization.
 	Release func() `json:"-"`
@@ -205,6 +228,19 @@ type TIXTCPSealBeforeFragmentSizer interface {
 
 type TIXTCPCryptoInstaller interface {
 	InstallTIXTCPCrypto(ctx context.Context, specs []TIXTCPCryptoSpec) error
+}
+
+type TIXTCPCryptoStateLookup interface {
+	TIXTCPCryptoState(ctx context.Context, flowID uint64) (TIXTCPCryptoState, bool, error)
+}
+
+// TIXTCPCryptoStateLifecycle acknowledges when direct key slots are no longer
+// referenced by the full kernel datapath. Implementations retain replaced keys
+// until the corresponding state update has reached the kernel module.
+type TIXTCPCryptoStateLifecycle interface {
+	CommitTIXTCPCryptoState(ctx context.Context, flowID uint64, epoch uint64) error
+	ReleaseTIXTCPCryptoState(ctx context.Context, flowID uint64) error
+	ReleaseRetiredTIXTCPCryptoStates(ctx context.Context) error
 }
 
 type TIXTCPFlowDeleter interface {

@@ -39,8 +39,10 @@ func TestFullDatapathOuterGSOPagePoolCompatibilityAndFallback(t *testing.T) {
 	exitSource := source[exitStart:]
 	detach := strings.Index(exitSource, "trustix_datapath_hook_detach_all();")
 	synchronize := strings.Index(exitSource, "synchronize_net();")
+	freeState := strings.Index(exitSource, "trustix_datapath_free_state();")
 	destroy := strings.Index(exitSource, "trustix_datapath_destroy_tx_outer_gso_page_pools();")
-	if detach < 0 || synchronize < 0 || destroy < 0 || detach >= synchronize || synchronize >= destroy {
-		t.Fatal("outer-GSO page pools must be destroyed after hook detach and synchronize_net")
+	if detach < 0 || synchronize < 0 || freeState < 0 || destroy < 0 ||
+		detach >= synchronize || synchronize >= freeState || freeState >= destroy {
+		t.Fatal("outer-GSO page pools must be destroyed after hook detach, synchronize_net, and asynchronous worker teardown")
 	}
 }

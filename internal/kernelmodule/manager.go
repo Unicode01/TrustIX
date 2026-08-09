@@ -42,12 +42,22 @@ type Status struct {
 	UnloadOnExit     bool       `json:"unload_on_exit,omitempty"`
 }
 
+// ReloadAssessment describes whether an already-loaded module must be
+// replaced before the desired configuration can be applied.
+type ReloadAssessment struct {
+	Required            bool     `json:"required"`
+	Upgrade             bool     `json:"upgrade,omitempty"`
+	ParameterMismatches []string `json:"parameter_mismatches,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
+}
+
 type Manager struct {
-	mu         sync.Mutex
-	name       string
-	embedded   embeddedModuleAsset
-	loadedByUs bool
-	status     Status
+	mu                  sync.Mutex
+	name                string
+	embedded            embeddedModuleAsset
+	loadedByUs          bool
+	pendingReloadReason string
+	status              Status
 }
 
 func NewTrustIXCryptoManager() *Manager {
@@ -119,6 +129,38 @@ func (manager *Manager) Close(ctx context.Context) error {
 	return manager.closeLocked(ctx)
 }
 
+func (manager *Manager) AssessReload(module config.KernelModuleConfig) (Status, ReloadAssessment) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if !supportedModuleName(manager.name) {
+		status := unsupportedModuleStatus(manager.name, module, normalizeMode(module.Mode))
+		manager.status = status
+		return status, ReloadAssessment{}
+	}
+	if manager.embedded.name == "" {
+		manager.embedded = embeddedModuleForName(manager.name)
+	}
+	status, assessment := manager.assessReloadLocked(module)
+	manager.status = status
+	return status, assessment
+}
+
+// UnloadForCoordinatedReload unloads a supported TrustIX module after the
+// daemon has quiesced its dataplane and approved the dependency-wide reload.
+func (manager *Manager) UnloadForCoordinatedReload(ctx context.Context, module config.KernelModuleConfig, reason string) (Status, error) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if !supportedModuleName(manager.name) {
+		status := unsupportedModuleStatus(manager.name, module, normalizeMode(module.Mode))
+		manager.status = status
+		return status, fmt.Errorf("%s is not a supported TrustIX kernel module", manager.name)
+	}
+	if manager.embedded.name == "" {
+		manager.embedded = embeddedModuleForName(manager.name)
+	}
+	return manager.unloadForCoordinatedReloadLocked(ctx, module, reason)
+}
+
 func (manager *Manager) Snapshot() Status {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -126,6 +168,18 @@ func (manager *Manager) Snapshot() Status {
 		manager.status.Name = manager.name
 	}
 	return completeCapabilityStatus(manager.status)
+}
+
+// UpdateLifecycle changes daemon-owned lifecycle policy without probing or
+// reloading a live module. Load-affecting changes still go through Ensure.
+func (manager *Manager) UpdateLifecycle(module config.KernelModuleConfig) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.status.Name == "" {
+		manager.status.Name = manager.name
+	}
+	manager.status.ReloadOnUpgrade = normalizedReloadOnUpgrade(module.ReloadOnUpgrade)
+	manager.status.UnloadOnExit = module.UnloadOnExit
 }
 
 func (manager *Manager) SetStatusForTest(status Status) {
@@ -148,6 +202,14 @@ func normalizeMode(raw string) string {
 	}
 }
 
+func normalizedReloadOnUpgrade(raw string) string {
+	policy := config.NormalizeKernelModuleReloadOnUpgrade(raw)
+	if policy == "" {
+		return "auto"
+	}
+	return policy
+}
+
 func supportedModuleName(name string) bool {
 	switch name {
 	case "trustix_crypto", "trustix_datapath", "trustix_datapath_helpers":
@@ -163,7 +225,7 @@ func unsupportedModuleStatus(name string, module config.KernelModuleConfig, mode
 		Mode:            mode,
 		Path:            strings.TrimSpace(module.Path),
 		Parameters:      module.Parameters,
-		ReloadOnUpgrade: config.NormalizeKernelModuleReloadOnUpgrade(module.ReloadOnUpgrade),
+		ReloadOnUpgrade: normalizedReloadOnUpgrade(module.ReloadOnUpgrade),
 		UnloadOnExit:    module.UnloadOnExit,
 		State:           "unsupported",
 		UpgradeState:    "unsupported_module",

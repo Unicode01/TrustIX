@@ -608,9 +608,6 @@ func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicySnapshot(
 	localEndpoints map[core.EndpointID]config.EndpointConfig,
 	grantsErr error,
 ) (int, error) {
-	type dropped struct {
-		session interface{ Close() error }
-	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	} else {
@@ -620,7 +617,7 @@ func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicySnapshot(
 		// Grant enforcement is fail-closed, but the read failure must remain visible.
 		grants = nil
 	}
-	droppedSessions := make([]dropped, 0)
+	droppedSessions := make([]droppedDataSession, 0)
 	daemon.dataMu.Lock()
 	for key, session := range daemon.dataSessions {
 		runtime := daemon.dataSessionState[key]
@@ -631,11 +628,8 @@ func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicySnapshot(
 		if daemon.endpointAccessAllowsPeerWithGrants(key.Peer, endpoint, grants, now) {
 			continue
 		}
-		if runtime != nil && runtime.cancel != nil {
-			runtime.cancel()
-		}
 		daemon.clearForwardCacheForSession(key)
-		droppedSessions = append(droppedSessions, dropped{session: session})
+		droppedSessions = append(droppedSessions, droppedDataSession{key: key, session: session, runtime: runtime})
 		delete(daemon.dataSessions, key)
 		delete(daemon.dataSessionState, key)
 		daemon.deleteSessionPoolCursorLocked(key)
@@ -649,18 +643,9 @@ func (daemon *Daemon) dropDataSessionsUnauthorizedByEndpointGrantPolicySnapshot(
 		daemon.sessionPoolFlow = nil
 	}
 	daemon.dataMu.Unlock()
-	var closeErrs []error
-	for _, item := range droppedSessions {
-		if item.session != nil {
-			daemon.dataStats.staleSessionsDropped.Add(1)
-			if err := item.session.Close(); err != nil {
-				closeErrs = append(closeErrs, fmt.Errorf("close endpoint grant session: %w", err))
-			}
-		}
-	}
 	return len(droppedSessions), errors.Join(
 		wrapOperationError("read endpoint grants", grantsErr),
-		errors.Join(closeErrs...),
+		wrapOperationError("close endpoint grant sessions", daemon.closeDroppedDataSessionsResult(droppedSessions)),
 	)
 }
 

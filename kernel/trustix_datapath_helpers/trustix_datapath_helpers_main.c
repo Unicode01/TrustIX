@@ -523,15 +523,15 @@ static int __init trustix_datapath_helpers_init(void)
 	int ret;
 
 	trustix_datapath_helpers_disable_panic_risk_params();
-	ret = trustix_datapath_helpers_register();
+	ret = misc_register(&trustix_datapath_helpers_miscdev);
 	if (ret)
 		return ret;
-	trustix_datapath_helpers_refresh_features();
-	ret = misc_register(&trustix_datapath_helpers_miscdev);
+	ret = trustix_datapath_helpers_register();
 	if (ret) {
-		trustix_datapath_helpers_unregister();
+		misc_deregister(&trustix_datapath_helpers_miscdev);
 		return ret;
 	}
+	trustix_datapath_helpers_refresh_features();
 	return 0;
 }
 

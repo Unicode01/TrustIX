@@ -391,8 +391,12 @@ func kernelCryptoSuiteID(suite string) (uint16, error) {
 }
 
 func encodeKernelCryptoSpecs(specs []dataplane.TIXTCPCryptoSpec) ([]kernelCryptoFlowEntry, error) {
-	if len(specs) > int(kernelCryptoMaxEntries)/2 {
-		return nil, fmt.Errorf("tix_tcp kernel crypto spec count %d exceeds map capacity %d", len(specs), kernelCryptoMaxEntries/2)
+	return encodeKernelCryptoSpecsWithCapacity(specs, int(kernelCryptoMaxEntries)/2, "map")
+}
+
+func encodeKernelCryptoSpecsWithCapacity(specs []dataplane.TIXTCPCryptoSpec, capacity int, provider string) ([]kernelCryptoFlowEntry, error) {
+	if capacity <= 0 || len(specs) > capacity {
+		return nil, fmt.Errorf("tix_tcp kernel crypto spec count %d exceeds %s capacity %d", len(specs), provider, capacity)
 	}
 	entries := make([]kernelCryptoFlowEntry, 0, len(specs)*2)
 	for _, spec := range specs {

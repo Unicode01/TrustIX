@@ -310,7 +310,7 @@ func TestEffectiveKernelTransportModeKeepsAutoForSecureKernelCryptoTIXTCP(t *tes
 	}
 }
 
-func TestEffectiveKernelTransportModeRequiresKernelForSecureKernelModuleTIXTCPRouteGSO(t *testing.T) {
+func TestEffectiveKernelTransportModeRequiresKernelForSecureKernelModuleTIXTCPFullKmod(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -326,11 +326,14 @@ func TestEffectiveKernelTransportModeRequiresKernelForSecureKernelModuleTIXTCPRo
 		}},
 	}
 
-	if !tixTCPSecureRouteGSOAsyncForDesired(desired) {
-		t.Fatal("kernel-module secure tix_tcp should select secure route-GSO")
+	if !kernelDatapathSecureTIXTCPForDesired(desired) {
+		t.Fatal("kernel-module secure tix_tcp should select full secure kernel datapath")
+	}
+	if tixTCPSecureRouteGSOAsyncForDesired(desired) {
+		t.Fatal("full secure kernel datapath must not also select route-GSO")
 	}
 	if got := effectiveKernelTransportModeForDesired(desired); got != dataplane.KernelTransportModeRequireKernel {
-		t.Fatalf("kernel transport mode = %q, want require_kernel for secure tix_tcp route-GSO", got)
+		t.Fatalf("kernel transport mode = %q, want require_kernel for secure tix_tcp full-kmod", got)
 	}
 	if reason := tixTCPFastPathDisabledReasonForDesired(desired); reason != "" {
 		t.Fatalf("kernel-module secure tix_tcp unexpectedly disabled fast path: %q", reason)

@@ -24,30 +24,35 @@ import (
 )
 
 const (
-	kernelDatapathSessionFlagReverse                        = uint32(1 << 0)
-	kernelDatapathSessionFlagControlOnly                    = uint32(1 << 1)
-	kernelDatapathSessionFlagKernelFlow                     = uint32(1 << 2)
-	kernelDatapathSessionFlagEncrypted                      = uint32(1 << 3)
-	kernelDatapathSessionFlagSendEncrypted                  = uint32(1 << 4)
-	kernelDatapathSessionFlagReceiveEncrypted               = uint32(1 << 5)
-	kernelDatapathSessionFlagCryptoKernel                   = uint32(1 << 6)
-	kernelDatapathSessionFlagCryptoUserspace                = uint32(1 << 7)
-	kernelDatapathSessionFlagNativeBatching                 = uint32(1 << 8)
-	kernelDatapathSessionFlagDatagram                       = uint32(1 << 9)
-	kernelDatapathSessionFlagFragmentingDatagram            = uint32(1 << 10)
-	kernelDatapathSessionFlagSyntheticFallback              = uint32(1 << 11)
-	kernelDatapathSessionFlagSendInnerTCPChecksumPartial    = uint32(1 << 12)
-	kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial = uint32(1 << 13)
-	kernelDatapathSessionFlagSendInnerGSO                   = uint32(1 << 14)
-	kernelDatapathSessionFlagReceiveInnerGSO                = uint32(1 << 15)
-	kernelDatapathSessionFlagSendTIXTCPPortSharding         = uint32(1 << 16)
-	kernelDatapathSessionFlagReceiveTIXTCPPortSharding      = uint32(1 << 17)
+	kernelDatapathSessionFlagReverse                              = uint32(1 << 0)
+	kernelDatapathSessionFlagControlOnly                          = uint32(1 << 1)
+	kernelDatapathSessionFlagKernelFlow                           = uint32(1 << 2)
+	kernelDatapathSessionFlagEncrypted                            = uint32(1 << 3)
+	kernelDatapathSessionFlagSendEncrypted                        = uint32(1 << 4)
+	kernelDatapathSessionFlagReceiveEncrypted                     = uint32(1 << 5)
+	kernelDatapathSessionFlagCryptoKernel                         = uint32(1 << 6)
+	kernelDatapathSessionFlagCryptoUserspace                      = uint32(1 << 7)
+	kernelDatapathSessionFlagNativeBatching                       = uint32(1 << 8)
+	kernelDatapathSessionFlagDatagram                             = uint32(1 << 9)
+	kernelDatapathSessionFlagFragmentingDatagram                  = uint32(1 << 10)
+	kernelDatapathSessionFlagSyntheticFallback                    = uint32(1 << 11)
+	kernelDatapathSessionFlagSendInnerTCPChecksumPartial          = uint32(1 << 12)
+	kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial       = uint32(1 << 13)
+	kernelDatapathSessionFlagSendInnerGSO                         = uint32(1 << 14)
+	kernelDatapathSessionFlagReceiveInnerGSO                      = uint32(1 << 15)
+	kernelDatapathSessionFlagSendTIXTCPPortSharding               = uint32(1 << 16)
+	kernelDatapathSessionFlagReceiveTIXTCPPortSharding            = uint32(1 << 17)
+	kernelDatapathSessionFlagSendSecureInnerTCPChecksumPartial    = uint32(1 << 18)
+	kernelDatapathSessionFlagReceiveSecureInnerTCPChecksumPartial = uint32(1 << 19)
 
 	kernelDatapathFlowFlagIPv4 = uint32(1 << 0)
 
 	kernelDatapathSessionWireFlagIPv4        = uint32(1 << 0)
 	kernelDatapathSessionWireFlagLocalKnown  = uint32(1 << 1)
 	kernelDatapathSessionWireFlagRemoteKnown = uint32(1 << 2)
+
+	kernelDatapathSessionCryptoFlagSendReady    = uint32(1 << 0)
+	kernelDatapathSessionCryptoFlagReceiveReady = uint32(1 << 1)
 )
 
 const (
@@ -62,17 +67,36 @@ type kernelDatapathSessionSnapshot struct {
 	session transport.Session
 }
 
+type kernelDatapathStateCounts struct {
+	routes       uint32
+	sessions     uint32
+	flows        uint32
+	sessionWires uint32
+}
+
 var (
 	kernelDatapathStateStatsQuery = kernelmodule.DatapathStateStatsQuery
 	kernelDatapathApplyStateBatch = kernelmodule.DatapathApplyStateBatch
 )
 
 func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot dataplane.Snapshot) error {
+	daemon.kernelDatapathStateMu.Lock()
+	defer daemon.kernelDatapathStateMu.Unlock()
+	return daemon.syncKernelDatapathStateLocked(ctx, snapshot)
+}
+
+func (daemon *Daemon) syncCurrentKernelDatapathState(ctx context.Context) error {
+	daemon.kernelDatapathStateMu.Lock()
+	defer daemon.kernelDatapathStateMu.Unlock()
+	return daemon.syncKernelDatapathStateLocked(ctx, daemon.runtimeDataplaneSnapshot())
+}
+
+func (daemon *Daemon) syncKernelDatapathStateLocked(ctx context.Context, snapshot dataplane.Snapshot) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if !daemon.kernelDatapathAvailable() {
-		return nil
+		return daemon.releaseRetiredTIXTCPCryptoStates(ctx)
 	}
 	stats, err := kernelDatapathStateStatsQuery(kernelmodule.TrustIXDatapathDevicePath)
 	if err != nil {
@@ -86,19 +110,52 @@ func (daemon *Daemon) syncKernelDatapathState(ctx context.Context, snapshot data
 			stats.MaxFlows,
 		)
 	}
-	records := daemon.kernelDatapathStateRecords(ctx, snapshot)
+	upserts := daemon.kernelDatapathStateUpsertRecords(ctx, snapshot)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := daemon.applyKernelDatapathStateRecords(ctx, records); err != nil {
+	counts := kernelDatapathStateRecordCounts(upserts)
+	if err := validateKernelDatapathStateCapacity(stats, counts); err != nil {
 		return err
+	}
+
+	reset := !daemon.kernelDatapathStateInitialized
+	if !reset && kernelDatapathStateCountsMatch(stats, counts) {
+		if err := daemon.applyKernelDatapathStateRecords(ctx, upserts); err != nil {
+			return err
+		}
+	} else if !reset {
+		if err := daemon.applyKernelDatapathStateRecords(ctx, upserts); err != nil {
+			return fmt.Errorf("repair kernel datapath state without clearing live tables: %w", err)
+		}
+		refreshed, refreshErr := kernelDatapathStateStatsQuery(kernelmodule.TrustIXDatapathDevicePath)
+		if refreshErr != nil {
+			return fmt.Errorf("re-query kernel datapath state after non-destructive repair: %w", refreshErr)
+		}
+		reset = !kernelDatapathStateCountsMatch(refreshed, counts)
+	}
+	if reset {
+		records := append(daemon.kernelDatapathStateClearRecords(), upserts...)
+		if err := daemon.applyKernelDatapathStateRecords(ctx, records); err != nil {
+			daemon.kernelDatapathStateInitialized = false
+			return fmt.Errorf("reset kernel datapath state: %w", err)
+		}
+		daemon.kernelDatapathStateInitialized = true
+	}
+	if err := daemon.releaseRetiredTIXTCPCryptoStates(ctx); err != nil {
+		return fmt.Errorf("release retired tix_tcp crypto states after full kernel datapath sync: %w", err)
 	}
 	daemon.clearBackgroundError("kernel_datapath_state_sync")
 	return nil
 }
 
 func (daemon *Daemon) kernelDatapathStateRecords(ctx context.Context, snapshot dataplane.Snapshot) []kernelmodule.DatapathStateRecord {
-	records := make([]kernelmodule.DatapathStateRecord, 0, len(snapshot.Routes))
+	records := daemon.kernelDatapathStateClearRecords()
+	return append(records, daemon.kernelDatapathStateUpsertRecords(ctx, snapshot)...)
+}
+
+func (daemon *Daemon) kernelDatapathStateClearRecords() []kernelmodule.DatapathStateRecord {
+	records := make([]kernelmodule.DatapathStateRecord, 0, 5)
 	for _, kind := range []uint32{
 		kernelmodule.TrustIXDatapathStateKindRoute,
 		kernelmodule.TrustIXDatapathStateKindSession,
@@ -107,6 +164,14 @@ func (daemon *Daemon) kernelDatapathStateRecords(ctx context.Context, snapshot d
 	} {
 		records = append(records, kernelmodule.DatapathStateRecord{Kind: kind, Op: kernelmodule.TrustIXDatapathStateOpClear})
 	}
+	if daemon.kernelDatapathSecureTIXTCPReady() {
+		records = append(records, kernelmodule.DatapathStateRecord{Kind: kernelmodule.TrustIXDatapathStateKindSessionCrypto, Op: kernelmodule.TrustIXDatapathStateOpClear})
+	}
+	return records
+}
+
+func (daemon *Daemon) kernelDatapathStateUpsertRecords(ctx context.Context, snapshot dataplane.Snapshot) []kernelmodule.DatapathStateRecord {
+	records := make([]kernelmodule.DatapathStateRecord, 0, len(snapshot.Routes))
 	for _, route := range snapshot.Routes {
 		if record, ok := kernelDatapathRouteRecord(route); ok {
 			records = append(records, record)
@@ -133,6 +198,55 @@ func (daemon *Daemon) kernelDatapathStateRecords(ctx context.Context, snapshot d
 	return records
 }
 
+func kernelDatapathStateRecordCounts(records []kernelmodule.DatapathStateRecord) kernelDatapathStateCounts {
+	type recordKey struct {
+		kind uint32
+		key  [4]uint64
+	}
+	seen := make(map[recordKey]struct{}, len(records))
+	counts := kernelDatapathStateCounts{}
+	for _, record := range records {
+		if record.Op != kernelmodule.TrustIXDatapathStateOpUpsert {
+			continue
+		}
+		key := recordKey{kind: record.Kind, key: record.Key}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		switch record.Kind {
+		case kernelmodule.TrustIXDatapathStateKindRoute:
+			counts.routes++
+		case kernelmodule.TrustIXDatapathStateKindSession:
+			counts.sessions++
+		case kernelmodule.TrustIXDatapathStateKindFlow:
+			counts.flows++
+		case kernelmodule.TrustIXDatapathStateKindSessionWire:
+			counts.sessionWires++
+		}
+	}
+	return counts
+}
+
+func validateKernelDatapathStateCapacity(stats kernelmodule.DatapathStateStats, counts kernelDatapathStateCounts) error {
+	if counts.routes > stats.MaxRoutes || counts.sessions > stats.MaxSessions || counts.flows > stats.MaxFlows ||
+		(stats.MaxSessionWires > 0 && counts.sessionWires > stats.MaxSessionWires) {
+		return fmt.Errorf("kernel datapath desired state exceeds capacity routes=%d/%d sessions=%d/%d flows=%d/%d session_wires=%d/%d",
+			counts.routes, stats.MaxRoutes,
+			counts.sessions, stats.MaxSessions,
+			counts.flows, stats.MaxFlows,
+			counts.sessionWires, stats.MaxSessionWires)
+	}
+	return nil
+}
+
+func kernelDatapathStateCountsMatch(stats kernelmodule.DatapathStateStats, counts kernelDatapathStateCounts) bool {
+	return stats.Routes == counts.routes &&
+		stats.Sessions == counts.sessions &&
+		stats.Flows == counts.flows &&
+		stats.SessionWires == counts.sessionWires
+}
+
 func (daemon *Daemon) runKernelDatapathStateSync(ctx context.Context) {
 	ticker := time.NewTicker(kernelDatapathStateSyncInterval)
 	defer ticker.Stop()
@@ -141,7 +255,7 @@ func (daemon *Daemon) runKernelDatapathStateSync(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := daemon.syncKernelDatapathState(ctx, daemon.runtimeDataplaneSnapshot()); err != nil {
+			if err := daemon.syncCurrentKernelDatapathState(ctx); err != nil {
 				daemon.recordBackgroundError("kernel_datapath_state_sync", err)
 				daemon.requestRuntimeReconcile("kernel datapath state sync", err)
 			}
@@ -162,16 +276,16 @@ func (daemon *Daemon) syncKernelDatapathSessionStateChange(key dataSessionKey, r
 	if daemon == nil || session == nil {
 		return
 	}
-	daemon.dataMu.Lock()
-	current := daemon.dataSessions[key] == session && daemon.dataSessionState[key] == runtime
-	daemon.dataMu.Unlock()
-	if !current {
-		return
-	}
 	daemon.syncKernelDatapathSessionRecords(key, runtime, session)
 }
 
 func (daemon *Daemon) syncKernelDatapathSessionRecords(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) {
+	daemon.kernelDatapathStateMu.Lock()
+	defer daemon.kernelDatapathStateMu.Unlock()
+
+	if !daemon.kernelDatapathSessionIsCurrent(key, runtime, session) {
+		return
+	}
 	if !daemon.kernelDatapathAvailable() {
 		return
 	}
@@ -186,36 +300,136 @@ func (daemon *Daemon) syncKernelDatapathSessionRecords(key dataSessionKey, runti
 	if err := daemon.applyKernelDatapathStateRecords(context.Background(), records); err != nil {
 		daemon.recordBackgroundError("kernel_datapath_state_sync", fmt.Errorf("upsert kernel datapath session: %w", err))
 		daemon.requestRuntimeReconcile("kernel datapath session upsert", err)
+		return
+	}
+	if err := daemon.commitTIXTCPCryptoStateRecords(context.Background(), records); err != nil {
+		daemon.recordBackgroundError("kernel_datapath_crypto_state_sync", fmt.Errorf("commit tix_tcp crypto state: %w", err))
+		daemon.requestRuntimeReconcile("kernel datapath crypto state commit", err)
 	}
 }
 
-func (daemon *Daemon) syncKernelDatapathSessionDelete(key dataSessionKey) {
-	if !daemon.kernelDatapathAvailable() {
+func (daemon *Daemon) syncKernelDatapathSessionDelete(key dataSessionKey, session transport.Session) {
+	daemon.syncKernelDatapathSessionDeleteWithRetention(key, session, false)
+}
+
+func (daemon *Daemon) syncKernelDatapathSessionDeleteRetainingFlow(key dataSessionKey, session transport.Session) {
+	daemon.syncKernelDatapathSessionDeleteWithRetention(key, session, true)
+}
+
+func (daemon *Daemon) syncKernelDatapathSessionDeleteWithRetention(key dataSessionKey, session transport.Session, retainFlow bool) {
+	daemon.kernelDatapathStateMu.Lock()
+	defer daemon.kernelDatapathStateMu.Unlock()
+
+	flowID, releaseCrypto := kernelDatapathSecureTIXTCPFlowID(session)
+	releaseCrypto = releaseCrypto && !retainFlow
+	currentSession, currentRuntime, current := daemon.kernelDatapathSessionAndRuntimeForKey(key)
+	if current && currentSession == session {
 		return
 	}
-	record := kernelmodule.DatapathStateRecord{
-		Kind: kernelmodule.TrustIXDatapathStateKindSession,
-		Op:   kernelmodule.TrustIXDatapathStateOpDelete,
-		Key:  kernelDatapathSessionStateKey(key),
+	currentFlowID, _ := kernelDatapathSecureTIXTCPFlowID(currentSession)
+	releaseCrypto = releaseCrypto && currentFlowID != flowID
+	if !daemon.kernelDatapathAvailable() {
+		if releaseCrypto {
+			daemon.releaseTIXTCPCryptoState(context.Background(), flowID)
+		}
+		return
 	}
-	wireRecord := kernelmodule.DatapathStateRecord{
-		Kind: kernelmodule.TrustIXDatapathStateKindSessionWire,
-		Op:   kernelmodule.TrustIXDatapathStateOpDelete,
-		Key:  kernelDatapathSessionStateKey(key),
+	records := daemon.kernelDatapathSessionDeleteRecords(key)
+	if current {
+		records = append(records, daemon.kernelDatapathSessionStateRecords(key, currentRuntime, currentSession)...)
+		records = append(records, daemon.kernelDatapathFullPlaintextRouteSessionRecords(
+			context.Background(), daemon.runtimeDataplaneSnapshot().Routes,
+		)...)
 	}
-	records := []kernelmodule.DatapathStateRecord{record, wireRecord}
 	records = append(records, daemon.kernelDatapathKernelUDPFlowRecords(context.Background())...)
 	if err := daemon.applyKernelDatapathStateRecords(context.Background(), records); err != nil {
 		daemon.recordBackgroundError("kernel_datapath_state_sync", fmt.Errorf("delete kernel datapath session: %w", err))
 		daemon.requestRuntimeReconcile("kernel datapath session delete", err)
+		return
+	}
+	if current {
+		if err := daemon.commitTIXTCPCryptoStateRecords(context.Background(), records); err != nil {
+			daemon.recordBackgroundError("kernel_datapath_crypto_state_sync", fmt.Errorf("commit replacement tix_tcp crypto state: %w", err))
+			daemon.requestRuntimeReconcile("kernel datapath replacement crypto state commit", err)
+			return
+		}
+	}
+	if releaseCrypto {
+		daemon.releaseTIXTCPCryptoState(context.Background(), flowID)
 	}
 }
 
+func (daemon *Daemon) kernelDatapathSessionDeleteRecords(key dataSessionKey) []kernelmodule.DatapathStateRecord {
+	stateKey := kernelDatapathSessionStateKey(key)
+	records := []kernelmodule.DatapathStateRecord{
+		{Kind: kernelmodule.TrustIXDatapathStateKindSession, Op: kernelmodule.TrustIXDatapathStateOpDelete, Key: stateKey},
+		{Kind: kernelmodule.TrustIXDatapathStateKindSessionWire, Op: kernelmodule.TrustIXDatapathStateOpDelete, Key: stateKey},
+	}
+	if daemon.kernelDatapathSecureTIXTCPReady() {
+		records = append(records, kernelmodule.DatapathStateRecord{
+			Kind: kernelmodule.TrustIXDatapathStateKindSessionCrypto,
+			Op:   kernelmodule.TrustIXDatapathStateOpDelete,
+			Key:  stateKey,
+		})
+	}
+	return records
+}
+
+func kernelDatapathSecureTIXTCPFlowID(session transport.Session) (uint64, bool) {
+	info, ok := kernelDatapathSessionInfo(session)
+	return info.FlowID, ok && info.FlowID != 0 &&
+		info.Protocol == transport.ProtocolTIXTCP && info.Encrypted &&
+		info.CryptoPlacement == string(dataplane.CryptoPlacementKernel)
+}
+
+func (daemon *Daemon) commitTIXTCPCryptoStateRecords(ctx context.Context, records []kernelmodule.DatapathStateRecord) error {
+	lifecycle, ok := daemon.dataplane.(dataplane.TIXTCPCryptoStateLifecycle)
+	if !ok {
+		return nil
+	}
+	var resultErr error
+	for _, record := range records {
+		if record.Kind != kernelmodule.TrustIXDatapathStateKindSessionCrypto ||
+			record.Op != kernelmodule.TrustIXDatapathStateOpUpsert ||
+			record.Value[0] == 0 {
+			continue
+		}
+		resultErr = errors.Join(resultErr, lifecycle.CommitTIXTCPCryptoState(ctx, record.Value[0], record.Value[1]))
+	}
+	return resultErr
+}
+
+func (daemon *Daemon) releaseTIXTCPCryptoState(ctx context.Context, flowID uint64) {
+	lifecycle, ok := daemon.dataplane.(dataplane.TIXTCPCryptoStateLifecycle)
+	if !ok || flowID == 0 {
+		return
+	}
+	if err := lifecycle.ReleaseTIXTCPCryptoState(ctx, flowID); err != nil {
+		daemon.recordBackgroundError("kernel_datapath_crypto_state_sync", fmt.Errorf("release tix_tcp crypto state for flow %d: %w", flowID, err))
+		daemon.requestRuntimeReconcile("kernel datapath crypto state release", err)
+	}
+}
+
+func (daemon *Daemon) releaseRetiredTIXTCPCryptoStates(ctx context.Context) error {
+	lifecycle, ok := daemon.dataplane.(dataplane.TIXTCPCryptoStateLifecycle)
+	if !ok {
+		return nil
+	}
+	return lifecycle.ReleaseRetiredTIXTCPCryptoStates(ctx)
+}
+
 func (daemon *Daemon) syncKernelDatapathFlowUpsert(binding routing.FlowBinding) {
+	daemon.kernelDatapathStateMu.Lock()
+	defer daemon.kernelDatapathStateMu.Unlock()
+
+	current, ok := daemon.kernelDatapathFlowForKey(binding.Key)
+	if !ok {
+		return
+	}
 	if !daemon.kernelDatapathAvailable() {
 		return
 	}
-	record, ok := kernelDatapathFlowRecord(binding)
+	record, ok := kernelDatapathFlowRecord(current)
 	if !ok {
 		return
 	}
@@ -226,10 +440,20 @@ func (daemon *Daemon) syncKernelDatapathFlowUpsert(binding routing.FlowBinding) 
 }
 
 func (daemon *Daemon) syncKernelDatapathFlowDelete(key routing.FlowKey) {
+	daemon.kernelDatapathStateMu.Lock()
+	defer daemon.kernelDatapathStateMu.Unlock()
+
 	if !daemon.kernelDatapathAvailable() {
 		return
 	}
-	record, ok := kernelDatapathFlowDeleteRecord(key)
+	current, currentExists := daemon.kernelDatapathFlowForKey(key)
+	var record kernelmodule.DatapathStateRecord
+	var ok bool
+	if currentExists {
+		record, ok = kernelDatapathFlowRecord(current)
+	} else {
+		record, ok = kernelDatapathFlowDeleteRecord(key)
+	}
 	if !ok {
 		return
 	}
@@ -237,6 +461,28 @@ func (daemon *Daemon) syncKernelDatapathFlowDelete(key routing.FlowKey) {
 		daemon.recordBackgroundError("kernel_datapath_state_sync", fmt.Errorf("delete kernel datapath flow: %w", err))
 		daemon.requestRuntimeReconcile("kernel datapath flow delete", err)
 	}
+}
+
+func (daemon *Daemon) kernelDatapathSessionIsCurrent(key dataSessionKey, runtime *dataSessionRuntime, session transport.Session) bool {
+	currentSession, currentRuntime, ok := daemon.kernelDatapathSessionAndRuntimeForKey(key)
+	return ok && currentSession == session && currentRuntime == runtime
+}
+
+func (daemon *Daemon) kernelDatapathSessionAndRuntimeForKey(key dataSessionKey) (transport.Session, *dataSessionRuntime, bool) {
+	daemon.dataMu.Lock()
+	defer daemon.dataMu.Unlock()
+	session, ok := daemon.dataSessions[key]
+	if !ok || session == nil {
+		return nil, nil, false
+	}
+	return session, daemon.dataSessionState[key], true
+}
+
+func (daemon *Daemon) kernelDatapathFlowForKey(key routing.FlowKey) (routing.FlowBinding, bool) {
+	daemon.flowMu.RLock()
+	defer daemon.flowMu.RUnlock()
+	binding, ok := daemon.flows[key]
+	return binding, ok
 }
 
 func (daemon *Daemon) kernelDatapathAvailable() bool {
@@ -330,10 +576,75 @@ func (daemon *Daemon) kernelDatapathSessionStateRecords(key dataSessionKey, runt
 		return nil
 	}
 	records := []kernelmodule.DatapathStateRecord{sessionRecord}
-	if wireRecord, ok := daemon.kernelDatapathSessionWireRecord(key, session); ok {
-		records = append(records, wireRecord)
+	wireRecord, ok := daemon.kernelDatapathSessionWireRecord(key, session)
+	if !ok {
+		return records
+	}
+	records = append(records, wireRecord)
+	if cryptoRecord, ok := daemon.kernelDatapathSessionCryptoRecord(key, session); ok {
+		records = append(records, cryptoRecord)
 	}
 	return records
+}
+
+func (daemon *Daemon) kernelDatapathSessionCryptoRecord(key dataSessionKey, session transport.Session) (kernelmodule.DatapathStateRecord, bool) {
+	if daemon == nil || daemon.dataplane == nil || !daemon.kernelDatapathSecureTIXTCPReady() {
+		return kernelmodule.DatapathStateRecord{}, false
+	}
+	info, ok := kernelDatapathSessionInfo(session)
+	if !ok || info.FlowID == 0 || info.Protocol != transport.ProtocolTIXTCP || !info.Encrypted || info.CryptoPlacement != string(dataplane.CryptoPlacementKernel) {
+		return kernelmodule.DatapathStateRecord{}, false
+	}
+	lookup, ok := daemon.dataplane.(dataplane.TIXTCPCryptoStateLookup)
+	if !ok {
+		return kernelmodule.DatapathStateRecord{}, false
+	}
+	state, found, err := lookup.TIXTCPCryptoState(context.Background(), info.FlowID)
+	if err != nil {
+		daemon.recordBackgroundError("kernel_datapath_crypto_state_sync", err)
+		return kernelmodule.DatapathStateRecord{}, false
+	}
+	if !found || state.FlowID != info.FlowID || state.Send.Epoch != state.Receive.Epoch || state.Send.Epoch != info.Epoch || state.Send.Suite == 0 || state.Send.Suite != state.Receive.Suite || state.Send.WireFormat == 0 || state.Send.WireFormat != state.Receive.WireFormat || state.Send.ReplayWindow == 0 || state.Receive.ReplayWindow == 0 {
+		return kernelmodule.DatapathStateRecord{}, false
+	}
+	return kernelmodule.DatapathStateRecord{
+		Kind:  kernelmodule.TrustIXDatapathStateKindSessionCrypto,
+		Op:    kernelmodule.TrustIXDatapathStateOpUpsert,
+		Flags: kernelDatapathSessionCryptoFlagSendReady | kernelDatapathSessionCryptoFlagReceiveReady,
+		Key:   kernelDatapathSessionStateKey(key),
+		Value: [8]uint64{
+			state.FlowID,
+			state.Send.Epoch,
+			uint64(state.Send.SlotID) | uint64(state.Receive.SlotID)<<32,
+			uint64(state.Send.Suite) | uint64(state.Send.WireFormat)<<16 | uint64(state.Receive.ReplayWindow)<<32,
+			kernelDatapathPackBytes8(state.Send.IV[:8]),
+			uint64(kernelDatapathPackBytes4(state.Send.IV[8:])) | uint64(kernelDatapathPackBytes4(state.Receive.IV[:4]))<<32,
+			kernelDatapathPackBytes8(state.Receive.IV[4:]),
+			state.Receive.LastSequence,
+		},
+	}, true
+}
+
+func kernelDatapathPackBytes4(value []byte) uint32 {
+	if len(value) < 4 {
+		return 0
+	}
+	return uint32(value[0]) | uint32(value[1])<<8 | uint32(value[2])<<16 | uint32(value[3])<<24
+}
+
+func kernelDatapathPackBytes8(value []byte) uint64 {
+	if len(value) < 8 {
+		return 0
+	}
+	return uint64(kernelDatapathPackBytes4(value[:4])) | uint64(kernelDatapathPackBytes4(value[4:8]))<<32
+}
+
+func (daemon *Daemon) kernelDatapathSecureTIXTCPReady() bool {
+	if daemon == nil || daemon.kernelDatapath == nil {
+		return false
+	}
+	status := daemon.kernelDatapath.Snapshot()
+	return status.Loaded && status.HasFeature(kernelmodule.FeatureSecureTIXTCPFullDatapath)
 }
 
 func (daemon *Daemon) kernelDatapathFullPlaintextRouteSessionRecords(ctx context.Context, routes []routing.Route) []kernelmodule.DatapathStateRecord {
@@ -1088,16 +1399,20 @@ func kernelDatapathSessionFlags(key dataSessionKey, runtime *dataSessionRuntime,
 		flags |= kernelDatapathSessionFlagFragmentingDatagram
 	}
 	if key.Transport == transport.ProtocolTIXTCP || info.Protocol == transport.ProtocolTIXTCP {
-		if info.InnerTCPChecksumPartialNegotiated {
+		if info.SendEncrypted && info.SecureInnerTCPChecksumPartialNegotiated {
+			flags |= kernelDatapathSessionFlagSendSecureInnerTCPChecksumPartial
+		} else if !info.SendEncrypted && info.InnerTCPChecksumPartialNegotiated {
 			flags |= kernelDatapathSessionFlagSendInnerTCPChecksumPartial
 		}
-		if info.InnerTCPChecksumPartialLocal {
+		if info.ReceiveEncrypted && info.SecureInnerTCPChecksumPartialLocal {
+			flags |= kernelDatapathSessionFlagReceiveSecureInnerTCPChecksumPartial
+		} else if !info.ReceiveEncrypted && info.InnerTCPChecksumPartialLocal {
 			flags |= kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial
 		}
-		if info.InnerGSONegotiated {
+		if !info.SendEncrypted && info.InnerGSONegotiated {
 			flags |= kernelDatapathSessionFlagSendInnerGSO
 		}
-		if info.InnerGSOLocal {
+		if !info.ReceiveEncrypted && info.InnerGSOLocal {
 			flags |= kernelDatapathSessionFlagReceiveInnerGSO
 		}
 		if info.TIXTCPPortShardingNegotiated {

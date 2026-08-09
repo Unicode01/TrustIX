@@ -1,9 +1,12 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,6 +17,101 @@ import (
 	"trustix.local/trustix/internal/transport"
 	securetransport "trustix.local/trustix/internal/transport/secure"
 )
+
+func TestCloseKernelModulesReleasesAEADDirectOwnerFiles(t *testing.T) {
+	original := closeAEADDirectOwnerFiles
+	t.Cleanup(func() { closeAEADDirectOwnerFiles = original })
+	called := 0
+	closeAEADDirectOwnerFiles = func() error {
+		called++
+		return nil
+	}
+
+	if err := (&Daemon{}).closeKernelModules(context.Background()); err != nil {
+		t.Fatalf("close kernel modules: %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("close direct owner files calls = %d, want 1", called)
+	}
+}
+
+func TestCloseKernelModulesUsesReverseDependencyOrder(t *testing.T) {
+	payload, err := os.ReadFile("kernel_modules.go")
+	if err != nil {
+		t.Fatalf("read kernel module lifecycle source: %v", err)
+	}
+	body := daemonTestSourceFunctionBody(t, string(payload), "closeKernelModules")
+	helpers := strings.Index(body, "daemon.kernelHelpers.Close(ctx)")
+	datapath := strings.Index(body, "daemon.kernelDatapath.Close(ctx)")
+	ownerFiles := strings.Index(body, "closeAEADDirectOwnerFiles()")
+	crypto := strings.Index(body, "daemon.kernelCrypto.Close(ctx)")
+	if helpers < 0 || datapath < 0 || ownerFiles < 0 || crypto < 0 ||
+		helpers >= datapath || datapath >= ownerFiles || ownerFiles >= crypto {
+		t.Fatalf("kernel modules must close helpers, datapath, owner files, then crypto:\n%s", body)
+	}
+}
+
+func TestKernelModuleAllowsCoordinatedDependencyReload(t *testing.T) {
+	for name, tc := range map[string]struct {
+		module     config.KernelModuleConfig
+		assessment kernelmodule.ReloadAssessment
+		want       bool
+	}{
+		"auto active": {
+			module: config.KernelModuleConfig{Mode: kernelmodule.ModeAuto, ReloadOnUpgrade: "auto"},
+			want:   true,
+		},
+		"default policy active": {
+			module: config.KernelModuleConfig{Mode: kernelmodule.ModeRequired},
+			want:   true,
+		},
+		"never blocks dependency upgrade": {
+			module: config.KernelModuleConfig{Mode: kernelmodule.ModeAuto, ReloadOnUpgrade: "never"},
+		},
+		"never still permits own parameter correction": {
+			module:     config.KernelModuleConfig{Mode: kernelmodule.ModeAuto, ReloadOnUpgrade: "never"},
+			assessment: kernelmodule.ReloadAssessment{ParameterMismatches: []string{"rx_worker_inject"}},
+			want:       true,
+		},
+		"disabled blocks reload": {
+			module: config.KernelModuleConfig{Mode: kernelmodule.ModeDisabled, ReloadOnUpgrade: "always"},
+		},
+	} {
+		if got := kernelModuleAllowsCoordinatedDependencyReload(tc.module, tc.assessment); got != tc.want {
+			t.Fatalf("%s: coordinated reload allowed = %t, want %t", name, got, tc.want)
+		}
+	}
+}
+
+func TestEnsureKernelModulesPreparesCoordinatedReloadBeforeCryptoEnsure(t *testing.T) {
+	payload, err := os.ReadFile("kernel_modules.go")
+	if err != nil {
+		t.Fatalf("read kernel module lifecycle source: %v", err)
+	}
+	body := daemonTestSourceFunctionBody(t, string(payload), "ensureKernelModules")
+	prepare := strings.Index(body, "daemon.prepareKernelModuleCoordinatedReload(ctx, modules)")
+	ensureCrypto := strings.Index(body, "daemon.kernelCrypto.Ensure(ctx, cryptoModule)")
+	if prepare < 0 || ensureCrypto < 0 || prepare >= ensureCrypto {
+		t.Fatalf("coordinated module reload must run before crypto ensure:\n%s", body)
+	}
+}
+
+func TestCoordinatedReloadPreflightsDependenciesBeforeUnloading(t *testing.T) {
+	payload, err := os.ReadFile("kernel_modules.go")
+	if err != nil {
+		t.Fatalf("read kernel module lifecycle source: %v", err)
+	}
+	body := daemonTestSourceFunctionBody(t, string(payload), "prepareKernelModuleCoordinatedReload")
+	markLoaded := strings.Index(body, "dependency.loaded = true")
+	refCountCheck := strings.Index(body, "if status.RefCount > 0")
+	policyCheck := strings.Index(body, "if !kernelModuleAllowsCoordinatedDependencyReload")
+	unloadGuard := strings.Index(body, "if !dependency.loaded")
+	unload := strings.Index(body, "dependency.manager.UnloadForCoordinatedReload")
+	if markLoaded < 0 || refCountCheck < 0 || policyCheck < 0 || unloadGuard < 0 || unload < 0 ||
+		markLoaded >= refCountCheck || refCountCheck >= unloadGuard || policyCheck >= unloadGuard || unloadGuard >= unload {
+		t.Fatalf("coordinated reload must preflight every loaded dependency before the unload pass:\n%s", body)
+	}
+}
 
 func moduleParameterHasAssignment(params, want string) bool {
 	for _, field := range strings.Fields(params) {
@@ -151,6 +249,55 @@ func TestTrustIXDatapathReleasesHeldNetdevRefsOnUnregister(t *testing.T) {
 	detach := strings.Index(exitBody, "trustix_datapath_hook_detach_all()")
 	if unregister < 0 || detach < 0 || unregister > detach {
 		t.Fatalf("datapath exit must unregister notifier before detach-all:\n%s", exitBody)
+	}
+}
+
+func TestTrustIXDatapathLargePerCPUStateUsesDynamicAllocation(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_datapath", "trustix_datapath.c"))
+	if err != nil {
+		t.Fatalf("read trustix_datapath source: %v", err)
+	}
+	source := string(body)
+	for _, staticType := range []string{
+		"DEFINE_PER_CPU(struct trustix_datapath_secure_rx_scratch",
+		"DEFINE_PER_CPU(struct trustix_datapath_pcpu_hot_stats",
+	} {
+		if strings.Contains(source, staticType) {
+			t.Fatalf("large per-CPU state remains in the module static reserve: %q", staticType)
+		}
+	}
+	for _, want := range []string{
+		"alloc_percpu(struct trustix_datapath_secure_rx_scratch)",
+		"free_percpu(trustix_datapath_secure_rx_scratch)",
+		"alloc_percpu(struct trustix_datapath_pcpu_hot_stats)",
+		"free_percpu(trustix_datapath_pcpu_hot_stats)",
+		"get_cpu_ptr(trustix_datapath_secure_rx_scratch)",
+		"this_cpu_ptr(trustix_datapath_pcpu_hot_stats)",
+		"per_cpu_ptr(trustix_datapath_pcpu_hot_stats, cpu)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("dynamic per-CPU lifecycle missing %q", want)
+		}
+	}
+	initBody := daemonTestSourceFunctionBody(t, source, "trustix_datapath_init")
+	for _, want := range []string{
+		"trustix_datapath_alloc_pcpu_hot_stats()",
+		"trustix_datapath_alloc_secure_rx_scratch()",
+		"trustix_datapath_free_secure_rx_scratch()",
+		"trustix_datapath_free_pcpu_hot_stats()",
+	} {
+		if !strings.Contains(initBody, want) {
+			t.Fatalf("datapath init failure cleanup missing %q:\n%s", want, initBody)
+		}
+	}
+	exitBody := daemonTestSourceFunctionBody(t, source, "trustix_datapath_exit")
+	for _, want := range []string{
+		"trustix_datapath_free_secure_rx_scratch()",
+		"trustix_datapath_free_pcpu_hot_stats()",
+	} {
+		if !strings.Contains(exitBody, want) {
+			t.Fatalf("datapath exit cleanup missing %q:\n%s", want, exitBody)
+		}
 	}
 }
 
@@ -441,9 +588,54 @@ func TestTrustIXDatapathHelpersFlushQueuedNetdevRefsOnUnregister(t *testing.T) {
 	}
 	initBody := daemonTestSourceFunctionBody(t, string(mainBytes), "trustix_datapath_helpers_init")
 	misc := strings.Index(initBody, "misc_register(&trustix_datapath_helpers_miscdev)")
-	cleanup := strings.Index(initBody, "trustix_datapath_helpers_unregister();")
-	if misc < 0 || cleanup < 0 || cleanup < misc {
-		t.Fatalf("helper init must unregister helper runtime if misc_register fails:\n%s", initBody)
+	register := strings.Index(initBody, "trustix_datapath_helpers_register();")
+	cleanup := strings.Index(initBody, "misc_deregister(&trustix_datapath_helpers_miscdev);")
+	if misc < 0 || register < 0 || cleanup < 0 || misc >= register || cleanup <= register {
+		t.Fatalf("helper init must register the fallible misc device before the one-way BTF kfunc runtime and unwind it on failure:\n%s", initBody)
+	}
+}
+
+func TestTrustIXCryptoRegistersFallibleResourcesBeforeKfuncs(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_crypto", "trustix_crypto.c"))
+	if err != nil {
+		t.Fatalf("read trustix_crypto source: %v", err)
+	}
+	initBody := daemonTestSourceFunctionBody(t, string(payload), "trustix_crypto_init")
+	bpfCrypto := strings.Index(initBody, "bpf_crypto_register_type(&trustix_crypto)")
+	misc := strings.Index(initBody, "misc_register(&trustix_aead_miscdev)")
+	tcKfunc := strings.Index(initBody, "register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS")
+	xdpKfunc := strings.Index(initBody, "register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP")
+	if bpfCrypto < 0 || misc < 0 || tcKfunc < 0 || xdpKfunc < 0 ||
+		bpfCrypto >= tcKfunc || misc >= tcKfunc || tcKfunc >= xdpKfunc {
+		t.Fatalf("crypto init must complete fallible BPF-crypto and misc registration before one-way kfunc registration:\n%s", initBody)
+	}
+	tcFailure := initBody[tcKfunc:xdpKfunc]
+	for _, want := range []string{
+		"misc_deregister(&trustix_aead_miscdev);",
+		"bpf_crypto_unregister_type(&trustix_crypto);",
+		"return ret;",
+	} {
+		if !strings.Contains(tcFailure, want) {
+			t.Fatalf("crypto TC-kfunc failure path missing %q:\n%s", want, tcFailure)
+		}
+	}
+}
+
+func TestTrustIXCryptoWaitsForRCUCallbacksBeforeUnload(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", "..", "kernel", "trustix_crypto", "trustix_crypto.c"))
+	if err != nil {
+		t.Fatalf("read trustix_crypto source: %v", err)
+	}
+	source := string(payload)
+	clearAll := daemonTestSourceFunctionBody(t, source, "trustix_aead_direct_clear_all")
+	if !strings.Contains(clearAll, "call_rcu(&old->rcu, trustix_aead_direct_free_rcu);") ||
+		!strings.Contains(clearAll, "rcu_barrier();") ||
+		strings.Contains(clearAll, "synchronize_rcu();") {
+		t.Fatalf("crypto direct-slot teardown must wait for queued RCU callbacks before module code unloads:\n%s", clearAll)
+	}
+	exitBody := daemonTestSourceFunctionBody(t, source, "trustix_crypto_exit")
+	if !strings.Contains(exitBody, "trustix_aead_direct_clear_all();") {
+		t.Fatalf("crypto module exit does not drain direct slots and their RCU callbacks:\n%s", exitBody)
 	}
 }
 
@@ -1059,6 +1251,63 @@ func TestEffectiveKernelModulesForDesiredProfileDefaultsModes(t *testing.T) {
 	modules = effectiveKernelModulesForDesired(desired)
 	if modules.TrustIXCrypto.Mode != "disabled" || modules.TrustIXDatapath.Mode != "disabled" || modules.TrustIXDatapathHelpers.Mode != "disabled" {
 		t.Fatalf("disabled modules = %#v, want all disabled", modules)
+	}
+}
+
+func TestKernelModuleRuntimeConfigIgnoresSessionPoolAndLifecyclePolicy(t *testing.T) {
+	desired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfilePerformance,
+			TrustIXCrypto: config.KernelModuleConfig{
+				ReloadOnUpgrade: "auto",
+			},
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"tix-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "tix-a",
+			Transport: string(transport.ProtocolTIXTCP),
+			Enabled:   true,
+		}},
+	}
+
+	next := desired
+	next.TransportPolicy.SessionPool = config.SessionPoolPolicyConfig{Size: 8, Warmup: true}
+	next.KernelModules.TrustIXCrypto.ReloadOnUpgrade = "always"
+	next.KernelModules.TrustIXCrypto.UnloadOnExit = true
+	if kernelModuleRuntimeConfigChanged(desired, next) {
+		t.Fatal("session-pool and lifecycle-only changes should not reload kernel modules")
+	}
+}
+
+func TestKernelModuleRuntimeConfigDetectsDerivedTransportChange(t *testing.T) {
+	secureDesired := config.Desired{
+		KernelModules: config.KernelModulesConfig{
+			CapabilityProfile: config.KernelCapabilityProfilePerformance,
+		},
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathKernelModule,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"tix-a"},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "tix-a",
+			Transport: string(transport.ProtocolTIXTCP),
+			Enabled:   true,
+		}},
+	}
+	plaintextDesired := secureDesired
+	plaintextDesired.TransportPolicy.Encryption = securetransport.EncryptionPlaintext
+
+	if !kernelModuleRuntimeConfigChanged(secureDesired, plaintextDesired) {
+		t.Fatal("transport policy change with different derived module parameters should reload kernel modules")
 	}
 }
 
@@ -2219,6 +2468,35 @@ func TestTrustIXDatapathModuleParametersStripsExperimentalRXWorkerRawParametersW
 	}
 }
 
+func TestTrustIXDatapathModuleParametersKeepsKnownExperimentalOptOutWithoutExperimentGate(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
+
+	got := TrustIXDatapathModuleParameters(strings.Join([]string{
+		"rx_worker_stream_coalesce_gso=0",
+		"rx_worker_stream_coalesce_nonlinear=off",
+		"rx_worker_future_experiment=0",
+	}, " "))
+	fields := strings.Fields(got)
+	for _, want := range []string{
+		"rx_worker_stream_coalesce_gso=0",
+		"rx_worker_stream_coalesce_nonlinear=off",
+	} {
+		count := 0
+		for _, field := range fields {
+			if field == want {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("parameters %q contain %q %d times, want once", got, want, count)
+		}
+	}
+	if strings.Contains(got, "rx_worker_future_experiment=") {
+		t.Fatalf("parameters %q retained unknown RX-worker parameter", got)
+	}
+}
+
 func TestTrustIXDatapathModuleParametersKeepsExperimentalRXWorkerRawParametersWithExperimentGate(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_RX_WORKER", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_RX_WORKER", "1")
@@ -2520,7 +2798,7 @@ func TestTrustIXDatapathHelpersPerformanceTIXTCPDoesNotEnableLegacyRXStreamParse
 	}
 }
 
-func TestTrustIXDatapathHelpersSecureTIXTCPBuildsValidInnerChecksum(t *testing.T) {
+func TestTrustIXDatapathSecureTIXTCPUsesFullKmodWithoutRouteGSOHelpers(t *testing.T) {
 	desired := config.Desired{
 		TransportPolicy: config.TransportPolicyConfig{
 			Profile:         config.TransportProfilePerformance,
@@ -2537,20 +2815,40 @@ func TestTrustIXDatapathHelpersSecureTIXTCPBuildsValidInnerChecksum(t *testing.T
 		}},
 	}
 
-	if !tixTCPSecureRouteGSOAsyncForDesired(desired) {
-		t.Fatal("secure tix_tcp kernel crypto policy should select route-GSO")
+	if !kernelDatapathSecureTIXTCPForDesired(desired) {
+		t.Fatal("secure tix_tcp kernel crypto policy should select full secure kernel datapath")
 	}
-	got := TrustIXDatapathHelpersModuleParametersForDesired("", desired)
-	for _, want := range []string{
+	if tixTCPSecureRouteGSOAsyncForDesired(desired) {
+		t.Fatal("full secure kernel datapath must not also select route-GSO")
+	}
+	helpers := TrustIXDatapathHelpersModuleParametersForDesired("", desired)
+	for _, unexpected := range []string{
 		"route_tcp_gso=1",
 		"route_tcp_gso_async=1",
-		"route_tcp_gso_async_stream_direct_build=1",
-		"route_tcp_gso_async_stream_outer_gso=1",
-		"route_tcp_gso_async_stream_direct_build_inner_csum=1",
 		"route_tcp_gso_async_secure_seal_batch=1",
 	} {
-		if !moduleParameterHasAssignment(got, want) {
-			t.Fatalf("parameters = %q, missing %q", got, want)
+		if moduleParameterHasAssignment(helpers, unexpected) {
+			t.Fatalf("helper parameters = %q, unexpectedly retained %q", helpers, unexpected)
+		}
+	}
+	datapath := TrustIXDatapathModuleParametersForDesired("", desired)
+	for _, want := range []string{"rx_worker_inject=1", "tx_plaintext=1"} {
+		if !moduleParameterHasAssignment(datapath, want) {
+			t.Fatalf("datapath parameters = %q, missing %q", datapath, want)
+		}
+	}
+	if !moduleParameterHasAssignment(datapath, "enable_features=31872") {
+		t.Fatalf("datapath parameters = %q, secure tix_tcp feature bit is absent", datapath)
+	}
+	t.Setenv("TRUSTIX_TIX_TCP_SECURE_INNER_CHECKSUM_PARTIAL", "0")
+	withoutSecurePartial := TrustIXDatapathModuleParametersForDesired("", desired)
+	if !moduleParameterHasAssignment(withoutSecurePartial, "enable_features=15488") {
+		t.Fatalf("datapath parameters = %q, secure checksum-partial feature opt-out was ignored", withoutSecurePartial)
+	}
+	crypto := TrustIXCryptoModuleParametersForDesired("", desired)
+	for _, want := range []string{"datapath_simd_fastpath=1", "datapath_simd_irq_fpu_fastpath=1", "datapath_vaes=1"} {
+		if !moduleParameterHasAssignment(crypto, want) {
+			t.Fatalf("crypto parameters = %q, missing %q", crypto, want)
 		}
 	}
 }
@@ -2618,6 +2916,7 @@ func TestTrustIXDatapathHelpersSecureKernelUDPRouteGSOAvoidsPlaintextShortcuts(t
 		"route_tcp_gso_async_stream_outer_gso=1",
 		"route_tcp_xmit_worker=1",
 		"route_tcp_gso_async_secure_seal_batch=1",
+		"route_tcp_gso_async_queue_shards=" + strconv.Itoa(trustIXSecureRouteGSOQueueShards(runtime.NumCPU())),
 	} {
 		if !moduleParameterHasAssignment(got, want) {
 			t.Fatalf("parameters = %q, missing %q", got, want)
@@ -2630,5 +2929,53 @@ func TestTrustIXDatapathHelpersSecureKernelUDPRouteGSOAvoidsPlaintextShortcuts(t
 		if moduleParameterHasAssignment(got, unexpected) {
 			t.Fatalf("parameters = %q, unexpectedly enabled plaintext shortcut %q", got, unexpected)
 		}
+	}
+}
+
+func TestTrustIXSecureRouteGSOQueueShardsReservesCPUAndCapsWorkers(t *testing.T) {
+	tests := []struct {
+		cpus int
+		want int
+	}{
+		{cpus: 1, want: 1},
+		{cpus: 2, want: 1},
+		{cpus: 3, want: 2},
+		{cpus: 4, want: 3},
+		{cpus: 5, want: 3},
+		{cpus: 6, want: 4},
+		{cpus: 7, want: 5},
+		{cpus: 8, want: 5},
+		{cpus: 32, want: 5},
+	}
+	for _, test := range tests {
+		if got := trustIXSecureRouteGSOQueueShards(test.cpus); got != test.want {
+			t.Errorf("trustIXSecureRouteGSOQueueShards(%d) = %d, want %d", test.cpus, got, test.want)
+		}
+	}
+}
+
+func TestTrustIXDatapathHelpersSecureRouteGSOKeepsExplicitQueueShards(t *testing.T) {
+	desired := config.Desired{
+		TransportPolicy: config.TransportPolicyConfig{
+			Profile:         config.TransportProfilePerformance,
+			Datapath:        config.TransportDatapathTCXDP,
+			Encryption:      securetransport.EncryptionSecure,
+			CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+			Candidates:      []core.EndpointID{"udp-sec"},
+			KernelTransport: config.KernelTransportPolicyConfig{Mode: string(dataplane.KernelTransportModeRequireKernel)},
+		},
+		Endpoints: []config.EndpointConfig{{
+			Name:      "udp-sec",
+			Transport: string(transport.ProtocolUDP),
+			Enabled:   true,
+		}},
+	}
+
+	got := TrustIXDatapathHelpersModuleParametersForDesired("route_tcp_gso_async_queue_shards=3", desired)
+	if !moduleParameterHasAssignment(got, "route_tcp_gso_async_queue_shards=3") {
+		t.Fatalf("parameters = %q, explicit queue shard count was replaced", got)
+	}
+	if strings.Count(got, "route_tcp_gso_async_queue_shards=") != 1 {
+		t.Fatalf("parameters = %q, queue shard parameter was duplicated", got)
 	}
 }

@@ -197,15 +197,6 @@ func (device *kernelCryptoDevice) Close() error {
 		return device.closeErr
 	}
 	device.closed = true
-	var errs []error
-	if device.seal != nil {
-		errs = append(errs, wrapEBPFOperation("close kernel AEAD seal device", device.seal.Close()))
-		device.seal = nil
-	}
-	if device.open != nil {
-		errs = append(errs, wrapEBPFOperation("close kernel AEAD open device", device.open.Close()))
-		device.open = nil
-	}
 	device.flow = kernelCryptoDeviceFlow{}
 	clear(device.sealPool)
 	clear(device.openPool)
@@ -215,7 +206,33 @@ func (device *kernelCryptoDevice) Close() error {
 	clear(device.openPoolOps)
 	clear(device.sealNonces)
 	clear(device.openNonces)
+	clear(device.sealBorrowed)
+	clear(device.openIn)
+	clear(device.openOut)
+	clear(device.recvScratch)
 	clear(device.recvSeen)
+	device.sealPool = nil
+	device.openPool = nil
+	device.sealOps = nil
+	device.openOps = nil
+	device.sealPoolOps = nil
+	device.openPoolOps = nil
+	device.sealNonces = nil
+	device.openNonces = nil
+	device.sealBorrowed = nil
+	device.openIn = nil
+	device.openOut = nil
+	device.recvScratch = nil
+	device.recvSeen = nil
+	var errs []error
+	if device.seal != nil {
+		errs = append(errs, wrapEBPFOperation("close kernel AEAD seal device", device.seal.Close()))
+		device.seal = nil
+	}
+	if device.open != nil {
+		errs = append(errs, wrapEBPFOperation("close kernel AEAD open device", device.open.Close()))
+		device.open = nil
+	}
 	device.closeErr = errors.Join(errs...)
 	return device.closeErr
 }

@@ -20,6 +20,7 @@ import (
 
 const kernelCryptoFlowMapName = "ix_tix_tcp_kernel_crypto_flows"
 const kernelCryptoProviderMaxReason = 768
+const kernelCryptoDirectSlotOwnerABIMin = uint64(5)
 
 const (
 	kernelCryptoCommandInstall    uint32 = 1
@@ -134,6 +135,204 @@ type kernelCryptoProviderInstallEntry struct {
 	Entry kernelCryptoFlowEntry
 }
 
+type kernelDatapathCryptoInstallState struct {
+	state        dataplane.TIXTCPCryptoState
+	sendReady    bool
+	receiveReady bool
+}
+
+var (
+	kernelDatapathAEADDirectSetKeyAlloc = kernelmodule.AEADDirectSetKeyAlloc
+	kernelDatapathAEADDirectClearKey    = kernelmodule.AEADDirectClearKey
+)
+
+func (manager *Manager) installKernelDatapathTIXTCPCryptoLocked(entries []kernelCryptoFlowEntry) (resultErr error) {
+	if len(entries) == 0 {
+		return nil
+	}
+	staged := make(map[uint64]*kernelDatapathCryptoInstallState, len(entries)/2)
+	allocated := make([]uint32, 0, len(entries))
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		remaining, cleanupErr := clearKernelDatapathDirectSlots(allocated)
+		if len(remaining) > 0 {
+			if manager.kernelDatapathCryptoRetiredSlots == nil {
+				manager.kernelDatapathCryptoRetiredSlots = make(map[uint64][]uint32)
+			}
+			manager.kernelDatapathCryptoRetiredSlots[0] = append(
+				manager.kernelDatapathCryptoRetiredSlots[0], remaining...,
+			)
+		}
+		resultErr = errors.Join(resultErr, cleanupErr)
+	}()
+
+	for _, entry := range entries {
+		if entry.Key.Reserved[0] != kernelCryptoNamespaceTIXTCP || entry.Key.FlowID == 0 {
+			return fmt.Errorf("full secure kernel datapath received an invalid tix_tcp crypto key")
+		}
+		if entry.Value.KeyLen != kernelCryptoAES128KeyLen && entry.Value.KeyLen != kernelCryptoAES256KeyLen {
+			return fmt.Errorf("full secure kernel datapath flow %d has invalid key length %d", entry.Key.FlowID, entry.Value.KeyLen)
+		}
+		open := entry.Key.Direction == kernelCryptoDirectionRecv
+		if !open && entry.Key.Direction != kernelCryptoDirectionSend {
+			return fmt.Errorf("full secure kernel datapath flow %d has invalid direction %d", entry.Key.FlowID, entry.Key.Direction)
+		}
+		slot, err := kernelDatapathAEADDirectSetKeyAlloc(
+			"", kernelmodule.TrustIXAEADDirectAnySlot,
+			entry.Value.Key[:int(entry.Value.KeyLen)], open,
+		)
+		if err != nil {
+			return fmt.Errorf("install full secure kernel datapath key for flow %d direction %d: %w", entry.Key.FlowID, entry.Key.Direction, err)
+		}
+		allocated = append(allocated, slot)
+		install := staged[entry.Key.FlowID]
+		if install == nil {
+			install = &kernelDatapathCryptoInstallState{state: dataplane.TIXTCPCryptoState{FlowID: entry.Key.FlowID}}
+			staged[entry.Key.FlowID] = install
+		}
+		direct := dataplane.KernelCryptoDirectState{
+			SlotID:       slot,
+			Suite:        entry.Value.Suite,
+			WireFormat:   entry.Value.WireFormat,
+			Epoch:        entry.Value.Epoch,
+			IV:           entry.Value.IV,
+			ReplayWindow: entry.Value.ReplayWindow,
+		}
+		if open {
+			if install.receiveReady {
+				return fmt.Errorf("full secure kernel datapath flow %d has duplicate receive keys", entry.Key.FlowID)
+			}
+			install.state.Receive = direct
+			install.receiveReady = true
+		} else {
+			if install.sendReady {
+				return fmt.Errorf("full secure kernel datapath flow %d has duplicate send keys", entry.Key.FlowID)
+			}
+			install.state.Send = direct
+			install.sendReady = true
+		}
+	}
+
+	for flowID, install := range staged {
+		if !install.sendReady || !install.receiveReady ||
+			install.state.Send.Epoch != install.state.Receive.Epoch {
+			return fmt.Errorf("full secure kernel datapath flow %d requires complete send/receive state with matching epochs", flowID)
+		}
+	}
+	if manager.kernelDatapathCryptoStates == nil {
+		manager.kernelDatapathCryptoStates = make(map[uint64]dataplane.TIXTCPCryptoState, len(staged))
+	}
+	if manager.kernelDatapathCryptoRetiredSlots == nil {
+		manager.kernelDatapathCryptoRetiredSlots = make(map[uint64][]uint32)
+	}
+	for flowID, install := range staged {
+		if previous, ok := manager.kernelDatapathCryptoStates[flowID]; ok {
+			manager.kernelDatapathCryptoRetiredSlots[flowID] = append(
+				manager.kernelDatapathCryptoRetiredSlots[flowID],
+				previous.Send.SlotID, previous.Receive.SlotID,
+			)
+		}
+		manager.kernelDatapathCryptoStates[flowID] = install.state
+	}
+	return nil
+}
+
+func (manager *Manager) retireKernelDatapathTIXTCPCryptoStateLocked(flowID uint64) {
+	state, ok := manager.kernelDatapathCryptoStates[flowID]
+	if !ok {
+		return
+	}
+	if manager.kernelDatapathCryptoRetiredSlots == nil {
+		manager.kernelDatapathCryptoRetiredSlots = make(map[uint64][]uint32)
+	}
+	manager.kernelDatapathCryptoRetiredSlots[flowID] = append(
+		manager.kernelDatapathCryptoRetiredSlots[flowID],
+		state.Send.SlotID, state.Receive.SlotID,
+	)
+	delete(manager.kernelDatapathCryptoStates, flowID)
+}
+
+func clearKernelDatapathDirectSlots(slots []uint32) ([]uint32, error) {
+	remaining := make([]uint32, 0)
+	seen := make(map[uint32]struct{}, len(slots))
+	var resultErr error
+	for _, slot := range slots {
+		if _, ok := seen[slot]; ok {
+			continue
+		}
+		seen[slot] = struct{}{}
+		if err := kernelDatapathAEADDirectClearKey("", slot); err != nil {
+			remaining = append(remaining, slot)
+			resultErr = errors.Join(resultErr, fmt.Errorf("clear full secure kernel datapath key slot %d: %w", slot, err))
+		}
+	}
+	return remaining, resultErr
+}
+
+func (manager *Manager) commitKernelDatapathTIXTCPCryptoStateLocked(flowID uint64, epoch uint64) error {
+	state, ok := manager.kernelDatapathCryptoStates[flowID]
+	if !ok || state.Send.Epoch != epoch || state.Receive.Epoch != epoch {
+		return nil
+	}
+	remaining, err := clearKernelDatapathDirectSlots(manager.kernelDatapathCryptoRetiredSlots[flowID])
+	if len(remaining) == 0 {
+		delete(manager.kernelDatapathCryptoRetiredSlots, flowID)
+	} else {
+		manager.kernelDatapathCryptoRetiredSlots[flowID] = remaining
+	}
+	return err
+}
+
+func (manager *Manager) releaseKernelDatapathTIXTCPCryptoStateLocked(flowID uint64) error {
+	slots := append([]uint32(nil), manager.kernelDatapathCryptoRetiredSlots[flowID]...)
+	if state, ok := manager.kernelDatapathCryptoStates[flowID]; ok {
+		slots = append(slots, state.Send.SlotID, state.Receive.SlotID)
+	}
+	delete(manager.kernelDatapathCryptoStates, flowID)
+	remaining, err := clearKernelDatapathDirectSlots(slots)
+	if len(remaining) == 0 {
+		delete(manager.kernelDatapathCryptoRetiredSlots, flowID)
+	} else {
+		manager.kernelDatapathCryptoRetiredSlots[flowID] = remaining
+	}
+	return err
+}
+
+func (manager *Manager) releaseRetiredKernelDatapathTIXTCPCryptoStatesLocked() error {
+	var resultErr error
+	for flowID, slots := range manager.kernelDatapathCryptoRetiredSlots {
+		remaining, err := clearKernelDatapathDirectSlots(slots)
+		resultErr = errors.Join(resultErr, err)
+		if len(remaining) == 0 {
+			delete(manager.kernelDatapathCryptoRetiredSlots, flowID)
+		} else {
+			manager.kernelDatapathCryptoRetiredSlots[flowID] = remaining
+		}
+	}
+	return resultErr
+}
+
+func (manager *Manager) closeKernelDatapathTIXTCPCryptoLocked() error {
+	flowIDs := make(map[uint64]struct{}, len(manager.kernelDatapathCryptoStates)+len(manager.kernelDatapathCryptoRetiredSlots))
+	for flowID := range manager.kernelDatapathCryptoStates {
+		flowIDs[flowID] = struct{}{}
+	}
+	for flowID := range manager.kernelDatapathCryptoRetiredSlots {
+		flowIDs[flowID] = struct{}{}
+	}
+	var resultErr error
+	for flowID := range flowIDs {
+		resultErr = errors.Join(resultErr, manager.releaseKernelDatapathTIXTCPCryptoStateLocked(flowID))
+	}
+	if resultErr == nil {
+		manager.kernelDatapathCryptoStates = nil
+		manager.kernelDatapathCryptoRetiredSlots = nil
+	}
+	return resultErr
+}
+
 func (manager *Manager) initKernelCryptoProviderMapLocked() {
 	if manager.kernelCryptoFlowMap != nil {
 		manager.addCapabilityLocked("tix-tcp-kernel-crypto-flow-map")
@@ -150,6 +349,7 @@ func (manager *Manager) initKernelCryptoProviderMapLocked() {
 	probe := manager.kernelCryptoProbeSnapshotLocked()
 	bpfCryptoProviderReady := probe.SelfTest != nil && probe.SelfTest.Passed
 	directSlotProviderReady := kernelCryptoDirectSlotModuleReady()
+	directSlotFastPathReady := directSlotProviderReady && kernelCryptoDirectKfuncFastpathReady()
 	if !bpfCryptoProviderReady && !directSlotProviderReady {
 		return
 	}
@@ -170,7 +370,11 @@ func (manager *Manager) initKernelCryptoProviderMapLocked() {
 	manager.kernelCryptoFlowMapEntries = make(map[kernelCryptoFlowKey]struct{})
 	manager.addCapabilityLocked("tix-tcp-kernel-crypto-flow-map")
 	var provider *kernelCryptoProviderObject
-	if bpfCryptoProviderReady {
+	// Prefer the module direct-slot provider when its TC kfunc fast path is
+	// active. The verifier selftest only proves that BPF crypto kfunc programs
+	// load; it does not prove that gcm(aes) context creation succeeds at run
+	// time, and probing that unused path creates a misleading ENOENT warning.
+	if bpfCryptoProviderReady && !directSlotFastPathReady {
 		provider, err = loadKernelCryptoProviderObject()
 		if err != nil {
 			manager.kernelCryptoProviderLoadErrors++
@@ -203,7 +407,7 @@ func (manager *Manager) closeKernelCryptoProviderMapLocked() error {
 	for flowID := range manager.kernelCryptoDevices {
 		manager.deleteKernelCryptoDeviceLocked(kernelCryptoNamespaceKernelUDP, flowID)
 	}
-	var closeErr error
+	closeErr := manager.closeKernelDatapathTIXTCPCryptoLocked()
 	if manager.kernelCryptoProvider != nil {
 		for _, slot := range manager.kernelCryptoCtxSlots {
 			closeErr = errors.Join(closeErr, manager.kernelCryptoProvider.clearDirectSlot(slot))
@@ -254,6 +458,9 @@ func (manager *Manager) deleteKernelUDPCryptoFlowLocked(flowID uint64) {
 func (manager *Manager) deleteKernelCryptoFlowNamespaceLocked(namespace uint8, flowID uint64) {
 	if flowID == 0 {
 		return
+	}
+	if namespace == kernelCryptoNamespaceTIXTCP {
+		manager.retireKernelDatapathTIXTCPCryptoStateLocked(flowID)
 	}
 	keys := []kernelCryptoFlowKey{
 		kernelCryptoFlowKeyFor(namespace, flowID, kernelCryptoDirectionSend),
@@ -376,6 +583,7 @@ func (manager *Manager) kernelCryptoDirectSlotProviderReadyLocked() bool {
 	return manager.kernelCryptoProvider != nil &&
 		manager.kernelCryptoProvider.flowIndexMap != nil &&
 		manager.kernelCryptoProvider.directSlotMap != nil &&
+		kernelCryptoDirectSlotOwnerReady() &&
 		kernelmodule.AEADDeviceAvailable("")
 }
 
@@ -417,6 +625,22 @@ func kernelCryptoDirectKfuncFastpathUnavailableReason() string {
 	return ""
 }
 
+func kernelCryptoDirectSlotOwnerReady() bool {
+	abi, ok := readTrustIXAEADModuleParamUint64("abi_version")
+	return ok && abi >= kernelCryptoDirectSlotOwnerABIMin
+}
+
+func kernelCryptoDirectSlotOwnerUnavailableReason() string {
+	abi, ok := readTrustIXAEADModuleParamUint64("abi_version")
+	if !ok {
+		return "TrustIX AEAD direct-slot owner ABI is unavailable"
+	}
+	if abi < kernelCryptoDirectSlotOwnerABIMin {
+		return fmt.Sprintf("TrustIX AEAD module ABI %d lacks crash-safe direct-slot ownership (need >= %d)", abi, kernelCryptoDirectSlotOwnerABIMin)
+	}
+	return ""
+}
+
 func (manager *Manager) kernelCryptoTCDirectUnavailableReasonLocked() string {
 	if manager.kernelCryptoTCDirectReadyLocked() {
 		return ""
@@ -449,7 +673,11 @@ func (manager *Manager) kernelCryptoTCDirectUnavailableReasonLocked() string {
 			reasons = append(reasons, "direct-slot provider requires "+reason)
 		}
 	} else {
-		reasons = append(reasons, "direct-slot provider is unavailable")
+		if reason := kernelCryptoDirectSlotOwnerUnavailableReason(); reason != "" {
+			reasons = append(reasons, "direct-slot provider: "+reason)
+		} else {
+			reasons = append(reasons, "direct-slot provider is unavailable")
+		}
 	}
 	if reason := manager.kernelCryptoUnavailableReasonLocked(); reason != "" {
 		reasons = append(reasons, "BPF context provider: "+reason)
@@ -464,6 +692,7 @@ func kernelCryptoDirectSlotModuleReady() bool {
 	status := kernelmodule.ProbeTrustIXCryptoStatus()
 	return status.Loaded &&
 		status.HasFeature(kernelmodule.FeatureKfuncTC) &&
+		kernelCryptoDirectSlotOwnerReady() &&
 		kernelmodule.AEADDeviceAvailable("")
 }
 
@@ -554,10 +783,16 @@ func (manager *Manager) kernelUDPCryptoFallbackStatusLocked() dataplane.CryptoFa
 }
 
 func (manager *Manager) tixTCPKernelCryptoReadyLocked() bool {
+	if manager.kernelDatapathSecureTIXTCPTransportAvailableLocked() {
+		return kernelDatapathTIXTCPDirectCryptoReady()
+	}
 	return manager.kernelCryptoProductionReadyLocked() || manager.kernelCryptoDeviceAvailableLocked(kernelCryptoNamespaceTIXTCP)
 }
 
 func (manager *Manager) tixTCPKernelCryptoUnavailableReasonLocked() string {
+	if manager.kernelDatapathSecureTIXTCPTransportAvailableLocked() {
+		return kernelDatapathTIXTCPDirectCryptoUnavailableReason()
+	}
 	reasons := make([]string, 0, 2)
 	if !manager.kernelCryptoProductionReadyLocked() {
 		reasons = append(reasons, "BPF crypto provider: "+manager.kernelCryptoUnavailableReasonLocked())
@@ -571,10 +806,43 @@ func (manager *Manager) tixTCPKernelCryptoUnavailableReasonLocked() string {
 	return strings.Join(reasons, "; ")
 }
 
+func kernelDatapathTIXTCPDirectCryptoReady() bool {
+	status := kernelmodule.ProbeTrustIXCryptoStatus()
+	return status.Loaded &&
+		status.HasFeature(kernelmodule.FeatureDirectAESNI) &&
+		kernelCryptoDirectSlotOwnerReady() &&
+		kernelmodule.AEADDeviceAvailable("")
+}
+
+func kernelDatapathTIXTCPDirectCryptoUnavailableReason() string {
+	status := kernelmodule.ProbeTrustIXCryptoStatus()
+	reasons := make([]string, 0, 3)
+	if !status.Loaded {
+		reasons = append(reasons, "trustix_crypto module is not loaded")
+	} else if !status.HasFeature(kernelmodule.FeatureDirectAESNI) {
+		reasons = append(reasons, "trustix_crypto does not advertise "+kernelmodule.FeatureDirectAESNI)
+	}
+	if !kernelmodule.AEADDeviceAvailable("") {
+		reasons = append(reasons, "TrustIX AEAD device "+kernelmodule.TrustIXAEADDevicePath+" is unavailable")
+	}
+	if reason := kernelCryptoDirectSlotOwnerUnavailableReason(); reason != "" {
+		reasons = append(reasons, reason)
+	}
+	if len(reasons) == 0 {
+		return "full secure kernel datapath direct crypto is unavailable"
+	}
+	return strings.Join(reasons, "; ")
+}
+
 func (manager *Manager) tixTCPCryptoFallbackStatusLocked() dataplane.CryptoFallbackStatus {
 	fullModuleStatus := kernelmodule.ProbeTrustIXDatapathStatus()
 	helpersModuleStatus := kernelmodule.ProbeTrustIXDatapathHelpersStatus()
-	fullDatapathReady := fullModuleStatus.FullDatapathReady() && trustIXFullDatapathDriverReady()
+	fullDatapathModuleReady := fullModuleStatus.FullDatapathReady() && trustIXFullDatapathDriverReady()
+	fullDatapathReady := fullDatapathModuleReady && kernelDatapathTIXTCPDirectCryptoReady()
+	fullDatapathReason := moduleDatapathFallbackReason(fullModuleStatus, kernelmodule.FeatureFullDatapath, kernelmodule.TrustIXDatapathDevicePath)
+	if fullDatapathModuleReady && !kernelDatapathTIXTCPDirectCryptoReady() {
+		fullDatapathReason = kernelDatapathTIXTCPDirectCryptoUnavailableReason()
+	}
 	gsoReady := helpersModuleStatus.GSOSKBReady() && trustIXGSOSKBDriverReady()
 	bpfReady := manager.kernelCryptoProductionReadyLocked()
 	deviceReady := manager.kernelCryptoDeviceAvailableLocked(kernelCryptoNamespaceTIXTCP)
@@ -584,7 +852,7 @@ func (manager *Manager) tixTCPCryptoFallbackStatusLocked() dataplane.CryptoFallb
 			Ready:     fullDatapathReady,
 			Placement: "kernel",
 			Layer:     dataplane.CryptoFallbackLayerKernelModule,
-			Reason:    readinessReason(fullDatapathReady, moduleDatapathFallbackReason(fullModuleStatus, kernelmodule.FeatureFullDatapath, kernelmodule.TrustIXDatapathDevicePath)),
+			Reason:    readinessReason(fullDatapathReady, fullDatapathReason),
 		},
 		{
 			Name:      dataplane.CryptoFallbackGSOSKBModuleHelpers,
@@ -1190,6 +1458,17 @@ func (provider *kernelCryptoProviderObject) lookupCtxSlot(slot uint32) (kernelCr
 	var value kernelCryptoCtxSlotValue
 	if err := provider.contextSlots.Lookup(slot, &value); err != nil {
 		return kernelCryptoCtxSlotValue{}, err
+	}
+	return value, nil
+}
+
+func (provider *kernelCryptoProviderObject) lookupDirectSlot(slot uint32) (kernelCryptoDirectSlotValue, error) {
+	if provider == nil || provider.directSlotMap == nil {
+		return kernelCryptoDirectSlotValue{}, fmt.Errorf("kernel crypto direct slot map is not loaded")
+	}
+	var value kernelCryptoDirectSlotValue
+	if err := provider.directSlotMap.LookupWithFlags(slot, &value, cebpf.LookupLock); err != nil {
+		return kernelCryptoDirectSlotValue{}, err
 	}
 	return value, nil
 }

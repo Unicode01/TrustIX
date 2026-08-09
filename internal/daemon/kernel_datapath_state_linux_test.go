@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +79,640 @@ func TestApplyKernelDatapathStateRecordsRejectsShortSuccess(t *testing.T) {
 	}
 }
 
+func TestPeriodicKernelDatapathStateSyncDoesNotClearHealthyTables(t *testing.T) {
+	daemon := newKernelDatapathStateSyncTestDaemon(true)
+	snapshot := dataplane.Snapshot{Routes: []routing.Route{kernelDatapathStateSyncTestRoute()}}
+	originalStats := kernelDatapathStateStatsQuery
+	originalApply := kernelDatapathApplyStateBatch
+	kernelDatapathStateStatsQuery = func(string) (kernelmodule.DatapathStateStats, error) {
+		return kernelmodule.DatapathStateStats{
+			MaxRoutes: 16, Routes: 1,
+			MaxSessions: 16, MaxFlows: 16, MaxSessionWires: 16,
+		}, nil
+	}
+	var applied []kernelmodule.DatapathStateRecord
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		applied = append(applied, records...)
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() {
+		kernelDatapathStateStatsQuery = originalStats
+		kernelDatapathApplyStateBatch = originalApply
+	})
+
+	if err := daemon.syncKernelDatapathState(context.Background(), snapshot); err != nil {
+		t.Fatalf("periodic state sync: %v", err)
+	}
+	if len(applied) != 1 || applied[0].Op != kernelmodule.TrustIXDatapathStateOpUpsert {
+		t.Fatalf("healthy periodic sync records = %#v, want one route upsert and no clear", applied)
+	}
+}
+
+func TestInitialKernelDatapathStateSyncClearsUnknownPersistedState(t *testing.T) {
+	daemon := newKernelDatapathStateSyncTestDaemon(false)
+	snapshot := dataplane.Snapshot{Routes: []routing.Route{kernelDatapathStateSyncTestRoute()}}
+	originalStats := kernelDatapathStateStatsQuery
+	originalApply := kernelDatapathApplyStateBatch
+	kernelDatapathStateStatsQuery = func(string) (kernelmodule.DatapathStateStats, error) {
+		return kernelmodule.DatapathStateStats{
+			MaxRoutes: 16, Routes: 1,
+			MaxSessions: 16, MaxFlows: 16, MaxSessionWires: 16,
+		}, nil
+	}
+	var applied []kernelmodule.DatapathStateRecord
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		applied = append(applied, records...)
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() {
+		kernelDatapathStateStatsQuery = originalStats
+		kernelDatapathApplyStateBatch = originalApply
+	})
+
+	if err := daemon.syncKernelDatapathState(context.Background(), snapshot); err != nil {
+		t.Fatalf("initial state sync: %v", err)
+	}
+	clearSeen := false
+	for _, record := range applied {
+		clearSeen = clearSeen || record.Op == kernelmodule.TrustIXDatapathStateOpClear
+	}
+	if !clearSeen || !daemon.kernelDatapathStateInitialized {
+		t.Fatalf("initial sync records=%#v initialized=%t, want clear and initialized state", applied, daemon.kernelDatapathStateInitialized)
+	}
+}
+
+func TestPeriodicKernelDatapathStateSyncKeepsAllLargeBatchesNonDestructive(t *testing.T) {
+	const routeCount = 5000
+	daemon := newKernelDatapathStateSyncTestDaemon(true)
+	routes := make([]routing.Route, 0, routeCount)
+	for i := 0; i < routeCount; i++ {
+		addr := netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)})
+		routes = append(routes, routing.Route{
+			Prefix:   core.Prefix(addr.String() + "/32"),
+			Owner:    "ix-b",
+			NextHop:  "ix-b",
+			Endpoint: "wan-tix-tcp",
+			Kind:     routing.RouteUnicast,
+		})
+	}
+	originalStats := kernelDatapathStateStatsQuery
+	originalApply := kernelDatapathApplyStateBatch
+	kernelDatapathStateStatsQuery = func(string) (kernelmodule.DatapathStateStats, error) {
+		return kernelmodule.DatapathStateStats{
+			MaxRoutes: 8192, Routes: routeCount,
+			MaxSessions: 16, MaxFlows: 16, MaxSessionWires: 16,
+		}, nil
+	}
+	applyCalls := 0
+	applied := 0
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		applyCalls++
+		applied += len(records)
+		for _, record := range records {
+			if record.Op == kernelmodule.TrustIXDatapathStateOpClear {
+				t.Fatalf("large periodic batch %d contains destructive clear", applyCalls)
+			}
+		}
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() {
+		kernelDatapathStateStatsQuery = originalStats
+		kernelDatapathApplyStateBatch = originalApply
+	})
+
+	if err := daemon.syncKernelDatapathState(context.Background(), dataplane.Snapshot{Routes: routes}); err != nil {
+		t.Fatalf("large periodic state sync: %v", err)
+	}
+	if applyCalls != 2 || applied != routeCount {
+		t.Fatalf("large periodic sync apply calls=%d records=%d, want 2 and %d", applyCalls, applied, routeCount)
+	}
+}
+
+func TestPeriodicKernelDatapathStateSyncRepairsCountMismatchBeforeReset(t *testing.T) {
+	daemon := newKernelDatapathStateSyncTestDaemon(true)
+	snapshot := dataplane.Snapshot{Routes: []routing.Route{kernelDatapathStateSyncTestRoute()}}
+	originalStats := kernelDatapathStateStatsQuery
+	originalApply := kernelDatapathApplyStateBatch
+	statsCalls := 0
+	kernelDatapathStateStatsQuery = func(string) (kernelmodule.DatapathStateStats, error) {
+		statsCalls++
+		routes := uint32(0)
+		if statsCalls > 1 {
+			routes = 1
+		}
+		return kernelmodule.DatapathStateStats{
+			MaxRoutes: 16, Routes: routes,
+			MaxSessions: 16, MaxFlows: 16, MaxSessionWires: 16,
+		}, nil
+	}
+	var calls [][]kernelmodule.DatapathStateRecord
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		calls = append(calls, append([]kernelmodule.DatapathStateRecord(nil), records...))
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() {
+		kernelDatapathStateStatsQuery = originalStats
+		kernelDatapathApplyStateBatch = originalApply
+	})
+
+	if err := daemon.syncKernelDatapathState(context.Background(), snapshot); err != nil {
+		t.Fatalf("repair state sync: %v", err)
+	}
+	if statsCalls != 2 || len(calls) != 1 {
+		t.Fatalf("repair stats calls=%d apply calls=%d, want 2 and 1", statsCalls, len(calls))
+	}
+	for _, record := range calls[0] {
+		if record.Op == kernelmodule.TrustIXDatapathStateOpClear {
+			t.Fatalf("non-destructive repair unexpectedly cleared state: %#v", calls[0])
+		}
+	}
+}
+
+func TestPeriodicKernelDatapathStateSyncResetsPersistentCountMismatch(t *testing.T) {
+	daemon := newKernelDatapathStateSyncTestDaemon(true)
+	snapshot := dataplane.Snapshot{Routes: []routing.Route{kernelDatapathStateSyncTestRoute()}}
+	originalStats := kernelDatapathStateStatsQuery
+	originalApply := kernelDatapathApplyStateBatch
+	kernelDatapathStateStatsQuery = func(string) (kernelmodule.DatapathStateStats, error) {
+		return kernelmodule.DatapathStateStats{
+			MaxRoutes: 16, Routes: 2,
+			MaxSessions: 16, MaxFlows: 16, MaxSessionWires: 16,
+		}, nil
+	}
+	var calls [][]kernelmodule.DatapathStateRecord
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		calls = append(calls, append([]kernelmodule.DatapathStateRecord(nil), records...))
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() {
+		kernelDatapathStateStatsQuery = originalStats
+		kernelDatapathApplyStateBatch = originalApply
+	})
+
+	if err := daemon.syncKernelDatapathState(context.Background(), snapshot); err != nil {
+		t.Fatalf("persistent mismatch state sync: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("persistent mismatch apply calls = %d, want repair then reset", len(calls))
+	}
+	for _, record := range calls[0] {
+		if record.Op == kernelmodule.TrustIXDatapathStateOpClear {
+			t.Fatalf("first repair pass cleared state: %#v", calls[0])
+		}
+	}
+	clearSeen := false
+	for _, record := range calls[1] {
+		clearSeen = clearSeen || record.Op == kernelmodule.TrustIXDatapathStateOpClear
+	}
+	if !clearSeen {
+		t.Fatalf("persistent mismatch reset is missing clear records: %#v", calls[1])
+	}
+}
+
+func TestPeriodicKernelDatapathStateSyncDoesNotClearAfterRepairFailure(t *testing.T) {
+	daemon := newKernelDatapathStateSyncTestDaemon(true)
+	snapshot := dataplane.Snapshot{Routes: []routing.Route{kernelDatapathStateSyncTestRoute()}}
+	wantErr := errors.New("injected non-destructive repair failure")
+	originalStats := kernelDatapathStateStatsQuery
+	originalApply := kernelDatapathApplyStateBatch
+	kernelDatapathStateStatsQuery = func(string) (kernelmodule.DatapathStateStats, error) {
+		return kernelmodule.DatapathStateStats{
+			MaxRoutes: 16, Routes: 2,
+			MaxSessions: 16, MaxFlows: 16, MaxSessionWires: 16,
+		}, nil
+	}
+	var calls [][]kernelmodule.DatapathStateRecord
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		calls = append(calls, append([]kernelmodule.DatapathStateRecord(nil), records...))
+		return 0, nil, wantErr
+	}
+	t.Cleanup(func() {
+		kernelDatapathStateStatsQuery = originalStats
+		kernelDatapathApplyStateBatch = originalApply
+	})
+
+	err := daemon.syncKernelDatapathState(context.Background(), snapshot)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("repair failure = %v, want %v", err, wantErr)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("repair failure apply calls = %d, want 1", len(calls))
+	}
+	for _, record := range calls[0] {
+		if record.Op == kernelmodule.TrustIXDatapathStateOpClear {
+			t.Fatalf("failed non-destructive repair cleared live state: %#v", calls[0])
+		}
+	}
+}
+
+func newKernelDatapathStateSyncTestDaemon(initialized bool) *Daemon {
+	manager := kernelmodule.NewTrustIXDatapathManager()
+	manager.SetStatusForTest(kernelmodule.Status{Name: "trustix_datapath", Loaded: true, State: "loaded"})
+	return &Daemon{
+		kernelDatapath:                 manager,
+		kernelDatapathStateInitialized: initialized,
+	}
+}
+
+func kernelDatapathStateSyncTestRoute() routing.Route {
+	return routing.Route{
+		Prefix:   core.Prefix("10.82.0.0/24"),
+		Owner:    "ix-b",
+		NextHop:  "ix-b",
+		Endpoint: "wan-tix-tcp",
+		Policy:   "fast",
+		Kind:     routing.RouteUnicast,
+	}
+}
+
+func TestSyncKernelDatapathSessionUpsertCommitsEpochZeroCryptoAfterApply(t *testing.T) {
+	daemon, manager, key, session := newKernelDatapathCryptoLifecycleFixture()
+	original := kernelDatapathApplyStateBatch
+	appliedCrypto := false
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		for _, record := range records {
+			if record.Kind == kernelmodule.TrustIXDatapathStateKindSessionCrypto && record.Op == kernelmodule.TrustIXDatapathStateOpUpsert {
+				appliedCrypto = true
+			}
+		}
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	daemon.syncKernelDatapathSessionRecords(key, nil, session)
+	if !appliedCrypto {
+		t.Fatal("session upsert did not apply a crypto state record")
+	}
+	if len(manager.commitCalls) != 1 || manager.commitCalls[0] != [2]uint64{manager.state.FlowID, manager.state.Send.Epoch} {
+		t.Fatalf("crypto commit calls = %v, want flow %d epoch %d", manager.commitCalls, manager.state.FlowID, manager.state.Send.Epoch)
+	}
+}
+
+func TestSyncKernelDatapathSessionUpsertDoesNotCommitCryptoAfterApplyFailure(t *testing.T) {
+	daemon, manager, key, session := newKernelDatapathCryptoLifecycleFixture()
+	wantErr := errors.New("injected session upsert failure")
+	original := kernelDatapathApplyStateBatch
+	kernelDatapathApplyStateBatch = func(_ string, _ []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		return 0, nil, wantErr
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	daemon.syncKernelDatapathSessionRecords(key, nil, session)
+	if len(manager.commitCalls) != 0 {
+		t.Fatalf("crypto committed before failed state apply: %v", manager.commitCalls)
+	}
+	if status := daemon.runtimeReconcileStatus(); !status.Pending || status.LastError == "" {
+		t.Fatalf("failed state apply did not request reconciliation: %+v", status)
+	}
+}
+
+func TestSyncKernelDatapathSessionDeleteReleasesCryptoAfterApply(t *testing.T) {
+	daemon, manager, key, session := newKernelDatapathCryptoLifecycleFixture()
+	original := kernelDatapathApplyStateBatch
+	appliedCryptoDelete := false
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		for _, record := range records {
+			if record.Kind == kernelmodule.TrustIXDatapathStateKindSessionCrypto && record.Op == kernelmodule.TrustIXDatapathStateOpDelete {
+				appliedCryptoDelete = true
+			}
+		}
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	delete(daemon.dataSessions, key)
+	daemon.syncKernelDatapathSessionDelete(key, session)
+	if !appliedCryptoDelete {
+		t.Fatal("session delete did not apply a crypto state delete record")
+	}
+	if len(manager.releaseCalls) != 1 || manager.releaseCalls[0] != manager.state.FlowID {
+		t.Fatalf("crypto release calls = %v, want flow %d", manager.releaseCalls, manager.state.FlowID)
+	}
+}
+
+func TestSyncKernelDatapathSessionDeleteRetainingFlowKeepsCryptoAfterApply(t *testing.T) {
+	daemon, manager, key, session := newKernelDatapathCryptoLifecycleFixture()
+	original := kernelDatapathApplyStateBatch
+	appliedCryptoDelete := false
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		for _, record := range records {
+			if record.Kind == kernelmodule.TrustIXDatapathStateKindSessionCrypto && record.Op == kernelmodule.TrustIXDatapathStateOpDelete {
+				appliedCryptoDelete = true
+			}
+		}
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	delete(daemon.dataSessions, key)
+	daemon.syncKernelDatapathSessionDeleteRetainingFlow(key, session)
+	if !appliedCryptoDelete {
+		t.Fatal("retained session delete did not remove the old keyed crypto record")
+	}
+	if len(manager.releaseCalls) != 0 {
+		t.Fatalf("retained session delete released the transferred crypto flow: %v", manager.releaseCalls)
+	}
+}
+
+func TestDropSessionsForPeerTransportDeletesKernelStateAndReleasesCrypto(t *testing.T) {
+	daemon, manager, key, _ := newKernelDatapathCryptoLifecycleFixture()
+	original := kernelDatapathApplyStateBatch
+	deleteKinds := make(map[uint32]bool)
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		for _, record := range records {
+			if record.Op == kernelmodule.TrustIXDatapathStateOpDelete {
+				deleteKinds[record.Kind] = true
+			}
+		}
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	if dropped := daemon.dropSessionsForPeerTransport(key.Peer, key.Transport); dropped != 1 {
+		t.Fatalf("dropped peer transport sessions = %d, want 1", dropped)
+	}
+	if _, ok := daemon.dataSessions[key]; ok {
+		t.Fatal("dropped peer transport session remains in the daemon session map")
+	}
+	for _, kind := range []uint32{
+		kernelmodule.TrustIXDatapathStateKindSession,
+		kernelmodule.TrustIXDatapathStateKindSessionWire,
+		kernelmodule.TrustIXDatapathStateKindSessionCrypto,
+	} {
+		if !deleteKinds[kind] {
+			t.Fatalf("peer transport cleanup is missing kernel delete kind %d", kind)
+		}
+	}
+	if len(manager.releaseCalls) != 1 || manager.releaseCalls[0] != manager.state.FlowID {
+		t.Fatalf("peer transport cleanup crypto releases = %v, want flow %d", manager.releaseCalls, manager.state.FlowID)
+	}
+}
+
+func TestSyncKernelDatapathSessionDeleteDoesNotReleaseCryptoAfterApplyFailure(t *testing.T) {
+	daemon, manager, key, session := newKernelDatapathCryptoLifecycleFixture()
+	wantErr := errors.New("injected session delete failure")
+	original := kernelDatapathApplyStateBatch
+	kernelDatapathApplyStateBatch = func(_ string, _ []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		return 0, nil, wantErr
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = original })
+
+	delete(daemon.dataSessions, key)
+	daemon.syncKernelDatapathSessionDelete(key, session)
+	if len(manager.releaseCalls) != 0 {
+		t.Fatalf("crypto released before failed state delete: %v", manager.releaseCalls)
+	}
+	if status := daemon.runtimeReconcileStatus(); !status.Pending || status.LastError == "" {
+		t.Fatalf("failed state delete did not request reconciliation: %+v", status)
+	}
+}
+
+func TestKernelDatapathStateSyncSerializesConcurrentSessionDeleteAfterStaleSnapshot(t *testing.T) {
+	daemon, manager, key, session := newKernelDatapathCryptoLifecycleFixture()
+	originalStats := kernelDatapathStateStatsQuery
+	originalApply := kernelDatapathApplyStateBatch
+	kernelDatapathStateStatsQuery = func(string) (kernelmodule.DatapathStateStats, error) {
+		return kernelmodule.DatapathStateStats{MaxRoutes: 16, MaxSessions: 16, MaxFlows: 16}, nil
+	}
+	firstApplyStarted := make(chan struct{})
+	allowFirstApply := make(chan struct{})
+	var calls [][]kernelmodule.DatapathStateRecord
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		calls = append(calls, append([]kernelmodule.DatapathStateRecord(nil), records...))
+		if len(calls) == 1 {
+			close(firstApplyStarted)
+			<-allowFirstApply
+		}
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() {
+		kernelDatapathStateStatsQuery = originalStats
+		kernelDatapathApplyStateBatch = originalApply
+	})
+
+	fullSyncDone := make(chan error, 1)
+	go func() {
+		fullSyncDone <- daemon.syncKernelDatapathState(context.Background(), dataplane.Snapshot{})
+	}()
+	select {
+	case <-firstApplyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("full state sync did not reach the blocked apply")
+	}
+
+	daemon.dataMu.Lock()
+	delete(daemon.dataSessions, key)
+	delete(daemon.dataSessionState, key)
+	daemon.dataMu.Unlock()
+	deleteDone := make(chan struct{})
+	go func() {
+		daemon.syncKernelDatapathSessionDelete(key, session)
+		close(deleteDone)
+	}()
+	select {
+	case <-deleteDone:
+		t.Fatal("session delete bypassed the in-progress full state sync")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowFirstApply)
+	if err := <-fullSyncDone; err != nil {
+		t.Fatalf("full state sync: %v", err)
+	}
+	select {
+	case <-deleteDone:
+	case <-time.After(time.Second):
+		t.Fatal("session delete did not run after the full state sync completed")
+	}
+	if len(calls) != 2 {
+		t.Fatalf("kernel state apply calls = %d, want full sync then delete", len(calls))
+	}
+	deleteKinds := make(map[uint32]bool)
+	for _, record := range calls[1] {
+		if record.Op == kernelmodule.TrustIXDatapathStateOpDelete {
+			deleteKinds[record.Kind] = true
+		}
+	}
+	for _, kind := range []uint32{
+		kernelmodule.TrustIXDatapathStateKindSession,
+		kernelmodule.TrustIXDatapathStateKindSessionWire,
+		kernelmodule.TrustIXDatapathStateKindSessionCrypto,
+	} {
+		if !deleteKinds[kind] {
+			t.Fatalf("final serialized apply is missing delete kind %d: %#v", kind, calls[1])
+		}
+	}
+	if len(manager.releaseCalls) != 1 || manager.releaseCalls[0] != manager.state.FlowID {
+		t.Fatalf("serialized delete crypto releases = %v, want flow %d", manager.releaseCalls, manager.state.FlowID)
+	}
+}
+
+func TestKernelDatapathSessionUpsertSkipsSessionRemovedWhileWaitingForStateLock(t *testing.T) {
+	daemon, manager, key, session := newKernelDatapathCryptoLifecycleFixture()
+	originalApply := kernelDatapathApplyStateBatch
+	applyCalls := 0
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		applyCalls++
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = originalApply })
+
+	daemon.kernelDatapathStateMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		daemon.syncKernelDatapathSessionRecords(key, nil, session)
+		close(done)
+	}()
+	daemon.dataMu.Lock()
+	delete(daemon.dataSessions, key)
+	delete(daemon.dataSessionState, key)
+	daemon.dataMu.Unlock()
+	daemon.kernelDatapathStateMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stale session upsert did not return")
+	}
+	if applyCalls != 0 {
+		t.Fatalf("stale session upsert applied %d kernel batches, want 0", applyCalls)
+	}
+	if len(manager.commitCalls) != 0 {
+		t.Fatalf("stale session upsert committed crypto state: %v", manager.commitCalls)
+	}
+}
+
+func TestKernelDatapathSessionDeleteConvergesReplacementBeforeReleasingOldCrypto(t *testing.T) {
+	daemon, manager, key, oldSession := newKernelDatapathCryptoLifecycleFixture()
+	replacementInfo := oldSession.(kernelDatapathTestSession).info
+	replacementInfo.FlowID++
+	replacement := kernelDatapathTestSession{info: replacementInfo}
+	daemon.dataSessions[key] = replacement
+
+	originalApply := kernelDatapathApplyStateBatch
+	var applied []kernelmodule.DatapathStateRecord
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		applied = append(applied, records...)
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = originalApply })
+
+	daemon.syncKernelDatapathSessionDelete(key, oldSession)
+	deleteSeen := false
+	replacementSeen := false
+	for _, record := range applied {
+		if record.Kind != kernelmodule.TrustIXDatapathStateKindSession {
+			continue
+		}
+		deleteSeen = deleteSeen || record.Op == kernelmodule.TrustIXDatapathStateOpDelete
+		replacementSeen = replacementSeen || record.Op == kernelmodule.TrustIXDatapathStateOpUpsert && record.Value[0] == replacementInfo.FlowID
+	}
+	if !deleteSeen || !replacementSeen {
+		t.Fatalf("replacement convergence records = %#v, want old delete followed by replacement upsert", applied)
+	}
+	if len(manager.releaseCalls) != 1 || manager.releaseCalls[0] != manager.state.FlowID {
+		t.Fatalf("replaced session crypto releases = %v, want old flow %d", manager.releaseCalls, manager.state.FlowID)
+	}
+}
+
+func TestKernelDatapathSessionReplacementApplyFailureRetainsOldCrypto(t *testing.T) {
+	daemon, manager, key, oldSession := newKernelDatapathCryptoLifecycleFixture()
+	replacementInfo := oldSession.(kernelDatapathTestSession).info
+	replacementInfo.FlowID++
+	daemon.dataSessions[key] = kernelDatapathTestSession{info: replacementInfo}
+	wantErr := errors.New("injected replacement convergence failure")
+
+	originalApply := kernelDatapathApplyStateBatch
+	kernelDatapathApplyStateBatch = func(_ string, _ []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		return 0, nil, wantErr
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = originalApply })
+
+	daemon.syncKernelDatapathSessionDelete(key, oldSession)
+	if len(manager.releaseCalls) != 0 {
+		t.Fatalf("replacement failure released old crypto before state convergence: %v", manager.releaseCalls)
+	}
+	if status := daemon.runtimeReconcileStatus(); !status.Pending || !strings.Contains(status.LastError, wantErr.Error()) {
+		t.Fatalf("replacement failure reconcile status = %+v, want pending error %q", status, wantErr)
+	}
+}
+
+func TestKernelDatapathFlowUpsertSkipsReleasedBinding(t *testing.T) {
+	daemon, _, _, _ := newKernelDatapathCryptoLifecycleFixture()
+	binding := routing.FlowBinding{
+		Key: routing.FlowKey{
+			SourceIP: netip.MustParseAddr("192.0.2.10"), DestinationIP: netip.MustParseAddr("198.51.100.10"),
+			SourcePort: 12345, DestinationPort: 443, Protocol: 6,
+		},
+		NextHop: "ix-b", Endpoint: "wan-tix-tcp", LastSeen: time.Now(), ExpiresAt: time.Now().Add(time.Minute),
+	}
+	daemon.flows = map[routing.FlowKey]routing.FlowBinding{}
+
+	originalApply := kernelDatapathApplyStateBatch
+	applyCalls := 0
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		applyCalls++
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = originalApply })
+
+	daemon.syncKernelDatapathFlowUpsert(binding)
+	if applyCalls != 0 {
+		t.Fatalf("stale flow upsert applied %d kernel batches, want 0", applyCalls)
+	}
+}
+
+func TestKernelDatapathFlowDeleteConvergesReplacementAtSameKey(t *testing.T) {
+	daemon, _, _, _ := newKernelDatapathCryptoLifecycleFixture()
+	key := routing.FlowKey{
+		SourceIP: netip.MustParseAddr("192.0.2.10"), DestinationIP: netip.MustParseAddr("198.51.100.10"),
+		SourcePort: 12345, DestinationPort: 443, Protocol: 6,
+	}
+	daemon.flows = map[routing.FlowKey]routing.FlowBinding{
+		key: {Key: key, NextHop: "ix-b", Endpoint: "replacement", LastSeen: time.Now(), ExpiresAt: time.Now().Add(time.Minute)},
+	}
+
+	originalApply := kernelDatapathApplyStateBatch
+	var applied []kernelmodule.DatapathStateRecord
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		applied = append(applied, records...)
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() { kernelDatapathApplyStateBatch = originalApply })
+
+	daemon.syncKernelDatapathFlowDelete(key)
+	if len(applied) != 1 || applied[0].Kind != kernelmodule.TrustIXDatapathStateKindFlow || applied[0].Op != kernelmodule.TrustIXDatapathStateOpUpsert {
+		t.Fatalf("replacement flow convergence records = %#v, want one upsert", applied)
+	}
+}
+
+func TestSyncKernelDatapathStateRetriesRetiredCryptoCleanup(t *testing.T) {
+	daemon, manager, _, _ := newKernelDatapathCryptoLifecycleFixture()
+	wantErr := errors.New("injected retired crypto cleanup failure")
+	manager.releaseRetiredErrors = []error{wantErr, nil}
+	originalStats := kernelDatapathStateStatsQuery
+	originalApply := kernelDatapathApplyStateBatch
+	kernelDatapathStateStatsQuery = func(string) (kernelmodule.DatapathStateStats, error) {
+		return kernelmodule.DatapathStateStats{MaxRoutes: 16, MaxSessions: 16, MaxFlows: 16}, nil
+	}
+	kernelDatapathApplyStateBatch = func(_ string, records []kernelmodule.DatapathStateRecord) (uint32, []kernelmodule.DatapathStateRecord, error) {
+		return uint32(len(records)), records, nil
+	}
+	t.Cleanup(func() {
+		kernelDatapathStateStatsQuery = originalStats
+		kernelDatapathApplyStateBatch = originalApply
+	})
+
+	if err := daemon.syncKernelDatapathState(context.Background(), dataplane.Snapshot{}); !errors.Is(err, wantErr) {
+		t.Fatalf("first full sync error = %v, want %v", err, wantErr)
+	}
+	if err := daemon.syncKernelDatapathState(context.Background(), dataplane.Snapshot{}); err != nil {
+		t.Fatalf("retry full sync: %v", err)
+	}
+	if manager.releaseRetiredCalls != 2 {
+		t.Fatalf("retired crypto cleanup calls = %d, want 2", manager.releaseRetiredCalls)
+	}
+}
+
 func TestKernelDatapathRouteRecordEncodesIPv4Prefix(t *testing.T) {
 	route := routing.Route{
 		Prefix:   core.Prefix("10.82.0.0/24"),
@@ -134,31 +769,34 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 	runtime.lastRX.Store(100)
 	runtime.lastTX.Store(200)
 	session := kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
-		FlowID:                            0x1020304050607080,
-		Protocol:                          transport.ProtocolTIXTCP,
-		Peer:                              "ix-b",
-		Endpoint:                          "wan-udp",
-		LocalAddress:                      "192.0.2.1:51820",
-		RemoteAddress:                     "198.51.100.2:17041",
-		Epoch:                             7,
-		CryptoSuite:                       "AES-128-GCM-X25519",
-		CryptoPlacement:                   "kernel",
-		Encrypted:                         true,
-		SendEncrypted:                     true,
-		ReceiveEncrypted:                  true,
-		NativeBatching:                    true,
-		Datagram:                          true,
-		FragmentingDatagram:               true,
-		MaxPacketSize:                     64000,
-		InnerTCPChecksumPartialLocal:      true,
-		InnerTCPChecksumPartialPeer:       true,
-		InnerTCPChecksumPartialNegotiated: true,
-		InnerGSOLocal:                     true,
-		InnerGSOPeer:                      true,
-		InnerGSONegotiated:                true,
-		TIXTCPPortShardingLocal:           true,
-		TIXTCPPortShardingPeer:            true,
-		TIXTCPPortShardingNegotiated:      true,
+		FlowID:                                  0x1020304050607080,
+		Protocol:                                transport.ProtocolTIXTCP,
+		Peer:                                    "ix-b",
+		Endpoint:                                "wan-udp",
+		LocalAddress:                            "192.0.2.1:51820",
+		RemoteAddress:                           "198.51.100.2:17041",
+		Epoch:                                   7,
+		CryptoSuite:                             "AES-128-GCM-X25519",
+		CryptoPlacement:                         "kernel",
+		Encrypted:                               true,
+		SendEncrypted:                           true,
+		ReceiveEncrypted:                        true,
+		NativeBatching:                          true,
+		Datagram:                                true,
+		FragmentingDatagram:                     true,
+		MaxPacketSize:                           64000,
+		InnerTCPChecksumPartialLocal:            true,
+		InnerTCPChecksumPartialPeer:             true,
+		InnerTCPChecksumPartialNegotiated:       true,
+		SecureInnerTCPChecksumPartialLocal:      true,
+		SecureInnerTCPChecksumPartialPeer:       true,
+		SecureInnerTCPChecksumPartialNegotiated: true,
+		InnerGSOLocal:                           true,
+		InnerGSOPeer:                            true,
+		InnerGSONegotiated:                      true,
+		TIXTCPPortShardingLocal:                 true,
+		TIXTCPPortShardingPeer:                  true,
+		TIXTCPPortShardingNegotiated:            true,
 	}}
 	record, ok := kernelDatapathSessionRecord(key, runtime, session)
 	if !ok {
@@ -187,16 +825,20 @@ func TestKernelDatapathSessionRecordEncodesKernelFlow(t *testing.T) {
 		kernelDatapathSessionFlagNativeBatching,
 		kernelDatapathSessionFlagDatagram,
 		kernelDatapathSessionFlagFragmentingDatagram,
-		kernelDatapathSessionFlagSendInnerTCPChecksumPartial,
-		kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial,
-		kernelDatapathSessionFlagSendInnerGSO,
-		kernelDatapathSessionFlagReceiveInnerGSO,
+		kernelDatapathSessionFlagSendSecureInnerTCPChecksumPartial,
+		kernelDatapathSessionFlagReceiveSecureInnerTCPChecksumPartial,
 		kernelDatapathSessionFlagSendTIXTCPPortSharding,
 		kernelDatapathSessionFlagReceiveTIXTCPPortSharding,
 	} {
 		if record.Flags&flag == 0 {
 			t.Fatalf("session record missing flag %#x: %#v", flag, record)
 		}
+	}
+	if forbidden := record.Flags & (kernelDatapathSessionFlagSendInnerTCPChecksumPartial |
+		kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial |
+		kernelDatapathSessionFlagSendInnerGSO |
+		kernelDatapathSessionFlagReceiveInnerGSO); forbidden != 0 {
+		t.Fatalf("secure session record contains plaintext-only flags %#x: %#v", forbidden, record)
 	}
 }
 
@@ -242,6 +884,54 @@ func TestKernelDatapathSessionChecksumPartialFlagsAreDirectional(t *testing.T) {
 	key.Transport = transport.ProtocolUDP
 	if flags = kernelDatapathSessionFlags(key, nil, info); flags&(kernelDatapathSessionFlagSendInnerTCPChecksumPartial|kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial|kernelDatapathSessionFlagSendInnerGSO|kernelDatapathSessionFlagReceiveInnerGSO|kernelDatapathSessionFlagSendTIXTCPPortSharding|kernelDatapathSessionFlagReceiveTIXTCPPortSharding) != 0 {
 		t.Fatalf("UDP flags = %#x, inner optimization capabilities are TIX TCP-only", flags)
+	}
+}
+
+func TestKernelDatapathSessionSecureChecksumPartialFlagsAreDirectionalAndIsolated(t *testing.T) {
+	key := dataSessionKey{Transport: transport.ProtocolTIXTCP}
+	info := transport.KernelDatapathSessionInfo{
+		Protocol:                                transport.ProtocolTIXTCP,
+		SendEncrypted:                           true,
+		ReceiveEncrypted:                        true,
+		InnerTCPChecksumPartialLocal:            true,
+		InnerTCPChecksumPartialPeer:             true,
+		InnerTCPChecksumPartialNegotiated:       true,
+		SecureInnerTCPChecksumPartialLocal:      true,
+		SecureInnerTCPChecksumPartialPeer:       false,
+		SecureInnerTCPChecksumPartialNegotiated: false,
+		InnerGSOLocal:                           true,
+		InnerGSOPeer:                            true,
+		InnerGSONegotiated:                      true,
+	}
+	flags := kernelDatapathSessionFlags(key, nil, info)
+	if flags&kernelDatapathSessionFlagReceiveSecureInnerTCPChecksumPartial == 0 ||
+		flags&kernelDatapathSessionFlagSendSecureInnerTCPChecksumPartial != 0 {
+		t.Fatalf("local-only secure flags = %#x, want receive-only secure checksum-partial", flags)
+	}
+	if forbidden := flags & (kernelDatapathSessionFlagSendInnerTCPChecksumPartial |
+		kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial |
+		kernelDatapathSessionFlagSendInnerGSO |
+		kernelDatapathSessionFlagReceiveInnerGSO); forbidden != 0 {
+		t.Fatalf("secure session inherited plaintext capability flags %#x", forbidden)
+	}
+
+	info.SecureInnerTCPChecksumPartialPeer = true
+	info.SecureInnerTCPChecksumPartialNegotiated = true
+	flags = kernelDatapathSessionFlags(key, nil, info)
+	if flags&kernelDatapathSessionFlagReceiveSecureInnerTCPChecksumPartial == 0 ||
+		flags&kernelDatapathSessionFlagSendSecureInnerTCPChecksumPartial == 0 {
+		t.Fatalf("negotiated secure flags = %#x, want send+receive", flags)
+	}
+
+	info.SecureInnerTCPChecksumPartialLocal = false
+	info.SecureInnerTCPChecksumPartialPeer = false
+	info.SecureInnerTCPChecksumPartialNegotiated = false
+	flags = kernelDatapathSessionFlags(key, nil, info)
+	if flags&(kernelDatapathSessionFlagSendSecureInnerTCPChecksumPartial|
+		kernelDatapathSessionFlagReceiveSecureInnerTCPChecksumPartial|
+		kernelDatapathSessionFlagSendInnerTCPChecksumPartial|
+		kernelDatapathSessionFlagReceiveInnerTCPChecksumPartial) != 0 {
+		t.Fatalf("legacy plaintext capability enabled secure checksum flags: %#x", flags)
 	}
 }
 
@@ -490,6 +1180,89 @@ func TestKernelDatapathSessionWireRecordKeepsTIXTCPEpoch(t *testing.T) {
 	}
 }
 
+func TestKernelDatapathSessionCryptoRecordRequiresAdvertisedFeature(t *testing.T) {
+	lookup := &kernelDatapathCryptoStateManager{
+		NoopManager: dataplane.NewNoopManager(),
+		state: dataplane.TIXTCPCryptoState{
+			FlowID: 7,
+			Send: dataplane.KernelCryptoDirectState{
+				SlotID: 1, Suite: 1, WireFormat: 1, Epoch: 11, ReplayWindow: 65536,
+			},
+			Receive: dataplane.KernelCryptoDirectState{
+				SlotID: 2, Suite: 1, WireFormat: 1, Epoch: 11, ReplayWindow: 65536,
+			},
+		},
+		found: true,
+	}
+	manager := kernelmodule.NewTrustIXDatapathManager()
+	manager.SetStatusForTest(kernelmodule.Status{
+		Loaded:   true,
+		Features: []string{kernelmodule.FeatureFullDatapath},
+	})
+	daemon := &Daemon{dataplane: lookup, kernelDatapath: manager}
+	key := dataSessionKey{Peer: "ix-b", Endpoint: "wan-tix-tcp", Transport: transport.ProtocolTIXTCP, Encryption: "secure"}
+	session := kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID: 7, Protocol: transport.ProtocolTIXTCP, Epoch: 11, Encrypted: true,
+		CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+	}}
+	if _, ok := daemon.kernelDatapathSessionCryptoRecord(key, session); ok {
+		t.Fatal("secure crypto state must remain gated until the module advertises support")
+	}
+	if lookup.calls != 0 {
+		t.Fatalf("crypto lookup calls = %d, want 0 before capability gate", lookup.calls)
+	}
+}
+
+func TestKernelDatapathSessionCryptoRecordEncodesEpochZeroDirectSlots(t *testing.T) {
+	sendIV := [12]byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b}
+	receiveIV := [12]byte{0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b}
+	lookup := &kernelDatapathCryptoStateManager{
+		NoopManager: dataplane.NewNoopManager(),
+		state: dataplane.TIXTCPCryptoState{
+			FlowID: 0x1020304050607080,
+			Send: dataplane.KernelCryptoDirectState{
+				SlotID: 3, Suite: 1, WireFormat: 1, Epoch: 0, IV: sendIV,
+				ReplayWindow: 65536, LastSequence: 0x1122334455667788,
+			},
+			Receive: dataplane.KernelCryptoDirectState{
+				SlotID: 9, Suite: 1, WireFormat: 1, Epoch: 0, IV: receiveIV,
+				ReplayWindow: 65536, LastSequence: 0x8877665544332211,
+			},
+		},
+		found: true,
+	}
+	manager := kernelmodule.NewTrustIXDatapathManager()
+	manager.SetStatusForTest(kernelmodule.Status{
+		Loaded:   true,
+		Features: []string{kernelmodule.FeatureFullDatapath, kernelmodule.FeatureSecureTIXTCPFullDatapath},
+	})
+	daemon := &Daemon{dataplane: lookup, kernelDatapath: manager}
+	key := dataSessionKey{Peer: "ix-b", Endpoint: "wan-tix-tcp", Transport: transport.ProtocolTIXTCP, Encryption: "secure", PoolIndex: 4}
+	session := kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID: 0x1020304050607080, Protocol: transport.ProtocolTIXTCP, Epoch: 0, Encrypted: true,
+		CryptoPlacement: string(dataplane.CryptoPlacementKernel),
+	}}
+	record, ok := daemon.kernelDatapathSessionCryptoRecord(key, session)
+	if !ok {
+		t.Fatal("secure crypto state was not encoded")
+	}
+	if lookup.calls != 1 ||
+		record.Kind != kernelmodule.TrustIXDatapathStateKindSessionCrypto ||
+		record.Op != kernelmodule.TrustIXDatapathStateOpUpsert ||
+		record.Flags != kernelDatapathSessionCryptoFlagSendReady|kernelDatapathSessionCryptoFlagReceiveReady ||
+		record.Key != kernelDatapathSessionStateKey(key) ||
+		record.Value[0] != 0x1020304050607080 ||
+		record.Value[1] != 0 ||
+		record.Value[2] != uint64(3)|uint64(9)<<32 ||
+		record.Value[3] != uint64(1)|uint64(1)<<16|uint64(65536)<<32 ||
+		record.Value[4] != 0x0706050403020100 ||
+		record.Value[5] != 0x131211100b0a0908 ||
+		record.Value[6] != 0x1b1a191817161514 ||
+		record.Value[7] != 0x8877665544332211 {
+		t.Fatalf("unexpected session crypto record: %#v", record)
+	}
+}
+
 func TestKernelDatapathSessionStateKeySeparatesReverseDirection(t *testing.T) {
 	outbound := dataSessionKey{
 		Peer:       "ix-b",
@@ -522,6 +1295,36 @@ func TestKernelDatapathSessionStateRecordsKeepFlowWithoutWireTuple(t *testing.T)
 		records[0].Kind != kernelmodule.TrustIXDatapathStateKindSession ||
 		records[0].Value[0] != 0x1020304050607080 {
 		t.Fatalf("session-only kernel records = %#v, want negotiated flow record", records)
+	}
+}
+
+func TestKernelDatapathSessionStateRecordsSkipCryptoWithoutWireTuple(t *testing.T) {
+	daemon, lookup, key, session := newKernelDatapathCryptoLifecycleFixture()
+	info := session.(kernelDatapathTestSession).info
+	info.LocalAddress = ""
+	info.RemoteAddress = ""
+
+	records := daemon.kernelDatapathSessionStateRecords(key, nil, kernelDatapathTestSession{info: info})
+	if len(records) != 1 || records[0].Kind != kernelmodule.TrustIXDatapathStateKindSession {
+		t.Fatalf("half-ready secure session records = %#v, want session only", records)
+	}
+	if lookup.calls != 0 {
+		t.Fatalf("crypto lookup calls = %d, want 0 without a wire tuple", lookup.calls)
+	}
+}
+
+func TestKernelDatapathSessionStateRecordsOrderSecureDependencies(t *testing.T) {
+	daemon, lookup, key, session := newKernelDatapathCryptoLifecycleFixture()
+
+	records := daemon.kernelDatapathSessionStateRecords(key, nil, session)
+	if len(records) != 3 ||
+		records[0].Kind != kernelmodule.TrustIXDatapathStateKindSession ||
+		records[1].Kind != kernelmodule.TrustIXDatapathStateKindSessionWire ||
+		records[2].Kind != kernelmodule.TrustIXDatapathStateKindSessionCrypto {
+		t.Fatalf("secure session dependency order = %#v, want session, wire, crypto", records)
+	}
+	if lookup.calls != 1 {
+		t.Fatalf("crypto lookup calls = %d, want 1", lookup.calls)
 	}
 }
 
@@ -1099,6 +1902,115 @@ func (session kernelDatapathUserspaceTestSession) Stats() transport.TransportSta
 type kernelDatapathFlowSnapshotManager struct {
 	dataplane.NoopManager
 	flows []dataplane.KernelUDPFlow
+}
+
+type kernelDatapathCryptoStateManager struct {
+	*dataplane.NoopManager
+	state                dataplane.TIXTCPCryptoState
+	found                bool
+	err                  error
+	calls                int
+	commitCalls          [][2]uint64
+	releaseCalls         []uint64
+	releaseRetiredCalls  int
+	commitErr            error
+	releaseErr           error
+	releaseRetiredErrors []error
+}
+
+func (manager *kernelDatapathCryptoStateManager) TIXTCPCryptoState(ctx context.Context, flowID uint64) (dataplane.TIXTCPCryptoState, bool, error) {
+	manager.calls++
+	if err := ctx.Err(); err != nil {
+		return dataplane.TIXTCPCryptoState{}, false, err
+	}
+	if manager.err != nil {
+		return dataplane.TIXTCPCryptoState{}, false, manager.err
+	}
+	if flowID != manager.state.FlowID {
+		return dataplane.TIXTCPCryptoState{}, false, nil
+	}
+	return manager.state, manager.found, nil
+}
+
+func (manager *kernelDatapathCryptoStateManager) CommitTIXTCPCryptoState(ctx context.Context, flowID uint64, epoch uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	manager.commitCalls = append(manager.commitCalls, [2]uint64{flowID, epoch})
+	return manager.commitErr
+}
+
+func (manager *kernelDatapathCryptoStateManager) ReleaseTIXTCPCryptoState(ctx context.Context, flowID uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	manager.releaseCalls = append(manager.releaseCalls, flowID)
+	return manager.releaseErr
+}
+
+func (manager *kernelDatapathCryptoStateManager) ReleaseRetiredTIXTCPCryptoStates(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	manager.releaseRetiredCalls++
+	index := manager.releaseRetiredCalls - 1
+	if index < len(manager.releaseRetiredErrors) {
+		return manager.releaseRetiredErrors[index]
+	}
+	return nil
+}
+
+func newKernelDatapathCryptoLifecycleFixture() (*Daemon, *kernelDatapathCryptoStateManager, dataSessionKey, transport.Session) {
+	flowID := uint64(0x1020304050607080)
+	epoch := uint64(0)
+	manager := &kernelDatapathCryptoStateManager{
+		NoopManager: dataplane.NewNoopManager(),
+		state: dataplane.TIXTCPCryptoState{
+			FlowID: flowID,
+			Send: dataplane.KernelCryptoDirectState{
+				SlotID: 1, Suite: 1, WireFormat: 1, Epoch: epoch, ReplayWindow: 65536,
+			},
+			Receive: dataplane.KernelCryptoDirectState{
+				SlotID: 2, Suite: 1, WireFormat: 1, Epoch: epoch, ReplayWindow: 65536,
+			},
+		},
+		found: true,
+	}
+	kernelManager := kernelmodule.NewTrustIXDatapathManager()
+	kernelManager.SetStatusForTest(kernelmodule.Status{
+		Loaded: true,
+		Features: []string{
+			kernelmodule.FeatureFullDatapath,
+			kernelmodule.FeatureSecureTIXTCPFullDatapath,
+		},
+	})
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "wan-tix-tcp",
+		Transport:  transport.ProtocolTIXTCP,
+		Address:    "198.51.100.2:17041",
+		Encryption: "secure",
+	}
+	session := kernelDatapathTestSession{info: transport.KernelDatapathSessionInfo{
+		FlowID:           flowID,
+		Protocol:         transport.ProtocolTIXTCP,
+		Peer:             "ix-b",
+		Endpoint:         "wan-tix-tcp",
+		LocalAddress:     "192.0.2.1:17041",
+		RemoteAddress:    "198.51.100.2:17041",
+		Epoch:            epoch,
+		CryptoPlacement:  string(dataplane.CryptoPlacementKernel),
+		Encrypted:        true,
+		SendEncrypted:    true,
+		ReceiveEncrypted: true,
+	}}
+	daemon := &Daemon{
+		dataplane:        manager,
+		kernelDatapath:   kernelManager,
+		dataSessions:     map[dataSessionKey]transport.Session{key: session},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{},
+	}
+	return daemon, manager, key, session
 }
 
 func (manager kernelDatapathFlowSnapshotManager) KernelUDPFlows(ctx context.Context) ([]dataplane.KernelUDPFlow, error) {

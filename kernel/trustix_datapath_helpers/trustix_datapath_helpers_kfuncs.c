@@ -7523,6 +7523,17 @@ trustix_kernel_skb_tixt_tx_finalize_flow_tcp_header(
 }
 
 static __always_inline u32
+trustix_tixt_tx_inner_hash_mix(u32 hash)
+{
+	hash ^= hash >> 16;
+	hash *= 0x7feb352dU;
+	hash ^= hash >> 15;
+	hash *= 0x846ca68bU;
+	hash ^= hash >> 16;
+	return hash;
+}
+
+static __always_inline u32
 trustix_tixt_tx_inner_hash(const u8 *data, const u8 *data_end)
 {
 	u32 hash = 0;
@@ -7546,9 +7557,7 @@ trustix_tixt_tx_inner_hash(const u8 *data, const u8 *data_end)
 		ports = get_unaligned((const u32 *)l4);
 		hash ^= ports;
 	}
-	hash ^= hash >> 16;
-	hash ^= hash >> 8;
-	return hash;
+	return trustix_tixt_tx_inner_hash_mix(hash);
 }
 
 static __always_inline const struct trustix_kudp_tx_flow_value *
@@ -12333,6 +12342,8 @@ static u32 trustix_route_tcp_gso_async_hash_mix(u32 hash)
 	hash ^= hash >> 16;
 	hash *= 0x7feb352dU;
 	hash ^= hash >> 15;
+	hash *= 0x846ca68bU;
+	hash ^= hash >> 16;
 	return hash ? hash : 1;
 }
 
@@ -12341,6 +12352,32 @@ static u32 trustix_route_tcp_gso_async_flow_fallback_hash(u64 flow_id)
 	u32 hash = (u32)flow_id ^ (u32)(flow_id >> 32);
 
 	return trustix_route_tcp_gso_async_hash_mix(hash);
+}
+
+static u32 trustix_route_tcp_gso_async_flow_shard_hash(
+				const struct trustix_kudp_tx_route_value *route,
+				u64 flow_id)
+{
+	if (!route || !flow_id)
+		return trustix_route_tcp_gso_async_flow_fallback_hash(flow_id);
+	if (READ_ONCE(route->flow_id) == flow_id ||
+	    READ_ONCE(route->flow_id_1) == flow_id)
+		return 0;
+	if (READ_ONCE(route->flow_id_2) == flow_id)
+		return 1;
+	if (READ_ONCE(route->flow_id_3) == flow_id)
+		return 2;
+	if (READ_ONCE(route->flow_id_4) == flow_id)
+		return 3;
+	if (READ_ONCE(route->flow_id_5) == flow_id)
+		return 4;
+	if (READ_ONCE(route->flow_id_6) == flow_id)
+		return 5;
+	if (READ_ONCE(route->flow_id_7) == flow_id)
+		return 6;
+	if (READ_ONCE(route->flow_id_8) == flow_id)
+		return 7;
+	return trustix_route_tcp_gso_async_flow_fallback_hash(flow_id);
 }
 
 static bool
@@ -14477,7 +14514,7 @@ trustix_kernel_skb_tixt_tx_segment_route_tcp_gso_async_ex(
 		trustix_route_tcp_gso_async_hash_skb(skb, flow_id, item);
 	if (READ_ONCE(trustix_route_tcp_gso_async_flow_shard_queue)) {
 		item->queue_hash =
-			trustix_route_tcp_gso_async_flow_fallback_hash(flow_id);
+			trustix_route_tcp_gso_async_flow_shard_hash(route, flow_id);
 	} else {
 		item->queue_hash = inner_queue_hash;
 	}

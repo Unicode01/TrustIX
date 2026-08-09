@@ -45,6 +45,8 @@ const (
 	ixProvisionPlaintextPerformanceDatapath        = config.TransportDatapathKernelModule
 	ixProvisionPlaintextPerformanceCryptoPlacement = string(dataplane.CryptoPlacementUserspace)
 	ixProvisionPlaintextPerformanceKernelTransport = string(dataplane.KernelTransportModeRequireKernel)
+
+	ixProvisionPerformanceSessionPoolSize = 8
 )
 
 type ixProvisionIssueRequest struct {
@@ -1181,6 +1183,23 @@ func ixProvisionTIXTCPAdvanced(profile string) config.TransportAdvancedConfig {
 	return advanced
 }
 
+func ixProvisionSessionPool(request ixProvisionIssueRequest, profile ixProvisionProfileDefaults) config.SessionPoolPolicyConfig {
+	pool := config.SessionPoolPolicyConfig{Warmup: true}
+	if profile.TransportProfile != config.TransportProfilePerformance {
+		return pool
+	}
+	switch transport.NormalizeProtocol(transport.Protocol(request.EndpointTransport)) {
+	case transport.ProtocolUDP:
+		pool.Size = ixProvisionPerformanceSessionPoolSize
+	case transport.ProtocolTIXTCP:
+		pool.Size = ixProvisionPerformanceSessionPoolSize
+	default:
+		return pool
+	}
+	pool.Strategy = "flow"
+	return pool
+}
+
 func ixProvisionPlaintextPerformanceFullKmodProfile(profile ixProvisionProfileDefaults) bool {
 	return profile.TransportProfile == config.TransportProfilePerformance &&
 		profile.Datapath == config.TransportDatapathKernelModule &&
@@ -1267,11 +1286,13 @@ func ixProvisionKernelModuleModes(request ixProvisionIssueRequest, profile ixPro
 	}
 	if parseSecureTransportEncryption(profile.Encryption) != securetransport.EncryptionPlaintext ||
 		profile.TransportProfile != config.TransportProfilePerformance {
-		if ixProvisionSecureTIXTCPKernelProfile(request, profile) ||
-			(profile.TransportProfile == config.TransportProfilePerformance &&
-				profile.Datapath == ixProvisionPerformanceDatapath &&
-				parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionSecure &&
-				profile.CryptoPlacement == ixProvisionPerformanceCryptoPlacement) {
+		if ixProvisionSecureTIXTCPKernelProfile(request, profile) {
+			return "required", "required", "disabled"
+		}
+		if profile.TransportProfile == config.TransportProfilePerformance &&
+			profile.Datapath == ixProvisionPerformanceDatapath &&
+			parseSecureTransportEncryption(profile.Encryption) == securetransport.EncryptionSecure &&
+			profile.CryptoPlacement == ixProvisionPerformanceCryptoPlacement {
 			return "required", "disabled", "required"
 		}
 		return cryptoMode, datapathMode, helpersMode
@@ -1369,7 +1390,7 @@ func desiredForIXProvision(request ixProvisionIssueRequest, prefixes []core.Pref
 			TLSDataPlane:    config.TransportTLSDataPlaneAuto,
 			Profiles:        ixProvisionTransportProfiles(request, profile),
 			KernelTransport: config.KernelTransportPolicyConfig{Mode: ixProvisionKernelTransportMode(request, profile)},
-			SessionPool:     config.SessionPoolPolicyConfig{Warmup: true},
+			SessionPool:     ixProvisionSessionPool(request, profile),
 		},
 	}
 	if ixProvisionPlaintextPerformanceFullKmodProfile(profile) &&

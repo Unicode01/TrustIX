@@ -3262,6 +3262,53 @@ func TestSessionPoolFlowStrategyKeepsFiveTupleOnSameConnection(t *testing.T) {
 	}
 }
 
+func TestSessionPoolFlowStrategyKeepsLiveRetiredPoolMember(t *testing.T) {
+	endpoint := transport.Endpoint{
+		Name:       "server",
+		Transport:  transport.ProtocolTIXTCP,
+		Address:    "127.0.0.1:7001",
+		Encryption: securetransport.EncryptionSecure,
+	}
+	flow := routing.FlowKey{
+		SourceIP:        netip.MustParseAddr("10.0.0.2"),
+		DestinationIP:   netip.MustParseAddr("10.0.1.2"),
+		SourcePort:      12345,
+		DestinationPort: 5201,
+		Protocol:        6,
+	}
+	key := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   endpoint.Name,
+		Transport:  endpoint.Transport,
+		Address:    endpoint.Address,
+		Encryption: endpoint.Encryption,
+		PoolIndex:  3,
+	}
+	daemon := &Daemon{
+		desired: config.Desired{TransportPolicy: config.TransportPolicyConfig{
+			SessionPool: config.SessionPoolPolicyConfig{Size: 1, Strategy: "flow"},
+		}},
+		dataSessions: map[dataSessionKey]transport.Session{key: &recordingSession{}},
+		flows: map[routing.FlowKey]routing.FlowBinding{flow: {
+			Key:       flow,
+			NextHop:   key.Peer,
+			Endpoint:  key.Endpoint,
+			PoolIndex: key.PoolIndex,
+			ExpiresAt: time.Now().UTC().Add(time.Minute),
+		}},
+	}
+	cfgEndpoint := config.EndpointConfig{Name: endpoint.Name, Address: endpoint.Address, Transport: string(endpoint.Transport)}
+	if got := daemon.sessionPoolIndex(key.Peer, endpoint, flow, true, 1, cfgEndpoint); got != key.PoolIndex {
+		t.Fatalf("live retired pool index = %d, want %d", got, key.PoolIndex)
+	}
+
+	delete(daemon.dataSessions, key)
+	got := daemon.sessionPoolIndex(key.Peer, endpoint, flow, true, 1, cfgEndpoint)
+	if got != 0 {
+		t.Fatalf("missing retired session selected out-of-range pool index %d", got)
+	}
+}
+
 func TestConcurrentSessionPoolDialUsesSingleflight(t *testing.T) {
 	registry := transport.NewRegistry()
 	fake := &singleflightDialTransport{
@@ -7598,6 +7645,67 @@ func TestDropSessionsForPeerTransportDropsOnlyMatchingSessions(t *testing.T) {
 	}
 }
 
+func TestCloseUntrustedDataSessionsRemovesRuntimeAndPoolState(t *testing.T) {
+	allowedKey := dataSessionKey{
+		Peer:       "ix-b",
+		Endpoint:   "ep-udp",
+		Transport:  transport.ProtocolUDP,
+		Address:    "192.0.2.2:7002",
+		Encryption: "secure",
+	}
+	untrustedKey := dataSessionKey{
+		Peer:       "ix-c",
+		Endpoint:   "ep-udp",
+		Transport:  transport.ProtocolUDP,
+		Address:    "192.0.2.3:7002",
+		Encryption: "secure",
+	}
+	allowedSession := &recordingSession{}
+	untrustedSession := &recordingSession{}
+	untrustedCanceled := false
+	untrustedPool := dataSessionPoolKey{
+		Peer:       untrustedKey.Peer,
+		Endpoint:   untrustedKey.Endpoint,
+		Transport:  untrustedKey.Transport,
+		Address:    untrustedKey.Address,
+		Encryption: untrustedKey.Encryption,
+	}
+	daemon := &Daemon{
+		desired: config.Desired{Peers: []config.PeerConfig{{ID: allowedKey.Peer}}},
+		dataSessions: map[dataSessionKey]transport.Session{
+			allowedKey:   allowedSession,
+			untrustedKey: untrustedSession,
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{
+			allowedKey:   {key: allowedKey},
+			untrustedKey: {key: untrustedKey, cancel: func() { untrustedCanceled = true }},
+		},
+		sessionPoolRR: map[dataSessionPoolKey]uint64{untrustedPool: 1},
+	}
+
+	if err := daemon.closeUntrustedDataSessions(); err != nil {
+		t.Fatalf("close untrusted sessions: %v", err)
+	}
+	if _, ok := daemon.dataSessions[untrustedKey]; ok {
+		t.Fatal("untrusted session remains registered")
+	}
+	if _, ok := daemon.dataSessionState[untrustedKey]; ok {
+		t.Fatal("untrusted session runtime remains registered")
+	}
+	if _, ok := daemon.sessionPoolRR[untrustedPool]; ok {
+		t.Fatal("untrusted session pool cursor remains registered")
+	}
+	if !untrustedCanceled || !untrustedSession.closed.Load() {
+		t.Fatalf("untrusted session cleanup canceled=%t closed=%t, want true/true", untrustedCanceled, untrustedSession.closed.Load())
+	}
+	if daemon.dataSessions[allowedKey] != allowedSession || allowedSession.closed.Load() {
+		t.Fatal("allowed peer session was changed")
+	}
+	if daemon.dataSessionEpoch != 1 {
+		t.Fatalf("session epoch = %d, want 1", daemon.dataSessionEpoch)
+	}
+}
+
 func TestRegisterInboundReverseOnlyDataSessionDropsMatchingOutboundSession(t *testing.T) {
 	peer := testPeer()
 	publicAddress := peer.Endpoints[0].Address
@@ -8078,6 +8186,200 @@ func TestRegisterInboundTIXTCPSessionKeepsDialableOutboundSession(t *testing.T) 
 	}
 }
 
+func TestRegisterInboundPeerGenerationChangeDropsEveryOldPeerSession(t *testing.T) {
+	peer := testPeer()
+	for index := range peer.Endpoints {
+		peer.Endpoints[index].Transport = string(transport.ProtocolTIXTCP)
+	}
+	endpoint := peer.Endpoints[0]
+	oldGeneration := transport.SessionGeneration{1}
+	newGeneration := transport.SessionGeneration{2}
+	firstOutboundKey := dataSessionKey{
+		Peer: peer.ID, Endpoint: endpoint.Name, Transport: transport.ProtocolTIXTCP,
+		Address: endpoint.Address, Encryption: securetransport.EncryptionSecure,
+	}
+	secondOutboundKey := dataSessionKey{
+		Peer: peer.ID, Endpoint: peer.Endpoints[1].Name, Transport: transport.ProtocolTIXTCP,
+		Address: peer.Endpoints[1].Address, Encryption: securetransport.EncryptionSecure, PoolIndex: 3,
+	}
+	reverseKey := reverseDataSessionKey(peer.ID, endpoint, securetransport.EncryptionSecure)
+	unrelatedKey := dataSessionKey{
+		Peer: "ix-c", Endpoint: "c-tix", Transport: transport.ProtocolTIXTCP,
+		Address: "192.0.2.3:7003", Encryption: securetransport.EncryptionSecure,
+	}
+	firstOutbound := &retainingRecordingSession{}
+	secondOutbound := &retainingRecordingSession{}
+	oldReverse := &retainingRecordingSession{}
+	unrelated := &retainingRecordingSession{}
+	canceled := make(map[dataSessionKey]bool)
+	makeRuntime := func(key dataSessionKey, cfgEndpoint config.EndpointConfig) *dataSessionRuntime {
+		return &dataSessionRuntime{key: key, endpoint: cfgEndpoint, cancel: func() { canceled[key] = true }}
+	}
+	peerPool := dataSessionPoolKey{
+		Peer: peer.ID, Endpoint: endpoint.Name, Transport: transport.ProtocolTIXTCP,
+		Address: endpoint.Address, Encryption: securetransport.EncryptionSecure,
+	}
+	unrelatedPool := dataSessionPoolKey{
+		Peer: unrelatedKey.Peer, Endpoint: unrelatedKey.Endpoint, Transport: unrelatedKey.Transport,
+		Address: unrelatedKey.Address, Encryption: unrelatedKey.Encryption,
+	}
+	peerFlow := routing.FlowKey{
+		SourceIP: netip.MustParseAddr("10.0.0.2"), DestinationIP: netip.MustParseAddr("10.0.1.2"), Protocol: 6,
+	}
+	unrelatedFlow := routing.FlowKey{
+		SourceIP: netip.MustParseAddr("10.0.0.3"), DestinationIP: netip.MustParseAddr("10.0.2.2"), Protocol: 6,
+	}
+	daemon := &Daemon{
+		desired: config.Desired{
+			IX:     config.IXConfig{ID: "ix-a"},
+			Domain: config.DomainConfig{ID: peer.Domain},
+			Peers:  []config.PeerConfig{peer},
+		},
+		dataSessions: map[dataSessionKey]transport.Session{
+			firstOutboundKey:  firstOutbound,
+			secondOutboundKey: secondOutbound,
+			reverseKey:        oldReverse,
+			unrelatedKey:      unrelated,
+		},
+		dataSessionState: map[dataSessionKey]*dataSessionRuntime{
+			firstOutboundKey:  makeRuntime(firstOutboundKey, endpoint),
+			secondOutboundKey: makeRuntime(secondOutboundKey, peer.Endpoints[1]),
+			reverseKey:        makeRuntime(reverseKey, endpoint),
+			unrelatedKey:      makeRuntime(unrelatedKey, config.EndpointConfig{Name: unrelatedKey.Endpoint}),
+		},
+		peerSessionGeneration: map[core.IXID]peerDataSessionGeneration{
+			peer.ID: {Generation: oldGeneration, Supported: true},
+		},
+		sessionPoolRR: map[dataSessionPoolKey]uint64{peerPool: 4, unrelatedPool: 2},
+		sessionPoolFlow: map[dataSessionFlowPoolKey]int{
+			{Pool: peerPool, Flow: peerFlow}:           1,
+			{Pool: unrelatedPool, Flow: unrelatedFlow}: 0,
+		},
+		dataSessionEpoch: 7,
+		flows: map[routing.FlowKey]routing.FlowBinding{
+			peerFlow:      {Key: peerFlow, NextHop: peer.ID, Endpoint: endpoint.Name},
+			unrelatedFlow: {Key: unrelatedFlow, NextHop: unrelatedKey.Peer, Endpoint: unrelatedKey.Endpoint},
+		},
+		endpointState: make(map[endpointStateKey]rstate.EndpointState),
+	}
+	incoming := &generationBlockingIdentitySession{
+		blockingIdentitySession: blockingIdentitySession{
+			recordingSession: recordingSession{stats: transport.TransportStats{Encrypted: true, Encryption: securetransport.EncryptionSecure}},
+			peer:             peer.ID, domain: peer.Domain, recv: make(chan struct{}),
+		},
+		generation: newGeneration,
+		supported:  true,
+	}
+	t.Cleanup(func() { _ = daemon.closeDataSessions() })
+
+	runtime, err := daemon.registerInboundDataSession(context.Background(), transport.Endpoint{
+		Name: endpoint.Name, Transport: transport.ProtocolTIXTCP,
+	}, incoming)
+	if err != nil {
+		t.Fatalf("register inbound generation-changing session: %v", err)
+	}
+	if runtime == nil || daemon.dataSessions[runtime.key] != incoming {
+		t.Fatal("new generation reverse session was not registered")
+	}
+	for _, key := range []dataSessionKey{firstOutboundKey, secondOutboundKey} {
+		if _, ok := daemon.dataSessions[key]; ok {
+			t.Fatalf("old generation session %v remains registered", key)
+		}
+		if !canceled[key] {
+			t.Fatalf("old generation runtime %v was not canceled", key)
+		}
+	}
+	if !canceled[reverseKey] {
+		t.Fatal("old generation reverse runtime was not canceled")
+	}
+	for name, session := range map[string]*retainingRecordingSession{
+		"first outbound": firstOutbound, "second outbound": secondOutbound, "reverse": oldReverse,
+	} {
+		if !session.closed.Load() {
+			t.Fatalf("%s session was not closed", name)
+		}
+		if session.retained.Load() {
+			t.Fatalf("%s session retained an old kernel flow", name)
+		}
+	}
+	if daemon.dataSessions[unrelatedKey] != unrelated || unrelated.closed.Load() || canceled[unrelatedKey] {
+		t.Fatal("unrelated peer session was changed")
+	}
+	if _, ok := daemon.sessionPoolRR[peerPool]; ok {
+		t.Fatal("old peer round-robin pool state remains")
+	}
+	if _, ok := daemon.sessionPoolRR[unrelatedPool]; !ok {
+		t.Fatal("unrelated round-robin pool state was removed")
+	}
+	if _, ok := daemon.sessionPoolFlow[dataSessionFlowPoolKey{Pool: peerPool, Flow: peerFlow}]; ok {
+		t.Fatal("old peer flow-pool binding remains")
+	}
+	if _, ok := daemon.flows[peerFlow]; ok {
+		t.Fatal("old peer flow binding remains")
+	}
+	if _, ok := daemon.flows[unrelatedFlow]; !ok {
+		t.Fatal("unrelated flow binding was removed")
+	}
+	if daemon.dataSessionEpoch != 8 {
+		t.Fatalf("data session epoch = %d, want 8", daemon.dataSessionEpoch)
+	}
+	if got := daemon.peerSessionGeneration[peer.ID]; got != (peerDataSessionGeneration{Generation: newGeneration, Supported: true}) {
+		t.Fatalf("peer generation = %#v, want new supported generation", got)
+	}
+	counters := daemon.dataStats.snapshot()
+	if counters.SessionGenerationChanges != 1 || counters.StaleSessionsDropped != 3 {
+		t.Fatalf("generation counters = changes:%d stale:%d, want 1/3", counters.SessionGenerationChanges, counters.StaleSessionsDropped)
+	}
+}
+
+func TestPeerGenerationTracksCrossVersionCapabilityTransitions(t *testing.T) {
+	peer := core.IXID("ix-b")
+	oldGeneration := transport.SessionGeneration{1}
+	newGeneration := transport.SessionGeneration{2}
+	daemon := &Daemon{
+		peerSessionGeneration: map[core.IXID]peerDataSessionGeneration{
+			peer: {Generation: oldGeneration, Supported: true},
+		},
+		dataSessions:     make(map[dataSessionKey]transport.Session),
+		dataSessionState: make(map[dataSessionKey]*dataSessionRuntime),
+	}
+	legacy := &recordingSession{stats: transport.TransportStats{Encrypted: true}}
+	daemon.dataMu.Lock()
+	changed, dropped := daemon.observePeerDataSessionGenerationLocked(peer, legacy)
+	daemon.dataMu.Unlock()
+	if !changed || len(dropped) != 0 || daemon.dataSessionEpoch != 1 {
+		t.Fatalf("new-to-old transition = changed:%t dropped:%d epoch:%d, want true/0/1", changed, len(dropped), daemon.dataSessionEpoch)
+	}
+	daemon.dataMu.Lock()
+	changed, _ = daemon.observePeerDataSessionGenerationLocked(peer, legacy)
+	daemon.dataMu.Unlock()
+	if changed || daemon.dataSessionEpoch != 1 {
+		t.Fatalf("stable legacy capability changed=%t epoch=%d, want false/1", changed, daemon.dataSessionEpoch)
+	}
+	upgraded := &generationRecordingSession{
+		recordingSession: recordingSession{stats: transport.TransportStats{Encrypted: true}},
+		generation:       newGeneration,
+		supported:        true,
+	}
+	daemon.dataMu.Lock()
+	changed, _ = daemon.observePeerDataSessionGenerationLocked(peer, upgraded)
+	daemon.dataMu.Unlock()
+	if !changed || daemon.dataSessionEpoch != 2 {
+		t.Fatalf("old-to-new transition changed=%t epoch=%d, want true/2", changed, daemon.dataSessionEpoch)
+	}
+	plaintext := &generationRecordingSession{
+		recordingSession: recordingSession{stats: transport.TransportStats{Encryption: securetransport.EncryptionPlaintext}},
+		generation:       oldGeneration,
+		supported:        true,
+	}
+	daemon.dataMu.Lock()
+	changed, _ = daemon.observePeerDataSessionGenerationLocked(peer, plaintext)
+	daemon.dataMu.Unlock()
+	if changed || daemon.dataSessionEpoch != 2 {
+		t.Fatalf("plaintext generation changed=%t epoch=%d, want false/2", changed, daemon.dataSessionEpoch)
+	}
+}
+
 func TestEndpointStateSnapshotAddsFlowAndSessionCounters(t *testing.T) {
 	daemon := &Daemon{
 		flows:         make(map[routing.FlowKey]routing.FlowBinding),
@@ -8322,6 +8624,25 @@ type recordingSession struct {
 	stats  transport.TransportStats
 }
 
+type retainingRecordingSession struct {
+	recordingSession
+	retained atomic.Bool
+}
+
+func (session *retainingRecordingSession) RetainKernelFlowOnClose() {
+	session.retained.Store(true)
+}
+
+type generationRecordingSession struct {
+	recordingSession
+	generation transport.SessionGeneration
+	supported  bool
+}
+
+func (session *generationRecordingSession) PeerSessionGeneration() (transport.SessionGeneration, bool) {
+	return session.generation, session.supported
+}
+
 func (session *recordingSession) SendPacket(packet []byte) error {
 	session.sent = append(session.sent, append([]byte(nil), packet...))
 	return nil
@@ -8526,6 +8847,16 @@ type blockingIdentitySession struct {
 	domain   core.DomainID
 	recv     chan struct{}
 	closeErr error
+}
+
+type generationBlockingIdentitySession struct {
+	blockingIdentitySession
+	generation transport.SessionGeneration
+	supported  bool
+}
+
+func (session *generationBlockingIdentitySession) PeerSessionGeneration() (transport.SessionGeneration, bool) {
+	return session.generation, session.supported
 }
 
 func (session *blockingIdentitySession) RecvPacket() ([]byte, error) {

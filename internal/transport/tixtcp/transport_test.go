@@ -207,68 +207,113 @@ func TestTIXTCPDialContextCancelDoesNotCloseSession(t *testing.T) {
 	}
 }
 
-func TestTIXTCPCompatPrimerDoesNotPolluteTIXTCPFlowTuple(t *testing.T) {
+func TestTIXTCPCompatPrimerInstallsReciprocalDataFlowTuples(t *testing.T) {
 	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_TCP_PRIMER", "1")
 	t.Setenv("TRUSTIX_TIX_TCP_COMPAT_STREAM", "0")
-	provider := &fakeProvider{
-		local:   "ix-a",
-		subs:    make(map[chan dataplane.TIXTCPFrame]struct{}),
-		flows:   make(map[uint64]dataplane.TIXTCPFlow),
-		cryptos: make(map[uint64]fakeCrypto),
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen primer peer: %v", err)
-	}
-	defer ln.Close()
-	accepted := make(chan net.Conn, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err == nil {
-			accepted <- conn
-		}
-	}()
-
+	providerA, providerB := newProviderPair("ix-a", "ix-b")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	client, err := New(provider).Dial(ctx, transport.Peer{
+	ln, err := New(providerB).Listen(ctx, transport.Endpoint{
+		Name:      core.EndpointID("server"),
+		Transport: transport.ProtocolTIXTCP,
+		Listen:    "127.0.0.1:0",
+		Enabled:   true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	tixListener := ln.(*listener)
+	client, err := New(providerA).Dial(ctx, transport.Peer{
 		ID: core.IXID("ix-b"),
 		Endpoints: []transport.Endpoint{{
 			Name:      core.EndpointID("server"),
 			Transport: transport.ProtocolTIXTCP,
-			Address:   ln.Addr().String(),
+			Address:   tixListener.compatListener.Addr().String(),
 		}},
 	}, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	defer client.Close()
-	var serverConn net.Conn
+	var server transport.Session
 	select {
-	case serverConn = <-accepted:
+	case server = <-tixListener.acceptCh:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	defer serverConn.Close()
+	defer server.Close()
 
-	provider.mu.Lock()
-	if len(provider.flows) != 1 {
-		provider.mu.Unlock()
-		t.Fatalf("installed flows = %d, want 1", len(provider.flows))
+	providerA.mu.Lock()
+	if len(providerA.flows) != 1 {
+		providerA.mu.Unlock()
+		t.Fatalf("outbound installed flows = %d, want 1", len(providerA.flows))
 	}
-	var flow dataplane.TIXTCPFlow
-	for _, item := range provider.flows {
-		flow = item
+	var outbound dataplane.TIXTCPFlow
+	for _, item := range providerA.flows {
+		outbound = item
 	}
-	provider.mu.Unlock()
-	if flow.LocalAddress != "" {
-		t.Fatalf("flow local address = %q, want empty so TIX-TCP data path derives its own source tuple", flow.LocalAddress)
+	providerA.mu.Unlock()
+	providerB.mu.Lock()
+	if len(providerB.flows) != 1 {
+		providerB.mu.Unlock()
+		t.Fatalf("inbound installed flows = %d, want 1", len(providerB.flows))
 	}
-	if flow.RemoteAddress != ln.Addr().String() {
-		t.Fatalf("flow remote address = %q, want endpoint address %q", flow.RemoteAddress, ln.Addr().String())
+	var inbound dataplane.TIXTCPFlow
+	for _, item := range providerB.flows {
+		inbound = item
 	}
-	if flow.LocalAddress == serverConn.RemoteAddr().String() {
-		t.Fatalf("flow local address inherited primer tuple %q", serverConn.RemoteAddr().String())
+	providerB.mu.Unlock()
+
+	if outbound.ID == 0 || inbound.ID != outbound.ID {
+		t.Fatalf("flow IDs outbound=%d inbound=%d, want matching nonzero IDs", outbound.ID, inbound.ID)
+	}
+	wantSourcePort := tixTCPCompatDerivedSourcePort(outbound.ID)
+	if outbound.SourcePort != wantSourcePort || inbound.DestinationPort != wantSourcePort {
+		t.Fatalf("derived data source ports outbound=%d inbound-destination=%d, want %d", outbound.SourcePort, inbound.DestinationPort, wantSourcePort)
+	}
+	if outbound.DestinationPort == 0 || inbound.SourcePort != outbound.DestinationPort {
+		t.Fatalf("listener ports outbound-destination=%d inbound-source=%d, want matching nonzero ports", outbound.DestinationPort, inbound.SourcePort)
+	}
+	if outbound.LocalAddress != inbound.RemoteAddress || outbound.RemoteAddress != inbound.LocalAddress {
+		t.Fatalf("flow tuples are not reciprocal: outbound=%s -> %s inbound=%s -> %s", outbound.LocalAddress, outbound.RemoteAddress, inbound.LocalAddress, inbound.RemoteAddress)
+	}
+	clientInfo, clientOK := client.(transport.KernelDatapathSession).KernelDatapathSessionInfo()
+	serverInfo, serverOK := server.(transport.KernelDatapathSession).KernelDatapathSessionInfo()
+	if !clientOK || !serverOK {
+		t.Fatalf("kernel datapath session info available client=%t server=%t", clientOK, serverOK)
+	}
+	if clientInfo.LocalAddress != outbound.LocalAddress || clientInfo.RemoteAddress != outbound.RemoteAddress ||
+		serverInfo.LocalAddress != inbound.LocalAddress || serverInfo.RemoteAddress != inbound.RemoteAddress {
+		t.Fatalf("session wire tuples do not match installed flows: client=%+v outbound=%+v server=%+v inbound=%+v", clientInfo, outbound, serverInfo, inbound)
+	}
+}
+
+func TestTIXTCPCompatFlowCompleteTupleValidation(t *testing.T) {
+	complete := dataplane.TIXTCPFlow{
+		LocalAddress:    "192.0.2.10:41000",
+		RemoteAddress:   "198.51.100.20:7142",
+		SourcePort:      41000,
+		DestinationPort: 7142,
+	}
+	if !tixTCPCompatFlowHasCompleteTuple(complete) {
+		t.Fatal("complete IPv4 tuple was rejected")
+	}
+	for name, mutate := range map[string]func(*dataplane.TIXTCPFlow){
+		"missing local address":       func(flow *dataplane.TIXTCPFlow) { flow.LocalAddress = "" },
+		"missing remote address":      func(flow *dataplane.TIXTCPFlow) { flow.RemoteAddress = "" },
+		"missing source port":         func(flow *dataplane.TIXTCPFlow) { flow.SourcePort = 0 },
+		"missing destination port":    func(flow *dataplane.TIXTCPFlow) { flow.DestinationPort = 0 },
+		"mismatched source port":      func(flow *dataplane.TIXTCPFlow) { flow.SourcePort++ },
+		"mismatched destination port": func(flow *dataplane.TIXTCPFlow) { flow.DestinationPort++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			flow := complete
+			mutate(&flow)
+			if tixTCPCompatFlowHasCompleteTuple(flow) {
+				t.Fatalf("incomplete tuple was accepted: %+v", flow)
+			}
+		})
 	}
 }
 
@@ -351,7 +396,8 @@ func TestTIXTCPCompatControlDecodesOldInitWithoutSourcePort(t *testing.T) {
 }
 
 func TestTIXTCPCompatControlCapabilitiesRoundTrip(t *testing.T) {
-	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
+	want := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO |
+		tixTCPCapabilityPortSharding | tixTCPCapabilitySecureInnerTCPChecksumPartial
 	payload := encodeTIXTCPCompatControlCapabilities(want | 1<<63)
 	capabilities, ok := decodeTIXTCPCompatControlCapabilities(payload)
 	if !ok {
@@ -371,7 +417,8 @@ func TestTIXTCPCompatControlCapabilitiesNegotiateBothWays(t *testing.T) {
 	server := newSession(nil, nil, 1, "ix-a", "server", dataplane.CryptoPlacementUserspace)
 	client.compatControl = stream.NewSession(clientConn)
 	server.compatControl = stream.NewSession(serverConn)
-	allCapabilities := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
+	allCapabilities := tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO |
+		tixTCPCapabilityPortSharding | tixTCPCapabilitySecureInnerTCPChecksumPartial
 	client.localCapabilities.Store(allCapabilities)
 	server.localCapabilities.Store(allCapabilities)
 	go client.readCompatControl(context.Background())
@@ -395,6 +442,8 @@ func TestTIXTCPCompatControlCapabilitiesNegotiateBothWays(t *testing.T) {
 		return clientOK && serverOK &&
 			clientInfo.InnerTCPChecksumPartialLocal && clientInfo.InnerTCPChecksumPartialPeer && clientInfo.InnerTCPChecksumPartialNegotiated &&
 			serverInfo.InnerTCPChecksumPartialLocal && serverInfo.InnerTCPChecksumPartialPeer && serverInfo.InnerTCPChecksumPartialNegotiated &&
+			clientInfo.SecureInnerTCPChecksumPartialLocal && clientInfo.SecureInnerTCPChecksumPartialPeer && clientInfo.SecureInnerTCPChecksumPartialNegotiated &&
+			serverInfo.SecureInnerTCPChecksumPartialLocal && serverInfo.SecureInnerTCPChecksumPartialPeer && serverInfo.SecureInnerTCPChecksumPartialNegotiated &&
 			clientInfo.InnerGSOLocal && clientInfo.InnerGSOPeer && clientInfo.InnerGSONegotiated &&
 			serverInfo.InnerGSOLocal && serverInfo.InnerGSOPeer && serverInfo.InnerGSONegotiated &&
 			clientInfo.TIXTCPPortShardingLocal && clientInfo.TIXTCPPortShardingPeer && clientInfo.TIXTCPPortShardingNegotiated &&
@@ -405,6 +454,9 @@ func TestTIXTCPCompatControlCapabilitiesNegotiateBothWays(t *testing.T) {
 			tixTCPStatInnerTCPChecksumPartialLocal,
 			tixTCPStatInnerTCPChecksumPartialPeer,
 			tixTCPStatInnerTCPChecksumPartialNegotiated,
+			tixTCPStatSecureInnerTCPChecksumPartialLocal,
+			tixTCPStatSecureInnerTCPChecksumPartialPeer,
+			tixTCPStatSecureInnerTCPChecksumPartialNegotiated,
 			tixTCPStatInnerGSOLocal,
 			tixTCPStatInnerGSOPeer,
 			tixTCPStatInnerGSONegotiated,
@@ -493,6 +545,21 @@ func TestTIXTCPLocalCapabilitiesGateInnerGSO(t *testing.T) {
 	full.Provider = "af_xdp"
 	if got := tixTCPLocalCapabilities(full); got != 0 {
 		t.Fatalf("non-full-kernel provider advertised capabilities %#x", got)
+	}
+	secure := dataplane.TIXTCPStatus{
+		Provider:                      tixTCPProviderFullSecureKernel,
+		InnerTCPChecksumPartial:       true,
+		SecureInnerTCPChecksumPartial: true,
+		InnerGSO:                      true,
+		PortSharding:                  true,
+	}
+	wantSecure := tixTCPCapabilitySecureInnerTCPChecksumPartial | tixTCPCapabilityPortSharding
+	if got := tixTCPLocalCapabilities(secure); got != wantSecure {
+		t.Fatalf("secure capabilities = %#x, want %#x", got, wantSecure)
+	}
+	secure.SecureInnerTCPChecksumPartial = false
+	if got := tixTCPLocalCapabilities(secure); got != tixTCPCapabilityPortSharding {
+		t.Fatalf("secure provider advertised legacy plaintext capability bits %#x", got)
 	}
 }
 

@@ -46,6 +46,7 @@ type AttachSpec struct {
 	TIXTCPFastPathDisabled                   bool            `json:"tix_tcp_fast_path_disabled,omitempty"`
 	TIXTCPFastPathDisabledReason             string          `json:"tix_tcp_fast_path_disabled_reason,omitempty"`
 	KernelDatapathFullPlaintext              bool            `json:"kernel_datapath_full_plaintext,omitempty"`
+	KernelDatapathSecureTIXTCP               bool            `json:"kernel_datapath_secure_tix_tcp,omitempty"`
 	KernelDatapathSuppressLegacyRXWorker     bool            `json:"kernel_datapath_suppress_legacy_rx_worker,omitempty"`
 	PinPath                                  string          `json:"pin_path"`
 	DataDir                                  string          `json:"data_dir,omitempty"`
@@ -220,18 +221,19 @@ type BPFMapSnapshot struct {
 }
 
 type KernelUDPTXRouteSnapshot struct {
-	Prefix          string                    `json:"prefix"`
-	PrefixLen       uint32                    `json:"prefix_len"`
-	Address         string                    `json:"address"`
-	FlowID          uint64                    `json:"flow_id,omitempty"`
-	FlowIDs         []uint64                  `json:"flow_ids,omitempty"`
-	ActiveFlowCount int                       `json:"active_flow_count,omitempty"`
-	FlowMask        uint32                    `json:"flow_mask,omitempty"`
-	Flags           uint32                    `json:"flags,omitempty"`
-	DirectOnly      bool                      `json:"direct_only,omitempty"`
-	Inline          bool                      `json:"inline,omitempty"`
-	Bypass          bool                      `json:"bypass,omitempty"`
-	InlineFlows     []KernelUDPTXFlowSnapshot `json:"inline_flows,omitempty"`
+	Prefix           string                    `json:"prefix"`
+	PrefixLen        uint32                    `json:"prefix_len"`
+	Address          string                    `json:"address"`
+	FlowID           uint64                    `json:"flow_id,omitempty"`
+	FlowIDs          []uint64                  `json:"flow_ids,omitempty"`
+	ActiveFlowCount  int                       `json:"active_flow_count,omitempty"`
+	FlowMask         uint32                    `json:"flow_mask,omitempty"`
+	Flags            uint32                    `json:"flags,omitempty"`
+	DirectOnly       bool                      `json:"direct_only,omitempty"`
+	Inline           bool                      `json:"inline,omitempty"`
+	Bypass           bool                      `json:"bypass,omitempty"`
+	FullKernelTIXTCP bool                      `json:"full_kernel_tix_tcp,omitempty"`
+	InlineFlows      []KernelUDPTXFlowSnapshot `json:"inline_flows,omitempty"`
 }
 
 type KernelUDPTXFlowSnapshot struct {

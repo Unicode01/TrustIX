@@ -46,6 +46,12 @@ func TestSessionEncryptsWireAndRoundTrips(t *testing.T) {
 		t.Fatalf("client handshake: %v", err)
 	}
 	server := waitServer(t, serverReady, serverErr)
+	if client.epoch != 7 || server.epoch != 7 {
+		t.Fatalf("explicit session epochs = client:%d server:%d, want 7/7", client.epoch, server.epoch)
+	}
+	if got := binary.BigEndian.Uint16(clientInner.sentPackets()[0][6:8]); got&helloFeatureDerivedEpoch != 0 {
+		t.Fatalf("explicit epoch hello feature mask = 0x%04x, want derived epoch disabled", got)
+	}
 
 	if err := client.SendPacket([]byte("secret-payload")); err != nil {
 		t.Fatalf("send encrypted packet: %v", err)
@@ -77,6 +83,173 @@ func TestSessionEncryptsWireAndRoundTrips(t *testing.T) {
 	stats := client.Stats()
 	if !stats.Encrypted || stats.CryptoSuite != SuiteAES256GCMX25519 {
 		t.Fatalf("stats crypto fields = encrypted:%t suite:%q", stats.Encrypted, stats.CryptoSuite)
+	}
+}
+
+func TestSessionNegotiatesDerivedWireEpoch(t *testing.T) {
+	clientInner, serverInner := newMemorySessionPair()
+	serverReady := make(chan *Session, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		session, err := Server(serverInner, nil, Options{})
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverReady <- session
+	}()
+
+	client, err := Client(clientInner, nil, Options{})
+	if err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	defer client.Close()
+	server := waitServer(t, serverReady, serverErr)
+	defer server.Close()
+
+	if client.epoch == 0 || server.epoch != client.epoch {
+		t.Fatalf("derived session epochs = client:%d server:%d, want matching non-zero values", client.epoch, server.epoch)
+	}
+	if got := binary.BigEndian.Uint16(clientInner.sentPackets()[0][6:8]); got&helloFeatureDerivedEpoch == 0 {
+		t.Fatalf("client hello feature mask = 0x%04x, want derived epoch", got)
+	}
+	if got := binary.BigEndian.Uint16(serverInner.sentPackets()[0][6:8]); got&helloFeatureDerivedEpoch == 0 {
+		t.Fatalf("server hello feature mask = 0x%04x, want derived epoch", got)
+	}
+}
+
+func TestSessionDerivedWireEpochRequiresBothPeers(t *testing.T) {
+	clientInner, serverInner := newMemorySessionPair()
+	legacyOptions := Options{DerivedEpoch: func() bool { return false }}
+	serverReady := make(chan *Session, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		session, err := Server(serverInner, nil, legacyOptions)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverReady <- session
+	}()
+
+	client, err := Client(clientInner, nil, Options{})
+	if err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	defer client.Close()
+	server := waitServer(t, serverReady, serverErr)
+	defer server.Close()
+
+	if client.epoch != 0 || server.epoch != 0 {
+		t.Fatalf("legacy session epochs = client:%d server:%d, want 0/0", client.epoch, server.epoch)
+	}
+	if got := binary.BigEndian.Uint16(clientInner.sentPackets()[0][6:8]); got&helloFeatureDerivedEpoch == 0 {
+		t.Fatalf("client hello feature mask = 0x%04x, want derived epoch offer", got)
+	}
+	if got := binary.BigEndian.Uint16(serverInner.sentPackets()[0][6:8]); got&helloFeatureDerivedEpoch != 0 {
+		t.Fatalf("legacy server hello feature mask = 0x%04x, want no derived epoch offer", got)
+	}
+}
+
+func TestDerivedSessionEpochChangesWithProcessGeneration(t *testing.T) {
+	clientRandom := make([]byte, 32)
+	serverRandom := make([]byte, 32)
+	clientPublic := bytes.Repeat([]byte{3}, 32)
+	serverPublic := bytes.Repeat([]byte{5}, 32)
+	clientGeneration := transport.SessionGeneration{1, 2, 3, 4}
+	serverGeneration := transport.SessionGeneration{5, 6, 7, 8}
+	copy(clientRandom, clientGeneration[:])
+	copy(serverRandom, serverGeneration[:])
+
+	first := deriveSessionEpoch(clientRandom, serverRandom, clientPublic, serverPublic, defaultSuite)
+	clientRandom[0] ^= 0xff
+	second := deriveSessionEpoch(clientRandom, serverRandom, clientPublic, serverPublic, defaultSuite)
+	if first == 0 || second == 0 || first == second {
+		t.Fatalf("derived epochs before/after generation change = %d/%d, want distinct non-zero values", first, second)
+	}
+}
+
+func TestSessionCarriesSignedPeerProcessGeneration(t *testing.T) {
+	clientTLS, serverTLS := testTLSConfigs(t)
+	clientInner, serverInner := newMemorySessionPair()
+	clientGeneration := transport.SessionGeneration{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	serverGeneration := transport.SessionGeneration{16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1}
+	clientOptions := Options{SessionGeneration: func() transport.SessionGeneration { return clientGeneration }}
+	serverOptions := Options{SessionGeneration: func() transport.SessionGeneration { return serverGeneration }}
+
+	serverReady := make(chan *Session, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		session, err := Server(serverInner, serverTLS, serverOptions)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverReady <- session
+	}()
+	client, err := Client(clientInner, clientTLS, clientOptions)
+	if err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	defer client.Close()
+	server := waitServer(t, serverReady, serverErr)
+	defer server.Close()
+
+	if got, ok := client.PeerSessionGeneration(); !ok || got != serverGeneration {
+		t.Fatalf("client peer generation = %x supported=%t, want %x/true", got, ok, serverGeneration)
+	}
+	if got, ok := server.PeerSessionGeneration(); !ok || got != clientGeneration {
+		t.Fatalf("server peer generation = %x supported=%t, want %x/true", got, ok, clientGeneration)
+	}
+	wire := clientInner.sentPackets()[0]
+	if got := binary.BigEndian.Uint16(wire[6:8]); got&helloFeatureSessionGeneration == 0 {
+		t.Fatalf("client hello feature mask = 0x%04x, want session generation", got)
+	}
+	if got := wire[8 : 8+transport.SessionGenerationSize]; !bytes.Equal(got, clientGeneration[:]) {
+		t.Fatalf("client hello generation = %x, want %x", got, clientGeneration)
+	}
+}
+
+func TestSessionGenerationCapabilityIsIndependentlyNegotiated(t *testing.T) {
+	clientInner, serverInner := newMemorySessionPair()
+	clientGeneration := transport.SessionGeneration{1, 3, 3, 7}
+	serverReady := make(chan *Session, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		session, err := Server(serverInner, nil, Options{})
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverReady <- session
+	}()
+	client, err := Client(clientInner, nil, Options{
+		SessionGeneration: func() transport.SessionGeneration { return clientGeneration },
+	})
+	if err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	defer client.Close()
+	server := waitServer(t, serverReady, serverErr)
+	defer server.Close()
+
+	if _, ok := client.PeerSessionGeneration(); ok {
+		t.Fatal("client reported generation support for a peer without the feature")
+	}
+	if got, ok := server.PeerSessionGeneration(); !ok || got != clientGeneration {
+		t.Fatalf("server peer generation = %x supported=%t, want %x/true", got, ok, clientGeneration)
+	}
+}
+
+func TestPlaintextSessionDoesNotExposePeerProcessGeneration(t *testing.T) {
+	session := &Session{
+		sendEncrypted:    false,
+		recvEncrypted:    false,
+		peerGeneration:   transport.SessionGeneration{1},
+		peerGenerationOK: true,
+	}
+	if _, ok := session.PeerSessionGeneration(); ok {
+		t.Fatal("plaintext session exposed a peer process generation")
 	}
 }
 

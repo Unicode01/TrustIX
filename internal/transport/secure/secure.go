@@ -62,10 +62,12 @@ const (
 	dataHeaderLen = 24
 	dataFlagBatch = 1 << 0
 
-	helloFeatureTLSHandshakeOnly uint16 = 1 << 14
-	helloFeatureBatchRecords     uint16 = 1 << 15
-	helloFeatureMask             uint16 = helloFeatureTLSHandshakeOnly | helloFeatureBatchRecords
-	helloSuiteMask               uint16 = ^helloFeatureMask
+	helloFeatureDerivedEpoch      uint16 = 1 << 12
+	helloFeatureSessionGeneration uint16 = 1 << 13
+	helloFeatureTLSHandshakeOnly  uint16 = 1 << 14
+	helloFeatureBatchRecords      uint16 = 1 << 15
+	helloFeatureMask              uint16 = helloFeatureDerivedEpoch | helloFeatureSessionGeneration | helloFeatureTLSHandshakeOnly | helloFeatureBatchRecords
+	helloSuiteMask                uint16 = ^helloFeatureMask
 
 	secureBatchRecordHeaderLen  = 2
 	secureBatchRecordLengthLen  = 4
@@ -339,20 +341,46 @@ func secureTLSHandshakeOnlyNegotiated(client hello, server hello) bool {
 	return client.suiteMask&server.suiteMask&helloFeatureTLSHandshakeOnly != 0
 }
 
+func secureSessionGenerationFeature(options Options) uint16 {
+	if options.SessionGeneration == nil {
+		return 0
+	}
+	return helloFeatureSessionGeneration
+}
+
+func secureDerivedEpochFeature(options Options) uint16 {
+	if options.Epoch != 0 || !requestedEncryptionPolicy(options).AnyEncrypted() {
+		return 0
+	}
+	if options.DerivedEpoch != nil && !options.DerivedEpoch() {
+		return 0
+	}
+	return helloFeatureDerivedEpoch
+}
+
+func secureDerivedEpochNegotiated(client hello, server hello) bool {
+	return client.suiteMask&server.suiteMask&helloFeatureDerivedEpoch != 0
+}
+
 func secureHelloFeatures(inner transport.Session, options Options) uint16 {
-	return secureBatchRecordFeature(inner, options) | secureTLSHandshakeOnlyFeature(inner, options)
+	return secureDerivedEpochFeature(options) |
+		secureSessionGenerationFeature(options) |
+		secureBatchRecordFeature(inner, options) |
+		secureTLSHandshakeOnlyFeature(inner, options)
 }
 
 type Options struct {
-	Epoch            uint64
-	RequirePeerAuth  bool
-	KeySource        func() string
-	Encryption       func() string
-	CryptoSuites     func() []string
-	BatchRecords     func() bool
-	TLSHandshakeOnly func() bool
-	ClientAuthTLS    func(peer transport.Peer) (*tls.Config, error)
-	ServerAuthTLS    func() (*tls.Config, error)
+	Epoch             uint64
+	RequirePeerAuth   bool
+	KeySource         func() string
+	Encryption        func() string
+	CryptoSuites      func() []string
+	BatchRecords      func() bool
+	TLSHandshakeOnly  func() bool
+	DerivedEpoch      func() bool
+	SessionGeneration func() transport.SessionGeneration
+	ClientAuthTLS     func(peer transport.Peer) (*tls.Config, error)
+	ServerAuthTLS     func() (*tls.Config, error)
 }
 
 type EncryptionPolicy struct {
@@ -593,6 +621,8 @@ type Session struct {
 	peerIX           core.IXID
 	peerDomain       core.DomainID
 	peerIdentity     transport.PeerIdentity
+	peerGeneration   transport.SessionGeneration
+	peerGenerationOK bool
 	sendSeq          atomic.Uint64
 	sendMu           sync.Mutex
 	closeOnce        sync.Once
@@ -660,7 +690,7 @@ func Client(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	if err != nil {
 		return nil, err
 	}
-	session, err := newSession(inner, clientRole, state.privateKey, serverHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), encodedHello, rawServerHello)
+	session, err := newSession(inner, clientRole, state.privateKey, serverHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), secureDerivedEpochNegotiated(clientHello, serverHello), serverHello, encodedHello, rawServerHello)
 	if err != nil {
 		return nil, err
 	}
@@ -741,7 +771,7 @@ func Server(inner transport.Session, tlsConf *tls.Config, options Options) (*Ses
 	if err := inner.SendPacket(encodedHello); err != nil {
 		return nil, fmt.Errorf("send TrustIX server hello: %w", err)
 	}
-	session, err := newSession(inner, serverRole, state.privateKey, clientHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), rawClientHello, encodedHello)
+	session, err := newSession(inner, serverRole, state.privateKey, clientHello.publicKey, clientHello.random, serverHello.random, clientHello.publicKey, serverHello.publicKey, options, peerCert, suite, secureBatchRecordsNegotiated(clientHello, serverHello), secureDerivedEpochNegotiated(clientHello, serverHello), clientHello, rawClientHello, encodedHello)
 	if err != nil {
 		return nil, err
 	}
@@ -1703,6 +1733,13 @@ func (session *Session) PeerIdentity() (core.IXID, core.DomainID, bool) {
 	return session.peerIX, session.peerDomain, session.peerIX != "" || session.peerDomain != ""
 }
 
+func (session *Session) PeerSessionGeneration() (transport.SessionGeneration, bool) {
+	if !session.sendEncrypted && !session.recvEncrypted {
+		return transport.SessionGeneration{}, false
+	}
+	return session.peerGeneration, session.peerGenerationOK
+}
+
 func (session *Session) PeerIdentityDetail() (transport.PeerIdentity, bool) {
 	return session.peerIdentity, session.peerIdentity.Peer != "" || session.peerIdentity.Domain != "" || session.peerIdentity.Device != "" || session.peerIdentity.Role != ""
 }
@@ -1791,15 +1828,23 @@ func newHandshakeState(messageType byte, tlsConf *tls.Config, options Options, f
 	if _, err := rand.Read(randomBytes); err != nil {
 		return handshakeState{}, hello{}, fmt.Errorf("generate TrustIX transport random: %w", err)
 	}
+	featureMask := uint16(0)
+	if len(features) > 0 {
+		featureMask = features[0] & helloFeatureMask
+	}
+	if options.SessionGeneration == nil {
+		featureMask &^= helloFeatureSessionGeneration
+	} else if featureMask&helloFeatureSessionGeneration != 0 {
+		generation := options.SessionGeneration()
+		copy(randomBytes[:transport.SessionGenerationSize], generation[:])
+	}
 	state := handshakeState{privateKey: privateKey}
 	state.certDER, state.signer, err = localCertificate(tlsConf)
 	if err != nil {
 		return handshakeState{}, hello{}, err
 	}
 	suiteMask := suiteMaskForOptions(options)
-	if len(features) > 0 {
-		suiteMask |= features[0] & helloFeatureMask
-	}
+	suiteMask |= featureMask
 	helloMsg := hello{
 		messageType: messageType,
 		suiteMask:   suiteMask,
@@ -2116,7 +2161,16 @@ func appendSuiteMaskForSignature(payload []byte, hello hello) []byte {
 	return binary.BigEndian.AppendUint16(payload, normalizedSuiteMask(hello.suiteMask))
 }
 
-func newSession(inner transport.Session, role role, privateKey *ecdh.PrivateKey, peerPublicBytes []byte, clientRandom []byte, serverRandom []byte, clientPublic []byte, serverPublic []byte, options Options, peerCert *x509.Certificate, suite cryptoSuite, batchRecords bool, clientHelloRaw []byte, serverHelloRaw []byte) (*Session, error) {
+func peerSessionGenerationFromHello(peerHello hello) (transport.SessionGeneration, bool) {
+	if peerHello.suiteMask&helloFeatureSessionGeneration == 0 || len(peerHello.random) < transport.SessionGenerationSize {
+		return transport.SessionGeneration{}, false
+	}
+	var generation transport.SessionGeneration
+	copy(generation[:], peerHello.random[:transport.SessionGenerationSize])
+	return generation, true
+}
+
+func newSession(inner transport.Session, role role, privateKey *ecdh.PrivateKey, peerPublicBytes []byte, clientRandom []byte, serverRandom []byte, clientPublic []byte, serverPublic []byte, options Options, peerCert *x509.Certificate, suite cryptoSuite, batchRecords bool, derivedEpoch bool, peerHello hello, clientHelloRaw []byte, serverHelloRaw []byte) (*Session, error) {
 	peerPublic, err := ecdh.X25519().NewPublicKey(peerPublicBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: parse peer X25519 key: %v", ErrInvalidHandshake, err)
@@ -2127,19 +2181,26 @@ func newSession(inner transport.Session, role role, privateKey *ecdh.PrivateKey,
 	}
 	defer clearBytes(secret)
 	encryption := requestedEncryptionPolicy(options)
+	peerGeneration, peerGenerationOK := peerSessionGenerationFromHello(peerHello)
+	epoch := options.Epoch
+	if epoch == 0 && derivedEpoch {
+		epoch = deriveSessionEpoch(clientRandom, serverRandom, clientPublic, serverPublic, suite)
+	}
 	session := &Session{
-		inner:           inner,
-		role:            role,
-		epoch:           options.Epoch,
-		encryptionMode:  encryption.Mode,
-		sendEncrypted:   encryption.SendEncrypted,
-		recvEncrypted:   encryption.ReceiveEncrypted,
-		cryptoSuite:     suite,
-		cryptoKeySource: "",
-		batchRecords:    batchRecords,
-		replay:          newReplayWindow(defaultReplayWindowSize),
-		clientHelloRaw:  slices.Clone(clientHelloRaw),
-		serverHelloRaw:  slices.Clone(serverHelloRaw),
+		inner:            inner,
+		role:             role,
+		epoch:            epoch,
+		encryptionMode:   encryption.Mode,
+		sendEncrypted:    encryption.SendEncrypted,
+		recvEncrypted:    encryption.ReceiveEncrypted,
+		cryptoSuite:      suite,
+		cryptoKeySource:  "",
+		batchRecords:     batchRecords,
+		peerGeneration:   peerGeneration,
+		peerGenerationOK: peerGenerationOK,
+		replay:           newReplayWindow(defaultReplayWindowSize),
+		clientHelloRaw:   slices.Clone(clientHelloRaw),
+		serverHelloRaw:   slices.Clone(serverHelloRaw),
 	}
 	session.initDataHeader()
 	if peerCert != nil {
@@ -2205,6 +2266,29 @@ func newSession(inner transport.Session, role role, privateKey *ecdh.PrivateKey,
 		return nil, err
 	}
 	return session, nil
+}
+
+func deriveSessionEpoch(clientRandom []byte, serverRandom []byte, clientPublic []byte, serverPublic []byte, suite cryptoSuite) uint64 {
+	payload := make([]byte, 0, 192)
+	payload = append(payload, "TrustIX secure transport wire epoch v1\x00"...)
+	appendField := func(field []byte) {
+		payload = binary.BigEndian.AppendUint32(payload, uint32(len(field)))
+		payload = append(payload, field...)
+	}
+	appendField([]byte(suite.Name))
+	appendField(clientRandom)
+	appendField(serverRandom)
+	appendField(clientPublic)
+	appendField(serverPublic)
+	digest := sha256.Sum256(payload)
+	epoch := binary.BigEndian.Uint64(digest[:8])
+	if epoch == 0 {
+		epoch = binary.BigEndian.Uint64(digest[8:16])
+	}
+	if epoch == 0 {
+		epoch = 1
+	}
+	return epoch
 }
 
 func (session *Session) initDataHeader() {

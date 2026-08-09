@@ -15,6 +15,231 @@ import (
 	"trustix.local/trustix/internal/dataplane"
 )
 
+func TestKernelDatapathTIXTCPCryptoSlotLifecycle(t *testing.T) {
+	oldSetKey := kernelDatapathAEADDirectSetKeyAlloc
+	oldClearKey := kernelDatapathAEADDirectClearKey
+	t.Cleanup(func() {
+		kernelDatapathAEADDirectSetKeyAlloc = oldSetKey
+		kernelDatapathAEADDirectClearKey = oldClearKey
+	})
+
+	nextSlot := uint32(10)
+	cleared := make(map[uint32]int)
+	kernelDatapathAEADDirectSetKeyAlloc = func(_ string, _ uint32, _ []byte, _ bool) (uint32, error) {
+		slot := nextSlot
+		nextSlot++
+		return slot, nil
+	}
+	kernelDatapathAEADDirectClearKey = func(_ string, slot uint32) error {
+		cleared[slot]++
+		return nil
+	}
+
+	manager := NewManager()
+	const flowID = uint64(701)
+	firstEntries := kernelDatapathCryptoTestEntries(t, flowID, 7)
+	defer zeroKernelCryptoEntries(firstEntries)
+	if err := manager.installKernelDatapathTIXTCPCryptoLocked(firstEntries); err != nil {
+		t.Fatalf("install initial full secure crypto state: %v", err)
+	}
+	first := manager.kernelDatapathCryptoStates[flowID]
+	if first.Send.SlotID != 10 || first.Receive.SlotID != 11 || first.Send.Epoch != 7 || first.Receive.Epoch != 7 {
+		t.Fatalf("initial crypto state = %#v", first)
+	}
+	if len(manager.kernelDatapathCryptoRetiredSlots[flowID]) != 0 {
+		t.Fatalf("initial install retired slots = %v", manager.kernelDatapathCryptoRetiredSlots[flowID])
+	}
+
+	secondEntries := kernelDatapathCryptoTestEntries(t, flowID, 8)
+	defer zeroKernelCryptoEntries(secondEntries)
+	if err := manager.installKernelDatapathTIXTCPCryptoLocked(secondEntries); err != nil {
+		t.Fatalf("install replacement full secure crypto state: %v", err)
+	}
+	second := manager.kernelDatapathCryptoStates[flowID]
+	if second.Send.SlotID != 12 || second.Receive.SlotID != 13 || second.Send.Epoch != 8 || second.Receive.Epoch != 8 {
+		t.Fatalf("replacement crypto state = %#v", second)
+	}
+	retired := manager.kernelDatapathCryptoRetiredSlots[flowID]
+	if len(retired) != 2 || retired[0] != 10 || retired[1] != 11 {
+		t.Fatalf("replacement retired slots = %v, want [10 11]", retired)
+	}
+	if err := manager.commitKernelDatapathTIXTCPCryptoStateLocked(flowID, 7); err != nil {
+		t.Fatalf("commit stale epoch: %v", err)
+	}
+	if len(manager.kernelDatapathCryptoRetiredSlots[flowID]) != 2 || len(cleared) != 0 {
+		t.Fatalf("stale commit changed retired slots=%v cleared=%v", manager.kernelDatapathCryptoRetiredSlots[flowID], cleared)
+	}
+	if err := manager.commitKernelDatapathTIXTCPCryptoStateLocked(flowID, 8); err != nil {
+		t.Fatalf("commit replacement epoch: %v", err)
+	}
+	if _, ok := manager.kernelDatapathCryptoRetiredSlots[flowID]; ok || cleared[10] != 1 || cleared[11] != 1 {
+		t.Fatalf("matching commit retired=%v cleared=%v", manager.kernelDatapathCryptoRetiredSlots[flowID], cleared)
+	}
+	if err := manager.releaseKernelDatapathTIXTCPCryptoStateLocked(flowID); err != nil {
+		t.Fatalf("release current state: %v", err)
+	}
+	if _, ok := manager.kernelDatapathCryptoStates[flowID]; ok || cleared[12] != 1 || cleared[13] != 1 {
+		t.Fatalf("release left state=%v cleared=%v", manager.kernelDatapathCryptoStates[flowID], cleared)
+	}
+}
+
+func TestCommitTIXTCPCryptoStateAcceptsEpochZero(t *testing.T) {
+	oldSetKey := kernelDatapathAEADDirectSetKeyAlloc
+	oldClearKey := kernelDatapathAEADDirectClearKey
+	t.Cleanup(func() {
+		kernelDatapathAEADDirectSetKeyAlloc = oldSetKey
+		kernelDatapathAEADDirectClearKey = oldClearKey
+	})
+
+	nextSlot := uint32(20)
+	cleared := make(map[uint32]int)
+	kernelDatapathAEADDirectSetKeyAlloc = func(_ string, _ uint32, _ []byte, _ bool) (uint32, error) {
+		slot := nextSlot
+		nextSlot++
+		return slot, nil
+	}
+	kernelDatapathAEADDirectClearKey = func(_ string, slot uint32) error {
+		cleared[slot]++
+		return nil
+	}
+
+	manager := NewManager()
+	const flowID = uint64(702)
+	epochZeroEntries := kernelDatapathCryptoTestEntries(t, flowID, 0)
+	defer zeroKernelCryptoEntries(epochZeroEntries)
+	if err := manager.installKernelDatapathTIXTCPCryptoLocked(epochZeroEntries); err != nil {
+		t.Fatalf("install epoch-zero full secure crypto state: %v", err)
+	}
+	state := manager.kernelDatapathCryptoStates[flowID]
+	if state.Send.SlotID != 20 || state.Receive.SlotID != 21 || state.Send.Epoch != 0 || state.Receive.Epoch != 0 {
+		t.Fatalf("epoch-zero crypto state = %#v", state)
+	}
+
+	manager.kernelDatapathCryptoRetiredSlots[flowID] = []uint32{18, 19}
+	if err := manager.CommitTIXTCPCryptoState(context.Background(), flowID, 0); err != nil {
+		t.Fatalf("commit epoch-zero crypto state: %v", err)
+	}
+	if _, ok := manager.kernelDatapathCryptoRetiredSlots[flowID]; ok || cleared[18] != 1 || cleared[19] != 1 {
+		t.Fatalf("epoch-zero commit retired=%v cleared=%v", manager.kernelDatapathCryptoRetiredSlots[flowID], cleared)
+	}
+
+	rekeyEntries := kernelDatapathCryptoTestEntries(t, flowID, 1)
+	defer zeroKernelCryptoEntries(rekeyEntries)
+	if err := manager.installKernelDatapathTIXTCPCryptoLocked(rekeyEntries); err != nil {
+		t.Fatalf("rekey epoch-zero crypto state: %v", err)
+	}
+	retired := manager.kernelDatapathCryptoRetiredSlots[flowID]
+	if len(retired) != 2 || retired[0] != 20 || retired[1] != 21 {
+		t.Fatalf("rekey retired slots = %v, want [20 21]", retired)
+	}
+	if err := manager.CommitTIXTCPCryptoState(context.Background(), flowID, 1); err != nil {
+		t.Fatalf("commit rekeyed crypto state: %v", err)
+	}
+	if _, ok := manager.kernelDatapathCryptoRetiredSlots[flowID]; ok || cleared[20] != 1 || cleared[21] != 1 {
+		t.Fatalf("rekey commit retired=%v cleared=%v", manager.kernelDatapathCryptoRetiredSlots[flowID], cleared)
+	}
+}
+
+func TestKernelDatapathTIXTCPCryptoReleaseRetriesFailedSlotClear(t *testing.T) {
+	oldClearKey := kernelDatapathAEADDirectClearKey
+	t.Cleanup(func() { kernelDatapathAEADDirectClearKey = oldClearKey })
+
+	attempts := make(map[uint32]int)
+	kernelDatapathAEADDirectClearKey = func(_ string, slot uint32) error {
+		attempts[slot]++
+		if slot == 10 && attempts[slot] == 1 {
+			return errors.New("injected clear failure")
+		}
+		return nil
+	}
+	manager := NewManager()
+	manager.kernelDatapathCryptoStates = make(map[uint64]dataplane.TIXTCPCryptoState)
+	manager.kernelDatapathCryptoRetiredSlots = make(map[uint64][]uint32)
+	manager.kernelDatapathCryptoStates[7] = dataplane.TIXTCPCryptoState{
+		FlowID:  7,
+		Send:    dataplane.KernelCryptoDirectState{SlotID: 12, Epoch: 8},
+		Receive: dataplane.KernelCryptoDirectState{SlotID: 13, Epoch: 8},
+	}
+	manager.kernelDatapathCryptoRetiredSlots[7] = []uint32{10, 11}
+
+	if err := manager.releaseKernelDatapathTIXTCPCryptoStateLocked(7); err == nil {
+		t.Fatal("release with injected clear failure returned nil")
+	}
+	if _, ok := manager.kernelDatapathCryptoStates[7]; ok {
+		t.Fatal("release retained active crypto state after detaching it")
+	}
+	remaining := manager.kernelDatapathCryptoRetiredSlots[7]
+	if len(remaining) != 1 || remaining[0] != 10 {
+		t.Fatalf("remaining failed slots = %v, want [10]", remaining)
+	}
+	if err := manager.releaseRetiredKernelDatapathTIXTCPCryptoStatesLocked(); err != nil {
+		t.Fatalf("retry retired slot clear: %v", err)
+	}
+	if _, ok := manager.kernelDatapathCryptoRetiredSlots[7]; ok || attempts[10] != 2 {
+		t.Fatalf("retry retained slots=%v attempts=%v", manager.kernelDatapathCryptoRetiredSlots[7], attempts)
+	}
+}
+
+func TestKernelDatapathTIXTCPCryptoInstallRollbackRetainsFailedClear(t *testing.T) {
+	oldSetKey := kernelDatapathAEADDirectSetKeyAlloc
+	oldClearKey := kernelDatapathAEADDirectClearKey
+	t.Cleanup(func() {
+		kernelDatapathAEADDirectSetKeyAlloc = oldSetKey
+		kernelDatapathAEADDirectClearKey = oldClearKey
+	})
+
+	allocations := 0
+	clearAttempts := 0
+	kernelDatapathAEADDirectSetKeyAlloc = func(_ string, _ uint32, _ []byte, _ bool) (uint32, error) {
+		allocations++
+		if allocations == 2 {
+			return 0, errors.New("injected allocation failure")
+		}
+		return 21, nil
+	}
+	kernelDatapathAEADDirectClearKey = func(_ string, slot uint32) error {
+		if slot != 21 {
+			t.Fatalf("clear slot = %d, want 21", slot)
+		}
+		clearAttempts++
+		if clearAttempts == 1 {
+			return errors.New("injected rollback clear failure")
+		}
+		return nil
+	}
+
+	manager := NewManager()
+	entries := kernelDatapathCryptoTestEntries(t, 702, 7)
+	defer zeroKernelCryptoEntries(entries)
+	if err := manager.installKernelDatapathTIXTCPCryptoLocked(entries); err == nil {
+		t.Fatal("install with injected allocation failure returned nil")
+	}
+	if len(manager.kernelDatapathCryptoStates) != 0 {
+		t.Fatalf("failed install published state: %v", manager.kernelDatapathCryptoStates)
+	}
+	remaining := manager.kernelDatapathCryptoRetiredSlots[0]
+	if len(remaining) != 1 || remaining[0] != 21 {
+		t.Fatalf("failed rollback retained slots = %v, want [21]", remaining)
+	}
+	if err := manager.releaseRetiredKernelDatapathTIXTCPCryptoStatesLocked(); err != nil {
+		t.Fatalf("retry failed install cleanup: %v", err)
+	}
+	if len(manager.kernelDatapathCryptoRetiredSlots) != 0 || clearAttempts != 2 {
+		t.Fatalf("retry retained slots=%v clear attempts=%d", manager.kernelDatapathCryptoRetiredSlots, clearAttempts)
+	}
+}
+
+func kernelDatapathCryptoTestEntries(t *testing.T, flowID uint64, epoch uint64) []kernelCryptoFlowEntry {
+	t.Helper()
+	spec := validKernelCryptoSpec(flowID)
+	spec.Epoch = epoch
+	entries, err := encodeKernelCryptoSpecs([]dataplane.TIXTCPCryptoSpec{spec})
+	if err != nil {
+		t.Fatalf("encode full secure kernel datapath crypto spec: %v", err)
+	}
+	return entries
+}
+
 func TestKernelCryptoProviderObjectSyntheticContextLifecycle(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("kernel crypto provider object load requires root")

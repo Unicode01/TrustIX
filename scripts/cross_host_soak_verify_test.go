@@ -2273,7 +2273,10 @@ func TestCrossHostProductionGateRejectsSecureKUDPWithoutRouteHelperXmit(t *testi
 func TestCrossHostProductionGateAcceptsSecureTIXTCPKernelArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, true, true)
+	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, secureTIXTCPKernelArtifactOptions{
+		fullSecureDatapath: true,
+		secureTraffic:      true,
+	})
 
 	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-tix-tcp-kernel="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
@@ -2282,33 +2285,75 @@ func TestCrossHostProductionGateAcceptsSecureTIXTCPKernelArtifacts(t *testing.T)
 	}
 }
 
-func TestCrossHostProductionGateRejectsSecureTIXTCPKernelWithoutRouteGSO(t *testing.T) {
+func TestCrossHostProductionGateRejectsSecureTIXTCPKernelXDPUnauthorizedDrops(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, false, true)
+	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, secureTIXTCPKernelArtifactOptions{
+		fullSecureDatapath:   true,
+		secureTraffic:        true,
+		xdpUnauthorizedDrops: 1,
+	})
 
 	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-tix-tcp-kernel="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("production gate unexpectedly accepted secure TIX-TCP kernel artifacts without route-GSO:\n%s", output)
+		t.Fatalf("production gate unexpectedly accepted secure TIX-TCP kernel XDP unauthorized drops:\n%s", output)
 	}
-	if !strings.Contains(string(output), "tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc") {
-		t.Fatalf("production gate did not report missing secure TIX-TCP route-GSO stat:\n%s", output)
+	if !strings.Contains(string(output), "xdp_unauthorized_drops") {
+		t.Fatalf("production gate did not report XDP unauthorized drops:\n%s", output)
 	}
 }
 
-func TestCrossHostProductionGateRejectsSecureTIXTCPKernelWithoutDirectKfuncCrypto(t *testing.T) {
+func TestCrossHostProductionGateRejectsSecureTIXTCPKernelWithoutFullSecureDatapath(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
-	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, true, false)
+	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, secureTIXTCPKernelArtifactOptions{
+		secureTraffic: true,
+	})
 
 	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-tix-tcp-kernel="+filepath.ToSlash(dir))
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("production gate unexpectedly accepted secure TIX-TCP kernel artifacts without direct kfunc crypto:\n%s", output)
+		t.Fatalf("production gate unexpectedly accepted secure TIX-TCP kernel artifacts without full secure datapath:\n%s", output)
 	}
-	if !strings.Contains(string(output), "kernel_crypto_module_direct_kfunc_seal_calls") {
-		t.Fatalf("production gate did not report missing secure TIX-TCP direct kfunc counter:\n%s", output)
+	if !strings.Contains(string(output), "kernel_datapath_full_secure") {
+		t.Fatalf("production gate did not report missing secure TIX-TCP full-kmod provider:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsSecureTIXTCPKernelWithoutSecureTraffic(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, secureTIXTCPKernelArtifactOptions{
+		fullSecureDatapath: true,
+	})
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-tix-tcp-kernel="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted secure TIX-TCP kernel artifacts without secure traffic:\n%s", output)
+	}
+	if !strings.Contains(string(output), "kernel_datapath_module_secure_tx_packets") {
+		t.Fatalf("production gate did not report missing secure TIX-TCP traffic:\n%s", output)
+	}
+}
+
+func TestCrossHostProductionGateRejectsSecureTIXTCPKernelRXErrors(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, secureTIXTCPKernelArtifactOptions{
+		fullSecureDatapath: true,
+		secureTraffic:      true,
+		secureRXErrors:     1,
+	})
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-tix-tcp-kernel="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted secure TIX-TCP kernel RX errors:\n%s", output)
+	}
+	if !strings.Contains(string(output), "kernel_datapath_module_secure_rx_errors") {
+		t.Fatalf("production gate did not report secure TIX-TCP RX errors:\n%s", output)
 	}
 }
 
@@ -3409,7 +3454,15 @@ func writeSecureKUDPModuleParameters(t *testing.T, path string, routeHelperXmit 
 	})
 }
 
-func writeSecureTIXTCPKernelProductionGateArtifacts(t *testing.T, dir string, routeGSO bool, directKfuncCrypto bool) {
+type secureTIXTCPKernelArtifactOptions struct {
+	fullSecureDatapath   bool
+	secureTraffic        bool
+	xdpUnauthorizedDrops int
+	secureRXErrors       int
+	secureRXStale        int
+}
+
+func writeSecureTIXTCPKernelProductionGateArtifacts(t *testing.T, dir string, options secureTIXTCPKernelArtifactOptions) {
 	t.Helper()
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-a-to-b.json"), 1.9e9, 1.8e9, 3600.2, 3600, 0.8)
 	writeIperfJSONWithIntervals(t, filepath.Join(dir, "case-iperf-b-to-a.json"), 1.9e9, 1.8e9, 3600.2, 3600, 0.8)
@@ -3426,91 +3479,78 @@ func writeSecureTIXTCPKernelProductionGateArtifacts(t *testing.T, dir string, ro
 	writeLANStateArtifacts(t, dir, 1000, 1000)
 	writeHostStateArtifacts(t, dir, 4, 4, "virtio_net", "virtio_net")
 	writeLsmodArtifacts(t, dir, map[string][]string{
-		"a": {"trustix_crypto", "trustix_datapath_helpers"},
-		"b": {"trustix_crypto", "trustix_datapath_helpers"},
+		"a": {"trustix_crypto", "trustix_datapath"},
+		"b": {"trustix_crypto", "trustix_datapath"},
 	})
 	for _, node := range []string{"a", "b"} {
 		base := filepath.Join(dir, "collect", node)
 		writeStatusHealthJSON(t, filepath.Join(base, "status.json"), 8, 0, 0)
 		writeBinaryIdentityJSON(t, filepath.Join(base, "binary-identity.json"), "secure-tix-tcp-kernel-sha")
-		writeSecureTIXTCPKernelDatapathJSON(t, filepath.Join(base, "datapath.json"), routeGSO, directKfuncCrypto)
+		writeSecureTIXTCPKernelDatapathJSON(t, filepath.Join(base, "datapath.json"), options)
 		writeSecureTIXTCPKernelTransportsJSON(t, filepath.Join(base, "transports.json"), node)
-		writeSecureTIXTCPKernelModuleParameters(t, filepath.Join(base, "module-parameters.txt"), routeGSO, directKfuncCrypto)
+		writeSecureTIXTCPKernelModuleParameters(t, filepath.Join(base, "module-parameters.txt"), options)
 	}
 }
 
-func writeSecureTIXTCPKernelDatapathJSON(t *testing.T, path string, routeGSO bool, directKfuncCrypto bool) {
+func writeSecureTIXTCPKernelDatapathJSON(t *testing.T, path string, options secureTIXTCPKernelArtifactOptions) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("make secure TIX-TCP datapath dir: %v", err)
 	}
-	routeGSOValue := 0
-	if routeGSO {
-		routeGSOValue = 1
+	provider := "none"
+	fullSecureValue := 0
+	if options.fullSecureDatapath {
+		provider = "kernel_datapath_full_secure"
+		fullSecureValue = 1
 	}
-	directSealCalls := 0
-	directOpenCalls := 0
-	if directKfuncCrypto {
-		directSealCalls = 16
-		directOpenCalls = 16
+	securePackets := 0
+	secureFrames := 0
+	secureBatches := 0
+	if options.secureTraffic {
+		securePackets = 64
+		secureFrames = 64
+		secureBatches = 8
 	}
 	payload := map[string]any{
 		"tix_tcp": map[string]any{
+			"provider":         provider,
 			"fast_path":        true,
 			"reinject":         true,
+			"userspace_crypto": false,
 			"kernel_crypto":    true,
 			"requested_crypto": "kernel",
 			"effective_crypto": "kernel",
 			"active_flows":     1,
 			"provider_stats": map[string]any{
-				"kernel_crypto_flow_map_ready":                             1,
-				"kernel_crypto_flow_map_entries":                           1,
-				"kernel_crypto_flow_map_updates":                           1,
-				"kernel_crypto_direct_slot_provider_ready":                 1,
-				"kernel_crypto_direct_kfunc_fastpath_ready":                1,
-				"kernel_crypto_tc_direct_ready":                            1,
-				"kernel_crypto_rx_attached":                                0,
-				"kernel_crypto_tx_packet":                                  0,
-				"kernel_crypto_module_direct_kfunc_seal_calls":             directSealCalls,
-				"kernel_crypto_module_direct_kfunc_open_calls":             directOpenCalls,
-				"kernel_crypto_module_direct_kfunc_errors":                 0,
-				"tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc":           routeGSOValue,
-				"tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested": 1,
-				"tc_kernel_udp_tx_secure_direct_attached":                  1,
-				"tc_kernel_udp_tx_secure_direct_trust_inner_checksums":     1,
-				"tc_kernel_udp_tx_secure_direct_kfunc_seal_enabled":        1,
-				"tc_kernel_udp_tx_secure_direct_route_tcp_gso_kfunc":       routeGSOValue,
-				"kernel_crypto_frame_seal_successes":                       0,
-				"kernel_crypto_frame_open_successes":                       0,
-				"xdp_kernel_crypto_open_attempts":                          0,
-				"xdp_kernel_crypto_open_successes":                         0,
-				"tx_kernel_crypto_packet_seal_successes":                   0,
-				"kernel_crypto_provider_unavailable_errors":                0,
-				"kernel_crypto_flow_rejects":                               0,
-				"kernel_crypto_frame_rejects":                              0,
-				"kernel_crypto_frame_seal_errors":                          0,
-				"kernel_crypto_frame_open_errors":                          0,
-				"kernel_crypto_frame_replay_drops":                         0,
-				"xdp_kernel_crypto_open_errors":                            0,
-				"xdp_kernel_crypto_replay_drops":                           0,
-				"xdp_kernel_crypto_no_context_drops":                       0,
-				"xdp_kernel_crypto_header_errors":                          0,
-				"xdp_kernel_crypto_payload_len_errors":                     0,
-				"xdp_kernel_crypto_secure_header_errors":                   0,
-				"xdp_kernel_crypto_frame_header_errors":                    0,
-				"xdp_kernel_crypto_epoch_sequence_mismatches":              0,
-				"xdp_kernel_crypto_cipher_len_errors":                      0,
-				"xdp_kernel_crypto_cipher_load_errors":                     0,
-				"xdp_kernel_crypto_context_misses":                         0,
-				"xdp_kernel_crypto_state_misses":                           0,
-				"xdp_kernel_crypto_zero_plain_errors":                      0,
-				"xdp_kernel_crypto_context_unavailable":                    0,
-				"xdp_kernel_crypto_epoch_mismatches":                       0,
-				"xdp_kernel_crypto_suite_mismatches":                       0,
-				"xdp_kernel_crypto_dynptr_errors":                          0,
-				"xdp_kernel_crypto_decrypt_errors":                         0,
-				"xdp_kernel_crypto_replay_commit_errors":                   0,
-				"xdp_kernel_crypto_store_errors":                           0,
+				"xdp_unauthorized_drops":                                                        options.xdpUnauthorizedDrops,
+				"kernel_crypto_datapath_flows":                                                  fullSecureValue,
+				"kernel_crypto_datapath_retired_slots":                                          0,
+				"kernel_crypto_module_full_datapath_features_secure_tix_tcp_full_datapath":      fullSecureValue,
+				"kernel_crypto_module_full_datapath_safe_features_secure_tix_tcp_full_datapath": fullSecureValue,
+				"kernel_crypto_module_datapath_simd_fastpath":                                   1,
+				"kernel_crypto_module_datapath_simd_irq_fpu_fastpath":                           1,
+				"kernel_crypto_module_aesni_available":                                          1,
+				"kernel_crypto_module_direct_kfunc_seal_calls":                                  0,
+				"kernel_crypto_module_direct_kfunc_open_calls":                                  0,
+				"kernel_crypto_module_direct_kfunc_errors":                                      0,
+				"kernel_datapath_module_secure_tx_packets":                                      securePackets,
+				"kernel_datapath_module_secure_tx_frames":                                       secureFrames,
+				"kernel_datapath_module_secure_tx_batches":                                      secureBatches,
+				"kernel_datapath_module_state_clears":                                           5,
+				"kernel_datapath_module_state_table_full":                                       0,
+				"kernel_datapath_module_secure_tx_errors":                                       0,
+				"kernel_datapath_module_secure_tx_stale":                                        0,
+				"kernel_datapath_module_secure_rx_packets":                                      securePackets,
+				"kernel_datapath_module_secure_rx_frames":                                       secureFrames,
+				"kernel_datapath_module_secure_rx_errors":                                       options.secureRXErrors,
+				"kernel_datapath_module_secure_rx_stale":                                        options.secureRXStale,
+				"tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc":                                0,
+				"tc_tix_tcp_tx_direct_route_tcp_gso_async_kfunc_requested":                      0,
+				"tc_kernel_udp_tx_secure_direct_attached":                                       0,
+				"tc_kernel_udp_rx_secure_direct_attached":                                       0,
+				"kernel_crypto_provider_unavailable_errors":                                     0,
+				"kernel_crypto_flow_rejects":                                                    0,
+				"kernel_crypto_frame_rejects":                                                   0,
 			},
 		},
 	}
@@ -3523,31 +3563,42 @@ func writeSecureTIXTCPKernelDatapathJSON(t *testing.T, path string, routeGSO boo
 	}
 }
 
-func writeSecureTIXTCPKernelModuleParameters(t *testing.T, path string, routeHelperXmit bool, directKfuncCrypto bool) {
+func writeSecureTIXTCPKernelModuleParameters(t *testing.T, path string, options secureTIXTCPKernelArtifactOptions) {
 	t.Helper()
-	xmitPackets := "0"
-	if routeHelperXmit {
-		xmitPackets = "8"
+	securePackets := "0"
+	secureFrames := "0"
+	secureBatches := "0"
+	if options.secureTraffic {
+		securePackets = "64"
+		secureFrames = "64"
+		secureBatches = "8"
 	}
-	directSealCalls := "0"
-	directOpenCalls := "0"
-	if directKfuncCrypto {
-		directSealCalls = "16"
-		directOpenCalls = "16"
-	}
-	helperParams := routeGSOHelperParameters()
-	helperParams["route_tcp_gso_async_secure_seal_batch"] = "1"
-	helperParams["route_tcp_gso_async_stream_outer_gso_frames"] = "0"
-	helperParams["route_tcp_gso_async_xmit_packets"] = xmitPackets
 	writeModuleParameters(t, path, map[string]map[string]string{
 		"trustix_crypto": {
-			"kfunc_simd_fastpath":         "1",
-			"kfunc_simd_irq_fpu_fastpath": "1",
-			"direct_kfunc_seal_calls":     directSealCalls,
-			"direct_kfunc_open_calls":     directOpenCalls,
-			"direct_kfunc_errors":         "0",
+			"datapath_simd_fastpath":         "1",
+			"datapath_simd_irq_fpu_fastpath": "1",
+			"datapath_vaes":                  "0",
+			"aesni_available":                "1",
+			"direct_kfunc_seal_calls":        "0",
+			"direct_kfunc_open_calls":        "0",
+			"direct_kfunc_errors":            "0",
 		},
-		"trustix_datapath_helpers": helperParams,
+		"trustix_datapath": {
+			"features":          "31872",
+			"safe_features":     "31872",
+			"unsafe_features":   "0",
+			"selftests":         "16383",
+			"selftest_failures": "0",
+			"secure_tx_packets": securePackets,
+			"secure_tx_frames":  secureFrames,
+			"secure_tx_batches": secureBatches,
+			"secure_tx_errors":  "0",
+			"secure_tx_stale":   "0",
+			"secure_rx_packets": securePackets,
+			"secure_rx_frames":  secureFrames,
+			"secure_rx_errors":  strconv.Itoa(options.secureRXErrors),
+			"secure_rx_stale":   strconv.Itoa(options.secureRXStale),
+		},
 	})
 }
 

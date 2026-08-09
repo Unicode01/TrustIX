@@ -76,6 +76,7 @@ const volatile __u32 trustix_kudp_rx_secure_recompute_inner_csum = 0;
 #define TRUSTIX_TIX_TCP_FLAG_ENCRYPTED 1
 #define TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT 4
 #define TRUSTIX_TIX_TCP_FLAG_INNER_IPV4 8
+#define TRUSTIX_TIX_TCP_FLAG_INNER_TCP_CHECKSUM_PARTIAL 16
 #define TRUSTIX_KERNEL_CRYPTO_MAX_ENTRIES 4096
 #define TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS 1024
 #define TRUSTIX_KERNEL_CRYPTO_REPLAY_MAX ((TRUSTIX_KERNEL_CRYPTO_REPLAY_WORDS - 1) * 64)
@@ -1117,6 +1118,7 @@ int trustix_kudp_rx_secure(struct __sk_buff *skb)
             goto header_error;
         if (!(frame[5] & TRUSTIX_TIX_TCP_FLAG_ENCRYPTED) ||
             !(frame[5] & TRUSTIX_TIX_TCP_FLAG_INNER_IPV4) ||
+            (frame[5] & TRUSTIX_TIX_TCP_FLAG_INNER_TCP_CHECKSUM_PARTIAL) ||
             (frame[5] & TRUSTIX_TIX_TCP_FLAG_CRYPTO_FRAGMENT) ||
             !trustix_tix_tcp_unfragmented(frame))
             goto fallback;

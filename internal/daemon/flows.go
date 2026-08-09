@@ -1225,13 +1225,18 @@ func (daemon *Daemon) clearFlowsForPeers(peers map[core.IXID]struct{}) {
 		return
 	}
 	daemon.flowMu.Lock()
-	defer daemon.flowMu.Unlock()
+	removed := make([]routing.FlowKey, 0)
 	for key, binding := range daemon.flows {
 		if _, ok := peers[binding.NextHop]; ok {
 			delete(daemon.flows, key)
+			removed = append(removed, key)
 		}
 	}
+	daemon.flowMu.Unlock()
 	daemon.clearForwardCacheForPeers(peers)
+	for _, key := range removed {
+		daemon.syncKernelDatapathFlowDelete(key)
+	}
 }
 
 func (daemon *Daemon) flowSnapshot() []routing.FlowBinding {

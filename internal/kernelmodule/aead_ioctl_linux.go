@@ -33,49 +33,55 @@ const (
 	TrustIXAEADDirectMaxSlots        = 16384
 	TrustIXAEADDirectAnySlot         = ^uint32(0)
 	trustIXAEADDirectFlagOpen        = uint32(1)
+	trustIXAEADDirectFlagOwner       = uint32(1 << 2)
 
-	TrustIXDatapathHelpersFlagTIXTSelftestOK       = uint32(1 << 0)
-	TrustIXDatapathHelpersFlagFeaturesActive       = uint32(1 << 1)
-	TrustIXDatapathHelpersSelftestTIXTFrame        = uint64(1 << 0)
-	TrustIXDatapathHelpersSelftestTIXTStream       = uint64(1 << 1)
-	TrustIXDatapathSelftestStateTable              = uint64(1 << 2)
-	TrustIXDatapathSelftestClassify                = uint64(1 << 3)
-	TrustIXDatapathSelftestPacketClassify          = uint64(1 << 4)
-	TrustIXDatapathSelftestTIXTEncap               = uint64(1 << 5)
-	TrustIXDatapathSelftestTIXTDecap               = uint64(1 << 6)
-	TrustIXDatapathSelftestSessionWire             = uint64(1 << 7)
-	TrustIXDatapathSelftestOuterBuild              = uint64(1 << 8)
-	TrustIXDatapathSelftestOuterParse              = uint64(1 << 9)
-	TrustIXDatapathSelftestInnerTCPChecksumPartial = uint64(1 << 10)
-	TrustIXDatapathSelftestInnerGSO                = uint64(1 << 11)
-	TrustIXDatapathHelpersSelftestAll              = TrustIXDatapathHelpersSelftestTIXTFrame | TrustIXDatapathHelpersSelftestTIXTStream
-	TrustIXDatapathSelftestAll                     = TrustIXDatapathHelpersSelftestAll | TrustIXDatapathSelftestStateTable | TrustIXDatapathSelftestClassify | TrustIXDatapathSelftestPacketClassify | TrustIXDatapathSelftestTIXTEncap | TrustIXDatapathSelftestTIXTDecap | TrustIXDatapathSelftestSessionWire | TrustIXDatapathSelftestOuterBuild | TrustIXDatapathSelftestOuterParse | TrustIXDatapathSelftestInnerTCPChecksumPartial | TrustIXDatapathSelftestInnerGSO
+	TrustIXDatapathHelpersFlagTIXTSelftestOK             = uint32(1 << 0)
+	TrustIXDatapathHelpersFlagFeaturesActive             = uint32(1 << 1)
+	TrustIXDatapathHelpersSelftestTIXTFrame              = uint64(1 << 0)
+	TrustIXDatapathHelpersSelftestTIXTStream             = uint64(1 << 1)
+	TrustIXDatapathSelftestStateTable                    = uint64(1 << 2)
+	TrustIXDatapathSelftestClassify                      = uint64(1 << 3)
+	TrustIXDatapathSelftestPacketClassify                = uint64(1 << 4)
+	TrustIXDatapathSelftestTIXTEncap                     = uint64(1 << 5)
+	TrustIXDatapathSelftestTIXTDecap                     = uint64(1 << 6)
+	TrustIXDatapathSelftestSessionWire                   = uint64(1 << 7)
+	TrustIXDatapathSelftestOuterBuild                    = uint64(1 << 8)
+	TrustIXDatapathSelftestOuterParse                    = uint64(1 << 9)
+	TrustIXDatapathSelftestInnerTCPChecksumPartial       = uint64(1 << 10)
+	TrustIXDatapathSelftestInnerGSO                      = uint64(1 << 11)
+	TrustIXDatapathSelftestSecureTIXTCP                  = uint64(1 << 12)
+	TrustIXDatapathSelftestSecureInnerTCPChecksumPartial = uint64(1 << 13)
+	TrustIXDatapathHelpersSelftestAll                    = TrustIXDatapathHelpersSelftestTIXTFrame | TrustIXDatapathHelpersSelftestTIXTStream
+	TrustIXDatapathSelftestAll                           = TrustIXDatapathHelpersSelftestAll | TrustIXDatapathSelftestStateTable | TrustIXDatapathSelftestClassify | TrustIXDatapathSelftestPacketClassify | TrustIXDatapathSelftestTIXTEncap | TrustIXDatapathSelftestTIXTDecap | TrustIXDatapathSelftestSessionWire | TrustIXDatapathSelftestOuterBuild | TrustIXDatapathSelftestOuterParse | TrustIXDatapathSelftestInnerTCPChecksumPartial | TrustIXDatapathSelftestInnerGSO | TrustIXDatapathSelftestSecureTIXTCP | TrustIXDatapathSelftestSecureInnerTCPChecksumPartial
 
-	TrustIXDatapathStateKindRoute       = uint32(1)
-	TrustIXDatapathStateKindSession     = uint32(2)
-	TrustIXDatapathStateKindFlow        = uint32(3)
-	TrustIXDatapathStateKindSessionWire = uint32(4)
-	TrustIXDatapathStateOpUpsert        = uint32(1)
-	TrustIXDatapathStateOpGet           = uint32(2)
-	TrustIXDatapathStateOpDelete        = uint32(3)
-	TrustIXDatapathStateOpClear         = uint32(4)
-	TrustIXDatapathStateBatchMax        = 4096
-	TrustIXDatapathPacketMaxLen         = 65535
-	TrustIXDatapathHookOpAttach         = uint32(1)
-	TrustIXDatapathHookOpDetach         = uint32(2)
-	TrustIXDatapathHookOpQuery          = uint32(3)
-	TrustIXDatapathHookFlagRXPreview    = uint32(1 << 0)
-	TrustIXDatapathHookFlagRXStage      = uint32(1 << 1)
-	TrustIXDatapathHookFlagRXWorker     = uint32(1 << 2)
-	TrustIXDatapathHookFlagTXPlaintext  = uint32(1 << 3)
-	TrustIXDatapathRXStageOpQuery       = uint32(1)
-	TrustIXDatapathRXStageOpPeek        = uint32(2)
-	TrustIXDatapathRXStageOpPop         = uint32(3)
-	TrustIXDatapathRXStageOpClear       = uint32(4)
-	TrustIXDatapathRouteFlagUnicast     = uint32(1)
-	TrustIXDatapathRouteFlagLocal       = uint32(2)
-	TrustIXDatapathRouteFlagDrop        = uint32(3)
-	TrustIXDatapathRouteFlagReject      = uint32(4)
+	TrustIXDatapathStateKindRoute             = uint32(1)
+	TrustIXDatapathStateKindSession           = uint32(2)
+	TrustIXDatapathStateKindFlow              = uint32(3)
+	TrustIXDatapathStateKindSessionWire       = uint32(4)
+	TrustIXDatapathStateKindSessionCrypto     = uint32(5)
+	TrustIXDatapathStateOpUpsert              = uint32(1)
+	TrustIXDatapathStateOpGet                 = uint32(2)
+	TrustIXDatapathStateOpDelete              = uint32(3)
+	TrustIXDatapathStateOpClear               = uint32(4)
+	TrustIXDatapathStateBatchMax              = 4096
+	TrustIXDatapathPacketMaxLen               = 65535
+	TrustIXDatapathHookOpAttach               = uint32(1)
+	TrustIXDatapathHookOpDetach               = uint32(2)
+	TrustIXDatapathHookOpQuery                = uint32(3)
+	TrustIXDatapathHookFlagRXPreview          = uint32(1 << 0)
+	TrustIXDatapathHookFlagRXStage            = uint32(1 << 1)
+	TrustIXDatapathHookFlagRXWorker           = uint32(1 << 2)
+	TrustIXDatapathHookFlagTXPlaintext        = uint32(1 << 3)
+	TrustIXDatapathHookFlagTXSecureTIXTCP     = uint32(1 << 4)
+	TrustIXDatapathHookFlagRXSecureTIXTCPOnly = uint32(1 << 5)
+	TrustIXDatapathRXStageOpQuery             = uint32(1)
+	TrustIXDatapathRXStageOpPeek              = uint32(2)
+	TrustIXDatapathRXStageOpPop               = uint32(3)
+	TrustIXDatapathRXStageOpClear             = uint32(4)
+	TrustIXDatapathRouteFlagUnicast           = uint32(1)
+	TrustIXDatapathRouteFlagLocal             = uint32(2)
+	TrustIXDatapathRouteFlagDrop              = uint32(3)
+	TrustIXDatapathRouteFlagReject            = uint32(4)
 )
 
 func closeIOCTLFile(file *os.File, path string, resultErr *error) {
@@ -107,6 +113,50 @@ type AEADDevice struct {
 	mu   sync.Mutex
 	file *os.File
 	pool []byte
+}
+
+// Direct key slots outlive an ioctl call, so their fd must live for the
+// process lifetime. The kernel uses this fd as the crash-safe slot lease.
+var aeadDirectOwnerFiles = struct {
+	sync.Mutex
+	files map[string]*os.File
+}{}
+
+func openAEADDirectOwnerFile(path string) (*os.File, error) {
+	aeadDirectOwnerFiles.Lock()
+	defer aeadDirectOwnerFiles.Unlock()
+	if file := aeadDirectOwnerFiles.files[path]; file != nil {
+		return file, nil
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	if aeadDirectOwnerFiles.files == nil {
+		aeadDirectOwnerFiles.files = make(map[string]*os.File)
+	}
+	aeadDirectOwnerFiles.files[path] = file
+	return file, nil
+}
+
+// CloseAEADDirectOwnerFiles releases the process-owned direct-slot leases.
+// Callers must first quiesce every dataplane user that can install new slots.
+func CloseAEADDirectOwnerFiles() error {
+	aeadDirectOwnerFiles.Lock()
+	files := aeadDirectOwnerFiles.files
+	aeadDirectOwnerFiles.files = nil
+	aeadDirectOwnerFiles.Unlock()
+
+	var resultErr error
+	for path, file := range files {
+		if file == nil {
+			continue
+		}
+		if err := file.Close(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close TrustIX AEAD direct-slot owner %q: %w", path, err))
+		}
+	}
+	return resultErr
 }
 
 type DatapathDevice struct {
@@ -376,13 +426,21 @@ func AEADPoolBatchResults(err error) ([]int32, bool) {
 }
 
 func newAEADPoolBatchError(message string, result int32, rawOps []trustIXAEADIOCPoolOp) error {
+	return newAEADPoolBatchErrorWithCause(message, result, nil, rawOps)
+}
+
+func newAEADPoolBatchErrorWithCause(message string, result int32, cause error, rawOps []trustIXAEADIOCPoolOp) error {
 	results := make([]int32, len(rawOps))
 	for i := range rawOps {
 		results[i] = rawOps[i].Result
 	}
+	resultErr := fmt.Errorf("%s %d", message, result)
+	if cause != nil {
+		resultErr = fmt.Errorf("%s %d: %w", message, result, cause)
+	}
 	return &AEADPoolBatchError{
 		OpResults: results,
-		Err:       fmt.Errorf("%s %d", message, result),
+		Err:       resultErr,
 	}
 }
 
@@ -1538,7 +1596,7 @@ func AEADDirectSetKey(path string, slot uint32, key []byte, open bool) error {
 	return err
 }
 
-func AEADDirectSetKeyAlloc(path string, slot uint32, key []byte, open bool) (allocatedSlot uint32, resultErr error) {
+func AEADDirectSetKeyAlloc(path string, slot uint32, key []byte, open bool) (uint32, error) {
 	if err := validateAEADKey(key); err != nil {
 		return 0, err
 	}
@@ -1548,14 +1606,13 @@ func AEADDirectSetKeyAlloc(path string, slot uint32, key []byte, open bool) (all
 	if path == "" {
 		path = TrustIXAEADDevicePath
 	}
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	file, err := openAEADDirectOwnerFile(path)
 	if err != nil {
 		return 0, err
 	}
-	defer closeIOCTLFile(file, path, &resultErr)
-	var flags uint32
+	flags := trustIXAEADDirectFlagOwner
 	if open {
-		flags = trustIXAEADDirectFlagOpen
+		flags |= trustIXAEADDirectFlagOpen
 	}
 	req := trustIXAEADIOCDirectKey{
 		Version: trustIXAEADIOCVersion,
@@ -1564,11 +1621,19 @@ func AEADDirectSetKeyAlloc(path string, slot uint32, key []byte, open bool) (all
 		KeyLen:  uint32(len(key)),
 		KeyPtr:  sliceDataPtr(key),
 	}
-	if err := ioctl(uintptr(file.Fd()), trustIXAEADIOCDirectSetKeyCmd(), uintptr(unsafe.Pointer(&req))); err != nil {
-		runtime.KeepAlive(key)
-		return 0, err
+	err = ioctl(uintptr(file.Fd()), trustIXAEADIOCDirectSetKeyCmd(), uintptr(unsafe.Pointer(&req)))
+	if errors.Is(err, syscall.EINVAL) {
+		// ABI v4 and older do not understand the owner flag. Keep the old
+		// behavior during a mixed userspace/module upgrade.
+		req.Flags &^= trustIXAEADDirectFlagOwner
+		req.Slot = slot
+		req.Result = 0
+		err = ioctl(uintptr(file.Fd()), trustIXAEADIOCDirectSetKeyCmd(), uintptr(unsafe.Pointer(&req)))
 	}
 	runtime.KeepAlive(key)
+	if err != nil {
+		return 0, err
+	}
 	if req.Result != 0 {
 		return 0, fmt.Errorf("trustix AEAD direct set key returned %d", req.Result)
 	}
@@ -1624,13 +1689,17 @@ func OpenAEADDevice(path string) (*AEADDevice, error) {
 }
 
 func (device *AEADDevice) Close() error {
-	if device == nil || device.file == nil {
+	if device == nil {
 		return nil
 	}
 	device.mu.Lock()
 	defer device.mu.Unlock()
+	if device.file == nil {
+		return nil
+	}
 	var err error
 	if device.pool != nil {
+		clear(device.pool)
 		err = unix.Munmap(device.pool)
 		device.pool = nil
 	}
@@ -1698,6 +1767,7 @@ func (device *AEADDevice) MmapPool(size int) ([]byte, error) {
 		return nil, fmt.Errorf("trustix AEAD device is closed")
 	}
 	if device.pool != nil {
+		clear(device.pool)
 		if err := unix.Munmap(device.pool); err != nil {
 			return nil, err
 		}
@@ -1730,6 +1800,7 @@ func (device *AEADDevice) MunmapPool() error {
 	if device.pool == nil {
 		return nil
 	}
+	clear(device.pool)
 	err := unix.Munmap(device.pool)
 	device.pool = nil
 	return err
@@ -1993,6 +2064,9 @@ func (device *AEADDevice) kernelPreparedPoolBatch(flags uint32, start int, opCou
 		return rawErr
 	}
 	if err := ioctl(uintptr(device.file.Fd()), trustIXAEADIOCPoolPreparedBatchCmd(), uintptr(unsafe.Pointer(&req))); err != nil {
+		if req.Result < 0 {
+			return newAEADPoolBatchErrorWithCause("trustix AEAD prepared pool batch returned", req.Result, err, rawOps)
+		}
 		return err
 	}
 	if req.Result < 0 {
@@ -2016,6 +2090,9 @@ func (device *AEADDevice) poolBatchLocked(flags uint32, opsOffset int, opCount i
 		OpsOff:  uint64(opsOffset),
 	}
 	if err := ioctl(uintptr(device.file.Fd()), trustIXAEADIOCPoolBatchCmd(), uintptr(unsafe.Pointer(&req))); err != nil {
+		if req.Result < 0 {
+			return newAEADPoolBatchErrorWithCause("trustix AEAD pool batch returned", req.Result, err, rawOps)
+		}
 		return err
 	}
 	if req.Result < 0 {
@@ -2046,6 +2123,9 @@ func (device *AEADDevice) poolPrepareRunBatchRawLocked(flags uint32, opsOffset i
 		OpsOff:  uint64(opsOffset),
 	}
 	if err := ioctl(uintptr(device.file.Fd()), trustIXAEADIOCPoolPrepareRunBatchCmd(), uintptr(unsafe.Pointer(&req))); err != nil {
+		if req.Result < 0 {
+			return newAEADPoolBatchErrorWithCause("trustix AEAD pool prepare-run batch returned", req.Result, err, rawOps)
+		}
 		return err
 	}
 	if req.Result < 0 {

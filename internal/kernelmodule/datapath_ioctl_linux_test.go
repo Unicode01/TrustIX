@@ -26,9 +26,15 @@ func TestDatapathSelftestIOCABIMatchesKernelLayout(t *testing.T) {
 	}
 }
 
-func TestDatapathSelftestAllIncludesInnerTCPOptimizations(t *testing.T) {
-	if got, want := TrustIXDatapathSelftestAll, uint64(4095); got != want {
+func TestDatapathSelftestAllIncludesSecureTIXTCPAndInnerTCPOptimizations(t *testing.T) {
+	if got, want := TrustIXDatapathSelftestAll, uint64(16383); got != want {
 		t.Fatalf("datapath selftest mask = %d, want %d", got, want)
+	}
+	if TrustIXDatapathSelftestAll&TrustIXDatapathSelftestSecureTIXTCP == 0 {
+		t.Fatal("datapath selftest mask is missing secure tix_tcp")
+	}
+	if TrustIXDatapathSelftestAll&TrustIXDatapathSelftestSecureInnerTCPChecksumPartial == 0 {
+		t.Fatal("datapath selftest mask is missing secure inner TCP checksum partial")
 	}
 	if TrustIXDatapathSelftestAll&TrustIXDatapathSelftestInnerTCPChecksumPartial == 0 {
 		t.Fatal("datapath selftest mask is missing inner TCP checksum partial")

@@ -24,7 +24,10 @@ kfunc_fastpath_wipe="${TRUSTIX_KERNEL_FASTPATH_WIPE:-}"
 load_only="${TRUSTIX_KERNEL_LOAD_ONLY:-0}"
 loaded_by_script=0
 loaded_variant=""
-roundtrip_tests="${TRUSTIX_KERNEL_ROUNDTRIP_TESTS:-TestKernelCryptoProviderObjectSyntheticContextLifecycle|TestKernelCryptoProviderFrameSealOpenAndReplay|TestKernelCryptoProviderFrameSealOpenAES128|TestKernelCryptoProviderFrameSealOpenVariableSizes|TestTIXTCPKernelCryptoXDPOpensFrameAndRejectsReplay|TestTIXTCPKernelCryptoXDPDirectOpenObjectOpensFrame}"
+provider_roundtrip_tests="TestKernelCryptoProviderObjectSyntheticContextLifecycle|TestKernelCryptoProviderFrameSealOpenAndReplay|TestKernelCryptoProviderFrameSealOpenAES128|TestKernelCryptoProviderFrameSealOpenVariableSizes|TestTIXTCPKernelCryptoXDPOpensFrameAndRejectsReplay"
+direct_roundtrip_tests="TestKernelUDPTCSecureDirectObjectsLoadWithKernelDirectKfunc|TestTIXTCPKernelCryptoXDPDirectOpenObjectOpensFrame"
+roundtrip_tests="${TRUSTIX_KERNEL_ROUNDTRIP_TESTS:-}"
+roundtrip_mode=""
 
 if [[ -z "$test_bin" && -x "${repo_root}/bin/ebpf.test" ]]; then
   test_bin="${repo_root}/bin/ebpf.test"
@@ -90,6 +93,18 @@ simd_kfunc_fastpath_requested_value() {
   fi
 }
 
+select_roundtrip_tests() {
+  if [[ -n "$roundtrip_tests" ]]; then
+    roundtrip_mode="custom"
+  elif simd_kfunc_fastpath_requested; then
+    roundtrip_mode="direct-slot"
+    roundtrip_tests="$direct_roundtrip_tests"
+  else
+    roundtrip_mode="context-provider"
+    roundtrip_tests="$provider_roundtrip_tests"
+  fi
+}
+
 read_module_param() {
   local name="$1"
   local path="/sys/module/${module_name}/parameters/${name}"
@@ -142,7 +157,7 @@ roundtrip_skip_is_unsupported_kernel() {
   if printf '%s\n' "$output" | grep -qi 'requires root'; then
     return 1
   fi
-  printf '%s\n' "$output" | grep -qiE 'kernel crypto (provider|direct provider) is not ready|kernel crypto verifier selftest is not available|kernel BPF crypto does not expose AEAD-GCM|kernel BPF crypto verifier selftest failed'
+  printf '%s\n' "$output" | grep -qiE 'kernel crypto ((TC )?direct(-slot)? )?provider is not ready|kernel crypto verifier selftest is not available|kernel BPF crypto does not expose AEAD-GCM|kernel BPF crypto verifier selftest failed'
 }
 
 make_module_source() {
@@ -286,7 +301,7 @@ run_roundtrip_test() {
   local output
   if [[ -n "$test_bin" ]]; then
     [[ -x "$test_bin" ]] || die "TRUSTIX_KERNEL_TEST_BIN is not executable: $test_bin"
-    log "running prebuilt eBPF provider roundtrip/frame/RX-open tests"
+    log "running prebuilt ${roundtrip_mode} eBPF crypto tests"
     output="$("$test_bin" -test.run "$roundtrip_tests" -test.v 2>&1)" || {
       printf '%s\n' "$output"
       return 1
@@ -297,12 +312,12 @@ run_roundtrip_test() {
         log "BPF crypto kfunc provider is unsupported on this kernel; required roundtrip tests were skipped"
         return 2
       fi
-      die "one or more required kernel AEAD tests were skipped"
+      die "one or more required ${roundtrip_mode} kernel AEAD tests were skipped"
     fi
     return 0
   fi
   need_cmd go
-  log "running eBPF provider roundtrip/frame/RX-open tests through go test"
+  log "running ${roundtrip_mode} eBPF crypto tests through go test"
   output="$(cd "$repo_root" && go test -count=1 ./internal/dataplane/ebpf -run "$roundtrip_tests" -v 2>&1)" || {
     printf '%s\n' "$output"
     return 1
@@ -313,7 +328,7 @@ run_roundtrip_test() {
       log "BPF crypto kfunc provider is unsupported on this kernel; required roundtrip tests were skipped"
       return 2
     fi
-    die "one or more required kernel AEAD tests were skipped"
+    die "one or more required ${roundtrip_mode} kernel AEAD tests were skipped"
   fi
 }
 
@@ -395,6 +410,7 @@ run_vaes_device_test() {
 
 main() {
   require_linux_root
+  select_roundtrip_tests
   build_and_load_module
   if truthy "$load_only"; then
     log "ok: ${module_name} loaded in load-only mode"

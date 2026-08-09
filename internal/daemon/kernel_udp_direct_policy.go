@@ -78,6 +78,11 @@ func tixTCPSecureKernelCryptoDirectForDesired(desired config.Desired) bool {
 	return placement != string(dataplane.CryptoPlacementUserspace)
 }
 
+func kernelDatapathSecureTIXTCPForDesired(desired config.Desired) bool {
+	return tixTCPSecureKernelCryptoDirectForDesired(desired) &&
+		!tixTCPRouteGSOExplicitlyEnabledByEnv()
+}
+
 func kernelUDPTXDirectOnlyReasonForDesired(desired config.Desired) string {
 	if !kernelUDPTXDirectOnlyForDesired(desired) {
 		return ""
@@ -371,7 +376,8 @@ func tixTCPSecureRouteGSOAsyncForDesired(desired config.Desired) bool {
 	if tixTCPRouteGSOExplicitlyDisabledByEnv() {
 		return false
 	}
-	return tixTCPSecureKernelCryptoDirectForDesired(desired)
+	return tixTCPSecureKernelCryptoDirectForDesired(desired) &&
+		tixTCPRouteGSOExplicitlyEnabledByEnv()
 }
 
 func kernelUDPSecureRouteGSOForDesired(desired config.Desired) bool {

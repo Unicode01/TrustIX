@@ -553,6 +553,78 @@ func TestTIXTCPXDPAllowsKernelUDPSourcePort(t *testing.T) {
 	assertXDPStat(t, object, 1, 0)
 }
 
+func TestTIXTCPXDPFullKernelPortPassesTIXTUnchanged(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("full-kernel tix_tcp XDP pass-through requires root")
+	}
+	t.Setenv("TRUSTIX_TIX_TCP_HOT_STATS", "1")
+	const destinationPort = 9444
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{})
+	if err != nil {
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
+	}
+	defer object.Close()
+	if _, err := configureTIXTCPBPFConfigValueFor(object.configMap, 1, false, false, false); err != nil {
+		t.Fatalf("configure tix_tcp XDP object: %v", err)
+	}
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), tixTCPPortFlagFullKernelTIXTCPPass, cebpf.UpdateAny); err != nil {
+		t.Fatalf("mark full-kernel tix_tcp pass-through port: %v", err)
+	}
+
+	packet := mustTIXTCPXDPEthernetFrame(t, tixtcp.Frame{
+		Flags:    tixtcp.FlagEncrypted,
+		FlowID:   992,
+		Epoch:    9,
+		Sequence: 3,
+		Payload:  make([]byte, kernelCryptoSecureHeaderLen+kernelCryptoFrameTagLen),
+	}, destinationPort)
+	run := &cebpf.RunOptions{Data: append([]byte(nil), packet...), DataOut: make([]byte, len(packet))}
+	ret, err := object.program.Run(run)
+	if err != nil {
+		t.Fatalf("run full-kernel tix_tcp XDP pass-through: %v", err)
+	}
+	if ret != 2 {
+		t.Fatalf("full-kernel tix_tcp XDP return = %d, want XDP_PASS", ret)
+	}
+	if !bytes.Equal(run.DataOut, packet) {
+		t.Fatal("full-kernel tix_tcp XDP pass-through modified packet")
+	}
+	assertXDPStat(t, object, 0, 0)
+	assertXDPStat(t, object, 1, 0)
+	assertXDPStat(t, object, 2, 1)
+}
+
+func TestTIXTCPXDPFullKernelTIXTCPFlagDoesNotAuthorizeUDP(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("full-kernel tix_tcp UDP isolation requires root")
+	}
+	const destinationPort = 9445
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_xdp_bpfel.o", tixTCPXDPReplacements{})
+	if err != nil {
+		t.Fatalf("load tix_tcp XDP object: %-v", err)
+	}
+	defer object.Close()
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), tixTCPPortFlagFullKernelTIXTCPPass, cebpf.UpdateAny); err != nil {
+		t.Fatalf("mark full-kernel tix_tcp pass-through port: %v", err)
+	}
+
+	packet := mustKernelUDPXDPEthernetFrame(t, kerneludp.Frame{
+		FlowID:   993,
+		Sequence: 4,
+		Payload:  []byte("must not enter UDP XDP ownership"),
+	}, destinationPort)
+	run := &cebpf.RunOptions{Data: append([]byte(nil), packet...), DataOut: make([]byte, len(packet))}
+	ret, err := object.program.Run(run)
+	if err != nil {
+		t.Fatalf("run UDP isolation check: %v", err)
+	}
+	if ret != 1 {
+		t.Fatalf("UDP with only full-kernel tix_tcp flag returned %d, want XDP_DROP", ret)
+	}
+	assertXDPStat(t, object, 0, 0)
+	assertXDPStat(t, object, 1, 1)
+}
+
 func TestTIXTCPXDPPassesAllowedTCPControlPacket(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("tix_tcp XDP program run requires root")
@@ -635,6 +707,54 @@ func TestTIXTCPKernelCryptoXDPPassesAllowedTCPControlPacket(t *testing.T) {
 	}
 	assertXDPStat(t, object, 0, 0)
 	assertXDPStat(t, object, 1, 0)
+}
+
+func TestTIXTCPKernelCryptoXDPFullKernelPortBypassesOpen(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("full-kernel tix_tcp kernel-crypto XDP bypass requires root")
+	}
+	provider, err := loadKernelCryptoProviderObject()
+	if err != nil {
+		t.Skipf("kernel crypto provider object is unavailable: %-v", err)
+	}
+	defer provider.Close()
+	const destinationPort = 9446
+	object, err := loadTIXTCPXDPObjectFile(1, "bpf/tix_tcp_kernel_crypto_xdp_bpfel.o", tixTCPXDPReplacements{kernelCryptoProvider: provider})
+	if err != nil {
+		t.Fatalf("load tix_tcp kernel crypto XDP object: %-v", err)
+	}
+	defer object.Close()
+	key := uint32(0)
+	config := tixTCPConfigKernelUDPXDPOpen | tixTCPConfigHotPathStats
+	if err := object.configMap.Update(key, config, cebpf.UpdateAny); err != nil {
+		t.Fatalf("enable kernel-crypto XDP open: %v", err)
+	}
+	if err := object.portMap.Update(tixTCPPortMapKey(destinationPort), tixTCPPortFlagFullKernelTIXTCPPass, cebpf.UpdateAny); err != nil {
+		t.Fatalf("mark full-kernel tix_tcp pass-through port: %v", err)
+	}
+
+	packet := mustTIXTCPXDPEthernetFrame(t, tixtcp.Frame{
+		Flags:    tixtcp.FlagEncrypted,
+		FlowID:   994,
+		Epoch:    10,
+		Sequence: 5,
+		Payload:  make([]byte, kernelCryptoSecureHeaderLen+kernelCryptoFrameTagLen),
+	}, destinationPort)
+	run := &cebpf.RunOptions{Data: append([]byte(nil), packet...), DataOut: make([]byte, len(packet))}
+	ret, err := object.program.Run(run)
+	if err != nil {
+		t.Fatalf("run full-kernel tix_tcp kernel-crypto XDP bypass: %v", err)
+	}
+	if ret != 2 {
+		t.Fatalf("full-kernel tix_tcp kernel-crypto XDP return = %d, want XDP_PASS", ret)
+	}
+	if !bytes.Equal(run.DataOut, packet) {
+		t.Fatal("full-kernel tix_tcp kernel-crypto XDP bypass modified packet")
+	}
+	assertXDPStat(t, object, 0, 0)
+	assertXDPStat(t, object, 1, 0)
+	assertXDPStat(t, object, 2, 1)
+	assertXDPStat(t, object, 4, 0)
 }
 
 func TestTIXTCPXDPDirectsPlainKernelUDPToLAN(t *testing.T) {

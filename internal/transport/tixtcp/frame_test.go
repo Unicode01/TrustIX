@@ -219,8 +219,7 @@ func TestFrameRejectsInvalidInnerTCPChecksumPartialMetadata(t *testing.T) {
 	inner := testInnerTCPChecksumPartialPacket([]byte("metadata"))
 	tests := []Frame{
 		{Flags: FlagInnerTCPChecksumPartial, Payload: inner},
-		{Flags: FlagInnerIPv4 | FlagInnerTCPChecksumPartial | FlagEncrypted, Payload: inner},
-		{Flags: FlagInnerIPv4 | FlagInnerTCPChecksumPartial | FlagKernelOpened, Payload: inner},
+		{Flags: FlagInnerIPv4 | FlagInnerTCPChecksumPartial | FlagEncrypted | FlagKernelOpened, Payload: inner},
 		{Flags: FlagInnerIPv4 | FlagInnerTCPChecksumPartial | FlagCryptoFragment, FragmentCount: 2, Payload: inner},
 		{Flags: FlagInnerIPv4 | FlagInnerTCPChecksumPartial, FragmentCount: 2, Payload: inner},
 		{Flags: 1 << 7, Payload: inner},
@@ -229,6 +228,63 @@ func TestFrameRejectsInvalidInnerTCPChecksumPartialMetadata(t *testing.T) {
 		if _, err := frame.MarshalBinary(); err == nil {
 			t.Fatalf("MarshalBinary accepted invalid frame %#v", frame)
 		}
+	}
+}
+
+func TestEncryptedInnerTCPChecksumPartialDefersPayloadValidation(t *testing.T) {
+	want := []byte("opaque-ciphertext")
+	wire, err := (Frame{
+		Flags:   FlagEncrypted | FlagInnerIPv4 | FlagInnerTCPChecksumPartial,
+		Payload: want,
+	}).MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal encrypted checksum-partial frame: %v", err)
+	}
+	got, err := ParseFrame(wire)
+	if err != nil {
+		t.Fatalf("parse encrypted checksum-partial frame: %v", err)
+	}
+	if !bytes.Equal(got.Payload, want) {
+		t.Fatalf("encrypted payload = %x, want %x", got.Payload, want)
+	}
+}
+
+func TestKernelOpenedInnerTCPChecksumPartialValidatesSeed(t *testing.T) {
+	inner := testInnerTCPChecksumPartialPacket([]byte("kernel-opened"))
+	wire, err := (Frame{
+		Flags:   FlagKernelOpened | FlagInnerIPv4 | FlagInnerTCPChecksumPartial,
+		Payload: inner,
+	}).MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal kernel-opened checksum-partial frame: %v", err)
+	}
+	if _, err := ParseFrameNoCopy(wire); err != nil {
+		t.Fatalf("parse kernel-opened checksum-partial frame: %v", err)
+	}
+	wire[HeaderLen+ipv4HeaderLen+16] ^= 1
+	if _, err := ParseFrameNoCopy(wire); !errors.Is(err, ErrChecksum) {
+		t.Fatalf("ParseFrameNoCopy error = %v, want ErrChecksum", err)
+	}
+}
+
+func TestValidateInnerTCPChecksumRejectsPartialSeedAndCorruption(t *testing.T) {
+	partial := testInnerTCPChecksumPartialPacket([]byte("full-checksum"))
+	if err := ValidateInnerTCPChecksum(partial); !errors.Is(err, ErrChecksum) {
+		t.Fatalf("partial seed full-checksum validation error = %v, want ErrChecksum", err)
+	}
+	full := append([]byte(nil), partial...)
+	if err := CompleteInnerTCPChecksumPartial(full); err != nil {
+		t.Fatalf("complete checksum partial: %v", err)
+	}
+	if err := ValidateInnerTCPChecksum(full); err != nil {
+		t.Fatalf("validate complete checksum: %v", err)
+	}
+	if err := ValidateInnerTCPChecksumPartial(full); !errors.Is(err, ErrChecksum) {
+		t.Fatalf("complete checksum partial validation error = %v, want ErrChecksum", err)
+	}
+	full[len(full)-1] ^= 1
+	if err := ValidateInnerTCPChecksum(full); !errors.Is(err, ErrChecksum) {
+		t.Fatalf("corrupt full-checksum validation error = %v, want ErrChecksum", err)
 	}
 }
 

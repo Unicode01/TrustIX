@@ -51,52 +51,58 @@ const (
 )
 
 const (
-	tixTCPStatFragmentedPacketsSent             = "tix_tcp_fragmented_packets_sent"
-	tixTCPStatFragmentsSent                     = "tix_tcp_fragments_sent"
-	tixTCPStatFragmentsReceived                 = "tix_tcp_fragments_received"
-	tixTCPStatFragmentedPacketsReceived         = "tix_tcp_fragmented_packets_received"
-	tixTCPStatFragmentsReassembled              = "tix_tcp_fragments_reassembled"
-	tixTCPStatFragmentAssembliesCurrent         = "tix_tcp_fragment_assemblies_current"
-	tixTCPStatFragmentDuplicates                = "tix_tcp_fragment_duplicates"
-	tixTCPStatFragmentExpiredAssemblies         = "tix_tcp_fragment_expired_assemblies"
-	tixTCPStatFragmentExpiredFragments          = "tix_tcp_fragment_expired_fragments"
-	tixTCPStatFragmentMismatches                = "tix_tcp_fragment_mismatches"
-	tixTCPStatFragmentRejects                   = "tix_tcp_fragment_rejects"
-	tixTCPStatFragmentPayloadSize               = "tix_tcp_fragment_payload_size"
-	tixTCPStatTIXBExpandedPackets               = "tix_tcp_tixb_expanded_packets"
-	tixTCPStatTIXBExpandedItems                 = "tix_tcp_tixb_expanded_items"
-	tixTCPStatFullPlaintextKernel               = "tix_tcp_full_plaintext_kernel_datapath"
-	tixTCPStatInnerTCPChecksumPartialLocal      = "tix_tcp_inner_tcp_checksum_partial_local"
-	tixTCPStatInnerTCPChecksumPartialPeer       = "tix_tcp_inner_tcp_checksum_partial_peer"
-	tixTCPStatInnerTCPChecksumPartialNegotiated = "tix_tcp_inner_tcp_checksum_partial_negotiated"
-	tixTCPStatInnerGSOLocal                     = "tix_tcp_inner_gso_local"
-	tixTCPStatInnerGSOPeer                      = "tix_tcp_inner_gso_peer"
-	tixTCPStatInnerGSONegotiated                = "tix_tcp_inner_gso_negotiated"
-	tixTCPStatPortShardingLocal                 = "tix_tcp_port_sharding_local"
-	tixTCPStatPortShardingPeer                  = "tix_tcp_port_sharding_peer"
-	tixTCPStatPortShardingNegotiated            = "tix_tcp_port_sharding_negotiated"
+	tixTCPStatFragmentedPacketsSent                   = "tix_tcp_fragmented_packets_sent"
+	tixTCPStatFragmentsSent                           = "tix_tcp_fragments_sent"
+	tixTCPStatFragmentsReceived                       = "tix_tcp_fragments_received"
+	tixTCPStatFragmentedPacketsReceived               = "tix_tcp_fragmented_packets_received"
+	tixTCPStatFragmentsReassembled                    = "tix_tcp_fragments_reassembled"
+	tixTCPStatFragmentAssembliesCurrent               = "tix_tcp_fragment_assemblies_current"
+	tixTCPStatFragmentDuplicates                      = "tix_tcp_fragment_duplicates"
+	tixTCPStatFragmentExpiredAssemblies               = "tix_tcp_fragment_expired_assemblies"
+	tixTCPStatFragmentExpiredFragments                = "tix_tcp_fragment_expired_fragments"
+	tixTCPStatFragmentMismatches                      = "tix_tcp_fragment_mismatches"
+	tixTCPStatFragmentRejects                         = "tix_tcp_fragment_rejects"
+	tixTCPStatFragmentPayloadSize                     = "tix_tcp_fragment_payload_size"
+	tixTCPStatTIXBExpandedPackets                     = "tix_tcp_tixb_expanded_packets"
+	tixTCPStatTIXBExpandedItems                       = "tix_tcp_tixb_expanded_items"
+	tixTCPStatFullPlaintextKernel                     = "tix_tcp_full_plaintext_kernel_datapath"
+	tixTCPStatFullSecureKernel                        = "tix_tcp_full_secure_kernel_datapath"
+	tixTCPStatInnerTCPChecksumPartialLocal            = "tix_tcp_inner_tcp_checksum_partial_local"
+	tixTCPStatInnerTCPChecksumPartialPeer             = "tix_tcp_inner_tcp_checksum_partial_peer"
+	tixTCPStatInnerTCPChecksumPartialNegotiated       = "tix_tcp_inner_tcp_checksum_partial_negotiated"
+	tixTCPStatSecureInnerTCPChecksumPartialLocal      = "tix_tcp_secure_inner_tcp_checksum_partial_local"
+	tixTCPStatSecureInnerTCPChecksumPartialPeer       = "tix_tcp_secure_inner_tcp_checksum_partial_peer"
+	tixTCPStatSecureInnerTCPChecksumPartialNegotiated = "tix_tcp_secure_inner_tcp_checksum_partial_negotiated"
+	tixTCPStatInnerGSOLocal                           = "tix_tcp_inner_gso_local"
+	tixTCPStatInnerGSOPeer                            = "tix_tcp_inner_gso_peer"
+	tixTCPStatInnerGSONegotiated                      = "tix_tcp_inner_gso_negotiated"
+	tixTCPStatPortShardingLocal                       = "tix_tcp_port_sharding_local"
+	tixTCPStatPortShardingPeer                        = "tix_tcp_port_sharding_peer"
+	tixTCPStatPortShardingNegotiated                  = "tix_tcp_port_sharding_negotiated"
 )
 
 const (
 	tixTCPProviderFullPlaintextKernel = "kernel_datapath_full_plaintext"
+	tixTCPProviderFullSecureKernel    = "kernel_datapath_full_secure"
 )
 
 const (
-	tixTCPCompatTCPPrimerDefault            = true
-	tixTCPCompatTCPPrimerTimeout            = 3 * time.Second
-	tixTCPCompatHandshakePriority           = 200 * time.Millisecond
-	tixTCPCompatPriorityBuffer              = 8
-	tixTCPCompatControlVersion              = 1
-	tixTCPCompatControlInitType             = 1
-	tixTCPCompatControlInitLen              = 16
-	tixTCPCompatControlInitOldLen           = 14
-	tixTCPCompatControlCapabilitiesType     = 4
-	tixTCPCompatControlCapabilitiesLen      = 14
-	tixTCPCompatCapabilityRefreshInterval   = 2 * time.Second
-	tixTCPCapabilityInnerTCPChecksumPartial = uint64(1 << 0)
-	tixTCPCapabilityInnerGSO                = uint64(1 << 1)
-	tixTCPCapabilityPortSharding            = uint64(1 << 2)
-	tixTCPKnownCapabilities                 = tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding
+	tixTCPCompatTCPPrimerDefault                  = true
+	tixTCPCompatTCPPrimerTimeout                  = 3 * time.Second
+	tixTCPCompatHandshakePriority                 = 200 * time.Millisecond
+	tixTCPCompatPriorityBuffer                    = 8
+	tixTCPCompatControlVersion                    = 1
+	tixTCPCompatControlInitType                   = 1
+	tixTCPCompatControlInitLen                    = 16
+	tixTCPCompatControlInitOldLen                 = 14
+	tixTCPCompatControlCapabilitiesType           = 4
+	tixTCPCompatControlCapabilitiesLen            = 14
+	tixTCPCompatCapabilityRefreshInterval         = 2 * time.Second
+	tixTCPCapabilityInnerTCPChecksumPartial       = uint64(1 << 0)
+	tixTCPCapabilityInnerGSO                      = uint64(1 << 1)
+	tixTCPCapabilityPortSharding                  = uint64(1 << 2)
+	tixTCPCapabilitySecureInnerTCPChecksumPartial = uint64(1 << 3)
+	tixTCPKnownCapabilities                       = tixTCPCapabilityInnerTCPChecksumPartial | tixTCPCapabilityInnerGSO | tixTCPCapabilityPortSharding | tixTCPCapabilitySecureInnerTCPChecksumPartial
 )
 
 var errTIXTCPCapabilityAdvertisement = errors.New("tix_tcp capability advertisement failed")
@@ -289,28 +295,29 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			return nil, err
 		}
 		fullPlaintextKernel := tixTCPFullPlaintextKernelDatapathStatus(status)
+		fullSecureKernel := tixTCPFullSecureKernelDatapathStatus(status)
+		fullKernel := fullPlaintextKernel || fullSecureKernel
 		flowID, err := randomFlowID()
 		if err != nil {
 			return nil, err
 		}
 		primerConn, err := dialTIXTCPCompatPrimer(ctx, endpoint)
 		if err != nil {
-			if tixTCPCompatPrimerRequired() || fullPlaintextKernel {
+			if tixTCPCompatPrimerRequired() || fullKernel {
 				return nil, err
 			}
 			primerConn = nil
 		}
-		if primerConn == nil && fullPlaintextKernel {
-			return nil, fmt.Errorf("tix_tcp full plaintext kernel datapath requires compat TCP control primer for endpoint %q", endpoint.Name)
+		if primerConn == nil && fullKernel {
+			return nil, fmt.Errorf("tix_tcp full kernel datapath requires compat TCP control primer for endpoint %q", endpoint.Name)
 		}
-		flow := dataplane.TIXTCPFlow{
-			ID:              flowID,
-			Peer:            peer.ID,
-			Endpoint:        endpoint.Name,
-			LocalAddress:    strings.TrimSpace(endpoint.LocalBind.SourceIP),
-			RemoteAddress:   endpoint.Address,
-			CryptoPlacement: placement,
-			CreatedAt:       time.Now().UTC(),
+		flow := tixTCPCompatOutboundFlow(flowID, peer.ID, primerConn, endpoint, placement)
+		if fullKernel && !tixTCPCompatFlowHasCompleteTuple(flow) {
+			closeErr := tixTCPCleanupError("close compat primer", primerConn.Close())
+			return nil, errors.Join(
+				fmt.Errorf("tix_tcp full kernel datapath could not derive an IPv4 data tuple for endpoint %q", endpoint.Name),
+				closeErr,
+			)
 		}
 		if err := transportImpl.provider.InstallTIXTCPFlows(ctx, []dataplane.TIXTCPFlow{flow}); err != nil {
 			var closeErr error
@@ -348,9 +355,10 @@ func (transportImpl *Transport) Dial(ctx context.Context, peer transport.Peer, t
 			}
 			return nil, errors.Join(err, closeErr, deleteErr)
 		}
-		session := newSession(transportImpl.provider, subscription, flowID, peer.ID, endpoint.Name, placement, "", endpoint.Address)
+		session := newSession(transportImpl.provider, subscription, flowID, peer.ID, endpoint.Name, placement, flow.LocalAddress, flow.RemoteAddress)
 		session.compatControl = compatControl
 		session.fullPlaintextKernelDatapath = fullPlaintextKernel
+		session.fullSecureKernelDatapath = fullSecureKernel
 		session.localCapabilities.Store(localCapabilities)
 		session.enableCompatPriority()
 		// Dial contexts are commonly canceled after setup; the session receive
@@ -398,6 +406,8 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 		return nil, err
 	}
 	fullPlaintextKernel := tixTCPFullPlaintextKernelDatapathStatus(status)
+	fullSecureKernel := tixTCPFullSecureKernelDatapathStatus(status)
+	fullKernel := fullPlaintextKernel || fullSecureKernel
 	subscription, err := transportImpl.provider.SubscribeTIXTCP(ctx, tixTCPSessionBuffer())
 	if err != nil {
 		return nil, err
@@ -412,6 +422,7 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 		sessions:                    make(map[uint64]*session),
 		placement:                   placement,
 		fullPlaintextKernelDatapath: fullPlaintextKernel,
+		fullSecureKernelDatapath:    fullSecureKernel,
 	}
 	if compatListener, err := listenTIXTCPCompatPrimer(ep.Listen); err != nil {
 		return nil, errors.Join(err, tixTCPCleanupError("close tix_tcp subscription", subscription.Close()))
@@ -419,9 +430,9 @@ func (transportImpl *Transport) Listen(ctx context.Context, ep transport.Endpoin
 		listener.compatListener = compatListener
 		listener.primerFlowRequired = compatListener != nil
 	}
-	if fullPlaintextKernel && listener.compatListener == nil {
+	if fullKernel && listener.compatListener == nil {
 		return nil, errors.Join(
-			fmt.Errorf("tix_tcp full plaintext kernel datapath requires compat TCP control listener for endpoint %q", ep.Name),
+			fmt.Errorf("tix_tcp full kernel datapath requires compat TCP control listener for endpoint %q", ep.Name),
 			tixTCPCleanupError("close tix_tcp subscription", subscription.Close()),
 		)
 	}
@@ -471,6 +482,7 @@ type listener struct {
 	compatListener              net.Listener
 	primerFlowRequired          bool
 	fullPlaintextKernelDatapath bool
+	fullSecureKernelDatapath    bool
 }
 
 func (transportImpl *Transport) requestedCryptoPlacement() dataplane.CryptoPlacement {
@@ -514,13 +526,27 @@ func tixTCPReinjectUnavailableError(status dataplane.TIXTCPStatus) error {
 
 func (transportImpl *Transport) selectCryptoPlacementFromStatus(status dataplane.TIXTCPStatus, encryption string) (dataplane.CryptoPlacement, error) {
 	if tixTCPPlaintextEncryption(transportImpl.effectiveEncryption(encryption)) {
+		if tixTCPFullSecureKernelDatapathStatus(status) {
+			return "", fmt.Errorf("tix_tcp full secure kernel datapath requires secure encryption")
+		}
 		return dataplane.CryptoPlacementUserspace, nil
 	}
-	return selectCryptoPlacement(transportImpl.requestedCryptoPlacement(), status)
+	placement, err := selectCryptoPlacement(transportImpl.requestedCryptoPlacement(), status)
+	if err != nil {
+		return "", err
+	}
+	if tixTCPFullSecureKernelDatapathStatus(status) && placement != dataplane.CryptoPlacementKernel {
+		return "", fmt.Errorf("tix_tcp full secure kernel datapath requires kernel crypto")
+	}
+	return placement, nil
 }
 
 func tixTCPFullPlaintextKernelDatapathStatus(status dataplane.TIXTCPStatus) bool {
 	return strings.EqualFold(strings.TrimSpace(status.Provider), tixTCPProviderFullPlaintextKernel)
+}
+
+func tixTCPFullSecureKernelDatapathStatus(status dataplane.TIXTCPStatus) bool {
+	return strings.EqualFold(strings.TrimSpace(status.Provider), tixTCPProviderFullSecureKernel)
 }
 
 func (transportImpl *Transport) effectiveEncryption(encryption string) string {
@@ -693,6 +719,7 @@ func (listener *listener) acceptCompatPrimers() {
 		sess := newSession(listener.provider, nil, init.flowID, "", listener.endpoint.Name, listener.placement, flow.LocalAddress, flow.RemoteAddress)
 		sess.compatControl = control
 		sess.fullPlaintextKernelDatapath = listener.fullPlaintextKernelDatapath
+		sess.fullSecureKernelDatapath = listener.fullSecureKernelDatapath
 		sess.localCapabilities.Store(listener.currentLocalCapabilities())
 		sess.enableCompatPriority()
 		if err := sess.sendCompatCapabilities(); err != nil {
@@ -732,7 +759,8 @@ func (listener *listener) acceptCompatPrimers() {
 }
 
 func (listener *listener) currentLocalCapabilities() uint64 {
-	if listener == nil || listener.provider == nil || !listener.fullPlaintextKernelDatapath {
+	if listener == nil || listener.provider == nil ||
+		(!listener.fullPlaintextKernelDatapath && !listener.fullSecureKernelDatapath) {
 		return 0
 	}
 	capabilities, err := tixTCPProviderLocalCapabilities(context.Background(), listener.provider)
@@ -947,6 +975,7 @@ type session struct {
 	cryptoSuite                 string
 	cryptoOffloaded             bool
 	fullPlaintextKernelDatapath bool
+	fullSecureKernelDatapath    bool
 	localCapabilities           atomic.Uint64
 	peerCapabilities            atomic.Uint64
 	capabilityRefreshFailed     atomic.Bool
@@ -1120,7 +1149,7 @@ func (session *session) sendCompatCapabilitiesValue(capabilities uint64) error {
 
 func (session *session) refreshLocalCapabilities(ctx context.Context) error {
 	if session == nil || session.provider == nil || session.compatControl == nil ||
-		!session.fullPlaintextKernelDatapath {
+		(!session.fullPlaintextKernelDatapath && !session.fullSecureKernelDatapath) {
 		return nil
 	}
 	capabilities, statusErr := tixTCPProviderLocalCapabilities(ctx, session.provider)
@@ -1144,7 +1173,7 @@ func (session *session) refreshLocalCapabilities(ctx context.Context) error {
 
 func (session *session) monitorLocalCapabilities(ctx context.Context) {
 	if session == nil || session.provider == nil || session.compatControl == nil ||
-		!session.fullPlaintextKernelDatapath {
+		(!session.fullPlaintextKernelDatapath && !session.fullSecureKernelDatapath) {
 		return
 	}
 	ticker := time.NewTicker(tixTCPCompatCapabilityRefreshInterval)
@@ -1288,10 +1317,17 @@ func (session *session) SendPacket(pkt []byte) error {
 		session.packetsSent.Add(1)
 		return nil
 	}
-	if session.fullPlaintextKernelDatapath {
-		return fmt.Errorf("tix_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
+	if session.fullPlaintextKernelDatapath || session.fullSecureKernelDatapath {
+		return fmt.Errorf("tix_tcp %s owns data frames; userspace frame submit is unavailable", session.fullKernelDatapathName())
 	}
 	return session.SendPackets([][]byte{pkt})
+}
+
+func (session *session) fullKernelDatapathName() string {
+	if session != nil && session.fullSecureKernelDatapath {
+		return "full secure kernel datapath"
+	}
+	return "full plaintext kernel datapath"
 }
 
 func (session *session) SendPackets(pkts [][]byte) error {
@@ -1303,13 +1339,13 @@ func (session *session) SendPackets(pkts [][]byte) error {
 		return fmt.Errorf("tix_tcp session is closed")
 	default:
 	}
-	if session.fullPlaintextKernelDatapath {
+	if session.fullPlaintextKernelDatapath || session.fullSecureKernelDatapath {
 		if session.compatControl == nil {
-			return fmt.Errorf("tix_tcp full plaintext kernel datapath requires compat TCP control")
+			return fmt.Errorf("tix_tcp %s requires compat TCP control", session.fullKernelDatapathName())
 		}
 		for _, pkt := range pkts {
 			if !tixTCPCompatControlEligible(pkt) {
-				return fmt.Errorf("tix_tcp full plaintext kernel datapath owns data frames; userspace frame submit is unavailable")
+				return fmt.Errorf("tix_tcp %s owns data frames; userspace frame submit is unavailable", session.fullKernelDatapathName())
 			}
 		}
 		session.sendMu.Lock()
@@ -1944,34 +1980,38 @@ func (session *session) KernelDatapathSessionInfo() (transport.KernelDatapathSes
 	}
 	stats := session.Stats()
 	localPartial, peerPartial, negotiatedPartial := session.innerTCPChecksumPartialCapabilities()
+	localSecurePartial, peerSecurePartial, negotiatedSecurePartial := session.secureInnerTCPChecksumPartialCapabilities()
 	localGSO, peerGSO, negotiatedGSO := session.innerGSOCapabilities()
 	localPortSharding, peerPortSharding, negotiatedPortSharding := session.portShardingCapabilities()
 	info := transport.KernelDatapathSessionInfo{
-		FlowID:                            session.flowID,
-		Protocol:                          transport.ProtocolTIXTCP,
-		Peer:                              session.peer,
-		Endpoint:                          session.endpoint,
-		LocalAddress:                      session.localAddress,
-		RemoteAddress:                     session.remoteAddress,
-		Epoch:                             session.epoch,
-		CryptoSuite:                       stats.CryptoSuite,
-		CryptoPlacement:                   stats.CryptoPlacement,
-		Encrypted:                         stats.Encrypted,
-		SendEncrypted:                     stats.SendEncrypted,
-		ReceiveEncrypted:                  stats.ReceiveEncrypted,
-		NativeBatching:                    stats.NativeBatching,
-		Datagram:                          stats.Datagram,
-		FragmentingDatagram:               stats.FragmentingDatagram,
-		MaxPacketSize:                     stats.MaxPacketSize,
-		InnerTCPChecksumPartialLocal:      localPartial,
-		InnerTCPChecksumPartialPeer:       peerPartial,
-		InnerTCPChecksumPartialNegotiated: negotiatedPartial,
-		InnerGSOLocal:                     localGSO,
-		InnerGSOPeer:                      peerGSO,
-		InnerGSONegotiated:                negotiatedGSO,
-		TIXTCPPortShardingLocal:           localPortSharding,
-		TIXTCPPortShardingPeer:            peerPortSharding,
-		TIXTCPPortShardingNegotiated:      negotiatedPortSharding,
+		FlowID:                                  session.flowID,
+		Protocol:                                transport.ProtocolTIXTCP,
+		Peer:                                    session.peer,
+		Endpoint:                                session.endpoint,
+		LocalAddress:                            session.localAddress,
+		RemoteAddress:                           session.remoteAddress,
+		Epoch:                                   session.epoch,
+		CryptoSuite:                             stats.CryptoSuite,
+		CryptoPlacement:                         stats.CryptoPlacement,
+		Encrypted:                               stats.Encrypted,
+		SendEncrypted:                           stats.SendEncrypted,
+		ReceiveEncrypted:                        stats.ReceiveEncrypted,
+		NativeBatching:                          stats.NativeBatching,
+		Datagram:                                stats.Datagram,
+		FragmentingDatagram:                     stats.FragmentingDatagram,
+		MaxPacketSize:                           stats.MaxPacketSize,
+		InnerTCPChecksumPartialLocal:            localPartial,
+		InnerTCPChecksumPartialPeer:             peerPartial,
+		InnerTCPChecksumPartialNegotiated:       negotiatedPartial,
+		SecureInnerTCPChecksumPartialLocal:      localSecurePartial,
+		SecureInnerTCPChecksumPartialPeer:       peerSecurePartial,
+		SecureInnerTCPChecksumPartialNegotiated: negotiatedSecurePartial,
+		InnerGSOLocal:                           localGSO,
+		InnerGSOPeer:                            peerGSO,
+		InnerGSONegotiated:                      negotiatedGSO,
+		TIXTCPPortShardingLocal:                 localPortSharding,
+		TIXTCPPortShardingPeer:                  peerPortSharding,
+		TIXTCPPortShardingNegotiated:            negotiatedPortSharding,
 	}
 	return info, true
 }
@@ -1982,6 +2022,15 @@ func (session *session) innerTCPChecksumPartialCapabilities() (local, peer, nego
 	}
 	local = session.localCapabilities.Load()&tixTCPCapabilityInnerTCPChecksumPartial != 0
 	peer = session.peerCapabilities.Load()&tixTCPCapabilityInnerTCPChecksumPartial != 0
+	return local, peer, local && peer
+}
+
+func (session *session) secureInnerTCPChecksumPartialCapabilities() (local, peer, negotiated bool) {
+	if session == nil {
+		return false, false, false
+	}
+	local = session.localCapabilities.Load()&tixTCPCapabilitySecureInnerTCPChecksumPartial != 0
+	peer = session.peerCapabilities.Load()&tixTCPCapabilitySecureInnerTCPChecksumPartial != 0
 	return local, peer, local && peer
 }
 
@@ -2068,6 +2117,7 @@ func (session *session) EnableCryptoOffload(spec transport.CryptoOffloadSpec) er
 	session.cryptoOffloaded = true
 	session.configuredFragmentPayload = tixTCPFragmentPayloadSizeForPlacement(session.cryptoPlacement, true)
 	session.fragmentPayloadCached = 0
+	session.notifyKernelDatapathStateChange()
 	return nil
 }
 
@@ -2398,6 +2448,44 @@ func tixTCPCompatDerivedSourcePort(flowID uint64) uint16 {
 	return uint16(40000 + flowID%20000)
 }
 
+func tixTCPCompatOutboundFlow(flowID uint64, peer core.IXID, conn net.Conn, endpoint transport.Endpoint, placement dataplane.CryptoPlacement) dataplane.TIXTCPFlow {
+	flow := dataplane.TIXTCPFlow{
+		ID:              flowID,
+		Peer:            peer,
+		Endpoint:        endpoint.Name,
+		LocalAddress:    strings.TrimSpace(endpoint.LocalBind.SourceIP),
+		RemoteAddress:   endpoint.Address,
+		CryptoPlacement: placement,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if conn == nil {
+		return flow
+	}
+	localIP, _, localOK := tixTCPCompatTCPAddrParts(conn.LocalAddr())
+	remoteIP, remotePort, remoteOK := tixTCPCompatTCPAddrParts(conn.RemoteAddr())
+	if !localOK || !remoteOK {
+		return flow
+	}
+	sourcePort := tixTCPCompatDerivedSourcePort(flowID)
+	flow.LocalAddress = net.JoinHostPort(localIP.String(), strconv.Itoa(int(sourcePort)))
+	flow.RemoteAddress = net.JoinHostPort(remoteIP.String(), strconv.Itoa(int(remotePort)))
+	flow.SourcePort = sourcePort
+	flow.DestinationPort = remotePort
+	return flow
+}
+
+func tixTCPCompatFlowHasCompleteTuple(flow dataplane.TIXTCPFlow) bool {
+	if flow.SourcePort == 0 || flow.DestinationPort == 0 {
+		return false
+	}
+	localIP, localPort, err := resolveTIXTCPCompatHostPort(flow.LocalAddress)
+	if err != nil || !localIP.Is4() || localPort != flow.SourcePort {
+		return false
+	}
+	remoteIP, remotePort, err := resolveTIXTCPCompatHostPort(flow.RemoteAddress)
+	return err == nil && remoteIP.Is4() && remotePort == flow.DestinationPort
+}
+
 func tixTCPCompatInboundFlow(init tixTCPCompatControlInit, conn net.Conn, endpoint transport.Endpoint, placement dataplane.CryptoPlacement) dataplane.TIXTCPFlow {
 	now := time.Now().UTC()
 	flow := dataplane.TIXTCPFlow{
@@ -2478,10 +2566,12 @@ func encodeTIXTCPCompatControlInit(flowID uint64) []byte {
 
 func tixTCPLocalCapabilities(status dataplane.TIXTCPStatus) uint64 {
 	return tixTCPLocalCapabilityBits(dataplane.TIXTCPCapabilities{
-		FullPlaintextKernel:     tixTCPFullPlaintextKernelDatapathStatus(status),
-		InnerTCPChecksumPartial: status.InnerTCPChecksumPartial,
-		InnerGSO:                status.InnerGSO,
-		PortSharding:            status.PortSharding,
+		FullPlaintextKernel:           tixTCPFullPlaintextKernelDatapathStatus(status),
+		FullSecureKernel:              tixTCPFullSecureKernelDatapathStatus(status),
+		InnerTCPChecksumPartial:       status.InnerTCPChecksumPartial,
+		SecureInnerTCPChecksumPartial: status.SecureInnerTCPChecksumPartial,
+		InnerGSO:                      status.InnerGSO,
+		PortSharding:                  status.PortSharding,
 	})
 }
 
@@ -2501,15 +2591,18 @@ func tixTCPProviderLocalCapabilities(ctx context.Context, provider dataplane.TIX
 }
 
 func tixTCPLocalCapabilityBits(capabilities dataplane.TIXTCPCapabilities) uint64 {
-	if !capabilities.FullPlaintextKernel {
+	if !capabilities.FullPlaintextKernel && !capabilities.FullSecureKernel {
 		return 0
 	}
 	var bits uint64
-	if capabilities.InnerTCPChecksumPartial {
+	if capabilities.FullPlaintextKernel && capabilities.InnerTCPChecksumPartial {
 		bits |= tixTCPCapabilityInnerTCPChecksumPartial
 	}
-	if capabilities.InnerGSO && capabilities.InnerTCPChecksumPartial {
+	if capabilities.FullPlaintextKernel && capabilities.InnerGSO && capabilities.InnerTCPChecksumPartial {
 		bits |= tixTCPCapabilityInnerGSO
+	}
+	if capabilities.FullSecureKernel && capabilities.SecureInnerTCPChecksumPartial {
+		bits |= tixTCPCapabilitySecureInnerTCPChecksumPartial
 	}
 	if capabilities.PortSharding {
 		bits |= tixTCPCapabilityPortSharding
@@ -2955,34 +3048,41 @@ func (session *session) Stats() transport.TransportStats {
 
 func (session *session) fragmentStats() map[string]uint64 {
 	localPartial, peerPartial, negotiatedPartial := session.innerTCPChecksumPartialCapabilities()
+	localSecurePartial, peerSecurePartial, negotiatedSecurePartial := session.secureInnerTCPChecksumPartialCapabilities()
 	localGSO, peerGSO, negotiatedGSO := session.innerGSOCapabilities()
 	localPortSharding, peerPortSharding, negotiatedPortSharding := session.portShardingCapabilities()
 	extra := map[string]uint64{
-		tixTCPStatFragmentedPacketsSent:             session.fragmentedPacketsSent.Load(),
-		tixTCPStatFragmentsSent:                     session.fragmentsSent.Load(),
-		tixTCPStatFragmentsReceived:                 session.fragmentsReceived.Load(),
-		tixTCPStatFragmentedPacketsReceived:         session.fragmentedPacketsReceived.Load(),
-		tixTCPStatFragmentsReassembled:              session.fragmentsReassembled.Load(),
-		tixTCPStatFragmentDuplicates:                session.fragmentDuplicates.Load(),
-		tixTCPStatFragmentExpiredAssemblies:         session.fragmentExpiredAssemblies.Load(),
-		tixTCPStatFragmentExpiredFragments:          session.fragmentExpiredFragments.Load(),
-		tixTCPStatFragmentMismatches:                session.fragmentMismatches.Load(),
-		tixTCPStatFragmentRejects:                   session.fragmentRejects.Load(),
-		tixTCPStatFragmentPayloadSize:               uint64(session.fragmentPayloadSize()),
-		tixTCPStatTIXBExpandedPackets:               session.tixbExpandedPackets.Load(),
-		tixTCPStatTIXBExpandedItems:                 session.tixbExpandedItems.Load(),
-		tixTCPStatInnerTCPChecksumPartialLocal:      tixTCPBoolUint64(localPartial),
-		tixTCPStatInnerTCPChecksumPartialPeer:       tixTCPBoolUint64(peerPartial),
-		tixTCPStatInnerTCPChecksumPartialNegotiated: tixTCPBoolUint64(negotiatedPartial),
-		tixTCPStatInnerGSOLocal:                     tixTCPBoolUint64(localGSO),
-		tixTCPStatInnerGSOPeer:                      tixTCPBoolUint64(peerGSO),
-		tixTCPStatInnerGSONegotiated:                tixTCPBoolUint64(negotiatedGSO),
-		tixTCPStatPortShardingLocal:                 tixTCPBoolUint64(localPortSharding),
-		tixTCPStatPortShardingPeer:                  tixTCPBoolUint64(peerPortSharding),
-		tixTCPStatPortShardingNegotiated:            tixTCPBoolUint64(negotiatedPortSharding),
+		tixTCPStatFragmentedPacketsSent:                   session.fragmentedPacketsSent.Load(),
+		tixTCPStatFragmentsSent:                           session.fragmentsSent.Load(),
+		tixTCPStatFragmentsReceived:                       session.fragmentsReceived.Load(),
+		tixTCPStatFragmentedPacketsReceived:               session.fragmentedPacketsReceived.Load(),
+		tixTCPStatFragmentsReassembled:                    session.fragmentsReassembled.Load(),
+		tixTCPStatFragmentDuplicates:                      session.fragmentDuplicates.Load(),
+		tixTCPStatFragmentExpiredAssemblies:               session.fragmentExpiredAssemblies.Load(),
+		tixTCPStatFragmentExpiredFragments:                session.fragmentExpiredFragments.Load(),
+		tixTCPStatFragmentMismatches:                      session.fragmentMismatches.Load(),
+		tixTCPStatFragmentRejects:                         session.fragmentRejects.Load(),
+		tixTCPStatFragmentPayloadSize:                     uint64(session.fragmentPayloadSize()),
+		tixTCPStatTIXBExpandedPackets:                     session.tixbExpandedPackets.Load(),
+		tixTCPStatTIXBExpandedItems:                       session.tixbExpandedItems.Load(),
+		tixTCPStatInnerTCPChecksumPartialLocal:            tixTCPBoolUint64(localPartial),
+		tixTCPStatInnerTCPChecksumPartialPeer:             tixTCPBoolUint64(peerPartial),
+		tixTCPStatInnerTCPChecksumPartialNegotiated:       tixTCPBoolUint64(negotiatedPartial),
+		tixTCPStatSecureInnerTCPChecksumPartialLocal:      tixTCPBoolUint64(localSecurePartial),
+		tixTCPStatSecureInnerTCPChecksumPartialPeer:       tixTCPBoolUint64(peerSecurePartial),
+		tixTCPStatSecureInnerTCPChecksumPartialNegotiated: tixTCPBoolUint64(negotiatedSecurePartial),
+		tixTCPStatInnerGSOLocal:                           tixTCPBoolUint64(localGSO),
+		tixTCPStatInnerGSOPeer:                            tixTCPBoolUint64(peerGSO),
+		tixTCPStatInnerGSONegotiated:                      tixTCPBoolUint64(negotiatedGSO),
+		tixTCPStatPortShardingLocal:                       tixTCPBoolUint64(localPortSharding),
+		tixTCPStatPortShardingPeer:                        tixTCPBoolUint64(peerPortSharding),
+		tixTCPStatPortShardingNegotiated:                  tixTCPBoolUint64(negotiatedPortSharding),
 	}
 	if session.fullPlaintextKernelDatapath {
 		extra[tixTCPStatFullPlaintextKernel] = 1
+	}
+	if session.fullSecureKernelDatapath {
+		extra[tixTCPStatFullSecureKernel] = 1
 	}
 	session.recvMu.Lock()
 	extra[tixTCPStatFragmentAssembliesCurrent] = uint64(len(session.reassembly))

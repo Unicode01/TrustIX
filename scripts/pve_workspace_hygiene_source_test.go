@@ -502,12 +502,14 @@ func TestCrossHostRunnerKernelMixedEndpointDryRunConfig(t *testing.T) {
 			configWant: []string{
 				"capability_profile: performance",
 				"trustix_crypto:\n    mode: required",
+				"trustix_datapath:\n    mode: required",
 				"trustix_datapath_helpers:\n    mode: required",
 			},
 			envWant: []string{
-				"TRUSTIX_TIX_TCP_ROUTE_GSO=1",
+				"TRUSTIX_TIX_TCP_ROUTE_GSO=0",
 				"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_DIRECT=1",
 				"TRUSTIX_KERNEL_UDP_TC_TX_SECURE_ROUTE_GSO=1",
+				"TRUSTIX_KERNEL_CRYPTO_DATAPATH_VAES=1",
 			},
 		},
 	} {

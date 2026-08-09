@@ -35,6 +35,29 @@ func TestEnsureDisabledDoesNotRequireLinuxCapability(t *testing.T) {
 	}
 }
 
+func TestUpdateLifecycleDoesNotReplaceRuntimeStatus(t *testing.T) {
+	manager := NewTrustIXCryptoManager()
+	manager.SetStatusForTest(Status{
+		Name:       "trustix_crypto",
+		Mode:       ModeRequired,
+		Loaded:     true,
+		State:      "loaded_by_trustix",
+		Parameters: "datapath_simd_fastpath=1",
+	})
+
+	manager.UpdateLifecycle(config.KernelModuleConfig{
+		ReloadOnUpgrade: "always",
+		UnloadOnExit:    true,
+	})
+	status := manager.Snapshot()
+	if status.ReloadOnUpgrade != "always" || !status.UnloadOnExit {
+		t.Fatalf("lifecycle status = %#v", status)
+	}
+	if status.Mode != ModeRequired || !status.Loaded || status.State != "loaded_by_trustix" || status.Parameters != "datapath_simd_fastpath=1" {
+		t.Fatalf("lifecycle update replaced runtime status: %#v", status)
+	}
+}
+
 func TestEnsureUnknownModuleNameDoesNotFallBackToCrypto(t *testing.T) {
 	manager := NewManager("trustix_kernel")
 	status, err := manager.Ensure(context.Background(), config.KernelModuleConfig{Mode: "auto", Path: "embedded"})
