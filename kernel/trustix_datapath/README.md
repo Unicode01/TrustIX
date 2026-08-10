@@ -67,12 +67,15 @@ full-kmod traffic pinned to the fenced master's MAC until TTL expiry. The
 that invalidation count for HA and datapath gates.
 The module reports `full_datapath` only when the packet ownership path is
 explicitly enabled and self-tested. The current full-plaintext profile loads
-with `enable_features=7296` (`full_datapath=128`, negotiated inner TCP
-`CHECKSUM_PARTIAL=1024`, inner GSO `2048`, and TIX-TCP port sharding `4096`),
-keeps all datapath selftests passing, and sets `rx_worker_inject=1` and
-`tx_plaintext=1`. Negotiated port sharding maps inner flows onto 16 outer source
-ports with independent sequence domains. Mixed-version sessions retain the
-base outer port, full inner TCP checksums, and the original segmentation path.
+with `enable_features=5248` (`full_datapath=128`, negotiated inner TCP
+`CHECKSUM_PARTIAL=1024`, and TIX-TCP port sharding `4096`), keeps all datapath
+selftests passing, and sets `rx_worker_inject=1` and `tx_plaintext=1`. Plaintext
+GSO uses resilient outer-GSO framing, where every outer segment contains one
+complete independent TIX frame. Negotiated port sharding maps inner flows onto
+16 outer source ports with independent sequence domains. Inner GSO preservation
+(`2048`) is experimental and requires `TRUSTIX_TIX_TCP_INNER_GSO=1` on each
+participating node. Mixed-version sessions retain the base outer port, full
+inner TCP checksums, and the original segmentation path.
 Without those conditions it stays loaded as a control-plane state/hook module
 and marks the requested feature unsafe.
 The module creates one order-4 page pool per possible CPU for reusable
@@ -80,11 +83,23 @@ plaintext TX GSO skb storage. RX coalescing retains the nonlinear page-frag
 builder because linear page-pool storage reduced multi-queue throughput in
 cross-host testing.
 
+Secure TIX-TCP full-kernel RX preallocates one 65,535-byte scratch packet per
+possible CPU. The receive hook copies the complete IPv4 packet from a
+linear/nonlinear/GRO skb with `skb_copy_bits`, opens the encrypted frame batch
+in scratch, compacts it to kernel-opened TIX frames, and materializes
+worker-owned plaintext before releasing the scratch. It never calls
+whole-packet `skb_ensure_writable()` in atomic context. Same-CPU softirq reuse
+is disabled while scratch is active, and module teardown explicitly clears the
+plaintext buffer. The secure production gate requires `secure_rx_errors`,
+`secure_rx_stale`, and every `secure_rx_*_errors` stage counter to remain zero;
+`secure_rx_last_error` and `secure_rx_last_error_stage` retain the most recent
+failure for diagnosis.
+
 Build and inspect:
 
 ```sh
 make -C kernel/trustix_datapath
-sudo insmod kernel/trustix_datapath/trustix_datapath.ko enable_features=7296 rx_worker_inject=1 tx_plaintext=1
+sudo insmod kernel/trustix_datapath/trustix_datapath.ko enable_features=5248 rx_worker_inject=1 tx_plaintext=1
 cat /sys/module/trustix_datapath/parameters/abi_version
 cat /sys/module/trustix_datapath/parameters/features
 cat /sys/module/trustix_datapath/parameters/selftests

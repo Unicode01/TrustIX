@@ -2357,6 +2357,25 @@ func TestCrossHostProductionGateRejectsSecureTIXTCPKernelRXErrors(t *testing.T) 
 	}
 }
 
+func TestCrossHostProductionGateRejectsSecureTIXTCPKernelRXStageErrors(t *testing.T) {
+	requireProductionGateTools(t)
+	dir := t.TempDir()
+	writeSecureTIXTCPKernelProductionGateArtifacts(t, dir, secureTIXTCPKernelArtifactOptions{
+		fullSecureDatapath: true,
+		secureTraffic:      true,
+		secureRXCopyErrors: 1,
+	})
+
+	cmd := productionGateCommand(t, "TRUSTIX_CROSS_HOST_SECURE_TIX_TCP_KERNEL_CASES=secure-tix-tcp-kernel="+filepath.ToSlash(dir))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("production gate unexpectedly accepted secure TIX-TCP kernel RX stage errors:\n%s", output)
+	}
+	if !strings.Contains(string(output), "secure_rx_copy_errors") {
+		t.Fatalf("production gate did not report secure TIX-TCP RX copy errors:\n%s", output)
+	}
+}
+
 func TestCrossHostProductionGateAcceptsRouteGSOArtifacts(t *testing.T) {
 	requireProductionGateTools(t)
 	dir := t.TempDir()
@@ -3151,18 +3170,19 @@ func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		traffic = "128"
 	}
 	return map[string]string{
-		"enable_features":                               "7296",
-		"features":                                      "7296",
-		"safe_features":                                 "7296",
+		"enable_features":                               "5248",
+		"features":                                      "5248",
+		"safe_features":                                 "5248",
 		"session_records":                               "16",
 		"session_wire_records":                          "16",
 		"tx_plaintext_packets":                          traffic,
 		"tx_plaintext_gso_segments":                     traffic,
-		"tx_plaintext_outer_gso_segments":               "0",
+		"tx_plaintext_outer_gso_packets":                traffic,
+		"tx_plaintext_outer_gso_segments":               traffic,
 		"tx_plaintext_inner_tcp_checksum_partial":       traffic,
-		"tx_plaintext_inner_gso_attempts":               traffic,
-		"tx_plaintext_inner_gso_packets":                traffic,
-		"tx_plaintext_inner_gso_segments":               traffic,
+		"tx_plaintext_inner_gso_attempts":               "0",
+		"tx_plaintext_inner_gso_packets":                "0",
+		"tx_plaintext_inner_gso_segments":               "0",
 		"tx_plaintext_tix_tcp_port_shard_sets":          traffic,
 		"tx_plaintext_tix_tcp_shard_tx_queue_sets":      traffic,
 		"tx_plaintext_tix_tcp_shard_sequence_hits":      traffic,
@@ -3171,9 +3191,9 @@ func tixTCPFullKmodModuleOverrides(plaintextTraffic bool) map[string]string {
 		"tx_plaintext_inner_flow_hash_sets":             "0",
 
 		"rx_worker_inner_tcp_checksum_partial": traffic,
-		"rx_worker_inner_gso_candidates":       traffic,
-		"rx_worker_inner_gso_packets":          traffic,
-		"rx_worker_inner_gso_segments":         traffic,
+		"rx_worker_inner_gso_candidates":       "0",
+		"rx_worker_inner_gso_packets":          "0",
+		"rx_worker_inner_gso_segments":         "0",
 		"rx_worker_injected":                   traffic,
 		"rx_tix_tcp_port_shard_matches":        traffic,
 	}
@@ -3237,7 +3257,7 @@ func writeTIXTCPFullKmodDatapathJSON(t *testing.T, path string, fullPlaintextPro
 			"capture_forwarder_suppressed": true,
 			"active_flows":                 16,
 			"inner_tcp_checksum_partial":   true,
-			"inner_gso":                    true,
+			"inner_gso":                    false,
 			"port_sharding":                true,
 		},
 	}
@@ -3260,9 +3280,9 @@ func writeTIXTCPFullKmodTransportsJSON(t *testing.T, path string, node string) {
 		"packets_received": 0,
 		"extra": map[string]any{
 			"tix_tcp_full_plaintext_kernel_datapath": 1,
-			"tix_tcp_inner_gso_local":                1,
-			"tix_tcp_inner_gso_peer":                 1,
-			"tix_tcp_inner_gso_negotiated":           1,
+			"tix_tcp_inner_gso_local":                0,
+			"tix_tcp_inner_gso_peer":                 0,
+			"tix_tcp_inner_gso_negotiated":           0,
 			"tix_tcp_port_sharding_local":            1,
 			"tix_tcp_port_sharding_peer":             1,
 			"tix_tcp_port_sharding_negotiated":       1,
@@ -3460,6 +3480,7 @@ type secureTIXTCPKernelArtifactOptions struct {
 	xdpUnauthorizedDrops int
 	secureRXErrors       int
 	secureRXStale        int
+	secureRXCopyErrors   int
 }
 
 func writeSecureTIXTCPKernelProductionGateArtifacts(t *testing.T, dir string, options secureTIXTCPKernelArtifactOptions) {
@@ -3584,20 +3605,32 @@ func writeSecureTIXTCPKernelModuleParameters(t *testing.T, path string, options 
 			"direct_kfunc_errors":            "0",
 		},
 		"trustix_datapath": {
-			"features":          "31872",
-			"safe_features":     "31872",
-			"unsafe_features":   "0",
-			"selftests":         "16383",
-			"selftest_failures": "0",
-			"secure_tx_packets": securePackets,
-			"secure_tx_frames":  secureFrames,
-			"secure_tx_batches": secureBatches,
-			"secure_tx_errors":  "0",
-			"secure_tx_stale":   "0",
-			"secure_rx_packets": securePackets,
-			"secure_rx_frames":  secureFrames,
-			"secure_rx_errors":  strconv.Itoa(options.secureRXErrors),
-			"secure_rx_stale":   strconv.Itoa(options.secureRXStale),
+			"features":                        "29824",
+			"safe_features":                   "29824",
+			"unsafe_features":                 "0",
+			"selftests":                       "16383",
+			"selftest_failures":               "0",
+			"secure_tx_packets":               securePackets,
+			"secure_tx_frames":                secureFrames,
+			"secure_tx_batches":               secureBatches,
+			"secure_tx_errors":                "0",
+			"secure_tx_stale":                 "0",
+			"secure_rx_packets":               securePackets,
+			"secure_rx_frames":                secureFrames,
+			"secure_rx_errors":                strconv.Itoa(options.secureRXErrors),
+			"secure_rx_stale":                 strconv.Itoa(options.secureRXStale),
+			"secure_rx_writable_errors":       "0",
+			"secure_rx_frame_limit_errors":    "0",
+			"secure_rx_frame_parse_errors":    "0",
+			"secure_rx_frame_validate_errors": "0",
+			"secure_rx_plan_errors":           "0",
+			"secure_rx_header_errors":         "0",
+			"secure_rx_crypto_errors":         "0",
+			"secure_rx_checksum_errors":       "0",
+			"secure_rx_layout_errors":         "0",
+			"secure_rx_copy_errors":           strconv.Itoa(options.secureRXCopyErrors),
+			"secure_rx_delivery_errors":       "0",
+			"secure_rx_other_errors":          "0",
 		},
 	})
 }

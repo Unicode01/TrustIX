@@ -216,6 +216,21 @@
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_SLOTS 8192U
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_MAX_GSO_SEGS 64U
 #define TRUSTIX_DATAPATH_SECURE_TX_SEAL_BATCH 32U
+
+enum trustix_datapath_secure_rx_error_stage {
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_NONE = 0,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_WRITABLE,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_LIMIT,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_PARSE,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_VALIDATE,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_PLAN,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_HEADER,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_CRYPTO,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_CHECKSUM,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_LAYOUT,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_COPY,
+	TRUSTIX_DATAPATH_SECURE_RX_ERROR_DELIVERY,
+};
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_SLOTS 256U
 #define TRUSTIX_DATAPATH_TX_PLAINTEXT_COALESCE_MAX_FRAMES 32U
 #define TRUSTIX_DATAPATH_TX_OUTER_GSO_PAGE_POOL_ORDER 4U
@@ -753,6 +768,7 @@ struct trustix_datapath_rx_crypto_plan {
 struct trustix_datapath_secure_rx_scratch {
 	struct trustix_aead_direct_open_replay_op
 		ops[TRUSTIX_DATAPATH_RX_WORKER_STREAM_MAX_FRAMES];
+	__u8 *packet;
 };
 
 static struct trustix_datapath_secure_rx_scratch __percpu
@@ -760,17 +776,55 @@ static struct trustix_datapath_secure_rx_scratch __percpu
 
 static int trustix_datapath_alloc_secure_rx_scratch(void)
 {
+	struct trustix_datapath_secure_rx_scratch *scratch;
+	int cpu;
+
 	trustix_datapath_secure_rx_scratch =
 		alloc_percpu(struct trustix_datapath_secure_rx_scratch);
 	if (!trustix_datapath_secure_rx_scratch)
 		return -ENOMEM;
+	for_each_possible_cpu(cpu) {
+		scratch = per_cpu_ptr(trustix_datapath_secure_rx_scratch, cpu);
+		memset(scratch, 0, sizeof(*scratch));
+	}
+	for_each_possible_cpu(cpu) {
+		scratch = per_cpu_ptr(trustix_datapath_secure_rx_scratch, cpu);
+		scratch->packet = kvzalloc(TRUSTIX_DATAPATH_PACKET_MAX_LEN,
+					   GFP_KERNEL);
+		if (!scratch->packet)
+			goto error;
+	}
 	return 0;
+
+error:
+	for_each_possible_cpu(cpu) {
+		scratch = per_cpu_ptr(trustix_datapath_secure_rx_scratch, cpu);
+		if (scratch->packet)
+			memzero_explicit(scratch->packet,
+					 TRUSTIX_DATAPATH_PACKET_MAX_LEN);
+		kvfree(scratch->packet);
+		memset(scratch, 0, sizeof(*scratch));
+	}
+	free_percpu(trustix_datapath_secure_rx_scratch);
+	trustix_datapath_secure_rx_scratch = NULL;
+	return -ENOMEM;
 }
 
 static void trustix_datapath_free_secure_rx_scratch(void)
 {
+	struct trustix_datapath_secure_rx_scratch *scratch;
+	int cpu;
+
 	if (!trustix_datapath_secure_rx_scratch)
 		return;
+	for_each_possible_cpu(cpu) {
+		scratch = per_cpu_ptr(trustix_datapath_secure_rx_scratch, cpu);
+		if (scratch->packet)
+			memzero_explicit(scratch->packet,
+					 TRUSTIX_DATAPATH_PACKET_MAX_LEN);
+		kvfree(scratch->packet);
+		memset(scratch, 0, sizeof(*scratch));
+	}
 	free_percpu(trustix_datapath_secure_rx_scratch);
 	trustix_datapath_secure_rx_scratch = NULL;
 }
@@ -2638,6 +2692,159 @@ module_param_named(secure_rx_stale, trustix_datapath_secure_rx_stale,
 		   ullong, 0444);
 MODULE_PARM_DESC(secure_rx_stale,
 		 "Secure TIX-TCP RX frames rejected as stale or replayed");
+
+static unsigned long long trustix_datapath_secure_rx_writable_errors;
+module_param_named(secure_rx_writable_errors,
+		   trustix_datapath_secure_rx_writable_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_writable_errors,
+		 "Secure TIX-TCP RX skbs that could not be made writable");
+
+static unsigned long long trustix_datapath_secure_rx_frame_limit_errors;
+module_param_named(secure_rx_frame_limit_errors,
+		   trustix_datapath_secure_rx_frame_limit_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_frame_limit_errors,
+		 "Secure TIX-TCP RX packets exceeding the per-skb frame limit");
+
+static unsigned long long trustix_datapath_secure_rx_frame_parse_errors;
+module_param_named(secure_rx_frame_parse_errors,
+		   trustix_datapath_secure_rx_frame_parse_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_frame_parse_errors,
+		 "Secure TIX-TCP RX frame header parse failures");
+
+static unsigned long long trustix_datapath_secure_rx_frame_validate_errors;
+module_param_named(secure_rx_frame_validate_errors,
+		   trustix_datapath_secure_rx_frame_validate_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_frame_validate_errors,
+		 "Secure TIX-TCP RX frame metadata validation failures");
+
+static unsigned long long trustix_datapath_secure_rx_plan_errors;
+module_param_named(secure_rx_plan_errors,
+		   trustix_datapath_secure_rx_plan_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_plan_errors,
+		 "Secure TIX-TCP RX session or crypto-plan failures");
+
+static unsigned long long trustix_datapath_secure_rx_header_errors;
+module_param_named(secure_rx_header_errors,
+		   trustix_datapath_secure_rx_header_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_header_errors,
+		 "Secure TIX-TCP RX secure-header validation failures");
+
+static unsigned long long trustix_datapath_secure_rx_crypto_errors;
+module_param_named(secure_rx_crypto_errors,
+		   trustix_datapath_secure_rx_crypto_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_crypto_errors,
+		 "Secure TIX-TCP RX AEAD or replay-batch failures");
+
+static unsigned long long trustix_datapath_secure_rx_checksum_errors;
+module_param_named(secure_rx_checksum_errors,
+		   trustix_datapath_secure_rx_checksum_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_checksum_errors,
+		 "Secure TIX-TCP RX inner checksum validation failures");
+
+static unsigned long long trustix_datapath_secure_rx_layout_errors;
+module_param_named(secure_rx_layout_errors,
+		   trustix_datapath_secure_rx_layout_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_layout_errors,
+		 "Secure TIX-TCP RX compaction or skb layout failures");
+
+static unsigned long long trustix_datapath_secure_rx_copy_errors;
+module_param_named(secure_rx_copy_errors,
+		   trustix_datapath_secure_rx_copy_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_copy_errors,
+		 "Secure TIX-TCP RX skb-to-scratch copy failures");
+
+static unsigned long long trustix_datapath_secure_rx_delivery_errors;
+module_param_named(secure_rx_delivery_errors,
+		   trustix_datapath_secure_rx_delivery_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_delivery_errors,
+		 "Secure TIX-TCP RX plaintext worker delivery failures");
+
+static unsigned long long trustix_datapath_secure_rx_other_errors;
+module_param_named(secure_rx_other_errors,
+		   trustix_datapath_secure_rx_other_errors, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_other_errors,
+		 "Secure TIX-TCP RX failures without a classified stage");
+
+static unsigned long long trustix_datapath_secure_rx_gso_packets;
+module_param_named(secure_rx_gso_packets,
+		   trustix_datapath_secure_rx_gso_packets, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_gso_packets,
+		 "Secure TIX-TCP RX packets carrying GSO/GRO metadata");
+
+static unsigned long long trustix_datapath_secure_rx_nonlinear_packets;
+module_param_named(secure_rx_nonlinear_packets,
+		   trustix_datapath_secure_rx_nonlinear_packets, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_nonlinear_packets,
+		 "Secure TIX-TCP RX packets with nonlinear skb storage");
+
+static unsigned long long trustix_datapath_secure_rx_cloned_packets;
+module_param_named(secure_rx_cloned_packets,
+		   trustix_datapath_secure_rx_cloned_packets, ullong, 0444);
+MODULE_PARM_DESC(secure_rx_cloned_packets,
+		 "Secure TIX-TCP RX packets with cloned skb storage");
+
+static unsigned int trustix_datapath_secure_rx_max_frames;
+module_param_named(secure_rx_max_frames,
+		   trustix_datapath_secure_rx_max_frames, uint, 0444);
+MODULE_PARM_DESC(secure_rx_max_frames,
+		 "Largest successfully opened secure TIX-TCP frame batch");
+
+static int trustix_datapath_secure_rx_last_error;
+module_param_named(secure_rx_last_error,
+		   trustix_datapath_secure_rx_last_error, int, 0444);
+MODULE_PARM_DESC(secure_rx_last_error,
+		 "Last secure TIX-TCP RX failure errno");
+
+static unsigned int trustix_datapath_secure_rx_last_error_stage;
+module_param_named(secure_rx_last_error_stage,
+		   trustix_datapath_secure_rx_last_error_stage, uint, 0444);
+MODULE_PARM_DESC(secure_rx_last_error_stage,
+		 "Last secure TIX-TCP RX failure stage");
+
+static void trustix_datapath_secure_rx_record_error(
+	enum trustix_datapath_secure_rx_error_stage stage, int ret)
+{
+	WRITE_ONCE(trustix_datapath_secure_rx_last_error, ret ?: -EIO);
+	WRITE_ONCE(trustix_datapath_secure_rx_last_error_stage, stage);
+	switch (stage) {
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_WRITABLE:
+		trustix_datapath_secure_rx_writable_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_LIMIT:
+		trustix_datapath_secure_rx_frame_limit_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_PARSE:
+		trustix_datapath_secure_rx_frame_parse_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_VALIDATE:
+		trustix_datapath_secure_rx_frame_validate_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_PLAN:
+		trustix_datapath_secure_rx_plan_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_HEADER:
+		trustix_datapath_secure_rx_header_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_CRYPTO:
+		trustix_datapath_secure_rx_crypto_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_CHECKSUM:
+		trustix_datapath_secure_rx_checksum_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_LAYOUT:
+		trustix_datapath_secure_rx_layout_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_COPY:
+		trustix_datapath_secure_rx_copy_errors++;
+		break;
+	case TRUSTIX_DATAPATH_SECURE_RX_ERROR_DELIVERY:
+		trustix_datapath_secure_rx_delivery_errors++;
+		break;
+	default:
+		trustix_datapath_secure_rx_other_errors++;
+		break;
+	}
+}
 
 static unsigned long long
 	trustix_datapath_secure_tx_inner_tcp_checksum_partial;
@@ -17518,11 +17725,11 @@ out_dev:
 }
 
 static int
-trustix_datapath_rx_worker_push_stream_batch_copy(
+trustix_datapath_rx_worker_push_stream_batch_source(
 	struct sk_buff *skb, const struct trustix_datapath_ioc_classify *outer,
 	__u32 total_len, __u32 tixt_offset, unsigned int expected_frames,
 	int target_ifindex, unsigned int *queued_frames, bool force_queue,
-	bool offset_copy)
+	bool offset_copy, const __u8 *linear_network)
 {
 	struct trustix_datapath_rx_worker_pending_copy *pending = NULL;
 	struct trustix_datapath_rx_stage_view view = {};
@@ -17548,7 +17755,7 @@ trustix_datapath_rx_worker_push_stream_batch_copy(
 	if (!force_queue &&
 	    !READ_ONCE(trustix_datapath_rx_worker_stream_batch_queue))
 		return -EOPNOTSUPP;
-	if (!skb || !outer || !expected_frames ||
+	if (!skb || !outer || !expected_frames || total_len < tixt_offset ||
 	    expected_frames > TRUSTIX_DATAPATH_RX_WORKER_STREAM_MAX_FRAMES)
 		return -EINVAL;
 	ret = trustix_datapath_rx_worker_target_dev(skb, &target_dev,
@@ -17565,21 +17772,29 @@ trustix_datapath_rx_worker_push_stream_batch_copy(
 		ret = -ENOMEM;
 		goto error;
 	}
-	network = skb_network_header(skb);
-	if (!network) {
-		ret = -EINVAL;
-		goto error;
+	if (linear_network) {
+		network = linear_network;
+		network_offset = 0;
+		offset_copy = false;
+		cursor = network + tixt_offset;
+	} else {
+		network = skb_network_header(skb);
+		if (!network) {
+			ret = -EINVAL;
+			goto error;
+		}
+		network_offset = skb_network_offset(skb);
+		if (network_offset < 0 ||
+		    (__u32)network_offset > skb->len ||
+		    tixt_offset > skb->len - (__u32)network_offset) {
+			ret = -EOVERFLOW;
+			goto error;
+		}
 	}
-	network_offset = skb_network_offset(skb);
-	if (network_offset < 0 || (__u32)network_offset > skb->len ||
-	    tixt_offset > skb->len - (__u32)network_offset) {
-		ret = -EOVERFLOW;
-		goto error;
-	}
-	if (offset_copy) {
+	if (!linear_network && offset_copy) {
 		cursor = NULL;
 		cursor_offset = (__u32)network_offset + tixt_offset;
-	} else {
+	} else if (!linear_network) {
 		cursor = network + tixt_offset;
 	}
 	remaining = total_len - tixt_offset;
@@ -17627,7 +17842,9 @@ trustix_datapath_rx_worker_push_stream_batch_copy(
 			inner_packet = inner_header;
 		} else {
 			inner_packet = cursor + view.frame.header_len;
-			inner_offset = (__u32)(inner_packet - skb->data);
+			inner_offset = linear_network ?
+				(__u32)(inner_packet - linear_network) :
+				(__u32)(inner_packet - skb->data);
 		}
 		ret = trustix_datapath_parse_ipv4_packet(
 			inner_packet, view.frame.payload_len, &inner,
@@ -17711,6 +17928,18 @@ error:
 	trustix_datapath_rx_worker_stream_batch_errors++;
 	WRITE_ONCE(trustix_datapath_rx_worker_last_push_ret, ret);
 	return ret;
+}
+
+static int
+trustix_datapath_rx_worker_push_stream_batch_copy(
+	struct sk_buff *skb, const struct trustix_datapath_ioc_classify *outer,
+	__u32 total_len, __u32 tixt_offset, unsigned int expected_frames,
+	int target_ifindex, unsigned int *queued_frames, bool force_queue,
+	bool offset_copy)
+{
+	return trustix_datapath_rx_worker_push_stream_batch_source(
+		skb, outer, total_len, tixt_offset, expected_frames,
+		target_ifindex, queued_frames, force_queue, offset_copy, NULL);
 }
 
 static bool
@@ -18439,14 +18668,13 @@ static int
 trustix_datapath_secure_rx_preprocess_skb(
 	struct sk_buff *skb,
 	const struct trustix_datapath_ioc_classify *outer,
-	__u8 ip_header_len, __u8 l4_header_len, bool *claimed,
-	unsigned int *opened_frames)
+	__u8 ip_header_len, __u8 l4_header_len, int target_ifindex,
+	bool *claimed, unsigned int *opened_frames)
 {
 	struct trustix_datapath_rx_crypto_plan plan = {};
 	struct trustix_datapath_tixt_frame frame = {};
 	struct trustix_datapath_secure_rx_scratch *scratch = NULL;
 	struct trustix_aead_direct_open_replay_op *open_op;
-	struct skb_shared_info *shinfo;
 	struct iphdr *iph;
 	__u8 *network;
 	__u8 *source;
@@ -18461,8 +18689,11 @@ trustix_datapath_secure_rx_preprocess_skb(
 	__u32 plain_len;
 	__u64 opened_bytes = 0;
 	unsigned int frames = 0;
+	unsigned int queued_frames = 0;
 	int network_offset;
 	bool plan_valid = false;
+	enum trustix_datapath_secure_rx_error_stage error_stage =
+		TRUSTIX_DATAPATH_SECURE_RX_ERROR_NONE;
 	int ret;
 
 	if (claimed)
@@ -18496,24 +18727,38 @@ trustix_datapath_secure_rx_preprocess_skb(
 		return -EOPNOTSUPP;
 	*claimed = true;
 	if (trustix_datapath_get_be32(source) != TRUSTIX_DATAPATH_TIXT_MAGIC) {
+		error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_VALIDATE;
 		ret = -EPROTONOSUPPORT;
 		goto error;
 	}
-	ret = skb_ensure_writable(skb, (__u32)network_offset + total_len);
-	if (ret)
-		goto error;
-	network = skb_network_header(skb);
-	if (!network) {
-		ret = -EINVAL;
+	if (skb_is_gso(skb))
+		trustix_datapath_secure_rx_gso_packets++;
+	if (skb_is_nonlinear(skb))
+		trustix_datapath_secure_rx_nonlinear_packets++;
+	if (skb_cloned(skb))
+		trustix_datapath_secure_rx_cloned_packets++;
+	/* A process-context receive must not race same-CPU softirq scratch use. */
+	local_bh_disable();
+	scratch = get_cpu_ptr(trustix_datapath_secure_rx_scratch);
+	if (!scratch->packet) {
+		error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_COPY;
+		ret = -ENOMEM;
 		goto error;
 	}
-	scratch = get_cpu_ptr(trustix_datapath_secure_rx_scratch);
+	ret = skb_copy_bits(skb, (__u32)network_offset, scratch->packet,
+			    total_len);
+	if (ret) {
+		error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_COPY;
+		goto error;
+	}
+	network = scratch->packet;
 
 	source_offset = 40;
 	destination_offset = 40;
 	remaining = total_len - source_offset;
 	while (remaining) {
 		if (frames >= TRUSTIX_DATAPATH_RX_WORKER_STREAM_MAX_FRAMES) {
+			error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_LIMIT;
 			ret = -E2BIG;
 			goto error;
 		}
@@ -18521,8 +18766,10 @@ trustix_datapath_secure_rx_preprocess_skb(
 		source = network + source_offset;
 		ret = trustix_datapath_parse_tixt_header(
 			source, remaining, &frame);
-		if (ret)
+		if (ret) {
+			error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_PARSE;
 			goto error;
+		}
 		if (frame.header_len != TRUSTIX_DATAPATH_TIXT_HEADER_LEN ||
 		    (frame.flags &
 		     ~TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL) !=
@@ -18531,6 +18778,7 @@ trustix_datapath_secure_rx_preprocess_skb(
 		    frame.fragment_index || frame.fragment_count ||
 		    !frame.wire_len || frame.wire_len > remaining ||
 		    frame.payload_len < TRUSTIX_DATAPATH_SECURE_OVERHEAD) {
+			error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_VALIDATE;
 			ret = -EBADMSG;
 			goto error;
 		}
@@ -18540,11 +18788,14 @@ trustix_datapath_secure_rx_preprocess_skb(
 			ret = trustix_datapath_rx_crypto_plan_locked(
 				outer, &frame, &plan);
 			read_unlock_bh(&trustix_datapath_state_lock);
-			if (ret)
+			if (ret) {
+				error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_PLAN;
 				goto error;
+			}
 			plan_valid = true;
 		} else if (plan.flow_id != frame.flow_id ||
 			   plan.epoch != frame.epoch) {
+			error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_PLAN;
 			ret = -EPROTO;
 			goto error;
 		}
@@ -18554,6 +18805,7 @@ trustix_datapath_secure_rx_preprocess_skb(
 		       TRUSTIX_DATAPATH_SESSION_FLAG_RECEIVE_SECURE_INNER_TCP_CHECKSUM_PARTIAL) ||
 		     !(READ_ONCE(trustix_datapath_features) &
 		       TRUSTIX_DATAPATH_FEATURE_SECURE_INNER_TCP_CHECKSUM_PARTIAL))) {
+			error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_PLAN;
 			ret = -EPROTONOSUPPORT;
 			goto error;
 		}
@@ -18561,14 +18813,17 @@ trustix_datapath_secure_rx_preprocess_skb(
 		secure_header = source + frame.header_len;
 		ret = trustix_datapath_secure_validate_header(
 			secure_header, plan.suite, plan.epoch, frame.sequence);
-		if (ret)
+		if (ret) {
+			error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_HEADER;
 			goto error;
+		}
 		ciphertext = secure_header + TRUSTIX_DATAPATH_SECURE_HEADER_LEN;
 		cipher_len = frame.payload_len -
 			     TRUSTIX_DATAPATH_SECURE_HEADER_LEN;
 		plain_len = cipher_len - TRUSTIX_DATAPATH_SECURE_TAG_LEN;
 		if (!plain_len || plain_len > TRUSTIX_DATAPATH_PACKET_MAX_LEN ||
 		    opened_bytes > U64_MAX - plain_len) {
+			error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_VALIDATE;
 			ret = -EMSGSIZE;
 			goto error;
 		}
@@ -18589,18 +18844,19 @@ trustix_datapath_secure_rx_preprocess_skb(
 	}
 	if (!frames || source_offset != total_len ||
 	    destination_offset >= source_offset) {
+		error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_LAYOUT;
 		ret = -EBADMSG;
 		goto error;
 	}
 	ret = trustix_datapath_crypto_open_replay_batch(
 		plan.receive_slot, plan.receive_generation, scratch->ops, frames,
 		plan.replay_floor, plan.replay_window);
-	put_cpu_ptr(scratch);
-	scratch = NULL;
 	if (ret == -ENOENT)
 		ret = -ESTALE;
-	if (ret)
+	if (ret) {
+		error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_CRYPTO;
 		goto error;
+	}
 
 	source_offset = 40;
 	destination_offset = 40;
@@ -18610,8 +18866,10 @@ trustix_datapath_secure_rx_preprocess_skb(
 		source = network + source_offset;
 		ret = trustix_datapath_parse_tixt_header(
 			source, remaining, &frame);
-		if (ret)
+		if (ret) {
+			error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_FRAME_PARSE;
 			goto error;
+		}
 		secure_header = source + frame.header_len;
 		ciphertext = secure_header + TRUSTIX_DATAPATH_SECURE_HEADER_LEN;
 		cipher_len = frame.payload_len -
@@ -18623,6 +18881,7 @@ trustix_datapath_secure_rx_preprocess_skb(
 				TRUSTIX_DATAPATH_TIXT_FLAG_INNER_TCP_CHECKSUM_PARTIAL);
 		if (ret) {
 			trustix_datapath_secure_rx_inner_tcp_checksum_errors++;
+			error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_CHECKSUM;
 			goto error;
 		}
 		if (frame.flags &
@@ -18648,7 +18907,8 @@ trustix_datapath_secure_rx_preprocess_skb(
 				      plain_len;
 		remaining -= frame.wire_len;
 	}
-	if ((__u32)network_offset + destination_offset > skb->len) {
+	if (destination_offset > TRUSTIX_DATAPATH_PACKET_MAX_LEN) {
+		error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_LAYOUT;
 		ret = -EOVERFLOW;
 		goto error;
 	}
@@ -18657,25 +18917,32 @@ trustix_datapath_secure_rx_preprocess_skb(
 	iph->tot_len = htons((__u16)destination_offset);
 	trustix_datapath_rx_worker_fix_ipv4_header_checksum(
 		iph, ip_header_len);
-	skb_trim(skb, (__u32)network_offset + destination_offset);
-	skb->ip_summed = CHECKSUM_NONE;
-	skb->csum = 0;
-	skb->csum_level = 0;
-	if (skb_is_gso(skb)) {
-		shinfo = skb_shinfo(skb);
-		if (shinfo->gso_size > TRUSTIX_DATAPATH_SECURE_OVERHEAD)
-			shinfo->gso_size -= TRUSTIX_DATAPATH_SECURE_OVERHEAD;
-		shinfo->gso_segs = frames;
+	ret = trustix_datapath_rx_worker_push_stream_batch_source(
+		skb, outer, destination_offset, 40, frames, target_ifindex,
+		&queued_frames, true, false, network);
+	if (ret || queued_frames != frames) {
+		error_stage = TRUSTIX_DATAPATH_SECURE_RX_ERROR_DELIVERY;
+		if (!ret)
+			ret = -EIO;
+		goto error;
 	}
+	put_cpu_ptr(scratch);
+	scratch = NULL;
+	local_bh_enable();
 	trustix_datapath_secure_rx_packets++;
 	trustix_datapath_secure_rx_frames += frames;
 	trustix_datapath_secure_rx_bytes += opened_bytes;
-	*opened_frames = frames;
+	if (frames > READ_ONCE(trustix_datapath_secure_rx_max_frames))
+		WRITE_ONCE(trustix_datapath_secure_rx_max_frames, frames);
+	*opened_frames = queued_frames;
 	return 0;
 
 error:
-	if (scratch)
+	if (scratch) {
 		put_cpu_ptr(scratch);
+		local_bh_enable();
+	}
+	trustix_datapath_secure_rx_record_error(error_stage, ret);
 	if (ret == -ESTALE)
 		trustix_datapath_secure_rx_stale++;
 	else
@@ -19204,10 +19471,19 @@ trustix_datapath_nf_hook(void *priv, struct sk_buff *skb,
 			secure_rx_ret =
 				trustix_datapath_secure_rx_preprocess_skb(
 					skb, &classify, ip_header_len,
-					l4_header_len, &secure_rx_claimed,
-					&secure_rx_frames);
-			if (secure_rx_claimed && secure_rx_ret)
-				outer_ret = secure_rx_ret;
+					l4_header_len, target_ifindex,
+					&secure_rx_claimed, &secure_rx_frames);
+			if (secure_rx_claimed) {
+				if (secure_rx_ret) {
+					outer_ret = secure_rx_ret;
+				} else if (secure_rx_frames) {
+					worker_ret = 0;
+					worker_stream_frames = secure_rx_frames;
+					worker_stream_queued = true;
+				} else {
+					outer_ret = -EIO;
+				}
+			}
 		}
 		if ((hook_flags &
 		     TRUSTIX_DATAPATH_HOOK_FLAG_RX_SECURE_TIX_TCP_ONLY) &&

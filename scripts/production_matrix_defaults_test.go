@@ -5703,8 +5703,24 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_seal_errors=0",
 		"--require-datapath-max kernel_udp.provider_stats.kernel_crypto_frame_open_errors=0",
 		"--require-datapath-min tix_tcp.provider_stats.kernel_crypto_datapath_flows=\"${secure_tix_tcp_kernel_min_crypto_flows}\"",
+		"--require-datapath-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_errors=0",
+		"--require-datapath-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_stale=0",
 		"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_errors/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
 		"--require-datapath-ratio-max tix_tcp.provider_stats.kernel_datapath_module_secure_rx_stale/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=\"${secure_tix_tcp_kernel_replay_ratio_budget}\"",
+		"--require-module-param-max trustix_datapath.secure_rx_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_stale=0",
+		"--require-module-param-max trustix_datapath.secure_rx_writable_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_frame_limit_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_frame_parse_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_frame_validate_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_plan_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_header_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_crypto_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_checksum_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_layout_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_copy_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_delivery_errors=0",
+		"--require-module-param-max trustix_datapath.secure_rx_other_errors=0",
 		"--require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_tx_secure_direct_encrypt_errors=0",
 		"--require-datapath-max kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_decrypt_errors=\"${secure_kudp_direct_error_budget}\"",
 		"--require-datapath-min kernel_udp.provider_stats.tc_kernel_udp_rx_secure_direct_kfunc_open_attempts=1",
@@ -5744,9 +5760,7 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-min trustix_datapath.enable_features=5248",
 		"--require-module-param-min trustix_datapath.features=5248",
 		"--require-module-param-min trustix_datapath.safe_features=5248",
-		"--require-module-param-min trustix_datapath.enable_features=7296",
-		"--require-module-param-min trustix_datapath.features=7296",
-		"--require-module-param-min trustix_datapath.safe_features=7296",
+		"--require-datapath-stat tix_tcp.inner_gso=false",
 		"--require-module-param-max trustix_datapath.unsafe_features=0",
 		"--require-module-param-max trustix_datapath.selftest_failures=0",
 		"--require-module-param-min trustix_datapath.rx_worker_inject=1",
@@ -5765,14 +5779,16 @@ func TestCrossHostProductionGateRequiresFastPathArtifacts(t *testing.T) {
 		"--require-module-param-min trustix_datapath.rx_worker_single_coalesce_max_frames=32",
 		"--require-module-param-node-max a.trustix_datapath.rx_worker_single_coalesce=0",
 		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_segments=1",
-		"--require-module-param-any-min trustix_datapath.tx_plaintext_inner_gso_attempts=1",
-		"--require-module-param-any-min trustix_datapath.tx_plaintext_inner_gso_packets=1",
-		"--require-module-param-any-min trustix_datapath.tx_plaintext_inner_gso_segments=1",
+		"--require-module-param-any-min trustix_datapath.tx_plaintext_outer_gso_packets=1",
+		"--require-module-param-max trustix_datapath.tx_plaintext_inner_gso_attempts=0",
+		"--require-module-param-max trustix_datapath.tx_plaintext_inner_gso_packets=0",
+		"--require-module-param-max trustix_datapath.tx_plaintext_inner_gso_segments=0",
 		"--require-module-param-max trustix_datapath.tx_plaintext_inner_gso_fallbacks=0",
 		"--require-module-param-max trustix_datapath.tx_plaintext_inner_gso_errors=0",
-		"--require-module-param-any-min trustix_datapath.rx_worker_inner_gso_candidates=1",
-		"--require-module-param-any-min trustix_datapath.rx_worker_inner_gso_packets=1",
-		"--require-module-param-any-min trustix_datapath.rx_worker_inner_gso_segments=1",
+		"--require-module-param-max trustix_datapath.tx_plaintext_inner_gso_metadata_scrubs=0",
+		"--require-module-param-max trustix_datapath.rx_worker_inner_gso_candidates=0",
+		"--require-module-param-max trustix_datapath.rx_worker_inner_gso_packets=0",
+		"--require-module-param-max trustix_datapath.rx_worker_inner_gso_segments=0",
 		"--require-module-param-max trustix_datapath.rx_worker_inner_gso_partial_frames=0",
 		"--require-module-param-max trustix_datapath.rx_worker_inner_gso_malformed=0",
 		"--require-module-param-max trustix_datapath.rx_worker_inner_gso_errors=0",
@@ -6579,32 +6595,32 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.provider=kernel_datapath_full_plaintext")
 	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.fast_path=true")
 	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.inner_tcp_checksum_partial=true")
-	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.inner_gso=true")
+	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.inner_gso=false")
 	requireArgPair("expfull", "--require-datapath-stat", "tix_tcp.port_sharding=true")
-	requireArgPair("expfull", "--require-transport-session-stat", "stats.extra.tix_tcp_inner_gso_local=1")
-	requireArgPair("expfull", "--require-transport-session-stat", "stats.extra.tix_tcp_inner_gso_peer=1")
-	requireArgPair("expfull", "--require-transport-session-stat", "stats.extra.tix_tcp_inner_gso_negotiated=1")
 	requireArgPair("expfull", "--require-transport-session-stat", "stats.extra.tix_tcp_port_sharding_local=1")
 	requireArgPair("expfull", "--require-transport-session-stat", "stats.extra.tix_tcp_port_sharding_peer=1")
 	requireArgPair("expfull", "--require-transport-session-stat", "stats.extra.tix_tcp_port_sharding_negotiated=1")
 	requireArgPair("expfull", "--require-datapath-stat", "capture_forwarder_suppressed=true")
 	requireArgPair("expfull", "--require-datapath-min", "tix_tcp.active_flows=16")
-	requireArgPair("expfull", "--require-module-param-min", "trustix_datapath.enable_features=7296")
-	requireArgPair("expfull", "--require-module-param-min", "trustix_datapath.features=7296")
-	requireArgPair("expfull", "--require-module-param-min", "trustix_datapath.safe_features=7296")
+	requireArgPair("expfull", "--require-module-param-min", "trustix_datapath.enable_features=5248")
+	requireArgPair("expfull", "--require-module-param-min", "trustix_datapath.features=5248")
+	requireArgPair("expfull", "--require-module-param-min", "trustix_datapath.safe_features=5248")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_packets=1")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_gso_segments=1")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_inner_tcp_checksum_partial=1")
 	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.rx_worker_inner_tcp_checksum_partial=1")
 	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.rx_worker_inner_tcp_checksum_partial_errors=0")
-	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_inner_gso_attempts=1")
-	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_inner_gso_packets=1")
-	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_inner_gso_segments=1")
+	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_outer_gso_packets=1")
+	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.tx_plaintext_outer_gso_segments=1")
+	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.tx_plaintext_inner_gso_attempts=0")
+	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.tx_plaintext_inner_gso_packets=0")
+	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.tx_plaintext_inner_gso_segments=0")
 	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.tx_plaintext_inner_gso_fallbacks=0")
 	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.tx_plaintext_inner_gso_errors=0")
-	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.rx_worker_inner_gso_candidates=1")
-	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.rx_worker_inner_gso_packets=1")
-	requireArgPair("expfull", "--require-module-param-any-min", "trustix_datapath.rx_worker_inner_gso_segments=1")
+	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.tx_plaintext_inner_gso_metadata_scrubs=0")
+	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.rx_worker_inner_gso_candidates=0")
+	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.rx_worker_inner_gso_packets=0")
+	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.rx_worker_inner_gso_segments=0")
 	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.rx_worker_inner_gso_partial_frames=0")
 	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.rx_worker_inner_gso_malformed=0")
 	requireArgPair("expfull", "--require-module-param-max", "trustix_datapath.rx_worker_inner_gso_errors=0")
@@ -6657,8 +6673,28 @@ func TestCrossHostProductionGateUsesPerCaseMinGbps(t *testing.T) {
 	requireArgPair("secure-exp", "--require-datapath-stat", "tix_tcp.userspace_crypto=false")
 	requireArgPair("secure-exp", "--require-datapath-min", "tix_tcp.provider_stats.kernel_crypto_datapath_flows=1")
 	requireArgPair("secure-exp", "--require-datapath-max", "tix_tcp.provider_stats.kernel_crypto_datapath_retired_slots=0")
+	requireArgPair("secure-exp", "--require-datapath-max", "tix_tcp.provider_stats.kernel_datapath_module_secure_rx_errors=0")
+	requireArgPair("secure-exp", "--require-datapath-max", "tix_tcp.provider_stats.kernel_datapath_module_secure_rx_stale=0")
 	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.kernel_datapath_module_secure_rx_errors/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=0.00002")
 	requireArgPair("secure-exp", "--require-datapath-ratio-max", "tix_tcp.provider_stats.kernel_datapath_module_secure_rx_stale/tix_tcp.provider_stats.kernel_datapath_module_secure_rx_packets=0.00002")
+	for _, name := range []string{
+		"secure_rx_errors",
+		"secure_rx_stale",
+		"secure_rx_writable_errors",
+		"secure_rx_frame_limit_errors",
+		"secure_rx_frame_parse_errors",
+		"secure_rx_frame_validate_errors",
+		"secure_rx_plan_errors",
+		"secure_rx_header_errors",
+		"secure_rx_crypto_errors",
+		"secure_rx_checksum_errors",
+		"secure_rx_layout_errors",
+		"secure_rx_copy_errors",
+		"secure_rx_delivery_errors",
+		"secure_rx_other_errors",
+	} {
+		requireArgPair("secure-exp", "--require-module-param-max", "trustix_datapath."+name+"=0")
+	}
 	requireArgPair("secure-exp", "--require-lsmod-module", "trustix_crypto")
 	requireArgPair("secure-exp", "--require-lsmod-module", "trustix_datapath")
 	requireArgPair("secure-exp", "--forbid-lsmod-module", "trustix_datapath_helpers")

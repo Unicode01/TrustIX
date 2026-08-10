@@ -600,10 +600,10 @@ func TrustIXDatapathModuleParametersForDesired(raw string, desired config.Desire
 		params = addModuleParameterMask(params, "enable_features", 1<<7)
 		if fullPlaintext {
 			params = addModuleParameterMask(params, "enable_features", 1<<10)
-			if envFalsey("TRUSTIX_TIX_TCP_INNER_GSO") {
-				params = removeModuleParameterMask(params, "enable_features", 1<<11)
-			} else {
+			if envTruthyAny("TRUSTIX_TIX_TCP_INNER_GSO") {
 				params = addModuleParameterMask(params, "enable_features", 1<<11)
+			} else {
+				params = removeModuleParameterMask(params, "enable_features", 1<<11)
 			}
 			if envFalsey("TRUSTIX_TIX_TCP_PORT_SHARDING") {
 				params = removeModuleParameterMask(params, "enable_features", 1<<12)

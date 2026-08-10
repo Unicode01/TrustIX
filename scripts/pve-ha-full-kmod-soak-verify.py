@@ -34,8 +34,8 @@ MODULE_SNAPSHOT_FILES = (
     "module-remote-after.txt",
 )
 MODULE_REQUIRED_PARAMETERS = {
-    "enable_features": "7296",
-    "features": "7296",
+    "enable_features": "5248",
+    "features": "5248",
     "rx_worker_inject": "Y",
     "selftest_failures": "0",
     "selftests": "4095",

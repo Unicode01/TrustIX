@@ -6385,3 +6385,42 @@ can still recover low-single-digit percentages, but the tested local tuning
 space no longer supports a credible large gain. A material step above the
 roughly 6.2 Gbps secure userspace ceiling requires either the validated
 full-kmod path or a new multi-queue packet-I/O architecture that preserves GSO.
+
+### 2026-08-10 public full-kmod framing and secure RX scratch fix
+
+Public B/C testing first changed plaintext full-kmod TIX-TCP back to resilient
+outer-GSO framing by default. Inner GSO remains available only through
+`TRUSTIX_TIX_TCP_INNER_GSO=1`; production policy now requires feature mask
+`5248` and zero inner-GSO counters. A plaintext P8 30-second pair measured
+`1.719 Gbps` A-to-B and `2.238 Gbps` B-to-A on a line whose raw throughput was
+the limiting factor.
+
+Secure P8 then reproduced 30 receive failures with
+`secure_rx_last_error=-12` (`ENOMEM`) at the writable stage. The receive hook
+was calling whole-packet `skb_ensure_writable()` for an approximately 64 KiB
+nonlinear GRO skb in atomic context. The fixed path preallocates a 65,535-byte
+packet per possible CPU, copies with `skb_copy_bits`, decrypts and compacts in
+scratch, then materializes worker-owned plaintext without modifying the source
+skb. Scratch use is pinned and protected from same-CPU softirq reuse, and its
+plaintext is cleared on module teardown.
+
+Post-fix secure results were `1.631/2.019 Gbps` at P1 for 30 seconds,
+`1.781/2.013 Gbps` at P4 for 60 seconds, and `1.792/1.832 Gbps` at P8 for 60
+seconds. A final P8 pair ran 300 seconds per direction at `1.795 Gbps` and
+`1.954 Gbps`, processing 57,381,790 and 53,120,246 RX frames. All writable,
+copy, delivery, crypto, checksum, layout, worker, selftest, and kernel-log
+error checks remained zero; boot IDs were unchanged. A parallel normal-traffic
+monitor recorded 36 samples with zero ping or SSH failures. This is strong
+public regression evidence, but not a formal production pass: the gate
+correctly rejected the evidence because it used 300 rather than 3600 seconds,
+300 rather than 600 intervals, one rather than four vCPUs, and a temporary
+`version=dev commit=unknown` binary.
+
+After adding explicit same-CPU bottom-half exclusion and teardown zeroing, the
+same Debian 6.12/6.1 pair passed another P8 60-second run in both directions at
+`1.785 Gbps` and `1.744 Gbps`. The receivers opened 10,447,344 and 10,774,820
+secure frames. All secure RX/TX stage, worker, checksum, copy, delivery, and
+selftest errors remained zero; pstore was empty and both boot IDs were stable.
+The 6.1 host emitted its existing optional BPF-kfunc module-BTF warning, but the
+full-kmod direct crypto provider does not depend on that registration and the
+secure runner checks passed.

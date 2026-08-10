@@ -689,41 +689,41 @@ func TestTrustIXDatapathModuleParametersFullPlaintextEnablesTXWithCrashRiskGate(
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=7296 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=5248 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=1 rx_worker_single_coalesce_max_frames=32 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=1 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
 }
 
-func TestTrustIXDatapathModuleParametersInnerGSOEnabledByDefault(t *testing.T) {
+func TestTrustIXDatapathModuleParametersInnerGSODisabledByDefault(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "")
 
 	got := TrustIXDatapathModuleParameters("")
-	if !moduleParameterHasAssignment(got, "enable_features=7296") {
-		t.Fatalf("parameters = %q, missing default inner-GSO feature", got)
+	if !moduleParameterHasAssignment(got, "enable_features=5248") {
+		t.Fatalf("parameters = %q, did not select resilient outer-GSO framing by default", got)
 	}
 }
 
-func TestTrustIXDatapathModuleParametersInnerGSOCanBeDisabled(t *testing.T) {
+func TestTrustIXDatapathModuleParametersInnerGSOCanBeEnabledExplicitly(t *testing.T) {
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
-	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "1")
+
+	got := TrustIXDatapathModuleParameters("")
+	if !moduleParameterHasAssignment(got, "enable_features=7296") {
+		t.Fatalf("parameters = %q, did not enable explicitly requested inner-GSO feature", got)
+	}
+}
+
+func TestTrustIXDatapathModuleParametersRawInnerGSOFeatureRequiresExplicitOptIn(t *testing.T) {
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
+	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("enable_features=3200")
 	if !moduleParameterHasAssignment(got, "enable_features=5248") {
-		t.Fatalf("parameters = %q, did not disable inner-GSO feature", got)
-	}
-}
-
-func TestTrustIXDatapathModuleParametersPreservesExplicitInnerGSOFeature(t *testing.T) {
-	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
-	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
-
-	got := TrustIXDatapathModuleParameters("enable_features=3200")
-	if !moduleParameterHasAssignment(got, "enable_features=7296") {
-		t.Fatalf("parameters = %q, did not preserve explicitly configured inner-GSO feature", got)
+		t.Fatalf("parameters = %q, allowed a raw feature mask to bypass inner-GSO opt-in", got)
 	}
 }
 
@@ -732,7 +732,7 @@ func TestTrustIXDatapathModuleParametersPortShardingEnabledByDefault(t *testing.
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 
 	got := TrustIXDatapathModuleParameters("enable_features=3200")
-	if !moduleParameterHasAssignment(got, "enable_features=7296") {
+	if !moduleParameterHasAssignment(got, "enable_features=5248") {
 		t.Fatalf("parameters = %q, missing default TIX-TCP port-sharding feature", got)
 	}
 }
@@ -741,6 +741,7 @@ func TestTrustIXDatapathModuleParametersPortShardingCanBeDisabled(t *testing.T) 
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_KERNEL_DATAPATH_ALLOW_CRASH_RISK_FULL_PLAINTEXT", "1")
 	t.Setenv("TRUSTIX_TIX_TCP_PORT_SHARDING", "0")
+	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "1")
 
 	got := TrustIXDatapathModuleParameters("enable_features=7296")
 	if !moduleParameterHasAssignment(got, "enable_features=3200") {
@@ -776,7 +777,7 @@ func TestTrustIXDatapathModuleParametersOpenWrtDedicatedGateAllowsFullPlaintext(
 	t.Setenv("TRUSTIX_TIX_TCP_INNER_GSO", "")
 
 	got := TrustIXDatapathModuleParameters("")
-	want := "enable_features=7296 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=0 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
+	want := "enable_features=5248 rx_worker_inject=1 tx_plaintext=1 rx_worker_xmit=1 rx_worker_inline_xmit=1 rx_worker_inline_xmit_copy_csum=1 rx_worker_direct_xmit=1 rx_worker_inline_coalesce_max_frames=16 rx_worker_single_coalesce=0 rx_worker_tcp=1 rx_worker_stream_tcp=1 rx_worker_stream_batch_queue=1 rx_worker_stream_coalesce_gso=1 rx_worker_stream_coalesce_nonlinear=0 rx_worker_stream_coalesce_software_segment=0 rx_worker_xmit_more=1 rx_worker_xmit_dst_mac_cache=1 tx_plaintext_inline_xmit=1 tx_plaintext_direct_xmit=1 tx_plaintext_payload_fast_copy=1 tx_plaintext_payload_copy_csum=1 tx_plaintext_hash_tx_queue=1 tx_plaintext_stream_coalesce=0 tx_plaintext_skip_inner_tcp_checksum=0 tx_plaintext_stream_coalesce_max_frames=16 tx_plaintext_slots=8192 rx_worker_budget=1024 rx_worker_slots=8192 rx_worker_hot_stats=0"
 	if got != want {
 		t.Fatalf("parameters = %q, want %q", got, want)
 	}
@@ -994,7 +995,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfile(t *testin
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"enable_features=7296",
+		"enable_features=5248",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
@@ -1062,7 +1063,7 @@ func TestTrustIXDatapathModuleParametersForDesiredOpenWrtDedicatedGateAllowsFull
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"enable_features=7296",
+		"enable_features=5248",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
@@ -1095,7 +1096,7 @@ func TestTrustIXDatapathModuleParametersForDesiredFullPlaintextProfileWithCrashR
 
 	got := TrustIXDatapathModuleParametersForDesired("", desired)
 	for _, want := range []string{
-		"enable_features=7296",
+		"enable_features=5248",
 		"rx_worker_inject=1",
 		"tx_plaintext=1",
 		"rx_worker_xmit=1",
@@ -2837,12 +2838,12 @@ func TestTrustIXDatapathSecureTIXTCPUsesFullKmodWithoutRouteGSOHelpers(t *testin
 			t.Fatalf("datapath parameters = %q, missing %q", datapath, want)
 		}
 	}
-	if !moduleParameterHasAssignment(datapath, "enable_features=31872") {
+	if !moduleParameterHasAssignment(datapath, "enable_features=29824") {
 		t.Fatalf("datapath parameters = %q, secure tix_tcp feature bit is absent", datapath)
 	}
 	t.Setenv("TRUSTIX_TIX_TCP_SECURE_INNER_CHECKSUM_PARTIAL", "0")
 	withoutSecurePartial := TrustIXDatapathModuleParametersForDesired("", desired)
-	if !moduleParameterHasAssignment(withoutSecurePartial, "enable_features=15488") {
+	if !moduleParameterHasAssignment(withoutSecurePartial, "enable_features=13440") {
 		t.Fatalf("datapath parameters = %q, secure checksum-partial feature opt-out was ignored", withoutSecurePartial)
 	}
 	crypto := TrustIXCryptoModuleParametersForDesired("", desired)
