@@ -1,0 +1,3 @@
+// The callee records the background error, requests runtime reconciliation, and
+// returns ready=false, so the upsert caller intentionally consumes only readiness.
+(*trustix.local/trustix/internal/daemon.Daemon).syncKernelDatapathSessionRecords
